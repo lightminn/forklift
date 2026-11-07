@@ -1,0 +1,1929 @@
+{
+"table": [
+{
+"s": [
+0,
+2
+],
+"n": 782,
+"rate_p50": 0.0003734217338845926,
+"rate_max": 0.007391139915720377,
+"o_max": 0.002721822745068714,
+"truth_max": 5.250888539654053e-05,
+"n_corr_mean": 0.023017902813299233,
+"corr_max": 0.04067598357990648,
+"zupt_mean": 1.0063938618925832,
+"zupt_zero": 420
+},
+{
+"s": [
+2,
+5
+],
+"n": 169,
+"rate_p50": 0.00013021110238295618,
+"rate_max": 0.003442097029483887,
+"o_max": 0.008949452743408415,
+"truth_max": 0.00013112773598900063,
+"n_corr_mean": 0.17751479289940827,
+"corr_max": 0.04885999999999946,
+"zupt_mean": 4.520710059171598,
+"zupt_zero": 5
+},
+{
+"s": [
+5,
+10
+],
+"n": 28,
+"rate_p50": 5.083599525211698e-05,
+"rate_max": 0.00018523885549057883,
+"o_max": 0.0013892914886365348,
+"truth_max": 4.313073784456556e-05,
+"n_corr_mean": 0.6071428571428571,
+"corr_max": 0.0503557155250316,
+"zupt_mean": 12.214285714285714,
+"zupt_zero": 0
+},
+{
+"s": [
+10,
+30
+],
+"n": 41,
+"rate_p50": 2.9981543303330615e-05,
+"rate_max": 0.0026131322547579576,
+"o_max": 0.0399809255829644,
+"truth_max": 0.00015000455761460252,
+"n_corr_mean": 0.024390243902439025,
+"corr_max": 0.005234999999999879,
+"zupt_mean": 25.4390243902439,
+"zupt_zero": 0
+},
+{
+"s": [
+30,
+1000000000.0
+],
+"n": 18,
+"rate_p50": 2.229653553814351e-05,
+"rate_max": 0.0013659491108895705,
+"o_max": 0.042754209400649223,
+"truth_max": 8.116866379076493e-05,
+"n_corr_mean": 0.2222222222222222,
+"corr_max": 0.02181249933580287,
+"zupt_mean": 62.166666666666664,
+"zupt_zero": 1
+}
+],
+"sessions": [
+{
+"session": "val3_001",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.030957690646232175,
+0.0017687207198200383
+],
+"ends": [],
+"gyro_updates": 46,
+"bias_last": 0.011979714689372265
+},
+{
+"session": "val3_005",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+63.28333663381636,
+347.4333514533937
+],
+"damaged": false,
+"open_max": [
+0.09793519304998555,
+0.04811441442282027
+],
+"ends": [
+{
+"t": 174.44167576450855,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.1620667986700568,
+"delta_rad": 0.0508755199972446
+},
+{
+"t": 174.44167576450855,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 71,
+"bias_last": 0.012250904642657141
+},
+{
+"session": "val3_008",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.05367961870002207,
+0.016051679040680278
+],
+"ends": [],
+"gyro_updates": 42,
+"bias_last": 0.009558863186219796
+},
+{
+"session": "val3_011",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+35.8666685372591,
+35.883335204795
+],
+"damaged": false,
+"open_max": [
+0.04172139093018261,
+0.00630618340617195
+],
+"ends": [],
+"gyro_updates": 62,
+"bias_last": 0.01224420554647382
+},
+{
+"session": "val3_012",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.01985648971648004,
+0.0068896951245975835
+],
+"ends": [],
+"gyro_updates": 96,
+"bias_last": 0.011102455572504255
+},
+{
+"session": "val3_013",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+52.76666941866279,
+331.5333506241441
+],
+"damaged": false,
+"open_max": [
+0.06047516656768234,
+0.019944193023722523
+],
+"ends": [
+{
+"t": 72.55000378377736,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20001151698901712,
+"delta_rad": 0.02956105963831912
+},
+{
+"t": 72.55000378377736,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 69,
+"bias_last": 0.012227855309878213
+},
+{
+"session": "val3_015",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.02723087736479527,
+0.0014434034445627297
+],
+"ends": [],
+"gyro_updates": 51,
+"bias_last": 0.012583097599053565
+},
+{
+"session": "val3_016",
+"mode": "shadow",
+"status": "ended:pose_out_of_set",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.9569938144048176,
+0.3190576707735433
+],
+"ends": [
+{
+"t": 14.18333407305181,
+"kind": "ended",
+"reason": "pose_out_of_set"
+}
+],
+"gyro_updates": 41,
+"bias_last": 0.04134825438428059
+},
+{
+"session": "val3_020",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+76.65833733137697,
+369.37501926440746
+],
+"damaged": false,
+"open_max": [
+0.08119589210730742,
+0.04003482717237983
+],
+"ends": [
+{
+"t": 194.7666768245399,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20003893194146058,
+"delta_rad": 0.044708588736264154
+},
+{
+"t": 194.7666768245399,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 107,
+"bias_last": 0.012212331976522557
+},
+{
+"session": "val3_022",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+57.866669684648514,
+328.97501715738326
+],
+"damaged": false,
+"open_max": [
+0.10302745100601458,
+0.054475533109427994
+],
+"ends": [
+{
+"t": 96.15000501461327,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.2001127566039951,
+"delta_rad": 0.03575614285557624
+},
+{
+"t": 96.15000501461327,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 63,
+"bias_last": 0.011971303313005905
+},
+{
+"session": "val3_024",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+74.50000388547778,
+329.36668384447694
+],
+"damaged": false,
+"open_max": [
+0.05463701625231117,
+0.028212438286881636
+],
+"ends": [
+{
+"t": 93.95833823364228,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.1742854443923772,
+"delta_rad": 0.05125073233627075
+},
+{
+"t": 93.95833823364228,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 98,
+"bias_last": 0.01232781430767175
+},
+{
+"session": "val3_026",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.05275301675637035,
+0.007960326694587128
+],
+"ends": [],
+"gyro_updates": 37,
+"bias_last": 0.011630020919924017
+},
+{
+"session": "val3_028",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.02584985690652333,
+0.010727747189556602
+],
+"ends": [],
+"gyro_updates": 36,
+"bias_last": 0.01180470537722601
+},
+{
+"session": "val3_033",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+71.17500371206552,
+315.1250164350495
+],
+"damaged": false,
+"open_max": [
+0.07549988468739285,
+0.03689215233383858
+],
+"ends": [
+{
+"t": 162.45834180619568,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20006796620478112,
+"delta_rad": 0.03773287893189203
+},
+{
+"t": 162.45834180619568,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 84,
+"bias_last": 0.01263861055614115
+},
+{
+"session": "val3_040",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.026053755536428795,
+0.005533210960696255
+],
+"ends": [],
+"gyro_updates": 44,
+"bias_last": 0.011728061502538526
+},
+{
+"session": "val3_042",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.016762442002654778,
+0.0035834381968289364
+],
+"ends": [],
+"gyro_updates": 46,
+"bias_last": 0.011039623341803386
+},
+{
+"session": "val3_046",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+60.0416697980836,
+358.0666853412986
+],
+"damaged": false,
+"open_max": [
+0.05213862716585121,
+0.0107814629662214
+],
+"ends": [
+{
+"t": 346.80001808702946,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20011716844346597,
+"delta_rad": 0.0318602862744366
+},
+{
+"t": 346.80001808702946,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 81,
+"bias_last": 0.011774366303092369
+},
+{
+"session": "val3_048",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.030250159488861044,
+0.010944671233345638
+],
+"ends": [],
+"gyro_updates": 37,
+"bias_last": 0.011301723858402796
+},
+{
+"session": "val3_053",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.055310030094861296,
+0.003456649962609415
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.011978563522102048
+},
+{
+"session": "val3_055",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.4375768745743062,
+0.03368211482946659
+],
+"ends": [
+{
+"t": 45.62500237952918,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.47917830644498516,
+"delta_rad": 0.03515684932431862
+},
+{
+"t": 45.62500237952918,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 49,
+"bias_last": 0.012824775381444747
+},
+{
+"session": "val3_056",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.06337719479741133,
+0.00615285792550635
+],
+"ends": [],
+"gyro_updates": 68,
+"bias_last": 0.010645395525687475
+},
+{
+"session": "val3_058",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+79.77500416059047,
+371.0833526868373
+],
+"damaged": false,
+"open_max": [
+0.08348900496526485,
+0.045484848034666514
+],
+"ends": [
+{
+"t": 117.10000610724092,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20003257906791663,
+"delta_rad": 0.023982477965033056
+},
+{
+"t": 117.10000610724092,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 104,
+"bias_last": 0.012442293132843578
+},
+{
+"session": "val3_059",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.03415591742055352,
+0.0031515825342989245
+],
+"ends": [],
+"gyro_updates": 51,
+"bias_last": 0.012143715558840033
+},
+{
+"session": "val3_065",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+69.50833695847541,
+373.7666861601174
+],
+"damaged": false,
+"open_max": [
+0.07341504881892101,
+0.0498982626902601
+],
+"ends": [
+{
+"t": 99.98333854787052,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.20006088401290584,
+"delta_rad": 0.03509541399581793
+},
+{
+"t": 99.98333854787052,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 87,
+"bias_last": 0.01228699837151387
+},
+{
+"session": "val3_074",
+"mode": "shadow",
+"status": "unconfirmed",
+"mission": "failed",
+"mission_t": [
+27.90833478886634,
+27.925001456402242
+],
+"damaged": false,
+"open_max": [
+0.018387440027272415,
+0.004249170222072163
+],
+"ends": [],
+"gyro_updates": 53,
+"bias_last": 0.011785551939322281
+},
+{
+"session": "val3_076",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.06490158648863462,
+0.007571740536778781
+],
+"ends": [],
+"gyro_updates": 181,
+"bias_last": 0.011989158513160568
+},
+{
+"session": "val3_081",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": false,
+"open_max": [
+0.014328993247595087,
+0.003463726762932051
+],
+"ends": [],
+"gyro_updates": 39,
+"bias_last": 0.011687393227673497
+},
+{
+"session": "val3_086",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.04746105516522859,
+0.0009317149966900917
+],
+"ends": [],
+"gyro_updates": 50,
+"bias_last": 0.011803052752374107
+},
+{
+"session": "val3_087",
+"mode": "shadow",
+"status": "ended:pose_revoked:int",
+"mission": "done",
+"mission_t": [
+64.65000337176025,
+351.30001832172275
+],
+"damaged": false,
+"open_max": [
+0.05759888855115199,
+0.010822375541908569
+],
+"ends": [
+{
+"t": 97.85833843704313,
+"kind": "revoke",
+"gate": "int",
+"delta_m": 0.2001221570136425,
+"delta_rad": 0.030907079483809996
+},
+{
+"t": 97.85833843704313,
+"kind": "ended",
+"reason": "pose_revoked:int"
+}
+],
+"gyro_updates": 80,
+"bias_last": 0.012252734461060462
+},
+{
+"session": "val3_089",
+"mode": "shadow",
+"status": "confirmed",
+"mission": null,
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.04866746075631687,
+0.0010239897516055585
+],
+"ends": [],
+"gyro_updates": 47,
+"bias_last": 0.011472984936966702
+},
+{
+"session": "t_val3_006",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+50.541669302619994,
+386.8750201771036
+],
+"damaged": false,
+"open_max": [
+0.07202192320626791,
+0.030007041480384966
+],
+"ends": [],
+"gyro_updates": 43,
+"bias_last": 0.011932435324285624
+},
+{
+"session": "t_val3_007",
+"mode": "shadow",
+"status": "ended:pose_revoked:rematch",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.052202539275375,
+0.06476950856374364
+],
+"ends": [
+{
+"t": 62.19166991021484,
+"kind": "ended",
+"reason": "pose_revoked:rematch"
+}
+],
+"gyro_updates": 69,
+"bias_last": 0.011653955629646039
+},
+{
+"session": "t_val3_010",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.03650396279201115,
+0.0012331653451171931
+],
+"ends": [],
+"gyro_updates": 86,
+"bias_last": 0.010194119665852356
+},
+{
+"session": "t_val3_014",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+59.65833644475788,
+59.67500311229378
+],
+"damaged": false,
+"open_max": [
+0.0328947617272919,
+0.0020803998482935016
+],
+"ends": [],
+"gyro_updates": 109,
+"bias_last": 0.01180635800207791
+},
+{
+"session": "t_val3_017",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+46.06666906923056,
+46.08333573676646
+],
+"damaged": false,
+"open_max": [
+0.04009536955735205,
+0.012646871690781936
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.011142946653817869
+},
+{
+"session": "t_val3_021",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+74.84167056996375,
+74.85833723749965
+],
+"damaged": false,
+"open_max": [
+0.049297645129625846,
+0.0034273867326550383
+],
+"ends": [],
+"gyro_updates": 110,
+"bias_last": 0.011823475486582333
+},
+{
+"session": "t_val3_025",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.029803625836770938,
+0.004588399280756494
+],
+"ends": [],
+"gyro_updates": 91,
+"bias_last": 0.011803052752374107
+},
+{
+"session": "t_val3_029",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.05380093720297261,
+0.00410917049882617
+],
+"ends": [],
+"gyro_updates": 80,
+"bias_last": 0.011037793523400063
+},
+{
+"session": "t_val3_030",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+80.80833754781634,
+388.66668693721294
+],
+"damaged": false,
+"open_max": [
+0.061556551706255055,
+0.053714471297675814
+],
+"ends": [],
+"gyro_updates": 32,
+"bias_last": 0.012029413336405623
+},
+{
+"session": "t_val3_034",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+58.54166971985251,
+344.9416846567765
+],
+"damaged": false,
+"open_max": [
+0.055281250366686616,
+0.027216487835744818
+],
+"ends": [],
+"gyro_updates": 72,
+"bias_last": 0.012008193822030017
+},
+{
+"session": "t_val3_036",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+70.45833700802177,
+358.9250187193975
+],
+"damaged": false,
+"open_max": [
+0.04428137490967771,
+0.01166387304545724
+],
+"ends": [],
+"gyro_updates": 101,
+"bias_last": 0.012100626820400284
+},
+{
+"session": "t_val3_037",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+61.90833656210452,
+338.24168430734426
+],
+"damaged": false,
+"open_max": [
+0.05616675031949068,
+0.014011538395757972
+],
+"ends": [],
+"gyro_updates": 80,
+"bias_last": 0.011723103037168817
+},
+{
+"session": "t_val3_043",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.05343758012121643,
+0.01779612818103682
+],
+"ends": [],
+"gyro_updates": 8,
+"bias_last": 0.011925559034550889
+},
+{
+"session": "t_val3_044",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+32.958335052244365,
+288.35834837239236
+],
+"damaged": false,
+"open_max": [
+0.07065505981027932,
+0.020968889379359562
+],
+"ends": [],
+"gyro_updates": 72,
+"bias_last": 0.01262615621442074
+},
+{
+"session": "t_val3_045",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+73.15833714883775,
+73.17500381637365
+],
+"damaged": false,
+"open_max": [
+0.062216458825181065,
+0.013889315926913115
+],
+"ends": [],
+"gyro_updates": 86,
+"bias_last": 0.011018315230652071
+},
+{
+"session": "t_val3_049",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+46.17500240821391,
+46.191669075749815
+],
+"damaged": false,
+"open_max": [
+0.012455309152520647,
+0.0019842765505641204
+],
+"ends": [],
+"gyro_updates": 86,
+"bias_last": 0.011573504456859065
+},
+{
+"session": "t_val3_051",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+49.80833593104035,
+303.28334915079176
+],
+"damaged": false,
+"open_max": [
+0.10128560429146172,
+0.046807641910209696
+],
+"ends": [],
+"gyro_updates": 57,
+"bias_last": 0.0117313962845009
+},
+{
+"session": "t_val3_057",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.056752196500811716,
+0.004212786289590791
+],
+"ends": [],
+"gyro_updates": 108,
+"bias_last": 0.011628191101520698
+},
+{
+"session": "t_val3_060",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+52.00000271201134,
+52.00833604577929
+],
+"damaged": false,
+"open_max": [
+0.02162794018526043,
+0.004617114155859747
+],
+"ends": [],
+"gyro_updates": 88,
+"bias_last": 0.01180284602656412
+},
+{
+"session": "t_val3_062",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "done",
+"mission_t": [
+54.583336180076,
+355.2333518601954
+],
+"damaged": false,
+"open_max": [
+0.06633012518604227,
+0.024651955497890562
+],
+"ends": [],
+"gyro_updates": 73,
+"bias_last": 0.01182846289339661
+},
+{
+"session": "t_val3_063",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+47.03333578631282,
+47.05000245384872
+],
+"damaged": false,
+"open_max": [
+0.04947438810441394,
+0.00604845668813607
+],
+"ends": [],
+"gyro_updates": 95,
+"bias_last": 0.011575245678486678
+},
+{
+"session": "t_val3_064",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.02349695493513435,
+0.004594438344521445
+],
+"ends": [],
+"gyro_updates": 67,
+"bias_last": 0.01209059294225459
+},
+{
+"session": "t_val3_068",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+56.60833628568798,
+127.40000664442778
+],
+"damaged": false,
+"open_max": [
+0.0496931508678139,
+0.007515890691868753
+],
+"ends": [],
+"gyro_updates": 68,
+"bias_last": 0.011592480701211374
+},
+{
+"session": "t_val3_070",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+52.37500273156911,
+115.17500600684434
+],
+"damaged": false,
+"open_max": [
+0.04741270688909764,
+0.006141499806452622
+],
+"ends": [],
+"gyro_updates": 45,
+"bias_last": 0.01224514998793405
+},
+{
+"session": "t_val3_075",
+"mode": "shadow",
+"status": "ended:pose_revoked:window",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.6397768078000943,
+0.016197241353156144
+],
+"ends": [
+{
+"t": 12.125000632368028,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.4005831181281754,
+"delta_rad": 0.01744999999999941,
+"delta_int": [
+0.4025022907759665,
+0.019687598017630203
+]
+},
+{
+"t": 12.125000632368028,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 78,
+"bias_last": 0.010868509924532328
+},
+{
+"session": "t_val3_077",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.04263575127050603,
+0.004058438807350351
+],
+"ends": [],
+"gyro_updates": 95,
+"bias_last": 0.011364290298776537
+},
+{
+"session": "t_val3_088",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+58.07500302884728,
+58.09166969638318
+],
+"damaged": false,
+"open_max": [
+0.02672453833716636,
+0.003073056555557452
+],
+"ends": [],
+"gyro_updates": 94,
+"bias_last": 0.012246773080527384
+},
+{
+"session": "t_val3_091",
+"mode": "shadow",
+"status": "confirmed",
+"mission": "failed",
+"mission_t": [
+27.191668084822595,
+27.208334752358496
+],
+"damaged": false,
+"open_max": [
+0.043722111151158274,
+0.0026949863934770946
+],
+"ends": [],
+"gyro_updates": 84,
+"bias_last": 0.011581384252571169
+},
+{
+"session": "l_val3_006_hold_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.63333399221301,
+98.01667177863419
+],
+"damaged": false,
+"open_max": [
+0.04935936349742299,
+0.01043506374916153
+],
+"ends": [
+{
+"t": 98.01667177863419,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.07005086466654684,
+"delta_rad": 0.10865750066419683,
+"delta_int": [
+0.9910300108038878,
+0.15026017091026628
+]
+},
+{
+"t": 98.01667177863419,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 15,
+"bias_last": 0.010626684480848296
+},
+{
+"session": "l_val3_006_step_0.35",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+13.491667370311916,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.04800712313052807,
+0.013152735171677588
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.3485952657730178,
+"delta_rad": 0.0019036365233228159,
+"delta_int": [
+1.8206032107197294,
+0.11773948566435953
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 29,
+"bias_last": 0.01025361770540485
+},
+{
+"session": "l_val3_006_step_6",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.758333998732269,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.04843258905192577,
+0.011385038618074023
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 5.996897605374376,
+"delta_rad": 0.006354266749456272,
+"delta_int": [
+6.937639854460993,
+0.10919763397661518
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 26,
+"bias_last": 0.00981042836709183
+},
+{
+"session": "l_val3_006_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.650000659748912,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.05074278051714598,
+0.025935714297724066
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.04407907674563722,
+"delta_rad": 0.11755699940487707,
+"delta_int": [
+2.4239222837468115,
+0.3029848811011488
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 23,
+"bias_last": 0.010523126092393257
+},
+{
+"session": "l_val3_029_hold_yaw_0.12",
+"mode": "on",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.0,
+0.0
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.01187884078237707
+},
+{
+"session": "l_val3_029_step_0.35",
+"mode": "on",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.0,
+0.0
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.01187884078237707
+},
+{
+"session": "l_val3_029_step_6",
+"mode": "on",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.0,
+0.0
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.011900030764494108
+},
+{
+"session": "l_val3_029_yaw_0.12",
+"mode": "on",
+"status": "confirmed",
+"mission": "scene_damaged",
+"mission_t": [
+null,
+null
+],
+"damaged": true,
+"open_max": [
+0.0,
+0.0
+],
+"ends": [],
+"gyro_updates": 59,
+"bias_last": 0.011643331106328949
+},
+{
+"session": "l_val3_034_hold_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.825000668875873,
+64.6416700379923
+],
+"damaged": false,
+"open_max": [
+0.05372606037165918,
+0.006027017134392686
+],
+"ends": [
+{
+"t": 64.6416700379923,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.1256510906861779,
+"delta_rad": 0.11738250199258976,
+"delta_int": [
+1.0034751092968275,
+0.15616021970786964
+]
+},
+{
+"t": 64.6416700379923,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 23,
+"bias_last": 0.011752881589203635
+},
+{
+"session": "l_val3_034_step_0.35",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.691667328588665,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.055891514469994054,
+0.025700526352340432
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.3748373375295097,
+"delta_rad": 0.02193714471611785,
+"delta_int": [
+2.566311631940007,
+0.22712852405279074
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 31,
+"bias_last": 0.011784932352706317
+},
+{
+"session": "l_val3_034_step_6",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.791667333804071,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.05523640169796396,
+0.022321869531047978
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 6.0163410612800465,
+"delta_rad": 0.013959999999999972,
+"delta_int": [
+7.071910010972134,
+0.09087005512349111
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 34,
+"bias_last": 0.01028248075742401
+},
+{
+"session": "l_val3_034_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+13.533334039151669,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.05515205000996657,
+0.013487621878332967
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.03335609064516457,
+"delta_rad": 0.13628666719146443,
+"delta_int": [
+0.9155954520433423,
+0.18707544308251356
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 36,
+"bias_last": 0.010215428367817673
+},
+{
+"session": "l_val3_036_hold_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.60833399090916,
+71.95833708625287
+],
+"damaged": false,
+"open_max": [
+0.04400862151444243,
+0.006162101398318548
+],
+"ends": [
+{
+"t": 71.95833708625287,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.10066118697124005,
+"delta_rad": 0.11597154840579149,
+"delta_int": [
+0.5069168798395025,
+0.16027066896561754
+]
+},
+{
+"t": 71.95833708625287,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 22,
+"bias_last": 0.011578846250776178
+},
+{
+"session": "l_val3_036_step_0.35",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.533333986997604,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.04236016784979048,
+0.028153728203117234
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.3541077640216207,
+"delta_rad": 0.022934286953602778,
+"delta_int": [
+3.2566894895801957,
+0.2688780307407733
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 33,
+"bias_last": 0.012085782138177731
+},
+{
+"session": "l_val3_036_step_6",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.591667323373258,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.042421647573742685,
+0.015239718940911612
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 6.004603609471744,
+"delta_rad": 0.009036607347392867,
+"delta_int": [
+5.763222296275492,
+0.02639038337074095
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 35,
+"bias_last": 0.01050181798124194
+},
+{
+"session": "l_val3_036_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.408333980478346,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.04262863365578073,
+0.03170546478608233
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.03890889046253486,
+"delta_rad": 0.11651000000000078,
+"delta_int": [
+0.671200078066894,
+0.12450383723990678
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 34,
+"bias_last": 0.01019231997052161
+},
+{
+"session": "l_val3_045_hold_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+13.2416673572734,
+82.20000428706408
+],
+"damaged": false,
+"open_max": [
+0.055219098373945584,
+0.010150593565089407
+],
+"ends": [
+{
+"t": 82.20000428706408,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.04283837829159157,
+"delta_rad": 0.13570499999999974,
+"delta_int": [
+1.3478217687639389,
+0.2541828887216606
+]
+},
+{
+"t": 82.20000428706408,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 22,
+"bias_last": 0.012655521314835584
+},
+{
+"session": "l_val3_045_step_0.35",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.60833399090916,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.056019598312800484,
+0.022642441448873812
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.3514259268260643,
+"delta_rad": 0.007367777233543205,
+"delta_int": [
+2.258105628300883,
+0.11988590317190995
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 32,
+"bias_last": 0.012065684258813771
+},
+{
+"session": "l_val3_045_step_6",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.94166734162718,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.06338921560821026,
+0.010314605042880037
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 6.004101250218882,
+"delta_rad": 0.010469999999999535,
+"delta_int": [
+7.943581935435145,
+0.21584910393268078
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 35,
+"bias_last": 0.011312643704305582
+},
+{
+"session": "l_val3_045_yaw_0.12",
+"mode": "on",
+"status": "ended:pose_revoked:window",
+"mission": "failed",
+"mission_t": [
+12.850000670179725,
+200.0083437645808
+],
+"damaged": false,
+"open_max": [
+0.05953164623341459,
+0.022600638539967934
+],
+"ends": [
+{
+"t": 200.0083437645808,
+"kind": "revoke",
+"gate": "window",
+"delta_m": 0.058611967675322105,
+"delta_rad": 0.13034309080203665,
+"delta_int": [
+2.41145319158686,
+0.37504998948092844
+]
+},
+{
+"t": 200.0083437645808,
+"kind": "ended",
+"reason": "pose_revoked:window"
+}
+],
+"gyro_updates": 33,
+"bias_last": 0.011974520556748003
+}
+]
+}

@@ -217,6 +217,7 @@ class SlamPoseTracker:
         self.hold_travel_m = 0.0
         self.skipped_replies = 0
         self.offset = None  # test only (unconfirmed position revision plan 2 D): composed onto every correction received
+        self.release_log: list = []  # every release: (correction before, correction after, odom_from_base at it)
 
     def inject_offset(self, offset) -> None:
         """Test only: the correction received and every one after it is offset, as a wrong SLAM jump would be. It reaches
@@ -269,6 +270,8 @@ class SlamPoseTracker:
         if self.mode != "holding":
             raise ValueError("not holding")
         before = compose(self.applied[0], odom_from_base)
+        log = self.__dict__.setdefault("release_log", [])  # a tracker restored from an older record has none
+        log.append((tuple(self.applied[0]), tuple(self.received[0]), tuple(float(v) for v in odom_from_base)))
         self.applied = self.received
         after = compose(self.applied[0], odom_from_base)
         self.mode, self._hold_start, self._hold_last, self._stand = "tracking", None, None, None

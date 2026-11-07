@@ -300,7 +300,7 @@ def hold_releases(rows) -> list:
         o = tuple(a["odom_base"])
         m, rad = _gap(compose(tuple(a["received_after"]), o), compose(tuple(a["applied_after"]), o))
         out.append({"t0": a["applied_tick_s"], "t1": b["applied_tick_s"], "m": m, "rad": rad,
-                    "held": list(a["applied_after"]), "applied": list(a["received_after"])})
+                    "held": list(a["applied_after"]), "applied": list(a["received_after"]), "o": list(o)})
     return out
 
 

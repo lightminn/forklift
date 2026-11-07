@@ -15,7 +15,7 @@ from test_riibotics_isaac_scenes import _runner_args  # noqa: E402
 from test_start_reloc_runner import _live, _reloc  # noqa: E402
 
 BOUNDS = {"odom": [0.02, 0.02, 0.005, 0.01], "e_still": [0.03, 0.01], "e_slam": [0.05, 0.025],
-          "e_window": [0.153, 0.103]}
+          "e_window": [0.153, 0.103], "e_release": [0.065, 0.076]}
 
 
 def test_the_check_is_off_by_default_and_not_recorded_off(tmp_path):
@@ -50,6 +50,14 @@ def test_the_bounds_may_come_from_a_file(tmp_path):
     f.write_text(json.dumps(BOUNDS))
     on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds", str(f)))
     assert on.pose_check_bounds.odom == (0.02, 0.02, 0.005, 0.01)
+
+
+def test_a_bounds_file_without_the_release_limit_is_refused(tmp_path):
+    no_release = {k: v for k, v in BOUNDS.items() if k != "e_release"}
+    f = tmp_path / "bounds.json"
+    f.write_text(json.dumps(no_release))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, *_reloc(tmp_path), "--pose-check", "on", "--pose-check-bounds", str(f)))
 
 
 def test_a_bounds_file_without_the_window_limit_is_refused(tmp_path):
