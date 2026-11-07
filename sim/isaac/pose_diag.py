@@ -10,11 +10,11 @@ nothing here decides anything the run did not decide before.
 - ``save_premove``: item 3b, the state before the truck moves (after the start check's result, before the reverse):
   the applied correction C, the odometry O, the grid's correction, and the observe plan's grid by layers, built on a
   copy of the obstacle layer (run_transport ``grid_kwargs`` scratch).
-- ``save_prepare``: item 3c, each mission preparation's input fixed when it was submitted -- the worker payload as
+- ``save_capture`` / ``prune_captures``: item 3c, each mission preparation's input fixed when it was submitted -- the worker payload as
   pickled then (world with its obstacles and bounds, waypoints = every target candidate, config, geometry,
   pickup_bounds, grid_kwargs with pickup_obstacle and the occupancy) and the mission inputs -- with the grid by layers,
-  the start pose (rear; base by the caller's offset offline), C and O; written for the missions whose result is a
-  preparation failure.
+  the start pose (rear; base by the caller's offset offline), C and O; written at the submit, removed once its mission
+  is seen ended other than by a preparation failure.
 """
 
 from __future__ import annotations
@@ -106,26 +106,36 @@ def save_premove(path, premove: dict) -> None:
     np.savez_compressed(path, meta=json.dumps(_meta(premove)), **layers_arrays(premove["layers"]))
 
 
-def save_prepare(out_dir, captures, results) -> list:
-    """Each capture of a mission whose result reason starts with ``prepare:`` (every capture when the results could not
-    be read): ``prepare_input_<k>.pkl`` (``{"meta", "payload", "inputs"}``, the payload and inputs as the pickled
-    bytes taken at the submit) and ``prepare_input_<k>.npz`` (the layers). Returns what was written."""
+def save_capture(out_dir, k: int, cap: dict) -> dict:
+    """One preparation's capture written now: ``prepare_input_<k>.pkl`` (``{"meta", "payload", "inputs"}``, the
+    payload and inputs as the bytes pickled at the submit) and ``prepare_input_<k>.npz`` (the layers). Returns its
+    entry ``{"file", "mission_id", "t", "layers_match", "layers_source", "removed"}``."""
     import json
     from pathlib import Path
 
-    failed = None if results is None else {r.get("mission_id") for r in results
-                                           if str(r.get("reason") or "").startswith("prepare:")}
-    out = []
-    for k, cap in enumerate(captures, 1):
-        if failed is not None and cap.get("mission_id") not in failed:
-            continue
-        stem = Path(out_dir) / f"prepare_input_{k}"
-        with open(f"{stem}.pkl", "wb") as fh:
-            pickle.dump({"meta": _meta(cap), "payload": cap["payload"], "inputs": cap.get("inputs")}, fh)
-        np.savez_compressed(f"{stem}.npz", meta=json.dumps(_meta(cap)), **layers_arrays(cap["layers"]))
-        out.append({"file": stem.name, "mission_id": cap.get("mission_id"), "t": cap.get("t"),
-                    "layers_match": cap.get("layers_match"), "results_read": results is not None})
-    return out
+    stem = Path(out_dir) / f"prepare_input_{k}"
+    with open(f"{stem}.pkl", "wb") as fh:
+        pickle.dump({"meta": _meta(cap), "payload": cap["payload"], "inputs": cap.get("inputs")}, fh)
+    np.savez_compressed(f"{stem}.npz", meta=json.dumps(_meta(cap)), **layers_arrays(cap["layers"]))
+    return {"file": stem.name, "mission_id": cap.get("mission_id"), "t": cap.get("t"),
+            "layers_match": cap.get("layers_match"), "layers_source": cap.get("layers_source"), "removed": False}
 
 
-__all__ = ["UNCHECKED", "blocking_branch", "layers_arrays", "save_premove", "save_prepare", "walk_rear"]
+def prune_captures(out_dir, entries, results) -> list:
+    """Remove the files of captures whose mission has a result with a reason other than ``prepare:...``; a failed
+    one, one still running, or one whose result is no longer (or not yet) in ``results`` stays. ``results`` None
+    removes nothing. Returns the entries still on disk."""
+    from pathlib import Path
+
+    if results is not None:
+        ended_ok = {r.get("mission_id") for r in results if not str(r.get("reason") or "").startswith("prepare:")}
+        for e in entries:
+            if not e["removed"] and e["mission_id"] in ended_ok:
+                for ext in (".pkl", ".npz"):
+                    (Path(out_dir) / f"{e['file']}{ext}").unlink(missing_ok=True)
+                e["removed"] = True
+    return [e for e in entries if not e["removed"]]
+
+
+__all__ = ["UNCHECKED", "blocking_branch", "layers_arrays", "prune_captures", "save_capture", "save_premove",
+           "walk_rear"]

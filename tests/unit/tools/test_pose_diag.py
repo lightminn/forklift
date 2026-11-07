@@ -108,12 +108,17 @@ def test_the_pre_move_state_and_the_failed_preparations_inputs_are_written(tmp_p
             {"t": 90.0, "mission_id": "m2", "payload": pickle.dumps({}), "inputs": None, "layers": layers}]
     results = [{"mission_id": "m1", "reason": "prepare:all_candidates_failed:invalid_start"},
                {"mission_id": "m2", "reason": None, "outcome": "done"}]
-    wrote = D.save_prepare(tmp_path, caps, results)
-    assert [w["file"] for w in wrote] == ["prepare_input_1"] and wrote[0]["layers_match"] is True
+    entries = [D.save_capture(tmp_path, k, c) for k, c in enumerate(caps, 1)]
+    assert (tmp_path / "prepare_input_2.pkl").exists()  # written at the submit, whatever comes later
+    assert D.prune_captures(tmp_path, entries, None) == entries  # results unread: nothing removed
+    kept = D.prune_captures(tmp_path, entries, results)
+    assert [e["file"] for e in kept] == ["prepare_input_1"] and kept[0]["layers_match"] is True
+    assert not (tmp_path / "prepare_input_2.pkl").exists() and not (tmp_path / "prepare_input_2.npz").exists()
     got = pickle.load(open(tmp_path / "prepare_input_1.pkl", "rb"))
     assert pickle.loads(got["payload"]) == payload and got["meta"]["mission_id"] == "m1"
     assert np.load(tmp_path / "prepare_input_1.npz")["live"].sum() == 3
-    assert [w["file"] for w in D.save_prepare(tmp_path, caps, None)] == ["prepare_input_1", "prepare_input_2"]
+    # a failure whose result has rotated out of the book stays on disk
+    assert [e["file"] for e in D.prune_captures(tmp_path, entries, [])] == ["prepare_input_1"]
 
 
 def test_a_run_without_a_grid_plan_writes_its_record_without_arrays(tmp_path):

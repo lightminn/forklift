@@ -1643,6 +1643,9 @@ def arguments() -> argparse.Namespace:
           or args.reloc_operator_timeout_s is not None):
         parser.error("--start-pose, --reloc-dir, --reloc-unattended and --reloc-operator-timeout-s go with "
                      "--start-relocalize")
+    if args.pose_diag_capture and args.record_boundary:
+        # its plan_layers beside the Planner port's cache is not replayed (Codex capture re-review P2)
+        parser.error("--pose-diag-capture does not go with --record-boundary")
     if args.pose_check == "on" and (not args.start_relocalize or args.pose_check_bounds is None):
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
     if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
@@ -8854,7 +8857,7 @@ def drive(S, isaac) -> None:
             def pose_diag_prepare(t_, rear_, payload_, inputs_):
                 """Item 3c (record only): the preparation's input as submitted -- the payload and inputs pickled now,
                 as the worker gets them -- with the grid's layers from the build the submitted occupancy came from
-                (rebuilt on a copy only when there is none), C and O."""
+                (rebuilt on a copy only when there is none), C and O; written at once (prepare_input_<k>)."""
                 import pickle as pickle_
 
                 try:
@@ -8879,17 +8882,17 @@ def drive(S, isaac) -> None:
                             **info_, "payload": pickle_.dumps(payload_), "inputs": inputs_pickle_, "layers": layers_,
                             "layers_match": None if sent_ is None or layers_.get("occupancy") is None else bool(
                                 np.array_equal(sent_.occupied, layers_["occupancy"].occupied))}
+                    import pose_diag as pose_diag_
+
+                    # written now, so no later submit or result-book rotation can lose it; a mission seen ended
+                    # other than by a preparation failure has its files removed (Codex capture re-review P2)
                     caps_ = pose_box.setdefault("prepare_captures", [])
-                    # a mission that ended other than by a preparation failure needs none (Codex review P2: a failed
-                    # one is not pushed out by later submits); at most sixteen kept
+                    caps_.append(pose_diag_.save_capture(args.output, len(caps_) + 1, cap_))
                     try:
-                        ended_ok_ = {r.get("mission_id") for r in live.results.message()["results"]
-                                     if not str(r.get("reason") or "").startswith("prepare:")}
-                    except Exception:  # noqa: BLE001 -- unread: keep them all
-                        ended_ok_ = set()
-                    caps_[:] = [c for c in caps_ if c.get("mission_id") not in ended_ok_]
-                    caps_.append(cap_)
-                    del caps_[:-16]
+                        results_ = live.results.message()["results"]
+                    except Exception:  # noqa: BLE001 -- unread: nothing removed
+                        results_ = None
+                    pose_diag_.prune_captures(args.output, caps_, results_)
                 except Exception as exc_:  # noqa: BLE001 -- a record only, never the run's failure
                     state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
 
@@ -10715,10 +10718,10 @@ def drive(S, isaac) -> None:
 
                         try:
                             results_ = live.results.message()["results"]
-                        except Exception:  # noqa: BLE001 -- unread: every capture is written
+                        except Exception:  # noqa: BLE001 -- unread: every written capture stays
                             results_ = None
-                        state["pose_diag_prepare"] = pose_diag_.save_prepare(args.output, pose_box["prepare_captures"],
-                                                                             results_)
+                        state["pose_diag_prepare"] = pose_diag_.prune_captures(args.output,
+                                                                               pose_box["prepare_captures"], results_)
                     except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
                         state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
             if near is not None:
