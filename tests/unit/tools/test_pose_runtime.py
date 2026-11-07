@@ -940,6 +940,19 @@ def test_the_shadow_stand_beginning_at_a_release_starts_from_what_it_applied():
     assert rt.raw["stands"][-1]["rebased_rad"] == pytest.approx(0.005, abs=1e-6)
 
 
+def test_the_shadow_counts_the_first_sample_of_a_stand_that_begins_at_a_release():
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    applied = compose((b[0], b[1], b[2] + 0.02), invert(b))
+    first = compose((b[0], b[1], b[2] + 0.029), invert(b))
+    log = [(I, applied, b)]
+    _tick(rt, b, I, standing=False)
+    rt.tick(1.0, b, first, standing=True, deadman=False, epoch=1, control_gen=1, release_log=log)
+    rt.tick(1.1, b, applied, standing=True, deadman=False, epoch=1, control_gen=1, release_log=log)
+    rt.tick(1.2, b, applied, standing=False, deadman=False, epoch=1, control_gen=1, release_log=log)
+    assert rt.raw["stands"][-1]["rebased_rad"] == pytest.approx(0.009, abs=1e-6)
+
+
 def test_a_release_and_a_new_hold_between_two_ticks_counts_as_a_release():
     # Codex: reapproach_hold_exit releases and holds again in one call; both ticks read holding
     b = (2.42, 1.7, 0.6)

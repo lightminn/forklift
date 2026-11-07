@@ -560,7 +560,6 @@ class PoseRuntime:
                                "max_m": 0.0, "max_rad": 0.0,
                                "rebased_m": 0.0, "rebased_rad": 0.0, "mission": bool(mission_active), "near": bool(near),
                                "status": self.pc.status, "t1": t}
-                return
             st = self._stand
             if released is not None:
                 st["c_rebased"] = tuple(released)
