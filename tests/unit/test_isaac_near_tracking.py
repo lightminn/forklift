@@ -236,7 +236,7 @@ def test_the_condition_names_every_argument_setting_and_input_that_differs(tmp_p
     # M-a1 replay plan R3: the record's value format is recording-only too.
     format2 = {**result, "arguments": {**result["arguments"], "record_boundary": True, "record_boundary_format": 2}}
     assert NT.condition_problems(expected, NT.run_condition(format2, tmp_path)) == []
-    assert NT.RECORDING_ONLY_ARGUMENTS == frozenset({"record_boundary", "record_boundary_format"})
+    assert NT.RECORDING_ONLY_ARGUMENTS == frozenset({"record_boundary", "record_boundary_format", "pose_diag_capture"})
     changed = {
         **result,
         "arguments": {**result["arguments"], "slam_noise_spec": "3sigma", "seed": 5},

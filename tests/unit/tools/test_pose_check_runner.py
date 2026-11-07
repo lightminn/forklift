@@ -133,8 +133,8 @@ def test_the_rear_check_walks_the_straight_reverses_own_bundle():
 
     assert bundle(0.0, 0.0, TeleopLimits().curvature_margin_inv_m) == [-0.05, 0.0, 0.05]
     src = _source()
-    at = src.index("def pose_rear_blocked(rt_)")
-    assert "for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):" in src[at:at + 2500]
+    at = src.index("def pose_rear_blocked(rt_, detail_=None)")
+    assert "kappas_ = bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m)" in src[at:at + 3500]
     assert "with permission_kept(perm_):" in src[at:at + 3000]  # a check only (plan 2026-11-06 1.1)
 
 
@@ -177,7 +177,7 @@ def test_the_shadow_gates_nothing_in_the_runner():
     assert 'if not pose_box["rt"].shadow:' in src[at:at + 400]
     assert '**({} if pose_box["rt"] is None or pose_box["rt"].shadow' in src
     at = src.index("def pose_checkpoint(t_):")
-    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    body = src[at:src.index("def pose_rear_blocked(rt_, detail_=None)")]
     assert "if not rt_.shadow:\n                a_.pose = rt_.view_dict(view_)" in body
     assert "if rt_.ends() and pose_box[\"end\"] is None:" in body
     at = src.index("def make_pose_runtime(")
@@ -298,7 +298,7 @@ def test_the_shadow_audit_is_a_shadow_option_recorded_only_when_given(tmp_path):
 def test_the_audit_brackets_each_place_the_shadow_computes():
     src = _source()
     at = src.index("def pose_checkpoint(t_):")
-    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    body = src[at:src.index("def pose_rear_blocked(rt_, detail_=None)")]
     assert "if audit_on_:\n                rt_.audit.before()" in body
     assert 'rt_.audit.after("checkpoint", t_)' in body
     note = src.index('pose_box["rt"].note_tick(')
@@ -317,14 +317,14 @@ def test_the_shadows_places_in_the_tick_write_only_their_own():
     # the lead, 2026-11-06 (Codex 2d P2-7): the writes listed -- the arbiter only when on, the published view, the end
     # only when on; nothing into state, the spool or the core
     src = _source()
-    body = src[src.index("def pose_checkpoint(t_):"):src.index("def pose_rear_blocked(rt_)")]
+    body = src[src.index("def pose_checkpoint(t_):"):src.index("def pose_rear_blocked(rt_, detail_=None)")]
     shadow_part = body[:body.index("if rt_.ends() and pose_box[\"end\"] is None:")]
     assert "state[" not in shadow_part and "core." in shadow_part  # core read only:
     assert "core.commands.status in ACTIVE" in shadow_part and "core.near_active()" in shadow_part
     assert "core.commands.status =" not in shadow_part
     assert shadow_part.count("a_.pose = ") == 1 and "if not rt_.shadow:\n                a_.pose = " in shadow_part
     assert "live.pose_info = " in shadow_part  # the published view
-    rear = src[src.index("def pose_rear_blocked(rt_)"):src.index("def live_failed(t_, reason_")]
+    rear = src[src.index("def pose_rear_blocked(rt_, detail_=None)"):src.index("def live_failed(t_, reason_")]
     assert "state[" not in rear and "with permission_kept(perm_):" in rear
     # Codex 2d re-review: slam_rear() writes the tracker's hold record; the check reads C o O itself
     assert "slam_rear(" not in rear and "compose(applied_[0], slam_odom_base())" in rear
@@ -339,7 +339,7 @@ def test_the_shadows_places_in_the_tick_write_only_their_own():
 def test_the_check_is_told_the_trackers_hold():
     src = _source()
     at = src.index("def pose_checkpoint(t_):")
-    body = src[at:src.index("def pose_rear_blocked(rt_)")]
+    body = src[at:src.index("def pose_rear_blocked(rt_, detail_=None)")]
     assert body.count('holding=slam["tracker"].mode == "holding"') == 2
 
 
@@ -371,3 +371,42 @@ def test_the_correction_injection_is_a_test_of_a_confirmed_session(tmp_path):
     at = src.index("correction_injection(t)\n")
     assert 'if args.correction_inject is not None:' in src[at - 120:at]
     assert 'pose_box["rt"] is not None' in src[at - 200:at]
+
+
+def test_the_rear_check_walks_through_pose_diag_in_the_old_order_and_keeps_its_detail():
+    # the lead's decision after the second B, item 3a: the verdict as before, its detail recorded
+    src = _source()
+    rear = src[src.index("def pose_rear_blocked(rt_, detail_=None)"):src.index("def pose_diag_layers():")]
+    assert "state[" not in rear and "with permission_kept(perm_):" in rear
+    assert "if snap_ is None or applied_ is None:" in rear and rear.index("detail_.update(length_m") < rear.index(
+        "if snap_ is None or applied_ is None:")
+    assert "pose_diag_.walk_rear(kappas_, length_, zones_, zone_contact_, obstacle_check_)" in rear
+    assert "first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_, zones_)" in rear
+    assert "perm_.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1," in rear
+    at = src.index("rear_detail_ = {}")
+    block = src[at:at + 400]
+    assert "blocked_ = pose_rear_blocked(rt_, rear_detail_)" in block
+    assert "rt_.rear_checked(t_, blocked_, rear_detail_)" in block
+    assert 'if getattr(args, "pose_diag_capture", False):\n                    pose_diag_premove(t_, applied_)' in block
+
+
+def test_the_diagnostic_captures_use_copies_and_the_raw_grid_function():
+    src = _source()
+    layers = src[src.index("def pose_diag_layers():"):src.index("def pose_diag_premove(t_, applied_):")]
+    assert 'grid_kwargs("observe", scratch={"use_slam": mode_ != "holding", "layers": layers_})' in layers
+    prep = src[src.index("def pose_diag_prepare(t_, rear_, payload_, inputs_):"):src.index("def live_prepare(t_, rear_):")]
+    assert '"payload": pickle_.dumps(payload_)' in prep and "pose_diag_.save_capture(args.output" in prep
+    assert "pose_diag_.prune_captures(args.output, caps_, results_)" in prep
+    # the submitted occupancy's own build gives the layers; a capture of a mission that ended well is dropped
+    assert "built_[0] is sent_" in prep and '"submitted_build"' in prep and '"rebuilt_copy"' in prep
+    at = src.index("pose_diag_prepare(t_, rear_, payload_, inputs_)  # the input as submitted")
+    assert src.index("core.prepare_request(t_, rear_, inputs_, payload_)", at) - at < 200  # just before the submit
+    grid = src[src.index("def grid_kwargs(kind=None"):src.index("grid_kwargs = recorded_function(")]
+    assert 'else {} if getattr(args, "pose_diag_capture", False) else None)' in grid
+    assert 'obstacle["plan_layers"] = (occupancy, diag_layers_)' in grid
+    assert "layer_.planner_layers(stamp, applied_, obstacle[\"version\"], use_slam=use_slam," in grid
+
+
+def test_the_capture_does_not_go_with_a_boundary_record():
+    src = _source()
+    assert 'if args.pose_diag_capture and args.record_boundary:' in src

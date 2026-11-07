@@ -202,6 +202,39 @@ def test_with_several_own_poses_only_cells_under_all_of_them_are_left_out():
     assert not alone.occupied[i, j]
 
 
+def test_the_planner_layers_are_the_planner_grid_by_the_same_steps_with_each_layer_apart():
+    # the lead's decision after the second B, item 3b: a record only, on copies; the grid is planner_grid's
+    import copy
+
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _wall_raw(lay, 1.62), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    lay.memory.add_hits(np.array([0.3, 2.5]), np.array([0.0, 0.5]), 0.0)
+    from forklift_core.perception.planning_memory import SLAM_OCCUPIED
+
+    slam = np.zeros((20, 20), np.int8)
+    slam[10, 10] = SLAM_OCCUPIED  # about (2.5, -0.5): a SLAM-only cell
+    lay.memory.set_slam(slam, (2.0, -1.0), 0.05, stamp_s=0.0, index=1)
+    for now, own in ((0.25, None), (5.0, pose), (5.0, [pose, (0.4, 0.0, 0.0)])):
+        for use_slam in (False, True):
+            a, b = copy.deepcopy(lay), copy.deepcopy(lay)
+            occ = a.planner_grid(now, (0.0, 0.0, 0.0), 3, use_slam=use_slam, own_pose=own, loaded=False)
+            got = b.planner_layers(now, (0.0, 0.0, 0.0), 3, use_slam=use_slam, own_pose=own, loaded=False)
+            assert np.array_equal(got["occupancy"].occupied, occ.occupied)
+            assert (got["occupancy"].origin_x_m, got["occupancy"].resolution_m) == (occ.origin_x_m, occ.resolution_m)
+            mem = (got["memory_observed"] | got["slam_layer"]) if use_slam else got["memory_observed"]
+            assert np.array_equal(got["live"] | (mem & ~got["own_left_out"]), occ.occupied)
+            assert got["use_slam"] is use_slam and got["correction_version"] == occ.version
+            # the memory moved the same way in both copies (hits and clears), nothing more
+            assert np.array_equal(a.memory.occupied(), b.memory.occupied())
+            assert a.memory.revision == b.memory.revision
+    got = copy.deepcopy(lay).planner_layers(0.25, (0.0, 0.0, 0.0), 0)
+    assert got["own_left_out"].sum() == 0 and got["slam_layer"].any()
+
+
 def _grid_kwargs_harness(tmp_path, slam=None, with_map=False, **outer):
     """Run the runner's grid_kwargs (AST) against a real obstacle layer."""
     import ast
@@ -1066,3 +1099,23 @@ def test_the_evaluation_only_keys_are_left_out_of_the_replay_end_state(tmp_path)
     assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
     changed = {"state": new["state"], "obstacle": {**new["obstacle"], "events": 4}}
     assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
+
+
+def test_the_slam_layer_is_kept_apart_even_where_the_observed_memory_has_the_same_cell():
+    # Codex review of the capture PR: the union cannot tell a survey cell under an observed one
+    import copy
+
+    from forklift_core.perception.planning_memory import SLAM_OCCUPIED
+
+    lay = layer()
+    slam = np.zeros((20, 20), np.int8)
+    slam[10, 10] = SLAM_OCCUPIED
+    lay.memory.set_slam(slam, (2.0, -1.0), 0.05, stamp_s=0.0, index=1)
+    a, b = lay.memory.cell(2.0 + 10.5 * 0.05, -1.0 + 10.5 * 0.05)
+    alone = copy.deepcopy(lay).planner_layers(0.1, (0.0, 0.0, 0.0), 0)
+    lay.memory.add_hits(np.array([2.0 + 10.5 * 0.05]), np.array([-1.0 + 10.5 * 0.05]), 0.05)
+    both = copy.deepcopy(lay).planner_layers(0.1, (0.0, 0.0, 0.0), 0)
+    assert alone["slam_layer"].sum() == both["slam_layer"].sum() > 0
+    assert both["memory_observed"].sum() > alone["memory_observed"].sum()
+    assert lay.memory.slam_occupied()[a, b] and np.array_equal(
+        lay.memory.occupied(), lay.memory.occupied(use_slam=False) | lay.memory.slam_occupied())
