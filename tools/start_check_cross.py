@@ -209,7 +209,7 @@ def _submitted_arrays(sent, arrays: dict) -> tuple:
         "occupied" in arrays
         and np.asarray(arrays["occupied"]).shape == own["occupied"].shape
         and np.array_equal(np.asarray(arrays["occupied"], bool), own["occupied"])
-        and np.allclose(np.asarray(arrays["origin"], float), own["origin"])
+        and np.array_equal(np.asarray(arrays["origin"], float), own["origin"])
         and float(np.asarray(arrays["resolution_m"])) == float(own["resolution_m"])
     )
     if not same:
