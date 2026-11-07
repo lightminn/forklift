@@ -270,10 +270,10 @@ class SlamPoseTracker:
         if self.mode != "holding":
             raise ValueError("not holding")
         before = compose(self.applied[0], odom_from_base)
-        replaced = self.applied[0]
+        log = self.__dict__.setdefault("release_log", [])  # a tracker restored from an older record has none
+        log.append((tuple(self.applied[0]), tuple(self.received[0]), tuple(float(v) for v in odom_from_base)))
         self.applied = self.received
         after = compose(self.applied[0], odom_from_base)
-        self.release_log.append((tuple(replaced), tuple(self.applied[0]), tuple(float(v) for v in odom_from_base)))
         self.mode, self._hold_start, self._hold_last, self._stand = "tracking", None, None, None
         return (
             float(np.hypot(after[0] - before[0], after[1] - before[1])),

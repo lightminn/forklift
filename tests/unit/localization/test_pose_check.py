@@ -299,6 +299,15 @@ def test_each_release_is_judged_on_its_own_correction_not_this_tick_s():
     assert pc.status == "ended:pose_revoked:release"
 
 
+def test_a_stand_beginning_at_a_release_starts_from_what_it_applied():
+    # Codex: applied 0.070, this tick 0.075, then 0.079: 0.009 since the release, not 0.004
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False, holding=True)
+    pc.note_release(I, (0.0, 0.0, 0.070), I)
+    pc.update(1.0, I, (0.0, 0.0, 0.075), standing=True, deadman=False, holding=False)
+    assert pc.c_still == pytest.approx((0.0, 0.0, 0.070))
+
+
 def test_the_release_gate_reads_the_rear_axle_too():
     # a yaw step moves the base nothing and the rear axle by its offset
     pc = _confirmed()

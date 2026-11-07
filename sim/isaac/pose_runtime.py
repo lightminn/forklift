@@ -556,7 +556,8 @@ class PoseRuntime:
         the same with the reference taken again at a hold's release (the revision plan 9.4)."""
         if standing and C is not None:
             if self._stand is None:
-                self._stand = {"t0": t, "c_still": tuple(C), "c_rebased": tuple(C), "max_m": 0.0, "max_rad": 0.0,
+                self._stand = {"t0": t, "c_still": tuple(C), "c_rebased": tuple(released if released is not None else C),
+                               "max_m": 0.0, "max_rad": 0.0,
                                "rebased_m": 0.0, "rebased_rad": 0.0, "mission": bool(mission_active), "near": bool(near),
                                "status": self.pc.status, "t1": t}
                 return

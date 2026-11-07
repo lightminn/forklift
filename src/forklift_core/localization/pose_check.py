@@ -266,7 +266,7 @@ class PoseCheck:
                 return View(self.status, reason="pose_ended", delta_int=(m, rad))
             self.c_still = after  # passed: the stand starts from what it applied; the window and C_int stay
         if standing:
-            if new_stand or self.c_still is None:
+            if (new_stand and not releases) or self.c_still is None:
                 self.c_still = tuple(C)
             sm, srad = gap(now, compose(self.c_still, o), self.rear_offset_m)
             if sm > self.bounds.e_still[0] or srad > self.bounds.e_still[1]:
