@@ -2,8 +2,9 @@
 the signed true errors (along, across, heading in the truth's frame) of its evidence g and of the applied pose, the agreement
 passed or refused, by start class, stand, generation, attempt, scan and result times, the odometry's move between them and
 the reverse distance. It prints no value: the table goes to OUT, to be read once the lead has fixed the rule that uses it.
-The lattice pose, the global ICP's result, ``refined``, the ICP's refusal and the conservative check's local result are not
-recorded; each row lists them under ``unrecorded``.
+A generation recorded since #351 carries its ``diag`` (per attempt the lattice pose, the pose returned, the ICP's own end,
+``refined``, the ICP's reason and the endpoint fraction, laser poses; the conservative check's local result ``res_base``);
+the row copies it. An older record has none and lists those fields under ``unrecorded``.
 
     python tools/pose_agreement_audit.py OUT.json FOLDER...
 
@@ -121,9 +122,10 @@ def session_rows(path: str) -> tuple:
                "outcome": (gen or {}).get("outcome"), "why": (gen or {}).get("why"),
                "agree_m": ag["agree_m"], "agree_rad": ag["agree_rad"], "delta_o": None, "reverse_m": None,
                "g_err": None, "c_err": None, "wider": None,
-               # not in the records: the lattice pose, the global ICP's, refined and its refusal, the conservative check's
-               # local result (res.base) -- recording them is a runtime change, left to the lead
-               "unrecorded": ["lattice_pose", "icp_pose", "refined", "icp_reason", "res_base"]}
+               # #351's diagnostics when the generation has them; an older record lists what it lacks
+               "diag": (gen or {}).get("diag"),
+               "unrecorded": [] if (gen or {}).get("diag") is not None else
+               ["lattice_pose", "icp_pose", "refined", "icp_reason", "res_base"]}
         if at is not None and first is not None:
             row["reverse_m"] = math.hypot(at["o"][0] - first["o"][0], at["o"][1] - first["o"][1])
             if o_scan is not None:

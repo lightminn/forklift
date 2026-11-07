@@ -1,0 +1,317 @@
+{
+ "job": 16605,
+ "snapshot": "ucb2_51c85a8e",
+ "bounds_sha256": "56828fc6c62f3ab99d74da1461b8ed57c4d67b8882d2f566322a66289f281f5d",
+ "sessions": [
+  {
+   "session": "b2_val3_032_full",
+   "part": "032",
+   "probe": "reverse",
+   "reverse_kind": "full",
+   "placements": [],
+   "start_checked": true,
+   "start_confirmed": false,
+   "start_reasons": [
+    "competitor"
+   ],
+   "hyps": 23,
+   "rear": {
+    "t": 2.600000135600567,
+    "blocked": false
+   },
+   "strokes": 3,
+   "truth_moved_m": 1.871,
+   "rematches": [
+    {
+     "t": 15.308334131725132,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 30.758334937505424,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 38.408335336484015,
+     "outcome": "confirm",
+     "why": []
+    }
+   ],
+   "agreements": [
+    {
+     "t": 38.408335336484015,
+     "agree_m": 0.058574033851466124,
+     "agree_rad": 0.021223310745023483,
+     "ok": true
+    }
+   ],
+   "status": "confirmed",
+   "mission_submit": "ack",
+   "mission_outcome": "failed",
+   "mission_reason": "prepare:all_candidates_failed:invalid_start;invalid_start;in",
+   "mission_advice": {
+    "backoff_m": null,
+    "blocked_at_m": 0.15,
+    "from_rear": [
+     -5.498388686660085,
+     -10.43043931465988,
+     -1.6769176141913498
+    ]
+   },
+   "wrong_ticks": 0
+  },
+  {
+   "session": "b2_val3_032_half",
+   "part": "032",
+   "probe": "reverse",
+   "reverse_kind": "half",
+   "placements": [],
+   "start_checked": true,
+   "start_confirmed": false,
+   "start_reasons": [
+    "competitor"
+   ],
+   "hyps": 23,
+   "rear": {
+    "t": 2.7333334758877754,
+    "blocked": false
+   },
+   "strokes": 4,
+   "truth_moved_m": 1.857,
+   "rematches": [
+    {
+     "t": 9.708333839662373,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 20.608334408141673,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 27.59166810568422,
+     "outcome": "unconfirmed",
+     "why": [
+      "competitor"
+     ]
+    },
+    {
+     "t": 38.76666868850589,
+     "outcome": "confirm",
+     "why": []
+    }
+   ],
+   "agreements": [
+    {
+     "t": 38.76666868850589,
+     "agree_m": 0.04935948765037882,
+     "agree_rad": 0.01427993378917125,
+     "ok": true
+    }
+   ],
+   "status": "confirmed",
+   "mission_submit": "ack",
+   "mission_outcome": "failed",
+   "mission_reason": "prepare:all_candidates_failed:invalid_start;invalid_start;in",
+   "mission_advice": {
+    "backoff_m": null,
+    "blocked_at_m": 0.15,
+    "from_rear": [
+     -5.499485831228152,
+     -10.430078095606369,
+     -1.6761170484185879
+    ]
+   },
+   "wrong_ticks": 0
+  },
+  {
+   "session": "b2_val3_004_full_place",
+   "part": "operator",
+   "probe": "reverse_place",
+   "reverse_kind": "full",
+   "placements": [
+    {
+     "reason": "ambiguous",
+     "amb_ratio": 0.9946493030821811
+    },
+    {
+     "reason": "ambiguous",
+     "amb_ratio": 1.0
+    },
+    {
+     "reason": "ambiguous",
+     "amb_ratio": 1.0
+    }
+   ],
+   "start_checked": false,
+   "start_confirmed": null,
+   "start_reasons": null,
+   "hyps": null,
+   "rear": null,
+   "strokes": 0,
+   "truth_moved_m": null,
+   "rematches": [],
+   "agreements": [],
+   "status": null,
+   "mission_submit": null,
+   "mission_outcome": null,
+   "mission_reason": null,
+   "mission_advice": null,
+   "wrong_ticks": null
+  },
+  {
+   "session": "b2_val3_078_half_place",
+   "part": "operator",
+   "probe": "reverse_place",
+   "reverse_kind": "half",
+   "placements": [
+    {
+     "reason": "confirmed",
+     "amb_ratio": 0.9796607692426703
+    }
+   ],
+   "start_checked": true,
+   "start_confirmed": false,
+   "start_reasons": [
+    "competitor"
+   ],
+   "hyps": 36,
+   "rear": {
+    "t": 2.4416667940095067,
+    "blocked": true
+   },
+   "strokes": 0,
+   "truth_moved_m": 0.0,
+   "rematches": [],
+   "agreements": [],
+   "status": "ended:pose_rear_blocked",
+   "mission_submit": null,
+   "mission_outcome": null,
+   "mission_reason": null,
+   "mission_advice": null,
+   "wrong_ticks": 0
+  },
+  {
+   "session": "b2_val3_000_full_place",
+   "part": "operator",
+   "probe": "reverse_place",
+   "reverse_kind": "full",
+   "placements": [
+    {
+     "reason": "confirmed",
+     "amb_ratio": 0.9580389384254104
+    }
+   ],
+   "start_checked": true,
+   "start_confirmed": false,
+   "start_reasons": [
+    "believed:low_fit"
+   ],
+   "hyps": 88,
+   "rear": {
+    "t": 2.200000114738941,
+    "blocked": true
+   },
+   "strokes": 0,
+   "truth_moved_m": 0.0,
+   "rematches": [],
+   "agreements": [],
+   "status": "ended:pose_rear_blocked",
+   "mission_submit": null,
+   "mission_outcome": null,
+   "mission_reason": null,
+   "mission_advice": null,
+   "wrong_ticks": 0
+  },
+  {
+   "session": "b2_val3_038_half_place",
+   "part": "operator",
+   "probe": "reverse_place",
+   "reverse_kind": "half",
+   "placements": [
+    {
+     "reason": "confirmed",
+     "amb_ratio": 0.9088673983071326
+    }
+   ],
+   "start_checked": true,
+   "start_confirmed": true,
+   "start_reasons": [],
+   "hyps": 36,
+   "rear": null,
+   "strokes": 0,
+   "truth_moved_m": 7.78,
+   "rematches": [
+    {
+     "t": 281.2083479994908,
+     "outcome": "confirm",
+     "why": []
+    }
+   ],
+   "agreements": [
+    {
+     "t": 2.1916667809709907,
+     "agree_m": 0.05388246182907739,
+     "agree_rad": 0.0029158065715219057,
+     "ok": true
+    }
+   ],
+   "status": "confirmed",
+   "mission_submit": "ack",
+   "mission_outcome": "done",
+   "mission_reason": "",
+   "mission_advice": null,
+   "wrong_ticks": 0
+  },
+  {
+   "session": "b2_val3_018_full_place",
+   "part": "operator",
+   "probe": "reverse_place",
+   "reverse_kind": "full",
+   "placements": [
+    {
+     "reason": "confirmed",
+     "amb_ratio": 0.9158572260613386
+    }
+   ],
+   "start_checked": true,
+   "start_confirmed": true,
+   "start_reasons": [],
+   "hyps": 34,
+   "rear": null,
+   "strokes": 0,
+   "truth_moved_m": 10.053,
+   "rematches": [
+    {
+     "t": 269.74168073479086,
+     "outcome": "confirm",
+     "why": []
+    }
+   ],
+   "agreements": [
+    {
+     "t": 2.4250001264736056,
+     "agree_m": 0.038130570596208224,
+     "agree_rad": 0.001639603252203914,
+     "ok": true
+    }
+   ],
+   "status": "confirmed",
+   "mission_submit": "ack",
+   "mission_outcome": "done",
+   "mission_reason": "",
+   "mission_advice": null,
+   "wrong_ticks": 0
+  }
+ ]
+}

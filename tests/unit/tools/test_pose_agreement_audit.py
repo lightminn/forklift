@@ -38,6 +38,20 @@ def test_an_on_session_reads_its_agreement_events_and_says_which_pose_is_wider(t
     assert row["g_err"] == pytest.approx([0.0, 0.0, 0.03]) and row["source"] == "rematch"
     assert row["wider"] == "g" and row["delta_o"] == pytest.approx([0.0, 0.0])
     assert "res_base" in row["unrecorded"] and counts["generations"] == 1 and counts["competitor"] == 0
+    assert row["diag"] is None
+
+
+def test_a_generation_recorded_with_its_diagnostics_has_nothing_unrecorded(tmp_path):
+    diag = [{"stage": "relocalize", "lattice_laser": [3.0, 0.1, 0.0], "pose_laser": [3.0, 0.1, 0.0], "icp_laser": [3.0, 0.1, 0.0],
+             "refined": True, "icp_reason": "ok", "endpoint_fraction": 1.0, "reason": "confirmed", "state": "chosen"},
+            {"stage": "decide", "res_base": [3.0, 0.1, 0.03], "outcome": "confirm"}]
+    record = {"samples": SAMPLES, "start": {"result": {"confirmed": False}},
+              "events": [{"t": 9.5, "kind": "slam_agreement", "agree_m": 0.05, "agree_rad": 0.02, "evidence": [3.0, 0.1, 0.03],
+                          "ok": True}],
+              "rematches": [{"t": 9.5, "outcome": "confirm", "g": [3.0, 0.1, 0.03], "o_begin": [-2.0, 0.0, 0.0],
+                             "o_scan": [-2.0, 0.0, 0.0], "attempts": [], "scan_stamps": [[9.0]], "diag": diag}]}
+    row, = A.session_rows(_session(tmp_path, "b2_val3_032_full", record))[0]
+    assert row["unrecorded"] == [] and row["diag"] == diag
 
 
 def test_a_shadow_session_reads_its_raw_generations_in_order(tmp_path):
