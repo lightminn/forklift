@@ -139,6 +139,15 @@ def test_a_reverse_place_session_places_then_reverses(tmp_path):
     args = (tmp_path / "probe_args").read_text().split()
     assert args[args.index("--scenario") + 1] == "place" and args[args.index("--after-place") + 1] == "reverse"
     assert args[args.index("--reverse-kind") + 1] == "full" and "--mission-after-confirm" not in args
+    assert "--click-kind" not in args
+
+
+def test_a_reverse_place_session_takes_a_record_click(tmp_path):
+    # the F1 path's reach (the lead's decision of 2026-11-07, A): the wrong click, then the strokes
+    p = _session(tmp_path, RELOC_PROBE="reverse_place", POSE_CHECK="on", CLICK_KIND="yaw180")
+    assert p.returncode == 0, p.stdout + p.stderr
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--click-kind") + 1] == "yaw180" and args[args.index("--after-place") + 1] == "reverse"
 
 
 def test_a_reverse_session_needs_the_check_and_a_known_rule(tmp_path):

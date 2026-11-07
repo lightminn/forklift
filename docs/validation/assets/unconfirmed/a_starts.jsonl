@@ -1,0 +1,11 @@
+{"id": "val3_000", "start_pose": [3.499061346054077, -2.1622025966644287, 1.1562057850906424], "click_kind": "bay+y", "reverse_kind": "full"}
+{"id": "val3_000", "start_pose": [3.499061346054077, -2.1622025966644287, 1.1562057850906424], "click_kind": "bay-y", "reverse_kind": "half"}
+{"id": "val3_019", "start_pose": [-4.1387128829956055, 1.2911758422851562, -0.4671771996646873], "click_kind": "bay-y", "reverse_kind": "full"}
+{"id": "val3_034", "start_pose": [-24.295007705688477, 0.3461100459098816, 1.428556540961131], "click_kind": "bay-y", "reverse_kind": "half"}
+{"id": "val3_038", "start_pose": [-4.659675121307373, -7.307610511779785, -0.694828044232093], "click_kind": "yaw180", "reverse_kind": "full"}
+{"id": "val3_057", "start_pose": [-23.32318687438965, -4.188275337219238, 0.12334895510424508], "click_kind": "bay+y", "reverse_kind": "half"}
+{"id": "val3_061", "start_pose": [4.695055961608887, -12.663373947143555, 3.032651323622093], "click_kind": "bay+y", "reverse_kind": "full"}
+{"id": "val3_083", "start_pose": [4.971529483795166, -4.776116847991943, 1.6519901797010856], "click_kind": "bay+y", "reverse_kind": "half"}
+{"id": "val3_083", "start_pose": [4.971529483795166, -4.776116847991943, 1.6519901797010856], "click_kind": "bay-y", "reverse_kind": "full"}
+{"id": "val3_084", "start_pose": [4.891279697418213, 1.133164644241333, -2.0071675037635783], "click_kind": "bay+y", "reverse_kind": "half"}
+{"id": "val3_086", "start_pose": [-25.79865264892578, -6.505130767822266, -1.4013459078260102], "click_kind": "bay+y", "reverse_kind": "full"}
