@@ -82,7 +82,8 @@ def test_the_start_check_waits_for_the_slam_and_five_still_standing_scans():
     grid = TG._grid(*TG.ROOM)
     b = (2.42, 1.7, 0.6)
     w = Scripted()
-    rt = _rt(w, b=b, gen_points=np.zeros((40, 2)))
+    start_set = np.zeros((40, 2))
+    rt = _rt(w, b=b, gen_points=start_set)
     _feed(rt, grid, b, b)
     assert _tick(rt, b, C=None).status == "checking" and not w.jobs  # no SLAM yet: scans before it do not count
     _feed(rt, grid, b, b, n=4, t0=1.0)
@@ -92,6 +93,7 @@ def test_the_start_check_waits_for_the_slam_and_five_still_standing_scans():
     _tick(rt, b)
     [(_, kind, payload)] = w.jobs
     assert kind == "start_check" and payload["b_scan"] == pytest.approx(b) and payload["o_scan"] == pytest.approx(b)
+    assert payload["gen_points"] is start_set  # the start generation's own scan set, as handed in
 
 
 def test_a_scan_set_that_moved_or_did_not_stand_is_not_used():
@@ -151,6 +153,40 @@ def test_an_unconfirmed_start_reverses_then_rematches_and_confirms():
     assert payload["g"] == pytest.approx(o)
     w.answer({"outcome": "confirm", "g": list(o)})
     assert _tick(rt, o, compose(o, invert(o))).status == "confirmed"
+
+
+def test_each_generation_keeps_what_was_computed_for_it_and_its_points(tmp_path):
+    # the revision plan 9.19's diagnostics, a record only: the lattice pose, the ICP's, refined and its reason, the
+    # conservative check's local result, and the scan points once per generation
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b)
+    o = b
+    _tick(rt, o)
+    while _tick(rt, o, standing=False, deadman=True).drive_ready:
+        o = compose(o, (-0.01, 0.0, 0.0))
+    _tick(rt, o, standing=False)
+    _tick(rt, o)
+    _feed(rt, grid, o, o, t0=5.0)
+    _tick(rt, o)
+    lattice = R.laser_from_base(compose(o, (0.05, 0.0, 0.0)))
+    icp = R.laser_from_base(compose(o, (0.02, 0.0, 0.0)))
+    top = G.Candidate(R.laser_from_base(o), 0.95, 0.97, True, lattice, 0.9, "ok", icp)
+    w.answer({"match": G.GlobalMatch("ok", (top,)), "decision": G.Decision(True, "confirmed", 0.0)})
+    _tick(rt, o)
+    points = w.jobs[-1][2]["points"]
+    w.answer({"outcome": "confirm", "g": list(o), "res_base": list(compose(o, (0.01, 0.0, 0.0)))})
+    _tick(rt, o, compose(o, invert(o)))
+    gen = rt.record()["rematches"][-1]
+    diag = gen["diag"]
+    assert diag[0]["stage"] == "relocalize" and diag[0]["refined"] is True and diag[0]["icp_reason"] == "ok"
+    assert diag[0]["lattice_laser"] == lattice and diag[0]["pose_laser"] == R.laser_from_base(o)
+    assert diag[0]["icp_laser"] == icp and diag[0]["endpoint_fraction"] == pytest.approx(0.97)
+    assert diag[1]["stage"] == "decide" and diag[1]["res_base"] == pytest.approx(compose(o, (0.01, 0.0, 0.0)))
+    assert rt.gen_points is not None and rt.gen_points.shape == (40, 2)  # the start's scan set is left as handed in
+    rt.save_stand_scans(tmp_path / "s.npz")
+    data = np.load(tmp_path / "s.npz")
+    saved = data[f"g{gen['points']}"]
+    assert saved.dtype == np.asarray(points).dtype and np.array_equal(saved, points)  # as the worker got them
 
 
 def test_a_rematch_whose_scans_are_interrupted_by_a_move_is_dropped():

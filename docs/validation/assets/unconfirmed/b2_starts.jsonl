@@ -1,0 +1,7 @@
+{"id": "val3_032", "part": "032", "start_pose": [-5.709930896759033, -12.598739624023438, -1.6720201713177787], "reverse_kind": "full", "probe": "reverse"}
+{"id": "val3_032", "part": "032", "start_pose": [-5.709930896759033, -12.598739624023438, -1.6720201713177787], "reverse_kind": "half", "probe": "reverse"}
+{"id": "val3_004", "part": "operator", "start_pose": [-4.740661144256592, -18.877300262451172, 1.6791463891513065], "reverse_kind": "full", "probe": "reverse_place", "click_seed": 0, "click_index": 0, "b_p1b_decision": "competitor"}
+{"id": "val3_078", "part": "operator", "start_pose": [1.7240263223648071, -10.7225980758667, 1.5146059340942366], "reverse_kind": "half", "probe": "reverse_place", "click_seed": 0, "click_index": 1, "b_p1b_decision": "competitor"}
+{"id": "val3_000", "part": "operator", "start_pose": [3.499061346054077, -2.1622025966644287, 1.1562057850906424], "reverse_kind": "full", "probe": "reverse_place", "click_seed": 0, "click_index": 2, "b_p1b_decision": "competitor"}
+{"id": "val3_038", "part": "operator", "start_pose": [-4.659675121307373, -7.307610511779785, -0.694828044232093], "reverse_kind": "half", "probe": "reverse_place", "click_seed": 0, "click_index": 3, "b_p1b_decision": "periodic"}
+{"id": "val3_018", "part": "operator", "start_pose": [3.4398412704467773, -8.443718910217285, -1.3688762757857573], "reverse_kind": "full", "probe": "reverse_place", "click_seed": 0, "click_index": 4, "b_p1b_decision": "periodic"}

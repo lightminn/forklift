@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from forklift_core.localization import global_match as G
+from forklift_core.localization import scan_match as G_scan
 from forklift_core.localization.slam_map import Grid
 
 RES = 0.05
@@ -245,6 +246,21 @@ def test_refinement_keeps_the_lattice_pose_and_score_through_the_real_path():
     assert top.lattice_pose == off.pose and _close(top.pose, truth, m=0.05)
     d = G.decide(moved, e_min=0.0, r_max=1.0, sep_m=0.2)
     assert not d.confirmed and d.reason == "refine_moved"
+
+
+
+def test_a_refused_refinement_keeps_the_lattice_pose_and_records_where_the_icp_went(monkeypatch):
+    # Codex review of the diagnostics: an unaccepted ICP keeps the lattice pose for the decision, its own end and
+    # reason recorded beside it
+    grid = _grid(*ROOM)
+    truth = (2.3, 1.7, 0.6)
+    pts = _points(grid, truth)
+    went = (truth[0] + 0.125, truth[1], truth[2])
+    monkeypatch.setattr(G, "match_scans", lambda *a, **k: G_scan.MatchResult(False, "degenerate", went, 0.9, 0.01, 0.0, 3))
+    cand = G.Candidate(truth, 0.5, math.nan)
+    top = G.refine(grid, G.GlobalMatch("ok", (cand,)), pts).candidates[0]
+    assert top.pose == truth and top.refined is False and top.lattice_pose == truth
+    assert top.icp_reason == "degenerate" and top.icp_pose == went
 
 
 # --- B-P1b search budget (plan B4b): beam floor, map index, work cap, deadline ---------------------------------------
