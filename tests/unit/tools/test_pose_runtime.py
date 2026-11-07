@@ -338,6 +338,23 @@ def test_the_rear_check_is_asked_once_for_an_unconfirmed_start_and_a_block_ends_
     assert rt.pc.status == "ended:pose_rear_blocked" and not rt.rear_pending()
 
 
+def test_the_rear_checks_detail_is_kept_with_the_hypothesis_its_zone_came_from():
+    # the lead's decision after the second B, item 3a: a record only; the verdict decides as before
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _started(False, b, hyps=[((6.0, 1.7, 0.6), "twin")])
+    _tick(rt, b)
+    detail = {"branch": "zone", "kappa": 0.0, "zone_id": "P-1@h1"}
+    rt.rear_checked(0.0, blocked=True, detail=detail)
+    assert rt.pc.status == "ended:pose_rear_blocked" and rt.rear["detail"] == detail
+    assert rt.rear["zone_origin"] == {"zone": "P-1", "h": 1, "hyp": [6.0, 1.7, 0.6], "source": "twin"}
+    assert rt.zone_origin("P-1@h0")["source"] == "believed" and rt.zone_origin("P-1@h9")["hyp"] is None
+    assert rt.zone_origin("no-index") is None
+    grid, w, rt = _started(False, b)
+    _tick(rt, b)
+    rt.rear_checked(0.0, blocked=False)
+    assert "detail" not in rt.rear  # no detail given: the record as before
+
+
 def test_a_confirmed_start_needs_no_rear_check():
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _started(True, b)

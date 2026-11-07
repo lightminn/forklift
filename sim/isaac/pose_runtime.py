@@ -692,11 +692,33 @@ class PoseRuntime:
     def rear_pending(self) -> bool:
         return self.rear == "pending" and self.pc.status == "unconfirmed"
 
-    def rear_checked(self, t: float, blocked: bool) -> None:
-        """The runner's verdict on the straight reverse to D_MIN and its stop (design 3): blocked ends the session."""
+    def rear_checked(self, t: float, blocked: bool, detail: dict | None = None) -> None:
+        """The runner's verdict on the straight reverse to D_MIN and its stop (design 3): blocked ends the session.
+        ``detail`` (the lead's decision after the second B, item 3a: a record only) is kept beside it, the zone that
+        stopped an arc named with the hypothesis it came from."""
         self.rear = {"t": t, "blocked": bool(blocked)}
+        if detail is not None:
+            self.rear["detail"] = detail
+            zone = detail.get("zone_id")
+            if zone is not None:
+                self.rear["zone_origin"] = self.zone_origin(zone)
         if blocked and not self.shadow:
             self.pc.end(t, "pose_rear_blocked")
+
+    def zone_origin(self, zone_id: str) -> dict | None:
+        """The hypothesis an odometry zone ``<id>@h<k>`` (twin_check.odom_zones) was carried by: k 0 the believed
+        start moved to the scan, k >= 1 the k-th of the hypothesis set, with its source."""
+        try:
+            name, k = zone_id.rsplit("@h", 1)
+            k = int(k)
+        except (AttributeError, ValueError):
+            return None
+        if k == 0:
+            return {"zone": name, "h": 0, "hyp": list(T.moved(self.b, self.o0, self.o_s)), "source": "believed"}
+        if 1 <= k <= len(self.hyps_s):
+            q, src = self.hyps_s[k - 1]
+            return {"zone": name, "h": k, "hyp": list(q), "source": src}
+        return {"zone": name, "h": k, "hyp": None, "source": None}
 
     def rear_zones(self, map_zones) -> list:
         """The union zones in odometry coordinates grown for the whole move to D_MIN and the stop (design 3)."""

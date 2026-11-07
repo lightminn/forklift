@@ -1177,6 +1177,14 @@ def arguments() -> argparse.Namespace:
                         "second every SLAM correction from then on is offset by x,y,yaw (the yaw about the truck), as "
                         "a wrong jump would be; with ,hold not before the tracker is holding, so the jump comes out "
                         "at the release. Unattended relocalization batches with the check on or shadow.")
+    parser.add_argument("--pose-diag-capture", action="store_true",
+                        help="Record only (the lead's decision after the second B, 2026-11-07, item 3b-c): before the "
+                        "truck moves on an unconfirmed start, the state and the observe plan's grid by layers "
+                        "(pose_diag_premove.npz), built on a copy of the obstacle layer; at each live unloaded mission "
+                        "submit (its observe_ladder preparation; not a loaded submit), the preparation's input as "
+                        "submitted with the grid's layers from the same build, written for preparations that failed "
+                        "(prepare_input_<k>). Grid plans only (--layout scene records that it has none); nothing "
+                        "decided changes.")
     parser.add_argument("--pose-check-contacts", action="store_true",
                         help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
                         "every forklift rigid body reports its contacts, and each contact with anything but the floor "
@@ -1635,6 +1643,9 @@ def arguments() -> argparse.Namespace:
           or args.reloc_operator_timeout_s is not None):
         parser.error("--start-pose, --reloc-dir, --reloc-unattended and --reloc-operator-timeout-s go with "
                      "--start-relocalize")
+    if args.pose_diag_capture and args.record_boundary:
+        # its plan_layers beside the Planner port's cache is not replayed (Codex capture re-review P2)
+        parser.error("--pose-diag-capture does not go with --record-boundary")
     if args.pose_check == "on" and (not args.start_relocalize or args.pose_check_bounds is None):
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
     if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
@@ -5713,8 +5724,23 @@ def drive(S, isaac) -> None:
                 # The map is in SLAM's frame: only while control applies SLAM's
                 # correction (not holding) do the two frames agree.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
-            occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
-                                            own_pose=own_now_, loaded=loaded_now_)
+            diag_layers_ = (scratch.get("layers") if scratch is not None
+                            else {} if getattr(args, "pose_diag_capture", False) else None)
+            if diag_layers_ is not None:
+                # --pose-diag-capture (item 3b-c): the same grid by planner_grid's steps with its layers apart -- on
+                # the scratch copy, or for a real plan in the very build its occupancy comes from (kept beside the
+                # cache: a submit's grid and its layers are one build, Codex review P2)
+                layers_ = layer_.planner_layers(stamp, applied_, obstacle["version"], use_slam=use_slam,
+                                                own_pose=own_now_, loaded=loaded_now_)
+                occupancy = layers_["occupancy"]
+                diag_layers_.update(layers_, grid_applied=list(applied_), grid_stamp_s=float(stamp),
+                                    tracker_mode=mode_, loaded=loaded_now_,
+                                    own_pose=None if own_now_ is None else np.asarray(own_now_).tolist())
+                if scratch is None:
+                    obstacle["plan_layers"] = (occupancy, diag_layers_)
+            else:
+                occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
+                                                own_pose=own_now_, loaded=loaded_now_)
             bundle = {
                 "memory": layer_.memory is not None,
                 "memory_revision": layer_.memory.revision if layer_.memory is not None else None,
@@ -8825,6 +8851,48 @@ def drive(S, isaac) -> None:
 
             core.hooks.prepare_start_ok = prepare_start_ok
 
+            def pose_diag_prepare(t_, rear_, payload_, inputs_):
+                """Item 3c (record only): the preparation's input as submitted -- the payload and inputs pickled now,
+                as the worker gets them -- with the grid's layers from the build the submitted occupancy came from
+                (rebuilt on a copy only when there is none), C and O; written at once (prepare_input_<k>)."""
+                import pickle as pickle_
+
+                try:
+                    sent_ = payload_["grid_kwargs"].get("occupancy")
+                    built_ = obstacle.get("plan_layers")
+                    if sent_ is not None and built_ is not None and built_[0] is sent_:
+                        layers_ = dict(built_[1])
+                        info_ = {k: layers_.pop(k, None) for k in ("grid_applied", "grid_stamp_s", "tracker_mode",
+                                                                   "loaded", "own_pose")}
+                        info_["layers_source"] = "submitted_build"
+                    else:  # no grid plan, or a build without layers: rebuilt on a copy, said so
+                        layers_, info_ = pose_diag_layers()
+                        info_["layers_source"] = "rebuilt_copy"
+                    applied_ = slam["tracker"].applied
+                    try:
+                        inputs_pickle_ = pickle_.dumps(inputs_)
+                    except Exception as exc_:  # noqa: BLE001
+                        inputs_pickle_ = None
+                        info_["inputs_unpickled"] = repr(exc_)
+                    cap_ = {"t": float(t_), "mission_id": core.commands.mission_id, "rear": list(map(float, rear_)),
+                            "C": None if applied_ is None else list(applied_[0]), "O": list(slam_odom_base()),
+                            **info_, "payload": pickle_.dumps(payload_), "inputs": inputs_pickle_, "layers": layers_,
+                            "layers_match": None if sent_ is None or layers_.get("occupancy") is None else bool(
+                                np.array_equal(sent_.occupied, layers_["occupancy"].occupied))}
+                    import pose_diag as pose_diag_
+
+                    # written now, so no later submit or result-book rotation can lose it; a mission seen ended
+                    # other than by a preparation failure has its files removed (Codex capture re-review P2)
+                    caps_ = pose_box.setdefault("prepare_captures", [])
+                    caps_.append(pose_diag_.save_capture(args.output, len(caps_) + 1, cap_))
+                    try:
+                        results_ = live.results.message()["results"]
+                    except Exception:  # noqa: BLE001 -- unread: nothing removed
+                        results_ = None
+                    pose_diag_.prune_captures(args.output, caps_, results_)
+                except Exception as exc_:  # noqa: BLE001 -- a record only, never the run's failure
+                    state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
+
             def live_prepare(t_, rear_):
                 """The submitted mission's inputs, fixed now, and its first leg asked of the worker (D2)."""
                 mission_ = core.commands.mission
@@ -8873,6 +8941,8 @@ def drive(S, isaac) -> None:
                         inputs_["far_zone"] = ((cx_ + args.live_test_far_zone_offset_m, cy_), r_)
                         state.setdefault("live_test_injections", []).append(
                             {"far_zone_offset_m": args.live_test_far_zone_offset_m, "mission_id": core.commands.mission_id})
+                if getattr(args, "pose_diag_capture", False):
+                    pose_diag_prepare(t_, rear_, payload_, inputs_)  # the input as submitted (item 3c)
                 core.prepare_request(t_, rear_, inputs_, payload_)
 
             def live_prepare_loaded(t_, rear_):
@@ -9072,8 +9142,11 @@ def drive(S, isaac) -> None:
                 if rt_.audit is not None and not audit_on_:
                     audit_on_ = rt_.audit.due(force=True)  # every rear check (Codex 2d re-review P3)
                     rt_.audit.before()
-                blocked_ = pose_rear_blocked(rt_)
-                rt_.rear_checked(t_, blocked_)
+                rear_detail_ = {}
+                blocked_ = pose_rear_blocked(rt_, rear_detail_)
+                rt_.rear_checked(t_, blocked_, rear_detail_)
+                if getattr(args, "pose_diag_capture", False):
+                    pose_diag_premove(t_, applied_)  # the lead's item 3b: before the truck moves, a copy only
                 view_ = rt_.tick(t_, slam_odom_base(), None if applied_ is None else applied_[0],
                                  standing=bool(a_.stop_confirmed), deadman=bool(a_.armed and tel_.get("deadman")),
                                  epoch=live.session_epoch, control_gen=a_.control_gen,
@@ -9107,9 +9180,13 @@ def drive(S, isaac) -> None:
             state["correction_inject"] = {"t": float(t_), "offset": list(turned_), "pivot": list(pivot_),
                                           "holding": slam["tracker"].mode == "holding", "phase": ms.phase}
 
-        def pose_rear_blocked(rt_) -> bool:
+        def pose_rear_blocked(rt_, detail_=None) -> bool:
             """Design 3: the straight reverse to D_MIN and its stop is clear of the union zones (grown for that move)
-            and of the obstacle layer, on the permits' own outline and walk."""
+            and of the obstacle layer, on the permits' own outline and walk. ``detail_`` (a dict, the lead's decision
+            after the second B item 3a: a record only) gets which branch stopped it, at which curvature, the required
+            and verified distances, the zone, the obstacle's blocked kind and cells, the snapshot's stamp and the
+            correction version, every later branch unchecked (pose_diag.walk_rear, the same order)."""
+            import pose_diag as pose_diag_
             from forklift_core.control.drive_permission import arc_poses
             from forklift_core.localization import pose_check as P
             from forklift_core.localization.slam_pose import compose
@@ -9126,23 +9203,64 @@ def drive(S, isaac) -> None:
             zones_ = rt_.rear_zones(live_pallet_zones())
             applied_ = slam["tracker"].applied
             snap_ = layer_.snapshot
+            if detail_ is not None:
+                detail_.update(length_m=float(length_), step_m=float(step_), odom_rear=list(odom_rear_),
+                               zones=len(zones_), snapshot_stamp_s=None if snap_ is None else float(snap_.stamp_s),
+                               correction_version=obstacle["version"],
+                               grid_applied=list(obstacle["applied"] or (0.0, 0.0, 0.0)))
             if snap_ is None or applied_ is None:
+                if detail_ is not None:
+                    detail_.update(branch="no_snapshot" if snap_ is None else "no_applied", arcs=pose_diag_.UNCHECKED)
                 return True
             # C o O read here: the control pose's own call writes the tracker's hold record (Codex 2d re-review)
             map_rear_ = rear_from_base(compose(applied_[0], slam_odom_base()), abs(args.rear_axle_offset_m))
             perm_ = layer_.permission
             with permission_kept(perm_):
                 # the straight reverse's own bundle: steering 0 with the teleop's curvature margin (Codex 2b P2-3)
-                for kappa_ in bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m):
-                    if zones_ and first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_,
-                                                zones_)[0] < length_:
-                        return True
+                kappas_ = bundle(0.0, 0.0, live.arbiter.config.teleop_limits.curvature_margin_inv_m)
+
+                def zone_contact_(kappa_):
+                    return first_contact(odom_rear_, kappa_, -1, length_ + step_, step_, fp_, zones_)
+
+                def obstacle_check_(kappa_):
                     path_ = arc_poses(map_rear_, kappa_, -1, length_ + step_, step_)[0]
-                    check_ = perm_.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
-                                              lookahead_m=length_ + step_)
-                    if check_.verified_m < length_:
-                        return True
-                return False
+                    return perm_.check_path(snap_, path_, fp_, own_, current_pose=map_rear_, direction=-1,
+                                            lookahead_m=length_ + step_)
+
+                blocked_, arcs_ = pose_diag_.walk_rear(kappas_, length_, zones_, zone_contact_, obstacle_check_)
+            if detail_ is not None:
+                branch_, kappa_at_ = pose_diag_.blocking_branch(arcs_, length_)
+                at_ = next((a for a in arcs_ if a["kappa"] == kappa_at_), None) if branch_ else None
+                detail_.update(branch=branch_, kappa=kappa_at_, map_rear=list(map_rear_), applied=list(applied_[0]),
+                               arcs=arcs_, zone_id=at_["zone"]["zone_id"] if branch_ == "zone" else None)
+                if branch_ == "zone":
+                    detail_["zone_rect"] = next(([z.x_m, z.y_m, z.length_m, z.width_m, z.yaw_rad] for z in zones_
+                                                 if z.zone_id == detail_["zone_id"]), None)
+            return blocked_
+
+        def pose_diag_layers():
+            """--pose-diag-capture: the observe plan's grid as a plan made now would get it, by layers, on a copy of
+            the obstacle layer (grid_kwargs scratch: neither cached nor recorded); the grid's own state apart."""
+            layers_ = {}
+            mode_ = slam["tracker"].mode
+            # never the Planner port's recorded call: --pose-diag-capture refuses --record-boundary
+            grid_kwargs("observe", scratch={"use_slam": mode_ != "holding", "layers": layers_})
+            info_ = {k: layers_.pop(k, None) for k in ("grid_applied", "grid_stamp_s", "tracker_mode", "loaded",
+                                                       "own_pose")}
+            return layers_, info_
+
+        def pose_diag_premove(t_, applied_):
+            """Item 3b (record only): after the start check's result and before the reverse, C, O and the observe
+            grid by layers, once."""
+            if pose_box.get("premove") is not None:
+                return
+            try:
+                layers_, info_ = pose_diag_layers()
+                pose_box["premove"] = {"t": float(t_), "C": None if applied_ is None else list(applied_[0]),
+                                       "O": list(slam_odom_base()), **info_, "layers": layers_}
+            except Exception as exc_:  # noqa: BLE001 -- a record only, never the run's failure
+                state.setdefault("record_errors", []).append(f"pose diag premove: {exc_!r}")
+                pose_box["premove"] = False
 
         def live_failed(t_, reason_, ticked_, stepped__, applied_):
             """A live mission's failure caught in its tick (persistent console plan D6): recorded, the mission ended
@@ -10583,6 +10701,27 @@ def drive(S, isaac) -> None:
                     pose_box["rt"].close()
                 except Exception as exc_:  # noqa: BLE001
                     state.setdefault("record_errors", []).append(f"pose check worker: {exc_!r}")
+            if pose_box.get("premove") or pose_box.get("prepare_captures"):
+                # --pose-diag-capture (the lead's item 3b-c): records only
+                if pose_box.get("premove"):
+                    try:
+                        import pose_diag as pose_diag_
+
+                        pose_diag_.save_premove(args.output / "pose_diag_premove.npz", pose_box["premove"])
+                    except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                        state.setdefault("record_errors", []).append(f"pose diag premove: {exc_!r}")
+                if pose_box.get("prepare_captures"):
+                    try:
+                        import pose_diag as pose_diag_
+
+                        try:
+                            results_ = live.results.message()["results"]
+                        except Exception:  # noqa: BLE001 -- unread: every written capture stays
+                            results_ = None
+                        state["pose_diag_prepare"] = pose_diag_.prune_captures(args.output,
+                                                                               pose_box["prepare_captures"], results_)
+                    except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                        state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
             if near is not None:
                 # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
                 # summary in result.json. Guarded: a failed write never replaces the run's own
@@ -10913,6 +11052,7 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # plan 2026-11-06 1.2: the injection only when given
         and (k != "reloc_inject" or v is not None) and (k != "pose_check_contacts" or v)
         and (k != "pose_shadow_audit" or v) and (k != "correction_inject" or v is not None)
+        and (k != "pose_diag_capture" or v)
         and (
             k not in {"quarter_eye", "quarter_target", "quarter_focal"}
             or (v is not None and (k != "quarter_focal" or v != 2.5))
