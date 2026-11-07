@@ -392,6 +392,19 @@ def test_past_the_hall_s_scale_nothing_is_skipped():
     assert not PP._far(PP._bounding_circle(boxes), Zone("z", 3e10 + 50.0, 3e10, 1.0, 1.0, 0.0), 0.0)
 
 
+def test_a_zone_not_in_doubles_is_never_skipped():
+    # Codex: float32 fields subtract in float32, and the old test rounds its half extents there too, past the slack
+    fp, pose = Footprint(.58, .58, .23), (-22.58210666556494, 18.614214887426925, 0.0)
+    zone = Zone("z", *map(np.float32, (-21.189041, 19.166637, 1.626131, .64484507, 0.0)))
+    assert PP.inside(pose, fp, [zone]) == _old_inside(pose, fp, [zone]) == "z"
+    assert PP.first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone]) == _old_first_contact(pose, 0.0, 1, 0.0, 0.02, fp, [zone])
+    circle = (0.0, 0.0, 1.0)
+    assert PP._far(circle, Zone("double", np.float64(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert PP._far(circle, Zone("int", 50, 0, 1, 1, 0), 0.0)
+    assert not PP._far(circle, Zone("single", np.float32(50.0), 0.0, 1.0, 1.0, 0.0), 0.0)
+    assert not PP._far(circle, Zone("half", 50.0, 0.0, np.float16(1.0), 1.0, 0.0), 0.0)
+
+
 def test_the_circle_holds_the_truck_along_the_whole_arc():
     # a turning arc: every corner of every part at every sample is inside the circle
     parts = [(Footprint(0.944, 0.17, 0.36), 0.0, 0.0), (Footprint(0.18, 0.18, 0.05), 0.2, 0.9)]

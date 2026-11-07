@@ -203,9 +203,12 @@ def _far(circle, zone, grow_m: float) -> bool:
     """The zone cannot meet the boxes: the circles around them do not touch, by more than any rounding. Only a pass
     skipped: whatever is near is judged by ``_meets`` itself, so no answer changes. The unconfirmed check's union holds a
     pallet zone per hypothesis, and judging each one cost a control step (the revision plan 9.16). Anything not finite
-    is never far, nor is anything past FAR_SCALE_M, where the slack would not survive the sum: the old code's result or
-    exception stands."""
+    is never far, nor is anything past FAR_SCALE_M, where the slack would not survive the sum, nor a zone not in doubles
+    or integers, which ``_meets`` itself rounds wider than the slack: the old code's result or exception stands."""
     x, y, radius = circle
+    fields = (zone.x_m, zone.y_m, zone.length_m, zone.width_m, zone.yaw_rad, grow_m)
+    if not all(isinstance(v, (float, int)) for v in fields):  # np.float64 is a float; float32 and float16 are not
+        return False
     reach = math.hypot(zone.length_m / 2 + grow_m, zone.width_m / 2 + grow_m)
     # each comparison is False on NaN, so nothing not finite passes
     in_scale = all(abs(v) < FAR_SCALE_M for v in (x, y, radius, zone.x_m, zone.y_m, reach))
