@@ -63,9 +63,14 @@ def replay(name, s, ser, pc) -> list:
             pose = S.compose(after, o)
             pivoted = (pose[0], pose[1], pose[2] + sign * 0.12)
             m, rad = S._gap(pivoted, S.compose(before, o))
+            gate = m > GATE[0] or rad > GATE[1]
+            true_err = abs(math.remainder(pivoted[2] - ser.truth[onset][2], math.tau))
             out.append({"session": name, "t": at, "natural_rad": natural, "natural_m": m0, "sign": sign,
-                        "same_sign": bool(natural * sign > 0), "w2": res["detected"], "gate": m > GATE[0] or rad > GATE[1],
-                        "gate_m": m, "gate_rad": rad, "wrong": res["wrong_reached"], "delay_m": res["delay_m"]})
+                        "same_sign": bool(natural * sign > 0), "w2": res["detected"], "gate": gate,
+                        "gate_m": m, "gate_rad": rad, "wrong": res["wrong_reached"], "delay_m": res["delay_m"],
+                        "delay_s": res["delay_s"], "exposure_m": 0.0 if gate else res["exposure_m"],
+                        "exposure_s": 0.0 if gate else res["exposure_s"], "true_rad_at_release": true_err,
+                        "first": "release" if gate else ("window" if res["detected"] else None)})
     return out
 
 
@@ -122,6 +127,9 @@ def main():
         "outcomes": Counter(str(v["outcome"]) for v in info.values()), "eligible": len(tail),
         "tail_window_max": [lim[0] / S.FACTOR, lim[1] / S.FACTOR], "cells": cells, "replay_rows": len(rows),
         "replay_sessions": len({x["session"] for x in rows}), "w2_miss": sum(not x["w2"] for x in rows),
+        "both_gates": {"first": Counter(str(x["first"]) for x in rows), "window_first": [
+            {k: x[k] for k in ("session", "t", "natural_rad", "gate_rad", "delay_m", "delay_s", "exposure_m", "exposure_s",
+                               "true_rad_at_release")} for x in rows if x["first"] == "window"]},
         "bare_release": {"n": len(bare), "m_max": max((x["m"] for x in bare), default=0.0),
                          "rad_max": max((x["rad"] for x in bare), default=0.0),
                          "over_gate": sum(x["m"] > GATE[0] or x["rad"] > GATE[1] for x in bare)},

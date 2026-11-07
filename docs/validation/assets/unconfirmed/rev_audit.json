@@ -1,0 +1,933 @@
+[
+{
+"session": "val3_001",
+"t_start": 2.325000121258199,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.030992702332552604,
+0.0018629093319404433
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_005",
+"t_start": 3.1083334954455495,
+"group": "audit",
+"t_end": 347.4333514533937,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.09791993220028711,
+0.04807524732270174
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_008",
+"t_start": 3.5166668500751257,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.05365305361739645,
+0.015905843452835855
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_011",
+"t_start": 1.8583334302529693,
+"group": "audit",
+"t_end": 35.883335204795,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.041703557589897376,
+0.0062826994892595245
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_012",
+"t_start": 1.775000092573464,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.019839942032939577,
+0.007058365100441222
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_013",
+"t_start": 2.308333453722298,
+"group": "audit",
+"t_end": 331.5333506241441,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.06044579340855497,
+0.01990222588353152
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "val3_015",
+"t_start": 2.2083334485068917,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.027225623541921866,
+0.0014434034445627297
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_016",
+"t_start": 3.3083335058763623,
+"group": "start_not_confirmed"
+},
+{
+"session": "val3_020",
+"t_start": 3.1250001629814506,
+"group": "audit",
+"t_end": 369.37501926440746,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.08116777398031559,
+0.03997453466830425
+],
+"generations": 12,
+"asked": 0
+},
+{
+"session": "val3_022",
+"t_start": 3.7500001955777407,
+"group": "audit",
+"t_end": 328.97501715738326,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.10300061228599681,
+0.054441767308997635
+],
+"generations": 5,
+"asked": 0
+},
+{
+"session": "val3_024",
+"t_start": 2.866666816174984,
+"group": "audit",
+"t_end": 329.36668384447694,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.054612582338153456,
+0.02820855783922349
+],
+"generations": 12,
+"asked": 0
+},
+{
+"session": "val3_026",
+"t_start": 2.725000142119825,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.052818111293815355,
+0.007925123223896602
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_028",
+"t_start": 2.258333451114595,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.02582688720263821,
+0.010718303537310625
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_033",
+"t_start": 3.041666825301945,
+"group": "audit",
+"t_end": 315.1250164350495,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.07549741574674931,
+0.036867272864984146
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_040",
+"t_start": 2.4083334589377046,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.02603977878705432,
+0.005526226975541615
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_042",
+"t_start": 3.566666852682829,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.016795660635810374,
+0.003860696314764933
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "val3_046",
+"t_start": 3.1583334980532527,
+"group": "audit",
+"t_end": 358.0666853412986,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.05212449991347933,
+0.010763243687869545
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "val3_048",
+"t_start": 2.2083334485068917,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.03021230938161989,
+0.01081847457119789
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "val3_053",
+"t_start": 2.666666805744171,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.055310030094861296,
+0.0034457094172193337
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_055",
+"t_start": 2.383333457633853,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {
+"window": [
+45.716669050976634,
+0.4063840904240985,
+0.031410000000001936
+]
+},
+"first_gate": "window",
+"first_t": 45.716669050976634,
+"truth_max": [
+0.4375768745743062,
+0.03368057030357452
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_056",
+"t_start": 2.9083334850147367,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.06336794133520278,
+0.006564570010851423
+],
+"generations": 7,
+"asked": 0
+},
+{
+"session": "val3_058",
+"t_start": 3.6083335215225816,
+"group": "audit",
+"t_end": 371.0833526868373,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.08348900496526485,
+0.04537695310177403
+],
+"generations": 12,
+"asked": 0
+},
+{
+"session": "val3_059",
+"t_start": 2.708333474583924,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.034155129855285016,
+0.0031001496548683782
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_065",
+"t_start": 2.008333438076079,
+"group": "audit",
+"t_end": 373.7666861601174,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.07339593405703261,
+0.0498728490474071
+],
+"generations": 12,
+"asked": 0
+},
+{
+"session": "val3_074",
+"t_start": 2.775000144727528,
+"group": "start_not_confirmed"
+},
+{
+"session": "val3_076",
+"t_start": 2.6750001395121217,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.06468765514976778,
+0.007695682648892976
+],
+"generations": 13,
+"asked": 0
+},
+{
+"session": "val3_081",
+"t_start": 3.100000161677599,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.01430583423992077,
+0.003437344530625275
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "val3_086",
+"t_start": 2.3750001238659024,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.047559757480967545,
+0.0012601205017823691
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "val3_087",
+"t_start": 2.8083334797993302,
+"group": "audit",
+"t_end": 351.30001832172275,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.057616499259358425,
+0.010822375541908569
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "val3_089",
+"t_start": 2.5500001329928637,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.04866627002095775,
+0.001160475179892817
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "t_val3_006",
+"t_start": 2.7500001434236765,
+"group": "audit",
+"t_end": 386.8750201771036,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.07184020098723697,
+0.029989270821725394
+],
+"generations": 4,
+"asked": 2
+},
+{
+"session": "t_val3_007",
+"t_start": 2.325000121258199,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.05218311555591939,
+0.06515397174732795
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_010",
+"t_start": 2.4500001277774572,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.036489980203773566,
+0.002969084011633427
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "t_val3_014",
+"t_start": 2.525000131689012,
+"group": "audit",
+"t_end": 59.67500311229378,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.032842276314555365,
+0.0020428132329758375
+],
+"generations": 5,
+"asked": 0
+},
+{
+"session": "t_val3_017",
+"t_start": 3.2500001695007086,
+"group": "audit",
+"t_end": 46.08333573676646,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.040062453672731625,
+0.012519083517262941
+],
+"generations": 2,
+"asked": 0
+},
+{
+"session": "t_val3_021",
+"t_start": 2.3750001238659024,
+"group": "audit",
+"t_end": 74.85833723749965,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.049286822887498416,
+0.0034206333980870557
+],
+"generations": 5,
+"asked": 0
+},
+{
+"session": "t_val3_025",
+"t_start": 2.150000112131238,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.02996281640294675,
+0.004555548276833354
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_029",
+"t_start": 2.6416668044403195,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.053765289438579646,
+0.0040559885385024474
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_030",
+"t_start": 20.933334425091743,
+"group": "audit",
+"t_end": 388.66668693721294,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.061551151662585,
+0.053558684316884264
+],
+"generations": 6,
+"asked": 1
+},
+{
+"session": "t_val3_034",
+"t_start": 2.7666668109595776,
+"group": "audit",
+"t_end": 344.9416846567765,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.055092751355418,
+0.027163208809224237
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_036",
+"t_start": 2.741666809655726,
+"group": "audit",
+"t_end": 358.9250187193975,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.044179255091258605,
+0.011556710556709815
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_037",
+"t_start": 3.1083334954455495,
+"group": "audit",
+"t_end": 338.24168430734426,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.056061207495170635,
+0.01397636924240575
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_043",
+"t_start": 2.2666667848825455,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {
+"still": [
+37.71666863374412,
+0.015412676112856974,
+0.02181249933580287,
+31.47500164154917,
+false
+]
+},
+"first_gate": "still",
+"first_t": 37.71666863374412,
+"truth_max": [
+0.05343758012121643,
+0.03724890543863424
+],
+"generations": 3,
+"asked": 0
+},
+{
+"session": "t_val3_044",
+"t_start": 2.8083334797993302,
+"group": "audit",
+"t_end": 288.35834837239236,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.07063537753603932,
+0.02089560122900408
+],
+"generations": 0,
+"asked": 0
+},
+{
+"session": "t_val3_045",
+"t_start": 3.191666833125055,
+"group": "audit",
+"t_end": 73.17500381637365,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.06217636879465549,
+0.013823766503839874
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_049",
+"t_start": 2.5333334654569626,
+"group": "audit",
+"t_end": 46.191669075749815,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.01244594957911051,
+0.001951142534392816
+],
+"generations": 2,
+"asked": 0
+},
+{
+"session": "t_val3_051",
+"t_start": 2.2083334485068917,
+"group": "audit",
+"t_end": 303.28334915079176,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.10127994641622821,
+0.04676938325123925
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_057",
+"t_start": 2.9666668213903904,
+"group": "audit",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.056746483173611126,
+0.0041893299251239136
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_060",
+"t_start": 2.5666668005287647,
+"group": "audit",
+"t_end": 52.00833604577929,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.021621553800866538,
+0.0048951233475797995
+],
+"generations": 2,
+"asked": 0
+},
+{
+"session": "t_val3_062",
+"t_start": 3.800000198185444,
+"group": "audit",
+"t_end": 355.2333518601954,
+"mission": "done",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.06629941139022376,
+0.024583667706510548
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_063",
+"t_start": 2.0916667757555842,
+"group": "audit",
+"t_end": 47.05000245384872,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.04945702199404255,
+0.0059642891710325885
+],
+"generations": 3,
+"asked": 0
+},
+{
+"session": "t_val3_064",
+"t_start": 1.9083334328606725,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.02409401214370251,
+0.004691091244115708
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_068",
+"t_start": 3.008333490230143,
+"group": "audit",
+"t_end": 127.40000664442778,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.04964401623298854,
+0.007475492791994498
+],
+"generations": 6,
+"asked": 0
+},
+{
+"session": "t_val3_070",
+"t_start": 2.508333464153111,
+"group": "audit",
+"t_end": 115.17500600684434,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.04739232333838384,
+0.00585812440188116
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_075",
+"t_start": 2.5000001303851604,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {
+"window": [
+12.216667303815484,
+0.4005873150151625,
+0.01744999999999941
+],
+"rematch": [
+27.55833477061242,
+0.18271169082081679,
+0.004088405318611432
+]
+},
+"first_gate": "window",
+"first_t": 12.216667303815484,
+"truth_max": [
+0.6397768078000943,
+0.016308786670274245
+],
+"generations": 6,
+"asked": 6
+},
+{
+"session": "t_val3_077",
+"t_start": 2.291666786186397,
+"group": "start_invalid",
+"t_end": null,
+"mission": null,
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.04314297793720993,
+0.003987317116091793
+],
+"generations": 4,
+"asked": 0
+},
+{
+"session": "t_val3_088",
+"t_start": 1.9916667705401778,
+"group": "audit",
+"t_end": 58.09166969638318,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.026729591296678963,
+0.003029001559140543
+],
+"generations": 3,
+"asked": 0
+},
+{
+"session": "t_val3_091",
+"t_start": 2.241666783578694,
+"group": "audit",
+"t_end": 27.208334752358496,
+"mission": "failed",
+"first": {},
+"first_gate": null,
+"first_t": null,
+"truth_max": [
+0.043722111151158274,
+0.0026727331292324408
+],
+"generations": 0,
+"asked": 0
+}
+]
