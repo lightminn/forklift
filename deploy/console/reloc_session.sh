@@ -37,7 +37,8 @@ case "$PROBE_MODE" in
   reverse) UNATTENDED=1; PROBE_ARGS=(--scenario reverse) ;;
   reverse_place) UNATTENDED=; PROBE_ARGS=(--scenario place --after-place reverse "--truth=$START_POSE"
                                           --click-seed "${CLICK_SEED:-0}" --click-index "${CLICK_INDEX:-0}"
-                                          --place-wait-s "${PLACE_WAIT_S:-600}") ;;
+                                          --place-wait-s "${PLACE_WAIT_S:-600}"
+                                          ${CLICK_KIND:+--click-kind "$CLICK_KIND"}) ;;
   *) echo "RELOC_PROBE must be hold, place, reverse or reverse_place" >&2; exit 2 ;;
 esac
 case "$PROBE_MODE" in
