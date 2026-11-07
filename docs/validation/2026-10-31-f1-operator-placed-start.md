@@ -257,6 +257,12 @@ ws1 13936: the first run's list with only `HOLD_SIM_S=14`, the same snapshot and
     - the count is taken only among the shown candidates, at most four;
     - the check is a page step, not enforced by the vehicle.
   - The four hard starts F1 does not rescue need another means: seed 5's val4_021 (aisle slip) and val4_052 (deadline), both refused as ambiguous at every placement, and seed 3's val5_011 (ambiguous) and val5_083 (low fit).
+- **Operating residual risk** (the lead's decision of 2026-11-07, unconfirmed position revision plan 9.21; no code change):
+  - F1 placement is offered by the console by default and does not require the unconfirmed position check (③).
+  - Measured: all four neighbouring-bay misplacements passed the bridge's start check (section 1.3).
+  - The defence is the operator premise and the page's aids only, not enforced by the vehicle. ③ is off by default and is not counted as an operating safety layer.
+  - Mandatory review trigger: before autonomous operation on the real truck, F1 is either tied to ③ having passed its validation, or turned off.
+  - This does not resolve the remaining ambiguity of matcher (unattended) starts.
 - **Follow-up "확인 전 위치"** (the lead, after F1 closes; plan 5.1):
   - **What:** a placed start with look-alikes (or none known) is held as an unconfirmed position.
     - While unconfirmed, the arbiter refuses pick, lift and lower, unload and mission legs.
