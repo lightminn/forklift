@@ -700,9 +700,29 @@ class ObstacleLayer:
                      own_pose=None, loaded: bool = False):
         """Hall-wide OccupancyGrid of the occupied cells for a (re)plan: the live
         grid, and with the planning memory its remembered and SLAM cells."""
+        return self._planner(now_s, correction, version, use_slam=use_slam, own_pose=own_pose, loaded=loaded,
+                             layers=None)
+
+    def planner_layers(self, now_s: float, correction, version: int, *, use_slam: bool = True,
+                       own_pose=None, loaded: bool = False) -> dict:
+        """planner_grid's grid with its layers apart, by the same steps (a record only, run on a copy of the layer:
+        like planner_grid it moves the memory's hits and clears): ``occupancy``, ``live`` (the snapshot's occupied
+        cells), ``memory_observed`` and ``memory_with_slam`` (the memory without and with its SLAM layer, on the
+        snapshot's cells), ``own_left_out`` (the remembered cells wholly under the truck, left out of this copy),
+        ``use_slam``, the snapshot's stamp and correction version. Without a memory only the live grid."""
+        out: dict = {}
+        out["occupancy"] = self._planner(now_s, correction, version, use_slam=use_slam, own_pose=own_pose,
+                                         loaded=loaded, layers=out)
+        return out
+
+    def _planner(self, now_s: float, correction, version: int, *, use_slam: bool, own_pose, loaded: bool,
+                 layers: dict | None):
         if self.memory is not None:
             self._memory_hits(now_s, correction)
         snap = self.grid.snapshot(now_s, correction, version)
+        if layers is not None:
+            layers.update(live=snap.occupied.copy(), snapshot_stamp_s=snap.stamp_s,
+                          correction_version=snap.correction_version, use_slam=bool(use_slam))
         if self.memory is None:
             return snapshot_to_occupancy(snap)
         self._memory_clears(snap, now_s)
@@ -716,6 +736,13 @@ class ObstacleLayer:
         okj = (cj >= 0) & (cj < mem.shape[1])
         sub = np.zeros_like(occupied)
         sub[np.ix_(oki, okj)] = mem[np.ix_(ci[oki], cj[okj])]
+        if layers is not None:  # the memory's two readings on the snapshot's cells (reads only)
+            for name, slam_ in (("memory_observed", False), ("memory_with_slam", True)):
+                m_ = self.memory.occupied(use_slam=slam_)
+                on_ = np.zeros_like(occupied)
+                on_[np.ix_(oki, okj)] = m_[np.ix_(ci[oki], cj[okj])]
+                layers[name] = on_
+            layers["own_left_out"] = np.zeros_like(occupied)
         if own_pose is not None:
             # Where the truck stands nothing else can: the remembered cells wholly
             # inside its parts (blades and body apart, or the loaded outline) are
@@ -737,6 +764,8 @@ class ObstacleLayer:
                     cells.update((a, b) for a, b in whole_cells(snap, part, fp) if 0 <= a < nx and 0 <= b < ny)
                 out = cells if out is None else out & cells
             for a, b in out:
+                if layers is not None:
+                    layers["own_left_out"][a, b] = bool(sub[a, b])
                 sub[a, b] = False
         from forklift_core.planning.grid_collision import OccupancyGrid
 
