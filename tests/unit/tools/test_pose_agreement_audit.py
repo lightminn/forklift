@@ -27,18 +27,26 @@ def test_an_on_session_reads_its_agreement_events_and_says_which_pose_is_wider(t
     record = {"samples": SAMPLES, "start": {"result": {"confirmed": False}},
               "events": [{"t": 9.5, "kind": "slam_agreement", "agree_m": 0.05, "agree_rad": 0.02, "evidence": [3.0, 0.1, 0.03]},
                          {"t": 9.6, "kind": "ended"}]}
-    row, = A.session_rows(_session(tmp_path, "b_val3_032_full", record))
-    assert row["class"] == "natural_unconfirmed" and row["attempt"] == 1 and row["reverse_m"] == pytest.approx(2.0)
-    assert row["g_err"] == pytest.approx([0.0, 0.03]) and row["c_err"] == pytest.approx([0.1, 0.01]) and row["wider"] == "g"
+    record["events"][0]["ok"] = False  # a refused agreement is a row too
+    record["rematches"] = [{"t": 9.5, "outcome": "confirm", "why": [], "g": [3.0, 0.1, 0.03], "o_begin": [-2.0, 0.0, 0.0],
+                            "o_scan": [-2.0, 0.0, 0.0], "attempts": [{"reason": "ok", "state": "done"}],
+                            "scan_stamps": [[8.6, 8.7, 8.8, 8.9, 9.0]]}]
+    rows, counts = A.session_rows(_session(tmp_path, "b_val3_032_full", record))
+    row, = rows
+    assert row["class"] == "natural_unconfirmed" and row["ok"] is False and row["reverse_m"] == pytest.approx(2.0)
+    assert row["stand"] == 1 and row["generation"] == 1 and row["attempts"] == ["ok"] and row["scan_t"] == 9.0
+    assert row["g_err"] == pytest.approx([0.0, 0.0, 0.03]) and row["c_err"] == pytest.approx([0.0, -0.1, 0.01])
+    assert row["wider"] == "g" and row["delta_o"] == pytest.approx([0.0, 0.0])
+    assert "res_base" in row["unrecorded"] and counts["generations"] == 1 and counts["competitor"] == 0
 
 
 def test_a_shadow_session_reads_its_raw_generations_in_order(tmp_path):
     raw = {"start": {"confirmed": True}, "rematches": [{"t": 2.0, "g": [5.0, 0.0, 0.0], "agree_m": 0.01, "agree_rad": 0.001},
                                                        {"t": 3.0, "g": None},
                                                        {"t": 9.5, "g": [3.0, 0.1, 0.0], "agree_m": 0.02, "agree_rad": 0.002}]}
-    rows = A.session_rows(_session(tmp_path, "t_val3_006", {"samples": SAMPLES, "raw": raw}))
-    assert [r["attempt"] for r in rows] == [1, 2] and {r["class"] for r in rows} == {"confirmed"}
-    assert rows[1]["wider"] == "c" and rows[1]["kind"] == "raw"
+    rows, _ = A.session_rows(_session(tmp_path, "t_val3_006", {"samples": SAMPLES, "raw": raw}))
+    assert [r["agreement"] for r in rows] == [1, 2, 3] and {r["class"] for r in rows} == {"confirmed"}
+    assert rows[2]["wider"] == "c" and rows[2]["kind"] == "raw" and rows[1]["g_err"] is None
 
 
 def test_a_start_with_a_competitor_is_its_own_class(tmp_path):
@@ -55,5 +63,6 @@ def test_it_prints_no_value(tmp_path, capsys):
     assert A.main([str(out), str(tmp_path / "t_*")]) == 0
     text = capsys.readouterr().out
     assert "0.1234" not in text and "1 generations" in text
+    assert json.loads(out.read_text())["sessions"][0]["session"] == "t_val3_006"
     assert json.loads(out.read_text())["rows"][0]["agree_m"] == pytest.approx(0.1234)
     assert math.isfinite(json.loads(out.read_text())["rows"][0]["reverse_m"])

@@ -1,6 +1,9 @@
 """The record audit of the SLAM agreement (the revision plan 9.16, lead's note of 2026-11-07): every re-match's agreement and
-the true errors of its evidence g and of the applied pose, by start class, reverse distance and attempt. It prints no
-value: the table goes to OUT, to be read once the lead has fixed the rule that uses it.
+the signed true errors (along, across, heading in the truth's frame) of its evidence g and of the applied pose, the agreement
+passed or refused, by start class, stand, generation, attempt, scan and result times, the odometry's move between them and
+the reverse distance. It prints no value: the table goes to OUT, to be read once the lead has fixed the rule that uses it.
+The lattice pose, the global ICP's result, ``refined``, the ICP's refusal and the conservative check's local result are not
+recorded; each row lists them under ``unrecorded``.
 
     python tools/pose_agreement_audit.py OUT.json FOLDER...
 
@@ -48,41 +51,87 @@ def _sample_at(samples, t: float):
     return rows[-1] if rows else None
 
 
-def _generations(record: dict) -> list:
-    """(t, g, agree_m, agree_rad, kind) of each generation with an agreement; g None when the record has none."""
+def _signed(pose, truth) -> list:
+    """(along, across, heading) of pose - truth in the truth's frame: the sign kept."""
+    dx, dy = pose[0] - truth[0], pose[1] - truth[1]
+    c, s = math.cos(truth[2]), math.sin(truth[2])
+    return [c * dx + s * dy, -s * dx + c * dy, math.remainder(pose[2] - truth[2], math.tau)]
+
+
+def _agreements(record: dict) -> list:
+    """Every agreement the check judged, passed or not: a shadow's raw generations, an on run's agreement events."""
     raw = (record.get("raw") or {}).get("rematches")
     if raw is not None:
-        return [(g["t"], g.get("g"), g["agree_m"], g["agree_rad"], "raw") for g in raw if g.get("agree_m") is not None]
-    return [(e["t"], e.get("evidence"), e["agree_m"], e["agree_rad"], e["kind"]) for e in record.get("events", [])
+        return [{"t": g["t"], "g": g.get("g"), "agree_m": g.get("agree_m"), "agree_rad": g.get("agree_rad"), "ok": None,
+                 "kind": "raw", "scan_t": g.get("scan_t"), "o_scan": g.get("o_scan")} for g in raw]
+    return [{"t": e["t"], "g": e.get("evidence"), "agree_m": e["agree_m"], "agree_rad": e["agree_rad"], "ok": e.get("ok"),
+             "kind": e["kind"], "scan_t": None, "o_scan": None} for e in record.get("events", [])
             if e.get("kind") in ("slam_agreement", "rematch_agreement")]
 
 
-def session_rows(path: str) -> list:
+def _generation_at(record: dict, t: float):
+    return next((r for r in record.get("rematches") or [] if abs(r["t"] - t) < 1e-6), None)
+
+
+def session_rows(path: str) -> tuple:
+    """(rows, counts): one row per agreement with its generation; the session's discards, competitor endings, deadlines
+    and contacts counted apart."""
     record = json.load(open(os.path.join(path, "epoch_1", "run", "result.json"))).get("pose_check") or {}
     samples = record.get("samples") or []
     first = next((x for x in samples if x.get("o")), None)
     cls = start_class(record, path)
+    gens = record.get("rematches") or []
+    stand_of = {}
+    for r in gens:  # a generation's stand: the odometry it began at
+        stand_of.setdefault(tuple(r.get("o_begin") or ()), len(stand_of) + 1)
     rows = []
-    for attempt, (t, g, agree_m, agree_rad, kind) in enumerate(_generations(record), 1):
-        at = _sample_at(samples, t)
-        row = {"session": os.path.basename(path.rstrip("/")), "class": cls, "attempt": attempt, "t": t, "kind": kind,
-               "agree_m": agree_m, "agree_rad": agree_rad, "reverse_m": None, "g_err": None, "c_err": None, "wider": None}
+    for k, ag in enumerate(_agreements(record), 1):
+        gen = _generation_at(record, ag["t"])
+        stamps = (gen or {}).get("scan_stamps") or []
+        scan_t = ag["scan_t"] if ag["scan_t"] is not None else (stamps[-1][-1] if stamps and stamps[-1] else None)
+        o_scan = ag["o_scan"] if ag["o_scan"] is not None else (gen or {}).get("o_scan")
+        at, scanned = _sample_at(samples, ag["t"]), _sample_at(samples, scan_t) if scan_t is not None else None
+        row = {"session": os.path.basename(path.rstrip("/")), "class": cls, "agreement": k, "kind": ag["kind"],
+               "ok": ag["ok"], "t": ag["t"], "scan_t": scan_t, "stand": stand_of.get(tuple((gen or {}).get("o_begin") or ())),
+               "generation": gens.index(gen) + 1 if gen in gens else None,
+               "attempts": [a.get("reason") for a in (gen or {}).get("attempts") or []] if isinstance((gen or {}).get("attempts"), list) else (gen or {}).get("attempts"),
+               "outcome": (gen or {}).get("outcome"), "why": (gen or {}).get("why"),
+               "agree_m": ag["agree_m"], "agree_rad": ag["agree_rad"], "delta_o": None, "reverse_m": None,
+               "g_err": None, "c_err": None, "wider": None,
+               # not in the records: the lattice pose, the global ICP's, refined and its refusal, the conservative check's
+               # local result (res.base) -- recording them is a runtime change, left to the lead
+               "unrecorded": ["lattice_pose", "icp_pose", "refined", "icp_reason", "res_base"]}
         if at is not None and first is not None:
             row["reverse_m"] = math.hypot(at["o"][0] - first["o"][0], at["o"][1] - first["o"][1])
-            row["c_err"] = list(_gap(at["applied"], at["truth"]))
-            if g is not None:
-                row["g_err"] = list(_gap(g, at["truth"]))
-                row["wider"] = "g" if row["g_err"][1] > row["c_err"][1] else "c"
+            if o_scan is not None:
+                row["delta_o"] = list(_gap(at["o"], o_scan))
+            truth = (scanned or at)["truth"]
+            row["c_err"] = _signed(at["applied"], at["truth"])
+            if ag["g"] is not None:
+                row["g_err"] = _signed(ag["g"], truth)
+                row["wider"] = "g" if abs(row["g_err"][2]) > abs(row["c_err"][2]) else "c"
         rows.append(row)
-    return rows
+    events = record.get("events", [])
+    counts = {"session": os.path.basename(path.rstrip("/")), "class": cls, "generations": len(gens),
+              "discarded": sum(e.get("kind") == "rematch_discarded" for e in events),
+              "competitor": sum("competitor" in (r.get("why") or []) for r in gens),
+              "deadline": sum(any(a.get("reason") == "deadline" for a in r.get("attempts") or [] if isinstance(a, dict))
+                              for r in gens),
+              "contacts": len(((record.get("contacts") or {}).get("intervals")) or [])}
+    return rows, counts
 
 
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else argv
     out, folders = Path(args[0]), args[1:]
-    rows = [r for f in folders for s in sorted(glob.glob(f)) if os.path.exists(os.path.join(s, "epoch_1", "run", "result.json"))
-            for r in session_rows(s)]
-    out.write_text(json.dumps({"rows": rows}, indent=0) + "\n")
+    rows, counts = [], []
+    for f in folders:
+        for s in sorted(glob.glob(f)):
+            if os.path.exists(os.path.join(s, "epoch_1", "run", "result.json")):
+                r, c = session_rows(s)
+                rows += r
+                counts.append(c)
+    out.write_text(json.dumps({"rows": rows, "sessions": counts}, indent=0) + "\n")
     print(f"{len(rows)} generations written to {out}: no value printed")  # the rule comes before the reading
     return 0
 
