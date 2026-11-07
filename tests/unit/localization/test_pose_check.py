@@ -251,12 +251,70 @@ def test_the_stand_reference_is_taken_again_at_a_hold_release():
     assert pc.status == "ended:pose_revoked:still"
 
 
+def test_a_hold_release_is_judged_against_the_correction_it_replaced():
+    # the revision plan 9.13: a window whose start moved the other way can pass a jump; the release's own step cannot
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False)
+    _tick(pc, I, (0.0, 0.0, -0.05), standing=True, holding=True)
+    pc.note_release((0.0, 0.0, -0.05))
+    pc.update(1.0, I, (0.0, 0.0, 0.03), standing=True, deadman=False, holding=False)  # 0.08 rad at the release; 0.03 to the window
+    assert pc.status == "ended:pose_revoked:release"
+    event = [e for e in pc.events if e.get("kind") == "revoke"][-1]
+    assert event["gate"] == "release" and event["delta_rad"] == pytest.approx(0.08)
+
+
+def test_a_release_within_the_limit_takes_the_stand_again_and_leaves_the_window_and_c_int():
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False)
+    _tick(pc, I, I, standing=True, holding=True)
+    window, c_int = list(pc._window), pc.c_int
+    pc.note_release(I)
+    C = (0.0, 0.0, 0.04)
+    pc.update(1.0, I, C, standing=True, deadman=False, holding=False)
+    assert pc.status == "confirmed" and pc.c_still == pytest.approx(C) and pc.c_int == c_int
+    assert list(pc._window)[:len(window)] == window
+    pc.note_release(C)  # one release is judged once: the later update of the same tick has no release to judge
+    pc.update(1.0, I, C, standing=True, deadman=False, holding=False)
+    pc.update(1.0, I, (0.0, 0.0, 0.045), standing=True, deadman=False, holding=False)
+    assert pc.release_from is None and pc.status == "confirmed"
+
+
+def test_the_release_gate_reads_the_rear_axle_too():
+    # a yaw step moves the base nothing and the rear axle by its offset
+    pc = _confirmed()
+    _tick(pc, I, I, standing=False)
+    _tick(pc, I, I, standing=True, holding=True)
+    pc.note_release(I)
+    pc.update(1.0, I, (0.0, 0.0, 0.074), standing=True, deadman=False, holding=False)
+    assert pc.status == "confirmed"  # 0.074 rad, and 0.034 m at the rear axle of 0.46 m
+    pc2 = _confirmed()
+    pc2.bounds = P.Bounds(odom=BOUNDS.odom, e_still=BOUNDS.e_still, e_slam=BOUNDS.e_slam, e_release=(0.02, 0.076))
+    _tick(pc2, I, I, standing=False)
+    _tick(pc2, I, I, standing=True, holding=True)
+    pc2.note_release(I)
+    pc2.update(1.0, I, (0.0, 0.0, 0.074), standing=True, deadman=False, holding=False)
+    assert pc2.status == "ended:pose_revoked:release"
+
+
+def test_a_release_before_the_confirmation_judges_nothing_and_takes_the_stand_again():
+    pc = _pc()
+    pc.note_release((0.0, 0.0, 0.5))
+    pc.update(0.0, I, I, standing=True, deadman=False)
+    assert pc.release_from is None and not pc.status.startswith("ended:")
+
+
 def test_the_stand_gate_is_not_taken_again_without_a_release():
     pc = _confirmed()
     _tick(pc, I, I, standing=False)
     pc.update(1.0, I, I, standing=True, deadman=False)
     pc.update(1.1, I, (0.0, 0.0, 0.04), standing=True, deadman=False)
     assert pc.status == "ended:pose_revoked:still"
+
+
+def test_the_release_limit_is_a_development_value():
+    with pytest.raises(ValueError):
+        P.Bounds(odom=(0.0, 0.0, 0.0, 0.0), e_still=(0.03, 0.01), e_slam=(0.05, 0.025), e_release=(0.1,))
+    assert BOUNDS.e_release == (0.065, 0.076)
 
 
 def test_the_window_limit_is_a_development_value():

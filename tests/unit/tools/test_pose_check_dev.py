@@ -71,6 +71,7 @@ def test_the_development_values_and_their_basis(tmp_path):
     out = D.dev_values(recs, min_samples=2)
     assert out["e_still"] == pytest.approx([0.015, 0.006])
     assert out["e_window"] == [0.153, 0.103]  # the bounds the runner refuses to start without
+    assert out["e_release"] == [0.065, 0.076]
     assert out["e_slam"] == pytest.approx([0.12, 0.045])  # the re-match's 0.08 m, 0.03 rad: the larger of the two kinds
     assert out["basis"]["e_slam"]["start"]["n"] == 2 and out["basis"]["e_slam"]["rematch"]["n"] == 2  # not the twin
     assert out["basis"]["e_slam"]["rematch"]["all_g_n"] == 3

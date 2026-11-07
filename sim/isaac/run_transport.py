@@ -265,14 +265,16 @@ def _finite_triple(value: str) -> tuple[float, float, float]:
 
 def _pose_bounds(value: str):
     """Parse the unconfirmed position check's development values (docs/plans/2026-11-02-unconfirmed-runner.md 0):
-    JSON {"odom": [a, b, c, e], "e_still": [m, rad], "e_slam": [m, rad], "e_window": [m, rad]} inline or in a file."""
+    JSON {"odom": [a, b, c, e], "e_still": [m, rad], "e_slam": [m, rad], "e_window": [m, rad],
+    "e_release": [m, rad]} inline or in a file."""
     from forklift_core.localization.pose_check import Bounds
 
     try:
         text = Path(value).read_text() if not value.lstrip().startswith("{") and Path(value).is_file() else value
         data = json.loads(text)
         return Bounds(odom=tuple(float(v) for v in data["odom"]), e_still=tuple(float(v) for v in data["e_still"]),
-                      e_slam=tuple(float(v) for v in data["e_slam"]), e_window=tuple(float(v) for v in data["e_window"]))
+                      e_slam=tuple(float(v) for v in data["e_slam"]), e_window=tuple(float(v) for v in data["e_window"]),
+                      e_release=tuple(float(v) for v in data["e_release"]))
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise argparse.ArgumentTypeError(f"--pose-check-bounds: {exc}") from exc
 
@@ -10860,7 +10862,7 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         k: (
             asdict(v)
             if k in {"pallet_geometry_loaded", "drive_geometry"}
-            else {f: list(getattr(v, f)) for f in ("odom", "e_still", "e_slam", "e_window")}
+            else {f: list(getattr(v, f)) for f in ("odom", "e_still", "e_slam", "e_window", "e_release")}
             if k == "pose_check_bounds" and v is not None
             else list(v)
             if k == "correction_inject" and v is not None

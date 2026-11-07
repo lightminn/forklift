@@ -912,14 +912,26 @@ def test_each_hold_release_is_recorded_with_the_correction_either_side_and_the_s
     row, = rt.record()["releases"]
     assert row["t"] == 1.2 and row["before"] == list(held) and row["after"] == list(after) and row["o"] == list(b)
     assert row["rad"] == pytest.approx(0.12) and row["status"] == status
-    assert rt.record()["bounds"]["e_window"] == [0.153, 0.103]
+    assert rt.record()["bounds"]["e_window"] == [0.153, 0.103] and rt.record()["bounds"]["e_release"] == [0.065, 0.076]
+
+
+def test_a_release_and_a_new_hold_is_judged_against_the_held_correction():
+    # the count, not the flag: reapproach_hold_exit holds again in the same call, and C_before stays until the gate reads it
+    b = (2.42, 1.7, 0.6)
+    grid, w, rt = _shadow(True, b)
+    _tick(rt, b, I)
+    rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
+    turned = compose((b[0], b[1], b[2] + 0.09), invert(b))  # about the truck: 0.09 rad, under the window's 0.103
+    rt.tick(1.1, b, turned, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)
+    gates = [e.get("gate") for e in rt.pc.events if e.get("kind") == "revoke"]
+    assert gates == ["release"] and rt.pc.status == "ended:pose_revoked:release"
 
 
 def test_a_release_and_a_new_hold_between_two_ticks_counts_as_a_release():
     # Codex: reapproach_hold_exit releases and holds again in one call; both ticks read holding
     b = (2.42, 1.7, 0.6)
     grid, w, rt = _shadow(True, b)
-    after = (0.0, 0.0, 0.04)
+    after = compose((b[0], b[1], b[2] + 0.04), invert(b))  # about the truck, within the release's limit
     _tick(rt, b, I)
     rt.tick(1.0, b, I, standing=True, deadman=False, epoch=1, control_gen=1, holding=True)
     rt.tick(1.1, b, after, standing=True, deadman=False, epoch=1, control_gen=1, holding=True, release_count=1)

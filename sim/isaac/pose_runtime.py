@@ -313,8 +313,11 @@ class PoseRuntime:
         released = ((self._release_count is not None and release_count != self._release_count)
                     or (self._was_holding and not holding))
         self._release_count = release_count
-        if released:
-            self.pc.c_still = None
+        if released:  # the check judges the release before it takes the stand again (the revision plan 9.13)
+            if C is not None and self._c_before is not None:
+                self.pc.note_release(self._c_before)
+            else:
+                self.pc.c_still = None
             if self.meter is not None:
                 self.meter.c_still = None
         view = self._tick(t, o, C, standing=standing, deadman=deadman, epoch=epoch, control_gen=control_gen,
@@ -741,7 +744,8 @@ class PoseRuntime:
                               for cap in self.stand_sets],
                "stand_sets_skipped": self.stand_sets_skipped,
                "bounds": {"odom": list(self.bounds.odom), "e_still": list(self.bounds.e_still),
-                          "e_slam": list(self.bounds.e_slam), "e_window": list(self.bounds.e_window)}}
+                          "e_slam": list(self.bounds.e_slam), "e_window": list(self.bounds.e_window),
+                          "e_release": list(self.bounds.e_release)}}
         if self.contacts is not None:
             out["contacts"] = self.contacts.record()
         if self.audit is not None:
