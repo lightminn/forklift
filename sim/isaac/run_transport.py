@@ -8199,7 +8199,7 @@ def drive(S, isaac) -> None:
                         odom_pose_ = tuple(float(v) for v in slam["odom_rear"])
                         with live_timers.region("teleop.permit.pose_union"):
                             pallet_ = live_pallet_perm.limit(pose_zones_, pose_key_, odom_pose_, curvatures, direction,
-                                                             check, fp_, key=(key_[1:], "pose_union"))
+                                                             check, fp_, key=(key_, "pose_union"))
                         live_state["permit_trace_n"] = live_state.get("permit_trace_n", 0) + 1
                         if live_state["permit_trace_n"] % 7 == 1 and live_state["permit_trace_n"] < 1400:
                             import pickle
