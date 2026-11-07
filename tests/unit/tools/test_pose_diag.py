@@ -114,3 +114,11 @@ def test_the_pre_move_state_and_the_failed_preparations_inputs_are_written(tmp_p
     assert pickle.loads(got["payload"]) == payload and got["meta"]["mission_id"] == "m1"
     assert np.load(tmp_path / "prepare_input_1.npz")["live"].sum() == 3
     assert [w["file"] for w in D.save_prepare(tmp_path, caps, None)] == ["prepare_input_1", "prepare_input_2"]
+
+
+def test_a_run_without_a_grid_plan_writes_its_record_without_arrays(tmp_path):
+    import json
+
+    D.save_premove(tmp_path / "pre.npz", {"t": 1.0, "layers": {}})
+    pre = np.load(tmp_path / "pre.npz")
+    assert json.loads(str(pre["meta"]))["grid"] == "no_grid_plan" and list(pre.files) == ["meta"]

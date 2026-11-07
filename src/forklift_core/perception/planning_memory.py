@@ -242,14 +242,21 @@ class PlanningMemory:
         plus the SLAM layer where no clear is newer than the occupancy it carries."""
         out = self.last_hit > self.last_clear
         if use_slam and self.slam is not None:
-            dated = np.where(self.slam, self.slam_since, -np.inf)
-            grown_since = dated.copy()
-            for di in (-1, 0, 1):
-                for dj in (-1, 0, 1):
-                    np.maximum(grown_since, _shift(dated, di, dj, -np.inf), out=grown_since)
-            grown = np.isfinite(grown_since)
-            out |= grown & ~(self.last_clear > grown_since)
+            out |= self.slam_occupied()
         return out
+
+    def slam_occupied(self) -> np.ndarray:
+        """The SLAM layer's own part of ``occupied``: its cells grown by one, where no clear is newer than the
+        occupancy they carry (all False without a SLAM layer)."""
+        if self.slam is None:
+            return np.zeros(self.shape, bool)
+        dated = np.where(self.slam, self.slam_since, -np.inf)
+        grown_since = dated.copy()
+        for di in (-1, 0, 1):
+            for dj in (-1, 0, 1):
+                np.maximum(grown_since, _shift(dated, di, dj, -np.inf), out=grown_since)
+        grown = np.isfinite(grown_since)
+        return grown & ~(self.last_clear > grown_since)
 
 
 __all__ = ["PlanningMemory", "SLAM_OCCUPIED"]

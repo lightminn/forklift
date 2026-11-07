@@ -397,9 +397,13 @@ def test_the_diagnostic_captures_use_copies_and_the_raw_grid_function():
     assert "grid_kwargs_raw = grid_kwargs" in src and src.index("grid_kwargs_raw = grid_kwargs") < src.index(
         "grid_kwargs = recorded_function(")
     prep = src[src.index("def pose_diag_prepare(t_, rear_, payload_, inputs_):"):src.index("def live_prepare(t_, rear_):")]
-    assert '"payload": pickle_.dumps(payload_)' in prep and "del caps_[:-8]" in prep
+    assert '"payload": pickle_.dumps(payload_)' in prep and "del caps_[:-16]" in prep
+    # the submitted occupancy's own build gives the layers; a capture of a mission that ended well is dropped
+    assert "built_[0] is sent_" in prep and '"submitted_build"' in prep and '"rebuilt_copy"' in prep
+    assert 'caps_[:] = [c for c in caps_ if c.get("mission_id") not in ended_ok_]' in prep
     at = src.index("pose_diag_prepare(t_, rear_, payload_, inputs_)  # the input as submitted")
     assert src.index("core.prepare_request(t_, rear_, inputs_, payload_)", at) - at < 200  # just before the submit
     grid = src[src.index("def grid_kwargs(kind=None"):src.index("grid_kwargs_raw = grid_kwargs")]
-    assert 'if scratch is not None and scratch.get("layers") is not None:' in grid
+    assert 'else {} if getattr(args, "pose_diag_capture", False) else None)' in grid
+    assert 'obstacle["plan_layers"] = (occupancy, diag_layers_)' in grid
     assert "layer_.planner_layers(stamp, applied_, obstacle[\"version\"], use_slam=use_slam," in grid

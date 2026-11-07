@@ -77,11 +77,13 @@ def _short(d, length_m: float) -> bool:
 
 def layers_arrays(layers: dict, prefix: str = "") -> dict:
     """``ObstacleLayer.planner_layers``'s output as npz arrays (the occupancy grid apart: its cells and frame)."""
-    occ = layers["occupancy"]
+    occ = layers.get("occupancy")
+    if occ is None:  # no grid plan (e.g. --layout scene): nothing but the record says so
+        return {}
     out = {f"{prefix}occupied": np.asarray(occ.occupied, bool),
            f"{prefix}origin": np.asarray([occ.origin_x_m, occ.origin_y_m], float),
            f"{prefix}resolution_m": np.asarray(occ.resolution_m, float)}
-    for name in ("live", "memory_observed", "memory_with_slam", "own_left_out"):
+    for name in ("live", "memory_observed", "slam_layer", "own_left_out"):
         if layers.get(name) is not None:
             out[f"{prefix}{name}"] = np.asarray(layers[name], bool)
     for name in ("snapshot_stamp_s", "correction_version", "use_slam"):
@@ -91,7 +93,9 @@ def layers_arrays(layers: dict, prefix: str = "") -> dict:
 
 
 def _meta(cap: dict) -> dict:
-    return {k: v for k, v in cap.items() if k not in ("layers", "payload", "inputs")}
+    out = {k: v for k, v in cap.items() if k not in ("layers", "payload", "inputs")}
+    out["grid"] = "grid_plan" if (cap.get("layers") or {}).get("occupancy") is not None else "no_grid_plan"
+    return out
 
 
 def save_premove(path, premove: dict) -> None:

@@ -225,14 +225,14 @@ def test_the_planner_layers_are_the_planner_grid_by_the_same_steps_with_each_lay
             got = b.planner_layers(now, (0.0, 0.0, 0.0), 3, use_slam=use_slam, own_pose=own, loaded=False)
             assert np.array_equal(got["occupancy"].occupied, occ.occupied)
             assert (got["occupancy"].origin_x_m, got["occupancy"].resolution_m) == (occ.origin_x_m, occ.resolution_m)
-            mem = got["memory_with_slam"] if use_slam else got["memory_observed"]
+            mem = (got["memory_observed"] | got["slam_layer"]) if use_slam else got["memory_observed"]
             assert np.array_equal(got["live"] | (mem & ~got["own_left_out"]), occ.occupied)
             assert got["use_slam"] is use_slam and got["correction_version"] == occ.version
             # the memory moved the same way in both copies (hits and clears), nothing more
             assert np.array_equal(a.memory.occupied(), b.memory.occupied())
             assert a.memory.revision == b.memory.revision
     got = copy.deepcopy(lay).planner_layers(0.25, (0.0, 0.0, 0.0), 0)
-    assert got["own_left_out"].sum() == 0 and (got["memory_with_slam"] & ~got["memory_observed"]).any()
+    assert got["own_left_out"].sum() == 0 and got["slam_layer"].any()
 
 
 def _grid_kwargs_harness(tmp_path, slam=None, with_map=False, **outer):
@@ -1099,3 +1099,23 @@ def test_the_evaluation_only_keys_are_left_out_of_the_replay_end_state(tmp_path)
     assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
     changed = {"state": new["state"], "obstacle": {**new["obstacle"], "events": 4}}
     assert module.final_projection(changed, ms, tmp_path) != module.final_projection(old, ms, tmp_path)
+
+
+def test_the_slam_layer_is_kept_apart_even_where_the_observed_memory_has_the_same_cell():
+    # Codex review of the capture PR: the union cannot tell a survey cell under an observed one
+    import copy
+
+    from forklift_core.perception.planning_memory import SLAM_OCCUPIED
+
+    lay = layer()
+    slam = np.zeros((20, 20), np.int8)
+    slam[10, 10] = SLAM_OCCUPIED
+    lay.memory.set_slam(slam, (2.0, -1.0), 0.05, stamp_s=0.0, index=1)
+    a, b = lay.memory.cell(2.0 + 10.5 * 0.05, -1.0 + 10.5 * 0.05)
+    alone = copy.deepcopy(lay).planner_layers(0.1, (0.0, 0.0, 0.0), 0)
+    lay.memory.add_hits(np.array([2.0 + 10.5 * 0.05]), np.array([-1.0 + 10.5 * 0.05]), 0.05)
+    both = copy.deepcopy(lay).planner_layers(0.1, (0.0, 0.0, 0.0), 0)
+    assert alone["slam_layer"].sum() == both["slam_layer"].sum() > 0
+    assert both["memory_observed"].sum() > alone["memory_observed"].sum()
+    assert lay.memory.slam_occupied()[a, b] and np.array_equal(
+        lay.memory.occupied(), lay.memory.occupied(use_slam=False) | lay.memory.slam_occupied())

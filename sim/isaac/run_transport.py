@@ -1180,9 +1180,11 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--pose-diag-capture", action="store_true",
                         help="Record only (the lead's decision after the second B, 2026-11-07, item 3b-c): before the "
                         "truck moves on an unconfirmed start, the state and the observe plan's grid by layers "
-                        "(pose_diag_premove.npz); at each live mission submit, the preparation's input as submitted with "
-                        "the grid by layers, written for preparations that failed (prepare_input_<k>). Both built on a "
-                        "copy of the obstacle layer; nothing decided changes.")
+                        "(pose_diag_premove.npz), built on a copy of the obstacle layer; at each live unloaded mission "
+                        "submit (its observe_ladder preparation; not a loaded submit), the preparation's input as "
+                        "submitted with the grid's layers from the same build, written for preparations that failed "
+                        "(prepare_input_<k>). Grid plans only (--layout scene records that it has none); nothing "
+                        "decided changes.")
     parser.add_argument("--pose-check-contacts", action="store_true",
                         help="With --pose-check on or shadow (docs/plans/2026-11-06-unconfirmed-validation.md 1.4): "
                         "every forklift rigid body reports its contacts, and each contact with anything but the floor "
@@ -5719,14 +5721,20 @@ def drive(S, isaac) -> None:
                 # The map is in SLAM's frame: only while control applies SLAM's
                 # correction (not holding) do the two frames agree.
                 use_slam = mode_ != "holding" if scratch is None else bool(scratch["use_slam"])
-            if scratch is not None and scratch.get("layers") is not None:
-                # --pose-diag-capture (item 3b-c): the same grid with its layers apart, on this copy
+            diag_layers_ = (scratch.get("layers") if scratch is not None
+                            else {} if getattr(args, "pose_diag_capture", False) else None)
+            if diag_layers_ is not None:
+                # --pose-diag-capture (item 3b-c): the same grid by planner_grid's steps with its layers apart -- on
+                # the scratch copy, or for a real plan in the very build its occupancy comes from (kept beside the
+                # cache: a submit's grid and its layers are one build, Codex review P2)
                 layers_ = layer_.planner_layers(stamp, applied_, obstacle["version"], use_slam=use_slam,
                                                 own_pose=own_now_, loaded=loaded_now_)
                 occupancy = layers_["occupancy"]
-                scratch["layers"].update(layers_, grid_applied=list(applied_), grid_stamp_s=float(stamp),
-                                         tracker_mode=mode_, loaded=loaded_now_,
-                                         own_pose=None if own_now_ is None else np.asarray(own_now_).tolist())
+                diag_layers_.update(layers_, grid_applied=list(applied_), grid_stamp_s=float(stamp),
+                                    tracker_mode=mode_, loaded=loaded_now_,
+                                    own_pose=None if own_now_ is None else np.asarray(own_now_).tolist())
+                if scratch is None:
+                    obstacle["plan_layers"] = (occupancy, diag_layers_)
             else:
                 occupancy = layer_.planner_grid(stamp, applied_, obstacle["version"], use_slam=use_slam,
                                                 own_pose=own_now_, loaded=loaded_now_)
@@ -8845,26 +8853,43 @@ def drive(S, isaac) -> None:
 
             def pose_diag_prepare(t_, rear_, payload_, inputs_):
                 """Item 3c (record only): the preparation's input as submitted -- the payload and inputs pickled now,
-                as the worker gets them -- with the grid by layers rebuilt on a copy, C and O; the last eight kept."""
+                as the worker gets them -- with the grid's layers from the build the submitted occupancy came from
+                (rebuilt on a copy only when there is none), C and O."""
                 import pickle as pickle_
 
                 try:
-                    layers_, info_ = pose_diag_layers()
+                    sent_ = payload_["grid_kwargs"].get("occupancy")
+                    built_ = obstacle.get("plan_layers")
+                    if sent_ is not None and built_ is not None and built_[0] is sent_:
+                        layers_ = dict(built_[1])
+                        info_ = {k: layers_.pop(k, None) for k in ("grid_applied", "grid_stamp_s", "tracker_mode",
+                                                                   "loaded", "own_pose")}
+                        info_["layers_source"] = "submitted_build"
+                    else:  # no grid plan, or a build without layers: rebuilt on a copy, said so
+                        layers_, info_ = pose_diag_layers()
+                        info_["layers_source"] = "rebuilt_copy"
                     applied_ = slam["tracker"].applied
                     try:
                         inputs_pickle_ = pickle_.dumps(inputs_)
                     except Exception as exc_:  # noqa: BLE001
                         inputs_pickle_ = None
                         info_["inputs_unpickled"] = repr(exc_)
-                    sent_ = payload_["grid_kwargs"].get("occupancy")
                     cap_ = {"t": float(t_), "mission_id": core.commands.mission_id, "rear": list(map(float, rear_)),
                             "C": None if applied_ is None else list(applied_[0]), "O": list(slam_odom_base()),
                             **info_, "payload": pickle_.dumps(payload_), "inputs": inputs_pickle_, "layers": layers_,
-                            "layers_match": None if sent_ is None else bool(
+                            "layers_match": None if sent_ is None or layers_.get("occupancy") is None else bool(
                                 np.array_equal(sent_.occupied, layers_["occupancy"].occupied))}
                     caps_ = pose_box.setdefault("prepare_captures", [])
+                    # a mission that ended other than by a preparation failure needs none (Codex review P2: a failed
+                    # one is not pushed out by later submits); at most sixteen kept
+                    try:
+                        ended_ok_ = {r.get("mission_id") for r in live.results.message()["results"]
+                                     if not str(r.get("reason") or "").startswith("prepare:")}
+                    except Exception:  # noqa: BLE001 -- unread: keep them all
+                        ended_ok_ = set()
+                    caps_[:] = [c for c in caps_ if c.get("mission_id") not in ended_ok_]
                     caps_.append(cap_)
-                    del caps_[:-8]
+                    del caps_[:-16]
                 except Exception as exc_:  # noqa: BLE001 -- a record only, never the run's failure
                     state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
 
@@ -10677,20 +10702,25 @@ def drive(S, isaac) -> None:
                     state.setdefault("record_errors", []).append(f"pose check worker: {exc_!r}")
             if pose_box.get("premove") or pose_box.get("prepare_captures"):
                 # --pose-diag-capture (the lead's item 3b-c): records only
-                try:
-                    import pose_diag as pose_diag_
+                if pose_box.get("premove"):
+                    try:
+                        import pose_diag as pose_diag_
 
-                    if pose_box.get("premove"):
                         pose_diag_.save_premove(args.output / "pose_diag_premove.npz", pose_box["premove"])
-                    if pose_box.get("prepare_captures"):
+                    except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                        state.setdefault("record_errors", []).append(f"pose diag premove: {exc_!r}")
+                if pose_box.get("prepare_captures"):
+                    try:
+                        import pose_diag as pose_diag_
+
                         try:
                             results_ = live.results.message()["results"]
                         except Exception:  # noqa: BLE001 -- unread: every capture is written
                             results_ = None
                         state["pose_diag_prepare"] = pose_diag_.save_prepare(args.output, pose_box["prepare_captures"],
                                                                              results_)
-                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
-                    state.setdefault("record_errors", []).append(f"pose diag: {exc_!r}")
+                    except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own failure
+                        state.setdefault("record_errors", []).append(f"pose diag prepare: {exc_!r}")
             if near is not None:
                 # Plan D8 S4a ⑥: every frame, tick and event of the near-field tracking; the
                 # summary in result.json. Guarded: a failed write never replaces the run's own

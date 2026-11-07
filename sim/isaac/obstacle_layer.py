@@ -707,8 +707,8 @@ class ObstacleLayer:
                        own_pose=None, loaded: bool = False) -> dict:
         """planner_grid's grid with its layers apart, by the same steps (a record only, run on a copy of the layer:
         like planner_grid it moves the memory's hits and clears): ``occupancy``, ``live`` (the snapshot's occupied
-        cells), ``memory_observed`` and ``memory_with_slam`` (the memory without and with its SLAM layer, on the
-        snapshot's cells), ``own_left_out`` (the remembered cells wholly under the truck, left out of this copy),
+        cells), ``memory_observed`` (the memory's observed cells) and ``slam_layer`` (its SLAM, i.e. survey, layer's
+        own cells, used only with ``use_slam``), both on the snapshot's cells, ``own_left_out`` (the remembered cells wholly under the truck, left out of this copy),
         ``use_slam``, the snapshot's stamp and correction version. Without a memory only the live grid."""
         out: dict = {}
         out["occupancy"] = self._planner(now_s, correction, version, use_slam=use_slam, own_pose=own_pose,
@@ -736,9 +736,9 @@ class ObstacleLayer:
         okj = (cj >= 0) & (cj < mem.shape[1])
         sub = np.zeros_like(occupied)
         sub[np.ix_(oki, okj)] = mem[np.ix_(ci[oki], cj[okj])]
-        if layers is not None:  # the memory's two readings on the snapshot's cells (reads only)
-            for name, slam_ in (("memory_observed", False), ("memory_with_slam", True)):
-                m_ = self.memory.occupied(use_slam=slam_)
+        if layers is not None:  # the memory's observed cells and its SLAM (survey) layer apart, on the snapshot's cells
+            for name, m_ in (("memory_observed", self.memory.occupied(use_slam=False)),
+                             ("slam_layer", self.memory.slam_occupied())):
                 on_ = np.zeros_like(occupied)
                 on_[np.ix_(oki, okj)] = m_[np.ix_(ci[oki], cj[okj])]
                 layers[name] = on_
