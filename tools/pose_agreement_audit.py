@@ -51,6 +51,16 @@ def _sample_at(samples, t: float):
     return rows[-1] if rows else None
 
 
+def _nearest(samples, t: float):
+    rows = [x for x in samples if x.get("o") and x.get("truth")]
+    return min(rows, key=lambda x: abs(x["t"] - t)) if rows else None
+
+
+def _compose(a, b):
+    c, s = math.cos(a[2]), math.sin(a[2])
+    return (a[0] + c * b[0] - s * b[1], a[1] + s * b[0] + c * b[1], a[2] + b[2])
+
+
 def _signed(pose, truth) -> list:
     """(along, across, heading) of pose - truth in the truth's frame: the sign kept."""
     dx, dy = pose[0] - truth[0], pose[1] - truth[1]
@@ -67,15 +77,16 @@ def _agreements(record: dict) -> list:
         if start.get("agree_m") is not None:  # the start check's own agreement, judged when it confirmed
             rows.append({"t": start["t"], "g": start.get("r"), "agree_m": start["agree_m"], "agree_rad": start["agree_rad"],
                          "ok": None, "kind": "raw_start", "scan_t": start.get("scan_t"), "o_scan": start.get("o_scan"),
-                         "qualified": bool(start.get("confirmed"))})
+                         "qualified": bool(start.get("confirmed")), "applied": None, "C": start.get("C")})
         rows += [{"t": g["t"], "g": g.get("g"), "agree_m": g.get("agree_m"), "agree_rad": g.get("agree_rad"), "ok": None,
                   "kind": "raw", "scan_t": g.get("scan_t"), "o_scan": g.get("o_scan"),
                   "qualified": bool(g.get("residual_confirmed") and g.get("applicable") and g.get("g") is not None
-                                    and g.get("agree_m") is not None)} for g in raw]
+                                    and g.get("agree_m") is not None), "applied": None, "C": g.get("C")} for g in raw]
         return rows
     # an on run judges an agreement only past the conservative check and the discarding: every one qualifies
     return [{"t": e["t"], "g": e.get("evidence"), "agree_m": e["agree_m"], "agree_rad": e["agree_rad"], "ok": e.get("ok"),
-             "kind": e["kind"], "scan_t": None, "o_scan": None, "qualified": True} for e in record.get("events", [])
+             "kind": e["kind"], "scan_t": None, "o_scan": None, "qualified": True, "applied": e.get("applied"), "C": None}
+            for e in record.get("events", [])
             if e.get("kind") in ("slam_agreement", "rematch_agreement")]
 
 
@@ -100,11 +111,12 @@ def session_rows(path: str) -> tuple:
         stamps = (gen or {}).get("scan_stamps") or []
         scan_t = ag["scan_t"] if ag["scan_t"] is not None else (stamps[-1][-1] if stamps and stamps[-1] else None)
         o_scan = ag["o_scan"] if ag["o_scan"] is not None else (gen or {}).get("o_scan")
-        at, scanned = _sample_at(samples, ag["t"]), _sample_at(samples, scan_t) if scan_t is not None else None
+        at, scanned = _nearest(samples, ag["t"]), _nearest(samples, scan_t) if scan_t is not None else None
         contact = any(c["t0"] <= ag["t"] <= c["t1"] for c in ((record.get("contacts") or {}).get("intervals")) or [])
         row = {"session": os.path.basename(path.rstrip("/")), "class": cls, "agreement": k, "kind": ag["kind"],
                "ok": ag["ok"], "qualified": ag["qualified"], "in_contact": contact, "t": ag["t"], "scan_t": scan_t, "stand": stand_of.get(tuple((gen or {}).get("o_begin") or ())),
                "generation": gens.index(gen) + 1 if gen in gens else None,
+               "source": "rematch" if gen is not None or ag["kind"] == "raw" else "start",
                "attempts": [a.get("reason") for a in (gen or {}).get("attempts") or []] if isinstance((gen or {}).get("attempts"), list) else (gen or {}).get("attempts"),
                "outcome": (gen or {}).get("outcome"), "why": (gen or {}).get("why"),
                "agree_m": ag["agree_m"], "agree_rad": ag["agree_rad"], "delta_o": None, "reverse_m": None,
@@ -117,7 +129,10 @@ def session_rows(path: str) -> tuple:
             if o_scan is not None:
                 row["delta_o"] = list(_gap(at["o"], o_scan))
             truth = (scanned or at)["truth"]
-            row["c_err"] = _signed(at["applied"], at["truth"])
+            # the applied pose the agreement judged: the event's own (on), else the result's correction at the odometry
+            # nearest its tick (shadow), never an earlier sample's
+            applied = ag["applied"] or (_compose(ag["C"], at["o"]) if ag["C"] is not None else at["applied"])
+            row["c_err"] = _signed(applied, at["truth"])
             if ag["g"] is not None:
                 row["g_err"] = _signed(ag["g"], truth)
                 row["wider"] = "g" if abs(row["g_err"][2]) > abs(row["c_err"][2]) else "c"

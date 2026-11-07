@@ -35,7 +35,7 @@ def test_an_on_session_reads_its_agreement_events_and_says_which_pose_is_wider(t
     row, = rows
     assert row["class"] == "natural_unconfirmed" and row["ok"] is False and row["reverse_m"] == pytest.approx(2.0)
     assert row["stand"] == 1 and row["generation"] == 1 and row["attempts"] == ["ok"] and row["scan_t"] == 9.0
-    assert row["g_err"] == pytest.approx([0.0, 0.0, 0.03]) and row["c_err"] == pytest.approx([0.0, -0.1, 0.01])
+    assert row["g_err"] == pytest.approx([0.0, 0.0, 0.03]) and row["source"] == "rematch"
     assert row["wider"] == "g" and row["delta_o"] == pytest.approx([0.0, 0.0])
     assert "res_base" in row["unrecorded"] and counts["generations"] == 1 and counts["competitor"] == 0
 
@@ -66,3 +66,23 @@ def test_it_prints_no_value(tmp_path, capsys):
     assert json.loads(out.read_text())["sessions"][0]["session"] == "t_val3_006"
     assert json.loads(out.read_text())["rows"][0]["agree_m"] == pytest.approx(0.1234)
     assert math.isfinite(json.loads(out.read_text())["rows"][0]["reverse_m"])
+
+
+def test_the_applied_pose_is_the_event_s_own_and_g_meets_the_truth_at_its_scan(tmp_path):
+    # Codex: the sample before the event had heading 0, the event applied 0.10: c is the wider one
+    samples = [{"t": 2.0, "o": [0.0, 0.0, 0.0], "applied": [0.0, 0.0, 0.0], "truth": [0.0, 0.0, 0.0]}]
+    record = {"samples": samples, "start": {"result": {"confirmed": True}}, "rematches": [],
+              "events": [{"t": 2.05, "kind": "slam_agreement", "agree_m": 0.0, "agree_rad": 0.07, "ok": False,
+                          "evidence": [0.0, 0.0, 0.03], "applied": [0.0, 0.0, 0.10]}]}
+    (row,), _ = A.session_rows(_session(tmp_path, "t_val3_006", record))
+    assert row["c_err"] == pytest.approx([0.0, 0.0, 0.10]) and row["wider"] == "c" and row["source"] == "start"
+
+
+def test_a_shadow_row_takes_the_result_s_correction_at_the_nearest_odometry(tmp_path):
+    samples = [{"t": 2.0, "o": [1.0, 0.0, 0.0], "applied": [1.0, 0.0, 0.0], "truth": [1.0, 0.0, 0.0]}]
+    raw = {"start": {"confirmed": True}, "rematches": [{"t": 2.04, "g": [1.0, 0.0, 0.0], "agree_m": 0.0, "agree_rad": 0.05,
+                                                        "residual_confirmed": True, "applicable": True,
+                                                        "C": [0.0, 0.0, 0.05]}]}
+    (row,), _ = A.session_rows(_session(tmp_path, "t_val3_006", {"samples": samples, "raw": raw}))
+    assert row["c_err"][2] == pytest.approx(0.05) and row["wider"] == "c"
+
