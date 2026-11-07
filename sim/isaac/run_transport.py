@@ -9077,7 +9077,7 @@ def drive(S, isaac) -> None:
                                  epoch=live.session_epoch, control_gen=a_.control_gen,
                                  mission_active=core.commands.status in ACTIVE, near=bool(core.near_active()),
                                  holding=slam["tracker"].mode == "holding",
-                             release_log=getattr(slam["tracker"], "release_log", ()))
+                                 release_log=getattr(slam["tracker"], "release_log", ()))
             if not rt_.shadow:
                 a_.pose = rt_.view_dict(view_)
             live.pose_info = rt_.display(view_, None if applied_ is None else applied_[0], live_pallet_zones(), t=t_)
