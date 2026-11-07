@@ -8163,9 +8163,10 @@ def drive(S, isaac) -> None:
                 key_ = key_ + (loaded_,)  # a changed outline is not the cached check
                 fp_, own_ = layer_.footprints(loaded_, direction)
                 pose_ = tuple(float(v) for v in live_state["rear"])
-                result_ = live_perm.limit(snap_, key_, now_, layer_.last_scan_s, pose=pose_, curvatures=curvatures,
-                                          direction=direction, check_speed_mps=check, footprint=fp_,
-                                          own_footprint=own_)
+                with live_timers.region("teleop.permit.lidar"):
+                    result_ = live_perm.limit(snap_, key_, now_, layer_.last_scan_s, pose=pose_, curvatures=curvatures,
+                                              direction=direction, check_speed_mps=check, footprint=fp_,
+                                              own_footprint=own_)
                 if args.live_test_permit_compare:
                     live_state["permit_calls"] = live_state.get("permit_calls", 0) + 1
                     if live_state["permit_calls"] % 12 == 0:
@@ -8196,8 +8197,17 @@ def drive(S, isaac) -> None:
                         # plan 3.3: the start not confirmed -- the union over every hypothesis, in odometry
                         # coordinates against the odometry's rear axle (a SLAM correction cannot move them)
                         odom_pose_ = tuple(float(v) for v in slam["odom_rear"])
-                        pallet_ = live_pallet_perm.limit(pose_zones_, pose_key_, odom_pose_, curvatures, direction,
-                                                         check, fp_, key=(key_, "pose_union"))
+                        with live_timers.region("teleop.permit.pose_union"):
+                            pallet_ = live_pallet_perm.limit(pose_zones_, pose_key_, odom_pose_, curvatures, direction,
+                                                             check, fp_, key=(key_[1:], "pose_union"))
+                        live_state["permit_trace_n"] = live_state.get("permit_trace_n", 0) + 1
+                        if live_state["permit_trace_n"] % 7 == 1 and live_state["permit_trace_n"] < 1400:
+                            import pickle
+                            with open(Path(args.output) / "permit_trace.pkl", "ab") as trace_f_:
+                                pickle.dump({"zones": list(pose_zones_), "pose": odom_pose_, "curvatures": list(curvatures),
+                                             "direction": direction, "check": check, "fp": fp_,
+                                             "step_m": live_pallet_perm.step_m, "out": list(pallet_),
+                                             "lidar": list(result_)}, trace_f_)
                     elif ctx_ is not None:
                         # Plan D14: the recovered pallet's own zone is exempted (inside it every arc is 0); the
                         # others stay, and so does the LiDAR permission above.
