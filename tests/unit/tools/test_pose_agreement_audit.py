@@ -100,3 +100,15 @@ def test_a_shadow_row_takes_the_result_s_correction_at_the_nearest_odometry(tmp_
     (row,), _ = A.session_rows(_session(tmp_path, "t_val3_006", {"samples": samples, "raw": raw}))
     assert row["c_err"][2] == pytest.approx(0.05) and row["wider"] == "c"
 
+
+
+def test_an_on_runs_start_agreement_is_judged_at_the_starts_scan(tmp_path):
+    # Codex plan review P2: the start check's agreement against the truth at its scan, not at its result
+    samples = [{"t": 1.0, "o": [0.0, 0.0, 0.0], "applied": [5.0, 0.0, 0.0], "truth": [5.0, 0.0, 0.02]},
+               {"t": 2.4, "o": [0.0, 0.0, 0.0], "applied": [5.0, 0.0, 0.0], "truth": [5.0, 0.0, 0.0]}]
+    record = {"samples": samples, "start": {"scan_t": 1.0, "o_scan": [0.0, 0.0, 0.0], "result": {"confirmed": True}},
+              "events": [{"t": 2.4, "kind": "slam_agreement", "agree_m": 0.01, "agree_rad": 0.01, "ok": True,
+                          "evidence": [5.0, 0.0, 0.05]}]}
+    row, = A.session_rows(_session(tmp_path, "b2_val3_018_full_place", record))[0]
+    assert row["source"] == "start" and row["scan_t"] == 1.0
+    assert row["g_err"][2] == pytest.approx(0.03)  # 0.05 against the scan's truth 0.02, not 0.05 against 0.0

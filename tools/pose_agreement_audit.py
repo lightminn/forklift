@@ -84,11 +84,21 @@ def _agreements(record: dict) -> list:
                   "qualified": bool(g.get("residual_confirmed") and g.get("applicable") and g.get("g") is not None
                                     and g.get("agree_m") is not None), "applied": None, "C": g.get("C")} for g in raw]
         return rows
-    # an on run judges an agreement only past the conservative check and the discarding: every one qualifies
-    return [{"t": e["t"], "g": e.get("evidence"), "agree_m": e["agree_m"], "agree_rad": e["agree_rad"], "ok": e.get("ok"),
-             "kind": e["kind"], "scan_t": None, "o_scan": None, "qualified": True, "applied": e.get("applied"), "C": None}
-            for e in record.get("events", [])
-            if e.get("kind") in ("slam_agreement", "rematch_agreement")]
+    # an on run judges an agreement only past the conservative check and the discarding: every one qualifies. The start
+    # check's agreement (the first with no generation at its time) is judged against the truth at the start's scan, as a
+    # generation's is at its own (Codex plan review P2); a generation's scan comes from its record in session_rows
+    start = record.get("start") or {}
+    rows, start_used = [], False
+    for e in record.get("events", []):
+        if e.get("kind") not in ("slam_agreement", "rematch_agreement"):
+            continue
+        own_start = not start_used and _generation_at(record, e["t"]) is None and start.get("scan_t") is not None
+        start_used = start_used or own_start
+        rows.append({"t": e["t"], "g": e.get("evidence"), "agree_m": e["agree_m"], "agree_rad": e["agree_rad"],
+                     "ok": e.get("ok"), "kind": e["kind"], "scan_t": start["scan_t"] if own_start else None,
+                     "o_scan": start.get("o_scan") if own_start else None, "qualified": True,
+                     "applied": e.get("applied"), "C": None})
+    return rows
 
 
 def _generation_at(record: dict, t: float):
@@ -98,7 +108,8 @@ def _generation_at(record: dict, t: float):
 def session_rows(path: str) -> tuple:
     """(rows, counts): one row per agreement with its generation; the session's discards, competitor endings, deadlines
     and contacts counted apart."""
-    record = json.load(open(os.path.join(path, "epoch_1", "run", "result.json"))).get("pose_check") or {}
+    with open(os.path.join(path, "epoch_1", "run", "result.json")) as fh:
+        record = json.load(fh).get("pose_check") or {}
     samples = record.get("samples") or []
     first = next((x for x in samples if x.get("o")), None)
     cls = start_class(record, path)

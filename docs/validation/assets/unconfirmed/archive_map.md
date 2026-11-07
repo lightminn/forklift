@@ -27,10 +27,18 @@ ws1 경로는 `/home/projects/forklift` 기준이다. 해시는 2026-11-08 ws1 �
 | URDF | `artifacts/20261013_fork_spacing/dd_cfg/old/dls08_measured/forklift.urdf` | 517e8260…b760 | 같은 보관본(74,927 B·시각 일치), ws1 원본 유지 |
 | bounds | 실행 폴더의 `bounds_eslam.json`(두 번째 B·진단), 스냅숏의 `bounds_provisional.json`(B3·M1) | `bounds_eslam.json` 56828fc6…1f5d, 스냅숏 판 c396bfe0…717b | 각 실행 폴더·스냅숏 보관본 안 |
 | 브리지 이미지 | `forklift/ros2-dev@sha256:e7c29c2a…2659`(ID e7c29c2a0c34, 3.01 GB) | 이미지 digest 가 식별자 | **없음** — 삭제 전 `docker save … | zstd` 로 `gdrive:` 에 보관 필요 |
-| 실행 환경 | `.venv`(Python 3.11.15, `--system-site-packages` from `/opt/isaacsim-env`), Isaac Sim 5.1.0.0, numpy 1.26.0, scipy 1.15.3, numba 0.59.1, GPU RTX 5070 Ti, 드라이버 580.178.04 | `pip freeze`(346 줄) 4c64a527…bb9b | 보관하지 않음(공유 환경). 버전과 freeze 해시로만 식별하며, 바뀌면 재실행 결과의 비교 가능성이 깨진다 |
+| 실행 환경 | `.venv`(Python 3.11.15, `--system-site-packages` from `/opt/isaacsim-env`), Isaac Sim 5.1.0.0, numpy 1.26.0, scipy 1.15.3, numba 0.59.1, GPU RTX 5070 Ti, 드라이버 580.178.04 | `pip freeze`(346 줄) 4c64a527…bb9b | ENV_ARCHIVE — 전체 `pip freeze` 와 재구성 명세(`pyvenv.cfg`, `/opt/isaacsim-env` 의 Isaac Sim 판, Python 판, 드라이버)를 `env_ws1_20261108.txt` 로 이 폴더에 둔다. 환경 자체(공유 `.venv`·`/opt`)는 보관하지 않으며, 바뀌면 재실행 결과의 비교 가능성이 깨진다 |
+
+## 2.1 (가)의 남은 항목
+
+- 지도 묶음: 보관 위치 확인 중(BUNDLE_ARCHIVE). 없으면 보관 대상에 더한다.
+- 브리지 이미지: 보관본 없음, `docker save` 뒤 보관 필요.
+- 실행 환경: `env_ws1_20261108.txt` 작성 필요(ENV_ARCHIVE).
+
+세 항목이 닫히기 전에는 (가)가 충족되지 않으며 ws1 원본을 지우지 않는다.
 
 ## 3. 복원 확인 (나)
 
-`restore_check_032.sh`: 보관본에서 `uc_diag_s4/s/d_val3_032_full/epoch_1/run/{pose_diag_premove.npz,prepare_input_1.pkl,prepare_input_1.npz}` 와 URDF 를 빈 폴더에 풀고, main 의 `tools/start_check_cross.py`(#354)로 2×2 를 다시 계산해 `diag_cross_032f.json` 과 비교한다. `MATCH` 일 때만 종료 코드 0 이다. 같은 형식의 가짜 보관본으로 `MATCH` 를 확인했다(2026-11-08). 실제 보관본 확인은 업로드 뒤 콘솔이 돌린다.
+`restore_check_032.sh`: 보관본에서 `uc_diag_s4/s/d_val3_032_full/epoch_1/run/{pose_diag_premove.npz,prepare_input_1.pkl,prepare_input_1.npz}` 와 URDF 를 빈 폴더에 풀고, main 의 `tools/start_check_cross.py`(#354)로 2×2 를 다시 계산해 `diag_cross_032f.json` 과 비교한다. 복원된 네 파일의 sha256 을 아래 값과 자동 대조하고, `MATCH` 일 때만 종료 코드 0 이다. 같은 형식의 가짜 보관본으로 `MATCH` 를 확인했다(2026-11-08). 실제 보관본 확인은 업로드 뒤 콘솔이 돌린다.
 
 복원된 파일의 sha256(2026-11-08 ws1 원본): `pose_diag_premove.npz` 00acbf92…ed6d, `prepare_input_1.pkl` 787865e0…7d47, `prepare_input_1.npz` 4123fc0f…58bf.
