@@ -33,6 +33,9 @@ from forklift_core.safety.arbiter import START_BLOCK_REASON, Arbiter, ArbiterCon
 from forklift_core.safety.state import state_message
 
 
+COMMAND_LOG_FIELDS = ("t", "command", "accepted", "reason", "mission_id", "status", "request_id")  # validation v2 H3
+
+
 @dataclass
 class Hooks:
     """What the runner does and reads for the runtime (all called on the control thread)."""
@@ -542,6 +545,10 @@ class LiveRuntime:
 
     def tick_end(self, t: float, records: list, safety: dict, candidate: tuple, drive: dict | None):
         """The output for this tick (the runner applies it, then calls ``publish`` with what it applied)."""
+        if records:
+            # validation v2 H3 (docs/plans/2026-11-08-live-riib-defaults-v2.md): the mission commands applied this
+            # tick with the core's time, logged before their replies are queued -- the applied cancel's sim time
+            self.log({"mission_commands": [{k: r.get(k) for k in COMMAND_LOG_FIELDS} for r in records], "tick_t": t})
         return self.link.end(self.clock(), records, safety, candidate, drive)
 
     def publish(self, t: float, out, safety: dict, *, pose: dict | None, freshness: dict | None,
