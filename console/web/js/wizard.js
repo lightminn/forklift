@@ -67,6 +67,8 @@ export function blockReason(ctx) {
   if (!ctx.hasLease) return "조종 권한이 있어야 지시할 수 있습니다";
   if (ctx.mode === "STOPPED") return "정지 상태입니다 · 재무장 뒤 지시할 수 있습니다";
   if (ctx.mode === "TELEOP") return "수동 조종 중에는 지시할 수 없습니다";
+  // the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4): latched for the session
+  if (ctx.state?.start_block) return "출발 위치가 확인되지 않았습니다 · 자동 운행과 미션은 받지 않습니다 · 수동 운전만 됩니다";
   if (ctx.mission && ACTIVE.includes(ctx.mission.status)) return "작업이 진행 중입니다";
   if (ctx.state?.stopped_confirmed === false) return "정지 확인을 기다리는 중입니다"; // else not_stopped
   return null;

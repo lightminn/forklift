@@ -142,3 +142,42 @@ def test_a_malformed_placement_or_confirmation_is_invalid(v, t, fields):
     v.inject("relocalize")
     lease = _lease(v)
     assert _req(v, lease, t, "x", **fields)["reason"] == "invalid"
+
+
+# --- the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4): the fake keeps the source --------------
+def _placed(v):
+    v.inject("relocalize")
+    lease = _lease(v)
+    true = (v.pose.x_m, v.pose.y_m, v.pose.yaw_rad)
+    assert _req(v, lease, "relocalize_place", "pl", generation=1, pose=[true[0] + 0.4, true[1], true[2]])["t"] == "ack"
+    v.clock.t += 2.0
+    v.step(0.1)
+    lease = v.handle("a", {"t": "lease_request", "request_id": "L2", "session_epoch": v.session_epoch},
+                     conn_id="c1")["lease_id"]
+    assert _req(v, lease, "relocalize_place_confirm", "c", generation=1, preview_id=1)["t"] == "ack"
+    v.clock.t += 3.0
+    v.step(0.1)
+    return v.handle("a", {"t": "lease_request", "request_id": "L3", "session_epoch": v.session_epoch},
+                    conn_id="c1")["lease_id"]
+
+
+def test_a_placed_start_refuses_missions_and_says_so_in_the_state(v):
+    lease = _placed(v)
+    st = v.make_state()
+    assert st["pose"] is not None and st["start_block"]["reason"] == "operator_placed_start"
+    reply = _req(v, lease, "mission_submit", "m", pallet_id="P-01", destination_id="D-A", targets_revision=0)
+    assert reply["t"] == "reject" and reply["reason"] == "operator_placed_start"
+
+
+def test_a_placed_start_keeps_teleop_open(v):
+    lease = _placed(v)
+    assert _req(v, lease, "mode_request", "t", to="TELEOP", source="direct")["t"] == "ack"
+
+
+def test_a_picked_start_is_not_blocked(v):
+    v.inject("relocalize")
+    lease = _lease(v)
+    assert _req(v, lease, "relocalize_pick", "p", generation=1, candidate=1)["t"] == "ack"
+    v.clock.t += 3.0
+    v.step(0.1)
+    assert "start_block" not in v.make_state()

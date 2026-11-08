@@ -1208,7 +1208,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "reloc_inject": None, "pose_check_contacts": False,
                               "pose_shadow_audit": False, "correction_inject": None,
                               # 2026-11-07 the lead's item 3b-c: records only, off in every earlier run
-                              "pose_diag_capture": False}
+                              "pose_diag_capture": False,
+                              # 2026-11-08 the vehicle-side F1 block (plan 2026-11-08-f1-vehicle-block 2.5): no earlier
+                              # run had it (none placed a start and ran a mission)
+                              "operator_placed_auto": "allow"}
 # Arguments that only add records to a run (M-a0 boundary record, docs/plans/2026-10-15-m-a05-boundary.md
 # section 5): any value matches the measurement condition. The recorder only reads (values are copied before
 # a call runs), so what it can change is wall-clock timing, to which runs are already sensitive (render

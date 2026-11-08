@@ -36,6 +36,10 @@ RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_res
 # the map opens (and no AUTO); once ended the controls stay locked too -- STOP and the session end stay open
 POSE_REFUSED = ("mission_submit", "mission_resume", "pick_request", "recovery", "sim_reset")
 POSE_ENDED_REFUSED = POSE_REFUSED + ("rearm", "arm", "mode_request")
+# docs/plans/2026-11-08-f1-vehicle-block.md 2.1: an operator-placed start (start_reloc.autonomy_block) latches a refusal
+# of what drives the truck by the map, and AUTO; teleop, arming, STOP, the session's end and a scene reset stay open
+START_REFUSED = ("mission_submit", "mission_resume", "pick_request", "recovery")
+START_BLOCK_REASON = "operator_placed_start"
 # the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
@@ -149,6 +153,8 @@ class Arbiter:
         # the unconfirmed position check's view this tick ({status, drive_ready, reason}); None: no check
         self.pose: dict | None = None
         self._pose_end: str | None = None  # end_pose's reason: a latch the next view cannot lift
+        # the vehicle-side F1 block ({reason, source, since_mono}); None: no block. Set once, never cleared in the epoch
+        self.start_block: dict | None = None
         self.stops = 0  # every STOP taken (B-P2c: the relocalization drops the attempt a new one interrupts)
         self.provisional_auto = False
         self._context_gen = 0
@@ -352,6 +358,9 @@ class Arbiter:
         if self.reloc is not None and (kind in RELOC_REFUSED
                                        or (kind == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
             return self._reply(kind, request_id, "relocalizing")
+        if self.start_block is not None and (kind in START_REFUSED
+                                             or (kind == "mode_request" and msg.get("to") == "AUTO")):
+            return self._reply(kind, request_id, "operator_placed_start")
         pose = (self._pose_view() or {}).get("status")
         if pose is not None and pose.startswith("ended:") and kind in POSE_ENDED_REFUSED:
             return self._reply(kind, request_id, "pose_ended")
@@ -421,6 +430,14 @@ class Arbiter:
 
     def _on_recovery(self, client_id, request_id, msg, now_mono):
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
+
+    def block_start(self, source, now_mono: float) -> None:
+        """The vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.2), set by the live runtime as it takes
+        the relocalized start over: the first call holds -- nothing in the epoch lifts or replaces it."""
+        if self.start_block is not None:
+            return
+        self.start_block = {"reason": START_BLOCK_REASON, "source": source, "since_mono": now_mono}
+        self.events.append({"t": now_mono, "event": "start_block", "reason": START_BLOCK_REASON, "source": source})
 
     def _on_relocalize_pick(self, client_id, request_id, msg, now_mono):
         """B-P2c (plan 1.2 step 7): the operator's candidate of the generation shown; applied here, so the answer is
@@ -741,6 +758,8 @@ class Arbiter:
                 and self.control_gen == self._context_gen):
             # Only with no boundary since mission_context: a STOP at a physics step inside the mission's tick
             # (the gate) is not undone by the submit it overtook (Codex M-c round 2 P1).
+            if self.start_block is not None:  # unreachable past the two refusals; a new path ends the session here
+                raise RuntimeError(f"AUTO entry with an operator_placed start: {self.start_block}")
             self._set_mode("AUTO", now_mono, "mission")
         elif self.mode == "AUTO" and status not in AUTO_STATUSES:
             last = self.mission.log[-1] if self.mission is not None and self.mission.log else {}

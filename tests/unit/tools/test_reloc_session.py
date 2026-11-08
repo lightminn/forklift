@@ -155,3 +155,19 @@ def test_a_reverse_session_needs_the_check_and_a_known_rule(tmp_path):
                   {"RELOC_PROBE": "reverse", "POSE_CHECK": "on", "REVERSE_KIND": "long"}):
         p = _session(tmp_path, **extra)
         assert p.returncode == 2, (extra, p.stdout + p.stderr)
+
+
+def test_a_place_block_session_places_then_checks_the_block(tmp_path):
+    # docs/plans/2026-11-08-f1-vehicle-block.md 5: attended, the placement, then the block check with the vehicle's
+    # setting as the expectation and the first CYCLE leg as the mission tried
+    p = _session(tmp_path, RELOC_PROBE="place_block", CLICK_SEED="5")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1,2,3"]  # attended
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--after-place") + 1] == "block_check" and args[args.index("--block-expect") + 1] == "block"
+    assert args[args.index("--cycle") + 1] == "P-1:D-1"
+    (tmp_path / "b").mkdir()
+    p = _session(tmp_path / "b", RELOC_PROBE="place_block", F1_AUTONOMY="allow", CYCLE="P-2:D-1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    args = (tmp_path / "b" / "probe_args").read_text().split()
+    assert args[args.index("--block-expect") + 1] == "allow" and args[args.index("--cycle") + 1] == "P-2:D-1"

@@ -1598,6 +1598,9 @@ async def place_scenario(p, args):
     if p.report["localized"]:
         if getattr(args, "after_place", "hold") == "reverse":  # plan 2026-11-06 2 (reverse_place): V2's placements
             await _reverse_localized(p, args)
+        elif getattr(args, "after_place", "hold") == "block_check":  # plan 2026-11-08 5: the vehicle-side F1 block
+            await _block_check(p, args)
+            await _end_session(p)
         else:
             await _hold_and_end(p, args)
         return
@@ -1845,6 +1848,74 @@ async def _await_rematch(p, shadow, args) -> dict:
     return {"started": True, "done": bool(done), "wall_s": time.monotonic() - t0, "status": _pc_status(p.state)}
 
 
+BLOCK_REASON = "operator_placed_start"
+
+
+def _xy(s):
+    pose = (s or {}).get("pose") or {}
+    return (pose.get("x_m"), pose.get("y_m")) if pose.get("x_m") is not None else None
+
+
+async def _block_check(p, args):
+    """docs/plans/2026-11-08-f1-vehicle-block.md 5: once an operator-placed start is localized, what the vehicle refuses
+    and keeps open, judged here against --block-expect (block: AUTO, missions and picks refused operator_placed_start,
+    the state's start_block, no AUTO, teleop taken and the truck moved; allow: the submit taken -- then cancelled --
+    and no start_block). Every check must run: a step that could not is a failure, never a pass. The record's source
+    (the runner's start_reloc) is checked afterwards from the run's files."""
+    out = p.report["block_check"] = {"expect": args.block_expect, "checks": {}, "modes": []}
+    checks = out["checks"]
+    confirm = (p.report.get("confirm") or {}).get("reply")
+    checks["placement_confirmed"] = confirm == "ack"
+    checks["same_epoch"] = not (p.report.get("handover") or {}).get("epoch_changed")
+    lease = await p.request("lease_request")
+    p.lease_id = (lease or {}).get("lease_id") or p.lease_id
+    standing = await p.until(p.standing, 30, label="standing_before_block_check")
+    out["start_block"] = (p.state or {}).get("start_block")
+    pallet_id, destination_id = args.cycle.split(",")[0].split(":")
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    submit = None
+    for _ in range(40):
+        submit = await p.request("mission_submit", pallet_id=pallet_id, destination_id=destination_id,
+                                 targets_revision=(p.targets or {}).get("targets_revision"))
+        if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed",
+                                                          "stale_targets"):
+            break
+        await asyncio.sleep(0.5)
+    out["submit"] = submit
+    out["modes"].append((p.state or {}).get("mode"))
+    if args.block_expect == "allow":
+        checks["standing"] = bool(standing)
+        checks["submit_taken"] = bool(submit) and submit.get("t") == "ack"
+        checks["no_start_block"] = out["start_block"] is None
+        if checks["submit_taken"]:
+            out["cancel"] = await p.request("mission_cancel", mission_id=submit.get("mission_id"))
+            await p.until(lambda s: (s.get("mission") or {}).get("status") not in ("accepted", "preparing", "running",
+                                                                                   "cancelling"), 120,
+                          label="cancelled")
+    else:
+        out["auto"] = await p.request("mode_request", to="AUTO")
+        out["pick"] = await p.request("pick_request")
+        out["modes"].append((p.state or {}).get("mode"))
+        checks["standing"] = bool(standing)
+        checks["start_block"] = (out["start_block"] or {}).get("reason") == BLOCK_REASON
+        for name in ("submit", "auto", "pick"):
+            r = out[name] or {}
+            checks[f"{name}_refused"] = r.get("t") == "reject" and r.get("reason") == BLOCK_REASON
+        checks["no_mission"] = (p.state or {}).get("mission") is None or (p.state or {}).get("mission", {}).get(
+            "status") not in ("accepted", "preparing", "running")
+        before = _xy(p.state)
+        out["teleop"] = await teleop_drive(p, args.block_teleop_s, 0.15, 0.0)
+        after = _xy(p.state)
+        out["moved_m"] = None if before is None or after is None else math.hypot(after[0] - before[0],
+                                                                                after[1] - before[1])
+        checks["teleop_taken"] = bool(out["teleop"]) and out["teleop"].get("t") == "ack"
+        checks["teleop_moved"] = out["moved_m"] is not None and out["moved_m"] > 0.02
+        out["modes"].append((p.state or {}).get("mode"))
+    checks["never_auto"] = "AUTO" not in out["modes"]
+    out["verdict"] = "pass" if all(checks.values()) else "fail"
+    out["failed"] = sorted(k for k, v in checks.items() if not v)
+
+
 async def _one_mission(p, args) -> dict:
     """The first --cycle leg, submitted standing, and its result."""
     pallet_id, destination_id = args.cycle.split(",")[0].split(":")
@@ -1980,7 +2051,12 @@ def main():
     ap.add_argument("--wait-port-s", type=float, default=900.0)
     ap.add_argument("--launcher-pid", type=int, default=None,
                     help="the session launcher's pid: its end before the session runs ends the probe at once (exit 3)")
-    ap.add_argument("--after-place", choices=("hold", "reverse"), default="hold",
+    ap.add_argument("--block-expect", choices=("block", "allow"), default="block",
+                    help="place scenario with --after-place block_check (plan 2026-11-08 5): what the vehicle's "
+                    "F1 setting is, and so what the check expects")
+    ap.add_argument("--block-teleop-s", type=float, default=3.0,
+                    help="block_check: the teleop drive's wall seconds (0.15 m/s ratio, straight)")
+    ap.add_argument("--after-place", choices=("hold", "reverse", "block_check"), default="hold",
                     help="place scenario: once localized, the hold (as before) or the reverse scenario's strokes")
     ap.add_argument("--reverse-kind", choices=("full", "half", "chatter"), default="full",
                     help="reverse scenario (plan 2026-11-06 2.1): when a stroke lets go")

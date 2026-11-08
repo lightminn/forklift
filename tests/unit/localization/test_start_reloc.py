@@ -376,3 +376,26 @@ def test_a_placement_outside_the_map_is_refused_without_using_a_placement():
     r.place_bounds = (0.0, 0.0, 6.0, 4.0)
     assert r.place(r.generation, (-0.1, 2.0, 1.57)) == (False, "reloc_place_invalid") and r.places == 0
     assert r.place(r.generation, (0.6, 2.0, 1.57)) == (True, "")
+
+
+# --- the vehicle-side F1 block's decision (docs/plans/2026-11-08-f1-vehicle-block.md 2.2) ----------------------------
+@pytest.mark.parametrize("record, estimate, policy, want", [
+    (None, None, "block", None),  # the scene's start, known: no relocalization, nothing to block
+    ({"source": "matcher"}, "matcher", "block", None),
+    ({"source": "operator"}, "operator", "block", None),
+    ({"source": "operator_placed"}, "operator_placed", "block", "operator_placed_start"),
+    ({"source": "operator_placed"}, None, "block", "operator_placed_start"),  # no relocalizer object (unattended path)
+    ({"source": "operator_placed"}, "operator_placed", "allow", None),
+    ({"source": None}, None, "block", "operator_placed_start"),  # fail-closed: a relocalization with no source
+    ({}, None, "block", "operator_placed_start"),
+    ({"source": "rviz"}, None, "block", "operator_placed_start"),  # a source this code does not know
+    ({"source": "matcher"}, "operator_placed", "block", "operator_placed_start"),  # record and estimate disagree
+    ({"source": "operator_placed"}, "matcher", "block", "operator_placed_start"),
+])
+def test_the_block_decision(record, estimate, policy, want):
+    assert R.autonomy_block(record, policy, estimate_source=estimate) == want
+
+
+def test_an_unknown_policy_is_refused():
+    with pytest.raises(ValueError):
+        R.autonomy_block({"source": "matcher"}, "maybe")
