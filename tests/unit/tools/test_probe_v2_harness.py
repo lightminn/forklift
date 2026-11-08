@@ -117,7 +117,7 @@ def test_a_reply_event_keeps_its_send_and_reply_times(monkeypatch):
     assert e["sent_mono"] == 1000.0 and abs(e["reply_mono"] - 1000.02) < 1e-9 and abs(e["rtt_s"] - 0.02) < 1e-9
 
 
-def test_main_with_a_mission_still_active_stops_cancels_and_then_ends_the_session(monkeypatch):
+def test_main_with_a_mission_still_active_rearms_cancels_waits_for_its_end_and_then_ends_the_session(monkeypatch):
     clock = Clock()
     monkeypatch.setattr(lcp, "time", clock)
 
@@ -127,27 +127,46 @@ def test_main_with_a_mission_still_active_stops_cancels_and_then_ends_the_sessio
     monkeypatch.setattr(lcp.asyncio, "sleep", fake_sleep)
 
     class Active(MainProbe):
+        """As the arbiter and the core: a cancel is refused while STOPPED (stopped_locked), an acked cancel passes
+        through 'cancelling' before 'cancelled', and session_end is refused while the mission is not final."""
+
         async def request(self, kind, timeout=5.0, **fields):
-            out = await super().request(kind, timeout, **fields)
-            if kind == "stop":
-                self.state = dict(self.state, mode="STOPPED")
-            if kind == "mission_cancel":
-                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelled"})
-            if kind == "session_end" and (self.state.get("mission") or {}).get("status") == "paused":
-                self.closed_code = None
+            m = self.state.get("mission") or {}
+            if kind == "mission_cancel" and self.state.get("mode") == "STOPPED":
+                self.requests.append(kind)
+                return {"t": "reject", "reason": "stopped_locked"}
+            if kind == "session_end" and m.get("status") not in lcp.FINAL_MISSION:
+                self.requests.append(kind)
                 return {"t": "reject", "reason": "mission_active"}
+            out = await super().request(kind, timeout, **fields)
+            if kind == "rearm":
+                self.state = dict(self.state, mode="PAUSED")
+            if kind == "mission_cancel":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelling"})
             return out
 
         async def until(self, pred, timeout, label=""):
             self.labels.append(label)
-            if label == "mission_end_or_stop":  # the final resume left the mission paused (a repeated STOP)
-                self.state = dict(self.state, mode="AUTO", mission={"mission_id": "m1", "status": "paused"})
+            if label == "mission_end_or_stop":  # the final resume refused: the mission left paused, the arbiter PAUSED
+                self.state = dict(self.state, mode="PAUSED", mission={"mission_id": "m1", "status": "paused"})
+                return True
+            if label == "end_cancel_ended":  # the core finishes the cancel
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelled"})
             return pred(self.state) if label.startswith("end_") else True
+
+        async def request_until_standing(self, kind, tries=20, **fields):
+            return await self.request(kind, **fields)
 
     p = Active()
     args = argparse.Namespace(expect_stop_in_capture=True, observe_timeout_s=10.0, auto_s=1.0,
                               mission_timeout_s=100.0, end_session=True)
-    asyncio.run(lcp.main_scenario(p, args))
-    tail = p.requests[p.requests.index("stop", len(p.requests) - 5):]
-    assert tail[:2] == ["stop", "mission_cancel"] and tail[-1] == "session_end"
-    assert p.report["end_active"]["cancel_ended"] and p.report["close_code"] == 1000
+    p.state = dict(p.state, mode="STOPPED", mission={"mission_id": "m1", "status": "paused"})
+    asyncio.run(lcp.end_active_mission(p, "m1"))
+    assert p.requests == ["rearm", "mission_cancel"]
+    assert p.labels[-1] == "end_cancel_ended" and (p.state["mission"] or {}).get("status") == "cancelled"
+    assert p.report == {}  # end_active_mission returns its record; main keeps it
+    p2 = Active()
+    asyncio.run(lcp.main_scenario(p2, args))
+    assert p2.report["end_active"]["cancel"]["t"] == "ack" and p2.report["end_active"]["cancel_ended"]
+    assert p2.requests[-1] == "session_end" and p2.report["close_code"] == 1000
+    assert p2.requests[-3:] == ["mission_cancel", "lease_request", "session_end"]

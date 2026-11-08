@@ -442,7 +442,7 @@ async def main_scenario(p: Probe, args):
         # trace (a launcher TERM lost both in batch 16782's lifecycle 1); a mission still active (the final resume
         # refused, a STOP again) would make session_end refuse it (mission_active): STOP, cancel, its end, then end
         m_ = (p.state or {}).get("mission") or {}
-        if m_.get("status") in ACTIVE_MISSION:
+        if m_.get("mission_id") and m_.get("status") not in FINAL_MISSION:
             p.report["end_active"] = await end_active_mission(p, m_.get("mission_id"))
         await _end_session(p)
         return
@@ -925,16 +925,28 @@ async def stall_recovery(p: Probe, args, mission_id, seen: int) -> dict:
     return out
 
 
-ACTIVE_MISSION = ("running", "paused", "preparing", "held")
+FINAL_MISSION = ("done", "failed", "cancelled", "recovery_required")  # forklift_core.mission.commands.FINAL
+
+
+def mission_over(s: dict, mission_id) -> bool:
+    """This mission has a final status, or the state's mission slot has moved on from it."""
+    m = s.get("mission") or {}
+    if m.get("mission_id") == mission_id:
+        return m.get("status") in FINAL_MISSION
+    return True
 
 
 async def end_active_mission(p: Probe, mission_id) -> dict:
-    """Before a session's end with a mission still active: STOP, cancel it, and wait (120 s) until it has ended."""
-    out = {"stop": await p.request("stop", source="key")}
-    out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="end_stopped")
+    """Before a session's end with a mission not yet final: out of STOPPED first (a cancel is refused there,
+    stopped_locked) -- stand, rearm, leave STOPPED -- then cancel it and wait (120 s) for its final status."""
+    out = {}
+    if (p.state or {}).get("mode") == "STOPPED":
+        out["standing"] = await p.until(p.standing, 20.0, label="end_standing")
+        out["rearm"] = await p.request_until_standing("rearm")
+        out["rearmed"] = await p.until(lambda s: s.get("mode") != "STOPPED", 5.0, label="end_rearmed")
     out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
-    out["cancel_ended"] = await p.until(
-        lambda s: ((s.get("mission") or {}).get("status") not in ACTIVE_MISSION), 120.0, label="end_cancel_ended")
+    out["cancel_ended"] = bool(out["cancel"] and out["cancel"].get("t") == "ack") and await p.until(
+        lambda s: mission_over(s, mission_id), 120.0, label="end_cancel_ended")
     return out
 
 
@@ -944,8 +956,8 @@ async def stall_end_session(p: Probe) -> dict:
     out = {"stop": await p.request("stop", source="key")}
     out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="stall_end_stopped")
     m = (p.state or {}).get("mission") or {}
-    if m.get("status") in ACTIVE_MISSION:
-        out["cancel"] = await p.request("mission_cancel", mission_id=m.get("mission_id"))
+    if m.get("mission_id") and m.get("status") not in FINAL_MISSION:
+        out["end_active"] = await end_active_mission(p, m.get("mission_id"))  # rearm first: STOPPED refuses a cancel
     out["session_end"] = await p.request("session_end")
     return out
 
