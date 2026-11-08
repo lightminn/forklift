@@ -48,7 +48,7 @@ def judge(probe: dict, result: dict, log_lines: list[dict]) -> tuple[list[str], 
                 fb.append((float(f[0]), float(f[1]), float(d.get("mono", float("nan")))))
         elif d.get("request_id") and d.get("where"):
             server.setdefault(d["request_id"], d)
-        elif "tick_t" in d and "mono" in d:
+        elif "speed_mps" in d and "tick_t" in d and "mono" in d:  # the per-step drive output (not events or H3 lines)
             cmd_mono.append(d["mono"])
             cmd_tick.append(d["tick_t"])
             cmd_mode.append(d.get("mode"))

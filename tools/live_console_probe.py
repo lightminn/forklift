@@ -227,7 +227,7 @@ class Probe:
             if rid in self.replies:
                 at, reply = self.replies[rid]
                 self.event("reply", kind=kind, request_id=rid, t=reply["t"], reason=reply.get("reason"),
-                           detail=reply.get("detail"), rtt_s=at - sent)
+                           detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
                 if reply.get("control_gen") is not None:
                     self.control_gen = reply["control_gen"]
                 return reply
@@ -253,7 +253,7 @@ class Probe:
                 if request_id in self.replies:
                     at, reply = self.replies[request_id]
                     self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                               detail=reply.get("detail"), rtt_s=at - sent)
+                               detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
                     if reply.get("control_gen") is not None:
                         self.control_gen = reply["control_gen"]
                     return reply
@@ -263,7 +263,7 @@ class Probe:
             return None
         at, reply = self.replies[request_id]
         self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                   detail=reply.get("detail"), rtt_s=at - sent)  # logged as any answer (Codex r5 P3)
+                   detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)  # (Codex r5 P3)
         return reply
 
     async def request_until_standing(self, kind, tries=20, **fields):
@@ -437,6 +437,15 @@ async def main_scenario(p: Probe, args):
         await p.until(p.standing, 20, label="standing_again")
         await p.request_until_standing("rearm")
         await p.request_until_standing("mission_resume", mission_id=mission_id)
+    if getattr(args, "end_session", False):
+        # validation v2 H1: end the session through its own path, so the epoch writes result.json and the tick
+        # trace (a launcher TERM lost both in batch 16782's lifecycle 1); a mission still active (the final resume
+        # refused, a STOP again) would make session_end refuse it (mission_active): STOP, cancel, its end, then end
+        m_ = (p.state or {}).get("mission") or {}
+        if m_.get("mission_id") and m_.get("status") not in FINAL_MISSION:
+            p.report["end_active"] = await end_active_mission(p, m_.get("mission_id"))
+        await _end_session(p)
+        return
     end = time.monotonic() + 60
     while p.closed_code is None and time.monotonic() < end:
         await asyncio.sleep(0.05)
@@ -916,14 +925,70 @@ async def stall_recovery(p: Probe, args, mission_id, seen: int) -> dict:
     return out
 
 
+FINAL_MISSION = ("done", "failed", "cancelled", "recovery_required")  # forklift_core.mission.commands.FINAL
+
+
+def mission_over(s: dict, mission_id) -> bool:
+    """This mission has a final status, or the state's mission slot has moved on from it."""
+    m = s.get("mission") or {}
+    if m.get("mission_id") == mission_id:
+        return m.get("status") in FINAL_MISSION
+    return True
+
+
+async def end_active_mission(p: Probe, mission_id) -> dict:
+    """Before a session's end with a mission not yet final: out of STOPPED first (a cancel is refused there,
+    stopped_locked) -- stand, rearm, leave STOPPED -- then cancel it (unless it is already recovering from an earlier
+    cancel) and wait (120 s) for its final status, resuming once a recovery the PAUSED mode paused."""
+    out = {}
+    if (p.state or {}).get("mode") == "STOPPED":
+        out["standing"] = await p.until(p.standing, 20.0, label="end_standing")
+        out["rearm"] = await p.request_until_standing("rearm")
+        out["rearmed"] = await p.until(lambda s: s.get("mode") != "STOPPED", 5.0, label="end_rearmed")
+
+    def paused_recovery(s):
+        # a cancel that stood with the forks in a pocket (or short of clearance: clear_out) became a recovery, which
+        # the PAUSED mode pauses at once -- as the cycle path's U30 handling, it is resumed once (Codex v2 H1 P2)
+        m = s.get("mission") or {}
+        phase = str(m.get("phase") or "")
+        return (m.get("mission_id") == mission_id and m.get("status") == "paused"
+                and (phase.startswith("recover_") or phase == "clear_out"))
+
+    m0 = (p.state or {}).get("mission") or {}
+    # already recovering (an earlier cancel became a recovery, e.g. the stall recovery's): a second cancel is refused
+    # (recovering), so no new cancel -- the recovery is resumed and waited for (Codex v2 H1 P2)
+    out["in_recovery"] = p.state is not None and m0.get("mission_id") == mission_id and (
+        m0.get("status") == "recovering" or paused_recovery(p.state))
+    out["cancel_ended"] = False
+    if not out["in_recovery"]:
+        out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
+        if not (out["cancel"] and out["cancel"].get("t") == "ack"):
+            if (out["cancel"] or {}).get("reason") != "recovering":
+                return out
+            out["in_recovery"] = True
+
+    stop_by = time.monotonic() + 120.0
+    while time.monotonic() < stop_by and p.closed_code is None:
+        hit = await p.until(lambda s: mission_over(s, mission_id) or (paused_recovery(s) and "recovery_resume" not in out),
+                            max(0.0, stop_by - time.monotonic()), label="end_cancel_ended")
+        if p.state is not None and mission_over(p.state, mission_id):
+            out["cancel_ended"] = True
+            break
+        if not hit:
+            break
+        if p.state is not None and paused_recovery(p.state) and "recovery_resume" not in out:
+            out["recovery_resume"] = await p.request_until_standing("mission_resume", mission_id=mission_id)
+    return out
+
+
 async def stall_end_session(p: Probe) -> dict:
     """A recovery not made: STOP, one more cancel of a mission still active, and the session's end asked; the wrapper
     ends the launcher after the probe if the session does not end (its grace)."""
     out = {"stop": await p.request("stop", source="key")}
     out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="stall_end_stopped")
     m = (p.state or {}).get("mission") or {}
-    if m.get("status") in ("running", "paused", "preparing", "held"):
-        out["cancel"] = await p.request("mission_cancel", mission_id=m.get("mission_id"))
+    if m.get("mission_id") and m.get("status") not in FINAL_MISSION:
+        out["end_active"] = await end_active_mission(p, m.get("mission_id"))  # rearm first: STOPPED refuses a cancel
     out["session_end"] = await p.request("session_end")
     return out
 
@@ -2173,7 +2238,8 @@ def main():
                          "snapshots from before it")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
-    ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--end-session", action="store_true",
+                    help="cycle, queue and main scenarios: end the session at the end (main: validation v2 H1)")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
