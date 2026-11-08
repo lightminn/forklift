@@ -28,6 +28,7 @@
     "sim": 3623.1668556295335,
     "wall": 12079.383306614938,
     "false_wall": 89.29740081710042,
+    "valid_wall": 12079.383306614938,
     "longest": 3.0467597150127403,
     "stalls": 3
    },
@@ -35,6 +36,7 @@
     "sim": 3623.3001889698207,
     "wall": 12079.385942678084,
     "false_wall": 97.97417701716768,
+    "valid_wall": 12079.385942678084,
     "longest": 2.3682598079903983,
     "stalls": 1
    }
@@ -1163,6 +1165,52 @@
    "new_lease": true,
    "old_lease_refused": true,
    "mission_done": true,
+   "order": [
+    [
+     "stopped_in_capture",
+     9
+    ],
+    [
+     "rearm",
+     12
+    ],
+    [
+     "resume",
+     14
+    ],
+    [
+     "auto_again",
+     15
+    ],
+    [
+     "teleop_entry",
+     19
+    ],
+    [
+     "arm",
+     20
+    ],
+    [
+     "expired_disarmed",
+     21
+    ],
+    [
+     "new_lease",
+     25
+    ],
+    [
+     "old_lease_refused",
+     26
+    ],
+    [
+     "final_resume",
+     28
+    ],
+    [
+     "session_end",
+     31
+    ]
+   ],
    "pass": true
   },
   "2": {
@@ -1226,6 +1274,41 @@
     "mission_id": "m1"
    },
    "stop_reply_s": 0.018923010036814958,
+   "order": [
+    [
+     "approach",
+     7
+    ],
+    [
+     "stop",
+     8
+    ],
+    [
+     "stopped",
+     9
+    ],
+    [
+     "rearm",
+     11
+    ],
+    [
+     "cancel",
+     13
+    ],
+    [
+     "recovery_resume",
+     14
+    ],
+    [
+     "m2_submit",
+     17
+    ],
+    [
+     "session_end",
+     20
+    ]
+   ],
+   "needs_recovery": true,
    "pass": false
   }
  },

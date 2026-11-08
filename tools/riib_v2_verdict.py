@@ -86,7 +86,7 @@ def trace_missing(trace: dict, a: float, b: float) -> bool:
 def arm_rules(a: dict, b: dict) -> dict:
     """The four pooled comparisons (3.3) from per-arm totals {sim, wall, false_wall, longest, stalls}."""
     fa, fb = a["sim"] / a["wall"], b["sim"] / b["wall"]
-    ra, rb = a["false_wall"] / a["wall"], b["false_wall"] / b["wall"]
+    ra, rb = a["false_wall"] / a["valid_wall"], b["false_wall"] / b["valid_wall"]
     out = {"F": {"A": fa, "B": fb, "pass": fb >= F_RATIO * fa},
            "R": {"A": ra, "B": rb, "pass": rb <= ra + R_ADD},
            "longest": {"A": a["longest"], "B": b["longest"], "pass": b["longest"] <= LONG_MUL * a["longest"] + LONG_ADD_S},
@@ -170,6 +170,12 @@ def safety(sess: dict) -> dict:
     res = sess.get("result")
     if res is None:
         return {"undecidable": "no run result.json"}
+    absent = [k for k in ("forbidden_pocket_contacts", "session_neighbour_gap", "session_rest_largest", "mission_results",
+                          "obstacle_layer") if k not in res]
+    unparsed = [m for m, st in (sess.get("records") or {}).items() if st is None]
+    if absent or unparsed or not (sess["run"] / "spool" / "manifest.json").exists():
+        return {"undecidable": {"absent": absent, "unparsed_records": unparsed,
+                                "spool_manifest": (sess["run"] / "spool" / "manifest.json").exists()}}
     gaps = res.get("session_neighbour_gap") or {}
     rest = res.get("session_rest_largest") or {}
     reasons = [r.get("reason") for r in sess.get("rows") or [] if r.get("reason")]
@@ -274,6 +280,28 @@ def _epoch_exit(sess: dict):
     return codes
 
 
+def in_order(events: list, steps: list) -> tuple[bool, list]:
+    """Each step matched by a later event than the previous one (a step = (name, predicate on an event)); returns
+    (all matched, [(name, event index or None)])."""
+    found, i = [], 0
+    for name, pred in steps:
+        j = next((k for k in range(i, len(events)) if pred(events[k])), None)
+        found.append((name, j))
+        if j is None:
+            return False, found + [(n, None) for n, _ in steps[len(found):]]
+        i = j + 1
+    return True, found
+
+
+def _reply(kind, t="ack", reason=None):
+    return lambda e: (e.get("event") == "reply" and e.get("kind") == kind and e.get("t") == t
+                      and (reason is None or e.get("reason") == reason))
+
+
+def _label(label):
+    return lambda e: e.get("event") == "reached" and e.get("label") == label
+
+
 def _replies(probe: dict, kind: str) -> list:
     return [e for e in probe.get("events") or [] if e.get("event") == "reply" and e.get("kind") == kind]
 
@@ -299,10 +327,17 @@ def lifecycle(sess: dict, which: int) -> dict:
              "new_lease": bool((p.get("reconnect") or {}).get("new_lease")),
              "old_lease_refused": (p.get("old_lease_after_reconnect") or {}).get("reason") == "stale_lease",
              "mission_done": bool(rows) and rows[0].get("outcome") == "done"}
-        c["pass"] = all([c["stopped_in_capture"], c["rearm_ack"], c["resume_acks"] >= 2, c["auto_again"],
-                         c["teleop_entry_ack"], c["arm_ack"], c["expired_disarmed"], c["new_lease"],
-                         c["old_lease_refused"], c["mission_done"], common["session_end_ack"], common["exit_ok"],
-                         common["result_json"], common["tick_trace"]])
+        teleop_id = (p.get("teleop_entry") or {}).get("request_id")
+        ok, order = in_order(p.get("events") or [], [
+            ("stopped_in_capture", _label("stopped_in_capture")), ("rearm", _reply("rearm")),
+            ("resume", _reply("mission_resume")), ("auto_again", _label("auto_again")),
+            ("teleop_entry", lambda e: _reply("mode_request")(e) and e.get("request_id") == teleop_id),
+            ("arm", _reply("arm")), ("expired_disarmed", _label("expired_disarmed")),
+            ("new_lease", _reply("lease_request")), ("old_lease_refused", _reply("mode_request", "reject", "stale_lease")),
+            ("final_resume", _reply("mission_resume")), ("session_end", _reply("session_end"))])
+        c["order"] = order
+        c["pass"] = all([ok, c["teleop_entry_ack"], c["new_lease"], c["old_lease_refused"], c["mission_done"],
+                         common["exit_ok"], common["result_json"], common["tick_trace"]])
     elif which == 2:
         runs = p.get("missions_run") or []
         first = runs[0] if runs else {}
@@ -335,8 +370,16 @@ def lifecycle(sess: dict, which: int) -> dict:
              "after_cancel_statuses": w.get("after_cancel_statuses"), "recovery_resume": w.get("recovery_resume")}
         stop_ev = next((e for e in _replies(p, "stop") if e.get("sent_mono") is not None), None)
         c["stop_reply_s"] = None if stop_ev is None else stop_ev["reply_mono"] - stop_ev["sent_mono"]
-        c["pass"] = all([c["phase_reached"], c["stop_ack"], c["rearm_ack"], c["cancel_ack"], c["m1_cancelled"],
-                         c["m2_done"], common["session_end_ack"], common["exit_ok"]])
+        needs_recovery = "recovering" in (w.get("after_cancel_statuses") or []) or bool(w.get("recovery_resume"))
+        steps_ = [("approach", _label("stop_wait:approach")), ("stop", _reply("stop")),
+                  ("stopped", _label("stopped_for_wait")), ("rearm", _reply("rearm")),
+                  ("cancel", _reply("mission_cancel"))]
+        if needs_recovery:
+            steps_.append(("recovery_resume", _reply("mission_resume")))
+        steps_ += [("m2_submit", _reply("mission_submit")), ("session_end", _reply("session_end"))]
+        ok, order = in_order(p.get("events") or [], steps_)
+        c["order"], c["needs_recovery"] = order, needs_recovery
+        c["pass"] = all([ok, c["phase_reached"], c["m1_cancelled"], c["m2_done"], common["exit_ok"]])
     return {**common, **c}
 
 
@@ -380,8 +423,8 @@ def evaluate(out_dir: Path) -> dict:
     for n in names:
         sess[n] = load_session(out_dir / "s" / n)
     pairs, dropped = [], []
-    totals = {"A": {"sim": 0.0, "wall": 0.0, "false_wall": 0.0, "longest": 0.0, "stalls": 0},
-              "B": {"sim": 0.0, "wall": 0.0, "false_wall": 0.0, "longest": 0.0, "stalls": 0}}
+    totals = {arm: {"sim": 0.0, "wall": 0.0, "false_wall": 0.0, "valid_wall": 0.0, "longest": 0.0, "stalls": 0}
+              for arm in ("A", "B")}
     hyp = {"A": {"rendered": 0, "capture": 0, "other": 0}, "B": {"rendered": 0, "capture": 0, "other": 0}}
     for p in plan["pairs"]:
         ss = [sess[n] for n in p["runs"]]
@@ -402,6 +445,8 @@ def evaluate(out_dir: Path) -> dict:
             arm = s["name"].rsplit("_", 1)[1]
             info = {"eligible": eligible(s), "missions": [(r.get("mission_id"), r.get("outcome"), r.get("reason"))
                                                           for r in s.get("rows") or []]}
+            if a is not None and (s.get("trace") is None or not s.get("steps")):
+                why.append(f"missing {s['name']} (no tick trace or no step records)")
             if a is not None and s.get("trace") is not None and s.get("steps"):
                 st = interval_stats(s["steps"], a, b)
                 ex, unm = c2_steps(s)
@@ -421,9 +466,10 @@ def evaluate(out_dir: Path) -> dict:
             for arm, info in row["sessions"].items():
                 s = sess[f"ab_{p['scene']}_s{p['seed']}_{arm}"]
                 st = interval_stats(s["steps"], a, b)
-                totals[arm]["sim"] += st["F"] * st["wall_s"]
+                totals[arm]["sim"] += st["F"] * st["wall_s"]  # = tick_t[k1] - tick_t[k0]
                 totals[arm]["wall"] += st["wall_s"]
-                totals[arm]["false_wall"] += st["R"] * st["wall_s"]
+                totals[arm]["false_wall"] += st["false_wall_s"]  # the registered R: valid adjacent intervals only
+                totals[arm]["valid_wall"] += st["valid_wall_s"]
                 totals[arm]["longest"] = max(totals[arm]["longest"], info["longest_false_s"])
                 totals[arm]["stalls"] += info["stalls"]["total"]
                 for kind in ("rendered", "capture", "other"):

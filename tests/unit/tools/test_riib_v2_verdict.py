@@ -37,8 +37,8 @@ def test_stalls_split_by_the_previous_row_and_c2_steps_apart():
 
 
 def test_the_four_pooled_rules():
-    a = {"sim": 300.0, "wall": 1000.0, "false_wall": 50.0, "longest": 10.0, "stalls": 3}
-    ok = {"sim": 292.0, "wall": 1000.0, "false_wall": 60.0, "longest": 14.0, "stalls": 5}
+    a = {"sim": 300.0, "wall": 1000.0, "valid_wall": 1000.0, "false_wall": 50.0, "longest": 10.0, "stalls": 3}
+    ok = {"sim": 292.0, "wall": 1000.0, "valid_wall": 1000.0, "false_wall": 60.0, "longest": 14.0, "stalls": 5}
     out = V.arm_rules(a, ok)
     assert out["pass"] and out["F"]["pass"] and out["R"]["pass"] and out["longest"]["pass"] and out["stalls"]["pass"]
     assert not V.arm_rules(a, {**ok, "sim": 290.0})["F"]["pass"]  # 0.290 < 0.97 x 0.300
@@ -52,3 +52,19 @@ def test_a_trace_break_inside_the_interval_is_missing():
     assert not V.trace_missing(tr, 0.0, 1.0)
     tr["live_step"] = np.array([0.0, 1.0, 3.0, 4.0])
     assert V.trace_missing(tr, 0.0, 1.0) and not V.trace_missing(tr, 0.15, 1.0)
+
+
+def test_pooled_r_uses_the_valid_intervals_not_the_wall_with_gaps():
+    # Codex: R x wall_s overcounts when allowed gaps sit inside wall_s
+    a = {"sim": 300.0, "wall": 1000.0, "valid_wall": 1000.0, "false_wall": 90.6, "longest": 1.0, "stalls": 0}
+    b = {"sim": 300.0, "wall": 1009.0, "valid_wall": 1000.0, "false_wall": 100.45, "longest": 1.0, "stalls": 0}
+    assert V.arm_rules(a, b)["R"]["pass"]  # 0.10045 <= 0.0906 + 0.01
+
+
+def test_the_lifecycle_order_needs_each_step_after_the_previous():
+    ev = [{"event": "reached", "label": "x"}, {"event": "reply", "kind": "rearm", "t": "ack"},
+          {"event": "reply", "kind": "mission_resume", "t": "ack"}]
+    ok, order = V.in_order(ev, [("x", V._label("x")), ("rearm", V._reply("rearm")), ("resume", V._reply("mission_resume"))])
+    assert ok and [j for _, j in order] == [0, 1, 2]
+    ok2, _ = V.in_order(list(reversed(ev)), [("x", V._label("x")), ("rearm", V._reply("rearm"))])
+    assert not ok2  # the rearm before the label does not count
