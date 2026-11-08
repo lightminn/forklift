@@ -1707,10 +1707,11 @@ async def tour_scenario(p: Probe, args):
 # --- R1 confirmation (docs/plans/2026-10-17-realtime-sim.md 5.17) --------------------------------------------------
 # The teleop limits the ratios scale (forklift_core.safety.teleop_drive.TeleopLimits; the probe does not import the
 # package): 0.15 m/s forward and reverse, curvature 0.18 1/m (within the 0.36 limit).
-CONFIRM_LIMITS = {"direct_forward_mps": 0.5, "direct_reverse_mps": 0.25, "curvature_inv_m": 0.36}
+CONFIRM_LIMITS = {"direct_forward_mps": 0.5, "direct_reverse_mps": 0.25, "curvature_inv_m": 0.36, "loaded_mps": 0.30}
 CONFIRM_FORWARD_RATIO = 0.3
 CONFIRM_REVERSE_RATIO = 0.6
 CONFIRM_CURVATURE_RATIO = 0.5
+CONFIRM_LOADED_RATIO = 0.5  # 0.15 m/s under the loaded cap
 
 
 async def _psleep(p, seconds):
@@ -1768,14 +1769,18 @@ async def confirm_enter_teleop(p, tries=60, clock=time.monotonic) -> dict:
     return rec
 
 
-async def hold_teleop(p, label, seconds, speed_ratio, curvature_ratio, mode="direct", lift_dir=0, stop_after_s=None,
-                      clock=time.monotonic) -> dict:
-    """A command held for ``seconds`` wall s, dead man pressed, every 0.05 s (5.17 T1: the interval, its mode and
-    ratios are what the analysis reads the control ticks inside); with ``stop_after_s`` a STOP is sent that far in
-    (STOP-T, while moving) and the hold ends there. The truck is let come to a stand after it (zero command)."""
+async def hold_teleop(p, label, sim_seconds, speed_ratio, curvature_ratio, mode="direct", lift_dir=0,
+                      stop_after_sim_s=None, factor=1.0, clock=time.monotonic) -> dict:
+    """A command held for ``sim_seconds`` of simulated time (``sim_seconds / factor`` wall s at the declared factor),
+    dead man pressed, every 0.05 wall s (5.17 T1: the interval, its mode and ratios are what the analysis reads the
+    control ticks inside); with ``stop_after_sim_s`` a STOP is sent that far in (STOP-T, while moving) and the hold
+    ends there. The truck is let come to a stand after it (zero command); ``stand_mono`` is when it stood."""
     rec = {"label": label, "mode": mode, "deadman": True, "speed_ratio": speed_ratio, "curvature_ratio": curvature_ratio,
-           "lift_dir": int(lift_dir), "start_mono": clock(), "start_state": _pose_of(p.state)}
+           "lift_dir": int(lift_dir), "sim_seconds": sim_seconds, "factor": factor, "start_mono": clock(),
+           "start_state": _pose_of(p.state)}
     start = rec["start_mono"]
+    seconds = sim_seconds / factor
+    stop_after_s = None if stop_after_sim_s is None else stop_after_sim_s / factor
     while clock() - start < seconds:
         if stop_after_s is not None and clock() - start >= stop_after_s:
             rec["stop"] = await confirm_stop(p, "T", clock=clock)
@@ -1787,10 +1792,12 @@ async def hold_teleop(p, label, seconds, speed_ratio, curvature_ratio, mode="dir
         rec["end_mono"] = clock()
     rec["end_state"] = _pose_of(p.state)
     if "stop" not in rec:
-        stop_by = clock() + 15.0
+        stop_by = clock() + 15.0 / factor
         while clock() < stop_by and not (p.state and p.standing(p.state)):
             await p.teleop(0.0, 0.0, True, mode="direct")
             await _psleep(p, 0.05)
+    rec["stand_mono"] = clock()
+    rec["stand_state"] = _pose_of(p.state)
     p.report.setdefault("confirm", {}).setdefault("holds", []).append(rec)
     return rec
 
@@ -1807,7 +1814,7 @@ async def command_expiry(p, factor, clock=time.monotonic) -> dict:
     teleop command for 0.5/f wall s (the lease is kept by the background echo), and record what the vehicle shows."""
     rec = {"silence_s": 0.5 / factor}
     start = clock()
-    while clock() - start < 1.0:
+    while clock() - start < 1.0 / factor:
         await p.teleop(CONFIRM_FORWARD_RATIO, 0.0, True, mode="direct")
         await _psleep(p, 0.05)
     rec["moving_before"] = not p.standing(p.state or {})
@@ -1831,6 +1838,7 @@ async def confirm_scenario(p: Probe, args):
     and reverse -- and the command-expiry test; then the session ends."""
     rep = p.report.setdefault("confirm", {})
     rep["steps"] = []
+    f = args.live_factor  # holds are given in simulated seconds; their wall length is sim / f
 
     def step(name, ok):
         rep["steps"].append({"step": name, "ok": bool(ok), "mono": time.monotonic()})
@@ -1879,7 +1887,7 @@ async def confirm_scenario(p: Probe, args):
         if step("stop_A1", a1["rearm"] == "ack"):
             entry = await confirm_enter_teleop(p)
             if step("loaded_teleop_entry", entry["entered"]):
-                await hold_teleop(p, "loaded_forward", 2.0, CONFIRM_FORWARD_RATIO, 0.0)
+                await hold_teleop(p, "loaded_forward", 2.0, CONFIRM_LOADED_RATIO, 0.0, factor=f)
                 await p.request("mode_request", to="PAUSED")
             await resume()
     # STOP-A2 on the return, moving; resume
@@ -1902,17 +1910,17 @@ async def confirm_scenario(p: Probe, args):
     # the teleop block, standing after the mission
     entry = await confirm_enter_teleop(p)
     if step("teleop_entry", entry["entered"]):
-        fwd = await hold_teleop(p, "forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, stop_after_s=1.5)
+        fwd = await hold_teleop(p, "forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, stop_after_sim_s=1.5, factor=f)
         if "stop" in fwd:
             entry = await confirm_enter_teleop(p)
             step("teleop_reentry_after_stop", entry["entered"])
-        await hold_teleop(p, "reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0)
-        await hold_teleop(p, "left", 2.0, CONFIRM_FORWARD_RATIO, CONFIRM_CURVATURE_RATIO)
-        await hold_teleop(p, "right", 2.0, CONFIRM_FORWARD_RATIO, -CONFIRM_CURVATURE_RATIO)
-        await hold_teleop(p, "lift_up", 2.0, 0.0, 0.0, lift_dir=1)
-        await hold_teleop(p, "lift_down", 2.0, 0.0, 0.0, lift_dir=-1)
-        await hold_teleop(p, "video_forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, mode="video")
-        await hold_teleop(p, "video_reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0, mode="video")
+        await hold_teleop(p, "reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0, factor=f)
+        await hold_teleop(p, "left", 2.0, CONFIRM_FORWARD_RATIO, CONFIRM_CURVATURE_RATIO, factor=f)
+        await hold_teleop(p, "right", 2.0, CONFIRM_FORWARD_RATIO, -CONFIRM_CURVATURE_RATIO, factor=f)
+        await hold_teleop(p, "lift_up", 2.0, 0.0, 0.0, lift_dir=1, factor=f)
+        await hold_teleop(p, "lift_down", 2.0, 0.0, 0.0, lift_dir=-1, factor=f)
+        await hold_teleop(p, "video_forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, mode="video", factor=f)
+        await hold_teleop(p, "video_reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0, mode="video", factor=f)
         await command_expiry(p, args.live_factor)
         await p.request("mode_request", to="PAUSED")
     await p.until(p.standing, 20, label="standing_at_end")

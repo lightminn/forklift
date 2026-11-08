@@ -35,6 +35,13 @@ FAR="$FAR --recognition-learned-python $P/venvs/learned/bin/python --recognition
 FAR="$FAR --recognition-pixel-lag-steps 12 --recognition-providers CUDAExecutionProvider,CPUExecutionProvider"
 FAR="$FAR --recognition-device-id 0 --recognition-threads 4"
 NEAR="--near-capture-redraw always --near-capture-redraw-lateral-m 0.10 --near-capture-expected on"
+# only the registered combinations (plan 5.17): far L/K at 0.4 and 0.3; off L/KP at 0.4; mark L/K at 0.4 and 0.3 and
+# KP at 0.4; wall L/K/KP at 0.4
+case "${SET:-}:${ARM}:${FACTOR}" in
+  far:L:0.4|far:K:0.4|far:L:0.3|far:K:0.3|off:L:0.4|off:KP:0.4|mark:L:0.4|mark:K:0.4|mark:KP:0.4|mark:L:0.3|mark:K:0.3) ;;
+  wall:L:0.4|wall:K:0.4|wall:KP:0.4) ;;
+  *) echo "SET:ARM:FACTOR ${SET:-}:${ARM}:${FACTOR} is not in plan 5.17's registration" >&2; exit 2 ;;
+esac
 TRACE="--max-sim-seconds 1500"  # the trace buffer (plan 5.17 T6: dropped must be 0); the live loop is not bounded by it
 END=(--end-session)
 case ${SET:?far, off, mark or wall} in
@@ -50,9 +57,10 @@ case ${SET:?far, off, mark or wall} in
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   mark)
     unset SCENE_FILE
-    # the freeze 30-45 sim s (as the M-c marker run): video-mode commands across it must be refused stale_video
-    export EXTRA_ARGS="--live-test-marker --live-test-camera-freeze 30:45 $TRACE"
-    PROBE=(--scenario marker --frames-dir "$OUT/frames" --frames 300 --freeze-from 30) ; END=() ;;
+    # 200 frames (about 20 sim s at the 10 Hz live camera) for the pixel lag, then TELEOP before the freeze at 30-60 sim s:
+    # video-mode commands across it must be refused stale_video (Codex tool review: 300 frames reached the freeze's end)
+    export EXTRA_ARGS="--live-test-marker --live-test-camera-freeze 30:60 $TRACE"
+    PROBE=(--scenario marker --frames-dir "$OUT/frames" --frames 200 --freeze-from 30) ; END=() ;;
   wall)
     unset SCENE_FILE
     export EXTRA_ARGS="--live-test-permit-compare $TRACE"
