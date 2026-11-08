@@ -115,3 +115,39 @@ def test_a_reply_event_keeps_its_send_and_reply_times(monkeypatch):
     assert reply == {"t": "ack"}
     (e,) = events
     assert e["sent_mono"] == 1000.0 and abs(e["reply_mono"] - 1000.02) < 1e-9 and abs(e["rtt_s"] - 0.02) < 1e-9
+
+
+def test_main_with_a_mission_still_active_stops_cancels_and_then_ends_the_session(monkeypatch):
+    clock = Clock()
+    monkeypatch.setattr(lcp, "time", clock)
+
+    async def fake_sleep(s):
+        clock.t += s
+
+    monkeypatch.setattr(lcp.asyncio, "sleep", fake_sleep)
+
+    class Active(MainProbe):
+        async def request(self, kind, timeout=5.0, **fields):
+            out = await super().request(kind, timeout, **fields)
+            if kind == "stop":
+                self.state = dict(self.state, mode="STOPPED")
+            if kind == "mission_cancel":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelled"})
+            if kind == "session_end" and (self.state.get("mission") or {}).get("status") == "paused":
+                self.closed_code = None
+                return {"t": "reject", "reason": "mission_active"}
+            return out
+
+        async def until(self, pred, timeout, label=""):
+            self.labels.append(label)
+            if label == "mission_end_or_stop":  # the final resume left the mission paused (a repeated STOP)
+                self.state = dict(self.state, mode="AUTO", mission={"mission_id": "m1", "status": "paused"})
+            return pred(self.state) if label.startswith("end_") else True
+
+    p = Active()
+    args = argparse.Namespace(expect_stop_in_capture=True, observe_timeout_s=10.0, auto_s=1.0,
+                              mission_timeout_s=100.0, end_session=True)
+    asyncio.run(lcp.main_scenario(p, args))
+    tail = p.requests[p.requests.index("stop", len(p.requests) - 5):]
+    assert tail[:2] == ["stop", "mission_cancel"] and tail[-1] == "session_end"
+    assert p.report["end_active"]["cancel_ended"] and p.report["close_code"] == 1000

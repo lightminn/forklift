@@ -439,7 +439,11 @@ async def main_scenario(p: Probe, args):
         await p.request_until_standing("mission_resume", mission_id=mission_id)
     if getattr(args, "end_session", False):
         # validation v2 H1: end the session through its own path, so the epoch writes result.json and the tick
-        # trace (a launcher TERM lost both in batch 16782's lifecycle 1)
+        # trace (a launcher TERM lost both in batch 16782's lifecycle 1); a mission still active (the final resume
+        # refused, a STOP again) would make session_end refuse it (mission_active): STOP, cancel, its end, then end
+        m_ = (p.state or {}).get("mission") or {}
+        if m_.get("status") in ACTIVE_MISSION:
+            p.report["end_active"] = await end_active_mission(p, m_.get("mission_id"))
         await _end_session(p)
         return
     end = time.monotonic() + 60
@@ -921,13 +925,26 @@ async def stall_recovery(p: Probe, args, mission_id, seen: int) -> dict:
     return out
 
 
+ACTIVE_MISSION = ("running", "paused", "preparing", "held")
+
+
+async def end_active_mission(p: Probe, mission_id) -> dict:
+    """Before a session's end with a mission still active: STOP, cancel it, and wait (120 s) until it has ended."""
+    out = {"stop": await p.request("stop", source="key")}
+    out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="end_stopped")
+    out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
+    out["cancel_ended"] = await p.until(
+        lambda s: ((s.get("mission") or {}).get("status") not in ACTIVE_MISSION), 120.0, label="end_cancel_ended")
+    return out
+
+
 async def stall_end_session(p: Probe) -> dict:
     """A recovery not made: STOP, one more cancel of a mission still active, and the session's end asked; the wrapper
     ends the launcher after the probe if the session does not end (its grace)."""
     out = {"stop": await p.request("stop", source="key")}
     out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="stall_end_stopped")
     m = (p.state or {}).get("mission") or {}
-    if m.get("status") in ("running", "paused", "preparing", "held"):
+    if m.get("status") in ACTIVE_MISSION:
         out["cancel"] = await p.request("mission_cancel", mission_id=m.get("mission_id"))
     out["session_end"] = await p.request("session_end")
     return out

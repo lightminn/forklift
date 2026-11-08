@@ -135,3 +135,15 @@ def test_a_plan_asked_in_the_tick_the_pause_or_cancel_took_effect_fails_and_the_
     probe, result, log = run()
     result["async_plans"][1]["requested_s"] = RESUME1  # asked in the resume's own tick: allowed
     assert judge(probe, result, log) == []
+
+
+def test_other_log_lines_with_a_tick_time_are_not_drive_output():
+    # validation v2 H3's applied-command lines (and arbiter events) carry tick_t and mono but no speed: not commands
+    probe, result, log = run()
+    log.append({"mission_commands": [{"t": CANCEL, "command": "mission_cancel", "accepted": True, "reason": None,
+                                      "mission_id": "m1", "status": "cancelling", "request_id": "r12"}],
+                "tick_t": CANCEL + 0.1, "mono": mono(CANCEL) + 0.11})
+    log.append({"t": mono(CANCEL), "event": "mode", "from": "AUTO", "to": "PAUSED", "arbiter": True,
+                "tick_t": CANCEL + 0.2, "mono": mono(CANCEL) + 0.21})
+    log.sort(key=lambda d: d["mono"])
+    assert judge(probe, result, log) == []
