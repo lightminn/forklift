@@ -115,4 +115,8 @@ term_relay_wait "$L"
 rc=$TERM_RELAY_RC
 echo "launcher exit $rc $(date -Is)"
 [ "$prc" -ne 0 ] && [ "$prc" -ne 3 ] && exit 4
+if [ "$PROBE_MODE" = place_block ]; then  # plan 2026-11-08 5: the vehicle's own records decide, after the session
+  "$VENV_PY" "$ROOT/tools/f1_block_judge.py" "$OUT" --expect "${F1_AUTONOMY:-block}" > "$OUT/f1_block_judge.log" 2>&1 \
+    || { echo "block check failed on the vehicle's records (f1_block_verdict.json)"; exit 6; }
+fi
 exit "$rc"

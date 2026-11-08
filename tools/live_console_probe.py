@@ -1849,6 +1849,7 @@ async def _await_rematch(p, shadow, args) -> dict:
 
 
 BLOCK_REASON = "operator_placed_start"
+BLOCK_ACTIVE = ("accepted", "preparing", "running", "resuming", "recovering")
 
 
 def _xy(s):
@@ -1864,6 +1865,7 @@ async def _block_check(p, args):
     (the runner's start_reloc) is checked afterwards from the run's files."""
     out = p.report["block_check"] = {"expect": args.block_expect, "checks": {}, "modes": []}
     checks = out["checks"]
+    first = len(getattr(p, "states", None) or [])  # every state received from here on is judged, not snapshots
     confirm = (p.report.get("confirm") or {}).get("reply")
     checks["placement_confirmed"] = confirm == "ack"
     checks["same_epoch"] = not (p.report.get("handover") or {}).get("epoch_changed")
@@ -1901,8 +1903,6 @@ async def _block_check(p, args):
         for name in ("submit", "auto", "pick"):
             r = out[name] or {}
             checks[f"{name}_refused"] = r.get("t") == "reject" and r.get("reason") == BLOCK_REASON
-        checks["no_mission"] = (p.state or {}).get("mission") is None or (p.state or {}).get("mission", {}).get(
-            "status") not in ("accepted", "preparing", "running")
         before = _xy(p.state)
         out["teleop"] = await teleop_drive(p, args.block_teleop_s, 0.15, 0.0)
         after = _xy(p.state)
@@ -1911,7 +1911,12 @@ async def _block_check(p, args):
         checks["teleop_taken"] = bool(out["teleop"]) and out["teleop"].get("t") == "ack"
         checks["teleop_moved"] = out["moved_m"] is not None and out["moved_m"] > 0.02
         out["modes"].append((p.state or {}).get("mode"))
-    checks["never_auto"] = "AUTO" not in out["modes"]
+        seen = (getattr(p, "states", None) or [])[first:]
+        out["states_judged"] = len(seen)
+        checks["states_seen"] = len(seen) > 0
+        checks["never_auto"] = all((x or {}).get("mode") != "AUTO" for x in seen + [p.state])
+        checks["no_mission"] = all(((x or {}).get("mission") or {}).get("status") not in BLOCK_ACTIVE
+                                   for x in seen + [p.state])
     out["verdict"] = "pass" if all(checks.values()) else "fail"
     out["failed"] = sorted(k for k, v in checks.items() if not v)
 
@@ -2151,6 +2156,10 @@ def main():
         report["frames"] = p.frames
         report["states"] = p.states
         args.report.write_text(json.dumps(report, default=str))
+    # plan 2026-11-08 5: a block check that did not pass, or never ran (an epoch changed, no placement), fails the run
+    if args.scenario == "place" and args.after_place == "block_check" and (
+            (report.get("block_check") or {}).get("verdict") != "pass"):
+        sys.exit(5)
 
 
 if __name__ == "__main__":

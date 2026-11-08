@@ -22,12 +22,16 @@ class Fake:
         self.closed_code, self.lease_id, self.arm_gen = None, None, 0
         self.targets = {"targets_revision": 1}
         self.x, self.mode, self.mission = 0.0, "PAUSED", None
-        self.calls = []
+        self.calls, self.states, self.flash_auto, self.auto_on_accept = [], [], False, False
         self._publish()
 
     def _publish(self):
         self.state = {"pose": {"x_m": self.x, "y_m": 0.0}, "mode": self.mode, "mission": self.mission,
                       "rear_axle_speed_mps": 0.0, **({"start_block": BLOCK} if self.blocked else {})}
+        self.states.append({"mode": self.mode, "mission": self.mission})
+        if self.flash_auto:  # an AUTO state between two snapshots the check takes itself
+            self.states.append({"mode": "AUTO", "mission": None})
+            self.flash_auto = False
 
     def standing(self, s):
         return True
@@ -51,6 +55,8 @@ class Fake:
             if self.blocked:
                 return refused
             self.mission = {"status": "accepted", "mission_id": "m1"}
+            if self.auto_on_accept:
+                self.mode = "AUTO"
             self._publish()
             return {"t": "ack", "mission_id": "m1"}
         if kind == "mission_cancel":
@@ -118,3 +124,26 @@ def test_an_unconfirmed_placement_or_a_new_epoch_fails():
     fake = Fake()
     fake.report["handover"] = {"epoch_changed": [1, 2]}
     assert _run(fake)["failed"] == ["same_epoch"]
+
+
+def test_an_auto_state_between_the_snapshots_fails_the_block():
+    fake = Fake()
+    fake.flash_auto = True
+    out = _run(fake)
+    assert out["verdict"] == "fail" and "never_auto" in out["failed"] and out["states_judged"] > 0
+
+
+def test_allow_passes_with_the_auto_a_taken_mission_brings():
+    fake = Fake(blocked=False)
+    fake.auto_on_accept = True
+    out = _run(fake, "allow")
+    assert out["verdict"] == "pass", out["failed"]
+
+
+def test_a_failed_check_ends_the_probe_with_an_error(tmp_path, monkeypatch):
+    import json
+
+    report = {"block_check": {"verdict": "fail"}}
+    src = (ROOT / "tools/live_console_probe.py").read_text()
+    assert 'args.after_place == "block_check" and (' in src and "sys.exit(5)" in src
+    assert json.loads(json.dumps(report))["block_check"]["verdict"] != "pass"
