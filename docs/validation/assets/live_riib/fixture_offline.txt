@@ -1,0 +1,21 @@
+input <tmp>/diag/032f/prepare_input_1.pkl sha256 787865e0e43712d1d7ea9b0b6da620b0f715d15217b9d06b8beadd9832797d47
+input <tmp>/riibfx/line_m_session.json sha256 83e27b4cd9b36653614e317509211054d1d5298afeee10135aee51cbd6761c70
+input <tmp>/riibfx/random_m_session.json sha256 8b8fe55499148528e3daec138937b406efaeec46459e520c6429014309858cfa
+guard: straight unloaded leg, prop 0.6 x 0.8 m (height irrelevant here), speed 0.3 m/s; cap at truck offsets toward the prop 0/0.01/0.02/0.03/0.05 m ('-' = none)
+  default  planned 0.10: - - - - 0.00
+  default  planned 0.20: - - - - -
+  default  planned 0.30: - - - - -
+  fixture  planned 0.10: - 0.00 0.00 0.00 0.00
+  fixture  planned 0.20: - - 0.00 0.00 0.00
+  fixture  planned 0.30: - - 0.00 0.00 0.00
+withdrawal: inserted_offset 1.260 m, pallet 0.6 x 0.8 m, footprint Footprint(front_m=1.29, rear_m=0.17, half_width_m=0.36), clearance 0.1 m
+  line_m     D-1 w=0.30: free@0 False free@0.1 False first_step None  backoff prefix advice 0.13 length 0.16
+  line_m     D-1 w=0.35: free@0 True  free@0.1 False first_step None  backoff prefix advice 0.08 length 0.11
+  line_m     D-1 w=0.40: free@0 True  free@0.1 False first_step None  backoff prefix advice 0.04 length 0.07
+  line_m     D-1 w=0.45: free@0 True  free@0.1 True  first_step True  backoff prefix advice 0.01 length 0.04
+  line_m     D-1 w=0.55: free@0 True  free@0.1 True  first_step True  backoff prefix advice 0.01 length 0.04
+  random_m   D-1 w=0.30: free@0 False free@0.1 False first_step None  backoff prefix advice 0.13 length 0.16
+  random_m   D-1 w=0.35: free@0 True  free@0.1 False first_step None  backoff prefix advice 0.08 length 0.11
+  random_m   D-1 w=0.40: free@0 True  free@0.1 False first_step None  backoff prefix advice 0.03 length 0.06
+  random_m   D-1 w=0.45: free@0 True  free@0.1 True  first_step True  backoff prefix advice 0.01 length 0.04
+  random_m   D-1 w=0.55: free@0 True  free@0.1 True  first_step True  backoff prefix advice 0.01 length 0.04

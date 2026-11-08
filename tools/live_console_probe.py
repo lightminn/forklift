@@ -800,6 +800,134 @@ async def manual_recovery(p: Probe, args) -> dict:
     return out
 
 
+class StallWatch:
+    """--stall-recover-s (docs/plans/2026-11-08-live-riib-defaults-validation.md 3.2, the low-clearance guard's target
+    sessions): this mission running in AUTO with the truck standing -- reported rear-axle speed under 0.005 m/s, its
+    published pose within 0.01 m of one spot -- over fresh states for ``seconds`` wall s in a row. A cap of 0 from the
+    guard stands the truck with no result of its own; this is what an operator watching the page would see, and it
+    can also be a long legitimate stand (a heuristic: the cause is attributed afterwards from the run's records).
+    Only a new state counts (a state object or sequence seen before adds nothing, Codex probe review P2); no new state
+    for ``STALE_S`` starts the count again, as anything else does (another mission, a pause, STOPPED, a move);
+    ``reset`` for a stop the caller handles."""
+
+    SPEED_MPS, SPOT_M, STALE_S = 0.005, 0.01, 1.0
+
+    def __init__(self, seconds: float, mission_id, clock=None):
+        self.seconds, self.mission_id = float(seconds), mission_id
+        self.clock = clock if clock is not None else (lambda: time.monotonic())
+        self.since = self.spot = self.seen = self.fresh_at = None
+
+    def reset(self) -> None:
+        self.since = self.spot = None
+
+    def __call__(self, s) -> bool:
+        now = self.clock()
+        stamp = None if s is None else (s.get("state_seq"), id(s))
+        if stamp is None or stamp == self.seen:
+            if self.fresh_at is None or now - self.fresh_at > self.STALE_S:
+                self.reset()
+            return False
+        if self.fresh_at is not None and now - self.fresh_at > self.STALE_S:
+            self.reset()  # a silence before this state: its stand is not known to have gone on
+        self.seen, self.fresh_at = stamp, now
+        m = s.get("mission") or {}
+        pose, v = s.get("pose"), s.get("rear_axle_speed_mps")
+        if not (m.get("mission_id") == self.mission_id and m.get("status") == "running" and s.get("mode") == "AUTO"
+                and v is not None and abs(v) < self.SPEED_MPS and isinstance(pose, dict)
+                and pose.get("x_m") is not None and pose.get("y_m") is not None):
+            self.reset()
+            return False
+        xy = (float(pose["x_m"]), float(pose["y_m"]))
+        if self.spot is None or math.hypot(xy[0] - self.spot[0], xy[1] - self.spot[1]) >= self.SPOT_M:
+            self.since, self.spot = now, xy
+            return False
+        return now - self.since >= self.seconds
+
+
+# stall_recovery outcomes after which the cycle goes on (the others end the session)
+STALL_GOES_ON = ("recovered", "recovery_required", "completed_before_cancel", "ended_otherwise")
+
+
+async def stall_recovery(p: Probe, args, mission_id, seen: int) -> dict:
+    """The registered recovery from a stand StallWatch saw (validation plan 3.2): cancel the mission and wait for its
+    result; an empty truck then backs off straight by hand once in TELEOP (0.05-``--stall-backoff-m``, measured by the
+    reported speed, standing at its end) and goes PAUSED. ``outcome``:
+    - recovered;
+    - recovery_required: the cancel left the forks in a pocket (--manual-recovery takes it at the next submit);
+    - completed_before_cancel / ended_otherwise: the mission ended by itself first (done / another result): no move;
+    - loaded_hold: cancelled with the pallet on the forks -- a SCENE_FILE session cannot go on (the next submit is
+      cargo_held; the registration counts it as an operational gap);
+    - cancel_refused, cancel_not_ended, teleop_refused, reverse_out_of_interval, paused_refused: not recovered.
+    Every request's reply is checked (Codex probe review P2)."""
+    st = p.state or {}
+    out = {"mono": time.monotonic(), "mission": st.get("mission"), "pose": st.get("pose"), "mode": st.get("mode"),
+           "load": st.get("load")}
+    out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
+
+    def ended(s):
+        r = s.get("last_result") or {}
+        return r.get("seq", 0) > seen and r.get("mission_id") == mission_id
+
+    if (out["cancel"] or {}).get("t") != "ack":
+        if p.state is not None and ended(p.state):  # the mission ended by itself just before
+            out["result"] = p.state.get("last_result")
+            out["outcome"] = ("completed_before_cancel" if (out["result"] or {}).get("outcome") == "done"
+                              else "ended_otherwise")
+            return out
+        out["outcome"] = "cancel_refused"
+        return out
+    out["ended"] = await p.until(ended, 120.0, label="stall_cancel_end")
+    out["result"] = (p.state or {}).get("last_result")
+    if not out["ended"]:
+        out["outcome"] = "cancel_not_ended"
+        return out
+    result_outcome = (out["result"] or {}).get("outcome")
+    if result_outcome == "recovery_required":
+        out["outcome"] = "recovery_required"
+        return out
+    if result_outcome == "done":
+        out["outcome"] = "completed_before_cancel"
+        return out
+    if result_outcome != "cancelled":
+        out["outcome"] = "ended_otherwise"
+        return out
+    if ((p.state or {}).get("load") or {}).get("state") == "loaded":
+        out["outcome"] = "loaded_hold"
+        return out
+    out["teleop"] = await enter_teleop(p)
+    arm_gen = int(getattr(p, "arm_gen", 0) or 0)  # enter_teleop keeps this arm's generation (0: the arm failed)
+    # the replies come before the state that shows them (Codex probe review round 2 P2): wait for it
+    out["armed"] = bool(out["teleop"]) and out["teleop"].get("t") == "ack" and arm_gen > 0 and await p.until(
+        lambda s: s.get("mode") == "TELEOP" and bool(s.get("armed")) and int(s.get("arm_gen") or 0) >= arm_gen,
+        5.0, label="stall_teleop_armed")
+    if not out["armed"]:
+        out["outcome"] = "teleop_refused"
+        return out
+    out["backoff"] = await back_off_by(p, 0.05, float(args.stall_backoff_m), max_s=30.0)
+    standing = bool(p.state and p.standing(p.state))
+    out["paused"] = await p.request("mode_request", to="PAUSED")
+    if not (out["backoff"]["within"] and standing):
+        out["outcome"] = "reverse_out_of_interval"
+        return out
+    if (out["paused"] or {}).get("t") != "ack":
+        out["outcome"] = "paused_refused"
+        return out
+    out["outcome"] = "recovered"
+    return out
+
+
+async def stall_end_session(p: Probe) -> dict:
+    """A recovery not made: STOP, one more cancel of a mission still active, and the session's end asked; the wrapper
+    ends the launcher after the probe if the session does not end (its grace)."""
+    out = {"stop": await p.request("stop", source="key")}
+    out["stopped"] = await p.until(lambda s: s.get("mode") == "STOPPED", 10.0, label="stall_end_stopped")
+    m = (p.state or {}).get("mission") or {}
+    if m.get("status") in ("running", "paused", "preparing", "held"):
+        out["cancel"] = await p.request("mission_cancel", mission_id=m.get("mission_id"))
+    out["session_end"] = await p.request("session_end")
+    return out
+
+
 async def lift_scenario(p: Probe, args):
     """Plan D14 U20 a/b: the manual lift in an idle session -- up and down at its rate within the travel; the
     client going quiet mid-lift; the runner stopped (SIGSTOP) while the lease runs out, then continued."""
@@ -1063,16 +1191,41 @@ async def cycle_scenario(p: Probe, args):
                 await asyncio.sleep(0.1)
             entry["after_cancel"] = {"statuses": statuses_, "phases": phases_}
         end_by = time.monotonic() + args.mission_timeout_s
+        stall_ = (StallWatch(args.stall_recover_s, submit.get("mission_id"), clock=getattr(p, "clock", None))
+                  if args.stall_recover_s > 0 else None)
+        stalled_, span_ = False, None
+
+        def ended_this_(s):
+            r_ = s.get("last_result") or {}
+            return r_.get("seq", 0) > seen and r_.get("mission_id") == submit.get("mission_id")
+
         while time.monotonic() < end_by and p.closed_code is None:
-            await p.until(lambda s: (((s.get("last_result") or {}).get("seq", 0) > seen
-                                      and (s.get("last_result") or {}).get("mission_id") == submit.get("mission_id")))
-                          or s.get("mode") == "STOPPED", end_by - time.monotonic(), label=f"end:{leg}")
+            await p.until(lambda s, w_=stall_: ended_this_(s) or s.get("mode") == "STOPPED" or (w_ is not None and w_(s)),
+                          end_by - time.monotonic(), label=f"end:{leg}")
+            if (stall_ is not None and p.state is not None and not ended_this_(p.state)
+                    and p.state.get("mode") != "STOPPED" and stall_.since is not None
+                    and stall_.clock() - stall_.since >= stall_.seconds):
+                stalled_ = True  # validation plan 3.2: the registered recovery, then the next leg or the end
+                # the stand on the watch's clock (time.monotonic live, the runtime's tick-trace clock): the guard's
+                # holds are in sim time, so the false-positive check maps this span through the trace's (S, tick)
+                span_ = {"clock": "stall_watch", "since": stall_.since, "decided": stall_.clock()}
+                break
             if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
                 break
+            if stall_ is not None:
+                stall_.reset()  # a STOP and its rearm are not part of a stand (Codex probe review P2)
             await p.until(p.standing, 20, label="standing_again")
             await p.request_until_standing("rearm")
             await p.request_until_standing("mission_resume", mission_id=submit.get("mission_id"))
+        if stalled_:
+            entry["stall_recovery"] = await stall_recovery(p, args, submit.get("mission_id"), seen)
+            entry["stall_recovery"]["stall_span_mono"] = span_
         entry["result"] = (p.state or {}).get("last_result")
+        if stalled_ and entry["stall_recovery"]["outcome"] not in STALL_GOES_ON:
+            p.event("stall_recovery_not_done", outcome=entry["stall_recovery"]["outcome"])
+            entry["ended_mono"] = time.monotonic()
+            p.report["stall_end"] = await stall_end_session(p)
+            break  # the next mission is not asked of a truck that could not be got going again
         if (entry["result"] or {}).get("mission_id") != submit.get("mission_id"):
             # not this submission's end (it never came, or a later one is shown): kept, and said (Codex probe P2-1)
             entry["result_not_this_mission"] = True
@@ -1998,6 +2151,12 @@ def main():
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
                     "before the next submit")
     ap.add_argument("--manual-extra-s", type=float, default=2.0, help="manual recovery: reverse this long after it")
+    ap.add_argument("--stall-recover-s", type=float, default=0.0,
+                    help="cycle scenario (docs/plans/2026-11-08-live-riib-defaults-validation.md 3.2): a running mission "
+                    "whose truck stands within 0.01 m this many wall s is cancelled, backed off straight by hand once and "
+                    "the cycle goes on; a recovery that cannot be made ends the session. 0: off")
+    ap.add_argument("--stall-backoff-m", type=float, default=0.30,
+                    help="the stall recovery's hand reverse: from 0.05 m to this many metres (measured by the speed)")
     ap.add_argument("--manual-backoffs", type=int, default=3,
                     help="manual recovery: how often to back off further and ask again when the preparation cannot "
                     "start from where the recovery ended (invalid_start)")
@@ -2096,6 +2255,14 @@ def main():
     ap.add_argument("--tour-pacing-wait-s", type=float, default=900.0,
                     help="tour scenario: no progress this long while teleop is forbidden for pacing (wall s)")
     args = ap.parse_args()
+    if not (math.isfinite(args.stall_recover_s) and args.stall_recover_s >= 0):
+        ap.error("--stall-recover-s must be a finite number of wall seconds (0: off)")
+    if not (math.isfinite(args.stall_backoff_m) and args.stall_backoff_m > 0.05):
+        ap.error("--stall-backoff-m must be a finite distance above 0.05 m")
+    if args.stall_recover_s > 0 and (args.scenario != "cycle" or args.cancel_at or args.stop_wait_at):
+        # the watch runs in the cycle's end wait only; with --cancel-at or --stop-wait-at their waits come first and
+        # it would not watch them (Codex probe review)
+        ap.error("--stall-recover-s goes with --scenario cycle, not with --cancel-at or --stop-wait-at")
     if args.queue_resume_not_stopped:
         # both would resubmit after the same refusal
         ap.error("--queue-resume-not-stopped is superseded by the queue's own start resubmit (plan D5 exception)")
