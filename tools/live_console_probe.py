@@ -1193,7 +1193,7 @@ async def cycle_scenario(p: Probe, args):
         end_by = time.monotonic() + args.mission_timeout_s
         stall_ = (StallWatch(args.stall_recover_s, submit.get("mission_id"), clock=getattr(p, "clock", None))
                   if args.stall_recover_s > 0 else None)
-        stalled_ = False
+        stalled_, span_ = False, None
 
         def ended_this_(s):
             r_ = s.get("last_result") or {}
@@ -1206,6 +1206,9 @@ async def cycle_scenario(p: Probe, args):
                     and p.state.get("mode") != "STOPPED" and stall_.since is not None
                     and stall_.clock() - stall_.since >= stall_.seconds):
                 stalled_ = True  # validation plan 3.2: the registered recovery, then the next leg or the end
+                # the stand on the watch's clock (time.monotonic live, the runtime's tick-trace clock): the guard's
+                # holds are in sim time, so the false-positive check maps this span through the trace's (S, tick)
+                span_ = {"clock": "stall_watch", "since": stall_.since, "decided": stall_.clock()}
                 break
             if p.state is None or p.state.get("mode") != "STOPPED" or p.closed_code is not None:
                 break
@@ -1216,6 +1219,7 @@ async def cycle_scenario(p: Probe, args):
             await p.request_until_standing("mission_resume", mission_id=submit.get("mission_id"))
         if stalled_:
             entry["stall_recovery"] = await stall_recovery(p, args, submit.get("mission_id"), seen)
+            entry["stall_recovery"]["stall_span_mono"] = span_
         entry["result"] = (p.state or {}).get("last_result")
         if stalled_ and entry["stall_recovery"]["outcome"] not in STALL_GOES_ON:
             p.event("stall_recovery_not_done", outcome=entry["stall_recovery"]["outcome"])

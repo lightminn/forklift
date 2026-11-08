@@ -325,6 +325,9 @@ def test_a_stand_is_cancelled_backed_off_and_the_cycle_goes_on_to_the_next_missi
     probe = run_cycle(script, monkeypatch)
     first, second = probe.report["missions_run"]
     assert first["stall_recovery"]["outcome"] == "recovered" and second["result"]["outcome"] == "done"
+    # the stand's span on the watch's clock (CLOCK_MONOTONIC live), mapped to sim time by the tick trace offline
+    span = first["stall_recovery"]["stall_span_mono"]
+    assert span["decided"] - span["since"] >= 60.0 and span["clock"] == "stall_watch"
     kinds = [k for _, k, _ in probe.v.requests]
     assert kinds.index("mission_cancel") < kinds.index("back_off") < kinds.index("mission_submit", 2)
 
