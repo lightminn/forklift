@@ -1,0 +1,1245 @@
+{
+ "pace": {
+  "pairs_dropped": 0,
+  "F": {
+   "A": 0.29994634358903133,
+   "B": 0.2999573162215322,
+   "pass": true
+  },
+  "R": {
+   "A": 0.007392546337046791,
+   "B": 0.008110857412959364,
+   "pass": true
+  },
+  "longest": {
+   "A": 3.0467597150127403,
+   "B": 2.3682598079903983,
+   "pass": true
+  },
+  "stalls": {
+   "A": 3,
+   "B": 1,
+   "pass": true
+  },
+  "pass": true,
+  "verdict": "pass",
+  "totals": {
+   "A": {
+    "sim": 3623.1668556295335,
+    "wall": 12079.383306614938,
+    "false_wall": 89.29740081710042,
+    "longest": 3.0467597150127403,
+    "stalls": 3
+   },
+   "B": {
+    "sim": 3623.3001889698207,
+    "wall": 12079.385942678084,
+    "false_wall": 97.97417701716768,
+    "longest": 2.3682598079903983,
+    "stalls": 1
+   }
+  },
+  "hypothesis_split": {
+   "A": {
+    "rendered": 0,
+    "capture": 3,
+    "other": 0
+   },
+   "B": {
+    "rendered": 0,
+    "capture": 1,
+    "other": 0
+   }
+  }
+ },
+ "pairs": [
+  {
+   "pair": 1,
+   "scene": "line_m",
+   "seed": 0,
+   "first": "B",
+   "interval": [
+    490333.577377108,
+    491814.243301319
+   ],
+   "sessions": {
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999760573623047,
+     "R": 0.009827791460244453,
+     "wall_s": 1480.6182435679948,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.81052953802282,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    },
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29998857521934796,
+     "R": 0.0030525424344838635,
+     "wall_s": 1480.6120183310122,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.3804478839738294,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 2,
+   "scene": "random_m",
+   "seed": 0,
+   "first": "B",
+   "interval": [
+    491991.777482268,
+    493568.965733503
+   ],
+   "sessions": {
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999355490585991,
+     "R": 0.016099221799880586,
+     "wall_s": 1577.116682196036,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 2.3682598079903983,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    },
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29993880580036275,
+     "R": 0.014013008417322186,
+     "wall_s": 1577.1829081699834,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.7569463980034925,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 3,
+   "scene": "line_m",
+   "seed": 1,
+   "first": "A",
+   "interval": [
+    493691.913205461,
+    495156.232975712
+   ],
+   "sessions": {
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999957431199075,
+     "R": 0.002955448337158057,
+     "wall_s": 1464.2152974379715,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.1497079210239463,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    },
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999986661835679,
+     "R": 0.004466697025779069,
+     "wall_s": 1464.3121423370321,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.1499718729755841,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 4,
+   "scene": "random_m",
+   "seed": 1,
+   "first": "B",
+   "interval": [
+    495380.889808167,
+    496887.639538559
+   ],
+   "sessions": {
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29994685425700696,
+     "R": 0.006099654178514989,
+     "wall_s": 1506.6836579739465,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.7654120220104232,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    },
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999368857603149,
+     "R": 0.007783328214314775,
+     "wall_s": 1506.7337330789887,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.7744353230227716,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 5,
+   "scene": "line_m",
+   "seed": 2,
+   "first": "B",
+   "interval": [
+    497119.99692466,
+    498618.492452316
+   ],
+   "sessions": {
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29996272803578267,
+     "R": 0.0034811139219138292,
+     "wall_s": 1498.4362436800147,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.8454944050172344,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    },
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29996787066675107,
+     "R": 0.004181516855617274,
+     "wall_s": 1498.4661160889664,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.5682767099933699,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 6,
+   "scene": "random_m",
+   "seed": 2,
+   "first": "A",
+   "interval": [
+    498777.191775665,
+    500273.963301468
+   ],
+   "sessions": {
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999298199335633,
+     "R": 0.005945406398101557,
+     "wall_s": 1496.7113201520406,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.7386849589529447,
+     "stalls": {
+      "total": 1,
+      "rendered": 0,
+      "capture": 1,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": [
+       0.2646
+      ]
+     },
+     "c2_unmapped": []
+    },
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29995973837572215,
+     "R": 0.008444744853756455,
+     "wall_s": 1496.7565064340015,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.4981046610046178,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 7,
+   "scene": "line_m",
+   "seed": 3,
+   "first": "B",
+   "interval": [
+    500520.097507428,
+    502068.884594995
+   ],
+   "sessions": {
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.2999472106332399,
+     "R": 0.004645537178385436,
+     "wall_s": 1548.717044509016,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.776196624035947,
+     "stalls": {
+      "total": 1,
+      "rendered": 0,
+      "capture": 1,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": [
+       0.253
+      ]
+     },
+     "c2_unmapped": []
+    },
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29998393176619104,
+     "R": 0.0066059556754984395,
+     "wall_s": 1548.7774789439864,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 3.0467597150127403,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  },
+  {
+   "pair": 8,
+   "scene": "random_m",
+   "seed": 3,
+   "first": "A",
+   "interval": [
+    502201.596421611,
+    503708.364924006
+   ],
+   "sessions": {
+    "A": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29983055060690406,
+     "R": 0.014088087956080205,
+     "wall_s": 1506.684434411989,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 2.364583747985307,
+     "stalls": {
+      "total": 2,
+      "rendered": 0,
+      "capture": 2,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": [
+       0.3392,
+       0.2639
+      ]
+     },
+     "c2_unmapped": []
+    },
+    "B": {
+     "eligible": true,
+     "missions": [
+      [
+       "m1",
+       "done",
+       null
+      ],
+      [
+       "m2",
+       "done",
+       null
+      ],
+      [
+       "m3",
+       "done",
+       null
+      ]
+     ],
+     "F": 0.29993455893553833,
+     "R": 0.011449282354139499,
+     "wall_s": 1506.745421980042,
+     "missing_steps": 0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "longest_false_s": 1.789607985992916,
+     "stalls": {
+      "total": 0,
+      "rendered": 0,
+      "capture": 0,
+      "other": 0,
+      "c2_excluded": 0,
+      "gaps": []
+     },
+     "c2_unmapped": []
+    }
+   },
+   "dropped": []
+  }
+ ],
+ "c2_cap": {
+  "sessions": {
+   "c2_line_m_on": {
+    "gaps": [
+     {
+      "step": 2284,
+      "gap_s": 0.03059632400982082,
+      "over_cap": false
+     }
+    ],
+    "unmapped": []
+   }
+  },
+  "pass": true
+ },
+ "safety": {
+  "ab_line_m_s0_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.3506113515330152,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_random_m_s0_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.4182492625594424,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_line_m_s1_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.35249399437393897,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_random_m_s1_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.42851265796462157,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_line_m_s2_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.3487879510570617,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_random_m_s2_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.44339570132812267,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_line_m_s3_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.3498991263141553,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "ab_random_m_s3_B": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.4684671252882763,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "c2_line_m_on": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.3500748282341185,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "c2_line_m_shadow": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 1.8041656369166068,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [
+    "Tracking timeout in observe"
+   ],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "boxed_line_m": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.3521771458950105,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "boxed_random_m": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.4312821068026703,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "life1_line_m_main": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.35038113218958766,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [],
+   "safety_reasons": [],
+   "other_reasons": [],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "life2_random_m_held": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.8218750056117606,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [
+    "operator"
+   ],
+   "safety_reasons": [],
+   "other_reasons": [
+    "operator"
+   ],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  },
+  "life3_random_m_reloc": {
+   "not_applied": "reloc_needs_operator before any mission"
+  },
+  "life4_line_m_stop": {
+   "forbidden_run": 0,
+   "forbidden_missions": 0,
+   "neighbour_overlap": [],
+   "min_gap_m": 0.39849460606992376,
+   "rest_past_bound": [],
+   "unpermitted_dir_entries": 0,
+   "scene_damaged": null,
+   "reasons": [
+    "operator",
+    "observe:all_candidates_exhausted:perception_no_pallet:uncertain_in_radius:success;success;success;invalid_goal;success;success"
+   ],
+   "safety_reasons": [],
+   "other_reasons": [
+    "operator"
+   ],
+   "spool_complete": true,
+   "spool_dropped": {},
+   "spool_unsettled": {},
+   "results_unsettled": [],
+   "mission_files_missing": [],
+   "pass": true
+  }
+ },
+ "backoff": {
+  "boxed_line_m": [
+   {
+    "mission": "m1",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": false,
+    "complete": true,
+    "truth_reverse": null,
+    "firing": false
+   },
+   {
+    "mission": "m2",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": true,
+    "complete": true,
+    "truth_reverse": "True",
+    "truth_along_min_m": -0.07095193025474653,
+    "L_m": 0.07,
+    "firing": true
+   },
+   {
+    "mission": "m3",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": true,
+    "complete": true,
+    "truth_reverse": "True",
+    "truth_along_min_m": -0.07003698710929136,
+    "L_m": 0.07,
+    "firing": true
+   }
+  ],
+  "boxed_random_m": [
+   {
+    "mission": "m1",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": true,
+    "complete": true,
+    "truth_reverse": "True",
+    "truth_along_min_m": -0.07045812352989551,
+    "L_m": 0.07,
+    "firing": true
+   },
+   {
+    "mission": "m2",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": true,
+    "complete": true,
+    "truth_reverse": "True",
+    "truth_along_min_m": -0.07172600622726616,
+    "L_m": 0.07,
+    "firing": true
+   },
+   {
+    "mission": "m3",
+    "installed": true,
+    "boxed_trigger": false,
+    "path_prefix": false,
+    "complete": true,
+    "truth_reverse": null,
+    "firing": false
+   }
+  ]
+ },
+ "c2_function": {
+  "c2_line_m_on": [
+   {
+    "mission": "m1",
+    "installed": 1,
+    "near_capture": "done",
+    "complete": true,
+    "firing": true
+   },
+   {
+    "mission": "m2",
+    "installed": 0,
+    "near_capture": "done",
+    "complete": true,
+    "firing": false
+   },
+   {
+    "mission": "m3",
+    "installed": 0,
+    "near_capture": "done",
+    "complete": true,
+    "firing": false
+   }
+  ],
+  "c2_line_m_shadow": [
+   {
+    "mission": "m1",
+    "installed": 0,
+    "near_capture": "pending",
+    "complete": false,
+    "firing": false
+   }
+  ]
+ },
+ "lifecycle": {
+  "1": {
+   "epoch_exit": [
+    0
+   ],
+   "exit_ok": true,
+   "session_end_ack": true,
+   "result_json": true,
+   "tick_trace": true,
+   "stopped_in_capture": true,
+   "rearm_ack": true,
+   "resume_acks": 2,
+   "auto_again": true,
+   "teleop_entry_ack": true,
+   "arm_ack": true,
+   "expired_disarmed": true,
+   "new_lease": true,
+   "old_lease_refused": true,
+   "mission_done": true,
+   "pass": true
+  },
+  "2": {
+   "epoch_exit": [
+    0
+   ],
+   "exit_ok": true,
+   "session_end_ack": true,
+   "result_json": true,
+   "tick_trace": true,
+   "transport_reached": true,
+   "cancel_ack": true,
+   "cancelled_operator": true,
+   "cargo_held_rejects": 2,
+   "h3": {
+    "found": true,
+    "applied_t": 53.34166944865137,
+    "applied_mono": 505725.10416112,
+    "sent": 505725.077650768,
+    "receipt": 505725.102300046,
+    "reply": 505725.104545465,
+    "ordered": true
+   },
+   "pass": true
+  },
+  "3": {
+   "epoch_exit": [
+    1
+   ],
+   "exit_ok": false,
+   "session_end_ack": false,
+   "result_json": true,
+   "tick_trace": false,
+   "reloc_needs_operator": true,
+   "mission_done": false,
+   "outcome": "ended_per_record",
+   "pass": false
+  },
+  "4": {
+   "epoch_exit": [
+    0
+   ],
+   "exit_ok": true,
+   "session_end_ack": true,
+   "result_json": true,
+   "tick_trace": true,
+   "phase_reached": true,
+   "stop_ack": true,
+   "rearm_ack": true,
+   "cancel_ack": true,
+   "m1_cancelled": true,
+   "m2_done": false,
+   "after_cancel_statuses": [
+    "paused",
+    "recovering"
+   ],
+   "recovery_resume": {
+    "t": "ack",
+    "of": "mission_resume",
+    "request_id": "r6",
+    "mission_id": "m1"
+   },
+   "stop_reply_s": 0.018923010036814958,
+   "pass": false
+  }
+ },
+ "b_only_failures": [],
+ "rules": {
+  "stall_s": 0.25,
+  "c2_cap_s": 2.0,
+  "F_ratio": 0.97,
+  "R_add": 0.01,
+  "longest": [
+   1.2,
+   2.0
+  ],
+  "stall_add": 2,
+  "max_dropped_pairs": 2
+ }
+}
