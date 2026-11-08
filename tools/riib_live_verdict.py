@@ -264,9 +264,21 @@ def session(d: Path) -> dict:
     out["missions"] = [{k: r.get(k) for k in ("order", "pallet_id", "destination_id", "mission_id", "outcome", "reason",
                                               "class", "forbidden_contacts", "reject_reason", "start")}
                        for r in rows["rows"]]
-    result = json.loads((run / "result.json").read_text())
+    try:
+        result = json.loads((run / "result.json").read_text())
+    except (OSError, ValueError):
+        result = None  # the session did not end through its own end path (e.g. TERMed): no run record
+    out["result_json"] = result is not None
+    if result is None:
+        out["safety"] = {"undecidable": "no run result.json",
+                         "forbidden_contacts_missions": sum(int(m.get("forbidden_contacts") or 0)
+                                                            for m in out["missions"]),
+                         "load_safety_failures": sum(m.get("class") == "load_safety" for m in out["missions"])}
+        result = {}
+    else:
+        out["safety"] = None
     ol = result.get("obstacle_layer") or {}
-    out["safety"] = {"forbidden_contacts_run": len(result.get("forbidden_pocket_contacts") or []),
+    out["safety"] = out["safety"] or {"forbidden_contacts_run": len(result.get("forbidden_pocket_contacts") or []),
                      "forbidden_contacts_missions": sum(int(m.get("forbidden_contacts") or 0) for m in out["missions"]),
                      "unpermitted_dir_entries": ol.get("unpermitted_dir_entries"),
                      "unpermitted_entries": ol.get("unpermitted_entries"),
@@ -277,11 +289,17 @@ def session(d: Path) -> dict:
     out["features"] = feats
     out["tick_trace"] = result.get("tick_trace")
     # pace
-    entries = read_live_log(run)
+    try:
+        entries = read_live_log(run)
+    except ValueError as e:  # 3.4: a log read_live_log refuses leaves the substitute span undecidable
+        entries = read_live_log(run, allow_incomplete=True)
+        out["live_log_incomplete"] = str(e)
     steps = step_records(entries)
-    tg, _ = trace_gaps(run)
+    tg = trace_gaps(run)[0] if (run / "tick_trace.npz").exists() else {}
     lg = log_gaps(steps)
     chk = overlap_check(tg, lg)
+    if out.get("live_log_incomplete"):
+        chk["passed"] = False  # the substitute is not used on a log read_live_log refuses
     out["overlap"] = chk
     w0, w1 = window(entries)
     c2_steps = set()

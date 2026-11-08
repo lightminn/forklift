@@ -1,0 +1,4100 @@
+{
+ "sessions": [
+  {
+   "name": "ab_line_m_s0_A",
+   "arm": "A",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.3522172933058492,
+       "t": 33.35833507310599,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5327210196356684,
+       "t": 181.36667612567544,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.4629610547872473,
+       "t": 265.91668053530157,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.3522172933058492,
+     "rest_moves": {
+      "P-2": [
+       3.6863436927953305e-07,
+       0.00030926274628950733
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       2.128447146734784e-05,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 23349,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_line_m_s0_A/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.03452345996629447,
+    "p99_diff_s": 0.02362736319890246,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 59252,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 1,
+     "max_gap_s": 0.5492691099643707,
+     "gaps_from_log": 23344,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 18.465276403003372
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.5492691099643707,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     455425.503563872,
+     457166.997360371
+    ],
+    "realtime_factor": {
+     "median": 0.2793905910153429,
+     "n": 1677
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_line_m_s0_B",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.3513437839649837,
+       "t": 33.20000173151493,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5327158815874228,
+       "t": 180.75834276061505,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.46977025977937764,
+       "t": 263.4000137373805,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.3513437839649837,
+     "rest_moves": {
+      "P-2": [
+       2.394640249012142e-07,
+       0.00019685861968169634
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       1.3404627761353855e-05,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 1.6755072233283563,
+     "approach": 0.8948130234833762,
+     "insert": 0.4794333265866604,
+     "extract": 0.2015535199689329,
+     "transport": 0.24947650888036343,
+     "withdraw": 0.24852242968391836,
+     "return_home": 1.0614527131800293
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 19351,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_line_m_s0_B/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.0329681770526804,
+    "p99_diff_s": 0.023299779751105233,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 55248,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 1,
+     "max_gap_s": 0.544087385002058,
+     "gaps_from_log": 19340,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 17.298456230026204
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.544087385002058,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     455475.798565074,
+     457101.194384778
+    ],
+    "realtime_factor": {
+     "median": 0.2792003866638692,
+     "n": 1565
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_line_m_s1_A",
+   "arm": "A",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "1",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.35069566467173413,
+       "t": 33.591668418608606,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.532412196586418,
+       "t": 179.8583427136764,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.469924445803615,
+       "t": 289.6333484388888,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.35069566467173413,
+     "rest_moves": {
+      "P-2": [
+       9.893574327111356e-07,
+       9.042413095903069e-05
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       1.923130377998994e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 22137,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_line_m_s1_A/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.0286258680280298,
+    "p99_diff_s": 0.023483484950847924,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 58038,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 2,
+     "max_gap_s": 0.2530653619905934,
+     "gaps_from_log": 22129,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 32.31885570602026
+    },
+    "trace_only": {
+     "steps": 35909,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.1826052509713918,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     457273.503371202,
+     458980.532922735
+    ],
+    "realtime_factor": {
+     "median": 0.2788805882459717,
+     "n": 1639
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_line_m_s1_B",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "1",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.35062251483092755,
+       "t": 33.566668417304754,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5329209640216249,
+       "t": 179.8416760461405,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.4670591700650942,
+       "t": 264.67501380387694,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.35062251483092755,
+     "rest_moves": {
+      "P-2": [
+       9.953986831047752e-07,
+       0.00023446424803382762
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       2.8879434560927785e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 1.665329996744191,
+     "approach": 0.8917852329412232,
+     "insert": 0.47662077474918285,
+     "extract": 0.1963984859050001,
+     "transport": 0.2532409763396657,
+     "withdraw": 0.25256820591735596,
+     "return_home": 1.0595415755009017
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 19648,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_line_m_s1_B/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.0344517040066421,
+    "p99_diff_s": 0.02337140799267218,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 55549,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 1,
+     "max_gap_s": 0.22647696395870298,
+     "gaps_from_log": 19641,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 19.646495585038792
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.2085594959789887,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     457215.860424902,
+     458848.141754637
+    ],
+    "realtime_factor": {
+     "median": 0.27907593685698817,
+     "n": 1568
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_random_m_s0_A",
+   "arm": "A",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.3015811101346995,
+       "t": 360.5083521353081,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8395798402041327,
+       "t": 44.791669002734125,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7323529049215037,
+       "t": 213.4000111296773,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4589050286367032,
+       "t": 75.25000392459333,
+       "phase": "transport",
+       "mission_pallet": "P-4"
+      },
+      "P-4": {
+       "m": 0.4635130590870791,
+       "t": 276.5916810920462,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.4589050286367032,
+     "rest_moves": {
+      "P-1": [
+       8.009287506566458e-07,
+       0.00014542942766291125
+      ],
+      "P-2": [
+       4.995779578161303e-07,
+       9.20238386621444e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       2.3939562995732167e-06,
+       0.00015807749069856735
+      ],
+      "P-4": [
+       9.547214793945162e-07,
+       0.0003572637452479857
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 21687,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_random_m_s0_A/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 2,
+    "max_diff_s": 0.030221562017686665,
+    "p99_diff_s": 0.023211031053215266,
+    "passed": false
+   },
+   "pace": {
+    "full": {
+     "steps": 57590,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.247589914011769,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 21680,
+     "c2_steps": [],
+     "longest_pacing_false_s": 28.20623288000934
+    },
+    "trace_only": {
+     "steps": 35910,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.247589914011769,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     457146.46839519,
+     458842.306008866
+    ],
+    "realtime_factor": {
+     "median": 0.2791079657468889,
+     "n": 1630
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_random_m_s0_B",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.3294851387581648,
+       "t": 353.84168512094766,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8394665216158448,
+       "t": 43.79166895058006,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7144226327334398,
+       "t": 201.0666771531105,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4342530688532135,
+       "t": 435.7250227248296,
+       "phase": "lower",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.48594275591081215,
+       "t": 261.466680303216,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.4342530688532135,
+     "rest_moves": {
+      "P-1": [
+       1.0033971047802178e-06,
+       0.00016213151999589813
+      ],
+      "P-2": [
+       5.024586707379629e-07,
+       9.166985574227146e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       1.925020106802484e-06,
+       0.00015807749350788073
+      ],
+      "P-4": [
+       3.5886748369909214e-07,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 0.8864394618288903,
+     "approach": 0.8524987109994006,
+     "insert": 0.6497867139594613,
+     "extract": 0.3909541148331174,
+     "transport": 0.3105158257358227,
+     "withdraw": 0.3139163583064418,
+     "return_home": 0.45312448948198936
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 21072,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_random_m_s0_B/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.03269414103124291,
+    "p99_diff_s": 0.022889519869349898,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 56974,
+     "stalls_confirmed": 3,
+     "stalls_uncertain": 3,
+     "max_gap_s": 0.5915046079899184,
+     "gaps_from_log": 21066,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 24.933275905961636
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 3,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.5915046079899184,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     455537.920519703,
+     457218.751090817
+    ],
+    "realtime_factor": {
+     "median": 0.2788700390528787,
+     "n": 1615
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_random_m_s1_A",
+   "arm": "A",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "1",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.296354785819133,
+       "t": 358.09168534260243,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8396744766137497,
+       "t": 43.82500228565186,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.714465486787996,
+       "t": 216.483344623819,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4144176629080353,
+       "t": 430.56668912246823,
+       "phase": "transport",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.4964942643423791,
+       "t": 275.27501435671,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.4144176629080353,
+     "rest_moves": {
+      "P-1": [
+       8.018984822674817e-07,
+       0.00016628607916538863
+      ],
+      "P-2": [
+       5.024586707379629e-07,
+       9.202383383633807e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       7.516229015141242e-07,
+       0.00015807749350788073
+      ],
+      "P-4": [
+       2.2107624088472053e-05,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 22263,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_random_m_s1_A/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 1,
+    "max_diff_s": 0.038722684083040804,
+    "p99_diff_s": 0.023305795241612942,
+    "passed": false
+   },
+   "pace": {
+    "full": {
+     "steps": 58164,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 1.1242250239592977,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 22256,
+     "c2_steps": [],
+     "longest_pacing_false_s": 74.19029087095987
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 1.1242250239592977,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     458885.54817074,
+     460604.924714077
+    ],
+    "realtime_factor": {
+     "median": 0.27907004679089675,
+     "n": 1652
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "ab_random_m_s1_B",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "1",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.307750464153507,
+       "t": 345.0083513269201,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8394466588443353,
+       "t": 43.05833557900041,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7224633642493156,
+       "t": 201.1000104881823,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4497633432739862,
+       "t": 418.50002182647586,
+       "phase": "transport",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.4754809955990423,
+       "t": 263.4000137373805,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.4497633432739862,
+     "rest_moves": {
+      "P-1": [
+       6.823690618190355e-07,
+       0.00015390186199105472
+      ],
+      "P-2": [
+       5.009649835233164e-07,
+       9.166922596277476e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711444886143
+      ],
+      "P-5": [
+       1.924270207566968e-06,
+       0.00015807749350788073
+      ],
+      "P-4": [
+       3.58994302384505e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 0.8802095012849774,
+     "approach": 0.8517680507359702,
+     "insert": 0.6592082164196824,
+     "extract": 0.4031138465629746,
+     "transport": 0.27747660552381725,
+     "withdraw": 0.2940575467025297,
+     "return_home": 0.4463242010434104
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 19673,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/ab_random_m_s1_B/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.041151413053739816,
+    "p99_diff_s": 0.022902619322994724,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 55575,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 2,
+     "max_gap_s": 1.0178011829848401,
+     "gaps_from_log": 19667,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 68.92827590799425
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 0,
+     "max_gap_s": 1.0178011829848401,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     458950.938367308,
+     460594.65190526
+    ],
+    "realtime_factor": {
+     "median": 0.27874806531868523,
+     "n": 1576
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "boxed_line_m",
+   "arm": "B",
+   "fix": "boxed",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.35188873514054236,
+       "t": 33.69166842382401,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5324775686713796,
+       "t": 187.93334313482046,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.46908022519296416,
+       "t": 272.2833475340158,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.35188873514054236,
+     "rest_moves": {
+      "P-2": [
+       2.457562461863554e-07,
+       9.042413095903069e-05
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       5.266248299799052e-07,
+       0.0006888983551177162
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 1.6740055568553611,
+     "approach": 0.8989479285710584,
+     "insert": 0.4835807038511639,
+     "extract": 0.2048898062011777,
+     "transport": 0.25174063184797046,
+     "withdraw": 0.25078571315335485,
+     "return_home": 0.9136248935549423
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 20155,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/boxed_line_m/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.0264312329236418,
+    "p99_diff_s": 0.02328825438860804,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 56041,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 2,
+     "max_gap_s": 0.2544615989900194,
+     "gaps_from_log": 20133,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 26.58186699199723
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.2103582030395046,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     462414.687917449,
+     464067.965462173
+    ],
+    "realtime_factor": {
+     "median": 0.2791289009395835,
+     "n": 1594
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "boxed_random_m",
+   "arm": "B",
+   "fix": "boxed",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.337082967841492,
+       "t": 353.1916850870475,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.840134831531694,
+       "t": 44.316668977960944,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7198334063308615,
+       "t": 202.05001053772867,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4413522625395154,
+       "t": 429.94168908987194,
+       "phase": "transport",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.4612616723882983,
+       "t": 261.4000136330724,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.4413522625395154,
+     "rest_moves": {
+      "P-1": [
+       8.650698409657955e-07,
+       0.0001493950738190672
+      ],
+      "P-2": [
+       5.024586707379629e-07,
+       9.202322095687924e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711444886143
+      ],
+      "P-5": [
+       1.2004686572812654e-06,
+       0.00015807749069856735
+      ],
+      "P-4": [
+       9.60200349302145e-07,
+       0.0003916022503026039
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 0.8800288378524204,
+     "approach": 0.8549054940779282,
+     "insert": 0.6723640615070642,
+     "extract": 0.4193025229383873,
+     "transport": 0.2202196425902596,
+     "withdraw": 0.24936398336578713,
+     "return_home": 0.37456162675751986
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "mission_plan",
+       "advice_m": 0.03,
+       "length_m": 0.06,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      },
+      {
+       "where": "release_replan",
+       "advice_m": 0.04,
+       "length_m": 0.07,
+       "status": "prefix",
+       "adopted": true,
+       "trigger": "invalid_start",
+       "check": "first_step"
+      }
+     ],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 21061,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/boxed_random_m/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.03663901297841221,
+    "p99_diff_s": 0.022787115497048944,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 56963,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 2,
+     "max_gap_s": 0.23585205496056005,
+     "gaps_from_log": 21053,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 30.17671233700821
+    },
+    "trace_only": {
+     "steps": 35910,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.23585205496056005,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     462627.385307304,
+     464311.582903136
+    ],
+    "realtime_factor": {
+     "median": 0.27912969245910746,
+     "n": 1622
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "c2_line_m_on",
+   "arm": "C2on",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.3500880044105164,
+       "t": 44.491668987087905,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5326727655921735,
+       "t": 192.90834339428693,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.4683238383382804,
+       "t": 272.23334753140807,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.3500880044105164,
+     "rest_moves": {
+      "P-2": [
+       2.467706078541159e-07,
+       0.000236627932584373
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       2.682209014892578e-07,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [
+      {
+       "time_s": 19.591667688451707,
+       "kind": "near",
+       "leg_serial": 1,
+       "zero_command_s": 3.0000001564621925,
+       "position_error_m": 0.05754384687670551,
+       "yaw_error_rad": -0.15213937578781705,
+       "rear_pose": [
+        -2.948278882531039,
+        -0.30607146244088024,
+        0.20663590958552697
+       ],
+       "slam_mode": "holding",
+       "planning_wall_s": 0.0005630709929391742,
+       "outcome": "installed"
+      }
+     ],
+     "near_end_injections": {
+      "events": [
+       {
+        "final_leg_start": 18,
+        "final_leg_length_m": 1.3472616487352844,
+        "final_leg_direction": -1,
+        "event": "armed",
+        "kappa_mean_inv_m": 0.20714285714285713,
+        "s": 1.0,
+        "dx_left_m": -0.06,
+        "dpsi_rad": 0.15,
+        "time_s": 11.083333911374211,
+        "remaining_m": 0.7996160233699681,
+        "progress_m": 1.5677230267756785,
+        "segment": 27,
+        "leg_index": 1,
+        "tracker_ordinal": 0,
+        "tracker_sha256": "d95eaae6672c76764377a185e70953a2c30930aa9f2f3af832cc956b2df25c98"
+       },
+       {
+        "event": "restored",
+        "progress_m": 2.266022863851594,
+        "segment": 39,
+        "remaining_m": 0.10131618629405281,
+        "projected_remaining_m": 0.09968640949221941,
+        "time_s": 13.933334060013294
+       },
+       {
+        "event": "judged",
+        "time_s": 19.591667688451707,
+        "outcome": "installed",
+        "restored_before": true
+       }
+      ],
+      "pallet_shift_max_m": {
+       "injection": 1.2605580934632599e-07,
+       "install": 1.802055038524486e-07
+      },
+      "windows": {
+       "injection": [
+        11.083333911374211,
+        19.591667688451707
+       ],
+       "install": [
+        19.591667688451707,
+        25.966668020933867
+       ]
+      },
+      "max_path_distance_m": 0.042331806537261235
+     },
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 22002,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/c2_line_m_on/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.03331396798603237,
+    "p99_diff_s": 0.023528422234812753,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 57891,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 1,
+     "max_gap_s": 1.181258783035446,
+     "gaps_from_log": 21981,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [
+      {
+       "step": 2278,
+       "gap_s": 0.027836705034133047,
+       "source": "trace",
+       "log_gap_s": 0.03622224001446739,
+       "over_cap": false
+      }
+     ],
+     "longest_pacing_false_s": 65.37469486397458
+    },
+    "trace_only": {
+     "steps": 35910,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 0,
+     "max_gap_s": 1.181258783035446,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [
+      {
+       "step": 2278,
+       "gap_s": 0.027836705034133047,
+       "source": "trace",
+       "log_gap_s": 0.03622224001446739
+      }
+     ]
+    },
+    "window_mono": [
+     459186.98847046,
+     460892.763658437
+    ],
+    "realtime_factor": {
+     "median": 0.27943837504180635,
+     "n": 1641
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "c2_line_m_shadow",
+   "arm": "C2shadow",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "failed",
+     "reason": "Tracking timeout in observe",
+     "class": "tracking",
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    },
+    {
+     "order": 3,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 1.8052426241571682,
+       "t": 8.958333800546825,
+       "phase": "observe",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 2.979673244370721,
+       "t": 8.958333800546825,
+       "phase": "observe",
+       "mission_pallet": "P-1"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 1.8052426241571682,
+     "rest_moves": {
+      "P-2": [
+       1.8521849654102404e-07,
+       9.042412113666957e-05
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327911044467577
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "observe",
+     "return_start_backoffs": [],
+     "observe_end_stands": [
+      {
+       "time_s": 19.266667671501637,
+       "kind": "near",
+       "leg_serial": 1,
+       "zero_command_s": 3.0000001564621925,
+       "position_error_m": 0.05760689810479053,
+       "yaw_error_rad": -0.15100139091529413,
+       "rear_pose": [
+        -2.9481993430903493,
+        -0.3060135428891616,
+        0.20534882762494072
+       ],
+       "slam_mode": "holding",
+       "outcome": "shadow",
+       "mission_id": "m1",
+       "phase_started_s": 4.3083335580304265,
+       "stand_since_s": 16.266667515039444,
+       "path_sha256": "7595a983de48a72c986af9c8eedb9535bfc24343407e4ac6035127c151e4036e",
+       "goal": [
+        -2.95154300146343,
+        -0.24850376408642366,
+        0.05434743670964659
+       ],
+       "observe_replans_n": 0,
+       "loose_arrivals_n": 0
+      }
+     ],
+     "near_end_injections": {
+      "events": [
+       {
+        "final_leg_start": 18,
+        "final_leg_length_m": 1.347208292357707,
+        "final_leg_direction": -1,
+        "event": "armed",
+        "kappa_mean_inv_m": 0.20714285714285713,
+        "s": 1.0,
+        "dx_left_m": -0.06,
+        "dpsi_rad": 0.15,
+        "time_s": 11.05000057630241,
+        "remaining_m": 0.7992442743587169,
+        "progress_m": 1.5681099629492836,
+        "segment": 27,
+        "leg_index": 1,
+        "tracker_ordinal": 0,
+        "tracker_sha256": "7595a983de48a72c986af9c8eedb9535bfc24343407e4ac6035127c151e4036e"
+       },
+       {
+        "event": "restored",
+        "progress_m": 2.267110893374081,
+        "segment": 39,
+        "remaining_m": 0.10024334393391943,
+        "projected_remaining_m": 0.09870941581586878,
+        "time_s": 13.608334043063223
+       },
+       {
+        "event": "judged",
+        "time_s": 19.266667671501637,
+        "outcome": "shadow",
+        "restored_before": true
+       }
+      ],
+      "pallet_shift_max_m": {
+       "injection": 6.365778659755961e-08,
+       "install": null
+      },
+      "windows": {
+       "injection": [
+        11.05000057630241,
+        19.266667671501637
+       ],
+       "install": null
+      },
+      "max_path_distance_m": 0.042655623256556786
+     },
+     "near_capture_status": "pending",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 4051,
+    "dropped": 0,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/c2_line_m_shadow/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 4050,
+    "class_mismatches": 0,
+    "max_diff_s": 0.02615168201737106,
+    "p99_diff_s": 0.023744285865686835,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 3937,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.15655122901080176,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 1.9794380609528162
+    },
+    "trace_only": {
+     "steps": 3937,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.15655122901080176,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     459028.219186753,
+     459142.473111559
+    ],
+    "realtime_factor": {
+     "median": 0.2818059153158614,
+     "n": 110
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "c2_random_m_on",
+   "arm": "C2on",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.2994828286456566,
+       "t": 345.4583513503894,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8395596299977478,
+       "t": 43.03333557769656,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7181161340631459,
+       "t": 199.85001042298973,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4676167942198334,
+       "t": 420.6833552736789,
+       "phase": "transport",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.46064038574824884,
+       "t": 263.52501374389976,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.46064038574824884,
+     "rest_moves": {
+      "P-1": [
+       8.005474632805175e-07,
+       0.0001750495187741977
+      ],
+      "P-2": [
+       5.024586707379629e-07,
+       9.202322095687924e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711444886143
+      ],
+      "P-5": [
+       3.2782554626464844e-07,
+       0.00015807749350788073
+      ],
+      "P-4": [
+       5.66951488696806e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": {
+      "events": [
+       {
+        "final_leg_start": 8,
+        "final_leg_length_m": 0.7749293985880177,
+        "final_leg_direction": -1,
+        "event": "not_armed",
+        "reason": "final_leg_short",
+        "time_s": 20.42500106524676,
+        "remaining_m": 0.7749293985880177,
+        "progress_m": 0.4243474852244212,
+        "segment": 8,
+        "leg_index": 1,
+        "tracker_ordinal": 0,
+        "tracker_sha256": "26adee78babc28a91d12a066d6ad7f3246057884eb0ca518d04f967d729a2e5f"
+       }
+      ],
+      "pallet_shift_max_m": {
+       "injection": null,
+       "install": null
+      },
+      "windows": {
+       "injection": null,
+       "install": null
+      },
+      "max_path_distance_m": null
+     },
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 20082,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/c2_random_m_on/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.039023777935653925,
+    "p99_diff_s": 0.023294362220913172,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 55982,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 2,
+     "max_gap_s": 0.25966908101690933,
+     "gaps_from_log": 20074,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 53.02048485499108
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 1,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.25966908101690933,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     460703.249651421,
+     462351.915725325
+    ],
+    "realtime_factor": {
+     "median": 0.27934501363753556,
+     "n": 1587
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "c2_random_m_shadow",
+   "arm": "C2shadow",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.3056270938525265,
+       "t": 352.5666850544512,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8403177254196207,
+       "t": 43.258335589431226,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7457427660672102,
+       "t": 208.64167754817754,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.4722608131475179,
+       "t": 433.2666892632842,
+       "phase": "lower",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.45967277517088456,
+       "t": 268.6916806800291,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.45967277517088456,
+     "rest_moves": {
+      "P-1": [
+       8.038689641247959e-07,
+       0.00018515880467366707
+      ],
+      "P-2": [
+       5.009649835233164e-07,
+       9.16698508978303e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       1.0410570189183097e-06,
+       0.00015807749069856735
+      ],
+      "P-4": [
+       3.2258518890072423e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": {
+      "events": [
+       {
+        "final_leg_start": 8,
+        "final_leg_length_m": 0.7576200156155064,
+        "final_leg_direction": -1,
+        "event": "not_armed",
+        "reason": "final_leg_short",
+        "time_s": 20.141667717136443,
+        "remaining_m": 0.7576200156155064,
+        "progress_m": 0.4115464773231572,
+        "segment": 8,
+        "leg_index": 1,
+        "tracker_ordinal": 0,
+        "tracker_sha256": "f901a5508052b3aca7775a95c6ec0b821d772db6495499d2f66f3144baa3136f"
+       }
+      ],
+      "pallet_shift_max_m": {
+       "injection": null,
+       "install": null
+      },
+      "windows": {
+       "injection": null,
+       "install": null
+      },
+      "max_path_distance_m": null
+     },
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 20669,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/c2_random_m_shadow/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.042449378001037985,
+    "p99_diff_s": 0.023327394833322614,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 56572,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 2,
+     "max_gap_s": 0.28833604394458234,
+     "gaps_from_log": 20664,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 41.07996607199311
+    },
+    "trace_only": {
+     "steps": 35908,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.28833604394458234,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     460638.300745398,
+     462306.458053548
+    ],
+    "realtime_factor": {
+     "median": 0.27937602138628786,
+     "n": 1607
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "guard_line_m",
+   "arm": "B",
+   "fix": "guard",
+   "scenario": "cycle",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "cycle",
+    "--cycle",
+    "P-1:D-1,P-2:D-2,P-3:D-3",
+    "--stall-recover-s",
+    "60",
+    "--stall-backoff-m",
+    "0.30",
+    "--manual-recovery",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-2",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-2": {
+       "m": 0.3528226813066132,
+       "t": 32.72500170674175,
+       "phase": "extract",
+       "mission_pallet": "P-1"
+      },
+      "P-3": {
+       "m": 0.5322939374380132,
+       "t": 182.65834285970777,
+       "phase": "extract",
+       "mission_pallet": "P-2"
+      },
+      "P-1": {
+       "m": 0.4628073822850438,
+       "t": 265.3000138364732,
+       "phase": "lower",
+       "mission_pallet": "P-2"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.3528226813066132,
+     "rest_moves": {
+      "P-2": [
+       9.684608464999152e-07,
+       9.042413095903069e-05
+      ],
+      "P-3": [
+       3.2816403427042423e-07,
+       0.00012327918609310085
+      ],
+      "P-1": [
+       1.9371509552001953e-07,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.3,
+     "deviation_m": 0.015
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 1.6782285744118912,
+     "approach": 0.8945095047985814,
+     "insert": 0.47911138381908314,
+     "extract": 0.20010226444715107,
+     "transport": 0.2495433389236681,
+     "withdraw": 0.24858762793152067,
+     "return_home": 1.059281904931727
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 19904,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/guard_line_m/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.02899540401995182,
+    "p99_diff_s": 0.02326422987272963,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 55903,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 2,
+     "max_gap_s": 2.8018198889913037,
+     "gaps_from_log": 19899,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 42.23948109796038
+    },
+    "trace_only": {
+     "steps": 36004,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 2.8018198889913037,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     460934.517255511,
+     462581.652344097
+    ],
+    "realtime_factor": {
+     "median": 0.27955362454140503,
+     "n": 1584
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "guard_random_m",
+   "arm": "B",
+   "fix": "guard",
+   "scenario": "cycle",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "cycle",
+    "--cycle",
+    "P-4:D-1,P-5:D-2,P-3:D-3",
+    "--stall-recover-s",
+    "60",
+    "--stall-backoff-m",
+    "0.30",
+    "--manual-recovery",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": "m2",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-3",
+     "destination_id": "D-3",
+     "mission_id": "m3",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.337068535129336,
+       "t": 345.4416846828535,
+       "phase": "extract",
+       "mission_pallet": "P-3"
+      },
+      "P-2": {
+       "m": 0.8395617367025848,
+       "t": 41.516668831929564,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.7176881207080854,
+       "t": 199.82501042168587,
+       "phase": "extract",
+       "mission_pallet": "P-5"
+      },
+      "P-5": {
+       "m": 0.45715348063686334,
+       "t": 422.6500220429152,
+       "phase": "transport",
+       "mission_pallet": "P-3"
+      },
+      "P-4": {
+       "m": 0.45493814862396964,
+       "t": 263.49168040882796,
+       "phase": "transport",
+       "mission_pallet": "P-5"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.45493814862396964,
+     "rest_moves": {
+      "P-1": [
+       8.031435595877091e-07,
+       0.00015744979850009253
+      ],
+      "P-2": [
+       5.009649835233164e-07,
+       9.202322578271769e-05
+      ],
+      "P-3": [
+       4.828528090125218e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       3.2313538256587746e-07,
+       0.0003233146302207981
+      ],
+      "P-4": [
+       1.5254779483052384e-06,
+       0.0
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.3,
+     "deviation_m": 0.015
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 384,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 0.8839897254310998,
+     "approach": 0.8478934630270661,
+     "insert": 0.6398566631267827,
+     "extract": 0.37808856070250974,
+     "transport": 0.2938533381927749,
+     "withdraw": 0.3004255365687807,
+     "return_home": 0.4496958516808701
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m2",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    },
+    {
+     "mission_id": "m3",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 36016,
+    "dropped": 20044,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/guard_random_m/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 36015,
+    "class_mismatches": 0,
+    "max_diff_s": 0.02731300302548334,
+    "p99_diff_s": 0.022819835925474763,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 56032,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 2,
+     "max_gap_s": 1.1736211199895479,
+     "gaps_from_log": 20040,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 45.66622605198063
+    },
+    "trace_only": {
+     "steps": 35992,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 1.1736211199895479,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     462349.743072874,
+     464008.223391355
+    ],
+    "realtime_factor": {
+     "median": 0.27883198264413145,
+     "n": 1598
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "life1_line_m_main",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "main",
+   "scene": "line_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "main",
+    "--expect-stop-in-capture"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-1",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "done",
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": "queue",
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    },
+    {
+     "order": 3,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    }
+   ],
+   "result_json": false,
+   "safety": {
+    "undecidable": "no run result.json",
+    "forbidden_contacts_missions": 0,
+    "load_safety_failures": 0
+   },
+   "guard": null,
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "complete",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": null,
+   "live_log_incomplete": "<OUT>/s/life1_line_m_main/live/epoch_1/run: the live log has no end summary (the session did not close its writer)",
+   "overlap": {
+    "steps": 0,
+    "passed": false
+   },
+   "pace": {
+    "full": {
+     "steps": 18507,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.0,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 18507,
+     "c2_steps": [],
+     "longest_pacing_false_s": 18.629085899039637
+    },
+    "trace_only": {
+     "steps": 0,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.0,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     464050.17214589,
+     464591.065730279
+    ],
+    "realtime_factor": {
+     "median": 0.2835254502194334,
+     "n": 524
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "life2_random_m_held",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "cycle",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "cycle",
+    "--cycle",
+    "P-4:D-1,P-4:D-1,P-5:D-2",
+    "--cancel-at",
+    "transport:5",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": "m1",
+     "outcome": "cancelled",
+     "reason": "operator",
+     "class": "other",
+     "forbidden_contacts": 0,
+     "reject_reason": null,
+     "start": "confirmed"
+    },
+    {
+     "order": 2,
+     "pallet_id": "P-4",
+     "destination_id": "D-1",
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": "cargo_held",
+     "start": "rejected"
+    },
+    {
+     "order": 3,
+     "pallet_id": "P-5",
+     "destination_id": "D-2",
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": "cargo_held",
+     "start": "rejected"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": 0,
+    "unpermitted_entries": 0,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {
+      "P-1": {
+       "m": 1.9909291245756484,
+       "t": 42.43333554640412,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-2": {
+       "m": 0.8396481981210573,
+       "t": 42.43333554640412,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-3": {
+       "m": 0.8259467961033268,
+       "t": 42.43333554640412,
+       "phase": "extract",
+       "mission_pallet": "P-4"
+      },
+      "P-5": {
+       "m": 0.9786035535605654,
+       "t": 4.325000225566328,
+       "phase": "observe",
+       "mission_pallet": "P-4"
+      }
+     },
+     "overlaps": [],
+     "min_gap_m": 0.8259467961033268,
+     "rest_moves": {
+      "P-1": [
+       6.823690618190355e-07,
+       0.00013523400065594638
+      ],
+      "P-2": [
+       4.971273934129559e-07,
+       9.095709805786266e-05
+      ],
+      "P-3": [
+       4.799122487064575e-07,
+       0.00023014711058968454
+      ],
+      "P-5": [
+       3.2313538256587746e-07,
+       0.00016293647303271096
+      ]
+     },
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": true
+    }
+   },
+   "guard": {
+    "config": {
+     "margin_m": 0.05,
+     "deviation_m": 0.02
+    },
+    "ticks": {
+     "empty": {
+      "capped": 0,
+      "zero": 0
+     },
+     "loaded": {
+      "capped": 0,
+      "zero": 0
+     }
+    },
+    "holds": [],
+    "holds_saturated": false,
+    "min_clearance_m": {
+     "observe": 0.883992248369999,
+     "approach": 1.2485534803044156,
+     "insert": 0.9019713669191216,
+     "extract": 0.5756778733826928,
+     "transport": 1.1235795191764493
+    }
+   },
+   "features": [
+    {
+     "mission_id": "m1",
+     "records": true,
+     "phase": "transport",
+     "return_start_backoffs": [],
+     "observe_end_stands": [],
+     "near_end_injections": [],
+     "near_capture_status": "done",
+     "log": []
+    }
+   ],
+   "tick_trace": {
+    "rows": 6367,
+    "dropped": 0,
+    "path": "/home/projects/forklift/test_runs/live/riibv_21ce53df/s/life2_random_m_held/live/epoch_1/run/tick_trace.npz"
+   },
+   "overlap": {
+    "steps": 6366,
+    "class_mismatches": 0,
+    "max_diff_s": 0.0264316099928692,
+    "p99_diff_s": 0.022811805919627663,
+    "passed": true
+   },
+   "pace": {
+    "full": {
+     "steps": 6281,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 2.8111592069617473,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 20.481637680961285
+    },
+    "trace_only": {
+     "steps": 6281,
+     "stalls_confirmed": 2,
+     "stalls_uncertain": 0,
+     "max_gap_s": 2.8111592069617473,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     464109.683088712,
+     464297.063848939
+    ],
+    "realtime_factor": {
+     "median": 0.27926593716617554,
+     "n": 179
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  },
+  {
+   "name": "life3_random_m_reloc",
+   "arm": "B",
+   "fix": "none",
+   "scenario": "queue",
+   "scene": "random_m_session",
+   "seed": "0",
+   "probe": [
+    "--scenario",
+    "queue",
+    "--cycle",
+    "P-4:D-1",
+    "--end-session"
+   ],
+   "probe_found": true,
+   "missions": [
+    {
+     "order": 1,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": "probe_error: launcher_ended",
+     "class": "infra",
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    },
+    {
+     "order": 2,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    },
+    {
+     "order": 3,
+     "pallet_id": null,
+     "destination_id": null,
+     "mission_id": null,
+     "outcome": null,
+     "reason": null,
+     "class": null,
+     "forbidden_contacts": null,
+     "reject_reason": null,
+     "start": "not_submitted"
+    }
+   ],
+   "result_json": true,
+   "safety": {
+    "forbidden_contacts_run": 0,
+    "forbidden_contacts_missions": 0,
+    "unpermitted_dir_entries": null,
+    "unpermitted_entries": null,
+    "load_safety_failures": 0,
+    "low_objects": {
+     "neighbour_gap": {},
+     "overlaps": [],
+     "min_gap_m": null,
+     "rest_moves": {},
+     "rest_bound": [
+      0.01,
+      0.01
+     ],
+     "moved_past_bound": [],
+     "recorded": false
+    }
+   },
+   "guard": null,
+   "features": [],
+   "tick_trace": null,
+   "overlap": {
+    "steps": 0,
+    "passed": false
+   },
+   "pace": {
+    "full": {
+     "steps": 0,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.0,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": [],
+     "longest_pacing_false_s": 0.0
+    },
+    "trace_only": {
+     "steps": 0,
+     "stalls_confirmed": 0,
+     "stalls_uncertain": 0,
+     "max_gap_s": 0.0,
+     "gaps_from_log": 0,
+     "missing_gaps": 0,
+     "undecidable_steps": 0,
+     "c2_steps": []
+    },
+    "window_mono": [
+     null,
+     null
+    ],
+    "realtime_factor": {
+     "median": null,
+     "n": 0
+    }
+   },
+   "stall_recoveries": [],
+   "manual_recovery": null
+  }
+ ],
+ "rules": {
+  "stall_s": 0.25,
+  "band_s": 0.05,
+  "overlap_max_s": 0.05,
+  "c2_cap_s": 2.0
+ }
+}
