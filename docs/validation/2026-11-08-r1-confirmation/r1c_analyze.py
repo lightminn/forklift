@@ -439,27 +439,28 @@ def verdict(rows, expected, branch, factor, candidate):
     ls = [x["processed_to_still_s"] for x in l_stops if "processed_to_still_s" in x]
     if ks and ls and max(ks) > max(ls) + 0.1 / factor:
         why.append("R-b stop-complete")
-    # R-c
-    for label in DISTANCE:
-        mk = [x.get("moving_output_share") for x in holds(K, label) if x.get("moving_output_share") is not None]
-        ml = [x.get("moving_output_share") for x in holds(L, label) if x.get("moving_output_share") is not None]
-        if not mk or (ml and np.median(mk) < np.median(ml)):
+    # R-c, every block and every measure (Codex round 3 P2): distance and signed heading within 25 % of the
+    # baseline's median (or within 0.02 m / 0.02 rad of it when that median is that small), the moving-output share
+    # not lower, the lateral departure no more than the baseline's largest + 0.03 m, the signed lift change within 10 %
+    for label in REQUIRED_HOLDS:
+        kh, lh = holds(K, label), holds(L, label)
+        for key, floor in (("distance_m", 0.02), ("heading_change_rad", 0.02)):
+            ref = float(np.median([x.get(key) or 0.0 for x in lh]))
+            tol = max(0.25 * abs(ref), floor)
+            if any(x.get(key) is None or abs(x[key] - ref) > tol for x in kh):
+                why.append(f"R-c {key} {label}")
+        if label in LIFT:
+            ml = float(np.median([x.get("lift_change_m") or 0.0 for x in lh]))
+            if any(x.get("lift_change_m") is None or abs(x["lift_change_m"] - ml) > 0.10 * abs(ml) for x in kh):
+                why.append(f"R-c lift {label}")
+            continue
+        mk = [x.get("moving_output_share") for x in kh if x.get("moving_output_share") is not None]
+        ml_ = [x.get("moving_output_share") for x in lh if x.get("moving_output_share") is not None]
+        if not mk or (ml_ and np.median(mk) < np.median(ml_)):
             why.append(f"R-c moving output {label}")
-        dl = np.median([abs(x.get("distance_m") or 0) for x in holds(L, label)])
-        if any(x.get("distance_m") is None or abs(abs(x["distance_m"]) - dl) > 0.25 * dl for x in holds(K, label)):
-            why.append(f"R-c distance {label}")
-        ll = max((x.get("lateral_max_m") or 0 for x in holds(L, label)), default=0)
-        if any(x.get("lateral_max_m") is None or x["lateral_max_m"] > ll + 0.03 for x in holds(K, label)):
+        ll = max((x.get("lateral_max_m") or 0.0 for x in lh), default=0.0)
+        if any(x.get("lateral_max_m") is None or x["lateral_max_m"] > ll + 0.03 for x in kh):
             why.append(f"R-c lateral {label}")
-    for label in HEADING:  # signed: a turn the other way is not the same turn (Codex round 2 P2)
-        hl = np.median([x.get("heading_change_rad") or 0 for x in holds(L, label)])
-        if any(x.get("heading_change_rad") is None or abs(x["heading_change_rad"] - hl) > 0.25 * abs(hl)
-               for x in holds(K, label)):
-            why.append(f"R-c heading {label}")
-    for label in LIFT:
-        ml = np.median([x.get("lift_change_m") or 0 for x in holds(L, label)])
-        if any(x.get("lift_change_m") is None or abs(x["lift_change_m"] - ml) > 0.10 * abs(ml) for x in holds(K, label)):
-            why.append(f"R-c lift {label}")
     # R-d
     norm = lambda rs: sum(sum((r.get("T2") or {}).get("normal", {}).values()) for r in rs)  # noqa: E731
     if norm(K) > norm(L):

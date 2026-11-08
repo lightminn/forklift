@@ -30,19 +30,19 @@ def stop(label):
 
 def holds_row(blocked=0.1, heading=1.0, lift=1.0, dist=1.0, stop_t=True):
     hs = [{"label": "loaded_forward", "ticks": 100, "pacing_blocked_tick_share": blocked, "moving_output_share": 0.9,
-           "distance_m": 0.3}]
+           "distance_m": 0.3, "heading_change_rad": 0.0, "lateral_max_m": 0.01}]
     for label, d in ra.DISTANCE.items():
         h = {"label": label, "ticks": 100, "pacing_blocked_tick_share": blocked, "moving_output_share": 0.9,
-             "distance_m": d * dist, "lateral_max_m": 0.01}
+             "distance_m": d * dist, "heading_change_rad": 0.0, "lateral_max_m": 0.01}
         if label == "forward" and stop_t:
             h["stop"] = stop("T")
         hs.append(h)
     for label, hc in ra.HEADING.items():
-        hs.append({"label": label, "ticks": 100, "pacing_blocked_tick_share": blocked,
-                   "heading_change_rad": ra.HEADING_SIGN[label] * hc * heading, "distance_m": 0.3})
+        hs.append({"label": label, "ticks": 100, "pacing_blocked_tick_share": blocked, "moving_output_share": 0.9,
+                   "heading_change_rad": ra.HEADING_SIGN[label] * hc * heading, "distance_m": 0.3, "lateral_max_m": 0.02})
     for label, lc in ra.LIFT.items():
-        hs.append({"label": label, "ticks": 100, "pacing_blocked_tick_share": blocked,
-                   "lift_change_m": ra.LIFT_SIGN[label] * lc * lift})
+        hs.append({"label": label, "ticks": 100, "pacing_blocked_tick_share": blocked, "distance_m": 0.0,
+                   "heading_change_rad": 0.0, "lift_change_m": ra.LIFT_SIGN[label] * lc * lift})
     return hs
 
 
@@ -130,6 +130,23 @@ def test_a_turn_or_a_lift_the_other_way_fails_the_function_rule(kw):
     expected, rows = far_set(k_kw={"ok": 0.9, **kw})
     v = ra.verdict(rows, expected, "far", 0.4, "K")
     assert v["verdict"].startswith("no change") and any(w.startswith("R-c") for w in v["why"])
+
+
+@pytest.mark.parametrize("label, key, value", [("loaded_forward", "distance_m", 0.0),
+                                               ("loaded_forward", "moving_output_share", 0.0),
+                                               ("left", "distance_m", 0.0), ("right", "distance_m", 0.0),
+                                               ("forward", "heading_change_rad", 0.5),
+                                               ("reverse", "heading_change_rad", 0.5),
+                                               ("video_forward", "heading_change_rad", 0.5)])
+def test_every_block_is_compared_on_every_measure(label, key, value):
+    expected, rows = far_set(k_kw={"ok": 0.9})
+    for r in rows:
+        if r["arm"] == "K" and r["set"] == "far":
+            for h in r["T1"]:
+                if h["label"] == label:
+                    h[key] = value
+    v = ra.verdict(rows, expected, "far", 0.4, "K")
+    assert v["verdict"] != "change" and any(w.startswith("R-c") and label in w for w in v["why"])
 
 
 def test_a_slower_stop_beyond_the_bracket_fails_and_inside_it_holds():
