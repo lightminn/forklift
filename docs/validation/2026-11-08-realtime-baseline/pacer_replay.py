@@ -89,21 +89,28 @@ def replay(w, eps, catchup, to_step_end=None, with_ok=False):
 
 
 def transformed(r, split=False, scan=1.0, ctrl=1.0):
+    """(W, to_step_end) after the transform: the time to step_world's end moves with every change that falls before
+    it (the scan processing, the render's world.step share), not with the camera read or the control tick that come
+    after it (Codex G1 round 2 P2)."""
     w = r["w"].copy()
+    tse = r["parts"]["to_step_end"].copy()
     P = r["parts"]
     rs = r["rendered"] & r["scan"]
     if scan != 1.0:
-        w -= np.where(r["scan"], (1 - scan) * P["step_rest"], 0.0)
+        cut = np.where(r["scan"], (1 - scan) * P["step_rest"], 0.0)
+        w -= cut
+        tse -= cut
     if ctrl != 1.0:
         w -= (1 - ctrl) * P["control"]
     if split:
         plain_world = np.median(P["world"][~r["rendered"]])
-        own = np.where(rs, np.maximum(P["world"] - plain_world, 0) + P["after"], 0.0)
-        w -= own
-        moved = np.zeros_like(w)
-        moved[6:] = own[:-6]
-        w += moved
-    return w
+        render = np.where(rs, np.maximum(P["world"] - plain_world, 0), 0.0)  # before step_world's end
+        read = np.where(rs, P["after"], 0.0)  # the camera read, after it
+        w -= render + read
+        tse -= render
+        w[6:] += render[:-6] + read[:-6]
+        tse[6:] += render[:-6]
+    return w, tse
 
 
 def main() -> int:
@@ -120,9 +127,9 @@ def main() -> int:
         mean_w = float(np.mean(r["w"])) / DT
         print(f"{name}: measured {measured:.4f}, replay catch-up 0 {check:.4f} (check), mean W / h {mean_w:.3f}")
         for label, kw in cases:
-            w = transformed(r, **kw)
+            w, tse = transformed(r, **kw)
             row = " ".join(f"k{k}={replay(w, r['eps'], k):.3f}" for k in (0, 6, 12, 24, 120))
-            ratio6, ok6 = replay(w, r["eps"], 6, r["parts"]["to_step_end"], with_ok=True)
+            ratio6, ok6 = replay(w, r["eps"], 6, tse, with_ok=True)
             row += f"  | k6 ok-share {ok6 if ok6 is None else round(ok6, 3)}"
             print(f"   {label:24s} mean W/h {np.mean(w) / DT:.3f}  {row}")
     return 0
