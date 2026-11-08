@@ -212,7 +212,11 @@ def block(K, w, interval, eps, wait, parts, replies, h, data) -> dict:
 
     order = sorted(gains, key=lambda p: -gains[p])
     near_lo, near_hi = near_set(gains, False), near_set(gains_hi, True)
-    near = near_lo if near_lo == near_hi else {"uncertain": [near_lo, near_hi]}
+    # confirmed only when both ends agree and no part inside the set has a gain range overlapping one outside it
+    # (any allocation of a missing part could reorder them; Codex round 5 P2)
+    overlap = near_lo is not None and any(gains[x] <= gains_hi[y] and gains[y] <= gains_hi[x]
+                                          for x in near_lo for y in gains if y not in near_lo)
+    near = near_lo if near_lo == near_hi and not overlap else {"uncertain": [near_lo, near_hi]}
     kinds = kind_of(data[K, C["flags"]])
     phase = data[K, C["tick"]].astype(int) % 12
     over = np.maximum(W - h, 0)
@@ -371,12 +375,13 @@ def concurrency(runs: list[dict]) -> None:
 
 
 def phase_matched(i_runs: list[dict], c3_runs: list[dict]) -> None:
-    """Each alone run of a level measured again over every same-level 3-slot session's 3-common window (sim seconds
-    since its own t0): the same mission phases, so the alone/concurrent difference is not one of phases."""
+    """Each alone run of a level measured again over every same-level 3-slot session's 3-common window in elapsed
+    sim seconds since its own t0 (key "elapsed_matched"). This matches elapsed time, not mission phases: where the
+    phase transitions fall at other times the windows can still hold different phases (Codex round 5 P2)."""
     for r in i_runs:
         if "_S" not in r:
             continue
-        r["phase_matched"] = {}
+        r["elapsed_matched"] = {}
         for c in c3_runs:
             win = ((c.get("by_concurrency") or {}).get("3") or {}).get("sim_window_since_t0")
             if c.get("level") != r.get("level") or not win:
@@ -385,7 +390,7 @@ def phase_matched(i_runs: list[dict], c3_runs: list[dict]) -> None:
             m = (r["_sim"] >= t0 + win[0]) & (r["_sim"] <= t0 + win[1])
             if (r["_K"] & m).any():
                 blk = window_block(r, m)
-                r["phase_matched"][c["name"]] = {k: blk[k] for k in ("sim_s", "ratio", "excess_per_sim_s",
+                r["elapsed_matched"][c["name"]] = {k: blk[k] for k in ("sim_s", "ratio", "excess_per_sim_s",
                                                                        "gain_per_sim_s", "stalls")}
 
 
