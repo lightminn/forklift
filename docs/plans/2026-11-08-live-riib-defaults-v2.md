@@ -221,3 +221,4 @@
 - 개정 Codex 검토 2 회차: 새 P1/P2 없음(1fb5e273).
 - 개정 2 Codex 검토 1 회차(P1 없음, P2 2): F₁·R₁ 과 1 단계 유지 집합을 1 단계로 동결(대상 선정·순서별 판정·k = 0 의 N 모두). 매니페스트 비교는 같은 N·장면·seed 대응, 실행별 필드 정규화·제외 목록 고정.
 - 개정 2 Codex 검토 2 회차(P2 1): 제외 목록을 실행 식별용 `BUNDLE_SLOT`·`BUNDLE_JOB`·`BUNDLE_RUN`·`BUNDLE_TOKEN` 으로 한정하고 `BUNDLE_ARGS` 는 비교 대상으로 둠.
+- 개정 2 Codex 검토 3 회차: 새 P1/P2 없음(6d2c9e98).
