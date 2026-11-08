@@ -68,3 +68,27 @@ def test_the_lifecycle_order_needs_each_step_after_the_previous():
     assert ok and [j for _, j in order] == [0, 1, 2]
     ok2, _ = V.in_order(list(reversed(ev)), [("x", V._label("x")), ("rearm", V._reply("rearm"))])
     assert not ok2  # the rearm before the label does not count
+
+
+def test_expected_missions_must_have_their_files_and_contact_field(tmp_path):
+    import json as _json
+
+    run = tmp_path / "run"
+    (run / "missions" / "m1").mkdir(parents=True)
+    (run / "spool").mkdir()
+    (run / "spool" / "manifest.json").write_text(_json.dumps({"complete": True}))
+    for f in ("result.json", "records.json"):
+        (run / "missions" / "m1" / f).write_text("{}")
+    res = {"forbidden_pocket_contacts": [], "session_neighbour_gap": {}, "session_rest_largest": {},
+           "obstacle_layer": {"unpermitted_dir_entries": 0},
+           "mission_results": [{"mission_id": "m1"}, {"mission_id": "m2"}]}
+    sess = {"run": run, "result": res, "rows": [], "probe": {},
+            "records": {"m1": {"forbidden_pocket_contacts": []}}}
+    out = V.safety(sess)
+    assert "undecidable" in out and out["undecidable"]["missing_missions"] == ["m2"]
+    res["mission_results"] = [{"mission_id": "m1"}]
+    sess["records"] = {"m1": {}}  # parsed, but without the contact field
+    out = V.safety(sess)
+    assert "undecidable" in out and out["undecidable"]["records_without_contacts"] == ["m1"]
+    sess["records"] = {"m1": {"forbidden_pocket_contacts": []}}
+    assert V.safety(sess)["pass"] is True

@@ -172,10 +172,20 @@ def safety(sess: dict) -> dict:
         return {"undecidable": "no run result.json"}
     absent = [k for k in ("forbidden_pocket_contacts", "session_neighbour_gap", "session_rest_largest", "mission_results",
                           "obstacle_layer") if k not in res]
-    unparsed = [m for m, st in (sess.get("records") or {}).items() if st is None]
-    if absent or unparsed or not (sess["run"] / "spool" / "manifest.json").exists():
-        return {"undecidable": {"absent": absent, "unparsed_records": unparsed,
-                                "spool_manifest": (sess["run"] / "spool" / "manifest.json").exists()}}
+    records = sess.get("records") or {}
+    unparsed = [m for m, st in records.items() if st is None]
+    # every mission the results book or an acked submit names must have its files, parse, and carry the contact field
+    expected = {m.get("mission_id") for m in res.get("mission_results") or [] if m.get("mission_id")}
+    expected |= {((e.get("submit") or {}).get("mission_id")) for e in (sess.get("probe") or {}).get("missions_run") or []
+                 if (e.get("submit") or {}).get("t") == "ack" and (e.get("submit") or {}).get("mission_id")}
+    missing_missions = sorted(m for m in expected
+                              if not ((sess["run"] / "missions" / m / "result.json").exists()
+                                      and (sess["run"] / "missions" / m / "records.json").exists()))
+    no_contacts = sorted(m for m, st in records.items() if st is not None and "forbidden_pocket_contacts" not in st)
+    manifest_ok = (sess["run"] / "spool" / "manifest.json").exists()
+    if absent or unparsed or missing_missions or no_contacts or not manifest_ok:
+        return {"undecidable": {"absent": absent, "unparsed_records": unparsed, "missing_missions": missing_missions,
+                                "records_without_contacts": no_contacts, "spool_manifest": manifest_ok}}
     gaps = res.get("session_neighbour_gap") or {}
     rest = res.get("session_rest_largest") or {}
     reasons = [r.get("reason") for r in sess.get("rows") or [] if r.get("reason")]
