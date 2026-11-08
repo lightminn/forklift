@@ -1,0 +1,640 @@
+{
+ "bundles": [
+  {
+   "bundle": 1,
+   "concurrency": 1,
+   "catchup": 0,
+   "runs": [
+    "bl1_n1_k0_line_m",
+    "bl1_n1_k0_random_m"
+   ],
+   "interval": "own",
+   "sessions": [
+    {
+     "name": "bl1_n1_k0_line_m",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      474133.629893331,
+      475805.626457398
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.29143149147292424,
+     "R": 0.016385630616415417,
+     "wall_s": 1671.9482039610157,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n1_k0_random_m",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      475857.012597069,
+      477461.116791825
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.29034227333827883,
+     "R": 0.04242750953383243,
+     "wall_s": 1604.055168869032,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  },
+  {
+   "bundle": 2,
+   "concurrency": 1,
+   "catchup": 6,
+   "runs": [
+    "bl1_n1_k6_line_m",
+    "bl1_n1_k6_random_m"
+   ],
+   "interval": "own",
+   "sessions": [
+    {
+     "name": "bl1_n1_k6_line_m",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      477522.207246806,
+      479065.367603238
+     ],
+     "short_gaps": 4831,
+     "setting_ok": true,
+     "F": 0.2997029083856789,
+     "R": 0.007118927752298443,
+     "wall_s": 1543.1115654199966,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n1_k6_random_m",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      479117.240312423,
+      480759.493097421
+     ],
+     "short_gaps": 5457,
+     "setting_ok": true,
+     "F": 0.29997320164305175,
+     "R": 0.0050555261845023685,
+     "wall_s": 1642.2023356099962,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  },
+  {
+   "bundle": 3,
+   "concurrency": 2,
+   "catchup": 6,
+   "runs": [
+    "bl1_n2_k6_line_m",
+    "bl1_n2_k6_random_m"
+   ],
+   "interval": [
+    480881.353970781,
+    482374.384978447
+   ],
+   "sessions": [
+    {
+     "name": "bl1_n2_k6_line_m",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      480820.814438525,
+      482374.384978447
+     ],
+     "short_gaps": 5341,
+     "setting_ok": true,
+     "F": 0.2999689632093236,
+     "R": 0.004027688453331373,
+     "wall_s": 1492.9600890440051,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n2_k6_random_m",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      480881.353970781,
+      482494.882739962
+     ],
+     "short_gaps": 5812,
+     "setting_ok": true,
+     "F": 0.29993131762945086,
+     "R": 0.007137816826424326,
+     "wall_s": 1492.9807715979987,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  },
+  {
+   "bundle": 4,
+   "concurrency": 2,
+   "catchup": 0,
+   "runs": [
+    "bl1_n2_k0_line_m",
+    "bl1_n2_k0_random_m"
+   ],
+   "interval": [
+    482615.620110963,
+    484163.164848315
+   ],
+   "sessions": [
+    {
+     "name": "bl1_n2_k0_line_m",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      482555.549344485,
+      484163.164848315
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.287300688918058,
+     "R": 0.08310412971506494,
+     "wall_s": 1547.4786765329773,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n2_k0_random_m",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      482615.620110963,
+      484211.191380387
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.2871638615941894,
+     "R": 0.08858436961520723,
+     "wall_s": 1547.5195499059628,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  },
+  {
+   "bundle": 5,
+   "concurrency": 3,
+   "catchup": 0,
+   "runs": [
+    "bl1_n3_k0_line_ma",
+    "bl1_n3_k0_random_m",
+    "bl1_n3_k0_line_mb"
+   ],
+   "interval": [
+    484395.039735417,
+    485920.933434554
+   ],
+   "sessions": [
+    {
+     "name": "bl1_n3_k0_line_ma",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      484270.16877844,
+      485920.933434554
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.28414316291999914,
+     "R": 0.1021637030283107,
+     "wall_s": 1525.8447589929565,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n3_k0_random_m",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "failed"
+      ]
+     ],
+     "eligible": false,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      484330.794762135,
+      486055.350642438
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.28393283232566047,
+     "R": 0.10155399799527003,
+     "wall_s": 1525.8597806859761,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n3_k0_line_mb",
+     "catchup_args": "0",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      484395.039735417,
+      486040.437149642
+     ],
+     "short_gaps": 0,
+     "setting_ok": true,
+     "F": 0.28403745169786015,
+     "R": 0.10682283520110909,
+     "wall_s": 1525.8845386289759,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  },
+  {
+   "bundle": 6,
+   "concurrency": 3,
+   "catchup": 6,
+   "runs": [
+    "bl1_n3_k6_line_ma",
+    "bl1_n3_k6_random_m",
+    "bl1_n3_k6_line_mb"
+   ],
+   "interval": [
+    486241.682910341,
+    487687.01489552
+   ],
+   "sessions": [
+    {
+     "name": "bl1_n3_k6_line_ma",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      486115.853524755,
+      487687.01489552
+     ],
+     "short_gaps": 5924,
+     "setting_ok": true,
+     "F": 0.2999855513107555,
+     "R": 0.010056400869608515,
+     "wall_s": 1445.2641270580352,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n3_k6_random_m",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      486175.968600981,
+      487745.043772104
+     ],
+     "short_gaps": 6929,
+     "setting_ok": true,
+     "F": 0.2999218286626061,
+     "R": 0.013859368054167414,
+     "wall_s": 1445.2933437369647,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    },
+    {
+     "name": "bl1_n3_k6_line_mb",
+     "catchup_args": "6",
+     "phase_args": "unset",
+     "missions": [
+      [
+       "m1",
+       "done"
+      ],
+      [
+       "m2",
+       "done"
+      ],
+      [
+       "m3",
+       "done"
+      ]
+     ],
+     "eligible": true,
+     "dropped": 0,
+     "log_complete": true,
+     "window": [
+      486241.682910341,
+      487796.099919915
+     ],
+     "short_gaps": 5600,
+     "setting_ok": true,
+     "F": 0.29996368050291905,
+     "R": 0.0128101223274747,
+     "wall_s": 1445.3139411769807,
+     "missing_steps": 0,
+     "missing_share": 0.0,
+     "missing_wall_s": 0.0,
+     "max_gap_s": 0.0,
+     "decidable": true,
+     "why": ""
+    }
+   ]
+  }
+ ],
+ "arms": {
+  "0": {
+   "F1": 0.29088688240560157,
+   "R1": 0.029406570075123924,
+   "held": {
+    "1": true,
+    "2": false,
+    "3": null
+   }
+  },
+  "6": {
+   "F1": 0.29983805501436533,
+   "R1": 0.006087226968400406,
+   "held": {
+    "1": true,
+    "2": true,
+    "3": true
+   }
+  }
+ },
+ "stage2_blockers": [
+  "catch-up 0: an undecidable concurrency"
+ ],
+ "stage2_targets": null,
+ "rules": {
+  "F_ratio": 0.97,
+  "R_add": 0.03,
+  "F1_stop": 0.27,
+  "missing_share": 0.01,
+  "missing_gap_s": 5.0,
+  "common_min_s": 900.0
+ }
+}
