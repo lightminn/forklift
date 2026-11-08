@@ -97,6 +97,17 @@ def stage2_blockers(arms: dict) -> list:
 
 
 # --- records ------------------------------------------------------------------------------------------------------------
+def read_log(run) -> tuple[list, bool, str | None]:
+    """(entries, complete, error): read_live_log; a refused log is read again allowing it incomplete (the session is
+    then undecidable through log_complete False); refused even so (rotated parts lost, files missing) -> no entries."""
+    try:
+        return read_live_log(run), True, None
+    except ValueError as e:
+        first = str(e)
+    try:
+        return read_live_log(run, allow_incomplete=True), False, first
+    except (ValueError, OSError) as e:
+        return [], False, f"{first}; {e}"
 def session_record(d: Path, factor: float) -> dict:
     out = {"name": d.name}
     args = dict(line.split("=", 1) for line in (d / "args.txt").read_text().splitlines()
@@ -115,11 +126,9 @@ def session_record(d: Path, factor: float) -> dict:
     except (OSError, ValueError):
         result = {}
     out["dropped"] = (result.get("tick_trace") or {}).get("dropped")
-    try:
-        entries = read_live_log(run)
-        out["log_complete"] = True
-    except ValueError:
-        entries, out["log_complete"] = read_live_log(run, allow_incomplete=True), False
+    entries, out["log_complete"], log_error = read_log(run)
+    if log_error:
+        out["log_error"] = log_error
     out["steps"] = {int(e["step"]): (float(e["mono"]), float(e["tick_t"]), bool(e["pacing_ok"]))
                     for e in entries if "pacing_ok" in e and "step" in e}
     submits = [float(e["mono"]) for e in entries if e.get("t") == "mission_submit" and "mono" in e]

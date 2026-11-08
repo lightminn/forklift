@@ -66,3 +66,23 @@ def test_no_stage_two_when_an_arm_has_no_held_n_a_low_f1_or_an_undecidable_concu
     assert B.stage2_blockers({0: {"held": {1: False, 2: False, 3: False}, "F1": 0.29}, 6: ok})
     assert B.stage2_blockers({0: ok, 6: {"held": ok["held"], "F1": 0.268}})
     assert B.stage2_blockers({0: {"held": {1: True, 2: None, 3: True}, "F1": 0.29}, 6: ok})
+
+
+def test_a_log_refused_even_when_incomplete_is_allowed_leaves_the_session_undecidable(monkeypatch):
+    def refuse(run, allow_incomplete=False):
+        raise ValueError("live log parts missing")
+
+    monkeypatch.setattr(B, "read_live_log", refuse)
+    entries, complete, error = B.read_log("run")
+    assert entries == [] and complete is False and "missing" in error
+
+    calls = []
+
+    def strict_only(run, allow_incomplete=False):
+        calls.append(allow_incomplete)
+        if not allow_incomplete:
+            raise ValueError("no end summary")
+        return [{"step": 1}]
+
+    monkeypatch.setattr(B, "read_live_log", strict_only)
+    assert B.read_log("run") == ([{"step": 1}], False, "no end summary") and calls == [False, True]
