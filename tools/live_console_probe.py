@@ -938,24 +938,34 @@ def mission_over(s: dict, mission_id) -> bool:
 
 async def end_active_mission(p: Probe, mission_id) -> dict:
     """Before a session's end with a mission not yet final: out of STOPPED first (a cancel is refused there,
-    stopped_locked) -- stand, rearm, leave STOPPED -- then cancel it and wait (120 s) for its final status."""
+    stopped_locked) -- stand, rearm, leave STOPPED -- then cancel it (unless it is already recovering from an earlier
+    cancel) and wait (120 s) for its final status, resuming once a recovery the PAUSED mode paused."""
     out = {}
     if (p.state or {}).get("mode") == "STOPPED":
         out["standing"] = await p.until(p.standing, 20.0, label="end_standing")
         out["rearm"] = await p.request_until_standing("rearm")
         out["rearmed"] = await p.until(lambda s: s.get("mode") != "STOPPED", 5.0, label="end_rearmed")
-    out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
-    out["cancel_ended"] = False
-    if not (out["cancel"] and out["cancel"].get("t") == "ack"):
-        return out
 
     def paused_recovery(s):
-        # the cancel stood with the forks in a pocket (or short of clearance: clear_out) and became a recovery, which
+        # a cancel that stood with the forks in a pocket (or short of clearance: clear_out) became a recovery, which
         # the PAUSED mode pauses at once -- as the cycle path's U30 handling, it is resumed once (Codex v2 H1 P2)
         m = s.get("mission") or {}
         phase = str(m.get("phase") or "")
         return (m.get("mission_id") == mission_id and m.get("status") == "paused"
                 and (phase.startswith("recover_") or phase == "clear_out"))
+
+    m0 = (p.state or {}).get("mission") or {}
+    # already recovering (an earlier cancel became a recovery, e.g. the stall recovery's): a second cancel is refused
+    # (recovering), so no new cancel -- the recovery is resumed and waited for (Codex v2 H1 P2)
+    out["in_recovery"] = p.state is not None and m0.get("mission_id") == mission_id and (
+        m0.get("status") == "recovering" or paused_recovery(p.state))
+    out["cancel_ended"] = False
+    if not out["in_recovery"]:
+        out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
+        if not (out["cancel"] and out["cancel"].get("t") == "ack"):
+            if (out["cancel"] or {}).get("reason") != "recovering":
+                return out
+            out["in_recovery"] = True
 
     stop_by = time.monotonic() + 120.0
     while time.monotonic() < stop_by and p.closed_code is None:

@@ -212,3 +212,40 @@ def test_a_cancel_that_becomes_a_paused_recovery_is_resumed_until_the_mission_is
     out = asyncio.run(lcp.end_active_mission(p, "m1"))
     assert p.requests == ["mission_cancel", "mission_resume"]
     assert out["recovery_resume"]["t"] == "ack" and out["cancel_ended"] is True
+
+
+def test_a_mission_already_in_recovery_is_not_cancelled_again_but_resumed_and_waited_for(monkeypatch):
+    # Codex: the stall recovery's cancel became a recovery and timed out; a second cancel is refused (recovering)
+    clock = Clock()
+    monkeypatch.setattr(lcp, "time", clock)
+
+    async def fake_sleep(s):
+        clock.t += s
+
+    monkeypatch.setattr(lcp.asyncio, "sleep", fake_sleep)
+
+    class InRecovery(MainProbe):
+        async def request(self, kind, timeout=5.0, **fields):
+            if kind == "mission_cancel":
+                self.requests.append(kind)
+                return {"t": "reject", "reason": "recovering"}
+            out = await super().request(kind, timeout, **fields)
+            if kind == "mission_resume":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "recovering",
+                                                       "phase": "recover_insert"})
+            return out
+
+        async def request_until_standing(self, kind, tries=20, **fields):
+            return await self.request(kind, **fields)
+
+        async def until(self, pred, timeout, label=""):
+            self.labels.append(label)
+            if label == "end_cancel_ended" and (self.state.get("mission") or {}).get("status") == "recovering":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelled"})
+            return pred(self.state)
+
+    p = InRecovery()
+    p.state = dict(p.state, mode="PAUSED", mission={"mission_id": "m1", "status": "paused", "phase": "recover_insert"})
+    out = asyncio.run(lcp.end_active_mission(p, "m1"))
+    assert "mission_cancel" not in p.requests and p.requests == ["mission_resume"]
+    assert out["in_recovery"] and out["cancel_ended"] is True
