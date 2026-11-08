@@ -187,8 +187,7 @@ def mission_features(run: Path) -> list:
                     "return_start_backoffs": st.get("return_start_backoffs") or [],
                     "observe_end_stands": st.get("observe_end_stands") or [],
                     "near_end_injections": st.get("near_end_injections") or [],
-                    "near_capture_status": (st.get("near_capture") or {}).get("status"),
-                    "log": [r for r in st.get("log") or [] if r.get("command") in ("cancel", "submit")]})
+                    "near_capture_status": (st.get("near_capture") or {}).get("status")})
     return out
 
 
@@ -209,44 +208,51 @@ def low_objects(result: dict) -> dict:
 
 # --- the false-positive check (3.2, 3.4) --------------------------------------------------------------------------------
 def to_sim(steps: dict, mono: float) -> float | None:
-    """The core time at a runtime-clock instant, by the per-step (mono, tick_t) pairs (linear between neighbours)."""
-    pts = sorted((v[0], v[1]) for v in steps.values())
-    xs = [p[0] for p in pts]
-    i = bisect.bisect_left(xs, mono)
-    if i == 0 or i == len(xs):
+    """The core time at a runtime-clock instant, linear between the two consecutive steps around it; None outside the
+    records or across a missing step (no interpolation over a gap)."""
+    order = sorted(steps)
+    monos = [steps[k][0] for k in order]
+    i = bisect.bisect_left(monos, mono)
+    if i == 0 or i == len(monos):
         return None
-    (m0, t0), (m1, t1) = pts[i - 1], pts[i]
+    k0, k1 = order[i - 1], order[i]
+    if k1 != k0 + 1:
+        return None
+    (m0, t0), (m1, t1) = steps[k0][:2], steps[k1][:2]
     return t0 + (t1 - t0) * (mono - m0) / (m1 - m0) if m1 > m0 else t0
 
 
-def false_positive(entry: dict, steps: dict, guard: dict | None, mission: dict | None, probe_events: list) -> dict:
+def false_positive(entry: dict, steps: dict, guard: dict | None, entries: list, probe_events: list,
+                   log_ok: bool) -> dict:
+    """Registration 3.2 / 3.4. The registered independent check compares the probe's cancel request with the cancel's
+    time in the run's records (sim); the mission command log is not persisted in the live records (records.json,
+    result.json and live_log.jsonl carry no applied-cancel time), so that check has no source and every verdict here is
+    undecidable. For information: the interval overlap the mapping would give, and a clock check -- the probe's send
+    (reply mono - rtt) <= the runtime's receipt (live log, same request_id) <= the probe's reply."""
     rec = entry.get("stall_recovery") or {}
     span = rec.get("stall_span_mono")
-    if not span or guard is None:
-        return {"verdict": "undecidable", "why": "no span or no guard record"}
-    a, b = to_sim(steps, span["since"]), to_sim(steps, span["decided"])
-    if a is None or b is None:
-        return {"verdict": "undecidable", "why": "the span is outside the per-step records"}
-    # the independent check: the probe's cancel request vs the mission log's cancel, within one control tick
-    # the recovery's cancel: the first cancel reply after the stall decision; its send = the reply's mono - rtt_s
-    cancel_req = [e for e in probe_events if e.get("event") == "reply" and e.get("kind") == "mission_cancel"
-                  and e.get("mono", -math.inf) >= span["decided"]]
-    logged = [r for r in (mission or {}).get("log", []) if r.get("command") == "cancel" and r.get("accepted")]
-    check = None
-    if cancel_req and logged:
-        first = min(cancel_req, key=lambda e: e["mono"])
-        t_req = to_sim(steps, first["mono"] - float(first.get("rtt_s") or 0.0))
-        check = None if t_req is None else {"probe_sim_s": t_req, "log_sim_s": logged[-1]["t"],
-                                            "diff_s": abs(t_req - logged[-1]["t"])}
-    dt = 1.0 / 120.0
-    if check is None or check["diff_s"] > dt:
-        return {"verdict": "undecidable", "why": "cancel check", "check": check, "span_sim_s": [a, b]}
-    hit = [h for h in guard["holds"] if h["since_s"] <= b and h["last_s"] >= a]
-    if hit:
-        return {"verdict": "guard_stop", "holds": hit, "span_sim_s": [a, b], "check": check}
-    if guard["holds_saturated"]:
-        return {"verdict": "undecidable", "why": "holds saturated", "span_sim_s": [a, b], "check": check}
-    return {"verdict": "false_positive", "span_sim_s": [a, b], "check": check}
+    info: dict = {}
+    if span and guard is not None and log_ok:
+        a, b = to_sim(steps, span["since"]), to_sim(steps, span["decided"])
+        if a is not None and b is not None:
+            hit = [h for h in guard["holds"] if h["since_s"] <= b and h["last_s"] >= a]
+            info["span_sim_s"] = [a, b]
+            info["overlap_if_mapped"] = ("guard_stop" if hit else
+                                         "undecidable_saturated" if guard["holds_saturated"] else "false_positive")
+            info["holds_hit"] = hit
+    replies = [e for e in probe_events if e.get("event") == "reply" and e.get("kind") == "mission_cancel"
+               and span and e.get("mono", -math.inf) >= span["decided"]]
+    if replies:
+        first = min(replies, key=lambda e: e["mono"])
+        got = [e for e in entries if e.get("t") == "mission_cancel" and e.get("request_id") == first.get("request_id")
+               and "mono" in e]
+        if got:
+            sent = first["mono"] - float(first.get("rtt_s") or 0.0)
+            info["clock_check"] = {"sent": sent, "received": got[0]["mono"], "reply": first["mono"],
+                                   "ordered": sent <= got[0]["mono"] <= first["mono"]}
+    why = ("the registered cancel check has no source: the applied cancel's sim time is not in the live records"
+           if log_ok else "the live log is incomplete")
+    return {"verdict": "undecidable", "why": why, **info}
 
 
 # --- one session ----------------------------------------------------------------------------------------------------------
@@ -321,9 +327,9 @@ def session(d: Path) -> dict:
     for e in (probe or {}).get("missions_run") or []:
         if "stall_recovery" in e:
             mid = (e.get("submit") or {}).get("mission_id")
-            mission = next((f for f in feats if f["mission_id"] == mid), None)
             stalls.append({"mission_id": mid, "outcome": e["stall_recovery"].get("outcome"),
-                           "false_positive_check": false_positive(e, steps, out["guard"], mission, events)})
+                           "false_positive_check": false_positive(e, steps, out["guard"], entries, events,
+                                                                  not out.get("live_log_incomplete"))})
     out["stall_recoveries"] = stalls
     out["manual_recovery"] = (probe or {}).get("manual_recovery")
     return out

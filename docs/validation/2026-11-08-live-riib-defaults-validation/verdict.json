@@ -114,8 +114,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -124,8 +123,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -134,8 +132,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -324,8 +321,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -334,8 +330,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -344,8 +339,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -508,8 +502,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -518,8 +511,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -528,8 +520,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -718,8 +709,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -728,8 +718,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -738,8 +727,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -922,8 +910,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -932,8 +919,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -942,8 +928,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -1152,8 +1137,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -1162,8 +1146,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -1172,8 +1155,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -1356,8 +1338,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -1366,8 +1347,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -1376,8 +1356,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -1586,8 +1565,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -1596,8 +1574,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -1606,8 +1583,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -1824,8 +1800,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -1862,8 +1837,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -1900,8 +1874,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -2138,8 +2111,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -2176,8 +2148,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -2214,8 +2185,7 @@
      ],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -2444,8 +2414,7 @@
       },
       "max_path_distance_m": 0.042331806537261235
      },
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -2454,8 +2423,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -2464,8 +2432,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -2706,8 +2673,7 @@
       },
       "max_path_distance_m": 0.042655623256556786
      },
-     "near_capture_status": "pending",
-     "log": []
+     "near_capture_status": "pending"
     }
    ],
    "tick_trace": {
@@ -2916,8 +2882,7 @@
       },
       "max_path_distance_m": null
      },
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -2926,8 +2891,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -2936,8 +2900,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -3146,8 +3109,7 @@
       },
       "max_path_distance_m": null
      },
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -3156,8 +3118,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -3166,8 +3127,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -3361,8 +3321,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -3371,8 +3330,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -3381,8 +3339,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -3596,8 +3553,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m2",
@@ -3606,8 +3562,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     },
     {
      "mission_id": "m3",
@@ -3616,8 +3571,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
@@ -3732,8 +3686,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": null,
@@ -3926,8 +3879,7 @@
      "return_start_backoffs": [],
      "observe_end_stands": [],
      "near_end_injections": [],
-     "near_capture_status": "done",
-     "log": []
+     "near_capture_status": "done"
     }
    ],
    "tick_trace": {
