@@ -1704,6 +1704,222 @@ async def tour_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+# --- R1 confirmation (docs/plans/2026-10-17-realtime-sim.md 5.17) --------------------------------------------------
+# The teleop limits the ratios scale (forklift_core.safety.teleop_drive.TeleopLimits; the probe does not import the
+# package): 0.15 m/s forward and reverse, curvature 0.18 1/m (within the 0.36 limit).
+CONFIRM_LIMITS = {"direct_forward_mps": 0.5, "direct_reverse_mps": 0.25, "curvature_inv_m": 0.36}
+CONFIRM_FORWARD_RATIO = 0.3
+CONFIRM_REVERSE_RATIO = 0.6
+CONFIRM_CURVATURE_RATIO = 0.5
+
+
+async def _psleep(p, seconds):
+    """asyncio.sleep, or the probe's own sleep when it keeps a clock of its own (the tests' fake)."""
+    sleep = getattr(p, "sleep", None)
+    await (sleep(seconds) if sleep is not None else asyncio.sleep(seconds))
+
+
+async def confirm_stop(p, label, clock=time.monotonic) -> dict:
+    """A STOP sent now (a 'key' source, as the console's button): its send time and request on the probe's clock --
+    the runner's link log holds the same request processed -- whether the truck was moving when it was sent, then the
+    stop and the stand waited for and a rearm (5.17 T3). A STOP not acknowledged is recorded and not rearmed."""
+    s = p.state or {}
+    rec = {"label": label, "sent_mono": clock(), "moving_at_send": not p.standing(s), "mode_at_send": s.get("mode"),
+           "phase_at_send": (s.get("mission") or {}).get("phase")}
+    reply = await p.request("stop", source="key")
+    rec["reply"] = None if reply is None else reply.get("t")
+    rec["request_id"] = None if reply is None else reply.get("request_id")
+    rec["stopped"] = bool(reply) and await p.until(lambda st: st.get("mode") == "STOPPED", 5, label=f"stopped_{label}")
+    rec["standing"] = rec["stopped"] and await p.until(p.standing, 20, label=f"standing_{label}")
+    rec["standing_mono"] = clock() if rec["standing"] else None
+    rec["rearm"] = None
+    if rec["standing"]:
+        await _psleep(p, 0.5)
+        rearm = await p.request_until_standing("rearm")
+        rec["rearm"] = None if rearm is None else rearm.get("t")
+    p.report.setdefault("confirm", {}).setdefault("stops", []).append(rec)
+    return rec
+
+
+async def confirm_enter_teleop(p, tries=60, clock=time.monotonic) -> dict:
+    """PAUSED, standing, TELEOP and armed, as enter_teleop -- counting the TELEOP entries refused for pacing (5.17 T1:
+    the arbiter refuses the mode while the pacer is not ok)."""
+    rec = {"start_mono": clock(), "pacing_refusals": 0, "not_stopped_refusals": 0, "entered": False}
+    await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 30, label="standing_before_teleop")
+    reply = None
+    for _ in range(tries):
+        reply = await p.request("mode_request", to="TELEOP")
+        if reply is not None and reply.get("detail") == "pacing":
+            rec["pacing_refusals"] += 1
+        elif reply is not None and reply.get("reason") in ("not_stopped", "no_feedback:rear_axle_speed"):
+            rec["not_stopped_refusals"] += 1
+        else:
+            break
+        await _psleep(p, 0.5)
+    rec["reply"] = None if reply is None else {"t": reply.get("t"), "reason": reply.get("reason"),
+                                               "detail": reply.get("detail")}
+    if reply and reply.get("t") == "ack":
+        arm = await p.request("arm")
+        p.arm_gen = (arm or {}).get("arm_gen", 0)
+        rec["entered"] = bool(arm) and arm.get("t") == "ack"
+    rec["end_mono"] = clock()
+    p.report.setdefault("confirm", {}).setdefault("teleop_entries", []).append(rec)
+    return rec
+
+
+async def hold_teleop(p, label, seconds, speed_ratio, curvature_ratio, mode="direct", lift_dir=0, stop_after_s=None,
+                      clock=time.monotonic) -> dict:
+    """A command held for ``seconds`` wall s, dead man pressed, every 0.05 s (5.17 T1: the interval, its mode and
+    ratios are what the analysis reads the control ticks inside); with ``stop_after_s`` a STOP is sent that far in
+    (STOP-T, while moving) and the hold ends there. The truck is let come to a stand after it (zero command)."""
+    rec = {"label": label, "mode": mode, "deadman": True, "speed_ratio": speed_ratio, "curvature_ratio": curvature_ratio,
+           "lift_dir": int(lift_dir), "start_mono": clock(), "start_state": _pose_of(p.state)}
+    start = rec["start_mono"]
+    while clock() - start < seconds:
+        if stop_after_s is not None and clock() - start >= stop_after_s:
+            rec["stop"] = await confirm_stop(p, "T", clock=clock)
+            rec["end_mono"] = rec["stop"]["sent_mono"]
+            break
+        await p.teleop(speed_ratio, curvature_ratio, True, mode=mode, lift_dir=lift_dir)
+        await _psleep(p, 0.05)
+    else:
+        rec["end_mono"] = clock()
+    rec["end_state"] = _pose_of(p.state)
+    if "stop" not in rec:
+        stop_by = clock() + 15.0
+        while clock() < stop_by and not (p.state and p.standing(p.state)):
+            await p.teleop(0.0, 0.0, True, mode="direct")
+            await _psleep(p, 0.05)
+    p.report.setdefault("confirm", {}).setdefault("holds", []).append(rec)
+    return rec
+
+
+def _pose_of(s):
+    s = s or {}
+    pose = s.get("pose") or {}
+    return {"x_m": pose.get("x_m"), "y_m": pose.get("y_m"), "yaw_rad": pose.get("yaw_rad"), "lift_m": s.get("lift_m"),
+            "mode": s.get("mode"), "armed": s.get("armed")}
+
+
+async def command_expiry(p, factor, clock=time.monotonic) -> dict:
+    """5.17 T2 boundary test, apart from video expiry: drive forward on direct commands until moving, then send no
+    teleop command for 0.5/f wall s (the lease is kept by the background echo), and record what the vehicle shows."""
+    rec = {"silence_s": 0.5 / factor}
+    start = clock()
+    while clock() - start < 1.0:
+        await p.teleop(CONFIRM_FORWARD_RATIO, 0.0, True, mode="direct")
+        await _psleep(p, 0.05)
+    rec["moving_before"] = not p.standing(p.state or {})
+    rec["silence_start_mono"] = clock()
+    end = rec["silence_start_mono"] + rec["silence_s"]
+    while clock() < end:
+        await _psleep(p, 0.05)
+    rec["silence_end_mono"] = clock()
+    s = p.state or {}
+    rec["armed_after"] = s.get("armed")
+    rec["last_teleop_reject_after"] = s.get("last_teleop_reject")
+    rec["standing_after"] = p.standing(s)
+    p.report.setdefault("confirm", {})["expiry"] = rec
+    return rec
+
+
+async def confirm_scenario(p: Probe, args):
+    """5.17: one AUTO cycle P-1:D-1 with a STOP while moving in transport (then a short teleop while the mission
+    lives, loaded) and one while moving on the return, each rearmed and resumed; after the mission's result the
+    teleop block -- direct forward (a STOP inside it), reverse, left and right curves, lift up and down, video forward
+    and reverse -- and the command-expiry test; then the session ends."""
+    rep = p.report.setdefault("confirm", {})
+    rep["steps"] = []
+
+    def step(name, ok):
+        rep["steps"].append({"step": name, "ok": bool(ok), "mono": time.monotonic()})
+        return ok
+
+    await p.open()
+    await p.open_media()
+    await p.until(lambda s: True, 10, label="first_state")
+    lease = await p.request("lease_request")
+    p.lease_id = lease.get("lease_id") if lease else None
+    p.report["session"] = {"session_epoch": p.epoch, "lease_id": p.lease_id}
+    await p.until(lambda s: p.targets is not None, 10, label="targets")
+    await p.until(p.standing, 30, label="standing_at_start")
+    submit = None
+    for _ in range(20):
+        submit = await p.request("mission_submit", pallet_id="P-1", destination_id="D-1",
+                                 targets_revision=p.targets["targets_revision"])
+        if submit is None or submit.get("reason") not in ("not_stopped", "no_feedback:rear_axle_speed"):
+            break
+        await asyncio.sleep(0.5)
+    mission_id = (submit or {}).get("mission_id")
+    rep["submit"] = submit
+    if not step("submitted", mission_id):
+        return
+    seen = ((p.state or {}).get("last_result") or {}).get("seq", 0)
+
+    def ended(s):
+        r_ = s.get("last_result") or {}
+        return r_.get("seq", 0) > seen and r_.get("mission_id") == mission_id
+
+    def moving_in(phase):
+        return lambda s: (s.get("mission") or {}).get("phase") == phase and not p.standing(s) and s.get("mode") == "AUTO"
+
+    async def resume():
+        await p.until(p.standing, 10, label="standing_before_resume")
+        await asyncio.sleep(0.4)
+        r_ = await p.request_until_standing("mission_resume", mission_id=mission_id)
+        return step("resumed", r_ and r_.get("t") == "ack") and await p.until(lambda s: s.get("mode") == "AUTO", 10,
+                                                                              label="auto_again")
+
+    timeout = args.mission_timeout_s
+    # STOP-A1 in transport, moving; a short loaded teleop while the mission lives; resume
+    if step("transport_moving", await p.until(lambda s: moving_in("transport")(s) or ended(s), timeout,
+                                              label="transport_moving") and not ended(p.state)):
+        a1 = await confirm_stop(p, "A1")
+        if step("stop_A1", a1["rearm"] == "ack"):
+            entry = await confirm_enter_teleop(p)
+            if step("loaded_teleop_entry", entry["entered"]):
+                await hold_teleop(p, "loaded_forward", 2.0, CONFIRM_FORWARD_RATIO, 0.0)
+                await p.request("mode_request", to="PAUSED")
+            await resume()
+    # STOP-A2 on the return, moving; resume
+    if step("return_moving", await p.until(lambda s: moving_in("return_home")(s) or ended(s), timeout,
+                                           label="return_moving") and not ended(p.state)):
+        a2 = await confirm_stop(p, "A2")
+        if step("stop_A2", a2["rearm"] == "ack"):
+            await p.request("mode_request", to="PAUSED")
+            await resume()
+    end_by = time.monotonic() + timeout
+    while time.monotonic() < end_by and p.closed_code is None:
+        await p.until(lambda s: ended(s) or s.get("mode") == "STOPPED", end_by - time.monotonic(), label="mission_end")
+        if p.state is None or ended(p.state) or p.state.get("mode") != "STOPPED":
+            break
+        await p.until(p.standing, 20, label="standing_again")
+        await p.request_until_standing("rearm")
+        await p.request_until_standing("mission_resume", mission_id=mission_id)
+    rep["mission_result"] = (p.state or {}).get("last_result")
+    step("mission_ended", ended(p.state or {}))
+    # the teleop block, standing after the mission
+    entry = await confirm_enter_teleop(p)
+    if step("teleop_entry", entry["entered"]):
+        fwd = await hold_teleop(p, "forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, stop_after_s=1.5)
+        if "stop" in fwd:
+            entry = await confirm_enter_teleop(p)
+            step("teleop_reentry_after_stop", entry["entered"])
+        await hold_teleop(p, "reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0)
+        await hold_teleop(p, "left", 2.0, CONFIRM_FORWARD_RATIO, CONFIRM_CURVATURE_RATIO)
+        await hold_teleop(p, "right", 2.0, CONFIRM_FORWARD_RATIO, -CONFIRM_CURVATURE_RATIO)
+        await hold_teleop(p, "lift_up", 2.0, 0.0, 0.0, lift_dir=1)
+        await hold_teleop(p, "lift_down", 2.0, 0.0, 0.0, lift_dir=-1)
+        await hold_teleop(p, "video_forward", 3.0, CONFIRM_FORWARD_RATIO, 0.0, mode="video")
+        await hold_teleop(p, "video_reverse", 3.0, -CONFIRM_REVERSE_RATIO, 0.0, mode="video")
+        await command_expiry(p, args.live_factor)
+        await p.request("mode_request", to="PAUSED")
+    await p.until(p.standing, 20, label="standing_at_end")
+    if getattr(args, "end_session", False):
+        rep["session_end"] = await p.request_until_standing("session_end")
+
+
 async def hold_scenario(p, args):
     """B-P2d (start relocalization plan 4.4, 1.2 step 12): a relocalized session that reached running (the port file
     says so only after the localization) stands for --hold-sim-s of simulated time -- wall: that over --live-factor,
@@ -2210,7 +2426,7 @@ def main():
     ap.add_argument("--port-file", type=Path, required=True)
     ap.add_argument("--report", type=Path, required=True)
     ap.add_argument("--scenario", choices=("main", "slow", "marker", "approach", "planwait", "cycle", "queue", "lift", "reset",
-                                           "restart", "tour", "hold", "place", "reverse"),
+                                           "restart", "tour", "hold", "place", "reverse", "confirm"),
                     default="main")
     ap.add_argument("--manual-recovery", action="store_true",
                     help="cycle scenario (plan D14 U20 c): a mission ending recovery_required is recovered by hand "
@@ -2350,7 +2566,7 @@ def main():
                     "queue": queue_scenario,
                     "lift": lift_scenario, "reset": reset_scenario, "restart": restart_scenario,
                     "tour": tour_scenario, "hold": hold_scenario, "place": place_scenario,
-                    "reverse": reverse_scenario}[args.scenario]
+                    "reverse": reverse_scenario, "confirm": confirm_scenario}[args.scenario]
         asyncio.run(scenario(p, args))
         if ((args.scenario == "reset" and (report.get("reset") or {}).get("t") == "ack")
                 or (args.scenario == "restart" and "killed" in report)):
