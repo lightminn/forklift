@@ -2,7 +2,10 @@
 # Real-time plan 5.13 (baseline re-measure, measurement only): one live console session on the factory hall driven by
 # the console probe through one cycle mission (P-1:D-1, then the session ends), with the per-step trace on and a
 # CPU/GPU sampler beside it. Run from a snapshot root, as a tools/isaac_bundle.py list entry:
-#   LEVEL=off|video|views [FACTOR=1.0] bash .../rt_session.sh OUT
+#   LEVEL=off|video|views [FACTOR=1.0] [CATCHUP=0] [PHASE=k] [TRACE=1] bash .../rt_session.sh OUT
+#   CATCHUP: FORKLIFT_LIVE_CATCHUP_STEPS (plan D7; 0 = the default pacer), PHASE: FORKLIFT_LIVE_CAMERA_PHASE 0-11 (plan
+#   5.12 D12b; unset = the runtime's own count), TRACE=0: no tick trace (plan 5.15 G1's trace-cost run); all unset =
+#   the 5.13 runs exactly
 #   off:   no video (the live console's operating default)
 #   video: --video (the overview video, no extra views)
 #   views: --video --extra-views quarter,chase (the riib launcher's default views)
@@ -26,15 +29,20 @@ export EXTRA_ARGS="$VID --max-sim-seconds 1200 ${MORE:-}"
 # every live-loop switch at its default (plan 5.13 P2-7): only the trace is set; one epoch, never restarted by the
 # supervisor (a failed session is a missing run, not a retried one)
 for v in $(env | grep -oE '^FORKLIFT_LIVE_[A-Z_]+' || true); do unset "$v"; done
-export FORKLIFT_LIVE_TICK_TRACE=1 MAX_EPOCHS=1
+export MAX_EPOCHS=1
+case "${TRACE:-1}" in 1) export FORKLIFT_LIVE_TICK_TRACE=1 ;; 0) ;; *) echo "TRACE must be 0 or 1" >&2; exit 2 ;; esac
+case "${CATCHUP:-0}" in 0) ;; [1-9]|[1-9][0-9]) export FORKLIFT_LIVE_CATCHUP_STEPS=$CATCHUP ;; *) echo "CATCHUP must be 0-99" >&2; exit 2 ;; esac
+if [ -n "${PHASE:-}" ]; then
+  case "$PHASE" in [0-9]|10|11) export FORKLIFT_LIVE_CAMERA_PHASE=$PHASE ;; *) echo "PHASE must be 0-11" >&2; exit 2 ;; esac
+fi
 if [ "${DRY_RUN:-0}" = 1 ]; then
   grep -q "DRY_RUN" "$ROOT/deploy/console/isaac_live.sbatch" || { echo "DRY_RUN: no DRY_RUN in isaac_live.sbatch"; exit 2; }
   # the launcher prints RUNNER_ARGS and ARGS_OK
   DRY_RUN=1 bash "$ROOT/deploy/console/isaac_live.sbatch" "$OUT/live"; exit $?
 fi
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} session=${SESSION_ID:-} out=$OUT root=$ROOT level=$LEVEL factor=$FACTOR $(date -Is)"
-printf 'LEVEL=%s\nFACTOR=%s\nSEED=%s\nEXTRA_ARGS=%s\nSESSION_ID=%s\nBRIDGE_CPU=%s\nSLURM_JOB_ID=%s\nCPUS=%s\n' \
-  "$LEVEL" "$FACTOR" "$SEED" "$EXTRA_ARGS" "${SESSION_ID:-}" "${BRIDGE_CPU:-}" "${SLURM_JOB_ID:-}" \
+printf 'LEVEL=%s\nFACTOR=%s\nCATCHUP=%s\nPHASE=%s\nTRACE=%s\nSEED=%s\nEXTRA_ARGS=%s\nSESSION_ID=%s\nBRIDGE_CPU=%s\nSLURM_JOB_ID=%s\nCPUS=%s\n' \
+  "$LEVEL" "$FACTOR" "${CATCHUP:-0}" "${PHASE:-}" "${TRACE:-1}" "$SEED" "$EXTRA_ARGS" "${SESSION_ID:-}" "${BRIDGE_CPU:-}" "${SLURM_JOB_ID:-}" \
   "$(taskset -cp $$ | awk -F': ' '{print $2}')" > "$OUT/rt_conditions.txt"
 { env | grep -E '^(FORKLIFT_|OMP_|CUDA_)' | sort
   sha256sum "$0" "$HERE/rt_monitor.py" "$BASE_SCENE" "$FORKLIFT_URDF" "$ROOT/sim/isaac/run_transport.py"
