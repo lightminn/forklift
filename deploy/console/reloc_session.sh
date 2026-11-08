@@ -17,7 +17,11 @@
 #   reverse / reverse_place (docs/plans/2026-11-06-unconfirmed-validation.md 2.1): with POSE_CHECK on or shadow, the
 #   probe backs the truck up by the pressing rule REVERSE_KIND (full | half | chatter) and, with MISSION_AFTER_CONFIRM=1,
 #   runs the first pallet mission once confirmed (the shadow: after the strokes) and stands POST_MISSION_SIM_S (20)
-#   after it -- unattended, or after the placement as place does (reverse_place)
+#   after it -- unattended, or after the placement as place does (reverse_place); a mission after a placement is
+#   refused by the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md) unless F1_AUTONOMY=allow, which an
+#   approved run names (the value goes into the runner's recorded arguments)
+#   place_block (plan 2026-11-08 5): the placement as place, then the block check -- the refusals and teleop with
+#   F1_AUTONOMY block (default), the submit taken with allow; CYCLE's first leg is the mission tried (P-1:D-1)
 #
 # Run from the repository root.
 set -u
@@ -39,7 +43,11 @@ case "$PROBE_MODE" in
                                           --click-seed "${CLICK_SEED:-0}" --click-index "${CLICK_INDEX:-0}"
                                           --place-wait-s "${PLACE_WAIT_S:-600}"
                                           ${CLICK_KIND:+--click-kind "$CLICK_KIND"}) ;;
-  *) echo "RELOC_PROBE must be hold, place, reverse or reverse_place" >&2; exit 2 ;;
+  place_block) UNATTENDED=; PROBE_ARGS=(--scenario place --after-place block_check "--truth=$START_POSE"
+                                        --click-seed "${CLICK_SEED:-0}" --click-index "${CLICK_INDEX:-0}"
+                                        --place-wait-s "${PLACE_WAIT_S:-600}" --block-expect "${F1_AUTONOMY:-block}"
+                                        --cycle "${CYCLE:-P-1:D-1}") ;;
+  *) echo "RELOC_PROBE must be hold, place, place_block, reverse or reverse_place" >&2; exit 2 ;;
 esac
 case "$PROBE_MODE" in
   reverse|reverse_place)
@@ -107,4 +115,8 @@ term_relay_wait "$L"
 rc=$TERM_RELAY_RC
 echo "launcher exit $rc $(date -Is)"
 [ "$prc" -ne 0 ] && [ "$prc" -ne 3 ] && exit 4
+if [ "$PROBE_MODE" = place_block ]; then  # plan 2026-11-08 5: the vehicle's own records decide, after the session
+  "$VENV_PY" "$ROOT/tools/f1_block_judge.py" "$OUT" --expect "${F1_AUTONOMY:-block}" > "$OUT/f1_block_judge.log" 2>&1 \
+    || { echo "block check failed on the vehicle's records (f1_block_verdict.json)"; exit 6; }
+fi
 exit "$rc"

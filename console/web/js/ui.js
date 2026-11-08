@@ -6,7 +6,7 @@ import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES,
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
 import { bayCheckKey, candidateButtons, placeActions, relocActions, relocOf, relocSummary } from "./reloc.js";
-import { poseBand, poseCheckOf } from "./posecheck.js";
+import { poseBand, poseCheckOf, startBand } from "./posecheck.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
 
 const MODE_KO = { AUTO: "자동 주행", TELEOP: "수동 조종", PAUSED: "대기", STOPPED: "정지됨" };
@@ -234,6 +234,13 @@ export function render(m) {
     $("pose-text").textContent = band.text;
     $("pose-banner").title = band.title;
     $("pose-banner").classList.toggle("bad", band.tone === "bad");
+  }
+  // the vehicle-side F1 block (plan 2026-11-08 2.4): an operator-placed start, for the whole session
+  const startB = startBand(st);
+  $("start-banner").hidden = !startB;
+  if (startB) {
+    $("start-text").textContent = startB.text;
+    $("start-banner").title = startB.title;
   }
   // B-P2c: the start relocalization over the map, with the retry the operator may ask for
   const reloc = monitor ? null : relocOf(st);

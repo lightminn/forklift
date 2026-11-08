@@ -84,6 +84,9 @@ class Context:
     # live: the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 3.3): False while the start is
     # not confirmed -- a submit and a resume are refused pose_unconfirmed; True without the check
     pose_ok: bool = True
+    # live: the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.1): an operator-placed start -- a
+    # submit (a loaded one too) and a resume are refused operator_placed_start
+    start_blocked: bool = False
     # live: the pallet on the forks a submit may deliver as it is carried (plan D5 6c; the runner's conditions
     # met), else None -- a cargo_held refusal lets that one submit through as a loaded submit
     loaded_pallet: str | None = None
@@ -170,6 +173,8 @@ class MissionCommands:
             return "stopping"
         if context.scene_damaged:
             return "scene_damaged"
+        if context.start_blocked:
+            return "operator_placed_start"
         loaded = False
         if context.submit_refusal is not None:
             # plan D5 6c: the carried pallet itself, its conditions met, goes as a loaded submit
@@ -221,6 +226,8 @@ class MissionCommands:
             return "not_paused"
         if context.stop_kind != "none":
             return "stopping"
+        if context.start_blocked:
+            return "operator_placed_start"
         if not context.pose_ok:
             return "pose_unconfirmed"
         self.status = "resuming"

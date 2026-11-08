@@ -84,6 +84,9 @@ STOPPED_ALLOWED = {
 }
 # B-P2c: while the start is unknown nothing may move the truck or replace the scene (the live arbiter's RELOC_REFUSED)
 RELOC_REFUSED = {"arm", "mission_submit", "mission_resume", "recovery", "sim_reset"}
+# docs/plans/2026-11-08-f1-vehicle-block.md 2.1: an operator-placed start refuses what drives by the map (the live
+# arbiter's START_REFUSED, and AUTO) for the session; teleop stays open
+START_REFUSED = {"mission_submit", "mission_resume", "pick_request", "recovery"}
 INT_FIELDS = ("session_epoch", "control_gen", "arm_gen", "seq")
 LIFT_TOP_M = 0.28
 LIFT_CARRY_M = 0.12
@@ -247,6 +250,7 @@ class MockVehicle:
         self._submit_override = None  # queue plan D5 exception: the next submit meets a settling truck
         self.reloc = None  # B-P2c: an injected start relocalization (slam.reloc), None: the place is known
         self._reloc_due = None  # (when, what): the next relocalization step the fake takes by itself
+        self.start_block = None  # the vehicle-side F1 block, as the live runtime latches it (plan 2026-11-08 2.2)
 
     # ------------------------------------------------------------------ helpers
     def _now(self) -> float:
@@ -551,6 +555,7 @@ class MockVehicle:
             "stand_waiver": None,
             **(self._policy_override or {}),
             "plan": self._plan(),
+            **({} if self.start_block is None else {"start_block": dict(self.start_block)}),
             # B-P2c: while the start is unknown the pose is null and the relocalization rides the slam field
             **({} if self.reloc is None else {
                 "pose": None, "slam": {"mode": "localization", "map_id": "f" * 64, "map_loaded": True,
@@ -671,6 +676,8 @@ class MockVehicle:
         if self.reloc is not None and (t in RELOC_REFUSED
                                        or (t == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
             return self._reply(msg, reason="relocalizing")
+        if self.start_block is not None and (t in START_REFUSED or (t == "mode_request" and msg.get("to") == "AUTO")):
+            return self._reply(msg, reason="operator_placed_start")
         handler = getattr(self, "_req_" + t)
         return handler(msg)
 
@@ -1048,7 +1055,7 @@ class MockVehicle:
             return self._reply(msg, reason="reloc_stale_pick")
         x, y, yaw = r["preview"]
         r.update(state="localizing", candidates=[], generation=r["generation"] + 1)
-        self._reloc_due = (self._now() + 2.0, ("localized", x, y, yaw))
+        self._reloc_due = (self._now() + 2.0, ("localized", x, y, yaw, "operator_placed"))
         return self._reply(msg)
 
     def _req_relocalize_retry(self, msg: dict) -> dict:
@@ -1090,6 +1097,9 @@ class MockVehicle:
                 r.update(state=r.get("stage", "awaiting_pick"), place_reason="low_fit")
         else:  # localized: the place is known, the session goes on as usual
             self.pose = replace(self.pose, x_m=what[1], y_m=what[2], yaw_rad=what[3])
+            if len(what) > 4 and what[4] == "operator_placed" and self.start_block is None:
+                self.start_block = {"reason": "operator_placed_start", "source": "operator_placed",
+                                    "since_mono": now}
             self.reloc = None
 
     def inject(self, kind: str) -> None:

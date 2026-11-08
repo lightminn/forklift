@@ -29,7 +29,7 @@ from forklift_core.live.pacing import Pacer
 from forklift_core.mission.commands import FINAL, Context
 from forklift_core.mission.results import ResultsBook
 from forklift_core.perf import TIMERS
-from forklift_core.safety.arbiter import Arbiter, ArbiterConfig, Feedback
+from forklift_core.safety.arbiter import START_BLOCK_REASON, Arbiter, ArbiterConfig, Feedback
 from forklift_core.safety.state import state_message
 
 
@@ -116,8 +116,13 @@ class LiveRuntime:
                  test_stop_in_capture: bool = False, camera_pixel_lag_s: float = 0.0,
                  camera_model: dict | None = None, catchup_steps: int = 0, end: EndHooks | None = None,
                  port: int = 0, supervised: bool = False, log_rotate_bytes: int = 200_000_000, log_keep: int = 3,
-                 trace=None, parts: ConsoleParts | None = None):
+                 trace=None, parts: ConsoleParts | None = None, start_block: tuple | None = None):
         self.core, self.hooks, self.clock, self.sleep = core, hooks, clock, sleep
+        # the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.2): (reason, source) as the runner
+        # decided it (start_reloc.autonomy_block), latched in start() before the relocalization is let go
+        if start_block is not None and start_block[0] != START_BLOCK_REASON:
+            raise ValueError(f"the start block's reason must be {START_BLOCK_REASON!r}, not {start_block[0]!r}")
+        self._start_block = start_block
         self.trace = trace  # real-time plan 5.12 D12a: a TickTrace on this clock, or None (nothing recorded)
         self.end = end or EndHooks()
         self.results = ResultsBook()  # the session's mission outcomes (persistent console plan D1 step 9)
@@ -208,6 +213,8 @@ class LiveRuntime:
 
     # --- lifecycle -------------------------------------------------------------------------------------------------
     def start(self) -> int:
+        if self._start_block is not None:  # before the server opens or the relocalization is let go: no gap
+            self.arbiter.block_start(self._start_block[1], self.clock())
         if self.parts is None:
             port = self.server.start()
             self.started_wall = time.time()
@@ -387,7 +394,8 @@ class LiveRuntime:
                                                       scene_damaged=self.scene["damaged"] is not None,
                                                       localization_ok=localization_ok,
                                                       loaded_pallet=loaded_pallet,
-                                                      repick_blockers=repick_blockers, pose_ok=pose_ok))
+                                                      repick_blockers=repick_blockers, pose_ok=pose_ok,
+                                                      start_blocked=self.arbiter.start_block is not None))
         self.collect_end(t)  # ended in this apply (a cancel before it ran, a stopped preparation)
         self._note_archive_errors()
         self._flush(t)
@@ -555,6 +563,8 @@ class LiveRuntime:
                 msg["slam"] = dict(self.slam_info)
             if self.pose_info is not None:  # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 4)
                 msg["pose_check"] = dict(self.pose_info)
+            if self.arbiter.start_block is not None:  # the vehicle-side F1 block (plan 2026-11-08 2.4)
+                msg["start_block"] = dict(self.arbiter.start_block)
             self.channels.put(None, msg)
         targets = self.core.targets
         if targets.revision != self._targets_revision:

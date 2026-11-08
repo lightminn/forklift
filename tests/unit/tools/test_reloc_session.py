@@ -21,7 +21,8 @@ def _fakes(tmp_path, probe_rc: int, launcher_s: float):
                         f"echo \"$RELOC_UNATTENDED $MAX_EPOCHS $START_POSE\" > \"$1/launcher_env\"\n"
                         f"for i in $(seq 1 {int(launcher_s * 10)}); do sleep 0.1; done\nexit 0\n")
     python = tmp_path / "python"
-    python.write_text(f"#!/bin/bash\necho \"$@\" > {tmp_path}/probe_args\n"
+    python.write_text(f"#!/bin/bash\ncase \"$1\" in *f1_block_judge.py) echo \"$@\" > {tmp_path}/judge_args; "
+                      f"exit ${{JUDGE_RC:-0}};; esac\necho \"$@\" > {tmp_path}/probe_args\n"
                       f"for i in $(seq 1 400); do [ -e {tmp_path}/out/launcher_ready ] && break; sleep 0.05; done\n"
                       f"exit {probe_rc}\n")
     python.chmod(0o755)
@@ -155,3 +156,32 @@ def test_a_reverse_session_needs_the_check_and_a_known_rule(tmp_path):
                   {"RELOC_PROBE": "reverse", "POSE_CHECK": "on", "REVERSE_KIND": "long"}):
         p = _session(tmp_path, **extra)
         assert p.returncode == 2, (extra, p.stdout + p.stderr)
+
+
+def test_a_place_block_session_places_then_checks_the_block(tmp_path):
+    # docs/plans/2026-11-08-f1-vehicle-block.md 5: attended, the placement, then the block check with the vehicle's
+    # setting as the expectation and the first CYCLE leg as the mission tried
+    p = _session(tmp_path, RELOC_PROBE="place_block", CLICK_SEED="5")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (tmp_path / "out" / "launcher_env").read_text().split() == ["1", "1,2,3"]  # attended
+    args = (tmp_path / "probe_args").read_text().split()
+    assert args[args.index("--after-place") + 1] == "block_check" and args[args.index("--block-expect") + 1] == "block"
+    assert args[args.index("--cycle") + 1] == "P-1:D-1"
+    (tmp_path / "b").mkdir()
+    p = _session(tmp_path / "b", RELOC_PROBE="place_block", F1_AUTONOMY="allow", CYCLE="P-2:D-1")
+    assert p.returncode == 0, p.stdout + p.stderr
+    args = (tmp_path / "b" / "probe_args").read_text().split()
+    assert args[args.index("--block-expect") + 1] == "allow" and args[args.index("--cycle") + 1] == "P-2:D-1"
+
+
+def test_a_place_block_session_ends_with_the_vehicles_verdict(tmp_path):
+    p = _session(tmp_path, RELOC_PROBE="place_block")
+    assert p.returncode == 0, p.stdout + p.stderr
+    judge = (tmp_path / "judge_args").read_text().split()
+    assert judge[judge.index("--expect") + 1] == "block" and judge[1] == str(tmp_path / "out")
+    (tmp_path / "f").mkdir()
+    q = _session(tmp_path / "f", RELOC_PROBE="place_block", JUDGE_RC="1")
+    assert q.returncode == 6 and "block check failed" in q.stdout
+    (tmp_path / "h").mkdir()
+    assert _session(tmp_path / "h", RELOC_PROBE="place")  # no judge for the other modes
+    assert not (tmp_path / "h" / "judge_args").exists()

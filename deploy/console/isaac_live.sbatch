@@ -53,6 +53,9 @@
 #   with START_POSE; on needs POSE_CHECK_BOUNDS (the development values' JSON file), shadow takes none.
 #   POSE_CHECK_CONTACTS=1 records every forklift body's contacts. RELOC_INJECT (test only: a wrong-estimate injection,
 #   reloc_phase.INJECT_KINDS) only in an unattended relocalization (RELOC_UNATTENDED=1) with the check on or shadow.
+#   F1_AUTONOMY (block|allow; docs/plans/2026-11-08-f1-vehicle-block.md, lead 2026-11-08): with START_POSE, unset is
+#   block -- an operator-placed start (or one of unknown source) refuses AUTO and missions for the epoch, teleop open;
+#   allow only for an approved development run (the value is in the launch log and the runner's recorded arguments).
 #
 # Run from the repository root. Open the console through   ssh -N -L 8798:127.0.0.1:$PORT <host>.
 set -u
@@ -84,6 +87,10 @@ case "$RELOC_WAIT_S" in ''|*[!0-9]*) echo "RELOC_WAIT_S must be whole seconds"; 
 [ "$RELOC_WAIT_S" -gt 60 ] || { echo "RELOC_WAIT_S must be over 60 s (the operator's time is 60 s less)"; exit 2; }
 POSE_CHECK=${POSE_CHECK:-off}
 case "$POSE_CHECK" in off|shadow|on) ;; *) echo "POSE_CHECK must be off, shadow or on" >&2; exit 2;; esac
+# the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.5, lead 2026-11-08): unset, block; allow only
+# for approved development runs (an unconfirmed-position run with a mission after a placement); set but empty: refused
+F1_AUTONOMY=${F1_AUTONOMY-block}
+case "$F1_AUTONOMY" in block|allow) ;; *) echo "F1_AUTONOMY must be block or allow" >&2; exit 2;; esac
 if [ "$POSE_CHECK" != off ] && [ -z "${START_POSE:-}" ]; then
   echo "POSE_CHECK=$POSE_CHECK needs START_POSE (the check follows the start relocalization)" >&2; exit 2
 fi
@@ -149,6 +156,7 @@ else
 fi
 echo "slam: $SLAM_CHOICE"
 echo "start: $START_MODE"
+[ -n "${START_POSE:-}" ] && echo "F1_AUTONOMY=$F1_AUTONOMY (an operator-placed start: block refuses AUTO and missions)"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
@@ -166,6 +174,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
+  printf 'F1_AUTONOMY=%q\n' "$F1_AUTONOMY"  # the vehicle-side F1 block (plan 2026-11-08 2.5)
   printf 'SLAM_CHOICE=%q\n' "$SLAM_CHOICE"  # the runner shows it on the console (live-default plan 5d)
   printf 'POSE_CHECK=%q\nPOSE_CHECK_BOUNDS=%q\nPOSE_CHECK_CONTACTS=%q\nRELOC_INJECT=%q\n' "$POSE_CHECK" \
     "${POSE_CHECK_BOUNDS:-}" "$POSE_CHECK_CONTACTS" "${RELOC_INJECT:-}"  # plan 2026-11-06-unconfirmed-validation 2
@@ -222,6 +231,7 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
+[ -n "${START_POSE:-}" ] && RELOC+=(--operator-placed-auto "${F1_AUTONOMY:-block}")  # plan 2026-11-08 2.5
 POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
 [ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
 [ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
