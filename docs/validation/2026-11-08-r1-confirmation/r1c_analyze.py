@@ -1,6 +1,9 @@
 """Real-time plan 5.17 R1 confirmation: the registered measures T1-T6 per session and the per-branch rules.
 
-    PYTHONPATH=SNAP/src python r1c_analyze.py SNAP R1C_DIR --list R1C.jsonl [--json out.json]
+    PYTHONPATH=SNAP/src python SNAP/docs/validation/2026-11-08-r1-confirmation/r1c_analyze.py R1C_DIR --list R1C.jsonl \
+        [--json out.json]
+
+The snapshot is the checkout this file sits in (its tick_trace, forklift_core and tools/live_marker_lag.py are used).
 
 R1C_DIR holds one folder per session (r1c_session.sh's OUT, args.txt naming SET, ARM and FACTOR); the bundle list
 names the registered sessions -- a verdict is given only when every registered session of its branch is there and
@@ -45,7 +48,7 @@ from pathlib import Path
 
 import numpy as np
 
-SNAP = Path(sys.argv[1]).resolve()
+SNAP = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(SNAP / "sim" / "isaac"))
 sys.path.insert(0, str(SNAP / "src"))
 from tick_trace import COLUMNS  # noqa: E402
@@ -59,7 +62,11 @@ PIXEL_LAG_S_DEFAULT_PLUS_STEP = 0.2 + 1 / 120  # (--live-camera-pixel-lag-s 0.2 
 DISTANCE = {"forward": 0.15 * 1.5, "reverse": 0.15 * 3.0, "video_forward": 0.15 * 3.0, "video_reverse": 0.15 * 3.0}
 HEADING = {"left": 0.18 * 0.15 * 2.0, "right": 0.18 * 0.15 * 2.0}
 LIFT = {"lift_up": 0.02 * 2.0, "lift_down": 0.02 * 2.0}
-REQUIRED_HOLDS = tuple(DISTANCE) + tuple(HEADING) + tuple(LIFT)
+HEADING_SIGN = {"left": 1.0, "right": -1.0}  # a positive curvature turns left (yaw grows)
+LIFT_SIGN = {"lift_up": 1.0, "lift_down": -1.0}
+REQUIRED_HOLDS = ("loaded_forward",) + tuple(DISTANCE) + tuple(HEADING) + tuple(LIFT)
+# the arm's profile as the wrapper pins it (plan 5.17): catch-up, camera phase ("" = unset, the legacy rule)
+PROFILE = {"L": ("0", ""), "K": ("6", ""), "KP": ("6", "6")}
 
 
 def read_args(out: Path) -> dict:
@@ -129,6 +136,20 @@ class Session:
             self.joint = spool_group(self.run / "spool", "slam_log.joint")
         except (OSError, ValueError) as exc:
             self.invalid.append(f"spool: {exc}")
+        want = PROFILE.get(self.arm)
+        got = (self.args.get("FORKLIFT_LIVE_CATCHUP_STEPS", ""), self.args.get("FORKLIFT_LIVE_CAMERA_PHASE", ""))
+        if want is None or got != want:
+            self.invalid.append(f"profile {got} is not arm {self.arm}'s {want}")
+        self.mission_records = None
+        mid = (self.confirm.get("submit") or {}).get("mission_id")
+        if self.set in ("far", "off"):
+            rec = self.run / "missions" / str(mid) / "records.json"
+            try:
+                self.mission_records = json.loads(rec.read_text()) if mid else None
+            except (OSError, ValueError):
+                self.mission_records = None
+            if mid and self.mission_records is None:
+                self.invalid.append(f"mission {mid}: records.json missing or unreadable")
 
     # --- clocks ------------------------------------------------------------------------------------------------------
     def row_at_mono(self, mono):
@@ -173,13 +194,17 @@ class Session:
             stamps, rates, _ = self.joint_arrays()
             still = rates < STILL_RAD_S
             for k in np.flatnonzero(stamps > self.start_sim(i0)):
+                r = self.row_of_end_stamp(stamps[k])
+                if not self.trace[r, C["world_end"]] >= proc:
+                    continue  # a step that ended before the STOP was processed is not its stop (Codex round 2 P2)
                 end = stamps[k] + STILL_SIM_S
                 if stamps[-1] < end - 1e-9:
                     break  # the window's end was never observed
                 win = (stamps >= stamps[k]) & (stamps <= end + 1e-9)
                 if still[win].all():
-                    r = self.row_of_end_stamp(stamps[k])
-                    out["processed_to_still_s"] = float(self.trace[r, C["world_end"]] - proc)
+                    v = float(self.trace[r, C["world_end"]] - proc)
+                    if math.isfinite(v) and v >= 0:
+                        out["processed_to_still_s"] = v
                     break
         return out
 
@@ -262,14 +287,9 @@ class Session:
         out["failed_after_resume"] = res.get("outcome") not in (None, "done") and bool(steps.get("resumed"))
         r = self.result or {}
         ol = r.get("obstacle_layer") or {}
-        mission_contacts = 0
-        for rec in sorted((self.run / "missions").glob("*/records.json")):
-            try:
-                mission_contacts += len(((json.loads(rec.read_text()).get("state") or {})
-                                         .get("forbidden_pocket_contacts")) or [])
-            except (OSError, ValueError):
-                mission_contacts = None
-                break
+        mission_contacts = None
+        if self.mission_records is not None:
+            mission_contacts = len(((self.mission_records.get("state") or {}).get("forbidden_pocket_contacts")) or [])
         out["safety"] = {"forbidden_contacts_run": len(r.get("forbidden_pocket_contacts") or []),
                          "forbidden_contacts_missions": mission_contacts,
                          "unpermitted_entries": ol.get("unpermitted_entries"),
@@ -365,6 +385,10 @@ def verdict(rows, expected, branch, factor, candidate):
     if factor == 0.4:
         want += [n for n, (s_, a_, f_) in expected.items() if s_ == "wall" and a_ in ("L", candidate)]
     by = {r["name"]: r for r in rows}
+    mismatch = [n for n in want if n in by and (by[n]["set"], by[n]["arm"], by[n]["factor"])
+                != (expected[n][0], expected[n][1], float(expected[n][2]))]
+    if mismatch:
+        return {"verdict": "invalid (conditions differ from the list)", "why": mismatch}
     missing = [n for n in want if n not in by or by[n]["invalid"]]
     if missing:
         return {"verdict": "pending (supplement)", "why": missing}
@@ -376,20 +400,20 @@ def verdict(rows, expected, branch, factor, candidate):
     if done(L) < need:
         return {"verdict": "undecidable", "why": [f"baseline completed {done(L)} < {need}"]}
     for label in REQUIRED_HOLDS:
-        if len(holds(L, label)) < len(L):
+        if len(holds(L, label)) < need:
             return {"verdict": "undecidable", "why": [f"baseline hold missing: {label}"]}
     for label, cmd in DISTANCE.items():
         if np.median([abs(h.get("distance_m") or 0) for h in holds(L, label)]) < 0.5 * cmd:
             return {"verdict": "undecidable", "why": [f"baseline exposure short: {label}"]}
     for label, cmd in HEADING.items():
-        if np.median([abs(h.get("heading_change_rad") or 0) for h in holds(L, label)]) < 0.5 * cmd:
+        if np.median([HEADING_SIGN[label] * (h.get("heading_change_rad") or 0) for h in holds(L, label)]) < 0.5 * cmd:
             return {"verdict": "undecidable", "why": [f"baseline exposure short: {label}"]}
     for label, cmd in LIFT.items():
-        if np.median([abs(h.get("lift_change_m") or 0) for h in holds(L, label)]) < 0.5 * cmd:
+        if np.median([LIFT_SIGN[label] * (h.get("lift_change_m") or 0) for h in holds(L, label)]) < 0.5 * cmd:
             return {"verdict": "undecidable", "why": [f"baseline exposure short: {label}"]}
     # the candidate's exposure: every required check in at least two sessions
-    exp_k = [r["T2"]["boundary"] for r in K if (r.get("T2") or {}).get("boundary")]
-    short = [lab for lab in ("A1", "A2", "T") if len(stops(K, lab)) < 2]
+    exp_k = [r["T2"]["boundary"] for r in K if ((r.get("T2") or {}).get("boundary") or {}).get("moving_before")]
+    short = [lab for lab in ("A1", "A2", "T") if len([x for x in stops(K, lab) if x.get("moving_at_send")]) < 2]
     short += [lab for lab in REQUIRED_HOLDS if len(holds(K, lab)) < 2]
     short += ["expiry"] if len(exp_k) < 2 else []
     if short:
@@ -427,14 +451,14 @@ def verdict(rows, expected, branch, factor, candidate):
         ll = max((x.get("lateral_max_m") or 0 for x in holds(L, label)), default=0)
         if any(x.get("lateral_max_m") is None or x["lateral_max_m"] > ll + 0.03 for x in holds(K, label)):
             why.append(f"R-c lateral {label}")
-    for label in HEADING:
-        hl = np.median([abs(x.get("heading_change_rad") or 0) for x in holds(L, label)])
-        if any(x.get("heading_change_rad") is None or abs(abs(x["heading_change_rad"]) - hl) > 0.25 * hl
+    for label in HEADING:  # signed: a turn the other way is not the same turn (Codex round 2 P2)
+        hl = np.median([x.get("heading_change_rad") or 0 for x in holds(L, label)])
+        if any(x.get("heading_change_rad") is None or abs(x["heading_change_rad"] - hl) > 0.25 * abs(hl)
                for x in holds(K, label)):
             why.append(f"R-c heading {label}")
     for label in LIFT:
-        ml = np.median([abs(x.get("lift_change_m") or 0) for x in holds(L, label)])
-        if any(x.get("lift_change_m") is None or abs(abs(x["lift_change_m"]) - ml) > 0.10 * ml for x in holds(K, label)):
+        ml = np.median([x.get("lift_change_m") or 0 for x in holds(L, label)])
+        if any(x.get("lift_change_m") is None or abs(x["lift_change_m"] - ml) > 0.10 * abs(ml) for x in holds(K, label)):
             why.append(f"R-c lift {label}")
     # R-d
     norm = lambda rs: sum(sum((r.get("T2") or {}).get("normal", {}).values()) for r in rs)  # noqa: E731
@@ -475,9 +499,10 @@ def verdict(rows, expected, branch, factor, candidate):
     ok = lambda r: (r.get("T5") or {}).get("auto_ok_share_after_first")  # noqa: E731
     ratio = lambda r: (r.get("T5") or {}).get("auto_ratio")  # noqa: E731
 
-    def blocked(r):
-        v = [x["pacing_blocked_tick_share"] for x in r.get("T1") or [] if "pacing_blocked_tick_share" in x]
-        return float(np.mean(v)) if v else None
+    def blocked(r):  # pooled over every hold's ticks (the registered share of control ticks)
+        n = sum(x["ticks"] for x in r.get("T1") or [] if "pacing_blocked_tick_share" in x)
+        b = sum(x["ticks"] * x["pacing_blocked_tick_share"] for x in r.get("T1") or [] if "pacing_blocked_tick_share" in x)
+        return b / n if n else None
     gains = []
     if None not in (med(K, ok), med(L, ok)) and med(K, ok) >= med(L, ok) + 0.02:
         gains.append("ok")
@@ -490,7 +515,6 @@ def verdict(rows, expected, branch, factor, candidate):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("snap")
     ap.add_argument("r1c", type=Path)
     ap.add_argument("--list", type=Path, required=True, help="the registered bundle list (r1c_lists.py)")
     ap.add_argument("--json", type=Path)
