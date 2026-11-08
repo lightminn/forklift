@@ -170,3 +170,45 @@ def test_main_with_a_mission_still_active_rearms_cancels_waits_for_its_end_and_t
     assert p2.report["end_active"]["cancel"]["t"] == "ack" and p2.report["end_active"]["cancel_ended"]
     assert p2.requests[-1] == "session_end" and p2.report["close_code"] == 1000
     assert p2.requests[-3:] == ["mission_cancel", "lease_request", "session_end"]
+
+
+def test_a_cancel_that_becomes_a_paused_recovery_is_resumed_until_the_mission_is_final(monkeypatch):
+    # Codex: forks in a pocket -- paused -> cancelling -> recovering -> paused (the PAUSED mode pauses the recovery);
+    # nothing moves until it is resumed, as the cycle path's U30 handling does
+    clock = Clock()
+    monkeypatch.setattr(lcp, "time", clock)
+
+    async def fake_sleep(s):
+        clock.t += s
+
+    monkeypatch.setattr(lcp.asyncio, "sleep", fake_sleep)
+
+    class Recovering(MainProbe):
+        async def request(self, kind, timeout=5.0, **fields):
+            out = await super().request(kind, timeout, **fields)
+            if kind == "mission_cancel":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelling", "phase": "insert"})
+            if kind == "mission_resume" and (self.state.get("mission") or {}).get("status") == "paused":
+                self.state = dict(self.state, mission={"mission_id": "m1", "status": "recovering",
+                                                       "phase": "recover_insert"})
+            return out
+
+        async def request_until_standing(self, kind, tries=20, **fields):
+            return await self.request(kind, **fields)
+
+        async def until(self, pred, timeout, label=""):
+            self.labels.append(label)
+            m = self.state.get("mission") or {}
+            if label == "end_cancel_ended":
+                if m.get("status") == "cancelling":  # the recovery stands paused in PAUSED
+                    self.state = dict(self.state, mission={"mission_id": "m1", "status": "paused",
+                                                           "phase": "recover_insert"})
+                elif m.get("status") == "recovering":  # resumed: the recovery ends the cancel
+                    self.state = dict(self.state, mission={"mission_id": "m1", "status": "cancelled"})
+            return pred(self.state)
+
+    p = Recovering()
+    p.state = dict(p.state, mode="PAUSED", mission={"mission_id": "m1", "status": "paused", "phase": "insert"})
+    out = asyncio.run(lcp.end_active_mission(p, "m1"))
+    assert p.requests == ["mission_cancel", "mission_resume"]
+    assert out["recovery_resume"]["t"] == "ack" and out["cancel_ended"] is True

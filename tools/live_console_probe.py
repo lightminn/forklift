@@ -945,8 +945,29 @@ async def end_active_mission(p: Probe, mission_id) -> dict:
         out["rearm"] = await p.request_until_standing("rearm")
         out["rearmed"] = await p.until(lambda s: s.get("mode") != "STOPPED", 5.0, label="end_rearmed")
     out["cancel"] = await p.request("mission_cancel", mission_id=mission_id)
-    out["cancel_ended"] = bool(out["cancel"] and out["cancel"].get("t") == "ack") and await p.until(
-        lambda s: mission_over(s, mission_id), 120.0, label="end_cancel_ended")
+    out["cancel_ended"] = False
+    if not (out["cancel"] and out["cancel"].get("t") == "ack"):
+        return out
+
+    def paused_recovery(s):
+        # the cancel stood with the forks in a pocket (or short of clearance: clear_out) and became a recovery, which
+        # the PAUSED mode pauses at once -- as the cycle path's U30 handling, it is resumed once (Codex v2 H1 P2)
+        m = s.get("mission") or {}
+        phase = str(m.get("phase") or "")
+        return (m.get("mission_id") == mission_id and m.get("status") == "paused"
+                and (phase.startswith("recover_") or phase == "clear_out"))
+
+    stop_by = time.monotonic() + 120.0
+    while time.monotonic() < stop_by and p.closed_code is None:
+        hit = await p.until(lambda s: mission_over(s, mission_id) or (paused_recovery(s) and "recovery_resume" not in out),
+                            max(0.0, stop_by - time.monotonic()), label="end_cancel_ended")
+        if p.state is not None and mission_over(p.state, mission_id):
+            out["cancel_ended"] = True
+            break
+        if not hit:
+            break
+        if p.state is not None and paused_recovery(p.state) and "recovery_resume" not in out:
+            out["recovery_resume"] = await p.request_until_standing("mission_resume", mission_id=mission_id)
     return out
 
 
