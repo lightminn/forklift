@@ -212,11 +212,13 @@ def block(K, w, interval, eps, wait, parts, replies, h, data) -> dict:
 
     order = sorted(gains, key=lambda p: -gains[p])
     near_lo, near_hi = near_set(gains, False), near_set(gains_hi, True)
-    # confirmed only when both ends agree and no part inside the set has a gain range overlapping one outside it
-    # (any allocation of a missing part could reorder them; Codex round 5 P2)
-    overlap = near_lo is not None and any(gains[x] <= gains_hi[y] and gains[y] <= gains_hi[x]
-                                          for x in near_lo for y in gains if y not in near_lo)
-    near = near_lo if near_lo == near_hi and not overlap else {"uncertain": [near_lo, near_hi]}
+    # confirmed only when both ends agree and every rank up to one past the set is confirmed (its gain range overlaps
+    # no other part's): an allocation of a missing part could reorder inside the set as well as across its edge
+    # (Codex rounds 5-6 P2)
+    confirmed = {o: not any(gains[o] <= gains_hi[x] and gains[x] <= gains_hi[o] for x in gains if x != o)
+                 for o in gains}
+    edge = order[:len(near_lo) + 1] if near_lo is not None else order
+    near = near_lo if near_lo == near_hi and all(confirmed[o] for o in edge) else {"uncertain": [near_lo, near_hi]}
     kinds = kind_of(data[K, C["flags"]])
     phase = data[K, C["tick"]].astype(int) % 12
     over = np.maximum(W - h, 0)
