@@ -31,7 +31,7 @@ export EXTRA_ARGS="$VID --max-sim-seconds 1200 ${MORE:-}"
 for v in $(env | grep -oE '^FORKLIFT_LIVE_[A-Z_]+' || true); do unset "$v"; done
 export MAX_EPOCHS=1
 case "${TRACE:-1}" in 1) export FORKLIFT_LIVE_TICK_TRACE=1 ;; 0) ;; *) echo "TRACE must be 0 or 1" >&2; exit 2 ;; esac
-case "${CATCHUP:-0}" in 0) ;; [1-9]|[1-9][0-9]) export FORKLIFT_LIVE_CATCHUP_STEPS=$CATCHUP ;; *) echo "CATCHUP must be 0-99" >&2; exit 2 ;; esac
+case "${CATCHUP:-0}" in 0) ;; [1-9]|1[0-2]) export FORKLIFT_LIVE_CATCHUP_STEPS=$CATCHUP ;; *) echo "CATCHUP must be 0-12 (the runner's range)" >&2; exit 2 ;; esac
 if [ -n "${PHASE:-}" ]; then
   case "$PHASE" in [0-9]|10|11) export FORKLIFT_LIVE_CAMERA_PHASE=$PHASE ;; *) echo "PHASE must be 0-11" >&2; exit 2 ;; esac
 fi

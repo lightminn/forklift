@@ -47,7 +47,8 @@ def load(trace_root: Path, run: dict):
     eps = np.r_[S[1:] - (q[1:] + d[1:]), np.nan]
     K = (sim >= t0) & (sim_next <= t1) & np.isfinite(w) & np.isfinite(interval)
     nx = data[np.r_[np.arange(1, len(data)), len(data) - 1]]
-    parts = {"world": data[:, C["world_end"]] - data[:, C["world_start"]],
+    parts = {"to_step_end": data[:, C["step_end"]] - S,
+             "world": data[:, C["world_end"]] - data[:, C["world_start"]],
              "step_rest": data[:, C["step_end"]] - data[:, C["world_end"]],
              "after": data[:, C["after_end"]] - data[:, C["step_end"]],
              "control": nx[:, C["ctrl_end"]] - nx[:, C["ctrl_start"]]}
@@ -60,19 +61,31 @@ def load(trace_root: Path, run: dict):
             "rendered": rendered[idx], "scan": scan[idx]}
 
 
-def replay(w, eps, catchup):
+def replay(w, eps, catchup, to_step_end=None, with_ok=False):
+    """The ratio over the replayed steps; with_ok: also the share of steps with ``ok`` after the first ``ok``.
+    ``after_step`` is called where the runtime calls it -- after step_world, before the camera read and the next
+    control tick (``to_step_end`` of each step, clipped to its W; Codex G1 review P2) -- and ``ok`` is read as the
+    next control tick sees it."""
     p = Pacer(1.0, DT, catchup_steps=catchup)
     t = 0.0
     t_first = None
-    for wi, ei in zip(w, eps):
+    oks = []
+    for i, (wi, ei) in enumerate(zip(w, eps)):
         sleep = p.wait_s(t)
         t += sleep + (ei if sleep > 0 else 0.0)
         p.started(t)
         if t_first is None:
             t_first = t
+        mid = wi if to_step_end is None else min(max(to_step_end[i], 0.0), wi)
+        p.after_step(t + mid)
+        oks.append(p.ok)
         t += wi
-        p.after_step(t)
-    return len(w) * DT / (t - t_first)
+    ratio = len(w) * DT / (t - t_first)
+    if not with_ok:
+        return ratio
+    oks = np.array(oks)
+    first = int(np.argmax(oks)) if oks.any() else None
+    return ratio, (None if first is None else float(oks[first:].mean()))
 
 
 def transformed(r, split=False, scan=1.0, ctrl=1.0):
@@ -109,6 +122,8 @@ def main() -> int:
         for label, kw in cases:
             w = transformed(r, **kw)
             row = " ".join(f"k{k}={replay(w, r['eps'], k):.3f}" for k in (0, 6, 12, 24, 120))
+            ratio6, ok6 = replay(w, r["eps"], 6, r["parts"]["to_step_end"], with_ok=True)
+            row += f"  | k6 ok-share {ok6 if ok6 is None else round(ok6, 3)}"
             print(f"   {label:24s} mean W/h {np.mean(w) / DT:.3f}  {row}")
     return 0
 
