@@ -1,0 +1,17 @@
+{
+ "expect": "allow",
+ "run": "/home/projects/forklift/test_runs/f1_block/f1b_ecf5f3d5/val4_002_allow/epoch_1/run",
+ "checks": {
+  "probe_pass": true,
+  "one_epoch": true,
+  "source_operator_placed": true,
+  "argument_applied": true,
+  "decision_recorded": true,
+  "log_whole": true,
+  "ticks_logged": true,
+  "mission_made": true
+ },
+ "auto_ticks": 2,
+ "verdict": "pass",
+ "failed": []
+}

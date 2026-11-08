@@ -101,6 +101,7 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
+[ -n "${START_POSE:-}" ] && RELOC+=(--operator-placed-auto "${F1_AUTONOMY:-block}")  # plan 2026-11-08 2.5
 POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
 [ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
 [ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")

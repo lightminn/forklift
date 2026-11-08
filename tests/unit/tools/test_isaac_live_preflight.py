@@ -313,3 +313,28 @@ def test_the_unconfirmed_position_check_reaches_the_runner(tmp_path):
                 {"START_POSE": "4.0,3.0,-2.0", "POSE_CHECK": "shadow", "RELOC_INJECT": "turn"}):  # attended
         q = _relocalizing(tmp_path, **bad)
         assert q.returncode == 2 and ("POSE_CHECK" in q.stderr or "RELOC_INJECT" in q.stderr), (bad, q.stderr)
+
+
+# --- the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.5, the lead's decision 2026-11-08) -------
+def test_a_relocalizing_start_blocks_autonomy_after_a_placement_by_default(tmp_path):
+    p, _ = _registry_launch(tmp_path, MAP_BUNDLE="")
+    assert p.returncode == 0, p.stdout + p.stderr
+    pre = _preflight(tmp_path)
+    assert pre[pre.index("--operator-placed-auto") + 1] == "block"
+    assert "F1_AUTONOMY=block" in p.stdout  # the value applied, in the launch log
+
+
+def test_only_f1_autonomy_allow_turns_the_block_off_and_it_is_logged(tmp_path):
+    p, _ = _registry_launch(tmp_path, MAP_BUNDLE="", F1_AUTONOMY="allow")
+    assert p.returncode == 0, p.stdout + p.stderr
+    pre = _preflight(tmp_path)
+    assert pre[pre.index("--operator-placed-auto") + 1] == "allow" and "F1_AUTONOMY=allow" in p.stdout
+    for bad in ("off", "", "BLOCK"):
+        q, _ = _registry_launch(tmp_path / f"bad{len(bad)}{bad}", MAP_BUNDLE="", F1_AUTONOMY=bad)
+        assert q.returncode == 2 and "F1_AUTONOMY must be block or allow" in q.stdout + q.stderr
+
+
+def test_a_known_start_passes_no_block_argument(tmp_path):
+    p, _ = _registry_launch(tmp_path, START_RELOC="off")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "--operator-placed-auto" not in _preflight(tmp_path)

@@ -1161,6 +1161,11 @@ def arguments() -> argparse.Namespace:
                         help="B-P2c: with --start-relocalize, the operator's whole time from the runner's start "
                         f"(unset: {RELOC_OPERATOR_TIMEOUT_S:.0f} s, inside the supervisor's 600 s --reloc-wait-s); a "
                         "retry does not extend it. Past it the session ends reloc_operator_timeout.")
+    parser.add_argument("--operator-placed-auto", choices=("block", "allow"), default="block",
+                        help="The vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.5): with "
+                        "--start-relocalize, a start from the operator's placement (source operator_placed), or one "
+                        "whose source is unknown, refuses AUTO and missions for the whole epoch (teleop stays open). "
+                        "allow only for approved development runs; a real-truck launcher never takes it.")
     parser.add_argument("--pose-check", choices=("off", "shadow", "on"), default="off",
                         help="The unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md): after the "
                         "start relocalization, a start with residual ambiguity opens only a straight reverse until a "
@@ -8040,6 +8045,16 @@ def drive(S, isaac) -> None:
                                         axle_to_fork_tip_m=args.axle_to_fork_tip_m,
                                         rear_axle_offset_m=args.rear_axle_offset_m, exit_clearance_m=EXIT_CLEARANCE_M)
 
+            # the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.2): from this runner's own record,
+            # cross-checked with the relocalizer's estimate where the early console holds one; latched by the runtime
+            from forklift_core.localization.start_reloc import autonomy_block
+
+            estimate_ = getattr(getattr(reloc_console, "reloc", None), "estimate", None)
+            start_block_ = autonomy_block(start_reloc, args.operator_placed_auto,
+                                          estimate_source=None if estimate_ is None else estimate_.source)
+            if start_reloc is not None:
+                start_reloc["autonomy"] = "blocked" if start_block_ is not None else "allowed"
+            start_block_ = None if start_block_ is None else (start_block_, (start_reloc or {}).get("source"))
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
                                 lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
@@ -8054,6 +8069,7 @@ def drive(S, isaac) -> None:
                 config=live_arbiter_config(args, lift_limit_m=live_lift_limit_, catchup_steps=live_catchup_),
                 # B-P2c: a relocalizing run's early console -- its arbiter, link, channels and server -- adopted
                 **({} if reloc_console is None else {"parts": reloc_console.parts}),
+                start_block=start_block_,
                 camera_pixel_lag_s=args.live_camera_pixel_lag_s,
                 host=args.live_host, web_root=args.live_web_root,
                 test_step_delay_s=args.live_test_step_delay_ms / 1000.0, camera_freeze=freeze_,
@@ -11047,6 +11063,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
         and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s")
              or v not in (None, False))
+        # the vehicle-side F1 block (plan 2026-11-08 2.5): with the relocalization, the value applied, always
+        and (k != "operator_placed_auto" or args.start_relocalize)
         # the unconfirmed position check (plan 2026-11-02-unconfirmed-runner 3.1): only when on
         and (k not in ("pose_check", "pose_check_bounds") or args.pose_check != "off")
         # plan 2026-11-06 1.2: the injection only when given

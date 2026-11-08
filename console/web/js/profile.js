@@ -95,6 +95,9 @@ export function resumeState({ state, mission, hasLease }) {
   }
   const phase = String(mission.phase || "");
   const hint = phase.startsWith("recover_") || phase === "clear_out" ? "재개하면 복구를 이어 가 취소를 마칩니다" : "";
+  if (state?.start_block) {  // the vehicle-side F1 block (plan 2026-11-08 2.4)
+    return { enabled: false, why: "출발 위치가 확인되지 않았습니다 · 자동 운행과 미션은 받지 않습니다", hint };
+  }
   const stand = standWhy(state);
   return stand ? { enabled: false, why: stand, hint } : { enabled: true, why: "", hint };
 }
@@ -265,6 +268,8 @@ export const REJECT = {
   // the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 2.3)
   pose_unconfirmed: "출발 위치가 확인되기 전입니다 · 곧은 후진으로 확인한 뒤에 보내세요",
   pose_ended: "출발 위치 확인이 끝났습니다 · 세션을 다시 시작하세요",
+  // the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4)
+  operator_placed_start: "운전자가 놓은 출발 위치입니다 · 자동 운행과 미션은 받지 않습니다(수동 운전만)",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",

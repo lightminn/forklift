@@ -51,6 +51,18 @@ function legend(pc) {
   return `점선은 가설 구역(차 기준)${omitted}`;
 }
 
+// The vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4): the state's start_block, latched for the
+// whole session -- the map's pose looks aligned once a placement is confirmed, but nothing confirmed it.
+export const START_BLOCK_TEXT = "자동 운행과 미션은 받지 않습니다 · 수동 운전만 됩니다";
+
+export function startBand(st) {
+  const b = st?.start_block;
+  if (!b) return null;
+  const head = b.source === "operator_placed" ? "운전자가 놓은 위치 · 확인되지 않음 · 지도 표시를 믿고 운전하지 마세요"
+    : "출발 위치의 출처를 확인할 수 없습니다 · 지도 표시를 믿고 운전하지 마세요";
+  return { text: `${head} · ${START_BLOCK_TEXT}`, title: b.reason, tone: "bad" };
+}
+
 // the zones to draw: polygons of [x, y] map points, finite, at most MAX_ZONES
 export function poseZones(pc) {
   const out = [];

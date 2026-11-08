@@ -257,6 +257,27 @@ class StartRelocalizer:
         self.generation += 1
 
 
+SOURCES = ("matcher", "operator", "operator_placed")
+AUTONOMY_POLICIES = ("block", "allow")
+
+
+def autonomy_block(record, policy: str, estimate_source: str | None = None) -> str | None:
+    """The vehicle-side F1 block's decision (docs/plans/2026-11-08-f1-vehicle-block.md 2.2): ``operator_placed_start``
+    when a relocalized start (``record``, the runner's start relocalization record; None: the scene's start, known)
+    came from the operator's placement and the policy blocks; also when its source is missing, not one this code
+    knows, or not the relocalizer's own estimate's (fail-closed). None otherwise."""
+    if policy not in AUTONOMY_POLICIES:
+        raise ValueError(f"the F1 autonomy policy must be one of {AUTONOMY_POLICIES}, not {policy!r}")
+    if record is None or policy == "allow":
+        return None
+    source = record.get("source")
+    if source not in SOURCES or source == "operator_placed":
+        return "operator_placed_start"
+    if estimate_source is not None and estimate_source != source:
+        return "operator_placed_start"
+    return None
+
+
 def _write_atomic(path: Path, text: str) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text)
@@ -294,6 +315,6 @@ def clear_epoch(epoch_dir) -> None:
             p.unlink(missing_ok=True)
 
 
-__all__ = ["BRIDGE_GO", "Estimate", "RELOC_POSE", "RelocConfig", "StartRelocalizer", "base_from_laser",
-           "clear_epoch", "laser_from_base", "read_bridge_go", "read_reloc_pose", "rear_from_base", "write_bridge_go",
+__all__ = ["AUTONOMY_POLICIES", "BRIDGE_GO", "Estimate", "RELOC_POSE", "RelocConfig", "SOURCES", "StartRelocalizer",
+           "autonomy_block", "base_from_laser", "clear_epoch", "laser_from_base", "read_bridge_go", "read_reloc_pose", "rear_from_base", "write_bridge_go",
            "write_reloc_pose"]
