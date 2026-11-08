@@ -1,27 +1,42 @@
-# Independent recompute (review 1) from raw files only, no project tools.
-import numpy as np, json, glob, os
-runs = {
- 'A0_b1': 'g1raw/g1/g1_02_b1_A0', 'A6P_b1': 'g1raw/g1/g1_04_b1_A6P',
- 'A6P_b2': 'g1raw/g1/g1_06_b2_A6P', 'A6P_b3': 'g1raw/g1/g1_08_b3_A6P', 'A0_b3':'g1raw/g1/g1_09_b3_A0',
- 'riib_line': 'g2raw/riibv_21ce53df/s/ab_line_m_s0_A', 'riib_rand': 'g2raw/riibv_21ce53df/s/guard_random_m'}
-for k, d in runs.items():
-    tt = glob.glob(d + '/**/tick_trace.npz', recursive=True)
-    ll = glob.glob(d + '/**/live_log.jsonl', recursive=True)
-    if not tt: print(k, 'no trace'); continue
-    z = np.load(tt[0]); cols = list(z['columns']); D = z['data']
+"""Independent recompute (plan 5.18/5.19 review 1) from raw live files only, no project tools.
+
+usage: recompute_g2g3.py RUN_DIR [RUN_DIR ...]
+  RUN_DIR holds live/epoch_1/run/tick_trace.npz (and live_log.jsonl when present).
+Prints per run: the trace's loss state and span, control ticks over 50/100/200 ms, the start gaps over 0.25 s by two
+clocks (S = pacer start after the wait, the 5.15 M3 / rtb_analyze definition; world_start = after the stop gate),
+counted from the first control tick (whole, no exclusion) with each gap's control-tick content, gc.gen2 status lines,
+and the low-clearance timer normalised by the session's simulated span.
+"""
+import glob, json, sys
+import numpy as np
+
+DT = 1 / 120
+for d in sys.argv[1:]:
+    tt = glob.glob(d + "/**/tick_trace.npz", recursive=True)
+    ll = glob.glob(d + "/**/live_log.jsonl", recursive=True)
+    z = np.load(tt[0]); cols = list(z["columns"]); D = z["data"]
     c = lambda n: D[:, cols.index(n)]
-    cs, ce = c('ctrl_start'), c('ctrl_end'); m = np.isfinite(cs) & np.isfinite(ce) & (ce > cs)
-    dur = (ce - cs)[m]
-    ws = c('world_start'); span = np.nanmax(ws) - np.nanmin(ws)
-    # status lines: gen2 occurrences, low_clearance totals, sim span
-    gen2 = []; lc = 0.0; t0 = t1 = 0.0; nstat = 0
-    if not ll: ll = ["/dev/null"]
-    for line in open(ll[0]):
+    S, ws, cs, ce = c("S"), c("world_start"), c("ctrl_start"), c("ctrl_end")
+    dur = np.nan_to_num(np.where(np.isfinite(cs), ce - cs, 0.0))
+    first = int(np.argmax(np.isfinite(cs)))
+    t0 = ws[first]
+    print(f"{d.rstrip('/').split('/')[-1]}: rows {len(D)} (sim {len(D)*DT:.0f}s) first ctrl row {first}"
+          f" | ctrl >50 {int((dur>.05).sum())} >100 {int((dur>.1).sum())} >200 {int((dur>.2).sum())} max {np.nanmax(dur)*1e3:.0f}ms")
+    for name, clk in (("S", S), ("world_start", ws)):
+        g = np.diff(clk[first:]); big = np.where(g > 0.25)[0] + first
+        items = []
+        for j in big:
+            inside = (cs >= clk[j]) & (cs < clk[j + 1])
+            items.append(f"t+{clk[j]-t0:.1f}s {int((clk[j+1]-clk[j])*1e3)}ms ctrl {int(dur[inside].sum()*1e3)}ms")
+        near = int(((g > 0.20) & (g <= 0.25)).sum())
+        print(f"   gaps>0.25 by {name}: {len(big)} {items}  (0.20-0.25: {near})")
+    gen2, lc, nstat, ts = [], 0.0, 0, []
+    for line in (open(ll[0]) if ll else []):
         r = json.loads(line)
-        if r.get('status') and 'timers' in r:
-            nstat += 1; tm = r['timers']
-            if 'gc.gen2' in tm: gen2.append((nstat, round(tm['gc.gen2'][2], 3)))
-            for kk, v in tm.items():
-                if 'low_clearance' in kk and '<' not in kk: lc += v[0]
-            t = r.get('tick_t'); t0 = t if nstat == 1 else t0; t1 = t
-    print(f"{k}: trace wall span {span:.0f}s ticks {m.sum()} >50 {int((dur>.05).sum())} >100 {int((dur>.1).sum())} >200 {int((dur>.2).sum())} max {dur.max()*1e3:.0f}ms | status {nstat} gen2 {gen2} | sim {t0:.0f}-{t1:.0f}s low_clear {lc:.1f}s -> {lc/max(t1-t0,1e-9):.3f}/sim s")
+        if r.get("status") and "timers" in r:
+            nstat += 1; tm = r["timers"]
+            if "gc.gen2" in tm: gen2.append((nstat, round(tm["gc.gen2"][2], 3)))
+            lc += sum(v[0] for k, v in tm.items() if "low_clearance" in k and "<" not in k)
+            ts.append(r["tick_t"])
+    if ts:
+        print(f"   status lines {nstat} gc.gen2 {gen2} | low_clearance {lc:.1f}s / sim {ts[-1]-ts[0]:.0f}s = {lc/(ts[-1]-ts[0]):.3f}")
