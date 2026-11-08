@@ -115,13 +115,16 @@ class FakeProbe:
         return {"t": "ack"}
 
     async def until(self, pred, timeout, hz=20, label=""):
+        if getattr(self, "pending", None) is not None:  # the state that shows a reply arrives after it
+            self.state, self.pending = self.pending, None
         return bool(pred(self.state))
 
 
 def run(probe, monkeypatch, *, teleop=("ack",), moved=0.17, armed=True):
     async def enter(p):
         if teleop[0] == "ack":
-            p.state = {**p.state, "mode": "TELEOP", "armed": armed}
+            p.arm_gen = 7 if armed else 0
+            p.pending = {**p.state, "mode": "TELEOP", "armed": armed, "arm_gen": 7 if armed else 0}  # not yet shown
         return {"t": teleop[0]} if teleop[0] else None
 
     async def back(p, low, high, max_s):
@@ -148,6 +151,13 @@ def test_the_recovery_cancels_waits_backs_off_once_by_hand_and_pauses(monkeypatc
                                          (dict(moved=0.40), "reverse_out_of_interval")])
 def test_a_refused_teleop_or_a_reverse_outside_its_interval_is_its_own_outcome(monkeypatch, kw, outcome):
     assert run(FakeProbe({"outcome": "cancelled"}), monkeypatch, **kw)["outcome"] == outcome
+
+
+def test_the_armed_teleop_is_waited_for_in_the_state_after_the_replies(monkeypatch):
+    # Codex probe review round 2 P2: the acks come first; the decision waits for the state that shows them
+    probe = FakeProbe({"outcome": "cancelled"})
+    out = run(probe, monkeypatch)
+    assert out["armed"] is True and out["outcome"] == "recovered"
 
 
 def test_a_refused_pause_is_not_a_recovery(monkeypatch):
@@ -221,7 +231,8 @@ class CycleVehicle:
         mission = None if self.mission_id is None else {"mission_id": self.mission_id, "status": self.status}
         return {"state_seq": self.seq, "mode": self.mode, "rear_axle_speed_mps": self.speed, "mission": mission,
                 "pose": {"frame": "map", "x_m": self.x, "y_m": 2.0, "yaw_rad": 0.0}, "load": {"state": self.load},
-                "last_result": self.result}
+                "last_result": self.result, "armed": getattr(self, "armed", False),
+                "arm_gen": 3 if getattr(self, "armed", False) else 0}
 
     def end(self, outcome):
         self.result = {"seq": (self.result or {}).get("seq", 0) + 1, "mission_id": self.mission_id, "outcome": outcome}
@@ -292,8 +303,7 @@ def cycle_args(**over):
 
 def run_cycle(script, monkeypatch, **over):
     async def enter(p):
-        p.v.mode = "TELEOP"
-        p.state = {**p.v.state(), "armed": True}
+        p.v.mode, p.v.armed, p.arm_gen = "TELEOP", True, 3  # shown by the next state the probe waits for
         return {"t": "ack"}
 
     async def back(p, low, high, max_s):

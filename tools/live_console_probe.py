@@ -895,8 +895,12 @@ async def stall_recovery(p: Probe, args, mission_id, seen: int) -> dict:
         out["outcome"] = "loaded_hold"
         return out
     out["teleop"] = await enter_teleop(p)
-    if (not out["teleop"] or out["teleop"].get("t") != "ack" or (p.state or {}).get("mode") != "TELEOP"
-            or not (p.state or {}).get("armed")):
+    arm_gen = int(getattr(p, "arm_gen", 0) or 0)  # enter_teleop keeps this arm's generation (0: the arm failed)
+    # the replies come before the state that shows them (Codex probe review round 2 P2): wait for it
+    out["armed"] = bool(out["teleop"]) and out["teleop"].get("t") == "ack" and arm_gen > 0 and await p.until(
+        lambda s: s.get("mode") == "TELEOP" and bool(s.get("armed")) and int(s.get("arm_gen") or 0) >= arm_gen,
+        5.0, label="stall_teleop_armed")
+    if not out["armed"]:
         out["outcome"] = "teleop_refused"
         return out
     out["backoff"] = await back_off_by(p, 0.05, float(args.stall_backoff_m), max_s=30.0)
