@@ -227,7 +227,7 @@ class Probe:
             if rid in self.replies:
                 at, reply = self.replies[rid]
                 self.event("reply", kind=kind, request_id=rid, t=reply["t"], reason=reply.get("reason"),
-                           detail=reply.get("detail"), rtt_s=at - sent)
+                           detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
                 if reply.get("control_gen") is not None:
                     self.control_gen = reply["control_gen"]
                 return reply
@@ -253,7 +253,7 @@ class Probe:
                 if request_id in self.replies:
                     at, reply = self.replies[request_id]
                     self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                               detail=reply.get("detail"), rtt_s=at - sent)
+                               detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
                     if reply.get("control_gen") is not None:
                         self.control_gen = reply["control_gen"]
                     return reply
@@ -263,7 +263,7 @@ class Probe:
             return None
         at, reply = self.replies[request_id]
         self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                   detail=reply.get("detail"), rtt_s=at - sent)  # logged as any answer (Codex r5 P3)
+                   detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)  # (Codex r5 P3)
         return reply
 
     async def request_until_standing(self, kind, tries=20, **fields):
@@ -437,6 +437,11 @@ async def main_scenario(p: Probe, args):
         await p.until(p.standing, 20, label="standing_again")
         await p.request_until_standing("rearm")
         await p.request_until_standing("mission_resume", mission_id=mission_id)
+    if getattr(args, "end_session", False):
+        # validation v2 H1: end the session through its own path, so the epoch writes result.json and the tick
+        # trace (a launcher TERM lost both in batch 16782's lifecycle 1)
+        await _end_session(p)
+        return
     end = time.monotonic() + 60
     while p.closed_code is None and time.monotonic() < end:
         await asyncio.sleep(0.05)
@@ -2173,7 +2178,8 @@ def main():
                          "snapshots from before it")
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
-    ap.add_argument("--end-session", action="store_true", help="cycle scenario: end the session at the end")
+    ap.add_argument("--end-session", action="store_true",
+                    help="cycle, queue and main scenarios: end the session at the end (main: validation v2 H1)")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
