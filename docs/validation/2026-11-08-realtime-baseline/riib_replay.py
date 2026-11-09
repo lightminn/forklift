@@ -56,7 +56,7 @@ def main() -> int:
         S, q, d = data[:, C["S"]], data[:, C["q"]], data[:, C["d"]]
         w = work(data)
         interval = np.r_[S[1:] - S[:-1], np.nan]
-        eps = np.nan_to_num(np.r_[S[1:] - (q[1:] + d[1:]), np.nan])
+        eps = np.nan_to_num(S - (q + d))  # each start's own overshoot (Codex G3-0 review P2: was one step late)
         K = np.isfinite(w) & np.isfinite(interval) & np.isfinite(data[:, C["step_end"]])
         idx = np.flatnonzero(K)
         bits = np.nan_to_num(data[:, C["flags"]]).astype(int)

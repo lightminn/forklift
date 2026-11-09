@@ -2,304 +2,352 @@ f 1.0 replay of f 0.4/0.3 records (W held fixed): for ranking only, see the modu
 
 r1c_01_far_L_04: factor 0.4, AUTO steps 17695 (147 sim s)
   AUTO work per sim s: world 0.395 step_rest 0.225 after 0.022 control 0.312 | W 0.959; control > 50 ms 4
-   base                                                       ratio 0.880 ok 0.213
-   scan0.5                                                    ratio 0.961 ok 0.975
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.976
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.963 ok 0.976
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.992 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.987 ok 0.98
-   scan0.5 + render0.5 + tail flat                            ratio 0.989 ok 0.987
-   ref split                                                  ratio 0.980 ok 0.968
-   ref split + scan0.5                                        ratio 0.986 ok 0.966
-   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.974
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.976 ratio 0.963
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.975 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.964 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.964 ratio 0.960
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.964 ratio 0.958
+   check: replay at the record's own f 0.4 k 0: ratio 0.368 ok 0.403 | measured AUTO ratio 0.367 ok 0.388
+   base                                                       ratio 0.881 ok 0.213  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.962 ok 0.975  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.976  (saves 0.267 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.964 ok 0.976  (saves 0.102 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.269 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.988 ok 0.98  (saves 0.183 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.989 ok 0.987  (saves 0.185 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.980 ok 0.975  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.983 ok 0.976  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.980 ok 0.976  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.986 ok 0.966  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.974  (saves 0.102 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.975 ratio 0.962
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.102, ok 0.976 ratio 0.964
+     scan 1.0 body 0.75 render 0.75 tail flat: saves 0.126, ok 0.957 ratio 0.950
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.131, ok 0.975 ratio 0.979
+     scan 0.35 body 1.0 render 1.0 tail flat: saves 0.132, ok 0.987 ratio 0.981
 
 r1c_02_far_K_04: factor 0.4, AUTO steps 18258 (152 sim s)
   AUTO work per sim s: world 0.395 step_rest 0.227 after 0.023 control 0.314 | W 0.965; control > 50 ms 4
-   base                                                       ratio 0.876 ok 0.188
-   scan0.5                                                    ratio 0.958 ok 0.967
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.987
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.960 ok 0.979
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.992 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.987 ok 0.986
-   scan0.5 + render0.5 + tail flat                            ratio 0.989 ok 0.985
-   ref split                                                  ratio 0.979 ok 0.962
-   ref split + scan0.5                                        ratio 0.985 ok 0.988
-   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.979 ratio 0.960
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.967 ratio 0.958
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.959 ratio 0.958
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.957 ratio 0.956
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.963 ratio 0.955
+   check: replay at the record's own f 0.4 k 6: ratio 0.400 ok 0.990 | measured AUTO ratio 0.400 ok 0.99
+   base                                                       ratio 0.877 ok 0.193  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.959 ok 0.967  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.987  (saves 0.276 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.961 ok 0.979  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.277 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.988 ok 0.986  (saves 0.184 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.989 ok 0.985  (saves 0.185 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.978 ok 0.97  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.983 ok 0.974  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.979 ok 0.962  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.985 ok 0.988  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.967 ratio 0.959
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.979 ratio 0.961
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.131, ok 0.972 ratio 0.978
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.133, ok 0.969 ratio 0.974
+     scan 0.35 body 1.0 render 1.0 tail flat: saves 0.133, ok 0.980 ratio 0.979
 
 r1c_03_far_K_04: factor 0.4, AUTO steps 18372 (153 sim s)
   AUTO work per sim s: world 0.385 step_rest 0.227 after 0.023 control 0.308 | W 0.949; control > 50 ms 5
-   base                                                       ratio 0.887 ok 0.243
-   scan0.5                                                    ratio 0.967 ok 0.967
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.978
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.969 ok 0.979
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.988 ok 0.978
-   scan0.5 + render0.5 + tail flat                            ratio 0.990 ok 0.987
-   ref split                                                  ratio 0.982 ok 0.969
-   ref split + scan0.5                                        ratio 0.985 ok 0.988
-   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.979 ratio 0.969
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.967 ratio 0.967
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.970 ratio 0.967
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.967 ratio 0.965
-     scan 0.75 body 1.0 render 0.75 tail flat: ok 0.952 ratio 0.958
+   check: replay at the record's own f 0.4 k 6: ratio 0.400 ok 0.986 | measured AUTO ratio 0.400 ok 0.986
+   base                                                       ratio 0.887 ok 0.247  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.968 ok 0.967  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.978  (saves 0.273 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.970 ok 0.979  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.274 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.989 ok 0.978  (saves 0.182 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.987  (saves 0.183 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.982 ok 0.971  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.985 ok 0.971  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.982 ok 0.969  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.985 ok 0.988  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail keep: saves 0.091, ok 0.950 ratio 0.956
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.093, ok 0.952 ratio 0.958
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.967 ratio 0.968
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.979 ratio 0.970
+     scan 1.0 body 0.75 render 0.75 tail keep: saves 0.126, ok 0.953 ratio 0.954
 
 r1c_04_far_L_04: factor 0.4, AUTO steps 18855 (157 sim s)
   AUTO work per sim s: world 0.396 step_rest 0.225 after 0.023 control 0.312 | W 0.962; control > 50 ms 4
-   base                                                       ratio 0.880 ok 0.212
-   scan0.5                                                    ratio 0.961 ok 0.969
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.977
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.963 ok 0.969
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.988 ok 0.977
-   scan0.5 + render0.5 + tail flat                            ratio 0.990 ok 0.988
-   ref split                                                  ratio 0.980 ok 0.97
-   ref split + scan0.5                                        ratio 0.986 ok 0.988
-   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.988
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.969 ratio 0.963
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.969 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.976 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.976 ratio 0.959
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.966 ratio 0.957
+   check: replay at the record's own f 0.4 k 0: ratio 0.368 ok 0.416 | measured AUTO ratio 0.368 ok 0.399
+   base                                                       ratio 0.881 ok 0.216  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.961 ok 0.969  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.977  (saves 0.265 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.963 ok 0.969  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.266 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.988 ok 0.977  (saves 0.182 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.990 ok 0.988  (saves 0.184 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.980 ok 0.976  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.983 ok 0.977  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.980 ok 0.97  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.986 ok 0.988  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.988  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.969 ratio 0.961
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.969 ratio 0.963
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.131, ok 0.976 ratio 0.979
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.132, ok 0.977 ratio 0.975
+     scan 0.75 body 0.75 render 1.0 tail keep: saves 0.132, ok 0.976 ratio 0.960
 
 r1c_05_far_L_04: factor 0.4, AUTO steps 17240 (144 sim s)
   AUTO work per sim s: world 0.398 step_rest 0.228 after 0.023 control 0.313 | W 0.967; control > 50 ms 5
-   base                                                       ratio 0.874 ok 0.195
-   scan0.5                                                    ratio 0.956 ok 0.946
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.987 ok 0.967
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.958 ok 0.958
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.989 ok 0.974
-   scan0.5 + render0.5                                        ratio 0.984 ok 0.974
-   scan0.5 + render0.5 + tail flat                            ratio 0.987 ok 0.973
-   ref split                                                  ratio 0.976 ok 0.955
-   ref split + scan0.5                                        ratio 0.982 ok 0.974
-   ref split + scan0.5 + tail flat                            ratio 0.985 ok 0.974
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.958 ratio 0.958
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.954 ratio 0.955
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.952 ratio 0.953
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.951 ratio 0.951
-     scan 0.35 body 1.0 render 1.0 tail flat: ok 0.974 ratio 0.976
+   check: replay at the record's own f 0.4 k 0: ratio 0.367 ok 0.379 | measured AUTO ratio 0.367 ok 0.371
+   base                                                       ratio 0.875 ok 0.195  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.956 ok 0.953  (saves 0.102 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.987 ok 0.975  (saves 0.268 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.959 ok 0.966  (saves 0.104 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.989 ok 0.974  (saves 0.269 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.984 ok 0.974  (saves 0.186 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.987 ok 0.973  (saves 0.188 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.974 ok 0.963  (saves 0.152 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.979 ok 0.967  (saves 0.152 s/sim s)
+   ref split                                                  ratio 0.976 ok 0.955  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.982 ok 0.974  (saves 0.102 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.985 ok 0.974  (saves 0.104 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.102, ok 0.953 ratio 0.956
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.104, ok 0.966 ratio 0.959
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.132, ok 0.964 ratio 0.974
+     scan 0.75 body 0.75 render 1.0 tail keep: saves 0.134, ok 0.952 ratio 0.954
+     scan 0.35 body 1.0 render 1.0 tail flat: saves 0.134, ok 0.974 ratio 0.976
 
 r1c_06_far_K_04: factor 0.4, AUTO steps 17482 (146 sim s)
   AUTO work per sim s: world 0.394 step_rest 0.228 after 0.023 control 0.317 | W 0.967; control > 50 ms 5
-   base                                                       ratio 0.878 ok 0.2
-   scan0.5                                                    ratio 0.959 ok 0.963
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.990 ok 0.98
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.961 ok 0.972
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.992 ok 0.986
-   scan0.5 + render0.5                                        ratio 0.986 ok 0.987
-   scan0.5 + render0.5 + tail flat                            ratio 0.988 ok 0.987
-   ref split                                                  ratio 0.977 ok 0.962
-   ref split + scan0.5                                        ratio 0.984 ok 0.971
-   ref split + scan0.5 + tail flat                            ratio 0.986 ok 0.971
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.972 ratio 0.961
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.963 ratio 0.959
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.961 ratio 0.959
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.957 ratio 0.957
-     scan 0.35 body 1.0 render 1.0 tail flat: ok 0.981 ratio 0.978
+   check: replay at the record's own f 0.4 k 6: ratio 0.400 ok 0.990 | measured AUTO ratio 0.400 ok 0.99
+   base                                                       ratio 0.879 ok 0.206  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.960 ok 0.963  (saves 0.102 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.990 ok 0.98  (saves 0.278 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.961 ok 0.972  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.992 ok 0.986  (saves 0.280 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.987 ok 0.987  (saves 0.184 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.988 ok 0.987  (saves 0.186 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.977 ok 0.975  (saves 0.152 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.981 ok 0.982  (saves 0.152 s/sim s)
+   ref split                                                  ratio 0.977 ok 0.962  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.984 ok 0.971  (saves 0.102 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.986 ok 0.971  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.094, ok 0.950 ratio 0.950
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.102, ok 0.963 ratio 0.960
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.972 ratio 0.961
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.132, ok 0.974 ratio 0.977
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.134, ok 0.974 ratio 0.973
 
 r1c_07_off_L_04: factor 0.4, AUTO steps 17288 (144 sim s)
   AUTO work per sim s: world 0.355 step_rest 0.221 after 0.022 control 0.305 | W 0.906; control > 50 ms 4
-   base                                                       ratio 0.918 ok 0.507
-   scan0.5                                                    ratio 0.986 ok 0.964
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.995 ok 0.968
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.987 ok 0.963
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.997 ok 0.974
-   scan0.5 + render0.5                                        ratio 0.993 ok 0.975
-   scan0.5 + render0.5 + tail flat                            ratio 0.994 ok 0.979
-   ref split                                                  ratio 0.995 ok 0.964
-   ref split + scan0.5                                        ratio 0.996 ok 0.974
-   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.974
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.963 ratio 0.987
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.964 ratio 0.986
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.962 ratio 0.989
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.963 ratio 0.987
-     scan 0.75 body 1.0 render 0.75 tail flat: ok 0.963 ratio 0.979
+   check: replay at the record's own f 0.4 k 0: ratio 0.373 ok 0.852 | measured AUTO ratio 0.373 ok 0.842
+   base                                                       ratio 0.919 ok 0.507  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.986 ok 0.964  (saves 0.099 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.995 ok 0.968  (saves 0.267 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.987 ok 0.966  (saves 0.101 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.997 ok 0.974  (saves 0.268 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.993 ok 0.975  (saves 0.158 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.995 ok 0.979  (saves 0.159 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.991 ok 0.964  (saves 0.149 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.992 ok 0.975  (saves 0.149 s/sim s)
+   ref split                                                  ratio 0.995 ok 0.964  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.996 ok 0.974  (saves 0.099 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.974  (saves 0.101 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail keep: saves 0.079, ok 0.963 ratio 0.978
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.080, ok 0.962 ratio 0.980
+     scan 1.0 body 0.75 render 1.0 tail keep: saves 0.084, ok 0.952 ratio 0.957
+     scan 1.0 body 0.75 render 1.0 tail flat: saves 0.085, ok 0.950 ratio 0.958
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.099, ok 0.964 ratio 0.986
 
 r1c_08_off_KP_04: factor 0.4, AUTO steps 17461 (146 sim s)
   AUTO work per sim s: world 0.350 step_rest 0.230 after 0.026 control 0.300 | W 0.911; control > 50 ms 4
-   base                                                       ratio 0.995 ok 0.96
-   scan0.5                                                    ratio 0.996 ok 0.975
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.997 ok 0.974
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.998 ok 0.974
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.998 ok 0.974
-   scan0.5 + render0.5                                        ratio 0.997 ok 0.975
-   scan0.5 + render0.5 + tail flat                            ratio 0.998 ok 0.981
-   ref split                                                  ratio 0.995 ok 0.961
-   ref split + scan0.5                                        ratio 0.996 ok 0.975
-   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.974
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 1.0 body 1.0 render 1.0 tail flat: ok 0.967 ratio 0.997
-     scan 1.0 body 1.0 render 1.0 tail keep: ok 0.960 ratio 0.995
-     scan 0.75 body 1.0 render 1.0 tail flat: ok 0.974 ratio 0.997
-     scan 0.75 body 1.0 render 1.0 tail keep: ok 0.975 ratio 0.996
-     scan 1.0 body 0.75 render 1.0 tail flat: ok 0.974 ratio 0.997
+   check: replay at the record's own f 0.4 k 6: ratio 0.400 ok 0.993 | measured AUTO ratio 0.400 ok 0.993
+   base                                                       ratio 0.995 ok 0.96  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.996 ok 0.975  (saves 0.103 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.997 ok 0.974  (saves 0.271 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.998 ok 0.974  (saves 0.105 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.998 ok 0.974  (saves 0.272 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.997 ok 0.975  (saves 0.161 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.998 ok 0.981  (saves 0.163 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.996 ok 0.975  (saves 0.153 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.997 ok 0.975  (saves 0.153 s/sim s)
+   ref split                                                  ratio 0.995 ok 0.961  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.996 ok 0.975  (saves 0.103 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.974  (saves 0.105 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 1.0 body 1.0 render 1.0 tail keep: saves 0.000, ok 0.960 ratio 0.995
+     scan 1.0 body 1.0 render 1.0 tail flat: saves 0.001, ok 0.967 ratio 0.997
+     scan 1.0 body 1.0 render 0.75 tail keep: saves 0.029, ok 0.967 ratio 0.996
+     scan 1.0 body 1.0 render 0.75 tail flat: saves 0.030, ok 0.974 ratio 0.997
+     scan 0.75 body 1.0 render 1.0 tail keep: saves 0.052, ok 0.975 ratio 0.996
 
 r1c_09_off_KP_04: factor 0.4, AUTO steps 17964 (150 sim s)
   AUTO work per sim s: world 0.349 step_rest 0.227 after 0.026 control 0.297 | W 0.904; control > 50 ms 4
-   base                                                       ratio 0.996 ok 0.961
-   scan0.5                                                    ratio 0.997 ok 0.975
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.997 ok 0.975
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.998 ok 0.976
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.998 ok 0.975
-   scan0.5 + render0.5                                        ratio 0.998 ok 0.975
-   scan0.5 + render0.5 + tail flat                            ratio 0.999 ok 0.992
-   ref split                                                  ratio 0.996 ok 0.961
-   ref split + scan0.5                                        ratio 0.997 ok 0.975
-   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.976
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 1.0 body 1.0 render 1.0 tail flat: ok 0.968 ratio 0.997
-     scan 1.0 body 1.0 render 1.0 tail keep: ok 0.961 ratio 0.996
-     scan 0.75 body 1.0 render 1.0 tail flat: ok 0.975 ratio 0.998
-     scan 0.75 body 1.0 render 1.0 tail keep: ok 0.975 ratio 0.996
-     scan 1.0 body 0.75 render 1.0 tail flat: ok 0.975 ratio 0.998
+   check: replay at the record's own f 0.4 k 6: ratio 0.400 ok 0.993 | measured AUTO ratio 0.400 ok 0.993
+   base                                                       ratio 0.996 ok 0.961  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.997 ok 0.975  (saves 0.102 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.997 ok 0.975  (saves 0.268 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.998 ok 0.976  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.998 ok 0.975  (saves 0.270 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.998 ok 0.975  (saves 0.159 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.999 ok 0.992  (saves 0.161 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.997 ok 0.975  (saves 0.152 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.997 ok 0.975  (saves 0.152 s/sim s)
+   ref split                                                  ratio 0.996 ok 0.961  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.997 ok 0.975  (saves 0.102 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.976  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 1.0 body 1.0 render 1.0 tail keep: saves 0.000, ok 0.961 ratio 0.996
+     scan 1.0 body 1.0 render 1.0 tail flat: saves 0.001, ok 0.968 ratio 0.997
+     scan 1.0 body 1.0 render 0.75 tail keep: saves 0.029, ok 0.971 ratio 0.997
+     scan 1.0 body 1.0 render 0.75 tail flat: saves 0.030, ok 0.972 ratio 0.998
+     scan 0.75 body 1.0 render 1.0 tail keep: saves 0.051, ok 0.975 ratio 0.996
 
 r1c_10_off_L_04: factor 0.4, AUTO steps 17493 (146 sim s)
   AUTO work per sim s: world 0.352 step_rest 0.220 after 0.021 control 0.305 | W 0.903; control > 50 ms 4
-   base                                                       ratio 0.924 ok 0.538
-   scan0.5                                                    ratio 0.987 ok 0.963
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.996 ok 0.967
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.989 ok 0.974
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.997 ok 0.974
-   scan0.5 + render0.5                                        ratio 0.993 ok 0.968
-   scan0.5 + render0.5 + tail flat                            ratio 0.995 ok 0.976
-   ref split                                                  ratio 0.995 ok 0.966
-   ref split + scan0.5                                        ratio 0.996 ok 0.975
-   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.975
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.974 ratio 0.989
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.963 ratio 0.987
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.974 ratio 0.990
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.963 ratio 0.989
-     scan 0.75 body 1.0 render 0.75 tail flat: ok 0.974 ratio 0.982
+   check: replay at the record's own f 0.4 k 0: ratio 0.373 ok 0.849 | measured AUTO ratio 0.373 ok 0.845
+   base                                                       ratio 0.924 ok 0.547  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.987 ok 0.963  (saves 0.099 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.996 ok 0.975  (saves 0.267 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.989 ok 0.974  (saves 0.100 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.997 ok 0.974  (saves 0.268 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.993 ok 0.975  (saves 0.156 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.995 ok 0.976  (saves 0.158 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.993 ok 0.968  (saves 0.149 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.993 ok 0.968  (saves 0.149 s/sim s)
+   ref split                                                  ratio 0.995 ok 0.966  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.996 ok 0.974  (saves 0.099 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.998 ok 0.974  (saves 0.100 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail keep: saves 0.078, ok 0.963 ratio 0.981
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.080, ok 0.974 ratio 0.982
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.099, ok 0.963 ratio 0.987
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.100, ok 0.974 ratio 0.989
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.107, ok 0.963 ratio 0.989
 
 r1c_11_far_L_03: factor 0.3, AUTO steps 19406 (162 sim s)
   AUTO work per sim s: world 0.391 step_rest 0.226 after 0.023 control 0.307 | W 0.953; control > 50 ms 5
-   base                                                       ratio 0.886 ok 0.255
-   scan0.5                                                    ratio 0.967 ok 0.971
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.982
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.969 ok 0.974
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.994 ok 0.988
-   scan0.5 + render0.5                                        ratio 0.990 ok 0.987
-   scan0.5 + render0.5 + tail flat                            ratio 0.992 ok 0.986
-   ref split                                                  ratio 0.983 ok 0.975
-   ref split + scan0.5                                        ratio 0.988 ok 0.976
-   ref split + scan0.5 + tail flat                            ratio 0.990 ok 0.976
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.974 ratio 0.969
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.971 ratio 0.967
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.971 ratio 0.967
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.972 ratio 0.965
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.970 ratio 0.963
+   check: replay at the record's own f 0.3 k 0: ratio 0.287 ok 0.981 | measured AUTO ratio 0.287 ok 0.981
+   base                                                       ratio 0.887 ok 0.263  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.968 ok 0.971  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.982  (saves 0.270 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.970 ok 0.974  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.994 ok 0.988  (saves 0.272 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.990 ok 0.987  (saves 0.182 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.992 ok 0.986  (saves 0.184 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.983 ok 0.973  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.986 ok 0.973  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.983 ok 0.975  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.988 ok 0.976  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.990 ok 0.976  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail keep: saves 0.091, ok 0.952 ratio 0.957
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.093, ok 0.952 ratio 0.959
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.971 ratio 0.968
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.974 ratio 0.970
+     scan 1.0 body 0.75 render 0.75 tail keep: saves 0.125, ok 0.955 ratio 0.954
 
 r1c_12_far_K_03: factor 0.3, AUTO steps 17798 (148 sim s)
   AUTO work per sim s: world 0.393 step_rest 0.228 after 0.023 control 0.311 | W 0.960; control > 50 ms 5
-   base                                                       ratio 0.883 ok 0.234
-   scan0.5                                                    ratio 0.965 ok 0.961
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.98
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.966 ok 0.972
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.989 ok 0.988
-   scan0.5 + render0.5 + tail flat                            ratio 0.990 ok 0.987
-   ref split                                                  ratio 0.979 ok 0.964
-   ref split + scan0.5                                        ratio 0.985 ok 0.987
-   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.972 ratio 0.966
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.961 ratio 0.965
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.962 ratio 0.965
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.962 ratio 0.963
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.958 ratio 0.961
+   check: replay at the record's own f 0.3 k 6: ratio 0.300 ok 0.995 | measured AUTO ratio 0.300 ok 0.995
+   base                                                       ratio 0.883 ok 0.234  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.965 ok 0.961  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.98  (saves 0.275 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.967 ok 0.972  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.277 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.989 ok 0.988  (saves 0.184 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.987  (saves 0.185 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.981 ok 0.97  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.985 ok 0.974  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.979 ok 0.964  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.985 ok 0.973  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.972  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.961 ratio 0.965
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.972 ratio 0.967
+     scan 1.0 body 0.75 render 0.75 tail keep: saves 0.128, ok 0.957 ratio 0.952
+     scan 1.0 body 0.75 render 0.75 tail flat: saves 0.130, ok 0.957 ratio 0.953
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.132, ok 0.969 ratio 0.981
 
 r1c_13_far_K_03: factor 0.3, AUTO steps 17468 (146 sim s)
   AUTO work per sim s: world 0.392 step_rest 0.228 after 0.022 control 0.313 | W 0.961; control > 50 ms 5
-   base                                                       ratio 0.882 ok 0.21
-   scan0.5                                                    ratio 0.962 ok 0.966
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.979
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.964 ok 0.979
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.986
-   scan0.5 + render0.5                                        ratio 0.989 ok 0.985
-   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.985
-   ref split                                                  ratio 0.980 ok 0.968
-   ref split + scan0.5                                        ratio 0.986 ok 0.979
-   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.979 ratio 0.964
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.966 ratio 0.962
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.961 ratio 0.962
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.960 ratio 0.961
-     scan 0.75 body 1.0 render 0.75 tail flat: ok 0.951 ratio 0.952
+   check: replay at the record's own f 0.3 k 6: ratio 0.300 ok 0.995 | measured AUTO ratio 0.300 ok 0.994
+   base                                                       ratio 0.882 ok 0.215  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.963 ok 0.966  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.979  (saves 0.275 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.965 ok 0.979  (saves 0.102 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.986  (saves 0.277 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.989 ok 0.985  (saves 0.182 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.985  (saves 0.184 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.981 ok 0.968  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.985 ok 0.974  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.980 ok 0.968  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.986 ok 0.979  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.987 ok 0.987  (saves 0.102 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.093, ok 0.955 ratio 0.953
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.966 ratio 0.963
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.102, ok 0.979 ratio 0.965
+     scan 1.0 body 0.75 render 0.75 tail flat: saves 0.129, ok 0.956 ratio 0.951
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.131, ok 0.973 ratio 0.981
 
 r1c_14_far_L_03: factor 0.3, AUTO steps 18179 (151 sim s)
   AUTO work per sim s: world 0.394 step_rest 0.228 after 0.022 control 0.312 | W 0.962; control > 50 ms 4
-   base                                                       ratio 0.879 ok 0.206
-   scan0.5                                                    ratio 0.961 ok 0.957
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.988
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.963 ok 0.968
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.989 ok 0.983
-   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.983
-   ref split                                                  ratio 0.982 ok 0.963
-   ref split + scan0.5                                        ratio 0.988 ok 0.975
-   ref split + scan0.5 + tail flat                            ratio 0.989 ok 0.974
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.968 ratio 0.963
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.957 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.970 ratio 0.961
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.958 ratio 0.959
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.960 ratio 0.957
+   check: replay at the record's own f 0.3 k 0: ratio 0.287 ok 0.976 | measured AUTO ratio 0.287 ok 0.972
+   base                                                       ratio 0.880 ok 0.207  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.962 ok 0.957  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.975  (saves 0.275 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.963 ok 0.968  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.974  (saves 0.276 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.989 ok 0.983  (saves 0.183 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.983  (saves 0.185 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.980 ok 0.982  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.984 ok 0.981  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.982 ok 0.963  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.988 ok 0.975  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.989 ok 0.974  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.957 ratio 0.962
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.968 ratio 0.963
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.132, ok 0.981 ratio 0.980
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.133, ok 0.969 ratio 0.975
+     scan 0.35 body 1.0 render 1.0 tail flat: saves 0.133, ok 0.980 ratio 0.981
 
 r1c_15_far_L_03: factor 0.3, AUTO steps 17413 (145 sim s)
   AUTO work per sim s: world 0.394 step_rest 0.229 after 0.023 control 0.311 | W 0.962; control > 50 ms 5
-   base                                                       ratio 0.880 ok 0.198
-   scan0.5                                                    ratio 0.962 ok 0.966
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.975
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.964 ok 0.972
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.987 ok 0.977
-   scan0.5 + render0.5 + tail flat                            ratio 0.989 ok 0.984
-   ref split                                                  ratio 0.980 ok 0.969
-   ref split + scan0.5                                        ratio 0.987 ok 0.974
-   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.973
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.972 ratio 0.964
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.966 ratio 0.962
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.967 ratio 0.962
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.967 ratio 0.960
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.963 ratio 0.958
+   check: replay at the record's own f 0.3 k 0: ratio 0.287 ok 0.977 | measured AUTO ratio 0.287 ok 0.977
+   base                                                       ratio 0.881 ok 0.198  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.963 ok 0.966  (saves 0.102 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.991 ok 0.98  (saves 0.275 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.964 ok 0.979  (saves 0.103 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987  (saves 0.276 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.988 ok 0.977  (saves 0.184 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.990 ok 0.984  (saves 0.185 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.980 ok 0.968  (saves 0.152 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.983 ok 0.969  (saves 0.152 s/sim s)
+   ref split                                                  ratio 0.980 ok 0.969  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.987 ok 0.974  (saves 0.102 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.973  (saves 0.103 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.102, ok 0.966 ratio 0.963
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.103, ok 0.979 ratio 0.964
+     scan 0.35 body 1.0 render 1.0 tail keep: saves 0.132, ok 0.968 ratio 0.980
+     scan 0.75 body 1.0 render 0.5 tail keep: saves 0.133, ok 0.967 ratio 0.975
+     scan 0.35 body 1.0 render 1.0 tail flat: saves 0.134, ok 0.980 ratio 0.981
 
 r1c_16_far_K_03: factor 0.3, AUTO steps 17778 (148 sim s)
   AUTO work per sim s: world 0.393 step_rest 0.227 after 0.022 control 0.313 | W 0.962; control > 50 ms 5
-   base                                                       ratio 0.884 ok 0.227
-   scan0.5                                                    ratio 0.966 ok 0.969
-   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.98
-   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.967 ok 0.979
-   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.993 ok 0.987
-   scan0.5 + render0.5                                        ratio 0.989 ok 0.988
-   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.987
-   ref split                                                  ratio 0.980 ok 0.97
-   ref split + scan0.5                                        ratio 0.986 ok 0.987
-   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.987
-   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:
-     scan 0.5 body 1.0 render 1.0 tail flat: ok 0.979 ratio 0.967
-     scan 0.5 body 1.0 render 1.0 tail keep: ok 0.969 ratio 0.966
-     scan 0.75 body 0.75 render 1.0 tail flat: ok 0.974 ratio 0.966
-     scan 0.75 body 0.75 render 1.0 tail keep: ok 0.970 ratio 0.964
-     scan 1.0 body 0.5 render 1.0 tail flat: ok 0.963 ratio 0.963
+   check: replay at the record's own f 0.3 k 6: ratio 0.300 ok 0.994 | measured AUTO ratio 0.300 ok 0.994
+   base                                                       ratio 0.884 ok 0.228  (saves 0.000 s/sim s)
+   scan0.5                                                    ratio 0.966 ok 0.969  (saves 0.101 s/sim s)
+   scan0.5 + body0.5 (tail kept)  [lead: control-mean cut]    ratio 0.992 ok 0.98  (saves 0.275 s/sim s)
+   scan0.5 + tail flat            [lead: tail flattening]     ratio 0.968 ok 0.979  (saves 0.102 s/sim s)
+   scan0.5 + ctrl0.5 (all ticks)                              ratio 0.994 ok 0.987  (saves 0.277 s/sim s)
+   scan0.5 + render0.5                                        ratio 0.989 ok 0.988  (saves 0.182 s/sim s)
+   scan0.5 + render0.5 + tail flat                            ratio 0.991 ok 0.987  (saves 0.183 s/sim s)
+   scan0.5 + body cut 0.05 s/sim s (equal saving)             ratio 0.983 ok 0.975  (saves 0.151 s/sim s)
+   scan0.5 + render cut 0.05 s/sim s (equal saving)           ratio 0.986 ok 0.975  (saves 0.151 s/sim s)
+   ref split                                                  ratio 0.980 ok 0.97  (saves 0.000 s/sim s)
+   ref split + scan0.5                                        ratio 0.986 ok 0.987  (saves 0.101 s/sim s)
+   ref split + scan0.5 + tail flat                            ratio 0.988 ok 0.987  (saves 0.102 s/sim s)
+   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):
+     scan 0.75 body 1.0 render 0.75 tail flat: saves 0.093, ok 0.953 ratio 0.956
+     scan 0.5 body 1.0 render 1.0 tail keep: saves 0.101, ok 0.969 ratio 0.966
+     scan 0.5 body 1.0 render 1.0 tail flat: saves 0.102, ok 0.979 ratio 0.968
+     scan 1.0 body 0.75 render 0.75 tail keep: saves 0.128, ok 0.950 ratio 0.953
+     scan 1.0 body 0.75 render 0.75 tail flat: saves 0.130, ok 0.951 ratio 0.955

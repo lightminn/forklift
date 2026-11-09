@@ -36,7 +36,8 @@ def load(run_dir: Path):
         data = z["data"]
     w = work(data)
     S, q, d = data[:, C["S"]], data[:, C["q"]], data[:, C["d"]]
-    eps = np.r_[S[1:] - (q[1:] + d[1:]), np.nan]
+    # the start's own overshoot past its wait (Codex G3-0 review P2: S[i+1]-(q+d)[i+1] was one step late)
+    eps = S - (q + d)
     nx = data[np.r_[np.arange(1, len(data)), len(data) - 1]]
     parts = {"to_step_end": data[:, C["step_end"]] - S,
              "world": data[:, C["world_end"]] - data[:, C["world_start"]],
@@ -44,23 +45,40 @@ def load(run_dir: Path):
              "after": data[:, C["after_end"]] - data[:, C["step_end"]],
              "control": nx[:, C["ctrl_end"]] - nx[:, C["ctrl_start"]]}
     bits = np.nan_to_num(data[:, C["flags"]]).astype(int)
-    auto_steps, factor = set(), None
+    auto_steps, factor, cmd = set(), None, []
     for line in open(run / "live_log.jsonl"):
         r = json.loads(line)
-        if "mode" in r and "step" in r and r["mode"] == "AUTO":
-            auto_steps.add(int(r["step"]))
+        if "mode" in r and "step" in r and "pacing_ok" in r and r.get("mono") is not None:
+            cmd.append(r)
+            if r["mode"] == "AUTO":
+                auto_steps.add(int(r["step"]))
         if r.get("status") and isinstance(r.get("pacing"), dict) and factor is None:
             factor = r["pacing"].get("target_factor")
+    # the measured AUTO ratio and ok share (the check row replays the record at its own factor and catch-up)
+    msim = mwall = 0.0
+    for r0, r1 in zip(cmd, cmd[1:]):
+        if r0["mode"] == "AUTO" and r1["mode"] == "AUTO":
+            msim, mwall = msim + (r1["tick_t"] - r0["tick_t"]), mwall + (r1["mono"] - r0["mono"])
+    oks = [bool(r["pacing_ok"]) for r in cmd if r["mode"] == "AUTO"]
+    measured = (msim / mwall if mwall > 0 else None,
+                float(np.mean(oks[oks.index(True):])) if True in oks else None)
+    catchup = 0
+    args_txt = run_dir / "args.txt"
+    if args_txt.exists():
+        for line in args_txt.read_text().splitlines():
+            if line.startswith("FORKLIFT_LIVE_CATCHUP_STEPS="):
+                catchup = int(line.split("=", 1)[1] or 0)
     live_step = data[:, C["live_step"]]
     auto = np.array([int(s) in auto_steps if np.isfinite(s) else False for s in live_step])
     keep = np.isfinite(w) & np.isfinite(eps)
     idx = np.flatnonzero(keep)
-    return {"w": w[idx], "eps": eps[idx], "auto": auto[idx], "factor": factor,
+    return {"w": w[idx], "eps": eps[idx], "auto": auto[idx], "factor": factor, "measured": measured,
+            "catchup": catchup,
             "parts": {k: np.nan_to_num(v[idx]) for k, v in parts.items()},
             "rendered": ((bits & BIT["rendered"]) != 0)[idx], "scan": ((bits & BIT["scan"]) != 0)[idx]}
 
 
-def transform(r, split=False, scan=1.0, body=1.0, tail="keep", render=1.0):
+def transform(r, split=False, scan=1.0, body=1.0, tail="keep", render=1.0, body_save=None, render_save=None):
     """(W, to_step_end). Scan processing and the render's world.step share sit before step_world's end; the camera
     read and the control tick after it. body halves only control ticks <= 50 ms; tail 'flat' caps the rest at 50 ms;
     tail 'scale' scales the long ticks by ``body`` too (pacer_replay's ctrl factor)."""
@@ -72,6 +90,9 @@ def transform(r, split=False, scan=1.0, body=1.0, tail="keep", render=1.0):
         tse -= cut
     c = P["control"]
     short = c <= TAIL
+    sim_all = len(r["w"]) * DT
+    if body_save is not None:  # an absolute cut, s per sim s over the whole trace (Codex P2: equal savings compared)
+        body = 1.0 - body_save * sim_all / max(c[short].sum(), 1e-9)
     w -= np.where(short, (1 - body) * c, 0.0)
     if tail == "flat":
         w -= np.where(~short, c - TAIL, 0.0)
@@ -79,6 +100,8 @@ def transform(r, split=False, scan=1.0, body=1.0, tail="keep", render=1.0):
         w -= np.where(~short, (1 - body) * c, 0.0)
     plain_world = np.median(P["world"][~r["rendered"]]) if (~r["rendered"]).any() else 0.0
     render_part = np.where(r["rendered"], np.maximum(P["world"] - plain_world, 0.0), 0.0)
+    if render_save is not None:
+        render = 1.0 - render_save * sim_all / max(render_part.sum(), 1e-9)
     if render != 1.0:
         cut = (1 - render) * render_part
         w -= cut
@@ -95,8 +118,8 @@ def transform(r, split=False, scan=1.0, body=1.0, tail="keep", render=1.0):
     return w, tse
 
 
-def replay(r, w, tse, catchup=6):
-    p = Pacer(1.0, DT, catchup_steps=catchup)
+def replay(r, w, tse, catchup=6, factor=1.0):
+    p = Pacer(factor, DT, catchup_steps=catchup)
     t, oks, starts = 0.0, [], []
     for i, (wi, ei) in enumerate(zip(w, r["eps"])):
         sleep = p.wait_s(t)
@@ -122,6 +145,8 @@ ROWS = [
     ("scan0.5 + ctrl0.5 (all ticks)", {"scan": 0.5, "body": 0.5, "tail": "scale"}),
     ("scan0.5 + render0.5", {"scan": 0.5, "render": 0.5}),
     ("scan0.5 + render0.5 + tail flat", {"scan": 0.5, "render": 0.5, "tail": "flat"}),
+    ("scan0.5 + body cut 0.05 s/sim s (equal saving)", {"scan": 0.5, "body_save": 0.05}),
+    ("scan0.5 + render cut 0.05 s/sim s (equal saving)", {"scan": 0.5, "render_save": 0.05}),
     ("ref split", {"split": True}),
     ("ref split + scan0.5", {"split": True, "scan": 0.5}),
     ("ref split + scan0.5 + tail flat", {"split": True, "scan": 0.5, "tail": "flat"}),
@@ -144,9 +169,15 @@ def main() -> int:
         print("  AUTO work per sim s: " + " ".join(f"{k} {P[k][a].sum() / sim:.3f}"
                                                    for k in ("world", "step_rest", "after", "control"))
               + f" | W {r['w'][a].sum() / sim:.3f}; control > 50 ms {int((c[a] > TAIL).sum())}")
+        rr, ro = replay(r, r["w"], r["parts"]["to_step_end"], catchup=r["catchup"], factor=r["factor"])
+        mr, mo = r["measured"]
+        print(f"   check: replay at the record's own f {r['factor']} k {r['catchup']}: ratio {rr:.3f} ok {ro:.3f}"
+              f" | measured AUTO ratio {mr:.3f} ok {mo if mo is None else round(mo, 3)}")
+        base_w = r["w"].sum()
         for label, kw in ROWS:
             ratio, ok = replay(r, *transform(r, **kw))
-            print(f"   {label:58s} ratio {ratio:.3f} ok {ok if ok is None else round(ok, 3)}")
+            saved = (base_w - transform(r, **kw)[0].sum()) / (len(r["w"]) * DT)
+            print(f"   {label:58s} ratio {ratio:.3f} ok {ok if ok is None else round(ok, 3)}  (saves {saved:.3f} s/sim s)")
         best = []
         for tail in ("keep", "flat"):
             for s in GRID_SCAN:
@@ -154,12 +185,14 @@ def main() -> int:
                     for rd in GRID_RENDER:
                         ratio, ok = replay(r, *transform(r, scan=s, body=b, tail=tail, render=rd))
                         if ok is not None and ok >= 0.95 and ratio >= 0.95:
-                            cost = (1 - s) + (1 - b) + (1 - rd)
+                            # ranked by the work removed (s per sim s), tail flattening included (Codex P2)
+                            w_ = transform(r, scan=s, body=b, tail=tail, render=rd)[0]
+                            cost = (base_w - w_.sum()) / (len(r["w"]) * DT)
                             best.append((cost, s, b, rd, tail, ok, ratio))
         best.sort()
-        print("   smallest cuts (sum of fractions) reaching ok >= 0.95 and ratio >= 0.95, no phase split:")
+        print("   least removed work (s/sim s) reaching ok >= 0.95 and ratio >= 0.95, no phase split (grid, not an optimum):")
         for cost, s, b, rd, tail, ok, ratio in best[:5]:
-            print(f"     scan {s} body {b} render {rd} tail {tail}: ok {ok:.3f} ratio {ratio:.3f}")
+            print(f"     scan {s} body {b} render {rd} tail {tail}: saves {cost:.3f}, ok {ok:.3f} ratio {ratio:.3f}")
         if not best:
             print("     none on the grid")
     return 0
