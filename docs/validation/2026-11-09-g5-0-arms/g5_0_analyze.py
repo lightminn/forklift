@@ -5,9 +5,12 @@ the prep's physics time unchanged), the first two render steps after the first c
 start gaps), the prep renders' and the wait's wall times (the live log's ``live_test_prep`` event), the first ``ok``
 from the runner start and from the first tick (M6), the mission outcome, and the 0.25 s gaps in the first 10 s.
 
-Per arm (the warm-up left out): a stall k (k = 1, 2) is "gone" when both sessions' render step k is at most 0.25 s, and
-"reduced" when the arm's median is at most half of P0's. The reading follows the registration's rules; when more than
-one holds, every one is listed.
+Per arm (the warm-up left out), each stall k (k = 1, 2) on its own: "gone" when every session's render step k is at
+most 0.25 s, "reduced" when the arm's median is at most half of P0's; "split" when the sessions disagree (one at most
+0.25 s, one above: a third session is due, plan 5.24); "shifted" when a later render step in the first 10 s takes over
+0.25 s (the stall moved, not gone). A prep arm whose renders each took at most 0.25 s while the stalls stayed did not
+do the live renders' work: the render reading is then undecided, not rejected. The oracle arm counts only with the
+same semantic labels as P0. The reading follows the registration's rules; when more than one holds, each is listed.
 
     PYTHONPATH=SNAP/src python g5_0_analyze.py OUT_DIR --list OUT_DIR.jsonl --ps PS.jsonl [--json out.json]
 """
@@ -29,10 +32,12 @@ C, BIT = g2m.C, g2m.BIT
 EDGE_S = 0.25
 
 
-def render_steps(trace: np.ndarray, first_row: int, k: int = 2) -> list[dict]:
-    """The first k rendered steps at or after the first control tick: world.step s and the start gap holding it."""
+def render_steps(trace: np.ndarray, first_row: int, k: int | None = 2) -> list[dict]:
+    """The first k rendered steps (all with k None) at or after the first control tick: world.step s and the start
+    gap holding it."""
     flags = np.nan_to_num(trace[:, C["flags"]]).astype(int)
-    rows = [i for i in np.where(flags & BIT["rendered"])[0] if i >= first_row][:k]
+    rows = [i for i in np.where(flags & BIT["rendered"])[0] if i >= first_row]
+    rows = rows if k is None else rows[:k]
     out = []
     for i in rows:
         world = float(trace[i, C["world_end"]] - trace[i, C["world_start"]])
@@ -52,15 +57,20 @@ def session_row(sess, arm: str) -> dict:
     elif prep is not None:
         row["invalid"].append(f"a live_test_prep event in arm {arm}")
     if prep is not None:
-        row["prep"] = {"renders_s": [b - a for a, b in prep.get("renders", [])],
+        row["prep"] = {"renders_s": [b - a for a, b in prep.get("renders", [])], "renders_cpu_s": prep.get("renders_cpu_s"),
                        "wait_s": (prep["wait"][1] - prep["wait"][0]) if prep.get("wait") else None,
-                       "physics_unchanged": prep.get("physics_unchanged")}
+                       "wait_cpu_s": prep.get("wait_cpu_s"), "physics_unchanged": prep.get("physics_unchanged")}
+    rec = (sess.result or {}).get("recognition") or {}
+    row["semantic_labels"] = rec.get("labels")
     if sess.trace is None:
         return row
     first = sess.first_ctrl_row()
     row["render_steps"] = render_steps(sess.trace, first)
     S = sess.trace[:, C["S"]]
     t0 = S[first]
+    later = [r for r in render_steps(sess.trace, first, None)[2:] if r["gap_s"] == r["gap_s"]
+             and S[r["row"]] - t0 <= 10.0]
+    row["later_render_over_0_25"] = [r for r in later if r["world_s"] > EDGE_S]
     gaps = np.diff(S[first:])
     within = (S[first:-1] - t0) <= 10.0
     row["gaps_over_0_25_first_10s"] = int(((gaps > EDGE_S) & within).sum())
@@ -80,13 +90,22 @@ def arm_summary(rows: list[dict]) -> dict:
     out = {}
     base = {k: float(np.median([r["render_steps"][k]["world_s"] for r in by.get("P0", [])])) if by.get("P0") else None
             for k in (0, 1)}
+    p0_labels = [r.get("semantic_labels") for r in by.get("P0", [])]
     for arm, rs in sorted(by.items()):
-        s = {"sessions": len(rs)}
+        s = {"sessions": len(rs), "shifted": any(r.get("later_render_over_0_25") for r in rs)}
         for k in (0, 1):
             vals = [r["render_steps"][k]["world_s"] for r in rs]
             med = float(np.median(vals))
-            s[f"stall{k + 1}"] = {"world_s": vals, "median_s": med, "gone": len(rs) == 2 and all(v <= EDGE_S for v in vals),
+            below = [v <= EDGE_S for v in vals]
+            s[f"stall{k + 1}"] = {"world_s": vals, "median_s": med, "gone": len(rs) >= 2 and all(below),
+                                  "split": any(below) and not all(below),
                                   "reduced": base[k] is not None and arm != "P0" and med <= base[k] / 2}
+        if arm in ("P1", "P2"):
+            preps = [v for r in rs for v in (r.get("prep") or {}).get("renders_s", [])]
+            s["prep_renders_s"] = preps
+            s["prep_did_the_work"] = bool(preps) and max(preps) > EDGE_S
+        if arm == "O":
+            s["same_labels_as_P0"] = bool(p0_labels) and all(r.get("semantic_labels") == p0_labels[0] for r in rs)
         out[arm] = s
     return out
 
@@ -100,14 +119,29 @@ def reading(summary: dict) -> list[str]:
         st = summary.get(arm, {}).get(f"stall{k}", {})
         return st.get("gone", False) or st.get("reduced", False)
     out = []
-    if eased("P1", 1) and gone("P2", 1) and gone("P2", 2):
-        out.append("first render-graph evaluation/preparation (P1 eases stall 1, P2 removes both)")
-    if eased("W", 1) or eased("W", 2):
-        out.append("time-based background work (the wait alone eases a stall)")
-    if (gone("O", 1) or gone("O", 2)) and not (gone("P2", 1) or gone("W", 1)):
-        out.append("the learned worker / IPC (only the oracle arm removes a stall)")
-    if not out:
-        out.append("none of the arms removes a stall: a Kit profiler arm is next (registered separately)")
+    for arm, s in summary.items():
+        for k in (1, 2):
+            if s.get(f"stall{k}", {}).get("split"):
+                out.append(f"{arm} stall {k} split between its sessions: a third {arm} session is due")
+        if s.get("shifted") and arm != "P0":
+            out.append(f"{arm}: a later render step in the first 10 s took over 0.25 s -- a stall moved, not gone")
+    for k in (1, 2):  # each stall on its own (independent review of 5.24, item 2)
+        if gone("P2", k) or (k == 1 and eased("P1", 1)):
+            out.append(f"stall {k}: first render-graph evaluation/preparation (a prep render removes or eases it)")
+        if eased("W", k):
+            out.append(f"stall {k}: time-based background work (the wait alone eases it)")
+        if gone("O", k) and not (gone("P2", k) or eased("W", k)):
+            if summary.get("O", {}).get("same_labels_as_P0"):
+                out.append(f"stall {k}: the learned worker / IPC (only the oracle arm removes it)")
+            else:
+                out.append(f"stall {k}: the oracle arm removes it but its semantic labels differ from P0's: undecided")
+    for arm in ("P1", "P2"):
+        s = summary.get(arm)
+        if s is not None and not s.get("prep_did_the_work") and not (eased(arm, 1) or eased(arm, 2)):
+            out.append(f"{arm}: its prep renders each took at most 0.25 s and the stalls stayed -- world.render() did "
+                       "not do the live renders' work; the render reading is undecided, not rejected")
+    if not any(o.startswith("stall") for o in out):
+        out.append("no arm removes or eases a stall: a Kit profiler arm is next (registered separately)")
     return out
 
 

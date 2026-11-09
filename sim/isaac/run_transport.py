@@ -9217,16 +9217,20 @@ def drive(S, isaac) -> None:
                 # Real-time plan 5.24 (G5-0 arms, test only): the first renders (or a plain wait) before the first
                 # control tick -- does the start stall move here, go, or stay? The physics must not move: its time
                 # before and after is kept, and an arm that moved it is invalid.
-                prep_ = {"renders": [], "wait_s": float(args.live_test_prep_wait_s),
+                # (the process's CPU time over each part too: a wait that some background thread works through shows
+                # here; independent review of 5.24, item 3)
+                prep_ = {"renders": [], "renders_cpu_s": [], "wait_s": float(args.live_test_prep_wait_s),
                          "physics_time_before": float(world.current_time)}
                 for _ in range(args.live_test_prep_renders):
-                    a_ = time.monotonic()
+                    a_, c_ = time.monotonic(), time.process_time()
                     world.render()
                     prep_["renders"].append([a_, time.monotonic()])
+                    prep_["renders_cpu_s"].append(time.process_time() - c_)
                 if args.live_test_prep_wait_s:
-                    a_ = time.monotonic()
+                    a_, c_ = time.monotonic(), time.process_time()
                     time.sleep(args.live_test_prep_wait_s)
                     prep_["wait"] = [a_, time.monotonic()]
+                    prep_["wait_cpu_s"] = time.process_time() - c_
                 prep_["physics_time_after"] = float(world.current_time)
                 prep_["physics_unchanged"] = prep_["physics_time_after"] == prep_["physics_time_before"]
                 state.setdefault("live_test_injections", []).append({"prep": prep_})
