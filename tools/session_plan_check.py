@@ -206,17 +206,20 @@ def _rect(site, pallet) -> Rectangle:
 
 
 def plan_mission(session, pallet, geometry, config, targets, slots: dict, pid: str, did: str, *, nominal, shape,
-                 prior_grow_m: float, observe_planner, transport_planner) -> dict:
+                 prior_grow_m: float, observe_planner, transport_planner, start=None) -> dict:
     """One mission of a session planned and measured as check_session does, in the state ``targets`` / ``slots`` (the
     pallets delivered before it at their slots): its candidates, plan status, outcome by the truth outlines, the
-    submit check's verdict and the planned length of each stage (CT-2 V2, docs/plans/2026-10-24-ct2-next-pick.md)."""
+    submit check's verdict and the planned length of each stage (CT-2 V2, docs/plans/2026-10-24-ct2-next-pick.md).
+    ``start``: where the mission leaves from in place of the session's start (it still returns to the session's start;
+    docs/plans/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 3)."""
     entry = {"pallet_id": pid, "destination_id": did,
              "submit_check": targets.check_submit(pid, did, targets.revision)}
     started = time.monotonic()
     own, dest = session.pallet_by_id(pid), session.destination(did)
     props = tuple(session.static_props) + session_pallet_props(
         targets, exclude_id=pid, nominal=nominal, shape=shape, prior_grow_m=prior_grow_m)
-    scenario = TransportScenario(seed=0, start_rear=session.start_rear, pickup=own.truth, destination=dest,
+    scenario = TransportScenario(seed=0, start_rear=session.start_rear if start is None else start, pickup=own.truth,
+                                 destination=dest,
                                  props=props, bounds=session.bounds)
     observe = None
     zone = zone_rect(own.zone, pallet.overall_depth_m, pallet.overall_width_m)

@@ -60,11 +60,11 @@ case ${SET:?far, off, mark or wall} in
     # 200 frames (about 20 sim s at the 10 Hz live camera) for the pixel lag, then TELEOP before the freeze at 30-60 sim s:
     # video-mode commands across it must be refused stale_video (Codex tool review: 300 frames reached the freeze's end)
     export EXTRA_ARGS="--live-test-marker --live-test-camera-freeze 30:60 $TRACE"
-    PROBE=(--scenario marker --frames-dir "$OUT/frames" --frames 200 --freeze-from 30) ; END=() ;;
+    PROBE=(--scenario marker --frames-dir "$OUT/frames" --frames 200 --freeze-from 30) ;;
   wall)
     unset SCENE_FILE
     export EXTRA_ARGS="--live-test-permit-compare $TRACE"
-    PROBE=(--scenario approach) ; END=() ;;
+    PROBE=(--scenario approach) ;;
   *) echo "SET must be far, off, mark or wall" >&2; exit 2 ;;
 esac
 { env | grep -E '^(SET|ARM|FACTOR|SEED|PORT|SCENE_FILE|ENCODER_MODEL|MAX_EPOCHS|SLAM_BUNDLE_ROOT|SESSION_ID|BRIDGE_CPU|FORKLIFT_[A-Z_]+|BUNDLE_[A-Z]+)=' | sort
@@ -91,7 +91,9 @@ PROBE_PID=$!
 wait "$PROBE_PID"; prc=$?
 while kill -0 "$PROBE_PID" 2>/dev/null; do wait "$PROBE_PID"; prc=$?; done
 echo "probe exit $prc $(date -Is)"; echo "$prc" > "$OUT/probe_rc"
-[ ${#END[@]} -eq 0 ] && kill -TERM "$LIVE" 2>/dev/null  # the marker and approach probes do not end the session
+# every set ends the session through the probe (--end-session); a launcher TERM loses the end summary, the tick
+# trace and the spool (plan 5.17: job 16866 lost all eight hall sessions so). The wait and the TERM below only
+# follow a probe that could not end it.
 for _ in $(seq 60); do kill -0 "$LIVE" 2>/dev/null || break; sleep 2; done
 kill -TERM "$LIVE" 2>/dev/null
 wait "$LIVE"; lrc=$?; echo "live exit $lrc $(date -Is)"

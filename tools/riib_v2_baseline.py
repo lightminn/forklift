@@ -46,7 +46,8 @@ def interval_stats(steps: dict, a: float, b: float) -> dict:
     expected = k1 - k0 + 1
     missing = expected - len(keys)
     out = {"F": (t1 - t0) / (m1 - m0) if m1 > m0 else math.nan, "R": false_wall / wall if wall > 0 else math.nan,
-           "wall_s": m1 - m0, "missing_steps": missing, "missing_share": missing / expected,
+           "wall_s": m1 - m0, "valid_wall_s": wall, "false_wall_s": false_wall,
+           "missing_steps": missing, "missing_share": missing / expected,
            "missing_wall_s": missing_wall, "max_gap_s": max_gap}
     why = []
     if out["missing_share"] > MISSING_SHARE:
