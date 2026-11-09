@@ -1201,6 +1201,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-10-29 B-P2b (start relocalization plan 1.4): every earlier run started at the
                               # scene's start, known; a relocalizing run from elsewhere is another condition
                               "start_pose": None, "start_relocalize": False,
+                              # 2026-11-09 the repro batch's H0: a known start at a placed pose; none before
+                              "start_known": False,
                               # B-P2c: the operator's options of a relocalizing run; none before
                               "reloc_unattended": False, "reloc_operator_timeout_s": None,
                               # 2026-11-03 the unconfirmed position check (plan 2026-11-02-unconfirmed-runner): off
