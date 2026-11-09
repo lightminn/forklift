@@ -71,14 +71,28 @@ def test_a_split_arm_waits_for_its_third_session_then_its_median_decides():
     assert any(o.startswith("stall 1: time-based") for o in out)
 
 
+def _others():
+    return [row("P1", 2.2, 1.0, prep=[0.3]), row("P1", 2.3, 0.97, prep=[0.3]), row("P2", 2.3, 0.99, prep=[0.3, 0.1]),
+            row("P2", 2.2, 0.98, prep=[0.3, 0.1]), row("W", 2.3, 1.0), row("W", 2.3, 0.98)]
+
+
 def test_the_oracle_arm_counts_only_alone_and_with_p0s_labels():
-    out = read(base() + [row("O", 0.1, 0.02), row("O", 0.12, 0.03)])
+    out = read(base() + [row("O", 0.1, 0.02), row("O", 0.12, 0.03)])  # no other arm decided: no evidence
+    assert any("are not decided -- undecided" in o for o in out) and not any("learned worker" in o for o in out)
+    out = read(base() + _others() + [row("O", 0.1, 0.02), row("O", 0.12, 0.03)])
     assert any("learned worker" in o for o in out)
     # P1 removes stall 1 too: then it is not the oracle alone
     out = read(base() + [row("O", 0.1, 0.02), row("O", 0.12, 0.03), row("P1", 0.1, 0.9, prep=[2.3]),
                          row("P1", 0.1, 0.95, prep=[2.3])])
     assert not any(o.startswith("stall 1: the learned worker") for o in out)
     # labels missing on both sides: undecided, not equal
-    out = read([row("P0", 2.3, 1.0, labels=None), row("P0", 2.3, 1.0, labels=None),
-                row("O", 0.1, 0.02, labels=None), row("O", 0.1, 0.02, labels=None)])
+    out = read([row("P0", 2.3, 1.0, labels=None), row("P0", 2.3, 1.0, labels=None)] + _others()
+               + [row("O", 0.1, 0.02, labels=None), row("O", 0.1, 0.02, labels=None)])
     assert any("labels are not P0's (or missing)" in o for o in out)
+
+
+def test_extra_args_as_the_wrapper_records_them():
+    recorded = r"--recognition\ far\ --recognition-proposals\ oracle\ --recognition-pixel-lag-steps\ 12\ --max-sim-seconds\ 1500"
+    text = g5.extra_args(recorded)
+    assert "--recognition far" in text and "--recognition-proposals oracle" in text
+    assert "--recognition-proposals learned" in g5.extra_args(r"--recognition\ far\ --recognition-proposals\ learned")

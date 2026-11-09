@@ -46,6 +46,17 @@ def render_steps(trace: np.ndarray, first_row: int, k: int | None = 2) -> list[d
     return out
 
 
+def extra_args(recorded: str) -> str:
+    """The wrapper's EXTRA_ARGS as args.txt keeps it (printf %q: escaped spaces) back to plain words joined by spaces
+    (Codex 5.24 review round 2 P2-1)."""
+    import shlex
+
+    try:
+        return " ".join(" ".join(shlex.split(t)) for t in shlex.split(recorded))
+    except ValueError:
+        return recorded
+
+
 def session_row(sess, arm: str) -> dict:
     row = {"name": sess.name, "arm": arm, "invalid": list(sess.invalid)}
     prep = next((r for r in sess.log if r.get("event") == "live_test_prep"), None)
@@ -62,7 +73,7 @@ def session_row(sess, arm: str) -> dict:
                                       f"wait {bool(prep.get('wait'))}")
     elif prep is not None:
         row["invalid"].append(f"a live_test_prep event in arm {arm}")
-    extra = sess.cond.get("EXTRA_ARGS", "")
+    extra = extra_args(sess.cond.get("EXTRA_ARGS", ""))
     oracle = "--recognition-proposals oracle" in extra
     if (arm == "O") != oracle or ("--recognition far" not in extra):
         row["invalid"].append(f"arm {arm} ran with the proposals {'oracle' if oracle else 'learned'} (EXTRA_ARGS)")
@@ -184,7 +195,11 @@ def reading(summary: dict) -> list[str]:
         if wait:
             out.append(f"stall {k}: time-based background work (the wait alone eases it)")
         if gone("O", k) and not (prep or wait or eased("P1", k) or eased("P2", k)):  # O alone (P2-3)
-            if arms.get("O", {}).get("same_labels_as_P0"):
+            compared = [a for a in ("P1", "P2", "W") if st(a, k).get("state") in ("gone", "present")]
+            if len(compared) < 3:  # a missing or short arm is no evidence of "no effect" (round 2 P2-2)
+                out.append(f"stall {k}: the oracle arm removes it but {sorted({'P1', 'P2', 'W'} - set(compared))} "
+                           "are not decided -- undecided")
+            elif arms.get("O", {}).get("same_labels_as_P0"):
                 out.append(f"stall {k}: the learned worker / IPC (only the oracle arm removes it)")
             else:
                 out.append(f"stall {k}: the oracle arm removes it but its semantic labels are not P0's (or missing): "
