@@ -509,12 +509,18 @@ async def _marker_steps(p: Probe, args):
         st = p.state or {}
         p.report["freeze"]["samples"].append({"mono": time.monotonic(), "last_frame_sim": sim_now(),
                                               "armed": st.get("armed"), "reject": st.get("last_teleop_reject")})
-        # Only a refusal with the frames stopped at the freeze counts: a stale_video before it (a render or transport
-        # stall) would end the steps -- and with --end-session the session -- before the freeze was tested (Codex
-        # r1c mark/wall review P2). The last frame before the freeze is within one camera period of its start.
-        if (not st.get("armed") and st.get("last_teleop_reject") == "stale_video"
-                and sim_now() >= args.freeze_from - FREEZE_FRAME_SLACK_S):
-            p.event("stale_video_disarmed", last_frame_sim=sim_now())
+        in_freeze = sim_now() >= args.freeze_from - FREEZE_FRAME_SLACK_S
+        if not st.get("armed") and not in_freeze:
+            # Disarmed before the freeze (a stall's stale_video, an expiry): armed again, so the freeze meets live
+            # commands (R1 results: three sessions entered it already disarmed and proved nothing).
+            p.event("rearmed_before_freeze", reject=st.get("last_teleop_reject"), last_frame_sim=sim_now())
+            arm = await p.request("arm")
+            p.arm_gen = (arm or {}).get("arm_gen", p.arm_gen)
+        elif not st.get("armed"):
+            # Disarmed with the frames stopped at the freeze: the steps end here, whatever the state's last reject
+            # shows now (it is soon overwritten by not_armed / stale_control: R1 results, r1c_18 waited 600 s). The
+            # analysis judges the reason from the runner's own disarm event, not from this sample.
+            p.event("disarmed_in_freeze", reject=st.get("last_teleop_reject"), last_frame_sim=sim_now())
             break
         await asyncio.sleep(0.05)
 
@@ -563,10 +569,22 @@ async def _approach_steps(p: Probe, args):
             except websockets.ConnectionClosed:
                 break  # the runner ended (its own checks stop a run): recorded below
             st = p.state or {}
+            if not st.get("armed"):
+                # Disarmed mid-leg (a command expiry after a long step; R1 results: every arm's wall leg ended so and
+                # the later legs never moved): armed again and the leg goes on; it is not a hold.
+                p.event("rearmed_in_leg", leg=name, reject=st.get("last_teleop_reject"))
+                arm = await p.request("arm")
+                p.arm_gen = (arm or {}).get("arm_gen", p.arm_gen)
+                still_since = None
+                await asyncio.sleep(0.05)
+                continue
             v = abs(st.get("rear_axle_speed_mps") or 0.0)
             moved = moved or v > 0.05
             applied_ = abs((st.get("applied") or {}).get("speed_mps") or 0.0)
-            if moved and applied_ == 0.0 and v < 0.03:  # the vehicle holds it (the measured speed jitters ~0.02)
+            permit_limit = (st.get("permit") or {}).get("limit_mps")
+            # A hold is the permission's: armed, the output zero, the permission's limit zero, the truck still
+            # (R1 results: an expiry's zero output was counted as a hold short of the wall).
+            if moved and applied_ == 0.0 and v < 0.03 and permit_limit is not None and permit_limit <= 0.0:
                 still_since = still_since or time.monotonic()
                 if time.monotonic() - still_since > args.held_s and name not in ("reverse_swing", "weave"):
                     break  # held short of the obstacle with the command still asking to go
@@ -1746,7 +1764,12 @@ async def _psleep(p, seconds):
     await (sleep(seconds) if sleep is not None else asyncio.sleep(seconds))
 
 
-async def confirm_stop(p, label, clock=time.monotonic) -> dict:
+# R1 results: the STOP's completion is the four wheels still for 0.2 sim s; a rearm 0.5 wall s after the rear axle
+# stood (0.2 sim s at 0.4) came before it could be seen. The probe now holds the STOP 1 sim s before rearming.
+STOP_HOLD_SIM_S = 1.0
+
+
+async def confirm_stop(p, label, clock=time.monotonic, factor=1.0) -> dict:
     """A STOP sent now (a 'key' source, as the console's button): its send time and request on the probe's clock --
     the runner's link log holds the same request processed -- whether the truck was moving when it was sent, then the
     stop and the stand waited for and a rearm (5.17 T3). A STOP not acknowledged is recorded and not rearmed."""
@@ -1761,7 +1784,7 @@ async def confirm_stop(p, label, clock=time.monotonic) -> dict:
     rec["standing_mono"] = clock() if rec["standing"] else None
     rec["rearm"] = None
     if rec["standing"]:
-        await _psleep(p, 0.5)
+        await _psleep(p, max(0.5, STOP_HOLD_SIM_S / factor))
         rearm = await p.request_until_standing("rearm")
         rec["rearm"] = None if rearm is None else rearm.get("t")
     p.report.setdefault("confirm", {}).setdefault("stops", []).append(rec)
@@ -1809,7 +1832,7 @@ async def hold_teleop(p, label, sim_seconds, speed_ratio, curvature_ratio, mode=
     stop_after_s = None if stop_after_sim_s is None else stop_after_sim_s / factor
     while clock() - start < seconds:
         if stop_after_s is not None and clock() - start >= stop_after_s:
-            rec["stop"] = await confirm_stop(p, "T", clock=clock)
+            rec["stop"] = await confirm_stop(p, "T", clock=clock, factor=factor)
             rec["end_mono"] = rec["stop"]["sent_mono"]
             break
         await p.teleop(speed_ratio, curvature_ratio, True, mode=mode, lift_dir=lift_dir)
@@ -1909,7 +1932,7 @@ async def confirm_scenario(p: Probe, args):
     # STOP-A1 in transport, moving; a short loaded teleop while the mission lives; resume
     if step("transport_moving", await p.until(lambda s: moving_in("transport")(s) or ended(s), timeout,
                                               label="transport_moving") and not ended(p.state)):
-        a1 = await confirm_stop(p, "A1")
+        a1 = await confirm_stop(p, "A1", factor=f)
         if step("stop_A1", a1["rearm"] == "ack"):
             entry = await confirm_enter_teleop(p)
             if step("loaded_teleop_entry", entry["entered"]):
@@ -1919,7 +1942,7 @@ async def confirm_scenario(p: Probe, args):
     # STOP-A2 on the return, moving; resume
     if step("return_moving", await p.until(lambda s: moving_in("return_home")(s) or ended(s), timeout,
                                            label="return_moving") and not ended(p.state)):
-        a2 = await confirm_stop(p, "A2")
+        a2 = await confirm_stop(p, "A2", factor=f)
         if step("stop_A2", a2["rearm"] == "ack"):
             await p.request("mode_request", to="PAUSED")
             await resume()

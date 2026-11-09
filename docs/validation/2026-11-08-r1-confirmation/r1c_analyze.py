@@ -127,6 +127,7 @@ class Session:
         self.status = [r for r in self.log if "pacing_ok" in r and r.get("mono") is not None and "speed_mps" in r]
         self.links = [r for r in self.log if r.get("where") is not None and r.get("t") is not None]
         self.disarms = [r for r in self.log if r.get("arbiter") and r.get("event") == "disarm"]
+        self.arbiter_events = [r for r in self.log if r.get("arbiter")]
         self.result = json.loads((self.run / "result.json").read_text()) if (self.run / "result.json").exists() else None
         saved = (self.result or {}).get("tick_trace") or {}
         self.trace = None
@@ -192,23 +193,35 @@ class Session:
             before = [r["mono"] for r in self.status if r["mono"] < first_zero["mono"]]
             lower = max(before[-1], proc) if before else proc
             out["processed_to_zero_s"] = [lower - proc, first_zero["mono"] - proc]
+        # the search closes at the rearm: a still window after it belongs to later driving, not to this STOP (R1
+        # results: r1c_02's STOP-T rearmed 0.76 s after processing and its "still" came 48.6 s later)
+        rearm = next((e.get("t", e.get("mono")) for e in self.arbiter_events
+                      if e.get("event") == "mode" and e.get("reason") == "rearm"
+                      and (e.get("t", e.get("mono")) or -1) >= proc), None)
+        out["rearm_after_processed_s"] = None if rearm is None else rearm - proc
         if self.trace is not None and self.joint is not None:
             i0 = self.row_at_mono(proc)
             out["in_burst"] = self.early(i0)
             stamps, rates, _ = self.joint_arrays()
             still = rates < STILL_RAD_S
+            out["still_before_rearm"] = False
             for k in np.flatnonzero(stamps > self.start_sim(i0)):
                 r = self.row_of_end_stamp(stamps[k])
                 if not self.trace[r, C["world_end"]] >= proc:
                     continue  # a step that ended before the STOP was processed is not its stop (Codex round 2 P2)
+                if rearm is not None and self.trace[r, C["world_end"]] > rearm:
+                    break  # rearmed before the wheels stood still: not this STOP's stop
                 end = stamps[k] + STILL_SIM_S
                 if stamps[-1] < end - 1e-9:
                     break  # the window's end was never observed
+                if rearm is not None and self.trace[self.row_of_end_stamp(end), C["world_end"]] > rearm:
+                    break  # the still window would end after the rearm: not seen before it
                 win = (stamps >= stamps[k]) & (stamps <= end + 1e-9)
                 if still[win].all():
                     v = float(self.trace[r, C["world_end"]] - proc)
                     if math.isfinite(v) and v >= 0:
                         out["processed_to_still_s"] = v
+                        out["still_before_rearm"] = True
                     break
         return out
 
@@ -355,8 +368,23 @@ def freeze_check(s):
             t = s.start_sim(s.row_at_mono(x["mono"]))
             if window[0] <= t <= window[1] and (x.get("last_frame_sim") or 0.0) >= window[0] - FREEZE_FRAME_SLACK_S:
                 inside.append(t)
-    out["freeze_disarm_sim_s"] = inside[0] if inside else None
-    out["freeze_disarmed_stale_video"] = bool(inside)
+    out["sample_disarm_sim_s"] = inside[0] if inside else None  # the probe's samples (kept as information)
+    # R1 results: the judgement reads the runner's own events -- armed when the freeze began (the last arm or disarm
+    # before it is an arm), then a stale_video disarm inside the freeze. The probe's samples miss it when the state's
+    # last reject is overwritten (r1c_18), and a session disarmed before the freeze proves nothing.
+    seq = [e for e in getattr(s, "arbiter_events", []) if e.get("event") in ("arm", "disarm")
+           and e.get("tick_t") is not None]
+    armed_at = None
+    if window is not None:
+        before = [e for e in seq if e["tick_t"] < window[0]]
+        armed_at = bool(before) and before[-1]["event"] == "arm"
+        hit = next((e["tick_t"] for e in seq if e["event"] == "disarm" and e.get("reason") == "stale_video"
+                    and window[0] <= e["tick_t"] <= window[1]), None)
+    else:
+        hit = None
+    out["armed_at_freeze_start"] = armed_at
+    out["freeze_disarm_sim_s"] = hit
+    out["freeze_disarmed_stale_video"] = bool(armed_at) and hit is not None
     end = s.report.get("end_requested_mono")
     last = max((x["mono"] for x in samples), default=None)
     out["ended_after_measures"] = None if end is None or last is None else bool(end > last)
