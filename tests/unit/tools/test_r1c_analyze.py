@@ -192,7 +192,7 @@ def test_a_baseline_that_does_not_complete_is_undecidable():
 C = {n: i for i, n in enumerate(COLUMNS)}
 
 
-def write_run(tmp_path, *, profile=("6", ""), records=True):
+def write_run(tmp_path, *, profile=("6", ""), records=True, rearm_step=None):
     out = tmp_path / "r01"
     run = out / "live" / "epoch_1" / "run"
     (run / "spool" / "slam_log.joint").mkdir(parents=True)
@@ -227,6 +227,9 @@ def write_run(tmp_path, *, profile=("6", ""), records=True):
     lines.append({"mono": proc, "where": "step", "conn": "c", "client": "op", "t": "stop", "request_id": "r9",
                   "reply": ["ack", None]})
     lines.append({"t": float(S[400]), "event": "disarm", "reason": "expired", "arbiter": True, "tick_t": 400 / 120})
+    if rearm_step is not None:
+        lines.append({"t": float(S[rearm_step]), "event": "mode", "reason": "rearm", "arbiter": True,
+                      "tick_t": rearm_step / 120})
     lines.sort(key=lambda e: e.get("mono", e.get("t")))
     (run / "live_log.jsonl").write_text("".join(json.dumps(e) + "\n" for e in lines))
     (run / "result.json").write_text(json.dumps({"tick_trace": {"rows": n, "dropped": 0}}))
@@ -295,14 +298,18 @@ def test_the_arbiter_logs_an_expired_disarm_when_no_command_arrives():
     assert disarms and disarms[0]["reason"] == "expired" and a.last_teleop_reject is None
 
 
-def freeze_session(samples, end_mono=None, factor=0.4):
-    """A mark session for the freeze check: ticks at 120 Hz, wall S at the factor, the args' freeze 30:60."""
+def freeze_session(samples, end_mono=None, factor=0.4, events=()):
+    """A mark session for the freeze check: ticks at 120 Hz, wall S at the factor, the args' freeze 30:60, and the
+    runner's arm / disarm events (sim times) the judgement reads (R1 results)."""
     ticks = np.arange(0, 120 * 70)
     data = np.full((len(ticks), len(ra.C)), np.nan)
     data[:, ra.C["tick"]] = ticks
     data[:, ra.C["S"]] = 1000.0 + ticks * ra.DT / factor
+    data[:, ra.C["world_end"]] = data[:, ra.C["S"]] + 0.002  # each step's world.step ends 2 ms after its start
     s = SimpleNamespace(trace=data, args={"EXTRA_ARGS": r"--live-test-marker\ --live-test-camera-freeze\ 30:60"},
-                        report={"freeze": {"samples": samples}, **({"end_requested_mono": end_mono} if end_mono else {})})
+                        report={"freeze": {"samples": samples}, **({"end_requested_mono": end_mono} if end_mono else {})},
+                        arbiter_events=[{"arbiter": True, "event": ev, "reason": why, "t": 1000.0 + t / factor,
+                                         "tick_t": t + 1 / 120} for ev, why, t in events])  # tick_t: the flush's tick
     s.row_at_mono = lambda m: ra.Session.row_at_mono(s, m)
     s.start_sim = lambda i: ra.Session.start_sim(s, i)
     return s
@@ -312,17 +319,31 @@ def at(sim, factor=0.4):
     return 1000.0 + sim / factor
 
 
-def test_the_freeze_refusal_counts_only_inside_the_freeze():
+def test_the_freeze_refusal_needs_an_arm_before_it_and_the_runners_disarm_inside_it():
     inside = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}
-    early = {"mono": at(25.0), "armed": False, "reject": "stale_video", "last_frame_sim": 24.9}
-    flowing = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 25.0}
     assert ra.freeze_window({"EXTRA_ARGS": r"--live-test-camera-freeze\ 30:60\ --x"}) == (30.0, 60.0)
-    out = ra.freeze_check(freeze_session([early, inside], end_mono=at(36.0)))
-    assert out["freeze_disarmed_stale_video"] and abs(out["freeze_disarm_sim_s"] - 35.0) < 0.01
+    good = freeze_session([inside], end_mono=at(36.0), events=[("arm", None, 20.7), ("disarm", "stale_video", 30.15)])
+    out = ra.freeze_check(good)
+    assert out["armed_at_freeze_start"] and out["freeze_disarmed_stale_video"] and out["freeze_disarm_sim_s"] == 30.15
     assert out["ended_after_measures"] is True
-    assert not ra.freeze_check(freeze_session([early]))["freeze_disarmed_stale_video"]
-    assert not ra.freeze_check(freeze_session([flowing]))["freeze_disarmed_stale_video"]
-    assert ra.freeze_check(freeze_session([inside], end_mono=at(34.0)))["ended_after_measures"] is False
+    # r1c_18: the samples missed it (the last reject overwritten) but the runner's event is there
+    missed = freeze_session([{"mono": at(31.0), "armed": False, "reject": "not_armed", "last_frame_sim": 29.95}],
+                            events=[("arm", None, 20.7), ("disarm", "stale_video", 30.15)])
+    assert ra.freeze_check(missed)["freeze_disarmed_stale_video"]
+    # disarmed before the freeze and never armed again: nothing proved, whatever the samples say
+    early = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "stale_video", 23.96),
+                                             ("disarm", "stale_video", 30.2)])
+    out = ra.freeze_check(early)
+    assert out["armed_at_freeze_start"] is False and not out["freeze_disarmed_stale_video"]
+    # armed again before the freeze: proved again
+    rearmed = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "expired", 23.96), ("arm", None, 24.5),
+                                               ("disarm", "stale_video", 30.2)])
+    assert ra.freeze_check(rearmed)["freeze_disarmed_stale_video"]
+    # another reason inside the freeze is not the freeze's refusal
+    other = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "expired", 31.0)])
+    assert not ra.freeze_check(other)["freeze_disarmed_stale_video"]
+    assert ra.freeze_check(freeze_session([inside], end_mono=at(34.0),
+                                          events=[("arm", None, 20.7)]))["ended_after_measures"] is False
 
 
 def test_the_freeze_window_is_read_from_a_real_args_file(tmp_path):
@@ -334,6 +355,50 @@ def test_the_freeze_window_is_read_from_a_real_args_file(tmp_path):
         "0123abcd  /x/r1c_session.sh\n")
     args = ra.read_args(tmp_path)
     assert args["SET"] == "mark" and ra.freeze_window(args) == (30.0, 60.0)
-    s = freeze_session([{"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}])
+    s = freeze_session([], events=[("arm", None, 20.7), ("disarm", "stale_video", 30.2)])
     s.args = args
     assert ra.freeze_check(s)["freeze_disarmed_stale_video"]
+
+
+def test_the_stop_search_closes_at_the_rearm(tmp_path):
+    """R1 results: a still window after the rearm belongs to later driving, not to the STOP (r1c_02's STOP-T)."""
+    early = ra.Session(write_run(tmp_path / "a", rearm_step=305)).analyse()["T3"][0]  # before 0.2 sim s of stillness
+    assert early["still_before_rearm"] is False and "processed_to_still_s" not in early
+    assert early["rearm_after_processed_s"] > 0
+    late = ra.Session(write_run(tmp_path / "b", rearm_step=450)).analyse()["T3"][0]
+    assert late["still_before_rearm"] is True and late["processed_to_still_s"] >= 0
+
+
+def test_a_disarm_just_before_the_freeze_flushed_at_its_tick_is_before_it():
+    """Codex tools review P2-1: the event's tick_t is the tick it was flushed with; its occurrence decides. A gate
+    disarm inside the last step before the freeze (during its world.step) acts from that step, before the freeze."""
+    inside = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}
+    s = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "stale_video", 29.99)])
+    S = s.trace[:, ra.C["S"]]
+    s.arbiter_events[-1]["t"] = float(S[3599] + 0.001)  # inside step 3599's world.step (2 ms long)
+    s.arbiter_events[-1]["tick_t"] = 30.0  # flushed with the first tick of the freeze
+    out = ra.freeze_check(s)
+    assert out["armed_at_freeze_start"] is False and not out["freeze_disarmed_stale_video"]
+
+
+def test_a_wall_leg_records_its_disarms_and_rearms_and_a_recovered_leg_is_no_clean_stop():
+    """Codex tools review P2-2: a leg recovered after an expiry is kept apart from a continuous approach."""
+    s = SimpleNamespace(trace=None, joint=None,
+                        report={"approach": [{"leg": "forward_to_wall", "held": True, "moved": True, "armed": True,
+                                              "permit": {"reason": "occupied", "limit_mps": 0.0}}],
+                                "events": [{"event": "rearmed_in_leg", "leg": "forward_to_wall", "mono": 5.0},
+                                           {"event": "leg_done", "leg": "forward_to_wall", "mono": 9.0}]},
+                        arbiter_events=[{"arbiter": True, "event": "disarm", "reason": "expired", "t": 4.9}])
+    row = ra.wall_measures(s)[0]
+    assert row["disarms"] == ["expired"] and row["rearms"] == 1 and row["permit_reason"] == "occupied"
+
+
+def test_a_control_tick_event_acts_from_the_next_step():
+    """Round 2 P2-1: an arm between a step's world.step end and the next S belongs to the next step."""
+    s = freeze_session([])
+    S = s.trace[:, ra.C["S"]]
+    k = 3600  # sim 30.0
+    between = float(S[k - 1] + 0.010)  # after step k-1's world.step (2 ms), before S[k]
+    assert abs(ra.event_sim(s, between) - 30.0) < 1e-9
+    within = float(S[k - 1] + 0.001)  # inside step k-1's world.step
+    assert abs(ra.event_sim(s, within) - (k - 1) / 120) < 1e-9
