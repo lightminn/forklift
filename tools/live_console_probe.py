@@ -452,7 +452,25 @@ async def main_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+async def _end_if_asked(p, args) -> None:
+    """--end-session for the scenarios that leave the session open (marker, approach): close it through its own path
+    so the epoch writes its end summary, result.json, the tick trace and the spool -- a launcher TERM lost all of them
+    (realtime plan 5.17, ws1 job 16866: the eight hall sessions; validation v2 H1 likewise)."""
+    if getattr(args, "end_session", False):
+        await _end_session(p)
+
+
 async def marker_scenario(p: Probe, args):
+    await _marker_steps(p, args)
+    await _end_if_asked(p, args)
+
+
+async def approach_scenario(p: Probe, args):
+    await _approach_steps(p, args)
+    await _end_if_asked(p, args)
+
+
+async def _marker_steps(p: Probe, args):
     """Plan C5: save the frames (the runner's marker tells when their pixels were drawn); then, with the runner's
     camera freeze (--live-test-camera-freeze FROM:TO, sim s), hold TELEOP and send video-mode commands (dead man
     released: nothing moves) across the freeze -- they must be refused stale_video and disarm."""
@@ -493,7 +511,7 @@ async def marker_scenario(p: Probe, args):
         await asyncio.sleep(0.05)
 
 
-async def approach_scenario(p: Probe, args):
+async def _approach_steps(p: Probe, args):
     """M-c completion 5: teleoperation up to an obstacle the 2D LiDAR sees. From the start pose (rear axle at
     x -2.34 facing +x) a slight right curve passes the pallet (it sits 1 m to the left; the 1.05 m scan plane does
     not see it -- nor does the teleoperation permission) towards the hall wall at x 4.7: the arc bundle permission must slow the truck and hold it short of
@@ -2463,7 +2481,7 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true",
-                    help="cycle, queue and main scenarios: end the session at the end (main: validation v2 H1)")
+                    help="cycle, queue, main, confirm, marker and approach scenarios: end the session at the end (main: validation v2 H1; marker and approach: realtime plan 5.17, job 16866)")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
