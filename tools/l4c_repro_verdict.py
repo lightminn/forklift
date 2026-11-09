@@ -273,6 +273,14 @@ def _pose_error(a, b):
     return (math.hypot(a[0] - b[0], a[1] - b[1]), abs(math.atan2(math.sin(a[2] - b[2]), math.cos(a[2] - b[2]))))
 
 
+def _pose3(v) -> bool:
+    """Three finite numbers (an incomplete start_known record leaves the session undecided, never an error)."""
+    try:
+        return len(v) == 3 and all(math.isfinite(float(x)) for x in v)
+    except (TypeError, ValueError):
+        return False
+
+
 def h0_valid(sess: dict, track, p5: list) -> dict:
     """The pose match at the P-5 mission's start (truth rear vs the target) and the known start (correction 1.5): the
     runner's ``start_known`` record at the registered base pose and no start relocalization. The settled truth's
@@ -280,7 +288,7 @@ def h0_valid(sess: dict, track, p5: list) -> dict:
     result = sess.get("result") or {}
     known = result.get("start_known") or {}
     base = [float(v) for v in H0_START_POSE_KNOWN.split(",")]
-    known_ok = (bool(known.get("base")) and bool(known.get("rear")) and result.get("start_reloc") is None
+    known_ok = (_pose3(known.get("base")) and _pose3(known.get("rear")) and result.get("start_reloc") is None
                 and all(abs(float(a) - b) <= 1e-6 for a, b in zip(known["base"], base)))
     first = min(p5, key=lambda m: float(m.get("started_s") or 0.0)) if p5 else None
     at = None if first is None else truth_at(track, float(first.get("started_s") or 0.0))

@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from test_isaac_live_preflight import (  # noqa: E402,F401 -- tmp_path: the short /tmp root the launcher needs
-    _bridge, _launch, _preflight, _registry_launch, _relocalizing, _supervisor, tmp_path)
+    _bridge, _fake_python, _launch, _preflight, _registry_launch, _relocalizing, _supervisor, tmp_path)
 
 POSE = "-0.934,0.9106,0.1706"
 
@@ -64,3 +64,13 @@ def test_without_it_the_session_starts_as_before(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     assert "--start-known" not in _preflight(tmp_path) and _env(tmp_path, "START_POSE_KNOWN") == ""
     assert _env(tmp_path, "MAP_START_POSE") == "1.5,-2.0,0.25"  # the registry row's start
+
+
+def test_a_map_folder_given_by_hand_takes_the_known_start_as_its_start_pose(tmp_path):
+    # Codex fix A review P3: the folder's MAP_START_POSE requirement comes before the start choice
+    bundle = tmp_path / "bundle"
+    bundle.mkdir(parents=True)
+    p = _launch(tmp_path, venv_py=_fake_python(tmp_path), DRY_RUN="0", MAP_BUNDLE=str(bundle),
+                START_POSE_KNOWN=POSE)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert _env(tmp_path, "MAP_START_POSE") == POSE and "--start-known" in _preflight(tmp_path)

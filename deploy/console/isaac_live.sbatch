@@ -80,6 +80,9 @@ case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exi
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
+# the repro batch's H0 (diagnostic): a known start is the bridge's start pose on any survey map, the registry's or one
+# given by hand (checked with the start choice below)
+[ -n "${START_POSE_KNOWN:-}" ] && [ -n "${MAP_BUNDLE:-}" ] && MAP_START_POSE=$START_POSE_KNOWN
 if [ -n "${MAP_BUNDLE:-}" ]; then
   # a bundle folder that is not there stops the launch (an empty realpath would have read as mapping)
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
@@ -168,8 +171,7 @@ else
     START_MODE="known (no survey map to relocalize on)"
   fi
 fi
-if [ -n "${START_POSE_KNOWN:-}" ]; then  # where the truck stands is where the SLAM starts (map = world)
-  MAP_START_POSE=$START_POSE_KNOWN
+if [ -n "${START_POSE_KNOWN:-}" ]; then  # where the truck stands is where the SLAM starts (map = world, set above)
   START_MODE="known at START_POSE_KNOWN (diagnostic: placed there, no relocalization)"
 fi
 echo "slam: $SLAM_CHOICE"

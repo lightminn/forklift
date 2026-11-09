@@ -159,6 +159,11 @@ def test_h0_is_valid_on_the_known_start_at_the_target_pose():
     moved = [(0.0, *rear), (50.0, rear[0] + 0.03, rear[1], rear[2])]
     v = R.h0_valid({"result": {"start_known": known}}, moved, [{"started_s": 50.0}])
     assert v["known_start"] and v["pose_ok"] is False and not v["ok"]  # the settle missed the target by 3 cm
+    # Codex fix A review P3: an incomplete or broken record is not the known start (undecided), never an error
+    for bad in ({**known, "base": [-0.934]}, {**known, "rear": [-1.2691]}, {**known, "rear": None},
+                {**known, "base": [-0.934, 0.9106, float("nan")]}, {**known, "rear": ["x", 0.0, 0.0]}):
+        v = R.h0_valid({"result": {"start_known": bad}}, track, p5)
+        assert not v["ok"] and not v["known_start"] and v["start_error"] is None
 
 
 def test_a_mission_without_its_result_or_folder_is_missing(tmp_path):
