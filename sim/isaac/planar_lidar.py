@@ -170,6 +170,50 @@ def cast_scan_flags(
     return distances, hits, own
 
 
+def cast_scan_flags_fast(
+    origin: np.ndarray,
+    directions: np.ndarray,
+    range_max_m: float,
+    *,
+    own_prefixes: tuple = (SELF_PREFIX,),
+    query=None,
+    own_cache: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Real-time plan G3-1d candidate (the microbench's arm B; the runner does not call it yet): cast_scan_flags'
+    rays, results and own test, with the Python around each query trimmed -- the directions converted to floats once
+    (``tolist``), the query and the vector type bound once, and the own test done once per distinct
+    (rigidBody, collision) pair (``own_cache``, keyed also by the prefixes: they change with the carried pallet).
+    The own test keeps cast_scan_flags' meaning -- a prefix anywhere in rigidBody + collision (Codex P1-2, plan 5.20:
+    not startswith)."""
+    import carb
+
+    if query is None:
+        from omni.physx import get_physx_scene_query_interface
+
+        query = get_physx_scene_query_interface()
+    cast, vec, reach = query.raycast_closest, carb.Float3, float(range_max_m)
+    start = vec(*map(float, origin))
+    n = len(directions)
+    distances = np.full(n, np.nan)
+    hits = np.zeros(n, dtype=bool)
+    own = np.zeros(n, dtype=bool)
+    cache = {} if own_cache is None else own_cache
+    prefixes = tuple(own_prefixes)
+    for index, (x, y, z) in enumerate(np.asarray(directions, dtype=float).tolist()):
+        result = cast(start, vec(x, y, z), reach, False)
+        if not result.get("hit", False):
+            continue
+        hits[index] = True
+        distances[index] = float(result["distance"])
+        key = (prefixes, result.get("rigidBody", ""), result.get("collision", ""))
+        flag = cache.get(key)
+        if flag is None:
+            body = str(key[1]) + str(key[2])
+            flag = cache[key] = any(prefix in body for prefix in prefixes)
+        own[index] = flag
+    return distances, hits, own
+
+
 # Real-time plan 5.20 G3-1a: every N-th scan (FORKLIFT_LIVE_LIDAR_PROFILE_EVERY, 0 = off) is cast through the same
 # steps with its time split -- the PhysX query, the direction's conversion, and the own-body test -- into the live
 # timers (lidar.split.*; the scan count in lidar.split.scans). Only those scans pay for the clocks; the results are the
@@ -227,6 +271,7 @@ __all__ = [
     "LaserMount",
     "cast_scan",
     "cast_scan_flags",
+    "cast_scan_flags_fast",
     "draw_points",
     "laser_pose_2d",
     "laser_rays_world",
