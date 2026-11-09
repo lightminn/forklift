@@ -11,8 +11,17 @@ for a follow-up, not timed here (its signature is not known in advance). Adoptio
 at least 1 ms per scan against A with identical results at every pose.
 
 The stage is a run's saved scene (``run/scene.usda``: the truck, the pallets and the environment as that run built
-them). Physics is stepped twice so the scene query sees the colliders, then never again: every arm casts the same
-state. Poses: the truck's LiDAR origin (base_link + the bridge's mount -0.12, 0, 1.05) and --poses - 1 more, moved
+them), opened and waited for until it has loaded (``is_stage_loading``, --load-timeout-s), with the truck's
+base_link and colliders checked. The saved physics settings are kept (``set_defaults=False``); after ``play`` and
+two steps the physics is not stepped again: every arm casts the same state. Arm order rotates every repeat.
+
+Validity (Codex bench review): the oracle A must return the same arrays at every repeat, and every arm's arrays must
+equal A's; the colliders each ray hits (rigidBody, collision, distance) are compared once per pose outside the timing
+for T against A's Float3 query. ``adopt`` needs all of it and a saving of at least 1 ms per scan. Any failure is
+recorded and the process exits non-zero (no ``adopt`` left beside an error).
+
+Limits: the sensor moves about a truck that does not; the rays repeat over a warm cache without physics or rendering
+load -- a saving here is per scan at rest, not yet the live one. Poses: the truck's LiDAR origin (base_link + the bridge's mount -0.12, 0, 1.05) and --poses - 1 more, moved
 in x/y by up to --spread-m and turned, so the rays meet the truck's own body, pallets and walls in different shares.
 
   $VENV_PY sim/isaac/lidar_bench.py --scene RUN/scene.usda --output OUT [--rays 1600 --range-m 12 --repeats 30]
@@ -23,6 +32,7 @@ Writes OUT/lidar_bench.json; touches nothing else.
 import argparse
 import json
 import math
+import os
 import sys
 import time
 import traceback
@@ -40,6 +50,7 @@ ap.add_argument("--poses", type=int, default=8)
 ap.add_argument("--spread-m", type=float, default=0.6)
 ap.add_argument("--base-link", default="/World/Forklift/base_link")
 ap.add_argument("--mount", default="-0.12,0.0,1.05,0.0", help="x,y,z,yaw of the laser on base_link (the bridge's)")
+ap.add_argument("--load-timeout-s", type=float, default=600.0)
 args = ap.parse_args()
 args.output.mkdir(parents=True, exist_ok=False)
 
@@ -74,25 +85,50 @@ def tuple_cast(query, origin, directions, range_m, prefixes, cache):
     return distances, hits, own
 
 
+def bodies(query, start, directions, range_m):
+    """(hit, distance, rigidBody, collision) per ray, untimed."""
+    out = []
+    for d in np.asarray(directions, float).tolist():
+        r = query.raycast_closest(start, d if isinstance(start, tuple) else type(start)(*d), float(range_m), False)
+        out.append((bool(r.get("hit", False)), r.get("distance"), r.get("rigidBody"), r.get("collision")))
+    return out
+
+
 def main():
+    import carb
     import omni.usd
     from isaacsim.core.api import SimulationContext
+    from isaacsim.core.utils.stage import is_stage_loading
     from omni.physx import get_physx_scene_query_interface
-    from pxr import UsdGeom
+    from pxr import Usd, UsdGeom, UsdPhysics
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import planar_lidar as pl
 
     pl._PROFILE_EVERY = 0
-    omni.usd.get_context().open_stage(args.scene)
-    for _ in range(20):
+    if not omni.usd.get_context().open_stage(args.scene):
+        raise RuntimeError(f"open_stage failed: {args.scene}")
+    t0 = time.monotonic()
+    app.update()
+    while is_stage_loading():
+        if time.monotonic() - t0 > args.load_timeout_s:
+            raise RuntimeError(f"the stage was still loading after {args.load_timeout_s} s")
         app.update()
-    sim = SimulationContext(physics_dt=1 / 120, rendering_dt=1 / 120, stage_units_in_meters=1.0)
+    record["load_s"] = time.monotonic() - t0
+    stage = omni.usd.get_context().get_stage()
+    if not stage.GetPrimAtPath(args.base_link).IsValid():
+        raise RuntimeError(f"no {args.base_link} on the stage")
+    colliders = [p.GetPath().pathString for p in Usd.PrimRange(stage.GetPseudoRoot())
+                 if p.HasAPI(UsdPhysics.CollisionAPI)]
+    record["colliders"] = {"all": len(colliders), "truck": sum(c.startswith(pl.SELF_PREFIX) for c in colliders)}
+    if not record["colliders"]["truck"] or record["colliders"]["all"] <= record["colliders"]["truck"]:
+        raise RuntimeError(f"too few colliders: {record['colliders']}")
+    sim = SimulationContext(physics_dt=1 / 120, rendering_dt=1 / 120, stage_units_in_meters=1.0, set_defaults=False)
+    record["physics_dt"] = sim.get_physics_dt()
     sim.initialize_physics()
     sim.play()
     sim.step(render=False)
     sim.step(render=False)
-    stage = omni.usd.get_context().get_stage()
     xf = UsdGeom.Xformable(stage.GetPrimAtPath(args.base_link)).ComputeLocalToWorldTransform(0)
     base = np.array(xf.ExtractTranslation(), float)
     rot = np.array(xf.ExtractRotationMatrix(), float).T  # world_from_base (Gf rows are the basis vectors)
@@ -119,14 +155,21 @@ def main():
         record["T_unsupported"] = f"{type(exc).__name__}: {exc}"
         del arms["T"]
     out = []
+    names = list(arms)
     for k, (origin, dirs) in enumerate(poses):
         oracle = arms["A"](origin, dirs, None)
         row = {"pose": k, "origin": origin.tolist(), "hits": int(oracle[1].sum()), "own": int(oracle[2].sum()),
                "equal": {}, "ms": {}}
+        if "T" in arms:  # the colliders themselves, outside the timing: tuple vectors against Float3
+            f3 = bodies(query, carb.Float3(*map(float, origin)), dirs, args.range_m)
+            tp = bodies(query, tuple(map(float, origin)), dirs, args.range_m)
+            row["bodies_equal_T"] = f3 == tp
         caches = {name: {} for name in arms}
         times = {name: [] for name in arms}
-        for _ in range(args.repeats):
-            for name, fn in arms.items():  # interleaved: drift hits every arm alike
+        for rep_ in range(args.repeats):
+            order = names[rep_ % len(names):] + names[:rep_ % len(names)]  # rotated: no arm always first
+            for name in order:
+                fn = arms[name]
                 t0 = time.perf_counter()
                 res = fn(origin, dirs, caches[name])
                 times[name].append((time.perf_counter() - t0) * 1e3)
@@ -137,18 +180,30 @@ def main():
     record["poses"] = out
     record["summary"] = {n: {"median_ms": float(np.median([r["ms"][n]["median"] for r in out])),
                              "all_equal": all(r["equal"][n] for r in out)} for n in arms}
+    if "T" in arms:
+        record["summary"]["T"]["bodies_equal"] = all(r.get("bodies_equal_T", False) for r in out)
+    oracle_stable = record["summary"]["A"]["all_equal"]
+    record["oracle_stable"] = oracle_stable
     base_ms = record["summary"]["A"]["median_ms"]
     for n, s in record["summary"].items():
         s["saving_ms_per_scan"] = base_ms - s["median_ms"]
-        s["adopt"] = bool(n != "A" and s["all_equal"] and s["saving_ms_per_scan"] >= 1.0)
+        s["adopt"] = bool(n != "A" and oracle_stable and s["all_equal"] and s.get("bodies_equal", True)
+                          and s["saving_ms_per_scan"] >= 1.0)
     sim.stop()
 
 
+rc = 0
 try:
     main()
-except Exception:  # noqa: BLE001 -- the record keeps the failure
+except Exception:  # noqa: BLE001 -- the record keeps the failure; the exit code says it
     record["errors"].append(traceback.format_exc())
-finally:
-    (args.output / "lidar_bench.json").write_text(json.dumps(record, indent=1))
-    print(json.dumps(record.get("summary", record["errors"]), indent=1), flush=True)
+if record["errors"] or not record.get("oracle_stable", False):
+    rc = 1
+    for s in record.get("summary", {}).values():
+        s["adopt"] = False  # no adoption beside an error or an unstable oracle
+(args.output / "lidar_bench.json").write_text(json.dumps(record, indent=1, default=str))
+print(json.dumps(record.get("summary", record["errors"]), indent=1, default=str), flush=True)
+try:
     app.close()
+finally:
+    os._exit(rc)
