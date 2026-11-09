@@ -33,8 +33,8 @@ With 6 pairs: pass when the comparable pairs' mean fall is at least 0.007 s/sim 
 and no mission degradation; a fail otherwise (5.20's six pairs, read like 5.26's 1e rule: an operating decision, not
 statistical certainty).
 A comparable pair count below the registered number is reported as such (the check is then not passed).
-Also reported, not judged here: whether the mean fall reaches 0.025 s/sim s (the low end of the stage's -25 to -35
-ms/sim s; how it bears on the pass is for the lead to fix before the results).
+Also reported, not judged: whether the mean fall reaches 0.025 s/sim s, the low end of -25 to -35 ms/sim s, which is
+the G3 budget's target and not part of the stage pass (lead decision 2026-11-10, plan 5.26 amendment).
 """
 
 from __future__ import annotations
