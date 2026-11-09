@@ -42,6 +42,7 @@
     2. 코드가 상속 환경에서 직접 읽는 진단·실험 변수를 명시적으로 지운다(`unset`). 대상: `FORKLIFT_LIVE_LONG_CALLS_MS`, `FORKLIFT_LIVE_LIDAR_PROFILE_EVERY`, `FORKLIFT_LIVE_ASYNC_PLAN`, `FORKLIFT_LIVE_ASYNC_SLAM`, `FORKLIFT_LIVE_OVERVIEW`, `FORKLIFT_LIVE_START_DIGEST`, `FORKLIFT_PERF_DUMP*`, `FORKLIFT_KERNELS*`, `FORKLIFT_PLAN_KAPPA`, `FORKLIFT_TEST_WORKER_DIE_ONCE`, `FORKLIFT_ISAAC_AUDIO`. 래퍼가 값을 정하는 `FORKLIFT_LIVE_TICK_TRACE`·`FORKLIFT_LIVE_CATCHUP_STEPS`·`FORKLIFT_LIVE_CAMERA_PHASE`(unset) 와 런처 입력 `FORKLIFT_URDF` 는 빼고, 지우기 전 값이 있었는지를 기록한다. 목록은 등록 고정 때 `grep` 으로 다시 뽑는다(코드가 `os.environ` 으로 읽는 `FORKLIFT_*` 전부).
     3. `args.txt` 에 `OCC_DUMPS` 와 2 의 지운 변수(`unset` 또는 '값 있었음')를 남긴다.
     - `isaac_bundle.py` 의 `inherited_controls` 는 셸 래퍼·런처가 읽는 변수만 보므로, 2 는 그 검사를 대신하지 않고 보완한다.
+    - 허용 diff(초안 시점, `riib_session_v3.sh` sha256 3d5797a5…; 고정 때 목록을 다시 뽑아 바뀌면 diff·해시를 고친다)는 부록 A.
   - 런처: 스냅숏 안 `deploy/console/isaac_live.sbatch`.
   - 장면 파일:
     - random_m sha256 8b8fe554…
@@ -56,6 +57,7 @@
     - 이 배치의 묶음군 사이 대조: 첫 묶음군 제출 직전에 두 폴더의 모든 파일 내용 해시 목록(`find -type f` 의 sha256)을 남기고, 다음 묶음군 제출마다 다시 떠서 같아야 한다. `/opt/isaacsim-env`(`.venv` 가 `--system-site-packages` 로 보는 곳)는 크기가 커서 내용 해시 대신 첫 제출 시각 뒤에 바뀐 파일이 없는지(`find -newermt`)만 본다.
   - 실행 목록: v2 의 `pa_1..8.jsonl`·`rest.jsonl`, 확인 실행의 `RUNS_l4c.jsonl` 과 env 를 키 단위로 비교한다. 다를 수 있는 것은 스냅숏 경로와 세션 경로, 래퍼 경로, 생명주기 4 의 `OCC_DUMPS=1` 뿐이다.
   - **묶음군마다 다시 대조한다.** 위 항목 가운데 제출 때 볼 수 있는 것(스냅숏 트리·바이트코드, 래퍼·런처·장면·ONNX·스냅숏 밖 입력의 해시, 인터프리터 내용 해시, 실행 목록 해시, 브리지 이미지 ID)은 첫 고정 매니페스트와 묶음군 제출마다 다시 맞춘다. 실행 뒤에는 모든 세션의 실제 `image_id`·`slam_choice` 와 러너가 기록한 인자(`occupied_dumps` 는 생명주기 4 네 세션에서만 참)를 확인한다.
+- **기본 끔·인자 미사용 확인(총괄 지시 2026-11-10)**: 고정 커밋까지 main 에 들어오는 PR(예: #393·#395)이 추가한 러너·런처 옵션은 모두 기본 끔이어야 하고, 이 배치의 어느 세션도 그 옵션을 켜지 않아야 한다. 대조표에 PR 마다 옵션 이름·기본값(`argparse` 선언, 런처 환경 변수 기본)·이 배치의 DRY_RUN 해석 인자에 그 옵션이 없음(또는 기본값)을 적는다. 하나라도 기본이 켜져 있거나 해석 인자에 켜진 채 들어가면 제출하지 않고 총괄에 올린다.
 - **d72fd9b3 이후 운용 경로 변경(참고, 판정과 무관)**: `git diff --stat d72fd9b3 <고정 커밋> -- src sim deploy config tools/live_console_probe.py` 를 등록 고정 때 적는다. 2026-11-10 기준 14 파일, +1314/−38 이다(#379 계측, #382 덤프, #385 known start, R1 탐침 도구, #391 LiDAR 등). 이 배치의 두 팔은 그 코드를 함께 돌린다.
 
 ### 1.2 v2 와 같게 두는 것
@@ -165,7 +167,7 @@
 
 ## 3. 도구와 순서
 
-- 집계: `tools/riib_v2_verdict.py`.
+- 집계: `tools/riib_v2_verdict.py --rv3`(실행 폴더에 `plan_main.json`·`plan_l4c.json`·`plan_rv3.json`).
   - 통합 A/B·나머지 묶음은 v2 본배치 판정 경로로 집계한다.
   - 생명주기 4 묶음은 `--confirm` 경로로 집계한다.
   - 두 결과를 생명주기 기준으로 합치는 기능(나머지 묶음에 생명주기 4 가 없을 때 확인 판정을 생명주기 4 로 쓰는 것)과 2 절의 실패 목록·처분은 집계 하위 명령으로 넣는다. 확인 판정의 `to_lead` 를 보존한다. 시험을 먼저 쓰고, 결과 전에 머지한다.
@@ -193,3 +195,39 @@
   - P3 `pip freeze`·`RECORD` 의 의미 한계 → 과거 대조는 한계 명시, 묶음군 사이는 파일 내용 해시.
 - **Codex 재검토 2 회차**: 새 P1/P2 없음(수렴). P3 2 반영: unset 목록에 `FORKLIFT_ISAAC_AUDIO`, C2 shadow 예외를 실제 shadow 발화와 그 종료 사유로 좁힘.
 - Codex 가 확인한 것(반박 없음): 나눠 내기는 짝 공정성을 깨지 않음, d72fd9b3 대비 러너 argparse 에 기존 옵션 삭제·기본값 변경 없음(#389 기본 `sync`, #391 기본 `loop`), 생명주기 1–3 의 조건을 무효화하는 새 기본값 없음(F1 `block` 은 d72fd9b3 에도 있었고 matcher 확정 시작은 차단하지 않음).
+
+## 부록 A. 래퍼 v2 → v3 허용 diff
+
+```diff
+--- ../riibv2/riib_session_v2.sh	2026-11-08 23:18:29.475142963 +0900
++++ riib_session_v3.sh	2026-11-10 06:06:11.507537582 +0900
+@@ -4,7 +4,16 @@
+ # arguments and the probe's options come from the run's env. Run from the snapshot root:
+ #   ARM=A|B|C2shadow|C2on [FIX=none|boxed] CATCHUP=0|6 SCENARIO=queue|cycle|main [CYCLE=..] [PROBE_EXTRA=..]
+ #   SCENE_FILE=.. SEED=.. FACTOR=.. PORT=.. bash riib_session.sh OUT
++# rv3 (docs/plans/2026-11-10-live-riib-v2-rerun-new-snapshot.md 1.1): v2's wrapper with three additions only --
++# OCC_DUMPS=1 adds --occupied-dumps, the diagnostic and experiment variables the code reads from the inherited
++# environment are cleared, and both are kept in args.txt.
+ set -u
++RV3_CLEAR="FORKLIFT_LIVE_LONG_CALLS_MS FORKLIFT_LIVE_LIDAR_PROFILE_EVERY FORKLIFT_LIVE_ASYNC_PLAN FORKLIFT_LIVE_ASYNC_SLAM"
++RV3_CLEAR="$RV3_CLEAR FORKLIFT_LIVE_OVERVIEW FORKLIFT_LIVE_START_DIGEST FORKLIFT_PERF_DUMP FORKLIFT_PERF_DUMP_EVERY"
++RV3_CLEAR="$RV3_CLEAR FORKLIFT_PERF_DUMP_STRATA_K FORKLIFT_PERF_DUMP_STREAM FORKLIFT_KERNELS FORKLIFT_KERNELS_DUAL"
++RV3_CLEAR="$RV3_CLEAR FORKLIFT_KERNELS_DUAL_LOG FORKLIFT_PLAN_KAPPA FORKLIFT_TEST_WORKER_DIE_ONCE FORKLIFT_ISAAC_AUDIO"
++RV3_HAD=""
++for v in $RV3_CLEAR; do [ -n "${!v+x}" ] && RV3_HAD="$RV3_HAD $v"; unset "$v"; done
+ OUT=$(realpath -m "$1"); ROOT=$(pwd); mkdir -p "$OUT"
+ P=/home/projects/forklift
+ export VENV_PY=$P/.venv/bin/python
+@@ -50,9 +59,11 @@
+ read -ra PX <<< "${PROBE_EXTRA:-}"
+ PROBE+=("${PX[@]}")
+ export EXTRA_ARGS="$FAR $NEAR --max-sim-seconds 1200 $RUNX $ARMX $FIXX"  # v2 H4: the tick trace covers the session
++[ "${OCC_DUMPS:-0}" = 1 ] && EXTRA_ARGS="$EXTRA_ARGS --occupied-dumps"  # rv3 1.3: the lifecycle 4 bundle only
+ # 3.2: every session's whole argument list kept in its result folder
+ { env | grep -E '^(ARM|FIX|CATCHUP|SCENARIO|CYCLE|PROBE_EXTRA|SCENE_FILE|SEED|FACTOR|PORT|ENCODER_MODEL|D7_HOLD|MAX_EPOCHS|FORKLIFT_LIVE_TICK_TRACE|FORKLIFT_LIVE_CATCHUP_STEPS|START_RELOC|RELOC_UNATTENDED|SLAM_BUNDLE_ROOT|LAG|SESSION_ID|BUNDLE_[A-Z]+)=' | sort
+   printf 'FORKLIFT_LIVE_CAMERA_PHASE=%s\n' "${FORKLIFT_LIVE_CAMERA_PHASE-unset}"
++  printf 'OCC_DUMPS=%s\n' "${OCC_DUMPS:-0}"; printf 'RV3_CLEARED=%s\n' "$RV3_CLEAR"; printf 'RV3_HAD=%s\n' "${RV3_HAD# }"
+   printf 'EXTRA_ARGS=%q\n' "$EXTRA_ARGS"; printf 'PROBE='; printf '%q ' "${PROBE[@]}" "${END[@]}"; echo; } > "$OUT/args.txt"
+ # DRY_RUN=1: no probe, no Isaac -- the launcher's own DRY_RUN (it prints RUNNER_ARGS and ARGS_OK, or exits 2) passes through
+ if [ "${DRY_RUN:-0}" = 1 ]; then
+```
