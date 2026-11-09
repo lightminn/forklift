@@ -15,6 +15,16 @@ import numpy as np
 
 SELF_PREFIX = "/World/Forklift"
 
+# Real-time plan G3-1d (bench #388 adopted; docs/validation/2026-11-09-g3-1d-lidar-bench.md): how cast_scan_flags
+# casts -- "loop" (the original loop; the default, every earlier run), "fast" (cast_scan_flags_fast, same results) or
+# "oracle" (both on the same physics state, compared ray by ray; the loop's result is returned). Set once by the runner
+# (--lidar-cast); the own cache and the oracle's counts live here for the process.
+CAST_MODE = "loop"
+_OWN_CACHE: dict = {}
+_OWN_CACHE_MAX = 200_000
+ORACLE = {"scans": 0, "mismatched_scans": 0, "mismatched_rays": 0, "own_true_rays": 0, "prefix_sets": [],
+          "first_mismatch": None}
+
 
 @dataclass(frozen=True)
 class LaserMount:
@@ -150,6 +160,8 @@ def cast_scan_flags(
     import carb
     from omni.physx import get_physx_scene_query_interface
 
+    if CAST_MODE != "loop":
+        return _cast_by_mode(origin, directions, range_max_m, own_prefixes)
     query = get_physx_scene_query_interface()
     start = carb.Float3(*map(float, origin))
     distances = np.full(len(directions), np.nan)
@@ -212,6 +224,47 @@ def cast_scan_flags_fast(
             flag = cache[key] = any(prefix in body for prefix in prefixes)
         own[index] = flag
     return distances, hits, own
+
+
+def _cast_loop(origin, directions, range_max_m, own_prefixes):
+    """The original loop's result (the oracle's reference), whatever CAST_MODE says."""
+    mode = globals()["CAST_MODE"]
+    globals()["CAST_MODE"] = "loop"
+    try:
+        return cast_scan_flags(origin, directions, range_max_m, own_prefixes=own_prefixes)
+    finally:
+        globals()["CAST_MODE"] = mode
+
+
+def _cast_by_mode(origin, directions, range_max_m, own_prefixes):
+    if len(_OWN_CACHE) > _OWN_CACHE_MAX:  # bounded: prefix sets x bodies met; dropped whole, rebuilt on use
+        _OWN_CACHE.clear()
+    if CAST_MODE == "fast":
+        return cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
+    if CAST_MODE != "oracle":
+        raise ValueError(f"CAST_MODE {CAST_MODE!r}: loop, fast or oracle")
+    ref = _cast_loop(origin, directions, range_max_m, own_prefixes)
+    got = cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
+    ORACLE["scans"] += 1
+    ORACLE["own_true_rays"] += int(ref[2].sum())
+    prefixes = list(own_prefixes)
+    if prefixes not in ORACLE["prefix_sets"]:
+        ORACLE["prefix_sets"].append(prefixes)
+    bad = ~(np.isclose(ref[0], got[0], rtol=0.0, atol=0.0, equal_nan=True) & (ref[1] == got[1]) & (ref[2] == got[2]))
+    if bad.any():
+        ORACLE["mismatched_scans"] += 1
+        ORACLE["mismatched_rays"] += int(bad.sum())
+        if ORACLE["first_mismatch"] is None:
+            i = int(np.argmax(bad))
+            ORACLE["first_mismatch"] = {"ray": i, "loop": [float(ref[0][i]), bool(ref[1][i]), bool(ref[2][i])],
+                                        "fast": [float(got[0][i]), bool(got[1][i]), bool(got[2][i])],
+                                        "prefixes": prefixes}
+    return ref
+
+
+def oracle_record() -> dict:
+    return {"mode": CAST_MODE, **{k: (list(v) if isinstance(v, list) else v) for k, v in ORACLE.items()},
+            "own_cache_entries": len(_OWN_CACHE)}
 
 
 # Real-time plan 5.20 G3-1a: every N-th scan (FORKLIFT_LIVE_LIDAR_PROFILE_EVERY, 0 = off) is cast through the same
