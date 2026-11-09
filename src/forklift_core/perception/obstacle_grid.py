@@ -35,6 +35,7 @@ numpy only.
 
 from __future__ import annotations
 
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from math import ceil, cos, sin, sqrt
@@ -374,6 +375,55 @@ def _erode(mask: np.ndarray, radius_cells: float, *, offsets=None) -> np.ndarray
     return out
 
 
+# Real-time plan 5.26 G3-1b: _clear_group judged at the beams' cells only (FORKLIFT_GRID_CLEAR_KERNEL=1, read once
+# here; off by default). The same cells come out FREE as with the whole-grid erosions: the body rectangles are the
+# original _rect_mask, each beam cell's rho the original np.hypot, and the per-cell test the erosion's own.
+CLEAR_KERNEL = os.environ.get("FORKLIFT_GRID_CLEAR_KERNEL", "0") == "1"
+
+
+_OFFSETS: dict = {}
+
+
+def _offsets_cached(radius_cells: float) -> np.ndarray:
+    """_reach_offsets for a radius, kept (a pure function of its float argument)."""
+    got = _OFFSETS.get(radius_cells)
+    if got is None:
+        if len(_OFFSETS) > 4096:
+            _OFFSETS.clear()
+        got = _OFFSETS[radius_cells] = _reach_offsets(radius_cells)
+    return got
+
+
+def _cells_eroded_numpy(mask, ci, cj, offsets) -> np.ndarray:
+    """_erode's test at the listed cells only, without numba: one offset at a time, O(cells) memory; a neighbour
+    outside the grid fails (as the reference's padding)."""
+    nx, ny = mask.shape
+    ok = np.ones(len(ci), dtype=bool)
+    for di, dj in np.asarray(offsets, dtype=np.int64).tolist():
+        p, q = ci + di, cj + dj
+        inside = (p >= 0) & (p < nx) & (q >= 0) & (q < ny)
+        hit = np.zeros(len(ci), dtype=bool)
+        hit[inside] = mask[p[inside], q[inside]]
+        ok &= hit
+        if not ok.any():
+            break
+    return ok
+
+
+def _cells_eroded(mask, ci, cj, offsets, nxt_cache: dict) -> np.ndarray:
+    if kernels.mode() == "numba":
+        from forklift_core.perception import grid_numba
+
+        rows = grid_numba.row_intervals(offsets)
+        if rows is not None:
+            if "nxt" not in nxt_cache:
+                nxt_cache["nxt"] = grid_numba.next_off(np.ascontiguousarray(mask))
+            return grid_numba.cells_eroded_rows(nxt_cache["nxt"], ci, cj, rows)
+        return grid_numba.cells_eroded(np.ascontiguousarray(mask), ci, cj,
+                                       np.ascontiguousarray(offsets, dtype=np.int64))
+    return _cells_eroded_numpy(mask, ci, cj, offsets)
+
+
 class ObstacleGrid:
     def __init__(self, config: GridConfig):
         self.config = config
@@ -545,6 +595,8 @@ class ObstacleGrid:
 
     def _clear_group(self, group, state, free_stamp):
         """FREE where the beams of same-instant scans passed, shrunk once by their error radius."""
+        if CLEAR_KERNEL and all(b > a for a, b in zip(self.config.rho_bands_m, self.config.rho_bands_m[1:])):
+            return self._clear_group_cells(group, state, free_stamp)
         cfg = self.config
         nx, ny = cfg.shape
         res = cfg.resolution_m
@@ -589,6 +641,76 @@ class ObstacleGrid:
                 eroded &= ~inside
             state[eroded] = FREE
             free_stamp[eroded] = scan.stamp_s
+
+    def _clear_group_cells(self, group, state, free_stamp):
+        """_clear_group judged at the beams' cells (plan 5.26): the same raw, the same body rectangles, each beam
+        cell's band from its own rho, and for each acting band the erosion's test at that band's cells only."""
+        cfg = self.config
+        nx, ny = cfg.shape
+        res = cfg.resolution_m
+        raw = np.zeros((nx, ny), dtype=bool)
+        for scan, age, geo in group:
+            rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
+            finite = np.isfinite(ranges)
+            clear_to = np.where(ranges == np.inf, cfg.max_clear_m, np.where(finite, np.minimum(ranges, cfg.max_mark_m), 0.0))
+            clear_to = np.where(usable, np.minimum(np.minimum(clear_to, cfg.max_clear_m), limit), 0.0)
+            bound = cfg.sensor_bound_at(np.where(finite, ranges, 0.0))
+            clear_to = np.where(finite & (ranges <= cfg.max_mark_m), clear_to - bound - res, clear_to)
+            raw |= self._ray_mask(laser, cos_a, sin_a, np.maximum(clear_to, 0.0))
+        if not raw.any():
+            return
+        scan, age, geo = group[0]
+        rear_map = geo[0]
+        ci, cj = np.nonzero(raw)
+        support = raw
+        keep = np.ones(len(ci), dtype=bool)
+        if scan.own_footprint:
+            # the body rectangles where they are read: the grown one (support) over the cells its circumscribed disk
+            # can reach, the shrunk one (withheld) at the beam cells -- _rect_mask's own element expressions
+            fp = scan.own_footprint
+            reach = sqrt(max(fp[0], fp[1]) ** 2 + fp[2] ** 2) + 2 * cfg.half_diagonal_m + res
+            i0 = max(0, int(np.floor((rear_map[0] - reach - cfg.x_min_m) / res)) - 1)
+            i1 = min(nx, int(np.ceil((rear_map[0] + reach - cfg.x_min_m) / res)) + 1)
+            j0 = max(0, int(np.floor((rear_map[1] - reach - cfg.y_min_m) / res)) - 1)
+            j1 = min(ny, int(np.ceil((rear_map[1] + reach - cfg.y_min_m) / res)) + 1)
+            if i0 < i1 and j0 < j1:
+                wi, wj = np.meshgrid(np.arange(i0, i1), np.arange(j0, j1), indexing="ij")
+                own = np.zeros((nx, ny), dtype=bool)
+                own[i0:i1, j0:j1] = self._rect_at(rear_map, fp, cfg.half_diagonal_m, wi, wj)
+                support = raw | own
+            keep = ~self._rect_at(rear_map, fp, -cfg.half_diagonal_m, ci, cj)
+        gx = cfg.x_min_m + (np.arange(nx) + 0.5) * res
+        gy = cfg.y_min_m + (np.arange(ny) + 0.5) * res
+        rho = np.hypot(gx[ci] - rear_map[0], gy[cj] - rear_map[1])  # the original's elements, at the raw cells
+        cache: dict = {}
+        lower = 0.0
+        for edge in cfg.rho_bands_m:
+            in_band = (rho >= lower) & (rho < edge)
+            lower = edge
+            if not in_band.any():
+                continue
+            r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
+            if r_band is None or r_band > cfg.free_r_cap_m:
+                continue
+            sel = in_band & keep
+            if not sel.any():
+                continue
+            bi, bj = ci[sel], cj[sel]
+            ok = _cells_eroded(support, bi, bj, _offsets_cached(max(r_band / res, 0.0)), cache)
+            state[bi[ok], bj[ok]] = FREE
+            free_stamp[bi[ok], bj[ok]] = scan.stamp_s
+
+    def _rect_at(self, rear, footprint, grow_m: float, ii, jj) -> np.ndarray:
+        """_rect_mask at the cells (ii, jj) only, by its own element expressions (the same float operations in the
+        same order, so the same bits)."""
+        cfg = self.config
+        front, back, half = footprint[0] + grow_m, footprint[1] + grow_m, footprint[2] + grow_m
+        gx = cfg.x_min_m + (ii + 0.5) * cfg.resolution_m - rear[0]
+        gy = cfg.y_min_m + (jj + 0.5) * cfg.resolution_m - rear[1]
+        c, s = cos(rear[2]), sin(rear[2])
+        u = gx * c + gy * s
+        v = -gx * s + gy * c
+        return (u <= front) & (u >= -back) & (np.abs(v) <= half)
 
     def _rect_mask(self, rear, footprint, *, grow_m: float) -> np.ndarray:
         """Cells whose centre lies inside the footprint rectangle grown by grow_m
