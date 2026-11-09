@@ -26,6 +26,7 @@ import os
 import pickle
 import struct
 import sys
+import threading
 import time
 from collections import deque
 from contextlib import contextmanager
@@ -51,6 +52,57 @@ class Timers:
         self._count: dict[str, int] = {}
         self._max: dict[str, float] = {}
         self._cpu: dict[str, float] = {}
+        # Real-time plan 5.18 G2-0: the long-call record. ``long_s`` None (default): off, nothing is kept and no
+        # stack is held. A number: every region call of at least that wall time is kept as it ends, with its caller
+        # path (the enclosing regions), its self time (the nested regions' time taken out, recorded or not), its
+        # thread CPU time and ``where()``'s context (the live runner's trace row), up to ``long_cap`` records.
+        self.long_s: float | None = None
+        self.long: list[dict] = []
+        self.long_cap = 200_000
+        self.long_dropped = 0
+        self.where = None
+        self._local = threading.local()  # each thread's own stack of open regions: [name, start, nested wall s]
+
+    def sched_mark(self) -> None:
+        """The physics step's start, for the long-call record's scheduling wait: this thread's run-queue wait
+        (/proc/thread-self/schedstat, ns) is read here and again when a long call is kept."""
+        self._local.sched = (time.perf_counter(), _run_delay_s())
+
+    def _stack(self) -> list:
+        stack = getattr(self._local, "stack", None)
+        if stack is None:
+            stack = self._local.stack = []
+        return stack
+
+    def _enter(self, name: str, start: float) -> None:
+        self._stack().append([name, start, 0.0])
+
+    def _leave(self, name: str, start: float, seconds: float, cpu_s: float) -> None:
+        stack = self._stack()
+        frame = stack.pop() if stack else [name, start, 0.0]
+        if stack:
+            stack[-1][2] += seconds
+        if seconds < self.long_s:
+            return
+        if len(self.long) >= self.long_cap:
+            self.long_dropped += 1
+            return
+        record = {"name": name, "path": [f[0] for f in stack], "start": start, "end": start + seconds,
+                  "self_s": seconds - frame[2], "cpu_s": cpu_s}
+        if threading.current_thread() is not threading.main_thread():
+            record["thread"] = threading.current_thread().name
+        mark = getattr(self._local, "sched", None)
+        if mark is not None and mark[1] is not None:
+            now = _run_delay_s()
+            if now is not None:
+                record["run_delay_s_since_step"] = now - mark[1]
+                record["since_step_s"] = start + seconds - mark[0]
+        if self.where is not None:
+            try:
+                record.update(self.where())
+            except Exception as exc:  # noqa: BLE001 -- a context that cannot be read is noted, never raised
+                record["where_error"] = f"{type(exc).__name__}: {exc}"
+        self.long.append(record)
 
     def add(self, name: str, seconds: float, cpu_s: float | None = None) -> None:
         self._total[name] = self._total.get(name, 0.0) + seconds
@@ -66,15 +118,24 @@ class Timers:
             yield
             return
         start, cpu = time.perf_counter(), time.thread_time()
+        long_on = self.long_s is not None
+        if long_on:
+            self._enter(name, start)
         try:
             yield
         finally:
-            self.add(name, time.perf_counter() - start, time.thread_time() - cpu)
+            seconds, cpu_s = time.perf_counter() - start, time.thread_time() - cpu
+            self.add(name, seconds, cpu_s)
+            if long_on:
+                self._leave(name, start, seconds, cpu_s)
 
-    def wrap(self, owner, attribute: str, name: str | None = None, *, by_caller: bool = False) -> None:
+    def wrap(self, owner, attribute: str, name: str | None = None, *, by_caller: bool = False,
+             long_only: bool = False) -> None:
         """Time every call of ``owner.attribute`` as one region: a class's method (every instance), an
         instance's method or a module's function. ``by_caller``: one region per calling function
-        (``name<caller``)."""
+        (``name<caller``). ``long_only``: the call enters the long-call record only (its stack and records), not
+        the per-second totals ``take`` returns -- finer regions that leave the status line's timers as they were;
+        it costs nothing while the long-call record is off."""
         raw = owner.__dict__[attribute] if isinstance(owner, type) else getattr(owner, attribute)
         static = isinstance(raw, staticmethod)
         fn = raw.__func__ if static else raw
@@ -82,14 +143,21 @@ class Timers:
 
         @functools.wraps(fn)
         def timed(*args, **kwargs):
-            if not self.enabled:
+            if not self.enabled or (long_only and self.long_s is None):
                 return fn(*args, **kwargs)
             where = f"{label}<{caller_name()}" if by_caller else label
             start, cpu = time.perf_counter(), time.thread_time()
+            long_on = self.long_s is not None
+            if long_on:
+                self._enter(where, start)
             try:
                 return fn(*args, **kwargs)
             finally:
-                self.add(where, time.perf_counter() - start, time.thread_time() - cpu)
+                seconds, cpu_s = time.perf_counter() - start, time.thread_time() - cpu
+                if not long_only:
+                    self.add(where, seconds, cpu_s)
+                if long_on:
+                    self._leave(where, start, seconds, cpu_s)
 
         setattr(owner, attribute, staticmethod(timed) if static else timed)
 
@@ -100,6 +168,15 @@ class Timers:
                    round(self._cpu[k], 6) if k in self._cpu else None] for k, v in self._total.items()}
         self._total, self._count, self._max, self._cpu = {}, {}, {}, {}
         return out
+
+
+def _run_delay_s() -> float | None:
+    """This thread's time waiting on the run queue (Linux schedstat), or None where it cannot be read."""
+    try:
+        with open("/proc/thread-self/schedstat", "rb") as f:
+            return int(f.read().split()[1]) / 1e9
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 TIMERS = Timers()

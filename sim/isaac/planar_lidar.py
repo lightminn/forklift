@@ -7,6 +7,8 @@ same physics state, so a scan has no rotation skew. The ray hits collision
 geometry: a surface without a collider is invisible to it.
 """
 
+import os
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -153,6 +155,8 @@ def cast_scan_flags(
     distances = np.full(len(directions), np.nan)
     hits = np.zeros(len(directions), dtype=bool)
     own = np.zeros(len(directions), dtype=bool)
+    if _profile_due():
+        return _cast_scan_flags_profiled(query, start, directions, range_max_m, own_prefixes, distances, hits, own)
     for index, direction in enumerate(directions):
         result = query.raycast_closest(
             start, carb.Float3(*map(float, direction)), float(range_max_m), False
@@ -163,6 +167,53 @@ def cast_scan_flags(
         hits[index] = True
         distances[index] = float(result["distance"])
         own[index] = any(prefix in body for prefix in own_prefixes)
+    return distances, hits, own
+
+
+# Real-time plan 5.20 G3-1a: every N-th scan (FORKLIFT_LIVE_LIDAR_PROFILE_EVERY, 0 = off) is cast through the same
+# steps with its time split -- the PhysX query, the direction's conversion, and the own-body test -- into the live
+# timers (lidar.split.*; the scan count in lidar.split.scans). Only those scans pay for the clocks; the results are the
+# loop's own, step for step.
+_PROFILE_EVERY = int(os.environ.get("FORKLIFT_LIVE_LIDAR_PROFILE_EVERY", "0") or 0)
+_profile_count = [0]
+
+
+def _profile_due() -> bool:
+    if _PROFILE_EVERY <= 0:
+        return False
+    _profile_count[0] += 1
+    return _profile_count[0] % _PROFILE_EVERY == 0
+
+
+def _cast_scan_flags_profiled(query, start, directions, range_max_m, own_prefixes, distances, hits, own):
+    import carb
+    from forklift_core.perf import TIMERS
+
+    clock = time.perf_counter
+    t_conv = t_query = t_own = 0.0
+    t0 = clock()
+    for index, direction in enumerate(directions):
+        a = clock()
+        d = carb.Float3(*map(float, direction))
+        b = clock()
+        result = query.raycast_closest(start, d, float(range_max_m), False)
+        c = clock()
+        t_conv += b - a
+        t_query += c - b
+        if not result.get("hit", False):
+            continue
+        e = clock()
+        body = str(result.get("rigidBody", "")) + str(result.get("collision", ""))
+        hits[index] = True
+        distances[index] = float(result["distance"])
+        own[index] = any(prefix in body for prefix in own_prefixes)
+        t_own += clock() - e
+    total = clock() - t0
+    if TIMERS.enabled:
+        TIMERS.add("lidar.split.scans", total)
+        TIMERS.add("lidar.split.convert", t_conv)
+        TIMERS.add("lidar.split.query", t_query)
+        TIMERS.add("lidar.split.hit_and_own", t_own)
     return distances, hits, own
 
 
