@@ -1,0 +1,635 @@
+{
+ "sessions": {
+  "l4c_s0_B": {
+   "arm": "B",
+   "seed": "0",
+   "slam_choice": [
+    "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+   ],
+   "map_ok": true,
+   "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+   "image_ok": true,
+   "lifecycle": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "phase_reached": true,
+    "stop_ack": true,
+    "rearm_ack": true,
+    "cancel_ack": true,
+    "m1_cancelled": true,
+    "m2_done": true,
+    "after_cancel_statuses": [
+     "paused",
+     "recovering"
+    ],
+    "recovery_resume": {
+     "t": "ack",
+     "of": "mission_resume",
+     "request_id": "r6",
+     "mission_id": "m1"
+    },
+    "stop_reply_s": 0.025325012975372374,
+    "order": [
+     [
+      "approach",
+      7
+     ],
+     [
+      "stop",
+      8
+     ],
+     [
+      "stopped",
+      9
+     ],
+     [
+      "rearm",
+      11
+     ],
+     [
+      "cancel",
+      13
+     ],
+     [
+      "recovery_resume",
+      14
+     ],
+     [
+      "m2_submit",
+      17
+     ],
+     [
+      "session_end",
+      20
+     ]
+    ],
+    "needs_recovery": true,
+    "pass": true
+   },
+   "stop": {
+    "phase_reached": true,
+    "mission_id": "m1",
+    "m1_id": "m1",
+    "phase_at_end": "approach",
+    "target_at_end": [
+     "P-4",
+     "D-1"
+    ],
+    "mode_at_end": "STOPPED",
+    "end_reason": "sim_time",
+    "waited_sim_s": 5.000000261,
+    "pass": true
+   },
+   "stop_hold": {
+    "steps": 600,
+    "steps_covered": true,
+    "command_held": true,
+    "truth_samples": 600,
+    "truth_move_m": 0.00023229112982088056,
+    "held": true
+   },
+   "safety": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.39431707290069545,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "targets": {
+    "row": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "requested": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "result": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ]
+   },
+   "target_ok": true,
+   "c2_cap": {
+    "gaps": [],
+    "unmapped": [],
+    "pass": true
+   },
+   "pass": true
+  },
+  "l4c_s1_B": {
+   "arm": "B",
+   "seed": "1",
+   "slam_choice": [
+    "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+   ],
+   "map_ok": true,
+   "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+   "image_ok": true,
+   "lifecycle": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "phase_reached": true,
+    "stop_ack": true,
+    "rearm_ack": true,
+    "cancel_ack": true,
+    "m1_cancelled": true,
+    "m2_done": false,
+    "after_cancel_statuses": [
+     "paused",
+     "recovering",
+     "cancelled"
+    ],
+    "recovery_resume": {
+     "t": "ack",
+     "of": "mission_resume",
+     "request_id": "r7",
+     "mission_id": "m1"
+    },
+    "stop_reply_s": 0.006907918956130743,
+    "order": [
+     [
+      "approach",
+      8
+     ],
+     [
+      "stop",
+      9
+     ],
+     [
+      "stopped",
+      10
+     ],
+     [
+      "rearm",
+      12
+     ],
+     [
+      "cancel",
+      14
+     ],
+     [
+      "recovery_resume",
+      15
+     ],
+     [
+      "m2_submit",
+      18
+     ],
+     [
+      "session_end",
+      21
+     ]
+    ],
+    "needs_recovery": true,
+    "pass": false
+   },
+   "stop": {
+    "phase_reached": true,
+    "mission_id": "m1",
+    "m1_id": "m1",
+    "phase_at_end": "approach",
+    "target_at_end": [
+     "P-4",
+     "D-1"
+    ],
+    "mode_at_end": "STOPPED",
+    "end_reason": "sim_time",
+    "waited_sim_s": 5.000000261000004,
+    "pass": true
+   },
+   "stop_hold": {
+    "steps": 600,
+    "steps_covered": true,
+    "command_held": true,
+    "truth_samples": 600,
+    "truth_move_m": 0.0002565614616442143,
+    "held": true
+   },
+   "safety": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3983082003467868,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator",
+     "Tracking timeout in transport"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "targets": {
+    "row": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "requested": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "result": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ]
+   },
+   "target_ok": true,
+   "c2_cap": {
+    "gaps": [],
+    "unmapped": [],
+    "pass": true
+   },
+   "pass": false
+  },
+  "l4c_s0_A": {
+   "arm": "A",
+   "seed": "0",
+   "slam_choice": [
+    "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+   ],
+   "map_ok": true,
+   "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+   "image_ok": true,
+   "lifecycle": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "phase_reached": true,
+    "stop_ack": true,
+    "rearm_ack": true,
+    "cancel_ack": true,
+    "m1_cancelled": true,
+    "m2_done": false,
+    "after_cancel_statuses": [
+     "paused",
+     "recovering",
+     "cancelled"
+    ],
+    "recovery_resume": {
+     "t": "ack",
+     "of": "mission_resume",
+     "request_id": "r6",
+     "mission_id": "m1"
+    },
+    "stop_reply_s": 0.015873297990765423,
+    "order": [
+     [
+      "approach",
+      7
+     ],
+     [
+      "stop",
+      8
+     ],
+     [
+      "stopped",
+      9
+     ],
+     [
+      "rearm",
+      11
+     ],
+     [
+      "cancel",
+      13
+     ],
+     [
+      "recovery_resume",
+      14
+     ],
+     [
+      "m2_submit",
+      17
+     ],
+     [
+      "session_end",
+      20
+     ]
+    ],
+    "needs_recovery": true,
+    "pass": false
+   },
+   "stop": {
+    "phase_reached": true,
+    "mission_id": "m1",
+    "m1_id": "m1",
+    "phase_at_end": "approach",
+    "target_at_end": [
+     "P-4",
+     "D-1"
+    ],
+    "mode_at_end": "STOPPED",
+    "end_reason": "sim_time",
+    "waited_sim_s": 5.100000265999999,
+    "pass": true
+   },
+   "stop_hold": {
+    "steps": 612,
+    "steps_covered": true,
+    "command_held": true,
+    "truth_samples": 612,
+    "truth_move_m": 0.0002862346779245589,
+    "held": true
+   },
+   "safety": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.352556229934539,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator",
+     "scene_replan_refused:cusp_pose:blocked:occupied"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "targets": {
+    "row": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "requested": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "result": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ]
+   },
+   "target_ok": true,
+   "c2_cap": {
+    "gaps": [],
+    "unmapped": [],
+    "pass": true
+   },
+   "pass": false
+  },
+  "l4c_s1_A": {
+   "arm": "A",
+   "seed": "1",
+   "slam_choice": [
+    "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+   ],
+   "map_ok": true,
+   "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+   "image_ok": true,
+   "lifecycle": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "phase_reached": true,
+    "stop_ack": true,
+    "rearm_ack": true,
+    "cancel_ack": true,
+    "m1_cancelled": true,
+    "m2_done": true,
+    "after_cancel_statuses": [
+     "paused",
+     "recovering"
+    ],
+    "recovery_resume": {
+     "t": "ack",
+     "of": "mission_resume",
+     "request_id": "r6",
+     "mission_id": "m1"
+    },
+    "stop_reply_s": 0.019856927974615246,
+    "order": [
+     [
+      "approach",
+      7
+     ],
+     [
+      "stop",
+      8
+     ],
+     [
+      "stopped",
+      9
+     ],
+     [
+      "rearm",
+      11
+     ],
+     [
+      "cancel",
+      13
+     ],
+     [
+      "recovery_resume",
+      14
+     ],
+     [
+      "m2_submit",
+      17
+     ],
+     [
+      "session_end",
+      20
+     ]
+    ],
+    "needs_recovery": true,
+    "pass": true
+   },
+   "stop": {
+    "phase_reached": true,
+    "mission_id": "m1",
+    "m1_id": "m1",
+    "phase_at_end": "approach",
+    "target_at_end": [
+     "P-4",
+     "D-1"
+    ],
+    "mode_at_end": "STOPPED",
+    "end_reason": "sim_time",
+    "waited_sim_s": 5.000000259999997,
+    "pass": true
+   },
+   "stop_hold": {
+    "steps": 600,
+    "steps_covered": true,
+    "command_held": true,
+    "truth_samples": 600,
+    "truth_move_m": 0.0003400281184350283,
+    "held": true
+   },
+   "safety": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.39483430480187526,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "targets": {
+    "row": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "requested": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ],
+    "result": [
+     [
+      "P-4",
+      "D-1"
+     ],
+     [
+      "P-5",
+      "D-2"
+     ]
+    ]
+   },
+   "target_ok": true,
+   "c2_cap": {
+    "gaps": [],
+    "unmapped": [],
+    "pass": true
+   },
+   "pass": true
+  }
+ },
+ "composition_ok": true,
+ "judged_pass": false,
+ "failed_controls": [
+  "l4c_s0_A"
+ ],
+ "stop_not_held": [],
+ "outcome": "not_passed"
+}
