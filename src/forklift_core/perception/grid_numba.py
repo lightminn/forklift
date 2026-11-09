@@ -157,3 +157,51 @@ def dilate_rows(mask, rows):
                     out[i, j] = True
                     break
     return out
+
+
+@njit(cache=True, nogil=True)
+def next_off(mask):
+    """For every row, the first column at or after j whose cell is not a mask cell (ny when none)."""
+    nx, ny = mask.shape
+    nxt = np.empty((nx, ny + 1), dtype=np.int64)
+    for i in range(nx):
+        nxt[i, ny] = ny
+        for j in range(ny - 1, -1, -1):
+            nxt[i, j] = j if not mask[i, j] else nxt[i, j + 1]
+    return nxt
+
+
+@njit(cache=True, nogil=True)
+def cells_eroded_rows(nxt, ci, cj, rows):
+    """erode_rows' test at the listed cells only (real-time plan 5.26 G3-1b): cell (ci[k], cj[k]) passes when, for
+    every run, the cells (i + di, j + lo .. j + hi) are all inside the grid and mask cells. ``nxt`` is next_off(mask)."""
+    nx = nxt.shape[0]
+    ny = nxt.shape[1] - 1
+    out = np.zeros(len(ci), dtype=np.bool_)
+    for k in range(len(ci)):
+        i, j = ci[k], cj[k]
+        ok = True
+        for r in range(len(rows)):
+            p, lo, hi = i + rows[r, 0], j + rows[r, 1], j + rows[r, 2]
+            if p < 0 or p >= nx or lo < 0 or hi >= ny or nxt[p, lo] <= hi:
+                ok = False
+                break
+        out[k] = ok
+    return out
+
+
+@njit(cache=True, nogil=True)
+def cells_eroded(mask, ci, cj, offsets):
+    """erode's test at the listed cells only, for offsets that are not row runs."""
+    nx, ny = mask.shape
+    out = np.zeros(len(ci), dtype=np.bool_)
+    for k in range(len(ci)):
+        i, j = ci[k], cj[k]
+        ok = True
+        for m in range(len(offsets)):
+            p, q = i + offsets[m, 0], j + offsets[m, 1]
+            if not (0 <= p < nx and 0 <= q < ny and mask[p, q]):
+                ok = False
+                break
+        out[k] = ok
+    return out

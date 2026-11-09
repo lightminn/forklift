@@ -82,6 +82,9 @@ def warm_up() -> float:
     gn.erode(mask, offsets), gn.dilate(mask, offsets)
     rows = gn.row_intervals(offsets)
     gn.erode_rows(mask, rows), gn.dilate_rows(mask, rows)
+    # real-time plan 5.26 G3-1b: the beam-cell erosion test (used only with FORKLIFT_GRID_CLEAR_KERNEL=1)
+    ci = np.zeros(1, dtype=np.int64)
+    gn.cells_eroded_rows(gn.next_off(mask), ci, ci, rows), gn.cells_eroded(mask, ci, ci, offsets)
     from forklift_core.control import shadow_numba as sn  # plan 5.27: the arrays apply() hands it
 
     cells = np.zeros(1, dtype=np.int64)
