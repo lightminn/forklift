@@ -184,6 +184,25 @@ class Session:
                         scans += v[1]
         return {k: totals[k] / scans * 1e3 for k in totals} if scans else {}
 
+    def m5_corrections(self) -> dict:
+        """The share of scans whose layer correction version differs from the scan before (obstacle.scans in the
+        spool), and of SLAM records whose applied correction differs: the ceiling of a cache keyed on it."""
+        import glob
+
+        def items(group):
+            out = []
+            for f in sorted(glob.glob(str(self.run / "spool" / group / "*.jsonl"))):
+                out += [json.loads(line) for line in open(f)]
+            return sorted(out, key=lambda r: r.get("stamp_s", 0.0))
+
+        scans = items("obstacle.scans")
+        recs = items("slam.records")
+        v = [r.get("version") for r in scans]
+        ap = [tuple(r.get("applied_after") or ()) for r in recs]
+        return {"scans": len(scans), "version_change_share": (sum(a != b for a, b in zip(v, v[1:])) / len(v)) if v else None,
+                "slam_records": len(recs),
+                "applied_change_share": (sum(a != b for a, b in zip(ap, ap[1:])) / len(ap)) if ap else None}
+
     def m6_start(self) -> dict:
         S = self.trace[:, C["S"]]
         first_tick = float(S[self.first_ctrl_row()])
@@ -219,7 +238,7 @@ class Session:
         if self.trace is None or self.invalid:
             return row
         row.update({"M1": self.m1_gaps(), "M2": self.m2_calls(), "M3": self.m3_scan(), "M4": self.m4_lidar(),
-                    "M6": self.m6_start(), "M7": self.m7_work()})
+                    "M5": self.m5_corrections(), "M6": self.m6_start(), "M7": self.m7_work()})
         return row
 
 
