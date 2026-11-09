@@ -1848,6 +1848,7 @@ P3 도 반영했다: 완전 분리의 해석 한정·최소 반복, 렌더 멈�
 - 시간은 약 60–65 분이다(r1c2 trace 합계 56 분 + 기동).
 
 **읽기(고정; Codex 5.25 P2-7·8).**
+- 옛 r1c2 원자료는 보관했다. `gdrive:ws1-cleanup-20261110-j/j_r1c2.tar.zst`(md5 08c8e66b198d07656a1a7097641d3405)에 r1c2 실행 자료·목록·preflight·로그와 스냅숏 r1c2_0ac2e29e 를 함께 넣었다. 복원 명령: `rclone cat gdrive:ws1-cleanup-20261110-j/j_r1c2.tar.zst | zstd -dc | tar -xpf - -C /home/projects/forklift`.
 - 비교는 같은 분석기로 한다. 옛 r1c2 원자료도 지금의 `r1c_analyze.py` 로 다시 읽어 나란히 둔다. 탐침이 #383 으로 바뀌어(만료 뒤·프리즈 전 재무장) 뒤 구간의 명령·주행이 달라지기 때문이다.
 - wall:
   - 팔마다 첫 해제(정지·만료)까지의 공통 구간을 따로 본다: 허가 상한, 정지 방식, 그 직전 world.step 의 길이.
