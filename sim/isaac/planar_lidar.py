@@ -157,11 +157,17 @@ def cast_scan_flags(
     carried. Those beams stay hits (the body blocks them) but the obstacle
     grid neither marks nor clears with them.
     """
+    if CAST_MODE != "loop":
+        return _cast_by_mode(origin, directions, range_max_m, own_prefixes)
+    return _loop_cast(origin, directions, range_max_m, own_prefixes)
+
+
+def _loop_cast(origin, directions, range_max_m, own_prefixes):
+    """cast_scan_flags' original loop (a module-private name: the live timers wrap cast_scan_flags, and the oracle's
+    reference cast must not go through that wrapper again)."""
     import carb
     from omni.physx import get_physx_scene_query_interface
 
-    if CAST_MODE != "loop":
-        return _cast_by_mode(origin, directions, range_max_m, own_prefixes)
     query = get_physx_scene_query_interface()
     start = carb.Float3(*map(float, origin))
     distances = np.full(len(directions), np.nan)
@@ -226,16 +232,6 @@ def cast_scan_flags_fast(
     return distances, hits, own
 
 
-def _cast_loop(origin, directions, range_max_m, own_prefixes):
-    """The original loop's result (the oracle's reference), whatever CAST_MODE says."""
-    mode = globals()["CAST_MODE"]
-    globals()["CAST_MODE"] = "loop"
-    try:
-        return cast_scan_flags(origin, directions, range_max_m, own_prefixes=own_prefixes)
-    finally:
-        globals()["CAST_MODE"] = mode
-
-
 def _cast_by_mode(origin, directions, range_max_m, own_prefixes):
     if len(_OWN_CACHE) > _OWN_CACHE_MAX:  # bounded: prefix sets x bodies met; dropped whole, rebuilt on use
         _OWN_CACHE.clear()
@@ -243,7 +239,7 @@ def _cast_by_mode(origin, directions, range_max_m, own_prefixes):
         return cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
     if CAST_MODE != "oracle":
         raise ValueError(f"CAST_MODE {CAST_MODE!r}: loop, fast or oracle")
-    ref = _cast_loop(origin, directions, range_max_m, own_prefixes)
+    ref = _loop_cast(origin, directions, range_max_m, own_prefixes)
     got = cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
     ORACLE["scans"] += 1
     ORACLE["own_true_rays"] += int(ref[2].sum())
