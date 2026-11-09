@@ -861,6 +861,17 @@ def arguments() -> argparse.Namespace:
         "earlier run.",
     )
     parser.add_argument(
+        "--occupied-dumps",
+        action="store_true",
+        help="docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2 (diagnostic): besides the run's first "
+        "obstacle dumps, <kind>_dump_N.npz files (grid, free stamps, origin, resolution, pose, truth, correction, "
+        "blocked cells) at: a mission's start; the transport's entry (rear axle within 3 m of the destination); a "
+        "permission hold on an occupied or unknown cell at 0, 1, 5, 20 and 60 s and on its release after 1 s; a "
+        "scene-replan or escape candidate refused for a blocked reason (the permit's own cells), at once and then at "
+        "most once a second; 24 a mission, 96 a run, listed with the dropped ones in state['occupied_dumps']. Off "
+        "(default): nothing is read or written, as before.",
+    )
+    parser.add_argument(
         "--low-clearance-guard",
         choices=("on", "off"),
         default="off",
@@ -6958,6 +6969,8 @@ def drive(S, isaac) -> None:
                                 d7_reapproach_hold=getattr(args, "d7_reapproach_hold", "off"),
                                 # docs/plans/2026-10-25-low-clearance-guard.md: off in a record from before the option.
                                 low_clearance_guard=getattr(args, "low_clearance_guard", "off"),
+                                # diagnostic dumps (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md)
+                                occupied_dumps=bool(getattr(args, "occupied_dumps", False)),
                                 restart_confirm_scans=int(getattr(args, "restart_confirm_scans", 0) or 0),
                                 low_clearance_margin_m=getattr(args, "low_clearance_margin_m", 0.05),
                                 low_clearance_deviation_m=getattr(args, "low_clearance_deviation_m", 0.02),

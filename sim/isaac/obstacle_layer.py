@@ -572,7 +572,8 @@ class ObstacleLayer:
 
     def candidate_permit(self, now_s: float, path_ahead, *, current_pose, direction: int, loaded: bool,
                          curvature_inv_m: float, measured_curvature_inv_m: float, cap_mps: float,
-                         strict: bool = True, strict_from_m: float = 0.0, permission=None) -> dict:
+                         strict: bool = True, strict_from_m: float = 0.0, permission=None,
+                         with_cells: bool = False) -> dict:
         """The scene-mode replan's check before a candidate is installed (docs/plans/2026-10-23-scene-replan.md
         2.1 step 6, 7판): ``path_ahead`` -- the candidate tracker's first gear leg -- on the processed snapshot, in a
         fresh DrivePermission so the layer's own (its path check, the distance driven since, its last stop arc) is
@@ -629,6 +630,10 @@ class ObstacleLayer:
                    measured_allowed_why=allowed[1][1], need_m=need, strict=bool(strict),
                    strict_from_m=zone_from, strict_checked_m=zone_len, occupied_ahead=ahead.blocked == "occupied")
         need_zone = zone_len if zone_from > 0.0 else need
+        if with_cells:
+            # --occupied-dumps (diagnostic): the cells of this permit's own walks, read off the checks already made
+            out["cells"] = {name: [[int(i), int(j)] for i, j in getattr(c_, "blocked_cells", ()) or ()]
+                            for name, c_ in (("walk", check), ("ahead", ahead), ("zone", zone_check))}
         if check.blocked == "occupied" or ahead.blocked == "occupied":
             out["why"] = "blocked:occupied"
         elif zone_len > 0.0 and zone_check.blocked is not None:
