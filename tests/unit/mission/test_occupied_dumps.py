@@ -87,7 +87,8 @@ class _Fake:
         self.hooks = SimpleNamespace(save_npz=lambda name, **arrays: saved.append((name, arrays)),
                                      truth_rear=lambda: (0.0, 0.0, 0.0))
         self.options = SimpleNamespace(occupied_dumps=True)
-        for name in ("_occupied_state", "_occupied_dump", "_candidate_dump", "_occupied_new_mission"):
+        for name in ("_occupied_state", "_occupied_dump", "_occupied_write", "_candidate_dump",
+                     "_occupied_new_mission"):
             setattr(self, name, getattr(MissionCore, name).__get__(self))
 
 
@@ -145,4 +146,21 @@ def test_a_new_mission_resets_the_episode_and_budget_and_dumps_the_start():
     assert occ["holds"].since is None and occ["budget"].mission == 1  # the start dump took one
     name, a = saved[-1]
     assert name == "mission_start_dump_1.npz" and str(a["rear_source"]) == "plan_start"
-    assert a["rear"].tolist() == [-1.28, 0.87, 0.17] and a["truth_rear"].tolist() == [-1.27, 0.85, 0.17]  # not forced equal
+    assert a["rear"].tolist() == [-1.28, 0.87, 0.17]
+    assert a["truth_rear"].tolist() == [-1.27, 0.85, 0.17]  # not forced equal
+
+
+def test_a_failed_write_is_listed_and_never_ends_the_run():
+    def boom(name, **arrays):
+        raise OSError("disk full")
+
+    f = _Fake([])
+    f.hooks.save_npz = boom
+    f._occupied_dump("hold", 1.0, (0, 0, 0), (0, 0, 0))  # no exception
+    entry = f.state["occupied_dumps"]["files"][0]
+    assert entry["error"] == "OSError: disk full" and entry["write_s"] >= 0.0
+    saved = []
+    g = _Fake(saved)
+    g._occupied_dump("hold", 1.0, (0, 0, 0), (0, 0, 0))
+    first = g.state["occupied_dumps"]["files"][0]
+    assert "error" not in first and first["write_s"] >= 0.0
