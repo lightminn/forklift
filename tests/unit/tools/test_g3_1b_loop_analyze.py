@@ -12,7 +12,8 @@ SPEC.loader.exec_module(tool)
 
 def r(pair, arm, share, rate, done=True, invalid=()):
     return {"name": f"p{pair}{arm}", "pair": pair, "arm": arm, "invalid": list(invalid), "mission_done": done,
-            "scan_step_rest_s_per_sim_s": share, "auto": {"rate": rate}}
+            "scan_step_rest_s_per_sim_s": share, "auto": {"rate": rate}, "kernels_mode": "numba",
+            "safety": {"forbidden_contacts": 0, "unpermitted_entries": 0, "unpermitted_dir_entries": 0}}
 
 
 def three(falls, rises, overrides=None):
@@ -48,3 +49,29 @@ def test_six_pairs_decide_on_the_means():
     assert v["result"] == "pass" and abs(v["mean_fall_s_per_sim_s"] - 0.007166666666666667) < 1e-12
     rows = [x if x["arm"] == "off" else x | {"scan_step_rest_s_per_sim_s": 0.199} for x in rows]
     assert tool.verdict(rows, registered_pairs=6)["result"] == "fail"
+
+
+def test_safety_degradation_fails_and_a_missing_safety_record_does_not_pass():
+    rows = three([0.012, 0.010, 0.009], [0.01, 0.02, 0.01])
+    rows[3]["safety"]["unpermitted_entries"] = 1  # pair 2's on arm
+    v = tool.verdict(rows)
+    assert v["result"] == "fail" and v["mission_degraded_pairs"] == [2]
+    rows = three([0.012, 0.010, 0.009], [0.01, 0.02, 0.01])
+    rows[0]["safety"]["forbidden_contacts"] = None
+    v = tool.verdict(rows)
+    assert v["result"] == "fail" and v["safety_undecided_pairs"] == [1]
+
+
+def test_the_list_must_hold_the_registered_pairs():
+    def e(p, arm):
+        return {"env": {"PAIR": str(p), "FORKLIFT_GRID_CLEAR_KERNEL": "1" if arm == "on" else "0"}}
+    ok = [e(p, a) for p in (1, 2, 3) for a in ("off", "on")]
+    assert tool.list_problems(ok) == []
+    assert tool.list_problems(ok[:2])  # one pair only
+    assert tool.list_problems([e(p, a) for p in (4, 5, 6) for a in ("off", "on")])  # the extension alone
+    assert tool.list_problems(ok[:-1] + [e(3, "off")])  # a pair with two off sessions
+
+
+def test_the_stage_target_is_reported_not_judged():
+    v = tool.verdict(three([0.012, 0.010, 0.009], [0.01, 0.02, 0.01]))
+    assert v["result"] == "pass" and v["reported_reaches_stage_target_low"] is False

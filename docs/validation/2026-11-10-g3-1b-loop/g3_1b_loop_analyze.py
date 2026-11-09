@@ -2,32 +2,39 @@
 
     PYTHONPATH=SNAP/src python g3_1b_loop_analyze.py OUT_DIR --list OUT_DIR.jsonl [--ps PS.jsonl] [--json out.json]
 
-Sessions: g3_1b_loop_lists.py's (line_m far K f 1.0 alone, the grid switch off/on, pairs by the list's PAIR). The arm
-is the list's FORKLIFT_GRID_CLEAR_KERNEL (the bundle runner hands the list's env to the session; the run records no
-switch of its own). Validity is g2m_analyze.py's session reading (live log, tick trace, probe exit, the monitor's GPU
-processes; with --ps the other-user CPU rule of the 5.22 F supplement) with this run's registered conditions.
+Sessions: g3_1b_loop_lists.py's (line_m far K f 1.0 alone, the grid switch off/on, pairs by the list's PAIR). The list
+must hold exactly pairs 1..3 (or, extended, 1..6), each with one off and one on session. The arm is the list's
+FORKLIFT_GRID_CLEAR_KERNEL, and the session's args.txt (r1c_session.sh writes the FORKLIFT_* environment there) must
+show the same value, FORKLIFT_SHADOW_KERNEL=0, SEED=0 and no profiler variable; result.json's kernel mode is recorded
+and must be the same in both arms of a pair. Validity is otherwise g2m_analyze.py's session reading (live log, tick
+trace, probe exit, the monitor's GPU processes; with --ps the other-user CPU rule of the 5.22 F supplement).
 
 Per session (AUTO: the status-line windows whose every command line is AUTO, g2m_analyze.py's auto_windows):
 - the AUTO scan steps' after-step processing per sim s (step_end - world_end on scan-flagged rows; M3, 5.20's
   denominator) and the scan steps' W p50/p99/max;
 - the AUTO rate: the windows' sim s over their wall s (mono), and ``ok``: the share of AUTO command lines with
   pacing_ok;
-- the missions' outcomes.
+- the missions' outcomes and safety: result.json's forbidden pocket contacts and the obstacle layer's unpermitted
+  entries (and direction entries), as r1c_analyze.py reads them.
 
 Pairs (5.26: the timing of a pair whose run failed is not counted): a pair is comparable when both sessions are valid
-and both missions are done. A pair with a mission not done in one arm is reported (mission or safety, kept in the
-degradation line) and not counted for timing.
+and both missions are done. Degradation: the off arm's missions done and the on arm's not, or more forbidden contacts
+or unpermitted entries with on than with off; a safety record missing in either arm leaves the pair undecided, which
+does not pass. A pair with a mission not done is not counted for timing.
 
 Stage pass (5.20; prediction from 1b-0: -14 ms/sim s, half = 0.007 s/sim s), with the registered 3 pairs:
 - pass: every comparable pair's scan-step share falls (off - on > 0) and its AUTO rate rises (on - off > 0), every
   pair's fall is at least 0.007 s/sim s, three comparable pairs, and no pair where the off arm's missions were done and
   the on arm's were not;
-- extend to 6 pairs (once): the pairs disagree in direction (some fall and rise, some not) -- 5.20;
+- extend to 6 pairs (once): the pairs disagree in direction -- 5.20; a pair's direction is the joint one (its share
+  falls and its rate rises, or not), so pairs improving on one measure each do not count as disagreeing;
 - fail: otherwise (no pair improves, or an improving set misses half the prediction, or a mission degradation).
 With 6 pairs: pass when the comparable pairs' mean fall is at least 0.007 s/sim s, their mean rate rise is positive
 and no mission degradation; a fail otherwise (5.20's six pairs, read like 5.26's 1e rule: an operating decision, not
 statistical certainty).
 A comparable pair count below the registered number is reported as such (the check is then not passed).
+Also reported, not judged here: whether the mean fall reaches 0.025 s/sim s (the low end of the stage's -25 to -35
+ms/sim s; how it bears on the pass is for the lead to fix before the results).
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ _spec = importlib.util.spec_from_file_location("g2m_analyze", HERE.parents[1] / 
 g2m = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(g2m)
 HALF_PREDICTION = 0.007  # s per sim s: half of 1b-0's -14 ms/sim s
+STAGE_TARGET_LOW = 0.025  # s per sim s: the stage's -25 ms/sim s, reported only
 
 
 class Session(g2m.Session):
@@ -57,10 +65,14 @@ class Session(g2m.Session):
         for k in c:
             if k.startswith(g2m.FORBIDDEN):
                 self.invalid.append(f"{k} set (dumps and the dual run stay out of the check)")
-        want = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "FORKLIFT_LIVE_CATCHUP_STEPS": "6"}
+        want = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "FORKLIFT_LIVE_CATCHUP_STEPS": "6", "SEED": "0",
+                "FORKLIFT_GRID_CLEAR_KERNEL": "1" if self.arm == "on" else "0", "FORKLIFT_SHADOW_KERNEL": "0"}
         for k, v in want.items():
             if c.get(k) != v:
                 self.invalid.append(f"{k}={c.get(k)}, registered {v}")
+        for k in g2m.INSTR_ON:
+            if c.get(k) is not None:
+                self.invalid.append(f"{k} set in an INSTR off session")
 
     def auto_rate(self) -> dict:
         win = self.auto_windows()
@@ -78,21 +90,49 @@ def analyse_session(s: Session) -> dict:
     if s.trace is None or s.invalid:
         return row
     m3 = s.m3_scan()
+    res = s.result or {}
+    ol = res.get("obstacle_layer") or {}
     row.update({"scan_step_rest_s_per_sim_s": m3.get("scan_step_rest_s_per_sim_s"),
-                "scan_step_W_ms": m3.get("scan_step_W_ms"), "auto": s.auto_rate(), "M8": s.m8_report_only()})
+                "scan_step_W_ms": m3.get("scan_step_W_ms"), "auto": s.auto_rate(), "M8": s.m8_report_only(),
+                "kernels_mode": (res.get("kernels") or {}).get("mode"),
+                "safety": {"forbidden_contacts": len(res.get("forbidden_pocket_contacts") or []) if res else None,
+                           "unpermitted_entries": ol.get("unpermitted_entries"),
+                           "unpermitted_dir_entries": ol.get("unpermitted_dir_entries")}})
     return row
+
+
+def list_problems(entries: list[dict]) -> list[str]:
+    """The list holds pairs 1..3 or 1..6, each with one off and one on session (Codex review P2-3)."""
+    arms: dict[int, list[str]] = {}
+    for e in entries:
+        arms.setdefault(int(e["env"]["PAIR"]), []).append("on" if e["env"].get("FORKLIFT_GRID_CLEAR_KERNEL") == "1"
+                                                           else "off")
+    out = []
+    if sorted(arms) not in (list(range(1, 4)), list(range(1, 7))):
+        out.append(f"pairs {sorted(arms)}, registered 1..3 or 1..6")
+    out += [f"pair {p}: arms {sorted(a)}" for p, a in arms.items() if sorted(a) != ["off", "on"]]
+    return out
 
 
 def verdict(rows: list[dict], registered_pairs: int = 3) -> dict:
     by_pair: dict[int, dict] = {}
     for r in rows:
         by_pair.setdefault(r["pair"], {})[r["arm"]] = r
-    pairs, degraded, left_out = [], [], []
+    pairs, degraded, left_out, undecided = [], [], [], []
     for p in sorted(by_pair):
         off, on = by_pair[p].get("off"), by_pair[p].get("on")
         if off is None or on is None or off["invalid"] or on["invalid"]:
             left_out.append({"pair": p, "why": "a session missing or invalid"})
             continue
+        if off.get("kernels_mode") != on.get("kernels_mode"):
+            left_out.append({"pair": p, "why": f"kernel modes differ: {off.get('kernels_mode')} / {on.get('kernels_mode')}"})
+            continue
+        so, sn = off.get("safety") or {}, on.get("safety") or {}
+        keys = ("forbidden_contacts", "unpermitted_entries", "unpermitted_dir_entries")
+        if any(so.get(k) is None or sn.get(k) is None for k in keys):
+            undecided.append(p)
+        elif any(sn[k] > so[k] for k in keys):
+            degraded.append(p)
         if off["mission_done"] and not on["mission_done"]:
             degraded.append(p)
         if not (off["mission_done"] and on["mission_done"]):
@@ -105,11 +145,16 @@ def verdict(rows: list[dict], registered_pairs: int = 3) -> dict:
                       "improves": fall > 0 and rise is not None and rise > 0,
                       "half_prediction": fall >= HALF_PREDICTION})
     n = len(pairs)
-    out = {"pairs": pairs, "left_out": left_out, "mission_degraded_pairs": degraded, "registered_pairs":
-           registered_pairs, "half_prediction_s_per_sim_s": HALF_PREDICTION}
+    out = {"pairs": pairs, "left_out": left_out, "mission_degraded_pairs": sorted(set(degraded)),
+           "safety_undecided_pairs": undecided, "registered_pairs": registered_pairs,
+           "half_prediction_s_per_sim_s": HALF_PREDICTION}
+    if pairs:
+        mean_fall_ = float(np.mean([x["fall_s_per_sim_s"] for x in pairs]))
+        out["reported_mean_fall_s_per_sim_s"] = mean_fall_
+        out["reported_reaches_stage_target_low"] = mean_fall_ >= STAGE_TARGET_LOW
     if registered_pairs == 3:
         improving = [x["improves"] for x in pairs]
-        if degraded:
+        if degraded or undecided:
             out["result"] = "fail"
         elif n < 3:
             out["result"] = "not enough comparable pairs"
@@ -120,7 +165,7 @@ def verdict(rows: list[dict], registered_pairs: int = 3) -> dict:
         else:
             out["result"] = "fail"
     else:
-        if degraded:
+        if degraded or undecided:
             out["result"] = "fail"
         elif n < registered_pairs:
             out["result"] = "not enough comparable pairs"
@@ -143,6 +188,10 @@ def main() -> int:
     a = ap.parse_args()
     ps = g2m.read_ps(a.ps.read_text()) if a.ps else None
     entries = [json.loads(x) for x in a.list.read_text().splitlines() if x.strip()]
+    problems = list_problems(entries)
+    if problems:
+        print(json.dumps({"list_not_registered": problems}))
+        return 2
     rows = [analyse_session(Session(a.out / e["name"], e, ps=ps)) for e in entries]
     registered = len({e["env"]["PAIR"] for e in entries})
     out = {"sessions": rows, "verdict": verdict(rows, registered)}
