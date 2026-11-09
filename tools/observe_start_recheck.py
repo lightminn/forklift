@@ -82,10 +82,26 @@ class Unsupported(ValueError):
     """A record this reconstruction does not cover (it would rebuild a different check)."""
 
 
-def supported(result: dict, missions: dict, mission_id: str, replan_t: float) -> None:
+def recognised_before(state: dict, t: float) -> bool | None:
+    """Whether the mission's far recognition had selected a pallet by sim time ``t`` (a selected attempt whose first
+    selection stamp is at or before ``t``); None when a selected attempt carries no stamp (cannot tell)."""
+    for att in (state.get("recognition_mission") or {}).get("attempts") or []:
+        if att.get("status") != "selected":
+            continue
+        stamps = [h.get("stamp_ns") for h in att.get("selection_history") or [] if h.get("stamp_ns") is not None]
+        if not stamps:
+            return None
+        if min(stamps) * 1e-9 <= t:
+            return True
+    return False
+
+
+def supported(result: dict, missions: dict, mission_id: str, replan_t: float, state: dict | None = None,
+              leg_serial=None) -> None:
     """Raise Unsupported unless the check is the one rebuilt here: a scene layout planning without --grid-planning
     (no occupancy, the props kept), the replan before the mission's approach (the observation still holds the pallet
-    as its prior, not a perceived outline -- run_transport grid_kwargs), and no earlier mission in the session for the
+    as its prior, not a perceived outline -- run_transport grid_kwargs) on the mission's first observe leg with no far
+    recognition selected yet, and no earlier mission in the session for the
     same pallet (a prior at its first place: its session zone, safety.pallet_permit preparation_obstacle; an earlier
     mission may have recognised it even when cancelled)."""
     args = result.get("arguments") or {}
@@ -96,6 +112,13 @@ def supported(result: dict, missions: dict, mission_id: str, replan_t: float) ->
     trs = sorted((float(t["time_s"]), t.get("to")) for t in result.get("transitions") or [])
     if any(to == "approach" and t0 <= t <= replan_t for t, to in trs):
         raise Unsupported("the replan came after the mission's approach (the pallet held as its perceived outline)")
+    # the first far observation only: a later observe leg (near capture, realignment, side legs) comes after the
+    # recognition and holds the perceived outline although the phase is still observe (core near_leg)
+    if leg_serial != 0:
+        raise Unsupported(f"the replan is on observe leg {leg_serial}, not the mission's first (far) observation")
+    seen = recognised_before(state or {}, replan_t)
+    if seen is not False:
+        raise Unsupported("the far recognition had selected the pallet before the replan (or its time is unknown)")
     for mid, m in missions.items():
         # any earlier mission for the same pallet may have recognised it (a cancel in the approach keeps it
         # recognised, core's targets book): its next preparation holds the perceived outline, not the zone
@@ -117,7 +140,7 @@ def inputs_of(run_dir: Path, mission_id: str, scene_file: Path) -> dict:
     mres = missions[mission_id]
     replans = state.get("observe_replans") or []
     if replans:
-        supported(result, missions, mission_id, float(replans[-1]["time_s"]))
+        supported(result, missions, mission_id, float(replans[-1]["time_s"]), state, replans[-1].get("leg_serial"))
     geom = result["geometry"]
     fp = geom["unloaded_footprint"]
     footprint = Footprint(float(fp["front_m"]), float(fp["rear_m"]), float(fp["half_width_m"]))

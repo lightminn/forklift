@@ -56,7 +56,8 @@ def test_an_open_start_reports_a_lower_bound_not_a_silent_cap():
     assert capped and clear == 64.0
 
 
-def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried_before=False, cancelled_before=False):
+def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried_before=False, cancelled_before=False,
+         leg_serial=0, attempts=()):
     import json
 
     run = tmp_path / "run"
@@ -81,7 +82,9 @@ def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried
                 "bounds": {"x_min_m": -10, "x_max_m": 10, "y_min_m": -10, "y_max_m": 10}}
     (run / "missions" / "m2" / "records.json").write_text(json.dumps({"state": {
         "mission_scenario": scenario,
-        "observe_replans": [{"time_s": 60.0, "rear_pose": [0.0, 0.0, 0.0], "status": "invalid_start"}]}}))
+        "observe_replans": [{"time_s": 60.0, "rear_pose": [0.0, 0.0, 0.0], "status": "invalid_start",
+                             "leg_serial": leg_serial}],
+        "recognition_mission": {"attempts": list(attempts)}}}))
     (run / "result.json").write_text(json.dumps({
         "arguments": {"layout": layout, "grid_planning": grid}, "transitions": transitions,
         "geometry": {"unloaded_footprint": {"front_m": 1.29, "rear_m": 0.17, "half_width_m": 0.36},
@@ -118,8 +121,18 @@ def test_the_inputs_are_read_from_the_records_and_the_scene(tmp_path, monkeypatc
     ({"approach_before": True}, "approach"),
     ({"carried_before": True}, "earlier mission"),
     ({"cancelled_before": True}, "earlier mission"),
+    # Codex round 3 P2: the near leg after the far recognition (s16 H0 m1 shape: leg 1, selected at 33.3 s)
+    ({"leg_serial": 1}, "observe leg 1"),
+    ({"attempts": [{"status": "selected", "selection_history": [{"stamp_ns": 33_300_001_737}]}]}, "selected"),
+    ({"attempts": [{"status": "selected", "selection_history": []}]}, "selected"),
 ])
 def test_a_record_this_does_not_rebuild_is_refused(tmp_path, monkeypatch, kw, why):
     _fake_scene(monkeypatch)
     with pytest.raises(O.Unsupported, match=why):
         O.inputs_of(_run(tmp_path, **kw), "m2", tmp_path / "scene.json")
+
+
+def test_a_recognition_after_the_replan_does_not_refuse_it(tmp_path, monkeypatch):
+    _fake_scene(monkeypatch)
+    late = [{"status": "selected", "selection_history": [{"stamp_ns": 70_000_000_000}]}]
+    assert O.inputs_of(_run(tmp_path, attempts=late), "m2", tmp_path / "scene.json")["pallet_id"] == "P-5"
