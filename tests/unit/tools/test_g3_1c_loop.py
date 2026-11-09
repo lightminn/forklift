@@ -41,7 +41,9 @@ def test_a_list_mixing_grid_values_or_with_an_odd_shadow_value_is_refused():
     e = lists.entries("/snap", "/out", "1")
     e[0]["env"]["FORKLIFT_SHADOW_KERNEL"] = "2"
     assert tool.list_problems(e)
-    del e[1]["env"]["FORKLIFT_SHADOW_KERNEL"]
+    e = lists.entries("/snap", "/out", "1")  # a fresh list: only an off session's key removed
+    off = next(x for x in e if x["env"]["FORKLIFT_SHADOW_KERNEL"] == "0")
+    del off["env"]["FORKLIFT_SHADOW_KERNEL"]
     assert tool.list_problems(e)
 
 
