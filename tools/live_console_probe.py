@@ -452,11 +452,15 @@ async def main_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+FREEZE_FRAME_SLACK_S = 0.15  # the live camera runs at 10 Hz: its last frame before the freeze is at most 0.1 s early
+
+
 async def _end_if_asked(p, args) -> None:
     """--end-session for the scenarios that leave the session open (marker, approach): close it through its own path
     so the epoch writes its end summary, result.json, the tick trace and the spool -- a launcher TERM lost all of them
     (realtime plan 5.17, ws1 job 16866: the eight hall sessions; validation v2 H1 likewise)."""
     if getattr(args, "end_session", False):
+        p.report["end_requested_mono"] = time.monotonic()  # after every measured step (the analysis checks it)
         await _end_session(p)
 
 
@@ -505,7 +509,11 @@ async def _marker_steps(p: Probe, args):
         st = p.state or {}
         p.report["freeze"]["samples"].append({"mono": time.monotonic(), "last_frame_sim": sim_now(),
                                               "armed": st.get("armed"), "reject": st.get("last_teleop_reject")})
-        if not st.get("armed") and st.get("last_teleop_reject") == "stale_video":
+        # Only a refusal with the frames stopped at the freeze counts: a stale_video before it (a render or transport
+        # stall) would end the steps -- and with --end-session the session -- before the freeze was tested (Codex
+        # r1c mark/wall review P2). The last frame before the freeze is within one camera period of its start.
+        if (not st.get("armed") and st.get("last_teleop_reject") == "stale_video"
+                and sim_now() >= args.freeze_from - FREEZE_FRAME_SLACK_S):
             p.event("stale_video_disarmed", last_frame_sim=sim_now())
             break
         await asyncio.sleep(0.05)

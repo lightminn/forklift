@@ -77,3 +77,79 @@ def test_the_r1c_wrapper_ends_every_set_through_the_probe():
     assert "END=(--end-session)" in src
     assert "END=()" not in src  # no set resets it (16866's mark and wall did)
     assert '"${PROBE[@]}" "${END[@]}"' in src
+
+
+class MarkerProbe:
+    """The marker steps' freeze loop: stale_video refusals first while frames still flow (a stall at sim 25 s), then
+    with the frames stopped at the freeze (last frame 29.95 s)."""
+
+    def __init__(self):
+        self.closed_code = None
+        self.report, self.events = {}, []
+        self.frames = [{"stamp_ns": int(20.0e9)}]
+        self.state = {"armed": False, "last_teleop_reject": "stale_video", "rear_axle_speed_mps": 0.0}
+        self.calls = 0
+        self.lease_id = self.arm_gen = None
+
+    async def open(self):
+        pass
+
+    async def open_media(self):
+        pass
+
+    def standing(self, s):
+        return True
+
+    async def until(self, pred, timeout, hz=20, label=""):
+        return True
+
+    async def request(self, kind, **fields):
+        return {"t": "ack", "lease_id": "L1", "arm_gen": 1}
+
+    async def teleop(self, speed, curvature, deadman=True, mode="direct", lift_dir=0):
+        self.calls += 1
+        self.frames.append({"stamp_ns": int((25.0 if self.calls < 4 else 29.95) * 1e9)})
+
+    def event(self, name, **fields):
+        self.events.append((name, fields))
+
+
+def test_a_stale_video_before_the_freeze_does_not_end_the_marker_steps(tmp_path, monkeypatch):
+    async def fast_sleep(_):
+        return None
+    monkeypatch.setattr(lcp.asyncio, "sleep", fast_sleep)
+    p = MarkerProbe()
+    args = SimpleNamespace(frames_dir=tmp_path / "f", frames=0, marker_s=60.0, freeze_from=30.0)
+    asyncio.run(lcp._marker_steps(p, args))
+    assert p.calls == 4  # three refusals at 25 s passed over, the fourth (frames stopped at 29.95 s) ends the loop
+    assert p.events == [("stale_video_disarmed", {"last_frame_sim": 29.95})]
+
+
+def test_the_real_approach_steps_refused_teleop_still_end_the_session(monkeypatch):
+    """Codex review P3: the approach body returns early when TELEOP is refused; the end still follows it."""
+    class ApproachProbe(FakeProbe):
+        async def open(self):
+            pass
+
+        async def open_media(self):
+            pass
+
+        def standing(self, s):
+            return True
+
+        async def until(self, pred, timeout, hz=20, label=""):
+            return True
+
+        async def request(self, kind, **fields):
+            self.log.append(("request", kind))
+            if kind == "mode_request":
+                return {"t": "reject", "reason": "teleop_forbidden", "detail": "start_block"}
+            return {"t": "ack", "lease_id": "L1"}
+
+    p = ApproachProbe()
+    asyncio.run(lcp.approach_scenario(p, SimpleNamespace(end_session=True)))
+    kinds = [k for _, k in p.log]
+    assert kinds[:2] == ["lease_request", "mode_request"] and "arm" not in kinds
+    assert kinds[-2:] == ["lease_request", "session_end"]
+    assert p.report["teleop_entry"]["t"] == "reject" and "approach" not in p.report
+    assert p.report["close_code"] == 1000 and p.report["end_requested_mono"] > 0
