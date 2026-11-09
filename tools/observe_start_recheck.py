@@ -45,17 +45,20 @@ def props_of(scenario: dict, keepout_m: float = 0.0, plane_m: float = LIDAR_PLAN
     return out
 
 
-def max_free_clearance(free, pose, hi: float = 1.0, tol: float = 1e-5):
-    """The largest clearance the pose is free at (bisection), None when it is not free at zero."""
+def max_free_clearance(free, pose, hi: float = 1.0, tol: float = 1e-5, cap: float = 64.0):
+    """(clearance, capped): the largest clearance the pose is free at (bisection after doubling ``hi``), (None, False)
+    when it is not free at zero; capped True when it is still free at ``cap`` (the value is then a lower bound)."""
     if not free(pose, 0.0):
-        return None
-    if free(pose, hi):
-        return hi
+        return None, False
+    while free(pose, hi):
+        if hi >= cap:
+            return hi, True
+        hi = min(2 * hi, cap)
     lo = 0.0
     while hi - lo > tol:
         mid = (lo + hi) / 2
         lo, hi = (mid, hi) if free(pose, mid) else (lo, mid)
-    return lo
+    return lo, False
 
 
 def recheck(rects: list, footprint: Footprint, bounds: Bounds, pose, clearance_m: float) -> dict:
@@ -66,22 +69,55 @@ def recheck(rects: list, footprint: Footprint, bounds: Bounds, pose, clearance_m
     if not make_checker([], footprint, bounds, None).free(pose, clearance_m):
         blockers.append("bounds")
     start = Pose2D(float(pose[0]), float(pose[1]), float(pose[2]))
+    clear_, capped_ = max_free_clearance(checker.free, pose)
     return {"pose": [float(v) for v in pose], "clearance_m": clearance_m,
             "free_at_zero": bool(checker.free(pose, 0.0)), "free_at_clearance": bool(checker.free(pose, clearance_m)),
-            "max_free_clearance_m": max_free_clearance(checker.free, pose),
+            "max_free_clearance_m": clear_, "max_free_clearance_is_lower_bound": capped_,
             "blockers": blockers,
             "advice_back": straight_start_advice(checker.free, clearance_m, start, -1),
             "advice_forward": straight_start_advice(checker.free, clearance_m, start, +1)}
 
 
+class Unsupported(ValueError):
+    """A record this reconstruction does not cover (it would rebuild a different check)."""
+
+
+def supported(result: dict, missions: dict, mission_id: str, replan_t: float) -> None:
+    """Raise Unsupported unless the check is the one rebuilt here: a scene layout planning without --grid-planning
+    (no occupancy, the props kept), the replan before the mission's approach (the observation still holds the pallet
+    as its prior, not a perceived outline -- run_transport grid_kwargs), and the pallet never carried or delivered
+    earlier in the session (a prior at its first place: its session zone, safety.pallet_permit
+    preparation_obstacle)."""
+    args = result.get("arguments") or {}
+    if args.get("layout") != "scene" or args.get("grid_planning") is not False:
+        raise Unsupported("only a --layout scene run without --grid-planning (its observation plans on the layout)")
+    me = missions[mission_id]
+    t0, t1 = float(me["started_s"]), float(me["ended_s"])
+    trs = sorted((float(t["time_s"]), t.get("to")) for t in result.get("transitions") or [])
+    if any(to == "approach" and t0 <= t <= replan_t for t, to in trs):
+        raise Unsupported("the replan came after the mission's approach (the pallet held as its perceived outline)")
+    for mid, m in missions.items():
+        if mid == mission_id or m.get("pallet_id") != me.get("pallet_id") or float(m["started_s"]) >= t0:
+            continue
+        if m.get("outcome") == "done" or any(to == "lift" and float(m["started_s"]) <= t <= float(m["ended_s"])
+                                              for t, to in trs):
+            raise Unsupported(f"{me.get('pallet_id')} was carried in {mid} (no longer a prior at its first place)")
+
+
 def inputs_of(run_dir: Path, mission_id: str, scene_file: Path) -> dict:
-    """Everything the check reads, from the session's records and its scene file."""
+    """Everything the check reads, from the session's records and its scene file (Unsupported when the record is
+    not the case rebuilt here)."""
     from scene_file import load_session, zone_rect
 
     result = json.loads((run_dir / "result.json").read_text())
     rec = json.loads((run_dir / "missions" / mission_id / "records.json").read_text())
     state = rec.get("state", rec)
-    mres = json.loads((run_dir / "missions" / mission_id / "result.json").read_text()).get("result", {})
+    missions = {d.name: json.loads((d / "result.json").read_text()).get("result", {})
+                for d in sorted((run_dir / "missions").iterdir()) if (d / "result.json").exists()}
+    mres = missions[mission_id]
+    replans = state.get("observe_replans") or []
+    if replans:
+        supported(result, missions, mission_id, float(replans[-1]["time_s"]))
     geom = result["geometry"]
     fp = geom["unloaded_footprint"]
     footprint = Footprint(float(fp["front_m"]), float(fp["rear_m"]), float(fp["half_width_m"]))
@@ -94,7 +130,6 @@ def inputs_of(run_dir: Path, mission_id: str, scene_file: Path) -> dict:
     pallet = next(p for p in session.pallets if p.pallet_id == pallet_id)
     zone = zone_rect(pallet.zone, float(geom["pallet_depth_m"]), float(geom["pallet_width_m"]))
     rects = props_of(scenario, float(keepout)) + [(f"prior:{pallet_id}", zone)]
-    replans = state.get("observe_replans") or []
     return {"rects": rects, "footprint": footprint, "bounds": bounds, "pose": replans[-1]["rear_pose"] if replans else None,
             "status": replans[-1]["status"] if replans else None,
             "clearance_m": float(result["planner_config"]["clearance_m"]), "pallet_id": pallet_id,
@@ -108,7 +143,11 @@ def main(argv=None) -> int:
     ap.add_argument("--scene-file", type=Path, required=True)
     ap.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
-    inp = inputs_of(a.run_dir, a.mission, a.scene_file)
+    try:
+        inp = inputs_of(a.run_dir, a.mission, a.scene_file)
+    except Unsupported as exc:
+        print(f"unsupported record: {exc}")
+        return 2
     if inp["pose"] is None:
         print("no observe replan in this mission")
         return 1
