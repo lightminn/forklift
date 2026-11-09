@@ -1,7 +1,8 @@
 """Real-time plan 5.25 wall reading: per wall session, the probe's legs (moved, held, armed, the permission's limit and
 reason at the leg's end) and the world.step lengths from the tick trace -- over the whole session and up to the first
 leg's end, the latter taken as the first leg's wall duration from the trace's first paced start (an approximation: the
-leg starts a little after the trace does, so the window is slightly long). The whole-session figures carry the reading.
+leg starts a little after the trace does, so the window ends a little before the leg does). The whole-session figures
+carry the reading.
 
     VENV_PY wall_read.py SNAP_DIR R1C_DIR
 """
