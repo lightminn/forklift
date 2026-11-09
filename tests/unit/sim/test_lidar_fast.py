@@ -73,3 +73,45 @@ def test_fast_takes_a_given_query(fake_isaac):
     q = FakeQuery()
     pl.cast_scan_flags_fast(np.zeros(3), np.eye(3), 5.0, query=q)
     assert len(q.calls) == 3 and fake_isaac == []
+
+
+def test_cast_modes_fast_and_oracle_return_the_loops_result_and_count(fake_isaac, monkeypatch):
+    import planar_lidar as pl
+
+    monkeypatch.setattr(pl, "_PROFILE_EVERY", 0)
+    monkeypatch.setattr(pl, "_OWN_CACHE", {})
+    monkeypatch.setattr(pl, "ORACLE", {"scans": 0, "mismatched_scans": 0, "mismatched_rays": 0, "own_true_rays": 0,
+                                       "prefix_sets": [], "first_mismatch": None})
+    dirs = np.random.default_rng(1).normal(size=(25, 3))
+    monkeypatch.setattr(pl, "CAST_MODE", "loop")
+    plain = pl.cast_scan_flags(np.zeros(3), dirs, 9.0, own_prefixes=(pl.SELF_PREFIX, "/World/P_1"))
+    for mode in ("fast", "oracle"):
+        monkeypatch.setattr(pl, "CAST_MODE", mode)
+        got = pl.cast_scan_flags(np.zeros(3), dirs, 9.0, own_prefixes=(pl.SELF_PREFIX, "/World/P_1"))
+        for a, b in zip(plain, got):
+            np.testing.assert_array_equal(a, b)
+    rec = pl.oracle_record()
+    assert (rec["scans"], rec["mismatched_scans"], rec["mode"]) == (1, 0, "oracle")
+    assert rec["own_true_rays"] == int(plain[2].sum()) > 0  # own hits were in the compared scans
+    assert rec["prefix_sets"] == [[pl.SELF_PREFIX, "/World/P_1"]] and rec["own_cache_entries"] > 0
+    assert pl.CAST_MODE == "oracle"  # the oracle's reference cast leaves the mode as it was
+
+
+def test_the_oracle_counts_a_mismatch(fake_isaac, monkeypatch):
+    import planar_lidar as pl
+
+    monkeypatch.setattr(pl, "_PROFILE_EVERY", 0)
+    monkeypatch.setattr(pl, "ORACLE", {"scans": 0, "mismatched_scans": 0, "mismatched_rays": 0, "own_true_rays": 0,
+                                       "prefix_sets": [], "first_mismatch": None})
+    monkeypatch.setattr(pl, "CAST_MODE", "oracle")
+    real_fast = pl.cast_scan_flags_fast
+
+    def wrong(*a, **k):
+        d, h, o = real_fast(*a, **k)
+        d = d.copy()
+        d[0] = 99.0
+        return d, h, o
+    monkeypatch.setattr(pl, "cast_scan_flags_fast", wrong)
+    pl.cast_scan_flags(np.zeros(3), np.eye(3), 5.0)
+    rec = pl.oracle_record()
+    assert rec["mismatched_scans"] == 1 and rec["first_mismatch"]["ray"] == 0
