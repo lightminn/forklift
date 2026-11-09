@@ -115,3 +115,13 @@ def test_the_line2_stress_tools_are_batch_only(tmp_path):
     assert p.returncode == 0, p.stderr
     p = _check(*_base(tmp_path / "run"), "--docking-degenerate-continue", "on")
     assert p.returncode == 2 and "needs --d7-docking" in p.stderr
+
+
+def test_the_g5_0_prep_arms_need_a_live_run_and_one_arm_at_a_time(tmp_path):
+    # real-time plan 5.24: test-only arms; a batch run refuses them, and renders and a wait are separate arms
+    p = _check(*_base(tmp_path / "a"), "--live-test-prep-renders", "1")
+    assert p.returncode == 2 and "need --live" in p.stderr
+    p = _check(*_base(tmp_path / "b"), "--live", "--live-test-prep-renders", "1", "--live-test-prep-wait-s", "3.5")
+    assert p.returncode == 2 and "separate arms" in p.stderr
+    p = _check(*_base(tmp_path / "c"), "--live-test-prep-renders", "4")
+    assert p.returncode == 2

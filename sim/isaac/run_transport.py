@@ -1373,6 +1373,11 @@ def arguments() -> argparse.Namespace:
                         "arbiter also ages the frame from that step's start (2026-10-17 marker runs: 11 physics "
                         "steps, about one render of the 10 Hz camera; the default adds a render of margin)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
+    parser.add_argument("--live-test-prep-renders", type=int, default=0, choices=(0, 1, 2, 3),
+                        help="real-time plan 5.24 (G5-0 arm, test only): world.render() this many times just before "
+                             "the live start, timed and recorded with the physics time before and after")
+    parser.add_argument("--live-test-prep-wait-s", type=float, default=0.0,
+                        help="real-time plan 5.24 (G5-0 wait control, test only): sleep this long at the same place")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1871,6 +1876,12 @@ def arguments() -> argparse.Namespace:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
         parser.error("--live-test-far-zone-offset-m needs --live and --recognition far")
+    if (args.live_test_prep_renders or args.live_test_prep_wait_s) and not args.live:
+        parser.error("--live-test-prep-renders / --live-test-prep-wait-s need --live (plan 5.24 G5-0 arms)")
+    if args.live_test_prep_renders and args.live_test_prep_wait_s:
+        parser.error("--live-test-prep-renders and --live-test-prep-wait-s are separate arms (plan 5.24)")
+    if not 0.0 <= args.live_test_prep_wait_s <= 30.0:
+        parser.error("--live-test-prep-wait-s must be in [0, 30]")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
                           or args.live_test_recovery_blocked or args.live_test_return_correction_drops
                           or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
@@ -9202,6 +9213,24 @@ def drive(S, isaac) -> None:
                        "overlay": overlay}
                 if encoder is not None else None)
             live_prestart_(live)  # 5.18/5.21 measurement (off by default): the core's ports, the start marks
+            if args.live_test_prep_renders or args.live_test_prep_wait_s:
+                # Real-time plan 5.24 (G5-0 arms, test only): the first renders (or a plain wait) before the first
+                # control tick -- does the start stall move here, go, or stay? The physics must not move: its time
+                # before and after is kept, and an arm that moved it is invalid.
+                prep_ = {"renders": [], "wait_s": float(args.live_test_prep_wait_s),
+                         "physics_time_before": float(world.current_time)}
+                for _ in range(args.live_test_prep_renders):
+                    a_ = time.monotonic()
+                    world.render()
+                    prep_["renders"].append([a_, time.monotonic()])
+                if args.live_test_prep_wait_s:
+                    a_ = time.monotonic()
+                    time.sleep(args.live_test_prep_wait_s)
+                    prep_["wait"] = [a_, time.monotonic()]
+                prep_["physics_time_after"] = float(world.current_time)
+                prep_["physics_unchanged"] = prep_["physics_time_after"] == prep_["physics_time_before"]
+                state.setdefault("live_test_injections", []).append({"prep": prep_})
+                live.log({"event": "live_test_prep", **prep_})
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
             if lifecycle_on():
                 live.log({"event": "lifecycle", "marks": list(LIFECYCLE)})  # 5.21 G5-0, on the live log's clock
