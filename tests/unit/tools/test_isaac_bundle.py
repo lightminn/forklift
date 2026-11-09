@@ -2142,3 +2142,4 @@ def test_an_unreadable_boot_id_neither_issues_nor_verifies_a_proof(tmp_path, mon
     monkeypatch.setattr(ib, "boot_id", lambda: None)
     assert ib.main(args) == 1 and "boot id cannot be read" in capsys.readouterr().out
     assert not proof_path.exists()
+    assert ib.main(args + ["--allow-no-persistence"]) == 1 and not proof_path.exists()  # allowed or not

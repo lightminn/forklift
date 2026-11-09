@@ -575,10 +575,11 @@ def gpu_check(allow: bool, skip: bool) -> tuple[list[str], list[str], dict]:
         modes = gpu_persistence_modes()
         record = {"modes": modes, "boot_id": boot_id(), "queried": [t0, time.time()]}
         found = persistence_problems(modes)
-    if record["boot_id"] is None:
-        found = found + ["the node's boot id cannot be read: a proof could not tell a reboot (persistence off again)"]
+    hard = ([] if record["boot_id"] is not None else
+            ["the node's boot id cannot be read: a proof could not tell a reboot (persistence off again)"])
     record["allowed_without"] = bool(found and allow)
-    return ([], found, record) if allow else (found, [], record)
+    # an unreadable boot id is refused even when allowed: its proof could never verify (Codex round 3 P3)
+    return (hard, found, record) if allow else (found + hard, [], record)
 
 
 def write_preflight(list_path, data: bytes, runs, runner, info, inputs, gpu=None) -> Path:
