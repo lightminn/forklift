@@ -593,7 +593,10 @@ def test_the_runner_prepares_each_live_mission_from_where_the_truck_stands():
     # the adoption's runner part and the session's baseline, before the console starts
     assert "nonlocal scenario, truth_destination, initial_pallet, pickup_obstacle, pickup_zone, pickup_bounds" in source
     start = source.index("            live.start()  # after the SLAM warm-up")
-    before = source[start - 1900:start]  # (the D8 record spool and the U21 start digest switch are between them)
+    # (the D8 record spool and the U21 start digest switch are between them; the plan 5.24 G5-0 test prep arms come
+    # after the prestart hook, so the window ends there)
+    prestart = source.rindex("live_prestart_(live)", 0, start)
+    before = source[prestart - 1900:prestart]
     assert "core.options.observe_bounds = None" in before and "core.baseline = MissionBaseline.capture(core)" in before
     # D-0 live only; the session's end ends a mission still on and skips the batch judgement
     # (not with a session scene: its slots are its destinations, plan 2026-10-22-rigid-session-pallets 2.5)

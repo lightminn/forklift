@@ -1,0 +1,310 @@
+{
+ "conditions": {
+  "scene": "/home/projects/forklift/test_runs/live/rtb/g2m/g2m_01_H_on/live/epoch_1/run/scene.usda",
+  "output": "/home/projects/forklift/test_runs/live/rtb/lbench/hall",
+  "rays": "1600",
+  "range_m": "12.0",
+  "repeats": "30",
+  "poses": "8",
+  "spread_m": "0.6",
+  "base_link": "/World/Forklift/base_link",
+  "mount": "-0.12,0.0,1.05,0.0",
+  "load_timeout_s": "600.0"
+ },
+ "errors": [],
+ "load_s": 7.059149786015041,
+ "colliders": {
+  "all": 4054,
+  "truck": 55
+ },
+ "physics_dt": 0.008333333333333333,
+ "query_methods": [
+  "overlap_box",
+  "overlap_box_any",
+  "overlap_mesh",
+  "overlap_mesh_any",
+  "overlap_shape",
+  "overlap_shape_any",
+  "overlap_sphere",
+  "overlap_sphere_any",
+  "raycast_all",
+  "raycast_any",
+  "raycast_closest",
+  "sweep_box_all",
+  "sweep_box_any",
+  "sweep_box_closest",
+  "sweep_mesh_all",
+  "sweep_mesh_any",
+  "sweep_mesh_closest",
+  "sweep_shape_all",
+  "sweep_shape_any",
+  "sweep_shape_closest",
+  "sweep_sphere_all",
+  "sweep_sphere_any",
+  "sweep_sphere_closest"
+ ],
+ "poses": [
+  {
+   "pose": 0,
+   "origin": [
+    -0.343665651415663,
+    0.970204296372652,
+    1.0499931233661028
+   ],
+   "hits": 1039,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.308014980982989,
+     "p90": 5.428314465098083
+    },
+    "B": {
+     "median": 3.9271299610845745,
+     "p90": 4.055481357499957
+    },
+    "T": {
+     "median": 4.632327007129788,
+     "p90": 4.771451361011714
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 1,
+   "origin": [
+    -0.1793116266299179,
+    0.6939483528892965,
+    1.0499931233661028
+   ],
+   "hits": 1047,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.102932977024466,
+     "p90": 5.342252715490758
+    },
+    "B": {
+     "median": 3.8643584703095257,
+     "p90": 4.074823565315455
+    },
+    "T": {
+     "median": 4.54422301845625,
+     "p90": 4.768742760643363
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 2,
+   "origin": [
+    -0.923832488781428,
+    1.346128583412979,
+    1.0499931233661028
+   ],
+   "hits": 1027,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.176795995794237,
+     "p90": 5.359942372888327
+    },
+    "B": {
+     "median": 3.9222955820150673,
+     "p90": 4.134069138672203
+    },
+    "T": {
+     "median": 4.60217654472217,
+     "p90": 4.752166254911572
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 3,
+   "origin": [
+    -0.21570272049504718,
+    1.24560016955345,
+    1.0499931233661028
+   ],
+   "hits": 1029,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.274613038636744,
+     "p90": 5.338090832810849
+    },
+    "B": {
+     "median": 4.01059997966513,
+     "p90": 4.047373414505273
+    },
+    "T": {
+     "median": 4.649965499993414,
+     "p90": 4.732458270154893
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 4,
+   "origin": [
+    0.17842125712965878,
+    1.3492285613184904,
+    1.0499931233661028
+   ],
+   "hits": 1032,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.129142489749938,
+     "p90": 5.266927275806665
+    },
+    "B": {
+     "median": 3.875954484101385,
+     "p90": 3.9753440534695983
+    },
+    "T": {
+     "median": 4.551721969619393,
+     "p90": 4.77833739714697
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 5,
+   "origin": [
+    0.08521948048942013,
+    0.41050698673920927,
+    1.0499931233661028
+   ],
+   "hits": 1058,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.1100365235470235,
+     "p90": 5.342148547060788
+    },
+    "B": {
+     "median": 3.876028989907354,
+     "p90": 4.04774114722386
+    },
+    "T": {
+     "median": 4.572089994326234,
+     "p90": 4.783486237283796
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 6,
+   "origin": [
+    -0.7328789066925923,
+    1.4060190031925157,
+    1.0499931233661028
+   ],
+   "hits": 1022,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.2325495053082705,
+     "p90": 5.384976079221815
+    },
+    "B": {
+     "median": 3.951174032408744,
+     "p90": 4.068321920931339
+    },
+    "T": {
+     "median": 4.61054703919217,
+     "p90": 4.746711987536401
+    }
+   },
+   "bodies_equal_T": true
+  },
+  {
+   "pose": 7,
+   "origin": [
+    -0.5840113827708013,
+    0.8774289618098422,
+    1.0499931233661028
+   ],
+   "hits": 1039,
+   "own": 0,
+   "equal": {
+    "A": true,
+    "B": true,
+    "T": true
+   },
+   "ms": {
+    "A": {
+     "median": 5.282778001856059,
+     "p90": 5.357538419775665
+    },
+    "B": {
+     "median": 4.025978501886129,
+     "p90": 4.045749420765787
+    },
+    "T": {
+     "median": 4.738123971037567,
+     "p90": 4.813560692127794
+    }
+   },
+   "bodies_equal_T": true
+  }
+ ],
+ "summary": {
+  "A": {
+   "median_ms": 5.204672750551254,
+   "all_equal": true,
+   "saving_ms_per_scan": 0.0,
+   "adopt": false
+  },
+  "B": {
+   "median_ms": 3.924712771549821,
+   "all_equal": true,
+   "saving_ms_per_scan": 1.2799599790014327,
+   "adopt": true
+  },
+  "T": {
+   "median_ms": 4.60636179195717,
+   "all_equal": true,
+   "bodies_equal": true,
+   "saving_ms_per_scan": 0.5983109585940838,
+   "adopt": false
+  }
+ },
+ "oracle_stable": true
+}
