@@ -388,7 +388,7 @@ def test_a_refused_or_unrun_mission_in_any_queue_is_a_failure_unless_after_an_ex
     assert [x["outcome"] for x in V.rv3_failures(l4)] == ["not_run"]  # m2 never ran; the third row is padding
 
 
-def test_the_run_check_inputs_are_required_and_shared(tmp_path):
+def test_the_run_check_inputs_are_required_and_shared():
     with pytest.raises(ValueError, match="slam_choice"):
         V.rv3_plan_inputs({"slam_choice": {"random_m": "r"}, "image_id": "i"},
                           {"slam_choice": "r", "image_id": "i"}, ["ab_line_m_s0_A", "l4c_s0_B"])
@@ -415,3 +415,16 @@ def test_the_dump_option_must_be_a_recorded_boolean():
     assert V.rv3_dump_args({"l4": s("l4", {"occupied_dumps": 1})}, {"l4"}) == ["l4"]
     assert V.rv3_dump_args({"a": s("a", {"occupied_dumps": False}), "l4": s("l4", {"occupied_dumps": True})},
                            {"l4"}) == []
+
+
+def test_a_real_mission_past_the_planned_rows_is_still_checked():
+    life1 = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), _row("m2", "P-2", "failed", "x"), _row(None, None, None)])
+    assert [f["mission"] for f in V.rv3_failures(life1)] == ["m2"]
+    on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"), _row("m3", "P-3", "done"),
+                                _row("m4", "P-1", "failed", "y")])
+    assert [f["mission"] for f in V.rv3_failures(on)] == ["m4"]
+    l4 = _sess("l4c_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row("m2", "P-5", "done"),
+                             _row("m3", "P-5", "failed", "z")])
+    assert [f["mission"] for f in V.rv3_failures(l4)] == ["m3"]
+    padded = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), _row(None, None, None), _row(None, None, None)])
+    assert V.rv3_failures(padded) == []
