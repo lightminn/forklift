@@ -103,39 +103,3 @@ def retained(a, b, r, fresh, stamps, whole, di, dj, gap):
                 changed = True
     return alive, stamp
 
-
-@njit(cache=True, nogil=True)
-def move_values(i0, i1, j0, j1, present, t, rho, wi, wj):
-    """``ShadowMemory._move``'s test per candidate: every old cell of its box [i0..i1] x [j0..j1] remembered (window
-    ``present`` from cell (wi, wj)), then the oldest time and the largest rho over the box (plan 5.27). ``ok`` is -1
-    for an empty box (the original raises there; the caller takes the original path)."""
-    n = len(i0)
-    nx, ny = present.shape
-    ok = np.zeros(n, dtype=np.int64)
-    tmin = np.full(n, np.inf)
-    rmax = np.full(n, -np.inf)
-    for m in range(n):
-        if i1[m] < i0[m] or j1[m] < j0[m]:
-            ok[m] = -1
-            continue
-        good = True
-        lo = np.inf
-        hi = -np.inf
-        for a in range(i0[m], i1[m] + 1):
-            p = a - wi
-            for b in range(j0[m], j1[m] + 1):
-                q = b - wj
-                if p < 0 or p >= nx or q < 0 or q >= ny or not present[p, q]:
-                    good = False
-                    break
-                if t[p, q] < lo:
-                    lo = t[p, q]
-                if rho[p, q] > hi:
-                    hi = rho[p, q]
-            if not good:
-                break
-        if good:
-            ok[m] = 1
-            tmin[m] = lo
-            rmax[m] = hi
-    return ok, tmin, rmax

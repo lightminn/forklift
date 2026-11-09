@@ -135,7 +135,7 @@ def test_the_replay_leaves_the_switch_and_the_mode_as_they_were(whole, tmp_path,
     mode = kernels.mode()
     marker = lambda self, *a, **k: None  # noqa: E731 -- a hook someone set after the tool was imported
     monkeypatch.setattr(sm.ShadowMemory, "_move", marker)
-    hooks = {name: sm.ShadowMemory.__dict__[name] for name in ("_apply_arrays", "_move_arrays", "_move",
+    hooks = {name: sm.ShadowMemory.__dict__[name] for name in ("_apply_arrays", "_move",
                                                                  "_retained_stamps")}
     batched = sm._retained_stamps_batched
     run(whole, tmp_path, monkeypatch)

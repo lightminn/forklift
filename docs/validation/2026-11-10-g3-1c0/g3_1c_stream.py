@@ -15,8 +15,8 @@ dump off) with its completeness marker (``stream_totals_<pid>.json``). For every
 
 Files are read one at a time (a call's arrays are about 1.6 MB). Every folder given must hold a marker and streamed
 records, and none but streamed ones (a stream recording dumps nothing else). Reported: per receiver the counts above,
-the continuous replay's total and per-kind time per arm, the memory move's own time per arm (``_move`` /
-``_move_arrays``, so its share of apply can be judged, plan 5.27), and the coverage of the cases plan 5.27 lists, read
+the continuous replay's total and per-kind time per arm, the memory move's own time per arm (``_move``,
+so its share of apply can be judged, plan 5.27), and the coverage of the cases plan 5.27 lists, read
 off the branches the reference replay actually took (the candidates handed to the RETAINED judgement, which of its
 paths ran, its result).
 
@@ -49,10 +49,9 @@ APPLY = sm.ShadowMemory.apply
 while hasattr(APPLY, "__wrapped__"):
     APPLY = APPLY.__wrapped__
 _ARRAYS = sm.ShadowMemory._apply_arrays
-_MOVE_ARRAYS = sm.ShadowMemory._move_arrays
 RAN = Counter()
 SEEN: dict = {}  # what the reference replay's RETAINED judgement got and gave, and the move's time
-HOOKS = (("ShadowMemory", "_apply_arrays"), ("ShadowMemory", "_move_arrays"), ("ShadowMemory", "_move"),
+HOOKS = (("ShadowMemory", "_apply_arrays"), ("ShadowMemory", "_move"),
          ("ShadowMemory", "_retained_stamps"), ("module", "_retained_stamps_batched"))
 
 
@@ -65,15 +64,11 @@ def _count(name, real):
 
 def _timed_move(real):
     def inner(self, *a, **k):
-        if SEEN.get("in_move"):  # _move_arrays falling back to _move: counted once, by the outer call
-            return real(self, *a, **k)
-        SEEN["in_move"] = True
         start = time.perf_counter()
         try:
             return real(self, *a, **k)
         finally:
             SEEN["move_s"] = SEEN.get("move_s", 0.0) + time.perf_counter() - start
-            SEEN["in_move"] = False
     return inner
 
 
@@ -91,7 +86,6 @@ def install() -> dict:
     cls = sm.ShadowMemory
     saved = {h: (cls.__dict__[h[1]] if h[0] == "ShadowMemory" else getattr(sm, h[1])) for h in HOOKS}
     cls._apply_arrays = _count("arrays", cls.__dict__["_apply_arrays"])
-    cls._move_arrays = _timed_move(_count("move_arrays", cls.__dict__["_move_arrays"]))
     cls._move = _timed_move(cls.__dict__["_move"])
     cls._retained_stamps = staticmethod(_seen_retained("reference", cls.__dict__["_retained_stamps"].__func__))
     sm._retained_stamps_batched = _seen_retained("batched", saved[("module", "_retained_stamps_batched")])

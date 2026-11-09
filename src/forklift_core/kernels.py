@@ -86,7 +86,6 @@ def warm_up() -> float:
 
     cells = np.zeros(1, dtype=np.int64)
     sn.retained(cells, cells, one * 0.1, mask, stamp, mask, cells, cells, one * 0.05)
-    sn.move_values(cells, cells, cells, cells, mask, stamp, stamp, 0, 0)
     return time.perf_counter() - start
 
 

@@ -60,7 +60,7 @@ def drive(seed, mode, monkeypatch, steps=30, stamp_type=float):
     rng = np.random.default_rng(seed)
     off, on = ShadowMemory(0.15, ERROR), ShadowMemory(0.15, ERROR)
     used = {"apply": 0, "move": 0}
-    for name, key in (("_apply_arrays", "apply"), ("_move_arrays", "move")):
+    for name, key in (("_apply_arrays", "apply"), ("_move", "move")):  # moves: both memories, the original
         real = getattr(ShadowMemory, name)
 
         def counted(self, *a, _real=real, _key=key, **k):
@@ -172,24 +172,23 @@ def test_a_zero_time_in_the_memory_moves_by_the_original(mode, monkeypatch):
 def test_without_numba_the_numpy_path_never_imports_the_kernels(monkeypatch):
     monkeypatch.setitem(sys.modules, "forklift_core.control.shadow_numba", None)  # an import would fail
     used = drive(4, "numpy", monkeypatch, steps=12)
-    assert used["apply"] == 11 and used["move"] == 0
+    assert used["apply"] == 11
 
 
 @pytest.mark.skipif(importlib.util.find_spec("numba") is None, reason="numba not installed")
 def test_warm_up_compiles_the_signatures_a_session_uses(monkeypatch):
-    """Plan D3 / 5.27 (Codex P2-3): after kernels.warm_up() the first RETAINED call and the first move compile
-    nothing new."""
+    """Plan D3 / 5.27 (Codex P2-3): after kernels.warm_up() the first RETAINED call compiles nothing new."""
     from forklift_core.control import shadow_numba
 
     previous = kernels.set_mode("numba")
     try:
         kernels.warm_up()
-        before = (len(shadow_numba.retained.signatures), len(shadow_numba.move_values.signatures))
+        before = len(shadow_numba.retained.signatures)
     finally:
         kernels.set_mode(previous)
     used = drive(1, "numba", monkeypatch, steps=12)
     assert used["move"] >= 1
-    assert (len(shadow_numba.retained.signatures), len(shadow_numba.move_values.signatures)) == before
+    assert len(shadow_numba.retained.signatures) == before
 
 
 @pytest.mark.parametrize("mode", FAST)

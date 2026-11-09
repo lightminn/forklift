@@ -232,60 +232,6 @@ class ShadowMemory:
             return False
         return all(type(v[0]) is float and type(v[2]) is float for v in self.memory.values())
 
-    def _move_arrays(self, correction, res: float) -> None:
-        """``_move`` on arrays (plan 5.27): the same candidate set (the same cells added in the same order), the same
-        corner expressions with ``math.cos``/``math.sin`` of the same angles, the box test and its min/max in
-        control/shadow_numba.py. A zero or NaN among the values (min/max then depend on order) or an empty box: the
-        original."""
-        values = list(self.memory.values())
-        t_all = np.array([v[0] for v in values])
-        r_all = np.array([v[2] for v in values])
-        if not (np.all(np.isfinite(t_all) & (t_all != 0.0)) and np.all(np.isfinite(r_all) & (r_all != 0.0))):
-            self._move(correction, res)
-            return
-        from forklift_core.control import shadow_numba
-
-        old_from_new = _compose(self.correction, _invert(correction))  # map_old <- odom <- map_new
-        new_from_old = _invert(old_from_new)
-        k = np.fromiter(chain.from_iterable(self.memory), dtype=np.int64, count=2 * len(values)).reshape(-1, 2)
-        x, y, th = new_from_old
-        c, s = cos(th), sin(th)
-        b0, b1 = (k[:, 0] + 0.5) * res, (k[:, 1] + 0.5) * res
-        ci = np.floor((x + b0 * c - b1 * s) / res).astype(np.int64)
-        cj = np.floor((y + b0 * s + b1 * c) / res).astype(np.int64)
-        off = np.array([(di, dj) for di in (-1, 0, 1) for dj in (-1, 0, 1)], dtype=np.int64)
-        candidates = set(zip((ci[:, None] + off[None, :, 0]).ravel().tolist(),
-                             (cj[:, None] + off[None, :, 1]).ravel().tolist()))
-        cand = np.fromiter(chain.from_iterable(candidates), dtype=np.int64, count=2 * len(candidates)).reshape(-1, 2)
-        x, y, th = old_from_new
-        c, s = cos(th), sin(th)
-        xs, ys = [], []
-        for dx, dy in ((0, 0), (1, 0), (0, 1), (1, 1)):
-            u, v = (cand[:, 0] + dx) * res, (cand[:, 1] + dy) * res
-            xs.append(x + u * c - v * s)
-            ys.append(y + u * s + v * c)
-        xs, ys = np.array(xs), np.array(ys)
-        i0 = np.floor(xs.min(axis=0) / res + 1e-9).astype(np.int64)
-        i1 = np.floor(xs.max(axis=0) / res - 1e-9).astype(np.int64)
-        j0 = np.floor(ys.min(axis=0) / res + 1e-9).astype(np.int64)
-        j1 = np.floor(ys.max(axis=0) / res - 1e-9).astype(np.int64)
-        wi, wj = int(k[:, 0].min()), int(k[:, 1].min())
-        shape = (int(k[:, 0].max()) - wi + 1, int(k[:, 1].max()) - wj + 1)
-        present = np.zeros(shape, dtype=bool)
-        tw = np.zeros(shape)
-        rw = np.zeros(shape)
-        present[k[:, 0] - wi, k[:, 1] - wj] = True
-        tw[k[:, 0] - wi, k[:, 1] - wj] = t_all
-        rw[k[:, 0] - wi, k[:, 1] - wj] = r_all
-        ok, tmin, rmax = shadow_numba.move_values(i0, i1, j0, j1, present, tw, rw, wi, wj)
-        if (ok < 0).any():
-            self._move(correction, res)
-            return
-        keep = np.flatnonzero(ok > 0)
-        self.memory = dict(zip(zip(cand[keep, 0].tolist(), cand[keep, 1].tolist()),
-                               ((t, "moved", r) for t, r in zip(tmin[keep].tolist(), rmax[keep].tolist()))))
-        self.stats["moves"] += 1
-
     def _apply_arrays(self, snapshot: GridSnapshot, own_pose, own_footprint: Footprint,
                       extra_support: dict | None) -> GridSnapshot:
         """``apply`` after start-up on arrays (plan 5.27 method A): the same cells, values, value types and memory key
@@ -299,10 +245,7 @@ class ShadowMemory:
             raise ValueError("snapshot origin must be a multiple of the resolution")
         correction = tuple(float(v) for v in snapshot.correction)
         if self.correction is not None and correction != self.correction and self.memory:
-            if kernels.mode() == "numba":
-                self._move_arrays(correction, res)
-            else:
-                self._move(correction, res)
+            self._move(correction, res)  # the original (plan 5.27: its share stayed under the 5 % rule)
         self.correction = correction
         state = snapshot.state
         nx, ny = state.shape

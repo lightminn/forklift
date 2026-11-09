@@ -53,15 +53,11 @@ def _counting(real):
 def _timed(real):
     """The memory move's own time (Codex 1c-0 review P3: a move call's whole time is not the move's share)."""
     def inner(self, *a, **k):
-        if RAN.get("in_move"):  # _move_arrays falling back to _move: counted once, by the outer call
-            return real(self, *a, **k)
-        RAN["in_move"] = True
         start = time.perf_counter()
         try:
             return real(self, *a, **k)
         finally:
             RAN["move_s"] += time.perf_counter() - start
-            RAN["in_move"] = False
     return inner
 
 
@@ -98,12 +94,12 @@ def analyse(paths, modes) -> dict:
     """The replays below set the switch and the kernel mode; both, and the counting hook, are put back after."""
     saved = (sm.SHADOW_KERNEL, kernels.mode())
     cls = sm.ShadowMemory
-    hooks = (cls._apply_arrays, cls._move, cls._move_arrays)  # what is there now, put back after
-    cls._apply_arrays, cls._move, cls._move_arrays = _counting(hooks[0]), _timed(hooks[1]), _timed(hooks[2])
+    hooks = (cls._apply_arrays, cls._move)  # what is there now, put back after
+    cls._apply_arrays, cls._move = _counting(hooks[0]), _timed(hooks[1])
     try:
         return _analyse(paths, modes)
     finally:
-        cls._apply_arrays, cls._move, cls._move_arrays = hooks
+        cls._apply_arrays, cls._move = hooks
         sm.SHADOW_KERNEL = saved[0]
         kernels.set_mode(saved[1])
 
