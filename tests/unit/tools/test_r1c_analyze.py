@@ -305,6 +305,7 @@ def freeze_session(samples, end_mono=None, factor=0.4, events=()):
     data = np.full((len(ticks), len(ra.C)), np.nan)
     data[:, ra.C["tick"]] = ticks
     data[:, ra.C["S"]] = 1000.0 + ticks * ra.DT / factor
+    data[:, ra.C["world_end"]] = data[:, ra.C["S"]] + 0.002  # each step's world.step ends 2 ms after its start
     s = SimpleNamespace(trace=data, args={"EXTRA_ARGS": r"--live-test-marker\ --live-test-camera-freeze\ 30:60"},
                         report={"freeze": {"samples": samples}, **({"end_requested_mono": end_mono} if end_mono else {})},
                         arbiter_events=[{"arbiter": True, "event": ev, "reason": why, "t": 1000.0 + t / factor,
@@ -369,9 +370,12 @@ def test_the_stop_search_closes_at_the_rearm(tmp_path):
 
 
 def test_a_disarm_just_before_the_freeze_flushed_at_its_tick_is_before_it():
-    """Codex tools review P2-1: the event's tick_t is the tick it was flushed with; its occurrence decides."""
+    """Codex tools review P2-1: the event's tick_t is the tick it was flushed with; its occurrence decides. A gate
+    disarm inside the last step before the freeze (during its world.step) acts from that step, before the freeze."""
     inside = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}
-    s = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "stale_video", 29.995)])
+    s = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "stale_video", 29.99)])
+    S = s.trace[:, ra.C["S"]]
+    s.arbiter_events[-1]["t"] = float(S[3599] + 0.001)  # inside step 3599's world.step (2 ms long)
     s.arbiter_events[-1]["tick_t"] = 30.0  # flushed with the first tick of the freeze
     out = ra.freeze_check(s)
     assert out["armed_at_freeze_start"] is False and not out["freeze_disarmed_stale_video"]
@@ -387,3 +391,14 @@ def test_a_wall_leg_records_its_disarms_and_rearms_and_a_recovered_leg_is_no_cle
                         arbiter_events=[{"arbiter": True, "event": "disarm", "reason": "expired", "t": 4.9}])
     row = ra.wall_measures(s)[0]
     assert row["disarms"] == ["expired"] and row["rearms"] == 1 and row["permit_reason"] == "occupied"
+
+
+def test_a_control_tick_event_acts_from_the_next_step():
+    """Round 2 P2-1: an arm between a step's world.step end and the next S belongs to the next step."""
+    s = freeze_session([])
+    S = s.trace[:, ra.C["S"]]
+    k = 3600  # sim 30.0
+    between = float(S[k - 1] + 0.010)  # after step k-1's world.step (2 ms), before S[k]
+    assert abs(ra.event_sim(s, between) - 30.0) < 1e-9
+    within = float(S[k - 1] + 0.001)  # inside step k-1's world.step
+    assert abs(ra.event_sim(s, within) - (k - 1) / 120) < 1e-9

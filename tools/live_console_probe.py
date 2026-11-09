@@ -595,8 +595,10 @@ async def _approach_steps(p: Probe, args):
         final_limit = (st.get("permit") or {}).get("limit_mps")
         # held: the permission's hold, kept at least held_s and still so at the leg's end (armed, its limit zero;
         # Codex tools review P2-3: a disarm in the last wait left held=true with armed=false)
+        final_v = abs(st.get("rear_axle_speed_mps") or 0.0)
+        final_applied = abs((st.get("applied") or {}).get("speed_mps") or 0.0)
         held = (still_since is not None and time.monotonic() - still_since >= args.held_s and bool(st.get("armed"))
-                and final_limit is not None and final_limit <= 0.0)
+                and final_limit is not None and final_limit <= 0.0 and final_applied == 0.0 and final_v < 0.03)
         p.report["approach"].append({"leg": name, "wall_s": time.monotonic() - start, "moved": moved,
                                      "held": held, "armed": st.get("armed"),
                                      "applied": st.get("applied"), "permit": st.get("permit"),

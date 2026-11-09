@@ -349,6 +349,17 @@ def marker(s: Session):
 FREEZE_FRAME_SLACK_S = 0.15  # the probe's own rule (tools/live_console_probe.py): one 10 Hz camera period
 
 
+def event_sim(s, t: float) -> float:
+    """The simulated time an arbiter event at monotonic ``t`` acts from. Within step i (S_i up to its world.step's
+    end) it is step i's; after that step's world.step it happened in the step's after-work or the next control tick,
+    which comes before step i+1's S, so it acts from step i+1 (Codex tools review round 2 P2-1)."""
+    i = s.row_at_mono(t)
+    world_end = s.trace[i, C["world_end"]]
+    if np.isfinite(world_end) and t > world_end and i + 1 < len(s.trace):
+        i += 1
+    return s.start_sim(i)
+
+
 def freeze_window(args: dict):
     m = re.search(r"camera-freeze\\? +([0-9.]+):([0-9.]+)", args.get("EXTRA_ARGS", ""))
     return (float(m.group(1)), float(m.group(2))) if m else None
@@ -379,7 +390,7 @@ def freeze_check(s):
     if s.trace is not None:
         for e in getattr(s, "arbiter_events", []):
             if e.get("event") in ("arm", "disarm") and e.get("t") is not None:
-                seq.append({**e, "sim": s.start_sim(s.row_at_mono(e["t"]))})
+                seq.append({**e, "sim": event_sim(s, e["t"])})
     armed_at = None
     hit = None
     if window is not None and seq:
