@@ -41,7 +41,7 @@ def test_the_saved_capture_tick_follows_the_last_row_of_a_capture_run():
         shift(D, row, 0.05)
         D[row, C["ctrl_start"]] = D[row, C["ctrl_end"]] - 0.05  # the save in the tick after the run
     c = tool.capture_ticks(D)
-    assert c["rows"] == [19, 30] and c["runs"] == 2 and c["flagged_rows"] == 11
+    assert c["rows"] == [19, 30] and c["runs"] == 2 and c["flagged_rows"] == 11 and c["runs_cut_short"] == 0
     assert abs(c["control_next_s"]["median"] - 0.05) < 1e-9 and c["control_last_flagged_row_s"]["median"] < 0.01
 
 
@@ -79,7 +79,7 @@ def row(n, scene, mode, *, near=(0, 0), over=(0, 0), cap=0.06, done=True, proble
     return {"name": f"g2a_{n:02d}_{scene}_{mode}", "n": n, "scene": scene, "mode": mode, "invalid": [],
             "mission_done": done, "gaps": {"near": near[1], "near_control": near[0], "over": over[1],
                                            "over_control": over[0]},
-            "capture": {"control_next_s": {"median": cap}},
+            "capture": {"control_next_s": {"median": cap}, "runs_vs_entries": {"same": True}},
             "files": {"missing": ["x"] if problems else [], "unreadable": []},
             "capture_dump": {"mode": "async", "dropped_full": 0, "errors": 0, "unsettled": 0} if mode == "async" else None,
             "log_dropped_lines": 0, "mission_outcomes": [("done", None)], "forbidden_pocket_contacts": 0}
@@ -139,3 +139,43 @@ def test_no_control_made_near_gap_in_either_arm_holds_line_2():
     for r in rows:
         r["gaps"]["near_control"] = 0
     assert tool.verdict(rows)["lines"]["2_near_control_share_lower"]["pass"]
+
+
+def test_a_run_cut_short_by_a_stop_or_a_pause_is_left_out():
+    D = trace(60)
+    D[:, C["live_step"]] = np.arange(60)
+    D[10:13, C["flags"]] = BIT["capture"]  # aborted: a STOP in its last tick
+    D[30:33, C["flags"]] = BIT["capture"]  # saved
+    cmd = [{"step": k, "mode": "AUTO", "stop_kind": "none"} for k in range(60)]
+    cmd[12]["stop_kind"] = "preempt"
+    c = tool.capture_ticks(D, cmd)
+    assert c["rows"] == [32] and c["runs"] == 1 and c["runs_cut_short"] == 1
+    cmd[12]["stop_kind"] = "none"
+    cmd[31]["mode"] = "PAUSED"
+    assert tool.capture_ticks(D, cmd)["rows"] == [12]
+
+
+def test_an_async_mismatch_leaves_line_3_undecided_but_keeps_the_mission_line():
+    rows = good()
+    next(r for r in rows if r["mode"] == "async")["capture"]["runs_vs_entries"]["same"] = False
+    v = tool.verdict(rows)
+    assert not v["lines"]["3_capture_control_lower"]["pass"] and len(v["lines"]["4_missions_no_worse"]["pairs"]) == 6
+
+
+def test_a_lost_last_set_and_missing_contact_records(tmp_path):
+    from PIL import Image
+
+    Image.new("RGB", (4, 4)).save(tmp_path / "perception_capture_1_rgb.png")
+    np.save(tmp_path / "perception_capture_1_depth_m.npy", np.full((4, 4), np.nan))
+    f = tool.capture_files(tmp_path, None, expected_max=2)  # one mission, two kept runs: number 2 lost whole
+    assert "2:rgb.png" in f["missing"] and "2:depth_m.npy" in f["missing"]
+    m = tmp_path / "missions" / "m1"
+    m.mkdir(parents=True)
+    (m / "records.json").write_text('{"state": {"forbidden_pocket_contacts": [1]}}')
+    assert tool.forbidden_contacts(tmp_path, {"forbidden_pocket_contacts": []}) == 1
+    assert tool.forbidden_contacts(tmp_path, {}) is None
+    (m / "records.json").write_text('{"state": {}}')
+    assert tool.forbidden_contacts(tmp_path, {"forbidden_pocket_contacts": []}) is None
+    rows = good()
+    next(r for r in rows if r["mode"] == "async")["forbidden_pocket_contacts"] = None
+    assert not tool.verdict(rows)["lines"]["4_missions_no_worse"]["pass"]

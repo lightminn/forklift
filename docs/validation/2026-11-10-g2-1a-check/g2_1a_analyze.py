@@ -13,21 +13,27 @@ missions):
   (run_transport.py, D9c); once its frame is taken, the next control tick runs capture_and_detect, where save_capture
   writes (sync) or hands over (async) the files. So the saved capture's tick is the control tick of the row after a
   run of capture-flagged rows: row (last of the run) + 1, its ctrl_end - ctrl_start and its start gap (Codex review
-  P1: the retry rows of a run save nothing). A run abandoned (a pause) saves nothing either; with async the number of
-  runs is compared with the dumper's entries and a difference is reported. The control tick of the run's last row is
-  reported beside it as a check that the save sits in the tick after.
+  P1: the retry rows of a run save nothing). A run cut short saves nothing either -- a STOP in a capture tick aborts
+  it, a pause abandons it (run_transport.py, D9c) -- so a run is left out when any status line of its steps (the
+  flagged rows and the tick after) is not AUTO or carries a stop (stop_kind not "none"); the left-out runs are counted.
+  With async the kept runs must equal the dumper's written entries; a difference leaves that session's pair undecided
+  for line 3 (Codex round 2). The control tick of the run's last row is reported beside it as a check that the save
+  sits in the tick after.
 - start gaps over 0.20 s (from the first control tick): each gap's parts as g2m_analyze.py's M1 (world, step_rest,
   after, control_next); a gap is control-made when control_next is strictly its largest measured part and at least
   half the gap (so a gap mostly outside the measured parts is not control-made; a part not measured counts as none).
   Counted for 0.20 < gap <= 0.25 (near) and gap > 0.25 (over), control-made and from any source.
 - the capture files in the run folder (perception_capture_<n>_rgb.png, _depth_m.npy, _depth_vis.png): the attempt
   numbers restart per mission and the files carry no mission id, so a later mission overwrites the earlier ones and
-  the folder holds each number's last capture. Every number from 1 to the largest present must have rgb and depth, the
-  depth picture too when the depth has a finite value, and every file must open (PIL verify, numpy load); with async
-  every entry written (``done``) must have its files.
+  the folder holds each number's last capture. Every number from 1 to the largest expected must have rgb and depth,
+  the depth picture too when the depth has a finite value, and every file must open (PIL verify, numpy load). The
+  largest expected is the largest present, raised to the kept runs' count in a session of one mission (its numbers are
+  then 1..runs; Codex round 2: a last set lost whole would otherwise pass) and, with async, to every written entry's
+  number (each must have its files). With several missions in a sync session only the numbers present are known.
 - result.json ``capture_dump`` (async): dropped_full, errors, unsettled; the live log's end summary dropped lines.
-- the missions' outcomes (g2m_analyze.py), the forbidden pocket contacts (result.json ``forbidden_pocket_contacts``)
-  and the whole-trace world.step counts over 0.25 / 0.5 s (M8; the lead's 2026-11-10 decision: the hall sessions are
+- the missions' outcomes (g2m_analyze.py), the forbidden pocket contacts -- each finished mission's own record
+  (missions/<id>/records.json, where the mission's state goes at its end) plus result.json's for a mission still on; a
+  record without the key makes the count unknown (Codex round 2) -- and the whole-trace world.step counts over 0.25 / 0.5 s (M8; the lead's 2026-11-10 decision: the hall sessions are
   where the old hall long steps are looked for again).
 
 Pass (5.23 / 5.18 G2-1), on the valid sessions, all of:
@@ -97,12 +103,28 @@ class Session(g2m.Session):
             self.invalid.append(f"EXTRA_ARGS does not carry --live-capture-dump {mode}: {c.get('EXTRA_ARGS')!r}")
 
 
-def capture_ticks(D: np.ndarray) -> dict:
+def capture_ticks(D: np.ndarray, cmd: list | None = None) -> dict:
     bits = np.nan_to_num(D[:, C["flags"]]).astype(int)
     flagged = (bits & BIT["capture"]) != 0
     last = flagged & ~np.r_[flagged[1:], False]  # a run's last flagged row (the next row is not flagged)
     rows = np.flatnonzero(last)
     rows = rows[rows + 1 < len(D)]
+    by_step = {}
+    for r in cmd or []:
+        if r.get("step") is not None:
+            by_step.setdefault(int(r["step"]), []).append(r)
+    kept, cut = [], 0
+    for row in rows:
+        first = row
+        while first > 0 and flagged[first - 1]:
+            first -= 1
+        steps = [D[k, C["live_step"]] for k in range(first, row + 2)]
+        lines = [x for st in steps if np.isfinite(st) for x in by_step.get(int(st), [])]
+        if any(x.get("mode") != "AUTO" or (x.get("stop_kind") or "none") != "none" for x in lines):
+            cut += 1
+            continue
+        kept.append(row)
+    rows = np.array(kept, dtype=int)
     ctrl = D[:, C["ctrl_end"]] - D[:, C["ctrl_start"]]
     nxt = ctrl[rows + 1]
     same = ctrl[rows]
@@ -112,7 +134,7 @@ def capture_ticks(D: np.ndarray) -> dict:
         v = v[np.isfinite(v)]
         return {"n": int(v.size), "median": float(np.median(v)), "p99": float(np.percentile(v, 99)),
                 "max": float(v.max())} if v.size else {"n": 0}
-    return {"runs": int(len(rows)), "flagged_rows": int(flagged.sum()), "rows": rows.tolist(),
+    return {"runs": int(len(rows)), "runs_cut_short": cut, "flagged_rows": int(flagged.sum()), "rows": rows.tolist(),
             "control_next_s": q(nxt), "control_last_flagged_row_s": q(same), "gap_s": q(gap)}
 
 
@@ -136,7 +158,7 @@ def gap_counts(D: np.ndarray, first: int) -> dict:
     return out
 
 
-def capture_files(run: Path, entries: list | None) -> dict:
+def capture_files(run: Path, entries: list | None, expected_max: int = 0) -> dict:
     from PIL import Image
 
     by = defaultdict(dict)
@@ -145,7 +167,8 @@ def capture_files(run: Path, entries: list | None) -> dict:
         if m:
             by[int(m.group(1))][m.group(2)] = f
     missing, unreadable = [], []
-    for n in range(1, max(by, default=0) + 1):
+    top = max([max(by, default=0), expected_max] + [int(e["attempt"]) for e in entries or [] if e.get("done")])
+    for n in range(1, top + 1):
         files = by.get(n, {})
         for need in ("rgb.png", "depth_m.npy"):
             if need not in files:
@@ -168,6 +191,20 @@ def capture_files(run: Path, entries: list | None) -> dict:
     return {"attempts": sorted(by), "missing": missing, "unreadable": unreadable}
 
 
+def forbidden_contacts(run: Path, result: dict | None) -> int | None:
+    """Forbidden pocket contacts of the whole session: every finished mission's record plus result.json's (a mission
+    still on); None when a record lacks the key."""
+    total = 0
+    for f in sorted(run.glob("missions/*/records.json")):
+        state = (json.loads(f.read_text()).get("state")) or {}
+        if "forbidden_pocket_contacts" not in state:
+            return None
+        total += len(state["forbidden_pocket_contacts"] or [])
+    if not result or "forbidden_pocket_contacts" not in result:
+        return None
+    return total + len(result["forbidden_pocket_contacts"] or [])
+
+
 def analyse_session(s: Session) -> dict:
     n, scene, mode = arm_of(s.name)
     row = {"name": s.name, "n": n, "scene": scene, "mode": mode, "invalid": s.invalid, "ps": s.ps,
@@ -177,14 +214,17 @@ def analyse_session(s: Session) -> dict:
     D = s.trace
     dump = (s.result or {}).get("capture_dump")
     end = next((r["log_end"] for r in s.log if isinstance(r.get("log_end"), dict)), {})
-    row.update({"capture": capture_ticks(D), "gaps": gap_counts(D, s.first_ctrl_row()),
-                "files": capture_files(s.run, (dump or {}).get("entries") if mode == "async" else None),
+    cap = capture_ticks(D, s.cmd)
+    missions = len(list(s.run.glob("missions/*/records.json")))
+    row.update({"capture": cap, "gaps": gap_counts(D, s.first_ctrl_row()), "missions_recorded": missions,
+                "files": capture_files(s.run, (dump or {}).get("entries") if mode == "async" else None,
+                                       cap["runs"] if missions <= 1 else 0),
                 "capture_dump": None if dump is None else {k: dump.get(k) for k in ("mode", "closed", "dropped_full",
                                                                                    "errors", "unsettled")},
                 "log_dropped_lines": end.get("dropped_lines"), "M8": s.m8_report_only(),
-                "forbidden_pocket_contacts": len((s.result or {}).get("forbidden_pocket_contacts") or [])})
+                "forbidden_pocket_contacts": forbidden_contacts(s.run, s.result)})
     if mode == "async" and dump is not None:
-        written = sum(1 for e in dump.get("entries") or [] if e.get("mode") == "async")
+        written = sum(1 for e in dump.get("entries") or [] if e.get("mode") in ("async", "dropped_full"))
         row["capture"]["runs_vs_entries"] = {"runs": row["capture"]["runs"], "entries": written,
                                              "same": row["capture"]["runs"] == written}
     return row
@@ -213,21 +253,24 @@ def verdict(rows: list[dict]) -> dict:
                 left_out.append([a, b])
                 continue
             sync, asy = (ra, rb) if ra["mode"] == "sync" else (rb, ra)
-            ms, ma = sync["capture"]["control_next_s"].get("median"), asy["capture"]["control_next_s"].get("median")
-            drops.append({"pair": [a, b], "scene": scene, "sync_median_s": ms, "async_median_s": ma,
-                          "drop_s": None if ms is None or ma is None else ms - ma})
-            contacts = (sync.get("forbidden_pocket_contacts", 0), asy.get("forbidden_pocket_contacts", 0))
+            contacts = (sync.get("forbidden_pocket_contacts"), asy.get("forbidden_pocket_contacts"))
             missions.append({"pair": [a, b], "sync_done": sync["mission_done"], "async_done": asy["mission_done"],
                              "sync_outcomes": sync["mission_outcomes"], "async_outcomes": asy["mission_outcomes"],
                              "forbidden_pocket_contacts": contacts,
-                             "pass": sync["mission_done"] is not None
+                             "pass": sync["mission_done"] is not None and None not in contacts
                              and not (sync["mission_done"] and not asy["mission_done"])
                              and contacts[1] <= contacts[0]})
+            if not (asy["capture"].get("runs_vs_entries") or {}).get("same", False):
+                left_out.append([a, b])  # the async kept runs do not match its written captures: line 3 undecided
+                continue
+            ms, ma = sync["capture"]["control_next_s"].get("median"), asy["capture"]["control_next_s"].get("median")
+            drops.append({"pair": [a, b], "scene": scene, "sync_median_s": ms, "async_median_s": ma,
+                          "drop_s": None if ms is None or ma is None else ms - ma})
     d = [x["drop_s"] for x in drops]
     lines["3_capture_control_lower"] = {"pairs": drops, "left_out": left_out,
                                         "median_drop_s": float(np.median(d)) if d and None not in d else None,
-                                        "pass": bool(d) and None not in d and all(x > 0 for x in d)
-                                        and float(np.median(d)) >= MEDIAN_DROP_S}
+                                        "pass": not left_out and len(d) == 6 and None not in d
+                                        and all(x > 0 for x in d) and float(np.median(d)) >= MEDIAN_DROP_S}
     lines["4_missions_no_worse"] = {"pairs": missions, "pass": bool(missions) and all(m["pass"] for m in missions)}
     bad = []
     for r in ok.values():
