@@ -11469,6 +11469,7 @@ def main() -> None:
         from forklift_core import perf as perf_
 
         perf_._dual_report()  # real-time plan V2: the dual run's final counts (a no-op otherwise)
+        perf_.stream_report()  # real-time plan 5.27: the streamed receivers' call counts (a no-op otherwise)
         print(
             "MISSION_RESULT",
             record_json(

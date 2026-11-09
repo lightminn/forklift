@@ -1,0 +1,7058 @@
+{
+ "summary": {
+  "dumps": 329,
+  "moved": 27,
+  "extra_support": 0,
+  "memory_cells": {
+   "n": 329,
+   "mean": 788.9878419452888,
+   "p50": 650.0,
+   "p90": 981.0,
+   "p99": 984.4399999999999,
+   "max": 986.0
+  },
+  "numba": {
+   "self_reproduced": 329,
+   "equal": 329,
+   "arrays_ran": 328,
+   "off_ms": {
+    "n": 329,
+    "mean": 3.2808172156398063,
+    "p50": 2.947777997178491,
+    "p90": 4.586356398067437,
+    "p99": 9.643139481777322,
+    "max": 11.29553999635391
+   },
+   "on_ms": {
+    "n": 329,
+    "mean": 1.2337852614278209,
+    "p50": 1.2060349981766194,
+    "p90": 1.5394554022350349,
+    "p99": 2.608748961356468,
+    "max": 2.8198340005474165
+   },
+   "off_ms_moved": {
+    "n": 27,
+    "mean": 7.6302718508587635,
+    "p50": 6.391622999217361,
+    "p90": 9.778514198842458,
+    "p99": 11.014019277354235,
+    "max": 11.29553999635391
+   },
+   "on_ms_moved": {
+    "n": 27,
+    "mean": 2.0994805187607803,
+    "p50": 2.0917750007356517,
+    "p90": 2.563423202082049,
+    "p99": 2.766445340821519,
+    "max": 2.8198340005474165
+   },
+   "off_ms_still": {
+    "n": 302,
+    "mean": 2.891958688650032,
+    "p50": 2.4668730002304073,
+    "p90": 4.022086896293332,
+    "p99": 4.738564794170089,
+    "max": 4.815831998712383
+   },
+   "on_ms_still": {
+    "n": 302,
+    "mean": 1.1563886655735496,
+    "p50": 1.102226997318212,
+    "p90": 1.401947200065479,
+    "p99": 1.5961170202353974,
+    "max": 2.7473849986563437
+   }
+  },
+  "numpy": {
+   "self_reproduced": 329,
+   "equal": 329,
+   "arrays_ran": 328,
+   "off_ms": {
+    "n": 329,
+    "mean": 3.3405520912766877,
+    "p50": 2.9911489982623607,
+    "p90": 4.812334000598639,
+    "p99": 9.52254340314539,
+    "max": 9.761558998434339
+   },
+   "on_ms": {
+    "n": 329,
+    "mean": 2.679759276726341,
+    "p50": 2.2020060059730895,
+    "p90": 3.8485981960548084,
+    "p99": 8.730580322153399,
+    "max": 8.949087001383305
+   },
+   "off_ms_moved": {
+    "n": 27,
+    "mean": 7.499085518820384,
+    "p50": 6.127837004896719,
+    "p90": 9.57689560163999,
+    "p99": 9.733131380053237,
+    "max": 9.761558998434339
+   },
+   "on_ms_moved": {
+    "n": 27,
+    "mean": 6.894691704709893,
+    "p50": 5.770704003225546,
+    "p90": 8.79247380362358,
+    "p99": 8.937217481579864,
+    "max": 8.949087001383305
+   },
+   "off_ms_still": {
+    "n": 302,
+    "mean": 2.968762678880397,
+    "p50": 2.493818996299524,
+    "p90": 4.184529195481446,
+    "p99": 4.898366189954686,
+    "max": 5.217422003624961
+   },
+   "on_ms_still": {
+    "n": 302,
+    "mean": 2.302927569588739,
+    "p50": 1.9301860011182725,
+    "p90": 3.328359803708736,
+    "p99": 4.052890929233399,
+    "max": 4.239205998601392
+   }
+  }
+ },
+ "rows": [
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000000.pkl.gz",
+   "call": 0,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 0,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024748760042712092,
+    "on_s": 0.002599268002086319,
+    "arrays_ran": false
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024868499967851676,
+    "on_s": 0.0020369100020616315,
+    "arrays_ran": false
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000001.pkl.gz",
+   "call": 1,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002242807997390628,
+    "on_s": 0.0011182750022271648,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002103396000165958,
+    "on_s": 0.0015216809988487512,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000002.pkl.gz",
+   "call": 2,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002053865995549131,
+    "on_s": 0.0009795719961402938,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0018966920033562928,
+    "on_s": 0.0014893719999236055,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000003.pkl.gz",
+   "call": 3,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002135542999894824,
+    "on_s": 0.0010876410015043803,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002036522993876133,
+    "on_s": 0.0015081549936439842,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000004.pkl.gz",
+   "call": 4,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005297313000482973,
+    "on_s": 0.0020187319969409145,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00543563200335484,
+    "on_s": 0.004873311001574621,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000005.pkl.gz",
+   "call": 5,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0018989870004588738,
+    "on_s": 0.0009314999988419004,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001961932000995148,
+    "on_s": 0.0014799480049987324,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000006.pkl.gz",
+   "call": 6,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019213719933759421,
+    "on_s": 0.0009238459970219992,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002186056997743435,
+    "on_s": 0.001482208004745189,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000007.pkl.gz",
+   "call": 7,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019159629955538549,
+    "on_s": 0.0009335490030935034,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002168819999496918,
+    "on_s": 0.0015068940047058277,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000008.pkl.gz",
+   "call": 8,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001921632996527478,
+    "on_s": 0.0009469310025451705,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001913280997541733,
+    "on_s": 0.0015416949972859584,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000009.pkl.gz",
+   "call": 9,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0018745749985100701,
+    "on_s": 0.0010639569954946637,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019549019998521544,
+    "on_s": 0.0014620970032410696,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000010.pkl.gz",
+   "call": 10,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002015471000049729,
+    "on_s": 0.0009484580004937015,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019137449999107048,
+    "on_s": 0.0014426570051000454,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000020.pkl.gz",
+   "call": 20,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 660,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0018569429958006367,
+    "on_s": 0.0009432799997739494,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0018818230018950999,
+    "on_s": 0.001439069994376041,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000030.pkl.gz",
+   "call": 30,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 627,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023566660020151176,
+    "on_s": 0.0009349340034532361,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022659870010102168,
+    "on_s": 0.001783405001333449,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000039.pkl.gz",
+   "call": 39,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005739021995395888,
+    "on_s": 0.0016432720003649592,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005825575994094834,
+    "on_s": 0.005439323002065066,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000040.pkl.gz",
+   "call": 40,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002344381995499134,
+    "on_s": 0.0009759520035004243,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021406730011221953,
+    "on_s": 0.0016529929998796433,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000050.pkl.gz",
+   "call": 50,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022252290000324138,
+    "on_s": 0.0009137429951806553,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002284318004967645,
+    "on_s": 0.0018706289993133396,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000060.pkl.gz",
+   "call": 60,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021255379979265854,
+    "on_s": 0.000909392001631204,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002057121993857436,
+    "on_s": 0.001567254999827128,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000070.pkl.gz",
+   "call": 70,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021187059974181466,
+    "on_s": 0.0009170490011456423,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023671620001550764,
+    "on_s": 0.0017681769968476146,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000073.pkl.gz",
+   "call": 73,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 637,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0057465270001557656,
+    "on_s": 0.0017122400022344664,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006045083995559253,
+    "on_s": 0.005505532004463021,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000080.pkl.gz",
+   "call": 80,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 637,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024130960009642877,
+    "on_s": 0.001039303999277763,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023439220021828078,
+    "on_s": 0.002106209001794923,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000088.pkl.gz",
+   "call": 88,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005678869005350862,
+    "on_s": 0.001633979998587165,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005631713000184391,
+    "on_s": 0.0053795339990756474,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000090.pkl.gz",
+   "call": 90,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 641,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002110449997417163,
+    "on_s": 0.0009437740009161644,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002144689002307132,
+    "on_s": 0.001856833005149383,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000097.pkl.gz",
+   "call": 97,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006391622999217361,
+    "on_s": 0.0016765549953561276,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0060758609979529865,
+    "on_s": 0.005463059998874087,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000100.pkl.gz",
+   "call": 100,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024073759996099398,
+    "on_s": 0.0009768130039446987,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002306278001924511,
+    "on_s": 0.0018424959998810664,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000110.pkl.gz",
+   "call": 110,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 652,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023448390056728385,
+    "on_s": 0.0010219979958492331,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002227095996204298,
+    "on_s": 0.0016837500006658956,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000111.pkl.gz",
+   "call": 111,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 643,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0059466739985509776,
+    "on_s": 0.0016726599933463149,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006063284003175795,
+    "on_s": 0.005574848000833299,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000120.pkl.gz",
+   "call": 120,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 639,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002128833999449853,
+    "on_s": 0.000959078999585472,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002140718999726232,
+    "on_s": 0.0016862360062077641,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000130.pkl.gz",
+   "call": 130,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002140311000403017,
+    "on_s": 0.001075906002370175,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002406186002190225,
+    "on_s": 0.0018205710002803244,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000140.pkl.gz",
+   "call": 140,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022824709958513267,
+    "on_s": 0.000925373999052681,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023958220044733025,
+    "on_s": 0.0018951629972434603,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000150.pkl.gz",
+   "call": 150,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0025093690055655316,
+    "on_s": 0.0014627339987782761,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023036299971863627,
+    "on_s": 0.0021242870061541907,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000160.pkl.gz",
+   "call": 160,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020136940001975745,
+    "on_s": 0.0009682179952505976,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021208439939073287,
+    "on_s": 0.001556737995997537,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000170.pkl.gz",
+   "call": 170,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002183926000725478,
+    "on_s": 0.00092293100169627,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002024860994424671,
+    "on_s": 0.0015572350021102466,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000180.pkl.gz",
+   "call": 180,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002076165001199115,
+    "on_s": 0.0009504330009804107,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002099434997944627,
+    "on_s": 0.0015259580031852238,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000190.pkl.gz",
+   "call": 190,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002200462004111614,
+    "on_s": 0.0009741670000948943,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002179347997298464,
+    "on_s": 0.0015896090044407174,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000200.pkl.gz",
+   "call": 200,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002237995999166742,
+    "on_s": 0.000999321993731428,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002142486999218818,
+    "on_s": 0.0015676050024922006,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000210.pkl.gz",
+   "call": 210,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002220606002083514,
+    "on_s": 0.0009199320047628134,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002262019996123854,
+    "on_s": 0.0018397399981040508,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000220.pkl.gz",
+   "call": 220,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020135730010224506,
+    "on_s": 0.0009230569994542748,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022726289971615188,
+    "on_s": 0.001577433999045752,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000230.pkl.gz",
+   "call": 230,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002095269999699667,
+    "on_s": 0.0010723890009103343,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002203516000008676,
+    "on_s": 0.0016600219969404861,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000240.pkl.gz",
+   "call": 240,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020019459989271127,
+    "on_s": 0.001139168998633977,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001996828999835998,
+    "on_s": 0.0015087219944689423,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000250.pkl.gz",
+   "call": 250,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002204100994276814,
+    "on_s": 0.0009240060026058927,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002218813999206759,
+    "on_s": 0.0016064709998317994,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000260.pkl.gz",
+   "call": 260,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021702619997086003,
+    "on_s": 0.0010309680001228116,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021078680001664907,
+    "on_s": 0.0016789119981694967,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000270.pkl.gz",
+   "call": 270,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002115723997121677,
+    "on_s": 0.000911257004190702,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021952160022919998,
+    "on_s": 0.0016686629969626665,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000280.pkl.gz",
+   "call": 280,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 613,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021996619980200194,
+    "on_s": 0.0009480570006417111,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002236658001493197,
+    "on_s": 0.0018085420015268028,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000290.pkl.gz",
+   "call": 290,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020214730029692873,
+    "on_s": 0.0008962189967860468,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019872269986080937,
+    "on_s": 0.001536246003524866,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000300.pkl.gz",
+   "call": 300,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020658520006691106,
+    "on_s": 0.001044755001203157,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002057022000371944,
+    "on_s": 0.001582127995789051,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000310.pkl.gz",
+   "call": 310,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 623,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021509820071514696,
+    "on_s": 0.0009714279949548654,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002239895002276171,
+    "on_s": 0.001646794997213874,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000320.pkl.gz",
+   "call": 320,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002657388999068644,
+    "on_s": 0.0011191419980605133,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002309876996150706,
+    "on_s": 0.0018271559965796769,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000330.pkl.gz",
+   "call": 330,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022246930020628497,
+    "on_s": 0.001020775998767931,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023650160001125187,
+    "on_s": 0.001822908001486212,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000340.pkl.gz",
+   "call": 340,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00217981400055578,
+    "on_s": 0.0009327590014436282,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002108356995449867,
+    "on_s": 0.0015634989977115765,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000342.pkl.gz",
+   "call": 342,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020602400036295876,
+    "on_s": 0.0010329290016670711,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020665050033130683,
+    "on_s": 0.0015751719984109513,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000343.pkl.gz",
+   "call": 343,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002030185001785867,
+    "on_s": 0.0009472530000493862,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020125439987168647,
+    "on_s": 0.001581962002092041,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000344.pkl.gz",
+   "call": 344,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002163557001040317,
+    "on_s": 0.0009134800056926906,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002108970998961013,
+    "on_s": 0.001588722996530123,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000345.pkl.gz",
+   "call": 345,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002107999003783334,
+    "on_s": 0.0012282280004001223,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002080695005133748,
+    "on_s": 0.0015991459949873388,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000346.pkl.gz",
+   "call": 346,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021734980036853813,
+    "on_s": 0.000952149996010121,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021070270013296977,
+    "on_s": 0.0016112119992612861,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000350.pkl.gz",
+   "call": 350,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023153849979280494,
+    "on_s": 0.0009725480049382895,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023989559995243326,
+    "on_s": 0.0018506030028220266,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000360.pkl.gz",
+   "call": 360,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 628,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002524849995097611,
+    "on_s": 0.000995334004983306,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023899709995021112,
+    "on_s": 0.0017920799946296029,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000370.pkl.gz",
+   "call": 370,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 621,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002315543999429792,
+    "on_s": 0.000948488996073138,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002206730998295825,
+    "on_s": 0.0018005169986281544,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000380.pkl.gz",
+   "call": 380,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002306549999048002,
+    "on_s": 0.0011038439988624305,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002289014999405481,
+    "on_s": 0.0018217850010842085,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000390.pkl.gz",
+   "call": 390,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002365488006034866,
+    "on_s": 0.0009072360044228844,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024957249988801777,
+    "on_s": 0.0017987250030273572,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000399.pkl.gz",
+   "call": 399,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020345529992482625,
+    "on_s": 0.0009104639975703321,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019923430008930154,
+    "on_s": 0.0015697999988333322,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000400.pkl.gz",
+   "call": 400,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021067999987280928,
+    "on_s": 0.0009002160004456528,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002579981999588199,
+    "on_s": 0.0018604430006234907,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000401.pkl.gz",
+   "call": 401,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002947777997178491,
+    "on_s": 0.0009307310028816573,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001976501000171993,
+    "on_s": 0.0014572649961337447,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000402.pkl.gz",
+   "call": 402,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002108988002873957,
+    "on_s": 0.0010825409990502521,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024359099988942035,
+    "on_s": 0.001940845002536662,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000403.pkl.gz",
+   "call": 403,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002008718001889065,
+    "on_s": 0.0009161690031760372,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019267950046923943,
+    "on_s": 0.0015330590031226166,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000410.pkl.gz",
+   "call": 410,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 628,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022994370010565035,
+    "on_s": 0.0010057930048787966,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021026030008215457,
+    "on_s": 0.0016605600030743517,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000420.pkl.gz",
+   "call": 420,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 627,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020913639964419417,
+    "on_s": 0.0009942310061887838,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020037549984408543,
+    "on_s": 0.001509190995420795,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000430.pkl.gz",
+   "call": 430,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 626,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020677339998655953,
+    "on_s": 0.0009223110027960502,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021477129994309507,
+    "on_s": 0.0015959509983076714,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000440.pkl.gz",
+   "call": 440,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 627,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002018947998294607,
+    "on_s": 0.0009260590013582259,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023005939947324805,
+    "on_s": 0.0015409000043291599,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000450.pkl.gz",
+   "call": 450,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002209063997725025,
+    "on_s": 0.0009530910028843209,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020445169939193875,
+    "on_s": 0.0015073590038809925,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000460.pkl.gz",
+   "call": 460,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024962019961094484,
+    "on_s": 0.0009641359938541427,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002192727006331552,
+    "on_s": 0.001729153998894617,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000470.pkl.gz",
+   "call": 470,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023407990011037327,
+    "on_s": 0.0009292700051446445,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022674579959129915,
+    "on_s": 0.001814178998756688,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000480.pkl.gz",
+   "call": 480,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 621,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001950568999745883,
+    "on_s": 0.0008694770003785379,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019343870008015074,
+    "on_s": 0.0014980319974711165,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000482.pkl.gz",
+   "call": 482,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 621,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024338360017281957,
+    "on_s": 0.001431696000508964,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024780859966995195,
+    "on_s": 0.0020262389953131787,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000483.pkl.gz",
+   "call": 483,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0030741200025659055,
+    "on_s": 0.0011895880015799776,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0029911489982623607,
+    "on_s": 0.002252908998343628,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000484.pkl.gz",
+   "call": 484,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003472777003480587,
+    "on_s": 0.0012313719998928718,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032642770020174794,
+    "on_s": 0.002515301006496884,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000485.pkl.gz",
+   "call": 485,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032800049957586452,
+    "on_s": 0.0013810739983455278,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0031268149978131987,
+    "on_s": 0.0023749720057821833,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000486.pkl.gz",
+   "call": 486,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002992802001244854,
+    "on_s": 0.0011961690033785999,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00327611000102479,
+    "on_s": 0.002206315999501385,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000490.pkl.gz",
+   "call": 490,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034648329965421,
+    "on_s": 0.001278078998439014,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003494021002552472,
+    "on_s": 0.002854047001164872,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000500.pkl.gz",
+   "call": 500,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003372669998498168,
+    "on_s": 0.0013698800030397251,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032947350046015345,
+    "on_s": 0.0024449539996567182,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000510.pkl.gz",
+   "call": 510,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 959,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003236649004975334,
+    "on_s": 0.0012060349981766194,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032303109983331524,
+    "on_s": 0.0023999569966690615,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000520.pkl.gz",
+   "call": 520,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 960,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0031571250001434237,
+    "on_s": 0.0012805200021830387,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034296559970243834,
+    "on_s": 0.0030497909974656068,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000527.pkl.gz",
+   "call": 527,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 960,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032754869971540757,
+    "on_s": 0.0013554870020016097,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034155159955844283,
+    "on_s": 0.0025949830014724284,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000528.pkl.gz",
+   "call": 528,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 960,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0033768949942896143,
+    "on_s": 0.001384991999657359,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004000578002887778,
+    "on_s": 0.002864012996724341,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000529.pkl.gz",
+   "call": 529,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 958,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034758850015350617,
+    "on_s": 0.0013504759990610182,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003421918001549784,
+    "on_s": 0.00247947499883594,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000530.pkl.gz",
+   "call": 530,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 953,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0031143930027610622,
+    "on_s": 0.0012570640028570779,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003001892000611406,
+    "on_s": 0.0022020060059730895,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000531.pkl.gz",
+   "call": 531,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 947,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0031308329998864792,
+    "on_s": 0.0011865519991260953,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035914009931730106,
+    "on_s": 0.0025180700031341985,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000540.pkl.gz",
+   "call": 540,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 947,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003999169995950069,
+    "on_s": 0.0012867959958384745,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004157570998359006,
+    "on_s": 0.0033289300044998527,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000550.pkl.gz",
+   "call": 550,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 965,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003106364994891919,
+    "on_s": 0.0012605249939952046,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0033019440015777946,
+    "on_s": 0.002451585001836065,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000560.pkl.gz",
+   "call": 560,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 956,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003967345001001377,
+    "on_s": 0.0012371100019663572,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004099789999600034,
+    "on_s": 0.0031930080003803596,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000570.pkl.gz",
+   "call": 570,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 949,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003279811004176736,
+    "on_s": 0.0013323910025064833,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003344172000652179,
+    "on_s": 0.0025586420015315525,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000580.pkl.gz",
+   "call": 580,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008952391006459948,
+    "on_s": 0.002249361998110544,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008668271002534311,
+    "on_s": 0.007888943997386377,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000581.pkl.gz",
+   "call": 581,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003203255997505039,
+    "on_s": 0.0012878339985036291,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003242281003622338,
+    "on_s": 0.002459826006088406,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000582.pkl.gz",
+   "call": 582,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003081783994275611,
+    "on_s": 0.0014049360033823177,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034285109941265546,
+    "on_s": 0.0025571989972377196,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000583.pkl.gz",
+   "call": 583,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004312249999202322,
+    "on_s": 0.0013576609999290667,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004373989002488088,
+    "on_s": 0.0033371300014550798,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000584.pkl.gz",
+   "call": 584,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004072398995049298,
+    "on_s": 0.0013971610023872927,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004151415996602736,
+    "on_s": 0.0032164290023501962,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000585.pkl.gz",
+   "call": 585,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 965,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004199021997919772,
+    "on_s": 0.0014133029981167056,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004496154004300479,
+    "on_s": 0.0035075179985142313,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000589.pkl.gz",
+   "call": 589,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 968,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009352155000669882,
+    "on_s": 0.002459560004353989,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009287922002840787,
+    "on_s": 0.00870365000446327,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000590.pkl.gz",
+   "call": 590,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 968,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004146186001889873,
+    "on_s": 0.0013122870004735887,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004384740997920744,
+    "on_s": 0.0034117579998564906,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000600.pkl.gz",
+   "call": 600,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 953,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003999569998995867,
+    "on_s": 0.0012508049985626712,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004427152001881041,
+    "on_s": 0.0034100370030500926,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000606.pkl.gz",
+   "call": 606,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009921018994646147,
+    "on_s": 0.00253074800275499,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009541750005155336,
+    "on_s": 0.008903435002139304,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000610.pkl.gz",
+   "call": 610,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038933089963393286,
+    "on_s": 0.0011968210019404069,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003983029004302807,
+    "on_s": 0.003177970000251662,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000620.pkl.gz",
+   "call": 620,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 961,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003408541997487191,
+    "on_s": 0.0012998270030948333,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036526650001178496,
+    "on_s": 0.0026460149965714663,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000627.pkl.gz",
+   "call": 627,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008653527998831123,
+    "on_s": 0.002303417000803165,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008389008995436598,
+    "on_s": 0.007621613993251231,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000630.pkl.gz",
+   "call": 630,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 963,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040773209984763525,
+    "on_s": 0.0013149470032658428,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004502141004195437,
+    "on_s": 0.0034154339955421165,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000640.pkl.gz",
+   "call": 640,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0030702709991601296,
+    "on_s": 0.0012746290012728423,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003300191994640045,
+    "on_s": 0.0023539620015071705,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000650.pkl.gz",
+   "call": 650,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 963,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035778090023086406,
+    "on_s": 0.0012647900002775714,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034999609997612424,
+    "on_s": 0.0027195869988645427,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000660.pkl.gz",
+   "call": 660,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 969,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003410329001781065,
+    "on_s": 0.001327717000094708,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037157799961278215,
+    "on_s": 0.0026555419972282834,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000663.pkl.gz",
+   "call": 663,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 970,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009052651999809314,
+    "on_s": 0.002229745005024597,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008787820006546099,
+    "on_s": 0.007944914003019221,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000670.pkl.gz",
+   "call": 670,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 973,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003818773002421949,
+    "on_s": 0.0012316740030655637,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003925750999769662,
+    "on_s": 0.003209501999663189,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000680.pkl.gz",
+   "call": 680,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 972,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036244229995645583,
+    "on_s": 0.0013731989965890534,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037321940035326406,
+    "on_s": 0.0028296000018599443,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000690.pkl.gz",
+   "call": 690,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 976,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003706255003635306,
+    "on_s": 0.0013029580004513264,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037084710056660697,
+    "on_s": 0.0029627519979840145,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000700.pkl.gz",
+   "call": 700,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 978,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035771429975284263,
+    "on_s": 0.0012793959976988845,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035637320033856668,
+    "on_s": 0.002846919000148773,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000710.pkl.gz",
+   "call": 710,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034032949988613836,
+    "on_s": 0.0012758420052705333,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038305039997794665,
+    "on_s": 0.0026554329961072654,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000720.pkl.gz",
+   "call": 720,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009539327002130449,
+    "on_s": 0.0024388780002482235,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009652222004660871,
+    "on_s": 0.008739269003854133,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000730.pkl.gz",
+   "call": 730,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035464569955365732,
+    "on_s": 0.0012628260010387748,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035886159967049025,
+    "on_s": 0.0030052950023673475,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000740.pkl.gz",
+   "call": 740,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035778150049736723,
+    "on_s": 0.0012229870044393465,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038090059970272705,
+    "on_s": 0.003077809997193981,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000750.pkl.gz",
+   "call": 750,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003781571998842992,
+    "on_s": 0.0013889859983464703,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036015069999848492,
+    "on_s": 0.002917594996688422,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000760.pkl.gz",
+   "call": 760,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003531338006723672,
+    "on_s": 0.0012205960010760464,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036807659998885356,
+    "on_s": 0.002598575003503356,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000770.pkl.gz",
+   "call": 770,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003912120999302715,
+    "on_s": 0.001449313000193797,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003629881000961177,
+    "on_s": 0.002975220006192103,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000780.pkl.gz",
+   "call": 780,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003550487002939917,
+    "on_s": 0.0012929639997310005,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003597193004679866,
+    "on_s": 0.0028518280014395714,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000790.pkl.gz",
+   "call": 790,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 977,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034829259966500103,
+    "on_s": 0.001242871003341861,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003311997999844607,
+    "on_s": 0.0024917609989643097,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000800.pkl.gz",
+   "call": 800,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 971,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009322546997282188,
+    "on_s": 0.002377918004640378,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00962961399636697,
+    "on_s": 0.008597015999839641,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000810.pkl.gz",
+   "call": 810,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 969,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035376590021769516,
+    "on_s": 0.0012381859996821731,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035949099983554333,
+    "on_s": 0.002899268001783639,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000820.pkl.gz",
+   "call": 820,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034291290066903457,
+    "on_s": 0.0013766859992756508,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003842338999675121,
+    "on_s": 0.0028720089976559393,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000830.pkl.gz",
+   "call": 830,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 962,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037601860021823086,
+    "on_s": 0.001339918999292422,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003622638003434986,
+    "on_s": 0.0029025440016994253,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000840.pkl.gz",
+   "call": 840,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 957,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00355248199775815,
+    "on_s": 0.001261649995285552,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003688723998493515,
+    "on_s": 0.002807614000630565,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000850.pkl.gz",
+   "call": 850,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009377804999530781,
+    "on_s": 0.002336443001695443,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009076987000298686,
+    "on_s": 0.008413456998823676,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000860.pkl.gz",
+   "call": 860,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 969,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003364231997693423,
+    "on_s": 0.0013083800004096702,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036397740041138604,
+    "on_s": 0.002776131994323805,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000870.pkl.gz",
+   "call": 870,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 974,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037807279950357042,
+    "on_s": 0.0013960380019852892,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003636520996224135,
+    "on_s": 0.0029097829974489287,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000880.pkl.gz",
+   "call": 880,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 976,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009428747995116282,
+    "on_s": 0.002489833001163788,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00924434199987445,
+    "on_s": 0.008708237997780088,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000890.pkl.gz",
+   "call": 890,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 978,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00397461299871793,
+    "on_s": 0.0014533139983541332,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00377512100385502,
+    "on_s": 0.002864535999833606,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000900.pkl.gz",
+   "call": 900,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035896849949494936,
+    "on_s": 0.001317274000030011,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036767560013686307,
+    "on_s": 0.0028525770030682907,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000910.pkl.gz",
+   "call": 910,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035638990011648275,
+    "on_s": 0.0012377889943309128,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00344694999512285,
+    "on_s": 0.002740197000093758,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000920.pkl.gz",
+   "call": 920,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034658389995456673,
+    "on_s": 0.0013139810034772381,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003533097005856689,
+    "on_s": 0.0026250390001223423,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000930.pkl.gz",
+   "call": 930,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 973,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032987550002872013,
+    "on_s": 0.0012841740026487969,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034322770006838255,
+    "on_s": 0.0026016880001407117,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000940.pkl.gz",
+   "call": 940,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00968351100164,
+    "on_s": 0.0024661969946464524,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009322988000349142,
+    "on_s": 0.008537515001080465,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000950.pkl.gz",
+   "call": 950,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034511730045778677,
+    "on_s": 0.0013179980014683679,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003595298003347125,
+    "on_s": 0.002604075998533517,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000960.pkl.gz",
+   "call": 960,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003357790999871213,
+    "on_s": 0.001288552004552912,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003764396002225112,
+    "on_s": 0.0027375569989089854,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000970.pkl.gz",
+   "call": 970,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 977,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003868117004458327,
+    "on_s": 0.0012604500007000752,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004056486999616027,
+    "on_s": 0.003223029001674149,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000980.pkl.gz",
+   "call": 980,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 977,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003983426999184303,
+    "on_s": 0.0014159040001686662,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003991076002421323,
+    "on_s": 0.0031051600017235614,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0000990.pkl.gz",
+   "call": 990,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 976,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040427439962513745,
+    "on_s": 0.001374965999275446,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004063264997967053,
+    "on_s": 0.003245312000217382,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001000.pkl.gz",
+   "call": 1000,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037597139962599613,
+    "on_s": 0.0012785899962182157,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003854007001791615,
+    "on_s": 0.0028974700035178103,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001010.pkl.gz",
+   "call": 1010,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00375109699962195,
+    "on_s": 0.0013776219930150546,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036555580009007826,
+    "on_s": 0.0028586629996425472,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001020.pkl.gz",
+   "call": 1020,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003990017001342494,
+    "on_s": 0.0014761169950361364,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004375623000669293,
+    "on_s": 0.003346575002069585,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001030.pkl.gz",
+   "call": 1030,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004377573997771833,
+    "on_s": 0.0014170770009513944,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00429594999877736,
+    "on_s": 0.003289688997028861,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001040.pkl.gz",
+   "call": 1040,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038527720025740564,
+    "on_s": 0.001314756998908706,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037555840026470833,
+    "on_s": 0.0030266060057329014,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001050.pkl.gz",
+   "call": 1050,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009294193994719535,
+    "on_s": 0.0026124360010726377,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.008976072000223212,
+    "on_s": 0.008278765002614819,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001060.pkl.gz",
+   "call": 1060,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036305219982750714,
+    "on_s": 0.0012245719990460202,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035577359958551824,
+    "on_s": 0.0027484120000735857,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001070.pkl.gz",
+   "call": 1070,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004023969995614607,
+    "on_s": 0.0013680499978363514,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004415921001054812,
+    "on_s": 0.003423000998736825,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001080.pkl.gz",
+   "call": 1080,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039035190056893043,
+    "on_s": 0.0013387219951255247,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004133283997362014,
+    "on_s": 0.0031007790021249093,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001090.pkl.gz",
+   "call": 1090,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004043027998704929,
+    "on_s": 0.0015060330042615533,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038916510020499118,
+    "on_s": 0.003008218998729717,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001100.pkl.gz",
+   "call": 1100,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 985,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040286769944941625,
+    "on_s": 0.0013259080005809665,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00410690200078534,
+    "on_s": 0.003331528998387512,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001110.pkl.gz",
+   "call": 1110,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038824759976705536,
+    "on_s": 0.001362746006634552,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040839209978003055,
+    "on_s": 0.0031454620038857684,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001120.pkl.gz",
+   "call": 1120,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003920183997252025,
+    "on_s": 0.0012805299993488006,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004183297998679336,
+    "on_s": 0.003253021997807082,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001130.pkl.gz",
+   "call": 1130,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039233579955180176,
+    "on_s": 0.0012858920017606579,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004078118996403646,
+    "on_s": 0.003314631998364348,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001140.pkl.gz",
+   "call": 1140,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039346069970633835,
+    "on_s": 0.0014530089974869043,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00404190800327342,
+    "on_s": 0.0031346640025731176,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001150.pkl.gz",
+   "call": 1150,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003895218003890477,
+    "on_s": 0.0013344379985937849,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038787750017945655,
+    "on_s": 0.0031038610031828284,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001160.pkl.gz",
+   "call": 1160,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 978,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035234559982200153,
+    "on_s": 0.001333137995970901,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003597060000174679,
+    "on_s": 0.0027548520010896027,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001170.pkl.gz",
+   "call": 1170,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003908284998033196,
+    "on_s": 0.0013032479982939549,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004002866000519134,
+    "on_s": 0.0030661470009363256,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001180.pkl.gz",
+   "call": 1180,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037306369995349087,
+    "on_s": 0.001393954000377562,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003955259999202099,
+    "on_s": 0.0030419069953495637,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001190.pkl.gz",
+   "call": 1190,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038261160007095896,
+    "on_s": 0.0012381889973767102,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004090644004463684,
+    "on_s": 0.003219256999727804,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001200.pkl.gz",
+   "call": 1200,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003662062998046167,
+    "on_s": 0.0012861700015491806,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003788046997215133,
+    "on_s": 0.003011799002706539,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001210.pkl.gz",
+   "call": 1210,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003633658998296596,
+    "on_s": 0.0013343990067369305,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036894629956805147,
+    "on_s": 0.0028105620003771037,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001220.pkl.gz",
+   "call": 1220,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003531472997565288,
+    "on_s": 0.001242806996742729,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036708510015159845,
+    "on_s": 0.00298339100118028,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001230.pkl.gz",
+   "call": 1230,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004076253993844148,
+    "on_s": 0.0013054610026301816,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040322880013263784,
+    "on_s": 0.003136508006718941,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001240.pkl.gz",
+   "call": 1240,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035709689982468262,
+    "on_s": 0.001256907002243679,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037621369992848486,
+    "on_s": 0.002881694999814499,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001250.pkl.gz",
+   "call": 1250,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003925657998479437,
+    "on_s": 0.001327517005847767,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003822621001745574,
+    "on_s": 0.0030151089958962984,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001260.pkl.gz",
+   "call": 1260,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 975,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00399562200618675,
+    "on_s": 0.0013786510025965981,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003938000998459756,
+    "on_s": 0.0031776440009707585,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001270.pkl.gz",
+   "call": 1270,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038376829979824834,
+    "on_s": 0.001251186004083138,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004077468998730183,
+    "on_s": 0.0031738280013087206,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001280.pkl.gz",
+   "call": 1280,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003954742998757865,
+    "on_s": 0.0013084399979561567,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004220609996991698,
+    "on_s": 0.003232923998439219,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001290.pkl.gz",
+   "call": 1290,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0038314460034598596,
+    "on_s": 0.0012780990000464953,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037763500004075468,
+    "on_s": 0.002985494997119531,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001300.pkl.gz",
+   "call": 1300,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004184069999610074,
+    "on_s": 0.001407263996952679,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0042459670003154315,
+    "on_s": 0.0033068690026993863,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001310.pkl.gz",
+   "call": 1310,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003726518996700179,
+    "on_s": 0.0012506319981184788,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003914114000508562,
+    "on_s": 0.0032408640036010183,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001320.pkl.gz",
+   "call": 1320,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003920005001418758,
+    "on_s": 0.0013544199973694049,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004207853002299089,
+    "on_s": 0.0027498330018715933,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001330.pkl.gz",
+   "call": 1330,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004071850002219435,
+    "on_s": 0.0013323700040928088,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004234355998050887,
+    "on_s": 0.0033066770047298633,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001340.pkl.gz",
+   "call": 1340,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039953419982339256,
+    "on_s": 0.0012761469988618046,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0041592170018702745,
+    "on_s": 0.0033985690024564974,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001350.pkl.gz",
+   "call": 1350,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037846980048925616,
+    "on_s": 0.001301411997701507,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036936800024705008,
+    "on_s": 0.003128509000816848,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001360.pkl.gz",
+   "call": 1360,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004237935994751751,
+    "on_s": 0.0014689039962831885,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004406703999848105,
+    "on_s": 0.0034334890005993657,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001370.pkl.gz",
+   "call": 1370,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 985,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004188698003417812,
+    "on_s": 0.001380795998557005,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004152571003942285,
+    "on_s": 0.0034287279995623976,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001380.pkl.gz",
+   "call": 1380,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037580470016109757,
+    "on_s": 0.0013880090045859106,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003868465995765291,
+    "on_s": 0.002982026999234222,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001390.pkl.gz",
+   "call": 1390,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037529460023506545,
+    "on_s": 0.0014024789998074993,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003687802003696561,
+    "on_s": 0.003467682996415533,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001400.pkl.gz",
+   "call": 1400,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 986,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004177349001110997,
+    "on_s": 0.0014294190041255206,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004808867000974715,
+    "on_s": 0.0037203399988356978,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001410.pkl.gz",
+   "call": 1410,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 980,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039643819982302375,
+    "on_s": 0.0014594750027754344,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004213196996715851,
+    "on_s": 0.0030845439978293143,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001420.pkl.gz",
+   "call": 1420,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004587073999573477,
+    "on_s": 0.0015966270002536476,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004898705999949016,
+    "on_s": 0.00423497299925657,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001430.pkl.gz",
+   "call": 1430,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004586176997690927,
+    "on_s": 0.0015456289984285831,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004826201999094337,
+    "on_s": 0.0038353010022547096,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001440.pkl.gz",
+   "call": 1440,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 983,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004769967003085185,
+    "on_s": 0.0014409139985218644,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005217422003624961,
+    "on_s": 0.0040529559992137365,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001450.pkl.gz",
+   "call": 1450,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004815831998712383,
+    "on_s": 0.0015448569974978454,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004864725000516046,
+    "on_s": 0.004046449001180008,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001460.pkl.gz",
+   "call": 1460,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004749430998344906,
+    "on_s": 0.0015324780033552088,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0050174529969808646,
+    "on_s": 0.0038876070029800758,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001470.pkl.gz",
+   "call": 1470,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004572193996864371,
+    "on_s": 0.0014971780037740245,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004746104001242202,
+    "on_s": 0.003838845994323492,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001480.pkl.gz",
+   "call": 1480,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 982,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00460677599767223,
+    "on_s": 0.0015381050034193322,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004696538999269251,
+    "on_s": 0.003765749999729451,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001490.pkl.gz",
+   "call": 1490,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 986,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.01129553999635391,
+    "on_s": 0.0026144930016016588,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009473154997976962,
+    "on_s": 0.008949087001383305,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001500.pkl.gz",
+   "call": 1500,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 981,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035704629990505055,
+    "on_s": 0.0013035399970249273,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037302709970390424,
+    "on_s": 0.002797692002786789,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001510.pkl.gz",
+   "call": 1510,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 979,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036437179951462895,
+    "on_s": 0.0014559919945895672,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036516420004772954,
+    "on_s": 0.0029701670064241625,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001520.pkl.gz",
+   "call": 1520,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 977,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003675902000395581,
+    "on_s": 0.001348657999187708,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037944409996271133,
+    "on_s": 0.002856760002032388,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001530.pkl.gz",
+   "call": 1530,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 975,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.010212768000201322,
+    "on_s": 0.0028198340005474165,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.009761558998434339,
+    "on_s": 0.008872281003277749,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001540.pkl.gz",
+   "call": 1540,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 973,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035940039961133152,
+    "on_s": 0.0012775630020769313,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003452574004768394,
+    "on_s": 0.0026662269956432283,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001550.pkl.gz",
+   "call": 1550,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 972,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035189420013921335,
+    "on_s": 0.0013714070009882562,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003708114003529772,
+    "on_s": 0.0027271509970887564,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001560.pkl.gz",
+   "call": 1560,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 965,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003401294001378119,
+    "on_s": 0.0012858500049333088,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0033006879966706038,
+    "on_s": 0.002467491001880262,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001570.pkl.gz",
+   "call": 1570,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 963,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0033128930008388124,
+    "on_s": 0.0013422299962257966,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0037299559990060516,
+    "on_s": 0.0028431699975044467,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001580.pkl.gz",
+   "call": 1580,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 943,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004107330001716036,
+    "on_s": 0.0014680480016977526,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004226971999742091,
+    "on_s": 0.0033656279993010685,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001590.pkl.gz",
+   "call": 1590,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 961,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036551480006892234,
+    "on_s": 0.0012515239941421896,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003980904002673924,
+    "on_s": 0.002838045998942107,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001600.pkl.gz",
+   "call": 1600,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00410118700528983,
+    "on_s": 0.0013900359990657307,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00408880000031786,
+    "on_s": 0.0033232279965886846,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001610.pkl.gz",
+   "call": 1610,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003729966003447771,
+    "on_s": 0.001359519999823533,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032949200030998327,
+    "on_s": 0.0024810419999994338,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001620.pkl.gz",
+   "call": 1620,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0039197689984575845,
+    "on_s": 0.0012174049988971092,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00439711099897977,
+    "on_s": 0.00351516099908622,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001630.pkl.gz",
+   "call": 1630,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 961,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003913100998033769,
+    "on_s": 0.0012744749983539805,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036299780040280893,
+    "on_s": 0.0029375589947449043,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001640.pkl.gz",
+   "call": 1640,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 961,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00402926799870329,
+    "on_s": 0.001258201002201531,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0040663399995537475,
+    "on_s": 0.0033451150011387654,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001650.pkl.gz",
+   "call": 1650,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0035053960018558428,
+    "on_s": 0.001346586002910044,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003747823997400701,
+    "on_s": 0.0028510639967862517,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001660.pkl.gz",
+   "call": 1660,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 969,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004005139002401847,
+    "on_s": 0.0012869880010839552,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004088023000804242,
+    "on_s": 0.0034894260024884716,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001670.pkl.gz",
+   "call": 1670,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004739895994134713,
+    "on_s": 0.0014705869980389252,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005167852003069129,
+    "on_s": 0.004239205998601392,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001680.pkl.gz",
+   "call": 1680,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 966,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036764910037163645,
+    "on_s": 0.0014320600021164864,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003813707997323945,
+    "on_s": 0.0031008830046630464,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001690.pkl.gz",
+   "call": 1690,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004241415997967124,
+    "on_s": 0.0016330060025211424,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004397770004288759,
+    "on_s": 0.003460171996266581,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001700.pkl.gz",
+   "call": 1700,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 965,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0041402419956284575,
+    "on_s": 0.0013831710020895116,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0041846659951261245,
+    "on_s": 0.0034500449983170256,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001710.pkl.gz",
+   "call": 1710,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004227388999424875,
+    "on_s": 0.0013942279983893968,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004310238000471145,
+    "on_s": 0.0034727739985100925,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001720.pkl.gz",
+   "call": 1720,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 967,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004372549999970943,
+    "on_s": 0.0013422720003291033,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004325034002249595,
+    "on_s": 0.003464859000814613,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001730.pkl.gz",
+   "call": 1730,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003248035005526617,
+    "on_s": 0.0013968550047138706,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0036403050035005435,
+    "on_s": 0.0026142770002479665,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001731.pkl.gz",
+   "call": 1731,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003388454999367241,
+    "on_s": 0.0013304069943842478,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034882820036727935,
+    "on_s": 0.0025606950002838857,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001732.pkl.gz",
+   "call": 1732,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003397951993974857,
+    "on_s": 0.001301937001699116,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034306320012547076,
+    "on_s": 0.004128667998884339,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001733.pkl.gz",
+   "call": 1733,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0033168669979204424,
+    "on_s": 0.0013104219979140908,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004365475993836299,
+    "on_s": 0.0032202310030697845,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001734.pkl.gz",
+   "call": 1734,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003470342999207787,
+    "on_s": 0.001359253001282923,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003326016005303245,
+    "on_s": 0.002556651998020243,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001740.pkl.gz",
+   "call": 1740,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032140559997060336,
+    "on_s": 0.0012527059952844866,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034218029977637343,
+    "on_s": 0.0028110439961892553,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001750.pkl.gz",
+   "call": 1750,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0031867470024735667,
+    "on_s": 0.0012333350023254752,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003516496995871421,
+    "on_s": 0.0025557989938533865,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001760.pkl.gz",
+   "call": 1760,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0032428949998575263,
+    "on_s": 0.0013085269965813495,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.003245254003559239,
+    "on_s": 0.0024505039982614107,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001770.pkl.gz",
+   "call": 1770,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0034461949981050566,
+    "on_s": 0.0014178779965732247,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00391085899900645,
+    "on_s": 0.0027552650062716566,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001774.pkl.gz",
+   "call": 1774,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 964,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022470290059573017,
+    "on_s": 0.001122237001254689,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024955889966804534,
+    "on_s": 0.0017553170036990196,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001775.pkl.gz",
+   "call": 1775,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002466279998770915,
+    "on_s": 0.0010765390034066513,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0026567140012048185,
+    "on_s": 0.0020924630007357337,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001776.pkl.gz",
+   "call": 1776,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0025841539973043837,
+    "on_s": 0.0010658249957486987,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0025483559948042966,
+    "on_s": 0.0019007060036528856,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001777.pkl.gz",
+   "call": 1777,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023613180019310676,
+    "on_s": 0.0010001019982155412,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024600680044386536,
+    "on_s": 0.0018800959951477125,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001778.pkl.gz",
+   "call": 1778,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002265316004923079,
+    "on_s": 0.0009631020002416335,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002502073002688121,
+    "on_s": 0.0019269170006737113,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001779.pkl.gz",
+   "call": 1779,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022878730014781468,
+    "on_s": 0.00098458999855211,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024786159992800094,
+    "on_s": 0.001884341996628791,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001780.pkl.gz",
+   "call": 1780,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023077790028764866,
+    "on_s": 0.0009508670045761392,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022800059959990904,
+    "on_s": 0.0018446589965606108,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001790.pkl.gz",
+   "call": 1790,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002304752000782173,
+    "on_s": 0.0009955509958672337,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023607410039403476,
+    "on_s": 0.0018518429933465086,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001800.pkl.gz",
+   "call": 1800,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002133052999852225,
+    "on_s": 0.0010220949989161454,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002161358999728691,
+    "on_s": 0.0017427619968657382,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001810.pkl.gz",
+   "call": 1810,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002375955999013968,
+    "on_s": 0.0009795170044526458,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022891460030223243,
+    "on_s": 0.0018488649948267266,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001820.pkl.gz",
+   "call": 1820,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022617170034209266,
+    "on_s": 0.0009475169936195016,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022987080010352656,
+    "on_s": 0.0018686330004129559,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001830.pkl.gz",
+   "call": 1830,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020057610017829575,
+    "on_s": 0.0009543500054860488,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002154647998395376,
+    "on_s": 0.001686760995653458,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001833.pkl.gz",
+   "call": 1833,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005873121997865383,
+    "on_s": 0.0018033310043392703,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00603573599801166,
+    "on_s": 0.005538910998438951,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001834.pkl.gz",
+   "call": 1834,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020320240000728518,
+    "on_s": 0.0009558770034345798,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019856540020555258,
+    "on_s": 0.0015929020009934902,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001835.pkl.gz",
+   "call": 1835,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002036204001342412,
+    "on_s": 0.0009334279966424219,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021002909998060204,
+    "on_s": 0.0015864960005274042,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001836.pkl.gz",
+   "call": 1836,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020685940035036765,
+    "on_s": 0.0009391080020577647,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020550299959722906,
+    "on_s": 0.0015652510046493262,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001837.pkl.gz",
+   "call": 1837,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001979156004381366,
+    "on_s": 0.0009248369970009662,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020985349983675405,
+    "on_s": 0.0015859999984968454,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001838.pkl.gz",
+   "call": 1838,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019604640037869103,
+    "on_s": 0.000986455001111608,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002158565999707207,
+    "on_s": 0.0016264799996861257,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001840.pkl.gz",
+   "call": 1840,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020597659968188964,
+    "on_s": 0.0009179490007227287,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020702750043710694,
+    "on_s": 0.001543617996503599,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001850.pkl.gz",
+   "call": 1850,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001979016000404954,
+    "on_s": 0.0009911710003507324,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021964879997540265,
+    "on_s": 0.001687811003648676,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001860.pkl.gz",
+   "call": 1860,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020903330005239695,
+    "on_s": 0.0009631959983380511,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021059620048617944,
+    "on_s": 0.0015832380013307557,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001870.pkl.gz",
+   "call": 1870,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020079489986528642,
+    "on_s": 0.0009511320022284053,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002018933999352157,
+    "on_s": 0.0015411030035465956,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001871.pkl.gz",
+   "call": 1871,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019794619947788306,
+    "on_s": 0.000944555999012664,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019896000012522563,
+    "on_s": 0.0015677250048611313,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001872.pkl.gz",
+   "call": 1872,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001978820000658743,
+    "on_s": 0.0009846470056800172,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002053937001619488,
+    "on_s": 0.0015574680001009256,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001873.pkl.gz",
+   "call": 1873,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001980761000595521,
+    "on_s": 0.0009371740015922114,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002005590002227109,
+    "on_s": 0.0015652079964638688,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001874.pkl.gz",
+   "call": 1874,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002042842002992984,
+    "on_s": 0.0010196119983447716,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002206638004281558,
+    "on_s": 0.0015647499967599288,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001875.pkl.gz",
+   "call": 1875,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020514919960987754,
+    "on_s": 0.0009450699944864027,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020857700001215562,
+    "on_s": 0.0015712020031060092,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001880.pkl.gz",
+   "call": 1880,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019727399994735606,
+    "on_s": 0.0009519650047877803,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001973283004190307,
+    "on_s": 0.001642483999603428,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001890.pkl.gz",
+   "call": 1890,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002003860005061142,
+    "on_s": 0.0009215459940605797,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001976285995624494,
+    "on_s": 0.0015696479968028143,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001900.pkl.gz",
+   "call": 1900,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020098580062040128,
+    "on_s": 0.0009422079965588637,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020361540009616874,
+    "on_s": 0.0015696940026828088,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001910.pkl.gz",
+   "call": 1910,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020553020003717393,
+    "on_s": 0.0009546639994368888,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021057660051155835,
+    "on_s": 0.0015570929972454906,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001920.pkl.gz",
+   "call": 1920,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021204170043347403,
+    "on_s": 0.0009837350007728674,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001978783999220468,
+    "on_s": 0.001557421994220931,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001930.pkl.gz",
+   "call": 1930,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019938670011470094,
+    "on_s": 0.0009309720044257119,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002074883996101562,
+    "on_s": 0.00158829300198704,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001940.pkl.gz",
+   "call": 1940,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020639000067603774,
+    "on_s": 0.000930517002416309,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020409120043041185,
+    "on_s": 0.0015815540027688257,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001950.pkl.gz",
+   "call": 1950,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020009689978905953,
+    "on_s": 0.0009455590043216944,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020376350003061816,
+    "on_s": 0.0016258350005955435,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001960.pkl.gz",
+   "call": 1960,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020600939969881438,
+    "on_s": 0.0009466859992244281,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021705929975723848,
+    "on_s": 0.001601762996870093,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001970.pkl.gz",
+   "call": 1970,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022147170020616613,
+    "on_s": 0.0010288099947501905,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020137399988016114,
+    "on_s": 0.0015753659972688183,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001980.pkl.gz",
+   "call": 1980,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020128159958403558,
+    "on_s": 0.0009715089981909841,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020181860018055886,
+    "on_s": 0.0015707799975643866,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0001990.pkl.gz",
+   "call": 1990,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021111910027684644,
+    "on_s": 0.000944892002735287,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023564030052511953,
+    "on_s": 0.001742494998325128,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002000.pkl.gz",
+   "call": 2000,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020982510031899437,
+    "on_s": 0.000993195004411973,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002033846998529043,
+    "on_s": 0.001643390001845546,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002001.pkl.gz",
+   "call": 2001,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005766192000010051,
+    "on_s": 0.0017286849979427643,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005955959000857547,
+    "on_s": 0.005394455001805909,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002010.pkl.gz",
+   "call": 2010,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 642,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020383900045999326,
+    "on_s": 0.0010067999974125996,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002097712000249885,
+    "on_s": 0.0017117740062531084,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002011.pkl.gz",
+   "call": 2011,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 641,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005787381996924523,
+    "on_s": 0.001719438994769007,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005944139003986493,
+    "on_s": 0.005309248001140077,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002020.pkl.gz",
+   "call": 2020,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 644,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006240937000256963,
+    "on_s": 0.0016806409985292703,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005898591996810865,
+    "on_s": 0.005473106000863481,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002030.pkl.gz",
+   "call": 2030,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 644,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002054887001577299,
+    "on_s": 0.0009047819985426031,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020836339972447604,
+    "on_s": 0.0015929680012050085,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002032.pkl.gz",
+   "call": 2032,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 644,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00541547300235834,
+    "on_s": 0.001859202006016858,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00557462900178507,
+    "on_s": 0.005002634999982547,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002040.pkl.gz",
+   "call": 2040,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020460170053411275,
+    "on_s": 0.00095110999973258,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002095110001391731,
+    "on_s": 0.0015967060026014224,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002041.pkl.gz",
+   "call": 2041,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005924491997575387,
+    "on_s": 0.001738838996971026,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.005967716999293771,
+    "on_s": 0.005602916004136205,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002050.pkl.gz",
+   "call": 2050,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 647,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002058697005850263,
+    "on_s": 0.0009622619982110336,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002054327000223566,
+    "on_s": 0.001626659999601543,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002060.pkl.gz",
+   "call": 2060,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 647,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002241351998236496,
+    "on_s": 0.0010332579986425117,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022634429988102056,
+    "on_s": 0.001884232995507773,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002070.pkl.gz",
+   "call": 2070,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020414199971128255,
+    "on_s": 0.0009177059982903302,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022788479982409626,
+    "on_s": 0.001595954003278166,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002080.pkl.gz",
+   "call": 2080,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 644,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020753010030603036,
+    "on_s": 0.0009474159960518591,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022466730006271973,
+    "on_s": 0.0016413859993917868,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002090.pkl.gz",
+   "call": 2090,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 642,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022048739992897026,
+    "on_s": 0.0009915379996527918,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022650410028290935,
+    "on_s": 0.0017287369992118329,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002100.pkl.gz",
+   "call": 2100,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024095539993140846,
+    "on_s": 0.0011454280029283836,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022681620030198246,
+    "on_s": 0.001854107998951804,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002110.pkl.gz",
+   "call": 2110,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 639,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002208559999417048,
+    "on_s": 0.0010407480003777891,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002214854001067579,
+    "on_s": 0.0016739520069677383,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002120.pkl.gz",
+   "call": 2120,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022294680020422675,
+    "on_s": 0.0009576100055710413,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022589479995076545,
+    "on_s": 0.0018297889982932247,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002130.pkl.gz",
+   "call": 2130,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020416420011315495,
+    "on_s": 0.0010355510021327063,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022841589961899444,
+    "on_s": 0.0017326590023003519,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002140.pkl.gz",
+   "call": 2140,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002489919999788981,
+    "on_s": 0.0010569410005700774,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023792700012563728,
+    "on_s": 0.001885601996036712,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002150.pkl.gz",
+   "call": 2150,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002208903999417089,
+    "on_s": 0.0009597049938747659,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022188970033312216,
+    "on_s": 0.0017161419964395463,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002160.pkl.gz",
+   "call": 2160,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 629,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00217999499727739,
+    "on_s": 0.0010303259987267666,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002075481999781914,
+    "on_s": 0.0016201159960473888,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002170.pkl.gz",
+   "call": 2170,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020886410056846216,
+    "on_s": 0.0009578879980836064,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002193537002312951,
+    "on_s": 0.0017235220002476126,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002180.pkl.gz",
+   "call": 2180,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022551250003743917,
+    "on_s": 0.0009962359981727786,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002236624997749459,
+    "on_s": 0.0017606789988349192,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002190.pkl.gz",
+   "call": 2190,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 644,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002046547997451853,
+    "on_s": 0.0009651379950810224,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021023509980295785,
+    "on_s": 0.001604812998266425,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002200.pkl.gz",
+   "call": 2200,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 648,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021468330014613457,
+    "on_s": 0.0009415329986950383,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020746669979416765,
+    "on_s": 0.0016940179993980564,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002210.pkl.gz",
+   "call": 2210,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002093987997795921,
+    "on_s": 0.0009229619972757064,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020871750020887703,
+    "on_s": 0.001628641999559477,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002220.pkl.gz",
+   "call": 2220,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006064886998501606,
+    "on_s": 0.0020917750007356517,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006127837004896719,
+    "on_s": 0.005670908001775388,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002230.pkl.gz",
+   "call": 2230,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 648,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022388080033124425,
+    "on_s": 0.001053754000167828,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002376928001467604,
+    "on_s": 0.001781619997927919,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002240.pkl.gz",
+   "call": 2240,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 650,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023113640054361895,
+    "on_s": 0.000978520001808647,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022031309999874793,
+    "on_s": 0.0017613890013308264,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002250.pkl.gz",
+   "call": 2250,
+   "moved": true,
+   "extra_support": false,
+   "memory_cells": 649,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006058641993149649,
+    "on_s": 0.001777759003743995,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.006081838997488376,
+    "on_s": 0.005770704003225546,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002260.pkl.gz",
+   "call": 2260,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021764010016340762,
+    "on_s": 0.0009517450016574003,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022985629984759726,
+    "on_s": 0.0017752819985616952,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002270.pkl.gz",
+   "call": 2270,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 647,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002228730998467654,
+    "on_s": 0.0009680789953563362,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023166560058598407,
+    "on_s": 0.0017611319999559782,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002280.pkl.gz",
+   "call": 2280,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 650,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002209660000517033,
+    "on_s": 0.001002666998829227,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002310939999006223,
+    "on_s": 0.0017746999947121367,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002290.pkl.gz",
+   "call": 2290,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021883359950152226,
+    "on_s": 0.0009734310006024316,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022304209996946156,
+    "on_s": 0.0017842220040620305,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002300.pkl.gz",
+   "call": 2300,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 649,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002291937002155464,
+    "on_s": 0.0009599799959687516,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022276039962889627,
+    "on_s": 0.0018010640051215887,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002310.pkl.gz",
+   "call": 2310,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 647,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002153799003281165,
+    "on_s": 0.0009420930000487715,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023277340005734004,
+    "on_s": 0.001783717998478096,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002320.pkl.gz",
+   "call": 2320,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021621849955408834,
+    "on_s": 0.0009472259989706799,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002250050994916819,
+    "on_s": 0.001764843000273686,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002330.pkl.gz",
+   "call": 2330,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 650,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002161431999411434,
+    "on_s": 0.001007238999591209,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022808290013927035,
+    "on_s": 0.0017193449966725893,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002340.pkl.gz",
+   "call": 2340,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 648,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002177558999392204,
+    "on_s": 0.000955032002821099,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021728790015913546,
+    "on_s": 0.001773001000401564,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002350.pkl.gz",
+   "call": 2350,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002260035995277576,
+    "on_s": 0.0009585940060787834,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002247786003863439,
+    "on_s": 0.0017782690047170036,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002360.pkl.gz",
+   "call": 2360,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 641,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002145842998288572,
+    "on_s": 0.0009633390000090003,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002542797003115993,
+    "on_s": 0.0016839500021887943,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002370.pkl.gz",
+   "call": 2370,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 637,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002364132000366226,
+    "on_s": 0.0010478679978405125,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002514095998776611,
+    "on_s": 0.0019334550015628338,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002380.pkl.gz",
+   "call": 2380,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.00244158099667402,
+    "on_s": 0.0010638750027283095,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024100980008370243,
+    "on_s": 0.0018989599993801676,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002390.pkl.gz",
+   "call": 2390,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 631,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024674660016898997,
+    "on_s": 0.0010426549997646362,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0026717039945651777,
+    "on_s": 0.001969138000276871,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002400.pkl.gz",
+   "call": 2400,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019782230010605417,
+    "on_s": 0.0008765859965933487,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020738160019391216,
+    "on_s": 0.0015620720005244948,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002410.pkl.gz",
+   "call": 2410,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 639,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022048350001568906,
+    "on_s": 0.0027473849986563437,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.004582304994983133,
+    "on_s": 0.001743894004903268,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002420.pkl.gz",
+   "call": 2420,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 638,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021493199965334497,
+    "on_s": 0.0009849879934336059,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002070378999633249,
+    "on_s": 0.0016596999994362704,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002430.pkl.gz",
+   "call": 2430,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020781310013262555,
+    "on_s": 0.0009140429974650033,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020325220029917546,
+    "on_s": 0.001560384000185877,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002440.pkl.gz",
+   "call": 2440,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002161320000595879,
+    "on_s": 0.0009025629988173023,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002165807003621012,
+    "on_s": 0.0017321760024060495,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002450.pkl.gz",
+   "call": 2450,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 630,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020295120048103854,
+    "on_s": 0.0008918489984353073,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022979790010140277,
+    "on_s": 0.0016895910011953674,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002460.pkl.gz",
+   "call": 2460,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 637,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002250197001558263,
+    "on_s": 0.0009809599941945635,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021904989989707246,
+    "on_s": 0.00180228499812074,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002470.pkl.gz",
+   "call": 2470,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 635,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002195250002841931,
+    "on_s": 0.0010255480010528117,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002247473006718792,
+    "on_s": 0.001739373998134397,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002480.pkl.gz",
+   "call": 2480,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002217483997810632,
+    "on_s": 0.000996301998384297,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021860749984625727,
+    "on_s": 0.00179080999805592,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002490.pkl.gz",
+   "call": 2490,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 632,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020244879997335374,
+    "on_s": 0.0009364049983560108,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021445989987114444,
+    "on_s": 0.0015979780000634491,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002500.pkl.gz",
+   "call": 2500,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020951389960828237,
+    "on_s": 0.0010578770015854388,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021545449999393895,
+    "on_s": 0.001752178999595344,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002510.pkl.gz",
+   "call": 2510,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 636,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021081179947941564,
+    "on_s": 0.000980131997494027,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0023140499979490414,
+    "on_s": 0.0017096670053433627,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002520.pkl.gz",
+   "call": 2520,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 634,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002110483001160901,
+    "on_s": 0.0009108649974223226,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021476660040207207,
+    "on_s": 0.001605081997695379,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002530.pkl.gz",
+   "call": 2530,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 630,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0019815999985439703,
+    "on_s": 0.0009011820002342574,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.001979464999749325,
+    "on_s": 0.0015180690024862997,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002540.pkl.gz",
+   "call": 2540,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 633,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002107521999278106,
+    "on_s": 0.0010154709962080233,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020926190045429394,
+    "on_s": 0.0017053830015356652,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002550.pkl.gz",
+   "call": 2550,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 637,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0020860839940723963,
+    "on_s": 0.0009645930040278472,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021898139966651797,
+    "on_s": 0.0017142520009656437,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002560.pkl.gz",
+   "call": 2560,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 641,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0021415360024548136,
+    "on_s": 0.0009973569976864383,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002317272999789566,
+    "on_s": 0.002603653003461659,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002570.pkl.gz",
+   "call": 2570,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0028993660016567446,
+    "on_s": 0.0010195449940511025,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0024920489959185943,
+    "on_s": 0.0019984780010418035,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002580.pkl.gz",
+   "call": 2580,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002500785994925536,
+    "on_s": 0.0011006099957739934,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002503714000340551,
+    "on_s": 0.0019594309997046366,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002590.pkl.gz",
+   "call": 2590,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002536971995141357,
+    "on_s": 0.0010791560052894056,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0026225569963571616,
+    "on_s": 0.0020657069981098175,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002600.pkl.gz",
+   "call": 2600,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 646,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002566631002991926,
+    "on_s": 0.0011328159962431528,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0025448199958191253,
+    "on_s": 0.0019902760031982325,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002610.pkl.gz",
+   "call": 2610,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0025564469979144633,
+    "on_s": 0.0011123880030936562,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002574263999122195,
+    "on_s": 0.0020539460019790567,
+    "arrays_ran": true
+   }
+  },
+  {
+   "file": "/home/light/.claude/jobs/2e44f506/tmp/g3b0/dumps/g3b0_H/shadow_apply/635234_0002620.pkl.gz",
+   "call": 2620,
+   "moved": false,
+   "extra_support": false,
+   "memory_cells": 645,
+   "numba": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.0022264450017246418,
+    "on_s": 0.0011682570038828999,
+    "arrays_ran": true
+   },
+   "numpy": {
+    "self_reproduced": true,
+    "equal": true,
+    "off_s": 0.002328169997781515,
+    "on_s": 0.0018328879959881306,
+    "arrays_ran": true
+   }
+  }
+ ],
+ "expected": {
+  "numba": {
+   "move_share": 0.04,
+   "off_ms": 3.081491215138381,
+   "on_ms": 1.194112339701039,
+   "saving_share": 0.6124888061225855,
+   "expected_ms_per_sim_s": -33.44188881429317
+  },
+  "numpy": {
+   "move_share": 0.04,
+   "off_ms": 3.1499755924779964,
+   "on_ms": 2.486598134993585,
+   "saving_share": 0.21059765004799647,
+   "expected_ms_per_sim_s": -11.498631692620608
+  }
+ },
+ "conditions": {
+  "source_commit": "01f3da3c",
+  "numpy": "2.4.6",
+  "numba": "0.65.1",
+  "modes": [
+   "numba",
+   "numpy"
+  ],
+  "live_ms_per_sim_s": 54.6
+ }
+}
