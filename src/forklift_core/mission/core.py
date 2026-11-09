@@ -68,6 +68,7 @@ from forklift_core import determinism
 from forklift_core.control import RearAxlePathTracker, TrackerConfig, ackermann_command
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.baseline import start_digest
+
 from forklift_core.mission.cargo import APPROACH_GAP_M, CargoState
 from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
 from forklift_core.mission.commands import MissionCommands
@@ -87,6 +88,8 @@ from forklift_core.localization.slam_pose import compose, invert
 from forklift_core.planning import PlanResult, Rectangle, collision_free_pose
 from forklift_core.planning.pallet_mission import SearchBudget, failed_plan_reason
 from forklift_core.planning import Pose2D as PlanningPose
+
+ENTRY_RADIUS_M = 3.0  # --occupied-dumps: the transport's entry, the rear axle this near the destination
 
 __all__ = ["MissionCore"]
 
@@ -1619,6 +1622,31 @@ class MissionCore:
         self.permit_stop_tick(t, rear, allowed, why, acting, gate_only=gate_only)
         if getattr(self, "_exit_latch", None) is not None:
             self.exit_exempt_tick_end(t, rear, loaded, allowed, why, gate_only)
+        if getattr(options, "occupied_dumps", False):
+            # diagnostic (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2), on the final allowed of
+            # this tick (the D4 path-blocked stop included): a hold's start, ages and release; the transport's entry
+            occ_ = self._occupied_state()
+            estop_cells_ = getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells", ())
+            path_cells_ = getattr(obstacle["layer"].permission.path_check, "blocked_cells", ())
+            common_ = dict(kappa=kappa, direction=direction, loaded=loaded, why=why, allowed=float(allowed),
+                           path_blocked_ticks=int(obstacle.get("path_blocked_ticks", 0)), blocked_cells=estop_cells_,
+                           path_blocked_cells=path_cells_)
+            holds_ = occ_["holds"]
+            age_ = holds_.tick(t, acting and allowed == 0.0 and why in ("unknown", "occupied"))
+            if age_ is not None:
+                self._occupied_dump("hold", t, rear, truth_rear, hold_age_s=age_, hold_since_s=holds_.since,
+                                    hold_episode=holds_.episode, **common_)
+            elif holds_.release_due:
+                holds_.release_taken()
+                self._occupied_dump("hold_release", t, rear, truth_rear, held_s=holds_.released_after_s,
+                                    hold_episode=holds_.episode, **common_)
+            dest_ = getattr(getattr(options, "scenario", None), "destination", None)
+            mid_ = self.commands.mission_id
+            if (ms.phase == "transport" and dest_ is not None and mid_ not in occ_["entries"]
+                    and math.hypot(float(rear[0]) - float(dest_.x_m), float(rear[1]) - float(dest_.y_m))
+                    <= ENTRY_RADIUS_M):
+                occ_["entries"].add(mid_)
+                self._occupied_dump("entry", t, rear, truth_rear, **common_)
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
@@ -8101,13 +8129,102 @@ class MissionCore:
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
         # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
         zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
+        dumps_ = getattr(self.options, "occupied_dumps", False)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
             cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
-            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0,
+            **({"with_cells": True} if dumps_ else {}))  # the diagnostic's cells; off: the call as before
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
+        if dumps_:
+            self._candidate_dump("candidate", t, pose_, permit_, leg=np.asarray(leg_, dtype=float),
+                                 direction=int(direction_), loaded=bool(hooks.loaded()))
         return out
+
+    def _occupied_state(self) -> dict:
+        """``--occupied-dumps``' run state: the hold episodes, the budget, the refusal pacer, the missions whose
+        transport entry was dumped; the manifest is the run record's ``state["occupied_dumps"]``."""
+        from forklift_core.mission.occupied_dumps import DumpBudget, HoldDumps, RefusalPacer
+
+        occ_ = self.__dict__.get("_occupied")
+        if occ_ is None:
+            occ_ = self._occupied = {"holds": HoldDumps(), "budget": DumpBudget(), "pacer": RefusalPacer(),
+                                     "entries": set(), "seq": 0}
+            self.state.setdefault("occupied_dumps", {"files": [], "drops": []})
+        return occ_
+
+    def _occupied_new_mission(self, t: float, plan=None) -> None:
+        """``--occupied-dumps`` at a mission's start: no hold episode carried over, the mission's budget, and the
+        grid as the mission starts (Codex review P2-4; repro registration: the snapshot before the mission runs). The
+        estimated pose is the plan's first pose (the estimate it was planned from -- no new estimate is read, which
+        could move the tracker's state; Codex review P2); NaN without a plan."""
+        occ_ = self._occupied_state()
+        occ_["holds"].new_mission()
+        occ_["budget"].new_mission()
+        if self.obstacle is not None:
+            poses_ = None if plan is None else getattr(plan, "poses", None)
+            rear_ = (np.asarray(poses_, dtype=float)[0] if poses_ is not None and len(poses_)
+                     else np.full(3, np.nan))
+            self._occupied_dump("mission_start", t, rear_, self.hooks.truth_rear(), rear_source="plan_start")
+
+    def _occupied_dump(self, kind: str, t: float, rear, truth_rear, *, blocked_cells=(), path_blocked_cells=(),
+                       **fields) -> None:
+        """A diagnostic dump of ``--occupied-dumps``: the permission's snapshot (grid, free stamps, origin, resolution),
+        the pose, the correction and the blocked cells (grid indices i, j -> x, y cell centres), plus ``fields``; named
+        ``<kind>_dump_<run sequence>.npz`` and listed in ``state["occupied_dumps"]`` (a refused budget is listed under
+        drops)."""
+        obstacle, ms = self.obstacle, self.ms
+        occ_ = self._occupied_state()
+        manifest_ = self.state["occupied_dumps"]
+        snap_ = None if obstacle is None else obstacle["layer"].snapshot
+        entry_ = {"kind": kind, "t": float(t), "phase": ms.phase, "mission_id": self.commands.mission_id,
+                  "why": None if fields.get("why") is None else str(fields.get("why"))}
+        if snap_ is None:
+            manifest_["drops"].append({**entry_, "reason": "no_snapshot"})
+            return
+        if not occ_["budget"].take():
+            manifest_["drops"].append({**entry_, "reason": "budget"})
+            return
+        occ_["seq"] += 1
+        name = f"{kind}_dump_{occ_['seq']}.npz"
+        file_ = {**entry_, "name": name}
+        manifest_["files"].append(file_)
+        started_ = self.hooks.wall()  # the write's wall time through the recorded clock port (a replay compares it)
+        try:
+            self._occupied_write(name, snap_, t, rear, truth_rear, kind, blocked_cells, path_blocked_cells, fields)
+        except Exception as exc:  # noqa: BLE001 -- a failed diagnostic write never ends the run; it is listed
+            file_["error"] = f"{type(exc).__name__}: {exc}"
+        file_["write_s"] = self.hooks.wall() - started_
+
+    def _occupied_write(self, name, snap_, t, rear, truth_rear, kind, blocked_cells, path_blocked_cells, fields):
+        obstacle, ms = self.obstacle, self.ms
+        self.hooks.save_npz(
+            name, state=snap_.state, free_stamp=snap_.free_stamp, origin=[snap_.origin_x_m, snap_.origin_y_m],
+            res=snap_.resolution_m, stamp=snap_.stamp_s, t=t, phase=ms.phase, kind=kind,
+            mission_id=str(self.commands.mission_id), rear=np.asarray(rear, dtype=float),
+            truth_rear=np.asarray(truth_rear, dtype=float), correction=np.asarray(obstacle["applied"], dtype=float),
+            version=obstacle["version"], blocked_cells=np.asarray(blocked_cells, dtype=np.int64).reshape(-1, 2),
+            path_blocked_cells=np.asarray(path_blocked_cells, dtype=np.int64).reshape(-1, 2), **fields)
+
+    def _candidate_dump(self, kind: str, t: float, pose, permit, **fields) -> None:
+        """``--occupied-dumps``: a scene-replan candidate refused for a blocked reason (``kind`` "candidate") or an
+        escape evaluation that chose nothing or whose permit refused (``kind`` "escape"), the first of a mission's phase
+        at once and then at most once a second. The cells are the permit's own walks (``candidate_permit(...,
+        with_cells=True)`` -- its fresh permission, so the driving permission is never touched; Codex review P2-1,
+        P2-2): walk, ahead (unknown passes) and the strict zone's."""
+        from forklift_core.mission.occupied_dumps import blocked_candidate
+
+        if self.obstacle is None or (kind == "candidate" and not blocked_candidate(permit)):
+            return
+        if not self._occupied_state()["pacer"].due((kind, self.commands.mission_id, self.ms.phase), t):
+            return
+        cells_ = (permit or {}).get("cells") or {}
+        self._occupied_dump(
+            kind, t, tuple(float(v) for v in pose), self.hooks.truth_rear(), why=str((permit or {}).get("why")),
+            permit_json=json.dumps({k: v for k, v in (permit or {}).items() if k != "cells"}, default=str),
+            blocked_cells=cells_.get("walk", ()), path_blocked_cells=cells_.get("ahead", ()),
+            zone_blocked_cells=np.asarray(cells_.get("zone", ()), dtype=np.int64).reshape(-1, 2), **fields)
 
     @staticmethod
     def _poses_length(poses) -> float:
@@ -8275,7 +8392,9 @@ class MissionCore:
                 permit_ = layer_.candidate_permit(t, poses_, current_pose=pose_, direction=int(choice_.direction),
                                                   loaded=loaded_, curvature_inv_m=0.0,
                                                   measured_curvature_inv_m=kappa_now_, cap_mps=speed_,
-                                                  permission=permission_)
+                                                  permission=permission_,
+                                                  **({"with_cells": True}
+                                                     if getattr(options, "occupied_dumps", False) else {}))
             return SimpleNamespace(candidates=candidates_, choice=choice_, permit=permit_, poses=poses_, near=near_,
                                    pose=pose_, checker=checker_, rects=rects_, footprint=footprint_, bounds=bounds_,
                                    stop_len=stop_len_, leg_dir=leg_dir_)
@@ -8301,6 +8420,10 @@ class MissionCore:
                      "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
                 if getattr(options, "escape_start_release", "off") == "on":
                     core._escape_release_count("escapes_released")
+            if getattr(options, "occupied_dumps", False) and (choice_ is None or not (ev_.permit or {}).get("ok")):
+                # diagnostic (Codex review P2-5): an escape that chose nothing or whose permit refused
+                core._candidate_dump("escape", t, pose_, ev_.permit,
+                                     candidates_json=json.dumps(state["scene_escape_candidates"][-1], default=str))
             if choice_ is None:
                 return None
             poses_, permit_ = ev_.poses, ev_.permit
@@ -8751,6 +8874,8 @@ class MissionCore:
         ms.phase, ms.phase_started = "observe", t
         state["phase"] = ms.phase
         self.commands.adopt()
+        if getattr(options, "occupied_dumps", False):
+            self._occupied_new_mission(t, plan)
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 
@@ -8793,6 +8918,8 @@ class MissionCore:
         self.loaded_wait = {"since": float(t)}
         state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
         self.commands.adopt()
+        if getattr(options, "occupied_dumps", False):
+            self._occupied_new_mission(t, getattr(plan, "transport", plan))  # a loaded start's plan holds its transport
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 

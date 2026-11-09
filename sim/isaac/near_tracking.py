@@ -1051,6 +1051,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_end_stand",
     # docs/plans/2026-11-03-near-end-stand-c2-injection.md 2: its diagnostic detour
     "inject_near_end_detour",
+    # docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2: diagnostic dumps only
+    "occupied_dumps",
     "near_bounds",
     "near_drive_terms",
     # Plan D8 S4c-1: the injections are checked on their own, not against the measurement.
