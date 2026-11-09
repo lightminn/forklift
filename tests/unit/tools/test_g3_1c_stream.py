@@ -142,3 +142,16 @@ def test_the_replay_leaves_the_switch_and_the_mode_as_they_were(whole, tmp_path,
     assert sm.SHADOW_KERNEL is False and kernels.mode() == mode
     assert {name: sm.ShadowMemory.__dict__[name] for name in hooks} == hooks  # what was there before the run
     assert sm._retained_stamps_batched is batched
+
+
+def test_the_edge_coverage_uses_the_judgements_own_reach():
+    """Codex 1c-0 round 2 P3: a candidate one cell from the edge with a reach inside the grid is not counted; a NaN
+    radius is counted as such instead of failing."""
+    tool.SEEN.clear()
+    tool.SEEN.update(path="batched", cand={(1, 5): 0.05}, stamp={(1, 5): 1.0}, res=0.1, shape=(10, 10))
+    assert "candidate_reach_off_grid" not in tool.branches()
+    tool.SEEN.update(cand={(0, 5): 0.15}, stamp={(0, 5): 1.0})
+    assert "candidate_reach_off_grid" in tool.branches()
+    tool.SEEN.update(cand={(5, 5): 0.05, (6, 6): float("nan")}, stamp={(5, 5): 1.0})
+    assert "non_finite_radius" in tool.branches()
+    tool.SEEN.clear()

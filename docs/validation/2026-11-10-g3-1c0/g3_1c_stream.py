@@ -119,11 +119,19 @@ def branches() -> list[str]:
         out.append("empty_stamp")
     elif not any(np.isfinite(v) for v in stamp.values()):
         out.append("all_inf_stamp")
-    for (a, b), r in cand.items():
-        k = int(np.ceil(r / res)) + 1
-        if a - k < 0 or b - k < 0 or a + k >= nx or b + k >= ny:
-            out.append("candidate_reach_off_grid")
-            break
+    radii = [r for r in cand.values() if np.isfinite(r)]
+    if len(radii) < len(cand):
+        out.append("non_finite_radius")
+    if radii:  # the judgement's own reach: offsets in its box with gap <= r (Codex 1c-0 round 2 P3)
+        di, dj, gap = sm._offsets(max(radii), res)
+        for (a, b), r in cand.items():
+            if not np.isfinite(r):
+                continue
+            m = gap <= r
+            p, q = a + di[m], b + dj[m]
+            if ((p < 0) | (p >= nx) | (q < 0) | (q >= ny)).any():
+                out.append("candidate_reach_off_grid")
+                break
     return out
 
 
