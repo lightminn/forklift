@@ -323,3 +323,17 @@ def test_the_freeze_refusal_counts_only_inside_the_freeze():
     assert not ra.freeze_check(freeze_session([early]))["freeze_disarmed_stale_video"]
     assert not ra.freeze_check(freeze_session([flowing]))["freeze_disarmed_stale_video"]
     assert ra.freeze_check(freeze_session([inside], end_mono=at(34.0)))["ended_after_measures"] is False
+
+
+def test_the_freeze_window_is_read_from_a_real_args_file(tmp_path):
+    """Round 2 P2: read_args dropped EXTRA_ARGS, so a real session never had a freeze window -- from the file on."""
+    (tmp_path / "args.txt").write_text(
+        "ARM=K\nFACTOR=0.4\nFORKLIFT_LIVE_CATCHUP_STEPS=6\nSET=mark\n"
+        "EXTRA_ARGS=--live-test-marker\\ --live-test-camera-freeze\\ 30:60\\ --max-sim-seconds\\ 1500\n"
+        "PROBE=--scenario marker --frames-dir /x/frames --frames 200 --freeze-from 30 --end-session \n"
+        "0123abcd  /x/r1c_session.sh\n")
+    args = ra.read_args(tmp_path)
+    assert args["SET"] == "mark" and ra.freeze_window(args) == (30.0, 60.0)
+    s = freeze_session([{"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}])
+    s.args = args
+    assert ra.freeze_check(s)["freeze_disarmed_stale_video"]

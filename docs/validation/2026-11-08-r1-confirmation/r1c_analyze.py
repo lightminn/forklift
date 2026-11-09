@@ -71,11 +71,14 @@ PROFILE = {"L": ("0", ""), "K": ("6", ""), "KP": ("6", "6")}
 
 
 def read_args(out: Path) -> dict:
+    """args.txt's KEY=value lines, EXTRA_ARGS and PROBE included (the freeze window is read from EXTRA_ARGS; Codex
+    r1c mark/wall review round 2 P2: dropping them left every real session without it)."""
     a = {}
     for line in (out / "args.txt").read_text().splitlines():
-        if "=" in line and not line.startswith(("EXTRA_ARGS", "PROBE")):
+        if "=" in line:
             k, v = line.split("=", 1)
-            a[k] = v
+            if k.replace("_", "").isalnum():
+                a[k] = v
     return a
 
 
