@@ -54,8 +54,23 @@ def main() -> int:
         samples = [per_call(fn, a.n) for _ in range(a.repeats)]
         t.take()
         out[label] = statistics.median(samples)
+    # a by_parent call inside an open region (the parent name is built, as in the run)
+    t.long_s = 10.0
+    with t.region("parent<caller|grand"):
+        samples = [per_call(obj.timed_parent, a.n) for _ in range(a.repeats)]
+    t.take()
+    out["timer_by_parent_in_parent_on_record"] = statistics.median(samples)
+    samples = [per_call(t.sched_mark, a.n) for _ in range(a.repeats)]
+    out["sched_mark_us"] = statistics.median(samples)
+    clock = time.perf_counter
+    samples = [per_call(clock, a.n) for _ in range(a.repeats)]
+    out["perf_counter_us"] = statistics.median(samples)
     out["added_on_vs_off_us"] = out["timer_on_record"] - out["timer_off_record"]
     out["long_only_added_us"] = out["long_only_on_record"] - out["direct"]
+    # Plan 5.22 M7 (Codex round 2 P2-1): every entered region is charged the largest full cost (a timer that does not
+    # exist when the measurement is off pays all of it): the by_parent call inside a parent, less the direct call.
+    out["per_region_call_bound_us"] = max(out["timer_by_parent_in_parent_on_record"], out["timer_by_parent_on_record"],
+                                          out["timer_on_record"], out["long_only_on_record"]) - out["direct"]
     print(json.dumps(out))
     return 0
 

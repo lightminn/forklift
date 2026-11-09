@@ -104,6 +104,7 @@ class Session:
             self.invalid.append(f"probe exit {rc}")
         self._check_monitor()
         self.lifecycle = next((r.get("marks") for r in self.log if r.get("event") == "lifecycle"), None)
+        self.mission_outcomes = self._mission_outcomes()
         self.mission_done = self._mission_done()
 
     def _check_conditions(self):
@@ -126,25 +127,41 @@ class Session:
                 self.invalid.append(f"{k}={c.get(k)}, registered {v}")
 
     def _check_monitor(self):
+        """The session ran alone on the GPU, as the monitor saw it: every query answered ("ok"), every process on
+        the GPU inside this job's cgroup. A failed query or an unknown ownership is no evidence of an empty GPU
+        (Codex round 2 P2-5): the session is held invalid."""
         f = self.out / "monitor" / "host.jsonl"
-        if not f.exists():
+        lines = [json.loads(x) for x in f.read_text().splitlines()] if f.exists() else []
+        if not lines:
             self.invalid.append("no monitor record")
             return
-        for line in f.read_text().splitlines():
-            r = json.loads(line)
-            for p in r.get("gpu_procs") or []:
-                if len(p) > 3 and p[3] is False:
-                    self.invalid.append(f"another GPU process {p[2]} (pid {p[0]})")
+        for r in lines:
+            if r.get("gpu_status") != "ok" or r.get("gpu_procs") is None:
+                self.invalid.append(f"monitor query not ok ({r.get('gpu_status')})")
+                return
+            for p in r["gpu_procs"]:
+                if len(p) < 4 or p[3] is not True:
+                    self.invalid.append(f"a GPU process not known to be this job's: {p}")
                     return
 
-    def _mission_done(self) -> bool | None:
+    def _mission_outcomes(self) -> list:
+        """(outcome, reason) of every mission the probe ran: the confirm scenario's one (set F) or the cycle
+        scenario's missions_run (set H; Codex round 2 P2-3)."""
         report = self.out / "probe.json"
         if not report.exists():
-            return None
+            return []
         j = json.loads(report.read_text())
-        res = (j.get("confirm") or {}).get("mission_result") or j.get("result") or {}
-        outcome = res.get("outcome") if isinstance(res, dict) else None
-        return None if outcome is None else outcome == "done"
+        results = []
+        if (j.get("confirm") or {}).get("mission_result"):
+            results.append(j["confirm"]["mission_result"])
+        results += [m.get("result") or {} for m in j.get("missions_run") or []]
+        return [(r.get("outcome"), r.get("reason")) for r in results]
+
+    def _mission_done(self) -> bool | None:
+        out = self.mission_outcomes
+        if not out or any(o is None for o, _ in out):
+            return None
+        return all(o == "done" for o, _ in out)
 
     # --- helpers -------------------------------------------------------------------------------------------------
     def auto_rows(self) -> np.ndarray:
@@ -338,17 +355,28 @@ class Session:
                  "after": D[:, C["after_end"]] - D[:, C["step_end"]],
                  "control": nx[:, C["ctrl_end"]] - nx[:, C["ctrl_start"]]}
         out = {"auto_s_per_sim_s": {k: float(np.nansum(v[auto]) / sim_auto) for k, v in parts.items()},
-               "whole_W_s_per_sim_s": float(np.nansum(w) / sim_all), "mission_done": self.mission_done}
+               "whole_W_s_per_sim_s": float(np.nansum(w) / sim_all), "mission_done": self.mission_done,
+               "mission_outcomes": self.mission_outcomes, "auto_sim_s": float(sim_auto)}
         if self.long is not None and bench:
-            # the accounting bound, per whole-trace sim s: every entered region call's added cost (measured on this
-            # node by g2m_bench.py, the larger of the on-record and the long-only added costs), the records' keeping
-            # and the profiled LiDAR scans' extra time
-            per_call = max(bench["added_on_vs_off_us"], bench["long_only_added_us"]) * 1e-6
+            # The accounting bound, per whole-trace sim s (Codex round 2 P2-1/2): every entered region call charged
+            # the largest full wrapper cost measured on this node; two phase marks per trace row (each control tick,
+            # each physics step); the records' keeping; each profiled LiDAR scan's extra clock reads (three a ray and
+            # two more a hit: five a ray at most) and its five bookings.
             calls = self.long.get("region_calls", 0)
-            lidar = self.m4_lidar().get("profiled_extra_s_total", 0.0)
-            bound = calls * per_call + self.long.get("overhead_s", 0.0) + max(lidar, 0.0)
-            out["accounting"] = {"region_calls": calls, "per_call_us": per_call * 1e6,
-                                 "keeping_s": self.long.get("overhead_s"), "lidar_extra_s": lidar,
+            per_call = bench["per_region_call_bound_us"] * 1e-6
+            marks = 2 * len(D) * bench["sched_mark_us"] * 1e-6
+            lidar_rays, lidar_scans = 0.0, 0
+            for r in self.timers:
+                for k, v in r["timers"].items():
+                    if head(k) == "lidar.split.rays":
+                        lidar_rays += v[0]
+                        lidar_scans += v[1]
+            lidar = (5 * lidar_rays + 5 * lidar_scans) * bench["perf_counter_us"] * 1e-6 \
+                + 5 * lidar_scans * per_call
+            keeping = self.long.get("overhead_s", 0.0)
+            bound = calls * per_call + marks + keeping + lidar
+            out["accounting"] = {"region_calls": calls, "per_call_us": per_call * 1e6, "marks_s": marks,
+                                 "keeping_s": keeping, "lidar_profiled_scans": lidar_scans, "lidar_s": lidar,
                                  "bound_s_per_sim_s": bound / sim_all,
                                  "bound_share_of_W": bound / sim_all / out["whole_W_s_per_sim_s"]}
         return out
@@ -363,29 +391,37 @@ class Session:
 
 
 def m7_verdict(rows, names_by_set) -> dict:
-    """Per set: complete only with every registered session valid and its mission done (3 on, 2 off). The verdict is
-    the accounting bound (each on session's bound <= 1 % of W); the A/B mean difference is reported beside it with the
-    off-off spread, and flagged when it exceeds the largest bound by more than that spread (plan 5.22 review P2-3/4)."""
+    """Per set: complete only with every registered session valid (3 on, 2 off). The verdict is the accounting bound
+    (each on session's bound <= 1 % of W), which does not need the missions to succeed. The A/B mean difference is a
+    consistency check, computed only over sessions whose missions ended alike (same outcomes and reasons; a different
+    mission is a different workload), reported with the off-off spread and flagged when it exceeds the largest bound
+    by more than that spread (plan 5.22 review round 1 P2-3/4, round 2 P2-3/4)."""
     out = {}
     for set_, want in REGISTERED.items():
         sel = {i: [r for r in rows if r.get("set") == set_ and r.get("instr") == i and not r.get("warm")]
                for i in ("on", "off")}
         missing = [n for n in names_by_set[set_] if not any(r["name"] == n and not r["invalid"] for r in rows)]
-        failed = [r["name"] for r in sel["on"] + sel["off"] if r.get("M7", {}).get("mission_done") is False]
-        if missing or failed or any(len([r for r in sel[i] if not r["invalid"]]) != want[i] for i in want):
-            out[set_] = {"verdict": "incomplete", "missing_or_invalid": missing, "mission_failed": failed}
+        if missing or any(len([r for r in sel[i] if not r["invalid"]]) != want[i] for i in want):
+            out[set_] = {"verdict": "incomplete", "missing_or_invalid": missing}
             continue
         on, off = [r["M7"] for r in sel["on"]], [r["M7"] for r in sel["off"]]
-        bounds = [r["accounting"]["bound_share_of_W"] for r in on if "accounting" in r]
-        w_on = [r["auto_s_per_sim_s"]["W"] for r in on]
-        w_off = [r["auto_s_per_sim_s"]["W"] for r in off]
-        ab = (np.mean(w_on) - np.mean(w_off)) / np.mean(w_off)
-        spread = (max(w_off) - min(w_off)) / np.mean(w_off)
-        verdict = "cost <= 1 %" if bounds and max(bounds) <= 0.01 else (
-            "undetermined (no accounting)" if not bounds else "cost > 1 % by the accounting bound")
-        out[set_] = {"verdict": verdict, "bound_share_of_W": bounds, "ab_rel_diff": float(ab),
-                     "off_off_spread": float(spread),
-                     "ab_inconsistent": bool(bounds) and ab > max(bounds) + spread}
+        bounds = [float(r["accounting"]["bound_share_of_W"]) for r in on if "accounting" in r]
+        if len(bounds) != len(on):
+            verdict = "undetermined (no accounting)"
+        else:
+            verdict = "cost <= 1 %" if max(bounds) <= 0.01 else "cost > 1 % by the accounting bound"
+        outcomes = {tuple(map(tuple, r["mission_outcomes"])) for r in on + off}
+        entry = {"verdict": verdict, "bound_share_of_W": bounds, "mission_outcomes": sorted(map(list, outcomes))}
+        if len(outcomes) == 1 and all(r["mission_outcomes"] for r in on + off):
+            w_on = [r["auto_s_per_sim_s"]["W"] for r in on]
+            w_off = [r["auto_s_per_sim_s"]["W"] for r in off]
+            ab = float((np.mean(w_on) - np.mean(w_off)) / np.mean(w_off))
+            spread = float((max(w_off) - min(w_off)) / np.mean(w_off))
+            entry.update({"ab_rel_diff": ab, "off_off_spread": spread,
+                          "ab_inconsistent": bool(bounds) and bool(ab > max(bounds) + spread)})
+        else:
+            entry["ab"] = "not comparable: the missions ended differently"
+        out[set_] = entry
     return out
 
 
