@@ -297,7 +297,7 @@ def h0_valid(sess: dict, track, p5: list) -> dict:
         dx, dyaw = _pose_error(at[1:], H0_TARGET_REAR)
         pose_ok = dx <= POSE_TOL_M and dyaw <= POSE_TOL_RAD
         if known_ok:
-            start_error = _pose_error(at[1:], known["rear"])
+            start_error = _pose_error(at[1:], [float(v) for v in known["rear"]])
     return {"ok": bool(known_ok and pose_ok), "known_start": known_ok, "pose_ok": pose_ok,
             "start_error": start_error, "start_truth": None if at is None else list(at[1:])}
 

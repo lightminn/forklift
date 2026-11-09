@@ -164,6 +164,8 @@ def test_h0_is_valid_on_the_known_start_at_the_target_pose():
                 {**known, "base": [-0.934, 0.9106, float("nan")]}, {**known, "rear": ["x", 0.0, 0.0]}):
         v = R.h0_valid({"result": {"start_known": bad}}, track, p5)
         assert not v["ok"] and not v["known_start"] and v["start_error"] is None
+    texts = {**known, "rear": ["-1.2690", "0.8530", "0.1706"]}  # Codex round 2 P3: numbers as text are numbers
+    assert R.h0_valid({"result": {"start_known": texts}}, track, p5)["ok"]
 
 
 def test_a_mission_without_its_result_or_folder_is_missing(tmp_path):
