@@ -158,7 +158,11 @@ def main() -> int:
     ap.add_argument("--json", type=Path, required=True)
     ap.add_argument("--modes", nargs="+", default=["reference", "numba"])
     ap.add_argument("--limit", type=int, default=0, help="0: every dump")
+    ap.add_argument("--clear-kernel", action="store_true",
+                    help="replay with _clear_group judged at the beams' cells (plan 5.26): the dumps were made with it "
+                         "off, so the self-reproduction is then the byte-equality check on real calls")
     a = ap.parse_args()
+    og.CLEAR_KERNEL = a.clear_kernel
     missing = [str(d) for d in a.dirs if not any((d / "grid_snapshot").glob("*.pkl.gz"))]
     if missing:
         print(f"no grid_snapshot dumps in {missing}", file=sys.stderr)
