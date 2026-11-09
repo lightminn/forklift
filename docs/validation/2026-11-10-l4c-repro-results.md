@@ -44,6 +44,7 @@
 - 기반 실패 0, 재제출 0. 세션 길이 9.5–13.9 분(s25 H1 만 4.1 분). 덩이 사이 조기 종료 판정은 매번 미확정이었다(덩이 1–3). 실행 가능성(덩이 1)은 유효 H1 6/6, P-5 운반 도달 12/12 로 통과했다.
 - 롤링 보관(디스크 세션): `gdrive:ws1-l4r-f8905b3f-rolling/chunk_{1..4}.tar.zst`(md5 96ee4b1a… · bd76df77… · 83601827… · d939633a…, 모두 MATCH), 스모크 `gdrive:ws1-l4r-f8905b3f-smoke-rolling/chunk_1.tar.zst`(ddc1c6ff…). 지운 것은 인식 프레임·perception_capture·브리지 지도뿐이고 판정 입력은 ws1 에 남아 있다.
 - 판정 산출물(실행 폴더 `verdicts/`): `verdict_c1..c3.json`, `verdict_final.json`(sha256 e43ce501…), `chunk_report_c1..c4.jsonl`, `supp_final.jsonl`(ba66d116…)·`supp2.jsonl`(755a3f9c…)와 이 둘을 만든 `supp.py`·`supp2.py`.
+- 보관 위치(2026-11-10, #397 머지 뒤 ws1 에서 지움): 실행 폴더와 스냅숏은 `gdrive:ws1-cleanup-20261110-t/t_l4r.tar.zst`(md5 184d5c64…, `verdicts/` 는 그 안의 `test_runs/live/l4r_f8905b3f/verdicts/`), 스모크 `t_smoke.tar.zst`(59788da5…), 인식 프레임은 위 롤링 보관본. 복원: `rclone cat gdrive:ws1-cleanup-20261110-t/<묶음>.tar.zst | zstd -dc | tar -xpf - -C /home/projects/forklift`.
 
 ## 3. 세션 결과와 2.6 보고
 
