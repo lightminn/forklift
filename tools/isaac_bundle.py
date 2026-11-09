@@ -575,6 +575,8 @@ def gpu_check(allow: bool, skip: bool) -> tuple[list[str], list[str], dict]:
         modes = gpu_persistence_modes()
         record = {"modes": modes, "boot_id": boot_id(), "queried": [t0, time.time()]}
         found = persistence_problems(modes)
+    if record["boot_id"] is None:
+        found = found + ["the node's boot id cannot be read: a proof could not tell a reboot (persistence off again)"]
     record["allowed_without"] = bool(found and allow)
     return ([], found, record) if allow else (found, [], record)
 
@@ -613,9 +615,10 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
     if not isinstance(gpu, dict) or "allowed_without" not in gpu:
         problems.append(f"{path} has no GPU persistence check (made before it): run isaac_bundle.py check again")
     else:
-        if gpu.get("boot_id") is not None and gpu.get("boot_id") != boot_id():
-            problems.append("the node rebooted since the check (persistence mode does not survive one): run "
-                            "isaac_bundle.py check again")
+        now = boot_id()
+        if not gpu.get("boot_id") or not now or gpu.get("boot_id") != now:
+            problems.append("the node rebooted since the check, or a boot id is missing (persistence mode does not "
+                            "survive a reboot): run isaac_bundle.py check again")
         modes = gpu.get("modes")
         if not gpu["allowed_without"] and (not isinstance(modes, dict) or not modes
                                            or any(m != "Enabled" for m in modes.values())):

@@ -2128,3 +2128,17 @@ def test_check_inside_a_job_is_refused_and_queries_nothing_after_other_problems(
     monkeypatch.setattr(ib, "in_job_context", lambda environ=None: False)
     monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: ["r0: something else"])
     assert ib.main(args) == 1 and queried == []
+
+
+def test_an_unreadable_boot_id_neither_issues_nor_verifies_a_proof(tmp_path, monkeypatch, capsys):
+    path, args = _checked(tmp_path, monkeypatch)
+    data = path.read_bytes()
+    runs = ib.load_runs(str(path), text=data.decode())
+    proof_path = tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)
+    proof = json.loads(proof_path.read_text())
+    proof["gpu_persistence"]["boot_id"] = None  # a proof with no boot id never verifies
+    proof_path.write_text(json.dumps(proof))
+    assert any("boot id is missing" in p for p in ib.verify_preflight(path, data, runs, {}))
+    monkeypatch.setattr(ib, "boot_id", lambda: None)
+    assert ib.main(args) == 1 and "boot id cannot be read" in capsys.readouterr().out
+    assert not proof_path.exists()
