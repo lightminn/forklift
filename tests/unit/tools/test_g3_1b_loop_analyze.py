@@ -92,3 +92,12 @@ def test_a_missing_kernel_mode_and_mission_contact_records(tmp_path):
     assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": None}) is None  # null: unknown
     (run / "missions" / "m1" / "records.json").unlink()  # a reported mission without its record: unknown
     assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) is None
+
+
+def test_a_reported_mission_without_an_id_makes_the_contacts_unknown(tmp_path):
+    out, run = tmp_path / "s", tmp_path / "s" / "run"
+    run.mkdir(parents=True)
+    (out / "probe.json").write_text('{"confirm": {"mission_result": {"outcome": "done"}}}')
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) is None
+    (out / "probe.json").write_text('{}')  # no mission reported: the session's own list only
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) == 0
