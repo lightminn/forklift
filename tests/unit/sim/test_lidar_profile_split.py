@@ -64,11 +64,15 @@ def test_the_profiled_scan_equals_the_plain_loop_and_books_its_parts(fake_isaac,
     assert {"lidar.split.scans", "lidar.split.convert", "lidar.split.query", "lidar.split.hit_and_own"} <= set(booked)
 
 
-def test_only_every_nth_scan_is_profiled(monkeypatch):
+def test_only_every_nth_scan_is_profiled_and_only_with_the_live_timers(monkeypatch):
     import planar_lidar as pl
+    from forklift_core.perf import TIMERS
 
     monkeypatch.setattr(pl, "_PROFILE_EVERY", 3)
     monkeypatch.setattr(pl, "_profile_count", [0])
+    monkeypatch.setattr(TIMERS, "enabled", False)
+    assert not any(pl._profile_due() for _ in range(6))  # a batch run: nothing would book it
+    monkeypatch.setattr(TIMERS, "enabled", True)
     assert [pl._profile_due() for _ in range(6)] == [False, False, True, False, False, True]
     monkeypatch.setattr(pl, "_PROFILE_EVERY", 0)
     assert not any(pl._profile_due() for _ in range(5))

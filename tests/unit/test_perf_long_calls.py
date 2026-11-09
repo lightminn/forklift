@@ -143,7 +143,7 @@ def test_each_thread_keeps_its_own_stack(timers):
     assert abs(main_rec["self_s"] - 0.001) < 1e-9  # the other thread's call is not nested in it
 
 
-def test_long_only_regions_stay_out_of_the_totals_and_cost_nothing_off(timers):
+def test_long_only_regions_stay_out_of_the_totals_and_are_not_entered_off(timers):
     t, clock = timers
 
     class Core:
@@ -169,4 +169,44 @@ def test_the_scheduling_wait_since_the_step_is_kept_when_readable(timers, monkey
     with t.region("a"):
         clock.t += 0.1
     rec = t.long[0]
-    assert rec["run_delay_s_since_step"] == pytest.approx(0.25) and rec["since_step_s"] == pytest.approx(0.6)
+    assert rec["run_delay_s_since_mark"] == pytest.approx(0.25) and rec["since_mark_s"] == pytest.approx(0.6)
+
+
+def test_the_keeping_of_a_childs_record_is_not_the_parents_self_time(timers, monkeypatch):
+    t, clock = timers
+    t.long_s = 0.010
+
+    def slow_where():
+        clock.t += 0.040  # the record's keeping
+        return {}
+
+    t.where = slow_where
+    with t.region("parent"):
+        clock.t += 0.010
+        with t.region("child"):
+            clock.t += 0.030
+    child, parent = t.long
+    assert child["self_s"] == pytest.approx(0.030)
+    assert parent["self_s"] == pytest.approx(0.010, abs=1e-9)  # not 0.050 (Codex review P2-2)
+    assert t.long_overhead_s >= 0.040
+
+
+def test_the_cap_holds_across_threads(timers):
+    import threading
+
+    t, clock = timers
+    t.long_s = 0.0
+    t.long_cap = 1
+    gate = threading.Barrier(4)
+
+    def worker():
+        gate.wait()
+        with t.region("w"):
+            pass
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(t.long) == 1 and t.long_dropped == 3

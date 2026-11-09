@@ -1432,6 +1432,48 @@ def test_without_a_trace_the_runtime_writes_none(tmp_path):
     finally:
         rt.close()
     assert not (tmp_path / "tick_trace.npz").exists()
+    with open(tmp_path / "live_log.jsonl") as log:
+        end = [json.loads(line) for line in log if '"event": "end"' in line][0]
+    assert "long_calls" not in end  # 5.18 G2-0 off: the end line is as it was (Codex instrumentation review P2-6)
+    assert not (tmp_path / "long_calls.json").exists()
+
+
+def test_the_trace_names_the_row_the_running_work_belongs_to():
+    # Real-time plan 5.18 G2-0 (Codex instrumentation review P2-1): a control tick runs before its step's row begins,
+    # and its marks go to that next row; a step's own work belongs to the row begun last.
+    from sim.isaac.tick_trace import TickTrace
+
+    trace = TickTrace(10, Clock())
+    trace.control("ctrl_start", 0.0)
+    assert trace.in_control and trace.row_now() == 0  # the first control tick: row 0, about to begin
+    trace.control("ctrl_end", 0.001)
+    trace.begin()
+    assert not trace.in_control and trace.row_now() == 0  # the step's own work: row 0
+    trace.control("ctrl_start", 0.01)
+    assert trace.row_now() == 1
+    trace.control("ctrl_end", 0.011)
+    trace.begin()
+    assert trace.row_now() == 1
+
+
+def test_the_long_call_record_is_written_beside_the_trace_when_on(tmp_path, monkeypatch):
+    from forklift_core.perf import TIMERS
+    from sim.isaac.tick_trace import TickTrace
+
+    rt, core, did, clock_ = runtime(tmp_path)
+    rt.trace = TickTrace(10, clock_)
+    monkeypatch.setattr(TIMERS, "long_s", 0.0)
+    monkeypatch.setattr(TIMERS, "long", [{"name": "x", "path": [], "start": 0.0, "end": 0.1, "self_s": 0.1}])
+    rt.start()
+    try:
+        step(rt, clock_, 0.0)
+    finally:
+        rt.close()
+    saved = json.loads((tmp_path / "long_calls.json").read_text())
+    assert saved["threshold_s"] == 0.0 and saved["records"][0]["name"] == "x"
+    with open(tmp_path / "live_log.jsonl") as log:
+        end = [json.loads(line) for line in log if '"event": "end"' in line][0]
+    assert end["long_calls"]["records"] == 1
 
 
 def test_the_camera_phase_puts_the_render_on_the_physics_counter(tmp_path):

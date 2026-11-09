@@ -346,7 +346,7 @@ class LiveRuntime:
                   "camera_latency_s": self.camera_latency.report(),
                   "camera_pixel_latency_s": self.camera_pixel_latency.report(),
                   "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved,
-                  "long_calls": getattr(self, "long_calls_saved", None)})
+                  **({"long_calls": self.long_calls_saved} if hasattr(self, "long_calls_saved") else {})})
         if not self.io.close(self._io_left(), on_end=lambda: self._log.close()):
             # stuck on the disk: the log has no end summary, and its file is closed once the writer has ended (its
             # current file -- a roll-over reopens it)

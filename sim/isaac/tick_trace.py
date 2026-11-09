@@ -52,6 +52,17 @@ class TickTrace:
         if name not in _CONTROL:
             raise KeyError(name)
         self._pending[name] = self._pending.get(name, 0.0) + value if name == "replies_s" else value
+        if name == "ctrl_start":
+            self.in_control = True
+        elif name == "ctrl_end":
+            self.in_control = False
+
+    in_control = False  # between a control tick's ctrl_start and ctrl_end (its marks go to the next row)
+
+    def row_now(self) -> int:
+        """The row the work now running belongs to: a control tick's, the row its step is about to begin (its marks
+        go there); a step's own work, the row begun last (real-time plan 5.18 G2-0, Codex review P2-1)."""
+        return self.rows if self.in_control else self.rows - 1
 
     def control_flag(self, name: str) -> None:
         """A flag the control tick knows of the step it is about to ask for (a capture's, a pocket frame's)."""

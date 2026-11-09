@@ -181,6 +181,10 @@ _profile_count = [0]
 def _profile_due() -> bool:
     if _PROFILE_EVERY <= 0:
         return False
+    from forklift_core.perf import TIMERS
+
+    if not TIMERS.enabled:  # a batch run: nothing would book the split (Codex review)
+        return False
     _profile_count[0] += 1
     return _profile_count[0] % _PROFILE_EVERY == 0
 

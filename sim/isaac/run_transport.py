@@ -8339,6 +8339,15 @@ def drive(S, isaac) -> None:
                           "grid_world", "grid_kwargs", "final_straight_prefix"):  # the planner ports
                 if callable(getattr(core.hooks, name_, None)):
                     live_timers.wrap(core.hooks, name_, f"plan.{name_}", by_caller=True)
+            def live_prestart_(live_):
+                if live_timers.long_s is not None:
+                    for name_ in sorted(vars(core.hooks)):  # every port the core calls (capture, detection, dumps)
+                        if callable(getattr(core.hooks, name_, None)) and not name_.startswith("__") and name_ not in (
+                                "plan_transport", "plan_transport_leg", "plan_return_leg", "plan_observation_leg",
+                                "grid_world", "grid_kwargs", "final_straight_prefix"):
+                            live_timers.wrap(core.hooks, name_, f"hook.{name_}", long_only=True)
+                lifecycle_mark("live_start_call")
+
             long_ms_ = os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS")
             if long_ms_:
                 # Real-time plans 5.18 G2-0 / 5.20 G3-1a / 5.21 G5-0: every region call of at least this many
@@ -8348,18 +8357,16 @@ def drive(S, isaac) -> None:
                 if live.trace is None:
                     raise ValueError("FORKLIFT_LIVE_LONG_CALLS_MS needs FORKLIFT_LIVE_TICK_TRACE=1 (the rows it keys on)")
                 live_timers.long_s = float(long_ms_) / 1000.0
-                live_timers.where = lambda: {"row": live.trace.rows - 1}
+                live_timers.where = lambda: {"row": live.trace.row_now(),
+                                             "phase": "control" if live.trace.in_control else "step"}
                 wrapped_ = {(type(core), n_) for n_, v_ in vars(type(core)).items()
                             if callable(v_) and not n_.startswith("_")}
                 for name_, value_ in list(vars(type(core)).items()):  # the mission core's own private steps
                     if callable(value_) and name_.startswith("_") and not name_.startswith("__") \
                             and (type(core), name_) not in wrapped_:
                         live_timers.wrap(type(core), name_, f"core.{name_}", long_only=True)
-                for name_ in sorted(vars(core.hooks)):  # every port the core calls (capture, detection, dumps)
-                    if callable(getattr(core.hooks, name_, None)) and not name_.startswith("__") and name_ not in (
-                            "plan_transport", "plan_transport_leg", "plan_return_leg", "plan_observation_leg",
-                            "grid_world", "grid_kwargs", "final_straight_prefix"):
-                        live_timers.wrap(core.hooks, name_, f"hook.{name_}", long_only=True)
+                # The core's ports are wrapped just before the live start (live_prestart_), once every one is wired
+                # (Codex review P2-4: prepare_start_ok, live_mission_ready/start and trace_ground are set after here).
                 if obstacle is not None:
                     import forklift_core.perception.obstacle_grid as timed_grid_module
                     import forklift_core.control.shadow_memory as timed_shadow_module
@@ -9147,9 +9154,9 @@ def drive(S, isaac) -> None:
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
                        "overlay": overlay}
                 if encoder is not None else None)
-            lifecycle_mark("live_start_call")
+            live_prestart_(live)  # 5.18/5.21 measurement (off by default): the core's ports, the start marks
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
-            if _LIFECYCLE_ON:
+            if lifecycle_on():
                 live.log({"event": "lifecycle", "marks": list(LIFECYCLE)})  # 5.21 G5-0, on the live log's clock
             if pose_box["sink"] is not None:
                 # plan 3.3: checking from the first live tick -- nothing opens until the start check's result
@@ -9390,6 +9397,8 @@ def drive(S, isaac) -> None:
                 if live is not None:
                     if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
                         live.trace.control("ctrl_start", live.trace.now())
+                        if live_timers.long_s is not None:
+                            live_timers.sched_mark()  # 5.18 G2-0: a control call's run-queue wait counts from here
                     live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
@@ -11259,17 +11268,24 @@ def check_args_only(args: argparse.Namespace) -> int:
 
 
 # Real-time plan 5.21 G5-0: start-up milestones on the monotonic clock (the tick trace's and the live log's), kept only
-# with the long-call record on (FORKLIFT_LIVE_LONG_CALLS_MS) and written to the live log at its start and its close.
+# with the long-call record on (FORKLIFT_LIVE_LONG_CALLS_MS, read when the run starts, as that record reads it). They
+# go to the run's result (state["lifecycle"], so a start that fails before the live log keeps them) and to the live
+# log at its start. Render products' first complete and first valid frames are not timed here: polling them adds the
+# GPU syncs the start-up stalls may come from (plan 5.21: those belong to the separate discriminating runs).
 LIFECYCLE: list = []
-_LIFECYCLE_ON = bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
+
+
+def lifecycle_on() -> bool:
+    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
 
 
 def lifecycle_mark(name: str, **fields) -> None:
-    if _LIFECYCLE_ON:
+    if lifecycle_on():
         LIFECYCLE.append({"mark": name, "mono": time.monotonic(), **fields})
 
 
 def main() -> None:
+    LIFECYCLE.clear()
     lifecycle_mark("runner_main")
     args = arguments()
     if args.check_args:
@@ -11324,6 +11340,8 @@ def main() -> None:
                               "diagnostics": {}}} if args.deterministic else {}),
         "arguments": recorded_arguments(args),
     }
+    if lifecycle_on():
+        state["lifecycle"] = LIFECYCLE  # 5.21 G5-0: the same list, so a start that fails early still keeps its marks
     scene_root = Path(args.base_scene).resolve().parent
     state["scene_sha256"] = {
         str(path.relative_to(scene_root)): hashlib.sha256(path.read_bytes()).hexdigest()

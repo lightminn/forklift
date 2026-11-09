@@ -60,12 +60,16 @@ class Timers:
         self.long: list[dict] = []
         self.long_cap = 200_000
         self.long_dropped = 0
+        self.long_overhead_s = 0.0  # the record's own keeping time (taken out of the enclosing calls' self time)
         self.where = None
+        self._long_lock = threading.Lock()
         self._local = threading.local()  # each thread's own stack of open regions: [name, start, nested wall s]
 
     def sched_mark(self) -> None:
-        """The physics step's start, for the long-call record's scheduling wait: this thread's run-queue wait
-        (/proc/thread-self/schedstat, ns) is read here and again when a long call is kept."""
+        """A phase's start (the live runner marks each control tick's and each physics step's), for the long-call
+        record's scheduling wait: this thread's run-queue wait (/proc/thread-self/schedstat) is read here and again
+        as a long call ends, so a kept call carries the wait since its phase began -- not the call's own wait
+        (that would need a read at every call's start)."""
         self._local.sched = (time.perf_counter(), _run_delay_s())
 
     def _stack(self) -> list:
@@ -80,29 +84,36 @@ class Timers:
     def _leave(self, name: str, start: float, seconds: float, cpu_s: float) -> None:
         stack = self._stack()
         frame = stack.pop() if stack else [name, start, 0.0]
-        if stack:
-            stack[-1][2] += seconds
         if seconds < self.long_s:
+            if stack:
+                stack[-1][2] += seconds
             return
-        if len(self.long) >= self.long_cap:
-            self.long_dropped += 1
-            return
+        keep_start = time.perf_counter()
+        delay_now = _run_delay_s()  # first, before the keeping's own work
         record = {"name": name, "path": [f[0] for f in stack], "start": start, "end": start + seconds,
                   "self_s": seconds - frame[2], "cpu_s": cpu_s}
         if threading.current_thread() is not threading.main_thread():
             record["thread"] = threading.current_thread().name
         mark = getattr(self._local, "sched", None)
-        if mark is not None and mark[1] is not None:
-            now = _run_delay_s()
-            if now is not None:
-                record["run_delay_s_since_step"] = now - mark[1]
-                record["since_step_s"] = start + seconds - mark[0]
+        if mark is not None and mark[1] is not None and delay_now is not None:
+            record["run_delay_s_since_mark"] = delay_now - mark[1]
+            record["since_mark_s"] = start + seconds - mark[0]
         if self.where is not None:
             try:
                 record.update(self.where())
             except Exception as exc:  # noqa: BLE001 -- a context that cannot be read is noted, never raised
                 record["where_error"] = f"{type(exc).__name__}: {exc}"
-        self.long.append(record)
+        with self._long_lock:
+            if len(self.long) >= self.long_cap:
+                self.long_dropped += 1
+            else:
+                self.long.append(record)
+        overhead = time.perf_counter() - keep_start
+        self.long_overhead_s += overhead
+        if stack:
+            # The enclosing call's self time leaves out this call and the keeping of its record (Codex
+            # instrumentation review P2-2: the keeping went to the parent).
+            stack[-1][2] += seconds + overhead
 
     def add(self, name: str, seconds: float, cpu_s: float | None = None) -> None:
         self._total[name] = self._total.get(name, 0.0) + seconds
