@@ -27,7 +27,8 @@ import sys
 import time
 from pathlib import Path
 
-os.environ.pop("FORKLIFT_PERF_DUMP", None)  # replaying must not dump again
+if "forklift_core.perf" not in sys.modules:
+    os.environ.pop("FORKLIFT_PERF_DUMP", None)  # replaying must not dump again (read when perf is imported)
 import numpy as np  # noqa: E402
 
 from forklift_core import kernels  # noqa: E402
@@ -38,13 +39,30 @@ APPLY = sm.ShadowMemory.apply
 while hasattr(APPLY, "__wrapped__"):  # the dump and dual decorators off: the method itself
     APPLY = APPLY.__wrapped__
 LIVE_MS_PER_SIM_S = 54.6  # line_m AUTO shadow.apply (docs/validation/2026-11-09-g2-measure-results.md 5)
-RAN = {"arrays": 0}
+RAN = {"arrays": 0, "move_s": 0.0}
 _ARRAYS = sm.ShadowMemory._apply_arrays
 
 
-def _counting(self, *a, **k):
-    RAN["arrays"] += 1
-    return _ARRAYS(self, *a, **k)
+def _counting(real):
+    def inner(self, *a, **k):
+        RAN["arrays"] += 1
+        return real(self, *a, **k)
+    return inner
+
+
+def _timed(real):
+    """The memory move's own time (Codex 1c-0 review P3: a move call's whole time is not the move's share)."""
+    def inner(self, *a, **k):
+        if RAN.get("in_move"):  # _move_arrays falling back to _move: counted once, by the outer call
+            return real(self, *a, **k)
+        RAN["in_move"] = True
+        start = time.perf_counter()
+        try:
+            return real(self, *a, **k)
+        finally:
+            RAN["move_s"] += time.perf_counter() - start
+            RAN["in_move"] = False
+    return inner
 
 
 def load(path: Path) -> dict:
@@ -56,10 +74,10 @@ def replay(record, mode: str, on: bool):
     kernels.set_mode(mode)
     sm.SHADOW_KERNEL = on
     receiver, args, kwargs = copy.deepcopy(record["before"])
-    ran = RAN["arrays"]
+    ran, moved = RAN["arrays"], RAN["move_s"]
     start = time.perf_counter()
     out = APPLY(receiver, *args, **kwargs)
-    return receiver, out, time.perf_counter() - start, RAN["arrays"] > ran
+    return receiver, out, time.perf_counter() - start, RAN["arrays"] > ran, RAN["move_s"] - moved
 
 
 def same(a, b) -> list:
@@ -79,11 +97,13 @@ def kind(record) -> dict:
 def analyse(paths, modes) -> dict:
     """The replays below set the switch and the kernel mode; both, and the counting hook, are put back after."""
     saved = (sm.SHADOW_KERNEL, kernels.mode())
-    sm.ShadowMemory._apply_arrays = _counting
+    cls = sm.ShadowMemory
+    hooks = (cls._apply_arrays, cls._move, cls._move_arrays)  # what is there now, put back after
+    cls._apply_arrays, cls._move, cls._move_arrays = _counting(hooks[0]), _timed(hooks[1]), _timed(hooks[2])
     try:
         return _analyse(paths, modes)
     finally:
-        sm.ShadowMemory._apply_arrays = _ARRAYS
+        cls._apply_arrays, cls._move, cls._move_arrays = hooks
         sm.SHADOW_KERNEL = saved[0]
         kernels.set_mode(saved[1])
 
@@ -105,7 +125,8 @@ def _analyse(paths, modes) -> dict:
             off = replay(rec, mode, False)
             on = replay(rec, mode, True)
             row[mode] = {"self_reproduced": same(off[:2], (rec["after"][0], rec["result"])) == [],
-                         "equal": same(off[:2], on[:2]) == [], "off_s": off[2], "on_s": on[2], "arrays_ran": on[3]}
+                         "equal": same(off[:2], on[:2]) == [], "off_s": off[2], "on_s": on[2], "arrays_ran": on[3],
+                         "off_move_s": off[4], "on_move_s": on[4]}
         rows.append(row)
     summary = {"dumps": len(rows), "moved": sum(r["moved"] for r in rows),
                "extra_support": sum(r["extra_support"] for r in rows),
@@ -119,7 +140,9 @@ def _analyse(paths, modes) -> dict:
                          "off_ms_moved": _q([1e3 * r[mode]["off_s"] for r in rows if r["moved"]]),
                          "on_ms_moved": _q([1e3 * r[mode]["on_s"] for r in rows if r["moved"]]),
                          "off_ms_still": _q([1e3 * r[mode]["off_s"] for r in rows if not r["moved"]]),
-                         "on_ms_still": _q([1e3 * r[mode]["on_s"] for r in rows if not r["moved"]])}
+                         "on_ms_still": _q([1e3 * r[mode]["on_s"] for r in rows if not r["moved"]]),
+                         "off_ms_move_only": _q([1e3 * r[mode]["off_move_s"] for r in rows if r["moved"]]),
+                         "on_ms_move_only": _q([1e3 * r[mode]["on_move_s"] for r in rows if r["moved"]])}
     return {"summary": summary, "rows": rows}
 
 
@@ -131,8 +154,10 @@ def expected(summary: dict, mode: str, move_share: float) -> dict:
         return s[key]["mean"] if s[key] else float("nan")
     off = (1 - move_share) * mean("off_ms_still") + move_share * mean("off_ms_moved")
     on = (1 - move_share) * mean("on_ms_still") + move_share * mean("on_ms_moved")
+    move_only = move_share * mean("off_ms_move_only")
     return {"move_share": move_share, "off_ms": off, "on_ms": on, "saving_share": 1 - on / off,
-            "expected_ms_per_sim_s": -(1 - on / off) * LIVE_MS_PER_SIM_S}
+            "expected_ms_per_sim_s": -(1 - on / off) * LIVE_MS_PER_SIM_S,
+            "off_move_share_of_apply": move_only / off}  # plan 5.27's 5 % rule reads the move's own time
 
 
 def _q(v) -> dict:

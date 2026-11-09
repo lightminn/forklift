@@ -3,8 +3,10 @@ FORKLIFT_PERF_DUMP set) and its completeness marker; the replay accepts a whole 
 missing last call or a missing marker (Codex plan 5.27 P2-1: a call that changes no state passes the continuity
 check, so only the counts tell a missing one)."""
 
+import gzip
 import importlib.util
 import json
+import pickle
 import os
 import subprocess
 import sys
@@ -85,7 +87,10 @@ def test_a_whole_stream_replays_equal_in_every_mode(whole, tmp_path, monkeypatch
     assert (r["replayed"], r["invalid"], r["mismatches"]) == (6, None, 0)
     cover = r["coverage"]
     assert cover["startup"] == 1 and cover["move"] == 1 and cover["extra_support"] == 1
+    assert cover.get("retained", 0) + cover.get("no_retained", 0) == 6
     assert set(r["time_s"]) == {"off", *(f"on_{m}" for m in MODES)}
+    assert all(r["time_s"][arm]["move_only"] > 0 for arm in r["time_s"])  # the move's own time, per arm
+    assert all(f["problem"] is None for f in j["folders"])
 
 
 def test_a_prefix_a_gap_a_lost_last_call_or_no_marker_is_refused(whole, tmp_path, monkeypatch):
@@ -102,6 +107,20 @@ def test_a_prefix_a_gap_a_lost_last_call_or_no_marker_is_refused(whole, tmp_path
         assert not j["valid"]
         reason = j["receivers"][0]["invalid"]
         assert ("seq 3 where 2 was due" in reason) if name == "gap" else ("5 replayed" in reason)
+    absent = tmp_path / "absent"  # a session that never wrote (Codex 1c-0 review P2)
+    out = tmp_path / "out.json"
+    monkeypatch.setattr(sys, "argv", ["g3_1c_stream.py", str(whole), str(absent), "--json", str(out), "--modes", "numpy"])
+    assert tool.main() == 1
+    assert json.loads(out.read_text())["folders"][1]["problem"] == "no shadow_apply records"
+    sampled = tmp_path / "sampled"  # an unstreamed record beside a whole stream: not a stream recording
+    shutil.copytree(whole, sampled)
+    with gzip.open(files[0], "rb") as f:
+        rec = pickle.load(f)
+    rec["stream"] = None
+    with gzip.open(sampled / "shadow_apply" / "1_9999999.pkl.gz", "wb") as f:
+        pickle.dump(rec, f)
+    j = run(sampled, tmp_path, monkeypatch)
+    assert not j["valid"] and j["unstreamed_records"] == 1
     bare = tmp_path / "bare"
     shutil.copytree(whole, bare)
     for marker in bare.glob("stream_totals_*.json"):
@@ -114,6 +133,12 @@ def test_the_replay_leaves_the_switch_and_the_mode_as_they_were(whole, tmp_path,
     from forklift_core.control import shadow_memory as sm
 
     mode = kernels.mode()
+    marker = lambda self, *a, **k: None  # noqa: E731 -- a hook someone set after the tool was imported
+    monkeypatch.setattr(sm.ShadowMemory, "_move", marker)
+    hooks = {name: sm.ShadowMemory.__dict__[name] for name in ("_apply_arrays", "_move_arrays", "_move",
+                                                                 "_retained_stamps")}
+    batched = sm._retained_stamps_batched
     run(whole, tmp_path, monkeypatch)
     assert sm.SHADOW_KERNEL is False and kernels.mode() == mode
-    assert sm.ShadowMemory._apply_arrays is tool._ARRAYS and sm.ShadowMemory._move_arrays is tool._MOVE_ARRAYS
+    assert {name: sm.ShadowMemory.__dict__[name] for name in hooks} == hooks  # what was there before the run
+    assert sm._retained_stamps_batched is batched

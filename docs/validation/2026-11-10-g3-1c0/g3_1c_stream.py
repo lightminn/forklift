@@ -13,8 +13,12 @@ dump off) with its completeness marker (``stream_totals_<pid>.json``). For every
 3. the candidates: the same start, the switch on, in each kernel mode asked; every call equals step 2 (results,
    receivers and the memory's key list with its element types).
 
-Files are read one at a time (a call's arrays are about 1.6 MB). Reported: per receiver the counts above, the
-continuous replay's total and per-kind time per arm, and the coverage of the cases plan 5.27 lists.
+Files are read one at a time (a call's arrays are about 1.6 MB). Every folder given must hold a marker and streamed
+records, and none but streamed ones (a stream recording dumps nothing else). Reported: per receiver the counts above,
+the continuous replay's total and per-kind time per arm, the memory move's own time per arm (``_move`` /
+``_move_arrays``, so its share of apply can be judged, plan 5.27), and the coverage of the cases plan 5.27 lists, read
+off the branches the reference replay actually took (the candidates handed to the RETAINED judgement, which of its
+paths ran, its result).
 
     PYTHONPATH=SNAP/src python g3_1c_stream.py DUMP_DIR [DUMP_DIR ...] --json out.json [--modes numba numpy]
 """
@@ -32,13 +36,13 @@ import time
 from collections import Counter, defaultdict
 from pathlib import Path
 
-os.environ.pop("FORKLIFT_PERF_DUMP", None)  # replaying must not dump again
+if "forklift_core.perf" not in sys.modules:
+    os.environ.pop("FORKLIFT_PERF_DUMP", None)  # replaying must not dump again (read when perf is imported)
 import numpy as np  # noqa: E402
 
 from forklift_core import kernels  # noqa: E402
 from forklift_core.control import shadow_memory as sm  # noqa: E402
 from forklift_core.control.drive_permission import RETAINED  # noqa: E402
-from forklift_core.perception.obstacle_grid import FREE, UNKNOWN  # noqa: E402
 from forklift_core.perf import differences  # noqa: E402
 
 APPLY = sm.ShadowMemory.apply
@@ -47,6 +51,9 @@ while hasattr(APPLY, "__wrapped__"):
 _ARRAYS = sm.ShadowMemory._apply_arrays
 _MOVE_ARRAYS = sm.ShadowMemory._move_arrays
 RAN = Counter()
+SEEN: dict = {}  # what the reference replay's RETAINED judgement got and gave, and the move's time
+HOOKS = (("ShadowMemory", "_apply_arrays"), ("ShadowMemory", "_move_arrays"), ("ShadowMemory", "_move"),
+         ("ShadowMemory", "_retained_stamps"), ("module", "_retained_stamps_batched"))
 
 
 def _count(name, real):
@@ -54,6 +61,70 @@ def _count(name, real):
         RAN[name] += 1
         return real(self, *a, **k)
     return inner
+
+
+def _timed_move(real):
+    def inner(self, *a, **k):
+        if SEEN.get("in_move"):  # _move_arrays falling back to _move: counted once, by the outer call
+            return real(self, *a, **k)
+        SEEN["in_move"] = True
+        start = time.perf_counter()
+        try:
+            return real(self, *a, **k)
+        finally:
+            SEEN["move_s"] = SEEN.get("move_s", 0.0) + time.perf_counter() - start
+            SEEN["in_move"] = False
+    return inner
+
+
+def _seen_retained(path, real):
+    def inner(cand, res, fresh, stamps, whole, nx, ny):
+        out = real(cand, res, fresh, stamps, whole, nx, ny)
+        SEEN.update(path=path, cand=dict(cand), stamp=dict(out), res=res, shape=(nx, ny))
+        return out
+    return inner
+
+
+def install() -> dict:
+    """The counting, timing and inspecting hooks; returns what was there (the class's own entries, a staticmethod
+    object included), for ``uninstall``."""
+    cls = sm.ShadowMemory
+    saved = {h: (cls.__dict__[h[1]] if h[0] == "ShadowMemory" else getattr(sm, h[1])) for h in HOOKS}
+    cls._apply_arrays = _count("arrays", cls.__dict__["_apply_arrays"])
+    cls._move_arrays = _timed_move(_count("move_arrays", cls.__dict__["_move_arrays"]))
+    cls._move = _timed_move(cls.__dict__["_move"])
+    cls._retained_stamps = staticmethod(_seen_retained("reference", cls.__dict__["_retained_stamps"].__func__))
+    sm._retained_stamps_batched = _seen_retained("batched", saved[("module", "_retained_stamps_batched")])
+    return saved
+
+
+def uninstall(saved: dict) -> None:
+    for (owner, name), value in saved.items():
+        setattr(sm.ShadowMemory if owner == "ShadowMemory" else sm, name, value)
+
+
+def branches() -> list[str]:
+    """Coverage from the reference replay's RETAINED judgement (Codex 1c-0 review P3: the cases as taken, not
+    guessed from the inputs): the reference path (a zero or NaN, depth support included), no candidates, an empty
+    or all-inf result, and a candidate whose reach crosses the grid's edge."""
+    out = []
+    if "cand" not in SEEN:
+        return out
+    cand, stamp, res, (nx, ny) = SEEN["cand"], SEEN["stamp"], SEEN["res"], SEEN["shape"]
+    if SEEN["path"] == "reference":
+        out.append("zero_or_nan")
+    if not cand:
+        out.append("no_candidates")
+    elif not stamp:
+        out.append("empty_stamp")
+    elif not any(np.isfinite(v) for v in stamp.values()):
+        out.append("all_inf_stamp")
+    for (a, b), r in cand.items():
+        k = int(np.ceil(r / res)) + 1
+        if a - k < 0 or b - k < 0 or a + k >= nx or b + k >= ny:
+            out.append("candidate_reach_off_grid")
+            break
+    return out
 
 
 def load(path: Path) -> dict:
@@ -89,9 +160,6 @@ def kinds(record, previous) -> list[str]:
         out.append("move")
     if extra:
         out.append("extra_support")
-    fresh = snap.state == FREE
-    if np.any(fresh & ((snap.free_stamp == 0.0) | np.isnan(snap.free_stamp))):
-        out.append("zero_or_nan")
     out.append("retained" if (result.state == RETAINED).any() else "no_retained")
     if previous is not None:
         p_snap, p_foot = previous
@@ -99,13 +167,6 @@ def kinds(record, previous) -> list[str]:
             out.append("origin_shift")
         if foot != p_foot:
             out.append("footprint_change")
-    after = record["after"][0]
-    nx, ny = snap.state.shape
-    oi, oj = int(round(snap.origin_x_m / snap.resolution_m)), int(round(snap.origin_y_m / snap.resolution_m))
-    near_edge = [(a - oi, b - oj) for a, b in after.memory if 0 <= a - oi < nx and 0 <= b - oj < ny
-                 and snap.state[a - oi, b - oj] == UNKNOWN and min(a - oi, b - oj, nx - 1 - (a - oi), ny - 1 - (b - oj)) < 3]
-    if near_edge:
-        out.append("candidate_near_edge")
     return out
 
 
@@ -139,15 +200,20 @@ class Stream:
         kind = kinds(record, self.previous)
         self.cover.update(kind)
         bucket = "move" if "move" in kind else "extra_support" if "extra_support" in kind else "still"
+        SEEN.clear()
         out, dt = call(self.ref, record, self.modes[0], False)
+        self.cover.update(branches())
         self.time["off"][bucket] += dt
+        self.time["off"]["move_only"] += SEEN.get("move_s", 0.0)
         bad = same((self.ref, out), (record["after"][0], record["result"]))
         if bad:
             self.mismatch.append({"seq": seq, "arm": "reference", "diff": bad[:3]})
         for m in self.modes:
             arrays = RAN["arrays"]
+            SEEN.clear()
             c_out, c_dt = call(self.cand[m], record, m, True)
             self.time[f"on_{m}"][bucket] += c_dt
+            self.time[f"on_{m}"]["move_only"] += SEEN.get("move_s", 0.0)
             if RAN["arrays"] == arrays and self.ref.started and "startup" not in kind:
                 self.cover[f"gate_original_{m}"] += 1
             bad = same((self.ref, out), (self.cand[m], c_out))
@@ -180,7 +246,13 @@ def replay(dirs, modes) -> dict:
             continue
         key = (record["stream"][0], record["stream"][1])
         streams.setdefault(key, Stream(key, modes)).feed(record)
-    out = {"unstreamed_records": unstreamed, "receivers": []}
+    out = {"unstreamed_records": unstreamed, "receivers": [], "folders": []}
+    for d in dirs:  # every folder given counts (Codex 1c-0 review P2: a missing session must not pass unseen)
+        markers = list(Path(d).glob("stream_totals_*.json"))
+        records = any((Path(d) / "shadow_apply").glob("*.pkl.gz"))
+        out["folders"].append({"dir": str(d), "markers": len(markers), "records": bool(records),
+                               "problem": None if markers and records else
+                               "no completeness marker" if records else "no shadow_apply records"})
     for key, s in streams.items():
         t = totals.get(key)
         complete = None
@@ -196,7 +268,8 @@ def replay(dirs, modes) -> dict:
             "coverage": dict(s.cover),
             "time_s": {arm: {k: round(v, 6) for k, v in kinds_.items()} for arm, kinds_ in s.time.items()}})
     out["missing_receivers"] = [list(k) for k in totals if k not in streams]
-    out["valid"] = bool(streams) and not out["missing_receivers"] and all(
+    out["valid"] = bool(streams) and not out["missing_receivers"] and not unstreamed and all(
+        f["problem"] is None for f in out["folders"]) and all(
         r["invalid"] is None and r["mismatches"] == 0 for r in out["receivers"])
     return out
 
@@ -210,12 +283,11 @@ def main() -> int:
     ap.add_argument("--source-commit", default=None)
     a = ap.parse_args()
     saved = (sm.SHADOW_KERNEL, kernels.mode())
-    sm.ShadowMemory._apply_arrays = _count("arrays", _ARRAYS)
-    sm.ShadowMemory._move_arrays = _count("move_arrays", _MOVE_ARRAYS)
+    hooks = install()  # what is there now, not at import (Codex 1c-0 review P3)
     try:
         out = replay(a.dirs, a.modes)
     finally:
-        sm.ShadowMemory._apply_arrays, sm.ShadowMemory._move_arrays = _ARRAYS, _MOVE_ARRAYS
+        uninstall(hooks)
         sm.SHADOW_KERNEL = saved[0]
         kernels.set_mode(saved[1])
     import importlib.metadata as md

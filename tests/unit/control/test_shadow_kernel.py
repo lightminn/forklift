@@ -4,6 +4,7 @@ order, key and value types and float bits, call after call -- in both fast kerne
 moves, grid-origin shifts, depth support, signed zeros and non-float times (those take the original path)."""
 
 import copy
+import dataclasses
 import importlib.util
 import math
 import sys
@@ -189,3 +190,51 @@ def test_warm_up_compiles_the_signatures_a_session_uses(monkeypatch):
     used = drive(1, "numba", monkeypatch, steps=12)
     assert used["move"] >= 1
     assert (len(shadow_numba.retained.signatures), len(shadow_numba.move_values.signatures)) == before
+
+
+@pytest.mark.parametrize("mode", FAST)
+@pytest.mark.parametrize("dtype", [np.int64, np.longdouble])
+def test_a_free_time_is_stored_as_the_original_float(mode, dtype, monkeypatch):
+    """Codex 1c-0 review P2: the original stores float(free_stamp[a, b]); an integer or long-double stamp array
+    must not leave its own scalar type in the memory."""
+    rng = np.random.default_rng(13)
+    off, on = ShadowMemory(0.15, ERROR), ShadowMemory(0.15, ERROR)
+    used = {"apply": 0}
+    real = ShadowMemory._apply_arrays
+
+    def counted(self, *a, **k):
+        used["apply"] += 1
+        return real(self, *a, **k)
+    monkeypatch.setattr(ShadowMemory, "_apply_arrays", counted)
+    for k in range(4):
+        snap = snapshot(rng, float(k + 1), (0.0, 0.0, 0.0), (-4.0, -4.0))
+        snap = dataclasses.replace(snap, free_stamp=np.where(snap.state == FREE, k + 1, 0).astype(dtype))
+        a = (off, call(off, mode, False, snap, (0.0, 0.01 * k, 0.0), BODY, None, monkeypatch))
+        b = (on, call(on, mode, True, snap, (0.0, 0.01 * k, 0.0), BODY, None, monkeypatch))
+        assert same(a, b) == []
+    assert all(type(v[0]) is float for v in on.memory.values())
+    assert used == {"apply": 0}  # a stamp array that is not float64 keeps the original path
+
+
+@pytest.mark.parametrize("mode", FAST)
+def test_a_non_finite_radius_behaves_like_the_original(mode, monkeypatch):
+    """Codex 1c-0 review P3: with a NaN among the candidates' radii the batched code's max() decides; the array path
+    hands such a call to it rather than to the kernel."""
+    rng = np.random.default_rng(17)
+    off, on = ShadowMemory(0.15, ERROR), ShadowMemory(0.15, ERROR)
+    snap = snapshot(rng, 0.1, (0.0, 0.0, 0.0), (-4.0, -4.0))
+    for mem in (off, on):
+        call(mem, mode, False, snap, (0.0, 0.0, 0.0), BODY, None, monkeypatch)
+        keys = list(mem.memory)
+        mem.memory[keys[len(keys) // 2]] = (0.05, "free", float("nan"))
+    later = snapshot(rng, 0.2, (0.0, 0.0, 0.0), (-4.0, -4.0), free_share=0.6)
+    results = []
+    for mem, on_ in ((off, False), (on, True)):
+        try:
+            results.append((mem, call(mem, mode, on_, later, (0.0, 0.0, 0.0), BODY, None, monkeypatch)))
+        except ValueError as e:
+            results.append(("raised", str(e)))
+    if results[0][0] == "raised":
+        assert results[1] == results[0]
+    else:
+        assert same(results[0], results[1]) == []

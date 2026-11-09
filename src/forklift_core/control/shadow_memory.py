@@ -228,6 +228,8 @@ class ShadowMemory:
                    *e.yaw_rad)
         if any(type(v) is not float for v in scalars):
             return False
+        if snapshot.free_stamp.dtype != np.float64:  # its values are stored and handed to the kernels as float64
+            return False
         return all(type(v[0]) is float and type(v[2]) is float for v in self.memory.values())
 
     def _move_arrays(self, correction, res: float) -> None:
@@ -349,7 +351,7 @@ class ShadowMemory:
             fa, fb = ba[sel], bb[sel]
             margin = self.rho_margin_m
             keep.update(zip(zip((fa + oi).tolist(), (fb + oj).tolist()),
-                            ((t, "free", r + margin) for t, r in zip(snapshot.free_stamp[fa, fb].tolist(),
+                            ((float(t), "free", r + margin) for t, r in zip(snapshot.free_stamp[fa, fb].tolist(),
                                                                        rho(fa, fb)))))
         self.memory = keep
         # Candidates: remembered UNKNOWN cells whose error stays in the table over the next evidence_max_age_s.
@@ -390,7 +392,8 @@ class ShadowMemory:
         zero_or_nan = bool(np.any(fresh & ((stamps_fresh == 0.0) | np.isnan(stamps_fresh))))
         if not len(ca):
             return snapshot
-        if kernels.mode() == "numba" and not zero_or_nan:
+        # A non-finite radius: the batched code's max() over the candidates decides (Codex 1c-0 review P3).
+        if kernels.mode() == "numba" and not zero_or_nan and bool(np.isfinite(radius).all()):
             from forklift_core.control import shadow_numba
 
             whole_mask = np.zeros((nx, ny), dtype=bool)
