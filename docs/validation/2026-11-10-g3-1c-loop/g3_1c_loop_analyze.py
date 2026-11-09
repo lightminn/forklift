@@ -47,6 +47,9 @@ class Session(base.Session):
 
 def list_problems(entries: list[dict]) -> list[str]:
     """Pairs 1..3 or 1..6, each one shadow-off and one shadow-on session, one grid value across the list."""
+    bad = [e.get("name") for e in entries if e["env"].get("FORKLIFT_SHADOW_KERNEL") not in ("0", "1")]
+    if bad:
+        return [f"shadow switch not 0 or 1 in {bad}"]
     out = base.list_problems([{"env": {"PAIR": e["env"]["PAIR"],
                                        "FORKLIFT_GRID_CLEAR_KERNEL": e["env"].get("FORKLIFT_SHADOW_KERNEL")}}
                               for e in entries])

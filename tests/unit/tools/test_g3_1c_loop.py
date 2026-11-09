@@ -34,10 +34,15 @@ def test_each_list_holds_three_balanced_pairs_with_one_grid_value(grid):
         lists.entries("/snap", "/out", "2")
 
 
-def test_a_list_mixing_grid_values_is_refused():
+def test_a_list_mixing_grid_values_or_with_an_odd_shadow_value_is_refused():
     e = lists.entries("/snap", "/out", "1")
     e[0]["env"]["FORKLIFT_GRID_CLEAR_KERNEL"] = "0"
     assert any("grid switch values" in p for p in tool.list_problems(e))
+    e = lists.entries("/snap", "/out", "1")
+    e[0]["env"]["FORKLIFT_SHADOW_KERNEL"] = "2"
+    assert tool.list_problems(e)
+    del e[1]["env"]["FORKLIFT_SHADOW_KERNEL"]
+    assert tool.list_problems(e)
 
 
 def r(pair, arm, share, rate):
