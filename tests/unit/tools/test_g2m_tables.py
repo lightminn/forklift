@@ -39,3 +39,20 @@ def test_periodic_finds_the_period_with_a_free_phase_per_session():
     r = tables.periodic(starts)
     assert abs(r["median_spacing_s"] - P) < 1e-6 and abs(r["period_s"] - P) < 0.002
     assert all(s["coherence"] > 0.99 for s in r["sessions"].values())
+
+
+def test_timers_take_whole_windows_and_only_auto_ones(monkeypatch):
+    def cmd(mono, mode):
+        return {"pacing_ok": True, "speed_mps": 0.1, "mono": mono, "mode": mode}
+
+    def line(mono, tick, s):
+        return {"status": True, "mono": mono, "tick_t": tick, "timers": {"x": [s, 1]}}
+    log = [line(1.0, 0.1, 9.0),  # the first line opens no window: its timers are before any window here
+           cmd(1.5, "PAUSED"), line(2.0, 1.1, 1.0),  # a window with a non-AUTO command
+           cmd(2.5, "AUTO"), line(3.0, 2.1, 2.0),  # AUTO
+           cmd(3.5, "AUTO"), line(4.0, 3.1, 3.0)]  # AUTO
+    monkeypatch.setattr(tables, "read_live_log", lambda run: log)
+    t, span = tables.timers(Path("."))
+    assert (t["x"], round(span, 6)) == ([5.0, 2], 2.0)
+    t, span = tables.timers(Path("."), auto_only=False)
+    assert (t["x"], round(span, 6)) == ([6.0, 3], 3.0)

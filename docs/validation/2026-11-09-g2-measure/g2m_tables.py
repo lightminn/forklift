@@ -8,7 +8,8 @@ verdicts are g2m_analyze.py's; these are the readings the review asked for (Code
   node-wide one);
 - phases: the INSTR on - off difference of each AUTO phase (ms/sim s) and of each region's per-call time, from the
   status-line timers both arms keep (the on arm's ``name|parent`` keys folded onto their name);
-- refresh: the on arm's subtree under the obstacle scan's refresh (by_parent), mean over the on sessions.
+- refresh: the on arm's subtree under the obstacle scan's refresh (by_parent), mean over the on sessions -- in the AUTO
+  windows (the registered population) and, apart, over the whole session; the per-call comparison is AUTO too.
 
     PYTHONPATH=SNAP/src python g2m_tables.py ANALYSIS.json RUN_DIR [RUN_DIR ...] [--set H|F]
 """
@@ -41,18 +42,29 @@ def find(run_dirs, name):
     return None
 
 
-def timers(run: Path) -> tuple[dict, float]:
-    """{name: [wall s, calls]} summed over the status lines, and the status lines' sim span (s)."""
+def timers(run: Path, auto_only: bool = True) -> tuple[dict, float]:
+    """{name: [wall s, calls]} and the sim s they cover, from the status-line windows -- the timers a line carries are
+    those since the line before, so a window is (previous line, line] and the first line opens none (Codex round 2
+    P2-3: the old sum took the first line's timers over the last-minus-first span). ``auto_only``: only the windows
+    whose every command line is AUTO, g2m_analyze.py's ``auto_windows`` (the registered M3 population)."""
+    log = read_live_log(run)
+    cmd = [r for r in log if "pacing_ok" in r and "speed_mps" in r and r.get("mono") is not None]
+    lines = [r for r in log if r.get("status") and isinstance(r.get("timers"), dict) and r.get("mono") is not None
+             and r.get("tick_t") is not None]
+    cmd_mono = np.array([r["mono"] for r in cmd])
+    cmd_auto = np.array([r.get("mode") == "AUTO" for r in cmd])
     out = defaultdict(lambda: [0.0, 0])
-    ticks = []
-    for r in read_live_log(run):
-        if r.get("status") and isinstance(r.get("timers"), dict):
-            ticks.append(r.get("tick_t"))
-            for k, v in r["timers"].items():
-                out[k][0] += v[0]
-                out[k][1] += v[1]
-    ticks = [t for t in ticks if t is not None]
-    return dict(out), (max(ticks) - min(ticks)) if ticks else float("nan")
+    span = 0.0
+    for a, b in zip(lines, lines[1:]):
+        if auto_only:
+            sel = (cmd_mono > a["mono"]) & (cmd_mono <= b["mono"])
+            if not (sel.any() and cmd_auto[sel].all()):
+                continue
+        span += b["tick_t"] - a["tick_t"]
+        for k, v in b["timers"].items():
+            out[k][0] += v[0]
+            out[k][1] += v[1]
+    return dict(out), span if span > 0 else float("nan")
 
 
 def folded(t: dict) -> dict:
@@ -167,13 +179,15 @@ def main() -> int:
     off = [n for n, r in judged.items() if r["instr"] == "off"]
     sess = {n: find(a.runs, n) for n in rows}
     raw = {n: timers(sess[n] / "live" / "epoch_1" / "run") for n in judged}
+    raw_all = {n: timers(sess[n] / "live" / "epoch_1" / "run", auto_only=False) for n in judged}
     tm = {n: (folded(t), s) for n, (t, s) in raw.items()}
     out = {"set": a.set, "on": on, "off": off,
            "gaps": {n: gaps(r) for n, r in rows.items()},
            "periodic_long_world_steps": periodic({n: long_steps(sess[n]) for n in rows}),
            "phases_on_minus_off": phases(judged, on, off) if on and off else None,
            "per_call_on_vs_off": per_call(tm, on, off, REGIONS) if on and off else None,
-           "refresh_subtree_on": subtree(raw, on) if on else None}
+           "refresh_subtree_on_auto": subtree(raw, on) if on else None,
+           "refresh_subtree_on_whole_session": subtree(raw_all, on) if on else None}
     print(json.dumps(out, indent=1))
     return 0
 
