@@ -160,7 +160,8 @@ def analyse(out: Path, arm: str, results: dict) -> dict:
     catchup = 6 if arm in ("A6", "A6P") else 0
     if catchup:
         idx = np.flatnonzero(K)
-        starts = replay_starts(w[idx], np.nan_to_num(eps[idx]), catchup)
+        # the replay applies each start's own overshoot; eps here is the next start's (M3's interval split) -- shifted
+        starts = replay_starts(w[idx], np.nan_to_num(np.r_[np.nan, eps[:-1]][idx]), catchup)
         early_rep = np.zeros(len(w), bool)
         early_rep[idx[1:]] = np.diff(starts) < h - 1e-9
         r["M4_fixed_w_replay"] = split_means(w, kinds, early_rep, K)

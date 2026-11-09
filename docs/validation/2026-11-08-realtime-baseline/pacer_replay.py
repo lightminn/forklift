@@ -44,7 +44,7 @@ def load(trace_root: Path, run: dict):
     w = work(data)
     S, q, d = data[:, C["S"]], data[:, C["q"]], data[:, C["d"]]
     interval = np.r_[S[1:] - S[:-1], np.nan]
-    eps = np.r_[S[1:] - (q[1:] + d[1:]), np.nan]
+    eps = S - (q + d)  # the start's own overshoot past its wait (Codex G3-0 review P2: S[i+1]-(q+d)[i+1] was one step late)
     K = (sim >= t0) & (sim_next <= t1) & np.isfinite(w) & np.isfinite(interval)
     nx = data[np.r_[np.arange(1, len(data)), len(data) - 1]]
     parts = {"to_step_end": data[:, C["step_end"]] - S,
