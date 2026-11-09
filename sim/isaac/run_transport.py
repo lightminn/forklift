@@ -11109,14 +11109,6 @@ def drive(S, isaac) -> None:
                 late_ = far_live.close()
                 if late_:
                     state.setdefault("far_late_calls", []).extend(late_)
-            if capture_dumper[0] is not None:
-                # G2-1a: the capture writer ends with the run, within its own deadline; what it has not written is
-                # marked (its record goes to result.json, written after this)
-                try:
-                    capture_dumper[0].close(30.0)
-                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
-                    state["capture_dump_close_error"] = repr(exc_)
-                state["capture_dump"] = capture_dumper[0].record()
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)
@@ -11124,6 +11116,15 @@ def drive(S, isaac) -> None:
                     state["live_close_error"] = repr(exc_)
                 if live.trace is not None:  # D12a: the rows kept, the steps dropped, or why the write failed
                     state["tick_trace"] = live.trace_saved
+            if capture_dumper[0] is not None:
+                # G2-1a: the capture writer ends with the run, after the live session's own close (which shares one
+                # budget with its settles), within its own deadline; what it has not written is marked (its record
+                # goes to result.json, written after this)
+                try:
+                    capture_dumper[0].close(30.0)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["capture_dump_close_error"] = repr(exc_)
+                state["capture_dump"] = capture_dumper[0].record()
             # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
             # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
             # replay compares every port call).

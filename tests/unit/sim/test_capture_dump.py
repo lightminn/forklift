@@ -1,7 +1,8 @@
 """Real-time plan G2-1a: the capture dumper writes on a thread of its own, in one order for one path, and says what it
 did: a record open writes in place; a handed-over capture is written later from copies; a refusal waits for the queue
 and writes in place after it; a close past its deadline marks what was not written; a failure is kept, never raised
-(Codex G2-1a review round 1: P1 records, P2-2 its own writer, P2-3 close, P2-4 order)."""
+(Codex G2-1a review round 1: P1 records, P2-2 its own writer, P2-3 close, P2-4 order; round 2: a full queue drops,
+never waits nor writes past it)."""
 
 import sys
 import threading
@@ -51,21 +52,33 @@ def test_handed_over_captures_are_written_later_from_copies():
     assert d.close(5.0) is True
     assert files.got == [(1, 0, 1.5)]
     rec = d.record()
-    assert (rec["closed"], rec["refused"], rec["errors"], rec["unsettled"]) == (True, 0, 0, 0)
+    assert (rec["closed"], rec["dropped_full"], rec["errors"], rec["unsettled"]) == (True, 0, 0, 0)
     assert rec["entries"] == [{"attempt": 1, "mode": "async", "done": True}]
 
 
-def test_a_refusal_waits_for_the_queue_so_one_path_keeps_its_order():
+def test_a_full_queue_drops_the_new_capture_and_never_writes_past_it():
     gate = threading.Event()
     files = Files(gate)
-    d = CaptureDumper(files, max_pending=1, settle_s=5.0)
-    a = _arrays(1)
-    assert d.dump(1, *a) == "async"  # an earlier mission's attempt 1, still waiting on the disk
-    threading.Timer(0.2, gate.set).start()
-    assert d.dump(1, *_arrays(2)) == "sync_refused"  # the next mission's attempt 1: same path
-    assert files.got == [(1, 1, 2.5), (1, 2, 3.5)]  # the old one first, the new one last: the file is the new one
-    assert "order_unsafe" not in d.entries[1]
+    d = CaptureDumper(files, max_pending=1)
+    assert d.dump(1, *_arrays(1)) == "async"  # an earlier mission's attempt 1, still waiting on the disk
+    assert d.dump(1, *_arrays(2)) == "dropped_full"  # same path: not written here, so never over the old one
+    assert files.got == []  # nothing waited for, nothing written on the caller's thread
+    gate.set()
     d.close(5.0)
+    assert files.got == [(1, 1, 2.5)]
+    rec = d.record()
+    assert (rec["dropped_full"], rec["unsettled"], rec["errors"]) == (1, 0, 0)
+
+
+def test_one_path_keeps_its_order_through_the_queue():
+    gate = threading.Event()
+    files = Files(gate)
+    d = CaptureDumper(files)
+    d.dump(1, *_arrays(1))
+    d.dump(1, *_arrays(2))
+    gate.set()
+    d.close(5.0)
+    assert files.got == [(1, 1, 2.5), (1, 2, 3.5)]  # the newer capture's files last
 
 
 def test_a_close_past_its_deadline_marks_what_was_not_written():
