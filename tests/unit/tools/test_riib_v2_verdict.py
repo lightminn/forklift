@@ -92,3 +92,101 @@ def test_expected_missions_must_have_their_files_and_contact_field(tmp_path):
     assert "undecidable" in out and out["undecidable"]["records_without_contacts"] == ["m1"]
     sess["records"] = {"m1": {"forbidden_pocket_contacts": []}}
     assert V.safety(sess)["pass"] is True
+
+
+def _confirm_ok():
+    w = {"phase_reached": True, "mission_id": "m1", "start_sim_s": 19.2, "end_sim_s": 24.2, "end_reason": "sim_time",
+         "mode_at_end": "STOPPED", "mission_at_end": {"mission_id": "m1", "status": "paused", "phase": "approach",
+                                                      "pallet_id": "P-4", "destination_id": "D-1"}}
+    rows = [{"pallet_id": "P-4", "destination_id": "D-1", "mission_id": "m1"},
+            {"pallet_id": "P-5", "destination_id": "D-2", "mission_id": "m2"}]
+    return {"lc": True, "safe": True, "rows": rows, "run": "x", "probe": {"missions_run": [{"stop_wait": w}]},
+            "args": {"ARM": "B", "SEED": "0"}, "slam_choice": [MAP]}
+
+
+MAP = "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+
+
+TG = (("P-4", "D-1"), ("P-5", "D-2"))
+
+
+def test_a_confirmation_session_needs_lifecycle_4_safety_the_cap_and_a_different_m2_target(monkeypatch):
+    # docs/plans/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 4
+    monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": s["lc"]})
+    monkeypatch.setattr(V, "safety", lambda s: {"pass": s["safe"]})
+    monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
+    assert V.confirm_session(_confirm_ok(), TG, MAP)["pass"] is True
+    assert confirm_session_({**_confirm_ok(), "lc": False}, TG)["pass"] is False
+    assert confirm_session_({**_confirm_ok(), "safe": False}, TG)["pass"] is False
+    same = _confirm_ok()
+    same["rows"][1] = {"pallet_id": "P-4", "destination_id": "D-1", "mission_id": "m2"}
+    assert confirm_session_(same, TG)["pass"] is False
+    short = _confirm_ok()
+    short["rows"] = short["rows"][:1]
+    assert confirm_session_(short, TG)["pass"] is False
+    monkeypatch.setattr(V, "c2_steps", lambda s: ({7}, []))
+    monkeypatch.setattr(V, "c2_gaps", lambda s, ks: [{"step": 7, "gap_s": 2.5, "over_cap": True}])
+    assert confirm_session_(_confirm_ok(), TG)["pass"] is False
+
+
+@pytest.mark.parametrize("change", [
+    ("mission_at_end", "phase", "insert"),  # the STOP held the mission in another phase
+    ("mission_at_end", "pallet_id", "P-5"),
+    ("mission_at_end", "mission_id", "m2"),
+    (None, "mode_at_end", "AUTO"),
+    (None, "end_reason", "timeout"),
+    (None, "end_sim_s", 23.0),  # the registered 5 s wait not met
+    (None, "mission_id", "m2"),
+])
+def test_the_stop_must_hold_m1_in_approach_for_the_registered_wait(monkeypatch, change):
+    monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": True})
+    monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
+    monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
+    sess = _confirm_ok()
+    w = sess["probe"]["missions_run"][0]["stop_wait"]
+    where, key, value = change
+    (w[where] if where else w)[key] = value
+    out = confirm_session_(sess, TG)
+    assert out["pass"] is False and out["stop"]["pass"] is False
+
+
+def confirm_session_(sess, tg):
+    return V.confirm_session(sess, tg, MAP)
+
+
+def test_a_session_on_another_map_choice_is_undecidable(monkeypatch):
+    monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": True})
+    monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
+    monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
+    for choices in ([], ["mapping (fallback: no registry row)"], [MAP, "mapping (fallback: x)"]):
+        out = V.confirm_session({**_confirm_ok(), "slam_choice": choices}, TG, MAP)
+        assert out["pass"] is False and out["undecidable"] == "slam_choice"
+
+
+def _r(arm, seed, ok=True):
+    return {"pass": ok, "arm": arm, "seed": seed}
+
+
+def test_the_confirmation_passes_on_both_judged_sessions_and_sends_a_failed_control_to_the_lead():
+    s = {"l4c_s0_B": _r("B", "0"), "l4c_s1_B": _r("B", "1"), "l4c_s0_A": _r("A", "0"), "l4c_s1_A": _r("A", "1", False)}
+    plan = {"judged": ["l4c_s0_B", "l4c_s1_B"], "controls": ["l4c_s0_A", "l4c_s1_A"]}
+    out = V.confirm_verdict(plan, s)
+    assert out["judged_pass"] is True and out["failed_controls"] == ["l4c_s1_A"]
+    assert out["outcome"] == "to_lead"  # an A failure is for the lead to explain before any promotion
+    s["l4c_s1_A"]["pass"] = True
+    assert V.confirm_verdict(plan, s)["outcome"] == "pass"
+    s["l4c_s0_B"]["pass"] = False
+    assert V.confirm_verdict(plan, s)["outcome"] == "not_passed"
+    assert V.confirm_verdict({"judged": [], "controls": []}, {})["outcome"] == "not_passed"
+
+
+@pytest.mark.parametrize("plan", [
+    {"judged": ["l4c_s0_B"], "controls": []},  # a judged seed and the controls missing
+    {"judged": ["l4c_s0_B", "l4c_s0_B"], "controls": ["l4c_s0_A", "l4c_s1_A"]},  # a duplicate
+    {"judged": ["l4c_s0_B", "l4c_s1_B"], "controls": ["l4c_s0_A", "l4c_s0_B"]},  # in both groups
+    {"judged": ["l4c_s0_B", "l4c_s0_A"], "controls": ["l4c_s1_B", "l4c_s1_A"]},  # arms swapped
+])
+def test_the_confirmation_needs_the_registered_composition(plan):
+    s = {"l4c_s0_B": _r("B", "0"), "l4c_s1_B": _r("B", "1"), "l4c_s0_A": _r("A", "0"), "l4c_s1_A": _r("A", "1")}
+    out = V.confirm_verdict(plan, s)
+    assert out["outcome"] == "not_passed" and out["composition_ok"] is False

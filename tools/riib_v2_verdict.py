@@ -519,12 +519,116 @@ def evaluate(out_dir: Path) -> dict:
                       "longest": [LONG_MUL, LONG_ADD_S], "stall_add": STALL_ADD, "max_dropped_pairs": MAX_DROPPED_PAIRS}}
 
 
+# --- the lifecycle 4 confirmation (docs/plans/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 4) ----------------
+STOP_WAIT_S = 5.0  # the registered --stop-wait-sim-s
+TICK_S = 1.0 / 120.0
+
+
+def stop_valid(sess: dict, m1: tuple) -> dict:
+    """The STOP held m1 (its registered pallet and destination) in approach, STOPPED, for the registered wait: the
+    probe's own record at the wait's end (a mission STOPPED does not change phase, so its phase then is the phase the STOP
+    caught it in)."""
+    runs = (sess.get("probe") or {}).get("missions_run") or []
+    w = (runs[0] if runs else {}).get("stop_wait") or {}
+    end = w.get("mission_at_end") or {}
+    rows = sess.get("rows") or []
+    m1_id = rows[0].get("mission_id") if rows else None
+    waited = (w.get("end_sim_s") - w.get("start_sim_s")) if None not in (w.get("end_sim_s"), w.get("start_sim_s")) \
+        else None
+    c = {"phase_reached": bool(w.get("phase_reached")), "mission_id": w.get("mission_id"), "m1_id": m1_id,
+         "phase_at_end": end.get("phase"), "target_at_end": (end.get("pallet_id"), end.get("destination_id")),
+         "mode_at_end": w.get("mode_at_end"), "end_reason": w.get("end_reason"), "waited_sim_s": waited}
+    c["pass"] = (c["phase_reached"] and m1_id is not None and w.get("mission_id") == m1_id == end.get("mission_id")
+                 and end.get("phase") == "approach" and tuple(c["target_at_end"]) == tuple(m1)
+                 and w.get("mode_at_end") == "STOPPED" and w.get("end_reason") == "sim_time"
+                 and waited is not None and waited >= STOP_WAIT_S - TICK_S)
+    return c
+
+
+def _session_args(sess: dict) -> dict:
+    if "args" in sess:
+        return sess["args"]
+    out = {}
+    try:
+        for line in (sess["dir"] / "args.txt").read_text().splitlines():
+            k, _, v = line.partition("=")
+            out[k] = v
+    except (KeyError, OSError):
+        pass
+    return out
+
+
+def _slam_choices(sess: dict) -> list:
+    if "slam_choice" in sess:
+        return list(sess["slam_choice"])
+    return [e.get("choice") for e in _supervisor(sess) if e.get("event") == "slam_choice"]
+
+
+def confirm_session(sess: dict, targets: tuple, map_choice: str) -> dict:
+    """One confirmation session: lifecycle 4's chain, the STOP holding m1 in approach for the registered wait, m1 and m2
+    on the registered (pallet, destination) pairs (m2 a different pallet), the main batch's safety and completeness, and
+    the C2 cap if a C2 step occurs. ``targets``: ((m1 pallet, destination), (m2 pallet, destination)). A session whose
+    map choice is not the registered registry row (or not recorded) is undecidable and never passes."""
+    args = _session_args(sess)
+    choices = _slam_choices(sess)
+    map_ok = bool(choices) and all(c == map_choice for c in choices)
+    rows = sess.get("rows") or []
+    got = [(r.get("pallet_id"), r.get("destination_id")) for r in rows[:2]]
+    target_ok = (len(got) == 2 and [tuple(t) for t in targets] == got and got[0][0] != got[1][0]
+                 and rows[0].get("mission_id") is not None and rows[0].get("mission_id") != rows[1].get("mission_id"))
+    stop = stop_valid(sess, tuple(targets[0]))
+    lc = lifecycle(sess, 4)
+    sf = safety(sess)
+    ks, unmapped = c2_steps(sess) if sess.get("run") is not None else (set(), [])
+    gaps = c2_gaps(sess, ks) if ks else []
+    cap_ok = not unmapped and all(g["gap_s"] is not None and not g["over_cap"] for g in gaps)
+    out = {"arm": args.get("ARM"), "seed": args.get("SEED"), "slam_choice": choices, "map_ok": map_ok,
+           "lifecycle": lc, "stop": stop, "safety": sf, "targets": got, "target_ok": target_ok,
+           "c2_cap": {"gaps": gaps, "unmapped": unmapped, "pass": cap_ok},
+           "pass": map_ok and bool(lc.get("pass")) and stop["pass"] and sf.get("pass") is True and target_ok and cap_ok}
+    if not map_ok:
+        out["undecidable"] = "slam_choice"
+    return out
+
+
+CONFIRM_ARMS = {"judged": {("B", "0"), ("B", "1")}, "controls": {("A", "0"), ("A", "1")}}  # (ARM, SEED) once each
+
+
+def confirm_verdict(plan: dict, results: dict) -> dict:
+    """Both judged sessions (arm B, seeds 0 and 1) must pass; a control (arm A, seeds 0 and 1) failure never waives a
+    judged one and sends the outcome to the lead (no automatic promotion while it is unexplained). The registered
+    composition is checked by each session's own ARM and SEED: none missing, duplicated or in both groups."""
+    judged, controls = list(plan.get("judged") or []), list(plan.get("controls") or [])
+
+    def arms(names):
+        return [((results.get(n) or {}).get("arm"), (results.get(n) or {}).get("seed")) for n in names]
+
+    composition_ok = (len(set(judged)) == len(judged) == 2 and len(set(controls)) == len(controls) == 2
+                      and not set(judged) & set(controls)
+                      and set(arms(judged)) == CONFIRM_ARMS["judged"] and set(arms(controls)) == CONFIRM_ARMS["controls"])
+    judged_pass = composition_ok and all((results.get(n) or {}).get("pass") is True for n in judged)
+    failed_controls = [n for n in controls if (results.get(n) or {}).get("pass") is not True]
+    outcome = "not_passed" if not judged_pass else "to_lead" if failed_controls else "pass"
+    return {"composition_ok": composition_ok, "judged_pass": judged_pass, "failed_controls": failed_controls,
+            "outcome": outcome}
+
+
+def evaluate_confirm(out_dir: Path) -> dict:
+    plan = json.loads((out_dir / "plan_l4c.json").read_text())
+    targets = tuple(tuple(t) for t in plan["targets"])  # [[m1 pallet, destination], [m2 pallet, destination]]
+    results = {n: confirm_session(load_session(out_dir / "s" / n), targets, plan["slam_choice"])
+               for n in (plan.get("judged") or []) + (plan.get("controls") or [])}
+    return {"sessions": results, **confirm_verdict(plan, results)}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", type=Path)
     ap.add_argument("--json", type=Path, required=True)
+    ap.add_argument("--confirm", action="store_true", help="the lifecycle 4 confirmation run (plan_l4c.json)")
     a = ap.parse_args(argv)
-    a.json.write_text(json.dumps(evaluate(a.out), indent=1, default=str) + "\n")
+    result = evaluate_confirm(a.out) if a.confirm else evaluate(a.out)
+    a.json.write_text(json.dumps(result, indent=1, default=str) + "\n")
     return 0
 
 

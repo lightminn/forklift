@@ -1,0 +1,111 @@
+# 라이브 riib v2 — 생명주기 4 확인 실행 등록 (2026-11-09)
+
+- 근거: [v2 본배치 결과](../validation/2026-11-09-live-riib-v2-main.md) 6 절(총괄 결정, 후속 경로 (ii))·7 절(기록 진단, 시나리오를 고친 이유). 원래 등록은 [v2 계획](2026-11-08-live-riib-defaults-v2.md) 3.3.
+- 이 실행은 **생명주기 4 하나만** 다시 본다. 페이스·C2·안전·④⑤ 기능 확인·팔 B 만의 실패는 본배치 결과를 그대로 쓴다. 본배치의 원래 생명주기 4(line_m)는 미통과로 남고, 이 실행의 결과로 바뀌지 않는다.
+- 분류 (ii)는 총괄의 범위 결정에 근거한다(2026-11-09 확인). '남아 있는 바닥 팔레트에 가린 대상을 집는 상황'은 이번 ④⑤ 판정의 지원 범위 밖이고, 알려진 한계로 받아들였다(백로그). 이 범위 결정은 이번 ④⑤ 판정에만 적용된다.
+
+## 1. 바뀌는 것과 그대로인 것
+
+| | 본배치 생명주기 4 | 확인 실행 |
+|---|---|---|
+| 장면 | line_m | **random_m** (`test_runs/riibotics/scenes_ct1_a770031/random_m_session.json`, sha256 8b8fe554…) |
+| 순서 | `cycle P-1:D-1,P-2:D-2` | **`cycle P-4:D-1,P-5:D-2`** |
+| 탐침 추가 인자 | `--stop-wait-at approach:5 --stop-wait-sim-s 5 --manual-recovery` | 같음 |
+| 팔·seed | B, seed 0 | **B seed 0·1(판정), A seed 0·1(대조)** |
+| 동시 수 | 나머지 묶음, 슬롯 3(8 세션) | **이 묶음, 슬롯 2(4 세션)** |
+
+바뀌는 것은 위 표의 장면·순서·팔·seed·동시 수 뿐이다. 동시 수는 페이스에 영향을 주지만 이 실행은 페이스를 판정하지 않는다. 다음은 본배치와 같다.
+- 스냅숏 `snapshots/riibv2_d72fd9b3`(재생 게이트 16819 29/29).
+- 래퍼는 본배치의 `tools/riib_session_v2.sh` 를 바이트 그대로 복사한다(sha256 9a61542e…). 래퍼가 `--end-session` 을 붙인다.
+- 런처 `deploy/console/isaac_live.sbatch`.
+- 설정: 따라잡기 6, 배속 0.3, 위상 unset, `FIX=none`, `MAX_EPOCHS=1`, `ENCODER_MODEL=team_spec_quantized`, `D7_HOLD=on`, 인식 인자는 래퍼가 팔별로 넣는 그대로.
+- 지도는 registry 의 random_m 행(`SLAM_BUNDLE_ROOT=/home/projects/forklift/artifacts/slam_bundles`). 본배치 random_m 세션들의 `slam_choice` 는 모두 `localization (registry: random_m_team_spec_quantized_0facac3eea66)` 였다.
+- 묶음 실행기 `tools/isaac_bundle.py`(자동 재시도 0).
+
+시나리오를 바꾼 이유(결과 문서 7 절): line_m 에서 m1 이 취소돼 P-1 이 남으면, 다른 대상(P-2·P-3)이 모두 같은 줄의 P-1 뒤에 선다. 그래서 그 장면에서는 '취소 뒤 다른 대상으로 넘어가는' 생명주기를 시험할 수 없다. P-1 을 다시 제출하면 대상 변경(다른 인식 영역, 다른 팔레트로의 상태 전환)이 빠진다. random_m 에서는 P-5 의 관측 시선이 모두 y ≤ −0.78 에 있고, 남은 P-4 외곽의 가장 낮은 모서리는 y 0.752 다. random_m 은 생명주기 2·3 의 장면이기도 하다.
+
+## 2. 실행
+
+- 실행 폴더 `test_runs/live/l4c_d72fd9b3/`(소켓 경로 107 바이트 이하로 짧게). 세션 이름은 `l4c_s0_B`·`l4c_s0_A`·`l4c_s1_B`·`l4c_s1_A`.
+- 한 묶음 잡이고 슬롯 2, 목록 순서는 B0, A0, B1, A1 이다. 묶음 실행기는 빈 슬롯이 생기면 목록의 다음 세션을 바로 시작한다(장벽 없음). 그래서 B0·A0 가 먼저 함께 돌고, 먼저 끝난 쪽 자리에 B1, 다음 자리에 A1 이 들어간다. 자원은 본배치 묶음과 같은 shard 4·CPU 8·19G 이고, 시간 한도는 `isaac_bundle.py sizes` 가 찍는 값을 쓴다.
+- 실행 목록·`plan_l4c.json`·래퍼 사본의 해시를 `lists.sha256` 에 남기고, 제출 전에 `isaac_bundle.py check` 를 통과시킨다.
+- **본배치와의 동일성 대조(제출 전, 결과를 `identity.json` 에 남김)**. 하나라도 어긋나면 제출하지 않는다.
+  - 스냅숏: 같은 폴더 `snapshots/riibv2_d72fd9b3` 를 쓴다. 본배치 매니페스트(`riibv2_d72fd9b3/manifest_stage1.json`)가 적은 커밋 d72fd9b3·tree c13ce083… 의 `git ls-tree -r` 과, 제출 직전 폴더 파일의 git blob 해시가 경로마다 같아야 한다. 추가·누락 파일이 없어야 하고, 실행이 만드는 `__pycache__` 만 예외다.
+  - 래퍼: 사본의 sha256 이 본배치 사본(`rv2m_d72fd9b3/tools/riib_session_v2.sh`)과 같아야 한다.
+  - 런처: 스냅숏 안 `deploy/console/isaac_live.sbatch` 의 sha256 이 같아야 한다.
+  - 실행 목록 항목: 본배치 `rest.jsonl` 의 `life4_line_m_stop` 항목과 env 를 키 단위로 비교한다. 다른 것은 `SCENE_FILE`·`CYCLE`·`SEED`·`ARM` 과 세션 경로(argv·`retry_move`·`pace_log`·`first_record`·`scan`)뿐이어야 한다.
+  - 장면 파일: sha256 8b8fe554… 이어야 한다.
+  - 인식 입력: ONNX sha256 이 본배치 기록(`recognition_missions/*/result.json` 의 `proposer.onnx_sha256` bed77752…)과 같아야 한다.
+  - 지도 번들: 실행 뒤 각 세션의 `slam_choice` 가 위 registry 행과 같아야 한다. 어긋난 세션은 판정 불가로 둔다(기반 실패가 아니므로 다시 내지 않는다).
+- 제출은 rtb_r1c(16866)가 끝나고 CPU 사전 확인(3 절)이 통과한 뒤에 한다. 같은 시간대에 다른 Isaac·CPU 잡이 없어야 한다. 제출 전에 실행 폴더·스냅숏·목록 해시를 총괄에 준다(디스크 보존 통보는 총괄이 한다). ws1 `/home` 여유는 제출 직전에 10 G 이상이어야 하고, 모자라면 제출하지 않는다(2026-11-09 정리 뒤 28 G; 본배치 세션 하나가 234–305 M).
+- **다시 내는 규칙**: v2 3.2 의 통일 규칙을 따른다. 기반 실패(Isaac 기동 실패·`startup_silent`·`startup_viewport`·탐침 전 래퍼 종료)일 때만 그 세션을 한 번 다시 낸다. 다른 Slurm 잡이 겹쳐 무효가 된 묶음은 묶음 전체를 한 번 다시 낸다. 실제로 돌린 세션 수의 상한은 8 이다. 그 뒤에도 판정 불가인 B 세션은 미통과로 센다. 결과가 나쁘다는 이유로는 다시 내지 않는다.
+
+## 3. 제출 전 CPU 계획 확인
+
+- 도구: `tools/riib_life4_plan_check.py random_m_session.json --records s0B=<본배치 ab_random_m_s0_B m1 records.json> --records s1B=<… s1_B …> --out <실행 폴더>/plan_check.json`.
+- 도구는 m2(P-5 → D-2)를 `session_plan_check.plan_mission` 과 같은 방식으로 계획한다. P-4 는 제자리에 둔다(아무것도 배달되지 않은 상태).
+- 출발 자세만 바꾸고, 복귀 목적지는 언제나 세션 시작점이다(`plan_mission(…, start=)`; 라이브도 현재 자세에서 출발해 세션 대기점으로 돌아간다).
+- 시작점은 11 개다.
+  - 세션 시작점 (−2.093, 0, 0).
+  - 본배치 B seed 0·1(`s0B`·`s1B`)의 m1 계획된 접근 경로에서 각각 다섯: 처음, 중간, 끝, 그리고 끝에서 진행 방향 반대로 0.31 m 와 1.0 m 물러난 자세. 0.31 m 는 원래 생명주기 4 의 `clear_out` 길이, 1.0 m 는 `clear_out` 의 예산이다.
+- 정식 판정은 두 기록을 모두 받아야 돌고, 11 개가 빠짐없이 한 번씩 검사되어 모두 `passed`(제출 거부 없음)여야 통과다. 하나라도 아니면 Isaac 을 내지 않고 이 등록을 다시 본다. `--smoke`(세션 시작점 하나)는 도구 확인용이고 통과로 치지 않는다.
+- 한계: 이 점들은 계획 관문을 위한 표본이다. STOP 과 취소 뒤 회복이 트럭을 남기는 자리의 포괄 범위가 아니다(`clear_out` 은 최근 전진 궤적을 거슬러 가고 필요하면 연장한다). CPU 의 P-4 는 새 prior 이고, m1 이 인식한 위치·불확실도를 가진 실행 시점의 P-4 와 같지 않다. CPU 결과는 계획이 있다는 근거일 뿐이고, 실제 관측과 완료는 확인 실행으로 판단한다.
+- ws1 에서 CPU Slurm 잡 하나로 돌린다(로컬 실측 시작점당 약 18 s, 11 개 약 3–4 분). r1c 가 끝난 뒤 Isaac 제출 전에 돌리고, Isaac 잡과 겹치지 않게 한다.
+
+## 4. 판정
+
+**B 세션 하나의 통과 조건**(v2 3.3 생명주기 4 연쇄, 대상만 P-4/P-5 로 바꿈). 모두 순서대로 있어야 한다.
+1. m1(P-4) `approach` 도달(`stop_wait:approach`).
+2. STOP 송신과 응답 ack.
+3. `STOPPED`(`stopped_for_wait`).
+4. 재무장 ack.
+5. 취소 ack.
+6. 회복이 필요하면 `--manual-recovery` 재개 ack.
+7. m1 `cancelled`.
+8. m2 수락. m1 은 (P-4, D-1), m2 는 (P-5, D-2)여야 하고, 임무 ID 가 서로 달라야 한다.
+9. m2 `done`.
+10. `session_end` ack.
+11. epoch 종료 코드 0.
+
+**STOP 의 유효 조건**(탐침의 `stop_wait` 기록). 대기가 끝날 때 다음이 모두 참이어야 한다.
+- `mission_at_end` 가 m1 이다(임무 ID 가 `stop_wait.mission_id` 와 m1 결과 행의 ID 와 같다).
+- 그 단계는 `approach`, 대상은 (P-4, D-1)이다. STOPPED 상태의 임무는 단계가 바뀌지 않으므로, 이때의 단계가 STOP 이 잡은 단계다.
+- `mode_at_end` 가 `STOPPED`, `end_reason` 이 `sim_time` 이다.
+- `end_sim_s − start_sim_s` 가 등록된 대기 5 s 에서 한 틱(1/120 s)을 뺀 값 이상이다.
+
+단계 미도달, 다른 단계에서의 STOP, 대기 미충족은 그 세션의 미통과다. 기반 실패가 아니므로 다시 내지 않는다.
+
+그리고 v2 본배치와 같은 안전·기록 완결이 있어야 한다: 금지 접촉 0, 이웃 팔레트 겹침 0, 정지 팔레트 이동 경계 초과 0, `unpermitted_dir_entries` 0, `scene_damaged` 없음, spool 완결, 예상 임무마다 파일·파싱·접촉 필드. C2 동기 재계획 스텝이 나오면 2.0 s 상한도 지킨다.
+
+**확인 실행 통과**: B seed 0·1 두 세션이 모두 위를 채운다.
+
+**팔 A(진단용 대조군)**
+- A 의 결과는 판정에 들어가지 않는다.
+- A 의 실패로 B 의 실패를 면제하지 않는다.
+- A 세션이 위 조건을 못 채웠는데 원인이 기록으로 설명되지 않으면, 자동 승격하지 않고 총괄에 올린다.
+
+**결과 처리**
+- 확인 실행 통과이고 설명 안 된 A 실패가 없으면: 생명주기 기준(1·2·4 통과, 3 기록대로 끝남)이 채워진 것으로 보고, 본배치의 나머지 기준과 합쳐 ④⑤ 승격을 권고한다. 결정은 총괄이 하고, 승격 PR 은 그 뒤에 낸다.
+- 그 밖에는 ④⑤ 보류를 유지한다. B 실패는 원인 조사로 넘긴다. 이 실행을 다시 낼지는 새 등록과 총괄 결정으로 정한다.
+
+**보고**(판정에 쓰지 않음): STOP 송신부터 응답까지의 지연, 응답 뒤 첫 상태의 정지 래치와 적용 바퀴 명령, 정지까지의 시간, m2 시작 `start_rear`, m2 관측 시도 수, ④⑤ 작동 기록(m2 의 `return_start_backoffs`·`observe_end_stands`).
+
+**집계 도구**: `tools/riib_v2_verdict.py --confirm`(`plan_l4c.json` 의 `judged`·`controls`·`targets`·`slam_choice`). 세션마다 다음을 모두 채워야 통과로 센다. `slam_choice` 가 등록된 registry 행과 다르거나 기록이 없으면 그 세션은 판정 불가이고, 통과로 세지 않는다.
+- `lifecycle(…, 4)`: 본배치와 같은 연쇄.
+- `stop_valid`: 위의 STOP 유효 조건.
+- 대상·목적지·임무 ID 확인.
+- `safety`: 본배치와 같은 안전·기록 완결.
+- C2 상한.
+
+판정 묶음은 `confirm_verdict` 가 낸다(`pass`·`to_lead`·`not_passed`). 구성도 확인한다: 각 세션 `args.txt` 의 ARM·SEED 로 보아 판정 쪽이 B seed 0·1, 대조 쪽이 A seed 0·1 이 한 번씩이어야 하고, 누락·중복·두 쪽에 다 든 세션이 있으면 `not_passed` 다. 단위시험이 있고, 결과가 나오기 전에 머지한다.
+
+## 5. 순서
+
+1. 이 등록 → Codex 적대적 검토, 독립 검토(새 스레드) → 고정.
+2. 확인 실행 집계 하위 명령(시험 먼저) → 판정 PR 과 함께 ws1 전체 시험(r1c 뒤) → 머지.
+3. r1c 끝 → CPU 사전 확인 → 총괄에 이름·해시 → 확인 실행 제출 → 판정 → 보고.
+4. ② 주입 계획은 따로 나란히 쓴다. 그 기준 스냅숏은 승격 결정 뒤에 고정한다.
+
+## 6. 자체 검토
+
+(검토 결과와 처리를 여기에 적는다.)
