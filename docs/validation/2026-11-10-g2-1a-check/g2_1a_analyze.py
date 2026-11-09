@@ -195,13 +195,16 @@ def capture_files(run: Path, entries: list | None) -> dict:
 
 def mission_ids(out: Path) -> list[str] | None:
     """The missions the probe reports (the confirm scenario's one, the cycle scenario's missions_run); None when the
-    probe report is missing."""
+    probe report is missing or a reported result has no mission id."""
     f = out / "probe.json"
     if not f.exists():
         return None
     j = json.loads(f.read_text())
     results = [(j.get("confirm") or {}).get("mission_result")] + [m.get("result") for m in j.get("missions_run") or []]
-    return [r["mission_id"] for r in results if r and r.get("mission_id")]
+    results = [r for r in results if r is not None]
+    if any(not r.get("mission_id") for r in results):
+        return None  # a reported mission without its id: its record cannot be found (Codex round 4)
+    return [r["mission_id"] for r in results]
 
 
 def forbidden_contacts(out: Path, run: Path, result: dict | None) -> int | None:

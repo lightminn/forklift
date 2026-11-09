@@ -174,3 +174,12 @@ def test_files_by_number_present_and_mission_contact_records(tmp_path):
     rows = good()
     next(r for r in rows if r["mode"] == "async")["forbidden_pocket_contacts"] = None
     assert not tool.verdict(rows)["lines"]["4_missions_no_worse"]["pass"]
+
+
+def test_a_reported_mission_without_an_id_makes_the_contacts_unknown(tmp_path):
+    out, run = tmp_path / "s", tmp_path / "s" / "run"
+    run.mkdir(parents=True)
+    (out / "probe.json").write_text('{"confirm": {"mission_result": {"outcome": "done"}}}')
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) is None
+    (out / "probe.json").write_text('{}')  # no mission reported: the session's own list only
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) == 0
