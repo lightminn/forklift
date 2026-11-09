@@ -85,17 +85,34 @@ class Session(g2m.Session):
                 "ok": float(np.mean([bool(r.get("pacing_ok")) for r in auto_cmd])) if auto_cmd else None}
 
 
-def forbidden_contacts(run: Path, result: dict | None) -> int | None:
-    """Every finished mission's record plus result.json's (a mission still on); None when a record lacks the key."""
-    total = 0
-    for f in sorted(run.glob("missions/*/records.json")):
-        state = (json.loads(f.read_text()).get("state")) or {}
-        if "forbidden_pocket_contacts" not in state:
-            return None
-        total += len(state["forbidden_pocket_contacts"] or [])
-    if not result or "forbidden_pocket_contacts" not in result:
+def mission_ids(out: Path) -> list[str] | None:
+    """The missions the probe reports (the confirm scenario's one, the cycle scenario's missions_run); None when the
+    probe report is missing."""
+    f = out / "probe.json"
+    if not f.exists():
         return None
-    return total + len(result["forbidden_pocket_contacts"] or [])
+    j = json.loads(f.read_text())
+    results = [(j.get("confirm") or {}).get("mission_result")] + [m.get("result") for m in j.get("missions_run") or []]
+    return [r["mission_id"] for r in results if r and r.get("mission_id")]
+
+
+def forbidden_contacts(out: Path, run: Path, result: dict | None) -> int | None:
+    """Forbidden pocket contacts of the session: every mission the probe reports must have its record
+    (missions/<id>/records.json, where the mission's state goes at its end) with a list there, and result.json a list
+    for a mission still on; anything missing or null makes the count unknown (Codex review rounds 2-3)."""
+    ids = mission_ids(out)
+    if ids is None or not result or not isinstance(result.get("forbidden_pocket_contacts"), list):
+        return None
+    total = len(result["forbidden_pocket_contacts"])
+    for mid in ids:
+        f = run / "missions" / mid / "records.json"
+        if not f.exists():
+            return None
+        state = (json.loads(f.read_text()).get("state")) or {}
+        if not isinstance(state.get("forbidden_pocket_contacts"), list):
+            return None
+        total += len(state["forbidden_pocket_contacts"])
+    return total
 
 
 def analyse_session(s: Session) -> dict:
@@ -109,7 +126,7 @@ def analyse_session(s: Session) -> dict:
     row.update({"scan_step_rest_s_per_sim_s": m3.get("scan_step_rest_s_per_sim_s"),
                 "scan_step_W_ms": m3.get("scan_step_W_ms"), "auto": s.auto_rate(), "M8": s.m8_report_only(),
                 "kernels_mode": (res.get("kernels") or {}).get("mode"),
-                "safety": {"forbidden_contacts": forbidden_contacts(s.run, res),
+                "safety": {"forbidden_contacts": forbidden_contacts(s.out, s.run, res),
                            "unpermitted_entries": ol.get("unpermitted_entries"),
                            "unpermitted_dir_entries": ol.get("unpermitted_dir_entries")}})
     return row

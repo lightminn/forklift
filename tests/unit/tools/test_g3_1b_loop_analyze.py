@@ -83,8 +83,12 @@ def test_a_missing_kernel_mode_and_mission_contact_records(tmp_path):
         x["kernels_mode"] = None  # both arms of pair 1 without a recorded mode
     v = tool.verdict(rows)
     assert v["result"] == "not enough comparable pairs" and v["left_out"][0]["pair"] == 1
-    m = tmp_path / "missions" / "m1"
-    m.mkdir(parents=True)
-    (m / "records.json").write_text('{"state": {"forbidden_pocket_contacts": [1, 2]}}')
-    assert tool.forbidden_contacts(tmp_path, {"forbidden_pocket_contacts": []}) == 2
-    assert tool.forbidden_contacts(tmp_path, {}) is None
+    out, run = tmp_path / "s", tmp_path / "s" / "run"
+    (run / "missions" / "m1").mkdir(parents=True)
+    (out / "probe.json").write_text('{"confirm": {"mission_result": {"mission_id": "m1"}}}')
+    (run / "missions" / "m1" / "records.json").write_text('{"state": {"forbidden_pocket_contacts": [1, 2]}}')
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) == 2
+    assert tool.forbidden_contacts(out, run, {}) is None
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": None}) is None  # null: unknown
+    (run / "missions" / "m1" / "records.json").unlink()  # a reported mission without its record: unknown
+    assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) is None
