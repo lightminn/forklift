@@ -75,6 +75,18 @@ def acting_bands(grid, group, raw) -> list[dict]:
     return out
 
 
+CELLS_CALLS = [0]
+_CELLS = og.ObstacleGrid._clear_group_cells
+
+
+def _counting_cells(self, *a, **k):
+    CELLS_CALLS[0] += 1
+    return _CELLS(self, *a, **k)
+
+
+og.ObstacleGrid._clear_group_cells = _counting_cells
+
+
 def replay(record, mode: str, calls: list) -> tuple[object, float]:
     """The dumped call again from its ``before`` copy in kernel mode ``mode``; each _clear_group call's stats and time
     appended to ``calls``. Returns the snapshot and the whole call's wall time."""
@@ -112,7 +124,10 @@ def load(path: Path) -> dict:
 def analyse(paths, modes) -> dict:
     if "numba" in modes:
         kernels.set_mode("numba")
-        kernels.warm_up()
+        kernels.warm_up()  # every numba kernel, the beam-cell ones included, compiled before any timed call
+    if paths:  # one untimed replay per mode first: first-call costs (imports, caches) out of the timings
+        for mode in modes:
+            replay(load(paths[0]), mode, [])
     rows, strata = [], Counter()
     for p in paths:
         rec = load(p)
@@ -132,7 +147,7 @@ def analyse(paths, modes) -> dict:
     used = [r for r in rows if all(r[m]["self_reproduced"] for m in modes)]
     calls = [c for r in used for c in r["clear_group_calls"]]
     summary = {
-        "dumps": len(rows), "self_reproduced": len(used),
+        "dumps": len(rows), "self_reproduced": len(used), "beam_cell_calls": CELLS_CALLS[0],
         "by_caller_phase": [[c, ph, n] for (c, ph), n in strata.most_common()],
         "clear_group_calls": len(calls),
         "raw_cells": _q([c["raw_cells"] for c in calls]),
@@ -158,11 +173,14 @@ def main() -> int:
     ap.add_argument("--json", type=Path, required=True)
     ap.add_argument("--modes", nargs="+", default=["reference", "numba"])
     ap.add_argument("--limit", type=int, default=0, help="0: every dump")
-    ap.add_argument("--clear-kernel", action="store_true",
-                    help="replay with _clear_group judged at the beams' cells (plan 5.26): the dumps were made with it "
-                         "off, so the self-reproduction is then the byte-equality check on real calls")
+    ap.add_argument("--clear-kernel", choices=("env", "on", "off"), default="env",
+                    help="the beam-cell _clear_group (plan 5.26): env (default) keeps FORKLIFT_GRID_CLEAR_KERNEL as the "
+                         "module read it, on/off override it. The dumps were made with it off, so with it on the "
+                         "self-reproduction is the byte-equality check on real calls")
+    ap.add_argument("--source-commit", default=None, help="the code's commit, written into the report")
     a = ap.parse_args()
-    og.CLEAR_KERNEL = a.clear_kernel
+    if a.clear_kernel != "env":
+        og.CLEAR_KERNEL = a.clear_kernel == "on"
     missing = [str(d) for d in a.dirs if not any((d / "grid_snapshot").glob("*.pkl.gz"))]
     if missing:
         print(f"no grid_snapshot dumps in {missing}", file=sys.stderr)
@@ -171,6 +189,16 @@ def main() -> int:
     if a.limit:
         paths = paths[: a.limit]
     out = analyse(paths, a.modes)
+    import importlib.metadata as md
+
+    def ver(name):
+        try:
+            return md.version(name)
+        except md.PackageNotFoundError:
+            return None
+    out["conditions"] = {"clear_kernel": bool(og.CLEAR_KERNEL), "clear_kernel_arg": a.clear_kernel,
+                         "env": os.environ.get("FORKLIFT_GRID_CLEAR_KERNEL"), "source_commit": a.source_commit,
+                         "numpy": ver("numpy"), "numba": ver("numba"), "modes": a.modes}
     a.json.write_text(json.dumps(out, indent=1, default=str))
     print(json.dumps(out["summary"], indent=1, default=str))
     return 0 if out["summary"]["self_reproduced"] == out["summary"]["dumps"] else 1

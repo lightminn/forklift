@@ -59,6 +59,8 @@ def _original(grid, group, state, stamp):
 
 @pytest.mark.parametrize("mode", ["reference", "numba"])
 def test_cells_equal_the_original_byte_for_byte(mode):
+    if mode == "numba":
+        pytest.importorskip("numba")  # an optional dependency: the NumPy path is tested without it
     kernels.set_mode(mode)
     try:
         rng = np.random.default_rng(5)
