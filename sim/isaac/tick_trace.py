@@ -70,6 +70,7 @@ class TickTrace:
 
     def begin(self) -> None:
         """A physics step begins: a new row, holding the control marks made since the last one."""
+        self.in_control = False  # a control tick that raised never reached ctrl_end (Codex review round 2 P2)
         if self.rows >= self.capacity:
             self.dropped += 1
         else:

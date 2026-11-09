@@ -1454,6 +1454,9 @@ def test_the_trace_names_the_row_the_running_work_belongs_to():
     trace.control("ctrl_end", 0.011)
     trace.begin()
     assert trace.row_now() == 1
+    trace.control("ctrl_start", 0.02)  # a control tick that raises: no ctrl_end, the failure path steps
+    trace.begin()
+    assert not trace.in_control and trace.row_now() == 2  # the failure's step is a step's work, on its own row
 
 
 def test_the_long_call_record_is_written_beside_the_trace_when_on(tmp_path, monkeypatch):
