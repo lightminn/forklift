@@ -123,7 +123,7 @@ def main():
     record["colliders"] = {"all": len(colliders), "truck": sum(c.startswith(pl.SELF_PREFIX) for c in colliders)}
     if not record["colliders"]["truck"] or record["colliders"]["all"] <= record["colliders"]["truck"]:
         raise RuntimeError(f"too few colliders: {record['colliders']}")
-    sim = SimulationContext(physics_dt=1 / 120, rendering_dt=1 / 120, stage_units_in_meters=1.0, set_defaults=False)
+    sim = SimulationContext(stage_units_in_meters=1.0, set_defaults=False)  # the saved scene's settings, its dt too
     record["physics_dt"] = sim.get_physics_dt()
     sim.initialize_physics()
     sim.play()
@@ -203,7 +203,11 @@ if record["errors"] or not record.get("oracle_stable", False):
         s["adopt"] = False  # no adoption beside an error or an unstable oracle
 (args.output / "lidar_bench.json").write_text(json.dumps(record, indent=1, default=str))
 print(json.dumps(record.get("summary", record["errors"]), indent=1, default=str), flush=True)
-try:
-    app.close()
-finally:
+if rc:
+    # app.close() may end the process with code 0 on its own (fast shutdown; run_transport saw it): a failure leaves
+    # before it (Codex bench review round 2)
+    sys.stdout.flush()
+    sys.stderr.flush()
     os._exit(rc)
+app.close()
+os._exit(0)
