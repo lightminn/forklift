@@ -380,12 +380,24 @@ class Session:
                                  "bound_share_of_W": bound / sim_all / out["whole_W_s_per_sim_s"]}
         return out
 
+    def m8_report_only(self) -> dict:
+        """Report only (R1 results, lead decision 2026-11-09): long world.steps over the whole trace and the live
+        camera's pixel latency from the end summary (a window of the last frames; its max over the whole run)."""
+        D = self.trace
+        world = D[:, C["world_end"]] - D[:, C["world_start"]]
+        w = world[np.isfinite(world)]
+        end = next((r for r in self.log if r.get("event") == "end"), {})
+        return {"world_step_over_0_25_s": int((w > 0.25).sum()), "world_step_over_0_5_s": int((w > 0.5).sum()),
+                "world_step_max_s": float(w.max()) if len(w) else None,
+                "camera_pixel_latency_s": end.get("camera_pixel_latency_s")}
+
     def analyse(self, bench) -> dict:
         row = {"name": self.name, "set": self.set, "instr": self.instr, "warm": self.warm, "invalid": self.invalid}
         if self.trace is None or self.invalid:
             return row
         row.update({"M1": self.m1_gaps(), "M2": self.m2_calls(), "M3": self.m3_scan(), "M4": self.m4_lidar(),
-                    "M5": self.m5_corrections(), "M6": self.m6_start(), "M7": self.m7_work(bench)})
+                    "M5": self.m5_corrections(), "M6": self.m6_start(), "M7": self.m7_work(bench),
+                    "M8": self.m8_report_only()})
         return row
 
 
