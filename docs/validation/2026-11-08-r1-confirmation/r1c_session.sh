@@ -31,6 +31,13 @@ case "${INSTR:-off}" in
   off) ;;
   *) echo "INSTR must be on or off" >&2; exit 2 ;;
 esac
+# Real-time plan 5.24: LIFECYCLE=on keeps the start marks (runner start, live start; FORKLIFT_LIVE_LIFECYCLE) without
+# the long-call record -- the first ok from the runner's start (M6) needs them
+case "${LIFECYCLE:-off}" in
+  on) export FORKLIFT_LIVE_LIFECYCLE=1 ;;
+  off) ;;
+  *) echo "LIFECYCLE must be on or off" >&2; exit 2 ;;
+esac
 case ${ARM:?L, K or KP} in
   L) export FORKLIFT_LIVE_CATCHUP_STEPS=0 ;;
   K) export FORKLIFT_LIVE_CATCHUP_STEPS=6 ;;
@@ -42,6 +49,13 @@ FAR="$FAR --recognition-learned-python $P/venvs/learned/bin/python --recognition
 FAR="$FAR --recognition-pixel-lag-steps 12 --recognition-providers CUDAExecutionProvider,CPUExecutionProvider"
 FAR="$FAR --recognition-device-id 0 --recognition-threads 4"
 NEAR="--near-capture-redraw always --near-capture-redraw-lateral-m 0.10 --near-capture-expected on"
+# Real-time plan 5.24 (G5-0 arms): PROPOSALS=oracle swaps the learned proposer for the oracle masks (the semantic
+# render path stays); PREP_RENDERS / PREP_WAIT_S add the test arms on the far branch. Unset: as before.
+[ "${PROPOSALS:-learned}" = oracle ] && FAR="--recognition far --recognition-proposals oracle --recognition-pixel-lag-steps 12"
+case "${PROPOSALS:-learned}" in learned|oracle) ;; *) echo "PROPOSALS must be learned or oracle" >&2; exit 2 ;; esac
+PREP=""
+[ -n "${PREP_RENDERS:-}" ] && PREP="--live-test-prep-renders $PREP_RENDERS"
+[ -n "${PREP_WAIT_S:-}" ] && PREP="$PREP --live-test-prep-wait-s $PREP_WAIT_S"
 # only the registered combinations (plan 5.17): far L/K at 0.4 and 0.3; off L/KP at 0.4; mark L/K at 0.4 and 0.3 and
 # KP at 0.4; wall L/K/KP at 0.4
 case "${SET:-}:${ARM}:${FACTOR}" in
@@ -50,17 +64,19 @@ case "${SET:-}:${ARM}:${FACTOR}" in
   *) echo "SET:ARM:FACTOR ${SET:-}:${ARM}:${FACTOR} is not in plan 5.17's registration" >&2; exit 2 ;;
 esac
 TRACE="--max-sim-seconds 1500"  # the trace buffer (plan 5.17 T6: dropped must be 0); the live loop is not bounded by it
+# Real-time plan 5.23 (G2-1a): CAPTURE_DUMP=sync|async adds --live-capture-dump to the line_m branches; unset, nothing
+CD=${CAPTURE_DUMP:+--live-capture-dump $CAPTURE_DUMP}
 END=(--end-session)
 case ${SET:?far, off, mark or wall} in
   far)
     [ "$ARM" = KP ] && { echo "KP is never run with far recognition (plan 5.17 scope)" >&2; exit 2; }
     export SCENE_FILE=$LINE_M
-    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE"
+    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE${PREP:+ $PREP}${CD:+ $CD}"
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   off)
     [ "$ARM" = K ] && { echo "the far-off branch compares L and KP (plan 5.17)" >&2; exit 2; }
     export SCENE_FILE=$LINE_M
-    export EXTRA_ARGS="$NEAR $TRACE"
+    export EXTRA_ARGS="$NEAR $TRACE${CD:+ $CD}"
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   mark)
     unset SCENE_FILE

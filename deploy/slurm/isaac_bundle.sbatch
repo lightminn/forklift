@@ -62,7 +62,8 @@ source "$ROOT/deploy/lib/term_relay.sh" || { echo "no $ROOT/deploy/lib/term_rela
 mkdir -p "$OUT"
 echo "host=$(hostname) job=${SLURM_JOB_ID:-} shards=${SLURM_SHARDS_ON_NODE:-?} gpus=${CUDA_VISIBLE_DEVICES:-unset} node_gpu=${SLURM_JOB_GPUS:-?}" \
   "cpus=$(taskset -cp $$ | awk -F': ' '{print $2}') list=$LIST out=$OUT $(date -Is)"
-nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv 2>/dev/null
+nvidia-smi --query-gpu=index,memory.used,memory.total,persistence_mode --format=csv 2>/dev/null
+# (the job sees only its own GPU: the node's every GPU is checked by `isaac_bundle.py check` from the login shell)
 # shellcheck disable=SC2086 -- BUNDLE_ARGS is a list of words by design
 # Slurm's TERM ends the runner, which ends its runs (deploy/lib/term_relay.sh: armed before the start, so a TERM
 # however early reaches it; the batch shell waits for its own end)

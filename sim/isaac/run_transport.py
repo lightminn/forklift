@@ -1373,6 +1373,19 @@ def arguments() -> argparse.Namespace:
                         "arbiter also ages the frame from that step's start (2026-10-17 marker runs: 11 physics "
                         "steps, about one render of the 10 Hz camera; the default adds a render of margin)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
+    parser.add_argument("--live-test-prep-renders", type=int, default=0, choices=(0, 1, 2, 3),
+                        help="real-time plan 5.24 (G5-0 arm, test only): world.render() this many times just before "
+                             "the live start, timed and recorded with the physics time before and after")
+    parser.add_argument("--live-test-prep-wait-s", type=float, default=0.0,
+                        help="real-time plan 5.24 (G5-0 wait control, test only): sleep this long at the same place")
+    parser.add_argument("--live-capture-dump", choices=("sync", "async"), default="sync",
+                        help="real-time plan G2-1a: the capture's diagnostic image and depth files written on the "
+                             "control thread (sync) or handed to the live session's writer thread (async; live "
+                             "only, never while a boundary record is open)")
+    parser.add_argument("--lidar-cast", choices=("loop", "fast", "oracle"), default="loop",
+                        help="real-time plan G3-1d: the 2D LiDAR's PhysX casting -- loop (the original, default), fast "
+                             "(cast_scan_flags_fast: same results, about 1.2 ms less a scan at rest; bench #388) or "
+                             "oracle (both on the same physics state, compared ray by ray, the loop's result used)")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1871,6 +1884,14 @@ def arguments() -> argparse.Namespace:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
         parser.error("--live-test-far-zone-offset-m needs --live and --recognition far")
+    if (args.live_test_prep_renders or args.live_test_prep_wait_s) and not args.live:
+        parser.error("--live-test-prep-renders / --live-test-prep-wait-s need --live (plan 5.24 G5-0 arms)")
+    if args.live_test_prep_renders and args.live_test_prep_wait_s:
+        parser.error("--live-test-prep-renders and --live-test-prep-wait-s are separate arms (plan 5.24)")
+    if not 0.0 <= args.live_test_prep_wait_s <= 30.0:
+        parser.error("--live-test-prep-wait-s must be in [0, 30]")
+    if args.live_capture_dump == "async" and not args.live:
+        parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
                           or args.live_test_recovery_blocked or args.live_test_return_correction_drops
                           or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
@@ -6597,20 +6618,32 @@ def drive(S, isaac) -> None:
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
     # mission core; what has not moved yet is reached through hooks.
+    capture_dumper = [None]  # G2-1a: a CaptureDumper when --live-capture-dump async (set with the live runtime)
+
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
-        (a Sink the mission core calls where they stood)."""
+        (a Sink the mission core calls where they stood). Real-time plan G2-1a: with --live-capture-dump async in a
+        live session the same writes go to a writer thread of their own on copies of the arrays (capture_dump.py:
+        one FIFO, a refusal waits for it and writes here, a boundary record open writes here) -- the control tick no
+        longer waits on PNG encoding and the disk (about 0.044 s of the pocket detection tick)."""
+        if capture_dumper[0] is None:  # a batch run (and replay), or sync: as before, nothing new imported
+            write_capture_dump(attempt_number, scene_input.rgb, scene_input.depth_m)
+            return
+        capture_dumper[0].dump(attempt_number, scene_input.rgb, scene_input.depth_m,
+                               record_open=_BOUNDARY_RECORD.get("gate") is not None)
+
+    def write_capture_dump(attempt_number, rgb, depth_m) -> None:
         # Diagnostic dump for offline root-cause analysis; not part
         # of the perception contract itself.
-        save_image(Image.fromarray(scene_input.rgb),
+        save_image(Image.fromarray(rgb),
             args.output / f"perception_capture_{attempt_number}_rgb.png")
         np.save(
             args.output
             / f"perception_capture_{attempt_number}_depth_m.npy",
-            scene_input.depth_m,
+            depth_m,
         )
-        finite_depth = scene_input.depth_m[
-            np.isfinite(scene_input.depth_m)
+        finite_depth = depth_m[
+            np.isfinite(depth_m)
         ]
         if finite_depth.size:
             depth_range = (
@@ -6618,7 +6651,7 @@ def drive(S, isaac) -> None:
                 float(finite_depth.max()),
             )
             normalized = np.clip(
-                (scene_input.depth_m - depth_range[0])
+                (depth_m - depth_range[0])
                 / max(depth_range[1] - depth_range[0], 1e-6),
                 0,
                 1,
@@ -8159,6 +8192,10 @@ def drive(S, isaac) -> None:
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            if args.live_capture_dump == "async":
+                from capture_dump import CaptureDumper
+
+                capture_dumper[0] = CaptureDumper(write_capture_dump)  # real-time plan G2-1a: a writer of its own
             if far_runtime is not None:
                 # Plan 2026-10-22-live-far-recognition T1 (A): the far work on a thread of its own, applied on the
                 # tick by tag; its files on the session's writer; no driving frame inside a capture session.
@@ -9202,6 +9239,52 @@ def drive(S, isaac) -> None:
                        "overlay": overlay}
                 if encoder is not None else None)
             live_prestart_(live)  # 5.18/5.21 measurement (off by default): the core's ports, the start marks
+            if args.live_test_prep_renders or args.live_test_prep_wait_s:
+                # Real-time plan 5.24 (G5-0 arms, test only): the first renders (or a plain wait) before the first
+                # control tick -- does the start stall move here, go, or stay? The physics must not move: its time
+                # before and after is kept, and an arm that moved it is invalid.
+                # (the process's CPU time over each part too: a wait that some background thread works through shows
+                # here; independent review of 5.24, item 3)
+                # What the prep did to the render products and the step counters (Codex 5.24 review P2-5): each
+                # camera's rendering frame and time, the physics step index and the runner's tick, before and after.
+                def prep_view_():
+                    cams_ = {}
+                    for name_, cam_ in (("live_video", _bound.get("live_video_camera")),
+                                        ("perception", _bound.get("perception_camera"))):
+                        if cam_ is None:
+                            continue
+                        try:
+                            f_ = cam_.get_current_frame() or {}
+                            rf_ = f_.get("rendering_frame")
+                            if isinstance(rf_, dict):
+                                rf_ = [int(rf_.get("referenceTimeNumerator", -1)),
+                                       int(rf_.get("referenceTimeDenominator", -1))]
+                            cams_[name_] = {"rendering_frame": rf_, "rendering_time": f_.get("rendering_time")}
+                        except Exception as exc_:  # noqa: BLE001 -- a camera that cannot be read is noted
+                            cams_[name_] = {"error": f"{type(exc_).__name__}: {exc_}"}
+                    return {"physics_time": float(world.current_time),
+                            "step_index": int(getattr(world, "current_time_step_index", -1)),
+                            "runner_tick": int(stepper["tick"]), "cameras": cams_}
+
+                prep_ = {"renders": [], "renders_cpu_s": [], "wait_s": float(args.live_test_prep_wait_s),
+                         "renders_asked": int(args.live_test_prep_renders), "before": prep_view_()}
+                prep_["physics_time_before"] = prep_["before"]["physics_time"]
+                for _ in range(args.live_test_prep_renders):
+                    a_, c_ = time.monotonic(), time.process_time()
+                    world.render()
+                    prep_["renders"].append([a_, time.monotonic()])
+                    prep_["renders_cpu_s"].append(time.process_time() - c_)
+                if args.live_test_prep_wait_s:
+                    a_, c_ = time.monotonic(), time.process_time()
+                    time.sleep(args.live_test_prep_wait_s)
+                    prep_["wait"] = [a_, time.monotonic()]
+                    prep_["wait_cpu_s"] = time.process_time() - c_
+                prep_["after"] = prep_view_()
+                prep_["physics_time_after"] = prep_["after"]["physics_time"]
+                prep_["physics_unchanged"] = all(prep_["after"][k_] == prep_["before"][k_]
+                                                 for k_ in ("physics_time", "step_index", "runner_tick"))
+                state.setdefault("live_test_injections", []).append({"prep": prep_})
+                live.log({"event": "live_test_prep", **prep_})
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
             if lifecycle_on():
                 live.log({"event": "lifecycle", "marks": list(LIFECYCLE)})  # 5.21 G5-0, on the live log's clock
@@ -11094,6 +11177,15 @@ def drive(S, isaac) -> None:
                     state["live_close_error"] = repr(exc_)
                 if live.trace is not None:  # D12a: the rows kept, the steps dropped, or why the write failed
                     state["tick_trace"] = live.trace_saved
+            if capture_dumper[0] is not None:
+                # G2-1a: the capture writer ends with the run, after the live session's own close (which shares one
+                # budget with its settles), within its own deadline; what it has not written is marked (its record
+                # goes to result.json, written after this)
+                try:
+                    capture_dumper[0].close(30.0)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["capture_dump_close_error"] = repr(exc_)
+                state["capture_dump"] = capture_dumper[0].record()
             # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
             # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
             # replay compares every port call).
@@ -11324,7 +11416,9 @@ LIFECYCLE: list = []
 
 
 def lifecycle_on() -> bool:
-    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
+    # the start marks alone (FORKLIFT_LIVE_LIFECYCLE=1, plan 5.24: a cheap list of a few monotonic reads) or with the
+    # long-call record (5.22)
+    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS") or os.environ.get("FORKLIFT_LIVE_LIFECYCLE"))
 
 
 def lifecycle_mark(name: str, **fields) -> None:
@@ -11339,6 +11433,10 @@ def main() -> None:
     if args.check_args:
         sys.exit(check_args_only(args))
     determinism.configure(getattr(args, "deterministic", False))
+    if args.lidar_cast != "loop":  # G3-1d: set once, before any cast (the default leaves the module untouched)
+        import planar_lidar as lidar_mode_
+
+        lidar_mode_.CAST_MODE = args.lidar_cast
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
@@ -11465,6 +11563,10 @@ def main() -> None:
         if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
             state["deterministic"]["broken"] = determinism.broken()
             state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
+        if args.lidar_cast != "loop":  # G3-1d: the mode, and the oracle's counts when compared
+            import planar_lidar as lidar_mode_
+
+            state["lidar_cast"] = lidar_mode_.oracle_record()
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 

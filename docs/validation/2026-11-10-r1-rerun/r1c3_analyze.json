@@ -1,0 +1,482 @@
+{
+ "sessions": [
+  {
+   "name": "r1c_17_mark_L_04",
+   "set": "mark",
+   "arm": "L",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "T4": {
+    "marker_lag": {
+     "frames": 172,
+     "pixel_lag_sim_s": 0.09166666666666856,
+     "physics_steps": 11.000000000000227,
+     "bootstrap_tau_sim_s": {
+      "p5": 0.09166666666666856,
+      "p95": 0.09166666666666856
+     },
+     "residual_rows_rms": 0.1538982144663676,
+     "rows_per_m": 71.61491224260187,
+     "fit_correlation": 0.9993132505525905,
+     "alias_residual_ratio": 270.4570712891923,
+     "lift_range_m": [
+      0.002502884017303586,
+      0.24731944501399994
+     ],
+     "noise_rows": 0.16771210661606772,
+     "nonconforming_frames": [],
+     "trim_converged": true,
+     "trim_iterations": 1,
+     "metadata_latency_s": {
+      "n": 172,
+      "median": 0.053411367058288306,
+      "p99": 0.05873744113836436,
+      "max": 0.060262774932198226
+     },
+     "pixel_latency_wall_s_conforming_frames": {
+      "n": 172,
+      "median": 0.2999881627038121,
+      "p99": 0.3068321283825207,
+      "max": 0.3083803370827809
+     },
+     "tau_grid_s": [
+      -0.5,
+      3.0000000000000107,
+      0.008333333333333333
+     ]
+    },
+    "pixel": {
+     "n": 172,
+     "median": 0.2999881627038121,
+     "p99": 0.3068321283825207,
+     "max": 0.3083803370827809
+    },
+    "freeze_window_sim_s": [
+     30.0,
+     60.0
+    ],
+    "stale_video_samples": 0,
+    "sample_disarm_sim_s": null,
+    "armed_at_freeze_start": true,
+    "freeze_disarm_sim_s": 30.15833333333333,
+    "freeze_disarmed_stale_video": true,
+    "ended_after_measures": true
+   }
+  },
+  {
+   "name": "r1c_18_mark_K_04",
+   "set": "mark",
+   "arm": "K",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "T4": {
+    "marker_lag": {
+     "frames": 172,
+     "pixel_lag_sim_s": 0.09166666666666856,
+     "physics_steps": 11.000000000000227,
+     "bootstrap_tau_sim_s": {
+      "p5": 0.09166666666666856,
+      "p95": 0.09166666666666856
+     },
+     "residual_rows_rms": 0.08745168443755305,
+     "rows_per_m": 71.48592509474177,
+     "fit_correlation": 0.9997772920012242,
+     "alias_residual_ratio": 834.1287985922851,
+     "lift_range_m": [
+      0.002502884017303586,
+      0.24731948971748352
+     ],
+     "noise_rows": 0.07921820231946464,
+     "nonconforming_frames": [],
+     "trim_converged": true,
+     "trim_iterations": 1,
+     "metadata_latency_s": {
+      "n": 172,
+      "median": 0.05316083302022889,
+      "p99": 0.056178520292742166,
+      "max": 0.0577309780055657
+     },
+     "pixel_latency_wall_s_conforming_frames": {
+      "n": 172,
+      "median": 0.28234472102485597,
+      "p99": 0.2853413550753612,
+      "max": 0.28688485524617136
+     },
+     "tau_grid_s": [
+      -0.5,
+      3.0000000000000107,
+      0.008333333333333333
+     ]
+    },
+    "pixel": {
+     "n": 172,
+     "median": 0.28234472102485597,
+     "p99": 0.2853413550753612,
+     "max": 0.28688485524617136
+    },
+    "freeze_window_sim_s": [
+     30.0,
+     60.0
+    ],
+    "stale_video_samples": 0,
+    "sample_disarm_sim_s": null,
+    "armed_at_freeze_start": true,
+    "freeze_disarm_sim_s": 30.141666666666666,
+    "freeze_disarmed_stale_video": true,
+    "ended_after_measures": true
+   }
+  },
+  {
+   "name": "r1c_19_mark_KP_04",
+   "set": "mark",
+   "arm": "KP",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "T4": {
+    "marker_lag": {
+     "frames": 172,
+     "pixel_lag_sim_s": 0.09166666666666856,
+     "physics_steps": 11.000000000000227,
+     "bootstrap_tau_sim_s": {
+      "p5": 0.09166666666666856,
+      "p95": 0.09166666666666856
+     },
+     "residual_rows_rms": 0.0786599217177316,
+     "rows_per_m": 71.46852662171624,
+     "fit_correlation": 0.9998197441499513,
+     "alias_residual_ratio": 1031.1007568487137,
+     "lift_range_m": [
+      0.002502884017303586,
+      0.24731941521167755
+     ],
+     "noise_rows": 0.07630720184982799,
+     "nonconforming_frames": [],
+     "trim_converged": true,
+     "trim_iterations": 1,
+     "metadata_latency_s": {
+      "n": 172,
+      "median": 0.034059740020893514,
+      "p99": 0.036256295033963395,
+      "max": 0.037151876953430474
+     },
+     "pixel_latency_wall_s_conforming_frames": {
+      "n": 172,
+      "median": 0.2632338140392676,
+      "p99": 0.2654425331251696,
+      "max": 0.26633215707261115
+     },
+     "tau_grid_s": [
+      -0.5,
+      3.0000000000000107,
+      0.008333333333333333
+     ]
+    },
+    "pixel": {
+     "n": 172,
+     "median": 0.2632338140392676,
+     "p99": 0.2654425331251696,
+     "max": 0.26633215707261115
+    },
+    "freeze_window_sim_s": [
+     30.0,
+     60.0
+    ],
+    "stale_video_samples": 0,
+    "sample_disarm_sim_s": null,
+    "armed_at_freeze_start": true,
+    "freeze_disarm_sim_s": 30.2,
+    "freeze_disarmed_stale_video": true,
+    "ended_after_measures": true
+   }
+  },
+  {
+   "name": "r1c_20_mark_L_03",
+   "set": "mark",
+   "arm": "L",
+   "factor": 0.3,
+   "invalid": [],
+   "steps": null,
+   "T4": {
+    "marker_lag": {
+     "frames": 172,
+     "pixel_lag_sim_s": 0.09166666666666856,
+     "physics_steps": 11.000000000000227,
+     "bootstrap_tau_sim_s": {
+      "p5": 0.09166666666666856,
+      "p95": 0.09166666666666856
+     },
+     "residual_rows_rms": 0.08776310618131289,
+     "rows_per_m": 71.48081179794168,
+     "fit_correlation": 0.9997756714732233,
+     "alias_residual_ratio": 827.515145569913,
+     "lift_range_m": [
+      0.002502884017303586,
+      0.24731941521167755
+     ],
+     "noise_rows": 0.08254166737610925,
+     "nonconforming_frames": [],
+     "trim_converged": true,
+     "trim_iterations": 1,
+     "metadata_latency_s": {
+      "n": 172,
+      "median": 0.06065882305847481,
+      "p99": 0.06471823608037085,
+      "max": 0.06708665599580854
+     },
+     "pixel_latency_wall_s_conforming_frames": {
+      "n": 172,
+      "median": 0.3767925837310031,
+      "p99": 0.38357906514196655,
+      "max": 0.38533876300789416
+     },
+     "tau_grid_s": [
+      -0.5,
+      3.0000000000000107,
+      0.008333333333333333
+     ]
+    },
+    "pixel": {
+     "n": 172,
+     "median": 0.3767925837310031,
+     "p99": 0.38357906514196655,
+     "max": 0.38533876300789416
+    },
+    "freeze_window_sim_s": [
+     30.0,
+     60.0
+    ],
+    "stale_video_samples": 0,
+    "sample_disarm_sim_s": null,
+    "armed_at_freeze_start": true,
+    "freeze_disarm_sim_s": 30.175,
+    "freeze_disarmed_stale_video": true,
+    "ended_after_measures": true
+   }
+  },
+  {
+   "name": "r1c_21_mark_K_03",
+   "set": "mark",
+   "arm": "K",
+   "factor": 0.3,
+   "invalid": [],
+   "steps": null,
+   "T4": {
+    "marker_lag": {
+     "frames": 172,
+     "pixel_lag_sim_s": 0.09166666666666856,
+     "physics_steps": 11.000000000000227,
+     "bootstrap_tau_sim_s": {
+      "p5": 0.09166666666666856,
+      "p95": 0.09166666666666856
+     },
+     "residual_rows_rms": 0.08699925895959389,
+     "rows_per_m": 71.49428064233855,
+     "fit_correlation": 0.9997796411095734,
+     "alias_residual_ratio": 842.7513603212301,
+     "lift_range_m": [
+      0.002502884017303586,
+      0.2473195195198059
+     ],
+     "noise_rows": 0.0835463101760461,
+     "nonconforming_frames": [],
+     "trim_converged": true,
+     "trim_iterations": 1,
+     "metadata_latency_s": {
+      "n": 172,
+      "median": 0.060130227997433394,
+      "p99": 0.0632861143280752,
+      "max": 0.063742829952389
+     },
+     "pixel_latency_wall_s_conforming_frames": {
+      "n": 172,
+      "median": 0.3656878462061286,
+      "p99": 0.36886745554744266,
+      "max": 0.36929892434272915
+     },
+     "tau_grid_s": [
+      -0.5,
+      3.0000000000000107,
+      0.008333333333333333
+     ]
+    },
+    "pixel": {
+     "n": 172,
+     "median": 0.3656878462061286,
+     "p99": 0.36886745554744266,
+     "max": 0.36929892434272915
+    },
+    "freeze_window_sim_s": [
+     30.0,
+     60.0
+    ],
+    "stale_video_samples": 0,
+    "sample_disarm_sim_s": null,
+    "armed_at_freeze_start": true,
+    "freeze_disarm_sim_s": 30.141666666666666,
+    "freeze_disarmed_stale_video": true,
+    "ended_after_measures": true
+   }
+  },
+  {
+   "name": "r1c_22_wall_L_04",
+   "set": "wall",
+   "arm": "L",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "wall": [
+    {
+     "leg": "forward_to_wall",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 2,
+     "permit_reason": "pallet:P-1",
+     "ended_after": true,
+     "base_x_m": 0.8190129995346069
+    },
+    {
+     "leg": "reverse_swing",
+     "held": false,
+     "moved": true,
+     "forbidden": "pacing",
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "drive_forbidden",
+     "ended_after": true,
+     "base_x_m": -1.3772344589233398
+    },
+    {
+     "leg": "forward_again",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "occupied",
+     "ended_after": true,
+     "base_x_m": 4.183420658111572
+    }
+   ]
+  },
+  {
+   "name": "r1c_23_wall_K_04",
+   "set": "wall",
+   "arm": "K",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "wall": [
+    {
+     "leg": "forward_to_wall",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 1,
+     "permit_reason": "pallet:P-1",
+     "ended_after": true,
+     "base_x_m": 0.8218785524368286
+    },
+    {
+     "leg": "reverse_swing",
+     "held": false,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "occupied",
+     "ended_after": true,
+     "base_x_m": -2.8795864582061768
+    },
+    {
+     "leg": "forward_again",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "occupied",
+     "ended_after": true,
+     "base_x_m": 4.080377101898193
+    }
+   ]
+  },
+  {
+   "name": "r1c_24_wall_KP_04",
+   "set": "wall",
+   "arm": "KP",
+   "factor": 0.4,
+   "invalid": [],
+   "steps": null,
+   "wall": [
+    {
+     "leg": "forward_to_wall",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 1,
+     "permit_reason": "pallet:P-1",
+     "ended_after": true,
+     "base_x_m": 0.8222153186798096
+    },
+    {
+     "leg": "reverse_swing",
+     "held": false,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "occupied",
+     "ended_after": true,
+     "base_x_m": -2.877300500869751
+    },
+    {
+     "leg": "forward_again",
+     "held": true,
+     "moved": true,
+     "forbidden": null,
+     "armed": true,
+     "disarms": [],
+     "rearms": 0,
+     "permit_reason": "occupied",
+     "ended_after": true,
+     "base_x_m": 4.083529472351074
+    }
+   ]
+  }
+ ],
+ "verdicts": {
+  "far@0.4": {
+   "verdict": "undecidable",
+   "why": [
+    "baseline completed 0 < 2"
+   ]
+  },
+  "far@0.3": {
+   "verdict": "undecidable",
+   "why": [
+    "baseline completed 0 < 2"
+   ]
+  },
+  "off@0.4": {
+   "verdict": "undecidable",
+   "why": [
+    "baseline completed 0 < 1"
+   ]
+  }
+ }
+}
