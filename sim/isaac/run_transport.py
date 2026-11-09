@@ -6603,22 +6603,19 @@ def drive(S, isaac) -> None:
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
     # mission core; what has not moved yet is reached through hooks.
-    capture_dump_io = [None]  # G2-1a: the live session's writer when --live-capture-dump async (set with the runtime)
+    capture_dumper = [None]  # G2-1a: a CaptureDumper when --live-capture-dump async (set with the live runtime)
 
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
         (a Sink the mission core calls where they stood). Real-time plan G2-1a: with --live-capture-dump async in a
-        live session and no boundary record open, the same writes go to the session's writer thread on copies of the
-        arrays -- the control tick no longer waits on PNG encoding and the disk (about 0.044 s of the pocket
-        detection tick); a writer that refuses them (its byte budget full) gets them written here, as before."""
-        if capture_dump_io[0] is None:  # a batch run (and replay), or sync: as before, nothing new imported
+        live session the same writes go to a writer thread of their own on copies of the arrays (capture_dump.py:
+        one FIFO, a refusal waits for it and writes here, a boundary record open writes here) -- the control tick no
+        longer waits on PNG encoding and the disk (about 0.044 s of the pocket detection tick)."""
+        if capture_dumper[0] is None:  # a batch run (and replay), or sync: as before, nothing new imported
             write_capture_dump(attempt_number, scene_input.rgb, scene_input.depth_m)
             return
-        from capture_dump import dispatch_capture_dump
-
-        dispatch_capture_dump(capture_dump_io[0], _BOUNDARY_RECORD.get("gate") is not None, write_capture_dump,
-                              attempt_number, scene_input.rgb, scene_input.depth_m,
-                              state["perception"].setdefault("capture_dump", []))
+        capture_dumper[0].dump(attempt_number, scene_input.rgb, scene_input.depth_m,
+                               record_open=_BOUNDARY_RECORD.get("gate") is not None)
 
     def write_capture_dump(attempt_number, rgb, depth_m) -> None:
         # Diagnostic dump for offline root-cause analysis; not part
@@ -8181,8 +8178,9 @@ def drive(S, isaac) -> None:
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
             if args.live_capture_dump == "async":
-                capture_dump_io[0] = live.io  # real-time plan G2-1a: the capture's files on the session's writer
-                state["capture_dump"] = "async"
+                from capture_dump import CaptureDumper
+
+                capture_dumper[0] = CaptureDumper(write_capture_dump)  # real-time plan G2-1a: a writer of its own
             if far_runtime is not None:
                 # Plan 2026-10-22-live-far-recognition T1 (A): the far work on a thread of its own, applied on the
                 # tick by tag; its files on the session's writer; no driving frame inside a capture session.
@@ -11111,6 +11109,14 @@ def drive(S, isaac) -> None:
                 late_ = far_live.close()
                 if late_:
                     state.setdefault("far_late_calls", []).extend(late_)
+            if capture_dumper[0] is not None:
+                # G2-1a: the capture writer ends with the run, within its own deadline; what it has not written is
+                # marked (its record goes to result.json, written after this)
+                try:
+                    capture_dumper[0].close(30.0)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["capture_dump_close_error"] = repr(exc_)
+                state["capture_dump"] = capture_dumper[0].record()
             if live is not None:
                 try:
                     live.close()  # M-c: close frames to every client, the port file says ended (or stop_failed)

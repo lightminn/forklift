@@ -1,68 +1,102 @@
-"""Real-time plan G2-1a: the capture's diagnostic files written in place without a writer or with a boundary record
-open; handed over on copies with one; written in place when the writer refuses them; a failing write kept on its
-entry, never raised into the mission."""
+"""Real-time plan G2-1a: the capture dumper writes on a thread of its own, in one order for one path, and says what it
+did: a record open writes in place; a handed-over capture is written later from copies; a refusal waits for the queue
+and writes in place after it; a close past its deadline marks what was not written; a failure is kept, never raised
+(Codex G2-1a review round 1: P1 records, P2-2 its own writer, P2-3 close, P2-4 order)."""
 
 import sys
+import threading
 from pathlib import Path
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "sim" / "isaac"))
-from capture_dump import dispatch_capture_dump  # noqa: E402
+from capture_dump import CaptureDumper  # noqa: E402
 
 
-class Writer:
-    def __init__(self, accept=True):
-        self.accept, self.jobs = accept, []
-
-    def put_line(self, job, nbytes):
-        self.jobs.append((job, nbytes))
-        return self.accept
+def _arrays(v=0):
+    return np.full((4, 5, 3), v, np.uint8), np.full((4, 5), 1.5 + v)
 
 
-def _arrays():
-    return np.zeros((4, 5, 3), np.uint8), np.full((4, 5), 1.5)
+class Files:
+    """The write function: what each path got, in the order the writes finished."""
+
+    def __init__(self, gate=None):
+        self.got, self.gate = [], gate
+
+    def __call__(self, n, rgb, depth):
+        if self.gate is not None:
+            self.gate.wait(5)
+        self.got.append((n, int(rgb[0, 0, 0]), float(depth[0, 0])))
 
 
-def test_without_a_writer_or_with_a_record_open_it_writes_in_place():
+def test_a_record_open_writes_in_place():
+    files = Files()
+    d = CaptureDumper(files)
     rgb, depth = _arrays()
-    seen, entries = [], []
-    write = lambda n, r, d: seen.append((n, r, d))  # noqa: E731
-    assert dispatch_capture_dump(None, False, write, 1, rgb, depth, entries) == "sync"
-    assert dispatch_capture_dump(Writer(), True, write, 2, rgb, depth, entries) == "sync"
-    assert [s[0] for s in seen] == [1, 2] and seen[0][1] is rgb and entries == []
+    assert d.dump(1, rgb, depth, record_open=True) == "sync"
+    assert files.got == [(1, 0, 1.5)] and d.entries == []
+    assert d.close(5.0) is True
 
 
-def test_a_writer_gets_copies_and_writes_them_later():
+def test_handed_over_captures_are_written_later_from_copies():
+    gate = threading.Event()
+    files = Files(gate)
+    d = CaptureDumper(files)
     rgb, depth = _arrays()
-    seen, entries, w = [], [], Writer()
-    assert dispatch_capture_dump(w, False, lambda n, r, d: seen.append((n, r.copy(), d.copy())), 3, rgb, depth,
-                                 entries) == "async"
-    assert seen == [] and entries == [{"attempt": 3, "mode": "async"}]
-    (job, nbytes), = w.jobs
-    assert nbytes == rgb.nbytes + depth.nbytes
-    rgb[:] = 9  # the capture changes after the hand-over: the files keep what it was
+    assert d.dump(1, rgb, depth) == "async"
+    rgb[:] = 9  # the capture changes after the hand-over: its files keep what it was
     depth[:] = 0.0
-    job()
-    assert seen[0][0] == 3 and not seen[0][1].any() and (seen[0][2] == 1.5).all()
+    gate.set()
+    assert d.close(5.0) is True
+    assert files.got == [(1, 0, 1.5)]
+    rec = d.record()
+    assert (rec["closed"], rec["refused"], rec["errors"], rec["unsettled"]) == (True, 0, 0, 0)
+    assert rec["entries"] == [{"attempt": 1, "mode": "async", "done": True}]
 
 
-def test_a_refusing_writer_means_written_in_place():
-    rgb, depth = _arrays()
-    seen, entries = [], []
-    assert dispatch_capture_dump(Writer(accept=False), False, lambda n, r, d: seen.append(n), 4, rgb, depth,
-                                 entries) == "sync_refused"
-    assert seen == [4] and entries == [{"attempt": 4, "mode": "sync_refused"}]
+def test_a_refusal_waits_for_the_queue_so_one_path_keeps_its_order():
+    gate = threading.Event()
+    files = Files(gate)
+    d = CaptureDumper(files, max_pending=1, settle_s=5.0)
+    a = _arrays(1)
+    assert d.dump(1, *a) == "async"  # an earlier mission's attempt 1, still waiting on the disk
+    threading.Timer(0.2, gate.set).start()
+    assert d.dump(1, *_arrays(2)) == "sync_refused"  # the next mission's attempt 1: same path
+    assert files.got == [(1, 1, 2.5), (1, 2, 3.5)]  # the old one first, the new one last: the file is the new one
+    assert "order_unsafe" not in d.entries[1]
+    d.close(5.0)
 
 
-def test_a_failing_write_on_the_writer_is_kept_not_raised(capsys):
-    rgb, depth = _arrays()
-    entries, w = [], Writer()
+def test_a_close_past_its_deadline_marks_what_was_not_written():
+    gate = threading.Event()
+    files = Files(gate)
+    d = CaptureDumper(files)
+    d.dump(1, *_arrays())
+    assert d.close(0.1) is False
+    rec = d.record()
+    assert rec["unsettled"] == 1 and rec["entries"][0]["unsettled"] is True
+    gate.set()
 
-    def write(n, r, d):
+
+def test_a_failing_write_is_kept_not_raised(capsys):
+    def write(n, r, dd):
         raise OSError("disk full")
-    dispatch_capture_dump(w, False, write, 5, rgb, depth, entries)
-    w.jobs[0][0]()  # the writer thread's call: no exception escapes
-    assert entries == [{"attempt": 5, "mode": "async", "error": "OSError: disk full"}]
+    d = CaptureDumper(write)
+    d.dump(5, *_arrays())
+    d.close(5.0)
+    assert d.record()["errors"] == 1 and d.entries[0]["error"] == "OSError: disk full"
+    assert "unsettled" not in d.entries[0]
     assert "capture dump 5 failed" in capsys.readouterr().err
+
+
+def test_its_writer_is_not_the_live_logs():
+    from forklift_core.live.io_writer import OrderedWriter
+
+    log = OrderedWriter()
+    d = CaptureDumper(Files())
+    assert d.io is not log and d.io._thread.name == "live-capture"
+    d.dump(1, *_arrays())
+    d.close(5.0)
+    assert log.dropped_lines == 0
+    log.close(5.0)
