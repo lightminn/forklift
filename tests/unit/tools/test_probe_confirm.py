@@ -179,3 +179,25 @@ def test_a_hold_in_sim_seconds_runs_sim_over_factor_wall_seconds_and_records_its
     rec = run(lcp.hold_teleop(p, "reverse", 3.0, -0.6, 0.0, factor=0.3, clock=clock))
     assert rec["end_mono"] - rec["start_mono"] == pytest.approx(10.0, abs=0.06)
     assert rec["stand_mono"] >= rec["end_mono"] and rec["sim_seconds"] == 3.0 and rec["factor"] == 0.3
+
+
+@pytest.mark.parametrize("factor,wait", [(1.0, 1.0), (0.4, 2.5), (0.3, 1.0 / 0.3)])
+def test_a_stop_is_held_one_sim_second_before_the_rearm(monkeypatch, factor, wait):
+    """R1 results (Codex tools review P3): the STOP's four-wheel stillness must be observable before the rearm."""
+    clock = Clock()
+    p = FakeProbe(clock)
+    waits = []
+
+    async def psleep(p_, seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr(lcp, "_psleep", psleep)
+    run(lcp.confirm_stop(p, "A1", clock=clock, factor=factor))
+    assert waits == [pytest.approx(wait)]
+
+
+def test_every_confirm_stop_passes_the_factor():
+    import inspect
+    src = inspect.getsource(lcp.confirm_scenario) + inspect.getsource(lcp.hold_teleop)
+    calls = [line for line in src.splitlines() if "confirm_stop(" in line]
+    assert calls and all("factor=" in line for line in calls)

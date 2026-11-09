@@ -40,6 +40,7 @@ T6 validity: instrumentation or infrastructure failures (trace dropped or missin
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 import re
 import math
@@ -372,16 +373,20 @@ def freeze_check(s):
     # R1 results: the judgement reads the runner's own events -- armed when the freeze began (the last arm or disarm
     # before it is an arm), then a stale_video disarm inside the freeze. The probe's samples miss it when the state's
     # last reject is overwritten (r1c_18), and a session disarmed before the freeze proves nothing.
-    seq = [e for e in getattr(s, "arbiter_events", []) if e.get("event") in ("arm", "disarm")
-           and e.get("tick_t") is not None]
+    # Each event at its occurrence ("t", the monotonic clock), put on the simulated clock through the trace: "tick_t"
+    # is the tick the event was flushed with, so a disarm at 29.99 sim s can carry 30.0 (Codex tools review P2-1).
+    seq = []
+    if s.trace is not None:
+        for e in getattr(s, "arbiter_events", []):
+            if e.get("event") in ("arm", "disarm") and e.get("t") is not None:
+                seq.append({**e, "sim": s.start_sim(s.row_at_mono(e["t"]))})
     armed_at = None
-    if window is not None:
-        before = [e for e in seq if e["tick_t"] < window[0]]
+    hit = None
+    if window is not None and seq:
+        before = [e for e in seq if e["sim"] < window[0]]
         armed_at = bool(before) and before[-1]["event"] == "arm"
-        hit = next((e["tick_t"] for e in seq if e["event"] == "disarm" and e.get("reason") == "stale_video"
-                    and window[0] <= e["tick_t"] <= window[1]), None)
-    else:
-        hit = None
+        hit = next((e["sim"] for e in seq if e["event"] == "disarm" and e.get("reason") == "stale_video"
+                    and window[0] <= e["sim"] <= window[1]), None)
     out["armed_at_freeze_start"] = armed_at
     out["freeze_disarm_sim_s"] = hit
     out["freeze_disarmed_stale_video"] = bool(armed_at) and hit is not None
@@ -395,9 +400,22 @@ def wall_measures(s: Session):
     """The approach probe's wall stop (R-g): per leg whether it moved, whether the vehicle held it short with the
     command still asking to go, the permission's reason, and the true base x where the leg ended."""
     done = {e.get("leg"): e.get("mono") for e in s.report.get("events") or [] if e.get("event") == "leg_done"}
+    rearms = defaultdict(int)
+    for e in s.report.get("events") or []:
+        if e.get("event") == "rearmed_in_leg":
+            rearms[e.get("leg")] += 1
+    disarms = [e for e in getattr(s, "arbiter_events", []) if e.get("event") == "disarm" and e.get("t") is not None]
     out = []
+    prev_end = -math.inf
     for leg in s.report.get("approach") or []:
-        row = {k: leg.get(k) for k in ("leg", "held", "moved", "forbidden")}
+        row = {k: leg.get(k) for k in ("leg", "held", "moved", "forbidden", "armed")}
+        end_ = done.get(leg.get("leg"))
+        # the runner's disarms inside this leg and the probe's re-arms (Codex tools review P2-2): a leg recovered
+        # after a disarm is not a continuous approach
+        inside = [e.get("reason") for e in disarms if prev_end < e["t"] <= (end_ if end_ is not None else math.inf)]
+        row["disarms"] = inside
+        row["rearms"] = rearms.get(leg.get("leg"), 0)
+        prev_end = end_ if end_ is not None else prev_end
         row["permit_reason"] = (leg.get("permit") or {}).get("reason")
         end = s.report.get("end_requested_mono")
         row["ended_after"] = None if end is None or done.get(leg.get("leg")) is None else bool(end > done[leg["leg"]])
@@ -546,6 +564,8 @@ def verdict(rows, expected, branch, factor, candidate):
             if not (b_.get("moved") and b_.get("held") and b_.get("permit_reason") == "occupied") or \
                     a_.get("base_x_m") is None or b_.get("base_x_m") is None or abs(b_["base_x_m"] - a_["base_x_m"]) > 0.05:
                 why.append(f"R-g {leg}")
+            elif a_.get("disarms") or b_.get("disarms"):
+                why.append(f"R-g {leg} recovered after a disarm")  # not a continuous approach in one arm
     # R-f
     if done(K) < done(L):
         why.append("R-f fewer completions")

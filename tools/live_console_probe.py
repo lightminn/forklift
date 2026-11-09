@@ -592,8 +592,13 @@ async def _approach_steps(p: Probe, args):
                 still_since = None
             await asyncio.sleep(0.05)
         st = p.state or {}
+        final_limit = (st.get("permit") or {}).get("limit_mps")
+        # held: the permission's hold, kept at least held_s and still so at the leg's end (armed, its limit zero;
+        # Codex tools review P2-3: a disarm in the last wait left held=true with armed=false)
+        held = (still_since is not None and time.monotonic() - still_since >= args.held_s and bool(st.get("armed"))
+                and final_limit is not None and final_limit <= 0.0)
         p.report["approach"].append({"leg": name, "wall_s": time.monotonic() - start, "moved": moved,
-                                     "held": still_since is not None, "armed": st.get("armed"),
+                                     "held": held, "armed": st.get("armed"),
                                      "applied": st.get("applied"), "permit": st.get("permit"),
                                      "forbidden": st.get("teleop_forbidden_reason")})
         p.event("leg_done", leg=name)

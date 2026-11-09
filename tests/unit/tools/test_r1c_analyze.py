@@ -307,7 +307,8 @@ def freeze_session(samples, end_mono=None, factor=0.4, events=()):
     data[:, ra.C["S"]] = 1000.0 + ticks * ra.DT / factor
     s = SimpleNamespace(trace=data, args={"EXTRA_ARGS": r"--live-test-marker\ --live-test-camera-freeze\ 30:60"},
                         report={"freeze": {"samples": samples}, **({"end_requested_mono": end_mono} if end_mono else {})},
-                        arbiter_events=[{"arbiter": True, "event": ev, "reason": why, "tick_t": t} for ev, why, t in events])
+                        arbiter_events=[{"arbiter": True, "event": ev, "reason": why, "t": 1000.0 + t / factor,
+                                         "tick_t": t + 1 / 120} for ev, why, t in events])  # tick_t: the flush's tick
     s.row_at_mono = lambda m: ra.Session.row_at_mono(s, m)
     s.start_sim = lambda i: ra.Session.start_sim(s, i)
     return s
@@ -365,3 +366,24 @@ def test_the_stop_search_closes_at_the_rearm(tmp_path):
     assert early["rearm_after_processed_s"] > 0
     late = ra.Session(write_run(tmp_path / "b", rearm_step=450)).analyse()["T3"][0]
     assert late["still_before_rearm"] is True and late["processed_to_still_s"] >= 0
+
+
+def test_a_disarm_just_before_the_freeze_flushed_at_its_tick_is_before_it():
+    """Codex tools review P2-1: the event's tick_t is the tick it was flushed with; its occurrence decides."""
+    inside = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}
+    s = freeze_session([inside], events=[("arm", None, 20.7), ("disarm", "stale_video", 29.995)])
+    s.arbiter_events[-1]["tick_t"] = 30.0  # flushed with the first tick of the freeze
+    out = ra.freeze_check(s)
+    assert out["armed_at_freeze_start"] is False and not out["freeze_disarmed_stale_video"]
+
+
+def test_a_wall_leg_records_its_disarms_and_rearms_and_a_recovered_leg_is_no_clean_stop():
+    """Codex tools review P2-2: a leg recovered after an expiry is kept apart from a continuous approach."""
+    s = SimpleNamespace(trace=None, joint=None,
+                        report={"approach": [{"leg": "forward_to_wall", "held": True, "moved": True, "armed": True,
+                                              "permit": {"reason": "occupied", "limit_mps": 0.0}}],
+                                "events": [{"event": "rearmed_in_leg", "leg": "forward_to_wall", "mono": 5.0},
+                                           {"event": "leg_done", "leg": "forward_to_wall", "mono": 9.0}]},
+                        arbiter_events=[{"arbiter": True, "event": "disarm", "reason": "expired", "t": 4.9}])
+    row = ra.wall_measures(s)[0]
+    assert row["disarms"] == ["expired"] and row["rearms"] == 1 and row["permit_reason"] == "occupied"
