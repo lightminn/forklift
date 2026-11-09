@@ -224,3 +224,27 @@ def test_the_keepout_reaches_the_planners_and_the_tall_props_gap_is_recorded(tmp
     stage = out["missions"][0]["stages"]["return_home"]
     assert stage["tall_nearest"] == "tall:0" and stage["tall_bound_m"] == pytest.approx(0.25, abs=0.01)
     assert out["missions"][0]["outcome"] == "passed"  # a record beside the outcome, not part of it
+
+
+def test_a_given_start_moves_where_the_mission_starts_but_not_where_it_returns(tmp_path):
+    """Lifecycle 4 confirmation pre-check (Codex P2): the truck leaves from where the cancel left it and returns to the
+    session's home."""
+    path = _session(tmp_path, n=1)
+    ctx = C.session_context(path)
+    seen = {}
+    observe, transport = _planners()
+
+    def observe_(scenario, waypoint, config, **kw):
+        seen["start"] = scenario.start_rear
+        return observe(scenario, waypoint, config, **kw)
+
+    def transport_(scenario, config, **kw):
+        seen["return_to"] = kw["return_to"]
+        return transport(scenario, config, **kw)
+
+    entry = C.plan_mission(ctx["session"], ctx["pallet"], ctx["geometry"], ctx["config"], C.fresh_targets(ctx), {},
+                           "P-1", "D-1", nominal=ctx["nominal"], shape=ctx["shape"], prior_grow_m=0.2,
+                           observe_planner=observe_, transport_planner=transport_, start=C.Pose2D(1.0, 0.5, 0.1))
+    assert entry["outcome"] == "passed"
+    assert (seen["start"].x_m, seen["start"].y_m, seen["start"].yaw_rad) == (1.0, 0.5, 0.1)
+    assert (seen["return_to"].x_m, seen["return_to"].y_m) == (0.0, 0.0)
