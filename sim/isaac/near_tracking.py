@@ -1118,6 +1118,7 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "live_epoch": None,
                               "live_test_scan_silence": None,
                               "live_capture_dump": "sync",  # 2026-11-09: real-time plan G2-1a (live only)
+                              "lidar_cast": "loop",  # 2026-11-09: real-time plan G3-1d
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);

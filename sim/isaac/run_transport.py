@@ -1377,6 +1377,10 @@ def arguments() -> argparse.Namespace:
                         help="real-time plan G2-1a: the capture's diagnostic image and depth files written on the "
                              "control thread (sync) or handed to the live session's writer thread (async; live "
                              "only, never while a boundary record is open)")
+    parser.add_argument("--lidar-cast", choices=("loop", "fast", "oracle"), default="loop",
+                        help="real-time plan G3-1d: the 2D LiDAR's PhysX casting -- loop (the original, default), fast "
+                             "(cast_scan_flags_fast: same results, about 1.2 ms less a scan at rest; bench #388) or "
+                             "oracle (both on the same physics state, compared ray by ray, the loop's result used)")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -11370,6 +11374,10 @@ def main() -> None:
     if args.check_args:
         sys.exit(check_args_only(args))
     determinism.configure(getattr(args, "deterministic", False))
+    if args.lidar_cast != "loop":  # G3-1d: set once, before any cast (the default leaves the module untouched)
+        import planar_lidar as lidar_mode_
+
+        lidar_mode_.CAST_MODE = args.lidar_cast
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
@@ -11496,6 +11504,10 @@ def main() -> None:
         if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
             state["deterministic"]["broken"] = determinism.broken()
             state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
+        if args.lidar_cast != "loop":  # G3-1d: the mode, and the oracle's counts when compared
+            import planar_lidar as lidar_mode_
+
+            state["lidar_cast"] = lidar_mode_.oracle_record()
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 

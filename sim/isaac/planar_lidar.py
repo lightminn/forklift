@@ -15,6 +15,16 @@ import numpy as np
 
 SELF_PREFIX = "/World/Forklift"
 
+# Real-time plan G3-1d (bench #388 adopted; docs/validation/2026-11-09-g3-1d-lidar-bench.md): how cast_scan_flags
+# casts -- "loop" (the original loop; the default, every earlier run), "fast" (cast_scan_flags_fast, same results) or
+# "oracle" (both on the same physics state, compared ray by ray; the loop's result is returned). Set once by the runner
+# (--lidar-cast); the own cache and the oracle's counts live here for the process.
+CAST_MODE = "loop"
+_OWN_CACHE: dict = {}
+_OWN_CACHE_MAX = 200_000
+ORACLE = {"scans": 0, "mismatched_scans": 0, "mismatched_rays": 0, "own_true_rays": 0, "prefix_sets": [],
+          "first_mismatch": None}
+
 
 @dataclass(frozen=True)
 class LaserMount:
@@ -147,6 +157,14 @@ def cast_scan_flags(
     carried. Those beams stay hits (the body blocks them) but the obstacle
     grid neither marks nor clears with them.
     """
+    if CAST_MODE != "loop":
+        return _cast_by_mode(origin, directions, range_max_m, own_prefixes)
+    return _loop_cast(origin, directions, range_max_m, own_prefixes)
+
+
+def _loop_cast(origin, directions, range_max_m, own_prefixes):
+    """cast_scan_flags' original loop (a module-private name: the live timers wrap cast_scan_flags, and the oracle's
+    reference cast must not go through that wrapper again)."""
     import carb
     from omni.physx import get_physx_scene_query_interface
 
@@ -168,6 +186,81 @@ def cast_scan_flags(
         distances[index] = float(result["distance"])
         own[index] = any(prefix in body for prefix in own_prefixes)
     return distances, hits, own
+
+
+def cast_scan_flags_fast(
+    origin: np.ndarray,
+    directions: np.ndarray,
+    range_max_m: float,
+    *,
+    own_prefixes: tuple = (SELF_PREFIX,),
+    query=None,
+    own_cache: dict | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Real-time plan G3-1d candidate (the microbench's arm B; the runner does not call it yet): cast_scan_flags'
+    rays, results and own test, with the Python around each query trimmed -- the directions converted to floats once
+    (``tolist``), the query and the vector type bound once, and the own test done once per distinct
+    (rigidBody, collision) pair (``own_cache``, keyed also by the prefixes: they change with the carried pallet).
+    The own test keeps cast_scan_flags' meaning -- a prefix anywhere in rigidBody + collision (Codex P1-2, plan 5.20:
+    not startswith)."""
+    import carb
+
+    if query is None:
+        from omni.physx import get_physx_scene_query_interface
+
+        query = get_physx_scene_query_interface()
+    cast, vec, reach = query.raycast_closest, carb.Float3, float(range_max_m)
+    start = vec(*map(float, origin))
+    n = len(directions)
+    distances = np.full(n, np.nan)
+    hits = np.zeros(n, dtype=bool)
+    own = np.zeros(n, dtype=bool)
+    cache = {} if own_cache is None else own_cache
+    prefixes = tuple(own_prefixes)
+    for index, (x, y, z) in enumerate(np.asarray(directions, dtype=float).tolist()):
+        result = cast(start, vec(x, y, z), reach, False)
+        if not result.get("hit", False):
+            continue
+        hits[index] = True
+        distances[index] = float(result["distance"])
+        key = (prefixes, result.get("rigidBody", ""), result.get("collision", ""))
+        flag = cache.get(key)
+        if flag is None:
+            body = str(key[1]) + str(key[2])
+            flag = cache[key] = any(prefix in body for prefix in prefixes)
+        own[index] = flag
+    return distances, hits, own
+
+
+def _cast_by_mode(origin, directions, range_max_m, own_prefixes):
+    if len(_OWN_CACHE) > _OWN_CACHE_MAX:  # bounded: prefix sets x bodies met; dropped whole, rebuilt on use
+        _OWN_CACHE.clear()
+    if CAST_MODE == "fast":
+        return cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
+    if CAST_MODE != "oracle":
+        raise ValueError(f"CAST_MODE {CAST_MODE!r}: loop, fast or oracle")
+    ref = _loop_cast(origin, directions, range_max_m, own_prefixes)
+    got = cast_scan_flags_fast(origin, directions, range_max_m, own_prefixes=own_prefixes, own_cache=_OWN_CACHE)
+    ORACLE["scans"] += 1
+    ORACLE["own_true_rays"] += int(ref[2].sum())
+    prefixes = list(own_prefixes)
+    if prefixes not in ORACLE["prefix_sets"]:
+        ORACLE["prefix_sets"].append(prefixes)
+    bad = ~(np.isclose(ref[0], got[0], rtol=0.0, atol=0.0, equal_nan=True) & (ref[1] == got[1]) & (ref[2] == got[2]))
+    if bad.any():
+        ORACLE["mismatched_scans"] += 1
+        ORACLE["mismatched_rays"] += int(bad.sum())
+        if ORACLE["first_mismatch"] is None:
+            i = int(np.argmax(bad))
+            ORACLE["first_mismatch"] = {"ray": i, "loop": [float(ref[0][i]), bool(ref[1][i]), bool(ref[2][i])],
+                                        "fast": [float(got[0][i]), bool(got[1][i]), bool(got[2][i])],
+                                        "prefixes": prefixes}
+    return ref
+
+
+def oracle_record() -> dict:
+    return {"mode": CAST_MODE, **{k: (list(v) if isinstance(v, list) else v) for k, v in ORACLE.items()},
+            "own_cache_entries": len(_OWN_CACHE)}
 
 
 # Real-time plan 5.20 G3-1a: every N-th scan (FORKLIFT_LIVE_LIDAR_PROFILE_EVERY, 0 = off) is cast through the same
@@ -227,6 +320,7 @@ __all__ = [
     "LaserMount",
     "cast_scan",
     "cast_scan_flags",
+    "cast_scan_flags_fast",
     "draw_points",
     "laser_pose_2d",
     "laser_rays_world",
