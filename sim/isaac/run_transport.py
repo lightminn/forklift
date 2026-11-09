@@ -1153,6 +1153,14 @@ def arguments() -> argparse.Namespace:
         "its physical validity read it, the localization never does.",
     )
     parser.add_argument(
+        "--start-known",
+        action="store_true",
+        help="docs/plans/2026-11-09-l4c-repro-cancel-other-target.md 1.3 (diagnostic): the truck placed at --start-pose "
+        "and the start known there -- the odometry, the obstacle layer's first scan and the bridge's start check begin "
+        "at its rear axle, as they do at the scene's start; no relocalization. A live session on a survey map whose "
+        "bridge is told the same pose (the launcher's START_POSE_KNOWN). Off (default): as every earlier run.",
+    )
+    parser.add_argument(
         "--start-relocalize",
         action="store_true",
         help="B-P2b (plan 1.2): the start is unknown to the localization -- before the SLAM link the stationary scans "
@@ -1646,7 +1654,14 @@ def arguments() -> argparse.Namespace:
             parser.error("--scan-capture-poses is a batch capture: not with --live or --slam-feedback")
     elif args.scan_capture_out is not None or args.scan_capture_bundle is not None:
         parser.error("--scan-capture-out and --scan-capture-bundle go with --scan-capture-poses")
-    if args.start_relocalize:  # B-P2b (plan 1.1, 1.2)
+    if args.start_known:  # the repro batch's H0 (diagnostic): a known start at a placed pose
+        if args.start_pose is None or args.start_relocalize:
+            parser.error("--start-known needs --start-pose and no --start-relocalize")
+        if not args.live or args.slam_map_bundle is None:
+            parser.error("--start-known is a live session on a survey map (--live, --slam-map-bundle)")
+        if args.reloc_dir is not None or args.reloc_unattended or args.reloc_operator_timeout_s is not None:
+            parser.error("--reloc-dir, --reloc-unattended and --reloc-operator-timeout-s go with --start-relocalize")
+    elif args.start_relocalize:  # B-P2b (plan 1.1, 1.2)
         if args.start_pose is None or args.reloc_dir is None:
             parser.error("--start-relocalize needs --start-pose (where the truck is placed) and --reloc-dir")
         if not args.live or args.slam_map_bundle is None or args.obstacle_layer is None:
@@ -3150,12 +3165,24 @@ def spawn_base_pose(args, scenario) -> tuple:
     return (rear.x_m + off * math.cos(rear.yaw_rad), rear.y_m + off * math.sin(rear.yaw_rad), rear.yaw_rad)
 
 
-def map_start_rear(scenario, start_reloc) -> tuple:
+def known_start_rear(args):
+    """--start-known: the rear axle of the placed base_link (world = map, as at the scene's start); None otherwise."""
+    if not getattr(args, "start_known", False):
+        return None
+    x, y, yaw = (float(v) for v in args.start_pose)
+    off = abs(float(args.rear_axle_offset_m))
+    return (x - off * math.cos(yaw), y - off * math.sin(yaw), yaw)
+
+
+def map_start_rear(scenario, start_reloc, known=None) -> tuple:
     """Where the odometry, the obstacle layer's first scan and the bridge's start check begin (map rear axle): a start
-    relocalization's estimate (B-P2 plan 1.1, 1.2 step 10), else the scene's start (odom = map = world, as before)."""
-    if start_reloc is None:
-        return (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
-    return tuple(float(v) for v in start_reloc["estimate_rear"])
+    relocalization's estimate (B-P2 plan 1.1, 1.2 step 10), else a known start at a placed pose (``known``,
+    --start-known), else the scene's start (odom = map = world, as before)."""
+    if start_reloc is not None:
+        return tuple(float(v) for v in start_reloc["estimate_rear"])
+    if known is not None:
+        return tuple(float(v) for v in known)
+    return (scenario.start_rear.x_m, scenario.start_rear.y_m, scenario.start_rear.yaw_rad)
 
 
 def truck_spawn_problem(args, initial_base, base_start) -> str | None:
@@ -4853,6 +4880,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
                                            console=reloc_console, sink=pose_box["sink"])
         reloc_console.service("setup")
+    if known_start_rear(args) is not None:  # the repro batch's H0: a known start at the placed pose (no matching)
+        state["start_known"] = {"base": list(spawn_base_pose(args, scenario)), "rear": list(known_start_rear(args))}
     if obstacle is not None:
         import planar_lidar as obstacle_lidar
 
@@ -4872,7 +4901,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 obstacle_module.beam_limits(origin, directions, band_top_m=obstacle["layer"].band_top_m,
                                              band_bottom_m=obstacle["layer"].band_bottom_m),
             )
-        start_pose = map_start_rear(scenario, start_reloc)  # the map start (rear axle), never the placed pose
+        # the map start (rear axle): never the placed pose of a relocalization; a known placed start's own rear axle
+        start_pose = map_start_rear(scenario, start_reloc, known_start_rear(args))
         obstacle["layer"].add_scans(0.0, prime_raw, odom_rear=start_pose, loaded=False)
         if args.scan_capture_poses is not None:
             run_scan_capture(args, state, settings, world, robot, obstacle["layer"], prime_base)
@@ -6289,7 +6319,7 @@ def drive(S, isaac) -> None:
 
         # The known start (odom = map = world); the plan's v3 state machine. B-P2b: a start relocalization's
         # estimate instead -- the odometry and the bridge's start check begin there (plan 1.2 step 10).
-        slam_start = map_start_rear(scenario, start_reloc)
+        slam_start = map_start_rear(scenario, start_reloc, known_start_rear(args))
         slam = {
             "link": isaac.slam_link_client(
                 str(args.slam_feedback), timeout_s=args.slam_reply_timeout
@@ -11139,7 +11169,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
-        and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s")
+        and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s",
+                       "start_known")
              or v not in (None, False))
         # the vehicle-side F1 block (plan 2026-11-08 2.5): with the relocalization, the value applied, always
         and (k != "operator_placed_auto" or args.start_relocalize)

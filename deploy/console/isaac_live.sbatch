@@ -56,6 +56,10 @@
 #   F1_AUTONOMY (block|allow; docs/plans/2026-11-08-f1-vehicle-block.md, lead 2026-11-08): with START_POSE, unset is
 #   block -- an operator-placed start (or one of unknown source) refuses AUTO and missions for the epoch, teleop open;
 #   allow only for an approved development run (the value is in the launch log and the runner's recorded arguments).
+#   START_POSE_KNOWN (diagnostic; docs/plans/2026-11-09-l4c-repro-cancel-other-target.md 1.3, the repro batch's H0):
+#   "x,y,yaw" world base_link -- the truck placed there and its start known there, no relocalization: the runner gets
+#   --start-pose/--start-known, the bridge it as its MAP_START_POSE. Needs a survey map; never with START_POSE or
+#   START_RELOC=on (it turns the start relocalization off); no F1 block (nothing is placed by an operator).
 #
 # Run from the repository root. Open the console through   ssh -N -L 8798:127.0.0.1:$PORT <host>.
 set -u
@@ -76,6 +80,9 @@ case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exi
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
+# the repro batch's H0 (diagnostic): a known start is the bridge's start pose on any survey map, the registry's or one
+# given by hand (checked with the start choice below)
+[ -n "${START_POSE_KNOWN:-}" ] && [ -n "${MAP_BUNDLE:-}" ] && MAP_START_POSE=$START_POSE_KNOWN
 if [ -n "${MAP_BUNDLE:-}" ]; then
   # a bundle folder that is not there stops the launch (an empty realpath would have read as mapping)
   MAP_BUNDLE=$(realpath -e "$MAP_BUNDLE") || { echo "no SLAM bundle folder ${MAP_BUNDLE}" >&2; exit 2; }
@@ -110,6 +117,16 @@ fi
 if [ -n "${START_POSE:-}" ] && [ -z "${MAP_BUNDLE:-}" ]; then
   echo "START_POSE relocalizes on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2
   exit 2
+fi
+if [ -n "${START_POSE_KNOWN:-}" ]; then  # the repro batch's H0 (diagnostic): a known start at a placed pose
+  [ -n "${START_POSE:-}" ] && { echo "START_POSE_KNOWN and START_POSE are two starts: give one" >&2; exit 2; }
+  if [ -z "${MAP_BUNDLE:-}" ]; then
+    echo "START_POSE_KNOWN is a known start on a survey map: it needs one (slam: $SLAM_CHOICE)" >&2; exit 2
+  fi
+  if [ -n "${START_RELOC+set}" ] && [ "$START_RELOC" != off ]; then
+    echo "START_RELOC=${START_RELOC} contradicts START_POSE_KNOWN (a known start, no relocalization)" >&2; exit 2
+  fi
+  START_RELOC=off
 fi
 # The start (lead 2026-10-31, start relocalization plan 7.1): the operator's console relocalizes by default -- placed at
 # the registry's scene start (the survey's own settled start, ~80 um from the scene's nominal one; the localization
@@ -154,6 +171,9 @@ else
     START_MODE="known (no survey map to relocalize on)"
   fi
 fi
+if [ -n "${START_POSE_KNOWN:-}" ]; then  # where the truck stands is where the SLAM starts (map = world, set above)
+  START_MODE="known at START_POSE_KNOWN (diagnostic: placed there, no relocalization)"
+fi
 echo "slam: $SLAM_CHOICE"
 echo "start: $START_MODE"
 [ -n "${START_POSE:-}" ] && echo "F1_AUTONOMY=$F1_AUTONOMY (an operator-placed start: block refuses AUTO and missions)"
@@ -172,6 +192,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
+  printf 'START_POSE_KNOWN=%q\n' "${START_POSE_KNOWN:-}"  # the repro batch's H0: placed and known (empty: off)
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
   printf 'RELOC_UNATTENDED=%q\nRELOC_WAIT_S=%q\n' "${RELOC_UNATTENDED:-}" "$RELOC_WAIT_S"  # B-P2c
   printf 'F1_AUTONOMY=%q\n' "$F1_AUTONOMY"  # the vehicle-side F1 block (plan 2026-11-08 2.5)
@@ -232,6 +253,8 @@ RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the 
                                   --reloc-operator-timeout-s "$((RELOC_WAIT_S - 60))")
 [ -n "${START_POSE:-}" ] && [ "${RELOC_UNATTENDED:-}" = 1 ] && RELOC+=(--reloc-unattended)
 [ -n "${START_POSE:-}" ] && RELOC+=(--operator-placed-auto "${F1_AUTONOMY:-block}")  # plan 2026-11-08 2.5
+# the repro batch's H0 (diagnostic): placed at START_POSE_KNOWN and known there; one word, as above
+[ -n "${START_POSE_KNOWN:-}" ] && RELOC=("--start-pose=$START_POSE_KNOWN" --start-known)
 POSE=()  # the unconfirmed position check (plan 2026-11-06-unconfirmed-validation 2); off: as before
 [ "${POSE_CHECK:-off}" != off ] && POSE=(--pose-check "$POSE_CHECK")
 [ "${POSE_CHECK:-off}" = on ] && POSE+=(--pose-check-bounds "$POSE_CHECK_BOUNDS")
