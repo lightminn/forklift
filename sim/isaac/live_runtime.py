@@ -321,6 +321,18 @@ class LiveRuntime:
                 self.trace_saved = self.trace.save(self.output / "tick_trace.npz")
             except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
                 self.trace_saved = {"error": repr(exc), "rows": self.trace.rows}
+        if TIMERS.long_s is not None:
+            # Real-time plan 5.18 G2-0: the long-call record, written once beside the trace.
+            try:
+                path = self.output / "long_calls.json"
+                path.write_text(json.dumps({"threshold_s": TIMERS.long_s, "dropped": TIMERS.long_dropped,
+                                            "overhead_s": TIMERS.long_overhead_s,
+                                            "region_calls": TIMERS.long_region_calls, "records": TIMERS.long}))
+                self.long_calls_saved = {"records": len(TIMERS.long), "dropped": TIMERS.long_dropped,
+                                         "overhead_s": TIMERS.long_overhead_s,
+                                         "region_calls": TIMERS.long_region_calls, "path": str(path)}
+            except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
+                self.long_calls_saved = {"error": repr(exc)}
         self.settle_records()
         ended = self.server.stop()
         if self.port_file is not None:
@@ -335,7 +347,8 @@ class LiveRuntime:
         self.log({"event": "end", "server_ended": ended, "pacing": self.pacer.report(),
                   "camera_latency_s": self.camera_latency.report(),
                   "camera_pixel_latency_s": self.camera_pixel_latency.report(),
-                  "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved})
+                  "camera_pixel_unknown": self.camera_pixel_unknown, "tick_trace": self.trace_saved,
+                  **({"long_calls": self.long_calls_saved} if hasattr(self, "long_calls_saved") else {})})
         if not self.io.close(self._io_left(), on_end=lambda: self._log.close()):
             # stuck on the disk: the log has no end summary, and its file is closed once the writer has ended (its
             # current file -- a roll-over reopens it)

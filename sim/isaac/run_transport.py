@@ -4283,7 +4283,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             except Exception as exc:  # noqa: BLE001 -- the mission's failure, by its type
                 raise RuntimeError(f"recognition_error:{type(exc).__name__}") from exc
     if args.use_perception:
+        lifecycle_mark("perception_camera_initialize_start")
         perception_camera.initialize()
+        lifecycle_mark("perception_camera_initialize_end")
         verify_camera_intrinsics(perception_camera, perception_calibration, state)
         # Capture needs axial depth as well as RGBA (see determinism_probe.py).
         perception_camera.add_distance_to_image_plane_to_frame()
@@ -4316,11 +4318,14 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if stage.GetPrimAtPath("/World/Scene").IsValid():
                     label_targets.append(("/World/Scene", "floor"))
                 label_targets += [(p_, f"inst_{k_}") for k_, p_ in enumerate(state["scene_pallets"], start=1)]
+            lifecycle_mark("semantic_labels_start")
             for path_, label_ in label_targets:
                 prim_ = stage.GetPrimAtPath(path_)
                 require(prim_.IsValid(), f"recognition label target {path_} is missing")
                 add_labels(prim_, labels=[label_], instance_name="class")
+            lifecycle_mark("semantic_labels_end", n=len(label_targets))
             perception_camera.add_semantic_segmentation_to_frame({"colorize": False})
+            lifecycle_mark("semantic_annotator_attached")
             state["recognition"] = {"labels": [list(t_) for t_ in label_targets]}
         if args.pocket_check or args.record_pocket_frames or args.near_tracking:
             pocket_camera.initialize()
@@ -4493,7 +4498,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 atexit.register(far_learned["worker"].close)
                 # What really runs: a CUDA request that does not come up stops the run here, before any driving
                 # (it once fell back to the CPU silently).
+                lifecycle_mark("learned_providers_wait")
                 far_learned["active_providers"] = far_learned["worker"].providers()
+                lifecycle_mark("learned_providers_ready")
                 far_learned["source"] = frr.LearnedSource(far_learned["worker"])
                 far_learned["record"] = {
                     "kind": "learned", "onnx": str(args.recognition_onnx),
@@ -8103,7 +8110,9 @@ def drive(S, isaac) -> None:
             # Real-time plan D3: a live run takes the fastest kernels (a batch run stays on the reference unless told),
             # compiled (or loaded) before the first step, not in it.
             live_kernels.prefer_fast()
+            lifecycle_mark("kernels_warm_up_start")
             state["kernels"] = {"mode": live_kernels.mode(), "warm_up_s": live_kernels.warm_up()}
+            lifecycle_mark("kernels_warm_up_end")
             if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") != "0":
                 # Real-time plan D8: the long plans go to a worker process; the control loop stands and goes on.
                 from forklift_core.planning.plan_worker import PlanWorker, worker_env
@@ -8297,6 +8306,8 @@ def drive(S, isaac) -> None:
                 world_step_untraced_ = world.step
 
                 def world_step_traced_(*a_, **k_):
+                    if live_timers.long_s is not None:
+                        live_timers.sched_mark()  # 5.18 G2-0: the run-queue wait of a long call counts from here
                     live.trace.set("world_start", live.trace.now())
                     try:
                         return world_step_untraced_(*a_, **k_)
@@ -8307,16 +8318,16 @@ def drive(S, isaac) -> None:
 
                 world.step = world_step_traced_
             if args.record_slam:  # the module and the scan cadence exist only with the recorded scans
-                live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast")
+                live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast", by_parent=True)
             if slam is not None:
                 live_timers.wrap(slam["link"], "exchange", "slam.exchange")
             if obstacle is not None:
                 layer_class_ = type(obstacle["layer"])
                 for name_ in ("add_scans", "refresh", "limit", "check_candidate", "planner_grid"):
-                    live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True)
-                live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True)
-                live_timers.wrap(TimedShadow, "apply", "shadow.apply")
-                live_timers.wrap(TimedShadow, "_move", "shadow.move")  # real-time plan D9d: is the 0.27 s spike the move?
+                    live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True, by_parent=True)
+                live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True, by_parent=True)
+                live_timers.wrap(TimedShadow, "apply", "shadow.apply", by_parent=True)
+                live_timers.wrap(TimedShadow, "_move", "shadow.move", by_parent=True)  # real-time plan D9d: is the 0.27 s spike the move?
                 # D9d: the move was not it (d9a_1: 114 calls, at most 14 ms); time Python's garbage collections.
                 # A collection can start at any allocation -- inside the status line's walk over the timers too --
                 # so the callback only appends to its own list, folded into the timers at a tick's start (Codex D9
@@ -8333,7 +8344,8 @@ def drive(S, isaac) -> None:
 
                 live_gc_.callbacks.append(live_gc_timer)
                 for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
-                    live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True)
+                    live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True,
+                                     by_parent=True)  # by_parent: the measurement mode only (5.22 M3)
             for name_, value_ in list(vars(type(core)).items()):  # every public step of the mission core
                 if callable(value_) and not name_.startswith("_"):
                     live_timers.wrap(type(core), name_, f"core.{name_}")
@@ -8341,6 +8353,54 @@ def drive(S, isaac) -> None:
                           "grid_world", "grid_kwargs", "final_straight_prefix"):  # the planner ports
                 if callable(getattr(core.hooks, name_, None)):
                     live_timers.wrap(core.hooks, name_, f"plan.{name_}", by_caller=True)
+            def live_prestart_(live_):
+                if live_timers.long_s is not None:
+                    for name_ in sorted(vars(core.hooks)):  # every port the core calls (capture, detection, dumps)
+                        if callable(getattr(core.hooks, name_, None)) and not name_.startswith("__") and name_ not in (
+                                "plan_transport", "plan_transport_leg", "plan_return_leg", "plan_observation_leg",
+                                "grid_world", "grid_kwargs", "final_straight_prefix"):
+                            live_timers.wrap(core.hooks, name_, f"hook.{name_}", long_only=True)
+                lifecycle_mark("live_start_call")
+
+            long_ms_ = os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS")
+            if long_ms_:
+                # Real-time plans 5.18 G2-0 / 5.20 G3-1a / 5.21 G5-0: every region call of at least this many
+                # milliseconds, with its caller path, self time, thread CPU time, run-queue wait and trace row,
+                # written at the live close (long_calls.json). The finer regions below are long-only: they enter
+                # this record but not the status line's timers, which stay as they were. Off by default.
+                if live.trace is None:
+                    raise ValueError("FORKLIFT_LIVE_LONG_CALLS_MS needs FORKLIFT_LIVE_TICK_TRACE=1 (the rows it keys on)")
+                live_timers.long_s = float(long_ms_) / 1000.0
+                live_timers.where = lambda: {"row": live.trace.row_now(),
+                                             "phase": "control" if live.trace.in_control else "step"}
+                wrapped_ = {(type(core), n_) for n_, v_ in vars(type(core)).items()
+                            if callable(v_) and not n_.startswith("_")}
+                for name_, value_ in list(vars(type(core)).items()):  # the mission core's own private steps
+                    if callable(value_) and name_.startswith("_") and not name_.startswith("__") \
+                            and (type(core), name_) not in wrapped_:
+                        live_timers.wrap(type(core), name_, f"core.{name_}", long_only=True)
+                # The core's ports are wrapped just before the live start (live_prestart_), once every one is wired
+                # (Codex review P2-4: prepare_start_ok, live_mission_ready/start and trace_ground are set after here).
+                if obstacle is not None:
+                    # 5.20 G3-1a: the scan processing's inner steps (1-3 ms each, under the long-call threshold) go to
+                    # the status line's timers, each split by the region it ran inside (name<parent: _geometry runs
+                    # under grid.snapshot<refresh and under the layer's own memory hits) -- in this measurement mode
+                    # only, so a run without it logs as before.
+                    import forklift_core.perception.obstacle_grid as timed_grid_module
+                    import forklift_core.control.shadow_memory as timed_shadow_module
+
+                    for name_ in ("_geometry", "_marks", "_clear_group", "_mark_disks", "_rect_mask", "prune"):
+                        live_timers.wrap(TimedGrid, name_, f"grid.{name_}", by_parent=True)
+                    for name_ in ("_line_close", "_dilate", "_erode"):
+                        live_timers.wrap(timed_grid_module, name_, f"grid.{name_}", by_parent=True)
+                    for name_ in ("_retained_stamps_batched", "band_cells", "whole_cells"):
+                        if hasattr(timed_shadow_module, name_):
+                            live_timers.wrap(timed_shadow_module, name_, f"shadow.{name_}", by_parent=True)
+                    if callable(getattr(TimedShadow, "_retained_stamps", None)):
+                        live_timers.wrap(TimedShadow, "_retained_stamps", "shadow._retained_stamps", by_parent=True)
+                    for name_, value_ in list(vars(layer_class_).items()):
+                        if callable(value_) and name_.startswith("_") and not name_.startswith("__"):
+                            live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_parent=True)
             live_permit_untimed_ = live_permit
 
             def live_permit(curvatures, direction, check):
@@ -9111,7 +9171,10 @@ def drive(S, isaac) -> None:
                 video={"frame_audit": frame_audit, "video_frames": video_frames if args.robot_camera else None,
                        "overlay": overlay}
                 if encoder is not None else None)
+            live_prestart_(live)  # 5.18/5.21 measurement (off by default): the core's ports, the start marks
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
+            if lifecycle_on():
+                live.log({"event": "lifecycle", "marks": list(LIFECYCLE)})  # 5.21 G5-0, on the live log's clock
             if pose_box["sink"] is not None:
                 # plan 3.3: checking from the first live tick -- nothing opens until the start check's result
                 pose_box["rt"] = make_pose_runtime(args, start_reloc, slam_bundle_, obstacle, pose_box["sink"],
@@ -9351,6 +9414,8 @@ def drive(S, isaac) -> None:
                 if live is not None:
                     if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
                         live.trace.control("ctrl_start", live.trace.now())
+                        if live_timers.long_s is not None:
+                            live_timers.sched_mark()  # 5.18 G2-0: a control call's run-queue wait counts from here
                     live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
@@ -11219,7 +11284,26 @@ def check_args_only(args: argparse.Namespace) -> int:
     return 0
 
 
+# Real-time plan 5.21 G5-0: start-up milestones on the monotonic clock (the tick trace's and the live log's), kept only
+# with the long-call record on (FORKLIFT_LIVE_LONG_CALLS_MS, read when the run starts, as that record reads it). They
+# go to the run's result (state["lifecycle"], so a start that fails before the live log keeps them) and to the live
+# log at its start. Render products' first complete and first valid frames are not timed here: polling them adds the
+# GPU syncs the start-up stalls may come from (plan 5.21: those belong to the separate discriminating runs).
+LIFECYCLE: list = []
+
+
+def lifecycle_on() -> bool:
+    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
+
+
+def lifecycle_mark(name: str, **fields) -> None:
+    if lifecycle_on():
+        LIFECYCLE.append({"mark": name, "mono": time.monotonic(), **fields})
+
+
 def main() -> None:
+    LIFECYCLE.clear()
+    lifecycle_mark("runner_main")
     args = arguments()
     if args.check_args:
         sys.exit(check_args_only(args))
@@ -11273,6 +11357,8 @@ def main() -> None:
                               "diagnostics": {}}} if args.deterministic else {}),
         "arguments": recorded_arguments(args),
     }
+    if lifecycle_on():
+        state["lifecycle"] = LIFECYCLE  # 5.21 G5-0: the same list, so a start that fails early still keeps its marks
     scene_root = Path(args.base_scene).resolve().parent
     state["scene_sha256"] = {
         str(path.relative_to(scene_root)): hashlib.sha256(path.read_bytes()).hexdigest()
