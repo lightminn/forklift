@@ -12,10 +12,15 @@ import pytest
 from tools import isaac_bundle as ib
 
 
+REAL_MODES = ib.gpu_persistence_modes
+
+
 @pytest.fixture(autouse=True)
 def _gpus_persistent(monkeypatch):
-    """The check reads the node's GPU persistence mode; tests see two GPUs with it on unless they say otherwise."""
+    """The check reads the node's GPU persistence mode from outside a job; tests see two GPUs with it on and run as
+    if from the login shell (the ws1 test job itself is a Slurm job) unless they say otherwise."""
     monkeypatch.setattr(ib, "gpu_persistence_modes", lambda: {0: "Enabled", 1: "Enabled"})
+    monkeypatch.setattr(ib, "in_job_context", lambda environ=None: False)
 
 PY = sys.executable
 
@@ -2043,13 +2048,12 @@ def test_persistence_problems_name_every_gpu_without_it():
 def test_gpu_persistence_modes_parses_nvidia_smi(monkeypatch):
     class P:
         returncode, stdout = 0, "0, Enabled\n1, Disabled\n"
-    monkeypatch.undo()  # the real reader, with nvidia-smi replaced
-    monkeypatch.setattr(ib.subprocess, "run", lambda *a, **k: P())
-    assert ib.gpu_persistence_modes() == {0: "Enabled", 1: "Disabled"}
+    monkeypatch.setattr(ib.subprocess, "run", lambda *a, **k: P())  # the real reader, nvidia-smi replaced
+    assert REAL_MODES() == {0: "Enabled", 1: "Disabled"}
     P.returncode = 9
-    assert ib.gpu_persistence_modes() is None
+    assert REAL_MODES() is None
     monkeypatch.setattr(ib.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("nvidia-smi")))
-    assert ib.gpu_persistence_modes() is None
+    assert REAL_MODES() is None
 
 
 def test_check_refuses_a_gpu_without_persistence_unless_allowed(tmp_path, capsys, monkeypatch):
@@ -2065,7 +2069,8 @@ def test_check_refuses_a_gpu_without_persistence_unless_allowed(tmp_path, capsys
     assert ib.main(args + ["--allow-no-persistence"]) == 0
     assert "warning (--allow-no-persistence)" in capsys.readouterr().out
     proof = json.loads((tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)).read_text())
-    assert proof["gpu_persistence"] == {"modes": {"0": "Enabled", "1": "Disabled"}, "allowed_without": True}
+    g = proof["gpu_persistence"]
+    assert (g["modes"], g["allowed_without"], g["boot_id"]) == ({"0": "Enabled", "1": "Disabled"}, True, ib.boot_id())
 
 
 def test_check_records_the_persistence_it_saw(tmp_path, monkeypatch):
@@ -2074,4 +2079,52 @@ def test_check_records_the_persistence_it_saw(tmp_path, monkeypatch):
     monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
     assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 0
     proof = json.loads((tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)).read_text())
-    assert proof["gpu_persistence"] == {"modes": {"0": "Enabled", "1": "Enabled"}, "allowed_without": False}
+    g = proof["gpu_persistence"]
+    assert (g["modes"], g["allowed_without"]) == ({"0": "Enabled", "1": "Enabled"}, False)
+    assert g["queried"][0] <= g["queried"][1]
+
+
+def _checked(tmp_path, monkeypatch):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "r0", "argv": py("pass")}) + "\n")
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
+    args = ["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]
+    assert ib.main(args) == 0
+    return path, args
+
+
+def test_a_failing_re_check_withdraws_the_earlier_proof(tmp_path, monkeypatch):
+    path, args = _checked(tmp_path, monkeypatch)
+    data = path.read_bytes()
+    assert ib.verify_preflight(path, data, ib.load_runs(str(path), text=data.decode()), {}) == []
+    monkeypatch.setattr(ib, "gpu_persistence_modes", lambda: {0: "Enabled", 1: "Disabled"})
+    assert ib.main(args) == 1
+    problems = ib.verify_preflight(path, data, ib.load_runs(str(path), text=data.decode()), {})
+    assert problems and "no preflight proof" in problems[0]
+
+
+def test_a_proof_without_the_gpu_check_or_from_another_boot_does_not_verify(tmp_path, monkeypatch):
+    path, _ = _checked(tmp_path, monkeypatch)
+    data = path.read_bytes()
+    runs = ib.load_runs(str(path), text=data.decode())
+    proof_path = tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)
+    proof = json.loads(proof_path.read_text())
+    monkeypatch.setattr(ib, "boot_id", lambda: "another-boot")
+    assert any("rebooted" in p for p in ib.verify_preflight(path, data, runs, {}))
+    del proof["gpu_persistence"]
+    proof_path.write_text(json.dumps(proof))
+    assert any("no GPU persistence check" in p for p in ib.verify_preflight(path, data, runs, {}))
+
+
+def test_check_inside_a_job_is_refused_and_queries_nothing_after_other_problems(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "r0", "argv": py("pass")}) + "\n")
+    args = ["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
+    monkeypatch.setattr(ib, "in_job_context", lambda environ=None: True)
+    assert ib.main(args) == 1 and "inside a Slurm job" in capsys.readouterr().out
+    queried = []
+    monkeypatch.setattr(ib, "gpu_persistence_modes", lambda: queried.append(1) or {0: "Enabled"})
+    monkeypatch.setattr(ib, "in_job_context", lambda environ=None: False)
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: ["r0: something else"])
+    assert ib.main(args) == 1 and queried == []

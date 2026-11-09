@@ -547,6 +547,38 @@ def persistence_problems(modes) -> list[str]:
     return []
 
 
+def boot_id() -> str | None:
+    """This boot of the node: persistence mode is not kept across a reboot, so a proof is bound to the boot it saw."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def in_job_context(environ=None) -> bool:
+    """Inside a Slurm job its device cgroup hides the node's other GPUs, so nvidia-smi there cannot show them all."""
+    return bool((os.environ if environ is None else environ).get("SLURM_JOB_ID"))
+
+
+def gpu_check(allow: bool, skip: bool) -> tuple[list[str], list[str], dict]:
+    """(problems, warnings, the proof's record) of the node's GPU persistence (realtime plan 5.22, 2026-11-09). With
+    other problems already found (``skip``) nothing is queried: a query from outside a job is itself what stalls a
+    GPU without persistence. ``allow`` (--allow-no-persistence) turns the problems into warnings, kept in the record."""
+    if skip:
+        return [], [], {}
+    if in_job_context():
+        found = ["check runs inside a Slurm job, whose nvidia-smi sees only the job's GPU: run it from the login "
+                 "shell to see every GPU of the node"]
+        record = {"modes": None, "boot_id": boot_id(), "in_job": True}
+    else:
+        t0 = time.time()
+        modes = gpu_persistence_modes()
+        record = {"modes": modes, "boot_id": boot_id(), "queried": [t0, time.time()]}
+        found = persistence_problems(modes)
+    record["allowed_without"] = bool(found and allow)
+    return ([], found, record) if allow else (found, [], record)
+
+
 def write_preflight(list_path, data: bytes, runs, runner, info, inputs, gpu=None) -> Path:
     """The list's preflight proof beside it: the list bytes checked, the files the verdict rests on as hashed before
     the check (``inputs``), what each run's launch chose (SLAM mode, bundle, map id)."""
@@ -577,6 +609,17 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
     problems = []
     if proof.get("list_sha256") != hashlib.sha256(data).hexdigest():
         problems.append(f"{path} is the proof of other list bytes: the list changed since its check")
+    gpu = proof.get("gpu_persistence")
+    if not isinstance(gpu, dict) or "allowed_without" not in gpu:
+        problems.append(f"{path} has no GPU persistence check (made before it): run isaac_bundle.py check again")
+    else:
+        if gpu.get("boot_id") is not None and gpu.get("boot_id") != boot_id():
+            problems.append("the node rebooted since the check (persistence mode does not survive one): run "
+                            "isaac_bundle.py check again")
+        modes = gpu.get("modes")
+        if not gpu["allowed_without"] and (not isinstance(modes, dict) or not modes
+                                           or any(m != "Enabled" for m in modes.values())):
+            problems.append(f"{path}: its GPU persistence record is not all on and was not allowed")
     for p, digest in (proof.get("inputs") or {}).items():
         if _sha256_file(p) != digest:
             problems.append(f"{p} changed since the check")
@@ -2181,6 +2224,9 @@ def main(argv=None) -> int:
         a = cp.parse_args(argv[1:])
         data = Path(a.list).read_bytes()  # read once: the bytes checked are the bytes the proof names
         runs = load_runs(a.list, text=data.decode())
+        # a check certifies anew or not at all: an earlier proof of this list is withdrawn before it starts, so a
+        # failing re-check (a GPU's persistence gone since, say) leaves nothing that verifies (Codex P2)
+        Path(str(a.list) + PREFLIGHT_SUFFIX).unlink(missing_ok=True)
         info = {}
         # the files hashed before the check, compared after it: a file edited during the check would otherwise have
         # its new contents certified by the old contents' verdict (Codex)
@@ -2188,13 +2234,10 @@ def main(argv=None) -> int:
         problems = check_runs(runs, a.runner, info=info)
         problems += [f"{p} changed during the check" for p, d in preflight_inputs(runs, a.runner).items()
                      if inputs.get(p) != d]
-        modes = gpu_persistence_modes()
-        gpu_problems = persistence_problems(modes)
-        if gpu_problems and a.allow_no_persistence:
-            print("\n".join(f"warning (--allow-no-persistence): {g}" for g in gpu_problems))
-        else:
-            problems += gpu_problems
-        gpu = {"modes": modes, "allowed_without": bool(gpu_problems and a.allow_no_persistence)}
+        gpu_problems, gpu_warnings, gpu = gpu_check(a.allow_no_persistence, skip=bool(problems))
+        problems += gpu_problems
+        for w in gpu_warnings:
+            print(f"warning (--allow-no-persistence): {w}")
         for line in problems:
             print(line)
         warning = wave_warning(len(runs), a.kind, a.jobs) if a.kind else None
