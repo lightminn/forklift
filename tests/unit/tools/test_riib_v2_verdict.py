@@ -105,7 +105,11 @@ def _confirm_ok():
               "speed_mps": 0.0} for i in range(60)]
     return {"lc": True, "safe": True, "rows": rows, "run": "x", "probe": {"missions_run": runs},
             "args": {"ARM": "B", "SEED": "0"}, "slam_choice": [MAP], "entries": steps,
-            "mission_results": {"m1": ("P-4", "D-1"), "m2": ("P-5", "D-2")}, "truth_track": None}
+            "mission_results": {"m1": ("P-4", "D-1"), "m2": ("P-5", "D-2")}, "log_complete": True,
+            "truth_track": [(19.2 + k * 0.5, 0.0, 0.0) for k in range(11)], "image_id": IMG}
+
+
+IMG = "sha256:aaa"
 
 
 MAP = "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
@@ -119,7 +123,7 @@ def test_a_confirmation_session_needs_lifecycle_4_safety_the_cap_and_a_different
     monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": s["lc"]})
     monkeypatch.setattr(V, "safety", lambda s: {"pass": s["safe"]})
     monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
-    assert V.confirm_session(_confirm_ok(), TG, MAP)["pass"] is True
+    assert V.confirm_session(_confirm_ok(), TG, MAP, IMG)["pass"] is True
     assert confirm_session_({**_confirm_ok(), "lc": False}, TG)["pass"] is False
     assert confirm_session_({**_confirm_ok(), "safe": False}, TG)["pass"] is False
     same = _confirm_ok()
@@ -161,30 +165,30 @@ def test_the_target_is_checked_on_the_request_the_result_and_the_row(monkeypatch
     monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
     sess = _confirm_ok()
     sess["mission_results"] = {"m1": ("P-4", "D-1"), "m2": ("P-4", "D-1")}
-    assert V.confirm_session(sess, TG, MAP)["target_ok"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["target_ok"] is False
     sess = _confirm_ok()
     sess["mission_results"] = {"m1": ("P-4", "D-1")}  # m2's result missing
-    assert V.confirm_session(sess, TG, MAP)["target_ok"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["target_ok"] is False
     sess = _confirm_ok()
     sess["probe"]["missions_run"][1]["pallet_id"] = "P-3"
-    assert V.confirm_session(sess, TG, MAP)["target_ok"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["target_ok"] is False
 
 
 def test_the_stop_hold_reports_motion_during_the_wait(monkeypatch):
     monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": True})
     monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
     monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
-    out = V.confirm_session(_confirm_ok(), TG, MAP)
+    out = V.confirm_session(_confirm_ok(), TG, MAP, IMG)
     assert out["stop_hold"]["held"] is True and out["pass"] is True
     sess = _confirm_ok()
     sess["entries"][30]["speed_mps"] = 0.05  # a wheel command inside the wait
-    assert V.confirm_session(sess, TG, MAP)["stop_hold"]["held"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["stop_hold"]["held"] is False
     sess = _confirm_ok()
     sess["entries"][30]["mode"] = "AUTO"
-    assert V.confirm_session(sess, TG, MAP)["stop_hold"]["held"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["stop_hold"]["held"] is False
     sess = _confirm_ok()
     sess["truth_track"] = [(19.5, 0.0, 0.0), (22.0, 0.02, 0.0)]  # the truck moved 2 cm while STOPPED
-    assert V.confirm_session(sess, TG, MAP)["stop_hold"]["held"] is False
+    assert V.confirm_session(sess, TG, MAP, IMG)["stop_hold"]["held"] is False
     s = {"l4c_s0_B": {"pass": True, "arm": "B", "seed": "0", "stop_hold": {"held": False}},
          "l4c_s1_B": {"pass": True, "arm": "B", "seed": "1", "stop_hold": {"held": True}},
          "l4c_s0_A": {"pass": True, "arm": "A", "seed": "0"}, "l4c_s1_A": {"pass": True, "arm": "A", "seed": "1"}}
@@ -193,7 +197,7 @@ def test_the_stop_hold_reports_motion_during_the_wait(monkeypatch):
 
 
 def confirm_session_(sess, tg):
-    return V.confirm_session(sess, tg, MAP)
+    return V.confirm_session(sess, tg, MAP, IMG)
 
 
 def test_a_session_on_another_map_choice_is_undecidable(monkeypatch):
@@ -201,12 +205,12 @@ def test_a_session_on_another_map_choice_is_undecidable(monkeypatch):
     monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
     monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
     for choices in ([], ["mapping (fallback: no registry row)"], [MAP, "mapping (fallback: x)"]):
-        out = V.confirm_session({**_confirm_ok(), "slam_choice": choices}, TG, MAP)
+        out = V.confirm_session({**_confirm_ok(), "slam_choice": choices}, TG, MAP, IMG)
         assert out["pass"] is False and out["undecidable"] == "slam_choice"
 
 
 def _r(arm, seed, ok=True):
-    return {"pass": ok, "arm": arm, "seed": seed}
+    return {"pass": ok, "arm": arm, "seed": seed, "stop_hold": {"held": True}}
 
 
 def test_the_confirmation_passes_on_both_judged_sessions_and_sends_a_failed_control_to_the_lead():
@@ -238,8 +242,36 @@ def test_a_session_on_another_bridge_image_is_undecidable(monkeypatch):
     monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": True})
     monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
     monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
-    ok = {**_confirm_ok(), "image_id": "sha256:aaa"}
-    assert V.confirm_session(ok, TG, MAP, image_id="sha256:aaa")["pass"] is True
+    assert V.confirm_session(_confirm_ok(), TG, MAP, IMG)["pass"] is True
     for got in ("sha256:bbb", None):
-        out = V.confirm_session({**_confirm_ok(), "image_id": got}, TG, MAP, image_id="sha256:aaa")
+        out = V.confirm_session({**_confirm_ok(), "image_id": got}, TG, MAP, IMG)
         assert out["pass"] is False and out["undecidable"] == "image_id"
+    for expected in (None, ""):  # independent review round 2 P2-2: an empty expectation never switches the check off
+        with pytest.raises(ValueError):
+            V.confirm_session(_confirm_ok(), TG, MAP, expected)
+
+
+@pytest.mark.parametrize("change", ["no_truth", "truth_outside", "one_step", "log_incomplete", "step_gap"])
+def test_missing_stop_evidence_is_not_a_hold(monkeypatch, change):
+    # independent review round 2 P2-1: missing evidence is told apart from a hold and goes to the lead
+    monkeypatch.setattr(V, "lifecycle", lambda s, w: {"pass": True})
+    monkeypatch.setattr(V, "safety", lambda s: {"pass": True})
+    monkeypatch.setattr(V, "c2_steps", lambda s: (set(), []))
+    sess = _confirm_ok()
+    if change == "no_truth":
+        sess["truth_track"] = None
+    elif change == "truth_outside":
+        sess["truth_track"] = [(10.0, 0.0, 0.0), (30.0, 0.0, 0.0)]
+    elif change == "one_step":
+        sess["entries"] = [e for e in sess["entries"] if e["step"] == 30]
+    elif change == "log_incomplete":
+        sess["log_complete"] = False
+    else:
+        sess["entries"] = [e for e in sess["entries"] if e["step"] != 30]
+    hold = V.confirm_session(sess, TG, MAP, IMG)["stop_hold"]
+    assert hold["held"] is None
+    s = {"l4c_s0_B": {"pass": True, "arm": "B", "seed": "0", "stop_hold": hold},
+         "l4c_s1_B": {"pass": True, "arm": "B", "seed": "1", "stop_hold": {"held": True}},
+         "l4c_s0_A": {"pass": True, "arm": "A", "seed": "0"}, "l4c_s1_A": {"pass": True, "arm": "A", "seed": "1"}}
+    out = V.confirm_verdict({"judged": ["l4c_s0_B", "l4c_s1_B"], "controls": ["l4c_s0_A", "l4c_s1_A"]}, s)
+    assert out["outcome"] == "to_lead" and out["stop_not_held"] == ["l4c_s0_B"]
