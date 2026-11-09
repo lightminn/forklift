@@ -33,40 +33,46 @@ def shift(D, row, by):
              C["ctrl_end"]]] += by
 
 
-def test_the_capture_tick_is_the_control_tick_after_the_capture_step():
-    D = trace()
-    D[10, C["flags"]] = BIT["capture"]
-    shift(D, 11, 0.05)
-    D[11, C["ctrl_start"]] = D[11, C["ctrl_end"]] - 0.05  # the save in the tick before step 11
+def test_the_saved_capture_tick_follows_the_last_row_of_a_capture_run():
+    D = trace(60)
+    D[10:20, C["flags"]] = BIT["capture"]  # ten retry renders, the frame taken at row 19 (Codex review P1)
+    D[30, C["flags"]] = BIT["capture"]  # a second capture taken at once
+    for row in (20, 31):
+        shift(D, row, 0.05)
+        D[row, C["ctrl_start"]] = D[row, C["ctrl_end"]] - 0.05  # the save in the tick after the run
     c = tool.capture_ticks(D)
-    assert c["rows"] == [10]
-    assert abs(c["control_next_s"]["median"] - 0.05) < 1e-9 and c["control_same_row_s"]["median"] < 0.01
-    assert abs(c["gap_s"]["median"] - (1 / 120 + 0.05)) < 1e-9
+    assert c["rows"] == [19, 30] and c["runs"] == 2 and c["flagged_rows"] == 11
+    assert abs(c["control_next_s"]["median"] - 0.05) < 1e-9 and c["control_last_flagged_row_s"]["median"] < 0.01
 
 
 def test_gaps_are_counted_near_and_over_and_split_by_their_largest_part():
-    D = trace(60)
+    D = trace(80)
     shift(D, 11, 0.22)  # near, control-made
     D[11, C["ctrl_start"]] = D[11, C["ctrl_end"]] - 0.21
+    shift(D, 51, 0.22)  # near, mostly outside the measured parts: control the largest part but under half the gap
+    D[51, C["ctrl_start"]] = D[51, C["ctrl_end"]] - 0.01
     shift(D, 31, 0.30)  # over, world-made
     D[30, C["world_end"]] = D[30, C["world_start"]] + 0.29
     D[30, C["step_end"]] = D[30, C["world_end"]] + 0.001
     D[30, C["after_end"]] = D[30, C["step_end"]] + 0.001
     g = tool.gap_counts(D, 0)
-    assert g == {"near": 1, "near_control": 1, "over": 1, "over_control": 0}
+    assert g == {"near": 2, "near_control": 1, "over": 1, "over_control": 0}
 
 
 def test_capture_files_must_be_whole_and_open(tmp_path):
     from PIL import Image
 
     Image.new("RGB", (4, 4)).save(tmp_path / "perception_capture_1_rgb.png")
-    np.save(tmp_path / "perception_capture_1_depth_m.npy", np.ones((4, 4)))
+    np.save(tmp_path / "perception_capture_1_depth_m.npy", np.ones((4, 4)))  # finite: its picture is due
     Image.new("RGB", (4, 4)).save(tmp_path / "perception_capture_2_rgb.png")
-    (tmp_path / "perception_capture_3_depth_vis.png").write_bytes(b"not a png")
-    f = tool.capture_files(tmp_path, [{"attempt": 1, "done": True}, {"attempt": 4, "done": True}])
-    assert f["attempts"] == [1, 2, 3]
-    assert "2:depth_m.npy" in f["missing"] and "3:rgb.png" in f["missing"]
-    assert any(m.startswith("4:") for m in f["missing"]) and f["unreadable"] == ["perception_capture_3_depth_vis.png: UnidentifiedImageError"]
+    np.save(tmp_path / "perception_capture_2_depth_m.npy", np.full((4, 4), np.nan))  # no finite value: no picture
+    (tmp_path / "perception_capture_4_depth_vis.png").write_bytes(b"not a png")
+    f = tool.capture_files(tmp_path, [{"attempt": 2, "done": True}, {"attempt": 5, "done": True}])
+    assert f["attempts"] == [1, 2, 4]
+    assert "1:depth_vis.png" in f["missing"] and not any(m.startswith("2:") for m in f["missing"])
+    assert "3:rgb.png" in f["missing"] and "3:depth_m.npy" in f["missing"]  # a whole attempt gone
+    assert "4:rgb.png" in f["missing"] and any(m.startswith("5:") for m in f["missing"])
+    assert f["unreadable"] == ["perception_capture_4_depth_vis.png: UnidentifiedImageError"]
 
 
 def row(n, scene, mode, *, near=(0, 0), over=(0, 0), cap=0.06, done=True, problems=False):
@@ -76,7 +82,7 @@ def row(n, scene, mode, *, near=(0, 0), over=(0, 0), cap=0.06, done=True, proble
             "capture": {"control_next_s": {"median": cap}},
             "files": {"missing": ["x"] if problems else [], "unreadable": []},
             "capture_dump": {"mode": "async", "dropped_full": 0, "errors": 0, "unsettled": 0} if mode == "async" else None,
-            "log_dropped_lines": 0}
+            "log_dropped_lines": 0, "mission_outcomes": [("done", None)], "forbidden_pocket_contacts": 0}
 
 
 def good():
@@ -103,12 +109,25 @@ def test_the_registered_lines_pass_and_each_one_can_fail():
     next(r for r in rows if r["mode"] == "async")["mission_done"] = False
     assert not tool.verdict(rows)["lines"]["4_missions_no_worse"]["pass"]
     rows = good()
+    next(r for r in rows if r["mode"] == "async")["forbidden_pocket_contacts"] = 1  # a safety degradation
+    assert not tool.verdict(rows)["lines"]["4_missions_no_worse"]["pass"]
+    rows = good()
+    next(r for r in rows if r["mode"] == "sync")["mission_done"] = None  # an unknown sync outcome: undecided
+    assert not tool.verdict(rows)["lines"]["4_missions_no_worse"]["pass"]
+    rows = good()
     rows[3]["files"]["missing"] = ["7:rgb.png"]
     assert not tool.verdict(rows)["lines"]["5_no_loss"]["pass"]
     rows = good()
     for r in rows:
-        r["gaps"]["over"] = 2 if r["mode"] == "async" else 1
+        if r["scene"] == "H":  # worse in hall only, better in line_m: per scene it fails
+            r["gaps"]["over"] = 2 if r["mode"] == "async" else 1
+        else:
+            r["gaps"]["over"] = 0 if r["mode"] == "async" else 5
     assert not tool.verdict(rows)["lines"]["6_any_source_over_0_25_not_more"]["pass"]
+    rows = good()
+    for r in rows:  # line 2: the share falls but the count of control-made near gaps rises
+        r["gaps"]["near"], r["gaps"]["near_control"] = ((10, 2) if r["mode"] == "sync" else (40, 3))
+    assert not tool.verdict(rows)["lines"]["2_near_control_share_lower"]["pass"]
     rows = good()
     rows[0]["invalid"] = ["probe exit 1"]
     v = tool.verdict(rows)
