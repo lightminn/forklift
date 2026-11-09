@@ -50,17 +50,19 @@ case "${SET:-}:${ARM}:${FACTOR}" in
   *) echo "SET:ARM:FACTOR ${SET:-}:${ARM}:${FACTOR} is not in plan 5.17's registration" >&2; exit 2 ;;
 esac
 TRACE="--max-sim-seconds 1500"  # the trace buffer (plan 5.17 T6: dropped must be 0); the live loop is not bounded by it
+# Real-time plan 5.23 (G2-1a): CAPTURE_DUMP=sync|async adds --live-capture-dump to the line_m branches; unset, nothing
+CD=${CAPTURE_DUMP:+--live-capture-dump $CAPTURE_DUMP}
 END=(--end-session)
 case ${SET:?far, off, mark or wall} in
   far)
     [ "$ARM" = KP ] && { echo "KP is never run with far recognition (plan 5.17 scope)" >&2; exit 2; }
     export SCENE_FILE=$LINE_M
-    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE"
+    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE${CD:+ $CD}"
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   off)
     [ "$ARM" = K ] && { echo "the far-off branch compares L and KP (plan 5.17)" >&2; exit 2; }
     export SCENE_FILE=$LINE_M
-    export EXTRA_ARGS="$NEAR $TRACE"
+    export EXTRA_ARGS="$NEAR $TRACE${CD:+ $CD}"
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   mark)
     unset SCENE_FILE

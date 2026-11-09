@@ -115,3 +115,11 @@ def test_the_line2_stress_tools_are_batch_only(tmp_path):
     assert p.returncode == 0, p.stderr
     p = _check(*_base(tmp_path / "run"), "--docking-degenerate-continue", "on")
     assert p.returncode == 2 and "needs --d7-docking" in p.stderr
+
+
+def test_the_async_capture_dump_needs_a_live_run(tmp_path):
+    # real-time plan G2-1a: a batch run writes its capture files in place; async is refused, sync accepted
+    p = _check(*_base(tmp_path / "a"), "--live-capture-dump", "async")
+    assert p.returncode == 2 and "--live-capture-dump async needs --live" in p.stderr
+    p = _check(*_base(tmp_path / "b"), "--live-capture-dump", "sync")
+    assert p.returncode == 0, p.stderr

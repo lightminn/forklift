@@ -1373,6 +1373,10 @@ def arguments() -> argparse.Namespace:
                         "arbiter also ages the frame from that step's start (2026-10-17 marker runs: 11 physics "
                         "steps, about one render of the 10 Hz camera; the default adds a render of margin)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
+    parser.add_argument("--live-capture-dump", choices=("sync", "async"), default="sync",
+                        help="real-time plan G2-1a: the capture's diagnostic image and depth files written on the "
+                             "control thread (sync) or handed to the live session's writer thread (async; live "
+                             "only, never while a boundary record is open)")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1871,6 +1875,8 @@ def arguments() -> argparse.Namespace:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
         parser.error("--live-test-far-zone-offset-m needs --live and --recognition far")
+    if args.live_capture_dump == "async" and not args.live:
+        parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
                           or args.live_test_recovery_blocked or args.live_test_return_correction_drops
                           or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
@@ -6597,20 +6603,35 @@ def drive(S, isaac) -> None:
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
     # mission core; what has not moved yet is reached through hooks.
+    capture_dump_io = [None]  # G2-1a: the live session's writer when --live-capture-dump async (set with the runtime)
+
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
-        (a Sink the mission core calls where they stood)."""
+        (a Sink the mission core calls where they stood). Real-time plan G2-1a: with --live-capture-dump async in a
+        live session and no boundary record open, the same writes go to the session's writer thread on copies of the
+        arrays -- the control tick no longer waits on PNG encoding and the disk (about 0.044 s of the pocket
+        detection tick); a writer that refuses them (its byte budget full) gets them written here, as before."""
+        if capture_dump_io[0] is None:  # a batch run (and replay), or sync: as before, nothing new imported
+            write_capture_dump(attempt_number, scene_input.rgb, scene_input.depth_m)
+            return
+        from capture_dump import dispatch_capture_dump
+
+        dispatch_capture_dump(capture_dump_io[0], _BOUNDARY_RECORD.get("gate") is not None, write_capture_dump,
+                              attempt_number, scene_input.rgb, scene_input.depth_m,
+                              state["perception"].setdefault("capture_dump", []))
+
+    def write_capture_dump(attempt_number, rgb, depth_m) -> None:
         # Diagnostic dump for offline root-cause analysis; not part
         # of the perception contract itself.
-        save_image(Image.fromarray(scene_input.rgb),
+        save_image(Image.fromarray(rgb),
             args.output / f"perception_capture_{attempt_number}_rgb.png")
         np.save(
             args.output
             / f"perception_capture_{attempt_number}_depth_m.npy",
-            scene_input.depth_m,
+            depth_m,
         )
-        finite_depth = scene_input.depth_m[
-            np.isfinite(scene_input.depth_m)
+        finite_depth = depth_m[
+            np.isfinite(depth_m)
         ]
         if finite_depth.size:
             depth_range = (
@@ -6618,7 +6639,7 @@ def drive(S, isaac) -> None:
                 float(finite_depth.max()),
             )
             normalized = np.clip(
-                (scene_input.depth_m - depth_range[0])
+                (depth_m - depth_range[0])
                 / max(depth_range[1] - depth_range[0], 1e-6),
                 0,
                 1,
@@ -8159,6 +8180,9 @@ def drive(S, isaac) -> None:
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            if args.live_capture_dump == "async":
+                capture_dump_io[0] = live.io  # real-time plan G2-1a: the capture's files on the session's writer
+                state["capture_dump"] = "async"
             if far_runtime is not None:
                 # Plan 2026-10-22-live-far-recognition T1 (A): the far work on a thread of its own, applied on the
                 # tick by tag; its files on the session's writer; no driving frame inside a capture session.
