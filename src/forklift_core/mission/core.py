@@ -8190,12 +8190,12 @@ class MissionCore:
         name = f"{kind}_dump_{occ_['seq']}.npz"
         file_ = {**entry_, "name": name}
         manifest_["files"].append(file_)
-        started_ = time.monotonic()  # the write's wall time, a record of the diagnostic's own cost (repro P2-2)
+        started_ = self.hooks.wall()  # the write's wall time through the recorded clock port (a replay compares it)
         try:
             self._occupied_write(name, snap_, t, rear, truth_rear, kind, blocked_cells, path_blocked_cells, fields)
         except Exception as exc:  # noqa: BLE001 -- a failed diagnostic write never ends the run; it is listed
             file_["error"] = f"{type(exc).__name__}: {exc}"
-        file_["write_s"] = time.monotonic() - started_
+        file_["write_s"] = self.hooks.wall() - started_
 
     def _occupied_write(self, name, snap_, t, rear, truth_rear, kind, blocked_cells, path_blocked_cells, fields):
         obstacle, ms = self.obstacle, self.ms

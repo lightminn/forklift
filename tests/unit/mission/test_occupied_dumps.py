@@ -85,7 +85,7 @@ class _Fake:
         self.state = {}
         self.commands = SimpleNamespace(mission_id="m2")
         self.hooks = SimpleNamespace(save_npz=lambda name, **arrays: saved.append((name, arrays)),
-                                     truth_rear=lambda: (0.0, 0.0, 0.0))
+                                     truth_rear=lambda: (0.0, 0.0, 0.0), wall=lambda: 0.0)
         self.options = SimpleNamespace(occupied_dumps=True)
         for name in ("_occupied_state", "_occupied_dump", "_occupied_write", "_candidate_dump",
                      "_occupied_new_mission"):
