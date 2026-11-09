@@ -8154,15 +8154,19 @@ class MissionCore:
             self.state.setdefault("occupied_dumps", {"files": [], "drops": []})
         return occ_
 
-    def _occupied_new_mission(self, t: float) -> None:
+    def _occupied_new_mission(self, t: float, plan=None) -> None:
         """``--occupied-dumps`` at a mission's start: no hold episode carried over, the mission's budget, and the
-        grid as the mission starts (Codex review P2-4; repro registration: the snapshot before the mission runs)."""
+        grid as the mission starts (Codex review P2-4; repro registration: the snapshot before the mission runs). The
+        estimated pose is the plan's first pose (the estimate it was planned from -- no new estimate is read, which
+        could move the tracker's state; Codex review P2); NaN without a plan."""
         occ_ = self._occupied_state()
         occ_["holds"].new_mission()
         occ_["budget"].new_mission()
         if self.obstacle is not None:
-            truth_ = self.hooks.truth_rear()
-            self._occupied_dump("mission_start", t, truth_, truth_)
+            poses_ = None if plan is None else getattr(plan, "poses", None)
+            rear_ = (np.asarray(poses_, dtype=float)[0] if poses_ is not None and len(poses_)
+                     else np.full(3, np.nan))
+            self._occupied_dump("mission_start", t, rear_, self.hooks.truth_rear(), rear_source="plan_start")
 
     def _occupied_dump(self, kind: str, t: float, rear, truth_rear, *, blocked_cells=(), path_blocked_cells=(),
                        **fields) -> None:
@@ -8861,7 +8865,7 @@ class MissionCore:
         state["phase"] = ms.phase
         self.commands.adopt()
         if getattr(options, "occupied_dumps", False):
-            self._occupied_new_mission(t)
+            self._occupied_new_mission(t, plan)
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 
@@ -8905,7 +8909,7 @@ class MissionCore:
         state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
         self.commands.adopt()
         if getattr(options, "occupied_dumps", False):
-            self._occupied_new_mission(t)
+            self._occupied_new_mission(t, plan)
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 

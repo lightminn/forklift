@@ -140,6 +140,9 @@ def test_a_new_mission_resets_the_episode_and_budget_and_dumps_the_start():
     occ = f._occupied_state()
     occ["holds"].tick(10.0, True)
     occ["budget"].mission = 5
-    f._occupied_new_mission(30.0)
+    f.hooks.truth_rear = lambda: (-1.27, 0.85, 0.17)
+    f._occupied_new_mission(30.0, SimpleNamespace(poses=np.array([[-1.28, 0.87, 0.17], [-1.0, 0.9, 0.17]])))
     assert occ["holds"].since is None and occ["budget"].mission == 1  # the start dump took one
-    assert saved[-1][0] == "mission_start_dump_1.npz"
+    name, a = saved[-1]
+    assert name == "mission_start_dump_1.npz" and str(a["rear_source"]) == "plan_start"
+    assert a["rear"].tolist() == [-1.28, 0.87, 0.17] and a["truth_rear"].tolist() == [-1.27, 0.85, 0.17]  # not forced equal
