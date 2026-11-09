@@ -293,21 +293,20 @@ class Session:
         return out
 
     def m4_lidar(self) -> dict:
+        """The profiled scans' split, ms a scan (conversion, query, hit and own test, and the loop's total), and their
+        rays a scan (lidar.split.rays books the count in the seconds field, not a time)."""
         totals, scans = defaultdict(float), 0
-        plain_s, plain_n = 0.0, 0
         for r in self.timers:
             for k, v in r["timers"].items():
                 if head(k).startswith("lidar.split."):
                     totals[head(k)] += v[0]
                     if head(k) == "lidar.split.scans":
                         scans += v[1]
-                elif head(k) == "lidar.cast":
-                    plain_s, plain_n = plain_s + v[0], plain_n + v[1]
-        out = {k: totals[k] / scans * 1e3 for k in totals} if scans else {}
-        if scans and plain_n:
-            # lidar.cast holds every scan, the profiled ones too: their extra time is their mean less the others'
-            others = (plain_s - totals["lidar.split.scans"]) / max(plain_n - scans, 1)
-            out["profiled_extra_s_total"] = totals["lidar.split.scans"] - scans * others
+        if not scans:
+            return {}
+        out = {f"{k}_ms_per_scan": totals[k] / scans * 1e3 for k in totals if k != "lidar.split.rays"}
+        out["rays_per_scan"] = totals.get("lidar.split.rays", 0.0) / scans
+        out["profiled_scans"] = scans
         return out
 
     def m5_corrections(self) -> dict:
@@ -411,7 +410,8 @@ def m7_verdict(rows, names_by_set) -> dict:
         else:
             verdict = "cost <= 1 %" if max(bounds) <= 0.01 else "cost > 1 % by the accounting bound"
         outcomes = {tuple(map(tuple, r["mission_outcomes"])) for r in on + off}
-        entry = {"verdict": verdict, "bound_share_of_W": bounds, "mission_outcomes": sorted(map(list, outcomes))}
+        # shown as strings: an outcome may be None (a refused submit has no result), which does not sort with text
+        entry = {"verdict": verdict, "bound_share_of_W": bounds, "mission_outcomes": sorted(map(repr, outcomes))}
         if len(outcomes) == 1 and all(r["mission_outcomes"] for r in on + off):
             w_on = [r["auto_s_per_sim_s"]["W"] for r in on]
             w_off = [r["auto_s_per_sim_s"]["W"] for r in off]
