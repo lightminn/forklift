@@ -1119,3 +1119,24 @@ def test_the_slam_layer_is_kept_apart_even_where_the_observed_memory_has_the_sam
     assert both["memory_observed"].sum() > alone["memory_observed"].sum()
     assert lay.memory.slam_occupied()[a, b] and np.array_equal(
         lay.memory.occupied(), lay.memory.occupied(use_slam=False) | lay.memory.slam_occupied())
+
+
+def test_a_candidate_permit_gives_its_own_walks_cells_only_when_asked():
+    """--occupied-dumps (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2): with_cells adds the
+    cells of the permit's own walks; the verdict and the layer's permission are the same either way, and without it the
+    out dict is as before."""
+    lay = layer()
+    pose = (0.0, 0.0, 0.0)
+    path = np.column_stack((np.linspace(0, 4, 81), np.zeros(81), np.zeros(81)))
+    for k in range(3):
+        lay.add_scans(0.1 * k, _wall_raw(lay, 1.62), odom_rear=pose, loaded=False)
+    lay.refresh(0.2, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=path, loaded=False)
+    held = lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6)
+    plain = lay.candidate_permit(0.2, path, current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0,
+                                 measured_curvature_inv_m=0.0, cap_mps=0.6)
+    cells = lay.candidate_permit(0.2, path, current_pose=pose, direction=1, loaded=False, curvature_inv_m=0.0,
+                                 measured_curvature_inv_m=0.0, cap_mps=0.6, with_cells=True)
+    assert "cells" not in plain and {k: v for k, v in cells.items() if k != "cells"} == plain
+    assert cells["why"] == "blocked:occupied" and cells["cells"]["walk"]  # the wall's cells
+    assert set(cells["cells"]) == {"walk", "ahead", "zone"}
+    assert lay.limit(0.2, current_pose=pose, curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.6) == held

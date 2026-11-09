@@ -1482,20 +1482,6 @@ class MissionCore:
                 raw_base=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[1],
                 raw_q=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[2],
             )
-        if getattr(options, "occupied_dumps", False):
-            # diagnostic (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2): the hold's later ages
-            from forklift_core.mission.occupied_dumps import HoldDumps
-
-            hold_dumps_ = self.__dict__.setdefault("_hold_dumps", HoldDumps())
-            age_ = hold_dumps_.tick(t, allowed == 0.0 and why in ("unknown", "occupied"))
-            if age_ is not None:
-                self._occupied_dump(
-                    f"obstacle_hold_dump_{hold_dumps_.count}.npz", t, rear, truth_rear, kappa=kappa,
-                    direction=direction, loaded=loaded, why=why, hold_age_s=age_, hold_since_s=hold_dumps_.since,
-                    hold_episode=hold_dumps_.episode,
-                    blocked_cells=getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells",
-                                          ()),
-                    path_blocked_cells=getattr(obstacle["layer"].permission.path_check, "blocked_cells", ()))
         ticks = obstacle["ticks"]
         ticks[ms.phase] = ticks.get(ms.phase, 0) + 1
         low = obstacle["min_allowed"]
@@ -1633,6 +1619,22 @@ class MissionCore:
         self.permit_stop_tick(t, rear, allowed, why, acting, gate_only=gate_only)
         if getattr(self, "_exit_latch", None) is not None:
             self.exit_exempt_tick_end(t, rear, loaded, allowed, why, gate_only)
+        if getattr(options, "occupied_dumps", False):
+            # diagnostic (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2): the hold's later ages,
+            # judged on the final allowed of this tick (the D4 path-blocked stop included; Codex review P2-3)
+            from forklift_core.mission.occupied_dumps import HoldDumps
+
+            hold_dumps_ = self.__dict__.setdefault("_hold_dumps", HoldDumps())
+            age_ = hold_dumps_.tick(t, acting and allowed == 0.0 and why in ("unknown", "occupied"))
+            if age_ is not None:
+                self._occupied_dump(
+                    f"obstacle_hold_dump_{hold_dumps_.count}.npz", t, rear, truth_rear, kappa=kappa,
+                    direction=direction, loaded=loaded, why=why, hold_age_s=age_, hold_since_s=hold_dumps_.since,
+                    hold_episode=hold_dumps_.episode,
+                    path_blocked_ticks=int(obstacle.get("path_blocked_ticks", 0)),
+                    blocked_cells=getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells",
+                                          ()),
+                    path_blocked_cells=getattr(obstacle["layer"].permission.path_check, "blocked_cells", ()))
         return SimpleNamespace(allowed=allowed, why=why, acting=acting, pocket_phase=pocket_phase,
                                obstacle_hold=obstacle_hold, requested_speed=requested_speed)
 
@@ -8115,14 +8117,17 @@ class MissionCore:
         strict_ = self._scene_permit_strict(tracker, leg_, uncut)
         # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
         zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
+        dumps_ = getattr(self.options, "occupied_dumps", False)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
             cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
-            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
+            strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0,
+            **({"with_cells": True} if dumps_ else {}))  # the diagnostic's cells; off: the call as before
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
-        if getattr(self.options, "occupied_dumps", False):
-            self._candidate_dump(t, pose_, leg_, int(direction_), hooks.loaded(), permit_)
+        if dumps_:
+            self._candidate_dump("candidate", t, pose_, permit_, leg=np.asarray(leg_, dtype=float),
+                                 direction=int(direction_), loaded=bool(hooks.loaded()))
         return out
 
     def _occupied_dump(self, name: str, t: float, rear, truth_rear, *, blocked_cells=(), path_blocked_cells=(),
@@ -8141,27 +8146,26 @@ class MissionCore:
             blocked_cells=np.asarray(blocked_cells, dtype=np.int64).reshape(-1, 2),
             path_blocked_cells=np.asarray(path_blocked_cells, dtype=np.int64).reshape(-1, 2), **fields)
 
-    def _candidate_dump(self, t: float, pose, leg, direction: int, loaded: bool, permit) -> None:
-        """``--occupied-dumps``: a scene-replan candidate refused for a blocked reason -- its leg, the permit and the
-        blocked cells of the candidate's walk (the check re-run here, read only; with the option off nothing is read)."""
+    def _candidate_dump(self, kind: str, t: float, pose, permit, **fields) -> None:
+        """``--occupied-dumps``: a scene-replan candidate refused for a blocked reason (``kind`` "candidate") or an
+        escape evaluation that chose nothing or whose permit refused (``kind`` "escape"). The cells are the permit's
+        own walks (``candidate_permit(..., with_cells=True)`` -- its fresh permission, so the driving permission is
+        never touched; Codex review P2-1, P2-2): walk, ahead (unknown passes) and the strict zone's."""
         from forklift_core.mission.occupied_dumps import MAX_CANDIDATE_DUMPS, blocked_candidate
 
-        if not blocked_candidate(permit) or self.obstacle is None:
+        if kind == "candidate" and not blocked_candidate(permit):
             return
         count_ = self.__dict__.get("_candidate_dumps", 0)
-        if count_ >= MAX_CANDIDATE_DUMPS:
+        if count_ >= MAX_CANDIDATE_DUMPS or self.obstacle is None:
             return
         self._candidate_dumps = count_ + 1
-        layer_ = self.obstacle["layer"]
-        pose_ = tuple(float(v) for v in pose)
-        walk_ = layer_.check_candidate(leg, current_pose=pose_, direction=direction, loaded=loaded)
-        ahead_ = layer_.check_candidate(leg, current_pose=pose_, direction=direction, loaded=loaded,
-                                        unknown_passes=True)
+        cells_ = (permit or {}).get("cells") or {}
         self._occupied_dump(
-            f"candidate_dump_{self._candidate_dumps}.npz", t, pose_, self.hooks.truth_rear(), direction=direction,
-            loaded=loaded, leg=np.asarray(leg, dtype=float), why=str(permit.get("why")),
-            permit_json=json.dumps(permit, default=str), blocked_cells=getattr(walk_, "blocked_cells", ()),
-            path_blocked_cells=getattr(ahead_, "blocked_cells", ()))
+            f"{kind}_dump_{self._candidate_dumps}.npz", t, tuple(float(v) for v in pose), self.hooks.truth_rear(),
+            why=str((permit or {}).get("why")),
+            permit_json=json.dumps({k: v for k, v in (permit or {}).items() if k != "cells"}, default=str),
+            blocked_cells=cells_.get("walk", ()), path_blocked_cells=cells_.get("ahead", ()),
+            zone_blocked_cells=np.asarray(cells_.get("zone", ()), dtype=np.int64).reshape(-1, 2), **fields)
 
     @staticmethod
     def _poses_length(poses) -> float:
@@ -8329,7 +8333,9 @@ class MissionCore:
                 permit_ = layer_.candidate_permit(t, poses_, current_pose=pose_, direction=int(choice_.direction),
                                                   loaded=loaded_, curvature_inv_m=0.0,
                                                   measured_curvature_inv_m=kappa_now_, cap_mps=speed_,
-                                                  permission=permission_)
+                                                  permission=permission_,
+                                                  **({"with_cells": True}
+                                                     if getattr(options, "occupied_dumps", False) else {}))
             return SimpleNamespace(candidates=candidates_, choice=choice_, permit=permit_, poses=poses_, near=near_,
                                    pose=pose_, checker=checker_, rects=rects_, footprint=footprint_, bounds=bounds_,
                                    stop_len=stop_len_, leg_dir=leg_dir_)
@@ -8355,6 +8361,10 @@ class MissionCore:
                      "width_m": float(r_.width_m), "yaw_rad": float(r_.yaw_rad)} for r_ in near_]
                 if getattr(options, "escape_start_release", "off") == "on":
                     core._escape_release_count("escapes_released")
+            if getattr(options, "occupied_dumps", False) and (choice_ is None or not (ev_.permit or {}).get("ok")):
+                # diagnostic (Codex review P2-5): an escape that chose nothing or whose permit refused
+                core._candidate_dump("escape", t, pose_, ev_.permit,
+                                     candidates_json=json.dumps(state["scene_escape_candidates"][-1], default=str))
             if choice_ is None:
                 return None
             poses_, permit_ = ev_.poses, ev_.permit
@@ -8781,6 +8791,8 @@ class MissionCore:
         # stays with this mission; the rest (the follower's counters, the near and SLAM run keys) starts clean.
         for owner, kept in self.baseline.restore(self).items():
             getattr(self, owner).update(kept)
+        if self.__dict__.get("_hold_dumps") is not None:
+            self._hold_dumps.new_mission()  # --occupied-dumps: no hold episode carried over (Codex review P2-4)
         options.scenario = inputs["scenario"]
         options.return_to_pose = options.home_rear = inputs["wait_pose"]
         options.observation_waypoints[:] = inputs["waypoints"]
@@ -8818,6 +8830,8 @@ class MissionCore:
         ms, state, options, paths, trackers = self.ms, self.state, self.options, self.paths, self.trackers
         for owner, kept in self.baseline.restore(self).items():
             getattr(self, owner).update(kept)
+        if self.__dict__.get("_hold_dumps") is not None:
+            self._hold_dumps.new_mission()  # --occupied-dumps: no hold episode carried over (Codex review P2-4)
         options.scenario = inputs["scenario"]
         options.return_to_pose = options.home_rear = inputs["wait_pose"]
         options.observation_waypoints[:] = inputs["waypoints"]

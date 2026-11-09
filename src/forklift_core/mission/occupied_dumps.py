@@ -22,6 +22,10 @@ class HoldDumps:
         self.count = 0
         self.episode = 0
 
+    def new_mission(self) -> None:
+        """A mission's start: no hold episode carries over (the run's count stays -- the cap is the run's)."""
+        self.since, self.done = None, set()
+
     def tick(self, t: float, held: bool) -> float | None:
         if not held:
             self.since, self.done = None, set()
