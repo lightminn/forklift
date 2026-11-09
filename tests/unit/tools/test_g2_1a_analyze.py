@@ -79,7 +79,8 @@ def row(n, scene, mode, *, near=(0, 0), over=(0, 0), cap=0.06, done=True, proble
     return {"name": f"g2a_{n:02d}_{scene}_{mode}", "n": n, "scene": scene, "mode": mode, "invalid": [],
             "mission_done": done, "gaps": {"near": near[1], "near_control": near[0], "over": over[1],
                                            "over_control": over[0]},
-            "capture": {"control_next_s": {"median": cap}, "control_next_clean_s": {"median": cap}},
+            "capture": {"control_next_s": {"median": cap, "missing": 0},
+                        "control_next_clean_s": {"median": cap, "missing": 0}},
             "files": {"missing": ["x"] if problems else [], "unreadable": []},
             "capture_dump": {"mode": "async", "dropped_full": 0, "errors": 0, "unsettled": 0} if mode == "async" else None,
             "log_dropped_lines": 0, "mission_outcomes": [("done", None)], "forbidden_pocket_contacts": 0}
@@ -183,3 +184,14 @@ def test_a_reported_mission_without_an_id_makes_the_contacts_unknown(tmp_path):
     assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) is None
     (out / "probe.json").write_text('{}')  # no mission reported: the session's own list only
     assert tool.forbidden_contacts(out, run, {"forbidden_pocket_contacts": []}) == 0
+
+
+def test_a_capture_tick_without_its_control_time_leaves_the_pair_undecided():
+    D = trace(40)
+    D[10:12, C["flags"]] = BIT["capture"]
+    D[12, C["ctrl_end"]] = np.nan  # the failed tick skipped its end mark
+    assert tool.capture_ticks(D)["control_next_s"]["missing"] == 1
+    rows = good()
+    rows[0]["capture"]["control_next_s"]["missing"] = 1
+    v = tool.verdict(rows)["lines"]["3_capture_control_lower"]
+    assert v["left_out"] == [[1, 2]] and not v["pass"]

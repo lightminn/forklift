@@ -19,6 +19,8 @@ missions):
   of the runs whose status lines (the flagged rows and the tick after) are all AUTO with no stop (B; the others are
   counted as suspect). Line 3 must hold on both. The control tick of the run's last row is reported beside it as a
   check that the save sits in the tick after; the async dumper's written entries are reported beside the run counts.
+  A capture tick whose control time was not recorded (a tick that failed may skip its end mark) is counted as
+  missing and leaves that session's pair undecided for line 3.
 - start gaps over 0.20 s (from the first control tick): each gap's parts as g2m_analyze.py's M1 (world, step_rest,
   after, control_next); a gap is control-made when control_next is strictly its largest measured part and at least
   half the gap (so a gap mostly outside the measured parts is not control-made; a part not measured counts as none).
@@ -133,9 +135,12 @@ def capture_ticks(D: np.ndarray, cmd: list | None = None) -> dict:
     gap = D[rows + 1, C["S"]] - D[rows, C["S"]]
 
     def q(v):
+        missing = int((~np.isfinite(v)).sum())  # a tick that failed may leave its end unrecorded (Codex round 4)
         v = v[np.isfinite(v)]
-        return {"n": int(v.size), "median": float(np.median(v)), "p99": float(np.percentile(v, 99)),
-                "max": float(v.max())} if v.size else {"n": 0}
+        out = {"n": int(v.size), "missing": missing}
+        if v.size:
+            out.update(median=float(np.median(v)), p99=float(np.percentile(v, 99)), max=float(v.max()))
+        return out
     return {"runs": int(len(all_rows)), "runs_suspect": cut, "flagged_rows": int(flagged.sum()),
             "rows": all_rows.tolist(), "rows_clean": rows.tolist(),
             "control_next_s": q(ctrl_all), "control_next_clean_s": q(nxt),
@@ -278,6 +283,10 @@ def verdict(rows: list[dict]) -> dict:
                              "pass": sync["mission_done"] is not None and None not in contacts
                              and not (sync["mission_done"] and not asy["mission_done"])
                              and contacts[1] <= contacts[0]})
+            if any(r["capture"][k].get("missing") for r in (sync, asy) for k in ("control_next_s",
+                                                                              "control_next_clean_s")):
+                left_out.append([a, b])  # a capture tick without its control time: line 3 undecided for the pair
+                continue
             for pop, key in (("A", "control_next_s"), ("B", "control_next_clean_s")):
                 ms, ma = sync["capture"][key].get("median"), asy["capture"][key].get("median")
                 drops.append({"pair": [a, b], "scene": scene, "population": pop, "sync_median_s": ms,
