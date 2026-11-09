@@ -9219,8 +9219,30 @@ def drive(S, isaac) -> None:
                 # before and after is kept, and an arm that moved it is invalid.
                 # (the process's CPU time over each part too: a wait that some background thread works through shows
                 # here; independent review of 5.24, item 3)
+                # What the prep did to the render products and the step counters (Codex 5.24 review P2-5): each
+                # camera's rendering frame and time, the physics step index and the runner's tick, before and after.
+                def prep_view_():
+                    cams_ = {}
+                    for name_, cam_ in (("live_video", _bound.get("live_video_camera")),
+                                        ("perception", _bound.get("perception_camera"))):
+                        if cam_ is None:
+                            continue
+                        try:
+                            f_ = cam_.get_current_frame() or {}
+                            rf_ = f_.get("rendering_frame")
+                            if isinstance(rf_, dict):
+                                rf_ = [int(rf_.get("referenceTimeNumerator", -1)),
+                                       int(rf_.get("referenceTimeDenominator", -1))]
+                            cams_[name_] = {"rendering_frame": rf_, "rendering_time": f_.get("rendering_time")}
+                        except Exception as exc_:  # noqa: BLE001 -- a camera that cannot be read is noted
+                            cams_[name_] = {"error": f"{type(exc_).__name__}: {exc_}"}
+                    return {"physics_time": float(world.current_time),
+                            "step_index": int(getattr(world, "current_time_step_index", -1)),
+                            "runner_tick": int(stepper["tick"]), "cameras": cams_}
+
                 prep_ = {"renders": [], "renders_cpu_s": [], "wait_s": float(args.live_test_prep_wait_s),
-                         "physics_time_before": float(world.current_time)}
+                         "renders_asked": int(args.live_test_prep_renders), "before": prep_view_()}
+                prep_["physics_time_before"] = prep_["before"]["physics_time"]
                 for _ in range(args.live_test_prep_renders):
                     a_, c_ = time.monotonic(), time.process_time()
                     world.render()
@@ -9231,8 +9253,10 @@ def drive(S, isaac) -> None:
                     time.sleep(args.live_test_prep_wait_s)
                     prep_["wait"] = [a_, time.monotonic()]
                     prep_["wait_cpu_s"] = time.process_time() - c_
-                prep_["physics_time_after"] = float(world.current_time)
-                prep_["physics_unchanged"] = prep_["physics_time_after"] == prep_["physics_time_before"]
+                prep_["after"] = prep_view_()
+                prep_["physics_time_after"] = prep_["after"]["physics_time"]
+                prep_["physics_unchanged"] = all(prep_["after"][k_] == prep_["before"][k_]
+                                                 for k_ in ("physics_time", "step_index", "runner_tick"))
                 state.setdefault("live_test_injections", []).append({"prep": prep_})
                 live.log({"event": "live_test_prep", **prep_})
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
@@ -11357,7 +11381,9 @@ LIFECYCLE: list = []
 
 
 def lifecycle_on() -> bool:
-    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
+    # the start marks alone (FORKLIFT_LIVE_LIFECYCLE=1, plan 5.24: a cheap list of a few monotonic reads) or with the
+    # long-call record (5.22)
+    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS") or os.environ.get("FORKLIFT_LIVE_LIFECYCLE"))
 
 
 def lifecycle_mark(name: str, **fields) -> None:

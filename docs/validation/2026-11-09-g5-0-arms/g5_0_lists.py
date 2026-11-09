@@ -18,7 +18,7 @@ def main() -> int:
     for n, arm in enumerate(ORDER):
         name = f"g50_{n:02d}_{arm}"
         out = f"{out_root}/{name}"
-        env = {"SET": "far", "ARM": "K", "FACTOR": "0.4", "SEED": "0", "INSTR": "off", **ARM_ENV[arm]}
+        env = {"SET": "far", "ARM": "K", "FACTOR": "0.4", "SEED": "0", "INSTR": "off", "LIFECYCLE": "on", **ARM_ENV[arm]}
         print(json.dumps({"name": name, "argv": ["bash", f"{snap}/docs/validation/2026-11-08-r1-confirmation/r1c_session.sh", out],
                           "env": env, "cwd": snap, "retry_move": [out],
                           "pace_log": f"{out}/live/epoch_*/run/live_log.jsonl",

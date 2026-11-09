@@ -31,6 +31,13 @@ case "${INSTR:-off}" in
   off) ;;
   *) echo "INSTR must be on or off" >&2; exit 2 ;;
 esac
+# Real-time plan 5.24: LIFECYCLE=on keeps the start marks (runner start, live start; FORKLIFT_LIVE_LIFECYCLE) without
+# the long-call record -- the first ok from the runner's start (M6) needs them
+case "${LIFECYCLE:-off}" in
+  on) export FORKLIFT_LIVE_LIFECYCLE=1 ;;
+  off) ;;
+  *) echo "LIFECYCLE must be on or off" >&2; exit 2 ;;
+esac
 case ${ARM:?L, K or KP} in
   L) export FORKLIFT_LIVE_CATCHUP_STEPS=0 ;;
   K) export FORKLIFT_LIVE_CATCHUP_STEPS=6 ;;
