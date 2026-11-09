@@ -744,13 +744,17 @@ def rv3_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
         mid, outcome = r.get("mission_id"), r.get("outcome")
         # past the planned rows only empty padding is skipped: a real mission or a submit attempt there is checked
         # too (ct_survey attaches folders no probe entry claimed -- Codex P2)
-        if i >= planned and mid is None and r.get("start") != "rejected":
+        empty = mid is None and r.get("start") in (None, "not_submitted")  # never sent (ct_survey's start states)
+        if i >= planned and empty:
             continue
         keep = {"session": name, "mission": mid, "outcome": outcome, "reason": r.get("reason"), "row": i,
                 "start": r.get("start"), "reject_reason": r.get("reject_reason")}
         if r.get("start") == "rejected":
             if not (name.startswith("life2_") and r.get("reject_reason") == "cargo_held"):
                 out.append({**keep, "outcome": "rejected"})
+            continue
+        if mid is None and not empty:  # a submit with no settled answer (busy/stale reject, no reply): never waived
+            out.append({**keep, "outcome": "start_unknown"})
             continue
         if mid is None:
             if stopped or (name.startswith("life3_") and life3_ended_per_record):

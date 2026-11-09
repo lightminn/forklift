@@ -428,3 +428,14 @@ def test_a_real_mission_past_the_planned_rows_is_still_checked():
     assert [f["mission"] for f in V.rv3_failures(l4)] == ["m3"]
     padded = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), _row(None, None, None), _row(None, None, None)])
     assert V.rv3_failures(padded) == []
+
+
+def test_an_unsettled_submit_is_a_failure_wherever_it_is():
+    busy = {"mission_id": None, "pallet_id": "P-2", "outcome": None, "reason": None, "start": "unknown",
+            "reject_reason": "busy"}
+    life1 = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), busy])
+    assert [(f["outcome"], f["reject_reason"]) for f in V.rv3_failures(life1)] == [("start_unknown", "busy")]
+    shadow = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe"), busy,
+                                        {**_row(None, None, None), "start": "not_submitted"}],
+                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert [f["outcome"] for f in V.rv3_failures(shadow)] == ["start_unknown"]  # the stop waives padding only
