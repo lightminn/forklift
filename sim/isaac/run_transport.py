@@ -8369,22 +8369,24 @@ def drive(S, isaac) -> None:
                 # (Codex review P2-4: prepare_start_ok, live_mission_ready/start and trace_ground are set after here).
                 if obstacle is not None:
                     # 5.20 G3-1a: the scan processing's inner steps (1-3 ms each, under the long-call threshold) go to
-                    # the status line's timers -- in this measurement mode only, so a run without it logs as before.
+                    # the status line's timers, each split by the region it ran inside (name<parent: _geometry runs
+                    # under grid.snapshot<refresh and under the layer's own memory hits) -- in this measurement mode
+                    # only, so a run without it logs as before.
                     import forklift_core.perception.obstacle_grid as timed_grid_module
                     import forklift_core.control.shadow_memory as timed_shadow_module
 
                     for name_ in ("_geometry", "_marks", "_clear_group", "_mark_disks", "_rect_mask", "prune"):
-                        live_timers.wrap(TimedGrid, name_, f"grid.{name_}")
+                        live_timers.wrap(TimedGrid, name_, f"grid.{name_}", by_parent=True)
                     for name_ in ("_line_close", "_dilate", "_erode"):
-                        live_timers.wrap(timed_grid_module, name_, f"grid.{name_}")
+                        live_timers.wrap(timed_grid_module, name_, f"grid.{name_}", by_parent=True)
                     for name_ in ("_retained_stamps_batched", "band_cells", "whole_cells"):
                         if hasattr(timed_shadow_module, name_):
-                            live_timers.wrap(timed_shadow_module, name_, f"shadow.{name_}")
+                            live_timers.wrap(timed_shadow_module, name_, f"shadow.{name_}", by_parent=True)
                     if callable(getattr(TimedShadow, "_retained_stamps", None)):
-                        live_timers.wrap(TimedShadow, "_retained_stamps", "shadow._retained_stamps")
+                        live_timers.wrap(TimedShadow, "_retained_stamps", "shadow._retained_stamps", by_parent=True)
                     for name_, value_ in list(vars(layer_class_).items()):
                         if callable(value_) and name_.startswith("_") and not name_.startswith("__"):
-                            live_timers.wrap(layer_class_, name_, f"layer.{name_}")
+                            live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_parent=True)
             live_permit_untimed_ = live_permit
 
             def live_permit(curvatures, direction, check):

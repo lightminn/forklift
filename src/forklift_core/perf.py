@@ -141,12 +141,14 @@ class Timers:
                 self._leave(name, start, seconds, cpu_s)
 
     def wrap(self, owner, attribute: str, name: str | None = None, *, by_caller: bool = False,
-             long_only: bool = False) -> None:
+             long_only: bool = False, by_parent: bool = False) -> None:
         """Time every call of ``owner.attribute`` as one region: a class's method (every instance), an
         instance's method or a module's function. ``by_caller``: one region per calling function
         (``name<caller``). ``long_only``: the call enters the long-call record only (its stack and records), not
         the per-second totals ``take`` returns -- finer regions that leave the status line's timers as they were;
-        it costs nothing while the long-call record is off."""
+        it costs nothing while the long-call record is off. ``by_parent``: with the long-call record on, one region
+        per enclosing region (``name<parent``, the innermost open region on this thread), so an inner step's total
+        is split by the call it ran inside (Codex instrumentation review round 4 P2)."""
         raw = owner.__dict__[attribute] if isinstance(owner, type) else getattr(owner, attribute)
         static = isinstance(raw, staticmethod)
         fn = raw.__func__ if static else raw
@@ -157,8 +159,11 @@ class Timers:
             if not self.enabled or (long_only and self.long_s is None):
                 return fn(*args, **kwargs)
             where = f"{label}<{caller_name()}" if by_caller else label
-            start, cpu = time.perf_counter(), time.thread_time()
             long_on = self.long_s is not None
+            if by_parent and long_on:
+                stack_ = self._stack()
+                where = f"{where}<{stack_[-1][0]}" if stack_ else where
+            start, cpu = time.perf_counter(), time.thread_time()
             if long_on:
                 self._enter(where, start)
             try:

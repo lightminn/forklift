@@ -210,3 +210,27 @@ def test_the_cap_holds_across_threads(timers):
     for th in threads:
         th.join()
     assert len(t.long) == 1 and t.long_dropped == 3
+
+
+def test_by_parent_splits_an_inner_steps_total_by_the_region_it_ran_inside(timers):
+    t, clock = timers
+
+    class Grid:
+        def snapshot(self):
+            clock.t += 0.001
+            self._geometry()
+
+        def _geometry(self):
+            clock.t += 0.002
+
+    t.wrap(Grid, "snapshot", "grid.snapshot")
+    t.wrap(Grid, "_geometry", "grid._geometry", by_parent=True)
+    g = Grid()
+    g.snapshot()
+    g._geometry()  # off the record: no enclosing region known, the plain name
+    assert set(t.take()) == {"grid.snapshot", "grid._geometry"}
+    t.long_s = 1.0  # the record on (nothing long enough is kept): the stack names the parent
+    g.snapshot()
+    g._geometry()
+    totals = t.take()
+    assert totals["grid._geometry<grid.snapshot"][1] == 1 and totals["grid._geometry"][1] == 1
