@@ -102,4 +102,3 @@ def retained(a, b, r, fresh, stamps, whole, di, dj, gap):
                 stamp[m] = low
                 changed = True
     return alive, stamp
-
