@@ -147,3 +147,16 @@ def test_a_mission_without_its_result_or_folder_is_missing(tmp_path):
     p5, missing = R._missions(sess)
     assert [m["mission_id"] for m in p5] == ["m1"]
     assert missing == ["result:m2", "mission_folder:m3"]
+
+
+def test_f_c_counts_the_whole_candidate_wait_within_its_stretch():
+    rec = {"scene_replans": [{"trigger": "cusp_pose", "outcome": "refused", "mission_end": True,
+                              "candidate": {"why": "blocked:occupied"}, "truth_rear": [1.677, -8.660, -0.236],
+                              "permit_waits": [
+                                  {"why": "blocked:unknown", "since_s": 162.7, "until_s": 163.7, "stretch": 1},
+                                  {"why": "blocked:occupied", "since_s": 163.7, "until_s": 165.7, "stretch": 1}]}]}
+    assert R.f_c(rec) == "yes"  # unknown 1 s then occupied 2 s, refused for occupied (Codex P2-1)
+    other = {"scene_replans": [{**rec["scene_replans"][0], "permit_waits": [
+        {"why": "blocked:occupied", "since_s": 150.0, "until_s": 152.0, "stretch": 0},
+        {"why": "blocked:occupied", "since_s": 164.7, "until_s": 165.7, "stretch": 1}]}]}
+    assert R.f_c(other) == "no"  # an earlier stretch does not count toward this candidate's wait

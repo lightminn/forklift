@@ -2,8 +2,9 @@
 
     python tools/l4c_repro_verdict.py RUN_DIR --json OUT.json
 
-RUN_DIR holds ``plan_l4r.json`` ({"pairs": [{"seed": k, "H1": name, "H0": name}], "planned_pairs": 24, ...}) and the
-session folders ``s/<name>``. Per session: the required evidence, the arm's validity (H1: the STOP-cancel-recovery chain;
+RUN_DIR holds ``plan_l4r.json`` ({"pairs": [{"seed": k, "H1": [attempt], "H0": [attempt]}], "planned_pairs": 24}, an
+attempt {"name": .., "base_failure": bool}) and the session folders ``s/<name>``. Per session: the required evidence,
+the arm's validity (H1: the STOP-cancel-recovery chain;
 H0: the pose match and the relocalization), and over all its P-5:D-2 missions F_p / F_c (2.1). Per pair: b / c. Then the
 one-sided exact McNemar, the conclusion row (2.3) robust to every assignment of the undecided sessions and the pairs not
 run (a compressed enumeration over (b, c, H0 F_p seeds, H0 F_c seeds, any F)), the mechanical early stop and the
@@ -163,7 +164,9 @@ def f_c(state: dict) -> str:
         waits = r.get("permit_waits") or []
         last = waits[-1] if waits else {}
         final_why = (r.get("candidate") or {}).get("why", last.get("why"))
-        waited = (float(last["until_s"]) - float(last["since_s"])) if last.get("since_s") is not None else 0.0
+        # the refusal timer runs over the candidate's whole wait: the recorder splits it by reason within a stretch
+        same = [w for w in waits if w.get("stretch") == last.get("stretch") and w.get("since_s") is not None]
+        waited = (float(last["until_s"]) - min(float(w["since_s"]) for w in same)) if same else 0.0
         if (r.get("trigger") == "cusp_pose" and r.get("outcome") == "refused" and r.get("mission_end")
                 and last.get("why") == "blocked:occupied" and final_why == "blocked:occupied"
                 and waited >= CANDIDATE_WAIT_S - 0.05
@@ -323,8 +326,8 @@ def session_outcome(sess: dict, arm: str) -> dict:
         if fc == "yes":
             c_vals = {True}
     possible = {("p" if p else "") + ("c" if c else "") or "none" for p in p_vals for c in c_vals}
-    if possible == {"none"} and not any(m.get("outcome") == "done" for m in p5):
-        out["outcome"] = None  # no F and no P-5 done: undecided (2.2)
+    if "none" in possible and not any(m.get("outcome") == "done" for m in p5):
+        out["outcome"] = None  # 'no F' possible but no P-5 done: undecided (2.2) -- only a certain F stands
     elif len(possible) == 1:
         out["outcome"] = possible.pop()
     else:
