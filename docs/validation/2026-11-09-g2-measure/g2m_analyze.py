@@ -1,7 +1,9 @@
 """Real-time plan 5.22: the G2-0 / G3-1a / G5-0 measurement run's measures M1-M7 (descriptive; M3's completion line and
 M7's cost line are the only verdicts). Run from a checkout (its sim/isaac and src give the trace and the live-log reader):
 
-    PYTHONPATH=SNAP/src python g2m_analyze.py OUT_DIR --list OUT_DIR.jsonl --bench BENCH.json [--json out.json]
+    PYTHONPATH=SNAP/src python g2m_analyze.py OUT_DIR --list OUT_DIR.jsonl --bench BENCH.json [--json out.json] \\
+        [--sacct SACCT.txt]   # sacct -a -X -P -n -o JobID,User,Start,End -S <run start> -E <run end>
+        [--ps PS.jsonl]       # the set-F supplement: g2m_cpu_sampler.py's record judges validity (rule 2)
 
 Clocks: the tick trace, the long-call record and the live log's mono are one clock (perf_counter / CLOCK_MONOTONIC on
 Linux). Rows: a long call's "row" is the trace row its work belongs to (a control tick's is the row of the step it
@@ -55,6 +57,64 @@ def read_conditions(out: Path) -> dict:
     return a
 
 
+def running_others(text: str, own: str | None) -> list[str]:
+    """The jobs other than ``own`` that a session's ``squeue -h -o '%i %u %j %T %b %C'`` snapshot shows RUNNING
+    (the start, node and end snapshots; 5.22 correction 2026-11-09: any other running job on the node, CPU-only
+    included, makes the session invalid -- the lead's conservative reading after 17015 ran beside set F)."""
+    out = []
+    for line in text.splitlines():
+        f = line.split()
+        if len(f) >= 4 and f[0].split("_")[0].isdigit() and f[3] == "RUNNING" and f[0] != own:
+            out.append(" ".join(f[:4]))
+    return out
+
+
+def read_sacct(text: str) -> list[tuple[str, str, float, float]]:
+    """``sacct -a -X -P -n -o JobID,User,Start,End`` (taken after the run, the node's whole window) as (job, user,
+    start, end) in epoch seconds; an end of Unknown/None is a job still running (end = inf). Start/end snapshots
+    alone miss a job that came and went inside a session, so the overlap test reads this when it is given."""
+    import datetime as _dt
+    jobs = []
+    for line in text.splitlines():
+        f = line.strip().split("|")
+        if len(f) < 4 or not f[0]:
+            continue
+        try:
+            start = _dt.datetime.fromisoformat(f[2]).timestamp()
+        except ValueError:
+            continue  # not started (Unknown/None): it cannot overlap
+        try:
+            end = _dt.datetime.fromisoformat(f[3]).timestamp()
+        except ValueError:
+            end = float("inf")
+        jobs.append((f[0], f[1], start, end))
+    return jobs
+
+
+def overlapping(jobs, own: str | None, t0: float, t1: float) -> list[str]:
+    return [f"{j} ({u})" for j, u, a, b in jobs if j != own and a < t1 and b > t0]
+
+
+PS_CORES = 1.0     # rule (2) of the set-F supplement (lead, 2026-11-09, fixed before the run)
+PS_SHARE = 0.05
+
+
+def read_ps(text: str) -> list[dict]:
+    return [r for r in (json.loads(x) for x in text.splitlines() if x.strip()) if "wall" in r]
+
+
+def ps_rule(samples: list[dict], t0: float, t1: float) -> dict:
+    """Rule (2): the session is invalid when more than 5 % of the CPU sampler's samples inside its monitor window
+    show other users' processes over one core in sum (or when no sample falls inside it)."""
+    inside = [r for r in samples if t0 <= r["wall"] <= t1]
+    over = [r for r in inside if r.get("other_cores", 0.0) > PS_CORES]
+    vals = sorted(r.get("other_cores", 0.0) for r in inside)
+    return {"samples": len(inside), "over_1_core": len(over),
+            "share": len(over) / len(inside) if inside else None,
+            "other_cores_median": vals[len(vals) // 2] if vals else None, "other_cores_max": vals[-1] if vals else None,
+            "invalid": not inside or len(over) / len(inside) > PS_SHARE}
+
+
 def head(key: str) -> str:
     return key.split("|", 1)[0]
 
@@ -64,7 +124,7 @@ def parent_of(key: str) -> str | None:
 
 
 class Session:
-    def __init__(self, out: Path, entry: dict):
+    def __init__(self, out: Path, entry: dict, other_jobs=None, ps=None):
         self.out, self.name, self.env = out, entry["name"], entry["env"]
         self.set = "H" if "LEVEL" in self.env else "F"
         self.instr = self.env.get("INSTR", "off")
@@ -103,6 +163,10 @@ class Session:
         if rc != "0":
             self.invalid.append(f"probe exit {rc}")
         self._check_monitor()
+        self.ps = None
+        self._check_other_jobs(other_jobs, judge=ps is None)
+        if ps is not None:
+            self._check_ps(ps)
         self.lifecycle = next((r.get("marks") for r in self.log if r.get("event") == "lifecycle"), None)
         self.mission_outcomes = self._mission_outcomes()
         self.mission_done = self._mission_done()
@@ -143,6 +207,39 @@ class Session:
                 if len(p) < 4 or p[3] is not True:
                     self.invalid.append(f"a GPU process not known to be this job's: {p}")
                     return
+
+    def _walls(self) -> list[float]:
+        f = self.out / "monitor" / "host.jsonl"
+        walls = [json.loads(x).get("wall") for x in f.read_text().splitlines()] if f.exists() else []
+        return [w for w in walls if w is not None]
+
+    def _check_ps(self, samples):
+        """The set-F supplement's rule (2) (with ``--ps``); rule (1), another GPU process, is ``_check_monitor``."""
+        walls = self._walls()
+        self.ps = ps_rule(samples, min(walls), max(walls)) if walls else {"samples": 0, "invalid": True}
+        if self.ps["invalid"]:
+            self.invalid.append(f"other users' CPU over {PS_CORES:g} core in more than {PS_SHARE:.0%} of samples "
+                                f"(or no sample): {self.ps}")
+
+    def _check_other_jobs(self, other_jobs, judge: bool = True):
+        """No other job ran on the node during the session (5.22 correction): RUNNING in the start, node or end
+        snapshot, or -- with ``--sacct`` -- an allocation overlapping the monitor's first-to-last wall time. With the
+        CPU sampler's rule (``--ps``, the set-F supplement) the jobs are kept as a record and do not judge."""
+        own = self.cond.get("BUNDLE_JOB") or self.cond.get("SLURM_JOB_ID")
+        seen = []
+        for name in ("squeue_start.txt", "node_start.txt", "squeue_end.txt"):
+            f = self.out / name
+            if f.exists():
+                seen += [f"{name}: {j}" for j in running_others(f.read_text(), own)]
+        if other_jobs is not None:
+            walls = self._walls()
+            if walls:
+                seen += [f"sacct: {j}" for j in overlapping(other_jobs, own, min(walls), max(walls))]
+            else:
+                seen.append("sacct given but no monitor wall times to place the session")
+        self.other_jobs = sorted(set(seen))
+        if seen and judge:
+            self.invalid.append("another job on the node: " + "; ".join(self.other_jobs))
 
     def _mission_outcomes(self) -> list:
         """(outcome, reason) of every mission the probe ran: the confirm scenario's one (set F) or the cycle
@@ -392,7 +489,8 @@ class Session:
                 "camera_pixel_latency_s": end.get("camera_pixel_latency_s")}
 
     def analyse(self, bench) -> dict:
-        row = {"name": self.name, "set": self.set, "instr": self.instr, "warm": self.warm, "invalid": self.invalid}
+        row = {"name": self.name, "set": self.set, "instr": self.instr, "warm": self.warm, "invalid": self.invalid,
+               "other_jobs": self.other_jobs, "ps": self.ps}
         if self.trace is None or self.invalid:
             return row
         row.update({"M1": self.m1_gaps(), "M2": self.m2_calls(), "M3": self.m3_scan(), "M4": self.m4_lidar(),
@@ -443,15 +541,20 @@ def main() -> int:
     ap.add_argument("--list", type=Path, required=True)
     ap.add_argument("--bench", type=Path, help="g2m_bench.py's JSON from the same node")
     ap.add_argument("--json", type=Path)
+    ap.add_argument("--sacct", type=Path, help="sacct -a -X -P -n -o JobID,User,Start,End over the run's window")
+    ap.add_argument("--ps", type=Path, help="g2m_cpu_sampler.py's record (the set-F supplement's rule 2)")
     a = ap.parse_args()
     bench = json.loads(a.bench.read_text()) if a.bench else None
+    other_jobs = read_sacct(a.sacct.read_text()) if a.sacct else None
+    ps = read_ps(a.ps.read_text()) if a.ps else None
     entries = [json.loads(line) for line in a.list.read_text().splitlines() if line.strip()]
     names_by_set = {"H": [e["name"] for e in entries if "LEVEL" in e["env"] and not e["name"].endswith("_warm")],
-                    "F": [e["name"] for e in entries if "LEVEL" not in e["env"]]}
+                    "F": [e["name"] for e in entries if "LEVEL" not in e["env"] and not e["name"].endswith("_warm")]}
     rows = []
     for e in entries:
         d = a.out_dir / e["name"]
-        rows.append(Session(d, e).analyse(bench) if d.exists() else {"name": e["name"], "invalid": ["missing"]})
+        rows.append(Session(d, e, other_jobs, ps).analyse(bench) if d.exists()
+                    else {"name": e["name"], "invalid": ["missing"]})
     summary = {"sessions": rows, "M7": m7_verdict(rows, names_by_set)}
     for r in rows:
         print(json.dumps({k: r.get(k) for k in ("name", "set", "instr", "invalid")}))
