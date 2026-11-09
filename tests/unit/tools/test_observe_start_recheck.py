@@ -56,7 +56,7 @@ def test_an_open_start_reports_a_lower_bound_not_a_silent_cap():
     assert capped and clear == 64.0
 
 
-def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried_before=False):
+def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried_before=False, cancelled_before=False):
     import json
 
     run = tmp_path / "run"
@@ -65,6 +65,10 @@ def _run(tmp_path, *, layout="scene", grid=False, approach_before=False, carried
                        "ended_s": 61.0}}
     if approach_before:
         transitions.append({"time_s": 50.0, "to": "approach"})
+    if cancelled_before:  # Codex round 2 P2: recognised, cancelled in its approach, then submitted again
+        transitions.append({"time_s": 10.0, "to": "approach"})
+        missions["m1"] = {"pallet_id": "P-5", "destination_id": "D-2", "outcome": "cancelled", "started_s": 1.0,
+                          "ended_s": 30.0}
     if carried_before:
         missions["m1"] = {"pallet_id": "P-5", "destination_id": "D-9", "outcome": "done", "started_s": 1.0,
                           "ended_s": 30.0}
@@ -112,7 +116,8 @@ def test_the_inputs_are_read_from_the_records_and_the_scene(tmp_path, monkeypatc
     ({"layout": "factory"}, "--layout scene"),
     ({"grid": True}, "--layout scene"),
     ({"approach_before": True}, "approach"),
-    ({"carried_before": True}, "carried"),
+    ({"carried_before": True}, "earlier mission"),
+    ({"cancelled_before": True}, "earlier mission"),
 ])
 def test_a_record_this_does_not_rebuild_is_refused(tmp_path, monkeypatch, kw, why):
     _fake_scene(monkeypatch)

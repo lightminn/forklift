@@ -85,9 +85,9 @@ class Unsupported(ValueError):
 def supported(result: dict, missions: dict, mission_id: str, replan_t: float) -> None:
     """Raise Unsupported unless the check is the one rebuilt here: a scene layout planning without --grid-planning
     (no occupancy, the props kept), the replan before the mission's approach (the observation still holds the pallet
-    as its prior, not a perceived outline -- run_transport grid_kwargs), and the pallet never carried or delivered
-    earlier in the session (a prior at its first place: its session zone, safety.pallet_permit
-    preparation_obstacle)."""
+    as its prior, not a perceived outline -- run_transport grid_kwargs), and no earlier mission in the session for the
+    same pallet (a prior at its first place: its session zone, safety.pallet_permit preparation_obstacle; an earlier
+    mission may have recognised it even when cancelled)."""
     args = result.get("arguments") or {}
     if args.get("layout") != "scene" or args.get("grid_planning") is not False:
         raise Unsupported("only a --layout scene run without --grid-planning (its observation plans on the layout)")
@@ -97,11 +97,11 @@ def supported(result: dict, missions: dict, mission_id: str, replan_t: float) ->
     if any(to == "approach" and t0 <= t <= replan_t for t, to in trs):
         raise Unsupported("the replan came after the mission's approach (the pallet held as its perceived outline)")
     for mid, m in missions.items():
-        if mid == mission_id or m.get("pallet_id") != me.get("pallet_id") or float(m["started_s"]) >= t0:
-            continue
-        if m.get("outcome") == "done" or any(to == "lift" and float(m["started_s"]) <= t <= float(m["ended_s"])
-                                              for t, to in trs):
-            raise Unsupported(f"{me.get('pallet_id')} was carried in {mid} (no longer a prior at its first place)")
+        # any earlier mission for the same pallet may have recognised it (a cancel in the approach keeps it
+        # recognised, core's targets book): its next preparation holds the perceived outline, not the zone
+        if mid != mission_id and m.get("pallet_id") == me.get("pallet_id") and float(m["started_s"]) < t0:
+            raise Unsupported(f"{me.get('pallet_id')} had an earlier mission {mid} (it may be recognised: no longer "
+                              "a prior at its first place)")
 
 
 def inputs_of(run_dir: Path, mission_id: str, scene_file: Path) -> dict:
