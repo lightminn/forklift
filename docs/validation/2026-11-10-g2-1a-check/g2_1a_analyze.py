@@ -1,0 +1,239 @@
+"""Real-time plan 5.23 G2-1a: the Isaac check's measures and its pass line (5.18 G2-1), fixed before the results.
+
+    PYTHONPATH=SNAP/src python g2_1a_analyze.py OUT_DIR --list OUT_DIR.jsonl [--ps PS.jsonl] [--json out.json]
+
+Sessions are g2_1a_lists.py's (hall A6P and line_m far K f 0.4, sync and async alternating, pairs (01,02) (05,06)
+(09,10) hall and (03,04) (07,08) (11,12) line_m). Validity is g2m_analyze.py's session reading (live log, tick trace,
+probe exit, the monitor's GPU processes; with --ps the other-user CPU rule of the 5.22 F supplement) with this run's
+registered conditions; a session whose arguments do not carry its arm's --live-capture-dump mode is invalid.
+
+Per session, over the trace from the first control tick on (5.23 names no AUTO restriction; the captures fall in the
+missions):
+- capture ticks: each step row i whose flags carry ``capture`` (the step rendered for a capture) is followed by the
+  control tick that reads that capture -- row i+1's ctrl_end - ctrl_start -- with its start gap S[i+1] - S[i]
+  (g2m_analyze.py's row attribution). The control tick of row i itself is reported beside it as a check that the
+  ~0.044 s save sits in the tick after the capture step (5.23, the sync arm).
+- start gaps over 0.20 s (from the first control tick): each gap's parts as g2m_analyze.py's M1 (world, step_rest,
+  after, control_next); a gap is control-made when control_next is its largest part. Counted for 0.20 < gap <= 0.25
+  (near) and gap > 0.25 (over), control-made and from any source.
+- the capture files in the run folder (perception_capture_<n>_rgb.png, _depth_m.npy, _depth_vis.png; the depth
+  picture only when the depth has a finite value): every attempt with an rgb or a depth file must have both and each
+  file must open (PIL verify, numpy load); with async every entry written (``done``) must have its files.
+- result.json ``capture_dump`` (async): dropped_full, errors, unsettled; the live log's end summary dropped lines.
+- the missions' outcomes (g2m_analyze.py) and the whole-trace world.step counts over 0.25 / 0.5 s (M8; the lead's
+  2026-11-10 decision: the hall sessions are where the old hall long steps are looked for again).
+
+Pass (5.23 / 5.18 G2-1), on the valid sessions, all of:
+1. no control-made start gap over 0.25 s in any async session;
+2. control-made near gaps (0.20-0.25 s) as a share of the near gaps lower with async than with sync, both arms pooled
+   over their sessions -- when neither arm has a control-made near gap the line holds (nothing to lower);
+3. the capture ticks' control time lower with async in every pair (each arm's median over its capture ticks), and
+   the median of the pairs' decreases at least 0.03 s;
+4. missions no worse: in every pair the async session's missions all done when the sync session's are;
+5. no capture file missing or unreadable, no dropped_full, error or unsettled capture, no lost live-log line;
+6. start gaps over 0.25 s from any source no more with async than with sync, summed over the sessions.
+A pair with an invalid session is left out of 3-4 and reported; every line names what it counted.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve()
+_spec = importlib.util.spec_from_file_location("g2m_analyze", HERE.parents[1] / "2026-11-09-g2-measure" / "g2m_analyze.py")
+g2m = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(g2m)
+C, BIT = g2m.C, g2m.BIT
+NEAR_S, EDGE_S = 0.20, 0.25
+PAIRS = {"H": [(1, 2), (5, 6), (9, 10)], "F": [(3, 4), (7, 8), (11, 12)]}
+MEDIAN_DROP_S = 0.03
+
+
+def arm_of(name: str) -> tuple[int, str, str]:
+    m = re.fullmatch(r"g2a_(\d+)_([HF])_(sync|async)", name)
+    if not m:
+        raise ValueError(f"not a g2_1a_lists.py name: {name}")
+    return int(m.group(1)), m.group(2), m.group(3)
+
+
+class Session(g2m.Session):
+    def _check_conditions(self):
+        c = self.cond
+        _, scene, mode = arm_of(self.name)
+        for k in c:
+            if k.startswith(g2m.FORBIDDEN):
+                self.invalid.append(f"{k} set (dumps and the dual run stay out of the check)")
+        if scene == "H":
+            want = {"FACTOR": "1.0", "CATCHUP": "6", "PHASE": "6", "LEVEL": "off"}
+        else:
+            want = {"SET": "far", "ARM": "K", "FACTOR": "0.4", "FORKLIFT_LIVE_CATCHUP_STEPS": "6"}
+        for k, v in want.items():
+            if c.get(k) != v:
+                self.invalid.append(f"{k}={c.get(k)}, registered {v}")
+        extra = c.get("EXTRA_ARGS", "").replace("\\ ", " ")  # r1c_session.sh writes it with printf %q
+        if f"--live-capture-dump {mode}" not in extra:
+            self.invalid.append(f"EXTRA_ARGS does not carry --live-capture-dump {mode}: {c.get('EXTRA_ARGS')!r}")
+
+
+def capture_ticks(D: np.ndarray) -> dict:
+    bits = np.nan_to_num(D[:, C["flags"]]).astype(int)
+    rows = np.flatnonzero((bits & BIT["capture"]) != 0)
+    rows = rows[rows + 1 < len(D)]
+    ctrl = D[:, C["ctrl_end"]] - D[:, C["ctrl_start"]]
+    nxt = ctrl[rows + 1]
+    same = ctrl[rows]
+    gap = D[rows + 1, C["S"]] - D[rows, C["S"]]
+
+    def q(v):
+        v = v[np.isfinite(v)]
+        return {"n": int(v.size), "median": float(np.median(v)), "p99": float(np.percentile(v, 99)),
+                "max": float(v.max())} if v.size else {"n": 0}
+    return {"rows": rows.tolist(), "control_next_s": q(nxt), "control_same_row_s": q(same), "gap_s": q(gap)}
+
+
+def gap_counts(D: np.ndarray, first: int) -> dict:
+    S = D[:, C["S"]]
+    out = {"near": 0, "near_control": 0, "over": 0, "over_control": 0}
+    for i in range(first, len(D) - 1):
+        gap = S[i + 1] - S[i]
+        if not np.isfinite(gap) or gap <= NEAR_S:
+            continue
+        parts = {"world": D[i, C["world_end"]] - D[i, C["world_start"]],
+                 "step_rest": D[i, C["step_end"]] - D[i, C["world_end"]],
+                 "after": D[i, C["after_end"]] - D[i, C["step_end"]],
+                 "control_next": D[i + 1, C["ctrl_end"]] - D[i + 1, C["ctrl_start"]]}
+        parts = {k: (float(v) if np.isfinite(v) else -np.inf) for k, v in parts.items()}
+        control = max(parts, key=parts.get) == "control_next"
+        key = "near" if gap <= EDGE_S else "over"
+        out[key] += 1
+        out[key + "_control"] += int(control)
+    return out
+
+
+def capture_files(run: Path, entries: list | None) -> dict:
+    from PIL import Image
+
+    by = defaultdict(dict)
+    for f in run.glob("perception_capture_*"):
+        m = re.fullmatch(r"perception_capture_(\d+)_(rgb\.png|depth_m\.npy|depth_vis\.png)", f.name)
+        if m:
+            by[int(m.group(1))][m.group(2)] = f
+    missing, unreadable = [], []
+    for n, files in sorted(by.items()):
+        for need in ("rgb.png", "depth_m.npy"):
+            if need not in files:
+                missing.append(f"{n}:{need}")
+        for kind, f in files.items():
+            try:
+                if kind.endswith(".png"):
+                    with Image.open(f) as im:
+                        im.verify()
+                else:
+                    np.load(f, allow_pickle=False)
+            except Exception as exc:  # noqa: BLE001 -- recorded, judged below
+                unreadable.append(f"{f.name}: {type(exc).__name__}")
+    for e in entries or []:
+        if e.get("done") and not {"rgb.png", "depth_m.npy"} <= set(by.get(int(e["attempt"]), {})):
+            missing.append(f"{e['attempt']}: written by the dumper but its files are not there")
+    return {"attempts": sorted(by), "missing": missing, "unreadable": unreadable}
+
+
+def analyse_session(s: Session) -> dict:
+    n, scene, mode = arm_of(s.name)
+    row = {"name": s.name, "n": n, "scene": scene, "mode": mode, "invalid": s.invalid, "ps": s.ps,
+           "other_jobs": s.other_jobs, "mission_outcomes": s.mission_outcomes, "mission_done": s.mission_done}
+    if s.trace is None or s.invalid:
+        return row
+    D = s.trace
+    dump = (s.result or {}).get("capture_dump")
+    end = next((r for r in s.log if r.get("event") == "log_end"), {})
+    row.update({"capture": capture_ticks(D), "gaps": gap_counts(D, s.first_ctrl_row()),
+                "files": capture_files(s.run, (dump or {}).get("entries") if mode == "async" else None),
+                "capture_dump": None if dump is None else {k: dump.get(k) for k in ("mode", "closed", "dropped_full",
+                                                                                   "errors", "unsettled")},
+                "log_dropped_lines": end.get("dropped_lines"), "M8": s.m8_report_only()})
+    return row
+
+
+def verdict(rows: list[dict]) -> dict:
+    ok = {r["n"]: r for r in rows if not r["invalid"] and "gaps" in r}
+    by_mode = {m: [r for r in ok.values() if r["mode"] == m] for m in ("sync", "async")}
+    lines = {}
+    over_ctrl = sum(r["gaps"]["over_control"] for r in by_mode["async"])
+    lines["1_no_control_over_0_25_async"] = {"count": over_ctrl, "pass": over_ctrl == 0}
+    near = {m: (sum(r["gaps"]["near_control"] for r in v), sum(r["gaps"]["near"] for r in v)) for m, v in by_mode.items()}
+    share = {m: (c / t if t else 0.0) for m, (c, t) in near.items()}
+    neither = near["sync"][0] == 0 and near["async"][0] == 0
+    lines["2_near_control_share_lower"] = {"control_near_by_arm": near, "share": share,
+                                          "pass": neither or share["async"] < share["sync"]}
+    drops, missions, left_out = [], [], []
+    for scene, pairs in PAIRS.items():
+        for a, b in pairs:
+            ra, rb = ok.get(a), ok.get(b)
+            if ra is None or rb is None:
+                left_out.append([a, b])
+                continue
+            sync, asy = (ra, rb) if ra["mode"] == "sync" else (rb, ra)
+            ms, ma = sync["capture"]["control_next_s"].get("median"), asy["capture"]["control_next_s"].get("median")
+            drops.append({"pair": [a, b], "scene": scene, "sync_median_s": ms, "async_median_s": ma,
+                          "drop_s": None if ms is None or ma is None else ms - ma})
+            missions.append({"pair": [a, b], "sync_done": sync["mission_done"], "async_done": asy["mission_done"],
+                             "pass": not (sync["mission_done"] and not asy["mission_done"])})
+    d = [x["drop_s"] for x in drops]
+    lines["3_capture_control_lower"] = {"pairs": drops, "left_out": left_out,
+                                        "median_drop_s": float(np.median(d)) if d and None not in d else None,
+                                        "pass": bool(d) and None not in d and all(x > 0 for x in d)
+                                        and float(np.median(d)) >= MEDIAN_DROP_S}
+    lines["4_missions_no_worse"] = {"pairs": missions, "pass": bool(missions) and all(m["pass"] for m in missions)}
+    bad = []
+    for r in ok.values():
+        f = r["files"]
+        if f["missing"] or f["unreadable"]:
+            bad.append(f"{r['name']}: files {f['missing'] + f['unreadable']}")
+        cd = r["capture_dump"]
+        if r["mode"] == "async":
+            if cd is None or cd.get("mode") != "async":
+                bad.append(f"{r['name']}: no async capture_dump record")
+            elif cd.get("dropped_full") or cd.get("errors") or cd.get("unsettled"):
+                bad.append(f"{r['name']}: capture_dump {cd}")
+        if r["log_dropped_lines"]:
+            bad.append(f"{r['name']}: live log dropped {r['log_dropped_lines']}")
+    lines["5_no_loss"] = {"problems": bad, "pass": not bad}
+    over = {m: sum(r["gaps"]["over"] for r in v) for m, v in by_mode.items()}
+    lines["6_any_source_over_0_25_not_more"] = {"by_arm": over, "pass": over["async"] <= over["sync"]}
+    return {"valid_sessions": sorted(ok), "invalid_sessions": sorted(r["name"] for r in rows if r["invalid"]),
+            "lines": lines, "pass": all(v["pass"] for v in lines.values()) and not left_out}
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("out", type=Path)
+    ap.add_argument("--list", type=Path, required=True)
+    ap.add_argument("--ps", type=Path, default=None)
+    ap.add_argument("--json", type=Path, default=None)
+    a = ap.parse_args()
+    ps = g2m.read_ps(a.ps.read_text()) if a.ps else None
+    entries = [json.loads(x) for x in a.list.read_text().splitlines() if x.strip()]
+    rows = [analyse_session(Session(a.out / e["name"], e, ps=ps)) for e in entries]
+    out = {"sessions": rows, "verdict": verdict(rows),
+           "hall_long_world_steps": [{"name": r["name"], **(r.get("M8") or {})} for r in rows if r["scene"] == "H"]}
+    text = json.dumps(out, indent=1, default=str)
+    if a.json:
+        a.json.write_text(text)
+    for r in rows:
+        print(json.dumps({k: r.get(k) for k in ("name", "invalid", "mission_done")}, default=str))
+    print(json.dumps(out["verdict"], indent=1, default=str))
+    print(json.dumps(out["hall_long_world_steps"], default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
