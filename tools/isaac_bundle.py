@@ -515,13 +515,47 @@ def preflight_inputs(runs, runner) -> dict:
     return {p: _sha256_file(p) for p in sorted(paths)}
 
 
-def write_preflight(list_path, data: bytes, runs, runner, info, inputs) -> Path:
+def gpu_persistence_modes(timeout_s=10.0) -> dict | None:
+    """{GPU index: "Enabled"/"Disabled"/...} for every GPU nvidia-smi sees from here, or None when it cannot be read.
+    ``check`` runs from the login shell, outside any job's device cgroup, so it sees the node's every GPU -- a job's
+    own nvidia-smi sees only its GPU and cannot tell (realtime plan 5.22, 2026-11-09)."""
+    try:
+        p = subprocess.run(["nvidia-smi", "--query-gpu=index,persistence_mode", "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=timeout_s)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if p.returncode != 0:
+        return None
+    modes = {}
+    for line in p.stdout.splitlines():
+        parts = [x.strip() for x in line.split(",")]
+        if len(parts) == 2 and parts[0].isdigit():
+            modes[int(parts[0])] = parts[1]
+    return modes or None
+
+
+def persistence_problems(modes) -> list[str]:
+    """Why the node's GPUs may stall a run: without persistence mode an idle GPU is set up and torn down by every
+    nvidia-smi from outside a job, which holds the whole driver about 1 s -- on ws1 (2026-11-09) another user's
+    monitor's query every 17 s stalled every running session's world.step 0.6-1.3 s (realtime plan 5.22 results)."""
+    if modes is None:
+        return ["GPU persistence mode cannot be read (nvidia-smi): not shown to be on for every GPU"]
+    off = [f"GPU {i} {m}" for i, m in sorted(modes.items()) if m != "Enabled"]
+    if off:
+        return [f"GPU persistence mode is not on ({', '.join(off)}): any nvidia-smi from outside a job re-initialises "
+                "an idle GPU and stalls the driver about 1 s -- live pacing and realtime measurements break"]
+    return []
+
+
+def write_preflight(list_path, data: bytes, runs, runner, info, inputs, gpu=None) -> Path:
     """The list's preflight proof beside it: the list bytes checked, the files the verdict rests on as hashed before
     the check (``inputs``), what each run's launch chose (SLAM mode, bundle, map id)."""
     path = Path(str(list_path) + PREFLIGHT_SUFFIX)
     proof = {"list_sha256": hashlib.sha256(data).hexdigest(), "checked_at": time.time(),
              "runner": os.path.realpath(runner), "inputs": inputs,
              "runs": [{"name": r.name, **(info or {}).get(r.name, {})} for r in runs]}
+    if gpu is not None:
+        proof["gpu_persistence"] = gpu
     path.write_text(json.dumps(proof, indent=1) + "\n")
     return path
 
@@ -2141,6 +2175,9 @@ def main(argv=None) -> int:
         cp.add_argument("--runner", required=True, help="the snapshot's runner, e.g. SNAP/sim/isaac/run_transport.py")
         cp.add_argument("--kind", choices=sorted(KINDS), help="with --jobs: warn when the last wave is half empty")
         cp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list (--claim-dir)")
+        cp.add_argument("--allow-no-persistence", action="store_true",
+                        help="check even with a GPU's persistence mode off or unreadable (recorded in the proof; for "
+                             "runs whose timing is not judged)")
         a = cp.parse_args(argv[1:])
         data = Path(a.list).read_bytes()  # read once: the bytes checked are the bytes the proof names
         runs = load_runs(a.list, text=data.decode())
@@ -2151,6 +2188,13 @@ def main(argv=None) -> int:
         problems = check_runs(runs, a.runner, info=info)
         problems += [f"{p} changed during the check" for p, d in preflight_inputs(runs, a.runner).items()
                      if inputs.get(p) != d]
+        modes = gpu_persistence_modes()
+        gpu_problems = persistence_problems(modes)
+        if gpu_problems and a.allow_no_persistence:
+            print("\n".join(f"warning (--allow-no-persistence): {g}" for g in gpu_problems))
+        else:
+            problems += gpu_problems
+        gpu = {"modes": modes, "allowed_without": bool(gpu_problems and a.allow_no_persistence)}
         for line in problems:
             print(line)
         warning = wave_warning(len(runs), a.kind, a.jobs) if a.kind else None
@@ -2159,7 +2203,7 @@ def main(argv=None) -> int:
         print(f"{len(problems)} problems")
         if problems:
             return 1
-        print(f"preflight proof: {write_preflight(a.list, data, runs, a.runner, info, inputs)}")
+        print(f"preflight proof: {write_preflight(a.list, data, runs, a.runner, info, inputs, gpu)}")
         return 0
     if argv[:1] == ["verify-preflight"]:
         vp = argparse.ArgumentParser(prog="isaac_bundle.py verify-preflight",

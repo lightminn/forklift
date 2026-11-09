@@ -11,6 +11,12 @@ import pytest
 
 from tools import isaac_bundle as ib
 
+
+@pytest.fixture(autouse=True)
+def _gpus_persistent(monkeypatch):
+    """The check reads the node's GPU persistence mode; tests see two GPUs with it on unless they say otherwise."""
+    monkeypatch.setattr(ib, "gpu_persistence_modes", lambda: {0: "Enabled", 1: "Enabled"})
+
 PY = sys.executable
 
 
@@ -2024,3 +2030,48 @@ def test_a_run_the_bundle_ended_is_not_a_crash(tmp_path):
     run, out = crash_run(tmp_path, "t_s0", f"mkdir -p {tmp_path}/t_s0/run && trap 'exit 139' TERM && sleep 30 & wait")
     bundle(tmp_path, [run], retries=1, first_rel="run/scenario.json", run_timeout_s=0.5)
     assert results(tmp_path)["t_s0"]["startup_crash"] is False
+
+
+def test_persistence_problems_name_every_gpu_without_it():
+    assert ib.persistence_problems({0: "Enabled", 1: "Enabled"}) == []
+    (msg,) = ib.persistence_problems({0: "Enabled", 1: "Disabled"})
+    assert "GPU 1 Disabled" in msg and "GPU 0" not in msg
+    (msg,) = ib.persistence_problems(None)
+    assert "cannot be read" in msg
+
+
+def test_gpu_persistence_modes_parses_nvidia_smi(monkeypatch):
+    class P:
+        returncode, stdout = 0, "0, Enabled\n1, Disabled\n"
+    monkeypatch.undo()  # the real reader, with nvidia-smi replaced
+    monkeypatch.setattr(ib.subprocess, "run", lambda *a, **k: P())
+    assert ib.gpu_persistence_modes() == {0: "Enabled", 1: "Disabled"}
+    P.returncode = 9
+    assert ib.gpu_persistence_modes() is None
+    monkeypatch.setattr(ib.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("nvidia-smi")))
+    assert ib.gpu_persistence_modes() is None
+
+
+def test_check_refuses_a_gpu_without_persistence_unless_allowed(tmp_path, capsys, monkeypatch):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "r0", "argv": py("pass")}) + "\n")
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
+    monkeypatch.setattr(ib, "gpu_persistence_modes", lambda: {0: "Enabled", 1: "Disabled"})
+    args = ["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]
+    assert ib.main(args) == 1
+    out = capsys.readouterr().out
+    assert "GPU 1 Disabled" in out and "1 problems" in out
+    assert not (tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)).exists()  # no proof: the runner will not start it
+    assert ib.main(args + ["--allow-no-persistence"]) == 0
+    assert "warning (--allow-no-persistence)" in capsys.readouterr().out
+    proof = json.loads((tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)).read_text())
+    assert proof["gpu_persistence"] == {"modes": {"0": "Enabled", "1": "Disabled"}, "allowed_without": True}
+
+
+def test_check_records_the_persistence_it_saw(tmp_path, monkeypatch):
+    path = tmp_path / "runs.jsonl"
+    path.write_text(json.dumps({"name": "r0", "argv": py("pass")}) + "\n")
+    monkeypatch.setattr(ib, "check_runs", lambda runs, runner, **k: [])
+    assert ib.main(["check", "--list", str(path), "--runner", str(tmp_path / "runner.py")]) == 0
+    proof = json.loads((tmp_path / ("runs.jsonl" + ib.PREFLIGHT_SUFFIX)).read_text())
+    assert proof["gpu_persistence"] == {"modes": {"0": "Enabled", "1": "Enabled"}, "allowed_without": False}
