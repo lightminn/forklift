@@ -1,0 +1,355 @@
+{
+ "sessions": [
+  {
+   "name": "g3bl_01_on",
+   "arm": "on",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 28,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.1963429757974347,
+   "scan_step_W_ms": {
+    "p50": 39.60710996761918,
+    "p99": 68.03878113627431,
+    "max": 125.78117998782545
+   },
+   "auto": {
+    "windows": 171,
+    "sim_s": 156.000008136034,
+    "wall_s": 172.59014334902167,
+    "rate": 0.9038755348882344,
+    "ok": 0.4631539967200973
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2793280970072374,
+    "camera_pixel_latency_s": {
+     "n": 2081,
+     "max": 3.570440270937979,
+     "window_n": 2081,
+     "window_median": 0.2646050789626315,
+     "window_p99": 0.3800356760621071,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3bl_02_off",
+   "arm": "off",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 27,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.21248261982215372,
+   "scan_step_W_ms": {
+    "p50": 41.493168915621936,
+    "p99": 73.89483543578537,
+    "max": 121.75233999732882
+   },
+   "auto": {
+    "windows": 166,
+    "sim_s": 148.07500772271305,
+    "wall_s": 168.25874555204064,
+    "rate": 0.880043454721437,
+    "ok": 0.23250401728819195
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2840407020412385,
+    "camera_pixel_latency_s": {
+     "n": 2017,
+     "max": 3.592047101003118,
+     "window_n": 2017,
+     "window_median": 0.2697582970140502,
+     "window_p99": 0.3877906010020524,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3bl_03_off",
+   "arm": "off",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 27,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.002,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.20937584472858883,
+   "scan_step_W_ms": {
+    "p50": 41.00006492808461,
+    "p99": 70.66234305500984,
+    "max": 126.20383501052856
+   },
+   "auto": {
+    "windows": 158,
+    "sim_s": 142.53334076702595,
+    "wall_s": 160.1976370678749,
+    "rate": 0.8897343517410018,
+    "ok": 0.3755640600902496
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.28133077302482,
+    "camera_pixel_latency_s": {
+     "n": 1978,
+     "max": 3.5677216600161046,
+     "window_n": 1978,
+     "window_median": 0.26723353302804753,
+     "window_p99": 0.3855065789539367,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3bl_04_on",
+   "arm": "on",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 27,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.005,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.1984193591326229,
+   "scan_step_W_ms": {
+    "p50": 39.728793082758784,
+    "p99": 75.00226581236346,
+    "max": 133.82151094265282
+   },
+   "auto": {
+    "windows": 161,
+    "sim_s": 146.77500765491277,
+    "wall_s": 162.83711085107643,
+    "rate": 0.9013609175929599,
+    "ok": 0.46162390314339663
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2984987000236288,
+    "camera_pixel_latency_s": {
+     "n": 2015,
+     "max": 3.5937766840215772,
+     "window_n": 2015,
+     "window_median": 0.2633922300301492,
+     "window_p99": 0.39465924201067537,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3bl_05_on",
+   "arm": "on",
+   "pair": 3,
+   "invalid": [],
+   "ps": {
+    "samples": 26,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.19626239611956403,
+   "scan_step_W_ms": {
+    "p50": 39.52779702376574,
+    "p99": 70.66273246891797,
+    "max": 138.33119301125407
+   },
+   "auto": {
+    "windows": 159,
+    "sim_s": 145.30000757798553,
+    "wall_s": 160.72302064590622,
+    "rate": 0.9040398008577776,
+    "ok": 0.4879191599864514
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.290225110948086,
+    "camera_pixel_latency_s": {
+     "n": 1996,
+     "max": 3.5528780119493604,
+     "window_n": 1996,
+     "window_median": 0.2623938840115443,
+     "window_p99": 0.3811680891085416,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3bl_06_off",
+   "arm": "off",
+   "pair": 3,
+   "invalid": [],
+   "ps": {
+    "samples": 27,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.2111265219512899,
+   "scan_step_W_ms": {
+    "p50": 41.23501549474895,
+    "p99": 72.73639265913519,
+    "max": 129.64784598443657
+   },
+   "auto": {
+    "windows": 161,
+    "sim_s": 144.2416741894558,
+    "wall_s": 163.3908362480579,
+    "rate": 0.882801493043771,
+    "ok": 0.2834919368624993
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3338189319474623,
+    "camera_pixel_latency_s": {
+     "n": 1980,
+     "max": 3.631255724001676,
+     "window_n": 1980,
+     "window_median": 0.2690806079772301,
+     "window_p99": 0.38179184996988624,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  }
+ ],
+ "verdict": {
+  "pairs": [
+   {
+    "pair": 1,
+    "fall_s_per_sim_s": 0.016139644024719013,
+    "rate_rise": 0.023832080166797387,
+    "improves": true,
+    "half_prediction": true
+   },
+   {
+    "pair": 2,
+    "fall_s_per_sim_s": 0.010956485595965931,
+    "rate_rise": 0.011626565851958093,
+    "improves": true,
+    "half_prediction": true
+   },
+   {
+    "pair": 3,
+    "fall_s_per_sim_s": 0.01486412583172586,
+    "rate_rise": 0.021238307814006596,
+    "improves": true,
+    "half_prediction": true
+   }
+  ],
+  "left_out": [],
+  "mission_degraded_pairs": [],
+  "safety_undecided_pairs": [],
+  "registered_pairs": 3,
+  "half_prediction_s_per_sim_s": 0.007,
+  "reported_mean_fall_s_per_sim_s": 0.013986751817470269,
+  "reported_reaches_stage_target_low": false,
+  "result": "pass"
+ }
+}
