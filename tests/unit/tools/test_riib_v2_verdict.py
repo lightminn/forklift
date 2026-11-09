@@ -295,8 +295,9 @@ def test_the_expected_ends_are_registered_and_narrow():
     other = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in transport")],
                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
     assert len(V.rv3_failures(other)) == 1  # another reason in the same session is not waived
-    life2 = _sess("life2_random_m_held", [_row("m1", "P-4", "cancelled", "operator"), _row(None, "P-4", None),
-                                          _row(None, "P-5", None)])
+    life2 = _sess("life2_random_m_held", [_row("m1", "P-4", "cancelled", "operator"),
+                                          {**_row(None, "P-4", None), "start": "rejected", "reject_reason": "cargo_held"},
+                                          {**_row(None, "P-5", None), "start": "rejected", "reject_reason": "cargo_held"}])
     assert V.rv3_failures(life2) == []  # the cancel and the two refused resubmits
     l4 = _sess("l4_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row("m2", "P-5", "failed", "x")])
     assert [f["mission"] for f in V.rv3_failures(l4)] == ["m2"]  # m1's cancel is expected, m2's failure is not
@@ -364,3 +365,53 @@ def test_the_dump_option_must_be_on_in_the_lifecycle_4_sessions_only():
     sessions["ab_line_m_s0_A"]["result"]["arguments"]["occupied_dumps"] = True
     sessions["l4_s0_B"]["result"]["arguments"]["occupied_dumps"] = False
     assert V.rv3_dump_args(sessions, {"l4_s0_B"}) == ["ab_line_m_s0_A", "l4_s0_B"]
+
+
+def test_a_refused_or_unrun_mission_in_any_queue_is_a_failure_unless_after_an_expected_end():
+    def rj(pallet, why):
+        return {"mission_id": None, "pallet_id": pallet, "outcome": None, "reason": None, "start": "rejected",
+                "reject_reason": why}
+    on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"), rj("P-3", "busy")])
+    f = V.rv3_failures(on)
+    assert [(x["outcome"], x["reject_reason"]) for x in f] == [("rejected", "busy")]  # Codex P2: C2 on is a queue too
+    unrun_on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row(None, None, None), _row(None, None, None)])
+    assert [x["outcome"] for x in V.rv3_failures(unrun_on)] == ["not_run", "not_run"]
+    shadow = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe"),
+                                        _row(None, None, None), _row(None, None, None)],
+                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert V.rv3_failures(shadow) == []  # the queue stops after its expected end
+    life2_other = _sess("life2_random_m_held", [_row("m1", "P-4", "cancelled", "operator"), rj("P-4", "cargo_held"),
+                                                rj("P-5", "busy")])
+    assert [x["reject_reason"] for x in V.rv3_failures(life2_other)] == ["busy"]  # only cargo_held is expected there
+    l4 = _sess("l4c_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row(None, None, None),
+                             _row(None, None, None)])
+    assert [x["outcome"] for x in V.rv3_failures(l4)] == ["not_run"]  # m2 never ran; the third row is padding
+
+
+def test_the_run_check_inputs_are_required_and_shared(tmp_path):
+    with pytest.raises(ValueError, match="slam_choice"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "i"}, ["ab_line_m_s0_A", "l4c_s0_B"])
+    with pytest.raises(ValueError, match="image"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "other"}, ["ab_line_m_s0_A"])
+    with pytest.raises(ValueError, match="random_m"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "x", "image_id": "i"}, ["ab_line_m_s0_A"])
+    with pytest.raises(ValueError, match="scene"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "i"}, ["mystery_session"])
+    scenes = V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                               {"slam_choice": "r", "image_id": "i"}, ["ab_line_m_s0_A", "life2_random_m_held"])
+    assert scenes == {"ab_line_m_s0_A": "line_m", "life2_random_m_held": "random_m"}
+
+
+def test_the_dump_option_must_be_a_recorded_boolean():
+    def s(name, args):
+        return {"name": name, "result": {"arguments": args}}
+    assert V.rv3_dump_args({"a": s("a", {})}, set()) == ["a"]  # absent is not off (Codex P2)
+    assert V.rv3_dump_args({"a": s("a", {"occupied_dumps": None})}, set()) == ["a"]
+    assert V.rv3_dump_args({"l4": s("l4", {"occupied_dumps": "false"})}, {"l4"}) == ["l4"]
+    assert V.rv3_dump_args({"l4": s("l4", {"occupied_dumps": 1})}, {"l4"}) == ["l4"]
+    assert V.rv3_dump_args({"a": s("a", {"occupied_dumps": False}), "l4": s("l4", {"occupied_dumps": True})},
+                           {"l4"}) == []

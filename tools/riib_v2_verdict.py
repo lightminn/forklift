@@ -710,36 +710,54 @@ def evaluate_confirm(out_dir: Path) -> dict:
 
 # --- the new-snapshot re-comparison (docs/plans/2026-11-10-live-riib-v2-rerun-new-snapshot.md 2) ----------------------
 F_GUARD = 0.27  # v2 baseline's stop line: a pair session under it leaves the pace unjudged (to the lead)
-QUEUE_PREFIXES = ("ab_", "boxed_")  # three-mission queues: a mission not run is a failure
+PLANNED = (("ab_", 3), ("boxed_", 3), ("c2_", 3), ("l4", 2), ("life1_", 1), ("life2_", 3), ("life3_", 1))
+
+
+def planned_missions(name: str) -> int:
+    """The rows a session's probe plans (the queues three, the confirmation's cycle two, lifecycle 1 and 3 one,
+    lifecycle 2 its mission and two resubmits); rows past it are ct_survey's padding."""
+    return next((n for prefix, n in PLANNED if name.startswith(prefix)), 3)
+
+
+def _expected_end(name: str, i: int, r: dict, st: dict) -> bool:
+    outcome, reason = r.get("outcome"), r.get("reason")
+    if (name.startswith("c2_line_m_shadow") and outcome == "failed" and reason == "Tracking timeout in observe"
+            and any(x.get("kind") == "near" and x.get("outcome") == "shadow" for x in st.get("observe_end_stands") or [])):
+        return True
+    if name.startswith("life2_") and i == 0 and outcome == "cancelled" and reason == "operator":
+        return True
+    return bool(name.startswith("l4") and i == 0 and outcome == "cancelled" and reason == "operator")
 
 
 def rv3_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
-    """The session's mission failures other than the registered expected ends (plan 2): every mission row not ``done``,
-    and a three-mission queue's row never run. Expected: the C2 shadow fixture's ``Tracking timeout in observe`` with
-    a recorded shadow firing in that mission; lifecycle 2's operator cancel and its refused resubmits; lifecycle 3's
-    rows when it ended on ``reloc_needs_operator``; a confirmation session's m1 cancel after the STOP."""
+    """The session's mission failures other than the registered expected ends (plan 2), over its planned rows: a
+    mission not ``done``, a refused submit (``start: rejected``; only lifecycle 2's ``cargo_held`` is expected), and a
+    planned mission never started -- unless the session stopped after an expected end (the C2 shadow fixture's queue)
+    or lifecycle 3 ended on ``reloc_needs_operator``. Expected ends: the C2 shadow fixture's ``Tracking timeout in
+    observe`` with a recorded shadow firing in that mission, lifecycle 2's operator cancel, the confirmation's m1
+    cancel after the STOP."""
     name, out = sess["name"], []
     records = sess.get("records") or {}
-    for i, r in enumerate(sess.get("rows") or []):
-        mid, outcome, reason = r.get("mission_id"), r.get("outcome"), r.get("reason")
+    stopped = False  # an expected end that ends the queue (the C2 shadow fixture)
+    for i, r in enumerate((sess.get("rows") or [])[:planned_missions(name)]):
+        mid, outcome = r.get("mission_id"), r.get("outcome")
+        keep = {"session": name, "mission": mid, "outcome": outcome, "reason": r.get("reason"), "row": i,
+                "start": r.get("start"), "reject_reason": r.get("reject_reason")}
+        if r.get("start") == "rejected":
+            if not (name.startswith("life2_") and r.get("reject_reason") == "cargo_held"):
+                out.append({**keep, "outcome": "rejected"})
+            continue
         if mid is None:
-            if name.startswith(QUEUE_PREFIXES):
-                out.append({"session": name, "mission": None, "outcome": "not_run", "reason": reason, "row": i})
-            elif name.startswith("life3_") and not life3_ended_per_record and (reason or r.get("pallet_id")):
-                out.append({"session": name, "mission": None, "outcome": "not_run", "reason": reason, "row": i})
-            continue  # life2's refused resubmits, a single-mission session's padding
+            if stopped or (name.startswith("life3_") and life3_ended_per_record):
+                continue
+            out.append({**keep, "outcome": "not_run"})
+            continue
         if outcome == "done":
             continue
-        st = records.get(mid) or {}
-        if (name.startswith("c2_line_m_shadow") and reason == "Tracking timeout in observe"
-                and any(x.get("kind") == "near" and x.get("outcome") == "shadow"
-                        for x in st.get("observe_end_stands") or [])):
+        if _expected_end(name, i, r, records.get(mid) or {}):
+            stopped = stopped or name.startswith("c2_line_m_shadow")
             continue
-        if name.startswith("life2_") and outcome == "cancelled" and reason == "operator":
-            continue
-        if name.startswith("l4") and i == 0 and outcome == "cancelled" and reason == "operator":
-            continue
-        out.append({"session": name, "mission": mid, "outcome": outcome, "reason": reason, "row": i})
+        out.append(keep)
     return out
 
 
@@ -759,13 +777,37 @@ def rv3_dispose(fails: dict, partners: dict, arms: dict) -> dict:
 
 
 def rv3_dump_args(sessions: dict, dump_sessions: set) -> list:
-    """Sessions whose recorded ``occupied_dumps`` is not what the plan registers (on in the lifecycle 4 bundle only)."""
+    """Sessions whose recorded ``occupied_dumps`` is not the registered JSON boolean (true in the lifecycle 4 bundle
+    only); an absent or non-boolean record is not "off"."""
     bad = []
     for name, s in sorted(sessions.items()):
-        got = bool(((s.get("result") or {}).get("arguments") or {}).get("occupied_dumps"))
-        if got != (name in dump_sessions):
+        args = (s.get("result") or {}).get("arguments") or {}
+        got = args.get("occupied_dumps", None)
+        if not isinstance(got, bool) or got != (name in dump_sessions):
             bad.append(name)
     return bad
+
+
+SCENES = ("line_m", "random_m")
+
+
+def rv3_plan_inputs(rv3: dict, l4c: dict, names: list) -> dict:
+    """The run checks' expectations, required and shared (Codex P2): a registry row for every scene a session runs, one
+    bridge image for both bundles, the confirmation's map the random_m row. Returns each session's scene."""
+    if rv3.get("image_id") in (None, "") or rv3.get("image_id") != l4c.get("image_id"):
+        raise ValueError("plan_rv3 and plan_l4c must name the same bridge image")
+    choices = rv3.get("slam_choice") or {}
+    if l4c.get("slam_choice") != choices.get("random_m"):
+        raise ValueError("plan_l4c's map choice must be plan_rv3's random_m row")
+    scenes = {}
+    for n in names:
+        sc = next((x for x in SCENES if f"_{x}_" in f"_{n}_"), "random_m" if n.startswith("l4") else None)
+        if sc is None:
+            raise ValueError(f"no scene for session {n}")
+        if not choices.get(sc):
+            raise ValueError(f"plan_rv3 slam_choice has no row for {sc}")
+        scenes[n] = sc
+    return scenes
 
 
 def rv3_outcome(main_v: dict, conf_v: dict, disposition: dict, checks_ok: bool) -> dict:
@@ -817,10 +859,10 @@ def evaluate_rv3(out_dir: Path) -> dict:
     l3_end = (main_v.get("lifecycle", {}).get("3") or {}).get("outcome") == "ended_per_record"
     fails = {n: rv3_failures(s, life3_ended_per_record=l3_end) for n, s in sess.items()}
     disposition = rv3_dispose(fails, partners, arms)
-    scene_of = {n: next((sc for sc in rv3["slam_choice"] if f"_{sc}_" in f"_{n}_"), None) for n in names}
-    map_bad = [n for n in names if n not in l4 and scene_of[n] is not None and not (
-        n.startswith("life3_") and l3_end) and not (_slam_choices(sess[n])
-                                                   and all(c == rv3["slam_choice"][scene_of[n]] for c in _slam_choices(sess[n])))]
+    scene_of = rv3_plan_inputs(rv3, plan_l4c, names)
+    map_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
+               and not (_slam_choices(sess[n])
+                        and all(c == rv3["slam_choice"][scene_of[n]] for c in _slam_choices(sess[n])))]
     image_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
                  and _image_id(sess[n]) != rv3["image_id"]]
     dump_bad = rv3_dump_args({n: s for n, s in sess.items() if s.get("result") is not None}, set(l4))
