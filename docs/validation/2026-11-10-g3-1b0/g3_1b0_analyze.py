@@ -128,6 +128,7 @@ def analyse(paths, modes) -> dict:
     if paths:  # one untimed replay per mode first: first-call costs (imports, caches) out of the timings
         for mode in modes:
             replay(load(paths[0]), mode, [])
+    CELLS_CALLS[0] = 0  # the measured replays only (summed over the modes)
     rows, strata = [], Counter()
     for p in paths:
         rec = load(p)
