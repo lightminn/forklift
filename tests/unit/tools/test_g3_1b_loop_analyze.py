@@ -75,3 +75,16 @@ def test_the_list_must_hold_the_registered_pairs():
 def test_the_stage_target_is_reported_not_judged():
     v = tool.verdict(three([0.012, 0.010, 0.009], [0.01, 0.02, 0.01]))
     assert v["result"] == "pass" and v["reported_reaches_stage_target_low"] is False
+
+
+def test_a_missing_kernel_mode_and_mission_contact_records(tmp_path):
+    rows = three([0.012, 0.010, 0.009], [0.01, 0.02, 0.01])
+    for x in rows[:2]:
+        x["kernels_mode"] = None  # both arms of pair 1 without a recorded mode
+    v = tool.verdict(rows)
+    assert v["result"] == "not enough comparable pairs" and v["left_out"][0]["pair"] == 1
+    m = tmp_path / "missions" / "m1"
+    m.mkdir(parents=True)
+    (m / "records.json").write_text('{"state": {"forbidden_pocket_contacts": [1, 2]}}')
+    assert tool.forbidden_contacts(tmp_path, {"forbidden_pocket_contacts": []}) == 2
+    assert tool.forbidden_contacts(tmp_path, {}) is None

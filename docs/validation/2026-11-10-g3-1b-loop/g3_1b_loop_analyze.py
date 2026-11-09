@@ -14,8 +14,9 @@ Per session (AUTO: the status-line windows whose every command line is AUTO, g2m
   denominator) and the scan steps' W p50/p99/max;
 - the AUTO rate: the windows' sim s over their wall s (mono), and ``ok``: the share of AUTO command lines with
   pacing_ok;
-- the missions' outcomes and safety: result.json's forbidden pocket contacts and the obstacle layer's unpermitted
-  entries (and direction entries), as r1c_analyze.py reads them.
+- the missions' outcomes and safety: the forbidden pocket contacts of every finished mission's record
+  (missions/<id>/records.json, where the mission's state goes at its end) plus result.json's, and the obstacle layer's
+  unpermitted entries (and direction entries), as r1c_analyze.py reads them; a missing key makes the count unknown.
 
 Pairs (5.26: the timing of a pair whose run failed is not counted): a pair is comparable when both sessions are valid
 and both missions are done. Degradation: the off arm's missions done and the on arm's not, or more forbidden contacts
@@ -84,6 +85,19 @@ class Session(g2m.Session):
                 "ok": float(np.mean([bool(r.get("pacing_ok")) for r in auto_cmd])) if auto_cmd else None}
 
 
+def forbidden_contacts(run: Path, result: dict | None) -> int | None:
+    """Every finished mission's record plus result.json's (a mission still on); None when a record lacks the key."""
+    total = 0
+    for f in sorted(run.glob("missions/*/records.json")):
+        state = (json.loads(f.read_text()).get("state")) or {}
+        if "forbidden_pocket_contacts" not in state:
+            return None
+        total += len(state["forbidden_pocket_contacts"] or [])
+    if not result or "forbidden_pocket_contacts" not in result:
+        return None
+    return total + len(result["forbidden_pocket_contacts"] or [])
+
+
 def analyse_session(s: Session) -> dict:
     row = {"name": s.name, "arm": s.arm, "pair": s.pair, "invalid": s.invalid, "ps": s.ps,
            "mission_outcomes": s.mission_outcomes, "mission_done": s.mission_done}
@@ -95,7 +109,7 @@ def analyse_session(s: Session) -> dict:
     row.update({"scan_step_rest_s_per_sim_s": m3.get("scan_step_rest_s_per_sim_s"),
                 "scan_step_W_ms": m3.get("scan_step_W_ms"), "auto": s.auto_rate(), "M8": s.m8_report_only(),
                 "kernels_mode": (res.get("kernels") or {}).get("mode"),
-                "safety": {"forbidden_contacts": len(res.get("forbidden_pocket_contacts") or []) if res else None,
+                "safety": {"forbidden_contacts": forbidden_contacts(s.run, res),
                            "unpermitted_entries": ol.get("unpermitted_entries"),
                            "unpermitted_dir_entries": ol.get("unpermitted_dir_entries")}})
     return row
@@ -124,7 +138,7 @@ def verdict(rows: list[dict], registered_pairs: int = 3) -> dict:
         if off is None or on is None or off["invalid"] or on["invalid"]:
             left_out.append({"pair": p, "why": "a session missing or invalid"})
             continue
-        if off.get("kernels_mode") != on.get("kernels_mode"):
+        if off.get("kernels_mode") is None or off.get("kernels_mode") != on.get("kernels_mode"):
             left_out.append({"pair": p, "why": f"kernel modes differ: {off.get('kernels_mode')} / {on.get('kernels_mode')}"})
             continue
         so, sn = off.get("safety") or {}, on.get("safety") or {}
