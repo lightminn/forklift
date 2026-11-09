@@ -1,6 +1,7 @@
 """The cancel-then-other-target repro batch's verdict (docs/plans/2026-11-09-l4c-repro-cancel-other-target.md 2)."""
 
 import itertools
+import math
 import sys
 from pathlib import Path
 
@@ -128,10 +129,43 @@ def test_the_plan_shape_and_the_attempt_choice():
 
 
 def test_a_session_must_match_its_pair_and_arm():
+    known = "-0.9340,0.9106,0.1706"
     assert R.args_mismatch({"SEED": "4", "SCENARIO": "cycle"}, 4, "H1") == []
-    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE": "-0.934,0.9106,0.1706"}, 4, "H0") == []
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE_KNOWN": known}, 4, "H0") == []
     assert R.args_mismatch({"SEED": "5", "SCENARIO": "cycle"}, 4, "H1") == ["args:seed"]
     assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue"}, 4, "H0") == ["args:arm"]  # no start pose
+    # correction 1.5: the relocalizing H0 of chunk 1 is not this arm, nor is a known start at another pose
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE": known}, 4, "H0") == ["args:arm"]
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE_KNOWN": known, "START_POSE": known}, 4,
+                           "H0") == ["args:arm"]
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE_KNOWN": "-0.9,0.9,0.17"}, 4,
+                           "H0") == ["args:arm"]
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "cycle", "START_POSE_KNOWN": known}, 4, "H1") == ["args:arm"]
+
+
+def test_h0_is_valid_on_the_known_start_at_the_target_pose():
+    rear = (-1.2691, 0.8528, 0.1706)
+    known = {"base": [-0.934, 0.9106, 0.1706], "rear": [-1.2690, 0.8530, 0.1706]}
+    track = [(0.0, *rear), (50.0, *rear)]
+    p5 = [{"started_s": 10.0}]
+    v = R.h0_valid({"result": {"start_known": known}}, track, p5)
+    assert v["ok"] and v["known_start"] and v["pose_ok"]
+    assert v["start_error"][0] == pytest.approx(math.hypot(0.0001, 0.0002), abs=1e-9)
+    assert not R.h0_valid({"result": {}}, track, p5)["ok"]  # no known start record
+    reloc = {"start_known": known, "start_reloc": {"status": "chosen"}}
+    assert not R.h0_valid({"result": reloc}, track, p5)["ok"]  # a relocalization is not this arm
+    other = {"start_known": {**known, "base": [-0.9, 0.9106, 0.1706]}}
+    assert not R.h0_valid({"result": other}, track, p5)["ok"]  # another placed pose
+    moved = [(0.0, *rear), (50.0, rear[0] + 0.03, rear[1], rear[2])]
+    v = R.h0_valid({"result": {"start_known": known}}, moved, [{"started_s": 50.0}])
+    assert v["known_start"] and v["pose_ok"] is False and not v["ok"]  # the settle missed the target by 3 cm
+    # Codex fix A review P3: an incomplete or broken record is not the known start (undecided), never an error
+    for bad in ({**known, "base": [-0.934]}, {**known, "rear": [-1.2691]}, {**known, "rear": None},
+                {**known, "base": [-0.934, 0.9106, float("nan")]}, {**known, "rear": ["x", 0.0, 0.0]}):
+        v = R.h0_valid({"result": {"start_known": bad}}, track, p5)
+        assert not v["ok"] and not v["known_start"] and v["start_error"] is None
+    texts = {**known, "rear": ["-1.2690", "0.8530", "0.1706"]}  # Codex round 2 P3: numbers as text are numbers
+    assert R.h0_valid({"result": {"start_known": texts}}, track, p5)["ok"]
 
 
 def test_a_mission_without_its_result_or_folder_is_missing(tmp_path):
