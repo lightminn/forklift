@@ -147,8 +147,10 @@ class Timers:
         (``name<caller``). ``long_only``: the call enters the long-call record only (its stack and records), not
         the per-second totals ``take`` returns -- finer regions that leave the status line's timers as they were;
         it costs nothing while the long-call record is off. ``by_parent``: with the long-call record on, one region
-        per enclosing region (``name<parent``, the innermost open region on this thread), so an inner step's total
-        is split by the call it ran inside (Codex instrumentation review round 4 P2)."""
+        per enclosing region (``name|parent``, the innermost open region on this thread; ``|`` keeps it apart from
+        ``by_caller``'s ``<``), so an inner step's total is split by the call it ran inside (Codex instrumentation
+        review round 4 P2; 5.22 review: a parent's direct children are the keys whose part after the first ``|`` is
+        the parent)."""
         raw = owner.__dict__[attribute] if isinstance(owner, type) else getattr(owner, attribute)
         static = isinstance(raw, staticmethod)
         fn = raw.__func__ if static else raw
@@ -162,7 +164,7 @@ class Timers:
             long_on = self.long_s is not None
             if by_parent and long_on:
                 stack_ = self._stack()
-                where = f"{where}<{stack_[-1][0]}" if stack_ else where
+                where = f"{where}|{stack_[-1][0]}" if stack_ else where
             start, cpu = time.perf_counter(), time.thread_time()
             if long_on:
                 self._enter(where, start)

@@ -8305,16 +8305,16 @@ def drive(S, isaac) -> None:
 
                 world.step = world_step_traced_
             if args.record_slam:  # the module and the scan cadence exist only with the recorded scans
-                live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast")
+                live_timers.wrap(planar_lidar, "cast_scan_flags", "lidar.cast", by_parent=True)
             if slam is not None:
                 live_timers.wrap(slam["link"], "exchange", "slam.exchange")
             if obstacle is not None:
                 layer_class_ = type(obstacle["layer"])
                 for name_ in ("add_scans", "refresh", "limit", "check_candidate", "planner_grid"):
-                    live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True)
-                live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True)
-                live_timers.wrap(TimedShadow, "apply", "shadow.apply")
-                live_timers.wrap(TimedShadow, "_move", "shadow.move")  # real-time plan D9d: is the 0.27 s spike the move?
+                    live_timers.wrap(layer_class_, name_, f"layer.{name_}", by_caller=True, by_parent=True)
+                live_timers.wrap(TimedGrid, "snapshot", "grid.snapshot", by_caller=True, by_parent=True)
+                live_timers.wrap(TimedShadow, "apply", "shadow.apply", by_parent=True)
+                live_timers.wrap(TimedShadow, "_move", "shadow.move", by_parent=True)  # real-time plan D9d: is the 0.27 s spike the move?
                 # D9d: the move was not it (d9a_1: 114 calls, at most 14 ms); time Python's garbage collections.
                 # A collection can start at any allocation -- inside the status line's walk over the timers too --
                 # so the callback only appends to its own list, folded into the timers at a tick's start (Codex D9
@@ -8331,7 +8331,8 @@ def drive(S, isaac) -> None:
 
                 live_gc_.callbacks.append(live_gc_timer)
                 for name_ in ("update", "allowed_speed", "check_path", "check_arc"):
-                    live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True)
+                    live_timers.wrap(timed_permission.DrivePermission, name_, f"permission.{name_}", by_caller=True,
+                                     by_parent=True)  # by_parent: the measurement mode only (5.22 M3)
             for name_, value_ in list(vars(type(core)).items()):  # every public step of the mission core
                 if callable(value_) and not name_.startswith("_"):
                     live_timers.wrap(type(core), name_, f"core.{name_}")

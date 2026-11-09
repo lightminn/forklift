@@ -233,4 +233,4 @@ def test_by_parent_splits_an_inner_steps_total_by_the_region_it_ran_inside(timer
     g.snapshot()
     g._geometry()
     totals = t.take()
-    assert totals["grid._geometry<grid.snapshot"][1] == 1 and totals["grid._geometry"][1] == 1
+    assert totals["grid._geometry|grid.snapshot"][1] == 1 and totals["grid._geometry"][1] == 1
