@@ -7,6 +7,7 @@ import itertools
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -292,3 +293,47 @@ def test_the_arbiter_logs_an_expired_disarm_when_no_command_arrives():
     a.observe(t + 0.31, Feedback(t + 0.31, 0.1))
     disarms = [e for e in a.events if e.get("event") == "disarm"]
     assert disarms and disarms[0]["reason"] == "expired" and a.last_teleop_reject is None
+
+
+def freeze_session(samples, end_mono=None, factor=0.4):
+    """A mark session for the freeze check: ticks at 120 Hz, wall S at the factor, the args' freeze 30:60."""
+    ticks = np.arange(0, 120 * 70)
+    data = np.full((len(ticks), len(ra.C)), np.nan)
+    data[:, ra.C["tick"]] = ticks
+    data[:, ra.C["S"]] = 1000.0 + ticks * ra.DT / factor
+    s = SimpleNamespace(trace=data, args={"EXTRA_ARGS": r"--live-test-marker\ --live-test-camera-freeze\ 30:60"},
+                        report={"freeze": {"samples": samples}, **({"end_requested_mono": end_mono} if end_mono else {})})
+    s.row_at_mono = lambda m: ra.Session.row_at_mono(s, m)
+    s.start_sim = lambda i: ra.Session.start_sim(s, i)
+    return s
+
+
+def at(sim, factor=0.4):
+    return 1000.0 + sim / factor
+
+
+def test_the_freeze_refusal_counts_only_inside_the_freeze():
+    inside = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}
+    early = {"mono": at(25.0), "armed": False, "reject": "stale_video", "last_frame_sim": 24.9}
+    flowing = {"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 25.0}
+    assert ra.freeze_window({"EXTRA_ARGS": r"--live-test-camera-freeze\ 30:60\ --x"}) == (30.0, 60.0)
+    out = ra.freeze_check(freeze_session([early, inside], end_mono=at(36.0)))
+    assert out["freeze_disarmed_stale_video"] and abs(out["freeze_disarm_sim_s"] - 35.0) < 0.01
+    assert out["ended_after_measures"] is True
+    assert not ra.freeze_check(freeze_session([early]))["freeze_disarmed_stale_video"]
+    assert not ra.freeze_check(freeze_session([flowing]))["freeze_disarmed_stale_video"]
+    assert ra.freeze_check(freeze_session([inside], end_mono=at(34.0)))["ended_after_measures"] is False
+
+
+def test_the_freeze_window_is_read_from_a_real_args_file(tmp_path):
+    """Round 2 P2: read_args dropped EXTRA_ARGS, so a real session never had a freeze window -- from the file on."""
+    (tmp_path / "args.txt").write_text(
+        "ARM=K\nFACTOR=0.4\nFORKLIFT_LIVE_CATCHUP_STEPS=6\nSET=mark\n"
+        "EXTRA_ARGS=--live-test-marker\\ --live-test-camera-freeze\\ 30:60\\ --max-sim-seconds\\ 1500\n"
+        "PROBE=--scenario marker --frames-dir /x/frames --frames 200 --freeze-from 30 --end-session \n"
+        "0123abcd  /x/r1c_session.sh\n")
+    args = ra.read_args(tmp_path)
+    assert args["SET"] == "mark" and ra.freeze_window(args) == (30.0, 60.0)
+    s = freeze_session([{"mono": at(35.0), "armed": False, "reject": "stale_video", "last_frame_sim": 29.95}])
+    s.args = args
+    assert ra.freeze_check(s)["freeze_disarmed_stale_video"]

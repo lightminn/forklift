@@ -452,7 +452,29 @@ async def main_scenario(p: Probe, args):
     p.report["close_code"] = p.closed_code
 
 
+FREEZE_FRAME_SLACK_S = 0.15  # the live camera runs at 10 Hz: its last frame before the freeze is at most 0.1 s early
+
+
+async def _end_if_asked(p, args) -> None:
+    """--end-session for the scenarios that leave the session open (marker, approach): close it through its own path
+    so the epoch writes its end summary, result.json, the tick trace and the spool -- a launcher TERM lost all of them
+    (realtime plan 5.17, ws1 job 16866: the eight hall sessions; validation v2 H1 likewise)."""
+    if getattr(args, "end_session", False):
+        p.report["end_requested_mono"] = time.monotonic()  # after every measured step (the analysis checks it)
+        await _end_session(p)
+
+
 async def marker_scenario(p: Probe, args):
+    await _marker_steps(p, args)
+    await _end_if_asked(p, args)
+
+
+async def approach_scenario(p: Probe, args):
+    await _approach_steps(p, args)
+    await _end_if_asked(p, args)
+
+
+async def _marker_steps(p: Probe, args):
     """Plan C5: save the frames (the runner's marker tells when their pixels were drawn); then, with the runner's
     camera freeze (--live-test-camera-freeze FROM:TO, sim s), hold TELEOP and send video-mode commands (dead man
     released: nothing moves) across the freeze -- they must be refused stale_video and disarm."""
@@ -487,13 +509,17 @@ async def marker_scenario(p: Probe, args):
         st = p.state or {}
         p.report["freeze"]["samples"].append({"mono": time.monotonic(), "last_frame_sim": sim_now(),
                                               "armed": st.get("armed"), "reject": st.get("last_teleop_reject")})
-        if not st.get("armed") and st.get("last_teleop_reject") == "stale_video":
+        # Only a refusal with the frames stopped at the freeze counts: a stale_video before it (a render or transport
+        # stall) would end the steps -- and with --end-session the session -- before the freeze was tested (Codex
+        # r1c mark/wall review P2). The last frame before the freeze is within one camera period of its start.
+        if (not st.get("armed") and st.get("last_teleop_reject") == "stale_video"
+                and sim_now() >= args.freeze_from - FREEZE_FRAME_SLACK_S):
             p.event("stale_video_disarmed", last_frame_sim=sim_now())
             break
         await asyncio.sleep(0.05)
 
 
-async def approach_scenario(p: Probe, args):
+async def _approach_steps(p: Probe, args):
     """M-c completion 5: teleoperation up to an obstacle the 2D LiDAR sees. From the start pose (rear axle at
     x -2.34 facing +x) a slight right curve passes the pallet (it sits 1 m to the left; the 1.05 m scan plane does
     not see it -- nor does the teleoperation permission) towards the hall wall at x 4.7: the arc bundle permission must slow the truck and hold it short of
@@ -2463,7 +2489,7 @@ def main():
     ap.add_argument("--cycle", default="P-1:D-1,P-1:D-0,P-1:D-1", help="cycle / queue scenario: pallet:destination,...; queue: \"auto\" for one all-remaining-pallets item (CT-2)")
     ap.add_argument("--pre-teleop-s", type=float, default=0.0, help="cycle scenario: drive by hand first (wall s)")
     ap.add_argument("--end-session", action="store_true",
-                    help="cycle, queue and main scenarios: end the session at the end (main: validation v2 H1)")
+                    help="cycle, queue, main, confirm, marker and approach scenarios: end the session at the end (main: validation v2 H1; marker and approach: realtime plan 5.17, job 16866)")
     ap.add_argument("--reconnect-at-end", action="store_true",
                     help="cycle scenario: reconnect after the missions and keep the results book it gets (U2)")
     ap.add_argument("--cancel-pause-s", type=float, default=0.0,
