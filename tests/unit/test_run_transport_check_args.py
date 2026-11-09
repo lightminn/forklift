@@ -125,3 +125,11 @@ def test_the_g5_0_prep_arms_need_a_live_run_and_one_arm_at_a_time(tmp_path):
     assert p.returncode == 2 and "separate arms" in p.stderr
     p = _check(*_base(tmp_path / "c"), "--live-test-prep-renders", "4")
     assert p.returncode == 2
+
+
+def test_the_async_capture_dump_needs_a_live_run(tmp_path):
+    # real-time plan G2-1a: a batch run writes its capture files in place; async is refused, sync accepted
+    p = _check(*_base(tmp_path / "a"), "--live-capture-dump", "async")
+    assert p.returncode == 2 and "--live-capture-dump async needs --live" in p.stderr
+    p = _check(*_base(tmp_path / "b"), "--live-capture-dump", "sync")
+    assert p.returncode == 0, p.stderr

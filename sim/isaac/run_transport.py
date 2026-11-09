@@ -1378,6 +1378,14 @@ def arguments() -> argparse.Namespace:
                              "the live start, timed and recorded with the physics time before and after")
     parser.add_argument("--live-test-prep-wait-s", type=float, default=0.0,
                         help="real-time plan 5.24 (G5-0 wait control, test only): sleep this long at the same place")
+    parser.add_argument("--live-capture-dump", choices=("sync", "async"), default="sync",
+                        help="real-time plan G2-1a: the capture's diagnostic image and depth files written on the "
+                             "control thread (sync) or handed to the live session's writer thread (async; live "
+                             "only, never while a boundary record is open)")
+    parser.add_argument("--lidar-cast", choices=("loop", "fast", "oracle"), default="loop",
+                        help="real-time plan G3-1d: the 2D LiDAR's PhysX casting -- loop (the original, default), fast "
+                             "(cast_scan_flags_fast: same results, about 1.2 ms less a scan at rest; bench #388) or "
+                             "oracle (both on the same physics state, compared ray by ray, the loop's result used)")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1882,6 +1890,8 @@ def arguments() -> argparse.Namespace:
         parser.error("--live-test-prep-renders and --live-test-prep-wait-s are separate arms (plan 5.24)")
     if not 0.0 <= args.live_test_prep_wait_s <= 30.0:
         parser.error("--live-test-prep-wait-s must be in [0, 30]")
+    if args.live_capture_dump == "async" and not args.live:
+        parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
                           or args.live_test_recovery_blocked or args.live_test_return_correction_drops
                           or args.live_test_push_pallet or args.live_test_fail_at or args.live_test_kill_worker):
@@ -6608,20 +6618,32 @@ def drive(S, isaac) -> None:
 
     # M-a1 slice 1: the phase transition and the known-pallet bookkeeping it carries moved to the
     # mission core; what has not moved yet is reached through hooks.
+    capture_dumper = [None]  # G2-1a: a CaptureDumper when --live-capture-dump async (set with the live runtime)
+
     def save_capture(attempt_number, scene_input) -> None:
         """M-a1 slice 4b-i: the capture's diagnostic image and depth dumps, the runner's statements unchanged
-        (a Sink the mission core calls where they stood)."""
+        (a Sink the mission core calls where they stood). Real-time plan G2-1a: with --live-capture-dump async in a
+        live session the same writes go to a writer thread of their own on copies of the arrays (capture_dump.py:
+        one FIFO, a refusal waits for it and writes here, a boundary record open writes here) -- the control tick no
+        longer waits on PNG encoding and the disk (about 0.044 s of the pocket detection tick)."""
+        if capture_dumper[0] is None:  # a batch run (and replay), or sync: as before, nothing new imported
+            write_capture_dump(attempt_number, scene_input.rgb, scene_input.depth_m)
+            return
+        capture_dumper[0].dump(attempt_number, scene_input.rgb, scene_input.depth_m,
+                               record_open=_BOUNDARY_RECORD.get("gate") is not None)
+
+    def write_capture_dump(attempt_number, rgb, depth_m) -> None:
         # Diagnostic dump for offline root-cause analysis; not part
         # of the perception contract itself.
-        save_image(Image.fromarray(scene_input.rgb),
+        save_image(Image.fromarray(rgb),
             args.output / f"perception_capture_{attempt_number}_rgb.png")
         np.save(
             args.output
             / f"perception_capture_{attempt_number}_depth_m.npy",
-            scene_input.depth_m,
+            depth_m,
         )
-        finite_depth = scene_input.depth_m[
-            np.isfinite(scene_input.depth_m)
+        finite_depth = depth_m[
+            np.isfinite(depth_m)
         ]
         if finite_depth.size:
             depth_range = (
@@ -6629,7 +6651,7 @@ def drive(S, isaac) -> None:
                 float(finite_depth.max()),
             )
             normalized = np.clip(
-                (scene_input.depth_m - depth_range[0])
+                (depth_m - depth_range[0])
                 / max(depth_range[1] - depth_range[0], 1e-6),
                 0,
                 1,
@@ -8170,6 +8192,10 @@ def drive(S, isaac) -> None:
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
+            if args.live_capture_dump == "async":
+                from capture_dump import CaptureDumper
+
+                capture_dumper[0] = CaptureDumper(write_capture_dump)  # real-time plan G2-1a: a writer of its own
             if far_runtime is not None:
                 # Plan 2026-10-22-live-far-recognition T1 (A): the far work on a thread of its own, applied on the
                 # tick by tag; its files on the session's writer; no driving frame inside a capture session.
@@ -11151,6 +11177,15 @@ def drive(S, isaac) -> None:
                     state["live_close_error"] = repr(exc_)
                 if live.trace is not None:  # D12a: the rows kept, the steps dropped, or why the write failed
                     state["tick_trace"] = live.trace_saved
+            if capture_dumper[0] is not None:
+                # G2-1a: the capture writer ends with the run, after the live session's own close (which shares one
+                # budget with its settles), within its own deadline; what it has not written is marked (its record
+                # goes to result.json, written after this)
+                try:
+                    capture_dumper[0].close(30.0)
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["capture_dump_close_error"] = repr(exc_)
+                state["capture_dump"] = capture_dumper[0].record()
             # M-a3: the lifecycle ends with the run, once every clean-up has run -- done only when the run
             # succeeded and nothing is propagating, failed otherwise; the loop's own time (no new clock read: the
             # replay compares every port call).
@@ -11398,6 +11433,10 @@ def main() -> None:
     if args.check_args:
         sys.exit(check_args_only(args))
     determinism.configure(getattr(args, "deterministic", False))
+    if args.lidar_cast != "loop":  # G3-1d: set once, before any cast (the default leaves the module untouched)
+        import planar_lidar as lidar_mode_
+
+        lidar_mode_.CAST_MODE = args.lidar_cast
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=False)
     # A hang leaves no trace of where it stopped (2026-10-26: dv3_trailer_det2 in world.render() for 45 min, lfsolo
@@ -11524,6 +11563,10 @@ def main() -> None:
         if "deterministic" in state:  # plan D0: why it stopped being deterministic, and the diagnostics
             state["deterministic"]["broken"] = determinism.broken()
             state["deterministic"]["diagnostics"]["frame_sync"] = frame_sync.summary()
+        if args.lidar_cast != "loop":  # G3-1d: the mode, and the oracle's counts when compared
+            import planar_lidar as lidar_mode_
+
+            state["lidar_cast"] = lidar_mode_.oracle_record()
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 
