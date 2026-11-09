@@ -29,6 +29,7 @@ ENTRY_M, RUN_MIN_S, SCAN_GAP_S, END_GAP_S = 3.0, 5.0, 0.15, 0.25
 H0_TARGET_REAR = (-1.2691, 0.8528, 0.1706)  # 1.3: the confirmation run's median truth rear axle at P-5's submit
 POSE_TOL_M, POSE_TOL_RAD = 0.02, 0.02
 ALPHA = 0.05
+CANDIDATE_WAIT_S = 3.0  # the scene replan's candidate re-check before a refusal
 OUTCOMES = ("none", "p", "c", "pc")  # a session's possible F result: none, F_p only, F_c only, both
 
 
@@ -59,16 +60,25 @@ def _flags(outcome: str) -> tuple[bool, bool]:
     return "p" in outcome, "c" in outcome
 
 
+def _choices(o) -> tuple:
+    """A session's possible outcomes: None (undecided) -> all of OUTCOMES, a string -> itself, a set -> its members."""
+    if o is None:
+        return OUTCOMES
+    if isinstance(o, str):
+        return (o,)
+    return tuple(sorted(o))
+
+
 def rows_possible(pairs: list, planned: int) -> set:
-    """Every conclusion row reachable when each undecided session (None) and every pair not run takes each of OUTCOMES.
-    ``pairs``: [(h1_outcome or None, h0_outcome or None)]. Compressed: the state is (b, c, H0 F_p seeds capped at 2, H0
-    F_c seeds capped at 2, any F)."""
+    """Every conclusion row reachable when each session takes each of its possible outcomes (an undecided one and every
+    pair not run: all of OUTCOMES; a partly known one: its set). ``pairs``: [(h1, h0)]. Compressed: the state is (b, c,
+    H0 F_p seeds capped at 2, H0 F_c seeds capped at 2, any F)."""
     states = {(0, 0, 0, 0, False)}
     full = list(pairs) + [(None, None)] * max(0, planned - len(pairs))
     for h1, h0 in full:
         nxt = set()
-        for o1 in ([h1] if h1 is not None else OUTCOMES):
-            for o0 in ([h0] if h0 is not None else OUTCOMES):
+        for o1 in _choices(h1):
+            for o0 in _choices(h0):
                 f1, f0 = o1 != "none", o0 != "none"
                 p0, c0 = _flags(o0)
                 for b, c, hp, hc, af in states:
@@ -81,9 +91,9 @@ def rows_possible(pairs: list, planned: int) -> set:
 def rows_brute(pairs: list, planned: int) -> set:
     """The same by full enumeration (tests only: 16 ** unknown pairs)."""
     full = list(pairs) + [(None, None)] * max(0, planned - len(pairs))
-    slots = [(i, k) for i, pr in enumerate(full) for k in (0, 1) if pr[k] is None]
+    slots = [(i, k) for i, pr in enumerate(full) for k in (0, 1) if not isinstance(pr[k], str)]
     out = set()
-    for combo in itertools.product(OUTCOMES, repeat=len(slots)):
+    for combo in itertools.product(*[_choices(full[i][k]) for i, k in slots]):
         filled = [list(pr) for pr in full]
         for (i, k), o in zip(slots, combo):
             filled[i][k] = o
@@ -132,12 +142,14 @@ def entry(xy, dest=D2_XY) -> bool:
 
 
 def f_p(mission: dict, scans: list, track) -> str:
-    """"yes", "no" or "undecided" (2.1 F_p) for one mission that failed in transport."""
-    run = occupied_run_at_end(scans, float(mission["ended_s"]))
+    """"yes", "no" or "undecided" (2.1 F_p) for one mission that failed in transport. No transport scan within END_GAP_S
+    of the end -- the observation stopped before it -- is undecided whatever the last scan was."""
+    ended = float(mission["ended_s"])
+    run = occupied_run_at_end(scans, ended)
+    if run["status"] == "no_scans" or ended - float(run.get("last_s", -math.inf)) > END_GAP_S:
+        return "undecided"
     if run["status"] != "run" or run["length_s"] < RUN_MIN_S:
         return "no"
-    if run["end_gap_s"] > END_GAP_S:
-        return "undecided"  # the occupied run is the last record but the scans stopped before the end
     at = truth_at(track, run["last_s"])
     if at is None:
         return "undecided"
@@ -149,25 +161,47 @@ def f_c(state: dict) -> str:
     entry by its truth rear, ending the mission."""
     for r in state.get("scene_replans") or []:  # an absent key in a valid record: no replan
         waits = r.get("permit_waits") or []
-        blocked = [w for w in waits if w.get("why") == "blocked:occupied"]
+        last = waits[-1] if waits else {}
+        final_why = (r.get("candidate") or {}).get("why", last.get("why"))
+        waited = (float(last["until_s"]) - float(last["since_s"])) if last.get("since_s") is not None else 0.0
         if (r.get("trigger") == "cusp_pose" and r.get("outcome") == "refused" and r.get("mission_end")
-                and blocked and r.get("truth_rear") is not None and entry(r["truth_rear"][:2])):
+                and last.get("why") == "blocked:occupied" and final_why == "blocked:occupied"
+                and waited >= CANDIDATE_WAIT_S - 0.05
+                and r.get("truth_rear") is not None and entry(r["truth_rear"][:2])):
             return "yes"
     return "no"
 
 
 # --- a session (2.2) -------------------------------------------------------------------------------------------------
-def _p5_missions(sess: dict) -> list:
-    out = []
+def _missions(sess: dict) -> tuple[list, list]:
+    """The P-5:D-2 missions with their results, and what is missing: a mission folder without a readable result or
+    records, or a mission the session rows name (an acked submit) without a folder."""
+    out, missing = [], []
     run = sess.get("run")
+    seen = set()
     for md in sorted(run.glob("missions/*")) if run is not None else []:
+        seen.add(md.name)
         try:
             r = json.loads((md / "result.json").read_text()).get("result") or {}
         except (OSError, ValueError):
+            missing.append(f"result:{md.name}")
             continue
+        if not (md / "records.json").exists():
+            missing.append(f"records:{md.name}")
         if (r.get("pallet_id"), r.get("destination_id")) == P5:
             out.append({"mission_id": md.name, **r})
-    return out
+    for row in sess.get("rows") or []:
+        mid = row.get("mission_id")
+        if mid is not None and mid not in seen:
+            missing.append(f"mission_folder:{mid}")
+    return out, missing
+
+
+def _reached_transport(sess: dict, mission: dict) -> bool:
+    """The mission entered transport: a transition to it within the mission's time (result.json transitions)."""
+    t0, t1 = float(mission.get("started_s") or 0.0), float(mission.get("ended_s") or math.inf)
+    return any(x.get("to") == "transport" and t0 <= float(x.get("time_s", -1.0)) <= t1
+               for x in (sess.get("result") or {}).get("transitions") or [])
 
 
 def _stage(sess: dict, mission_id: str):
@@ -260,8 +294,11 @@ def session_outcome(sess: dict, arm: str) -> dict:
     missing = _required(sess)
     out["missing"] = missing
     track = _track(sess)
-    p5 = _p5_missions(sess)
-    out["p5"] = [{"mission_id": m["mission_id"], "outcome": m.get("outcome"), "reason": m.get("reason")} for m in p5]
+    p5, missing_m = _missions(sess)
+    missing += missing_m
+    out["missing"] = missing
+    out["p5"] = [{"mission_id": m["mission_id"], "outcome": m.get("outcome"), "reason": m.get("reason"),
+                  "reached_transport": _reached_transport(sess, m)} for m in p5]
     valid = h1_valid(sess) if arm == "H1" else h0_valid(sess, track, p5)
     out["valid"] = valid
     if missing or not valid["ok"] or track is None:
@@ -272,27 +309,26 @@ def session_outcome(sess: dict, arm: str) -> dict:
     except (OSError, ValueError):
         out["outcome"], out["missing"] = None, missing + ["spool:obstacle.scans"]
         return out
-    subtypes, undecided = set(), False
+    p_vals, c_vals = {False}, {False}  # what F_p / F_c can be over the session's missions (any mission F -> F)
     for m in p5:
         if m.get("outcome") != "failed" or _stage(sess, m["mission_id"]) != "transport":
             continue
         fp = f_p(m, scans, track)
         fc = f_c((sess.get("records") or {}).get(m["mission_id"]) or {})
-        m_rec = next(x for x in out["p5"] if x["mission_id"] == m["mission_id"])
-        m_rec.update(f_p=fp, f_c=fc)
+        next(x for x in out["p5"] if x["mission_id"] == m["mission_id"]).update(f_p=fp, f_c=fc)
         if fp == "yes":
-            subtypes.add("p")
+            p_vals = {True}
+        elif fp == "undecided" and p_vals != {True}:
+            p_vals = {False, True}
         if fc == "yes":
-            subtypes.add("c")
-        undecided = undecided or fp == "undecided"
-    if subtypes:
-        out["outcome"] = "pc" if subtypes == {"p", "c"} else subtypes.pop()
-    elif undecided:
-        out["outcome"] = None
-    elif any(m.get("outcome") == "done" for m in p5):
-        out["outcome"] = "none"
+            c_vals = {True}
+    possible = {("p" if p else "") + ("c" if c else "") or "none" for p in p_vals for c in c_vals}
+    if possible == {"none"} and not any(m.get("outcome") == "done" for m in p5):
+        out["outcome"] = None  # no F and no P-5 done: undecided (2.2)
+    elif len(possible) == 1:
+        out["outcome"] = possible.pop()
     else:
-        out["outcome"] = None
+        out["outcome"] = sorted(possible)  # partly known (e.g. F_c yes, F_p undecided): kept for the enumeration
     return out
 
 
@@ -300,41 +336,91 @@ def session_outcome(sess: dict, arm: str) -> dict:
 def batch_verdict(pairs: list, planned: int) -> dict:
     """``pairs``: [(h1_outcome or None, h0_outcome or None)] for the pairs run so far, in order."""
     rows = rows_possible(pairs, planned)
-    decided = [(h1, h0) for h1, h0 in pairs if h1 is not None and h0 is not None]
+    decided = [(h1, h0) for h1, h0 in pairs if isinstance(h1, str) and isinstance(h0, str)]
     b = sum(1 for h1, h0 in decided if h1 != "none" and h0 == "none")
     c = sum(1 for h1, h0 in decided if h0 != "none" and h1 == "none")
     return {"rows_possible": sorted(rows), "settled": len(rows) == 1,
             "conclusion": next(iter(rows)) if len(rows) == 1 else "undecided", "b_decided": b, "c_decided": c,
-            "pairs_run": len(pairs), "planned_pairs": planned}
+            "mcnemar_p_decided": mcnemar_p(b, c), "pairs_run": len(pairs), "planned_pairs": planned}
 
 
 def feasibility(chunk: list) -> dict:
     """After the first chunk: valid H1 (STOP valid and P-5 reaching transport) >= 4 of 6 and P-5 reaching transport
     >= 8 of 12 sessions, else stop (2.4). ``chunk``: [(h1_session_result, h0_session_result)]."""
     def reached(r):
-        return any(m.get("outcome") in ("done", "failed") and m.get("f_p") is not None or m.get("outcome") == "done"
-                   for m in r.get("p5") or [])
+        return any(m.get("reached_transport") for m in r.get("p5") or [])
 
     valid_h1 = sum(1 for h1, _ in chunk if h1.get("valid", {}).get("stop") and reached(h1))
     reach = sum(1 for pr in chunk for r in pr if reached(r))
     return {"valid_h1": valid_h1, "reached": reach, "ok": valid_h1 >= 4 and reach >= 8}
 
 
+PLANNED_PAIRS, SEEDS = 24, tuple(range(2, 26))
+
+
+def validate_plan(plan: dict) -> list:
+    """The registered shape (1.4): 24 planned pairs on seeds 2-25 in order, each seed once, every attempt folder name
+    used once. An arm's attempts: [{"name": .., "base_failure": bool}] in run order."""
+    errors = []
+    if int(plan.get("planned_pairs", -1)) != PLANNED_PAIRS:
+        errors.append("planned_pairs")
+    seeds = [int(p_["seed"]) for p_ in plan.get("pairs", [])]
+    if seeds != list(SEEDS[:len(seeds)]):
+        errors.append("seeds")
+    names = [a["name"] for p_ in plan.get("pairs", []) for arm in ("H1", "H0") for a in p_[arm]]
+    if len(names) != len(set(names)):
+        errors.append("duplicate_session")
+    for p_ in plan.get("pairs", []):
+        for arm in ("H1", "H0"):
+            if not 1 <= len(p_[arm]) <= 2:
+                errors.append(f"attempts:{p_['seed']}:{arm}")
+    return errors
+
+
+def args_mismatch(args: dict, seed: int, arm: str) -> list:
+    """The session's recorded arguments (args.txt) against its pair: the seed, and the arm's construction -- H1 the
+    cycle without a start pose, H0 the queue with the registered START_POSE."""
+    out = []
+    if str(args.get("SEED")) != str(seed):
+        out.append("args:seed")
+    want = ("cycle", False) if arm == "H1" else ("queue", True)
+    if args.get("SCENARIO") != want[0] or bool(args.get("START_POSE")) != want[1]:
+        out.append("args:arm")
+    return out
+
+
+def chosen_attempt(attempts: list):
+    """1.4: the first attempt without a base failure, or None (both failed at the base: undecided)."""
+    return next((a["name"] for a in attempts if not a.get("base_failure")), None)
+
+
 def evaluate(run_dir: Path) -> dict:
     plan = json.loads((run_dir / "plan_l4r.json").read_text())
+    errors = validate_plan(plan)
+    if errors:
+        return {"plan_errors": errors, "conclusion": "invalid_plan"}
     sessions, pairs = {}, []
     for pr in plan["pairs"]:
         res = {}
         for arm in ("H1", "H0"):
-            d = run_dir / "s" / pr[arm]
-            res[arm] = session_outcome(V.load_session(d), arm) if d.exists() else {"arm": arm, "outcome": None,
-                                                                                    "missing": ["not_run"]}
-            sessions[pr[arm]] = res[arm]
+            name = chosen_attempt(pr[arm])
+            d = None if name is None else run_dir / "s" / name
+            if d is None or not d.exists():
+                res[arm] = {"arm": arm, "outcome": None, "missing": ["no_attempt" if name is None else "not_run"]}
+            else:
+                sess_ = V.load_session(d)
+                res[arm] = session_outcome(sess_, arm)
+                mismatch = args_mismatch(V._session_args(sess_), int(pr["seed"]), arm)
+                if mismatch:
+                    res[arm]["missing"] = res[arm].get("missing", []) + mismatch
+                    res[arm]["outcome"] = None
+            res[arm]["attempt"] = name
+            sessions[f"{pr['seed']}:{arm}"] = res[arm]
         pairs.append((res["H1"]["outcome"], res["H0"]["outcome"]))
     out = {"sessions": sessions, **batch_verdict(pairs, int(plan["planned_pairs"]))}
-    first = plan["pairs"][:6]
-    if len(first) == 6 and all((run_dir / "s" / p_[a]).exists() for p_ in first for a in ("H1", "H0")):
-        out["feasibility"] = feasibility([(sessions[p_["H1"]], sessions[p_["H0"]]) for p_ in first])
+    if len(plan["pairs"]) >= 6:
+        out["feasibility"] = feasibility([(sessions[f"{p_['seed']}:H1"], sessions[f"{p_['seed']}:H0"])
+                                          for p_ in plan["pairs"][:6]])
     return out
 
 

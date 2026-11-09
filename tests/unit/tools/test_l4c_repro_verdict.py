@@ -31,7 +31,8 @@ def test_the_compressed_enumeration_matches_the_brute_force(seed):
     rng = random.Random(seed)
     for planned in (1, 2, 3):
         for run in range(planned + 1):
-            pairs = [tuple(rng.choice(R.OUTCOMES + (None,)) for _ in range(2)) for _ in range(run)]
+            pick = R.OUTCOMES + (None, ("c", "pc"), ("none", "p"))
+            pairs = [tuple(rng.choice(pick) for _ in range(2)) for _ in range(run)]
             assert R.rows_possible(pairs, planned) == R.rows_brute(pairs, planned)
 
 
@@ -70,9 +71,16 @@ def test_f_p_on_the_anchor_shape_and_its_edges():
 
 def test_f_c_needs_the_cusp_refusal_at_the_entry():
     rec = {"scene_replans": [{"trigger": "cusp_pose", "outcome": "refused", "mission_end": True,
-                              "permit_waits": [{"why": "blocked:occupied", "since_s": 162.7, "until_s": 165.7}],
-                              "truth_rear": [1.677, -8.660, -0.236]}]}
+                              "permit_waits": [{"why": "blocked:occupied", "since_s": 162.717, "until_s": 165.717}],
+                              "candidate": {"why": "blocked:occupied"}, "truth_rear": [1.677, -8.660, -0.236]}]}
     assert R.f_c(rec) == "yes"
+    late = {"scene_replans": [{**rec["scene_replans"][0], "candidate": {"why": "blocked:unknown"},
+                               "permit_waits": [{"why": "blocked:occupied", "since_s": 162.7, "until_s": 163.0},
+                                                {"why": "blocked:unknown", "since_s": 163.0, "until_s": 166.0}]}]}
+    assert R.f_c(late) == "no"  # the final refusal was for an unknown cell (Codex P2-1)
+    quick = {"scene_replans": [{**rec["scene_replans"][0],
+                                "permit_waits": [{"why": "blocked:occupied", "since_s": 162.7, "until_s": 163.2}]}]}
+    assert R.f_c(quick) == "no"  # refused before its 3 s re-check
     assert R.f_c({}) == "no"  # an absent key: no replan
     far = {"scene_replans": [{**rec["scene_replans"][0], "truth_rear": [-1.0, -2.0, 0.0]}]}
     assert R.f_c(far) == "no"
@@ -81,10 +89,61 @@ def test_f_c_needs_the_cusp_refusal_at_the_entry():
 
 
 def test_the_feasibility_check():
-    ok_h1 = {"valid": {"stop": True}, "p5": [{"outcome": "done"}]}
-    bad_h1 = {"valid": {"stop": False}, "p5": [{"outcome": "done"}]}
-    h0 = {"valid": {}, "p5": [{"outcome": "done"}]}
+    ok_h1 = {"valid": {"stop": True}, "p5": [{"outcome": "done", "reached_transport": True}]}
+    bad_h1 = {"valid": {"stop": False}, "p5": [{"outcome": "done", "reached_transport": True}]}
+    h0 = {"valid": {}, "p5": [{"outcome": "failed", "reached_transport": True}]}  # failed after transport: reached
     assert R.feasibility([(ok_h1, h0)] * 4 + [(bad_h1, h0)] * 2)["ok"]
     assert not R.feasibility([(ok_h1, h0)] * 3 + [(bad_h1, h0)] * 3)["ok"]
     none = {"valid": {"stop": True}, "p5": []}
     assert not R.feasibility([(ok_h1, none)] * 6)["ok"]  # 6 of 12 reached transport
+
+
+def test_a_stopped_observation_is_undecided_even_for_a_short_run():
+    m = {"ended_s": 10.0}
+    scans = [_scan(0.5 + 0.1 * k, "occupied") for k in range(6)]  # occupied 0.5-1.0, then nothing to 10.0
+    assert R.f_p(m, scans, [(0.0, 3.4, -8.4, 0.0)]) == "undecided"
+    assert R.f_p(m, [], [(0.0, 3.4, -8.4, 0.0)]) == "undecided"  # no transport scan at all
+
+
+def test_partly_known_sessions_keep_their_possibilities():
+    # Codex P2-3: F_c yes with F_p undecided is {c, pc}, which can change the row when H0 already has an F_p seed
+    pairs = [("none", "p"), ("none", ("c", "pc"))] + [("none", "none")] * 22
+    rows = R.rows_possible(pairs, 24)
+    assert rows == {"h0_same_type", "undecided_or_other"}
+    assert not R.batch_verdict(pairs, 24)["settled"]
+
+
+def test_the_plan_shape_and_the_attempt_choice():
+    def pair(k, h1="ok", h0="ok"):
+        return {"seed": k, "H1": [{"name": f"h1_s{k}", "base_failure": h1 != "ok"}],
+                "H0": [{"name": f"h0_s{k}", "base_failure": h0 != "ok"}]}
+    good = {"planned_pairs": 24, "pairs": [pair(k) for k in range(2, 8)]}
+    assert R.validate_plan(good) == []
+    assert "seeds" in R.validate_plan({**good, "pairs": [pair(3), pair(2)]})
+    dup = {**good, "pairs": [pair(2), {**pair(3), "H0": [{"name": "h0_s2", "base_failure": False}]}]}
+    assert "duplicate_session" in R.validate_plan(dup)
+    assert "planned_pairs" in R.validate_plan({**good, "planned_pairs": 16})
+    assert R.chosen_attempt([{"name": "a", "base_failure": True}, {"name": "b", "base_failure": False}]) == "b"
+    assert R.chosen_attempt([{"name": "a", "base_failure": True}, {"name": "b", "base_failure": True}]) is None
+
+
+def test_a_session_must_match_its_pair_and_arm():
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "cycle"}, 4, "H1") == []
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue", "START_POSE": "-0.934,0.9106,0.1706"}, 4, "H0") == []
+    assert R.args_mismatch({"SEED": "5", "SCENARIO": "cycle"}, 4, "H1") == ["args:seed"]
+    assert R.args_mismatch({"SEED": "4", "SCENARIO": "queue"}, 4, "H0") == ["args:arm"]  # no start pose
+
+
+def test_a_mission_without_its_result_or_folder_is_missing(tmp_path):
+    import json
+
+    run = tmp_path / "run"
+    for mid, res in (("m1", {"pallet_id": "P-5", "destination_id": "D-2", "outcome": "done"}), ("m2", None)):
+        (run / "missions" / mid).mkdir(parents=True)
+        (run / "missions" / mid / "records.json").write_text("{}")
+        if res is not None:
+            (run / "missions" / mid / "result.json").write_text(json.dumps({"result": res}))
+    sess = {"run": run, "rows": [{"mission_id": "m1"}, {"mission_id": "m2"}, {"mission_id": "m3"}]}
+    p5, missing = R._missions(sess)
+    assert [m["mission_id"] for m in p5] == ["m1"]
+    assert missing == ["result:m2", "mission_folder:m3"]
