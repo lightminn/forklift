@@ -8909,7 +8909,7 @@ class MissionCore:
         state.setdefault("loaded_lift_wait", []).append({"start_s": float(t)})
         self.commands.adopt()
         if getattr(options, "occupied_dumps", False):
-            self._occupied_new_mission(t, plan)
+            self._occupied_new_mission(t, getattr(plan, "transport", plan))  # a loaded start's plan holds its transport
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 
