@@ -123,8 +123,9 @@ def analyse(paths, modes) -> dict:
         for mode in modes:
             calls: list = []
             snap, whole = replay(rec, mode, calls)
-            row[mode] = {"self_reproduced": same_snapshot(snap, rec["result"]), "snapshot_s": whole,
-                         "clear_group_s": sum(c["s"] for c in calls), "clear_groups": len(calls)}
+            row[mode] = {"self_reproduced": same_snapshot(snap, rec["result"]),
+                         "snapshot_s_with_stats": whole,  # includes this tool's raw/band counting: not the call's cost
+                         "clear_group_s": [c["s"] for c in calls]}
             if mode == modes[0]:
                 row["clear_group_calls"] = [{k: v for k, v in c.items() if k != "s"} for c in calls]
         rows.append(row)
@@ -137,11 +138,10 @@ def analyse(paths, modes) -> dict:
         "raw_cells": _q([c["raw_cells"] for c in calls]),
         "acting_bands": _q([len(c["bands"]) for c in calls]),
         "offsets": dict(Counter(b["offsets"] for c in calls for b in c["bands"])),
-        "shapes": dict(Counter(tuple(c["shape"]) for c in calls).most_common(5)),
+        "shapes": [[list(k), n] for k, n in Counter(tuple(c["shape"]) for c in calls).most_common(5)],
     }
-    for m in modes:
-        per = [r[m]["clear_group_s"] / r[m]["clear_groups"] for r in used if r[m]["clear_groups"]]
-        summary[f"{m}_clear_group_ms_per_call"] = _q([1e3 * v for v in per])
+    for m in modes:  # every _clear_group call's own time (Codex 1b-0 review P2: no per-dump averaging)
+        summary[f"{m}_clear_group_ms_per_call"] = _q([1e3 * v for r in used for v in r[m]["clear_group_s"]])
     return {"summary": summary, "rows": rows}
 
 
@@ -159,6 +159,10 @@ def main() -> int:
     ap.add_argument("--modes", nargs="+", default=["reference", "numba"])
     ap.add_argument("--limit", type=int, default=0, help="0: every dump")
     a = ap.parse_args()
+    missing = [str(d) for d in a.dirs if not any((d / "grid_snapshot").glob("*.pkl.gz"))]
+    if missing:
+        print(f"no grid_snapshot dumps in {missing}", file=sys.stderr)
+        return 2
     paths = sorted(p for d in a.dirs for p in (d / "grid_snapshot").glob("*.pkl.gz"))
     if a.limit:
         paths = paths[: a.limit]

@@ -45,3 +45,19 @@ def test_the_analysis_reproduces_real_dumps_and_counts_raw_and_bands(tmp_path):
     assert s["dumps"] == s["self_reproduced"] >= 4
     assert s["clear_group_calls"] >= 4 and s["raw_cells"]["max"] > 0
     assert s["acting_bands"]["max"] >= 1 and all(n > 0 for n in s["offsets"])
+    import json
+    json.dumps(out, default=str)  # the report serialises (shapes as lists)
+    assert s["reference_clear_group_ms_per_call"]["n"] == s["clear_group_calls"]  # one time per call, not per dump
+    sys.argv = ["g3_1b0_analyze.py", str(tmp_path / "nothing"), "--json", str(tmp_path / "x.json")]
+    assert an.main() == 2  # no dumps: a failure, not an empty success
+
+
+def test_the_list_keeps_the_dumps_out_of_the_retry_output():
+    import json
+    out = subprocess.run([sys.executable, str(ROOT / "docs" / "validation" / "2026-11-10-g3-1b0" / "g3_1b0_lists.py"),
+                          "/S", "/R/g3b0"], capture_output=True, text=True, check=True).stdout
+    for line in out.splitlines():
+        e = json.loads(line)
+        assert not e["env"]["FORKLIFT_PERF_DUMP"].startswith(e["retry_move"][0])
+        assert e["env"]["FORKLIFT_PERF_DUMP"].startswith("/R/g3b0_dumps/")
+        assert e["env"]["FORKLIFT_PERF_DUMP_STRATA_K"] == "5" and e["env"]["FORKLIFT_PERF_DUMP_STREAM"] == ""
