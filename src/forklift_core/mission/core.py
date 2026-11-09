@@ -1482,6 +1482,20 @@ class MissionCore:
                 raw_base=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[1],
                 raw_q=obstacle.get("last_raw", ({}, np.zeros(3), np.zeros(4)))[2],
             )
+        if getattr(options, "occupied_dumps", False):
+            # diagnostic (docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2): the hold's later ages
+            from forklift_core.mission.occupied_dumps import HoldDumps
+
+            hold_dumps_ = self.__dict__.setdefault("_hold_dumps", HoldDumps())
+            age_ = hold_dumps_.tick(t, allowed == 0.0 and why in ("unknown", "occupied"))
+            if age_ is not None:
+                self._occupied_dump(
+                    f"obstacle_hold_dump_{hold_dumps_.count}.npz", t, rear, truth_rear, kappa=kappa,
+                    direction=direction, loaded=loaded, why=why, hold_age_s=age_, hold_since_s=hold_dumps_.since,
+                    hold_episode=hold_dumps_.episode,
+                    blocked_cells=getattr(getattr(obstacle["layer"].permission, "last_estop", None), "blocked_cells",
+                                          ()),
+                    path_blocked_cells=getattr(obstacle["layer"].permission.path_check, "blocked_cells", ()))
         ticks = obstacle["ticks"]
         ticks[ms.phase] = ticks.get(ms.phase, 0) + 1
         low = obstacle["min_allowed"]
@@ -8107,7 +8121,47 @@ class MissionCore:
             cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
             strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0)
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
+        if getattr(self.options, "occupied_dumps", False):
+            self._candidate_dump(t, pose_, leg_, int(direction_), hooks.loaded(), permit_)
         return out
+
+    def _occupied_dump(self, name: str, t: float, rear, truth_rear, *, blocked_cells=(), path_blocked_cells=(),
+                       **fields) -> None:
+        """A diagnostic dump of ``--occupied-dumps``: the permission's snapshot (grid, free stamps, origin, resolution),
+        the pose, the correction and the blocked cells (grid indices i, j -> x, y cell centres), plus ``fields``."""
+        obstacle, ms = self.obstacle, self.ms
+        snap_ = obstacle["layer"].snapshot
+        if snap_ is None:
+            return
+        self.hooks.save_npz(
+            name, state=snap_.state, free_stamp=snap_.free_stamp, origin=[snap_.origin_x_m, snap_.origin_y_m],
+            res=snap_.resolution_m, stamp=snap_.stamp_s, t=t, phase=ms.phase,
+            rear=np.asarray(rear, dtype=float), truth_rear=np.asarray(truth_rear, dtype=float),
+            correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
+            blocked_cells=np.asarray(blocked_cells, dtype=np.int64).reshape(-1, 2),
+            path_blocked_cells=np.asarray(path_blocked_cells, dtype=np.int64).reshape(-1, 2), **fields)
+
+    def _candidate_dump(self, t: float, pose, leg, direction: int, loaded: bool, permit) -> None:
+        """``--occupied-dumps``: a scene-replan candidate refused for a blocked reason -- its leg, the permit and the
+        blocked cells of the candidate's walk (the check re-run here, read only; with the option off nothing is read)."""
+        from forklift_core.mission.occupied_dumps import MAX_CANDIDATE_DUMPS, blocked_candidate
+
+        if not blocked_candidate(permit) or self.obstacle is None:
+            return
+        count_ = self.__dict__.get("_candidate_dumps", 0)
+        if count_ >= MAX_CANDIDATE_DUMPS:
+            return
+        self._candidate_dumps = count_ + 1
+        layer_ = self.obstacle["layer"]
+        pose_ = tuple(float(v) for v in pose)
+        walk_ = layer_.check_candidate(leg, current_pose=pose_, direction=direction, loaded=loaded)
+        ahead_ = layer_.check_candidate(leg, current_pose=pose_, direction=direction, loaded=loaded,
+                                        unknown_passes=True)
+        self._occupied_dump(
+            f"candidate_dump_{self._candidate_dumps}.npz", t, pose_, self.hooks.truth_rear(), direction=direction,
+            loaded=loaded, leg=np.asarray(leg, dtype=float), why=str(permit.get("why")),
+            permit_json=json.dumps(permit, default=str), blocked_cells=getattr(walk_, "blocked_cells", ()),
+            path_blocked_cells=getattr(ahead_, "blocked_cells", ()))
 
     @staticmethod
     def _poses_length(poses) -> float:
