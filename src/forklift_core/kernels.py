@@ -82,6 +82,11 @@ def warm_up() -> float:
     gn.erode(mask, offsets), gn.dilate(mask, offsets)
     rows = gn.row_intervals(offsets)
     gn.erode_rows(mask, rows), gn.dilate_rows(mask, rows)
+    from forklift_core.control import shadow_numba as sn  # plan 5.27: the arrays apply() hands it
+
+    cells = np.zeros(1, dtype=np.int64)
+    sn.retained(cells, cells, one * 0.1, mask, stamp, mask, cells, cells, one * 0.05)
+    sn.move_values(cells, cells, cells, cells, mask, stamp, stamp, 0, 0)
     return time.perf_counter() - start
 
 
