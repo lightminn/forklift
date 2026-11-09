@@ -61,6 +61,7 @@ class Timers:
         self.long_cap = 200_000
         self.long_dropped = 0
         self.long_overhead_s = 0.0  # the record's own keeping time (taken out of the enclosing calls' self time)
+        self.long_region_calls = 0  # every region call entered while the record is on (plan 5.22 M7's accounting)
         self.where = None
         self._long_lock = threading.Lock()
         self._local = threading.local()  # each thread's own stack of open regions: [name, start, nested wall s]
@@ -79,6 +80,7 @@ class Timers:
         return stack
 
     def _enter(self, name: str, start: float) -> None:
+        self.long_region_calls += 1
         self._stack().append([name, start, 0.0])
 
     def _leave(self, name: str, start: float, seconds: float, cpu_s: float) -> None:

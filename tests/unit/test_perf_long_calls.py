@@ -234,3 +234,15 @@ def test_by_parent_splits_an_inner_steps_total_by_the_region_it_ran_inside(timer
     g._geometry()
     totals = t.take()
     assert totals["grid._geometry|grid.snapshot"][1] == 1 and totals["grid._geometry"][1] == 1
+
+
+def test_region_calls_are_counted_while_the_record_is_on(timers):
+    t, clock = timers
+    with t.region("a"):
+        pass
+    assert t.long_region_calls == 0
+    t.long_s = 1.0
+    for _ in range(3):
+        with t.region("a"):
+            pass
+    assert t.long_region_calls == 3

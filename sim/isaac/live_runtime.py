@@ -326,9 +326,11 @@ class LiveRuntime:
             try:
                 path = self.output / "long_calls.json"
                 path.write_text(json.dumps({"threshold_s": TIMERS.long_s, "dropped": TIMERS.long_dropped,
-                                            "overhead_s": TIMERS.long_overhead_s, "records": TIMERS.long}))
+                                            "overhead_s": TIMERS.long_overhead_s,
+                                            "region_calls": TIMERS.long_region_calls, "records": TIMERS.long}))
                 self.long_calls_saved = {"records": len(TIMERS.long), "dropped": TIMERS.long_dropped,
-                                         "overhead_s": TIMERS.long_overhead_s, "path": str(path)}
+                                         "overhead_s": TIMERS.long_overhead_s,
+                                         "region_calls": TIMERS.long_region_calls, "path": str(path)}
             except Exception as exc:  # noqa: BLE001 -- recorded, never raised over the run's own end
                 self.long_calls_saved = {"error": repr(exc)}
         self.settle_records()
