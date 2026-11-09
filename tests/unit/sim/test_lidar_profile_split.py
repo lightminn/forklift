@@ -62,6 +62,7 @@ def test_the_profiled_scan_equals_the_plain_loop_and_books_its_parts(fake_isaac,
     assert fake_isaac[0].calls == fake_isaac[1].calls  # the same queries, in the same order
     booked = TIMERS.take()
     assert {"lidar.split.scans", "lidar.split.convert", "lidar.split.query", "lidar.split.hit_and_own"} <= set(booked)
+    assert booked["lidar.split.rays"][0] == len(dirs)  # the ray count, in the seconds field
 
 
 def test_only_every_nth_scan_is_profiled_and_only_with_the_live_timers(monkeypatch):

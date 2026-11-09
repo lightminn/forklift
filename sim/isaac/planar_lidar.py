@@ -218,6 +218,8 @@ def _cast_scan_flags_profiled(query, start, directions, range_max_m, own_prefixe
         TIMERS.add("lidar.split.convert", t_conv)
         TIMERS.add("lidar.split.query", t_query)
         TIMERS.add("lidar.split.hit_and_own", t_own)
+        # the profiled scan's ray count, booked in the seconds field (plan 5.22 M7's accounting: its extra clock reads)
+        TIMERS.add("lidar.split.rays", float(len(directions)))
     return distances, hits, own
 
 
