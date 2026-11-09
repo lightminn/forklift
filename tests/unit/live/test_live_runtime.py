@@ -1473,7 +1473,7 @@ def test_the_long_call_record_is_written_beside_the_trace_when_on(tmp_path, monk
     finally:
         rt.close()
     saved = json.loads((tmp_path / "long_calls.json").read_text())
-    assert saved["threshold_s"] == 0.0 and saved["records"][0]["name"] == "x"
+    assert saved["threshold_s"] == 0.0 and saved["records"][0]["name"] == "x" and "overhead_s" in saved
     with open(tmp_path / "live_log.jsonl") as log:
         end = [json.loads(line) for line in log if '"event": "end"' in line][0]
     assert end["long_calls"]["records"] == 1
