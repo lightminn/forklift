@@ -11,7 +11,9 @@ function-input dumps. Off unless asked for; neither changes what the measured co
   ``FORKLIFT_PERF_DUMP_STREAM`` (``shadow_apply=300``), the first calls of each receiver one after another. A
   record holds the receiver, the arguments and the keyword arguments before the call (copied as one object
   graph, so an argument that is the receiver's own attribute stays so), the same after it, and the result, so
-  ``tools/perf_bench.py`` can run the call again on another implementation and compare.
+  ``tools/perf_bench.py`` can run the call again on another implementation and compare. ``stream_report()`` writes
+  each streamed receiver's call and record counts (``<dir>/stream_totals_<pid>.json``), so a replay can tell a
+  whole stream from a prefix (real-time plan 5.27, Codex P2-1).
 """
 
 from __future__ import annotations
@@ -218,7 +220,7 @@ _STREAM = _every(os.environ.get("FORKLIFT_PERF_DUMP_STREAM", ""), default=0)
 _STRATA_K = int(os.environ.get("FORKLIFT_PERF_DUMP_STRATA_K", "5"))
 _calls: dict[str, int] = {}
 _strata: dict[tuple, int] = {}
-_streams: dict[tuple, list] = {}  # (name, id of receiver) -> [receiver (kept alive: no id reuse), calls so far]
+_streams: dict[tuple, list] = {}  # (name, id of receiver) -> [receiver (kept alive: no id reuse), records, calls]
 _last: dict = {}
 CONTEXT: dict = {}  # what the runner says it is doing (the mission phase), part of every stratum
 
@@ -332,7 +334,8 @@ def dumped(name: str, *, pure: bool = False, strata=None):
             limit = _STREAM.get(name, _STREAM["*"])
             stream = None
             if limit:
-                stream = _streams.setdefault((name, id(receiver)), [receiver, 0])
+                stream = _streams.setdefault((name, id(receiver)), [receiver, 0, 0])
+                stream[2] += 1  # every call, recorded or past the limit
                 if stream[1] >= limit:
                     stream = None
             if pure:
@@ -362,6 +365,28 @@ def dumped(name: str, *, pure: bool = False, strata=None):
         return inner
 
     return wrap
+
+
+def stream_report() -> Path | None:
+    """Write every streamed receiver's counts -- calls made, calls recorded, the limit -- to
+    ``<FORKLIFT_PERF_DUMP>/stream_totals_<pid>.json`` (rewritten each time; a no-op without streams). The runner calls
+    it before ``app.close()``, which can end the process without ``atexit`` (plan 5.27, Codex round 2 P3); ``atexit``
+    calls it again as a backup."""
+    if not _DUMP_DIR or not _streams:
+        return None
+    rows = [{"name": name, "pid": os.getpid(), "receiver": rid, "calls": entry[2], "records": entry[1],
+             "limit": _STREAM.get(name, _STREAM["*"]), "exhausted": entry[1] >= _STREAM.get(name, _STREAM["*"])}
+            for (name, rid), entry in _streams.items()]
+    out = Path(_DUMP_DIR) / f"stream_totals_{os.getpid()}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rows, indent=1) + "\n")
+    tmp.replace(out)
+    return out
+
+
+if _DUMP_DIR:
+    atexit.register(stream_report)
 
 
 # --- the dual run (real-time plan V2) -----------------------------------------------------------------------------

@@ -1373,6 +1373,11 @@ def arguments() -> argparse.Namespace:
                         "arbiter also ages the frame from that step's start (2026-10-17 marker runs: 11 physics "
                         "steps, about one render of the 10 Hz camera; the default adds a render of margin)")
     parser.add_argument("--live-web-root", type=Path, default=None, help="M-c: console/web to serve")
+    parser.add_argument("--live-test-prep-renders", type=int, default=0, choices=(0, 1, 2, 3),
+                        help="real-time plan 5.24 (G5-0 arm, test only): world.render() this many times just before "
+                             "the live start, timed and recorded with the physics time before and after")
+    parser.add_argument("--live-test-prep-wait-s", type=float, default=0.0,
+                        help="real-time plan 5.24 (G5-0 wait control, test only): sleep this long at the same place")
     parser.add_argument("--live-capture-dump", choices=("sync", "async"), default="sync",
                         help="real-time plan G2-1a: the capture's diagnostic image and depth files written on the "
                              "control thread (sync) or handed to the live session's writer thread (async; live "
@@ -1879,6 +1884,12 @@ def arguments() -> argparse.Namespace:
         args.return_turnaround = bool(args.live)  # plan D11: on for a live run, off for a batch one (as before)
     if args.live_test_far_zone_offset_m is not None and (not args.live or args.recognition != "far"):
         parser.error("--live-test-far-zone-offset-m needs --live and --recognition far")
+    if (args.live_test_prep_renders or args.live_test_prep_wait_s) and not args.live:
+        parser.error("--live-test-prep-renders / --live-test-prep-wait-s need --live (plan 5.24 G5-0 arms)")
+    if args.live_test_prep_renders and args.live_test_prep_wait_s:
+        parser.error("--live-test-prep-renders and --live-test-prep-wait-s are separate arms (plan 5.24)")
+    if not 0.0 <= args.live_test_prep_wait_s <= 30.0:
+        parser.error("--live-test-prep-wait-s must be in [0, 30]")
     if args.live_capture_dump == "async" and not args.live:
         parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
@@ -9228,6 +9239,52 @@ def drive(S, isaac) -> None:
                        "overlay": overlay}
                 if encoder is not None else None)
             live_prestart_(live)  # 5.18/5.21 measurement (off by default): the core's ports, the start marks
+            if args.live_test_prep_renders or args.live_test_prep_wait_s:
+                # Real-time plan 5.24 (G5-0 arms, test only): the first renders (or a plain wait) before the first
+                # control tick -- does the start stall move here, go, or stay? The physics must not move: its time
+                # before and after is kept, and an arm that moved it is invalid.
+                # (the process's CPU time over each part too: a wait that some background thread works through shows
+                # here; independent review of 5.24, item 3)
+                # What the prep did to the render products and the step counters (Codex 5.24 review P2-5): each
+                # camera's rendering frame and time, the physics step index and the runner's tick, before and after.
+                def prep_view_():
+                    cams_ = {}
+                    for name_, cam_ in (("live_video", _bound.get("live_video_camera")),
+                                        ("perception", _bound.get("perception_camera"))):
+                        if cam_ is None:
+                            continue
+                        try:
+                            f_ = cam_.get_current_frame() or {}
+                            rf_ = f_.get("rendering_frame")
+                            if isinstance(rf_, dict):
+                                rf_ = [int(rf_.get("referenceTimeNumerator", -1)),
+                                       int(rf_.get("referenceTimeDenominator", -1))]
+                            cams_[name_] = {"rendering_frame": rf_, "rendering_time": f_.get("rendering_time")}
+                        except Exception as exc_:  # noqa: BLE001 -- a camera that cannot be read is noted
+                            cams_[name_] = {"error": f"{type(exc_).__name__}: {exc_}"}
+                    return {"physics_time": float(world.current_time),
+                            "step_index": int(getattr(world, "current_time_step_index", -1)),
+                            "runner_tick": int(stepper["tick"]), "cameras": cams_}
+
+                prep_ = {"renders": [], "renders_cpu_s": [], "wait_s": float(args.live_test_prep_wait_s),
+                         "renders_asked": int(args.live_test_prep_renders), "before": prep_view_()}
+                prep_["physics_time_before"] = prep_["before"]["physics_time"]
+                for _ in range(args.live_test_prep_renders):
+                    a_, c_ = time.monotonic(), time.process_time()
+                    world.render()
+                    prep_["renders"].append([a_, time.monotonic()])
+                    prep_["renders_cpu_s"].append(time.process_time() - c_)
+                if args.live_test_prep_wait_s:
+                    a_, c_ = time.monotonic(), time.process_time()
+                    time.sleep(args.live_test_prep_wait_s)
+                    prep_["wait"] = [a_, time.monotonic()]
+                    prep_["wait_cpu_s"] = time.process_time() - c_
+                prep_["after"] = prep_view_()
+                prep_["physics_time_after"] = prep_["after"]["physics_time"]
+                prep_["physics_unchanged"] = all(prep_["after"][k_] == prep_["before"][k_]
+                                                 for k_ in ("physics_time", "step_index", "runner_tick"))
+                state.setdefault("live_test_injections", []).append({"prep": prep_})
+                live.log({"event": "live_test_prep", **prep_})
             live.start()  # after the SLAM warm-up: the console sees the first control tick next (Codex D9 impl P3)
             if lifecycle_on():
                 live.log({"event": "lifecycle", "marks": list(LIFECYCLE)})  # 5.21 G5-0, on the live log's clock
@@ -11359,7 +11416,9 @@ LIFECYCLE: list = []
 
 
 def lifecycle_on() -> bool:
-    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS"))
+    # the start marks alone (FORKLIFT_LIVE_LIFECYCLE=1, plan 5.24: a cheap list of a few monotonic reads) or with the
+    # long-call record (5.22)
+    return bool(os.environ.get("FORKLIFT_LIVE_LONG_CALLS_MS") or os.environ.get("FORKLIFT_LIVE_LIFECYCLE"))
 
 
 def lifecycle_mark(name: str, **fields) -> None:
@@ -11512,6 +11571,7 @@ def main() -> None:
         from forklift_core import perf as perf_
 
         perf_._dual_report()  # real-time plan V2: the dual run's final counts (a no-op otherwise)
+        perf_.stream_report()  # real-time plan 5.27: the streamed receivers' call counts (a no-op otherwise)
         print(
             "MISSION_RESULT",
             record_json(
