@@ -140,6 +140,8 @@ class Session:
             self.joint = spool_group(self.run / "spool", "slam_log.joint")
         except (OSError, ValueError) as exc:
             self.invalid.append(f"spool: {exc}")
+        if "FORKLIFT_LIVE_LONG_CALLS_MS" in self.args or "FORKLIFT_LIVE_LIDAR_PROFILE_EVERY" in self.args:
+            self.invalid.append("a measurement-mode session (plan 5.22 INSTR on) is not an R1 session")
         want = PROFILE.get(self.arm)
         got = (self.args.get("FORKLIFT_LIVE_CATCHUP_STEPS", ""), self.args.get("FORKLIFT_LIVE_CAMERA_PHASE", ""))
         if want is None or got != want:

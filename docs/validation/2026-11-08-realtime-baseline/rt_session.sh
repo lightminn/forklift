@@ -30,6 +30,13 @@ export EXTRA_ARGS="$VID --max-sim-seconds 1200 ${MORE:-}"
 # supervisor (a failed session is a missing run, not a retried one)
 for v in $(env | grep -oE '^FORKLIFT_LIVE_[A-Z_]+' || true); do unset "$v"; done
 export MAX_EPOCHS=1
+# Real-time plan 5.22 (measurement run): INSTR=on turns on the long-call record and the sampled LiDAR split (PR #379,
+# after the variables are cleared above); unset or off keeps every earlier run's environment exactly.
+case "${INSTR:-off}" in
+  on) export FORKLIFT_LIVE_LONG_CALLS_MS=20 FORKLIFT_LIVE_LIDAR_PROFILE_EVERY=20 ;;
+  off) ;;
+  *) echo "INSTR must be on or off" >&2; exit 2 ;;
+esac
 case "${TRACE:-1}" in 1) export FORKLIFT_LIVE_TICK_TRACE=1 ;; 0) ;; *) echo "TRACE must be 0 or 1" >&2; exit 2 ;; esac
 case "${CATCHUP:-0}" in 0) ;; [1-9]|1[0-2]) export FORKLIFT_LIVE_CATCHUP_STEPS=$CATCHUP ;; *) echo "CATCHUP must be 0-12 (the runner's range)" >&2; exit 2 ;; esac
 if [ -n "${PHASE:-}" ]; then
@@ -44,6 +51,7 @@ echo "host=$(hostname) job=${SLURM_JOB_ID:-} session=${SESSION_ID:-} out=$OUT ro
 printf 'LEVEL=%s\nFACTOR=%s\nCATCHUP=%s\nPHASE=%s\nTRACE=%s\nSEED=%s\nEXTRA_ARGS=%s\nSESSION_ID=%s\nBRIDGE_CPU=%s\nSLURM_JOB_ID=%s\nCPUS=%s\n' \
   "$LEVEL" "$FACTOR" "${CATCHUP:-0}" "${PHASE:-}" "${TRACE:-1}" "$SEED" "$EXTRA_ARGS" "${SESSION_ID:-}" "${BRIDGE_CPU:-}" "${SLURM_JOB_ID:-}" \
   "$(taskset -cp $$ | awk -F': ' '{print $2}')" > "$OUT/rt_conditions.txt"
+[ "${INSTR:-off}" = on ] && env | grep -E '^FORKLIFT_LIVE_(LONG_CALLS_MS|LIDAR_PROFILE_EVERY)=' | sort >> "$OUT/rt_conditions.txt"
 { env | grep -E '^(FORKLIFT_|OMP_|CUDA_)' | sort
   sha256sum "$0" "$HERE/rt_monitor.py" "$BASE_SCENE" "$FORKLIFT_URDF" "$ROOT/sim/isaac/run_transport.py"
   scontrol show node "$(hostname)" | grep -E 'CfgTRES|AllocTRES'

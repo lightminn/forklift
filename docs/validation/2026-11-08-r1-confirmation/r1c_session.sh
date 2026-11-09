@@ -24,6 +24,13 @@ LINE_M=$P/test_runs/riibotics/scenes_ct1_a770031/line_m_session.json
 # every live-loop switch at its default, then the arm's profile set explicitly (plan 5.17: validation pins k and phase)
 for v in $(env | grep -oE '^FORKLIFT_LIVE_[A-Z_]+' || true); do unset "$v"; done
 export FORKLIFT_LIVE_TICK_TRACE=1
+# Real-time plan 5.22 (measurement run): INSTR=on turns on the long-call record and the sampled LiDAR split (PR #379,
+# after the variables are cleared above); unset or off keeps every earlier run's environment exactly.
+case "${INSTR:-off}" in
+  on) export FORKLIFT_LIVE_LONG_CALLS_MS=20 FORKLIFT_LIVE_LIDAR_PROFILE_EVERY=20 ;;
+  off) ;;
+  *) echo "INSTR must be on or off" >&2; exit 2 ;;
+esac
 case ${ARM:?L, K or KP} in
   L) export FORKLIFT_LIVE_CATCHUP_STEPS=0 ;;
   K) export FORKLIFT_LIVE_CATCHUP_STEPS=6 ;;
