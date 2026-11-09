@@ -369,9 +369,9 @@ def test_the_localization_path_never_reads_the_placed_pose():
 def test_the_setup_and_the_drive_start_from_map_start_rear():
     run_ = _source("\ndef run(app,", "\ndef drive(S, isaac)")
     drive_ = _source("\ndef drive(S, isaac)", "\ndef recorded_arguments(")
-    assert "start_pose=map_start_rear(scenario,start_reloc)" in run_.replace(" ", "")  # the obstacle layer's prime
+    assert "start_pose=map_start_rear(scenario,start_reloc,known_start_rear(args))" in run_.replace(" ", "")  # the obstacle layer's prime
     assert "odom_rear=start_pose," in run_.replace(" ", "")
-    assert "slam_start=map_start_rear(scenario,start_reloc)" in drive_.replace(" ", "")  # odometry, start check
+    assert "slam_start=map_start_rear(scenario,start_reloc,known_start_rear(args))" in drive_.replace(" ", "")  # odometry, start check
     assert "base_start=spawn_base_pose(args, scenario)" not in run_  # (it builds the array from it)
     assert "spawn_base_pose(args, scenario)" in run_
     # the verdict is taken when every warm-up is done, before the server opens (Codex B-P2b review P2)

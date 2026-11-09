@@ -4,8 +4,8 @@
 
 RUN_DIR holds ``plan_l4r.json`` ({"pairs": [{"seed": k, "H1": [attempt], "H0": [attempt]}], "planned_pairs": 24}, an
 attempt {"name": .., "base_failure": bool}) and the session folders ``s/<name>``. Per session: the required evidence,
-the arm's validity (H1: the STOP-cancel-recovery chain;
-H0: the pose match and the relocalization), and over all its P-5:D-2 missions F_p / F_c (2.1). Per pair: b / c. Then the
+the arm's validity (H1: the STOP-cancel-recovery chain; H0: the pose match and the known start, correction 1.5), and
+over all its P-5:D-2 missions F_p / F_c (2.1). Per pair: b / c. Then the
 one-sided exact McNemar, the conclusion row (2.3) robust to every assignment of the undecided sessions and the pairs not
 run (a compressed enumeration over (b, c, H0 F_p seeds, H0 F_c seeds, any F)), the mechanical early stop and the
 feasibility check (2.4)."""
@@ -29,6 +29,7 @@ D2_XY = (3.4, -8.469)  # random_m's D-2 (the scene file's destination)
 ENTRY_M, RUN_MIN_S, SCAN_GAP_S, END_GAP_S = 3.0, 5.0, 0.15, 0.25
 H0_TARGET_REAR = (-1.2691, 0.8528, 0.1706)  # 1.3: the confirmation run's median truth rear axle at P-5's submit
 POSE_TOL_M, POSE_TOL_RAD = 0.02, 0.02
+H0_START_POSE_KNOWN = "-0.9340,0.9106,0.1706"  # 1.3 (correction 1.5): the base_link pose the launcher is given
 ALPHA = 0.05
 CANDIDATE_WAIT_S = 3.0  # the scene replan's candidate re-check before a refusal
 OUTCOMES = ("none", "p", "c", "pc")  # a session's possible F result: none, F_p only, F_c only, both
@@ -268,26 +269,29 @@ def h1_valid(sess: dict) -> dict:
     return {"ok": ok, "stop": stop["pass"], "hold": hold.get("held"), "order": order_ok, "p5_target": p5_ok}
 
 
+def _pose_error(a, b):
+    return (math.hypot(a[0] - b[0], a[1] - b[1]), abs(math.atan2(math.sin(a[2] - b[2]), math.cos(a[2] - b[2]))))
+
+
 def h0_valid(sess: dict, track, p5: list) -> dict:
-    """The pose match at the P-5 mission's start (truth rear vs the target) and the relocalization confirmed by the
-    matcher (its estimate's error reported)."""
-    rec = (sess.get("result") or {}).get("start_reloc") or {}
-    confirmed = rec.get("status") == "chosen" and rec.get("source") == "matcher" and rec.get("verdict") is not None
-    err = None
-    if rec.get("verdict"):
-        s_, t_ = rec["verdict"].get("slam_base"), rec["verdict"].get("truth_base")
-        if s_ and t_:
-            err = (math.hypot(s_[0] - t_[0], s_[1] - t_[1]),
-                   abs(math.atan2(math.sin(s_[2] - t_[2]), math.cos(s_[2] - t_[2]))))
+    """The pose match at the P-5 mission's start (truth rear vs the target) and the known start (correction 1.5): the
+    runner's ``start_known`` record at the registered base pose and no start relocalization. The settled truth's
+    difference from the known start's rear axle (where the odometry began) is reported."""
+    result = sess.get("result") or {}
+    known = result.get("start_known") or {}
+    base = [float(v) for v in H0_START_POSE_KNOWN.split(",")]
+    known_ok = (bool(known.get("base")) and bool(known.get("rear")) and result.get("start_reloc") is None
+                and all(abs(float(a) - b) <= 1e-6 for a, b in zip(known["base"], base)))
     first = min(p5, key=lambda m: float(m.get("started_s") or 0.0)) if p5 else None
     at = None if first is None else truth_at(track, float(first.get("started_s") or 0.0))
-    pose_ok = None
+    pose_ok, start_error = None, None
     if at is not None:
-        dx = math.hypot(at[1] - H0_TARGET_REAR[0], at[2] - H0_TARGET_REAR[1])
-        dyaw = abs(math.atan2(math.sin(at[3] - H0_TARGET_REAR[2]), math.cos(at[3] - H0_TARGET_REAR[2])))
+        dx, dyaw = _pose_error(at[1:], H0_TARGET_REAR)
         pose_ok = dx <= POSE_TOL_M and dyaw <= POSE_TOL_RAD
-    return {"ok": bool(confirmed and pose_ok), "relocalized": confirmed, "pose_ok": pose_ok,
-            "reloc_error": err, "start_truth": None if at is None else list(at[1:])}
+        if known_ok:
+            start_error = _pose_error(at[1:], known["rear"])
+    return {"ok": bool(known_ok and pose_ok), "known_start": known_ok, "pose_ok": pose_ok,
+            "start_error": start_error, "start_truth": None if at is None else list(at[1:])}
 
 
 def session_outcome(sess: dict, arm: str) -> dict:
@@ -382,12 +386,13 @@ def validate_plan(plan: dict) -> list:
 
 def args_mismatch(args: dict, seed: int, arm: str) -> list:
     """The session's recorded arguments (args.txt) against its pair: the seed, and the arm's construction -- H1 the
-    cycle without a start pose, H0 the queue with the registered START_POSE."""
+    cycle without a start pose, H0 the queue with the registered START_POSE_KNOWN (correction 1.5) and no START_POSE."""
     out = []
     if str(args.get("SEED")) != str(seed):
         out.append("args:seed")
-    want = ("cycle", False) if arm == "H1" else ("queue", True)
-    if args.get("SCENARIO") != want[0] or bool(args.get("START_POSE")) != want[1]:
+    want = ("cycle", "") if arm == "H1" else ("queue", H0_START_POSE_KNOWN)
+    if (args.get("SCENARIO") != want[0] or (args.get("START_POSE_KNOWN") or "") != want[1]
+            or args.get("START_POSE")):
         out.append("args:arm")
     return out
 
