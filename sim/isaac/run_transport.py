@@ -864,9 +864,12 @@ def arguments() -> argparse.Namespace:
         "--occupied-dumps",
         action="store_true",
         help="docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2 (diagnostic): besides the run's first "
-        "obstacle dumps, dump the grid, pose and blocked cells of a permission hold on an occupied or unknown cell at "
-        "1, 5, 20 and 60 s of the hold (obstacle_hold_dump_N.npz, 16 a run) and of each scene-replan candidate refused "
-        "for a blocked reason (candidate_dump_N.npz, 8 a run). Off (default): nothing is read or written, as before.",
+        "obstacle dumps, <kind>_dump_N.npz files (grid, free stamps, origin, resolution, pose, truth, correction, "
+        "blocked cells) at: a mission's start; the transport's entry (rear axle within 3 m of the destination); a "
+        "permission hold on an occupied or unknown cell at 0, 1, 5, 20 and 60 s and on its release after 1 s; a "
+        "scene-replan or escape candidate refused for a blocked reason (the permit's own cells), at once and then at "
+        "most once a second; 24 a mission, 96 a run, listed with the dropped ones in state['occupied_dumps']. Off "
+        "(default): nothing is read or written, as before.",
     )
     parser.add_argument(
         "--low-clearance-guard",
