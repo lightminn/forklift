@@ -34,6 +34,17 @@ def _entries(names, outcome="passed"):
     return [{"name": n, "outcome": outcome, "submit_check": None} for n in names]
 
 
+def test_the_gate_leaves_the_approach_middle_and_end_as_reports():
+    # independent review P2-3: clear_out runs because those poses may fail the next start check
+    gate = C.gate_names(("s0B", "s1B"), (0.31, 1.0))
+    assert len(gate) == 7 and "s0B:approach_mid" not in gate and "s1B:approach_end" not in gate
+    assert "s0B:approach_start" in gate and "s1B:approach_end_back_1.00" in gate
+    entries = _entries(C.expected_names(("s0B", "s1B"), (0.31, 1.0)))
+    entries[2]["outcome"] = "observe_failed"  # s0B:approach_mid
+    out = C.verdict(entries, C.expected_names(("s0B", "s1B"), (0.31, 1.0)), gate)
+    assert out["pass"] is True and out["report_failed"] == ["s0B:approach_mid"]
+
+
 def test_the_formal_check_passes_only_on_every_registered_start():
     expected = C.expected_names(("s0B", "s1B"), (0.31, 1.0))
     assert len(expected) == 11 and expected[0] == "session_start"

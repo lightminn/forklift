@@ -564,7 +564,67 @@ def _slam_choices(sess: dict) -> list:
     return [e.get("choice") for e in _supervisor(sess) if e.get("event") == "slam_choice"]
 
 
-def confirm_session(sess: dict, targets: tuple, map_choice: str) -> dict:
+HOLD_MOVE_M = 0.01  # the true rear axle may not move more than this while STOPPED (a report: registration 4)
+
+
+def _mission_results(sess: dict) -> dict:
+    """mission id -> (pallet, destination) from each mission's own result.json (not the probe's request)."""
+    if "mission_results" in sess:
+        return dict(sess["mission_results"])
+    out = {}
+    run = sess.get("run")
+    for md in sorted(run.glob("missions/*")) if run is not None else []:
+        try:
+            r = json.loads((md / "result.json").read_text()).get("result") or {}
+            out[md.name] = (r.get("pallet_id"), r.get("destination_id"))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def _truth_track(sess: dict):
+    """[(t, x, y)] of the true rear axle from the spool's slam.control (columns 0 and 4-5), None when unreadable."""
+    if "truth_track" in sess:
+        return sess["truth_track"]
+    try:
+        c = np.asarray(load_list(sess["run"] / "spool", "slam.control"), dtype=float).reshape(-1, 7)
+    except (KeyError, OSError, ValueError, TypeError):
+        return None
+    return [(float(r[0]), float(r[4]), float(r[5])) for r in c]
+
+
+def stop_hold(sess: dict) -> dict:
+    """The applied command over the STOP wait (every step record in [start_sim_s, end_sim_s] STOPPED at speed 0) and the
+    true rear axle's largest move from its position at the wait's start (a report; a breach goes to the lead)."""
+    runs = (sess.get("probe") or {}).get("missions_run") or []
+    w = (runs[0] if runs else {}).get("stop_wait") or {}
+    t0, t1 = w.get("start_sim_s"), w.get("end_sim_s")
+    if t0 is None or t1 is None:
+        return {"held": None, "why": "no stop wait"}
+    steps = [e for e in sess.get("entries") or [] if "speed_mps" in e and "tick_t" in e and t0 <= e["tick_t"] <= t1]
+    cmd_ok = bool(steps) and all(e.get("mode") == "STOPPED" and abs(float(e["speed_mps"])) == 0.0 for e in steps)
+    track = _truth_track(sess)
+    move = None
+    if track:
+        inside = [(x, y) for t, x, y in track if t0 <= t <= t1]
+        if inside:
+            x0, y0 = inside[0]
+            move = max(math.hypot(x - x0, y - y0) for x, y in inside)
+    held = cmd_ok and (move is None or move <= HOLD_MOVE_M)
+    return {"held": held, "steps": len(steps), "command_held": cmd_ok, "truth_move_m": move,
+            "truth_read": track is not None}
+
+
+def _image_id(sess: dict):
+    if "image_id" in sess:
+        return sess["image_id"]
+    try:
+        return (sess["dir"] / "live" / "epoch_1" / "bridge" / "image_id").read_text().strip() or None
+    except (KeyError, OSError):
+        return None
+
+
+def confirm_session(sess: dict, targets: tuple, map_choice: str, image_id: str | None = None) -> dict:
     """One confirmation session: lifecycle 4's chain, the STOP holding m1 in approach for the registered wait, m1 and m2
     on the registered (pallet, destination) pairs (m2 a different pallet), the main batch's safety and completeness, and
     the C2 cap if a C2 step occurs. ``targets``: ((m1 pallet, destination), (m2 pallet, destination)). A session whose
@@ -572,10 +632,18 @@ def confirm_session(sess: dict, targets: tuple, map_choice: str) -> dict:
     args = _session_args(sess)
     choices = _slam_choices(sess)
     map_ok = bool(choices) and all(c == map_choice for c in choices)
+    got_image = _image_id(sess) if image_id is not None else None
+    image_ok = image_id is None or got_image == image_id
     rows = sess.get("rows") or []
+    want = [tuple(t) for t in targets]
     got = [(r.get("pallet_id"), r.get("destination_id")) for r in rows[:2]]
-    target_ok = (len(got) == 2 and [tuple(t) for t in targets] == got and got[0][0] != got[1][0]
-                 and rows[0].get("mission_id") is not None and rows[0].get("mission_id") != rows[1].get("mission_id"))
+    requested = [(m.get("pallet_id"), m.get("destination_id"))
+                 for m in ((sess.get("probe") or {}).get("missions_run") or [])[:2]]
+    results = _mission_results(sess)
+    ids = [r.get("mission_id") for r in rows[:2]]
+    recorded = [results.get(i) for i in ids]
+    target_ok = (len(got) == 2 and got == want and requested == want and recorded == want
+                 and want[0][0] != want[1][0] and None not in ids and ids[0] != ids[1])
     stop = stop_valid(sess, tuple(targets[0]))
     lc = lifecycle(sess, 4)
     sf = safety(sess)
@@ -583,11 +651,16 @@ def confirm_session(sess: dict, targets: tuple, map_choice: str) -> dict:
     gaps = c2_gaps(sess, ks) if ks else []
     cap_ok = not unmapped and all(g["gap_s"] is not None and not g["over_cap"] for g in gaps)
     out = {"arm": args.get("ARM"), "seed": args.get("SEED"), "slam_choice": choices, "map_ok": map_ok,
-           "lifecycle": lc, "stop": stop, "safety": sf, "targets": got, "target_ok": target_ok,
+           "image_id": got_image, "image_ok": image_ok,
+           "lifecycle": lc, "stop": stop, "stop_hold": stop_hold(sess), "safety": sf,
+           "targets": {"row": got, "requested": requested, "result": recorded}, "target_ok": target_ok,
            "c2_cap": {"gaps": gaps, "unmapped": unmapped, "pass": cap_ok},
-           "pass": map_ok and bool(lc.get("pass")) and stop["pass"] and sf.get("pass") is True and target_ok and cap_ok}
+           "pass": (map_ok and image_ok and bool(lc.get("pass")) and stop["pass"] and sf.get("pass") is True
+                    and target_ok and cap_ok)}
     if not map_ok:
         out["undecidable"] = "slam_choice"
+    elif not image_ok:
+        out["undecidable"] = "image_id"
     return out
 
 
@@ -608,15 +681,16 @@ def confirm_verdict(plan: dict, results: dict) -> dict:
                       and set(arms(judged)) == CONFIRM_ARMS["judged"] and set(arms(controls)) == CONFIRM_ARMS["controls"])
     judged_pass = composition_ok and all((results.get(n) or {}).get("pass") is True for n in judged)
     failed_controls = [n for n in controls if (results.get(n) or {}).get("pass") is not True]
-    outcome = "not_passed" if not judged_pass else "to_lead" if failed_controls else "pass"
+    stop_not_held = [n for n in judged if ((results.get(n) or {}).get("stop_hold") or {}).get("held") is False]
+    outcome = "not_passed" if not judged_pass else "to_lead" if failed_controls or stop_not_held else "pass"
     return {"composition_ok": composition_ok, "judged_pass": judged_pass, "failed_controls": failed_controls,
-            "outcome": outcome}
+            "stop_not_held": stop_not_held, "outcome": outcome}
 
 
 def evaluate_confirm(out_dir: Path) -> dict:
     plan = json.loads((out_dir / "plan_l4c.json").read_text())
     targets = tuple(tuple(t) for t in plan["targets"])  # [[m1 pallet, destination], [m2 pallet, destination]]
-    results = {n: confirm_session(load_session(out_dir / "s" / n), targets, plan["slam_choice"])
+    results = {n: confirm_session(load_session(out_dir / "s" / n), targets, plan["slam_choice"], plan["image_id"])
                for n in (plan.get("judged") or []) + (plan.get("controls") or [])}
     return {"sessions": results, **confirm_verdict(plan, results)}
 

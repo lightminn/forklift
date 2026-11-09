@@ -11,8 +11,9 @@ session's start:
 
 These are sample points for a planning gate, not the range of where a STOP and the recovery after a cancel can leave the
 truck (clear_out retraces the recent forward path and may extend it), and the fresh prior P-4 is not the P-4 m1
-recognised. The formal check passes only when every registered start is checked once and plans and passes (outcome
-``passed``, no submit refusal). It shows that plans exist; whether m2 observes and completes is the Isaac run's to show.
+recognised. The formal check needs every registered start checked once; it passes when each gating start (the session
+start, each approach's first pose and backed-off ends) plans and passes (outcome ``passed``, no submit refusal) -- the
+approach's middle and last pose are reported only, since clear_out runs when such a pose fails the start check. It shows that plans exist; whether m2 observes and completes is the Isaac run's to show.
 
     python tools/riib_life4_plan_check.py SESSION.json --records s0B=REC.json --records s1B=REC.json --out RESULT.json
     python tools/riib_life4_plan_check.py SESSION.json --smoke --out RESULT.json     # the session start only, no gate
@@ -55,12 +56,23 @@ def expected_names(records=RECORD_NAMES, backs=BACKS_M) -> list[str]:
                                 for label in (*LABELS, *(_back_label(b) for b in backs))]
 
 
-def verdict(entries: list[dict], expected: list[str]) -> dict:
+def gate_names(records=RECORD_NAMES, backs=BACKS_M) -> list[str]:
+    """The starts that gate: the session start and, per record, the approach's first pose and the backed-off ends. The
+    approach's middle and last pose are reported only: clear_out runs exactly when such a pose fails the next mission's
+    start check (independent review P2-3)."""
+    return ["session_start"] + [f"{r}:{label}" for r in records
+                                for label in ("approach_start", *(_back_label(b) for b in backs))]
+
+
+def verdict(entries: list[dict], expected: list[str], gate: list[str] | None = None) -> dict:
+    gate = expected if gate is None else gate
     names = [e["name"] for e in entries]
-    failed = [e["name"] for e in entries if e.get("outcome") != "passed" or e.get("submit_check") is not None]
+    bad = [e["name"] for e in entries if e.get("outcome") != "passed" or e.get("submit_check") is not None]
+    failed = [n for n in bad if n in gate]
     missing = [n for n in expected if n not in names]
     extra = sorted({n for n in names if n not in expected or names.count(n) > 1})
-    return {"pass": bool(entries) and not failed and not missing and not extra, "failed": failed, "missing": missing,
+    return {"pass": bool(entries) and not failed and not missing and not extra, "failed": failed,
+            "report_failed": [n for n in bad if n not in gate], "missing": missing,
             "unexpected_or_duplicate": extra, "starts": len(entries)}
 
 
@@ -97,7 +109,7 @@ def main(argv=None) -> int:
             starts += approach_starts(json.loads(Path(recs[name]).read_text()), name)
     entries = check(a.session, starts)
     expected = ["session_start"] if a.smoke else expected_names()
-    v = verdict(entries, expected)
+    v = verdict(entries, expected, None if a.smoke else gate_names())
     if a.smoke:
         v["pass"] = False
         v["smoke"] = True
