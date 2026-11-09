@@ -21,7 +21,7 @@ for name in sys.argv[3:]:
         d = z["data"]
     t0, t1 = r["driving_sim_s"]; sim = d[:, C["tick"]] * DT; sn = np.r_[sim[1:], np.inf]
     S, q, dd = d[:, C["S"]], d[:, C["q"]], d[:, C["d"]]
-    w = work(d); itv = np.r_[S[1:] - S[:-1], np.nan]; eps = np.nan_to_num(np.r_[S[1:] - (q[1:] + dd[1:]), np.nan])
+    w = work(d); itv = np.r_[S[1:] - S[:-1], np.nan]; eps = np.nan_to_num(S - (q + dd))  # each start's own overshoot (Codex G3-0 P2)
     K = (sim >= t0) & (sn <= t1) & np.isfinite(w) & np.isfinite(itv)
     nx = d[np.r_[np.arange(1, len(d)), len(d) - 1]]
     ctrl = np.nan_to_num(nx[:, C["ctrl_end"]] - nx[:, C["ctrl_start"]])

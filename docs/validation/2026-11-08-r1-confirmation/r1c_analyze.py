@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import math
 import subprocess
 import sys
@@ -70,11 +71,14 @@ PROFILE = {"L": ("0", ""), "K": ("6", ""), "KP": ("6", "6")}
 
 
 def read_args(out: Path) -> dict:
+    """args.txt's KEY=value lines, EXTRA_ARGS and PROBE included (the freeze window is read from EXTRA_ARGS; Codex
+    r1c mark/wall review round 2 P2: dropping them left every real session without it)."""
     a = {}
     for line in (out / "args.txt").read_text().splitlines():
-        if "=" in line and not line.startswith(("EXTRA_ARGS", "PROBE")):
+        if "=" in line:
             k, v = line.split("=", 1)
-            a[k] = v
+            if k.replace("_", "").isalnum():
+                a[k] = v
     return a
 
 
@@ -325,10 +329,38 @@ def marker(s: Session):
         res = json.loads(p.stdout)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         return {"error": repr(exc)}
+    return {"marker_lag": res, "pixel": res.get("pixel_latency_wall_s_conforming_frames"), **freeze_check(s)}
+
+
+FREEZE_FRAME_SLACK_S = 0.15  # the probe's own rule (tools/live_console_probe.py): one 10 Hz camera period
+
+
+def freeze_window(args: dict):
+    m = re.search(r"camera-freeze\\? +([0-9.]+):([0-9.]+)", args.get("EXTRA_ARGS", ""))
+    return (float(m.group(1)), float(m.group(2))) if m else None
+
+
+def freeze_check(s):
+    """R-e's freeze refusal, inside the freeze (Codex r1c mark/wall review P2): a stale_video disarm sample whose last
+    frame is the one before the freeze and whose instant falls in the freeze's simulated window (the trace row at
+    its wall time); and the session's end asked only after the last sample."""
     freeze = s.report.get("freeze") or {}
-    disarmed = any(x.get("armed") is False and x.get("reject") == "stale_video" for x in freeze.get("samples") or [])
-    return {"marker_lag": res, "pixel": res.get("pixel_latency_wall_s_conforming_frames"),
-            "freeze_disarmed_stale_video": disarmed}
+    samples = freeze.get("samples") or []
+    window = freeze_window(s.args)
+    hits = [x for x in samples if x.get("armed") is False and x.get("reject") == "stale_video"]
+    out = {"freeze_window_sim_s": window, "stale_video_samples": len(hits)}
+    inside = []
+    if window is not None and s.trace is not None:
+        for x in hits:
+            t = s.start_sim(s.row_at_mono(x["mono"]))
+            if window[0] <= t <= window[1] and (x.get("last_frame_sim") or 0.0) >= window[0] - FREEZE_FRAME_SLACK_S:
+                inside.append(t)
+    out["freeze_disarm_sim_s"] = inside[0] if inside else None
+    out["freeze_disarmed_stale_video"] = bool(inside)
+    end = s.report.get("end_requested_mono")
+    last = max((x["mono"] for x in samples), default=None)
+    out["ended_after_measures"] = None if end is None or last is None else bool(end > last)
+    return out
 
 
 def wall_measures(s: Session):
@@ -339,6 +371,8 @@ def wall_measures(s: Session):
     for leg in s.report.get("approach") or []:
         row = {k: leg.get(k) for k in ("leg", "held", "moved", "forbidden")}
         row["permit_reason"] = (leg.get("permit") or {}).get("reason")
+        end = s.report.get("end_requested_mono")
+        row["ended_after"] = None if end is None or done.get(leg.get("leg")) is None else bool(end > done[leg["leg"]])
         mono = done.get(leg.get("leg"))
         if mono is not None and s.trace is not None and s.joint is not None:
             stamps, _, pose = s.joint_arrays()
