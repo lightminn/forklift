@@ -60,8 +60,13 @@
 ### 2.1 실패 F
 
 같은 임무(P-5 → D-2)가 운반 단계에서 실패로 끝나고, 그 직전에 아래 중 하나가 **입구**(참값 뒷차축이 참값 D-2 중심에서 3.0 m 안)에서 있었으면 F 다.
-- **Fₚ(허가 정지형)**: spool `obstacle.scans`(약 10 Hz, 스캔마다 허가 검사의 `blocked`)에서, 운반 단계에 `blocked == "occupied"` 인 스캔이 이어진다(이웃 스캔 간격 0.15 s 이하). 그 연속 구간이 5 시뮬 s 이상이고, 임무 실패까지 끊기지 않는다. 입구 여부는 그 구간 첫 스캔 시각의 참값 뒷차축(spool `slam.control` 4–6 열)으로 본다. `unknown` 은 이 구간에 넣지 않는다. 간격이 0.15 s 를 넘으면 구간이 끊긴다. `permit_stop → invalid_start → timeout` 사슬은 따로 표기한다.
+- **Fₚ(허가 정지형)**: spool `obstacle.scans`(약 10 Hz, 스캔마다 허가 검사의 `blocked`)에서, 운반 단계에 `blocked == "occupied"` 인 스캔이 이어진다(이웃 스캔 간격 0.15 s 이하). 그 연속 구간이 5 시뮬 s 이상이고, 임무 실패까지 끊기지 않는다. 입구 여부는 그 구간 **마지막 스캔** 시각의 참값 뒷차축(spool `slam.control` 4–6 열)으로 본다. 첫 스캔이 아닌 이유: 막힌 동안에도 차가 기어 들어간다. 확인 실행 B seed 1 은 구간 첫 스캔(138.2 s)에 D-2 에서 3.41 m, 마지막(236.7 s)에 1.51 m 였다. `unknown` 은 이 구간에 넣지 않는다. 간격이 0.15 s 를 넘으면 구간이 끊긴다. `permit_stop → invalid_start → timeout` 사슬은 따로 표기한다.
 - **F꜀(후보 거부형)**: 임무 기록 `state.scene_replans` 에 같은 입구의 cusp 재계획(`trigger: cusp_pose`)이 있고, 후보 대기(`permit_waits`, 3 s)를 거쳐 `blocked:occupied` 로 거부되어 임무가 끝났다. 허가 `occupied` 스캔이 없어도 포함한다. 입구 여부는 그 기록의 `truth_rear` 로 본다.
+- **앵커 확인(새 결과 전, 확인 실행 기록에 대입)**:
+  - B seed 1: 연속 occupied 구간 98.5 s(138.2–236.7 s, 끝에서 D-2 까지 1.51 m) → Fₚ.
+  - A seed 0: occupied 스캔 없음, cusp_pose 재계획 blocked:occupied 거부 → F꜀.
+  - B seed 0(완료): 가장 긴 구간 0.6 s → F 아님.
+  - A seed 1(완료): occupied 스캔 없음 → F 아님.
 - 3.0 m·5 s·0.15 s 는 이 등록의 값이다. 정상 일시 사건과 비교하려고, 연속 구간 길이·막힌 칸을 함께 보고한다. 덤프의 hold 나이(`hold_age_s`)는 unknown 과 occupied 를 한 구간으로 묶고 재계획 중에는 갱신되지 않으므로, F 판정에 쓰지 않는다(진단만).
 
 ### 2.2 세션을 세는 조건
