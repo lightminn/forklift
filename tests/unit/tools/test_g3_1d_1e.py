@@ -76,3 +76,28 @@ def test_1e_branches():
     assert v["result"] == "plan 1e" and v["straddle"] and abs(v["1e_target_s_per_sim_s"] - (0.1 - 0.0986666666)) < 1e-9
     assert tool.verdict_1e(pairs([0.11, 0.12, 0.105], {2: {"invalid": ["probe exit 1"]}}), 3)["result"] == "supplement"
     assert tool.verdict_1e(pairs([0.11, 0.12, 0.105], {3: {"done": False}}), 3)["result"] == "hold: to the lead"
+
+
+def test_the_list_must_hold_each_arms_registered_switches():
+    e = lists.entries("1e", "/s", "/o", "fast") + lists.entries("1e", "/s", "/o", "loop", pairs=6, first=4)
+    assert any("candidate LiDAR modes" in p for p in tool.list_problems("1e", e))  # fast and loop mixed
+    e = lists.entries("1e", "/s", "/o", "fast")
+    for x in e:
+        if x["env"]["ARM_NAME"] == "cand":
+            x["env"]["FORKLIFT_SHADOW_KERNEL"] = "0"
+    assert tool.list_problems("1e", e)
+    e = lists.entries("1d", "/s", "/o")
+    e[0]["env"]["FORKLIFT_GRID_CLEAR_KERNEL"] = "0"
+    assert tool.list_problems("1d", e)
+
+
+def test_a_degraded_pair_holds_even_with_a_supplement_due():
+    v = tool.verdict_1e(pairs([0.11, 0.12, 0.105], {2: {"invalid": ["probe exit 1"]}, 3: {"done": False}}), 3)
+    assert v["result"] == "hold: to the lead" and v["supplement_sessions"] == ["p2on"]
+
+
+def test_a_session_without_auto_scans_is_summarised_with_nulls():
+    rows = pairs([0.11, 0.12, 0.105])
+    rows[1]["scan_step_W_ms"] = None
+    s = tool.arm_summary(rows)
+    assert s["on"]["W_p99_ms"][0] is None and len(s["off"]["W_max_ms"]) == 3
