@@ -4868,7 +4868,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                      **({"latency_layer": args.latency_layer} if latency_layer_ is not None else {}),
                                      "k": int(args.layer_worker_k) if latency_layer_ is None else latency_layer_[1],
                                      "latency_added_s": layer_worker_latency_s_,
-                                     "use_age_s": float(layer_config["grid"]["free_use_age_s"]),
+                                     # (an undeclared latency-test layer keeps the file's: no free_use_age_s key)
+                                     "use_age_s": float(layer_config["grid"].get("free_use_age_s",
+                                                                                 layer_config["grid"]["free_max_age_s"])),
                                      "timeout_s": float(args.layer_worker_timeout_s),
                                      "cpus_mode": getattr(args, "layer_worker_cpus", "off"),
                                      "process_affinity": sorted(os.sched_getaffinity(0)),
