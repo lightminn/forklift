@@ -738,7 +738,7 @@ def job_gpu_index(env) -> int | None:
     return int(gpus[0]) if len(gpus) == 1 and gpus[0].isdigit() else None
 
 
-def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
+def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None, session_cores=1) -> dict:
     """The job's resources for `slots` sessions of `kind` (default its max per GPU): shards for the sessions' GPU
     memory (a riib session with its video holds 4.47 GB, more than a 4,076 MiB shard, so 3 of them take 4 shards --
     the shards are what other jobs on the GPU rely on), 2 cores per session, RAM = slots x session +
@@ -758,7 +758,11 @@ def sbatch_sizes(kind, slots=None, runs=None, jobs=1, run_min=None) -> dict:
     # R mapping graphs grown to 1.10-1.15 s and none of the normal-processing kind -- the rule fixed before counted
     # all (2: a shared-against-split comparison); the lead's reading after the results counts the latter only and
     # adopted the core provisionally (docs/plans/2026-10-26-ws1-isaac-array.md 5.3; weak evidence, kept counted)
-    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] + BRIDGE_CORE_CPUS,
+    # session_cores 2 (1e (c), docs/validation/2026-11-11-g3-1e-c-results.md): two physical cores a session; the
+    # runner's --bridge-cpus auto still sets one core apart and the sessions share the rest as one pool
+    if session_cores not in (1, 2):
+        raise ValueError(f"session cores 1 or 2, not {session_cores}")
+    out = {"slots": slots, "gres": f"shard:{shards}", "cpus": slots * k["cores"] * session_cores + BRIDGE_CORE_CPUS,
            "mem_gib": int(mem)}
     if runs:
         out["time"] = time_limit(runs, slots, jobs, run_min or k["run_min"])
@@ -2298,6 +2302,8 @@ def main(argv=None) -> int:
         sp.add_argument("--runs", type=int, help="the list's runs: also print --time")
         sp.add_argument("--jobs", type=int, default=1, help="bundle jobs sharing the list")
         sp.add_argument("--run-min", type=float, help="a run's p95 wall minutes (default: the kind's measured)")
+        sp.add_argument("--session-cores", type=int, default=1, choices=(1, 2),
+                        help="physical cores a session (2: the real-time choice, 1e (c); the default stays 1)")
         sp.add_argument("--array", action="store_true",
                         help="one run per array task (deploy/slurm/isaac_array.sbatch); needs --runs and --run-min")
         a = sp.parse_args(argv[1:])
@@ -2316,7 +2322,7 @@ def main(argv=None) -> int:
                       file=sys.stderr)
             return 0
         try:
-            z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min)
+            z = sbatch_sizes(a.kind, a.slots, a.runs, a.jobs, a.run_min, a.session_cores)
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 2

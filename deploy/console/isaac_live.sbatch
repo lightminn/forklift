@@ -2,7 +2,7 @@
 #SBATCH --job-name=console_live
 #SBATCH --partition=compute
 #SBATCH --gres=shard:1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=6
 #SBATCH --mem=8G
 #SBATCH --time=08:00:00
 #SBATCH --signal=B:TERM@120
@@ -253,11 +253,40 @@ echo "start: $START_MODE"
 JOB=${SESSION_ID:-${SLURM_JOB_ID:-local$$}}
 mkdir -p "$OUT"
 export OMNI_KIT_ACCEPT_EULA=YES OMP_NUM_THREADS=2 PYTHONPATH=$ROOT/src
-CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)}
+# The CPUs (1e (c), docs/validation/2026-11-11-g3-1e-c-results.md, the lead's decision of 2026-11-11): alone, the job's
+# CPUs split as a single-slot bundle splits them (tools/isaac_bundle.py split_bridge_cpus / auto_bridge_cpus) -- a whole
+# core for the SLAM bridge, the session pinned to the rest: the default job CPU 6 gives the session two physical cores,
+# CPU 4 one; fewer than a session core plus a bridge core and nothing is split (the bridge on the first CPU, the session
+# unpinned, as before). In a bundle BRIDGE_CPU comes from the bundle runner, which pins the session itself.
+# LIVE_TEST_CPUS / LIVE_TEST_SIBLINGS (tests only) stand in for the job's affinity and the CPU topology.
+SESSION_CPUS=""
+if [ -n "${BRIDGE_CPU:-}" ]; then
+  CPU0=$BRIDGE_CPU
+else
+  read -r SPLIT_BRIDGE SPLIT_SESSION < <("$VENV_PY" -c '
+import json, os, sys
+sys.path.insert(0, os.path.join(sys.argv[1], "tools"))
+import isaac_bundle as b
+cpus = sorted(int(x) for x in os.environ["LIVE_TEST_CPUS"].split(",")) if os.environ.get("LIVE_TEST_CPUS") \
+    else sorted(os.sched_getaffinity(0))
+sib = json.loads(os.environ["LIVE_TEST_SIBLINGS"]) if os.environ.get("LIVE_TEST_SIBLINGS") else None
+siblings = (lambda c: tuple(sib.get(str(c), [c]))) if sib is not None else b._siblings
+bridge, session = b.split_bridge_cpus(cpus, b.auto_bridge_cpus(len(cpus), 1), siblings)
+print(",".join(map(str, bridge)) or "-", ",".join(map(str, session)) or "-")
+' "$ROOT")
+  if [ -n "${SPLIT_BRIDGE:-}" ] && [ "$SPLIT_BRIDGE" != - ]; then
+    CPU0=$SPLIT_BRIDGE
+    SESSION_CPUS=$SPLIT_SESSION
+  else
+    CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
+  fi
+fi
+echo "cpus: bridge $CPU0, session ${SESSION_CPUS:-unpinned}"
 # Every value the epoch scripts use, quoted for the shell once here; the scripts below expand nothing at writing.
 {
   printf 'ROOT=%q\nBASE_SCENE=%q\nFORKLIFT_URDF=%q\nVENV_PY=%q\nJOB=%q\nCPU0=%q\n' \
     "$ROOT" "$BASE_SCENE" "$FORKLIFT_URDF" "$VENV_PY" "$JOB" "$CPU0"
+  printf 'SESSION_CPUS=%q\n' "$SESSION_CPUS"  # the session's pinning (empty: unpinned, or the bundle's)
   printf 'PORT=%q\nFACTOR=%q\nSEED=%q\nEXTRA_ARGS=%q\n' "${PORT:-8798}" "${FACTOR:-0.4}" "${SEED:-0}" "${EXTRA_ARGS:-}"
   printf 'MAP_BUNDLE=%q\nMAP_START_POSE=%q\n' "${MAP_BUNDLE:-}" "${MAP_START_POSE:-}"
   printf 'SCENE_FILE=%q\n' "$([ -n "${SCENE_FILE:-}" ] && realpath "$SCENE_FILE")"
@@ -368,7 +397,9 @@ if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments
   printf '%s\n' "${ARGS[@]}"
   exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" --check-args
 fi
-exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
+PIN=()  # the session's CPUs when the launcher split them (env.sh SESSION_CPUS)
+[ -n "${SESSION_CPUS:-}" ] && PIN=(taskset -c "$SESSION_CPUS")
+exec "${PIN[@]}" "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 # Preflight (docs/plans/2026-10-27-ws1-preflight.md): the session's SLAM bundle as the supervisor will load it, and the
