@@ -119,7 +119,23 @@ class Timers:
             # instrumentation review P2-2: the keeping went to the parent).
             stack[-1][2] += seconds + overhead
 
+    @contextmanager
+    def capture(self):
+        """This thread's region totals go to a list of its own instead of the shared ones (real-time plan 5.28 D7:
+        the layer worker's thread; the shared dicts are updated and taken without a lock, so another thread must not
+        write them). Yields the list of ``add`` arguments; the main thread adds them later."""
+        captured: list = []
+        self._local.capture = captured
+        try:
+            yield captured
+        finally:
+            self._local.capture = None
+
     def add(self, name: str, seconds: float, cpu_s: float | None = None) -> None:
+        captured = getattr(self._local, "capture", None)
+        if captured is not None:
+            captured.append((name, seconds, cpu_s))
+            return
         self._total[name] = self._total.get(name, 0.0) + seconds
         self._count[name] = self._count.get(name, 0) + 1
         if seconds > self._max.get(name, 0.0):
