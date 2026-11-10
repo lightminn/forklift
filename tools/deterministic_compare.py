@@ -33,6 +33,8 @@ from pathlib import Path
 import numpy as np
 
 SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt"}
+# rv4 registration 1.1: the runtime's boot id and time namespace -- host identity, not run output
+SKIP_NAMES = {"runtime_clock.json"}
 # Plan D1b: RTX RGB differs between processes even on the same timeline (probes v7-v9) and a deterministic run keeps it
 # off the decision path (the oracle masks replace the learned proposer), so array members holding RGB are left out.
 RGB_MEMBERS = {"rgb", "rgba"}
@@ -139,7 +141,7 @@ def _items(run: Path) -> dict:
     spools: dict = {}
     for path in sorted(p for p in run.rglob("*") if p.is_file()):
         rel = path.relative_to(run).as_posix()
-        if path.suffix in SKIP_SUFFIXES:
+        if path.suffix in SKIP_SUFFIXES or path.name in SKIP_NAMES:
             continue
         parts = rel.split("/")
         if path.name == "manifest.json" and len(parts) >= 2 and parts[-2] == "spool":

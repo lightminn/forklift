@@ -200,8 +200,9 @@ class LiveRuntime:
         self._log_rotations = 0
         # Plan U29: a reader of this log expects its end summary (log_end) and refuses it without (read_live_log).
         self._write_log(json.dumps({"log_writer": "ordered"}) + "\n")
-        # rv4 registration 1.1: this process's clock identity, second (the reader checks the first line for the writer)
-        self._write_log(json.dumps({"clock": clock_identity()}) + "\n")
+        # rv4 registration 1.1: this process's clock identity, in its own file beside the log (live_log keeps its
+        # lines: its readers are not touched)
+        (self.output / "runtime_clock.json").write_text(json.dumps(clock_identity()) + "\n")
         self.feedback: Feedback | None = None
         self.step = 0
         self.step_start: deque = deque(maxlen=600)  # (sim time at the step's end, mono at its start)

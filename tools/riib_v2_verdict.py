@@ -125,6 +125,7 @@ def load_session(d: Path) -> dict:
                         "flags": data[:, cols.index("flags")], "flag_names": [str(f) for f in z["flags"]]}
     except (OSError, KeyError, ValueError):
         out["trace"] = None
+    out["runtime_clock"] = ct_survey._json(run / "runtime_clock.json")  # rv4 1.1 (absent before rv4: None)
     out["records"] = {}
     for md in sorted(run.glob("missions/*")):
         try:
@@ -425,11 +426,12 @@ def h3_check(sess: dict, request_id) -> dict:
             "ordered": mono_applied is not None and sent <= receipt <= mono_applied <= reply}
 
 
-def clock_ok(probe: dict, entries: list) -> bool:
-    """rv4 registration 1.1: the probe's and the runtime's own boot id and time namespace, both present and equal (a
-    missing or unread value is a mismatch, never equal to another missing one)."""
+def clock_ok(probe: dict, runtime_clock) -> bool:
+    """rv4 registration 1.1: the probe's and the runtime's own boot id and time namespace (the probe report's
+    ``clock``, the run's runtime_clock.json), both present and equal (a missing or unread value is a mismatch, never
+    equal to another missing one)."""
     pc = (probe or {}).get("clock") or {}
-    rc = next((e["clock"] for e in entries or [] if isinstance(e.get("clock"), dict)), None) or {}
+    rc = runtime_clock if isinstance(runtime_clock, dict) else {}
     keys = ("boot_id", "time_ns")
     return all(pc.get(k) is not None and pc.get(k) == rc.get(k) for k in keys)
 
@@ -449,7 +451,7 @@ def h3_direct(sess: dict, request_id="r4") -> dict:
     rep_ = next((e for e in _replies(probe, "mission_cancel") if e.get("request_id") == request_id), None)
     receipt = next((e["mono"] for e in entries if e.get("t") == "mission_cancel" and e.get("request_id") == request_id
                     and "mono" in e), None)
-    clock = clock_ok(probe, entries)
+    clock = clock_ok(probe, sess.get("runtime_clock"))
     a_mono = None if applied is None else applied.get("mono")
     sent = None if rep_ is None else rep_.get("sent_mono")
     reply = None if rep_ is None else rep_.get("reply_mono")

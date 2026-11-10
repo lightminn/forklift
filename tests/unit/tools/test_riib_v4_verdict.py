@@ -17,7 +17,7 @@ CLOCK = {"boot_id": "b", "time_ns": "time:[1]"}
 # --- H3 -------------------------------------------------------------------------------------------------------------
 def h3_sess(*, sent=10.0, applied=10.5, reply=11.0, receipt=10.4, accepted=True, step_mono=11.2, probe_clock=CLOCK,
             run_clock=CLOCK, extra_commands=()):
-    entries = [{"clock": run_clock}] if run_clock is not None else []
+    entries = []
     if receipt is not None:
         entries.append({"mono": receipt, "t": "mission_cancel", "request_id": "r4"})
     if applied is not None:
@@ -30,7 +30,7 @@ def h3_sess(*, sent=10.0, applied=10.5, reply=11.0, receipt=10.4, accepted=True,
     probe = {"events": events}
     if probe_clock is not None:
         probe["clock"] = probe_clock
-    return {"entries": entries, "probe": probe, "steps": {1: (step_mono, 52.2, True)}}
+    return {"entries": entries, "probe": probe, "steps": {1: (step_mono, 52.2, True)}, "runtime_clock": run_clock}
 
 
 def test_h3_direct_passes_when_the_record_precedes_the_reply_though_the_substitute_is_late():

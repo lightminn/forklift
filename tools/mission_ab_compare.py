@@ -34,6 +34,8 @@ import numpy as np
 
 SKIP_SUFFIXES = {".usd", ".usda", ".usdc", ".png", ".jpg", ".mp4", ".log", ".txt"}
 SKIP_DIRS = ("boundary/",)
+# rv4 registration 1.1: the live runtime's boot id and time namespace -- host identity, not run output
+SKIP_NAMES = {"runtime_clock.json"}
 RECORDING_ONLY_ARGUMENTS = {"record_boundary", "record_boundary_format", "video_preset", "frame_log"}  # arguments that only add records  # the M-a0 boundary record is a record of the run, not its output
 # Result keys only a boundary-recording run writes (M-a1 replay plan R3: the setup snapshot's audit, a recording
 # failure note) -- skipped like the record itself.
@@ -116,7 +118,7 @@ def compare(run_a: Path, run_b: Path) -> dict:
                    | {p.relative_to(run_b).as_posix() for p in run_b.rglob("*") if p.is_file()})
     for name in names:
         fa, fb = run_a / name, run_b / name
-        if Path(name).suffix in SKIP_SUFFIXES or name.startswith(SKIP_DIRS):
+        if Path(name).suffix in SKIP_SUFFIXES or name.startswith(SKIP_DIRS) or Path(name).name in SKIP_NAMES:
             out["skipped"].append(name)
             continue
         if not fa.exists() or not fb.exists():
