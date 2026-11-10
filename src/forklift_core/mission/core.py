@@ -5937,7 +5937,12 @@ class MissionCore:
     def _clearing_scans(self) -> dict:
         """The newest scan stamp of each obstacle sensor that may clear cells (restart confirmation, R1)."""
         layer = self.obstacle["layer"]
-        return {sensor.name: float(layer.last_scan_s.get(sensor.name, -math.inf))
+        # with a layer worker (real-time plan 5.28 D3) the scans the installed refresh checked: a scan received but not
+        # yet installed has not been checked, so it may not count as a clearing scan (Codex 5.28 round 1 P1-2)
+        # (keyed on the obstacle dict, not read from the layer: a recorded run's layer is a recording proxy, where an
+        # attribute read is a boundary read)
+        stamps = layer.checked_scan_s if self.obstacle.get("layer_worker") else layer.last_scan_s
+        return {sensor.name: float(stamps.get(sensor.name, -math.inf))
                 for sensor in layer.sensors if sensor.may_clear}
 
     def _restart_gate(self, t: float, allowed: float, why: str):
@@ -6211,9 +6216,13 @@ class MissionCore:
         return all(now_s - last_ <= timeout_ for last_ in layer_.last_scan_s.values())
 
     def cusp_scan_id(self, now_s):
-        """Which scan a standing decision belongs to: the obstacle layer's last stamp (0.1 s without one)."""
+        """Which scan a standing decision belongs to: the obstacle layer's last stamp (0.1 s without one). With a layer
+        worker (real-time plan 5.28 D3) the stamp of the scan the installed snapshot checked: the decision reads that
+        snapshot, so a scan received but not yet installed is not consumed on the older one."""
         obstacle = self.obstacle
         if obstacle is not None:
+            if "checked_stamp" in obstacle:
+                return obstacle["checked_stamp"]
             return obstacle.get("last_stamp")
         return math.floor(now_s * 10.0 + 1e-9)
 

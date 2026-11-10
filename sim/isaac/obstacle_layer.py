@@ -157,6 +157,19 @@ def stop_arc_hits(arc, rects, hull_shape, moving_shape_, *, margin_m: float, ski
     return hull, (list(hull) if moving_shape_ is hull_shape else hits(moving_shape_))
 
 
+class WindowGeometry:
+    """A window snapshot's geometry before its cells exist (plan 5.28 D3): what the depth support reads (origin,
+    resolution, ``state.shape``) -- reading anything else fails loudly."""
+
+    __slots__ = ("origin_x_m", "origin_y_m", "resolution_m", "state")
+
+    def __init__(self, x0: float, y0: float, res: float, shape: tuple):
+        from types import SimpleNamespace
+
+        self.origin_x_m, self.origin_y_m, self.resolution_m = x0, y0, res
+        self.state = SimpleNamespace(shape=tuple(shape))
+
+
 class ObstacleLayer:
     def __init__(self, config: dict, *, hall, error_table: AgeErrorTable, unloaded: Footprint,
                  loaded: Footprint, body_front_m: float, rear_axle_x_in_base_m: float, noise_seed: int,
@@ -245,6 +258,8 @@ class ObstacleLayer:
         self.rear_x = rear_axle_x_in_base_m
         self.rng = np.random.default_rng([noise_seed, 7])
         self.last_scan_s: dict = {}
+        self.checked_scan_s: dict = {}  # the scans the installed refresh checked (plan 5.28 D3)
+        self.worker = None  # a LayerWorker (plan 5.28), attached by a live run with --layer-worker
         self.snapshot = None
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
         # frame; set only while the depth pocket check gates every tick.
@@ -355,6 +370,7 @@ class ObstacleLayer:
         """raw: sensor name -> (distances, hits, own) from planar_lidar.cast_scan_flags. correction / version: the
         map-from-odom correction (and its version) this scan goes into the grid with -- the exit-prefix watch places
         the scan there, as the grid marks it; without them the watch does not verify this scan."""
+        self.barrier("add_scans")
         _, own_outline = self.footprints(loaded)
         seen = []
         for sensor in self.sensors:
@@ -473,62 +489,153 @@ class ObstacleLayer:
 
     def exit_exempt_clear(self, reason: str) -> None:
         """The latch closed: no region, no verification, later refreshes untransformed."""
+        self.barrier("exit_exempt_clear")
         self.exit_region_rel = None
         self.exit_verified = None
         self.exit_status = {"closed": str(reason)}
 
     def refresh(self, now_s: float, correction, version: int, *, current_pose, path_ahead, loaded: bool,
                 direction: int = 0):
-        """New local snapshot and path check around the truck."""
+        """New local snapshot and path check around the truck (synchronous). With a layer worker attached (real-time
+        plan 5.28) a pending scan refresh is installed first (a barrier), so this refresh runs on the state the
+        synchronous path would have had."""
+        self.barrier("refresh")
+        job = self.refresh_prepare(now_s, correction, version, current_pose=current_pose, path_ahead=path_ahead,
+                                   loaded=loaded, direction=direction, detach=False)
+        return self.refresh_install(job, self.refresh_compute(job))
+
+    def refresh_prepare(self, now_s: float, correction, version: int, *, current_pose, path_ahead, loaded: bool,
+                        direction: int = 0, detach: bool) -> dict:
+        """Plan 5.28 D3, on the main thread: the window, the planning memory's hits and every input the computation
+        reads, as the synchronous refresh reads them now. ``detach``: for a worker -- the inputs the main thread may
+        change later are copied and the depth support is evaluated here on the window's geometry (it reads only the
+        snapshot's origin, resolution and shape); otherwise the callback is called inside the computation, as
+        before."""
+        import copy as _copy
+
         x, y = current_pose[0], current_pose[1]
         w, res = self.window_m, self.grid_config.resolution_m
         x0 = math.floor((x - w) / res) * res
         y0 = math.floor((y - w) / res) * res
         if self.memory is not None:
             self._memory_hits(now_s, correction)
+        footprint, own = self.footprints(loaded, direction)
+        job = {"now_s": now_s, "correction": correction, "version": version, "current_pose": current_pose,
+               "path_ahead": path_ahead, "loaded": loaded, "direction": direction, "x0": x0, "y0": y0,
+               "footprint": footprint, "own": own, "permission_config": self.permission.config,
+               "known": self.known, "corridor": self.corridor, "exempt": self.exempt,
+               "exit_region_rel": self.exit_region_rel, "exit_verified": self.exit_verified,
+               "scan_stamps": dict(self.last_scan_s), "depth_support": self.depth_support, "support_value": None}
+        if detach:
+            job["known"] = _copy.deepcopy(self.known)
+            job["corridor"] = _copy.deepcopy(self.corridor)
+            job["exempt"] = _copy.deepcopy(self.exempt)
+            job["exit_region_rel"] = _copy.deepcopy(self.exit_region_rel)
+            job["exit_verified"] = _copy.deepcopy(self.exit_verified)
+            job["known_config"] = _copy.deepcopy(self.known_config)
+            if self.shadow is not None and self.depth_support is not None:
+                shape = replace(self.grid_config, x_min_m=x0, x_max_m=x0 + 2 * w, y_min_m=y0, y_max_m=y0 + 2 * w).shape
+                job["support_value"] = self.depth_support(WindowGeometry(x0, y0, res, shape), now_s)
+            job["depth_support"] = None
+        else:
+            job["known_config"] = self.known_config
+        return job
+
+    def refresh_compute(self, job: dict) -> dict:
+        """Plan 5.28 D3: the grid snapshot, the shadow memory, the known pallets, the exemption and the exit-prefix
+        verification -- the synchronous refresh's own code, on the job's inputs. Changes only the grid's and the
+        shadow memory's own state (a worker owns them while the job is in flight); the layer's snapshot and exit
+        status are the install's."""
+        now_s, correction, version = job["now_s"], job["correction"], job["version"]
+        current_pose, direction = job["current_pose"], job["direction"]
+        x0, y0, w = job["x0"], job["y0"], self.window_m
         self.grid.config = replace(self.grid_config, x_min_m=x0, x_max_m=x0 + 2 * w, y_min_m=y0, y_max_m=y0 + 2 * w)
         try:
-            self.snapshot = self.grid.snapshot(now_s, correction, version)
+            raw = self.grid.snapshot(now_s, correction, version)
         finally:
             self.grid.config = self.grid_config
-        if self.memory is not None:
-            self._memory_clears(self.snapshot, now_s)
-        footprint, own = self.footprints(loaded, direction)
+        snapshot = raw
+        own = job["own"]
         # The shadow-band memory may lean on cells the depth pocket check saw
         # free (observation, with its time), never on the exemption itself
         # (Codex checkpoint P1: exempt cells as fresh FREE spread RETAINED past
         # the region). The face cells straddling the region's edge need that
         # evidence (L3c v8, insertion start).
         if self.shadow is not None:
-            support = self.depth_support(self.snapshot, now_s) if self.depth_support is not None else None
-            self.snapshot = self.shadow.apply(self.snapshot, current_pose, own if isinstance(own, Footprint) else self.body,
-                                              extra_support=support)
-        if self.known:
+            if job["depth_support"] is not None:
+                support = job["depth_support"](raw, now_s)
+            else:
+                support = job["support_value"]
+            snapshot = self.shadow.apply(snapshot, current_pose, own if isinstance(own, Footprint) else self.body,
+                                         extra_support=support)
+        known, pconf, kc = job["known"], job["permission_config"], job["known_config"]
+        if known:
             from forklift_core.perception.known_obstacles import apply_known, corridor_mask
 
             mask = None
-            if self.corridor is not None:
-                c_path, c_shape, c_until = self.corridor
-                mask = corridor_mask(self.snapshot, c_path, c_shape, self.permission.config, direction=-1,
-                                     until_m=c_until, tracking_m=float(self.known_config.get("tracking_m", 0.006)))
-            self.snapshot = apply_known(
-                self.snapshot, self.known, now_s, exclude=mask, table=self.error_table, current_pose=current_pose,
+            if job["corridor"] is not None:
+                c_path, c_shape, c_until = job["corridor"]
+                mask = corridor_mask(snapshot, c_path, c_shape, pconf, direction=-1,
+                                     until_m=c_until, tracking_m=float(kc.get("tracking_m", 0.006)))
+            snapshot = apply_known(
+                snapshot, known, now_s, exclude=mask, table=self.error_table, current_pose=current_pose,
                 cap_m=float(self.grid_config.free_r_cap_m),
-                horizon_s=float(self.permission.config.evidence_max_age_s),
-                empirical_m=self.known_config.get("empirical_m"),
-                empirical_max_age_s=self.known_config.get("empirical_max_age_s"),
+                horizon_s=float(pconf.evidence_max_age_s),
+                empirical_m=kc.get("empirical_m"),
+                empirical_max_age_s=kc.get("empirical_max_age_s"),
             )
-        if self.exempt is not None:
-            self.snapshot = exempt_region(self.snapshot, self.exempt)
-        if self.exit_region_rel is not None:
+        if job["exempt"] is not None:
+            snapshot = exempt_region(snapshot, job["exempt"])
+        exit_update = None
+        if job["exit_region_rel"] is not None:
             from forklift_core.control.exit_prefix_exempt import apply_verified
 
-            self.snapshot, freed, skipped = apply_verified(
-                self.snapshot, self.exit_verified, self.loaded, self.exit_margin_m, now_s=now_s,
+            snapshot, freed, skipped = apply_verified(
+                snapshot, job["exit_verified"], self.loaded, self.exit_margin_m, now_s=now_s,
                 max_age_s=float(self.grid_config.free_max_age_s))
-            self.exit_status.update(transformed=skipped is None, skipped=skipped, freed=freed, refresh_s=float(now_s))
-        return self.permission.update(self.snapshot, path_ahead, footprint, own, current_pose=current_pose,
-                                      direction=direction)
+            exit_update = {"transformed": skipped is None, "skipped": skipped, "freed": freed, "refresh_s": float(now_s)}
+        return {"raw": raw, "snapshot": snapshot, "exit_update": exit_update}
+
+    def refresh_install(self, job: dict, result: dict):
+        """Plan 5.28 D3, on the main thread: the planning memory's clears (at the job's time), the snapshot, the exit
+        status, the permission's path check (with the job's path and pose) and the times of the scans this result
+        checked (restart confirmation and the cusp watch read them -- D5)."""
+        now_s = job["now_s"]
+        self.snapshot = result["raw"]
+        if self.memory is not None:
+            self._memory_clears(result["raw"], now_s)
+        self.snapshot = result["snapshot"]
+        if result["exit_update"] is not None:
+            self.exit_status.update(result["exit_update"])
+        self.checked_scan_s = dict(job["scan_stamps"])
+        return self.permission.update(self.snapshot, job["path_ahead"], job["footprint"], job["own"],
+                                      current_pose=job["current_pose"], direction=job["direction"])
+
+    # ---- the layer worker's barrier (real-time plan 5.28 D4) ----------------------------------------------------
+    _BARRIER_ATTRS = frozenset({"exempt", "depth_support", "corridor", "known"})
+
+    def __setattr__(self, name, value):
+        if name in ObstacleLayer._BARRIER_ATTRS and self.__dict__.get("worker") is not None:
+            self.barrier(f"set_{name}")
+        object.__setattr__(self, name, value)
+
+    def __deepcopy__(self, memo):
+        """A copy (the scratch plans copy the layer) after any pending refresh is installed, without the worker: the
+        copy is never refreshed by it (plan 5.28 D4). Otherwise the default deep copy of every attribute."""
+        import copy as _copy
+
+        self.barrier("deepcopy")
+        new = type(self).__new__(type(self))
+        memo[id(self)] = new
+        for key, value in self.__dict__.items():
+            object.__setattr__(new, key, None if key == "worker" else _copy.deepcopy(value, memo))
+        return new
+
+    def barrier(self, reason: str) -> None:
+        """Install a pending scan refresh before the main thread touches what it owns or reads (plan 5.28 D4)."""
+        worker = self.__dict__.get("worker")
+        if worker is not None and worker.pending:
+            worker.install_now(reason)
 
     def check_candidate(self, path_ahead, *, current_pose, direction: int, loaded: bool, extra_margin_m: float = 0.0,
                         extra_ramp_m: float | None = None, unknown_passes: bool = False,
@@ -722,6 +829,7 @@ class ObstacleLayer:
 
     def _planner(self, now_s: float, correction, version: int, *, use_slam: bool, own_pose, loaded: bool,
                  layers: dict | None):
+        self.barrier("planner")
         if self.memory is not None:
             self._memory_hits(now_s, correction)
         snap = self.grid.snapshot(now_s, correction, version)
