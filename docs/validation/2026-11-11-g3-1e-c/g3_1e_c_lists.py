@@ -4,7 +4,9 @@ core apart for the SLAM bridge); B: two (job CPU 6). Both arms 1e off (no LAYER_
 (r1c_session.sh), seed 0, 1b 1c 1d on (explicit), INSTR off; RETURN_START / NEAR_END_STAND are the launcher's defaults
 in both arms (not set here; the analyzer checks the recorded values agree). Pairs: (A 1, B 1) and (B 2, A 2).
 
-    python g3_1e_c_lists.py SNAP_DIR OUT_ROOT     # writes OUT_ROOT/<name>.jsonl, prints "name arm pair cpus list"
+    python g3_1e_c_lists.py SNAP_DIR OUT_ROOT [--rerun-pair P]
+        # writes OUT_ROOT/<name>.jsonl, prints "name arm pair cpus list"; --rerun-pair writes only pair P's two jobs,
+        # in their registered order, under new names g3cc_r<P>_<n>_<arm> (the first run's records stay)
 """
 
 import json
@@ -17,10 +19,12 @@ BASE = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "SEED": "0", "INSTR": "off", 
 ORDER = (("A", 1, 4), ("B", 1, 6), ("B", 2, 6), ("A", 2, 4))
 
 
-def jobs(snap: str, out_root: str) -> list[dict]:
+def jobs(snap: str, out_root: str, rerun_pair: int | None = None) -> list[dict]:
     out = []
     for n, (arm, pair, cpus) in enumerate(ORDER, start=1):
-        name = f"g3cc_{n}_{arm}"
+        if rerun_pair is not None and pair != rerun_pair:
+            continue
+        name = f"g3cc_{n}_{arm}" if rerun_pair is None else f"g3cc_r{pair}_{n}_{arm}"
         run = f"{out_root}/{name}/{name}"
         entry = {"name": name, "argv": ["bash", f"{snap}/{WRAPPER}", run],
                  "env": {**BASE, "ARM_NAME": arm, "PAIR": str(pair), "CORES": "1" if arm == "A" else "2"},
@@ -31,16 +35,23 @@ def jobs(snap: str, out_root: str) -> list[dict]:
     return out
 
 
-def main_args(argv: list) -> tuple[str, str]:
+def main_args(argv: list) -> tuple[str, str, int | None]:
+    rerun = None
+    if "--rerun-pair" in argv:
+        i = argv.index("--rerun-pair")
+        rerun = int(argv[i + 1])
+        argv = argv[:i] + argv[i + 2:]
+        if rerun not in (1, 2):
+            raise SystemExit("--rerun-pair is 1 or 2")
     if len(argv) != 2:
-        raise SystemExit("usage: g3_1e_c_lists.py SNAP_DIR OUT_ROOT")
-    return argv[0], argv[1].rstrip("/")
+        raise SystemExit("usage: g3_1e_c_lists.py SNAP_DIR OUT_ROOT [--rerun-pair P]")
+    return argv[0], argv[1].rstrip("/"), rerun
 
 
 def main() -> int:
-    snap, out_root = main_args(sys.argv[1:])
+    snap, out_root, rerun = main_args(sys.argv[1:])
     Path(out_root).mkdir(parents=True, exist_ok=True)
-    for j in jobs(snap, out_root):
+    for j in jobs(snap, out_root, rerun):
         f = Path(out_root) / f"{j['name']}.jsonl"
         f.write_text(json.dumps(j["entries"][0]) + "\n")
         print(j["name"], j["arm"], j["pair"], j["cpus"], f)
