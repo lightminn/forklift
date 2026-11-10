@@ -17,10 +17,11 @@ Per session (s per AUTO sim s unless named):
   the AUTO scans / the AUTO sim time (delay: the computation is inside total_wall_s; thread: only prepare and submit);
 - compute: the computation's own wall (compute_s) per AUTO sim s, and its CPU / wall ratio (GIL waiting shows as < 1);
 - barrier: the installs that were not scheduled (by reason), their count per AUTO sim s and their wait per AUTO sim s;
-- main_other: the status-line timers' isaac.step plus every core.* region per AUTO sim s (the AUTO windows of
-  g2m_analyze's auto_windows), less the barrier installs' wait and install time (a barrier inside a core region is
-  timed by it; Codex 1e-0 review P2) -- the main thread's other work; the scheduled installs run at the control tick's
-  start, outside every core region;
+- main_other: from the tick trace, over the AUTO rows: each row's control tick (ctrl_end - ctrl_start) and world step
+  (world_end - world_start), less the wait and install time of the installs made inside those control ticks (the
+  scheduled ones at the tick's start and every barrier but add_scans, which runs in the scan's own processing), whose
+  install tick is an AUTO row's -- the main thread's other work, on the same rows and denominator as W (Codex 1e-0
+  review round 2 P2: the core.* timers nest and their windows differ from the AUTO rows);
 - reported, not used: the SLAM replies' apply lag (applied_tick_s - stamp_s of the async link's records, sim s) and the
   far recognition's job wall times (the missions' recognition_mission.live.jobs).
 
@@ -166,15 +167,14 @@ def measure(s: Session) -> dict:
                       "wait": sum(float(r["wait_s"]) for r in barrier) / sim if sim > 0 else None,
                       "install": sum(float(r["install_s"]) for r in barrier) / sim if sim > 0 else None}
     out["scheduled_wait_ms"] = _q([1e3 * float(r["wait_s"]) for r in inst if r["reason"] == "scheduled"])
-    totals: dict = {}
-    for _, _, _, timers in s.auto_windows():
-        for k, v in timers.items():
-            if g2m.head(k) == "isaac.step" or g2m.head(k).startswith("core."):
-                totals[g2m.head(k)] = totals.get(g2m.head(k), 0.0) + v[0]
-    wsim = sum(x[2] for x in s.auto_windows())
-    out["main_other_raw"] = sum(totals.values()) / wsim if wsim > 0 else None
-    out["main_other"] = None if out["main_other_raw"] is None or sim <= 0 else \
-        out["main_other_raw"] - out["barrier"]["wait"] - out["barrier"]["install"]
+    D = s.trace
+    ctrl = D[ok, C["ctrl_end"]] - D[ok, C["ctrl_start"]]
+    world = D[ok, C["world_end"]] - D[ok, C["world_start"]]
+    in_ctrl = [r for r in s.installs if r.get("install_tick") in ticks and r["reason"] != "add_scans"]
+    taken = sum(float(r["wait_s"]) + float(r["install_s"]) for r in in_ctrl)
+    out["main_other_raw"] = (float(np.nansum(ctrl)) + float(np.nansum(world))) / sim if sim > 0 else None
+    out["main_other"] = None if sim <= 0 else out["main_other_raw"] - taken / sim
+    out["installs_in_auto_control"] = len(in_ctrl)
     T = {}
     for k in KS:
         waits = []

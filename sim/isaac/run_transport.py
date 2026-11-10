@@ -11091,7 +11091,7 @@ def drive(S, isaac) -> None:
                     # worker may still change is read (D6). The last pending one was installed at the session's end
                     # (above); a run that ended by an exception leaves it pending (recorded).
                     worker_ = obstacle["layer"].worker
-                    layer_ok_ = worker_.failed is None
+                    layer_ok_ = worker_.failed is None and not worker_.pending  # a pending job may still run (D6)
                     if worker_.failed is not None:
                         state["success"] = False
                         state.setdefault("failure_reason", f"layer_worker_failed: {worker_.failed}")
