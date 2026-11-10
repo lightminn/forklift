@@ -124,6 +124,12 @@ class UseMarks:
         self._open[channel] = ident
         self._out.setdefault(channel, {})[ident] = {"use": "unused"}
 
+    def superseded(self, channel: str, ident) -> None:
+        """Installed only to be replaced at once (a synchronous refresh right after its barrier): never read."""
+        if self._open.get(channel) == ident:
+            del self._open[channel]
+        self._out.setdefault(channel, {})[ident] = {"use": "superseded"}
+
     def control_tick(self, tick: int, t: float) -> None:
         for channel, ident in self._open.items():
             self._out[channel][ident] = {"use": "used", "tick": int(tick), "t": float(t)}
@@ -176,6 +182,25 @@ class DelayedJobs:
         if out is not None:
             self.records.append({"job": int(job_id), "arrived": float(arrived), "delivered": float(now),
                                  "injected_s": float(now - arrived)})
+        return out
+
+    def discard(self, job_id: int) -> None:
+        """An answer dropped while held is recorded with its arrival and the drop (never delivered)."""
+        arrived = self._jobs.arrival(job_id)
+        if arrived is not None:
+            now = self._clock()
+            self.records.append({"job": int(job_id), "arrived": float(arrived), "delivered": None,
+                                 "discarded": float(now), "held_s": float(now - arrived)})
+        self._jobs.discard(job_id)
+
+    def held_at_end(self, job_ids) -> list:
+        """The answers that arrived but were still held when the run ended (recorded, never delivered)."""
+        now, out = self._clock(), []
+        for job_id in job_ids:
+            arrived = self._jobs.arrival(job_id)
+            if arrived is not None:
+                out.append({"job": int(job_id), "arrived": float(arrived), "delivered": None, "cut": float(now),
+                            "held_s": float(now - arrived)})
         return out
 
     def __getattr__(self, name):

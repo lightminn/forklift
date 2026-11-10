@@ -239,3 +239,38 @@ def test_a_queued_reply_keeps_its_scan_id():
     q = li.SlamReplyQueue(("ticks", 6), seed=0)
     q.push("a", scan_tick=12, moving=True, holding=False, ident=41)
     assert q.records[-1]["id"] == 41
+
+
+def test_a_layer_job_replaced_at_once_is_superseded_not_used():
+    m = li.UseMarks()
+    m.delivered("layer", 12, tick=20)
+    m.superseded("layer", 12)
+    m.control_tick(21, 0.175)
+    assert m.result()["layer"][12] == {"use": "superseded"}
+
+
+def test_delayed_jobs_record_a_held_answer_dropped_or_cut():
+    now = [0.0]
+    jobs = FakeJobs()
+    d = li.DelayedJobs(jobs, 0.1, clock=lambda: now[0])
+    jobs.done[3], jobs.arrived[3] = (True, "v"), 0.0
+    now[0] = 0.04
+    d.discard(3)
+    assert d.records[-1] == {"job": 3, "arrived": 0.0, "delivered": None, "discarded": 0.04, "held_s": 0.04}
+    jobs.done[4], jobs.arrived[4] = (True, "w"), 0.05
+    now[0] = 0.07
+    assert d.held_at_end([4, 9]) == [{"job": 4, "arrived": 0.05, "delivered": None, "cut": 0.07,
+                                       "held_s": pytest.approx(0.02)}]
+
+
+def test_the_lockstep_reply_handling_is_inside_slam_deliver():
+    """The refactor's guard: slam_deliver holds the tracker call, the start check and the record (not its docstring
+    alone), and the scan block calls it on the path the options leave untouched."""
+    import ast
+
+    tree = ast.parse((ROOT / "sim/isaac/run_transport.py").read_text())
+    fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "slam_deliver")
+    body = ast.unparse(fn)
+    assert "slam['tracker'].receive(" in body and "slam_not_localized" in body and "slam['records'].append(" in body
+    step = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "step_world")
+    assert "slam_deliver(reply, m_)" in ast.unparse(step)

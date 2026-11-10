@@ -4838,6 +4838,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     info_["applied_written"] = latency_module.install_applied(obstacle, info_)
                     if latency_marks_ is not None:
                         latency_marks_.delivered("layer", info_["scan_tick"], tick=info_["install_tick"])
+                        if info_.get("reason") == "refresh" or not info_["applied_written"]:
+                            # a synchronous refresh replaces it at once (its barrier, a reprojection's): never read
+                            latency_marks_.superseded("layer", info_["scan_tick"])
 
             from layer_worker import affinity_cores, worker_cpus
 
@@ -7802,56 +7805,56 @@ def drive(S, isaac) -> None:
             """A lockstep SLAM reply applied: the tracker, the start's map check (L4) and the record -- with the scan's
             own values (``m_``: scan_id, stamp_s, phase, now_base, now_q, odom_base). At once after the exchange, or,
             with the latency test's --latency-slam, when its queue delivers it (plan 2026-11-11 2.1)."""
-        warming_ = slam["tracker"].mode == "warming_up"
-        slam["tracker"].receive(
-            reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
-        )
-        if slam.get("bundle") is not None and warming_ and slam["tracker"].mode != "warming_up":
-            # L4: the bridge checked the map it runs on and says which; it must be the one this run hashed
-            if getattr(reply, "map_id", None) != slam["bundle"].map_id:
-                raise SessionFailure(f"slam_map_mismatch: the bridge runs on map {getattr(reply, 'map_id', None)}, "
-                                     f"not {slam['bundle'].map_id}")
-            # The odometry starts at the world start and map = world: the first correction is the identity
-            # within the start tolerance -- a bridge told another start pose would pass its own check there.
-            # B-P2b: the start is the relocalization's estimate (slam_start), never the placed pose (plan 1.2
-            # step 10: the same tolerance and reason, no truth read).
-            offset_ = abs(args.rear_axle_offset_m)
-            start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
-                           slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
-            at_ = compose(tuple(reply.map_from_odom), m_["odom_base"])  # the map pose this reply gives now
-            start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
-            start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
-            if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
-                raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
-                                     f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
-            state["slam_map"]["confirmed_by_bridge"] = True
-            state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
-            if start_reloc is not None:
-                # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
-                # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
-                truth_yaw_v_, _ = yaw_and_tilt(m_["now_q"])
-                start_reloc["bootstrap_check"] = {
-                    "scan_id": m_["scan_id"], "stamp_s": m_["stamp_s"], "slam_base": [float(v) for v in at_],
-                    "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), float(truth_yaw_v_)],
-                    "estimate_base": list(start_reloc["estimate"])}
-        truth_yaw, _ = yaw_and_tilt(m_["now_q"])
-        slam["records"].append(
-            {
-                "scan_id": m_["scan_id"],
-                "stamp_s": m_["stamp_s"],
-                "phase": m_["phase"],
-                "status": reply.status,
-                "mode": slam["tracker"].mode,
-                "map_from_odom": list(reply.map_from_odom),
-                # What control uses (holding keeps an older one).
-                "applied_map_from_odom": list(slam["tracker"].applied[0])
-                if slam["tracker"].applied is not None
-                else None,
-                "odom_base": list(m_["odom_base"]),
-                "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), truth_yaw],
-                "slam_wall_s": reply.slam_wall_s,
-            }
-        )
+            warming_ = slam["tracker"].mode == "warming_up"
+            slam["tracker"].receive(
+                reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
+            )
+            if slam.get("bundle") is not None and warming_ and slam["tracker"].mode != "warming_up":
+                # L4: the bridge checked the map it runs on and says which; it must be the one this run hashed
+                if getattr(reply, "map_id", None) != slam["bundle"].map_id:
+                    raise SessionFailure(f"slam_map_mismatch: the bridge runs on map {getattr(reply, 'map_id', None)}, "
+                                         f"not {slam['bundle'].map_id}")
+                # The odometry starts at the world start and map = world: the first correction is the identity
+                # within the start tolerance -- a bridge told another start pose would pass its own check there.
+                # B-P2b: the start is the relocalization's estimate (slam_start), never the placed pose (plan 1.2
+                # step 10: the same tolerance and reason, no truth read).
+                offset_ = abs(args.rear_axle_offset_m)
+                start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
+                               slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
+                at_ = compose(tuple(reply.map_from_odom), m_["odom_base"])  # the map pose this reply gives now
+                start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
+                start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
+                if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
+                    raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
+                                         f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
+                state["slam_map"]["confirmed_by_bridge"] = True
+                state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
+                if start_reloc is not None:
+                    # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
+                    # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
+                    truth_yaw_v_, _ = yaw_and_tilt(m_["now_q"])
+                    start_reloc["bootstrap_check"] = {
+                        "scan_id": m_["scan_id"], "stamp_s": m_["stamp_s"], "slam_base": [float(v) for v in at_],
+                        "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), float(truth_yaw_v_)],
+                        "estimate_base": list(start_reloc["estimate"])}
+            truth_yaw, _ = yaw_and_tilt(m_["now_q"])
+            slam["records"].append(
+                {
+                    "scan_id": m_["scan_id"],
+                    "stamp_s": m_["stamp_s"],
+                    "phase": m_["phase"],
+                    "status": reply.status,
+                    "mode": slam["tracker"].mode,
+                    "map_from_odom": list(reply.map_from_odom),
+                    # What control uses (holding keeps an older one).
+                    "applied_map_from_odom": list(slam["tracker"].applied[0])
+                    if slam["tracker"].applied is not None
+                    else None,
+                    "odom_base": list(m_["odom_base"]),
+                    "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), truth_yaw],
+                    "slam_wall_s": reply.slam_wall_s,
+                }
+            )
 
         def latency_slam_drain(tick_: int) -> None:
             """Latency test A: the queued replies due by this physics tick, delivered in order."""
@@ -11445,7 +11448,9 @@ def drive(S, isaac) -> None:
                     if latency_marks_ is not None:
                         li_["use"] = {c: {str(k): v for k, v in d.items()} for c, d in latency_marks_.result().items()}
                     if core_ is not None and isinstance(core_.jobs, latency_module.DelayedJobs):
-                        li_["plan"] = {"delay_ms": float(args.latency_plan_ms), "records": core_.jobs.records}
+                        pending_ = [core_.pending.job] if getattr(core_, "pending", None) is not None else []
+                        li_["plan"] = {"delay_ms": float(args.latency_plan_ms),
+                                       "records": core_.jobs.records + core_.jobs.held_at_end(pending_)}
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["latency_injection_error"] = repr(exc_)
             if locals().get("core") is not None and core.jobs is not None:
