@@ -13,8 +13,12 @@ Per session and phase (phases from spool/slam.records by stamp):
 3. Over forward turning ticks (|curvature| > 0.15 1/m): the rear wheels' rotation difference against track x curvature
    (is the rear axle driven as the kinematics needs), and three heading changes -- the truth's, the one the rear wheels'
    difference implies if they rolled without slip ((R - L) x radius / track), and the model's (D).
-4. A least-squares split of the truth's per-tick heading change into a x the model's (true steering, true travel) plus
-   b x travel (a scale and a curvature offset).
+4. A least-squares split of the truth's per-tick heading change into a x the model's (true steering, true travel, the
+   interval's mid curvature) plus b x travel (a scale and a curvature offset), forward ticks only (Codex review P2:
+   reversing ticks mixed in move the scale).
+5. Each rear wheel's longitudinal slip over the forward turning ticks: its rotation x radius against its own centre's
+   true forward displacement (the centre from the base pose: x = the rear axle's, y = +-track/2; Codex review P2: the
+   two wheels' opposite slips cancel in their mean).
 The geometry is the run's (result.json chassis_model.drive_geometry: wheelbase, track, wheel radius).
 
     python odom_yaw_diag.py ROOT SESSION... [--json out.json]   (ROOT/<batch>/<session>/live/epoch_1/run)
@@ -71,6 +75,10 @@ def session(run: Path) -> dict:
     true_inc = np.zeros((len(t), 4))
     true_inc[1:] = np.diff(J["wheel_angles_rad"], axis=0)
     pos = J["base_pose_world"][:, :2].astype(float)
+    rear_x = -abs(float(json.loads((run / "result.json").read_text())["arguments"]["rear_axle_offset_m"]))  # the URDF rear axle
+    cy, sy = np.cos(truth_yaw), np.sin(truth_yaw)
+    centres = {side: pos + np.column_stack((rear_x * cy - y0 * sy, rear_x * sy + y0 * cy))
+               for side, y0 in (("left", tr / 2), ("right", -tr / 2))}
 
     def model_dyaw(inc, st):
         k = curv(st)
@@ -96,7 +104,7 @@ def session(run: Path) -> dict:
                "error_rad": {k: float(v[idx].sum() - dy_truth[idx].sum()) for k, v in mdy.items()},
                "truth_path_m": float(np.sum(np.hypot(*np.diff(pos[np.nonzero(m)[0]], axis=0).T))),
                "wheel_travel_m": float(np.sum(np.abs(ds[idx])))}
-        mv = m & (np.abs(ds) > 1e-4)
+        mv = m & (ds > 1e-4)  # forward only
         if mv.sum() > 10:
             X = np.column_stack((k_true[mv] * ds[mv], ds[mv]))
             a, b = np.linalg.lstsq(X, dy_truth[mv], rcond=None)[0]
@@ -111,6 +119,16 @@ def session(run: Path) -> dict:
                 "truth_dyaw_rad": float(dy_truth[tm].sum()),
                 "rear_wheels_dyaw_rad": float(((rr - rl) * rad / tr).sum()),
                 "model_dyaw_rad": float(mdy["D"][tm].sum())}
+            slip = {}
+            for side, col in (("left", 2), ("right", 3)):
+                c = centres[side]
+                fwd = np.zeros(len(t))
+                fwd[1:] = (np.diff(c[:, 0]) * cy[:-1] + np.diff(c[:, 1]) * sy[:-1])  # along the heading
+                slip[side] = {"wheel_m": float((true_inc[tm, col] * rad).sum()), "centre_forward_m": float(fwd[tm].sum())}
+                slip[side]["wheel_minus_centre_m"] = slip[side]["wheel_m"] - slip[side]["centre_forward_m"]
+            slip["difference_over_track_rad"] = (slip["right"]["wheel_minus_centre_m"]
+                                                 - slip["left"]["wheel_minus_centre_m"]) / tr
+            row["turning_forward"]["rear_longitudinal_slip"] = slip
         out["phases"][phase] = row
     return out
 

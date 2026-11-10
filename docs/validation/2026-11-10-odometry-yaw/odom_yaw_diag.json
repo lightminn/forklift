@@ -29,7 +29,20 @@
      "track_x_curvature": 0.09402455838187578,
      "truth_dyaw_rad": 0.017417571014707624,
      "rear_wheels_dyaw_rad": 0.016862041545364092,
-     "model_dyaw_rad": 0.018510274886598697
+     "model_dyaw_rad": 0.018510274886598697,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 0.10066717863082886,
+       "centre_forward_m": 0.10021923665655037,
+       "wheel_minus_centre_m": 0.0004479419742784846
+      },
+      "right": {
+       "wheel_m": 0.10960406064987183,
+       "centre_forward_m": 0.10945054918315178,
+       "wheel_minus_centre_m": 0.00015351146672004656
+      },
+      "difference_over_track_rad": -0.0005555292595442226
+     }
     }
    },
    "insert": {
@@ -58,11 +71,7 @@
      "D": -2.3984803989091265e-05
     },
     "truth_path_m": 0.6350437172873297,
-    "wheel_travel_m": 0.6352789188411574,
-    "fit": {
-     "scale": 1.0394370058550453,
-     "offset_per_m": -3.5820842413766266e-05
-    }
+    "wheel_travel_m": 0.6352789188411574
    },
    "transport": {
     "ticks": 13128,
@@ -76,8 +85,8 @@
     "truth_path_m": 26.51447526944743,
     "wheel_travel_m": 26.427173600573138,
     "fit": {
-     "scale": 0.9214955699979185,
-     "offset_per_m": 0.002836061170061726
+     "scale": 0.9208375014892142,
+     "offset_per_m": 0.0025915710878194292
     },
     "turning_forward": {
      "ticks": 5881,
@@ -85,7 +94,20 @@
      "track_x_curvature": -0.05777092683413606,
      "truth_dyaw_rad": -1.4378847000244566,
      "rear_wheels_dyaw_rad": -1.5862812691117685,
-     "model_dyaw_rad": -1.6045980030861613
+     "model_dyaw_rad": -1.6045980030861613,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.28581452418307,
+       "centre_forward_m": 13.258717404465198,
+       "wheel_minus_centre_m": 0.02709711971787243
+      },
+      "right": {
+       "wheel_m": 12.445085451553833,
+       "centre_forward_m": 12.496638589691436,
+       "wheel_minus_centre_m": -0.05155313813760287
+      },
+      "difference_over_track_rad": -0.14839671293485907
+     }
     }
    },
    "return_home": {
@@ -100,8 +122,8 @@
     "truth_path_m": 29.326142561324197,
     "wheel_travel_m": 29.22592585320324,
     "fit": {
-     "scale": 0.9546775376251512,
-     "offset_per_m": 0.0010241933878306494
+     "scale": 0.937044994420898,
+     "offset_per_m": 0.005396430679511721
     },
     "turning_forward": {
      "ticks": 4602,
@@ -109,7 +131,20 @@
      "track_x_curvature": 0.014584774314378341,
      "truth_dyaw_rad": 0.9055834146172235,
      "rear_wheels_dyaw_rad": 0.9048532272847193,
-     "model_dyaw_rad": 0.8446863940010836
+     "model_dyaw_rad": 0.8446863940010836,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 20.587441732965694,
+       "centre_forward_m": 20.57605821232062,
+       "wheel_minus_centre_m": 0.01138352064507231
+      },
+      "right": {
+       "wheel_m": 21.067013943426595,
+       "centre_forward_m": 21.056017285490086,
+       "wheel_minus_centre_m": 0.01099665793650928
+      },
+      "difference_over_track_rad": -0.0007299296387981687
+     }
     }
    }
   }
@@ -165,11 +200,7 @@
      "D": 7.622563810687525e-06
     },
     "truth_path_m": 0.6354190011838652,
-    "wheel_travel_m": 0.6356136287238936,
-    "fit": {
-     "scale": 1.030801292753691,
-     "offset_per_m": 2.339977794177207e-05
-    }
+    "wheel_travel_m": 0.6356136287238936
    },
    "transport": {
     "ticks": 12624,
@@ -183,8 +214,8 @@
     "truth_path_m": 26.566929575803705,
     "wheel_travel_m": 26.488042370457247,
     "fit": {
-     "scale": 0.9200278003665047,
-     "offset_per_m": 0.002363694617792221
+     "scale": 0.918291502939158,
+     "offset_per_m": 0.002064870186968147
     },
     "turning_forward": {
      "ticks": 5589,
@@ -192,7 +223,20 @@
      "track_x_curvature": -0.056071115993063005,
      "truth_dyaw_rad": -1.3676185250186734,
      "rear_wheels_dyaw_rad": -1.5086562794474991,
-     "model_dyaw_rad": -1.5304157198329085
+     "model_dyaw_rad": -1.5304157198329085,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.003705684581789,
+       "centre_forward_m": 12.977197926184164,
+       "wheel_minus_centre_m": 0.026507758397624315
+      },
+      "right": {
+       "wheel_m": 12.204117856474614,
+       "centre_forward_m": 12.252360177786844,
+       "wheel_minus_centre_m": -0.048242321312230274
+      },
+      "difference_over_track_rad": -0.14103788624500865
+     }
     }
    },
    "return_home": {
@@ -207,8 +251,8 @@
     "truth_path_m": 27.04949041872168,
     "wheel_travel_m": 26.94749446831825,
     "fit": {
-     "scale": 0.9496494854458116,
-     "offset_per_m": 0.0013444153575493426
+     "scale": 0.9331199260700278,
+     "offset_per_m": 0.0057767540838587
     },
     "turning_forward": {
      "ticks": 4632,
@@ -216,7 +260,20 @@
      "track_x_curvature": 0.00997256468007964,
      "truth_dyaw_rad": 0.7889749828820947,
      "rear_wheels_dyaw_rad": 0.791010211380023,
-     "model_dyaw_rad": 0.7188776767990432
+     "model_dyaw_rad": 0.7188776767990432,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 20.581022645266316,
+       "centre_forward_m": 20.577456287266045,
+       "wheel_minus_centre_m": 0.0035663580002704975
+      },
+      "right": {
+       "wheel_m": 21.000258057297728,
+       "centre_forward_m": 20.99561291079284,
+       "wheel_minus_centre_m": 0.004645146504888231
+      },
+      "difference_over_track_rad": 0.002035450008712705
+     }
     }
    }
   }
@@ -272,11 +329,7 @@
      "D": -3.758510745307771e-05
     },
     "truth_path_m": 0.6359303665749417,
-    "wheel_travel_m": 0.6361395503070693,
-    "fit": {
-     "scale": 1.0748763064961055,
-     "offset_per_m": -1.6407968590288267e-05
-    }
+    "wheel_travel_m": 0.6361395503070693
    },
    "transport": {
     "ticks": 12876,
@@ -290,8 +343,8 @@
     "truth_path_m": 26.483290201850032,
     "wheel_travel_m": 26.399637372273997,
     "fit": {
-     "scale": 0.9200783921345368,
-     "offset_per_m": 0.0020217449046306462
+     "scale": 0.9190580192968654,
+     "offset_per_m": 0.001977707568438836
     },
     "turning_forward": {
      "ticks": 5769,
@@ -299,7 +352,20 @@
      "track_x_curvature": -0.05511165360509151,
      "truth_dyaw_rad": -1.3964727247579123,
      "rear_wheels_dyaw_rad": -1.5521522102934617,
-     "model_dyaw_rad": -1.5570691182490837
+     "model_dyaw_rad": -1.5570691182490837,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.02146686761386,
+       "centre_forward_m": 12.992011992232388,
+       "wheel_minus_centre_m": 0.029454875381471624
+      },
+      "right": {
+       "wheel_m": 12.198826196158326,
+       "centre_forward_m": 12.251881526302896,
+       "wheel_minus_centre_m": -0.05305533014456998
+      },
+      "difference_over_track_rad": -0.155679633068003
+     }
     }
    },
    "return_home": {
@@ -314,8 +380,8 @@
     "truth_path_m": 29.292883625686997,
     "wheel_travel_m": 29.196310479417285,
     "fit": {
-     "scale": 0.9535600788564145,
-     "offset_per_m": 0.010065961566391597
+     "scale": 0.9164181358708404,
+     "offset_per_m": 0.0018393949866234885
     },
     "turning_forward": {
      "ticks": 3455,
@@ -323,7 +389,20 @@
      "track_x_curvature": -0.10497578957236209,
      "truth_dyaw_rad": -2.495888668099246,
      "rear_wheels_dyaw_rad": -2.6513499949263846,
-     "model_dyaw_rad": -2.7582068382855436
+     "model_dyaw_rad": -2.7582068382855436,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 14.179872899923978,
+       "centre_forward_m": 14.14453997470686,
+       "wheel_minus_centre_m": 0.03533292521711928
+      },
+      "right": {
+       "wheel_m": 12.774657402612995,
+       "centre_forward_m": 12.821719286110028,
+       "wheel_minus_centre_m": -0.04706188349703311
+      },
+      "difference_over_track_rad": -0.15546190323424977
+     }
     }
    }
   }
@@ -379,11 +458,7 @@
      "D": -3.475965590044681e-05
     },
     "truth_path_m": 0.6349494788367473,
-    "wheel_travel_m": 0.6351616019990782,
-    "fit": {
-     "scale": 1.02772218049443,
-     "offset_per_m": -4.782924880442802e-05
-    }
+    "wheel_travel_m": 0.6351616019990782
    },
    "transport": {
     "ticks": 13092,
@@ -397,8 +472,8 @@
     "truth_path_m": 26.48471230602181,
     "wheel_travel_m": 26.399552876433987,
     "fit": {
-     "scale": 0.9212077468263525,
-     "offset_per_m": 0.0017597929438384532
+     "scale": 0.9171456203128976,
+     "offset_per_m": 0.0009226091576004481
     },
     "turning_forward": {
      "ticks": 5766,
@@ -406,7 +481,20 @@
      "track_x_curvature": -0.047057100351368536,
      "truth_dyaw_rad": -1.2819098945862482,
      "rear_wheels_dyaw_rad": -1.4326742238659669,
-     "model_dyaw_rad": -1.4445264002414087
+     "model_dyaw_rad": -1.4445264002414087,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.034823262801194,
+       "centre_forward_m": 13.005701068284342,
+       "wheel_minus_centre_m": 0.029122194516851607
+      },
+      "right": {
+       "wheel_m": 12.275505924152231,
+       "centre_forward_m": 12.326288893467812,
+       "wheel_minus_centre_m": -0.05078296931558057
+      },
+      "difference_over_track_rad": -0.1507644600611928
+     }
     }
    },
    "return_home": {
@@ -421,8 +509,8 @@
     "truth_path_m": 29.700255972121326,
     "wheel_travel_m": 29.574736725762328,
     "fit": {
-     "scale": 0.9656022120622233,
-     "offset_per_m": -1.2551371112613595e-05
+     "scale": 0.9313205459861537,
+     "offset_per_m": 0.005765723394164673
     },
     "turning_forward": {
      "ticks": 3402,
@@ -430,7 +518,20 @@
      "track_x_curvature": -0.002430531823115629,
      "truth_dyaw_rad": 0.25157942001056854,
      "rear_wheels_dyaw_rad": 0.2270337829094109,
-     "model_dyaw_rad": 0.16785394356631977
+     "model_dyaw_rad": 0.16785394356631977,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 14.611854936543189,
+       "centre_forward_m": 14.59935705246793,
+       "wheel_minus_centre_m": 0.01249788407525898
+      },
+      "right": {
+       "wheel_m": 14.732182841485177,
+       "centre_forward_m": 14.732694087477359,
+       "wheel_minus_centre_m": -0.0005112459921825518
+      },
+      "difference_over_track_rad": -0.024545528429134964
+     }
     }
    }
   }
