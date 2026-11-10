@@ -1911,6 +1911,9 @@ def arguments() -> argparse.Namespace:
             parser.error("--layer-worker-timeout-s must be positive")
         if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") == "0":
             parser.error("--layer-worker needs the asynchronous planning (a synchronous capture steps inside a tick)")
+        if args.layer_worker == "thread" and (os.environ.get("FORKLIFT_KERNELS_DUAL") or os.environ.get("FORKLIFT_PERF_DUMP")):
+            parser.error("--layer-worker thread is not combined with FORKLIFT_KERNELS_DUAL or FORKLIFT_PERF_DUMP (their "
+                         "decorators change process-wide state off the main thread)")
     if args.live_capture_dump == "async" and not args.live:
         parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
@@ -6300,6 +6303,8 @@ def drive(S, isaac) -> None:
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     cells.stepper = stepper
+    if obstacle is not None and obstacle.get("layer_worker"):
+        obstacle["layer"].worker.tick_fn = lambda: stepper["tick"]  # plan 5.28 D4: a barrier install's actual tick
     if args.record_slam:
         import planar_lidar
         import yaml
@@ -10879,6 +10884,10 @@ def drive(S, isaac) -> None:
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped", "bottom_deck_refused"):
             return  # bottom_deck_refused: plan 2026-10-19 task 3, a refusal the mission records (mission_result)
         if live is not None:
+            if obstacle is not None and obstacle.get("layer_worker") and obstacle["layer"].worker.failed is None:
+                # Real-time plan 5.28: the last pending refresh installed before the session's end path (its scan record
+                # reaches the spool, which closes below); a failure here raises, and the run fails (Codex 1e-0 P2)
+                obstacle["layer"].barrier("session_end")
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
             live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
@@ -11079,15 +11088,15 @@ def drive(S, isaac) -> None:
                                    "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))}}
                 layer_ok_ = True
                 if obstacle.get("layer_worker"):
-                    # Real-time plan 5.28: the last pending refresh installed (unless the worker failed: then nothing it
-                    # may still change is read -- D6), its installs kept apart (1e-0's paired waits)
+                    # Real-time plan 5.28: the installs kept apart (1e-0's paired waits); after a failure nothing the
+                    # worker may still change is read (D6). The last pending one was installed at the session's end
+                    # (above); a run that ended by an exception leaves it pending (recorded).
                     worker_ = obstacle["layer"].worker
-                    if worker_.failed is None:
-                        try:
-                            worker_.install_now("session_end")
-                        except Exception as exc_:  # noqa: BLE001 -- recorded; the run's own end goes on
-                            state["layer_worker_failure"] = repr(exc_)
                     layer_ok_ = worker_.failed is None
+                    if worker_.failed is not None:
+                        state["success"] = False
+                        state.setdefault("failure_reason", f"layer_worker_failed: {worker_.failed}")
+                    state["layer_worker"]["pending_at_end"] = bool(worker_.pending)
                     state["layer_worker"].update(worker_.summary())
                     (args.output / "layer_worker.json").write_text(record_json(worker_.records) + "\n")
                 state["obstacle_layer"].update(

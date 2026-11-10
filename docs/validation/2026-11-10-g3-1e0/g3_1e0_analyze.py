@@ -18,8 +18,11 @@ Per session (s per AUTO sim s unless named):
 - compute: the computation's own wall (compute_s) per AUTO sim s, and its CPU / wall ratio (GIL waiting shows as < 1);
 - barrier: the installs that were not scheduled (by reason), their count per AUTO sim s and their wait per AUTO sim s;
 - main_other: the status-line timers' isaac.step plus every core.* region per AUTO sim s (the AUTO windows of
-  g2m_analyze's auto_windows) -- the main thread's other work, which holds no install or wait;
-- the far recognition's and the SLAM link's delays are reported from the result where it has them (not used).
+  g2m_analyze's auto_windows), less the barrier installs' wait and install time (a barrier inside a core region is
+  timed by it; Codex 1e-0 review P2) -- the main thread's other work; the scheduled installs run at the control tick's
+  start, outside every core region;
+- reported, not used: the SLAM replies' apply lag (applied_tick_s - stamp_s of the async link's records, sim s) and the
+  far recognition's job wall times (the missions' recognition_mission.live.jobs).
 
 Thread session, per AUTO scan with tick_t[k]: T_i = done_t - submit_t, S_i(k) = tick_t[k] - submit_t, the scheduled wait
 max(T_i - S_i(k), 0); its mean and p99 (ms a scan) for k = 2, 3, 4; scans per AUTO sim s.
@@ -34,6 +37,9 @@ Prediction (5.28 1e-0 registration):
 - decision: "go to 1e-1" when net(chosen k) >= 0.03707 s/sim s, else "process design to the lead".
 The session ran at k = 3: the waits for 2 and 4 are read off its records; the main thread's pattern at another k is not
 measured (stated with the result). Neither session is a judgement (1e-2 judges).
+
+Completeness (Codex 1e-0 review P2): every AUTO install must have its scan record (scans_without_record = 0) and both
+sessions AUTO scans; otherwise no prediction is made.
 
 Validity: as g3_1b_loop_analyze (dumps, INSTR), plus the registered conditions (far K f 1.0 seed 0, grid 1, shadow 1,
 EXTRA_ARGS with --lidar-cast fast and --layer-worker <arm> --layer-worker-k 3), result.json layer_worker mode = the
@@ -118,6 +124,12 @@ class Session(base.Session):
             out += [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
         return out
 
+    def slam_records(self) -> list[dict]:
+        out = []
+        for f in sorted((self.run / "spool" / "slam.records").glob("*.jsonl")):
+            out += [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
+        return out
+
 
 def _q(v) -> dict | None:
     if not v:
@@ -151,7 +163,8 @@ def measure(s: Session) -> dict:
     for r in barrier:
         reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
     out["barrier"] = {"reasons": reasons, "per_sim_s": len(barrier) / sim if sim > 0 else None,
-                      "wait": sum(float(r["wait_s"]) for r in barrier) / sim if sim > 0 else None}
+                      "wait": sum(float(r["wait_s"]) for r in barrier) / sim if sim > 0 else None,
+                      "install": sum(float(r["install_s"]) for r in barrier) / sim if sim > 0 else None}
     out["scheduled_wait_ms"] = _q([1e3 * float(r["wait_s"]) for r in inst if r["reason"] == "scheduled"])
     totals: dict = {}
     for _, _, _, timers in s.auto_windows():
@@ -159,7 +172,9 @@ def measure(s: Session) -> dict:
             if g2m.head(k) == "isaac.step" or g2m.head(k).startswith("core."):
                 totals[g2m.head(k)] = totals.get(g2m.head(k), 0.0) + v[0]
     wsim = sum(x[2] for x in s.auto_windows())
-    out["main_other"] = sum(totals.values()) / wsim if wsim > 0 else None
+    out["main_other_raw"] = sum(totals.values()) / wsim if wsim > 0 else None
+    out["main_other"] = None if out["main_other_raw"] is None or sim <= 0 else \
+        out["main_other_raw"] - out["barrier"]["wait"] - out["barrier"]["install"]
     T = {}
     for k in KS:
         waits = []
@@ -169,9 +184,14 @@ def measure(s: Session) -> dict:
                 waits.append(max(0.0, (float(r["done_t"]) - float(r["submit_t"])) - (tt[k] - float(r["submit_t"]))))
         T[k] = _q([1e3 * x for x in waits])
     out["paired_wait_ms"] = T
-    res = s.result or {}
-    out["reported"] = {"far_live": res.get("far_live_stats") or res.get("far_recognition_live"),
-                       "slam_async": res.get("slam_async")}
+    lags = [float(r["applied_tick_s"]) - float(r["stamp_s"]) for r in s.slam_records()
+            if r.get("applied_tick_s") is not None and r.get("stamp_s") is not None]
+    jobs = []
+    for f in sorted((s.run / "missions").glob("*/records.json")):
+        st = json.loads(f.read_text()).get("state") or {}
+        jobs += [float(j["wall_s"]) for j in ((st.get("recognition_mission") or {}).get("live") or {}).get("jobs", [])
+                 if j.get("wall_s") is not None]
+    out["reported"] = {"slam_apply_lag_s": _q(lags), "far_job_wall_s": _q(jobs)}
     return out
 
 
@@ -221,7 +241,9 @@ def main() -> int:
     else:
         m = {arm: measure(s) for arm, s in sessions.items()}
         out["measures"] = m
-        out["result"] = predict(m["delay"], m["thread"])
+        incomplete = {arm: {"scans": x["scans"], "scans_without_record": x["scans_without_record"]}
+                      for arm, x in m.items() if x["scans"] == 0 or x["scans_without_record"]}
+        out["result"] = {"incomplete": incomplete} if incomplete else predict(m["delay"], m["thread"])
     text = json.dumps(out, indent=1, default=str)
     if a.json:
         a.json.write_text(text)

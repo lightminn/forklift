@@ -161,7 +161,7 @@ def test_a_barrier_installs_the_pending_refresh_first(touch):
         lay.exit_exempt_clear("test")
     assert not w.pending and w.records[0]["reason"] == {"set_exempt": "set_exempt", "set_known": "set_known"}.get(
         touch, touch)
-    assert w.records[0]["install_tick"] is None
+    assert w.records[0]["install_tick"] is None  # no tick source in this test
 
 
 def test_worker_timers_are_merged_on_the_main_thread_at_install(monkeypatch):
@@ -251,3 +251,33 @@ def test_the_core_reads_the_checked_scan_when_a_worker_is_on():
 def test_the_near_contract_knows_the_layer_worker_arguments():
     text = (ROOT / "sim/isaac/near_tracking.py").read_text()
     assert '"layer_worker": "off", "layer_worker_k": 3, "layer_worker_timeout_s": 0.5' in text
+
+
+def test_the_core_reads_the_layer_in_the_recorded_order_when_off():
+    """Codex 1e-0 review P1: a recorded run's layer is a recording proxy; off, _clearing_scans reads sensors, then
+    last_scan_s per sensor, as every recorded run did."""
+    from forklift_core.mission.core import MissionCore
+
+    reads = []
+
+    class Tracking:
+        def __getattr__(self, name):
+            reads.append(name)
+            return {"sensors": [SimpleNamespace(name="a", may_clear=True), SimpleNamespace(name="b", may_clear=True)],
+                    "last_scan_s": {"a": 0.1, "b": 0.2}}[name]
+
+    core = SimpleNamespace(obstacle={"layer": Tracking()})
+    assert MissionCore._clearing_scans(core) == {"a": 0.1, "b": 0.2}
+    assert reads == ["sensors", "last_scan_s", "last_scan_s"]
+
+
+def test_a_barrier_install_records_the_physics_tick():
+    lay = layer()
+    w = lw.LayerWorker(lay, "delay", 3, tick_fn=lambda: 17)
+    lay.worker = w
+    pose = (0.0, 0.0, 0.0)
+    lay.add_scans(0.0, raw_scan(lay, pose), odom_rear=pose, loaded=False)
+    w.submit(lay.refresh_prepare(0.0, (0.0, 0.0, 0.0), 0, current_pose=pose, path_ahead=PATH, loaded=False,
+                                 detach=True), 12)
+    lay.planner_grid(0.05, (0.0, 0.0, 0.0), 0)
+    assert (w.records[0]["reason"], w.records[0]["install_tick"], w.records[0]["due_tick"]) == ("planner", 17, 15)

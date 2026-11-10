@@ -35,13 +35,14 @@ class LayerWorkerFailure(RuntimeError):
 
 class LayerWorker:
     def __init__(self, layer, mode: str, k: int, *, clock=time.perf_counter, timeout_s: float = 0.5,
-                 on_install=None):
+                 on_install=None, tick_fn=None):
         if mode not in ("delay", "thread"):
             raise ValueError(f"layer worker mode {mode!r}: delay or thread")
         if not 1 <= int(k) <= 11:
             raise ValueError(f"layer worker k {k}: 1..11 (below the scan period of 12 ticks)")
         self.layer, self.mode, self.k = layer, mode, int(k)
         self.clock, self.timeout_s, self.on_install = clock, float(timeout_s), on_install
+        self.tick_fn = tick_fn  # the physics counter a barrier install is recorded at (D4: its actual tick)
         self.records: list[dict] = []
         self._slack: list[dict] = []  # the recent jobs' records waiting for their next control ticks' times
         self.failed: str | None = None
@@ -118,6 +119,8 @@ class LayerWorker:
             raise LayerWorkerFailure(f"layer_worker_failed: {self.failed}") from self._error
         job, info, result = self._job, self._info, self._result
         self._job = self._info = self._result = None
+        if tick is None and self.tick_fn is not None:
+            tick = self.tick_fn()
         for entry in result.pop("timers", ()):
             TIMERS.add(*entry)  # the worker's timers, on the main thread (D7)
         t0 = self.clock()

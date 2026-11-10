@@ -5937,12 +5937,13 @@ class MissionCore:
     def _clearing_scans(self) -> dict:
         """The newest scan stamp of each obstacle sensor that may clear cells (restart confirmation, R1)."""
         layer = self.obstacle["layer"]
-        # with a layer worker (real-time plan 5.28 D3) the scans the installed refresh checked: a scan received but not
-        # yet installed has not been checked, so it may not count as a clearing scan (Codex 5.28 round 1 P1-2)
-        # (keyed on the obstacle dict, not read from the layer: a recorded run's layer is a recording proxy, where an
-        # attribute read is a boundary read)
-        stamps = layer.checked_scan_s if self.obstacle.get("layer_worker") else layer.last_scan_s
-        return {sensor.name: float(stamps.get(sensor.name, -math.inf))
+        if self.obstacle.get("layer_worker"):
+            # with a layer worker (real-time plan 5.28 D3) the scans the installed refresh checked: a scan received but
+            # not yet installed has not been checked, so it may not count as a clearing scan (Codex 5.28 round 1 P1-2)
+            # (keyed on the obstacle dict: a recorded run's layer is a recording proxy, where a read is recorded)
+            return {sensor.name: float(layer.checked_scan_s.get(sensor.name, -math.inf))
+                    for sensor in layer.sensors if sensor.may_clear}
+        return {sensor.name: float(layer.last_scan_s.get(sensor.name, -math.inf))
                 for sensor in layer.sensors if sensor.may_clear}
 
     def _restart_gate(self, t: float, allowed: float, why: str):
