@@ -2,7 +2,7 @@
 
 - 질문(총괄): #410 이 찾은 회전 부족(전진에서 차체가 명목 운동학보다 약 8 % 덜 돎, 뒷바퀴 좌우 반대 세로 미끄럼)이 plant 의 접촉·마찰 설정에서 오는가. 적재의 기여를 같은 경로의 기록으로 분리한다. 같은 범위에 콘솔이 rv3 27 세션에서 찾은 "전진 포화 때 왼쪽 바퀴 조향이 명령보다 0.030–0.035 rad 덜 꺾임"의 원인 진단을 합쳤다(총괄 2026-11-10).
 - 새 실행은 없다. 이미 있는 조향 탐침 기록 두 묶음을 다시 읽었다.
-  - 조향 왼쪽 비대칭 탐침(`2026-11-04-steering-left-asymmetry-probe.md`, ws1 `test_runs/simphys/steer_asym/p_bb7fcdcb/`, 잡 15401).
+  - 조향 왼쪽 비대칭 탐침(`2026-11-04-steering-left-asymmetry-probe.md`, ws1 `test_runs/simphys/steer_asym/p_bb7fcdcb/`, 잡 15401; 2026-11-10 부터 `gdrive:ws1-cleanup-20261110-ag/ag_f1v2.tar.zst`).
   - F2 타이어 2×2 탐침의 M2(`2026-11-05-f2-2x2.md`, ws1 `test_runs/simphys/f2/x2/m2_*`, 보관본 복원).
   - 두 묶음 모두 `--steering-probe --deterministic`, seed 1 출발 자리, 운영 설정 사본에 팔 키만 다르다.
   - 같은 plant·결정적 절차라 A0s1 = A0s2 = M2 120 Hz O, A2c = M2 240 Hz O 는 NPZ 전체가 같다(Codex 확인). 독립 표본으로 겹쳐 세지 않는다.
