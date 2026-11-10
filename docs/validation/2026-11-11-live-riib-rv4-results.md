@@ -157,4 +157,8 @@
   - PR 의 기준(그때의 main)과 고정 커밋 54bd84a9 사이에 운용 경로(`src/`·`sim/`·`deploy/`·`config/`, 런처·래퍼·탐침)가 바뀌지 않아야 한다.
   - PR 은 라이브 런처의 ④⑤ 기본값만 바꿔야 한다.
   - 그 사이 운용 경로가 바뀌면 이 배치의 근거를 옮기지 않고 총괄에 올린다.
-- 원자료: ws1 `test_runs/live/rv4_54bd84a9/` 와 `snapshots/rv4_54bd84a9` 는 hold 중이다(승격 결정까지). 큰 프레임은 결정 뒤 디스크 세션 규칙대로 보관한다.
+- 원자료: 승격(#424 머지) 뒤 ws1 원본을 보관하고 지웠다(2026-11-11, md5 일치 확인).
+  - `gdrive:ws1-rv4-54bd84a9-final/`
+    - `rv4_run.tar.zst`: `test_runs/live/rv4_54bd84a9/` 전체(판정 입력, 세션 기록, 인식 프레임·영상 포함, 롤링 보관 없음), 27,022 항목, md5 97b20c1f…
+    - `rv4_snap.tar.zst`: `snapshots/rv4_54bd84a9/`, 2,326 항목, md5 c25b67ee…
+    - `archive_map.txt`·`PAIRS.txt`: 두 단위의 짝과 복원 순서(rv4_snap → rv4_run, 둘 다 `-C /home/projects/forklift`).
