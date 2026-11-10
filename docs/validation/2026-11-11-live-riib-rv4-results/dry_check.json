@@ -1,0 +1,110 @@
+{
+ "sessions": 27,
+ "bad": [],
+ "pairs": [
+  {
+   "pair": "pa_1.jsonl",
+   "A": "ab_line_m_s0_A",
+   "B": "ab_line_m_s0_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_2.jsonl",
+   "A": "ab_random_m_s0_A",
+   "B": "ab_random_m_s0_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_3.jsonl",
+   "A": "ab_line_m_s1_A",
+   "B": "ab_line_m_s1_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_4.jsonl",
+   "A": "ab_random_m_s1_A",
+   "B": "ab_random_m_s1_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_5.jsonl",
+   "A": "ab_line_m_s2_A",
+   "B": "ab_line_m_s2_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_6.jsonl",
+   "A": "ab_random_m_s2_A",
+   "B": "ab_random_m_s2_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_7.jsonl",
+   "A": "ab_line_m_s3_A",
+   "B": "ab_line_m_s3_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  },
+  {
+   "pair": "pa_8.jsonl",
+   "A": "ab_random_m_s3_A",
+   "B": "ab_random_m_s3_B",
+   "B_extra": [
+    "on",
+    "--return-start-backoff",
+    "boxed",
+    "--near-end-stand"
+   ],
+   "A_extra": [],
+   "ok": true
+  }
+ ]
+}

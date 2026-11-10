@@ -1,0 +1,2252 @@
+{
+ "main": {
+  "pace": {
+   "pairs_dropped": 0,
+   "F": {
+    "A": 0.2999463532747611,
+    "B": 0.299959808358555,
+    "pass": true
+   },
+   "R": {
+    "A": 0.008236985814857437,
+    "B": 0.006441771229352188,
+    "pass": true
+   },
+   "longest": {
+    "A": 3.436075269943103,
+    "B": 2.402206421014853,
+    "pass": true
+   },
+   "stalls": {
+    "A": 2,
+    "B": 1,
+    "pass": true
+   },
+   "pass": true,
+   "verdict": "pass",
+   "totals": {
+    "A": {
+     "sim": 3630.6001893505454,
+     "wall": 12104.16512723791,
+     "false_wall": 99.70183645375073,
+     "valid_wall": 12104.16512723791,
+     "longest": 3.436075269943103,
+     "stalls": 2
+    },
+    "B": {
+     "sim": 3630.7251893570647,
+     "wall": 12104.038901828812,
+     "false_wall": 77.97144955676049,
+     "valid_wall": 12104.038901828812,
+     "longest": 2.402206421014853,
+     "stalls": 1
+    }
+   },
+   "hypothesis_split": {
+    "A": {
+     "rendered": 0,
+     "capture": 2,
+     "other": 0
+    },
+    "B": {
+     "rendered": 0,
+     "capture": 1,
+     "other": 0
+    }
+   }
+  },
+  "pairs": [
+   {
+    "pair": 1,
+    "scene": "line_m",
+    "seed": 0,
+    "first": "B",
+    "interval": [
+     649082.007767515,
+     650590.520347978
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999948457350372,
+      "R": 0.002825335952912832,
+      "wall_s": 1508.4426617139252,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.1443607240216807,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999665317344902,
+      "R": 0.0056146840198762135,
+      "wall_s": 1508.501701783971,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.8220548189710826,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 2,
+    "scene": "random_m",
+    "seed": 0,
+    "first": "B",
+    "interval": [
+     650787.431245009,
+     652314.428869913
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29987746606877325,
+      "R": 0.012475206278696168,
+      "wall_s": 1526.9293039930053,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 2.402206421014853,
+      "stalls": {
+       "total": 1,
+       "rendered": 0,
+       "capture": 1,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": [
+        0.2533
+       ]
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999096828535618,
+      "R": 0.012136110749280456,
+      "wall_s": 1526.9875679250108,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 3.436075269943103,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 3,
+    "scene": "line_m",
+    "seed": 1,
+    "first": "A",
+    "interval": [
+     652443.422059188,
+     653927.48028408
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29998785091381674,
+      "R": 0.0031249141814421537,
+      "wall_s": 1484.0046195049072,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.3602076609386131,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999780010586458,
+      "R": 0.003883214980791648,
+      "wall_s": 1484.0533471800154,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.541901719989255,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 4,
+    "scene": "random_m",
+    "seed": 1,
+    "first": "B",
+    "interval": [
+     654093.922695245,
+     655626.609366633
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29993036185527944,
+      "R": 0.008440046258419003,
+      "wall_s": 1532.6336235658964,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7789471310097724,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999432172662584,
+      "R": 0.006646939682140633,
+      "wall_s": 1532.6790678339312,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 2.3149059179704636,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 5,
+    "scene": "line_m",
+    "seed": 2,
+    "first": "B",
+    "interval": [
+     655758.082953319,
+     657248.221249529
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999802022314064,
+      "R": 0.0035329871850952334,
+      "wall_s": 1490.0706335089635,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.1253615700406954,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29997122281255845,
+      "R": 0.005842766374590847,
+      "wall_s": 1490.11523768201,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.4770399290136993,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 6,
+    "scene": "random_m",
+    "seed": 2,
+    "first": "A",
+    "interval": [
+     657395.232201802,
+     658907.920151043
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999673091478644,
+      "R": 0.02100773744111908,
+      "wall_s": 1512.609351620078,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7059327939059585,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29995591993623894,
+      "R": 0.010303667581424503,
+      "wall_s": 1512.6667848189827,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.5681612899061292,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 7,
+    "scene": "line_m",
+    "seed": 3,
+    "first": "B",
+    "interval": [
+     659061.128707127,
+     660584.3445947
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999864961285824,
+      "R": 0.003591460065903633,
+      "wall_s": 1523.151974263019,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.1917792080203071,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999816218251891,
+      "R": 0.004406006007799205,
+      "wall_s": 1523.2045029429719,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.554822181002237,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 8,
+    "scene": "random_m",
+    "seed": 3,
+    "first": "A",
+    "interval": [
+     660744.163026085,
+     662270.282861228
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29984563797607755,
+      "R": 0.0069992060415925835,
+      "wall_s": 1526.0630779450294,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7583313529612496,
+      "stalls": {
+       "total": 2,
+       "rendered": 0,
+       "capture": 2,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": [
+        0.2933,
+        0.3394
+       ]
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999767502048887,
+      "R": 0.006317896118361971,
+      "wall_s": 1526.090572785004,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.145626020967029,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   }
+  ],
+  "c2_cap": {
+   "sessions": {
+    "c2_line_m_on": {
+     "gaps": [
+      {
+       "step": 2288,
+       "gap_s": 0.027737666037864983,
+       "over_cap": false
+      }
+     ],
+     "unmapped": []
+    }
+   },
+   "pass": true
+  },
+  "safety": {
+   "ab_line_m_s0_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.35040578628718605,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s0_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.44767083770096483,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s1_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3508204755785191,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s1_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.4172664660790142,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s2_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3502310146818782,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s2_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.42058697516438565,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s3_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3494835240121401,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s3_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.44576772181748325,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "c2_line_m_on": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3519622659551817,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "c2_line_m_shadow": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 1.8108546187461856,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "Tracking timeout in observe"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "boxed_line_m": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3510423444248864,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "boxed_random_m": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.4567885698555848,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life1_line_m_main": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3496925129866066,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life2_random_m_held": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.8209945425348664,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life3_random_m_reloc": {
+    "not_applied": "reloc_needs_operator before any mission"
+   }
+  },
+  "backoff": {
+   "boxed_line_m": [
+    {
+     "mission": "m1",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07085535374551462,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m2",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07107033313015394,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m3",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07101207007587844,
+     "L_m": 0.07,
+     "firing": true
+    }
+   ],
+   "boxed_random_m": [
+    {
+     "mission": "m1",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": false,
+     "complete": true,
+     "truth_reverse": null,
+     "firing": false
+    },
+    {
+     "mission": "m2",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07164389104808941,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m3",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07018968645867792,
+     "L_m": 0.07,
+     "firing": true
+    }
+   ]
+  },
+  "c2_function": {
+   "c2_line_m_on": [
+    {
+     "mission": "m1",
+     "installed": 1,
+     "near_capture": "done",
+     "complete": true,
+     "firing": true
+    },
+    {
+     "mission": "m2",
+     "installed": 0,
+     "near_capture": "done",
+     "complete": true,
+     "firing": false
+    },
+    {
+     "mission": "m3",
+     "installed": 0,
+     "near_capture": "done",
+     "complete": true,
+     "firing": false
+    }
+   ],
+   "c2_line_m_shadow": [
+    {
+     "mission": "m1",
+     "installed": 0,
+     "near_capture": "pending",
+     "complete": false,
+     "firing": false
+    }
+   ]
+  },
+  "lifecycle": {
+   "1": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "stopped_in_capture": true,
+    "rearm_ack": true,
+    "resume_acks": 2,
+    "auto_again": true,
+    "teleop_entry_ack": true,
+    "arm_ack": true,
+    "expired_disarmed": true,
+    "new_lease": true,
+    "old_lease_refused": true,
+    "mission_done": true,
+    "order": [
+     [
+      "stopped_in_capture",
+      11
+     ],
+     [
+      "rearm",
+      14
+     ],
+     [
+      "resume",
+      16
+     ],
+     [
+      "auto_again",
+      17
+     ],
+     [
+      "teleop_entry",
+      20
+     ],
+     [
+      "arm",
+      21
+     ],
+     [
+      "expired_disarmed",
+      22
+     ],
+     [
+      "new_lease",
+      26
+     ],
+     [
+      "old_lease_refused",
+      27
+     ],
+     [
+      "final_resume",
+      29
+     ],
+     [
+      "session_end",
+      32
+     ]
+    ],
+    "pass": true
+   },
+   "2": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "transport_reached": true,
+    "cancel_ack": true,
+    "cancelled_operator": true,
+    "cargo_held_rejects": 2,
+    "h3": {
+     "found": true,
+     "applied_mono": 664318.38741729,
+     "sent": 664318.374451989,
+     "reply": 664318.387869077,
+     "clock_ok": true,
+     "joined": true,
+     "run_epoch": 46222113884997,
+     "probe_epoch": 46222113884997,
+     "cancelled_mission": "m1",
+     "applied_missions": [
+      "m1"
+     ],
+     "ordered": true,
+     "receipt_mono": 664318.385937217,
+     "receipt_ordered": true,
+     "substitute_mono": 664318.387547665,
+     "substitute_ordered": true,
+     "substitute_minus_direct_s": 0.00013037503231316805
+    },
+    "pass": true
+   },
+   "3": {
+    "epoch_exit": [
+     1
+    ],
+    "exit_ok": false,
+    "session_end_ack": false,
+    "result_json": true,
+    "tick_trace": false,
+    "reloc_needs_operator": true,
+    "mission_done": false,
+    "outcome": "ended_per_record",
+    "pass": false
+   }
+  },
+  "b_only_failures": [],
+  "rules": {
+   "stall_s": 0.25,
+   "c2_cap_s": 2.0,
+   "F_ratio": 0.97,
+   "R_add": 0.01,
+   "longest": [
+    1.2,
+    2.0
+   ],
+   "stall_add": 2,
+   "max_dropped_pairs": 2
+  }
+ },
+ "confirm": {
+  "sessions": {
+   "l4c_s0_B": {
+    "arm": "B",
+    "seed": "0",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.017576970043592155,
+     "order": [
+      [
+       "approach",
+       8
+      ],
+      [
+       "stop",
+       9
+      ],
+      [
+       "stopped",
+       10
+      ],
+      [
+       "rearm",
+       12
+      ],
+      [
+       "cancel",
+       14
+      ],
+      [
+       "recovery_resume",
+       15
+      ],
+      [
+       "m2_submit",
+       19
+      ],
+      [
+       "session_end",
+       22
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000261000004,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.0003401705278300034,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.4004612003527603,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s1_B": {
+    "arm": "B",
+    "seed": "1",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering",
+      "cancelled"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.010111073032021523,
+     "order": [
+      [
+       "approach",
+       8
+      ],
+      [
+       "stop",
+       9
+      ],
+      [
+       "stopped",
+       10
+      ],
+      [
+       "rearm",
+       12
+      ],
+      [
+       "cancel",
+       14
+      ],
+      [
+       "recovery_resume",
+       15
+      ],
+      [
+       "m2_submit",
+       19
+      ],
+      [
+       "session_end",
+       22
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000260999997,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.0003706527072065314,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.3548754867852229,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s0_A": {
+    "arm": "A",
+    "seed": "0",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.003879635944031179,
+     "order": [
+      [
+       "approach",
+       8
+      ],
+      [
+       "stop",
+       9
+      ],
+      [
+       "stopped",
+       10
+      ],
+      [
+       "rearm",
+       12
+      ],
+      [
+       "cancel",
+       14
+      ],
+      [
+       "recovery_resume",
+       15
+      ],
+      [
+       "m2_submit",
+       19
+      ],
+      [
+       "session_end",
+       22
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.100000265999999,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 612,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 612,
+     "truth_move_m": 0.0002662411247690708,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.39907753466157814,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s1_A": {
+    "arm": "A",
+    "seed": "1",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r7",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.004770689993165433,
+     "order": [
+      [
+       "approach",
+       10
+      ],
+      [
+       "stop",
+       11
+      ],
+      [
+       "stopped",
+       12
+      ],
+      [
+       "rearm",
+       14
+      ],
+      [
+       "cancel",
+       16
+      ],
+      [
+       "recovery_resume",
+       17
+      ],
+      [
+       "m2_submit",
+       21
+      ],
+      [
+       "session_end",
+       24
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000261,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.00030146537532387414,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.3791937456270858,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   }
+  },
+  "composition_ok": true,
+  "judged_pass": true,
+  "failed_controls": [],
+  "stop_not_held": [],
+  "outcome": "pass"
+ },
+ "failures": {},
+ "start_retries": {
+  "life1_line_m_main": [
+   {
+    "session_epoch": 162764741083237,
+    "reject_request_id": "r2",
+    "reason": "not_stopped",
+    "ack_request_id": "r3",
+    "gap_s": 0.531
+   }
+  ],
+  "l4c_s1_A": [
+   {
+    "session_epoch": 127136464874341,
+    "reject_request_id": "r2",
+    "reason": "not_stopped",
+    "ack_request_id": "r3",
+    "gap_s": 2.294
+   }
+  ]
+ },
+ "disposition": {
+  "b_only": [],
+  "a_only": [],
+  "both": []
+ },
+ "run_checks": {
+  "slam_choice": [],
+  "image_id": [],
+  "occupied_dumps": [],
+  "plant": []
+ },
+ "plant": {
+  "ok": true,
+  "problems": [],
+  "values": {
+   "settings_synthetic": {
+    "physics_hz": 120,
+    "pallet_mass_kg": 4.93,
+    "static_friction": 0.8,
+    "dynamic_friction": 0.7,
+    "wheel_torque_nm": 3.0,
+    "steering_torque_nm": 20.0,
+    "steering_stiffness": 1000.0,
+    "steering_damping": 100.0,
+    "steering_command_rate_rad_s": 1.0,
+    "lift_force_n": 180.0,
+    "lift_target_m": 0.2,
+    "lift_rate_mps": 0.06,
+    "planner_curvature_inv_m": 0.29,
+    "tracker_curvature_inv_m": 0.36,
+    "planning_clearance_m": 0.1,
+    "approach_speed_mps": 0.6,
+    "transport_speed_mps": 0.3,
+    "extract_speed_mps": 0.18,
+    "withdraw_speed_mps": 0.12,
+    "insert_speed_mps": 0.055,
+    "drive_acceleration_mps2": 0.3,
+    "max_wheel_rate_rad_s": 8.0
+   },
+   "physics_scene": {
+    "solver_type": "TGS",
+    "friction_correlation_distance_m": 0.02500000037252903,
+    "friction_offset_threshold_m": 0.03999999910593033,
+    "stabilization": false,
+    "external_forces_every_iteration": false,
+    "dt_s": 0.008333333333333333
+   },
+   "plant_tyre_contact": [
+    {
+     "collider": "/World/Forklift/front_left_wheel/collisions/front_left_tire_collision/cylinder",
+     "material": "/World/ContactMaterial",
+     "static_friction": 0.800000011920929,
+     "dynamic_friction": 0.699999988079071,
+     "compliant_stiffness": null,
+     "compliant_damping": null,
+     "damping_combine_mode": null,
+     "friction_combine_mode": null
+    },
+    {
+     "collider": "/World/Forklift/rear_left_wheel/collisions/rear_left_tire_collision/cylinder",
+     "material": "/World/ContactMaterial",
+     "static_friction": 0.800000011920929,
+     "dynamic_friction": 0.699999988079071,
+     "compliant_stiffness": null,
+     "compliant_damping": null,
+     "damping_combine_mode": null,
+     "friction_combine_mode": null
+    },
+    {
+     "collider": "/World/Forklift/rear_right_wheel/collisions/rear_right_tire_collision/cylinder",
+     "material": "/World/ContactMaterial",
+     "static_friction": 0.800000011920929,
+     "dynamic_friction": 0.699999988079071,
+     "compliant_stiffness": null,
+     "compliant_damping": null,
+     "damping_combine_mode": null,
+     "friction_combine_mode": null
+    },
+    {
+     "collider": "/World/Forklift/front_right_wheel/collisions/front_right_tire_collision/cylinder",
+     "material": "/World/ContactMaterial",
+     "static_friction": 0.800000011920929,
+     "dynamic_friction": 0.699999988079071,
+     "compliant_stiffness": null,
+     "compliant_damping": null,
+     "damping_combine_mode": null,
+     "friction_combine_mode": null
+    }
+   ],
+   "plant_backend": {
+    "body_names": [
+     "base_link",
+     "fork_carriage",
+     "left_steering_carrier",
+     "rear_left_wheel",
+     "rear_right_wheel",
+     "right_steering_carrier",
+     "left_fork_tip",
+     "right_fork_tip",
+     "front_left_wheel",
+     "front_right_wheel"
+    ],
+    "masses_kg": [
+     20.100000381469727,
+     1.600000023841858,
+     0.05000000074505806,
+     0.550000011920929,
+     0.550000011920929,
+     0.05000000074505806,
+     1.0,
+     1.0,
+     0.550000011920929,
+     0.550000011920929
+    ],
+    "coms": [
+     [
+      -0.09000000357627869,
+      0.0,
+      0.2800000011920929
+     ],
+     [
+      0.6499999761581421,
+      0.0,
+      0.15000000596046448
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ],
+     [
+      0.0,
+      0.0,
+      0.0
+     ]
+    ],
+    "inertias": [
+     [
+      0.7646642923355103,
+      0.0,
+      0.0,
+      0.0,
+      2.0478549003601074,
+      0.0,
+      0.0,
+      0.0,
+      2.1341443061828613
+     ],
+     [
+      0.05410666763782501,
+      0.0,
+      0.0,
+      0.0,
+      0.04817333444952965,
+      0.0,
+      0.0,
+      0.0,
+      0.05297333374619484
+     ],
+     [
+      5.208333277550992e-06,
+      0.0,
+      0.0,
+      0.0,
+      5.208333277550992e-06,
+      0.0,
+      0.0,
+      0.0,
+      5.208333277550992e-06
+     ],
+     [
+      0.0024366863071918488,
+      0.0,
+      0.0,
+      0.0,
+      0.004286705516278744,
+      0.0,
+      0.0,
+      0.0,
+      0.0024366863071918488
+     ],
+     [
+      0.0024366863071918488,
+      0.0,
+      0.0,
+      0.0,
+      0.004286705516278744,
+      0.0,
+      0.0,
+      0.0,
+      0.0024366863071918488
+     ],
+     [
+      5.208333277550992e-06,
+      0.0,
+      0.0,
+      0.0,
+      5.208333277550992e-06,
+      0.0,
+      0.0,
+      0.0,
+      5.208333277550992e-06
+     ],
+     [
+      9.999999747378752e-05,
+      0.0,
+      0.0,
+      0.0,
+      9.999999747378752e-05,
+      0.0,
+      0.0,
+      0.0,
+      9.999999747378752e-05
+     ],
+     [
+      9.999999747378752e-05,
+      0.0,
+      0.0,
+      0.0,
+      9.999999747378752e-05,
+      0.0,
+      0.0,
+      0.0,
+      9.999999747378752e-05
+     ],
+     [
+      0.0024366863071918488,
+      0.0,
+      0.0,
+      0.0,
+      0.004286705516278744,
+      0.0,
+      0.0,
+      0.0,
+      0.0024366863071918488
+     ],
+     [
+      0.0024366863071918488,
+      0.0,
+      0.0,
+      0.0,
+      0.004286705516278744,
+      0.0,
+      0.0,
+      0.0,
+      0.0024366863071918488
+     ]
+    ],
+    "dof_names": [
+     "fork_lift",
+     "left_steer",
+     "rear_left_spin",
+     "rear_right_spin",
+     "right_steer",
+     "front_left_spin",
+     "front_right_spin"
+    ],
+    "drive_stiffness": [
+     4000.0,
+     57295.78125,
+     0.0,
+     0.0,
+     57295.78125,
+     0.0,
+     0.0
+    ],
+    "drive_damping": [
+     400.0,
+     5729.578125,
+     1145.9156494140625,
+     1145.9156494140625,
+     5729.578125,
+     1145.9156494140625,
+     1145.9156494140625
+    ],
+    "max_efforts": [
+     180.0,
+     20.0,
+     3.0,
+     3.0,
+     20.0,
+     3.0,
+     3.0
+    ]
+   },
+   "forklift_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "pallet_urdf_sha256": "fe0948644452e466a3a6a79c697fb79f2c46a7d4edf1d566fb7949cbebcaf64e",
+   "scene_built_from_urdf_sha256": "517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760",
+   "scene_sha256": {
+    "configuration/forklift_base.usd": "ec9f25d847c19f8bd4c29ba8779c7316d8f1d8be15850f1d9fbff27063f2d833",
+    "configuration/forklift_physics.usd": "7e1b9b846807a0d00d99740b5b31ce36af7319f5567a7f02fe509019dd4f8cd2",
+    "configuration/forklift_robot.usd": "f204a5a240e4854ac3d001399ba8a1312303d2c7ddfbf01217a2172d6d437cbd",
+    "configuration/forklift_sensor.usd": "fea1996ebe5cfea2596883d00e37d211c0c172ed6a938a2f2f16736e414fce1b",
+    "forklift.usd": "b6625b140a025a08d5ab28706b8122322fdccb78a59994a3fbf59d3f39e8728e",
+    "scene.usda": "6471c8ef90227d457ae23162d29908958cdfa0ed09725bc9c5cd73ee2ec4f49d"
+   }
+  }
+ },
+ "family_346": {},
+ "criteria": {
+  "pace": true,
+  "c2_cap": true,
+  "safety": true,
+  "backoff_firing": true,
+  "c2_firing": true,
+  "lifecycle_1": true,
+  "lifecycle_2": true,
+  "lifecycle_3": true,
+  "lifecycle_4": true
+ },
+ "pace_guard": true,
+ "held_by": [],
+ "to_lead_by": [],
+ "outcome": "pass",
+ "judged": true
+}
