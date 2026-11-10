@@ -1,0 +1,412 @@
+{
+ "kind": "1d",
+ "sessions": [
+  {
+   "name": "g3dl_01_fast",
+   "arm": "on",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 23,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.1491718238412045,
+   "scan_step_W_ms": {
+    "p50": 34.94638798292726,
+    "p99": 62.66666944837196,
+    "max": 125.59562607202679
+   },
+   "auto": {
+    "windows": 153,
+    "sim_s": 144.26667419075966,
+    "wall_s": 154.5357566657476,
+    "rate": 0.9335488258733581,
+    "ok": 0.8248912982099498
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3395308640319854,
+    "camera_pixel_latency_s": {
+     "n": 1720,
+     "max": 3.6151805910049006,
+     "window_n": 1720,
+     "window_median": 0.25049240147927776,
+     "window_p99": 0.37677351699676365,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3dl_02_loop",
+   "arm": "off",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.1606580854738623,
+   "scan_step_W_ms": {
+    "p50": 35.87224497459829,
+    "p99": 63.089568103896376,
+    "max": 127.59836600162089
+   },
+   "auto": {
+    "windows": 155,
+    "sim_s": 145.6250075949356,
+    "wall_s": 156.61243468290195,
+    "rate": 0.9298432010828965,
+    "ok": 0.7917537418808246
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.27680569794029,
+    "camera_pixel_latency_s": {
+     "n": 1718,
+     "max": 3.538380432059057,
+     "window_n": 1718,
+     "window_median": 0.2519301149295643,
+     "window_p99": 0.36083140305709094,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3dl_03_loop",
+   "arm": "off",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.16186314748141972,
+   "scan_step_W_ms": {
+    "p50": 36.04942699894309,
+    "p99": 65.99011500365994,
+    "max": 128.62105295062065
+   },
+   "auto": {
+    "windows": 154,
+    "sim_s": 144.05000751279294,
+    "wall_s": 155.34055770898703,
+    "rate": 0.9273174349139028,
+    "ok": 0.7918839265472682
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.281326040974818,
+    "camera_pixel_latency_s": {
+     "n": 1726,
+     "max": 3.5688995009986684,
+     "window_n": 1726,
+     "window_median": 0.2531100335181691,
+     "window_p99": 0.36645835696253926,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3dl_04_fast",
+   "arm": "on",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.14933672803565173,
+   "scan_step_W_ms": {
+    "p50": 34.87436001887545,
+    "p99": 63.97071898099966,
+    "max": 133.99051094893366
+   },
+   "auto": {
+    "windows": 152,
+    "sim_s": 143.06667412817478,
+    "wall_s": 153.40200248500332,
+    "rate": 0.9326258576198252,
+    "ok": 0.8079147815130863
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2671044090529904,
+    "camera_pixel_latency_s": {
+     "n": 1696,
+     "max": 3.5668309439206496,
+     "window_n": 1696,
+     "window_median": 0.25068416947033256,
+     "window_p99": 0.3632718720473349,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3dl_05_fast",
+   "arm": "on",
+   "pair": 3,
+   "invalid": [],
+   "ps": {
+    "samples": 23,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.005,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.14758946130022588,
+   "scan_step_W_ms": {
+    "p50": 34.539576969109476,
+    "p99": 60.43339294148608,
+    "max": 189.3561079632491
+   },
+   "auto": {
+    "windows": 154,
+    "sim_s": 146.00000761449337,
+    "wall_s": 155.55019095586613,
+    "rate": 0.938603846882564,
+    "ok": 0.8657070279424217
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3145878450013697,
+    "camera_pixel_latency_s": {
+     "n": 1720,
+     "max": 3.5882032129447907,
+     "window_n": 1720,
+     "window_median": 0.2487157549476251,
+     "window_p99": 0.3665777270216495,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  },
+  {
+   "name": "g3dl_06_loop",
+   "arm": "off",
+   "pair": 3,
+   "invalid": [],
+   "ps": {
+    "samples": 23,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.1617506252491389,
+   "scan_step_W_ms": {
+    "p50": 36.03393450612202,
+    "p99": 58.915560853201896,
+    "max": 132.13498308323324
+   },
+   "auto": {
+    "windows": 154,
+    "sim_s": 144.0916741816327,
+    "wall_s": 155.63738928397652,
+    "rate": 0.9258165717411421,
+    "ok": 0.7435151929764552
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3140659489436075,
+    "camera_pixel_latency_s": {
+     "n": 1730,
+     "max": 3.584805127000436,
+     "window_n": 1730,
+     "window_median": 0.25372877647168934,
+     "window_p99": 0.3693196129752323,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   }
+  }
+ ],
+ "verdict": {
+  "pairs": [
+   {
+    "pair": 1,
+    "fall_s_per_sim_s": 0.011486261632657785,
+    "rate_rise": 0.003705624790461548,
+    "improves": true,
+    "half_prediction": true
+   },
+   {
+    "pair": 2,
+    "fall_s_per_sim_s": 0.012526419445767989,
+    "rate_rise": 0.005308422705922355,
+    "improves": true,
+    "half_prediction": true
+   },
+   {
+    "pair": 3,
+    "fall_s_per_sim_s": 0.014161163948913036,
+    "rate_rise": 0.012787275141421972,
+    "improves": true,
+    "half_prediction": true
+   }
+  ],
+  "left_out": [],
+  "mission_degraded_pairs": [],
+  "safety_undecided_pairs": [],
+  "registered_pairs": 3,
+  "half_prediction_s_per_sim_s": 0.00575,
+  "reported_mean_fall_s_per_sim_s": 0.012724615009112936,
+  "reported_reaches_stage_target_low": false,
+  "result": "pass"
+ },
+ "arms": {
+  "off": {
+   "ok": [
+    0.7917537418808246,
+    0.7918839265472682,
+    0.7435151929764552
+   ],
+   "rate": [
+    0.9298432010828965,
+    0.9273174349139028,
+    0.9258165717411421
+   ],
+   "W_p99_ms": [
+    63.089568103896376,
+    65.99011500365994,
+    58.915560853201896
+   ],
+   "W_max_ms": [
+    127.59836600162089,
+    128.62105295062065,
+    132.13498308323324
+   ],
+   "auto_sim_s": [
+    145.6250075949356,
+    144.05000751279294,
+    144.0916741816327
+   ]
+  },
+  "on": {
+   "ok": [
+    0.8248912982099498,
+    0.8079147815130863,
+    0.8657070279424217
+   ],
+   "rate": [
+    0.9335488258733581,
+    0.9326258576198252,
+    0.938603846882564
+   ],
+   "W_p99_ms": [
+    62.66666944837196,
+    63.97071898099966,
+    60.43339294148608
+   ],
+   "W_max_ms": [
+    125.59562607202679,
+    133.99051094893366,
+    189.3561079632491
+   ],
+   "auto_sim_s": [
+    144.26667419075966,
+    143.06667412817478,
+    146.00000761449337
+   ]
+  }
+ }
+}

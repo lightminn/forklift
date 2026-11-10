@@ -72,12 +72,14 @@ esac
 TRACE="--max-sim-seconds 1500"  # the trace buffer (plan 5.17 T6: dropped must be 0); the live loop is not bounded by it
 # Real-time plan 5.23 (G2-1a): CAPTURE_DUMP=sync|async adds --live-capture-dump to the line_m branches; unset, nothing
 CD=${CAPTURE_DUMP:+--live-capture-dump $CAPTURE_DUMP}
+# Real-time plan 5.26 (G3-1d stage check, 1e run): LIDAR_CAST=loop|fast adds --lidar-cast to the line_m far branch; unset, nothing
+LC=${LIDAR_CAST:+--lidar-cast $LIDAR_CAST}
 END=(--end-session)
 case ${SET:?far, off, mark or wall} in
   far)
     [ "$ARM" = KP ] && { echo "KP is never run with far recognition (plan 5.17 scope)" >&2; exit 2; }
     export SCENE_FILE=$LINE_M
-    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE${PREP:+ $PREP}${CD:+ $CD}"
+    export EXTRA_ARGS="$FAR $NEAR --near-capture-lower waive_far_confirmed $TRACE${PREP:+ $PREP}${CD:+ $CD}${LC:+ $LC}"
     PROBE=(--scenario confirm --live-factor "$FACTOR" --mission-timeout-s 2400) ;;
   off)
     [ "$ARM" = K ] && { echo "the far-off branch compares L and KP (plan 5.17)" >&2; exit 2; }
