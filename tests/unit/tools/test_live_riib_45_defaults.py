@@ -133,3 +133,10 @@ def test_a_near_tracking_run_may_name_the_return_start_backoff_off(tmp_path):
 def test_an_abbreviation_of_either_is_refused(tmp_path, extra):
     p = _launch(tmp_path, EXTRA_ARGS=extra)
     assert p.returncode == 2 and "in full" in p.stdout, p.stdout + p.stderr
+
+
+@pytest.mark.parametrize("extra, refused", [("--near-tracking --return-start-backoff boxed --return-start-backoff off", False),
+                                            ("--near-tracking --return-start-backoff off --return-start-backoff=boxed", True)])
+def test_a_near_tracking_run_judges_the_last_return_start_backoff(tmp_path, extra, refused):
+    p = _launch(tmp_path, EXTRA_ARGS=extra)
+    assert ("--near-tracking keeps the return-start backoff off" in p.stdout) is refused, p.stdout + p.stderr
