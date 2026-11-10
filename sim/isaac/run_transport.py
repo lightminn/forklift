@@ -4713,13 +4713,11 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
         layer_worker_latency_s_ = 0.0
         if getattr(args, "layer_worker", "off") != "off":
-            # Real-time plan 5.28 D5: the scan's check takes effect k-1 ticks later than in place; the stopping model
-            # every permission derives from this config (the layer's, the teleop bundle's, the exit and withdrawal
-            # copies, the candidates') carries that latency. The truth evaluation keeps the file's value.
+            # Real-time plan 5.28 D5 and the 1e-0 fix: the scan's check takes effect k-1 ticks later than in place; the
+            # stopping model's latency and the FREE evidence's use age take that delay (worker_config). The truth
+            # evaluation keeps the file's stopping model.
             layer_worker_latency_s_ = (int(args.layer_worker_k) - 1) / 120.0
-            layer_config["permission"] = dict(layer_config["permission"])
-            layer_config["permission"]["latency_s"] = float(layer_config["permission"]["latency_s"]) \
-                + layer_worker_latency_s_
+            layer_config = obstacle_module.worker_config(layer_config, int(args.layer_worker_k))
         age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
         table_problem_ = age_table_problem(age_table, args)
         require(table_problem_ is None, str(table_problem_))
@@ -4775,6 +4773,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             obstacle["checked_stamp"] = None
             state["layer_worker"] = {"mode": args.layer_worker, "k": int(args.layer_worker_k),
                                      "latency_added_s": layer_worker_latency_s_,
+                                     "use_age_s": float(layer_config["grid"]["free_use_age_s"]),
                                      "timeout_s": float(args.layer_worker_timeout_s)}
         if getattr(args, "start_band_release", "off") == "on":
             # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the

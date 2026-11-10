@@ -72,6 +72,23 @@ def load_layer_config(path: Path) -> dict:
     return {**data, "sensors": sensors}
 
 
+def worker_config(config: dict, k: int) -> dict:
+    """A copy of the layer config for a layer worker installing at the scan tick + k (real-time plan 5.28): every use
+    of a scan's result comes up to s = (k-1)/120 s later than in place. The stopping model's latency takes s (D5: the
+    farther drive before the late check takes effect), and the FREE evidence's use age becomes free_max_age_s + s
+    (docs/validation/2026-11-10-g3-1e0-run.md: the grid's FREE shrink is sized for it, and the permission's age checks,
+    the shadow memory's and the known pallets' horizons take it). What accepts evidence keeps free_max_age_s. Every
+    permission built from this config (the layer's, the teleop bundle's, the exit and withdrawal copies, the
+    candidates') carries both; the truth evaluation keeps the file's stopping model. The input is not changed."""
+    s = (int(k) - 1) / 120.0
+    out = dict(config)
+    out["permission"] = dict(config["permission"])
+    out["permission"]["latency_s"] = float(config["permission"]["latency_s"]) + s
+    out["grid"] = dict(config["grid"])
+    out["grid"]["free_use_age_s"] = float(config["grid"]["free_max_age_s"]) + s
+    return out
+
+
 def beam_limits(origin, directions, *, band_top_m: float, floor_margin_m: float = 0.05,
                 band_bottom_m: float | None = None) -> np.ndarray:
     """Per beam, the range up to which a tilted planar beam stays between the
@@ -201,6 +218,7 @@ class ObstacleLayer:
             resolution_m=float(g["resolution_m"]), max_mark_m=float(g["max_mark_m"]),
             max_clear_m=float(g["max_clear_m"]), range_min_m=self.range_min_m,
             free_max_age_s=float(g["free_max_age_s"]), occupied_max_age_s=float(g["occupied_max_age_s"]),
+            free_use_age_s=None if g.get("free_use_age_s") is None else float(g["free_use_age_s"]),
             sensor_bound_m=self.noise_cut_m, free_r_cap_m=float(g["free_r_cap_m"]),
             free_rho_m=float(g["free_rho_m"]), close_gap_m=float(g.get("close_gap_m", 0.0)),
             free_min_width_m=float(g.get("free_min_width_m", 0.0)),
@@ -208,6 +226,10 @@ class ObstacleLayer:
             range_bound_model=self.range_noise_model,
         )
         self.grid = ObstacleGrid(self.grid_config)
+        # the oldest age FREE evidence is used at (worker_config): the permission's age checks, the shadow memory's and
+        # the known pallets' horizons; acceptance (fresh scans, memory clears, exit verification) keeps free_max_age_s
+        use_age = self.grid_config.use_age_s
+        self.exit_stamp_back_s = use_age - self.grid_config.free_max_age_s
         self.error_table = error_table
         # Known pallets (plan v10 D5): the 1.05 m plane never sees an EPAL 6, so the
         # pickup zone, the recognised pallet and the delivered pallet reach the
@@ -222,7 +244,7 @@ class ObstacleLayer:
             PermissionConfig(
                 StoppingModel(float(p["latency_s"]), float(p["decel_mps2"]), float(p["margin_m"])),
                 envelope_offset_m=float(p["envelope_m"]),
-                evidence_max_age_s=float(g["free_max_age_s"]),
+                evidence_max_age_s=use_age,
                 envelope_ramp_m=float(p["envelope_ramp_m"]),
                 sensor_timeout_s=float(p["sensor_timeout_s"]),
                 lookahead_m=float(p["lookahead_m"]),
@@ -232,7 +254,7 @@ class ObstacleLayer:
         self.window_m = float(g["window_m"])
         # Shadow-band memory (D4 delta approved 2026-10-05); absent = strict rule.
         band = p.get("shadow_band_m")
-        self.shadow = None if band is None else ShadowMemory(float(band), error_table, evidence_max_age_s=float(g["free_max_age_s"]))
+        self.shadow = None if band is None else ShadowMemory(float(band), error_table, evidence_max_age_s=use_age)
         self.unloaded, self.loaded = unloaded, loaded
         self.body = Footprint(body_front_m, unloaded.rear_m, unloaded.half_width_m)
         # Unloaded, the permission checks the body and the fork blades (rear-axle
@@ -592,7 +614,7 @@ class ObstacleLayer:
 
             snapshot, freed, skipped = apply_verified(
                 snapshot, job["exit_verified"], self.loaded, self.exit_margin_m, now_s=now_s,
-                max_age_s=float(self.grid_config.free_max_age_s))
+                max_age_s=float(self.grid_config.free_max_age_s), stamp_back_s=self.exit_stamp_back_s)
             exit_update = {"transformed": skipped is None, "skipped": skipped, "freed": freed, "refresh_s": float(now_s)}
         return {"raw": raw, "snapshot": snapshot, "exit_update": exit_update}
 

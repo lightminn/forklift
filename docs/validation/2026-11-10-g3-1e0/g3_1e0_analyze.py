@@ -46,6 +46,13 @@ sessions AUTO scans; otherwise no prediction is made.
 Validity: as g3_1b_loop_analyze (dumps, INSTR), plus the registered conditions (far K f 1.0 seed 0, grid 1, shadow 1,
 EXTRA_ARGS with --lidar-cast fast and --layer-worker <arm> --layer-worker-k 3), result.json layer_worker mode = the
 arm with no failure, scan_switches grid / shadow True and lidar fast, layer_worker.json present, the mission done.
+
+The re-measurement after the 1e-0 fix (docs/validation/2026-11-10-g3-1e0-run.md, fixed before its result): the list may
+carry a third session, ``off`` (the same switches, no worker), after the registered two. It is read on its own path
+(OffSession) and reported under "control" -- its session reading, its W and main_other on the same population rule, and
+its evidence_stale ticks; it never enters the validity, the completeness, the prediction or the decision, which stay
+the registered two's. Every session also reports its evidence_stale ticks per phase (result.json
+obstacle_layer.slowed_reasons), a report metric only.
 """
 
 from __future__ import annotations
@@ -131,6 +138,77 @@ class Session(base.Session):
         for f in sorted((self.run / "spool" / "slam.records").glob("*.jsonl")):
             out += [json.loads(line) for line in f.read_text().splitlines() if line.strip()]
         return out
+
+
+class OffSession(Session):
+    """The re-measurement's control: the registered conditions without a worker (no --layer-worker, no layer_worker
+    record, no layer_worker.json needed)."""
+
+    def __init__(self, out: Path, entry: dict, ps=None):
+        self.arm = "off"
+        self.pair = 1
+        g2m.Session.__init__(self, out, entry, ps=ps)
+        res = self.result or {}
+        if res.get("layer_worker"):
+            self.invalid.append(f"result.json layer_worker {res.get('layer_worker')} in the control")
+        sw = res.get("scan_switches") or {}
+        if not (sw.get("grid_clear_kernel") and sw.get("shadow_kernel") and sw.get("lidar_cast") == "fast"):
+            self.invalid.append(f"scan_switches {sw}")
+        self.installs = []
+
+    def _check_conditions(self):
+        c = self.cond
+        for k in c:
+            if k.startswith(g2m.FORBIDDEN):
+                self.invalid.append(f"{k} set (dumps and the dual run stay out of the check)")
+        want = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "FORKLIFT_LIVE_CATCHUP_STEPS": "6", "SEED": "0",
+                "FORKLIFT_GRID_CLEAR_KERNEL": "1", "FORKLIFT_SHADOW_KERNEL": "1"}
+        for k, v in want.items():
+            if c.get(k) != v:
+                self.invalid.append(f"{k}={c.get(k)}, registered {v}")
+        extra = c.get("EXTRA_ARGS", "").replace("\\ ", " ")
+        if "--lidar-cast fast" not in extra:
+            self.invalid.append("EXTRA_ARGS without --lidar-cast fast")
+        if "--layer-worker" in extra:
+            self.invalid.append("EXTRA_ARGS with --layer-worker in the control")
+        for k in g2m.INSTR_ON:
+            if c.get(k) is not None:
+                self.invalid.append(f"{k} set in an INSTR off session")
+
+
+def registered_arms(arms: list) -> bool:
+    """The registered two, optionally followed by the one control."""
+    return arms[:2] == ["delay", "thread"] and arms[2:] in ([], ["off"])
+
+
+def stale_ticks(result: dict) -> dict:
+    """evidence_stale control ticks per phase and in total (result.json obstacle_layer.slowed_reasons) -- reported."""
+    reasons = ((result or {}).get("obstacle_layer") or {}).get("slowed_reasons") or {}
+    out: dict = {}
+    for key, n in reasons.items():
+        phase, _, why = key.partition(":")
+        if why == "evidence_stale":
+            out[phase] = out.get(phase, 0) + int(n)
+    out["total"] = sum(out.values())
+    return out
+
+
+def attach_control(out: dict, control) -> dict:
+    """The control beside the result: the result is not read or changed."""
+    out["control"] = control
+    return out
+
+
+def control_report(s: OffSession) -> dict:
+    row = base.analyse_session(s)
+    row["evidence_stale_ticks"] = stale_ticks(s.result)
+    if s.invalid:
+        return row
+    ok, w, sim, _ = s.auto_population()
+    raw, _, _ = other_work(s.trace, ok, [])
+    row["W"] = float(np.nansum(w[ok])) / sim if sim > 0 else None
+    row["main_other"] = raw / sim if sim > 0 else None
+    return row
 
 
 def other_work(D: np.ndarray, ok: np.ndarray, installs: list[dict]) -> tuple[float, float, int]:
@@ -238,12 +316,14 @@ def main() -> int:
     a = ap.parse_args()
     ps = g2m.read_ps(a.ps.read_text()) if a.ps else None
     entries = [json.loads(x) for x in a.list.read_text().splitlines() if x.strip()]
-    arms = [e["env"].get("LAYER_WORKER") for e in entries]
-    if arms != ["delay", "thread"]:
+    arms = [e["env"].get("LAYER_WORKER") or "off" for e in entries]
+    if not registered_arms(arms):
         print(json.dumps({"list_not_registered": arms}))
         return 2
-    sessions = {e["env"]["LAYER_WORKER"]: Session(a.out / e["name"], e, ps=ps) for e in entries}
+    sessions = {e["env"]["LAYER_WORKER"]: Session(a.out / e["name"], e, ps=ps) for e in entries[:2]}
     rows = {arm: base.analyse_session(s) for arm, s in sessions.items()}
+    for arm, s in sessions.items():
+        rows[arm]["evidence_stale_ticks"] = stale_ticks(s.result)
     out = {"sessions": rows}
     bad = [arm for arm, s in sessions.items() if s.invalid or not rows[arm].get("mission_done")]
     if bad:
@@ -254,6 +334,13 @@ def main() -> int:
         incomplete = {arm: {"scans": x["scans"], "scans_without_record": x["scans_without_record"]}
                       for arm, x in m.items() if x["scans"] == 0 or x["scans_without_record"]}
         out["result"] = {"incomplete": incomplete} if incomplete else predict(m["delay"], m["thread"])
+    control = None
+    if len(entries) == 3:
+        try:
+            control = control_report(OffSession(a.out / entries[2]["name"], entries[2], ps=ps))
+        except Exception as exc:  # the control never stops the registered reading
+            control = {"invalid": [f"control unreadable: {type(exc).__name__}: {exc}"]}
+    out = attach_control(out, control)
     text = json.dumps(out, indent=1, default=str)
     if a.json:
         a.json.write_text(text)
