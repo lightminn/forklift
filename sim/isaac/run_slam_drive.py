@@ -134,9 +134,9 @@ def arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--video", action="store_true")
-    parser.add_argument("--overview-clip", choices=("off", "auto"), default="off",
+    parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto",
                         help="the top-down survey camera clips everything above the ceiling lamps' bottom less 0.3 m "
-                             "(that camera only; overhead_clip.py): auto, or not (off, default)")
+                             "(that camera only; overhead_clip.py): auto (default since 2026-11-10), or not (off)")
     parser.add_argument("--fps", type=video_hz, default=30)
     parser.add_argument(
         "--robot-camera",

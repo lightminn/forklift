@@ -909,10 +909,10 @@ def arguments() -> argparse.Namespace:
         help="The videos' x264 preset (crf 20 either way: the same quality, another file size and encoder CPU). "
         "Runs before the option encoded with medium; recorded in the result's camera block.",
     )
-    parser.add_argument("--overview-clip", choices=("off", "auto"), default="off",
+    parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto",
                         help="the top-down overview camera clips everything above the ceiling lamps' bottom less 0.3 m "
                              "(read from the stage; that camera only -- lights, perception cameras, LiDAR and physics "
-                             "are untouched): auto, or not (off, default)")
+                             "are untouched): auto (default since 2026-11-10, user decision), or not (off)")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
     parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
     parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")

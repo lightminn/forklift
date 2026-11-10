@@ -20,7 +20,7 @@ No Isaac imports at module level.
 from __future__ import annotations
 
 MARGIN_M = 0.3
-FLOOR_M = 3.0  # never below scene.hide_overhead's line: floor-level props stay whole
+FLOOR_M = 3.0  # never below scene.hide_overhead's line
 
 
 def clip_z_from(parts, margin_m: float = MARGIN_M, floor_m: float = FLOOR_M) -> float | None:

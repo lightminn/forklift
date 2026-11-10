@@ -64,10 +64,13 @@ def test_read_parts_finds_the_lamps_on_a_small_stage():
     assert lamp
 
 
-def test_the_runners_offer_the_option_off_by_default_and_the_near_contract_knows_it():
+def test_the_runners_clip_by_default_and_the_near_contract_leaves_it_out():
     run = (ROOT / "sim/isaac/run_transport.py").read_text()
-    assert 'parser.add_argument("--overview-clip", choices=("off", "auto"), default="off"' in run
+    assert 'parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto"' in run
     assert 'state["camera"]["overhead_clip"] = overhead_clip.apply(camera, stage, float(eye[2]))' in run
     slam = (ROOT / "sim/isaac/run_slam_drive.py").read_text()
-    assert 'parser.add_argument("--overview-clip", choices=("off", "auto"), default="off"' in slam
-    assert '"overview_clip": "off"' in (ROOT / "sim/isaac/near_tracking.py").read_text()
+    assert 'parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto"' in slam
+    import near_tracking
+
+    assert "overview_clip" in near_tracking.RUN_SPECIFIC_ARGUMENTS  # a video-only setting, not a run condition
+    assert "overview_clip" not in near_tracking.POST_MEASUREMENT_ARGUMENTS
