@@ -26,8 +26,10 @@
 #   --d7-reapproach-hold comes later and wins),
 #   RETURN_START (boxed: --return-start-backoff boxed) and NEAR_END_STAND (on: --near-end-stand on) -- ④⑤, the
 #   lead's promotion decision of 2026-11-11 after rv4 (docs/validation/2026-11-11-live-riib-rv4-results.md); off as
-#   before (NEAR_END_STAND also shadow); a --near-tracking run keeps both off; an EXTRA_ARGS --near-end-stand comes later
-#   and wins; records made before this default ran with both off: do not mix them with later ones,
+#   before (NEAR_END_STAND also shadow); a --near-tracking run defaults both off and refuses a return-start backoff other
+#   than off; an EXTRA_ARGS value comes later and wins; records made before this default ran with both off: do not mix
+#   them with later ones; measurement wrappers that call this launcher inherit the defaults unless they name the two,
+#   so a measurement's registration names them,
 #   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
 #   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
@@ -93,15 +95,18 @@ case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exi
 g3_words() { local IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}; set +f; }
 G3_NEAR=0
 G3_EXTRA_CAST=""
-G3_EXTRA_RSB=0  # an EXTRA_ARGS --return-start-backoff (refused with --near-tracking, below)
+G3_EXTRA_RSB=""  # an EXTRA_ARGS --return-start-backoff's last value (other than off refused with --near-tracking)
 g3_next=0
+rsb_next=0
 while IFS= read -r w; do
   if [ "$g3_next" = 1 ]; then G3_EXTRA_CAST=$w; g3_next=0; continue; fi
+  if [ "$rsb_next" = 1 ]; then G3_EXTRA_RSB=$w; rsb_next=0; continue; fi
   case "$w" in
     --near-tracking) G3_NEAR=1;;
     --lidar-cast) g3_next=1;;
     --lidar-cast=*) G3_EXTRA_CAST=${w#--lidar-cast=};;
-    --return-start-backoff|--return-start-backoff=*) G3_EXTRA_RSB=1;;
+    --return-start-backoff) rsb_next=1;;
+    --return-start-backoff=*) G3_EXTRA_RSB=${w#--return-start-backoff=};;
     --near-end-stand|--near-end-stand=*) ;;  # comes after the launcher's and wins (argparse keeps the last)
     --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
       o=${w%%=*}
@@ -130,16 +135,18 @@ echo "SCAN_SWITCHES grid_clear_kernel=$FORKLIFT_GRID_CLEAR_KERNEL shadow_kernel=
   "lidar_cast=${G3_EXTRA_CAST:-$LIDAR_CAST}${G3_EXTRA_CAST:+ (EXTRA_ARGS)}"
 # ④⑤ (the lead's promotion decision of 2026-11-11 after rv4, docs/validation/2026-11-11-live-riib-rv4-results.md):
 # on by default in this launcher -- --return-start-backoff boxed (RETURN_START) and --near-end-stand on
-# (NEAR_END_STAND); an explicit value wins and an EXTRA_ARGS --near-end-stand comes later and wins. A --near-tracking run
-# keeps both off: its contract records the return-start backoff off (near_tracking.py), so an explicit one is refused.
+# (NEAR_END_STAND); an explicit value wins and an EXTRA_ARGS --return-start-backoff / --near-end-stand comes later and
+# wins (abbreviations refused, so what is printed is what runs). A --near-tracking run defaults both to off: its contract
+# records the return-start backoff off (near_tracking.py), so a value other than off is refused there; the near-end
+# stand is a run-specific argument of that contract and may be named.
 # The runner's own defaults stay off. Live records made before this default (rv4's arm A, earlier console baselines)
 # ran with both off: do not mix them with later ones.
 if [ "$G3_NEAR" = 1 ]; then RETURN_START=${RETURN_START:-off}; NEAR_END_STAND=${NEAR_END_STAND:-off}
 else RETURN_START=${RETURN_START:-boxed}; NEAR_END_STAND=${NEAR_END_STAND:-on}; fi
 case "$RETURN_START" in on|boxed|off) ;; *) echo "RETURN_START must be on, boxed or off"; exit 2;; esac
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "NEAR_END_STAND must be on, shadow or off"; exit 2;; esac
-if [ "$G3_NEAR" = 1 ] && { [ "$RETURN_START" != off ] || [ "$G3_EXTRA_RSB" = 1 ]; }; then
-  echo "--near-tracking keeps the return-start backoff off (RETURN_START=off, no EXTRA_ARGS --return-start-backoff)"
+if [ "$G3_NEAR" = 1 ] && { [ "$RETURN_START" != off ] || { [ -n "$G3_EXTRA_RSB" ] && [ "$G3_EXTRA_RSB" != off ]; }; }; then
+  echo "--near-tracking keeps the return-start backoff off (RETURN_START and any EXTRA_ARGS --return-start-backoff off)"
   exit 2
 fi
 echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NEAR_END_STAND"

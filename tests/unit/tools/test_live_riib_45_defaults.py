@@ -1,8 +1,9 @@
 """④⑤ as the live console's defaults (the lead's promotion decision of 2026-11-11 after rv4,
 docs/validation/2026-11-11-live-riib-rv4-results.md): the console launcher passes --return-start-backoff boxed and
 --near-end-stand on unless told otherwise; an explicit RETURN_START / NEAR_END_STAND wins, an EXTRA_ARGS --near-end-stand
-comes later and wins; a --near-tracking run keeps both off (its contract records the return-start backoff off) and
-refuses an explicit return-start backoff; the survey keeps both off on the console's runner word for word."""
+comes later and wins (either form; abbreviations refused); a --near-tracking run defaults both off (its contract
+records the return-start backoff off) and refuses a return-start backoff other than off; the survey keeps both off on
+the console's runner word for word."""
 import os
 import shutil
 import subprocess
@@ -83,7 +84,7 @@ def test_an_extra_args_near_end_stand_comes_later_and_wins(tmp_path):
     assert _values(tmp_path, "--near-end-stand") == ["on", "off"]  # the launcher's first, the list's last
 
 
-def test_a_near_tracking_run_keeps_both_off_and_refuses_an_explicit_return_start_backoff(tmp_path):
+def test_a_near_tracking_run_defaults_both_off_and_refuses_a_return_start_backoff_on(tmp_path):
     _launch(tmp_path, EXTRA_ARGS="--near-tracking")  # the runner's own check may refuse a bare --near-tracking
     e = _env_sh(tmp_path)
     assert (e["RETURN_START"], e["NEAR_END_STAND"]) == ("off", "off")
@@ -104,3 +105,31 @@ def test_anything_else_is_refused(tmp_path, env, message):
 def test_the_survey_keeps_both_off():
     survey = (ROOT / "deploy/console/slam_survey.sbatch").read_text()
     assert "printf 'RETURN_START=off\\nNEAR_END_STAND=off\\n'" in survey
+
+
+@pytest.mark.parametrize("extra, rsb, nes", [
+    ("--return-start-backoff off", ["boxed", "off"], ["on"]),
+    ("--return-start-backoff=on --near-end-stand=shadow", ["boxed", "on"], ["on", "shadow"]),
+    # rv4's arm B (riib_session_v3.sh ARMX) on top of the new defaults: the same final values
+    ("--return-start-backoff boxed --near-end-stand on", ["boxed", "boxed"], ["on", "on"]),
+])
+def test_extra_args_in_either_form_come_later_and_win(tmp_path, extra, rsb, nes):
+    p = _launch(tmp_path, EXTRA_ARGS=extra)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert _values(tmp_path, "--return-start-backoff") == rsb
+    assert _values(tmp_path, "--near-end-stand") == nes
+
+
+def test_a_near_tracking_run_may_name_the_return_start_backoff_off(tmp_path):
+    for extra in ("--near-tracking --return-start-backoff off", "--near-tracking --return-start-backoff=off"):
+        _launch(tmp_path, EXTRA_ARGS=extra)  # the runner's own check may refuse a bare --near-tracking
+        e = _env_sh(tmp_path)
+        assert e["RETURN_START"] == "off"
+        p = _launch(tmp_path, EXTRA_ARGS=extra, RETURN_START="off")
+        assert "--near-tracking keeps the return-start backoff off" not in p.stdout, (extra, p.stdout)
+
+
+@pytest.mark.parametrize("extra", ["--return-start boxed", "--near-end on", "--return-start-back=boxed"])
+def test_an_abbreviation_of_either_is_refused(tmp_path, extra):
+    p = _launch(tmp_path, EXTRA_ARGS=extra)
+    assert p.returncode == 2 and "in full" in p.stdout, p.stdout + p.stderr
