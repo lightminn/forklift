@@ -4765,7 +4765,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     latency_slam_queue_ = (latency_module.SlamReplyQueue(
         latency_slam_spec_, args.seed if getattr(args, "latency_seed", None) is None else args.latency_seed)
         if latency_slam_spec_ else None)
-    latency_box_ = {"moving": False}  # the truth speed over 0.05 m/s at the last physics step (latency records only)
+    # the truth speed over 0.05 m/s at the last physics step, and the stand that runs up to it (the latency test's
+    # stop-vs-end record, plan 4.2: the requested and applied speeds zero and the truth speed under 0.05 m/s)
+    latency_box_ = {"moving": False, "stand_since": None, "last_stamp": None}
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module
@@ -5207,7 +5209,8 @@ def drive(S, isaac) -> None:
         import latency_injection as latency_module_
 
         _bound.update(latency_module=latency_module_, latency_slam_spec_=None, latency_layer_=None,
-                      latency_marks_=None, latency_slam_queue_=None, latency_box_={"moving": False})
+                      latency_marks_=None, latency_slam_queue_=None,
+                      latency_box_={"moving": False, "stand_since": None, "last_stamp": None})
     if "latency_module" in _bound:
         latency_module = _bound["latency_module"]
     if "latency_slam_spec_" in _bound:
@@ -7938,6 +7941,14 @@ def drive(S, isaac) -> None:
                 p1_, p0_ = slam_log["base_pose_world"][-1], slam_log["base_pose_world"][-2]
                 dt_ = slam_log["joint_stamps_s"][-1] - slam_log["joint_stamps_s"][-2]
                 latency_box_["moving"] = bool(dt_ > 0 and math.hypot(p1_[0] - p0_[0], p1_[1] - p0_[1]) / dt_ > 0.05)
+                zero_ = ((state.get("applied_command") or (0.0, []))[0] == 0.0
+                         and (slam is None or slam.get("last_command", 0.0) == 0.0))
+                if zero_ and not latency_box_["moving"]:
+                    if latency_box_["stand_since"] is None:
+                        latency_box_["stand_since"] = float(stamp_now)
+                else:
+                    latency_box_["stand_since"] = None
+                latency_box_["last_stamp"] = float(stamp_now)
             slam_log["wheel_angles_rad"].append(wheel_angles)
             if encoder_model is not None:
                 # The team's encoders, read from the joint angles this tick (row = the interval ending now).
@@ -11447,6 +11458,9 @@ def drive(S, isaac) -> None:
                                         "pending_at_end": obstacle["layer"].worker.pending_info()}
                     if latency_marks_ is not None:
                         li_["use"] = {c: {str(k): v for k, v in d.items()} for c, d in latency_marks_.result().items()}
+                        since_, last_ = latency_box_.get("stand_since"), latency_box_.get("last_stamp")
+                        li_["final_stand"] = {"last_step_s": last_, "since_s": since_,
+                                              "length_s": (last_ - since_) if since_ is not None else 0.0}
                     if core_ is not None and isinstance(core_.jobs, latency_module.DelayedJobs):
                         li_["plan"] = {"delay_ms": float(args.latency_plan_ms),
                                        "records": core_.jobs.records + core_.jobs.held_at_end()}
