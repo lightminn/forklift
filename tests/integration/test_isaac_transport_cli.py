@@ -444,8 +444,11 @@ def test_every_physics_step_after_start_goes_through_step_world() -> None:
     )
     body = ast.unparse(step_world)
     for needle in ("world.step(", "slam['odometry'].update(", "slam['link'].exchange(",
-                   "slam['tracker'].receive(", "slam['stop'].update(", "tick % scan_every"):
+                   "slam['stop'].update(", "tick % scan_every", "slam_deliver(reply, m_)"):
         assert needle in body, needle
+    # the reply is applied by slam_deliver (the latency test's queue may hold it; off, at once -- plan 2026-11-11 2.1)
+    deliver = next(node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == "slam_deliver")
+    assert "slam['tracker'].receive(" in ast.unparse(deliver)
     run = runner_run(tree)
     loop = next(
         node

@@ -43,8 +43,10 @@ def test_on_is_refused_outside_a_scene_run_or_with_near_tracking(tmp_path, extra
 
 def test_the_obstacle_scans_carry_their_correction_and_version():
     source = (ROOT / "sim/isaac/run_transport.py").read_text()
-    assert ('**({"correction": obstacle["applied"], "version": obstacle["version"]}\n'
+    assert ('**({"correction": scan_correction_, "version": scan_version_}\n'
             '                               if getattr(args, "exit_prefix_exempt", "off") == "on" else {})') in source
+    # off the latency test's late layer install, the scan's values are the updated obstacle["applied"]/["version"]
+    assert 'scan_version_, scan_correction_ = obstacle["version"], obstacle["applied"]' in source
 
 
 def test_the_evaluation_books_the_tick_after_the_permission_decided_it():
