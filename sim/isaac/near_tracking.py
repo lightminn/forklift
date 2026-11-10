@@ -1035,6 +1035,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "scene_requirements_override",
     # the video encoder's preset (2026-10-27): the videos' file size and encoder CPU, not the run
     "video_preset",
+    # the top-down video camera's ceiling clip (2026-11-10, on by default): that camera's picture only, not the run
+    "overview_clip",
     "frame_log",
     "slam_feedback",
     "slam_map_dir",

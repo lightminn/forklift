@@ -909,6 +909,10 @@ def arguments() -> argparse.Namespace:
         help="The videos' x264 preset (crf 20 either way: the same quality, another file size and encoder CPU). "
         "Runs before the option encoded with medium; recorded in the result's camera block.",
     )
+    parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto",
+                        help="the top-down overview camera clips everything above the ceiling lamps' bottom less 0.3 m "
+                             "(read from the stage; that camera only -- lights, perception cameras, LiDAR and physics "
+                             "are untouched): auto (default since 2026-11-10, user decision), or not (off)")
     parser.add_argument("--extra-views", default="", metavar="VIEWS")
     parser.add_argument("--quarter-eye", type=quarter_vector, metavar="X,Y,Z")
     parser.add_argument("--quarter-target", type=quarter_vector, metavar="X,Y,Z")
@@ -4322,6 +4326,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
     state["velocities_after_reset"] = body_velocities()
     camera.initialize()
+    if getattr(args, "overview_clip", "off") == "auto":
+        import overhead_clip  # the overview looks straight down: its near plane is a height (overhead_clip.py)
+
+        state["camera"]["overhead_clip"] = overhead_clip.apply(camera, stage, float(eye[2]))
     if getattr(args, "live", False) and not args.video:
         # Real-time plan S4 (a): the overview camera (1280x720) feeds only the video, its inset and the robot-camera
         # composite, all of which need --video; without it a live run neither renders it nor evaluates its frame
