@@ -466,3 +466,29 @@ def test_retries_are_listed_only_for_a_complete_record():
     fails = V.rv4_failures(s)
     assert V.rv4_retries(s, fails) == []
     assert any(x["outcome"] == "rejected" and x["attempt_request_id"] == "r2" for x in fails)
+
+
+# --- Codex implementation review round 4 ------------------------------------------------------------------------------
+def test_attempt_seq_against_the_send_order_is_incomplete():
+    ev = probe(att("r3", 2, "ack", mono=1.0), att("r2", 1, "reject", "not_stopped", mono=2.0))
+    a = V.submit_attempts(ev)
+    assert a["complete"] is False and a["retries"] == []
+
+
+def test_a_row_level_start_unknown_does_not_drop_the_retry_list():
+    rows = [{**_row("m1", "P-1", "done"), "destination_id": "D-1"},
+            {**_row(None, "P-2", None, start="unknown"), "reject_reason": "busy", "destination_id": "D-2"}]
+    ev = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2),
+               att("r5", 3, "reject", "busy", pallet="P-2", dest="D-2", mono=3))
+    s = fsess("ab_line_m_s0_B", rows, ev["events"])
+    fails = V.rv4_failures(s)
+    assert not any(x.get("why") for x in fails)  # the record is complete
+    assert [r["reject_request_id"] for r in V.rv4_retries(s, fails)] == ["r2"]
+
+
+def test_an_attempt_and_its_orphan_copy_count_once():
+    ev = probe(att("r2", 1, "reject", "busy_x"))["events"]
+    copy = {k: v for k, v in ev[1].items() if k != "attempt_seq"}
+    ev.append(copy)
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
+    assert [x.get("attempt_request_id") for x in f if x["outcome"] == "rejected"] == ["r2"]

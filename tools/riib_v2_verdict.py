@@ -949,7 +949,7 @@ def submit_attempts(probe: dict) -> dict:
     for a start wait, and the very next attempt is an ack for the same pallet, destination and item -- at most one in
     the whole session. Incomplete: a reply or timeout without its ``sent`` event or attempt fields, a sent event twice
     for one id, or an epoch's attempt_seq not 1..n. Incomplete exempts nothing."""
-    attempts, problems, seen, orphans = {}, [], set(), []
+    attempts, problems, seen, orphans, last_seq = {}, [], set(), [], {}
     need = ("request_id", "session_epoch", "attempt_seq", "pallet_id", "destination_id", "path")
     for e in (probe or {}).get("events") or []:
         if e.get("kind") != "mission_submit":
@@ -964,6 +964,11 @@ def submit_attempts(probe: dict) -> dict:
                 problems.append(f"{rid}: sent without {[k for k in need if e.get(k) is None]}")
             if e.get("path") == "queue" and e.get("item_id") is None:
                 problems.append(f"{rid}: a queue attempt without its item")
+            ep, sq = e.get("session_epoch"), e.get("attempt_seq")
+            if sq is not None and ep in last_seq and not sq > last_seq[ep]:
+                problems.append(f"{rid}: attempt_seq {sq} sent after {last_seq[ep]}")  # against the send order (P2)
+            if sq is not None:
+                last_seq[ep] = max(sq, last_seq.get(ep, sq))
             attempts[rid] = {"request_id": rid, "session_epoch": e.get("session_epoch"), "seq": e.get("attempt_seq"),
                              "pallet_id": e.get("pallet_id"), "destination_id": e.get("destination_id"),
                              "item_id": e.get("item_id"), "t": None, "reason": None, "mono": e.get("mono")}
@@ -1079,7 +1084,9 @@ def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
             why = "attempt_sequence_incomplete"
         elif evidence and not att["attempts"]:
             why = "submit_evidence_without_attempts"
-    observed = [a for a in att["attempts"] if a["t"] == "reject"] + att["orphans"]
+    ids = {a["request_id"] for a in att["attempts"]}
+    observed = ([a for a in att["attempts"] if a["t"] == "reject"]
+                + [o for o in att["orphans"] if o["request_id"] not in ids])  # one per request (Codex P3)
     # every row's submission against the attempts, per submission (Codex P2): a refused row consumes an observed reject
     # of its target (then it is counted as that attempt) or stays a row refusal; a started row consumes an ack
     rows, used, unmatched = [], set(), []
@@ -1173,7 +1180,7 @@ def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict
 def rv4_retries(sess: dict, failures: list) -> list:
     """The start-wait retry list on the same completeness as the failure list: none for a session whose record came
     out incomplete there (its refusals are failures instead; Codex P3)."""
-    if any(f.get("outcome") == "start_unknown" for f in failures):
+    if any(f.get("outcome") == "start_unknown" and f.get("why") for f in failures):  # rv4's incomplete record only
         return []
     return submit_attempts(sess.get("probe") or {})["retries"]
 
