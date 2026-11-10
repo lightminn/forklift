@@ -7,7 +7,6 @@ stamped (k-1)/120 earlier so they expire when they do without a worker. Off: not
 import copy
 import importlib.util
 import json
-import math
 import re
 import sys
 from pathlib import Path
@@ -17,8 +16,15 @@ import pytest
 
 from forklift_core.control.drive_permission import DrivePermission
 from forklift_core.control.exit_prefix_exempt import VerifiedCorridor, apply_verified
-from forklift_core.perception.obstacle_grid import (FREE, OCCUPIED, AgeErrorTable, GridConfig, GridSnapshot, ObstacleGrid,
-                                                    ObstacleScan)
+from forklift_core.perception.obstacle_grid import (
+    FREE,
+    OCCUPIED,
+    AgeErrorTable,
+    GridConfig,
+    GridSnapshot,
+    ObstacleGrid,
+    ObstacleScan,
+)
 from forklift_core.planning.geometry import Bounds, Footprint
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -106,9 +112,9 @@ def test_the_free_shrink_is_sized_for_the_use_age(monkeypatch, kernel):
         ages = []
         real = grid.radius_m
 
-        def spy(age_s, rho_m, *, sensor=True, _real=real):
+        def spy(age_s, rho_m, *, sensor=True, _real=real, _ages=ages):
             if not sensor and rho_m > 0.0:  # the FREE shrink's band edges (the marks' pose error is at rho 0)
-                ages.append(age_s)
+                _ages.append(age_s)
             return _real(age_s, rho_m, sensor=sensor)
 
         monkeypatch.setattr(grid, "radius_m", spy)
@@ -147,14 +153,30 @@ def test_the_permission_age_check_passes_between_f_and_l_only_with_the_worker():
         assert (why == "evidence_stale") is expect_stale
 
 
+def test_the_teleop_bundle_takes_l_at_its_ends_and_between():
+    """BundlePermit (teleop_drive): the two ends ask allowed_speed, the arcs between compare their own path check's
+    FREE age with the config's evidence_max_age_s -- with a worker both pass evidence aged between F and L."""
+    from forklift_core.safety.teleop_drive import BundlePermit
+
+    L = F + 2 / 120.0
+    own = Footprint(0.3, 0.1, 0.2)
+    for cfg, expect_stale in ((layer(CONFIG).permission.config, True),
+                              (layer(MODULE.worker_config(CONFIG, 3)).permission.config, False)):
+        bundle = BundlePermit(cfg)
+        snap = _snapshot(0.0)
+        speed, why = bundle.limit(snap, 1, 0.5 * (F + L), {}, pose=(0.0, 0.0, 0.0), curvatures=[-0.2, 0.0, 0.2],
+                                  direction=1, check_speed_mps=0.3, footprint=own, own_footprint=own)
+        assert (why == "evidence_stale") is expect_stale
+
+
 def test_the_age_comparisons_are_the_registered_ones():
-    """The sites that compare a FREE evidence age with evidence_max_age_s, all reading a permission config (so all take
-    L with a worker): drive_permission.allowed_speed, the teleop bundle, the candidate's zone, the cusp's next leg. A new
-    one must be added here and judged against the plan."""
+    """A location check (Codex P3: it finds these four spellings, not every possible comparison): the permission's
+    age checks the plan lists, each reading a permission config's evidence_max_age_s. allowed_speed and the teleop
+    bundle are also checked by behaviour above; the candidate's zone and the cusp's next leg read the same config."""
     pattern = re.compile(r"now_s?_? - .*oldest_free_s.*>.*evidence_max_age_s|age_ <= pconf_\.evidence_max_age_s")
     found = []
     for path in sorted((ROOT / "src").rglob("*.py")) + sorted((ROOT / "sim" / "isaac").glob("*.py")):
-        for n, line in enumerate(path.read_text().splitlines(), 1):
+        for line in path.read_text().splitlines():
             if pattern.search(line):
                 found.append(str(path.relative_to(ROOT)))
     assert sorted(found) == sorted([

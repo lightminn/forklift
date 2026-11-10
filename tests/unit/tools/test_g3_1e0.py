@@ -93,6 +93,18 @@ def test_the_off_control_never_changes_the_judgement():
         assert out["result"] == result and out["control"] == control
 
 
+def test_a_control_that_cannot_be_read_is_reported_not_raised(tmp_path, monkeypatch):
+    e = lists.entries("/s", "/o", control=True)
+    assert an.read_control(tmp_path, e[:2]) is None
+
+    def boom(*a, **k):
+        raise RuntimeError("no run")
+
+    monkeypatch.setattr(an, "OffSession", boom)
+    out = an.read_control(tmp_path, e)
+    assert out == {"invalid": ["control unreadable: RuntimeError: no run"]}
+
+
 def test_the_evidence_stale_ticks_are_read_per_phase():
     res = {"obstacle_layer": {"slowed_reasons": {"transport:evidence_stale": 768, "transport:limit": 3,
                                                  "return_home:evidence_stale": 670, "observe:ok": 5}}}

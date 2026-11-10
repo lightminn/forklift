@@ -199,6 +199,16 @@ def attach_control(out: dict, control) -> dict:
     return out
 
 
+def read_control(out_dir: Path, entries: list, ps=None):
+    """The control's report (None without one); any failure to read it is reported, never raised."""
+    if len(entries) < 3:
+        return None
+    try:
+        return control_report(OffSession(out_dir / entries[2]["name"], entries[2], ps=ps))
+    except Exception as exc:  # the control never stops the registered reading
+        return {"invalid": [f"control unreadable: {type(exc).__name__}: {exc}"]}
+
+
 def control_report(s: OffSession) -> dict:
     row = base.analyse_session(s)
     row["evidence_stale_ticks"] = stale_ticks(s.result)
@@ -334,13 +344,7 @@ def main() -> int:
         incomplete = {arm: {"scans": x["scans"], "scans_without_record": x["scans_without_record"]}
                       for arm, x in m.items() if x["scans"] == 0 or x["scans_without_record"]}
         out["result"] = {"incomplete": incomplete} if incomplete else predict(m["delay"], m["thread"])
-    control = None
-    if len(entries) == 3:
-        try:
-            control = control_report(OffSession(a.out / entries[2]["name"], entries[2], ps=ps))
-        except Exception as exc:  # the control never stops the registered reading
-            control = {"invalid": [f"control unreadable: {type(exc).__name__}: {exc}"]}
-    out = attach_control(out, control)
+    out = attach_control(out, read_control(a.out, entries, ps))
     text = json.dumps(out, indent=1, default=str)
     if a.json:
         a.json.write_text(text)
