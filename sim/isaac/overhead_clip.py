@@ -6,9 +6,14 @@ read as obstacles on an empty floor. This clips them in the video camera only: a
 the plane at height z at the distance ``eye_z - z``, so a near clipping distance of ``eye_z - clip_z`` cuts everything
 above ``clip_z`` from that camera's picture. Lights, the perception cameras, the LiDAR and physics are untouched.
 
-``clip_z`` is read from the stage: the lowest bottom of the environment's light-holding top-level parts, less a margin
-(full_warehouse.usd, 2026-11-10: the SM_LampCeilingA lamps' bottoms at 5.82 m, the pillar roof beams at 7.88 m with
-braces from 6.01 m; floor-standing racks, walls and pillars keep their parts below the plane).
+``clip_z`` is read from the stage: the lowest bottom of the environment's ceiling lamps -- light-holding top-level
+parts lying wholly above 3 m (a light nearer the floor does not count) -- less a margin (full_warehouse.usd,
+2026-11-10: the SM_LampCeilingA lamps' bottoms, their RectLights' extent included, at 5.82 m, so the clip is at
+5.52 m; the pillar roof beams at 7.88 m with braces from 6.01 m). The near plane cuts every shape above it: the
+racks (3-6 m), the walls and the wall pillars keep only their parts below 5.52 m in that picture -- a top view, where
+the parts above stand over the same floor. No lamp: no clip (the roof beams then stay).
+Applies to the straight-down cameras only (run_transport's GlobalCamera, run_slam_drive's SurveyCamera); an oblique
+or forward camera (quarter, chase, the robot's video cameras) has no horizontal near plane and is not changed.
 No Isaac imports at module level.
 """
 
@@ -19,9 +24,10 @@ FLOOR_M = 3.0  # never below scene.hide_overhead's line: floor-level props stay 
 
 
 def clip_z_from(parts, margin_m: float = MARGIN_M, floor_m: float = FLOOR_M) -> float | None:
-    """``parts``: (bottom z, holds a light) of the environment's top-level parts. The clip height: the lowest
-    light-holding bottom less ``margin_m``, not below ``floor_m``; None without a light-holding part."""
-    lit = [float(z) for z, light in parts if light]
+    """``parts``: (bottom z, holds a light) of the environment's top-level parts. The clip height: the lowest bottom
+    of the ceiling lamps (light-holding parts wholly above ``floor_m``) less ``margin_m``, not below ``floor_m``;
+    None without one."""
+    lit = [float(z) for z, light in parts if light and float(z) >= floor_m]
     if not lit:
         return None
     return max(min(lit) - margin_m, floor_m)

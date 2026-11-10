@@ -17,6 +17,8 @@ def test_the_clip_height_is_the_lowest_lamp_less_the_margin_not_below_the_floor_
     assert oc.clip_z_from(parts) == pytest.approx(5.518)
     assert oc.clip_z_from([(0.0, False), (6.0, False)]) is None  # no lamp: nothing to clip for
     assert oc.clip_z_from([(3.1, True)]) == oc.FLOOR_M  # never below the hide_overhead line
+    assert oc.clip_z_from([(0.2, True), (5.82, True)]) == pytest.approx(5.52)  # a floor light does not count
+    assert oc.clip_z_from([(0.2, True)]) is None
 
 
 def test_a_straight_down_camera_cuts_above_the_plane_only_when_it_cuts_more():
