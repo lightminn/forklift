@@ -17,11 +17,12 @@ Per session (s per AUTO sim s unless named):
   the AUTO scans / the AUTO sim time (delay: the computation is inside total_wall_s; thread: only prepare and submit);
 - compute: the computation's own wall (compute_s) per AUTO sim s, and its CPU / wall ratio (GIL waiting shows as < 1);
 - barrier: the installs that were not scheduled (by reason), their count per AUTO sim s and their wait per AUTO sim s;
-- main_other: from the tick trace, over the AUTO rows: each row's control tick (ctrl_end - ctrl_start) and world step
-  (world_end - world_start), less the wait and install time of the installs made inside those control ticks (the
-  scheduled ones at the tick's start and every barrier but add_scans, which runs in the scan's own processing), whose
-  install tick is an AUTO row's -- the main thread's other work, on the same rows and denominator as W (Codex 1e-0
-  review round 2 P2: the core.* timers nest and their windows differ from the AUTO rows);
+- main_other: from the tick trace, as W_i is made (row i's step, row i+1's control -- Codex 1e-0 review round 3 P2):
+  over the AUTO rows i, row i's world step (world_end - world_start) and row i+1's control tick (ctrl_end -
+  ctrl_start), less the wait and install time of the installs made inside those control ticks (the scheduled ones at
+  the tick's start and every barrier but add_scans, which runs in the scan's own processing), i.e. whose install tick
+  is row i+1's -- the main thread's other work, on the same rows and denominator as W (round 2 P2: the core.* timers
+  nest and their windows differ from the AUTO rows);
 - reported, not used: the SLAM replies' apply lag (applied_tick_s - stamp_s of the async link's records, sim s) and the
   far recognition's job wall times (the missions' recognition_mission.live.jobs).
 
@@ -132,6 +133,19 @@ class Session(base.Session):
         return out
 
 
+def other_work(D: np.ndarray, ok: np.ndarray, installs: list[dict]) -> tuple[float, float, int]:
+    """(row i's world steps + row i+1's control ticks over the AUTO rows i, the wait + install time of the installs made
+    in those control ticks, their count) -- the W_i decomposition's other parts (s)."""
+    idx = np.nonzero(ok)[0]
+    idx = idx[idx + 1 < len(D)]
+    world = D[idx, C["world_end"]] - D[idx, C["world_start"]]
+    ctrl = D[idx + 1, C["ctrl_end"]] - D[idx + 1, C["ctrl_start"]]
+    ctrl_ticks = {int(x) for x in D[idx + 1, C["tick"]] if np.isfinite(x)}
+    inside = [r for r in installs if r.get("install_tick") in ctrl_ticks and r["reason"] != "add_scans"]
+    taken = sum(float(r["wait_s"]) + float(r["install_s"]) for r in inside)
+    return float(np.nansum(world)) + float(np.nansum(ctrl)), taken, len(inside)
+
+
 def _q(v) -> dict | None:
     if not v:
         return None
@@ -167,14 +181,10 @@ def measure(s: Session) -> dict:
                       "wait": sum(float(r["wait_s"]) for r in barrier) / sim if sim > 0 else None,
                       "install": sum(float(r["install_s"]) for r in barrier) / sim if sim > 0 else None}
     out["scheduled_wait_ms"] = _q([1e3 * float(r["wait_s"]) for r in inst if r["reason"] == "scheduled"])
-    D = s.trace
-    ctrl = D[ok, C["ctrl_end"]] - D[ok, C["ctrl_start"]]
-    world = D[ok, C["world_end"]] - D[ok, C["world_start"]]
-    in_ctrl = [r for r in s.installs if r.get("install_tick") in ticks and r["reason"] != "add_scans"]
-    taken = sum(float(r["wait_s"]) + float(r["install_s"]) for r in in_ctrl)
-    out["main_other_raw"] = (float(np.nansum(ctrl)) + float(np.nansum(world))) / sim if sim > 0 else None
-    out["main_other"] = None if sim <= 0 else out["main_other_raw"] - taken / sim
-    out["installs_in_auto_control"] = len(in_ctrl)
+    raw, taken, n_in = other_work(s.trace, ok, s.installs)
+    out["main_other_raw"] = raw / sim if sim > 0 else None
+    out["main_other"] = None if sim <= 0 else (raw - taken) / sim
+    out["installs_in_auto_control"] = n_in
     T = {}
     for k in KS:
         waits = []

@@ -62,3 +62,23 @@ def test_the_list_must_be_delay_then_thread(tmp_path, monkeypatch, capsys):
     f.write_text("\n".join(json.dumps(x) for x in reversed(lists.entries("/s", "/o"))))
     monkeypatch.setattr(sys, "argv", ["g3_1e0_analyze.py", str(tmp_path), "--list", str(f)])
     assert an.main() == 2 and "list_not_registered" in capsys.readouterr().out
+
+
+def test_the_other_work_takes_row_i_steps_and_row_i_plus_1_controls():
+    """Codex 1e-0 round 3 P2: W_i holds row i's step and row i+1's control; the other work follows it, and an install
+    is taken out when it ran in such a control tick."""
+    import numpy as np
+
+    C = an.C
+    D = np.full((4, len(C)), np.nan)
+    for i in range(4):
+        D[i, C["tick"]] = 100 + i
+        D[i, C["world_start"]], D[i, C["world_end"]] = 0.0, 0.002 * (i + 1)
+        D[i, C["ctrl_start"]], D[i, C["ctrl_end"]] = 0.0, 0.010 * (i + 1)
+    ok = np.array([False, True, True, False])
+    installs = [{"install_tick": 102, "reason": "scheduled", "wait_s": 0.001, "install_s": 0.002},
+                {"install_tick": 101, "reason": "scheduled", "wait_s": 0.5, "install_s": 0.5},  # row 1's own control
+                {"install_tick": 103, "reason": "add_scans", "wait_s": 0.5, "install_s": 0.5}]  # in the scan step
+    raw, taken, n = an.other_work(D, ok, installs)
+    assert abs(raw - ((0.004 + 0.006) + (0.030 + 0.040))) < 1e-12
+    assert (abs(taken - 0.003) < 1e-12, n) == (True, 1)
