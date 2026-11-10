@@ -436,3 +436,33 @@ def test_life3_plant_and_safety_exemption_only_before_any_submit(tmp_path):
     sess["life3_random_m_reloc"]["records"] = {}
     assert V.rv4_plant_skip(sess, life3_ended_per_record=True) == {"life3_random_m_reloc"}
     assert V.rv4_plant_skip(sess, life3_ended_per_record=False) == set()
+
+
+# --- Codex implementation review round 3 ------------------------------------------------------------------------------
+def test_an_exempted_or_superseded_reject_does_not_stand_for_another_submissions_refusal():
+    rows = [{**_row("m1", "P-1", "done"), "destination_id": "D-1"},
+            {**_row(None, "P-1", None, start="rejected"), "reject_reason": "cargo_held", "destination_id": "D-1"}]
+    ev = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))  # the later refusal's events lost
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", rows, ev["events"]))
+    assert any(x["outcome"] == "rejected" and x.get("reject_reason", x.get("reason")) == "cargo_held" for x in f)
+    assert any(x["outcome"] == "start_unknown" for x in f)
+
+
+def test_a_duplicate_send_keeps_the_seen_reject_and_orphans_count_once():
+    ev = probe(att("r2", 1, "reject", "busy_x"))["events"]
+    ev += [{**ev[0], "mono": 1.2}, {**ev[1], "t": "ack", "reason": None, "mono": 1.4}]
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
+    assert [x.get("attempt_request_id") for x in f if x["outcome"] == "rejected"] == ["r2"]
+    orphan = probe(att("r2", 1, "reject", "busy_x", sent=False))["events"] * 2
+    f2 = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], orphan))
+    assert [x.get("attempt_request_id") for x in f2 if x["outcome"] == "rejected"] == ["r2"]
+
+
+def test_retries_are_listed_only_for_a_complete_record():
+    rows = [{**_row("m1", "P-1", "done"), "destination_id": "D-1"}, {**_row("m2", "P-2", "done"),
+                                                                       "destination_id": "D-2"}]
+    ev = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))  # m2's ack missing
+    s = fsess("ab_line_m_s0_B", rows, ev["events"])
+    fails = V.rv4_failures(s)
+    assert V.rv4_retries(s, fails) == []
+    assert any(x["outcome"] == "rejected" and x["attempt_request_id"] == "r2" for x in fails)

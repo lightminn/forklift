@@ -958,6 +958,7 @@ def submit_attempts(probe: dict) -> dict:
         if e.get("event") == "sent":
             if rid in seen:
                 problems.append(f"{rid}: sent twice")
+                continue  # the first record stays, with any refusal it already had (Codex P2)
             seen.add(rid)
             if any(e.get(k) is None for k in need):
                 problems.append(f"{rid}: sent without {[k for k in need if e.get(k) is None]}")
@@ -969,7 +970,8 @@ def submit_attempts(probe: dict) -> dict:
         elif e.get("event") in ("reply", "reply_timeout"):
             if e.get("attempt_seq") is None or rid not in attempts:
                 problems.append(f"{rid}: {e.get('event')} without its sent event or attempt fields")
-                if e.get("event") == "reply" and e.get("t") == "reject":  # an observed refusal is kept (Codex P2)
+                if (e.get("event") == "reply" and e.get("t") == "reject"  # an observed refusal is kept once (Codex P2)
+                        and all(o["request_id"] != rid for o in orphans)):
                     orphans.append({"request_id": rid, "session_epoch": e.get("session_epoch"),
                                     "seq": e.get("attempt_seq"), "pallet_id": e.get("pallet_id"),
                                     "destination_id": e.get("destination_id"), "item_id": e.get("item_id"),
@@ -1092,9 +1094,15 @@ def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
             return a
         return None
     acks = [a for a in att["attempts"] if a["t"] == "ack"]
+    exempt = {x["reject_request_id"] for x in att["retries"]}
+
+    def superseded(a):  # a later ack for the same target: that refusal was not the submission's final answer
+        return any(b["pallet_id"] == a["pallet_id"] and b["destination_id"] == a["destination_id"]
+                   and (b.get("mono") or 0) > (a.get("mono") or 0) for b in acks)
+    finals = [a for a in observed if a["request_id"] not in exempt and not superseded(a)]
     for r in sess.get("rows") or []:
         if r.get("start") == "rejected":
-            if take(observed, r) is None:
+            if take(finals, r) is None:
                 rows.append(r)
                 unmatched.append(f"row {r.get('pallet_id')}: refused, no reject attempt")
             continue
@@ -1160,6 +1168,14 @@ def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict
             problems.append(f"{k} differs from the manifest")
     return {"ok": not problems, "problems": problems,
             "values": {k: values[names[0]].get(k) for k in PLANT_GLOBAL} if names else {}}
+
+
+def rv4_retries(sess: dict, failures: list) -> list:
+    """The start-wait retry list on the same completeness as the failure list: none for a session whose record came
+    out incomplete there (its refusals are failures instead; Codex P3)."""
+    if any(f.get("outcome") == "start_unknown" for f in failures):
+        return []
+    return submit_attempts(sess.get("probe") or {})["retries"]
 
 
 def rv4_plant_skip(sessions: dict, life3_ended_per_record: bool) -> set:
@@ -1240,7 +1256,7 @@ def evaluate_rv4(out_dir: Path) -> dict:
         partners[n] = next((m for m in l4 if m != n and _session_args(sess[m]).get("SEED") == seed), None)
     l3_end = (main_v.get("lifecycle", {}).get("3") or {}).get("outcome") == "ended_per_record"
     fails = {n: rv4_failures(s, life3_ended_per_record=l3_end) for n, s in sess.items()}
-    retries = {n: submit_attempts(s.get("probe") or {})["retries"] for n, s in sess.items()}
+    retries = {n: rv4_retries(s, fails[n]) for n, s in sess.items()}
     disposition = rv3_dispose(fails, partners, arms)
     scene_of = rv3_plan_inputs(rv4, plan_l4c, names)
     map_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
