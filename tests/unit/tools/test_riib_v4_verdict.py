@@ -492,3 +492,11 @@ def test_an_attempt_and_its_orphan_copy_count_once():
     ev.append(copy)
     f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
     assert [x.get("attempt_request_id") for x in f if x["outcome"] == "rejected"] == ["r2"]
+
+
+def test_an_orphan_reject_for_a_sent_attempt_without_a_reject_is_kept():
+    ev = probe(att("r2", 1, None))["events"]  # sent only
+    ev.append({"event": "reply", "kind": "mission_submit", "request_id": "r2", "t": "reject", "reason": "busy_x",
+               "mono": 1.1})  # its only refusal, without attempt_seq
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
+    assert [x.get("attempt_request_id") for x in f if x["outcome"] == "rejected"] == ["r2"]

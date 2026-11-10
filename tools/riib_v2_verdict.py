@@ -1084,7 +1084,7 @@ def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
             why = "attempt_sequence_incomplete"
         elif evidence and not att["attempts"]:
             why = "submit_evidence_without_attempts"
-    ids = {a["request_id"] for a in att["attempts"]}
+    ids = {a["request_id"] for a in att["attempts"] if a["t"] == "reject"}  # only refusals already kept (Codex P2)
     observed = ([a for a in att["attempts"] if a["t"] == "reject"]
                 + [o for o in att["orphans"] if o["request_id"] not in ids])  # one per request (Codex P3)
     # every row's submission against the attempts, per submission (Codex P2): a refused row consumes an observed reject
