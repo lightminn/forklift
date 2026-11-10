@@ -320,7 +320,7 @@ def _reached(probe: dict, label: str) -> bool:
     return any(e.get("event") == "reached" and e.get("label") == label for e in probe.get("events") or [])
 
 
-def lifecycle(sess: dict, which: int) -> dict:
+def lifecycle(sess: dict, which: int, rv4: bool = False) -> dict:
     p, rows, codes = sess.get("probe") or {}, sess.get("rows") or [], _epoch_exit(sess)
     ends = _replies(p, "session_end")
     common = {"epoch_exit": codes, "exit_ok": codes == [0], "session_end_ack": any(e.get("t") == "ack" for e in ends),
@@ -353,7 +353,7 @@ def lifecycle(sess: dict, which: int) -> dict:
         first = runs[0] if runs else {}
         rejects = [e.get("reason") for e in _replies(p, "mission_submit") if e.get("t") == "reject"]
         cancel = (first.get("cancel_reply") or {})
-        h3 = h3_check(sess, (cancel or {}).get("request_id"))
+        h3 = (h3_direct if rv4 else h3_check)(sess, (cancel or {}).get("request_id"))
         c = {"transport_reached": bool(first.get("cancel_phase_reached")), "cancel_ack": cancel.get("t") == "ack",
              "cancelled_operator": bool(rows) and rows[0].get("outcome") == "cancelled"
                                    and rows[0].get("reason") == "operator",
@@ -425,8 +425,51 @@ def h3_check(sess: dict, request_id) -> dict:
             "ordered": mono_applied is not None and sent <= receipt <= mono_applied <= reply}
 
 
+def clock_ok(probe: dict, entries: list) -> bool:
+    """rv4 registration 1.1: the probe's and the runtime's own boot id and time namespace, both present and equal (a
+    missing or unread value is a mismatch, never equal to another missing one)."""
+    pc = (probe or {}).get("clock") or {}
+    rc = next((e["clock"] for e in entries or [] if isinstance(e.get("clock"), dict)), None) or {}
+    keys = ("boot_id", "time_ns")
+    return all(pc.get(k) is not None and pc.get(k) == rc.get(k) for k in keys)
+
+
+def h3_direct(sess: dict, request_id="r4") -> dict:
+    """rv4 registration 1.1: the applied cancel's direct record -- the first ``mission_commands`` entry carrying this
+    request id as an accepted cancel, its ``mono`` stamped by ``log()`` before ``Link.end`` queues the reply -- and
+    the order probe send <= direct record <= reply, under one clock (``clock_ok``). The runtime's receipt ``mono`` (the
+    cycle's ``now``, before ``Link.begin`` drains the channels) and rv3's step substitute are reported only."""
+    if not request_id:
+        return {"found": False, "ordered": False}
+    entries = sess.get("entries") or []
+    probe = sess.get("probe") or {}
+    applied = next((e for e in entries if "mission_commands" in e and any(
+        c.get("request_id") == request_id and c.get("command") == "cancel" and c.get("accepted") is True
+        for c in e["mission_commands"])), None)
+    rep_ = next((e for e in _replies(probe, "mission_cancel") if e.get("request_id") == request_id), None)
+    receipt = next((e["mono"] for e in entries if e.get("t") == "mission_cancel" and e.get("request_id") == request_id
+                    and "mono" in e), None)
+    clock = clock_ok(probe, entries)
+    a_mono = None if applied is None else applied.get("mono")
+    sent = None if rep_ is None else rep_.get("sent_mono")
+    reply = None if rep_ is None else rep_.get("reply_mono")
+    ordered = (clock and None not in (a_mono, sent, reply) and float(sent) <= float(a_mono) <= float(reply))
+    sub = None
+    if applied is not None and applied.get("tick_t") is not None:
+        steps = sess.get("steps") or {}
+        sub = min((v[0] for v in steps.values() if v[1] >= float(applied["tick_t"])), default=None)
+    return {"found": applied is not None, "applied_mono": a_mono, "sent": sent, "reply": reply, "clock_ok": clock,
+            "ordered": bool(ordered),
+            "receipt_mono": receipt,
+            "receipt_ordered": (None if None in (receipt, a_mono, sent)
+                                else float(sent) <= float(receipt) <= float(a_mono)),
+            "substitute_mono": sub,
+            "substitute_ordered": None if None in (sub, sent, reply) else float(sent) <= sub <= float(reply),
+            "substitute_minus_direct_s": None if None in (sub, a_mono) else sub - float(a_mono)}
+
+
 # --- the batch ----------------------------------------------------------------------------------------------------
-def evaluate(out_dir: Path) -> dict:
+def evaluate(out_dir: Path, rv4: bool = False) -> dict:
     plan = json.loads((out_dir / "plan_main.json").read_text())
     sess = {}
     names = [n for p in plan["pairs"] for n in p["runs"]] + plan["rest"]
@@ -512,7 +555,7 @@ def evaluate(out_dir: Path) -> dict:
             "backoff": {n: backoff_firing(sess[n]) for n in ("boxed_line_m", "boxed_random_m")},
             "c2_function": {"c2_line_m_on": c2_firing(sess["c2_line_m_on"]),
                             "c2_line_m_shadow": c2_firing(sess["c2_line_m_shadow"])},
-            "lifecycle": {"1": lifecycle(sess["life1_line_m_main"], 1), "2": lifecycle(sess["life2_random_m_held"], 2),
+            "lifecycle": {"1": lifecycle(sess["life1_line_m_main"], 1), "2": lifecycle(sess["life2_random_m_held"], 2, rv4=rv4),
                           "3": l3,
                           # the rv3 batch has no line_m lifecycle 4 in its rest (it is the confirmation bundle's)
                           **({"4": lifecycle(sess["life4_line_m_stop"], 4)} if "life4_line_m_stop" in sess else {})},
@@ -881,6 +924,242 @@ def evaluate_rv3(out_dir: Path) -> dict:
             "disposition": disposition, "run_checks": checks, **combined}
 
 
+# --- rv4 (docs/plans/2026-11-10-live-riib-rv4-registration.md) -------------------------------------------------------
+START_WAIT = ("not_stopped", "no_feedback:rear_axle_speed")
+
+
+def submit_attempts(probe: dict) -> dict:
+    """rv4 registration 1.2: the probe's mission_submit attempts (one per request id), their completeness, the
+    start-wait retries and the rejects that count. An attempt is a retry when it is its session epoch's first, refused
+    for a start wait, and the very next attempt is an ack for the same pallet, destination and item -- at most one in
+    the whole session. Incomplete: a reply or timeout without its ``sent`` event or attempt fields, a sent event twice
+    for one id, or an epoch's attempt_seq not 1..n. Incomplete exempts nothing."""
+    attempts, problems, seen = {}, [], set()
+    for e in (probe or {}).get("events") or []:
+        if e.get("kind") != "mission_submit":
+            continue
+        rid = e.get("request_id")
+        if e.get("event") == "sent":
+            if rid in seen:
+                problems.append(f"{rid}: sent twice")
+            seen.add(rid)
+            attempts[rid] = {"request_id": rid, "session_epoch": e.get("session_epoch"), "seq": e.get("attempt_seq"),
+                             "pallet_id": e.get("pallet_id"), "destination_id": e.get("destination_id"),
+                             "item_id": e.get("item_id"), "t": None, "reason": None, "mono": e.get("mono")}
+        elif e.get("event") in ("reply", "reply_timeout"):
+            if e.get("attempt_seq") is None or rid not in attempts:
+                problems.append(f"{rid}: {e.get('event')} without its sent event or attempt fields")
+                continue
+            if e.get("event") == "reply":
+                attempts[rid].update(t=e.get("t"), reason=e.get("reason"), reply_mono=e.get("reply_mono"))
+    by_epoch: dict = {}
+    for a in attempts.values():
+        by_epoch.setdefault(a["session_epoch"], []).append(a)
+    ordered = []
+    for ep, lst in by_epoch.items():
+        lst.sort(key=lambda a: (a["seq"] is None, a["seq"]))
+        if [a["seq"] for a in lst] != list(range(1, len(lst) + 1)):
+            problems.append(f"epoch {ep}: attempt_seq {[a['seq'] for a in lst]}")
+        ordered += lst
+    complete = not problems
+    retries = []
+    if complete:
+        for lst in by_epoch.values():
+            if len(retries) >= 1:
+                break
+            first, nxt = lst[0], (lst[1] if len(lst) > 1 else None)
+            if (first["t"] == "reject" and first["reason"] in START_WAIT and nxt is not None and nxt["t"] == "ack"
+                    and (nxt["pallet_id"], nxt["destination_id"], nxt["item_id"])
+                    == (first["pallet_id"], first["destination_id"], first["item_id"])):
+                retries.append({"session_epoch": first["session_epoch"], "reject_request_id": first["request_id"],
+                                "reason": first["reason"], "ack_request_id": nxt["request_id"],
+                                "gap_s": None if None in (first.get("mono"), nxt.get("mono"))
+                                else round(nxt["mono"] - first["mono"], 3)})
+    exempt = {r["reject_request_id"] for r in retries}
+    rejects = [a for a in ordered if a["t"] == "reject" and a["request_id"] not in exempt]
+    return {"attempts": ordered, "complete": complete, "problems": problems, "retries": retries, "rejects": rejects}
+
+
+def _submit_evidence(sess: dict, att: dict) -> bool:
+    """Any sign a mission was submitted: a probe attempt, a row started or refused, a runtime submit record, a
+    mission folder (rv4 registration 1.2's pre-submit expected end needs none of them)."""
+    if att["attempts"] or any(e.get("kind") == "mission_submit" for e in (sess.get("probe") or {}).get("events") or []):
+        return True
+    if any(r.get("mission_id") or r.get("start") in ("confirmed", "unknown", "rejected") for r in sess.get("rows") or []):
+        return True
+    if any(c.get("command") == "submit" for e in sess.get("entries") or [] for c in e.get("mission_commands") or []):
+        return True
+    return bool(sess.get("records"))
+
+
+def _expected_cargo_held(sess: dict, att: dict) -> set:
+    """Lifecycle 2: the two planned resubmits after the transport cancel, refused cargo_held -- the first two such
+    attempts answered after the cancel's ack; any other cargo_held is a failure."""
+    if not sess["name"].startswith("life2_"):
+        return set()
+    cancel = next((e.get("reply_mono", e.get("mono")) for e in _replies(sess.get("probe") or {}, "mission_cancel")
+                   if e.get("t") == "ack"), None)
+    if cancel is None:
+        return set()
+    after = [a for a in att["attempts"] if a["t"] == "reject" and a["reason"] == "cargo_held"
+             and a.get("reply_mono") is not None and a["reply_mono"] > cancel]
+    return {a["request_id"] for a in after[:2]}
+
+
+def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
+    """rv3's failure list with its row-level refusals replaced by attempt-level rejects (each once), plus one
+    start_unknown for an incomplete attempt sequence or a session with no probe events -- unless lifecycle 3 ended on
+    the record before any submit evidence (rv4 registration 1.2)."""
+    rows = [r for r in sess.get("rows") or [] if r.get("start") != "rejected"]
+    out = rv3_failures({**sess, "rows": rows}, life3_ended_per_record=life3_ended_per_record)
+    att = submit_attempts(sess.get("probe") or {})
+    name = sess["name"]
+    pre_submit_end = (name.startswith("life3_") and life3_ended_per_record and not _submit_evidence(sess, att))
+    events = (sess.get("probe") or {}).get("events") or []
+    if not pre_submit_end:
+        if not events:
+            out.append({"session": name, "mission": None, "outcome": "start_unknown", "why": "no_probe_events",
+                        "row": None})
+        elif not att["complete"]:
+            out.append({"session": name, "mission": None, "outcome": "start_unknown",
+                        "why": "attempt_sequence_incomplete", "problems": att["problems"], "row": None})
+    waived = _expected_cargo_held(sess, att)
+    for a in att["rejects"] if att["complete"] else [a for a in att["attempts"] if a["t"] == "reject"]:
+        if a["request_id"] in waived:
+            continue
+        out.append({"session": name, "mission": None, "outcome": "rejected", "reason": a["reason"],
+                    "attempt_request_id": a["request_id"], "attempt_seq": a["seq"],
+                    "session_epoch": a["session_epoch"], "pallet_id": a["pallet_id"], "row": None})
+    return out
+
+
+PLANT_GLOBAL = ("settings_synthetic", "physics_scene", "plant_tyre_contact", "plant_backend", "forklift_urdf_sha256",
+                "pallet_urdf_sha256", "scene_built_from_urdf_sha256", "scene_sha256")
+PLANT_SCENE = ("plant", "pallet_mass")
+
+
+def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict:
+    """rv4 registration 3: the plant keys the runner records, present in every session (``skip``: a recorded
+    pre-submit end with no result), equal across all sessions (``pallet_mass.kg`` too) and per scene (``plant``,
+    ``pallet_mass``), and the vehicle URDF and base scene hashes equal to the manifest's."""
+    problems, values = [], {}
+    for n, s in sessions.items():
+        r = s.get("result")
+        if r is None:
+            if n not in skip:
+                problems.append(f"{n}: no result")
+            continue
+        for k in PLANT_GLOBAL + PLANT_SCENE:
+            if r.get(k) is None:
+                problems.append(f"{n}: {k} missing")
+        values[n] = r
+    def same(keyf, group):
+        vals = {json.dumps(keyf(values[n]), sort_keys=True, default=str) for n in group}
+        return len(vals) <= 1
+    names = list(values)
+    for k in PLANT_GLOBAL:
+        if not same(lambda r: r.get(k), names):
+            problems.append(f"{k} differs across sessions")
+    if not same(lambda r: (r.get("pallet_mass") or {}).get("kg"), names):
+        problems.append("pallet_mass.kg differs across sessions")
+    for sc in sorted(set(scene_of.get(n) for n in names)):
+        group = [n for n in names if scene_of.get(n) == sc]
+        for k in PLANT_SCENE:
+            if not same(lambda r: r.get(k), group):
+                problems.append(f"{k} differs within {sc}")
+    for k in ("forklift_urdf_sha256", "scene_sha256"):
+        if manifest.get(k) is None:
+            problems.append(f"manifest {k} missing")
+        elif any(values[n].get(k) != manifest[k] for n in names):
+            problems.append(f"{k} differs from the manifest")
+    return {"ok": not problems, "problems": problems,
+            "values": {k: values[names[0]].get(k) for k in PLANT_GLOBAL} if names else {}}
+
+
+FAMILY_YAW_RAD, FAMILY_BACK_S = 0.10, 2.0
+
+
+def family_346_of(m: dict) -> str:
+    """rv4 registration 4 (report only): #346's extractor values for a P-5 -> D-2 loaded-transport cross_track."""
+    peak = (m or {}).get("flip_yaw_peak_rad")
+    if (m or {}).get("error") or peak is None:
+        return "unclassifiable"
+    back = m.get("back_within_0_05_s")
+    return "family" if abs(peak) >= FAMILY_YAW_RAD and (back is None or back > FAMILY_BACK_S) else "not_family"
+
+
+def _nf_measure():
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "docs/validation/2026-11-07-near-capture-frequency/nf_transport_cmp.py"
+    spec = importlib.util.spec_from_file_location("nf_transport_cmp", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.measure
+
+
+def family_346(sess: dict, failure: dict, scene: str) -> dict:
+    """The report column for one failure: a loaded-transport cross_track of random_m P-5 -> D-2 classified by
+    ``family_346_of``; any other failure is not in the column (None)."""
+    mid = failure.get("mission")
+    st = (sess.get("records") or {}).get(mid) or {}
+    tf = st.get("tracking_failure") or {}
+    if not (mid and str(failure.get("reason") or "").startswith("Tracking failed in transport")
+            and (tf.get("tracking") or {}).get("failure") == "cross_track"):
+        return None
+    row = next((r for r in sess.get("rows") or [] if r.get("mission_id") == mid), {})
+    if scene != "random_m" or row.get("pallet_id") != "P-5" or row.get("destination_id") not in (None, "D-2"):
+        return {"class": "unclassifiable", "why": "not the random_m P-5 -> D-2 transport"}
+    try:
+        m = _nf_measure()(str(sess["run"]), mid)
+    except (OSError, KeyError, StopIteration, ValueError, TypeError) as exc:
+        m = {"error": repr(exc)[:200]}
+    return {"class": family_346_of(m), "flip_yaw_peak_rad": m.get("flip_yaw_peak_rad"),
+            "back_within_0_05_s": m.get("back_within_0_05_s")}
+
+
+def evaluate_rv4(out_dir: Path) -> dict:
+    """rv3's combined reading with the rv4 changes: H3 on the direct record, attempt-level rejects and the retry list,
+    the plant gate (plan_rv4.json's ``plant`` manifest) as a run check, the #346 report column."""
+    rv4 = json.loads((out_dir / "plan_rv4.json").read_text())
+    main_v = evaluate(out_dir, rv4=True)
+    conf_v = evaluate_confirm(out_dir)
+    plan_main = json.loads((out_dir / "plan_main.json").read_text())
+    plan_l4c = json.loads((out_dir / "plan_l4c.json").read_text())
+    l4 = list(plan_l4c.get("judged") or []) + list(plan_l4c.get("controls") or [])
+    names = [n for p in plan_main["pairs"] for n in p["runs"]] + plan_main["rest"] + l4
+    sess = {n: load_session(out_dir / "s" / n) for n in names}
+    arms = {n: (_session_args(s).get("ARM") or n.rsplit("_", 1)[-1]) for n, s in sess.items()}
+    partners = {}
+    for p in plan_main["pairs"]:
+        a, b = p["runs"]
+        partners[a], partners[b] = b, a
+    for n in l4:
+        seed = _session_args(sess[n]).get("SEED")
+        partners[n] = next((m for m in l4 if m != n and _session_args(sess[m]).get("SEED") == seed), None)
+    l3_end = (main_v.get("lifecycle", {}).get("3") or {}).get("outcome") == "ended_per_record"
+    fails = {n: rv4_failures(s, life3_ended_per_record=l3_end) for n, s in sess.items()}
+    retries = {n: submit_attempts(s.get("probe") or {})["retries"] for n, s in sess.items()}
+    disposition = rv3_dispose(fails, partners, arms)
+    scene_of = rv3_plan_inputs(rv4, plan_l4c, names)
+    map_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
+               and not (_slam_choices(sess[n])
+                        and all(c == rv4["slam_choice"][scene_of[n]] for c in _slam_choices(sess[n])))]
+    image_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
+                 and _image_id(sess[n]) != rv4["image_id"]]
+    dump_bad = rv3_dump_args({n: s for n, s in sess.items() if s.get("result") is not None}, set(l4))
+    skip = {n for n in names if n.startswith("life3_") and l3_end and sess[n].get("result") is None}
+    plant = plant_check(sess, scene_of, rv4.get("plant") or {}, skip=skip)
+    checks = {"slam_choice": map_bad, "image_id": image_bad, "occupied_dumps": dump_bad,
+              "plant": [] if plant["ok"] else plant["problems"]}
+    combined = rv3_outcome(main_v, conf_v, disposition,
+                           checks_ok=not (map_bad or image_bad or dump_bad or not plant["ok"]))
+    family = {n: [c for f in fs if (c := family_346(sess[n], f, scene_of[n])) is not None]
+              for n, fs in fails.items() if fs}
+    return {"main": main_v, "confirm": conf_v, "failures": {n: f for n, f in fails.items() if f},
+            "start_retries": {n: r for n, r in retries.items() if r}, "disposition": disposition,
+            "run_checks": checks, "plant": plant, "family_346": {n: c for n, c in family.items() if c}, **combined}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", type=Path)
@@ -888,8 +1167,11 @@ def main(argv=None) -> int:
     ap.add_argument("--confirm", action="store_true", help="the lifecycle 4 confirmation run (plan_l4c.json)")
     ap.add_argument("--rv3", action="store_true",
                     help="the new-snapshot re-comparison: main + confirmation bundles combined (plan_rv3.json)")
+    ap.add_argument("--rv4", action="store_true",
+                    help="rv4: --rv3 with the direct H3, attempt-level rejects, the plant gate (plan_rv4.json)")
     a = ap.parse_args(argv)
-    result = evaluate_rv3(a.out) if a.rv3 else evaluate_confirm(a.out) if a.confirm else evaluate(a.out)
+    result = (evaluate_rv4(a.out) if a.rv4 else evaluate_rv3(a.out) if a.rv3
+              else evaluate_confirm(a.out) if a.confirm else evaluate(a.out))
     a.json.write_text(json.dumps(result, indent=1, default=str) + "\n")
     return 0
 

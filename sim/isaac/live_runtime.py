@@ -36,6 +36,21 @@ from forklift_core.safety.state import state_message
 COMMAND_LOG_FIELDS = ("t", "command", "accepted", "reason", "mission_id", "status", "request_id")  # validation v2 H3
 
 
+
+def clock_identity() -> dict:
+    """This process's boot id and time namespace (rv4 registration 1.1), read in-process so the runtime and the probe
+    compare their own; a failed read is recorded as None (a mismatch for the verdict, never a value)."""
+    out = {}
+    try:
+        out["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        out["boot_id"] = None
+    try:
+        out["time_ns"] = os.readlink("/proc/self/ns/time")
+    except OSError:
+        out["time_ns"] = None
+    return out
+
 @dataclass
 class Hooks:
     """What the runner does and reads for the runtime (all called on the control thread)."""
@@ -185,6 +200,8 @@ class LiveRuntime:
         self._log_rotations = 0
         # Plan U29: a reader of this log expects its end summary (log_end) and refuses it without (read_live_log).
         self._write_log(json.dumps({"log_writer": "ordered"}) + "\n")
+        # rv4 registration 1.1: this process's clock identity, second (the reader checks the first line for the writer)
+        self._write_log(json.dumps({"clock": clock_identity()}) + "\n")
         self.feedback: Feedback | None = None
         self.step = 0
         self.step_start: deque = deque(maxlen=600)  # (sim time at the step's end, mono at its start)

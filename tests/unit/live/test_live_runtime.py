@@ -1509,3 +1509,20 @@ def test_a_control_flag_lands_on_the_step_it_was_asked_for():
     trace.begin()
     assert int(trace.data[0, -1]) == (1 << FLAGS.index("capture")) | (1 << FLAGS.index("rendered"))
     assert np.isnan(trace.data[1, -1])  # the next step carries none
+
+
+def test_the_log_records_the_runtime_clock_identity_second(tmp_path, monkeypatch):
+    """rv4 registration 1.1: the runtime's own boot id and time namespace, read in-process, as the log's second line
+    (the first stays the writer marker the reader checks); a failed read is None, never a value."""
+    from forklift_core.live.spool import read_live_log
+
+    import sim.isaac.live_runtime as lr
+
+    rt, core, did, clock = runtime(tmp_path)
+    rt.close()
+    entries = read_live_log(tmp_path)
+    assert entries[0] == {"log_writer": "ordered"}
+    clock_ = entries[1]["clock"]
+    assert set(clock_) == {"boot_id", "time_ns"}
+    monkeypatch.setattr(lr.os, "readlink", lambda path: (_ for _ in ()).throw(OSError("no ns")))
+    assert lr.clock_identity()["time_ns"] is None
