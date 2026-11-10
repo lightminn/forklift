@@ -10871,8 +10871,7 @@ def drive(S, isaac) -> None:
                 if type(exc_).__name__ == "LayerWorkerFailure":
                     # Real-time plan 5.28 D6: the wheels stop (steering and lift held), the layer is not touched again,
                     # and the session ends (not the mission alone)
-                    robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
-                    state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
+                    live_zero_wheels()  # the live stop: the applied command and the stop detector's say so too
                     state["layer_worker_failure"] = str(exc_)
                     raise SessionFailure(str(exc_)) from exc_
                 if live is None or isinstance(exc_, SessionFailure) or classify_failure(str(exc_)) == "session":
