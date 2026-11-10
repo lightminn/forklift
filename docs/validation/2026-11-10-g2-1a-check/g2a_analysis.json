@@ -1,0 +1,1643 @@
+{
+ "sessions": [
+  {
+   "name": "g2a_01_H_sync",
+   "n": 1,
+   "scene": "H",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 31,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.002,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1677,
+     4487
+    ],
+    "rows_clean": [
+     1677,
+     4487
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16273930249735713,
+     "p99": 0.20882129027973861,
+     "max": 0.2097617390099913
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16273930249735713,
+     "p99": 0.20882129027973861,
+     "max": 0.2097617390099913
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0022039454779587686,
+     "p99": 0.0024113521922845393,
+     "max": 0.0024155849823728204
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1912877740105614,
+     "p99": 0.22796343808295205,
+     "max": 0.22871192102320492
+    }
+   },
+   "gaps": {
+    "near": 2,
+    "near_control": 2,
+    "over": 0,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.14360632409807295,
+    "camera_pixel_latency_s": {
+     "n": 2614,
+     "max": 0.7040958378929645,
+     "window_n": 2614,
+     "window_median": 0.21929089649347588,
+     "window_p99": 0.2981388479238376,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_02_H_async",
+   "n": 2,
+   "scene": "H",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 30,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.002,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1673,
+     4018
+    ],
+    "rows_clean": [
+     1673,
+     4018
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.134618912008591,
+     "p99": 0.1762044084467925,
+     "max": 0.17705309204757214
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.134618912008591,
+     "p99": 0.1762044084467925,
+     "max": 0.17705309204757214
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0026172709767706692,
+     "p99": 0.002742739369859919,
+     "max": 0.00274529994931072
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.15485236805398017,
+     "p99": 0.19855566894635557,
+     "max": 0.19944757304619998
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 0,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.14168247499037534,
+    "camera_pixel_latency_s": {
+     "n": 2581,
+     "max": 0.6766116799553856,
+     "window_n": 2581,
+     "window_median": 0.21936664800159633,
+     "window_p99": 0.29278593393974006,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_03_F_sync",
+   "n": 3,
+   "scene": "F",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 48,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 21,
+    "rows": [
+     351,
+     1599
+    ],
+    "rows_clean": [
+     351,
+     1599
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1569924054783769,
+     "p99": 0.166181812066352,
+     "max": 0.16636935097631067
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1569924054783769,
+     "p99": 0.166181812066352,
+     "max": 0.16636935097631067
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.00238078401889652,
+     "p99": 0.00258566775592044,
+     "max": 0.00258984905667603
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.18352926801890135,
+     "p99": 0.19723081566626205,
+     "max": 0.19751043908763677
+    }
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.277474350994453,
+    "camera_pixel_latency_s": {
+     "n": 1726,
+     "max": 3.8649533690186217,
+     "window_n": 1726,
+     "window_median": 0.5576625515241176,
+     "window_p99": 0.5734033280750737,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_04_F_async",
+   "n": 4,
+   "scene": "F",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 47,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     350,
+     1605
+    ],
+    "rows_clean": [
+     350,
+     1605
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1468966529937461,
+     "p99": 0.163471334266942,
+     "max": 0.1638095930684358
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1468966529937461,
+     "p99": 0.163471334266942,
+     "max": 0.1638095930684358
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0018451855285093188,
+     "p99": 0.0019300893135368825,
+     "max": 0.0019318220438435674
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1693507909658365,
+     "p99": 0.1856410849688109,
+     "max": 0.18597353994846344
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2461304150056094,
+    "camera_pixel_latency_s": {
+     "n": 1716,
+     "max": 3.73828369891271,
+     "window_n": 1716,
+     "window_median": 0.55764067301061,
+     "window_p99": 0.5755281820893288,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_05_H_async",
+   "n": 5,
+   "scene": "H",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 30,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1626,
+     3971
+    ],
+    "rows_clean": [
+     1626,
+     3971
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.15433171699987724,
+     "p99": 0.19655660071060993,
+     "max": 0.19741833303123713
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.15433171699987724,
+     "p99": 0.19655660071060993,
+     "max": 0.19741833303123713
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0034673799527809024,
+     "p99": 0.00408723387401551,
+     "max": 0.004099883954040706
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1822169700753875,
+     "p99": 0.21536592972348445,
+     "max": 0.21604243910405785
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 2,
+    "near_control": 2,
+    "over": 0,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.13461698789615184,
+    "camera_pixel_latency_s": {
+     "n": 2537,
+     "max": 0.6816580250160769,
+     "window_n": 2537,
+     "window_median": 0.21897714002989233,
+     "window_p99": 0.29678302991669625,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_06_H_sync",
+   "n": 6,
+   "scene": "H",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 30,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1652,
+     4078
+    ],
+    "rows_clean": [
+     1652,
+     4078
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17095746449194849,
+     "p99": 0.20897802121238782,
+     "max": 0.2097539509413764
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17095746449194849,
+     "p99": 0.20897802121238782,
+     "max": 0.2097539509413764
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.002594973484519869,
+     "p99": 0.002767633287003264,
+     "max": 0.0027711569564417005
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.19049669103696942,
+     "p99": 0.2299170783231966,
+     "max": 0.23072157602291554
+    }
+   },
+   "gaps": {
+    "near": 1,
+    "near_control": 1,
+    "over": 0,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.13603176502510905,
+    "camera_pixel_latency_s": {
+     "n": 2533,
+     "max": 0.6960635590367019,
+     "window_n": 2533,
+     "window_median": 0.2190154689596966,
+     "window_p99": 0.2927344609051943,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_07_F_async",
+   "n": 7,
+   "scene": "F",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 48,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     352,
+     1628
+    ],
+    "rows_clean": [
+     352,
+     1628
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1517523960210383,
+     "p99": 0.1665711455582641,
+     "max": 0.1668735690182075
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1517523960210383,
+     "p99": 0.1665711455582641,
+     "max": 0.1668735690182075
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.002046445559244603,
+     "p99": 0.002055018114624545,
+     "max": 0.0020551930647343397
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1758843160350807,
+     "p99": 0.19089336585137062,
+     "max": 0.19119967299047858
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.296706182998605,
+    "camera_pixel_latency_s": {
+     "n": 1744,
+     "max": 3.850462595000863,
+     "window_n": 1744,
+     "window_median": 0.5580236209789291,
+     "window_p99": 0.581450070021674,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_08_F_sync",
+   "n": 8,
+   "scene": "F",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 48,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     352,
+     1627
+    ],
+    "rows_clean": [
+     352,
+     1627
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16225634643342346,
+     "p99": 0.16704096761532128,
+     "max": 0.1671386129455641
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16225634643342346,
+     "p99": 0.16704096761532128,
+     "max": 0.1671386129455641
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0021959784789942205,
+     "p99": 0.0022595515858847646,
+     "max": 0.0022608489962294698
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.18587922950973734,
+     "p99": 0.19045578295714222,
+     "max": 0.19054918200708926
+    }
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3037712019868195,
+    "camera_pixel_latency_s": {
+     "n": 1738,
+     "max": 3.9061752390116453,
+     "window_n": 1738,
+     "window_median": 0.5575816270429641,
+     "window_p99": 0.5842697219923139,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_09_H_sync",
+   "n": 9,
+   "scene": "H",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 30,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1678,
+     3440
+    ],
+    "rows_clean": [
+     1678,
+     3440
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17238403751980513,
+     "p99": 0.2049982685316354,
+     "max": 0.20566386508289725
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17238403751980513,
+     "p99": 0.2049982685316354,
+     "max": 0.20566386508289725
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0024290375295095146,
+     "p99": 0.002727703816490248,
+     "max": 0.0027337990468367934
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.19070672249654308,
+     "p99": 0.22299920285469851,
+     "max": 0.22365823306608945
+    }
+   },
+   "gaps": {
+    "near": 1,
+    "near_control": 1,
+    "over": 0,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.1364153689937666,
+    "camera_pixel_latency_s": {
+     "n": 2566,
+     "max": 0.705286632059142,
+     "window_n": 2566,
+     "window_median": 0.2192047425196506,
+     "window_p99": 0.2892256280174479,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_10_H_async",
+   "n": 10,
+   "scene": "H",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 30,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "failed",
+     "cusp_position_stall"
+    ]
+   ],
+   "mission_done": false,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     1667,
+     4068
+    ],
+    "rows_clean": [
+     1667,
+     4068
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17021853500045836,
+     "p99": 0.2139648804673925,
+     "max": 0.21485766302794218
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.17021853500045836,
+     "p99": 0.2139648804673925,
+     "max": 0.21485766302794218
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0025104075320996344,
+     "p99": 0.0025502792897168546,
+     "max": 0.0025510929990559816
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.19896886800415814,
+     "p99": 0.24960109717445447,
+     "max": 0.2506344079738483
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 1,
+    "over_control": 1
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 0,
+    "world_step_over_0_5_s": 0,
+    "world_step_max_s": 0.13389486994128674,
+    "camera_pixel_latency_s": {
+     "n": 2576,
+     "max": 0.6919703490566462,
+     "window_n": 2576,
+     "window_median": 0.21906186896376312,
+     "window_p99": 0.29735843499656767,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_11_F_sync",
+   "n": 11,
+   "scene": "F",
+   "mode": "sync",
+   "invalid": [],
+   "ps": {
+    "samples": 47,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     352,
+     1579
+    ],
+    "rows_clean": [
+     352,
+     1579
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16812217351980507,
+     "p99": 0.1682857713336125,
+     "max": 0.16828911006450653
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.16812217351980507,
+     "p99": 0.1682857713336125,
+     "max": 0.16828911006450653
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.001906981982756406,
+     "p99": 0.0021139952109660953,
+     "max": 0.0021182199707254767
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.19022350298473611,
+     "p99": 0.19109053937369025,
+     "max": 0.191108233993873
+    }
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": null,
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3359008519910276,
+    "camera_pixel_latency_s": {
+     "n": 1715,
+     "max": 3.8989494600100443,
+     "window_n": 1715,
+     "window_median": 0.5574700859142467,
+     "window_p99": 0.5815073990961537,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  },
+  {
+   "name": "g2a_12_F_async",
+   "n": 12,
+   "scene": "F",
+   "mode": "async",
+   "invalid": [],
+   "ps": {
+    "samples": 47,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "other_jobs": [],
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "capture": {
+    "runs": 2,
+    "runs_suspect": 0,
+    "flagged_rows": 22,
+    "rows": [
+     352,
+     1612
+    ],
+    "rows_clean": [
+     352,
+     1612
+    ],
+    "control_next_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.13031444448279217,
+     "p99": 0.1489085631875787,
+     "max": 0.14928803499788046
+    },
+    "control_next_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.13031444448279217,
+     "p99": 0.1489085631875787,
+     "max": 0.14928803499788046
+    },
+    "control_last_flagged_row_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.0019433384877629578,
+     "p99": 0.0023853170045185835,
+     "max": 0.00239433697424829
+    },
+    "gap_clean_s": {
+     "n": 2,
+     "missing": 0,
+     "median": 0.1533832715358585,
+     "p99": 0.17132228474365546,
+     "max": 0.17168838705401868
+    },
+    "entries_written": 2
+   },
+   "gaps": {
+    "near": 0,
+    "near_control": 0,
+    "over": 2,
+    "over_control": 0
+   },
+   "files": {
+    "attempts": [
+     1,
+     2
+    ],
+    "missing": [],
+    "unreadable": []
+   },
+   "capture_dump": {
+    "mode": "async",
+    "closed": true,
+    "dropped_full": 0,
+    "errors": 0,
+    "unsettled": 0
+   },
+   "log_dropped_lines": 0,
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.230843696044758,
+    "camera_pixel_latency_s": {
+     "n": 1719,
+     "max": 3.8088119770400226,
+     "window_n": 1719,
+     "window_median": 0.5576559770852327,
+     "window_p99": 0.5735286519629881,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "forbidden_pocket_contacts": 0
+  }
+ ],
+ "verdict": {
+  "valid_sessions": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9,
+   10,
+   11,
+   12
+  ],
+  "invalid_sessions": [],
+  "lines": {
+   "1_no_control_over_0_25_async": {
+    "count": 1,
+    "pass": false
+   },
+   "2_near_control_share_lower": {
+    "scenes": {
+     "H": {
+      "control_near_by_arm": {
+       "sync": [
+        4,
+        4
+       ],
+       "async": [
+        2,
+        2
+       ]
+      },
+      "share": {
+       "sync": 1.0,
+       "async": 1.0
+      },
+      "pass": false
+     },
+     "F": {
+      "control_near_by_arm": {
+       "sync": [
+        0,
+        0
+       ],
+       "async": [
+        0,
+        0
+       ]
+      },
+      "share": {
+       "sync": 0.0,
+       "async": 0.0
+      },
+      "pass": true
+     }
+    },
+    "pass": false
+   },
+   "3_capture_control_lower": {
+    "pairs": [
+     {
+      "pair": [
+       1,
+       2
+      ],
+      "scene": "H",
+      "population": "A",
+      "sync_median_s": 0.16273930249735713,
+      "async_median_s": 0.134618912008591,
+      "drop_s": 0.028120390488766134
+     },
+     {
+      "pair": [
+       1,
+       2
+      ],
+      "scene": "H",
+      "population": "B",
+      "sync_median_s": 0.16273930249735713,
+      "async_median_s": 0.134618912008591,
+      "drop_s": 0.028120390488766134
+     },
+     {
+      "pair": [
+       5,
+       6
+      ],
+      "scene": "H",
+      "population": "A",
+      "sync_median_s": 0.17095746449194849,
+      "async_median_s": 0.15433171699987724,
+      "drop_s": 0.01662574749207124
+     },
+     {
+      "pair": [
+       5,
+       6
+      ],
+      "scene": "H",
+      "population": "B",
+      "sync_median_s": 0.17095746449194849,
+      "async_median_s": 0.15433171699987724,
+      "drop_s": 0.01662574749207124
+     },
+     {
+      "pair": [
+       9,
+       10
+      ],
+      "scene": "H",
+      "population": "A",
+      "sync_median_s": 0.17238403751980513,
+      "async_median_s": 0.17021853500045836,
+      "drop_s": 0.0021655025193467736
+     },
+     {
+      "pair": [
+       9,
+       10
+      ],
+      "scene": "H",
+      "population": "B",
+      "sync_median_s": 0.17238403751980513,
+      "async_median_s": 0.17021853500045836,
+      "drop_s": 0.0021655025193467736
+     },
+     {
+      "pair": [
+       3,
+       4
+      ],
+      "scene": "F",
+      "population": "A",
+      "sync_median_s": 0.1569924054783769,
+      "async_median_s": 0.1468966529937461,
+      "drop_s": 0.010095752484630793
+     },
+     {
+      "pair": [
+       3,
+       4
+      ],
+      "scene": "F",
+      "population": "B",
+      "sync_median_s": 0.1569924054783769,
+      "async_median_s": 0.1468966529937461,
+      "drop_s": 0.010095752484630793
+     },
+     {
+      "pair": [
+       7,
+       8
+      ],
+      "scene": "F",
+      "population": "A",
+      "sync_median_s": 0.16225634643342346,
+      "async_median_s": 0.1517523960210383,
+      "drop_s": 0.010503950412385166
+     },
+     {
+      "pair": [
+       7,
+       8
+      ],
+      "scene": "F",
+      "population": "B",
+      "sync_median_s": 0.16225634643342346,
+      "async_median_s": 0.1517523960210383,
+      "drop_s": 0.010503950412385166
+     },
+     {
+      "pair": [
+       11,
+       12
+      ],
+      "scene": "F",
+      "population": "A",
+      "sync_median_s": 0.16812217351980507,
+      "async_median_s": 0.13031444448279217,
+      "drop_s": 0.037807729037012905
+     },
+     {
+      "pair": [
+       11,
+       12
+      ],
+      "scene": "F",
+      "population": "B",
+      "sync_median_s": 0.16812217351980507,
+      "async_median_s": 0.13031444448279217,
+      "drop_s": 0.037807729037012905
+     }
+    ],
+    "left_out": [],
+    "populations": {
+     "A": {
+      "median_drop_s": 0.013564848952228203,
+      "pass": false
+     },
+     "B": {
+      "median_drop_s": 0.013564848952228203,
+      "pass": false
+     }
+    },
+    "pass": false
+   },
+   "4_missions_no_worse": {
+    "pairs": [
+     {
+      "pair": [
+       1,
+       2
+      ],
+      "sync_done": false,
+      "async_done": false,
+      "sync_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     },
+     {
+      "pair": [
+       5,
+       6
+      ],
+      "sync_done": false,
+      "async_done": false,
+      "sync_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     },
+     {
+      "pair": [
+       9,
+       10
+      ],
+      "sync_done": false,
+      "async_done": false,
+      "sync_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "failed",
+        "cusp_position_stall"
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     },
+     {
+      "pair": [
+       3,
+       4
+      ],
+      "sync_done": true,
+      "async_done": true,
+      "sync_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     },
+     {
+      "pair": [
+       7,
+       8
+      ],
+      "sync_done": true,
+      "async_done": true,
+      "sync_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     },
+     {
+      "pair": [
+       11,
+       12
+      ],
+      "sync_done": true,
+      "async_done": true,
+      "sync_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "async_outcomes": [
+       [
+        "done",
+        null
+       ]
+      ],
+      "forbidden_pocket_contacts": [
+       0,
+       0
+      ],
+      "pass": true
+     }
+    ],
+    "pass": true
+   },
+   "5_no_loss": {
+    "problems": [],
+    "pass": true
+   },
+   "6_any_source_over_0_25_not_more": {
+    "scenes": {
+     "H": {
+      "sync": 0,
+      "async": 1
+     },
+     "F": {
+      "sync": 6,
+      "async": 6
+     }
+    },
+    "pass": false
+   }
+  },
+  "pass": false
+ },
+ "hall_long_world_steps": [
+  {
+   "name": "g2a_01_H_sync",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.14360632409807295,
+   "camera_pixel_latency_s": {
+    "n": 2614,
+    "max": 0.7040958378929645,
+    "window_n": 2614,
+    "window_median": 0.21929089649347588,
+    "window_p99": 0.2981388479238376,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  },
+  {
+   "name": "g2a_02_H_async",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.14168247499037534,
+   "camera_pixel_latency_s": {
+    "n": 2581,
+    "max": 0.6766116799553856,
+    "window_n": 2581,
+    "window_median": 0.21936664800159633,
+    "window_p99": 0.29278593393974006,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  },
+  {
+   "name": "g2a_05_H_async",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.13461698789615184,
+   "camera_pixel_latency_s": {
+    "n": 2537,
+    "max": 0.6816580250160769,
+    "window_n": 2537,
+    "window_median": 0.21897714002989233,
+    "window_p99": 0.29678302991669625,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  },
+  {
+   "name": "g2a_06_H_sync",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.13603176502510905,
+   "camera_pixel_latency_s": {
+    "n": 2533,
+    "max": 0.6960635590367019,
+    "window_n": 2533,
+    "window_median": 0.2190154689596966,
+    "window_p99": 0.2927344609051943,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  },
+  {
+   "name": "g2a_09_H_sync",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.1364153689937666,
+   "camera_pixel_latency_s": {
+    "n": 2566,
+    "max": 0.705286632059142,
+    "window_n": 2566,
+    "window_median": 0.2192047425196506,
+    "window_p99": 0.2892256280174479,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  },
+  {
+   "name": "g2a_10_H_async",
+   "world_step_over_0_25_s": 0,
+   "world_step_over_0_5_s": 0,
+   "world_step_max_s": 0.13389486994128674,
+   "camera_pixel_latency_s": {
+    "n": 2576,
+    "max": 0.6919703490566462,
+    "window_n": 2576,
+    "window_median": 0.21906186896376312,
+    "window_p99": 0.29735843499656767,
+    "window": "the last 36000 measured frames (a count, not a wall time)"
+   }
+  }
+ ]
+}
