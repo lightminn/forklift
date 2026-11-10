@@ -1,0 +1,2351 @@
+{
+ "sessions": {
+  "g3ec4_01_D": {
+   "name": "g3ec4_01_D",
+   "arm": "D",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 21,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.11960374803096438,
+   "scan_step_W_ms": {
+    "p50": 30.105720041319728,
+    "p99": 52.51338134054097,
+    "max": 110.30084104277194
+   },
+   "auto": {
+    "windows": 146,
+    "sim_s": 143.9916741764173,
+    "wall_s": 147.22759281587787,
+    "rate": 0.9780209770629925,
+    "ok": 0.9554616570547593
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.305561008048244,
+    "camera_pixel_latency_s": {
+     "n": 1722,
+     "max": 3.4543627940583974,
+     "window_n": 1722,
+     "window_median": 0.2359630884602666,
+     "window_p99": 0.30686303798574954,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   },
+   "kinds": {
+    "environment": [],
+    "worker": [],
+    "mission": []
+   },
+   "evidence_stale_ticks": {
+    "total": 0
+   },
+   "scheduler": {
+    "jobs": 1731,
+    "cpu_over_wall": 1.0069015443271507,
+    "delay_over_wall": 0.0071062752109840865,
+    "cpus": [
+     0,
+     1,
+     12,
+     13
+    ]
+   },
+   "k4_corrected_wait_ms": null,
+   "threads": {
+    "window_s": 200.2798409461975,
+    "samples": 21,
+    "missed_threads": "unknown",
+    "by_name": {
+     "python/python": {
+      "cpu_s": 161.21999999999989,
+      "delay_s": 43.44863143599999,
+      "threads": 106,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "python/tbb.worker": {
+      "cpu_s": 97.1699999999996,
+      "delay_s": 1111.3971158950005,
+      "threads": 24,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking2": {
+      "cpu_s": 7.979999999999999,
+      "delay_s": 66.52346577,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking0": {
+      "cpu_s": 7.6899999999999995,
+      "delay_s": 67.04224496,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking15": {
+      "cpu_s": 7.569999999999998,
+      "delay_s": 67.24127249200001,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking18": {
+      "cpu_s": 7.5299999999999985,
+      "delay_s": 66.513630308,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking17": {
+      "cpu_s": 7.309999999999998,
+      "delay_s": 66.391169881,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking7": {
+      "cpu_s": 7.299999999999998,
+      "delay_s": 66.746341493,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking16": {
+      "cpu_s": 7.239999999999999,
+      "delay_s": 66.48286764000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking6": {
+      "cpu_s": 7.209999999999999,
+      "delay_s": 66.767206219,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking11": {
+      "cpu_s": 7.199999999999998,
+      "delay_s": 66.808705658,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking20": {
+      "cpu_s": 7.1099999999999985,
+      "delay_s": 67.02934974099999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking12": {
+      "cpu_s": 7.059999999999999,
+      "delay_s": 66.85689240200001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking1": {
+      "cpu_s": 6.979999999999999,
+      "delay_s": 66.570320255,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking13": {
+      "cpu_s": 6.89,
+      "delay_s": 66.645469351,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking22": {
+      "cpu_s": 6.87,
+      "delay_s": 66.815917017,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking14": {
+      "cpu_s": 6.85,
+      "delay_s": 66.699256874,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking3": {
+      "cpu_s": 6.849999999999999,
+      "delay_s": 66.777791658,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking4": {
+      "cpu_s": 6.849999999999999,
+      "delay_s": 66.60074558099998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking5": {
+      "cpu_s": 6.849999999999999,
+      "delay_s": 66.693496025,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking23": {
+      "cpu_s": 6.82,
+      "delay_s": 66.551795323,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking21": {
+      "cpu_s": 6.819999999999999,
+      "delay_s": 66.725716274,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking19": {
+      "cpu_s": 6.800000000000001,
+      "delay_s": 66.67466455,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking9": {
+      "cpu_s": 6.799999999999999,
+      "delay_s": 66.77071135600002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking10": {
+      "cpu_s": 6.799999999999999,
+      "delay_s": 66.801560239,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking8": {
+      "cpu_s": 6.789999999999999,
+      "delay_s": 66.25811844100001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda-EvtHandlr": {
+      "cpu_s": 0.49000000000000016,
+      "delay_s": 3.116975652,
+      "threads": 3,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/Profiler proces": {
+      "cpu_s": 0.31,
+      "delay_s": 4.295943330000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python3/python3": {
+      "cpu_s": 0.22999999999999998,
+      "delay_s": 0.011527691,
+      "threads": 1,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/OC Tick": {
+      "cpu_s": 0.22000000000000006,
+      "delay_s": 0.37971068399999997,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkps] Update": {
+      "cpu_s": 0.22,
+      "delay_s": 2.1724676250000003,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-smi/nvidia-smi": {
+      "cpu_s": 0.09,
+      "delay_s": 0.08784042300000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.scenedb.fre": {
+      "cpu_s": 0.08,
+      "delay_s": 0.203748517,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx::streaming ": {
+      "cpu_s": 0.07,
+      "delay_s": 0.102222574,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task timer": {
+      "cpu_s": 0.05,
+      "delay_s": 0.503209284,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Print": {
+      "cpu_s": 0.04,
+      "delay_s": 0.43042080600000004,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC File IO": {
+      "cpu_s": 0.03,
+      "delay_s": 0.04801266,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Directory Wa": {
+      "cpu_s": 0.01,
+      "delay_s": 0.025027036,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "bash/bash": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "nvidia-smi/cuda00001800007": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task watch": {
+      "cpu_s": 0.0,
+      "delay_s": 0.017593297999999993,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/heartbeat threa": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/FileSystemWatch": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/structured log ": {
+      "cpu_s": 0.0,
+      "delay_s": 1.584e-05,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000c800033": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/python:disk$0": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 2,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/[vkcf] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkrt] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.161713958,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.shaderdb.Fi": {
+      "cpu_s": 0.0,
+      "delay_s": 0.21649269600000007,
+      "threads": 6,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Py CBs": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-ngx-upda/nvidia-ngx-upda": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC http": {
+      "cpu_s": 0.0,
+      "delay_s": 0.024903942,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000240000a": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     }
+    }
+   }
+  },
+  "g3ec4_02_T": {
+   "name": "g3ec4_02_T",
+   "arm": "T",
+   "pair": 1,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.05193035351791181,
+   "scan_step_W_ms": {
+    "p50": 23.950701928697526,
+    "p99": 49.41546388436108,
+    "max": 100.29256297275424
+   },
+   "auto": {
+    "windows": 148,
+    "sim_s": 146.5500076431781,
+    "wall_s": 148.77005279797595,
+    "rate": 0.9850773383954324,
+    "ok": 0.9573122971914513
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2642489039571956,
+    "camera_pixel_latency_s": {
+     "n": 1757,
+     "max": 3.4067788909887895,
+     "window_n": 1757,
+     "window_median": 0.22846078989095986,
+     "window_p99": 0.29817038599867374,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   },
+   "kinds": {
+    "environment": [],
+    "worker": [],
+    "mission": []
+   },
+   "evidence_stale_ticks": {
+    "total": 0
+   },
+   "scheduler": {
+    "jobs": 1766,
+    "cpu_over_wall": 0.4185751191182329,
+    "delay_over_wall": 0.05103692745002126,
+    "cpus": [
+     1,
+     13
+    ]
+   },
+   "k4_corrected_wait_ms": null,
+   "threads": {
+    "window_s": 210.29811334609985,
+    "samples": 22,
+    "missed_threads": "unknown",
+    "by_name": {
+     "python/python": {
+      "cpu_s": 174.45999999999992,
+      "delay_s": 47.70606936600003,
+      "threads": 106,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14",
+       "1,13"
+      ]
+     },
+     "python/tbb.worker": {
+      "cpu_s": 92.71999999999989,
+      "delay_s": 1095.4735105210004,
+      "threads": 24,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking1": {
+      "cpu_s": 8.069999999999999,
+      "delay_s": 67.427245077,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking3": {
+      "cpu_s": 7.879999999999999,
+      "delay_s": 67.591054232,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking0": {
+      "cpu_s": 7.869999999999997,
+      "delay_s": 67.77369163600001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking11": {
+      "cpu_s": 7.769999999999999,
+      "delay_s": 67.39052470299998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking14": {
+      "cpu_s": 7.6099999999999985,
+      "delay_s": 67.105583061,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking5": {
+      "cpu_s": 7.359999999999998,
+      "delay_s": 67.382918472,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking18": {
+      "cpu_s": 7.319999999999998,
+      "delay_s": 67.913554162,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking7": {
+      "cpu_s": 7.259999999999998,
+      "delay_s": 67.267144447,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking23": {
+      "cpu_s": 7.249999999999998,
+      "delay_s": 67.223086411,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking15": {
+      "cpu_s": 7.2399999999999975,
+      "delay_s": 67.18730158700001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking21": {
+      "cpu_s": 7.179999999999998,
+      "delay_s": 67.483763985,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking16": {
+      "cpu_s": 7.169999999999998,
+      "delay_s": 67.10606429699999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking20": {
+      "cpu_s": 7.159999999999998,
+      "delay_s": 67.38043652100001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking12": {
+      "cpu_s": 7.119999999999998,
+      "delay_s": 67.22278969600002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking13": {
+      "cpu_s": 7.119999999999998,
+      "delay_s": 66.89070469800001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking8": {
+      "cpu_s": 7.089999999999998,
+      "delay_s": 67.18294991599998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking10": {
+      "cpu_s": 7.019999999999999,
+      "delay_s": 67.252702641,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking6": {
+      "cpu_s": 6.889999999999998,
+      "delay_s": 67.48446615799999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking22": {
+      "cpu_s": 6.879999999999999,
+      "delay_s": 67.043059665,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking19": {
+      "cpu_s": 6.879999999999998,
+      "delay_s": 67.295337747,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking2": {
+      "cpu_s": 6.869999999999999,
+      "delay_s": 67.24715871800001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking17": {
+      "cpu_s": 6.869999999999997,
+      "delay_s": 67.22623260499999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking4": {
+      "cpu_s": 6.8199999999999985,
+      "delay_s": 67.333839652,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking9": {
+      "cpu_s": 6.759999999999999,
+      "delay_s": 67.17382040599999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda-EvtHandlr": {
+      "cpu_s": 0.5000000000000002,
+      "delay_s": 2.9294535230000003,
+      "threads": 3,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.shaderdb.Fi": {
+      "cpu_s": 0.32,
+      "delay_s": 0.21835762499999992,
+      "threads": 6,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/Profiler proces": {
+      "cpu_s": 0.3,
+      "delay_s": 4.452658512,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python3/python3": {
+      "cpu_s": 0.24000000000000002,
+      "delay_s": 0.005503990000000001,
+      "threads": 1,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/OC Tick": {
+      "cpu_s": 0.22000000000000006,
+      "delay_s": 0.499688095,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkps] Update": {
+      "cpu_s": 0.21,
+      "delay_s": 2.276858381,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-smi/nvidia-smi": {
+      "cpu_s": 0.09999999999999999,
+      "delay_s": 0.10257559400000003,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx::streaming ": {
+      "cpu_s": 0.07,
+      "delay_s": 0.103620065,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.scenedb.fre": {
+      "cpu_s": 0.07,
+      "delay_s": 0.15380031400000002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Print": {
+      "cpu_s": 0.04,
+      "delay_s": 0.4552074479999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task timer": {
+      "cpu_s": 0.04,
+      "delay_s": 0.40299073100000005,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC File IO": {
+      "cpu_s": 0.02,
+      "delay_s": 0.006108557,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/FileSystemWatch": {
+      "cpu_s": 0.01,
+      "delay_s": 0.022758155,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Directory Wa": {
+      "cpu_s": 0.01,
+      "delay_s": 0.26263810899999984,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC http": {
+      "cpu_s": 0.01,
+      "delay_s": 0.05831929900000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "bash/bash": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "nvidia-smi/cuda00001800007": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task watch": {
+      "cpu_s": 0.0,
+      "delay_s": 0.025390248,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/heartbeat threa": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/structured log ": {
+      "cpu_s": 0.0,
+      "delay_s": 0.008688116999999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000c800033": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/python:disk$0": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 2,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/[vkcf] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkrt] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.3400477059999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Py CBs": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-ngx-upda/nvidia-ngx-upda": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000240000a": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     }
+    }
+   }
+  },
+  "g3ec4_03_T": {
+   "name": "g3ec4_03_T",
+   "arm": "T",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.003,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.050622591153983196,
+   "scan_step_W_ms": {
+    "p50": 23.525907075963914,
+    "p99": 49.96341783553363,
+    "max": 68.8924069982022
+   },
+   "auto": {
+    "windows": 149,
+    "sim_s": 147.59167436417192,
+    "wall_s": 149.65261502191424,
+    "rate": 0.9862285022053204,
+    "ok": 0.9569122265689569
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.3540720879100263,
+    "camera_pixel_latency_s": {
+     "n": 1782,
+     "max": 3.5142284330213442,
+     "window_n": 1782,
+     "window_median": 0.22785172704607248,
+     "window_p99": 0.2922651299741119,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   },
+   "kinds": {
+    "environment": [],
+    "worker": [],
+    "mission": []
+   },
+   "evidence_stale_ticks": {
+    "total": 0
+   },
+   "scheduler": {
+    "jobs": 1791,
+    "cpu_over_wall": 0.42855059101143994,
+    "delay_over_wall": 0.05287250628278527,
+    "cpus": [
+     1,
+     13
+    ]
+   },
+   "k4_corrected_wait_ms": null,
+   "threads": {
+    "window_s": 210.30441117286682,
+    "samples": 22,
+    "missed_threads": "unknown",
+    "by_name": {
+     "python/python": {
+      "cpu_s": 172.11000000000013,
+      "delay_s": 49.75161551799996,
+      "threads": 107,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14",
+       "1,13"
+      ]
+     },
+     "python/tbb.worker": {
+      "cpu_s": 97.13999999999994,
+      "delay_s": 1125.7947617390005,
+      "threads": 24,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking1": {
+      "cpu_s": 7.889999999999998,
+      "delay_s": 69.85923235600002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking12": {
+      "cpu_s": 7.8199999999999985,
+      "delay_s": 67.758993074,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking18": {
+      "cpu_s": 7.789999999999998,
+      "delay_s": 67.55211131099999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking5": {
+      "cpu_s": 7.7399999999999975,
+      "delay_s": 67.870191264,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking14": {
+      "cpu_s": 7.619999999999997,
+      "delay_s": 67.9226723,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking3": {
+      "cpu_s": 7.559999999999997,
+      "delay_s": 67.773080176,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking9": {
+      "cpu_s": 7.5299999999999985,
+      "delay_s": 67.629902838,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking13": {
+      "cpu_s": 7.4899999999999975,
+      "delay_s": 67.454892438,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking0": {
+      "cpu_s": 7.439999999999998,
+      "delay_s": 67.622462694,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking7": {
+      "cpu_s": 7.339999999999998,
+      "delay_s": 67.62747719600002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking8": {
+      "cpu_s": 7.289999999999997,
+      "delay_s": 67.241994825,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking22": {
+      "cpu_s": 7.249999999999997,
+      "delay_s": 68.200906722,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking16": {
+      "cpu_s": 7.239999999999998,
+      "delay_s": 68.01272819199998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking11": {
+      "cpu_s": 7.22,
+      "delay_s": 67.199825325,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking2": {
+      "cpu_s": 7.189999999999998,
+      "delay_s": 67.641398325,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking23": {
+      "cpu_s": 7.179999999999998,
+      "delay_s": 67.564973089,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking19": {
+      "cpu_s": 7.149999999999998,
+      "delay_s": 67.865384467,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking10": {
+      "cpu_s": 7.1099999999999985,
+      "delay_s": 67.669941555,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking15": {
+      "cpu_s": 7.0299999999999985,
+      "delay_s": 68.181562649,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking20": {
+      "cpu_s": 6.959999999999998,
+      "delay_s": 67.66510599300001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking17": {
+      "cpu_s": 6.91,
+      "delay_s": 67.47479606600001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking21": {
+      "cpu_s": 6.909999999999999,
+      "delay_s": 67.506328525,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking6": {
+      "cpu_s": 6.889999999999999,
+      "delay_s": 67.813911273,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking4": {
+      "cpu_s": 6.889999999999998,
+      "delay_s": 67.29996538,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda-EvtHandlr": {
+      "cpu_s": 0.4700000000000002,
+      "delay_s": 3.142321037,
+      "threads": 3,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/Profiler proces": {
+      "cpu_s": 0.28,
+      "delay_s": 4.539126593999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python3/python3": {
+      "cpu_s": 0.24000000000000002,
+      "delay_s": 0.013664400000000002,
+      "threads": 1,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/OC Tick": {
+      "cpu_s": 0.23000000000000004,
+      "delay_s": 0.484488309,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkps] Update": {
+      "cpu_s": 0.21000000000000002,
+      "delay_s": 2.1856182790000003,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-smi/nvidia-smi": {
+      "cpu_s": 0.09999999999999999,
+      "delay_s": 0.09299116899999998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx::streaming ": {
+      "cpu_s": 0.07,
+      "delay_s": 0.09707889199999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.scenedb.fre": {
+      "cpu_s": 0.07,
+      "delay_s": 0.256073212,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Print": {
+      "cpu_s": 0.05,
+      "delay_s": 0.4534309940000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task timer": {
+      "cpu_s": 0.04,
+      "delay_s": 0.49283099599999997,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC File IO": {
+      "cpu_s": 0.03,
+      "delay_s": 0.07169056900000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/FileSystemWatch": {
+      "cpu_s": 0.01,
+      "delay_s": 0.016909779,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC http": {
+      "cpu_s": 0.01,
+      "delay_s": 0.076109482,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "bash/bash": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "nvidia-smi/cuda00001800007": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task watch": {
+      "cpu_s": 0.0,
+      "delay_s": 0.022510259999999997,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/heartbeat threa": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/structured log ": {
+      "cpu_s": 0.0,
+      "delay_s": 0.00158715,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000c800033": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/python:disk$0": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 2,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/[vkcf] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkrt] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.14512843199999997,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.shaderdb.Fi": {
+      "cpu_s": 0.0,
+      "delay_s": 0.192800857,
+      "threads": 6,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Directory Wa": {
+      "cpu_s": 0.0,
+      "delay_s": 0.03251139299999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Py CBs": {
+      "cpu_s": 0.0,
+      "delay_s": 0.015031393,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-ngx-upda/nvidia-ngx-upda": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000240000a": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     }
+    }
+   }
+  },
+  "g3ec4_04_D": {
+   "name": "g3ec4_04_D",
+   "arm": "D",
+   "pair": 2,
+   "invalid": [],
+   "ps": {
+    "samples": 22,
+    "over_1_core": 0,
+    "share": 0.0,
+    "other_cores_median": 0.001,
+    "other_cores_max": 0.004,
+    "invalid": false
+   },
+   "mission_outcomes": [
+    [
+     "done",
+     null
+    ]
+   ],
+   "mission_done": true,
+   "scan_step_rest_s_per_sim_s": 0.12029937098795662,
+   "scan_step_W_ms": {
+    "p50": 30.536366975866258,
+    "p99": 52.07539382507093,
+    "max": 91.37107501737773
+   },
+   "auto": {
+    "windows": 149,
+    "sim_s": 146.69167431723326,
+    "wall_s": 150.27555891510565,
+    "rate": 0.9761512475897893,
+    "ok": 0.9480067377877597
+   },
+   "M8": {
+    "world_step_over_0_25_s": 2,
+    "world_step_over_0_5_s": 2,
+    "world_step_max_s": 2.2504773479886353,
+    "camera_pixel_latency_s": {
+     "n": 1745,
+     "max": 3.3865669169463217,
+     "window_n": 1745,
+     "window_median": 0.2369613969931379,
+     "window_p99": 0.3020247609820217,
+     "window": "the last 36000 measured frames (a count, not a wall time)"
+    }
+   },
+   "kernels_mode": "numba",
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0
+   },
+   "kinds": {
+    "environment": [],
+    "worker": [],
+    "mission": []
+   },
+   "evidence_stale_ticks": {
+    "total": 0
+   },
+   "scheduler": {
+    "jobs": 1754,
+    "cpu_over_wall": 1.0110423654608571,
+    "delay_over_wall": 0.0032932597460895753,
+    "cpus": [
+     0,
+     1,
+     12,
+     13
+    ]
+   },
+   "k4_corrected_wait_ms": null,
+   "threads": {
+    "window_s": 200.28222680091858,
+    "samples": 21,
+    "missed_threads": "unknown",
+    "by_name": {
+     "python/python": {
+      "cpu_s": 160.46999999999989,
+      "delay_s": 44.03345904200001,
+      "threads": 106,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "python/tbb.worker": {
+      "cpu_s": 96.2599999999998,
+      "delay_s": 1102.6950883889992,
+      "threads": 24,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking15": {
+      "cpu_s": 8.079999999999998,
+      "delay_s": 66.39017372800001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking10": {
+      "cpu_s": 7.539999999999998,
+      "delay_s": 66.26238533600001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking5": {
+      "cpu_s": 7.5299999999999985,
+      "delay_s": 66.373935585,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking9": {
+      "cpu_s": 7.509999999999999,
+      "delay_s": 66.18852580599999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking4": {
+      "cpu_s": 7.489999999999998,
+      "delay_s": 66.48267635499998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking18": {
+      "cpu_s": 7.469999999999999,
+      "delay_s": 66.126394915,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking8": {
+      "cpu_s": 7.369999999999999,
+      "delay_s": 66.25190879,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking22": {
+      "cpu_s": 7.329999999999998,
+      "delay_s": 66.049337387,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking20": {
+      "cpu_s": 7.249999999999999,
+      "delay_s": 65.822211937,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking3": {
+      "cpu_s": 7.199999999999999,
+      "delay_s": 66.21756709800002,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking6": {
+      "cpu_s": 7.179999999999999,
+      "delay_s": 66.197693288,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking13": {
+      "cpu_s": 7.169999999999999,
+      "delay_s": 66.30601301600001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking11": {
+      "cpu_s": 7.159999999999999,
+      "delay_s": 66.43046641,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking19": {
+      "cpu_s": 7.139999999999999,
+      "delay_s": 66.303167399,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking17": {
+      "cpu_s": 7.079999999999997,
+      "delay_s": 67.145129407,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking23": {
+      "cpu_s": 6.989999999999998,
+      "delay_s": 66.484826682,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking12": {
+      "cpu_s": 6.969999999999999,
+      "delay_s": 66.28942300099999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking1": {
+      "cpu_s": 6.959999999999998,
+      "delay_s": 66.30318906,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking0": {
+      "cpu_s": 6.949999999999999,
+      "delay_s": 66.15153239,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking7": {
+      "cpu_s": 6.949999999999998,
+      "delay_s": 66.87931214700001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking16": {
+      "cpu_s": 6.829999999999999,
+      "delay_s": 66.14908427599998,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking2": {
+      "cpu_s": 6.8199999999999985,
+      "delay_s": 66.063651107,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking14": {
+      "cpu_s": 6.809999999999999,
+      "delay_s": 66.18957721999999,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.tasking21": {
+      "cpu_s": 6.749999999999999,
+      "delay_s": 66.29903721,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda-EvtHandlr": {
+      "cpu_s": 0.4900000000000002,
+      "delay_s": 2.8142155310000008,
+      "threads": 3,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/Profiler proces": {
+      "cpu_s": 0.30000000000000004,
+      "delay_s": 4.222727129,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Tick": {
+      "cpu_s": 0.22000000000000006,
+      "delay_s": 0.604557666,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkps] Update": {
+      "cpu_s": 0.22000000000000003,
+      "delay_s": 2.123984258,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python3/python3": {
+      "cpu_s": 0.22,
+      "delay_s": 0.005755237,
+      "threads": 1,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "nvidia-smi/nvidia-smi": {
+      "cpu_s": 0.09999999999999999,
+      "delay_s": 0.32634207900000006,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx::streaming ": {
+      "cpu_s": 0.07,
+      "delay_s": 0.082271821,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.scenedb.fre": {
+      "cpu_s": 0.07,
+      "delay_s": 0.153265364,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Print": {
+      "cpu_s": 0.05,
+      "delay_s": 0.4642100740000001,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task timer": {
+      "cpu_s": 0.05,
+      "delay_s": 0.494580362,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC File IO": {
+      "cpu_s": 0.03,
+      "delay_s": 0.073969376,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/FileSystemWatch": {
+      "cpu_s": 0.01,
+      "delay_s": 0.01507054,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Directory Wa": {
+      "cpu_s": 0.01,
+      "delay_s": 0.251587429,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "bash/bash": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 4,
+      "affinity": [
+       "0-1,12-13",
+       "0-2,12-14"
+      ]
+     },
+     "nvidia-smi/cuda00001800007": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/carb.task watch": {
+      "cpu_s": 0.0,
+      "delay_s": 0.023330538999999997,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/heartbeat threa": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/structured log ": {
+      "cpu_s": 0.0,
+      "delay_s": 0.00712504,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000c800033": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/python:disk$0": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 2,
+      "affinity": [
+       "0-2,12-14"
+      ]
+     },
+     "python/[vkcf] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/[vkrt] Analysis": {
+      "cpu_s": 0.0,
+      "delay_s": 0.281461361,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/rtx.shaderdb.Fi": {
+      "cpu_s": 0.0,
+      "delay_s": 0.208022688,
+      "threads": 6,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC Py CBs": {
+      "cpu_s": 0.0,
+      "delay_s": 0.005545418,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/OC http": {
+      "cpu_s": 0.0,
+      "delay_s": 0.047089678999999995,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "nvidia-ngx-upda/nvidia-ngx-upda": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     },
+     "python/cuda0000240000a": {
+      "cpu_s": 0.0,
+      "delay_s": 0.0,
+      "threads": 1,
+      "affinity": [
+       "0-1,12-13"
+      ]
+     }
+    }
+   }
+  }
+ },
+ "k_executed": 4,
+ "summary_slots": 1,
+ "measures": {
+  "g3ec4_01_D": {
+   "auto_sim_s": 145.91666666666666,
+   "W": 0.7959851817810841,
+   "scans": 1459,
+   "scans_without_record": 0,
+   "scans_per_sim_s": 9.998857795545403,
+   "main_layer": 0.0914061475682925,
+   "compute": 0.06789243855630114,
+   "compute_cpu_over_wall": {
+    "n": 1459,
+    "mean": 0.9878841486684964,
+    "p50": 0.9980670725049985,
+    "p99": 1.0000779875649082,
+    "max": 1.0001178636427985
+   },
+   "barrier": {
+    "reasons": {
+     "refresh": 27
+    },
+    "per_sim_s": 0.18503712164477443,
+    "wait": 5.849309452835456e-07,
+    "install": 0.00039647842386683217
+   },
+   "scheduled_wait_ms": {
+    "n": 1432,
+    "mean": 0.0026897109743186883,
+    "p50": 0.002674991264939308,
+    "p99": 0.0034636305645108245,
+    "max": 0.01203198917210102
+   },
+   "main_other_raw": 0.6252238108911607,
+   "main_other": 0.6050751186191381,
+   "installs_in_auto_control": 1460,
+   "paired_wait_ms": {
+    "2": {
+     "n": 1459,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    },
+    "3": {
+     "n": 1459,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    },
+    "4": {
+     "n": 1459,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    }
+   },
+   "reported": {
+    "slam_apply_lag_s": {
+     "n": 1724,
+     "mean": 0.013747100484948562,
+     "p50": 0.0,
+     "p99": 0.23975001250393674,
+     "max": 0.5000000260770321
+    },
+    "far_job_wall_s": {
+     "n": 14,
+     "mean": 0.17993914155522361,
+     "p50": 0.17291506298352033,
+     "p99": 0.24590205715852786,
+     "max": 0.24980237695854157
+    }
+   }
+  },
+  "g3ec4_02_T": {
+   "auto_sim_s": 148.925,
+   "W": 0.789745963655102,
+   "scans": 1488,
+   "scans_without_record": 0,
+   "scans_per_sim_s": 9.991606513345642,
+   "main_layer": 0.020076652100931652,
+   "compute": 0.19902508411308212,
+   "compute_cpu_over_wall": {
+    "n": 1488,
+    "mean": 0.4308210353195591,
+    "p50": 0.42307375114832785,
+    "p99": 0.8807419303531455,
+    "max": 0.9302850953369993
+   },
+   "barrier": {
+    "reasons": {
+     "refresh": 29
+    },
+    "per_sim_s": 0.19472889038106428,
+    "wait": 0.0009026762858828642,
+    "install": 0.000458612762277751
+   },
+   "scheduled_wait_ms": {
+    "n": 1459,
+    "mean": 2.966092912367889,
+    "p50": 3.2140000257641077,
+    "p99": 5.8057929831556985,
+    "max": 30.025183921679854
+   },
+   "main_other_raw": 0.6800428213456585,
+   "main_other": 0.6322469313647575,
+   "installs_in_auto_control": 1490,
+   "paired_wait_ms": {
+    "2": {
+     "n": 1488,
+     "mean": 12.594664592035516,
+     "p50": 12.96401396393776,
+     "p99": 18.20157311158251,
+     "max": 71.06482598464936
+    },
+    "3": {
+     "n": 1488,
+     "mean": 7.555439624098575,
+     "p50": 8.03383148740977,
+     "p99": 11.726573985069962,
+     "max": 51.008468959480524
+    },
+    "4": {
+     "n": 1488,
+     "mean": 2.8982863126833354,
+     "p50": 3.191312018316239,
+     "p99": 5.724464835366225,
+     "max": 30.014293966814876
+    }
+   },
+   "reported": {
+    "slam_apply_lag_s": {
+     "n": 1759,
+     "mean": 0.013587266200387797,
+     "p50": 0.0,
+     "p99": 0.23333334550261497,
+     "max": 0.49166669230908155
+    },
+    "far_job_wall_s": {
+     "n": 14,
+     "mean": 0.19995029692238728,
+     "p50": 0.18502259155502543,
+     "p99": 0.2981071939656976,
+     "max": 0.3018268099986017
+    }
+   }
+  },
+  "g3ec4_03_T": {
+   "auto_sim_s": 151.21666666666667,
+   "W": 0.7701610307948051,
+   "scans": 1511,
+   "scans_without_record": 0,
+   "scans_per_sim_s": 9.992284801058084,
+   "main_layer": 0.020170448077500777,
+   "compute": 0.19102130451630836,
+   "compute_cpu_over_wall": {
+    "n": 1511,
+    "mean": 0.44159165064773076,
+    "p50": 0.4304963920185851,
+    "p99": 0.8836543428246149,
+    "max": 0.9284021724153491
+   },
+   "barrier": {
+    "reasons": {
+     "refresh": 30
+    },
+    "per_sim_s": 0.1983908299349719,
+    "wait": 0.0009190447629627202,
+    "install": 0.00042854287051576756
+   },
+   "scheduled_wait_ms": {
+    "n": 1481,
+    "mean": 2.699833024739037,
+    "p50": 2.991123008541763,
+    "p99": 5.530040850862862,
+    "max": 37.926584016531706
+   },
+   "main_other_raw": 0.6611498507102287,
+   "main_other": 0.6158195570048455,
+   "installs_in_auto_control": 1513,
+   "paired_wait_ms": {
+    "2": {
+     "n": 1511,
+     "mean": 11.891348507735461,
+     "p50": 12.299739988520741,
+     "p99": 16.770826873835187,
+     "max": 70.47795096877962
+    },
+    "3": {
+     "n": 1511,
+     "mean": 7.088823808562984,
+     "p50": 7.651538006030023,
+     "p99": 10.677000973373666,
+     "max": 46.24746891204268
+    },
+    "4": {
+     "n": 1511,
+     "mean": 2.6389978040030693,
+     "p50": 2.9644339811056852,
+     "p99": 5.5085179046727735,
+     "max": 37.905153003521264
+    }
+   },
+   "reported": {
+    "slam_apply_lag_s": {
+     "n": 1784,
+     "mean": 0.017091742296485992,
+     "p50": 0.0,
+     "p99": 0.35141668499447465,
+     "max": 0.6250000325962901
+    },
+    "far_job_wall_s": {
+     "n": 14,
+     "mean": 0.20714808708622254,
+     "p50": 0.20571416954044253,
+     "p99": 0.2594664184271823,
+     "max": 0.2631236739689484
+    }
+   }
+  },
+  "g3ec4_04_D": {
+   "auto_sim_s": 148.39166666666668,
+   "W": 0.8007899250663318,
+   "scans": 1483,
+   "scans_without_record": 0,
+   "scans_per_sim_s": 9.993822654012465,
+   "main_layer": 0.09142258003867249,
+   "compute": 0.06777454032092749,
+   "compute_cpu_over_wall": {
+    "n": 1483,
+    "mean": 0.9890042793121497,
+    "p50": 0.998146999970911,
+    "p99": 1.0001167963134425,
+    "max": 1.0001642344953325
+   },
+   "barrier": {
+    "reasons": {
+     "refresh": 27
+    },
+    "per_sim_s": 0.1819509181782445,
+    "wait": 5.193897662367901e-07,
+    "install": 0.0004544935826788105
+   },
+   "scheduled_wait_ms": {
+    "n": 1456,
+    "mean": 0.0028217413333490246,
+    "p50": 0.0028150388970971107,
+    "p99": 0.0036710349377244767,
+    "max": 0.007363967597484589
+   },
+   "main_other_raw": 0.6291112167032282,
+   "main_other": 0.6087491855906247,
+   "installs_in_auto_control": 1484,
+   "paired_wait_ms": {
+    "2": {
+     "n": 1483,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    },
+    "3": {
+     "n": 1483,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    },
+    "4": {
+     "n": 1483,
+     "mean": 0.0,
+     "p50": 0.0,
+     "p99": 0.0,
+     "max": 0.0
+    }
+   },
+   "reported": {
+    "slam_apply_lag_s": {
+     "n": 1747,
+     "mean": 0.014896967004756451,
+     "p50": 0.0,
+     "p99": 0.2878333483450112,
+     "max": 0.5333333611488342
+    },
+    "far_job_wall_s": {
+     "n": 14,
+     "mean": 0.17427735514606216,
+     "p50": 0.16509891900932416,
+     "p99": 0.27908011316321785,
+     "max": 0.29219201300293207
+    }
+   }
+  }
+ },
+ "result": {
+  "k": 4,
+  "k_is_prediction": false,
+  "pairs": {
+   "1": {
+    "k": 4,
+    "moved": 0.07132949546736085,
+    "main_other_increase": 0.027171812745619417,
+    "barrier_wait": 0.0009026762858828642,
+    "net": 0.01429647003651123,
+    "direct": 0.00623921812598216,
+    "residual_direct_minus_net": -0.00805725191052907,
+    "passes": false
+   },
+   "2": {
+    "k": 4,
+    "moved": 0.07125213196117171,
+    "main_other_increase": 0.007070371414220733,
+    "barrier_wait": 0.0009190447629627202,
+    "net": 0.036893098137022726,
+    "direct": 0.030628894271526708,
+    "residual_direct_minus_net": -0.006264203865496018,
+    "passes": false
+   }
+  },
+  "decision": "stage 2 to the lead",
+  "target_s_per_sim_s": 0.03707
+ },
+ "core_alone": null
+}
