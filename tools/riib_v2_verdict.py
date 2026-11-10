@@ -513,7 +513,9 @@ def evaluate(out_dir: Path) -> dict:
             "c2_function": {"c2_line_m_on": c2_firing(sess["c2_line_m_on"]),
                             "c2_line_m_shadow": c2_firing(sess["c2_line_m_shadow"])},
             "lifecycle": {"1": lifecycle(sess["life1_line_m_main"], 1), "2": lifecycle(sess["life2_random_m_held"], 2),
-                          "3": l3, "4": lifecycle(sess["life4_line_m_stop"], 4)},
+                          "3": l3,
+                          # the rv3 batch has no line_m lifecycle 4 in its rest (it is the confirmation bundle's)
+                          **({"4": lifecycle(sess["life4_line_m_stop"], 4)} if "life4_line_m_stop" in sess else {})},
             "b_only_failures": [{"pair": r["pair"], "B": r["sessions"]["B"]["missions"]} for r in b_only],
             "rules": {"stall_s": STALL_S, "c2_cap_s": C2_CAP_S, "F_ratio": F_RATIO, "R_add": R_ADD,
                       "longest": [LONG_MUL, LONG_ADD_S], "stall_add": STALL_ADD, "max_dropped_pairs": MAX_DROPPED_PAIRS}}
@@ -706,13 +708,188 @@ def evaluate_confirm(out_dir: Path) -> dict:
     return {"sessions": results, **confirm_verdict(plan, results)}
 
 
+# --- the new-snapshot re-comparison (docs/plans/2026-11-10-live-riib-v2-rerun-new-snapshot.md 2) ----------------------
+F_GUARD = 0.27  # v2 baseline's stop line: a pair session under it leaves the pace unjudged (to the lead)
+PLANNED = (("ab_", 3), ("boxed_", 3), ("c2_", 3), ("l4", 2), ("life1_", 1), ("life2_", 3), ("life3_", 1))
+
+
+def planned_missions(name: str) -> int:
+    """The rows a session's probe plans (the queues three, the confirmation's cycle two, lifecycle 1 and 3 one,
+    lifecycle 2 its mission and two resubmits); rows past it are ct_survey's padding."""
+    return next((n for prefix, n in PLANNED if name.startswith(prefix)), 3)
+
+
+def _expected_end(name: str, i: int, r: dict, st: dict) -> bool:
+    outcome, reason = r.get("outcome"), r.get("reason")
+    if (name.startswith("c2_line_m_shadow") and outcome == "failed" and reason == "Tracking timeout in observe"
+            and any(x.get("kind") == "near" and x.get("outcome") == "shadow" for x in st.get("observe_end_stands") or [])):
+        return True
+    if name.startswith("life2_") and i == 0 and outcome == "cancelled" and reason == "operator":
+        return True
+    return bool(name.startswith("l4") and i == 0 and outcome == "cancelled" and reason == "operator")
+
+
+def rv3_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
+    """The session's mission failures other than the registered expected ends (plan 2), over its planned rows: a
+    mission not ``done``, a refused submit (``start: rejected``; only lifecycle 2's ``cargo_held`` is expected), and a
+    planned mission never started -- unless the session stopped after an expected end (the C2 shadow fixture's queue)
+    or lifecycle 3 ended on ``reloc_needs_operator``. Expected ends: the C2 shadow fixture's ``Tracking timeout in
+    observe`` with a recorded shadow firing in that mission, lifecycle 2's operator cancel, the confirmation's m1
+    cancel after the STOP."""
+    name, out = sess["name"], []
+    records = sess.get("records") or {}
+    stopped = False  # an expected end that ends the queue (the C2 shadow fixture)
+    planned = planned_missions(name)
+    for i, r in enumerate(sess.get("rows") or []):
+        mid, outcome = r.get("mission_id"), r.get("outcome")
+        # past the planned rows only empty padding is skipped: a real mission or a submit attempt there is checked
+        # too (ct_survey attaches folders no probe entry claimed -- Codex P2)
+        empty = mid is None and r.get("start") in (None, "not_submitted")  # never sent (ct_survey's start states)
+        if i >= planned and empty:
+            continue
+        keep = {"session": name, "mission": mid, "outcome": outcome, "reason": r.get("reason"), "row": i,
+                "start": r.get("start"), "reject_reason": r.get("reject_reason")}
+        if r.get("start") == "rejected":
+            if not (name.startswith("life2_") and r.get("reject_reason") == "cargo_held"):
+                out.append({**keep, "outcome": "rejected"})
+            continue
+        if mid is None and not empty:  # a submit with no settled answer (busy/stale reject, no reply): never waived
+            out.append({**keep, "outcome": "start_unknown"})
+            continue
+        if mid is None:
+            if stopped or (name.startswith("life3_") and life3_ended_per_record):
+                continue
+            out.append({**keep, "outcome": "not_run"})
+            continue
+        if outcome == "done":
+            continue
+        if _expected_end(name, i, r, records.get(mid) or {}):
+            stopped = stopped or name.startswith("c2_line_m_shadow")
+            continue
+        out.append(keep)
+    return out
+
+
+def rv3_dispose(fails: dict, partners: dict, arms: dict) -> dict:
+    """Each failing session as B only (no failure in its A partner, or no partner: an arm-B rest session), A only, or
+    both (its partner failed too)."""
+    out = {"b_only": [], "a_only": [], "both": []}
+    for name in sorted(n for n, f in fails.items() if f):
+        partner = partners.get(name)
+        if partner is not None and fails.get(partner):
+            out["both"].append(name)
+        elif arms.get(name) == "A":
+            out["a_only"].append(name)
+        else:
+            out["b_only"].append(name)
+    return out
+
+
+def rv3_dump_args(sessions: dict, dump_sessions: set) -> list:
+    """Sessions whose recorded ``occupied_dumps`` is not the registered JSON boolean (true in the lifecycle 4 bundle
+    only); an absent or non-boolean record is not "off"."""
+    bad = []
+    for name, s in sorted(sessions.items()):
+        args = (s.get("result") or {}).get("arguments") or {}
+        got = args.get("occupied_dumps", None)
+        if not isinstance(got, bool) or got != (name in dump_sessions):
+            bad.append(name)
+    return bad
+
+
+SCENES = ("line_m", "random_m")
+
+
+def rv3_plan_inputs(rv3: dict, l4c: dict, names: list) -> dict:
+    """The run checks' expectations, required and shared (Codex P2): a registry row for every scene a session runs, one
+    bridge image for both bundles, the confirmation's map the random_m row. Returns each session's scene."""
+    if rv3.get("image_id") in (None, "") or rv3.get("image_id") != l4c.get("image_id"):
+        raise ValueError("plan_rv3 and plan_l4c must name the same bridge image")
+    choices = rv3.get("slam_choice") or {}
+    if l4c.get("slam_choice") != choices.get("random_m"):
+        raise ValueError("plan_l4c's map choice must be plan_rv3's random_m row")
+    scenes = {}
+    for n in names:
+        sc = next((x for x in SCENES if f"_{x}_" in f"_{n}_"), "random_m" if n.startswith("l4") else None)
+        if sc is None:
+            raise ValueError(f"no scene for session {n}")
+        if not choices.get(sc):
+            raise ValueError(f"plan_rv3 slam_choice has no row for {sc}")
+        scenes[n] = sc
+    return scenes
+
+
+def rv3_outcome(main_v: dict, conf_v: dict, disposition: dict, checks_ok: bool) -> dict:
+    """The combined reading (plan 2): hold when a registered criterion fails or a failure is B's only; to the lead
+    when the pace guard trips, the confirmation goes to the lead, a failure is A's only or both arms', or a run check
+    (map choice, bridge image, recorded dump option) failed; pass otherwise."""
+    fs = [info.get("F") for row in main_v.get("pairs") or [] for info in (row.get("sessions") or {}).values()]
+    guard = all(f is None or f >= F_GUARD for f in fs)
+    safety_ok = all(v.get("pass") is True or "not_applied" in v for v in (main_v.get("safety") or {}).values())
+    life = main_v.get("lifecycle") or {}
+    criteria = {
+        "pace": (main_v.get("pace") or {}).get("verdict") == "pass" if guard else None,
+        "c2_cap": (main_v.get("c2_cap") or {}).get("pass") is True,
+        "safety": safety_ok,
+        "backoff_firing": any(e.get("firing") for v in (main_v.get("backoff") or {}).values() for e in v),
+        "c2_firing": any(e.get("firing") for e in (main_v.get("c2_function") or {}).get("c2_line_m_on") or []),
+        "lifecycle_1": (life.get("1") or {}).get("pass") is True,
+        "lifecycle_2": (life.get("2") or {}).get("pass") is True,
+        "lifecycle_3": (life.get("3") or {}).get("outcome") in ("pass", "ended_per_record"),
+        "lifecycle_4": conf_v.get("judged_pass") is True,
+    }
+    held = [k for k, v in criteria.items() if v is False] + (["b_only_failure"] if disposition.get("b_only") else [])
+    lead = ((["pace_guard"] if not guard else []) + (["confirmation_to_lead"] if conf_v.get("outcome") == "to_lead" else [])
+            + (["a_only_failure"] if disposition.get("a_only") else []) + (["both_arms_failure"] if disposition.get("both") else [])
+            + ([] if checks_ok else ["run_checks"]))
+    outcome = "hold" if held else "to_lead" if lead else "pass"
+    return {"criteria": criteria, "pace_guard": guard, "held_by": held, "to_lead_by": lead, "outcome": outcome}
+
+
+def evaluate_rv3(out_dir: Path) -> dict:
+    """OUT holds plan_main.json (the pairs and the rest without a lifecycle 4), plan_l4c.json (the lifecycle 4 bundle)
+    and plan_rv3.json ({"slam_choice": {scene: registry row}, "image_id": id}); s/<run> for every session."""
+    rv3 = json.loads((out_dir / "plan_rv3.json").read_text())
+    main_v = evaluate(out_dir)
+    conf_v = evaluate_confirm(out_dir)
+    plan_main = json.loads((out_dir / "plan_main.json").read_text())
+    plan_l4c = json.loads((out_dir / "plan_l4c.json").read_text())
+    l4 = list(plan_l4c.get("judged") or []) + list(plan_l4c.get("controls") or [])
+    names = [n for p in plan_main["pairs"] for n in p["runs"]] + plan_main["rest"] + l4
+    sess = {n: load_session(out_dir / "s" / n) for n in names}
+    arms = {n: (_session_args(s).get("ARM") or n.rsplit("_", 1)[-1]) for n, s in sess.items()}
+    partners = {}
+    for p in plan_main["pairs"]:
+        a, b = p["runs"]
+        partners[a], partners[b] = b, a
+    for n in l4:  # the confirmation's same-seed partner
+        seed = _session_args(sess[n]).get("SEED")
+        partners[n] = next((m for m in l4 if m != n and _session_args(sess[m]).get("SEED") == seed), None)
+    l3_end = (main_v.get("lifecycle", {}).get("3") or {}).get("outcome") == "ended_per_record"
+    fails = {n: rv3_failures(s, life3_ended_per_record=l3_end) for n, s in sess.items()}
+    disposition = rv3_dispose(fails, partners, arms)
+    scene_of = rv3_plan_inputs(rv3, plan_l4c, names)
+    map_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
+               and not (_slam_choices(sess[n])
+                        and all(c == rv3["slam_choice"][scene_of[n]] for c in _slam_choices(sess[n])))]
+    image_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
+                 and _image_id(sess[n]) != rv3["image_id"]]
+    dump_bad = rv3_dump_args({n: s for n, s in sess.items() if s.get("result") is not None}, set(l4))
+    checks = {"slam_choice": map_bad, "image_id": image_bad, "occupied_dumps": dump_bad}
+    combined = rv3_outcome(main_v, conf_v, disposition, checks_ok=not (map_bad or image_bad or dump_bad))
+    return {"main": main_v, "confirm": conf_v, "failures": {n: f for n, f in fails.items() if f},
+            "disposition": disposition, "run_checks": checks, **combined}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("out", type=Path)
     ap.add_argument("--json", type=Path, required=True)
     ap.add_argument("--confirm", action="store_true", help="the lifecycle 4 confirmation run (plan_l4c.json)")
+    ap.add_argument("--rv3", action="store_true",
+                    help="the new-snapshot re-comparison: main + confirmation bundles combined (plan_rv3.json)")
     a = ap.parse_args(argv)
-    result = evaluate_confirm(a.out) if a.confirm else evaluate(a.out)
+    result = evaluate_rv3(a.out) if a.rv3 else evaluate_confirm(a.out) if a.confirm else evaluate(a.out)
     a.json.write_text(json.dumps(result, indent=1, default=str) + "\n")
     return 0
 
