@@ -11,7 +11,8 @@
   - 정체: `g2a/g2a_01_H_sync`, `g2a/g2a_06_H_sync`, `j1_i1/j1_i1_3_off`
   - 완료 대조: `j6_c3off_b/j6_c3off_b_1_off`
 - 재생 하나는 `deploy/slurm/slam_map_replay.sbatch OUT EPOCH_DIR ODOM` 이다(새로 만듦, 기존 위치 추정 재생 `slam_loc_replay.sbatch` 의 지도 작성판).
-  - 컨테이너(`tools/slam_map_replay_container.sh`): live 세션과 같은 slam_toolbox online sync 와 같은 매개변수(`slam_toolbox_isaac_online.yaml`, `slam_bridge_container.sh` 의 기본값)로 돈다. 브리지는 `keyframe_gate every` 다.
+  - 컨테이너(`tools/slam_map_replay_container.sh`): live 세션과 같은 slam_toolbox online sync 와 같은 매개변수(`slam_toolbox_isaac_online.yaml`, `slam_bridge_container.sh` 의 기본값)로 돈다. 브리지는 `keyframe_gate every` 이고, live 처럼 `persistent`(지도를 메모리에 쌓지 않음)다.
+  - 브리지 소켓이 180 s 안에 생기지 않거나 컨테이너가 먼저 끝나면 바로 실패로 끝낸다. 구동이 실패하면 컨테이너를 바로 세운다.
   - 구동(`tools/slam_loc_replay_drive.py`, 기존 도구 그대로): live 브리지가 slam_toolbox 에 보낸 스캔(브리지 기록의 `sent != local`)만 같은 순서로 보낸다. 그래서 어느 팔이든 같은 스캔이 정합된다. 거리값은 기록된 깨끗한 거리에 러너와 같은 방식으로 다시 그린 잡음을 더한다(`default_rng([seed, 7])`, seed 0). 두 팔에 같은 잡음이고, live 의 잡음 흐름 그 자체는 아니다.
   - 팔: `--odom recorded` 와 `--odom truth`. 시간은 세션 끝까지다.
 - 8 재생(4 세션 × 2 팔), 각 CPU 2·메모리 4G·한도 40 분. ws1 CPU 잡이고, rv3 가 멈춘 틈에 낸다(총괄 허용). 넓은 rv3 잡을 오래 막지 않게 배열 하나로 한꺼번에 낸다.
@@ -20,12 +21,18 @@
 
 - 오차: 처리된 응답마다 `compose(map_from_odom, 보낸 오도메트리) − truth_base`. 단계는 live 기록의 같은 스캔 단계를 쓴다.
 - 유효성(세션마다):
-  - 두 재생 모두 끝까지 성공(status ok, 보낸 스캔 모두 응답).
-  - 기록 팔이 live 의 편향을 재현한다. 운반 중앙값 |e| 가 live 와 0.03 m 안이고, e_y 의 부호가 같다. 재현하지 못하면 그 세션은 판정하지 않는다(재생이 live 를 대표하지 않음).
-- 읽기(세션마다):
-  - **오도메트리 유도**: 참 팔의 운반 중앙값 |e| 가 0.05 m 아래이고 기록 팔의 절반 아래.
-  - **SLAM 자체**: 참 팔이 기록 팔과 0.03 m 안.
-  - **혼합**: 그 사이.
+  - 두 재생 모두 끝까지 성공(status ok, 보낸 스캔 모두 응답), 운반 오차가 모두 유한.
+  - 기록 팔이 live 의 편향을 스캔마다 재현한다(Codex P2-1: 중앙값만으로는 일부 구간의 발산을 놓친다).
+    - 두 기록에 같이 있는 운반 스캔에서 같은 스캔끼리의 오차 벡터 차 |e_기록팔 − e_live| 의 p90 이 0.05 m 이하.
+    - 운반 중앙값 |e| 가 live 와 0.03 m 안이고 e_y 부호가 같다.
+    - 운반 p90 |e| 가 live 와 0.05 m 안.
+  - 재현하지 못하면 그 세션은 판정하지 않는다(재생이 live 를 대표하지 않음).
+- 읽기(세션마다, 운반 스캔; Codex P2-2·P2-3):
+  - **오도메트리 유도**: 참 팔의 중앙값 |e| 가 0.05 m 아래이고 기록 팔의 절반 아래.
+  - **SLAM 자체(같은 편향)**: 참 팔의 중앙값 |e| 가 기록 팔과 0.03 m 안이고, 중앙값 e_y 가 같은 부호로 0.03 m 안이며, 같은 스캔끼리의 |e_참 − e_기록| p50 이 0.03 m 이하.
+  - **참 오도메트리에서 더 나쁨**: 참 팔의 중앙값 |e| 가 기록 팔보다 0.03 m 넘게 크다.
+  - **참 오도메트리에서 다른 오차**: 크기는 비슷하지만(0.03 m 안) 같은 편향의 조건을 못 채운다. 완벽한 오도메트리에서도 비슷한 크기의 오차가 남는다는 뜻이지, live 의 −y 편향이 오도메트리와 무관하다는 뜻은 아니다.
+  - **혼합**: 그 밖(참 오도메트리에서 줄었지만 "오도메트리 유도"만큼은 아님).
 - 전체: 유효한 세션이 모두 같은 읽기면 그 읽기, 아니면 "갈림"(세션별로 보고).
 - 보고만: 각 팔의 복귀 단계 계단(시각·크기·참위치), 참 팔의 e_yaw.
 

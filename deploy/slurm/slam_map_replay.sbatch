@@ -27,10 +27,22 @@ docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$OUT/bridge:/out" -v "$OUT/sock:/run/slam" \
   forklift/ros2-dev:jazzy bash /workspace/tools/slam_map_replay_container.sh /run/slam/slam.sock /out >/dev/null
 docker inspect --format '{{.Image}}' "$NAME" > "$OUT/image_id"
+# the bridge's socket within 180 s while the container runs, else fail now (Codex review P3: the driver would wait 600 s)
+for _ in $(seq 180); do
+  [ -S "$OUT/sock/slam.sock" ] && break
+  [ "$(docker inspect --format '{{.State.Running}}' "$NAME" 2>/dev/null)" = true ] || break
+  sleep 1
+done
+if [ ! -S "$OUT/sock/slam.sock" ]; then
+  docker logs "$NAME" > "$OUT/container.log" 2>&1
+  printf '{"state": "done", "ok": false, "reason": "no bridge socket"}\n' > "$OUT/status.json"; cat "$OUT/status.json"; exit 1
+fi
 taskset -c "$DRV_CPU" "$PY" "$ROOT/tools/slam_loc_replay_drive.py" "$EP/run" "$EP/bridge/records.jsonl" \
   "$OUT/sock/slam.sock" "$OUT/replies.jsonl" --noise-seed "${NOISE_SEED:-0}" --odom "$ODOM" --until-s "$UNTIL" \
   > "$OUT/drive.log" 2>&1
 DRV=$?
+# a driver that failed leaves the bridge waiting for a connection: stop it at once (Codex review P3)
+[ "$DRV" = 0 ] || docker stop -t 10 "$NAME" >/dev/null 2>&1
 CON=$(timeout 300 docker wait "$NAME")
 docker logs "$NAME" > "$OUT/container.log" 2>&1
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)

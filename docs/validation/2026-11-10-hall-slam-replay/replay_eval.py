@@ -5,13 +5,20 @@ For each session: the live run (EPOCH/run: spool/slam.records, the phase of each
 compose(map_from_odom, odom) - truth_base, by phase; the transport phase's median |e| and e_y; the return-phase steps of
 that error above 0.05 m between processed replies (as cusp_diag.py).
 
-Validity (per session): both replays ok (status.json) and complete (every recorded sent scan answered up to the end), and
-the recorded arm reproduces the live drift: its transport median |e| within 0.03 m of the live run's and its median
-e_y of the same sign.
+Validity (per session): both replays ok (status.json) and complete (every recorded sent scan answered up to the end), all
+transport errors finite, and the recorded arm reproduces the live drift scan by scan (Codex review P2-1): over the
+transport scans both have, the p90 of |e_recorded - e_live| (the 2-D error vectors of the same scan) at most 0.05 m,
+the transport median |e| within 0.03 m of the live run's with the same e_y sign, and the transport p90 |e| within
+0.05 m of the live run's.
 
-Reading (registered):
-- per session, the truth arm's transport median |e| against the recorded arm's: "odometry-driven" when it is below 0.05 m
-  and below half the recorded arm's; "SLAM's own" when it is within 0.03 m of the recorded arm's; otherwise "mixed";
+Reading (registered; Codex review P2-2, P2-3):
+- per session, the truth arm against the recorded arm on the transport scans:
+  - "odometry-driven": the truth arm's median |e| below 0.05 m and below half the recorded arm's;
+  - "SLAM's own (same bias)": the truth arm's median |e| within 0.03 m of the recorded arm's, its median e_y of the same
+    sign and within 0.03 m, and the per-scan p50 of |e_truth - e_recorded| at most 0.03 m;
+  - "worse with true odometry": the truth arm's median |e| more than 0.03 m above the recorded arm's;
+  - "other error with true odometry": a similar size (within 0.03 m) but not the same bias by the conditions above;
+  - "mixed": otherwise (smaller with true odometry, not as far as "odometry-driven");
 - overall: the same reading in every valid session, else "split" (each session's reading reported);
 - reported, not judged: each arm's return-phase steps (time, size, truth position) and the truth arm's e_yaw.
 
@@ -52,7 +59,7 @@ def spool(run: Path, group: str) -> list[dict]:
 
 
 def errors(rows: list[dict], phase_of: dict, odom_key: str) -> dict:
-    by, steps, prev = {}, [], None
+    by, steps, prev, per_scan = {}, [], None, {}
     for r in rows:
         if r.get("status") != "processed" or r.get("map_from_odom") is None:
             continue
@@ -61,17 +68,30 @@ def errors(rows: list[dict], phase_of: dict, odom_key: str) -> dict:
         e = (est[0] - tr[0], est[1] - tr[1], wrap(est[2] - tr[2]))
         ph = phase_of.get(r["scan_id"])
         by.setdefault(ph, []).append(e)
+        if ph == "transport":
+            per_scan[r["scan_id"]] = e
         if prev is not None and ph in ("withdraw", "return_home"):
             d = math.hypot(e[0] - prev[0], e[1] - prev[1])
             if d > STEP_M:
                 steps.append({"t": float(r["stamp_s"]), "step_m": d, "truth_xy": [float(tr[0]), float(tr[1])]})
         prev = e
-    out = {"steps": steps}
+    out = {"steps": steps, "transport_by_scan": per_scan}
     for ph, v in by.items():
         a = np.asarray(v, float)
-        out[str(ph)] = {"n": len(a), "abs_e_m": float(np.median(np.hypot(a[:, 0], a[:, 1]))),
-                        "e_y_m": float(np.median(a[:, 1])), "e_yaw_rad": float(np.median(a[:, 2]))}
+        mag = np.hypot(a[:, 0], a[:, 1])
+        out[str(ph)] = {"n": len(a), "abs_e_m": float(np.median(mag)), "abs_e_p90_m": float(np.percentile(mag, 90)),
+                        "e_y_m": float(np.median(a[:, 1])), "e_yaw_rad": float(np.median(a[:, 2])),
+                        "finite": bool(np.all(np.isfinite(a)))}
     return out
+
+
+def paired(a: dict, b: dict, q: float) -> float | None:
+    """The q-th percentile of |e_a - e_b| over the scans both have (2-D error vectors)."""
+    ids = sorted(set(a) & set(b))
+    if not ids:
+        return None
+    d = [math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1]) for i in ids]
+    return float(np.percentile(d, q))
 
 
 def session(out_root: Path, live_root: Path, name: str) -> dict:
@@ -90,19 +110,38 @@ def session(out_root: Path, live_root: Path, name: str) -> dict:
         if [r["scan_id"] for r in rows] != sent:
             res["invalid"].append(f"{arm}: {len(rows)} replies for {len(sent)} sent scans")
         res["arms"][arm] = errors(rows, phase_of, "odom")
-    lt, rt = res["live"].get("transport"), res["arms"]["recorded"].get("transport")
-    if lt is None or rt is None:
-        res["invalid"].append("no transport phase")
-    elif abs(rt["abs_e_m"] - lt["abs_e_m"]) > 0.03 or np.sign(rt["e_y_m"]) != np.sign(lt["e_y_m"]):
-        res["invalid"].append(f"the recorded arm does not reproduce the live drift: {rt} vs {lt}")
-    tt = res["arms"]["truth"].get("transport")
-    if not res["invalid"] and tt is not None:
-        if tt["abs_e_m"] < 0.05 and tt["abs_e_m"] < rt["abs_e_m"] / 2:
-            res["reading"] = "odometry-driven"
-        elif abs(tt["abs_e_m"] - rt["abs_e_m"]) <= 0.03:
-            res["reading"] = "SLAM's own"
-        else:
-            res["reading"] = "mixed"
+    lt, rt, tt = (res["live"].get("transport"), res["arms"]["recorded"].get("transport"),
+                  res["arms"]["truth"].get("transport"))
+    if lt is None or rt is None or tt is None:
+        res["invalid"].append("no transport phase in every record")
+        return res
+    if not (lt["finite"] and rt["finite"] and tt["finite"]):
+        res["invalid"].append("non-finite transport errors")
+        return res
+    live_scans, rec_scans = res["live"]["transport_by_scan"], res["arms"]["recorded"]["transport_by_scan"]
+    truth_scans = res["arms"]["truth"]["transport_by_scan"]
+    res["recorded_vs_live_p90_m"] = paired(rec_scans, live_scans, 90)
+    res["truth_vs_recorded_p50_m"] = paired(truth_scans, rec_scans, 50)
+    if (res["recorded_vs_live_p90_m"] is None or res["recorded_vs_live_p90_m"] > 0.05
+            or abs(rt["abs_e_m"] - lt["abs_e_m"]) > 0.03 or np.sign(rt["e_y_m"]) != np.sign(lt["e_y_m"])
+            or abs(rt["abs_e_p90_m"] - lt["abs_e_p90_m"]) > 0.05):
+        res["invalid"].append(f"the recorded arm does not reproduce the live drift: {rt} vs {lt}, "
+                              f"per-scan p90 {res['recorded_vs_live_p90_m']}")
+    if res["invalid"]:
+        return res
+    same_size = abs(tt["abs_e_m"] - rt["abs_e_m"]) <= 0.03
+    same_bias = (same_size and np.sign(tt["e_y_m"]) == np.sign(rt["e_y_m"]) and abs(tt["e_y_m"] - rt["e_y_m"]) <= 0.03
+                 and res["truth_vs_recorded_p50_m"] is not None and res["truth_vs_recorded_p50_m"] <= 0.03)
+    if tt["abs_e_m"] < 0.05 and tt["abs_e_m"] < rt["abs_e_m"] / 2:
+        res["reading"] = "odometry-driven"
+    elif same_bias:
+        res["reading"] = "SLAM's own (same bias)"
+    elif tt["abs_e_m"] > rt["abs_e_m"] + 0.03:
+        res["reading"] = "worse with true odometry"
+    elif same_size:
+        res["reading"] = "other error with true odometry"
+    else:
+        res["reading"] = "mixed"
     return res
 
 
