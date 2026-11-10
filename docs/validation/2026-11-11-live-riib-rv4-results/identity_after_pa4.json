@@ -1,0 +1,9 @@
+{
+ "both_ends_match": true,
+ "per_item": {
+  "snapshot": true,
+  "hashes": true,
+  "interpreters": true
+ },
+ "limit": "a change reverted between the two ends is not detected"
+}
