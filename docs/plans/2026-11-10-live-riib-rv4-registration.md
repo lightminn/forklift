@@ -20,31 +20,45 @@
 ### 1.1 H3 — 직접 적용 기록 기준
 
 - 대상: 생명주기 2 의 운반 중 취소(rv3 등록 2 절, v2 3.3 의 생명주기 2 연쇄).
-- **판정 시각(직접)**: `live_log.jsonl` 에서 `mission_commands` 가운데 그 취소의 `request_id`·`command: cancel` 을 담은 기록의 `mono`(런타임 단조 시계). 같은 `request_id` 의 기록이 둘 이상이면 첫 기록이다.
-- **순서 조건**: 탐침 송신(`sent_mono`) ≤ 런타임 수신(`live_log` 의 `t: mission_cancel` 기록 `mono`) ≤ 직접 적용 기록 `mono` ≤ 탐침 응답(`reply_mono`).
+- **직접 적용 시각**: `live_log.jsonl` 의 `mission_commands` 가운데, 그 취소의 `request_id`·`command: cancel`·`accepted: true` 를 담은 기록의 `mono` 다.
+  - 같은 `request_id` 의 기록이 둘 이상이면 첫 기록이다.
+  - 근거(코드 확인): `LiveRuntime.tick_end` 가 `mission_commands` 를 `log()` 에 넘긴다. 이때 `log()` 가 `mono` 를 매긴다. 그다음 `Link.end` 가 응답을 큐에 넣는다. 그래서 이 시각은 응답 큐잉보다 앞선다(디스크 쓰기는 비동기지만 시각은 그 전에 정해진다).
+- **판정 순서 조건**: 탐침 송신(`sent_mono`) ≤ 직접 적용 `mono` ≤ 탐침 응답(`reply_mono`).
   - 탐침과 런타임은 같은 노드의 같은 단조 시계(`CLOCK_MONOTONIC`)를 쓴다. rv3 등록과 같은 가정이다.
-  - 같은 값(등호)은 순서를 채운 것으로 본다.
-- **결측**: 직접 기록, 수신 기록, 응답 가운데 하나라도 없거나 `mono` 가 없으면 H3 불통과다. 스텝 대용으로 대신하지 않는다.
-- **보조(판정에 쓰지 않음)**: rv3 의 스텝 대용(적용 `tick_t` 이상인 첫 스텝 기록의 `mono`)도 계산해 보고한다. 직접 기록과의 차를 함께 적는다.
-  - 이 대용은 런타임이 응답을 큐에 넣은 뒤의 `publish()` 에서 찍히므로 응답보다 늦을 수 있다(rv3 결과 2 절: 대용 28 µs 늦음, 직접 269 µs 앞섬).
-- 도구: `h3_check` 에 직접 기록 경로를 더한다. `ordered` 는 직접 기록으로 판정하고, `substitute_mono`·`substitute_ordered` 를 보고 필드로 남긴다.
+  - 등호는 순서를 채운 것으로 본다.
+- **런타임 수신 시각은 판정에서 뺀다(보고만).** `live_log` 의 `t: mission_cancel` 기록 `mono` 는 요청별 수신 시각이 아니다. 런타임이 주기 시작에 잡은 `now` 이고, 그 뒤 `Link.begin` 이 채널을 비우며 그 `now` 를 모든 요청에 붙인다. 그래서 정상 처리된 요청에서도 송신보다 이를 수 있다(Codex 확인). 수신 ≤ 직접 적용 여부는 보고 필드로 남긴다.
+- **결측**: 송신, 직접 적용 기록, 응답 가운데 하나라도 없거나 `mono` 가 없으면 H3 불통과다. 거부된 취소(`accepted: false`)만 있으면 직접 적용 기록이 없는 것으로 본다. 스텝 대용으로 대신하지 않는다.
+- **보조(판정에 쓰지 않음)**: rv3 의 스텝 대용(적용 `tick_t` 이상인 첫 스텝 기록의 `mono`)도 계산하고, 직접 기록과의 차를 함께 보고한다.
+  - 이 대용은 응답이 큐에 들어간 뒤의 `publish()` 에서 찍히므로 응답보다 늦을 수 있다. rv3 결과 2 절에서 대용은 응답보다 28 µs 늦었고, 직접 기록은 269 µs 앞섰다.
+- 도구: `h3_check` 에 직접 기록 경로를 더한다. `ordered` 는 위 판정 순서 조건이다. `receipt_mono`·`receipt_ordered`·`substitute_mono`·`substitute_ordered` 는 보고 필드다.
 
-### 1.2 초기 not_stopped 재시도 — 목록과 상한
+### 1.2 초기 기동 대기 거부의 재시도 — 목록과 상한
 
 - **배경**: rv3 의 고정 도구는 큐 항목마다 마지막 응답만 봤다(`ct_survey.start_states`). 그래서 첫 제출의 `not_stopped` 거부는 실패 목록에 없었다(rv3 결과 4 절: `life1_line_m_main`, `life2_random_m_held`, `l4c_s0_A` 의 r2).
   - 이 거부는 게이트웨이에서 나간다. 그래서 `live_log` 의 `mission_commands` 에는 없고, 탐침 `events` 의 `reply`(`kind: mission_submit`, `t: reject`)에만 있다.
-- **재시도의 정의(전부 채워야 한다)**:
-  1. `kind: mission_submit` 응답이 `t: reject` 이고, `reason` 이 `not_stopped` 또는 `no_feedback:rear_axle_speed` 다(총괄 결정 2026-11-10: 둘 다 기동 준비 지연이지 ④⑤ 의 행동이 아니다).
-  2. 그 세션 epoch 의 **첫 번째** `mission_submit` 이다. 그 전에 같은 epoch 에서 수락된(`ack`) 제출이 없다.
-  3. 바로 다음 `mission_submit` 이 같은 팔레트·목적지이고 `ack` 다. 사이에 다른 `mission_submit` 이 없다.
-- **상한: 두 사유를 합쳐 세션당 1 회.** 운용 대기열의 D5 예외(`tools/mission_queue.py` `START_RETRY_STAND_MS`)가 세션의 첫 제출에 한 번만 다시 내는 것과 같은 값이다. 탐침은 20 회까지 다시 묻지만, 판정은 운용 대기열의 허용을 넘지 않는다. D5 는 `not_stopped` 만 다시 내므로, `no_feedback:rear_axle_speed` 를 넣은 것은 운용 대기열보다 넓다. 총괄 결정으로 넣었다.
-- **목록**: 위 정의를 채운 거부를 `start_retries` 목록으로 따로 낸다. 항목마다 세션, 거부 `request_id`, 수락 `request_id`, 둘 사이 시간(s)을 적는다. 목록에 든 거부는 실패가 아니다.
-- **실패로 세는 것**: 그 밖의 모든 `mission_submit` 거부다. 실패 목록에 시도 단위로 넣는다(`outcome: rejected`, `attempt_request_id`).
-  - 예: 상한을 넘은 두 번째 거부, 첫 제출이 아닌 제출의 `not_stopped`·`no_feedback:rear_axle_speed`, 그 밖의 사유.
-  - 마지막 응답이 `ack` 여도 그 앞의 거부는 실패다. rv3 의 '마지막 응답' 기준을 이 점에서 바꾼다.
-  - 생명주기 2 의 `cargo_held` 두 번(rv3 등록의 예상된 끝)은 그대로 예외다.
-- **범위 밖**: `mission_submit` 이 아닌 요청이다. `session_end` 의 `stale_control`·`not_stopped`, `mode_request`·`rearm`·`resume` 의 `not_stopped` 같은 것이다.
-  - 이것들은 탐침의 `request_until_standing` 재시도 계약 그대로이고, 판정의 실패 목록에 넣지 않는다. 생명주기 연쇄의 통과 조건(rv3 등록 2 절)은 그대로다.
+  - 지금 탐침의 `reply` 이벤트에는 대상(팔레트·목적지·항목)과 `session_epoch` 가 없다. 그래서 rv4 전에 탐침 계측을 더한다(아래).
+- **탐침 계측(rv4 전 변경, 시험 먼저)**: `live_console_probe.py` 가 `mission_submit` 을 보낼 때마다 `reply` 이벤트에 다음을 남긴다. `session_epoch`, `request_id`, `pallet_id`, `destination_id`, 큐 항목이면 `item_id`, 그리고 보낸 경로(`main`·`cycle`·`queue`)다.
+  - 응답이 없을 때(timeout)도 `sent` 이벤트로 같은 필드를 남긴다.
+  - 같은 `request_id` 로 다시 보낸 것은 한 시도다. 새 `request_id`(탐침의 다시 묻기, 대기열 D5 의 다시 내기)는 별도 시도다.
+  - 탐침은 두 팔이 같이 쓰는 측정 도구이고 승격 대상이 아니다. 운용 경로(러너·런처·래퍼)는 바꾸지 않는다.
+- **epoch**: 프로토콜의 `session_epoch` 값이다. 실행 폴더의 `epoch_N` 번호와 같지 않을 수 있다. 같은 `session_epoch` 안의 재접속은 '첫 제출'과 상한을 초기화하지 않는다.
+- **재시도의 정의(엄격, 전부 채워야 한다)**:
+  1. `mission_submit` 시도의 응답이 `t: reject` 이고, `reason` 이 `not_stopped` 또는 `no_feedback:rear_axle_speed` 다. 둘 다 기동 준비 지연이지 ④⑤ 의 행동이 아니다(총괄 결정 2026-11-10).
+  2. 그 시도가 그 `session_epoch` 의 **첫 번째** `mission_submit` 시도다.
+  3. **바로 다음** `mission_submit` 시도가 같은 `pallet_id`·`destination_id`(큐 항목이면 같은 `item_id`)이고 `t: ack` 다.
+- **상한: 세션당 1 회.** 정의 2 때문에 구조상 한 세션에 하나뿐이다.
+  - 근거: 운용 대기열의 D5 예외(`tools/mission_queue.py` 의 `start_retry_used`)가 세션의 첫 제출에 한 번만 다시 낸다. 그 **횟수만** 빌렸다. D5 의 다른 조건(연속 정지 1 s 같은 대기 시간, 제어 세대, 기존 임무 관측)은 판정 조건이 아니다.
+  - D5 는 `not_stopped` 만 다시 낸다. `no_feedback:rear_axle_speed` 를 넣은 것은 총괄 결정이다.
+  - 이 값은 rv3 를 본 뒤 정했다. rv4 자료 전에 고정한다는 것까지만 주장하고, rv3 와 무관하게 고른 값이라고는 하지 않는다.
+- **연속 거부**: 첫 시도가 거부되고 바로 다음 시도도 거부되면 정의 3 을 못 채운다. 그래서 첫 거부와 이어지는 거부가 **모두 실패**다. 예: `not_stopped → not_stopped → ack`, `not_stopped → no_feedback:rear_axle_speed → ack`.
+- **목록**: 정의를 채운 거부를 `start_retries` 로 따로 낸다. 항목마다 세션, `session_epoch`, 거부 `request_id`, 수락 `request_id`, 둘 사이 시간(s)을 적는다. 목록에 든 거부는 실패가 아니다.
+- **실패 목록 — 거부는 시도 단위로 대체한다**:
+  - rv3 의 행 단위 `rejected`(항목의 마지막 응답이 거부)는 쓰지 않는다. 그 대신 `mission_submit` 거부 시도 하나하나를 `outcome: rejected`, `attempt_request_id` 로 한 번씩 넣는다. 같은 거부를 두 번 세지 않는다.
+  - `start_unknown`(답 없는 제출), `not_run`(내지 못한 계획 임무), 실제 임무 실패(`done` 이 아닌 끝)는 rv3 그대로다.
+  - 생명주기 2 의 `cargo_held` 는 **운반 중 취소 뒤 계획된 재제출 두 시도**만 예외다. 세 번째 이상이거나 순서 밖의 `cargo_held` 는 실패다.
+  - **대응 불가**: 거부 시도의 `session_epoch`·대상 필드가 없어 정의를 확인할 수 없으면 재시도로 보지 않고 실패로 넣는다. 탐침 이벤트가 아예 없으면 거부가 없었던 것으로 보지 않고 `start_unknown` 과 같이 다룬다.
+- **범위 밖**: `mission_submit` 이 아닌 요청이다. 예: `session_end` 의 `stale_control`·`not_stopped`, `mode_request`·`rearm`·`resume` 의 `not_stopped`.
+  - 이것들은 탐침의 `request_until_standing` 재시도 계약 그대로이고, 실패 목록에 넣지 않는다. 생명주기 연쇄의 통과 조건(rv3 등록 2 절)은 그대로다.
 - **처분**: 실패 목록의 처분(B 쪽에만, A 쪽에만, 양쪽)은 rv3 등록 2 절 그대로다.
 
 ## 2. 실행 조건 — rv3 에서 쓴 것을 등록으로 고정
@@ -59,16 +73,18 @@ rv3 에서 총괄·사용자 결정으로 실행 중에 바꾼 조건을 이번�
 - **CPU 관문 잡**(생명주기 4 계획 관문, 인터프리터 대조)은 Isaac 묶음과 겹치지 않게 사슬로 건다(rv3 와 같음).
 - **묶음군 순서**:
   - 등록 순서는 통합 A/B → 나머지 → 생명주기 4 다. 생명주기 4 관문의 입력(이 배치의 random_m B seed 0·1 m1 기록)이 그 앞에 있어야 한다.
-  - GPU 빈틈 때문에 총괄이 신호로 순서를 바꾸면, 매니페스트에 '총괄 신호'와 시각을 적고 결과의 실행 예외에 쓴다. 짝 순서도 같다. 등록이 허용한 것으로 쓰지 않는다.
+  - GPU 빈틈 때문에 총괄이 신호로 순서를 바꾸면, **바뀐 묶음군이 시작하기 전에** 매니페스트에 '총괄 신호'와 시각을 적고, 결과의 실행 예외에 쓴다. 짝 순서도 같다. 등록이 허용한 것으로 쓰지 않는다.
 - **겹침**:
   - 판정에 쓰는 묶음 구간(Slurm 시작–끝) 안에 다른 잡이 시작하거나 돌면 그 묶음은 무효다.
-  - 다른 잡의 끝이 묶음 시작과 같은 초이거나, 다른 잡의 시작이 묶음 끝과 같은 초이면 겹침이 아니다. rv3 처럼 그대로 적는다.
+  - `sacct` 는 초 단위로 기록한다. 다른 잡의 끝이 묶음 시작과 같은 초이거나, 다른 잡의 시작이 묶음 끝과 같은 초이면 **초 해상도 기록상 비겹침으로 분류**하고 그대로 적는다. 이것은 실제로 한순간도 겹치지 않았다는 증명이 아니다.
 - **노드 조건 기록**:
-  - 묶음군 제출 때(rv3 와 같음)에 더해, **묶음군이 끝난 직후에도** `sacct -a`, `/proc/loadavg`, `docker ps` 를 남긴다. 그 뒤에 배속 판정 실행이 이어지지 않을 때만 `nvidia-smi` 도 남긴다.
+  - 묶음군 제출 때(rv3 와 같음)에 더해, **묶음군이 끝난 직후에도** `sacct -a`, `/proc/loadavg`, `docker ps` 를 남긴다. 그 뒤에 배속 판정 실행이 이어지지 않을 때만 `nvidia-smi` 도 남긴다. 생략하면 그 이유와 뒤따른 잡을 적는다.
   - 배치가 끝나면 그날 전체 `sacct -a -X` 를 결과에 붙인다. 다른 사용자 잡 이름은 지운다.
 - **제출 오류·취소**:
   - 세션이 하나도 시작되지 않은 제출 오류는 재제출 예산을 쓰지 않는다(rv3 의 총괄 결정을 규칙으로 둠).
-  - 측정 전(묶음 워밍업 540 s 안)에 겹침으로 취소한 묶음도 예산을 쓰지 않는다. 취소는 사용자가 한다(이 세션은 `scancel` 권한이 없다).
+  - 다른 사용자 잡과 겹쳐 무효가 된 묶음은, 끝까지 돌았든 중간에 취소했든 **세션·짝당 기반 실패 재제출 횟수를 쓰지 않는다.** 원인이 실행 조건이지 그 세션이 아니기 때문이다. 취소는 사용자가 한다(이 세션은 `scancel` 권한이 없다).
+    - 묶음 실행기의 540 s 는 각 실행 시작부터 세는 페이스 감시 유예이지, 판정 측정 전 구간이 아니다. 그 안에서도 임무와 측정 창은 이미 시작될 수 있다. 그래서 면제를 '측정 전'으로 정의하지 않는다.
+    - 실제로 시작한 세션은 무효·취소여도 **실제 실행 34 세션 상한**에 넣는다. 다시 내면 상한을 넘게 되는 경우는 내지 않고 총괄에 올린다.
   - 앞 실행이 남긴 결과 폴더는 제출 전에 옮긴다. 제출 스크립트가 `b_<목록>` 폴더가 없음을 확인한다.
 
 ## 3. plant 판 고정(총괄 결정 2026-11-10)
@@ -76,11 +92,19 @@ rv3 에서 총괄·사용자 결정으로 실행 중에 바꾼 조건을 이번�
 - **기준선은 다시 재지 않는다.** rv4 는 스냅숏으로 plant 판을 고정하고, 두 팔이 같은 plant 를 쓴다.
 - 시뮬-물성 ①(plant 접촉·마찰 점검)의 결과로 plant 를 바꿀지는 별도 결정이다. 바뀌면 그 판으로 rv4 를 낸다.
 - **rv3 자료와 섞어 집계하지 않는다.** 페이스·실패 목록·처분 모두 rv4 27 세션으로만 한다.
-- **plant 판의 기록**: 매니페스트(첫 고정과 묶음군마다)와 결과에 다음을 적는다. 실행 뒤에는 모든 세션의 `result.json` 에서 같은 값을 읽는다.
-  - `scene_sha256`: 차량 USD 묶음(`configuration/forklift_*.usd`, `forklift.usd`)과 `scene.usda`.
-  - 차량 URDF 와 base scene USD 의 sha256(rv3 등록 1.1 의 스냅숏 밖 입력), 팔레트 물성 USD(`configuration/pallet_physics.usd`)의 sha256.
-  - `physics_scene`(솔버, 마찰 상관 거리·오프셋 문턱, 안정화, `dt_s`)과 `settings_synthetic.physics_hz`(tick 주파수, rv3 는 120 Hz).
-  - **27 세션의 이 값이 모두 같아야 한다.** 하나라도 다르면 판정하지 않고 총괄에 올린다. 기반 실패가 아니므로 다시 내지 않는다.
+- **plant 판의 기록과 관문**: 실행 뒤 모든 세션의 `result.json` 에서 아래 키를 읽는다(지금 러너가 기록하는 키다). 매니페스트(첫 고정과 묶음군마다)에는 실행 입력 쪽 값을 적는다.
+  - 세션 전체(27)가 같아야 하는 키:
+    - `settings_synthetic` 전체(`physics_hz` = tick 주파수, 바퀴·조향 토크와 강성·감쇠, 바닥 정·동마찰 등).
+    - `physics_scene`(솔버, 마찰 상관 거리·오프셋 문턱, 안정화, `dt_s`).
+    - `plant_tyre_contact`(바퀴 충돌체의 접촉 재질·마찰).
+    - `plant_backend`(물체별 질량·질량 중심).
+    - `forklift_urdf_sha256`·`pallet_urdf_sha256`·`scene_built_from_urdf_sha256`·`scene_sha256`(base scene 폴더의 USD 해시).
+    - `pallet_mass.kg`.
+  - 같은 장면 파일끼리 같아야 하는 키: `plant`(장면 물체의 재질 목록), `pallet_mass` 전체(엔진 prim 경로가 장면마다 다르다).
+  - **매니페스트와 맞춰야 하는 키**: `forklift_urdf_sha256` 은 매니페스트의 차량 URDF 해시, `scene_sha256` 은 매니페스트의 base scene 폴더 USD 해시와 같아야 한다.
+  - 위 키가 하나라도 없거나 다르면 판정하지 않고 총괄에 올린다. 기반 실패가 아니므로 다시 내지 않는다.
+  - 한계: 팔레트 USD(`output/pallet.usd`)는 실행마다 생성되고, 접촉 물성은 실행 stage 에 적용된다(`sim/isaac/scene.py`). 이 값을 모두 대표하는 단일 해시는 없다. 위 키는 러너가 기록하는 범위만 묶는다. 시뮬-물성 ① 이 기록 키를 늘리면, 늘어난 키도 고정 때 이 목록에 더한다.
+  - rv3 의 27 세션은 위 키에서 이 규칙을 채운다(확인: 장면 무관 키 27 세션 같음, `plant`·`pallet_mass` 는 장면별로 같음). 이것은 키 선택이 실제 기록과 맞는지의 확인일 뿐, rv3 판정에 쓰지 않는다.
 
 ## 4. 그대로 두는 것(요약)
 
@@ -88,28 +112,44 @@ rv3 에서 총괄·사용자 결정으로 실행 중에 바꾼 조건을 이번�
 - 동일성 관문(1.1)도 그대로다. 스냅숏 이름은 `rv4_<hash>`, 래퍼는 v3 를 쓴다. 고정 때 해제 대상 변수 목록을 다시 뽑아 바뀌면 diff·해시를 적는다.
 - **0 절의 예외로 받아들인 원인 미확정 실패는 rv3 등록의 세 사건뿐이다.** rv3 의 B 운반 cross_track(#346 계열)은 진단 문서에 '재발로 기록'했을 뿐이고, 이 등록에서 예외로 넣지 않는다. 같은 모양이 팔 B 에서 다시 나면 팔 B 만의 실패다(총괄 결정 2026-11-10: 예외 없음, 등록대로 `b_only_failure`).
 - **#346 계열 분류 칸(보고만, 판정과 무관)**: 결과 문서의 실패 목록에, 적재 운반 `cross_track` 종결마다 #346 계열인지를 미리 정한 기준으로 적는다.
-  - 기준: random_m P-5 → D-2 운반이고, #346 의 추출기(`docs/validation/2026-11-07-near-capture-frequency/nf_transport_cmp.py`, 바꾸지 않음)로 잰 '변곡점 뒤 4 s 안의 요 오차 최대'에서 0.05 rad 안으로 돌아오기 전에 실패했다(#346 재현 판단 기준 2 의 '같은 꼬리').
+  - 기준(둘 다): random_m P-5 → D-2 적재 운반의 `cross_track` 종결이다. 그리고 #346 의 추출기(`docs/validation/2026-11-07-near-capture-frequency/nf_transport_cmp.py`, 바꾸지 않음)로 잰 '변곡점 뒤 4 s 안의 요 오차 최대'의 절댓값이 0.10 rad 이상이고, 그 최대에서 2 s 안에 0.05 rad 안으로 돌아오지 않았다.
+  - 이 문턱은 #346 s100(−0.229, 복귀 없음)과 rv3 s1_B(−0.189, 10.45 s 뒤 한 번 지남)를 본 뒤 정했다. 완주 20 세션은 0.063 rad 안·0.22 s 안이었다. 보고용 분류라서 그 사실을 적고 쓴다.
   - 다른 임무의 `cross_track`, 또는 그 지표를 잴 수 없는 경우는 '분류 불가'로 적는다.
 
 ## 5. 도구
 
-- `tools/riib_v2_verdict.py` 에 `--rv4` 를 둔다. `--rv3` 와 다른 점은 1.1·1.2 뿐이다.
+- `tools/live_console_probe.py`: 1.2 의 탐침 계측(`mission_submit` 시도마다 `session_epoch`·대상·경로를 이벤트에 남김). 탐침 시험을 먼저 쓴다.
+- `tools/riib_v2_verdict.py` 에 `--rv4` 를 둔다. `--rv3` 와 다른 점은 1.1·1.2 의 판정, 3 절 plant 관문, 4 절 분류 칸이다.
   - `h3_check(direct=True)`: 직접 기록으로 판정하고, 대용은 보고만 한다.
-  - `submit_attempts(probe)`: 탐침 `events` 의 `mission_submit` 응답을 순서대로 읽는다. `start_retries` 와 시도 단위 거부 실패를 낸다.
-  - `rv4_failures`: `rv3_failures` 에 시도 단위 거부를 더한다.
-  - `plant_check(sessions)`: 3 절의 plant 판 값을 세션마다 읽어, 모두 같은지와 그 값을 낸다. 다르면 결합 결과를 `to_lead` 로 둔다.
+  - `submit_attempts(probe)`: 탐침 `events` 의 `mission_submit` 시도(`request_id` 단위)를 순서대로 읽는다. `start_retries` 와 시도 단위 거부 실패를 낸다.
+  - `rv4_failures`: `rv3_failures` 의 행 단위 `rejected` 를 시도 단위 거부로 **대체**한다. `start_unknown`·`not_run`·임무 실패는 그대로 둔다.
+  - `plant_check(sessions, manifest)`: 3 절의 키를 세션마다 읽어 존재·일치(전체, 장면별)·매니페스트 일치를 낸다. 어긋나면 결합 결과를 `to_lead` 로 둔다.
   - `family_346(session, mission)`: 4 절의 분류 칸(보고만). #346 추출기를 바꾸지 않고 불러 쓴다.
 - 시험을 먼저 쓴다. 대상:
-  - 직접 기록이 응답보다 앞서고 대용이 늦는 경우: rv3 의 r4 와 같은 모양으로, 통과해야 한다.
-  - 직접 기록 결측: 불통과.
-  - 첫 제출 `not_stopped` 1 회 뒤 `ack`: 재시도 목록에 들고 실패는 없다.
-  - 첫 제출 `no_feedback:rear_axle_speed` 1 회 뒤 `ack`: 재시도. 첫 제출에서 `not_stopped` 다음 `no_feedback:rear_axle_speed` 뒤 `ack`: 둘째가 실패다(합산 상한).
-  - plant 판 값이 한 세션만 다름: `to_lead`.
-  - `not_stopped` 2 회 뒤 `ack`: 둘째가 실패다.
-  - 둘째 제출의 `not_stopped`: 실패다.
-  - 다른 팔레트로 다시 낸 경우: 재시도가 아니고 실패다.
-  - 생명주기 2 의 `cargo_held` 두 번: 예외다.
-  - `session_end` 의 `stale_control`: 범위 밖이다.
+  - H3:
+    - 직접 기록이 응답보다 앞서고 대용이 늦은 경우(rv3 r4 모양): 통과.
+    - 송신·직접 기록·응답 각각 결측: 불통과.
+    - 송신 > 직접, 직접 > 응답 각각: 불통과. 등호: 통과.
+    - 거부된 취소 기록만 있음: 불통과.
+    - 같은 `request_id` 기록 둘: 첫 기록을 쓴다.
+    - 수신 시각이 송신보다 이른 경우(수신 경쟁): 판정은 통과, `receipt_ordered` 만 거짓.
+  - 재시도:
+    - 첫 시도 `not_stopped` → 같은 대상 `ack`: 재시도 1, 실패 0. `no_feedback:rear_axle_speed` 도 같다.
+    - `not_stopped → not_stopped → ack`, `not_stopped → no_feedback:rear_axle_speed → ack`: 거부 둘 다 실패.
+    - 둘째 이후 제출의 `not_stopped`: 실패.
+    - 다음 시도가 다른 팔레트, 목적지만 다름, 다른 항목, 응답 없음(timeout): 재시도 아님, 실패.
+    - 같은 `request_id` 재송신: 한 시도.
+    - 같은 `session_epoch` 안의 재접속 뒤 제출: '첫 시도' 아님. 다른 `session_epoch` 의 첫 시도: 새로 센다.
+    - 큐 경로(D5 다시 내기, 새 `request_id`)와 `main`·`cycle` 경로 각각.
+    - 대상·epoch 필드가 없는 거부: 재시도 아님, 실패. 탐침 이벤트 없음: 거부 없음으로 보지 않음.
+  - 실패 집계:
+    - 항목의 마지막 응답이 거부일 때 그 거부를 한 번만 센다.
+    - 생명주기 2 의 계획된 `cargo_held` 두 시도만 예외. 세 번째나 순서 밖은 실패.
+    - `session_end` 의 `stale_control`: 범위 밖.
+  - 실행·plant:
+    - 무효·취소 세션도 34 상한에 들어감.
+    - plant 키 결측, 한 세션만 다름, 장면별 키의 장면 안 불일치, 27 세션이 같지만 매니페스트와 다름: 모두 `to_lead`.
+  - #346 분류: 기준을 채운 경우·문턱 밖·다른 임무·지표 불가.
 - 회귀 시험: `--rv3` 의 기존 판정은 바뀌지 않는다(rv3 원자료 사본에서 `verdict.json` 과 같음).
 - rv3 원자료에 `--rv4` 를 돌린 값은 **이 등록이 고정된 뒤** 참고로만 낸다. 규칙을 그 값에 맞춰 고치지 않는다.
 
