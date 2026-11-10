@@ -99,25 +99,44 @@ def launcher_problem(values: list) -> str | None:
     return None
 
 
-def split_kinds(invalid: list, row: dict, records: list) -> dict:
-    """environment / mission, the mission reading independent of the environment's (Codex review P2-2)."""
+def split_kinds(invalid: list, row: dict, records: list, safety=None) -> dict:
+    """environment / mission, the mission and safety readings independent of the environment's (Codex review P2-2,
+    round 2). A session that never started (no mission record: mission_done None) is the environment's (the bundle
+    did not start it -- rerun once); one that started and did not finish its mission is a mission failure. Safety is
+    read whenever the session started, whatever else is invalid."""
     env, mission, probe = [], [], []
     for x in invalid:
         (probe if x.startswith("probe exit") else env).append(x)
-    if not row.get("mission_done"):
+    started = row.get("mission_done") is not None
+    if not started:
+        env.append("session not started (no mission record)")
+    elif not row.get("mission_done"):
         mission.append(f"mission not done: {row.get('mission_outcomes')}")
     ms = mission_status(records)
     if ms:
         mission.append(ms)
-    safety = row.get("safety")
     keys = ("forbidden_contacts", "unpermitted_entries", "unpermitted_dir_entries")
-    if not env:  # the safety counters exist only when the session was read in full
+    if started:
         if safety is None or any(safety.get(k) is None for k in keys):
             mission.append(f"safety record missing: {safety}")
         elif any(safety.get(k) for k in keys):
             mission.append(f"safety {safety}")
     (mission if mission else env).extend(probe)
     return {"environment": env, "worker": [], "mission": mission}
+
+
+def safety_of(s) -> dict | None:
+    """The safety counters from the session's records, read even when the session is otherwise invalid."""
+    res = s.result
+    if not res:
+        return None
+    ol = res.get("obstacle_layer") or {}
+    try:
+        fc = base.forbidden_contacts(s.out, s.run, res)
+    except Exception:  # noqa: BLE001 -- unreadable is missing
+        fc = None
+    return {"forbidden_contacts": fc, "unpermitted_entries": ol.get("unpermitted_entries"),
+            "unpermitted_dir_entries": ol.get("unpermitted_dir_entries")}
 
 
 def session_w(s) -> float | None:
@@ -151,7 +170,8 @@ def read_session(f: Path, e: dict) -> tuple[dict, dict]:
         "name": s.name, "invalid": s.invalid, "ps": s.ps, "mission_outcomes": s.mission_outcomes,
         "mission_done": s.mission_done}
     row["arm"], row["pair"] = arm, int(e["env"]["PAIR"])
-    row["kinds"] = split_kinds(s.invalid, row, recs)
+    row["safety_read"] = safety_of(s)
+    row["kinds"] = split_kinds(s.invalid, row, recs, row["safety_read"])
     row["evidence_stale_ticks"] = e0.stale_ticks(s.result)
     row["session_cpus"], row["node_gpu"] = summary.get("session_cpus"), summary.get("node_gpu")
     row["start_end"] = [recs[0].get("start"), recs[0].get("end")] if recs else None

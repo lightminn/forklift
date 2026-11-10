@@ -94,18 +94,33 @@ SAFE = {"forbidden_contacts": 0, "unpermitted_entries": 0, "unpermitted_dir_entr
 
 
 def test_the_mission_reading_is_kept_apart_from_the_environment():
-    k = an.split_kinds(["other users' CPU over 1 core"], {"mission_done": False}, [])
+    k = an.split_kinds(["other users' CPU over 1 core"], {"mission_done": False}, [], SAFE)
     assert k["environment"] and k["mission"]  # an overlap does not erase the mission failure
-    k = an.split_kinds(["probe exit 1"], {"mission_done": False}, [])
+    k = an.split_kinds(["probe exit 1"], {"mission_done": False}, [], SAFE)
     assert k["mission"] and "probe exit 1" in k["mission"] and not k["environment"]
-    k = an.split_kinds(["probe exit 1"], {"mission_done": True, "safety": SAFE}, [])
+    k = an.split_kinds(["probe exit 1"], {"mission_done": True}, [], SAFE)
     assert k["environment"] == ["probe exit 1"] and not k["mission"]
-    k = an.split_kinds([], {"mission_done": True, "safety": SAFE}, [{"status": "tour_incomplete"}])
+    k = an.split_kinds([], {"mission_done": True}, [{"status": "tour_incomplete"}], SAFE)
     assert k["mission"] == ["bundle mission status tour_incomplete"]
-    assert an.split_kinds([], {"mission_done": True, "safety": {**SAFE, "unpermitted_entries": None}}, [])["mission"]
-    assert an.split_kinds([], {"mission_done": True, "safety": SAFE}, []) == {"environment": [], "worker": [],
-                                                                              "mission": []}
+    assert an.split_kinds([], {"mission_done": True}, [], {**SAFE, "unpermitted_entries": None})["mission"]
+    assert an.split_kinds([], {"mission_done": True}, [], SAFE) == {"environment": [], "worker": [], "mission": []}
     assert an.attempt_problem([{"attempt": 1, "status": "early_mission_failure"}]) is None
+
+
+def test_safety_is_read_even_with_an_environment_invalidity():
+    k = an.split_kinds(["no CPU sampler record"], {"mission_done": True}, [], {**SAFE, "forbidden_contacts": 1})
+    assert k["environment"] == ["no CPU sampler record"] and k["mission"]
+    k = an.split_kinds(["no CPU sampler record"], {"mission_done": True}, [], None)
+    assert k["mission"] == ["safety record missing: None"]
+
+
+def test_a_session_that_never_started_is_the_environments():
+    k = an.split_kinds(["bundle: attempts []"], {"mission_done": None}, [], None)
+    assert not k["mission"] and "session not started (no mission record)" in k["environment"]
+    lv = [{"RETURN_START": "boxed", "NEAR_END_STAND": "on"}] * 4
+    rows = {"a1": row(1, "A", env=k["environment"]), "b1": row(1, "B"), "b2": row(2, "B"), "a2": row(2, "A")}
+    assert an.decide(rows, lv)["rerun_pairs"] == [1]
+    assert an.decide(rows, lv, reruns=(1,))["decision"] == "to the lead"  # the rerun invalid again
 
 
 def test_the_launcher_values_are_read_from_the_runs_live_directory(tmp_path):
