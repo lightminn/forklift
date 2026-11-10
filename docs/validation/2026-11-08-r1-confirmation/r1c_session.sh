@@ -20,6 +20,11 @@ export BASE_SCENE=$A/base_scene/scene.usda FORKLIFT_URDF=$A/dd_cfg/old/dls08_mea
 export PORT=${PORT:-$((8860 + ${SLURM_JOB_ID:-0} % 100))} FACTOR=${FACTOR:?factor} SEED=${SEED:-0}
 export SLAM_BUNDLE_ROOT=${SLAM_BUNDLE_ROOT:-$P/artifacts/slam_bundles}
 export ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized} MAX_EPOCHS=1
+# The G3 scan-step switches (real-time plan 5.26-5.27): the console launcher turns them on by default since the lead's
+# decision of 2026-11-10; this measurement wrapper keeps every list's meaning -- off unless the list sets them (an unset
+# LIDAR_CAST passes loop to the launcher; a --lidar-cast in EXTRA_ARGS comes later and wins there)
+export FORKLIFT_GRID_CLEAR_KERNEL=${FORKLIFT_GRID_CLEAR_KERNEL:-0} FORKLIFT_SHADOW_KERNEL=${FORKLIFT_SHADOW_KERNEL:-0}
+export LIDAR_CAST=${LIDAR_CAST:-loop}
 LINE_M=$P/test_runs/riibotics/scenes_ct1_a770031/line_m_session.json
 # every live-loop switch at its default, then the arm's profile set explicitly (plan 5.17: validation pins k and phase)
 for v in $(env | grep -oE '^FORKLIFT_LIVE_[A-Z_]+' || true); do unset "$v"; done

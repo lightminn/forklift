@@ -60,6 +60,8 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"  # the console's runner reads it
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
+  # the G3 scan-step switches stay off in a survey (real-time plan 5.26-5.27): its maps are compared across runs
+  printf 'FORKLIFT_GRID_CLEAR_KERNEL=0\nFORKLIFT_SHADOW_KERNEL=0\nLIDAR_CAST=loop\n'
   printf 'SLAM_CHOICE=%q\n' "mapping (survey epoch)"  # the console's runner shows it (live-default plan 5d)
 } > "$OUT/env.sh"
 
@@ -88,6 +90,8 @@ cat > "$OUT/runner.sh" <<'EOT'
 # epoch $1, its directory $2, the port file $3, the session's map id $4 and survey bundle $5 (with MAP_BUNDLE)
 . "$(dirname "$0")/env.sh"
 cd "$ROOT"
+# the G3 scan-step switches (env.sh): read by the modules at import; an EXTRA_ARGS --lidar-cast comes later and wins
+export FORKLIFT_GRID_CLEAR_KERNEL="${FORKLIFT_GRID_CLEAR_KERNEL:-0}" FORKLIFT_SHADOW_KERNEL="${FORKLIFT_SHADOW_KERNEL:-0}"
 LOC=()  # SLAM localization plan L7: localize on the survey bundle from the start (unset: online mapping)
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-planning)
@@ -126,7 +130,7 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
+  --lidar-cast "${LIDAR_CAST:-loop}" $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac
