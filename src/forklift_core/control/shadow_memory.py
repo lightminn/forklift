@@ -33,7 +33,9 @@ appearing inside it, after they were last seen outside it.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field, replace
+from itertools import chain
 from math import cos, hypot, sin
 
 import numpy as np
@@ -44,6 +46,10 @@ from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, UNKNOWN, AgeE
 from forklift_core.perf import changed, dual, dumped, shape_kind
 from forklift_core.planning.geometry import Footprint
 
+# Real-time plan 5.27 G3-1c: the shadow apply on arrays, bit for bit the original including the memory's key order and
+# value types (FORKLIFT_SHADOW_KERNEL=1, read once at start; off by default). Kernel mode ``reference`` keeps the
+# original path; ``numba`` judges RETAINED with control/shadow_numba.py, ``numpy`` with _retained_stamps_batched.
+SHADOW_KERNEL = os.environ.get("FORKLIFT_SHADOW_KERNEL", "0") == "1"
 
 
 def _compose(a, b):
@@ -121,6 +127,8 @@ class ShadowMemory:
         expires it with that support (Codex P1); its radius is sized for the
         age it may reach within that limit.
         """
+        if SHADOW_KERNEL and kernels.mode() != "reference" and self.started and self._exact_floats(snapshot, own_pose):
+            return self._apply_arrays(snapshot, own_pose, own_footprint, extra_support)
         res = snapshot.resolution_m
         oi = int(round(snapshot.origin_x_m / res))
         oj = int(round(snapshot.origin_y_m / res))
@@ -208,6 +216,153 @@ class ShadowMemory:
                 continue  # no fresh evidence anywhere along the support: not retained
             out[a, b] = RETAINED
             free_stamp[a, b] = t
+        self.stats["retained_max"] = max(self.stats["retained_max"], int((out == RETAINED).sum()))
+        return replace(snapshot, state=out, free_stamp=free_stamp)
+
+    def _exact_floats(self, snapshot: GridSnapshot, own_pose) -> bool:
+        """Every scalar the array path computes with is a built-in float (plan 5.27, Codex round 2-3): then a float64
+        array operation is the same binary64 operation as the original scalar one. Otherwise the original path."""
+        e = self.error
+        scalars = (snapshot.stamp_s, snapshot.origin_x_m, snapshot.origin_y_m, snapshot.resolution_m, own_pose[0],
+                   own_pose[1], self.band_m, self.evidence_max_age_s, self.rho_margin_m, *e.ages_s, *e.position_m,
+                   *e.yaw_rad)
+        if any(type(v) is not float for v in scalars):
+            return False
+        if snapshot.free_stamp.dtype != np.float64:  # its values are stored and handed to the kernels as float64
+            return False
+        return all(type(v[0]) is float and type(v[2]) is float for v in self.memory.values())
+
+    def _apply_arrays(self, snapshot: GridSnapshot, own_pose, own_footprint: Footprint,
+                      extra_support: dict | None) -> GridSnapshot:
+        """``apply`` after start-up on arrays (plan 5.27 method A): the same cells, values, value types and memory key
+        order. The new memory is built by the original's three insertions in order (kept memory, wholly covered cells,
+        fresh FREE band cells; a key already present keeps its place); each distance is ``math.hypot`` of arguments
+        computed by the original expressions; the candidates' radius uses ``math.sin`` of the table rows used."""
+        res = snapshot.resolution_m
+        oi = int(round(snapshot.origin_x_m / res))
+        oj = int(round(snapshot.origin_y_m / res))
+        if abs(oi * res - snapshot.origin_x_m) > 1e-6 or abs(oj * res - snapshot.origin_y_m) > 1e-6:
+            raise ValueError("snapshot origin must be a multiple of the resolution")
+        correction = tuple(float(v) for v in snapshot.correction)
+        if self.correction is not None and correction != self.correction and self.memory:
+            self._move(correction, res)  # the original (plan 5.27: its share stayed under the 5 % rule)
+        self.correction = correction
+        state = snapshot.state
+        nx, ny = state.shape
+        cells, _ = footprint_cells(snapshot, own_pose, own_footprint, self.band_m)
+        band = _cell_set(cells, nx, ny)
+        whole = whole_cells(snapshot, own_pose, own_footprint)
+        band -= whole
+        now = snapshot.stamp_s
+        ox, oy, px, py = snapshot.origin_x_m, snapshot.origin_y_m, own_pose[0], own_pose[1]
+
+        def rho(a, b) -> list:
+            return list(map(hypot, (ox + (a + 0.5) * res - px).tolist(), (oy + (b + 0.5) * res - py).tolist()))
+
+        band_mask = np.zeros((nx, ny), dtype=bool)
+        if band:
+            ba = np.fromiter((c[0] for c in band), dtype=np.int64, count=len(band))
+            bb = np.fromiter((c[1] for c in band), dtype=np.int64, count=len(band))
+            band_mask[ba, bb] = True
+        else:
+            ba = bb = np.zeros(0, dtype=np.int64)
+        # 1. remembered cells still in the band and UNKNOWN, in the memory's order (their original key and value)
+        keys = list(self.memory)
+        values = list(self.memory.values())
+        if keys:
+            k = np.fromiter(chain.from_iterable(keys), dtype=np.int64, count=2 * len(keys)).reshape(-1, 2)
+            a, b = k[:, 0] - oi, k[:, 1] - oj
+            inside = (a >= 0) & (a < nx) & (b >= 0) & (b < ny)  # no negative-index wrap (plan 5.27, agy 6)
+            ac, bc = np.where(inside, a, 0), np.where(inside, b, 0)
+            stay = np.flatnonzero(inside & band_mask[ac, bc] & (state[ac, bc] == UNKNOWN)).tolist()
+            keep = {keys[i]: values[i] for i in stay}
+        else:
+            keep = {}
+        # 2. cells wholly under the truck, not OCCUPIED, in the whole set's order
+        if whole:
+            w = np.fromiter(chain.from_iterable(whole), dtype=np.int64, count=2 * len(whole)).reshape(-1, 2)
+            wa, wb = w[:, 0], w[:, 1]
+            ok = (wa >= 0) & (wa < nx) & (wb >= 0) & (wb < ny)
+            wa, wb = wa[ok], wb[ok]
+            sel = state[wa, wb] != OCCUPIED
+            wa, wb = wa[sel], wb[sel]
+            keep.update(zip(zip((wa + oi).tolist(), (wb + oj).tolist()),
+                            ((now, "covered", r) for r in rho(wa, wb))))
+        # 3. fresh FREE band cells, in the band set's order (band -= whole: the reference's set, iterated alike)
+        if band:
+            sel = state[ba, bb] == FREE
+            fa, fb = ba[sel], bb[sel]
+            margin = self.rho_margin_m
+            keep.update(zip(zip((fa + oi).tolist(), (fb + oj).tolist()),
+                            ((float(t), "free", r + margin) for t, r in zip(snapshot.free_stamp[fa, fb].tolist(),
+                                                                       rho(fa, fb)))))
+        self.memory = keep
+        # Candidates: remembered UNKNOWN cells whose error stays in the table over the next evidence_max_age_s.
+        keys = list(keep)
+        if keys:
+            k = np.fromiter(chain.from_iterable(keys), dtype=np.int64, count=2 * len(keys)).reshape(-1, 2)
+            ca, cb = k[:, 0] - oi, k[:, 1] - oj  # every remembered cell is in the grid now (band or whole)
+            unk = state[ca, cb] == UNKNOWN
+            vals = list(keep.values())
+            t_obs = np.array([v[0] for v in vals])[unk]
+            rho_c = np.array([v[2] for v in vals])[unk]
+            ca, cb = ca[unk], cb[unk]
+            age = now - t_obs + self.evidence_max_age_s
+            age = np.where(age < 0, 0.0, age)
+            table = np.array(self.error.ages_s)
+            le = age[:, None] <= table[None, :]
+            found = le.any(axis=1)
+            row = le.argmax(axis=1)[found]
+            ca, cb, rho_c = ca[found], cb[found], rho_c[found]
+            e = np.array(self.error.position_m)[row]
+            yaw = self.error.yaw_rad
+            half_sin = {i: sin(yaw[i] / 2) for i in set(row.tolist())}  # only the rows used (Codex P3)
+            s_row = np.array([half_sin[i] for i in row.tolist()]) if len(row) else np.zeros(0)
+            radius = e + 2 * rho_c * s_row + res / 2
+        else:
+            ca = cb = np.zeros(0, dtype=np.int64)
+            radius = np.zeros(0)
+        fresh = state == FREE
+        stamps_fresh = snapshot.free_stamp
+        if extra_support:
+            fresh = fresh.copy()
+            stamps_fresh = stamps_fresh.copy()
+            for (a, b), t_cert in extra_support.items():
+                if 0 <= a < nx and 0 <= b < ny and state[a, b] != OCCUPIED:
+                    fresh[a, b] = True
+                    if not np.isfinite(stamps_fresh[a, b]) or t_cert < stamps_fresh[a, b]:
+                        stamps_fresh[a, b] = t_cert
+        zero_or_nan = bool(np.any(fresh & ((stamps_fresh == 0.0) | np.isnan(stamps_fresh))))
+        if not len(ca):
+            return snapshot
+        # A non-finite radius: the batched code's max() over the candidates decides (Codex 1c-0 review P3).
+        if kernels.mode() == "numba" and not zero_or_nan and bool(np.isfinite(radius).all()):
+            from forklift_core.control import shadow_numba
+
+            whole_mask = np.zeros((nx, ny), dtype=bool)
+            if whole:
+                whole_mask[_whole_index(whole, nx, ny)] = True
+            di, dj, gap = _offsets(float(radius.max()), res)
+            alive, stamp_arr = shadow_numba.retained(ca, cb, radius, np.ascontiguousarray(fresh),
+                                                     np.ascontiguousarray(stamps_fresh), whole_mask, di, dj, gap)
+            idx = np.flatnonzero(alive)
+            sa, sb, st = ca[idx], cb[idx], stamp_arr[idx]
+        else:
+            cand = dict(zip(zip(ca.tolist(), cb.tolist()), radius.tolist()))
+            retained_stamps = self._retained_stamps if zero_or_nan else _retained_stamps_batched
+            stamp = retained_stamps(cand, res, fresh, stamps_fresh, whole, nx, ny)
+            if not stamp:
+                return snapshot
+            sa = np.array([c[0] for c in stamp], dtype=np.int64)
+            sb = np.array([c[1] for c in stamp], dtype=np.int64)
+            st = np.array(list(stamp.values()))
+        if not len(sa):
+            return snapshot
+        out = state.copy()
+        free_stamp = snapshot.free_stamp.copy()
+        finite = np.isfinite(st)  # no fresh evidence anywhere along the support: not retained
+        out[sa[finite], sb[finite]] = RETAINED
+        free_stamp[sa[finite], sb[finite]] = st[finite]
         self.stats["retained_max"] = max(self.stats["retained_max"], int((out == RETAINED).sum()))
         return replace(snapshot, state=out, free_stamp=free_stamp)
 
@@ -313,6 +468,34 @@ class ShadowMemory:
                 elif (p, q) not in whole:
                     return None
         return fresh_n, ret_n
+
+
+def _cell_set(cells, nx, ny) -> set:
+    """band_cells' set from footprint_cells' cells: the same in-grid cells added one by one in the same order as its
+    set comprehension, so the same set iterating alike (plan 5.27; checked on 588 recorded calls)."""
+    c = np.asarray(cells, dtype=np.int64).reshape(-1, 2)
+    m = (c[:, 0] >= 0) & (c[:, 0] < nx) & (c[:, 1] >= 0) & (c[:, 1] < ny)
+    return set(zip(c[m, 0].tolist(), c[m, 1].tolist()))
+
+
+def _whole_index(whole, nx, ny):
+    w = np.array([c for c in whole if 0 <= c[0] < nx and 0 <= c[1] < ny], dtype=np.int64).reshape(-1, 2)
+    return w[:, 0], w[:, 1]
+
+
+_OFFSETS: dict = {}
+
+
+def _offsets(r_max: float, res: float):
+    """The batched code's offset list for a largest reach, with its gaps by ``math.hypot`` (cached per size)."""
+    k = int(np.ceil(r_max / res)) + 1
+    key = (k, res)
+    if key not in _OFFSETS:
+        offsets = [(i, j) for i in range(-k, k + 1) for j in range(-k, k + 1) if (i, j) != (0, 0)]
+        _OFFSETS[key] = (np.array([o[0] for o in offsets], dtype=np.int64), np.array([o[1] for o in offsets],
+                         dtype=np.int64), np.array([res * hypot(max(abs(i) - 1, 0), max(abs(j) - 1, 0))
+                                                    for i, j in offsets]))
+    return _OFFSETS[key]
 
 
 def band_cells(snapshot: GridSnapshot, pose, footprint: Footprint, band_m: float) -> set:
