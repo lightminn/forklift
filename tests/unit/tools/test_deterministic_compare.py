@@ -236,3 +236,13 @@ def test_a_different_value_beside_the_run_folder_still_fails(tmp_path):
         (run / "result.json").write_text(json.dumps(result))
         runs.append(run)
     assert dc.compare(*runs)["equal"] is False
+
+
+def test_the_runtime_clock_identity_file_is_left_out(tmp_path):
+    """rv4 registration 1.1's runtime_clock.json is host identity (boot id, time namespace), not run output: two runs
+    of one configuration across a reboot still compare equal."""
+    a, b = make_run(tmp_path, path_tag="a"), make_run(tmp_path, path_tag="b")
+    (a / "run" / "runtime_clock.json").write_text(json.dumps({"boot_id": "x", "time_ns": "time:[1]"}))
+    (b / "run" / "runtime_clock.json").write_text(json.dumps({"boot_id": "y", "time_ns": "time:[2]"}))
+    out = dc.compare(a, b)
+    assert out["equal"] is True, out["differences"]

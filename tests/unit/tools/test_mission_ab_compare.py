@@ -87,3 +87,14 @@ def test_a_format_2_recording_runs_own_keys_are_skipped(tmp_path):
             **extra}))
     out = M.compare(a, b)
     assert out["differences"] == []
+
+
+def test_the_runtime_clock_identity_file_is_skipped(tmp_path):
+    """rv4 registration 1.1's runtime_clock.json is host identity: present in one run only (a pre-rv4 run) or with
+    another boot id, it is not a difference."""
+    a = run_dir(tmp_path, "a")
+    b = run_dir(tmp_path, "b")
+    (b / "runtime_clock.json").write_text(json.dumps({"boot_id": "y", "time_ns": "time:[2]"}))
+    rep = M.compare(a, b)
+    assert rep["equal"], rep["differences"]
+    assert "runtime_clock.json" in rep["skipped"]

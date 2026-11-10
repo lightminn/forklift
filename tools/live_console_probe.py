@@ -27,9 +27,28 @@ from websockets.asyncio.client import connect
 API = "console/1"
 
 
+def clock_identity() -> dict:
+    """This process's boot id and time namespace (rv4 registration 1.1): read here, in-process, so the probe and the
+    runtime compare their own; a failed read is recorded as None (a mismatch for the verdict, never a value)."""
+    out = {}
+    try:
+        out["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip() or None
+    except OSError:
+        out["boot_id"] = None
+    try:
+        out["time_ns"] = os.readlink("/proc/self/ns/time")
+    except OSError:
+        out["time_ns"] = None
+    return out
+
+
 class Probe:
     def __init__(self, port: int, report: dict):
         self.port, self.report = port, report
+        self.report.setdefault("clock", clock_identity())
+        self.scenario_name = None  # the --scenario, the path recorded with each mission_submit attempt
+        self.submit_seq: dict = {}  # session epoch -> the last mission_submit attempt_seq
+        self.submit_attempt: dict = {}  # request id -> its attempt record (a resend of the same id is that attempt)
         self.ws = None
         self.media = None
         self.client_id = "probe"
@@ -69,6 +88,22 @@ class Probe:
 
     def event(self, name, **fields):
         self.report.setdefault("events", []).append({"mono": time.monotonic(), "event": name, **fields})
+
+    def submit_attempt_of(self, kind, rid, fields, meta, path) -> dict:
+        """rv4 registration 1.2: a mission_submit attempt's record -- the session epoch, an attempt_seq that counts new
+        mission_submit request ids per epoch (nothing else), the target and the path -- with a ``sent`` event before
+        the first send of that id. Probe-side only: nothing of it goes into the message. Other kinds: {}."""
+        if kind != "mission_submit":
+            return {}
+        if rid not in self.submit_attempt:
+            n = self.submit_seq.get(self.epoch, 0) + 1
+            self.submit_seq[self.epoch] = n
+            self.submit_attempt[rid] = {"session_epoch": self.epoch, "attempt_seq": n,
+                                        "pallet_id": fields.get("pallet_id"),
+                                        "destination_id": fields.get("destination_id"),
+                                        "item_id": (meta or {}).get("item_id"), "path": path}
+            self.event("sent", kind=kind, request_id=rid, **self.submit_attempt[rid])
+        return self.submit_attempt[rid]
 
     # --- connection ---------------------------------------------------------------------------------------------
     async def open(self):
@@ -210,7 +245,8 @@ class Probe:
                 reply = await self._request(kind, timeout, **fields)
         return reply
 
-    async def _request(self, kind, timeout=5.0, request_id=None, **fields):
+    async def _request(self, kind, timeout=5.0, request_id=None, meta=None, **fields):
+        """``meta``: probe-side record fields for a mission_submit attempt (``item_id``); never sent."""
         self.n += 1
         rid = request_id or f"r{self.n}"
         msg = {"t": kind, "request_id": rid, "session_epoch": self.epoch, **fields}
@@ -220,6 +256,8 @@ class Probe:
         if kind not in ("stop", "lease_request"):
             msg.setdefault("lease_id", self.lease_id)
             msg.setdefault("control_gen", self.control_gen)
+        attempt = (self.submit_attempt_of(kind, rid, fields, meta, getattr(self, "scenario_name", None))
+                   if kind == "mission_submit" else {})
         sent = time.monotonic()
         await self.ws.send(json.dumps(msg))
         end = sent + timeout
@@ -227,15 +265,15 @@ class Probe:
             if rid in self.replies:
                 at, reply = self.replies[rid]
                 self.event("reply", kind=kind, request_id=rid, t=reply["t"], reason=reply.get("reason"),
-                           detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
+                           detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at, **attempt)
                 if reply.get("control_gen") is not None:
                     self.control_gen = reply["control_gen"]
                 return reply
             await asyncio.sleep(0.01)
-        self.event("reply_timeout", kind=kind, request_id=rid)
+        self.event("reply_timeout", kind=kind, request_id=rid, **attempt)
         return None
 
-    async def request_resent(self, kind, request_id, retry_s=0.5, **fields):
+    async def request_resent(self, kind, request_id, retry_s=0.5, meta=None, **fields):
         """protocol.js request() + pump(): the same message resent every retry_s until it is answered (no timeout --
         the caller stops waiting when it no longer needs the answer)."""
         msg = {"t": kind, "request_id": request_id, "session_epoch": self.epoch, **fields}
@@ -245,6 +283,7 @@ class Probe:
         msg.setdefault("lease_id", self.lease_id)
         msg.setdefault("control_gen", self.control_gen)
         raw = json.dumps(msg)
+        attempt = self.submit_attempt_of(kind, request_id, fields, meta, "queue") if kind == "mission_submit" else {}
         sent = time.monotonic()
         while self.closed_code is None and request_id not in self.queue_forgotten and request_id not in self.replies:
             await self.ws.send(raw)
@@ -253,7 +292,7 @@ class Probe:
                 if request_id in self.replies:
                     at, reply = self.replies[request_id]
                     self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                               detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)
+                               detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at, **attempt)
                     if reply.get("control_gen") is not None:
                         self.control_gen = reply["control_gen"]
                     return reply
@@ -263,7 +302,8 @@ class Probe:
             return None
         at, reply = self.replies[request_id]
         self.event("reply", kind=kind, request_id=request_id, t=reply["t"], reason=reply.get("reason"),
-                   detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at)  # (Codex r5 P3)
+                   detail=reply.get("detail"), rtt_s=at - sent, sent_mono=sent, reply_mono=at,
+                   **attempt)  # (Codex r5 P3)
         return reply
 
     async def request_until_standing(self, kind, tries=20, **fields):
@@ -1498,7 +1538,7 @@ async def queue_scenario(p: Probe, args):
             p.queue_asking = {"key": key, "entry": entry}  # answered through _read
             resend = asyncio.ensure_future(p.request_resent(
                 "mission_submit", s_["request_id"], pallet_id=s_["pallet_id"], destination_id=s_["destination_id"],
-                targets_revision=s_["targets_revision"]))
+                targets_revision=s_["targets_revision"], meta={"item_id": s_["item_id"]}))
         await p.echo()
         await asyncio.sleep(0.25)
     for task_ in (resend, pick_resend):
@@ -2624,6 +2664,7 @@ def main():
         sys.exit(3)
     report = {"port_file": info}
     p = Probe(info["port"], report)
+    p.scenario_name = args.scenario
     try:
         scenario = {"main": main_scenario, "slow": slow_scenario, "marker": marker_scenario,
                     "approach": approach_scenario, "planwait": planwait_scenario, "cycle": cycle_scenario,
@@ -2652,6 +2693,7 @@ def main():
             report["after_reset"] = {"port_file": info2, "ready": ready}
             if ready:
                 p2 = Probe(info2["port"], report["after_reset"])
+                p2.scenario_name = args.scenario
                 try:
                     if args.scenario == "restart":
                         async def resend_then_cycle():
