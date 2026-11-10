@@ -384,3 +384,55 @@ def test_family_346_needs_the_destination_on_record(monkeypatch):
     assert V.family_346(fam_sess(dest=None), FAIL, "random_m")["class"] == "unclassifiable"
     assert V.family_346(fam_sess(), FAIL, "line_m")["class"] == "unclassifiable"
     assert V.family_346(fam_sess(records={"m2": {}}), FAIL, "random_m") is None  # not a cross_track: not in the column
+
+
+# --- Codex implementation review round 2 ------------------------------------------------------------------------------
+def test_a_row_refusal_without_its_reject_attempt_is_kept_and_marks_the_record_incomplete():
+    rows = [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"),
+            {**_row(None, "P-3", None, start="rejected"), "reject_reason": "busy_x", "destination_id": "D-3"}]
+    for r, d in zip(rows[:2], ("D-1", "D-2")):
+        r["destination_id"] = d
+    ev = probe(att("r2", 1, "ack", pallet="P-1", dest="D-1"), att("r3", 2, "ack", pallet="P-2", dest="D-2", mono=2))
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", rows, ev["events"]))
+    assert {x["outcome"] for x in f} == {"start_unknown", "rejected"}
+
+
+def test_a_matched_row_refusal_is_counted_once_and_an_unmatched_one_kept():
+    rows = [{**_row(None, "P-1", None, start="rejected"), "reject_reason": "busy_x", "destination_id": "D-1"},
+            {**_row(None, "P-2", None, start="rejected"), "reject_reason": "busy_x", "destination_id": "D-2"}]
+    ev = probe(att("r2", 1, "reject", "busy_x", pallet="P-1", dest="D-1"))
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", rows, ev["events"]))
+    rej = [x for x in f if x["outcome"] == "rejected"]
+    assert len(rej) == 2 and any(x.get("attempt_request_id") == "r2" for x in rej)
+    assert any(x["outcome"] == "start_unknown" for x in f)
+
+
+def test_conflicting_replies_for_one_request_are_incomplete_and_keep_the_reject():
+    ev = probe(att("r2", 1, "reject", "not_stopped"))["events"]
+    ev.append({**ev[-1], "t": "ack", "reason": None, "mono": 1.3})
+    a = V.submit_attempts({"events": ev})
+    assert a["complete"] is False
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
+    assert any(x["outcome"] == "rejected" and x["attempt_request_id"] == "r2" for x in f)
+
+
+def test_request_id_and_the_queue_item_are_required():
+    no_rid = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))
+    for e in no_rid["events"][:2]:
+        e["request_id"] = None
+    assert V.submit_attempts(no_rid)["complete"] is False
+    queue = probe(att("q4", 1, "reject", "not_stopped"), att("q5", 2, "ack", mono=2))
+    for e in queue["events"]:
+        e["path"] = "queue"  # a queue attempt without its item
+    a = V.submit_attempts(queue)
+    assert a["complete"] is False and a["retries"] == []
+
+
+def test_life3_plant_and_safety_exemption_only_before_any_submit(tmp_path):
+    sess = {"a": {"result": plant_result("x"), "name": "a"},
+            "life3_random_m_reloc": {"result": None, "name": "life3_random_m_reloc", "rows": [],
+                                     "probe": {"events": []}, "records": {"m1": {}}, "entries": []}}
+    assert V.rv4_plant_skip(sess, life3_ended_per_record=True) == set()  # a mission folder: submitted
+    sess["life3_random_m_reloc"]["records"] = {}
+    assert V.rv4_plant_skip(sess, life3_ended_per_record=True) == {"life3_random_m_reloc"}
+    assert V.rv4_plant_skip(sess, life3_ended_per_record=False) == set()

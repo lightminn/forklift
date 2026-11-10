@@ -559,7 +559,10 @@ def evaluate(out_dir: Path, rv4: bool = False) -> dict:
                  for v in cap.values())
     safety_tab = {n: safety(s) for n, s in sess.items() if not n.endswith("_A")}
     l3 = lifecycle(sess["life3_random_m_reloc"], 3)
-    if l3.get("outcome") == "ended_per_record":
+    l3s = sess["life3_random_m_reloc"]
+    if l3.get("outcome") == "ended_per_record" and (
+            not rv4 or not _submit_evidence(l3s, submit_attempts(l3s.get("probe") or {}))):
+        # rv4: only before any submit evidence (Codex P2)
         safety_tab["life3_random_m_reloc"] = {"not_applied": "reloc_needs_operator before any mission"}
     b_only = [r for r in pairs if r["sessions"].get("A", {}).get("eligible") and not r["sessions"].get("B", {}).get("eligible")]
     return {"pace": pace, "pairs": pairs, "c2_cap": {"sessions": cap, "pass": cap_ok},
@@ -947,7 +950,7 @@ def submit_attempts(probe: dict) -> dict:
     the whole session. Incomplete: a reply or timeout without its ``sent`` event or attempt fields, a sent event twice
     for one id, or an epoch's attempt_seq not 1..n. Incomplete exempts nothing."""
     attempts, problems, seen, orphans = {}, [], set(), []
-    need = ("session_epoch", "attempt_seq", "pallet_id", "destination_id")
+    need = ("request_id", "session_epoch", "attempt_seq", "pallet_id", "destination_id", "path")
     for e in (probe or {}).get("events") or []:
         if e.get("kind") != "mission_submit":
             continue
@@ -958,6 +961,8 @@ def submit_attempts(probe: dict) -> dict:
             seen.add(rid)
             if any(e.get(k) is None for k in need):
                 problems.append(f"{rid}: sent without {[k for k in need if e.get(k) is None]}")
+            if e.get("path") == "queue" and e.get("item_id") is None:
+                problems.append(f"{rid}: a queue attempt without its item")
             attempts[rid] = {"request_id": rid, "session_epoch": e.get("session_epoch"), "seq": e.get("attempt_seq"),
                              "pallet_id": e.get("pallet_id"), "destination_id": e.get("destination_id"),
                              "item_id": e.get("item_id"), "t": None, "reason": None, "mono": e.get("mono")}
@@ -977,6 +982,11 @@ def submit_attempts(probe: dict) -> dict:
                                        a0["item_id"])):
                 problems.append(f"{rid}: {e.get('event')} contradicts its sent event")
             if e.get("event") == "reply":
+                prev = attempts[rid]["t"]
+                if prev is not None and (prev, attempts[rid]["reason"]) != (e.get("t"), e.get("reason")):
+                    problems.append(f"{rid}: conflicting replies")
+                if prev == "reject":
+                    continue  # the refusal seen is kept once (Codex P2)
                 attempts[rid].update(t=e.get("t"), reason=e.get("reason"), reply_mono=e.get("reply_mono"))
     by_epoch: dict = {}
     for a in attempts.values():
@@ -1068,12 +1078,35 @@ def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
         elif evidence and not att["attempts"]:
             why = "submit_evidence_without_attempts"
     observed = [a for a in att["attempts"] if a["t"] == "reject"] + att["orphans"]
-    keep_row_refusals = why is not None and not observed
-    rows = [r for r in sess.get("rows") or [] if keep_row_refusals or r.get("start") != "rejected"]
+    # every row's submission against the attempts, per submission (Codex P2): a refused row consumes an observed reject
+    # of its target (then it is counted as that attempt) or stays a row refusal; a started row consumes an ack
+    rows, used, unmatched = [], set(), []
+
+    def take(pool, r):
+        for a in pool:
+            if id(a) in used or a["pallet_id"] != r.get("pallet_id"):
+                continue
+            if r.get("destination_id") is not None and a["destination_id"] != r.get("destination_id"):
+                continue
+            used.add(id(a))
+            return a
+        return None
+    acks = [a for a in att["attempts"] if a["t"] == "ack"]
+    for r in sess.get("rows") or []:
+        if r.get("start") == "rejected":
+            if take(observed, r) is None:
+                rows.append(r)
+                unmatched.append(f"row {r.get('pallet_id')}: refused, no reject attempt")
+            continue
+        if r.get("mission_id") and r.get("start") == "confirmed" and take(acks, r) is None and not pre_submit_end:
+            unmatched.append(f"row {r.get('mission_id')}: started, no ack attempt")
+        rows.append(r)
+    if unmatched and why is None:
+        why = "rows_without_attempts"
     out = rv3_failures({**sess, "rows": rows}, life3_ended_per_record=life3_ended_per_record)
     if why is not None:
         out.append({"session": name, "mission": None, "outcome": "start_unknown", "why": why,
-                    "problems": att["problems"], "row": None})
+                    "problems": att["problems"] + unmatched, "row": None})
     waived = _expected_cargo_held(sess, att) if why is None else set()
     for a in att["rejects"] if why is None else observed:
         if a["request_id"] in waived:
@@ -1127,6 +1160,14 @@ def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict
             problems.append(f"{k} differs from the manifest")
     return {"ok": not problems, "problems": problems,
             "values": {k: values[names[0]].get(k) for k in PLANT_GLOBAL} if names else {}}
+
+
+def rv4_plant_skip(sessions: dict, life3_ended_per_record: bool) -> set:
+    """rv4 registration 3: the only session the plant gate may skip -- lifecycle 3 ended on the record before any
+    submit evidence, with no result (Codex P2)."""
+    return {n for n, s in sessions.items()
+            if n.startswith("life3_") and life3_ended_per_record and s.get("result") is None
+            and not _submit_evidence(s, submit_attempts(s.get("probe") or {}))}
 
 
 def rv4_outcome(combined: dict, plant_ok: bool) -> dict:
@@ -1208,7 +1249,7 @@ def evaluate_rv4(out_dir: Path) -> dict:
     image_bad = [n for n in names if n not in l4 and not (n.startswith("life3_") and l3_end)
                  and _image_id(sess[n]) != rv4["image_id"]]
     dump_bad = rv3_dump_args({n: s for n, s in sess.items() if s.get("result") is not None}, set(l4))
-    skip = {n for n in names if n.startswith("life3_") and l3_end and sess[n].get("result") is None}
+    skip = rv4_plant_skip(sess, l3_end)
     plant = plant_check(sess, scene_of, rv4.get("plant") or {}, skip=skip)
     checks = {"slam_choice": map_bad, "image_id": image_bad, "occupied_dumps": dump_bad,
               "plant": [] if plant["ok"] else plant["problems"]}
