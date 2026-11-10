@@ -1125,6 +1125,10 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # 2026-11-10: real-time plan 5.28 G3-1e (live only; refused with --near-tracking)
                               "layer_worker": "off", "layer_worker_k": 3, "layer_worker_timeout_s": 0.5,
                               "layer_worker_cpus": "off",
+                              # 2026-11-11: the latency test (docs/plans/2026-11-11-latency-tolerance.md; A refused
+                              # with --near-tracking, B live only)
+                              "latency_slam": "off", "latency_layer": "off", "latency_seed": None,
+                              "latency_plan_ms": 0.0,
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);

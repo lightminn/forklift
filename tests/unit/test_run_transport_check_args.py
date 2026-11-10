@@ -133,3 +133,26 @@ def test_the_async_capture_dump_needs_a_live_run(tmp_path):
     assert p.returncode == 2 and "--live-capture-dump async needs --live" in p.stderr
     p = _check(*_base(tmp_path / "b"), "--live-capture-dump", "sync")
     assert p.returncode == 0, p.stderr
+
+
+def test_the_latency_options_are_checked_before_isaac(tmp_path):
+    """Latency test (docs/plans/2026-11-11-latency-tolerance.md): A batch only, B live only, bad specs refused."""
+    slam = ["--slam-feedback", str(tmp_path / "s.sock")]
+    ok = _check(*_base(tmp_path / "a"), *slam, "--latency-slam", "ticks:6", "--latency-layer", "undeclared:12",
+                "--latency-seed", "3")
+    assert ok.returncode == 0, ok.stderr
+    for extra, why in (
+        (["--latency-slam", "ticks:6"], "--latency-slam needs the SLAM feedback"),
+        ([*slam, "--latency-slam", "late:3"], "--latency-slam"),
+        (["--latency-layer", "undeclared:13"], "N out of range"),
+        (["--latency-layer", "jitter:12", "--layer-worker", "delay"], "--layer-worker"),  # refused either way
+        (["--latency-plan-ms", "50"], "live only"),
+    ):
+        p = _check(*_base(tmp_path / f"r{len(why)}"), *extra)
+        assert p.returncode == 2 and why in p.stderr, (extra, p.stderr[-400:])
+
+
+def test_the_latency_options_are_registered_in_the_near_contract():
+    text = (ROOT / "sim/isaac/near_tracking.py").read_text()
+    assert '"latency_slam": "off", "latency_layer": "off", "latency_seed": None,' in text
+    assert '"latency_plan_ms": 0.0,' in text

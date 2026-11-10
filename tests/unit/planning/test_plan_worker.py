@@ -318,3 +318,23 @@ def test_a_re_observation_ladder_runs_the_near_ladder_only(monkeypatch):
     payload = {**ladder_payload([(1, 0, 0), (2, 0, 0)]), "ladders": (False,)}
     out = pw._run("observe_ladder", payload)
     assert [(c[0][0], c[1]) for c in calls] == [(1, False), (2, False)] and out["result"] is None
+
+
+def test_an_answer_carries_its_arrival_and_reading_it_takes_nothing(worker):
+    """Latency test B (docs/plans/2026-11-11-latency-tolerance.md 2.4): the hold counts from the arrival."""
+    job = worker.submit("echo", {"value": 5, "sleep_s": 0.05})
+    assert worker.arrival(job) is None
+    deadline = time.monotonic() + 60
+    while worker.arrival(job) is None and time.monotonic() < deadline:
+        time.sleep(0.005)
+    arrived = worker.arrival(job)
+    assert arrived is not None and arrived <= time.monotonic()
+    assert worker.arrival(job) == arrived  # still there
+    assert worker.poll(job) == (True, {"result": 5})
+    assert worker.arrival(job) is None and worker.poll(job) is None
+
+
+def test_a_failed_answer_has_an_arrival_too():
+    done = pw._StampedDone()
+    done.setdefault(3, (False, "dead"))
+    assert 3 in done.arrived and done.pop(3) == (False, "dead") and 3 not in done.arrived
