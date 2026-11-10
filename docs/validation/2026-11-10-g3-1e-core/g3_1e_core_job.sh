@@ -4,6 +4,9 @@
 # sampler (every 10 s, this job's own threads) beside it.
 #   sbatch --cpus-per-task=6 [resources] g3_1e_core_job.sh SNAP_DIR PS_OUT.jsonl THREADS_OUT.jsonl LIST.jsonl BUNDLE_OUT live
 set -euo pipefail
+# single slot, no automatic retry (plan 3: a retried session invalidates its pair; Codex review P2-3/P2-4)
+case " ${BUNDLE_ARGS:-} " in *" --slots 1 "*) ;; *) echo "BUNDLE_ARGS must hold --slots 1" >&2; exit 2;; esac
+case " ${BUNDLE_ARGS:-} " in *" --retries 0 "*) ;; *) echo "BUNDLE_ARGS must hold --retries 0" >&2; exit 2;; esac
 SNAP=$1 PS_OUT=$2 TH_OUT=$3
 shift 3
 PY=${G2M_PY:-/home/projects/forklift/.venv/bin/python}

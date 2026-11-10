@@ -4,7 +4,8 @@ outside it) -- with its command, CPU ticks (utime + stime), scheduler counters (
 it last ran on, from /proc/<pid>/task/<tid>/{stat,schedstat}. Only the process table and this job's own threads are
 read. A thread that started and ended between two samples is not seen (reported as such, its number unknown).
 
-A sample: {"wall", "mono", "threads": {"<pid>/<tid>": [process comm, thread comm, ticks, run_ns, delay_ns, cpu]}}.
+A sample: {"wall", "mono", "threads": {"<pid>/<tid>": [process comm, thread comm, ticks, run_ns, delay_ns, cpu,
+affinity (the thread's Cpus_allowed_list)]}}.
 
     python g3_1e_thread_sampler.py OUT.jsonl [--every 10]   # until SIGTERM
 """
@@ -40,6 +41,14 @@ def _schedstat(path: str):
     return int(a), int(b)
 
 
+def _allowed(path: str) -> str | None:
+    with open(path) as f:
+        for line in f:
+            if line.startswith("Cpus_allowed_list:"):
+                return line.split(":", 1)[1].strip()
+    return None
+
+
 def sample(proc="/proc", uid=None, cgroup=None) -> dict:
     uid = os.getuid() if uid is None else uid
     cgroup = own_cgroup() if cgroup is None else cgroup
@@ -62,9 +71,10 @@ def sample(proc="/proc", uid=None, cgroup=None) -> dict:
             try:
                 tcomm, ticks, cpu = _stat(f"{base}/task/{t}/stat")
                 run_ns, delay_ns = _schedstat(f"{base}/task/{t}/schedstat")
+                allowed = _allowed(f"{base}/task/{t}/status")
             except (OSError, ValueError, IndexError):
                 continue
-            out[f"{d}/{t}"] = [pcomm, tcomm, ticks, run_ns, delay_ns, cpu]
+            out[f"{d}/{t}"] = [pcomm, tcomm, ticks, run_ns, delay_ns, cpu, allowed]
     return out
 
 

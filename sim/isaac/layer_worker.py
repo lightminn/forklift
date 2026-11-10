@@ -47,22 +47,29 @@ def _proc_siblings(cpu: int) -> tuple:
     return tuple(sorted(out))
 
 
-def worker_cpus(mode: str, affinity, siblings=_proc_siblings):
-    """The CPUs to pin the thread worker to: ``off`` none; ``auto`` the last whole core of ``affinity`` (its
-    siblings inside it) when it holds two cores or more, else none."""
-    if mode == "off":
-        return None
-    if mode != "auto":
-        raise ValueError(f"layer worker cpus {mode!r}: off or auto")
+def affinity_cores(affinity, siblings=_proc_siblings) -> list:
+    """The affinity's cores in CPU order: [(its CPUs of the core, all the core's siblings)]."""
     cpus = sorted(affinity)
     cores, seen = [], set()
     for c in cpus:
         if c in seen:
             continue
-        group = tuple(x for x in siblings(c) if x in cpus) or (c,)
+        sib = tuple(sorted(siblings(c)))
+        group = tuple(x for x in sib if x in cpus) or (c,)
         seen.update(group)
-        cores.append(group)
-    return cores[-1] if len(cores) >= 2 else None
+        cores.append((group, sib))
+    return cores
+
+
+def worker_cpus(mode: str, affinity, siblings=_proc_siblings):
+    """The CPUs to pin the thread worker to: ``off`` none; ``auto`` the last whole core of ``affinity`` (all its
+    siblings inside it) when it holds two whole cores or more, else none."""
+    if mode == "off":
+        return None
+    if mode != "auto":
+        raise ValueError(f"layer worker cpus {mode!r}: off or auto")
+    whole = [g for g, sib in affinity_cores(affinity, siblings) if g == sib]
+    return whole[-1] if len(whole) >= 2 else None
 
 
 def thread_schedstat():
@@ -207,12 +214,12 @@ class LayerWorker:
         finally:
             info["compute_s"] = self.clock() - t0
             info["compute_cpu_s"] = time.thread_time() - c0
-            info["done_t"] = self.clock()
             s1 = thread_schedstat()
             ok = s0 is not None and s1 is not None
             info["run_ns"] = s1[0] - s0[0] if ok else None
             info["run_delay_ns"] = s1[1] - s0[1] if ok else None
             info["cpu"] = thread_cpu()
+            info["done_t"] = self.clock()  # after the counters: the time the install may take it (Codex P2-5)
             self._done.set()
 
     def _loop(self) -> None:

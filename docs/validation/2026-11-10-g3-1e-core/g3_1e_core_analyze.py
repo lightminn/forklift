@@ -46,12 +46,13 @@ base, g2m = e0.base, e0.g2m
 TARGET = e0.TARGET
 WAIT_OK_S = e0.WAIT_OK_S
 REF_17604_DELAY = {"rate": 0.9406279402002807, "W": 0.8738943428706015}
-ENV_MARKS = ("other users'", "monitor", "GPU process", "probe exit", "live log", "tick trace", "long calls",
-             "no result", "allocation", "EXTRA_ARGS", "registered", "set (dumps", "INSTR", "scan_switches")
+ENV_MARKS = ("other users'", "monitor", "GPU process", "another job on the node", "probe exit", "live log", "tick trace",
+             "long calls", "no result", "allocation", "EXTRA_ARGS", "registered", "set (dumps", "INSTR", "scan_switches",
+             "bundle")
 
 
 class CoreSession(e0.Session):
-    def __init__(self, out: Path, entry: dict, ps=None, session_cpus=None):
+    def __init__(self, out: Path, entry: dict, ps=None, session_cpus=None, attempts=None):
         env = entry["env"]
         self.arm = env["ARM_NAME"]
         self.mode = env["LAYER_WORKER"]
@@ -68,11 +69,20 @@ class CoreSession(e0.Session):
         if not (sw.get("grid_clear_kernel") and sw.get("shadow_kernel") and sw.get("lidar_cast") == "fast"):
             self.invalid.append(f"scan_switches {sw}")
         aff = lw.get("process_affinity")
-        if not aff or len(aff) != 4 or (session_cpus is not None and sorted(session_cpus) != sorted(aff)):
+        cores = lw.get("process_cores")  # [(siblings inside the affinity, all siblings)] (the runner's record)
+        if session_cpus is None:
+            self.invalid.append("allocation: no bundle summary (session_cpus)")
+        elif not aff or sorted(session_cpus) != sorted(aff):
             self.invalid.append(f"allocation: process affinity {aff}, bundle session_cpus {session_cpus}")
+        if not cores or len(cores) != 2 or any(sorted(c[0]) != sorted(c[1]) for c in cores):
+            self.invalid.append(f"allocation: process cores {cores} (two whole cores registered)")
+        recs = attempts or []
+        if len(recs) != 1 or recs[0].get("attempt") != 1 or recs[0].get("retried") or recs[0].get("status") != "ended":
+            self.invalid.append(f"bundle: attempts {[(r.get('attempt'), r.get('status')) for r in recs]}")
         cpus, waff = lw.get("cpus"), lw.get("affinity")
         if self.arm == "T":
-            if not cpus or len(cpus) != 2 or not set(cpus) <= set(aff or ()) or waff != cpus:
+            last = sorted(cores[-1][0]) if cores else None
+            if not cpus or sorted(cpus) != last or waff != sorted(cpus):
                 self.invalid.append(f"allocation: T worker cpus {cpus}, its affinity {waff}")
         elif cpus is not None:
             self.invalid.append(f"allocation: D worker pinned to {cpus}")
@@ -106,17 +116,23 @@ class CoreSession(e0.Session):
 
 
 def kinds(s: CoreSession, row: dict) -> dict:
-    """The session's invalidity split: environment / setup (rerun the pair), worker, mission."""
-    env = [x for x in s.invalid if any(m in x for m in ENV_MARKS)]
+    """The session's invalidity split: environment / setup (rerun the pair), worker, mission. A worker failure ends
+    the session, so the probe's exit then belongs to the worker, not to the environment (Codex review P2-1)."""
+    env = [x for x in s.invalid if any(m in x for m in ENV_MARKS)
+           and not (s.worker_failed and x.startswith("probe exit"))]
     worker = [f"layer worker failed: {s.worker_failed}"] if s.worker_failed else []
-    worker += [x for x in s.invalid if x not in env and "layer worker" in x]
+    worker += [x for x in s.invalid if x not in env and ("layer worker" in x or x.startswith("probe exit"))]
     other = [x for x in s.invalid if x not in env and x not in worker]
     mission = list(other)
     if not row.get("mission_done"):
         mission.append(f"mission not done: {row.get('mission_outcomes')}")
-    safety = row.get("safety") or {}
-    if safety.get("forbidden_contacts") or safety.get("unpermitted_entries") or safety.get("unpermitted_dir_entries"):
-        mission.append(f"safety {safety}")
+    safety = row.get("safety")
+    keys = ("forbidden_contacts", "unpermitted_entries", "unpermitted_dir_entries")
+    if not env and not worker:
+        if safety is None or any(safety.get(k) is None for k in keys):
+            mission.append(f"safety record missing: {safety}")  # unknown is not zero (Codex review P2-6)
+        elif any(safety.get(k) for k in keys):
+            mission.append(f"safety {safety}")
     return {"environment": env, "worker": worker, "mission": mission}
 
 
@@ -155,18 +171,24 @@ def threads_report(samples: list, walls: tuple | None, tck: int) -> dict | None:
             if v0 is None:
                 continue
             name = f"{v1[0]}/{v1[1]}"
-            g = agg.setdefault(name, {"cpu_s": 0.0, "delay_s": 0.0, "threads": set()})
+            g = agg.setdefault(name, {"cpu_s": 0.0, "delay_s": 0.0, "threads": set(), "affinity": set()})
             g["cpu_s"] += (v1[2] - v0[2]) / tck
             g["delay_s"] += (v1[4] - v0[4]) / 1e9
             g["threads"].add(key)
+            if len(v1) > 6 and v1[6] is not None:
+                g["affinity"].add(v1[6])
     span = inside[-1]["wall"] - inside[0]["wall"] if len(inside) >= 2 else 0.0
     return {"window_s": span, "samples": len(inside), "missed_threads": "unknown",
-            "by_name": {n: {"cpu_s": g["cpu_s"], "delay_s": g["delay_s"], "threads": len(g["threads"])}
+            "by_name": {n: {"cpu_s": g["cpu_s"], "delay_s": g["delay_s"], "threads": len(g["threads"]),
+                            "affinity": sorted(g["affinity"])}
                         for n, g in sorted(agg.items(), key=lambda kv: -kv[1]["cpu_s"])}}
 
 
 def choose_k(t_measures: list, k_exec: int):
-    """The smallest k <= the executed k whose mean scheduled wait is at most 0.5 ms in every pair, else None."""
+    """A k = 3 run: the smallest k <= 3 whose mean scheduled wait is at most 0.5 ms in every pair, else None (the
+    supplementary pair is due). The supplementary k = 4 run is judged at k = 4 (plan 3; Codex review P2-2)."""
+    if k_exec == 4:
+        return 4
     for k in range(2, k_exec + 1):
         means = [(m["paired_wait_ms"].get(k) or {}).get("mean") for m in t_measures]
         if all(x is not None and x / 1e3 <= WAIT_OK_S for x in means):
@@ -190,8 +212,8 @@ def judge(pairs: dict, k_exec: int) -> dict:
     t_list = [pairs[p]["T"] for p in sorted(pairs)]
     k = choose_k(t_list, k_exec)
     if k is None:
-        return {"k": None, "decision": "supplementary k = 4 pair due" if k_exec == 3 else "stage 2 to the lead",
-                "why": f"no k <= {k_exec} with a mean scheduled wait <= 0.5 ms in both pairs"}
+        return {"k": None, "decision": "supplementary k = 4 pair due",
+                "why": "no k <= 3 with a mean scheduled wait <= 0.5 ms in both pairs"}
     per = {p: pair_net(pairs[p]["D"], pairs[p]["T"], k) for p in sorted(pairs)}
     ok = all(v["passes"] for v in per.values())
     return {"k": k, "k_is_prediction": k < k_exec, "pairs": per,
@@ -209,13 +231,22 @@ def main() -> int:
     entries = [json.loads(x) for x in a.list.read_text().splitlines() if x.strip()]
     order = [(e["env"]["ARM_NAME"], int(e["env"]["PAIR"])) for e in entries]
     ks = {int(e["env"]["LAYER_WORKER_K"]) for e in entries}
-    if order != [("D", 1), ("T", 1), ("T", 2), ("D", 2)] or len(ks) != 1:
-        print(json.dumps({"list_not_registered": order, "k": sorted(ks)}))
+    names = [e["name"] for e in entries]
+    if order != [("D", 1), ("T", 1), ("T", 2), ("D", 2)] or len(ks) != 1 or not ks <= {3, 4} \
+            or len(set(names)) != len(names):
+        print(json.dumps({"list_not_registered": order, "k": sorted(ks), "names": names}))
         return 2
     k_exec = ks.pop()
     ps = g2m.read_ps(a.ps.read_text()) if a.ps else None
     summary_f = a.out / "bundle" / "summary.json"
-    session_cpus = json.loads(summary_f.read_text()).get("session_cpus") if summary_f.exists() else None
+    summary = json.loads(summary_f.read_text()) if summary_f.exists() else {}
+    session_cpus = summary.get("session_cpus") if summary.get("slots") == 1 else None  # single slot registered
+    attempts: dict = {}
+    res_f = a.out / "bundle" / "results.jsonl"
+    for line in (res_f.read_text().splitlines() if res_f.exists() else []):
+        if line.strip():
+            r = json.loads(line)
+            attempts.setdefault(r.get("name"), []).append(r)
     th, tck = [], 100
     if a.threads and a.threads.exists():
         lines = [json.loads(x) for x in a.threads.read_text().splitlines() if x.strip()]
@@ -223,7 +254,7 @@ def main() -> int:
         th = [x for x in lines if "threads" in x]
     rows, sessions = {}, {}
     for e in entries:
-        s = CoreSession(a.out / e["name"], e, ps=ps, session_cpus=session_cpus)
+        s = CoreSession(a.out / e["name"], e, ps=ps, session_cpus=session_cpus, attempts=attempts.get(e["name"]))
         row = base.analyse_session(s) if not s.invalid else {
             "name": s.name, "arm": s.arm, "pair": s.pair, "invalid": s.invalid, "ps": s.ps,
             "mission_outcomes": s.mission_outcomes, "mission_done": s.mission_done}
@@ -234,17 +265,19 @@ def main() -> int:
         walls = s._walls() if hasattr(s, "_walls") else []
         row["threads"] = threads_report(th, (min(walls), max(walls)) if walls else None, tck)
         rows[e["name"]], sessions[e["name"]] = row, s
-    out = {"sessions": rows, "k_executed": k_exec}
-    rerun = sorted({r["pair"] for r in rows.values() if r["kinds"]["environment"]})
-    t_failed = sorted({r["pair"] for r in rows.values() if r["arm"] == "T" and r["pair"] not in rerun
+    out = {"sessions": rows, "k_executed": k_exec, "summary_slots": summary.get("slots")}
+    env_bad = {r["pair"] for r in rows.values() if r["kinds"]["environment"]}
+    # a T failure in a pair without an environment invalidity of its own T decides, whatever the other pair needs
+    t_failed = sorted({r["pair"] for r in rows.values() if r["arm"] == "T" and not r["kinds"]["environment"]
                        and (r["kinds"]["worker"] or r["kinds"]["mission"])})
-    d_failed = sorted({r["pair"] for r in rows.values() if r["arm"] == "D" and r["pair"] not in rerun
+    d_failed = sorted({r["pair"] for r in rows.values() if r["arm"] == "D" and not r["kinds"]["environment"]
                        and (r["kinds"]["worker"] or r["kinds"]["mission"])})
-    if rerun:
-        out["result"] = {"rerun_pairs": rerun, "why": "an environment or setup invalidity (plan 3: once)"}
-    elif t_failed:
-        out["result"] = {"decision": "stage 2 to the lead", "t_failed_pairs": t_failed,
+    rerun = sorted(env_bad)
+    if t_failed:
+        out["result"] = {"decision": "stage 2 to the lead", "t_failed_pairs": t_failed, "rerun_pairs": rerun,
                          "why": "a worker or mission failure of T, not erased by a rerun"}
+    elif rerun:
+        out["result"] = {"rerun_pairs": rerun, "why": "an environment or setup invalidity (plan 3: once)"}
     elif d_failed:
         out["result"] = {"decision": "to the lead", "d_failed_pairs": d_failed, "why": "the reference D failed"}
     else:
@@ -259,11 +292,15 @@ def main() -> int:
             for name, r in rows.items():
                 pairs.setdefault(r["pair"], {})[r["arm"]] = m[name]
             out["result"] = judge(pairs, k_exec)
-    d_rows = [r for r in rows.values() if r["arm"] == "D" and not r["kinds"]["environment"]]
-    out["core_alone"] = None if k_exec != 3 else {
-        "reference_17604_delay": REF_17604_DELAY,
-        "D": [{"name": r["name"], "rate": (r.get("auto") or {}).get("rate"),
-               "W": (out.get("measures") or {}).get(r["name"], {}).get("W")} for r in d_rows]}
+    d_rows = [r for r in rows.values() if r["arm"] == "D" and not any(r["kinds"].values())]
+    core_alone = []
+    for r in d_rows:  # each valid D on its own, whatever the judgement path (Codex review P3-10)
+        try:
+            w = e0.measure(sessions[r["name"]])["W"]
+        except Exception as exc:  # noqa: BLE001 -- report only
+            w = f"unreadable: {type(exc).__name__}"
+        core_alone.append({"name": r["name"], "rate": (r.get("auto") or {}).get("rate"), "W": w})
+    out["core_alone"] = None if k_exec != 3 else {"reference_17604_delay": REF_17604_DELAY, "D": core_alone}
     text = json.dumps(out, indent=1, default=str)
     if a.json:
         a.json.write_text(text)

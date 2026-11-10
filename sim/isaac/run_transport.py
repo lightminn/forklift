@@ -4769,7 +4769,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if "stamp_s" in info_:
                     obstacle["checked_stamp"] = info_["stamp_s"]  # the cusp watch's scan id (plan 5.28 D3)
 
-            from layer_worker import worker_cpus
+            from layer_worker import affinity_cores, worker_cpus
 
             cpus_ = (worker_cpus(getattr(args, "layer_worker_cpus", "off"), os.sched_getaffinity(0))
                      if args.layer_worker == "thread" else None)
@@ -4783,7 +4783,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                      "use_age_s": float(layer_config["grid"]["free_use_age_s"]),
                                      "timeout_s": float(args.layer_worker_timeout_s),
                                      "cpus_mode": getattr(args, "layer_worker_cpus", "off"),
-                                     "process_affinity": sorted(os.sched_getaffinity(0))}
+                                     "process_affinity": sorted(os.sched_getaffinity(0)),
+                                     "process_cores": [[list(g), list(s)]
+                                                       for g, s in affinity_cores(os.sched_getaffinity(0))]}
         if getattr(args, "start_band_release", "off") == "on":
             # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
             # envelope plus half a sample step); the candidate and teleop permissions copy this config

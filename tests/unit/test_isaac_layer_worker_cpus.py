@@ -28,6 +28,9 @@ def test_auto_takes_the_last_whole_core_of_two_or_more():
     assert lw.worker_cpus("off", [0, 1, 12, 13], sib) is None
     no_smt = siblings_of([(0,), (1,), (2,)])
     assert lw.worker_cpus("auto", [0, 1, 2], no_smt) == (2,)
+    assert lw.worker_cpus("auto", [0, 1, 12], sib) is None  # core 1 incomplete: one whole core only
+    assert lw.worker_cpus("auto", [0, 1, 2, 12, 13], siblings_of([(0, 12), (1, 13), (2, 14)])) == (1, 13)
+    assert lw.affinity_cores([0, 1, 12], sib) == [((0, 12), (0, 12)), ((1,), (1, 13))]
     with pytest.raises(ValueError):
         lw.worker_cpus("both", [0, 1], sib)
 

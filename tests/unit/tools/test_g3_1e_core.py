@@ -60,6 +60,7 @@ def test_k_is_read_only_at_or_below_the_executed_k_and_common_to_both_pairs():
     assert an.choose_k([t1, t2], 2) is None
     t3 = m(0.03, 0.40, 1.0, {2: 3.0, 3: 0.7, 4: 0.0})  # k = 4's 0 is structural in a k = 3 run: never read
     assert an.choose_k([t1, t3], 3) is None
+    assert an.choose_k([t3, t3], 4) == 4  # the supplementary run is judged at k = 4, whatever its wait
 
 
 def test_thread_first_needs_net_and_direct_in_both_pairs():
@@ -75,7 +76,9 @@ def test_thread_first_needs_net_and_direct_in_both_pairs():
     t_slow = m(0.025, 0.66, 0.84, {2: 3.0, 3: 0.8})
     r3 = an.judge({1: {"D": d, "T": t_slow}, 2: {"D": d, "T": t}}, 3)
     assert r3["decision"] == "supplementary k = 4 pair due"
-    assert an.judge({1: {"D": d, "T": t_slow}, 2: {"D": d, "T": t}}, 4)["decision"] == "stage 2 to the lead"
+    t4 = m(0.025, 0.66, 0.84, {2: 3.0, 3: 2.0, 4: 1.0})  # k = 4 run: net = 0.070 - 0.010 = 0.060, direct 0.06
+    r4 = an.judge({1: {"D": d, "T": t4}, 2: {"D": d, "T": t4}}, 4)
+    assert r4["k"] == 4 and r4["decision"] == "(a) thread plus a core"
 
 
 class S:
@@ -83,13 +86,22 @@ class S:
         self.invalid, self.worker_failed = invalid, failed
 
 
+SAFE = {"forbidden_contacts": 0, "unpermitted_entries": 0, "unpermitted_dir_entries": 0}
+
+
 def test_the_invalidity_kinds_keep_worker_and_mission_failures_out_of_the_rerun():
     k = an.kinds(S(["other users' CPU over 1 core in more than 5% of samples"]), {"mission_done": True})
     assert k["environment"] and not k["worker"] and not k["mission"]
-    k = an.kinds(S([], failed="timeout after 0.5 s (scheduled)"), {"mission_done": False, "mission_outcomes": [1]})
-    assert not k["environment"] and k["worker"] and k["mission"]
-    k = an.kinds(S([]), {"mission_done": True, "safety": {"forbidden_contacts": 1}})
+    k = an.kinds(S(["another job on the node: 1 x"]), {"mission_done": True, "safety": SAFE})
+    assert k["environment"]
+    k = an.kinds(S(["probe exit 1"], failed="timeout after 0.5 s (scheduled)"), {"mission_done": False})
+    assert not k["environment"] and k["worker"]  # the worker's failure ended the probe
+    assert an.kinds(S(["probe exit 1"]), {"mission_done": True, "safety": SAFE})["environment"]
+    k = an.kinds(S([]), {"mission_done": True, "safety": {**SAFE, "forbidden_contacts": 1}})
     assert k["mission"] and not k["environment"]
+    k = an.kinds(S([]), {"mission_done": True, "safety": {**SAFE, "unpermitted_entries": None}})
+    assert k["mission"] == [f"safety record missing: {dict(SAFE, unpermitted_entries=None)}"]
+    assert an.kinds(S([]), {"mission_done": True, "safety": SAFE}) == {"environment": [], "worker": [], "mission": []}
 
 
 def test_the_scheduler_report_and_k4_correction():
@@ -112,8 +124,8 @@ def test_the_thread_report_sums_consecutive_samples_inside_the_window():
          {"wall": 99.0, "threads": {"1/1": ["kit", "kit", 9999, 0, 0, 0]}}]
     r = an.threads_report(s, (0.0, 20.0), 100)
     assert r["samples"] == 3 and r["missed_threads"] == "unknown"
-    assert r["by_name"]["kit/kit"] == {"cpu_s": 10.0, "delay_s": 2.0, "threads": 1}
-    assert r["by_name"]["kit/lw"] == {"cpu_s": 3.0, "delay_s": 0.5, "threads": 1}
+    assert r["by_name"]["kit/kit"] == {"cpu_s": 10.0, "delay_s": 2.0, "threads": 1, "affinity": []}
+    assert r["by_name"]["kit/lw"] == {"cpu_s": 3.0, "delay_s": 0.5, "threads": 1, "affinity": []}
 
 
 def test_the_thread_sampler_reads_only_this_users_threads_in_this_cgroup(tmp_path):
@@ -127,11 +139,12 @@ def test_the_thread_sampler_reads_only_this_users_threads_in_this_cgroup(tmp_pat
             (p / "task" / str(t)).mkdir()
             (p / "task" / str(t) / "stat").write_text(stat.replace(f"({comm})", "(th one)"))
             (p / "task" / str(t) / "schedstat").write_text("1000 200 3\n")
+            (p / "task" / str(t) / "status").write_text("Name:\tth\nCpus_allowed_list:\t0-1,12-13\n")
     proc(10, [10, 11], "0::/job_1\n")
     proc(20, [20], "0::/other\n")
     out = smp.sample(str(tmp_path), uid=os.getuid(), cgroup="0::/job_1\n")
     assert sorted(out) == ["10/10", "10/11"]
-    assert out["10/11"] == ["python", "th one", 10, 1000, 200, 5]
+    assert out["10/11"] == ["python", "th one", 10, 1000, 200, 5, "0-1,12-13"]
 
 
 def test_the_list_must_be_registered(tmp_path, monkeypatch, capsys):
@@ -139,3 +152,12 @@ def test_the_list_must_be_registered(tmp_path, monkeypatch, capsys):
     f.write_text("\n".join(json.dumps(x) for x in reversed(lists.entries("/s", "/o"))))
     monkeypatch.setattr(sys, "argv", ["g3_1e_core_analyze.py", str(tmp_path), "--list", str(f)])
     assert an.main() == 2 and "list_not_registered" in capsys.readouterr().out
+
+
+def test_a_t_failure_decides_even_when_the_other_pair_needs_a_rerun_and_retries_invalidate(tmp_path):
+    """Codex review P2-1, P2-3: the precedence of a T failure and the bundle's attempt records."""
+    src = (D / "g3_1e_core_analyze.py").read_text()
+    assert src.index('if t_failed:') < src.index('elif rerun:')
+    assert '"bundle: attempts' in src and "summary.get(\"slots\") == 1" in src
+    job = (D / "g3_1e_core_job.sh").read_text()
+    assert '*" --slots 1 "*' in job and '*" --retries 0 "*' in job
