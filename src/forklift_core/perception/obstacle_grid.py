@@ -113,6 +113,9 @@ class GridConfig:
     max_clear_m: float = 5.0
     range_min_m: float = 0.15
     free_max_age_s: float = 0.2
+    # the oldest age FREE evidence may be used at, which the shrink is sized for (None: free_max_age_s); a layer
+    # worker uses evidence (k-1)/120 s later (real-time plan 5.28, docs/validation/2026-11-10-g3-1e0-run.md)
+    free_use_age_s: float | None = None
     occupied_max_age_s: float = 3.0
     sensor_bound_m: float = 0.06
     free_r_cap_m: float = 0.20
@@ -125,7 +128,13 @@ class GridConfig:
     # read from the measured range (sensor_bound_at)
     range_bound_model: str = "const"
 
+    @property
+    def use_age_s(self) -> float:
+        return self.free_max_age_s if self.free_use_age_s is None else self.free_use_age_s
+
     def __post_init__(self) -> None:
+        if self.free_use_age_s is not None and not self.free_use_age_s >= self.free_max_age_s:
+            raise ValueError("free_use_age_s must be at least free_max_age_s")
         if self.range_bound_model not in ("const", "a2_spec"):
             raise ValueError(f"unknown range bound model {self.range_bound_model!r}")
 
@@ -188,7 +197,9 @@ def compose(a, b):
 @dataclass
 class GridSnapshot:
     state: np.ndarray  # uint8 UNKNOWN / FREE / OCCUPIED
-    free_stamp: np.ndarray  # measurement time of the scan that made each FREE cell (nan elsewhere)
+    # measurement time of the scan that made each FREE cell (nan elsewhere); an exit-prefix cell freed under a layer
+    # worker carries its verification time less the worker's delay, the time its expiry is reckoned from
+    free_stamp: np.ndarray
     stamp_s: float
     correction: tuple[float, float, float]
     correction_version: int
@@ -632,8 +643,8 @@ class ObstacleGrid:
             if not (band & raw).any():
                 continue
             # Sized for the oldest age this evidence may still be used at
-            # (free_max_age_s), so it stays valid between snapshots (Codex L0 P1).
-            r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
+            # (use_age_s), so it stays valid between snapshots (Codex L0 P1).
+            r_band = self.radius_m(max(age, cfg.use_age_s), edge, sensor=False)
             if r_band is None or r_band > cfg.free_r_cap_m:
                 continue
             eroded = _erode(support, r_band / res) & raw & band
@@ -689,7 +700,7 @@ class ObstacleGrid:
             lower = edge
             if not in_band.any():
                 continue
-            r_band = self.radius_m(max(age, cfg.free_max_age_s), edge, sensor=False)
+            r_band = self.radius_m(max(age, cfg.use_age_s), edge, sensor=False)
             if r_band is None or r_band > cfg.free_r_cap_m:
                 continue
             sel = in_band & keep

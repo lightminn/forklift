@@ -32,6 +32,17 @@ def test_the_list_holds_delay_then_thread_with_the_registered_switches():
         assert x["argv"][1].endswith("r1c_session.sh")
 
 
+def test_the_rerun_list_adds_one_off_control_after_the_registered_two():
+    """docs/validation/2026-11-10-g3-1e0-run.md: the re-measurement adds a session without a worker (report only)."""
+    e = lists.entries("/snap", "/out", control=True)
+    assert [x["name"] for x in e] == ["g3e0_01_delay", "g3e0_02_thread", "g3e0_03_off"]
+    off = e[2]["env"]
+    assert "LAYER_WORKER" not in off and off["ARM_NAME"] == "off"  # r1c_session adds no --layer-worker
+    assert {k: v for k, v in off.items() if k != "ARM_NAME"} == \
+        {k: v for k, v in e[0]["env"].items() if k not in ("LAYER_WORKER", "ARM_NAME")}
+    assert lists.entries("/snap", "/out")[:2] == e[:2]
+
+
 def m(main_layer, other, W, waits, barrier_wait=0.0, scans=10.0):
     return {"main_layer": main_layer, "main_other": other, "W": W, "scans_per_sim_s": scans,
             "barrier": {"wait": barrier_wait},
@@ -62,6 +73,43 @@ def test_the_list_must_be_delay_then_thread(tmp_path, monkeypatch, capsys):
     f.write_text("\n".join(json.dumps(x) for x in reversed(lists.entries("/s", "/o"))))
     monkeypatch.setattr(sys, "argv", ["g3_1e0_analyze.py", str(tmp_path), "--list", str(f)])
     assert an.main() == 2 and "list_not_registered" in capsys.readouterr().out
+
+
+def test_an_off_control_may_follow_and_nothing_else(tmp_path, monkeypatch, capsys):
+    e = lists.entries("/s", "/o", control=True)
+    for bad in (e[1:] + e[:1], e + [e[2]], [e[0], e[2], e[1]]):
+        f = tmp_path / "l.jsonl"
+        f.write_text("\n".join(json.dumps(x) for x in bad))
+        monkeypatch.setattr(sys, "argv", ["g3_1e0_analyze.py", str(tmp_path), "--list", str(f)])
+        assert an.main() == 2 and "list_not_registered" in capsys.readouterr().out
+    assert an.registered_arms([x["env"].get("LAYER_WORKER") or "off" for x in e])
+
+
+def test_the_off_control_never_changes_the_judgement():
+    """A failed or missing control is reported beside the result; the result is the registered two's alone."""
+    result = {"chosen_k": 3, "decision": "go to 1e-1"}
+    for control in (None, {"invalid": ["no result.json"]}, {"mission_done": False}):
+        out = an.attach_control({"result": dict(result)}, control)
+        assert out["result"] == result and out["control"] == control
+
+
+def test_a_control_that_cannot_be_read_is_reported_not_raised(tmp_path, monkeypatch):
+    e = lists.entries("/s", "/o", control=True)
+    assert an.read_control(tmp_path, e[:2]) is None
+
+    def boom(*a, **k):
+        raise RuntimeError("no run")
+
+    monkeypatch.setattr(an, "OffSession", boom)
+    out = an.read_control(tmp_path, e)
+    assert out == {"invalid": ["control unreadable: RuntimeError: no run"]}
+
+
+def test_the_evidence_stale_ticks_are_read_per_phase():
+    res = {"obstacle_layer": {"slowed_reasons": {"transport:evidence_stale": 768, "transport:limit": 3,
+                                                 "return_home:evidence_stale": 670, "observe:ok": 5}}}
+    assert an.stale_ticks(res) == {"transport": 768, "return_home": 670, "total": 1438}
+    assert an.stale_ticks({}) == {"total": 0}
 
 
 def test_the_other_work_takes_row_i_steps_and_row_i_plus_1_controls():
