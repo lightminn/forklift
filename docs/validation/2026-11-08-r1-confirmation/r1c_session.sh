@@ -77,6 +77,9 @@ LC=${LIDAR_CAST:+--lidar-cast $LIDAR_CAST}
 # Real-time plan 5.28 (G3-1e 1e-0): LAYER_WORKER=delay|thread [LAYER_WORKER_K=2..4] adds --layer-worker to the line_m far
 # branch; unset, nothing
 LW=${LAYER_WORKER:+--layer-worker $LAYER_WORKER --layer-worker-k ${LAYER_WORKER_K:-3}}
+# 1e stage 1 (docs/plans/2026-11-10-g3-1e-process-worker.md): LAYER_WORKER_CPUS=auto adds --layer-worker-cpus with a
+# worker; unset, nothing (the 1e-0 lists are unchanged)
+[ -n "${LAYER_WORKER:-}" ] && [ -n "${LAYER_WORKER_CPUS:-}" ] && LW="$LW --layer-worker-cpus $LAYER_WORKER_CPUS"
 END=(--end-session)
 case ${SET:?far, off, mark or wall} in
   far)
