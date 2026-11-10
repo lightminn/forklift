@@ -99,11 +99,13 @@ def corridor_cells(snapshot, poses, footprint, margin_m: float) -> np.ndarray:
 
 
 def apply_verified(snapshot, verified: VerifiedCorridor | None, footprint, margin_m: float, *, now_s: float,
-                   max_age_s: float):
+                   max_age_s: float, stamp_back_s: float = 0.0):
     """(snapshot, cells freed, why skipped): the OCCUPIED cells the verified region (the footprint grown by
     ``margin_m`` at its poses) overlaps on this snapshot read FREE with its stamp. Skipped -- the snapshot returned as
     it is -- without a verification ("unverified"), for another correction than the snapshot's ("version"), with a
-    stamp or a now that is not finite or a stamp after now ("invalid"), or one older than ``max_age_s`` ("stale")."""
+    stamp or a now that is not finite or a stamp after now ("invalid"), or one older than ``max_age_s`` ("stale").
+    ``stamp_back_s``: the freed cells are stamped this much before the verification (a layer worker's delay, so that
+    under its longer use age they expire when they would without it; the verification itself is not changed)."""
     if verified is None:
         return snapshot, 0, "unverified"
     if int(verified.correction_version) != int(snapshot.correction_version):
@@ -122,7 +124,7 @@ def apply_verified(snapshot, verified: VerifiedCorridor | None, footprint, margi
     state = snapshot.state.copy()
     stamp = snapshot.free_stamp.copy()
     state[cells[:, 0], cells[:, 1]] = FREE
-    stamp[cells[:, 0], cells[:, 1]] = float(verified.stamp_s)
+    stamp[cells[:, 0], cells[:, 1]] = float(verified.stamp_s) - float(stamp_back_s)
     return replace(snapshot, state=state, free_stamp=stamp), int(len(cells)), None
 
 
