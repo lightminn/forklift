@@ -274,3 +274,18 @@ def test_the_lockstep_reply_handling_is_inside_slam_deliver():
     assert "slam['tracker'].receive(" in body and "slam_not_localized" in body and "slam['records'].append(" in body
     step = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "step_world")
     assert "slam_deliver(reply, m_)" in ast.unparse(step)
+
+
+def test_held_at_end_covers_every_open_job_of_the_wrapper():
+    now = [0.0]
+    jobs = FakeJobs()
+    ids = iter([11, 12, 13])
+    jobs.submit = lambda name, payload: next(ids)
+    d = li.DelayedJobs(jobs, 0.1, clock=lambda: now[0])
+    a, b, c = d.submit("observe", {}), d.submit("next_pick", {}), d.submit("dock", {})
+    jobs.done.update({a: (True, 1), b: (True, 2)})
+    jobs.arrived.update({a: 0.0, b: 0.0})
+    now[0] = 0.2
+    assert d.poll(a) == (True, 1)  # delivered: no longer open
+    out = d.held_at_end()  # b arrived and held (the pick service's), c not arrived yet
+    assert [r["job"] for r in out] == [b]

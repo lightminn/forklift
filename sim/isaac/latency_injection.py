@@ -170,6 +170,12 @@ class DelayedJobs:
             raise ValueError("--latency-plan-ms must be >= 0")
         self._jobs, self.delay_s, self._clock = jobs, float(delay_s), clock
         self.records: list[dict] = []
+        self._open: set = set()  # submitted through this wrapper, not yet delivered or dropped (every caller's)
+
+    def submit(self, name: str, payload: dict) -> int:
+        job_id = self._jobs.submit(name, payload)
+        self._open.add(job_id)
+        return job_id
 
     def poll(self, job_id: int):
         arrived = self._jobs.arrival(job_id)
@@ -180,6 +186,7 @@ class DelayedJobs:
             return None
         out = self._jobs.poll(job_id)
         if out is not None:
+            self._open.discard(job_id)
             self.records.append({"job": int(job_id), "arrived": float(arrived), "delivered": float(now),
                                  "injected_s": float(now - arrived)})
         return out
@@ -191,12 +198,14 @@ class DelayedJobs:
             now = self._clock()
             self.records.append({"job": int(job_id), "arrived": float(arrived), "delivered": None,
                                  "discarded": float(now), "held_s": float(now - arrived)})
+        self._open.discard(job_id)
         self._jobs.discard(job_id)
 
-    def held_at_end(self, job_ids) -> list:
-        """The answers that arrived but were still held when the run ended (recorded, never delivered)."""
+    def held_at_end(self, job_ids=None) -> list:
+        """The answers that arrived but were still held when the run ended (recorded, never delivered) -- by default
+        every job submitted through this wrapper (the core's, the pick service's) and still open."""
         now, out = self._clock(), []
-        for job_id in job_ids:
+        for job_id in sorted(self._open if job_ids is None else job_ids):
             arrived = self._jobs.arrival(job_id)
             if arrived is not None:
                 out.append({"job": int(job_id), "arrived": float(arrived), "delivered": None, "cut": float(now),

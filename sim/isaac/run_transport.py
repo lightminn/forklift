@@ -11448,9 +11448,8 @@ def drive(S, isaac) -> None:
                     if latency_marks_ is not None:
                         li_["use"] = {c: {str(k): v for k, v in d.items()} for c, d in latency_marks_.result().items()}
                     if core_ is not None and isinstance(core_.jobs, latency_module.DelayedJobs):
-                        pending_ = [core_.pending.job] if getattr(core_, "pending", None) is not None else []
                         li_["plan"] = {"delay_ms": float(args.latency_plan_ms),
-                                       "records": core_.jobs.records + core_.jobs.held_at_end(pending_)}
+                                       "records": core_.jobs.records + core_.jobs.held_at_end()}
                 except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
                     state["latency_injection_error"] = repr(exc_)
             if locals().get("core") is not None and core.jobs is not None:
