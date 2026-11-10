@@ -114,11 +114,15 @@ def test_safety_is_read_even_with_an_environment_invalidity():
     assert k["mission"] == ["safety record missing: None"]
 
 
-def test_a_session_that_never_started_is_the_environments():
-    k = an.split_kinds(["bundle: attempts []"], {"mission_done": None}, [], None)
-    assert not k["mission"] and "session not started (no mission record)" in k["environment"]
+def test_a_session_that_never_started_is_the_environments_and_one_that_ran_without_a_result_is_not():
+    k0 = an.split_kinds(["bundle: attempts []"], {"mission_done": None}, [], None, ran=False)
+    assert not k0["mission"] and "session not started (no trace of running)" in k0["environment"]
+    # ran, the probe died without its report, the bundle says ended with rc != 0: a mission-kind failure, safety kept
+    k = an.split_kinds(["probe exit 1"], {"mission_done": None}, [{"status": "ended", "rc": 1}], None, ran=True)
+    assert "mission result missing (the probe's report or its outcome)" in k["mission"]
+    assert "safety record missing: None" in k["mission"] and "probe exit 1" in k["mission"] and not k["environment"]
     lv = [{"RETURN_START": "boxed", "NEAR_END_STAND": "on"}] * 4
-    rows = {"a1": row(1, "A", env=k["environment"]), "b1": row(1, "B"), "b2": row(2, "B"), "a2": row(2, "A")}
+    rows = {"a1": row(1, "A", env=k0["environment"]), "b1": row(1, "B"), "b2": row(2, "B"), "a2": row(2, "A")}
     assert an.decide(rows, lv)["rerun_pairs"] == [1]
     assert an.decide(rows, lv, reruns=(1,))["decision"] == "to the lead"  # the rerun invalid again
 

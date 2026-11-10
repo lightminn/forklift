@@ -99,17 +99,20 @@ def launcher_problem(values: list) -> str | None:
     return None
 
 
-def split_kinds(invalid: list, row: dict, records: list, safety=None) -> dict:
+def split_kinds(invalid: list, row: dict, records: list, safety=None, ran: bool = True) -> dict:
     """environment / mission, the mission and safety readings independent of the environment's (Codex review P2-2,
-    round 2). A session that never started (no mission record: mission_done None) is the environment's (the bundle
-    did not start it -- rerun once); one that started and did not finish its mission is a mission failure. Safety is
-    read whenever the session started, whatever else is invalid."""
+    rounds 2-3). ``ran``: the session left a trace of running (the runner's log or result.json). One that did not run
+    is the environment's (rerun once). One that ran is read for its mission and its safety whatever else is invalid:
+    no mission result (the probe's report missing or without an outcome) is a mission-kind failure, not a reason to
+    rerun."""
     env, mission, probe = [], [], []
     for x in invalid:
         (probe if x.startswith("probe exit") else env).append(x)
-    started = row.get("mission_done") is not None
+    started = bool(ran)
     if not started:
-        env.append("session not started (no mission record)")
+        env.append("session not started (no trace of running)")
+    elif row.get("mission_done") is None:
+        mission.append("mission result missing (the probe's report or its outcome)")
     elif not row.get("mission_done"):
         mission.append(f"mission not done: {row.get('mission_outcomes')}")
     ms = mission_status(records)
@@ -171,7 +174,9 @@ def read_session(f: Path, e: dict) -> tuple[dict, dict]:
         "mission_done": s.mission_done}
     row["arm"], row["pair"] = arm, int(e["env"]["PAIR"])
     row["safety_read"] = safety_of(s)
-    row["kinds"] = split_kinds(s.invalid, row, recs, row["safety_read"])
+    ran = (run / "live" / "epoch_1" / "run.log").exists() or (run / "live" / "epoch_1" / "run" / "result.json").exists()
+    row["ran"] = ran
+    row["kinds"] = split_kinds(s.invalid, row, recs, row["safety_read"], ran=ran)
     row["evidence_stale_ticks"] = e0.stale_ticks(s.result)
     row["session_cpus"], row["node_gpu"] = summary.get("session_cpus"), summary.get("node_gpu")
     row["start_end"] = [recs[0].get("start"), recs[0].get("end")] if recs else None
