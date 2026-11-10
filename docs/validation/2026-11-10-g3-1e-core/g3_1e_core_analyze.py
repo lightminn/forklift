@@ -17,8 +17,8 @@ A worker or mission failure of T is not erased by a rerun: without an environmen
 
 Judgement:
 - the waits are read only for k at or below the executed k (the 1e-0 analyzer's k above it is structurally 0);
-- k = the smallest such k whose mean scheduled wait is at most 0.5 ms in both pairs; none (a k = 3 run): the
-  supplementary k = 4 pair is due; none (a k = 4 run): T fails;
+- a k = 3 run: k = the smallest k <= 3 whose mean scheduled wait is at most 0.5 ms in both pairs; none: the
+  supplementary k = 4 pair is due; the supplementary k = 4 run is judged at k = 4 (its measured wait in the net);
 - per pair: net_T(k) = moved - mean wait(k) x scans per AUTO sim s - barrier wait[T] - max(0, main_other[T] -
   main_other[D]); direct = W[D] - W[T];
 - (a) "thread plus a core" when both pairs have net_T >= 0.03707 and direct >= net_T / 2; else "stage 2 to the lead".
