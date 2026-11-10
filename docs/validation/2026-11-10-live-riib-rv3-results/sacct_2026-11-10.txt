@@ -1,0 +1,180 @@
+JobID|User|JobName|State|Start|End|AllocCPUS|ReqTRES
+17333|lightminn|rtb_g3cl|COMPLETED|2026-11-10T08:40:50|2026-11-10T09:06:52|4|billing=4,cpu=4,gres/shard=4,mem=8G,node=1
+17334|lightminn|g3cl_an|COMPLETED|2026-11-10T09:06:53|2026-11-10T09:06:54|2|billing=2,cpu=2,mem=4G,node=1
+17335|lightminn|pytest|COMPLETED|2026-11-10T09:06:53|2026-11-10T09:17:19|8|billing=8,cpu=8,mem=8G,node=1
+17336|lightminn|pytest|COMPLETED|2026-11-10T09:06:53|2026-11-10T09:16:54|8|billing=8,cpu=8,mem=8G,node=1
+17337|lightminn|pytest|COMPLETED|2026-11-10T09:16:54|2026-11-10T09:25:36|8|billing=8,cpu=8,mem=8G,node=1
+17338|lightminn|rtb_g3dl|COMPLETED|2026-11-10T09:25:36|2026-11-10T09:48:48|4|billing=4,cpu=4,gres/shard=4,mem=8G,node=1
+17339|lightminn|g3dl_an|COMPLETED|2026-11-10T09:48:48|2026-11-10T09:48:49|2|billing=2,cpu=2,mem=4G,node=1
+17340|lightminn|rv3|FAILED|2026-11-10T09:54:07|2026-11-10T09:54:08|8|billing=8,cpu=8,gres/shard=4,mem=19G,node=1
+17341|lightminn|rv3|FAILED|2026-11-10T09:55:23|2026-11-10T10:32:15|8|billing=8,cpu=8,gres/shard=4,mem=19G,node=1
+17342|lightminn|rtb_g3el|COMPLETED|2026-11-10T10:32:15|2026-11-10T10:57:36|4|billing=4,cpu=4,gres/shard=4,mem=8G,node=1
+17343|lightminn|g3el_an|COMPLETED|2026-11-10T10:57:36|2026-11-10T10:57:38|2|billing=2,cpu=2,mem=4G,node=1
+17344|lightminn|rv3|COMPLETED|2026-11-10T10:57:39|2026-11-10T11:25:37|8|billing=8,cpu=8,gres/shard=4,mem=19G,node=1
+17348|ksw|(other user)|COMPLETED|2026-11-10T11:12:00|2026-11-10T11:12:52|4|billing=4,cpu=4,mem=12G,node=1
+17349|ksw|(other user)|COMPLETED|2026-11-10T11:13:40|2026-11-10T12:10:31|8|billing=8,cpu=8,mem=24G,node=1
+17350|lightminn|pytest|COMPLETED|2026-11-10T11:25:37|2026-11-10T11:34:41|8|billing=8,cpu=8,mem=8G,node=1
+17352_1|lightminn|replay_gate|COMPLETED|2026-11-10T11:30:05|2026-11-10T11:31:19|2|billing=1,cpu=1,mem=4G,node=1
+17352_2|lightminn|replay_gate|COMPLETED|2026-11-10T11:30:05|2026-11-10T11:31:20|2|billing=1,cpu=1,mem=4G,node=1
+17352_3|lightminn|replay_gate|COMPLETED|2026-11-10T11:31:19|2026-11-10T11:33:05|2|billing=1,cpu=1,mem=4G,node=1
+17352_4|lightminn|replay_gate|COMPLETED|2026-11-10T11:31:22|2026-11-10T11:32:50|2|billing=1,cpu=1,mem=4G,node=1
+17352_5|lightminn|replay_gate|COMPLETED|2026-11-10T11:32:50|2026-11-10T11:34:37|2|billing=1,cpu=1,mem=4G,node=1
+17352_6|lightminn|replay_gate|COMPLETED|2026-11-10T11:33:05|2026-11-10T11:33:31|2|billing=1,cpu=1,mem=4G,node=1
+17352_7|lightminn|replay_gate|COMPLETED|2026-11-10T11:33:31|2026-11-10T11:35:21|2|billing=1,cpu=1,mem=4G,node=1
+17352_8|lightminn|replay_gate|COMPLETED|2026-11-10T11:34:37|2026-11-10T11:36:11|2|billing=1,cpu=1,mem=4G,node=1
+17352_9|lightminn|replay_gate|COMPLETED|2026-11-10T11:34:41|2026-11-10T11:36:12|2|billing=1,cpu=1,mem=4G,node=1
+17352_10|lightminn|replay_gate|COMPLETED|2026-11-10T11:34:41|2026-11-10T11:36:33|2|billing=1,cpu=1,mem=4G,node=1
+17352_11|lightminn|replay_gate|COMPLETED|2026-11-10T11:34:41|2026-11-10T11:36:29|2|billing=1,cpu=1,mem=4G,node=1
+17352_12|lightminn|replay_gate|COMPLETED|2026-11-10T11:34:41|2026-11-10T11:36:37|2|billing=1,cpu=1,mem=4G,node=1
+17352_13|lightminn|replay_gate|COMPLETED|2026-11-10T11:35:21|2026-11-10T11:36:57|2|billing=1,cpu=1,mem=4G,node=1
+17352_14|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:11|2026-11-10T11:37:31|2|billing=1,cpu=1,mem=4G,node=1
+17352_15|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:14|2026-11-10T11:37:38|2|billing=1,cpu=1,mem=4G,node=1
+17352_16|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:29|2026-11-10T11:37:46|2|billing=1,cpu=1,mem=4G,node=1
+17352_17|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:33|2026-11-10T11:36:59|2|billing=1,cpu=1,mem=4G,node=1
+17352_18|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:37|2026-11-10T11:37:54|2|billing=1,cpu=1,mem=4G,node=1
+17352_19|lightminn|replay_gate|COMPLETED|2026-11-10T11:36:58|2026-11-10T11:37:09|2|billing=1,cpu=1,mem=4G,node=1
+17352_20|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:01|2026-11-10T11:37:11|2|billing=1,cpu=1,mem=4G,node=1
+17352_21|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:09|2026-11-10T11:38:28|2|billing=1,cpu=1,mem=4G,node=1
+17352_22|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:12|2026-11-10T11:38:30|2|billing=1,cpu=1,mem=4G,node=1
+17352_23|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:31|2026-11-10T11:38:20|2|billing=1,cpu=1,mem=4G,node=1
+17352_24|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:38|2026-11-10T11:38:58|2|billing=1,cpu=1,mem=4G,node=1
+17352_25|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:46|2026-11-10T11:39:20|2|billing=1,cpu=1,mem=4G,node=1
+17352_26|lightminn|replay_gate|COMPLETED|2026-11-10T11:37:54|2026-11-10T11:39:46|2|billing=1,cpu=1,mem=4G,node=1
+17352_27|lightminn|replay_gate|COMPLETED|2026-11-10T11:38:20|2026-11-10T11:38:43|2|billing=1,cpu=1,mem=4G,node=1
+17352_28|lightminn|replay_gate|COMPLETED|2026-11-10T11:38:28|2026-11-10T11:38:42|2|billing=1,cpu=1,mem=4G,node=1
+17352_29|lightminn|replay_gate|COMPLETED|2026-11-10T11:38:31|2026-11-10T11:39:46|2|billing=1,cpu=1,mem=4G,node=1
+17355|lightminn|pytest|COMPLETED|2026-11-10T11:39:34|2026-11-10T11:48:02|8|billing=8,cpu=8,mem=8G,node=1
+17356|lightminn|g3pr_b1|COMPLETED|2026-11-10T11:39:05|2026-11-10T11:39:34|4|billing=4,cpu=4,gres/shard=4,mem=8G,node=1
+17357|lightminn|g3pr_b2|COMPLETED|2026-11-10T11:39:46|2026-11-10T11:45:27|4|billing=4,cpu=4,gres/shard=4,mem=8G,node=1
+17384|ksw|(other user)|COMPLETED|2026-11-10T12:10:59|2026-11-10T12:12:46|4|billing=4,cpu=4,mem=24G,node=1
+17385|ksw|(other user)|FAILED|2026-11-10T12:13:23|2026-11-10T12:13:26|4|billing=4,cpu=4,mem=24G,node=1
+17386|ksw|(other user)|COMPLETED|2026-11-10T12:13:40|2026-11-10T12:14:57|4|billing=4,cpu=4,mem=24G,node=1
+17387|lightminn|rv3|CANCELLED by 2001|2026-11-10T12:14:58|2026-11-10T12:19:54|8|billing=8,cpu=8,gres/shard=4,mem=19G,node=1
+17388|ksw|(other user)|COMPLETED|2026-11-10T12:15:16|2026-11-10T12:16:26|2|billing=2,cpu=2,mem=8G,node=1
+17389|ksw|(other user)|COMPLETED|2026-11-10T12:16:53|2026-11-10T12:19:42|4|billing=4,cpu=4,mem=24G,node=1
+17390|ksw|(other user)|COMPLETED|2026-11-10T12:20:01|2026-11-10T12:21:12|2|billing=2,cpu=2,mem=16G,node=1
+17391_1|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:03|2026-11-10T12:21:20|2|billing=1,cpu=1,mem=4G,node=1
+17391_2|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:03|2026-11-10T12:21:22|2|billing=1,cpu=1,mem=4G,node=1
+17391_3|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:03|2026-11-10T12:21:54|2|billing=1,cpu=1,mem=4G,node=1
+17391_4|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:21:36|2|billing=1,cpu=1,mem=4G,node=1
+17391_5|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:21:53|2|billing=1,cpu=1,mem=4G,node=1
+17391_6|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:20:30|2|billing=1,cpu=1,mem=4G,node=1
+17391_7|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:21:55|2|billing=1,cpu=1,mem=4G,node=1
+17391_8|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:21:39|2|billing=1,cpu=1,mem=4G,node=1
+17391_9|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:04|2026-11-10T12:21:35|2|billing=1,cpu=1,mem=4G,node=1
+17391_10|lightminn|replay_gate|COMPLETED|2026-11-10T12:20:30|2026-11-10T12:22:21|2|billing=1,cpu=1,mem=4G,node=1
+17391_11|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:12|2026-11-10T12:23:03|2|billing=1,cpu=1,mem=4G,node=1
+17391_12|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:20|2026-11-10T12:23:20|2|billing=1,cpu=1,mem=4G,node=1
+17391_13|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:23|2026-11-10T12:23:03|2|billing=1,cpu=1,mem=4G,node=1
+17391_14|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:35|2026-11-10T12:22:57|2|billing=1,cpu=1,mem=4G,node=1
+17391_15|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:41|2026-11-10T12:23:04|2|billing=1,cpu=1,mem=4G,node=1
+17391_16|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:53|2026-11-10T12:23:12|2|billing=1,cpu=1,mem=4G,node=1
+17391_17|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:55|2026-11-10T12:22:21|2|billing=1,cpu=1,mem=4G,node=1
+17391_18|lightminn|replay_gate|COMPLETED|2026-11-10T12:21:58|2026-11-10T12:23:14|2|billing=1,cpu=1,mem=4G,node=1
+17391_19|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:21|2026-11-10T12:22:33|2|billing=1,cpu=1,mem=4G,node=1
+17391_20|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:21|2026-11-10T12:22:32|2|billing=1,cpu=1,mem=4G,node=1
+17391_21|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:32|2026-11-10T12:23:52|2|billing=1,cpu=1,mem=4G,node=1
+17391_22|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:35|2026-11-10T12:23:54|2|billing=1,cpu=1,mem=4G,node=1
+17391_23|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:41|2026-11-10T12:23:31|2|billing=1,cpu=1,mem=4G,node=1
+17391_24|lightminn|replay_gate|COMPLETED|2026-11-10T12:22:58|2026-11-10T12:24:16|2|billing=1,cpu=1,mem=4G,node=1
+17391_25|lightminn|replay_gate|COMPLETED|2026-11-10T12:23:04|2026-11-10T12:24:38|2|billing=1,cpu=1,mem=4G,node=1
+17391_26|lightminn|replay_gate|COMPLETED|2026-11-10T12:23:04|2026-11-10T12:24:57|2|billing=1,cpu=1,mem=4G,node=1
+17391_27|lightminn|replay_gate|COMPLETED|2026-11-10T12:23:07|2026-11-10T12:23:29|2|billing=1,cpu=1,mem=4G,node=1
+17391_28|lightminn|replay_gate|COMPLETED|2026-11-10T12:23:12|2026-11-10T12:23:26|2|billing=1,cpu=1,mem=4G,node=1
+17391_29|lightminn|replay_gate|COMPLETED|2026-11-10T12:23:15|2026-11-10T12:24:29|2|billing=1,cpu=1,mem=4G,node=1
+17401|lightminn|pytest|FAILED|2026-11-10T12:23:52|2026-11-10T12:32:36|8|billing=8,cpu=8,mem=8G,node=1
+17407|ksw|(other user)|COMPLETED|2026-11-10T12:21:36|2026-11-10T12:22:41|2|billing=2,cpu=2,mem=16G,node=1
+17425|ksw|(other user)|COMPLETED|2026-11-10T12:23:25|2026-11-10T12:25:27|2|billing=2,cpu=2,mem=16G,node=1
+17430|lightminn|rv3|FAILED|2026-11-10T12:32:36|2026-11-10T12:32:36|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17431|lightminn|rv3|COMPLETED|2026-11-10T12:32:36|2026-11-10T13:01:00|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17432|lightminn|rv3|COMPLETED|2026-11-10T13:01:00|2026-11-10T13:29:39|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17433|lightminn|rv3|COMPLETED|2026-11-10T13:29:39|2026-11-10T13:57:21|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17434|lightminn|rv3gate|COMPLETED|2026-11-10T13:57:21|2026-11-10T14:00:16|2|billing=2,cpu=2,mem=3G,node=1
+17435|lightminn|rv3|COMPLETED|2026-11-10T14:16:33|2026-11-10T14:43:39|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17438|ksw|(other user)|CANCELLED by 2004|None|2026-11-10T13:11:31|0|billing=4,cpu=4,mem=12G,node=1
+17439|ksw|(other user)|CANCELLED by 2004|None|2026-11-10T13:11:31|0|billing=4,cpu=4,mem=16G,node=1
+17440|ksw|(other user)|FAILED|2026-11-10T13:57:21|2026-11-10T13:57:22|4|billing=4,cpu=4,gres/shard=1,mem=12G,node=1
+17441|ksw|(other user)|COMPLETED|2026-11-10T13:57:21|2026-11-10T14:16:33|4|billing=4,cpu=4,mem=12G,node=1
+17442|ksw|(other user)|COMPLETED|2026-11-10T14:43:39|2026-11-10T16:14:36|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17443|ksw|(other user)|COMPLETED|2026-11-10T14:43:39|2026-11-10T16:03:11|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17444|lightminn|rv3|COMPLETED|2026-11-10T16:14:36|2026-11-10T16:41:21|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17445|lightminn|rv3|COMPLETED|2026-11-10T16:41:21|2026-11-10T17:09:31|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17446|lightminn|rv3|COMPLETED|2026-11-10T17:09:31|2026-11-10T17:37:29|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17447|lightminn|rv3|COMPLETED|2026-11-10T17:37:29|2026-11-10T18:04:43|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17448|lightminn|rv3|COMPLETED|2026-11-10T18:04:43|2026-11-10T18:32:58|20|billing=20,cpu=20,gres/shard=4,mem=56G,node=1
+17449_1|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:45:21|2|billing=1,cpu=1,mem=4G,node=1
+17449_2|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:45:22|2|billing=1,cpu=1,mem=4G,node=1
+17449_3|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:45:52|2|billing=1,cpu=1,mem=4G,node=1
+17449_4|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:45:34|2|billing=1,cpu=1,mem=4G,node=1
+17449_5|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:45:50|2|billing=1,cpu=1,mem=4G,node=1
+17449_6|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:04|2026-11-10T14:44:30|2|billing=1,cpu=1,mem=4G,node=1
+17449_7|lightminn|replay_gate|COMPLETED|2026-11-10T14:44:34|2026-11-10T14:46:26|2|billing=1,cpu=1,mem=4G,node=1
+17449_8|lightminn|replay_gate|COMPLETED|2026-11-10T14:45:34|2026-11-10T14:47:14|2|billing=1,cpu=1,mem=4G,node=1
+17449_9|lightminn|replay_gate|COMPLETED|2026-11-10T14:45:34|2026-11-10T14:47:07|2|billing=1,cpu=1,mem=4G,node=1
+17449_10|lightminn|replay_gate|COMPLETED|2026-11-10T14:45:34|2026-11-10T14:47:26|2|billing=1,cpu=1,mem=4G,node=1
+17449_11|lightminn|replay_gate|COMPLETED|2026-11-10T14:46:04|2026-11-10T14:47:51|2|billing=1,cpu=1,mem=4G,node=1
+17449_12|lightminn|replay_gate|COMPLETED|2026-11-10T14:46:04|2026-11-10T14:48:00|2|billing=1,cpu=1,mem=4G,node=1
+17449_13|lightminn|replay_gate|COMPLETED|2026-11-10T14:46:34|2026-11-10T14:48:11|2|billing=1,cpu=1,mem=4G,node=1
+17449_14|lightminn|replay_gate|COMPLETED|2026-11-10T14:47:34|2026-11-10T14:48:58|2|billing=1,cpu=1,mem=4G,node=1
+17449_15|lightminn|replay_gate|COMPLETED|2026-11-10T14:47:34|2026-11-10T14:49:00|2|billing=1,cpu=1,mem=4G,node=1
+17449_16|lightminn|replay_gate|COMPLETED|2026-11-10T14:47:34|2026-11-10T14:48:50|2|billing=1,cpu=1,mem=4G,node=1
+17449_17|lightminn|replay_gate|COMPLETED|2026-11-10T14:48:04|2026-11-10T14:48:29|2|billing=1,cpu=1,mem=4G,node=1
+17449_18|lightminn|replay_gate|COMPLETED|2026-11-10T14:48:04|2026-11-10T14:49:21|2|billing=1,cpu=1,mem=4G,node=1
+17449_19|lightminn|replay_gate|COMPLETED|2026-11-10T14:48:34|2026-11-10T14:48:46|2|billing=1,cpu=1,mem=4G,node=1
+17449_20|lightminn|replay_gate|COMPLETED|2026-11-10T14:48:34|2026-11-10T14:48:45|2|billing=1,cpu=1,mem=4G,node=1
+17449_21|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:04|2026-11-10T14:50:27|2|billing=1,cpu=1,mem=4G,node=1
+17449_22|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:04|2026-11-10T14:50:26|2|billing=1,cpu=1,mem=4G,node=1
+17449_23|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:04|2026-11-10T14:49:53|2|billing=1,cpu=1,mem=4G,node=1
+17449_24|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:04|2026-11-10T14:50:23|2|billing=1,cpu=1,mem=4G,node=1
+17449_25|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:04|2026-11-10T14:50:38|2|billing=1,cpu=1,mem=4G,node=1
+17449_26|lightminn|replay_gate|COMPLETED|2026-11-10T14:49:34|2026-11-10T14:51:25|2|billing=1,cpu=1,mem=4G,node=1
+17449_27|lightminn|replay_gate|COMPLETED|2026-11-10T14:50:04|2026-11-10T14:50:27|2|billing=1,cpu=1,mem=4G,node=1
+17449_28|lightminn|replay_gate|COMPLETED|2026-11-10T14:50:34|2026-11-10T14:50:48|2|billing=1,cpu=1,mem=4G,node=1
+17449_29|lightminn|replay_gate|COMPLETED|2026-11-10T14:50:34|2026-11-10T14:51:52|2|billing=1,cpu=1,mem=4G,node=1
+17450|lightminn|pytest|COMPLETED|2026-11-10T14:51:04|2026-11-10T15:00:11|8|billing=8,cpu=8,mem=8G,node=1
+17479_1|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:17|2|billing=1,cpu=1,mem=4G,node=1
+17479_2|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:18|2|billing=1,cpu=1,mem=4G,node=1
+17479_3|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:51|2|billing=1,cpu=1,mem=4G,node=1
+17479_4|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:32|2|billing=1,cpu=1,mem=4G,node=1
+17479_5|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:48|2|billing=1,cpu=1,mem=4G,node=1
+17479_6|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:33:26|2|billing=1,cpu=1,mem=4G,node=1
+17479_7|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:51|2|billing=1,cpu=1,mem=4G,node=1
+17479_8|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:35|2|billing=1,cpu=1,mem=4G,node=1
+17479_9|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:30|2|billing=1,cpu=1,mem=4G,node=1
+17479_10|lightminn|replay_gate|COMPLETED|2026-11-10T18:32:59|2026-11-10T18:34:51|2|billing=1,cpu=1,mem=4G,node=1
+17479_11|lightminn|replay_gate|COMPLETED|2026-11-10T18:33:26|2026-11-10T18:35:18|2|billing=1,cpu=1,mem=4G,node=1
+17479_12|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:17|2026-11-10T18:36:17|2|billing=1,cpu=1,mem=4G,node=1
+17479_13|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:20|2026-11-10T18:36:00|2|billing=1,cpu=1,mem=4G,node=1
+17479_14|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:30|2026-11-10T18:35:53|2|billing=1,cpu=1,mem=4G,node=1
+17479_15|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:33|2026-11-10T18:35:58|2|billing=1,cpu=1,mem=4G,node=1
+17479_16|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:36|2026-11-10T18:35:52|2|billing=1,cpu=1,mem=4G,node=1
+17479_17|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:48|2026-11-10T18:35:15|2|billing=1,cpu=1,mem=4G,node=1
+17479_18|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:51|2026-11-10T18:36:10|2|billing=1,cpu=1,mem=4G,node=1
+17479_19|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:51|2026-11-10T18:35:03|2|billing=1,cpu=1,mem=4G,node=1
+17479_20|lightminn|replay_gate|COMPLETED|2026-11-10T18:34:51|2026-11-10T18:35:02|2|billing=1,cpu=1,mem=4G,node=1
+17479_21|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:02|2026-11-10T18:36:23|2|billing=1,cpu=1,mem=4G,node=1
+17479_22|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:05|2026-11-10T18:36:23|2|billing=1,cpu=1,mem=4G,node=1
+17479_23|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:15|2026-11-10T18:36:06|2|billing=1,cpu=1,mem=4G,node=1
+17479_24|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:18|2026-11-10T18:36:40|2|billing=1,cpu=1,mem=4G,node=1
+17479_25|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:52|2026-11-10T18:37:26|2|billing=1,cpu=1,mem=4G,node=1
+17479_26|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:53|2026-11-10T18:37:45|2|billing=1,cpu=1,mem=4G,node=1
+17479_27|lightminn|replay_gate|COMPLETED|2026-11-10T18:35:58|2026-11-10T18:36:22|2|billing=1,cpu=1,mem=4G,node=1
+17479_28|lightminn|replay_gate|COMPLETED|2026-11-10T18:36:01|2026-11-10T18:36:15|2|billing=1,cpu=1,mem=4G,node=1
+17479_29|lightminn|replay_gate|COMPLETED|2026-11-10T18:36:06|2026-11-10T18:37:24|2|billing=1,cpu=1,mem=4G,node=1
+17480|lightminn|pytest|COMPLETED|2026-11-10T18:36:22|2026-11-10T18:45:37|8|billing=8,cpu=8,mem=8G,node=1
+17481_0|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:06|2|billing=2,cpu=2,mem=4G,node=1
+17481_1|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:06|2|billing=2,cpu=2,mem=4G,node=1
+17481_2|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:05|2|billing=2,cpu=2,mem=4G,node=1
+17481_3|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:05|2|billing=2,cpu=2,mem=4G,node=1
+17481_4|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:05|2|billing=2,cpu=2,mem=4G,node=1
+17481_5|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:15:54|2026-11-10T15:16:05|2|billing=2,cpu=2,mem=4G,node=1
+17481_6|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:16:24|2026-11-10T15:16:35|2|billing=2,cpu=2,mem=4G,node=1
+17481_7|lightminn|hall_slam_replay|COMPLETED|2026-11-10T15:16:24|2026-11-10T15:16:35|2|billing=2,cpu=2,mem=4G,node=1
+17488|lightminn|hsr_eval|COMPLETED|2026-11-10T15:16:54|2026-11-10T15:16:54|2|billing=1,cpu=1,mem=2G,node=1
+17490|ksw|(other user)|COMPLETED|2026-11-10T18:36:25|2026-11-10T18:37:20|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17491|lightminn|deck11_render|RUNNING|2026-11-10T18:44:15|Unknown|10|billing=10,cpu=10,gres/shard=4,mem=20G,node=1
+17492|ksw|(other user)|COMPLETED|2026-11-10T18:37:23|2026-11-10T18:44:15|4|billing=4,cpu=4,gres/shard=1,mem=12G,node=1
+17521|ksw|(other user)|COMPLETED|2026-11-10T18:45:49|2026-11-10T18:47:38|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17522|ksw|(other user)|FAILED|2026-11-10T18:49:36|2026-11-10T18:49:37|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17523|ksw|(other user)|COMPLETED|2026-11-10T18:50:16|2026-11-10T18:52:09|4|billing=4,cpu=4,gres/shard=2,mem=16G,node=1
+17524|ksw|(other user)|COMPLETED|2026-11-10T18:52:39|2026-11-10T18:52:43|2|billing=2,cpu=2,mem=6G,node=1

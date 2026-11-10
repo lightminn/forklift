@@ -1,0 +1,286 @@
+{
+ "sessions": {
+  "ab_line_m_s0_A": {
+   "loaded": {
+    "n": 565,
+    "left_deficit": 0.0338
+   },
+   "unloaded": {
+    "n": 161,
+    "left_deficit": 0.0321
+   }
+  },
+  "ab_line_m_s0_B": {
+   "loaded": {
+    "n": 402,
+    "left_deficit": 0.0321
+   },
+   "unloaded": {
+    "n": 142,
+    "left_deficit": 0.0319
+   }
+  },
+  "ab_line_m_s1_A": {
+   "loaded": {
+    "n": 546,
+    "left_deficit": 0.0329
+   },
+   "unloaded": {
+    "n": 146,
+    "left_deficit": 0.0324
+   }
+  },
+  "ab_line_m_s1_B": {
+   "loaded": {
+    "n": 524,
+    "left_deficit": 0.0329
+   },
+   "unloaded": {
+    "n": 115,
+    "left_deficit": 0.0302
+   }
+  },
+  "ab_line_m_s2_A": {
+   "loaded": {
+    "n": 611,
+    "left_deficit": 0.0324
+   },
+   "unloaded": {
+    "n": 142,
+    "left_deficit": 0.0332
+   }
+  },
+  "ab_line_m_s2_B": {
+   "loaded": {
+    "n": 563,
+    "left_deficit": 0.0323
+   },
+   "unloaded": {
+    "n": 150,
+    "left_deficit": 0.0335
+   }
+  },
+  "ab_line_m_s3_A": {
+   "loaded": {
+    "n": 607,
+    "left_deficit": 0.034
+   },
+   "unloaded": {
+    "n": 64,
+    "left_deficit": 0.0314
+   }
+  },
+  "ab_line_m_s3_B": {
+   "loaded": {
+    "n": 525,
+    "left_deficit": 0.0331
+   },
+   "unloaded": {
+    "n": 139,
+    "left_deficit": 0.0323
+   }
+  },
+  "ab_random_m_s0_A": {
+   "loaded": {
+    "n": 742,
+    "left_deficit": 0.0334
+   },
+   "unloaded": {
+    "n": 206,
+    "left_deficit": 0.0317
+   }
+  },
+  "ab_random_m_s0_B": {
+   "loaded": {
+    "n": 819,
+    "left_deficit": 0.0334
+   },
+   "unloaded": {
+    "n": 175,
+    "left_deficit": 0.0306
+   }
+  },
+  "ab_random_m_s1_A": {
+   "loaded": {
+    "n": 555,
+    "left_deficit": 0.0329
+   },
+   "unloaded": {
+    "n": 115,
+    "left_deficit": 0.0318
+   }
+  },
+  "ab_random_m_s1_B": {
+   "loaded": {
+    "n": 526,
+    "left_deficit": 0.0332
+   },
+   "unloaded": {
+    "n": 55,
+    "left_deficit": 0.0333
+   }
+  },
+  "ab_random_m_s2_A": {
+   "loaded": {
+    "n": 714,
+    "left_deficit": 0.0331
+   },
+   "unloaded": {
+    "n": 69,
+    "left_deficit": 0.0316
+   }
+  },
+  "ab_random_m_s2_B": {
+   "loaded": {
+    "n": 805,
+    "left_deficit": 0.0333
+   },
+   "unloaded": {
+    "n": 112,
+    "left_deficit": 0.0325
+   }
+  },
+  "ab_random_m_s3_A": {
+   "loaded": {
+    "n": 835,
+    "left_deficit": 0.033
+   },
+   "unloaded": {
+    "n": 149,
+    "left_deficit": 0.0309
+   }
+  },
+  "ab_random_m_s3_B": {
+   "loaded": {
+    "n": 807,
+    "left_deficit": 0.0334
+   },
+   "unloaded": {
+    "n": 89,
+    "left_deficit": 0.033
+   }
+  },
+  "boxed_line_m": {
+   "loaded": {
+    "n": 552,
+    "left_deficit": 0.0342
+   },
+   "unloaded": {
+    "n": 154,
+    "left_deficit": 0.0323
+   }
+  },
+  "boxed_random_m": {
+   "loaded": {
+    "n": 796,
+    "left_deficit": 0.0336
+   },
+   "unloaded": {
+    "n": 150,
+    "left_deficit": 0.0308
+   }
+  },
+  "c2_line_m_on": {
+   "loaded": {
+    "n": 501,
+    "left_deficit": 0.0336
+   },
+   "unloaded": {
+    "n": 133,
+    "left_deficit": 0.0327
+   }
+  },
+  "c2_line_m_shadow": {
+   "loaded": {
+    "n": 0,
+    "left_deficit": null
+   },
+   "unloaded": {
+    "n": 8,
+    "left_deficit": 0.0311
+   }
+  },
+  "l4c_s0_A": {
+   "loaded": {
+    "n": 224,
+    "left_deficit": 0.0325
+   },
+   "unloaded": {
+    "n": 124,
+    "left_deficit": 0.0303
+   }
+  },
+  "l4c_s0_B": {
+   "loaded": {
+    "n": 208,
+    "left_deficit": 0.0325
+   },
+   "unloaded": {
+    "n": 83,
+    "left_deficit": 0.0311
+   }
+  },
+  "l4c_s1_A": {
+   "loaded": {
+    "n": 234,
+    "left_deficit": 0.0321
+   },
+   "unloaded": {
+    "n": 123,
+    "left_deficit": 0.0321
+   }
+  },
+  "l4c_s1_B": {
+   "loaded": {
+    "n": 255,
+    "left_deficit": 0.032
+   },
+   "unloaded": {
+    "n": 137,
+    "left_deficit": 0.0306
+   }
+  },
+  "life1_line_m_main": {
+   "loaded": {
+    "n": 262,
+    "left_deficit": 0.0335
+   },
+   "unloaded": {
+    "n": 23,
+    "left_deficit": 0.0354
+   }
+  },
+  "life2_random_m_held": {
+   "loaded": {
+    "n": 0,
+    "left_deficit": null
+   },
+   "unloaded": {
+    "n": 13,
+    "left_deficit": 0.0298
+   }
+  },
+  "life3_random_m_reloc": {
+   "loaded": {
+    "n": 0,
+    "left_deficit": null
+   },
+   "unloaded": {
+    "n": 0,
+    "left_deficit": null
+   }
+  }
+ },
+ "summary": {
+  "loaded": {
+   "sessions_n_ge_50": 24,
+   "min": 0.032,
+   "max": 0.0342
+  },
+  "unloaded": {
+   "sessions_n_ge_50": 23,
+   "min": 0.0302,
+   "max": 0.0335
+  }
+ }
+}

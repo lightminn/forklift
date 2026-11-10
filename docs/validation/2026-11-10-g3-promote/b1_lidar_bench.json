@@ -1,0 +1,232 @@
+{
+ "conditions": {
+  "scene": "/home/projects/forklift/test_runs/live/rtb/g3el_f/g3el_f_02_cand/live/epoch_1/run/scene.usda",
+  "output": "/home/projects/forklift/test_runs/live/rtb/g3pr_b1/out",
+  "rays": "1600",
+  "range_m": "12.0",
+  "repeats": "30",
+  "poses": "8",
+  "spread_m": "0.6",
+  "base_link": "/World/Forklift/base_link",
+  "mount": "-0.12,0.0,1.05,0.0",
+  "load_timeout_s": "600.0",
+  "prefix_sequence": "P_1,P_2",
+  "ring": "8",
+  "ring_m": "1.2"
+ },
+ "errors": [],
+ "load_s": 7.670908094965853,
+ "colliders": {
+  "all": 3600,
+  "truck": 55
+ },
+ "physics_dt": 0.008333333333333333,
+ "query_methods": [
+  "overlap_box",
+  "overlap_box_any",
+  "overlap_mesh",
+  "overlap_mesh_any",
+  "overlap_shape",
+  "overlap_shape_any",
+  "overlap_sphere",
+  "overlap_sphere_any",
+  "raycast_all",
+  "raycast_any",
+  "raycast_closest",
+  "sweep_box_all",
+  "sweep_box_any",
+  "sweep_box_closest",
+  "sweep_mesh_all",
+  "sweep_mesh_any",
+  "sweep_mesh_closest",
+  "sweep_shape_all",
+  "sweep_shape_any",
+  "sweep_shape_closest",
+  "sweep_sphere_all",
+  "sweep_sphere_any",
+  "sweep_sphere_closest"
+ ],
+ "prefix_sequence": {
+  "pallets": [
+   "P_1",
+   "P_2"
+  ],
+  "targets": 99,
+  "targets_by_class": {
+   "truck": 55,
+   "P1": 22,
+   "P2": 22
+  },
+  "steps": [
+   {
+    "step": "F",
+    "prefixes": [
+     "/World/Forklift"
+    ],
+    "scans": 792,
+    "mismatched_scans": 0,
+    "mismatched_rays": 0,
+    "hits": {
+     "truck": 3207,
+     "other": 651,
+     "P1": 1432,
+     "P2": 1287
+    },
+    "own": {
+     "truck": 3207,
+     "other": 0,
+     "P1": 0,
+     "P2": 0
+    },
+    "cache_entries_before": 0,
+    "cache_entries_after": 148,
+    "earlier_step_hits": 0,
+    "expected": {
+     "truck_own": true,
+     "P1_hits": true,
+     "P2_hits": true,
+     "P1_own": true,
+     "P2_own": true,
+     "other_never_own": true,
+     "equal": true
+    }
+   },
+   {
+    "step": "F+P1",
+    "prefixes": [
+     "/World/Forklift",
+     "/World/SessionPallets/P_1/"
+    ],
+    "scans": 792,
+    "mismatched_scans": 0,
+    "mismatched_rays": 0,
+    "hits": {
+     "truck": 3207,
+     "other": 651,
+     "P1": 1432,
+     "P2": 1287
+    },
+    "own": {
+     "truck": 3207,
+     "other": 0,
+     "P1": 1432,
+     "P2": 0
+    },
+    "cache_entries_before": 148,
+    "cache_entries_after": 296,
+    "earlier_step_hits": 0,
+    "expected": {
+     "truck_own": true,
+     "P1_hits": true,
+     "P2_hits": true,
+     "P1_own": true,
+     "P2_own": true,
+     "other_never_own": true,
+     "equal": true
+    }
+   },
+   {
+    "step": "F",
+    "prefixes": [
+     "/World/Forklift"
+    ],
+    "scans": 792,
+    "mismatched_scans": 0,
+    "mismatched_rays": 0,
+    "hits": {
+     "truck": 3207,
+     "other": 651,
+     "P1": 1432,
+     "P2": 1287
+    },
+    "own": {
+     "truck": 3207,
+     "other": 0,
+     "P1": 0,
+     "P2": 0
+    },
+    "cache_entries_before": 296,
+    "cache_entries_after": 296,
+    "earlier_step_hits": 6577,
+    "expected": {
+     "truck_own": true,
+     "P1_hits": true,
+     "P2_hits": true,
+     "P1_own": true,
+     "P2_own": true,
+     "other_never_own": true,
+     "equal": true
+    }
+   },
+   {
+    "step": "F+P2",
+    "prefixes": [
+     "/World/Forklift",
+     "/World/SessionPallets/P_2/"
+    ],
+    "scans": 792,
+    "mismatched_scans": 0,
+    "mismatched_rays": 0,
+    "hits": {
+     "truck": 3207,
+     "other": 651,
+     "P1": 1432,
+     "P2": 1287
+    },
+    "own": {
+     "truck": 3207,
+     "other": 0,
+     "P1": 0,
+     "P2": 1287
+    },
+    "cache_entries_before": 296,
+    "cache_entries_after": 444,
+    "earlier_step_hits": 0,
+    "expected": {
+     "truck_own": true,
+     "P1_hits": true,
+     "P2_hits": true,
+     "P1_own": true,
+     "P2_own": true,
+     "other_never_own": true,
+     "equal": true
+    }
+   },
+   {
+    "step": "F",
+    "prefixes": [
+     "/World/Forklift"
+    ],
+    "scans": 792,
+    "mismatched_scans": 0,
+    "mismatched_rays": 0,
+    "hits": {
+     "truck": 3207,
+     "other": 651,
+     "P1": 1432,
+     "P2": 1287
+    },
+    "own": {
+     "truck": 3207,
+     "other": 0,
+     "P1": 0,
+     "P2": 0
+    },
+    "cache_entries_before": 444,
+    "cache_entries_after": 444,
+    "earlier_step_hits": 6577,
+    "expected": {
+     "truck_own": true,
+     "P1_hits": true,
+     "P2_hits": true,
+     "P1_own": true,
+     "P2_own": true,
+     "other_never_own": true,
+     "equal": true
+    }
+   }
+  ],
+  "cache_reused_in_later_f_steps": true,
+  "passed": true
+ }
+}

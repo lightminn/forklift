@@ -26,6 +26,16 @@ in x/y by up to --spread-m and turned, so the rays meet the truck's own body, pa
 
   $VENV_PY sim/isaac/lidar_bench.py --scene RUN/scene.usda --output OUT [--rays 1600 --range-m 12 --repeats 30]
 
+--prefix-sequence P_1,P_2 (the G3 promotion's check, docs/validation/2026-11-10-g3-promote.md): instead of the
+timing, rays aimed at every collider of the truck and of the two session pallets (a ring of origins around each
+collider's centre, a fan from each) are cast under the own-prefix sets F, F+P1, F, F+P2, F in that order -- F the
+truck's, P the pallet's self-filter prefix as the runner forms it -- by the loop (A) and by the fast path (B) with one
+own cache kept across the whole sequence, as the runner's module cache is. Each ray's hit body is read once outside the
+arms and classed truck / P1 / P2 / other. Passes when every scan's arrays are equal in every step; in every step the
+truck has an own hit, each pallet has hits, a pallet's hits are own exactly in the steps whose set holds its prefix and
+the other hits are never own; and the fast path's cache answered some rays of the later F steps from entries an
+earlier step made (lookups counted by the step that made each entry). Exit 1 otherwise.
+
 Writes OUT/lidar_bench.json; touches nothing else.
 """
 
@@ -51,6 +61,9 @@ ap.add_argument("--spread-m", type=float, default=0.6)
 ap.add_argument("--base-link", default="/World/Forklift/base_link")
 ap.add_argument("--mount", default="-0.12,0.0,1.05,0.0", help="x,y,z,yaw of the laser on base_link (the bridge's)")
 ap.add_argument("--load-timeout-s", type=float, default=600.0)
+ap.add_argument("--prefix-sequence", default=None, help="P_1,P_2: the own-prefix sequence check instead of timing")
+ap.add_argument("--ring", type=int, default=8, help="origins around each collider (prefix sequence)")
+ap.add_argument("--ring-m", type=float, default=1.2, help="their distance from its centre (prefix sequence)")
 args = ap.parse_args()
 args.output.mkdir(parents=True, exist_ok=False)
 
@@ -94,6 +107,113 @@ def bodies(query, start, directions, range_m):
     return out
 
 
+def prefix_sequence(stage, query, pl):
+    """The own-prefix sequence check (see the module docstring); fills record["prefix_sequence"]."""
+    import carb
+    from pxr import Usd, UsdGeom, UsdPhysics
+    from session_pallets import pallet_prim, self_filter_prefix
+
+    ids = [s.strip() for s in args.prefix_sequence.split(",")]
+    if len(ids) != 2:
+        raise RuntimeError("--prefix-sequence takes two pallet ids")
+    roots = {"truck": pl.SELF_PREFIX, "P1": pallet_prim(ids[0]), "P2": pallet_prim(ids[1])}
+    cache_bbox = UsdGeom.BBoxCache(Usd.TimeCode.Default(), ["default", "render", "proxy", "guide"])
+    targets = []
+    for cls, root in roots.items():
+        prim = stage.GetPrimAtPath(root)
+        if not prim.IsValid():
+            raise RuntimeError(f"no {root} on the stage")
+        for q in Usd.PrimRange(prim):
+            if q.HasAPI(UsdPhysics.CollisionAPI):
+                box = cache_bbox.ComputeWorldBound(q).ComputeAlignedRange()
+                if not box.IsEmpty():
+                    targets.append((cls, q.GetPath().pathString, np.array(box.GetMidpoint(), float)))
+    if not {c for c, _, _ in targets} >= set(roots):
+        raise RuntimeError(f"colliders found for {sorted({c for c, _, _ in targets})} only")
+    scans = []  # (origin, directions): a ring of origins around each collider, a fan of 9 rays from each
+    fan = np.radians(np.linspace(-8.0, 8.0, 9))
+    for _, _, c in targets:
+        for k in range(args.ring):
+            a0 = 2 * math.pi * k / args.ring
+            origin = c + args.ring_m * np.array([math.cos(a0), math.sin(a0), 0.0])
+            back = math.atan2(c[1] - origin[1], c[0] - origin[0])
+            scans.append((origin, np.column_stack((np.cos(back + fan), np.sin(back + fan), np.zeros(len(fan))))))
+    F = (pl.SELF_PREFIX,)
+    steps = [("F", F), ("F+P1", F + (self_filter_prefix(ids[0]),)), ("F", F),
+             ("F+P2", F + (self_filter_prefix(ids[1]),)), ("F", F)]
+    prefix_of = {"P1": self_filter_prefix(ids[0]), "P2": self_filter_prefix(ids[1])}
+
+    def classify(body):
+        if body is None:
+            return None
+        if pl.SELF_PREFIX in body:
+            return "truck"
+        for cls, pre in prefix_of.items():
+            if pre in body:
+                return cls
+        return "other"
+
+    classes = []
+    for origin, dirs in scans:  # the hit bodies, once, outside the arms
+        bs = bodies(query, carb.Float3(*map(float, origin)), dirs, args.range_m)
+        classes.append([classify(str(rb) + str(col)) if hit else None for hit, _, rb, col in bs])
+    class StepCache(dict):
+        """The fast path's cache across the whole sequence (as the runner's module cache), each entry tagged with the
+        step that made it; a lookup that finds an entry an earlier step made is counted (Codex review P2: only such
+        lookups show reuse across steps -- a cache emptied at every step must fail)."""
+        step = 0
+        made: dict = {}
+        earlier_hits = 0
+
+        def get(self, key, default=None):
+            if key in self and self.made[key] < self.step:
+                self.earlier_hits += 1
+            return super().get(key, default)
+
+        def __setitem__(self, key, value):
+            self.made[key] = self.step
+            super().__setitem__(key, value)
+
+    shared = StepCache()
+    shared.made = {}
+    out = []
+    for index_, (name, prefixes) in enumerate(steps):
+        before = len(shared)
+        shared.step, shared.earlier_hits = index_, 0
+        row = {"step": name, "prefixes": list(prefixes), "scans": len(scans), "mismatched_scans": 0,
+               "mismatched_rays": 0, "hits": {}, "own": {}, "cache_entries_before": before}
+        for (origin, dirs), cls in zip(scans, classes):
+            ref = pl._loop_cast(origin, dirs, args.range_m, prefixes)
+            got = pl.cast_scan_flags_fast(origin, dirs, args.range_m, own_prefixes=prefixes, query=query,
+                                          own_cache=shared)
+            bad = ~(np.isclose(ref[0], got[0], rtol=0.0, atol=0.0, equal_nan=True) & (ref[1] == got[1])
+                    & (ref[2] == got[2]))
+            if bad.any():
+                row["mismatched_scans"] += 1
+                row["mismatched_rays"] += int(bad.sum())
+            for i, c in enumerate(cls):
+                if c is None or not ref[1][i]:
+                    continue
+                row["hits"][c] = row["hits"].get(c, 0) + 1
+                row["own"][c] = row["own"].get(c, 0) + int(ref[2][i])
+        row["cache_entries_after"] = len(shared)
+        row["earlier_step_hits"] = shared.earlier_hits  # rays answered from entries an earlier step made
+        pallet_in = {cls: prefix_of[cls] in prefixes for cls in prefix_of}
+        row["expected"] = {
+            "truck_own": row["own"].get("truck", 0) > 0 and row["own"]["truck"] == row["hits"]["truck"],
+            **{f"{cls}_hits": row["hits"].get(cls, 0) > 0 for cls in prefix_of},
+            **{f"{cls}_own": (row["own"].get(cls, 0) == row["hits"].get(cls, 0)) if pallet_in[cls]
+               else row["own"].get(cls, 0) == 0 for cls in prefix_of},
+            "other_never_own": row["own"].get("other", 0) == 0,
+            "equal": row["mismatched_scans"] == 0}
+        out.append(row)
+    reuse = all(r["earlier_step_hits"] > 0 for r in out[2::2])  # the later F steps: entries the first F made
+    record["prefix_sequence"] = {"pallets": ids, "targets": len(targets),
+                                 "targets_by_class": {c: sum(t[0] == c for t in targets) for c in roots},
+                                 "steps": out, "cache_reused_in_later_f_steps": reuse,
+                                 "passed": reuse and all(all(r["expected"].values()) for r in out)}
+
+
 def main():
     import carb
     import omni.usd
@@ -135,6 +255,10 @@ def main():
     mx, my, mz, myaw = map(float, args.mount.split(","))
     query = get_physx_scene_query_interface()
     record["query_methods"] = sorted(m for m in dir(query) if not m.startswith("_"))
+    if args.prefix_sequence:
+        prefix_sequence(stage, query, pl)
+        sim.stop()
+        return
     angles = np.linspace(-math.pi, math.pi, args.rays, endpoint=False)
     rng = np.random.default_rng(0)
     poses = []
@@ -197,7 +321,9 @@ try:
     main()
 except Exception:  # noqa: BLE001 -- the record keeps the failure; the exit code says it
     record["errors"].append(traceback.format_exc())
-if record["errors"] or not record.get("oracle_stable", False):
+passed = record.get("prefix_sequence", {}).get("passed", False) if args.prefix_sequence \
+    else record.get("oracle_stable", False)
+if record["errors"] or not passed:
     rc = 1
     for s in record.get("summary", {}).values():
         s["adopt"] = False  # no adoption beside an error or an unstable oracle
