@@ -143,7 +143,9 @@ if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments
   printf '%s\n' "${ARGS[@]}"
   exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" --check-args
 fi
-exec "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
+PIN=()  # the session's CPUs when the launcher split them (env.sh SESSION_CPUS)
+[ -n "${SESSION_CPUS:-}" ] && PIN=(taskset -c "$SESSION_CPUS")
+exec "${PIN[@]}" "$VENV_PY" "$ROOT/sim/isaac/run_transport.py" "${ARGS[@]}" > "$2/run.log" 2>&1
 EOT
 chmod +x "$OUT/bridge.sh" "$OUT/stop.sh" "$OUT/runner.sh"
 json() { "$VENV_PY" -c 'import json, sys; print(json.dumps(sys.argv[1:]))' "$@"; }
