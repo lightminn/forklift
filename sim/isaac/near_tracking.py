@@ -1120,6 +1120,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "live_test_prep_renders": 0, "live_test_prep_wait_s": 0.0,  # 2026-11-09: plan 5.24
                               "live_capture_dump": "sync",  # 2026-11-09: real-time plan G2-1a (live only)
                               "lidar_cast": "loop",  # 2026-11-09: real-time plan G3-1d
+                              # 2026-11-10: real-time plan 5.28 G3-1e (live only; refused with --near-tracking)
+                              "layer_worker": "off", "layer_worker_k": 3, "layer_worker_timeout_s": 0.5,
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);
