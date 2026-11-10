@@ -129,7 +129,7 @@
      - `OMP_NUM_THREADS=2`: 런처의 상수(`isaac_live.sbatch` 의 export 줄)이고, rv3 런처에도 같은 값이다. 표본기가 러너·인식 작업자 모두에서 2 를 기록했다.
      - onnxruntime 스레드: 러너 인자 `--recognition-threads 4` 로 고정된다. rv3 `args.txt` 와 rv4 의 27 개 DRY_RUN 모두 4 다.
      - `OPENBLAS_NUM_THREADS=24`: 인식 작업자 환경에 있다. 저장소 코드는 설정하지 않으며, 러너의 시작 환경에도 없다(실행 중 부모 프로세스가 정한 값을 물려받은 것으로 보인다). 24 는 ws1 의 논리 CPU 수(`nproc --all`·`os.cpu_count()` = 24)와 같다. 작업자의 affinity(6 CPU)나 Slurm 요청(20)과는 다르다. 그래서 affinity·cgroup·Slurm CPU 수에서 정해진 값이 아니고, rv3 ② 의 8 CPU cgroup 에서도 같은 값이었을 것이다(추론이고, rv3 ② 의 값은 기록이 없어 직접 대조하지 못했다).
-     - numba: `NUMBA_NUM_THREADS` 는 설정되지 않았다. 기본값은 기계의 CPU 수다(같은 이유로 cgroup·taskset 과 무관).
+     - numba: `NUMBA_NUM_THREADS` 는 설정되지 않았다. numba 0.59.1 의 기본값은 `os.sched_getaffinity(0)` 의 CPU 수다(Codex 지적, numba `config.py`). 그래서 affinity 의 영향을 받는다. 다만 묶음 실행기가 세션·브리지 CPU 를 나누는 방식이 rv3 ② 와 같다(묶음 요약 모두 CPU 0–3·12–15, 브리지 3·15). G3 커널은 `parallel=True` 없는 `njit` 라 병렬 스레드를 쓰지 않는다. 그래서 차이가 났다고 볼 근거는 없다.
      - 결론: 차이가 있었다는 근거는 없다. 다만 등록이 요구한 '제출 전 대조'는 하지 않았다. 이를 예외로 받아들일지는 총괄이 정한다.
   2. **묶음군 종료 직후 노드 기록을 남기지 않았다.** rv4 등록 2 절은 묶음군이 끝난 직후 `sacct -a`, `/proc/loadavg`, `docker ps`(조건부 `nvidia-smi`)를 남기도록 정했다. 이번에는 제출 때의 기록(매니페스트), 그날 밤 전체 `sacct -a -X`, affinity 표본기(261 회)만 있다. 종료 직후 기록과 그 생략 사유는 없다. 겹침 판정은 전체 `sacct` 로 했다.
 
