@@ -1386,6 +1386,16 @@ def arguments() -> argparse.Namespace:
                         help="real-time plan G3-1d: the 2D LiDAR's PhysX casting -- loop (the original, default), fast "
                              "(cast_scan_flags_fast: same results, about 1.2 ms less a scan at rest; bench #388) or "
                              "oracle (both on the same physics state, compared ray by ray, the loop's result used)")
+    parser.add_argument("--layer-worker", choices=("off", "delay", "thread"), default="off",
+                        help="real-time plan 5.28 G3-1e (live only): the scan's obstacle-layer refresh computed in place "
+                             "(off, default), on the control thread but installed k ticks later (delay: the behaviour "
+                             "change alone) or on a worker thread installed k ticks later (thread); both install early "
+                             "at a barrier and add (k-1)/120 s to the stopping model's latency")
+    parser.add_argument("--layer-worker-k", type=int, default=3,
+                        help="real-time plan 5.28: the install tick after the scan's (2-4 registered)")
+    parser.add_argument("--layer-worker-timeout-s", type=float, default=0.5,
+                        help="real-time plan 5.28 D6: a worker job not done this long after its install began ends the "
+                             "session")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1890,6 +1900,20 @@ def arguments() -> argparse.Namespace:
         parser.error("--live-test-prep-renders and --live-test-prep-wait-s are separate arms (plan 5.24)")
     if not 0.0 <= args.live_test_prep_wait_s <= 30.0:
         parser.error("--live-test-prep-wait-s must be in [0, 30]")
+    if args.layer_worker != "off":
+        if not args.live:
+            parser.error("--layer-worker needs --live (a batch run and the replay gate refresh in place)")
+        if args.near_tracking or args.record_boundary or args.deterministic:
+            parser.error("--layer-worker is not combined with --near-tracking, --record-boundary or --deterministic")
+        if not 2 <= args.layer_worker_k <= 4:
+            parser.error("--layer-worker-k must be 2..4 (real-time plan 5.28 registration)")
+        if not args.layer_worker_timeout_s > 0:
+            parser.error("--layer-worker-timeout-s must be positive")
+        if os.environ.get("FORKLIFT_LIVE_ASYNC_PLAN", "1") == "0":
+            parser.error("--layer-worker needs the asynchronous planning (a synchronous capture steps inside a tick)")
+        if args.layer_worker == "thread" and (os.environ.get("FORKLIFT_KERNELS_DUAL") or os.environ.get("FORKLIFT_PERF_DUMP")):
+            parser.error("--layer-worker thread is not combined with FORKLIFT_KERNELS_DUAL or FORKLIFT_PERF_DUMP (their "
+                         "decorators change process-wide state off the main thread)")
     if args.live_capture_dump == "async" and not args.live:
         parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
@@ -4687,6 +4711,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         from forklift_core.perception.obstacle_grid import AgeErrorTable
 
         layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
+        layer_worker_latency_s_ = 0.0
+        if getattr(args, "layer_worker", "off") != "off":
+            # Real-time plan 5.28 D5: the scan's check takes effect k-1 ticks later than in place; the stopping model
+            # every permission derives from this config (the layer's, the teleop bundle's, the exit and withdrawal
+            # copies, the candidates') carries that latency. The truth evaluation keeps the file's value.
+            layer_worker_latency_s_ = (int(args.layer_worker_k) - 1) / 120.0
+            layer_config["permission"] = dict(layer_config["permission"])
+            layer_config["permission"]["latency_s"] = float(layer_config["permission"]["latency_s"]) \
+                + layer_worker_latency_s_
         age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
         table_problem_ = age_table_problem(age_table, args)
         require(table_problem_ is None, str(table_problem_))
@@ -4722,6 +4755,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted_dir": [],
             "min_allowed": {},
         }
+        if getattr(args, "layer_worker", "off") != "off":
+            # Real-time plan 5.28: the scan refresh's worker (live only). The obstacle dict says it is on (the core
+            # reads the checked scan times then -- never from the layer, a recording proxy in recorded runs).
+            from layer_worker import LayerWorker
+
+            def layer_worker_installed_(job_, check_, info_) -> None:
+                rec_ = info_.pop("record", None)
+                if rec_ is not None:  # the scan's record, completed with its check (obstacle_scan's, made at install)
+                    rec_.update(verified_m=check_.verified_m, blocked=check_.blocked)
+                    obstacle["scans"].append(rec_)
+                if "stamp_s" in info_:
+                    obstacle["checked_stamp"] = info_["stamp_s"]  # the cusp watch's scan id (plan 5.28 D3)
+
+            obstacle["layer"].worker = LayerWorker(obstacle["layer"], args.layer_worker, args.layer_worker_k,
+                                                   timeout_s=args.layer_worker_timeout_s,
+                                                   on_install=layer_worker_installed_)
+            obstacle["layer_worker"] = True
+            obstacle["checked_stamp"] = None
+            state["layer_worker"] = {"mode": args.layer_worker, "k": int(args.layer_worker_k),
+                                     "latency_added_s": layer_worker_latency_s_,
+                                     "timeout_s": float(args.layer_worker_timeout_s)}
         if getattr(args, "start_band_release", "off") == "on":
             # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
             # envelope plus half a sample step); the candidate and teleop permissions copy this config
@@ -6249,6 +6303,8 @@ def drive(S, isaac) -> None:
     # step_world replaces this before the main loop; captures call through it.
     stepper = {"fn": lambda render: world.step(render=render), "tick": 0}
     cells.stepper = stepper
+    if obstacle is not None and obstacle.get("layer_worker"):
+        obstacle["layer"].worker.tick_fn = lambda: stepper["tick"]  # plan 5.28 D4: a barrier install's actual tick
     if args.record_slam:
         import planar_lidar
         import yaml
@@ -7460,6 +7516,19 @@ def drive(S, isaac) -> None:
                 ahead, leg_direction = trackers[ms.phase].leg_ahead()
             else:
                 ahead = np.array([current])
+            worker_ = layer.worker if obstacle.get("layer_worker") else None
+            if worker_ is not None:
+                # Real-time plan 5.28: prepared here (inputs fixed now), computed in place (delay) or on the worker
+                # (thread), installed at the scan tick + k or an earlier barrier; the scan's record waits for its check.
+                job_ = layer.refresh_prepare(stamp, correction, obstacle["version"], current_pose=current,
+                                             path_ahead=ahead, loaded=loaded_now, direction=leg_direction, detach=True)
+                record_ = {"stamp_s": float(stamp), "phase": ms.phase,
+                           "own_beams": {n: int(np.count_nonzero(r[2])) for n, r in raw.items()},
+                           "cast_wall_s": cast_s, "version": obstacle["version"]}
+                worker_.submit(job_, stepper["tick"] - 1,  # the counter moved past this scan's tick already (D4)
+                               extra={"stamp_s": float(stamp), "record": record_})
+                record_["total_wall_s"] = time.monotonic() - started  # the main thread's part
+                return
             check = layer.refresh(
                 stamp, correction, obstacle["version"], current_pose=current, path_ahead=ahead, loaded=loaded_now,
                 direction=leg_direction,
@@ -9204,6 +9273,8 @@ def drive(S, isaac) -> None:
                             (pickup_zone.x_m, pickup_zone.y_m, pickup_zone.length_m, pickup_zone.width_m,
                              pickup_zone.yaw_rad), fix_stamp_s=float(t_), r_fix_m=0.0, rho_m=0.0,
                             frame_correction=tuple(float(v) for v in applied_), kind="zone")]
+                    if obstacle.get("layer_worker"):
+                        obstacle["layer"].barrier("permission_reset")  # plan 5.28 D4: no older result revives it
                     permission_ = obstacle["layer"].permission
                     permission_.path_check, permission_._driven_since_m = None, 0.0
                 if live_perm is not None:
@@ -9530,6 +9601,10 @@ def drive(S, isaac) -> None:
                         if live_timers.long_s is not None:
                             live_timers.sched_mark()  # 5.18 G2-0: a control call's run-queue wait counts from here
                     live_spool.tick(time.monotonic())  # plan D8: before any of this tick's appends
+                    if obstacle is not None and obstacle.get("layer_worker"):
+                        # Real-time plan 5.28 D4: the pending scan refresh installed at its tick, before this tick's
+                        # replies, mission work and permission reads (the physics counter: the tick about to step)
+                        obstacle["layer"].worker.tick_start(stepper["tick"])
                     # Persistent console plan D2: a submit is prepared from where the truck stands (below, once the
                     # control pose is this tick's). Until D4/D5 a mission that ended with the forks possibly in a pocket
                     # refuses the next submit (recovery_required).
@@ -10307,6 +10382,9 @@ def drive(S, isaac) -> None:
                     # while the permission allowed this speed (Codex L0b P2).
                     if acting and abs(truth_speed) > 0.05:
                         pconf = obstacle["layer"].permission.config
+                        if obstacle.get("layer_worker"):  # plan 5.28 D5: the truth keeps the file's latency
+                            pconf = replace(pconf, stopping=replace(
+                                pconf.stopping, latency_s=pconf.stopping.latency_s - state["layer_worker"]["latency_added_s"]))
                         stop_len = pconf.stopping.distance_m(truth_speed)
                         moving_dir_ = 1 if truth_speed > 0 else -1
                         arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, moving_dir_, stop_len, 0.025)[0]
@@ -10790,6 +10868,12 @@ def drive(S, isaac) -> None:
                         branches=branch_probe(),
                     )
             except RuntimeError as exc_:
+                if type(exc_).__name__ == "LayerWorkerFailure":
+                    # Real-time plan 5.28 D6: the wheels stop (steering and lift held), the layer is not touched again,
+                    # and the session ends (not the mission alone)
+                    live_zero_wheels()  # the live stop: the applied command and the stop detector's say so too
+                    state["layer_worker_failure"] = str(exc_)
+                    raise SessionFailure(str(exc_)) from exc_
                 if live is None or isinstance(exc_, SessionFailure) or classify_failure(str(exc_)) == "session":
                     raise
                 live_failed(t, str(exc_), live_tick_out_, live_stepped_, locals().get("applied_commands_", []))
@@ -10799,6 +10883,10 @@ def drive(S, isaac) -> None:
         if ms.phase in ("repeat_capture_done", "repeat_target_not_reached", "near_tracking_stopped", "bottom_deck_refused"):
             return  # bottom_deck_refused: plan 2026-10-19 task 3, a refusal the mission records (mission_result)
         if live is not None:
+            if obstacle is not None and obstacle.get("layer_worker") and obstacle["layer"].worker.failed is None:
+                # Real-time plan 5.28: the last pending refresh installed before the session's end path (its scan record
+                # reaches the spool, which closes below); a failure here raises, and the run fails (Codex 1e-0 P2)
+                obstacle["layer"].barrier("session_end")
             # Persistent console plan D1: each mission was judged at its own end (the results book); the session
             # ends here (at the loop's limit until D7), a mission still on as session_end.
             live.collect_end(book_clock["t"] if book_clock["t"] is not None else 0.0)  # its own reason (Codex P3)
@@ -10997,6 +11085,19 @@ def drive(S, isaac) -> None:
                     walls = [x["total_wall_s"] for x in scans_rec] or [0.0]
                     scan_stats_ = {"scans": len(scans_rec),
                                    "wall_s_per_scan": {"mean": float(np.mean(walls)), "max": float(np.max(walls))}}
+                layer_ok_ = True
+                if obstacle.get("layer_worker"):
+                    # Real-time plan 5.28: the installs kept apart (1e-0's paired waits); after a failure nothing the
+                    # worker may still change is read (D6). The last pending one was installed at the session's end
+                    # (above); a run that ended by an exception leaves it pending (recorded).
+                    worker_ = obstacle["layer"].worker
+                    layer_ok_ = worker_.failed is None and not worker_.pending  # a pending job may still run (D6)
+                    if worker_.failed is not None:
+                        state["success"] = False
+                        state.setdefault("failure_reason", f"layer_worker_failed: {worker_.failed}")
+                    state["layer_worker"]["pending_at_end"] = bool(worker_.pending)
+                    state["layer_worker"].update(worker_.summary())
+                    (args.output / "layer_worker.json").write_text(record_json(worker_.records) + "\n")
                 state["obstacle_layer"].update(
                     {
                         **scan_stats_,
@@ -11037,7 +11138,7 @@ def drive(S, isaac) -> None:
                            if getattr(args, "escape_start_release", "off") == "on" else {}),
                         **({"restart_confirm": obstacle.get("restart_confirm") or {"scans": int(args.restart_confirm_scans)}}
                            if int(getattr(args, "restart_confirm_scans", 0) or 0) > 0 else {}),
-                        "shadow_memory": None if obstacle["layer"].shadow is None else {
+                        "shadow_memory": None if obstacle["layer"].shadow is None or not layer_ok_ else {
                             **obstacle["layer"].shadow.stats,
                             "band_m": obstacle["layer"].shadow.band_m,
                             "premise": "nothing inside the start-up band cells (outline grown by startup_reach_m)",
