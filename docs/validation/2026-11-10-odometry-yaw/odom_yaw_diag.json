@@ -1,0 +1,539 @@
+{
+ "g2a/g2a_06_H_sync": {
+  "geometry": {
+   "wheelbase_m": 0.66,
+   "track_m": 0.53,
+   "wheel_radius_m": 0.125,
+   "max_steering_rad": 0.2617993878,
+   "max_wheel_rate_rad_s": 8.0
+  },
+  "phases": {
+   "approach": {
+    "ticks": 684,
+    "truth_dyaw_rad": 0.029746907713495807,
+    "error_rad": {
+     "A": -0.008093848217556085,
+     "B": -0.00809388816269837,
+     "C": -0.008185069443055897,
+     "D": -0.00818528698497031
+    },
+    "truth_path_m": 2.0897976145865886,
+    "wheel_travel_m": 2.0910720248990735,
+    "fit": {
+     "scale": 0.9228849180649291,
+     "offset_per_m": 0.003851980903404282
+    },
+    "turning_forward": {
+     "ticks": 81,
+     "rear_diff_over_mean": 0.08458985566043925,
+     "track_x_curvature": 0.09402455838187578,
+     "truth_dyaw_rad": 0.017417571014707624,
+     "rear_wheels_dyaw_rad": 0.016862041545364092,
+     "model_dyaw_rad": 0.018510274886598697,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 0.10066717863082886,
+       "centre_forward_m": 0.10021923665655037,
+       "wheel_minus_centre_m": 0.0004479419742784846
+      },
+      "right": {
+       "wheel_m": 0.10960406064987183,
+       "centre_forward_m": 0.10945054918315178,
+       "wheel_minus_centre_m": 0.00015351146672004656
+      },
+      "difference_over_track_rad": -0.0005555292595442226
+     }
+    }
+   },
+   "insert": {
+    "ticks": 1008,
+    "truth_dyaw_rad": -2.3456486558902367e-06,
+    "error_rad": {
+     "A": 0.0003427073168978381,
+     "B": 0.00034271987414044835,
+     "C": 0.0003322313773987982,
+     "D": 0.00033225751011163455
+    },
+    "truth_path_m": 0.415077716984386,
+    "wheel_travel_m": 0.41515086591243744,
+    "fit": {
+     "scale": 1.5073035162864634,
+     "offset_per_m": -0.0012173099254466507
+    }
+   },
+   "extract": {
+    "ticks": 624,
+    "truth_dyaw_rad": -1.549424672118646e-05,
+    "error_rad": {
+     "A": -5.130354859147746e-06,
+     "B": -5.193264246666929e-06,
+     "C": -2.386591990986359e-05,
+     "D": -2.3984803989091265e-05
+    },
+    "truth_path_m": 0.6350437172873297,
+    "wheel_travel_m": 0.6352789188411574
+   },
+   "transport": {
+    "ticks": 13128,
+    "truth_dyaw_rad": -1.4465640929912513,
+    "error_rad": {
+     "A": -0.18433400281365953,
+     "B": -0.18429208590965818,
+     "C": -0.1852648803447139,
+     "D": -0.18522286708210411
+    },
+    "truth_path_m": 26.51447526944743,
+    "wheel_travel_m": 26.427173600573138,
+    "fit": {
+     "scale": 0.920732893005641,
+     "offset_per_m": 0.0025922722140845154
+    },
+    "turning_forward": {
+     "ticks": 5881,
+     "rear_diff_over_mean": -0.05669300888458316,
+     "track_x_curvature": -0.05777092683413606,
+     "truth_dyaw_rad": -1.4378847000244566,
+     "rear_wheels_dyaw_rad": -1.5862812691117685,
+     "model_dyaw_rad": -1.6045980030861613,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.28581452418307,
+       "centre_forward_m": 13.258717404465198,
+       "wheel_minus_centre_m": 0.02709711971787243
+      },
+      "right": {
+       "wheel_m": 12.445085451553833,
+       "centre_forward_m": 12.496638589691436,
+       "wheel_minus_centre_m": -0.05155313813760287
+      },
+      "difference_over_track_rad": -0.14839671293485907
+     }
+    }
+   },
+   "return_home": {
+    "ticks": 8732,
+    "truth_dyaw_rad": 1.9622987696794345,
+    "error_rad": {
+     "A": -0.13440968198705305,
+     "B": -0.13438315015798663,
+     "C": -0.13499492254443712,
+     "D": -0.13497025401161222
+    },
+    "truth_path_m": 29.326142561324197,
+    "wheel_travel_m": 29.22592585320324,
+    "fit": {
+     "scale": 0.9368403172679834,
+     "offset_per_m": 0.0053909320269391455
+    },
+    "turning_forward": {
+     "ticks": 4602,
+     "rear_diff_over_mean": 0.016442924557616544,
+     "track_x_curvature": 0.014584774314378341,
+     "truth_dyaw_rad": 0.9055834146172235,
+     "rear_wheels_dyaw_rad": 0.9048532272847193,
+     "model_dyaw_rad": 0.8446863940010836,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 20.587441732965694,
+       "centre_forward_m": 20.57605821232062,
+       "wheel_minus_centre_m": 0.01138352064507231
+      },
+      "right": {
+       "wheel_m": 21.067013943426595,
+       "centre_forward_m": 21.056017285490086,
+       "wheel_minus_centre_m": 0.01099665793650928
+      },
+      "difference_over_track_rad": -0.0007299296387981687
+     }
+    }
+   }
+  }
+ },
+ "j1_i1/j1_i1_3_off": {
+  "geometry": {
+   "wheelbase_m": 0.66,
+   "track_m": 0.53,
+   "wheel_radius_m": 0.125,
+   "max_steering_rad": 0.2617993878,
+   "max_wheel_rate_rad_s": 8.0
+  },
+  "phases": {
+   "approach": {
+    "ticks": 684,
+    "truth_dyaw_rad": 0.026818826872065507,
+    "error_rad": {
+     "A": -0.003999738924807341,
+     "B": -0.004000885584596665,
+     "C": -0.00404568610262665,
+     "D": -0.00404658323957386
+    },
+    "truth_path_m": 2.0884453707846147,
+    "wheel_travel_m": 2.089325966435023,
+    "fit": {
+     "scale": 0.7884710325989179,
+     "offset_per_m": 0.004824996749042793
+    }
+   },
+   "insert": {
+    "ticks": 1008,
+    "truth_dyaw_rad": -0.00029386877268762837,
+    "error_rad": {
+     "A": 9.466233493763475e-05,
+     "B": 9.471588897103176e-05,
+     "C": 0.00016965987760467232,
+     "D": 0.00016966083617621402
+    },
+    "truth_path_m": 0.4155132479374297,
+    "wheel_travel_m": 0.4155924320220947,
+    "fit": {
+     "scale": 0.8349957035184855,
+     "offset_per_m": -0.0004676990898732973
+    }
+   },
+   "extract": {
+    "ticks": 624,
+    "truth_dyaw_rad": 1.9398536939215644e-05,
+    "error_rad": {
+     "A": 2.5522443808780352e-05,
+     "B": 2.553623965767317e-05,
+     "C": 7.68971845267817e-06,
+     "D": 7.622563810687525e-06
+    },
+    "truth_path_m": 0.6354190011838652,
+    "wheel_travel_m": 0.6356136287238936
+   },
+   "transport": {
+    "ticks": 12624,
+    "truth_dyaw_rad": -1.459853114482308,
+    "error_rad": {
+     "A": -0.17430919312294257,
+     "B": -0.1743099977686533,
+     "C": -0.17646324082297493,
+     "D": -0.17646472700027305
+    },
+    "truth_path_m": 26.566929575803705,
+    "wheel_travel_m": 26.488042370457247,
+    "fit": {
+     "scale": 0.9182558511779771,
+     "offset_per_m": 0.002073241838959736
+    },
+    "turning_forward": {
+     "ticks": 5589,
+     "rear_diff_over_mean": -0.054757507387521574,
+     "track_x_curvature": -0.056071115993063005,
+     "truth_dyaw_rad": -1.3676185250186734,
+     "rear_wheels_dyaw_rad": -1.5086562794474991,
+     "model_dyaw_rad": -1.5304157198329085,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.003705684581789,
+       "centre_forward_m": 12.977197926184164,
+       "wheel_minus_centre_m": 0.026507758397624315
+      },
+      "right": {
+       "wheel_m": 12.204117856474614,
+       "centre_forward_m": 12.252360177786844,
+       "wheel_minus_centre_m": -0.048242321312230274
+      },
+      "difference_over_track_rad": -0.14103788624500865
+     }
+    }
+   },
+   "return_home": {
+    "ticks": 7455,
+    "truth_dyaw_rad": 1.9061630490137171,
+    "error_rad": {
+     "A": -0.11222359864062281,
+     "B": -0.11225716541623076,
+     "C": -0.1127086923077818,
+     "D": -0.11274137494592051
+    },
+    "truth_path_m": 27.04949041872168,
+    "wheel_travel_m": 26.94749446831825,
+    "fit": {
+     "scale": 0.9330111237709195,
+     "offset_per_m": 0.005720071669476953
+    },
+    "turning_forward": {
+     "ticks": 4632,
+     "rear_diff_over_mean": 0.01262854834098818,
+     "track_x_curvature": 0.00997256468007964,
+     "truth_dyaw_rad": 0.7889749828820947,
+     "rear_wheels_dyaw_rad": 0.791010211380023,
+     "model_dyaw_rad": 0.7188776767990432,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 20.581022645266316,
+       "centre_forward_m": 20.577456287266045,
+       "wheel_minus_centre_m": 0.0035663580002704975
+      },
+      "right": {
+       "wheel_m": 21.000258057297728,
+       "centre_forward_m": 20.99561291079284,
+       "wheel_minus_centre_m": 0.004645146504888231
+      },
+      "difference_over_track_rad": 0.002035450008712705
+     }
+    }
+   }
+  }
+ },
+ "j6_c3off_b/j6_c3off_b_1_off": {
+  "geometry": {
+   "wheelbase_m": 0.66,
+   "track_m": 0.53,
+   "wheel_radius_m": 0.125,
+   "max_steering_rad": 0.2617993878,
+   "max_wheel_rate_rad_s": 8.0
+  },
+  "phases": {
+   "approach": {
+    "ticks": 684,
+    "truth_dyaw_rad": 0.026758185748543342,
+    "error_rad": {
+     "A": -0.003772060081128941,
+     "B": -0.0037710756242130446,
+     "C": -0.003830793719142321,
+     "D": -0.003829630005987239
+    },
+    "truth_path_m": 2.091955810014759,
+    "wheel_travel_m": 2.0928328206115445,
+    "fit": {
+     "scale": 0.7858903469832925,
+     "offset_per_m": 0.00475601312691441
+    }
+   },
+   "insert": {
+    "ticks": 996,
+    "truth_dyaw_rad": -0.00032036893730467975,
+    "error_rad": {
+     "A": 8.309108024053598e-05,
+     "B": 8.309099048863303e-05,
+     "C": 0.00017088945635281044,
+     "D": 0.00017085720290841512
+    },
+    "truth_path_m": 0.4149775138256409,
+    "wheel_travel_m": 0.4150557294487953,
+    "fit": {
+     "scale": 0.8121105508690533,
+     "offset_per_m": -0.00048814713370533833
+    }
+   },
+   "extract": {
+    "ticks": 636,
+    "truth_dyaw_rad": 0.0003356559012913235,
+    "error_rad": {
+     "A": -1.8118403204415837e-05,
+     "B": -1.819594004099078e-05,
+     "C": -3.741593076819381e-05,
+     "D": -3.758510745307771e-05
+    },
+    "truth_path_m": 0.6359303665749417,
+    "wheel_travel_m": 0.6361395503070693
+   },
+   "transport": {
+    "ticks": 12876,
+    "truth_dyaw_rad": -1.4453936236431633,
+    "error_rad": {
+     "A": -0.17822098376925322,
+     "B": -0.17817411230476954,
+     "C": -0.17935655113216198,
+     "D": -0.17930884260545255
+    },
+    "truth_path_m": 26.483290201850032,
+    "wheel_travel_m": 26.399637372273997,
+    "fit": {
+     "scale": 0.9189551557740617,
+     "offset_per_m": 0.001998009064655034
+    },
+    "turning_forward": {
+     "ticks": 5769,
+     "rear_diff_over_mean": -0.05435823556285662,
+     "track_x_curvature": -0.05511165360509151,
+     "truth_dyaw_rad": -1.3964727247579123,
+     "rear_wheels_dyaw_rad": -1.5521522102934617,
+     "model_dyaw_rad": -1.5570691182490837,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.02146686761386,
+       "centre_forward_m": 12.992011992232388,
+       "wheel_minus_centre_m": 0.029454875381471624
+      },
+      "right": {
+       "wheel_m": 12.198826196158326,
+       "centre_forward_m": 12.251881526302896,
+       "wheel_minus_centre_m": -0.05305533014456998
+      },
+      "difference_over_track_rad": -0.155679633068003
+     }
+    }
+   },
+   "return_home": {
+    "ticks": 9576,
+    "truth_dyaw_rad": -4.81681394679189,
+    "error_rad": {
+     "A": -0.23832677037373973,
+     "B": -0.23832774931320966,
+     "C": -0.23841815276741674,
+     "D": -0.23842041312478113
+    },
+    "truth_path_m": 29.292883625686997,
+    "wheel_travel_m": 29.196310479417285,
+    "fit": {
+     "scale": 0.9163829650395879,
+     "offset_per_m": 0.0018843130254223505
+    },
+    "turning_forward": {
+     "ticks": 3455,
+     "rear_diff_over_mean": -0.09943291119150056,
+     "track_x_curvature": -0.10497578957236209,
+     "truth_dyaw_rad": -2.495888668099246,
+     "rear_wheels_dyaw_rad": -2.6513499949263846,
+     "model_dyaw_rad": -2.7582068382855436,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 14.179872899923978,
+       "centre_forward_m": 14.14453997470686,
+       "wheel_minus_centre_m": 0.03533292521711928
+      },
+      "right": {
+       "wheel_m": 12.774657402612995,
+       "centre_forward_m": 12.821719286110028,
+       "wheel_minus_centre_m": -0.04706188349703311
+      },
+      "difference_over_track_rad": -0.15546190323424977
+     }
+    }
+   }
+  }
+ },
+ "g2a/g2a_01_H_sync": {
+  "geometry": {
+   "wheelbase_m": 0.66,
+   "track_m": 0.53,
+   "wheel_radius_m": 0.125,
+   "max_steering_rad": 0.2617993878,
+   "max_wheel_rate_rad_s": 8.0
+  },
+  "phases": {
+   "approach": {
+    "ticks": 684,
+    "truth_dyaw_rad": 0.021778094963094376,
+    "error_rad": {
+     "A": -0.006155125748198081,
+     "B": -0.006154601912253383,
+     "C": -0.006248879621849975,
+     "D": -0.006248468365327079
+    },
+    "truth_path_m": 2.0920095875762974,
+    "wheel_travel_m": 2.092955397563525,
+    "fit": {
+     "scale": 0.8068376258560369,
+     "offset_per_m": 0.004505480199483555
+    }
+   },
+   "insert": {
+    "ticks": 1008,
+    "truth_dyaw_rad": -7.717278568357758e-05,
+    "error_rad": {
+     "A": 0.00011800205956579178,
+     "B": 0.00011819458103544544,
+     "C": 0.00020648806736960144,
+     "D": 0.00020653283796338422
+    },
+    "truth_path_m": 0.41523377195474365,
+    "wheel_travel_m": 0.415318101644516,
+    "fit": {
+     "scale": 1.0804630337964523,
+     "offset_per_m": -0.0005291179460089112
+    }
+   },
+   "extract": {
+    "ticks": 624,
+    "truth_dyaw_rad": 9.14800061663952e-05,
+    "error_rad": {
+     "A": -6.249407962106064e-05,
+     "B": -6.25649012438527e-05,
+     "C": -3.476767446078059e-05,
+     "D": -3.475965590044681e-05
+    },
+    "truth_path_m": 0.6349494788367473,
+    "wheel_travel_m": 0.6351616019990782
+   },
+   "transport": {
+    "ticks": 13092,
+    "truth_dyaw_rad": -1.4528927681798591,
+    "error_rad": {
+     "A": -0.1437424449607514,
+     "B": -0.14374853147290922,
+     "C": -0.14562496924805401,
+     "D": -0.1456321624983139
+    },
+    "truth_path_m": 26.48471230602181,
+    "wheel_travel_m": 26.399552876433987,
+    "fit": {
+     "scale": 0.9170571076206739,
+     "offset_per_m": 0.0009443132942549691
+    },
+    "turning_forward": {
+     "ticks": 5766,
+     "rear_diff_over_mean": -0.04604829965544324,
+     "track_x_curvature": -0.047057100351368536,
+     "truth_dyaw_rad": -1.2819098945862482,
+     "rear_wheels_dyaw_rad": -1.4326742238659669,
+     "model_dyaw_rad": -1.4445264002414087,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 13.034823262801194,
+       "centre_forward_m": 13.005701068284342,
+       "wheel_minus_centre_m": 0.029122194516851607
+      },
+      "right": {
+       "wheel_m": 12.275505924152231,
+       "centre_forward_m": 12.326288893467812,
+       "wheel_minus_centre_m": -0.05078296931558057
+      },
+      "difference_over_track_rad": -0.1507644600611928
+     }
+    }
+   },
+   "return_home": {
+    "ticks": 9312,
+    "truth_dyaw_rad": 1.8961024270812668,
+    "error_rad": {
+     "A": -0.178653440945999,
+     "B": -0.17864854465566826,
+     "C": -0.17827882206185208,
+     "D": -0.1782748055694583
+    },
+    "truth_path_m": 29.700255972121326,
+    "wheel_travel_m": 29.574736725762328,
+    "fit": {
+     "scale": 0.9311520980394761,
+     "offset_per_m": 0.005735317835018661
+    },
+    "turning_forward": {
+     "ticks": 3402,
+     "rear_diff_over_mean": 0.0004793605554752715,
+     "track_x_curvature": -0.002430531823115629,
+     "truth_dyaw_rad": 0.25157942001056854,
+     "rear_wheels_dyaw_rad": 0.2270337829094109,
+     "model_dyaw_rad": 0.16785394356631977,
+     "rear_longitudinal_slip": {
+      "left": {
+       "wheel_m": 14.611854936543189,
+       "centre_forward_m": 14.59935705246793,
+       "wheel_minus_centre_m": 0.01249788407525898
+      },
+      "right": {
+       "wheel_m": 14.732182841485177,
+       "centre_forward_m": 14.732694087477359,
+       "wheel_minus_centre_m": -0.0005112459921825518
+      },
+      "difference_over_track_rad": -0.024545528429134964
+     }
+    }
+   }
+  }
+ }
+}
