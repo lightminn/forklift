@@ -433,7 +433,7 @@ def clock_ok(probe: dict, runtime_clock) -> bool:
     pc = (probe or {}).get("clock") or {}
     rc = runtime_clock if isinstance(runtime_clock, dict) else {}
     keys = ("boot_id", "time_ns")
-    return all(pc.get(k) is not None and pc.get(k) == rc.get(k) for k in keys)
+    return all(isinstance(pc.get(k), str) and pc.get(k) and pc.get(k) == rc.get(k) for k in keys)
 
 
 def h3_direct(sess: dict, request_id="r4") -> dict:
@@ -445,9 +445,17 @@ def h3_direct(sess: dict, request_id="r4") -> dict:
         return {"found": False, "ordered": False}
     entries = sess.get("entries") or []
     probe = sess.get("probe") or {}
-    applied = next((e for e in entries if "mission_commands" in e and any(
-        c.get("request_id") == request_id and c.get("command") == "cancel" and c.get("accepted") is True
-        for c in e["mission_commands"])), None)
+    hits = [(e, c) for e in entries if "mission_commands" in e for c in e["mission_commands"]
+            if c.get("request_id") == request_id and c.get("command") == "cancel" and c.get("accepted") is True]
+    applied = hits[0][0] if hits else None
+    # the same session epoch (the runtime's start record, the probe's session) and the cancelled mission (the probe's
+    # cancel reply, every accepted record of this request id): anything else or ambiguous fails (registration 1.1)
+    run_epoch = next((e.get("session_epoch") for e in entries if e.get("event") == "start"), None)
+    probe_epoch = (probe.get("session") or {}).get("session_epoch")
+    target = next(((r.get("cancel_reply") or {}).get("mission_id") for r in probe.get("missions_run") or []
+                   if (r.get("cancel_reply") or {}).get("request_id") == request_id), None)
+    missions = {c.get("mission_id") for _, c in hits}
+    joined = (run_epoch is not None and run_epoch == probe_epoch and target is not None and missions == {target})
     rep_ = next((e for e in _replies(probe, "mission_cancel") if e.get("request_id") == request_id), None)
     receipt = next((e["mono"] for e in entries if e.get("t") == "mission_cancel" and e.get("request_id") == request_id
                     and "mono" in e), None)
@@ -455,12 +463,14 @@ def h3_direct(sess: dict, request_id="r4") -> dict:
     a_mono = None if applied is None else applied.get("mono")
     sent = None if rep_ is None else rep_.get("sent_mono")
     reply = None if rep_ is None else rep_.get("reply_mono")
-    ordered = (clock and None not in (a_mono, sent, reply) and float(sent) <= float(a_mono) <= float(reply))
+    ordered = (clock and joined and None not in (a_mono, sent, reply) and float(sent) <= float(a_mono) <= float(reply))
     sub = None
     if applied is not None and applied.get("tick_t") is not None:
         steps = sess.get("steps") or {}
         sub = min((v[0] for v in steps.values() if v[1] >= float(applied["tick_t"])), default=None)
     return {"found": applied is not None, "applied_mono": a_mono, "sent": sent, "reply": reply, "clock_ok": clock,
+            "joined": joined, "run_epoch": run_epoch, "probe_epoch": probe_epoch, "cancelled_mission": target,
+            "applied_missions": sorted(m for m in missions if m is not None),
             "ordered": bool(ordered),
             "receipt_mono": receipt,
             "receipt_ordered": (None if None in (receipt, a_mono, sent)
@@ -936,7 +946,8 @@ def submit_attempts(probe: dict) -> dict:
     for a start wait, and the very next attempt is an ack for the same pallet, destination and item -- at most one in
     the whole session. Incomplete: a reply or timeout without its ``sent`` event or attempt fields, a sent event twice
     for one id, or an epoch's attempt_seq not 1..n. Incomplete exempts nothing."""
-    attempts, problems, seen = {}, [], set()
+    attempts, problems, seen, orphans = {}, [], set(), []
+    need = ("session_epoch", "attempt_seq", "pallet_id", "destination_id")
     for e in (probe or {}).get("events") or []:
         if e.get("kind") != "mission_submit":
             continue
@@ -945,13 +956,26 @@ def submit_attempts(probe: dict) -> dict:
             if rid in seen:
                 problems.append(f"{rid}: sent twice")
             seen.add(rid)
+            if any(e.get(k) is None for k in need):
+                problems.append(f"{rid}: sent without {[k for k in need if e.get(k) is None]}")
             attempts[rid] = {"request_id": rid, "session_epoch": e.get("session_epoch"), "seq": e.get("attempt_seq"),
                              "pallet_id": e.get("pallet_id"), "destination_id": e.get("destination_id"),
                              "item_id": e.get("item_id"), "t": None, "reason": None, "mono": e.get("mono")}
         elif e.get("event") in ("reply", "reply_timeout"):
             if e.get("attempt_seq") is None or rid not in attempts:
                 problems.append(f"{rid}: {e.get('event')} without its sent event or attempt fields")
+                if e.get("event") == "reply" and e.get("t") == "reject":  # an observed refusal is kept (Codex P2)
+                    orphans.append({"request_id": rid, "session_epoch": e.get("session_epoch"),
+                                    "seq": e.get("attempt_seq"), "pallet_id": e.get("pallet_id"),
+                                    "destination_id": e.get("destination_id"), "item_id": e.get("item_id"),
+                                    "t": "reject", "reason": e.get("reason"), "mono": e.get("mono"),
+                                    "reply_mono": e.get("reply_mono"), "orphan": True})
                 continue
+            a0 = attempts[rid]
+            if ((e.get("session_epoch"), e.get("attempt_seq"), e.get("pallet_id"), e.get("destination_id"),
+                 e.get("item_id")) != (a0["session_epoch"], a0["seq"], a0["pallet_id"], a0["destination_id"],
+                                       a0["item_id"])):
+                problems.append(f"{rid}: {e.get('event')} contradicts its sent event")
             if e.get("event") == "reply":
                 attempts[rid].update(t=e.get("t"), reason=e.get("reason"), reply_mono=e.get("reply_mono"))
     by_epoch: dict = {}
@@ -979,13 +1003,15 @@ def submit_attempts(probe: dict) -> dict:
                                 else round(nxt["mono"] - first["mono"], 3)})
     exempt = {r["reject_request_id"] for r in retries}
     rejects = [a for a in ordered if a["t"] == "reject" and a["request_id"] not in exempt]
-    return {"attempts": ordered, "complete": complete, "problems": problems, "retries": retries, "rejects": rejects}
+    return {"attempts": ordered, "complete": complete, "problems": problems, "retries": retries, "rejects": rejects,
+            "orphans": orphans}
 
 
 def _submit_evidence(sess: dict, att: dict) -> bool:
     """Any sign a mission was submitted: a probe attempt, a row started or refused, a runtime submit record, a
     mission folder (rv4 registration 1.2's pre-submit expected end needs none of them)."""
-    if att["attempts"] or any(e.get("kind") == "mission_submit" for e in (sess.get("probe") or {}).get("events") or []):
+    if att["attempts"] or att.get("orphans") or any(e.get("kind") == "mission_submit"
+                                                     for e in (sess.get("probe") or {}).get("events") or []):
         return True
     if any(r.get("mission_id") or r.get("start") in ("confirmed", "unknown", "rejected") for r in sess.get("rows") or []):
         return True
@@ -995,38 +1021,61 @@ def _submit_evidence(sess: dict, att: dict) -> bool:
 
 
 def _expected_cargo_held(sess: dict, att: dict) -> set:
-    """Lifecycle 2: the two planned resubmits after the transport cancel, refused cargo_held -- the first two such
-    attempts answered after the cancel's ack; any other cargo_held is a failure."""
+    """Lifecycle 2: the two planned resubmits after the transport cancel, refused cargo_held -- matched in order to the
+    probe's planned items after the cancelled one (missions_run), each sent after the cancel's ack; any other
+    cargo_held is a failure (Codex P2)."""
     if not sess["name"].startswith("life2_"):
         return set()
-    cancel = next((e.get("reply_mono", e.get("mono")) for e in _replies(sess.get("probe") or {}, "mission_cancel")
-                   if e.get("t") == "ack"), None)
-    if cancel is None:
+    probe = sess.get("probe") or {}
+    runs = probe.get("missions_run") or []
+    k = next((i for i, r in enumerate(runs) if (r.get("cancel_reply") or {}).get("t") == "ack"), None)
+    if k is None:
         return set()
-    after = [a for a in att["attempts"] if a["t"] == "reject" and a["reason"] == "cargo_held"
-             and a.get("reply_mono") is not None and a["reply_mono"] > cancel]
-    return {a["request_id"] for a in after[:2]}
+    cancel_id = runs[k]["cancel_reply"].get("request_id")
+    cancel = next((e.get("reply_mono", e.get("mono")) for e in _replies(probe, "mission_cancel")
+                   if e.get("t") == "ack" and e.get("request_id") == cancel_id), None)
+    planned = [(r.get("pallet_id"), r.get("destination_id")) for r in runs[k + 1:k + 3]]
+    if cancel is None or len(planned) != 2:
+        return set()
+    later = [a for a in att["attempts"] if a.get("mono") is not None and a["mono"] > cancel]
+    waived, after = set(), -1
+    for target in planned:  # each planned target at most once, in the planned order
+        j = next((i for i, a in enumerate(later) if i > after and (a["pallet_id"], a["destination_id"]) == target
+                  and a["t"] == "reject" and a["reason"] == "cargo_held"), None)
+        if j is not None:
+            waived.add(later[j]["request_id"])
+            after = j
+    return waived
 
 
 def rv4_failures(sess: dict, life3_ended_per_record: bool = False) -> list:
     """rv3's failure list with its row-level refusals replaced by attempt-level rejects (each once), plus one
-    start_unknown for an incomplete attempt sequence or a session with no probe events -- unless lifecycle 3 ended on
-    the record before any submit evidence (rv4 registration 1.2)."""
-    rows = [r for r in sess.get("rows") or [] if r.get("start") != "rejected"]
-    out = rv3_failures({**sess, "rows": rows}, life3_ended_per_record=life3_ended_per_record)
-    att = submit_attempts(sess.get("probe") or {})
+    start_unknown for an incomplete attempt record -- an incomplete sequence, no probe events, or submit evidence
+    (rows, runtime submits, mission folders) with no submit attempt recorded -- unless lifecycle 3 ended on the record
+    before any submit evidence (rv4 registration 1.2). An incomplete record exempts nothing and keeps every refusal it
+    saw: attempt and orphan rejects, and the rows' refusals when no reject event was seen at all (Codex P2)."""
     name = sess["name"]
-    pre_submit_end = (name.startswith("life3_") and life3_ended_per_record and not _submit_evidence(sess, att))
+    att = submit_attempts(sess.get("probe") or {})
     events = (sess.get("probe") or {}).get("events") or []
+    evidence = _submit_evidence(sess, att)
+    pre_submit_end = name.startswith("life3_") and life3_ended_per_record and not evidence
+    why = None
     if not pre_submit_end:
         if not events:
-            out.append({"session": name, "mission": None, "outcome": "start_unknown", "why": "no_probe_events",
-                        "row": None})
+            why = "no_probe_events"
         elif not att["complete"]:
-            out.append({"session": name, "mission": None, "outcome": "start_unknown",
-                        "why": "attempt_sequence_incomplete", "problems": att["problems"], "row": None})
-    waived = _expected_cargo_held(sess, att)
-    for a in att["rejects"] if att["complete"] else [a for a in att["attempts"] if a["t"] == "reject"]:
+            why = "attempt_sequence_incomplete"
+        elif evidence and not att["attempts"]:
+            why = "submit_evidence_without_attempts"
+    observed = [a for a in att["attempts"] if a["t"] == "reject"] + att["orphans"]
+    keep_row_refusals = why is not None and not observed
+    rows = [r for r in sess.get("rows") or [] if keep_row_refusals or r.get("start") != "rejected"]
+    out = rv3_failures({**sess, "rows": rows}, life3_ended_per_record=life3_ended_per_record)
+    if why is not None:
+        out.append({"session": name, "mission": None, "outcome": "start_unknown", "why": why,
+                    "problems": att["problems"], "row": None})
+    waived = _expected_cargo_held(sess, att) if why is None else set()
+    for a in att["rejects"] if why is None else observed:
         if a["request_id"] in waived:
             continue
         out.append({"session": name, "mission": None, "outcome": "rejected", "reason": a["reason"],
@@ -1054,6 +1103,8 @@ def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict
         for k in PLANT_GLOBAL + PLANT_SCENE:
             if r.get(k) is None:
                 problems.append(f"{n}: {k} missing")
+        if (r.get("pallet_mass") or {}).get("kg") is None:
+            problems.append(f"{n}: pallet_mass.kg missing")
         values[n] = r
     def same(keyf, group):
         vals = {json.dumps(keyf(values[n]), sort_keys=True, default=str) for n in group}
@@ -1076,6 +1127,14 @@ def plant_check(sessions: dict, scene_of: dict, manifest: dict, skip=()) -> dict
             problems.append(f"{k} differs from the manifest")
     return {"ok": not problems, "problems": problems,
             "values": {k: values[names[0]].get(k) for k in PLANT_GLOBAL} if names else {}}
+
+
+def rv4_outcome(combined: dict, plant_ok: bool) -> dict:
+    """rv4 registration 3: a plant gate failure leaves the batch unjudged -- to the lead, whatever else holds."""
+    if plant_ok:
+        return {**combined, "judged": True}
+    return {**combined, "to_lead_by": list(combined.get("to_lead_by") or []) + ["plant"], "outcome": "to_lead",
+            "judged": False}
 
 
 FAMILY_YAW_RAD, FAMILY_BACK_S = 0.10, 2.0
@@ -1109,11 +1168,11 @@ def family_346(sess: dict, failure: dict, scene: str) -> dict:
             and (tf.get("tracking") or {}).get("failure") == "cross_track"):
         return None
     row = next((r for r in sess.get("rows") or [] if r.get("mission_id") == mid), {})
-    if scene != "random_m" or row.get("pallet_id") != "P-5" or row.get("destination_id") not in (None, "D-2"):
+    if scene != "random_m" or row.get("pallet_id") != "P-5" or row.get("destination_id") != "D-2":
         return {"class": "unclassifiable", "why": "not the random_m P-5 -> D-2 transport"}
     try:
         m = _nf_measure()(str(sess["run"]), mid)
-    except (OSError, KeyError, StopIteration, ValueError, TypeError) as exc:
+    except Exception as exc:  # noqa: BLE001 -- a report column: an extractor failure is unclassifiable, never fatal
         m = {"error": repr(exc)[:200]}
     return {"class": family_346_of(m), "flip_yaw_peak_rad": m.get("flip_yaw_peak_rad"),
             "back_within_0_05_s": m.get("back_within_0_05_s")}
@@ -1153,8 +1212,8 @@ def evaluate_rv4(out_dir: Path) -> dict:
     plant = plant_check(sess, scene_of, rv4.get("plant") or {}, skip=skip)
     checks = {"slam_choice": map_bad, "image_id": image_bad, "occupied_dumps": dump_bad,
               "plant": [] if plant["ok"] else plant["problems"]}
-    combined = rv3_outcome(main_v, conf_v, disposition,
-                           checks_ok=not (map_bad or image_bad or dump_bad or not plant["ok"]))
+    combined = rv4_outcome(rv3_outcome(main_v, conf_v, disposition, checks_ok=not (map_bad or image_bad or dump_bad)),
+                           plant_ok=plant["ok"])
     family = {n: [c for f in fs if (c := family_346(sess[n], f, scene_of[n])) is not None]
               for n, fs in fails.items() if fs}
     return {"main": main_v, "confirm": conf_v, "failures": {n: f for n, f in fails.items() if f},

@@ -17,17 +17,19 @@ CLOCK = {"boot_id": "b", "time_ns": "time:[1]"}
 # --- H3 -------------------------------------------------------------------------------------------------------------
 def h3_sess(*, sent=10.0, applied=10.5, reply=11.0, receipt=10.4, accepted=True, step_mono=11.2, probe_clock=CLOCK,
             run_clock=CLOCK, extra_commands=()):
-    entries = []
+    entries = [{"event": "start", "session_epoch": 5, "mono": 1.0}]
     if receipt is not None:
         entries.append({"mono": receipt, "t": "mission_cancel", "request_id": "r4"})
     if applied is not None:
         entries.append({"mono": applied, "tick_t": 52.1, "mission_commands": [
-            {"t": 52.1, "command": "cancel", "request_id": "r4", "accepted": accepted}, *extra_commands]})
+            {"t": 52.1, "command": "cancel", "request_id": "r4", "accepted": accepted, "mission_id": "m1"},
+            *extra_commands]})
     events = []
     if reply is not None:
         events.append({"event": "reply", "kind": "mission_cancel", "request_id": "r4", "t": "ack",
                        "sent_mono": sent, "reply_mono": reply, "mono": reply})
-    probe = {"events": events}
+    probe = {"events": events, "session": {"session_epoch": 5},
+             "missions_run": [{"cancel_reply": {"t": "ack", "request_id": "r4", "mission_id": "m1"}}]}
     if probe_clock is not None:
         probe["clock"] = probe_clock
     return {"entries": entries, "probe": probe, "steps": {1: (step_mono, 52.2, True)}, "runtime_clock": run_clock}
@@ -61,7 +63,7 @@ def test_h3_direct_refused_cancel_only_counts_as_missing():
 def test_h3_direct_takes_the_first_of_two_records():
     s = h3_sess(applied=10.5)
     s["entries"].append({"mono": 12.0, "mission_commands": [{"command": "cancel", "request_id": "r4",
-                                                              "accepted": True}]})
+                                                              "accepted": True, "mission_id": "m1"}]})
     assert V.h3_direct(s)["applied_mono"] == 10.5
 
 
@@ -175,17 +177,18 @@ def test_a_final_reject_is_counted_once_as_an_attempt():
 
 
 def test_life2_cargo_held_only_the_two_planned_after_the_cancel():
-    cancel = {"event": "reply", "kind": "mission_cancel", "request_id": "r4", "t": "ack", "reply_mono": 5.0, "mono": 5.0}
-    ev = probe(att("r3", 1, "ack", pallet="P-4", mono=1), extra=[cancel])["events"]
-    ev += probe(att("r5", 2, "reject", "cargo_held", mono=6), att("r6", 3, "reject", "cargo_held", mono=7))["events"]
     rows = [_row("m1", "P-4", "cancelled", "operator")]
-    assert [x for x in V.rv4_failures(fsess("life2_random_m_held", rows, ev)) if x["outcome"] == "rejected"] == []
-    ev3 = ev + probe(att("r7", 4, "reject", "cargo_held", mono=8))["events"]
-    assert [x["attempt_request_id"] for x in V.rv4_failures(fsess("life2_random_m_held", rows, ev3))
-            if x["outcome"] == "rejected"] == ["r7"]
-    early = probe(att("r3", 1, "reject", "cargo_held", pallet="P-4", mono=1), extra=[cancel])["events"]
-    assert [x["attempt_request_id"] for x in V.rv4_failures(fsess("life2_random_m_held", rows, early))
-            if x["outcome"] == "rejected"] == ["r3"]
+
+    def rej(ev):
+        s_ = fsess("life2_random_m_held", rows, ev)
+        s_["probe"] = life2_probe_extra(ev)
+        return [x["attempt_request_id"] for x in V.rv4_failures(s_) if x["outcome"] == "rejected"]
+    ev = life2_events()
+    assert rej(ev) == []
+    ev3 = ev + probe(att("r7", 4, "reject", "cargo_held", pallet="P-4", mono=8))["events"]
+    assert rej(ev3) == ["r7"]  # a third cargo_held
+    no_plan = fsess("life2_random_m_held", rows, ev)  # no missions_run: nothing is waived
+    assert [x["attempt_request_id"] for x in V.rv4_failures(no_plan) if x["outcome"] == "rejected"] == ["r5", "r6"]
 
 
 def test_an_incomplete_sequence_adds_one_start_unknown():
@@ -260,3 +263,124 @@ def test_family_346_predicate():
     assert V.family_346_of({"flip_yaw_peak_rad": -0.12, "back_within_0_05_s": 1.5}) == "not_family"
     assert V.family_346_of({"error": "x"}) == "unclassifiable"
     assert V.family_346_of({"flip_yaw_peak_rad": None}) == "unclassifiable"
+
+
+# --- Codex implementation review round 1 ------------------------------------------------------------------------------
+def test_attempt_fields_missing_or_reply_contradicting_its_send_is_incomplete():
+    bare = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))
+    for e in bare["events"]:
+        e.pop("pallet_id")
+    assert V.submit_attempts(bare)["complete"] is False
+    noepoch = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))
+    for e in noepoch["events"]:
+        e["session_epoch"] = None
+    assert V.submit_attempts(noepoch)["complete"] is False
+    contra = probe(att("r2", 1, "reject", "not_stopped"), att("r3", 2, "ack", mono=2))
+    contra["events"][1]["pallet_id"] = "P-9"  # the reply names another target than its send
+    a = V.submit_attempts(contra)
+    assert a["complete"] is False and a["retries"] == []
+
+
+def test_an_incomplete_sequence_keeps_the_rejects_it_saw():
+    ev = probe(att("r2", 1, "reject", "busy_x", sent=False), att("r3", 2, "ack", mono=2))["events"]
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", [_row("m1", "P-1", "done")], ev))
+    assert {x["outcome"] for x in f} == {"start_unknown", "rejected"}
+    assert [x.get("attempt_request_id") for x in f if x["outcome"] == "rejected"] == ["r2"]
+
+
+def test_rows_with_submit_evidence_and_no_submit_events_keep_the_row_refusal():
+    rows = [{**_row(None, "P-1", None, start="rejected"), "reject_reason": "busy_x"}, _row("m2", "P-2", "done"),
+            _row("m3", "P-3", "done")]
+    f = V.rv4_failures(fsess("ab_line_m_s0_B", rows, [{"event": "reached", "label": "welcome"}]))
+    assert {x["outcome"] for x in f} == {"start_unknown", "rejected"}
+
+
+def h3_full(**kw):
+    return h3_sess(**kw)
+
+
+def test_h3_direct_requires_the_same_epoch_and_mission():
+    assert V.h3_direct(h3_full())["ordered"] is True
+    other_epoch = h3_full()
+    other_epoch["entries"][0]["session_epoch"] = 6
+    assert V.h3_direct(other_epoch)["ordered"] is False
+    other_mission = h3_full()
+    other_mission["probe"]["missions_run"][0]["cancel_reply"]["mission_id"] = "m2"
+    assert V.h3_direct(other_mission)["ordered"] is False
+
+
+def test_h3_direct_two_accepted_records_for_different_missions_is_ambiguous():
+    s = h3_full()
+    s["entries"].append({"mono": 10.6, "mission_commands": [{"command": "cancel", "request_id": "r4", "accepted": True,
+                                                              "mission_id": "m2"}]})
+    assert V.h3_direct(s)["ordered"] is False
+
+
+def test_clock_values_must_be_non_empty():
+    empty = {"boot_id": "", "time_ns": ""}
+    assert V.h3_direct(h3_full(probe_clock=empty, run_clock=empty))["clock_ok"] is False
+
+
+def life2_events(targets=(("P-4", "D-1"), ("P-5", "D-2")), sent_before_cancel=False):
+    cancel = {"event": "reply", "kind": "mission_cancel", "request_id": "r4", "t": "ack", "reply_mono": 5.0, "mono": 5.0}
+    ev = probe(att("r3", 1, "ack", pallet="P-4", mono=1), extra=[cancel])["events"]
+    for i, (pal, dest) in enumerate(targets):
+        mono = 4.0 if sent_before_cancel and i == 0 else 6.0 + i
+        ev += probe(att(f"r{5 + i}", 2 + i, "reject", "cargo_held", pallet=pal, dest=dest, mono=mono))["events"]
+    return ev
+
+
+def life2_probe_extra(ev):
+    return {"events": ev, "missions_run": [
+        {"pallet_id": "P-4", "destination_id": "D-1", "cancel_reply": {"t": "ack", "request_id": "r4", "mission_id": "m1"}},
+        {"pallet_id": "P-4", "destination_id": "D-1"}, {"pallet_id": "P-5", "destination_id": "D-2"}]}
+
+
+def test_life2_cargo_held_waived_only_for_the_planned_targets_sent_after_the_cancel():
+    rows = [_row("m1", "P-4", "cancelled", "operator")]
+
+    def rej(ev):
+        s = fsess("life2_random_m_held", rows, ev)
+        s["probe"] = life2_probe_extra(ev)
+        return [x["attempt_request_id"] for x in V.rv4_failures(s) if x["outcome"] == "rejected"]
+    assert rej(life2_events()) == []
+    assert rej(life2_events(targets=(("P-4", "D-1"), ("P-3", "D-3")))) == ["r6"]  # not the planned second target
+    assert rej(life2_events(sent_before_cancel=True)) == ["r5"]  # sent before the cancel's ack
+
+
+def test_plant_gate_refuses_a_missing_pallet_mass_kg():
+    sess = {"a": {"result": plant_result("x", pallet_mass={"engine_usd_kg": {}})},
+            "b": {"result": plant_result("x", pallet_mass={"engine_usd_kg": {}})}}
+    assert V.plant_check(sess, {"a": "line_m", "b": "line_m"}, MANIFEST)["ok"] is False
+
+
+def test_a_plant_failure_sends_the_reading_to_the_lead_even_when_a_criterion_holds():
+    combined = {"criteria": {"lifecycle_2": False}, "held_by": ["lifecycle_2"], "to_lead_by": [], "outcome": "hold"}
+    out = V.rv4_outcome(combined, plant_ok=False)
+    assert out["outcome"] == "to_lead" and "plant" in out["to_lead_by"] and out["judged"] is False
+    assert V.rv4_outcome(combined, plant_ok=True)["outcome"] == "hold"
+
+
+def fam_sess(dest="D-2", records=None):
+    rec = records if records is not None else {"m2": {"tracking_failure": {"tracking": {"failure": "cross_track"}}}}
+    return {"run": "/nonexistent", "records": rec,
+            "rows": [{"mission_id": "m2", "pallet_id": "P-5", "destination_id": dest}]}
+
+
+FAIL = {"mission": "m2", "reason": "Tracking failed in transport: pos=1.6"}
+
+
+def test_family_346_extractor_errors_are_unclassifiable(monkeypatch):
+    def boom(run, mission):
+        raise IndexError("list index out of range")
+    monkeypatch.setattr(V, "_nf_measure", lambda: boom)
+    assert V.family_346(fam_sess(), FAIL, "random_m")["class"] == "unclassifiable"
+
+
+def test_family_346_needs_the_destination_on_record(monkeypatch):
+    monkeypatch.setattr(V, "_nf_measure", lambda: (lambda run, m: {"flip_yaw_peak_rad": -0.2,
+                                                                   "back_within_0_05_s": None}))
+    assert V.family_346(fam_sess(), FAIL, "random_m")["class"] == "family"
+    assert V.family_346(fam_sess(dest=None), FAIL, "random_m")["class"] == "unclassifiable"
+    assert V.family_346(fam_sess(), FAIL, "line_m")["class"] == "unclassifiable"
+    assert V.family_346(fam_sess(records={"m2": {}}), FAIL, "random_m") is None  # not a cross_track: not in the column
