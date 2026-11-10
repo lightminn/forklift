@@ -2307,6 +2307,10 @@ def main(argv=None) -> int:
         sp.add_argument("--array", action="store_true",
                         help="one run per array task (deploy/slurm/isaac_array.sbatch); needs --runs and --run-min")
         a = sp.parse_args(argv[1:])
+        if a.array and a.session_cores != 1:
+            print("--session-cores 2 is for bundle jobs; an array task is sized as a single job (not supported)",
+                  file=sys.stderr)
+            return 2
         if a.array:
             try:
                 z = array_sizes(a.kind, a.runs, a.run_min)

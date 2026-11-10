@@ -77,6 +77,19 @@ def test_too_few_cpus_split_nothing(tmp_path):
     assert env["SESSION_CPUS"] in ("''", "") and "session unpinned" in r.stdout
 
 
+def test_a_failed_split_falls_back_to_the_first_cpu_unpinned(tmp_path):
+    r = _launch(tmp_path, LIVE_TEST_CPUS="not-a-cpu")  # the inline Python fails: no output, the old behaviour
+    assert r.returncode == 0, r.stdout + r.stderr
+    env = _env_sh(tmp_path)
+    assert env["SESSION_CPUS"] in ("''", "") and "session unpinned" in r.stdout
+
+
+def test_the_array_sizes_refuse_two_session_cores():
+    r = subprocess.run([sys.executable, str(ROOT / "tools/isaac_bundle.py"), "sizes", "live", "--array", "--runs", "1",
+                        "--run-min", "5", "--session-cores", "2"], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 2 and "not supported" in r.stderr
+
+
 def test_a_bundle_bridge_cpu_wins_and_leaves_the_session_to_the_bundle(tmp_path):
     r = _launch(tmp_path, LIVE_TEST_CPUS="0,1,2,12,13,14", BRIDGE_CPU="5")
     assert r.returncode == 0, r.stdout + r.stderr
