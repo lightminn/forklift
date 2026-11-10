@@ -275,3 +275,167 @@ def test_missing_stop_evidence_is_not_a_hold(monkeypatch, change):
          "l4c_s0_A": {"pass": True, "arm": "A", "seed": "0"}, "l4c_s1_A": {"pass": True, "arm": "A", "seed": "1"}}
     out = V.confirm_verdict({"judged": ["l4c_s0_B", "l4c_s1_B"], "controls": ["l4c_s0_A", "l4c_s1_A"]}, s)
     assert out["outcome"] == "to_lead" and out["stop_not_held"] == ["l4c_s0_B"]
+
+
+# --- the new-snapshot re-comparison (docs/plans/2026-11-10-live-riib-v2-rerun-new-snapshot.md 2) ---------------------
+def _row(mid, pallet, outcome, reason=None):
+    return {"mission_id": mid, "pallet_id": pallet, "outcome": outcome, "reason": reason}
+
+
+def _sess(name, rows, records=None, occ=False):
+    return {"name": name, "rows": rows, "records": records or {}, "result": {"arguments": {"occupied_dumps": occ}}}
+
+
+def test_the_expected_ends_are_registered_and_narrow():
+    shadow = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe")],
+                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert V.rv3_failures(shadow) == []
+    no_stand = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe")], {"m1": {}})
+    assert [f["mission"] for f in V.rv3_failures(no_stand)] == ["m1"]  # not a shadow firing: a failure (Codex P3)
+    other = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in transport")],
+                  {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert len(V.rv3_failures(other)) == 1  # another reason in the same session is not waived
+    life2 = _sess("life2_random_m_held", [_row("m1", "P-4", "cancelled", "operator"),
+                                          {**_row(None, "P-4", None), "start": "rejected", "reject_reason": "cargo_held"},
+                                          {**_row(None, "P-5", None), "start": "rejected", "reject_reason": "cargo_held"}])
+    assert V.rv3_failures(life2) == []  # the cancel and the two refused resubmits
+    l4 = _sess("l4_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row("m2", "P-5", "failed", "x")])
+    assert [f["mission"] for f in V.rv3_failures(l4)] == ["m2"]  # m1's cancel is expected, m2's failure is not
+    queue = _sess("ab_line_m_s0_A", [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"), _row(None, None, None)])
+    assert [f["outcome"] for f in V.rv3_failures(queue)] == ["not_run"]  # a three-mission queue stopped early
+    reloc = _sess("life3_random_m_reloc", [_row(None, None, None, "probe_error: launcher_ended")])
+    assert V.rv3_failures(reloc, life3_ended_per_record=True) == []
+    assert len(V.rv3_failures(reloc, life3_ended_per_record=False)) == 1
+
+
+def test_failures_are_disposed_b_only_a_only_or_both():
+    fails = {"ab_line_m_s0_B": [{"mission": "m2"}], "ab_line_m_s1_A": [{"mission": "m1"}],
+             "ab_random_m_s0_A": [{"mission": "m3"}], "ab_random_m_s0_B": [{"mission": "m3"}],
+             "boxed_line_m": [{"mission": "m1"}], "l4_s1_A": [{"mission": "m2"}]}
+    partners = {"ab_line_m_s0_B": "ab_line_m_s0_A", "ab_line_m_s1_A": "ab_line_m_s1_B",
+                "ab_random_m_s0_A": "ab_random_m_s0_B", "ab_random_m_s0_B": "ab_random_m_s0_A",
+                "boxed_line_m": None, "l4_s1_A": "l4_s1_B"}
+    arms = {"ab_line_m_s0_B": "B", "ab_line_m_s1_A": "A", "ab_random_m_s0_A": "A", "ab_random_m_s0_B": "B",
+            "boxed_line_m": "B", "l4_s1_A": "A"}
+    out = V.rv3_dispose(fails, partners, arms)
+    assert out["b_only"] == ["ab_line_m_s0_B", "boxed_line_m"]
+    assert out["a_only"] == ["ab_line_m_s1_A", "l4_s1_A"]
+    assert out["both"] == ["ab_random_m_s0_A", "ab_random_m_s0_B"]
+
+
+def _main_ok():
+    return {"pace": {"verdict": "pass"}, "c2_cap": {"pass": True},
+            "safety": {"x": {"pass": True}, "life3_random_m_reloc": {"not_applied": "reloc_needs_operator"}},
+            "backoff": {"boxed_line_m": [{"firing": True}], "boxed_random_m": [{"firing": False}]},
+            "c2_function": {"c2_line_m_on": [{"firing": True}], "c2_line_m_shadow": [{"firing": False}]},
+            "lifecycle": {"1": {"pass": True}, "2": {"pass": True}, "3": {"outcome": "ended_per_record", "pass": False}},
+            "pairs": [{"sessions": {"A": {"F": 0.2999}, "B": {"F": 0.2999}}}]}
+
+
+def _conf_ok():
+    return {"judged_pass": True, "outcome": "pass"}
+
+
+def _disp(**kw):
+    return {"b_only": [], "a_only": [], "both": [], **kw}
+
+
+def test_the_combined_outcome_needs_every_criterion_and_keeps_the_leads_cases():
+    assert V.rv3_outcome(_main_ok(), _conf_ok(), _disp(), checks_ok=True)["outcome"] == "pass"
+    assert V.rv3_outcome(_main_ok(), {**_conf_ok(), "judged_pass": False, "outcome": "not_passed"}, _disp(),
+                         checks_ok=True)["outcome"] == "hold"
+    assert V.rv3_outcome(_main_ok(), {**_conf_ok(), "outcome": "to_lead"}, _disp(), checks_ok=True)["outcome"] == "to_lead"
+    assert V.rv3_outcome(_main_ok(), _conf_ok(), _disp(b_only=["ab_line_m_s0_B"]), checks_ok=True)["outcome"] == "hold"
+    assert V.rv3_outcome(_main_ok(), _conf_ok(), _disp(both=["a", "b"]), checks_ok=True)["outcome"] == "to_lead"
+    assert V.rv3_outcome(_main_ok(), _conf_ok(), _disp(a_only=["a"]), checks_ok=True)["outcome"] == "to_lead"
+    assert V.rv3_outcome(_main_ok(), _conf_ok(), _disp(), checks_ok=False)["outcome"] == "to_lead"
+    slow = {**_main_ok(), "pairs": [{"sessions": {"A": {"F": 0.2999}, "B": {"F": 0.2690}}}]}
+    out = V.rv3_outcome(slow, _conf_ok(), _disp(), checks_ok=True)
+    assert out["outcome"] == "to_lead" and out["pace_guard"] is False  # F < 0.27: the pace is not judged
+    for broken in ({"pace": {"verdict": "hold"}}, {"c2_cap": {"pass": False}}, {"safety": {"x": {"pass": False}}},
+                   {"backoff": {"boxed_line_m": [{"firing": False}]}}, {"c2_function": {"c2_line_m_on": []}},
+                   {"lifecycle": {**_main_ok()["lifecycle"], "2": {"pass": False}}},
+                   {"lifecycle": {**_main_ok()["lifecycle"], "3": {"outcome": "fail", "pass": False}}}):
+        assert V.rv3_outcome({**_main_ok(), **broken}, _conf_ok(), _disp(), checks_ok=True)["outcome"] == "hold", broken
+
+
+def test_the_dump_option_must_be_on_in_the_lifecycle_4_sessions_only():
+    sessions = {"ab_line_m_s0_A": _sess("ab_line_m_s0_A", [], occ=False), "l4_s0_B": _sess("l4_s0_B", [], occ=True)}
+    assert V.rv3_dump_args(sessions, {"l4_s0_B"}) == []
+    sessions["ab_line_m_s0_A"]["result"]["arguments"]["occupied_dumps"] = True
+    sessions["l4_s0_B"]["result"]["arguments"]["occupied_dumps"] = False
+    assert V.rv3_dump_args(sessions, {"l4_s0_B"}) == ["ab_line_m_s0_A", "l4_s0_B"]
+
+
+def test_a_refused_or_unrun_mission_in_any_queue_is_a_failure_unless_after_an_expected_end():
+    def rj(pallet, why):
+        return {"mission_id": None, "pallet_id": pallet, "outcome": None, "reason": None, "start": "rejected",
+                "reject_reason": why}
+    on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"), rj("P-3", "busy")])
+    f = V.rv3_failures(on)
+    assert [(x["outcome"], x["reject_reason"]) for x in f] == [("rejected", "busy")]  # Codex P2: C2 on is a queue too
+    unrun_on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row(None, None, None), _row(None, None, None)])
+    assert [x["outcome"] for x in V.rv3_failures(unrun_on)] == ["not_run", "not_run"]
+    shadow = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe"),
+                                        _row(None, None, None), _row(None, None, None)],
+                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert V.rv3_failures(shadow) == []  # the queue stops after its expected end
+    life2_other = _sess("life2_random_m_held", [_row("m1", "P-4", "cancelled", "operator"), rj("P-4", "cargo_held"),
+                                                rj("P-5", "busy")])
+    assert [x["reject_reason"] for x in V.rv3_failures(life2_other)] == ["busy"]  # only cargo_held is expected there
+    l4 = _sess("l4c_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row(None, None, None),
+                             _row(None, None, None)])
+    assert [x["outcome"] for x in V.rv3_failures(l4)] == ["not_run"]  # m2 never ran; the third row is padding
+
+
+def test_the_run_check_inputs_are_required_and_shared():
+    with pytest.raises(ValueError, match="slam_choice"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "i"}, ["ab_line_m_s0_A", "l4c_s0_B"])
+    with pytest.raises(ValueError, match="image"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "other"}, ["ab_line_m_s0_A"])
+    with pytest.raises(ValueError, match="random_m"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "x", "image_id": "i"}, ["ab_line_m_s0_A"])
+    with pytest.raises(ValueError, match="scene"):
+        V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                          {"slam_choice": "r", "image_id": "i"}, ["mystery_session"])
+    scenes = V.rv3_plan_inputs({"slam_choice": {"random_m": "r", "line_m": "l"}, "image_id": "i"},
+                               {"slam_choice": "r", "image_id": "i"}, ["ab_line_m_s0_A", "life2_random_m_held"])
+    assert scenes == {"ab_line_m_s0_A": "line_m", "life2_random_m_held": "random_m"}
+
+
+def test_the_dump_option_must_be_a_recorded_boolean():
+    def s(name, args):
+        return {"name": name, "result": {"arguments": args}}
+    assert V.rv3_dump_args({"a": s("a", {})}, set()) == ["a"]  # absent is not off (Codex P2)
+    assert V.rv3_dump_args({"a": s("a", {"occupied_dumps": None})}, set()) == ["a"]
+    assert V.rv3_dump_args({"l4": s("l4", {"occupied_dumps": "false"})}, {"l4"}) == ["l4"]
+    assert V.rv3_dump_args({"l4": s("l4", {"occupied_dumps": 1})}, {"l4"}) == ["l4"]
+    assert V.rv3_dump_args({"a": s("a", {"occupied_dumps": False}), "l4": s("l4", {"occupied_dumps": True})},
+                           {"l4"}) == []
+
+
+def test_a_real_mission_past_the_planned_rows_is_still_checked():
+    life1 = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), _row("m2", "P-2", "failed", "x"), _row(None, None, None)])
+    assert [f["mission"] for f in V.rv3_failures(life1)] == ["m2"]
+    on = _sess("c2_line_m_on", [_row("m1", "P-1", "done"), _row("m2", "P-2", "done"), _row("m3", "P-3", "done"),
+                                _row("m4", "P-1", "failed", "y")])
+    assert [f["mission"] for f in V.rv3_failures(on)] == ["m4"]
+    l4 = _sess("l4c_s0_B", [_row("m1", "P-4", "cancelled", "operator"), _row("m2", "P-5", "done"),
+                             _row("m3", "P-5", "failed", "z")])
+    assert [f["mission"] for f in V.rv3_failures(l4)] == ["m3"]
+    padded = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), _row(None, None, None), _row(None, None, None)])
+    assert V.rv3_failures(padded) == []
+
+
+def test_an_unsettled_submit_is_a_failure_wherever_it_is():
+    busy = {"mission_id": None, "pallet_id": "P-2", "outcome": None, "reason": None, "start": "unknown",
+            "reject_reason": "busy"}
+    life1 = _sess("life1_line_m_main", [_row("m1", "P-1", "done"), busy])
+    assert [(f["outcome"], f["reject_reason"]) for f in V.rv3_failures(life1)] == [("start_unknown", "busy")]
+    shadow = _sess("c2_line_m_shadow", [_row("m1", "P-1", "failed", "Tracking timeout in observe"), busy,
+                                        {**_row(None, None, None), "start": "not_submitted"}],
+                   {"m1": {"observe_end_stands": [{"kind": "near", "outcome": "shadow"}]}})
+    assert [f["outcome"] for f in V.rv3_failures(shadow)] == ["start_unknown"]  # the stop waives padding only
