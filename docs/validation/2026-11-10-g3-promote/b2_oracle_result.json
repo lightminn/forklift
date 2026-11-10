@@ -1,0 +1,29 @@
+{
+ "lidar_cast": {
+  "mode": "oracle",
+  "scans": 2005,
+  "mismatched_scans": 0,
+  "mismatched_rays": 0,
+  "own_true_rays": 0,
+  "prefix_sets": [
+   [
+    "/World/Forklift"
+   ],
+   [
+    "/World/Forklift",
+    "/World/SessionPallets/P_1/"
+   ]
+  ],
+  "first_mismatch": null,
+  "own_cache_entries": 79
+ },
+ "scan_switches": {
+  "grid_clear_kernel": true,
+  "shadow_kernel": true,
+  "shadow_arrays_enabled": true,
+  "kernels_mode": "numba",
+  "lidar_cast": "oracle",
+  "numpy": "1.26.0",
+  "numba": "0.59.1"
+ }
+}

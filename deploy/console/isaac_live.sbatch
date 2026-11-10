@@ -77,6 +77,50 @@ D7_HOLD=${D7_HOLD:-on}
 case "$D7_HOLD" in on|off) ;; *) echo "D7_HOLD must be on or off"; exit 2;; esac
 FAR_EXPECTED=${FAR_EXPECTED:-on}
 case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exit 2;; esac
+# The G3 scan-step changes (real-time plan 5.26-5.27; the lead's decision of 2026-11-10 after the 1b, 1c and 1d stage
+# checks and the 1e judgement run): on by default in this launcher -- FORKLIFT_GRID_CLEAR_KERNEL=1 (1b, the grid's
+# beam-cell clearing), FORKLIFT_SHADOW_KERNEL=1 (1c, the shadow memory's array path) and LIDAR_CAST=fast (1d, the LiDAR
+# loop with a per-body own cache); each gives the same output as off (docs/validation/2026-11-10-g3-promote.md). An
+# explicit value wins (0/1, loop/fast/oracle -- a measurement list's 0 stays 0) and an EXTRA_ARGS --lidar-cast comes
+# later and wins. A --near-tracking run keeps all three off: its contract compares lidar_cast loop and cannot see the
+# two environment switches, so its defaults are 0/0/loop and an explicit on is refused. The runner records what it
+# applied (result.json scan_switches). Live records made before this default (the rv3 and ④⑤ batches, earlier console
+# baselines) ran with them off at another realized sim/wall rate: do not mix them with later ones.
+g3_words() { local IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}; set +f; }
+G3_NEAR=0
+G3_EXTRA_CAST=""
+g3_next=0
+while IFS= read -r w; do
+  if [ "$g3_next" = 1 ]; then G3_EXTRA_CAST=$w; g3_next=0; continue; fi
+  case "$w" in
+    --near-tracking) G3_NEAR=1;;
+    --lidar-cast) g3_next=1;;
+    --lidar-cast=*) G3_EXTRA_CAST=${w#--lidar-cast=};;
+    --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
+      o=${w%%=*}
+      for full in --near-tracking --lidar-cast; do
+        case "$full" in "$o"*) echo "EXTRA_ARGS $o: write $full in full"; exit 2;; esac
+      done;;
+  esac
+done < <(g3_words)
+if [ "$G3_NEAR" = 1 ]; then
+  for v in "${FORKLIFT_GRID_CLEAR_KERNEL:-0}" "${FORKLIFT_SHADOW_KERNEL:-0}"; do
+    [ "$v" = 0 ] || { echo "--near-tracking keeps FORKLIFT_GRID_CLEAR_KERNEL and FORKLIFT_SHADOW_KERNEL at 0"; exit 2; }
+  done
+  [ "${LIDAR_CAST:-loop}" = loop ] && [ "${G3_EXTRA_CAST:-loop}" = loop ] \
+    || { echo "--near-tracking keeps the LiDAR cast at loop"; exit 2; }
+fi
+G3_DEFAULT=1
+[ "$G3_NEAR" = 1 ] && G3_DEFAULT=0
+FORKLIFT_GRID_CLEAR_KERNEL=${FORKLIFT_GRID_CLEAR_KERNEL:-$G3_DEFAULT}
+FORKLIFT_SHADOW_KERNEL=${FORKLIFT_SHADOW_KERNEL:-$G3_DEFAULT}
+if [ "$G3_NEAR" = 1 ]; then LIDAR_CAST=${LIDAR_CAST:-loop}; else LIDAR_CAST=${LIDAR_CAST:-fast}; fi
+case "$FORKLIFT_GRID_CLEAR_KERNEL" in 0|1) ;; *) echo "FORKLIFT_GRID_CLEAR_KERNEL must be 0 or 1"; exit 2;; esac
+case "$FORKLIFT_SHADOW_KERNEL" in 0|1) ;; *) echo "FORKLIFT_SHADOW_KERNEL must be 0 or 1"; exit 2;; esac
+case "$LIDAR_CAST" in loop|fast|oracle) ;; *) echo "LIDAR_CAST must be loop, fast or oracle"; exit 2;; esac
+case "$G3_EXTRA_CAST" in ""|loop|fast|oracle) ;; *) echo "EXTRA_ARGS --lidar-cast must be loop, fast or oracle"; exit 2;; esac
+echo "SCAN_SWITCHES grid_clear_kernel=$FORKLIFT_GRID_CLEAR_KERNEL shadow_kernel=$FORKLIFT_SHADOW_KERNEL" \
+  "lidar_cast=${G3_EXTRA_CAST:-$LIDAR_CAST}${G3_EXTRA_CAST:+ (EXTRA_ARGS)}"
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
@@ -191,6 +235,9 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
+  # the G3 scan-step switches (real-time plan 5.26-5.27): the runner exports the two and passes --lidar-cast
+  printf 'FORKLIFT_GRID_CLEAR_KERNEL=%q\nFORKLIFT_SHADOW_KERNEL=%q\nLIDAR_CAST=%q\n' \
+    "$FORKLIFT_GRID_CLEAR_KERNEL" "$FORKLIFT_SHADOW_KERNEL" "$LIDAR_CAST"
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'START_POSE_KNOWN=%q\n' "${START_POSE_KNOWN:-}"  # the repro batch's H0: placed and known (empty: off)
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
@@ -239,6 +286,8 @@ cat > "$OUT/runner.sh" <<'EOT'
 # epoch $1, its directory $2, the port file $3, the session's map id $4 and survey bundle $5 (with MAP_BUNDLE)
 . "$(dirname "$0")/env.sh"
 cd "$ROOT"
+# the G3 scan-step switches (env.sh): read by the modules at import; an EXTRA_ARGS --lidar-cast comes later and wins
+export FORKLIFT_GRID_CLEAR_KERNEL="${FORKLIFT_GRID_CLEAR_KERNEL:-0}" FORKLIFT_SHADOW_KERNEL="${FORKLIFT_SHADOW_KERNEL:-0}"
 LOC=()  # SLAM localization plan L7: localize on the survey bundle from the start (unset: online mapping)
 [ -n "${MAP_BUNDLE:-}" ] && LOC=(--slam-map-bundle "$5" --expected-map-id "$4")
 LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-planning)
@@ -277,7 +326,7 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
+  --lidar-cast "${LIDAR_CAST:-loop}" $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac
