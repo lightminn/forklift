@@ -106,7 +106,9 @@ def session(run: Path) -> dict:
                "wheel_travel_m": float(np.sum(np.abs(ds[idx])))}
         mv = m & (ds > 1e-4)  # forward only
         if mv.sum() > 10:
-            X = np.column_stack((k_true[mv] * ds[mv], ds[mv]))
+            k_mid = np.zeros(len(k_true))
+            k_mid[1:] = (k_true[:-1] + k_true[1:]) / 2  # the interval's mid curvature, as the odometry integrates
+            X = np.column_stack((k_mid[mv] * ds[mv], ds[mv]))
             a, b = np.linalg.lstsq(X, dy_truth[mv], rcond=None)[0]
             row["fit"] = {"scale": float(a), "offset_per_m": float(b)}
         tm = m & (np.abs(k_true) > 0.15) & (ds > 1e-4)
