@@ -5,7 +5,7 @@
 
 ## 실행
 
-- ws1 잡 15401(배열 26, 동시 2), 스냅숏 `snapshots/sp_bb7fcdcb`, 결과 `test_runs/simphys/steer_asym/p_bb7fcdcb/`.
+- ws1 잡 15401(배열 26, 동시 2), 스냅숏 `snapshots/sp_bb7fcdcb`, 결과 `test_runs/simphys/steer_asym/p_bb7fcdcb/`. 2026-11-10 에 ws1 에서 지우고 스냅숏·결과(함께 `smoke_d7102324/a10_scene*`)를 `gdrive:ws1-cleanup-20261110-ag/ag_f1v2.tar.zst`(md5 65d2a7f5…)로 옮겼다.
   - `judge.json`·`judge_verdicts.txt`: 판정 도구 출력(판정 도구는 실행 폴더가 아닌 파일 — `*.stall_stack.txt` — 을 건너뛰게 고친 판).
   - `judge_extra.json`: judge.json 에 없는 보조 수치. A3a·A3b 정지 창, A4 승강 범위, A5 구간별 꼴이고, 같은 창·같은 함수로 뽑았다(`judge_extra.py`).
 - 모든 팔: `--steering-probe --deterministic`, seed 1 출발 자리, 운영 설정 사본 + `probe_clear_area`(소품 끔, 장면 팔레트 치움) + 팔 키.
@@ -84,4 +84,4 @@
   - H2 범위, F2 비율, A8h 값을 고쳤다.
   - judge.json 밖의 수치는 judge_extra.json 으로 출처를 밝혔다.
   - τ_diff 비율과 broken_runs 를 정리했다.
-- 판정 수치는 ws1 `p_bb7fcdcb/judge.json`·`judge_extra.json` 에서 옮겼다.
+- 판정 수치는 ws1 `p_bb7fcdcb/judge.json`·`judge_extra.json` 에서 옮겼다(지금 `gdrive:ws1-cleanup-20261110-ag/ag_f1v2.tar.zst`).
