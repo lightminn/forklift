@@ -11426,6 +11426,31 @@ def lifecycle_mark(name: str, **fields) -> None:
         LIFECYCLE.append({"mark": name, "mono": time.monotonic(), **fields})
 
 
+def scan_switches_record() -> dict:
+    """The G3 scan-step switches as this process applied them (real-time plan 5.26-5.27; the console launcher turns
+    them on by default since 2026-11-10): the two environment switches as the modules read them at import, the kernel
+    mode the shadow memory's array path needs (it runs only away from ``reference``), the LiDAR cast mode, and the
+    NumPy and numba versions. Requested values are the launcher's (env.sh, its SCAN_SWITCHES line)."""
+    import importlib.metadata as md
+
+    import planar_lidar as lidar_mode_
+
+    from forklift_core import kernels
+    from forklift_core.control import shadow_memory
+    from forklift_core.perception import obstacle_grid
+
+    def version(name):
+        try:
+            return md.version(name)
+        except md.PackageNotFoundError:
+            return None
+
+    mode = kernels.mode()
+    return {"grid_clear_kernel": bool(obstacle_grid.CLEAR_KERNEL), "shadow_kernel": bool(shadow_memory.SHADOW_KERNEL),
+            "shadow_arrays_active": bool(shadow_memory.SHADOW_KERNEL) and mode != "reference", "kernels_mode": mode,
+            "lidar_cast": lidar_mode_.CAST_MODE, "numpy": version("numpy"), "numba": version("numba")}
+
+
 def main() -> None:
     LIFECYCLE.clear()
     lifecycle_mark("runner_main")
@@ -11567,6 +11592,7 @@ def main() -> None:
             import planar_lidar as lidar_mode_
 
             state["lidar_cast"] = lidar_mode_.oracle_record()
+        state["scan_switches"] = scan_switches_record()  # G3 promotion: what this run applied (plan 5.26-5.27)
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 
