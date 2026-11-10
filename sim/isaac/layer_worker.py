@@ -19,14 +19,77 @@ While a thread job runs, the grid and the shadow memory are the worker's (D3). I
 A failure (the computation raised, or it did not end within ``timeout_s``) raises ``LayerWorkerFailure`` at the
 install; the runner ends the session (D6). The thread cannot be cancelled: after a failure the layer is not touched
 again (``failed``).
+
+1e stage 1 (docs/plans/2026-11-10-g3-1e-process-worker.md): ``cpus`` pins the thread worker to those CPUs (the
+session's last whole core, ``worker_cpus("auto", ...)``) from inside its own thread, so only that thread moves. Every
+job records its thread's scheduler counters around the computation -- run time, run-queue delay (the time it was
+runnable but not running) and the CPU it ended on -- from /proc/thread-self (None where unreadable).
 """
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
 from forklift_core.perf import TIMERS
+
+
+def _proc_siblings(cpu: int) -> tuple:
+    try:
+        text = open(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list").read().strip()
+    except OSError:
+        return (cpu,)
+    out = set()
+    for part in text.split(","):
+        a, _, b = part.partition("-")
+        out.update(range(int(a), int(b or a) + 1))
+    return tuple(sorted(out))
+
+
+def affinity_cores(affinity, siblings=_proc_siblings) -> list:
+    """The affinity's cores in CPU order: [(its CPUs of the core, all the core's siblings)]."""
+    cpus = sorted(affinity)
+    cores, seen = [], set()
+    for c in cpus:
+        if c in seen:
+            continue
+        sib = tuple(sorted(siblings(c)))
+        group = tuple(x for x in sib if x in cpus) or (c,)
+        seen.update(group)
+        cores.append((group, sib))
+    return cores
+
+
+def worker_cpus(mode: str, affinity, siblings=_proc_siblings):
+    """The CPUs to pin the thread worker to: ``off`` none; ``auto`` the last whole core of ``affinity`` (all its
+    siblings inside it) when it holds two whole cores or more, else none."""
+    if mode == "off":
+        return None
+    if mode != "auto":
+        raise ValueError(f"layer worker cpus {mode!r}: off or auto")
+    whole = [g for g, sib in affinity_cores(affinity, siblings) if g == sib]
+    return whole[-1] if len(whole) >= 2 else None
+
+
+def thread_schedstat():
+    """(run ns, run-queue delay ns, timeslices) of the calling thread, or None."""
+    try:
+        with open("/proc/thread-self/schedstat") as f:
+            a, b, c = f.read().split()[:3]
+        return int(a), int(b), int(c)
+    except (OSError, ValueError):
+        return None
+
+
+def thread_cpu():
+    """The CPU the calling thread last ran on (/proc/thread-self/stat field 39), or None."""
+    try:
+        with open("/proc/thread-self/stat", "rb") as f:
+            raw = f.read()
+        return int(raw[raw.rindex(b")") + 2:].split()[36])
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 class LayerWorkerFailure(RuntimeError):
@@ -35,7 +98,7 @@ class LayerWorkerFailure(RuntimeError):
 
 class LayerWorker:
     def __init__(self, layer, mode: str, k: int, *, clock=time.perf_counter, timeout_s: float = 0.5,
-                 on_install=None, tick_fn=None):
+                 on_install=None, tick_fn=None, cpus=None):
         if mode not in ("delay", "thread"):
             raise ValueError(f"layer worker mode {mode!r}: delay or thread")
         if not 1 <= int(k) <= 11:
@@ -53,6 +116,8 @@ class LayerWorker:
         self._done = threading.Event()
         self._go = threading.Event()
         self._thread = None
+        self.cpus = None if cpus is None else tuple(sorted(cpus))
+        self.affinity = None  # the worker thread's affinity as it read it after pinning
         if mode == "thread":
             self._thread = threading.Thread(target=self._loop, name="layer-worker", daemon=True)
             self._thread.start()
@@ -134,6 +199,7 @@ class LayerWorker:
 
     def _run(self) -> None:
         info = self._info
+        s0 = thread_schedstat()
         t0, c0 = self.clock(), time.thread_time()
         try:
             if self.mode == "thread":
@@ -148,10 +214,18 @@ class LayerWorker:
         finally:
             info["compute_s"] = self.clock() - t0
             info["compute_cpu_s"] = time.thread_time() - c0
-            info["done_t"] = self.clock()
+            s1 = thread_schedstat()
+            ok = s0 is not None and s1 is not None
+            info["run_ns"] = s1[0] - s0[0] if ok else None
+            info["run_delay_ns"] = s1[1] - s0[1] if ok else None
+            info["cpu"] = thread_cpu()
+            info["done_t"] = self.clock()  # after the counters: the time the install may take it (Codex P2-5)
             self._done.set()
 
     def _loop(self) -> None:
+        if self.cpus is not None:
+            os.sched_setaffinity(0, self.cpus)  # from this thread: only the worker moves (1e stage 1)
+            self.affinity = sorted(os.sched_getaffinity(0))
         while True:
             self._go.wait()
             self._go.clear()
@@ -162,4 +236,5 @@ class LayerWorker:
         for r in self.records:
             reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
         return {"mode": self.mode, "k": self.k, "installs": len(self.records), "reasons": reasons,
-                "failed": self.failed}
+                "failed": self.failed, "cpus": None if self.cpus is None else list(self.cpus),
+                "affinity": self.affinity}

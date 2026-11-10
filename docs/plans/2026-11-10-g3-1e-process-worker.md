@@ -67,8 +67,8 @@
 
 ## 4. 단계 1 의 구현 범위(설계 승인 뒤, 시험 먼저)
 
-1. 묶음 실행기: 단일 슬롯 잡에서 세션에 물리 코어 둘을 주는 옵션(`--session-cores 2`). 형제 CPU 는 `thread_siblings_list` 로 찾는다. 다중 슬롯의 슬롯별 배정은 범위 밖이다(6 절).
-2. 러너: `--layer-worker-cpus`(T 의 작업자 스레드 고정). 실제 affinity(메인 프로세스의 모든 TID, 작업자, 자식 프로세스)와 스레드별 `stat`·`schedstat` 을 기록한다.
+1. 묶음 실행기: 코드 변경 없음(구현 때 확인). 단일 슬롯 잡에 CPU 6 을 주면 기존 `--bridge-cpus auto`(`auto_bridge_cpus`: CPU ≥ 2 × 슬롯 + 2)가 마지막 코어 하나를 브리지에 떼고 세션에 물리 코어 둘(논리 CPU 넷)을 남긴다. 분석기는 묶음 요약의 `session_cpus` 와 러너가 기록한 프로세스 affinity 를 대조한다. 다중 슬롯의 슬롯별 배정은 범위 밖이다(6 절).
+2. 러너: `--layer-worker-cpus auto`(T 의 작업자 스레드를 프로세스 affinity 의 마지막 온전한 코어에 고정; 형제 CPU 는 `thread_siblings_list`). 실제 affinity(메인 프로세스의 모든 TID, 작업자, 자식 프로세스)와 스레드별 `stat`·`schedstat` 을 기록한다.
 3. 작업자 스레드의 스캔별 `schedstat`·`sched_getcpu()` 기록.
 4. 분석기·목록 생성기 확장(3 절).
 5. 단위 시험(배정·고정·기록·분석기), off 경로 불변은 runs29 게이트 29/29, ws1 전체 pytest, Codex 수렴. 그 뒤 총괄 승인 하에 측정.

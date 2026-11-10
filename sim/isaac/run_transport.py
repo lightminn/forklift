@@ -1393,6 +1393,9 @@ def arguments() -> argparse.Namespace:
                              "at a barrier and add (k-1)/120 s to the stopping model's latency")
     parser.add_argument("--layer-worker-k", type=int, default=3,
                         help="real-time plan 5.28: the install tick after the scan's (2-4 registered)")
+    parser.add_argument("--layer-worker-cpus", choices=("off", "auto"), default="off",
+                        help="1e stage 1 (docs/plans/2026-11-10-g3-1e-process-worker.md): pin the thread worker to the "
+                             "last whole core of the process's CPUs when it holds two or more (auto), or not (off)")
     parser.add_argument("--layer-worker-timeout-s", type=float, default=0.5,
                         help="real-time plan 5.28 D6: a worker job not done this long after its install began ends the "
                              "session")
@@ -4766,15 +4769,23 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                 if "stamp_s" in info_:
                     obstacle["checked_stamp"] = info_["stamp_s"]  # the cusp watch's scan id (plan 5.28 D3)
 
+            from layer_worker import affinity_cores, worker_cpus
+
+            cpus_ = (worker_cpus(getattr(args, "layer_worker_cpus", "off"), os.sched_getaffinity(0))
+                     if args.layer_worker == "thread" else None)
             obstacle["layer"].worker = LayerWorker(obstacle["layer"], args.layer_worker, args.layer_worker_k,
                                                    timeout_s=args.layer_worker_timeout_s,
-                                                   on_install=layer_worker_installed_)
+                                                   on_install=layer_worker_installed_, cpus=cpus_)
             obstacle["layer_worker"] = True
             obstacle["checked_stamp"] = None
             state["layer_worker"] = {"mode": args.layer_worker, "k": int(args.layer_worker_k),
                                      "latency_added_s": layer_worker_latency_s_,
                                      "use_age_s": float(layer_config["grid"]["free_use_age_s"]),
-                                     "timeout_s": float(args.layer_worker_timeout_s)}
+                                     "timeout_s": float(args.layer_worker_timeout_s),
+                                     "cpus_mode": getattr(args, "layer_worker_cpus", "off"),
+                                     "process_affinity": sorted(os.sched_getaffinity(0)),
+                                     "process_cores": [[list(g), list(s)]
+                                                       for g, s in affinity_cores(os.sched_getaffinity(0))]}
         if getattr(args, "start_band_release", "off") == "on":
             # docs/plans/2026-10-24-start-band-release.md: the band is the walk's own inflation at the start (the
             # envelope plus half a sample step); the candidate and teleop permissions copy this config
