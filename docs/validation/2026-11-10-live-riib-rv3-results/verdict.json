@@ -1,0 +1,1954 @@
+{
+ "main": {
+  "pace": {
+   "pairs_dropped": 1,
+   "F": {
+    "A": 0.29995310401964365,
+    "B": 0.29994076266534714,
+    "pass": true
+   },
+   "R": {
+    "A": 0.00849667269979984,
+    "B": 0.009840194313470628,
+    "pass": true
+   },
+   "longest": {
+    "A": 3.744927278952673,
+    "B": 3.0738417130196467,
+    "pass": true
+   },
+   "stalls": {
+    "A": 1,
+    "B": 3,
+    "pass": true
+   },
+   "pass": true,
+   "verdict": "pass",
+   "totals": {
+    "A": {
+     "sim": 3132.4668300375342,
+     "wall": 10443.188578679925,
+     "false_wall": 88.73235529533122,
+     "valid_wall": 10443.188578679925,
+     "longest": 3.744927278952673,
+     "stalls": 1
+    },
+    "B": {
+     "sim": 3132.2918300284073,
+     "wall": 10443.034825257142,
+     "false_wall": 102.76149190287106,
+     "valid_wall": 10443.034825257142,
+     "longest": 3.0738417130196467,
+     "stalls": 3
+    }
+   },
+   "hypothesis_split": {
+    "A": {
+     "rendered": 0,
+     "capture": 1,
+     "other": 0
+    },
+    "B": {
+     "rendered": 2,
+     "capture": 1,
+     "other": 0
+    }
+   }
+  },
+  "pairs": [
+   {
+    "pair": 1,
+    "scene": "line_m",
+    "seed": 0,
+    "first": "B",
+    "interval": [
+     614079.27246406,
+     615547.345381358
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29998449844672487,
+      "R": 0.0032370012581114686,
+      "wall_s": 1468.0203763239551,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.5073027790058404,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999716135807416,
+      "R": 0.005332014634234202,
+      "wall_s": 1468.0556527019944,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.5448102969676256,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 2,
+    "scene": "random_m",
+    "seed": 0,
+    "first": "B",
+    "interval": [
+     607845.57697012,
+     609369.198565639
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999290205798602,
+      "R": 0.01915800107402746,
+      "wall_s": 1523.5272096990375,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 3.0395835919771343,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999519699238668,
+      "R": 0.010788718410007449,
+      "wall_s": 1523.605120126973,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 3.02967808698304,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 3,
+    "scene": "line_m",
+    "seed": 1,
+    "first": "A",
+    "interval": [
+     609546.47949433,
+     611011.788077607
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999808445627552,
+      "R": 0.002735603817544547,
+      "wall_s": 1465.2603020869428,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.8298617471009493,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999853721090204,
+      "R": 0.004268403966664713,
+      "wall_s": 1465.293745830073,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7826063469983637,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 4,
+    "scene": "random_m",
+    "seed": 1,
+    "first": "B",
+    "interval": [
+     611268.205342205,
+     612020.464325799
+    ],
+    "sessions": {
+     "B": {
+      "eligible": false,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "failed",
+        "Tracking failed in transport: pos=1.6688,yaw=0.5045"
+       ],
+       [
+        null,
+        null,
+        null
+       ]
+      ],
+      "F": 0.2999328060750522,
+      "R": 0.01469415458476525,
+      "wall_s": 752.2240777390543,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7180705810897052,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2998901600096408,
+      "R": 0.00925219229176587,
+      "wall_s": 752.1921084619826,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.7879030898911878,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": [
+     "common interval under 15 min",
+     "eligibility"
+    ]
+   },
+   {
+    "pair": 5,
+    "scene": "line_m",
+    "seed": 2,
+    "first": "B",
+    "interval": [
+     622767.249629577,
+     624238.641799255
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999885033481145,
+      "R": 0.002827825459411424,
+      "wall_s": 1471.3342392360792,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.0502834289800376,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29997657062618494,
+      "R": 0.0043266623857282395,
+      "wall_s": 1471.3649872660171,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.2369477449683473,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 6,
+    "scene": "random_m",
+    "seed": 2,
+    "first": "A",
+    "interval": [
+     624460.415089474,
+     625942.776257934
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999610777947241,
+      "R": 0.007759546189330808,
+      "wall_s": 1482.3035034800414,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.6618236729409546,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29989307901549866,
+      "R": 0.01943404494835755,
+      "wall_s": 1482.3339415190276,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 2.3544016189407557,
+      "stalls": {
+       "total": 1,
+       "rendered": 1,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": [
+        0.2876
+       ]
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 7,
+    "scene": "line_m",
+    "seed": 3,
+    "first": "B",
+    "interval": [
+     626135.035549639,
+     627621.005293971
+    ],
+    "sessions": {
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.29999049490203156,
+      "R": 0.0035100969122443177,
+      "wall_s": 1485.9082676169928,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.1368207129416987,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     },
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2999669754358808,
+      "R": 0.004472335792375269,
+      "wall_s": 1485.9414304939564,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 1.5068842079490423,
+      "stalls": {
+       "total": 0,
+       "rendered": 0,
+       "capture": 0,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": []
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   },
+   {
+    "pair": 8,
+    "scene": "random_m",
+    "seed": 3,
+    "first": "A",
+    "interval": [
+     627772.12229702,
+     629318.790091705
+    ],
+    "sessions": {
+     "A": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2998670785930669,
+      "R": 0.023240316472959262,
+      "wall_s": 1546.6575825239997,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 3.744927278952673,
+      "stalls": {
+       "total": 1,
+       "rendered": 0,
+       "capture": 1,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": [
+        0.2603
+       ]
+      },
+      "c2_unmapped": []
+     },
+     "B": {
+      "eligible": true,
+      "missions": [
+       [
+        "m1",
+        "done",
+        null
+       ],
+       [
+        "m2",
+        "done",
+        null
+       ],
+       [
+        "m3",
+        "done",
+        null
+       ]
+      ],
+      "F": 0.2998210571952026,
+      "R": 0.01576550816398489,
+      "wall_s": 1546.6170450319769,
+      "missing_steps": 0,
+      "missing_wall_s": 0.0,
+      "max_gap_s": 0.0,
+      "longest_false_s": 3.0738417130196467,
+      "stalls": {
+       "total": 2,
+       "rendered": 1,
+       "capture": 1,
+       "other": 0,
+       "c2_excluded": 0,
+       "gaps": [
+        0.2556,
+        0.3327
+       ]
+      },
+      "c2_unmapped": []
+     }
+    },
+    "dropped": []
+   }
+  ],
+  "c2_cap": {
+   "sessions": {
+    "c2_line_m_on": {
+     "gaps": [
+      {
+       "step": 2290,
+       "gap_s": 0.02777338307350874,
+       "over_cap": false
+      }
+     ],
+     "unmapped": []
+    }
+   },
+   "pass": true
+  },
+  "safety": {
+   "ab_line_m_s0_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3500001141193605,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s0_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.46207708369869344,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s1_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.350046290592426,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s1_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.49103875650340684,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "Tracking failed in transport: pos=1.6688,yaw=0.5045"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s2_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.35016065497057886,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s2_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.43095294814068263,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_line_m_s3_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3495236383415656,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "ab_random_m_s3_B": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.42501229524868006,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "c2_line_m_on": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.35007234874025633,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "c2_line_m_shadow": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 1.7983657050580146,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "Tracking timeout in observe"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "boxed_line_m": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.35130852132811996,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "boxed_random_m": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.4435803742415924,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life1_line_m_main": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.3500024236241418,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [],
+    "safety_reasons": [],
+    "other_reasons": [],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life2_random_m_held": {
+    "forbidden_run": 0,
+    "forbidden_missions": 0,
+    "neighbour_overlap": [],
+    "min_gap_m": 0.8249776895537281,
+    "rest_past_bound": [],
+    "unpermitted_dir_entries": 0,
+    "scene_damaged": null,
+    "reasons": [
+     "operator"
+    ],
+    "safety_reasons": [],
+    "other_reasons": [
+     "operator"
+    ],
+    "spool_complete": true,
+    "spool_dropped": {},
+    "spool_unsettled": {},
+    "results_unsettled": [],
+    "mission_files_missing": [],
+    "pass": true
+   },
+   "life3_random_m_reloc": {
+    "not_applied": "reloc_needs_operator before any mission"
+   }
+  },
+  "backoff": {
+   "boxed_line_m": [
+    {
+     "mission": "m1",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07100632183224163,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m2",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07046430647034463,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m3",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07086114671452835,
+     "L_m": 0.07,
+     "firing": true
+    }
+   ],
+   "boxed_random_m": [
+    {
+     "mission": "m1",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07049390992837602,
+     "L_m": 0.07,
+     "firing": true
+    },
+    {
+     "mission": "m2",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": false,
+     "complete": true,
+     "truth_reverse": null,
+     "firing": false
+    },
+    {
+     "mission": "m3",
+     "installed": true,
+     "boxed_trigger": false,
+     "path_prefix": true,
+     "complete": true,
+     "truth_reverse": "True",
+     "truth_along_min_m": -0.07170118406561146,
+     "L_m": 0.07,
+     "firing": true
+    }
+   ]
+  },
+  "c2_function": {
+   "c2_line_m_on": [
+    {
+     "mission": "m1",
+     "installed": 1,
+     "near_capture": "done",
+     "complete": true,
+     "firing": true
+    },
+    {
+     "mission": "m2",
+     "installed": 0,
+     "near_capture": "done",
+     "complete": true,
+     "firing": false
+    },
+    {
+     "mission": "m3",
+     "installed": 0,
+     "near_capture": "done",
+     "complete": true,
+     "firing": false
+    }
+   ],
+   "c2_line_m_shadow": [
+    {
+     "mission": "m1",
+     "installed": 0,
+     "near_capture": "pending",
+     "complete": false,
+     "firing": false
+    }
+   ]
+  },
+  "lifecycle": {
+   "1": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "stopped_in_capture": true,
+    "rearm_ack": true,
+    "resume_acks": 2,
+    "auto_again": true,
+    "teleop_entry_ack": true,
+    "arm_ack": true,
+    "expired_disarmed": true,
+    "new_lease": true,
+    "old_lease_refused": true,
+    "mission_done": true,
+    "order": [
+     [
+      "stopped_in_capture",
+      9
+     ],
+     [
+      "rearm",
+      12
+     ],
+     [
+      "resume",
+      14
+     ],
+     [
+      "auto_again",
+      15
+     ],
+     [
+      "teleop_entry",
+      19
+     ],
+     [
+      "arm",
+      20
+     ],
+     [
+      "expired_disarmed",
+      21
+     ],
+     [
+      "new_lease",
+      25
+     ],
+     [
+      "old_lease_refused",
+      26
+     ],
+     [
+      "final_resume",
+      28
+     ],
+     [
+      "session_end",
+      31
+     ]
+    ],
+    "pass": true
+   },
+   "2": {
+    "epoch_exit": [
+     0
+    ],
+    "exit_ok": true,
+    "session_end_ack": true,
+    "result_json": true,
+    "tick_trace": true,
+    "transport_reached": true,
+    "cancel_ack": true,
+    "cancelled_operator": true,
+    "cargo_held_rejects": 2,
+    "h3": {
+     "found": true,
+     "applied_t": 52.108336050994694,
+     "applied_mono": 600249.509168233,
+     "sent": 600249.48533732,
+     "receipt": 600249.507184187,
+     "reply": 600249.50914028,
+     "ordered": false
+    },
+    "pass": false
+   },
+   "3": {
+    "epoch_exit": [
+     1
+    ],
+    "exit_ok": false,
+    "session_end_ack": false,
+    "result_json": true,
+    "tick_trace": false,
+    "reloc_needs_operator": true,
+    "mission_done": false,
+    "outcome": "ended_per_record",
+    "pass": false
+   }
+  },
+  "b_only_failures": [
+   {
+    "pair": 4,
+    "B": [
+     [
+      "m1",
+      "done",
+      null
+     ],
+     [
+      "m2",
+      "failed",
+      "Tracking failed in transport: pos=1.6688,yaw=0.5045"
+     ],
+     [
+      null,
+      null,
+      null
+     ]
+    ]
+   }
+  ],
+  "rules": {
+   "stall_s": 0.25,
+   "c2_cap_s": 2.0,
+   "F_ratio": 0.97,
+   "R_add": 0.01,
+   "longest": [
+    1.2,
+    2.0
+   ],
+   "stall_add": 2,
+   "max_dropped_pairs": 2
+  }
+ },
+ "confirm": {
+  "sessions": {
+   "l4c_s0_B": {
+    "arm": "B",
+    "seed": "0",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.014568444108590484,
+     "order": [
+      [
+       "approach",
+       7
+      ],
+      [
+       "stop",
+       8
+      ],
+      [
+       "stopped",
+       9
+      ],
+      [
+       "rearm",
+       11
+      ],
+      [
+       "cancel",
+       13
+      ],
+      [
+       "recovery_resume",
+       14
+      ],
+      [
+       "m2_submit",
+       17
+      ],
+      [
+       "session_end",
+       20
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000261,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.00027846903747626454,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.3902260711723928,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s1_B": {
+    "arm": "B",
+    "seed": "1",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.01841460890136659,
+     "order": [
+      [
+       "approach",
+       7
+      ],
+      [
+       "stop",
+       8
+      ],
+      [
+       "stopped",
+       9
+      ],
+      [
+       "rearm",
+       11
+      ],
+      [
+       "cancel",
+       13
+      ],
+      [
+       "recovery_resume",
+       14
+      ],
+      [
+       "m2_submit",
+       17
+      ],
+      [
+       "session_end",
+       20
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.100000265999999,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 612,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 612,
+     "truth_move_m": 0.0002852846206009626,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.3836820443124744,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s0_A": {
+    "arm": "A",
+    "seed": "0",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r7",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.022118755034171045,
+     "order": [
+      [
+       "approach",
+       8
+      ],
+      [
+       "stop",
+       9
+      ],
+      [
+       "stopped",
+       10
+      ],
+      [
+       "rearm",
+       12
+      ],
+      [
+       "cancel",
+       14
+      ],
+      [
+       "recovery_resume",
+       15
+      ],
+      [
+       "m2_submit",
+       18
+      ],
+      [
+       "session_end",
+       21
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000260999997,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.00023435582669804945,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.3835472309850998,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   },
+   "l4c_s1_A": {
+    "arm": "A",
+    "seed": "1",
+    "slam_choice": [
+     "localization (registry: random_m_team_spec_quantized_0facac3eea66)"
+    ],
+    "map_ok": true,
+    "image_id": "sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659",
+    "image_ok": true,
+    "lifecycle": {
+     "epoch_exit": [
+      0
+     ],
+     "exit_ok": true,
+     "session_end_ack": true,
+     "result_json": true,
+     "tick_trace": true,
+     "phase_reached": true,
+     "stop_ack": true,
+     "rearm_ack": true,
+     "cancel_ack": true,
+     "m1_cancelled": true,
+     "m2_done": true,
+     "after_cancel_statuses": [
+      "paused",
+      "recovering"
+     ],
+     "recovery_resume": {
+      "t": "ack",
+      "of": "mission_resume",
+      "request_id": "r6",
+      "mission_id": "m1"
+     },
+     "stop_reply_s": 0.0021072180243209004,
+     "order": [
+      [
+       "approach",
+       7
+      ],
+      [
+       "stop",
+       8
+      ],
+      [
+       "stopped",
+       9
+      ],
+      [
+       "rearm",
+       11
+      ],
+      [
+       "cancel",
+       13
+      ],
+      [
+       "recovery_resume",
+       14
+      ],
+      [
+       "m2_submit",
+       17
+      ],
+      [
+       "session_end",
+       20
+      ]
+     ],
+     "needs_recovery": true,
+     "pass": true
+    },
+    "stop": {
+     "phase_reached": true,
+     "mission_id": "m1",
+     "m1_id": "m1",
+     "phase_at_end": "approach",
+     "target_at_end": [
+      "P-4",
+      "D-1"
+     ],
+     "mode_at_end": "STOPPED",
+     "end_reason": "sim_time",
+     "waited_sim_s": 5.000000260999997,
+     "pass": true
+    },
+    "stop_hold": {
+     "steps": 600,
+     "steps_covered": true,
+     "command_held": true,
+     "truth_samples": 600,
+     "truth_move_m": 0.0002585428270096119,
+     "held": true
+    },
+    "safety": {
+     "forbidden_run": 0,
+     "forbidden_missions": 0,
+     "neighbour_overlap": [],
+     "min_gap_m": 0.38706957458720936,
+     "rest_past_bound": [],
+     "unpermitted_dir_entries": 0,
+     "scene_damaged": null,
+     "reasons": [
+      "operator"
+     ],
+     "safety_reasons": [],
+     "other_reasons": [
+      "operator"
+     ],
+     "spool_complete": true,
+     "spool_dropped": {},
+     "spool_unsettled": {},
+     "results_unsettled": [],
+     "mission_files_missing": [],
+     "pass": true
+    },
+    "targets": {
+     "row": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "requested": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ],
+     "result": [
+      [
+       "P-4",
+       "D-1"
+      ],
+      [
+       "P-5",
+       "D-2"
+      ]
+     ]
+    },
+    "target_ok": true,
+    "c2_cap": {
+     "gaps": [],
+     "unmapped": [],
+     "pass": true
+    },
+    "pass": true
+   }
+  },
+  "composition_ok": true,
+  "judged_pass": true,
+  "failed_controls": [],
+  "stop_not_held": [],
+  "outcome": "pass"
+ },
+ "failures": {
+  "ab_random_m_s1_B": [
+   {
+    "session": "ab_random_m_s1_B",
+    "mission": "m2",
+    "outcome": "failed",
+    "reason": "Tracking failed in transport: pos=1.6688,yaw=0.5045",
+    "row": 1,
+    "start": "confirmed",
+    "reject_reason": null
+   },
+   {
+    "session": "ab_random_m_s1_B",
+    "mission": null,
+    "outcome": "not_run",
+    "reason": null,
+    "row": 2,
+    "start": "not_submitted",
+    "reject_reason": null
+   }
+  ]
+ },
+ "disposition": {
+  "b_only": [
+   "ab_random_m_s1_B"
+  ],
+  "a_only": [],
+  "both": []
+ },
+ "run_checks": {
+  "slam_choice": [],
+  "image_id": [],
+  "occupied_dumps": []
+ },
+ "criteria": {
+  "pace": true,
+  "c2_cap": true,
+  "safety": true,
+  "backoff_firing": true,
+  "c2_firing": true,
+  "lifecycle_1": true,
+  "lifecycle_2": false,
+  "lifecycle_3": true,
+  "lifecycle_4": true
+ },
+ "pace_guard": true,
+ "held_by": [
+  "lifecycle_2",
+  "b_only_failure"
+ ],
+ "to_lead_by": [],
+ "outcome": "hold"
+}
