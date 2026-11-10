@@ -24,6 +24,12 @@
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
 #   --d7-reapproach-hold comes later and wins),
+#   RETURN_START (boxed: --return-start-backoff boxed) and NEAR_END_STAND (on: --near-end-stand on) -- ④⑤, the
+#   lead's promotion decision of 2026-11-11 after rv4 (docs/validation/2026-11-11-live-riib-rv4-results.md); off as
+#   before (NEAR_END_STAND also shadow); a --near-tracking run defaults both off and refuses a return-start backoff other
+#   than off; an EXTRA_ARGS value comes later and wins; records made before this default ran with both off: do not mix
+#   them with later ones; measurement wrappers that call this launcher inherit the defaults unless they name the two,
+#   so a measurement's registration names them,
 #   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
 #   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
@@ -89,16 +95,22 @@ case "$FAR_EXPECTED" in on|off) ;; *) echo "FAR_EXPECTED must be on or off"; exi
 g3_words() { local IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}; set +f; }
 G3_NEAR=0
 G3_EXTRA_CAST=""
+G3_EXTRA_RSB=""  # an EXTRA_ARGS --return-start-backoff's last value (other than off refused with --near-tracking)
 g3_next=0
+rsb_next=0
 while IFS= read -r w; do
   if [ "$g3_next" = 1 ]; then G3_EXTRA_CAST=$w; g3_next=0; continue; fi
+  if [ "$rsb_next" = 1 ]; then G3_EXTRA_RSB=$w; rsb_next=0; continue; fi
   case "$w" in
     --near-tracking) G3_NEAR=1;;
     --lidar-cast) g3_next=1;;
     --lidar-cast=*) G3_EXTRA_CAST=${w#--lidar-cast=};;
+    --return-start-backoff) rsb_next=1;;
+    --return-start-backoff=*) G3_EXTRA_RSB=${w#--return-start-backoff=};;
+    --near-end-stand|--near-end-stand=*) ;;  # comes after the launcher's and wins (argparse keeps the last)
     --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
       o=${w%%=*}
-      for full in --near-tracking --lidar-cast; do
+      for full in --near-tracking --lidar-cast --return-start-backoff --near-end-stand; do
         case "$full" in "$o"*) echo "EXTRA_ARGS $o: write $full in full"; exit 2;; esac
       done;;
   esac
@@ -121,6 +133,23 @@ case "$LIDAR_CAST" in loop|fast|oracle) ;; *) echo "LIDAR_CAST must be loop, fas
 case "$G3_EXTRA_CAST" in ""|loop|fast|oracle) ;; *) echo "EXTRA_ARGS --lidar-cast must be loop, fast or oracle"; exit 2;; esac
 echo "SCAN_SWITCHES grid_clear_kernel=$FORKLIFT_GRID_CLEAR_KERNEL shadow_kernel=$FORKLIFT_SHADOW_KERNEL" \
   "lidar_cast=${G3_EXTRA_CAST:-$LIDAR_CAST}${G3_EXTRA_CAST:+ (EXTRA_ARGS)}"
+# ④⑤ (the lead's promotion decision of 2026-11-11 after rv4, docs/validation/2026-11-11-live-riib-rv4-results.md):
+# on by default in this launcher -- --return-start-backoff boxed (RETURN_START) and --near-end-stand on
+# (NEAR_END_STAND); an explicit value wins and an EXTRA_ARGS --return-start-backoff / --near-end-stand comes later and
+# wins (abbreviations refused, so what is printed is what runs). A --near-tracking run defaults both to off: its contract
+# records the return-start backoff off (near_tracking.py), so a value other than off is refused there; the near-end
+# stand is a run-specific argument of that contract and may be named.
+# The runner's own defaults stay off. Live records made before this default (rv4's arm A, earlier console baselines)
+# ran with both off: do not mix them with later ones.
+if [ "$G3_NEAR" = 1 ]; then RETURN_START=${RETURN_START:-off}; NEAR_END_STAND=${NEAR_END_STAND:-off}
+else RETURN_START=${RETURN_START:-boxed}; NEAR_END_STAND=${NEAR_END_STAND:-on}; fi
+case "$RETURN_START" in on|boxed|off) ;; *) echo "RETURN_START must be on, boxed or off"; exit 2;; esac
+case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "NEAR_END_STAND must be on, shadow or off"; exit 2;; esac
+if [ "$G3_NEAR" = 1 ] && { [ "$RETURN_START" != off ] || { [ -n "$G3_EXTRA_RSB" ] && [ "$G3_EXTRA_RSB" != off ]; }; }; then
+  echo "--near-tracking keeps the return-start backoff off (RETURN_START and any EXTRA_ARGS --return-start-backoff off)"
+  exit 2
+fi
+echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NEAR_END_STAND"
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
@@ -238,6 +267,7 @@ CPU0=${BRIDGE_CPU:-$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cu
   # the G3 scan-step switches (real-time plan 5.26-5.27): the runner exports the two and passes --lidar-cast
   printf 'FORKLIFT_GRID_CLEAR_KERNEL=%q\nFORKLIFT_SHADOW_KERNEL=%q\nLIDAR_CAST=%q\n' \
     "$FORKLIFT_GRID_CLEAR_KERNEL" "$FORKLIFT_SHADOW_KERNEL" "$LIDAR_CAST"
+  printf 'RETURN_START=%q\nNEAR_END_STAND=%q\n' "$RETURN_START" "$NEAR_END_STAND"  # ④⑤ (the runner passes them)
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'START_POSE_KNOWN=%q\n' "${START_POSE_KNOWN:-}"  # the repro batch's H0: placed and known (empty: off)
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
@@ -326,7 +356,9 @@ ARGS=(
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
-  --lidar-cast "${LIDAR_CAST:-loop}" $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
+  --lidar-cast "${LIDAR_CAST:-loop}" \
+  --return-start-backoff "${RETURN_START:-off}" --near-end-stand "${NEAR_END_STAND:-off}" \
+  $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
   # an older runner would take --check-args for a Kit argument and start Isaac
