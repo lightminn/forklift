@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Where the forward leg's start error comes from: at the reverse leg's end (the first cusp) and at forward start,
+"""Where the forward leg's start error comes from: at the reverse leg's end (the runner's leg switch at the first cusp) and at forward start,
 truth and control-estimate offsets from the plan, the SLAM estimate-truth gap over the transport, and commands.
 usage: rv3_cusp_start.py SESSIONS_DIR OUT.json"""
 import bisect, glob, json, math, os, sys
@@ -40,8 +40,13 @@ def measure(run, mission):
     # the first reverse leg ends at cusps[0]: the moment the truck stops reversing (the first forward run start)
     runs = run_lengths(samples, lambda s: s["signed_speed_mps"] > 0.05)
     t_fwd = max(runs, key=lambda x: x[1] - x[0])[0] if runs else None
+    # the reverse leg's end: the runner's own leg switch at the first cusp (result.json leg_switches, leg 0 of this
+    # transport); the last reversing sample comes about a second earlier, before the creep and brake to the cusp
+    switch = next((e for e in top.get("leg_switches") or [] if e.get("phase") == "transport" and e.get("leg") == 0
+                   and t_in <= e["time_s"] <= t_out), None)
     rev = run_lengths(samples, lambda s: s["signed_speed_mps"] < -0.05)
-    t_rev_end = max((b for a, b in rev if t_fwd is None or b <= t_fwd), default=None)
+    t_rev_end = switch["time_s"] if switch else max((b for a, b in rev if t_fwd is None or b <= t_fwd), default=None)
+    out["reverse_end_source"] = "leg_switch" if switch else "last_reversing_sample"
     edges = [0, *cusps, len(poses) - 1]
     forward = max(zip(edges, edges[1:]), key=lambda e: e[1] - e[0])[0]
     for label, t in (("reverse_end", t_rev_end), ("forward_start", t_fwd)):
