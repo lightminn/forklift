@@ -96,6 +96,11 @@ while IFS= read -r w; do
     --near-tracking) G3_NEAR=1;;
     --lidar-cast) g3_next=1;;
     --lidar-cast=*) G3_EXTRA_CAST=${w#--lidar-cast=};;
+    --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
+      o=${w%%=*}
+      for full in --near-tracking --lidar-cast; do
+        case "$full" in "$o"*) echo "EXTRA_ARGS $o: write $full in full"; exit 2;; esac
+      done;;
   esac
 done < <(g3_words)
 if [ "$G3_NEAR" = 1 ]; then

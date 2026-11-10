@@ -34,7 +34,7 @@ own cache kept across the whole sequence, as the runner's module cache is. Each 
 arms and classed truck / P1 / P2 / other. Passes when every scan's arrays are equal in every step; in every step the
 truck has an own hit, each pallet has hits, a pallet's hits are own exactly in the steps whose set holds its prefix and
 the other hits are never own; and the fast path's cache answered some rays of the later F steps from entries an
-earlier step made. Exit 1 otherwise.
+earlier step made (lookups counted by the step that made each entry). Exit 1 otherwise.
 
 Writes OUT/lidar_bench.json; touches nothing else.
 """
@@ -157,15 +157,32 @@ def prefix_sequence(stage, query, pl):
     for origin, dirs in scans:  # the hit bodies, once, outside the arms
         bs = bodies(query, carb.Float3(*map(float, origin)), dirs, args.range_m)
         classes.append([classify(str(rb) + str(col)) if hit else None for hit, _, rb, col in bs])
-    shared = {}  # the fast path's cache across the whole sequence, as the runner's module cache
+    class StepCache(dict):
+        """The fast path's cache across the whole sequence (as the runner's module cache), each entry tagged with the
+        step that made it; a lookup that finds an entry an earlier step made is counted (Codex review P2: only such
+        lookups show reuse across steps -- a cache emptied at every step must fail)."""
+        step = 0
+        made: dict = {}
+        earlier_hits = 0
+
+        def get(self, key, default=None):
+            if key in self and self.made[key] < self.step:
+                self.earlier_hits += 1
+            return super().get(key, default)
+
+        def __setitem__(self, key, value):
+            self.made[key] = self.step
+            super().__setitem__(key, value)
+
+    shared = StepCache()
+    shared.made = {}
     out = []
-    for name, prefixes in steps:
+    for index_, (name, prefixes) in enumerate(steps):
         before = len(shared)
+        shared.step, shared.earlier_hits = index_, 0
         row = {"step": name, "prefixes": list(prefixes), "scans": len(scans), "mismatched_scans": 0,
                "mismatched_rays": 0, "hits": {}, "own": {}, "cache_entries_before": before}
-        cached_rays = 0
         for (origin, dirs), cls in zip(scans, classes):
-            keys_before = set(shared)
             ref = pl._loop_cast(origin, dirs, args.range_m, prefixes)
             got = pl.cast_scan_flags_fast(origin, dirs, args.range_m, own_prefixes=prefixes, query=query,
                                           own_cache=shared)
@@ -179,11 +196,8 @@ def prefix_sequence(stage, query, pl):
                     continue
                 row["hits"][c] = row["hits"].get(c, 0) + 1
                 row["own"][c] = row["own"].get(c, 0) + int(ref[2][i])
-            # rays this scan answered from entries made before it (an earlier step's, or an earlier scan's)
-            bs = bodies(query, carb.Float3(*map(float, origin)), dirs, args.range_m)
-            cached_rays += sum(1 for hit, _, rb, col in bs if hit and (prefixes, rb or "", col or "") in keys_before)
         row["cache_entries_after"] = len(shared)
-        row["cached_rays"] = cached_rays
+        row["earlier_step_hits"] = shared.earlier_hits  # rays answered from entries an earlier step made
         pallet_in = {cls: prefix_of[cls] in prefixes for cls in prefix_of}
         row["expected"] = {
             "truck_own": row["own"].get("truck", 0) > 0 and row["own"]["truck"] == row["hits"]["truck"],
@@ -193,7 +207,7 @@ def prefix_sequence(stage, query, pl):
             "other_never_own": row["own"].get("other", 0) == 0,
             "equal": row["mismatched_scans"] == 0}
         out.append(row)
-    reuse = all(r["cache_entries_before"] > 0 and r["cached_rays"] > 0 for r in out[2::2])  # the later F steps
+    reuse = all(r["earlier_step_hits"] > 0 for r in out[2::2])  # the later F steps: entries the first F made
     record["prefix_sequence"] = {"pallets": ids, "targets": len(targets),
                                  "targets_by_class": {c: sum(t[0] == c for t in targets) for c in roots},
                                  "steps": out, "cache_reused_in_later_f_steps": reuse,

@@ -11428,8 +11428,9 @@ def lifecycle_mark(name: str, **fields) -> None:
 
 def scan_switches_record() -> dict:
     """The G3 scan-step switches as this process applied them (real-time plan 5.26-5.27; the console launcher turns
-    them on by default since 2026-11-10): the two environment switches as the modules read them at import, the kernel
-    mode the shadow memory's array path needs (it runs only away from ``reference``), the LiDAR cast mode, and the
+    them on by default since 2026-11-10): the two environment switches as the modules read them at import, whether the
+    shadow memory's array path is enabled (away from ``reference``; a call can still take the original path at its own
+    gates), the LiDAR cast mode, and the
     NumPy and numba versions. Requested values are the launcher's (env.sh, its SCAN_SWITCHES line)."""
     import importlib.metadata as md
 
@@ -11447,7 +11448,7 @@ def scan_switches_record() -> dict:
 
     mode = kernels.mode()
     return {"grid_clear_kernel": bool(obstacle_grid.CLEAR_KERNEL), "shadow_kernel": bool(shadow_memory.SHADOW_KERNEL),
-            "shadow_arrays_active": bool(shadow_memory.SHADOW_KERNEL) and mode != "reference", "kernels_mode": mode,
+            "shadow_arrays_enabled": bool(shadow_memory.SHADOW_KERNEL) and mode != "reference", "kernels_mode": mode,
             "lidar_cast": lidar_mode_.CAST_MODE, "numpy": version("numpy"), "numba": version("numba")}
 
 

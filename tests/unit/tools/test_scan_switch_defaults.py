@@ -56,8 +56,8 @@ def _env_sh(tmp_path) -> dict:
 def _runner(tmp_path):
     env = dict(line.split("=", 1) for line in (tmp_path / "runner_env").read_text().split())
     args = (tmp_path / "runner_args").read_text().splitlines()
-    casts = [args[i + 1] for i, a in enumerate(args) if a == "--lidar-cast"]
-    casts += [a.split("=", 1)[1] for a in args if a.startswith("--lidar-cast=")]
+    casts = [args[i + 1] if a == "--lidar-cast" else a.split("=", 1)[1]  # in order: argparse keeps the last
+             for i, a in enumerate(args) if a == "--lidar-cast" or a.startswith("--lidar-cast=")]
     return env, args, casts
 
 
@@ -82,7 +82,8 @@ def test_an_explicit_value_wins_and_a_measurement_list_s_zero_stays_zero(tmp_pat
 
 
 @pytest.mark.parametrize("extra, final", [("--lidar-cast oracle", "oracle"), ("--trace\t--lidar-cast=loop", "loop"),
-                                          ("--lidar-cast fast\n--lidar-cast loop", "loop")])
+                                          ("--lidar-cast fast\n--lidar-cast loop", "loop"),
+                                          ("--lidar-cast=oracle --lidar-cast fast", "fast")])
 def test_an_extra_args_lidar_cast_comes_later_and_wins(tmp_path, extra, final):
     p = _launch(tmp_path, EXTRA_ARGS=extra)
     assert p.returncode == 0, p.stdout + p.stderr
@@ -99,6 +100,12 @@ def test_a_near_tracking_run_keeps_all_three_off_and_refuses_an_explicit_on(tmp_
                 {"EXTRA_ARGS": "--near-tracking --lidar-cast=fast"}):
         p = _launch(tmp_path, **{"EXTRA_ARGS": "--near-tracking", **env})
         assert p.returncode == 2 and "--near-tracking keeps" in p.stdout, (env, p.stdout + p.stderr)
+
+
+@pytest.mark.parametrize("extra", ["--lidar-c oracle", "--lidar-cas=loop", "--near-track", "--lidar-cast oracle --lidar-c loop"])
+def test_an_abbreviation_argparse_would_take_is_refused(tmp_path, extra):
+    p = _launch(tmp_path, EXTRA_ARGS=extra)
+    assert p.returncode == 2 and "in full" in p.stdout, p.stdout + p.stderr
 
 
 @pytest.mark.parametrize("env, message", [({"FORKLIFT_GRID_CLEAR_KERNEL": "on"}, "must be 0 or 1"),
@@ -134,10 +141,10 @@ def test_the_runner_records_what_it_applied(monkeypatch):
     try:
         kernels.set_mode("numpy")
         r = run_transport.scan_switches_record()
-        assert (r["grid_clear_kernel"], r["shadow_kernel"], r["shadow_arrays_active"], r["kernels_mode"],
+        assert (r["grid_clear_kernel"], r["shadow_kernel"], r["shadow_arrays_enabled"], r["kernels_mode"],
                 r["lidar_cast"]) == (True, True, True, "numpy", "fast")
         assert r["numpy"]
         kernels.set_mode("reference")  # the shadow memory's array path does not run in reference mode
-        assert run_transport.scan_switches_record()["shadow_arrays_active"] is False
+        assert run_transport.scan_switches_record()["shadow_arrays_enabled"] is False
     finally:
         kernels.set_mode(mode)
