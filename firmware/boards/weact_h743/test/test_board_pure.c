@@ -2,6 +2,7 @@
 
 #include "board/board_config.h"
 #include "board/mailbox.h"
+#include "board/spi_cfg.h"
 #include "fw_test.h"
 
 static void mailbox_rules(void)
@@ -84,8 +85,18 @@ static void sensor_slot(void)
     CHECK(!slot_take(slot_pack(0, 0x1234), &consumed, &frame));
 }
 
+static void spi_cfg1(void)
+{
+    uint32_t v = spi_cfg1_value(3u);
+    CHECK_EQ_U((v >> 16) & 0x1Fu, 7u); /* CRCSIZE kept at its reset value */
+    CHECK_EQ_U(v & 0x1Fu, 15u);        /* DSIZE 16-bit */
+    CHECK_EQ_U((v >> 28) & 0x7u, 3u);  /* MBR /16 */
+    CHECK_EQ_U(v & (1u << 22), 0u);    /* CRCEN off */
+}
+
 int main(void)
 {
+    spi_cfg1();
     sensor_slot();
     mailbox_rules();
     mailbox_interleaving();

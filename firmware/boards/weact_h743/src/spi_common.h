@@ -9,7 +9,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "board/spi_cfg.h"
 #include "stm32h7xx.h"
+
+_Static_assert(SPI_CFG1_MBR_POS == SPI_CFG1_MBR_Pos &&
+                   SPI_CFG1_CRCSIZE_POS == SPI_CFG1_CRCSIZE_Pos &&
+                   SPI_CFG1_DSIZE_POS == SPI_CFG1_DSIZE_Pos,
+               "SPI_CFG1 field positions");
 
 /* The data registers take one 16-bit frame per access; address them as 16-bit MMIO. */
 static inline volatile uint16_t *spi_reg16(SPI_TypeDef *spi, size_t offset)
@@ -24,7 +30,7 @@ static inline volatile uint16_t *spi_reg16(SPI_TypeDef *spi, size_t offset)
 static inline void spi_setup(SPI_TypeDef *spi, uint32_t mbr, uint32_t cpol, uint32_t cpha)
 {
     spi->CR1 = 0;
-    spi->CFG1 = (mbr << SPI_CFG1_MBR_Pos) | (15u << SPI_CFG1_DSIZE_Pos); /* 16-bit frames */
+    spi->CFG1 = spi_cfg1_value(mbr); /* 16-bit frames, CRC off, CRCSIZE at reset */
     /* Master, software NSS held high internally, outputs kept driven while disabled (AFCNTR). */
     spi->CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_AFCNTR | (cpol ? SPI_CFG2_CPOL : 0u) |
                 (cpha ? SPI_CFG2_CPHA : 0u);
