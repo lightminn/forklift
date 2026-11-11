@@ -9778,8 +9778,9 @@ def drive(S, isaac) -> None:
                     latency_marks_.control_tick(stepper["tick"], t)  # latency test: what this control tick reads first
                     if latency_box_["stand_since"] is not None:  # the control ticks inside the current stand
                         last_c_ = latency_box_["stand_ctrl_last"]
-                        if last_c_ is not None:
-                            latency_box_["stand_ctrl_gap_max"] = max(latency_box_["stand_ctrl_gap_max"], float(t) - last_c_)
+                        # the first gap counts from the stand's start (a capture's steps before it are a gap too)
+                        ref_ = last_c_ if last_c_ is not None else latency_box_["stand_since"]
+                        latency_box_["stand_ctrl_gap_max"] = max(latency_box_["stand_ctrl_gap_max"], float(t) - ref_)
                         latency_box_["stand_ctrl_last"] = float(t)
                         latency_box_["stand_ctrl_n"] += 1
                 if live is not None:
