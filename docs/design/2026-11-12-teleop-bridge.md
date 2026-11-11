@@ -72,7 +72,7 @@ MCU 의 `wheel_rate_*` 는 쓰지 않는다(창이 표본 수라 시간 범위�
 이 다리에는 미션 코어가 없다(`Arbiter(mission=None)` — AUTO·미션 요청은 `unsupported`). 정책이 읽는 안전 상태를 다리가 만든다.
 - 기본은 **알 수 없음**: `load`·`fork_in_pocket` 이 `None` → 정책이 `state_unknown` 으로 거부.
 - 독립 S6 운용의 시작 확인은 네 가지를 **따로** 받는다(`--yes` 로 대신 못 함): `--empty-forks`(무적재), `--forks-clear`(포켓 밖), `--lift-low`(승강이 바닥~운반 높이 사이, 계획 5절), `--no-open-recovery`(미해결 현장 복구 없음). 넷이 다 있어야 빈 포크·포켓 밖·SLAM 없음(`frame.slam = False`)·미션 없음 상태를 쓴다. 하나라도 빠지면 알 수 없음이다.
-- **다리 자체의 실차 규칙**(재검토 P1-3): 안전 상태 제공자가 무엇을 주든(4e-2 에서 미션 코어가 줄 때도) 정책보다 먼저 `teleop_refused` 를 덮어쓴다 — `load.loaded` 참 → `real_loaded`, `recovery_required` 참 → `real_recovery_required`, `fork_in_pocket` 참이거나 `recovery` 문맥이 있음 → `real_in_pocket`. 기존 정책은 `recovery` 문맥이 있으면 `recovery_required` 보다 먼저 복구 주행(`reverse_straight`)을 열 수 있으므로 정책에 맡기지 않는다. 실차는 포켓 안 복구를 하지 않는다(현장 복구 절차, 계획 5절).
+- **다리 자체의 실차 규칙**(재검토 P1-3): 안전 상태 제공자가 무엇을 주든(4e-2 에서 미션 코어가 줄 때도) 정책보다 먼저 `teleop_refused` 를 덮어쓴다 — `load.loaded` 참 → `real_loaded`, `recovery_required` 참 → `real_recovery_required`, `fork_in_pocket` 참이거나 `recovery` 문맥이 있음 → `real_in_pocket`. 기존 정책은 `recovery` 문맥이 있으면 `recovery_required` 보다 먼저 복구 주행(`reverse_straight`)을 열 수 있으므로 정책에 맡기지 않는다. 실차는 포켓 안 복구를 하지 않는다. 이 덮어쓰기는 현장 복구 (B) 결정(총괄 2026-11-11 — `recovery_required` 면 텔레옵을 포함한 모든 구동·승강을 막고, 사람이 DISARM·차체 들기·팔레트 제거 뒤 `field_recovery_done`)을 다리에서 지키는 것이다: 계획 `docs/plans/2026-11-11-sim-to-real-bringup.md` 5절 '현장 복구 절차', 감사 `docs/design/2026-11-11-p05-truth-audit.md` 4-3·4-4 (4d-2b-2 구현 #450).
 
 ## 8. 허가와 방향 검사 — 스캔 없으면 0, 4d-1 규칙 그대로 (Codex P1-1, 재검토 P1-2)
 
