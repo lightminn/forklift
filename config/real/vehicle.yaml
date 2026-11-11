@@ -36,7 +36,22 @@ steering_map:
   kind: ideal_bicycle
   provenance: {source: chassis_model_steering_limit_one_wheel_measured_assigned_to_both, measured: false, until: S2}
 
+# Every limit in this file is static: it does not depend on the lift height (승강 높이 무관 정적 한계, 적재 운반
+# 전 재결정 -- lead decision 2026-11-11). Until it is decided again, before the first loaded transport on the real
+# truck, the real stages run with empty forks, at low speed and with the lift between the floor and the carrying
+# height only (plan section 5).
 wheel_rate_limit:
   # Operating limit on each driven wheel's rate (rad/s); also the firmware's max_wheel_rad_s.
   rad_s: 8.0
   provenance: {source: simulation_assumption_wheel_speed_limit_radps, measured: false, until: S3}
+
+steering_control:
+  # Host-side steering limits on the mechanism angle q (sim-to-real 4a' design D1): the rate the core slews q
+  # at, the creep / presteer / straight-ahead tolerances. Provisional copies of the simulation's settings on the
+  # front wheel angle (steering_command_rate_rad_s 1.0, creep 0.05, presteer 0.02, recovery straight 0.01);
+  # q is a different angle, so each is measured in S4 before it is trusted.
+  steering_rate_rad_s: 1.0
+  creep_threshold_rad: 0.05
+  presteer_threshold_rad: 0.02
+  straight_threshold_rad: 0.01
+  provenance: {source: simulation_settings_on_front_wheel_angle, measured: false, until: S4}

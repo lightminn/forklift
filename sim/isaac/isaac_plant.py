@@ -39,6 +39,18 @@ class IsaacPlant:
         """The two front steering joints' position targets."""
         self.robot.apply_action(self.action(joint_positions=steering, joint_indices=self.steers))
 
+    def command(self, cmd, lock_q=None):
+        """The shared contract (4a', forklift_core.plant.port.PlantCommand) on this plant: the wheels (with the
+        Isaac-only standstill lock), the steering and the lift target, then ``queued``. drive() keeps calling the
+        three methods itself until 4e-1 (a write sits between them); this is the contract's Isaac side."""
+        from forklift_core.plant.port import PortResult
+
+        self.drive_wheels(np.asarray(cmd.drive.wheel_rates_rad_s), lock_q)
+        self.steer(np.asarray(cmd.steering_command))
+        if cmd.lift_mode == "target":
+            self.hold_lift(cmd.lift_m)
+        return PortResult("queued")
+
     def controller(self):
         """Isaac only: the articulation controller whose drive gains the wheel lock reads and sets."""
         return self.robot.get_articulation_controller()

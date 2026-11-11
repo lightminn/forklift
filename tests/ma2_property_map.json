@@ -4799,8 +4799,8 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)",
-    "replace": "steering_command.copy() if (estop_holding or obstacle_hold or cusp_hold)",
+    "find": "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold or refused)",
+    "replace": "steering_command.copy() if (estop_holding or obstacle_hold or cusp_hold or refused)",
     "count": 1
    },
    "evidence": {
