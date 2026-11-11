@@ -8,6 +8,7 @@ two STATEs' encoder counts (design 2), never a dead-reckoning pose or the true s
 
 from __future__ import annotations
 
+import itertools
 import math
 import secrets
 from collections.abc import Callable, Sequence
@@ -89,6 +90,8 @@ class EncoderReading:
     dt_s: float | None = None
     age_s: float | None = None
     steering_rad: float | None = None
+    wheel_mps: tuple | None = None  # each wheel's measured speed (left, right), wheel forward positive
+    wheel_err: tuple | None = None  # each wheel's error width
 
 
 _INVALID = SafetySpeed(0.0, 0.0, (1, -1), valid=False)
@@ -146,7 +149,8 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
     lo, hi = signed - err, signed + err
     directions = (1, -1) if (lo < 0.0 < hi) else ((1,) if lo >= 0.0 else (-1,))
     return EncoderReading(SafetySpeed(signed, bound, directions, valid=True, age_s=age),
-                          (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q)
+                          (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q,
+                          wheel_mps=(v[0], v[1]), wheel_err=(e[0], e[1]))
 
 
 class DelayBound:
@@ -395,6 +399,29 @@ OUT_LIFE_NS = 100_000_000  # a DRIVE's life from its decision, before the consol
 STOPPING_WAIT_NS = 1_000_000_000  # an MCU-originated STOPPING runs out before the DISARM, for at most this
 IDLE, ARMING, READY, DISARMING, HELD = "idle", "arming", "ready", "disarming", "held"
 
+# --------------------------------------------------------------- the wall escape (standing-direction-rule design 4)
+ESCAPE_MPS = 0.05  # the escape's command cap (the physical speed is watched per wheel)
+ESCAPE_WHEEL_MARGIN_MPS = 0.02  # a wheel over ESCAPE_MPS + this is a STOP
+ESCAPE_DISTANCE_M = 0.20  # the operating budget: per wheel cumulative absolute travel, to the stand
+ESCAPE_TIME_S = 4.0
+ESCAPE_BRAKE_MIN_MPS2 = 0.3  # b_min: provisional, set by S5's stop measurement (plan's provisional table)
+ESCAPE_REVERSE_COUNTS = 3  # back from a wheel's best progress; re-set only from S6's count jitter (with a mm cap)
+ESCAPE_YAW_RAD_S = 0.02
+
+
+def escape_stop_reach_m(travel_m: float, reading: EncoderReading, p: EncoderSpeedParams, *, cycle_s: float) -> float:
+    """Design 4.3 (5th ed.): the travel so far plus the farthest the truck may still go once a stop is decided --
+    ``v T + A T^2 / 2 + (v + A T)^2 / (2 b_min)``, with ``v = max_w(|v_w| + e_w)`` (the safety bound, never signed),
+    ``A`` premise A1's wheel acceleration and ``T`` the reading's age (its delay included), a cycle and a DRIVE's
+    life."""
+    if reading.wheel_mps is not None and reading.wheel_err is not None:
+        v = max(abs(w) + e for w, e in zip(reading.wheel_mps, reading.wheel_err))
+    else:
+        v = reading.speed.bound_mps
+    a = p.wheel_accel_mps2
+    t = (reading.age_s or 0.0) + cycle_s + OUT_LIFE_NS / 1e9
+    return travel_m + v * t + 0.5 * a * t * t + (v + a * t) ** 2 / (2.0 * ESCAPE_BRAKE_MIN_MPS2)
+
 
 class TeleopBridge:
     """One cycle of the S6 bridge (design 5, step 2): read the encoder speed, run the arbiter through ``link``, keep
@@ -433,6 +460,14 @@ class TeleopBridge:
         self._urgent = False  # this cycle took a higher-priority stop than an MCU STOPPING
         self.reading: EncoderReading | None = None
         self.records: list[dict] = []
+        # the wall escape (standing-direction-rule design 4): the current offer, the approval waiting to start, the
+        # escape running, every step's record; the arbiter takes escape_approve only through this handler
+        self.offer: dict | None = None
+        self._approved: int | None = None
+        self.escape: dict | None = None
+        self.escape_log: list[dict] = []
+        self._offer_ids = itertools.count(secrets.randbelow(1 << 20) + 1)
+        self.arbiter.escape = self.approve_escape
 
     # ------------------------------------------------------------------ inputs
     def add_sample(self, sample: Sample) -> None:
@@ -662,7 +697,10 @@ class TeleopBridge:
     # ------------------------------------------------------------------ design 6
     def _output(self, now_ns: int, out, reading: EncoderReading, rec: dict) -> float:
         a = self.arbiter
+        if self.escape is not None and self._escape_lost(now_ns, rec):
+            return 0.0
         if self.phase != READY or not self.host.ready:
+            self._drop_offer()
             return 0.0  # arming: the host owns the zero; STOPPING/unauthorized: observe only
         q_meas = reading.steering_rad
         # a teleop command counts until its deadline, not at it (Codex re-review P2: the arbiter expires only past
@@ -670,7 +708,11 @@ class TeleopBridge:
         active = a.teleop is not None and int(a.teleop["deadline"] * 1e9) - now_ns >= MIN_LIFE_NS
         follow = (out.source == "teleop" and out.policy.drive_allowed and a.armed and a.preempt_latch is None
                   and active and bool(a.teleop.get("deadman")) and reading.speed.valid)
+        requested = a.drive.target(a.teleop, loaded=out.policy.loaded)[0] if a.teleop is not None else 0.0
+        if self.escape is not None:
+            return self._escape_output(now_ns, out, reading, rec, follow=follow, active=active, requested=requested)
         if not follow:
+            self._drop_offer()
             if not self.holding and q_meas is not None:
                 self.q_cmd = q_meas  # entering the hold: the steering stays where it is measured
             self.holding = True
@@ -695,17 +737,28 @@ class TeleopBridge:
             self.q_cmd = float(arr[0])
             q_cmd = [self.q_cmd]
         if speed != 0.0:
-            requested = a.drive.target(a.teleop, loaded=out.policy.loaded)[0] if a.teleop is not None else 0.0
             # the bundle TeleopDrive checks (measured curvature to the output's, with the margin), widened to the
             # curvature the submitted steering holds (Codex impl P1-2)
             k_meas = self.kin.held_curvature((q_meas,)) if q_meas is not None else None
             k_cmd = self.kin.held_curvature(q_cmd)
             ends = [k for k in (k_meas, k_cmd, float(out.curvature_inv_m)) if k is not None]
             curvs = bundle(min(ends), max(ends), a.config.teleop_limits.curvature_margin_inv_m)
-            speed, why = output_direction_check(lambda d, v: self.floor_permit(curvs, d, v), reading.speed,
-                                                requested, speed, self._commanded(now_ns))
+            limit_fn = lambda d, v: self.floor_permit(curvs, d, v)  # noqa: E731
+            commanded = self._commanded(now_ns)
+            out_speed = speed
+            speed, why = output_direction_check(limit_fn, reading.speed, requested, speed, commanded)
             if why is not None:
                 rec["direction_cut"] = why
+            started = self._offer_or_start(now_ns, reading, rec, limit_fn, requested, out_speed, commanded, why)
+            if started:
+                return self._escape_output(now_ns, out, reading, rec, follow=follow, active=active,
+                                           requested=requested)
+        else:
+            self._drop_offer()
+        return self._submit(now_ns, speed, q_cmd, q_meas, follow, rec)
+
+    def _submit(self, now_ns: int, speed: float, q_cmd: list, q_meas, follow: bool, rec: dict,
+                deadline_ns: int | None = None) -> float:
         if speed == 0.0:
             drive = self.kin.stopped(q_cmd)
         else:
@@ -717,9 +770,11 @@ class TeleopBridge:
             drive = self.kin.finalize(raw, q_cmd)
             speed = drive.speed_mps
         expires = self._deadline_ns(now_ns, follow)  # an active teleop command, wheels or steering only
+        if deadline_ns is not None:
+            expires = min(expires, deadline_ns)  # the escape's end (design 4.3)
         if expires <= now_ns:
             # the lease's end has come: nothing renews the old target -- the steering held where it is measured
-            if q_meas is not None:
+            if q_meas is not None and deadline_ns is None:
                 self.q_cmd, self.holding = q_meas, True
             q_cmd = [self.q_cmd]
             speed, drive = 0.0, self.kin.stopped(q_cmd)
@@ -735,8 +790,189 @@ class TeleopBridge:
             return 0.0
         if speed != 0.0:
             self.last_cmd = (speed, expires)  # a nonzero DRIVE may act until its expiry, whatever follows it
+            if self.escape is not None:
+                rec.setdefault("escape", {})["expires_ns"] = expires
         return speed
+
+    # ------------------------------------------------------- the wall escape (standing-direction-rule design 4)
+    def _log_escape(self, now_ns: int, event: str, **fields) -> None:
+        self.escape_log.append({"now_ns": now_ns, "event": event, **fields})
+
+    def _drop_offer(self) -> None:
+        self.offer, self._approved = None, None
+
+    def offer_view(self) -> dict | None:
+        """The state message's ``escape_offer`` (design 4.1)."""
+        o = self.offer
+        if o is None or self.escape is not None:
+            return None
+        return {k: o[k] for k in ("offer_id", "direction", "blocked", "reason")}
+
+    def escape_view(self) -> dict | None:
+        """The state message's ``escape``: the escape running."""
+        e = self.escape
+        if e is None:
+            return None
+        return {"offer_id": e["offer_id"], "direction": e["d"], "travel_m": [round(t, 4) for t in e["travel"]],
+                "elapsed_s": round((e["last_ns"] - e["start_ns"]) / 1e9, 3), "budget_m": ESCAPE_DISTANCE_M,
+                "time_s": ESCAPE_TIME_S}
+
+    def approve_escape(self, msg: dict, now_mono: float) -> str | None:
+        """The arbiter's ``escape_approve`` handler (design 4.2): the current offer, of its generations, once."""
+        now_ns = int(now_mono * 1e9)
+        why = None
+        o = self.offer
+        if self.escape is not None:
+            why = "escape_active"
+        elif o is None or msg["offer_id"] != o["offer_id"]:
+            why = "escape_no_offer"
+        elif msg["control_gen"] != o["control_gen"] or msg["arm_gen"] != o["arm_gen"]:
+            why = "escape_stale"
+        if why is not None:
+            self._log_escape(now_ns, "refused", offer_id=msg["offer_id"], reason=why)
+            return why
+        self._approved = o["offer_id"]
+        self._log_escape(now_ns, "approved", offer_id=o["offer_id"])
+        return None
+
+    def _offer_or_start(self, now_ns, reading, rec, limit_fn, requested, out_speed, commanded, cut) -> bool:
+        """Design 4.1: an offer while the requested direction's own permit allows the output and only the unasked
+        direction holds it, at a fresh stand with nothing nonzero in effect and the steering straight; an approval
+        of the offer starts the escape (returns True)."""
+        a = self.arbiter
+        d = 0 if requested == 0.0 else (1 if requested > 0 else -1)
+        ok = False
+        if cut is not None and d != 0 and (out_speed > 0) == (d > 0):
+            _al, why, hold, _drv, _uns = direction_limits(limit_fn, reading.speed, d, abs(out_speed), commanded)
+            own, _w = limit_fn(d, abs(out_speed))
+            q = reading.steering_rad
+            ok = (hold and own >= abs(out_speed) and counts_still(self.samples, self.params) and a.stop_confirmed
+                  and not self.port.older_nonzero_may_act(now_ns) and commanded == 0.0
+                  and q is not None and abs(q) <= self.kin.straight_threshold_rad)
+        if not ok:
+            self._drop_offer()
+            return False
+        o = self.offer
+        if o is None or (o["direction"], o["control_gen"], o["arm_gen"]) != (d, a.control_gen, a.arm_gen):
+            self._approved = None
+            o = self.offer = {"offer_id": next(self._offer_ids), "direction": d, "blocked": -d, "reason": why,
+                              "control_gen": a.control_gen, "arm_gen": a.arm_gen}
+            self._log_escape(now_ns, "offer", **{k: o[k] for k in ("offer_id", "direction", "blocked", "reason")})
+        rec["escape_offer"] = o["offer_id"]
+        if self._approved != o["offer_id"]:
+            return False
+        last = self.samples[-1].state
+        self.escape = {"offer_id": o["offer_id"], "d": d, "q": float(reading.steering_rad), "start_ns": now_ns,
+                       "last_ns": now_ns, "deadline_ns": now_ns + int(ESCAPE_TIME_S * 1e9),
+                       "control_gen": a.control_gen, "arm_gen": a.arm_gen, "disconnects": self.host.disconnects,
+                       "boot": last.boot_id, "c0": (last.wheel_count_left, last.wheel_count_right),
+                       "last_c": (last.wheel_count_left, last.wheel_count_right), "last_t": last.mcu_time_us,
+                       "best": [0, 0], "travel": [0.0, 0.0]}
+        self._drop_offer()
+        self.q_cmd, self.holding = self.escape["q"], True
+        self._log_escape(now_ns, "start", offer_id=o["offer_id"], direction=d, steering_rad=self.escape["q"])
+        return True
+
+    def _escape_end(self, now_ns: int, reason: str, rec: dict, *, stop: bool) -> None:
+        e = self.escape
+        self.escape = None
+        self._drop_offer()
+        self.host.drop_drives(f"escape_{reason}")
+        self._log_escape(now_ns, "end", offer_id=e["offer_id"], reason=reason, stop=stop,
+                         travel_m=[round(t, 5) for t in e["travel"]],
+                         elapsed_s=round((now_ns - e["start_ns"]) / 1e9, 3), steering_rad=e["q"])
+        rec["escape_end"] = reason
+        if stop:
+            if self.arbiter.mode != "STOPPED":
+                self._stop(now_ns, f"escape:{reason}", rec)
+            if self.phase in (ARMING, READY):
+                self._disarm(now_ns, f"escape_{reason}", rec)
+
+    def _escape_lost(self, now_ns: int, rec: dict) -> bool:
+        """Design 4.3: an operator STOP, a lease loss, a disarm, a generation change or a reconnect ends it at once."""
+        a, e = self.arbiter, self.escape
+        if (self.phase == READY and self.host.ready and a.control_gen == e["control_gen"]
+                and a.arm_gen == e["arm_gen"] and self.host.disconnects == e["disconnects"]):
+            return False
+        self._escape_end(now_ns, "generation", rec, stop=True)
+        return True
+
+    def _escape_watch(self, reading: EncoderReading) -> str | None:
+        """Every STATE since the last cycle: per wheel cumulative absolute travel and the count reverse against the
+        best progress in the escape's direction (design 4.3); then the yaw and per-wheel overspeed on the reading."""
+        e = self.escape
+        d = e["d"]
+        for smp in self.samples:
+            st = smp.state
+            if st.mcu_time_us <= e["last_t"]:
+                continue
+            if st.boot_id != e["boot"]:
+                return "boot"
+            c = (st.wheel_count_left, st.wheel_count_right)
+            for w in (0, 1):
+                step = wheel_count_delta(c[w], e["last_c"][w])
+                e["travel"][w] += abs(step) * 2.0 * math.pi * self.params.radius_m[w] / self.params.counts_per_rev[w]
+                prog = wheel_count_delta(c[w], e["c0"][w]) * d
+                e["best"][w] = max(e["best"][w], prog)
+                if e["best"][w] - prog > ESCAPE_REVERSE_COUNTS:
+                    e["last_c"], e["last_t"] = c, st.mcu_time_us
+                    return "wheel_reverse"
+            e["last_c"], e["last_t"] = c, st.mcu_time_us
+        if reading.yaw_rate is not None and abs(reading.yaw_rate) > ESCAPE_YAW_RAD_S:
+            return "yaw"
+        if reading.wheel_mps is not None and max(abs(v) for v in reading.wheel_mps) > \
+                ESCAPE_MPS + ESCAPE_WHEEL_MARGIN_MPS:
+            return "wheel_overspeed"
+        return None
+
+    def _escape_output(self, now_ns, out, reading, rec, *, follow, active, requested) -> float:
+        """Design 4.3: straight in the approved direction at ESCAPE_MPS at most, the requested direction's permit
+        as usual; the immediate stops, then the normal ends (distance by the measured formula, time, permit)."""
+        a, e = self.arbiter, self.escape
+        e["last_ns"] = now_ns
+        d = e["d"]
+        rec["escape"] = {"offer_id": e["offer_id"], "deadline_ns": e["deadline_ns"]}
+        why = None
+        if not reading.speed.valid:
+            why = "speed_invalid"
+        elif a.teleop is None or not active or not a.teleop.get("deadman"):
+            why = "deadman"
+        elif requested == 0.0 or (1 if requested > 0 else -1) != d:
+            why = "request"
+        elif not follow:
+            why = "policy"
+        elif reading.steering_rad is None or abs(reading.steering_rad) > self.kin.straight_threshold_rad:
+            why = "steering"
+        else:
+            why = self._escape_watch(reading)
+        if why is not None:
+            self._escape_end(now_ns, why, rec, stop=True)
+            return 0.0
+        q_cmd = [e["q"]]
+        self.q_cmd, self.holding = e["q"], True
+        speed = d * min(abs(float(out.speed_mps)), ESCAPE_MPS) if (out.speed_mps > 0) == (d > 0) else 0.0
+        reach = escape_stop_reach_m(max(e["travel"]), reading, self.params, cycle_s=self.cycle_s)
+        rec["escape"].update(travel_m=list(e["travel"]), reach_m=reach)
+        end = None
+        if now_ns >= e["deadline_ns"]:
+            end = "time"
+        elif reach >= ESCAPE_DISTANCE_M:
+            end = "distance"
+        elif speed == 0.0:
+            end = "permit"  # the arbiter's own target went to zero (its permit) -- it was nonzero at the offer
+        else:
+            k = [k for k in (self.kin.held_curvature(q_cmd), self.kin.held_curvature((reading.steering_rad,)), 0.0)
+                 if k is not None]
+            curvs = bundle(min(k), max(k), a.config.teleop_limits.curvature_margin_inv_m)
+            allowed, _w = self.floor_permit(curvs, d, abs(speed))
+            if allowed < abs(speed):
+                end = "permit"
+        if end is not None:
+            self._escape_end(now_ns, end, rec, stop=False)
+            return self._submit(now_ns, 0.0, q_cmd, reading.steering_rad, False, rec)
+        return self._submit(now_ns, speed, q_cmd, reading.steering_rad, True, rec, deadline_ns=e["deadline_ns"])
 
 
 __all__ = ["CONFIRMATIONS", "EncoderReading", "EncoderSpeedParams", "STANDING_MPS", "bench_safety", "command_cap_mps",
-           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayBound", "output_direction_check"]
+           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayBound", "output_direction_check", "ESCAPE_MPS", "ESCAPE_DISTANCE_M",
+           "ESCAPE_TIME_S", "ESCAPE_BRAKE_MIN_MPS2", "escape_stop_reach_m"]

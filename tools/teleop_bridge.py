@@ -118,6 +118,10 @@ class Bridge:
                                 else reading.speed.signed_mps,
                                 applied=rec["applied"], steering_rad=None if q is None else [q],
                                 lift_m=None if st is None else st.lift_m)
+            # the wall escape (standing-direction-rule design 4.1/4.3): the offer the console's button answers, and
+            # the escape running
+            msg["escape_offer"] = self.core.offer_view()
+            msg["escape"] = self.core.escape_view()
             notes = self.notes(now_ns)
             if notes:
                 msg["notes"] = notes

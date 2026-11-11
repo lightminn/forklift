@@ -12,7 +12,7 @@ import { API, createSession } from "./protocol.js";
 import { createQueueWire } from "./queuewire.js";
 import { AlarmBook, healthRows, queueStopText } from "./health.js";
 import { log, render, renderPallets, renderTemplates, renderWizard } from "./ui.js";
-import { controlProfile, disarmAsked, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
+import { controlProfile, disarmAsked, escapeRequest, frameAgreement, rejectText, scanDrawable, sessionChanges, staleness, stopIsRefused } from "./profile.js";
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
@@ -495,6 +495,11 @@ const missionId = () => m.session.state?.mission?.mission_id;
 $("lease").onclick = () => (m.session.hasLease ? req("lease_release") : req("lease_request"));
 $("stop").onclick = $("stop2").onclick = () => pressStop("console");
 $("rearm").onclick = () => req("rearm");
+// the wall escape (standing-direction-rule design 4.2): approves exactly the offer the last state showed
+$("escape").onclick = () => {
+  const fields = escapeRequest(m.session.state);
+  if (fields) req("escape_approve", fields);
+};
 // plan D13: the session requests, each behind a two-step confirm bound to its epoch, lease and control generation
 m.confirmKey = (kind) => {
   const g = m.session.generations;

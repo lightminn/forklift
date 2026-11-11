@@ -1,7 +1,7 @@
 // Panel rendering from the latest vehicle state. Buttons are only enabled when the
 // request could be accepted; the vehicle still decides and may reject.
 
-import { controlProfile, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
+import { controlProfile, escapeState, forbidText, liftControls, recoveryNote, videoStaleAfterS, palletKindLabel, permitText, rearmState, resumeState, resumeSteps, standWhy, stopInstruction, stopKind } from "./profile.js";
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
@@ -212,6 +212,14 @@ export function render(m) {
   $("rearm").disabled = !rearm.enabled;
   $("rearm").title = rearm.why;
   $("rearm").textContent = rearm.why && lease ? `재무장 · ${rearm.why}` : "재무장";
+  // the S6 bridge's wall escape (standing-direction-rule design 4.1): only while the vehicle offers it
+  const esc = escapeState(st, lease);
+  $("escape").hidden = !esc.shown;
+  $("escape").disabled = !esc.enabled;
+  $("escape").textContent = esc.label || "벽 앞 탈출";
+  $("escape").title = esc.hint;
+  $("escape-run").hidden = !esc.running;
+  $("escape-run").textContent = esc.running;
   $("l-peers").textContent = monitor
     ? "알 수 없음 · 이 연결은 조종 권한을 다루지 않습니다"
     : `${st.lease?.holder ? (lease ? "이 기기(조종)" : "다른 기기(조종)") : "조종 기기 없음"} · 관찰 ${st.lease?.observers ?? 0}대${st.lease?.reserved_until_s ? ` · 재연결 대기 ${st.lease.reserved_until_s.toFixed(1)} s` : ""}`;

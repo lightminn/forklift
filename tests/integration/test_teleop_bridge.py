@@ -4,6 +4,7 @@ console/1 through the Channels with request tokens. What it proves: the protocol
 recording on a real core -- not a real motor's currents, directions or stopping (the model's plant is synthetic)."""
 
 import itertools
+import math
 import os
 import signal
 import subprocess
@@ -185,6 +186,36 @@ def test_an_operator_teleop_drives_the_model_under_the_bound_and_a_stop_disarms_
     r.cycles(30)
     assert r.b.arbiter.mode == "STOPPED" and r.nonzero(n) == []
     assert r.b.host.state.mode == Mode.DISARMED
+
+
+def test_a_wall_escape_against_the_model(run):
+    """Standing-direction-rule design 5 (end to end): a wall behind holds the forward request at a stand; the bridge
+    offers the escape on the state message, the operator approves it, the model's wheels drive forward straight and
+    slow, and the escape ends on its measured formula within the budget."""
+    r = run(floor=lambda c, d, v: (1.0, "ok") if d > 0 else (0.0, "blocked_behind"))
+    r.to_ready()
+    r.cycles(60, teleop={"speed_ratio": 1.0}, until=lambda rec: r.b.core.offer is not None)
+    offer = r.b.core.offer
+    assert offer is not None and offer["direction"] == 1, r.recs[-1]
+    n = len(r.dev.sent)
+    assert r.nonzero(n) == []
+    st0 = r.b.host.state
+    c0 = (st0.wheel_count_left, st0.wheel_count_right)
+    r.c.request("escape_approve", arm_gen=r.b.arbiter.arm_gen, offer_id=offer["offer_id"])
+    r.cycles(400, teleop={"speed_ratio": 1.0},
+             until=lambda rec: rec.get("escape_end") is not None or r.b.arbiter.mode == "STOPPED")
+    assert any(m.get("of") == "escape_approve" and m["t"] == "ack" for m in r.c.replies), r.c.replies[-3:]
+    end = r.b.core.escape_log[-1]
+    assert end["event"] == "end" and end["reason"] == "distance", r.b.core.escape_log
+    drives = r.nonzero(n)
+    assert drives and all(m.left_wheel_rad_s > 0 and m.right_wheel_rad_s > 0 for m in drives)
+    assert max(max(m.left_wheel_rad_s, m.right_wheel_rad_s) for m in drives) * r.b.vehicle.wheel_radius_m[0] \
+        <= 0.05 + 1e-9
+    r.cycles(60, teleop={"speed_ratio": 1.0, "deadman": False})
+    st1 = r.b.host.state
+    m_per = 2 * math.pi * r.b.vehicle.wheel_radius_m[0] / r.b.vehicle.counts_per_wheel_rev[0]
+    travel = max(abs(st1.wheel_count_left - c0[0]), abs(st1.wheel_count_right - c0[1])) * m_per
+    assert 0.03 < travel <= 0.20, travel
 
 
 def test_the_cli_floor_without_a_scan_moves_nothing(run):
