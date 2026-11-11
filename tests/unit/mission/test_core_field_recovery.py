@@ -246,3 +246,22 @@ def test_an_open_field_recovery_holds_the_wheels_whatever_is_asked():
     res = core.assemble_command(11.0, 0.01, 0.4, 0.0, 0.0, held, False, False, False, False, False)
     assert res.drive.speed_mps == 0.0 and res.requested_speed == 0.0
     np.testing.assert_array_equal(res.steering_command, [0.1, 0.1])  # held, not steered
+
+
+@pytest.mark.parametrize("previous", [0.2, -0.2])
+def test_an_open_field_recovery_steps_the_slewed_wheels_to_zero_with_the_obstacle_layer_on(previous):
+    import numpy as np
+
+    from forklift_core.control.path_tracking import AckermannGeometry
+
+    core = field_core()
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.options.drive_geometry = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1,
+                                                    max_steering_rad=0.8, max_wheel_rate_rad_s=50.0)
+    core.options.obstacle_act = True
+    core.obstacle = {"layer": SimpleNamespace(permission=SimpleNamespace(
+        config=SimpleNamespace(stopping=SimpleNamespace(decel_mps2=0.8)))), "permission_cap": None}
+    core.hooks.steering_position = lambda: np.zeros(2)
+    core.state["command_speed"] = previous
+    res = core.assemble_command(11.0, 0.01, 0.0, 0.0, 0.0, np.zeros(2), False, False, False, False, False)
+    assert core.state["command_speed"] == 0.0 and res.drive.speed_mps == 0.0  # not 0.192 off the slew

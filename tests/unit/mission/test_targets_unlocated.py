@@ -58,3 +58,23 @@ def test_a_prior_pose_does_not_place_an_unlocated_pallet():
     b.unlocate("P1")
     b.update_pose("P1", Pose(4.0, 0.0, 0.0))  # a frame's re-expression, no observation
     assert b.pallets["P1"].state == "unlocated"
+
+
+def test_a_carried_pallets_last_pose_moves_with_the_frame():
+    from forklift_core.localization.slam_pose import compose
+
+    b = book()
+    b.pallets["P1"] = b.pallets["P1"].__class__(**{**b.pallets["P1"].__dict__, "state": "available", "at": None})
+    b.carried("P1")
+    assert b.pallets["P1"].last_pose == Pose(5.0, 0.0, 0.0)
+
+    def shift(p):
+        x, y, yaw = compose((1.0, 0.0, 0.0), (p.x_m, p.y_m, p.yaw_rad))
+        return Pose(x, y, yaw)
+
+    b.set_correction_version(1, reexpress=shift)  # a frame change: x + 1
+    assert b.pallets["P1"].last_pose == Pose(6.0, 0.0, 0.0)
+    assert b.move_last_pose("P1", shift) and b.pallets["P1"].last_pose == Pose(7.0, 0.0, 0.0)  # a hold's release
+    b.unlocate("P1")
+    assert b.pallets["P1"].pose == Pose(7.0, 0.0, 0.0)  # kept out where it was last known, in this frame
+    assert b.move_last_pose("P1", shift) is False  # only while carried

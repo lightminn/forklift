@@ -127,6 +127,16 @@ class TargetsBook:
         moved by other means (a manual recovery's ground verdict)."""
         return self._set(pallet_id, at=destination_id)
 
+    def move_last_pose(self, pallet_id: str, move) -> bool:
+        """A carried pallet's last known pose carried by a frame change (``move(pose) -> pose``, a hold's release):
+        only while it is carried (no pose of its own) -- a pallet on the floor keeps its pose and that moves instead.
+        Not part of the targets message: the revision does not move."""
+        pallet = self.pallets[pallet_id]
+        if pallet.state != "carried" or pallet.last_pose is None:
+            return False
+        self.pallets[pallet_id] = replace(pallet, last_pose=move(pallet.last_pose))
+        return True
+
     def unlocate(self, pallet_id: str) -> bool:
         """Sim-to-real 4d-2b-2: a field recovery took the pallet off the forks by hand -- where it is now is not known.
         Never a pick (no submit names it); its last pose stays an obstacle (planning props, teleop permit) until an
@@ -164,7 +174,9 @@ class TargetsBook:
                 if pallet.pose is not None:
                     pallet = self.pallets[pid] = replace(pallet, pose=reexpress(pallet.pose))
                 if pallet.put_down_pose is not None:
-                    self.pallets[pid] = replace(pallet, put_down_pose=reexpress(pallet.put_down_pose))
+                    pallet = self.pallets[pid] = replace(pallet, put_down_pose=reexpress(pallet.put_down_pose))
+                if pallet.last_pose is not None:  # 4d-2b-2
+                    self.pallets[pid] = replace(pallet, last_pose=reexpress(pallet.last_pose))
             self.destinations = {did: reexpress(pose) for did, pose in self.destinations.items()}
         self.revision += 1
         return True

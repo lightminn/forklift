@@ -6487,9 +6487,10 @@ class MissionCore:
         escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
                         and getattr(self, "_escape_guard_stop_t", None) == float(t))
         obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
-        if getattr(self, "field_recovery", None) is not None:
+        field_open_ = getattr(self, "field_recovery", None) is not None
+        if field_open_:
             # 4d-2b-2: an open field recovery holds the wheels whatever is asked (the steering held; the vehicle side's
-            # AUTO gate is 4e-2's)
+            # AUTO gate is 4e-2's) -- and steps them to zero after the slew below (Codex 4d-2b-2 re-review P2-1)
             obstacle_hold = True
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
@@ -6542,7 +6543,7 @@ class MissionCore:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
             if getattr(options, "low_clearance_guard", "off") == "on":
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
-            if estop_holding or safety_hold:
+            if estop_holding or safety_hold or field_open_:
                 wheel_speed = 0.0
             if observe_stop_:
                 wheel_speed = 0.0  # the start backoff's guard stopped it: the same step as the e-stop's
@@ -9264,6 +9265,8 @@ class MissionCore:
                 # the near capture's hold: its pallet; or one a manual recovery put down in it. Plan
                 # 2026-10-28-adoption-zone-check: a put-down made in this hold goes with it; an older one stays
                 tb.update_pose(pid, carried(tb.pallets[pid].pose), carry_put_down=pid in put_in_hold_)
+            elif due.get("pallet_held") and pid in tb.pallets and tb.pallets[pid].last_pose is not None:
+                tb.move_last_pose(pid, carried)  # 4d-2b-2: a carried pallet's last known pose was in this hold too
             tb.set_correction_version(self.slam_releases)
         else:
             # Only what this hold found is in its frame (Codex D6 rounds 4-5): the docked destination, carried as
@@ -9273,6 +9276,10 @@ class MissionCore:
                 scenario_ = slam.get("return_scenario", slam.get("transport_scenario", self.options.scenario))
                 slam["return_scenario"] = replace(scenario_, destination=carried(scenario_.destination))
             if pallet_held:
+                mission_ = self.commands.mission
+                if mission_ is not None and mission_.pallet_id in self.targets.pallets:
+                    # 4d-2b-2: a carried pallet's last known pose (an unlocated one's keep-out) is this hold's estimate
+                    self.targets.move_last_pose(mission_.pallet_id, carried)
                 if obstacle is not None and obstacle.get("pickup_estimate") is not None:
                     obstacle["pickup_estimate"] = carried(obstacle["pickup_estimate"])
                 if pocket.get("planning_pickup") is not None:
