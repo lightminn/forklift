@@ -61,6 +61,28 @@ static void pll1_start(uint32_t src, uint32_t m, uint32_t n)
     RCC->CR |= RCC_CR_PLL1ON;
 }
 
+/* PLL3 from the reference PLL1 runs on (PLLSRC is shared), Q output only (clock_config.h). Main
+   context after the tick started: the wait does not hold the control cycle. */
+bool clock_usb_init(void)
+{
+    bool hse = (RCC->PLLCKSELR & RCC_PLLCKSELR_PLLSRC) == RCC_PLLCKSELR_PLLSRC_HSE;
+    uint32_t m = hse ? CLK_PLL_HSE_M : CLK_PLL_HSI_M;
+    uint32_t n = hse ? CLK_PLL3_HSE_N : CLK_PLL3_HSI_N;
+    RCC->PLLCKSELR = (RCC->PLLCKSELR & ~RCC_PLLCKSELR_DIVM3) | (m << RCC_PLLCKSELR_DIVM3_Pos);
+    RCC->PLLCFGR =
+        (RCC->PLLCFGR & ~(RCC_PLLCFGR_PLL3RGE | RCC_PLLCFGR_PLL3VCOSEL | RCC_PLLCFGR_PLL3FRACEN |
+                          RCC_PLLCFGR_DIVP3EN | RCC_PLLCFGR_DIVR3EN)) |
+        (CLK_PLL_RANGE_4_8 << RCC_PLLCFGR_PLL3RGE_Pos) | RCC_PLLCFGR_DIVQ3EN;
+    RCC->PLL3DIVR = ((n - 1u) << RCC_PLL3DIVR_N3_Pos) | ((2u - 1u) << RCC_PLL3DIVR_P3_Pos) |
+                    ((CLK_PLL3_Q - 1u) << RCC_PLL3DIVR_Q3_Pos) | ((2u - 1u) << RCC_PLL3DIVR_R3_Pos);
+    RCC->CR |= RCC_CR_PLL3ON;
+    if (!cycles_wait_flag(&RCC->CR, RCC_CR_PLL3RDY, CLK_SYSCLK_HZ / 100u)) {
+        return false;
+    }
+    RCC->D2CCIP2R = (RCC->D2CCIP2R & ~RCC_D2CCIP2R_USBSEL) | (2u << RCC_D2CCIP2R_USBSEL_Pos);
+    return true;
+}
+
 clock_source clock_init(void)
 {
     vos1();
@@ -97,7 +119,7 @@ clock_source clock_init(void)
     }
     iwdg_kick();
 
-    /* HSI48 for the RNG and the USB (board design 3.3), in every link build. */
+    /* HSI48 for the RNG (board design 3.3). The USB runs from PLL3 (clock_usb_init). */
     RCC->CR |= RCC_CR_HSI48ON;
     if (!cycles_wait_flag(&RCC->CR, RCC_CR_HSI48RDY, CLK_SYSCLK_HZ / 100u)) {
         stop(6);

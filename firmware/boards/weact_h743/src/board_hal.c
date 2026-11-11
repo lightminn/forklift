@@ -1,9 +1,10 @@
 /* The core's HAL table on the WeAct H743 (board design 4, core design 3): DRV8244 SPI, KTH frames,
-   wheel encoders, IPROPI current sense, nFAULT, locked outputs, IWDG. The link comes in B3. */
+   wheel encoders, IPROPI current sense, nFAULT, locked outputs, IWDG, the link rings (B3). */
 #include "board/board_hal.h"
 #include "board/board.h"
 #include "board/drv_spi.h"
 #include "board/gpio.h"
+#include "board/link.h"
 #include "stm32h7xx.h"
 
 /* nFAULT L/R/M/H: PB11, PB12, PB14, PB15 (open drain, low = fault). */
@@ -36,17 +37,13 @@ static void hal_write(void *ctx, const drive_outputs *out)
 static size_t hal_link_read(void *ctx, uint8_t *buf, size_t cap)
 {
     (void)ctx;
-    (void)buf;
-    (void)cap;
-    return 0; /* B3 */
+    return link_read(buf, cap);
 }
 
 static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
 {
     (void)ctx;
-    (void)frame;
-    (void)len;
-    return false; /* B3; the core counts the dropped STATE */
+    return link_write_frame(frame, len); /* false: the core counts the dropped STATE */
 }
 
 static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx, uint32_t tag)

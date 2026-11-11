@@ -7,5 +7,7 @@
 #define FW_LINK_KIND "@FW_LINK@"
 #define FW_OUTPUTS_LOCKED 1
 #define FW_TOOLCHAIN "@FW_TOOLCHAIN_VERSION@"
+/* Board design 3.7: the USB product string and the head of the ELF identity. */
+#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " locked " FW_GIT_DESCRIBE
 
 #endif

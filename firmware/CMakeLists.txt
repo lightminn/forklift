@@ -47,6 +47,11 @@ target_include_directories(test_weact_h743_board_pure PRIVATE
 target_link_libraries(test_weact_h743_board_pure PRIVATE fw_core)
 add_test(NAME test_weact_h743_board_pure COMMAND test_weact_h743_board_pure)
 
+add_executable(test_weact_h743_link ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_link.c)
+target_include_directories(test_weact_h743_link PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+add_test(NAME test_weact_h743_link COMMAND test_weact_h743_link)
+
 # The board's real configuration needs the generated vehicle header (FW_PYTHON).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vehicle_header.cmake)
 if(FW_PYTHON)

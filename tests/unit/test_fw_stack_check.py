@@ -63,6 +63,16 @@ def test_indirect_rules_pick_targets_per_caller(tmp_path):
     assert r["levels"][0]["worst"] == 10 + 20 + 30 + 50
 
 
+def test_indirect_targets_take_alternatives(tmp_path):
+    """B3: TinyUSB's function-pointer values are named as a list of globs (a|b|c)."""
+    ci(tmp_path / "a.ci", {"tud_task_ext": (10, "static"), "cdcd_open": (20, "static"),
+                           "vendor_cb": (70, "static"), "usbd_int_set": (5, "static"),
+                           "other": (500, "static")},
+       [("tud_task_ext", "__indirect_call")])
+    r = tool.analyse(tmp_path, [["tud_task_ext"]], ["tud_*=cdcd_*|vendor_cb|usbd_int_set"])
+    assert r["levels"][0]["worst"] == 10 + 70
+
+
 def test_recursion_and_dynamic_frames_fail(tmp_path):
     ci(tmp_path / "a.ci", {"a": (8, "static"), "b": (8, "static")}, [("a", "b"), ("b", "a")])
     with pytest.raises(SystemExit, match="recursion"):
