@@ -66,6 +66,9 @@ def test_uo9_without_reaching_the_limit_is_unexposed_and_without_events_fails():
     # an unparsed log never passes, whatever the summary says (Codex round 2 P2)
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), None))["pass"]
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), ticks("layer_overdue", held=[1.2])))["pass"]
+    nan = G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), ticks("layer_overdue", held=[float("nan")])))
+    assert not nan["pass"] and nan["end_function"] == "unreadable"  # Codex round 3 P2
+    assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=float("nan")), ticks("layer_overdue", held=[0.4])))["pass"]
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, events=0, longest=0.0), ticks()))["pass"]
     unread = budgeted(0.05)
     del unread["layer_budget"]["watchdog"]

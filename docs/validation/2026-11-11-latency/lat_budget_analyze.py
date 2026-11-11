@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -73,8 +74,15 @@ def watchdog_of(result: dict, log: dict | None) -> dict:
     lb = result.get("layer_budget") or {}
     wd = lb.get("watchdog") or {}
     ticks = (log or {}).get("overdue_ticks")
-    readable = isinstance(ticks, list) and all(isinstance(r, list) and len(r) >= 7 for r in ticks)
+    def num(x):
+        return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
+
     end = lb.get("overdue_end_s") if isinstance(lb, dict) else None
+    # every row's time and held stop finite numbers, its reason a name, the limit finite (Codex round 3 P2: a NaN
+    # compares false and would read as below the limit)
+    readable = (isinstance(ticks, list) and num(end) and num(wd.get("longest_s"))
+                and all(isinstance(r, list) and len(r) >= 7 and num(r[0]) and num(r[6])
+                        and r[5] in ("layer_overdue", END_REASON) for r in ticks))
     exceeded = [r for r in ticks if r[5] == END_REASON] if readable else None
     # the first row past the limit (held > overdue_end_s) must be the end row and the last row (Codex round 2 P2)
     past = [i for i, r in enumerate(ticks) if float(r[6]) > float(end) + 1e-9] if readable and end is not None else None
@@ -99,7 +107,7 @@ def uo9_verdict(row: dict) -> dict:
               "invariant_0": w.get("invariant_violations") == 0,
               "log_readable": w.get("log_readable") is True}
     longest, end = w.get("longest_s"), w.get("overdue_end_s")
-    if longest is None or end is None:
+    if longest is None or end is None or not w.get("log_readable"):
         checks["end_readable"] = False
         exposed = None
     else:

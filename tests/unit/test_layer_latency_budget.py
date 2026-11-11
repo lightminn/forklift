@@ -214,3 +214,5 @@ def test_the_total_stop_time_holds_the_last_stretch_up_to_the_release():
     scan(lay, 0.2)
     assert lay.watchdog(0.23) is None
     assert lay.overdue_stats["total_s"] == pytest.approx(0.02) and lay.overdue_stats["events"] == 1
+    assert lay.overdue_stats["longest_event_s"] == pytest.approx(0.02)
+    assert lay.overdue_stats["longest_s"] == pytest.approx(0.01)  # the limit's: the longest a watchdog tick held

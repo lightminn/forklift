@@ -332,7 +332,7 @@ class ObstacleLayer:
         self._overdue_since = None
         self._watch_cache = None  # (now_s, reason): one judgement per control tick
         self.latency_log = {"scans": [], "overdue_ticks": []}  # [t_scan, t_use, D]; [t, required, installed, D, kind, reason, held]
-        self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0, "total_s": 0.0}
+        self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0, "total_s": 0.0, "longest_event_s": 0.0}
         self.snapshot = None
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
         # frame; set only while the depth pocket check gates every tick.
@@ -930,6 +930,9 @@ class ObstacleLayer:
         else:
             if self._overdue_since is not None:  # the stop's last stretch, up to the tick that released it
                 self.overdue_stats["total_s"] += float(now_s) - self._watch_cache[0]
+                # the whole event to its release (longest_s stays the longest stop a watchdog tick held: the limit's)
+                self.overdue_stats["longest_event_s"] = max(self.overdue_stats["longest_event_s"],
+                                                            float(now_s) - self._overdue_since)
             self._overdue_since = None
         self._watch_cache = (now_s, reason)
         return reason
