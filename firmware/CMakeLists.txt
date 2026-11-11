@@ -40,10 +40,13 @@ if(FW_MCU_MODEL)
     set(FW_VEHICLE_YAML ${FW_REPO}/config/real/vehicle.yaml CACHE FILEPATH "real vehicle config")
     set(FW_VEHICLE_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/vehicle_config.h)
     # The header also depends on the chassis model the config names; reconfigure when the config changes.
-    file(STRINGS ${FW_VEHICLE_YAML} _fw_chassis_line REGEX "^chassis_model:")
-    string(REGEX REPLACE "^chassis_model:[ \t]*([^ \t#]+).*$" "\\1" _fw_chassis_rel "${_fw_chassis_line}")
-    get_filename_component(_fw_vehicle_dir ${FW_VEHICLE_YAML} DIRECTORY)
-    get_filename_component(FW_CHASSIS_YAML ${_fw_vehicle_dir}/${_fw_chassis_rel} ABSOLUTE)
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${FW_REPO}/src
+                ${FW_PYTHON} ${FW_REPO}/tools/real_vehicle_header.py --config ${FW_VEHICLE_YAML} --print-chassis
+        OUTPUT_VARIABLE FW_CHASSIS_YAML OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _fw_rc)
+    if(NOT _fw_rc EQUAL 0)
+        message(FATAL_ERROR "could not read the chassis model named by ${FW_VEHICLE_YAML}")
+    endif()
     if(NOT EXISTS ${FW_CHASSIS_YAML})
         message(FATAL_ERROR "chassis model ${FW_CHASSIS_YAML} named by ${FW_VEHICLE_YAML} not found")
     endif()

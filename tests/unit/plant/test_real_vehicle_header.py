@@ -94,3 +94,19 @@ int main(void) {
     assert build.returncode == 0, build.stderr
     run = subprocess.run([str(exe)], capture_output=True, text=True)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_print_chassis_resolves_relative_quoted_and_absolute_paths(tmp_path, capsys):
+    chassis = REPO / "sim" / "models" / "dls08_measured" / "parameters.yaml"
+    text = VEHICLE_YAML.read_text()
+    for value in ('"../../sim/models/dls08_measured/parameters.yaml"', str(chassis)):
+        cfg = tmp_path / "real" / "vehicle.yaml"
+        cfg.parent.mkdir(exist_ok=True)
+        cfg.write_text(text.replace("chassis_model: ../../sim/models/dls08_measured/parameters.yaml",
+                                    f"chassis_model: {value}"))
+        if value.startswith('"'):
+            (tmp_path / "sim" / "models" / "dls08_measured").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "sim" / "models" / "dls08_measured" / "parameters.yaml").write_text(chassis.read_text())
+        assert gen.main(["--config", str(cfg), "--print-chassis"]) == 0
+        printed = Path(capsys.readouterr().out.strip())
+        assert printed.is_absolute() and printed.exists() and printed.name == "parameters.yaml"

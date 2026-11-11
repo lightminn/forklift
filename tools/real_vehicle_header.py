@@ -15,7 +15,11 @@ import argparse
 import sys
 from pathlib import Path
 
-from forklift_core.plant.real_vehicle import RealVehicleConfig, load_real_vehicle
+from forklift_core.plant.real_vehicle import (
+    RealVehicleConfig,
+    chassis_model_path,
+    load_real_vehicle,
+)
 
 ROUNDING_LIMIT = 1e-5  # relative; a scale this coarse is a wrong configuration, not a rounding
 
@@ -64,8 +68,15 @@ def render_header(cfg: RealVehicleConfig) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", type=Path, required=True)
-    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--out", type=Path)
+    ap.add_argument("--print-chassis", action="store_true",
+                    help="print the chassis model file the config names (a build dependency) and exit")
     args = ap.parse_args(argv)
+    if args.print_chassis:
+        print(chassis_model_path(args.config))
+        return 0
+    if args.out is None:
+        ap.error("--out is required")
     try:
         text = render_header(load_real_vehicle(args.config))
     except ValueError as exc:
