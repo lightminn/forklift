@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""S1–S6 bring-up host tool ① (docs/design/2026-11-12-bringup-host-tools.md): record, cpr, step, scenario, analyze.
+"""S1–S6 bring-up host tools ① (docs/design/2026-11-12-bringup-host-tools.md): record, cpr, step, scenario, analyze;
+and ② (docs/design/2026-11-12-bringup-commission-tool.md): commission, S3 axis by axis on a commissioning build.
 
 Not an executor (mcu-link/2 contract 3.3): it connects to any build and records the build bits, faults and reset
 cause; it drives only under the design's section 3 conditions (the host refuses a commissioning build and, unless
@@ -16,6 +17,8 @@ usage:
                       [--floor --power-switch-reachable] [--output-response-ms X|unavailable]
                       [--stop-time-ms X|unavailable] [--stop-distance-mm X|unavailable]
   bringup.py analyze  --record run.jsonl [--marker N] [--kind tx_cut|disarm|expiry|iwdg|power] [external ...]
+  bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --seconds S [--window LO HI]
+                      [--observed pos|neg|none] [--allow-locked] [--yes]
 """
 
 from __future__ import annotations
@@ -28,11 +31,14 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from forklift_core.mcu_link.build_policy import Client
+from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive, FaultFlag, LinkDecoder, McuState, Mode, RejectReason, ResetCause, StateFlag,
 )
 from forklift_core.plant.bringup import Sample, count_settle, step_metrics, wheel_cpr, wheel_rate_cap
+from forklift_core.plant.commission import (
+    AXES, COMMISSION_DUTY_MAX, COMMISSION_HOLD_MAX_S, commission_metrics, sign_verdict,
+)
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 
@@ -66,6 +72,7 @@ class Bench:
     link: object  # ReconnectingLink-like: service(host, now_ns) -> events, attribute tx_enabled
     out: object  # a text file
     allow_locked: bool = False
+    commission: bool = False  # the commissioning tool: COMMISSION to a commissioning build only
     host: McuLinkHost = None
     samples: list = field(default_factory=list)
     written: dict = field(default_factory=dict)  # seq -> (kind, host_ns, decoded message or None)
@@ -75,7 +82,8 @@ class Bench:
 
     def __post_init__(self) -> None:
         self._tap = LinkDecoder()
-        self.host = McuLinkHost(HOST_CFG, log=self._log, client=Client.BRINGUP, allow_locked=self.allow_locked)
+        self.host = McuLinkHost(HOST_CFG, log=self._log, client=Client.BRINGUP, allow_locked=self.allow_locked,
+                                commission=self.commission)
 
     def _log(self, what, now_ns, data, info) -> None:
         try:
@@ -187,7 +195,7 @@ class Session:
         b = self.b
         if not b.run_until(lambda: b.state is not None and b.state.mode == Mode.DISARMED, 3.0):
             raise Refused("no DISARMED STATE")
-        check_build(b.state, allow_locked=b.allow_locked)
+        self.preflight(b.state)
         if self.floor:
             # design 3: a floor run needs real outputs, a wired e-stop and the main switch in reach
             if b.allow_locked or b.state.flags & (StateFlag.OUTPUTS_LOCKED | StateFlag.ESTOP_UNWIRED):
@@ -202,6 +210,9 @@ class Session:
             raise Refused(f"arm blocked: {blocked.reason}")
         if not b.run_until(lambda: b.host.ready, 2.0):  # arm_pending -> zero_pending -> ready, no retry
             raise Refused("not ready after ARM")
+
+    def preflight(self, state: McuState) -> None:
+        check_build(state, allow_locked=self.b.allow_locked)
 
     def send(self, left: float, right: float, end_ns: int | None = None) -> int | None:
         """One DRIVE expiring at most at the run's fixed end and at ``end_ns``. Returns its seq when queued."""
@@ -396,6 +407,132 @@ def run_scenario(bench: Bench, session: Session, kind: str, rate: float) -> dict
                    "note": "software evidence only: the S5 verdict takes the external measurements"}, session)
 
 
+# ---------------------------------------------------------------- ② commissioning (S3)
+_AXIS_ENCODER_BITS = {0: FaultFlag.ENCODER_STUCK_L | FaultFlag.ENCODER_POLARITY_L,
+                      1: FaultFlag.ENCODER_STUCK_R | FaultFlag.ENCODER_POLARITY_R}
+PRE_ZERO_S = 0.3
+POST_ZERO_S = 0.5
+
+
+class CommissionSession(Session):
+    """Design ② 3: a commissioning build only, the picked axis's open-loop duty, early stops, the tool ① cleanup."""
+
+    def __init__(self, bench: Bench, axis: int, window: tuple[float, float] | None) -> None:
+        super().__init__(bench, 0.0)
+        self.axis, self.window = axis, window
+        self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
+        self.stop_reason: str | None = None
+
+    def preflight(self, state: McuState) -> None:
+        if not commission_allowed(state.flags):
+            raise Refused("not a commissioning build (STATE.flags.commission_build off): nothing is sent")
+        if state.flags & StateFlag.OUTPUTS_LOCKED and not self.b.allow_locked:
+            raise Refused("outputs_locked: nothing would turn (--allow-locked for a model)")
+        if self.axis >= 2:
+            v = state.steering_rad if self.axis == 2 else state.lift_m
+            lo, hi = self.window
+            if not (v == v and lo < v < hi):
+                raise Refused(f"window: the axis value {v} is not inside ({lo}, {hi})")
+
+    def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
+        raise Refused("the commissioning tool sends no DRIVE")
+
+    def send_duty(self, duty_e4: int, end_ns: int | None = None) -> int | None:
+        if abs(duty_e4) > COMMISSION_DUTY_MAX * 10000:
+            raise Refused(f"duty {duty_e4 / 1e4} over the tool limit {COMMISSION_DUTY_MAX}")
+        now = time.monotonic_ns()
+        expires = min(self.test_end_ns, now + HOST_CFG.cap_ms * 1_000_000)
+        if end_ns is not None:
+            expires = min(expires, end_ns)
+        self.b.last_queued = None
+        blocked = self.b.host.commission(self.axis, int(duty_e4), expires, now)
+        if blocked is not None or self.b.last_queued is None:
+            return None
+        seq = self.b.last_queued["seq"]
+        self.sent.append((seq, int(duty_e4)))
+        return seq
+
+    def hold_duty(self, duty_e4: int, seconds: float, stop=None) -> int | None:
+        """``hold`` for one axis's duty: the same bound and hand-over; ``stop()`` naming a reason ends a nonzero
+        hold at once (the caller then holds 0)."""
+        end_ns = time.monotonic_ns() + int(seconds * 1e9)
+        nonzero = duty_e4 != 0
+        bound = end_ns if nonzero else None
+        stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero else end_ns
+        first = None
+        while time.monotonic_ns() < stop_ns:
+            seq = self.send_duty(duty_e4, bound)
+            first = first if first is not None else seq
+            self.b.cycle()
+            why = self._abort_reason()
+            if why is not None:
+                self.aborted = why
+                return first
+            if stop is not None and (reason := stop()) is not None:
+                self.stop_reason = reason
+                return first
+            time.sleep(0.01)
+        return first
+
+    def _abort_reason(self) -> str | None:
+        b = self.b
+        if not b.host.ready:
+            return "authorization_revoked"
+        if b.state.reject_reason != RejectReason.NONE:
+            return f"rejected_{b.state.reject_reason.name.lower()}"
+        return None
+
+
+def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float) -> dict:
+    b, axis = bench, session.axis
+    duty_e4 = int(round(duty * 10000))
+    session.arm(PRE_ZERO_S + seconds + POST_ZERO_S + 1.0)
+    i_arm = len(b.samples)
+    at_start = b.state.fault_flags & _AXIS_ENCODER_BITS.get(axis, FaultFlag(0))
+
+    def early_stop() -> str | None:
+        st = b.state
+        if axis < 2 and (st.fault_flags & _AXIS_ENCODER_BITS[axis]) & ~at_start:
+            return "encoder_bit"  # design ② 3: latched, still ARMED -- the polarity question is answered
+        if axis >= 2:
+            v = st.steering_rad if axis == 2 else st.lift_m
+            lo, hi = session.window
+            if not (v == v and lo <= v <= hi):
+                return "window"
+        return None
+
+    session.hold_duty(0, PRE_ZERO_S)
+    n_zero = len(session.sent)
+    if session.aborted is None:
+        session.hold_duty(duty_e4, seconds, early_stop)
+        if session.stop_reason is None and session.aborted is None:
+            session.stop_reason = "time"
+    n_on = len(session.sent)
+    if session.aborted is None:
+        session.hold_duty(0, POST_ZERO_S)
+    session.cleanup()
+    on_seqs = {q for q, d in session.sent[n_zero:n_on] if d != 0}
+    off_seqs = {q for q, _d in session.sent[n_on:]}
+    on_index = next((i for i in range(i_arm, len(b.samples)) if b.samples[i].state.last_rx_seq in on_seqs), None)
+    off_index = None if on_index is None else next(
+        (i for i in range(on_index, len(b.samples)) if b.samples[i].state.last_rx_seq in off_seqs), None)
+    # the motion window ends with the post-zero hold, before the cleanup's DISARM
+    end = len(b.samples)
+    disarm_seqs = {q for q, (k, _t, _m) in b.written.items() if k == "DISARM"}
+    end = next((i for i in range(i_arm, end) if b.samples[i].state.last_rx_seq in disarm_seqs), end)
+    metrics = commission_metrics(b.samples[:end], axis=axis, duty_e4=duty_e4, on_index=on_index,
+                                 off_index=off_index)
+    faults = FaultFlag(0)
+    for smp in b.samples[i_arm:]:
+        faults |= smp.state.fault_flags
+    result = "ok" if on_index is not None else "no_acceptance"
+    return _final({"result": result, "metrics": asdict(metrics), "stop": session.stop_reason,
+                   "faults_seen": [f.name for f in FaultFlag if f in faults],
+                   "build_flags": [f.name for f in StateFlag if f in b.state.flags],
+                   "note": "software evidence only: the direction is the operator's, currents against the bench supply"},
+                  session)
+
+
 def verdict(kind: str, external: dict) -> dict:
     """Design 4: external measurements against the plan 3.4 thresholds. Every value given is kept, with or without
     a threshold (Codex impl P2-10); 'unavailable' stays so."""
@@ -494,6 +631,17 @@ def main(argv=None) -> int:
     sc.add_argument("--rate", type=float, default=0.5)
     sc.add_argument("--floor", action="store_true")
     sc.add_argument("--power-switch-reachable", action="store_true")
+    cm = sub.add_parser("commission")
+    cm.add_argument("--device", required=True)
+    cm.add_argument("--baud", type=int, choices=sorted(_BAUDS))
+    cm.add_argument("--out", required=True)
+    cm.add_argument("--allow-locked", action="store_true")
+    cm.add_argument("--yes", action="store_true")
+    cm.add_argument("--axis", choices=tuple(AXES), required=True)
+    cm.add_argument("--duty", type=float, required=True)
+    cm.add_argument("--seconds", type=float, required=True)
+    cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
+    cm.add_argument("--observed", choices=("pos", "neg", "none"))
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1)
@@ -509,7 +657,7 @@ def main(argv=None) -> int:
         return 0
     link = ReconnectingLink(args.device, baud=args.baud)
     with open(args.out, "a", encoding="utf-8") as out:
-        bench = Bench(link, out, allow_locked=args.allow_locked)
+        bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
         if args.cmd in ("record", "cpr"):
             bench.run_until(lambda: False, args.seconds,
                             every=_marker_reader(bench) if args.cmd == "record" and args.markers else None)
@@ -523,14 +671,52 @@ def main(argv=None) -> int:
     return 0
 
 
+def _check_commission_args(args) -> None:
+    """Design ② 2: the tool's own limits, before anything is sent."""
+    if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
+        raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
+    if not 0 < args.seconds <= COMMISSION_HOLD_MAX_S:
+        raise Refused(f"seconds must be in (0, {COMMISSION_HOLD_MAX_S}]")
+    if AXES[args.axis] >= 2:
+        if args.window is None or not args.window[0] < args.window[1]:
+            raise Refused("window: steering and lift need --window LO HI with LO < HI")
+    elif args.window is not None:
+        raise Refused("window: a wheel takes no window")
+
+
+def _observed(args) -> str:
+    if args.observed is not None:
+        return args.observed
+    if args.yes:
+        return "unknown"
+    print("Physical direction seen (pos = wheel rolling the truck forward / steering left / lift up; neg; none): ",
+          end="", flush=True)
+    answer = sys.stdin.readline().strip()
+    return answer if answer in ("pos", "neg", "none") else "unknown"
+
+
 def execute(args, bench: Bench) -> dict:
-    """A drive command (step or scenario) on a bench, with the cleanup guaranteed once an ARM may have gone out."""
-    session = Session(bench, _cap(), floor=getattr(args, "floor", False),
-                      power_switch_reachable=getattr(args, "power_switch_reachable", False))
+    """A drive command (step, scenario or commission) on a bench, with the cleanup guaranteed once an ARM may have
+    gone out."""
+    if args.cmd == "commission":
+        session = CommissionSession(bench, AXES[args.axis], None if args.window is None else tuple(args.window))
+    else:
+        session = Session(bench, _cap(), floor=getattr(args, "floor", False),
+                          power_switch_reachable=getattr(args, "power_switch_reachable", False))
     result: dict = {"result": "aborted", "why": "not run"}
     try:
-        _confirm(args, f"{args.cmd}: will ARM and drive")
-        if args.cmd == "step":
+        if args.cmd == "commission":
+            _check_commission_args(args)
+            _confirm(args, f"commission: will ARM and drive axis {args.axis} at duty {args.duty} for at most "
+                           f"{args.seconds} s (window {args.window}). Outputs on only after the IPROPI protection is "
+                           "confirmed (user decision); the window inside the mechanical limits.")
+            result = run_commission(bench, session, args.duty, args.seconds)
+            result["observed"] = _observed(args)
+            m = result["metrics"]
+            result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
+                                             duty_sign_in_build=m["duty_sign_in_build"])
+            result.update(cmd="commission", axis=args.axis)
+        elif args.cmd == "step":
             result = run_step(bench, session, args.wheel, args.target)
         else:
             result = run_scenario(bench, session, args.kind, args.rate)
