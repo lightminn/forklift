@@ -8,6 +8,8 @@ Read `CONTRIBUTING.md` before adding or restructuring code. It is the authoritat
 
 The source uses the `src/` layout from `CONTRIBUTING.md` §1 since 2026-09-11 (`src/forklift_core/`, `examples/`, `tests/unit|integration/`). Install with `python -m pip install -e '.[dev]'` before running anything; do not rely on the checkout directory being on `sys.path`. Keep this section identical in both instruction files.
 
+Validation documents, judgement or frozen records and scripts under `docs/validation/` never point at session-temporary paths (`~/.claude/jobs/*/tmp`, scratchpads, `/tmp`) as raw data; where such data goes is set in `CONTRIBUTING.md` §7.
+
 ## What this directory is
 
 This is the **리보틱스** team's **2026-2** project. The shared course Drive groups it under `2026 2학기 임베설/리보틱스/`. Use `리보틱스/forklift/` as the remote project workspace without a duplicate team directory; see `docs/plans/2026-09-10-local-and-remote-development-environment.md` for the observed Drive layout and team execution directories.
