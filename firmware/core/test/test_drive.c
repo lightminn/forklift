@@ -56,6 +56,20 @@ static drive_config make_config(void)
     c.adc_vref_v = 3.3f;
     c.adc_full_scale = 65535;
     c.overcurrent_hold_ms = 20;
+    /* v2: a normal build with an e-stop pin; slew and encoder limits far from these tests'
+       motions unless a test tightens them (synthetic values). */
+    c.estop_wired = true;
+    c.wheel_duty_slew_per_s = 1000.0f;
+    c.enc_gap_max_us = 20000;
+    c.enc_phys_max_rad_s = 50.0f;
+    c.enc_jump_rad_s = 100.0f;
+    c.enc_stuck_duty = 0.5f;
+    c.enc_stuck_ms = 200;
+    c.enc_stuck_counts = 4;
+    c.enc_polarity_duty = 0.3f;
+    c.enc_polarity_ms = 50;
+    c.enc_polarity_rise_rad_s = 1.0f;
+    c.enc_polarity_persist_ms = 400;
     return c;
 }
 
@@ -179,7 +193,7 @@ static void reset_world(uint32_t t0)
 static void boot(uint32_t t0)
 {
     reset_world(t0);
-    CHECK(drive_init(&d, &cfg, &in, BOOT_ID));
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
     for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
         tick();
     }
@@ -245,7 +259,7 @@ static void boot_and_retry(void)
 {
     reset_world(0);
     vm_ok = false;
-    CHECK(drive_init(&d, &cfg, &in, BOOT_ID));
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
     ticks(5);
     CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT);
     CHECK(all_drvoff());
@@ -266,7 +280,7 @@ static void boot_and_retry(void)
 
     reset_world(0);
     spi_mute = true;
-    CHECK(drive_init(&d, &cfg, &in, BOOT_ID));
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
     ticks(30);
     CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT);
     spi_mute = false;
@@ -457,7 +471,7 @@ static void replay_after_reboot(void)
     z.u.drive.arm_gen = go.u.drive.arm_gen = 1;
     /* MCU resets with a new boot id; the old bundle arrives late. */
     reset_world(0);
-    CHECK(drive_init(&d, &cfg, &in, BOOT_ID + 7));
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID + 7, DRIVE_RESET_POWER));
     for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
         tick();
     }
@@ -644,7 +658,7 @@ static void config_validation(void)
     drive dd;
     drive_inputs first;
     memset(&first, 0, sizeof first);
-    CHECK(!drive_init(&dd, &c, &first, 0));
+    CHECK(!drive_init(&dd, &c, &first, 0, DRIVE_RESET_POWER));
 }
 
 static void control_directions_and_limits(void)
@@ -694,6 +708,13 @@ static void clock_wrap_replay(void)
         tick();
     }
     CHECK(d.time_us > (1ull << 32));
+    /* v2: a read gap that long loses wheel counts; clear it to reach the 64-bit check. */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    send(simple(LINK_CLEAR_FAULTS, 89));
+    for (int i = 0; i < 200 && d.mode != DRIVE_MODE_DISARMED; i++) {
+        tick();
+    }
     CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
     arm_and_zero();
     uint64_t aliased = d.time_us - (1ull << 32) + 10000;
@@ -705,7 +726,7 @@ static void spi_refusal_and_timeout(void)
 {
     reset_world(0);
     spi_refuse = true;
-    CHECK(drive_init(&d, &cfg, &in, BOOT_ID));
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
     ticks(100);
     CHECK_EQ_U(d.mode, DRIVE_MODE_BOOT); /* refused starts time out and retry */
     spi_refuse = false;
@@ -868,6 +889,537 @@ static void refused_starts_do_not_cycle_spi_tags(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
 }
 
+/* ---- mcu-link/2 (design 2026-11-11-mcu-link-v2-firmware-core) -------------------------- */
+typedef void (*cfg_mod)(drive_config *c);
+
+static double wheel_pos[2]; /* counts, vehicle-forward (sign +1 in the synthetic config) */
+
+static void boot_with(cfg_mod mod)
+{
+    reset_world(0);
+    if (mod) {
+        mod(&cfg);
+    }
+    wheel_pos[0] = wheel_pos[1] = 0.0;
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
+    for (int i = 0; i < 200 && d.mode == DRIVE_MODE_BOOT; i++) {
+        tick();
+    }
+}
+
+/* One cycle with the wheels turning at rate (rad/s); messages as in tick_msgs. */
+static void tick_moving(double rate_l, double rate_r, const link_msg *msgs, int count)
+{
+    double rates[2] = {rate_l, rate_r};
+    for (int i = 0; i < 2; i++) {
+        wheel_pos[i] += rates[i] * (double)cfg.period_us * 1e-6 * 4096.0 / TWO_PI;
+        in.wheel_hw[i] = (uint16_t)(long)llround(wheel_pos[i]);
+    }
+    tick_msgs(msgs, count);
+}
+
+static link_msg commission_msg(uint16_t seq, uint8_t axis, int16_t duty_e4, uint16_t valid,
+                               uint64_t echo)
+{
+    link_msg m = {.type = LINK_COMMISSION, .seq = seq};
+    m.u.commission = (link_commission){.axis = axis,
+                                       .duty_e4 = duty_e4,
+                                       .valid_after_echo_ms = valid,
+                                       .arm_gen = d.arm_gen,
+                                       .boot_id = d.boot_id,
+                                       .echo_mcu_time_us = echo};
+    return m;
+}
+
+static void mod_no_estop(drive_config *c)
+{
+    c->estop_wired = false;
+}
+
+static void mod_locked(drive_config *c)
+{
+    c->estop_wired = false;
+    c->outputs_locked = true;
+}
+
+static void mod_hil(drive_config *c)
+{
+    mod_locked(c);
+    c->hil_plant = true;
+}
+
+static void mod_commission(drive_config *c)
+{
+    c->estop_wired = false;
+    c->commission_build = true;
+    c->commission_duty_max = 0.15f;
+    c->commission_time_ms = 2000;
+    c->enc_stuck_duty = 0.05f;
+    c->enc_polarity_duty = 0.05f;
+}
+
+static void v2_build_bits_and_estop_unwired(void)
+{
+    link_state s;
+    boot_with(NULL);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u, 0);
+    CHECK_EQ_U(s.reset_cause, DRIVE_RESET_POWER);
+
+    boot_with(mod_no_estop); /* outputs open, no pin: ARM refused */
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_ESTOP_UNWIRED);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u, DRIVE_STATE_ESTOP_UNWIRED);
+
+    boot_with(mod_locked); /* locked outputs: allowed */
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u, DRIVE_STATE_OUTPUTS_LOCKED | DRIVE_STATE_ESTOP_UNWIRED);
+
+    boot_with(mod_hil);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u,
+               DRIVE_STATE_HIL_PLANT | DRIVE_STATE_OUTPUTS_LOCKED | DRIVE_STATE_ESTOP_UNWIRED);
+
+    boot_with(mod_commission);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u, DRIVE_STATE_COMMISSION_BUILD | DRIVE_STATE_ESTOP_UNWIRED);
+
+    /* The order: an active e-stop input is reported before the missing pin. */
+    boot_with(mod_no_estop);
+    in.estop_active = true;
+    tick();
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_LATCHED);
+}
+
+static void v2_config_and_init(void)
+{
+    drive dd;
+    drive_inputs first;
+    memset(&first, 0, sizeof first);
+    drive_config c = make_config();
+    CHECK(drive_config_valid(&c));
+    CHECK(!drive_init(&dd, &c, &first, BOOT_ID, DRIVE_RESET_OTHER + 1));
+    CHECK(drive_init(&dd, &c, &first, BOOT_ID, DRIVE_RESET_OTHER));
+    c.hil_plant = true; /* HIL must be locked */
+    CHECK(!drive_config_valid(&c));
+    c.outputs_locked = true;
+    CHECK(drive_config_valid(&c));
+    c.commission_build = true; /* and is not a commission build */
+    c.commission_duty_max = 0.15f;
+    c.commission_time_ms = 2000;
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.commission_build = true;
+    c.commission_duty_max = 0.0f;
+    c.commission_time_ms = 2000;
+    CHECK(!drive_config_valid(&c));
+    c.commission_duty_max = 1.5f;
+    CHECK(!drive_config_valid(&c));
+    c.commission_duty_max = 0.15f;
+    CHECK(drive_config_valid(&c));
+    /* gap x physical maximum must not fold in 16 bits: 0.5 s x 50 rad/s x 4096 / 2pi = 16297. */
+    c = make_config();
+    c.enc_gap_max_us = 500000;
+    CHECK(drive_config_valid(&c));
+    c.enc_gap_max_us = 510000;
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.enc_gap_max_us = c.period_us; /* below two periods */
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
+    c.enc_polarity_persist_ms = 60; /* window 10 ms + rise 50 ms */
+    CHECK(!drive_config_valid(&c));
+    c.enc_polarity_persist_ms = 61;
+    CHECK(drive_config_valid(&c));
+    c = make_config();
+    c.wheel_duty_slew_per_s = 0.0f;
+    CHECK(!drive_config_valid(&c));
+}
+
+static void v2_wrong_build(void)
+{
+    boot_with(NULL);
+    arm_and_zero();
+    send(commission_msg(3, 0, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    link_msg bad = commission_msg(4, 9, 0, 150, echo_now()); /* before the format check */
+    send(bad);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+
+    boot_with(mod_commission);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(drive_msg(2, 0, 0, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    link_msg nan_drive = drive_msg(3, NAN, 0, 0, 150, echo_now());
+    send(nan_drive);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+}
+
+static void v2_commission_checks_and_outputs(void)
+{
+    boot_with(mod_commission);
+    in.abs_fresh[1] = false; /* no lift sensor: the wheels can still be commissioned */
+    ticks(5);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    send(commission_msg(2, 4, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(3, 0, 1501, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(4, 0, -1501, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(5, 0, 0, 0, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(6, 0, 1000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_ZERO_FIRST);
+    send(commission_msg(7, 0, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(commission_msg(7, 0, 1000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_SEQ);
+    send(commission_msg(8, 3, 500, 150, echo_now())); /* lift picked but not measurable */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED); /* the unpicked lift does not fault */
+
+    send(commission_msg(9, 0, 1000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_NEAR(out.duty[DRIVE_CH_L], 0.1, 1e-6);
+    CHECK(!out.drvoff[DRIVE_CH_L]);
+    CHECK(out.drvoff[DRIVE_CH_R] && out.drvoff[DRIVE_CH_M] && out.drvoff[DRIVE_CH_H]);
+    CHECK_NEAR(out.duty[DRIVE_CH_R], 0.0, 0.0);
+
+    /* Switching axis: L goes to its safe output in that cycle. */
+    send(commission_msg(10, 2, -500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK(out.drvoff[DRIVE_CH_L]);
+    CHECK_NEAR(d.wheel_duty[0], 0.0, 0.0);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], -0.05, 1e-6);
+
+    /* Expiry: every duty 0 at once with the outputs on (electrical brake). */
+    ticks(200);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    CHECK(!out.drvoff[DRIVE_CH_M]);
+    ticks((int)cfg.stop_grace_ms + 1);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+}
+
+static void v2_commission_duty_sign(void)
+{
+    boot_with(mod_commission);
+    cfg.duty_sign[DRIVE_CH_R] = -1;
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(commission_msg(2, 1, 0, 150, echo_now()));
+    send(commission_msg(3, 1, 1200, 150, echo_now()));
+    CHECK_NEAR(out.duty[DRIVE_CH_R], -0.12, 1e-6);
+    CHECK_NEAR(d.wheel_duty[1], 0.12, 1e-6); /* control coordinates */
+}
+
+/* Keeps axis L at duty_e4 by resending every 50 ms, the wheel turning so stuck stays quiet. */
+static int commission_run(int ms, int16_t duty_e4, bool zero_in_same_cycle, uint16_t *seq)
+{
+    for (int t = 0; t < ms; t++) {
+        if (t % 50 == 0) {
+            link_msg m[2] = {commission_msg((*seq)++, 0, 0, 150, echo_now()),
+                             commission_msg(0, 0, duty_e4, 150, echo_now())};
+            m[1].seq = (*seq)++;
+            if (zero_in_same_cycle) {
+                tick_moving(2.0, 0.0, m, 2);
+            } else {
+                tick_moving(2.0, 0.0, &m[1], 1);
+            }
+        } else {
+            tick_moving(2.0, 0.0, NULL, 0);
+        }
+        if (d.mode != DRIVE_MODE_ARMED) {
+            return t;
+        }
+    }
+    return -1;
+}
+
+static void v2_commission_time_limit(void)
+{
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    int stopped = commission_run(3000, 1000, false, &seq);
+    CHECK(stopped >= 1990 && stopped <= 2010);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    CHECK_NEAR(out.duty[DRIVE_CH_L], 0.0, 0.0);
+    ticks((int)cfg.stop_grace_ms + 1);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED); /* not a fault */
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT));
+
+    /* A zero slipped in before the non-zero duty in the same cycle does not reset the clock. */
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    stopped = commission_run(3000, 1000, true, &seq);
+    CHECK(stopped >= 1990 && stopped <= 2010);
+
+    /* One full cycle with every applied duty 0 restarts it. */
+    ticks((int)cfg.stop_grace_ms + 1);
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    CHECK(commission_run(1500, 1000, false, &seq) < 0);
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    tick_moving(0.0, 0.0, NULL, 0);
+    CHECK(commission_run(1500, 1000, false, &seq) < 0);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+}
+
+static void v2_commission_encoder_reports_only(void)
+{
+    boot_with(mod_commission);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(commission_msg(2, 0, 0, 150, echo_now()));
+    uint16_t seq = 3;
+    for (int t = 0; t < 400; t++) { /* counter frozen at duty 0.1 >= stuck duty 0.05 */
+        if (t % 50 == 0) {
+            send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+        } else {
+            tick();
+        }
+    }
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(0));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    ticks(200 + (int)cfg.stop_grace_ms + 1);
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(0)));
+}
+
+static void v2_gap_and_jump(void)
+{
+    /* The first cycle after init is not judged for a gap. */
+    reset_world(0);
+    wheel_pos[0] = wheel_pos[1] = 0.0;
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
+    in.now_us += 100000;
+    tick();
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_GAP));
+    CHECK(d.mode != DRIVE_MODE_FAULT);
+
+    boot_with(NULL);
+    uint32_t count0 = d.wheel[0].count;
+    in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 50);
+    in.now_us += 30000; /* > enc_gap_max_us 20 ms */
+    tick();
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_GAP);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT); /* latched while disarmed */
+    CHECK_EQ_U(d.wheel[0].count, count0); /* the step is dropped */
+    CHECK_NEAR(d.wheel[0].rate_rad_s, 0.0, 0.0);
+    in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 3); /* counting resumes from the new base */
+    tick();
+    CHECK_EQ_U(d.wheel[0].count, count0 + 3);
+
+    /* Jump: 100 rad/s x 1 ms x 4096 / 2pi + 1 = 66.2 counts. */
+    boot_with(NULL);
+    in.wheel_hw[1] = (uint16_t)(in.wheel_hw[1] + 66);
+    tick();
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(1)));
+    in.wheel_hw[1] = (uint16_t)(in.wheel_hw[1] - 67);
+    tick();
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(1));
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(0)));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    send(simple(LINK_CLEAR_FAULTS, 9));
+    for (int i = 0; i < 200 && d.mode != DRIVE_MODE_DISARMED; i++) {
+        tick();
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(1)));
+
+    /* A cycle right after a late one: the dt floor keeps 30 counts in 0.1 ms legal. */
+    boot_with(NULL);
+    in.now_us += 100 - cfg.period_us;                 /* tick() adds one period: 0.1 ms in all */
+    in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 30); /* < 100 x 0.5 ms x 4096/2pi + 1 = 33.6 */
+    tick();
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(0)));
+}
+
+static void arm_drive(double target)
+{
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(drive_msg(2, 0, 0, 0, 150, echo_now()));
+    send(drive_msg(3, (float)target, (float)target, 0, 150, echo_now()));
+}
+
+/* Keeps the DRIVE fresh with the wheels at rate; stops at the first fault. */
+static int drive_run(int ms, double target, double rate, uint16_t *seq)
+{
+    for (int t = 0; t < ms; t++) {
+        if (t % 50 == 0) {
+            link_msg m = drive_msg((*seq)++, (float)target, (float)target, 0, 150, echo_now());
+            tick_moving(rate, rate, &m, 1);
+        } else {
+            tick_moving(rate, rate, NULL, 0);
+        }
+        if (d.mode != DRIVE_MODE_ARMED) {
+            return t;
+        }
+    }
+    return -1;
+}
+
+static void v2_stuck(void)
+{
+    /* Frozen counter from the start, duty saturated. */
+    boot_with(NULL);
+    uint16_t seq = 4;
+    arm_drive(10.0);
+    int t = drive_run(1000, 10.0, 0.0, &seq);
+    CHECK(t > 150 && t < 260);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(0));
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(1));
+
+    /* Codex P1: running under high duty (heavy load), then the counter freezes. */
+    boot_with(NULL);
+    seq = 4;
+    arm_drive(20.0);
+    CHECK(drive_run(1000, 20.0, 5.0, &seq) < 0); /* progress keeps resetting the baseline */
+    CHECK(fabsf(d.wheel_duty[0]) >= 0.5f);
+    t = drive_run(1000, 20.0, 0.0, &seq);
+    CHECK(t > 150 && t < 260);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(0));
+
+    /* Below the stuck duty: a stalled wheel at low duty is not an encoder fault. */
+    boot_with(NULL);
+    cfg.wheel_pi.kp = 0.01f;
+    cfg.wheel_pi.ki = 0.0f;
+    cfg.wheel_pi.kff = 0.0f;
+    seq = 4;
+    arm_drive(10.0);
+    CHECK(drive_run(1000, 10.0, 0.0, &seq) < 0);
+
+    /* Locked outputs without HIL: wheels do not turn and that is normal. */
+    boot_with(mod_locked);
+    seq = 4;
+    arm_drive(10.0);
+    CHECK(drive_run(1000, 10.0, 0.0, &seq) < 0);
+    /* HIL: the model turns on the computed duty, so a frozen model counter is a fault. */
+    boot_with(mod_hil);
+    seq = 4;
+    arm_drive(10.0);
+    CHECK(drive_run(1000, 10.0, 0.0, &seq) > 0);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_STUCK(0));
+}
+
+static void v2_polarity(void)
+{
+    /* A/B swapped: the wheel accelerates the wrong way under positive duty -> (a). */
+    boot_with(NULL);
+    uint16_t seq = 4;
+    arm_drive(5.0);
+    double rate = 0.0;
+    int t;
+    for (t = 0; t < 1000 && d.mode == DRIVE_MODE_ARMED; t++) {
+        rate -= 0.05; /* -50 rad/s^2 */
+        if (t % 50 == 0) {
+            link_msg m = drive_msg(seq++, 5.0f, 5.0f, 0, 150, echo_now());
+            tick_moving(rate, rate, &m, 1);
+        } else {
+            tick_moving(rate, rate, NULL, 0);
+        }
+    }
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_POLARITY(0));
+    CHECK(t < 120); /* window 10 ms + a 1 rad/s rise */
+
+    /* Reversed at constant speed: no rise, caught by persistence (b). */
+    boot_with(NULL);
+    seq = 4;
+    arm_drive(5.0);
+    t = drive_run(1000, 5.0, -3.0, &seq);
+    CHECK(t >= 395 && t <= 420);
+    CHECK(d.fault_flags & DRIVE_FAULT_ENCODER_POLARITY(0));
+
+    /* Normal braking right after an acceleration, and a reversal both ways: no fault. */
+    boot_with(NULL);
+    seq = 4;
+    arm_drive(5.0);
+    rate = 0.0;
+    double target = 5.0;
+    for (t = 0; t < 1500; t++) {
+        if (t == 300) {
+            target = 0.0; /* brake */
+        } else if (t == 600) {
+            target = -5.0; /* reverse */
+        } else if (t == 1000) {
+            target = 5.0; /* and back */
+        }
+        double step = 0.05; /* +-50 rad/s^2 toward the target */
+        rate += target > rate ? (target - rate < step ? target - rate : step)
+                              : (rate - target < step ? target - rate : -step);
+        if (t % 50 == 0) {
+            link_msg m = drive_msg(seq++, (float)target, (float)target, 0, 150, echo_now());
+            tick_moving(rate, rate, &m, 1);
+        } else {
+            tick_moving(rate, rate, NULL, 0);
+        }
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(d.fault_flags & 0x00FE0000u, 0);
+}
+
+static void v2_slew(void)
+{
+    boot_with(NULL);
+    cfg.wheel_duty_slew_per_s = 5.0f; /* 0.005 per 1 ms cycle */
+    uint16_t seq = 4;
+    arm_drive(10.0);
+    float prev = d.wheel_duty[0];
+    bool within = true;
+    for (int t = 0; t < 100; t++) {
+        tick_moving(0.5, 0.5, NULL, 0);
+        within = within && fabsf(d.wheel_duty[0]) - fabsf(prev) <= 0.005f + 1e-6f;
+        prev = d.wheel_duty[0];
+        if (t % 50 == 0) {
+            send(drive_msg(seq++, 10.0f, 10.0f, 0, 150, echo_now()));
+            prev = d.wheel_duty[0];
+        }
+    }
+    CHECK(within);
+    CHECK(d.wheel_duty[0] > 0.3f && d.wheel_duty[0] < 0.6f); /* still ramping */
+    CHECK_NEAR(d.wheel_pi[0].integral, 0.0, 0.0);            /* no wind-up behind the slew bound */
+
+    /* Expiry from a high duty: STOPPING's first cycle may already brake (decrease is free). */
+    ticks(200);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK(d.wheel_duty[0] <= 0.0f);
+
+    /* DISARM drops to the safe output at once. */
+    boot_with(NULL);
+    cfg.wheel_duty_slew_per_s = 5.0f;
+    seq = 4;
+    arm_drive(10.0);
+    ticks(50);
+    send(simple(LINK_DISARM, seq++));
+    CHECK(all_drvoff());
+    CHECK_NEAR(d.wheel_duty[0], 0.0, 0.0);
+}
+
+static void v2_state_carries_reset_cause(void)
+{
+    reset_world(0);
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_IWDG));
+    link_state s;
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.reset_cause, DRIVE_RESET_IWDG);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -897,5 +1449,17 @@ int main(void)
     config_rejects_negative_gains_and_huge_zero();
     state_flags_follow_messages();
     refused_starts_do_not_cycle_spi_tags();
+    v2_build_bits_and_estop_unwired();
+    v2_config_and_init();
+    v2_wrong_build();
+    v2_commission_checks_and_outputs();
+    v2_commission_duty_sign();
+    v2_commission_time_limit();
+    v2_commission_encoder_reports_only();
+    v2_gap_and_jump();
+    v2_stuck();
+    v2_polarity();
+    v2_slew();
+    v2_state_carries_reset_cause();
     return FW_TEST_RESULT();
 }

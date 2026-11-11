@@ -53,6 +53,20 @@ static drive_config make_config(void)
     c.adc_vref_v = 3.3f;
     c.adc_full_scale = 65535;
     c.overcurrent_hold_ms = 20;
+    /* v2: a normal build with an e-stop pin; slew and encoder limits far from these tests'
+       motions unless a test tightens them (synthetic values). */
+    c.estop_wired = true;
+    c.wheel_duty_slew_per_s = 1000.0f;
+    c.enc_gap_max_us = 20000;
+    c.enc_phys_max_rad_s = 50.0f;
+    c.enc_jump_rad_s = 100.0f;
+    c.enc_stuck_duty = 0.5f;
+    c.enc_stuck_ms = 200;
+    c.enc_stuck_counts = 4;
+    c.enc_polarity_duty = 0.3f;
+    c.enc_polarity_ms = 50;
+    c.enc_polarity_rise_rad_s = 1.0f;
+    c.enc_polarity_persist_ms = 400;
     return c;
 }
 
@@ -237,7 +251,7 @@ static void start(void)
     }
     link_rx_init(&B.host_rx);
     CFG = make_config();
-    CHECK(fw_app_init(&app, &HAL, &CFG, 10, BOOT_ID));
+    CHECK(fw_app_init(&app, &HAL, &CFG, 10, BOOT_ID, DRIVE_RESET_IWDG));
 }
 
 static uint16_t host_seq = 1;

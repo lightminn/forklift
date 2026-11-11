@@ -38,6 +38,8 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_REJECT_STOPPING 11u
 #define DRIVE_REJECT_NOT_DISARMED 12u
 #define DRIVE_REJECT_SENSOR_INVALID 13u
+#define DRIVE_REJECT_WRONG_BUILD 14u   /* v2: COMMISSION in a normal build, DRIVE in commission */
+#define DRIVE_REJECT_ESTOP_UNWIRED 15u /* v2: no e-stop pin and the outputs are not locked */
 
 /* Fault bits (STATE.fault_flags). */
 #define DRIVE_FAULT_ESTOP_INPUT (1u << 0)
@@ -51,12 +53,28 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_FAULT_LIFT_OUT_OF_RANGE (1u << 14)
 #define DRIVE_FAULT_CYCLE_OVERRUN (1u << 15)
 #define DRIVE_FAULT_CURRENT_SENSE_INVALID (1u << 16)
+#define DRIVE_FAULT_ENCODER_GAP (1u << 17)                 /* v2, both wheels */
+#define DRIVE_FAULT_ENCODER_STUCK(w) (1u << (18 + (w)))    /* v2, w = 0 L, 1 R */
+#define DRIVE_FAULT_ENCODER_POLARITY(w) (1u << (20 + (w))) /* v2 */
+#define DRIVE_FAULT_ENCODER_JUMP(w) (1u << (22 + (w)))     /* v2 */
+#define DRIVE_FAULT_COMMISSION_TIME_LIMIT (1u << 24)       /* v2 */
 
 /* STATE.flags bits. */
 #define DRIVE_STATE_LIMITED 0x01u
 #define DRIVE_STATE_COMMAND_FRESH 0x02u
 #define DRIVE_STATE_ZERO_SEEN 0x04u
 #define DRIVE_STATE_DRIVERS_READY 0x08u
+#define DRIVE_STATE_COMMISSION_BUILD 0x10u /* v2 */
+#define DRIVE_STATE_HIL_PLANT 0x20u        /* v2 */
+#define DRIVE_STATE_OUTPUTS_LOCKED 0x40u   /* v2 */
+#define DRIVE_STATE_ESTOP_UNWIRED 0x80u    /* v2 */
+
+/* STATE.reset_cause (v2). */
+#define DRIVE_RESET_POWER 0u
+#define DRIVE_RESET_PIN 1u
+#define DRIVE_RESET_IWDG 2u
+#define DRIVE_RESET_SOFTWARE 3u
+#define DRIVE_RESET_OTHER 4u
 
 /* Every hardware value is required; there are no defaults (CONTRIBUTING 6). */
 typedef struct {
@@ -82,6 +100,27 @@ typedef struct {
     uint32_t adc_full_scale;
     float overcurrent_a[DRIVE_CH_COUNT];
     uint32_t overcurrent_hold_ms;
+
+    /* v2 build identity: compile-time constants of the board build, never changed by a
+       message (design 2026-11-11-mcu-link-v2-firmware-core section 2). */
+    bool commission_build;       /* FW_COMMISSION: COMMISSION only, DRIVE -> wrong_build */
+    bool hil_plant;              /* FW_HIL_PLANT: an in-MCU model fills the inputs */
+    bool outputs_locked;         /* the board never drives the motor outputs */
+    bool estop_wired;            /* an e-stop input pin exists */
+    float commission_duty_max;   /* COMMISSION |duty| limit, (0, 1]; commission builds only */
+    uint32_t commission_time_ms; /* continuous non-zero COMMISSION duty limit */
+    float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */
+    /* Encoder fault detection (plan 3.3); board values wait for S3/S4 measurements. */
+    uint32_t enc_gap_max_us;          /* longest gap between two wheel reads */
+    float enc_phys_max_rad_s;         /* physical wheel maximum (not the command limit) */
+    float enc_jump_rad_s;             /* a step implying a faster wheel is impossible */
+    float enc_stuck_duty;             /* |applied duty| that must move the wheel ... */
+    uint32_t enc_stuck_ms;            /* ... within this time ... */
+    uint32_t enc_stuck_counts;        /* ... by at least this many counts */
+    float enc_polarity_duty;          /* |applied duty| at which a wrong-way rise counts */
+    uint32_t enc_polarity_ms;         /* how long the wrong way must last */
+    float enc_polarity_rise_rad_s;    /* how much |rate| must grow the wrong way ... */
+    uint32_t enc_polarity_persist_ms; /* ... or how long any wrong-way episode may last */
 } drive_config;
 
 typedef struct {
@@ -106,6 +145,7 @@ typedef struct drive {
     uint8_t mode, reject_reason;
     uint16_t arm_gen, last_rx_seq;
     uint32_t boot_id;
+    uint8_t reset_cause;  /* STATE.reset_cause (v2) */
     uint64_t time_us;     /* MCU time, 64-bit (STATE.mcu_time_us) */
     uint32_t fault_flags; /* latched bits | live status bits */
     uint8_t driver_status[DRIVE_CH_COUNT];
@@ -131,6 +171,18 @@ typedef struct drive {
     uint64_t deadline_us, stop_until_us;
     bool zero_seen, have_drive_seq, limited;
     uint16_t last_drive_seq;
+    float wheel_duty[2]; /* applied wheel duty, control coordinates, after the slew limit */
+    /* COMMISSION (commission builds). */
+    uint8_t cm_axis;
+    float cm_duty; /* control coordinates */
+    bool cm_on;
+    uint64_t cm_on_since_us;
+    /* Encoder fault detection episodes. */
+    bool first_cycle; /* no gap judgement before the first drive_begin */
+    bool stuck_active[2], pol_active[2], pol_base_set[2];
+    uint64_t stuck_t0_us[2], pol_t0_us[2], pol_tb_us[2];
+    uint32_t stuck_c0[2];
+    float pol_r0[2];
     /* Driver initialisation and SPI. */
     drv8244_init ini;
     uint8_t init_ch;
@@ -148,8 +200,9 @@ typedef struct drive {
 
 bool drive_config_valid(const drive_config *c);
 
-/* false for an invalid config or boot_id 0. */
-bool drive_init(drive *d, const drive_config *c, const drive_inputs *first, uint32_t boot_id);
+/* false for an invalid config, boot_id 0 or a reset_cause outside DRIVE_RESET_*. */
+bool drive_init(drive *d, const drive_config *c, const drive_inputs *first, uint32_t boot_id,
+                uint8_t reset_cause);
 
 /* Sensors, expiry (before any message), e-stop and faults for this cycle. */
 void drive_begin(drive *d, const drive_inputs *in);

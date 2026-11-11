@@ -1,13 +1,13 @@
-/* MCU model endpoint (sim-to-real plan P0-7): the firmware core (fw_app) on a fake board, in real time
-   at 1 kHz, speaking mcu-link/1 over a tty (a pty slave in the tests). Host-only: it drives no
+/* MCU model endpoint (sim-to-real plan P0-7): the firmware core (fw_app) on a fake board, in real
+   time at 1 kHz, speaking mcu-link/1 over a tty (a pty slave in the tests). Host-only: it drives no
    hardware. Vehicle values come from the generated vehicle_config.h (tools/real_vehicle_header.py);
    every other drive_config value is synthetic, not a hardware value.
 
    usage: mcu_model --link PATH [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
                     [--estop-release-ms N] [--silent-at-ms N]
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
-   --silent-at-ms: from then the model neither reads nor writes the link (host silence detection only;
-   it is not an IWDG and proves nothing about output cut-off). */
+   --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
+   only; it is not an IWDG and proves nothing about output cut-off). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -190,9 +190,9 @@ static void hal_kick(void *ctx)
     (void)ctx;
 }
 
-static const fw_hal HAL = {&B,           hal_now,       hal_read,      hal_write,
-                           hal_link_read, hal_link_write, hal_spi_start, hal_spi_take,
-                           hal_kick};
+static const fw_hal HAL = {
+    &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
+    hal_spi_take, hal_kick};
 
 /* ---- plant: first-order wheels, integrating steering and lift ------------------------- */
 static const double WHEEL_TAU_S = 0.05;
@@ -227,9 +227,12 @@ static drive_config make_config(void)
     c.status_poll_ms = 10;
     c.overrun_limit = 50; /* a loaded host must not fault the model on scheduling jitter */
     c.adc_invalid_limit = 5;
-    c.wheel[0] = (wheel_enc_config){.counts_per_rev = FW_WHEEL_COUNTS_PER_REV_L, .window = 5, .sign = 1};
-    c.wheel[1] = (wheel_enc_config){.counts_per_rev = FW_WHEEL_COUNTS_PER_REV_R, .window = 5, .sign = 1};
-    c.wheel_pi = (pi_config){.kp = 0.05f, .ki = 0.5f, .kff = 1.0f / (FW_MAX_WHEEL_RAD_S * 1.25f), .out_max = 1.0f};
+    c.wheel[0] =
+        (wheel_enc_config){.counts_per_rev = FW_WHEEL_COUNTS_PER_REV_L, .window = 5, .sign = 1};
+    c.wheel[1] =
+        (wheel_enc_config){.counts_per_rev = FW_WHEEL_COUNTS_PER_REV_R, .window = 5, .sign = 1};
+    c.wheel_pi = (pi_config){
+        .kp = 0.05f, .ki = 0.5f, .kff = 1.0f / (FW_MAX_WHEEL_RAD_S * 1.25f), .out_max = 1.0f};
     c.steer_pi = (pi_config){.kp = 4.0f, .out_max = 0.8f};
     c.lift_pi = (pi_config){.kp = 20.0f, .out_max = 0.8f};
     c.steer = (abs_axis_config){.crc = KTH_CRC_G704_BYTES,
@@ -258,6 +261,23 @@ static drive_config make_config(void)
     c.adc_vref_v = 3.3f;
     c.adc_full_scale = 65535;
     c.overcurrent_hold_ms = 20;
+    /* mcu-link/2: a normal build with an e-stop input (the model's --estop-at-ms); no slew in
+       effect and encoder limits loose enough for the model's own motion. The read-gap limit is
+       the longest the 16-bit step stays unambiguous at the model's top speed (design 5). */
+    c.estop_wired = true;
+    c.wheel_duty_slew_per_s = 1000.0f;
+    c.enc_phys_max_rad_s = FW_MAX_WHEEL_RAD_S * 1.25f;
+    double cpr = FW_WHEEL_COUNTS_PER_REV_L > FW_WHEEL_COUNTS_PER_REV_R ? FW_WHEEL_COUNTS_PER_REV_L
+                                                                       : FW_WHEEL_COUNTS_PER_REV_R;
+    c.enc_gap_max_us = (uint32_t)(16000.0 * TWO_PI / ((double)c.enc_phys_max_rad_s * cpr) * 1e6);
+    c.enc_jump_rad_s = c.enc_phys_max_rad_s * 1.5f;
+    c.enc_stuck_duty = 0.95f;
+    c.enc_stuck_ms = 1000;
+    c.enc_stuck_counts = 1;
+    c.enc_polarity_duty = 0.95f;
+    c.enc_polarity_ms = 200;
+    c.enc_polarity_rise_rad_s = 5.0f;
+    c.enc_polarity_persist_ms = 2000;
     return c;
 }
 
@@ -316,15 +336,17 @@ int main(int argc, char **argv)
     static fw_app app;
     cfg = make_config();
     B.t0_ns = B.now_ns = mono_ns();
-    if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id)) {
+    if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id, DRIVE_RESET_POWER)) {
         fprintf(stderr, "fw_app_init refused the configuration\n");
         return 2;
     }
     uint64_t next = B.now_ns;
     while (!stop_requested && (duration_ms < 0 || elapsed_ms() < duration_ms)) {
         next += 1000000u;
-        struct timespec ts = {.tv_sec = (time_t)(next / 1000000000u), .tv_nsec = (long)(next % 1000000000u)};
-        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR && !stop_requested) {
+        struct timespec ts = {.tv_sec = (time_t)(next / 1000000000u),
+                              .tv_nsec = (long)(next % 1000000000u)};
+        while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &ts, NULL) == EINTR &&
+               !stop_requested) {
         }
         uint64_t prev = B.now_ns;
         B.now_ns = mono_ns();

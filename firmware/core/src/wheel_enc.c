@@ -29,11 +29,31 @@ bool wheel_enc_init(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32
     return true;
 }
 
-void wheel_enc_update(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32_t now_us)
+int32_t wheel_enc_step(const wheel_enc *e, const wheel_enc_config *c, uint16_t hw)
 {
     int16_t step = (int16_t)(uint16_t)(hw - e->last_hw); /* modular 16-bit difference */
+    return c->sign > 0 ? (int32_t)step : -(int32_t)step;
+}
+
+uint32_t wheel_enc_last_us(const wheel_enc *e)
+{
+    return e->hist_t_us[e->head];
+}
+
+void wheel_enc_rebase(wheel_enc *e, uint16_t hw, uint32_t now_us)
+{
     e->last_hw = hw;
-    int32_t signed_step = c->sign > 0 ? (int32_t)step : -(int32_t)step;
+    e->rate_rad_s = 0.0f;
+    e->head = 0;
+    e->filled = 1;
+    e->hist_count[0] = e->count;
+    e->hist_t_us[0] = now_us;
+}
+
+void wheel_enc_update(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32_t now_us)
+{
+    int32_t signed_step = wheel_enc_step(e, c, hw);
+    e->last_hw = hw;
     e->count += (uint32_t)signed_step; /* modular 32-bit accumulation */
     push(e, c, now_us);
 

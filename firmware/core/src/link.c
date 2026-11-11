@@ -11,7 +11,8 @@
 #define DRIVE_LEN 33u
 #define ARM_LEN 12u
 #define CLEAR_LEN 4u
-#define STATE_LEN 71u
+#define COMMISSION_LEN 19u
+#define STATE_LEN 72u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
 typedef struct {
@@ -94,6 +95,8 @@ static size_t payload_len(uint8_t type)
         return 0;
     case LINK_CLEAR_FAULTS:
         return CLEAR_LEN;
+    case LINK_COMMISSION:
+        return COMMISSION_LEN;
     case LINK_STATE:
         return STATE_LEN;
     default:
@@ -124,6 +127,16 @@ static void put_payload(wr *w, const link_msg *m)
     case LINK_CLEAR_FAULTS:
         put_u32(w, m->u.clear.boot_id);
         break;
+    case LINK_COMMISSION: {
+        const link_commission *c = &m->u.commission;
+        put_u8(w, c->axis);
+        put_u16(w, (uint16_t)c->duty_e4);
+        put_u16(w, c->valid_after_echo_ms);
+        put_u16(w, c->arm_gen);
+        put_u32(w, c->boot_id);
+        put_u64(w, c->echo_mcu_time_us);
+        break;
+    }
     case LINK_STATE: {
         const link_state *s = &m->u.state;
         put_u64(w, s->mcu_time_us);
@@ -151,6 +164,7 @@ static void put_payload(wr *w, const link_msg *m)
         put_u16(w, s->rx_errors);
         put_u16(w, s->cycle_overruns);
         put_u8(w, s->flags);
+        put_u8(w, s->reset_cause);
         break;
     }
     default:
@@ -181,6 +195,16 @@ static void get_payload(rd *r, link_msg *m)
     case LINK_CLEAR_FAULTS:
         m->u.clear.boot_id = get_u32(r);
         break;
+    case LINK_COMMISSION: {
+        link_commission *c = &m->u.commission;
+        c->axis = get_u8(r);
+        c->duty_e4 = (int16_t)get_u16(r);
+        c->valid_after_echo_ms = get_u16(r);
+        c->arm_gen = get_u16(r);
+        c->boot_id = get_u32(r);
+        c->echo_mcu_time_us = get_u64(r);
+        break;
+    }
     case LINK_STATE: {
         link_state *s = &m->u.state;
         s->mcu_time_us = get_u64(r);
@@ -208,6 +232,7 @@ static void get_payload(rd *r, link_msg *m)
         s->rx_errors = get_u16(r);
         s->cycle_overruns = get_u16(r);
         s->flags = get_u8(r);
+        s->reset_cause = get_u8(r);
         break;
     }
     default:

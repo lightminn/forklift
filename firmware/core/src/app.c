@@ -6,7 +6,7 @@
 #define LINK_READ_CHUNKS_PER_TICK 4u
 
 bool fw_app_init(fw_app *app, const fw_hal *hal, const drive_config *cfg, uint32_t state_period_ms,
-                 uint32_t boot_id)
+                 uint32_t boot_id, uint8_t reset_cause)
 {
     if (state_period_ms == 0) {
         return false;
@@ -17,7 +17,7 @@ bool fw_app_init(fw_app *app, const fw_hal *hal, const drive_config *cfg, uint32
     memset(&first, 0, sizeof first);
     hal->read_inputs(hal->ctx, &first);
     first.now_us = hal->now_us(hal->ctx);
-    if (!drive_init(&app->d, cfg, &first, boot_id)) {
+    if (!drive_init(&app->d, cfg, &first, boot_id, reset_cause)) {
         return false;
     }
     app->last_tick_us = first.now_us;
