@@ -100,8 +100,8 @@ def test_print_chassis_resolves_relative_quoted_and_absolute_paths(tmp_path, cap
     chassis = REPO / "sim" / "models" / "dls08_measured" / "parameters.yaml"
     text = VEHICLE_YAML.read_text()
     for value in ('"../../sim/models/dls08_measured/parameters.yaml"', str(chassis)):
-        cfg = tmp_path / "real" / "vehicle.yaml"
-        cfg.parent.mkdir(exist_ok=True)
+        cfg = tmp_path / "config" / "real" / "vehicle.yaml"
+        cfg.parent.mkdir(parents=True, exist_ok=True)
         cfg.write_text(text.replace("chassis_model: ../../sim/models/dls08_measured/parameters.yaml",
                                     f"chassis_model: {value}"))
         if value.startswith('"'):
