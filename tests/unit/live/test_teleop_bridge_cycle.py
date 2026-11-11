@@ -126,7 +126,8 @@ class Rig:
         self.bridge = None
         self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
                                            outbox_max=16), client=Client.REAL,
-                                on_state=lambda s, ns: self.bridge.add_sample(Sample(ns, s)))
+                                on_state=lambda s, ns: self.bridge.add_sample(Sample(ns, s)),
+                                log=self._log)
         self.kin = RealKinematics(VEH)
         self.port = RealPlantPort(self.host, self.kin)
         provider = (lambda now: safety) if safety is not None else (lambda now: rt.bench_safety(confirmed))
@@ -142,6 +143,10 @@ class Rig:
         self.channels.connect("c1", "op", control=True)
         self.recs = []
         self.replies = []
+
+    def _log(self, what, now_ns, data, info):
+        if what == "written" and info is not None:
+            self.bridge.frame_written(info["seq"], now_ns)
 
     def say(self, kind, **fields):
         msg = {"t": kind, "request_id": f"r{next(self.seq)}", "session_epoch": EPOCH, **fields}

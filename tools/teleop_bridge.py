@@ -72,7 +72,7 @@ class Bridge:
                                lambda: secrets.token_hex(16), mission=None)
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)
-        self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state)
+        self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state, log=self._log)
         self.port = RealPlantPort(self.host, self.kin)
         self.safety = rt.bench_safety(confirmed)
         self.core = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
@@ -83,6 +83,11 @@ class Bridge:
         self.record = record
         self.record_errors = 0
         self.overruns = 0
+
+    def _log(self, what, now_ns, data, info) -> None:
+        """Every frame written (or abandoned part-way, counted as possibly delivered): a round-trip anchor's start."""
+        if what in ("written", "abandoned") and info is not None and now_ns is not None:
+            self.core.frame_written(info["seq"], now_ns)
 
     def _on_state(self, state: McuState, received_ns: int) -> None:
         """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""

@@ -32,21 +32,21 @@ _SPEED_BITS = (FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCO
 # --------------------------------------------------------------------------------------------- encoder speed (design 2)
 @dataclass(frozen=True)
 class EncoderSpeedParams:
-    """The values the encoder speed's error width rests on. ``axle_accel_mps2`` and ``state_latency_s`` are the
-    premises A1 and A2 (provisional, plan's provisional table): the bound holds only while they do."""
+    """The values the encoder speed's error width rests on. ``axle_accel_mps2`` is premise A1 (provisional, plan's
+    provisional table): the bound holds only while it does. A STATE's delay is not a premise: it is measured by
+    round trip (``DelayBound``) and counted in its age."""
 
     radius_m: tuple[float, float]
     counts_per_rev: tuple[float, float]
     track_m: float
     kappa_max: float  # the largest curvature the steering map can hold
     axle_accel_mps2: float  # A1: the axle's acceleration bound (each wheel's is this x (1 + kappa_max track / 2))
-    state_latency_s: float  # A2: a STATE's measurement-to-receipt delay bound
     max_age_s: float  # the newest STATE older than this (host receipt) is too old for a safety speed
     dt_min_s: float  # the two STATEs differenced are at least this far apart (MCU time) ...
     dt_max_s: float  # ... and at most this
 
     def __post_init__(self) -> None:
-        for name in ("track_m", "axle_accel_mps2", "state_latency_s", "max_age_s", "dt_min_s", "dt_max_s"):
+        for name in ("track_m", "axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"):
             v = getattr(self, name)
             if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} must be a positive finite number")
@@ -68,15 +68,15 @@ class EncoderSpeedParams:
         return self.axle_accel_mps2 * self.turn_factor
 
     def error(self, wheel: int, dt_s: float, age_s: float) -> float:
-        """A wheel's speed error width: the acceleration over half the interval, the age and the latency, plus one
-        count at each end of the interval."""
+        """A wheel's speed error width: the acceleration over half the interval and the age (its receipt age plus
+        its measured delay), plus one count at each end of the interval."""
         quant = 2.0 * math.pi * self.radius_m[wheel] / (self.counts_per_rev[wheel] * dt_s)
-        return self.wheel_accel_mps2 * (dt_s / 2.0 + age_s + self.state_latency_s) + quant
+        return self.wheel_accel_mps2 * (dt_s / 2.0 + age_s) + quant
 
     def worst_error(self) -> float:
         """The largest error width a valid reading can have: the longest interval and age, the shortest interval's
         quantization."""
-        return max(self.wheel_accel_mps2 * (self.dt_max_s / 2.0 + self.max_age_s + self.state_latency_s)
+        return max(self.wheel_accel_mps2 * (self.dt_max_s / 2.0 + self.max_age_s)
                    + 2.0 * math.pi * self.radius_m[w] / (self.counts_per_rev[w] * self.dt_min_s) for w in (0, 1))
 
 
@@ -98,7 +98,7 @@ def _invalid(reason: str, *, age_s=None) -> EncoderReading:
 
 
 def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
-                  steering_ok: Callable[[float], bool], extra_delay_s: float = 0.0) -> EncoderReading:
+                  steering_ok: Callable[[float], bool], delay_s: float | None = 0.0) -> EncoderReading:
     """The safety speed from the newest STATE and the latest earlier STATE of the same boot at least ``dt_min_s``
     before it (MCU time), at most ``dt_max_s``: per wheel ``v = 2 pi r dc / (CPR dt)``, the mean, the yaw rate from
     the wheel difference, the bound on the outer wheel, the directions from ``signed +- e`` (design 2)."""
@@ -106,9 +106,11 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
         return _invalid("no_state")
     cur = samples[-1]
     s1 = cur.state
-    # the receipt age plus how much later than the link's best case this STATE arrived (design 2, A2 split): the
-    # premise L covers only the base delay
-    age = (now_ns - cur.host_ns) / 1e9 + max(0.0, float(extra_delay_s))
+    # the receipt age plus the STATE's own measurement-to-receipt delay (an upper bound by round trip, design 2);
+    # none known: no safety speed
+    if delay_s is None:
+        return _invalid("no_delay_bound")
+    age = (now_ns - cur.host_ns) / 1e9 + max(0.0, float(delay_s))
     if age > p.max_age_s or age < -1e-3:
         return _invalid("stale", age_s=age)
     age = max(age, 0.0)
@@ -146,28 +148,53 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
                           (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q)
 
 
-class DelayTracker:
-    """Each STATE's delay over the link's best case (design 2): the offset ``host receipt - MCU time`` of a STATE
-    minus the smallest offset seen this boot. The base never rises: one-way timing cannot tell a slow MCU clock from
-    a delay that grew, and a rising base turned a sustained 80 ms delay fresh (Codex impl P1-1, re-review P1). A
-    slow MCU clock therefore ages every STATE a little more as the boot goes on -- the fail-safe side: past
-    ``max_age_s`` the speed is invalid and the truck stops; the real drift is measured in P0-9's long HIL run.
-    The base delay itself is the premise L's."""
+class DelayBound:
+    """An upper bound on each STATE's delay from its measurement to its receipt, by round trip (design 2; Codex
+    re-review 3 P1: no offset baseline survives a clock rate difference -- a fast MCU clock hid a growing delay).
 
-    def __init__(self) -> None:
-        self._base: tuple[int, int] | None = None  # (offset_ns, boot)
+    A STATE that names frame ``k`` (``last_rx_seq``) was measured after the MCU took ``k``, so after ``k`` was
+    written: its delay is at most ``receipt - write of k`` -- whatever either clock's rate. That STATE is an anchor
+    ``(offset, receipt, bound)`` with ``offset = receipt - MCU time``. Another STATE ``j`` of the same boot is bounded
+    from an anchor ``a`` by ``bound_a + (offset_j - offset_a) + drift_max |receipt_j - receipt_a|`` (premise A3, the
+    clocks' rate difference, over at most ``anchor_max_age_s``); the smallest over the anchors counts. No anchor that
+    recent: no bound, no safety speed. Frame seqs are 16-bit: a write is forgotten after ``anchor_max_age_s``, long
+    before a seq comes round (65536 frames at 50 Hz is 22 min)."""
+
+    def __init__(self, *, anchor_max_age_s: float = 2.0, drift_max: float = 100e-6, anchors_max: int = 32) -> None:
+        self.anchor_max_age_ns = int(anchor_max_age_s * 1e9)
+        self.drift_max = float(drift_max)
+        self.anchors_max = int(anchors_max)
+        self._writes: dict[int, int] = {}  # seq -> write host ns
+        self._anchors: list[tuple[int, int, int, int]] = []  # (offset_ns, receipt_ns, bound_ns, boot)
+
+    def written(self, seq: int, write_ns: int) -> None:
+        self._writes[int(seq) & 0xFFFF] = int(write_ns)
+        cut = write_ns - self.anchor_max_age_ns
+        if len(self._writes) > 4 * self.anchors_max:
+            self._writes = {q: t for q, t in self._writes.items() if t >= cut}
 
     def add(self, sample: Sample) -> None:
-        off = sample.host_ns - sample.state.mcu_time_us * 1000
-        boot = sample.state.boot_id
-        if self._base is None or self._base[1] != boot or off < self._base[0]:
-            self._base = (off, boot)  # a new boot is a new MCU clock
+        seq = int(sample.state.last_rx_seq) & 0xFFFF
+        w = self._writes.get(seq)
+        rx = sample.host_ns
+        if w is None or rx < w or rx - w > self.anchor_max_age_ns:
+            return
+        # one anchor per frame: the first STATE naming it gives the tightest bound (later ones only add receipt time)
+        del self._writes[seq]
+        off = rx - sample.state.mcu_time_us * 1000
+        self._anchors.append((off, rx, rx - w, sample.state.boot_id))
+        cut = rx - self.anchor_max_age_ns
+        self._anchors = [a for a in self._anchors if a[1] >= cut and a[3] == sample.state.boot_id][-self.anchors_max:]
 
-    def excess_s(self, sample: Sample) -> float:
-        if self._base is None or self._base[1] != sample.state.boot_id:
-            return 0.0
+    def delay_s(self, sample: Sample) -> float | None:
         off = sample.host_ns - sample.state.mcu_time_us * 1000
-        return max(0.0, (off - self._base[0]) / 1e9)
+        best = None
+        for a_off, a_rx, a_b, boot in self._anchors:
+            if boot != sample.state.boot_id or abs(sample.host_ns - a_rx) > self.anchor_max_age_ns:
+                continue
+            b = a_b + (off - a_off) + self.drift_max * abs(sample.host_ns - a_rx)
+            best = b if best is None else min(best, b)
+        return None if best is None else max(0.0, best / 1e9)
 
 
 STILL_WINDOW_S = 0.2  # a stand before an MCU ARM: counts still over at least this much of contiguous STATEs ...
@@ -300,7 +327,7 @@ def load_bridge_params(path: str | Path, vehicle) -> EncoderSpeedParams:
     if not isinstance(data, dict) or set(data) != {"schema", "encoder_speed"} or data["schema"] != SCHEMA:
         raise ValueError(f"teleop bridge config must hold schema {SCHEMA!r} and encoder_speed only")
     es = data["encoder_speed"]
-    keys = {"axle_accel_mps2", "state_latency_s", "max_age_s", "dt_min_s", "dt_max_s"}
+    keys = {"axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"}
     if not isinstance(es, dict) or set(es) != keys | {"provenance"}:
         raise ValueError(f"encoder_speed must hold {sorted(keys)} and provenance")
     prov = es["provenance"]
@@ -337,7 +364,8 @@ class TeleopBridge:
         self.cycle_s = float(cycle_s)
         self.samples: list[Sample] = []
         self.samples_max = int(samples_max)
-        self.delays = DelayTracker()
+        self.delays = DelayBound()
+        self.last_ping_ns: int | None = None
         self.phase = IDLE
         self.bound_gen: int | None = None  # the arbiter arm_gen the MCU authorization belongs to
         self.used_gens: set[int] = set()  # arm_gens an MCU ARM was asked for (once each, never again)
@@ -354,6 +382,10 @@ class TeleopBridge:
     def add_sample(self, sample: Sample) -> None:
         self.delays.add(sample)
         self.samples.append(sample)
+
+    def frame_written(self, seq: int, write_ns: int) -> None:
+        """Every frame the link wrote (the host's log): the round-trip anchors' start times."""
+        self.delays.written(seq, write_ns)
         if len(self.samples) > self.samples_max:
             del self.samples[: len(self.samples) - self.samples_max]
 
@@ -378,9 +410,9 @@ class TeleopBridge:
     def cycle(self, now_ns: int) -> dict:
         a, now = self.arbiter, now_ns / 1e9
         rec: dict = {"now_ns": now_ns}
-        extra = self.delays.excess_s(self.samples[-1]) if self.samples else 0.0
-        reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok, extra)
-        rec["late_s"] = extra
+        delay = self.delays.delay_s(self.samples[-1]) if self.samples else None
+        reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok, delay)
+        rec["delay_s"] = delay
         self.reading = reading
         st = self.host.state
         was_driving = a.mode == "TELEOP" and a.armed  # before observe can disarm it (design 4)
@@ -422,6 +454,7 @@ class TeleopBridge:
             self.seen_control_gen = a.control_gen
             self.port.new_control_generation()  # queued DRIVEs go before this cycle's transmit
         self._arm_machine(now_ns, reading, rec)
+        self._ping(now_ns, rec)
         applied = self._output(now_ns, out, reading, rec)
         a.last_applied = applied  # what was put on the port, not the arbiter's target (Codex P1-3)
         rec["applied_mps"] = applied
@@ -506,6 +539,23 @@ class TeleopBridge:
                 else:
                     self.phase, self.bound_gen = ARMING, g
                     rec["arm"] = g
+
+    PING_NS = 500_000_000
+
+    def _ping(self, now_ns: int, rec: dict) -> None:
+        """While the MCU is not armed and nothing else goes out, a DISARM every 0.5 s: it changes nothing on a
+        disarmed MCU but is acknowledged (``last_rx_seq``), which keeps a round-trip delay anchor -- so the safety
+        speed (the stand check, the arbiter's feedback) stays measurable when no DRIVE flows."""
+        h, st = self.host, self.host.state
+        if self.phase not in (IDLE, HELD) or self.mcu_wait is not None or h.authorized or h.arming:
+            return
+        if st is None or st.mode == Mode.STOPPING:
+            return
+        if self.last_ping_ns is not None and now_ns - self.last_ping_ns < self.PING_NS:
+            return
+        h.request_disarm(now_ns)
+        self.last_ping_ns = now_ns
+        rec["ping"] = True
 
     def _arm_blocker(self, now_ns: int, reading: EncoderReading) -> str | None:
         """Design 4: every MCU ARM waits for a DISARMED MCU, no older nonzero DRIVE that could act, and a fresh
@@ -603,4 +653,4 @@ class TeleopBridge:
 
 
 __all__ = ["CONFIRMATIONS", "EncoderReading", "EncoderSpeedParams", "STANDING_MPS", "bench_safety", "command_cap_mps",
-           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayTracker", "output_direction_check"]
+           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayBound", "output_direction_check"]

@@ -5,8 +5,7 @@
 schema: teleop_bridge/1
 encoder_speed:
   axle_accel_mps2: 0.8   # premise A1 (each wheel's: x (1 + kappa_max track / 2)); the teleop accel command limit
-  state_latency_s: 0.02  # premise A2: STATE measurement-to-receipt delay bound; P0-9 round-trip p99 fixes it
-  max_age_s: 0.03        # the newest STATE older than this (host receipt) gives no safety speed
+  max_age_s: 0.05        # receipt age + the STATE's round-trip delay bound past this: no safety speed
   dt_min_s: 0.01         # the two STATEs differenced: at least this far apart (MCU time) ...
   dt_max_s: 0.025        # ... at most this (a STATE period over 25 ms gives no safety speed)
   provenance: {source: plan_provisional_table_lead_2026_11_12, measured: false, until: S5}
