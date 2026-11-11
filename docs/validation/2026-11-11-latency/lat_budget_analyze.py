@@ -73,13 +73,21 @@ def watchdog_of(result: dict, log: dict | None) -> dict:
     lb = result.get("layer_budget") or {}
     wd = lb.get("watchdog") or {}
     ticks = (log or {}).get("overdue_ticks")
-    exceeded = None if ticks is None else [r for r in ticks if len(r) > 5 and r[5] == END_REASON]
+    readable = isinstance(ticks, list) and all(isinstance(r, list) and len(r) >= 7 for r in ticks)
+    end = lb.get("overdue_end_s") if isinstance(lb, dict) else None
+    exceeded = [r for r in ticks if r[5] == END_REASON] if readable else None
+    # the first row past the limit (held > overdue_end_s) must be the end row and the last row (Codex round 2 P2)
+    past = [i for i, r in enumerate(ticks) if float(r[6]) > float(end) + 1e-9] if readable and end is not None else None
     return {"events": wd.get("events"), "ticks": wd.get("ticks"), "longest_s": wd.get("longest_s"),
             "overdue_end_s": lb.get("overdue_end_s"), "invariant_violations": lb.get("invariant_violations", 0)
             if isinstance(lb, dict) and "watchdog" in lb else None,
             "d_max_s": lb.get("d_max_s"), "scans_used": lb.get("scans_used"),
+            "log_readable": readable,
             "exceeded_rows": None if exceeded is None else len(exceeded),
-            "last_row_exceeded": None if not ticks else (len(ticks[-1]) > 5 and ticks[-1][5] == END_REASON),
+            "last_row_exceeded": None if not readable or not ticks else ticks[-1][5] == END_REASON,
+            "first_past_is_end": None if past is None else (bool(past) and past[0] == len(ticks) - 1
+                                                             and ticks[past[0]][5] == END_REASON),
+            "rows_past_limit": None if past is None else len(past),
             "failure_reason": result.get("failure_reason")}
 
 
@@ -88,7 +96,8 @@ def uo9_verdict(row: dict) -> dict:
     s, w = row.get("safety") or {}, row.get("watchdog") or {}
     checks = {"safety_0": s.get("violations") == 0,
               "events_ge_1": (w.get("events") or 0) >= 1,
-              "invariant_0": w.get("invariant_violations") == 0}
+              "invariant_0": w.get("invariant_violations") == 0,
+              "log_readable": w.get("log_readable") is True}
     longest, end = w.get("longest_s"), w.get("overdue_end_s")
     if longest is None or end is None:
         checks["end_readable"] = False
@@ -97,8 +106,11 @@ def uo9_verdict(row: dict) -> dict:
         exposed = longest > end + 1e-9
     if exposed:
         checks["ended_as_exceeded"] = w.get("failure_reason") == END_REASON
-        checks["ended_on_first_tick_past"] = w.get("exceeded_rows") == 1 and w.get("last_row_exceeded") is True
+        checks["ended_on_first_tick_past"] = (w.get("exceeded_rows") == 1 and w.get("last_row_exceeded") is True
+                                              and w.get("first_past_is_end") is True)
         checks["safe_stop"] = row.get("stop") == "safe_failure"
+    elif exposed is False:
+        checks["no_row_past_limit"] = w.get("rows_past_limit") == 0  # the log agrees with the summary
     return {"pass": all(checks.values()), "checks": checks,
             "end_function": "exposed" if exposed else ("unexposed" if exposed is False else "unreadable")}
 

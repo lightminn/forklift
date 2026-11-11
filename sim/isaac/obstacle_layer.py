@@ -899,6 +899,9 @@ class ObstacleLayer:
         b = getattr(self, "latency_budget_s", 0.0)
         if b <= 0.0:
             return None
+        clock_ = (getattr(self, "clock_box", None) or {}).get("fn")
+        if clock_ is not None:  # the sim clock, not the caller's tick start (a capture steps past it)
+            now_s = float(clock_())
         if self._watch_cache is not None and self._watch_cache[0] == now_s:
             return self._watch_cache[1]
         eps = LATENCY_EPS_S
@@ -925,6 +928,8 @@ class ObstacleLayer:
                 [float(now_s), required, self._installed_scan_s, self._last_d, "deadline" if overdue else "late",
                  reason, held])
         else:
+            if self._overdue_since is not None:  # the stop's last stretch, up to the tick that released it
+                self.overdue_stats["total_s"] += float(now_s) - self._watch_cache[0]
             self._overdue_since = None
         self._watch_cache = (now_s, reason)
         return reason

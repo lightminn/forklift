@@ -4842,6 +4842,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
         table_problem_ = age_table_problem(age_table, args)
         require(table_problem_ is None, str(table_problem_))
+        layer_clock_box_ = {"fn": None}  # the layer latency budget's sim clock, filled when the world starts
         obstacle = (latency_module.AppliedWatch if latency_layer_ is not None else dict)({
             "layer": obstacle_module.ObstacleLayer(
                 layer_config,
@@ -4874,6 +4875,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "unpermitted_dir": [],
             "min_allowed": {},
         })
+        if state.get("layer_budget"):
+            # the watchdog reads the sim clock itself (set once the world starts): a control tick's t is its start, and
+            # a capture inside the tick steps the world past it (Codex impl review round 2 P1)
+            obstacle["layer"].clock_box = layer_clock_box_
         if getattr(args, "layer_worker", "off") != "off" or latency_layer_ is not None:
             # Real-time plan 5.28: the scan refresh's worker (live only). The obstacle dict says it is on (the core
             # reads the checked scan times then -- never from the layer, a recording proxy in recorded runs).
@@ -5384,6 +5389,8 @@ def drive(S, isaac) -> None:
         new_obstacles = _bound["new_obstacles"]
     if "obstacle" in _bound:
         obstacle = _bound["obstacle"]
+    if "layer_clock_box_" in _bound:  # the layer latency budget's clock (2026-11-11); a setup before it has none
+        layer_clock_box_ = _bound["layer_clock_box_"]
     if "obstacle_module" in _bound:
         obstacle_module = _bound["obstacle_module"]
     if "origin" in _bound:
@@ -6811,6 +6818,9 @@ def drive(S, isaac) -> None:
         ms.phase = "observe"
     ms.phase_started = 0.0
     initial_time = world.current_time
+    if state.get("layer_budget") and obstacle is not None and "layer_clock_box_" in _bound:
+        # the layer latency budget's watchdog clock (the sim time every scan stamp and control tick is on)
+        layer_clock_box_["fn"] = lambda: float(world.current_time - initial_time)
     simulation_started_wall = time.monotonic()
     ms.lift_command = 0.0
     steering_command = np.zeros(2)
@@ -10587,11 +10597,6 @@ def drive(S, isaac) -> None:
                 # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
                 # while it stands on a zero command.
                 cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
-                if state.get("layer_budget") and obstacle is not None and not live_abort_:
-                    # the layer latency budget's watchdog on every control tick, whatever the phase and whether the
-                    # permission tick runs (Codex impl review P2): a stop past overdue_end_s ends the mission on the
-                    # first tick past it; the permission below reads the same tick's judgement (cached)
-                    require(obstacle["layer"].watchdog(float(t)) != "layer_latency_exceeded", "layer_latency_exceeded")
                 permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
                     requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                     or cusp_handed_ is not None
@@ -10698,6 +10703,12 @@ def drive(S, isaac) -> None:
                 if loaded_wait_ and not paused_:  # plan D5 6c: standing for the loaded start, the steering held
                     requested_speed, curvature = 0.0, 0.0
                     dwell_hold = True
+                if state.get("layer_budget") and obstacle is not None and not live_abort_:
+                    # the layer latency budget's watchdog on every control tick, whatever the phase and whether a
+                    # permission ran (Codex impl review P2), judged after this tick's refreshes and barrier installs
+                    # (round 2 P2) on the sim clock (a permission's own judgement this tick is the cached one): a
+                    # stop past overdue_end_s ends the mission on the first tick past it
+                    require(obstacle["layer"].watchdog(float(t)) != "layer_latency_exceeded", "layer_latency_exceeded")
                 if new_obstacles is not None and ms.phase in trackers:
                     leg, leg_direction = trackers[ms.phase].leg_ahead()
                     driven = float(trackers[ms.phase]._distance[-1]) - trackers[ms.phase].remaining_to_goal_m()

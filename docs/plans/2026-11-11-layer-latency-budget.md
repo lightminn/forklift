@@ -127,6 +127,8 @@
 - **감시 사유의 이름과 자리.** 3 절이 `layer_latency_over_budget` 라고 적은 감시 정지 사유는 구현에서 `layer_overdue` 다. 연속 정지 한도를 넘은 임무 종료 사유는 결정대로 `layer_latency_exceeded` 다. 감시는 `drive_permission.py` 가 아니라 `sim/isaac/obstacle_layer.py` 의 `ObstacleLayer.watchdog()` 에 두고, `limit()` 이 감시 정지를 `(0, 사유)` 로 돌려준다. 허가 계산이 층 객체의 스캔 기록과 설치 상태를 보아야 하기 때문이다. 임무 종료는 `mission/core.py` 가 `require` 로 한다(실패 분류 MISSION).
 - **검증 배치의 예산 주는 법.** 3 절은 예산을 `--obstacle-layer` 설정 파일로 준다고 했다. 위 이유로 파일을 바꾸지 않고 riib 런처의 `LAYER_BUDGET` 으로 준다: B0 는 `off`, 나머지는 `config/layer_latency_budget.yaml`, Uo9 는 거기에 `--layer-latency-budget-s 0.05` 를 더한다(`lat_lists.py budget`, 58 행). 지연 내성 A·B 의 목록은 등록 때처럼 예산 없이 돌도록 `LAYER_BUDGET=off` 를 명시했다.
 - **분석기.** A 의 `lat_analyze.py` 를 넓히지 않고 그 함수를 불러 쓰는 `lat_budget_analyze.py` 를 따로 두었다(A 의 판정 코드는 그대로 두고, 제외 필드 처리만 `strip_layer_timing()` 으로 꺼내 둘이 같이 쓴다). 감시 틱 기록(`layer_latency.json` 의 `overdue_ticks`)에 그 틱의 사유와 연속 정지 시간을 더해, Uo9 의 '한도를 넘은 뒤 첫 감시 틱에 종료'를 기록에서 읽는다(`layer_latency_exceeded` 줄이 하나이고 마지막 줄).
+- **감시 실행 위치와 시계(Codex 구현 검토 1·2 회차).** 감시 정지는 `acting` 이 아닌 단계(하역 직선 등)에서도 명령을 0 으로 막고 바퀴를 잡는다. 감시는 매 제어 틱, 그 틱의 refresh·장벽 설치가 끝난 뒤 한 번 더 판정되며(허가가 같은 틱에 이미 판정했으면 그 값), 층이 sim 시계를 직접 읽는다. 제어 틱의 `t` 는 틱 시작이라 틱 안의 촬영이 세계를 앞으로 보내면 낡기 때문이다. D 는 새 스캔마다 한 번, 그 스캔을 처음 가져온 설치의 첫 사용에서 잰다(재투영은 새 첫 사용이 아니다).
+- **기록 계약의 예외.** 지연 기록(`layer_latency.json`)은 스캔별 `[t_scan, t_use, D]` 와 감시 틱별 `[t, 요구 스캔, 설치 스캔, D, 종류, 사유, 연속 정지]` 를 담는다. 설치 시각 `t_install` 과, 첫 사용 전에 더 새 설치로 대체된 중간 스캔은 기록하지 않는다. 판정에 쓰이지 않는 보고용 값이라 예외로 둔다(Codex 동의).
 - **실차 설정.** `config/real/obstacle_layer.yaml`(schema `real_obstacle_layer/1`)에 B 와 종료 한도를 provenance(`lead_decision_2026_11_11`, 실측 아님, until S5·S8)와 함께 두었다. 단위 시험이 시뮬 파일과 값이 같음을 고정한다. 읽는 코드는 콘솔 세션이 실차 진입점에서 붙인다.
 
 ## 5. 다른 세션과의 순서

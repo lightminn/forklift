@@ -186,3 +186,31 @@ def test_a_reinstallation_without_a_newer_scan_is_not_judged_again():
     assert lay.watchdog(0.01) is None
     install(lay, 0.0)  # a correction's re-projection 0.09 s later: the same newest scan, not a new first use
     assert lay.watchdog(0.099) is None and len(lay.latency_log["scans"]) == 1
+
+
+def test_the_watchdog_reads_the_sim_clock_not_a_stale_tick_start():
+    # Codex round 2 P1: a capture inside the tick steps the world past the tick's t; the first use is judged then
+    lay = layer(budget=0.05)
+    now = {"t": 0.0}
+    lay.clock_box = {"fn": lambda: now["t"]}
+    scan(lay, 0.0)
+    install(lay, 0.0)
+    assert lay.watchdog(0.0) is None
+    scan(lay, 0.10)
+    install(lay, 0.10)  # installed during a capture
+    now["t"] = 0.19  # the world is at 0.19, the caller still passes the tick start 0.0
+    assert lay.watchdog(0.0) == "layer_overdue" and lay.latency_log["scans"][-1][2] == pytest.approx(0.09)
+
+
+def test_the_total_stop_time_holds_the_last_stretch_up_to_the_release():
+    lay = layer()
+    scan(lay, 0.0)
+    install(lay, 0.0)
+    lay.watchdog(0.0)
+    scan(lay, 0.1)
+    assert lay.watchdog(0.21) == "layer_overdue"
+    assert lay.watchdog(0.22) == "layer_overdue"
+    install(lay, 0.2)
+    scan(lay, 0.2)
+    assert lay.watchdog(0.23) is None
+    assert lay.overdue_stats["total_s"] == pytest.approx(0.02) and lay.overdue_stats["events"] == 1

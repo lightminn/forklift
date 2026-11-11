@@ -35,8 +35,9 @@ def test_each_arm_must_carry_its_budget_and_its_records(tmp_path):
     assert "no layer_latency.json" in G.budget_problems("Ub6", budgeted(latency_injection={}), tmp_path)
 
 
-def ticks(*reasons):
-    return {"overdue_ticks": [[i / 120, 0.0, None, None, "deadline", r, i / 120] for i, r in enumerate(reasons)]}
+def ticks(*reasons, held=None):
+    held = held or [i / 120 for i in range(len(reasons))]
+    return {"overdue_ticks": [[i / 120, 0.0, None, None, "deadline", r, h] for i, (r, h) in enumerate(zip(reasons, held))]}
 
 
 def uo9_row(result, log, violations=0, stop="safe_failure"):
@@ -45,19 +46,26 @@ def uo9_row(result, log, violations=0, stop="safe_failure"):
 
 def test_uo9_passes_on_the_end_at_the_first_tick_past_the_limit_with_a_safe_stop():
     res = budgeted(0.05, longest=1.004, reason=G.END_REASON)
-    log = ticks("layer_overdue", "layer_overdue", G.END_REASON)
+    log = ticks("layer_overdue", "layer_overdue", G.END_REASON, held=[0.99, 1.0, 1.004])
     v = G.uo9_verdict(uo9_row(res, log))
     assert v["pass"] and v["end_function"] == "exposed"
     assert not G.uo9_verdict(uo9_row(res, log, stop="observed_end"))["pass"]  # the end must be a safe stop
-    assert not G.uo9_verdict(uo9_row(res, ticks("layer_overdue", G.END_REASON, G.END_REASON)))["pass"]  # drove on
+    assert not G.uo9_verdict(uo9_row(res, ticks("layer_overdue", G.END_REASON, G.END_REASON,
+                                                held=[0.99, 1.004, 1.012])))["pass"]  # drove on
+    # ended one tick late: the first row past the limit was still an overdue (Codex round 2 P2)
+    late = ticks("layer_overdue", "layer_overdue", G.END_REASON, held=[1.0, 1.0083, 1.0167])
+    assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=1.0167, reason=G.END_REASON), late))["pass"]
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=1.004, reason="tracking"), log))["pass"]  # other end
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=1.004, reason=G.END_REASON, inv=1), log))["pass"]
     assert not G.uo9_verdict(uo9_row(res, log, violations=1))["pass"]
 
 
 def test_uo9_without_reaching_the_limit_is_unexposed_and_without_events_fails():
-    v = G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), ticks("layer_overdue")))
+    v = G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), ticks("layer_overdue", held=[0.4])))
     assert v["pass"] and v["end_function"] == "unexposed"
+    # an unparsed log never passes, whatever the summary says (Codex round 2 P2)
+    assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), None))["pass"]
+    assert not G.uo9_verdict(uo9_row(budgeted(0.05, longest=0.4), ticks("layer_overdue", held=[1.2])))["pass"]
     assert not G.uo9_verdict(uo9_row(budgeted(0.05, events=0, longest=0.0), ticks()))["pass"]
     unread = budgeted(0.05)
     del unread["layer_budget"]["watchdog"]
