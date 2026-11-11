@@ -180,3 +180,25 @@ Codex 4b 범위 상의(P2 3·P3 1)를 반영했다. 4b 도 Isaac 경로 동작 �
   | stand_hold·dwell 잠금의 q·qd·게인 | 직접 읽기(Isaac 정지 유지 흉내) | 4e-1(드라이버 묶기 때 Isaac 전용으로) |
   | 기록·평가 전용 읽기(truth·insertion·records) | 직접 읽기 | 4d(P0-5 감사표) |
 - #442 의 drive() 다섯 지점(층 설정, 매 틱 감시, `layer_clock_box_`, 시계 연결, 끝 기록)은 옮기지 않았다.
+
+## 6. 4c: 센서 입력 — 4c-1 계약·실차 변환, 4c-2 Isaac 추출 (2026-11-11)
+
+Codex 4c 범위 상의(P2 4·P3 1)를 반영해 4c 를 둘로 나눴다.
+
+- **4c-1(이 단계, 러너 변경 없음)** `forklift_core/sensors/frames.py`:
+  - `PlanarScan` 은 빔마다 상태를 따로 둔다: hit(거리), 확인된 no-return(REP-117 +inf), unknown(무효·너무 가까움·스트림 범위 밖), own(차체·적재물, S7 에서 잰 장착 구간).
+    - unknown 은 no-return 이 아니다. 소비자는 그 빔으로 빈 공간을 지우지 않는다. 지금 장애물 층은 무효를 +inf 로 바꿔 지우므로, 실제 스캔 소비 경로를 바꾸는 일은 4e-2 다.
+    - 빔 각도·거리 한계·`frame_id`·첫 빔 시각·`time_increment`·스캔 주기·호스트 수신 시각을 보존한다. deskew 는 하지 않고(`deskewed=False`), `beam_times_s()` 로 빔 시각을 준다.
+  - `RgbdFrame`: 같은 정류 격자에 정합된 컬러·depth(m, NaN unknown).
+    - 컬러·depth 각각의 취득 시각과 짝짓기 허용 차, 호스트 수신 시각을 싣는다.
+    - depth 배율은 스트림이 준 값만 받고 추정하지 않는다. 보정 출처를 적는다.
+    - 정합은 `aligned_to_frame` 이 intrinsics 의 frame 과 같을 때만 인정한다(크기가 같다고 정합이 아니다).
+- **4c-2(B 종료 뒤, 따로 검증)**: Isaac 쪽 추출이다. step_world 의 공유 스캔·엔코더 모형·자이로, 카메라별 sync → metadata → RGB → depth, 기준 스캔, 초기화·capture 콜백이 대상이다.
+  - 재생 게이트가 실행하지 않는 경로가 넓다. step_world, capture 내부, Frames 포트로 감싼 `read_pocket_frame`·`feed_near_frame`, step_world 안에서만 불리는 `obstacle_scan` 이 그렇다.
+  - 그래서 검증은 세 겹이다: 래퍼 직접 비교 시험(같은 가짜 프레임·레이캐스트를 옛 코드와 래퍼에 넣음), 결정 모드 A/A 확인 뒤 A/B 비교(`tools/deterministic_compare.py`, RGB·영상 제외 범위 유의), 기본 모드 learned·비동기 smoke. 게이트 29/29 와 전체 pytest 는 별도로 필요하다.
+  - 공유 스캔은 레이캐스트 한 번·잡음 한 번·두 소비자 전달을 유지한다. `TeamEncoderModel.read()` 의 물리 스텝당 호출 수와 상태도 유지한다. `IsaacSensors` 가 부를 때마다 새로 취득하는 getter 가 되지 않게 한다.
+- **4e-2 몫(실차 진입점)**:
+  - 장애물 층이 상태별 빔을 받는 소비 경로(unknown 은 지우지 않음, 실제 스캔에 합성 잡음을 다시 넣지 않음).
+  - 같은 스캔을 SLAM 과 장애물 층에 넘기는 시험.
+  - far 인식의 실차 proposer(instance_ids 없음)와 ONNX provider 확인.
+  - 승강에 따른 카메라 외부 변환을 영상 취득 시각에 맞추는 일.
