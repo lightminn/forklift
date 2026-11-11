@@ -4767,7 +4767,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         if latency_slam_spec_ else None)
     # the truth speed over 0.05 m/s at the last physics step, and the stand that runs up to it (the latency test's
     # stop-vs-end record, plan 4.2: the requested and applied speeds zero and the truth speed under 0.05 m/s)
-    latency_box_ = {"moving": False, "stand_since": None, "last_stamp": None}
+    latency_box_ = {"moving": False, "stand_since": None, "last_stamp": None,
+                    # the control ticks inside that stand (plan 4.2: the control record unbroken through it)
+                    "stand_ctrl_n": 0, "stand_ctrl_last": None, "stand_ctrl_gap_max": 0.0}
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module
@@ -5212,7 +5214,8 @@ def drive(S, isaac) -> None:
 
         _bound.update(latency_module=latency_module_, latency_slam_spec_=None, latency_layer_=None,
                       latency_marks_=None, latency_slam_queue_=None,
-                      latency_box_={"moving": False, "stand_since": None, "last_stamp": None})
+                      latency_box_={"moving": False, "stand_since": None, "last_stamp": None, "stand_ctrl_n": 0,
+                                    "stand_ctrl_last": None, "stand_ctrl_gap_max": 0.0})
     if "latency_module" in _bound:
         latency_module = _bound["latency_module"]
     if "latency_slam_spec_" in _bound:
@@ -7947,7 +7950,8 @@ def drive(S, isaac) -> None:
                          and (slam is None or slam.get("last_command", 0.0) == 0.0))
                 if zero_ and not latency_box_["moving"]:
                     if latency_box_["stand_since"] is None:
-                        latency_box_["stand_since"] = float(stamp_now)
+                        latency_box_.update(stand_since=float(stamp_now), stand_ctrl_n=0, stand_ctrl_last=None,
+                                            stand_ctrl_gap_max=0.0)
                 else:
                     latency_box_["stand_since"] = None
                 latency_box_["last_stamp"] = float(stamp_now)
@@ -9772,6 +9776,12 @@ def drive(S, isaac) -> None:
                     live_timers.add(*gc_seen_.pop())
                 if latency_marks_ is not None:
                     latency_marks_.control_tick(stepper["tick"], t)  # latency test: what this control tick reads first
+                    if latency_box_["stand_since"] is not None:  # the control ticks inside the current stand
+                        last_c_ = latency_box_["stand_ctrl_last"]
+                        if last_c_ is not None:
+                            latency_box_["stand_ctrl_gap_max"] = max(latency_box_["stand_ctrl_gap_max"], float(t) - last_c_)
+                        latency_box_["stand_ctrl_last"] = float(t)
+                        latency_box_["stand_ctrl_n"] += 1
                 if live is not None:
                     if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
                         live.trace.control("ctrl_start", live.trace.now())
@@ -11461,8 +11471,12 @@ def drive(S, isaac) -> None:
                     if latency_marks_ is not None:
                         li_["use"] = {c: {str(k): v for k, v in d.items()} for c, d in latency_marks_.result().items()}
                         since_, last_ = latency_box_.get("stand_since"), latency_box_.get("last_stamp")
+                        ctrl_last_ = latency_box_.get("stand_ctrl_last") if since_ is not None else None
                         li_["final_stand"] = {"last_step_s": last_, "since_s": since_,
-                                              "length_s": (last_ - since_) if since_ is not None else 0.0}
+                                              "length_s": (last_ - since_) if since_ is not None else 0.0,
+                                              "control_ticks": latency_box_.get("stand_ctrl_n", 0) if since_ is not None else 0,
+                                              "control_gap_max_s": latency_box_.get("stand_ctrl_gap_max", 0.0),
+                                              "control_tail_s": (last_ - ctrl_last_) if ctrl_last_ is not None else None}
                     if core_ is not None and isinstance(core_.jobs, latency_module.DelayedJobs):
                         li_["plan"] = {"delay_ms": float(args.latency_plan_ms),
                                        "records": core_.jobs.records + core_.jobs.held_at_end()}

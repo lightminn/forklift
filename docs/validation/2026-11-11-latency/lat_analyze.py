@@ -31,6 +31,7 @@ MUST_TOLERATE = {"S3", "S6", "U3", "U6", "C6"}  # 4.4: 50 ms and under
 EXPOSURE_MIN = 200
 ON_SCHEDULE_MIN = 0.8
 STAND_S = 0.5
+CONTROL_GAP_S = 3 / 120 + 1e-6  # the control record counts as unbroken with gaps up to 3 ticks (low_clearance_report's)
 TIME_FACTOR, TIME_ADD_S, DELIVERY_ADD_CM, ROUNDS_ADD = 1.15, 30.0, 1.0, 1
 SAME_EVENT_WORSE_M = 0.01
 
@@ -57,8 +58,10 @@ def stop_or_end(result: dict) -> str | None:
     if result.get("success"):
         return None
     stand = ((result.get("latency_injection") or {}).get("final_stand") or {})
-    length = stand.get("length_s")
-    return "safe_failure" if length is not None and length >= STAND_S - 1e-9 else "observed_end"
+    length, gap, tail = stand.get("length_s"), stand.get("control_gap_max_s"), stand.get("control_tail_s")
+    ok = (length is not None and length >= STAND_S - 1e-9 and (stand.get("control_ticks") or 0) >= 1
+          and gap is not None and gap <= CONTROL_GAP_S and tail is not None and tail <= CONTROL_GAP_S)
+    return "safe_failure" if ok else "observed_end"
 
 
 def safety_of(result: dict, low: dict | None) -> dict:
@@ -69,7 +72,9 @@ def safety_of(result: dict, low: dict | None) -> dict:
         for e in ol.get(key) or []:
             events.append({"kind": kind, "object": e.get("object"), "phase": e.get("phase")})
     phys_min, overlaps, arc = None, [], []
-    if low is not None and "error" not in low:
+    low_read = (low is not None and "error" not in low and bool(low.get("rows"))
+                and "no samples" not in (low.get("unevaluated") or []))
+    if low_read:
         rows = low.get("rows") or {}
         mins = [(k, r.get("min_m"), r.get("phase"), r.get("object")) for k, r in rows.items() if k.endswith("physical")]
         vals = [m for _, m, _, _ in mins if m is not None]
@@ -83,14 +88,15 @@ def safety_of(result: dict, low: dict | None) -> dict:
         "forbidden_contacts": None if contacts is None else len(contacts),
         "unpermitted_entries": ol.get("unpermitted_entries"),
         "unpermitted_dir_entries": ol.get("unpermitted_dir_entries"),
-        "low_clearance_read": low is not None and "error" not in low,
+        "low_clearance_read": low_read,
         "physical_min_m": phys_min,
         "events": events + overlaps + arc,
     }
-    out["violations"] = (None if (out["forbidden_contacts"] is None or out["unpermitted_entries"] is None
-                                  or out["unpermitted_dir_entries"] is None or not out["low_clearance_read"])
-                         else out["forbidden_contacts"] + out["unpermitted_entries"] + out["unpermitted_dir_entries"]
-                         + len(overlaps) + len(arc))
+    parts = (out["forbidden_contacts"], out["unpermitted_entries"], out["unpermitted_dir_entries"])
+    confirmed = sum(x for x in parts if x is not None) + len(overlaps) + len(arc)
+    out["unreadable"] = any(x is None for x in parts) or not low_read
+    # a confirmed violation stands whatever else could not be read; nothing confirmed and something unread is None
+    out["violations"] = confirmed if confirmed else (None if out["unreadable"] else 0)
     return out
 
 
@@ -202,56 +208,63 @@ def b0_repeat(s: dict, bs: dict) -> list:
 
 
 def conclusions(rows: dict, equivalence: dict, determinism: dict) -> dict:
-    """4.4 conclusion rules: defects by priority (1 dangerous, 2 observed_end, 3 failures or degradation at 50 ms and
-    under, 4 the rest), the arms an equivalence failure leaves unread, the D12/U12 reading."""
-    unread = set()
-    for scene, eq in equivalence.items():
-        if eq.get("S0") is False:
-            unread |= {(scene, a) for a in SLAM_ARMS - {"S0"}}
-            if scene == "aisle_rack":
-                unread |= {(scene, "U12")}
-        if eq.get("L0") is False:
-            unread |= {(scene, a) for a in LAYER_ARMS - {"L0"}}
-    stopped = {scene for scene, ok in determinism.items() if ok is False}
-    defects = []
+    """4.4 conclusion rules. Safety first and from every run that left a result -- first runs and their reruns, invalid
+    ones, baselines (a baseline's own violation is 'baseline_violation'): a rerun never erases a safety event (4.7).
+    The latency effects (observed ends, failures, degradation) only from the effective valid run of an arm whose
+    equivalence (its channels' S0 / L0) and the scene's determinism are confirmed True; anything unconfirmed leaves
+    the arm unread. Priorities: 1 dangerous, 2 observed_end, 3 failures at 50 ms and under, 3.5 their degradation,
+    4 the rest (4.5 degradation)."""
+    def channels_ok(scene, arm):
+        eq = equivalence.get(scene) or {}
+        need = (["S0"] if arm in SLAM_ARMS or (scene == "aisle_rack" and arm in LAYER_ARMS) else []) + (
+            ["L0"] if arm in LAYER_ARMS and scene != "aisle_rack" else [])
+        return all(eq.get(k) is True for k in need)
+
+    def determined(scene):
+        return True if scene == "aisle_rack" else determinism.get(scene) is True  # no repeat on the aisle (3.1)
+
+    defects, unread = [], set()
     for name, r in sorted(rows.items()):
-        if r.get("invalid") or r["arm"] in ("B0", "S0", "L0") or r.get("repeat"):
+        if (r.get("safety") or {}).get("violations"):
+            defects.append({"run": name, "scene": r["scene"], "seed": r["seed"], "arm": r["arm"], "class": "dangerous",
+                            "priority": 1, **({"baseline_violation": True} if r["arm"] in ("B0", "S0", "L0") else {}),
+                            **({"invalid": r["invalid"]} if r.get("invalid") else {})})
+    for name, r in sorted(rows.items()):
+        if not r.get("effective") or r.get("invalid") or r["arm"] in ("B0", "S0", "L0") or r.get("repeat"):
             continue
-        c = r["cell"]["class"]
-        key = (r["scene"], r["arm"])
-        if r["scene"] in stopped:
+        if not (channels_ok(r["scene"], r["arm"]) and determined(r["scene"])):
+            unread.add((r["scene"], r["arm"]))
             continue
-        if key in unread and c != "dangerous":
-            continue  # only the absolute safety is read for an unread arm
-        if c == "dangerous":
-            prio = 1
-        elif c == "observed_end":
+        cell = r.get("cell") or {}
+        c = cell.get("class")
+        if c == "dangerous" or cell.get("attribution"):
+            continue  # dangerous listed above; a baseline-failed aisle seed reads safety only (3.1, before 4.4)
+        if c == "observed_end":
             prio = 2
-        elif r["cell"].get("attribution"):
-            continue
-        elif c in ("safe_failure", "operating_degraded", "underexposed", "tolerated_no_operating_comparison"):
+        elif c in ("safe_failure", "underexposed", "tolerated_no_operating_comparison"):
             prio = 3 if r["arm"] in MUST_TOLERATE else 4
-            if c == "operating_degraded":
-                prio += 0.5  # after the failures of its band
+        elif c == "operating_degraded":
+            prio = 3.5 if r["arm"] in MUST_TOLERATE else 4.5
         else:
             continue
         defects.append({"run": name, "scene": r["scene"], "seed": r["seed"], "arm": r["arm"], "class": c,
                         "priority": prio})
     reading = {}
     for scene in {r["scene"] for r in rows.values()}:
+        if not ((equivalence.get(scene) or {}).get("L0") is True and determined(scene)):
+            continue
         for seed in {r["seed"] for r in rows.values()}:
-            d = next((r for r in rows.values() if (r["scene"], r["seed"], r["arm"]) == (scene, seed, "D12")
-                      and not r.get("invalid")), None)
-            u = next((r for r in rows.values() if (r["scene"], r["seed"], r["arm"]) == (scene, seed, "U12")
-                      and not r.get("invalid")), None)
-            if d and u:
-                dc, uc = d["cell"]["class"], u["cell"]["class"]
+            pick = {arm: next((r for r in rows.values() if (r["scene"], r["seed"], r["arm"]) == (scene, seed, arm)
+                               and r.get("effective") and not r.get("invalid")), None) for arm in ("D12", "U12")}
+            if pick["D12"] and pick["U12"]:
+                dc, uc = pick["D12"]["cell"]["class"], pick["U12"]["cell"]["class"]
                 reading[f"{scene}_s{seed}"] = (
                     "knows it: holds; unaware: stops" if dc == "tolerated" and uc == "safe_failure"
                     else "stop safety unknown" if uc == "observed_end"
                     else "safety violation" if uc == "dangerous" else f"D12 {dc} / U12 {uc}")
+    stopped = sorted(sc for sc in ("line_2", "random_1") if determinism.get(sc) is not True)
     return {"defects": sorted(defects, key=lambda x: (x["priority"], x["run"])), "unread": sorted(map(list, unread)),
-            "determinism_stopped": sorted(stopped), "d12_u12": reading}
+            "determinism_not_confirmed": stopped, "d12_u12": reading}
 
 
 # ---- I/O ----------------------------------------------------------------------------------------------------------
@@ -317,24 +330,33 @@ def main(argv=None) -> int:
     reruns = {json.loads(x)["name"]: json.loads(x) for x in rerun_file.read_text().splitlines()} if rerun_file.exists() else {}
     attempts = bundle_records(a.out_root)
     rows: dict = {}
-    for r in rows_in:
-        name = r["name"]
-        use = reruns.get(f"lat_r_{name}", r)  # a rerun stands in for the first, which stays on record
+
+    def make_row(use: dict, repeat: bool) -> dict:
         d = Path(use["argv"][-1])
         run = d / "run"
         result = _json(run / "result.json")
         env = use["env"]
-        arm, scene, seed = env["LAT_ARM"], env["SCENE"], int(env["SEED"])
-        layer_recs = _json(run / "layer_worker.json")
+        arm = env["LAT_ARM"]
         problems = environment_problems(attempts.get(use["name"], []), run, arm, result)
-        row = {"name": use["name"], "first": name if use is not r else None, "arm": arm, "scene": scene, "seed": seed,
-               "repeat": name.endswith("_rep"), "dir": str(d), "invalid": problems}
+        row = {"name": use["name"], "arm": arm, "scene": env["SCENE"], "seed": int(env["SEED"]), "repeat": repeat,
+               "dir": str(d), "invalid": problems}
         if result is not None:
             row["mission"] = mission_of(result)
             row["stop"] = stop_or_end(result)
-            row["exposure"] = exposure_of(arm, result, layer_recs)
+            row["exposure"] = exposure_of(arm, result, _json(run / "layer_worker.json"))
             row["_result"] = result
-        rows[name] = row
+        return row
+
+    for r in rows_in:  # a rerun is a row of its own beside its first run, which stays on record (4.7)
+        name = r["name"]
+        rows[name] = make_row(r, name.endswith("_rep"))
+        rr = reruns.get(f"lat_r_{name}")
+        rows[name]["effective"] = rr is None
+        if rr is not None:
+            rows[rr["name"]] = {**make_row(rr, name.endswith("_rep")), "rerun_of": name, "effective": True}
+
+    def eff(name: str) -> str:
+        return f"lat_r_{name}" if f"lat_r_{name}" in rows else name
     # the baselines' stopping model and the safety, for every run that has a result (read even when invalid)
     for name, row in rows.items():
         res = row.pop("_result", None)
@@ -342,6 +364,7 @@ def main(argv=None) -> int:
             continue
         base_name = (f"lat_S0_aisle_rack_s{row['seed']}" if row["scene"] == "aisle_rack"
                      else f"lat_B0_{row['scene']}_s{row['seed']}")
+        base_name = eff(base_name)
         base_res = _json(Path(rows[base_name]["dir"]) / "run" / "result.json") if base_name in rows else None
         try:
             stopping = stopping_from(a.snap, base_res or res, low_mod)
@@ -362,16 +385,20 @@ def main(argv=None) -> int:
             continue
         base_name = (f"lat_S0_aisle_rack_s{row['seed']}" if row["scene"] == "aisle_rack"
                      else f"lat_B0_{row['scene']}_s{row['seed']}")
+        base_name = eff(base_name)
         base = rows.get(base_name)
         base = base if base is not None and not base["invalid"] and "safety" in base else None
         row["cell"] = classify(row, base if name != base_name else None, aisle=row["scene"] == "aisle_rack")
     # equivalence and determinism (4.7): whole runs compared, the injection records left out for S0/L0
     def cmp(x, y, ignore):
+        x, y = eff(x), eff(y)
         if x not in rows or y not in rows or rows[x]["invalid"] or rows[y]["invalid"]:
             return None
         dc.IGNORE_INJECTION = ignore
         try:
-            return bool(dc.compare(Path(rows[x]["dir"]), Path(rows[y]["dir"]))["equal"])
+            # the run's record folder, as every determinism check compares it (the bridge's wall-timed map outputs
+            # beside it are not the run's records)
+            return bool(dc.compare(Path(rows[x]["dir"]) / "run", Path(rows[y]["dir"]) / "run")["equal"])
         finally:
             dc.IGNORE_INJECTION = False
     equivalence, determinism = {}, {}
@@ -384,13 +411,14 @@ def main(argv=None) -> int:
     if a.smoke is not None:
         dc.IGNORE_INJECTION = True
         try:
-            eq = dc.compare(a.smoke / "lat_sm_B0_aisle_rack_s0", a.smoke / "lat_sm_S0_aisle_rack_s0")["equal"]
+            eq = dc.compare(a.smoke / "lat_sm_B0_aisle_rack_s0" / "run",
+                            a.smoke / "lat_sm_S0_aisle_rack_s0" / "run")["equal"]
         finally:
             dc.IGNORE_INJECTION = False
         equivalence["aisle_rack"] = {"S0": bool(eq)}
-    rerun_needed = sorted(n for n, r in rows.items() if r["invalid"] and not r["first"])
-    out = {"rows": rows, "equivalence": equivalence, "determinism": determinism,
-           "rerun_needed": rerun_needed, "to_lead": sorted(n for n, r in rows.items() if r["invalid"] and r["first"]),
+    rerun_needed = sorted(n for n, r in rows.items() if r["invalid"] and r.get("effective") and not r.get("rerun_of"))
+    out = {"rows": rows, "equivalence": equivalence, "determinism": determinism, "rerun_needed": rerun_needed,
+           "to_lead": sorted(n for n, r in rows.items() if r["invalid"] and r.get("rerun_of")),
            "conclusions": conclusions(rows, equivalence, determinism)}
     if a.json is not None:
         a.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
