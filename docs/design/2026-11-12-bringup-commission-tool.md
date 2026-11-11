@@ -42,7 +42,7 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
   - 고른 축의 엔코더 비트 18–21(`encoder_stuck_*`·`encoder_polarity_*`)이 새로 켜짐. 시운전 빌드에서는 이 비트가 래치만 되고 `ARMED` 가 이어진다(계약 3.4). 도구는 비트를 표시하고, 그 축의 구동을 거기서 멈춘다 — 극성 판단은 이미 끝났고 더 돌릴 이유가 없다.
   - 창 이탈(조향·승강).
 - **중단**(도구 ① 과 같은 분류): 권한 철회(모드가 `ARMED` 를 벗어남 — 과전류·nFAULT·`commission_time_limit`·비상정지), 부팅 변경, `STATE` 공백(0.2 s), 비영 명령 거부(`reject_reason`, 예: `bad_value`·`sensor_invalid`).
-- **정리**: 정상·예외·Ctrl-C 모두 도구 ① 의 `execute` 경로(무장 요청이 나갔으면 마지막 `STATE` 와 무관하게 `DISARM` 확인). 단 **`STOPPING` 중에는 `DISARM` 을 보내지 않는다**(Codex P1-1). 시운전 빌드의 `STOPPING` 은 네 축 전기 제동이고, 계약 3.4 는 시간 상한으로 들어간 `STOPPING` 을 `DISARM` 으로 줄일 수 없다고 정한다. 그런데 지금 펌웨어 코어(`drive.c` `drive_handle` 의 `LINK_DISARM`)는 `STOPPING` 에서도 바로 `DISARMED` 로 가서 제동을 끝낸다(`safe_brake=false` 채널은 코스트). 그래서 도구는 대기 명령을 버리고 `STOPPING` 이 스스로 끝나기를 기다린 뒤(최대 1 s, `STOPPING_WAIT_S`) `DISARM` 확인을 한다. 펌웨어 쪽 불일치는 펌웨어 세션에 넘겼다(9절).
+- **정리**: 정상·예외·Ctrl-C 모두 도구 ① 의 `execute` 경로(무장 요청이 나갔으면 마지막 `STATE` 와 무관하게 `DISARM` 확인). 단 **`STOPPING` 중에는 `DISARM` 을 보내지 않는다**(Codex P1-1). 시운전 빌드의 `STOPPING` 은 네 축 전기 제동이고, 계약 3.4 는 시간 상한으로 들어간 `STOPPING` 을 `DISARM` 으로 줄일 수 없다고 정한다. 펌웨어 코어(`drive.c` `drive_handle` 의 `LINK_DISARM`)는 `STOPPING` 에서도 `DISARM` 을 받으면 바로 `DISARMED` 로 가서 제동을 끝낸다(`safe_brake=false` 채널은 코스트). 이것은 정지 명령에 예외를 두지 않는다는 코어의 선택이고, 계약 3.4 문구를 그에 맞춰 고쳤다(9절). 줄일 수 없는 것은 재무장 금지다. 도구는 제동 상태를 끝까지 보기 위해 대기 명령을 버리고 `STOPPING` 이 스스로 끝나기를 기다린 뒤(최대 1 s, `STOPPING_WAIT_S`) `DISARM` 확인을 한다.
 
 ## 4. 결과(소프트웨어 근거)
 
@@ -107,7 +107,7 @@ Codex 설계 상의 1회(P1 2·P2 5·P3 1). 모두 반영했다.
 
 | 지적 | 처리 |
 |---|---|
-| P1-1 정리용 `DISARM` 이 시간 상한 `STOPPING` 의 네 축 제동을 끊음(`drive.c` `LINK_DISARM`, 계약 3.4 와 불일치) | 근거 확인(`drive_handle` 이 `driving(d)` 면 바로 `DISARMED`). 도구는 `STOPPING` 이 끝나기 전에 `DISARM` 을 보내지 않는다(3절). 펌웨어 쪽 불일치(계약대로 `STOPPING` 유지 또는 계약 개정)는 펌웨어-H743 세션에 넘겼다 |
+| P1-1 정리용 `DISARM` 이 시간 상한 `STOPPING` 의 네 축 제동을 끊음(`drive.c` `LINK_DISARM`, 계약 3.4 와 불일치) | 근거 확인(`drive_handle` 이 `driving(d)` 면 바로 `DISARMED`). 도구는 `STOPPING` 이 끝나기 전에 `DISARM` 을 보내지 않는다(3절). 펌웨어-H743 세션의 판단(정지 명령에 예외를 두면 그쪽이 더 위험, 상한의 목적인 우회는 재무장 금지가 이미 막음)에 따라 코어는 그대로 두고 계약 3.4 문구를 고쳤다 |
 | P1-2 창 여유 0.1 s 가 명령 유효시간 150 ms 보다 짧고, S3 의 MCU 범위 검사는 독립 보호가 아님 | 시운전 유효시간 상한 60 ms, 조향·승강 한 번 0.2 s 이하, 여유 식을 명시, 첫 구동 조건, MCU 범위 검사를 물리 보호에서 뺌(2절). TX 단절·양방향 창 시험 추가 |
 | P2-3 axis 0 의 0 명령은 전체 축의 중립이 아님 | 무장용 0 명령만 axis 0, 그 뒤 0 은 모두 고른 축(3절) |
 | P2-4 부호 판정의 음의 명령·무동작 반례 | 관측을 '본 방향'으로 정의, 무동작 둘 다 `insufficient_motion`, 한쪽 `inconsistent`(4절) |

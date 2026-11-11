@@ -89,7 +89,7 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 - 받아들이는 순서: 프레임 검사(version·길이·CRC) 뒤 **맨 앞에 `wrong_build`**(정상 빌드의 `COMMISSION`, 시운전 빌드의 `DRIVE` 는 내용과 무관하게 14). 그다음은 `DRIVE` 와 같다(형식 → `boot_id` → 모드 → `arm_gen` → 마감 → `seq` → 무장 직후 첫 명령은 듀티 0 `zero_first`). M·H 를 고른 명령은 그 축 측정이 무효면 13 `sensor_invalid` 로 거부한다.
 - 한 번에 한 축만 움직이고, 나머지 축은 정지 상태다.
-- 시간 상한으로 들어간 `STOPPING` 은 `DISARM` 으로 줄일 수 없다. `stop_grace_ms` 가 끝날 때까지 `ARM` 은 `stopping` 으로 거부한다.
+- 시간 상한으로 들어간 `STOPPING` 에서도 `DISARM` 은 언제나 받아들여 바로 `DISARMED`(채널별 정지 상태)로 간다(3.2 와 같다. 정지 명령에는 예외를 두지 않는다). 이때 네 축 전기 제동이 끝나고, `safe_brake=false` 채널은 코스트가 된다. 줄일 수 없는 것은 **재무장 금지**다. 상한이 걸린 때부터 `stop_grace_ms` 가 끝날 때까지 `ARM` 은 `stopping` 으로 거부되고, 그 사이에 `DISARM`·결함·`CLEAR_FAULTS` 가 끼어도 유지된다. 제동 상태를 끝까지 보려는 도구는 `STOPPING` 이 끝날 때까지 `DISARM` 을 보내지 않는다(시운전 도구가 그렇게 한다).
 - `CLEAR_FAULTS` 는 `commission_time_limit`(24)을 지우지 않는다. 다음 `ARM` 이 지운다. 상한 뒤 `stop_grace_ms` 동안의 `ARM` 거부는 그 사이에 결함·`CLEAR_FAULTS` 가 끼어도 유지된다.
 - **시운전 빌드의 `STOPPING`** 은 고르지 않은 축까지 **네 축 모두** 듀티 0·DRVOFF low(전기 제동)다. 단 그 채널에 드라이버 결함이 있거나 드라이버가 준비되지 않았으면 끊는다.
 - **시간 상한은 실제 적용 출력으로 잰다**(`ARM`·`DISARM` 으로 지워지지 않는다. 한 주기에 `DISARM`→`ARM`→`COMMISSION`(0)→`COMMISSION`(비영)을 받아도 실제 출력이 0 인 주기가 없으면 시계가 이어진다): 네 축의 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돌고, 모두 0 인 주기가 한 번 지나야 지워진다(같은 주기에 `COMMISSION`(0)→`COMMISSION`(비영)을 보내도 지워지지 않는다). 시계가 상한(빌드 상수, 제안 2 s)을 넘으면 `STOPPING` → `DISARMED` 로 가고 `fault_flags.commission_time_limit` 을 켠다. 이 비트는 다음 `ARM` 까지 남는다.
@@ -179,3 +179,4 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   - `STATE.flags` 의 bit4–7 로 빌드 종류를 알린다.
   - `STATE` 끝에 `reset_cause` 를 붙였다.
   - 승강 원점 비트는 승강 방식 결정(계획 3.5) 뒤 version 3 으로 미룬다.
+  - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다. 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
