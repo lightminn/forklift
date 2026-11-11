@@ -29,7 +29,7 @@ from forklift_core.localization.wheel_odometry import advance_arc
 
 SCHEMA = "real_vehicle/1"
 CURVATURE_EDGE_TOL = 1e-9  # numerical noise at the reachable edge is normalised onto it, nothing more
-FLOAT32_EDGE_ULPS = 2.0**-22  # relative: two float32 steps -- an edge angle sent or read as an mcu-link f32
+FLOAT32_EDGE_ULPS = 2  # float32 steps at each end -- an edge angle sent or read as an mcu-link f32
 _TOP = {"schema", "chassis_model", "wheel_counts", "wheel_radius", "steering_map", "wheel_rate_limit"}
 _PROV_KEYS = {"source", "measured", "until"}
 
@@ -75,10 +75,9 @@ class SteeringMap:
         if not math.isfinite(angle_rad):
             return None
         low, high = self.angle_range
-        tol = max(abs(low), abs(high)) * FLOAT32_EDGE_ULPS
-        if low - tol <= angle_rad < low:
+        if low - FLOAT32_EDGE_ULPS * float(np.spacing(np.float32(abs(low)))) <= angle_rad < low:
             angle_rad = low
-        elif high < angle_rad <= high + tol:
+        elif high < angle_rad <= high + FLOAT32_EDGE_ULPS * float(np.spacing(np.float32(abs(high)))):
             angle_rad = high
         if not low <= angle_rad <= high:
             return None
