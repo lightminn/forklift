@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 
 from forklift_core.localization.wheel_odometry import advance_arc
+from forklift_core.mcu_link.messages import wheel_count_delta
 
 SCHEMA = "real_vehicle/1"
 CURVATURE_EDGE_TOL = 1e-9  # numerical noise at the reachable edge is normalised onto it, nothing more
@@ -263,10 +264,6 @@ class OdometryStep:
     reason: str | None
 
 
-def _i32_diff(now: int, before: int) -> int:
-    return ((int(now) - int(before) + 2**31) % 2**32) - 2**31
-
-
 class RealOdometry:
     """Rear-axle dead reckoning from mcu-link STATE samples, ordered on the MCU clock.
 
@@ -316,8 +313,8 @@ class RealOdometry:
         if sample[0] - ref[0] > self.max_gap_us:
             return self._step(False, True, "gap")
         c = self.cfg
-        rot_l = _i32_diff(sample[1], ref[1]) * 2 * math.pi / c.counts_per_wheel_rev[0]
-        rot_r = _i32_diff(sample[2], ref[2]) * 2 * math.pi / c.counts_per_wheel_rev[1]
+        rot_l = wheel_count_delta(sample[1], ref[1]) * 2 * math.pi / c.counts_per_wheel_rev[0]
+        rot_r = wheel_count_delta(sample[2], ref[2]) * 2 * math.pi / c.counts_per_wheel_rev[1]
         distance = (rot_l * c.wheel_radius_m[0] + rot_r * c.wheel_radius_m[1]) / 2
         self.pose = advance_arc(*self.pose, distance, (ref[3] + kappa) / 2)
         return self._step(True, False, None)
