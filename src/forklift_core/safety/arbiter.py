@@ -27,7 +27,8 @@ from .validate import problem
 MODES = ("PAUSED", "AUTO", "TELEOP", "STOPPED")
 LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_pause", "mission_resume",
           "mission_cancel", "recovery", "session_end", "sim_reset", "relocalize_pick", "relocalize_retry",
-          "relocalize_place", "relocalize_place_confirm")  # F1: the operator's placed pose and its confirmation
+          "relocalize_place", "relocalize_place_confirm",  # F1: the operator's placed pose and its confirmation
+          "escape_approve")  # the S6 bridge's wall escape (docs/design/2026-11-12-standing-direction-rule.md 4.2)
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
@@ -148,6 +149,9 @@ class Arbiter:
         self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
         self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
         self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
+        # the wall escape's approval handler ``(msg, now_mono) -> reason | None``, injected by the S6 bridge only;
+        # None: escape_approve is unsupported (Isaac, every other back end -- standing-direction-rule design 4.2)
+        self.escape = None
         # B-P2c: the start relocalization (a StartRelocalizer) while the start is unknown; None: localized or none
         self.reloc = None
         # the unconfirmed position check's view this tick ({status, drive_ready, reason}); None: no check
@@ -400,6 +404,24 @@ class Arbiter:
         if self.mission is not None and self.mission.status in ACTIVE:
             return self._reply("pick_request", request_id, "mission_active")
         return self._reply("pick_request", request_id)
+
+    def _on_escape_approve(self, client_id, request_id, msg, now_mono):
+        """The operator's approval of the bridge's wall-escape offer (standing-direction-rule design 4.2): the
+        arbiter checks the armed TELEOP, no latch and the arm generation; the bridge judges the offer."""
+        if self.escape is None:
+            return self._reply("escape_approve", request_id, "unsupported")
+        if self.mode != "TELEOP":
+            return self._reply("escape_approve", request_id, "not_teleop")
+        if not self.armed:
+            return self._reply("escape_approve", request_id, "not_armed")
+        if self.preempt_latch is not None:
+            return self._reply("escape_approve", request_id, "latched")
+        if msg["arm_gen"] != self.arm_gen:
+            return self._reply("escape_approve", request_id, "stale_arm")
+        why = self.escape(msg, now_mono)
+        self.events.append({"t": now_mono, "event": "escape_approve", "offer_id": msg["offer_id"],
+                            "accepted": why is None, "reason": why})
+        return self._reply("escape_approve", request_id, why)
 
     def _on_session_end(self, client_id, request_id, msg, now_mono):
         return self._session_request("session_end", request_id, now_mono)

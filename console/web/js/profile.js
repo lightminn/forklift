@@ -272,6 +272,14 @@ export const REJECT = {
   pose_ended: "출발 위치 확인이 끝났습니다 · 세션을 다시 시작하세요",
   // the vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.4)
   operator_placed_start: "운전자가 놓은 출발 위치입니다 · 자동 운행과 미션은 받지 않습니다(수동 운전만)",
+  // the wall escape (standing-direction-rule design 4.2)
+  escape_no_offer: "탈출 제안이 바뀌었습니다 · 지금 보이는 버튼을 다시 누르세요",
+  escape_stale: "탈출 제안이 이전 세대입니다 · 다시 확인하세요",
+  escape_active: "이미 탈출 중입니다",
+  stale_arm: "무장 세대가 바뀌었습니다 · 다시 확인하세요",
+  not_teleop: "수동 조종이 아닙니다",
+  not_armed: "무장하지 않았습니다",
+  latched: "정지 잠금 중입니다",
   // the fake vehicle's own (console/mock_vehicle)
   fork_in_pocket: "포크가 팔레트 포켓 안에 있습니다",
   load_present: "포크에 짐이 실려 있습니다",
@@ -295,4 +303,28 @@ export function rejectText(reason, detail = null) {
     text = head ? `${REJECT[head]} (${reason.slice(head.length)})` : reason;
   }
   return reason === "blocked" && detail ? `${text} (${blockersText(detail)})` : text;
+}
+
+// The S6 bridge's wall escape (docs/design/2026-11-12-standing-direction-rule.md 4.1-4.3): a button only while the
+// vehicle offers one (Isaac and the mock never do), its press approving exactly that offer; while an escape runs,
+// its progress instead.
+const DIR_KO = { 1: "앞으로", "-1": "뒤로" };
+const SIDE_KO = { 1: "앞", "-1": "뒤" };
+export function escapeState(st, hasLease) {
+  const offer = st?.escape_offer;
+  const run = st?.escape;
+  const running = run
+    ? `벽 앞 탈출 중 · ${DIR_KO[run.direction] ?? ""} ${Math.max(...(run.travel_m ?? [0])).toFixed(2)} / ${run.budget_m} m · ${Number(run.elapsed_s ?? 0).toFixed(1)} / ${run.time_s} s`
+    : "";
+  if (!offer || run) return { shown: false, enabled: false, label: "", hint: "", running };
+  const label = `벽 앞 탈출 · ${DIR_KO[offer.direction] ?? ""} 0.20 m`;
+  const hint = `${SIDE_KO[offer.blocked] ?? ""} 쪽이 막혀 정지했습니다. 막힌 쪽을 직접 보고 누르세요 · 직진 저속, 한 번만`;
+  return { shown: true, enabled: Boolean(hasLease), label, hint: hasLease ? hint : `조종 권한이 필요합니다 · ${hint}`, running };
+}
+
+// The approval's fields: the offer shown and the arm generation it stands under (null: nothing to approve).
+export function escapeRequest(st) {
+  const offer = st?.escape_offer;
+  if (!offer || !Number.isInteger(offer.offer_id) || !Number.isInteger(st?.arm_gen)) return null;
+  return { arm_gen: st.arm_gen, offer_id: offer.offer_id };
 }
