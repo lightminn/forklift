@@ -48,6 +48,20 @@ def _pty():
     return master, slave
 
 
+def _drain(fd):
+    """Everything the pty holds: the delimiter and the frame are separate writes, and one read may return only the
+    first (seen on ws1 under load)."""
+    out = b""
+    while True:
+        try:
+            chunk = os.read(fd, 256)
+        except BlockingIOError:
+            return out
+        if not chunk:
+            return out
+        out += chunk
+
+
 def test_a_delimiter_goes_before_the_first_frame_of_an_opening():
     master, slave = _pty()
     try:
@@ -55,11 +69,11 @@ def test_a_delimiter_goes_before_the_first_frame_of_an_opening():
         host = McuLinkHost(CFG)
         host.request_disarm(1)
         link.pump_writes(host, 2)
-        out = os.read(slave, 256)
+        out = _drain(slave)
         assert out[0] == 0x00 and len(out) > 1  # the delimiter, then the DISARM frame
         host.request_disarm(3)
         link.pump_writes(host, 4)
-        assert os.read(slave, 256)[0] != 0x00  # no second delimiter in this opening (a COBS frame never starts with 0)
+        assert _drain(slave)[0] != 0x00  # no second delimiter in this opening (a COBS frame never starts with 0)
     finally:
         os.close(master)
         os.close(slave)
@@ -81,7 +95,8 @@ def test_every_reopening_starts_with_a_delimiter():
             link.receive(host, 10 + k)
             host.request_disarm(20 + k)
             link.transmit(host, 30 + k)
-            assert os.read(slave, 256)[0] == 0x00
+            out = _drain(slave)
+            assert out[0] == 0x00 and len(out) > 1
             link.link.close()
             link.link = None  # as after a lost device
     finally:

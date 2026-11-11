@@ -118,10 +118,20 @@ class Bridge:
                                 else reading.speed.signed_mps,
                                 applied=rec["applied"], steering_rad=None if q is None else [q],
                                 lift_m=None if st is None else st.lift_m)
+            # the wall escape (standing-direction-rule design 4.1/4.3): the offer the console's button answers, and
+            # the escape running
+            msg["escape_offer"] = self.core.offer_view()
+            msg["escape"] = self.core.escape_view()
             notes = self.notes(now_ns)
             if notes:
                 msg["notes"] = notes
             self.channels.put(None, msg)
+        for e in rec.get("escape_events", ()):
+            # the console logs vehicle events (standing-direction-rule design 4.3; Codex impl review P2-2)
+            kind = "escape_stop" if e["event"] == "end" and e.get("stop") else f"escape_{e['event']}"
+            self.channels.put(None, {"t": "event", "kind": kind, "reason": e.get("reason"),
+                                     **{k: e[k] for k in ("offer_id", "travel_m", "elapsed_s", "after_end_s")
+                                        if k in e}})
         events += self.dev.transmit(self.host, now_ns)
         if events:
             rec["link_events"] = [e.kind for e in events]

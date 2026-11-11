@@ -50,6 +50,10 @@ def problem(msg) -> str | None:
             return "invalid"
     if t == "relocalize_place_confirm" and not is_int(msg.get("preview_id")):
         return "invalid"
+    # the wall escape's approval (standing-direction-rule design 4.2): the offer it approves and the arm generation
+    if t == "escape_approve" and not (is_int(msg.get("offer_id")) and is_int(msg.get("arm_gen"))
+                                      and is_int(msg.get("control_gen"))):
+        return "invalid"
     if t == "teleop":
         if not all(is_int(msg.get(k)) for k in INT_FIELDS) or not isinstance(msg.get("lease_id"), str):
             return "invalid"
