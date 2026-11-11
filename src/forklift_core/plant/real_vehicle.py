@@ -31,7 +31,9 @@ from forklift_core.mcu_link.messages import wheel_count_delta
 SCHEMA = "real_vehicle/1"
 CURVATURE_EDGE_TOL = 1e-9  # numerical noise at the reachable edge is normalised onto it, nothing more
 FLOAT32_EDGE_ULPS = 2  # float32 steps at each end -- an edge angle sent or read as an mcu-link f32
-_TOP = {"schema", "chassis_model", "wheel_counts", "wheel_radius", "steering_map", "wheel_rate_limit"}
+_TOP = {"schema", "chassis_model", "wheel_counts", "wheel_radius", "steering_map", "wheel_rate_limit",
+        "steering_control"}
+_STEERING_CONTROL = ("steering_rate_rad_s", "creep_threshold_rad", "presteer_threshold_rad", "straight_threshold_rad")
 _PROV_KEYS = {"source", "measured", "until"}
 
 
@@ -132,6 +134,7 @@ class RealVehicleConfig:
     steering: SteeringMap
     provenance: dict
     calibration_id: str  # 16 hex digits of the resolved values; the firmware header carries the same
+    steering_control: dict  # host-side q limits (4a' D1): not in the calibration id (the firmware does not read them)
 
     def resolved_values(self) -> dict:
         return {
@@ -195,9 +198,14 @@ def real_vehicle_from_mapping(data: dict, chassis: dict) -> RealVehicleConfig:
         raise ValueError("wheel_rate_limit must hold rad_s and provenance")
     rate = _positive(rl["rad_s"], "wheel_rate_limit.rad_s")
     prov["wheel_rate_limit"] = _provenance(rl, "wheel_rate_limit")
-    partial = RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov, "")
+    sc = data["steering_control"]
+    if not isinstance(sc, dict) or set(sc) != {*_STEERING_CONTROL, "provenance"}:
+        raise ValueError(f"steering_control must hold {list(_STEERING_CONTROL)} and provenance")
+    control = {k: _positive(sc[k], f"steering_control.{k}") for k in _STEERING_CONTROL}
+    prov["steering_control"] = _provenance(sc, "steering_control")
+    partial = RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov, "", control)
     return RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov,
-                             _calibration_id(partial.resolved_values()))
+                             _calibration_id(partial.resolved_values()), control)
 
 
 def chassis_model_path(path: str | Path) -> Path:

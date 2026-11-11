@@ -38,6 +38,8 @@ def mapping(**over):
         "wheel_radius": {"left": None, "right": None, "provenance": PROV},
         "steering_map": {"kind": "ideal_bicycle", "provenance": PROV},
         "wheel_rate_limit": {"rad_s": 8.0, "provenance": PROV},
+        "steering_control": {"steering_rate_rad_s": 1.0, "creep_threshold_rad": 0.05, "presteer_threshold_rad": 0.02,
+                             "straight_threshold_rad": 0.01, "provenance": PROV},
     }
     data.update(over)
     return data
