@@ -42,17 +42,6 @@ static void mailbox_interleaving(void)
     CHECK(ch == 1 && v == 0x55 && tag == 9);
 }
 
-static void generations(void)
-{
-    uint32_t consumed = 0;
-    CHECK(!generation_fresh(0, &consumed));
-    CHECK(generation_fresh(1, &consumed));
-    CHECK(!generation_fresh(1, &consumed)); /* the same result is fresh once */
-    consumed = 0xFFFFFFFFu;
-    CHECK(generation_fresh(0, &consumed)); /* wraps */
-    CHECK_EQ_U(consumed, 0);
-}
-
 static abs_axis_config axis(float zero, float spj, float lo, float hi)
 {
     abs_axis_config c;
@@ -77,11 +66,29 @@ static void raw_zero(void)
     CHECK(kth_raw_zero_outside_range(&outside));
 }
 
+/* Codex B2a review: a consumer that missed one completion must not see the next frame as fresh
+   twice. With the generation and the frame in one word the pair cannot be torn. */
+static void sensor_slot(void)
+{
+    uint16_t consumed = 0, frame = 0;
+    uint32_t slot = slot_pack(1, 0xAAAA); /* generation 1, never taken */
+    slot = slot_pack(2, 0xBBBB);          /* the interrupt completes again before the tick */
+    CHECK(slot_take(slot, &consumed, &frame));
+    CHECK_EQ_U(frame, 0xBBBB);
+    CHECK(!slot_take(slot, &consumed, &frame)); /* no new completion: not fresh again */
+    CHECK_EQ_U(frame, 0xBBBB);
+    /* Wraps over 16 bits. */
+    consumed = 0xFFFF;
+    CHECK(slot_take(slot_pack(0, 0x1234), &consumed, &frame));
+    CHECK_EQ_U(consumed, 0);
+    CHECK(!slot_take(slot_pack(0, 0x1234), &consumed, &frame));
+}
+
 int main(void)
 {
+    sensor_slot();
     mailbox_rules();
     mailbox_interleaving();
-    generations();
     raw_zero();
     return FW_TEST_RESULT();
 }

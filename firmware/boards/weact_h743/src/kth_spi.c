@@ -18,9 +18,9 @@
 enum { STAGE_IDLE, STAGE_STEER, STAGE_LIFT };
 
 static volatile uint32_t g_stage;
-static volatile uint16_t g_frame[2];
-static volatile uint32_t g_done[2];
-static uint32_t g_consumed[2];
+static volatile uint32_t g_slot[2];       /* generation | frame, one word (mailbox.h slot_pack) */
+static uint16_t g_generation[2];          /* interrupt side */
+static uint16_t g_consumed[2];            /* tick side */
 static const uint32_t cs_pin[2] = {0, 1}; /* PD0, PD1 */
 
 static void wait_cycles(uint32_t n)
@@ -65,10 +65,7 @@ void kth_spi_start_bundle(void)
 void kth_spi_snapshot(uint16_t frame[2], bool fresh[2])
 {
     for (int i = 0; i < 2; i++) {
-        uint32_t done = g_done[i];
-        MAILBOX_BARRIER();
-        frame[i] = g_frame[i];
-        fresh[i] = generation_fresh(done, &g_consumed[i]);
+        fresh[i] = slot_take(g_slot[i], &g_consumed[i], &frame[i]); /* one 32-bit read */
     }
 }
 
@@ -79,9 +76,8 @@ void SPI2_IRQHandler(void)
     uint32_t axis = g_stage == STAGE_STEER ? 0u : 1u;
     gpio_set(GPIOD, cs_pin[axis]);
     if (ok) {
-        g_frame[axis] = rx;
-        MAILBOX_BARRIER();
-        g_done[axis] = g_done[axis] + 1u;
+        g_generation[axis]++;
+        g_slot[axis] = slot_pack(g_generation[axis], rx); /* one 32-bit write */
     }
     if (g_stage == STAGE_STEER) {
         g_stage = STAGE_LIFT;

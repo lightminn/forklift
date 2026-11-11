@@ -60,12 +60,21 @@ static inline bool mailbox_take(mailbox *m, uint8_t *channel, uint16_t *value, u
     return true;
 }
 
-/* Completion generations (board design 4.5): the producer bumps `done` after storing a result;
-   the consumer treats it as fresh once, wrap-safe. */
-static inline bool generation_fresh(uint32_t done, uint32_t *consumed)
+/* A completed sensor read as one 32-bit word: generation (16 bits) | frame (16 bits). The
+   interrupt writes the word once; the tick reads it once -- one aligned 32-bit access each, so the
+   generation and its frame can never be torn apart (Codex B2a review). */
+static inline uint32_t slot_pack(uint16_t generation, uint16_t frame)
 {
-    if ((int32_t)(done - *consumed) > 0) {
-        *consumed = done;
+    return ((uint32_t)generation << 16) | frame;
+}
+
+/* Fresh once per new generation (wrap-safe over 16 bits); *frame is the slot's frame either way. */
+static inline bool slot_take(uint32_t slot, uint16_t *consumed, uint16_t *frame)
+{
+    uint16_t generation = (uint16_t)(slot >> 16);
+    *frame = (uint16_t)slot;
+    if ((int16_t)(uint16_t)(generation - *consumed) > 0) {
+        *consumed = generation;
         return true;
     }
     return false;

@@ -89,6 +89,44 @@ def test_build_identity_in_elf(locked_build):
     assert m, "build identity string missing"
 
 
+def _symbols(elf: Path) -> dict[str, int]:
+    out = subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-nm"), str(elf)],
+                         capture_output=True, text=True, check=True).stdout
+    syms = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            syms[parts[2]] = int(parts[0], 16)
+    return syms
+
+
+def _vectors(elf: Path, tmp: Path) -> list[int]:
+    raw = tmp / "isr_vector.bin"
+    subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-objcopy"), "-O", "binary", "-j", ".isr_vector",
+                    str(elf), str(raw)], check=True)
+    data = raw.read_bytes()
+    return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+
+
+def test_every_enabled_interrupt_has_its_handler(locked_build, tmp_path):
+    """Codex B2a review: an IRQ enabled with no vector entry jumped to address 0."""
+    elf = locked_build / "fw.elf"
+    syms = _symbols(elf)
+    vec = _vectors(elf, tmp_path)
+    header = (FIRMWARE / "third_party" / "cmsis_device_h7" / "Include" / "stm32h743xx.h").read_text()
+    irqn = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)_IRQn\s+=\s+(\d+),", header, re.M)}
+    assert all(v != 0 for v in vec[1:]), "a vector slot is empty"
+    default = syms["Default_Handler"] | 1
+    enabled = set()
+    for src in (BOARD / "src").glob("*.c"):
+        enabled |= set(re.findall(r"NVIC_EnableIRQ\((\w+)_IRQn\)", src.read_text()))
+    assert enabled, "no interrupt found"
+    for name in enabled:
+        slot = vec[16 + irqn[name]]
+        assert slot != default, f"{name} has no handler"
+        assert slot == syms[f"{name}_IRQHandler"] | 1, name
+
+
 def test_locked_build_links_no_tim1_output(locked_build):
     map_text = (locked_build / "fw.map").read_text()
     assert "motor_out_tim1" not in map_text

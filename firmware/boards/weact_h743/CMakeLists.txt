@@ -57,6 +57,7 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/motor_out_locked.c)
 
 add_executable(fw ${BOARD_SOURCES})
+set_source_files_properties(${BOARD_DIR}/src/vectors.c PROPERTIES COMPILE_OPTIONS "-Wno-override-init;-Wno-pedantic")
 add_dependencies(fw build_info)
 set_target_properties(fw PROPERTIES SUFFIX ".elf")
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
