@@ -264,6 +264,7 @@ def test_another_tracker_on_the_same_return_keeps_the_search_props():
 @pytest.mark.parametrize("speed", [
     SafetySpeed(0.0, 0.05, (1, -1)),
     SafetySpeed(0.0, 0.0, (1,), valid=False),
+    SafetySpeed(0.0, 0.01, (1, -1)),  # the standing threshold itself is not standing (Codex 4d-1 2nd P2)
 ])
 def test_the_real_truck_stops_on_an_unsure_or_invalid_speed_even_with_nothing_near(speed):
     """Sim-to-real 4d-1 (Codex 4d-1 review P2): the guard's own cap is infinite with nothing near, so the stop is set

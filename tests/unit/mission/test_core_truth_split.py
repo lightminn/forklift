@@ -60,33 +60,45 @@ def test_a_slam_off_truth_read_raises_on_the_real_truck():
 
 def test_the_simulation_checks_one_direction_as_before():
     c = core()
-    assert c._check_directions(SafetySpeed.exact(0.3), None) == [1]  # noqa: SLF001
-    assert c._check_directions(SafetySpeed.exact(0.0), None) == [-1]  # noqa: SLF001
-    assert c._check_directions(SafetySpeed.exact(-0.3), 1) == [1]  # noqa: SLF001  the request wins, as before
+    assert c._check_directions(SafetySpeed.exact(0.3), None) == ([1], [])  # noqa: SLF001
+    assert c._check_directions(SafetySpeed.exact(0.0), None) == ([-1], [])  # noqa: SLF001
+    assert c._check_directions(SafetySpeed.exact(-0.3), 1) == ([1], [])  # noqa: SLF001  the request wins, as before
 
 
 def test_the_real_truck_checks_every_direction_it_may_move():
     c = core(real=True)
-    unsure_moving = SafetySpeed(0.0, 0.05, (1, -1))
-    assert c._check_directions(unsure_moving, 1) == [1, -1]  # noqa: SLF001  the request does not erase the doubt
-    assert c._check_directions(unsure_moving, None) == [1, -1]  # noqa: SLF001
-    assert c._check_directions(SafetySpeed(-0.2, 0.2, (-1,)), 1) == [1, -1]  # noqa: SLF001  rolling back, asked fwd
-    standing = SafetySpeed(0.0, 0.005, (1, -1))
-    assert c._check_directions(standing, -1) == [-1]  # noqa: SLF001  a standing truck moves only as asked
-    assert c._check_directions(standing, None) == [1]  # noqa: SLF001
-    assert c._check_directions(SafetySpeed(0.0, 0.0, (1, -1), valid=False), 1) == [1, -1]  # noqa: SLF001
+    unsure = SafetySpeed(0.0, 0.05, (1, -1))
+    assert c._check_directions(unsure, 1) == ([1], [-1])  # noqa: SLF001  the request does not erase the doubt
+    assert c._check_directions(unsure, None) == ([1, -1], [])  # noqa: SLF001
+    assert c._check_directions(SafetySpeed(-0.2, 0.2, (-1,)), 1) == ([1], [-1])  # noqa: SLF001  rolling back
+    # a "standing" reading still has its residual motion checked (Codex 4d-1 2nd P2)
+    assert c._check_directions(SafetySpeed(-0.009, 0.009, (-1,)), 1) == ([1], [-1])  # noqa: SLF001
 
 
-def test_the_limit_over_several_directions_keeps_the_smallest():
+def test_the_limit_keeps_the_smallest_and_a_braking_direction_only_stops():
     calls = []
 
-    def limit(d):
-        calls.append(d)
-        return (0.4, "ok") if d > 0 else (0.1, "occupied")
+    def limit(d, cap):
+        calls.append((d, cap))
+        return (min(cap, 0.4), "ok") if d > 0 else (0.0, "occupied")
 
-    assert MissionCore._limit_any_direction(limit, [1, -1]) == (0.1, "occupied") and calls == [1, -1]  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1, -1], 0.3) == (0.0, "occupied")  # noqa: SLF001
+    assert calls == [(1, 0.3), (-1, 0.3)]
     calls.clear()
-    assert MissionCore._limit_any_direction(limit, [1]) == (0.4, "ok") and calls == [1]  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1], 0.3) == (0.3, "ok") and calls == [(1, 0.3)]  # noqa: SLF001
+    calls.clear()
+    # braking: rearward at the bound only; blocked behind while rolling back stops the forward request
+    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.02) == (0.0, "occupied")  # noqa: SLF001
+    assert calls == [(1, 0.3), (-1, 0.02)]
+    calls.clear()
+    # no motion: no braking check, the forward request is not blocked by what is behind
+    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.0) == (0.3, "ok") and calls == [(1, 0.3)]  # noqa: SLF001
+
+    def free(d, cap):
+        return (min(cap, 0.4), "ok")
+
+    # a free braking direction that allows the bound leaves the driving limit alone
+    assert MissionCore._limit_any_direction(free, [1], 0.3, [-1], 0.02) == (0.3, "ok")  # noqa: SLF001
 
 
 class _Tracker:
@@ -111,14 +123,14 @@ class _Layer:
 
     def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps):
         self.calls.append(direction)
-        return (0.0, "occupied") if direction == self.blocked_direction else (0.5, "ok")
+        return (0.0, "occupied") if direction == self.blocked_direction else (min(cap_mps, 0.5), "ok")
 
 
-def permission_core(speed, *, phase="transport", blocked=None, pocket_check=None):
+def permission_core(speed, *, phase="transport", blocked=None, pocket_check=None, act=True):
     layer = _Layer(blocked)
     hooks = SimpleNamespace(safety_speed=lambda: speed, truth_rear=lambda: np.zeros(3), require=lambda ok, why: None,
                             save_npz=lambda *a, **k: None, lift_position=lambda: 0.0)
-    opts = SimpleNamespace(drive_geometry=None, command_accel_mps2=0.8, obstacle_act=True, real_vehicle=True,
+    opts = SimpleNamespace(drive_geometry=None, command_accel_mps2=0.8, obstacle_act=act, real_vehicle=True,
                            pocket_check=pocket_check is not None, grid_planning=False, restart_confirm_scans=0)
     obstacle = {"layer": layer, "applied": (0.0, 0.0, 0.0), "ticks": {}, "min_allowed": {}, "slowed": {},
                 "reasons": {}, "version": 0}
@@ -132,8 +144,9 @@ def permission_core(speed, *, phase="transport", blocked=None, pocket_check=None
     return c, layer
 
 
-def test_an_invalid_safety_speed_holds_the_wheels():
-    c, _ = permission_core(SafetySpeed(0.0, 0.0, (1,), valid=False))
+@pytest.mark.parametrize("act", [True, False])
+def test_an_invalid_safety_speed_holds_the_wheels(act):
+    c, _ = permission_core(SafetySpeed(0.0, 0.0, (1,), valid=False), act=act)
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
     assert out.allowed == 0.0 and out.why == "safety_speed_invalid"
     assert out.requested_speed == 0.0 and out.obstacle_hold
@@ -155,3 +168,11 @@ def test_the_pocket_check_does_not_answer_an_unsure_direction():
     c, _ = permission_core(SafetySpeed(0.0, 0.05, (1, -1)), phase="insert", pocket_check=check)
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
     assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
+
+
+def test_a_standing_reading_with_no_request_lets_the_pocket_check_answer():
+    asked = []
+    check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"), summary=lambda: {})
+    c, _ = permission_core(SafetySpeed(0.0, 0.005, (1, -1)), phase="insert", pocket_check=check)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    assert out.why != "direction_unsure" and asked == [1]
