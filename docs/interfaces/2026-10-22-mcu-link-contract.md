@@ -120,8 +120,10 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 **빌드 비트를 읽는 호스트 규칙(v2)**:
 - 실행기(텔레옵·자율)는 `commission_build` 면 연결하지 않는다.
-- `hil_plant` 면 HIL 실행기만 연결한다. 이때는 `outputs_locked`·`estop_unwired` 가 함께 켜져 있어도 텔레옵·자율을 허용한다. 코어 보드만으로 도는 HIL 에는 비상정지 핀이 없고, 출력이 잠겨 바퀴가 돌 수 없기 때문이다.
-- 그 밖(실차)은 `outputs_locked`·`estop_unwired` 가 하나라도 켜져 있으면 텔레옵·자율을 거부한다.
+- **양방향 차단(총괄 조건 2026-11-11)**: 실차 실행기는 `hil_plant` 보드에 연결하지 않는다. HIL 실행기는 `hil_plant` 가 아닌 보드에 연결하지 않는다.
+- HIL 실행기는 `hil_plant` 보드에서 `outputs_locked`·`estop_unwired` 가 함께 켜져 있어도 텔레옵·자율을 연다. HIL 빌드는 PWM 을 초기화하지 않고 DRVOFF 를 high 로 고정해, 바퀴가 물리적으로 돌 수 없다. 코어 보드만으로 돌아 비상정지 핀도 없다.
+- 실차 실행기는 `outputs_locked`·`estop_unwired` 가 하나라도 켜져 있으면 텔레옵·자율을 거부한다.
+- 구현과 시험: `src/forklift_core/mcu_link/build_policy.py`(`connect_refusal`, `drive_refusal`, `commission_allowed`), `tests/unit/mcu_link/test_build_policy.py`.
 - bring-up 도구(STATE 기록·시운전·안전 시나리오)는 실행기가 아니다. 이 비트들을 기록·표시하되 연결은 막지 않는다. 시운전 도구는 `commission_build` 가 아니면 `COMMISSION` 을 보내지 않는다.
 
 ## 4. 시간과 만료
