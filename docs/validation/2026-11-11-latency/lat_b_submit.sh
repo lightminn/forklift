@@ -5,9 +5,11 @@
 #   bash lat_b_submit.sh SNAP_DIR OUT_ROOT [FIRST_DEPENDENCY] [-- RERUN_NAME ...]
 # With names after --, only those jobs again under lat_r_<name> (the registration's one rerun; the first stays).
 set -euo pipefail
-SNAP=$1 OUT=$2 DEP=${3:-}
-shift $(( $# >= 3 ? 3 : $# ))
-[ "${1:-}" = "--" ] && shift
+SNAP=$1 OUT=$2
+shift 2
+DEP=""
+if [ $# -gt 0 ] && [ "$1" != "--" ]; then DEP=$1; shift; fi
+if [ $# -gt 0 ] && [ "$1" = "--" ]; then shift; fi
 PY=${G2M_PY:-/home/projects/forklift/.venv/bin/python}
 cd "$SNAP"
 if [ $# -gt 0 ]; then

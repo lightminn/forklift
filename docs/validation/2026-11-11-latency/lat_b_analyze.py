@@ -1,15 +1,25 @@
-"""The latency test B's judgement (docs/plans/2026-11-11-latency-tolerance.md 4.6, 4.7; fixed before the results).
+"""The latency test B's judgement (docs/plans/2026-11-11-latency-tolerance.md 4.1, 4.2, 4.6, 4.7; fixed before the
+results).
 
     python lat_b_analyze.py OUT_ROOT --snap SNAP [--json OUT.json]
 
 Fifteen live sessions (lat_lists.b_jobs): line_m far K f 1.0 confirm, the planning answers held d ms after arrival.
-Per session: environment validity (the CPU sampler's overlap, its record, one bundle attempt, a trace of running --
-the 1e (c) rules, read by its analyzer), safety (forbidden pocket contacts, unpermitted entries, scene_damaged; read
-whenever the session ran), the expected mission (m1) done by the mission results, not the session's success, the
-stop-vs-end split of a failure, the exposure (>= 3 delayed answers, prepare and dock among them, for a session that
-finished its mission). "B passes" when the 12 judged sessions (d 0/25/50/100) are all safe, done and exposed. d 500 and
-the per-arm waits, drops and pacing are reported only. A rerun (lat_r_<name>) is a row of its own; nothing it shows
-erases its first run's safety or mission reading.
+Per session:
+- environment (4.7 B): the CPU sampler's overlap or a missing sampler record, the bundle's attempt (one, not retried),
+  a trace of running, the registered conditions (the 1e (c) session's); the GPU monitor's findings and other jobs are
+  notes (B is not a timing measurement). A probe's non-zero exit is the mission's, not the environment's.
+- the arm: the runner's --latency-plan-ms and the injection record's delay equal the list's d; the launcher's
+  RETURN_START / NEAR_END_STAND and the map choice the same in every session.
+- safety (4.1, read whenever the session ran): forbidden pocket contacts (the session's and each mission's records),
+  unpermitted entries, scene_damaged, and the low objects (tools/low_clearance_report.py on the session's spooled
+  samples and control rows: a physical overlap or a physical stop-arc violation). A confirmed violation stands whatever
+  else could not be read.
+- the mission m1 by its result (not the session's success), the stop after a failure (4.2: the truth speed under
+  0.05 m/s, no AUTO or teleop mode after the mission's end, the control rows unbroken, for 0.5 s up to the last row),
+  the exposure (>= 3 answers of this mission delivered, prepare and dock among them; d 0 from the mission's own plans).
+"B passes" when the 12 judged sessions (d 0/25/50/100, the effective run of each) are valid, safe, done and exposed.
+Every safety event (any session, d 500 and first runs included) is a P1 defect; a d 500 failure is the lowest. A rerun
+is allowed only for an environment-invalid first run without a mission failure; the first run stays on record.
 """
 
 from __future__ import annotations
@@ -17,12 +27,17 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[2]
 JUDGED = (0, 25, 50, 100)
-STAND_S, STILL_MPS = 0.5, 0.05
+STAND_S, STILL_MPS, CONTROL_GAP_S = 0.5, 0.05, 3 / 120 + 1e-6
+NOTE_PREFIXES = ("no monitor record", "monitor query not ok", "a GPU process not known", "another job on the node")
+DRIVING_MODES = ("AUTO", "TELEOP")
 
 
 def _load(name: str, path: Path):
@@ -39,62 +54,159 @@ def _json(path):
         return None
 
 
-def exposure_of(session_result: dict, mission_state: dict) -> dict:
-    """4.5 B: the delayed answers delivered (arrival + d), joined to the mission's async plan sites by job id."""
-    recs = ((session_result or {}).get("latency_injection") or {}).get("plan", {}).get("records") or []
-    sites = {p.get("job"): p.get("site") for p in (mission_state or {}).get("async_plans") or []}
-    delivered = [r for r in recs if r.get("delivered") is not None]
-    got = sorted({sites.get(r["job"]) for r in delivered} - {None})
-    return {"delivered": len(delivered), "held_dropped_or_cut": len(recs) - len(delivered), "sites": got,
-            "injected_s": sorted(round(float(r["injected_s"]), 4) for r in delivered),
-            "ok": len(delivered) >= 3 and {"prepare", "dock"} <= set(got)}
+def split_invalid(invalid: list) -> dict:
+    env, notes, mission = [], [], []
+    for x in invalid:
+        if x.startswith(NOTE_PREFIXES):
+            notes.append(x)
+        elif x.startswith("probe exit"):
+            mission.append(x)
+        else:
+            env.append(x)
+    return {"environment": env, "notes": notes, "mission": mission}
 
 
-def stop_after(control_rows: list, ended_s: float | None) -> str | None:
-    """4.2 for a failed mission in a live session: safe_failure when, after the mission's end, the truth speed stays
-    under 0.05 m/s for 0.5 s or more up to the session's last control row; observed_end otherwise. control_rows:
-    [t, rear x, y, yaw, truth x, y, yaw] (slam.control)."""
+def exposure_of(session_result: dict, mission_state: dict, delay_ms: int) -> dict:
+    """4.5 B: this mission's answers delivered -- for d > 0 the injection's delivered records joined to the mission's
+    plans by job id (an answer not of this mission is not counted); for d 0 the mission's own taken plans."""
+    plans = (mission_state or {}).get("async_plans") or []
+    if delay_ms:
+        recs = ((session_result or {}).get("latency_injection") or {}).get("plan", {}).get("records") or []
+        site_of = {p.get("job"): p.get("site") for p in plans}
+        mine = [r for r in recs if r.get("delivered") is not None and r.get("job") in site_of]
+        sites = [site_of[r["job"]] for r in mine]
+        held = len([r for r in recs if r.get("delivered") is None and r.get("job") in site_of])
+        injected = sorted(round(float(r["injected_s"]), 4) for r in mine)
+    else:
+        mine = [p for p in plans if p.get("finished_s") is not None and not p.get("dropped")]
+        sites, held, injected = [p.get("site") for p in mine], 0, []
+    return {"delivered": len(sites), "held_dropped_or_cut": held, "sites": sorted(set(sites)), "injected_s": injected,
+            "ok": len(sites) >= 3 and {"prepare", "dock"} <= set(sites)}
+
+
+def stop_after(control_rows: list, ended_s: float | None, modes: list) -> str:
+    """4.2 B. control_rows: [t, rear x, y, yaw, truth x, y, yaw]; modes: [(t, mode)] from the live log."""
     if ended_s is None:
         return "observed_end"
     rows = [r for r in control_rows if r[0] >= ended_s]
     if len(rows) < 2:
         return "observed_end"
+    later = [m for t, m in modes if t is not None and t >= ended_s]
+    before = [m for t, m in modes if t is not None and t < ended_s]
+    current = before[-1] if before else None
+    if any(m in DRIVING_MODES for m in later) or (not later and current in DRIVING_MODES):
+        return "observed_end"  # driving again (or still) after the mission's end
     still_since = None
     for a, b in zip(rows, rows[1:]):
         dt = b[0] - a[0]
+        if dt > CONTROL_GAP_S:
+            still_since = None  # a broken control record restarts the confirmation
+            continue
         v = ((b[4] - a[4]) ** 2 + (b[5] - a[5]) ** 2) ** 0.5 / dt if dt > 0 else 0.0
-        if v < STILL_MPS:
-            still_since = a[0] if still_since is None else still_since
-        else:
-            still_since = None
+        still_since = (a[0] if still_since is None else still_since) if v < STILL_MPS else None
     return "safe_failure" if still_since is not None and rows[-1][0] - still_since >= STAND_S - 1e-9 else "observed_end"
 
 
+def safety_of(session: dict, missions: dict, low: dict | None) -> dict:
+    """4.1, confirmed counts and completeness apart. missions: {id: records state or None (missing)}."""
+    contacts = len(session.get("forbidden_pocket_contacts") or [])
+    missing = [m for m, st in missions.items() if st is None]
+    contacts += sum(len((st or {}).get("forbidden_pocket_contacts") or []) for st in missions.values())
+    ol = session.get("obstacle_layer") or {}
+    unp, unp_dir = ol.get("unpermitted_entries"), ol.get("unpermitted_dir_entries")
+    low_read = (low is not None and "error" not in low and bool(low.get("rows"))
+                and "no samples" not in (low.get("unevaluated") or []))
+    overlaps, arcs = [], []
+    if low_read:
+        overlaps = [k for k, r in low["rows"].items() if k.endswith("physical") and r.get("min_m") is not None
+                    and r["min_m"] <= 0.0]
+        arcs = list(low.get("physical_arc_violations") or [])
+    damaged = 1 if session.get("scene_damaged") else 0
+    confirmed = contacts + (unp or 0) + (unp_dir or 0) + len(overlaps) + len(arcs) + damaged
+    unreadable = bool(missing) or unp is None or unp_dir is None or not low_read
+    return {"forbidden_contacts": contacts, "missions_without_records": missing, "unpermitted_entries": unp,
+            "unpermitted_dir_entries": unp_dir, "physical_overlaps": overlaps, "physical_arcs": len(arcs),
+            "scene_damaged": session.get("scene_damaged"), "low_clearance_read": low_read, "unreadable": unreadable,
+            "violations": confirmed if confirmed else (None if unreadable else 0)}
+
+
+def low_report(rd: Path, session: dict, low_mod) -> dict | None:
+    """The low-object report on a live session: its spooled samples and control rows laid out as a batch run's."""
+    import numpy as np
+    import yaml
+
+    from forklift_core.live.spool import load_list
+
+    tmp = Path(tempfile.mkdtemp(prefix="latb_low_"))
+    try:
+        res = dict(session)
+        res["samples"] = load_list(rd / "spool", "state.samples")
+        (tmp / "result.json").write_text(json.dumps(res, default=str))
+        ctl = np.asarray(load_list(rd / "spool", "slam.control"), dtype=float).reshape(-1, 7)
+        np.save(tmp / "slam_control.npy", ctl)
+        layer = (session.get("arguments") or {}).get("obstacle_layer")
+        p = Path(layer) if Path(layer).is_absolute() else ROOT / layer
+        perm = (yaml.safe_load(p.read_text()) or {})["permission"]
+        stopping = low_mod.StoppingModel(float(perm["latency_s"]), float(perm["decel_mps2"]), float(perm["margin_m"]))
+        return low_mod.run_report(str(tmp), stopping, float(perm.get("envelope_m", 0.01)))
+    except Exception as exc:  # noqa: BLE001 -- unreadable, never silently safe
+        return {"error": repr(exc)[:300]}
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def judge(rows: dict) -> dict:
-    """4.6: B passes when every judged session (d 0/25/50/100, the effective run of each) is valid, safe, done and
-    exposed. Safety events from any session (first runs, reruns, invalid ones, d 500) are listed first."""
+    """4.6 over the effective runs; safety from every row."""
     dangerous = sorted(n for n, r in rows.items() if (r.get("safety") or {}).get("violations"))
     eff = {n: r for n, r in rows.items() if r.get("effective")}
     judged = {n: r for n, r in eff.items() if r["delay_ms"] in JUDGED}
     problems = {}
     for n, r in sorted(judged.items()):
         why = []
-        if r["invalid"]:
-            why.append("invalid: " + "; ".join(r["invalid"]))
+        if r["kinds"]["environment"]:
+            why.append("invalid: " + "; ".join(r["kinds"]["environment"]))
         if (r.get("safety") or {}).get("violations") is None:
             why.append("safety unreadable")
+        if r.get("arm_problems"):
+            why.append("arm: " + "; ".join(r["arm_problems"]))
         if not r.get("mission_done"):
             why.append(f"mission not done ({r.get('stop')})")
         elif not (r.get("exposure") or {}).get("ok"):
             why.append("underexposed")
         if why:
             problems[n] = why
+    judged_danger = [n for n in dangerous if n in judged]
     counts = {d: sum(1 for r in judged.values() if r["delay_ms"] == d) for d in JUDGED}
     complete = all(c == 3 for c in counts.values())
-    ok = complete and not dangerous and not problems
-    return {"decision": "B passes" if ok else ("to the lead" if not complete else "B does not pass"),
-            "dangerous": dangerous, "problems": problems, "judged_per_delay": counts,
-            "defects": dangerous + sorted(n for n, w in problems.items() if not any(x.startswith("invalid") for x in w))}
+    clean = complete and not problems and not judged_danger
+    failures = sorted(n for n, r in rows.items() if r.get("ran") and r.get("mission_done") is False)  # first runs too
+    defects = ([{"run": n, "priority": 1, "class": "dangerous", "delay_ms": rows[n]["delay_ms"]} for n in dangerous]
+               + [{"run": n, "priority": 2 if rows[n].get("stop") == "observed_end" else 3,
+                   "class": rows[n].get("stop"), "delay_ms": rows[n]["delay_ms"]}
+                  for n in failures if rows[n]["delay_ms"] in JUDGED]
+               + [{"run": n, "priority": 4, "class": rows[n].get("stop"), "delay_ms": 500}
+                  for n in failures if rows[n]["delay_ms"] not in JUDGED])
+    launcher = {json.dumps(r.get("launcher"), sort_keys=True) for r in rows.values() if r.get("ran")}
+    return {"decision": "B passes" if clean and len(launcher) <= 1 else (
+        "to the lead" if not complete or len(launcher) > 1 else "B does not pass"),
+            "problems": problems, "judged_per_delay": counts, "launcher_values_agree": len(launcher) <= 1,
+            "defects": sorted(defects, key=lambda d: (d["priority"], d["run"]))}
+
+
+def report_of(session: dict, mres: dict, mrec: dict) -> dict:
+    plans = mrec.get("async_plans") or []
+    by_site: dict = {}
+    for p in plans:
+        b = by_site.setdefault(p.get("site"), {"asked": 0, "dropped": {}, "wait_s": 0.0})
+        b["asked"] += 1
+        if p.get("dropped"):
+            b["dropped"][p["dropped"]] = b["dropped"].get(p["dropped"], 0) + 1
+        b["wait_s"] = round(b["wait_s"] + (p.get("finished_s") or 0) - (p.get("requested_s") or 0), 3)
+    r = mres.get("result") or {}
+    return {"plan_sites": by_site, "async_plan_drops": mrec.get("async_plan_drops"),
+            "mission_sim_s": (r["ended_s"] - r["started_s"]) if r.get("ended_s") is not None and r.get("started_s")
+            is not None else None, "delivery_error_m": mres.get("delivery_error_m"),
+            "auto_factor": (session.get("live") or {}).get("pace") or session.get("pace")}
 
 
 def main(argv=None) -> int:
@@ -105,50 +217,54 @@ def main(argv=None) -> int:
     a = ap.parse_args(argv)
     lists = _load("lat_lists", HERE / "lat_lists.py")
     c = _load("g3_1e_c_analyze", HERE.parent / "2026-11-11-g3-1e-c" / "g3_1e_c_analyze.py")
+    low_mod = _load("low_clearance_report", ROOT / "tools/low_clearance_report.py")
     e0, g2m = c.e0, c.g2m
     registered = [j["name"] for j in lists.b_jobs(str(a.snap), str(a.out_root))]
-    names = [n for n in registered if (a.out_root / f"{n}.jsonl").exists()]
-    if names != registered:
-        print(json.dumps({"list_not_registered": sorted(set(registered) - set(names))}))
+    if [n for n in registered if (a.out_root / f"{n}.jsonl").exists()] != registered:
+        print(json.dumps({"list_not_registered": True}))
         return 2
-    rows: dict = {}
 
     def read(name: str) -> dict:
         e = json.loads((a.out_root / f"{name}.jsonl").read_text().splitlines()[0])
-        jobdir = a.out_root / name
+        d = int(e["env"]["LAT_DELAY_MS"])
         run = Path(e["argv"][-1])
         ps_f = a.out_root / f"{name}_ps.jsonl"
         ps = g2m.read_ps(ps_f.read_text()) if ps_f.exists() else None
-        res_f = jobdir / "bundle" / "results.jsonl"
+        res_f = a.out_root / name / "bundle" / "results.jsonl"
         recs = [json.loads(x) for x in res_f.read_text().splitlines() if x.strip()] if res_f.exists() else []
         recs = [r for r in recs if r.get("name") == name]
         s = e0.OffSession(run, e, ps=ps)
-        s.invalid.extend(p for p in (c.attempt_problem(recs), None if ps is not None else "no CPU sampler record") if p)
-        ran = (run / "live" / "epoch_1" / "run.log").exists() or (run / "live" / "epoch_1" / "run" / "result.json").exists()
+        invalid = list(s.invalid) + [p for p in (c.attempt_problem(recs),
+                                                 None if ps is not None else "no CPU sampler record") if p]
         rd = run / "live" / "epoch_1" / "run"
+        ran = (run / "live" / "epoch_1" / "run.log").exists() or (rd / "result.json").exists()
+        if not ran:
+            invalid.append("session not started (no trace of running)")
         session = _json(rd / "result.json") or {}
         mres = _json(rd / "missions" / "m1" / "result.json") or {}
-        mrec = (_json(rd / "missions" / "m1" / "records.json") or {}).get("state") or {}
+        mrec_all = _json(rd / "missions" / "m1" / "records.json")
+        mrec = (mrec_all or {}).get("state") or {}
         outcome = (mres.get("result") or {}).get("outcome")
-        safety = c.safety_of(s)
-        if safety is not None:
-            damaged = session.get("scene_damaged")
-            safety = {**safety, "scene_damaged": damaged}
-            parts = [safety.get("forbidden_contacts"), safety.get("unpermitted_entries"),
-                     safety.get("unpermitted_dir_entries")]
-            confirmed = sum(x for x in parts if x) + (1 if damaged else 0)
-            safety["violations"] = confirmed if confirmed else (None if any(x is None for x in parts) else 0)
-        row = {"name": name, "delay_ms": int(e["env"]["LAT_DELAY_MS"]), "invalid": list(s.invalid), "ran": ran,
-               "safety": safety if ran else None, "mission_done": outcome == "done", "mission_outcome": outcome,
+        arm = []
+        got_arg = (session.get("arguments") or {}).get("latency_plan_ms")
+        got_inj = ((session.get("latency_injection") or {}).get("plan") or {}).get("delay_ms")
+        if ran and session:
+            if float(got_arg or 0.0) != float(d):
+                arm.append(f"runner --latency-plan-ms {got_arg}, registered {d}")
+            if (d and got_inj != float(d)) or (not d and got_inj is not None):
+                arm.append(f"injection record delay {got_inj}, registered {d}")
+        row = {"name": name, "delay_ms": d, "ran": ran, "kinds": split_invalid(invalid), "arm_problems": arm,
+               "launcher": {**c.launcher_values(run),
+                            "map": (session.get("arguments") or {}).get("slam_map_bundle") is not None},
+               "mission_done": (outcome == "done") if ran else None, "mission_outcome": outcome,
                "mission_reason": (mres.get("result") or {}).get("reason"),
-               "exposure": exposure_of(session, mrec) if outcome == "done" else None,
-               # report only
-               "async_plan_drops": mrec.get("async_plan_drops"), "plan_waits_s": [
-                   round((p.get("finished_s") or 0) - (p.get("requested_s") or 0), 3)
-                   for p in mrec.get("async_plans") or []],
-               "delivery_error_m": mres.get("delivery_error_m"), "evidence_stale_ticks": e0.stale_ticks(session)}
-        if outcome != "done" and ran:
-            ctl = []
+               "exposure": exposure_of(session, mrec, d) if outcome == "done" else None,
+               "evidence_stale_ticks": e0.stale_ticks(session), **report_of(session, mres, mrec)}
+        if ran:
+            missions = {"m1": mrec if mrec_all is not None else None}
+            row["safety"] = safety_of(session, missions, low_report(rd, session, low_mod) if session else None)
+        if ran and outcome != "done":
+            ctl, modes = [], []
             try:
                 import numpy as np
 
@@ -157,25 +273,36 @@ def main(argv=None) -> int:
                 ctl = np.asarray(load_list(rd / "spool", "slam.control"), dtype=float).reshape(-1, 7).tolist()
             except Exception:  # noqa: BLE001 -- no control record: the stop is not confirmed
                 pass
-            row["stop"] = stop_after(ctl, (mres.get("result") or {}).get("ended_s"))
-        if not ran:
-            row["invalid"].append("session not started (no trace of running)")
+            for line in (rd / "live_log.jsonl").read_text().splitlines() if (rd / "live_log.jsonl").exists() else []:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                if ev.get("event") == "mode":
+                    modes.append((ev.get("tick_t"), ev.get("to")))
+            row["stop"] = stop_after(ctl, (mres.get("result") or {}).get("ended_s"), modes)
         return row
 
+    rows: dict = {}
+    not_allowed = []
     for n in registered:
         rows[n] = read(n)
         rr = f"lat_r_{n}"
         rows[n]["effective"] = not (a.out_root / f"{rr}.jsonl").exists()
         if not rows[n]["effective"]:
-            rows[rr] = {**read(rr), "rerun_of": n, "effective": True}
-    # 4.7: an environment-invalid session is run once more, unless it ran and failed its mission (not erased by a rerun)
-    rerun = sorted(n for n, r in rows.items() if r["invalid"] and r.get("effective") and not r.get("rerun_of")
-                   and not (r["ran"] and not r["mission_done"]))
-    out = {"sessions": rows, "result": judge(rows), "rerun_needed": rerun,
-           "to_lead": sorted(n for n, r in rows.items() if r["invalid"] and r.get("rerun_of"))}
+            first = rows[n]
+            if not first["kinds"]["environment"] or first.get("mission_done") is False or first["kinds"]["mission"]:
+                not_allowed.append(n)  # a rerun replaces only an environment-invalid first run without a failure
+                first["effective"] = True
+            rows[rr] = {**read(rr), "rerun_of": n, "effective": n not in not_allowed}
+    out = {"sessions": rows, "result": judge(rows), "rerun_not_allowed": not_allowed,
+           "rerun_needed": sorted(n for n, r in rows.items() if r["kinds"]["environment"] and r.get("effective")
+                                  and not r.get("rerun_of") and not (r["ran"] and r.get("mission_done") is False)),
+           "to_lead": sorted(n for n, r in rows.items() if r["kinds"]["environment"] and r.get("rerun_of"))}
     if a.json is not None:
         a.json.write_text(json.dumps(out, indent=1, default=str) + "\n")
-    print(json.dumps(out["result"], indent=1, default=str))
+    print(json.dumps({k: out[k] for k in ("result", "rerun_not_allowed", "rerun_needed", "to_lead")}, indent=1,
+                     default=str))
     return 0
 
 
