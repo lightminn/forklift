@@ -1,0 +1,8 @@
+# The forklift MCU's mcu-link USB CDC port (firmware docs/design/2026-11-12-weact-h743-board-firmware.md 5).
+# VID:PID is ST's virtual COM pair (0483:5740); the product string is the build identity
+# "forklift-mcu <kind> <locked|unlocked> <git>", so neither the ROM DFU device (0483:df11) nor a NUCLEO's ST-LINK
+# port matches. ModemManager is told to leave the port alone (its AT probes would reach the MCU's decoder), and the
+# port gets a stable name: /dev/forklift-mcu and /dev/forklift-mcu-<serial> (the MCU's 96-bit UID).
+# Install: deploy/udev/README.md (sudo, run by the user).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="forklift-mcu", SYMLINK+="forklift-mcu-$attr{serial}", MODE="0660", GROUP="dialout"
