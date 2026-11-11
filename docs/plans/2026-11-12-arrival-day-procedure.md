@@ -144,8 +144,9 @@ udevadm info -q property /dev/forklift-mcu | grep ID_MM_DEVICE_IGNORE   # =1 이
 5. **모든 전원을 끄고**(벤치 전원·USB), 레일이 내려간 것을 확인한 뒤 MCU 를 꽂는다. 6번의 오실로스코프를 먼저 걸어 두고, 그다음 전원(VM 포함)을 넣고 부팅한다. 오실로스코프가 없으면 6번의 분기를 먼저 따른다.
 6. **PB4 — SDO high 전압**(사용자 결정 2026-11-12: 플래시를 둔 채 잰다). DRV8244S 의 SDO high 는 nSLEEP 전압을 따라 nSLEEP = 3.3 V 에서 부하 없이 최대 3.8 V 다(SLVSG24C 7.5.2 `VOH_SDO_NL`). 출력 잠금 빌드도 부팅하면 드라이버를 깨우고(DRVOFF high 라 출력은 꺼진 채) 20 ms 마다 상태를 SPI 로 읽는다. 그래서 **이 부팅이 곧 WeAct SPI 플래시의 첫 노출**이다. 사용자는 이 위험을 알고 감수했다.
    - **측정**: PB4 를 WeAct 헤더에서 오실로스코프로 본다(대역 25 MHz 이상, 10× 프로브, 짧은 접지). SCK 는 6.25 MHz 이고, 거래 하나는 약 2.6 µs 다.
-     - 트리거는 PA0(L 채널 nCS) 하강이다. 단발로 **드라이버를 깨운 뒤 첫 SPI 거래**를 잡는다.
-     - 이어서 피크 검출(또는 잔상) 모드로 1–2 s 를 쌓아, 네 드라이버(nCS PA0–PA3) 모두의 high 최고값을 읽는다.
+     - 정상 폴링은 L→R→M→H 를 5 ms 간격으로 돈다(`firmware/core/src/drive.c`). 그래서 한 드라이버는 20 ms 마다 한 번 읽힌다. 한 nCS 로만 트리거하면 그 채널만 보이고 나머지 셋의 과전압을 놓친다(Codex).
+     - 첫 단발: 트리거를 PA0(L 채널 nCS) 하강에 걸고 부팅해, **드라이버를 깨운 뒤 L 의 첫 SPI 거래**를 잡는다.
+     - 이어서 트리거를 PA0·PA1·PA2·PA3 하강으로 차례로 바꾸고, 채널마다 피크 검출(또는 잔상) 모드로 1–2 s 를 쌓아 그 드라이버의 high 최고값을 읽는다. 네 값 가운데 가장 큰 것이 판정값이다.
      - 멀티미터 평균값은 쓰지 않는다.
    - **판정**: 최고값이 3.6 V 이하이면 플래시를 두고 계속한다. 3.6 V 를 넘으면 **바로 모든 전원을 끄고** 플래시를 뗀 뒤 5번부터 다시 한다. 3.6 V 이하라도 플래시가 안전하다는 보장은 아니다.
    - **기록(노출 사실)**: `artifacts/<시각>_s2_pb4_01/` 에 남기고 총괄에 보고한다.
@@ -298,16 +299,17 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
     ```
   - 두 프로세스가 같은 tty 를 열면 수신을 나눠 읽으므로 `record` 를 함께 돌리지 않는다(Codex).
   - `analyze` 는 소프트웨어 시간축만 준다(`last_state_ms`·`last_state_before_gap_ms`). 판정은 아래 외부 측정으로 한다.
+  - 리셋으로 USB 가 끊겨 표시 뒤 STATE 가 하나도 없으면, 두 시각이 모두 `null` 인데도 `analyze.result` 는 `"ok"` 다. 그때는 `run.jsonl` 원본에서 표시(`{"t":"marker"}`) 직전의 마지막 `{"t":"state"}` 줄을 직접 읽어 기록한다(Codex).
   - 오실로스코프로 잴 것: MTR_SLEEP·DRVOFF·EN·PH 핀, 모터 단자 전압, 모터 전류. 트리거는 NRST 하강.
   - 합격: 리셋 뒤 MTR_SLEEP 이 low 로 가서 전 채널이 SLEEP(출력 Hi-Z)이 되고, 모터 전류가 0 으로 간다. 리셋 순간의 반대 방향 펄스 유무와 그 길이를 기록한다.
-  - 이 실행의 도구 결과는 **중단이 정상**이다: 의도한 리셋으로 부팅이 바뀌므로 `aborted == "boot_changed"`, `result == "aborted"` 가 나온다(Codex 2라운드). 0절의 공통 합격 조건은 여기 적용하지 않고, 합격은 위 외부 측정으로만 한다. 재부팅 확인은 `new_boot_reset_cause == "PIN"` 으로 한다. USB 재열거로 링크가 끊겨 새 부팅이 기록에 없으면, 리셋 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "PIN"` 을 본다.
+  - 이 실행의 도구 결과는 **중단이 정상**이다. USB 가 끊기면 도구가 먼저 권한을 회수하므로 `aborted == "authorization_revoked"`, `result == "invalid_measurement"` 가 나온다. `metrics.reason` 은 재부팅을 봤는지에 따라 `end_unknown` 또는 `boot_changed` 다. 특정 조합을 기대하지 않는다(Codex). 0절의 공통 합격 조건은 여기 적용하지 않고, 합격은 위 외부 측정으로만 한다. 재부팅 확인은 `new_boot_reset_cause == "PIN"` 으로 한다. USB 재열거로 링크가 끊겨 새 부팅이 기록에 없으면, 리셋 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "PIN"` 을 본다.
 - **IWDG 판정**(계획 3.4: 주기 정지부터 출력 정지까지 100 ms): ①의 계산값 최대 53.8 ms + 주기 1 ms + ②에서 잰 리셋→차단 시간이 100 ms 안이어야 한다. 셋을 기록하고, 합이 100 ms 안이라는 근거가 없으면 판정을 보류한다. 한계: NRST 버튼과 IWDG 의 리셋 펄스 길이가 다르다(총괄 결정 (A)). 오실로스코프가 없으면 ②와 이 판정은 미룬다.
 - NRST 를 GND 로 붙잡은 상태에서도 위 핀 전압을 잰다. 계산과 다르면 멈추고 올린다(모터 출력 설계 4.1).
 
 **주 전원 차단**(`fw-open`, 받침대):
 - ②와 같이 `commission --seconds 1.5 --markers` 로 한 바퀴를 돌린다. 차단 스위치를 내리는 순간 Enter(앞에 `power` 라고 적으면 그 이름)를 누른다.
-- 이 실행도 **중단이 정상**이다(공통 합격 조건 적용 안 함). `analyze --record $D/run.jsonl --kind power --marker 0 | tee $D/result.json` 으로 표시 뒤 마지막 STATE 시각을 읽는다.
-- 전원을 다시 넣은 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "POWER"` 를 본다.
+- 이 실행도 **중단이 정상**이다(공통 합격 조건 적용 안 함, 도구 결과 조합은 ②처럼 고정되지 않는다). `analyze --record $D/run.jsonl --kind power --marker 0 | tee $D/result.json` 으로 표시 뒤 마지막 STATE 시각을 읽는다. 시각이 `null` 이면 ②처럼 원본에서 읽는다.
+- **MCU 전원이 어디서 오는지에 따라 예상이 다르다.** 보통 USB-C 케이블이면 VBUS 가 D10 을 거쳐 WeAct 와 메인보드 5 V 에 들어간다(보드 설계 3.1). 그러면 주 전원을 내려도 MCU 는 살아 있고 모터 전원(VM)만 빠진다. 이때는 재부팅 없이 링크가 이어지고, 드라이버 결함·`driver_not_ready` 로 서는 것이 예상이다. VBUS 를 끊은 케이블이나 UART7 이면 MCU 도 꺼진다. 그때는 전원을 다시 넣은 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "POWER"` 를 본다. 어느 구성이었는지 기록한다.
 - 바퀴가 서는 시간·거리는 영상이나 줄자로 잰다.
 
 ### 9.2 다음 PCB 판 뒤에 할 것
