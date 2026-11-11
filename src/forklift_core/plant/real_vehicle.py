@@ -200,15 +200,24 @@ def real_vehicle_from_mapping(data: dict, chassis: dict) -> RealVehicleConfig:
                              _calibration_id(partial.resolved_values()))
 
 
-def load_real_vehicle(path: str | Path) -> RealVehicleConfig:
-    """vehicle.yaml with its chassis model resolved relative to the file (any working directory)."""
+def chassis_model_path(path: str | Path) -> Path:
+    """The chassis model file a vehicle.yaml names, resolved relative to that file (absolute paths kept)."""
     import yaml
 
     path = Path(path).resolve()
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or not isinstance(data.get("chassis_model"), str):
         raise ValueError("vehicle config must name its chassis_model file")
-    chassis = yaml.safe_load((path.parent / data["chassis_model"]).read_text(encoding="utf-8"))
+    return (path.parent / data["chassis_model"]).resolve()
+
+
+def load_real_vehicle(path: str | Path) -> RealVehicleConfig:
+    """vehicle.yaml with its chassis model resolved relative to the file (any working directory)."""
+    import yaml
+
+    path = Path(path).resolve()
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    chassis = yaml.safe_load(chassis_model_path(path).read_text(encoding="utf-8"))
     return real_vehicle_from_mapping(data, chassis)
 
 
@@ -320,5 +329,5 @@ class RealOdometry:
         return self._step(True, False, None)
 
 
-__all__ = ["DriveRefusal", "OdometryStep", "RealOdometry", "RealVehicleConfig", "RearDrive", "SteeringMap",
+__all__ = ["chassis_model_path", "DriveRefusal", "OdometryStep", "RealOdometry", "RealVehicleConfig", "RearDrive", "SteeringMap",
            "load_real_vehicle", "real_vehicle_from_mapping", "rear_drive_command"]
