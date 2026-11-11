@@ -48,6 +48,12 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/reset_cause.c
     ${BOARD_DIR}/src/rng.c
     ${BOARD_DIR}/src/led.c
+    ${BOARD_DIR}/src/gpio.c
+    ${BOARD_DIR}/src/drv_spi.c
+    ${BOARD_DIR}/src/kth_spi.c
+    ${BOARD_DIR}/src/board_hal.c
+    ${BOARD_DIR}/src/board_config.c
+    ${BOARD_DIR}/src/board_rules.c
     ${BOARD_DIR}/src/motor_out_locked.c)
 
 add_executable(fw ${BOARD_SOURCES})
@@ -65,6 +71,9 @@ target_link_options(fw PRIVATE -T${BOARD_DIR}/stm32h743vi_dtcm.ld -Wl,-Map=${CMA
                     -Wl,--print-memory-usage)
 target_link_libraries(fw PRIVATE fw_core_arm m)
 set_property(TARGET fw APPEND PROPERTY LINK_DEPENDS ${BOARD_DIR}/stm32h743vi_dtcm.ld)
+# Vehicle values from config/real/vehicle.yaml, never written twice (plan P0-6).
+include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vehicle_header.cmake)
+fw_vehicle_header(fw ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 add_custom_command(TARGET fw POST_BUILD
     COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:fw> ${CMAKE_CURRENT_BINARY_DIR}/fw.bin

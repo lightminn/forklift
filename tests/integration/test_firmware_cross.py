@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,8 @@ pytestmark = pytest.mark.skipif(
 def _configure(build: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}", *extra],
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}",
+         f"-DFW_PYTHON={sys.executable}", *extra],
         capture_output=True, text=True,
     )
 
@@ -164,13 +166,18 @@ def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
         return subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
                                *args], cwd=repo, capture_output=True, text=True, check=True).stdout
 
+    header = tmp_path / "vehicle_config.h"
+    gen = subprocess.run([sys.executable, str(REPO / "tools" / "real_vehicle_header.py"), "--config",
+                          str(REPO / "config" / "real" / "vehicle.yaml"), "--out", str(header)],
+                         env={**os.environ, "PYTHONPATH": str(REPO / "src")}, capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
     git("init", "-q")
     git("add", "-A")
     git("commit", "-q", "-m", "a")
     build = tmp_path / "build"
     cfg = subprocess.run(
         ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
          f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}"],
         capture_output=True, text=True)
     assert cfg.returncode == 0, cfg.stderr
