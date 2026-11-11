@@ -24,6 +24,7 @@ MCU 의 `wheel_rate_*` 는 쓰지 않는다(창이 표본 수라 시간 범위�
 - `signed = (v_L + v_R)/2`, `yaw_rate = (v_R − v_L)/track`, `e = max(e_L, e_R)`.
 - **경계** `bound = max(|v_L| + e_L, |v_R| + e_R)` — 바깥 바퀴로 잡는다.
 - **가능 방향**: 구간 `[signed − e, signed + e]` 가 양수를 품으면 `+1`, 음수를 품으면 `−1`(0 을 걸치면 둘 다). 절대 상한(`bound`)과 따로 둔다.
+  - 결과: 서 있거나 느릴 때(`|signed| < e`, 지금 잠정값으로 약 0.022 m/s)는 늘 두 방향이다. 그래서 8절 방향 검사는 출발 때 반대쪽도 경계 속도로 본다 — 바로 뒤(정지 거리 안)가 막혀 있으면 앞으로 출발하는 것도 막는다. 코어 4d-1 의 실차 규칙과 같은 결과이고, 시험이 두 쪽(뒤가 막힘 → 출발 없음, 뒤가 경계 속도를 허락 → 출발)을 고정한다.
 - **무효**(`valid=False`): 끝 `STATE` 가 신선하지 않음(50 ms), 앞뒤 `STATE` 의 부팅이 다르거나 하나뿐임, `Δt` 가 0 이하이거나 `max_gap`(100 ms) 초과, 카운트 연속성·stuck·polarity 비트, 조향 측정이 지도 밖. 무효면 `Feedback.rear_axle_speed_mps = None`.
 - 전제 A1·A2 와 `L`·`a_axle` 은 `vehicle.yaml` `teleop_speed_limit` 아래에 provenance 와 함께 둔다(계획의 잠정값 표). 잠정값은 전제가 맞을 때만 상한이 된다는 점을 기록에 남긴다.
 
@@ -37,7 +38,7 @@ MCU 의 `wheel_rate_*` 는 쓰지 않는다(창이 표본 수라 시간 범위�
 ## 4. 무장 상태기계 (중재기 `arm_gen` ↔ MCU 무장, Codex P2-5·P1-3, 재검토 P2-5·P2-7·P2-8)
 
 중재기의 `armed` 는 콘솔 arm 일 뿐이다. 다리가 MCU 무장과 짝짓는다. 상태: `idle`, `arming(g)`, `ready(g)`, `disarming`, `held`.
-- **새 MCU 무장의 공통 조건**(모든 `request_arm` 앞): 중재기가 TELEOP·`armed`·`arm_gen = g`, MCU 가 `DISARMED`(다른 세대로 무장돼 있으면 먼저 `DISARM` 하고 확인), 옛 비영 DRIVE 가 작용할 수 없음(`port.older_nonzero_may_act` 거짓), **이 주기의 신선한 정지 확인**(엔코더 속도가 유효하고 `bound < STANDING_MPS`(0.01), 중재기의 정지 검출기도 정지). 같은 주기의 disarm → arm 도 이 조건으로 걸린다. 조건이 맞으면 `host.request_arm` 을 그 세대에 **한 번** 부르고, 거부·시간 초과면 중재기 `STOP`(`mcu_arm_refused:<이유>`). 자동 `ARM`·`CLEAR_FAULTS` 는 없다.
+- **새 MCU 무장의 공통 조건**(모든 `request_arm` 앞): 중재기가 TELEOP·`armed`·`arm_gen = g`, MCU 가 `DISARMED`(다른 세대로 무장돼 있으면 먼저 `DISARM` 하고 확인), 옛 비영 DRIVE 가 작용할 수 없음(`port.older_nonzero_may_act` 거짓), **이 주기의 신선한 정지 확인**(엔코더 속도가 유효하고, 같은 부팅의 끊김 없는 `STATE` 들이 MCU 시간 0.2 s 이상에 걸쳐 바퀴마다 카운트 변화 2 이하(`counts_still`), 중재기의 정지 검출기도 정지). 경계(`bound`)로는 정지를 확인하지 않는다: 가속 항(전제 A1·A2)이 정지한 차에서도 경계를 약 0.022 m/s 로 두어 어떤 정지 문턱(0.01)보다 크다. 같은 주기의 disarm → arm 도 이 조건으로 걸린다. 조건이 맞으면 `host.request_arm` 을 그 세대에 **한 번** 부르고, 거부·시간 초과면 중재기 `STOP`(`mcu_arm_refused:<이유>`). 자동 `ARM`·`CLEAR_FAULTS` 는 없다.
 - **무효 속도의 강제 STOP**: 주기 시작(중재기 `observe` 전)의 운용 상태를 기억해 둔다. 그때 TELEOP·무장이었고 이 주기 엔코더 속도가 무효면 중재기를 `STOP`(`speed_invalid`) — 중재기 자체의 `no_feedback` 걸쇠(정지 표본이 모이면 저절로 풀림)만으로 두지 않는다.
 - **해제**: 중재기가 `armed` 를 잃거나 `arm_gen`·`control_gen` 이 바뀌면 그 주기의 송신 전에 대기 DRIVE 를 버린다(`port.new_control_generation`).
 - **DISARM 의 우선순위**:
