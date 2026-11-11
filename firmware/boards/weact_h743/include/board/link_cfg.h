@@ -64,28 +64,45 @@ static inline uint32_t usb_string_desc(const char *s, uint16_t *desc, uint32_t c
     return n;
 }
 
-/* The device side of a CDC port, as the send pump sees it. */
+/* The device side of a CDC port, as the send pump sees it. There is deliberately no "clear":
+   with the DWC2 slave port (CFG_TUD_EDPT_DEDICATED_HWFIFO) an IN transfer is scheduled over the
+   whole software FIFO and the interrupt reads it in place, so clearing it under an active
+   transfer corrupts that transfer (Codex B3 review 2). */
 typedef struct {
     void *ctx;
     bool (*connected)(void *ctx);                               /* host has the port open (DTR) */
     uint32_t (*room)(void *ctx);                                /* bytes the stack accepts now */
     uint32_t (*write)(void *ctx, const uint8_t *p, uint32_t n); /* returns bytes taken */
     void (*flush)(void *ctx);
-    void (*clear)(void *ctx); /* drop what the stack holds and has not handed to the controller */
 } link_sink;
 
-/* Main loop (the send ring's consumer). While no host has the port open, frames are dropped as
-   they come and the stack's FIFO is emptied too (a host reading with DTR low would otherwise
-   drain old frames, Codex B3 review), so nothing old is waiting when one opens it (board design
-   5). Otherwise as much as the stack accepts moves on, frames possibly split across calls: the
-   bytes stay in order. Returns the bytes dropped from the ring. */
-static inline uint32_t link_tx_pump(link_ring *tx, const link_sink *s)
+/* Main loop (the send ring's consumer).
+   - While no host has the port open, frames are dropped as they come and *resync is set: what
+     the stack already holds (at most its FIFO, CFG_TUD_CDC_TX_BUFSIZE) is the only old data a
+     reopened port can see (board design 5.1).
+   - With the port open and *resync set (set here, or by the transport on any connection
+     life-cycle event), one 0x00 delimiter goes first: the old bytes may end inside a frame, and
+     the delimiter closes them as one broken frame instead of letting them swallow the first
+     fresh one. Empty frames are not errors on either decoder (core link_rx_feed,
+     forklift_core.mcu_link.framing). No frame is sent before the delimiter is taken.
+   - Then as much as the stack accepts moves on, frames possibly split across calls; the bytes
+     stay in order.
+   Returns the bytes dropped from the ring. */
+static inline uint32_t link_tx_pump(link_ring *tx, const link_sink *s, bool *resync)
 {
     if (!s->connected(s->ctx)) {
-        s->clear(s->ctx);
+        *resync = true;
         return link_ring_drop_all(tx);
     }
     bool moved = false;
+    if (*resync) {
+        static const uint8_t delimiter = 0x00;
+        if (s->room(s->ctx) == 0 || s->write(s->ctx, &delimiter, 1) != 1) {
+            return 0;
+        }
+        *resync = false;
+        moved = true;
+    }
     for (;;) {
         const uint8_t *p;
         uint32_t n = link_ring_peek(tx, &p);
@@ -107,22 +124,6 @@ static inline uint32_t link_tx_pump(link_ring *tx, const link_sink *s)
         s->flush(s->ctx);
     }
     return 0;
-}
-
-/* Main loop, on a DTR rising edge: drop the ring and the stack's FIFO, then send one delimiter.
-   A packet already handed to the controller (at most one 64 B IN packet) cannot be recalled and
-   may end inside a frame; the delimiter closes that tail as one broken frame instead of letting
-   it swallow the first fresh frame (Codex B3 review). Empty frames are not errors on either
-   decoder (core link_rx_feed, forklift_core.mcu_link.framing). Returns the bytes dropped. */
-static inline uint32_t link_tx_reopen(link_ring *tx, const link_sink *s)
-{
-    uint32_t dropped = link_ring_drop_all(tx);
-    s->clear(s->ctx);
-    static const uint8_t delimiter = 0x00;
-    if (s->write(s->ctx, &delimiter, 1) == 1) {
-        s->flush(s->ctx);
-    }
-    return dropped;
 }
 
 #endif

@@ -6,11 +6,13 @@
    run in the main loop or at priority 3, so the control tick, the command expiry and the IWDG
    keep running past them: a stuck USB stack silences the link and the vehicle stops on expiry.
 
-   Stale frames: while no host has the port open (DTR low), frames and TinyUSB's FIFO are dropped
-   as they come; on a DTR rising edge whatever is left is dropped again and a delimiter goes
-   first, so a reopened port starts with fresh STATE frames after at most one old IN packet
-   (board design 5.1, link_tx_reopen). The receive side keeps bytes in
-   TinyUSB's FIFO (the endpoint NAKs) when the ring is full: nothing is lost there. */
+   Stale frames: while no host has the port open, frames are dropped as they come; when it is open
+   again a delimiter goes first, so a reopened port sees at most TinyUSB's FIFO of old bytes,
+   closed as one broken frame, then fresh STATE frames (board design 5.1, link_tx_pump). Every
+   connection life-cycle callback marks the next opening for that delimiter too, so a resume
+   with DTR held or a reset between two polls is not missed. TinyUSB's FIFO is never cleared. The
+   receive side keeps bytes in TinyUSB's FIFO (the endpoint NAKs) when the ring is full: nothing is
+   lost there. */
 #include "board/board.h"
 #include "board/clock_config.h"
 #include "board/gpio.h"
@@ -33,7 +35,7 @@ static uint8_t g_rx_mem[LINK_RX_RING_SIZE];
 static uint8_t g_tx_mem[LINK_TX_RING_SIZE];
 static link_ring g_rx = {0, 0, g_rx_mem, LINK_RX_RING_SIZE - 1u};
 static link_ring g_tx = {0, 0, g_tx_mem, LINK_TX_RING_SIZE - 1u};
-static bool g_dtr;
+static bool g_resync = true; /* main loop only (tud_task callbacks and link_poll) */
 
 /* TinyUSB's millisecond clock (OPT_OS_NONE), main context only: the microsecond counter's
    wrap is carried so the milliseconds never step back. */
@@ -101,24 +103,39 @@ static void sink_flush(void *ctx)
     (void)tud_cdc_write_flush();
 }
 
-static void sink_clear(void *ctx)
-{
-    (void)ctx;
-    (void)tud_cdc_write_clear();
-}
+static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_flush};
 
-static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_flush, sink_clear};
-
-/* DTR edge, called from tud_task (main loop, the send ring's consumer). */
+/* Connection life cycle, called from tud_task (main loop): each marks the next opening for a
+   resynchronising delimiter (link_tx_pump). */
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void)itf;
     (void)rts;
-    if (dtr && !g_dtr) {
+    if (dtr) {
         g_link_stats.reopened++;
-        g_link_stats.tx_dropped_idle += link_tx_reopen(&g_tx, &g_sink);
     }
-    g_dtr = dtr;
+    g_resync = true;
+}
+
+void tud_mount_cb(void)
+{
+    g_resync = true;
+}
+
+void tud_umount_cb(void)
+{
+    g_resync = true;
+}
+
+void tud_suspend_cb(bool remote_wakeup_en)
+{
+    (void)remote_wakeup_en;
+    g_resync = true;
+}
+
+void tud_resume_cb(void)
+{
+    g_resync = true;
 }
 
 void link_poll(void)
@@ -146,10 +163,7 @@ void link_poll(void)
             break;
         }
     }
-    if (!tud_cdc_connected()) {
-        g_dtr = false; /* a bus reset clears the line state without the callback (cdcd_reset) */
-    }
-    g_link_stats.tx_dropped_idle += link_tx_pump(&g_tx, &g_sink);
+    g_link_stats.tx_dropped_idle += link_tx_pump(&g_tx, &g_sink, &g_resync);
 }
 
 size_t link_read(uint8_t *buf, size_t cap)

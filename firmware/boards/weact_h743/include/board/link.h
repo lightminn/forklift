@@ -14,7 +14,7 @@ typedef struct {
     volatile uint32_t tx_dropped_idle; /* bytes of frames dropped while no host had the port */
     volatile uint32_t uart_errors;     /* overrun, framing, noise */
     volatile uint32_t usb_started;     /* the USB stack came up */
-    volatile uint32_t reopened;        /* DTR rising edges */
+    volatile uint32_t reopened;        /* line-state changes with DTR high */
     volatile uint32_t usb33rdy;        /* PWR_CR3.USB33RDY after start (diagnostic only) */
 } link_stats;
 
