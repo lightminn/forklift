@@ -41,6 +41,8 @@ from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
 from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
 
 CYCLE_S = 0.02
+NO_STATE_HINT_S = 2.0  # no STATE this long: tell the operator (no automatic USB reset, lead 2026-11-12)
+NO_STATE_HINT = "MCU STATE 없음 — USB 가 멈췄으면 주 전원을 재투입하세요(자동 리셋 없음)"
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.5, zero_valid_ms=100, outbox_max=16)
 
 
@@ -86,6 +88,8 @@ class Bridge:
         self.record = record
         self.record_errors = 0
         self.overruns = 0
+        self._started_ns: int | None = None
+        self._last_rx_ns: int | None = None
 
     def _log(self, what, now_ns, data, info) -> None:
         """Every frame written (or abandoned part-way, counted as possibly delivered): a round-trip anchor's start."""
@@ -94,6 +98,7 @@ class Bridge:
 
     def _on_state(self, state: McuState, received_ns: int) -> None:
         """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""
+        self._last_rx_ns = received_ns  # kept here: the host forgets its receipt time on a disconnect
         self.core.add_sample(Sample(received_ns, state))
 
     def cycle(self, now_ns: int) -> dict:
@@ -113,6 +118,9 @@ class Bridge:
                                 else reading.speed.signed_mps,
                                 applied=rec["applied"], steering_rad=None if q is None else [q],
                                 lift_m=None if st is None else st.lift_m)
+            notes = self.notes(now_ns)
+            if notes:
+                msg["notes"] = notes
             self.channels.put(None, msg)
         events += self.dev.transmit(self.host, now_ns)
         if events:
@@ -123,6 +131,15 @@ class Bridge:
             except (OSError, ValueError):
                 self.record_errors += 1
         return rec
+
+    def notes(self, now_ns: int) -> list[str]:
+        """The console's session row (state.notes): the power-cycle hint while the MCU sends nothing. The truck is
+        already stopping by then -- the arbiter's feedback loss and the MCU's own command expiry -- so this only tells
+        the operator what to do."""
+        if self._started_ns is None:
+            self._started_ns = now_ns
+        since = self._started_ns if self._last_rx_ns is None else self._last_rx_ns
+        return [NO_STATE_HINT] if now_ns - since >= NO_STATE_HINT_S * 1e9 else []
 
     def close(self, now_ns: int) -> None:
         """Leave the MCU disarmed: a DISARM written, a few cycles to let it out."""

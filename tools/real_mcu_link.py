@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import os
 import select
 import sys
@@ -33,6 +34,10 @@ class LinkLost(Exception):
 
 
 def open_raw(path: str, baud: int | None = None) -> int:
+    """Open the link raw. The USB CDC firmware drops every STATE while the host's DTR is low (firmware board design
+    5): Linux cdc_acm raises DTR on open, and nothing here lowers it -- no zero speed (it hangs the line up) and no
+    clearing of the modem bits; DTR (and RTS) are asked high once more in case a previous user left them low. A
+    device without modem bits (a pty, a UART adapter that refuses) is fine as it is."""
     fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     try:
         attrs = termios.tcgetattr(fd)
@@ -44,16 +49,27 @@ def open_raw(path: str, baud: int | None = None) -> int:
         termios.tcsetattr(fd, termios.TCSANOW, attrs)
     except termios.error:
         pass  # not every endpoint is a tty with settable attributes (a pty master is fine raw already)
+    try:
+        bits = (termios.TIOCM_DTR | termios.TIOCM_RTS).to_bytes(4, sys.byteorder)
+        fcntl.ioctl(fd, termios.TIOCMBIS, bits)
+    except OSError:
+        pass  # no modem control on this endpoint
     return fd
 
 
+DELIMITER = b"\x00"
+
+
 class TtyLink:
-    """One open endpoint and the frame being written."""
+    """One open endpoint and the frame being written. Every opening first writes one COBS delimiter: the MCU's
+    receive buffer may hold half a frame from the last connection, and the delimiter closes it as one broken frame
+    so the first fresh frame is read whole (firmware board design 5; an empty frame is no error on either side)."""
 
     def __init__(self, fd: int) -> None:
         self.fd = fd
         self._cur: Outgoing | None = None
         self._off = 0
+        self._resync = True  # the delimiter is still to go out on this opening
 
     def read_available(self) -> bytes:
         """Whatever is waiting. An empty read is "nothing yet" on a raw tty (VMIN=0), not end of file;
@@ -83,6 +99,18 @@ class TtyLink:
         return b"".join(chunks)
 
     def pump_writes(self, host: McuLinkHost, now_ns: int) -> None:
+        if self._resync:
+            # before any frame is taken from the host: a frame held back by a full device stays the host's to drop
+            try:
+                if os.write(self.fd, DELIMITER) != 1:
+                    return
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError as exc:
+                if exc.errno in _LOST:
+                    raise LinkLost(str(exc)) from exc
+                raise
+            self._resync = False
         while True:
             if self._cur is None:
                 self._cur, self._off = host.next_frame(now_ns), 0
