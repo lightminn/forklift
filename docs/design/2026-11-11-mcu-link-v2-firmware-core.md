@@ -50,7 +50,7 @@ estop_wired == false && outputs_locked == false && commission_build == false  ->
 - 받아들이면: `cm_axis`, `cm_duty = duty_e4 / 10000`(제어 좌표 — `duty_sign` 적용 전), 마감은 `DRIVE` 식. **축이 바뀌면** 이전 축은 그 주기부터 정지 상태로 가고 적용 듀티 이력도 0 이 된다(다시 고를 때 변화율 제한을 건너뛰지 않게).
 - **출력**(`ARMED`): 지정 축만 `cm_duty`(바퀴 축이면 4절 변화율 제한), 나머지 셋은 `DISARMED` 와 같은 채널별 정지 상태(`drvoff = !safe_brake`, 듀티 0). 폐루프(PI)는 돌지 않는다.
 - **`STOPPING`**(만료·시간 상한): **고르지 않은 축까지 네 축 모두** 듀티를 그 주기에 바로 0, DRVOFF low(출력 켬)로 두고 `stop_grace_ms` 뒤 `DISARMED`. 그 채널의 드라이버 결함이나 드라이버 미준비면 끊는다. 감소 쪽은 변화율 제한이 없다(4절). 듀티 0·DRVOFF low 는 DRV8244 PH/EN 모드의 전기 제동이다. 정상 빌드의 `STOPPING`(속도 0 PI)과 다르다 — 시운전에는 폐루프 게인이 아직 없기 때문이다. 이 차이를 계약 4절에 적어 달라고 콘솔에 요청한다.
-- **시간 상한은 실제 출력으로 잰다**: `drive_finish` 가 정한 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돈다(`cm_on_since` = 그런 주기가 시작된 시각). 네 채널 적용 듀티가 모두 0 인 주기가 한 번 지나야 시계가 지워진다. 그래서 같은 주기에 `0 → 비영` 명령을 받거나 듀티를 계단식으로 바꿔도 시계가 지워지지 않는다. `ARM`·`DISARM` 의 제어 초기화도 시계를 지우지 않는다 — 한 주기에 `DISARM → ARM → COMMISSION(0) → COMMISSION(비영)` 을 받아도 실제 출력에 0 인 주기가 없으면 시계는 이어진다. `ARMED` 에서 `time − cm_on_since > commission_time_ms` 이면 마감 처리와 같은 자리(메시지 처리 전)에서 `STOPPING` 으로 가고 `commission_time_limit`(24)을 켠다. 이 비트는 `command_timeout` 처럼 래치지만 **결함 모드로 가지 않고** 다음 `ARM` 에서 지운다(계약 3.4).
+- **시간 상한은 실제 출력으로 잰다**: `drive_finish` 가 정한 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돈다(`cm_on_since` = 그런 주기가 시작된 시각). 네 채널 적용 듀티가 모두 0 인 주기가 한 번 지나야 시계가 지워진다. 그래서 같은 주기에 `0 → 비영` 명령을 받거나 듀티를 계단식으로 바꿔도 시계가 지워지지 않는다. `ARM`·`DISARM` 의 제어 초기화도 시계를 지우지 않는다 — 한 주기에 `DISARM → ARM → COMMISSION(0) → COMMISSION(비영)` 을 받아도 실제 출력에 0 인 주기가 없으면 시계는 이어진다. `ARMED` 에서 `time − cm_on_since > commission_time_ms` 이면 마감 처리와 같은 자리(메시지 처리 전)에서 `STOPPING` 으로 가고 `commission_time_limit`(24)을 켠다. 이 비트는 `command_timeout` 처럼 래치지만 **결함 모드로 가지 않고** 다음 `ARM` 에서 지운다(계약 3.4). 상한으로 들어간 `STOPPING` 은 `DISARM` 으로 줄일 수 없다: `stop_grace_ms` 가 끝날 때까지 `ARM` 을 `stopping` 으로 거부한다. 같은 주기에 `DISARM → ARM → COMMISSION` 을 받아도 0 출력이 `stop_grace_ms` 동안 이어진다(Codex PR 리뷰 P1). 최종 출력 단계도 상한을 넘긴 시운전 듀티를 내지 않는다.
 
 ### 3.1 시운전 빌드의 결함 판정 (S3 가 하는 일에 맞춤)
 
@@ -151,6 +151,11 @@ S3 는 `duty_sign`·엔코더 극성·조향과 승강의 기구 범위를 **처
 - P2 시운전 `STOPPING` 이 고르지 않은 축을 코스트로 둠 → 네 축 모두 듀티 0·DRVOFF low(3절, `safe_brake=false` 시험).
 - P3 4절 범위 식을 구현(부호별 비대칭)에 맞춤. P3 계약 3.2 `CLEAR_FAULTS` 의 시운전 센서 조건 → 7절 요청.
 - 3.1 시운전 예외는 "제시한 조건에서 수용 가능" 판정. S4 의 FAULT 합격은 정상 빌드로 확인한다.
+
+**② Codex 브랜치 전체 리뷰(adversarial-review, main...539dd8d4) P1 1·P2 2**
+- P1 시간 상한 발동 주기에 `DISARM → ARM` 으로 정지를 건너뜀 → `stop_grace_ms` 동안 ARM 거부, 최종 출력 단계 차단(3절). 반례 시험이 고치기 전 실패, ARM 보류 돌연변이를 잡음.
+- P2 두 건은 호스트 쪽(build 정책을 실제 송신 경로에, 엔코더 결함 비트를 오도메트리 연속성에) — 계약 주인(콘솔)이 고침.
+- C↔Python 320 메시지 바이트 왕복 일치.
 
 **③ agy(Gemini 4 Argon, ①② 미공개) '적히지 않은 전제' 8개**
 - 반영: 시운전에서 미검증 엔코더·절대각 판정이 S3 를 막음 → 3.1 절. 백래시로 stuck·polarity 가 다르게 동작 → 5절 문단과 S4 실측 항목. jump 의 짧은 `Δt` → `max(Δt, period/2)`. 감속 쪽 변화율 제한이 정지 예산을 먹음 → 4절(감소 무제한, 별도 감속 상한 대신). 첫 주기 gap → 예외. 시운전 축 전환 → 3절. 호스트의 비트 해석·`boot_id` 변화 → 7절 요청. `RCC_RSR` 누적 플래그 → 6절 판정 순서.

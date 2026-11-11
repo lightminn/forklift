@@ -568,6 +568,8 @@ void drive_begin(drive *d, const drive_inputs *in)
     if (d->mode == DRIVE_MODE_ARMED && d->cfg->commission_build && d->cm_on &&
         d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS) {
         enter_stopping(d, DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+        /* A DISARM cannot shorten this stop: ARM waits the whole grace (Codex PR review). */
+        d->cm_hold_until_us = d->stop_until_us;
     }
     /* Faults are judged while the outputs are still on, including the cycle the STOPPING
        grace ends, so they latch before the drop to DISARMED. */
@@ -634,6 +636,9 @@ static uint8_t arm_check(const drive *d, const link_arm *a)
         return DRIVE_REJECT_LATCHED;
     default:
         break;
+    }
+    if (d->cfg->commission_build && d->time_us < d->cm_hold_until_us) {
+        return DRIVE_REJECT_STOPPING; /* the commissioning time limit's stop is not over */
     }
     if (d->estop_now) {
         return DRIVE_REJECT_ESTOP_ACTIVE;
@@ -908,7 +913,9 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
             }
             continue;
         }
-        float u = d->mode == DRIVE_MODE_ARMED ? d->cm_duty : 0.0f;
+        bool over = d->cm_on &&
+                    d->time_us - d->cm_on_since_us > (uint64_t)c->commission_time_ms * US_PER_MS;
+        float u = d->mode == DRIVE_MODE_ARMED && !over ? d->cm_duty : 0.0f;
         if (ch < 2) {
             float lo, hi;
             slew_range(d->wheel_duty[ch], c->wheel_duty_slew_per_s * dt, 1.0f, &lo, &hi);

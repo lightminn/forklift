@@ -1529,6 +1529,37 @@ static void v2r2_commission_stopping_brakes_every_axis(void)
     }
 }
 
+/* ---- Codex PR review 1 ---------------------------------------------------------------- */
+static void v2r3_rearm_bundle_after_the_limit_waits_the_stop(void)
+{
+    /* After the time limit fires, a DISARM -> ARM -> COMMISSION(0) -> COMMISSION(non-zero)
+       bundle every cycle must not bring the output back before stop_grace_ms of zero output. */
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    CHECK(commission_run(3000, 1000, false, &seq) > 0);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    int zero_cycles = 0, first_nonzero = -1;
+    for (int t = 0; t < 1000; t++) {
+        link_msg m[4];
+        m[0] = simple(LINK_DISARM, seq++);
+        m[1] = arm_msg(seq++, d.boot_id, echo_now());
+        m[2] = commission_msg(seq++, 0, 0, 150, echo_now());
+        m[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        m[3] = commission_msg(seq++, 0, 1000, 150, echo_now());
+        m[3].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        tick_moving(2.0, 0.0, m, 4);
+        if (out.duty[DRIVE_CH_L] == 0.0f) {
+            zero_cycles++;
+        } else if (first_nonzero < 0) {
+            first_nonzero = t;
+        }
+    }
+    CHECK(first_nonzero >= (int)cfg.stop_grace_ms - 1);
+    CHECK(zero_cycles >= (int)cfg.stop_grace_ms - 1);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1574,5 +1605,6 @@ int main(void)
     v2r2_first_cycle_gap_drops_the_step();
     v2r2_polarity_baseline_waits_for_a_fresh_window();
     v2r2_commission_stopping_brakes_every_axis();
+    v2r3_rearm_bundle_after_the_limit_waits_the_stop();
     return FW_TEST_RESULT();
 }
