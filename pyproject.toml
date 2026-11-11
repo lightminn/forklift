@@ -15,6 +15,7 @@ model = ["PyYAML>=6", "mujoco>=3.3,<4", "Pillow>=10"]
 dataset = ["Pillow>=10"]
 console = ["websockets>=13", "Pillow>=10"]
 perf = ["numba>=0.59"]
+real = ["PyYAML>=6"]  # the real-vehicle config loader (forklift_core.plant.real_vehicle, sim-to-real plan P0-6)
 learned = ["onnxruntime>=1.17"]  # the learned instance proposer (stage 3, src/forklift_learned)  # compiled obstacle and permission kernels (docs/plans/2026-10-17-realtime-sim.md)
 dev = ["pytest>=7", "pytest-xdist>=3", "ruff", "build", "pip-tools", "Pillow>=10", "PyYAML>=6"]
 
