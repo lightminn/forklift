@@ -208,5 +208,4 @@ Codex 4c 범위 상의(P2 4·P3 1)를 반영해 4c 를 둘로 나눴다.
   - 포켓 구간의 재개 조건: 상한을 보존한 채 반대쪽 잔류 운동을 검증한다(실차 포켓 검사가 가능한 각 방향을 답함). 그 전까지 실차 삽입은 감독·저속·빈 포크.
   - **4d-2b-2 완료가 실차 진입의 선행 조건이다**(Codex 4d-2b-1 P2-5): 그 전에는 실차 복구 운용을 열지 않는다. 지금 텔레옵 정책은 recovery_required 에서도 높은 승강의 하강을 허용하고, carrying 취소는 cancelled 로 끝나 적재 텔레옵이 열린다.
   - 적재 삽입 전 (A) 결정: 실차에서 팔레트를 실은 자율 삽입(S10 이후) 전에 core 보조 수동 복구를 S5·S8 실측으로 정한다(감사 4-3 총괄 결정 1).
-  - **시뮬의 `SafetySpeed` 공급자를 `safety/standing.py` 규칙으로 옮긴다**(총괄 2026-11-12, 정지 방향 규칙 `docs/design/2026-11-12-standing-direction-rule.md` 4절): 지금 시뮬은 참값(`SafetySpeed.exact`)이라 '서 있다가 출발'·'저속 방향 전환'에서 실차보다 허용적이다. 실차 공급자(`hooks.safety_speed`)와 같은 모듈을 거치게 하고, 재생 게이트 29/29 와 함께 한다(4e-2 또는 그 전 별도 PR). 시뮬이 실차 동작을 예측하지 못하는 구간을 오래 두지 않는다.
   - 실차 훅 객체는 `fail_closed_hooks` 로 감싼다(4d-2a). 혼합 훅(`cusp_heading_motion`, `far_recognition*`)은 참값 필드를 `None` 으로 채운 같은 모양으로 구현하고, `options.G2.planning_target` 의 oracle 옵션은 조립하지 않는다.
