@@ -38,6 +38,7 @@ from forklift_core.mcu_link.messages import (
     encode,
     valid_after_echo_ms,
 )
+from forklift_core.mcu_link.build_policy import Client, drive_refusal
 from forklift_core.plant.real_vehicle import RearDrive
 
 
@@ -99,8 +100,13 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 
 class McuLinkHost:
-    def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None) -> None:
+    def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
+                 allow_locked: bool = False) -> None:
+        """``client``: who drives through this host (mcu-link/2 build bits, contract 3.3): the real executor (the
+        default), the HIL executor, or a bring-up tool. ``allow_locked``: a bring-up tool's run on a model or HIL
+        board whose outputs are locked."""
         self.cfg = cfg
+        self.client, self.allow_locked = Client(client), bool(allow_locked)
         self._log = log or (lambda *a: None)
         self._decoder = LinkDecoder()
         self._state: McuState | None = None
@@ -188,6 +194,21 @@ class McuLinkHost:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
 
+    def build_refusal(self, s: McuState | None = None) -> str | None:
+        """Why this host must not ARM or DRIVE the board reporting ``s`` (the latest STATE by default), from the
+        build bits (mcu-link/2 contract 3.3; Codex PR review P2): the executors by ``build_policy.drive_refusal``,
+        a bring-up tool never on a commissioning build (it takes no DRIVE) and on locked outputs only when allowed."""
+        s = self._state if s is None else s
+        if s is None:
+            return None
+        if self.client is Client.BRINGUP:
+            if s.flags & StateFlag.COMMISSION_BUILD:
+                return "commission_build"
+            if s.flags & StateFlag.OUTPUTS_LOCKED and not self.allow_locked:
+                return "outputs_locked"
+            return None
+        return drive_refusal(s.flags, self.client)
+
     def _on_state(self, s: McuState, now_ns: int, events: list) -> None:
         if s.boot_id == 0:
             events.append(HostEvent("state_invalid", {"why": "boot_id 0"}))
@@ -214,6 +235,11 @@ class McuLinkHost:
             events.append(HostEvent("faults_changed", {"from": int(prev.fault_flags), "to": int(s.fault_flags)}))
         if prev is not None and s.reject_reason != prev.reject_reason and s.reject_reason != RejectReason.NONE:
             events.append(HostEvent("reject", {"reason": s.reject_reason}))
+        refused = self.build_refusal(s)
+        if refused is not None and self._auth != _NONE:
+            self._revoke(f"build_refused: {refused}", events)
+            self._enqueue_disarm(now_ns)  # never leave a board armed that this host may not drive
+            return
         self._advance_auth(s, now_ns, events)
 
     def _advance_auth(self, s: McuState, now_ns: int, events: list) -> None:
@@ -280,6 +306,9 @@ class McuLinkHost:
             return Blocked("latched")
         if s.mode != Mode.DISARMED:
             return Blocked("not_disarmed")
+        refused = self.build_refusal(s)
+        if refused is not None:
+            return Blocked(f"build_refused: {refused}")
         if self._auth != _NONE:
             return Blocked("arm_in_progress")
         if len(self._outbox) >= self.cfg.outbox_max:
@@ -326,6 +355,9 @@ class McuLinkHost:
             return Blocked("zero_pending")
         if self._auth != _READY:
             return Blocked("not_authorized")
+        refused = self.build_refusal(s)
+        if refused is not None:
+            return Blocked(f"build_refused: {refused}")
         if expires_ns <= now_ns:
             return Blocked("expired")
         try:

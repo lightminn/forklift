@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from forklift_core.mcu_link.messages import Mode, StateFlag
+from forklift_core.mcu_link.messages import FaultFlag, Mode, StateFlag
 from forklift_core.plant.kinematics import RealDrive, RealKinematics
 from forklift_core.plant.mcu_host import Blocked, McuLinkHost
 from forklift_core.plant.real_vehicle import DriveRefusal, RearDrive
@@ -188,12 +188,16 @@ class RealPlantPort:
         if s is None:
             return None
         lift_ok = math.isfinite(s.lift_m)
+        cut_ = s.fault_flags & (FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R)
         return PlantSample(steering=(float(s.steering_rad),), lift_m=float(s.lift_m) if lift_ok else None,
                            wheel_counts=(int(s.wheel_count_left), int(s.wheel_count_right)),
                            mcu_time_us=int(s.mcu_time_us), received_host_ns=self.host.state_rx_ns,
                            boot_id=int(s.boot_id),
                            valid={"steering": self.kinematics.cfg.steering.curvature(float(s.steering_rad)) is not None,
-                                  "lift": lift_ok})
+                                  "lift": lift_ok,
+                                  # mcu-link/2: a wheel's count continuity broken this sample (contract 3.3) -- the
+                                  # odometry consumer passes it as RealOdometry.update(encoder_cut=...)
+                                  "wheel_counts_continuous": not cut_})
 
     def health(self, now_ns: int) -> PlantHealth:
         """The link's health now. It reads; it does not run the host's expiry (host.tick, driven by the control

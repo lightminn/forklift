@@ -313,3 +313,19 @@ def test_the_teleop_speed_limit_is_read_with_its_provenance():
     assert c.provenance["teleop_speed_limit"]["until"] == "S5" and c.provenance["teleop_speed_limit"]["measured"] is False
     with pytest.raises(ValueError):
         real_vehicle_from_mapping(mapping(teleop_speed_limit={"mps": 0.0, "provenance": PROV}), CHASSIS)
+
+
+def test_an_encoder_continuity_cut_breaks_the_odometry_and_the_next_sample_rereferences():
+    """mcu-link/2 bits 17/22/23 (Codex PR review P2): nothing is integrated across them."""
+    from forklift_core.plant.real_vehicle import RealOdometry, load_real_vehicle
+
+    cfg = load_real_vehicle(Path(__file__).resolve().parents[3] / "config" / "real" / "vehicle.yaml")
+    odo = RealOdometry(cfg, max_gap_s=0.5)
+    odo.update(0, 1, 0, 0, 0.0)
+    assert odo.update(10_000, 1, 1000, 1000, 0.0).integrated
+    pose = odo.pose
+    cut = odo.update(20_000, 1, 900_000, 900_000, 0.0, encoder_cut=True)  # a jump: those counts are not motion
+    assert not cut.integrated and cut.continuity_broken and cut.reason == "encoder_continuity" and odo.pose == pose
+    re = odo.update(30_000, 1, 901_000, 901_000, 0.0)
+    assert not re.integrated and re.reason == "rereference" and odo.pose == pose
+    assert odo.update(40_000, 1, 902_000, 902_000, 0.0).integrated
