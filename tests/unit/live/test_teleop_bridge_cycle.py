@@ -50,6 +50,7 @@ class FakeMcu:
         self.disarms = 0
         self.arms = 0
         self.arm_delay = 0  # ARM answered this many 10 ms steps late
+        self.ack_frozen = False  # frames applied but last_rx_seq no longer updated (no round-trip anchor)
         self._arm_due = None
 
     def receive(self, msg, seq):
@@ -78,7 +79,8 @@ class FakeMcu:
             self.cmd = (msg.left_wheel_rad_s, msg.right_wheel_rad_s)
             self.q = msg.steering_rad
             self.deadline_us = msg.echo_mcu_time_us + msg.valid_after_echo_ms * 1000
-            self.rx = seq
+            if not self.ack_frozen:
+                self.rx = seq
 
     def advance(self, dt_us):
         self.t_us += dt_us
@@ -597,3 +599,71 @@ def test_the_final_output_after_a_stop_is_a_preempt_zero():
     assert (out.mode, out.stop_kind, out.source, out.speed_mps, out.armed) == ("STOPPED", "preempt", "zero", 0.0,
                                                                                 False)
     assert rec["mode"] == "STOPPED" and rec["armed"] is False
+
+
+# --- the DISARM ping and the round-trip anchors (lead 2026-11-12) ----------------------------------------------------
+
+def _frames_after(r, n):
+    return [type(m).__name__ for _t, m in r.sent[n:]]
+
+
+def test_no_ping_disarm_goes_out_after_the_arm_and_the_arm_is_not_revoked():
+    """A ping queued but not yet written when the operator arms: it goes out ahead of the ARM (harmless on a disarmed
+    MCU), never after it; no ping is made while the ARM is pending or armed; the ARM is not revoked."""
+    r = Rig()
+    r.to_teleop()
+    for _ in range(40):  # wait until a ping is due, then let it queue without writing it
+        if r.bridge.last_ping_ns is not None and r.now + 20 * MS - r.bridge.last_ping_ns >= r.bridge.PING_NS:
+            break
+        r.cycle()
+    n = len(r.sent)
+    rec = r.cycle(transmit=False)
+    assert rec.get("ping") and [o.kind for o in r.host._outbox] == ["DISARM"]  # queued, unwritten
+    r.say("arm")
+    recs = [r.cycle() for _ in range(30)]
+    frames = _frames_after(r, n)
+    assert "Arm" in frames
+    first_arm = frames.index("Arm")
+    assert "Disarm" in frames[:first_arm] and "Disarm" not in frames[first_arm:], frames
+    assert not any(x.get("ping") for x in recs if x["phase"] != "idle")
+    assert r.bridge.phase == rt.READY and r.host.ready and r.mcu.arms == 1
+
+
+def test_a_ping_in_the_cycle_before_the_arm_does_not_revoke_it():
+    r = Rig()
+    r.to_teleop()
+    for _ in range(40):
+        rec = r.cycle()
+        if rec.get("ping"):
+            break
+    assert rec.get("ping")
+    r.say("arm")  # the next cycle arms right after the ping went out
+    r.run(25)
+    assert r.bridge.phase == rt.READY and r.host.ready
+    assert not any(str(x.get("stop", "")).startswith("mcu_") for x in r.recs)
+
+
+def test_while_armed_the_drives_keep_the_anchor_fresh_without_pings():
+    r = armed_rig()
+    recs = [r.cycle(teleop={"speed_ratio": 0.5}) for _ in range(150)]  # 3 s
+    assert not any(x.get("ping") for x in recs)
+    delays = [x["delay_s"] for x in recs]
+    assert all(d is not None and d < 0.03 for d in delays), max(d or 1 for d in delays)
+
+
+def test_no_anchor_for_two_seconds_invalidates_the_speed_and_stops():
+    """The MCU applies the DRIVEs but stops acknowledging them: after 2 s no anchor is recent enough -- no delay
+    bound, no safety speed, a STOP while driving."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.5})
+    r.mcu.ack_frozen = True
+    t0 = r.now
+    stopped_at = None
+    for _ in range(200):
+        rec = r.cycle(teleop={"speed_ratio": 0.5})
+        if rec.get("stop"):
+            stopped_at = r.now
+            break
+    assert rec["stop"] == "speed_invalid" and rec["speed_invalid"] == "no_delay_bound"
+    assert 2.0e9 <= stopped_at - t0 <= 2.2e9
+    assert any(isinstance(m, Disarm) for _t, m in r.sent[-5:])
