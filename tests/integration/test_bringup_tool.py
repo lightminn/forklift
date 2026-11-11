@@ -188,7 +188,9 @@ def test_cpr_from_a_known_hand_turn(mcu_model):
                              "--hand-turn-revs", "2", "--hand-turn-ms", "300", "--hand-turn-duration-ms", "1500"])
     try:
         b = bringup.Bench(PtyLink(master), io.StringIO())
-        b.run_until(lambda: False, 2.3)
+        # on the model's own clock (its STATE time is from its start, like the hand turn's 300 + 1500 ms): a slow
+        # start on a loaded host cut a fixed 2.3 s wall window short of the turn's end (9 counts short on ws1)
+        assert b.run_until(lambda: b.state is not None and b.state.mcu_time_us >= 2_100_000, 15.0), b.state
         from forklift_core.plant.bringup import wheel_cpr
         from forklift_core.plant.real_vehicle import load_real_vehicle
 

@@ -377,3 +377,119 @@ def test_a_scenario_with_an_invalid_external_value_sends_nothing(model):
     res = bringup.execute(sargs(output_response_ms="-inf"), b)
     assert res["result"] == "refused" and "output_response_ms" in res["why"]
     assert kinds_written(b) == []
+
+
+# --- markers while driving (arrival-day procedure, firmware session request 2026-11-12) ---------------------------
+
+def test_markers_mark_events_while_the_commission_drives(model, monkeypatch, tmp_path):
+    """A main power cut or an NRST reset happens while the wheel turns: Enter marks it in the same process's record,
+    and analyze reads the timeline from it."""
+    calls = {"n": 0}
+
+    def reader(bench):
+        def poll():
+            calls["n"] += 1
+            nonzero = any(k == "COMMISSION" and m is not None and m.duty_e4 != 0
+                          for k, _t, m in bench.written.values())
+            if nonzero and not any(r.get("t") == "marker" for r in rows(bench)):
+                bench.emit({"t": "marker", "host_ns": bringup.time.monotonic_ns(), "label": "power"})
+        return poll
+
+    monkeypatch.setattr(bringup, "_marker_reader", reader)
+    b = model()
+    res = bringup.execute(args(markers=True), b)
+    assert res["result"] == "ok", res
+    marks = [r for r in rows(b) if r.get("t") == "marker"]
+    assert len(marks) == 1 and calls["n"] > 0
+    first_on = min(t for k, t, m in b.written.values() if k == "COMMISSION" and m.duty_e4 != 0)
+    assert marks[0]["host_ns"] >= first_on  # marked while driving
+    rec = tmp_path / "run.jsonl"
+    rec.write_text(b.out.getvalue(), encoding="utf-8")
+    out = bringup.analyze(rec, 0, "power", {})
+    assert out["result"] == "ok" and out["marker"] == "power"
+
+
+def rows(bench):
+    import json as _json
+
+    return [_json.loads(x) for x in bench.out.getvalue().splitlines() if x.strip()]
+
+
+def test_the_marker_reader_starts_only_after_the_confirmation(model, monkeypatch):
+    """The reader reads stdin: installed before the 'yes' it would take the operator's confirmation line."""
+    seen = {}
+
+    def confirm(a, what):
+        seen["poll_at_confirm"] = b.poll
+
+    monkeypatch.setattr(bringup, "_confirm", confirm)
+    monkeypatch.setattr(bringup, "_marker_reader", lambda bench: (lambda: None))
+    b = model()
+    bringup.execute(args(markers=True, yes=False), b)
+    assert seen["poll_at_confirm"] is None and b.poll is not None
+
+
+def test_without_markers_nothing_reads_stdin(model, monkeypatch):
+    monkeypatch.setattr(bringup, "_marker_reader", lambda bench: pytest.fail("reader installed"))
+    b = model()
+    assert bringup.execute(args(), b)["result"] == "ok"
+    assert b.poll is None
+
+
+def test_the_commission_cli_takes_markers_and_analyze_says_its_marker_count_from_zero(capsys):
+    ap_args = ["commission", "--device", "/dev/null", "--out", "/dev/null", "--axis", "L", "--duty", "0.1",
+               "--seconds", "1.5", "--power-switch-in-hand", "--markers"]
+    import unittest.mock as um
+    with um.patch.object(bringup, "ReconnectingLink"), um.patch.object(bringup, "execute",
+                                                                       return_value={}) as ex:
+        bringup.main(ap_args)
+    assert ex.call_args[0][0].markers is True
+    with pytest.raises(SystemExit):
+        bringup.main(["analyze", "--help"])
+    help_text = capsys.readouterr().out
+    assert "0 = the first" in help_text and "-1 = the last" in help_text
+
+
+def test_analyze_answers_a_marker_out_of_range(tmp_path):
+    rec = tmp_path / "run.jsonl"
+    rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
+    out = bringup.analyze(rec, 1, "power", {})
+    assert out == {"result": "no_marker", "markers": 1, "asked": 1}
+
+
+def test_the_marker_reader_never_blocks_on_a_partial_line():
+    """Codex P2: on a canonical tty a label flushed with Ctrl-D is readable without a newline; a readline() would
+    wait for one and stall the drive loop. The reader takes the bytes there are and marks only whole lines."""
+    master, slave = os.openpty()  # the slave in its default canonical mode, like a terminal
+    try:
+        out = io.StringIO()
+        b = bringup.Bench(PtyLink(master), out, commission=True)
+        poll = bringup._marker_reader(b, fd=slave)
+        os.write(master, b"power\x04")  # a label, Ctrl-D: readable, no newline
+        bringup.time.sleep(0.05)
+        t0 = bringup.time.monotonic()
+        poll()
+        assert bringup.time.monotonic() - t0 < 0.02
+        assert "marker" not in out.getvalue()
+        os.write(master, b"\n")
+        bringup.time.sleep(0.05)
+        poll()
+        os.write(master, b"\nnrst\n")  # an empty line (plain Enter) and a label, in one read
+        bringup.time.sleep(0.05)
+        poll()
+        marks = [json.loads(x) for x in out.getvalue().splitlines() if '"marker"' in x]
+        assert [m["label"] for m in marks] == ["power", "", "nrst"]
+        t1 = bringup.time.monotonic()
+        poll()  # nothing waiting: returns at once
+        assert bringup.time.monotonic() - t1 < 0.02
+        os.write(master, b"\x04")  # Ctrl-D on an empty line: not the end of the markers
+        bringup.time.sleep(0.05)
+        poll()
+        os.write(master, b"again\n")
+        bringup.time.sleep(0.05)
+        poll()
+        marks = [json.loads(x) for x in out.getvalue().splitlines() if '"marker"' in x]
+        assert [m["label"] for m in marks][-1] == "again"
+    finally:
+        os.close(master)
+        os.close(slave)
