@@ -24,8 +24,7 @@ static uint32_t g_ticks;
 static void on_tick(void)
 {
     fw_app_tick(&g_app);
-    kth_spi_start_bundle(); /* frames for the next cycle (board design 3.4) */
-    adc_start();
+    board_hal_tick_end();
     g_ticks++;
     if (g_ticks % 500u == 0u) {
         led_toggle(); /* 1 Hz heartbeat */
@@ -51,7 +50,7 @@ int board_main(void)
     if (!board_config_valid(cfg)) {
         led_fail_forever(8);
     }
-    const fw_hal *hal = board_hal_init();
+    const fw_hal *hal = board_hal_init(cfg);
     iwdg_kick();
     if (!fw_app_init(&g_app, hal, cfg, STATE_PERIOD_MS, boot_id, (uint8_t)reset_cause)) {
         led_fail_forever(9);

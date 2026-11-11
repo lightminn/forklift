@@ -11,7 +11,13 @@ int main(void)
     /* IPROPI on the ADC pins is unprotected on schematic V1.0: outputs stay locked by default
        (plan 5 precondition, lead decision Q6). */
     CHECK(c->outputs_locked);
-    CHECK(!c->hil_plant);
+#if defined(FW_BUILD_hil)
+    CHECK(c->hil_plant && !c->commission_build); /* board design 9 */
+#elif defined(FW_BUILD_commission)
+    CHECK(c->commission_build && !c->hil_plant);
+#else
+    CHECK(!c->hil_plant && !c->commission_build);
+#endif
     CHECK(!c->estop_wired); /* no e-stop net on schematic V1.0 */
     CHECK(kth_raw_zero_outside_range(&c->steer));
     CHECK(kth_raw_zero_outside_range(&c->lift));

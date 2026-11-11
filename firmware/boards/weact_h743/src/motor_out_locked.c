@@ -63,7 +63,11 @@ void motor_out_apply(const drive_outputs *out)
 {
     (void)out;
     drive_levels();
+#if defined(FW_BUILD_hil)
+    GPIOB->BSRR = PB_LOW << 16; /* HIL: the drivers are never woken (board design 3.6, 9) */
+#else
     GPIOB->BSRR = PIN(0); /* nSLEEP stays high once woken */
+#endif
 }
 
 void motor_out_wake_drivers(void)

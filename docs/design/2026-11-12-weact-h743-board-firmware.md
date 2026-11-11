@@ -261,9 +261,9 @@ LPTIM 두 개(두 번 읽기), KTH 두 프레임과 그 신선도(축별 완료 
 `FW_BUILD=hil`: 출력 잠금, nSLEEP low, `read_inputs` 를 MCU 안의 모형이 채운다 — 바퀴(1차 지연 + 계산 듀티), KTH 프레임(조향·승강 위치 적분), ADC(듀티 비례), nFAULT high, DRV SPI 는 모형이 응답(`0xC0` 상태). 호스트 빌드 `mcu_model.c` 의 모형을 옮긴다. 고장 주입(엔코더 정지·부호 반전·튐, 링크 끊김)은 빌드 상수로 켜는 시험용 빌드에서만.
 
 - **시운전 상한과 DISARM**(Codex 2라운드, 계약 3.4 정정 2026-11-12): 상한 `STOPPING` 에서도 `DISARM` 은 바로 `DISARMED`(채널별 정지 상태)로 간다. 재무장 금지는 줄지 않는다. 그래서 상한과 `DISARM` 이 같은 주기에 오면 전기 제동이 한 주기도 걸리지 않을 수 있다(`safe_brake=false` 면 코스트). S5 에 **최대 허용 시운전 출력에서 상한 직후 DISARM·보류 중 DISARM** 의 바퀴 정지 시간·거리 측정을 넣고, 코스트가 문턱을 넘으면 그 축의 `safe_brake` 나 시운전 한계를 고친다.
-- **S5 의 IWDG 강제 시험용 빌드**(Codex P3): 주 루프를 멈추는 것으로는 TIM6 주기가 계속 갱신하므로 시험이 되지 않는다. 컴파일 시점 옵션 `FW_TEST_IWDG_STALL` 이 켜진 빌드는 정해진 링크 신호 없이도, 부팅 N 초 뒤 TIM6 주기와 갱신을 멈춘다. 이 빌드는 시험 전용이며 STATE flags 로는 구별되지 않으므로 ELF 이름과 USB 제품 문자열로 표시한다.
+- **S5 의 IWDG 강제 시험용 빌드**(Codex P3): 주 루프를 멈추는 것으로는 TIM6 주기가 계속 갱신하므로 시험이 되지 않는다. 컴파일 시점 옵션 `FW_TEST_IWDG_STALL=N`(초, 1–60)이 켜진 빌드는 정해진 링크 신호 없이도, 부팅 N 초 뒤 TIM6 주기와 갱신을 멈춘다. 출력은 건드리지 않는다 — 리셋이 출력을 끊는지가 시험 대상이다. 이 빌드는 시험 전용이며 STATE flags 로는 구별되지 않으므로 ELF 이름(`fw_iwdg_stall.elf`)과 빌드 정체·USB 제품 문자열(`<빌드>+iwdg-stall-Ns`)로 표시한다. **출력 잠금을 강제한다**(총괄 조건 2026-11-12): `FW_MOTOR_OUTPUT=1` 과 함께면 구성 단계에서 거부하고, 그래서 `STATE.flags.outputs_locked`(bit6)가 서서 실차 실행기가 텔레옵·자율을 거부한다 — 둘 다 시험으로 고정한다.
 
-- **재무장 보류의 HIL 확인**(총괄 배정 2026-11-12): 회귀 시험 v2r6 이 고정한 동작 — 시운전 상한 뒤 보류 중 `ARM` 거부(`reject_reason` 11 `stopping`)와 보류 만료 시각이 `DISARM`·`CLEAR_FAULTS` 로 바뀌지 않음 — 을 B4 의 HIL 빌드에서 호스트가 받은 `STATE`·거부 코드로 확인한다(실기 도구에는 넣지 않는다).
+- **재무장 보류의 보드 확인**(총괄 결정 2026-11-12 (A), 앞선 "HIL 빌드에서 확인" 배정을 대체): 회귀 시험 v2r6 이 고정한 동작 — 시운전 상한 뒤 보류 중 `ARM` 거부(`reject_reason` 11 `stopping`)와 보류 만료 시각이 `DISARM`·`CLEAR_FAULTS` 로 바뀌지 않음 — 을 확인 스크립트(`tools/`, 실기 bring-up 도구와 별개)가 호스트가 받은 `STATE`·거부 코드로 본다. 재무장 보류는 시운전 상한의 기능인데 코어는 `hil_plant`+`commission_build` 를 거부하므로(코어 설계 27행, 이 규칙은 그대로 둠) HIL 빌드로는 할 수 없다. 대상은 **출력 잠금 시운전 빌드**(`FW_BUILD=commission`, `FW_MOTOR_OUTPUT=0`)를 올린 실제 보드이고, 센서가 연결된 S2 벤치에서 돌린다(맨 보드는 KTH 무효로 ARM 이 안 될 수 있음). 출력이 잠긴 비 HIL 빌드는 stuck·polarity 를 판정하지 않으므로 바퀴가 안 돌아도 결함이 나지 않는다. CI 는 같은 스크립트를 호스트 모형(`mcu_model --commission-build 1 --outputs-locked 1`)에 돌린다.
 
 ## 10. 하드웨어 없이 하는 확인
 

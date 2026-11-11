@@ -233,6 +233,8 @@ def test_c_frames_decode_in_python_and_match_bytes(firmware_build):
 
 
 def test_board_configuration_test_is_built(firmware_build):
-    """The WeAct board's real drive_config is checked by its own C test (board design 3.7)."""
+    """The WeAct board's real drive_config is checked by its own C test, once per build kind
+    (board design 2.2, 3.7, 9)."""
     result = subprocess.run(["ctest", "-N"], cwd=firmware_build, capture_output=True, text=True)
-    assert "test_weact_h743_board_config" in result.stdout
+    for kind in ("normal", "commission", "hil"):
+        assert f"test_weact_h743_board_config_{kind}" in result.stdout

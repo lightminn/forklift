@@ -5,20 +5,22 @@
 
    usage: mcu_model --link PATH [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
                     [--estop-release-ms N] [--silent-at-ms N]
-                    [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T --hand-turn-duration-ms D]
+                    [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
+   --hand-turn-duration-ms D]
                     [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
                     [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1]
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
    only; it is not an IWDG and proves nothing about output cut-off).
-   --hand-turn-*: a known encoder trajectory independent of the drive (bring-up tool 1's CPR test): from T ms
-   the wheel's counts advance by N wheel revolutions at an even rate over D ms, forward rolling, whatever the
-   outputs.
-   --commission-build 1: an FW_COMMISSION build (COMMISSION only; synthetic duty limit 0.15 and time limit
-   2000 ms, the plan's proposals, or --commission-time-ms). --outputs-locked 1: the outputs_locked build bit
-   (the model's plant still follows the outputs the core computes). --encoder-sign-flip W: wheel W's counts run
-   against its motion (a wrong encoder sign for the commissioning tool's tests). --encoder-test-thresholds 1:
-   stuck/polarity judged from duty 0.05 within 100-300 ms, so a commissioning-limited duty can raise the bits. */
+   --hand-turn-*: a known encoder trajectory independent of the drive (bring-up tool 1's CPR test):
+   from T ms the wheel's counts advance by N wheel revolutions at an even rate over D ms, forward
+   rolling, whatever the outputs.
+   --commission-build 1: an FW_COMMISSION build (COMMISSION only; synthetic duty limit 0.15 and time
+   limit 2000 ms, the plan's proposals, or --commission-time-ms). --outputs-locked 1: the
+   outputs_locked build bit (the model's plant still follows the outputs the core computes).
+   --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
+   commissioning tool's tests). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
+   within 100-300 ms, so a commissioning-limited duty can raise the bits. */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -32,6 +34,7 @@
 #include <unistd.h>
 
 #include "fw/app.h"
+#include "plant.h"
 #include "vehicle_config.h"
 
 #define TWO_PI 6.28318530717958647692
@@ -40,20 +43,12 @@
 typedef struct {
     int fd;
     uint64_t t0_ns, now_ns;
-    double wheel_rad_s[2], wheel_counts[2];
-    double steer_rad, lift_m;
+    plant p; /* the shared vehicle model (firmware/plant, board design 9) */
     drive_outputs out;
-    uint8_t regs[DRIVE_CH_COUNT][0x0E];
-    bool nfault_low[DRIVE_CH_COUNT];
-    bool spi_done;
-    uint8_t spi_ch;
-    uint32_t spi_tag;
-    uint16_t spi_rx;
     uint8_t tx[TX_CAP];
     size_t tx_len;
     long fault_at_ms, estop_at_ms, estop_release_ms, silent_at_ms;
     long hand_wheel, hand_revs, hand_at_ms, hand_duration_ms;
-    long enc_flip;
     bool fault_fired;
 } board;
 
@@ -83,16 +78,6 @@ static bool silent(void)
     return B.silent_at_ms >= 0 && elapsed_ms() >= B.silent_at_ms;
 }
 
-static uint16_t kth_frame(double joint, double sensor_per_joint)
-{
-    double a = fmod(joint * sensor_per_joint, TWO_PI);
-    if (a < 0) {
-        a += TWO_PI;
-    }
-    uint16_t angle = (uint16_t)((uint32_t)lround(a * 4096.0 / TWO_PI) & 0x0FFFu);
-    return (uint16_t)((angle << 4) | crc4_kth7801(angle, KTH_CRC_G704_BYTES));
-}
-
 /* ---- HAL ---------------------------------------------------------------------------- */
 static uint32_t hal_now(void *ctx)
 {
@@ -103,21 +88,11 @@ static uint32_t hal_now(void *ctx)
 static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
-    for (int i = 0; i < 2; i++) {
-        double c = B.enc_flip == i ? -B.wheel_counts[i] : B.wheel_counts[i];
-        in->wheel_hw[i] = (uint16_t)(int64_t)llround(c);
-    }
-    in->abs_frame[0] = kth_frame(B.steer_rad, 1.0);
-    in->abs_frame[1] = kth_frame(B.lift_m, 10.0);
-    in->abs_fresh[0] = in->abs_fresh[1] = true;
-    in->adc_fresh = true;
     if (B.fault_at_ms >= 0 && !B.fault_fired && elapsed_ms() >= B.fault_at_ms) {
         B.fault_fired = true;
-        B.nfault_low[DRIVE_CH_L] = true;
+        B.p.nfault_low[DRIVE_CH_L] = true;
     }
-    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
-        in->nfault_low[ch] = B.nfault_low[ch];
-    }
+    plant_inputs(&B.p, in);
     long t = elapsed_ms();
     in->estop_active = B.estop_at_ms >= 0 && t >= B.estop_at_ms &&
                        (B.estop_release_ms < 0 || t < B.estop_release_ms);
@@ -171,32 +146,13 @@ static void flush_tx(void)
 static bool hal_spi_start(void *ctx, uint8_t ch, uint16_t tx, uint32_t tag)
 {
     (void)ctx;
-    uint8_t addr = (uint8_t)((tx >> 8) & 0x3Fu);
-    bool rd = (tx & 0x4000u) != 0;
-    if (!rd && addr < sizeof B.regs[0]) {
-        B.regs[ch][addr] = (uint8_t)tx;
-        if (addr == DRV8244_REG_COMMAND && (tx & 0x80u)) { /* CLR_FLT */
-            B.nfault_low[ch] = false;
-        }
-    }
-    B.spi_done = true;
-    B.spi_ch = ch;
-    B.spi_tag = tag;
-    B.spi_rx = (uint16_t)(0xC000u | ((rd && addr < sizeof B.regs[0]) ? B.regs[ch][addr] : 0));
-    return true;
+    return plant_spi_start(&B.p, ch, tx, tag);
 }
 
 static bool hal_spi_take(void *ctx, uint8_t *ch, uint16_t *rx, uint32_t *tag)
 {
     (void)ctx;
-    if (!B.spi_done) {
-        return false;
-    }
-    B.spi_done = false;
-    *ch = B.spi_ch;
-    *rx = B.spi_rx;
-    *tag = B.spi_tag;
-    return true;
+    return plant_spi_take(&B.p, ch, rx, tag);
 }
 
 static void hal_kick(void *ctx)
@@ -208,34 +164,23 @@ static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
     hal_spi_take, hal_kick};
 
-/* ---- plant: first-order wheels, integrating steering and lift ------------------------- */
-static const double WHEEL_TAU_S = 0.05;
-static const double STEER_RAD_S_PER_DUTY = 1.0;
-static const double LIFT_M_S_PER_DUTY = 0.1;
-
+/* ---- plant: the shared model, plus the host-only hand turn ------------------------------ */
 static void step_plant(double dt)
 {
-    const double k = (double)FW_MAX_WHEEL_RAD_S * 1.25; /* full duty reaches 1.25 x the limit */
-    const double cpr[2] = {(double)FW_WHEEL_COUNTS_PER_REV_L, (double)FW_WHEEL_COUNTS_PER_REV_R};
-    for (int i = 0; i < 2; i++) {
-        double duty = B.out.drvoff[i] ? 0.0 : (double)B.out.duty[i];
-        B.wheel_rad_s[i] += (k * duty - B.wheel_rad_s[i]) / WHEEL_TAU_S * dt;
-        B.wheel_counts[i] += B.wheel_rad_s[i] * dt * cpr[i] / TWO_PI;
-    }
+    plant_step(&B.p, &B.out, dt);
     if (B.hand_wheel >= 0 && B.hand_wheel < 2 && B.hand_duration_ms > 0) {
         long t = elapsed_ms() - B.hand_at_ms;
-        if (t >= 0 && t < B.hand_duration_ms) { /* a hand turn: counts only, the modelled rate untouched */
+        if (t >= 0 &&
+            t < B.hand_duration_ms) { /* a hand turn: counts only, the modelled rate untouched */
             const int w = (int)B.hand_wheel;
-            B.wheel_counts[w] += cpr[w] * (double)B.hand_revs * dt / ((double)B.hand_duration_ms / 1000.0);
+            B.p.wheel_counts[w] += B.p.counts_per_rev[w] * (double)B.hand_revs * dt /
+                                   ((double)B.hand_duration_ms / 1000.0);
         }
     }
-    double ds = B.out.drvoff[DRIVE_CH_M] ? 0.0 : (double)B.out.duty[DRIVE_CH_M];
-    double dl = B.out.drvoff[DRIVE_CH_H] ? 0.0 : (double)B.out.duty[DRIVE_CH_H];
-    B.steer_rad += ds * STEER_RAD_S_PER_DUTY * dt;
-    B.lift_m += dl * LIFT_M_S_PER_DUTY * dt;
 }
 
-static drive_config make_config(bool commission, long commission_time_ms, bool locked, bool enc_test)
+static drive_config make_config(bool commission, long commission_time_ms, bool locked,
+                                bool enc_test)
 {
     drive_config c;
     memset(&c, 0, sizeof c);
@@ -362,16 +307,13 @@ int main(int argc, char **argv)
     B.hand_revs = arg_long(argc, argv, "--hand-turn-revs", 0);
     B.hand_at_ms = arg_long(argc, argv, "--hand-turn-ms", 0);
     B.hand_duration_ms = arg_long(argc, argv, "--hand-turn-duration-ms", 0);
-    B.enc_flip = arg_long(argc, argv, "--encoder-sign-flip", -1);
+    long enc_flip = arg_long(argc, argv, "--encoder-sign-flip", -1);
     bool commission = arg_long(argc, argv, "--commission-build", 0) != 0;
     long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
     bool enc_test = arg_long(argc, argv, "--encoder-test-thresholds", 0) != 0;
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
     uint32_t boot_id = (uint32_t)arg_long(argc, argv, "--boot-id", 0x0B00700L);
-    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
-        B.nfault_low[ch] = true; /* drivers wake with a fault latched until CLR_FLT */
-    }
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
     signal(SIGPIPE, SIG_IGN);
@@ -379,6 +321,8 @@ int main(int argc, char **argv)
     static drive_config cfg;
     static fw_app app;
     cfg = make_config(commission, commission_time_ms, locked, enc_test);
+    plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
+    B.p.enc_flip = (int)enc_flip;
     B.t0_ns = B.now_ns = mono_ns();
     if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id, DRIVE_RESET_POWER)) {
         fprintf(stderr, "fw_app_init refused the configuration\n");
