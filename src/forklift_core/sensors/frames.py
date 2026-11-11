@@ -107,7 +107,11 @@ def planar_scan_from_laserscan(ranges: ArrayLike, *, angle_min_rad: float, angle
         s0, s1 = (_finite_scalar(v, "own sector") for v in sector)
         if not (-math.pi <= s0 < s1 <= math.pi):
             raise ValueError("an own sector needs -pi <= start < end <= pi")
-        status[(wrapped >= s0) & (wrapped <= s1)] = BeamStatus.OWN
+        # both ends included; -pi and +pi are the same direction (the wrap gives -pi), so test both readings
+        inside = (wrapped >= s0) & (wrapped <= s1)
+        at_pi = np.isclose(wrapped, -math.pi, rtol=0.0, atol=1e-12)
+        inside |= at_pi & (s1 >= math.pi)
+        status[inside] = BeamStatus.OWN
     ranges_m = np.where(status == BeamStatus.HIT, r, np.nan)
     if isinstance(received_host_ns, bool) or not isinstance(received_host_ns, int):
         raise ValueError("received_host_ns must be an integer")
@@ -158,12 +162,17 @@ def rgbd_frame_from_aligned(*, color: ArrayLike, depth_raw: ArrayLike, depth_sca
         raise ValueError(f"colour must be uint8 {(*shape, 3)}")
     if raw.dtype.kind not in "ui" or raw.shape != shape:
         raise ValueError(f"raw depth must be integer units of shape {shape}")
+    with np.errstate(over="ignore", under="ignore"):
+        scale32 = np.float32(scale)
+    if not (np.isfinite(scale32) and scale32 > 0):
+        raise ValueError("the depth scale is not a positive finite float32")
     unknown = raw <= 0
-    with np.errstate(over="ignore"):
-        depth = raw.astype(np.float32) * np.float32(scale)
+    with np.errstate(over="ignore", under="ignore"):
+        depth = raw.astype(np.float32) * scale32
     depth[unknown] = np.nan
-    if not np.isfinite(depth[~unknown]).all():
-        raise ValueError("the depth scale overflows float32 metres")
+    valid = depth[~unknown]
+    if not (np.isfinite(valid).all() and (valid > 0).all()):
+        raise ValueError("the depth scale gives pixels that are not positive finite float32 metres")
     if isinstance(received_host_ns, bool) or not isinstance(received_host_ns, int):
         raise ValueError("received_host_ns must be an integer")
     return RgbdFrame(rgb, depth, intrinsics, cs, ds, stamp_domain, received_host_ns, scale, calibration_source)

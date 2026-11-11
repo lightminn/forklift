@@ -47,7 +47,8 @@ def test_own_sectors_mark_the_body_whatever_the_reading():
     s = scan([1.0, 0.3, INF, 2.0], own_sectors_rad=((-1.7, -1.4), (3.0, math.pi)), own_mask_source="S7 empty forks")
     assert s.own_mask_source == "S7 empty forks"
     assert s.status[1] == BeamStatus.OWN  # -pi/2 is inside (-1.7, -1.4)
-    assert s.status[0] == BeamStatus.HIT and s.status[2] == BeamStatus.NO_RETURN
+    assert s.status[0] == BeamStatus.OWN  # -pi is +pi: inside (3.0, pi], both ends included
+    assert s.status[2] == BeamStatus.NO_RETURN and s.status[3] == BeamStatus.HIT
     assert math.isnan(s.ranges_m[1])
 
 
@@ -101,6 +102,8 @@ def test_an_aligned_pair_becomes_metres_with_zero_as_unknown():
     dict(calibration_source=""),
     dict(stamp_domain="host"),
     dict(depth_scale_m_per_unit=1e100),  # overflows float32 metres
+    dict(depth_scale_m_per_unit=1e-50),  # underflows to 0 m
+    dict(depth_scale_m_per_unit=1e100, depth_raw=np.zeros((3, 4), np.uint16)),  # refused even with no pixel
 ])
 def test_bad_pairs_are_refused(bad):
     with pytest.raises(ValueError):
@@ -115,3 +118,11 @@ def test_negative_raw_depth_is_unknown_and_the_frame_owns_its_buffers():
     assert math.isnan(f.depth_m[1, 2]) and f.depth_m[0, 0] == pytest.approx(1.0)
     color[0, 0, 0] = 255
     assert f.rgb[0, 0, 0] == 0 and f.stamp_domain == "ros"
+
+
+def test_an_own_sector_ending_at_pi_includes_the_minus_pi_beam():
+    """-pi and +pi are one direction: a sector up to +pi covers the first beam at -pi (Codex 4c-1 re-review P2-1)."""
+    s = scan([INF, 1.0, 1.0, 1.0], own_sectors_rad=((3.0, math.pi),), own_mask_source="m")
+    assert s.status[0] == BeamStatus.OWN and s.status[1] == BeamStatus.HIT
+    s2 = scan([INF, 1.0, 1.0, 1.0], own_sectors_rad=((-math.pi, -3.0),), own_mask_source="m")
+    assert s2.status[0] == BeamStatus.OWN
