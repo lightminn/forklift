@@ -18,6 +18,7 @@ def test_the_environment_split():
                          "another job on the node: x"])
     assert k["environment"] == ["other users' CPU over 1 core"] and k["mission"] == ["probe exit 1"]
     assert len(k["notes"]) == 2
+    assert B.split_invalid(["probe exit None", "session not started (no trace of running)"], ran=False)["mission"] == []
 
 
 def test_exposure_counts_only_this_missions_answers():
@@ -41,12 +42,16 @@ def rows_(n, dt=1 / 120):
 
 def test_the_stop_after_a_failed_mission():
     assert B.stop_after(rows_(120), 0.0, [(0.0, "STOPPED")]) == "safe_failure"
-    assert B.stop_after(rows_(50), 0.0, []) == "observed_end"  # 0.41 s
+    assert B.stop_after(rows_(50), 0.0, [(0.0, "STOPPED")]) == "observed_end"  # 0.41 s
+    assert B.stop_after(rows_(120), 0.0, []) == "observed_end"  # no mode known
     assert B.stop_after(rows_(3, dt=1.0), 0.0, []) == "observed_end"  # standing truth but no control in between
     moving = [[k / 120, 0, 0, 0, 0.002 * k, 0, 0] for k in range(120)]
     assert B.stop_after(moving, 0.0, []) == "observed_end"
     assert B.stop_after(rows_(120), 0.0, [(0.3, "AUTO")]) == "observed_end"  # driving again after the end
     assert B.stop_after(rows_(120), None, []) == "observed_end"
+    # AUTO up to 0.8 s after the end, the record ends at 1.0 s: only 0.2 s confirmable
+    assert B.stop_after(rows_(121), 0.0, [(-1.0, "AUTO"), (0.8, "STOPPED")]) == "observed_end"
+    assert B.stop_after(rows_(240), 0.0, [(-1.0, "AUTO"), (0.8, "STOPPED")]) == "safe_failure"  # 0.8 -> 2.0 s
 
 
 LOW_OK = {"rows": {"truck_physical": {"min_m": 0.2}}, "physical_arc_violations": []}

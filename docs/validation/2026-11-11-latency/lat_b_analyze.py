@@ -54,12 +54,16 @@ def _json(path):
         return None
 
 
-def split_invalid(invalid: list) -> dict:
+REGISTERED_LAUNCHER = {"RETURN_START": "boxed", "NEAR_END_STAND": "on", "map": True}  # plan 3.2
+
+
+def split_invalid(invalid: list, ran: bool = True) -> dict:
+    """A probe's exit is the mission's only for a session that ran; one that never started is the environment's."""
     env, notes, mission = [], [], []
     for x in invalid:
         if x.startswith(NOTE_PREFIXES):
             notes.append(x)
-        elif x.startswith("probe exit"):
+        elif x.startswith("probe exit") and ran:
             mission.append(x)
         else:
             env.append(x)
@@ -91,16 +95,23 @@ def stop_after(control_rows: list, ended_s: float | None, modes: list) -> str:
     rows = [r for r in control_rows if r[0] >= ended_s]
     if len(rows) < 2:
         return "observed_end"
-    later = [m for t, m in modes if t is not None and t >= ended_s]
-    before = [m for t, m in modes if t is not None and t < ended_s]
-    current = before[-1] if before else None
-    if any(m in DRIVING_MODES for m in later) or (not later and current in DRIVING_MODES):
-        return "observed_end"  # driving again (or still) after the mission's end
+    events = sorted((t, m) for t, m in modes if t is not None)
+
+    def mode_at(t):
+        last = None
+        for et, m in events:
+            if et <= t:
+                last = m
+            else:
+                break
+        return last  # None: unknown, never confirmable
+
     still_since = None
     for a, b in zip(rows, rows[1:]):
         dt = b[0] - a[0]
-        if dt > CONTROL_GAP_S:
-            still_since = None  # a broken control record restarts the confirmation
+        mode = mode_at(a[0])
+        if dt > CONTROL_GAP_S or mode is None or mode in DRIVING_MODES:
+            still_since = None  # a broken control record, an unknown or a driving mode restarts the confirmation
             continue
         v = ((b[4] - a[4]) ** 2 + (b[5] - a[5]) ** 2) ** 0.5 / dt if dt > 0 else 0.0
         still_since = (a[0] if still_since is None else still_since) if v < STILL_MPS else None
@@ -240,6 +251,8 @@ def main(argv=None) -> int:
         ran = (run / "live" / "epoch_1" / "run.log").exists() or (rd / "result.json").exists()
         if not ran:
             invalid.append("session not started (no trace of running)")
+        launcher = {**c.launcher_values(run), "map": (_json(rd / "result.json") or {}).get("arguments", {}).get(
+            "slam_map_bundle") is not None}
         session = _json(rd / "result.json") or {}
         mres = _json(rd / "missions" / "m1" / "result.json") or {}
         mrec_all = _json(rd / "missions" / "m1" / "records.json")
@@ -253,9 +266,11 @@ def main(argv=None) -> int:
                 arm.append(f"runner --latency-plan-ms {got_arg}, registered {d}")
             if (d and got_inj != float(d)) or (not d and got_inj is not None):
                 arm.append(f"injection record delay {got_inj}, registered {d}")
-        row = {"name": name, "delay_ms": d, "ran": ran, "kinds": split_invalid(invalid), "arm_problems": arm,
-               "launcher": {**c.launcher_values(run),
-                            "map": (session.get("arguments") or {}).get("slam_map_bundle") is not None},
+        if ran and session:
+            arm += [f"{k}={launcher.get(k)}, registered {v}" for k, v in REGISTERED_LAUNCHER.items()
+                    if launcher.get(k) != v]
+        row = {"name": name, "delay_ms": d, "ran": ran, "kinds": split_invalid(invalid, ran), "arm_problems": arm,
+               "launcher": launcher,
                "mission_done": (outcome == "done") if ran else None, "mission_outcome": outcome,
                "mission_reason": (mres.get("result") or {}).get("reason"),
                "exposure": exposure_of(session, mrec, d) if outcome == "done" else None,
