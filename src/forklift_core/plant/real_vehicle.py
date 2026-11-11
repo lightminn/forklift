@@ -29,6 +29,7 @@ from forklift_core.localization.wheel_odometry import advance_arc
 
 SCHEMA = "real_vehicle/1"
 CURVATURE_EDGE_TOL = 1e-9  # numerical noise at the reachable edge is normalised onto it, nothing more
+FLOAT32_EDGE_ULPS = 2.0**-22  # relative: two float32 steps -- an edge angle sent or read as an mcu-link f32
 _TOP = {"schema", "chassis_model", "wheel_counts", "wheel_radius", "steering_map", "wheel_rate_limit"}
 _PROV_KEYS = {"source", "measured", "until"}
 
@@ -68,8 +69,18 @@ class SteeringMap:
         return self.curvatures_inv_m[0], self.curvatures_inv_m[-1]
 
     def curvature(self, angle_rad: float) -> float | None:
-        """None outside the map (non-finite or beyond its ends): no extrapolation."""
-        if not math.isfinite(angle_rad) or not self.angle_range[0] <= angle_rad <= self.angle_range[1]:
+        """None outside the map (non-finite or beyond its ends): no extrapolation. An angle that is
+        outside only by the float32 rounding of an end (the wire and the firmware header are f32)
+        reads as that end."""
+        if not math.isfinite(angle_rad):
+            return None
+        low, high = self.angle_range
+        tol = max(abs(low), abs(high)) * FLOAT32_EDGE_ULPS
+        if low - tol <= angle_rad < low:
+            angle_rad = low
+        elif high < angle_rad <= high + tol:
+            angle_rad = high
+        if not low <= angle_rad <= high:
             return None
         if self.kind == "ideal_bicycle":
             return math.tan(angle_rad) / self.wheelbase_m
@@ -263,8 +274,10 @@ class RealOdometry:
     Each interval advances the mean of the two wheels' rotation x effective radius along the arc of
     its end points' mean curvature (as ``integrate_wheel_odometry_increments``). A new ``boot_id``,
     a steering reading outside the map (or non-finite), or an MCU-clock gap over ``max_gap_s`` drops
-    the reference: the counts moved meanwhile are not integrated, the next good sample only
-    re-references, and the step says continuity was broken. The pose itself is never reset here.
+    the reference: the counts moved meanwhile are not integrated and the step says continuity was
+    broken. A valid sample that ends a gap or starts a new boot is itself the new reference (the
+    next sample integrates from it); after an invalid steering reading the next valid sample only
+    re-references. The pose itself is never reset here.
     """
 
     def __init__(self, cfg: RealVehicleConfig, *, max_gap_s: float, initial_pose=(0.0, 0.0, 0.0)) -> None:

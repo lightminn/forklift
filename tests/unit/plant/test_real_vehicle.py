@@ -10,6 +10,7 @@ import pytest
 from forklift_core.control.path_tracking import AckermannGeometry, ackermann_command
 from forklift_core.localization.wheel_odometry import (
     AckermannOdometryGeometry,
+    advance_arc,
     integrate_wheel_odometry_increments,
 )
 from forklift_core.plant.real_vehicle import (
@@ -249,3 +250,54 @@ def test_calibration_id_follows_the_resolved_values(cfg):
     prov = {"source": "other", "measured": False, "until": "S2"}
     other = mapping(wheel_rate_limit={"rad_s": 8.0, "provenance": prov})
     assert real_vehicle_from_mapping(other, CHASSIS).calibration_id == cfg.calibration_id  # values only
+
+
+@pytest.mark.parametrize("table", [False, True])
+def test_map_ends_survive_the_float32_wire(cfg, table):
+    """The MCU reports q as an f32: a STATE at the map's end must not read as invalid (Codex K6 round 2)."""
+    if table:
+        sm = {"kind": "table", "points": [[-0.3000001, -0.33], [0.0, 0.0], [0.2800003, 0.36]], "provenance": PROV}
+        cfg = real_vehicle_from_mapping(mapping(steering_map=sm), CHASSIS)
+    for end in cfg.steering.angle_range:
+        wire = float(np.float32(end))
+        assert wire != end  # the case is real for these ends
+        assert cfg.steering.curvature(wire) == pytest.approx(cfg.steering.curvature(end))
+        o = odo(cfg)
+        o.update(0, 1, 0, 0, wire)
+        assert o.update(10_000, 1, 100, 100, wire).integrated
+    beyond = cfg.steering.angle_range[1] * (1 + 1e-5)
+    assert cfg.steering.curvature(beyond) is None
+
+
+def test_a_valid_sample_ending_a_gap_is_the_next_reference(cfg):
+    o = odo(cfg, max_gap_s=0.05)
+    o.update(0, 1, 0, 0, 0.0)
+    assert o.update(60_000, 1, 1000, 1000, 0.0).reason == "gap"
+    nxt = o.update(70_000, 1, 1100, 1100, 0.0)
+    assert nxt.integrated and o.pose[0] == pytest.approx(100 * 2 * math.pi / 327680 * 0.125)
+
+
+@pytest.mark.parametrize("speed,kappa", [(0.4, 0.25), (-0.3, -0.2), (5.0, 0.3), (-5.0, 0.1)])
+def test_unequal_sides_round_trip_through_counts(speed, kappa):
+    """Different radii and count scales per side: the commanded rates, turned into counts, integrate back
+    to the commanded (applied) speed and curvature."""
+    counts = {"left": {"counts_per_wheel_rev": 326000.0, "provenance": PROV},
+              "right": {"counts_per_wheel_rev": 328500.5, "provenance": PROV}}
+    radius = {"left": 0.124, "right": 0.1262, "provenance": PROV}
+    c = real_vehicle_from_mapping(mapping(wheel_counts=counts, wheel_radius=radius), CHASSIS)
+    d = rear_drive_command(speed, kappa, c)
+    assert isinstance(d, RearDrive)
+    assert max(abs(d.left_wheel_rad_s), abs(d.right_wheel_rad_s)) <= 8.0 + 1e-12
+    u_l, u_r = d.left_wheel_rad_s * 0.124, d.right_wheel_rad_s * 0.1262
+    assert (u_l + u_r) / 2 == pytest.approx(d.speed_mps)
+    assert (u_r - u_l) / (0.53 * d.speed_mps) == pytest.approx(d.curvature_inv_m)
+    o = odo(c)
+    dt = 0.01
+    o.update(0, 1, 0, 0, d.steering_rad)
+    n = 100
+    for k in range(1, n + 1):
+        cl = round(d.left_wheel_rad_s * k * dt * 326000.0 / (2 * math.pi))
+        cr = round(d.right_wheel_rad_s * k * dt * 328500.5 / (2 * math.pi))
+        o.update(k * 10_000, 1, cl, cr, d.steering_rad)
+    expected = advance_arc(0.0, 0.0, 0.0, d.speed_mps * n * dt, d.curvature_inv_m)
+    assert o.pose == pytest.approx(expected, abs=2e-5)

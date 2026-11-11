@@ -48,7 +48,7 @@ def test_fractional_counts_are_rounded_with_the_error_stated():
     assert "1.23 ppm" in text
 
 
-@pytest.mark.parametrize("value", [0.4, 2.0**32])
+@pytest.mark.parametrize("value", [0.4, 2.0**32, 10000.4])  # the last: in range, 4e-5 rounding
 def test_counts_outside_uint32_or_too_coarse_are_refused(value):
     counts = {side: {"counts_per_wheel_rev": value, "provenance": PROV} for side in ("left", "right")}
     with pytest.raises(ValueError):
