@@ -56,7 +56,8 @@ int board_main(void)
     cycles_init();
     led_init();
     if (!iwdg_runs_in_debug) {
-        led_fail_forever(10); /* DBG_IWDG1 would not clear: a debug halt could stop the IWDG */
+        led_fail_forever(11); /* DBG_IWDG1 would not clear (10 is the encoder ARROK timeout): a
+                                 debug halt could stop the IWDG */
     }
     g_clock_source = clock_init();
     iwdg_kick();
