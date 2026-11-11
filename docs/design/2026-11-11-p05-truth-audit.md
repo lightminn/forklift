@@ -141,6 +141,58 @@ rt 9920–9929(`rear`·`signed_speed`), rt 7680–7681(장애물 층 자세), rt
 - **4e-2 로 넘기는 조건 (장애물 층 강제)**: 남은 명령은 `command_speed` 에서 읽는데, 장애물 스위치가 꺼지면 slew 가 없어 이 값이 갱신되지 않는다. 실차 진입점은 무장 전에 장애물 층 존재와 `obstacle_act=True` 를 강제하고 실행 중 해제를 막는다(기본값만 켜 두는 것으로는 부족, Codex 4d-1 7차).
 - **4e-2 로 넘기는 열린 항목 (포켓 구간의 재개 조건)**: 안전 속도의 상한은 측정 오차·잔류 운동을 덮어야 하므로(`bound ≥ |signed|`) 정지 판정만으로 0 이 되지 않는다(엔코더는 창 안에 카운트 변화가 없어도 1 카운트/창 만큼의 상한이 남는다). 그래서 지금 규칙대로면 실차 포켓 구간은 반대쪽 잔류 운동이 있는 동안 계속 정지하고, 5 초 규칙으로 미션이 끝날 수 있다. 4e-2 는 상한을 보존한 채 반대쪽 잔류 운동을 검증하는 방법을 만들어야 한다 — 예: 실차 포켓 검사가 가능한 각 방향을 답한다(주행 방향은 요청 속도, 반대 방향은 상한으로). 그 전까지 실차 삽입은 3a 의 감독·저속·빈 포크 조건 안에서만 돈다.
 
+### 4-2. 4d-2a 설계 — 훅 계약과 EVAL 소비자 (Codex 설계 상의 반영)
+
+4d-2 는 둘로 나눈다(Codex). **4d-2a** 는 훅 분류·명시적 허용 목록·EVAL 소비자, **4d-2b** 는 HUMAN 전이·요청 수명·시간 제한·복구 근거 구별(4-3). Isaac 은 훅 호출 위치·횟수·순서를 그대로 둔다(게이트 29/29 + 전체 pytest). 실차 분기만 바꾼다.
+
+**1. 훅 계약** (`forklift_core/mission/hook_contract.py`)
+- core 가 쓰는 모든 훅 이름(지금 92개)을 등급과 함께 등록한다. 시험은 core 원문을 훑어 등록되지 않은 이름을 실패로 만든다(새 훅이 감사 없이 들어오지 못하게).
+- 등급별 동작:
+  - `CONTROL`(측정·계획·명령): 실차 구현으로 그대로 넘긴다.
+  - `RECORD`(기록·표시): 실차 구현으로 그대로 넘긴다(파일·콘솔).
+  - `EVAL`: base 를 읽지 않고 `None` 을 돌려주는 함수를 준다. 기록 전용 함수는 아무것도 하지 않는다.
+  - `HUMAN`: 위반 예외. 4d-2b 의 `operator_check` 로 바꾼다.
+  - `FALLBACK`·`TEST`·`SIM_ONLY`: 위반 예외.
+  - 등록되지 않은 이름: base 에 있어도 위반 예외(Codex P1).
+  - 선택 훅(`getattr(hooks, n, None)` 로 읽는 것)은 `optional=True` 로 따로 등록한다. 등록된 선택 훅만 `AttributeError` 를 내 기본값을 받는다. 등록되지 않은 이름의 `getattr` 도 위반 예외다.
+- `fail_closed_hooks(base)` 가 이 계약으로 감싼 객체를 돌려준다. 실차 진입점(4e-2)이 쓴다.
+- 혼합 훅(측정과 참값이 섞인 것)은 등급을 하나로 정하지 않는다. 실차 구현이 참값 필드를 `None` 으로 채운 같은 모양을 내도록 계약에 적는다. 대상: `cusp_heading_motion`(core 가 `**` 로 펼침), `far_recognition*`(4e-2 에서 참값 없는 구현).
+
+**2. 분류에서 주의할 것** (Codex P2-2·P2-3 표)
+- CONTROL 이지만 시뮬 구현이 참값을 쓰는 것. 실차 구현을 따로 만든다: `rear`·`signed_speed`·`cusp_standing`(SLAM 꺼짐 구현만 FALLBACK), `trace_ground`, `loaded_cargo_ok`(계획 채택·적재 출발 허가, HUMAN 근거 필요 — 4d-2b), `planning_target`(실차는 인식 결과만; core 의 `options.G2.planning_target` 직접 호출은 4e-2 조립에서 oracle 옵션 금지로 막음), `session_neighbour_rects`, `detect_pockets_expected`.
+- EVAL: `truth_rear`, `truth_relative_yaw`, `slam_error`, `insertion_measured`, `record_capture_evaluation`, `adoption_truth`.
+- `truth_obstacles`: 조건부 CONTROL. 실차에서 `grid_planning` 이 꺼져 있으면 도킹 진입에서 위반. 켜져 있으면 결과를 쓰지 않으므로 `None`.
+- HUMAN: `pallet_z`. FALLBACK: `truth_speed`·`truth_velocity`·`truth_yaw_rate`. TEST: `test_recovery_blocked`·`test_return_correction_drops`.
+- SIM_ONLY: `world`·`stage`·`export_scene`. CLOCK 인 `world.current_time` 은 4e-1 이 시계 훅으로 바꾼다.
+
+**3. EVAL 소비자의 `None`** (core). 호출은 그대로 두고 소비만 바꾼다.
+- JSON 기록에는 `null` 을 남긴다(필드를 빼지 않는다).
+- NPZ 에는 길이 0 배열과 `<name>_unjudgeable=True` 를 남긴다. `np.asarray(None, float)` 는 NaN 이 되므로 쓰지 않는다.
+- 자리별:
+  - `truth_rear`: 장애물 덤프, N9 기록(`rear_at_zero`·`rear_stopped`), 바닥판 기록, 계획 기록, 점유 덤프 네 곳, scene replan 기록.
+  - **도킹** 경로 전체: async 문맥의 `truth_rear` 튜플, `expected` 합성, 오차, 라운드 기록, 덤프. `None` 이면 평가 필드만 `null` 이고 도킹은 진행한다.
+  - `truth_relative_yaw` → 삽입 요 오차. `slam_error` → hold, 삽입 끝, 캡처. `insertion_measured`. 복귀 오차 `return_home_error`.
+  - `adoption_truth`: 필드를 빼지 않고 `null`.
+  - `cusp_heading_motion`: 실차 사전의 참값 필드 `null`.
+- 훅 밖:
+  - 캡처의 `truth_rear_capture`(core 5336): 실차는 추정 자세를 참값으로 적지 않고 `null`.
+  - `_scene_control_jump()`: 참값 열이 없으면 오차 0 대신 `null`.
+
+**4. 안전 소비자 하나 더** (Codex P2-3): cusp 정지 호 검사(core 6455)의 `max(|command|, |signed_speed|)`. 실차는 4d-1 의 `SafetySpeed` 규칙을 따른다. 무효면 정지. cap 은 상한과 명령 중 큰 값. 가능 방향이 둘이면 둘 다 검사한다. Isaac 은 지금 계산 그대로.
+
+**5. 시험**
+- 계약 시험: core 원문의 모든 훅 이름이 등록되어 있다. 등록되지 않은 이름과 EVAL 의 base 읽기를 막는다.
+- 가짜 실차 훅으로 다음이 예외 없이 지나가고 평가 필드가 `null` 인지 본다: 도킹 한 라운드, cusp 정지 확인, 덤프·기록 자리.
+
+### 4-3. 4d-2b 계약 (HUMAN, 다음 PR)
+
+- 다섯 자리(`pallet_z`)를 `_human_verdict(kind)` 로 모은다. 시뮬은 지금 식을 같은 순서로 평가한다.
+- 실차는 비차단 `operator_check(request) -> "wait" | "confirm" | "reject"` 를 쓴다. 다른 값(`None`·bool·임의 문자열)은 confirm 이 아니다.
+- 요청은 다음을 묶는다: kind, 목적, 미션 id·세대, phase·phase 시작, 복구 식별자, 요청 세대. 승강 재동작, 복구 대상 변경, 시간 초과는 확인을 무효화한다. 늦은 confirm 은 버린다.
+- 사람 대기와 승강 동작 시간을 구별한다. 목표 도달 실패는 동작 제한으로 다루고, 도달 뒤에는 승강을 유지한 채 확인을 기다린다. 대기 중에도 안전 틱·취소·SLAM 무효 처리는 돈다. `recover_lower` 의 20 s 제한은 유지한다(`begin_wait` 로 빼지 않는다).
+- 재개 시 `wait` 는 resuming 에서 바퀴 정지·승강 유지. `reject` 는 재개 거부 또는 `recovery_required`. 다시 내리기는 별도의 운용자 선택이다.
+- 접지 확인, 자동 retrace 허가, 수동 복구 종료 확인을 구별한다. 접지 confirm 으로 `trace_valid` 를 되살리지 않는다. 삽입 시작마다 `trace_valid=True` 로 되돌리는 기본값은 실차에서 쓰지 않는다(4e-2 와 경계).
+
 ## 4a. 이 감사가 기대는 다른 전제(agy ③, 해당 단계에서 다룸)
 
 - **LiDAR 가림 마스크는 적재물·승강 상태에 따라 달라진다.** S7 에서 빈 포크·적재 각 상태로 재고, 상태별 마스크를 쓴다(4c-1 `own_mask_source`).
