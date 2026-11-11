@@ -273,7 +273,12 @@ def test_the_real_sample_reads_the_latest_state_without_consuming_it():
 @pytest.mark.parametrize("steer,lift,ok_s,ok_l", [(0.5, 0.0, False, True), (float("nan"), float("nan"), False, False)])
 def test_the_real_sample_marks_invalid_readings_without_zeroing_them(steer, lift, ok_s, ok_l):
     """An out-of-map or NaN steering and a NaN lift are flagged, never replaced by 0 (Codex 4b P2-3)."""
-    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, encode
+    from forklift_core.mcu_link.messages import (
+        FaultFlag,
+        McuState,
+        RejectReason,
+        encode,
+    )
 
     b = Bench()
     b.host.on_bytes(encode(McuState(1000, BOOT, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 5, 6, 0.0, 0.0,
