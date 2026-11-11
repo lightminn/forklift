@@ -1,0 +1,23 @@
+# The real truck's obstacle-layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md, decision (c)).
+# Read by the real entry point (P0-4 4e-2, docs/plans/2026-11-11-sim-to-real-bringup.md), which the console session
+# attaches; the simulator reads the same values from config/layer_latency_budget.yaml, and a unit test keeps the two
+# equal. Every entry carries its provenance; "measured: false" values wait for the bring-up steps named in "until" and
+# must not be quoted as measurements (CONTRIBUTING 6).
+#
+# B bounds the delay from a LiDAR scan to the first control tick that uses its obstacle-layer result. The permission
+# closes it (stopping latency + B, FREE evidence use age + B, rounded to 9 places) and the watchdog stops the truck
+# when a result is later than B: (i) a scan older than B + 1e-6 s not yet in the installed snapshot, (ii) no motion on
+# a snapshot first used later than B. A watchdog stop held over overdue_end_s in a row ends the mission as
+# layer_latency_exceeded. The guarantee covers only the processing delay after a scan is taken (the scan's own time
+# stamp is the driver's). It holds on the real truck only with (a) a non-blocking snapshot install in the control
+# thread and (b) the MCU command deadline stopping a blocked control loop within the stopping model's base latency
+# (plan 2.1; the deadline is measured in S5).
+schema: real_obstacle_layer/1
+
+latency_budget:
+  seconds: 0.10
+  provenance: {source: lead_decision_2026_11_11, measured: false, until: S5}
+
+overdue_end:
+  seconds: 1.0
+  provenance: {source: lead_decision_2026_11_11, measured: false, until: S8}

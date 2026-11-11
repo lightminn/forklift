@@ -62,6 +62,7 @@ PREFIXES = {
     "recognition label target": SESSION,  # main's far recognition (2026-10-18): the scene's label prim is missing
     # the mission's own work: that mission fails
     "Tracking timeout": MISSION, "Tracking failed": MISSION, "obstacle_": MISSION,
+    "layer_latency_exceeded": MISSION,  # the layer latency budget's watchdog held over its limit (plan 2026-11-11)
     "perception_capture_failed": MISSION, "observation_discarded": MISSION, "near_capture_": MISSION,
     "pocket_check_refused": MISSION,  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
     "near_field_": MISSION, "observe:": MISSION, "observe_replan_failed": MISSION, "docking_": MISSION,

@@ -142,6 +142,11 @@ case "$GYRO" in
     LAYER=config/obstacle_layer_single_team_spec_gyro_d435i_static.yaml
     GYRO_ARGS=(--odometry-heading gyro --gyro-model config/gyro_model_d435i_static_20261023.yaml) ;;
   *) echo "GYRO must be off or measured"; exit 2;; esac
+# the layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md, the lead's decision 2026-11-11): a file kept
+# apart from the obstacle-layer one (a survey bundle's shared input); LAYER_BUDGET=off runs without it
+LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}
+BUDGET=(--layer-latency-budget "$LAYER_BUDGET")
+[ "$LAYER_BUDGET" = off ] && BUDGET=()
 case "$START_BAND" in on|off) ;; *) echo "START_BAND must be on or off"; exit 2;; esac
 [[ "$START_BAND_M" =~ ^[0-9]+([.][0-9]+)?$ ]] && awk -v b="$START_BAND_M" 'BEGIN{exit !(b > 0)}' \
   || { echo "START_BAND_M must be a positive number of metres"; exit 2; }
@@ -281,8 +286,8 @@ mkdir -p "$OUT/bridge" "$OUT/sock"
 export PYTHONPATH=$SNAP/src
 cd "$SNAP"
 echo "gpu ${CUDA_VISIBLE_DEVICES:-unset} job ${SLURM_JOB_ID:-} snapshot $SNAP scene $NAME mode $MODE near $NEAR markers $MARKERS rack $RACK keepout $KEEPOUT noise $NOISE start_band $START_BAND $(date -Is)"
-printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s EXIT_EXEMPT=%s RETURN_START=%s ENCODER_MODEL=%s GYRO=%s SCENE_FILE=%s\n' \
-  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$EXIT_EXEMPT" "$RETURN_START" "$ENCODER_MODEL" "$GYRO" \
+printf 'MODE=%s NEAR=%s MARKERS=%s RACK=%s KEEPOUT=%s NOISE=%s START_BAND=%s START_BAND_M=%s ESCAPE_PRESTEER=%s ESCAPE_START=%s LOW_CLEARANCE=%s RESTART_CONFIRM=%s D7_HOLD=%s EXIT_EXEMPT=%s RETURN_START=%s ENCODER_MODEL=%s GYRO=%s LAYER_BUDGET=%s SCENE_FILE=%s\n' \
+  "$MODE" "$NEAR" "$MARKERS" "$RACK" "$KEEPOUT" "$NOISE" "$START_BAND" "$START_BAND_M" "$ESCAPE_PRESTEER" "$ESCAPE_START" "$LOW_CLEARANCE" "$RESTART_CONFIRM" "$D7_HOLD" "$EXIT_EXEMPT" "$RETURN_START" "$ENCODER_MODEL" "$GYRO" "$LAYER_BUDGET" \
   "$SCENE_FILE" > "$OUT/riib_defaults.txt"
 # C3: recorded only when set, so every earlier run's record reads as before
 [ -n "$NEAR_RECAPTURE_GAP" ] && printf 'NEAR_RECAPTURE_GAP=%s\n' "$NEAR_RECAPTURE_GAP" >> "$OUT/riib_defaults.txt"
@@ -312,7 +317,7 @@ COMMON=(--base-scene "$BASE_SCENE"
   --forklift-urdf "$FORKLIFT_URDF" --settings config/isaac_transport_measured.yaml
   --delivery-straight-m 1.5 --alignment-straight-m 2.1 --withdrawal-m 0.55 --insertion-reserve-m 0.016
   --layout scene --scene-file "$SCENE_FILE" --fps 60 --max-sim-seconds "${MAX_SIM:-1500}"
-  --record-slam --return-home --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
+  --record-slam --return-home --obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"} --encoder-model "$ENCODER_MODEL" ${GYRO_ARGS[@]+"${GYRO_ARGS[@]}"} --obstacle-act --seed "${SEED:-0}"
   --lidar-keepout-m "$KEEPOUT" --start-band-release "$START_BAND" --escape-start-release "$ESCAPE_START"
   --escape-presteer "$ESCAPE_PRESTEER"
   --low-clearance-guard "$LOW_CLEARANCE" --restart-confirm-scans "$RESTART_CONFIRM" --d7-reapproach-hold "$D7_HOLD"

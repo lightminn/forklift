@@ -1445,12 +1445,18 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
         )
+        # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission
+        hooks.require(why != "layer_latency_exceeded", "layer_latency_exceeded")
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
         if exit_closed_ == "watch":
             # plan D2: the tick the watch rang stops the wheels, whatever the general limit allows beyond the stop arc
             # (Codex impl P1-2)
             allowed, why = 0.0, "exit_watch"
+        if why == "layer_overdue" and allowed > 0.0:
+            # the layer latency budget's online invariant (plan 2026-11-11): a watchdog tick never drives
+            lb_ = self.state.setdefault("layer_budget", {})
+            lb_["invariant_violations"] = lb_.get("invariant_violations", 0) + 1
         dumped_phases = obstacle.setdefault("dumped_phases", set())
         if allowed == 0.0 and why in ("unknown", "occupied") and t > 5.0 and (
             obstacle.get("dumps", 0) < 4 or ms.phase not in dumped_phases
@@ -5488,6 +5494,7 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        self.hooks.require(why != "layer_latency_exceeded", "layer_latency_exceeded")  # plan 2026-11-11 layer budget
         if exit_closed_ == "watch":
             allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False

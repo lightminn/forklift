@@ -1417,6 +1417,13 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--latency-seed", type=int, default=None,
                         help="latency test A: the jitter streams' seed (default: --seed); SLAM and the layer draw from "
                              "separate streams of it")
+    parser.add_argument("--layer-latency-budget", type=Path, default=None,
+                        help="the layer latency budget file (latency_budget_s, overdue_end_s; "
+                             "config/layer_latency_budget.yaml, docs/plans/2026-11-11-layer-latency-budget.md). Kept "
+                             "apart from the obstacle-layer file, a survey bundle's shared input; default: none (off)")
+    parser.add_argument("--layer-latency-budget-s", type=float, default=None,
+                        help="the layer latency budget B in seconds, overriding the budget file's latency_budget_s (a "
+                             "test arm; 0 turns it off)")
     parser.add_argument("--latency-plan-ms", type=float, default=0.0,
                         help="latency test B (live only): each planning worker answer held this long after it arrived "
                              "(0, default: no hold)")
@@ -1958,6 +1965,23 @@ def arguments() -> argparse.Namespace:
             parser.error("--latency-layer is not combined with --layer-worker")
         if args.near_tracking or args.record_boundary:
             parser.error("--latency-layer is not combined with --near-tracking or --record-boundary")
+    if args.layer_latency_budget_s is not None and not (math.isfinite(args.layer_latency_budget_s)
+                                                        and args.layer_latency_budget_s >= 0):
+        parser.error("--layer-latency-budget-s must be a finite number >= 0")
+    if args.layer_latency_budget is not None or args.layer_latency_budget_s is not None:
+        if args.obstacle_layer is None:
+            parser.error("--layer-latency-budget(-s) needs --obstacle-layer")
+        if args.layer_latency_budget is not None:
+            if not args.layer_latency_budget.is_file():
+                parser.error(f"--layer-latency-budget {args.layer_latency_budget}: no such file")
+            if str(Path(__file__).resolve().parent) not in sys.path:
+                sys.path.insert(0, str(Path(__file__).resolve().parent))
+            import obstacle_layer as budget_module_
+
+            try:
+                budget_module_.load_budget_file(args.layer_latency_budget)
+            except ValueError as exc:
+                parser.error(f"--layer-latency-budget: {exc}")
     if args.latency_plan_ms:
         if not args.live:
             parser.error("--latency-plan-ms is live only (latency test B; a batch run has no planning worker)")
@@ -4779,13 +4803,38 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         layer_config = obstacle_module.load_layer_config(args.obstacle_layer)
         layer_worker_latency_s_ = 0.0
-        if getattr(args, "layer_worker", "off") != "off":
+        # The layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md, the lead's decisions): the file's
+        # latency_budget_s (or the test override) bounds the delay from a scan to its first control use; it is closed
+        # like a declared worker (stopping latency + B, use age 0.2 + B) and the layer's watchdog stops the truck when a
+        # result is later than B. A live worker's own delay must fit in it.
+        budget_file_ = getattr(args, "layer_latency_budget", None)
+        if budget_file_ is not None:
+            layer_config = {**layer_config, **obstacle_module.load_budget_file(budget_file_)}
+        layer_budget_s_ = float(obstacle_module.budget_config(
+            layer_config, getattr(args, "layer_latency_budget_s", None))["latency_budget_applied_s"])
+        if layer_budget_s_ > 0.0:
+            require(not (latency_layer_ is not None and latency_layer_[0] == "declared"),
+                    "--latency-layer declared is not combined with a layer latency budget (the budget declares)")
+            if getattr(args, "layer_worker", "off") != "off":
+                require((int(args.layer_worker_k) - 1) / 120.0 <= layer_budget_s_ + obstacle_module.LATENCY_EPS_S,
+                        f"--layer-worker-k {args.layer_worker_k}: its delay passes the layer latency budget {layer_budget_s_}")
+            rate_ = int(yaml.safe_load(args.lidar.read_text())["rate_hz"])
+            timeout_ = float(layer_config["permission"]["sensor_timeout_s"])
+            require(timeout_ + 1e-9 >= 1.0 / rate_ + layer_budget_s_,
+                    f"sensor_timeout_s {timeout_} is below the scan period 1/{rate_} + the layer budget {layer_budget_s_}")
+            layer_config = obstacle_module.budget_config(layer_config, layer_budget_s_)
+            layer_worker_latency_s_ = layer_budget_s_
+            state["layer_budget"] = {"budget_s": layer_budget_s_,
+                                     "overdue_end_s": float(layer_config.get("overdue_end_s", 1.0)),
+                                     "source": "override" if getattr(args, "layer_latency_budget_s", None) is not None
+                                     else str(budget_file_ if budget_file_ is not None else args.obstacle_layer)}
+        elif getattr(args, "layer_worker", "off") != "off":
             # Real-time plan 5.28 D5 and the 1e-0 fix: the scan's check takes effect k-1 ticks later than in place; the
             # stopping model's latency and the FREE evidence's use age take that delay (worker_config). The truth
             # evaluation keeps the file's stopping model.
             layer_worker_latency_s_ = (int(args.layer_worker_k) - 1) / 120.0
             layer_config = obstacle_module.worker_config(layer_config, int(args.layer_worker_k))
-        if latency_layer_ is not None and latency_layer_[0] == "declared":
+        if latency_layer_ is not None and latency_layer_[0] == "declared" and layer_budget_s_ == 0.0:
             # Latency test A, declared (plan 2026-11-11 2.2): the stopping model and the FREE use age take k/120 (the
             # delay to the first control read); undeclared and jitter keep the file's
             layer_worker_latency_s_ = latency_layer_[1] / 120.0
@@ -8536,6 +8585,9 @@ def drive(S, isaac) -> None:
                     return 0.0, "no_permission"
                 layer_ = obstacle["layer"]
                 now_ = float(world.current_time - initial_time)
+                watch_ = layer_.watchdog(now_) if hasattr(layer_, "watchdog") else None
+                if watch_ is not None:
+                    return 0.0, watch_  # the layer latency budget's watchdog holds teleop too (plan 2026-11-11)
                 # The layer's own latest snapshot -- the one the mission's permission reads, with its shadow band and
                 # known obstacles applied, made once per scan (a separate whole-map snapshot here cost more than a
                 # live step and missed that processing).
@@ -10571,9 +10623,12 @@ def drive(S, isaac) -> None:
                     # while the permission allowed this speed (Codex L0b P2).
                     if acting and abs(truth_speed) > 0.05:
                         pconf = obstacle["layer"].permission.config
-                        if obstacle.get("layer_worker"):  # plan 5.28 D5: the truth keeps the file's latency
+                        # plan 5.28 D5 (and the layer latency budget): the truth keeps the file's latency
+                        added_ = (state["layer_worker"]["latency_added_s"] if obstacle.get("layer_worker")
+                                  else float((state.get("layer_budget") or {}).get("budget_s") or 0.0))
+                        if added_:
                             pconf = replace(pconf, stopping=replace(
-                                pconf.stopping, latency_s=pconf.stopping.latency_s - state["layer_worker"]["latency_added_s"]))
+                                pconf.stopping, latency_s=pconf.stopping.latency_s - added_))
                         stop_len = pconf.stopping.distance_m(truth_speed)
                         moving_dir_ = 1 if truth_speed > 0 else -1
                         arc = ARC_POSES(tuple(float(v) for v in truth_rear), kappa, moving_dir_, stop_len, 0.025)[0]
@@ -11281,6 +11336,13 @@ def drive(S, isaac) -> None:
                     state["layer_worker"]["pending_at_end"] = bool(worker_.pending)
                     state["layer_worker"].update(worker_.summary())
                     (args.output / "layer_worker.json").write_text(record_json(worker_.records) + "\n")
+                if getattr(obstacle["layer"], "latency_budget_s", 0.0) > 0.0:
+                    # the layer latency budget's watchdog (plan 2026-11-11): its stops and the per-scan delays
+                    lay_ = obstacle["layer"]
+                    d_ = [d for _, _, d in lay_.latency_log["scans"]]
+                    state["layer_budget"].update(watchdog=dict(lay_.overdue_stats), scans_used=len(d_),
+                                                 d_max_s=max(d_) if d_ else None)
+                    (args.output / "layer_latency.json").write_text(record_json(lay_.latency_log) + "\n")
                 state["obstacle_layer"].update(
                     {
                         **scan_stats_,

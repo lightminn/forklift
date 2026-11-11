@@ -1129,6 +1129,7 @@ POST_MEASUREMENT_ARGUMENTS = {
                               # with --near-tracking, B live only)
                               "latency_slam": "off", "latency_layer": "off", "latency_seed": None,
                               "latency_plan_ms": 0.0,
+                              "layer_latency_budget": None, "layer_latency_budget_s": None,  # 2026-11-11: the layer latency budget (None: off)
                               # 2026-10-18: the persistent console (a fixed port, a supervisor's restarts)
                               "live_port": 0, "live_supervised": False,
                               # 2026-10-18: the far recognition (docs/plans/2026-10-18-isaac-recognition-far-capture.md);

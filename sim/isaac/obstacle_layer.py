@@ -72,6 +72,42 @@ def load_layer_config(path: Path) -> dict:
     return {**data, "sensors": sensors}
 
 
+LATENCY_EPS_S = 1e-6  # the layer latency watchdog's boundary allowance (the recorded tick is a hair over 1/120 s)
+
+
+def load_budget_file(path) -> dict:
+    """The layer latency budget file (config/layer_latency_budget.yaml): exactly latency_budget_s (finite, >= 0) and
+    overdue_end_s (finite, > 0). Kept apart from the obstacle-layer file, which survey map bundles hash as a shared
+    input (forklift_core.localization.slam_map.SHARED_INPUTS)."""
+    doc = yaml.safe_load(Path(path).read_text()) or {}
+    if not isinstance(doc, dict) or set(doc) != {"latency_budget_s", "overdue_end_s"}:
+        raise ValueError(f"{path}: the budget file holds exactly latency_budget_s and overdue_end_s")
+    b, end = float(doc["latency_budget_s"]), float(doc["overdue_end_s"])
+    if not (math.isfinite(b) and b >= 0.0 and math.isfinite(end) and end > 0.0):
+        raise ValueError(f"{path}: latency_budget_s >= 0 and overdue_end_s > 0, both finite")
+    return {"latency_budget_s": b, "overdue_end_s": end}
+
+
+def budget_config(config: dict, budget_s: float | None = None) -> dict:
+    """A copy of the layer config with its latency budget B applied (docs/plans/2026-11-11-layer-latency-budget.md,
+    the lead's decisions): B bounds the delay from a scan to the first control tick that uses its result. Closed as
+    worker_config does (#417): the stopping model's latency takes B and the FREE evidence's use age becomes
+    free_max_age_s + B (rounded: 0.2 + 0.1 must read the 0.3 s row of the age table); what accepts evidence keeps
+    free_max_age_s. ``budget_s`` overrides the file's ``latency_budget_s`` (a test arm); 0 or absent applies nothing.
+    The copy carries ``latency_budget_applied_s``, which turns the layer's watchdog on when above 0."""
+    b = float(config.get("latency_budget_s") or 0.0) if budget_s is None else float(budget_s)
+    if not (math.isfinite(b) and b >= 0.0):
+        raise ValueError(f"latency budget {b!r}: a finite number >= 0")
+    out = dict(config)
+    out["latency_budget_applied_s"] = b
+    if b > 0.0:
+        out["permission"] = dict(config["permission"])
+        out["permission"]["latency_s"] = round(float(config["permission"]["latency_s"]) + b, 9)
+        out["grid"] = dict(config["grid"])
+        out["grid"]["free_use_age_s"] = round(float(config["grid"]["free_max_age_s"]) + b, 9)
+    return out
+
+
 def worker_config(config: dict, k: int, *, added_s: float | None = None) -> dict:
     """A copy of the layer config for a layer worker installing at the scan tick + k (real-time plan 5.28): every use
     of a scan's result comes up to s = (k-1)/120 s later than in place. The stopping model's latency takes s (D5: the
@@ -284,6 +320,19 @@ class ObstacleLayer:
         self.last_scan_s: dict = {}
         self.checked_scan_s: dict = {}  # the scans the installed refresh checked (plan 5.28 D3)
         self.worker = None  # a LayerWorker (plan 5.28), attached by a live run with --layer-worker
+        # The layer latency budget's watchdog (docs/plans/2026-11-11-layer-latency-budget.md): on only when the config
+        # came through budget_config with B > 0
+        self.latency_budget_s = float(config.get("latency_budget_applied_s") or 0.0)
+        self.overdue_end_s = float(config.get("overdue_end_s", 1.0))
+        self._scan_stamps: list = []  # the scans taken (their stamps), the most recent kept
+        self._installed_scan_s = None  # the newest scan the installed snapshot holds
+        self._first_use_pending = False
+        self._late = False  # the installed snapshot was first used with D > B
+        self._last_d = None
+        self._overdue_since = None
+        self._watch_cache = None  # (now_s, reason): one judgement per control tick
+        self.latency_log = {"scans": [], "overdue_ticks": []}  # [t_scan, t_use, D]; [t, required, installed, D, kind]
+        self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0}
         self.snapshot = None
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
         # frame; set only while the depth pocket check gates every tick.
@@ -416,6 +465,9 @@ class ObstacleLayer:
             )
             self.last_scan_s[sensor.name] = float(stamp_s)
             seen.append((sensor, ranges_, own_))
+        if seen and getattr(self, "latency_budget_s", 0.0) > 0.0:
+            self._scan_stamps.append(float(stamp_s))
+            del self._scan_stamps[:-64]
         if self.exit_region_rel is not None:
             self._exit_watch(float(stamp_s), seen, odom_rear, correction, version)
 
@@ -625,6 +677,11 @@ class ObstacleLayer:
         status, the permission's path check (with the job's path and pose) and the times of the scans this result
         checked (restart confirmation and the cusp watch read them -- D5)."""
         now_s = job["now_s"]
+        if getattr(self, "latency_budget_s", 0.0) > 0.0:
+            # the newest scan this snapshot holds; its first control use is judged at the next limit (D = t_use - t_scan)
+            stamps_ = [float(v) for v in (job.get("scan_stamps") or {}).values()]
+            self._installed_scan_s = max(stamps_) if stamps_ else None
+            self._first_use_pending = True
         self.snapshot = result["raw"]
         if self.memory is not None:
             self._memory_clears(result["raw"], now_s)
@@ -825,7 +882,46 @@ class ObstacleLayer:
                 self.known = [replace(k, fix_stamp_s=float(now_s), r_fix_m=float(kp["b_w_m"]) + float(kp["e_w_full_m"]))
                               if k.kind == "pallet" else k for k in self.known]
 
+    def watchdog(self, now_s: float) -> str | None:
+        """The layer latency watchdog (plan 2026-11-11 layer budget, 1): None while the layer in use may drive; else
+        ``layer_overdue`` -- (i) a scan older than B (its fixed deadline t_scan + B passed) is not in the installed
+        snapshot, or (ii) the installed snapshot was first used with D = t_use - t_scan > B -- and
+        ``layer_latency_exceeded`` once the stop has lasted over ``overdue_end_s`` in a row. One judgement per control
+        tick (the permission and the watch read the layer in the same tick). Off (None) without a budget."""
+        b = getattr(self, "latency_budget_s", 0.0)
+        if b <= 0.0:
+            return None
+        if self._watch_cache is not None and self._watch_cache[0] == now_s:
+            return self._watch_cache[1]
+        eps = LATENCY_EPS_S
+        if self._first_use_pending:
+            self._first_use_pending = False
+            if self._installed_scan_s is not None:
+                self._last_d = float(now_s) - self._installed_scan_s
+                self._late = self._last_d > b + eps
+                self.latency_log["scans"].append([self._installed_scan_s, float(now_s), self._last_d])
+        required = max((t for t in self._scan_stamps if t < now_s - b - eps), default=None)
+        overdue = required is not None and (self._installed_scan_s is None or self._installed_scan_s < required - 1e-12)
+        reason = None
+        if overdue or self._late:
+            if self._overdue_since is None:
+                self._overdue_since = float(now_s)
+                self.overdue_stats["events"] += 1
+            held = float(now_s) - self._overdue_since
+            self.overdue_stats["ticks"] += 1
+            self.overdue_stats["longest_s"] = max(self.overdue_stats["longest_s"], held)
+            self.latency_log["overdue_ticks"].append(
+                [float(now_s), required, self._installed_scan_s, self._last_d, "deadline" if overdue else "late"])
+            reason = "layer_latency_exceeded" if held > self.overdue_end_s else "layer_overdue"
+        else:
+            self._overdue_since = None
+        self._watch_cache = (now_s, reason)
+        return reason
+
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool, cap_mps: float):
+        watch_ = self.watchdog(now_s)
+        if watch_ is not None:
+            return 0.0, watch_  # the layer in use is late: no motion on it (plan 2026-11-11 layer budget, 1)
         footprint, own = self.footprints(loaded, direction)
         return self.permission.allowed_speed(
             now_s, self.last_scan_s, current_pose=current_pose, curvature_inv_m=curvature_inv_m,
