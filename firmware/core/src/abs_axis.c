@@ -34,7 +34,9 @@ void abs_axis_init(abs_axis *a)
     a->valid = false;
     a->out_of_range = false;
     a->bad_streak = 0;
+    a->frames = 0;
     a->crc_errors = 0;
+    a->alt_crc_errors = 0;
 }
 
 /* Into (-pi, pi] in bounded time (no subtract loop that a large input could stall). */
@@ -53,8 +55,16 @@ void abs_axis_update(abs_axis *a, const abs_axis_config *c, uint16_t frame, bool
 {
     uint16_t angle = 0;
     bool good = fresh && kth7801_decode(frame, c->crc, &angle);
-    if (fresh && !good) {
-        a->crc_errors++;
+    if (fresh) {
+        a->frames++;
+        if (!good) {
+            a->crc_errors++;
+        }
+        kth_crc_variant other =
+            c->crc == KTH_CRC_G704_BYTES ? KTH_CRC_REFLECTED_MSB_FIRST : KTH_CRC_G704_BYTES;
+        if (crc4_kth7801((uint16_t)(frame >> 4), other) != (frame & 0xFu)) {
+            a->alt_crc_errors++;
+        }
     }
     if (!good) {
         if (a->bad_streak < UINT16_MAX) {

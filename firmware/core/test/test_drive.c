@@ -652,6 +652,9 @@ static void config_validation(void)
     c.period_us = 0;
     CHECK(!drive_config_valid(&c));
     c = make_config();
+    c.period_us = 999; /* contract 3.3: at most one KTH count per axis per ms */
+    CHECK(!drive_config_valid(&c));
+    c = make_config();
     c.ipropi_ohm = NAN;
     CHECK(!drive_config_valid(&c));
     c = make_config();
@@ -696,6 +699,43 @@ static void state_report(void)
     tick();
     drive_fill_state(&d, &s);
     CHECK_EQ_I(s.current_ma[DRIVE_CH_L], 32767); /* saturates */
+}
+
+/* v3 (contract 3.3): STATE carries the per-axis KTH counters, mod 2^16; only boot clears them. */
+static void kth_counters_in_state(void)
+{
+    boot(0);
+    link_state s0, s1;
+    drive_fill_state(&d, &s0);
+    CHECK_EQ_U(s0.kth_frames[0], (uint16_t)d.steer.frames);
+    CHECK(s0.kth_frames[0] > 0); /* the boot ticks read both axes */
+    in.abs_fresh[1] = false;
+    ticks(5);
+    drive_fill_state(&d, &s1);
+    CHECK_EQ_U((uint16_t)(s1.kth_frames[0] - s0.kth_frames[0]), 5);
+    CHECK_EQ_U((uint16_t)(s1.kth_frames[1] - s0.kth_frames[1]), 0);
+    CHECK_EQ_U(s1.kth_crc_errors[0], s0.kth_crc_errors[0]);
+
+    in.abs_frame[0] ^= 0x1u; /* angle 0: the two variants agree, so both count the error */
+    tick();
+    drive_fill_state(&d, &s0);
+    CHECK_EQ_U((uint16_t)(s0.kth_crc_errors[0] - s1.kth_crc_errors[0]), 1);
+    CHECK_EQ_U((uint16_t)(s0.kth_alt_crc_errors[0] - s1.kth_alt_crc_errors[0]), 1);
+    set_steer(0.0);
+    in.abs_fresh[1] = true;
+
+    uint32_t frames = d.steer.frames, errs = d.steer.crc_errors;
+    arm_and_zero();
+    send(simple(LINK_DISARM, 3));
+    send(simple(LINK_CLEAR_FAULTS, 4));
+    CHECK_EQ_U(d.steer.frames, frames + 4); /* four more ticks, nothing reset */
+    CHECK_EQ_U(d.steer.crc_errors, errs);
+
+    d.steer.frames = 0x12345u; /* the wire carries the low 16 bits */
+    d.lift.alt_crc_errors = 0x1FFFFu;
+    drive_fill_state(&d, &s1);
+    CHECK_EQ_U(s1.kth_frames[0], 0x2345);
+    CHECK_EQ_U(s1.kth_alt_crc_errors[1], 0xFFFF);
 }
 
 static void clock_wrap_replay(void)
@@ -1739,6 +1779,7 @@ int main(void)
     config_validation();
     control_directions_and_limits();
     state_report();
+    kth_counters_in_state();
     clock_wrap_replay();
     spi_refusal_and_timeout();
     arm_alone_expires();

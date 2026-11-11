@@ -54,6 +54,70 @@ static void crc_and_freshness_streaks(void)
     CHECK_EQ_U(a.bad_streak, 0);
 }
 
+/* v3 counters (contract 3.3): every fresh frame counts once; errors under the configured variant and,
+   separately, under the other variant; stale frames count nothing. */
+static uint16_t with_crc(uint16_t angle12, kth_crc_variant v)
+{
+    return (uint16_t)((angle12 << 4) | crc4_kth7801(angle12, v));
+}
+
+static uint16_t angle_where_variants_differ(void)
+{
+    for (uint16_t a = 1; a < 4096; a++) {
+        if (crc4_kth7801(a, KTH_CRC_G704_BYTES) != crc4_kth7801(a, KTH_CRC_REFLECTED_MSB_FIRST)) {
+            return a;
+        }
+    }
+    return 0;
+}
+
+static void kth_counters(void)
+{
+    abs_axis_config c = base_config();
+    abs_axis a;
+    abs_axis_init(&a);
+    CHECK_EQ_U(a.frames, 0);
+    CHECK_EQ_U(a.crc_errors, 0);
+    CHECK_EQ_U(a.alt_crc_errors, 0);
+    uint16_t ang = angle_where_variants_differ();
+    CHECK(ang != 0);
+    CHECK(crc4_kth7801(0, KTH_CRC_G704_BYTES) == crc4_kth7801(0, KTH_CRC_REFLECTED_MSB_FIRST));
+
+    abs_axis_update(&a, &c, with_crc(ang, KTH_CRC_G704_BYTES), true); /* good; the other variant fails */
+    CHECK_EQ_U(a.frames, 1);
+    CHECK_EQ_U(a.crc_errors, 0);
+    CHECK_EQ_U(a.alt_crc_errors, 1);
+    abs_axis_update(&a, &c, with_crc(ang, KTH_CRC_REFLECTED_MSB_FIRST), true); /* the other variant's word */
+    CHECK_EQ_U(a.frames, 2);
+    CHECK_EQ_U(a.crc_errors, 1);
+    CHECK_EQ_U(a.alt_crc_errors, 1);
+    abs_axis_update(&a, &c, 0x0000, true); /* a stuck-low MISO passes both variants */
+    CHECK_EQ_U(a.frames, 3);
+    CHECK_EQ_U(a.crc_errors, 1);
+    CHECK_EQ_U(a.alt_crc_errors, 1);
+    uint8_t g = crc4_kth7801(ang, KTH_CRC_G704_BYTES), r = crc4_kth7801(ang, KTH_CRC_REFLECTED_MSB_FIRST);
+    uint8_t neither = 0;
+    while (neither == g || neither == r) {
+        neither++;
+    }
+    abs_axis_update(&a, &c, (uint16_t)((ang << 4) | neither), true); /* wrong under both */
+    CHECK_EQ_U(a.frames, 4);
+    CHECK_EQ_U(a.crc_errors, 2);
+    CHECK_EQ_U(a.alt_crc_errors, 2);
+    abs_axis_update(&a, &c, (uint16_t)((ang << 4) | neither), false); /* not fresh: nothing counts */
+    CHECK_EQ_U(a.frames, 4);
+    CHECK_EQ_U(a.crc_errors, 2);
+    CHECK_EQ_U(a.alt_crc_errors, 2);
+
+    c.crc = KTH_CRC_REFLECTED_MSB_FIRST; /* the alternative is the other one, whichever is configured */
+    abs_axis_init(&a);
+    abs_axis_update(&a, &c, with_crc(ang, KTH_CRC_REFLECTED_MSB_FIRST), true);
+    CHECK_EQ_U(a.frames, 1);
+    CHECK_EQ_U(a.crc_errors, 0);
+    CHECK_EQ_U(a.alt_crc_errors, 1);
+    CHECK(a.valid);
+}
+
 static void continuous_across_sensor_zero(void)
 {
     abs_axis_config c = base_config();
@@ -104,6 +168,7 @@ static void config_must_avoid_wrap_cut(void)
 
 int main(void)
 {
+    kth_counters();
     decodes_datasheet_word();
     crc_and_freshness_streaks();
     continuous_across_sensor_zero();
