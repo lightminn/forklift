@@ -39,13 +39,22 @@ if(FW_MCU_MODEL)
     get_filename_component(FW_REPO ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
     set(FW_VEHICLE_YAML ${FW_REPO}/config/real/vehicle.yaml CACHE FILEPATH "real vehicle config")
     set(FW_VEHICLE_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/vehicle_config.h)
+    # The header also depends on the chassis model the config names; reconfigure when the config changes.
+    file(STRINGS ${FW_VEHICLE_YAML} _fw_chassis_line REGEX "^chassis_model:")
+    string(REGEX REPLACE "^chassis_model:[ \t]*([^ \t#]+).*$" "\\1" _fw_chassis_rel "${_fw_chassis_line}")
+    get_filename_component(_fw_vehicle_dir ${FW_VEHICLE_YAML} DIRECTORY)
+    get_filename_component(FW_CHASSIS_YAML ${_fw_vehicle_dir}/${_fw_chassis_rel} ABSOLUTE)
+    if(NOT EXISTS ${FW_CHASSIS_YAML})
+        message(FATAL_ERROR "chassis model ${FW_CHASSIS_YAML} named by ${FW_VEHICLE_YAML} not found")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${FW_VEHICLE_YAML})
     add_custom_command(
         OUTPUT ${FW_VEHICLE_HEADER}
         COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${FW_REPO}/src
                 ${FW_PYTHON} ${FW_REPO}/tools/real_vehicle_header.py
                 --config ${FW_VEHICLE_YAML} --out ${FW_VEHICLE_HEADER}
         DEPENDS ${FW_VEHICLE_YAML}
-                ${FW_REPO}/sim/models/dls08_measured/parameters.yaml
+                ${FW_CHASSIS_YAML}
                 ${FW_REPO}/tools/real_vehicle_header.py
                 ${FW_REPO}/src/forklift_core/plant/real_vehicle.py
         COMMENT "Generating vehicle_config.h from ${FW_VEHICLE_YAML}")

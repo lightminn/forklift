@@ -311,12 +311,10 @@ def test_mode_fault_and_reject_changes_are_reported_once():
 def test_seq_wraps_and_every_frame_is_logged_by_stage():
     r = Rig()
     r.host._seq = 0xFFFE  # noqa: SLF001 -- start near the wrap
-    r.host.request_disarm(r.now)
-    r.host.request_disarm(r.now)
-    r.host.request_disarm(r.now)
-    dec = LinkDecoder()
-    seqs = []
-    while (f := r.host.next_frame(r.now)) is not None:
+    dec, seqs = LinkDecoder(), []
+    for _ in range(3):
+        r.host.request_disarm(r.now)
+        f = r.host.next_frame(r.now)
         r.host.frame_written(f, r.now)
         seqs += [x.seq for x in dec.feed(f.data, r.now)]
     assert seqs == [0xFFFE, 0xFFFF, 0]
@@ -324,3 +322,47 @@ def test_seq_wraps_and_every_frame_is_logged_by_stage():
     assert {"queued", "written"} <= set(stages)
     r.host.on_bytes(state(5_000_000), r.now)
     assert "received" in [e[0] for e in r.log]
+
+
+def test_a_state_arriving_after_a_stale_gap_still_revokes():
+    """on_bytes before tick (the adapter's order): the gap is seen on receipt (Codex P0-7 round 2 P1)."""
+    r = Rig()
+    r.ready()
+    ev = r.feed(dt_ms=60, mode=Mode.ARMED, gen=1, flags=StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+    assert "stale" in kinds(ev) and "authorization_revoked" in kinds(ev) and "recovered" in kinds(ev)
+    assert r.host.tick(r.now) == [] and not r.host.ready
+    assert r.host.drive(drive_cmd(), 0.0, True, r.now + 100 * MS, r.now) == Blocked("not_authorized")
+
+
+@pytest.mark.parametrize("late_ms,ok", [(290, True), (300, True), (301, False)])
+def test_arm_deadline_is_checked_before_zero_seen_makes_it_ready(late_ms, ok):
+    r = Rig(HostConfig(state_max_age_s=1.0, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=8))
+    r.feed()
+    t0 = r.now
+    r.host.request_arm(r.now)
+    r.sent()
+    r.feed(mode=Mode.ARMED, gen=1)
+    r.sent()
+    r.now = t0 + late_ms * MS - 10 * MS  # feed adds 10 ms
+    ev = r.feed(mode=Mode.ARMED, gen=1, flags=StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+    assert r.host.ready is ok
+    assert ("armed_ready" in kinds(ev)) is ok
+
+
+def test_disarm_requests_coalesce_within_the_outbox_bound():
+    r = Rig(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=2))
+    for _ in range(5):
+        r.host.request_disarm(r.now)
+    assert r.sent() == [Disarm()]
+
+
+def test_a_frame_handed_back_unsent_is_still_subject_to_cancellation():
+    """The adapter got EAGAIN before the first byte: the frame goes back and a DISARM still drops it."""
+    r = Rig()
+    r.ready()
+    r.host.drive(drive_cmd(), 0.0, True, r.now + 100 * MS, r.now)
+    f = r.host.next_frame(r.now)
+    assert f.kind == "DRIVE"
+    r.host.unsent(f, r.now)
+    r.host.request_disarm(r.now)
+    assert r.sent() == [Disarm()]

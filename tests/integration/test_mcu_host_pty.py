@@ -17,9 +17,14 @@ import pytest
 from forklift_core.mcu_link.messages import (
     Arm,
     ClearFaults,
+    Disarm,
     FaultFlag,
     LinkDecoder,
+    McuState,
     Mode,
+    RejectReason,
+    StateFlag,
+    encode,
 )
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import (
@@ -30,7 +35,7 @@ from forklift_core.plant.real_vehicle import (
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
-from real_mcu_link import TtyLink, service_fd  # noqa: E402
+from real_mcu_link import ReconnectingLink, TtyLink, service_fd  # noqa: E402
 
 CFG = HostConfig(state_max_age_s=0.1, cap_ms=150, arm_timeout_s=1.0, zero_valid_ms=100, outbox_max=16)
 VEHICLE = load_real_vehicle(REPO / "config" / "real" / "vehicle.yaml")
@@ -166,10 +171,24 @@ def test_restarted_mcu_is_a_new_boot_and_is_not_rearmed(bench_factory):
     assert b.state().mode == Mode.DISARMED and not b.host.ready
 
 
-def test_driver_fault_latches_and_only_the_operator_clears_it(bench_factory):
-    b = bench_factory("--fault-at-ms", "600")
+def keep_driving(b: Bench, cmd):
+    """Renew a short DRIVE every cycle while authorized, so an injection meets a driving MCU."""
+    def send(now):
+        if b.host.ready:
+            b.host.drive(cmd, 0.0, True, now + 60_000_000, now)
+    return send
+
+
+def revoked_for(b: Bench, reason: str) -> bool:
+    return any(e.kind == "authorization_revoked" and e.detail.get("reason") == reason for e in b.events)
+
+
+def test_driver_fault_while_driving_latches_and_only_the_operator_clears_it(bench_factory):
+    b = bench_factory("--fault-at-ms", "900")
     arm(b)
-    assert b.run_until(lambda: b.state().mode == Mode.FAULT, timeout_s=3.0)
+    send = keep_driving(b, rear_drive_command(0.3, 0.0, VEHICLE))
+    assert b.run_until(lambda: b.state().mode == Mode.FAULT, timeout_s=3.0, every=send)
+    assert revoked_for(b, "mode_fault"), [(e.kind, e.detail) for e in b.events]  # driving until the fault
     assert not b.host.ready
     b.run_until(lambda: False, timeout_s=0.3)
     assert not any(isinstance(m, ClearFaults) for m in b.written())
@@ -179,19 +198,92 @@ def test_driver_fault_latches_and_only_the_operator_clears_it(bench_factory):
     assert b.run_until(lambda: b.host.ready, timeout_s=3.0)
 
 
-def test_estop_latches(bench_factory):
-    b = bench_factory("--estop-at-ms", "600", "--estop-release-ms", "900")
+def test_estop_while_driving_latches(bench_factory):
+    b = bench_factory("--estop-at-ms", "900", "--estop-release-ms", "1200")
     arm(b)
-    assert b.run_until(lambda: b.state().mode == Mode.ESTOP, timeout_s=3.0)
-    assert not b.host.ready
+    send = keep_driving(b, rear_drive_command(0.3, 0.0, VEHICLE))
+    assert b.run_until(lambda: b.state().mode == Mode.ESTOP, timeout_s=3.0, every=send)
+    assert revoked_for(b, "mode_estop") and not b.host.ready
     b.run_until(lambda: False, timeout_s=0.5)  # released, still latched
     assert b.state().mode == Mode.ESTOP
     assert b.host.request_clear_faults(time.monotonic_ns()) is None
     assert b.run_until(lambda: b.state().mode == Mode.DISARMED, timeout_s=3.0)
 
 
-def test_silent_mcu_goes_stale_and_revokes(bench_factory):
-    b = bench_factory("--silent-at-ms", "800")
+def test_silent_mcu_goes_stale_and_that_revokes(bench_factory):
+    b = bench_factory("--silent-at-ms", "900")
     arm(b)
-    assert b.run_until(lambda: any(e.kind == "stale" for e in b.events), timeout_s=3.0)
-    assert any(e.kind == "authorization_revoked" for e in b.events) and not b.host.ready
+    send = keep_driving(b, rear_drive_command(0.3, 0.0, VEHICLE))
+    assert b.run_until(lambda: any(e.kind == "stale" for e in b.events), timeout_s=3.0, every=send)
+    assert revoked_for(b, "stale") and not b.host.ready
+
+
+def test_reconnecting_link_on_a_pty_slave_reads_nothing_without_hanging_up():
+    """open_raw on a live tty with no data reads empty -- not a hangup; closing the far end is one
+    (Codex P0-7 round 2 P1). The test writes STATE bytes into the master as the MCU."""
+    master, slave = os.openpty()
+    path = os.ttyname(slave)
+    tty.setraw(slave)
+    os.close(slave)
+    host = McuLinkHost(CFG)
+    link = ReconnectingLink(path, retry_s=0.05)
+    now = time.monotonic_ns()
+    events = link.service(host, now)
+    assert [e.kind for e in events] == ["connected"]
+    for _ in range(5):  # empty reads
+        events += link.service(host, time.monotonic_ns())
+    st = McuState(1000, 7, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0, 0.0, 0.0,
+                  (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0, StateFlag(0))
+    os.write(master, encode(st, 1))
+    time.sleep(0.02)
+    events += link.service(host, time.monotonic_ns())
+    kinds = [e.kind for e in events]
+    assert "first_state" in kinds and "disconnected" not in kinds
+    os.close(master)
+    time.sleep(0.02)
+    events = link.service(host, time.monotonic_ns())
+    assert "disconnected" in [e.kind for e in events]
+    link.service(host, time.monotonic_ns() + 100_000_000)  # reopen attempt on a vanished path: no crash
+    assert link.link is None
+
+
+def test_a_frame_refused_before_its_first_byte_can_still_be_cancelled():
+    """EAGAIN on the first byte: the DRIVE goes back to the host, and a DISARM drops it (Codex P0-7 round 2 P1)."""
+    host = McuLinkHost(CFG)
+    now = time.monotonic_ns()
+    st = lambda t, mode, gen, flags: encode(McuState(t, 7, gen, 0, mode, RejectReason.NONE, FaultFlag(0), 0, 0,  # noqa: E731
+                                                     0.0, 0.0, 0.0, 0.0, (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0,
+                                                     flags), 1)
+    host.on_bytes(st(1000, Mode.DISARMED, 0, StateFlag(0)), now)
+    host.request_arm(now)
+    host.next_frame(now)
+    host.on_bytes(st(2000, Mode.ARMED, 1, StateFlag(0)), now + 1)
+    host.next_frame(now + 1)
+    host.on_bytes(st(3000, Mode.ARMED, 1, StateFlag.ZERO_SEEN), now + 2)
+    assert host.ready
+    rfd, wfd = os.pipe()
+    os.set_blocking(wfd, False)
+    try:
+        while True:
+            os.write(wfd, b"x" * 65536)
+    except BlockingIOError:
+        pass
+    link = TtyLink(wfd)
+    host.drive(rear_drive_command(0.2, 0.0, VEHICLE), 0.0, True, now + 50_000_000, now + 3)
+    link.pump_writes(host, now + 4)  # EAGAIN before the first byte
+    host.request_disarm(now + 5)
+    os.set_blocking(rfd, False)
+    while True:
+        try:
+            if not os.read(rfd, 65536):
+                break
+        except BlockingIOError:
+            break
+    link.pump_writes(host, now + 6)
+    os.close(wfd)
+    data = b""
+    while chunk := os.read(rfd, 65536):
+        data += chunk
+    os.close(rfd)
+    msgs = [r.message for r in LinkDecoder().feed(data, 0)]
+    assert msgs == [Disarm()]

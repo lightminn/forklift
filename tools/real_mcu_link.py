@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import select
 import sys
 import termios
 import time
@@ -55,6 +56,13 @@ class TtyLink:
         self._off = 0
 
     def read_available(self) -> bytes:
+        """Whatever is waiting. An empty read is "nothing yet" on a raw tty (VMIN=0), not end of file;
+        a hangup shows as POLLHUP/POLLERR or as EIO/ENODEV on read (Codex P0-7 round 2 P1)."""
+        poller = select.poll()
+        poller.register(self.fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+        hung = 0
+        for _fd, revents in poller.poll(0):
+            hung |= revents & (select.POLLHUP | select.POLLERR | select.POLLNVAL)
         chunks = []
         while True:
             try:
@@ -68,8 +76,10 @@ class TtyLink:
                     raise LinkLost(str(exc)) from exc
                 raise
             if not data:
-                raise LinkLost("end of file")
+                break
             chunks.append(data)
+        if hung and not chunks:  # a hung-up tty also reports POLLIN and reads empty: deliver data first
+            raise LinkLost(f"hangup (poll 0x{hung:x})")
         return b"".join(chunks)
 
     def pump_writes(self, host: McuLinkHost, now_ns: int) -> None:
@@ -81,6 +91,11 @@ class TtyLink:
             try:
                 n = os.write(self.fd, self._cur.data[self._off:])
             except BlockingIOError:
+                if self._off == 0:
+                    # Nothing of it is out yet: hand it back so a DISARM, a revoke or its expiry can still
+                    # drop it before the next attempt (Codex P0-7 round 2 P1).
+                    host.unsent(self._cur, now_ns)
+                    self._cur = None
                 return
             except InterruptedError:
                 continue

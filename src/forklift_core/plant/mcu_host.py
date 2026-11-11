@@ -170,6 +170,9 @@ class McuLinkHost:
         if prev is not None and s.boot_id == prev.boot_id and s.mcu_time_us <= prev.mcu_time_us:
             events.append(HostEvent("state_out_of_order", {"mcu_time_us": s.mcu_time_us}))
             return
+        # The gap since the previous receipt is judged before this STATE refreshes the link: a STATE
+        # that arrives after a stale gap must not hide it (Codex P0-7 round 2 P1).
+        self._expire(now_ns, events)
         self._state, self._state_rx_ns = s, now_ns
         if prev is None:
             events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
@@ -217,14 +220,18 @@ class McuLinkHost:
                 self._auth = _READY
                 events.append(HostEvent("armed_ready", {"arm_gen": s.arm_gen}))
 
-    def tick(self, now_ns: int) -> list[HostEvent]:
-        events: list[HostEvent] = []
+    def _expire(self, now_ns: int, events: list) -> None:
+        """Staleness of the last receipt and the arm deadline, as of now_ns."""
         if self._state_rx_ns is not None and not self._fresh(now_ns) and not self._stale_reported:
             self._stale_reported = True
             events.append(HostEvent("stale", {"age_s": (now_ns - self._state_rx_ns) / 1e9}))
             self._revoke("stale", events)
         if self._auth in (_ARM_PENDING, _ZERO_PENDING) and now_ns > self._arm["deadline_ns"]:
             self._revoke("arm_timeout", events)
+
+    def tick(self, now_ns: int) -> list[HostEvent]:
+        events: list[HostEvent] = []
+        self._expire(now_ns, events)
         return events
 
     def disconnected(self, now_ns: int) -> list[HostEvent]:
@@ -259,14 +266,16 @@ class McuLinkHost:
         return None
 
     def request_disarm(self, now_ns: int) -> None:
-        """Always accepted, no STATE needed: drops queued ARM/DRIVE/CLEAR_FAULTS, then queues DISARM."""
+        """Always accepted, no STATE needed: drops queued ARM/DRIVE/CLEAR_FAULTS, then queues one DISARM
+        (an unsent DISARM already queued is enough; repeated requests do not grow the outbox)."""
         events: list = []
         self._revoke("disarm", events)
         self._drop(lambda o: o.kind != "DISARM", "disarm")
         self._enqueue_disarm(now_ns)
 
     def _enqueue_disarm(self, now_ns: int) -> None:
-        self._enqueue("DISARM", Disarm(), now_ns)
+        if not any(o.kind == "DISARM" for o in self._outbox):
+            self._enqueue("DISARM", Disarm(), now_ns)
 
     def request_clear_faults(self, now_ns: int) -> Blocked | None:
         s = self._state
@@ -331,6 +340,12 @@ class McuLinkHost:
                 continue
             return o
         return None
+
+    def unsent(self, out: Outgoing, now_ns: int) -> None:
+        """The adapter could not write the first byte of ``out`` (EAGAIN): it goes back to the head of
+        the outbox, still subject to every drop rule (a DISARM or a revoke still cancels it)."""
+        self._outbox.appendleft(out)
+        self._log("unsent", now_ns, out.data, {"kind": out.kind, "seq": out.seq})
 
     def frame_written(self, out: Outgoing, now_ns: int) -> None:
         self._log("written", now_ns, out.data, {"kind": out.kind, "seq": out.seq})
