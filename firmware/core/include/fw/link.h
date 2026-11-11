@@ -1,4 +1,4 @@
-/* mcu-link/1 messages (docs/interfaces/2026-10-22-mcu-link-contract.md). */
+/* mcu-link/2 messages (docs/interfaces/2026-10-22-mcu-link-contract.md). */
 #ifndef FW_LINK_H
 #define FW_LINK_H
 
@@ -8,7 +8,7 @@
 
 #include "fw/crc.h"
 
-#define LINK_VERSION 1u
+#define LINK_VERSION 2u
 #define LINK_BODY_MAX 80u
 #define LINK_WIRE_MAX 83u /* COBS(LINK_BODY_MAX) + delimiter, with room for one more code */
 
@@ -16,6 +16,7 @@
 #define LINK_ARM 0x02u
 #define LINK_DISARM 0x03u
 #define LINK_CLEAR_FAULTS 0x04u
+#define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
 #define LINK_STATE 0x81u
 
 #define LINK_DRIVE_FLAG_LIFT_HOLD 0x01u
@@ -38,6 +39,16 @@ typedef struct {
     uint32_t boot_id;
 } link_clear;
 
+/* v2, contract 3.4: one axis's open-loop duty for axis-by-axis commissioning. */
+typedef struct {
+    uint8_t axis; /* 0 L, 1 R, 2 M (steering), 3 H (lift) */
+    int16_t duty_e4;
+    uint16_t valid_after_echo_ms;
+    uint16_t arm_gen;
+    uint32_t boot_id;
+    uint64_t echo_mcu_time_us;
+} link_commission;
+
 typedef struct {
     uint64_t mcu_time_us;
     uint32_t boot_id;
@@ -50,6 +61,7 @@ typedef struct {
     uint8_t driver_status[4];
     uint16_t rx_errors, cycle_overruns;
     uint8_t flags;
+    uint8_t reset_cause; /* v2 */
 } link_state;
 
 typedef struct {
@@ -59,6 +71,7 @@ typedef struct {
         link_drive drive;
         link_arm arm;
         link_clear clear;
+        link_commission commission;
         link_state state;
     } u;
 } link_msg;

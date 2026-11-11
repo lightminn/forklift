@@ -366,3 +366,74 @@ def test_a_frame_handed_back_unsent_is_still_subject_to_cancellation():
     r.host.unsent(f, r.now)
     r.host.request_disarm(r.now)
     assert r.sent() == [Disarm()]
+
+
+# --- mcu-link/2 build bits on the send path (Codex PR review P2) ---
+
+def _state_with(flags, mode=None, **kw):
+    from forklift_core.mcu_link.messages import Mode as _Mode
+    base = dict(mcu_time_us=1_000, boot_id=7, arm_gen=0, last_rx_seq=0, mode=mode or _Mode.DISARMED)
+    base.update(kw)
+    from forklift_core.mcu_link.messages import FaultFlag as _F, McuState as _S, RejectReason as _R
+    return _S(**base, reject_reason=_R.NONE, fault_flags=_F(0), wheel_count_left=0, wheel_count_right=0,
+              wheel_rate_left_rad_s=0.0, wheel_rate_right_rad_s=0.0, steering_rad=0.0, lift_m=0.0,
+              current_ma=(0, 0, 0, 0), duty_e4=(0, 0, 0, 0), driver_status=(0, 0, 0, 0), rx_errors=0,
+              cycle_overruns=0, flags=flags)
+
+
+def _host_seeing(state, **kw):
+    from forklift_core.mcu_link.messages import encode as _encode
+    from forklift_core.plant.mcu_host import HostConfig as _HC, McuLinkHost as _H
+
+    h = _H(_HC(state_max_age_s=0.1, cap_ms=150, arm_timeout_s=1.0, zero_valid_ms=100, outbox_max=16), **kw)
+    h.on_bytes(_encode(state, 1), 1_000_000)
+    return h
+
+
+@pytest.mark.parametrize("flags,kw,refused", [
+    ("HIL_PLANT|OUTPUTS_LOCKED|ESTOP_UNWIRED", {}, "hil_board"),  # the real executor never arms a HIL board
+    ("COMMISSION_BUILD", {}, "commission_build"),
+    ("OUTPUTS_LOCKED", {}, "outputs_locked"),
+    ("ESTOP_UNWIRED", {}, "estop_unwired"),
+    ("DRIVERS_READY", {"client": "hil"}, "not_hil_board"),
+    ("COMMISSION_BUILD", {"client": "bringup", "allow_locked": True}, "commission_build"),
+    ("OUTPUTS_LOCKED", {"client": "bringup"}, "outputs_locked"),
+])
+def test_a_forbidden_build_is_never_armed(flags, kw, refused):
+    from forklift_core.mcu_link.build_policy import Client
+    from forklift_core.mcu_link.messages import StateFlag as _SF
+
+    f = _SF(0)
+    for name in flags.split("|"):
+        f |= _SF[name]
+    if "client" in kw:
+        kw = {**kw, "client": Client(kw["client"])}
+    h = _host_seeing(_state_with(f), **kw)
+    blocked = h.request_arm(1_000_001)
+    assert blocked is not None and blocked.reason == f"build_refused: {refused}"
+    assert h.next_frame(1_000_002) is None  # nothing went out
+
+
+def test_allowed_builds_arm():
+    from forklift_core.mcu_link.build_policy import Client
+    from forklift_core.mcu_link.messages import StateFlag as _SF
+
+    for flags, kw in ((_SF.DRIVERS_READY, {}), (_SF.HIL_PLANT | _SF.OUTPUTS_LOCKED | _SF.ESTOP_UNWIRED,
+                                                {"client": Client.HIL}),
+                      (_SF.OUTPUTS_LOCKED | _SF.HIL_PLANT, {"client": Client.BRINGUP, "allow_locked": True})):
+        h = _host_seeing(_state_with(flags), **kw)
+        assert h.request_arm(1_000_001) is None
+
+
+def test_a_build_bit_appearing_while_armed_revokes_and_disarms():
+    from forklift_core.mcu_link.messages import Disarm, LinkDecoder, Mode, StateFlag as _SF, encode as _encode
+
+    h = _host_seeing(_state_with(_SF.DRIVERS_READY))
+    assert h.request_arm(1_000_001) is None
+    while h.next_frame(1_000_002) is not None:
+        pass
+    events = h.on_bytes(_encode(_state_with(_SF.OUTPUTS_LOCKED, mode=Mode.ARMED, mcu_time_us=2_000, arm_gen=1), 2),
+                        1_100_000)
+    assert any(e.kind in ("authorization_revoked", "arm_failed") and "build_refused" in str(e.detail) for e in events)
+    out = h.next_frame(1_100_001)
+    assert out is not None and isinstance(next(iter(LinkDecoder().feed(out.data, 0))).message, Disarm)

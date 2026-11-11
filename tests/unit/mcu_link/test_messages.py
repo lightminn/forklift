@@ -7,6 +7,7 @@ from forklift_core.mcu_link.framing import cobs_decode, cobs_encode, crc16_ccitt
 from forklift_core.mcu_link.messages import (
     Arm,
     ClearFaults,
+    Commission,
     Disarm,
     Drive,
     FaultFlag,
@@ -15,6 +16,7 @@ from forklift_core.mcu_link.messages import (
     McuState,
     Mode,
     RejectReason,
+    ResetCause,
     StateFlag,
     decode,
     encode,
@@ -22,17 +24,23 @@ from forklift_core.mcu_link.messages import (
     wheel_count_delta,
 )
 
-# mcu-link/1 contract section 6 golden vectors.
-ARM_1234 = "0e01023412efbeadde0403020105010103764500"
+# mcu-link/2 contract section 6 golden vectors.
+ARM_1234 = "0e02023412efbeadde04030201050101033bad00"
 DRIVE_0007 = (
-    "04010107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab020101010388be00"
+    "04020107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab020101010374b200"
 )
-CLEAR_0008 = "0401040807efbeadde024e00"
-DISARM_0009 = "0401030903bc1100"
+CLEAR_0008 = "0402040807efbeadde778600"
+DISARM_0009 = "0402030903608a00"
+COMMISSION_000A = "0402050a050224fa960a0302efbeaddeefcdab0201010103742000"
 STATE_0102 = (
-    "0a01810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
+    "0a02810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
     "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
-    "02110202040b2cbb00"
+    "02110202020b03150900"
+)
+STATE_0103 = (
+    "0a02810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb0901"
+    "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
+    "0211020205d90275f100"
 )
 
 DRIVE = Drive(
@@ -69,6 +77,17 @@ STATE = McuState(
     cycle_overruns=2,
     flags=StateFlag.LIMITED | StateFlag.COMMAND_FRESH | StateFlag.DRIVERS_READY,
 )
+# v2: one axis's commissioning duty, and the new fault and build bits with a reset cause (every flag bit is defined)
+COMMISSION = Commission(axis=2, duty_e4=-1500, valid_after_echo_ms=150, arm_gen=0x0203, boot_id=0xDEADBEEF,
+                        echo_mcu_time_us=0x00000001_00ABCDEF)
+STATE_V2_BITS = McuState(
+    **{**STATE.__dict__,
+       "fault_flags": FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_STUCK_R | FaultFlag.ENCODER_JUMP_L
+       | FaultFlag.COMMISSION_TIME_LIMIT,
+       "flags": StateFlag.LIMITED | StateFlag.DRIVERS_READY | StateFlag.COMMISSION_BUILD | StateFlag.OUTPUTS_LOCKED
+       | StateFlag.ESTOP_UNWIRED,
+       "reset_cause": ResetCause.IWDG},
+)
 
 GOLDEN = [
     (Arm(boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000005_01020304), 0x1234, ARM_1234),
@@ -76,6 +95,8 @@ GOLDEN = [
     (ClearFaults(boot_id=0xDEADBEEF), 8, CLEAR_0008),
     (Disarm(), 9, DISARM_0009),
     (STATE, 0x0102, STATE_0102),
+    (COMMISSION, 0x000A, COMMISSION_000A),
+    (STATE_V2_BITS, 0x0103, STATE_0103),
 ]
 
 
@@ -126,19 +147,19 @@ def test_drive_rejects_bad_values():
 
 
 def _body(type_: int, payload: bytes) -> bytes:
-    return struct.pack("<BBH", 1, type_, 5) + payload
+    return struct.pack("<BBH", 2, type_, 5) + payload
 
 
-STATE_FORMAT = "<QIHHBBIiiffff4h4h4BHHB"
+STATE_FORMAT = "<QIHHBBIiiffff4h4h4BHHBB"
 
 
 @pytest.mark.parametrize(
     ("index", "value"),
     [
         (4, 6),  # mode beyond ESTOP
-        (5, 14),  # reject reason beyond sensor_invalid
-        (6, 1 << 17),  # undefined fault bit
-        (27, 0x10),  # undefined state flag
+        (5, 16),  # reject reason beyond estop_unwired
+        (6, 1 << 25),  # undefined fault bit
+        (28, 5),  # reset cause beyond OTHER
     ],
 )
 def test_decode_rejects_undefined_bits_and_enums(index, value):
@@ -150,11 +171,13 @@ def test_decode_rejects_undefined_bits_and_enums(index, value):
 
 def test_decode_rejects_bad_framing_fields():
     with pytest.raises(LinkError):
-        decode(struct.pack("<BBH", 2, 0x03, 0))  # version 2
+        decode(struct.pack("<BBH", 1, 0x03, 0))  # version 1 (mcu-link/1)
     with pytest.raises(LinkError):
-        decode(struct.pack("<BBH", 1, 0x7F, 0))  # unknown type
+        decode(struct.pack("<BBH", 2, 0x7F, 0))  # unknown type
     with pytest.raises(LinkError):
-        decode(struct.pack("<BBH", 1, 0x02, 0) + bytes(11))  # ARM payload 11 bytes
+        decode(struct.pack("<BBH", 2, 0x02, 0) + bytes(11))  # ARM payload 11 bytes
+    with pytest.raises(LinkError):
+        decode(struct.pack("<BBH", 2, 0x05, 0) + bytes(18))  # COMMISSION payload 18 bytes
 
 
 def test_link_decoder_keeps_host_receive_time():
@@ -187,3 +210,27 @@ def test_valid_after_echo_ms():
 def test_wheel_count_delta_is_modular():
     assert wheel_count_delta(-(2**31), 2**31 - 1) == 1
     assert wheel_count_delta(5, 10) == -5
+
+
+def test_the_golden_vectors_are_the_contract_formats_with_the_standard_crc():
+    """Independent of the module: struct formats of the contract and binascii's CRC-16/CCITT-FALSE."""
+    import binascii
+
+    body = struct.pack("<BBH", 2, 0x05, 0x000A) + struct.pack("<BhHHIQ", 2, -1500, 150, 0x0203, 0xDEADBEEF,
+                                                               0x00000001_00ABCDEF)
+    body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
+    assert cobs_encode(body) + b"\x00" == bytes.fromhex(COMMISSION_000A)
+    fields = (0x00000002_11223344, 0xDEADBEEF, 0x0203, 0x0102, 2, 7, (1 << 17) | (1 << 19) | (1 << 22) | (1 << 24),
+              -123456, 654321, 1.25, -0.5, 0.0625, 0.75, 1500, -200, 30, 4000, 5000, -10000, 2500, 0,
+              0xC0, 0xC4, 0xE0, 0x00, 17, 2, 0x01 | 0x08 | 0x10 | 0x40 | 0x80, 2)
+    body = struct.pack("<BBH", 2, 0x81, 0x0103) + struct.pack("<QIHHBBIiiffff4h4h4BHHBB", *fields)
+    body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
+    assert cobs_encode(body) + b"\x00" == bytes.fromhex(STATE_0103)
+
+
+@pytest.mark.parametrize("kw", [dict(axis=4), dict(axis=-1), dict(duty_e4=10001), dict(duty_e4=-10001),
+                                dict(valid_after_echo_ms=0), dict(arm_gen=0), dict(boot_id=0)])
+def test_commission_rejects_out_of_range_values(kw):
+    base = dict(axis=0, duty_e4=0, valid_after_echo_ms=150, arm_gen=1, boot_id=1, echo_mcu_time_us=0)
+    with pytest.raises(ValueError):
+        Commission(**{**base, **kw})

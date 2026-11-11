@@ -37,9 +37,10 @@ typedef struct {
     uint32_t state_drops;    /* STATE frames the link could not take */
 } fw_app;
 
-/* false for an invalid drive config, boot_id 0 or state_period_ms 0. */
+/* false for an invalid drive config, boot_id 0, state_period_ms 0 or an unknown reset_cause.
+   reset_cause is DRIVE_RESET_* from the board's reset flags, carried in every STATE. */
 bool fw_app_init(fw_app *app, const fw_hal *hal, const drive_config *cfg, uint32_t state_period_ms,
-                 uint32_t boot_id);
+                 uint32_t boot_id, uint8_t reset_cause);
 
 /* Order: SPI responses -> inputs -> drive_begin -> received messages -> drive_finish ->
    outputs -> next SPI frame -> STATE -> watchdog. */

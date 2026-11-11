@@ -28,4 +28,17 @@ bool wheel_enc_init(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32
 /* The 16-bit difference since the last read must stay within +-32767 counts. */
 void wheel_enc_update(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32_t now_us);
 
+/* The step wheel_enc_update would add for hw, in vehicle-forward counts. */
+int32_t wheel_enc_step(const wheel_enc *e, const wheel_enc_config *c, uint16_t hw);
+
+/* Time stamp of the last sample taken. */
+uint32_t wheel_enc_last_us(const wheel_enc *e);
+
+/* Time stamp of the oldest sample the rate is computed from. */
+uint32_t wheel_enc_oldest_us(const wheel_enc *e, const wheel_enc_config *c);
+
+/* Drops the step to hw (a gap or an impossible jump): the accumulated count is kept, the raw
+   base moves to hw and the rate history restarts from this one sample (rate 0). */
+void wheel_enc_rebase(wheel_enc *e, uint16_t hw, uint32_t now_us);
+
 #endif

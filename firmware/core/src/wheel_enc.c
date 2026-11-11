@@ -29,17 +29,47 @@ bool wheel_enc_init(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32
     return true;
 }
 
-void wheel_enc_update(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32_t now_us)
+int32_t wheel_enc_step(const wheel_enc *e, const wheel_enc_config *c, uint16_t hw)
 {
     int16_t step = (int16_t)(uint16_t)(hw - e->last_hw); /* modular 16-bit difference */
+    return c->sign > 0 ? (int32_t)step : -(int32_t)step;
+}
+
+uint32_t wheel_enc_last_us(const wheel_enc *e)
+{
+    return e->hist_t_us[e->head];
+}
+
+static uint16_t oldest_slot(const wheel_enc *e, const wheel_enc_config *c)
+{
+    uint16_t slots = (uint16_t)(c->window + 1u);
+    return (uint16_t)((e->head + slots + 1u - e->filled) % slots);
+}
+
+uint32_t wheel_enc_oldest_us(const wheel_enc *e, const wheel_enc_config *c)
+{
+    return e->hist_t_us[oldest_slot(e, c)];
+}
+
+void wheel_enc_rebase(wheel_enc *e, uint16_t hw, uint32_t now_us)
+{
     e->last_hw = hw;
-    int32_t signed_step = c->sign > 0 ? (int32_t)step : -(int32_t)step;
+    e->rate_rad_s = 0.0f;
+    e->head = 0;
+    e->filled = 1;
+    e->hist_count[0] = e->count;
+    e->hist_t_us[0] = now_us;
+}
+
+void wheel_enc_update(wheel_enc *e, const wheel_enc_config *c, uint16_t hw, uint32_t now_us)
+{
+    int32_t signed_step = wheel_enc_step(e, c, hw);
+    e->last_hw = hw;
     e->count += (uint32_t)signed_step; /* modular 32-bit accumulation */
     push(e, c, now_us);
 
     /* Rate between the newest sample and the oldest one kept, by their own time stamps. */
-    uint16_t slots = (uint16_t)(c->window + 1u);
-    uint16_t oldest = (uint16_t)((e->head + slots + 1u - e->filled) % slots);
+    uint16_t oldest = oldest_slot(e, c);
     uint32_t dt_us = now_us - e->hist_t_us[oldest];
     int32_t dcount = (int32_t)(e->count - e->hist_count[oldest]);
     e->rate_rad_s =

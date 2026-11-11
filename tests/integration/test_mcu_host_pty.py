@@ -129,6 +129,20 @@ def arm(b: Bench):
     assert b.run_until(lambda: b.host.ready), [e.kind for e in b.events]
 
 
+def test_the_model_speaks_mcu_link_2_as_a_normal_wired_build(bench_factory):
+    """mcu-link/2: the model is a normal build with its e-stop input wired -- no build bit, a power-on reset."""
+    from forklift_core.mcu_link.build_policy import Client, connect_refusal, drive_refusal
+    from forklift_core.mcu_link.messages import ResetCause
+
+    b = bench_factory()
+    assert b.run_until(lambda: b.state() is not None and b.state().mode == Mode.DISARMED), "no DISARMED STATE"
+    s = b.state()
+    build_bits = StateFlag.COMMISSION_BUILD | StateFlag.HIL_PLANT | StateFlag.OUTPUTS_LOCKED | StateFlag.ESTOP_UNWIRED
+    assert not s.flags & build_bits and s.reset_cause == ResetCause.POWER
+    assert connect_refusal(s.flags, Client.REAL) is None and drive_refusal(s.flags, Client.REAL) is None
+    assert connect_refusal(s.flags, Client.HIL) == "not_hil_board"
+
+
 def test_operator_arm_drive_and_stop_on_expiry(bench_factory):
     b = bench_factory()
     arm(b)

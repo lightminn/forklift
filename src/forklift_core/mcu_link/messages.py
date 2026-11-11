@@ -1,4 +1,4 @@
-"""mcu-link/1 messages: encode/decode and a stream decoder that stamps host time.
+"""mcu-link/2 messages: encode/decode and a stream decoder that stamps host time.
 
 Contract: ``docs/interfaces/2026-10-22-mcu-link-contract.md`` sections 2-4. Units are
 SI except where the contract fixes raw fields (``current_ma``, ``duty_e4``); the
@@ -14,7 +14,7 @@ from enum import IntEnum, IntFlag
 
 from .framing import BODY_MAX, FrameDecoder, cobs_encode, crc16_ccitt_false
 
-VERSION = 1
+VERSION = 2
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 
@@ -22,19 +22,21 @@ _HEADER = struct.Struct("<BBH")
 _DRIVE = struct.Struct("<ffffHBHIQ")
 _ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
-_STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHB")
+_STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB")
+_COMMISSION = struct.Struct("<BhHHIQ")
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
 TYPE_DISARM = 0x03
 TYPE_CLEAR_FAULTS = 0x04
+TYPE_COMMISSION = 0x05
 TYPE_STATE = 0x81
 
 _LIFT_HOLD = 0x01
 
 
 class LinkError(ValueError):
-    """A frame body that is not a valid mcu-link/1 message."""
+    """A frame body that is not a valid mcu-link/2 message."""
 
 
 class Mode(IntEnum):
@@ -61,6 +63,8 @@ class RejectReason(IntEnum):
     STOPPING = 11
     NOT_DISARMED = 12
     SENSOR_INVALID = 13
+    WRONG_BUILD = 14  # v2: a COMMISSION to a normal build, a DRIVE to the commissioning build
+    ESTOP_UNWIRED = 15  # v2: a normal build with no e-stop pin refuses ARM
 
 
 class FaultFlag(IntFlag):
@@ -81,6 +85,15 @@ class FaultFlag(IntFlag):
     LIFT_OUT_OF_RANGE = 1 << 14
     CYCLE_OVERRUN = 1 << 15
     CURRENT_SENSE_INVALID = 1 << 16
+    # v2: the rear wheels' encoder checks (gap shared: both encoders are read in the same cycle)
+    ENCODER_GAP = 1 << 17
+    ENCODER_STUCK_L = 1 << 18
+    ENCODER_STUCK_R = 1 << 19
+    ENCODER_POLARITY_L = 1 << 20
+    ENCODER_POLARITY_R = 1 << 21
+    ENCODER_JUMP_L = 1 << 22
+    ENCODER_JUMP_R = 1 << 23
+    COMMISSION_TIME_LIMIT = 1 << 24  # v2: a nonzero commissioning duty held past its limit (kept until ARM)
 
 
 class StateFlag(IntFlag):
@@ -88,10 +101,24 @@ class StateFlag(IntFlag):
     COMMAND_FRESH = 1 << 1
     ZERO_SEEN = 1 << 2
     DRIVERS_READY = 1 << 3
+    COMMISSION_BUILD = 1 << 4  # v2: FW_COMMISSION -- an executor never connects
+    HIL_PLANT = 1 << 5  # v2: FW_HIL_PLANT (outputs locked, a model fills the inputs)
+    OUTPUTS_LOCKED = 1 << 6  # v2: motor outputs refused by the build -- no teleop or autonomy
+    ESTOP_UNWIRED = 1 << 7  # v2: no e-stop pin -- no teleop or autonomy (a normal build refuses ARM)
 
 
-_FAULT_MASK = (1 << 17) - 1
-_STATE_FLAG_MASK = (1 << 4) - 1
+class ResetCause(IntEnum):
+    """v2: why the MCU last started (the same value in every STATE of a boot)."""
+
+    POWER = 0  # power-on or brown-out
+    PIN = 1
+    IWDG = 2
+    SOFTWARE = 3
+    OTHER = 4
+
+
+_FAULT_MASK = (1 << 25) - 1
+_STATE_FLAG_MASK = (1 << 8) - 1
 
 
 def _check_range(name: str, value: int, low: int, high: int) -> None:
@@ -126,6 +153,27 @@ class Drive:
             steering_rad=self.steering_rad,
             lift_m=self.lift_m,
         )
+        _check_range("valid_after_echo_ms", self.valid_after_echo_ms, 1, 0xFFFF)
+        _check_range("arm_gen", self.arm_gen, 1, 0xFFFF)
+        _check_range("boot_id", self.boot_id, 1, U32_MAX)
+        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U64_MAX)
+
+
+@dataclass(frozen=True)
+class Commission:
+    """v2 commissioning command (FW_COMMISSION builds only): one axis's duty, the others stopped. Axis 0 L, 1 R,
+    2 M (steering), 3 H (lift); ``duty_e4`` -10000..10000. Freshness as ``Drive``."""
+
+    axis: int
+    duty_e4: int
+    valid_after_echo_ms: int
+    arm_gen: int
+    boot_id: int
+    echo_mcu_time_us: int
+
+    def __post_init__(self) -> None:
+        _check_range("axis", self.axis, 0, 3)
+        _check_range("duty_e4", self.duty_e4, -10000, 10000)
         _check_range("valid_after_echo_ms", self.valid_after_echo_ms, 1, 0xFFFF)
         _check_range("arm_gen", self.arm_gen, 1, 0xFFFF)
         _check_range("boot_id", self.boot_id, 1, U32_MAX)
@@ -182,6 +230,7 @@ class McuState:
     rx_errors: int
     cycle_overruns: int
     flags: StateFlag
+    reset_cause: ResetCause = ResetCause.POWER
 
     @property
     def current_a(self) -> tuple[float, ...]:
@@ -194,7 +243,7 @@ class McuState:
         return tuple(value / 10000 for value in self.duty_e4)
 
 
-Message = Drive | Arm | Disarm | ClearFaults | McuState
+Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState
 
 
 def _payload(message: Message) -> tuple[int, bytes]:
@@ -210,6 +259,10 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.boot_id,
             message.echo_mcu_time_us,
         )
+    if isinstance(message, Commission):
+        return TYPE_COMMISSION, _COMMISSION.pack(
+            message.axis, message.duty_e4, message.valid_after_echo_ms, message.arm_gen, message.boot_id,
+            message.echo_mcu_time_us)
     if isinstance(message, Arm):
         return TYPE_ARM, _ARM.pack(message.boot_id, message.echo_mcu_time_us)
     if isinstance(message, Disarm):
@@ -237,6 +290,7 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.rx_errors,
             message.cycle_overruns,
             int(message.flags),
+            int(message.reset_cause),
         )
     raise TypeError(f"not an mcu-link message: {message!r}")
 
@@ -253,9 +307,9 @@ def encode(message: Message, seq: int) -> bytes:
 
 
 def _state(fields: tuple) -> McuState:
-    mode, reject, faults, flags = fields[4], fields[5], fields[6], fields[27]
-    if mode > max(Mode) or reject > max(RejectReason):
-        raise LinkError("mode or reject reason out of range")
+    mode, reject, faults, flags, cause = fields[4], fields[5], fields[6], fields[27], fields[28]
+    if mode > max(Mode) or reject > max(RejectReason) or cause > max(ResetCause):
+        raise LinkError("mode, reject reason or reset cause out of range")
     if faults & ~_FAULT_MASK or flags & ~_STATE_FLAG_MASK:
         raise LinkError("undefined fault or state flag bit set")
     return McuState(
@@ -278,6 +332,7 @@ def _state(fields: tuple) -> McuState:
         rx_errors=fields[25],
         cycle_overruns=fields[26],
         flags=StateFlag(flags),
+        reset_cause=ResetCause(cause),
     )
 
 
@@ -294,6 +349,7 @@ def decode(body: bytes) -> tuple[int, Message]:
         TYPE_ARM: _ARM,
         TYPE_CLEAR_FAULTS: _CLEAR,
         TYPE_STATE: _STATE,
+        TYPE_COMMISSION: _COMMISSION,
     }
     if type_ == TYPE_DISARM:
         if payload:
@@ -316,6 +372,8 @@ def decode(body: bytes) -> tuple[int, Message]:
             message = Arm(*fields)
         elif type_ == TYPE_CLEAR_FAULTS:
             message = ClearFaults(*fields)
+        elif type_ == TYPE_COMMISSION:
+            message = Commission(*fields)
         else:
             message = _state(fields)
     except LinkError:
