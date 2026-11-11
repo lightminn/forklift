@@ -279,10 +279,12 @@ def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
     assert kinds[0] == "ARM" and kinds.count("DISARM") >= 1 and "DRIVE" not in kinds
     first_disarm = kinds.index("DISARM")
     assert set(kinds[1:first_disarm]) == {"COMMISSION"}
-    # external values only: the stop time is kept with no threshold yet, the output response as given
+    # external values only, against the general DISARM's thresholds (lead decision: provisional until S5)
     ext = res["external"]
-    assert ext["stop_time_ms"] == {"value": 180.0, "limit": None, "pass": None}
+    general = bringup.verdict("disarm", {"stop_time_ms": "180", "output_response_ms": "unavailable"})
+    assert ext == general
     assert ext["output_response_ms"] == {"value": "unavailable", "limit": 100.0, "pass": None}
+    assert ext["stop_time_ms"]["value"] == 180.0
     assert res["cleanup_confirmed"] and b.state.mode == Mode.DISARMED
 
 
@@ -321,3 +323,11 @@ def test_the_scenario_cli_parses():
     a = ex.call_args[0][0]
     assert (a.scenario, a.limit_s, a.disarm_delay_ms, a.stop_time_ms, a.seconds) == ("hold_disarm", 2.0, 40.0,
                                                                                         "unavailable", None)
+
+
+def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp_path, monkeypatch):
+    monkeypatch.setitem(bringup.WHEEL_STOP_MS, "disarm", 400.0)  # whatever the DISARM row holds, they follow
+    rec = tmp_path / "run.jsonl"
+    rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
+    out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"})
+    assert out["external"]["stop_time_ms"] == {"value": 450.0, "limit": 400.0, "pass": False}

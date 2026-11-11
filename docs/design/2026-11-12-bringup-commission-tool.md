@@ -124,8 +124,8 @@ bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario 
   - 그 뒤 0.6 s 카운트 관찰 → 정리(도구 ① 과 같은 `DISARM` 확인).
 - 기록(소프트웨어 근거): 명령 순서(쓰기 완료 시각), 상한까지의 MCU 시간(`limit_after_ms`), 사건 `DISARM` 의 seq·쓰기 시각, 그 seq 를 담은 첫 `STATE`(수락)와 그 직전 표본의 모드(`disarm_during_stopping`), 수락 표본의 모드, 상한 표본에서 `DISARM` 쓰기까지(`limit_seen_to_disarm_write_ms`), `DISARMED` 까지·카운트 정착까지의 시각. 수락 표본에서 비트 24 가 남아 있는지는 시험이 본다.
 - 결과: `DISARM` 이 수락되고(`hold_disarm` 은 `STOPPING` 에서 수락돼야) 세션 전체 검사(3절)를 통과하면 `ok`, 아니면 `not_met`·`aborted`.
-- **합격 판정은 외부 측정값으로만** 한다(다른 S5 항목과 같다, 도구 ① 4절). 출력 반응은 `DISARM` 의 0.1 s 문턱(계획 3.4)을 쓴다. 정지 시간·거리는 계획 3.4 에 이 경우의 문턱이 없어 값만 기록한다(`limit: null`). 문턱은 S5 전에 정하고, 측정값에 맞춰 정하지 않는다(계획 3.4).
-- 재무장 보류의 확인(보류 중 `ARM` 거부)은 이 시나리오에 넣지 않았다. 펌웨어 회귀 시험 v2r6 가 고정하고 있고, 실기에서 `ARM` 을 일부러 보내는 것은 보류가 깨져 있으면 무장이 되는 시험이라 따로 정한다.
+- **합격 판정은 외부 측정값으로만** 한다(다른 S5 항목과 같다, 도구 ① 4절). 문턱은 일반 `DISARM` 의 것을 잠정 적용한다(총괄 결정 2026-11-12, 계획 3.4): 도구의 문턱 표에서 두 시나리오는 `disarm` 행을 따른다(`THRESHOLD_KIND`). 지금 그 행에는 출력 반응 0.1 s 만 있고 바퀴 정지 시간·거리 문턱은 없다(값만 기록, `limit: null`). 정해지면 같은 행 하나만 고친다. `analyze --kind limit_disarm|hold_disarm` 도 같은 문턱을 쓴다.
+- 재무장 보류의 확인(보류 중 `ARM` 거부)은 실기 도구에 넣지 않는다(총괄 결정 2026-11-12). 펌웨어 회귀 시험 v2r6 가 고정하고 있고, 실기 확인은 펌웨어 HIL 빌드 시험(펌웨어 PR ⑤)으로 넘긴다.
 - 시험(MCU 모형, 상한 300 ms·`stop_grace_ms` 100 ms): 두 시나리오 모두 `STOPPING` 에서 수락·`DISARMED`·비트 24 유지, 명령 순서(`ARM` → `COMMISSION`… → `DISARM`, `DRIVE` 없음), 외부 값 기록. 지연이 `stop_grace_ms` 보다 길면 `not_met`. 상한이 오지 않으면 `limit_not_reached`. 인자 거부(축·`--limit-s`·지연·주 전원·듀티). CLI 파싱.
 
 ## 9. 자체 검토

@@ -56,9 +56,12 @@ STATE_GAP_S = 0.2  # after an event, two STATEs further apart than this are an o
 HANDOVER_S = 0.05  # a nonzero hold stops sending this much before its end, so the next hold's first command lands
 # while the last nonzero one is still valid -- and no nonzero command outlives its hold (Codex re-review P2-1)
 # plan 3.4 thresholds (provisional, 0.2 m/s empty truck)
-OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0, "limit_disarm": 100.0, "hold_disarm": 100.0}
+OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0}
 WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0}
 STOP_DISTANCE_MM = {"tx_cut": 100.0, "expiry": 100.0}
+# ② the DISARMs in a commissioning time limit's STOPPING take the general DISARM's thresholds, provisionally until
+# the S5 measurements (lead decision 2026-11-12; plan 3.4) -- whatever the DISARM rows hold, these follow
+THRESHOLD_KIND = {"limit_disarm": "disarm", "hold_disarm": "disarm"}
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 # ② the commissioning host: a shorter validity bounds how long a COMMISSION runs on after the window stop
 COMMISSION_HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=COMMISSION_CAP_MS, arm_timeout_s=0.3,
@@ -702,7 +705,7 @@ def verdict(kind: str, external: dict) -> dict:
     out = {}
     for name, table in (("output_response_ms", OUTPUT_RESPONSE_MS), ("stop_time_ms", WHEEL_STOP_MS),
                         ("stop_distance_mm", STOP_DISTANCE_MM)):
-        value, limit = external.get(name), table.get(kind)
+        value, limit = external.get(name), table.get(THRESHOLD_KIND.get(kind, kind))
         if value is None and limit is None:
             continue
         if value is None or value == "unavailable":
@@ -812,7 +815,8 @@ def main(argv=None) -> int:
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1)
-    an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power"), required=True)
+    an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power") + COMMISSION_SCENARIOS,
+                    required=True)
     for p in (sc, an, cm):
         for name in ("output-response-ms", "stop-time-ms", "stop-distance-mm"):
             p.add_argument("--" + name)
