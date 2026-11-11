@@ -17,8 +17,9 @@ usage:
                       [--floor --power-switch-reachable] [--output-response-ms X|unavailable]
                       [--stop-time-ms X|unavailable] [--stop-distance-mm X|unavailable]
   bringup.py analyze  --record run.jsonl [--marker N] [--kind tx_cut|disarm|expiry|iwdg|power] [external ...]
+                      (--marker counts from 0: 0 = the first marker, -1 = the last, the default)
   bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --seconds S [--window LO HI]
-                      [--observed pos|neg|none] --power-switch-in-hand [--allow-locked] [--yes]
+                      [--observed pos|neg|none] --power-switch-in-hand [--allow-locked] [--yes] [--markers]
   bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
                       [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
 """
@@ -93,6 +94,7 @@ class Bench:
     last_queued: dict | None = None
     boots: list = field(default_factory=list)
     record_errors: int = 0
+    poll: object = None  # called every cycle (``--markers``: Enter marks an operator event in the record)
 
     def __post_init__(self) -> None:
         self._tap = LinkDecoder()
@@ -137,6 +139,8 @@ class Bench:
         now = time.monotonic_ns()
         for e in self.link.service(self.host, now):
             self.emit({"t": "event", "kind": e.kind, "host_ns": now, **{k: str(v) for k, v in e.detail.items()}})
+        if self.poll is not None:
+            self.poll()
 
     def run_until(self, pred, timeout_s: float, *, every=None, period_s: float = 0.002) -> bool:
         end = time.monotonic() + timeout_s
@@ -782,6 +786,8 @@ def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool
     markers = [r for r in rows if r.get("t") == "marker"]
     if not markers:
         return {"result": "no_marker"}
+    if not -len(markers) <= marker < len(markers):
+        return {"result": "no_marker", "markers": len(markers), "asked": marker}
     m_ns = int(markers[marker]["host_ns"])
     samples = [sample_from_row(r) for r in rows if r.get("t") == "state"]
     after = [s for s in samples if s.host_ns >= m_ns]
@@ -872,9 +878,12 @@ def main(argv=None) -> int:
     cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
     cm.add_argument("--observed", choices=("pos", "neg", "none"))
     cm.add_argument("--power-switch-in-hand", action="store_true")
+    cm.add_argument("--markers", action="store_true",
+                    help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
-    an.add_argument("--marker", type=int, default=-1)
+    an.add_argument("--marker", type=int, default=-1,
+                    help="which marker, counted from 0: 0 = the first, 1 = the second, -1 = the last (default)")
     an.add_argument("--floor", action="store_true", help="the marker's run was on the floor (else the stand)")
     an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power") + COMMISSION_SCENARIOS,
                     required=True)
@@ -983,6 +992,11 @@ def execute(args, bench: Bench) -> dict:
                         f"{args.seconds} s (window {args.window}).")
             _confirm(args, what + " Outputs on only after the IPROPI protection is confirmed (user decision); "
                                   "the window inside the mechanical limits.")
+            if getattr(args, "markers", False):
+                # after the confirmation: the reader reads stdin and would take the operator's 'yes' line
+                bench.poll = _marker_reader(bench)
+                print("markers: press Enter (optionally a label first) at each event -- the main power cut, an NRST "
+                      "reset -- while the wheel turns", file=sys.stderr, flush=True)
             if getattr(args, "scenario", None) is not None:
                 result = run_commission_scenario(bench, session, args.scenario, args.duty, args.limit_s,
                                                  args.disarm_delay_ms, args.stop_grace_ms)

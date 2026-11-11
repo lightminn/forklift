@@ -134,6 +134,13 @@ bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario 
 - 재무장 보류의 확인(보류 중 `ARM` 거부)은 실기 도구에 넣지 않는다(총괄 결정 2026-11-12). 펌웨어 회귀 시험 v2r6 가 고정하고 있고, 실기 확인은 펌웨어 HIL 빌드 시험(펌웨어 PR ⑤)으로 넘긴다.
 - 시험(MCU 모형, 상한 300 ms·`stop_grace_ms` 100 ms): 두 시나리오 모두 `STOPPING` 안 수락 입증·`DISARMED`·비트 24 유지, 명령 순서(`ARM` → `COMMISSION`… → `DISARM`, `DRIVE` 없음), 외부 값 기록. 운용자 `stop_grace_ms` 가 실제보다 길어 지연이 자연 종료 뒤로 가면 `not_met`. 상한이 오지 않으면 `limit_not_reached`. 낮춘 문턱의 polarity 비트 → `encoder_bit_before_limit`. 정리 중 처음 보인 `FAULT`·재부팅 → 중단. 인자 거부(축·`--limit-s`·지연·`--stop-grace-ms`·`--seconds`·주 전원·듀티). CLI 파싱. 단위: 입증 규칙(경계 안·표본 누락으로 경계 밖·자연 종료 먼저·미수락).
 
+## 11. 구동 중 사건 표시 `--markers` (펌웨어 세션 요청 2026-11-12, 도착일 절차서)
+
+주 전원 차단·NRST 리셋은 바퀴가 도는 동안 일어나야 한다. `record --markers` 는 구동하지 않고, 같은 tty 를 두 프로세스가 열면 수신을 나눠 읽는다. 그래서 `commission` 한 프로세스가 표시도 받는다.
+- `commission --markers`: 운용자 확인('yes') 뒤에만 Enter 읽기를 켠다(먼저 켜면 확인 줄을 표시로 먹는다). 그 뒤 매 주기 Enter(앞에 이름을 적으면 그 이름)가 기록에 `marker` 행을 남긴다. 구동 중에도 같다.
+- 전원 차단·리셋으로 링크가 끊기면 시운전은 설계대로 중단(abort)된다. 표시는 끊기기 전 기록에 남는다. 판정은 외부 측정과 `analyze --kind power|iwdg --marker N` 이다.
+- `analyze --marker` 는 0 부터 센다(0 = 첫 표시, -1 = 마지막, 기본값). 범위 밖이면 `{"result": "no_marker", "markers": 표시 수, "asked": N}`.
+
 ## 9. 자체 검토
 
 Codex 설계 상의 1회(P1 2·P2 5·P3 1). 모두 반영했다.
