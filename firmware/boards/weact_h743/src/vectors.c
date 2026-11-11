@@ -10,6 +10,13 @@ void Reset_Handler(void);
 void TIM6_DAC_IRQHandler(void);
 void SPI1_IRQHandler(void);
 void SPI2_IRQHandler(void);
+#if defined(FW_LINK_USB)
+void OTG_FS_IRQHandler(void);
+#elif defined(FW_LINK_UART7)
+void UART7_IRQHandler(void);
+#else
+#error "FW_LINK_USB or FW_LINK_UART7"
+#endif
 
 static void safe_stop(void)
 {
@@ -57,6 +64,11 @@ __attribute__((section(".isr_vector"), used)) const vector_fn g_vectors[16 + IRQ
     [16 + SPI1_IRQn] = SPI1_IRQHandler,
     [16 + SPI2_IRQn] = SPI2_IRQHandler,
     [16 + TIM6_DAC_IRQn] = TIM6_DAC_IRQHandler,
+#if defined(FW_LINK_USB)
+    [16 + OTG_FS_IRQn] = OTG_FS_IRQHandler,
+#else
+    [16 + UART7_IRQn] = UART7_IRQHandler,
+#endif
 };
 
 _Static_assert(TIM6_DAC_IRQn < IRQ_COUNT && WAKEUP_PIN_IRQn == IRQ_COUNT - 1, "vector table size");

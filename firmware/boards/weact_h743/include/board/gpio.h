@@ -13,6 +13,7 @@
 #define GPIO_PULL_UP 1u
 #define GPIO_SPEED_LOW 0u
 #define GPIO_SPEED_MEDIUM 1u
+#define GPIO_SPEED_HIGH 2u
 
 void gpio_mode(GPIO_TypeDef *port, uint32_t pin, uint32_t mode, uint32_t pull);
 /* Alternate function af, push-pull, given speed. */

@@ -7,6 +7,9 @@ set(FW_MOTOR_OUTPUT 0 CACHE STRING "0 = outputs locked (default); 1 needs FW_IPR
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
 
+if(NOT FW_LINK MATCHES "^(usb|uart7)$")
+    message(FATAL_ERROR "FW_LINK must be usb or uart7")
+endif()
 if(NOT FW_BUILD MATCHES "^(normal|commission|hil)$")
     message(FATAL_ERROR "FW_BUILD must be normal, commission or hil")
 endif()
@@ -58,6 +61,30 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/board_rules.c
     ${BOARD_DIR}/src/motor_out_locked.c)
 
+# The link (board design 5). TinyUSB is vendored (firmware/third_party/MANIFEST.yaml) and built as
+# its own library: its sources are not ours to hold to -Wconversion, but they are compiled for
+# the stack check and see the TIM1 guard like every board source.
+if(FW_LINK STREQUAL "usb")
+    list(APPEND BOARD_SOURCES ${BOARD_DIR}/src/link_usb.c ${BOARD_DIR}/src/usb_descriptors.c)
+    set(TUSB ${TP}/tinyusb/src)
+    add_library(tinyusb_arm STATIC
+        ${TUSB}/tusb.c
+        ${TUSB}/common/tusb_fifo.c
+        ${TUSB}/device/usbd.c
+        ${TUSB}/class/cdc/cdc_device.c
+        ${TUSB}/portable/synopsys/dwc2/dcd_dwc2.c
+        ${TUSB}/portable/synopsys/dwc2/dwc2_common.c)
+    target_include_directories(tinyusb_arm PUBLIC ${TUSB} ${BOARD_DIR}/include)
+    target_include_directories(tinyusb_arm SYSTEM PUBLIC ${TP}/cmsis_core/CMSIS/Core/Include
+                                                         ${TP}/cmsis_device_h7/Include)
+    target_compile_definitions(tinyusb_arm PUBLIC STM32H743xx)
+    target_compile_options(tinyusb_arm PRIVATE -O2 -w -fstack-usage -fcallgraph-info=su
+        -include ${BOARD_DIR}/include/board/lock_guard.h)
+else()
+    list(APPEND BOARD_SOURCES ${BOARD_DIR}/src/link_uart7.c)
+endif()
+string(TOUPPER "${FW_LINK}" FW_LINK_UPPER)
+
 add_executable(fw ${BOARD_SOURCES})
 set_source_files_properties(${BOARD_DIR}/src/vectors.c PROPERTIES COMPILE_OPTIONS "-Wno-override-init;-Wno-pedantic")
 add_dependencies(fw build_info)
@@ -65,7 +92,7 @@ set_target_properties(fw PROPERTIES SUFFIX ".elf")
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(fw SYSTEM PRIVATE ${TP}/cmsis_core/CMSIS/Core/Include
                                                ${TP}/cmsis_device_h7/Include)
-target_compile_definitions(fw PRIVATE STM32H743xx FW_BUILD_${FW_BUILD}=1)
+target_compile_definitions(fw PRIVATE STM32H743xx FW_BUILD_${FW_BUILD}=1 FW_LINK_${FW_LINK_UPPER}=1)
 target_compile_options(fw PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su>)
 # Locked outputs (board design 3.6): every board C source sees TIM1 poisoned.
 target_compile_options(fw PRIVATE
@@ -73,6 +100,9 @@ target_compile_options(fw PRIVATE
 target_link_options(fw PRIVATE -T${BOARD_DIR}/stm32h743vi_dtcm.ld -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/fw.map
                     -Wl,--print-memory-usage)
 target_link_libraries(fw PRIVATE fw_core_arm m)
+if(FW_LINK STREQUAL "usb")
+    target_link_libraries(fw PRIVATE tinyusb_arm)
+endif()
 set_property(TARGET fw APPEND PROPERTY LINK_DEPENDS ${BOARD_DIR}/stm32h743vi_dtcm.ld)
 # Vehicle values from config/real/vehicle.yaml, never written twice (plan P0-6).
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vehicle_header.cmake)

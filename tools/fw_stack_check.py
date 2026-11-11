@@ -14,8 +14,8 @@ a register-sized stack adjustment or a callee found nowhere fails the check (Cod
 assumed sizes).
 
 Indirect calls are bounded by the deepest of the candidates given with --indirect CALLER=TARGET
-(globs on function names; the first rule whose CALLER matches wins), e.g. the tick callback only
-from the TIM6 handler, the fw_hal entries from everywhere else. A dynamic frame or recursion fails the check.
+(globs on function names, TARGET may list several as a|b|c; the first rule whose CALLER matches
+wins), e.g. the tick callback only from the TIM6 handler, the fw_hal entries from the core. A dynamic frame or recursion fails the check.
 
   python tools/fw_stack_check.py BUILD_DIR --limit 4096 \\
       --level board_main --level TIM6_DAC_IRQHandler --level SPI1_IRQHandler,SPI2_IRQHandler \\
@@ -135,7 +135,8 @@ def analyse(build: Path, levels: list[list[str]], indirect: list[str], elf: Path
     rules = []
     for rule in indirect:
         caller, _, target = rule.partition("=")
-        rules.append((caller, [t for t in size if fnmatch.fnmatch(short(t), target)]))
+        globs = target.split("|")
+        rules.append((caller, [t for t in size if any(fnmatch.fnmatch(short(t), g) for g in globs)]))
 
     def indirect_targets(caller: str) -> list[str]:
         for pattern, targets in rules:

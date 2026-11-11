@@ -6,6 +6,7 @@
 #include "board/board_config.h"
 #include "board/board_hal.h"
 #include "board/drv_spi.h"
+#include "board/link.h"
 #include "build_info.h"
 #include "fw/app.h"
 #include "stm32h7xx.h"
@@ -14,8 +15,7 @@
 
 /* What this image is, kept in the ELF (board design 3.7). */
 __attribute__((section(".build_info"), used)) const char g_build_info[] =
-    "forklift-mcu " FW_BUILD_KIND " locked " FW_GIT_DESCRIBE " link=" FW_LINK_KIND
-    " cc=" FW_TOOLCHAIN;
+    FW_IDENTITY " link=" FW_LINK_KIND " cc=" FW_TOOLCHAIN;
 
 static fw_app g_app;
 static volatile clock_source g_clock_source;
@@ -57,7 +57,10 @@ int board_main(void)
         led_fail_forever(9);
     }
     tick_start(on_tick); /* right after init: the first cycle's gap is not judged (core 5) */
+    link_init();         /* after the tick: a transport that hangs starting leaves it running */
     for (;;) {
-        __WFI(); /* B3: tud_task() and the link rings */
+        link_poll();
+        /* Anything the poll missed waits at most one tick: TIM6 wakes the loop every 1 ms. */
+        __WFI();
     }
 }
