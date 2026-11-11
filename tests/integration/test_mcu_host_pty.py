@@ -355,3 +355,28 @@ def test_a_drop_while_a_frame_is_half_written_finishes_it_on_the_wire(monkeypatc
     assert [type(m).__name__ for m in msgs] == ["Drive", "Disarm"]  # the first DRIVE whole, the second dropped
     assert msgs[0].left_wheel_rad_s != 0.0
     assert port.outstanding_until(now + 6) == now + 200_000_000
+
+
+def test_receive_never_writes_and_transmit_writes_what_is_still_queued():
+    """The teleop bridge's order (docs/design/2026-11-12-teleop-bridge.md 5): what a cycle drops between receive and
+    transmit never goes out."""
+    import select
+
+    from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
+
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    os.set_blocking(master, False)
+    try:
+        link = ReconnectingLink(os.ttyname(slave))
+        host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
+                                      outbox_max=8))
+        now = time.monotonic_ns()
+        host.request_disarm(now)
+        link.receive(host, now)
+        assert not select.select([master], [], [], 0.05)[0]  # nothing written by receive
+        link.transmit(host, now)
+        assert select.select([master], [], [], 0.5)[0] and os.read(master, 64)  # the DISARM went out
+    finally:
+        os.close(master)
+        os.close(slave)

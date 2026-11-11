@@ -158,6 +158,30 @@ class ReconnectingLink:
         events += host.tick(now_ns)
         return events
 
+    # The teleop bridge's cycle (docs/design/2026-11-12-teleop-bridge.md 5): receive, decide, then transmit -- a
+    # STOP or an expiry judged in between drops what was queued before anything is written.
+    def receive(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+        """``service`` without the writes."""
+        saved, self.tx_enabled = self.tx_enabled, False
+        try:
+            return self.service(host, now_ns)
+        finally:
+            self.tx_enabled = saved
+
+    def transmit(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+        """The writes only (a lost device is handled as in ``service``)."""
+        if self.link is None or not self.tx_enabled:
+            return []
+        try:
+            self.link.pump_writes(host, now_ns)
+            return []
+        except LinkLost:
+            self.link.abandon(host, now_ns)
+            self.link.close()
+            self.link = None
+            self._next_try = now_ns + self.retry_ns
+            return host.disconnected(now_ns)
+
 
 def service_fd(link: TtyLink, host: McuLinkHost, now_ns: int, *, tx_enabled: bool = True) -> list[HostEvent]:
     """One cycle on an endpoint that is not reopened (a pty master in tests)."""

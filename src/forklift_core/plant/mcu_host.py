@@ -105,13 +105,18 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 class McuLinkHost:
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
-                 allow_locked: bool = False, commission: bool = False) -> None:
+                 allow_locked: bool = False, commission: bool = False,
+                 on_state: Callable[[McuState, int], None] | None = None, initial_seq: int = 0) -> None:
         """``client``: who drives through this host (mcu-link/2 build bits, contract 3.3): the real executor (the
         default), the HIL executor, or a bring-up tool. ``allow_locked``: a bring-up tool's run on a model or HIL
         board whose outputs are locked. ``commission``: the commissioning tool (bring-up only,
         docs/design/2026-11-12-bringup-commission-tool.md 5): COMMISSION to a commissioning build and nothing else,
-        never a DRIVE."""
+        never a DRIVE. ``on_state(state, received_ns)``: called with every STATE this host accepted (never one it
+        ignored as invalid or out of order) -- the teleop bridge's encoder speed reads these only. ``initial_seq``:
+        the first frame's seq (the teleop bridge starts each session at a random one, so a STATE an earlier session's
+        frame left in flight cannot pass for this session's acknowledgement)."""
         self.cfg = cfg
+        self._on_state_cb = on_state
         self.client, self.allow_locked = Client(client), bool(allow_locked)
         self.commission_mode = bool(commission)
         if self.commission_mode and self.client is not Client.BRINGUP:
@@ -121,7 +126,8 @@ class McuLinkHost:
         self._state: McuState | None = None
         self._state_rx_ns: int | None = None
         self._stale_reported = False
-        self._seq = 0
+        self._seq = int(initial_seq) & 0xFFFF
+        self.disconnects = 0  # how many times the adapter lost the device (the teleop bridge rechecks its session)
         self._outbox: deque[Outgoing] = deque()
         self._auth = _NONE
         self._auth_gen = 0  # bumps whenever authorization starts or ends
@@ -137,6 +143,17 @@ class McuLinkHost:
     @property
     def ready(self) -> bool:
         return self._auth == _READY
+
+    def skip_seq(self, n: int) -> int:
+        """Advance the next frame's seq by ``n`` (mod 2^16) and return it: the teleop bridge's session check writes two
+        frames a random distance apart, a step no earlier session's consecutive seqs can show."""
+        self._seq = (self._seq + int(n)) & 0xFFFF
+        return self._seq
+
+    @property
+    def arming(self) -> bool:
+        """An operator ARM asked for and not yet answered (no authorization yet, none revoked)."""
+        return self._auth == _ARM_PENDING
 
     @property
     def auth_epoch(self) -> int:
@@ -236,6 +253,8 @@ class McuLinkHost:
         # that arrives after a stale gap must not hide it (Codex P0-7 round 2 P1).
         self._expire(now_ns, events)
         self._state, self._state_rx_ns = s, now_ns
+        if self._on_state_cb is not None:
+            self._on_state_cb(s, now_ns)
         if prev is None:
             events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
         if self._stale_reported:
@@ -316,6 +335,7 @@ class McuLinkHost:
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
         self._state, self._state_rx_ns, self._stale_reported = None, None, False
+        self.disconnects += 1
         events.append(HostEvent("disconnected"))
         return events
 
