@@ -142,3 +142,40 @@ def test_the_creep_threshold_is_the_kinematics_own():
         core, _ = make(kinematics=kin, steering=(target_q - 0.1,))  # 0.1 rad behind the target
         out = assemble(core, np.array([target_q]), speed=0.4, curvature=0.2)
         assert (abs(out.drive.speed_mps) < 0.2) is creeps
+
+
+def _real_commands_core(near_tracker=None):
+    """The core with the real MissionCommands, a running mission."""
+    from forklift_core.mission.commands import MissionCommands
+
+    core, _ = make(kinematics=REAL, steering=(0.1,))
+    cmds = MissionCommands()
+    cmds.status, cmds.mission_id, cmds.adopted_id = "running", "m1", "m1"
+    core.commands = cmds
+    core.near = {"tracker": near_tracker, "commands": SimpleNamespace(add=lambda *a: None)}
+    return core, cmds
+
+
+def test_with_the_real_commands_a_refusal_pauses_and_a_same_tick_resume_releases():
+    """Pause → operator Resume → the resume checks pass in paused_tick (running again) → the assembly the same tick
+    drives (Codex 4a' re-review P2-2)."""
+    from forklift_core.mission.commands import Resume
+
+    core, cmds = _real_commands_core()
+    steer = np.array([0.1])
+    assemble(core, steer, curvature=0.9, t=10.0)
+    cmds.apply(10.01)
+    assert cmds.status == "paused"
+    cmds.queue(Resume())
+    cmds.apply(11.0)
+    assert cmds.status == "resuming"
+    cmds.resumed(11.0)  # what paused_tick's finish() does when the checks pass
+    cmds.status = "running"
+    assert assemble(core, steer, curvature=0.1, t=11.0).drive.speed_mps > 0.0
+
+
+def test_a_refusal_during_near_tracking_ends_the_mission():
+    """A pause is refused while the near tracker runs: the mission ends instead (Codex 4a' re-review P2-1)."""
+    core, cmds = _real_commands_core(near_tracker=object())
+    assemble(core, np.array([0.1]), curvature=0.9, t=10.0)
+    assert cmds.status == "failed" and cmds.log[-1]["reason"] == "kinematic_refusal"

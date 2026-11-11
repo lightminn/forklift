@@ -6117,9 +6117,17 @@ class MissionCore:
                                     "requested_curvature_inv_m": float(requested_curvature),
                                     "curvature_range": [float(v) for v in curvature_range], "plan": serial,
                                     "mission_id": getattr(self.commands, "mission_id", None)})
-        self.commands.queue(Pause(request_id="kinematic_refusal"))
+        near_active = self.near is not None and self.near.get("tracker") is not None
+        if near_active:
+            # A pause is refused while the near tracker runs (commands: near_tracking_active), so the mission would
+            # keep running with its wheels at zero (Codex 4a' re-review P2-1): end it instead -- the operator submits
+            # it again.
+            self.commands.terminate("failed", t, "kinematic_refusal")
+        else:
+            self.commands.queue(Pause(request_id="kinematic_refusal"))
+        pauses = getattr(self.commands, "pauses", None)
         self._refusal = {"plan": serial, "phase": phase, "repeats": 0,
-                         "status": getattr(self.commands, "status", None)}
+                         "pause_index": None if pauses is None or near_active else len(pauses)}
 
     def _refusal_clear_if_new_plan(self) -> None:
         """The latch ends with a new plan (another tracker serial or phase), an operator's resume (the paused
@@ -6130,8 +6138,13 @@ class MissionCore:
         tracker = self.trackers.get(phase)
         serial = None if tracker is None else (getattr(tracker, "_book", None) or {}).get("serial", id(tracker))
         status = getattr(self.commands, "status", None)
-        if (phase != self._refusal["phase"] or serial != self._refusal["plan"] or self.commands.adopted_id is None
-                or status == "resuming"):
+        # The operator's resume: the refusal's pause closed -- also when the resume checks passed earlier in this
+        # same tick (paused_tick before the assembly) and the mission is running again (Codex 4a' re-review P2-2).
+        pauses, idx = getattr(self.commands, "pauses", None), self._refusal["pause_index"]
+        resumed = status == "resuming" or (pauses is not None and idx is not None and len(pauses) > idx
+                                          and pauses[idx][1] is not None)
+        if phase != self._refusal["phase"] or serial != self._refusal["plan"] or self.commands.adopted_id is None \
+                or resumed:
             self._refusal = None
 
     def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,
