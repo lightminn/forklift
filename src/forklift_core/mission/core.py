@@ -1488,7 +1488,11 @@ class MissionCore:
                 t=t, rear=np.asarray(rear, dtype=float), truth_rear=self._npz_value(truth_rear),
                 **self._npz_flag("truth_rear", truth_rear),
                 kappa=kappa, direction=direction, loaded=loaded,
-                requested=requested_speed, truth_speed=truth_speed, phase=ms.phase, why=why,
+                requested=requested_speed, phase=ms.phase, why=why,
+                # (4d-2a: the real truck's speed here is the measured safety speed, not truth -- kept apart)
+                truth_speed=self._npz_value(None) if self._real_vehicle() else truth_speed,
+                **({"truth_speed_unjudgeable": True, "safety_speed_mps": speed_.signed_mps,
+                    "safety_speed_bound_mps": speed_.bound_mps} if self._real_vehicle() else {}),
                 leg=(trackers[ms.phase].leg_ahead()[0] if ms.phase in trackers else np.zeros((0, 3))),
                 correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
                 stamp=snap_.stamp_s,
@@ -7299,8 +7303,9 @@ class MissionCore:
             entry_.update(time_s=t, match_wall_s=docking["match_wall_s"], retry_match=retry_match,
                           estimate_error_truck_frame=(None if truth_rear is None
                                                       else list(compose(invert(tuple(truth_rear)), estimate))))
-            if result.goal_estimate is not None and expected is not None:
-                entry_["goal_error_line_frame"] = list(compose(invert(expected), tuple(result.goal_estimate)))
+            if result.goal_estimate is not None:
+                entry_["goal_error_line_frame"] = (None if expected is None  # 4d-2a: unjudgeable, kept as null
+                                                   else list(compose(invert(expected), tuple(result.goal_estimate))))
         # docs/plans/2026-11-04-line2-delivery-robustness.md D1: a first non-retry round refused by degenerate at all
         # of its starts goes on to the round-2 stop on the SLAM goal instead of the whole straight (off: as before)
         degenerate_continue_ = getattr(options, "docking_degenerate_continue", "off") == "on"
@@ -7952,7 +7957,7 @@ class MissionCore:
         hooks.write_paths()
         trackers[leg] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
                                             trackers[leg].config)
-        hooks.add_path_display(hooks.stage(), replanned, "Transport" if leg == "transport" else "Return",
+        hooks.add_path_display(self._stage(), replanned, "Transport" if leg == "transport" else "Return",
                                (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85))
         if leg == ms.phase:
             ms.phase_started = p.t

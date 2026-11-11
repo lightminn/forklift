@@ -326,3 +326,18 @@ def test_the_real_cusp_arc_stops_on_an_invalid_speed():
     c, layer = cusp_core(SafetySpeed(0.0, 0.0, (1,), valid=False))
     owned, record = c.cusp_ownership(10.0, (0.0, 0.0, 0.0), 0.0)
     assert not owned and record["why"] == "safety_speed_invalid" and layer.arcs == []
+
+
+def test_the_real_obstacle_dump_keeps_the_measured_speed_apart_from_truth():
+    """4d-2a (Codex impl review P2-3): the dump's truth_speed is unjudgeable; the safety speed has its own fields."""
+    saved = {}
+    c, layer = permission_core(SafetySpeed(0.1, 0.12, (1,)), blocked=1)
+    layer.snapshot = SimpleNamespace(state=np.zeros((2, 2)), free_stamp=np.zeros((2, 2)), origin_x_m=0.0,
+                                     origin_y_m=0.0, resolution_m=0.05, stamp_s=9.9)
+    c.hooks.save_npz = lambda name, **arrays: saved.setdefault(name, arrays)
+    c.hooks.truth_rear = lambda: None  # the real truck's evaluation hook
+    c.permission(10.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    dump = saved["obstacle_dump_1.npz"]
+    assert dump["truth_speed"].shape == (0,) and dump["truth_speed_unjudgeable"] is True
+    assert dump["safety_speed_mps"] == 0.1 and dump["safety_speed_bound_mps"] == 0.12
+    assert dump["truth_rear"].shape == (0,) and dump["truth_rear_unjudgeable"] is True

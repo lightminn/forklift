@@ -93,3 +93,11 @@ def test_the_classes_used():
     classes = {cls for cls, _ in HOOKS.values()}
     assert classes <= set(HookClass)
     assert HOOKS["pallet_z"][0] is HookClass.HUMAN and HOOKS["truth_rear"][0] is HookClass.EVAL
+
+
+def test_simulation_only_hooks_are_read_only_behind_the_real_truck_check():
+    """4d-2a: the stage only through MissionCore._stage, the scene export only off the real truck."""
+    assert CORE_SOURCE.count("hooks.stage()") == 1
+    assert "return None if self._real_vehicle() else self.hooks.stage()" in CORE_SOURCE
+    assert CORE_SOURCE.count("hooks.export_scene()") == 1
+    assert re.search(r"if not self\._real_vehicle\(\):[^\n]*\n\s+hooks\.export_scene\(\)", CORE_SOURCE)

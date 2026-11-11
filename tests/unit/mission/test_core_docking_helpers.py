@@ -608,7 +608,7 @@ def test_the_real_truck_docks_with_every_truth_field_unjudgeable(tmp_path, monke
     assert d["goal_error_vs_truth"] is None and d["slam_goal_error_vs_truth"] is None
     r = d["rounds"][0]
     assert r["goal_error_vs_truth"] is None and r["estimate_vs_truth_at_match"] is None
-    assert r["estimate_error_truck_frame"] is None and "goal_error_line_frame" not in r
+    assert r["estimate_error_truck_frame"] is None and r["goal_error_line_frame"] is None
     npz = saved["delivery_match_1.npz"]
     assert npz["truth_rear"].shape == (0,) and npz["truth_rear_unjudgeable"] is True
 
