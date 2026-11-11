@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from forklift_core.mcu_link.messages import (
     Arm,
     ClearFaults,
+    Commission,
     Disarm,
     Drive,
     LinkDecoder,
@@ -38,7 +39,7 @@ from forklift_core.mcu_link.messages import (
     encode,
     valid_after_echo_ms,
 )
-from forklift_core.mcu_link.build_policy import Client, drive_refusal
+from forklift_core.mcu_link.build_policy import Client, commission_allowed, drive_refusal
 from forklift_core.plant.real_vehicle import RearDrive
 
 
@@ -88,12 +89,15 @@ class LinkHealth:
 
 @dataclass(frozen=True)
 class Outgoing:
-    kind: str  # "ARM", "DISARM", "CLEAR_FAULTS", "DRIVE"
+    kind: str  # "ARM", "DISARM", "CLEAR_FAULTS", "DRIVE", "COMMISSION"
     seq: int
     data: bytes
-    expires_ns: int | None  # DRIVE only: dropped, not written, once this has passed
-    generation: int  # authorization generation it was made under (DRIVE dropped when it changes)
-    nonzero: bool = False  # DRIVE with a non-zero wheel target
+    expires_ns: int | None  # DRIVE/COMMISSION only: dropped, not written, once this has passed
+    generation: int  # authorization generation it was made under (DRIVE/COMMISSION dropped when it changes)
+    nonzero: bool = False  # DRIVE with a non-zero wheel target, COMMISSION with a non-zero duty
+
+
+_MOTION = ("DRIVE", "COMMISSION")  # the commands that move an axis: one outbox rule for both
 
 
 _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pending", "ready"
@@ -101,12 +105,17 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 class McuLinkHost:
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
-                 allow_locked: bool = False) -> None:
+                 allow_locked: bool = False, commission: bool = False) -> None:
         """``client``: who drives through this host (mcu-link/2 build bits, contract 3.3): the real executor (the
         default), the HIL executor, or a bring-up tool. ``allow_locked``: a bring-up tool's run on a model or HIL
-        board whose outputs are locked."""
+        board whose outputs are locked. ``commission``: the commissioning tool (bring-up only,
+        docs/design/2026-11-12-bringup-commission-tool.md 5): COMMISSION to a commissioning build and nothing else,
+        never a DRIVE."""
         self.cfg = cfg
         self.client, self.allow_locked = Client(client), bool(allow_locked)
+        self.commission_mode = bool(commission)
+        if self.commission_mode and self.client is not Client.BRINGUP:
+            raise ValueError("commission mode is for the bring-up client only")
         self._log = log or (lambda *a: None)
         self._decoder = LinkDecoder()
         self._state: McuState | None = None
@@ -142,7 +151,7 @@ class McuLinkHost:
     def drive_traffic(self) -> dict:
         """What a release check needs: the non-zero DRIVEs queued or being written (their original expiries) and
         every DRIVE written (seq, non-zero, original expiry, write time), oldest first."""
-        pending = [o.expires_ns for o in self._outbox if o.kind == "DRIVE" and o.nonzero]
+        pending = [o.expires_ns for o in self._outbox if o.kind in _MOTION and o.nonzero]
         if self._inflight is not None and self._inflight.nonzero:
             pending.append(self._inflight.expires_ns)
         return {"pending_nonzero_expiries": pending, "written": [dict(w) for w in self._written]}
@@ -150,7 +159,7 @@ class McuLinkHost:
     def drop_drives(self, reason: str) -> None:
         """Drop the queued DRIVEs (a control generation change). A frame already being written is finished by
         the adapter and tracked when written: cutting it is not a cancel (4a' design D4)."""
-        self._drop(lambda o: o.kind == "DRIVE", reason)
+        self._drop(lambda o: o.kind in _MOTION, reason)
 
     def _fresh(self, now_ns: int) -> bool:
         return self._state_rx_ns is not None and now_ns - self._state_rx_ns <= self.cfg.state_max_age_s * 1e9
@@ -180,7 +189,7 @@ class McuLinkHost:
             events.append(HostEvent("authorization_revoked" if self.authorized else "arm_failed", {"reason": reason}))
         self._auth, self._arm = _NONE, None
         self._auth_gen += 1
-        self._drop(lambda o: o.kind in ("DRIVE", "ARM"), f"revoked: {reason}")
+        self._drop(lambda o: o.kind in _MOTION or o.kind == "ARM", f"revoked: {reason}")
 
     # ---------------------------------------------------------------- receive
     def on_bytes(self, data: bytes, now_ns: int) -> list[HostEvent]:
@@ -200,6 +209,12 @@ class McuLinkHost:
         a bring-up tool never on a commissioning build (it takes no DRIVE) and on locked outputs only when allowed."""
         s = self._state if s is None else s
         if s is None:
+            return None
+        if self.commission_mode:
+            if not commission_allowed(s.flags):
+                return "not_commission_build"  # the two command kinds never cross builds (contract 3.3, 3.4)
+            if s.flags & StateFlag.OUTPUTS_LOCKED and not self.allow_locked:
+                return "outputs_locked"
             return None
         if self.client is Client.BRINGUP:
             if s.flags & StateFlag.COMMISSION_BUILD:
@@ -247,6 +262,15 @@ class McuLinkHost:
         if self._auth == _ARM_PENDING:
             if s.boot_id != a["boot"]:
                 self._revoke("boot_changed", events)
+            elif s.mode == Mode.ARMED and s.arm_gen not in (0, a["prev_gen"]) and self.commission_mode:
+                # the zero command of a commissioning build is a zero COMMISSION; axis 0 needs no steering or lift
+                # sensor, so arming does not depend on them (design 3)
+                a["gen"] = s.arm_gen
+                zero = Commission(0, 0, valid_after_echo_ms(now_ns + self.cfg.zero_valid_ms * 1_000_000, now_ns),
+                                  s.arm_gen, s.boot_id, s.mcu_time_us)
+                self._auth = _ZERO_PENDING
+                self._enqueue("COMMISSION", zero, now_ns, expires_ns=now_ns + self.cfg.zero_valid_ms * 1_000_000)
+                events.append(HostEvent("zero_sent", {"arm_gen": s.arm_gen}))
             elif s.mode == Mode.ARMED and s.arm_gen not in (0, a["prev_gen"]):
                 if s.steering_rad != s.steering_rad or abs(s.steering_rad) == float("inf"):
                     self._revoke("steering_invalid", events)
@@ -346,31 +370,57 @@ class McuLinkHost:
     # ---------------------------------------------------------------- drive
     def drive(self, cmd: RearDrive, lift_m: float, lift_hold: bool, expires_ns: int, now_ns: int) -> Blocked | None:
         """Queue one DRIVE for a decision that expires at ``expires_ns`` (host monotonic)."""
+        if self.commission_mode:
+            return Blocked("commission_host")
+        blocked, valid = self._motion_check(expires_ns, now_ns)
+        if blocked is not None:
+            return blocked
         s = self._state
-        if s is None:
-            return Blocked("no_state")
-        if not self._fresh(now_ns):
-            return Blocked("stale")
-        if self._auth == _ZERO_PENDING:
-            return Blocked("zero_pending")
-        if self._auth != _READY:
-            return Blocked("not_authorized")
-        refused = self.build_refusal(s)
-        if refused is not None:
-            return Blocked(f"build_refused: {refused}")
-        if expires_ns <= now_ns:
-            return Blocked("expired")
-        try:
-            valid = min(self.cfg.cap_ms, valid_after_echo_ms(expires_ns, self._state_rx_ns))
-        except ValueError:
-            return Blocked("expired")
-        if len(self._outbox) >= self.cfg.outbox_max:
-            return Blocked("outbox_full")
         msg = Drive(cmd.left_wheel_rad_s, cmd.right_wheel_rad_s, cmd.steering_rad, float(lift_m), valid,
                     bool(lift_hold), s.arm_gen, s.boot_id, s.mcu_time_us)
         self._enqueue("DRIVE", msg, now_ns, expires_ns=expires_ns,
                       nonzero=cmd.left_wheel_rad_s != 0.0 or cmd.right_wheel_rad_s != 0.0)
         return None
+
+    def commission(self, axis: int, duty_e4: int, expires_ns: int, now_ns: int) -> Blocked | None:
+        """Queue one COMMISSION (one axis's open-loop duty, contract 3.4) expiring at ``expires_ns``; the same
+        checks and validity rule as ``drive``. Only a commission-mode host sends it."""
+        if not self.commission_mode:
+            return Blocked("not_commission_host")
+        if not (isinstance(axis, int) and isinstance(duty_e4, int) and 0 <= axis <= 3
+                and -10000 <= duty_e4 <= 10000):
+            return Blocked("bad_value")
+        blocked, valid = self._motion_check(expires_ns, now_ns)
+        if blocked is not None:
+            return blocked
+        s = self._state
+        msg = Commission(axis, duty_e4, valid, s.arm_gen, s.boot_id, s.mcu_time_us)
+        self._enqueue("COMMISSION", msg, now_ns, expires_ns=expires_ns, nonzero=duty_e4 != 0)
+        return None
+
+    def _motion_check(self, expires_ns: int, now_ns: int) -> tuple[Blocked | None, int]:
+        """What a DRIVE and a COMMISSION both need, and the validity after the echo."""
+        s = self._state
+        if s is None:
+            return Blocked("no_state"), 0
+        if not self._fresh(now_ns):
+            return Blocked("stale"), 0
+        if self._auth == _ZERO_PENDING:
+            return Blocked("zero_pending"), 0
+        if self._auth != _READY:
+            return Blocked("not_authorized"), 0
+        refused = self.build_refusal(s)
+        if refused is not None:
+            return Blocked(f"build_refused: {refused}"), 0
+        if expires_ns <= now_ns:
+            return Blocked("expired"), 0
+        try:
+            valid = min(self.cfg.cap_ms, valid_after_echo_ms(expires_ns, self._state_rx_ns))
+        except ValueError:
+            return Blocked("expired"), 0
+        if len(self._outbox) >= self.cfg.outbox_max:
+            return Blocked("outbox_full"), 0
+        return None, valid
 
     # ---------------------------------------------------------------- outbox
     def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None, nonzero: bool = False) -> None:
@@ -394,7 +444,7 @@ class McuLinkHost:
         are dropped here. The adapter writes the frame completely before asking again."""
         while self._outbox:
             o = self._outbox.popleft()
-            if o.kind == "DRIVE" and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
+            if o.kind in _MOTION and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
                 self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "expired or stale"})
                 continue
             self._inflight = o
@@ -404,7 +454,7 @@ class McuLinkHost:
     def _sent(self, out: Outgoing, now_ns: int) -> None:
         if self._inflight is out:
             self._inflight = None
-        if out.kind == "DRIVE":
+        if out.kind in _MOTION:
             self._written.append({"seq": out.seq, "nonzero": out.nonzero, "expires_ns": out.expires_ns,
                                   "written_ns": now_ns})
 
