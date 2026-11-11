@@ -167,8 +167,10 @@ class DelayBound:
 
     **Session check** (re-review 6 P1: a random start seq still meets an earlier session's consecutive seqs). No
     anchor is taken until a STATE shows ``last_rx_seq`` step from ``a`` to ``b`` for a pair this session wrote a random
-    distance apart (``expect_step``) -- an earlier session's late STATEs only ever step by one (or by their own start's
-    random step: two random 16-bit values, about 2^-31). The host accepts STATEs in increasing MCU time only, so once
+    distance apart (``expect_step``, a step of 1024 to 64512) -- an earlier session's late STATEs step by one, or by a
+    few where STATEs went missing or frames were refused; a step of 1024 or more needs 20 s of its frames between two
+    of its STATEs, or its own session check's step -- matching this one's start and step: two random 16-bit values,
+    about 2^-32 (Codex re-review 7 P3). The host accepts STATEs in increasing MCU time only, so once
     such a STATE is accepted no earlier one can follow it: everything after it is this session's. A write is forgotten after ``anchor_max_age_s``, long before a 16-bit seq comes
     round (22 min at 50 Hz)."""
 
@@ -188,6 +190,11 @@ class DelayBound:
         if len(self._writes) > 4 * self.anchors_max:
             cut = write_ns - self.anchor_max_age_ns
             self._writes = {q: t for q, t in self._writes.items() if t >= cut}
+
+    def restart_check(self) -> None:
+        """Forget the session check and every anchor (a lost link)."""
+        self.verified_boot, self._step, self._pending, self._prev = None, None, None, None
+        self._anchors = []
 
     def expect_step(self, a: int, b: int) -> None:
         self._step = (int(a) & 0xFFFF, int(b) & 0xFFFF)
@@ -381,6 +388,7 @@ def load_bridge_params(path: str | Path, vehicle) -> EncoderSpeedParams:
 
 
 # ------------------------------------------------------------------------------------- the bridge's cycle (design 4-6)
+STEP_MIN = 1024  # the session check's step: an earlier session's ACKs only step this far after 20 s of missed frames
 STEP_RETRY_NS = 1_000_000_000  # a session check not passed within this is started again
 MIN_LIFE_NS = 1_000_000  # a command with less life left than the link's 1 ms validity step is not followed
 OUT_LIFE_NS = 100_000_000  # a DRIVE's life from its decision, before the console's own deadlines cut it
@@ -408,6 +416,9 @@ class TeleopBridge:
         self.samples: list[Sample] = []
         self.samples_max = int(samples_max)
         self.delays = DelayBound()
+        self._newest_mcu: dict[int, int] = {}
+        self.dropped_old = 0
+        self._disconnects_seen = 0
         self._step_b: int | None = None
         self._step_since = 0
         self.last_ping_ns: int | None = None
@@ -425,6 +436,16 @@ class TeleopBridge:
 
     # ------------------------------------------------------------------ inputs
     def add_sample(self, sample: Sample) -> None:
+        """A STATE the host accepted. The host forgets its last STATE on a disconnect, so after a reconnect it can
+        accept an older one; the bridge keeps each boot's newest MCU time across reconnects and drops anything not
+        newer (Codex re-review 7 P2: a 200 ms regression read as fresh) -- the session check's order argument rests
+        on it."""
+        st = sample.state
+        newest = self._newest_mcu.get(st.boot_id)
+        if newest is not None and st.mcu_time_us <= newest:
+            self.dropped_old += 1
+            return
+        self._newest_mcu[st.boot_id] = st.mcu_time_us
         self.delays.add(sample)
         self.samples.append(sample)
 
@@ -455,6 +476,10 @@ class TeleopBridge:
     def cycle(self, now_ns: int) -> dict:
         a, now = self.arbiter, now_ns / 1e9
         rec: dict = {"now_ns": now_ns}
+        if self.host.disconnects != self._disconnects_seen:
+            self._disconnects_seen = self.host.disconnects
+            self.delays.restart_check()  # a lost link: check the session again before any anchor
+            self._step_b = None
         delay = self.delays.delay_s(self.samples[-1]) if self.samples else None
         reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok, delay)
         rec["delay_s"] = delay
@@ -607,7 +632,7 @@ class TeleopBridge:
             # the session check (DelayBound): this ping is ``a``; the next one goes out a random distance after it
             a = h._seq
             h.request_disarm(now_ns)
-            gap = 2 + secrets.randbelow(0xFFF0)
+            gap = STEP_MIN + secrets.randbelow(0x10000 - 2 * STEP_MIN)
             b = h.skip_seq(gap - 1)
             self.delays.expect_step(a, b)
             self._step_b, self._step_since = b, now_ns

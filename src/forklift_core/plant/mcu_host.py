@@ -127,6 +127,7 @@ class McuLinkHost:
         self._state_rx_ns: int | None = None
         self._stale_reported = False
         self._seq = int(initial_seq) & 0xFFFF
+        self.disconnects = 0  # how many times the adapter lost the device (the teleop bridge rechecks its session)
         self._outbox: deque[Outgoing] = deque()
         self._auth = _NONE
         self._auth_gen = 0  # bumps whenever authorization starts or ends
@@ -334,6 +335,7 @@ class McuLinkHost:
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
         self._state, self._state_rx_ns, self._stale_reported = None, None, False
+        self.disconnects += 1
         events.append(HostEvent("disconnected"))
         return events
 

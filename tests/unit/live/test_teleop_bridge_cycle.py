@@ -667,3 +667,28 @@ def test_no_anchor_for_two_seconds_invalidates_the_speed_and_stops():
     assert rec["stop"] == "speed_invalid" and rec["speed_invalid"] == "no_delay_bound"
     assert 2.0e9 <= stopped_at - t0 <= 2.2e9
     assert any(isinstance(m, Disarm) for _t, m in r.sent[-5:])
+
+
+def test_an_older_state_after_a_reconnect_is_dropped_and_the_session_rechecked():
+    """Codex re-review 7 P2: the host forgets its last STATE on a disconnect; the bridge keeps each boot's newest MCU
+    time and drops an older STATE, and a lost link restarts the session check."""
+    from dataclasses import replace
+
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.5})
+    newest = r.bridge.samples[-1]
+    assert r.bridge.delays.verified
+    r.host.disconnected(r.now)
+    old = replace(newest.state, mcu_time_us=newest.state.mcu_time_us - 200_000)
+    r.host.on_bytes(encode(old, 1), r.now + 1)  # the host takes it: it forgot its last STATE
+    assert r.host.state == old and r.bridge.samples[-1] is newest and r.bridge.dropped_old >= 1
+    r.cycle()
+    assert not r.bridge.delays.verified  # a lost link: the session is checked again
+
+
+def test_the_session_check_steps_far():
+    r = Rig()
+    r.cycle(echo=False)
+    r.cycle(echo=False)
+    a, b = r.bridge.delays._step
+    assert rt.STEP_MIN <= (b - a) % 0x10000 <= 0x10000 - rt.STEP_MIN
