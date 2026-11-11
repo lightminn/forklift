@@ -1,4 +1,4 @@
-"""mcu-link/2 messages: encode/decode and a stream decoder that stamps host time.
+"""mcu-link/3 messages: encode/decode and a stream decoder that stamps host time.
 
 Contract: ``docs/interfaces/2026-10-22-mcu-link-contract.md`` sections 2-4. Units are
 SI except where the contract fixes raw fields (``current_ma``, ``duty_e4``); the
@@ -14,7 +14,7 @@ from enum import IntEnum, IntFlag
 
 from .framing import BODY_MAX, FrameDecoder, cobs_encode, crc16_ccitt_false
 
-VERSION = 2
+VERSION = 3
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 
@@ -22,7 +22,7 @@ _HEADER = struct.Struct("<BBH")
 _DRIVE = struct.Struct("<ffffHBHIQ")
 _ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
-_STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB")
+_STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
 
 TYPE_DRIVE = 0x01
@@ -231,6 +231,11 @@ class McuState:
     cycle_overruns: int
     flags: StateFlag
     reset_cause: ResetCause = ResetCause.POWER
+    # v3 (contract 3.3): per axis (M steering, H lift), 16-bit modular -- difference adjacent STATEs of one boot with
+    # :func:`kth_counter_delta`. Fresh frames, those failing the configured CRC variant, those that would fail the other
+    kth_frames: tuple[int, int] = (0, 0)
+    kth_crc_errors: tuple[int, int] = (0, 0)
+    kth_alt_crc_errors: tuple[int, int] = (0, 0)
 
     @property
     def current_a(self) -> tuple[float, ...]:
@@ -244,6 +249,24 @@ class McuState:
 
 
 Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState
+
+
+def _kth(message: McuState) -> tuple[int, ...]:
+    out = []
+    for name in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors"):
+        pair = tuple(getattr(message, name))
+        if len(pair) != 2:
+            raise LinkError(f"{name} holds two counters (M, H)")
+        for v in pair:
+            _check_range(name, v, 0, 0xFFFF)
+        out += pair
+    return tuple(out)
+
+
+def kth_counter_delta(new: int, old: int) -> int:
+    """How much a v3 KTH counter rose between two adjacent STATEs of one boot: unsigned modulo 2^16 (contract 3.3).
+    Never :func:`wheel_count_delta`'s signed half-range reading -- these counters only rise."""
+    return (int(new) - int(old)) & 0xFFFF
 
 
 def _payload(message: Message) -> tuple[int, bytes]:
@@ -291,6 +314,7 @@ def _payload(message: Message) -> tuple[int, bytes]:
             message.cycle_overruns,
             int(message.flags),
             int(message.reset_cause),
+            *_kth(message),
         )
     raise TypeError(f"not an mcu-link message: {message!r}")
 
@@ -333,6 +357,9 @@ def _state(fields: tuple) -> McuState:
         cycle_overruns=fields[26],
         flags=StateFlag(flags),
         reset_cause=ResetCause(cause),
+        kth_frames=tuple(fields[29:31]),
+        kth_crc_errors=tuple(fields[31:33]),
+        kth_alt_crc_errors=tuple(fields[33:35]),
     )
 
 

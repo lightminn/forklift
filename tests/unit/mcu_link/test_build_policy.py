@@ -36,8 +36,8 @@ def test_the_golden_state_0103_is_a_commissioning_board():
     from forklift_core.mcu_link.framing import cobs_decode
     from forklift_core.mcu_link.messages import decode
 
-    state_0103 = ("0a02810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb09010103a03f010102bf0103803d"
-                  "0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e00211020205d90275f100")  # contract 6
+    state_0103 = ("0a03810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb09010103a03f010102bf0103803d"
+                  "0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e00211020203d90203800104ffff02020505ff7fc42100")  # contract 6 (v3)
     body = cobs_decode(bytes.fromhex(state_0103)[:-1])[:-2]
     _, state = decode(body)
     assert connect_refusal(state.flags, Client.REAL) == "commission_build" and commission_allowed(state.flags)

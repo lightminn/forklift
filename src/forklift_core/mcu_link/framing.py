@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import binascii
 
-BODY_MAX = 80  # version .. crc, bytes
+BODY_MAX = 90  # version .. crc, bytes (v3: the STATE with its KTH counters)
 _ENCODED_MAX = BODY_MAX + 1  # COBS adds one byte per started 254-byte block
 
 

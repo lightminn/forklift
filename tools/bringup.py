@@ -22,6 +22,8 @@ usage:
                       [--observed pos|neg|none] --power-switch-in-hand [--allow-locked] [--yes] [--markers]
   bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
                       [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
+  bringup.py kth      --record run.jsonl --configured-m V --configured-h V --image ID
+                      (S2: the KTH CRC variant from the v3 counters; record while moving each axis through its range)
 """
 
 from __future__ import annotations
@@ -44,6 +46,8 @@ from forklift_core.plant.commission import (
     AXES, AXIS_HOLD_MAX_S, COMMISSION_CAP_MS, COMMISSION_DUTY_MAX, COMMISSION_HOLD_MAX_S, COMMISSION_HOLD_MIN_S,
     commission_metrics, sign_verdict,
 )
+from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
+from forklift_core.plant.kth_check import kth_check
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 
@@ -180,6 +184,9 @@ def sample_from_row(row: dict) -> Sample:
                   flags=flags, reset_cause=ResetCause[row["reset_cause"]],
                   current_ma=tuple(row["current_ma"]), duty_e4=tuple(row["duty_e4"]),
                   driver_status=tuple(row["driver_status"]))
+    for name in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors"):  # v3; JSON gives lists
+        if name in row:
+            fields[name] = tuple(row[name])
     return Sample(int(row["host_ns"]), McuState(**fields))
 
 
@@ -908,6 +915,12 @@ def main(argv=None) -> int:
     cm.add_argument("--power-switch-in-hand", action="store_true")
     cm.add_argument("--markers", action="store_true",
                     help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
+    kt = sub.add_parser("kth", help="S2: the KTH CRC variant from a record's v3 counters (mcu-link/3 contract 3.3)")
+    kt.add_argument("--record", required=True)
+    for ax in ("m", "h"):
+        kt.add_argument(f"--configured-{ax}", required=True, choices=KTH_VARIANTS,
+                        help=f"the CRC variant axis {ax.upper()} is configured with in the image under test")
+    kt.add_argument("--image", required=True, help="the firmware image under test (its identity string or hash)")
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1,
@@ -919,6 +932,12 @@ def main(argv=None) -> int:
         for name in ("output-response-ms", "stop-time-ms", "stop-distance-mm"):
             p.add_argument("--" + name)
     args = ap.parse_args(argv)
+    if args.cmd == "kth":
+        rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
+        samples = [sample_from_row(r) for r in rows if r.get("t") == "state"]
+        print(json.dumps(kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
+                                   image=args.image)))
+        return 0
     if args.cmd == "analyze":
         try:
             for name in ("output_response_ms", "stop_time_ms", "stop_distance_mm"):

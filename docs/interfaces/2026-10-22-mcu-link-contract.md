@@ -1,6 +1,6 @@
-# Jetson ↔ MCU 링크 계약 (mcu-link/2)
+# Jetson ↔ MCU 링크 계약 (mcu-link/3)
 
-작성일: 2026-10-22 · 개정: 2026-11-11(version 2, 7절) · 상태: **초안, 실기기 미검증** · 구현: `firmware/core/`(C), `src/forklift_core/mcu_link/`(Python)
+작성일: 2026-10-22 · 개정: 2026-11-11(version 2), 2026-11-12(version 3, 7절) · 상태: **초안, 실기기 미검증** · 구현: `firmware/core/`(C), `src/forklift_core/mcu_link/`(Python)
 
 상위 제어(Jetson)와 하위 제어 MCU 사이의 바이트 프레임과 메시지 의미를 정한다. 전송로(USB CDC 또는 UART)는 아직 정하지 않았으므로([핀맵 검토](../design/2026-10-22-h743-pinmap-draft-review.md) 4절) 이 계약은 **순서가 보장되는 바이트 스트림**만 가정한다. 펌웨어 구조는 [MCU 펌웨어 코어 설계](../design/2026-10-22-mcu-firmware-core.md)를 따른다.
 
@@ -12,10 +12,10 @@ body  = version:u8  type:u8  seq:u16  payload:N  crc:u16
 ```
 
 - 모든 다바이트 정수와 실수는 **little-endian**. 실수는 IEEE 754 binary32.
-- `version` = 2. 다른 값은 버린다(version 1 프레임 포함).
+- `version` = 3. 다른 값은 버린다(version 1·2 프레임 포함).
 - `crc` = CRC-16/CCITT-FALSE(다항식 0x1021, 초기값 0xFFFF, 반사 없음, 최종 XOR 0) 를 `version` 부터 `payload` 끝까지 계산. 검사값: ASCII `123456789` → `0x29B1`.
 - COBS(Consistent Overhead Byte Stuffing)로 0x00 을 없앤 뒤 구분자 0x00 하나를 붙인다. 받는 쪽은 0x00 까지 모아 디코드하고, 깨진 프레임은 버리고 다음 0x00 부터 다시 맞춘다. 빈 프레임(연속 0x00)은 오류가 아니다.
-- `body` 최대 **80 바이트**. 넘으면 버린다.
+- `body` 최대 **90 바이트**(v3, `STATE`). 넘으면 버린다. COBS 를 거친 프레임은 최대 91 바이트, 구분자 포함 92 바이트다.
 - `seq` 는 보낸 쪽이 메시지마다 1 씩 올린다(0xFFFF 다음 0). 양방향이 각자 센다.
 - 버린 프레임(COBS·CRC·버전·형식·길이·크기 오류)은 받는 쪽의 `rx_errors` 에 센다.
 - 보내는 쪽은 **프레임을 통째로만** 송신 버퍼에 넣는다. 자리가 모자라면 그 프레임 전체를 버린다(앞부분만 보내면 뒤 프레임까지 깨진다).
@@ -44,7 +44,7 @@ MCU 는 받은 시각만으로 명령의 나이를 알 수 없다. 전송로에 
 | 0x03 | `DISARM` | 호스트 → MCU | 없음(언제나 받아들인다 — 멈추는 쪽이라 신선도 검사를 하지 않는다) |
 | 0x04 | `CLEAR_FAULTS` | 호스트 → MCU | 4 바이트 `<I`: `boot_id` |
 | 0x05 | `COMMISSION` | 호스트 → MCU | 19 바이트 `<BhHHIQ` (3.4, `FW_COMMISSION` 빌드만) |
-| 0x81 | `STATE` | MCU → 호스트 | 72 바이트 `<QIHHBBIiiffff4h4h4BHHBB` |
+| 0x81 | `STATE` | MCU → 호스트 | 84 바이트 `<QIHHBBIiiffff4h4h4BHHBB6H` |
 
 길이가 표와 다른 메시지와 모르는 `type` 은 버린다(`rx_errors`).
 
@@ -125,8 +125,19 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 | `cycle_overruns` | u16 | 제어 주기 지연 누적(포화) |
 | `flags` | u8 | bit0 `limited`, bit1 `command_fresh`(마감 전 명령이 있음), bit2 `zero_seen`, bit3 `drivers_ready`, bit4 `commission_build`(v2), bit5 `hil_plant`(v2), bit6 `outputs_locked`(v2), bit7 `estop_unwired`(v2) |
 | `reset_cause` | u8 | v2: 마지막 시작 원인. 0 전원·BOR, 1 리셋 핀, 2 IWDG, 3 소프트웨어, 4 그 밖. 한 부팅 동안 모든 `STATE` 에 같은 값 |
+| `kth_frames` | 2 × u16 | v3: 축별(M 조향, H 승강) 받은 **신선한** KTH7801 프레임 수. 16비트 모듈러 |
+| `kth_crc_errors` | 2 × u16 | v3: 그중 **설정된 CRC 변형**으로 CRC 가 틀린 프레임 수. 16비트 모듈러 |
+| `kth_alt_crc_errors` | 2 × u16 | v3: 그중 **다른 CRC 변형**이었다면 CRC 가 틀렸을 프레임 수. 진단 전용 — 위치·유효성 판단에 쓰지 않는다. 16비트 모듈러 |
 
 `fault_flags` 비트: 0 `estop_input`, 1 `command_timeout`, 2 `driver_fault_l`, 3 `driver_fault_r`, 4 `driver_fault_m`, 5 `driver_fault_h`, 6 `steer_sensor_invalid`, 7 `lift_sensor_invalid`, 8 `overcurrent_l`, 9 `overcurrent_r`, 10 `overcurrent_m`, 11 `overcurrent_h`, 12 `driver_not_ready`, 13 `steer_out_of_range`, 14 `lift_out_of_range`, 15 `cycle_overrun`, 16 `current_sense_invalid`, 17 `encoder_gap`(v2, 두 바퀴 공통: 같은 주기에 읽는다), 18 `encoder_stuck_l`, 19 `encoder_stuck_r`, 20 `encoder_polarity_l`, 21 `encoder_polarity_r`, 22 `encoder_jump_l`, 23 `encoder_jump_r`, 24 `commission_time_limit`(v2, 3.4). 엔코더 비트 18–23 은 뒤 바퀴 L·R 에만 적용하고, 조향·승강(KTH 절대각)은 6·7·13·14 를 쓴다. 나머지(25–31)는 0 이어야 하며, 켜진 미정의 비트는 받는 쪽이 오류로 처리한다.
+
+**KTH CRC 계수(v3)** — S2 의 CRC 변형 확정용(계획 S2, 도착일 절차서). 두 변형(`KTH_CRC_G704_BYTES`, `KTH_CRC_REFLECTED_MSB_FIRST`)은 4096 개 각도 중 256 개(0x000·데이터시트 예 0x0FF 포함)에서 CRC 가 같다. 그래서 설정 변형의 오류 0 만으로는 증거가 되지 않고, 다른 변형이 틀렸을 프레임(`kth_alt_crc_errors`)을 실제로 지났다는 것이 함께 있어야 한다.
+- 세 계수는 같은 신선 프레임 집합에서 같은 주기에 갱신한다. 신선한 프레임 하나에 `kth_frames` 가 1 오르고, 그 프레임이 설정 변형으로 틀리면 `kth_crc_errors`, 다른 변형으로 틀리면 `kth_alt_crc_errors` 가 1 오른다. 신선하지 않은(받지 못한) 프레임은 어느 계수도 올리지 않는다.
+- 축마다 제어 주기당 많아야 1 오르고, 제어 주기는 1 ms 이상이다 — 축당 초당 1000 이하.
+- **부팅 때만** 0 으로 초기화한다. `ARM`·`DISARM`·`CLEAR_FAULTS`·재연결에는 그대로 둔다.
+- 호스트는 같은 부팅 안의 **인접** `STATE` 사이 차분 `(new − old) mod 2¹⁶`(부호 없는 차분, `wheel_count_delta` 의 반범위 부호 차분이 아님)을 정수로 더해 읽는다. 첫 `STATE` 와 마지막 `STATE` 만 빼면 랩을 놓친다. 인접 `STATE` 간격(`mcu_time_us`)이 30 s 를 넘거나(1000/s × 30 s < 2¹⁶), MCU 시각이 되돌아가거나, `boot_id` 가 바뀐 구간은 복원할 수 없어 그 판정을 무효로 한다. 짧은 `STATE` 누락은 누적 계수라서 복원된다. 복원한 합이 `errors ≤ frames`, `alt ≤ frames` 가 아니면 무효다.
+- `flags.hil_plant` 인 빌드의 계수는 모형이 만든 프레임의 것이다 — 합성 진단으로만 보고 실물 S2 확정에 쓰지 않는다.
+- 판정 도구: `tools/bringup.py kth --record run.jsonl --configured-m V --configured-h V --image ID`(`src/forklift_core/plant/kth_check.py`). 축마다 `configured_ok`(frames ≥ 1000, errors = 0, alt ≥ 100, 마지막 `STATE` 에서 축이 유효하고 범위 안), `other_variant`(frames ≥ 1000, alt = 0, errors ≥ 100), 그 밖은 `undecided`(이유와 함께). 문턱은 작업용 값이고 검증된 신뢰수준이 아니다. alt 증거는 두 변형을 가르는 프레임을 지났다는 뜻이지 범위 전체를 지났다는 뜻이 아니다 — 범위는 S2 가 따로 본다. 판정 결과에 설정 변형과 이미지 식별자가 함께 남는다.
 
 **호스트의 결함 해석(v2)**:
 - 비트 17·22·23 이 켜져 있는 동안은 그 바퀴(17 은 두 바퀴) 카운트의 연속성이 끊긴 것으로 본다. 펌웨어는 그 표본의 차분만 버리고 누적 카운트는 이어 간다. 끊긴 횟수는 알 수 없다.
@@ -152,29 +163,34 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 ## 5. 전송량
 
-`STATE` 는 body 78 바이트, COBS·구분자 포함 최대 80 바이트다(v2). 10 ms 마다 보내면 8.0 kB/s(UART 8N1 기준 80 kbit/s)라 115,200 bps 에서는 링크의 약 69 % 를 쓴다. UART 라면 460,800 bps 이상이나 USB CDC 를 쓰고, 그러지 못하면 `state_period_ms` 를 늘린다. MCU 는 송신을 막고 기다리지 않는다 — 보낼 자리가 없으면 그 `STATE` 를 통째로 버린다. `STATE` 를 못 받으면 호스트의 echo 가 오래돼 명령이 거부되는데, 그것은 정상적인 정지 동작이다.
+`STATE` 는 body 90 바이트, COBS·구분자 포함 최대 92 바이트다(v3). 10 ms 마다 보내면 9.2 kB/s(UART 8N1 기준 92 kbit/s)라 115,200 bps 에서는 링크의 약 80 % 를 쓴다. UART 라면 460,800 bps 이상이나 USB CDC 를 쓰고, 그러지 못하면 `state_period_ms` 를 늘린다. MCU 는 송신을 막고 기다리지 않는다 — 보낼 자리가 없으면 그 `STATE` 를 통째로 버린다. `STATE` 를 못 받으면 호스트의 echo 가 오래돼 명령이 거부되는데, 그것은 정상적인 정지 동작이다.
 
 ## 6. 고정 시험 벡터
 
-C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이라 상태 의미는 따지지 않는다). 3절 형식 문자열과 Python 표준 라이브러리(`struct`, `binascii.crc_hqx(body, 0xFFFF)`)로 한 번 만들어 고정했다. 실수 0.3 은 binary32 로 반올림된 값이다.
+C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이라 상태 의미는 따지지 않는다). v3: `version` 이 모든 메시지의 CRC 에 들어가므로 모든 벡터를 version 3 으로 다시 만들었다. 3절 형식 문자열과 Python 표준 라이브러리(`struct`, `binascii.crc_hqx(body, 0xFFFF)`)로 한 번 만들어 고정했다. 실수 0.3 은 binary32 로 반올림된 값이다.
 
 - `arm_1234` — `ARM`, seq 0x1234, boot_id 0xDEADBEEF, echo 0x0000000501020304:
-  `0e02023412efbeadde04030201050101033bad00`
+  `0e03023412efbeadde04030201050101031f0500`
 - `drive_0007` — `DRIVE`, seq 7, left 1.5, right −2.25, steer 0.125, lift 0.3, valid_after_echo_ms 150, flags 1, arm_gen 0x0203, boot_id 0xDEADBEEF, echo 0x0000000100ABCDEF:
-  `04020107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab020101010374b200`
-- `clear_0008` — `CLEAR_FAULTS`, seq 8, boot_id 0xDEADBEEF: `0402040807efbeadde778600`
-- `disarm_0009` — `DISARM`, seq 9: `0402030903608a00`
+  `04030107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab02010101033f4600`
+- `clear_0008` — `CLEAR_FAULTS`, seq 8, boot_id 0xDEADBEEF: `0403040807efbeaddea4c100`
+- `disarm_0009` — `DISARM`, seq 9: `0403030903d4fc00`
 - `commission_000a` — `COMMISSION`, seq 0x000A, axis 2, duty_e4 −1500, valid_after_echo_ms 150, arm_gen 0x0203, boot_id 0xDEADBEEF, echo 0x0000000100ABCDEF:
-  `0402050a050224fa960a0302efbeaddeefcdab0201010103742000`
-- `state_0102` — `STATE`, seq 0x0102, 필드 순서대로 `0x0000000211223344, 0xDEADBEEF, 0x0203, 0x0102, 2, 7, 0x00018001, −123456, 654321, 1.25, −0.5, 0.0625, 0.75, (1500, −200, 30, 4000), (5000, −10000, 2500, 0), (0xC0, 0xC4, 0xE0, 0x00), 17, 2, 0x0B, 0`:
-  `0a02810201443322110201010eefbeadde03020201020701800108c01dfefff1fb09010103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e002110202020b03150900`
-- `state_0103` — `STATE`, seq 0x0103, `state_0102` 과 같되 `fault_flags` = bit 17·19·22·24(`0x014A0000`), `flags` = bit 0·3·4·6·7(`0xD9`), `reset_cause` = 2:
-  `0a02810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb09010103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e00211020205d90275f100`
+  `0403050a050224fa960a0302efbeaddeefcdab02010101037f4500`
+- `state_0102` — `STATE`, seq 0x0102, 필드 순서대로 `0x0000000211223344, 0xDEADBEEF, 0x0203, 0x0102, 2, 7, 0x00018001, −123456, 654321, 1.25, −0.5, 0.0625, 0.75, (1500, −200, 30, 4000), (5000, −10000, 2500, 0), (0xC0, 0xC4, 0xE0, 0x00), 17, 2, 0x0B, 0, kth_frames (0x1234, 0xFFFF), kth_crc_errors (3, 0), kth_alt_crc_errors (0x0100, 7)`:
+  `0a03810201443322110201010eefbeadde03020201020701800108c01dfefff1fb09010103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e002110202020b063412ffff0301010103010703c0b000`
+- `state_0103` — `STATE`, seq 0x0103, `state_0102` 과 같되 `fault_flags` = bit 17·19·22·24(`0x014A0000`), `flags` = bit 0·3·4·6·7(`0xD9`), `reset_cause` = 2, kth_frames (0x8000, 1), kth_crc_errors (0xFFFF, 2), kth_alt_crc_errors (5, 0x7FFF):
+  `0a03810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb09010103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e00211020203d90203800104ffff02020505ff7fc42100`
 
 ## 7. 버전 관리
 
 필드를 바꾸면 `version` 을 올린다. 한 버전 안에서 필드 의미를 바꾸지 않는다.
 
+- **version 3 (2026-11-12, 콘솔·펌웨어-H743 합의, 계약 주인 콘솔, 총괄 배정)**:
+  - `STATE` 끝에 축별 KTH 계수 셋(`kth_frames`, `kth_crc_errors`, `kth_alt_crc_errors`, 각 2 × u16 모듈러)을 붙였다(3.3). 도착일 S2 의 CRC 변형 확정이 목적이다.
+  - `STATE` payload 72 → 84 바이트, body 상한 80 → 90 바이트.
+  - 모든 고정 벡터를 version 3 으로 다시 만들었다.
+  - 받는 쪽은 version 3 만 받는다(version 2 장비 배포 없음).
 - **version 2 (2026-11-11, 콘솔·펌웨어-H743 합의, 계약 주인 콘솔)**:
   - 엔코더 결함 비트 17–23 을 더했다.
   - `COMMISSION`(0x05)과 `commission_time_limit`(24)을 더했다.
