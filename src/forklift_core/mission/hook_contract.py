@@ -57,6 +57,7 @@ HOOKS: dict[str, tuple[HookClass, bool]] = {  # noqa: RUF012
     "cusp_holds": (_C, False), "cusp_monitor": (_C, False), "cusp_standing": (_C, False),
     "cusp_heading_motion": (_C, False), "live_mission_ready": (_C, False), "live_mission_start": (_C, False),
     "live_abort": (_C, True),
+    "operator_check": (_C, False),  # the operator's answer to a confirmation request (4d-2b-1; the console in 4e-2)
     # records and displays
     "path_record": (_R, False), "write_paths": (_R, False), "record_json": (_R, False), "save_npz": (_R, False),
     "save_capture": (_R, False), "dump_tracking": (_R, False), "path_stats": (_R, False), "echo": (_R, False),

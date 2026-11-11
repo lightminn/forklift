@@ -335,6 +335,9 @@ class MissionCore:
         # Persistent console plan D5a: the fork relation and the load, the session's (a batch run updates it too,
         # but only a live run reads it -- core.baseline is set there alone).
         self.cargo = CargoState()
+        self.cargo.assume_trace_valid = not bool(getattr(options, "real_vehicle", False))  # 4d-2b-1
+        self._operator = {"serial": 0, "request": None, "answer": None, "motion_since": None,  # 4d-2b-1
+                          "motion_key": None}
         self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
         self.recent_odom: list = []  # plan D4b: the last 3 m of odometry rear poses (live), every 0.02 m
         self.recent_steps: list = []  # whether the step arriving at each of them went forward
@@ -672,17 +675,35 @@ class MissionCore:
                 )
             )
         if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
-            hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
-            transition("extract", t)
+            if self._real_vehicle():
+                # 4d-2b-1: the lift at its target, then the operator says the pallet came up (no truth height)
+                reached_ = abs(float(hooks.lift_position()) - float(settings["lift_target_m"])) <= self.LIFT_REACH_M
+                verdict_ = self._operator_gate(t, "lifted", reached_)
+                hooks.require(verdict_ != "timeout", "Lift did not reach its position")
+                if verdict_ == "reject":
+                    hooks.require(False, "Pallet was not lifted (operator)")
+                elif verdict_ == "confirm":
+                    transition("extract", t)
+            else:
+                hooks.require(hooks.pallet_z() > 0.06, "Pallet was not lifted")
+                transition("extract", t)
         if ms.phase == "lower" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
-            hooks.require(
-                abs(hooks.pallet_z()) < 0.008, "Pallet did not settle onto destination floor"
-            )
-            hooks.require(
-                hooks.lift_position() < 0.012,
-                "Fork did not lower",
-            )
-            transition("withdraw", t)
+            if self._real_vehicle():
+                verdict_ = self._operator_gate(t, "settled", float(hooks.lift_position()) < 0.012)
+                hooks.require(verdict_ != "timeout", "Lift did not reach its position")
+                if verdict_ == "reject":
+                    hooks.require(False, "Pallet did not settle onto destination floor (operator)")
+                elif verdict_ == "confirm":
+                    transition("withdraw", t)
+            else:
+                hooks.require(
+                    abs(hooks.pallet_z()) < 0.008, "Pallet did not settle onto destination floor"
+                )
+                hooks.require(
+                    hooks.lift_position() < 0.012,
+                    "Fork did not lower",
+                )
+                transition("withdraw", t)
         if ms.phase in ("recover_lower", "recover_withdraw"):
             self.recovery_timers(t)
         if ms.phase == "settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
@@ -1133,6 +1154,11 @@ class MissionCore:
             self.recovery_failed(t, f"{ms.phase}_timeout")
             return
         if ms.phase == "recover_lower" and elapsed >= RECOVERY_LOWER_MIN_S:
+            if self._real_vehicle() and not self.cargo.trace_valid:
+                # 4d-2b-1: no automatic retrace on the real truck (never assumed, so not reached; refused before any
+                # truth height would be read). The simulation's order is unchanged below.
+                self.recovery_failed(t, "trace_invalid")
+                return
             if hooks.lift_position() < 0.012 and abs(hooks.pallet_z()) < 0.008:
                 if not self.cargo.trace_valid:
                     self.recovery_failed(t, "trace_invalid")
@@ -6163,6 +6189,63 @@ class MissionCore:
             raise TruthAccessViolation(name)
         return getattr(self.hooks, name)()
 
+    LIFT_REACH_M = 0.005  # 4d-2b-1: the lift is at its target within this (and a confirmation holds only while so)
+    LIFT_REACH_LIMIT_S = 10.0  # 4d-2b-1: the motion stage's limit once the timed ramp is over
+
+    def _operator_key(self, kind: str) -> tuple:
+        ms, cmds = self.ms, self.commands
+        return (kind, cmds.mission_id, cmds.mission_gen, ms.phase, float(ms.phase_started))
+
+    def _operator_gate(self, t: float, kind: str, reached: bool) -> str:
+        """The real truck's operator check for ``kind`` (4d-2b-1, truth audit 4-3): ``"motion"`` while the lift has
+        not reached its position, ``"timeout"`` once that took longer than the reach limit (work time, its own key's),
+        else ``"wait" | "confirm" | "reject"``. One request at a time, keyed by the kind, the mission and its
+        generation and the phase; a request whose key changed, or whose precondition broke, is dropped with its answer.
+        The hook answers ``(serial, verdict)``: only the current request's serial (an int, not a bool) and only
+        confirm or reject count; anything else is a wait."""
+        op = self._operator
+        key = self._operator_key(kind)
+        if not reached:
+            if op["request"] is not None:
+                self._operator_record(t, op["request"], "dropped:precondition")
+            op["request"], op["answer"] = None, None
+            if op["motion_since"] is None or op["motion_key"] != key:
+                op["motion_since"], op["motion_key"] = t, key  # (Codex 4d-2b-1 P2-1: never another key's timer)
+            return "timeout" if self.commands.work_elapsed(op["motion_since"], t) > self.LIFT_REACH_LIMIT_S else "motion"
+        op["motion_since"] = op["motion_key"] = None
+        if op["request"] is None or op["request"]["key"] != key:
+            self._operator_issue(t, key)
+        if op["answer"] is None:
+            got = self.hooks.operator_check(dict(op["request"]))
+            if (isinstance(got, tuple) and len(got) == 2 and type(got[0]) is int and got[0] == op["request"]["serial"]
+                    and got[1] in ("confirm", "reject")):
+                op["answer"] = got[1]
+                self._operator_record(t, op["request"], got[1])
+        return op["answer"] or "wait"
+
+    def _operator_issue(self, t: float, key: tuple) -> None:
+        op = self._operator
+        op["serial"] += 1
+        op["request"] = {"serial": op["serial"], "key": key, "kind": key[0], "mission_id": key[1],
+                         "mission_gen": key[2], "phase": key[3], "phase_started": key[4], "issued_s": float(t)}
+        op["answer"] = None
+        self._operator_record(t, op["request"], "requested")
+
+    def operator_request_again(self, t: float) -> bool:
+        """The operator asks again (4d-2b-1): the open request gets a new serial and no answer -- a wrong reject is
+        not fixed until the pose changes. False with nothing open."""
+        op = self._operator
+        if op["request"] is None:
+            return False
+        self._operator_record(t, op["request"], "dropped:again")
+        self._operator_issue(t, op["request"]["key"])
+        return True
+
+    def _operator_record(self, t: float, request: dict, event: str) -> None:
+        self.state.setdefault("operator_checks", []).append(
+            {"time_s": float(t), "serial": request["serial"], "kind": request["kind"],
+             "mission_id": request["mission_id"], "phase": request["phase"], "event": event})
+
     def _stage(self):
         """The simulation's stage for the path displays; the real truck has none (4d-2a: not even read)."""
         return None if self._real_vehicle() else self.hooks.stage()
@@ -8996,6 +9079,8 @@ class MissionCore:
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
         pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
         self.capture_recovery_context()  # plan D14: before the mission-owned state goes
+        # 4d-2b-1: an ended mission's confirmation request, answer and reach timer go with it; the serial goes on
+        self._operator.update(request=None, answer=None, motion_since=None, motion_key=None)
         if slam is not None:
             # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
             # a hold left with the forks free is released for the end (D1 step 4), now or once standing.

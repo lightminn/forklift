@@ -117,6 +117,9 @@ KNOWN = {
         # C3 (plan 2026-10-27 insertion lateral drift T2): a refused second near capture cannot rejoin the first line
         "near_capture_second_resume:",
         "layer_latency_exceeded",  # the layer latency budget's watchdog held over its limit (plan 2026-11-11)
+        # sim-to-real 4d-2b-1: the real truck's lift/lower motion stage and its operator's rejects
+        "Lift did not reach its position", "Pallet was not lifted (operator)",
+        "Pallet did not settle onto destination floor (operator)",
     },
 }
 

@@ -184,14 +184,35 @@ rt 9920–9929(`rear`·`signed_speed`), rt 7680–7681(장애물 층 자세), rt
 - 계약 시험: core 원문의 모든 훅 이름이 등록되어 있다. 등록되지 않은 이름과 EVAL 의 base 읽기를 막는다.
 - 가짜 실차 훅으로 다음이 예외 없이 지나가고 평가 필드가 `null` 인지 본다: 도킹 한 라운드, cusp 정지 확인, 덤프·기록 자리.
 
-### 4-3. 4d-2b 계약 (HUMAN, 다음 PR)
+### 4-3. 4d-2b — HUMAN 전이
 
-- 다섯 자리(`pallet_z`)를 `_human_verdict(kind)` 로 모은다. 시뮬은 지금 식을 같은 순서로 평가한다.
-- 실차는 비차단 `operator_check(request) -> "wait" | "confirm" | "reject"` 를 쓴다. 다른 값(`None`·bool·임의 문자열)은 confirm 이 아니다.
-- 요청은 다음을 묶는다: kind, 목적, 미션 id·세대, phase·phase 시작, 복구 식별자, 요청 세대. 승강 재동작, 복구 대상 변경, 시간 초과는 확인을 무효화한다. 늦은 confirm 은 버린다.
-- 사람 대기와 승강 동작 시간을 구별한다. 목표 도달 실패는 동작 제한으로 다루고, 도달 뒤에는 승강을 유지한 채 확인을 기다린다. 대기 중에도 안전 틱·취소·SLAM 무효 처리는 돈다. `recover_lower` 의 20 s 제한은 유지한다(`begin_wait` 로 빼지 않는다).
-- 재개 시 `wait` 는 resuming 에서 바퀴 정지·승강 유지. `reject` 는 재개 거부 또는 `recovery_required`. 다시 내리기는 별도의 운용자 선택이다.
-- 접지 확인, 자동 retrace 허가, 수동 복구 종료 확인을 구별한다. 접지 confirm 으로 `trace_valid` 를 되살리지 않는다. 삽입 시작마다 `trace_valid=True` 로 되돌리는 기본값은 실차에서 쓰지 않는다(4e-2 와 경계).
+4d-2b 는 둘로 나눈다(Codex 설계 상의 P2 다섯, 총괄 결정). **4d-2b-1** 은 lift/lower 운용자 확인과 요청 계약, **4d-2b-2** 는 실차 복구 경계(아래 총괄 결정)다.
+
+**4d-2b-1 (이 PR)**
+- 실차는 포켓 안 자동 하강·retrace 를 하지 않는다. `CargoState.assume_trace_valid` 를 두고(시뮬 True, 실차 False), `on_insert_start` 는 이 값을 `trace_valid` 로 쓴다. `recovery_timers` 는 실차에서 `trace_valid` 를 먼저 검사해 참값 높이를 읽기 전에 끝낸다(도달 불가 경로의 방어). 시뮬의 검사 순서는 그대로다.
+- 요청 계약 (`MissionCore._operator_gate`):
+  - 요청은 한 번에 하나다. 키는 (kind, mission_id, mission_gen, phase, phase_started) 이고 `serial` 이 붙는다. 키가 바뀌면 새 요청이고, 이전 답은 버린다.
+  - 훅 `operator_check(request) -> (serial, verdict)` 는 비차단이다. 지금 요청의 serial 이고 verdict 가 confirm/reject 일 때만 답으로 받는다. 그 밖의 모든 값은 wait 다. 받은 답은 그 요청 동안 유지한다.
+  - `operator_request_again(t)`: 운용자의 재요청이다. 같은 키에 새 serial 을 내고 답을 지운다. 잘못 누른 reject 가 같은 자세에 고정되지 않게 한다.
+  - 성립 조건이 깨지면 요청과 답을 버리고 동작 단계로 돌아간다. lifted 는 승강이 목표 ±5 mm, settled 는 승강 < 12 mm 이다.
+  - 기록: `state["operator_checks"]` (requested / confirm / reject / dropped:precondition / dropped:again).
+- 자리별 처리:
+  - lift(4.5 s 뒤): 승강이 목표 ±5 mm 에 들기 전은 동작 단계이고, 들지 못한 채 10 s 가 지나면 `require(False, "lifted: lift did not reach")`. 든 뒤에는 `lifted` 확인을 기다린다(시간 제한 없음). confirm 이면 extract, reject 면 `require(False, "Pallet was not lifted (operator)")`.
+  - lower(4.5 s 뒤): 승강 < 12 mm 가 동작 단계이고, 같은 10 s 제한을 둔다. 그 뒤 `settled` 확인을 기다린다. confirm 이면 withdraw, reject 면 `require(False, "Pallet did not settle onto destination floor (operator)")`.
+  - 대기 중에도 안전 틱·취소·SLAM 무효 처리는 돈다. 승강 목표는 ramp 가 도달한 목표 명령을 그대로 유지한다(측정값으로 덮지 않는다).
+- 시뮬은 지금 식을 같은 순서로 평가한다(`pallet_z` 를 더 읽지 않는다).
+
+**총괄 결정 (2026-11-11, 4d-2b-2 에서 구현)**
+1. **실차 수동 복구는 (B) 현장 복구로 시작한다.**
+   - recovery_required 동안 core 를 거치는 구동은 모두 막는다. 텔레옵도 막는다(3a 의 'SLAM 무효 때 텔레옵 연다'에 대한 예외).
+   - 현장 절차(계획 5절): DISARM → 모터 출력 끔 → 차체를 들어 옮기거나 팔레트를 빼냄 → 포크 빠짐을 눈으로 확인 → '복구 끝' 확인. 감속비가 약 80:1 이라 바퀴를 손으로 돌리기 어렵다.
+   - '복구 끝' 뒤에는 SLAM 이 유효하고 운용자가 다시 시작해야만 AUTO 로 돌아간다. 자동 재개는 없다.
+   - (A) core 보조 수동 복구(접지 확인 → 감독하 수동 후진 → 빠짐 확인)는 후속 항목이다. 실차에서 팔레트를 실은 자율 삽입(S10 이후) 전에 S5·S8 실측을 근거로 정한다.
+2. **실차의 취소 뒤 빈 포크 자동 후퇴(clear_out)는 조건부로 허용한다.**
+   - 허가·SafetySpeed(엔코더)·장애물 층 강제 아래, 감독·저속 조건에서만 움직인다.
+   - 포크가 포켓 안에 있을 수 있는 단계(삽입 시작 뒤 ~ 완전 빠짐 확인 전)의 취소는 clear_out 이 아니라 recovery_required(1 의 B)로 간다.
+   - '빈 포크'는 참값이 아니라 미션 상태(아직 집지 않음)로 판정한다.
+   - 이 경계는 취소 단계별 표 형태의 코어 단위 시험으로 고정한다.
 
 ## 4a. 이 감사가 기대는 다른 전제(agy ③, 해당 단계에서 다룸)
 
