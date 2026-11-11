@@ -146,6 +146,51 @@ def test_motor_output_cannot_be_opened(tmp_path):
     assert "outputs stay locked" in cfg.stderr
 
 
+def _identity(build: Path) -> str:
+    data = (build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+    m = re.search(rb"forklift-mcu \S+ locked (\S+) link=", data)
+    assert m, "build identity string missing"
+    return m.group(1).decode()
+
+
+def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
+    """Codex B1 review: a new commit or a dirty tree must reach the ELF without reconfiguring."""
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+    repo = tmp_path / "repo"
+    shutil.copytree(FIRMWARE, repo / "firmware", ignore=shutil.ignore_patterns("build"))
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+                               *args], cwd=repo, capture_output=True, text=True, check=True).stdout
+
+    git("init", "-q")
+    git("add", "-A")
+    git("commit", "-q", "-m", "a")
+    build = tmp_path / "build"
+    cfg = subprocess.run(
+        ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}",
+         f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}"],
+        capture_output=True, text=True)
+    assert cfg.returncode == 0, cfg.stderr
+
+    def build_once() -> str:
+        res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+        assert res.returncode == 0, res.stdout + res.stderr
+        return _identity(build)
+
+    head_a = git("rev-parse", "--short=12", "HEAD").strip()
+    assert build_once() == head_a
+    src = repo / "firmware" / "boards" / "weact_h743" / "src" / "led.c"
+    src.write_text(src.read_text() + "/* changed */\n")
+    assert build_once() == head_a + "-dirty"
+    git("commit", "-q", "-am", "b")
+    head_b = git("rev-parse", "--short=12", "HEAD").strip()
+    assert head_b != head_a
+    assert build_once() == head_b
+
+
 def test_unknown_build_kind_refused(tmp_path):
     cfg = _configure(tmp_path / "bad", "-DFW_BUILD=fast")
     assert cfg.returncode != 0

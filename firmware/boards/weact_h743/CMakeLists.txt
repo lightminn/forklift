@@ -19,14 +19,18 @@ endif()
 set(BOARD_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(TP ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party)
 
-# Build identity (board design 3.7): what is on the board must be readable from the ELF.
-execute_process(COMMAND git describe --always --dirty --abbrev=12
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-                OUTPUT_VARIABLE FW_GIT_DESCRIBE OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-if(NOT FW_GIT_DESCRIBE)
-    set(FW_GIT_DESCRIBE unknown)
-endif()
-configure_file(${BOARD_DIR}/build_info.h.in ${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h @ONLY)
+# Build identity (board design 3.7): what is on the board must be readable from the ELF. It is
+# regenerated at every build, not only at configure time, so a new commit or a dirty tree in the
+# same build directory reaches the ELF.
+set(BUILD_INFO_H ${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h)
+add_custom_target(build_info
+    COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${BOARD_DIR} -DIN=${BOARD_DIR}/build_info.h.in
+            -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD} -DFW_LINK=${FW_LINK}
+            "-DFW_TOOLCHAIN_VERSION=${FW_TOOLCHAIN_VERSION}"
+            -P ${BOARD_DIR}/gen_build_info.cmake
+    BYPRODUCTS ${BUILD_INFO_H}
+    COMMENT "build identity"
+    VERBATIM)
 
 # The core, compiled for the MCU from the same sources the host tests use.
 file(GLOB FW_CORE_ARM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../../core/src/*.c)
@@ -47,6 +51,7 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/motor_out_locked.c)
 
 add_executable(fw ${BOARD_SOURCES})
+add_dependencies(fw build_info)
 set_target_properties(fw PROPERTIES SUFFIX ".elf")
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_include_directories(fw SYSTEM PRIVATE ${TP}/cmsis_core/CMSIS/Core/Include
