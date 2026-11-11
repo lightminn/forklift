@@ -1,6 +1,6 @@
-# S6 콘솔 텔레옵 다리 — 콘솔 → 중재기 → 엔코더 속도 상한 → `McuLinkHost` (설계 2판, 2026-11-12)
+# S6 콘솔 텔레옵 다리 — 콘솔 → 중재기 → 엔코더 속도 상한 → `McuLinkHost` (설계 3판, 2026-11-12)
 
-bring-up 묶음의 PR ⑥ 이다(총괄 순서: #452 계약 → #453 도구 ① → #455 도구 ② → 이 PR → ⑦ A2M12 스캔). 계획 `docs/plans/2026-11-11-sim-to-real-bringup.md` S6(콘솔 텔레옵: 직진·좌우·후진, 정지 응답, 콘솔 lease·STOP·재무장)의 소프트웨어 경로를 **Isaac LiveRuntime 밖에서** 닫는다. 2판은 Codex 설계 상의(P1 3·P2 7·P3 1)를 반영했다(11절).
+bring-up 묶음의 PR ⑥ 이다(총괄 순서: #452 계약 → #453 도구 ① → #455 도구 ② → 이 PR → ⑦ A2M12 스캔). 계획 `docs/plans/2026-11-11-sim-to-real-bringup.md` S6(콘솔 텔레옵: 직진·좌우·후진, 정지 응답, 콘솔 lease·STOP·재무장)의 소프트웨어 경로를 **Isaac LiveRuntime 밖에서** 닫는다. 2판은 Codex 설계 상의(P1 3·P2 7·P3 1), 3판은 재검토(P1 3·P2 5·P3 2)를 반영했다(11절).
 
 **4e-2 와의 경계**(Codex 권고): **지금 구동을 허가하는 데 필요한 안전 계약**은 이 PR 에서 닫는다 — 무장 상태기계, 출력 마감, 거부 시 정지, 엔코더 속도의 유효성·방향·상한, 실차 적재·복구 차단. 미션 코어·SLAM·공통 조립·추가 실차 감시(IMU·전류 등)는 4e-2 에 남는다. 4e-2 는 이 다리의 부품(무장 대응·엔코더 속도·출력 게이트)을 그대로 쓴다.
 
@@ -13,36 +13,39 @@ bring-up 묶음의 PR ⑥ 이다(총괄 순서: #452 계약 → #453 도구 ① 
 - `tools/real_mcu_link.py`: `ReconnectingLink` 에 수신만(`receive`)·송신만(`transmit`) 나눈 두 단계(5절, 기존 `service` 는 그대로).
 - `tools/teleop_bridge.py`: 입출력 어댑터(장치·콘솔 서버·50 Hz 벽시계 루프·시작 확인).
 
-## 2. 엔코더 속도 (`SafetySpeed`, 참값 없음)
+## 2. 엔코더 속도 (`SafetySpeed`, 참값 없음) — 호스트 차분 (Codex 재검토 P1-1·P2-6)
 
-`STATE`(신선할 때만)의 바퀴 각속도 `ω_L, ω_R`(MCU 가 엔코더 카운트로 계산)와 `vehicle.yaml` 의 바퀴 반지름 `r_L, r_R`(지금 차체 모델 공칭값, S8 실효 반경 실측 대기 — 그래서 상한은 '공칭 반지름 환산'이다):
-- `v_L = r_L·ω_L`, `v_R = r_R·ω_R`, `signed = (v_L + v_R)/2`, `yaw_rate = (v_R − v_L)/track`.
-- **경계** `bound = max(|v_L|, |v_R|) + a_bound·(age + window) + q`:
-  - 바깥 바퀴 속도로 잡아 회전 중에도 차체 어느 바퀴도 넘지 않게 한다(평균만 보면 반대로 도는 두 바퀴가 0 으로 보인다, Codex P2-8).
-  - `age` 는 `STATE` 의 호스트 수신 나이(≤ 50 ms, 그보다 늙으면 무효), `window` 는 MCU 속도 창(빌드 상수, 설정값), `a_bound` 는 가속 상한(텔레옵 가속 `accel_mps2` 0.8 와 같은 잠정값 — 측정 뒤 S5 에서 정함), `q` 는 한 카운트의 속도 양자화(`2π·r / (CPR·window)`).
-  - 이 식과 값의 출처는 `vehicle.yaml` `teleop_speed_limit` 아래에 provenance 와 함께 둔다(설정 파서 확장, Codex P3).
-- **가능 방향** `directions`: `signed` 가 `+bound` 쪽으로 0 을 넘을 수 있으면 `+1`, `−bound` 쪽이면 `−1`(경계가 0 을 걸치면 둘 다). 정지 판정 문턱을 쓰지 않는다.
-- **무효**(`valid=False`): 신선하지 않음, 각속도가 유한하지 않음, 카운트 연속성·stuck·polarity 비트, 부팅이 바뀐 뒤 첫 표본, 조향 측정이 지도 밖(`PlantSample.valid["steering"]`). 무효면 `Feedback.rear_axle_speed_mps = None` 이라 중재기가 `no_feedback` 걸쇠로 무장을 풀고(4절) 정지 확인 전엔 다시 못 연다.
+MCU 의 `wheel_rate_*` 는 쓰지 않는다(창이 표본 수라 시간 범위를 호스트가 모른다). 호스트가 **연속한 두 `STATE` 의 카운트와 MCU 시각 차분**으로 직접 계산한다:
+- 바퀴마다 `Δc_w`(같은 부팅, 모듈러 차분), `Δt = Δmcu_time`. `v_w = 2π·r_w·Δc_w / (CPR_w·Δt)`. 이것은 그 구간의 평균 속도다.
+- **오차 폭** `e_w = a_w·(Δt/2 + age + L) + 2π·r_w / (CPR_w·Δt)`:
+  - `a_w`: 바퀴 가속 상한 = `a_axle·(1 + κ_max·track/2)`. `a_axle` 은 0.8 m/s²(잠정, 텔레옵 가속 명령 한계와 같은 값 — **전제 A1: 실제 각 바퀴의 가속이 이 값을 넘지 않는다**, S5 에서 확인).
+  - `Δt/2`: 평균 속도와 구간 끝의 차, `age`: 끝 `STATE` 의 호스트 수신 나이, `L`: **전제 A2: MCU 측정 → 호스트 수신 지연의 상한**(잠정 20 ms, P0-9 의 왕복 지연 p99 측정으로 확정). 늦게 도착한 `STATE` 의 수신 직후 나이 0 을 이 항이 덮는다.
+  - 마지막 항: 구간 양 끝의 카운트 양자화(±1 카운트).
+- `signed = (v_L + v_R)/2`, `yaw_rate = (v_R − v_L)/track`, `e = max(e_L, e_R)`.
+- **경계** `bound = max(|v_L| + e_L, |v_R| + e_R)` — 바깥 바퀴로 잡는다.
+- **가능 방향**: 구간 `[signed − e, signed + e]` 가 양수를 품으면 `+1`, 음수를 품으면 `−1`(0 을 걸치면 둘 다). 절대 상한(`bound`)과 따로 둔다.
+- **무효**(`valid=False`): 끝 `STATE` 가 신선하지 않음(50 ms), 앞뒤 `STATE` 의 부팅이 다르거나 하나뿐임, `Δt` 가 0 이하이거나 `max_gap`(100 ms) 초과, 카운트 연속성·stuck·polarity 비트, 조향 측정이 지도 밖. 무효면 `Feedback.rear_axle_speed_mps = None`.
+- 전제 A1·A2 와 `L`·`a_axle` 은 `vehicle.yaml` `teleop_speed_limit` 아래에 provenance 와 함께 둔다(계획의 잠정값 표). 잠정값은 전제가 맞을 때만 상한이 된다는 점을 기록에 남긴다.
 
-## 3. 상한 0.2 m/s — 명령 상한·안전 상한·고장 문턱 (Codex P2-9)
+## 3. 상한 0.2 m/s — 명령 상한·안전 상한·고장 문턱 (Codex P2-9, 재검토 P2-4)
 
-- **안전 상한** `V = teleop_speed_limit_mps`(0.2, 총괄 결정): 엔코더로 잰 속도의 **경계**가 이것을 넘으면 안 된다. 허용 오차를 덧붙이지 않는다.
-- **고장 문턱**: 무장한 텔레옵 중 `bound > V` 이면 그 주기에 0 을 보내고 중재기를 `STOP`(`overspeed`). 재개는 콘솔 재무장(정지 확인 포함).
-- **명령 상한**: 정상 주행이 고장 문턱에 닿지 않게 `V − a_bound·(age_max + window) − q`(잠정값으로 약 0.15 m/s)로 `TeleopLimits` 의 직진·후진·영상·적재 상한을 깎는다(`real_teleop_limits`). 이 값은 계산해 기록하고 시험이 고정한다.
+- **안전 상한** `V = teleop_speed_limit_mps`(0.2): 엔코더 경계가 이것을 넘으면 안 된다. 허용 오차를 덧붙이지 않는다.
+- **고장 문턱**: 무장한 텔레옵 중 `bound > V` 이면 그 주기에 0 을 보내고 중재기를 `STOP`(`overspeed`).
+- **명령 상한**: `V_cmd = (V − M) / (1 + κ_max·track/2)`. `M` 은 허용 최대 나이·구간에서의 오차 폭(`e` 의 최댓값), `κ_max` 는 조향 지도가 낼 수 있는 곡률의 최댓값(유지 조향을 포함해 실제로 쓸 수 있는 곡률). `TeleopLimits` 의 직진·후진·영상·적재 상한을 `V_cmd` 로 깎는다(`real_teleop_limits`). 계산값과 입력을 기록하고 시험이 고정한다.
 - 참값 경로(`truth_access`)를 부르지 않음을 시험이 고정한다.
 
-## 4. 무장 상태기계 (중재기 `arm_gen` ↔ MCU 무장, Codex P2-5·P1-3)
+## 4. 무장 상태기계 (중재기 `arm_gen` ↔ MCU 무장, Codex P2-5·P1-3, 재검토 P2-5·P2-7·P2-8)
 
-중재기의 `armed` 는 콘솔 arm 일 뿐이다. 다리가 MCU 무장과 짝짓는다. 상태: `idle`(MCU 무장 없음), `arming(g)`(중재기 `arm_gen = g` 를 위한 MCU 무장 진행), `ready(g)`, `disarming`(DISARM 확인 대기), `held`(거부·철회 뒤 재무장 전).
-- **무장**: 중재기가 TELEOP·`armed` 이고 `arm_gen = g` 인데 MCU 가 `g` 에 묶여 있지 않으면:
-  - MCU 가 다른 세대로 무장돼 있거나 무장 중이면 먼저 `DISARM` 하고 `DISARMED` 를 확인한 뒤(같은 주기의 disarm → arm 도 이렇게 걸린다),
-  - 옛 비영 DRIVE 가 아직 작용할 수 있으면(`port.older_nonzero_may_act`) 기다린 뒤,
-  - `host.request_arm` 을 **한 번** 부른다. 거부·시간 초과면 중재기를 `STOP`(`mcu_arm_refused:<이유>`).
-  - 자동 `ARM`·`CLEAR_FAULTS` 는 없다. 중재기의 새 arm(운용자 요청)마다 한 번이다.
-- **준비 전**: `ready(g)` 가 아니면 비영 출력은 없다. 중재기에는 적용 속도 0 을 알린다.
-- **해제**: 중재기가 `armed` 를 잃거나 `arm_gen` 이 바뀌거나 `control_gen` 이 바뀌면 그 주기의 송신 전에 대기 DRIVE 를 버리고(`port.new_control_generation`) `DISARM` 을 넣는다. 단 MCU 가 스스로 `STOPPING`(만료)이면 그 제어 감속을 `DISARM` 으로 끊지 않고 `DISARMED` 를 기다린다(최대 `stop_grace` + 여유). 운용자 STOP·lease 상실·피드백 상실은 바로 `DISARM` 한다(계약 3.4: `DISARM` 은 즉시 채널별 정지 상태).
-- **MCU 쪽 철회**: `ready(g)` 에서 호스트 권한이 끊기면(MCU `STOPPING`·`FAULT`·`ESTOP`·부팅 변경·링크 끊김·빌드 거부) 중재기를 `STOP`(`mcu_<이유>`). 다시 움직이려면 콘솔 재무장(중재기의 정지 확인 포함) → 새 `arm_gen` → 새 MCU 무장. 재연결만으로 다시 무장하지 않는다.
-- **빌드**: `Client.REAL` 이라 `outputs_locked`·`estop_unwired`·`commission_build`·`hil_plant` 보드에는 무장하지 않는다(계약 3.3). S6 선행 조건(bit6·bit7 해제)이 코드로 걸린다.
+중재기의 `armed` 는 콘솔 arm 일 뿐이다. 다리가 MCU 무장과 짝짓는다. 상태: `idle`, `arming(g)`, `ready(g)`, `disarming`, `held`.
+- **새 MCU 무장의 공통 조건**(모든 `request_arm` 앞): 중재기가 TELEOP·`armed`·`arm_gen = g`, MCU 가 `DISARMED`(다른 세대로 무장돼 있으면 먼저 `DISARM` 하고 확인), 옛 비영 DRIVE 가 작용할 수 없음(`port.older_nonzero_may_act` 거짓), **이 주기의 신선한 정지 확인**(엔코더 속도가 유효하고 `bound < STANDING_MPS`(0.01), 중재기의 정지 검출기도 정지). 같은 주기의 disarm → arm 도 이 조건으로 걸린다. 조건이 맞으면 `host.request_arm` 을 그 세대에 **한 번** 부르고, 거부·시간 초과면 중재기 `STOP`(`mcu_arm_refused:<이유>`). 자동 `ARM`·`CLEAR_FAULTS` 는 없다.
+- **무효 속도의 강제 STOP**: 주기 시작(중재기 `observe` 전)의 운용 상태를 기억해 둔다. 그때 TELEOP·무장이었고 이 주기 엔코더 속도가 무효면 중재기를 `STOP`(`speed_invalid`) — 중재기 자체의 `no_feedback` 걸쇠(정지 표본이 모이면 저절로 풀림)만으로 두지 않는다.
+- **해제**: 중재기가 `armed` 를 잃거나 `arm_gen`·`control_gen` 이 바뀌면 그 주기의 송신 전에 대기 DRIVE 를 버린다(`port.new_control_generation`).
+- **DISARM 의 우선순위**:
+  1. 운용자 STOP·lease 상실·피드백(속도) 무효·과속·포트 거부·조향 무효: 즉시 `DISARM`(계약 3.4: 즉시 채널별 정지 상태).
+  2. MCU 가 스스로 `STOPPING`(만료): DRIVE 도 `DISARM` 도 보내지 않고 `DISARMED` 를 기다린다(최대 1 s). 그동안 1 의 사건이 생기면 1 이 이긴다. 1 s 안에 끝나지 않으면 `DISARM`.
+  3. 그 밖의 해제(모드 변경·운용자 disarm): `DISARM`.
+- **MCU 쪽 철회**: `ready(g)` 에서 호스트 권한이 끊기면 중재기 `STOP`(`mcu_<이유>`). 재연결만으로 다시 무장하지 않는다. 다시 움직이려면 콘솔 재무장 → 새 `arm_gen` → 공통 조건.
+- **빌드**: `Client.REAL` 이라 `outputs_locked`·`estop_unwired`·`commission_build`·`hil_plant` 보드에는 무장하지 않는다(계약 3.3).
 
 ## 5. 한 주기 (50 Hz, 벽시계, 따라잡기 없음) — 순서가 안전 조건이다 (Codex P1-2)
 
@@ -51,42 +54,49 @@ bring-up 묶음의 PR ⑥ 이다(총괄 순서: #452 계약 → #453 도구 ① 
 3. **송신만**: `link.transmit(host, now)` — 2 에서 버린 것은 나가지 않는다. 이미 쓰기 시작한 프레임은 끝까지 쓰고 `older_nonzero_may_act` 로 추적한다(부분 송신은 취소가 아니다, 4a' D4).
 - 주기 초과는 세고 기록한다. 늦은 주기를 몰아서 돌리지 않는다. `ArbiterConfig(tick_s=0.02)`, 나머지는 기본값(Isaac 배속 보정 없음).
 
-## 6. 출력 게이트
+## 6. 출력 게이트 (재검토 P2-5)
 
-- **만료**(Codex P2-4): 비영 출력의 절대 만료 = `min(결정 시각 + 100 ms, 중재기 텔레옵 마감, lease 마감)`. 콘솔 명령이 갱신되지 않으면 MCU 쪽 마감도 그 원래 마감을 넘지 않는다. 0 출력도 같은 식이다.
-- **조향**(Codex P2-7): 조향 목표가 텔레옵 곡률을 따르는 것은 `ready(g)`·정책 `drive_allowed`·데드맨 눌림·latch 없음일 때뿐이다. 그 밖(정책 거부·데드맨 놓음·준비 전·preempt)에서는 **유지 조향** `q_hold` 를 보낸다. `q_hold` 는 새 MCU 무장마다 신선한 측정 `q` 로 다시 잡고, 유지 구간에 들어갈 때 그 순간의 측정 `q` 로 다시 잡는다. 곡률 → `q` 변환이 실패하거나(`DriveRefusal`) 측정 `q` 가 지도 밖이면 비영을 내지 않고 `STOP`(`steering_invalid`).
-- **승강**(Codex P2-10): 늘 `lift_hold`(MCU 가 무장 때 잡은 목표 유지)다. 승강 텔레옵은 열지 않는다. 일반 펌웨어의 `ARM` 은 조향·승강 센서·전류 측정이 모두 유효해야 하므로, **승강 센서가 유효한 것**이 S6 선행 조건이다(계획 S6 에 적음). 다리는 센서 유효성을 꾸미지 않고 시운전 빌드로 우회하지 않는다.
-- **거부**(Codex P1-3): `port.command` 가 `blocked`·`refused` 를 내면(큐 포화·세대·만료·`DriveRefusal`) 정지 의도를 건다 — 대기 DRIVE 를 버리고 `DISARM`, 중재기 `STOP`(`port_<이유>`). 재개는 4절 무장 조건(옛 비영 명령의 영향 가능성 소멸 + 중재기의 정지 확인 + 새 arm)으로만.
-- 기록은 셋을 나눈다: 중재기가 계산한 목표(`Output`), 포트에 낸 결과(`PortResult`), 측정(`SafetySpeed`).
+- **포트에 내는지**는 상태가 정한다:
+  - `arming(g)`(무장 뒤 0 명령): 호스트가 소유한다. 다리는 내지 않는다.
+  - MCU 자연 `STOPPING`·권한 없음: 내지 않는다(4절 2 — 관찰만). 이때의 포트 `blocked` 는 거부가 아니다.
+  - `ready(g)`: 매 주기 하나를 낸다. 텔레옵 명령이 있으면 그것, 없으면 0(유지 조향).
+- **만료**: 비영 = `min(결정 + 100 ms, 텔레옵 마감, lease 마감)`. 0(텔레옵 명령 없음) = `min(결정 + 100 ms, lease 마감)`, lease 가 없으면 `결정 + 100 ms`. 재송신도 같은 식이다. 콘솔 명령이 끊기면 MCU 마감이 그 원래 마감을 넘지 않는다.
+- **조향**: 텔레옵 곡률을 따르는 것은 `ready(g)`·정책 `drive_allowed`·데드맨 눌림·latch 없음일 때뿐이다. 그 밖에서는 유지 조향 `q_hold`(새 MCU 무장마다, 유지 구간에 들어갈 때마다 신선한 측정 `q` 로 다시 잡음). 곡률 → `q` 변환 실패(`DriveRefusal`)나 측정 `q` 가 지도 밖이면 비영을 내지 않고 `STOP`(`steering_invalid`).
+- **승강**: 늘 `lift_hold`. 승강 텔레옵은 열지 않는다(S6 선행 조건: 승강 센서가 한 바퀴 미만 범위에서 유효, 계획 S6). 센서 유효성을 꾸미지 않고 시운전 빌드로 우회하지 않는다.
+- **방향 검사**(8절)가 hold 를 내면 0.
+- **거부**: `ready(g)` 에서 낸 명령이 `blocked`·`refused` 면(큐 포화·세대·만료·`DriveRefusal`) 정지 의도: 대기 DRIVE 를 버리고 `DISARM`, 중재기 `STOP`(`port_<이유>`). 재개는 4절 공통 조건으로만.
+- 기록은 셋을 나눈다: 중재기 목표(`Output`), 포트 결과(`PortResult`), 측정(`SafetySpeed`).
 
 ## 7. 안전 상태 (미션 코어 없이, Codex P2-6)
 
 이 다리에는 미션 코어가 없다(`Arbiter(mission=None)` — AUTO·미션 요청은 `unsupported`). 정책이 읽는 안전 상태를 다리가 만든다.
 - 기본은 **알 수 없음**: `load`·`fork_in_pocket` 이 `None` → 정책이 `state_unknown` 으로 거부.
 - 독립 S6 운용의 시작 확인은 네 가지를 **따로** 받는다(`--yes` 로 대신 못 함): `--empty-forks`(무적재), `--forks-clear`(포켓 밖), `--lift-low`(승강이 바닥~운반 높이 사이, 계획 5절), `--no-open-recovery`(미해결 현장 복구 없음). 넷이 다 있어야 빈 포크·포켓 밖·SLAM 없음(`frame.slam = False`)·미션 없음 상태를 쓴다. 하나라도 빠지면 알 수 없음이다.
-- **다리 자체의 실차 규칙**: 안전 상태 제공자가 무엇을 주든(4e-2 에서 미션 코어가 줄 때도) `load.loaded` 가 참이면 `teleop_refused = "real_loaded"` 를 덮어쓴다(실차 적재 텔레옵 금지, 감사 4-3·4-4). `recovery_required`·현장 복구(`fork_in_pocket` 참)는 정책이 거부한다.
+- **다리 자체의 실차 규칙**(재검토 P1-3): 안전 상태 제공자가 무엇을 주든(4e-2 에서 미션 코어가 줄 때도) 정책보다 먼저 `teleop_refused` 를 덮어쓴다 — `load.loaded` 참 → `real_loaded`, `recovery_required` 참 → `real_recovery_required`, `fork_in_pocket` 참이거나 `recovery` 문맥이 있음 → `real_in_pocket`. 기존 정책은 `recovery` 문맥이 있으면 `recovery_required` 보다 먼저 복구 주행(`reverse_straight`)을 열 수 있으므로 정책에 맡기지 않는다. 실차는 포켓 안 복구를 하지 않는다(현장 복구 절차, 계획 5절).
 
-## 8. 허가 — 스캔 없으면 0, 엔코더 방향까지 검사 (Codex P1-1)
+## 8. 허가와 방향 검사 — 스캔 없으면 0, 4d-1 규칙 그대로 (Codex P1-1, 재검토 P1-2)
 
-- 다리의 허가 `permit(curvatures, direction, check_speed) -> (limit, reason)` 는 바닥 허가(장애물 층)를 감싼다:
-  - 요청 방향을 `check = max(check_speed, bound)` 로 검사한다.
-  - 2절 `directions` 가운데 요청과 다른 방향(잔류·반대 운동)도 `bound` 로 검사하고, 하나라도 막히면 `limit = 0`(`unasked_<dir>:<이유>`). 4d-1 의 실차 규칙(측정 방향을 경계 속도로, 각자 검사, 실패는 정지)과 같다.
-  - 엔코더 속도가 무효면 `limit = 0`.
-- **CLI 의 바닥 허가는 '스캔 소스 없음 → 0 (`no_scan`)'** 다. 그래서 ⑦ 전에는 실차 바퀴가 움직이지 않는다(계획 S6 선행 조건: 실제 스캔·LiDAR 장착 보정). 무장·정지·재무장·0 DRIVE·lease 는 지금도 닫힌다.
+- 바닥 허가 `floor(curvatures, direction, speed) -> (limit, reason)`(장애물 층)는 텔레옵 구동 계산(`TeleopDrive`)에 그대로 주입한다.
+- 그 뒤 **방향 검사**를 코어의 `_direction_limits`(실차 분기)와 같은 규칙으로 한다(`real_teleop.direction_limits`, 시험이 코어와 같은 결과를 고정):
+  - 움직일 수 있는 방향 `motion`: 2절 가능 방향 각각에 `bound`, 그리고 **아직 작용하는 명령**(직전에 낸 비영 명령의 부호·크기)에 그 크기(같은 방향이면 큰 쪽).
+  - 구동 방향(이번 출력의 방향)은 출력 속도로 검사한다. 출력이 0 이면 `motion` 의 방향들을 그 가장 큰 속도로 검사한다.
+  - 구동 방향이 아닌 `motion` 의 방향은 각자의 속도로 검사하고, 허가가 그보다 작으면 **0 + hold**(`unasked_<dir>:<이유>`, 이유가 없으면 `direction_unsure`).
+  - 엔코더 속도가 무효면 0.
+- **CLI 의 바닥 허가는 '스캔 소스 없음 → 0 (`no_scan`)'** 이다. ⑦ 전에는 실차 바퀴가 움직이지 않는다. 무장·정지·재무장·0 DRIVE·lease 는 지금도 닫힌다.
 - 시험은 합성 격자 위의 진짜 `DrivePermission` + `arc_permit` 바닥 허가를 주입한다. 주입 경로는 CLI 에서 닿지 않는다. ⑦ 이 스캔 소스 → 장애물 층 → 바닥 허가를 채운다.
 
 ## 9. 시험
 
 - 단위(`tests/unit/live/test_real_teleop.py`):
-  - 엔코더 속도: 부호·평균·yaw·바깥 바퀴 경계·나이·양자화, 무효 조건 각각, 경계가 0 을 걸칠 때 두 방향.
-  - 상한: 명령 상한 계산, 경계 > 0.2 → 0 + STOP, 0.21 m/s 측정이 통과하지 않음.
-  - 허가 감싸기: Codex 반례(후진 −0.005·후방 허가 0·전진 요청 → 0), 경계 검사 속도, 무효 → 0.
-  - 무장: 운용자 arm → `request_arm` 한 번, 지연된 ARMED, 같은 주기 disarm → arm(DISARM 확인 뒤 다시 ARM), 무장 대기 중 STOP·부팅 변경, MCU 철회 → 중재기 STOP, 재연결 뒤 자동 재무장 없음, 옛 비영 명령이 작용할 수 있으면 재무장 대기, 빌드 거부.
-  - 출력 게이트: 만료가 텔레옵·lease 마감을 넘지 않음(재송신 포함), 유지 조향(데드맨 놓음·정책 거부·준비 전), 큐 포화로 0 도 거부 → DISARM + STOP, 무효 조향 → STOP.
+  - 엔코더 속도: 호스트 차분(부호·평균·yaw), 오차 폭(가속·Δt/2·나이·지연·양자화), 바깥 바퀴 경계, 구간이 0 을 걸칠 때 두 방향·걸치지 않으면 한 방향, 무효 조건 각각.
+  - 상한: 명령 상한 `(V − M)/(1 + κ_max·track/2)` 계산, 최대 곡률·최대 나이에서도 정상 명령의 경계 ≤ 0.2, 경계 > 0.2 → 0 + STOP, 0.21 m/s 측정이 통과하지 않음.
+  - 방향 검사: Codex 반례 둘(후진 −0.005·후방 0·전진 요청 → 0; 옛 명령 −0.15·새 요청 +0.15·bound 0.05·후방 0.08 → 0 + hold), 코어 `_direction_limits`(실차) 와 같은 결과(여러 경우), 무효 → 0.
+  - 무장: 운용자 arm → `request_arm` 한 번, 지연된 ARMED, 같은 주기 disarm → arm(DISARM 확인 뒤 다시 ARM), 구르는 중의 새 arm → 정지 확인 전 ARM 없음, 무장 대기 중 STOP·부팅 변경, MCU 철회 → 중재기 STOP, 무효 속도 → 중재기 STOP(걸쇠만이 아님), 재연결 뒤 자동 재무장 없음, 옛 비영 명령이 작용할 수 있으면 재무장 대기, 빌드 거부.
+  - 출력 게이트: 만료가 텔레옵·lease 마감을 넘지 않음(재송신 포함, 텔레옵 명령 없는 0 포함), 상태별 제출 금지(무장 중·자연 STOPPING 에서 DRIVE·DISARM 없음, 그 사이 운용자 STOP 은 즉시 DISARM), 유지 조향(데드맨 놓음·정책 거부·준비 전), 큐 포화로 0 도 거부 → DISARM + STOP, 무효 조향 → STOP.
   - 주기 순서: STOP 이 채널에 있는 주기에 옛 비영 DRIVE 가 나가지 않음, 마감이 지난 주기에도.
-  - 안전 상태: 기본 알 수 없음, 확인 넷 중 하나라도 빠지면 거부, `real_loaded` 덮어쓰기, `recovery_required`·현장 복구 → 비영 DRIVE 없음.
-  - **양성**: SLAM 무효 + 나머지 유효 → 텔레옵이 비영 DRIVE 를 낸다(따로 둔다). AUTO 요청은 `unsupported`.
-- 종단(`tests/integration/test_teleop_bridge.py`, MCU 모형 pty + `Channels` 로 콘솔 메시지): lease → TELEOP → arm → MCU ARMED·ready → 비영 → 모형 바퀴가 돌고 경계 ≤ 0.2; STOP → MCU `DISARMED`; lease 만료 → 정지; 송신만 끊김 → MCU 만료 `STOPPING` → 다리는 `DISARM` 으로 끊지 않고 기다림 → 중재기 STOP; 수신만 끊김 → 호스트 stale → 중재기 STOP; 출력 잠금 빌드 → 무장 거부; 바닥 허가 없음(CLI 기본) → 무장돼도 비영 없음; 루프가 마감 직전에 멈춤 → MCU 가 원래 마감 안에 섬.
+  - 안전 상태: 기본 알 수 없음, 확인 넷 중 하나라도 빠지면 거부, `real_loaded`·`real_recovery_required`·`real_in_pocket` 덮어쓰기 — 유효한 `in_pocket` 복구 문맥·바닥 승강·직진 조향이 함께 와도(정책이 `reverse_straight` 를 열 조건) 비영 DRIVE 없음.
+  - **양성**: SLAM 무효 + 나머지 유효 → 텔레옵이 비영 DRIVE 를 낸다(따로 둔다). `mode_request(to=AUTO)` 는 `invalid`, 미션 요청은 `unsupported`.
+- 종단(`tests/integration/test_teleop_bridge.py`, MCU 모형 pty + `Channels` 로 콘솔 메시지): lease → TELEOP → arm → MCU ARMED·ready → 비영 → 모형 바퀴가 돌고 경계 ≤ 0.2; STOP → MCU `DISARMED`; lease 만료 → 정지; 송신만 끊김 → MCU 만료 `STOPPING` → 다리는 `DISARM` 으로 끊지 않고 기다림 → 중재기 STOP; 수신만 끊김 → 호스트 stale → 중재기 STOP; 출력 잠금 빌드 → 무장 거부; 바닥 허가 없음(CLI 기본) → 무장돼도 비영 없음; 루프가 마감 직전에 멈춤 → MCU 의 명령 만료(`STOPPING` 시작)가 원래 마감 안에 옴(물리 정지는 그 뒤 `stop_grace_ms` 안 — 따로 기록).
 - 실차 S6 는 같은 다리로 하되 ⑦ 뒤에 한다.
 
 ## 10. 범위 밖
@@ -110,3 +120,17 @@ Codex 설계 상의 1회(P1 3·P2 7·P3 1). 모두 반영했다.
 | P2-9 상한 구분 없음(0.21 통과) | 안전 상한 0.2 = 경계 문턱, 명령 상한은 그 아래로 계산(3절) |
 | P2-10 승강 센서 의존 | 승강 센서 유효가 S6 선행 조건, 꾸미지 않음(6절) |
 | P3 설정 파서 확장, 양성 시험 분리 | 2절, 9절 |
+
+Codex 재검토(2판, 7건 해결·4건 부분 해결, 새 P1 3·P2 5·P3 2). 모두 반영했다.
+
+| 지적 | 처리 |
+|---|---|
+| P1-1 경계 식 전제(수신 지연, 바퀴 가속, 창 시간) | 호스트 차분으로 바꿈(창 의미에 기대지 않음), 오차 폭 = 바퀴 가속 × (Δt/2 + 나이 + 지연 상한) + 양자화, 전제 A1·A2 명시(2절) |
+| P1-2 감싸기가 `_direction_limits` 와 다름(잔류 명령, 반례 −0.08) | 코어 실차 분기와 같은 규칙, 잔류 명령 포함, 같은 결과 시험(8절) |
+| P1-3 `recovery` 문맥이 있으면 정책이 복구 주행을 엶 | 다리가 정책보다 먼저 `real_recovery_required`·`real_in_pocket` 으로 덮어씀(7절) |
+| P2-4 명령 상한이 직진 기준 | `(V − M)/(1 + κ_max·track/2)`(3절) |
+| P2-5 준비 전 0 제출이 STOPPING 유지 규칙을 깸 | 상태별 제출 금지, DISARM 우선순위, 명령 없는 0 의 만료(4·6절) |
+| P2-6 방향 식이 절대 상한과 오차 폭을 섞음 | 구간 `signed ± e` 로 방향, 경계는 따로(2절) |
+| P2-7 새 세대 ARM 전 정지 확인 없음 | 모든 `request_arm` 앞에 신선한 정지 확인(4절) |
+| P2-8 무효 속도의 강제 STOP 없음 | 주기 시작 상태를 기억해 STOP(4절) |
+| P3 마감 시험 문구, AUTO 기대값 | 명령 만료와 물리 정지 분리, `invalid`(9절) |
