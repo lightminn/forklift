@@ -24,24 +24,7 @@ ALLOWED = {
     "docs/validation/2026-11-10-g3-1c0/c0_hall.json",
     "docs/validation/2026-11-10-g3-1c0/c0_line_m.json",
 }
-TEXT_SUFFIXES = {
-    ".py",
-    ".md",
-    ".json",
-    ".jsonl",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".txt",
-    ".sh",
-    ".sbatch",
-    ".mjs",
-    ".js",
-    ".cfg",
-    ".ini",
-    ".csv",
-    ".tsv",
-}
+# the ws1 pytest copy has no .git and holds tracked files only; these trees never reach it but are skipped when walking
 SKIP_DIRS = {
     ".git",
     "artifacts",
@@ -52,10 +35,11 @@ SKIP_DIRS = {
     "ros2/log",
     "presentation",
 }
+MAX_BYTES = 20 * 2**20  # larger tracked files are data, not records or scripts
 
 
 def tracked_files():
-    """git ls-files when this is a checkout; otherwise the tree itself (the ws1 pytest copy holds tracked files only)."""
+    """git ls-files when this is a checkout; otherwise the tree itself."""
     if (ROOT / ".git").exists():
         out = subprocess.run(
             ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, check=True
@@ -71,22 +55,21 @@ def tracked_files():
     return files
 
 
+def text_of(path):
+    """The file's text, or None for symlinks, missing, oversized or binary (NUL byte) files."""
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_BYTES:
+        return None
+    data = path.read_bytes()
+    return None if b"\0" in data else data.decode("utf-8", errors="ignore")
+
+
 def offending_files():
     found = []
     for rel in tracked_files():
-        path = ROOT / rel
-        if (
-            path.suffix not in TEXT_SUFFIXES
-            or path.is_symlink()
-            or not path.is_file()
-            or rel in ALLOWED
-        ):
+        if rel in ALLOWED:
             continue
-        try:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        if SESSION_PATH.search(text):
+        text = text_of(ROOT / rel)
+        if text is not None and SESSION_PATH.search(text):
             found.append(rel)
     return found
 
@@ -96,13 +79,25 @@ def test_no_tracked_file_reads_raw_data_from_a_session_folder():
 
 
 def test_pattern_catches_the_forms_seen_so_far():
-    assert SESSION_PATH.search("/home/light/.claude/jobs/53111190/tmp/g1raw/g1")
-    assert SESSION_PATH.search(
-        "/home/light/.cache/claude-tmp/claude-1000/-home-x/tasks/a.output"
+    # built from pieces so this file does not itself contain a forbidden path
+    job = "/home/light/" + ".claude/jobs/" + "53111190" + "/tmp/g1raw/g1"
+    scratch = (
+        "/home/light/" + ".cache/claude-tmp/" + "claude-1000/-home-x/tasks/a.output"
     )
+    assert SESSION_PATH.search(job)
+    assert SESSION_PATH.search(scratch)
     assert not SESSION_PATH.search(
         "`~/.claude/jobs/*/tmp`, session scratchpads"
     )  # the rule text itself
+
+
+def test_text_detection_covers_files_without_a_known_suffix(tmp_path):
+    forbidden = "x = '/home/light/" + ".claude/jobs/" + "deadbeef" + "/tmp/a'\n"
+    for name in ("run.args", "Dockerfile", "patch.diff"):
+        (tmp_path / name).write_text(forbidden)
+        assert SESSION_PATH.search(text_of(tmp_path / name))
+    (tmp_path / "blob.bin").write_bytes(b"\0" + forbidden.encode())
+    assert text_of(tmp_path / "blob.bin") is None
 
 
 def test_allowed_files_exist():

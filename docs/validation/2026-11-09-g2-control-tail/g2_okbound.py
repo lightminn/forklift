@@ -13,9 +13,10 @@ import json, sys
 from pathlib import Path
 import numpy as np
 argv = list(sys.argv)
-if "--g1-root" not in argv:
+i = argv.index("--g1-root") if "--g1-root" in argv else -1
+if i < 0 or i + 1 >= len(argv) or argv[i + 1].startswith("-"):
     sys.exit("g2_okbound.py: --g1-root <G1 run folder> is required (see the module docstring for where to restore it)")
-i = argv.index("--g1-root"); G1_ROOT = Path(argv[i + 1]); del argv[i:i + 2]
+G1_ROOT = Path(argv[i + 1]); del argv[i:i + 2]
 SNAP = Path(argv[1]); sys.path.insert(0, str(SNAP / "sim" / "isaac")); sys.path.insert(0, str(SNAP / "src"))
 from tick_trace import COLUMNS, work
 from forklift_core.live.pacing import Pacer
