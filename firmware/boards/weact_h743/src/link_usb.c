@@ -7,12 +7,12 @@
    keep running past them: a stuck USB stack silences the link and the vehicle stops on expiry.
 
    Stale frames: while no host has the port open, frames are dropped as they come; when it is open
-   again a delimiter goes first, so a reopened port sees at most TinyUSB's FIFO of old bytes,
-   closed as one broken frame, then fresh STATE frames (board design 5.1, link_tx_pump). Every
-   connection life-cycle callback marks the next opening for that delimiter too, so a resume
-   with DTR held or a reset between two polls is not missed. TinyUSB's FIFO is never cleared. The
-   receive side keeps bytes in TinyUSB's FIFO (the endpoint NAKs) when the ring is full: nothing is
-   lost there. */
+   again a delimiter goes first, so a reopened port sees at most TinyUSB's FIFO and one packet in
+   the controller of old bytes, closed as one broken frame, then fresh STATE frames (board
+   design 5.1, link_tx_pump). Every connection life-cycle callback marks the next opening for that
+   delimiter too, so a resume with DTR held or a reset between two polls is not missed. TinyUSB's
+   FIFO is never cleared. The receive side keeps bytes in TinyUSB's FIFO (the endpoint NAKs) when
+   the ring is full: nothing is lost there. */
 #include "board/board.h"
 #include "board/clock_config.h"
 #include "board/gpio.h"
@@ -105,8 +105,16 @@ static void sink_flush(void *ctx)
 
 static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_flush};
 
-/* Connection life cycle, called from tud_task (main loop): each marks the next opening for a
-   resynchronising delimiter (link_tx_pump). */
+/* Connection life cycle, called from tud_task (main loop, the send ring's consumer): each drops
+   the ring and marks the next opening for a resynchronising delimiter (link_tx_pump), so the
+   only old bytes a reopened port sees are TinyUSB's FIFO plus one packet in the controller's TX
+   FIFO, even when the poll never saw the port closed (Codex B3 review 3). */
+static void lifecycle(void)
+{
+    g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
+    g_resync = true;
+}
+
 void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
 {
     (void)itf;
@@ -114,28 +122,28 @@ void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
     if (dtr) {
         g_link_stats.reopened++;
     }
-    g_resync = true;
+    lifecycle();
 }
 
 void tud_mount_cb(void)
 {
-    g_resync = true;
+    lifecycle();
 }
 
 void tud_umount_cb(void)
 {
-    g_resync = true;
+    lifecycle();
 }
 
 void tud_suspend_cb(bool remote_wakeup_en)
 {
     (void)remote_wakeup_en;
-    g_resync = true;
+    lifecycle();
 }
 
 void tud_resume_cb(void)
 {
-    g_resync = true;
+    lifecycle();
 }
 
 void link_poll(void)
