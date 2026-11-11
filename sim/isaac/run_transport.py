@@ -6203,11 +6203,11 @@ def drive(S, isaac) -> None:
             far_runtime = RecordingProxy(far_runtime, "FarRecognition", boundary,
                                          hash_only_requests={"drive_frame", "stop"},
                                          watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
+    state["phase"] = "planning"
     # Sim-to-real P0-4 4a: the actuation calls go through one object made from the robot as wrapped above (the
     # record sees the same Vehicle/Controller calls). Its signature is temporary; the contract shared with the
-    # real-vehicle port is fixed in step 4a'.
+    # real-vehicle port is fixed in step 4a'. Made after the phase line, where drive()'s own body begins.
     plant = IsaacPlant(robot, isaac.action, wheels, steers, lift_index)
-    state["phase"] = "planning"
     # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here, after the binding prologue, from the arguments (not setup values), so a
     # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
     stand_hold = None
