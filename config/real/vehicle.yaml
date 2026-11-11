@@ -36,6 +36,10 @@ steering_map:
   kind: ideal_bicycle
   provenance: {source: chassis_model_steering_limit_one_wheel_measured_assigned_to_both, measured: false, until: S2}
 
+# Every limit in this file is static: it does not depend on the lift height (승강 높이 무관 정적 한계, 적재 운반
+# 전 재결정 -- lead decision 2026-11-11). Until it is decided again, before the first loaded transport on the real
+# truck, the real stages run with empty forks, at low speed and with the lift between the floor and the carrying
+# height only (plan section 5).
 wheel_rate_limit:
   # Operating limit on each driven wheel's rate (rad/s); also the firmware's max_wheel_rad_s.
   rad_s: 8.0
