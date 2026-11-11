@@ -43,3 +43,84 @@ def test_an_unconfirmed_operator_refuses(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("no\n"))
     with pytest.raises(bringup.Refused):
         bringup._confirm(type("A", (), {"yes": False})(), "x")
+
+
+# --- Codex impl review items without a link ---
+
+class _Link:
+    tx_enabled = True
+
+    def __init__(self, on_cycle=None):
+        self.on_cycle = on_cycle
+
+    def service(self, host, now_ns):
+        if self.on_cycle:
+            self.on_cycle()
+        return []
+
+
+def _bench(states, on_cycle=None, **kw):
+    import io
+
+    from forklift_core.plant.bringup import Sample
+
+    b = bringup.Bench(_Link(on_cycle), io.StringIO(), **kw)
+    for i, st in enumerate(states):
+        b.samples.append(Sample(i * 10**7, st))
+    return b
+
+
+def test_a_stale_cached_disarmed_never_confirms_the_cleanup():
+    """P2-3: nothing is written and no STATE comes after the DISARM -- the cleanup is not confirmed."""
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+    assert s.cleanup() is False and s.cleanup_confirmed is False
+
+
+def test_a_fault_after_the_event_is_an_abort():
+    """P2-5: a FAULT where STOPPING -> DISARMED was expected."""
+    import dataclasses
+    import time as _t
+
+    from forklift_core.plant.bringup import Sample
+
+    armed = dataclasses.replace(state(), mode=Mode.ARMED)
+    b = _bench([armed])
+    b.link.on_cycle = lambda: b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(armed, mode=Mode.FAULT)))
+    assert bringup._observe_stop(b, "tx_cut") == "unexpected_mode_fault"
+
+
+def test_a_floor_run_needs_real_outputs_a_wired_estop_and_the_switch():
+    for flags, reachable, allow in ((StateFlag.ESTOP_UNWIRED, True, False), (StateFlag(0), False, False),
+                                    (StateFlag(0), True, True)):
+        b = _bench([state(flags)], allow_locked=allow)
+        s = bringup.Session(b, 1.0, floor=True, power_switch_reachable=reachable)
+        with pytest.raises(bringup.Refused, match="floor"):
+            s.arm(1.0)
+        assert not s.arm_requested
+
+
+def test_analyze_reads_the_timeline_from_a_marker(tmp_path):
+    import dataclasses
+    import json
+
+    from forklift_core.plant.bringup import Sample
+
+    rec = tmp_path / "run.jsonl"
+    rows = []
+    for k in range(10):
+        st = dataclasses.replace(state(), mode=Mode.ARMED, mcu_time_us=k * 10_000, wheel_count_left=100 * k)
+        rows.append(bringup.state_row(Sample(k * 10_000_000, st)))
+    rows.append({"t": "marker", "host_ns": 95_000_000, "label": "iwdg"})
+    for k in range(10, 60):
+        st = dataclasses.replace(state(), boot_id=2, mode=Mode.DISARMED, mcu_time_us=(k - 10) * 10_000,
+                                 reset_cause=bringup.ResetCause.IWDG)
+        rows.append(bringup.state_row(Sample(k * 10_000_000 + 300_000_000, st)))
+    rec.write_text("\n".join(json.dumps(r, default=str) for r in rows))
+    out = bringup.analyze(rec, -1, "iwdg", {"output_response_ms": "40"})
+    sw = out["software"]
+    assert sw["new_boot_ms"] is not None and sw["new_boot_reset_cause"] == "IWDG"
+    assert out["external"]["output_response_ms"] == {"value": 40.0, "limit": 100.0, "pass": True}
+    # a value without a threshold is still kept
+    assert bringup.verdict("disarm", {"stop_time_ms": "300"})["stop_time_ms"] == {"value": 300.0, "limit": None,
+                                                                                 "pass": None}
