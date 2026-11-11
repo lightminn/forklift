@@ -44,7 +44,8 @@ STEP_MAX_S = 3.0
 CLEANUP_S = 1.0
 OBSERVE_S = 2.0
 STATE_GAP_S = 0.2  # after an event, two STATEs further apart than this are an observation failure
-HANDOVER_S = 0.05  # a nonzero command may outlive its hold by this much: the next hold's first command lands first
+HANDOVER_S = 0.05  # a nonzero hold stops sending this much before its end, so the next hold's first command lands
+# while the last nonzero one is still valid -- and no nonzero command outlives its hold (Codex re-review P2-1)
 # plan 3.4 thresholds (provisional, 0.2 m/s empty truck)
 OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0}
 WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0}
@@ -222,9 +223,11 @@ class Session:
         ``HANDOVER_S`` (Codex impl P2-4: not by the run's whole remaining budget); a zero one may stay valid to the
         run's end -- the next hold's first command must not find the MCU already stopping."""
         end_ns = time.monotonic_ns() + int(seconds * 1e9)
-        bound = end_ns + int(HANDOVER_S * 1e9) if (left or right) else None
+        nonzero = bool(left or right)
+        bound = end_ns if nonzero else None  # a nonzero command never expires after its hold's end
+        stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero else end_ns  # hand over early, inside the bound
         first = None
-        while time.monotonic_ns() < end_ns:
+        while time.monotonic_ns() < stop_ns:
             seq = self.send(left, right, bound)
             first = first if first is not None else seq
             self.b.cycle()
@@ -244,11 +247,11 @@ class Session:
         b.host.request_disarm(t0)
 
         def done() -> bool:
-            sent = [t for k, t, _m in b.written.values() if k == "DISARM" and t >= t0]
-            if not sent:
-                return False
-            return any(s.host_ns > min(sent) and s.state.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
-                       for s in b.samples[-50:])
+            # the MCU's own word that it took this DISARM: a STATE naming its seq (Codex re-review P2-2), not just
+            # any STATE received after the write
+            sent = {q: t for q, (k, t, _m) in b.written.items() if k == "DISARM" and t >= t0}
+            return any(s.state.last_rx_seq in sent and s.host_ns > sent[s.state.last_rx_seq]
+                       and s.state.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP) for s in b.samples[-50:])
 
         ok = b.run_until(done, CLEANUP_S)
         b.emit({"t": "cleanup", "confirmed": bool(ok)})
@@ -290,13 +293,20 @@ def run_step(bench: Bench, session: Session, wheel: str, target: float) -> dict:
                    "input_delay_host_s": None if written is None else (step_host - written) / 1e9}, session)
 
 
-def _observe_stop(b: Bench, kind: str) -> str | None:
+def _observe_stop(b: Bench, kind: str, boot: int | None = None, start_index: int | None = None) -> str | None:
     """After the event: only the expected STOPPING -> DISARMED (DISARM: straight to DISARMED) is the scenario; a
-    fault, an e-stop, a new boot, a STATE gap or no DISARMED in time is an abort (Codex impl P2-5)."""
-    boot = b.state.boot_id
+    fault, an e-stop, a new boot, a STATE gap or no DISARMED in time is an abort (Codex impl P2-5). ``boot`` and
+    ``start_index`` are the boot and the first sample as the event began: everything since is checked, the wait for
+    the last DRIVE's acceptance included (Codex re-review P2-3)."""
+    boot = b.state.boot_id if boot is None else boot
     end = time.monotonic() + OBSERVE_S
-    last = b.samples[-1].host_ns
     allowed = {Mode.ARMED, Mode.DISARMED} | ({Mode.STOPPING} if kind != "disarm" else set())
+    for s in b.samples[start_index if start_index is not None else len(b.samples):]:
+        if s.state.boot_id != boot:
+            return "boot_changed"
+        if s.state.mode not in allowed:
+            return f"unexpected_mode_{s.state.mode.name.lower()}"
+    last = b.samples[-1].host_ns
     while time.monotonic() < end:
         b.cycle()
         st = b.state
@@ -316,6 +326,8 @@ def _observe_stop(b: Bench, kind: str) -> str | None:
 
 def run_scenario(bench: Bench, session: Session, kind: str, rate: float) -> dict:
     b = bench
+    if not rate > 0:
+        raise Refused("the scenario rolls forward: --rate must be positive")  # Codex re-review P2-4
     session.arm(0.3 + STEP_MAX_S + 1.0)
     session.hold(0.0, 0.0, 0.3)
     rolling = session.aborted is None and b.run_until(
@@ -328,6 +340,7 @@ def run_scenario(bench: Bench, session: Session, kind: str, rate: float) -> dict
         return _final({**out, "result": "aborted"}, session)
     session.events_started = True
     event_ns = None
+    boot0, i_event = b.state.boot_id, len(b.samples)  # the boot and the first sample as the event begins
     if kind == "disarm":
         t0 = time.monotonic_ns()
         b.host.request_disarm(t0)
@@ -360,7 +373,7 @@ def run_scenario(bench: Bench, session: Session, kind: str, rate: float) -> dict
             if not met:
                 out["worst_case_unmet"] = True
     i0 = len(b.samples)
-    why = _observe_stop(b, kind)
+    why = _observe_stop(b, kind, boot0, i_event)
     if why is not None:
         session.aborted = why
     else:

@@ -124,3 +124,61 @@ def test_analyze_reads_the_timeline_from_a_marker(tmp_path):
     # a value without a threshold is still kept
     assert bringup.verdict("disarm", {"stop_time_ms": "300"})["stop_time_ms"] == {"value": 300.0, "limit": None,
                                                                                  "pass": None}
+
+
+def test_a_state_not_naming_the_disarm_never_confirms_the_cleanup():
+    """Codex re-review P2-2: a late STATE received after the DISARM write still reports an older seq."""
+    import dataclasses
+    import time as _t
+
+    from forklift_core.plant.bringup import Sample
+
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+    written = {}
+
+    def cycle():
+        if 5 not in b.written:
+            b.written[5] = ("DISARM", _t.monotonic_ns(), None)  # the DISARM went out as seq 5
+        b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=77)))
+
+    b.link.on_cycle = cycle
+    assert s.cleanup() is False
+
+
+def test_a_boot_change_while_waiting_for_the_acceptance_is_an_abort():
+    """Codex re-review P2-3: the boot as the event began is the reference, and the samples since are checked."""
+    import dataclasses
+
+    from forklift_core.plant.bringup import Sample
+
+    armed = dataclasses.replace(state(), mode=Mode.ARMED)
+    b = _bench([armed])
+    i_event = len(b.samples)
+    b.samples.append(Sample(10**9, dataclasses.replace(armed, boot_id=8, mode=Mode.DISARMED)))
+    assert bringup._observe_stop(b, "tx_cut", boot=1, start_index=i_event) == "boot_changed"
+
+
+def test_a_negative_rate_is_refused():
+    b = _bench([state()])
+    with pytest.raises(bringup.Refused, match="positive"):
+        bringup.run_scenario(b, bringup.Session(b, 1.0), "expiry", -0.8)
+
+
+def test_a_state_naming_the_disarm_after_its_write_confirms_the_cleanup():
+    import dataclasses
+    import time as _t
+
+    from forklift_core.plant.bringup import Sample
+
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+
+    def cycle():
+        if 5 not in b.written:
+            b.written[5] = ("DISARM", _t.monotonic_ns(), None)
+        else:
+            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5)))
+
+    b.link.on_cycle = cycle
+    assert s.cleanup() is True
