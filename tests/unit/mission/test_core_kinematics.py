@@ -179,3 +179,23 @@ def test_a_refusal_during_near_tracking_ends_the_mission():
     core, cmds = _real_commands_core(near_tracker=object())
     assemble(core, np.array([0.1]), curvature=0.9, t=10.0)
     assert cmds.status == "failed" and cmds.log[-1]["reason"] == "kinematic_refusal"
+
+
+def test_a_refusal_while_already_paused_releases_on_that_pauses_resume():
+    """Pause → refusal (measured q unknown) → q back → Resume → resumed → drives (Codex 4a' re-review P2-2 rest)."""
+    from forklift_core.mission.commands import Pause, Resume
+
+    core, cmds = _real_commands_core()
+    cmds.queue(Pause())
+    cmds.apply(9.0)
+    assert cmds.status == "paused" and len(cmds.pauses) == 1
+    core.hooks.steering_position = lambda: np.array([float("nan")])
+    assemble(core, np.array([0.1]), curvature=0.1, t=10.0)
+    cmds.apply(10.01)  # the refusal's Pause: refused (already paused), no new stop
+    assert len(cmds.pauses) == 1
+    core.hooks.steering_position = lambda: np.array([0.1])
+    cmds.queue(Resume())
+    cmds.apply(11.0)
+    cmds.resumed(11.0)
+    cmds.status = "running"
+    assert assemble(core, np.array([0.1]), curvature=0.1, t=11.01).drive.speed_mps > 0.0

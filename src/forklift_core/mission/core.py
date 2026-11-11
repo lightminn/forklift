@@ -6126,8 +6126,13 @@ class MissionCore:
         else:
             self.commands.queue(Pause(request_id="kinematic_refusal"))
         pauses = getattr(self.commands, "pauses", None)
-        self._refusal = {"plan": serial, "phase": phase, "repeats": 0,
-                         "pause_index": None if pauses is None or near_active else len(pauses)}
+        if pauses is None or near_active:
+            pause_index = None
+        elif getattr(self.commands, "paused_since", None) is not None and pauses:
+            pause_index = len(pauses) - 1  # already paused (or held): its open stop is the one the resume closes
+        else:
+            pause_index = len(pauses)  # the pause queued above opens the next one
+        self._refusal = {"plan": serial, "phase": phase, "repeats": 0, "pause_index": pause_index}
 
     def _refusal_clear_if_new_plan(self) -> None:
         """The latch ends with a new plan (another tracker serial or phase), an operator's resume (the paused
