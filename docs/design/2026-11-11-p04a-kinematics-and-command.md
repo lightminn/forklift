@@ -186,7 +186,8 @@ Codex 4b 범위 상의(P2 3·P3 1)를 반영했다. 4b 도 Isaac 경로 동작 �
 Codex 4c 범위 상의(P2 4·P3 1)를 반영해 4c 를 둘로 나눴다.
 
 - **4c-1(이 단계, 러너 변경 없음)** `forklift_core/sensors/frames.py`:
-  - `PlanarScan` 은 빔마다 상태를 따로 둔다: hit(거리), 확인된 no-return(REP-117 +inf), unknown(무효·너무 가까움·스트림 범위 밖), own(차체·적재물, S7 에서 잰 장착 구간).
+  - `PlanarScan` 은 빔마다 상태를 따로 둔다: hit(거리), 확인된 no-return(REP-117 +inf), too close(REP-117 -inf, 지금 Isaac 격자가 가까운 곳을 점유로 다루는 입력), unknown(NaN·스트림 범위 밖 유한값), own(차체·적재물, S7 에서 잰 장착 구간과 그 출처; 점유도 지우기도 하지 않음).
+  - 시각마다 `stamp_domain`(ros·sim·device)을 싣는다. RGB-D 짝은 한 도메인이어야 한다(Codex 4c-1 P2).
     - unknown 은 no-return 이 아니다. 소비자는 그 빔으로 빈 공간을 지우지 않는다. 지금 장애물 층은 무효를 +inf 로 바꿔 지우므로, 실제 스캔 소비 경로를 바꾸는 일은 4e-2 다.
     - 빔 각도·거리 한계·`frame_id`·첫 빔 시각·`time_increment`·스캔 주기·호스트 수신 시각을 보존한다. deskew 는 하지 않고(`deskewed=False`), `beam_times_s()` 로 빔 시각을 준다.
   - `RgbdFrame`: 같은 정류 격자에 정합된 컬러·depth(m, NaN unknown).
