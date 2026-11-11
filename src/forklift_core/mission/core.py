@@ -1528,8 +1528,9 @@ class MissionCore:
                 allowed, why = 0.0, "pocket_missing"
             elif len(directions_) > 1 or (braking_ and speed_.bound_mps > 0.0):
                 # 4d-1 (real truck only): the pocket check answers one direction and the layer waives the pocket
-                # region, so a residual motion the other way is not covered -- stop (Codex 4d-1 3rd P1)
-                allowed, why = 0.0, "direction_unsure"
+                # region, so a residual motion the other way is not covered -- stop, a hold whatever the obstacle
+                # switch says (Codex 4d-1 3rd P1, 4th P1)
+                allowed, why, speed_hold_ = 0.0, "direction_unsure", True
             elif pocket.get("await_still_frame"):
                 allowed, why = 0.0, "pocket_settle"
             elif (

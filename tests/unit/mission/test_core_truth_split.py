@@ -180,8 +180,9 @@ def test_a_standstill_asked_forward_lets_the_pocket_check_answer():
     assert out.why != "direction_unsure" and asked == [1]
 
 
-def test_a_failed_braking_check_holds_the_wheels_where_the_permission_does_not_act():
-    c, layer = permission_core(SafetySpeed(-0.2, 0.2, (-1,)), blocked=-1)
+@pytest.mark.parametrize("act", [True, False])
+def test_a_failed_braking_check_holds_the_wheels_where_the_permission_does_not_act(act):
+    c, layer = permission_core(SafetySpeed(-0.2, 0.2, (-1,)), blocked=-1, act=act)
     c.trackers["transport"].remaining = 0.2  # the delivery straight: the permission does not act there
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
     assert not out.acting and layer.calls == [1, -1]
@@ -189,10 +190,12 @@ def test_a_failed_braking_check_holds_the_wheels_where_the_permission_does_not_a
     assert c.obstacle["permission_cap"] == (1.0, 0.0)
 
 
-def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way():
+@pytest.mark.parametrize("act", [True, False])
+def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way(act):
     asked = []
     check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"), summary=lambda: {})
-    c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=check)
+    c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=check, act=act)
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
     assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
+    assert out.requested_speed == 0.0 and out.obstacle_hold
     assert c.obstacle["permission_cap"] == (1.0, 0.0)
