@@ -8192,7 +8192,6 @@ def drive(S, isaac) -> None:
         live = None
         if getattr(args, "live", False):
             # M-c (docs/plans/2026-10-17-m-c-isaac-live-runner.md): the arbiter, its console server and the pacing.
-            from forklift_core.control.path_tracking import ackermann_command as live_ackermann
             from forklift_core.safety.teleop_drive import TeleopLimits as LiveTeleopLimits
             from forklift_core.safety.teleop_drive import BundlePermit as LiveBundlePermit
             from forklift_core.safety.teleop_drive import arc_permit as live_arc_permit
@@ -10776,7 +10775,7 @@ def drive(S, isaac) -> None:
                                 live_pallet_perm.advance(driven_)
                                 live_pallet_full.advance(driven_)  # plan D14: the manual clear's end check too
                     live_state["odom_prev"] = odom_now_
-                    target_steer_ = np.asarray(live_ackermann(1.0, live.arbiter.drive.kappa, args.drive_geometry).steering_rad)
+                    target_steer_ = np.asarray(core.kinematics.command(1.0, live.arbiter.drive.kappa).steering_rad)  # 4a'
                     core.cargo.observe(ms.phase, rear)  # plan D4: the insert's anchors and trace, at the tick's end
                     # plan D4b: the recent odometry trajectory a back-out retraces (odometry, never the control pose)
                     core.observe_motion(slam["odom_rear"] if slam is not None else rear)
@@ -10837,15 +10836,16 @@ def drive(S, isaac) -> None:
                             live.log({"teleop_k": float(t), "measured_kappa": float(kappa),
                                       "output_kappa": float(live.arbiter.drive.kappa), "speed_mps": float(out_.speed_mps),
                                       "permit_asked": bool(out_.policy.drive_allowed)})  # forbidden: no arcs asked
-                        drive = live_ackermann(out_.speed_mps, out_.curvature_inv_m, args.drive_geometry)
-                        rate_ = settings["steering_command_rate_rad_s"] * dt
-                        steering_command[:] = steer_before_ + np.clip(np.asarray(drive.steering_rad) - steer_before_,
-                                                                      -rate_, rate_)
+                        # Sim-to-real 4a': the core's kinematics (the simulation's: the same Ackermann and slew)
+                        drive = core.kinematics.command(out_.speed_mps, out_.curvature_inv_m)
+                        slewed_ = steer_before_.copy()
+                        core.kinematics.slew_steering(slewed_, np.asarray(drive.steering_rad), dt)
+                        steering_command[:] = slewed_
                         requested_speed = float(drive.speed_mps)
                         state["command_speed"] = float(out_.speed_mps)
                         state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
                     elif out_.stop_kind == "preempt":
-                        drive = live_ackermann(0.0, kappa, args.drive_geometry)
+                        drive = core.kinematics.command(0.0, kappa)
                         steering_command[:] = steer_before_
                         requested_speed = 0.0
                         state["command_speed"] = 0.0

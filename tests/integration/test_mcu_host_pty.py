@@ -12,6 +12,7 @@ import time
 import tty
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from forklift_core.mcu_link.messages import (
@@ -287,3 +288,56 @@ def test_a_frame_refused_before_its_first_byte_can_still_be_cancelled():
     os.close(rfd)
     msgs = [r.message for r in LinkDecoder().feed(data, 0)]
     assert msgs == [Disarm()]
+
+
+def test_a_drop_while_a_frame_is_half_written_finishes_it_on_the_wire(monkeypatch):
+    """Real bytes through TtyLink, 3 at a time: the DRIVE being written when the generation changes goes out
+    whole (decodable, never cut), stays outstanding, and the next frame decodes after it (4a' design D4)."""
+    import real_mcu_link
+
+    from forklift_core.plant.kinematics import RealKinematics
+    from forklift_core.plant.port import RealPlantPort
+
+    host = McuLinkHost(CFG)
+    port = RealPlantPort(host, RealKinematics(VEHICLE))
+    now = time.monotonic_ns()
+    st = lambda t, mode, gen, flags: encode(McuState(t, 7, gen, 0, mode, RejectReason.NONE, FaultFlag(0), 0, 0,  # noqa: E731
+                                                     0.0, 0.0, 0.0, 0.0, (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0,
+                                                     flags), 1)
+    host.on_bytes(st(1000, Mode.DISARMED, 0, StateFlag(0)), now)
+    host.request_arm(now)
+    host.frame_written(host.next_frame(now), now)
+    host.on_bytes(st(2000, Mode.ARMED, 1, StateFlag(0)), now + 1)
+    host.frame_written(host.next_frame(now + 1), now + 1)
+    host.on_bytes(st(3000, Mode.ARMED, 1, StateFlag.ZERO_SEEN), now + 2)
+    rfd, wfd = os.pipe()
+    os.set_blocking(rfd, False)
+    real_write = os.write
+    monkeypatch.setattr(real_mcu_link.os, "write", lambda fd, data: real_write(fd, bytes(data[:3])))
+    link = TtyLink(wfd)
+    d = RealKinematics(VEHICLE).command(0.3, 0.1)
+    port.command(port.make_command(now, now + 200_000_000, d, np.asarray(d.steering_rad), 0.0, "keep"), now + 3)
+    port.command(port.make_command(now, now + 200_000_000, d, np.asarray(d.steering_rad), 0.0, "keep"), now + 3)
+    first = host.next_frame(now + 4)
+    host.unsent(first, now + 4)
+    calls = {"n": 0}
+
+    def three_then_drop(fd, data):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            port.new_control_generation()  # mid-frame: drops the second DRIVE, not the one on the wire
+        return real_write(fd, bytes(data[:3]))
+
+    monkeypatch.setattr(real_mcu_link.os, "write", three_then_drop)
+    for _ in range(40):
+        link.pump_writes(host, now + 5)
+    host.request_disarm(now + 6)
+    for _ in range(40):
+        link.pump_writes(host, now + 6)
+    data = os.read(rfd, 65536)
+    os.close(rfd)
+    os.close(wfd)
+    msgs = [r.message for r in LinkDecoder().feed(data, 0)]
+    assert [type(m).__name__ for m in msgs] == ["Drive", "Disarm"]  # the first DRIVE whole, the second dropped
+    assert msgs[0].left_wheel_rad_s != 0.0
+    assert port.outstanding_until(now + 6) == now + 200_000_000

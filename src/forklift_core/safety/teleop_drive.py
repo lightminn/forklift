@@ -61,6 +61,9 @@ class TeleopLimits:
     lift_rate_mps: float = 0.02
     recovery_reverse_mps: float = 0.10
     recovery_steer_tol_rad: float = 0.01
+    # Sim-to-real 4a' (design D2): the creep tolerance on the measured steering, in the kinematics' own steering
+    # angle (the simulation's front wheel angle by default; the real truck's mechanism angle from vehicle.yaml).
+    creep_threshold_rad: float = 0.05
     # Main session 2026-10-19 (condition 3 amended): an event stops the lift where it is -- the target is held within
     # this much of the measured lift, so a standing lift's gravity sag (target - measured, the sim's position drive:
     # carriage 1.6 kg x 9.81 / 1800 N/m = 8.7 mm plus the blades; 8.5 and 12.6 mm observed) leaves the target alone.
@@ -68,7 +71,8 @@ class TeleopLimits:
     lift_hold_tolerance_m: float = 0.02
 
     def __post_init__(self):
-        for name in ("lift_rate_mps", "recovery_reverse_mps", "recovery_steer_tol_rad", "lift_hold_tolerance_m"):
+        for name in ("lift_rate_mps", "recovery_reverse_mps", "recovery_steer_tol_rad", "lift_hold_tolerance_m",
+                     "creep_threshold_rad"):
             value = getattr(self, name)
             if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be a positive finite number")
@@ -223,7 +227,7 @@ class TeleopDrive:
         else:
             arcs = bundle(measured_kappa, self.kappa, lim.curvature_margin_inv_m)
             limit, why = min((permit(arcs, d, check) for d in sorted(directions)), key=lambda r: r[0])
-        speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad), decel_mps2=self.decel_mps2,
+        speed = slew_cap_stop(last_applied_mps, creep(speed_target, steering_error_rad, lim.creep_threshold_rad), decel_mps2=self.decel_mps2,
                               accel_mps2=lim.accel_mps2, dt=self.dt, cap_mps=max(0.0, limit), stop=preempt)
         return speed, self.kappa, (limit, why)
 

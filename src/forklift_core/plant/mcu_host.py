@@ -92,6 +92,7 @@ class Outgoing:
     data: bytes
     expires_ns: int | None  # DRIVE only: dropped, not written, once this has passed
     generation: int  # authorization generation it was made under (DRIVE dropped when it changes)
+    nonzero: bool = False  # DRIVE with a non-zero wheel target
 
 
 _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pending", "ready"
@@ -110,6 +111,8 @@ class McuLinkHost:
         self._auth = _NONE
         self._auth_gen = 0  # bumps whenever authorization starts or ends
         self._arm: dict | None = None  # boot, prev_gen, gen, deadline_ns, reject_at_request
+        self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
+        self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
 
     # ---------------------------------------------------------------- state
     @property
@@ -119,6 +122,29 @@ class McuLinkHost:
     @property
     def ready(self) -> bool:
         return self._auth == _READY
+
+    @property
+    def auth_epoch(self) -> int:
+        """Bumps whenever operator authorization starts or ends (4a' design D4): a command stamped with an
+        older epoch was made under another authorization."""
+        return self._auth_gen
+
+    @property
+    def state_rx_ns(self) -> int | None:
+        return self._state_rx_ns
+
+    def drive_traffic(self) -> dict:
+        """What a release check needs: the non-zero DRIVEs queued or being written (their original expiries) and
+        every DRIVE written (seq, non-zero, original expiry, write time), oldest first."""
+        pending = [o.expires_ns for o in self._outbox if o.kind == "DRIVE" and o.nonzero]
+        if self._inflight is not None and self._inflight.nonzero:
+            pending.append(self._inflight.expires_ns)
+        return {"pending_nonzero_expiries": pending, "written": [dict(w) for w in self._written]}
+
+    def drop_drives(self, reason: str) -> None:
+        """Drop the queued DRIVEs (a control generation change). A frame already being written is finished by
+        the adapter and tracked when written: cutting it is not a cancel (4a' design D4)."""
+        self._drop(lambda o: o.kind == "DRIVE", reason)
 
     def _fresh(self, now_ns: int) -> bool:
         return self._state_rx_ns is not None and now_ns - self._state_rx_ns <= self.cfg.state_max_age_s * 1e9
@@ -310,14 +336,15 @@ class McuLinkHost:
             return Blocked("outbox_full")
         msg = Drive(cmd.left_wheel_rad_s, cmd.right_wheel_rad_s, cmd.steering_rad, float(lift_m), valid,
                     bool(lift_hold), s.arm_gen, s.boot_id, s.mcu_time_us)
-        self._enqueue("DRIVE", msg, now_ns, expires_ns=expires_ns)
+        self._enqueue("DRIVE", msg, now_ns, expires_ns=expires_ns,
+                      nonzero=cmd.left_wheel_rad_s != 0.0 or cmd.right_wheel_rad_s != 0.0)
         return None
 
     # ---------------------------------------------------------------- outbox
-    def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None) -> None:
+    def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None, nonzero: bool = False) -> None:
         seq = self._seq
         self._seq = (self._seq + 1) & 0xFFFF
-        out = Outgoing(kind, seq, encode(msg, seq), expires_ns, self._auth_gen)
+        out = Outgoing(kind, seq, encode(msg, seq), expires_ns, self._auth_gen, nonzero)
         self._outbox.append(out)
         self._log("queued", now_ns, out.data, {"kind": kind, "seq": seq})
 
@@ -338,20 +365,33 @@ class McuLinkHost:
             if o.kind == "DRIVE" and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
                 self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "expired or stale"})
                 continue
+            self._inflight = o
             return o
         return None
+
+    def _sent(self, out: Outgoing, now_ns: int) -> None:
+        if self._inflight is out:
+            self._inflight = None
+        if out.kind == "DRIVE":
+            self._written.append({"seq": out.seq, "nonzero": out.nonzero, "expires_ns": out.expires_ns,
+                                  "written_ns": now_ns})
 
     def unsent(self, out: Outgoing, now_ns: int) -> None:
         """The adapter could not write the first byte of ``out`` (EAGAIN): it goes back to the head of
         the outbox, still subject to every drop rule (a DISARM or a revoke still cancels it)."""
+        if self._inflight is out:
+            self._inflight = None
         self._outbox.appendleft(out)
         self._log("unsent", now_ns, out.data, {"kind": out.kind, "seq": out.seq})
 
     def frame_written(self, out: Outgoing, now_ns: int) -> None:
+        self._sent(out, now_ns)
         self._log("written", now_ns, out.data, {"kind": out.kind, "seq": out.seq})
 
     def frame_abandoned(self, out: Outgoing, written: int, now_ns: int) -> None:
-        """A frame the adapter had started (``written`` bytes out) but could not finish (device lost)."""
+        """A frame the adapter had started (``written`` bytes out) but could not finish (device lost): counted
+        as possibly delivered."""
+        self._sent(out, now_ns)
         self._log("abandoned", now_ns, out.data, {"kind": out.kind, "seq": out.seq, "written": written})
 
 

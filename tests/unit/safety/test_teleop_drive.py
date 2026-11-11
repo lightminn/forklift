@@ -331,3 +331,13 @@ def test_a_forbidden_drive_does_not_ask_the_arcs():
 
     speed, _, (limit, why) = run(drive(), cmd(speed=1.0), permit, last=0.2, measured=0.2, allowed=False)
     assert asked == [] and (limit, why) == (0.0, "drive_forbidden") and speed < 0.2
+
+
+def test_the_creep_threshold_is_a_limit_and_defaults_to_the_simulations():
+    """Sim-to-real 4a' (design D2): TeleopDrive creeps on the kinematics' own threshold."""
+    from forklift_core.control.speed_chain import CREEP_STEERING_ERROR_RAD
+    from forklift_core.safety.teleop_drive import TeleopLimits
+
+    assert TeleopLimits().creep_threshold_rad == CREEP_STEERING_ERROR_RAD
+    with pytest.raises(ValueError):
+        TeleopLimits(creep_threshold_rad=0.0)

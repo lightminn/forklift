@@ -717,13 +717,13 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     # (L3c v37 never slewed).
     assert "obstacle_act=args.obstacle_act" in runner
     i = source.index("if obstacle is not None and options.obstacle_act:\n            # A step wheel target")
-    block = source[i : source.index("drive = ackermann_command(wheel_speed", i)]
+    block = source[i : source.index("drive = kin.command(wheel_speed", i)]  # 4a': the injected kinematics
     assert "permission.config.stopping.decel_mps2" in block
     assert "COMMAND_ACCEL_MPS2" in block
     # The slew acts on the final wheel speed (creep included), the permission's
     # own limit and the e-stop probe cut it as a step afterwards (Codex checkpoint 6 P1).
     pre = source[source.rindex("steering_error = ", 0, i) : i]
-    assert "wheel_speed = creep(requested_speed, steering_error)" in pre  # control/speed_chain.py (M-b4)
+    assert "wheel_speed = creep(requested_speed, steering_error, kin.creep_threshold_rad)" in pre  # speed_chain
     assert "if creeping and" not in block  # the creep is slewed (L3c v43 seed 1)
     assert block.index("slew_cap_stop(") < block.index('obstacle.get("permission_cap")')  # its arithmetic: speed_chain
     # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
@@ -1129,7 +1129,7 @@ def test_cusp_position_stall_v7_is_wired_into_the_runner():
     assembly = CORE.read_text()  # the command assembly moved to the mission core (M-a1 slice 5)
     assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in assembly
     assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in assembly
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in assembly
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold or refused)" in assembly
 
 
 def test_near_protection_prediction_screens_only_the_last_correction():
