@@ -66,6 +66,15 @@ static void sequence(uint32_t t0)
     for (int i = 0; i < 8; i++) {
         CHECK_EQ_U(sent[i], want[i]);
     }
+    /* Motor output design 3: SPI_IN stays locked (bits 4..3 = 01b; only 10b unlocks it), so the
+       pins alone decide DRVOFF, EN and PH -- CONFIG4's pin/register AND never applies. */
+    for (int i = 0; i < n; i++) {
+        bool command_write =
+            ((sent[i] >> 8) & 0x3Fu) == DRV8244_REG_COMMAND && !(sent[i] & 0x4000u);
+        if (command_write) {
+            CHECK_EQ_U((sent[i] >> 3) & 3u, 1u);
+        }
+    }
 }
 
 static void readback_mismatch_fails(void)

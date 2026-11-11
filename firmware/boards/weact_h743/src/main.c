@@ -50,10 +50,14 @@ static void on_tick(void)
 int board_main(void)
 {
     motor_out_safe_init(); /* step 2: before the clocks */
+    bool iwdg_runs_in_debug = iwdg_unfreeze_in_debug();
     iwdg_start();
     uint32_t reset_cause = reset_cause_read_and_clear();
     cycles_init();
     led_init();
+    if (!iwdg_runs_in_debug) {
+        led_fail_forever(10); /* DBG_IWDG1 would not clear: a debug halt could stop the IWDG */
+    }
     g_clock_source = clock_init();
     iwdg_kick();
     timebase_init();

@@ -5,9 +5,14 @@
 #define FW_GIT_DESCRIBE "@FW_GIT_DESCRIBE@"
 #define FW_BUILD_KIND "@FW_BUILD@"
 #define FW_LINK_KIND "@FW_LINK@"
-#define FW_OUTPUTS_LOCKED 1
+#define FW_OUTPUTS_LOCKED @FW_OUTPUTS_LOCKED@
+#if FW_OUTPUTS_LOCKED
+#define FW_RECORD_TAG ""
+#else
+#include "protection_record.h" /* FW_RECORD_TAG " rec=<record sha256, 8 hex>" */
+#endif
 #define FW_TOOLCHAIN "@FW_TOOLCHAIN_VERSION@"
 /* Board design 3.7: the USB product string and the head of the ELF identity. */
-#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " locked " FW_GIT_DESCRIBE
+#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG
 
 #endif

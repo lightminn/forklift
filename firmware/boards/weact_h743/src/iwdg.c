@@ -9,6 +9,15 @@
 #define IWDG_PR_DIV4 0u
 #define IWDG_RELOAD 399u
 
+/* Motor output design 3: DBGMCU is reset by a power-on reset only (RM0433 DBGMCU), so a past
+   debug session may have left IWDG1 frozen in debug. Cleared in every build and read back; false
+   if it stays set (the caller treats that as a boot failure). */
+bool iwdg_unfreeze_in_debug(void)
+{
+    DBGMCU->APB4FZ1 &= ~DBGMCU_APB4FZ1_DBG_IWDG1;
+    return (DBGMCU->APB4FZ1 & DBGMCU_APB4FZ1_DBG_IWDG1) == 0u;
+}
+
 void iwdg_start(void)
 {
     IWDG1->KR = IWDG_KEY_START; /* starts LSI and the counter */

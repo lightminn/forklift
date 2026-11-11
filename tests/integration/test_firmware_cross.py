@@ -5,6 +5,8 @@ directory in the home folder. Skipped where it is absent (e.g. ws1).
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -46,7 +48,7 @@ def _configure(build: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DFW_BOARD=weact_h743",
          f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}",
-         f"-DFW_PYTHON={sys.executable}", *extra],
+         f"-DFW_PYTHON={sys.executable}", "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *extra],
         capture_output=True, text=True,
     )
 
@@ -167,6 +169,15 @@ def test_every_enabled_interrupt_has_its_handler(any_build, tmp_path):
         assert slot == syms[f"{name}_IRQHandler"] | 1, name
 
 
+def test_every_board_source_of_a_locked_build_has_tim1_poisoned(any_build):
+    """Board design 3.6: in a locked build no board C source may name TIM1 (per-source guard)."""
+    cmds = json.loads((any_build[1].parent.parent / "compile_commands.json").read_text())
+    board = [c for c in cmds if "/boards/weact_h743/src/" in c["file"] and c["file"].endswith(".c")]
+    assert len(board) > 10
+    for c in board:
+        assert "lock_guard.h" in c["command"], c["file"]
+
+
 def test_locked_build_links_no_tim1_output(any_build):
     map_text = any_build[2].with_suffix(".map").read_text()
     assert "motor_out_tim1" not in map_text
@@ -263,11 +274,203 @@ def test_guard_alone_compiles(tmp_path):
     assert res.returncode == 0, res.stderr
 
 
-def test_motor_output_cannot_be_opened(tmp_path):
-    """Opening the outputs is the user's decision and a separate PR (lead decision Q6)."""
-    cfg = _configure(tmp_path / "open", "-DFW_MOTOR_OUTPUT=1")
+def test_motor_output_needs_the_protection_record(tmp_path):
+    """Motor output design 2: no record, no output build -- and the refusal says whose decision it
+    is (lead decision Q6)."""
+    cfg = _configure(tmp_path / "open", "-DFW_MOTOR_OUTPUT=1", "-DFW_BUILD=commission")
     assert cfg.returncode != 0
-    assert "outputs stay locked" in cfg.stderr
+    assert "user's decision" in _flat(cfg.stderr) and "IPROPI" in cfg.stderr
+
+
+def _flat(text: str) -> str:
+    """CMake wraps long messages: compare with the whitespace collapsed."""
+    return " ".join(text.split())
+
+
+MARKER = ("IPROPI protection record: confirmed-by=test fixture; date=2026-11-12; "
+          "evidence=not a real record (tests/integration/test_firmware_cross.py)\n")
+
+
+@pytest.fixture(scope="module")
+def record_repo(tmp_path_factory):
+    """The firmware in a scratch git repository outside this one, with a committed fake record
+    (lead condition: tests never write a record into the project)."""
+    root = tmp_path_factory.mktemp("record_repo")
+    repo = root / "repo"
+    shutil.copytree(FIRMWARE, repo / "firmware", ignore=shutil.ignore_patterns("build"))
+    (repo / "records").mkdir()
+    (repo / "records" / "ipropi.md").write_text("# fake\n" + MARKER)
+    header = root / "vehicle_config.h"
+    gen = subprocess.run([sys.executable, str(REPO / "tools" / "real_vehicle_header.py"), "--config",
+                          str(REPO / "config" / "real" / "vehicle.yaml"), "--out", str(header)],
+                         env={**os.environ, "PYTHONPATH": str(REPO / "src")}, capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "a")
+    return repo, header
+
+
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t", *args],
+                          cwd=repo, capture_output=True, text=True, check=True).stdout
+
+
+def _configure_in(repo: Path, header: Path, build: Path, *extra: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
+         f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}", *extra],
+        capture_output=True, text=True)
+
+
+OPEN = ("-DFW_MOTOR_OUTPUT=1", "-DFW_BUILD=commission")
+
+
+@pytest.fixture(scope="module")
+def open_build(record_repo, tmp_path_factory):
+    repo, header = record_repo
+    build = tmp_path_factory.mktemp("open_build")
+    cfg = _configure_in(repo, header, build, *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md",
+                        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "warning" not in (res.stdout + res.stderr).lower(), res.stdout + res.stderr
+    return build
+
+
+def test_output_build_carries_the_record_and_tim1(open_build, record_repo):
+    repo, _ = record_repo
+    d = open_build / "boards" / "weact_h743"
+    blob = subprocess.run(["git", "show", "HEAD:records/ipropi.md"], cwd=repo, capture_output=True,
+                          check=True).stdout
+    sha8 = hashlib.sha256(blob).hexdigest()[:8]
+    data = (d / "fw.elf").read_bytes()
+    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=" + sha8.encode() + rb" link=usb", data)
+    map_text = (d / "fw.map").read_text()
+    assert "motor_out_tim1" in map_text and "motor_out_locked" not in map_text
+    syms = _symbols(d / "fw.elf")
+    assert {"motor_out_apply", "motor_out_force_safe", "iwdg_unfreeze_in_debug"} <= set(syms)
+
+
+def test_only_the_output_file_escapes_the_tim1_guard(open_build):
+    """Motor output design 2: in the output build every board C source but motor_out_tim1.c is
+    still compiled with TIM1 poisoned."""
+    cmds = json.loads((open_build / "compile_commands.json").read_text())
+    board = [c for c in cmds if "/boards/weact_h743/src/" in c["file"] and c["file"].endswith(".c")]
+    assert len(board) > 10
+    for c in board:
+        guarded = "lock_guard.h" in c["command"]
+        assert guarded == (not c["file"].endswith("motor_out_tim1.c")), c["file"]
+
+
+def test_output_build_stack(open_build):
+    d = open_build / "boards" / "weact_h743"
+    args = [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(open_build),
+            "--limit", str(MAIN_STACK // 2), "--elf", str(d / "fw.elf"),
+            "--objdump", str(TOOLCHAIN / "bin" / "arm-none-eabi-objdump")]
+    for lv in ["board_main", "OTG_FS_IRQHandler", "TIM6_DAC_IRQHandler", "SPI1_IRQHandler,SPI2_IRQHandler",
+               "Default_Handler", "HardFault_Handler", "NMI_Handler"]:
+        args += ["--level", lv]
+    for rule in ["TIM6_DAC_IRQHandler=on_tick", "fw_app_*=hal_*", *TUSB_RULES]:
+        args += ["--indirect", rule]
+    res = subprocess.run(args, capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_output_build_rechecks_the_record_at_every_build(record_repo, tmp_path):
+    """Codex design review: configure-time evidence is not enough; a record changed after the
+    configure stops the next build."""
+    repo, header = record_repo
+    build = tmp_path / "b"
+    cfg = _configure_in(repo, header, build, *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+    assert cfg.returncode == 0, cfg.stderr
+    rec = repo / "records" / "ipropi.md"
+    original = rec.read_text()
+    try:
+        rec.write_text(original + "edited\n")
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "protection_record"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "differs from its committed version" in _flat(res.stdout + res.stderr)
+    finally:
+        rec.write_text(original)
+
+
+@pytest.mark.parametrize("case, message", [
+    ("untracked", "is not committed"),
+    ("staged_only", "is not committed"),
+    ("index_differs", "differs from its committed version"),
+    ("tree_differs", "differs from its committed version"),
+    ("symlink", "symbolic link"),
+    ("no_marker", "no marker line"),
+    ("outside", "outside the repository"),
+])
+def test_output_build_refuses_a_bad_record(record_repo, tmp_path, case, message):
+    """Motor output design 2: a regular file in the repository, its HEAD blob present, index and
+    work tree equal to HEAD, the marker line in the HEAD blob (Codex design reviews 1 and 2)."""
+    repo, header = record_repo
+    path = "records/ipropi.md"
+    restore = []
+    if case == "untracked":
+        path = "records/new.md"
+        (repo / path).write_text(MARKER)
+        restore.append(lambda: (repo / "records" / "new.md").unlink())
+    elif case == "staged_only":
+        path = "records/staged.md"
+        (repo / path).write_text(MARKER)
+        _git(repo, "add", path)
+        restore.append(lambda: (_git(repo, "rm", "-q", "--cached", "records/staged.md"),
+                                (repo / "records" / "staged.md").unlink()))
+    elif case == "index_differs":  # HEAD = A, index = B, work tree = A (Codex review 2)
+        rec = repo / path
+        a = rec.read_text()
+        rec.write_text(a + "b\n")
+        _git(repo, "add", path)
+        rec.write_text(a)
+        restore.append(lambda: _git(repo, "reset", "-q", "--", "records/ipropi.md"))
+    elif case == "tree_differs":
+        rec = repo / path
+        a = rec.read_text()
+        rec.write_text(a + "b\n")
+        restore.append(lambda: rec.write_text(a))
+    elif case == "symlink":
+        path = "records/link.md"
+        (repo / path).symlink_to(repo / "records" / "ipropi.md")
+        _git(repo, "add", path)
+        _git(repo, "commit", "-q", "-m", "link")
+        restore.append(lambda: (_git(repo, "rm", "-q", "records/link.md"),
+                                _git(repo, "commit", "-q", "-m", "unlink")))
+    elif case == "no_marker":
+        path = "records/plain.md"
+        (repo / path).write_text("# no marker\n")
+        _git(repo, "add", path)
+        _git(repo, "commit", "-q", "-m", "plain")
+        restore.append(lambda: (_git(repo, "rm", "-q", "records/plain.md"),
+                                _git(repo, "commit", "-q", "-m", "rm plain")))
+    elif case == "outside":
+        path = str(tmp_path / "elsewhere.md")
+        Path(path).write_text(MARKER)
+    try:
+        cfg = _configure_in(repo, header, tmp_path / "b", *OPEN, f"-DFW_IPROPI_PROTECTION_RECORD={path}")
+        assert cfg.returncode != 0
+        assert message in _flat(cfg.stderr), cfg.stderr
+        assert "user's decision" in _flat(cfg.stderr)
+    finally:
+        for r in restore:
+            r()
+
+
+@pytest.mark.parametrize("extra", [("-DFW_BUILD=normal",), ("-DFW_BUILD=hil",),
+                                   ("-DFW_BUILD=commission", "-DFW_TEST_IWDG_STALL=5")])
+def test_only_the_commissioning_build_may_open_the_outputs(record_repo, tmp_path, extra):
+    """Motor output design 2, lead condition 2: normal waits for the e-stop pin, hil and the IWDG
+    stall build stay locked -- even with a good record."""
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", "-DFW_MOTOR_OUTPUT=1",
+                        "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md", *extra)
+    assert cfg.returncode != 0
 
 
 def _identity(build: Path) -> str:
