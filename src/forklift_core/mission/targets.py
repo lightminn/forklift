@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-STATES = ("available", "carried", "delivered")
+STATES = ("available", "carried", "delivered", "unlocated")  # unlocated: sim-to-real 4d-2b-2 (a field recovery)
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,9 @@ class Pallet:
     # frame -- a re-pick's adoption rectangle sits about it; a later observation's pose does not move it. None: never
     # put down in this session (its first place's zone applies). Not part of the targets message.
     put_down_pose: Pose | None = None
+    # Sim-to-real 4d-2b-2: the last pose it was known at before it was lifted (carried keeps no pose) -- what an
+    # unlocated pallet is kept out of when it was on the forks at a field recovery. Not part of the targets message.
+    last_pose: Pose | None = None
 
 
 @dataclass
@@ -102,6 +105,8 @@ class TargetsBook:
             changes["put_down_pose"] = pose
         if basis is not None:
             changes.update(basis=basis, uncertainty_m=uncertainty_m)
+            if self.pallets[pallet_id].state == "unlocated" and basis == "recognised":
+                changes["state"] = "available"  # 4d-2b-2: an observation places a pallet lost in a field recovery
         return self._set(pallet_id, **changes)
 
     def update_destination(self, destination_id: str, pose: Pose) -> bool:
@@ -113,17 +118,47 @@ class TargetsBook:
         return True
 
     def carried(self, pallet_id: str) -> bool:
-        return self._set(pallet_id, pose=None, state="carried", at=None)  # lifted: its verified place is gone
+        last_ = self.pallets[pallet_id].pose or self.pallets[pallet_id].last_pose
+        return self._set(pallet_id, pose=None, state="carried", at=None,  # lifted: its verified place is gone
+                         last_pose=last_)
 
     def verify_at(self, pallet_id: str, destination_id: str | None) -> bool:
         """The pallet's verified place (plan D3): a destination after its delivery verdict passed, None when it is
         moved by other means (a manual recovery's ground verdict)."""
         return self._set(pallet_id, at=destination_id)
 
+    def move_last_pose(self, pallet_id: str, move) -> bool:
+        """A carried pallet's last known pose carried by a frame change (``move(pose) -> pose``, a hold's release):
+        only while it is carried (no pose of its own) -- a pallet on the floor keeps its pose and that moves instead.
+        Not part of the targets message: the revision does not move."""
+        pallet = self.pallets[pallet_id]
+        if pallet.state != "carried" or pallet.last_pose is None:
+            return False
+        self.pallets[pallet_id] = replace(pallet, last_pose=move(pallet.last_pose))
+        return True
+
+    def unlocate(self, pallet_id: str) -> bool:
+        """Sim-to-real 4d-2b-2: a field recovery took the pallet off the forks by hand -- where it is now is not known.
+        Never a pick (no submit names it); its last pose stays an obstacle (planning props, teleop permit) until an
+        observation places it again (``update_pose`` with basis "recognised") or the operator clears it; its verified
+        place and put-down snapshot (and with them a slot anchor or a re-pick's zone) are gone."""
+        pallet = self.pallets[pallet_id]
+        # a pallet taken off the forks keeps out the last place it was known at (it carries no pose while carried);
+        # where it really is now is the live obstacle layer's (audit 4-4 F4b)
+        return self._set(pallet_id, state="unlocated", at=None, put_down_pose=None,
+                         pose=pallet.pose if pallet.pose is not None else pallet.last_pose)
+
+    def clear_unlocated(self, pallet_id: str) -> bool:
+        """The operator says the unlocated pallet is not where it was last known: its pose (the obstacle) goes; it
+        stays unlocated, never a pick, until an observation places it."""
+        if self.pallets[pallet_id].state != "unlocated":
+            raise ValueError(f"{pallet_id} is not unlocated")
+        return self._set(pallet_id, pose=None)
+
     def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered",
                  uncertainty_m: float | None = None) -> bool:
         """Registered again where it was put down, under the same ID (basis "delivered", plan D10)."""
-        if state not in STATES or state == "carried":
+        if state not in STATES or state in ("carried", "unlocated"):
             raise ValueError(state)
         return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m,
                          put_down_pose=pose)
@@ -139,7 +174,9 @@ class TargetsBook:
                 if pallet.pose is not None:
                     pallet = self.pallets[pid] = replace(pallet, pose=reexpress(pallet.pose))
                 if pallet.put_down_pose is not None:
-                    self.pallets[pid] = replace(pallet, put_down_pose=reexpress(pallet.put_down_pose))
+                    pallet = self.pallets[pid] = replace(pallet, put_down_pose=reexpress(pallet.put_down_pose))
+                if pallet.last_pose is not None:  # 4d-2b-2
+                    self.pallets[pid] = replace(pallet, last_pose=reexpress(pallet.last_pose))
             self.destinations = {did: reexpress(pose) for did, pose in self.destinations.items()}
         self.revision += 1
         return True

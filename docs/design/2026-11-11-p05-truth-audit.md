@@ -109,6 +109,7 @@ rt 9920–9929(`rear`·`signed_speed`), rt 7680–7681(장애물 층 자세), rt
    - 이유: 실차 단계 S6(원격 조종)은 SLAM 을 올리기 전에 하고, F1 차량 측 차단(#360)도 AUTO 를 막을 때 텔레옵은 열어 두는 구조다.
    - 조건: MCU 명령 기한 만료 정지와 MCU 비상정지 입력이 살아 있을 것, 사람이 눈으로 보고 있을 것.
    - 저속 상한값은 `config/real/vehicle.yaml` 에 잠정값으로 두고 S5 정지 거리 실측으로 확정한다.
+   - **예외(4-3·4-4)**: 현장 복구 대기 중에는 텔레옵도 막고, 실차에서 팔레트를 실은 상태의 텔레옵(일시정지의 hold 포함)도 막는다. core 보조 복구(A)를 정할 때 다시 본다.
 3. **안전용 속도는 측정값(엔코더)만 쓴다.** `truth_speed` 와 `tracker_speed` 는 안전 판정에 쓰지 않는다. 4d 는 추종용·정지 확인용·안전 상한용 속도를 나눈다.
 4. **장면 손상 판정을 대신할 실차 감시**(IMU 기울기, 모터 전류, 명령 대비 바퀴·IMU 불일치, 카메라 적재 확인)는 후속 결정 항목이다. 4e-2 에서 후보와 권고를 올린다. 그때까지 실차 단계는 사람 감시·저속·빈 포크로 둔다(계획 5절).
 
@@ -213,6 +214,49 @@ rt 9920–9929(`rear`·`signed_speed`), rt 7680–7681(장애물 층 자세), rt
    - 포크가 포켓 안에 있을 수 있는 단계(삽입 시작 뒤 ~ 완전 빠짐 확인 전)의 취소는 clear_out 이 아니라 recovery_required(1 의 B)로 간다.
    - '빈 포크'는 참값이 아니라 미션 상태(아직 집지 않음)로 판정한다.
    - 이 경계는 취소 단계별 표 형태의 코어 단위 시험으로 고정한다.
+
+### 4-4. 4d-2b-2 설계 — 실차 현장 복구와 clear_out 경계 (Codex 상의 2회 반영, 총괄 동의)
+
+실차에만 적용한다(`field_recovery` 기본 False, 시뮬 불변).
+
+**F1. 포켓 이력과 빠짐 확인**
+- `CargoState.pocket_entered`: 삽입 시작(on_insert_start) 때마다 True 로 둔다. 운용자의 빠짐 확인(`confirm_out`)과 '복구 끝'만 False 로 되돌린다. 그래서 이전 미션의 확인이 다음 삽입에 남지 않는다.
+- 실차 settle(withdraw 직진 끝)에서 운용자 확인 `withdrawn` 을 받는다(4d-2b-1 의 `_operator_gate`). 성립 조건은 승강 바닥 + 정지(SafetySpeed)이고, 깨지면 요청을 버린다. confirm 이면 `confirm_out` 하고 다음 단계로 간다. reject 면 `require(False, "Forks are not out (operator)")`(미션 실패 → 현장 복구). 시뮬은 지금처럼 settle 타이머.
+- 실차의 '빈 포크' = `not pocket_entered and relation == "free"` (미션 상태; 참값 아님). `unknown`(무효화)은 확인보다 우선한다.
+- 확인 전에는 withdraw→settle 의 free 전환이 있어도 safety 의 `fork_in_pocket` 이 참이다. 그래서 일시정지 hold 의 텔레옵도 포켓 행으로 막힌다.
+
+**F2. 취소 판정 (실차)**
+- `cancel_decision`: 빈 포크면 "cancelled"(→ 기존 finish_cancel/clear_out, 허가·SafetySpeed·장애물 층 강제 아래). 아니면(carrying 포함) "recovery_required".
+- 미션 실패(require False)로 끝났을 때 빈 포크가 아니면 같은 현장 복구 상태로.
+- `submit_refusal`: 현장 복구 대기면 "recovery_required"(carrying 의 "cargo_held"·적재 재제출 없음).
+- `capture_recovery_context`: 실차에서는 만들지 않는다(D14 수동 복구 행 없음).
+
+**F3. 현장 복구 상태**
+- `MissionCore.field_recovery`: None 또는 {"id", "since_s", "mission_id", "pallet_id", "relation"}. 실차가 recovery_required 로 끝나는 모든 길에서 새 id 로 연다.
+- safety 보고에 `recovery_required: True` → teleop_policy 가 구동·승강 모두 거부(지금 행). 실차 carrying 텔레옵: hold(PAUSED→TELEOP) 경로의 적재 텔레옵도 실차에서는 막는다(감독·빈 포크 단계, (A) 결정 때 다시 본다).
+
+**F4. '복구 끝' — `field_recovery_done(t, recovery_id, *, disarmed, outstanding)`**
+- 조건: 열린 현장 복구가 있고 id 가 같다. 활성 미션이 없다(commands.status ∈ FINAL ∪ {"idle"}). `disarmed` 는 4e-2 가 현재 세대의 신선한 MCU 상태로 준다. `outstanding` 은 미해결 명령 없음이다. 하나라도 아니면 거부(사유)하고 상태는 그대로다. 같은 id 재전송은 이미 닫힌 복구라 거부된다.
+- 순서(풀기 전에 막기):
+  1. 재위치 세대를 새로 내고 `cargo.relocalize_required` 에 둔다. 제출은 "relocalize_required" 로 거부된다. 4e-2 가 `relocalize_generation()` 으로 그 세대의 재위치를 묻고, `relocalized(t, generation)` 이 같은 세대일 때만 푼다(이전 재위치의 늦은 답은 무시). 같은 세션에서 다시 AUTO 가 가능하다(F1 epoch 차단과 다름). 복구 전 SLAM·pose 확인·정합 근거를 무효화하는 일은 4e-2 몫이다.
+  2. 끝난 미션의 작업을 버린다(`abandon_jobs`: 대기 계획, 재요청 예약, 캡처, 관측). 구동·명령 세대 무효화는 4e-2 포트 쪽이다.
+  3. 팔레트 대상을 `unlocated` 로 둔다: 선택·제출 거부, `at`·`put_down_pose`·slot 근거 무효.
+  4. cargo free/none, pocket_entered False, field_recovery 닫음(기록 `state["field_recoveries"]`).
+- 자동 재개는 없다.
+
+**F4b. '위치 모름' 팔레트의 장애물이 풀리는 길 (총괄 추가 요청)**
+- 마지막 추정 자세는 계획 장애물(prop)과 텔레옵 허가 구역으로 남는다. 기본은 이대로 막힌 쪽이다. 포크에 실려 있던 팔레트(carried 는 자세가 없다)는 들기 전 마지막 자세(`last_pose`)를 쓴다.
+- 풀리는 길은 둘이다.
+  - 인식이 그 팔레트를 다시 관측하면 `update_pose(basis="recognised")` 로 새 자세와 `available` 이 된다.
+  - 운용자가 '치웠음'을 확인하면 `clear_unlocated` 로 자세를 지운다. 장애물에서 빠지지만 여전히 선택할 수 없다.
+- 실시간 장애물 층은 이와 별개로 지금 보이는 것만 막는다. 따라서 팔레트를 옮겼다면 새 위치는 장애물 층의 신선한 관측이 막는다. 마지막 자세만으로 다른 곳이 비었다고 판정하지 않는다. 복구 뒤 첫 미션은 그 영역을 다시 관측한 뒤에 계획하도록 4e-2 에서 묶는다.
+- 시험: `tests/unit/mission/test_targets_unlocated.py`.
+
+**F4c. 입력과 출력의 경계 (Codex 구현 리뷰)**
+- `field_recovery_done` 은 id 가 정확히 int 이고, DISARM·미해결 여부가 정확히 bool 일 때만 판단한다. 모르는 상태(None 등)는 거부한다. `relocalized` 의 세대도 int 만 받는다.
+- 열린 현장 복구 동안 core 의 `assemble_command` 는 요청과 관계없이 바퀴 0 에 조향을 유지한다. 중재기의 AUTO 출력 차단(복구 래치를 AUTO 게이트에 연결)은 4e-2 몫이다.
+
+**F5. 시험(표)**: (phase, pocket_entered, 확인 여부, relation) × 실차/시뮬 → cancelled+clear_out / recovery_required / recover. 최종 바퀴·승강 출력(assemble 과 텔레옵 정책), 남은 명령 없음까지 본다. F4 의 조건별 거부와 순서.
 
 ## 4a. 이 감사가 기대는 다른 전제(agy ③, 해당 단계에서 다룸)
 

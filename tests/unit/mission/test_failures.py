@@ -120,6 +120,7 @@ KNOWN = {
         # sim-to-real 4d-2b-1: the real truck's lift/lower motion stage and its operator's rejects
         "Lift did not reach its position", "Pallet was not lifted (operator)",
         "Pallet did not settle onto destination floor (operator)",
+        "Forks are not out (operator)",  # 4d-2b-2: the real truck's settle confirmation
     },
 }
 

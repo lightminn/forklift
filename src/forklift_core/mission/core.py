@@ -336,6 +336,11 @@ class MissionCore:
         # but only a live run reads it -- core.baseline is set there alone).
         self.cargo = CargoState()
         self.cargo.assume_trace_valid = not bool(getattr(options, "real_vehicle", False))  # 4d-2b-1
+        self.cargo.field_recovery = bool(getattr(options, "real_vehicle", False))  # 4d-2b-2 (lead decision 1, 2)
+        self.field_recovery: dict | None = None  # 4d-2b-2: the open field recovery (real truck)
+        self._field_recovery_serial = 0
+        self._relocalize_serial = 0
+        self._last_pose_hold = None  # 4d-2b-2: (pallet, hold by its release count) a carried pallet's last pose is in
         self._operator = {"serial": 0, "request": None, "answer": None, "motion_since": None,  # 4d-2b-1
                           "motion_key": None}
         self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
@@ -707,6 +712,16 @@ class MissionCore:
         if ms.phase in ("recover_lower", "recover_withdraw"):
             self.recovery_timers(t)
         if ms.phase == "settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
+            if self._real_vehicle():
+                # 4d-2b-2: the withdraw straight ran out by the tracker only -- the operator confirms the forks out
+                # its precondition: standing with the forks down (a request is dropped when either goes)
+                down_ = float(hooks.lift_position()) < 0.012 and self.safety_speed().standing(self.STANDING_MPS)
+                verdict_ = self._operator_gate(t, "withdrawn", down_)
+                if verdict_ == "reject":
+                    hooks.require(False, "Forks are not out (operator)")
+                if verdict_ != "confirm":
+                    return False
+                self.cargo.confirm_out()
             if "return_home" in self.trackers:
                 transition("return_home", t)
             else:
@@ -1060,6 +1075,8 @@ class MissionCore:
         """Before the mission and its state go (end_reset): what a manual recovery needs -- the pallet's ID and
         estimate, where the destination's pallet stands, the SLAM hold's basis, and whether it is on the floor."""
         cargo, mission = self.cargo, self.commands.mission
+        if cargo.field_recovery:
+            return  # 4d-2b-2: the real truck has no core-assisted recovery (lead decision 1, B: field recovery)
         if self.baseline is None or cargo.relation not in ("constrained", "unknown") or mission is None:
             return
         slam = self.slam
@@ -5868,11 +5885,27 @@ class MissionCore:
     def release_slam(self, odom_from_base):
         """The one place the core releases a SLAM hold: applies the received correction and counts the frame change
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
+        # 4d-2b-2 (real truck): a pallet lifted in this hold keeps its last known pose in the hold's frame -- carried
+        # into the map frame by this release, once (whichever release path ends the hold; the simulation reads nothing)
+        move_ = (self.cargo.field_recovery and self._last_pose_hold is not None
+                 and self._last_pose_hold[1] == self.slam_releases)
+        before_ = self._applied_or_identity() if move_ else None
         jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
+        if move_:
+            change_ = compose(self._applied_or_identity(), invert(before_))
+            pid_ = self._last_pose_hold[0]  # kept with the mark: a deferred end release runs after the mission is gone
+            if pid_ in self.targets.pallets:
+                self.targets.move_last_pose(pid_, lambda p_: TargetPose(
+                    *compose(change_, (float(p_.x_m), float(p_.y_m), float(p_.yaw_rad)))))
+            self._last_pose_hold = None
         self.slam_releases += 1
         self.in_hold = False
         self.put_downs_in_hold.clear()  # the hold they were put down in is over (end_release read them first)
         return jump
+
+    def _applied_or_identity(self) -> tuple:
+        applied = self.slam["tracker"].applied
+        return (0.0, 0.0, 0.0) if applied is None else tuple(float(v) for v in applied[0])
 
     def put_down_target(self, pallet_id: str, pose, **kwargs) -> bool:
         """TargetsBook.put_down, noting a put-down made under a SLAM hold (plan 2026-10-28-adoption-zone-check). The
@@ -5908,7 +5941,8 @@ class MissionCore:
         if ms.phase in ("recover_lower", "recover_withdraw", "clear_out"):
             return  # plan D4/D4b: the recovery puts the pallet back itself; no branch below applies
         if ms.phase in ("lift", "extract", "transport", "lower"):
-            tb.carried(pid)
+            if tb.carried(pid) and self.cargo.field_recovery and self.in_hold:
+                self._last_pose_hold = (pid, self.slam_releases)  # 4d-2b-2: its last pose is this hold's estimate
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
                 self.put_down_target(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10
@@ -5966,6 +6000,10 @@ class MissionCore:
             fields_ = self.cargo.safety_fields()
             out["load"] = {**fields_["load"], "lift_target_m": float(ms.lift_command)}
             out["fork_in_pocket"] = fields_["fork_in_pocket"]
+            if self.cargo.field_recovery and self.cargo.relation == "carrying":
+                # 4d-2b-2: no loaded teleop on the real truck, a hold's included (an exception to audit 3a's teleop
+                # without SLAM; looked at again with the core-assisted recovery, decision A)
+                out["teleop_refused"] = "real_loaded"
         if cmds.adopted_id is None and self.baseline is not None:
             # A live mission ended (the batch run's mission is always the adopted one): the forks in a pocket refuse
             # a submit and teleop until the recovery; the load held refuses a submit until the cargo submit (6c).
@@ -5973,6 +6011,7 @@ class MissionCore:
             refusal_ = self.cargo.submit_refusal()
             if refusal_ is not None:
                 out[refusal_] = True
+
             report_ = self.recovery_report()
             if report_ is not None:
                 out["recovery"] = report_  # plan D14: the recovery stage the teleop policy reads
@@ -6246,6 +6285,72 @@ class MissionCore:
             {"time_s": float(t), "serial": request["serial"], "kind": request["kind"],
              "mission_id": request["mission_id"], "phase": request["phase"], "event": event})
 
+    def _open_field_recovery(self, t: float) -> None:
+        """4d-2b-2 (real truck): a mission ended with the forks not confirmed out -- every core-driven motion and teleop
+        stays refused (the submit refusal and the safety report's ``recovery_required``) until ``field_recovery_done``."""
+        cargo = self.cargo
+        if not cargo.field_recovery or self.field_recovery is not None:
+            return
+        if not (cargo.pocket_entered or cargo.relation != "free"):
+            return
+        mission = self.commands.mission
+        self._field_recovery_serial += 1
+        self.field_recovery = {"id": self._field_recovery_serial, "since_s": float(t),
+                               "mission_id": self.commands.mission_id,
+                               "pallet_id": None if mission is None else mission.pallet_id,
+                               "relation": cargo.relation}
+        self.state.setdefault("field_recoveries", []).append({**self.field_recovery, "event": "opened"})
+
+    def field_recovery_done(self, t: float, recovery_id: int, *, disarmed: bool, outstanding: bool):
+        """The operator's 'recovery done' after the field procedure (audit 4-3 decision 1: DISARM, motor power off, the
+        truck lifted away or the pallet taken off, the forks seen out). Accepted only for the open recovery's id, with
+        no active mission, a fresh DISARM and no command outstanding (both given by the vehicle side, 4e-2). In order:
+        the relocalization block, the pending work dropped, the pallet unlocated, then the forks free. No resume.
+        Returns (accepted, refusal reason)."""
+        open_ = self.field_recovery
+        if open_ is None:
+            return False, "no_open_recovery"
+        if type(recovery_id) is not int or recovery_id != open_["id"]:
+            return False, "stale_recovery"
+        if type(disarmed) is not bool or type(outstanding) is not bool:
+            return False, "state_unknown"  # an unknown DISARM or outstanding state is not a yes
+        if self.commands.status not in ("idle", "done", "failed", "cancelled", "recovery_required"):
+            return False, "mission_active"
+        if not disarmed:
+            return False, "not_disarmed"
+        if outstanding:
+            return False, "commands_outstanding"
+        # 1: the truck may have been carried away -- no submit before a relocalization of this generation (one asked
+        # before it, answering late, does not count; 4e-2 voids the SLAM, pose and match evidence from before)
+        self._relocalize_serial += 1
+        self.cargo.relocalize_required = self._relocalize_serial
+        self.abandon_jobs(t)  # 2: the ended mission's plan wait, re-asks, capture and observation, no resume's undo
+        pallet_id = open_["pallet_id"]
+        if pallet_id is not None and pallet_id in self.targets.pallets:  # 3: kept as an obstacle, never a pick
+            self.targets.unlocate(pallet_id)
+        self.cargo.recovered()  # 4
+        self.cargo.pocket_entered = False
+        self.cargo.recovery_context = None
+        self.state.setdefault("field_recoveries", []).append({**open_, "event": "done", "time_s": float(t)})
+        self.field_recovery = None
+        return True, None
+
+    def relocalize_generation(self):
+        """The relocalization generation a field recovery's end asked for (None: none needed)."""
+        return self.cargo.relocalize_required or None
+
+    def relocalized(self, t: float, generation: int) -> bool:
+        """A relocalization confirmed the truck's place for ``generation`` (4e-2 wires the start relocalization, asked
+        after ``field_recovery_done`` with ``relocalize_generation()``): submits are taken again -- still no automatic
+        resume. Another generation's answer changes nothing (False)."""
+        if (not self.cargo.relocalize_required or type(generation) is not int
+                or generation != self.cargo.relocalize_required):
+            return False
+        self.cargo.relocalize_required = False
+        self.state.setdefault("field_recoveries", []).append({"event": "relocalized", "time_s": float(t),
+                                                              "generation": int(generation)})
+        return True
+
     def _stage(self):
         """The simulation's stage for the path displays; the real truck has none (4d-2a: not even read)."""
         return None if self._real_vehicle() else self.hooks.stage()
@@ -6400,6 +6505,11 @@ class MissionCore:
         escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
                         and getattr(self, "_escape_guard_stop_t", None) == float(t))
         obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
+        field_open_ = getattr(self, "field_recovery", None) is not None
+        if field_open_:
+            # 4d-2b-2: an open field recovery holds the wheels whatever is asked (the steering held; the vehicle side's
+            # AUTO gate is 4e-2's) -- and steps them to zero after the slew below (Codex 4d-2b-2 re-review P2-1)
+            obstacle_hold = True
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0
@@ -6451,7 +6561,7 @@ class MissionCore:
                 wheel_speed = math.copysign(cap[1], wheel_speed)
             if getattr(options, "low_clearance_guard", "off") == "on":
                 wheel_speed = self._low_clearance_capped(t, wheel_speed)
-            if estop_holding or safety_hold:
+            if estop_holding or safety_hold or field_open_:
                 wheel_speed = 0.0
             if observe_stop_:
                 wheel_speed = 0.0  # the start backoff's guard stopped it: the same step as the e-stop's
@@ -9079,6 +9189,7 @@ class MissionCore:
         the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
         pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
         self.capture_recovery_context()  # plan D14: before the mission-owned state goes
+        self._open_field_recovery(t)  # 4d-2b-2 (real truck): before the mission-owned state goes too
         # 4d-2b-1: an ended mission's confirmation request, answer and reach timer go with it; the serial goes on
         self._operator.update(request=None, answer=None, motion_since=None, motion_key=None)
         if slam is not None:

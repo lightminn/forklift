@@ -728,7 +728,7 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     assert "if creeping and" not in block  # the creep is slewed (L3c v43 seed 1)
     assert block.index("slew_cap_stop(") < block.index('obstacle.get("permission_cap")')  # its arithmetic: speed_chain
     # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
-    assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold:")
+    assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold or field_open_:")
     j = source.index('obstacle["permission_cap"] = ')  # the permission tick (M-a1 slice 3b)
     assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
     for text in (runner, source):

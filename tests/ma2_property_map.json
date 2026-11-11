@@ -5035,8 +5035,8 @@
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "if estop_holding or safety_hold:\n                wheel_speed = 0.0",
-    "replace": "if estop_holding:\n                wheel_speed = 0.0",
+    "find": "if estop_holding or safety_hold or field_open_:\n                wheel_speed = 0.0",
+    "replace": "if estop_holding or field_open_:\n                wheel_speed = 0.0",
     "count": 1
    },
    "evidence": {

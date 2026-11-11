@@ -66,6 +66,8 @@ def _policy(safety: dict | None, *, feedback_ok: bool, standing: bool, lift_m: f
     frame = safety.get("frame") or {}
     phase = (safety.get("mission") or {}).get("phase")
     recovery = safety.get("recovery")
+    if safety.get("teleop_refused"):
+        return refuse(str(safety["teleop_refused"]))  # sim-to-real 4d-2b-2: the real truck's loaded teleop
     if near.get("active"):
         return refuse("near_section")
     if recovery:

@@ -117,6 +117,7 @@ export const REASONS = {
   "Pallet did not settle onto destination floor": "팔레트가 목적지 바닥에 놓이지 않았습니다",
   "Fork did not lower": "포크가 내려가지 않았습니다",
   "Lift did not reach its position": "포크가 목표 높이에 닿지 않았습니다",
+  "Forks are not out (operator)": "운용자가 포크가 빠지지 않았다고 확인했습니다",
   "withdraw_not_certified": "포크를 빼도 되는지 확인하지 못했습니다",
   "withdraw_tracking_exceeded": "포크를 빼는 동안 추적 한계를 넘었습니다",
   "pocket_stop": "포켓 안에서 멈췄습니다",
