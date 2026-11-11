@@ -121,7 +121,8 @@ class _Layer:
     def __init__(self, blocked_direction=None):
         self.blocked_direction = blocked_direction
         self.calls = []
-        self.permission = SimpleNamespace(path_check=None, config=SimpleNamespace())
+        self.permission = SimpleNamespace(path_check=None,
+                                          config=SimpleNamespace(stopping=SimpleNamespace(decel_mps2=2.0)))
 
     def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps):
         self.calls.append(direction)
@@ -199,3 +200,36 @@ def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way(act):
     assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
     assert out.requested_speed == 0.0 and out.obstacle_hold
     assert c.obstacle["permission_cap"] == (1.0, 0.0)
+
+
+def test_the_command_still_in_effect_is_a_driving_direction():
+    c = core(real=True)
+    assert c._check_directions(SafetySpeed(-0.02, 0.02, (-1,)), None, 0.1) == ([-1, 1], [])  # noqa: SLF001
+    assert c._check_directions(SafetySpeed(-0.02, 0.02, (-1,)), -1, 0.1) == ([-1, 1], [])  # noqa: SLF001
+    assert core()._check_directions(SafetySpeed.exact(-0.02), None, 0.1) == ([-1], [])  # noqa: SLF001  sim: as before
+
+
+@pytest.mark.parametrize("phase,blocked", [("insert", None), ("transport", 1)])
+def test_a_zero_request_with_the_slew_still_forward_checks_forward(phase, blocked):
+    """Codex 4d-1 5th P1: asked 0 while rolling back, the slew from +0.1 would still drive forward."""
+    asked = []
+    check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.0, "occupied") if a[3] > 0 else (0.5, "ok"),
+                            summary=lambda: {})
+    c, layer = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase=phase, blocked=blocked,
+                               pocket_check=check if phase == "insert" else None)
+    c.state["command_speed"] = 0.1
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    assert out.allowed == 0.0 and c.obstacle["permission_cap"] == (1.0, 0.0)
+    # through the command assembly: the slew from +0.1 does not reach the wheels
+    from forklift_core.control.path_tracking import AckermannGeometry
+
+    c.options.drive_geometry = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1,
+                                                 max_steering_rad=0.8, max_wheel_rate_rad_s=50.0)
+    c.hooks.steering_position = lambda: np.zeros(2)
+    c.assemble_command(1.0, 0.01, out.requested_speed, 0.0, 0.0, np.zeros(2), False, out.obstacle_hold, False,
+                       False, False)
+    assert c.state["command_speed"] == 0.0
+    if phase == "insert":
+        assert out.why == "direction_unsure" and asked == []
+    else:
+        assert layer.calls == [-1, 1] and out.why == "occupied"

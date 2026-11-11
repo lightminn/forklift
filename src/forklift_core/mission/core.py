@@ -1452,11 +1452,12 @@ class MissionCore:
             if self.exit_exempt_open():
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
-        directions_, braking_ = self._check_directions(speed_, direction)
+        commanded_ = self._commanded_now()
+        directions_, braking_ = self._check_directions(speed_, direction, commanded_)
         allowed, why, braking_stop_ = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=cap_,
-        ), directions_, max(abs(requested_speed), speed_.bound_mps), braking_, speed_.bound_mps)
+        ), directions_, max(abs(requested_speed), speed_.bound_mps, abs(commanded_)), braking_, speed_.bound_mps)
         if direction is None:
             direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
@@ -5519,11 +5520,12 @@ class MissionCore:
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
-        directions_, braking_ = self._check_directions(speed_, None)
+        commanded_ = self._commanded_now()
+        directions_, braking_ = self._check_directions(speed_, None, commanded_)
         allowed, why, braking_stop_ = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=cap_,
-        ), directions_, speed_.bound_mps, braking_, speed_.bound_mps)
+        ), directions_, max(speed_.bound_mps, abs(commanded_)), braking_, speed_.bound_mps)
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"  # holds the wheels whether the phase acts or not (Codex impl review P1)
@@ -6171,16 +6173,27 @@ class MissionCore:
         """An invalid safety speed holds the wheels (4d-1, truth audit 3a); the simulation's is always valid."""
         return self._real_vehicle() and not speed.valid
 
-    def _check_directions(self, speed: SafetySpeed, direction):
+    def _commanded_now(self) -> float:
+        """The wheel command still in effect (the slew's start), read by the real truck's direction checks only -- 0
+        in the simulation, so its caps stay as before."""
+        return float(self.state.get("command_speed", 0.0)) if self._real_vehicle() else 0.0
+
+    def _check_directions(self, speed: SafetySpeed, direction, commanded_mps: float = 0.0):
         """The motion directions a safety check covers (4d-1), as ``(driving, braking)``. The simulation: the caller's
         ``direction`` (the request, a cusp hand-over) or else the true speed's -- one, as before, and no braking
         check. The real truck: the driving check covers the caller's direction (or, asked none, every direction the
         measured speed may have); the braking check covers every other direction the measured speed may have, at the
         speed bound only -- the motion the truck already has, not the one it is asked for (Codex 4d-1 2nd P2: a
-        standing reading is not a standstill, so no direction is left out)."""
+        standing reading is not a standstill, so no direction is left out). The command still in effect
+        (``commanded_mps``: a slew down from it keeps its direction for a while, whatever is asked now) is a driving
+        direction too (Codex 4d-1 5th P1)."""
         if not self._real_vehicle():
             return [direction if direction is not None else speed.directions[0]], []
         driving = list(speed.directions) if direction is None else [direction]
+        if commanded_mps != 0.0:
+            c_ = 1 if commanded_mps > 0 else -1
+            if c_ not in driving:
+                driving.append(c_)
         return driving, [d for d in speed.directions if d not in driving]
 
     @staticmethod
