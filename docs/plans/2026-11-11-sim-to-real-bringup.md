@@ -349,7 +349,7 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 
 | 값 | 잠정 | 출처 | 확정 |
 |---|---|---|---|
-| 텔레옵 명령 상한 | 약 0.14 m/s(`(0.2 − 오차 폭)/(1 + κ_max·track/2)`, 계산값) | 안전 상한 0.2(`vehicle.yaml` `teleop_speed_limit`, 계획 3.4 저속 텔레옵 수치)과 아래 두 값으로 계산 | S5 |
+| 텔레옵 명령 상한 | 0.132 m/s(`(0.2 − 오차 폭 0.055)/(1 + 0.367·0.53/2)`, `config/real/teleop_bridge.yaml` 로 계산) | 안전 상한 0.2(`vehicle.yaml` `teleop_speed_limit`, 계획 3.4 저속 텔레옵 수치)과 아래 두 값으로 계산 | S5 |
 | 엔코더 경계의 차축 가속 상한 `a_axle` | 0.8 m/s²(바퀴는 × (1 + κ_max·track/2)) | 텔레옵 가속 `TeleopLimits.accel_mps2` 와 같은 값(측정 아님, 전제 A1: 실제 바퀴 가속이 넘지 않음) | S5 |
 | `STATE` 수신 지연 상한 `L` | 20 ms | USB CDC·UART 링크의 가정(측정 아님, 전제 A2) | P0-9 왕복 지연 p99 |
 | 바퀴 반지름 | 차체 모델 공칭값(`vehicle.yaml` `wheel_radius` null) | `sim/models/dls08_measured` 의 공칭 반지름 | S8 실측(바퀴 실효 반경, `vehicle.yaml` provenance `until: S8`) |

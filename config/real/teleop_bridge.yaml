@@ -1,0 +1,12 @@
+# The S6 teleop bridge's encoder-speed premises (docs/design/2026-11-12-teleop-bridge.md 2; plan
+# docs/plans/2026-11-11-sim-to-real-bringup.md, the bridge's provisional table). The safety bound 0.2 m/s stays in
+# vehicle.yaml (teleop_speed_limit); these only set the error width under it and so the command cap. A measurement
+# above a premise raises the term here and lowers the command cap -- the 0.2 bound is never moved (lead 2026-11-12).
+schema: teleop_bridge/1
+encoder_speed:
+  axle_accel_mps2: 0.8   # premise A1 (each wheel's: x (1 + kappa_max track / 2)); the teleop accel command limit
+  state_latency_s: 0.02  # premise A2: STATE measurement-to-receipt delay bound; P0-9 round-trip p99 fixes it
+  max_age_s: 0.03        # the newest STATE older than this (host receipt) gives no safety speed
+  dt_min_s: 0.01         # the two STATEs differenced: at least this far apart (MCU time) ...
+  dt_max_s: 0.025        # ... at most this (a STATE period over 25 ms gives no safety speed)
+  provenance: {source: plan_provisional_table_lead_2026_11_12, measured: false, until: S5}
