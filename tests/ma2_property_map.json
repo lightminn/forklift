@@ -10665,14 +10665,14 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
    ],
-   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01` (core.py line 714) fails a behaviour test",
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) < 0.01` (core.py line 714) fails a behaviour test",
    "tests": [
     "tests/unit/mission/test_core_permission.py::test_without_slam_standing_is_below_10_mm_per_second"
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01\n",
-    "replace": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) <= 0.01\n",
+    "find": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) < 0.01\n",
+    "replace": "        stopped_now = slam[\"stop_now\"] if slam is not None else float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) <= 0.01\n",
     "count": 1
    },
    "evidence": {
@@ -10813,14 +10813,14 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
    ],
-   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1435) fails a behaviour test",
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1435) fails a behaviour test",
    "tests": [
     "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
-    "replace": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
+    "find": "                    and float(np.linalg.norm(self._truth(\"truth_velocity\")[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
+    "replace": "                    and float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
     "count": 1
    },
    "evidence": {
@@ -10853,14 +10853,14 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
    ],
-   "statement": "operator sweep: boundary on `float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1436) fails a behaviour test",
+   "statement": "operator sweep: boundary on `float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) <= trackers[ms.phase].config.stop_speed_mps` (core.py line 1436) fails a behaviour test",
    "tests": [
     "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
-    "replace": "                    and float(np.linalg.norm(hooks.truth_velocity()[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
+    "find": "                    and float(np.linalg.norm(self._truth(\"truth_velocity\")[:2]))\n                    <= trackers[ms.phase].config.stop_speed_mps\n",
+    "replace": "                    and float(np.linalg.norm(self._truth(\"truth_velocity\")[:2])) < trackers[ms.phase].config.stop_speed_mps\n",
     "count": 1
    },
    "evidence": {
@@ -10893,14 +10893,14 @@
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::15",
     "tests/unit/test_isaac_transport_planning_config.py::test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules::16"
    ],
-   "statement": "operator sweep: boundary on `abs(float(hooks.truth_yaw_rate())) <= cusp_stop_yaw_rate_radps` (core.py line 1437) fails a behaviour test",
+   "statement": "operator sweep: boundary on `abs(float(self._truth(\"truth_yaw_rate\"))) <= cusp_stop_yaw_rate_radps` (core.py line 1437) fails a behaviour test",
    "tests": [
     "tests/unit/mission/test_core_cusp_observe.py::test_without_slam_a_stop_at_exactly_the_stop_speed_and_yaw_rate_counts"
    ],
    "mutation": {
     "file": "src/forklift_core/mission/core.py",
-    "find": "                    and abs(float(hooks.truth_yaw_rate()))\n                    <= cusp_stop_yaw_rate_radps\n",
-    "replace": "                    and abs(float(hooks.truth_yaw_rate())) < cusp_stop_yaw_rate_radps\n",
+    "find": "                    and abs(float(self._truth(\"truth_yaw_rate\")))\n                    <= cusp_stop_yaw_rate_radps\n",
+    "replace": "                    and abs(float(self._truth(\"truth_yaw_rate\"))) < cusp_stop_yaw_rate_radps\n",
     "count": 1
    },
    "evidence": {
