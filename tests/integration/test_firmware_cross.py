@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,8 @@ pytestmark = pytest.mark.skipif(
 def _configure(build: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}", *extra],
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}",
+         f"-DFW_PYTHON={sys.executable}", *extra],
         capture_output=True, text=True,
     )
 
@@ -85,6 +87,44 @@ def test_build_identity_in_elf(locked_build):
     m = re.search(rb"forklift-mcu (normal|commission|hil) locked \S+ link=(usb|uart7) cc=[^\x00]*"
                   rb"Arm GNU Toolchain 13\.3\.Rel1", data)
     assert m, "build identity string missing"
+
+
+def _symbols(elf: Path) -> dict[str, int]:
+    out = subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-nm"), str(elf)],
+                         capture_output=True, text=True, check=True).stdout
+    syms = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            syms[parts[2]] = int(parts[0], 16)
+    return syms
+
+
+def _vectors(elf: Path, tmp: Path) -> list[int]:
+    raw = tmp / "isr_vector.bin"
+    subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-objcopy"), "-O", "binary", "-j", ".isr_vector",
+                    str(elf), str(raw)], check=True)
+    data = raw.read_bytes()
+    return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+
+
+def test_every_enabled_interrupt_has_its_handler(locked_build, tmp_path):
+    """Codex B2a review: an IRQ enabled with no vector entry jumped to address 0."""
+    elf = locked_build / "fw.elf"
+    syms = _symbols(elf)
+    vec = _vectors(elf, tmp_path)
+    header = (FIRMWARE / "third_party" / "cmsis_device_h7" / "Include" / "stm32h743xx.h").read_text()
+    irqn = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)_IRQn\s+=\s+(\d+),", header, re.M)}
+    assert all(v != 0 for v in vec[1:]), "a vector slot is empty"
+    default = syms["Default_Handler"] | 1
+    enabled = set()
+    for src in (BOARD / "src").glob("*.c"):
+        enabled |= set(re.findall(r"NVIC_EnableIRQ\((\w+)_IRQn\)", src.read_text()))
+    assert enabled, "no interrupt found"
+    for name in enabled:
+        slot = vec[16 + irqn[name]]
+        assert slot != default, f"{name} has no handler"
+        assert slot == syms[f"{name}_IRQHandler"] | 1, name
 
 
 def test_locked_build_links_no_tim1_output(locked_build):
@@ -164,13 +204,18 @@ def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
         return subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
                                *args], cwd=repo, capture_output=True, text=True, check=True).stdout
 
+    header = tmp_path / "vehicle_config.h"
+    gen = subprocess.run([sys.executable, str(REPO / "tools" / "real_vehicle_header.py"), "--config",
+                          str(REPO / "config" / "real" / "vehicle.yaml"), "--out", str(header)],
+                         env={**os.environ, "PYTHONPATH": str(REPO / "src")}, capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
     git("init", "-q")
     git("add", "-A")
     git("commit", "-q", "-m", "a")
     build = tmp_path / "build"
     cfg = subprocess.run(
         ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
          f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}"],
         capture_output=True, text=True)
     assert cfg.returncode == 0, cfg.stderr
