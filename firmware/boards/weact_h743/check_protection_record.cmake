@@ -2,8 +2,8 @@
 # and before every build of an output build:
 #   -DSRC_DIR=<a directory in the firmware's git repository> -DRECORD=<record path> -DOUT=<header>
 # The record must be a regular file in that repository, committed (its HEAD blob exists), with
-# the index equal to HEAD and the work tree equal to the index; the marker line and the hash are
-# read from the HEAD blob's bytes. Writing and committing that record is the user's decision
+# the index equal to HEAD and the work-tree bytes hashing to the HEAD blob; the marker line and the
+# hash are read from the HEAD blob's bytes. Writing and committing that record is the user's decision
 # (lead decision Q6); building this code is not.
 
 function(refuse why)
@@ -51,8 +51,13 @@ if(NOT in_head)
     refuse("'${REL}' is not committed")
 endif()
 git_ok(index_clean diff --cached --quiet HEAD -- "${REL}")
-git_ok(tree_clean diff --quiet -- "${REL}")
-if(NOT index_clean OR NOT tree_clean)
+# The work-tree bytes are hashed directly: git diff skips a file marked assume-unchanged or
+# skip-worktree (Codex code review), so it cannot vouch for the file the build reads.
+execute_process(COMMAND git rev-parse "HEAD:${REL}" WORKING_DIRECTORY ${TOP}
+                OUTPUT_VARIABLE HEAD_ID OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git hash-object --no-filters -- "${ABS}" WORKING_DIRECTORY ${TOP}
+                OUTPUT_VARIABLE TREE_ID OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+if(NOT index_clean OR NOT HEAD_ID OR NOT TREE_ID STREQUAL HEAD_ID)
     refuse("'${REL}' differs from its committed version")
 endif()
 execute_process(COMMAND git show "HEAD:${REL}" WORKING_DIRECTORY ${TOP} OUTPUT_VARIABLE BLOB

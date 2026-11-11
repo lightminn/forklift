@@ -403,6 +403,8 @@ def test_output_build_rechecks_the_record_at_every_build(record_repo, tmp_path):
     ("staged_only", "is not committed"),
     ("index_differs", "differs from its committed version"),
     ("tree_differs", "differs from its committed version"),
+    ("assume_unchanged", "differs from its committed version"),
+    ("skip_worktree", "differs from its committed version"),
     ("symlink", "symbolic link"),
     ("no_marker", "no marker line"),
     ("outside", "outside the repository"),
@@ -435,6 +437,13 @@ def test_output_build_refuses_a_bad_record(record_repo, tmp_path, case, message)
         a = rec.read_text()
         rec.write_text(a + "b\n")
         restore.append(lambda: rec.write_text(a))
+    elif case in ("assume_unchanged", "skip_worktree"):  # git diff skips the file (Codex code review)
+        flag = "--" + case.replace("_", "-")
+        rec = repo / path
+        a = rec.read_text()
+        _git(repo, "update-index", flag, path)
+        rec.write_text(a.replace("confirmed-by=test fixture", "confirmed-by=someone else"))
+        restore.append(lambda: (rec.write_text(a), _git(repo, "update-index", "--no-" + flag[2:], path)))
     elif case == "symlink":
         path = "records/link.md"
         (repo / path).symlink_to(repo / "records" / "ipropi.md")
