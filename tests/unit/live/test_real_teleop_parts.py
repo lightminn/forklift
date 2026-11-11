@@ -236,15 +236,30 @@ def _with(sample, **kw):
     return Sample(kw.pop("host_ns", sample.host_ns), McuState(**{**sample.state.__dict__, **kw}))
 
 
+def primed(t0_ns, mcu0_us, *, boot=7):
+    """A DelayBound past its session check: frames 60000 and 60010 written, two STATEs stepping 60000 -> 60010
+    (MCU times mcu0_us, mcu0_us + 1; received at t0_ns + 1, + 2)."""
+    db = rt.DelayBound()
+    db.written(60000, t0_ns)
+    db.written(60010, t0_ns)
+    db.expect_step(60000, 60010)
+    base = st(0, 0, 0, boot=boot)
+    db.add(_with(base, host_ns=t0_ns + 1, mcu_time_us=mcu0_us, last_rx_seq=60000))
+    db.add(_with(base, host_ns=t0_ns + 2, mcu_time_us=mcu0_us + 1, last_rx_seq=60010))
+    assert db.verified
+    return db
+
+
 def test_the_state_after_an_acknowledgement_is_bounded_by_the_round_trip():
     """Frame 7 written; the STATE whose last_rx_seq moves to 7 may have been measured before 7 was handled -- the
     next STATE was not: its delay is at most its receipt minus the write."""
-    db = rt.DelayBound()
+    db = primed(NOW - 100_000_000, 10_000)
     db.written(7, NOW - 30_000_000)
     db.add(_with(st(80, 0, 0), host_ns=NOW - 20_000_000, last_rx_seq=6))
     ack = _with(st(90, 0, 0), host_ns=NOW - 10_000_000, last_rx_seq=7)
     db.add(ack)
-    assert db.delay_s(ack) is None  # the acknowledging STATE itself is no anchor
+    before_nxt = db.delay_s(ack)  # only the primer's looser anchor reaches it (the acknowledging STATE is no anchor)
+    assert before_nxt is not None and before_nxt > 0.030
     nxt = _with(st(100, 0, 0), host_ns=NOW, last_rx_seq=7)
     db.add(nxt)
     assert db.delay_s(nxt) == pytest.approx(0.030)
@@ -280,7 +295,7 @@ def test_an_earlier_sessions_late_states_are_not_this_sessions_acknowledgements(
 def test_a_cycle_that_ran_long_after_its_measurement_cannot_shrink_the_bound():
     """Codex re-review 5 P2: the acknowledging cycle measured 4.1 ms before its STATE; the bound comes from the next
     STATE, measured after the frame was handled, whatever the cycle took."""
-    db = rt.DelayBound()
+    db = primed(NOW - 100_000_000, 10_000)
     w_ = NOW - 2_000_000
     db.written(9, w_)
     db.add(_with(st(80, 0, 0), host_ns=NOW - 12_000_000, last_rx_seq=8))
@@ -297,7 +312,7 @@ def test_the_drift_allowance_runs_on_the_measurement_interval():
     """Codex re-review 4 P2 (re-review 5 P3: with a real, positive delay). The anchor measured at host 0 and received
     1.000 s later; j measured 1.910 s later on the host (the MCU clock 100 ppm fast), received 1 ms after -- the delay
     fell from 1 s to 1 ms. The receipt interval (0.911 s) would undercount the drift; the MCU interval does not."""
-    db = rt.DelayBound()
+    db = primed(-1_000, -100)
     db.written(5, 0)
     db.add(_with(st(0, 0, 0), host_ns=1, mcu_time_us=0, last_rx_seq=4))
     db.add(_with(st(0, 0, 0), host_ns=2, mcu_time_us=1, last_rx_seq=5))  # acknowledges 5 (written at 0)
@@ -324,13 +339,14 @@ def _true_world(drift_ppm, delay_fn, seconds=1200.0):
     names the newest frame taken by its measurement. Returns (bound, true delay) pairs along the way."""
     db = rt.DelayBound()
     drift = drift_ppm * 1e-6
-    frames, seq, next_write, t_m, out = [], 0, 0, 0, []
+    frames, seq, next_write, t_m, out = [], 30_000, 0, 0, []
+    db.expect_step(30_000, 30_500)  # the first two frames are 500 apart (the session check)
     k = 0
     while t_m < seconds * 1e9:
         while next_write <= t_m:
             frames.append((seq, next_write, next_write + 1_000_000))
             db.written(seq, next_write)
-            seq = (seq + 1) & 0xFFFF
+            seq = (seq + (500 if seq == 30_000 else 1)) & 0xFFFF
             next_write += 20_000_000
         taken = [f for f in frames if f[2] <= t_m]
         named = taken[-1][0] if taken else 0xFFFF
@@ -351,7 +367,21 @@ def _true_world(drift_ppm, delay_fn, seconds=1200.0):
 def test_the_bound_never_falls_below_the_true_delay(drift_ppm):
     """Codex re-review 3 P1: a fast (or slow) MCU clock and a delay growing from 1 to 61 ms over 1200 s."""
     pairs = _true_world(drift_ppm, lambda t: 1_000_000 + 60_000_000 * t / 1.2e12)
-    assert pairs[0][0] is None  # before the first frame is acknowledged: no bound (no safety speed), the safe side
-    rest = pairs[1:]
+    assert pairs[0][0] is None  # before the session check passes: no bound (no safety speed), the safe side
+    rest = [p for p in pairs[1:] if p[0] is not None or False]
+    assert len(rest) >= len(pairs) - 3  # the check passes within the first few frames
     assert len(rest) > 100 and all(b is not None and b >= true - 1e-9 for b, true in rest), rest[-3:]
     assert pairs[-1][0] < pairs[-1][1] + 0.025  # and not uselessly loose: about a STATE period plus the link
+
+
+def test_a_colliding_start_seq_never_passes_the_session_check():
+    """Codex re-review 6 P1: this session starts at 40000; an earlier session's late STATEs step 39999 -> 40000 ->
+    40000 -- by one, never by this session's random step -- so no anchor and no bound."""
+    db = rt.DelayBound()
+    db.written(40000, NOW - 5_000_000)
+    db.written(52345, NOW - 4_000_000)  # the check's second frame, a random distance after
+    db.expect_step(40000, 52345)
+    for k, seq in enumerate((39999, 40000, 40000, 40000)):  # 130 ms late STATEs of the earlier session
+        db.add(_with(st(100 + 10 * k, 0, 0), host_ns=NOW + k * 10_000_000, last_rx_seq=seq))
+    assert not db.verified
+    assert db.delay_s(_with(st(140, 0, 0), host_ns=NOW + 40_000_000, last_rx_seq=40000)) is None

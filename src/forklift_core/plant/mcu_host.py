@@ -143,6 +143,12 @@ class McuLinkHost:
     def ready(self) -> bool:
         return self._auth == _READY
 
+    def skip_seq(self, n: int) -> int:
+        """Advance the next frame's seq by ``n`` (mod 2^16) and return it: the teleop bridge's session check writes two
+        frames a random distance apart, a step no earlier session's consecutive seqs can show."""
+        self._seq = (self._seq + int(n)) & 0xFFFF
+        return self._seq
+
     @property
     def arming(self) -> bool:
         """An operator ARM asked for and not yet answered (no authorization yet, none revoked)."""
