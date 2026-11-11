@@ -44,9 +44,10 @@ class EncoderSpeedParams:
     max_age_s: float  # the newest STATE older than this (host receipt) is too old for a safety speed
     dt_min_s: float  # the two STATEs differenced are at least this far apart (MCU time) ...
     dt_max_s: float  # ... and at most this
+    mcu_cycle_s: float = 0.001  # the firmware's control period: a measurement precedes a frame's handling by at most it
 
     def __post_init__(self) -> None:
-        for name in ("track_m", "axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"):
+        for name in ("track_m", "axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s", "mcu_cycle_s"):
             v = getattr(self, name)
             if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} must be a positive finite number")
@@ -152,47 +153,62 @@ class DelayBound:
     """An upper bound on each STATE's delay from its measurement to its receipt, by round trip (design 2; Codex
     re-review 3 P1: no offset baseline survives a clock rate difference -- a fast MCU clock hid a growing delay).
 
-    A STATE that names frame ``k`` (``last_rx_seq``) was measured after the MCU took ``k``, so after ``k`` was
-    written: its delay is at most ``receipt - write of k`` -- whatever either clock's rate. That STATE is an anchor
-    ``(offset, receipt, bound)`` with ``offset = receipt - MCU time``. Another STATE ``j`` of the same boot is bounded
-    from an anchor ``a`` by ``bound_a + (offset_j - offset_a) + drift_max |receipt_j - receipt_a|`` (premise A3, the
-    clocks' rate difference, over at most ``anchor_max_age_s``); the smallest over the anchors counts. No anchor that
-    recent: no bound, no safety speed. Frame seqs are 16-bit: a write is forgotten after ``anchor_max_age_s``, long
-    before a seq comes round (65536 frames at 50 Hz is 22 min)."""
+    The firmware's cycle reads its inputs, then handles the link's frames, then sends a STATE (``app.c``). A STATE
+    whose ``last_rx_seq`` moved to ``k`` -- the previous accepted STATE of the boot named another seq, so ``k`` was
+    taken between the two (Codex re-review 4 P1: the initial seq 0 is no acknowledgement) -- was measured at most one
+    cycle's work before ``k`` was handled (re-review 4 P2), and ``k`` was handled after it was written. Its delay is
+    therefore at most ``receipt - write of k + mcu_cycle_s`` whatever either clock's rate: an anchor
+    ``(offset, receipt, MCU time, bound)`` with ``offset = receipt - MCU time``. A cycle that overran (the count
+    moved) is not used. Another STATE ``j`` of the same boot is bounded from an anchor ``a`` by
+    ``bound_a + (offset_j - offset_a) + drift |MCU_j - MCU_a| / (1 - drift)`` -- the measurement interval taken from
+    the MCU clock, never the receipt interval (re-review 4 P2) -- over at most ``anchor_max_age_s`` (premise A3); the
+    smallest counts. No recent anchor: no bound, no safety speed. A write is forgotten after ``anchor_max_age_s``,
+    long before a 16-bit seq comes round (22 min at 50 Hz)."""
 
-    def __init__(self, *, anchor_max_age_s: float = 2.0, drift_max: float = 100e-6, anchors_max: int = 32) -> None:
+    def __init__(self, *, mcu_cycle_s: float = 0.001, anchor_max_age_s: float = 2.0, drift_max: float = 100e-6,
+                 anchors_max: int = 32) -> None:
+        self.mcu_cycle_ns = int(mcu_cycle_s * 1e9)
         self.anchor_max_age_ns = int(anchor_max_age_s * 1e9)
         self.drift_max = float(drift_max)
         self.anchors_max = int(anchors_max)
         self._writes: dict[int, int] = {}  # seq -> write host ns
-        self._anchors: list[tuple[int, int, int, int]] = []  # (offset_ns, receipt_ns, bound_ns, boot)
+        self._anchors: list[tuple[int, int, int, int, int]] = []  # (offset_ns, receipt_ns, mcu_ns, bound_ns, boot)
+        self._prev: tuple[int, int, int] | None = None  # the previous accepted STATE: (boot, last_rx_seq, overruns)
 
     def written(self, seq: int, write_ns: int) -> None:
         self._writes[int(seq) & 0xFFFF] = int(write_ns)
-        cut = write_ns - self.anchor_max_age_ns
         if len(self._writes) > 4 * self.anchors_max:
+            cut = write_ns - self.anchor_max_age_ns
             self._writes = {q: t for q, t in self._writes.items() if t >= cut}
 
     def add(self, sample: Sample) -> None:
-        seq = int(sample.state.last_rx_seq) & 0xFFFF
+        st = sample.state
+        seq = int(st.last_rx_seq) & 0xFFFF
+        prev, self._prev = self._prev, (st.boot_id, seq, int(st.cycle_overruns))
+        if prev is None or prev[0] != st.boot_id:
+            self._anchors = [a for a in self._anchors if a[4] == st.boot_id]
+            return  # nothing seen before on this boot: no acknowledgement can be told from the initial seq
+        if prev[1] == seq or prev[2] != int(st.cycle_overruns):
+            return  # no new acknowledgement, or a cycle overran in between
         w = self._writes.get(seq)
         rx = sample.host_ns
         if w is None or rx < w or rx - w > self.anchor_max_age_ns:
             return
-        # one anchor per frame: the first STATE naming it gives the tightest bound (later ones only add receipt time)
-        del self._writes[seq]
-        off = rx - sample.state.mcu_time_us * 1000
-        self._anchors.append((off, rx, rx - w, sample.state.boot_id))
+        del self._writes[seq]  # one anchor per frame: the first STATE naming it
+        mcu_ns = st.mcu_time_us * 1000
+        self._anchors.append((rx - mcu_ns, rx, mcu_ns, rx - w + self.mcu_cycle_ns, st.boot_id))
         cut = rx - self.anchor_max_age_ns
-        self._anchors = [a for a in self._anchors if a[1] >= cut and a[3] == sample.state.boot_id][-self.anchors_max:]
+        self._anchors = [a for a in self._anchors if a[1] >= cut and a[4] == st.boot_id][-self.anchors_max:]
 
     def delay_s(self, sample: Sample) -> float | None:
-        off = sample.host_ns - sample.state.mcu_time_us * 1000
+        mcu_ns = sample.state.mcu_time_us * 1000
+        off = sample.host_ns - mcu_ns
+        k = self.drift_max / (1.0 - self.drift_max)
         best = None
-        for a_off, a_rx, a_b, boot in self._anchors:
+        for a_off, a_rx, a_mcu, a_b, boot in self._anchors:
             if boot != sample.state.boot_id or abs(sample.host_ns - a_rx) > self.anchor_max_age_ns:
                 continue
-            b = a_b + (off - a_off) + self.drift_max * abs(sample.host_ns - a_rx)
+            b = a_b + (off - a_off) + k * abs(mcu_ns - a_mcu)
             best = b if best is None else min(best, b)
         return None if best is None else max(0.0, best / 1e9)
 
@@ -327,7 +343,7 @@ def load_bridge_params(path: str | Path, vehicle) -> EncoderSpeedParams:
     if not isinstance(data, dict) or set(data) != {"schema", "encoder_speed"} or data["schema"] != SCHEMA:
         raise ValueError(f"teleop bridge config must hold schema {SCHEMA!r} and encoder_speed only")
     es = data["encoder_speed"]
-    keys = {"axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"}
+    keys = {"axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s", "mcu_cycle_s"}
     if not isinstance(es, dict) or set(es) != keys | {"provenance"}:
         raise ValueError(f"encoder_speed must hold {sorted(keys)} and provenance")
     prov = es["provenance"]
@@ -364,7 +380,7 @@ class TeleopBridge:
         self.cycle_s = float(cycle_s)
         self.samples: list[Sample] = []
         self.samples_max = int(samples_max)
-        self.delays = DelayBound()
+        self.delays = DelayBound(mcu_cycle_s=params.mcu_cycle_s)
         self.last_ping_ns: int | None = None
         self.phase = IDLE
         self.bound_gen: int | None = None  # the arbiter arm_gen the MCU authorization belongs to
@@ -541,6 +557,7 @@ class TeleopBridge:
                     rec["arm"] = g
 
     PING_NS = 500_000_000
+    PING_FAST_NS = 100_000_000
 
     def _ping(self, now_ns: int, rec: dict) -> None:
         """While the MCU is not armed and nothing else goes out, a DISARM every 0.5 s: it changes nothing on a
@@ -551,7 +568,11 @@ class TeleopBridge:
             return
         if st is None or st.mode == Mode.STOPPING:
             return
-        if self.last_ping_ns is not None and now_ns - self.last_ping_ns < self.PING_NS:
+        # faster while there is no delay bound at all (start, a new boot): the first acknowledgement needs a seq that
+        # moves, and seq 0 cannot be told from the MCU's initial value
+        every = self.PING_NS if self.samples and self.delays.delay_s(self.samples[-1]) is not None \
+            else self.PING_FAST_NS
+        if self.last_ping_ns is not None and now_ns - self.last_ping_ns < every:
             return
         h.request_disarm(now_ns)
         self.last_ping_ns = now_ns
