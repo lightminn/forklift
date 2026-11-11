@@ -68,7 +68,7 @@ MCU 는 받은 시각만으로 명령의 나이를 알 수 없다. 전송로에 
 
 ### 3.2 `ARM`, `DISARM`, `CLEAR_FAULTS`
 
-`ARM` 거부 이유는 이 순서로 정한다: `boot_id` 다름 → `boot_mismatch`, 신선도 실패 → `stale_echo`, 모드가 `BOOT` → `driver_not_ready`, `STOPPING` → `stopping`, `ARMED` → `not_disarmed`, `FAULT`·`ESTOP` → `latched`, 비상정지 입력 → `estop_active`, 조향·승강 측정이 무효이거나 범위 밖이거나 전류 측정이 무효 → `sensor_invalid`.
+`ARM` 거부 이유는 이 순서로 정한다: `boot_id` 다름 → `boot_mismatch`, 신선도 실패 → `stale_echo`, 모드가 `BOOT` → `driver_not_ready`, `STOPPING` → `stopping`, `ARMED` → `not_disarmed`, `FAULT`·`ESTOP` → `latched`, 비상정지 입력 → `estop_active`, 비상정지 핀이 없는 출력 잠금 아닌 정상 빌드 → `estop_unwired`(v2), 조향·승강 측정이 무효이거나 범위 밖이거나 전류 측정이 무효 → `sensor_invalid`(시운전 빌드는 3.4 의 예외).
 
 - `ARM`: 위 검사를 모두 통과하면 `arm_gen` 을 올리고, 바퀴 목표 0, **조향·승강 목표 = 지금 측정값**, 적분 초기화, 마감 = `echo + command_timeout_ms`(뒤따르는 `DRIVE` 가 없으면 `STOPPING` 을 거쳐 `DISARMED`)로 `ARMED` 가 된다. 그 뒤 **두 바퀴 목표가 모두 0 인 `DRIVE` 를 먼저 받아야** 0 이 아닌 바퀴 목표를 받아들인다(`zero_first`).
 - `DISARM`: `ARMED`·`STOPPING` 이면 바로 `DISARMED`(출력은 채널별 정지 상태). 다른 모드에서는 아무 것도 바꾸지 않는다.
@@ -87,9 +87,13 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 | `boot_id` | u32 | 지금 부팅 ID |
 | `echo_mcu_time_us` | u64 | 2절 |
 
-- 받아들이는 순서와 이유는 `DRIVE` 와 같다(형식 → `boot_id` → 모드 → `arm_gen` → 마감 → `seq` → 무장 직후 첫 명령은 듀티 0 `zero_first`).
+- 받아들이는 순서: 프레임 검사(version·길이·CRC) 뒤 **맨 앞에 `wrong_build`**(정상 빌드의 `COMMISSION`, 시운전 빌드의 `DRIVE` 는 내용과 무관하게 14). 그다음은 `DRIVE` 와 같다(형식 → `boot_id` → 모드 → `arm_gen` → 마감 → `seq` → 무장 직후 첫 명령은 듀티 0 `zero_first`). M·H 를 고른 명령은 그 축 측정이 무효면 13 `sensor_invalid` 로 거부한다.
 - 한 번에 한 축만 움직이고, 나머지 축은 정지 상태다.
-- 0 이 아닌 듀티를 시운전 시간 상한(빌드 상수, 제안 2 s)보다 오래 연속으로 받으면 `STOPPING` → `DISARMED` 로 간다. 그리고 `fault_flags.commission_time_limit` 을 켠다. 이 비트는 다음 `ARM` 까지 남는다.
+- **시간 상한은 실제 적용 출력으로 잰다**: 네 축의 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돌고, 모두 0 인 주기가 한 번 지나야 지워진다(같은 주기에 `COMMISSION`(0)→`COMMISSION`(비영)을 보내도 지워지지 않는다). 시계가 상한(빌드 상수, 제안 2 s)을 넘으면 `STOPPING` → `DISARMED` 로 가고 `fault_flags.commission_time_limit` 을 켠다. 이 비트는 다음 `ARM` 까지 남는다.
+- **시운전 빌드의 판정 예외**(S3 는 극성·범위를 처음 찾는 단계다):
+  - `encoder_stuck_*`·`encoder_polarity_*`(18–21)는 비트만 래치하고 `FAULT` 로 가지 않는다. 다음 `ARM` 에서 지운다. 그래서 이 비트가 켜진 채 `ARMED` 일 수 있다(시운전 도구가 표시한다).
+  - 고르지 않은 조향·승강 축의 측정 무효·범위 밖은 표시만 하고 `ARM` 을 막지 않는다(승강 KTH 가 없어도 바퀴 시운전이 된다). 고른 축이 출력 중 무효·범위 밖이 되면 결함이다.
+  - 전류·nFAULT·과전류·비상정지·`encoder_gap`·`encoder_jump_*`·주기 지연은 정상 빌드와 같다.
 
 ### 3.3 `STATE` (MCU 가 `state_period_ms` 마다 보냄)
 
@@ -118,6 +122,11 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 `fault_flags` 비트: 0 `estop_input`, 1 `command_timeout`, 2 `driver_fault_l`, 3 `driver_fault_r`, 4 `driver_fault_m`, 5 `driver_fault_h`, 6 `steer_sensor_invalid`, 7 `lift_sensor_invalid`, 8 `overcurrent_l`, 9 `overcurrent_r`, 10 `overcurrent_m`, 11 `overcurrent_h`, 12 `driver_not_ready`, 13 `steer_out_of_range`, 14 `lift_out_of_range`, 15 `cycle_overrun`, 16 `current_sense_invalid`, 17 `encoder_gap`(v2, 두 바퀴 공통: 같은 주기에 읽는다), 18 `encoder_stuck_l`, 19 `encoder_stuck_r`, 20 `encoder_polarity_l`, 21 `encoder_polarity_r`, 22 `encoder_jump_l`, 23 `encoder_jump_r`, 24 `commission_time_limit`(v2, 3.4). 엔코더 비트 18–23 은 뒤 바퀴 L·R 에만 적용하고, 조향·승강(KTH 절대각)은 6·7·13·14 를 쓴다. 나머지(25–31)는 0 이어야 하며, 켜진 미정의 비트는 받는 쪽이 오류로 처리한다.
 
+**호스트의 결함 해석(v2)**:
+- 비트 17·22·23 이 켜져 있는 동안은 그 바퀴(17 은 두 바퀴) 카운트의 연속성이 끊긴 것으로 본다. 펌웨어는 그 표본의 차분만 버리고 누적 카운트는 이어 간다. 끊긴 횟수는 알 수 없다.
+- 출력이 잠긴 HIL 아닌 빌드는 stuck·polarity 를 판정하지 않는다(바퀴가 안 도는 것이 정상).
+- 세션 중 `boot_id` 가 바뀌면 `reset_cause` 가 0(전원·BOR)이어도 모터 기동 브라운아웃일 수 있으니 경고로 다룬다.
+
 **빌드 비트를 읽는 호스트 규칙(v2)**:
 - 실행기(텔레옵·자율)는 `commission_build` 면 연결하지 않는다.
 - **양방향 차단(총괄 조건 2026-11-11)**: 실차 실행기는 `hil_plant` 보드에 연결하지 않는다. HIL 실행기는 `hil_plant` 가 아닌 보드에 연결하지 않는다.
@@ -130,6 +139,7 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 - `ARMED` 에서 마감이 지나면 `STOPPING`: 바퀴 목표 0·조향과 승강은 그 순간 측정값 유지로 `stop_grace_ms` 동안 **출력을 켠 채** 제어해 세운 뒤 `DISARMED`(출력은 채널별 정지 상태). `command_timeout` 비트는 다음 `ARM` 까지 남는다. `STOPPING` 중 `DRIVE`·`ARM` 은 `stopping` 으로 거부한다 — 늦게 온 명령이 정지를 취소하지 못한다. `STOPPING` 중 비상정지·결함이 생기면 그쪽이 즉시 이긴다.
 - MCU 는 주기마다 **메시지를 처리하기 전에** 마감을 먼저 판정한다. 마감 시각과 같은 시각은 아직 유효하다.
+- v2: **시운전 빌드의 `STOPPING`**(만료·시운전 시간 상한)은 정상 빌드의 속도 0 제어가 아니다. 그 주기에 모든 축 듀티를 0 으로 두는 전기 제동이고, 출력은 켠 채 `stop_grace_ms` 동안 유지한다. 바퀴 듀티 변화율 제한은 크기가 커지는 쪽에만 걸리고, 줄어드는 쪽은 즉시다(정지 예산 보호).
 - 호스트는 `STATE` 를 받은 **호스트 단조 시각**으로 신선도를 판단한다(`mcu_time_us` 와 빼지 않는다). 다만 `valid_after_echo_ms` 계산에는 그 `STATE` 를 받은 호스트 시각을 쓴다.
 
 ## 5. 전송량
