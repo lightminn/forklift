@@ -243,12 +243,16 @@ def conclusions(rows: dict, equivalence: dict, determinism: dict) -> dict:
         c = cell.get("class")
         if c == "dangerous" or cell.get("attribution"):
             continue  # dangerous listed above; a baseline-failed aisle seed reads safety only (3.1, before 4.4)
+        # 4.4 as registered: within the 50 ms band an observed end right after P1, then its failures, then its
+        # degradation; the 100 ms / jitter arms' observed ends and failures after the whole band; their degradation
+        # is reported, not listed (only S3 S6 U3 U6 C6 must be tolerated)
+        band = r["arm"] in MUST_TOLERATE
         if c == "observed_end":
-            prio = 2
+            prio = 2 if band else 4
         elif c in ("safe_failure", "underexposed"):  # a completed run without a baseline to compare is no defect
-            prio = 3 if r["arm"] in MUST_TOLERATE else 4
-        elif c == "operating_degraded":
-            prio = 3.5 if r["arm"] in MUST_TOLERATE else 4.5
+            prio = 3 if band else 5
+        elif c == "operating_degraded" and band:
+            prio = 3.5
         else:
             continue
         defects.append({"run": name, "scene": r["scene"], "seed": r["seed"], "arm": r["arm"], "class": c,
