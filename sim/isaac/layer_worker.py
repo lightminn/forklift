@@ -98,11 +98,15 @@ class LayerWorkerFailure(RuntimeError):
 
 class LayerWorker:
     def __init__(self, layer, mode: str, k: int, *, clock=time.perf_counter, timeout_s: float = 0.5,
-                 on_install=None, tick_fn=None, cpus=None):
+                 on_install=None, tick_fn=None, cpus=None, k_range=(1, 11), k_fn=None):
+        """``k_range``/``k_fn``: the latency test's batch layer (docs/plans/2026-11-11-latency-tolerance.md 2.2) --
+        0..12, the delay drawn per job by ``k_fn``; k = 0 installs inside ``submit`` (delay mode only)."""
         if mode not in ("delay", "thread"):
             raise ValueError(f"layer worker mode {mode!r}: delay or thread")
-        if not 1 <= int(k) <= 11:
-            raise ValueError(f"layer worker k {k}: 1..11 (below the scan period of 12 ticks)")
+        lo, hi = k_range
+        if not lo <= int(k) <= hi or (lo < 1 and mode != "delay"):
+            raise ValueError(f"layer worker k {k}: {lo}..{hi}")
+        self.k_range, self.k_fn = (int(lo), int(hi)), k_fn
         self.layer, self.mode, self.k = layer, mode, int(k)
         self.clock, self.timeout_s, self.on_install = clock, float(timeout_s), on_install
         self.tick_fn = tick_fn  # the physics counter a barrier install is recorded at (D4: its actual tick)
@@ -133,14 +137,19 @@ class LayerWorker:
             raise LayerWorkerFailure(f"layer_worker_failed: submit after {self.failed}")
         if self._job is not None:
             self.install_now("submit")  # never two pending (a scan inside a capture's steps)
+        k = int(self.k_fn()) if self.k_fn is not None else self.k
+        if not self.k_range[0] <= k <= self.k_range[1]:
+            raise ValueError(f"layer worker job k {k}: {self.k_range[0]}..{self.k_range[1]}")
         self._job = job
-        self._info = {"scan_tick": int(scan_tick), "due_tick": int(scan_tick) + self.k, "submit_t": self.clock(),
-                      **(extra or {})}
+        self._info = {"scan_tick": int(scan_tick), "due_tick": int(scan_tick) + k, "submit_t": self.clock(),
+                      **({"k": k} if self.k_fn is not None or self.k_range != (1, 11) else {}), **(extra or {})}
         self._slack.append(self._info)
         self._result, self._error = None, None
         self._done.clear()
         if self.mode == "delay":
             self._run()
+            if k == 0:
+                self.install_now("immediate", tick=int(scan_tick))
         else:
             self._go.set()
 
@@ -230,6 +239,10 @@ class LayerWorker:
             self._go.wait()
             self._go.clear()
             self._run()
+
+    def pending_info(self) -> dict | None:
+        """The pending job's record (the scan's tick, its due tick, ...), or None."""
+        return None if self._job is None else dict(self._info)
 
     def summary(self) -> dict:
         reasons: dict = {}

@@ -87,6 +87,18 @@ def _tracker_ordinals(state: dict) -> dict:
     return state
 
 
+# --ignore-injection (the latency test's equivalence check, docs/plans/2026-11-11-latency-tolerance.md 2.3): the
+# injection's own records and the options themselves, nothing else
+INJECTION_KEYS = {"latency_injection", "layer_worker", "layer_worker_failure"}
+INJECTION_ARGUMENTS = {"latency_slam", "latency_layer", "latency_seed", "latency_plan_ms"}
+INJECTION_FILES = {"layer_worker.json"}
+IGNORE_INJECTION = False
+
+
+def _injection_key(here: str, k: str) -> bool:
+    return IGNORE_INJECTION and (here in INJECTION_KEYS or (here.endswith("arguments." + k) and k in INJECTION_ARGUMENTS))
+
+
 def normalise(value, roots: tuple, path: str = ""):
     """The comparable form of a JSON value: excluded keys dropped, run paths and snapshot names replaced."""
     if isinstance(value, dict):
@@ -97,7 +109,8 @@ def normalise(value, roots: tuple, path: str = ""):
             k = str(key)
             here = f"{path}.{k}" if path else k
             stamp = k in STAMP_KEYS and isinstance(sub, (int, float)) and not isinstance(sub, bool)
-            if WALL_KEY.search(k) or k in IDENTITY_KEYS or stamp or here == "deterministic.diagnostics":
+            if (WALL_KEY.search(k) or k in IDENTITY_KEYS or stamp or here == "deterministic.diagnostics"
+                    or _injection_key(here, k)):
                 continue
             out[k] = normalise(sub, roots, here)
         return out
@@ -142,6 +155,8 @@ def _items(run: Path) -> dict:
     for path in sorted(p for p in run.rglob("*") if p.is_file()):
         rel = path.relative_to(run).as_posix()
         if path.suffix in SKIP_SUFFIXES or path.name in SKIP_NAMES:
+            continue
+        if IGNORE_INJECTION and path.name in INJECTION_FILES:
             continue
         parts = rel.split("/")
         if path.name == "manifest.json" and len(parts) >= 2 and parts[-2] == "spool":
@@ -295,7 +310,12 @@ def main(argv=None) -> int:
     ap.add_argument("run_a", type=Path)
     ap.add_argument("run_b", type=Path)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--ignore-injection", action="store_true",
+                    help="the latency test's equivalence check: leave out the injection's records (latency_injection, "
+                         "layer_worker, layer_worker.json) and its four options in the arguments")
     args = ap.parse_args(argv)
+    global IGNORE_INJECTION
+    IGNORE_INJECTION = bool(args.ignore_injection)
     out = compare(args.run_a, args.run_b)
     if args.json is not None:
         args.json.write_text(json.dumps(out, indent=1) + "\n")

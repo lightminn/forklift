@@ -1403,6 +1403,22 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--layer-worker-timeout-s", type=float, default=0.5,
                         help="real-time plan 5.28 D6: a worker job not done this long after its install began ends the "
                              "session")
+    # The latency-tolerance test (docs/plans/2026-11-11-latency-tolerance.md): test-only injections, off by default.
+    parser.add_argument("--latency-slam", default="off",
+                        help="latency test A (batch only): each lockstep SLAM reply delivered N physics ticks after its "
+                             "scan (ticks:N, N >= 0) or 0..M ticks drawn per reply (jitter:M), never before the one "
+                             "ahead; off (default) delivers at once")
+    parser.add_argument("--latency-layer", default="off",
+                        help="latency test A (batch only): each obstacle-layer refresh computed at its scan and installed "
+                             "k ticks later or at an earlier barrier -- undeclared:k (the stopping model and the FREE "
+                             "use age as without it), declared:k (both take k/120 s) or jitter:M (k drawn 0..M per "
+                             "job, undeclared); k 0..12; off (default) refreshes in place")
+    parser.add_argument("--latency-seed", type=int, default=None,
+                        help="latency test A: the jitter streams' seed (default: --seed); SLAM and the layer draw from "
+                             "separate streams of it")
+    parser.add_argument("--latency-plan-ms", type=float, default=0.0,
+                        help="latency test B (live only): each planning worker answer held this long after it arrived "
+                             "(0, default: no hold)")
     parser.add_argument("--live-test-step-delay-ms", type=float, default=0.0,
                         help="M-c tests only: extra wall time per physics step (the slow-pacing test)")
     parser.add_argument("--live-test-far-zone-offset-m", type=float, default=None,
@@ -1921,6 +1937,31 @@ def arguments() -> argparse.Namespace:
         if args.layer_worker == "thread" and (os.environ.get("FORKLIFT_KERNELS_DUAL") or os.environ.get("FORKLIFT_PERF_DUMP")):
             parser.error("--layer-worker thread is not combined with FORKLIFT_KERNELS_DUAL or FORKLIFT_PERF_DUMP (their "
                          "decorators change process-wide state off the main thread)")
+    import latency_injection as latency_module  # the latency test (plan 2026-11-11): parsed here, refused early
+
+    try:  # not kept on args: the arguments record and the near contract see the options as given
+        latency_slam_ = latency_module.parse_slam(args.latency_slam)
+        latency_layer_ = latency_module.parse_layer(args.latency_layer)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if (latency_slam_ or latency_layer_) and args.live:
+        parser.error("--latency-slam / --latency-layer are batch only (latency test A; a live run has its own async paths)")
+    if latency_slam_ and not (args.record_slam and args.slam_feedback is not None):
+        parser.error("--latency-slam needs the SLAM feedback (--record-slam --slam-feedback)")
+    if (latency_slam_ or latency_layer_ or args.latency_plan_ms) and args.record_boundary:
+        parser.error("the latency test's options are not combined with --record-boundary")
+    if latency_layer_:
+        if args.obstacle_layer is None:
+            parser.error("--latency-layer needs --obstacle-layer")
+        if args.layer_worker != "off":
+            parser.error("--latency-layer is not combined with --layer-worker")
+        if args.near_tracking or args.record_boundary:
+            parser.error("--latency-layer is not combined with --near-tracking or --record-boundary")
+    if args.latency_plan_ms:
+        if not args.live:
+            parser.error("--latency-plan-ms is live only (latency test B; a batch run has no planning worker)")
+        if not (math.isfinite(args.latency_plan_ms) and args.latency_plan_ms >= 0):
+            parser.error("--latency-plan-ms must be a finite number >= 0")
     if args.live_capture_dump == "async" and not args.live:
         parser.error("--live-capture-dump async needs --live (a batch run writes its capture files in place)")
     if not args.live and (args.live_test_permit_compare or args.live_test_scan_silence or args.live_test_no_pallet_permit
@@ -4715,6 +4756,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             raise SessionFailure(f"{slam_map_module.MISMATCH}: " + "; ".join(mismatches_))
         state["slam_map"] = {"mode": "localization", "map_id": slam_bundle_.map_id,
                              "bundle": str(args.slam_map_bundle), "confirmed_by_bridge": False}
+    import latency_injection as latency_module
+
+    # The latency test (docs/plans/2026-11-11-latency-tolerance.md): None unless its options are given.
+    latency_slam_spec_ = latency_module.parse_slam(getattr(args, "latency_slam", "off"))
+    latency_layer_ = latency_module.parse_layer(getattr(args, "latency_layer", "off"))
+    latency_marks_ = latency_module.UseMarks() if (latency_slam_spec_ or latency_layer_) else None
+    latency_slam_queue_ = (latency_module.SlamReplyQueue(
+        latency_slam_spec_, args.seed if getattr(args, "latency_seed", None) is None else args.latency_seed)
+        if latency_slam_spec_ else None)
+    # the truth speed over 0.05 m/s at the last physics step, and the stand that runs up to it (the latency test's
+    # stop-vs-end record, plan 4.2: the requested and applied speeds zero and the truth speed under 0.05 m/s)
+    latency_box_ = {"moving": False, "stand_since": None, "last_stamp": None,
+                    # the control ticks inside that stand (plan 4.2: the control record unbroken through it)
+                    "stand_ctrl_n": 0, "stand_ctrl_last": None, "stand_ctrl_gap_max": 0.0}
     obstacle = None  # the priority-5 obstacle layer
     if args.obstacle_layer is not None:
         import obstacle_layer as obstacle_module
@@ -4729,10 +4784,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             # evaluation keeps the file's stopping model.
             layer_worker_latency_s_ = (int(args.layer_worker_k) - 1) / 120.0
             layer_config = obstacle_module.worker_config(layer_config, int(args.layer_worker_k))
+        if latency_layer_ is not None and latency_layer_[0] == "declared":
+            # Latency test A, declared (plan 2026-11-11 2.2): the stopping model and the FREE use age take k/120 (the
+            # delay to the first control read); undeclared and jitter keep the file's
+            layer_worker_latency_s_ = latency_layer_[1] / 120.0
+            layer_config = obstacle_module.worker_config(layer_config, latency_layer_[1], added_s=layer_worker_latency_s_)
         age_table = json.loads(Path(layer_config["odometry_age"]).read_text())
         table_problem_ = age_table_problem(age_table, args)
         require(table_problem_ is None, str(table_problem_))
-        obstacle = {
+        obstacle = (latency_module.AppliedWatch if latency_layer_ is not None else dict)({
             "layer": obstacle_module.ObstacleLayer(
                 layer_config,
                 hall=scenario.bounds,
@@ -4763,8 +4823,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             "events_dir": 0,  # the same truth check with the moving direction's shape (stop_arc_hits)
             "unpermitted_dir": [],
             "min_allowed": {},
-        }
-        if getattr(args, "layer_worker", "off") != "off":
+        })
+        if getattr(args, "layer_worker", "off") != "off" or latency_layer_ is not None:
             # Real-time plan 5.28: the scan refresh's worker (live only). The obstacle dict says it is on (the core
             # reads the checked scan times then -- never from the layer, a recording proxy in recorded runs).
             from layer_worker import LayerWorker
@@ -4776,19 +4836,43 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     obstacle["scans"].append(rec_)
                 if "stamp_s" in info_:
                     obstacle["checked_stamp"] = info_["stamp_s"]  # the cusp watch's scan id (plan 5.28 D3)
+                if latency_layer_ is not None:
+                    # Latency test A (plan 2026-11-11 2.2): applied/version describe the installed snapshot -- unless a
+                    # reprojection or another site wrote applied after this job was prepared (that state is newer)
+                    info_["applied_written"] = latency_module.install_applied(obstacle, info_)
+                    if latency_marks_ is not None:
+                        latency_marks_.delivered("layer", info_["scan_tick"], tick=info_["install_tick"])
+                        if info_.get("reason") == "refresh" or not info_["applied_written"]:
+                            # a synchronous refresh replaces it at once (its barrier, a reprojection's): never read
+                            latency_marks_.superseded("layer", info_["scan_tick"])
 
             from layer_worker import affinity_cores, worker_cpus
 
             cpus_ = (worker_cpus(getattr(args, "layer_worker_cpus", "off"), os.sched_getaffinity(0))
                      if args.layer_worker == "thread" else None)
-            obstacle["layer"].worker = LayerWorker(obstacle["layer"], args.layer_worker, args.layer_worker_k,
-                                                   timeout_s=args.layer_worker_timeout_s,
-                                                   on_install=layer_worker_installed_, cpus=cpus_)
+            if latency_layer_ is not None:
+                # Latency test A: computed in place at the scan (delay), installed k ticks later at a physics step's
+                # start (step_world) or at an earlier barrier; k 0..12, drawn per job for jitter
+                latency_seed_ = args.seed if args.latency_seed is None else args.latency_seed
+                obstacle["layer"].worker = LayerWorker(
+                    obstacle["layer"], "delay", latency_layer_[1] if latency_layer_[0] != "jitter" else 0,
+                    timeout_s=args.layer_worker_timeout_s, on_install=layer_worker_installed_,
+                    k_range=(0, latency_module.LAYER_MAX_K),
+                    k_fn=latency_module.layer_k_fn(latency_layer_, latency_seed_) if latency_layer_[0] == "jitter" else None)
+                obstacle["latency_layer"] = True
+            else:
+                obstacle["layer"].worker = LayerWorker(obstacle["layer"], args.layer_worker, args.layer_worker_k,
+                                                       timeout_s=args.layer_worker_timeout_s,
+                                                       on_install=layer_worker_installed_, cpus=cpus_)
             obstacle["layer_worker"] = True
             obstacle["checked_stamp"] = None
-            state["layer_worker"] = {"mode": args.layer_worker, "k": int(args.layer_worker_k),
+            state["layer_worker"] = {"mode": args.layer_worker if latency_layer_ is None else "delay",
+                                     **({"latency_layer": args.latency_layer} if latency_layer_ is not None else {}),
+                                     "k": int(args.layer_worker_k) if latency_layer_ is None else latency_layer_[1],
                                      "latency_added_s": layer_worker_latency_s_,
-                                     "use_age_s": float(layer_config["grid"]["free_use_age_s"]),
+                                     # (an undeclared latency-test layer keeps the file's: no free_use_age_s key)
+                                     "use_age_s": float(layer_config["grid"].get("free_use_age_s",
+                                                                                 layer_config["grid"]["free_max_age_s"])),
                                      "timeout_s": float(args.layer_worker_timeout_s),
                                      "cpus_mode": getattr(args, "layer_worker_cpus", "off"),
                                      "process_affinity": sorted(os.sched_getaffinity(0)),
@@ -5125,6 +5209,25 @@ def drive(S, isaac) -> None:
         _bound["far_live"] = None
     if "far_live" in _bound:
         far_live = _bound["far_live"]
+    if "latency_marks_" not in _bound:  # a setup recorded before the latency test (2026-11-11): all of it off
+        import latency_injection as latency_module_
+
+        _bound.update(latency_module=latency_module_, latency_slam_spec_=None, latency_layer_=None,
+                      latency_marks_=None, latency_slam_queue_=None,
+                      latency_box_={"moving": False, "stand_since": None, "last_stamp": None, "stand_ctrl_n": 0,
+                                    "stand_ctrl_last": None, "stand_ctrl_gap_max": 0.0})
+    if "latency_module" in _bound:
+        latency_module = _bound["latency_module"]
+    if "latency_slam_spec_" in _bound:
+        latency_slam_spec_ = _bound["latency_slam_spec_"]
+    if "latency_layer_" in _bound:
+        latency_layer_ = _bound["latency_layer_"]
+    if "latency_marks_" in _bound:
+        latency_marks_ = _bound["latency_marks_"]
+    if "latency_slam_queue_" in _bound:
+        latency_slam_queue_ = _bound["latency_slam_queue_"]
+    if "latency_box_" in _bound:
+        latency_box_ = _bound["latency_box_"]
     if "session" not in _bound:  # a setup recorded before sessions (2026-10-22)
         _bound["session"] = _bound["session_handles"] = _bound["session_rest"] = None
     if "session" in _bound:
@@ -7519,13 +7622,21 @@ def drive(S, isaac) -> None:
                 current = tuple(float(v) for v in slam_rear(stamp))
             else:
                 odom_rear, correction, current = truth_now, (0.0, 0.0, 0.0), truth_now
-            if correction != obstacle["applied"]:
-                obstacle["version"] += 1
-                obstacle["applied"] = correction
+            if obstacle.get("latency_layer"):
+                # Latency test A (plan 2026-11-11 2.2): applied/version stay the installed snapshot's until this scan's
+                # job is installed; the scan carries its own (a pending job is installed first, as add_scans would)
+                layer.barrier("add_scans")
+                scan_version_ = obstacle["version"] + (1 if correction != obstacle["applied"] else 0)
+                scan_correction_ = correction
+            else:
+                if correction != obstacle["applied"]:
+                    obstacle["version"] += 1
+                    obstacle["applied"] = correction
+                scan_version_, scan_correction_ = obstacle["version"], obstacle["applied"]
             # the correction and version this scan goes into the grid with: the exit-prefix watch places it there
             # (on only -- the call's request stays as every recorded run made it otherwise)
             layer.add_scans(stamp, raw, odom_rear=odom_rear, loaded=loaded_now,
-                            **({"correction": obstacle["applied"], "version": obstacle["version"]}
+                            **({"correction": scan_correction_, "version": scan_version_}
                                if getattr(args, "exit_prefix_exempt", "off") == "on" else {}))
             obstacle["last_stamp"] = float(stamp)
             obstacle["last_raw"] = (raw, np.asarray(base, dtype=float), np.asarray(q, dtype=float))
@@ -7538,13 +7649,18 @@ def drive(S, isaac) -> None:
             if worker_ is not None:
                 # Real-time plan 5.28: prepared here (inputs fixed now), computed in place (delay) or on the worker
                 # (thread), installed at the scan tick + k or an earlier barrier; the scan's record waits for its check.
-                job_ = layer.refresh_prepare(stamp, correction, obstacle["version"], current_pose=current,
+                job_ = layer.refresh_prepare(stamp, correction, scan_version_, current_pose=current,
                                              path_ahead=ahead, loaded=loaded_now, direction=leg_direction, detach=True)
                 record_ = {"stamp_s": float(stamp), "phase": ms.phase,
                            "own_beams": {n: int(np.count_nonzero(r[2])) for n, r in raw.items()},
-                           "cast_wall_s": cast_s, "version": obstacle["version"]}
+                           "cast_wall_s": cast_s, "version": scan_version_}
+                extra_ = {"stamp_s": float(stamp), "record": record_}
+                if obstacle.get("latency_layer"):
+                    extra_.update(correction=scan_correction_, version=scan_version_, writes=obstacle.writes,
+                                  moving=bool(latency_box_["moving"]),
+                                  holding=bool(slam is not None and slam["tracker"].mode == "holding"))
                 worker_.submit(job_, stepper["tick"] - 1,  # the counter moved past this scan's tick already (D4)
-                               extra={"stamp_s": float(stamp), "record": record_})
+                               extra=extra_)
                 record_["total_wall_s"] = time.monotonic() - started  # the main thread's part
                 return
             check = layer.refresh(
@@ -7693,12 +7809,81 @@ def drive(S, isaac) -> None:
                 return False
             return frr.live_observing(core.commands.status, observing_, live.stopped_in_tick)
 
+        def slam_deliver(reply, m_) -> None:
+            """A lockstep SLAM reply applied: the tracker, the start's map check (L4) and the record -- with the scan's
+            own values (``m_``: scan_id, stamp_s, phase, now_base, now_q, odom_base). At once after the exchange, or,
+            with the latency test's --latency-slam, when its queue delivers it (plan 2026-11-11 2.1)."""
+            warming_ = slam["tracker"].mode == "warming_up"
+            slam["tracker"].receive(
+                reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
+            )
+            if slam.get("bundle") is not None and warming_ and slam["tracker"].mode != "warming_up":
+                # L4: the bridge checked the map it runs on and says which; it must be the one this run hashed
+                if getattr(reply, "map_id", None) != slam["bundle"].map_id:
+                    raise SessionFailure(f"slam_map_mismatch: the bridge runs on map {getattr(reply, 'map_id', None)}, "
+                                         f"not {slam['bundle'].map_id}")
+                # The odometry starts at the world start and map = world: the first correction is the identity
+                # within the start tolerance -- a bridge told another start pose would pass its own check there.
+                # B-P2b: the start is the relocalization's estimate (slam_start), never the placed pose (plan 1.2
+                # step 10: the same tolerance and reason, no truth read).
+                offset_ = abs(args.rear_axle_offset_m)
+                start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
+                               slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
+                at_ = compose(tuple(reply.map_from_odom), m_["odom_base"])  # the map pose this reply gives now
+                start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
+                start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
+                if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
+                    raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
+                                         f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
+                state["slam_map"]["confirmed_by_bridge"] = True
+                state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
+                if start_reloc is not None:
+                    # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
+                    # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
+                    truth_yaw_v_, _ = yaw_and_tilt(m_["now_q"])
+                    start_reloc["bootstrap_check"] = {
+                        "scan_id": m_["scan_id"], "stamp_s": m_["stamp_s"], "slam_base": [float(v) for v in at_],
+                        "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), float(truth_yaw_v_)],
+                        "estimate_base": list(start_reloc["estimate"])}
+            truth_yaw, _ = yaw_and_tilt(m_["now_q"])
+            slam["records"].append(
+                {
+                    "scan_id": m_["scan_id"],
+                    "stamp_s": m_["stamp_s"],
+                    "phase": m_["phase"],
+                    "status": reply.status,
+                    "mode": slam["tracker"].mode,
+                    "map_from_odom": list(reply.map_from_odom),
+                    # What control uses (holding keeps an older one).
+                    "applied_map_from_odom": list(slam["tracker"].applied[0])
+                    if slam["tracker"].applied is not None
+                    else None,
+                    "odom_base": list(m_["odom_base"]),
+                    "truth_base": [float(m_["now_base"][0]), float(m_["now_base"][1]), truth_yaw],
+                    "slam_wall_s": reply.slam_wall_s,
+                }
+            )
+
+        def latency_slam_drain(tick_: int) -> None:
+            """Latency test A: the queued replies due by this physics tick, delivered in order."""
+            holding_ = slam["tracker"].mode == "holding"
+            for reply_, mm_ in latency_slam_queue_.drain(tick_, moving=latency_box_["moving"], holding=holding_):
+                slam_deliver(reply_, mm_)
+                latency_marks_.delivered("slam", mm_["scan_id"], tick=tick_)
+
         def step_world(render: bool) -> None:
             """One physics step and everything that must see every step
             (SLAM plan v3.1): encoders, odometry, the 10 Hz scan by physics
             tick (not loop step) and the SLAM lockstep. Capture steps too."""
             tick = stepper["tick"]
             stepper["tick"] = tick + 1
+            if latency_marks_ is not None:
+                # Latency test A (plan 2026-11-11 2): at this physics step's start, before it steps -- what is due by
+                # now (a capture's steps included, so a capture never stretches the delay)
+                if latency_slam_queue_ is not None and latency_slam_queue_.pending:
+                    latency_slam_drain(tick)
+                if obstacle is not None and obstacle.get("latency_layer"):
+                    obstacle["layer"].worker.install_due(tick)
             frame_due = args.video and tick % fps_divisor == 0
             # without video (--frame-log alone): the pose line at the frame's tick, nothing rendered
             pose_due = frame_log is not None and not args.video and tick % fps_divisor == 0
@@ -7757,6 +7942,19 @@ def drive(S, isaac) -> None:
             slam_log["wheel_rates_rad_s"].append(rates_true)
             slam_log["steering_rad"].append(steer_true)
             slam_log["base_pose_world"].append(np.concatenate((now_base, now_q)))
+            if latency_marks_ is not None and len(slam_log["base_pose_world"]) >= 2:
+                p1_, p0_ = slam_log["base_pose_world"][-1], slam_log["base_pose_world"][-2]
+                dt_ = slam_log["joint_stamps_s"][-1] - slam_log["joint_stamps_s"][-2]
+                latency_box_["moving"] = bool(dt_ > 0 and math.hypot(p1_[0] - p0_[0], p1_[1] - p0_[1]) / dt_ > 0.05)
+                zero_ = ((state.get("applied_command") or (0.0, []))[0] == 0.0
+                         and (slam is None or slam.get("last_command", 0.0) == 0.0))
+                if zero_ and not latency_box_["moving"]:
+                    if latency_box_["stand_since"] is None:
+                        latency_box_.update(stand_since=float(stamp_now), stand_ctrl_n=0, stand_ctrl_last=None,
+                                            stand_ctrl_gap_max=0.0)
+                else:
+                    latency_box_["stand_since"] = None
+                latency_box_["last_stamp"] = float(stamp_now)
             slam_log["wheel_angles_rad"].append(wheel_angles)
             if encoder_model is not None:
                 # The team's encoders, read from the joint angles this tick (row = the interval ending now).
@@ -7970,56 +8168,16 @@ def drive(S, isaac) -> None:
                 if getattr(args, "live", False):
                     raise SessionFailure(slam_reason_) from exc  # the live warm-up's lockstep exchange
                 require(False, slam_reason_)
-            warming_ = slam["tracker"].mode == "warming_up"
-            slam["tracker"].receive(
-                reply.scan_id, reply.stamp_s, reply.status, reply.map_from_odom
-            )
-            if slam.get("bundle") is not None and warming_ and slam["tracker"].mode != "warming_up":
-                # L4: the bridge checked the map it runs on and says which; it must be the one this run hashed
-                if getattr(reply, "map_id", None) != slam["bundle"].map_id:
-                    raise SessionFailure(f"slam_map_mismatch: the bridge runs on map {getattr(reply, 'map_id', None)}, "
-                                         f"not {slam['bundle'].map_id}")
-                # The odometry starts at the world start and map = world: the first correction is the identity
-                # within the start tolerance -- a bridge told another start pose would pass its own check there.
-                # B-P2b: the start is the relocalization's estimate (slam_start), never the placed pose (plan 1.2
-                # step 10: the same tolerance and reason, no truth read).
-                offset_ = abs(args.rear_axle_offset_m)
-                start_base_ = (slam_start[0] + offset_ * math.cos(slam_start[2]),
-                               slam_start[1] + offset_ * math.sin(slam_start[2]), slam_start[2])
-                at_ = compose(tuple(reply.map_from_odom), slam_odom_base())  # the map pose this reply gives now
-                start_dyaw_ = math.atan2(math.sin(at_[2] - start_base_[2]), math.cos(at_[2] - start_base_[2]))
-                start_off_ = math.hypot(at_[0] - start_base_[0], at_[1] - start_base_[1])
-                if start_off_ > 0.10 or abs(start_dyaw_) > 0.05:  # Codex S3 review P2: the pose, not map<-odom
-                    raise SessionFailure(f"slam_not_localized: the map pose at the start is {start_off_:.3f} m / "
-                                         f"{start_dyaw_:.3f} rad from the start, not within 0.10 m / 0.05 rad")
-                state["slam_map"]["confirmed_by_bridge"] = True
-                state["slam_map"]["start_error"] = [start_off_, start_dyaw_]
-                if start_reloc is not None:
-                    # The start check's tick, kept beside the verdict (which is taken when the warm-up ends: a gyro
-                    # bias can hold it after this reply -- Codex B-P2b review P2); nothing reads it back
-                    truth_yaw_v_, _ = yaw_and_tilt(now_q)
-                    start_reloc["bootstrap_check"] = {
-                        "scan_id": slam["scan_id"], "stamp_s": float(stamp_now), "slam_base": [float(v) for v in at_],
-                        "truth_base": [float(now_base[0]), float(now_base[1]), float(truth_yaw_v_)],
-                        "estimate_base": list(start_reloc["estimate"])}
-            truth_yaw, _ = yaw_and_tilt(now_q)
-            slam["records"].append(
-                {
-                    "scan_id": slam["scan_id"],
-                    "stamp_s": float(stamp_now),
-                    "phase": ms.phase,
-                    "status": reply.status,
-                    "mode": slam["tracker"].mode,
-                    "map_from_odom": list(reply.map_from_odom),
-                    # What control uses (holding keeps an older one).
-                    "applied_map_from_odom": list(slam["tracker"].applied[0])
-                    if slam["tracker"].applied is not None
-                    else None,
-                    "odom_base": list(slam_odom_base()),
-                    "truth_base": [float(now_base[0]), float(now_base[1]), truth_yaw],
-                    "slam_wall_s": reply.slam_wall_s,
-                }
-            )
+            m_ = {"scan_id": slam["scan_id"], "stamp_s": float(stamp_now), "phase": ms.phase,
+                  "now_base": np.array(now_base, dtype=float), "now_q": np.array(now_q, dtype=float),
+                  "odom_base": tuple(float(v) for v in slam_odom_base())}
+            if latency_slam_queue_ is not None and slam["tracker"].mode != "warming_up":
+                # Latency test A (plan 2026-11-11 2.1): queued to the scan tick + n; n = 0 is delivered right here
+                latency_slam_queue_.push((reply, m_), scan_tick=tick, moving=latency_box_["moving"],
+                                         holding=slam["tracker"].mode == "holding", ident=m_["scan_id"])
+                latency_slam_drain(tick)
+            else:
+                slam_deliver(reply, m_)
             slam["scan_id"] += 1
             if obstacle is not None and not scan_silenced(stamp_now):
                 # After this scan's reply: the correction control applies now.
@@ -8276,6 +8434,9 @@ def drive(S, isaac) -> None:
                     state.setdefault("live_test_injections", []).append({"worker_dies_at": "observe_ladder"})
                 core.jobs = PlanWorker(env=env_)
                 state["async_plan_worker"] = {"pid": core.jobs.proc.pid, "kernels": core.jobs.kernels}
+                if args.latency_plan_ms:
+                    # Latency test B (plan 2026-11-11 2.4): each answer held until its arrival + d
+                    core.jobs = latency_module.DelayedJobs(core.jobs, args.latency_plan_ms / 1000.0)
             else:  # persistent console plan D2: each mission is prepared by the worker
                 raise ValueError("a live session needs the planning worker (FORKLIFT_LIVE_ASYNC_PLAN=0 is batch-only)")
             core.hooks.live_abort = lambda: live.stopped_in_tick  # the core stops right after a raw capture
@@ -9613,6 +9774,15 @@ def drive(S, isaac) -> None:
                 live_abort_ = False  # M-c: the stop gate stopped the wheels inside this tick (plan C2)
                 while gc_seen_:  # D9d: the collections timed since the last tick, folded in outside any walk
                     live_timers.add(*gc_seen_.pop())
+                if latency_marks_ is not None:
+                    latency_marks_.control_tick(stepper["tick"], t)  # latency test: what this control tick reads first
+                    if latency_box_["stand_since"] is not None:  # the control ticks inside the current stand
+                        last_c_ = latency_box_["stand_ctrl_last"]
+                        # the first gap counts from the stand's start (a capture's steps before it are a gap too)
+                        ref_ = last_c_ if last_c_ is not None else latency_box_["stand_since"]
+                        latency_box_["stand_ctrl_gap_max"] = max(latency_box_["stand_ctrl_gap_max"], float(t) - ref_)
+                        latency_box_["stand_ctrl_last"] = float(t)
+                        latency_box_["stand_ctrl_n"] += 1
                 if live is not None:
                     if live.trace is not None:  # the spool's cut is control-tick work (main review of #61, P3)
                         live.trace.control("ctrl_start", live.trace.now())
@@ -10886,6 +11056,10 @@ def drive(S, isaac) -> None:
                         branches=branch_probe(),
                     )
             except RuntimeError as exc_:
+                if type(exc_).__name__ == "LayerWorkerFailure" and live is None:
+                    # Latency test A's batch layer (plan 2026-11-11 2.2): the run fails (layer_worker_failed); no live stop
+                    state["layer_worker_failure"] = str(exc_)
+                    raise
                 if type(exc_).__name__ == "LayerWorkerFailure":
                     # Real-time plan 5.28 D6: the wheels stop (steering and lift held), the layer is not touched again,
                     # and the session ends (not the mission alone)
@@ -11110,6 +11284,10 @@ def drive(S, isaac) -> None:
                     # (above); a run that ended by an exception leaves it pending (recorded).
                     worker_ = obstacle["layer"].worker
                     layer_ok_ = worker_.failed is None and not worker_.pending  # a pending job may still run (D6)
+                    if obstacle.get("latency_layer"):
+                        # Latency test A: a delay job is computed already; one left pending at the end is cut, never
+                        # installed (plan 2026-11-11 2.2), and the layer as installed is read as usual
+                        layer_ok_ = worker_.failed is None
                     if worker_.failed is not None:
                         state["success"] = False
                         state.setdefault("failure_reason", f"layer_worker_failed: {worker_.failed}")
@@ -11278,6 +11456,33 @@ def drive(S, isaac) -> None:
                     require(exit_code == 0, f"{name} video encoding failed")
         finally:
             live = locals().get("live")  # unbound when the setup failed before the live runtime was made
+            core_ = locals().get("core")
+            if latency_marks_ is not None or (core_ is not None
+                                              and isinstance(core_.jobs, latency_module.DelayedJobs)):
+                # The latency test's records (plan 2026-11-11 2, 4.5): what each channel delivered and when, what a
+                # control tick used first, what was cut at the end -- never read back by the run
+                try:
+                    li_ = state.setdefault("latency_injection", {})
+                    if latency_slam_queue_ is not None:
+                        li_["slam"] = {"spec": args.latency_slam, "truncated": latency_slam_queue_.truncate(),
+                                       "records": latency_slam_queue_.records}
+                    if latency_layer_ is not None and obstacle is not None and obstacle["layer"].worker is not None:
+                        li_["layer"] = {"spec": args.latency_layer,
+                                        "pending_at_end": obstacle["layer"].worker.pending_info()}
+                    if latency_marks_ is not None:
+                        li_["use"] = {c: {str(k): v for k, v in d.items()} for c, d in latency_marks_.result().items()}
+                        since_, last_ = latency_box_.get("stand_since"), latency_box_.get("last_stamp")
+                        ctrl_last_ = latency_box_.get("stand_ctrl_last") if since_ is not None else None
+                        li_["final_stand"] = {"last_step_s": last_, "since_s": since_,
+                                              "length_s": (last_ - since_) if since_ is not None else 0.0,
+                                              "control_ticks": latency_box_.get("stand_ctrl_n", 0) if since_ is not None else 0,
+                                              "control_gap_max_s": latency_box_.get("stand_ctrl_gap_max", 0.0),
+                                              "control_tail_s": (last_ - ctrl_last_) if ctrl_last_ is not None else None}
+                    if core_ is not None and isinstance(core_.jobs, latency_module.DelayedJobs):
+                        li_["plan"] = {"delay_ms": float(args.latency_plan_ms),
+                                       "records": core_.jobs.records + core_.jobs.held_at_end()}
+                except Exception as exc_:  # noqa: BLE001 -- never replaces the run's own end
+                    state["latency_injection_error"] = repr(exc_)
             if locals().get("core") is not None and core.jobs is not None:
                 try:
                     core.jobs.close()  # real-time plan D8: the planning worker ends with the run

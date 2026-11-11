@@ -246,3 +246,23 @@ def test_the_runtime_clock_identity_file_is_left_out(tmp_path):
     (b / "run" / "runtime_clock.json").write_text(json.dumps({"boot_id": "y", "time_ns": "time:[2]"}))
     out = dc.compare(a, b)
     assert out["equal"] is True, out["differences"]
+
+
+def test_ignore_injection_leaves_out_only_the_latency_tests_records_and_options(tmp_path, monkeypatch):
+    """The latency test's S0/L0 equivalence check (docs/plans/2026-11-11-latency-tolerance.md 2.3)."""
+    a, b = make_run(tmp_path, path_tag="a"), make_run(tmp_path, path_tag="b")
+    r = json.loads((b / "run" / "result.json").read_text())
+    r["latency_injection"] = {"slam": {"records": [{"scan_tick": 12}]}}
+    r["layer_worker"] = {"mode": "delay", "k": 0}
+    r["arguments"] = {"latency_slam": "ticks:0", "seed": 0}
+    (b / "run" / "result.json").write_text(json.dumps(r))
+    (b / "run" / "layer_worker.json").write_text("[]\n")
+    ra = json.loads((a / "run" / "result.json").read_text())
+    ra["arguments"] = {"latency_slam": "off", "seed": 0}
+    (a / "run" / "result.json").write_text(json.dumps(ra))
+    assert dc.compare(a, b)["equal"] is False  # off: every difference counts
+    monkeypatch.setattr(dc, "IGNORE_INJECTION", True)
+    assert dc.compare(a, b)["equal"] is True
+    r["arguments"]["seed"] = 1  # another argument still counts
+    (b / "run" / "result.json").write_text(json.dumps(r))
+    assert dc.compare(a, b)["equal"] is False

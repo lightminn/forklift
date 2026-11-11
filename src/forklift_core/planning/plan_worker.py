@@ -204,6 +204,27 @@ def main(argv: list[str]) -> int:
         conn_out.send_bytes(out)
 
 
+class _StampedDone(dict):
+    """The finished answers, each with the ``time.monotonic`` it was stored at (the latency test's arrival)."""
+
+    def __init__(self):
+        super().__init__()
+        self.arrived: dict[int, float] = {}
+
+    def __setitem__(self, key, value):
+        self.arrived[key] = time.monotonic()
+        super().__setitem__(key, value)
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def pop(self, key, *default):
+        self.arrived.pop(key, None)
+        return super().pop(key, *default)
+
+
 class PlanWorker:
     """The runner's handle on the worker: one job computes at a time, later ones wait in order.
 
@@ -221,7 +242,7 @@ class PlanWorker:
         self._lock = threading.Lock()  # guards the bookkeeping below, never held across pipe or process work
         self._outbox: queue.Queue = queue.Queue()  # (job_id, bytes)
         self._blobs: dict[int, bytes] = {}  # every job not yet answered nor discarded, to write again after a restart
-        self._done: dict[int, tuple] = {}
+        self._done: _StampedDone = _StampedDone()  # each answer with its arrival time (latency test B)
         self._discarded: set[int] = set()
         self._sent: list[int] = []  # written to the current process, unanswered, in order
         self._restart = threading.Event()
@@ -248,6 +269,12 @@ class PlanWorker:
             self._blobs[job_id] = blob
         self._outbox.put(job_id)
         return job_id
+
+    def arrival(self, job_id: int):
+        """When the answer of ``job_id`` came in (``time.monotonic``), or None while it has not (latency test B,
+        docs/plans/2026-11-11-latency-tolerance.md 2.4); reading it takes nothing."""
+        with self._lock:
+            return self._done.arrived.get(job_id)
 
     def poll(self, job_id: int):
         """None while the job runs (or waits); else ``(ok, value)`` -- the job's dict, or the failure text."""

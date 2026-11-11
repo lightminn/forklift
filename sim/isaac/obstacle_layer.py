@@ -72,7 +72,7 @@ def load_layer_config(path: Path) -> dict:
     return {**data, "sensors": sensors}
 
 
-def worker_config(config: dict, k: int) -> dict:
+def worker_config(config: dict, k: int, *, added_s: float | None = None) -> dict:
     """A copy of the layer config for a layer worker installing at the scan tick + k (real-time plan 5.28): every use
     of a scan's result comes up to s = (k-1)/120 s later than in place. The stopping model's latency takes s (D5: the
     farther drive before the late check takes effect), and the FREE evidence's use age becomes free_max_age_s + s
@@ -80,7 +80,9 @@ def worker_config(config: dict, k: int) -> dict:
     the shadow memory's and the known pallets' horizons take it). What accepts evidence keeps free_max_age_s. Every
     permission built from this config (the layer's, the teleop bundle's, the exit and withdrawal copies, the
     candidates') carries both; the truth evaluation keeps the file's stopping model. The input is not changed."""
-    s = (int(k) - 1) / 120.0
+    # added_s: the latency test's declared batch layer gives its own (k/120: its k counts from the first control read,
+    # docs/plans/2026-11-11-latency-tolerance.md 2.2); the live worker keeps (k-1)/120
+    s = (int(k) - 1) / 120.0 if added_s is None else float(added_s)
     out = dict(config)
     out["permission"] = dict(config["permission"])
     out["permission"]["latency_s"] = float(config["permission"]["latency_s"]) + s
