@@ -105,7 +105,28 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
 - 전원 강하·회생 과전압(오실로스코프).
 - 설정 파일 자동 수정.
 - 승강 위치 측정 방식(계획 3.5, 미정). 승강 시운전은 빈 포크·한 바퀴 미만 창에서만 한다.
-- **시운전 안전 시나리오(후속 PR)**: 펌웨어 쪽이 S5 에 넣은 '최대 시운전 출력에서 시간 상한 직후 `DISARM`·보류 중 `DISARM` 의 정지 시간·거리'를 도구 쪽에서 돕는 항목이다. 후보는 `commission --end disarm`(비영 구간 도중 `DISARM`, 도구 ① `scenario` 처럼 소프트웨어 시각열을 남기고 외부 측정값을 받음)이다. 시간 상한에 닿는 경우는 이 도구가 일부러 막고 있다(비영 1.5 s < 빌드 상한). 그래서 상한을 일부러 넘기는 실행을 열지 말지, 연다면 어떤 조건에서 열지 먼저 정해야 한다. 이 PR 에는 넣지 않는다.
+
+## 10. 시간 상한 `STOPPING` 중 `DISARM` 시나리오 (총괄 결정 2026-11-12)
+
+펌웨어 쪽이 S5 에 넣은 항목('최대 시운전 출력에서 상한 직후 `DISARM`·보류 중 `DISARM` 의 정지 시간·거리')을 도구로 연다(총괄 결정). 계약 3.2·3.4(2026-11-12 정정)와 펌웨어 회귀 시험 v2r6(`origin/feat/fw-weact-h743` 의 `firmware/core/test/test_drive.c` `limit_then_disarm`)가 정한 동작을 실기에서 기록하는 시나리오다.
+
+```
+bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
+                      [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand
+                      [--output-response-ms X|unavailable] [--stop-time-ms X|unavailable] [--stop-distance-mm X|unavailable]
+```
+
+- **바퀴만**(L·R). 조향·승강은 상한까지 돌리면 기구 한계에 닿는다.
+- 이 시나리오만 2절의 1.5 s 상한을 넘겨 **빌드의 시간 상한까지** 비영 듀티를 이어 보낸다. `--limit-s` 는 빌드 상한(제안 2 s)을 운용자가 적는 값이고 (1.5, 3.0] s 만 받는다. `--limit-s` + 0.3 s 안에 MCU 의 상한(`STOPPING` + `commission_time_limit`)이 보이지 않으면 `limit_not_reached` 로 중단한다. 비영 명령의 유효시간은 그대로 60 ms 이하라, 도구가 멈추면 MCU 만료가 구동을 끝낸다.
+- 순서: 무장 → 고른 바퀴 0 듀티 0.3 s → 비영 듀티(MCU 상한까지, 매 주기 새 표본 전체에서 상한을 찾음) → 사건:
+  - `limit_disarm`: 상한 표본을 본 즉시 `DISARM`.
+  - `hold_disarm`: 상한 뒤 `--disarm-delay-ms`(기본 50 ms, `stop_grace_ms` 보다 짧아야 함) 기다렸다 `DISARM`. 그 사이 `STOPPING` 이 끝났으면 시나리오의 뜻이 없으므로 `not_met`(`hold_ended_before_disarm`).
+  - 그 뒤 0.6 s 카운트 관찰 → 정리(도구 ① 과 같은 `DISARM` 확인).
+- 기록(소프트웨어 근거): 명령 순서(쓰기 완료 시각), 상한까지의 MCU 시간(`limit_after_ms`), 사건 `DISARM` 의 seq·쓰기 시각, 그 seq 를 담은 첫 `STATE`(수락)와 그 직전 표본의 모드(`disarm_during_stopping`), 수락 표본의 모드, 상한 표본에서 `DISARM` 쓰기까지(`limit_seen_to_disarm_write_ms`), `DISARMED` 까지·카운트 정착까지의 시각. 수락 표본에서 비트 24 가 남아 있는지는 시험이 본다.
+- 결과: `DISARM` 이 수락되고(`hold_disarm` 은 `STOPPING` 에서 수락돼야) 세션 전체 검사(3절)를 통과하면 `ok`, 아니면 `not_met`·`aborted`.
+- **합격 판정은 외부 측정값으로만** 한다(다른 S5 항목과 같다, 도구 ① 4절). 출력 반응은 `DISARM` 의 0.1 s 문턱(계획 3.4)을 쓴다. 정지 시간·거리는 계획 3.4 에 이 경우의 문턱이 없어 값만 기록한다(`limit: null`). 문턱은 S5 전에 정하고, 측정값에 맞춰 정하지 않는다(계획 3.4).
+- 재무장 보류의 확인(보류 중 `ARM` 거부)은 이 시나리오에 넣지 않았다. 펌웨어 회귀 시험 v2r6 가 고정하고 있고, 실기에서 `ARM` 을 일부러 보내는 것은 보류가 깨져 있으면 무장이 되는 시험이라 따로 정한다.
+- 시험(MCU 모형, 상한 300 ms·`stop_grace_ms` 100 ms): 두 시나리오 모두 `STOPPING` 에서 수락·`DISARMED`·비트 24 유지, 명령 순서(`ARM` → `COMMISSION`… → `DISARM`, `DRIVE` 없음), 외부 값 기록. 지연이 `stop_grace_ms` 보다 길면 `not_met`. 상한이 오지 않으면 `limit_not_reached`. 인자 거부(축·`--limit-s`·지연·주 전원·듀티). CLI 파싱.
 
 ## 9. 자체 검토
 

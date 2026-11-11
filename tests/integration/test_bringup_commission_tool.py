@@ -245,3 +245,79 @@ def test_a_link_failing_through_the_cleanup_still_writes_the_result(model):
     assert res["result"] == "aborted" and res["cleanup_confirmed"] is False
     rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
     assert [r for r in rows if r["t"] == "result"]
+
+
+# --- design ② 10: DISARM in the commissioning time limit's STOPPING (lead decision 2026-11-12) ---
+
+def sargs(**kw):
+    base = dict(cmd="commission", axis="L", duty=0.15, seconds=None, window=None, observed=None, yes=True,
+                power_switch_in_hand=True, scenario="limit_disarm", limit_s=2.0, disarm_delay_ms=50.0,
+                output_response_ms=None, stop_time_ms=None, stop_distance_mm=None)
+    return argparse.Namespace(**{**base, **kw})
+
+
+def _order(b):
+    return [(k, t) for _q, (k, t, _m) in sorted(b.written.items(), key=lambda kv: kv[1][1])]
+
+
+@pytest.mark.parametrize("kind", ["limit_disarm", "hold_disarm"])
+def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
+    """The model's limit is 300 ms and its stop_grace 100 ms: the DISARM goes out in the limit's STOPPING (at once,
+    or 50 ms in), its seq is accepted from STOPPING and the MCU is DISARMED with the limit bit kept."""
+    b = model("--commission-time-ms", "300")
+    res = bringup.execute(sargs(scenario=kind, stop_time_ms="180", output_response_ms="unavailable"), b)
+    assert res["result"] == "ok", res
+    assert res["limit_reached"] and res["disarm_accepted"] and res["disarm_during_stopping"] is True
+    assert res["mode_at_acceptance"] == "DISARMED"
+    acc = next(s for s in b.samples if s.state.last_rx_seq == res["disarm_seq"])
+    assert acc.state.fault_flags & bringup.FaultFlag.COMMISSION_TIME_LIMIT  # the latch survives the DISARM
+    assert 250 <= res["limit_after_ms"] <= 400
+    if kind == "hold_disarm":
+        assert res["software"]["limit_seen_to_disarm_write_ms"] >= 45
+    # order: ARM, zero COMMISSIONs, nonzero COMMISSIONs, then the scenario's DISARM, then the cleanup's
+    kinds = [k for k, _t in _order(b)]
+    assert kinds[0] == "ARM" and kinds.count("DISARM") >= 1 and "DRIVE" not in kinds
+    first_disarm = kinds.index("DISARM")
+    assert set(kinds[1:first_disarm]) == {"COMMISSION"}
+    # external values only: the stop time is kept with no threshold yet, the output response as given
+    ext = res["external"]
+    assert ext["stop_time_ms"] == {"value": 180.0, "limit": None, "pass": None}
+    assert ext["output_response_ms"] == {"value": "unavailable", "limit": 100.0, "pass": None}
+    assert res["cleanup_confirmed"] and b.state.mode == Mode.DISARMED
+
+
+def test_a_hold_disarm_after_the_stopping_ended_is_not_met(model):
+    b = model("--commission-time-ms", "300")
+    res = bringup.execute(sargs(scenario="hold_disarm", disarm_delay_ms=300.0), b)
+    assert res["result"] == "not_met" and res["hold_ended_before_disarm"], res
+    assert res["disarm_during_stopping"] is False and res["cleanup_confirmed"]
+
+
+def test_a_limit_that_never_comes_is_an_abort(model):
+    b = model()  # the model's limit is 2000 ms; the tool gives up at 1.6 + 0.3 s
+    res = bringup.execute(sargs(limit_s=1.6), b)
+    assert res["result"] == "aborted" and res["aborted"] == "limit_not_reached", res
+    assert res["cleanup_confirmed"]
+
+
+@pytest.mark.parametrize("kw,why", [({"axis": "M"}, "wheel only"), ({"limit_s": 1.5}, "limit-s"),
+                                    ({"limit_s": 3.1}, "limit-s"), ({"disarm_delay_ms": -1.0}, "delay"),
+                                    ({"power_switch_in_hand": False}, "power switch"), ({"duty": 0.2}, "duty")])
+def test_scenario_limits_refuse_before_anything_is_sent(model, kw, why):
+    b = model()
+    res = bringup.execute(sargs(**kw), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert kinds_written(b) == []
+
+
+def test_the_scenario_cli_parses():
+    ap_args = ["commission", "--device", "/dev/null", "--out", "/dev/null", "--axis", "R", "--duty", "0.1",
+               "--scenario", "hold_disarm", "--disarm-delay-ms", "40", "--power-switch-in-hand", "--stop-time-ms",
+               "unavailable"]
+    import unittest.mock as um
+    with um.patch.object(bringup, "ReconnectingLink"), um.patch.object(bringup, "execute",
+                                                                       return_value={}) as ex:
+        bringup.main(ap_args)
+    a = ex.call_args[0][0]
+    assert (a.scenario, a.limit_s, a.disarm_delay_ms, a.stop_time_ms, a.seconds) == ("hold_disarm", 2.0, 40.0,
+                                                                                        "unavailable", None)

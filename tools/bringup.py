@@ -18,7 +18,9 @@ usage:
                       [--stop-time-ms X|unavailable] [--stop-distance-mm X|unavailable]
   bringup.py analyze  --record run.jsonl [--marker N] [--kind tx_cut|disarm|expiry|iwdg|power] [external ...]
   bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --seconds S [--window LO HI]
-                      [--observed pos|neg|none] [--allow-locked] [--yes]
+                      [--observed pos|neg|none] --power-switch-in-hand [--allow-locked] [--yes]
+  bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
+                      [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
 """
 
 from __future__ import annotations
@@ -54,7 +56,7 @@ STATE_GAP_S = 0.2  # after an event, two STATEs further apart than this are an o
 HANDOVER_S = 0.05  # a nonzero hold stops sending this much before its end, so the next hold's first command lands
 # while the last nonzero one is still valid -- and no nonzero command outlives its hold (Codex re-review P2-1)
 # plan 3.4 thresholds (provisional, 0.2 m/s empty truck)
-OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0}
+OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0, "limit_disarm": 100.0, "hold_disarm": 100.0}
 WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0}
 STOP_DISTANCE_MM = {"tx_cut": 100.0, "expiry": 100.0}
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
@@ -603,6 +605,97 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                   session)
 
 
+COMMISSION_SCENARIOS = ("limit_disarm", "hold_disarm")
+LIMIT_MAX_S = 3.0  # the scenario drives a wheel up to the build's time limit (proposed 2 s), never past this
+LIMIT_SLACK_S = 0.3  # how long past --limit-s the scenario waits for the MCU's limit before giving up
+
+
+def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str, duty: float, limit_s: float,
+                            delay_ms: float) -> dict:
+    """Design ② 10 (lead decision 2026-11-12): drive one wheel until the MCU's own commissioning time limit, then a
+    DISARM at once (``limit_disarm``) or ``delay_ms`` into the limit's STOPPING (``hold_disarm``). The record is the
+    command order, the DISARM's acceptance (its seq in a STATE) and every STATE; the stop time and distance pass only
+    on external measurements."""
+    b, axis = bench, session.axis
+    duty_e4 = int(round(duty * 10000))
+    session.arm(PRE_ZERO_S + limit_s + LIMIT_SLACK_S + 2.0)
+    i_arm = len(b.samples)
+    session.hold_duty(0, PRE_ZERO_S)
+    out = {"kind": kind, "limit_reached": False, "event_host_ns": None, "disarm_seq": None,
+           "disarm_accepted": False, "mode_before_acceptance": None, "disarm_during_stopping": None}
+    if session.aborted is not None:
+        session.cleanup()
+        return _final({**out, "result": "aborted"}, session)
+    # drive on until the MCU's limit: STOPPING with commission_time_limit, judged over every new sample
+    limit_i, on_i, scanned = None, None, len(b.samples)
+    give_up = time.monotonic() + limit_s + LIMIT_SLACK_S
+    on_seqs = set()
+    while time.monotonic() < give_up:
+        seq = session.send_duty(duty_e4)
+        if seq is not None:
+            on_seqs.add(seq)
+        b.cycle()
+        for i in range(scanned, len(b.samples)):
+            st = b.samples[i].state
+            if on_i is None and st.last_rx_seq in on_seqs:
+                on_i = i
+            if st.mode == Mode.STOPPING and st.fault_flags & FaultFlag.COMMISSION_TIME_LIMIT:
+                limit_i = i
+                break
+        scanned = len(b.samples)
+        if limit_i is not None:
+            break
+        why = session._abort_reason()
+        if why is not None:
+            session.aborted = why
+            break
+        time.sleep(0.01)
+    if limit_i is None:
+        session.aborted = session.aborted or "limit_not_reached"
+        session.cleanup()
+        return _final({**out, "result": "aborted"}, session)
+    out["limit_reached"] = True
+    out["limit_after_ms"] = None if on_i is None else (
+        b.samples[limit_i].state.mcu_time_us - b.samples[on_i].state.mcu_time_us) / 1000
+    session.events_started = True
+    if kind == "hold_disarm":
+        # still in the limit's STOPPING after the delay, or the scenario's point is lost
+        b.run_until(lambda: False, delay_ms / 1000)
+        if b.state.mode != Mode.STOPPING:
+            out["hold_ended_before_disarm"] = True
+    t0 = time.monotonic_ns()
+    b.host.request_disarm(t0)
+    b.run_until(lambda: any(k == "DISARM" and t >= t0 for k, t, _m in b.written.values()), 0.5)
+    sent = sorted((t, q) for q, (k, t, _m) in b.written.items() if k == "DISARM" and t >= t0)
+    if sent:
+        out["event_host_ns"], out["disarm_seq"] = sent[0]
+        q = out["disarm_seq"]
+        b.run_until(lambda: any(s.state.last_rx_seq == q for s in b.samples[limit_i:]), 0.5)
+        acc = next((i for i in range(limit_i, len(b.samples)) if b.samples[i].state.last_rx_seq == q), None)
+        if acc is not None:
+            out["disarm_accepted"] = True
+            out["mode_before_acceptance"] = b.samples[acc - 1].state.mode.name
+            out["disarm_during_stopping"] = b.samples[acc - 1].state.mode == Mode.STOPPING
+            out["mode_at_acceptance"] = b.samples[acc].state.mode.name
+    b.run_until(lambda: False, 0.6)  # keep observing the counts after DISARMED
+    i0 = limit_i
+    settle = count_settle(b.samples, i0)
+    disarmed = next((s for s in b.samples[i0:] if s.state.mode == Mode.DISARMED), None)
+    why = session_abort_reason(b.samples, i_arm)
+    if why is not None:
+        session.aborted = session.aborted or why
+    met = bool(out["disarm_accepted"] and (out["disarm_during_stopping"] if kind == "hold_disarm" else True))
+    session.cleanup()
+    ev = out["event_host_ns"]
+    rel = (lambda ns: None if ns is None or ev is None else (ns - ev) / 1e6)
+    return _final({**out, "result": "ok" if met else "not_met",
+                   "software": {"limit_seen_to_disarm_write_ms": None if ev is None
+                                else (ev - b.samples[limit_i].host_ns) / 1e6,
+                                "disarmed_ms": rel(disarmed.host_ns if disarmed else None),
+                                "count_settle_ms": rel(settle.host_ns), "count_settle_reason": settle.reason},
+                   "note": "software evidence only: stop time and distance pass on external measurements"}, session)
+
+
 def verdict(kind: str, external: dict) -> dict:
     """Design 4: external measurements against the plan 3.4 thresholds. Every value given is kept, with or without
     a threshold (Codex impl P2-10); 'unavailable' stays so."""
@@ -709,7 +802,10 @@ def main(argv=None) -> int:
     cm.add_argument("--yes", action="store_true")
     cm.add_argument("--axis", choices=tuple(AXES), required=True)
     cm.add_argument("--duty", type=float, required=True)
-    cm.add_argument("--seconds", type=float, required=True)
+    cm.add_argument("--seconds", type=float)
+    cm.add_argument("--scenario", choices=COMMISSION_SCENARIOS)
+    cm.add_argument("--limit-s", type=float, default=2.0)
+    cm.add_argument("--disarm-delay-ms", type=float, default=50.0)
     cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
     cm.add_argument("--observed", choices=("pos", "neg", "none"))
     cm.add_argument("--power-switch-in-hand", action="store_true")
@@ -717,7 +813,7 @@ def main(argv=None) -> int:
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1)
     an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power"), required=True)
-    for p in (sc, an):
+    for p in (sc, an, cm):
         for name in ("output-response-ms", "stop-time-ms", "stop-distance-mm"):
             p.add_argument("--" + name)
     args = ap.parse_args(argv)
@@ -743,9 +839,23 @@ def main(argv=None) -> int:
 
 
 def _check_commission_args(args) -> None:
-    """Design ② 2: the tool's own limits, before anything is sent."""
+    """Design ② 2 and 10: the tool's own limits, before anything is sent."""
     if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
         raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
+    if getattr(args, "scenario", None) is not None:
+        if AXES[args.axis] >= 2:
+            raise Refused("scenario: a wheel only (steering and lift would run into their mechanical limits)")
+        if not COMMISSION_HOLD_MAX_S < args.limit_s <= LIMIT_MAX_S:
+            raise Refused(f"limit-s: the build's time limit, in ({COMMISSION_HOLD_MAX_S}, {LIMIT_MAX_S}]")
+        if not 0 <= args.disarm_delay_ms <= 1000:
+            raise Refused("disarm-delay-ms: the delay must be in [0, 1000]")
+        if args.window is not None:
+            raise Refused("window: a wheel takes no window")
+        if not args.power_switch_in_hand:
+            raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
+        return
+    if args.seconds is None:
+        raise Refused("seconds: required without --scenario")
     hold_max = AXIS_HOLD_MAX_S.get(AXES[args.axis], COMMISSION_HOLD_MAX_S)
     if not COMMISSION_HOLD_MIN_S <= args.seconds <= hold_max:
         raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
@@ -786,12 +896,20 @@ def execute(args, bench: Bench) -> dict:
             _confirm(args, f"commission: will ARM and drive axis {args.axis} at duty {args.duty} for at most "
                            f"{args.seconds} s (window {args.window}). Outputs on only after the IPROPI protection is "
                            "confirmed (user decision); the window inside the mechanical limits.")
-            result = run_commission(bench, session, args.duty, args.seconds)
-            result["observed"] = _observed(args)
-            m = result["metrics"]
-            result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
-                                             duty_sign_in_build=m["duty_sign_in_build"])
-            result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
+            if getattr(args, "scenario", None) is not None:
+                result = run_commission_scenario(bench, session, args.scenario, args.duty, args.limit_s,
+                                                 args.disarm_delay_ms)
+                result["external"] = verdict(args.scenario, {
+                    "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
+                    "stop_distance_mm": args.stop_distance_mm})
+                result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
+            else:
+                result = run_commission(bench, session, args.duty, args.seconds)
+                result["observed"] = _observed(args)
+                m = result["metrics"]
+                result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
+                                                 duty_sign_in_build=m["duty_sign_in_build"])
+                result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
         elif args.cmd == "step":
             result = run_step(bench, session, args.wheel, args.target)
         else:
