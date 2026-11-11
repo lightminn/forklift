@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import select
 import sys
 import time
@@ -825,12 +826,39 @@ def _confirm(args, what: str) -> None:
         raise Refused("operator did not confirm")
 
 
-def _marker_reader(bench: Bench):
-    """Enter on the terminal marks an operator event (design 2)."""
+def _marker_reader(bench: Bench, fd: int | None = None):
+    """Enter on the terminal marks an operator event (design 2). Never blocks the drive loop: the bytes there are
+    are read (``os.read`` after ``select``) and only whole lines mark -- a ``readline`` would wait for a newline after
+    a label flushed with Ctrl-D (Codex P2, commission --markers)."""
+    if fd is None:
+        try:
+            fd = sys.stdin.fileno()
+        except (AttributeError, OSError, ValueError):
+            return lambda: None
+    if not os.isatty(fd):
+        return lambda: None
+    buf = bytearray()
+    state = {"eof": False}
+
     def poll():
-        if sys.stdin.isatty() and select.select([sys.stdin], [], [], 0)[0]:
-            label = sys.stdin.readline().strip()
-            bench.emit({"t": "marker", "host_ns": time.monotonic_ns(), "label": label})
+        if state["eof"]:
+            return
+        while select.select([fd], [], [], 0)[0]:
+            try:
+                chunk = os.read(fd, 4096)
+            except (BlockingIOError, InterruptedError):
+                return
+            except OSError:
+                state["eof"] = True
+                return
+            if not chunk:
+                return  # a Ctrl-D on an empty line (a tty: later lines still come) -- this poll is done
+            buf.extend(chunk)
+            now = time.monotonic_ns()
+            while (i := buf.find(b"\n")) >= 0:
+                label = bytes(buf[:i]).decode("utf-8", "replace").strip()
+                del buf[: i + 1]
+                bench.emit({"t": "marker", "host_ns": now, "label": label})
     return poll
 
 

@@ -455,3 +455,41 @@ def test_analyze_answers_a_marker_out_of_range(tmp_path):
     rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
     out = bringup.analyze(rec, 1, "power", {})
     assert out == {"result": "no_marker", "markers": 1, "asked": 1}
+
+
+def test_the_marker_reader_never_blocks_on_a_partial_line():
+    """Codex P2: on a canonical tty a label flushed with Ctrl-D is readable without a newline; a readline() would
+    wait for one and stall the drive loop. The reader takes the bytes there are and marks only whole lines."""
+    master, slave = os.openpty()  # the slave in its default canonical mode, like a terminal
+    try:
+        out = io.StringIO()
+        b = bringup.Bench(PtyLink(master), out, commission=True)
+        poll = bringup._marker_reader(b, fd=slave)
+        os.write(master, b"power\x04")  # a label, Ctrl-D: readable, no newline
+        bringup.time.sleep(0.05)
+        t0 = bringup.time.monotonic()
+        poll()
+        assert bringup.time.monotonic() - t0 < 0.02
+        assert "marker" not in out.getvalue()
+        os.write(master, b"\n")
+        bringup.time.sleep(0.05)
+        poll()
+        os.write(master, b"\nnrst\n")  # an empty line (plain Enter) and a label, in one read
+        bringup.time.sleep(0.05)
+        poll()
+        marks = [json.loads(x) for x in out.getvalue().splitlines() if '"marker"' in x]
+        assert [m["label"] for m in marks] == ["power", "", "nrst"]
+        t1 = bringup.time.monotonic()
+        poll()  # nothing waiting: returns at once
+        assert bringup.time.monotonic() - t1 < 0.02
+        os.write(master, b"\x04")  # Ctrl-D on an empty line: not the end of the markers
+        bringup.time.sleep(0.05)
+        poll()
+        os.write(master, b"again\n")
+        bringup.time.sleep(0.05)
+        poll()
+        marks = [json.loads(x) for x in out.getvalue().splitlines() if '"marker"' in x]
+        assert [m["label"] for m in marks][-1] == "again"
+    finally:
+        os.close(master)
+        os.close(slave)
