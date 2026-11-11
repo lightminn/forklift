@@ -10,17 +10,20 @@ SOURCE = (Path(__file__).resolve().parents[2] / "sim/isaac/run_transport.py").re
 
 
 def test_the_applied_wheel_speed_follows_the_wheel_command():
-    apply_ = SOURCE.index("joint_velocities=np.asarray(drive.wheel_rates_rad_s)")
+    apply_ = SOURCE.index('plant.drive_wheels(np.asarray(drive.wheel_rates_rad_s), wheel_lock["q"])')  # P0-4 4a
     write_ = SOURCE.index('slam["applied_speed"] = float(drive.speed_mps)')
     step_ = SOURCE.index('stepper["fn"]((pocket_frames and step % 12 == 0) or capturing_)')
     assert apply_ < write_ < step_
 
 
 def test_every_step_that_stops_the_wheels_itself_writes_zero():
-    zeros = [m.start() for m in re.finditer(r"joint_velocities=np\.zeros\(len\(wheels\)\), joint_indices=wheels\)\)",
-                                            SOURCE)]
-    assert len(zeros) == 3  # the preempt, the gyro fault, the live zero
-    for start in zeros:
+    # P0-4 4a: every wheel stop goes through plant.zero_wheels(); the G2r capture's hold (inside a control tick,
+    # before the capture) is the fourth and writes nothing here, as before the extraction.
+    zeros = [m.start() for m in re.finditer(r"plant\.zero_wheels\(\)", SOURCE)]
+    g2r = [z for z in zeros if "G2r" in SOURCE[z - 300:z]]
+    steps = [z for z in zeros if z not in g2r]
+    assert len(g2r) == 1 and len(steps) == 3  # the preempt, the gyro fault, the live zero
+    for start in steps:
         assert 'slam["applied_speed"] = 0.0' in SOURCE[start:start + 700]
 
 
