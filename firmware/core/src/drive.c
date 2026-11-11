@@ -541,6 +541,23 @@ static void refresh_flags(drive *d)
     d->fault_flags = d->latched | live;
 }
 
+static bool commission_over_limit(const drive *d)
+{
+    return d->cfg->commission_build && d->cm_on &&
+           d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS;
+}
+
+/* After the commissioning time limit: the limit bit, and no ARM before stop_grace_ms of zero
+   output from now (Codex PR review). */
+static void hold_commission(drive *d)
+{
+    d->latched |= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
+    uint64_t until = d->time_us + (uint64_t)d->cfg->stop_grace_ms * US_PER_MS;
+    if (until > d->cm_hold_until_us) {
+        d->cm_hold_until_us = until;
+    }
+}
+
 static void enter_stopping(drive *d, uint32_t why)
 {
     d->mode = DRIVE_MODE_STOPPING;
@@ -557,17 +574,25 @@ void drive_begin(drive *d, const drive_inputs *in)
 {
     d->time_us += (uint32_t)(in->now_us - d->last_now32); /* widen the HAL clock */
     d->last_now32 = in->now_us;
+    /* The commissioning time limit is judged first and whatever the mode: a fault taken in
+       this same cycle must not drop its hold (Codex PR review 3). */
+    bool cm_over = commission_over_limit(d);
+    if (cm_over) {
+        hold_commission(d);
+    }
     read_sensors(d, in);
     check_spi_timeout(d);
 
-    /* Expiry first, so a DRIVE arriving after the deadline cannot extend it. */
-    if (d->mode == DRIVE_MODE_ARMED && d->has_deadline && d->time_us > d->deadline_us) {
-        enter_stopping(d, DRIVE_FAULT_COMMAND_TIMEOUT);
-    }
-    /* Commissioning time limit, measured on the applied output (design 3). */
-    if (d->mode == DRIVE_MODE_ARMED && d->cfg->commission_build && d->cm_on &&
-        d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS) {
-        enter_stopping(d, DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    /* Expiry first, so a DRIVE arriving after the deadline cannot extend it. The command
+       deadline and the commissioning time limit (applied output, design 3) are judged
+       independently before the mode changes, so one cannot hide the other (Codex PR review 2). */
+    if (d->mode == DRIVE_MODE_ARMED) {
+        bool expired = d->has_deadline && d->time_us > d->deadline_us;
+        bool over = cm_over;
+        if (expired || over) {
+            enter_stopping(d, (expired ? DRIVE_FAULT_COMMAND_TIMEOUT : 0u) |
+                                  (over ? DRIVE_FAULT_COMMISSION_TIME_LIMIT : 0u));
+        }
     }
     /* Faults are judged while the outputs are still on, including the cycle the STOPPING
        grace ends, so they latch before the drop to DISARMED. */
@@ -634,6 +659,9 @@ static uint8_t arm_check(const drive *d, const link_arm *a)
         return DRIVE_REJECT_LATCHED;
     default:
         break;
+    }
+    if (d->cfg->commission_build && d->time_us < d->cm_hold_until_us) {
+        return DRIVE_REJECT_STOPPING; /* the commissioning time limit's stop is not over */
     }
     if (d->estop_now) {
         return DRIVE_REJECT_ESTOP_ACTIVE;
@@ -817,8 +845,9 @@ static void handle_clear(drive *d, const link_msg *m)
         d->reject_reason = DRIVE_REJECT_SENSOR_INVALID;
         return;
     }
-    /* Driver faults and overcurrent are not conditions: the re-initialisation decides. */
-    d->latched = 0;
+    /* Driver faults and overcurrent are not conditions: the re-initialisation decides. The
+       commissioning time limit stays until the next ARM (contract 3.4). */
+    d->latched &= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
     d->mode = DRIVE_MODE_BOOT;
     d->reject_reason = DRIVE_REJECT_NONE;
     d->last_rx_seq = m->seq;
@@ -908,7 +937,11 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
             }
             continue;
         }
-        float u = d->mode == DRIVE_MODE_ARMED ? d->cm_duty : 0.0f;
+        bool over = commission_over_limit(d);
+        if (over) {
+            hold_commission(d); /* past the limit by whatever path: zero and hold */
+        }
+        float u = d->mode == DRIVE_MODE_ARMED && !over ? d->cm_duty : 0.0f;
         if (ch < 2) {
             float lo, hi;
             slew_range(d->wheel_duty[ch], c->wheel_duty_slew_per_s * dt, 1.0f, &lo, &hi);
@@ -932,6 +965,9 @@ void drive_finish(drive *d, drive_outputs *out)
     float dt = (float)c->period_us * 1e-6f;
     drive_outputs o;
     memset(&o, 0, sizeof o);
+    if (commission_over_limit(d)) {
+        hold_commission(d); /* before any branch below clears cm_on */
+    }
     if (driving(d) && !c->commission_build) {
         float duty[DRIVE_CH_COUNT];
         for (int i = 0; i < 2; i++) {

@@ -1529,6 +1529,135 @@ static void v2r2_commission_stopping_brakes_every_axis(void)
     }
 }
 
+/* ---- Codex PR review 1 ---------------------------------------------------------------- */
+static void v2r3_rearm_bundle_after_the_limit_waits_the_stop(void)
+{
+    /* After the time limit fires, a DISARM -> ARM -> COMMISSION(0) -> COMMISSION(non-zero)
+       bundle every cycle must not bring the output back before stop_grace_ms of zero output. */
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    CHECK(commission_run(3000, 1000, false, &seq) > 0);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    int zero_cycles = 0, first_nonzero = -1;
+    for (int t = 0; t < 1000; t++) {
+        link_msg m[4];
+        m[0] = simple(LINK_DISARM, seq++);
+        m[1] = arm_msg(seq++, d.boot_id, echo_now());
+        m[2] = commission_msg(seq++, 0, 0, 150, echo_now());
+        m[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        m[3] = commission_msg(seq++, 0, 1000, 150, echo_now());
+        m[3].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        tick_moving(2.0, 0.0, m, 4);
+        if (out.duty[DRIVE_CH_L] == 0.0f) {
+            zero_cycles++;
+        } else if (first_nonzero < 0) {
+            first_nonzero = t;
+        }
+    }
+    CHECK(first_nonzero >= (int)cfg.stop_grace_ms - 1);
+    CHECK(zero_cycles >= (int)cfg.stop_grace_ms - 1);
+}
+
+static void v2r4_limit_and_expiry_in_the_same_cycle(void)
+{
+    /* The command deadline is placed exactly on the time limit, so both fire in one cycle;
+       the re-arm bundle must still wait stop_grace_ms (Codex PR review 2). */
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+    CHECK(d.cm_on);
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    while (d.time_us + 150000u < limit_at) { /* keep it fresh until 150 ms before */
+        if ((d.time_us / 1000u) % 50u == 0) {
+            send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+        } else {
+            tick();
+        }
+    }
+    uint64_t echo = echo_now();
+    link_msg last = commission_msg(seq++, 0, 1000, (uint16_t)((limit_at - echo) / 1000u), echo);
+    send(last);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(d.deadline_us, limit_at);
+    while (d.mode == DRIVE_MODE_ARMED) {
+        tick();
+    }
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMAND_TIMEOUT);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    int first_nonzero = -1;
+    for (int t = 0; t < 400; t++) {
+        link_msg m[4];
+        m[0] = simple(LINK_DISARM, seq++);
+        m[1] = arm_msg(seq++, d.boot_id, echo_now());
+        m[2] = commission_msg(seq++, 0, 0, 150, echo_now());
+        m[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        m[3] = commission_msg(seq++, 0, 1000, 150, echo_now());
+        m[3].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        tick_moving(2.0, 0.0, m, 4);
+        if (out.duty[DRIVE_CH_L] != 0.0f && first_nonzero < 0) {
+            first_nonzero = t;
+        }
+    }
+    CHECK(first_nonzero >= (int)cfg.stop_grace_ms - 1);
+}
+
+/* Runs commissioning up to the limit, then on the cycle that passes it injects a fault
+   (0 = encoder gap, 1 = encoder jump); clears it and re-arms every cycle after. Returns
+   whether output resumed before stop_grace_ms had passed since the limit (Codex PR review 3). */
+static bool limit_with_fault_resumes_early(int kind)
+{
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    while (d.time_us + 2000u < limit_at) {
+        if ((d.time_us / 1000u) % 50u == 0) {
+            send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+        } else {
+            tick();
+        }
+    }
+    if (kind == 0) {
+        in.now_us += 25000; /* lands past the limit and past the gap limit together */
+        in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 1);
+    } else {
+        in.now_us += 2000;
+        in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 500);
+    }
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    uint64_t t_limit = d.time_us;
+    send(simple(LINK_CLEAR_FAULTS, seq++));
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT); /* kept through CLEAR_FAULTS */
+    bool early = false;
+    for (int t = 0; t < 400; t++) {
+        link_msg m[3];
+        m[0] = arm_msg(seq++, d.boot_id, echo_now());
+        m[1] = commission_msg(seq++, 0, 0, 150, echo_now());
+        m[1].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        m[2] = commission_msg(seq++, 0, 1000, 150, echo_now());
+        m[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        tick_moving(0.0, 0.0, m, 3);
+        if (out.duty[DRIVE_CH_L] != 0.0f &&
+            d.time_us < t_limit + (uint64_t)cfg.stop_grace_ms * 1000u) {
+            early = true;
+        }
+    }
+    return early;
+}
+
+static void v2r5_limit_hold_survives_a_fault_in_the_same_cycle(void)
+{
+    CHECK(!limit_with_fault_resumes_early(0));
+    CHECK(!limit_with_fault_resumes_early(1));
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1574,5 +1703,8 @@ int main(void)
     v2r2_first_cycle_gap_drops_the_step();
     v2r2_polarity_baseline_waits_for_a_fresh_window();
     v2r2_commission_stopping_brakes_every_axis();
+    v2r3_rearm_bundle_after_the_limit_waits_the_stop();
+    v2r4_limit_and_expiry_in_the_same_cycle();
+    v2r5_limit_hold_survives_a_fault_in_the_same_cycle();
     return FW_TEST_RESULT();
 }

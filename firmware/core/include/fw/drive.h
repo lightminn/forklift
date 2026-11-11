@@ -177,6 +177,7 @@ typedef struct drive {
     float cm_duty; /* control coordinates */
     bool cm_on;
     uint64_t cm_on_since_us;
+    uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
     bool first_cycle; /* no gap judgement before the first drive_begin */
     bool stuck_active[2], pol_active[2], pol_base_set[2];

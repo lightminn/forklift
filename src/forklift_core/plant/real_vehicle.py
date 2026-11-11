@@ -311,7 +311,10 @@ class RealOdometry:
         return OdometryStep(self.pose, integrated, broken, reason)
 
     def update(self, mcu_time_us: int, boot_id: int, count_left: int, count_right: int,
-               steering_rad: float) -> OdometryStep:
+               steering_rad: float, *, encoder_cut: bool = False) -> OdometryStep:
+        """``encoder_cut``: the STATE reports a wheel's count continuity broken (mcu-link/2 fault bits 17, 22, 23,
+        contract 3.3 host reading) -- the reference is dropped and nothing is integrated across it; the next sample
+        without it re-references (Codex PR review P2)."""
         if boot_id != self._boot:
             first = self._boot is None
             self._boot, self._last_time_us, self._ref = boot_id, None, None
@@ -325,6 +328,9 @@ class RealOdometry:
         if self._last_time_us is not None and mcu_time_us <= self._last_time_us:
             return self._step(False, False, "time_not_increasing")
         self._last_time_us = int(mcu_time_us)
+        if encoder_cut:
+            self._ref = None
+            return self._step(False, True, "encoder_continuity")
         kappa = self.cfg.steering.curvature(steering_rad)
         if kappa is None:
             self._ref = None
