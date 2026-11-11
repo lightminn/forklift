@@ -370,3 +370,10 @@ def test_a_fault_or_reboot_first_seen_in_the_scenario_cleanup_is_an_abort(model,
     monkeypatch.setattr(bringup.CommissionSession, "cleanup", cleanup_then_bad_state)
     res = bringup.execute(sargs(), b)
     assert res["result"] == "aborted" and res["aborted"] == ("mode_fault" if what == "fault" else "boot_changed")
+
+
+def test_a_scenario_with_an_invalid_external_value_sends_nothing(model):
+    b = model()
+    res = bringup.execute(sargs(output_response_ms="-inf"), b)
+    assert res["result"] == "refused" and "output_response_ms" in res["why"]
+    assert kinds_written(b) == []

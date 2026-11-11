@@ -201,3 +201,19 @@ def test_cpr_from_a_known_hand_turn(mcu_model):
         proc.wait(timeout=5)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.parametrize("raw", ["-1", "-inf", "inf", "nan", "fast"])
+def test_an_invalid_external_value_never_passes(raw):
+    """Codex review: only 'unavailable' or a finite value >= 0."""
+    for floor in (True, False):
+        with pytest.raises(ValueError):
+            bringup.verdict("disarm", {"stop_time_ms": raw}, floor=floor)
+    with pytest.raises(ValueError):
+        bringup.verdict("disarm", {"output_response_ms": raw})
+
+
+def test_an_invalid_external_value_is_refused_before_the_arm(bench):
+    res = bringup.execute(_args(cmd="scenario", kind="disarm", stop_distance_mm="-150"), bench)
+    assert res["result"] == "refused" and "stop_distance_mm" in res["why"]
+    assert not any(k == "ARM" for k, _t, _m in bench.written.values())

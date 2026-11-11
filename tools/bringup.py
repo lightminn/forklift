@@ -734,6 +734,20 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
                    "note": "software evidence only: stop time and distance pass on external measurements"}, session)
 
 
+def external_value(name: str, raw) -> float | str | None:
+    """An external measurement as given: None, 'unavailable', or a finite value >= 0 -- anything else is refused
+    (Codex review: a negative or non-finite value must never pass)."""
+    if raw is None or raw == "unavailable":
+        return raw
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name}: {raw!r} is neither a number nor 'unavailable'") from None
+    if not (v == v and v >= 0 and v != float("inf")):
+        raise ValueError(f"{name}: {raw!r} must be finite and >= 0")
+    return v
+
+
 def verdict(kind: str, external: dict, *, floor: bool = False) -> dict:
     """Design 4: external measurements against the plan 3.4 thresholds. Every value given is kept, with or without
     a threshold (Codex impl P2-10); 'unavailable' stays so. Off the floor (wheels lifted on the stand, the default)
@@ -743,7 +757,7 @@ def verdict(kind: str, external: dict, *, floor: bool = False) -> dict:
     out = {}
     for name, table in (("output_response_ms", OUTPUT_RESPONSE_MS), ("stop_time_ms", WHEEL_STOP_MS),
                         ("stop_distance_mm", STOP_DISTANCE_MM)):
-        value, limit = external.get(name), table.get(THRESHOLD_KIND.get(kind, kind))
+        value, limit = external_value(name, external.get(name)), table.get(THRESHOLD_KIND.get(kind, kind))
         if value is None and limit is None:
             continue
         if value is None or value == "unavailable":
@@ -869,6 +883,12 @@ def main(argv=None) -> int:
             p.add_argument("--" + name)
     args = ap.parse_args(argv)
     if args.cmd == "analyze":
+        try:
+            for name in ("output_response_ms", "stop_time_ms", "stop_distance_mm"):
+                external_value(name, getattr(args, name))
+        except ValueError as exc:
+            print(json.dumps({"result": "refused", "why": str(exc)}))
+            return 2
         print(json.dumps(analyze(Path(args.record), args.marker, args.kind, {
             "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
             "stop_distance_mm": args.stop_distance_mm}, floor=args.floor), default=str))
@@ -946,6 +966,11 @@ def execute(args, bench: Bench) -> dict:
                           power_switch_reachable=getattr(args, "power_switch_reachable", False))
     result: dict = {"result": "aborted", "why": "not run"}
     try:
+        for name in ("output_response_ms", "stop_time_ms", "stop_distance_mm"):
+            try:
+                external_value(name, getattr(args, name, None))  # before anything is armed
+            except ValueError as exc:
+                raise Refused(str(exc)) from None
         if args.cmd == "commission":
             _check_commission_args(args)
             if getattr(args, "scenario", None) is not None:
