@@ -55,3 +55,10 @@ def test_reruns_take_new_names(tmp_path):
     assert (tmp_path / "lat_r_lat_b03_d50_r1.jsonl").exists()
     with pytest.raises(SystemExit):
         L.main(["rerun", "/s", str(tmp_path), "lat_X_line_2_s0"])
+
+
+def test_a_b_out_too_long_for_the_slam_socket_is_refused():
+    with pytest.raises(SystemExit):
+        L.b_entry("/s", "/home/projects/forklift/test_runs/latency/smoke2_d32554f6", "lat_sm_B50", 50)
+    assert L.b_entry("/s", "/home/projects/forklift/test_runs/lat/sm", "lat_sm_B50", 50)
+    L.b_jobs("/s", "/home/projects/forklift/test_runs/lat/b_99d08772")  # the main B root fits

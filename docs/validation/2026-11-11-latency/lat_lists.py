@@ -79,8 +79,13 @@ def smoke_rows(snap: str, out: str) -> list[dict]:
     return rows
 
 
+SOCK_TAIL = "/live/epoch_999/sock/slam.sock"  # the live launcher's longest socket path below the run (AF_UNIX: 107)
+
+
 def b_entry(snap: str, out: str, name: str, d: int) -> dict:
     run = f"{out}/{name}/{name}"
+    if len((run + SOCK_TAIL).encode()) > 107:
+        raise SystemExit(f"{run}: the SLAM socket path would pass 107 bytes -- a shorter OUT")
     return {"name": name, "argv": ["bash", f"{snap}/{B_WRAPPER}", run], "cwd": snap,
             "env": {**B_BASE, **({"LATENCY_PLAN_MS": str(d)} if d else {}), "LAT_DELAY_MS": str(d)},
             "retry_move": [run], "pace_log": f"{run}/live/epoch_*/run/live_log.jsonl",
