@@ -5249,6 +5249,19 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     return drive(_Setup(**locals()), isaac)
 
 
+class TickVars:
+    """Sim-to-real 4e-1a (docs/design/2026-11-11-p04e1-control-tick.md): the control tick's names the closures defined
+    outside the loop read -- ``rear``, ``forward``, ``truth_speed``, ``steering_command``, ``requested_speed``. The loop
+    keeps its own names and syncs them here after every assignment (``set_rear`` too); the closures read them here. A
+    name not set yet raises NameError, as the bare name did (``grid_kwargs``'s first plans)."""
+
+    def __getattr__(self, name):
+        raise NameError(f"name {name!r} is not defined")
+
+    def sync(self, **values) -> None:
+        self.__dict__.update(values)
+
+
 def drive(S, isaac) -> None:
     """The run from its initial plans on (M-a1 replay plan R2): every Isaac object it touches is in ``S``
     (a service, recorded when recording) or behind ``isaac`` (adapters), so a replay can run it on CPU with
@@ -5873,7 +5886,7 @@ def drive(S, isaac) -> None:
         # (pixel lag, L3c v7): the odometry speed, never the truth -- not the
         # command, which stays up while the permission holds the truck (L3c v11:
         # a standing truck kept eroding the strip against the face).
-        speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
+        speed_now = abs(slam["odom_speed"]) if slam is not None else abs(tick_vars.requested_speed)
         yaw_rate_now = abs(slam.get("odom_yaw_rate", 0.0)) if slam is not None else 0.0
         record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now,
                                  lift_m=float(plant.sample().lift_m))  # 4b
@@ -5966,7 +5979,7 @@ def drive(S, isaac) -> None:
         applied_ = tuple(float(v) for v in applied) if applied is not None else (
             obstacle["applied"] or (0.0, 0.0, 0.0))
         try:
-            own_ = own if own is not None else rear
+            own_ = own if own is not None else tick_vars.rear
             # Several poses (obstacle recovery v4: an escape's end region) keep only the cells under all.
             own_now_ = (tuple(tuple(float(v) for v in p_) for p_ in own_) if np.ndim(own_) == 2
                         else tuple(float(v) for v in own_))
@@ -6090,7 +6103,7 @@ def drive(S, isaac) -> None:
             # again (L3c v18 seed 1: 3 replans in 30 s on the return).
             fp_r = geometry.unloaded_footprint
             grow_r = planner_config.clearance_m + res_r
-            band_poses_ = rear if band_pose is None else band_pose
+            band_poses_ = tick_vars.rear if band_pose is None else band_pose
             band_poses_ = [band_poses_] if np.ndim(band_poses_) == 1 else list(band_poses_)
             under_r = np.ones_like(band_r)
             for bp_ in band_poses_:  # several poses (an escape's end region): cleared only under all
@@ -6261,6 +6274,7 @@ def drive(S, isaac) -> None:
                                          hash_only_requests={"drive_frame", "stop"},
                                          watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
     state["phase"] = "planning"
+    tick_vars = TickVars()  # sim-to-real 4e-1a: the tick's names the closures read (set as the loop sets them)
     # Sim-to-real P0-4 4a: the actuation calls go through one object made from the robot as wrapped above (the
     # record sees the same Vehicle/Controller calls). Its signature is temporary; the contract shared with the
     # real-vehicle port is fixed in step 4a'. Made after the phase line, where drive()'s own body begins.
@@ -6825,6 +6839,7 @@ def drive(S, isaac) -> None:
     simulation_started_wall = time.monotonic()
     ms.lift_command = 0.0
     steering_command = np.zeros(2)
+    tick_vars.sync(steering_command=steering_command)  # 4e-1a
     state["transitions"] = []
     state["samples"] = []
     inset_estimate = None
@@ -7003,6 +7018,7 @@ def drive(S, isaac) -> None:
         # (grid_kwargs's own pose, dump_tracking, the docking) read run()'s rear, so it is set here at once.
         nonlocal rear
         rear = value
+        tick_vars.sync(rear=rear)  # 4e-1a: the closures the core calls next read it there
 
     def far_recognition_hook(scene_input_, base_, yaw_, reference_):
         """The far observation's decision (plan v2, 3): the stop frame with its instance ids, the control pose for
@@ -7136,9 +7152,9 @@ def drive(S, isaac) -> None:
             path_record=path_record,
             write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
             # M-a1 slice 3b: truth (SimTruth list) and the permission's diagnostics dump.
-            truth_speed=lambda: truth_speed, truth_velocity=lambda: velocity,
+            truth_speed=lambda: tick_vars.truth_speed, truth_velocity=lambda: velocity,
             # sim-to-real 4d-1: the safety speed -- the simulation's is the true speed exactly (the real truck's: encoders)
-            safety_speed=lambda: SafetySpeed.exact(truth_speed),
+            safety_speed=lambda: SafetySpeed.exact(tick_vars.truth_speed),
             save_npz=save_npz_at_output,
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
@@ -7163,7 +7179,7 @@ def drive(S, isaac) -> None:
             cusp_standing=lambda: cusp_standing(),
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.
-            rear=lambda: rear, world=lambda: world, stage=lambda: stage,
+            rear=lambda: tick_vars.rear, world=lambda: world, stage=lambda: stage,
             truth_obstacles=lambda: obstacles if session_extra_["fn"] is None else obstacles + session_extra_["fn"](),
             dock=lambda *a, **k: dock(*a, **k),
             plan_docking_reapproach=lambda *a, **k: plan_docking_reapproach(*a, **k),
@@ -7196,7 +7212,7 @@ def drive(S, isaac) -> None:
             # M-a1 slice 5: the release at a stop, the measured steering.
             steering_position=steering_position_,
             # M-a1 slice 6d: the near field's mission side (near_tick, the correction redraws, installs, retry).
-            steering_command=lambda: steering_command, correction_grid=lambda *a: correction_grid(*a),
+            steering_command=lambda: tick_vars.steering_command, correction_grid=lambda *a: correction_grid(*a),
             redraw_docking=lambda *a, **k: redraw_docking(*a, **k),
             redraw_docking_traced=lambda *a, **k: redraw_docking_traced(*a, **k), tracking_frame=near_tracking_frame,
         ),
@@ -7370,9 +7386,9 @@ def drive(S, isaac) -> None:
         speed and rear pose control used (under SLAM the tracker speed and the estimate) beside the
         measured speed and the true rear pose (Codex fix A implementation review 2 P3)."""
         return {"control_speed_mps": float(signed_speed_now),
-                "measured_speed_mps": float(np.dot(robot.get_linear_velocity()[:2], forward)),
+                "measured_speed_mps": float(np.dot(robot.get_linear_velocity()[:2], tick_vars.forward)),
                 "truth_rear": np.asarray(truth_rear, dtype=float).tolist(),
-                "steering_command_rad": np.asarray(steering_command, dtype=float).tolist(),
+                "steering_command_rad": np.asarray(tick_vars.steering_command, dtype=float).tolist(),
                 "steering_actual_rad": np.asarray(plant.sample().steering, dtype=float).tolist()}  # 4b
 
     cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)  # fix A's hold records
@@ -7479,9 +7495,9 @@ def drive(S, isaac) -> None:
                 "phase_started_s": ms.phase_started,
                 "loop_step": step,
                 "config": asdict(tracker.config),
-                "rear_pose": rear.tolist(),
+                "rear_pose": tick_vars.rear.tolist(),
                 "signed_speed_mps": signed_speed,
-                "steering_command_rad": steering_command.tolist(),
+                "steering_command_rad": tick_vars.steering_command.tolist(),
                 "steering_actual_rad": np.asarray(
                     robot.get_joint_positions()[steers], dtype=float
                 ).tolist(),
@@ -9293,7 +9309,7 @@ def drive(S, isaac) -> None:
                 occupancy_ = None
                 if grid_planning:
                     try:
-                        own_ = moved(rear)  # where the truck stands now, in the frame checked
+                        own_ = moved(tick_vars.rear)  # where the truck stands now, in the frame checked
                     except NameError:
                         own_ = pose_
                     correction_ = (tuple(float(v) for v in tracker_.received[0]) if frame_ is not None
@@ -9921,6 +9937,7 @@ def drive(S, isaac) -> None:
                         (float(ppos[0]), float(ppos[1]), float(pallet_yaw))):
                     core.cargo.trace_valid = False  # plan D4: the retrace is no evidence (a recovery refuses)
                 forward = np.array([math.cos(yaw), math.sin(yaw)])
+                tick_vars.sync(forward=forward)  # 4e-1a
                 rear = np.array(
                     [
                         base[0] - abs(args.rear_axle_offset_m) * forward[0],
@@ -9928,6 +9945,7 @@ def drive(S, isaac) -> None:
                         yaw,
                     ]
                 )
+                tick_vars.sync(rear=rear)  # 4e-1a
                 velocity = robot.get_linear_velocity()
                 signed_speed = float(np.dot(velocity[:2], forward))
                 # Ground truth checks, evaluates and renders; control below uses
@@ -9953,6 +9971,7 @@ def drive(S, isaac) -> None:
                         state["slam_async"]["long_poll_gaps"] = [list(g) for g in slam["async_link"].long_poll_gaps]
                 if slam is not None:
                     rear = slam_rear(t)
+                    tick_vars.sync(rear=rear)  # 4e-1a
                     if live is not None and pose_box["rt"] is not None:
                         if args.correction_inject is not None:
                             correction_injection(t)
@@ -10227,10 +10246,12 @@ def drive(S, isaac) -> None:
                         ep_ = live_withdraw["open"]
                         ep_["min_lateral_m"] = min(min(gaps_), ep_.get("min_lateral_m", math.inf))
                 requested_speed, curvature = 0.0, 0.0
+                tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                 tracking = None
                 # M-a1 slice 5: the release gate at the tick's start is the core's.
                 gate_ = core.release_gate(t, rear)
                 releasing, warming, rear = gate_.releasing, gate_.warming, gate_.rear
+                tick_vars.sync(rear=rear)  # 4e-1a
                 paused_ = core.commands.stopped  # M-a3 (plan E3): paused, resuming or cancelling -- no mission work
                 if live is not None and core.commands.status in ("idle", "done", "failed", "cancelled", "recovery_required"):
                     paused_ = True  # M-c: no mission yet (or over): its work does not run
@@ -10263,6 +10284,7 @@ def drive(S, isaac) -> None:
                             else:
                                 core.observation_freeze(t, captured_)
                                 rear = captured_.rear  # the estimate now, after the capture's own release
+                                tick_vars.sync(rear=rear)  # 4e-1a
                                 if captured_.rear_stamp is not None:
                                     rear_stamp = captured_.rear_stamp
                                 if slam is not None:
@@ -10278,6 +10300,7 @@ def drive(S, isaac) -> None:
                             # probe, samples), as each says (docs/validation/2026-11-02-observe-capture-base.md)
                             capture_diagnostics, cap_base, cap_yaw = captured_.capture_diagnostics, captured_.base, captured_.yaw
                             forward, rear = captured_.forward, captured_.rear
+                            tick_vars.sync(rear=rear, forward=forward)  # 4e-1a
                             if captured_.rear_stamp is not None:
                                 rear_stamp = captured_.rear_stamp
                             prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
@@ -10346,12 +10369,14 @@ def drive(S, isaac) -> None:
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
                     rear = scene_.rear
+                    tick_vars.sync(rear=rear)  # 4e-1a
                     if scene_.owned:
                         scene_owned_ = True
                         if scene_.output == "presteer":
                             scene_presteer_ = scene_.curvature
                         elif scene_.output == "escape":
                             requested_speed, curvature = scene_.requested_speed, scene_.curvature
+                            tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                         else:
                             plan_wait_ = True
                 if (ms.phase in trackers and not releasing and not warming and not paused_ and not plan_wait_
@@ -10369,13 +10394,16 @@ def drive(S, isaac) -> None:
                         # stall and observe recoveries (they do not run while it lasts)
                         backoff_ = core.observe_backoff_tick(t, rear, tracking, signed_speed, dt)
                         tracking, rear = backoff_.tracking, backoff_.rear
+                        tick_vars.sync(rear=rear)  # 4e-1a
                     elif not scene_raised_:
                         # M-a1 slice 4a-ii: the D7c docking stop, the SLAM goal heading miss and the stall replan.
                         stall_ = core.docking_and_stall(t, rear, tracking, signed_speed, dt, loaded)
                         tracking, rear, d7_docking_, d7_owned = stall_.tracking, stall_.rear, stall_.d7_docking_, stall_.d7_owned
+                        tick_vars.sync(rear=rear)  # 4e-1a
                         # M-a1 slice 4a-iii: the cusp and observe-leg recoveries are the core's.
                         recover_ = core.cusp_and_observe_recovery(t, rear, tracking, signed_speed, dt, d7_docking_, d7_owned, step)
                         tracking, rear = recover_.tracking, recover_.rear
+                        tick_vars.sync(rear=rear)  # 4e-1a
                         if ms.phase == "bottom_deck_refused":
                             break  # plan 2026-10-19 task 4: a side recovery ended the mission (no command after it)
                     if not scene_raised_:
@@ -10384,6 +10412,7 @@ def drive(S, isaac) -> None:
                                                 safety_hold)
                         requested_speed, curvature, tracking, rear = (command_.requested_speed, command_.curvature,
                                                                       command_.tracking, command_.rear)
+                        tick_vars.sync(rear=rear, requested_speed=requested_speed)  # 4e-1a
                         dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
                         if tracking.status == "arrived":
                             if args.use_perception and ms.phase == "observe":
@@ -10392,6 +10421,7 @@ def drive(S, isaac) -> None:
                                     # retreat end), not the far recognition or the detector.
                                     deck_tick_ = core.bottom_deck_capture(t, rear, step)
                                     rear = deck_tick_.rear
+                                    tick_vars.sync(rear=rear)  # 4e-1a
                                     if deck_tick_.stop or ms.phase == "bottom_deck_refused":
                                         break
                                 elif live is not None and core.jobs is not None:
@@ -10421,6 +10451,7 @@ def drive(S, isaac) -> None:
                                         capture_diagnostics, cap_base, cap_yaw = (captured_.capture_diagnostics, captured_.base,
                                                                                   captured_.yaw)  # apart, as above
                                         forward, rear = captured_.forward, captured_.rear
+                                        tick_vars.sync(rear=rear, forward=forward)  # 4e-1a
                                         if captured_.rear_stamp is not None:
                                             rear_stamp = captured_.rear_stamp
                                         prior, params, detection, observation = captured_.prior, captured_.params, captured_.detection, captured_.observation
@@ -10563,6 +10594,7 @@ def drive(S, isaac) -> None:
                                 # second near capture's gap -- captured and re-drawn there; the approach goes on.
                                 second_ = core.second_near_capture(t, rear, step)
                                 rear = second_.rear
+                                tick_vars.sync(rear=rear)  # 4e-1a
                                 if second_.rear_stamp is not None:
                                     rear_stamp = second_.rear_stamp
                             else:
@@ -10570,12 +10602,14 @@ def drive(S, isaac) -> None:
                                 arrival_ = core.arrive(t, tracking)
                                 if arrival_.rear is not None:
                                     rear = arrival_.rear
+                                    tick_vars.sync(rear=rear)  # 4e-1a
                                 if arrival_.stop:
                                     break
                 if core.jobs is not None and not plan_wait_ and core.job_pending():
                     plan_wait_ = True  # real-time plan D9b: the delivery docking match was just asked; this tick stands
                 if live_abort_:
                     requested_speed, curvature = 0.0, 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                 # M-a1 slice 2: the lift ramp, timers (plan D5 6c: a loaded start wait ramps while a plan is waited for)
                 if (not paused_ and not live_abort_ and (not plan_wait_ or core.lift_ramps_in_plan_wait())
                         and core.lift_and_timers(t, dt)):
@@ -10584,10 +10618,12 @@ def drive(S, isaac) -> None:
                     # Persistent console plan D1: the mission ends, judged on the truth; the session goes on standing.
                     live.end_mission(t, "complete", None)
                     paused_, requested_speed, curvature = True, 0.0, 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                 # The curvature the wheels actually hold: an emergency stop keeps it, so
                 # the permission, the stop itself and the probe all use this one.
                 kappa = held_kappa()
                 truth_speed = float(np.dot(velocity[:2], forward))
+                tick_vars.sync(truth_speed=truth_speed)  # 4e-1a
                 obstacle_hold = False
                 pocket_phase = False
                 # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
@@ -10614,10 +10650,12 @@ def drive(S, isaac) -> None:
                         perm_tick_ = core.permission(t, rear, kappa, requested_speed, loaded, cusp_handed_)
                         allowed, why, acting, pocket_phase = perm_tick_.allowed, perm_tick_.why, perm_tick_.acting, perm_tick_.pocket_phase
                         requested_speed, obstacle_hold = perm_tick_.requested_speed, perm_tick_.obstacle_hold
+                        tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                         # M-a1 slice 3c: stop, replan, resume (plan D4) is the core's.
                         if obstacle["blocked_ticks"] >= 120 or obstacle.pop("force_replan", None) == ms.phase:
                             replan_tick_ = core.blocked_replan(t, rear, kappa, requested_speed)
                             rear, requested_speed = replan_tick_.rear, replan_tick_.requested_speed
+                            tick_vars.sync(rear=rear, requested_speed=requested_speed)  # 4e-1a
                             if ms.phase == "bottom_deck_refused":
                                 break  # plan 2026-10-19 task 4: a blocked side leg ended the mission
                     # docs/plans/2026-10-28-exit-prefix-extract-rules.md D5: the ticks the truth evaluation books to the
@@ -10674,7 +10712,9 @@ def drive(S, isaac) -> None:
                     # follows the lift, the stop is watched; a cancel ends standing, a resume steps through its checks.
                     paused_tick_ = core.paused_tick(t, rear, kappa, loaded)
                     rear, obstacle_hold = paused_tick_.rear, paused_tick_.obstacle_hold
+                    tick_vars.sync(rear=rear)  # 4e-1a
                     requested_speed, curvature = 0.0, 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                     dwell_hold = True  # the steering held where it is; the wheels brake on its curvature
                     cancel_stop_ = paused_tick_.stop  # the loop ends after this tick's stop output is applied
                     if cancel_stop_ and live is not None:
@@ -10686,18 +10726,22 @@ def drive(S, isaac) -> None:
                             live.end_mission(t, "cancelled", "operator")
                 elif scene_presteer_ is not None:  # scene replan 2.1 step 8: standing, the wheels to the new leg's
                     requested_speed, curvature = 0.0, scene_presteer_  # first command (the steering not held)
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                     dwell_hold = False
                 elif plan_wait_:  # real-time plan D8b: standing for a plan, the steering held
                     requested_speed, curvature = 0.0, 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                     dwell_hold = True
                 elif core.live_leg(t, rear, loaded):  # M-a1 slice 3a: the live travel leg and the replan wait
                     requested_speed = 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                     if core.jobs is not None and core.job_pending():
                         plan_wait_ = True  # real-time plan D8b: the leg's plan was just asked
                         curvature = 0.0
                         dwell_hold = True
                 if loaded_wait_ and not paused_:  # plan D5 6c: standing for the loaded start, the steering held
                     requested_speed, curvature = 0.0, 0.0
+                    tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                     dwell_hold = True
                 if state.get("layer_budget") and obstacle is not None and not live_abort_:
                     # the layer latency budget's watchdog on every control tick, whatever the phase and whether a
@@ -10821,7 +10865,9 @@ def drive(S, isaac) -> None:
                 command_ = core.assemble_command(t, dt, requested_speed, curvature, kappa, steering_command, estop_holding,
                                                  obstacle_hold, dwell_hold, cusp_hold, safety_hold)
                 drive, steering_command, actual_steering = command_.drive, command_.steering_command, command_.actual_steering
+                tick_vars.sync(steering_command=steering_command)  # 4e-1a
                 requested_speed = command_.requested_speed
+                tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                 if live is not None:
                     # M-c (plan C2): the arbiter decides what drives. AUTO and PAUSED: the core's command as assembled.
                     # TELEOP: the operator's speed and curvature through the same back end (Ackermann, steering rate);
@@ -10867,6 +10913,7 @@ def drive(S, isaac) -> None:
                             # The deferred release moved the control pose: the permit reads the released one (Codex
                             # D14 impl round 1 P2-3).
                             rear = np.asarray(slam_rear(t), dtype=float)
+                            tick_vars.sync(rear=rear)  # 4e-1a
                             live_state["rear"] = tuple(float(v) for v in rear)
                     if pose_box["rt"] is not None:
                         pose_checkpoint(t)  # plan 3.3 (3): the correction this tick ends with, before the output
@@ -10910,12 +10957,14 @@ def drive(S, isaac) -> None:
                         core.kinematics.slew_steering(slewed_, np.asarray(drive.steering_rad), dt)
                         steering_command[:] = slewed_
                         requested_speed = float(drive.speed_mps)
+                        tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                         state["command_speed"] = float(out_.speed_mps)
                         state["applied_command"] = (float(drive.speed_mps), [float(v) for v in steering_command])
                     elif out_.stop_kind == "preempt":
                         drive = core.kinematics.command(0.0, kappa)
                         steering_command[:] = steer_before_
                         requested_speed = 0.0
+                        tick_vars.sync(requested_speed=requested_speed)  # 4e-1a
                         state["command_speed"] = 0.0
                         state["applied_command"] = (0.0, [float(v) for v in steering_command])
                     # The state carries what is applied after the choice above (contract 6, Codex M-c round 5 P1).
