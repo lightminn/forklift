@@ -14,6 +14,7 @@ void motor_out_safe_init(void);
 void motor_out_force_safe(void);
 
 void iwdg_start(void);
+bool iwdg_unfreeze_in_debug(void); /* DBG_IWDG1 cleared and read back */
 void iwdg_kick(void);
 
 /* Cycle counter for bounded waits before the time base runs. */

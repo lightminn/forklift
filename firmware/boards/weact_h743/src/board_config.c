@@ -79,7 +79,11 @@ static drive_config make(void)
        protection on schematic V1.0 (plan 5 precondition); opening them is the user's decision. */
     c.commission_build = BOARD_COMMISSION;
     c.hil_plant = BOARD_HIL; /* board design 9: the vehicle model fills the inputs */
+#if defined(FW_MOTOR_OUTPUT_OPEN)
+    c.outputs_locked = false; /* behind the protection record gate (motor output design 2) */
+#else
     c.outputs_locked = true;
+#endif
     c.estop_wired = false;          /* no e-stop net on schematic V1.0 */
     c.commission_duty_max = 0.15f;  /* plan 3.4 */
     c.commission_time_ms = 2000;    /* plan 3.4 */
