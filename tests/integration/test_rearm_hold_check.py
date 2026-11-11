@@ -130,3 +130,16 @@ def test_a_hold_longer_than_stated_is_caught_on_the_model(mcu_model):
 
 def test_a_hold_too_short_to_judge_is_refused(tmp_path):
     assert check.main(["--device", "/nonexistent", "--out", str(tmp_path / "r.jsonl"), "--stop-grace-ms", "100"]) == 2
+
+
+def test_judge_fails_when_states_are_missing():
+    """Codex B4 review: a 40 ms STATE gap between the last ARMED and the first STOPPING widens the hold-end window
+    enough to pass a hold cut to 270 ms (limit at 1.001 s, ARM taken at 1.280 s); a gap fails the check."""
+    S, D = Mode.STOPPING, Mode.DISARMED
+    samples = [_s(960_000, Mode.ARMED), _s(970_000, Mode.ARMED), _s(1_010_000, S, 9), _s(1_020_000, S, 9),
+               _s(1_030_000, D, 10)]
+    samples += [_s(t, D, 10, RejectReason.STOPPING) for t in range(1_040_000, 1_280_000, 10_000)]
+    samples.append(_s(1_280_000, Mode.ARMED, 99))
+    arm_ns = [t * 1000 for t in range(1_035_000, 1_280_000, 10_000)]
+    res = check.judge(samples, 2, GRACE_MS, 10, 1_060_000_000, arm_ns)
+    assert res["result"] == "not_met" and not res["checks"]["no_state_gap"], res

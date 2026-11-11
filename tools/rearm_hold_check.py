@@ -17,7 +17,10 @@ was lost on the link). A CLEAR_FAULTS while DISARMED is ignored by the core (it 
 check sends one inside the hold and requires the hold to outlast it all the same.
 
 The hold ends stop_grace_ms after the cycle the limit fired in; that cycle lies between the last ARMED STATE and the
-first STOPPING STATE, so the end is known to within one STATE period. The DISARM goes a third of the hold after the
+first STOPPING STATE, so the end is known to within one STATE period -- provided no STATE is missing: from the last
+ARMED STATE to the first ARM taken, consecutive STATEs must be at most STATE_GAP_MAX_US apart, or a lost STATE widens
+the window enough to pass a shortened hold (Codex B4 review; a STATE lost on the link or undecoded never moves the
+MCU's rx_errors). The DISARM goes a third of the hold after the
 limit is seen (still in its STOPPING) and the CLEAR_FAULTS two thirds in, so a hold either of them restarted would
 end at least a third of the hold late -- twice the slack (a sixth of the hold). Pass: refusals seen after the DISARM
 was taken and after the CLEAR_FAULTS was written, no other refusal reason before the first ARM taken, no ARM taken
@@ -40,6 +43,7 @@ from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
 
 ARM_PERIOD_S = 0.01
 REFUSAL_SEEN_NS = 30_000_000  # a written ARM has reached the MCU and its result a STATE (three STATE periods)
+STATE_GAP_MAX_US = 15_000  # STATE every 10 ms (board and model): a longer gap means a lost or undecoded STATE
 GRACE_MIN_MS = 150.0  # the slack (grace / 6) must stay above two STATE periods plus the ARM cadence
 
 
@@ -52,7 +56,8 @@ def judge(samples: list, limit_i: int, grace_ms: float, disarm_seq: int | None, 
           arm_ns: list[int]) -> dict:
     """Pure verdict. ``samples``: the recorded STATEs (``.host_ns``, ``.state``); ``limit_i``: the first STOPPING
     sample with commission_time_limit; ``clear_ns``, ``arm_ns``: host write times of the CLEAR_FAULTS and ARMs."""
-    armed = next((samples[i].state for i in range(limit_i - 1, -1, -1) if samples[i].state.mode == Mode.ARMED), None)
+    armed_i = next((i for i in range(limit_i - 1, -1, -1) if samples[i].state.mode == Mode.ARMED), None)
+    armed = None if armed_i is None else samples[armed_i].state
     out = {"result": "not_met", "hold_end_earliest_us": None, "hold_end_latest_us": None}
     if armed is None:
         out["why"] = "no ARMED STATE before the limit"
@@ -62,7 +67,12 @@ def judge(samples: list, limit_i: int, grace_ms: float, disarm_seq: int | None, 
     out["hold_end_earliest_us"], out["hold_end_latest_us"] = earliest, latest
     tail = samples[limit_i:]
     disarm = next((s for s in tail if disarm_seq is not None and s.state.last_rx_seq == disarm_seq), None)
-    taken = next((s for s in tail if s.state.mode == Mode.ARMED), None)
+    taken_i = next((i for i in range(limit_i, len(samples)) if samples[i].state.mode == Mode.ARMED), None)
+    taken = None if taken_i is None else samples[taken_i]
+    last_i = taken_i if taken_i is not None else len(samples) - 1
+    window = [samples[i].state.mcu_time_us for i in range(armed_i, last_i + 1)]
+    gap = max((b - a for a, b in zip(window, window[1:])), default=0)
+    out["max_state_gap_us"] = gap
     out["disarm_taken"] = disarm is not None
     out["first_arm_taken_us"] = None if taken is None else taken.state.mcu_time_us
     end_ns = taken.host_ns if taken is not None else float("inf")
@@ -88,6 +98,7 @@ def judge(samples: list, limit_i: int, grace_ms: float, disarm_seq: int | None, 
         "refused_after_clear_faults": refused_after(clear_ns),
         "no_other_refusal": not others,
         "no_link_errors": len(errors) <= 1,
+        "no_state_gap": gap <= STATE_GAP_MAX_US,
         "not_shortened": taken is not None and taken.state.mcu_time_us >= earliest,
         "not_lengthened": taken is not None and taken.state.mcu_time_us <= latest + slack_us(grace_ms),
     }
