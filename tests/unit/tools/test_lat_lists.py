@@ -74,3 +74,30 @@ def test_a_b_out_too_long_for_the_slam_socket_is_refused():
         L.b_entry("/s", "/home/projects/forklift/test_runs/latency/smoke2_d32554f6/a_much_longer_folder", "lat_sm_B50", 50)
     assert L.b_entry("/s", "/home/projects/forklift/test_runs/lat/sm", "lat_sm_B50", 50)
     L.b_jobs("/s", "/home/projects/forklift/test_runs/lat/b_99d08772")  # the main B root fits
+
+
+def test_a_and_b_keep_running_without_the_layer_budget():
+    # registered before the launchers' budget default (plan 2026-11-11-layer-latency-budget 4.1)
+    for r in (*L.a_rows("/s", "/o"), *L.smoke_rows("/s", "/o"), *L.b_jobs("/s", "/o")):
+        assert r["env"]["LAYER_BUDGET"] == "off", r["name"]
+
+
+def test_budget_has_the_registered_58_runs(tmp_path):
+    rows = L.budget_rows("/s", "/o")
+    assert len(rows) == 58
+    text = "".join(json.dumps(r) + "\n" for r in rows)
+    assert len(B.load_runs(tmp_path / "x.jsonl", text=text)) == 58
+    by = {r["name"]: r["env"] for r in rows}
+    for scene in ("line_2", "random_1", "aisle_rack"):
+        for seed in (0, 1, 2):
+            for arm in ("B0", "Bb10", "Ub3", "Ub6", "Ub12", "Uo9"):
+                assert by[f"lbg_{arm}_{scene}_s{seed}"]["LAT_ARM"] == arm
+    assert sorted(n for n in by if n.endswith("_rep")) == sorted(
+        f"lbg_{a}_{s}_s0_rep" for a in ("B0", "Ub6") for s in ("random_1", "line_2"))
+    assert by["lbg_B0_line_2_s1"]["LAYER_BUDGET"] == "off" and by["lbg_B0_line_2_s1"]["EXTRA_ARGS"] == L.BASE_ARGS
+    assert by["lbg_Bb10_line_2_s1"]["LAYER_BUDGET"] == "config/layer_latency_budget.yaml"
+    assert by["lbg_Bb10_line_2_s1"]["EXTRA_ARGS"] == L.BASE_ARGS
+    assert by["lbg_Ub12_aisle_rack_s2"]["EXTRA_ARGS"].endswith("--latency-layer undeclared:12")
+    assert by["lbg_Uo9_random_1_s0"]["EXTRA_ARGS"].endswith("--layer-latency-budget-s 0.05 --latency-layer undeclared:9")
+    for e in by.values():
+        assert e["VIDEO"] == "off" and e["RETURN_START"] == "boxed" and e["NEAR_END_STAND"] == "on"

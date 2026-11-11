@@ -1588,6 +1588,21 @@ def test_the_registry_a_run_names_is_among_the_inputs(tmp_path):
     assert os.path.realpath(tmp_path / "reg.yaml") in ib.preflight_inputs([run], tmp_path / "runner.py")
 
 
+def test_the_layer_budget_files_are_among_the_inputs(tmp_path):
+    # the layer latency budget (plan 2026-11-11-layer-latency-budget 4.1): the default file and the one a run names
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/layer_latency_budget.yaml").write_text("latency_budget_s: 0.1\noverdue_end_s: 1.0\n")
+    (tmp_path / "b.yaml").write_text("latency_budget_s: 0.05\noverdue_end_s: 1.0\n")
+    (tmp_path / "runner.py").write_text("")
+    got = ib.preflight_inputs([ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"LAYER_BUDGET": "b.yaml"})],
+                              tmp_path / "runner.py")
+    assert os.path.realpath(tmp_path / "b.yaml") in got
+    assert os.path.realpath(tmp_path / "config/layer_latency_budget.yaml") in got
+    off = ib.preflight_inputs([ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"LAYER_BUDGET": "off"})],
+                              tmp_path / "runner.py")
+    assert os.path.realpath(tmp_path / "b.yaml") not in off
+
+
 def test_plain_expansions_are_settings_too(tmp_path):
     # Codex: EXTRA_ARGS read as $EXTRA_ARGS or ${EXTRA_ARGS} steers the run as much as ${EXTRA_ARGS:-}
     (tmp_path / "launch.sh").write_text('echo $EXTRA_ARGS ${MORE}\n')

@@ -465,7 +465,8 @@ SNAPSHOT_LAUNCHERS = ("deploy/console/isaac_live.sbatch", "deploy/console/slam_c
                       "deploy/riibotics/riib_scene.sbatch", "deploy/lib/term_relay.sh")
 SNAPSHOT_INPUTS = SNAPSHOT_LAUNCHERS + ("sim/isaac/run_transport.py", "config/slam_map_bundles.yaml",
                                         "tools/slam_bundle_registry.py", "config/scene_requirements.yaml",
-                                        "sim/isaac/scene_requirements.py")
+                                        "sim/isaac/scene_requirements.py",
+                                        "config/layer_latency_budget.yaml")  # the launchers' default budget file
 
 
 def launcher_files(run) -> list[str]:
@@ -508,6 +509,8 @@ def preflight_inputs(runs, runner) -> dict:
         rels = list(SNAPSHOT_INPUTS)
         if run.env.get("SLAM_BUNDLE_REGISTRY"):  # the registry the run names, not only the default (Codex)
             rels.append(run.env["SLAM_BUNDLE_REGISTRY"])
+        if run.env.get("LAYER_BUDGET", "off") != "off":  # the layer budget file the run names (Codex budget P2)
+            rels.append(run.env["LAYER_BUDGET"])
         for rel in rels:
             path = os.path.join(run.cwd or ".", rel)
             if os.path.isfile(path):

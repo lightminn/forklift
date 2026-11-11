@@ -16,6 +16,8 @@
 # (graph, grid from the read-back, manifest, map_id) and the survey's checks to OUT/bundle and OUT/survey_report.json.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/slam_survey.sbatch OUT
+#   LAYER_BUDGET (config/layer_latency_budget.yaml, as isaac_live.sbatch; off: none): a survey made with it still
+#   matches the bundles made before it (the budget is no shared input); compare surveys only at the same value
 #   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), TOUR (a tour .npz), TOUR_CONFIG
 #   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
 #   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),
@@ -101,6 +103,11 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 # reported table for a team-spec model; PR #108's team-spec table)
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
+# the layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md, the lead's decision 2026-11-11): a file kept
+# apart from the obstacle-layer one (a survey bundle's shared input); LAYER_BUDGET=off runs without it
+LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}
+BUDGET=(--layer-latency-budget "$LAYER_BUDGET")
+[ "$LAYER_BUDGET" = off ] && BUDGET=()
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
@@ -126,7 +133,7 @@ ARGS=(
   "${LAYOUT[@]}" --fps 60 \
   --use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
-  --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
+  --obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"} --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \

@@ -156,3 +156,35 @@ def test_the_latency_options_are_registered_in_the_near_contract():
     text = (ROOT / "sim/isaac/near_tracking.py").read_text()
     assert '"latency_slam": "off", "latency_layer": "off", "latency_seed": None,' in text
     assert '"latency_plan_ms": 0.0,' in text
+
+
+def test_the_layer_latency_budget_file_is_checked_before_isaac(tmp_path):
+    """The layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md): its own file, read before Isaac."""
+    ok = _check(*_base(tmp_path / "a"), "--layer-latency-budget", str(ROOT / "config/layer_latency_budget.yaml"))
+    assert ok.returncode == 0, ok.stderr
+    bad = tmp_path / "bad.yaml"
+    for i, (text, why) in enumerate([("latency_budget_s: 0.1\n", "exactly"),
+                                     ("latency_budget_s: -0.1\noverdue_end_s: 1.0\n", ">= 0"),
+                                     ("latency_budget_s: 0.1\noverdue_end_s: 0\n", "> 0")]):
+        bad.write_text(text)
+        p = _check(*_base(tmp_path / f"b{i}"), "--layer-latency-budget", str(bad))
+        assert p.returncode == 2 and why in p.stderr, (text, p.stderr)
+    p = _check(*_base(tmp_path / "c"), "--layer-latency-budget", str(tmp_path / "none.yaml"))
+    assert p.returncode == 2 and "no such file" in p.stderr
+    p = _check(*_base(tmp_path / "d"), "--layer-latency-budget-s", "-1")
+    assert p.returncode == 2 and "finite number >= 0" in p.stderr
+
+
+def test_the_launchers_pass_the_layer_latency_budget_and_the_layer_files_stay_unbudgeted():
+    import yaml
+
+    doc = yaml.safe_load((ROOT / "config/layer_latency_budget.yaml").read_text())
+    assert doc == {"latency_budget_s": 0.10, "overdue_end_s": 1.0}  # the lead's decision 2026-11-11
+    for launcher in ("deploy/console/isaac_live.sbatch", "deploy/console/slam_survey.sbatch",
+                     "deploy/riibotics/riib_scene.sbatch"):
+        text = (ROOT / launcher).read_text()
+        assert "LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}" in text, launcher
+        assert '--obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"}' in text, launcher
+    # survey map bundles hash the obstacle-layer file as a shared input: the budget is never written into one
+    for layer in sorted((ROOT / "config").glob("obstacle_layer_single*.yaml")):
+        assert "latency_budget_s" not in yaml.safe_load(layer.read_text()), layer

@@ -1454,6 +1454,11 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
         )
+        # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
+        # watchdog stop holds the wheels in every phase, acting or not (Codex impl review P1)
+        if why == "layer_latency_exceeded":  # asked only then: no new hook call on a recorded tick (replay gate)
+            hooks.require(False, "layer_latency_exceeded")
+        budget_stop_ = why == "layer_overdue"
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
         if exit_closed_ == "watch":
@@ -1570,7 +1575,7 @@ class MissionCore:
         # The permission's own limit, applied to the wheels as a step
         # (the stop it was measured with); the path-blocked stop below
         # is a planned one and brakes on the slew.
-        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
+        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and (acting or budget_stop_)) else None
         if obstacle["permission_cap"] is not None and allowed == 0.0 and why.startswith("sensor_silent"):
             # N9 deadlines: the permission's zero reaches the wheels as a
             # step through the final cap whatever the tracker asks (Codex
@@ -1598,11 +1603,16 @@ class MissionCore:
             obstacle["slowed"][ms.phase] = obstacle["slowed"].get(ms.phase, 0) + 1
             key = f"{ms.phase}:{why}"
             obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
-            if options.obstacle_act and acting:
+            if options.obstacle_act and (acting or budget_stop_):
                 requested_speed = math.copysign(allowed, requested_speed)
                 # Zero allowed: the emergency stop the check assumed --
                 # wheels to zero, steering held (Codex L0b P1).
                 obstacle_hold = allowed == 0.0
+        if budget_stop_ and requested_speed != 0.0:
+            # the layer latency budget's online invariant (plan 2026-11-11): a watchdog tick never drives -- the
+            # final command, after every override (Codex impl review P1)
+            lb_ = self.state.setdefault("layer_budget", {})
+            lb_["invariant_violations"] = lb_.get("invariant_violations", 0) + 1
         # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
         stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
         # Plan cusp position stall v7: an occupied prefix of the next leg (the current leg's check
@@ -5497,6 +5507,9 @@ class MissionCore:
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
         )
+        if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
+            self.hooks.require(False, "layer_latency_exceeded")
+        budget_stop_ = why == "layer_overdue"  # holds the wheels whether the phase acts or not (Codex impl review P1)
         if exit_closed_ == "watch":
             allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False
@@ -5519,9 +5532,9 @@ class MissionCore:
             if allowed > 0.0:
                 allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
-        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and acting) else None
+        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and (acting or budget_stop_)) else None
         return SimpleNamespace(allowed=allowed, why=why, acting=acting,
-                               obstacle_hold=bool(options.obstacle_act and acting and allowed == 0.0))
+                               obstacle_hold=bool(options.obstacle_act and (acting or budget_stop_) and allowed == 0.0))
 
     def paused_tick(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
         """One control tick while the mission is paused, resuming or cancelling (E3, E5, E6): nothing of the

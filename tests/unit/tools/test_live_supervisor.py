@@ -415,7 +415,7 @@ def test_the_live_runner_takes_the_encoder_model_with_its_own_age_table():
     runner = runner[: runner.index("EOT\n")]
     assert ('LAYER=config/obstacle_layer_single.yaml\n'
             '[ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml') in runner
-    assert '--obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act' in runner
+    assert '--obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"} --encoder-model "$ENCODER_MODEL" --obstacle-act' in runner
     assert "--obstacle-layer config/obstacle_layer_single.yaml" not in runner
 
 

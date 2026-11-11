@@ -21,6 +21,10 @@
 #   has no row; registry: that bundle or no launch; none: mapping; a folder: that bundle with MAP_START_POSE "x,y,yaw",
 #   map <- base_link at the scene's start), SLAM_BUNDLE_ROOT (where the registry's bundle folders are),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
+#   LAYER_BUDGET (config/layer_latency_budget.yaml: --layer-latency-budget, B 0.10 s and the 1.0 s end, the lead's
+#   decision 2026-11-11, docs/plans/2026-11-11-layer-latency-budget.md; off: none) -- records made before this default
+#   ran without the budget: a comparison's two arms use the same LAYER_BUDGET, and results with and without it are
+#   not mixed,
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
 #   --d7-reapproach-hold comes later and wins),
@@ -355,6 +359,11 @@ LAYOUT=(--min-obstacle-height-m 1.15 --prism-colliders --layout factory --grid-p
 # reported table for a team-spec model; PR #108's team-spec table)
 LAYER=config/obstacle_layer_single.yaml
 [ "$ENCODER_MODEL" = reported ] || LAYER=config/obstacle_layer_single_team_spec.yaml
+# the layer latency budget (docs/plans/2026-11-11-layer-latency-budget.md, the lead's decision 2026-11-11): a file kept
+# apart from the obstacle-layer one (a survey bundle's shared input); LAYER_BUDGET=off runs without it
+LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}
+BUDGET=(--layer-latency-budget "$LAYER_BUDGET")
+[ "$LAYER_BUDGET" = off ] && BUDGET=()
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
 [ -n "${START_POSE:-}" ] && RELOC=("--start-pose=$START_POSE" --start-relocalize --reloc-dir "$2"
@@ -380,7 +389,7 @@ ARGS=(
   "${LAYOUT[@]}" --fps 60 \
   --use-perception --pallet-prior config/pallet_prior_epal6.yaml --planning-target perception \
   --perception-mount carriage_low_measured --depth-quantize-mm 1 --record-slam --return-home \
-  --obstacle-layer "$LAYER" --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
+  --obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"} --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
