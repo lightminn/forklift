@@ -49,9 +49,14 @@ class FakeMcu:
         self.deaf = False  # frames are not received (a TX-only cut seen from the MCU)
         self.disarms = 0
         self.arms = 0
+        self.arm_delay = 0  # ARM answered this many 10 ms steps late
+        self._arm_due = None
 
     def receive(self, msg, seq):
         if self.deaf:
+            return
+        if isinstance(msg, Arm) and self.arm_delay and self._arm_due is None:
+            self._arm_due = (self.arm_delay, seq)
             return
         if isinstance(msg, Arm):
             if self.mode == Mode.DISARMED:
@@ -77,6 +82,14 @@ class FakeMcu:
 
     def advance(self, dt_us):
         self.t_us += dt_us
+        if self._arm_due is not None:
+            n, seq = self._arm_due
+            if n <= 1:
+                self._arm_due, delay, self.arm_delay = None, self.arm_delay, 0
+                self.receive(Arm(self.boot, self.t_us), seq)
+                self.arm_delay = delay
+            else:
+                self._arm_due = (n - 1, seq)
         if self.mode == Mode.ARMED and self.deadline_us is not None and self.t_us > self.deadline_us:
             self.mode, self.cmd, self.stop_until = Mode.STOPPING, (0.0, 0.0), self.t_us + 100_000
         if self.mode == Mode.STOPPING and self.t_us >= self.stop_until:
@@ -112,7 +125,8 @@ class Rig:
         self.tap = LinkDecoder()
         self.bridge = None
         self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
-                                           outbox_max=16), log=self._log, client=Client.REAL)
+                                           outbox_max=16), client=Client.REAL,
+                                on_state=lambda s, ns: self.bridge.add_sample(Sample(ns, s)))
         self.kin = RealKinematics(VEH)
         self.port = RealPlantPort(self.host, self.kin)
         provider = (lambda now: safety) if safety is not None else (lambda now: rt.bench_safety(confirmed))
@@ -128,12 +142,6 @@ class Rig:
         self.channels.connect("c1", "op", control=True)
         self.recs = []
         self.replies = []
-
-    def _log(self, what, now_ns, data, info):
-        if what == "received":
-            for r in self.tap.feed(bytes(data), now_ns):
-                if isinstance(r.message, McuState) and self.bridge is not None:
-                    self.bridge.add_sample(Sample(r.received_ns, r.message))
 
     def say(self, kind, **fields):
         msg = {"t": kind, "request_id": f"r{next(self.seq)}", "session_epoch": EPOCH, **fields}
@@ -168,7 +176,7 @@ class Rig:
             "speed_ratio": speed_ratio, "curvature_ratio": curvature_ratio,
             "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}})
 
-    def cycle(self, *, echo=True, transmit=True, teleop=None):
+    def cycle(self, *, echo=True, transmit=True, teleop=None, before=None):
         """20 ms: two MCU STATEs received, the bridge's cycle, then transmit (design 5's order)."""
         for _ in range(2):
             self.now += 10 * MS
@@ -180,6 +188,8 @@ class Rig:
             self.echo()
         if teleop is not None:
             self.teleop(**teleop)
+        if before is not None:
+            before(self)
         rec = self.bridge.cycle(self.now)
         self.recs.append(rec)
         if transmit:
@@ -388,18 +398,25 @@ def test_disarm_and_arm_in_one_cycle_disarm_the_mcu_then_arm_it_again():
 def test_a_new_arm_while_rolling_waits_for_a_stand():
     r = armed_rig()
     r.run(15, teleop={"speed_ratio": 1.0})
+    arms_before = r.mcu.arms
     r.say("disarm")
     r.say("arm")
-    rec = r.cycle()
-    arms = r.mcu.arms
-    assert rec.get("arm_wait") in (None, "mcu_armed", "older_drive_may_act", "not_standing") and r.mcu.arms == arms
-    waits = []
-    for _ in range(40):
-        rec = r.cycle()
-        waits.append(rec.get("arm_wait"))
-        if r.mcu.arms > arms:
-            break
-    assert "not_standing" in waits or "older_drive_may_act" in waits or "mcu_armed" in waits
+    recs = [r.cycle() for _ in range(60)]
+    armed_at = [k for k, x in enumerate(recs) if x.get("arm") is not None]
+    assert armed_at and r.mcu.arms == arms_before + 1
+    k = armed_at[0]
+    assert recs[k]["arm_still"] is True  # the ARM went out on a measured stand
+    assert any(x.get("arm_wait") == "not_standing" for x in recs[:k])  # and not while still rolling
+
+
+def test_a_late_arm_answer_is_waited_for_not_refused():
+    """Codex impl P2-4: the host's ARM pending is not a revoke."""
+    r = Rig()
+    r.mcu.arm_delay = 6  # 60 ms
+    r.to_teleop()
+    r.arm()
+    assert r.bridge.phase == rt.READY and r.mcu.arms == 1
+    assert not any(str(x.get("stop", "")).startswith("mcu_arm_refused") for x in r.recs)
 
 
 def test_a_locked_board_is_never_armed():
@@ -474,3 +491,64 @@ def test_no_truth_is_read(monkeypatch):
     r = armed_rig()
     r.run(20, teleop={"speed_ratio": 1.0})
     assert r.nonzero_sent()
+
+
+def test_an_operator_stop_in_the_cycle_the_mcu_stopping_is_first_seen_disarms_at_once():
+    """Codex impl P1-3."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 1.0})
+    r.mcu.deaf = True
+    sent = {"done": False}
+
+    def stop_when_stopping(rig):
+        if not sent["done"] and rig.mcu.mode == Mode.STOPPING:
+            rig.channels.message("c1", "op", {"t": "stop", "session_epoch": EPOCH, "request_id": "s3"})
+            sent["done"] = True
+
+    for _ in range(30):
+        n = len(r.sent)
+        rec = r.cycle(before=stop_when_stopping)
+        if sent["done"]:
+            break
+    assert sent["done"] and r.bridge.mcu_wait is None and rec.get("disarm")
+    assert any(isinstance(m, Disarm) for _t, m in r.sent[n:])
+
+
+def test_a_steering_only_command_never_outlives_the_teleop_deadline():
+    """Codex impl P2-5: a presteer at zero wheel speed is still an active teleop command."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.0, "curvature_ratio": 1.0})
+    last = [m for _t, m in r.sent if isinstance(m, Drive)][-1]
+    assert last.left_wheel_rad_s == 0.0 and abs(last.steering_rad) > 0.0
+    deadline_ns = int(r.arbiter.teleop["deadline"] * 1e9)
+    expiry = r.host.drive_traffic()["written"][-1]["expires_ns"]
+    assert expiry <= deadline_ns
+
+
+def test_the_direction_check_covers_the_curvature_the_steering_holds():
+    """Codex impl P1-2: the rear is closed only on near-straight arcs; the target curvature is large but the
+    steering still holds a small one -- the check must see it."""
+    def floor(curvs, d, v):
+        if d < 0 and any(abs(k) < 0.1 for k in curvs):
+            return 0.0, "blocked_behind_straight"
+        return 1.0, "ok"
+
+    r = armed_rig(floor=floor)
+    n = len(r.sent)
+    recs = [r.cycle(teleop={"speed_ratio": 1.0, "curvature_ratio": 1.0}) for _ in range(5)]
+    assert r.nonzero_sent(n) == [] and any(x.get("direction_cut") for x in recs)
+
+
+def test_states_the_host_rejects_never_reach_the_speed():
+    """Codex impl P2-7."""
+    from dataclasses import replace
+
+    r = armed_rig()
+    last = r.bridge.samples[-1]
+    bad = r.mcu.state()
+    r.host.on_bytes(encode(replace(bad, boot_id=0), 1), r.now + 1)
+    r.host.on_bytes(encode(replace(bad, mcu_time_us=last.state.mcu_time_us - 50_000), 1), r.now + 2)
+    assert r.bridge.samples[-1] is last
+    good = replace(bad, mcu_time_us=last.state.mcu_time_us + 10_000)
+    r.host.on_bytes(encode(good, 1), r.now + 3)
+    assert r.bridge.samples[-1].state == good  # an accepted one does arrive

@@ -29,7 +29,7 @@ from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
-from forklift_core.mcu_link.messages import LinkDecoder, McuState  # noqa: E402
+from forklift_core.mcu_link.messages import McuState  # noqa: E402
 from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.kinematics import RealKinematics, teleop_limit_overrides  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
@@ -72,8 +72,7 @@ class Bridge:
                                lambda: secrets.token_hex(16), mission=None)
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)
-        self._tap = LinkDecoder()
-        self.host = McuLinkHost(HOST_CFG, log=self._log, client=Client.REAL)
+        self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state)
         self.port = RealPlantPort(self.host, self.kin)
         self.safety = rt.bench_safety(confirmed)
         self.core = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
@@ -85,15 +84,9 @@ class Bridge:
         self.record_errors = 0
         self.overruns = 0
 
-    def _log(self, what, now_ns, data, info):
-        if what != "received":
-            return
-        try:
-            for r in self._tap.feed(bytes(data), now_ns):
-                if isinstance(r.message, McuState):
-                    self.core.add_sample(Sample(r.received_ns, r.message))
-        except Exception:  # noqa: BLE001 -- the host's receive goes on
-            self.record_errors += 1
+    def _on_state(self, state: McuState, received_ns: int) -> None:
+        """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""
+        self.core.add_sample(Sample(received_ns, state))
 
     def cycle(self, now_ns: int) -> dict:
         """Design 5: receive only, decide, transmit only."""
@@ -105,12 +98,12 @@ class Bridge:
             reading = self.core.reading
             st = self.host.state
             q = None if reading is None or reading.steering_rad is None else reading.steering_rad
+            # the final state and the command actually submitted (Codex impl P3): ``out`` was refreshed after every
+            # stop the cycle took; ``applied`` is the port's speed and the steering command's own curvature
             msg = state_message(self.arbiter, out, self.core.safety_provider(now), now_mono=now,
                                 rear_axle_speed_mps=None if reading is None or not reading.speed.valid
                                 else reading.speed.signed_mps,
-                                applied={"speed_mps": rec["applied_mps"], "curvature_inv_m": out.curvature_inv_m,
-                                         "steering_rad": None if q is None else [q]},
-                                steering_rad=None if q is None else [q],
+                                applied=rec["applied"], steering_rad=None if q is None else [q],
                                 lift_m=None if st is None else st.lift_m)
             self.channels.put(None, msg)
         events += self.dev.transmit(self.host, now_ns)
@@ -133,23 +126,30 @@ class Bridge:
             time.sleep(CYCLE_S)
 
 
-def run(bridge: Bridge, *, duration_s: float | None, clock=time.monotonic_ns, sleep=time.sleep) -> None:
-    """The 50 Hz wall-clock loop: an overrun is counted and the next cycle starts from now -- no catching up."""
+OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun
+
+
+def run(bridge: Bridge, *, duration_s: float | None, clock=time.monotonic_ns, sleep=time.sleep) -> list[int]:
+    """The 50 Hz wall-clock loop. Every cycle starts at least a period after the previous one started; a late start
+    is counted and the schedule restarts from it -- no catching up (Codex impl P2-6: two cycles 5 ms apart each took
+    a 20 ms slew). Returns the start times (tests)."""
     period = int(CYCLE_S * 1e9)
     t0 = clock()
-    nxt = t0
+    slot = t0
+    starts: list[int] = []
     for _ in itertools.count():
         now = clock()
         if duration_s is not None and now - t0 >= duration_s * 1e9:
             break
-        if now > nxt + period:
+        if now - slot > OVERRUN_TOLERANCE_NS:
             bridge.overruns += 1
-            nxt = now
+        starts.append(now)
         bridge.cycle(now)
-        nxt += period
-        delay = (nxt - clock()) / 1e9
+        slot = now + period  # from this cycle's actual start
+        delay = (slot - clock()) / 1e9
         if delay > 0:
             sleep(delay)
+    return starts
 
 
 def main(argv=None) -> int:

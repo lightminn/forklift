@@ -105,13 +105,16 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 
 class McuLinkHost:
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
-                 allow_locked: bool = False, commission: bool = False) -> None:
+                 allow_locked: bool = False, commission: bool = False,
+                 on_state: Callable[[McuState, int], None] | None = None) -> None:
         """``client``: who drives through this host (mcu-link/2 build bits, contract 3.3): the real executor (the
         default), the HIL executor, or a bring-up tool. ``allow_locked``: a bring-up tool's run on a model or HIL
         board whose outputs are locked. ``commission``: the commissioning tool (bring-up only,
         docs/design/2026-11-12-bringup-commission-tool.md 5): COMMISSION to a commissioning build and nothing else,
-        never a DRIVE."""
+        never a DRIVE. ``on_state(state, received_ns)``: called with every STATE this host accepted (never one it
+        ignored as invalid or out of order) -- the teleop bridge's encoder speed reads these only."""
         self.cfg = cfg
+        self._on_state_cb = on_state
         self.client, self.allow_locked = Client(client), bool(allow_locked)
         self.commission_mode = bool(commission)
         if self.commission_mode and self.client is not Client.BRINGUP:
@@ -137,6 +140,11 @@ class McuLinkHost:
     @property
     def ready(self) -> bool:
         return self._auth == _READY
+
+    @property
+    def arming(self) -> bool:
+        """An operator ARM asked for and not yet answered (no authorization yet, none revoked)."""
+        return self._auth == _ARM_PENDING
 
     @property
     def auth_epoch(self) -> int:
@@ -236,6 +244,8 @@ class McuLinkHost:
         # that arrives after a stale gap must not hide it (Codex P0-7 round 2 P1).
         self._expire(now_ns, events)
         self._state, self._state_rx_ns = s, now_ns
+        if self._on_state_cb is not None:
+            self._on_state_cb(s, now_ns)
         if prev is None:
             events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
         if self._stale_reported:

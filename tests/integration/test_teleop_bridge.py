@@ -231,16 +231,47 @@ def test_without_the_four_confirmations_teleop_stays_closed(run):
     assert r.b.arbiter.mode != "TELEOP" and r.b.host.state.mode == Mode.DISARMED and r.nonzero() == []
 
 
-def test_the_cli_runs_against_the_model_and_leaves_it_disarmed(mcu_model, tmp_path, monkeypatch, capsys):  # noqa: F811
+def test_the_loop_never_catches_up():
+    """Codex impl P2-6: a 35 ms first cycle -- the next starts 20 ms after the late one, not 5 ms."""
+    t = {"now": 0}
+    took = iter([35_000_000] + [1_000_000] * 10)
+
+    class Fake:
+        overruns = 0
+
+        def cycle(self, now):
+            t["now"] += next(took)
+
+    def sleep(s):
+        t["now"] += int(s * 1e9)
+
+    starts = tb.run(Fake(), duration_s=0.12, clock=lambda: t["now"], sleep=sleep)
+    gaps = [b - a for a, b in zip(starts, starts[1:])]
+    assert min(gaps) >= 20_000_000 and gaps[0] == 35_000_000
+
+
+def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model, tmp_path, monkeypatch,  # noqa: F811
+                                                                       capsys):
     m = Model(mcu_model)
+    made = []
+    orig = tb.Bridge.__init__
+
+    def init(self, *a, **k):
+        orig(self, *a, **k)
+        made.append(self)
+
     try:
         dev = PtyDevice(m.master)
         monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb.Bridge, "__init__", init)
         rec = tmp_path / "run.jsonl"
         code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--duration-s", "1.0",
                         *[f"--{n.replace('_', '-')}" for n in ALL]])
         out = capsys.readouterr().out
         assert code == 0 and '"command_cap_mps"' in out and "no_scan" in out
         assert rec.read_text().count("\n") >= 20
+        b = made[0]
+        assert b.host.state is not None and b.host.state.mode == Mode.DISARMED
+        assert b.host.state.last_rx_seq == b.host._seq - 1  # the closing DISARM was the last frame the MCU took
     finally:
         m.close()

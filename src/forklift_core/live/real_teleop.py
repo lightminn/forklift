@@ -19,7 +19,7 @@ from forklift_core.mcu_link.messages import FaultFlag, Mode, wheel_count_delta
 from forklift_core.plant.bringup import Sample
 from forklift_core.plant.real_vehicle import DriveRefusal
 from forklift_core.safety.arbiter import Feedback
-from forklift_core.safety.teleop_drive import TeleopLimits
+from forklift_core.safety.teleop_drive import TeleopLimits, bundle
 from forklift_core.safety.truth_access import SafetySpeed
 
 SCHEMA = "teleop_bridge/1"
@@ -146,32 +146,35 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
                           (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q)
 
 
+CLOCK_DRIFT_MAX = 100e-6  # premise A3: the MCU and host clocks differ in rate by at most this (100 ppm)
+
+
 class DelayTracker:
     """Each STATE's delay over the link's best case (design 2): the offset ``host receipt - MCU time`` of a STATE
-    minus the smallest offset seen over ``window_s``. The base (smallest) delay is the premise L's; whatever a STATE
-    takes beyond it is measured here and added to its age, so a late STATE never reads as fresh."""
+    minus the base offset. The base is the smallest offset seen this boot, allowed to rise only as fast as the two
+    clocks may drift apart (premise A3) -- a sustained higher delay is never taken for the new best case (Codex impl
+    P1-1: a 5 s window let 80 ms become 0 after 6 s). The base delay itself is the premise L's; what a STATE takes
+    beyond it is measured here and added to its age, so a late STATE never reads as fresh."""
 
-    def __init__(self, window_s: float = 5.0) -> None:
-        self.window_ns = int(window_s * 1e9)
-        self._seen: list[tuple[int, int, int]] = []  # (host_ns, offset_ns, boot)
+    def __init__(self, drift_max: float = CLOCK_DRIFT_MAX) -> None:
+        self.drift_max = float(drift_max)
+        self._base: tuple[int, int, int] | None = None  # (offset_ns, host_ns, boot)
+
+    def _base_at(self, host_ns: int) -> int:
+        off, t, _boot = self._base
+        return off + int(self.drift_max * max(0, host_ns - t))
 
     def add(self, sample: Sample) -> None:
         off = sample.host_ns - sample.state.mcu_time_us * 1000
-        if self._seen and self._seen[-1][2] != sample.state.boot_id:
-            self._seen = []  # a new boot is a new MCU clock
-        self._seen.append((sample.host_ns, off, sample.state.boot_id))
-        cut = sample.host_ns - self.window_ns
-        while self._seen and self._seen[0][0] < cut:
-            self._seen.pop(0)
+        boot = sample.state.boot_id
+        if self._base is None or self._base[2] != boot or off <= self._base_at(sample.host_ns):
+            self._base = (off, sample.host_ns, boot)  # a new boot is a new MCU clock
 
     def excess_s(self, sample: Sample) -> float:
-        if not self._seen:
+        if self._base is None or self._base[2] != sample.state.boot_id:
             return 0.0
-        base = min(o for _h, o, b in self._seen if b == sample.state.boot_id) if any(
-            b == sample.state.boot_id for _h, _o, b in self._seen) else None
-        if base is None:
-            return 0.0
-        return max(0.0, (sample.host_ns - sample.state.mcu_time_us * 1000 - base) / 1e9)
+        off = sample.host_ns - sample.state.mcu_time_us * 1000
+        return max(0.0, (off - self._base_at(sample.host_ns)) / 1e9)
 
 
 STILL_WINDOW_S = 0.2  # a stand before an MCU ARM: counts still over at least this much of contiguous STATEs ...
@@ -349,6 +352,7 @@ class TeleopBridge:
         self.holding = True  # the steering is held (not following the teleop curvature)
         self.last_cmd: tuple[float, int] = (0.0, 0)  # (speed, expiry ns) of the last DRIVE queued
         self.mcu_wait: dict | None = None  # an MCU-originated STOPPING: {"control_gen", "until_ns"}
+        self._urgent = False  # this cycle took a higher-priority stop than an MCU STOPPING
         self.reading: EncoderReading | None = None
         self.records: list[dict] = []
 
@@ -391,6 +395,7 @@ class TeleopBridge:
         if reading.speed.valid:
             feedback = Feedback(self.samples[-1].host_ns / 1e9, reading.speed.signed_mps, reading.yaw_rate or 0.0,
                                 lift_m=lift, steering_rad=abs(reading.steering_rad))
+        gen_before = a.control_gen
         self.link.gate(now)
         self.link.begin(now, feedback)
         safety = enforce_real(self.safety_provider(now))
@@ -403,6 +408,9 @@ class TeleopBridge:
                      "steering_error_rad": math.inf if target is None else abs(target[0] - q),
                      "permit": self.floor_permit}
         out = self.link.end(now, [], safety, (0.0, 0.0), drive)
+        # a boundary the arbiter took this cycle (an operator STOP, a lease or feedback loss, a disarm): it outranks
+        # an MCU STOPPING first seen in the same cycle (Codex impl P1-3)
+        self._urgent = a.control_gen != gen_before
         rec.update(mode=a.mode, armed=a.armed, arm_gen=a.arm_gen, target_mps=out.speed_mps,
                    target_kappa=out.curvature_inv_m, policy=out.policy.reason,
                    speed=None if not reading.speed.valid else
@@ -412,8 +420,10 @@ class TeleopBridge:
         # design 3/4: an invalid speed while driving, or a bound over the limit, is a STOP (not only the latch)
         if was_driving and not reading.speed.valid:
             self._stop(now_ns, "speed_invalid", rec)
+            self._urgent = True
         elif a.armed and reading.speed.valid and reading.speed.bound_mps > self.limit_mps:
             self._stop(now_ns, "overspeed", rec)
+            self._urgent = True
         if a.control_gen != self.seen_control_gen:
             self.seen_control_gen = a.control_gen
             self.port.new_control_generation()  # queued DRIVEs go before this cycle's transmit
@@ -422,8 +432,13 @@ class TeleopBridge:
         a.last_applied = applied  # what was put on the port, not the arbiter's target (Codex P1-3)
         rec["applied_mps"] = applied
         rec["phase"] = self.phase
+        q = self.q_cmd
+        rec["applied"] = {"speed_mps": applied, "steering_rad": None if q is None else [q],
+                          "curvature_inv_m": None if q is None else self.kin.held_curvature((q,))}
         self.records.append(rec)
-        rec["_out"] = out
+        # the state after every stop this cycle took (Codex impl P3): the console reads the final mode and gen
+        rec["_out"] = replace(out, mode=a.mode, armed=a.armed, control_gen=a.control_gen, speed_mps=applied,
+                              reason=a.preempt_latch)
         return rec
 
     # ------------------------------------------------------------------ design 4
@@ -457,12 +472,12 @@ class TeleopBridge:
                 self.mcu_wait = None
                 self._disarm(now_ns, why, rec)
             return
-        if self.phase in (ARMING, READY) and not h.authorized:
+        if self.phase in (ARMING, READY) and not h.authorized and not h.arming:
             # the host's authorization ended on its own: MCU STOPPING / FAULT / ESTOP / boot / link / build
             reason = "link" if mcu_mode is None or not h.health(now_ns).fresh else mcu_mode.name.lower()
             what = "mcu_arm_refused" if self.phase == ARMING else f"mcu_{reason}"
             self._stop(now_ns, what, rec)
-            if mcu_mode == Mode.STOPPING and h.health(now_ns).fresh:
+            if mcu_mode == Mode.STOPPING and h.health(now_ns).fresh and not self._urgent:
                 self.mcu_wait = {"control_gen": a.control_gen, "until_ns": now_ns + STOPPING_WAIT_NS}
                 self.phase, self.bound_gen = HELD, None
                 self.host.drop_drives("mcu_stopping")
@@ -485,6 +500,7 @@ class TeleopBridge:
             why = self._arm_blocker(now_ns, reading)
             rec["arm_wait"] = why
             if why is None:
+                rec["arm_still"] = counts_still(self.samples, self.params)
                 self.used_gens.add(g)
                 blocked = h.request_arm(now_ns)
                 if blocked is not None:
@@ -544,7 +560,12 @@ class TeleopBridge:
             q_cmd = [self.q_cmd]
         if speed != 0.0:
             requested = a.drive.target(a.teleop, loaded=out.policy.loaded)[0] if a.teleop is not None else 0.0
-            curvs = sorted({float(out.curvature_inv_m), float(a.drive.kappa)})
+            # the bundle TeleopDrive checks (measured curvature to the output's, with the margin), widened to the
+            # curvature the submitted steering holds (Codex impl P1-2)
+            k_meas = self.kin.held_curvature((q_meas,)) if q_meas is not None else None
+            k_cmd = self.kin.held_curvature(q_cmd)
+            ends = [k for k in (k_meas, k_cmd, float(out.curvature_inv_m)) if k is not None]
+            curvs = bundle(min(ends), max(ends), a.config.teleop_limits.curvature_margin_inv_m)
             speed, why = output_direction_check(lambda d, v: self.floor_permit(curvs, d, v), reading.speed,
                                                 requested, speed, self._commanded(now_ns))
             if why is not None:
@@ -559,7 +580,7 @@ class TeleopBridge:
                 return 0.0
             drive = self.kin.finalize(raw, q_cmd)
             speed = drive.speed_mps
-        expires = self._deadline_ns(now_ns, speed != 0.0)
+        expires = self._deadline_ns(now_ns, follow)  # an active teleop command, wheels or steering only
         if expires <= now_ns:
             speed, drive = 0.0, self.kin.stopped(q_cmd)
             expires = self._deadline_ns(now_ns, False)

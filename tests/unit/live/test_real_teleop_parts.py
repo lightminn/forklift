@@ -236,10 +236,32 @@ def test_a_late_state_ages_by_its_delay_over_the_best_case():
     late = st(100, 0, 0, rx_ms=125)  # 25 ms after its MCU time: 24 ms late
     tr.add(early)
     tr.add(late)
-    assert tr.excess_s(late) == pytest.approx(0.024, abs=1e-6)
+    assert tr.excess_s(late) == pytest.approx(0.024, abs=1e-5)  # less the clock-drift allowance (4 us)
     now = late.host_ns + 1_000_000
     fresh = rt.encoder_speed([early, late], now, P, ok)
     aged = rt.encoder_speed([early, late], now, P, ok, tr.excess_s(late))
-    assert aged.age_s == pytest.approx(fresh.age_s + 0.024) and aged.speed.bound_mps > fresh.speed.bound_mps
+    assert aged.age_s == pytest.approx(fresh.age_s + 0.024, abs=1e-5) and aged.speed.bound_mps > fresh.speed.bound_mps
     # later than the age limit allows: no safety speed at all
     assert not rt.encoder_speed([early, late], now, P, ok, 0.05).speed.valid
+
+
+def test_a_sustained_delay_never_becomes_the_new_best_case():
+    """Codex impl P1-1: 1 ms once, then 80 ms for 6 s -- the excess stays about 79 ms (less the drift allowance)."""
+    tr = rt.DelayTracker()
+    tr.add(st(0, 0, 0, rx_ms=1))
+    last = None
+    for k in range(1, 601):
+        t = k * 10
+        last = st(t, 0, 0, rx_ms=t + 80)
+        tr.add(last)
+    assert tr.excess_s(last) == pytest.approx(0.079, abs=0.001)
+
+
+def test_the_base_follows_a_slow_clock_drift():
+    tr = rt.DelayTracker()
+    last = None
+    for k in range(0, 601):  # 50 ppm: the offset grows 0.5 ms over 10 s
+        t = k * 10
+        last = st(t, 0, 0, rx_ms=t + 1 + t * 50e-6)
+        tr.add(last)
+    assert tr.excess_s(last) < 1e-4
