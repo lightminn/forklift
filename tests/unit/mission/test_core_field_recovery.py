@@ -265,3 +265,57 @@ def test_an_open_field_recovery_steps_the_slewed_wheels_to_zero_with_the_obstacl
     core.state["command_speed"] = previous
     res = core.assemble_command(11.0, 0.01, 0.0, 0.0, 0.0, np.zeros(2), False, False, False, False, False)
     assert core.state["command_speed"] == 0.0 and res.drive.speed_mps == 0.0  # not 0.192 off the slew
+
+
+class _Tracker:
+    def __init__(self):
+        self.applied = ((0.0, 0.0, 0.0),)
+        self.mode = "holding"
+
+    def release(self, odom_from_base):
+        self.applied = ((1.0, 0.0, 0.0),)  # the received correction: x + 1
+        self.mode = "tracking"
+        return 1.0, 0.0
+
+
+def test_a_pallet_lifted_in_a_hold_is_kept_out_where_the_hold_put_it_after_a_normal_release():
+    """Codex 4d-2b-2 P2: carried in the pickup hold -> the transport's ordinary release -> recovery done."""
+    core = field_core(entered=False)
+    core.targets.update_pose("P1", Pose(1.0, 0.0, 0.0), basis="recognised", uncertainty_m=0.05)
+    core.slam = {"tracker": _Tracker(), "holds": []}
+    core.options.scenario = SimpleNamespace(destination=SimpleNamespace(x_m=5.0, y_m=0.0, yaw_rad=0.0))
+    core.commands.adopted_id = core.commands.mission_id
+    core.in_hold = True
+    core.ms.phase = "lift"
+    core.refresh_targets()  # lifted in the hold: carried, its last pose the hold's estimate
+    assert core.targets.pallets["P1"].state == "carried"
+    core.release_slam("ODOM")  # the ordinary release on the way to the transport
+    assert core.targets.pallets["P1"].last_pose == Pose(2.0, 0.0, 0.0)
+    core.release_slam("ODOM")  # a later release does not move it again
+    assert core.targets.pallets["P1"].last_pose == Pose(2.0, 0.0, 0.0)
+    core.cargo.on_insert_start((0.0, 0.0, 0.0))
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.commands.status = "cancelled"
+    core.abandon_jobs = lambda t: None
+    assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
+    assert core.targets.pallets["P1"].pose == Pose(2.0, 0.0, 0.0)
+
+
+def test_the_simulation_reads_no_correction_around_a_release():
+    core, _, _ = make("lift", real=False)
+    reads = []
+
+    class Watch(_Tracker):
+        @property
+        def applied(self):
+            reads.append("applied")
+            return ((0.0, 0.0, 0.0),)
+
+        @applied.setter
+        def applied(self, v):
+            pass
+
+    core.slam = {"tracker": Watch(), "holds": []}
+    core._last_pose_hold = 0  # noqa: SLF001
+    core.release_slam("ODOM")
+    assert reads == []
