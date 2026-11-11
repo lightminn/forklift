@@ -1420,6 +1420,115 @@ static void v2_state_carries_reset_cause(void)
     CHECK_EQ_U(s.reset_cause, DRIVE_RESET_IWDG);
 }
 
+/* ---- Codex design round 2 ------------------------------------------------------------- */
+static void v2r2_disarm_rearm_does_not_reset_commission_clock(void)
+{
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    int t;
+    for (t = 0; t < 3000 && d.mode == DRIVE_MODE_ARMED; t++) {
+        if (t % 50 == 0) {
+            link_msg m[4];
+            int n = 0;
+            if (t > 0 && t % 1500 == 0) { /* DISARM -> ARM -> 0 in the same cycle */
+                m[n++] = simple(LINK_DISARM, seq++);
+                m[n++] = arm_msg(seq++, d.boot_id, echo_now());
+                m[n] = commission_msg(seq++, 0, 0, 150, echo_now());
+                m[n++].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+            }
+            m[n] = commission_msg(seq++, 0, 1000, 150, echo_now());
+            if (n > 0) {
+                m[n].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+            }
+            n++;
+            tick_moving(2.0, 0.0, m, n);
+        } else {
+            tick_moving(2.0, 0.0, NULL, 0);
+        }
+    }
+    CHECK(t >= 1990 && t <= 2012);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+}
+
+static void v2r2_first_cycle_gap_drops_the_step(void)
+{
+    reset_world(0);
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
+    uint32_t c0 = d.wheel[0].count;
+    in.now_us += 100000;                                 /* first cycle very late */
+    in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 40000); /* would fold to -25536 */
+    tick();
+    CHECK_EQ_U(d.wheel[0].count, c0); /* dropped, no fault on the first cycle */
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_GAP));
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_JUMP(0)));
+    CHECK(d.mode != DRIVE_MODE_FAULT);
+    /* A first cycle on time adds its step as usual. */
+    reset_world(0);
+    CHECK(drive_init(&d, &cfg, &in, BOOT_ID, DRIVE_RESET_POWER));
+    in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 5);
+    tick();
+    CHECK_EQ_U(d.wheel[0].count, 5);
+}
+
+static void v2r2_polarity_baseline_waits_for_a_fresh_window(void)
+{
+    /* Configured 1 ms but running at 1.9 ms (no overrun): a 20-sample window spans 38 ms, so a
+       baseline taken after 20 ms still holds the acceleration (Codex round 2). */
+    boot_with(NULL);
+    for (int i = 0; i < 2; i++) {
+        cfg.wheel[i].window = 20;
+    }
+    cfg.enc_polarity_rise_rad_s = 0.05f;
+    cfg.wheel_pi.ki = 0.0f; /* the duty turns negative the cycle the brake starts */
+    cfg.wheel_pi.kff = 0.0f;
+    uint16_t seq = 4;
+    arm_drive(5.0);
+    double rate = 0.0;
+    for (int k = 0; k < 250 && d.mode == DRIVE_MODE_ARMED; k++) {
+        double target = k < 50 ? 5.0 : 0.0;
+        rate += k < 50 ? 0.04 : -0.001; /* up to 2 rad/s, then a slow brake */
+        in.now_us += 1900 - cfg.period_us;
+        for (int i = 0; i < 2; i++) {
+            wheel_pos[i] += rate * 1.9e-3 * 4096.0 / TWO_PI;
+            in.wheel_hw[i] = (uint16_t)(long)llround(wheel_pos[i]);
+        }
+        if (k % 25 == 0) {
+            link_msg m = drive_msg(seq++, (float)target, (float)target, 0, 150, echo_now());
+            tick_msgs(&m, 1);
+        } else {
+            tick();
+        }
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_ENCODER_POLARITY(0)));
+}
+
+static void mod_commission_coast(drive_config *c)
+{
+    mod_commission(c);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        c->safe_brake[ch] = false;
+    }
+}
+
+static void v2r2_commission_stopping_brakes_every_axis(void)
+{
+    boot_with(mod_commission_coast);
+    send(arm_msg(1, d.boot_id, echo_now()));
+    send(commission_msg(2, 0, 0, 150, echo_now()));
+    send(commission_msg(3, 0, 1000, 150, echo_now()));
+    send(commission_msg(4, 2, 500, 150, echo_now())); /* L driven, then M */
+    CHECK(out.drvoff[DRIVE_CH_L]);                    /* unpicked in ARMED: its safe output */
+    ticks(200);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        CHECK(!out.drvoff[ch]); /* every axis: duty 0 with the outputs on (brake) */
+        CHECK_NEAR(out.duty[ch], 0.0, 0.0);
+    }
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1461,5 +1570,9 @@ int main(void)
     v2_polarity();
     v2_slew();
     v2_state_carries_reset_cause();
+    v2r2_disarm_rearm_does_not_reset_commission_clock();
+    v2r2_first_cycle_gap_drops_the_step();
+    v2r2_polarity_baseline_waits_for_a_fresh_window();
+    v2r2_commission_stopping_brakes_every_axis();
     return FW_TEST_RESULT();
 }

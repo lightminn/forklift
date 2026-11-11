@@ -181,6 +181,7 @@ typedef struct drive {
     bool first_cycle; /* no gap judgement before the first drive_begin */
     bool stuck_active[2], pol_active[2], pol_base_set[2];
     uint64_t stuck_t0_us[2], pol_t0_us[2], pol_tb_us[2];
+    uint32_t pol_t0_hal[2]; /* HAL clock at the episode start */
     uint32_t stuck_c0[2];
     float pol_r0[2];
     /* Driver initialisation and SPI. */

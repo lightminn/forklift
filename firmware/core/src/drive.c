@@ -274,7 +274,8 @@ static void reset_control(drive *d)
     }
     d->cm_axis = CM_AXIS_NONE;
     d->cm_duty = 0.0f;
-    d->cm_on = false;
+    /* cm_on is not cleared here: only a cycle whose applied outputs are all zero clears it, so
+       a DISARM and ARM in one cycle cannot restart the commissioning clock (Codex round 2). */
     pi_reset(&d->steer_pi);
     pi_reset(&d->lift_pi);
     d->steer_target = d->steer_ref = d->steer.position;
@@ -341,8 +342,12 @@ static void read_sensors(drive *d, const drive_inputs *in)
         wheel_enc *e = &d->wheel[i];
         uint32_t dt_us = in->now_us - wheel_enc_last_us(e);
         bool drop = false;
-        if (!d->first_cycle && dt_us > c->enc_gap_max_us) {
-            bits |= DRIVE_FAULT_ENCODER_GAP;
+        if (dt_us > c->enc_gap_max_us) {
+            /* The step may have folded. The first cycle after init may be late (USB start-up):
+               drop its step without a fault (Codex round 2). */
+            if (!d->first_cycle) {
+                bits |= DRIVE_FAULT_ENCODER_GAP;
+            }
             drop = true;
         }
         /* An impossible step; dt has a floor so a cycle right after a late one is not judged
@@ -353,7 +358,7 @@ static void read_sensors(drive *d, const drive_inputs *in)
                           (float)c->wheel[i].counts_per_rev / TWO_PI_F +
                       1.0f;
         int32_t step = wheel_enc_step(e, &c->wheel[i], in->wheel_hw[i]);
-        if (fabsf((float)step) > limit) {
+        if (!drop && fabsf((float)step) > limit) {
             bits |= DRIVE_FAULT_ENCODER_JUMP(i);
             drop = true;
         }
@@ -448,13 +453,16 @@ static uint32_t judge_encoder(drive *d, int i)
     }
 
     if (fabsf(u) >= c->enc_polarity_duty && u * w < 0.0f) {
-        uint64_t window_us = (uint64_t)c->wheel[i].window * c->period_us;
         if (!d->pol_active[i]) {
             d->pol_active[i] = true;
             d->pol_base_set[i] = false;
             d->pol_t0_us[i] = d->time_us;
+            d->pol_t0_hal[i] = d->last_now32;
         }
-        if (!d->pol_base_set[i] && d->time_us - d->pol_t0_us[i] >= window_us) {
+        /* Baseline once the oldest sample of the rate window is from the episode itself, so a
+           slow real cycle cannot leave the earlier acceleration in it (Codex round 2). */
+        if (!d->pol_base_set[i] &&
+            (int32_t)(wheel_enc_oldest_us(e, &c->wheel[i]) - d->pol_t0_hal[i]) >= 0) {
             d->pol_base_set[i] = true; /* the rate window has been replaced once */
             d->pol_r0[i] = fabsf(w);
             d->pol_tb_us[i] = d->time_us;
@@ -881,6 +889,17 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
 {
     const drive_config *c = d->cfg;
     bool any = false;
+    if (d->mode == DRIVE_MODE_STOPPING) {
+        /* Every axis at duty 0 with the outputs on: the electric brake (Codex round 2). A
+           channel's own driver fault still cuts it. */
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            bool own_fault = (d->fault_flags & DRIVE_FAULT_DRIVER(ch)) != 0;
+            o->drvoff[ch] = !d->drivers_ready || own_fault;
+        }
+        d->wheel_duty[0] = d->wheel_duty[1] = 0.0f;
+        d->cm_on = false;
+        return;
+    }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         if (ch != d->cm_axis) {
             o->drvoff[ch] = channel_safe_drvoff(d, ch);
