@@ -6,12 +6,21 @@ set_property(CACHE FW_BUILD PROPERTY STRINGS normal commission hil)
 set(FW_MOTOR_OUTPUT 0 CACHE STRING "0 = outputs locked (default); 1 needs FW_IPROPI_PROTECTION_RECORD")
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
+set(FW_TEST_IWDG_STALL 0 CACHE STRING "0, or N = 1..60: S5 test build that stops the tick N s after boot")
 
 if(NOT FW_LINK MATCHES "^(usb|uart7)$")
     message(FATAL_ERROR "FW_LINK must be usb or uart7")
 endif()
 if(NOT FW_BUILD MATCHES "^(normal|commission|hil)$")
     message(FATAL_ERROR "FW_BUILD must be normal, commission or hil")
+endif()
+if(NOT FW_TEST_IWDG_STALL MATCHES "^([0-9]|[1-5][0-9]|60)$")
+    message(FATAL_ERROR "FW_TEST_IWDG_STALL must be 0 or a number of seconds 1..60")
+endif()
+if(FW_TEST_IWDG_STALL AND FW_MOTOR_OUTPUT)
+    # Lead condition 2026-11-12: the stall test build always reports outputs_locked, so the real
+    # executor refuses teleop and autonomy on it (board design 9).
+    message(FATAL_ERROR "FW_TEST_IWDG_STALL needs the outputs locked (FW_MOTOR_OUTPUT=0)")
 endif()
 if(FW_MOTOR_OUTPUT)
     # Opening the outputs is the user's decision once the IPROPI ADC protection is confirmed
@@ -26,9 +35,18 @@ set(TP ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party)
 # regenerated at every build, not only at configure time, so a new commit or a dirty tree in the
 # same build directory reaches the ELF.
 set(BUILD_INFO_H ${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h)
+# The IWDG stall test build is not told apart by STATE.flags: its build kind, the USB product
+# string and the image name say it (board design 9).
+if(FW_TEST_IWDG_STALL)
+    set(FW_BUILD_KIND "${FW_BUILD}+iwdg-stall-${FW_TEST_IWDG_STALL}s")
+    set(FW_IMAGE fw_iwdg_stall)
+else()
+    set(FW_BUILD_KIND "${FW_BUILD}")
+    set(FW_IMAGE fw)
+endif()
 add_custom_target(build_info
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${BOARD_DIR} -DIN=${BOARD_DIR}/build_info.h.in
-            -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD} -DFW_LINK=${FW_LINK}
+            -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD_KIND} -DFW_LINK=${FW_LINK}
             "-DFW_TOOLCHAIN_VERSION=${FW_TOOLCHAIN_VERSION}"
             -P ${BOARD_DIR}/gen_build_info.cmake
     BYPRODUCTS ${BUILD_INFO_H}
@@ -93,17 +111,20 @@ string(TOUPPER "${FW_LINK}" FW_LINK_UPPER)
 add_executable(fw ${BOARD_SOURCES})
 set_source_files_properties(${BOARD_DIR}/src/vectors.c PROPERTIES COMPILE_OPTIONS "-Wno-override-init;-Wno-pedantic")
 add_dependencies(fw build_info)
-set_target_properties(fw PROPERTIES SUFFIX ".elf")
+set_target_properties(fw PROPERTIES SUFFIX ".elf" OUTPUT_NAME ${FW_IMAGE})
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated
                                       ${CMAKE_CURRENT_SOURCE_DIR}/../../plant)
 target_include_directories(fw SYSTEM PRIVATE ${TP}/cmsis_core/CMSIS/Core/Include
                                                ${TP}/cmsis_device_h7/Include)
 target_compile_definitions(fw PRIVATE STM32H743xx FW_BUILD_${FW_BUILD}=1 FW_LINK_${FW_LINK_UPPER}=1)
+if(FW_TEST_IWDG_STALL)
+    target_compile_definitions(fw PRIVATE FW_TEST_IWDG_STALL_S=${FW_TEST_IWDG_STALL})
+endif()
 target_compile_options(fw PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su>)
 # Locked outputs (board design 3.6): every board C source sees TIM1 poisoned.
 target_compile_options(fw PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-include ${BOARD_DIR}/include/board/lock_guard.h>)
-target_link_options(fw PRIVATE -T${BOARD_DIR}/stm32h743vi_dtcm.ld -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/fw.map
+target_link_options(fw PRIVATE -T${BOARD_DIR}/stm32h743vi_dtcm.ld -Wl,-Map=${CMAKE_CURRENT_BINARY_DIR}/${FW_IMAGE}.map
                     -Wl,--print-memory-usage)
 target_link_libraries(fw PRIVATE fw_core_arm m)
 if(FW_LINK STREQUAL "usb")
@@ -115,6 +136,6 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vehicle_header.cmake)
 fw_vehicle_header(fw ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 add_custom_command(TARGET fw POST_BUILD
-    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:fw> ${CMAKE_CURRENT_BINARY_DIR}/fw.bin
-    COMMAND ${CMAKE_SIZE} -A $<TARGET_FILE:fw> > ${CMAKE_CURRENT_BINARY_DIR}/fw.size.txt
+    COMMAND ${CMAKE_OBJCOPY} -O binary $<TARGET_FILE:fw> ${CMAKE_CURRENT_BINARY_DIR}/${FW_IMAGE}.bin
+    COMMAND ${CMAKE_SIZE} -A $<TARGET_FILE:fw> > ${CMAKE_CURRENT_BINARY_DIR}/${FW_IMAGE}.size.txt
     VERBATIM)

@@ -8,7 +8,7 @@
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
    --hand-turn-duration-ms D]
                     [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
-                    [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1]
+                    [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1] [--stop-grace-ms N]
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
    only; it is not an IWDG and proves nothing about output cut-off).
@@ -20,7 +20,8 @@
    outputs_locked build bit (the model's plant still follows the outputs the core computes).
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
-   within 100-300 ms, so a commissioning-limited duty can raise the bits. */
+   within 100-300 ms, so a commissioning-limited duty can raise the bits. --stop-grace-ms: the
+   STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -180,13 +181,13 @@ static void step_plant(double dt)
 }
 
 static drive_config make_config(bool commission, long commission_time_ms, bool locked,
-                                bool enc_test)
+                                bool enc_test, long stop_grace_ms)
 {
     drive_config c;
     memset(&c, 0, sizeof c);
     c.period_us = 1000;
     c.command_timeout_ms = 200;
-    c.stop_grace_ms = 100;
+    c.stop_grace_ms = (uint32_t)stop_grace_ms;
     c.driver_retry_ms = 50;
     c.driver_wake_us = 1000;
     c.spi_timeout_us = 3000;
@@ -310,6 +311,7 @@ int main(int argc, char **argv)
     long enc_flip = arg_long(argc, argv, "--encoder-sign-flip", -1);
     bool commission = arg_long(argc, argv, "--commission-build", 0) != 0;
     long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
+    long stop_grace_ms = arg_long(argc, argv, "--stop-grace-ms", 100);
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
     bool enc_test = arg_long(argc, argv, "--encoder-test-thresholds", 0) != 0;
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
@@ -320,7 +322,7 @@ int main(int argc, char **argv)
 
     static drive_config cfg;
     static fw_app app;
-    cfg = make_config(commission, commission_time_ms, locked, enc_test);
+    cfg = make_config(commission, commission_time_ms, locked, enc_test, stop_grace_ms);
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.t0_ns = B.now_ns = mono_ns();

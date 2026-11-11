@@ -66,7 +66,7 @@ add_test(NAME test_weact_h743_link COMMAND test_weact_h743_link)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vehicle_header.cmake)
 if(FW_PYTHON)
     # One configuration test per build kind (board design 2.2, 9).
-    foreach(kind normal commission hil)
+    foreach(kind normal commission hil iwdg_stall)
         set(t test_weact_h743_board_config_${kind})
         add_executable(${t}
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
@@ -74,7 +74,11 @@ if(FW_PYTHON)
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_rules.c)
         target_include_directories(${t} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
-        target_compile_definitions(${t} PRIVATE FW_BUILD_${kind}=1)
+        if(kind STREQUAL "iwdg_stall") # the S5 test build: a normal build that stalls (design 9)
+            target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_TEST_IWDG_STALL_S=5)
+        else()
+            target_compile_definitions(${t} PRIVATE FW_BUILD_${kind}=1)
+        endif()
         target_link_libraries(${t} PRIVATE fw_core)
         fw_vehicle_header(${t} ${CMAKE_CURRENT_BINARY_DIR}/generated_board_${kind})
         add_test(NAME ${t} COMMAND ${t})

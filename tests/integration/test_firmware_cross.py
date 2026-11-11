@@ -68,6 +68,7 @@ BUILDS = {
     "uart7": (("-DFW_LINK=uart7",), "uart7", "normal", "fw"),
     "commission": (("-DFW_BUILD=commission",), "usb", "commission", "fw"),
     "hil": (("-DFW_BUILD=hil",), "usb", "hil", "fw"),
+    "iwdg_stall": (("-DFW_TEST_IWDG_STALL=5",), "usb", "normal+iwdg-stall-5s", "fw_iwdg_stall"),
 }
 
 
@@ -333,6 +334,24 @@ def test_hil_build_runs_the_model_and_never_wakes_the_drivers(build_of):
         assert absent not in syms, absent
     normal = _symbols_of(build_of("usb") / "fw.elf")
     assert "motor_out_wake_drivers" in normal and "plant_step" not in normal
+
+
+def test_iwdg_stall_build_stops_the_tick(build_of):
+    """Board design 9: only the S5 test build can stop the tick."""
+    assert "tick_stop" in _symbols_of(build_of("iwdg_stall") / "fw_iwdg_stall.elf")
+    assert "tick_stop" not in _symbols_of(build_of("usb") / "fw.elf")
+
+
+@pytest.mark.parametrize("args, message", [
+    (("-DFW_TEST_IWDG_STALL=5", "-DFW_MOTOR_OUTPUT=1"), "needs the outputs locked"),
+    (("-DFW_TEST_IWDG_STALL=61",), "1..60"),
+    (("-DFW_TEST_IWDG_STALL=x",), "1..60"),
+])
+def test_iwdg_stall_build_refusals(tmp_path, args, message):
+    """Lead condition 2026-11-12: the stall test build never opens the outputs."""
+    cfg = _configure(tmp_path / "stall", *args)
+    assert cfg.returncode != 0
+    assert message in cfg.stderr
 
 
 def test_unknown_link_refused(tmp_path):
