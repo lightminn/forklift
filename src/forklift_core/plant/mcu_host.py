@@ -112,8 +112,7 @@ class McuLinkHost:
         self._auth_gen = 0  # bumps whenever authorization starts or ends
         self._arm: dict | None = None  # boot, prev_gen, gen, deadline_ns, reject_at_request
         self._inflight: Outgoing | None = None  # handed to the adapter, not yet written / unsent / abandoned
-        self._last_nonzero: dict | None = None  # the last non-zero DRIVE written: seq, expires_ns, written_ns
-        self._zero_after_seq: int | None = None  # a zero DRIVE written after it (its seq)
+        self._written: deque = deque(maxlen=256)  # every DRIVE written: seq, nonzero, expires_ns, written_ns
 
     # ---------------------------------------------------------------- state
     @property
@@ -135,12 +134,12 @@ class McuLinkHost:
         return self._state_rx_ns
 
     def drive_traffic(self) -> dict:
-        """What a release check needs: a non-zero DRIVE queued or being written, the last non-zero DRIVE
-        written (seq, original expiry, write time) and a zero DRIVE written after it."""
-        return {"queued_nonzero": any(o.kind == "DRIVE" and o.nonzero for o in self._outbox),
-                "inflight_nonzero": self._inflight is not None and self._inflight.nonzero,
-                "last_nonzero": None if self._last_nonzero is None else dict(self._last_nonzero),
-                "zero_after_seq": self._zero_after_seq}
+        """What a release check needs: the non-zero DRIVEs queued or being written (their original expiries) and
+        every DRIVE written (seq, non-zero, original expiry, write time), oldest first."""
+        pending = [o.expires_ns for o in self._outbox if o.kind == "DRIVE" and o.nonzero]
+        if self._inflight is not None and self._inflight.nonzero:
+            pending.append(self._inflight.expires_ns)
+        return {"pending_nonzero_expiries": pending, "written": [dict(w) for w in self._written]}
 
     def drop_drives(self, reason: str) -> None:
         """Drop the queued DRIVEs (a control generation change). A frame already being written is finished by
@@ -373,13 +372,9 @@ class McuLinkHost:
     def _sent(self, out: Outgoing, now_ns: int) -> None:
         if self._inflight is out:
             self._inflight = None
-        if out.kind != "DRIVE":
-            return
-        if out.nonzero:
-            self._last_nonzero = {"seq": out.seq, "expires_ns": out.expires_ns, "written_ns": now_ns}
-            self._zero_after_seq = None
-        elif self._last_nonzero is not None:
-            self._zero_after_seq = out.seq
+        if out.kind == "DRIVE":
+            self._written.append({"seq": out.seq, "nonzero": out.nonzero, "expires_ns": out.expires_ns,
+                                  "written_ns": now_ns})
 
     def unsent(self, out: Outgoing, now_ns: int) -> None:
         """The adapter could not write the first byte of ``out`` (EAGAIN): it goes back to the head of

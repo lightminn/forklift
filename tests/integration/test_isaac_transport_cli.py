@@ -618,11 +618,13 @@ def test_d8b_dwells_hold_the_steering_as_well_as_the_wheels() -> None:
     # (A cusp position stall's hold, plan cusp stall v7, joins the same path.)
     # (the command assembly moved to the mission core, M-a1 slice 5)
     assert "if estop_holding or obstacle_hold or dwell_hold or cusp_hold:" in command
-    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold)" in command
+    # (4a': a latched kinematic refusal, the real kinematics' only, holds the steering the same way)
+    assert "steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold or refused)" in command
     # The wheels brake on the held steering's curvature, in the command actually applied.
     assert "wheel_curvature = kappa if (dwell_hold or cusp_hold) else curvature" in command
-    assert "drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)" in command
-    assert "ackermann_command(wheel_speed, curvature," not in command and "ackermann_command(" not in source
+    # Sim-to-real 4a': the Ackermann arithmetic is the core's injected kinematics (plant/kinematics.py)
+    assert "drive = kin.command(wheel_speed, wheel_curvature)" in command
+    assert "kin.command(wheel_speed, curvature)" not in command and "ackermann_command(" not in source
     assert source.index("dwell_hold = dwell_standing = False") < source.index("command_ = core.command(")
 
 
@@ -659,12 +661,12 @@ def test_s4_safety_stops_take_the_dwell_path_without_the_wheel_lock_and_record_t
     slew = assembly.index("wheel_speed = slew_cap_stop(")  # its arithmetic: control/speed_chain.py (M-b4)
     zero = assembly.index("if estop_holding or safety_hold:\n                wheel_speed = 0.0")
     assert slew < assembly.index("cap = obstacle.get(\"permission_cap\")") < zero
-    assert zero < assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)")
+    assert zero < assembly.index("drive = kin.command(wheel_speed, wheel_curvature)")  # 4a': the kinematics
     tree = ast.parse(source)
     functions = runner_and_core_functions(tree)
     assert "applied_speed_mps=state.get('applied_command'" in functions["record_truth_tick"]
     recorded = assembly.index("state[\"applied_command\"] = (float(drive.speed_mps)")
-    assert assembly.index("drive = ackermann_command(wheel_speed, wheel_curvature, drive_geometry)") < recorded
+    assert assembly.index("drive = kin.command(wheel_speed, wheel_curvature)") < recorded
     # The runner applies the assembled command afterwards (M-a1 slice 5).
     assert source.index("command_ = core.assemble_command(") < source.index(
         "plant.drive_wheels(np.asarray(drive.wheel_rates_rad_s)")

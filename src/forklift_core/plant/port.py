@@ -14,6 +14,7 @@ hold_lift into the same frame. The link's queue and frame writing stay with ``Mc
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -84,6 +85,13 @@ class RealPlantPort:
             return PortResult("refused", cmd.drive.reason)
         if not isinstance(cmd.drive, RealDrive):
             raise TypeError("the real port takes a RealDrive")
+        if not math.isfinite(cmd.drive.steering_rad[0]):
+            # No steering to hold (an unknown measured q): a zero frame on the last finite intent if there is
+            # one, else DISARM -- outputs to their safe state (Codex 4a' impl P2).
+            if self._intent is not None and self._intent[0] == self.host.auth_epoch:
+                return self.zero_wheels(now_ns, cmd.expires_ns)
+            self.host.request_disarm(now_ns)
+            return PortResult("blocked", "steering_unknown_disarmed")
         result = self._submit(cmd.drive.rear(), cmd.lift_m, cmd.lift_mode, cmd.expires_ns, now_ns)
         if result.kind == "queued":
             self._intent = (cmd.auth_epoch, cmd.drive.steering_rad[0], cmd.lift_m, cmd.lift_mode, cmd.expires_ns)
@@ -93,13 +101,16 @@ class RealPlantPort:
         if self._intent is None or self._intent[0] != self.host.auth_epoch:
             self._intent = None
             return PortResult("blocked", "no_intent")
-        epoch, q, lift_m, lift_mode, _old = self._intent
+        epoch, q, lift_m, lift_mode, old_expires = self._intent
         if lift is not None:
             lift_m, lift_mode = lift
+        # The intent's own lifetime bounds the composed frame: a zero or a lift target never extends the decision
+        # it is composed from (Codex 4a' impl P1-3); a longer life is a new decision through command().
+        expires = min(int(expires_ns), int(old_expires))
         rear = RearDrive(0.0, 0.0, 0.0, 0.0, q, False)
-        result = self._submit(rear, lift_m, lift_mode, expires_ns, now_ns)
+        result = self._submit(rear, lift_m, lift_mode, expires, now_ns)
         if result.kind == "queued":
-            self._intent = (epoch, q, lift_m, lift_mode, expires_ns)
+            self._intent = (epoch, q, lift_m, lift_mode, expires)
         return result
 
     def zero_wheels(self, now_ns: int, expires_ns: int) -> PortResult:
@@ -110,30 +121,36 @@ class RealPlantPort:
         """The lift's target to ``position_m`` (lift_mode target, not the firmware hold flag), wheels zero."""
         return self._compose(now_ns, expires_ns, lift=(float(position_m), "target"))
 
-    @property
-    def outstanding_until_ns(self) -> int | None:
-        last = self.host.drive_traffic()["last_nonzero"]
-        return None if last is None else last["expires_ns"]
+    def _unsettled(self, now_ns: int) -> list:
+        """The original expiries of the non-zero DRIVEs that could still act (release condition (a))."""
+        t = self.host.drive_traffic()
+        out = [e for e in t["pending_nonzero_expiries"] if e > now_ns]
+        s, rx = self.host.state, self.host.state_rx_ns
+        for i, w in enumerate(t["written"]):
+            if not w["nonzero"] or now_ns >= w["expires_ns"]:
+                continue
+            heard = s is not None and rx is not None and rx > w["written_ns"]
+            if heard and s.mode != Mode.ARMED:
+                continue  # a later ARM has a new arm_gen this frame cannot match
+            if heard:
+                later = [x for x in t["written"][i + 1:] if x["written_ns"] < rx]
+                if any(_seq_at_or_after(s.last_rx_seq, x["seq"]) for x in later):
+                    continue  # the MCU accepted a later DRIVE: this one's target and deadline are replaced
+                if s.last_rx_seq == w["seq"] and not s.flags & StateFlag.COMMAND_FRESH:
+                    continue  # accepted, and its deadline has passed
+            out.append(w["expires_ns"])
+        return out
+
+    def outstanding_until(self, now_ns: int) -> int | None:
+        """The latest original expiry among the non-zero DRIVEs that could still act at ``now_ns``."""
+        left = self._unsettled(now_ns)
+        return max(left) if left else None
 
     def older_nonzero_may_act(self, now_ns: int) -> bool:
-        """Release condition (a) of design D4: could an older non-zero DRIVE still move the wheels? Not a
-        standstill judgement -- that is condition (b), a fresh measurement."""
-        t = self.host.drive_traffic()
-        if t["queued_nonzero"] or t["inflight_nonzero"]:
-            return True
-        last = t["last_nonzero"]
-        if last is None or now_ns >= last["expires_ns"]:
-            return False
-        s, rx = self.host.state, self.host.state_rx_ns
-        if s is None or rx is None or rx <= last["written_ns"]:
-            return True  # nothing heard since the write
-        if s.mode != Mode.ARMED:
-            return False  # a later ARM has a new arm_gen this frame cannot match
-        if t["zero_after_seq"] is not None and _seq_at_or_after(s.last_rx_seq, t["zero_after_seq"]):
-            return False  # a later zero DRIVE was accepted
-        if _seq_at_or_after(s.last_rx_seq, last["seq"]) and not s.flags & StateFlag.COMMAND_FRESH:
-            return False  # accepted, and its deadline has passed
-        return True
+        """Release condition (a) of design D4: could an older non-zero DRIVE still move the wheels? Every one
+        queued, being written or written and not yet settled counts (Codex 4a' impl P1-1). Not a standstill
+        judgement -- that is condition (b), a fresh measurement."""
+        return bool(self._unsettled(now_ns))
 
 
 __all__ = ["LIFT_MODES", "PlantCommand", "PortResult", "RealPlantPort"]

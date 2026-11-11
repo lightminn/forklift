@@ -37,7 +37,9 @@ def make(*, kinematics=None, steering=(0.0, 0.0), replan_allowed=False, phase="t
                        options=options)
     core.scene_replan_allowed = lambda: replan_allowed
     core.scene_replan_request = lambda t, trigger, **kw: calls.append(("replan", t, trigger))
-    core.commands = SimpleNamespace(adopted_id="m1")
+    queued = []
+    core.commands = SimpleNamespace(adopted_id="m1", mission_id="m1", status="running", queue=queued.append)
+    core.queued = queued
     return core, calls
 
 
@@ -72,35 +74,48 @@ def test_a_wrong_steering_shape_ends_the_tick():
         assemble(core, np.zeros(1))
 
 
-def test_a_refusal_latches_a_stop_and_asks_for_one_replan_per_plan():
+def test_a_refusal_latches_a_stop_and_pauses_the_mission_once_per_plan():
+    """Design D3 as built in 4a': stop, steering held, the mission paused for the operator; no automatic replan."""
     core, calls = make(kinematics=REAL, steering=(0.1,), replan_allowed=True)
     steer = np.array([0.1])
     out = assemble(core, steer, curvature=0.9)  # beyond the map
     assert out.drive.speed_mps == 0.0 and out.drive.wheel_rates_rad_s == (0.0, 0.0)
     assert steer[0] == pytest.approx(0.1)  # steering held
-    assert calls == [("replan", 10.0, "kinematic_refusal")]
-    assert core.refusal_events[-1]["replan"] == "requested"
+    assert calls == []  # no scene replan
+    assert [c.request_id for c in core.queued] == ["kinematic_refusal"]
+    assert core.refusal_events[-1]["reason"] == "curvature_infeasible"
     assemble(core, steer, curvature=0.9, t=10.01)
-    assemble(core, steer, curvature=0.2, t=10.02)  # still latched: the same plan
-    assert len(calls) == 1 and assemble(core, steer, curvature=0.2, t=10.03).drive.speed_mps == 0.0
+    assert assemble(core, steer, curvature=0.2, t=10.02).drive.speed_mps == 0.0  # latched on this plan
+    assert len(core.queued) == 1 and len(core.refusal_events) == 1
 
 
-def test_a_new_plan_clears_the_latch_and_a_second_refusal_on_it_waits_for_the_operator():
-    core, calls = make(kinematics=REAL, steering=(0.1,), replan_allowed=True)
+def test_a_new_plan_or_the_operators_resume_clears_the_latch():
+    core, _ = make(kinematics=REAL, steering=(0.1,))
     steer = np.array([0.1])
     assemble(core, steer, curvature=0.9)
-    core.trackers["transport"] = SimpleNamespace(_book={"serial": 2})  # the replan installed a new plan
+    core.trackers["transport"] = SimpleNamespace(_book={"serial": 2})  # a new plan
     assert assemble(core, steer, curvature=0.1, t=11.0).drive.speed_mps > 0.0
-    core.trackers["transport"] = SimpleNamespace(_book={"serial": 1})  # back on plan 1 (already asked once)
     assemble(core, steer, curvature=0.9, t=12.0)
-    assert len(calls) == 1 and core.refusal_events[-1]["replan"] == "operator"
+    assert core._refusal is not None  # noqa: SLF001
+    core.commands.status = "resuming"  # the operator resumed
+    assert assemble(core, steer, curvature=0.1, t=13.0).drive.speed_mps > 0.0
 
 
-@pytest.mark.parametrize("phase", ["approach", "insert"])
-def test_where_no_scene_replan_is_allowed_the_refusal_waits_for_the_operator(phase):
-    core, calls = make(kinematics=REAL, steering=(0.1,), replan_allowed=False, phase=phase)
-    assemble(core, np.array([0.1]), curvature=0.9)
-    assert calls == [] and core.refusal_events[-1]["replan"] == "operator"
+def test_an_unknown_measured_steering_is_a_refusal():
+    """The measured q cannot be read as a curvature: stop and pause, even for a feasible request (Codex P1-2)."""
+    core, _ = make(kinematics=REAL, steering=(float("nan"),))
+    out = assemble(core, np.array([0.1]), curvature=0.1)
+    assert out.drive.speed_mps == 0.0 and core.refusal_events[-1]["reason"] == "steering_unknown"
+    assert [c.request_id for c in core.queued] == ["kinematic_refusal"]
+
+
+def test_the_presteer_tolerance_is_the_given_kinematics_own():
+    from forklift_core.mission.scene_replan import SceneReplanConfig
+
+    core, _ = make(kinematics=REAL, steering=(0.1,))
+    assert core.scene_replan.config.presteer_tolerance_rad == REAL.presteer_threshold_rad
+    core_sim, _ = make()
+    assert core_sim.scene_replan.config.presteer_tolerance_rad == SceneReplanConfig().presteer_tolerance_rad
 
 
 def test_an_unknown_steering_brakes_without_a_curvature():

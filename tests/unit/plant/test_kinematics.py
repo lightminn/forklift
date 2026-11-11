@@ -116,3 +116,17 @@ def test_shapes_are_checked(real, ack, bad_shape):
         real.steering_error((0.1,), np.asarray(bad_shape))
     with pytest.raises(ValueError):
         ack.held_curvature((0.1,))
+
+
+def test_teleop_limits_take_the_real_kinematics_tolerances(ack):
+    from forklift_core.control.speed_chain import creep
+    from forklift_core.plant.kinematics import teleop_limit_overrides
+    from forklift_core.safety.teleop_drive import TeleopLimits
+
+    sc = {"steering_rate_rad_s": 0.7, "creep_threshold_rad": 0.2, "presteer_threshold_rad": 0.015,
+          "straight_threshold_rad": 0.03, "provenance": PROV}
+    k = RealKinematics(real_vehicle_from_mapping(mapping(steering_control=sc), CHASSIS))
+    lim = TeleopLimits(**teleop_limit_overrides(k))
+    assert (lim.creep_threshold_rad, lim.recovery_steer_tol_rad) == (0.2, 0.03)
+    assert TeleopLimits(**teleop_limit_overrides(ack)) == TeleopLimits()
+    assert creep(0.4, 0.1, lim.creep_threshold_rad) == 0.4 and creep(0.4, 0.1) == 0.1  # AUTO uses the same rule

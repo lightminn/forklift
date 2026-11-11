@@ -1,5 +1,7 @@
 """P0-4 4a' port contract against the P0-7 host (docs/design/2026-11-11-p04a-kinematics-and-command.md D4)."""
 
+import math
+
 import numpy as np
 import pytest
 from test_mcu_host import BOOT, MS, state  # noqa: E402
@@ -121,7 +123,7 @@ def test_release_condition_a_needs_queue_inflight_and_written_commands_settled()
     assert b.port.older_nonzero_may_act(b.now)  # being written
     b.host.frame_written(f, b.now)
     assert b.port.older_nonzero_may_act(b.now)  # written, not expired, MCU still fresh
-    assert b.port.outstanding_until_ns == b.now + 100 * MS
+    assert b.port.outstanding_until(b.now) == b.now + 100 * MS
     b.now += 101 * MS
     assert not b.port.older_nonzero_may_act(b.now)  # expired
 
@@ -169,7 +171,7 @@ def test_a_frame_cut_at_any_point_by_a_drop_is_finished_or_dropped_never_lost(wr
     else:
         b.port.new_control_generation()  # drops the queue; the frame in flight is finished by the adapter
         b.host.frame_written(f, b.now)
-        assert b.port.older_nonzero_may_act(b.now) and b.port.outstanding_until_ns == b.now + 200 * MS
+        assert b.port.older_nonzero_may_act(b.now) and b.port.outstanding_until(b.now) == b.now + 200 * MS
 
 
 def test_zero_and_lift_compose_from_the_latest_intent():
@@ -207,4 +209,50 @@ def test_expiry_is_never_extended_by_a_composed_frame():
     b.drain()
     assert b.port.zero_wheels(b.now, b.now + 500 * MS) == PortResult("queued")
     (z,) = b.drain()
-    assert z.valid_after_echo_ms <= 150 and z.boot_id == BOOT
+    assert z.valid_after_echo_ms <= 40 and z.boot_id == BOOT  # the intent's 40 ms, not the 500 asked
+
+
+def test_an_earlier_command_still_fresh_keeps_the_release_closed():
+    """A (100 ms) accepted, B (10 ms) written but not yet accepted: after B expires, A still acts (Codex 4a' impl P1-1)."""
+    b = Bench()
+    b.arm()
+    b.port.command(b.cmd(ttl_ms=100), b.now)
+    b.drain()
+    seq_a = (b.host._seq - 1) & 0xFFFF  # noqa: SLF001
+    b.port.command(b.cmd(ttl_ms=10), b.now)
+    b.drain()
+    b.feed(dt_ms=11, mode=Mode.ARMED, gen=b.gen, flags=READY | StateFlag.COMMAND_FRESH, last_rx=seq_a)
+    assert b.port.older_nonzero_may_act(b.now)
+    assert b.port.outstanding_until(b.now) == b.now - 11 * MS + 100 * MS
+
+
+def test_a_later_accepted_drive_settles_the_earlier_ones():
+    b = Bench()
+    b.arm()
+    b.port.command(b.cmd(ttl_ms=100), b.now)
+    b.drain()
+    b.port.zero_wheels(b.now, b.now + 100 * MS)
+    b.drain()
+    seq_zero = (b.host._seq - 1) & 0xFFFF  # noqa: SLF001
+    b.feed(mode=Mode.ARMED, gen=b.gen, flags=READY | StateFlag.COMMAND_FRESH, last_rx=seq_zero)
+    assert not b.port.older_nonzero_may_act(b.now)
+
+
+def test_an_unknown_steering_stops_on_the_last_intent_or_disarms():
+    from forklift_core.mcu_link.messages import Disarm
+    from forklift_core.plant.kinematics import RealDrive
+
+    b = Bench()
+    b.arm()
+    nan_drive = RealDrive(0.0, 0.0, (float("nan"),), (0.0, 0.0), False)
+    cmd = b.port.make_command(b.now, b.now + 50 * MS, nan_drive, np.array([0.0]), 0.0, "keep")
+    assert b.port.command(cmd, b.now) == PortResult("blocked", "steering_unknown_disarmed")
+    assert b.drain() == [Disarm()]
+    b2 = Bench()
+    b2.arm()
+    b2.port.command(b2.cmd(), b2.now)
+    b2.drain()
+    cmd2 = b2.port.make_command(b2.now, b2.now + 50 * MS, nan_drive, np.array([0.0]), 0.0, "keep")
+    assert b2.port.command(cmd2, b2.now) == PortResult("queued")
+    (z,) = b2.drain()
+    assert (z.left_wheel_rad_s, z.right_wheel_rad_s) == (0.0, 0.0) and math.isfinite(z.steering_rad)

@@ -161,4 +161,13 @@ class RealKinematics:
                          out.speed_limited)
 
 
-__all__ = ["AckermannKinematics", "RealDrive", "RealKinematics", "SIM_PRESTEER_TOLERANCE_RAD"]
+def teleop_limit_overrides(kinematics) -> dict:
+    """The TeleopLimits fields a kinematics sets (design D2): the simulation's keeps every default; the real
+    truck's gives its creep and straight-ahead tolerances on q. ``TeleopLimits(**teleop_limit_overrides(k), ...)``."""
+    if isinstance(kinematics, RealKinematics):
+        return {"creep_threshold_rad": kinematics.creep_threshold_rad,
+                "recovery_steer_tol_rad": kinematics.straight_threshold_rad}
+    return {}
+
+
+__all__ = ["AckermannKinematics", "RealDrive", "RealKinematics", "SIM_PRESTEER_TOLERANCE_RAD", "teleop_limit_overrides"]

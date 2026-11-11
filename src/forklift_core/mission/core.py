@@ -73,7 +73,7 @@ from forklift_core.mission.baseline import start_digest
 
 from forklift_core.mission.cargo import APPROACH_GAP_M, CargoState
 from forklift_core.safety.pallet_permit import RECOGNISED_MARGIN_M
-from forklift_core.mission.commands import MissionCommands
+from forklift_core.mission.commands import MissionCommands, Pause
 from forklift_core.control.speed_chain import creep, slew_cap_stop
 from forklift_core.mission.targets import Pose as TargetPose
 from forklift_core.mission.targets import TargetsBook
@@ -354,9 +354,13 @@ class MissionCore:
         # The scene-mode replan device (docs/plans/2026-10-23-scene-replan.md): one request at a time ahead of the
         # follower; its records are the mission's (state["scene_replans"], made at the first request -- a run without
         # one keeps its state as it was), its budget reset at each mission's end.
+        given_kinematics_ = getattr(options, "kinematics", None)
         self.scene_replan = SceneReplan(None, SceneReplanConfig(
             # docs/plans/2026-10-27-escape-presteer.md D2; off (and an options object from before it): as before
-            escape_presteer=getattr(options, "escape_presteer", "off") == "on"))
+            escape_presteer=getattr(options, "escape_presteer", "off") == "on",
+            # sim-to-real 4a' D1: a given (real) kinematics' presteer tolerance, in its own steering angle
+            **({"presteer_tolerance_rad": given_kinematics_.presteer_threshold_rad}
+               if given_kinematics_ is not None else {})))
         # Plan 2026-10-24-goal-creep-stall G2: the final goal's creep watch (a mission's own: CORE_FIELDS).
         self.goal_creep_watch = {"key": None, "last_t": None, "window": [], "latched": False}
         # docs/plans/2026-10-26-observe-start-backoff.md B4/B8: the first far observation's start backoff in progress and
@@ -6098,36 +6102,36 @@ class MissionCore:
                 self.options.drive_geometry, lambda: self.settings["steering_command_rate_rad_s"])
         return self._kinematics
 
-    def _kinematic_refusal(self, t: float, refusal, steering_command) -> None:
-        """Design D3: latch a stop with the steering held, record it, and ask for one scene replan per plan
-        where the scene replan is allowed; elsewhere the mission waits for the operator. Only a kinematics that
-        refuses (the real truck's) gets here."""
+    def _kinematic_refusal(self, t: float, reason: str, requested_curvature: float, curvature_range) -> None:
+        """Design D3 as built in 4a': latch a stop with the steering held, record it, and pause the mission -- the
+        operator decides (resume to retry, or cancel). An automatic scene replan after a refusal waits for its own
+        change: it needs the scene replan's stop check tied to the port's release conditions (Codex 4a' impl P2-4).
+        Only a kinematics that refuses (the real truck's) gets here."""
         phase = self.ms.phase
         tracker = self.trackers.get(phase)
         serial = None if tracker is None else (getattr(tracker, "_book", None) or {}).get("serial", id(tracker))
-        event = {"t": float(t), "phase": phase, "reason": refusal.reason,
-                 "requested_curvature_inv_m": float(refusal.requested_curvature_inv_m),
-                 "curvature_range": [float(v) for v in refusal.curvature_range], "plan": serial}
         if self._refusal is not None and self._refusal["plan"] == serial:
             self._refusal["repeats"] += 1
             return
-        replan = "operator"
-        asked = {e["plan"] for e in self.refusal_events if e.get("replan") == "requested"}
-        if serial not in asked and self.scene_replan_allowed():
-            self.scene_replan_request(t, "kinematic_refusal")
-            replan = "requested"
-        event["replan"] = replan
-        self.refusal_events.append(event)
-        self._refusal = {"plan": serial, "phase": phase, "replan": replan, "repeats": 0}
+        self.refusal_events.append({"t": float(t), "phase": phase, "reason": reason,
+                                    "requested_curvature_inv_m": float(requested_curvature),
+                                    "curvature_range": [float(v) for v in curvature_range], "plan": serial,
+                                    "mission_id": getattr(self.commands, "mission_id", None)})
+        self.commands.queue(Pause(request_id="kinematic_refusal"))
+        self._refusal = {"plan": serial, "phase": phase, "repeats": 0,
+                         "status": getattr(self.commands, "status", None)}
 
     def _refusal_clear_if_new_plan(self) -> None:
-        """A new plan (another tracker serial or phase) or no adopted mission ends the latch (design D3 step 5, 8)."""
+        """The latch ends with a new plan (another tracker serial or phase), an operator's resume (the paused
+        mission resuming: the retry re-evaluates the command) or no adopted mission (design D3 step 5, 8)."""
         if self._refusal is None:
             return
         phase = self.ms.phase
         tracker = self.trackers.get(phase)
         serial = None if tracker is None else (getattr(tracker, "_book", None) or {}).get("serial", id(tracker))
-        if phase != self._refusal["phase"] or serial != self._refusal["plan"] or self.commands.adopted_id is None:
+        status = getattr(self.commands, "status", None)
+        if (phase != self._refusal["phase"] or serial != self._refusal["plan"] or self.commands.adopted_id is None
+                or status == "resuming"):
             self._refusal = None
 
     def assemble_command(self, t: float, dt: float, requested_speed: float, curvature: float, kappa: float,
@@ -6161,11 +6165,16 @@ class MissionCore:
         kin = self.kinematics
         drive = kin.command(requested_speed, wheel_curvature)
         refused = False
-        if isinstance(drive, DriveRefusal) or self._refusal is not None:
-            # Sim-to-real 4a' D3 (a refusing kinematics only; the simulation's never refuses): a stop with the
-            # steering held, the wheels braking on the held steering's curvature -- none when it is unknown.
-            if isinstance(drive, DriveRefusal):
-                self._kinematic_refusal(t, drive, steering_command)
+        if isinstance(drive, DriveRefusal):
+            self._kinematic_refusal(t, drive.reason, drive.requested_curvature_inv_m, drive.curvature_range)
+        actual_steering = hooks.steering_position()
+        if kin.held_curvature(actual_steering) is None:
+            # The measured steering cannot be read as a curvature (an invalid or out-of-map q): a refusal too
+            # (Codex 4a' impl P1-2). The simulation's kinematics always reads one.
+            self._kinematic_refusal(t, "steering_unknown", float("nan"), (float("nan"), float("nan")))
+        if self._refusal is not None:
+            # Sim-to-real 4a' D3 (a refusing kinematics only): a stop with the steering held, the wheels braking on
+            # the held steering's curvature -- none when it is unknown.
             refused = True
             requested_speed = 0.0
             wheel_curvature = kin.held_curvature(steering_command)
@@ -6174,7 +6183,6 @@ class MissionCore:
             steering_command.copy() if (estop_holding or obstacle_hold or dwell_hold or cusp_hold or refused)
             else np.asarray(drive.steering_rad)
         )
-        actual_steering = hooks.steering_position()
         # Creep while steering catches up; log the measured physical response.
         steering_error = kin.steering_error(target_steering, actual_steering)
         wheel_speed = creep(requested_speed, steering_error, kin.creep_threshold_rad)
@@ -8592,12 +8600,17 @@ class MissionCore:
 
         def steering_error(target_kappa):
             # each front wheel against its own Ackermann angle (Codex impl round 1 P3: the mean held curvature
-            # hides +0.08 / -0.08 rad)
-            actual_ = [float(v) for v in hooks.steering_actual()]
-            return max(abs(a_ - b_) for a_, b_ in zip(actual_, wheel_targets(target_kappa)))
+            # hides +0.08 / -0.08 rad); through the kinematics (4a': shapes checked, an unreachable target is
+            # never satisfied)
+            actual_ = np.asarray([float(v) for v in hooks.steering_actual()])
+            targets_ = wheel_targets(target_kappa)
+            return math.inf if targets_ is None else self.kinematics.steering_error(np.asarray(targets_), actual_)
 
         def steer_gap(a_, b_):
-            return max(abs(x_ - y_) for x_, y_ in zip(wheel_targets(a_), wheel_targets(b_)))
+            ta_, tb_ = wheel_targets(a_), wheel_targets(b_)
+            if ta_ is None or tb_ is None:
+                return math.inf
+            return self.kinematics.steering_error(np.asarray(ta_), np.asarray(tb_))
 
         def preview():
             return core._scene_preview(copy.deepcopy(trackers[ms.phase]), t, box.rear, dt)
