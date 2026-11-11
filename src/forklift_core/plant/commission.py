@@ -13,6 +13,11 @@ from forklift_core.plant.bringup import _CUT, _ENCODER_ANY, Sample
 AXES = {"L": 0, "R": 1, "M": 2, "H": 3}
 COMMISSION_DUTY_MAX = 0.15  # the tool's own bound: the plan's proposed build limit (the build may be lower)
 COMMISSION_HOLD_MAX_S = 1.5  # under the proposed 2 s build time limit, so a sound tool never meets it
+COMMISSION_HOLD_MIN_S = 0.1  # above the 50 ms hand-over, so a run sends its nonzero duty (Codex design P3)
+# steering and lift: short runs only -- a nonzero command never outlives its hold, so this bounds the travel of
+# one run even with the window unseen or the link lost (Codex design P1-2)
+AXIS_HOLD_MAX_S = {2: 0.2, 3: 0.2}
+COMMISSION_CAP_MS = 60  # the validity cap of a COMMISSION: the window stop's command expiry bound
 # a motion smaller than this is "none": wheels in counts, steering in rad, lift in m
 NOISE = {0: 4, 1: 4, 2: 0.005, 3: 0.0005}
 
@@ -23,7 +28,11 @@ class CommissionMetrics:
     reason: str | None
     axis: int
     duty_e4: int  # commanded
-    driven_ms: float | None  # MCU time from the first sample accepting the nonzero command to the one accepting 0
+    # MCU time the axis was driven, bounded by the samples (``last_rx_seq`` names only the last accepted command,
+    # Codex design P2-7): min from the first sample accepting a nonzero command to the first accepting a zero,
+    # max from the sample before each of them
+    driven_ms_min: float | None
+    driven_ms_max: float | None
     applied_max_e4: int  # largest |reported duty| on the axis while driven
     duty_sign_in_build: int | None  # reported duty sign / command sign (STATE.duty_e4 carries duty_sign)
     current_peak_ma: int
@@ -57,7 +66,7 @@ def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_ind
     """``on_index``: the first sample accepting the nonzero COMMISSION; ``off_index``: the first accepting the zero
     after it (or the end of driving). The motion runs from the last sample before acceptance to the last sample
     (the coast included); currents, duties and rates over the driven samples only."""
-    empty = dict(driven_ms=None, applied_max_e4=0, duty_sign_in_build=None, current_peak_ma=0, current_mean_ma=None,
+    empty = dict(driven_ms_min=None, driven_ms_max=None, applied_max_e4=0, duty_sign_in_build=None, current_peak_ma=0, current_mean_ma=None,
                  others_peak_ma=0, measured_delta=None, measured_sign="invalid", rate_mean_rad_s=None,
                  rate_peak_rad_s=None, value=None, encoder_bits_at_start=[], encoder_bits_new=[])
     if on_index is None or not samples or on_index >= len(samples):
@@ -80,8 +89,10 @@ def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_ind
     duty_sign = None if peak_applied == 0 or duty_e4 == 0 else (1 if (peak_applied > 0) == (duty_e4 > 0) else -1)
     cur = [s.state.current_ma[axis] for s in driven]
     others = [c for s in driven for i, c in enumerate(s.state.current_ma) if i != axis]
-    base = dict(driven_ms=(samples[off].state.mcu_time_us - samples[on_index].state.mcu_time_us) / 1000
-                if off < len(samples) else None,
+    t = (lambda i: samples[i].state.mcu_time_us)
+    closed = off < len(samples)
+    base = dict(driven_ms_min=(t(off - 1) - t(on_index)) / 1000 if closed and off - 1 >= on_index else None,
+                driven_ms_max=(t(off) - t(max(on_index - 1, 0))) / 1000 if closed else None,
                 applied_max_e4=abs(peak_applied), duty_sign_in_build=duty_sign,
                 current_peak_ma=max(cur, default=0), current_mean_ma=sum(cur) / len(cur) if cur else None,
                 others_peak_ma=max(others, default=0), encoder_bits_at_start=_bits(at_start),
@@ -116,16 +127,17 @@ def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_ind
 
 
 def sign_verdict(duty_e4: int, measured_sign: str, observed: str, *, duty_sign_in_build: int | None) -> dict:
-    """Design 4: with the operator's physical direction for this command (``pos``: wheel rolling the truck forward,
-    steering left, lift up), whether the channel's ``duty_sign`` and the axis sensor's sign are right, and the
-    ``duty_sign`` to use (against the build's, read from the reported duty). No observation, no proposal."""
+    """Design 4: with the direction the operator actually saw (``pos``: wheel rolling the truck forward, steering
+    left, lift up; ``neg``; ``none``), whether the channel's ``duty_sign`` (command sign against the seen direction)
+    and the axis sensor's sign (measured against seen) are right, and the ``duty_sign`` to use (against the build's,
+    read from the reported duty). No observation, too little motion or a disagreement: no proposal."""
     out = {"duty_sign_ok": None, "sensor_sign_ok": None, "suggested_duty_sign": None, "note": None}
     if observed not in ("pos", "neg", "none"):
         return {**out, "note": "no_observation"}
     if measured_sign == "invalid":
         return {**out, "note": "measurement_invalid"}
     if observed == "none" and measured_sign == "none":
-        return {**out, "note": "no_motion"}
+        return {**out, "note": "insufficient_motion"}
     if (observed == "none") != (measured_sign == "none"):
         return {**out, "note": "inconsistent"}
     duty_ok = observed == ("pos" if duty_e4 > 0 else "neg")

@@ -37,7 +37,8 @@ from forklift_core.mcu_link.messages import (
 )
 from forklift_core.plant.bringup import Sample, count_settle, step_metrics, wheel_cpr, wheel_rate_cap
 from forklift_core.plant.commission import (
-    AXES, COMMISSION_DUTY_MAX, COMMISSION_HOLD_MAX_S, commission_metrics, sign_verdict,
+    AXES, AXIS_HOLD_MAX_S, COMMISSION_CAP_MS, COMMISSION_DUTY_MAX, COMMISSION_HOLD_MAX_S, COMMISSION_HOLD_MIN_S,
+    commission_metrics, sign_verdict,
 )
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
@@ -57,6 +58,10 @@ OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0}
 WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0}
 STOP_DISTANCE_MM = {"tx_cut": 100.0, "expiry": 100.0}
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
+# ② the commissioning host: a shorter validity bounds how long a COMMISSION runs on after the window stop
+COMMISSION_HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=COMMISSION_CAP_MS, arm_timeout_s=0.3,
+                                 zero_valid_ms=COMMISSION_CAP_MS, outbox_max=16)
+STOPPING_WAIT_S = 1.0  # ② the cleanup lets a commissioning STOPPING (four-axis brake) run out before its DISARM
 
 
 class Refused(Exception):
@@ -82,7 +87,7 @@ class Bench:
 
     def __post_init__(self) -> None:
         self._tap = LinkDecoder()
-        self.host = McuLinkHost(HOST_CFG, log=self._log, client=Client.BRINGUP, allow_locked=self.allow_locked,
+        self.host = McuLinkHost(COMMISSION_HOST_CFG if self.commission else HOST_CFG, log=self._log, client=Client.BRINGUP, allow_locked=self.allow_locked,
                                 commission=self.commission)
 
     def _log(self, what, now_ns, data, info) -> None:
@@ -422,6 +427,7 @@ class CommissionSession(Session):
         self.axis, self.window = axis, window
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
+        self.stopping_waited_ms: float | None = None
 
     def preflight(self, state: McuState) -> None:
         if not commission_allowed(state.flags):
@@ -441,7 +447,7 @@ class CommissionSession(Session):
         if abs(duty_e4) > COMMISSION_DUTY_MAX * 10000:
             raise Refused(f"duty {duty_e4 / 1e4} over the tool limit {COMMISSION_DUTY_MAX}")
         now = time.monotonic_ns()
-        expires = min(self.test_end_ns, now + HOST_CFG.cap_ms * 1_000_000)
+        expires = min(self.test_end_ns, now + self.b.host.cfg.cap_ms * 1_000_000)
         if end_ns is not None:
             expires = min(expires, end_ns)
         self.b.last_queued = None
@@ -474,6 +480,28 @@ class CommissionSession(Session):
             time.sleep(0.01)
         return first
 
+    def cleanup(self) -> bool:
+        """Design ② 3: the tool ① cleanup, but never a DISARM into a commissioning STOPPING -- the firmware ends it
+        on DISARM and its four-axis electric brake with it (Codex design P1-1, against contract 3.4). Queued
+        commands are dropped and the STOPPING is let run out first (bounded by ``STOPPING_WAIT_S``)."""
+        b = self.b
+        b.host.drop_drives("cleanup")
+        if b.state is not None and b.state.mode == Mode.STOPPING:
+            t0 = time.monotonic()
+            b.run_until(lambda: b.state.mode != Mode.STOPPING, STOPPING_WAIT_S)
+            self.stopping_waited_ms = (time.monotonic() - t0) * 1000
+            b.emit({"t": "stopping_waited", "ms": self.stopping_waited_ms, "mode": b.state.mode.name})
+        return super().cleanup()
+
+    def early_stop(self, state: McuState, at_start: FaultFlag) -> str | None:
+        """Why a nonzero hold ends now (design ② 3): a stuck/polarity bit of the driven wheel newly on (latched
+        while ARMED in a commissioning build), or the steering/lift value out of the window."""
+        if self.axis < 2:
+            return "encoder_bit" if (state.fault_flags & _AXIS_ENCODER_BITS[self.axis]) & ~at_start else None
+        v = state.steering_rad if self.axis == 2 else state.lift_m
+        lo, hi = self.window
+        return None if v == v and lo <= v <= hi else "window"
+
     def _abort_reason(self) -> str | None:
         b = self.b
         if not b.host.ready:
@@ -491,15 +519,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     at_start = b.state.fault_flags & _AXIS_ENCODER_BITS.get(axis, FaultFlag(0))
 
     def early_stop() -> str | None:
-        st = b.state
-        if axis < 2 and (st.fault_flags & _AXIS_ENCODER_BITS[axis]) & ~at_start:
-            return "encoder_bit"  # design ② 3: latched, still ARMED -- the polarity question is answered
-        if axis >= 2:
-            v = st.steering_rad if axis == 2 else st.lift_m
-            lo, hi = session.window
-            if not (v == v and lo <= v <= hi):
-                return "window"
-        return None
+        return session.early_stop(b.state, at_start)
 
     session.hold_duty(0, PRE_ZERO_S)
     n_zero = len(session.sent)
@@ -528,6 +548,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     result = "ok" if on_index is not None else "no_acceptance"
     return _final({"result": result, "metrics": asdict(metrics), "stop": session.stop_reason,
                    "faults_seen": [f.name for f in FaultFlag if f in faults],
+                   "stopping_waited_ms": session.stopping_waited_ms,
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags],
                    "note": "software evidence only: the direction is the operator's, currents against the bench supply"},
                   session)
@@ -642,6 +663,7 @@ def main(argv=None) -> int:
     cm.add_argument("--seconds", type=float, required=True)
     cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
     cm.add_argument("--observed", choices=("pos", "neg", "none"))
+    cm.add_argument("--power-switch-in-hand", action="store_true")
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1)
@@ -675,8 +697,13 @@ def _check_commission_args(args) -> None:
     """Design ② 2: the tool's own limits, before anything is sent."""
     if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
         raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
-    if not 0 < args.seconds <= COMMISSION_HOLD_MAX_S:
-        raise Refused(f"seconds must be in (0, {COMMISSION_HOLD_MAX_S}]")
+    hold_max = AXIS_HOLD_MAX_S.get(AXES[args.axis], COMMISSION_HOLD_MAX_S)
+    if not COMMISSION_HOLD_MIN_S <= args.seconds <= hold_max:
+        raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
+    if not args.power_switch_in_hand:
+        # the commissioning build arms without an e-stop pin: a person holds the main power switch (firmware design
+        # 2.1, Q3); --yes does not stand in for it (Codex design P2-5)
+        raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
     if AXES[args.axis] >= 2:
         if args.window is None or not args.window[0] < args.window[1]:
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
@@ -715,7 +742,7 @@ def execute(args, bench: Bench) -> dict:
             m = result["metrics"]
             result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
                                              duty_sign_in_build=m["duty_sign_in_build"])
-            result.update(cmd="commission", axis=args.axis)
+            result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
         elif args.cmd == "step":
             result = run_step(bench, session, args.wheel, args.target)
         else:

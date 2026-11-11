@@ -54,7 +54,8 @@ def model(mcu_model):  # noqa: F811
 
 
 def args(**kw):
-    base = dict(cmd="commission", axis="L", duty=0.1, seconds=0.6, window=None, observed=None, yes=True)
+    base = dict(cmd="commission", axis="L", duty=0.1, seconds=0.6, window=None, observed=None, yes=True,
+                power_switch_in_hand=True)
     return argparse.Namespace(**{**base, **kw})
 
 
@@ -75,7 +76,7 @@ def test_a_wheel_run_arms_with_a_zero_commission_drives_and_disarms(model):
     assert res["result"] == "ok", res
     m = res["metrics"]
     assert m["valid"] and m["measured_sign"] == "pos" and m["duty_sign_in_build"] == 1
-    assert m["rate_mean_rad_s"] > 0 and 400 <= m["driven_ms"] <= 800
+    assert m["rate_mean_rad_s"] > 0 and 400 <= m["driven_ms_min"] <= m["driven_ms_max"] <= 800
     assert res["stop"] == "time" and res["verdict"]["duty_sign_ok"] and res["verdict"]["sensor_sign_ok"]
     assert "COMMISSION" in kinds_written(b) and "DRIVE" not in kinds_written(b)
     assert res["cleanup_confirmed"] and b.state.mode == Mode.DISARMED
@@ -89,23 +90,51 @@ def test_a_reversed_encoder_is_proposed_as_a_sensor_sign_flip(model):
     assert res["verdict"]["duty_sign_ok"] is True and res["verdict"]["sensor_sign_ok"] is False
 
 
-def test_a_steering_run_stops_at_the_window(model):
+@pytest.mark.parametrize("duty", [0.15, -0.15])
+def test_a_steering_run_stops_at_the_window_either_way(model, duty):
     b = model()
     b.run_until(lambda: b.state is not None, 2.0)
     s0 = b.state.steering_rad
-    # the model's steering moves 0.15 rad/s at duty 0.15: a 0.03 rad window is left within about 0.2 s
-    res = bringup.execute(args(axis="M", duty=0.15, seconds=1.2, window=(s0 - 0.03, s0 + 0.03)), b)
+    # the model's steering moves 0.15 rad/s at duty 0.15: a 0.01 rad window is left after about 70 ms of 200
+    res = bringup.execute(args(axis="M", duty=duty, seconds=0.2, window=(s0 - 0.01, s0 + 0.01)), b)
     assert res["result"] == "ok" and res["stop"] == "window", res
-    assert res["metrics"]["measured_sign"] == "pos" and res["metrics"]["value"]["max"] > s0 + 0.03 - 1e-6
-    assert res["metrics"]["driven_ms"] < 900
+    v = res["metrics"]["value"]
+    assert res["metrics"]["measured_sign"] == ("pos" if duty > 0 else "neg")
+    assert (v["max"] > s0 + 0.01 - 1e-6) if duty > 0 else (v["min"] < s0 - 0.01 + 1e-6)
+    assert res["metrics"]["driven_ms_min"] < 150
+
+
+def test_a_lost_link_after_a_steering_command_stops_within_the_commission_cap(model, monkeypatch):
+    """Codex design P1-2: the window stop cannot reach the MCU -- the last COMMISSION's validity (60 ms) ends it."""
+    b = model()
+    b.run_until(lambda: b.state is not None, 2.0)
+    s0 = b.state.steering_rad
+    real = bringup.CommissionSession.send_duty
+    n = {"nonzero": 0}
+
+    def cut_after_three(self, duty_e4, end_ns=None):
+        seq = real(self, duty_e4, end_ns)
+        if duty_e4 != 0:
+            n["nonzero"] += 1
+            if n["nonzero"] == 3:
+                self.b.run_until(lambda: seq in self.b.written, 0.2)
+                self.b.link.tx_enabled = False
+        return seq
+
+    monkeypatch.setattr(bringup.CommissionSession, "send_duty", cut_after_three)
+    res = bringup.execute(args(axis="M", duty=0.15, seconds=0.2, window=(s0 - 0.5, s0 + 0.5)), b)
+    last = max(t for k, t, m in b.written.values() if k == "COMMISSION" and m is not None and m.duty_e4 != 0)
+    zero = next(s for s in b.samples if s.host_ns > last and s.state.duty_e4[2] == 0)
+    assert (zero.host_ns - last) / 1e6 <= bringup.COMMISSION_CAP_MS + 30, res
+    assert res["cleanup_confirmed"]
 
 
 def test_steering_needs_a_window_around_the_start(model):
     b = model()
-    assert bringup.execute(args(axis="M"), b)["result"] == "refused"
+    assert bringup.execute(args(axis="M", seconds=0.2), b)["result"] == "refused"
     b.run_until(lambda: b.state is not None, 2.0)
     s0 = b.state.steering_rad
-    res = bringup.execute(args(axis="M", window=(s0 + 0.1, s0 + 0.2)), b)
+    res = bringup.execute(args(axis="M", seconds=0.2, window=(s0 + 0.1, s0 + 0.2)), b)
     assert res["result"] == "refused" and "window" in res["why"]
     assert kinds_written(b) == []
 
@@ -114,21 +143,40 @@ def test_a_lift_run(model):
     b = model()
     b.run_until(lambda: b.state is not None, 2.0)
     h0 = b.state.lift_m
-    res = bringup.execute(args(axis="H", duty=-0.1, seconds=0.4, window=(h0 - 0.05, h0 + 0.05), observed="neg"), b)
+    res = bringup.execute(args(axis="H", duty=-0.15, seconds=0.2, window=(h0 - 0.05, h0 + 0.05), observed="neg"), b)
     assert res["result"] == "ok", res
     assert res["metrics"]["measured_sign"] == "neg" and res["verdict"]["duty_sign_ok"]
 
 
-def test_the_mcu_time_limit_aborts_and_cleans_up(model):
+def test_the_mcu_time_limit_aborts_and_the_cleanup_never_cuts_its_stopping(model):
+    """Codex design P1-1: the firmware ends a STOPPING on DISARM (and its four-axis brake); the cleanup waits it
+    out, so the MCU reaches DISARMED on its own before any DISARM is written."""
     b = model("--commission-time-ms", "300")
     res = bringup.execute(args(seconds=1.0), b)
     assert res["result"] == "aborted" and res["aborted"] == "authorization_revoked", res
-    assert "COMMISSION_TIME_LIMIT" in res["faults_seen"]
+    assert "COMMISSION_TIME_LIMIT" in res["faults_seen"] and res["stopping_waited_ms"] is not None
+    stopping = next(s for s in b.samples if s.state.mode == Mode.STOPPING)
+    disarmed = next(s for s in b.samples if s.host_ns > stopping.host_ns and s.state.mode == Mode.DISARMED)
+    disarms = [t for k, t, _m in b.written.values() if k == "DISARM"]
+    assert disarms and min(disarms) >= disarmed.host_ns
     assert res["cleanup_confirmed"]
 
 
+def test_a_new_polarity_bit_of_the_driven_wheel_stops_its_duty_while_still_armed(model):
+    """Codex design P2-6: test thresholds low enough for a commissioning duty to raise the bit."""
+    b = model("--encoder-sign-flip", "0", "--encoder-test-thresholds", "1")
+    res = bringup.execute(args(seconds=1.0), b)
+    assert res["result"] == "ok" and res["stop"] == "encoder_bit", res
+    names = [n for n, _t in res["metrics"]["encoder_bits_new"]]
+    assert "ENCODER_POLARITY_L" in names
+    first_bit = next(i for i, s in enumerate(b.samples) if s.state.fault_flags & bringup.FaultFlag.ENCODER_POLARITY_L)
+    assert any(s.state.mode == Mode.ARMED and s.state.duty_e4[0] == 0 for s in b.samples[first_bit:])
+
+
 @pytest.mark.parametrize("kw,why", [({"duty": 0.2}, "duty"), ({"duty": 0.0}, "duty"), ({"seconds": 1.6}, "seconds"),
-                                    ({"seconds": 0.0}, "seconds"), ({"window": (0.0, 1.0)}, "window")])
+                                    ({"seconds": 0.05}, "seconds"), ({"window": (0.0, 1.0)}, "window"),
+                                    ({"axis": "M", "seconds": 0.3, "window": (-1.0, 1.0)}, "seconds"),
+                                    ({"power_switch_in_hand": False}, "power switch")])
 def test_tool_limits_refuse_before_anything_is_sent(model, kw, why):
     b = model()
     res = bringup.execute(args(**kw), b)

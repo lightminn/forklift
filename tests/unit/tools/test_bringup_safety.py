@@ -195,3 +195,46 @@ def test_a_gap_in_the_acceptance_wait_is_an_abort():
     i_event = len(b.samples)
     b.samples.append(Sample(250_000_000, dataclasses.replace(armed, mcu_time_us=250_000)))
     assert bringup._observe_stop(b, "tx_cut", boot=1, start_index=i_event) == "state_gap"
+
+
+# --- ② commissioning (docs/design/2026-11-12-bringup-commission-tool.md 3) ---
+
+def _commission_session(axis, window=None):
+    import io
+
+    b = bringup.Bench(None, io.StringIO(), commission=True)
+    return bringup.CommissionSession(b, axis, window)
+
+
+def _with(**kw):
+    from dataclasses import replace
+
+    return replace(state(StateFlag.COMMISSION_BUILD), **kw)
+
+
+def test_only_the_driven_wheels_new_stuck_or_polarity_bit_stops_it():
+    s = _commission_session(0)
+    none = FaultFlag(0)
+    assert s.early_stop(_with(fault_flags=FaultFlag.ENCODER_POLARITY_L), none) == "encoder_bit"
+    assert s.early_stop(_with(fault_flags=FaultFlag.ENCODER_STUCK_L), none) == "encoder_bit"
+    assert s.early_stop(_with(fault_flags=FaultFlag.ENCODER_POLARITY_R | FaultFlag.ENCODER_STUCK_R), none) is None
+    # already on before the run: not new
+    assert s.early_stop(_with(fault_flags=FaultFlag.ENCODER_POLARITY_L), FaultFlag.ENCODER_POLARITY_L) is None
+    assert _commission_session(1).early_stop(_with(fault_flags=FaultFlag.ENCODER_STUCK_R), none) == "encoder_bit"
+
+
+def test_the_window_stop_and_an_invalid_value():
+    s = _commission_session(2, (0.2, 0.3))
+    assert s.early_stop(_with(steering_rad=0.25), FaultFlag(0)) is None
+    assert s.early_stop(_with(steering_rad=0.31), FaultFlag(0)) == "window"
+    assert s.early_stop(_with(steering_rad=float("nan")), FaultFlag(0)) == "window"
+    h = _commission_session(3, (-0.01, 0.01))
+    assert h.early_stop(_with(lift_m=0.02), FaultFlag(0)) == "window"
+
+
+def test_the_commission_session_refuses_a_normal_build_and_any_drive():
+    s = _commission_session(0)
+    with pytest.raises(bringup.Refused, match="not a commissioning build"):
+        s.preflight(state())
+    with pytest.raises(bringup.Refused, match="no DRIVE"):
+        s.send(0.1, 0.1)

@@ -39,7 +39,7 @@ def test_wheel_run_sign_rate_current_and_driven_time():
     m = commission_metrics(s, axis=0, duty_e4=1000, on_index=2, off_index=12)
     assert m.valid and m.measured_sign == "pos" and m.measured_delta == 100
     assert m.duty_sign_in_build == 1 and m.applied_max_e4 == 1000
-    assert m.driven_ms == pytest.approx(100.0)
+    assert m.driven_ms_min == pytest.approx(90.0) and m.driven_ms_max == pytest.approx(110.0)
     # rate: the back half of the driven samples (i = 5..9 -> 1.5..1.9)
     assert m.rate_mean_rad_s == pytest.approx(1.7) and m.rate_peak_rad_s == pytest.approx(1.9)
     assert m.current_peak_ma == 309 and m.current_mean_ma == pytest.approx(304.5) and m.others_peak_ma == 5
@@ -117,7 +117,7 @@ def test_no_acceptance_is_not_a_measurement():
     (1000, "pos", "unknown", None, None, "no_observation"),
     (1000, "none", "pos", None, None, "inconsistent"),
     (1000, "pos", "none", None, None, "inconsistent"),
-    (1000, "none", "none", None, None, "no_motion"),
+    (1000, "none", "none", None, None, "insufficient_motion"),
 ])
 def test_sign_verdict(cmd, measured, observed, duty_ok, sensor_ok, note):
     v = sign_verdict(cmd, measured, observed, duty_sign_in_build=1)
