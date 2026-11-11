@@ -1052,7 +1052,7 @@ def test_obstacle_recovery_v4_releases_a_hold_at_a_backoff_end_and_in_its_recove
     assert "clearance_used_ = mission_clearance_" in core
     # find_escape moved to the mission core (M-a1 slice 6c); its dump goes through the runner's Sink.
     assert 'save_npz(\n                f"obstacle_recovery_{dumps_ + 1}.npz"' in moved_fn
-    assert "band_pose=None, label=None" in source and "band_poses_ = rear if band_pose is None else band_pose" in source
+    assert "band_pose=None, label=None" in source and "band_poses_ = tick_vars.rear if band_pose is None else band_pose" in source
     assert 'own=list(region), band_pose=list(region), label="escape_end"' in moved_fn
 
 
