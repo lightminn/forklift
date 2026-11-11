@@ -20,6 +20,11 @@ add_library(fw_core STATIC ${FW_CORE_SOURCES})
 target_include_directories(fw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(fw_core PUBLIC m)
 
+# The vehicle model shared by the host model endpoint and the MCU's HIL build (board design 9).
+add_library(fw_plant STATIC ${CMAKE_CURRENT_SOURCE_DIR}/plant/plant.c)
+target_include_directories(fw_plant PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/plant)
+target_link_libraries(fw_plant PUBLIC fw_core)
+
 enable_testing()
 file(GLOB FW_TESTS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/test/test_*.c)
 foreach(test_source ${FW_TESTS})
@@ -47,6 +52,11 @@ target_include_directories(test_weact_h743_board_pure PRIVATE
 target_link_libraries(test_weact_h743_board_pure PRIVATE fw_core)
 add_test(NAME test_weact_h743_board_pure COMMAND test_weact_h743_board_pure)
 
+add_executable(test_plant ${CMAKE_CURRENT_SOURCE_DIR}/plant/test_plant.c)
+target_include_directories(test_plant PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
+target_link_libraries(test_plant PRIVATE fw_plant)
+add_test(NAME test_plant COMMAND test_plant)
+
 add_executable(test_weact_h743_link ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_link.c)
 target_include_directories(test_weact_h743_link PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
@@ -55,15 +65,20 @@ add_test(NAME test_weact_h743_link COMMAND test_weact_h743_link)
 # The board's real configuration needs the generated vehicle header (FW_PYTHON).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vehicle_header.cmake)
 if(FW_PYTHON)
-    add_executable(test_weact_h743_board_config
-        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_config.c
-        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_rules.c)
-    target_include_directories(test_weact_h743_board_config PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
-    target_link_libraries(test_weact_h743_board_config PRIVATE fw_core)
-    fw_vehicle_header(test_weact_h743_board_config ${CMAKE_CURRENT_BINARY_DIR}/generated_board)
-    add_test(NAME test_weact_h743_board_config COMMAND test_weact_h743_board_config)
+    # One configuration test per build kind (board design 2.2, 9).
+    foreach(kind normal commission hil)
+        set(t test_weact_h743_board_config_${kind})
+        add_executable(${t}
+            ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_config.c
+            ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_rules.c)
+        target_include_directories(${t} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+        target_compile_definitions(${t} PRIVATE FW_BUILD_${kind}=1)
+        target_link_libraries(${t} PRIVATE fw_core)
+        fw_vehicle_header(${t} ${CMAKE_CURRENT_BINARY_DIR}/generated_board_${kind})
+        add_test(NAME ${t} COMMAND ${t})
+    endforeach()
 endif()
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
@@ -106,5 +121,5 @@ if(FW_MCU_MODEL)
         COMMENT "Generating vehicle_config.h from ${FW_VEHICLE_YAML}")
     add_executable(mcu_model ${CMAKE_CURRENT_SOURCE_DIR}/tools/mcu_model.c ${FW_VEHICLE_HEADER})
     target_include_directories(mcu_model PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
-    target_link_libraries(mcu_model PRIVATE fw_core)
+    target_link_libraries(mcu_model PRIVATE fw_plant fw_core)
 endif()

@@ -12,6 +12,11 @@
 #else
 #define BOARD_COMMISSION false
 #endif
+#if defined(FW_BUILD_hil)
+#define BOARD_HIL true
+#else
+#define BOARD_HIL false
+#endif
 
 #define PI_F 3.14159265358979323846f
 
@@ -73,7 +78,7 @@ static drive_config make(void)
     /* Build identity (board design 2.2). Outputs locked: IPROPI reaches the ADC pins without
        protection on schematic V1.0 (plan 5 precondition); opening them is the user's decision. */
     c.commission_build = BOARD_COMMISSION;
-    c.hil_plant = false;
+    c.hil_plant = BOARD_HIL; /* board design 9: the vehicle model fills the inputs */
     c.outputs_locked = true;
     c.estop_wired = false;          /* no e-stop net on schematic V1.0 */
     c.commission_duty_max = 0.15f;  /* plan 3.4 */

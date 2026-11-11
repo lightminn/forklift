@@ -61,21 +61,38 @@ def _build(tmp_path_factory, name: str, *extra: str) -> Path:
     return build / "boards" / "weact_h743"
 
 
+# Every build the board design names (2.2, 5, 9), all with the outputs locked: name -> (cmake
+# arguments, link, build kind in the identity, image name).
+BUILDS = {
+    "usb": ((), "usb", "normal", "fw"),
+    "uart7": (("-DFW_LINK=uart7",), "uart7", "normal", "fw"),
+    "commission": (("-DFW_BUILD=commission",), "usb", "commission", "fw"),
+    "hil": (("-DFW_BUILD=hil",), "usb", "hil", "fw"),
+}
+
+
 @pytest.fixture(scope="module")
-def locked_build(tmp_path_factory) -> Path:
+def build_of(tmp_path_factory):
+    made: dict[str, Path] = {}
+
+    def get(name: str) -> Path:
+        if name not in made:
+            made[name] = _build(tmp_path_factory, f"weact_h743_{name}", *BUILDS[name][0])
+        return made[name]
+    return get
+
+
+@pytest.fixture(scope="module")
+def locked_build(build_of) -> Path:
     """The default build: normal, outputs locked, USB CDC link."""
-    return _build(tmp_path_factory, "weact_h743")
+    return build_of("usb")
 
 
-@pytest.fixture(scope="module")
-def uart7_build(tmp_path_factory) -> Path:
-    return _build(tmp_path_factory, "weact_h743_uart7", "-DFW_LINK=uart7")
-
-
-@pytest.fixture(params=["usb", "uart7"])
-def any_build(request) -> tuple[str, Path]:
-    name = "locked_build" if request.param == "usb" else "uart7_build"
-    return request.param, request.getfixturevalue(name)
+@pytest.fixture(params=list(BUILDS))
+def any_build(request, build_of) -> tuple[str, Path, Path]:
+    """(name, build directory, ELF) for each build."""
+    d = build_of(request.param)
+    return request.param, d, d / f"{BUILDS[request.param][3]}.elf"
 
 
 def _sections(elf: Path) -> dict[str, int]:
@@ -90,7 +107,7 @@ def _sections(elf: Path) -> dict[str, int]:
 
 
 def test_size_within_limits(any_build):
-    s = _sections(any_build[1] / "fw.elf")
+    s = _sections(any_build[2])
     flash = s.get(".isr_vector", 0) + s.get(".text", 0) + s.get(".ARM.exidx", 0) + s.get(".data", 0)
     dtcm = s.get(".data", 0) + s.get(".bss", 0)
     assert 0 < flash <= FLASH_LIMIT
@@ -98,12 +115,13 @@ def test_size_within_limits(any_build):
 
 
 def test_build_identity_in_elf(any_build):
-    link, build = any_build
-    data = (build / "fw.elf").read_bytes()
-    m = re.search(rb"forklift-mcu (normal|commission|hil) locked \S+ link=(usb|uart7) cc=[^\x00]*"
+    name, _, elf = any_build
+    data = elf.read_bytes()
+    m = re.search(rb"forklift-mcu (\S+) locked \S+ link=(usb|uart7) cc=[^\x00]*"
                   rb"Arm GNU Toolchain 13\.3\.Rel1", data)
     assert m, "build identity string missing"
-    assert m.group(2).decode() == link
+    assert m.group(1).decode() == BUILDS[name][2]
+    assert m.group(2).decode() == BUILDS[name][1]
 
 
 def _symbols(elf: Path) -> dict[str, int]:
@@ -128,14 +146,14 @@ def _vectors(elf: Path, tmp: Path) -> list[int]:
 def test_every_enabled_interrupt_has_its_handler(any_build, tmp_path):
     """Codex B2a review: an IRQ enabled with no vector entry jumped to address 0. An IRQ whose
     priority a board source sets counts as enabled too: TinyUSB enables the OTG one itself."""
-    elf = any_build[1] / "fw.elf"
+    elf = any_build[2]
     syms = _symbols(elf)
     vec = _vectors(elf, tmp_path)
     header = (FIRMWARE / "third_party" / "cmsis_device_h7" / "Include" / "stm32h743xx.h").read_text()
     irqn = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)_IRQn\s+=\s+(\d+),", header, re.M)}
     assert all(v != 0 for v in vec[1:]), "a vector slot is empty"
     default = syms["Default_Handler"] | 1
-    compiled = set(re.findall(r"src/(\w+)\.c\.obj", (any_build[1] / "fw.map").read_text()))
+    compiled = set(re.findall(r"src/(\w+)\.c\.obj", elf.with_suffix(".map").read_text()))
     enabled = set()
     for src in (BOARD / "src").glob("*.c"):
         if src.stem in compiled:
@@ -148,8 +166,8 @@ def test_every_enabled_interrupt_has_its_handler(any_build, tmp_path):
         assert slot == syms[f"{name}_IRQHandler"] | 1, name
 
 
-def test_locked_build_links_no_tim1_output(locked_build):
-    map_text = (locked_build / "fw.map").read_text()
+def test_locked_build_links_no_tim1_output(any_build):
+    map_text = any_build[2].with_suffix(".map").read_text()
     assert "motor_out_tim1" not in map_text
     assert "motor_out_locked" in map_text
 
@@ -169,12 +187,13 @@ TUSB_RULES = [
 ]
 
 
-@pytest.mark.parametrize("link", ["usb", "uart7"])
-def test_stack_worst_case_from_call_graphs(link, request):
+@pytest.mark.parametrize("name", list(BUILDS))
+def test_stack_worst_case_from_call_graphs(name, build_of):
     """Board design 6: call-graph worst case per preemption level plus exception frames, within
     half of the main stack (tools/fw_stack_check.py). Levels from the lowest priority up: main
     loop, USB OTG (3), TIM6 (2), SPI and UART7 (1)."""
-    build = request.getfixturevalue("locked_build" if link == "usb" else "uart7_build")
+    build = build_of(name)
+    link = BUILDS[name][1]
     levels = ["board_main"]
     if link == "usb":
         levels.append("OTG_FS_IRQHandler")
@@ -186,7 +205,7 @@ def test_stack_worst_case_from_call_graphs(link, request):
     if link == "usb":
         rules += TUSB_RULES
     args = [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(build.parent.parent),
-            "--limit", str(MAIN_STACK // 2), "--elf", str(build / "fw.elf"),
+            "--limit", str(MAIN_STACK // 2), "--elf", str(build / f"{BUILDS[name][3]}.elf"),
             "--objdump", str(TOOLCHAIN / "bin" / "arm-none-eabi-objdump")]
     for lv in levels:
         args += ["--level", lv]
@@ -298,6 +317,22 @@ def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
     head_b = git("rev-parse", "--short=12", "HEAD").strip()
     assert head_b != head_a
     assert build_once() == head_b
+
+
+def _symbols_of(elf: Path) -> set[str]:
+    return set(_symbols(elf))
+
+
+def test_hil_build_runs_the_model_and_never_wakes_the_drivers(build_of):
+    """Board design 9: the HIL build fills the inputs from the shared vehicle model and starts no
+    motor-side peripheral; nSLEEP is never raised (motor_out_wake_drivers is not even linked)."""
+    d = build_of("hil")
+    syms = _symbols_of(d / "fw.elf")
+    assert {"plant_step", "plant_inputs", "plant_spi_start"} <= syms
+    for absent in ("motor_out_wake_drivers", "drv_spi_init", "kth_spi_init", "encoder_init", "adc_init"):
+        assert absent not in syms, absent
+    normal = _symbols_of(build_of("usb") / "fw.elf")
+    assert "motor_out_wake_drivers" in normal and "plant_step" not in normal
 
 
 def test_unknown_link_refused(tmp_path):

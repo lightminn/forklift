@@ -76,8 +76,9 @@ static const fw_hal g_hal = {
     .watchdog_kick = hal_kick,
 };
 
-const fw_hal *board_hal_init(void)
+const fw_hal *board_hal_init(const drive_config *cfg)
 {
+    (void)cfg;
     RCC->AHB4ENR |= RCC_AHB4ENR_GPIOBEN;
     (void)RCC->AHB4ENR;
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
@@ -89,4 +90,10 @@ const fw_hal *board_hal_init(void)
     adc_init();
     motor_out_wake_drivers();
     return &g_hal;
+}
+
+void board_hal_tick_end(void)
+{
+    kth_spi_start_bundle(); /* frames for the next cycle (board design 3.4) */
+    adc_start();
 }

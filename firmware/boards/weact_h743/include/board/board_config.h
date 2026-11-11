@@ -12,7 +12,8 @@
    out_of_range (board design 3.7). Uses the core's own conversion. */
 bool kth_raw_zero_outside_range(const abs_axis_config *c);
 
-/* The configuration this build runs with (commission_build from FW_BUILD; outputs locked). */
+/* The configuration this build runs with (commission_build, hil_plant from FW_BUILD; outputs
+   locked). The core itself refuses hil_plant with commission_build or without outputs_locked. */
 const drive_config *board_drive_config(void);
 
 /* drive_config_valid plus the board's own rules (raw-zero check on both axes, outputs locked,

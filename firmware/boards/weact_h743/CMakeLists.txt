@@ -56,10 +56,15 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/kth_spi.c
     ${BOARD_DIR}/src/encoder.c
     ${BOARD_DIR}/src/adc.c
-    ${BOARD_DIR}/src/board_hal.c
+    $<IF:$<STREQUAL:${FW_BUILD},hil>,${BOARD_DIR}/src/board_hal_hil.c,${BOARD_DIR}/src/board_hal.c>
     ${BOARD_DIR}/src/board_config.c
     ${BOARD_DIR}/src/board_rules.c
     ${BOARD_DIR}/src/motor_out_locked.c)
+
+# HIL (board design 9): the vehicle model shared with the host model endpoint.
+if(FW_BUILD STREQUAL "hil")
+    list(APPEND BOARD_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/../../plant/plant.c)
+endif()
 
 # The link (board design 5). TinyUSB is vendored (firmware/third_party/MANIFEST.yaml) and built as
 # its own library: its sources are not ours to hold to -Wconversion, but they are compiled for
@@ -89,7 +94,8 @@ add_executable(fw ${BOARD_SOURCES})
 set_source_files_properties(${BOARD_DIR}/src/vectors.c PROPERTIES COMPILE_OPTIONS "-Wno-override-init;-Wno-pedantic")
 add_dependencies(fw build_info)
 set_target_properties(fw PROPERTIES SUFFIX ".elf")
-target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated
+                                      ${CMAKE_CURRENT_SOURCE_DIR}/../../plant)
 target_include_directories(fw SYSTEM PRIVATE ${TP}/cmsis_core/CMSIS/Core/Include
                                                ${TP}/cmsis_device_h7/Include)
 target_compile_definitions(fw PRIVATE STM32H743xx FW_BUILD_${FW_BUILD}=1 FW_LINK_${FW_LINK_UPPER}=1)
