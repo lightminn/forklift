@@ -574,6 +574,12 @@ void drive_begin(drive *d, const drive_inputs *in)
 {
     d->time_us += (uint32_t)(in->now_us - d->last_now32); /* widen the HAL clock */
     d->last_now32 = in->now_us;
+    /* The commissioning time limit is judged first and whatever the mode: a fault taken in
+       this same cycle must not drop its hold (Codex PR review 3). */
+    bool cm_over = commission_over_limit(d);
+    if (cm_over) {
+        hold_commission(d);
+    }
     read_sensors(d, in);
     check_spi_timeout(d);
 
@@ -582,13 +588,10 @@ void drive_begin(drive *d, const drive_inputs *in)
        independently before the mode changes, so one cannot hide the other (Codex PR review 2). */
     if (d->mode == DRIVE_MODE_ARMED) {
         bool expired = d->has_deadline && d->time_us > d->deadline_us;
-        bool over = commission_over_limit(d);
+        bool over = cm_over;
         if (expired || over) {
             enter_stopping(d, (expired ? DRIVE_FAULT_COMMAND_TIMEOUT : 0u) |
                                   (over ? DRIVE_FAULT_COMMISSION_TIME_LIMIT : 0u));
-        }
-        if (over) {
-            hold_commission(d); /* a DISARM cannot shorten this stop */
         }
     }
     /* Faults are judged while the outputs are still on, including the cycle the STOPPING
@@ -842,8 +845,9 @@ static void handle_clear(drive *d, const link_msg *m)
         d->reject_reason = DRIVE_REJECT_SENSOR_INVALID;
         return;
     }
-    /* Driver faults and overcurrent are not conditions: the re-initialisation decides. */
-    d->latched = 0;
+    /* Driver faults and overcurrent are not conditions: the re-initialisation decides. The
+       commissioning time limit stays until the next ARM (contract 3.4). */
+    d->latched &= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
     d->mode = DRIVE_MODE_BOOT;
     d->reject_reason = DRIVE_REJECT_NONE;
     d->last_rx_seq = m->seq;
@@ -961,6 +965,9 @@ void drive_finish(drive *d, drive_outputs *out)
     float dt = (float)c->period_us * 1e-6f;
     drive_outputs o;
     memset(&o, 0, sizeof o);
+    if (commission_over_limit(d)) {
+        hold_commission(d); /* before any branch below clears cm_on */
+    }
     if (driving(d) && !c->commission_build) {
         float duty[DRIVE_CH_COUNT];
         for (int i = 0; i < 2; i++) {

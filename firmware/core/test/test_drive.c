@@ -1605,6 +1605,59 @@ static void v2r4_limit_and_expiry_in_the_same_cycle(void)
     CHECK(first_nonzero >= (int)cfg.stop_grace_ms - 1);
 }
 
+/* Runs commissioning up to the limit, then on the cycle that passes it injects a fault
+   (0 = encoder gap, 1 = encoder jump); clears it and re-arms every cycle after. Returns
+   whether output resumed before stop_grace_ms had passed since the limit (Codex PR review 3). */
+static bool limit_with_fault_resumes_early(int kind)
+{
+    boot_with(mod_commission);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    while (d.time_us + 2000u < limit_at) {
+        if ((d.time_us / 1000u) % 50u == 0) {
+            send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+        } else {
+            tick();
+        }
+    }
+    if (kind == 0) {
+        in.now_us += 25000; /* lands past the limit and past the gap limit together */
+        in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 1);
+    } else {
+        in.now_us += 2000;
+        in.wheel_hw[0] = (uint16_t)(in.wheel_hw[0] + 500);
+    }
+    tick();
+    CHECK_EQ_U(d.mode, DRIVE_MODE_FAULT);
+    uint64_t t_limit = d.time_us;
+    send(simple(LINK_CLEAR_FAULTS, seq++));
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT); /* kept through CLEAR_FAULTS */
+    bool early = false;
+    for (int t = 0; t < 400; t++) {
+        link_msg m[3];
+        m[0] = arm_msg(seq++, d.boot_id, echo_now());
+        m[1] = commission_msg(seq++, 0, 0, 150, echo_now());
+        m[1].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        m[2] = commission_msg(seq++, 0, 1000, 150, echo_now());
+        m[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+        tick_moving(0.0, 0.0, m, 3);
+        if (out.duty[DRIVE_CH_L] != 0.0f &&
+            d.time_us < t_limit + (uint64_t)cfg.stop_grace_ms * 1000u) {
+            early = true;
+        }
+    }
+    return early;
+}
+
+static void v2r5_limit_hold_survives_a_fault_in_the_same_cycle(void)
+{
+    CHECK(!limit_with_fault_resumes_early(0));
+    CHECK(!limit_with_fault_resumes_early(1));
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1652,5 +1705,6 @@ int main(void)
     v2r2_commission_stopping_brakes_every_axis();
     v2r3_rearm_bundle_after_the_limit_waits_the_stop();
     v2r4_limit_and_expiry_in_the_same_cycle();
+    v2r5_limit_hold_survives_a_fault_in_the_same_cycle();
     return FW_TEST_RESULT();
 }
