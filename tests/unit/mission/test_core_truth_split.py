@@ -82,28 +82,30 @@ def test_the_limit_keeps_the_smallest_and_a_braking_direction_only_stops():
         calls.append((d, cap))
         return (min(cap, 0.4), "ok") if d > 0 else (0.0, "occupied")
 
-    assert MissionCore._limit_any_direction(limit, [1, -1], 0.3) == (0.0, "occupied")  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1, -1], 0.3) == (0.0, "occupied", False)  # noqa: SLF001
     assert calls == [(1, 0.3), (-1, 0.3)]
     calls.clear()
-    assert MissionCore._limit_any_direction(limit, [1], 0.3) == (0.3, "ok") and calls == [(1, 0.3)]  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1], 0.3) == (0.3, "ok", False) and calls == [(1, 0.3)]  # noqa: SLF001
     calls.clear()
     # braking: rearward at the bound only; blocked behind while rolling back stops the forward request
-    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.02) == (0.0, "occupied")  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.02) == (0.0, "occupied", True)  # noqa: SLF001
     assert calls == [(1, 0.3), (-1, 0.02)]
     calls.clear()
     # no motion: no braking check, the forward request is not blocked by what is behind
-    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.0) == (0.3, "ok") and calls == [(1, 0.3)]  # noqa: SLF001
+    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.0) == (0.3, "ok", False) and calls == [(1, 0.3)]  # noqa: SLF001
 
     def free(d, cap):
         return (min(cap, 0.4), "ok")
 
     # a free braking direction that allows the bound leaves the driving limit alone
-    assert MissionCore._limit_any_direction(free, [1], 0.3, [-1], 0.02) == (0.3, "ok")  # noqa: SLF001
+    assert MissionCore._limit_any_direction(free, [1], 0.3, [-1], 0.02) == (0.3, "ok", False)  # noqa: SLF001
 
 
 class _Tracker:
+    remaining = 5.0
+
     def remaining_to_goal_m(self):
-        return 5.0
+        return self.remaining
 
     def progress_m(self):
         return 1.0
@@ -170,9 +172,27 @@ def test_the_pocket_check_does_not_answer_an_unsure_direction():
     assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
 
 
-def test_a_standing_reading_with_no_request_lets_the_pocket_check_answer():
+def test_a_standstill_asked_forward_lets_the_pocket_check_answer():
     asked = []
     check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"), summary=lambda: {})
-    c, _ = permission_core(SafetySpeed(0.0, 0.005, (1, -1)), phase="insert", pocket_check=check)
-    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    c, _ = permission_core(SafetySpeed(0.0, 0.0, (1, -1)), phase="insert", pocket_check=check)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.3, False, None)
     assert out.why != "direction_unsure" and asked == [1]
+
+
+def test_a_failed_braking_check_holds_the_wheels_where_the_permission_does_not_act():
+    c, layer = permission_core(SafetySpeed(-0.2, 0.2, (-1,)), blocked=-1)
+    c.trackers["transport"].remaining = 0.2  # the delivery straight: the permission does not act there
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    assert not out.acting and layer.calls == [1, -1]
+    assert out.allowed == 0.0 and out.requested_speed == 0.0 and out.obstacle_hold
+    assert c.obstacle["permission_cap"] == (1.0, 0.0)
+
+
+def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way():
+    asked = []
+    check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"), summary=lambda: {})
+    c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=check)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
+    assert c.obstacle["permission_cap"] == (1.0, 0.0)

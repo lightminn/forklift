@@ -1453,7 +1453,7 @@ class MissionCore:
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
         directions_, braking_ = self._check_directions(speed_, direction)
-        allowed, why = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
+        allowed, why, braking_stop_ = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=cap_,
         ), directions_, max(abs(requested_speed), speed_.bound_mps), braking_, speed_.bound_mps)
@@ -1464,8 +1464,9 @@ class MissionCore:
         if why == "layer_latency_exceeded":  # asked only then: no new hook call on a recorded tick (replay gate)
             hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"
-        speed_hold_ = self._speed_hold(speed_)  # 4d-1: an invalid safety speed holds the wheels, acting or not
-        if speed_hold_:
+        # 4d-1: an invalid safety speed, or a failed braking check, holds the wheels, acting or not (Codex 4d-1 3rd P1)
+        speed_hold_ = self._speed_hold(speed_) or braking_stop_
+        if self._speed_hold(speed_):
             allowed, why = 0.0, "safety_speed_invalid"
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
@@ -1525,8 +1526,10 @@ class MissionCore:
             acting = True
             if pocket["check"] is None:
                 allowed, why = 0.0, "pocket_missing"
-            elif len(directions_) > 1 and not speed_.standing(self.STANDING_MPS):
-                allowed, why = 0.0, "direction_unsure"  # 4d-1: the pocket check answers one direction (real truck only)
+            elif len(directions_) > 1 or (braking_ and speed_.bound_mps > 0.0):
+                # 4d-1 (real truck only): the pocket check answers one direction and the layer waives the pocket
+                # region, so a residual motion the other way is not covered -- stop (Codex 4d-1 3rd P1)
+                allowed, why = 0.0, "direction_unsure"
             elif pocket.get("await_still_frame"):
                 allowed, why = 0.0, "pocket_settle"
             elif (
@@ -5516,15 +5519,15 @@ class MissionCore:
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
         directions_, braking_ = self._check_directions(speed_, None)
-        allowed, why = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
+        allowed, why, braking_stop_ = self._limit_any_direction(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=cap_,
         ), directions_, speed_.bound_mps, braking_, speed_.bound_mps)
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"  # holds the wheels whether the phase acts or not (Codex impl review P1)
-        speed_hold_ = self._speed_hold(speed_)  # 4d-1: an invalid safety speed holds the wheels, acting or not
-        if speed_hold_:
+        speed_hold_ = self._speed_hold(speed_) or braking_stop_  # 4d-1: held, acting or not
+        if self._speed_hold(speed_):
             allowed, why = 0.0, "safety_speed_invalid"
         if exit_closed_ == "watch":
             allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
@@ -6184,17 +6187,19 @@ class MissionCore:
         """The layer's limit ``limit_fn(direction, cap)``: the smallest over the driving ``directions`` at ``cap_mps``
         (one call for one direction), then each ``braking`` direction at the speed bound -- a braking direction that
         does not allow the speed the truck may already have there stops the truck (its reason kept, or
-        ``direction_unsure`` when the layer named none). No motion (a zero bound), no braking check."""
+        ``direction_unsure`` when the layer named none). No motion (a zero bound), no braking check. Returns
+        ``(allowed, why, braking_stop)``: a braking stop is a hold whether the phase's permission acts or not."""
         if len(directions) == 1:
             allowed, why = limit_fn(directions[0], cap_mps)
         else:
             allowed, why = min((limit_fn(d, cap_mps) for d in directions), key=lambda r: r[0])
+        braking_stop = False
         if bound_mps > 0.0:
             for d in braking:
                 a_, w_ = limit_fn(d, bound_mps)
                 if a_ < bound_mps:
-                    allowed, why = 0.0, (w_ if w_ != "ok" else "direction_unsure")
-        return allowed, why
+                    allowed, why, braking_stop = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
+        return allowed, why, braking_stop
 
     def _kinematic_refusal(self, t: float, reason: str, requested_curvature: float, curvature_range) -> None:
         """Design D3 as built in 4a': latch a stop with the steering held, record it, and pause the mission -- the
