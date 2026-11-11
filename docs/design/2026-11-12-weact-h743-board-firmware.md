@@ -27,8 +27,8 @@ PR 나누기(총괄 승인 2026-11-11, 계약 PR 은 먼저 끝냄):
 |---|---|---|---|
 | CMSIS Core | ARM-software/CMSIS_5 `5.9.0` (`2b7495b8`) | Apache-2.0 | `CMSIS/Core/Include/*` |
 | CMSIS 장치 H7 | STMicroelectronics/cmsis-device-h7 `v1.10.7` (`8f922cdc`) | Apache-2.0 | `stm32h7xx.h`, `stm32h743xx.h`, `system_stm32h7xx.h`(시작 코드는 직접 씀) |
-| STM32H7 LL | STMicroelectronics/stm32h7xx-hal-driver `v1.11.6` (`a1996eed`) | BSD-3-Clause | 쓰는 `stm32h7xx_ll_*.h/.c` 만(HAL 은 넣지 않음) |
-| TinyUSB | hathach/tinyusb (B3 에서 고정, 최근 안정 태그) | MIT | `src/` 의 장치·CDC, `portable/synopsys/dwc2` |
+| STM32H7 LL | STMicroelectronics/stm32h7xx-hal-driver `v1.11.6` (`a1996eed`) | BSD-3-Clause | **들여오지 않았다**(B1): 레지스터를 CMSIS 이름으로 직접 쓴다. 원문 확인용으로만 참조 |
+| TinyUSB | hathach/tinyusb `0.21.0` (`dae3f9a3`, 2026-06-30 공개) | MIT | 장치 스택·CDC 클래스·Synopsys DWC2 포트 26개 파일 + LICENSE. USB 빌드의 컴파일러 의존 목록과 MANIFEST 가 같은지 크로스 시험이 확인한다(B3) |
 
 - 태그는 2026-11-11 `git ls-remote` 로 확인했다. STM32CubeH7 V1.13.0 패키지의 HAL 드라이버 V1.11.6·CMSIS 장치 V1.10.7 과 같은 판이다(로컬 `~/tools/stm32cube-repo` 의 릴리스 노트).
 
@@ -64,7 +64,7 @@ PR 나누기(총괄 승인 2026-11-11, 계약 PR 은 먼저 끝냄):
 3. IWDG 시작(3.5).
 4. 리셋 원인 읽기(`RCC_RSR`): IWDG1 → 2, 소프트웨어 → 3, BOR·POR → 0, 핀 → 1, 그 밖 → 4 순서로 판정하고 `RMVF` 로 지운다(핀 플래그는 다른 리셋에도 함께 켜지므로 마지막에 본다).
 5. 전압: VOS1 요청 → `VOSRDY` 대기(제한 시간 있음).
-6. 클록(3.3), 시간 기준(3.4), 주변장치, `boot_id`(3.7), 링크. 각 단계는 제한 시간을 두고 기다리며, IWDG 갱신 간격이 **40 ms 를 넘지 않게** 나눈다(3.5). USB 열거와 CRS 동기는 부팅을 막지 않는다(기다리지 않고 주기로 넘어감).
+6. 클록(3.3), 시간 기준(3.4), 주변장치, `boot_id`(3.7), 링크. 각 단계는 제한 시간을 두고 기다리며, IWDG 갱신 간격이 **40 ms 를 넘지 않게** 나눈다(3.5). **링크는 7 의 주기 시작 뒤 주 문맥에서 켠다**(B3): TinyUSB 는 코어 리셋·엔드포인트 끄기에서 제한 없이 기다리므로, 그 기다림이 주기·만료·IWDG 를 막지 않게 한다. USB 열거는 부팅을 막지 않는다.
 7. `fw_app_init(..., reset_cause)` 직후 곧바로 1 kHz 주기를 시작한다(첫 주기 지연은 코어가 차분만 버린다 — mcu-link/2 코어 설계 5절).
 
 ### 3.3 클록
@@ -78,8 +78,8 @@ PR 나누기(총괄 승인 2026-11-11, 계약 PR 은 먼저 끝냄):
 | SPI1·SPI2 커널 | PLL1Q 100 MHz → SPI1 /16 = 6.25 MHz(DRV8244 최대 10 MHz), SPI2 /32 = 3.125 MHz(KTH7801 최대 10 MHz, LVDS·케이블 경유라 낮게 시작, S2 에서 올림) | |
 | ADC 커널 | per_ck = HSI 64 MHz, ADC 분주 /2 = 32 MHz | **판(revision)마다 다르다**(AN5312 1.7): rev Y 는 아날로그 ADC 클록 32 MHz → `BOOST` 켬, rev V 는 안에서 /2 가 더 붙어 16 MHz → `BOOST=10`(12.5–25 MHz 대역). 부팅 때 `DBGMCU_IDCODE.REV_ID`(0x1003 = Y, 0x2003 = V)로 판을 읽어 고른다. 모르는 판이면 ADC 를 켜지 않는다(전류 무효 → ARM 거부) |
 | LPTIM1·LPTIM2 커널 | 기본 rcc_pclk1·rcc_pclk4 = 100 MHz | 엔코더 입력 ≤ 커널/4 = 25 MHz ≫ 약 104 kHz(계획 3.3) |
-| USB | HSI48 + CRS(USB SOF 동기). **CRS 동기원 값이 판마다 다르다**(AN5312 1.4): PA11/PA12 의 USB2 SOF 는 rev Y `SYNCSRC=00`, rev V `SYNCSRC=11`. LL 의 `LL_CRS_SYNC_SOURCE_USB` 는 `SYNCSRC_1`(값 10, 2026-11-12 LL v1.11.6 에서 확인)이라 쓰지 않고 판별 값으로 직접 쓴다. 동기 성공·오류 플래그를 읽어 둔다 | 컨트롤러는 `USB2_OTG_FS`, 내장 FS PHY |
-| RNG | HSI48 (`RNGSEL`) | UART 빌드에서도 RNG 를 위해 HSI48 을 켠다 |
+| USB | **(B3 정정) PLL3 Q = 48 MHz**: PLL1 과 같은 기준(`PLLSRC` 는 세 PLL 공통)·같은 M 에서 HSE 경로 5 MHz × 96, HSI 경로 6.4 MHz × 75 = VCO 480 MHz, Q /10. `USBSEL=10`. 링크를 켤 때(주 문맥) PLL3 를 켜고, 잠기지 않으면 링크 없이 돈다(ARM 이 오지 않음). HSI 대체 경로의 USB 클록은 HSI 오차를 그대로 가져 USB FS 허용 오차(±0.25 %)를 지키지 못한다 — **그때 USB 링크는 실패하는 것으로 본다**(agy). 링크가 없으면 ARM 이 오지 않아 안전 쪽이고, UART7 빌드는 영향이 없다 | **HSI48 + CRS 를 버린 이유**: USB FS 는 ±0.25 % 가 필요한데 HSI48 은 보정 없이 30 °C 에서 47.5–48.5 MHz, 온도 전 범위 −4.5/+3.5 %(DS12110 Rev 7 표 46). CRS 의 USB SOF 동기는 **rev Y 에서 동작하지 않는다**(ES0396 Rev 6 2.2.2, 해결책은 LSE 동기). 또 설계 초안의 판별 `SYNCSRC`(rev Y 00·rev V 11, AN5312 인용)는 RM0433 Rev 7 의 CRS_CFGR 표(00 = USB2 SOF, 10 = OTG HS1 SOF, 11 = 예약)와 맞지 않았다. 수정 결정으로 이 불일치를 쓰지 않게 됐다. 컨트롤러는 `USB2_OTG_FS`, 내장 FS PHY |
+| RNG | HSI48 (`RNGSEL`) | HSI48 은 RNG 에만 쓴다(링크 종류와 무관하게 켬) |
 | 실패 | HSE 가 제한 시간 안에 안 서면 위 HSI 대체 경로로 같은 주파수를 만든다(LED 로 표시. STATE 에는 이 사실을 실을 필드가 없다 — 한계로 적는다). 실행 중 HSE 를 잃으면 CSS → NMI → 출력을 안전 핀 상태로 되돌리고 멈춤 → IWDG 리셋 → 다시 시작해 HSI 경로 | 주기가 6 배 느려진 채 제어가 이어지는 일을 막는다 |
 
 ### 3.4 시간 기준과 주기
@@ -176,15 +176,27 @@ LPTIM 두 개(두 번 읽기), KTH 두 프레임과 그 신선도(축별 완료 
 - SPI2 도 `TSIZE=1`. 조향 거래의 EOT 인터럽트에서 결과를 넣고 CS1 을 올린 뒤, **DWT 계수기로 1 µs 이상 기다렸다가** CS2 를 내리고 승강 거래를 시작한다. 승강 EOT 뒤에는 멈춘다.
   - 이유: ES0392 2.22.2 — EOT 뒤 SCK 한 주기 안에 `CSTART` 를 다시 세우면 거래가 멈출 수 있다. 3.125 MHz 에서 한 주기는 320 ns 다.
   - KTH7801 의 CS high 최소 시간은 데이터시트로 확인해 그보다 길게 둔다(실물·데이터시트 확인 필요).
-  - `SPE` 를 껐다 켜는 방식은 쓰지 않는다(ES0392 2.22.6 출력 끊김).
+  - **(B2a 정정)** 거래마다 RM0433 50.4.12 의 표준 종료 절차(EOT → RX 읽기 → 플래그 지움 → `SPE=0`)를 따르고, 다음 거래는 `SPE=1` 로 다시 켠다. 이것이 오류 정오표의 첫째 해결책이다(ES0396 2.12.2 = ES0392 의 같은 항목: "Disable then enable SPI after each EOT event"). SPI 를 끈 동안에는 EOT 인터럽트를 꺼 둔다(ES0396 2.12.4). 1라운드 검토가 든 "2.22.6 SPE 토글 출력 끊김" 은 원문(ES0396 Rev 6, 같은 실리콘)에서 찾지 못해 근거로 쓰지 않는다. 1 µs 간격은 CS high 시간을 위해 그대로 둔다.
 - 두 번째 거래가 주기 안에 끝나지 않으면(오류·멈춤) 그 축은 그 주기에 신선하지 않다. 코어의 `invalid_limit` 이 연속 실패를 센다.
 
 ## 5. 링크
 
 - **USB CDC(기본)**: TinyUSB, OTG FS(PA11/PA12), VBUS 감지 끔, 제품 문자열 `forklift-mcu`, 일련번호 = MCU UID 96비트(16진). VID/PID 는 ST 의 VCP 쌍(0x0483/0x5740)을 쓰고, Jetson 쪽은 VID/PID 가 아니라 **일련번호와 제품 문자열**로 장치를 고른다(udev 규칙, P0-7 어댑터) — ROM DFU 장치(0483:df11)를 링크로 오인하지 않게.
 - **UART7 대안**(`FW_LINK=uart7`): PE7 RX·PE8 TX, 460,800 bps 8N1(계약 5절: 115,200 은 STATE 만으로 69 %). 메인보드에서 미연결 핀이라 Jetson 과의 배선은 따로 한다.
-- 재연결: 호스트가 포트를 다시 열면(DTR 상승, `tud_cdc_line_state_cb`) 송신 링에 남은 옛 `STATE` 를 버린다. 호스트는 echo 신선도로 옛 프레임을 걸러 내지만, 쌓인 프레임이 한꺼번에 나가지 않게 한다. Jetson udev 규칙에 `ID_MM_DEVICE_IGNORE=1`(ModemManager 가 AT 명령을 보내지 않게)을 넣는 것은 호스트 쪽(P0-7 어댑터) 몫으로 넘긴다(agy).
+- 재연결: 호스트가 포트를 다시 열면 남은 옛 `STATE` 가 한꺼번에 나가지 않게 한다(구현은 5.1 — 닫힌 동안 링을 버리고, 다시 열 때 구분자를 먼저 보냄). 호스트는 echo 신선도로 옛 프레임을 걸러 내지만, 쌓인 프레임이 한꺼번에 나가지 않게 한다. Jetson udev 규칙에 `ID_MM_DEVICE_IGNORE=1`(ModemManager 가 AT 명령을 보내지 않게)을 넣는 것은 호스트 쪽(P0-7 어댑터) 몫으로 넘긴다(agy).
 - 링 버퍼: 수신은 주 루프(생산)→주기(소비), 송신은 주기(생산)→주 루프(소비). `link_write_frame` 은 프레임 전체가 들어갈 자리가 있을 때만 넣는다(코어 설계 3절). 크기는 수신 512 B·송신 1024 B(STATE 80 B × 10 주기 여유).
+
+### 5.1 B3 구현
+
+- **문맥**: 주기는 링만 만진다. USB 빌드는 OTG 인터럽트(우선순위 3)가 사건만 쌓고 `tud_task`·수신 복사·송신 펌프가 주 루프에서 돈다. 주 루프는 `link_poll` 뒤 `WFI` 로 자며, 놓친 일은 길어야 한 주기(TIM6 1 ms 깨움) 늦는다. UART7 빌드는 두 방향을 UART7 인터럽트(우선순위 1, 주기 위)에서 옮긴다: 16바이트 수신 FIFO 가 460,800 bps 에서 350 µs 만 버티므로 주기 아래에 둘 수 없다.
+- **링 초기값**: 링은 정적 초기화로 리셋 때부터 유효하다. 링크가 켜지기 전 주기가 `STATE` 를 넣으면 USB 는 링에 쌓였다가 연결 전이라 버려지고, UART7 은 준비 플래그 전이라 거부된다(코어가 누락을 센다).
+- **옛 프레임**(5절 재연결의 구현): 호스트가 포트를 열지 않은 동안(`tud_cdc_connected()` 거짓 — DTR 낮음·suspend·미구성) 송신 펌프는 프레임을 오는 대로 버리고 "재동기 필요"를 켠다. mount·umount·suspend·resume·line-state 콜백도 링을 버리고 같은 표시를 켠다(DTR 을 쥔 채 resume 하면 line-state 콜백이 없고, 두 poll 사이 리셋·재열거는 poll 이 닫힘을 못 볼 수 있다 — Codex B3 2차). 다시 열린 것을 보면 **구분자 0x00 을 먼저 쓰고**, 그것이 들어가기 전에는 어떤 프레임도 보내지 않는다. **TinyUSB FIFO 는 비우지 않는다**: DWC2 slave 포트(`CFG_TUD_EDPT_DEDICATED_HWFIFO=1`)는 IN 전송을 소프트웨어 FIFO 전체 길이로 예약하고 인터럽트가 그 자리에서 읽으므로, 전송 중에 비우면 그 전송이 깨진다(Codex B3 2차, `tusb.c` `tu_edpt_stream_write_xfer`). 그래서 다시 연 호스트가 받을 수 있는 옛 바이트는 많아야 TinyUSB FIFO(`CFG_TUD_CDC_TX_BUFSIZE` 256 B)와 컨트롤러 TX FIFO 의 한 패킷(64 B, 이중 버퍼 끔)을 합한 320 B(`STATE` 약 4 개)다. 닫힘을 poll 이 못 봐도 생명주기 콜백이 링을 버리므로 링 잔량은 더해지지 않는다(Codex B3 3차 P3). 그리고 구분자가 그 꼬리를 깨진 프레임 하나로 닫아 첫 새 프레임을 지킨다(빈 프레임은 펌웨어·호스트 디코더 모두 오류가 아님). 옛 `STATE` 는 echo 신선도로 걸러진다. 연결된 채 호스트가 읽지 않으면 FIFO 와 링이 차고, 그 뒤 프레임은 `link_write_frame` 거부로 코어가 센다.
+- **호스트 쪽 전제**(agy 독립 검토): 호스트는 DTR 을 올린 채 둬야 한다. Linux `cdc_acm` 은 포트를 열 때 DTR 을 올리므로(`cat`·pyserial 기본도 올라감) P0-7 어댑터가 일부러 DTR 을 내리지만 않으면 된다 — 내리면 모든 `STATE` 가 버려진다. 같은 이유로 호스트도 포트를 연 뒤 첫 명령 앞에 구분자 0x00 을 하나 보내는 것이 좋다(MCU 수신 버퍼에 지난 연결의 반쪽 프레임이 남아 있을 수 있음, P0-7 어댑터). ModemManager 의 AT 탐침은 udev `ID_MM_DEVICE_IGNORE=1` 로 막고(P0-7), 들어오더라도 수신 디코더가 CRC 로 버린다. UART7 대안 배선은 3.3 V 레벨(Jetson Orin Nano 40핀 헤더 UART)과 공통 GND 가 필요하고, 흐름 제어가 없으므로 호스트 수신 오버런 계수를 S 단계에서 본다.
+- **수신**: USB 는 링이 차면 TinyUSB FIFO 에 남겨 엔드포인트가 NAK 한다(잃지 않음). UART7 은 링이 차면 바이트를 버리고 센다(COBS 구분자에서 다시 맞춤). 오버런·프레이밍·노이즈 오류는 지우고 센다. RX(PE7)는 풀업 — 선이 없을 때 잡음 바이트를 막는다.
+- **UART7 송신 인터럽트 켬**: 주기가 프레임을 넣고 `TXFNFIE` 를 켜고, 인터럽트가 링이 비면 끈다. 주기의 CR1 읽기-수정-쓰기 사이에 인터럽트가 끄면 주기가 켬을 다시 써서 빈 인터럽트가 한 번 더 온다 — 해가 없다.
+- **USB 전원**: `USB33DEN` 만 켜고 `USB33RDY` 는 기다리지 않는다(진단용으로 기록). LQFP100 에는 VDD33USB 핀이 없고 VDD 에 붙어 있으며(DS12110 Rev 7 개정 이력, 그림 5), ST 는 그 공급 구성에서 `USB33RDY` 가 서지 않는다고 답했다 — 기다리면 정상 전원에서도 USB 가 영영 시작되지 않는다(Codex B3 P1). USB 레귤레이터(`USBREGEN`)는 리셋값(꺼짐) 그대로.
+- **USB 장치 정보**: 제품 문자열 = 빌드 정체(`forklift-mcu <종류> locked <git>`, 126자에서 자름), 일련번호 = UID 세 단어(0 번 먼저, 16진 대문자 24자), `bcdDevice` 0x0200(mcu-link/2), 인터페이스 문자열 `mcu-link`. `SystemCoreClock` 은 TinyUSB STM32 포트가 읽으므로(턴어라운드 시간) 400 MHz 고정값으로 정의한다.
+- **멈춘 USB**: TinyUSB 의 제한 없는 기다림이 걸리면 링크가 조용해지고 명령 만료로 차량이 멈춘다. IWDG 는 주기가 계속 갱신하므로 리셋되지 않는다 — 전원을 다시 넣어야 링크가 돌아온다(링크 생존 감시는 이 PR 범위 밖).
 
 ## 6. 메모리·캐시
 
@@ -259,15 +271,18 @@ LPTIM 두 개(두 번 읽기), KTH 두 프레임과 그 신선도(축별 완료 
 - 맵·크기: 플래시·DTCM 사용량을 `build-info.json` 에 남기고, 상한(플래시 256 KB, DTCM 96 KB)을 넘으면 실패.
 - 스택: B1 은 모든 함수 프레임의 합(재귀가 없으므로 어느 호출 경로보다 크다) + 중첩 예외 프레임 3 개가 주 스택의 50 % 를 넘으면 실패. 코드가 커지는 B2 부터 호출 그래프(`-fcallgraph-info=su`)로 바꾼다.
 - 출력 잠금 링크 검사(3.6).
-- 호스트 시험: 리셋 원인 판정, 링 버퍼(프레임 단위), 클록 설정 상수의 `_Static_assert`(VCO 범위, SPI 분주 → 최대 클록 이하).
+- 호스트 시험: 리셋 원인 판정, 링 버퍼(프레임 단위·32비트 넘김·발행 전 바이트·전부 버림), 송신 펌프(연결 전 버림·순서·막힌 스택), UART BRR(217, +0.006 %), USB 문자열(UID 16진·126자 자름), 클록 설정 상수의 `_Static_assert`(VCO 범위, SPI 분주 → 최대 클록 이하, PLL3 48 MHz).
+- B3 크로스 시험: usb·uart7 두 빌드 모두 크기·정체 문자열(`link=`)·벡터·스택. 스택 단계는 주 루프 → OTG(3) → TIM6(2) → SPI·UART7(1) → 예상 밖 IRQ → HardFault → NMI. TinyUSB 간접 호출은 호출자별 대상(드라이버 표·완료 콜백·OSAL 인터럽트 스위치)으로 묶는다. 들여온 TinyUSB 파일 = 빌드가 읽은 파일.
 - 선택: Renode 의 STM32H743 플랫폼으로 UART7 빌드 부팅·링크 왕복(USB 는 에뮬 안 됨). B3 뒤 여유가 있을 때.
 - 실기로만 되는 것: HSE·PLL 실제 동작, USB 열거, IWDG 리셋 시 DRVOFF high 측정, LPTIM 실제 입력, SPI 파형, ADC 값.
 
 ## 11. 묻거나 확인할 것
 
-- (B1 전 확인) AN2606 H74x 부트로더 핀 표(PB10·PB14·PA2·PA6·PE11–PE14), AN5312(rev Y·V 의 ADC·CRS 차이), ES0392 SPI 항목.
+- (B1 전 확인) AN2606 H74x 부트로더 핀 표(PB10·PB14·PA2·PA6·PE11–PE14), AN5312(rev Y·V 의 ADC 차이 — CRS 는 B3 에서 쓰지 않기로 해 해당 없음), ES0392 SPI 항목.
 - (S1) VBUS → D10 → 메인보드 5 V 역전원. 벤치 전원·노트북·Jetson 사이 접지 경로(agy).
 - (S2) KTH7801 CS high 최소 시간, 케이블을 뺐을 때 LVDS 수신기 출력, 보드 판(rev Y·V).
+- (S1·S5, agy B3) VBUS 감지를 끈 상태에서 Jetson 전원이 꺼졌을 때 D+ 풀업(1.5 kΩ)이 호스트 쪽으로 역전류를 흘리는지, Jetson 재부팅 뒤 `/dev/ttyACM*` 이 케이블을 다시 꽂지 않고 돌아오는지. 모터 구동 중 USB 끊김·리셋(`dmesg`)과 두 보드 접지 전위차 — 절연 필요 여부.
+- (알려진 한계) USB 스택이 멈추면 주기가 IWDG 를 계속 갱신하므로 자동 복구가 없다(차량은 명령 만료로 멈춤). 링크 생존 감시 리셋은 별도 판단.
 
 ## 12. 자체 검토
 

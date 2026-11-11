@@ -21,8 +21,11 @@ void cycles_init(void);
 uint32_t cycles_now(void);
 bool cycles_wait_flag(volatile uint32_t *reg, uint32_t mask, uint32_t timeout_cycles);
 
-/* VOS1, PLL1 at 400 MHz from HSE or (if it does not start) HSI, HSI48 for RNG/USB, CSS on. */
+/* VOS1, PLL1 at 400 MHz from HSE or (if it does not start) HSI, HSI48 for the RNG, CSS on. */
 clock_source clock_init(void);
+
+/* PLL3 Q at 48 MHz as the USB kernel clock (board design 3.3); false if PLL3 did not lock. */
+bool clock_usb_init(void);
 
 void timebase_init(void); /* TIM2 free-running 1 MHz */
 uint32_t timebase_now_us(void);

@@ -39,6 +39,33 @@ target_include_directories(test_weact_h743_reset_cause PRIVATE
 target_link_libraries(test_weact_h743_reset_cause PRIVATE fw_core)
 add_test(NAME test_weact_h743_reset_cause COMMAND test_weact_h743_reset_cause)
 
+add_executable(test_weact_h743_board_pure
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_pure.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_rules.c)
+target_include_directories(test_weact_h743_board_pure PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+target_link_libraries(test_weact_h743_board_pure PRIVATE fw_core)
+add_test(NAME test_weact_h743_board_pure COMMAND test_weact_h743_board_pure)
+
+add_executable(test_weact_h743_link ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_link.c)
+target_include_directories(test_weact_h743_link PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+add_test(NAME test_weact_h743_link COMMAND test_weact_h743_link)
+
+# The board's real configuration needs the generated vehicle header (FW_PYTHON).
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vehicle_header.cmake)
+if(FW_PYTHON)
+    add_executable(test_weact_h743_board_config
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_config.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/board_rules.c)
+    target_include_directories(test_weact_h743_board_config PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+    target_link_libraries(test_weact_h743_board_config PRIVATE fw_core)
+    fw_vehicle_header(test_weact_h743_board_config ${CMAKE_CURRENT_BINARY_DIR}/generated_board)
+    add_test(NAME test_weact_h743_board_config COMMAND test_weact_h743_board_config)
+endif()
+
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
     add_executable(link_tool ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
     target_link_libraries(link_tool PRIVATE fw_core)

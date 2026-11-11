@@ -8,6 +8,7 @@ import random
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,9 @@ def firmware_build(tmp_path_factory) -> Path:
         pytest.skip("no C compiler")
     build = tmp_path_factory.mktemp("firmware_build")
     result = subprocess.run(
-        ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DCMAKE_BUILD_TYPE=Debug"],
+        # FW_PYTHON: the board's real configuration test needs the generated vehicle header.
+        ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DCMAKE_BUILD_TYPE=Debug",
+         f"-DFW_PYTHON={sys.executable}"],
         capture_output=True,
         text=True,
     )
@@ -227,3 +230,9 @@ def test_c_frames_decode_in_python_and_match_bytes(firmware_build):
         assert wire == encode(message, seq), f"seed {SEED} case {index}"
         body = cobs_decode(wire[:-1])[:-2]
         assert decode(body) == (seq, message), f"seed {SEED} case {index}"
+
+
+def test_board_configuration_test_is_built(firmware_build):
+    """The WeAct board's real drive_config is checked by its own C test (board design 3.7)."""
+    result = subprocess.run(["ctest", "-N"], cwd=firmware_build, capture_output=True, text=True)
+    assert "test_weact_h743_board_config" in result.stdout

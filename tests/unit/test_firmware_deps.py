@@ -21,7 +21,7 @@ def test_manifest_pins_commits_and_licenses():
     m = yaml.safe_load(MANIFEST.read_text())
     for pkg in m["packages"]:
         assert len(pkg["commit"]) == 40 and all(c in "0123456789abcdef" for c in pkg["commit"])
-        assert pkg["license"] in ("Apache-2.0", "BSD-3-Clause")
+        assert pkg["license"] in ("Apache-2.0", "BSD-3-Clause", "MIT")
         assert any(Path(f).name.startswith("LICENSE") for f in pkg["files"]), pkg["name"]
         for rel, digest in pkg["files"].items():
             assert isinstance(digest, str) and len(digest) == 64, rel

@@ -9,9 +9,11 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 FIRMWARE = REPO / "firmware"
@@ -21,8 +23,6 @@ TOOLCHAIN_FILE = BOARD / "arm-gnu-13.3.cmake"
 FLASH_LIMIT = 256 * 1024  # board design 10
 DTCM_LIMIT = 96 * 1024
 MAIN_STACK = 8 * 1024
-EXCEPTION_FRAME = 108  # FPU lazy-stacking frame 104 B + 4 B alignment padding (design 6)
-NESTING = 3  # priorities 1, 2, 3 above the main loop
 
 
 def _toolchain() -> Path | None:
@@ -45,20 +45,37 @@ pytestmark = pytest.mark.skipif(
 def _configure(build: Path, *extra: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["cmake", "-S", str(FIRMWARE), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}", *extra],
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DCMAKE_TOOLCHAIN_FILE={TOOLCHAIN_FILE}",
+         f"-DFW_PYTHON={sys.executable}", *extra],
         capture_output=True, text=True,
     )
 
 
-@pytest.fixture(scope="module")
-def locked_build(tmp_path_factory) -> Path:
-    build = tmp_path_factory.mktemp("weact_h743")
-    cfg = _configure(build)
+def _build(tmp_path_factory, name: str, *extra: str) -> Path:
+    build = tmp_path_factory.mktemp(name)
+    cfg = _configure(build, *extra)
     assert cfg.returncode == 0, cfg.stdout + cfg.stderr
     res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "warning" not in (res.stdout + res.stderr).lower(), res.stdout + res.stderr
     return build / "boards" / "weact_h743"
+
+
+@pytest.fixture(scope="module")
+def locked_build(tmp_path_factory) -> Path:
+    """The default build: normal, outputs locked, USB CDC link."""
+    return _build(tmp_path_factory, "weact_h743")
+
+
+@pytest.fixture(scope="module")
+def uart7_build(tmp_path_factory) -> Path:
+    return _build(tmp_path_factory, "weact_h743_uart7", "-DFW_LINK=uart7")
+
+
+@pytest.fixture(params=["usb", "uart7"])
+def any_build(request) -> tuple[str, Path]:
+    name = "locked_build" if request.param == "usb" else "uart7_build"
+    return request.param, request.getfixturevalue(name)
 
 
 def _sections(elf: Path) -> dict[str, int]:
@@ -72,19 +89,63 @@ def _sections(elf: Path) -> dict[str, int]:
     return sizes
 
 
-def test_size_within_limits(locked_build):
-    s = _sections(locked_build / "fw.elf")
+def test_size_within_limits(any_build):
+    s = _sections(any_build[1] / "fw.elf")
     flash = s.get(".isr_vector", 0) + s.get(".text", 0) + s.get(".ARM.exidx", 0) + s.get(".data", 0)
     dtcm = s.get(".data", 0) + s.get(".bss", 0)
     assert 0 < flash <= FLASH_LIMIT
     assert dtcm <= DTCM_LIMIT
 
 
-def test_build_identity_in_elf(locked_build):
-    data = (locked_build / "fw.elf").read_bytes()
+def test_build_identity_in_elf(any_build):
+    link, build = any_build
+    data = (build / "fw.elf").read_bytes()
     m = re.search(rb"forklift-mcu (normal|commission|hil) locked \S+ link=(usb|uart7) cc=[^\x00]*"
                   rb"Arm GNU Toolchain 13\.3\.Rel1", data)
     assert m, "build identity string missing"
+    assert m.group(2).decode() == link
+
+
+def _symbols(elf: Path) -> dict[str, int]:
+    out = subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-nm"), str(elf)],
+                         capture_output=True, text=True, check=True).stdout
+    syms = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 3:
+            syms[parts[2]] = int(parts[0], 16)
+    return syms
+
+
+def _vectors(elf: Path, tmp: Path) -> list[int]:
+    raw = tmp / "isr_vector.bin"
+    subprocess.run([str(TOOLCHAIN / "bin" / "arm-none-eabi-objcopy"), "-O", "binary", "-j", ".isr_vector",
+                    str(elf), str(raw)], check=True)
+    data = raw.read_bytes()
+    return [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
+
+
+def test_every_enabled_interrupt_has_its_handler(any_build, tmp_path):
+    """Codex B2a review: an IRQ enabled with no vector entry jumped to address 0. An IRQ whose
+    priority a board source sets counts as enabled too: TinyUSB enables the OTG one itself."""
+    elf = any_build[1] / "fw.elf"
+    syms = _symbols(elf)
+    vec = _vectors(elf, tmp_path)
+    header = (FIRMWARE / "third_party" / "cmsis_device_h7" / "Include" / "stm32h743xx.h").read_text()
+    irqn = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)_IRQn\s+=\s+(\d+),", header, re.M)}
+    assert all(v != 0 for v in vec[1:]), "a vector slot is empty"
+    default = syms["Default_Handler"] | 1
+    compiled = set(re.findall(r"src/(\w+)\.c\.obj", (any_build[1] / "fw.map").read_text()))
+    enabled = set()
+    for src in (BOARD / "src").glob("*.c"):
+        if src.stem in compiled:
+            enabled |= set(re.findall(r"NVIC_(?:EnableIRQ|SetPriority)\((\w+)_IRQn",
+                                      src.read_text()))
+    assert enabled, "no interrupt found"
+    for name in enabled:
+        slot = vec[16 + irqn[name]]
+        assert slot != default, f"{name} has no handler"
+        assert slot == syms[f"{name}_IRQHandler"] | 1, name
 
 
 def test_locked_build_links_no_tim1_output(locked_build):
@@ -93,16 +154,59 @@ def test_locked_build_links_no_tim1_output(locked_build):
     assert "motor_out_locked" in map_text
 
 
-def test_stack_upper_bound(locked_build):
-    """B1: the sum of every frame bounds any call chain (no recursion); B2 adds the call graph."""
-    total = 0
-    for su in locked_build.parent.parent.rglob("*.su"):
-        for line in su.read_text().splitlines():
-            fields = line.split("\t")
-            if len(fields) >= 3:
-                assert fields[2] in ("static", "static,bounded"), line
-                total += int(fields[1])
-    assert total + NESTING * EXCEPTION_FRAME <= MAIN_STACK // 2, total
+# TinyUSB's indirect calls in this image, per caller (B3, usbd.c and osal_none.h of 0.21.0): the
+# class driver table holds only the CDC driver (driver->init/reset/open/control_xfer_cb/xfer_cb);
+# a control transfer completes through the class's callback or the weak vendor default
+# (CFG_TUD_TEST_MODE is off); the OSAL-none queue and spinlock switch interrupts through
+# usbd_int_set. Nothing calls usbd_defer_func, so no deferred function is ever queued, and the CDC
+# driver's sof and xfer_isr are NULL, so dcd_event_handler reaches only the interrupt switch.
+TUSB_RULES = [
+    "tud_rhport_init=cdcd_init|usbd_int_set",
+    "tud_task_ext=cdcd_open|cdcd_control_xfer_cb|cdcd_xfer_cb|tud_vendor_control_xfer_cb|usbd_int_set",
+    "configuration_reset=cdcd_reset",
+    "usbd_*=usbd_int_set",
+    "dcd_event_handler=usbd_int_set",
+]
+
+
+@pytest.mark.parametrize("link", ["usb", "uart7"])
+def test_stack_worst_case_from_call_graphs(link, request):
+    """Board design 6: call-graph worst case per preemption level plus exception frames, within
+    half of the main stack (tools/fw_stack_check.py). Levels from the lowest priority up: main
+    loop, USB OTG (3), TIM6 (2), SPI and UART7 (1)."""
+    build = request.getfixturevalue("locked_build" if link == "usb" else "uart7_build")
+    levels = ["board_main"]
+    if link == "usb":
+        levels.append("OTG_FS_IRQHandler")
+    levels += ["TIM6_DAC_IRQHandler",
+               "SPI1_IRQHandler,SPI2_IRQHandler" + (",UART7_IRQHandler" if link == "uart7" else ""),
+               # An unexpected IRQ runs at priority 0, HardFault above it, NMI above all (Codex B2b).
+               "Default_Handler", "HardFault_Handler", "NMI_Handler"]
+    rules = ["TIM6_DAC_IRQHandler=on_tick", "fw_app_*=hal_*"]
+    if link == "usb":
+        rules += TUSB_RULES
+    args = [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(build.parent.parent),
+            "--limit", str(MAIN_STACK // 2), "--elf", str(build / "fw.elf"),
+            "--objdump", str(TOOLCHAIN / "bin" / "arm-none-eabi-objdump")]
+    for lv in levels:
+        args += ["--level", lv]
+    for rule in rules:
+        args += ["--indirect", rule]
+    res = subprocess.run(args, capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_vendored_tinyusb_is_exactly_what_the_usb_build_reads(locked_build):
+    """Lead condition (B3): only the TinyUSB files the build uses are vendored. The compiler's
+    dependency files list every TinyUSB source and header the USB build opened."""
+    used = set()
+    for dep in locked_build.parent.parent.rglob("*.d"):
+        for tok in dep.read_text().replace("\\\n", " ").split():
+            if "third_party/tinyusb/" in tok and not tok.endswith(":"):
+                used.add(tok.split("third_party/tinyusb/", 1)[1])
+    m = yaml.safe_load((FIRMWARE / "third_party" / "MANIFEST.yaml").read_text())
+    listed = next(p for p in m["packages"] if p["name"] == "tinyusb")["files"]
+    assert used == {f for f in listed if f != "LICENSE"}
 
 
 def test_tim1_is_poisoned_in_locked_builds(tmp_path):
@@ -164,13 +268,18 @@ def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
         return subprocess.run(["git", "-c", "user.email=t@example.invalid", "-c", "user.name=t",
                                *args], cwd=repo, capture_output=True, text=True, check=True).stdout
 
+    header = tmp_path / "vehicle_config.h"
+    gen = subprocess.run([sys.executable, str(REPO / "tools" / "real_vehicle_header.py"), "--config",
+                          str(REPO / "config" / "real" / "vehicle.yaml"), "--out", str(header)],
+                         env={**os.environ, "PYTHONPATH": str(REPO / "src")}, capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
     git("init", "-q")
     git("add", "-A")
     git("commit", "-q", "-m", "a")
     build = tmp_path / "build"
     cfg = subprocess.run(
         ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
          f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}"],
         capture_output=True, text=True)
     assert cfg.returncode == 0, cfg.stderr
@@ -189,6 +298,12 @@ def test_identity_follows_the_tree_in_an_incremental_build(tmp_path):
     head_b = git("rev-parse", "--short=12", "HEAD").strip()
     assert head_b != head_a
     assert build_once() == head_b
+
+
+def test_unknown_link_refused(tmp_path):
+    cfg = _configure(tmp_path / "badlink", "-DFW_LINK=spi")
+    assert cfg.returncode != 0
+    assert "FW_LINK must be usb or uart7" in cfg.stderr
 
 
 def test_unknown_build_kind_refused(tmp_path):

@@ -1,6 +1,7 @@
 /* Motor outputs of a locked build (board design 3.6): the pins only ever take their safe levels.
    This is the only board file that writes motor pins; TIM1 is poisoned for every board source. */
 #include "board/board.h"
+#include "board/board_hal.h"
 #include "stm32h7xx.h"
 
 #define PIN(n) (1u << (n))
@@ -19,7 +20,7 @@
 static void drive_levels(void)
 {
     GPIOA->BSRR = PA_HIGH;
-    GPIOB->BSRR = PB_HIGH | (PB_LOW << 16);
+    GPIOB->BSRR = PB_HIGH;
     GPIOD->BSRR = PD_HIGH;
     GPIOE->BSRR = PE_LOW << 16;
 }
@@ -43,6 +44,7 @@ void motor_out_safe_init(void)
         RCC_AHB4ENR_GPIOAEN | RCC_AHB4ENR_GPIOBEN | RCC_AHB4ENR_GPIODEN | RCC_AHB4ENR_GPIOEEN;
     (void)RCC->AHB4ENR; /* the clock is on before the first port access */
     drive_levels();     /* levels first, so a pin turning into an output starts safe */
+    GPIOB->BSRR = PB_LOW << 16;
     make_outputs(GPIOA, PA_HIGH);
     make_outputs(GPIOB, PB_HIGH | PB_LOW);
     make_outputs(GPIOD, PD_HIGH);
@@ -52,4 +54,19 @@ void motor_out_safe_init(void)
 void motor_out_force_safe(void)
 {
     drive_levels();
+    GPIOB->BSRR = PB_LOW << 16; /* nSLEEP low: drivers asleep */
+}
+
+/* Locked: the requested duty and DRVOFF are ignored; every motor pin keeps its safe level. The
+   duty the core computed still goes out in STATE (contract 3.3 outputs_locked). */
+void motor_out_apply(const drive_outputs *out)
+{
+    (void)out;
+    drive_levels();
+    GPIOB->BSRR = PIN(0); /* nSLEEP stays high once woken */
+}
+
+void motor_out_wake_drivers(void)
+{
+    GPIOB->BSRR = PIN(0); /* nSLEEP high; DRVOFF high keeps the outputs off */
 }
