@@ -1,0 +1,31 @@
+# External code vendored for the MCU build (board design 2026-11-12 section 2, K4 revision).
+# Only the files listed here are copied, unchanged, from the pinned tag. tools/fetch_firmware_deps.py
+# re-downloads the tag archive and checks every file against its sha256 (--check reads the tree
+# only; --fetch rewrites the files from the archive and then checks).
+# Tags verified with `git ls-remote` on 2026-11-11; they match the STM32CubeH7 V1.13.0 package.
+packages:
+- name: cmsis_core
+  repo: ARM-software/CMSIS_5
+  tag: 5.9.0
+  commit: 2b7495b8535bdcb306dac29b9ded4cfb679d7e5c
+  license: Apache-2.0
+  dest: firmware/third_party/cmsis_core
+  files:
+    LICENSE.txt: b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1
+    CMSIS/Core/Include/cachel1_armv7.h: 2e336a64f60a9c0eaf5a08e2c4845d94da86c3fd84d219d0d0c9f530e63bc9c3
+    CMSIS/Core/Include/cmsis_compiler.h: b51963d271c1571ca3463654c76aa7ea50c4eac5d0a2710df10414ac64d9e0f8
+    CMSIS/Core/Include/cmsis_gcc.h: 43bfd1fe69fbbc2ca70aaf7d43cc3e20f16e0c7f66e1bdef9b51af6dc14b2617
+    CMSIS/Core/Include/cmsis_version.h: 184c19fd3ee73632edf35a0b4d49cd48be75fbf49e6ccb19d9db05fa83bea4b3
+    CMSIS/Core/Include/core_cm7.h: e974d0a91752487d0154457cd422c37667328e9ddb7ba4fa2fed479a63577f63
+    CMSIS/Core/Include/mpu_armv7.h: 29206b52ee02290ed6f5a5415ebd4187de802cf176d9b3cb844390d8e5571372
+- name: cmsis_device_h7
+  repo: STMicroelectronics/cmsis-device-h7
+  tag: v1.10.7
+  commit: 8f922cdc7cc6de2344e75ddd657889f4ff761790
+  license: Apache-2.0
+  dest: firmware/third_party/cmsis_device_h7
+  files:
+    LICENSE.md: 49d37f1f2e5c1f9fc9da194b44ffbfa41f966b7cf446fbab4d1e2b0c1e3d20df
+    Include/stm32h7xx.h: 99ac7d4598e20d9bd74e0e001f0e63c2a8eb0a3584242d9e442be31ceb616cb9
+    Include/stm32h743xx.h: 9a4ea0860707868a1cc562140ba214d535fb5a64fde91b451b2767276eef7e03
+    Include/system_stm32h7xx.h: e0f13c2971d34bda571aed454880b3608093cd9a5f7420a763e8c2bda34e826a

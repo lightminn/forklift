@@ -1658,6 +1658,66 @@ static void v2r5_limit_hold_survives_a_fault_in_the_same_cycle(void)
     CHECK(!limit_with_fault_resumes_early(1));
 }
 
+/* Contract 3.4 as corrected 2026-11-12: a DISARM in the commissioning limit's STOPPING is
+   taken at once (safe output per channel); only the re-arm hold cannot be shortened. Checked
+   for a DISARM in the limit's own cycle and in the next one, with safe_brake both ways. */
+static void limit_then_disarm(bool brake, bool same_cycle)
+{
+    boot_with(brake ? mod_commission : mod_commission_coast);
+    if (brake) {
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            cfg.safe_brake[ch] = true;
+        }
+    }
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    while (d.time_us < limit_at) { /* the limit fires in the cycle after limit_at */
+        if ((d.time_us / 1000u) % 50u == 0) {
+            send(commission_msg(seq++, 0, 1000, 150, echo_now()));
+        } else {
+            tick();
+        }
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    link_msg disarm = simple(LINK_DISARM, seq++);
+    if (same_cycle) {
+        tick_msgs(&disarm, 1); /* the limit fires at the head, the DISARM in the same cycle */
+    } else {
+        tick();
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        tick_msgs(&disarm, 1);
+    }
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        CHECK_NEAR(out.duty[ch], 0.0, 0.0);
+        CHECK(out.drvoff[ch] == !brake); /* the configured safe output, no drive */
+    }
+    uint64_t hold_end = limit_at + 1000u + (uint64_t)cfg.stop_grace_ms * 1000u;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    while (d.time_us + 2000u < hold_end) {
+        tick();
+    }
+    send(arm_msg(seq++, d.boot_id, echo_now())); /* handled one cycle before hold_end */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(d.time_us + 1000u, hold_end);
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT));
+}
+
+static void v2r6_disarm_in_the_limit_stop(void)
+{
+    limit_then_disarm(false, true);
+    limit_then_disarm(false, false);
+    limit_then_disarm(true, true);
+    limit_then_disarm(true, false);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1706,5 +1766,6 @@ int main(void)
     v2r3_rearm_bundle_after_the_limit_waits_the_stop();
     v2r4_limit_and_expiry_in_the_same_cycle();
     v2r5_limit_hold_survives_a_fault_in_the_same_cycle();
+    v2r6_disarm_in_the_limit_stop();
     return FW_TEST_RESULT();
 }
