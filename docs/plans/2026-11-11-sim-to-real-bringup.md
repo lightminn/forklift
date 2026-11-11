@@ -185,17 +185,19 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 
 ## 3. STM32 펌웨어
 
-### 3.1 툴체인·빌드·플래시·디버그 (K4 확정)
+### 3.1 툴체인·빌드·플래시·디버그 (K4 확정, 2026-11-11 개정)
 
-- **CubeMX** 로 `firmware/boards/weact_h743/` 에 초기화 코드(클록·GPIO·TIM1·LPTIM1/2·SPI1/2·ADC·USB 또는 UART·IWDG)를 생성한다. `.ioc` 를 커밋하고, 생성 코드는 사용자 코드 구역만 고친다.
-- **빠른 경로는 LL**: LPTIM 카운터 두 번 읽기, SPI DMA 거래와 태그, ADC 를 TIM1 트리거에 맞춘 DMA, 링크 송신 링 버퍼.
-- **빌드**: CubeMX 의 CMake 생성 + `arm-none-eabi-gcc`(버전 고정, 예: Arm GNU Toolchain 13.x — 설치 전 총괄 확인). 코어는 그대로 링크한다(호스트 시험과 같은 소스).
-- **플래시·디버그**: ST-LINK V2/V3(SWD, PA13·PA14) + OpenOCD 또는 STM32CubeProgrammer. USB DFU(BOOT0)는 비상 경로.
+**K4 개정**(총괄 결정 2026-11-11 Q1·Q5, 사용자 결정 2026-11-12). 세부는 보드 설계 [`docs/design/2026-11-12-weact-h743-board-firmware.md`](../design/2026-11-12-weact-h743-board-firmware.md) 2절·8절이다.
+- **CubeMX 를 쓰지 않는다.** 무인 환경에서 재현되는 헤드리스 빌드로 간다. CMSIS Core·CMSIS 장치 H7·LL 을 고정 태그로 `firmware/third_party/` 에 들여오고, 출처·라이선스·해시를 기록한다. 초기화 코드는 손으로 쓴다. `.ioc` 는 참고용으로만 둔다.
+- **빠른 경로는 LL·레지스터다.** LPTIM 카운터 두 번 읽기, SPI 는 인터럽트 거래와 태그, ADC 는 주입 변환, 링크는 송신 링 버퍼로 한다. DMA 는 쓰지 않는다.
+- **빌드**: CMake + Arm GNU Toolchain **13.3.rel1** 공식 tarball(버전을 CMake 가 검사)로 한다. 코어는 그대로 링크한다(호스트 시험과 같은 소스).
+- **플래시는 USB-C ROM DFU 만 쓴다**(사용자 결정 2026-11-12). BOOT0 + 하드웨어 리셋으로 들어가고, WeAct 를 메인보드에서 뺀 상태에서 한다. ST-LINK(SWD)는 쓰지 않는다. 보유 NUCLEO 의 ST-LINK 를 개조해 쓰는 경로는 보드 설계 8.1 의 보류된 선택지로 남긴다.
 - 명령(적기만):
   ```bash
-  cmake -S firmware -B build/mcu -DFW_BOARD=weact_h743 -DCMAKE_TOOLCHAIN_FILE=firmware/boards/weact_h743/arm-gcc.cmake
+  cmake -S firmware -B build/mcu -DFW_BOARD=weact_h743 -DARM_GNU_TOOLCHAIN_DIR=<설치 경로> \
+        -DCMAKE_TOOLCHAIN_FILE=$PWD/firmware/boards/weact_h743/arm-gnu-13.3.cmake   # 절대 경로
   cmake --build build/mcu -j
-  openocd -f interface/stlink.cfg -f target/stm32h7x.cfg -c "program build/mcu/fw.elf verify reset exit"
+  STM32_Programmer_CLI -c port=usb1 -w build/mcu/fw.elf -v   # BOOT0 로 들어간 DFU, 열거된 번호 확인
   ```
 
 ### 3.2 주변장치 대응 (회로도 V1.0 기준)
@@ -206,8 +208,8 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 | DRVOFF L/R/M/H | PD9/PD10/PD13/PD14 | GPIO 출력(기본 high = 끔) | 주기마다 SPI 전에 씀 |
 | nSLEEP(공통) | PB0 `MTR_SLEEP` | GPIO | 드라이버 재시작 경로(핀맵 검토 A5 해결) |
 | nFAULT L/R/M/H | PB11/PB12/PB14/PB15 | GPIO 입력(EXTI 선택) | 입력 스냅숏 |
-| DRV8244 SPI | PA5/PA7/PB4, nCS PA0–PA3 | SPI1 모드 1, DMA | 거래 하나씩, 32비트 태그 |
-| IPROPI L/R/M/H | PA6/PC4/PB1/PC0, R_IPROPI 1 kΩ(회로도 R5·R6·R15·R12) → 3.3 V 전 범위 약 15.7 A(A_IPROPI 4,750 대표값) | ADC1/2, TIM1 트리거 DMA | 표본마다 신선도 플래그. ADC 핀 과전압 보호는 핀맵 A6 확인 항목 |
+| DRV8244 SPI | PA5/PA7/PB4, nCS PA0–PA3 | SPI1 모드 1, EOT 인터럽트(DMA 없음, K4 개정) | 거래 하나씩, 32비트 태그 |
+| IPROPI L/R/M/H | PA6/PC4/PB1/PC0, R_IPROPI 1 kΩ(회로도 R5·R6·R15·R12) → 3.3 V 전 범위 약 15.7 A(A_IPROPI 4,750 대표값) | ADC1 주입 변환(소프트웨어 시작, DMA 없음. PWM 중앙 동기는 출력을 여는 PR 에서) | 표본마다 신선도 플래그. ADC 핀 과전압 보호는 핀맵 A6 확인 항목 |
 | 바퀴 엔코더 L | PD12(A)/PE1(B), Z = PC6 | LPTIM1 엔코더, ARR 0xFFFF(16비트) | 두 번 읽기, 코어가 32비트 모듈러로 누적 |
 | 바퀴 엔코더 R | PB10(A)/PD11(B), Z = PC7 | LPTIM2 엔코더 | 두 번 읽기 |
 | KTH7801 조향(M)·승강(H) | SCK PB13, MOSI PC1, MISO PC2_C, CS1 PD0, CS2 PD1 | SPI2 모드 3 ≤ 10 MHz(LVDS 경유 최대 클럭은 실측) | PC2_C 아날로그 스위치 닫기(핀맵 B2) |
@@ -304,7 +306,7 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 | P0-5b | **인식·영상 경로** (2.3b) | P0-3 기록 bag | proposer 인식이 bag 에서 동작(ARM64 provider 확인), 영상 시각이 D435i 취득 시각 |
 | P0-6 | **변환 모듈** (K6): 속도·곡률 → 뒤 두 바퀴 rad/s(전자 차동: 안·바깥 바퀴 속도비 = 회전 반경 ± 윤거/2) + 조향 기구각(앞바퀴 각 ↔ KTH 축각 보정표 자리), `STATE` → 오도메트리(실차판 team_spec 모형: 조향 측정 하나, 모터 카운트 ÷ (4,096 × G)). G 는 `config/real/vehicle.yaml` **한 곳**에 두고(지금 값 80, '사용자 추정, 실측 대기' 꼬리표), 펌웨어 보드 설정 헤더는 빌드 때 그 파일에서 만든다(손으로 두 군데 적지 않음) | 저장소 | 호스트 시험(대칭·직진·최대 조향·후진, 모듈러 카운트 넘김), Isaac 쪽 같은 모형과의 대조 시험. **관절 포화(Codex P2)**: ① 곡률이 조향 각 상한으로 실현 불가능하면 감속으로 풀리지 않으므로 명령을 **거부하고 정지**, 추종기·계획기에 알려 재계획한다. ② 실현 가능한 곡률에서 바깥 바퀴가 속도 상한을 넘으면 두 바퀴를 같은 비율로 줄인다(곡률 유지). 실제 적용된 바퀴 속도·조향을 돌려줘 추종기와 기록이 그 값을 쓴다. 최대 속도 × 최대 곡률 × 후진 조합 시험 |
 | P0-7 | **mcu_link 호스트 어댑터**: 시리얼 열기·재연결·`STATE` 신선도·`valid_after_echo_ms` 계산(원래 명령의 절대 만료를 넘지 않음, 2.2)·MCU 모드·결함을 중재기로·로그 | 저장소 | 프레이밍은 `link_tool` 과 고정 벡터로 교차 시험. 만료·거부·재무장은 `link_tool` 이 아니라 **펌웨어 코어를 호스트에서 돌린 MCU 모형 끝점**(pty 건너편에서 `fw/app` 을 실행하는 작은 프로그램, 새로)과 시험한다(Codex P2). 자동 `ARM`·`CLEAR_FAULTS` 를 보내지 않음을 시험으로 고정 |
-| P0-8 | **보드 HAL 골격**(코어 보드만으로): CubeMX 프로젝트, 툴체인, 링크(USB CDC/UART), IWDG, LED, `FW_HIL_PLANT` | WeAct H743 코어 보드(보유 여부 확인 항목), ST-LINK | 링크 왕복 1 시간 무오류, 만료 정지·재무장·`CLEAR_FAULTS` 시퀀스, 워치독 리셋 시 DRVOFF high(오실로스코프·멀티미터) |
+| P0-8 | **보드 HAL 골격**(코어 보드만으로): 헤드리스 빌드(CMSIS·LL 고정, K4 개정), 툴체인, 링크(USB CDC/UART), IWDG, LED, `FW_HIL_PLANT` — 보드 설계 `docs/design/2026-11-12-weact-h743-board-firmware.md`, PR B1–B4 | WeAct H743 코어 보드(사용자 보유), USB-C(ROM DFU, 사용자 결정 2026-11-12 — ST-LINK 없음) | 링크 왕복 1 시간 무오류, 만료 정지·재무장·`CLEAR_FAULTS` 시퀀스, 워치독 리셋 시 DRVOFF high(오실로스코프·멀티미터) |
 | P0-9 | **Jetson ↔ STM HIL**: P0-7 + P0-8 + 실차 plant 포트를 HIL 모형에 연결 | P0-4 ⑤(실차 진입점·조립), P0-6, P0-7, P0-8 | 실행기에서 텔레옵 명령 → MCU 모형 → `STATE` → 오도메트리가 닫힌다. 링크를 뽑으면 MCU 가 `STOPPING`→`DISARMED`(마감 + `stop_grace_ms` 안). **지연 주입**(스캔·SLAM 보정·MCU STATE 를 늦추거나 끊음)에서 입력 나이 상한 안에 정지. 센서 드라이버·SLAM 이 함께 도는 부하에서 **링크 왕복 p99** 를 재서 기록하고, p99 가 `valid_after_echo` 상한의 1/3 이하일 것(agy; `latency_timer` 는 FTDI 계열 설정이라 USB CDC 에는 해당하지 않는다) |
 
 순서: P0-1 → P0-2 → P0-3 은 Jetson 쪽 한 줄, P0-4·P0-5·P0-6·P0-7 은 저장소 쪽 한 줄로 나란히(P0-5a·P0-5b 는 P0-3 뒤), P0-8 → P0-9 는 코어 보드가 있을 때.
@@ -423,7 +425,7 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 17. **최종 실장 BOM**: U22 대체 여부, 외부 퓨즈, 하네스(엔코더·KTH 케이블 길이·차폐) 포함 여부.
 18. **승강 기구의 높이별 무게중심과 최대 승강 높이**(팀 확인): 포크·캐리지·마스트의 질량 배치와 승강 높이에 따른 무게중심 이동, 기구상 최대 높이와 운반 높이. 승강 높이별 한계를 다시 정할 때 쓴다(총괄 결정 2026-11-11).
 
-권고로 정한 것(묻지 않음): 제어 주기 1 kHz·`STATE` 100 Hz·실행기 50 Hz, Docker + systemd, CubeMX + LL, 실행기도 컨테이너, `config/real/` 위치, rosbag2 MCAP, 시운전 빌드·HIL 빌드 분리, 정지 문턱 제안값(S5 에서 확정), 관절 포화 때 곡률 우선.
+권고로 정한 것(묻지 않음): 제어 주기 1 kHz·`STATE` 100 Hz·실행기 50 Hz, Docker + systemd, 헤드리스 CMSIS·LL(K4 개정 2026-11-11), 실행기도 컨테이너, `config/real/` 위치, rosbag2 MCAP, 시운전 빌드·HIL 빌드 분리, 정지 문턱 제안값(S5 에서 확정), 관절 포화 때 곡률 우선.
 
 ## 8. 후속 결정 항목 (이 계획 밖)
 
