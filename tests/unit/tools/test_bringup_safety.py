@@ -261,7 +261,7 @@ def _sample(mode, *, age_s=0.0, boot=1, t_us=1):
                   replace(state(StateFlag.COMMISSION_BUILD), mode=mode, boot_id=boot, mcu_time_us=t_us))
 
 
-@pytest.mark.parametrize("mode,age_s", [(Mode.STOPPING, 0.0), (Mode.ARMED, 0.5)])
+@pytest.mark.parametrize("mode,age_s", [(Mode.STOPPING, 0.0), (Mode.ARMED, 0.5), (Mode.ARMED, 0.06)])
 def test_an_unseen_stopping_end_still_disarms_and_is_an_abort(mode, age_s, monkeypatch):
     """Codex re-review P2-1: a STOPPING seen, or an old ARMED that may hide one -- no fresh STATE out of it within
     the wait: the DISARM still goes out, and the run is aborted as stopping_end_unobserved."""

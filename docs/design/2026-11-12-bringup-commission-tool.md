@@ -45,7 +45,7 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
 - **세션 전체 검사**: 무장부터 정리까지의 표본 전체에서 `FAULT`·`ESTOP` 모드나 부팅 변경이 하나라도 있으면 중단이다. 정리 중 처음 보인 결함도 포함한다. 동역학 계산용으로 `DISARM` 확인 표본에서 자르는 것과는 따로다(재검토 P2-2).
 - **중단**(도구 ① 과 같은 분류): 권한 철회(모드가 `ARMED` 를 벗어남 — 과전류·nFAULT·`commission_time_limit`·비상정지), 부팅 변경, `STATE` 공백(0.2 s), 비영 명령 거부(`reject_reason`, 예: `bad_value`·`sensor_invalid`).
 - **정리**: 정상·예외·Ctrl-C 모두 도구 ① 의 `execute` 경로(무장 요청이 나갔으면 마지막 `STATE` 와 무관하게 `DISARM` 확인). 단 **`STOPPING` 중에는 `DISARM` 을 미룬다**(Codex P1-1). 시운전 빌드의 `STOPPING` 은 네 축 전기 제동이다. 펌웨어 코어(`drive.c` `drive_handle` 의 `LINK_DISARM`)는 `STOPPING` 에서도 `DISARM` 을 받으면 바로 `DISARMED` 로 가서 제동을 끝낸다(`safe_brake=false` 채널은 코스트). 이것은 정지 명령에 예외를 두지 않는다는 코어의 선택이고, 계약 3.4 문구를 그에 맞춰 고쳤다(9절). 줄일 수 없는 것은 재무장 금지다. 도구는 제동 상태를 끝까지 보기 위해 대기 명령을 버리고 `STOPPING` 이 스스로 끝나기를 기다린 뒤(최대 1 s, `STOPPING_WAIT_S`) `DISARM` 확인을 한다.
-  - 마지막 `STATE` 가 오래됐으면(0.2 s 넘게 수신 없음) 보이지 않는 `STOPPING` 일 수 있으므로 같은 방식으로 기다린다. 기다림은 '대기 시작 뒤 새로 받은 `STATE` 가 `STOPPING` 이 아님'으로 끝난다.
+  - 마지막 `STATE` 가 오래됐으면(호스트 신선도 기준 50 ms 를 넘김) 보이지 않는 `STOPPING` 일 수 있으므로 같은 방식으로 기다린다. 기다림은 '대기 시작 뒤 새로 받은 `STATE` 가 `STOPPING` 이 아님'으로 끝난다.
   - 1 s 안에 그것을 보지 못하거나 대기 중 I/O 가 실패해도 `DISARM` 은 보낸다(정지 명령은 미루기만 하고 거두지 않는다). 대신 그 실행은 `stopping_end_unobserved` 로 중단 처리한다(Codex 재검토 P2-1). 정리 자체가 예외로 끝나도 결과 행은 `cleanup_confirmed=false` 와 `cleanup_error` 로 남는다(재검토 P2-5).
 
 ## 4. 결과(소프트웨어 근거)
@@ -132,3 +132,10 @@ Codex 재검토(설계 2판 + 구현, 새 P1 없음, P2 5·P3 1). 모두 반영�
 | P2-4 비영 직전 이미 창 밖이어도 첫 비영이 나감, 표본 묶음의 이탈·복귀 누락 | 비영 송신 전 검사, 새 표본 전체 검사(3절) |
 | P2-5 대기 중 예외가 정리·결과 기록을 탈출 | 대기 예외를 잡아 `DISARM` 계속, `execute` 의 마지막 정리 예외도 잡아 결과 행 기록 |
 | P3-6 설계에 이전 계약 문장 | 고침 |
+
+Codex 재검토 3회차(P1 없음, P2 1·P3 1). 반영했다.
+
+| 지적 | 처리 |
+|---|---|
+| P2 정리의 신선도 기준(0.2 s)이 호스트(50 ms)와 달라 50–200 ms 공백에서 보이지 않는 `STOPPING` 을 기다리지 않음 | 호스트 설정의 `state_max_age_s` 로 맞춤, 60 ms 공백 시험 |
+| P3 끝 표본이 `DISARM` 확인 표본이면 절단으로 경계가 사라짐 | 끝 표본은 절단해도 남김, 계산은 끝이 입력 밖이면 `end_unknown` |

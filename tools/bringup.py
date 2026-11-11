@@ -492,7 +492,8 @@ class CommissionSession(Session):
         commands are dropped and the STOPPING is let run out first (bounded by ``STOPPING_WAIT_S``)."""
         b = self.b
         b.host.drop_drives("cleanup")
-        stale = not b.samples or time.monotonic_ns() - b.samples[-1].host_ns > STATE_GAP_S * 1e9
+        # the host's own freshness bound (50 ms), not the observation gap (Codex re-review 3 P2)
+        stale = not b.samples or time.monotonic_ns() - b.samples[-1].host_ns > b.host.cfg.state_max_age_s * 1e9
         if stale or b.state.mode == Mode.STOPPING:
             # the MCU may be STOPPING unseen (the last STATE is old) or seen: wait for a fresh STATE out of it.
             # Not seen within STOPPING_WAIT_S (or the I/O failing): the DISARM still goes out -- a stop command is
@@ -582,6 +583,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     end = len(b.samples)
     disarm_seqs = {q for q, (k, _t, _m) in b.written.items() if k == "DISARM"}
     end = next((i for i in range(i_arm, end) if b.samples[i].state.last_rx_seq in disarm_seqs), end)
+    if off_index is not None and off_index >= end:
+        end = off_index + 1  # the sample that closes the driven span stays, even when it confirms the DISARM
     metrics = commission_metrics(b.samples[:end], axis=axis, duty_e4=duty_e4, on_index=on_index,
                                  off_index=off_index)
     # the whole session, the cleanup included, apart from the dynamics' cut (Codex re-review P2-2)

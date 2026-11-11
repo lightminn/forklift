@@ -143,3 +143,9 @@ def test_nan_rates_are_skipped():
 def test_an_unknown_end_of_driving_is_not_a_measurement():
     m = commission_metrics(wheel_run(), axis=0, duty_e4=1000, on_index=2, off_index=None)
     assert not m.valid and m.reason == "end_unknown"
+
+
+def test_an_end_sample_cut_off_the_record_is_an_unknown_end():
+    s = wheel_run()
+    m = commission_metrics(s, axis=0, duty_e4=1000, on_index=2, off_index=len(s))
+    assert not m.valid and m.reason == "end_unknown"
