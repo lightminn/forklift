@@ -90,6 +90,9 @@ KNOWN = {
         "Invalid pallet spawn after settling: ",  # a session pallet's settle check (setup; plan 2026-10-22 rigid 2.1)
         "Session pallet displaced: ",  # a session pallet nobody handles moved (scene damage; rigid plan 2.4)
         "withdraw_tracking_exceeded:", "Perception camera did not produce depth", "Measured pallet solid overlap in ",
+        # the layer latency budget (plan 2026-11-11): setup checks before Isaac, and the watchdog's end each tick
+        "--latency-layer declared is not combined with a layer latency budget (the budget declares)",
+        "--layer-worker-k ", "sensor_timeout_s ", "layer_latency_exceeded",
         "",
     },
     "src/forklift_core/mission/core.py": {
@@ -113,6 +116,7 @@ KNOWN = {
         "observe_start_backoff_short", "observe_start_backoff_stopped",
         # C3 (plan 2026-10-27 insertion lateral drift T2): a refused second near capture cannot rejoin the first line
         "near_capture_second_resume:",
+        "layer_latency_exceeded",  # the layer latency budget's watchdog held over its limit (plan 2026-11-11)
     },
 }
 

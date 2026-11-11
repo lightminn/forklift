@@ -63,6 +63,9 @@ PREFIXES = {
     # the mission's own work: that mission fails
     "Tracking timeout": MISSION, "Tracking failed": MISSION, "obstacle_": MISSION,
     "layer_latency_exceeded": MISSION,  # the layer latency budget's watchdog held over its limit (plan 2026-11-11)
+    # the layer latency budget's setup checks, refused before Isaac (plan 2026-11-11)
+    "--latency-layer declared is not combined with a layer latency budget": SESSION, "--layer-worker-k ": SESSION,
+    "sensor_timeout_s ": SESSION,
     "perception_capture_failed": MISSION, "observation_discarded": MISSION, "near_capture_": MISSION,
     "pocket_check_refused": MISSION,  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
     "near_field_": MISSION, "observe:": MISSION, "observe_replan_failed": MISSION, "docking_": MISSION,

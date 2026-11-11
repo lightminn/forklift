@@ -16,10 +16,13 @@ from forklift_core.planning.geometry import Bounds, Footprint
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "sim" / "isaac"))
-SPEC = importlib.util.spec_from_file_location("obstacle_layer", ROOT / "sim/isaac/obstacle_layer.py")
-MODULE = importlib.util.module_from_spec(SPEC)
-sys.modules["obstacle_layer"] = MODULE
-SPEC.loader.exec_module(MODULE)
+if "obstacle_layer" in sys.modules:  # one module per process: another test pickles its classes (xdist worker)
+    MODULE = sys.modules["obstacle_layer"]
+else:
+    SPEC = importlib.util.spec_from_file_location("obstacle_layer", ROOT / "sim/isaac/obstacle_layer.py")
+    MODULE = importlib.util.module_from_spec(SPEC)
+    sys.modules["obstacle_layer"] = MODULE
+    SPEC.loader.exec_module(MODULE)
 
 CONFIG = MODULE.load_layer_config(ROOT / "config/obstacle_layer_single_team_spec.yaml")
 AGE = json.loads((ROOT / CONFIG["odometry_age"]).read_text())
