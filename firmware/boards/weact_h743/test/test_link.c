@@ -78,6 +78,7 @@ typedef struct {
     uint8_t got[64];
     uint32_t n;
     int flushes;
+    int clears;
 } fake_sink;
 
 static bool fs_connected(void *c)
@@ -107,19 +108,27 @@ static void fs_flush(void *c)
     ((fake_sink *)c)->flushes++;
 }
 
+static void fs_clear(void *c)
+{
+    ((fake_sink *)c)->clears++;
+}
+
 static void tx_pump(void)
 {
     uint8_t mem[16];
     link_ring r;
     link_ring_init(&r, mem, sizeof mem);
     fake_sink f = {.connected = false, .room = 64};
-    link_sink s = {&f, fs_connected, fs_room, fs_write, fs_flush};
+    link_sink s = {&f, fs_connected, fs_room, fs_write, fs_flush, fs_clear};
     const uint8_t old[5] = {9, 9, 9, 9, 0};
     CHECK(link_ring_put_frame(&r, old, 5));
     /* Nobody has the port open: the frame is dropped, nothing reaches the stack. */
     CHECK_EQ_U(link_tx_pump(&r, &s), 5);
     CHECK_EQ_U(f.n, 0);
     CHECK_EQ_U(f.flushes, 0);
+    /* ...and so is anything still in the stack's FIFO: a host reading with DTR low gets no old
+       frames (Codex B3 review). */
+    CHECK_EQ_U(f.clears, 1);
     /* Port open: only frames made since then go out, in order, across the buffer end and
        across a full stack. */
     f.connected = true;
@@ -137,6 +146,30 @@ static void tx_pump(void)
     CHECK_EQ_U(link_tx_pump(&r, &s), 0);
     CHECK_EQ_U(f.n, 12);
     CHECK(memcmp(f.got, a, 6) == 0 && memcmp(f.got + 6, b, 6) == 0);
+}
+
+/* DTR rising (Codex B3 review): the ring and the stack FIFO are dropped, and a delimiter goes
+   first. An IN packet already handed to the controller (<= 64 B) cannot be recalled; it may end
+   inside a frame, and the delimiter keeps that tail from swallowing the first fresh frame. Empty
+   frames are not errors on either decoder. */
+static void tx_reopen(void)
+{
+    uint8_t mem[16];
+    link_ring r;
+    link_ring_init(&r, mem, sizeof mem);
+    fake_sink f = {.connected = true, .room = 64};
+    link_sink s = {&f, fs_connected, fs_room, fs_write, fs_flush, fs_clear};
+    const uint8_t old[6] = {7, 7, 7, 7, 7, 0};
+    CHECK(link_ring_put_frame(&r, old, 6));
+    CHECK_EQ_U(link_tx_reopen(&r, &s), 6);
+    CHECK_EQ_U(f.clears, 1);
+    CHECK_EQ_U(f.n, 1);
+    CHECK_EQ_U(f.got[0], 0x00);
+    CHECK_EQ_U(f.flushes, 1);
+    const uint8_t a[4] = {1, 2, 3, 0};
+    CHECK(link_ring_put_frame(&r, a, 4));
+    CHECK_EQ_U(link_tx_pump(&r, &s), 0);
+    CHECK(f.n == 5 && memcmp(f.got + 1, a, 4) == 0);
 }
 
 static void uart_divider(void)
@@ -180,6 +213,7 @@ int main(void)
     unpublished_bytes_are_invisible();
     put_some_takes_what_fits();
     tx_pump();
+    tx_reopen();
     uart_divider();
     usb_strings();
     usb_clock();

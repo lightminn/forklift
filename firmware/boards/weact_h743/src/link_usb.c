@@ -6,9 +6,10 @@
    run in the main loop or at priority 3, so the control tick, the command expiry and the IWDG
    keep running past them: a stuck USB stack silences the link and the vehicle stops on expiry.
 
-   Stale frames: while no host has the port open (DTR low), frames are dropped as they come; on
-   a DTR rising edge whatever is left in the send ring and in TinyUSB's FIFO is dropped too, so a
-   reopened port starts with fresh STATE frames (board design 5). The receive side keeps bytes in
+   Stale frames: while no host has the port open (DTR low), frames and TinyUSB's FIFO are dropped
+   as they come; on a DTR rising edge whatever is left is dropped again and a delimiter goes
+   first, so a reopened port starts with fresh STATE frames after at most one old IN packet
+   (board design 5.1, link_tx_reopen). The receive side keeps bytes in
    TinyUSB's FIFO (the endpoint NAKs) when the ring is full: nothing is lost there. */
 #include "board/board.h"
 #include "board/clock_config.h"
@@ -56,12 +57,11 @@ void link_init(void)
     if (!clock_usb_init()) {
         return; /* no USB clock: the link stays silent, ARM never arrives */
     }
-    /* VDD33USB comes from the board's 3.3 V: its level detector must be on before the
-       transceiver is used (RM0433 6.4.4). */
+    /* The VDD33USB level detector must be on before the transceiver is used (RM0433 6.4.4); the
+       USB regulator stays off (USBREGEN reset value). On LQFP100 VDD33USB is not a pin: it is
+       bonded to VDD (DS12110 Rev 7 revision history, figure 5), and ST reports USB33RDY does not
+       rise in that supply configuration, so it is recorded, never waited on (Codex B3 review). */
     PWR->CR3 |= PWR_CR3_USB33DEN;
-    if (!cycles_wait_flag(&PWR->CR3, PWR_CR3_USB33RDY, CLK_SYSCLK_HZ / 100u)) {
-        return;
-    }
     RCC->AHB1ENR |= RCC_AHB1ENR_USB2OTGFSEN;
     (void)RCC->AHB1ENR;
     NVIC_SetPriority(OTG_FS_IRQn, USB_IRQ_PRIORITY); /* TinyUSB enables it in dcd_init */
@@ -69,24 +69,12 @@ void link_init(void)
     if (tusb_init(BOARD_TUD_RHPORT, &init)) {
         g_link_stats.usb_started = 1;
     }
+    g_link_stats.usb33rdy = (PWR->CR3 & PWR_CR3_USB33RDY) != 0u;
 }
 
 void OTG_FS_IRQHandler(void)
 {
     tud_int_handler(BOARD_TUD_RHPORT);
-}
-
-/* DTR edge, called from tud_task (main loop, the send ring's consumer). */
-void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
-{
-    (void)itf;
-    (void)rts;
-    if (dtr && !g_dtr) {
-        g_link_stats.reopened++;
-        g_link_stats.tx_dropped_idle += link_ring_drop_all(&g_tx);
-        (void)tud_cdc_write_clear();
-    }
-    g_dtr = dtr;
 }
 
 static bool sink_connected(void *ctx)
@@ -113,7 +101,25 @@ static void sink_flush(void *ctx)
     (void)tud_cdc_write_flush();
 }
 
-static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_flush};
+static void sink_clear(void *ctx)
+{
+    (void)ctx;
+    (void)tud_cdc_write_clear();
+}
+
+static const link_sink g_sink = {0, sink_connected, sink_room, sink_write, sink_flush, sink_clear};
+
+/* DTR edge, called from tud_task (main loop, the send ring's consumer). */
+void tud_cdc_line_state_cb(uint8_t itf, bool dtr, bool rts)
+{
+    (void)itf;
+    (void)rts;
+    if (dtr && !g_dtr) {
+        g_link_stats.reopened++;
+        g_link_stats.tx_dropped_idle += link_tx_reopen(&g_tx, &g_sink);
+    }
+    g_dtr = dtr;
+}
 
 void link_poll(void)
 {
@@ -139,6 +145,9 @@ void link_poll(void)
         if (got < n) {
             break;
         }
+    }
+    if (!tud_cdc_connected()) {
+        g_dtr = false; /* a bus reset clears the line state without the callback (cdcd_reset) */
     }
     g_link_stats.tx_dropped_idle += link_tx_pump(&g_tx, &g_sink);
 }

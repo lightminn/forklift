@@ -15,6 +15,7 @@ typedef struct {
     volatile uint32_t uart_errors;     /* overrun, framing, noise */
     volatile uint32_t usb_started;     /* the USB stack came up */
     volatile uint32_t reopened;        /* DTR rising edges */
+    volatile uint32_t usb33rdy;        /* PWR_CR3.USB33RDY after start (diagnostic only) */
 } link_stats;
 
 extern link_stats g_link_stats;
