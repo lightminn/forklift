@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-STATES = ("available", "carried", "delivered")
+STATES = ("available", "carried", "delivered", "unlocated")  # unlocated: sim-to-real 4d-2b-2 (a field recovery)
 
 
 @dataclass(frozen=True)
@@ -102,6 +102,8 @@ class TargetsBook:
             changes["put_down_pose"] = pose
         if basis is not None:
             changes.update(basis=basis, uncertainty_m=uncertainty_m)
+            if self.pallets[pallet_id].state == "unlocated" and basis == "recognised":
+                changes["state"] = "available"  # 4d-2b-2: an observation places a pallet lost in a field recovery
         return self._set(pallet_id, **changes)
 
     def update_destination(self, destination_id: str, pose: Pose) -> bool:
@@ -120,10 +122,24 @@ class TargetsBook:
         moved by other means (a manual recovery's ground verdict)."""
         return self._set(pallet_id, at=destination_id)
 
+    def unlocate(self, pallet_id: str) -> bool:
+        """Sim-to-real 4d-2b-2: a field recovery took the pallet off the forks by hand -- where it is now is not known.
+        Never a pick (no submit names it); its last pose stays an obstacle (planning props, teleop permit) until an
+        observation places it again (``update_pose`` with basis "recognised") or the operator clears it; its verified
+        place and put-down snapshot (and with them a slot anchor or a re-pick's zone) are gone."""
+        return self._set(pallet_id, state="unlocated", at=None, put_down_pose=None)
+
+    def clear_unlocated(self, pallet_id: str) -> bool:
+        """The operator says the unlocated pallet is not where it was last known: its pose (the obstacle) goes; it
+        stays unlocated, never a pick, until an observation places it."""
+        if self.pallets[pallet_id].state != "unlocated":
+            raise ValueError(f"{pallet_id} is not unlocated")
+        return self._set(pallet_id, pose=None)
+
     def put_down(self, pallet_id: str, pose: Pose, *, state: str = "delivered",
                  uncertainty_m: float | None = None) -> bool:
         """Registered again where it was put down, under the same ID (basis "delivered", plan D10)."""
-        if state not in STATES or state == "carried":
+        if state not in STATES or state in ("carried", "unlocated"):
             raise ValueError(state)
         return self._set(pallet_id, pose=pose, state=state, basis="delivered", uncertainty_m=uncertainty_m,
                          put_down_pose=pose)

@@ -65,6 +65,11 @@ class CargoState:
         # Sim-to-real 4d-2b-1: what an insert's start assumes of that premise. The simulation checks it against truth
         # every tick; the real truck cannot measure it, so it never assumes it -- no automatic pocket retrace there.
         self.assume_trace_valid = True
+        # Sim-to-real 4d-2b-2 (lead decision 2): the real truck judges empty forks by the mission's state, not truth --
+        # no pocket entered since the forks were last confirmed out. Anything else ends in a field recovery.
+        self.field_recovery = False
+        self.pocket_entered = False
+        self.relocalize_required = False  # a field recovery's end: the relocalization generation it waits for, or False
         self.last_rear = None  # the control pose at the last tick's end
         # Plan D14: what a manual recovery needs once the mission that left the forks in a pocket is gone (the
         # pallet's ID and estimate, the SLAM hold's basis, the stage); None when there is none.
@@ -87,6 +92,7 @@ class CargoState:
         self.anchor, self.depth0 = tuple(float(v) for v in rear), -APPROACH_GAP_M
         self.trace = [(self.anchor, -APPROACH_GAP_M)]
         self.insert_end, self.placed, self.trace_valid = None, None, self.assume_trace_valid
+        self.pocket_entered = True
 
     def on_insert_end(self, rear) -> None:
         self.insert_end = tuple(float(v) for v in rear)
@@ -187,8 +193,16 @@ class CargoState:
         if self.placed is not None:
             self.placed = [(move(pose), depth) for pose, depth in self.placed]
 
+    def confirm_out(self) -> None:
+        """The operator confirmed the forks out of the pocket (the real truck's settle, 4d-2b-2)."""
+        self.pocket_entered = False
+
     def cancel_decision(self, rear, *, in_withdraw: bool) -> str:
-        """What a live cancel confirmed standing leads to: ``cancelled``, ``recover`` or ``recovery_required``."""
+        """What a live cancel confirmed standing leads to: ``cancelled``, ``recover`` or ``recovery_required``. The
+        real truck (``field_recovery``): ``cancelled`` with empty forks by the mission's state, else
+        ``recovery_required`` -- carrying included, never an automatic recovery."""
+        if self.field_recovery:
+            return "cancelled" if (not self.pocket_entered and self.relation == "free") else "recovery_required"
         if self.relation in ("free", "carrying"):
             return "cancelled"
         if self.relation == "unknown" or not self.trace_valid or self.anchor is None:
@@ -207,6 +221,10 @@ class CargoState:
         self.relation, self.load, self.invalidated = "unknown", "unknown", reason
 
     def submit_refusal(self) -> str | None:
+        if self.field_recovery and (self.pocket_entered or self.relation != "free"):
+            return "recovery_required"  # 4d-2b-2: no loaded resubmit, nothing before the forks are confirmed out
+        if self.field_recovery and self.relocalize_required:
+            return "relocalize_required"
         if self.relation in ("constrained", "unknown"):
             return "recovery_required"
         if self.relation == "carrying":
@@ -222,10 +240,12 @@ class CargoState:
         return self.relation == "carrying" or self.load in ("acquiring", "releasing", "unknown")
 
     def safety_fields(self) -> dict:
+        # 4d-2b-2: on the real truck forks not confirmed out count as in a pocket (the withdraw's end is the tracker's,
+        # not a verdict) -- the teleop policy then refuses as for a pocket
+        in_ = self.relation != "free" or (self.field_recovery and self.pocket_entered)
         return {"load": {"loaded": self.loaded_outline(), "basis": "phase+cargo", "pallet_id": self.pallet_id,
                          "state": self.load},
-                "fork_in_pocket": {"value": self.relation != "free", "basis": "phase+cargo",
-                                   "relation": self.relation}}
+                "fork_in_pocket": {"value": in_, "basis": "phase+cargo", "relation": self.relation}}
 
 
 # Plan D5 6c item 2a: how far the carried pallet may sit from its nominal seat on the forks for a loaded submit (the

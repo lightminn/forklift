@@ -74,6 +74,7 @@ PREFIXES = {
     "async_near_no_fresh_depth": MISSION, "planning_wait_moving": MISSION, "Pallet was not lifted": MISSION,
     "Pallet did not settle onto destination floor": MISSION, "Fork did not lower": MISSION,
     "Lift did not reach its position": MISSION,  # the real truck's lift/lower motion stage (sim-to-real 4d-2b-1)
+    "Forks are not out (operator)": MISSION,  # the real truck's settle confirmation refused (sim-to-real 4d-2b-2)
     "withdraw_not_certified": MISSION, "withdraw_tracking_exceeded": MISSION, "pocket_stop": MISSION,
     "transport_recovery_after_docking": MISSION, "stall_replan_failed": MISSION, "Mission planning failed": MISSION,
     "approach:": MISSION, "insert:": MISSION, "extract:": MISSION, "transport:": MISSION, "withdraw:": MISSION,
