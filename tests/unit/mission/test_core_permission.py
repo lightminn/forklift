@@ -270,3 +270,28 @@ def test_without_the_option_nothing_of_the_confirmation_is_read():
     obstacle["layer"].answer = (0.15, "occupied")
     out = core.permission(10.1, REAR, 0.0, 0.2, False, None)  # the stand-in layer has no sensors: none was read
     assert out.allowed == 0.15 and "restart_confirm" not in obstacle
+
+
+def test_a_layer_watchdog_stop_holds_the_wheels_where_the_permission_does_not_act():
+    # the layer latency budget (plan 2026-11-11, Codex impl review P1): on the delivery straight (not acted on) the
+    # watchdog's zero still caps the command and holds the wheels; the online invariant stays 0
+    slam = {"tracker": SimpleNamespace(applied=None), "stop_now": False, "docking": {"reapproach": False}}
+    core, obstacle, _, _ = make("transport", remaining=0.7, slam=slam, limit=(0.0, "layer_overdue"))
+    core.state["layer_budget"] = {"invariant_violations": 0}
+    out = core.permission(10.0, REAR, 0.0, 0.3, True, None)
+    assert out.acting is False and out.requested_speed == 0.0 and out.obstacle_hold is True
+    assert obstacle["permission_cap"] == (10.0, 0.0) and core.state["layer_budget"]["invariant_violations"] == 0
+    # an ordinary stop there is still not acted on (unchanged)
+    core2, obstacle2, _, _ = make("transport", remaining=0.7, slam=slam, limit=(0.0, "occupied"))
+    out2 = core2.permission(10.0, REAR, 0.0, 0.3, True, None)
+    assert out2.requested_speed == 0.3 and obstacle2["permission_cap"] is None
+    # obstacle_act off: the watchdog tick drives and the invariant counts it
+    core3, _, _, _ = make("observe", limit=(0.0, "layer_overdue"), act=False)
+    core3.permission(10.0, REAR, 0.0, 0.3, True, None)
+    assert core3.state["layer_budget"]["invariant_violations"] == 1
+
+
+def test_the_limit_past_the_watchdog_end_ends_the_mission():
+    core, _, _, _ = make(limit=(0.0, "layer_latency_exceeded"))
+    with pytest.raises(RuntimeError, match="layer_latency_exceeded"):
+        core.permission(10.0, REAR, 0.0, 0.3, True, None)

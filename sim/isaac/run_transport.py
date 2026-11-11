@@ -1969,8 +1969,8 @@ def arguments() -> argparse.Namespace:
                                                         and args.layer_latency_budget_s >= 0):
         parser.error("--layer-latency-budget-s must be a finite number >= 0")
     if args.layer_latency_budget is not None or args.layer_latency_budget_s is not None:
-        if args.obstacle_layer is None:
-            parser.error("--layer-latency-budget(-s) needs --obstacle-layer")
+        if args.obstacle_layer is None or not args.obstacle_act:
+            parser.error("--layer-latency-budget(-s) needs --obstacle-layer and --obstacle-act (its stop acts)")
         if args.layer_latency_budget is not None:
             if not args.layer_latency_budget.is_file():
                 parser.error(f"--layer-latency-budget {args.layer_latency_budget}: no such file")
@@ -4824,7 +4824,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     f"sensor_timeout_s {timeout_} is below the scan period 1/{rate_} + the layer budget {layer_budget_s_}")
             layer_config = obstacle_module.budget_config(layer_config, layer_budget_s_)
             layer_worker_latency_s_ = layer_budget_s_
-            state["layer_budget"] = {"budget_s": layer_budget_s_,
+            state["layer_budget"] = {"budget_s": layer_budget_s_, "invariant_violations": 0,
                                      "overdue_end_s": float(layer_config.get("overdue_end_s", 1.0)),
                                      "source": "override" if getattr(args, "layer_latency_budget_s", None) is not None
                                      else str(budget_file_ if budget_file_ is not None else args.obstacle_layer)}
@@ -8584,7 +8584,8 @@ def drive(S, isaac) -> None:
                     return 0.0, "no_permission"
                 layer_ = obstacle["layer"]
                 now_ = float(world.current_time - initial_time)
-                watch_ = layer_.watchdog(now_) if hasattr(layer_, "watchdog") else None
+                # a plain value first: a replayed record's layer answers only the calls it recorded (Codex impl P2)
+                watch_ = layer_.watchdog(now_) if state.get("layer_budget") else None
                 if watch_ is not None:
                     return 0.0, watch_  # the layer latency budget's watchdog holds teleop too (plan 2026-11-11)
                 # The layer's own latest snapshot -- the one the mission's permission reads, with its shadow band and
@@ -10586,6 +10587,11 @@ def drive(S, isaac) -> None:
                 # Plan cusp position stall v7: a stall handed to the obstacle side keeps this block running
                 # while it stands on a zero command.
                 cusp_handed_ = cusp_monitor.handed(ms.phase) if obstacle is not None else None
+                if state.get("layer_budget") and obstacle is not None and not live_abort_:
+                    # the layer latency budget's watchdog on every control tick, whatever the phase and whether the
+                    # permission tick runs (Codex impl review P2): a stop past overdue_end_s ends the mission on the
+                    # first tick past it; the permission below reads the same tick's judgement (cached)
+                    require(obstacle["layer"].watchdog(float(t)) != "layer_latency_exceeded", "layer_latency_exceeded")
                 permission_tick_ = not paused_ and not live_abort_ and obstacle is not None and ms.phase in trackers and (
                     requested_speed != 0.0 or abs(truth_speed) > 0.05 or obstacle.get("force_replan") == ms.phase
                     or cusp_handed_ is not None
@@ -11336,7 +11342,7 @@ def drive(S, isaac) -> None:
                     state["layer_worker"]["pending_at_end"] = bool(worker_.pending)
                     state["layer_worker"].update(worker_.summary())
                     (args.output / "layer_worker.json").write_text(record_json(worker_.records) + "\n")
-                if getattr(obstacle["layer"], "latency_budget_s", 0.0) > 0.0:
+                if state.get("layer_budget"):  # a plain value, not the (possibly replayed) layer (Codex impl P2)
                     # the layer latency budget's watchdog (plan 2026-11-11): its stops and the per-scan delays
                     lay_ = obstacle["layer"]
                     d_ = [d for _, _, d in lay_.latency_log["scans"]]

@@ -40,7 +40,7 @@ def scan(lay, t):
 
 
 def install(lay, newest):
-    lay._installed_scan_s, lay._first_use_pending = newest, True
+    lay._note_install({"scan_stamps": {} if newest is None else {"lidar": newest}})
 
 
 def test_the_budget_closes_the_stopping_latency_and_the_use_age_and_reads_the_0_3_row():
@@ -122,6 +122,7 @@ def test_one_judgement_per_tick_and_the_stop_over_the_limit_is_named():
     assert lay.latency_log["overdue_ticks"][-1][5:] == ["layer_latency_exceeded", pytest.approx(1.0 + 1 / 120)]
     assert [r[5] for r in lay.latency_log["overdue_ticks"]].count("layer_latency_exceeded") == 1
     assert lay.overdue_stats["events"] == 1 and lay.overdue_stats["longest_s"] > 1.0
+    assert lay.overdue_stats["total_s"] == pytest.approx(lay.overdue_stats["longest_s"])
 
 
 def test_a_stop_released_within_the_limit_goes_on():
@@ -176,3 +177,12 @@ def test_a_budgeted_run_still_matches_a_survey_bundle():
     # the registered bundles' recorded obstacle-layer hash (ws1 manifests, read 2026-11-11) is the file's
     assert slam_map.file_sha256(files["obstacle_layer"]) == \
         "73e35f8fee45ad5547df851cb799528b5b25d89657bcca3697607d84af5d9db0"
+
+
+def test_a_reinstallation_without_a_newer_scan_is_not_judged_again():
+    lay = layer()
+    scan(lay, 0.0)
+    install(lay, 0.0)
+    assert lay.watchdog(0.01) is None
+    install(lay, 0.0)  # a correction's re-projection 0.09 s later: the same newest scan, not a new first use
+    assert lay.watchdog(0.099) is None and len(lay.latency_log["scans"]) == 1

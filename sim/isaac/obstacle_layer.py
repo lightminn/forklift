@@ -332,7 +332,7 @@ class ObstacleLayer:
         self._overdue_since = None
         self._watch_cache = None  # (now_s, reason): one judgement per control tick
         self.latency_log = {"scans": [], "overdue_ticks": []}  # [t_scan, t_use, D]; [t, required, installed, D, kind, reason, held]
-        self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0}
+        self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0, "total_s": 0.0}
         self.snapshot = None
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
         # frame; set only while the depth pocket check gates every tick.
@@ -672,16 +672,24 @@ class ObstacleLayer:
             exit_update = {"transformed": skipped is None, "skipped": skipped, "freed": freed, "refresh_s": float(now_s)}
         return {"raw": raw, "snapshot": snapshot, "exit_update": exit_update}
 
+    def _note_install(self, job: dict) -> None:
+        """The layer latency budget: the newest scan the installed snapshot holds; its first control use is judged at
+        the next watchdog (D = t_use - t_scan). A re-installation without a newer scan -- a correction's re-projection,
+        a core refresh -- keeps the judgement its scan had: D is judged once per scan, at the first use of the snapshot
+        that brought it."""
+        stamps_ = [float(v) for v in (job.get("scan_stamps") or {}).values()]
+        newest_ = max(stamps_) if stamps_ else None
+        if newest_ is not None and (self._installed_scan_s is None or newest_ > self._installed_scan_s):
+            self._installed_scan_s = newest_
+            self._first_use_pending = True
+
     def refresh_install(self, job: dict, result: dict):
         """Plan 5.28 D3, on the main thread: the planning memory's clears (at the job's time), the snapshot, the exit
         status, the permission's path check (with the job's path and pose) and the times of the scans this result
         checked (restart confirmation and the cusp watch read them -- D5)."""
         now_s = job["now_s"]
         if getattr(self, "latency_budget_s", 0.0) > 0.0:
-            # the newest scan this snapshot holds; its first control use is judged at the next limit (D = t_use - t_scan)
-            stamps_ = [float(v) for v in (job.get("scan_stamps") or {}).values()]
-            self._installed_scan_s = max(stamps_) if stamps_ else None
-            self._first_use_pending = True
+            self._note_install(job)
         self.snapshot = result["raw"]
         if self.memory is not None:
             self._memory_clears(result["raw"], now_s)
@@ -907,6 +915,8 @@ class ObstacleLayer:
             if self._overdue_since is None:
                 self._overdue_since = float(now_s)
                 self.overdue_stats["events"] += 1
+            else:  # the stop's time between two judged ticks of one event
+                self.overdue_stats["total_s"] += float(now_s) - self._watch_cache[0]
             held = float(now_s) - self._overdue_since
             self.overdue_stats["ticks"] += 1
             self.overdue_stats["longest_s"] = max(self.overdue_stats["longest_s"], held)

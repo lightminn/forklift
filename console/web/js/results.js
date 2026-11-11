@@ -26,6 +26,7 @@ export const REASONS = {
   "localization_stale": "위치 추정이 오래됐습니다",
   "slam_link_failed": "SLAM 연결이 끊겼습니다",
   "kinematic_refusal": "조향이 그 곡률을 낼 수 없어 멈췄습니다(실차 운동학)",
+  "layer_latency_exceeded": "장애물 지도 갱신이 지연 예산보다 늦어 1초 넘게 멈춰 임무를 끝냈습니다",
   "slam_prewarm_timeout": "SLAM 준비 시간이 지났습니다",
   "slam_map_mismatch": "지도 묶음이 세션의 지도와 다릅니다",
   "slam_map_not_loaded": "조사 지도를 불러오지 못했습니다",
