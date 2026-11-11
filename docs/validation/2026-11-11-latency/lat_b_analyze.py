@@ -109,8 +109,8 @@ def stop_after(control_rows: list, ended_s: float | None, modes: list) -> str:
     still_since = None
     for a, b in zip(rows, rows[1:]):
         dt = b[0] - a[0]
-        mode = mode_at(a[0])
-        if dt > CONTROL_GAP_S or mode is None or mode in DRIVING_MODES:
+        mode, mode_b = mode_at(a[0]), mode_at(b[0])  # both ends of the pair (the last row's mode too)
+        if dt > CONTROL_GAP_S or mode is None or mode in DRIVING_MODES or mode_b is None or mode_b in DRIVING_MODES:
             still_since = None  # a broken control record, an unknown or a driving mode restarts the confirmation
             continue
         v = ((b[4] - a[4]) ** 2 + (b[5] - a[5]) ** 2) ** 0.5 / dt if dt > 0 else 0.0

@@ -52,6 +52,7 @@ def test_the_stop_after_a_failed_mission():
     # AUTO up to 0.8 s after the end, the record ends at 1.0 s: only 0.2 s confirmable
     assert B.stop_after(rows_(121), 0.0, [(-1.0, "AUTO"), (0.8, "STOPPED")]) == "observed_end"
     assert B.stop_after(rows_(240), 0.0, [(-1.0, "AUTO"), (0.8, "STOPPED")]) == "safe_failure"  # 0.8 -> 2.0 s
+    assert B.stop_after(rows_(121), 0.0, [(0.0, "STOPPED"), (1.0, "AUTO")]) == "observed_end"  # AUTO at the last row
 
 
 LOW_OK = {"rows": {"truck_physical": {"min_m": 0.2}}, "physical_arc_violations": []}
