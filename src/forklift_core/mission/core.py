@@ -68,6 +68,7 @@ from forklift_core import determinism
 from forklift_core.control import RearAxlePathTracker, TrackerConfig
 from forklift_core.plant.kinematics import AckermannKinematics
 from forklift_core.plant.real_vehicle import DriveRefusal
+from forklift_core.safety.truth_access import SafetySpeed, TruthAccessViolation
 from forklift_core.control import cusp_stall as CUSP_STALL
 from forklift_core.mission.baseline import start_digest
 
@@ -1425,7 +1426,8 @@ class MissionCore:
         ms, state, obstacle, slam, pocket, hooks, options = (self.ms, self.state, self.obstacle, self.slam, self.pocket,
                                                             self.hooks, self.options)
         trackers, geometry = self.trackers, self.geometry
-        truth_speed, truth_rear = hooks.truth_speed(), hooks.truth_rear()
+        speed_ = self.safety_speed()  # 4d-1: the safety speed (the simulation's is the true speed exactly)
+        truth_speed, truth_rear = speed_.signed_mps, hooks.truth_rear()
         obstacle_hold = False
         if slam is not None and slam["tracker"].applied is not None:
             applied_now = tuple(float(v) for v in slam["tracker"].applied[0])
@@ -1443,22 +1445,28 @@ class MissionCore:
             # a standing truck's noise -- the e-stop arc must not flip side every tick.
             direction = cusp_handed_.hand_direction
         else:
-            direction = 1 if truth_speed > 0 else -1
+            direction = None  # the safety speed's (the simulation's rule: 1 if speed > 0 else -1)
         exit_closed_ = None
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "permission")
             if self.exit_exempt_open():
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
-        allowed, why = obstacle["layer"].limit(
+        allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-            direction=direction, loaded=loaded, cap_mps=max(abs(requested_speed), abs(truth_speed)),
-        )
+            direction=d_, loaded=loaded, cap_mps=cap_,
+        ), speed_, direction, max(abs(requested_speed), speed_.bound_mps))
+        if direction is None:
+            direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
         # watchdog stop holds the wheels in every phase, acting or not (Codex impl review P1)
         if why == "layer_latency_exceeded":  # asked only then: no new hook call on a recorded tick (replay gate)
             hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"
+        # 4d-1: an invalid safety speed, or a failed braking check, holds the wheels, acting or not (Codex 4d-1 3rd P1)
+        speed_hold_ = self._speed_hold(speed_) or motion_hold_
+        if self._speed_hold(speed_):
+            allowed, why = 0.0, "safety_speed_invalid"
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
         if exit_closed_ == "watch":
@@ -1517,6 +1525,11 @@ class MissionCore:
             acting = True
             if pocket["check"] is None:
                 allowed, why = 0.0, "pocket_missing"
+            elif unsure_:
+                # 4d-1 (real truck only): the pocket check answers one direction and the layer waives the pocket
+                # region, so a residual motion the other way is not covered -- stop, a hold whatever the obstacle
+                # switch says (Codex 4d-1 3rd P1, 4th P1)
+                allowed, why, speed_hold_ = 0.0, "direction_unsure", True
             elif pocket.get("await_still_frame"):
                 allowed, why = 0.0, "pocket_settle"
             elif (
@@ -1534,7 +1547,7 @@ class MissionCore:
             else:
                 lp, wp = pocket["check"].limit(
                     t, tuple(float(v) for v in rear), kappa, direction,
-                    max(abs(requested_speed), abs(truth_speed)),
+                    max(abs(requested_speed), speed_.bound_mps),
                     float(hooks.lift_position()),
                 )
                 if lp < allowed:
@@ -1575,7 +1588,9 @@ class MissionCore:
         # The permission's own limit, applied to the wheels as a step
         # (the stop it was measured with); the path-blocked stop below
         # is a planned one and brakes on the slew.
-        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and (acting or budget_stop_)) else None
+        # (an invalid safety speed holds the wheels whatever the obstacle switch says, Codex 4d-1 2nd P1)
+        obstacle["permission_cap"] = (t, float(allowed)) if (
+            (options.obstacle_act and (acting or budget_stop_)) or speed_hold_) else None
         if obstacle["permission_cap"] is not None and allowed == 0.0 and why.startswith("sensor_silent"):
             # N9 deadlines: the permission's zero reaches the wheels as a
             # step through the final cap whatever the tracker asks (Codex
@@ -1583,11 +1598,11 @@ class MissionCore:
             trace = obstacle.setdefault("silence_trace", {})
             trace.setdefault("first_zero_s", t)
             trace.setdefault("reason", why)
-            trace.setdefault("speed_at_zero_mps", abs(truth_speed))
+            trace.setdefault("speed_at_zero_mps", speed_.bound_mps)
             trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
             # The stop is the start of the final standing: a slow instant followed by
             # motion is not it (Codex stage-1 3rd P2), so moving again clears it.
-            if abs(truth_speed) < 0.01:
+            if speed_.standing(0.01):
                 if "stopped_s" not in trace:
                     trace["stopped_s"] = t
                     trace["rear_stopped"] = [float(v) for v in truth_rear]
@@ -1603,7 +1618,7 @@ class MissionCore:
             obstacle["slowed"][ms.phase] = obstacle["slowed"].get(ms.phase, 0) + 1
             key = f"{ms.phase}:{why}"
             obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
-            if options.obstacle_act and (acting or budget_stop_):
+            if (options.obstacle_act and (acting or budget_stop_)) or speed_hold_:
                 requested_speed = math.copysign(allowed, requested_speed)
                 # Zero allowed: the emergency stop the check assumed --
                 # wheels to zero, steering held (Codex L0b P1).
@@ -1614,7 +1629,7 @@ class MissionCore:
             lb_ = self.state.setdefault("layer_budget", {})
             lb_["invariant_violations"] = lb_.get("invariant_violations", 0) + 1
         # Stop, replan, resume (plan D4): blocked by an obstacle and standing.
-        stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
+        stopped_now = slam["stop_now"] if slam is not None else float(np.linalg.norm(self._truth("truth_velocity")[:2])) < 0.01
         # Plan cusp position stall v7: an occupied prefix of the next leg (the current leg's check
         # ends at the cusp and cannot see it) counts as a blocked path while it stays.
         cusp_prefix_blocked_ = cusp_handed_ is not None and cusp_handed_.prefix_occupied_now
@@ -2595,9 +2610,9 @@ class MissionCore:
                 if slam is not None
                 else (
                     tracking.speed_mps == 0.0
-                    and float(np.linalg.norm(hooks.truth_velocity()[:2]))
+                    and float(np.linalg.norm(self._truth("truth_velocity")[:2]))
                     <= trackers[ms.phase].config.stop_speed_mps
-                    and abs(float(hooks.truth_yaw_rate()))
+                    and abs(float(self._truth("truth_yaw_rate")))
                     <= cusp_stop_yaw_rate_radps
                 )
             )
@@ -2771,8 +2786,8 @@ class MissionCore:
             tracking = replace(tracking, status="braking", speed_mps=0.0)
             # Stopped first (as the transport's cusp recovery without SLAM; Codex implementation round 2 P2): the
             # command stays 0 until the truck stands, then the face ends or the stand is planned again.
-            stopped_ = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers["observe"].config.stop_speed_mps
-                        and abs(float(hooks.truth_yaw_rate())) <= cusp_stop_yaw_rate_radps)
+            stopped_ = (float(np.linalg.norm(self._truth("truth_velocity")[:2])) <= trackers["observe"].config.stop_speed_mps
+                        and abs(float(self._truth("truth_yaw_rate"))) <= cusp_stop_yaw_rate_radps)
             if stopped_:
                 out_ = self.bottom_deck_recover(t, rear, "observe_miss")
                 rear = out_.rear
@@ -5468,7 +5483,7 @@ class MissionCore:
         permission tells it -- the driving tick, the watch while a plan is waited for, the scene replan's escape and
         candidate checks (Codex round 3 P2: the device's ticks run the watch, not the driving tick). A no-op with the
         release off or a permission without it."""
-        obstacle, slam, hooks = self.obstacle, self.slam, self.hooks
+        obstacle, slam = self.obstacle, self.slam
         if obstacle is None or getattr(self.options, "start_band_release", "off") != "on":
             return  # off: not even a read of the permission (a replay records every port read)
         perm = obstacle["layer"].permission
@@ -5476,7 +5491,7 @@ class MissionCore:
         if note is None or getattr(perm.config, "start_band_m", 0.0) <= 0.0:
             return
         if standing is None:
-            standing = slam["stop_now"] if slam is not None else float(np.linalg.norm(hooks.truth_velocity()[:2])) < 0.01
+            standing = slam["stop_now"] if slam is not None else float(np.linalg.norm(self._truth("truth_velocity")[:2])) < 0.01
         note(bool(standing), tuple(float(v) for v in rear), obstacle["version"])
 
     def permission_watch(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
@@ -5484,9 +5499,9 @@ class MissionCore:
         with its emergency stop and sensor silence, and the cap the command assembly steps to -- every tick,
         whatever the speed. No work counter (path blocked, blocked and standing), no progress watch, no N9 end:
         a silent sensor is reported and keeps the resume from finishing."""
-        ms, obstacle, slam, trackers, hooks, options = (self.ms, self.obstacle, self.slam, self.trackers, self.hooks,
+        ms, obstacle, slam, trackers, options = (self.ms, self.obstacle, self.slam, self.trackers,
                                                         self.options)
-        truth_speed = hooks.truth_speed()
+        speed_ = self.safety_speed()  # 4d-1
         applied_now = (tuple(float(v) for v in slam["tracker"].applied[0])
                        if slam is not None and slam["tracker"].applied is not None else (0.0, 0.0, 0.0))
         if applied_now != obstacle["applied"]:
@@ -5503,13 +5518,16 @@ class MissionCore:
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): its common boundary
             exit_closed_ = self.exit_exempt_boundary(t, rear, loaded, "watch")
         self._note_release_standing(rear)
-        allowed, why = obstacle["layer"].limit(
+        allowed, why, motion_hold_, _, _ = self._direction_limits(lambda d_, cap_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-            direction=1 if truth_speed > 0 else -1, loaded=loaded, cap_mps=abs(truth_speed),
-        )
+            direction=d_, loaded=loaded, cap_mps=cap_,
+        ), speed_, None, speed_.bound_mps)
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"  # holds the wheels whether the phase acts or not (Codex impl review P1)
+        speed_hold_ = self._speed_hold(speed_) or motion_hold_  # 4d-1: held, acting or not
+        if self._speed_hold(speed_):
+            allowed, why = 0.0, "safety_speed_invalid"
         if exit_closed_ == "watch":
             allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False
@@ -5532,9 +5550,10 @@ class MissionCore:
             if allowed > 0.0:
                 allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
-        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and (acting or budget_stop_)) else None
+        holds_ = (options.obstacle_act and (acting or budget_stop_)) or speed_hold_  # the hold: whatever the switch
+        obstacle["permission_cap"] = (t, float(allowed)) if holds_ else None
         return SimpleNamespace(allowed=allowed, why=why, acting=acting,
-                               obstacle_hold=bool(options.obstacle_act and (acting or budget_stop_) and allowed == 0.0))
+                               obstacle_hold=bool(holds_ and allowed == 0.0))
 
     def paused_tick(self, t: float, rear, kappa: float, loaded: bool) -> SimpleNamespace:
         """One control tick while the mission is paused, resuming or cancelling (E3, E5, E6): nothing of the
@@ -5545,7 +5564,7 @@ class MissionCore:
         ms, slam, obstacle, hooks, cmds = self.ms, self.slam, self.obstacle, self.hooks, self.commands
         if getattr(self, "_exit_latch", None) is not None:  # exit-prefix exemption (plan D1): closed on a pause
             self.exit_exempt_boundary(t, rear, loaded, "paused")
-        standing = bool(slam["stop_now"]) if slam is not None else abs(float(hooks.truth_speed())) < 0.01
+        standing = bool(slam["stop_now"]) if slam is not None else self.safety_speed().standing(0.01)  # 4d-1
         if cmds.pause_hold_count is None:  # M-a3c: the stop's hold, as it began (R3, R4n, R11, R9/R14)
             cmds.pause_hold_count = self.hold_count()
             cmds.pause_holding = slam is not None and slam["tracker"].mode == "holding"
@@ -6067,12 +6086,18 @@ class MissionCore:
         end_allowance = tcfg.overshoot_tolerance_m if tcfg.overshoot_tolerance_m is not None else tcfg.position_tolerance_m
         # The arc of the motion the truck has (Codex round 4 P2-1): a truck still rolling stops the way it rolls, at
         # the largest of the speeds it has or is asked for.
-        truth_speed_fn = getattr(self.hooks, "truth_speed", None)
-        moving = float(truth_speed_fn()) if truth_speed_fn is not None else 0.0
+        has_speed_ = (getattr(self.hooks, "safety_speed", None) is not None
+                      or getattr(self.hooks, "truth_speed", None) is not None)
+        # 4d-1: the real truck has no speed-less fallback (a missing hook raises in safety_speed)
+        speed_ = self.safety_speed() if (has_speed_ or self._real_vehicle()) else SafetySpeed.exact(0.0)
         commanded = float(state.get("command_speed", 0.0))
-        speed_cap = max(abs(float(requested_speed)), abs(commanded), abs(moving))
-        if abs(moving) > 0.01:
-            direction = 1 if moving > 0 else -1
+        speed_cap = max(abs(float(requested_speed)), abs(commanded), speed_.bound_mps)
+        # 4d-1: an invalid speed, or moving in a direction it cannot tell, stops the wheels this tick (real truck only;
+        # the guard below still runs for its record, on the first possible direction)
+        unsure_stop_ = self._speed_hold(speed_) or (len(speed_.directions) == 2
+                                                     and not speed_.standing(self.STANDING_MPS))
+        if speed_.bound_mps > 0.01:
+            direction = speed_.directions[0]
         elif abs(commanded) > 1e-6:
             direction = 1 if commanded > 0 else -1
         elif requested_speed != 0.0:
@@ -6103,6 +6128,9 @@ class MissionCore:
                                       "clearance_now_m": _finite_or_none(now_)})
                 else:
                     holds[-1]["last_s"] = float(t)
+        if unsure_stop_:
+            self._low_clearance_cap = (t, 0.0)
+            guard["zero_ticks"][ms.phase] = guard["zero_ticks"].get(ms.phase, 0) + 1
 
     @property
     def kinematics(self):
@@ -6114,6 +6142,80 @@ class MissionCore:
             self._kinematics = given if given is not None else AckermannKinematics(
                 self.options.drive_geometry, lambda: self.settings["steering_command_rate_rad_s"])
         return self._kinematics
+
+    def _real_vehicle(self) -> bool:
+        return bool(getattr(self.options, "real_vehicle", False))
+
+    def _truth(self, name: str):
+        """A simulation-truth hook read on a SLAM-off fallback branch (truth audit: FALLBACK). The real truck never
+        reads truth (sim-to-real 4d-1): it raises TruthAccessViolation; the simulation calls the hook as before."""
+        if self._real_vehicle():
+            raise TruthAccessViolation(name)
+        return getattr(self.hooks, name)()
+
+    def safety_speed(self) -> SafetySpeed:
+        """The speed a safety decision reads (4d-1): the hooks' ``safety_speed`` when given (the real truck's
+        encoder-based one), else the true speed exactly (the simulation's, and a test's hooks without it)."""
+        fn = getattr(self.hooks, "safety_speed", None)
+        if fn is not None:
+            return fn()
+        if self._real_vehicle():
+            raise TruthAccessViolation("truth_speed")
+        return SafetySpeed.exact(self.hooks.truth_speed())
+
+    STANDING_MPS = 0.01  # the stop confirmation's speed (the N9 trace's, the SLAM-off standing)
+
+    def _speed_hold(self, speed: SafetySpeed) -> bool:
+        """An invalid safety speed holds the wheels (4d-1, truth audit 3a); the simulation's is always valid."""
+        return self._real_vehicle() and not speed.valid
+
+    def _commanded_now(self) -> float:
+        """The wheel command still in effect (the slew's start), read by the real truck's direction checks only -- 0
+        in the simulation, so its caps stay as before."""
+        return float(self.state.get("command_speed", 0.0)) if self._real_vehicle() else 0.0
+
+    def _direction_limits(self, limit_fn, speed: SafetySpeed, direction, cap_mps: float):
+        """The layer's limit ``limit_fn(direction, cap)`` over the motion directions a safety check covers (4d-1).
+        Returns ``(allowed, why, hold, driving, unsure)``.
+
+        The simulation: one call at ``cap_mps`` in the caller's ``direction`` (the request, a cusp hand-over) or else
+        the true speed's -- as before; never a hold, never unsure.
+
+        The real truck: the motion the truck may have unasked -- every direction the measured speed may have, at the
+        speed bound (a standing reading is not a standstill, Codex 4d-1 2nd P2), and the command still in effect, at
+        its magnitude (a slew keeps its direction for a while whatever is asked now, 5th P1). The driving check is the
+        caller's direction at ``cap_mps`` (asked none: every direction of that motion, at the largest of its speeds).
+        Every motion direction other than the caller's is also checked at its own speed: one that does not allow it
+        stops the truck as a hold, whatever the permission's activity (3rd P1) and whether or not it is also a driving
+        direction (6th P1); its reason is kept, or ``direction_unsure`` when the layer named none. ``unsure`` is more
+        than one possible direction (the motion's and the caller's) -- the pocket check answers one only."""
+        if not self._real_vehicle():
+            d_ = direction if direction is not None else speed.directions[0]
+            allowed, why = limit_fn(d_, cap_mps)
+            return allowed, why, False, [d_], False
+        motion = {}
+        if speed.bound_mps > 0.0:
+            for d_ in speed.directions:
+                motion[d_] = speed.bound_mps
+        commanded = self._commanded_now()
+        if commanded != 0.0:
+            c_ = 1 if commanded > 0 else -1
+            motion[c_] = max(motion.get(c_, 0.0), abs(commanded))
+        possible = set(motion) | ({direction} if direction is not None else set())
+        if direction is not None:
+            driving, cap = [direction], cap_mps
+        else:
+            driving = list(motion) or [speed.directions[0]]
+            cap = max([cap_mps, *motion.values()])
+        allowed, why = min((limit_fn(d_, cap) for d_ in driving), key=lambda r: r[0])
+        hold = False
+        for d_, v_ in motion.items():
+            if d_ == direction:
+                continue  # the asked direction: the permission's own limit
+            a_, w_ = limit_fn(d_, v_)
+            if a_ < v_:
+                allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
+        return allowed, why, hold, driving, len(possible) > 1
 
     def _kinematic_refusal(self, t: float, reason: str, requested_curvature: float, curvature_range) -> None:
         """Design D3 as built in 4a': latch a stop with the steering held, record it, and pause the mission -- the
@@ -6436,8 +6538,8 @@ class MissionCore:
         if slam is not None:
             stopped = bool(slam["stop_now"])
         else:  # the commanded speed is forced to zero below; the stand is the true one
-            stopped = (float(np.linalg.norm(hooks.truth_velocity()[:2])) <= trackers[ms.phase].config.stop_speed_mps
-                       and abs(float(hooks.truth_yaw_rate())) <= options.cusp_stop_yaw_rate_radps)
+            stopped = (float(np.linalg.norm(self._truth("truth_velocity")[:2])) <= trackers[ms.phase].config.stop_speed_mps
+                       and abs(float(self._truth("truth_yaw_rate"))) <= options.cusp_stop_yaw_rate_radps)
         # Its own stand count, keyed to this phase's tracker: a path replaced while it waited (an obstacle replan, a
         # resume) starts the count again, and the transport's ms.cusp_stop_ticks is left alone.
         key = (ms.phase, id(trackers[ms.phase]))
@@ -7936,7 +8038,8 @@ class MissionCore:
                 self._observe_failed_request(t, rear, ctx)
                 return SimpleNamespace(hold=True)
             return SimpleNamespace(hold=False)
-        if abs(float(truth_speed)) > 0.05:
+        moving_ = (truth_speed.bound_mps if isinstance(truth_speed, SafetySpeed) else abs(float(truth_speed))) > 0.05
+        if moving_:  # 4d-1: a safety speed (the runner passes the true speed exactly in the simulation)
             p.moving_since = t if p.moving_since is None else p.moving_since
             hooks.require(t - p.moving_since <= 1.0, "planning_wait_moving")
         else:

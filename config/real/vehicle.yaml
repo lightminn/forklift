@@ -55,3 +55,10 @@ steering_control:
   presteer_threshold_rad: 0.02
   straight_threshold_rad: 0.01
   provenance: {source: simulation_settings_on_front_wheel_angle, measured: false, until: S4}
+
+teleop_speed_limit:
+  # The teleop speed cap without SLAM (lead decision 2026-11-11, truth audit 3a): judged on the encoder-measured
+  # speed, never a dead-reckoning pose; MCU expiry stop and e-stop input alive, a person watching. Provisional
+  # until the S5 stopping-distance measurement fixes it (0.2 m/s is the plan's slow teleop figure, section 3.4).
+  mps: 0.2
+  provenance: {source: plan_slow_teleop_figure, measured: false, until: S5}

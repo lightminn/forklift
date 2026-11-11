@@ -40,6 +40,7 @@ def mapping(**over):
         "wheel_rate_limit": {"rad_s": 8.0, "provenance": PROV},
         "steering_control": {"steering_rate_rad_s": 1.0, "creep_threshold_rad": 0.05, "presteer_threshold_rad": 0.02,
                              "straight_threshold_rad": 0.01, "provenance": PROV},
+        "teleop_speed_limit": {"mps": 0.2, "provenance": PROV},
     }
     data.update(over)
     return data
@@ -303,3 +304,12 @@ def test_unequal_sides_round_trip_through_counts(speed, kappa):
         o.update(k * 10_000, 1, cl, cr, d.steering_rad)
     expected = advance_arc(0.0, 0.0, 0.0, d.speed_mps * n * dt, d.curvature_inv_m)
     assert o.pose == pytest.approx(expected, abs=2e-5)
+
+
+def test_the_teleop_speed_limit_is_read_with_its_provenance():
+    """Lead decision 2026-11-11 (truth audit 3a): teleop without SLAM under an encoder-judged cap, provisional to S5."""
+    c = load_real_vehicle(VEHICLE_YAML)
+    assert c.teleop_speed_limit_mps == 0.2
+    assert c.provenance["teleop_speed_limit"]["until"] == "S5" and c.provenance["teleop_speed_limit"]["measured"] is False
+    with pytest.raises(ValueError):
+        real_vehicle_from_mapping(mapping(teleop_speed_limit={"mps": 0.0, "provenance": PROV}), CHASSIS)

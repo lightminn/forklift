@@ -556,8 +556,9 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
     # Moving: keep braking, no plan yet. Stopped means zero command, planar
     # speed and yaw rate, held for 0.1 s -- not the forward speed alone.
     assert "tracking.speed_mps == 0.0" in branch
-    assert "np.linalg.norm(hooks.truth_velocity()[:2])" in branch  # the runner's velocity, as a truth hook
-    assert "hooks.truth_yaw_rate()" in branch  # robot.get_angular_velocity()[2]
+    # the runner's velocity and yaw rate, as truth hooks read through the SLAM-off guard (sim-to-real 4d-1)
+    assert "np.linalg.norm(self._truth('truth_velocity')[:2])" in branch  # (ast.unparse quotes)
+    assert "self._truth('truth_yaw_rate')" in branch  # robot.get_angular_velocity()[2]
     assert "cusp_stop_ticks < cusp_stop_needed" in branch
     assert "replace(tracking, status='braking')" in branch
     # The replan is the active plan everywhere afterwards.

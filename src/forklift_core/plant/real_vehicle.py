@@ -32,7 +32,7 @@ SCHEMA = "real_vehicle/1"
 CURVATURE_EDGE_TOL = 1e-9  # numerical noise at the reachable edge is normalised onto it, nothing more
 FLOAT32_EDGE_ULPS = 2  # float32 steps at each end -- an edge angle sent or read as an mcu-link f32
 _TOP = {"schema", "chassis_model", "wheel_counts", "wheel_radius", "steering_map", "wheel_rate_limit",
-        "steering_control"}
+        "steering_control", "teleop_speed_limit"}
 _STEERING_CONTROL = ("steering_rate_rad_s", "creep_threshold_rad", "presteer_threshold_rad", "straight_threshold_rad")
 _PROV_KEYS = {"source", "measured", "until"}
 
@@ -135,6 +135,7 @@ class RealVehicleConfig:
     provenance: dict
     calibration_id: str  # 16 hex digits of the resolved values; the firmware header carries the same
     steering_control: dict  # host-side q limits (4a' D1): not in the calibration id (the firmware does not read them)
+    teleop_speed_limit_mps: float = 0.0  # teleop cap without SLAM, judged on encoder speed (truth audit 3a)
 
     def resolved_values(self) -> dict:
         return {
@@ -203,9 +204,14 @@ def real_vehicle_from_mapping(data: dict, chassis: dict) -> RealVehicleConfig:
         raise ValueError(f"steering_control must hold {list(_STEERING_CONTROL)} and provenance")
     control = {k: _positive(sc[k], f"steering_control.{k}") for k in _STEERING_CONTROL}
     prov["steering_control"] = _provenance(sc, "steering_control")
-    partial = RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov, "", control)
+    tl = data["teleop_speed_limit"]
+    if not isinstance(tl, dict) or set(tl) != {"mps", "provenance"}:
+        raise ValueError("teleop_speed_limit must hold mps and provenance")
+    teleop = _positive(tl["mps"], "teleop_speed_limit.mps")
+    prov["teleop_speed_limit"] = _provenance(tl, "teleop_speed_limit")
+    partial = RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov, "", control, teleop)
     return RealVehicleConfig(wheelbase, track, radius, tuple(counts), rate, steering, prov,
-                             _calibration_id(partial.resolved_values()), control)
+                             _calibration_id(partial.resolved_values()), control, teleop)
 
 
 def chassis_model_path(path: str | Path) -> Path:

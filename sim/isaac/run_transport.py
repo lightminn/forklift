@@ -32,6 +32,7 @@ from isaac_plant import IsaacPlant  # noqa: E402
 from frame_sync import rgba_of as frame_sync_rgba  # noqa: E402
 
 from forklift_core import determinism
+from forklift_core.safety.truth_access import SafetySpeed  # sim-to-real 4d-1
 
 EXIT_CLEARANCE_M = 0.08
 RUNNER_STARTED_MONO = time.monotonic()  # B-P2c: the process's start, as near as the runner can tell
@@ -7136,6 +7137,8 @@ def drive(S, isaac) -> None:
             write_paths=lambda: (args.output / "paths.json").write_text(record_json(state["paths"], indent=2) + "\n"),
             # M-a1 slice 3b: truth (SimTruth list) and the permission's diagnostics dump.
             truth_speed=lambda: truth_speed, truth_velocity=lambda: velocity,
+            # sim-to-real 4d-1: the safety speed -- the simulation's is the true speed exactly (the real truck's: encoders)
+            safety_speed=lambda: SafetySpeed.exact(truth_speed),
             save_npz=save_npz_at_output,
             # M-a1 slice 3c: the blocked replan's releases, planners and recovery helpers (read when called).
             plan_observation_leg=lambda *a, **k: plan_observation_leg(*a, **k),
@@ -10235,7 +10238,7 @@ def drive(S, isaac) -> None:
                 # Real-time plan D8b: a tick waiting for a plan (asked, still computing, or just taken) stands: none of the
                 # mission's own work below runs, the permission watches, the links, commands and sensors go on.
                 plan_wait_ = core.jobs is not None and core.job_hold(
-                    t, rear, float(np.dot(velocity[:2], forward)), paused_).hold
+                    t, rear, SafetySpeed.exact(float(np.dot(velocity[:2], forward))), paused_).hold  # 4d-1
                 if live is not None and core.commands.status in ("accepted", "preparing"):
                     plan_wait_ = True  # persistent console plan D2: a mission being prepared stands, whatever is pending
                 # Real-time plan D9c: the observe capture runs over control ticks (one render step each, at this tick's
