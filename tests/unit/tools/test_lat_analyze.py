@@ -173,3 +173,9 @@ def test_a_safety_event_survives_an_invalid_run_a_rerun_and_a_baseline():
     runs = {d["run"]: d for d in out["defects"]}
     assert runs["lat_U6_line_2_s1"]["class"] == "dangerous" and runs["lat_U6_line_2_s1"]["invalid"]
     assert runs["lat_B0_line_2_s1"]["baseline_violation"] is True and "lat_r_lat_U6_line_2_s1" not in runs
+
+
+def test_a_completed_arm_without_a_baseline_comparison_is_no_defect():
+    rows = {"lat_S12_aisle_rack_s1": {**crow("S12", "tolerated_no_operating_comparison"), "scene": "aisle_rack",
+                                      "seed": 1}}
+    assert A.conclusions(rows, {"aisle_rack": {"S0": True}}, {})["defects"] == []

@@ -34,6 +34,10 @@ STAND_S = 0.5
 CONTROL_GAP_S = 3 / 120 + 1e-6  # the control record counts as unbroken with gaps up to 3 ticks (low_clearance_report's)
 TIME_FACTOR, TIME_ADD_S, DELIVERY_ADD_CM, ROUNDS_ADD = 1.15, 30.0, 1.0, 1
 SAME_EVENT_WORSE_M = 0.01
+# --determinism-without-layer-timing (a lead's post-result exception, if granted): the layer worker's per-job CPU and
+# wall measurements, in layer_worker.json and latency_injection.layer.pending_at_end only
+LAYER_TIMING = {"compute_s", "compute_cpu_s", "run_ns", "run_delay_ns", "cpu", "submit_t", "done_t", "install_start_t",
+                "install_s", "wait_s", "tick_t"}
 
 
 def _load(name: str, path: Path):
@@ -241,7 +245,7 @@ def conclusions(rows: dict, equivalence: dict, determinism: dict) -> dict:
             continue  # dangerous listed above; a baseline-failed aisle seed reads safety only (3.1, before 4.4)
         if c == "observed_end":
             prio = 2
-        elif c in ("safe_failure", "underexposed", "tolerated_no_operating_comparison"):
+        elif c in ("safe_failure", "underexposed"):  # a completed run without a baseline to compare is no defect
             prio = 3 if r["arm"] in MUST_TOLERATE else 4
         elif c == "operating_degraded":
             prio = 3.5 if r["arm"] in MUST_TOLERATE else 4.5
@@ -315,6 +319,9 @@ def main(argv=None) -> int:
     ap.add_argument("--snap", type=Path, required=True)
     ap.add_argument("--smoke", type=Path, default=None, help="the smoke's out root (aisle_rack's B0/S0 equivalence)")
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--determinism-without-layer-timing", action="store_true",
+                    help="the determinism repeats compared without the layer worker's per-job CPU and wall "
+                         "measurements (a post-result exception the lead grants; off: the registered comparison)")
     a = ap.parse_args(argv)
     lists = _load("lat_lists", HERE / "lat_lists.py")
     low_mod = _load("low_clearance_report", ROOT / "tools/low_clearance_report.py")
@@ -390,6 +397,25 @@ def main(argv=None) -> int:
         base = base if base is not None and not base["invalid"] and "safety" in base else None
         row["cell"] = classify(row, base if name != base_name else None, aisle=row["scene"] == "aisle_rack")
     # equivalence and determinism (4.7): whole runs compared, the injection records left out for S0/L0
+    if a.determinism_without_layer_timing:
+        orig_items = dc._items
+
+        def strip(d):
+            return {k: v for k, v in d.items() if k not in LAYER_TIMING} if isinstance(d, dict) else d
+
+        def items(run):
+            it = orig_items(run)
+            if "layer_worker.json" in it:
+                kind, lines = it["layer_worker.json"]
+                it["layer_worker.json"] = (kind, [[strip(e) for e in doc] for doc in lines])
+            for doc in it.get("result.json", ("json", []))[1]:
+                lay = (doc.get("latency_injection") or {}).get("layer") or {}
+                if isinstance(lay.get("pending_at_end"), dict):
+                    lay["pending_at_end"] = strip(lay["pending_at_end"])
+            return it
+
+        dc._items = items
+
     def cmp(x, y, ignore):
         x, y = eff(x), eff(y)
         if x not in rows or y not in rows or rows[x]["invalid"] or rows[y]["invalid"]:
@@ -417,7 +443,8 @@ def main(argv=None) -> int:
             dc.IGNORE_INJECTION = False
         equivalence["aisle_rack"] = {"S0": bool(eq)}
     rerun_needed = sorted(n for n, r in rows.items() if r["invalid"] and r.get("effective") and not r.get("rerun_of"))
-    out = {"rows": rows, "equivalence": equivalence, "determinism": determinism, "rerun_needed": rerun_needed,
+    out = {"determinism_without_layer_timing": bool(a.determinism_without_layer_timing),
+           "rows": rows, "equivalence": equivalence, "determinism": determinism, "rerun_needed": rerun_needed,
            "to_lead": sorted(n for n, r in rows.items() if r["invalid"] and r.get("rerun_of")),
            "conclusions": conclusions(rows, equivalence, determinism)}
     if a.json is not None:
