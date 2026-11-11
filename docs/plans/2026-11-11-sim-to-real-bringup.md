@@ -195,7 +195,7 @@ K2(확정): **센서는 ROS 컨테이너 안의 어댑터가 Unix 소켓으로 �
 - 명령(적기만):
   ```bash
   cmake -S firmware -B build/mcu -DFW_BOARD=weact_h743 -DARM_GNU_TOOLCHAIN_DIR=<설치 경로> \
-        -DCMAKE_TOOLCHAIN_FILE=firmware/boards/weact_h743/arm-gnu-13.3.cmake
+        -DCMAKE_TOOLCHAIN_FILE=$PWD/firmware/boards/weact_h743/arm-gnu-13.3.cmake   # 절대 경로
   cmake --build build/mcu -j
   STM32_Programmer_CLI -c port=usb1 -w build/mcu/fw.elf -v   # BOOT0 로 들어간 DFU, 열거된 번호 확인
   ```

@@ -1,5 +1,5 @@
-# Host build of the hardware-independent firmware core and its tests.
-# The MCU target build (toolchain, startup, board HAL) is added once the board is fixed.
+# Host build of the hardware-independent firmware core and its tests, or (FW_BOARD set, with
+# that board's toolchain file) the MCU build in boards/<board>/.
 cmake_minimum_required(VERSION 3.16)
 project(forklift_fw C)
 
@@ -7,6 +7,13 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 add_compile_options(-Wall -Wextra -Werror -Wconversion -Wshadow)
+
+set(FW_BOARD "" CACHE STRING "MCU board to cross-build (empty: host build and tests)")
+if(FW_BOARD)
+    enable_language(ASM)
+    add_subdirectory(boards/${FW_BOARD})
+    return()
+endif()
 
 file(GLOB FW_CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/src/*.c)
 add_library(fw_core STATIC ${FW_CORE_SOURCES})
@@ -22,6 +29,15 @@ foreach(test_source ${FW_TESTS})
     target_link_libraries(${test_name} PRIVATE fw_core)
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
+
+# Board logic that does not touch registers (reset cause, clock constants), host-tested.
+add_executable(test_weact_h743_reset_cause
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_reset_cause.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/src/reset_cause.c)
+target_include_directories(test_weact_h743_reset_cause PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
+target_link_libraries(test_weact_h743_reset_cause PRIVATE fw_core)
+add_test(NAME test_weact_h743_reset_cause COMMAND test_weact_h743_reset_cause)
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
     add_executable(link_tool ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
