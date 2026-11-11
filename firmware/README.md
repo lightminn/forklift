@@ -19,6 +19,8 @@
 | `app` | 한 주기 연결: HAL 함수 표(`fw_hal`)를 받아 입력·메시지·출력·SPI·STATE·워치독 순서로 부름 |
 | `tools/link_tool.c` | 호스트 전용 인코드/디코드(C↔Python 교차 시험용) |
 
+차량 값 가운데 바퀴 한 바퀴당 카운트(모터 축 엔코더 × 감속비)·바퀴 속도 상한·조향 기구각 범위는 손으로 적지 않는다. 보드 빌드가 `tools/real_vehicle_header.py --config config/real/vehicle.yaml --out <build>/vehicle_config.h` 로 헤더를 만들어 쓴다. 헤더의 `FW_VEHICLE_CALIBRATION_ID` 는 호스트 `forklift_core.plant.real_vehicle` 설정의 `calibration_id` 와 같아야 한다(실차 이식 계획 P0-6).
+
 보드 HAL 이 지켜야 할 것(비차단, 프레임 단위 송신, 표본별 신선도, LPTIM 두 번 읽기, 독립 워치독)은 설계 문서 3절이다. 실제 하드웨어 값(극성·게인·영점·R_IPROPI·`safe_brake` 등)은 모두 `drive_config` 로 받고 기본값이 없다. 시험의 설정은 합성 값이다.
 
 ## 호스트 빌드·시험

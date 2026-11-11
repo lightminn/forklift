@@ -1,0 +1,42 @@
+# Real-vehicle values for the K6 drive conversion (docs/plans/2026-11-11-sim-to-real-bringup.md P0-6).
+# Read by forklift_core.plant.real_vehicle.load_real_vehicle and tools/real_vehicle_header.py; the
+# firmware header is generated from this file at build time, never written by hand.
+#
+# Only values that belong to the real truck live here. Nominal chassis geometry (wheelbase, track,
+# nominal wheel radius, per-wheel steering limit) is read from the chassis model named below, so it
+# is not written twice. Every entry carries its provenance; "measured: false" values wait for the
+# bring-up steps named in "until" and must not be quoted as measurements (CONTRIBUTING 6).
+schema: real_vehicle/1
+chassis_model: ../../sim/models/dls08_measured/parameters.yaml
+
+wheel_counts:
+  # Quadrature counts per *wheel* revolution, per side. Give exactly one of
+  # {motor_counts_per_rev + gear_ratio} or {counts_per_wheel_rev} (the S2 measurement).
+  left:
+    motor_counts_per_rev: 4096  # MT6701 ABZ 1024 pulses/rev x 4; the chip's programmed resolution is checked in S2
+    gear_ratio: 80.0
+    provenance: {source: user_estimate_2026_11_11, measured: false, until: S2}
+  right:
+    motor_counts_per_rev: 4096
+    gear_ratio: 80.0
+    provenance: {source: user_estimate_2026_11_11, measured: false, until: S2}
+
+wheel_radius:
+  # Effective rolling radius per side; null = the chassis model's nominal radius (provisional).
+  left: null
+  right: null
+  provenance: {source: chassis_model_nominal, measured: false, until: S8}
+
+steering_map:
+  # The MCU steers the mechanism angle q (mcu-link DRIVE/STATE steering_rad, the KTH7801 axis after
+  # abs_axis' linear calibration). The host maps q <-> path curvature about the rear axle.
+  # kind "ideal_bicycle": q is the virtual centre-wheel angle, curvature = tan(q) / wheelbase, over
+  # the range the chassis model's per-wheel limit allows on the inner wheel. Replace with
+  # kind "table" (points: [[q_rad, curvature_inv_m], ...], both strictly increasing) after S2/S8.
+  kind: ideal_bicycle
+  provenance: {source: chassis_model_steering_limit_one_wheel_measured_assigned_to_both, measured: false, until: S2}
+
+wheel_rate_limit:
+  # Operating limit on each driven wheel's rate (rad/s); also the firmware's max_wheel_rad_s.
+  rad_s: 8.0
+  provenance: {source: simulation_assumption_wheel_speed_limit_radps, measured: false, until: S3}
