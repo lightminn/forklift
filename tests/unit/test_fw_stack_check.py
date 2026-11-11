@@ -76,3 +76,15 @@ def test_indirect_call_without_a_rule_fails(tmp_path):
     ci(tmp_path / "a.ci", {"a": (8, "static")}, [("a", "__indirect_call")])
     with pytest.raises(SystemExit, match="indirect"):
         tool.analyse(tmp_path, [["a"]], [])
+
+
+def test_recursion_in_a_function_without_a_call_graph_fails(tmp_path):
+    """Codex B2b review 2: a library function calling itself is recursion, not a 0-byte call."""
+    ci(tmp_path / "a.ci", {"main": (16, "static")}, [("main", "lib_recursive")])
+    binary = {"lib_recursive": ["push\t{r4, lr}", "bne.n\t8000010 <lib_recursive+0x8>",
+                                "bl\t8000000 <lib_recursive>"]}
+    with pytest.raises(SystemExit, match="recursion"):
+        tool.analyse(tmp_path, [["main"]], [], binary=binary)
+    binary = {"lib_leaf": ["push\t{r4, lr}", "bne.n\t8000010 <lib_leaf+0x8>"]}
+    ci(tmp_path / "a.ci", {"main": (16, "static")}, [("main", "lib_leaf")])
+    assert tool.analyse(tmp_path, [["main"]], [], binary=binary)["total"] == 24

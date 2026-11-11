@@ -117,15 +117,18 @@ def binary_frame(name: str, insns: list[str]) -> tuple[int, set[str]]:
         elif re.match(r"(blx|bx)\s+r", ins) and not ins.startswith("bx\tlr") and not re.match(r"bx\s+lr", ins):
             raise SystemExit(f"indirect branch in {name}: {ins}")
         m = CALL.search(ins)
-        if m and m.group(2) != name:
-            callees.add(m.group(2))
+        if m:  # branches inside the function read <name+0x..> and do not match; a bare <name> is a
+            callees.add(m.group(2))  # call or jump to its own start: recursion (Codex B2b review)
     return frame, callees
 
 
 def analyse(build: Path, levels: list[list[str]], indirect: list[str], elf: Path | None = None,
-            objdump: str = "arm-none-eabi-objdump") -> dict:
+            objdump: str = "arm-none-eabi-objdump",
+            binary: dict[str, list[str]] | None = None) -> dict:
+    """binary: the image's functions as disassembly lines (from elf, or given by a test)."""
     size, kind, calls = load(build)
-    binary = disassembly(elf, objdump) if elf else {}
+    if binary is None:
+        binary = disassembly(elf, objdump) if elf else {}
     for title, k in kind.items():
         if "dynamic" in k:
             raise SystemExit(f"dynamic stack frame: {short(title)}")
