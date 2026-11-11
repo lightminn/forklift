@@ -812,10 +812,14 @@ class TeleopBridge:
         the count reverse against the best progress and the steering on every STATE (Codex impl review P2-1)."""
         for smp in self.samples:
             st = smp.state
-            if st.mcu_time_us <= track["last_t"]:
+            # new by the host's receipt, the boot first: a new boot's MCU clock may start below the old one's
+            # (Codex impl re-review P2-1)
+            if smp.host_ns <= track["last_host"]:
                 continue
             if st.boot_id != track["boot"]:
                 return "boot"
+            if st.mcu_time_us <= track["last_t"]:
+                continue
             c = (st.wheel_count_left, st.wheel_count_right)
             why = None
             for w in (0, 1):
@@ -826,7 +830,7 @@ class TeleopBridge:
                     track["best"][w] = max(track["best"][w], prog)
                     if track["best"][w] - prog > ESCAPE_REVERSE_COUNTS:
                         why = why or "wheel_reverse"
-            track["last_c"], track["last_t"] = c, st.mcu_time_us
+            track["last_c"], track["last_t"], track["last_host"] = c, st.mcu_time_us, smp.host_ns
             if d is not None and why is None:
                 q = float(st.steering_rad)
                 if not (math.isfinite(q) and abs(q) <= self.kin.straight_threshold_rad):
@@ -839,11 +843,13 @@ class TeleopBridge:
         """Design 4.3's record after an end: the travel from the escape's start to the stand, or to the general rule
         driving again (the hand-over), or for ESCAPE_SETTLE_S at most."""
         t = self._tail
+        # a stand only from STATEs received after the end, on a valid fresh reading (Codex impl re-review P2-2)
+        after = [s for s in self.samples if s.host_ns > t["end_host"]]
         if self._follow(t) == "boot":
             event = "settle_lost"
         elif applied != 0.0:
             event = "handed_over"
-        elif counts_still(self.samples, self.params):
+        elif self.reading is not None and self.reading.speed.valid and counts_still(after, self.params):
             event = "settled"
         elif now_ns - t["end_ns"] > ESCAPE_SETTLE_S * 1e9:
             event = "settle_timeout"
@@ -922,6 +928,7 @@ class TeleopBridge:
                        "control_gen": a.control_gen, "arm_gen": a.arm_gen, "disconnects": self.host.disconnects,
                        "boot": last.boot_id, "c0": (last.wheel_count_left, last.wheel_count_right),
                        "last_c": (last.wheel_count_left, last.wheel_count_right), "last_t": last.mcu_time_us,
+                       "last_host": self.samples[-1].host_ns,
                        "best": [0, 0], "travel": [0.0, 0.0]}
         self._drop_offer()
         self.q_cmd, self.holding = self.escape["q"], True
@@ -938,7 +945,8 @@ class TeleopBridge:
                          elapsed_s=round((now_ns - e["start_ns"]) / 1e9, 3), steering_rad=e["q"])
         rec["escape_end"] = reason
         self._tail = {"offer_id": e["offer_id"], "boot": e["boot"], "last_c": e["last_c"], "last_t": e["last_t"],
-                      "travel": list(e["travel"]), "end_ns": now_ns}
+                      "last_host": e["last_host"], "travel": list(e["travel"]), "end_ns": now_ns,
+                      "end_host": self.samples[-1].host_ns if self.samples else now_ns}
         if stop:
             if self.arbiter.mode != "STOPPED":
                 self._stop(now_ns, f"escape:{reason}", rec)

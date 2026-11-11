@@ -471,6 +471,55 @@ def test_the_travel_after_the_end_is_recorded_to_the_stand(mcu_kw):
     assert settled[0]["after_end_s"] > 0
 
 
+def _ended(r):
+    while r.bridge.escape is not None:
+        r.cycle(teleop={"speed_ratio": 1.0})
+    return r.bridge.escape_log[-1]
+
+
+def test_a_reboot_with_an_earlier_mcu_clock_after_the_end_is_settle_lost():
+    """Codex impl re-review P2-1: a new boot's STATEs start below the old boot's last MCU time."""
+    r = wall_rig()
+    escaping(r)
+    _ended(r)
+    r.mcu.boot, r.mcu.t_us, r.mcu.mode, r.mcu.gen = 0x7777, 1_000, Mode.DISARMED, 0
+    r.mcu.counts = [0.0, 0.0]
+    for _ in range(40):
+        r.cycle(teleop={"speed_ratio": 1.0, "deadman": False})
+    tails = [e["event"] for e in r.bridge.escape_log if e["event"].startswith("settle")]
+    assert tails == ["settle_lost"], r.bridge.escape_log[-3:]
+
+
+@pytest.mark.parametrize("cut_after", [0, 1, None])  # at the start, after the first drive; at the end
+def test_no_settled_without_a_fresh_stand_seen_after_the_end(cut_after):
+    """Codex impl re-review P2-2: a stand recorded before the end (or a stale reading) never closes the record."""
+    p = rt.load_bridge_params(__import__("pathlib").Path(__file__).resolve().parents[3]
+                              / "config" / "real" / "teleop_bridge.yaml", VEH)
+    mcu = InertialMcu(accel=p.wheel_accel_mps2)
+    r = wall_rig(mcu)
+    c0 = counts(r)
+    escaping(r)
+    on_bytes = r.host.on_bytes
+    if cut_after is not None:
+        for _ in range(cut_after):
+            r.cycle(teleop={"speed_ratio": 1.0})
+        r.host.on_bytes = lambda data, now: []  # the reception is cut
+        for _ in range(10):
+            r.cycle(teleop={"speed_ratio": 1.0})
+        assert r.bridge.escape is None  # the stale speed stopped it
+    else:
+        _ended(r)
+        r.host.on_bytes = lambda data, now: []
+    for _ in range(10):
+        r.cycle(teleop={"speed_ratio": 1.0, "deadman": False})
+    assert not [e for e in r.bridge.escape_log if e["event"].startswith("settle")], r.bridge.escape_log[-2:]
+    r.host.on_bytes = on_bytes
+    c1 = stand_after(r, 200, deadman=False)
+    settled = [e for e in r.bridge.escape_log if e["event"] == "settled"]
+    assert len(settled) == 1
+    assert max(settled[0]["travel_m"]) == pytest.approx(travel_m(c0, c1), abs=1e-4)
+
+
 def test_a_hand_over_to_the_general_rule_is_recorded():
     p = rt.load_bridge_params(__import__("pathlib").Path(__file__).resolve().parents[3]
                               / "config" / "real" / "teleop_bridge.yaml", VEH)
