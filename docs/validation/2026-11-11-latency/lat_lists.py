@@ -83,7 +83,7 @@ SOCK_TAIL = "/live/epoch_999/sock/slam.sock"  # the live launcher's longest sock
 
 
 def b_entry(snap: str, out: str, name: str, d: int) -> dict:
-    run = f"{out}/{name}/{name}"
+    run = f"{out}/{name}/s"  # short: the session's SLAM socket path sits below it (bundle output: {out}/{name}/bundle)
     if len((run + SOCK_TAIL).encode()) > 107:
         raise SystemExit(f"{run}: the SLAM socket path would pass 107 bytes -- a shorter OUT")
     return {"name": name, "argv": ["bash", f"{snap}/{B_WRAPPER}", run], "cwd": snap,

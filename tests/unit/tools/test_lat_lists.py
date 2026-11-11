@@ -48,7 +48,19 @@ def test_b_is_three_rounds_of_five_delays_the_second_reversed():
     assert jobs[0]["env"]["SET"] == "far" and jobs[0]["env"]["LIDAR_CAST"] == "fast"
 
 
-def test_reruns_take_new_names(tmp_path):
+@pytest.fixture
+def short_tmp():
+    """A short root under /tmp (a B run's SLAM socket path must stay within 107 bytes)."""
+    import shutil
+    import tempfile
+
+    root = Path(tempfile.mkdtemp(dir="/tmp", prefix="ll"))
+    yield root
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_reruns_take_new_names(short_tmp):
+    tmp_path = short_tmp
     assert L.main(["rerun", "/s", str(tmp_path), "lat_U6_line_2_s2", "lat_b03_d50_r1"]) == 0
     (row,) = [json.loads(x) for x in (tmp_path / "RUNS_rerun.jsonl").read_text().splitlines()]
     assert row["name"] == "lat_r_lat_U6_line_2_s2" and row["env"]["LAT_ARM"] == "U6"
@@ -59,6 +71,6 @@ def test_reruns_take_new_names(tmp_path):
 
 def test_a_b_out_too_long_for_the_slam_socket_is_refused():
     with pytest.raises(SystemExit):
-        L.b_entry("/s", "/home/projects/forklift/test_runs/latency/smoke2_d32554f6", "lat_sm_B50", 50)
+        L.b_entry("/s", "/home/projects/forklift/test_runs/latency/smoke2_d32554f6/a_much_longer_folder", "lat_sm_B50", 50)
     assert L.b_entry("/s", "/home/projects/forklift/test_runs/lat/sm", "lat_sm_B50", 50)
     L.b_jobs("/s", "/home/projects/forklift/test_runs/lat/b_99d08772")  # the main B root fits
