@@ -90,6 +90,7 @@ class _Fake:
         for name in ("_occupied_state", "_occupied_dump", "_occupied_write", "_candidate_dump",
                      "_occupied_new_mission"):
             setattr(self, name, getattr(MissionCore, name).__get__(self))
+        self._npz_value, self._npz_flag = MissionCore._npz_value, MissionCore._npz_flag  # static (4d-2a)
 
 
 def test_a_blocked_candidate_is_dumped_with_the_permits_own_cells_and_listed():

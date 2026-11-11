@@ -571,3 +571,51 @@ def test_an_obstacle_replan_during_a_reapproach_takes_the_capped_curvature_too(t
     w.core.transport_replan(Pose2D(1.0, 2.0, 0.0), KappaConfig(curvature_limit_inv_m=0.27), None)
     _, args, _ = [c for c in w.calls if c[0] == "plan_docking_reapproach"][0]
     assert args[3] == KappaConfig(curvature_limit_inv_m=0.24)
+
+
+def _real_docking(tmp_path, monkeypatch, grid_planning=True):
+    """Sim-to-real 4d-2a: the delivery match through the real truck's fail-closed hooks -- no truth, no stage."""
+    import forklift_core.planning.grid_collision as gc
+    from forklift_core.mission.hook_contract import fail_closed_hooks
+
+    class Checker:
+        def __init__(self, occupancy, footprint, bounds):
+            pass
+
+        def free(self, pose):
+            return True
+
+    monkeypatch.setattr(gc, "GridFootprintChecker", Checker)
+    w = docking_world(tmp_path, monkeypatch)
+    saved = {}
+
+    def save_npz(name, **arrays):
+        saved[name] = arrays
+
+    w.core.hooks.save_npz = save_npz
+    w.core.hooks.grid_kwargs = lambda kind=None, **k: {"occupancy": "DOCKING_GRID", "deadline": None}
+    w.core.hooks.stage = lambda: (_ for _ in ()).throw(AssertionError("stage read on the real truck"))
+    w.core.options.real_vehicle, w.core.options.grid_planning = True, grid_planning
+    w.core.hooks = fail_closed_hooks(w.core.hooks)
+    return w, saved
+
+
+def test_the_real_truck_docks_with_every_truth_field_unjudgeable(tmp_path, monkeypatch):
+    w, saved = _real_docking(tmp_path, monkeypatch)
+    w.core.dock_at_delivery_straight(12.0)
+    d = w.slam["docking"]
+    assert d["accepted_any"] is True and (d["status"], d["round"]) == ("armed", 2)  # the docking goes on
+    assert d["goal_error_vs_truth"] is None and d["slam_goal_error_vs_truth"] is None
+    r = d["rounds"][0]
+    assert r["goal_error_vs_truth"] is None and r["estimate_vs_truth_at_match"] is None
+    assert r["estimate_error_truck_frame"] is None and r["goal_error_line_frame"] is None
+    npz = saved["delivery_match_1.npz"]
+    assert npz["truth_rear"].shape == (0,) and npz["truth_rear_unjudgeable"] is True
+
+
+def test_the_real_truck_refuses_the_docking_dry_run_on_true_obstacles(tmp_path, monkeypatch):
+    from forklift_core.safety.truth_access import TruthAccessViolation
+
+    w, _ = _real_docking(tmp_path, monkeypatch, grid_planning=False)
+    with pytest.raises(TruthAccessViolation):
+        w.core.dock_at_delivery_straight(12.0)

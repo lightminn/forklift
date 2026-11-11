@@ -627,7 +627,7 @@ class MissionCore:
             # Insertion-axis yaw against the true pallet (fork axis
             # along the pallet x axis either way round).
             relative_yaw = hooks.truth_relative_yaw()
-            state["insertion_truth_yaw_rad"] = float(
+            state["insertion_truth_yaw_rad"] = None if relative_yaw is None else float(  # 4d-2a: None = unjudgeable
                 math.atan2(math.sin(2 * relative_yaw), math.cos(2 * relative_yaw)) / 2
             )
             if slam is not None:
@@ -693,7 +693,7 @@ class MissionCore:
                 return True
         if ms.phase == "home_settle" and self.commands.work_elapsed(ms.phase_started, t) > 1.0:
             truth_rear, home = hooks.truth_rear(), self.options.home_rear
-            state["return_home_error"] = {
+            state["return_home_error"] = None if truth_rear is None else {  # 4d-2a: None = unjudgeable
                 "position_m": float(
                     np.hypot(
                         truth_rear[0] - home.x_m,
@@ -1485,9 +1485,14 @@ class MissionCore:
                 f"obstacle_dump_{obstacle['dumps']}.npz",
                 state=snap_.state, free_stamp=snap_.free_stamp,
                 origin=[snap_.origin_x_m, snap_.origin_y_m], res=snap_.resolution_m,
-                t=t, rear=np.asarray(rear, dtype=float), truth_rear=np.asarray(truth_rear, dtype=float),
+                t=t, rear=np.asarray(rear, dtype=float), truth_rear=self._npz_value(truth_rear),
+                **self._npz_flag("truth_rear", truth_rear),
                 kappa=kappa, direction=direction, loaded=loaded,
-                requested=requested_speed, truth_speed=truth_speed, phase=ms.phase, why=why,
+                requested=requested_speed, phase=ms.phase, why=why,
+                # (4d-2a: the real truck's speed here is the measured safety speed, not truth -- kept apart)
+                truth_speed=self._npz_value(None) if self._real_vehicle() else truth_speed,
+                **({"truth_speed_unjudgeable": True, "safety_speed_mps": speed_.signed_mps,
+                    "safety_speed_bound_mps": speed_.bound_mps} if self._real_vehicle() else {}),
                 leg=(trackers[ms.phase].leg_ahead()[0] if ms.phase in trackers else np.zeros((0, 3))),
                 correction=np.asarray(obstacle["applied"], dtype=float), version=obstacle["version"],
                 stamp=snap_.stamp_s,
@@ -1599,13 +1604,13 @@ class MissionCore:
             trace.setdefault("first_zero_s", t)
             trace.setdefault("reason", why)
             trace.setdefault("speed_at_zero_mps", speed_.bound_mps)
-            trace.setdefault("rear_at_zero", [float(v) for v in truth_rear])
+            trace.setdefault("rear_at_zero", self._pose_list(truth_rear))
             # The stop is the start of the final standing: a slow instant followed by
             # motion is not it (Codex stage-1 3rd P2), so moving again clears it.
             if speed_.standing(0.01):
                 if "stopped_s" not in trace:
                     trace["stopped_s"] = t
-                    trace["rear_stopped"] = [float(v) for v in truth_rear]
+                    trace["rear_stopped"] = self._pose_list(truth_rear)
             elif "stopped_s" in trace:
                 trace.setdefault("interrupted_stops_s", []).append(trace.pop("stopped_s"))
                 trace.pop("rear_stopped", None)
@@ -3932,7 +3937,8 @@ class MissionCore:
         hooks.write_paths()
         hooks.show_path(paths["approach"], "Approach", (0.05, 0.45, 1.0))
         hooks.show_path(paths["transport"], "Transport", (1.0, 0.65, 0.04))
-        hooks.export_scene()
+        if not self._real_vehicle():  # sim-to-real 4d-2a: a simulation export, none on the real truck
+            hooks.export_scene()
         hooks.echo("PLANNED " + record_json(
                 {
                     k: {
@@ -4219,7 +4225,7 @@ class MissionCore:
                         rear_estimate=[float(v) for v in rear_est_],
                         theta_e_deg=bottom_deck_evidence.stand_angle_deg(cam_, target_b_, face),
                         range_m=float(np.linalg.norm(cam_ - np.asarray(target_b_.centre_xy))),
-                        truth_rear=[float(v) for v in hooks.truth_rear()])
+                        truth_rear=self._pose_list(hooks.truth_rear()))
             if not arrived_:
                 rec_.update(verdict="unobserved", reason="arrival")
             else:
@@ -4238,7 +4244,8 @@ class MissionCore:
                                                    target_b_.support_z_m]),
                            target_map=np.asarray([*deck_["target"]["centre_xy"], deck_["target"]["model_yaw_rad"]]),
                            rear_estimate=np.asarray(rec_["rear_estimate"], dtype=float),
-                           truth_rear=np.asarray(rec_["truth_rear"], dtype=float),
+                           truth_rear=self._npz_value(rec_["truth_rear"]),
+                           **self._npz_flag("truth_rear", rec_["truth_rear"]),
                            face=face, axis=axis_, shape=deck_["target"]["shape"],
                            params=json.dumps(asdict(options.bottom_deck_params)), verdict=rec_["verdict"],
                            reason=rec_["reason"], stamp_ns=int(scene_.stamp_ns))
@@ -4429,6 +4436,8 @@ class MissionCore:
             xy_ = truth_()
             if xy_ is not None:
                 check_["truth"] = [float(xy_[0]), float(xy_[1])]
+            elif self._real_vehicle():
+                check_["truth"] = None  # 4d-2a: unjudgeable is recorded, not left out
         record_["checks"].append(check_)
         if not check_["inside"]:
             record_["refused"] = check_
@@ -5333,7 +5342,8 @@ class MissionCore:
                         now_s, slam_rear(now_s), hooks.loaded())
             # The accepted ground-truth pose only validated the
             # capture; control takes the estimate at this instant.
-            truth_rear_capture = [float(v) for v in rear]
+            # (4d-2a: the real truck's capture pose is an estimate, not truth -- none recorded as truth)
+            truth_rear_capture = None if self._real_vehicle() else [float(v) for v in rear]
             rear = slam_rear(now_s)
             rear_stamp = now_s
             yaw = float(rear[2])
@@ -6153,6 +6163,25 @@ class MissionCore:
             raise TruthAccessViolation(name)
         return getattr(self.hooks, name)()
 
+    def _stage(self):
+        """The simulation's stage for the path displays; the real truck has none (4d-2a: not even read)."""
+        return None if self._real_vehicle() else self.hooks.stage()
+
+    @staticmethod
+    def _pose_list(value):
+        """An evaluation pose for a JSON record: None (unjudgeable, the real truck) stays None."""
+        return None if value is None else [float(v) for v in value]
+
+    @staticmethod
+    def _npz_value(value):
+        """An evaluation value for an NPZ record: an empty array for None (np.asarray(None, float) is a NaN scalar,
+        not 'unjudgeable'); the flag beside it is ``_npz_flag``."""
+        return np.zeros(0) if value is None else np.asarray(value, dtype=float)
+
+    @staticmethod
+    def _npz_flag(name: str, value) -> dict:
+        return {f"{name}_unjudgeable": True} if value is None else {}
+
     def safety_speed(self) -> SafetySpeed:
         """The speed a safety decision reads (4d-1): the hooks' ``safety_speed`` when given (the real truck's
         encoder-based one), else the true speed exactly (the simulation's, and a test's hooks without it)."""
@@ -6439,7 +6468,9 @@ class MissionCore:
         loaded = self.hooks.loaded()
         ms = self.ms
         obstacle = self.obstacle
-        signed_speed = self.hooks.signed_speed()
+        real_ = self._real_vehicle()
+        # (4d-2a: the real truck's arc reads the safety speed, never the tracker's -- truth audit 3a)
+        signed_speed = None if real_ else self.hooks.signed_speed()
         trackers = self.trackers
         if obstacle is None:
             return True, None
@@ -6450,10 +6481,27 @@ class MissionCore:
         pose_ = tuple(float(v) for v in rear_now)
         kappa_ = held_kappa()
         path_ = layer_.check_candidate(leg_, current_pose=pose_, direction=dir_, loaded=loaded)
-        arc_ = layer_.check_arc_candidate(
-            current_pose=pose_, curvature_inv_m=kappa_, direction=dir_, loaded=loaded,
-            cap_mps=max(abs(float(command_mps)), abs(float(signed_speed))),
-        )
+        if not real_:
+            arc_ = layer_.check_arc_candidate(
+                current_pose=pose_, curvature_inv_m=kappa_, direction=dir_, loaded=loaded,
+                cap_mps=max(abs(float(command_mps)), abs(float(signed_speed))),
+            )
+        else:
+            speed_ = self.safety_speed()
+            if self._speed_hold(speed_):
+                return False, {"time_s": now_s, "why": "safety_speed_invalid"}
+            # every direction the truck may move in (the leg's, the measured speed's, the command's), at the largest
+            # of the speeds it may have (4d-1's rule): any blocked arc keeps the stop with the obstacle side
+            dirs_ = [dir_]
+            for d_ in (speed_.directions if speed_.bound_mps > 0.0 else ()):
+                if d_ not in dirs_:
+                    dirs_.append(d_)
+            if float(command_mps) != 0.0 and (1 if command_mps > 0 else -1) not in dirs_:
+                dirs_.append(1 if command_mps > 0 else -1)
+            cap_ = max(abs(float(command_mps)), speed_.bound_mps)
+            arcs_ = [layer_.check_arc_candidate(current_pose=pose_, curvature_inv_m=kappa_, direction=d_,
+                                                loaded=loaded, cap_mps=cap_) for d_ in dirs_]
+            arc_ = next((a_ for a_ in arcs_ if a_.blocked is not None), arcs_[0])
         timeout_ = layer_.permission.config.sensor_timeout_s
         silent_ = sorted(name_ for name_, last_ in layer_.last_scan_s.items() if now_s - last_ > timeout_)
         record_ = {
@@ -6845,7 +6893,7 @@ class MissionCore:
         obstacle = self.obstacle
         paths = self.paths
         slam = self.slam
-        stage = self.hooks.stage()
+        stage = self._stage()
         state = self.state
         trackers = self.trackers
         state.setdefault("paths_replaced", []).append(
@@ -7108,12 +7156,16 @@ class MissionCore:
         laser_mount = self.hooks.laser_mount()  # bound only under SLAM in run()
         move_withdraw = self.move_withdraw
         ms = self.ms
+        if self._real_vehicle() and not grid_planning:
+            # 4d-2a (truth audit: conditional CONTROL): the dry run without the grid checks against the scene's true
+            # obstacles; the real truck plans on the grid only
+            raise TruthAccessViolation("truth_obstacles (grid_planning off)")
         obstacles = self.hooks.truth_obstacles()
         paths = self.paths
         rear = self.hooks.rear()  # the runner's, read when called
         scenario = self.options.scenario
         slam = self.slam
-        stage = self.hooks.stage()
+        stage = self._stage()
         start_docking_retry = self.start_docking_retry
         state = self.state
         straight_from_pose = self.hooks.straight_from_pose
@@ -7155,7 +7207,8 @@ class MissionCore:
                 rear_from_laser=rear_from_laser, estimate_rear=estimate, delivery_rear=seed, **acceptance_kw)},
                 t, rear, self._applied_now(), ctx={"estimate": estimate, "live": live, "rear_from_laser": rear_from_laser,
                                                    "reference": reference, "seed": seed, "seeded": seeded,
-                                                   "truth_rear": tuple(float(v) for v in truth_rear)})
+                                                   "truth_rear": (None if truth_rear is None
+                                                                  else tuple(float(v) for v in truth_rear))})
             return
         if answer is not None:
             asked, result, answer_wall_s = answer
@@ -7180,7 +7233,8 @@ class MissionCore:
                                           "start_reasons": [why for _ok, why, _q in result.starts]}
             result = _refused_degenerate(result)
         # Evaluation only: where the delivery pose really is in the estimate frame.
-        expected = compose(estimate, compose(invert(tuple(truth_rear)), reference))
+        # (4d-2a: no truth on the real truck -- every evaluation field below is None, the docking goes on)
+        expected = None if truth_rear is None else compose(estimate, compose(invert(tuple(truth_rear)), reference))
         docking.update(
             match_wall_s=time.monotonic() - match_start if answer is None else answer_wall_s,
             live_beams=int(len(live)),
@@ -7190,13 +7244,13 @@ class MissionCore:
             starts=[[ok, why, list(q)] for ok, why, q in result.starts],
             start_details=[dict(d) for d in result.start_details],  # iterations, cycle, gates (2026-10-13)
             goal_error_vs_truth=None
-            if result.goal_estimate is None
+            if result.goal_estimate is None or expected is None
             else [
                 float(result.goal_estimate[0] - expected[0]),
                 float(result.goal_estimate[1] - expected[1]),
                 float(math.atan2(math.sin(result.goal_estimate[2] - expected[2]), math.cos(result.goal_estimate[2] - expected[2]))),
             ],
-            slam_goal_error_vs_truth=[
+            slam_goal_error_vs_truth=None if expected is None else [
                 float(delivery[0] - expected[0]),
                 float(delivery[1] - expected[1]),
             ],
@@ -7208,7 +7262,9 @@ class MissionCore:
             self.hooks.save_npz(
                 f"delivery_match_{len(docking.get('rounds', [])) + 1}.npz",
                 reference=slam["reference_points"], live=live, rear_from_laser=rear_from_laser,
-                estimate=estimate, seed=seed, reference_rear=reference, truth_rear=tuple(truth_rear),
+                estimate=estimate, seed=seed, reference_rear=reference,
+                truth_rear=self._npz_value(truth_rear) if truth_rear is None else tuple(truth_rear),
+                **self._npz_flag("truth_rear", truth_rear),
             )
         except OSError as exc:
             docking.setdefault("match_input_errors", []).append(f"{type(exc).__name__}: {exc}")
@@ -7229,7 +7285,7 @@ class MissionCore:
                 "accepted": result.accepted,
                 "reason": result.reason,
                 "goal_error_vs_truth": docking["goal_error_vs_truth"],
-                "estimate_vs_truth_at_match": [
+                "estimate_vs_truth_at_match": None if truth_rear is None else [
                     float(estimate[0] - truth_rear[0]),
                     float(estimate[1] - truth_rear[1]),
                 ],
@@ -7245,9 +7301,11 @@ class MissionCore:
             # frame (along, lateral, yaw) rather than world dx/dy.
             entry_ = docking["rounds"][-1]
             entry_.update(time_s=t, match_wall_s=docking["match_wall_s"], retry_match=retry_match,
-                          estimate_error_truck_frame=list(compose(invert(tuple(truth_rear)), estimate)))
+                          estimate_error_truck_frame=(None if truth_rear is None
+                                                      else list(compose(invert(tuple(truth_rear)), estimate))))
             if result.goal_estimate is not None:
-                entry_["goal_error_line_frame"] = list(compose(invert(expected), tuple(result.goal_estimate)))
+                entry_["goal_error_line_frame"] = (None if expected is None  # 4d-2a: unjudgeable, kept as null
+                                                   else list(compose(invert(expected), tuple(result.goal_estimate))))
         # docs/plans/2026-11-04-line2-delivery-robustness.md D1: a first non-retry round refused by degenerate at all
         # of its starts goes on to the round-2 stop on the SLAM goal instead of the whole straight (off: as before)
         degenerate_continue_ = getattr(options, "docking_degenerate_continue", "off") == "on"
@@ -7566,7 +7624,7 @@ class MissionCore:
         slam = self.slam
         slam_odom_base = self.hooks.slam_odom_base
         slam_rear = self.hooks.slam_rear
-        stage = self.hooks.stage()  # the runner's, read when called
+        stage = self._stage()  # the runner's, read when called
         state = self.state
         trackers = self.trackers
         travel_config = self.options.travel_config
@@ -7899,7 +7957,7 @@ class MissionCore:
         hooks.write_paths()
         trackers[leg] = RearAxlePathTracker(replanned.poses, replanned.directions, replanned.curvatures_inv_m,
                                             trackers[leg].config)
-        hooks.add_path_display(hooks.stage(), replanned, "Transport" if leg == "transport" else "Return",
+        hooks.add_path_display(self._stage(), replanned, "Transport" if leg == "transport" else "Return",
                                (1.0, 0.65, 0.04) if leg == "transport" else (0.55, 0.2, 0.85))
         if leg == ms.phase:
             ms.phase_started = p.t
@@ -7973,7 +8031,7 @@ class MissionCore:
         runs could not be told apart from the synchronous ones without it): the control and true rear poses, the
         applied correction, the SLAM mode and hold count."""
         slam = self.slam
-        return {"rear": [float(v) for v in rear], "truth_rear": [float(v) for v in self.hooks.truth_rear()],
+        return {"rear": [float(v) for v in rear], "truth_rear": self._pose_list(self.hooks.truth_rear()),
                 "applied": None if applied is None else [float(v) for v in applied],
                 "mode": slam["tracker"].mode if slam is not None else None, "hold": self.hold_count()}
 
@@ -8265,8 +8323,8 @@ class MissionCore:
         """Plan 2.4 (simulation): the largest one-tick change of control minus truth since the current gear leg began."""
         slam = self.slam
         since_ = self.scene_correction.get("since_s")
-        if slam is None or since_ is None or not slam.get("control"):
-            return None
+        if slam is None or since_ is None or not slam.get("control") or self._real_vehicle():
+            return None  # (4d-2a: the real truck's control rows carry no truth -- not a zero jump)
         best_, at_, prev_ = 0.0, None, None
         for row in slam["control"]:
             if row[0] < since_ or len(row) < 7:
@@ -8417,7 +8475,8 @@ class MissionCore:
             name, state=snap_.state, free_stamp=snap_.free_stamp, origin=[snap_.origin_x_m, snap_.origin_y_m],
             res=snap_.resolution_m, stamp=snap_.stamp_s, t=t, phase=ms.phase, kind=kind,
             mission_id=str(self.commands.mission_id), rear=np.asarray(rear, dtype=float),
-            truth_rear=np.asarray(truth_rear, dtype=float), correction=np.asarray(obstacle["applied"], dtype=float),
+            truth_rear=self._npz_value(truth_rear), correction=np.asarray(obstacle["applied"], dtype=float),
+            **self._npz_flag("truth_rear", truth_rear),
             version=obstacle["version"], blocked_cells=np.asarray(blocked_cells, dtype=np.int64).reshape(-1, 2),
             path_blocked_cells=np.asarray(path_blocked_cells, dtype=np.int64).reshape(-1, 2), **fields)
 
@@ -9689,7 +9748,7 @@ class MissionCore:
         obstacle = self.obstacle
         paths = self.paths
         pocket = self.pocket
-        stage = self.hooks.stage()  # the runner's, read when called
+        stage = self._stage()  # the runner's, read when called
         state = self.state
         trackers = self.trackers
         revision_ = near["path_revision"] + 1

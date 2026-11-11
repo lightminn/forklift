@@ -961,7 +961,8 @@ def test_s4c3_stage_one_redraws_a_refused_near_capture_before_ending() -> None:
     moved = CORE.read_text()  # the capture moved to the mission core (M-a1 slice 4b-i)
     sample = moved.index('attempt["capture_control"] = {')
     assert moved.index('attempt["slam_error"] = slam_error()') < sample
-    assert moved.index("truth_rear_capture = [float(v) for v in rear]") < moved.index(
+    # (4d-2a: the real truck records no capture truth -- the simulation's line is kept after the guard)
+    assert moved.index("truth_rear_capture = None if self._real_vehicle() else [float(v) for v in rear]") < moved.index(
         "rear = slam_rear(now_s)", moved.index("truth_rear_capture")
     )
     # The correction trigger and the check measure the same distance.

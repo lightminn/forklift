@@ -365,3 +365,20 @@ def test_both_release_paths_record_the_failed_plan():
 
     source = inspect.getsource(core)
     assert source.count("failed_plan=failed_plan_record(replanned)") == 2
+
+
+def test_the_real_truck_takes_a_worker_release_plan_without_reading_the_stage():
+    """Sim-to-real 4d-2a (Codex impl review P2-1): the async release's adoption shows the path with no stage."""
+    from forklift_core.mission.hook_contract import fail_closed_hooks
+
+    w = World(phase="return_home")
+    w.hooks.stage = lambda: (_ for _ in ()).throw(AssertionError("stage read on the real truck"))
+    w.hooks.wall = lambda: 5.0
+    shown = []
+    w.hooks.add_path_display = lambda stage, path, label, color: shown.append((stage, label))
+    w.core.options.real_vehicle = True
+    w.core.hooks = fail_closed_hooks(w.hooks)
+    w.core._refresh_for_new_leg = lambda t, rear: None  # noqa: SLF001  (not under test)
+    p = SimpleNamespace(ctx={"need": {"leg": "return_home", "event": {}}}, t=30.0, wall=4.0)
+    w.core._release_finish(p, {"result": leg(5.0, 3.0)}, 31.0, w.rear)  # noqa: SLF001
+    assert shown == [(None, "Return")] and w.core.paths["return_home"].length_m == 3.0

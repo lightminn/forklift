@@ -259,3 +259,85 @@ def test_rolling_back_on_a_rearward_command_into_a_block_holds_through_the_assem
     res = c.assemble_command(1.0, 0.01, out.requested_speed, 0.0, 0.0, np.zeros(2), False, out.obstacle_hold, False,
                              False, False)
     assert res.drive.speed_mps == 0.0  # (without the obstacle switch: no slew, no command_speed record)
+
+
+# --- 4d-2a: evaluation values and the cusp arc on the real truck ---
+
+def test_unjudgeable_values_are_recorded_as_such():
+    assert MissionCore._pose_list(None) is None and MissionCore._pose_list((1, 2.5, 3)) == [1.0, 2.5, 3.0]
+    assert MissionCore._npz_value(None).shape == (0,)
+    np.testing.assert_array_equal(MissionCore._npz_value((1, 2, 3)), [1.0, 2.0, 3.0])
+    assert MissionCore._npz_flag("truth_rear", None) == {"truth_rear_unjudgeable": True}
+    assert MissionCore._npz_flag("truth_rear", (1, 2, 3)) == {}
+
+
+def test_the_real_truck_reads_no_stage_and_no_control_truth_jump():
+    read = []
+    c = core(real=True, hooks=SimpleNamespace(stage=lambda: read.append("stage")))
+    assert c._stage() is None and read == []  # noqa: SLF001
+    c.slam = {"control": [[1.0, 0, 0, 0, 0, 0, 0]]}
+    c.scene_correction = {"since_s": 0.0}
+    assert c._scene_control_jump() is None  # noqa: SLF001  not a zero jump
+    s = core(hooks=SimpleNamespace(stage=lambda: "STAGE"))
+    assert s._stage() == "STAGE"  # noqa: SLF001
+
+
+class _ArcLayer:
+    def __init__(self, blocked_direction=None):
+        self.snapshot = object()
+        self.blocked_direction = blocked_direction
+        self.arcs = []
+        self.permission = SimpleNamespace(config=SimpleNamespace(sensor_timeout_s=0.5))
+        self.last_scan_s = {"lidar": 10.0}
+
+    def check_candidate(self, leg, **k):
+        return SimpleNamespace(blocked=None, verified_m=1.0)
+
+    def check_arc_candidate(self, *, direction, cap_mps, **k):
+        self.arcs.append((direction, cap_mps))
+        return SimpleNamespace(blocked="occupied" if direction == self.blocked_direction else None, verified_m=1.0)
+
+
+def cusp_core(speed, *, real=True, blocked=None, signed=0.3):
+    layer = _ArcLayer(blocked)
+    hooks = SimpleNamespace(held_kappa=lambda: 0.0, loaded=lambda: False, safety_speed=lambda: speed,
+                            signed_speed=lambda: signed)
+    c, _ = permission_core(speed)
+    c.hooks = hooks
+    c.options.real_vehicle = real
+    c.obstacle = {"layer": layer}
+    return c, layer
+
+
+def test_the_simulation_cusp_arc_is_unchanged():
+    c, layer = cusp_core(SafetySpeed.exact(-0.3), real=False, signed=-0.3)
+    owned, record = c.cusp_ownership(10.0, (0.0, 0.0, 0.0), 0.1)
+    assert owned and layer.arcs == [(1, 0.3)]  # the leg's direction at max(|command|, |signed|)
+
+
+def test_the_real_cusp_arc_checks_every_possible_direction_at_the_safety_bound():
+    c, layer = cusp_core(SafetySpeed(-0.2, 0.2, (-1,)), blocked=-1, signed=0.0)
+    owned, record = c.cusp_ownership(10.0, (0.0, 0.0, 0.0), 0.1)
+    assert not owned and record["arc"] == "occupied"
+    assert layer.arcs == [(1, 0.2), (-1, 0.2)]  # never the tracker's speed (0.0 here)
+
+
+def test_the_real_cusp_arc_stops_on_an_invalid_speed():
+    c, layer = cusp_core(SafetySpeed(0.0, 0.0, (1,), valid=False))
+    owned, record = c.cusp_ownership(10.0, (0.0, 0.0, 0.0), 0.0)
+    assert not owned and record["why"] == "safety_speed_invalid" and layer.arcs == []
+
+
+def test_the_real_obstacle_dump_keeps_the_measured_speed_apart_from_truth():
+    """4d-2a (Codex impl review P2-3): the dump's truth_speed is unjudgeable; the safety speed has its own fields."""
+    saved = {}
+    c, layer = permission_core(SafetySpeed(0.1, 0.12, (1,)), blocked=1)
+    layer.snapshot = SimpleNamespace(state=np.zeros((2, 2)), free_stamp=np.zeros((2, 2)), origin_x_m=0.0,
+                                     origin_y_m=0.0, resolution_m=0.05, stamp_s=9.9)
+    c.hooks.save_npz = lambda name, **arrays: saved.setdefault(name, arrays)
+    c.hooks.truth_rear = lambda: None  # the real truck's evaluation hook
+    c.permission(10.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    dump = saved["obstacle_dump_1.npz"]
+    assert dump["truth_speed"].shape == (0,) and dump["truth_speed_unjudgeable"] is True
+    assert dump["safety_speed_mps"] == 0.1 and dump["safety_speed_bound_mps"] == 0.12
+    assert dump["truth_rear"].shape == (0,) and dump["truth_rear_unjudgeable"] is True
