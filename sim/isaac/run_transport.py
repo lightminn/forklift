@@ -28,6 +28,7 @@ import numpy as np
 if str(Path(__file__).resolve().parent) not in sys.path:  # run through runpy or imported: its sibling modules too
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 from frame_sync import FrameSync  # noqa: E402
+from isaac_plant import IsaacPlant  # noqa: E402
 from frame_sync import rgba_of as frame_sync_rgba  # noqa: E402
 
 from forklift_core import determinism
@@ -6202,6 +6203,10 @@ def drive(S, isaac) -> None:
             far_runtime = RecordingProxy(far_runtime, "FarRecognition", boundary,
                                          hash_only_requests={"drive_frame", "stop"},
                                          watches={"drive_frame": far_watch_, "stop": far_watch_} if far_watch_ else None)
+    # Sim-to-real P0-4 4a: the actuation calls go through one object made from the robot as wrapped above (the
+    # record sees the same Vehicle/Controller calls). Its signature is temporary; the contract shared with the
+    # real-vehicle port is fixed in step 4a'.
+    plant = IsaacPlant(robot, isaac.action, wheels, steers, lift_index)
     state["phase"] = "planning"
     # docs/plans/2026-11-01-standstill-wheel-hold.md S1/S0: made here, after the binding prologue, from the arguments (not setup values), so a
     # setup recorded before them and an off run bind nothing new; off keeps the dwell lock path below as is
@@ -7890,7 +7895,7 @@ def drive(S, isaac) -> None:
             if mission_stop_kinds and stop_kind_at(world.current_time - initial_time) == "preempt":
                 # M-a3 (plan E7): a preempt stops the wheels at this physics step, a capture's steps included; the
                 # steering stays where it is. The applied command, its slew and the stop detector's command say so.
-                robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                plant.zero_wheels()
                 state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
                 state["command_speed"] = 0.0
                 # Seen by the next control tick even if it ended inside a capture's steps (watched: recorded and
@@ -7993,7 +7998,7 @@ def drive(S, isaac) -> None:
                     if reason_ is not None:
                         # Design D5: the wheels stop at this physics step (as a preempt stops them), then the session
                         # ends; the steering stays where it is.
-                        robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                        plant.zero_wheels()
                         state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
                         state["command_speed"] = 0.0
                         slam["last_command"] = 0.0
@@ -8200,7 +8205,7 @@ def drive(S, isaac) -> None:
             def live_zero_wheels() -> None:
                 # As a scheduled preempt (M-a3 E7): the wheels stop at this step, the steering stays; the applied
                 # command, its slew and the stop detector's command say so.
-                robot.apply_action(isaac.action(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+                plant.zero_wheels()
                 state["applied_command"] = (0.0, list((state.get("applied_command") or (0.0, []))[1]))
                 state["command_speed"] = 0.0
                 if slam is not None:
@@ -8208,7 +8213,7 @@ def drive(S, isaac) -> None:
                     slam["applied_speed"] = 0.0
 
             def live_hold_lift(position: float) -> None:
-                robot.apply_action(isaac.action(joint_positions=np.array([position]), joint_indices=lift_index))
+                plant.hold_lift(position)
 
             # The live video camera (unbound without --use-perception: no video); the perception camera only if a run
             # bound none.
@@ -8361,7 +8366,7 @@ def drive(S, isaac) -> None:
 
             def live_unlock_wheels():  # persistent console plan D1 step 5: the dwell's lock, released as the loop does
                 if wheel_lock["q"] is not None:
-                    robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                    plant.controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
                     wheel_lock["events"][-1]["release_s"] = float(book_clock["t"])
                     wheel_lock["q"] = None
 
@@ -8472,7 +8477,7 @@ def drive(S, isaac) -> None:
                     # Two sines of 2.0 and 3.1 s: no shift under 62 s maps the wave onto itself, so a lag cannot be
                     # read as a period off (Codex M-c round 16 P2). Within the joint's 0-0.28 m and 1 m/s.
                     target_ = 0.14 + 0.06 * (math.sin(2 * math.pi * sim_s / 2.0) + math.sin(2 * math.pi * sim_s / 3.1))
-                    robot.apply_action(isaac.action(joint_positions=np.array([target_]), joint_indices=lift_index))
+                    plant.hold_lift(target_)
 
             def live_step_world(render: bool) -> None:
                 sim_ = float(world.current_time - initial_time)
@@ -8815,6 +8820,7 @@ def drive(S, isaac) -> None:
             )
             if not early_ports:  # format 2 made these ports at the hand-over
                 robot = RecordingProxy(robot, "Vehicle", boundary)
+                plant.robot = robot  # the actuation follows the rebinding (P0-4 4a)
                 pallet = RecordingProxy(pallet, "SimTruth", boundary)
                 world = RecordingProxy(world, "Clock", boundary)
                 cells.world, cells.robot = world, robot  # the capture's callbacks read the proxies from here on
@@ -10372,12 +10378,7 @@ def drive(S, isaac) -> None:
                                     ):
                                         # G2r: the original capture above is G2's; hold the
                                         # wheels, capture again, then stop whatever is seen.
-                                        robot.apply_action(
-                                            isaac.action(
-                                                joint_velocities=np.zeros(len(wheels)),
-                                                joint_indices=wheels,
-                                            )
-                                        )
+                                        plant.zero_wheels()
                                         first_pose = [
                                             np.asarray(v, dtype=float).tolist()
                                             for v in capture_diagnostics.accepted_pose
@@ -10877,7 +10878,7 @@ def drive(S, isaac) -> None:
                                     (float(ppos[0]), float(ppos[1]), float(pallet_yaw)), t=t)
                 if stand_hold is not None:
                     # Plan 2026-11-01-standstill-wheel-hold S1: one lock state (none / stand / dwell) for both locks
-                    controller_ = robot.get_articulation_controller()
+                    controller_ = plant.controller()
                     events_before_ = len(stand_hold.events)
                     hold_ = stand_hold.step(
                         float(t), dwell_standing=bool(dwell_standing),
@@ -10915,7 +10916,7 @@ def drive(S, isaac) -> None:
                     wheel_lock["q"] = hold_.q
                 elif dwell_standing and wheel_lock["q"] is None:
                     # Plan D8b: hold the wheels where they stand for the dwell (DWELL_WHEEL_KP).
-                    controller_ = robot.get_articulation_controller()
+                    controller_ = plant.controller()
                     kps_, kds_ = (np.asarray(g, dtype=float).copy() for g in controller_.get_gains())
                     wheel_lock.update(q=np.asarray(robot.get_joint_positions()[wheels], dtype=float).copy(), gains=(kps_, kds_))
                     locked_kps = kps_.copy()
@@ -10923,7 +10924,7 @@ def drive(S, isaac) -> None:
                     controller_.set_gains(kps=locked_kps, kds=kds_)
                     wheel_lock["events"].append({"lock_s": float(t), "q": wheel_lock["q"].tolist()})
                 elif not dwell_standing and wheel_lock["q"] is not None:
-                    robot.get_articulation_controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
+                    plant.controller().set_gains(kps=wheel_lock["gains"][0], kds=wheel_lock["gains"][1])
                     wheel_lock["events"][-1]["release_s"] = float(t)
                     wheel_lock["q"] = None
                 probe_zero_ = bool(np.all(np.asarray(drive.wheel_rates_rad_s, dtype=float) == 0.0))
@@ -10943,27 +10944,13 @@ def drive(S, isaac) -> None:
                         "effort": None if efforts_ is None else [float(v) for v in np.asarray(efforts_())[wheels]],
                         "base": [float(base[0]), float(base[1]), float(yaw)],
                         "pallet": [float(ppos[0]), float(ppos[1]), float(pallet_yaw)]}) + "\n")
-                robot.apply_action(
-                    isaac.action(
-                        joint_velocities=np.asarray(drive.wheel_rates_rad_s),
-                        joint_positions=wheel_lock["q"],
-                        joint_indices=wheels,
-                    )
-                )
+                plant.drive_wheels(np.asarray(drive.wheel_rates_rad_s), wheel_lock["q"])
                 if slam is not None:
                     # Plan 2026-10-24-goal-creep-stall: the wheel speed the next physics step runs on (live: the
                     # arbiter's, as applied), read by the core's goal creep watch at the next tick.
                     slam["applied_speed"] = float(drive.speed_mps)
-                robot.apply_action(
-                    isaac.action(
-                        joint_positions=steering_command, joint_indices=steers
-                    )
-                )
-                robot.apply_action(
-                    isaac.action(
-                        joint_positions=np.array([ms.lift_command]), joint_indices=lift_index
-                    )
-                )
+                plant.steer(steering_command)
+                plant.hold_lift(ms.lift_command)
                 core.refresh_targets()  # M-a4: the targets list follows the mission (no port call)
                 if safety_file is not None:
                     safety_file.write(json.dumps(core.safety_state(t)) + "\n")  # M-a3 (plan E8): every control tick
