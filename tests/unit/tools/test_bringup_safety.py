@@ -182,3 +182,16 @@ def test_a_state_naming_the_disarm_after_its_write_confirms_the_cleanup():
 
     b.link.on_cycle = cycle
     assert s.cleanup() is True
+
+
+def test_a_gap_in_the_acceptance_wait_is_an_abort():
+    """Codex re-review 3: 250 ms without a STATE between the event and the acceptance."""
+    import dataclasses
+
+    from forklift_core.plant.bringup import Sample
+
+    armed = dataclasses.replace(state(), mode=Mode.ARMED)
+    b = _bench([armed])  # host_ns 0
+    i_event = len(b.samples)
+    b.samples.append(Sample(250_000_000, dataclasses.replace(armed, mcu_time_us=250_000)))
+    assert bringup._observe_stop(b, "tx_cut", boot=1, start_index=i_event) == "state_gap"

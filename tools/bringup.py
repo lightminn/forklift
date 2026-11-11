@@ -301,11 +301,16 @@ def _observe_stop(b: Bench, kind: str, boot: int | None = None, start_index: int
     boot = b.state.boot_id if boot is None else boot
     end = time.monotonic() + OBSERVE_S
     allowed = {Mode.ARMED, Mode.DISARMED} | ({Mode.STOPPING} if kind != "disarm" else set())
-    for s in b.samples[start_index if start_index is not None else len(b.samples):]:
+    i0 = start_index if start_index is not None else len(b.samples)
+    prev = b.samples[i0 - 1].host_ns if i0 > 0 else None  # the last sample before the event
+    for s in b.samples[i0:]:
         if s.state.boot_id != boot:
             return "boot_changed"
         if s.state.mode not in allowed:
             return f"unexpected_mode_{s.state.mode.name.lower()}"
+        if prev is not None and s.host_ns - prev > STATE_GAP_S * 1e9:
+            return "state_gap"  # a gap in the acceptance wait is an observation failure too (Codex re-review 3)
+        prev = s.host_ns
     last = b.samples[-1].host_ns
     while time.monotonic() < end:
         b.cycle()
