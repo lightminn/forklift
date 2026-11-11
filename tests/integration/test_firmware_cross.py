@@ -22,8 +22,6 @@ TOOLCHAIN_FILE = BOARD / "arm-gnu-13.3.cmake"
 FLASH_LIMIT = 256 * 1024  # board design 10
 DTCM_LIMIT = 96 * 1024
 MAIN_STACK = 8 * 1024
-EXCEPTION_FRAME = 108  # FPU lazy-stacking frame 104 B + 4 B alignment padding (design 6)
-NESTING = 3  # priorities 1, 2, 3 above the main loop
 
 
 def _toolchain() -> Path | None:
@@ -133,16 +131,17 @@ def test_locked_build_links_no_tim1_output(locked_build):
     assert "motor_out_locked" in map_text
 
 
-def test_stack_upper_bound(locked_build):
-    """B1: the sum of every frame bounds any call chain (no recursion); B2 adds the call graph."""
-    total = 0
-    for su in locked_build.parent.parent.rglob("*.su"):
-        for line in su.read_text().splitlines():
-            fields = line.split("\t")
-            if len(fields) >= 3:
-                assert fields[2] in ("static", "static,bounded"), line
-                total += int(fields[1])
-    assert total + NESTING * EXCEPTION_FRAME <= MAIN_STACK // 2, total
+def test_stack_worst_case_from_call_graphs(locked_build):
+    """Board design 6: call-graph worst case per preemption level plus exception frames, within
+    half of the main stack (tools/fw_stack_check.py)."""
+    res = subprocess.run(
+        [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(locked_build.parent.parent),
+         "--limit", str(MAIN_STACK // 2), "--level", "board_main", "--level", "TIM6_DAC_IRQHandler",
+         "--level", "SPI1_IRQHandler,SPI2_IRQHandler",
+         "--level", "NMI_Handler,HardFault_Handler,Default_Handler",
+         "--indirect", "TIM6_DAC_IRQHandler=on_tick", "--indirect", "*=hal_*"],
+        capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
 
 
 def test_tim1_is_poisoned_in_locked_builds(tmp_path):
