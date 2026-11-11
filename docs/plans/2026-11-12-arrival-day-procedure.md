@@ -309,7 +309,9 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 **주 전원 차단**(`fw-open`, 받침대):
 - ②와 같이 `commission --seconds 1.5 --markers` 로 한 바퀴를 돌린다. 차단 스위치를 내리는 순간 Enter(앞에 `power` 라고 적으면 그 이름)를 누른다.
 - 이 실행도 **중단이 정상**이다(공통 합격 조건 적용 안 함, 도구 결과 조합은 ②처럼 고정되지 않는다). `analyze --record $D/run.jsonl --kind power --marker 0 | tee $D/result.json` 으로 표시 뒤 마지막 STATE 시각을 읽는다. 시각이 `null` 이면 ②처럼 원본에서 읽는다.
-- **MCU 전원이 어디서 오는지에 따라 예상이 다르다.** 보통 USB-C 케이블이면 VBUS 가 D10 을 거쳐 WeAct 와 메인보드 5 V 에 들어간다(보드 설계 3.1). 그러면 주 전원을 내려도 MCU 는 살아 있고 모터 전원(VM)만 빠진다. 이때는 재부팅 없이 링크가 이어지고, 드라이버 결함·`driver_not_ready` 로 서는 것이 예상이다. VBUS 를 끊은 케이블이나 UART7 이면 MCU 도 꺼진다. 그때는 전원을 다시 넣은 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "POWER"` 를 본다. 어느 구성이었는지 기록한다.
+- **MCU 전원이 어디서 오는지에 따라 관측이 다르다.** 어느 구성이었는지 기록한다.
+  - VBUS 를 끊은 케이블이나 UART7: MCU 도 꺼진다. 전원을 다시 넣은 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "POWER"` 를 본다.
+  - 보통 USB-C 케이블: VBUS 가 D10 을 거쳐 WeAct 5 V 에 들어가므로(보드 설계 3.1) 주 전원을 내려도 MCU 가 살아 있고 모터 전원(VM)만 빠질 수 있다. 이것은 시험 구성으로 고르는 분기가 아니라 관측 설명이다 — S1 에서 메인보드 5 V 역전원이 보였으면 5절 3 대로 이미 케이블·링크를 바꿨어야 한다(Codex). 이 경우 재부팅 없이 링크가 이어지며, 그때 켜진 `fault_flags`·`driver_status` 를 그대로 기록한다. 특정 결함 비트를 기대하지 않는다(이미 초기화된 드라이버는 `drivers_ready` 가 저절로 내려가지 않는다).
 - 바퀴가 서는 시간·거리는 영상이나 줄자로 잰다.
 
 ### 9.2 다음 PCB 판 뒤에 할 것
