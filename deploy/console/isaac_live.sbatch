@@ -21,6 +21,10 @@
 #   has no row; registry: that bundle or no launch; none: mapping; a folder: that bundle with MAP_START_POSE "x,y,yaw",
 #   map <- base_link at the scene's start), SLAM_BUNDLE_ROOT (where the registry's bundle folders are),
 #   SESSION_ID / BRIDGE_CPU (set by tools/isaac_bundle.py when several sessions share the job),
+#   LAYER_BUDGET (config/layer_latency_budget.yaml: --layer-latency-budget, B 0.10 s and the 1.0 s end, the lead's
+#   decision 2026-11-11, docs/plans/2026-11-11-layer-latency-budget.md; off: none) -- records made before this default
+#   ran without the budget: a comparison's two arms use the same LAYER_BUDGET, and results with and without it are
+#   not mixed,
 #   D7_HOLD (on: --d7-reapproach-hold, the SLAM corrections held over a D7 re-approach until its retry match -- its
 #   registered V5 batch passed, docs/validation/2026-10-25-reapproach-slam-hold.md; off as before; an EXTRA_ARGS
 #   --d7-reapproach-hold comes later and wins),

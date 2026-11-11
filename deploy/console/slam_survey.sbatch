@@ -16,6 +16,8 @@
 # (graph, grid from the read-back, manifest, map_id) and the survey's checks to OUT/bundle and OUT/survey_report.json.
 #
 #   BASE_SCENE=<scene.usda> FORKLIFT_URDF=<forklift.urdf> VENV_PY=<python> sbatch deploy/console/slam_survey.sbatch OUT
+#   LAYER_BUDGET (config/layer_latency_budget.yaml, as isaac_live.sbatch; off: none): a survey made with it still
+#   matches the bundles made before it (the budget is no shared input); compare surveys only at the same value
 #   optional: PORT (8799), FACTOR (0.4), SEED (0), EXTRA_ARGS (split on spaces), TOUR (a tour .npz), TOUR_CONFIG
 #   (config/slam_survey_tour.yaml: the judged region's aisles), CYCLE (P-1:D-1,P-1:D-0, without TOUR: the missions,
 #   pallet:destination), REFERENCE_RUN (a run of operational missions: its observation poses, its path recorded),

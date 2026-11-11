@@ -119,6 +119,8 @@ def test_one_judgement_per_tick_and_the_stop_over_the_limit_is_named():
     assert lay.watchdog(t0) == "layer_overdue" and lay.overdue_stats["ticks"] == 1  # the same tick, counted once
     assert lay.watchdog(t0 + 1.0) == "layer_overdue"  # exactly 1.0 s held
     assert lay.watchdog(t0 + 1.0 + 1 / 120) == "layer_latency_exceeded"
+    assert lay.latency_log["overdue_ticks"][-1][5:] == ["layer_latency_exceeded", pytest.approx(1.0 + 1 / 120)]
+    assert [r[5] for r in lay.latency_log["overdue_ticks"]].count("layer_latency_exceeded") == 1
     assert lay.overdue_stats["events"] == 1 and lay.overdue_stats["longest_s"] > 1.0
 
 
@@ -152,3 +154,25 @@ def test_the_real_trucks_budget_equals_the_simulators_and_carries_its_provenance
     assert real["overdue_end"]["seconds"] == sim["overdue_end_s"] == 1.0
     for entry in (real["latency_budget"], real["overdue_end"]):
         assert set(entry["provenance"]) == {"source", "measured", "until"} and entry["provenance"]["measured"] is False
+
+
+def test_a_budgeted_run_still_matches_a_survey_bundle():
+    """The budget lives outside the survey bundles' shared inputs and scene arguments: a run that passes it matches a
+    bundle made without it (the registered bundles' manifests hold the unchanged obstacle-layer file's sha256)."""
+    from forklift_core.localization import slam_map
+
+    assert "layer_latency_budget" not in slam_map.SHARED_INPUTS and "layer_latency_budget" not in slam_map.SHARED_ARGUMENTS
+    assert "layer_latency_budget_s" not in slam_map.SHARED_ARGUMENTS
+    files = {"obstacle_layer": ROOT / "config/obstacle_layer_single_team_spec.yaml",
+             "lidar": ROOT / "config/isaac_slam_lidar.yaml"}
+    sha = {name: (slam_map.file_sha256(files[name]) if name in files else "x" * 64)
+           for name in slam_map.SHARED_INPUTS + (slam_map.SCENE_INPUT,)}
+    survey_args = {"layout": "scene", "prism_colliders": False, "min_obstacle_height_m": None,
+                   "slam_noise_seed": 0, "slam_noise_spec": None}
+    manifest = {"seed": 0, "run": {"arguments": survey_args, "scene_sha256": "s"},
+                "inputs": {name: {"sha256": h} for name, h in sha.items()}}
+    run_args = {**survey_args, "layer_latency_budget": "config/layer_latency_budget.yaml", "layer_latency_budget_s": None}
+    assert slam_map.run_mismatches(manifest, seed=0, input_sha256=sha, scene_sha256="s", arguments=run_args) == []
+    # the registered bundles' recorded obstacle-layer hash (ws1 manifests, read 2026-11-11) is the file's
+    assert slam_map.file_sha256(files["obstacle_layer"]) == \
+        "73e35f8fee45ad5547df851cb799528b5b25d89657bcca3697607d84af5d9db0"

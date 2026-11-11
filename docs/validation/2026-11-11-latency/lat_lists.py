@@ -4,6 +4,8 @@
                                               # OUT/RUNS_smoke.jsonl and the live B row in OUT/lat_sm_B50.jsonl
     python lat_lists.py a SNAP OUT            # A: 80 riib rows in OUT/RUNS_A.jsonl
     python lat_lists.py b SNAP OUT            # B: 15 single-slot live jobs, one OUT/<name>.jsonl each, in order
+    python lat_lists.py budget SNAP OUT       # the layer budget check (docs/plans/2026-11-11-layer-latency-budget.md 3):
+                                              # 58 riib rows in OUT/RUNS_budget.jsonl
     python lat_lists.py rerun SNAP OUT NAME.. # one row per named A run under lat_r_<name> (the first record stays),
                                               # in OUT/RUNS_rerun.jsonl (B names: one OUT/lat_r_<name>.jsonl each)
 
@@ -24,6 +26,8 @@ RIIB_ENV = {  # ws1 paths (the riib batches' template, e.g. test_runs/riibotics/
     "ONNX": f"{P}/test_runs/s3/yolo_runs/yolo11s-seg_p15/weights/best.onnx",
     "LEARNED_PY": f"{P}/venvs/learned/bin/python",
     "VIDEO": "off", "RETURN_START": "boxed", "NEAR_END_STAND": "on",
+    # A and B were registered before the launchers' layer budget default (2026-11-11): they keep running without it
+    "LAYER_BUDGET": "off",
 }
 BASE_ARGS = "--deterministic --lidar-cast loop"
 ARMS = {  # plan 3.1
@@ -36,8 +40,18 @@ ARMS = {  # plan 3.1
 }
 MAIN_ARMS = ("B0", "S3", "S6", "S12", "U3", "U6", "U12", "D12", "C6", "J")
 AISLE_ARMS = ("S0", "S12", "U12", "C6")
+# the layer budget check (plan 2026-11-11-layer-latency-budget 3, 4.1): B0 runs without the budget (LAYER_BUDGET=off),
+# every other arm with the decided file (config/layer_latency_budget.yaml, B 0.10); Uo9 alone on the test
+# budget 0.05 (the injector stops at 12 ticks, so it cannot pass 0.10)
+BUDGET_FILE = "config/layer_latency_budget.yaml"
+BUDGET_ARMS = {"B0": ("off", ""), "Bb10": (BUDGET_FILE, ""),
+               "Ub3": (BUDGET_FILE, "--latency-layer undeclared:3"), "Ub6": (BUDGET_FILE, "--latency-layer undeclared:6"),
+               "Ub12": (BUDGET_FILE, "--latency-layer undeclared:12"),
+               "Uo9": (BUDGET_FILE, "--layer-latency-budget-s 0.05 --latency-layer undeclared:9")}
+BUDGET_SCENES = ("aisle_rack", "random_1", "line_2")  # the longer runs first in a bundle
 B_WRAPPER = "docs/validation/2026-11-08-r1-confirmation/r1c_session.sh"
-B_BASE = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "SEED": "0", "INSTR": "off", "FORKLIFT_GRID_CLEAR_KERNEL": "1",
+B_BASE = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "SEED": "0", "INSTR": "off", "LAYER_BUDGET": "off",
+          "FORKLIFT_GRID_CLEAR_KERNEL": "1",
           "FORKLIFT_SHADOW_KERNEL": "1", "LIDAR_CAST": "fast"}
 B_DELAYS = (0, 25, 50, 100, 500)
 
@@ -48,6 +62,23 @@ def riib_row(snap: str, out: str, name: str, arm: str, scene: str, seed: int) ->
     env = dict(RIIB_ENV, SNAP=snap, SCENE=scene, SEED=str(seed), EXTRA_ARGS=extra, LAT_ARM=arm)  # LAT_*: the list's own
     return {"name": name, "cwd": snap, "argv": ["bash", f"{snap}/deploy/riibotics/riib_scene.sbatch", d], "env": env,
             "retry_move": [d], "scan": [f"{d}/run.log"]}
+
+
+def budget_row(snap: str, out: str, name: str, arm: str, scene: str, seed: int) -> dict:
+    layer_budget, extra = BUDGET_ARMS[arm]
+    row = riib_row(snap, out, name, "B0", scene, seed)
+    row["env"].update(EXTRA_ARGS=f"{BASE_ARGS} {extra}".strip(), LAT_ARM=arm, LAYER_BUDGET=layer_budget)
+    return row
+
+
+def budget_rows(snap: str, out: str) -> list[dict]:
+    rows = [budget_row(snap, out, f"lbg_{arm}_{scene}_s{seed}", arm, scene, seed)
+            for seed in (0, 1, 2) for scene in BUDGET_SCENES for arm in BUDGET_ARMS]
+    for scene in ("random_1", "line_2"):  # seed 0: the determinism repeats (A's, on B0 and Ub6)
+        for arm in ("B0", "Ub6"):
+            rows.append(budget_row(snap, out, f"lbg_{arm}_{scene}_s0_rep", arm, scene, 0))
+    assert len(rows) == 58 and len({r["name"] for r in rows}) == 58
+    return rows
 
 
 def a_rows(snap: str, out: str) -> list[dict]:
@@ -111,7 +142,7 @@ def write(path: Path, rows: list[dict]) -> None:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 3 or argv[0] not in ("smoke", "a", "b", "rerun"):
+    if len(argv) < 3 or argv[0] not in ("smoke", "a", "b", "budget", "rerun"):
         raise SystemExit(__doc__)
     mode, snap, out = argv[0], argv[1], argv[2].rstrip("/")
     Path(out).mkdir(parents=True, exist_ok=True)
@@ -120,6 +151,8 @@ def main(argv: list) -> int:
         write(Path(out) / "lat_sm_B50.jsonl", [b_entry(snap, out, "lat_sm_B50", 50)])
     elif mode == "a":
         write(Path(out) / "RUNS_A.jsonl", a_rows(snap, out))
+    elif mode == "budget":
+        write(Path(out) / "RUNS_budget.jsonl", budget_rows(snap, out))
     elif mode == "b":
         for j in b_jobs(snap, out):
             write(Path(out) / f"{j['name']}.jsonl", [j])
@@ -128,9 +161,13 @@ def main(argv: list) -> int:
         names = argv[3:]
         a = {r["name"]: r for r in a_rows(snap, out)}
         b = {j["name"]: j for j in b_jobs(snap, out)}
+        g = {r["name"]: r for r in budget_rows(snap, out)}
         rows = []
         for name in names:
-            if name in a:
+            if name in g:
+                e = g[name]["env"]
+                rows.append(budget_row(snap, out, f"lat_r_{name}", e["LAT_ARM"], e["SCENE"], int(e["SEED"])))
+            elif name in a:
                 e = a[name]["env"]
                 rows.append(riib_row(snap, out, f"lat_r_{name}", e["LAT_ARM"], e["SCENE"], int(e["SEED"])))
             elif name in b:

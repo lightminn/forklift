@@ -331,7 +331,7 @@ class ObstacleLayer:
         self._last_d = None
         self._overdue_since = None
         self._watch_cache = None  # (now_s, reason): one judgement per control tick
-        self.latency_log = {"scans": [], "overdue_ticks": []}  # [t_scan, t_use, D]; [t, required, installed, D, kind]
+        self.latency_log = {"scans": [], "overdue_ticks": []}  # [t_scan, t_use, D]; [t, required, installed, D, kind, reason, held]
         self.overdue_stats = {"events": 0, "ticks": 0, "longest_s": 0.0}
         self.snapshot = None
         # Docking exemption (plan D5): (x, y, length, width, yaw) in the control
@@ -910,9 +910,10 @@ class ObstacleLayer:
             held = float(now_s) - self._overdue_since
             self.overdue_stats["ticks"] += 1
             self.overdue_stats["longest_s"] = max(self.overdue_stats["longest_s"], held)
-            self.latency_log["overdue_ticks"].append(
-                [float(now_s), required, self._installed_scan_s, self._last_d, "deadline" if overdue else "late"])
             reason = "layer_latency_exceeded" if held > self.overdue_end_s else "layer_overdue"
+            self.latency_log["overdue_ticks"].append(
+                [float(now_s), required, self._installed_scan_s, self._last_d, "deadline" if overdue else "late",
+                 reason, held])
         else:
             self._overdue_since = None
         self._watch_cache = (now_s, reason)

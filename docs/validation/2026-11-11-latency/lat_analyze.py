@@ -308,6 +308,28 @@ def environment_problems(attempts: list, run: Path, arm: str, result: dict | Non
     return out
 
 
+def strip_layer_timing(dc) -> None:
+    """Exception 1 (the lead's, after A's results): ``deterministic_compare`` leaves out the layer worker's per-job CPU
+    and wall measurements (LAYER_TIMING) in layer_worker.json and latency_injection.layer.pending_at_end only."""
+    orig_items = dc._items
+
+    def strip(d):
+        return {k: v for k, v in d.items() if k not in LAYER_TIMING} if isinstance(d, dict) else d
+
+    def items(run):
+        it = orig_items(run)
+        if "layer_worker.json" in it:
+            kind, lines = it["layer_worker.json"]
+            it["layer_worker.json"] = (kind, [[strip(e) for e in doc] for doc in lines])
+        for doc in it.get("result.json", ("json", []))[1]:
+            lay = (doc.get("latency_injection") or {}).get("layer") or {}
+            if isinstance(lay.get("pending_at_end"), dict):
+                lay["pending_at_end"] = strip(lay["pending_at_end"])
+        return it
+
+    dc._items = items
+
+
 def stopping_from(snap: Path, result: dict, low_mod):
     layer = (result.get("arguments") or {}).get("obstacle_layer")
     import yaml
@@ -402,23 +424,7 @@ def main(argv=None) -> int:
         row["cell"] = classify(row, base if name != base_name else None, aisle=row["scene"] == "aisle_rack")
     # equivalence and determinism (4.7): whole runs compared, the injection records left out for S0/L0
     if a.determinism_without_layer_timing:
-        orig_items = dc._items
-
-        def strip(d):
-            return {k: v for k, v in d.items() if k not in LAYER_TIMING} if isinstance(d, dict) else d
-
-        def items(run):
-            it = orig_items(run)
-            if "layer_worker.json" in it:
-                kind, lines = it["layer_worker.json"]
-                it["layer_worker.json"] = (kind, [[strip(e) for e in doc] for doc in lines])
-            for doc in it.get("result.json", ("json", []))[1]:
-                lay = (doc.get("latency_injection") or {}).get("layer") or {}
-                if isinstance(lay.get("pending_at_end"), dict):
-                    lay["pending_at_end"] = strip(lay["pending_at_end"])
-            return it
-
-        dc._items = items
+        strip_layer_timing(dc)
 
     def cmp(x, y, ignore):
         x, y = eff(x), eff(y)
