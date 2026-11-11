@@ -124,3 +124,22 @@ def test_rolling_distance_and_the_rate_cap():
     assert rolling_distance_m(327_680, 327_680, 0.125) == pytest.approx(2 * math.pi * 0.125)
     assert wheel_rate_cap(8.0, 0.125) == pytest.approx(1.6) and wheel_rate_cap(8.0, None) == 1.0
     assert wheel_rate_cap(0.5, 0.125) == 0.5
+
+
+def test_a_settle_is_never_held_across_a_gap_nor_on_a_stuck_encoder():
+    gap = [st(0), st(1_000_000)]  # two equal counts a second apart: not a 0.3 s hold
+    assert count_settle(gap).reason == "undetermined"
+    stuck = [st(k * 10_000, faults=FaultFlag.ENCODER_STUCK_L) for k in range(60)]
+    assert count_settle(stuck).reason == "undetermined"
+
+
+def test_a_step_settle_is_not_held_across_a_gap():
+    samples = [st(k * 10_000, rate_l=1.0) for k in range(5)] + [st(1_100_000, rate_l=1.0)]
+    m = step_metrics(samples, 0, 0, 0.0, 1.0, window_s=2.0)
+    assert m.unsettled
+
+
+def test_a_response_already_under_way_at_the_first_accepting_state_keeps_its_crossing():
+    samples = [st(0, rate_l=0.0)] + [st(10_000 + k * 10_000, rate_l=min(1.0, 0.2 + 0.1 * k)) for k in range(40)]
+    m = step_metrics(samples, 0, 10_000, 0.0, 1.0)  # the first accepting STATE already reads 20 %
+    assert m.rise_s is not None and m.rise_s[1] - m.rise_s[0] >= 0.01  # the 10 % crossing is an interval before it

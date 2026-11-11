@@ -1,13 +1,17 @@
 /* MCU model endpoint (sim-to-real plan P0-7): the firmware core (fw_app) on a fake board, in real
-   time at 1 kHz, speaking mcu-link/1 over a tty (a pty slave in the tests). Host-only: it drives no
+   time at 1 kHz, speaking mcu-link/2 over a tty (a pty slave in the tests). Host-only: it drives no
    hardware. Vehicle values come from the generated vehicle_config.h (tools/real_vehicle_header.py);
    every other drive_config value is synthetic, not a hardware value.
 
    usage: mcu_model --link PATH [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
                     [--estop-release-ms N] [--silent-at-ms N]
+                    [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T --hand-turn-duration-ms D]
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
-   only; it is not an IWDG and proves nothing about output cut-off). */
+   only; it is not an IWDG and proves nothing about output cut-off).
+   --hand-turn-*: a known encoder trajectory independent of the drive (bring-up tool 1's CPR test): from T ms
+   the wheel's counts advance by N wheel revolutions at an even rate over D ms, forward rolling, whatever the
+   outputs. */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +45,7 @@ typedef struct {
     uint8_t tx[TX_CAP];
     size_t tx_len;
     long fault_at_ms, estop_at_ms, estop_release_ms, silent_at_ms;
+    long hand_wheel, hand_revs, hand_at_ms, hand_duration_ms;
     bool fault_fired;
 } board;
 
@@ -208,6 +213,13 @@ static void step_plant(double dt)
         B.wheel_rad_s[i] += (k * duty - B.wheel_rad_s[i]) / WHEEL_TAU_S * dt;
         B.wheel_counts[i] += B.wheel_rad_s[i] * dt * cpr[i] / TWO_PI;
     }
+    if (B.hand_wheel >= 0 && B.hand_wheel < 2 && B.hand_duration_ms > 0) {
+        long t = elapsed_ms() - B.hand_at_ms;
+        if (t >= 0 && t < B.hand_duration_ms) { /* a hand turn: counts only, the modelled rate untouched */
+            const int w = (int)B.hand_wheel;
+            B.wheel_counts[w] += cpr[w] * (double)B.hand_revs * dt / ((double)B.hand_duration_ms / 1000.0);
+        }
+    }
     double ds = B.out.drvoff[DRIVE_CH_M] ? 0.0 : (double)B.out.duty[DRIVE_CH_M];
     double dl = B.out.drvoff[DRIVE_CH_H] ? 0.0 : (double)B.out.duty[DRIVE_CH_H];
     B.steer_rad += ds * STEER_RAD_S_PER_DUTY * dt;
@@ -323,6 +335,10 @@ int main(int argc, char **argv)
     B.estop_at_ms = arg_long(argc, argv, "--estop-at-ms", -1);
     B.estop_release_ms = arg_long(argc, argv, "--estop-release-ms", -1);
     B.silent_at_ms = arg_long(argc, argv, "--silent-at-ms", -1);
+    B.hand_wheel = arg_long(argc, argv, "--hand-turn-wheel", -1);
+    B.hand_revs = arg_long(argc, argv, "--hand-turn-revs", 0);
+    B.hand_at_ms = arg_long(argc, argv, "--hand-turn-ms", 0);
+    B.hand_duration_ms = arg_long(argc, argv, "--hand-turn-duration-ms", 0);
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
     uint32_t boot_id = (uint32_t)arg_long(argc, argv, "--boot-id", 0x0B00700L);
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {

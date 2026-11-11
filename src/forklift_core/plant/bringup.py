@@ -14,6 +14,11 @@ _CUT = {  # the bits that break a wheel's count continuity (contract 3.3, host r
     0: FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L,
     1: FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_R,
 }
+# every encoder fault: a count settle never counts on an encoder judged stuck or reversed either
+_ENCODER_ANY = (FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_STUCK_L | FaultFlag.ENCODER_STUCK_R
+                | FaultFlag.ENCODER_POLARITY_L | FaultFlag.ENCODER_POLARITY_R | FaultFlag.ENCODER_JUMP_L
+                | FaultFlag.ENCODER_JUMP_R)
+GAP_US = 50_000  # two STATEs further apart than this are an observation gap: no hold is counted across it
 
 
 @dataclass(frozen=True)
@@ -94,14 +99,18 @@ def _crossing(points, level: float):
 
 def step_metrics(samples: list[Sample], wheel: int, step_mcu_us: int, initial: float, target: float, *,
                  window_s: float = 3.0, hold_s: float = 0.2, band: float = 0.05,
-                 gap_us: int = 50_000) -> StepMetrics:
-    """A wheel rate step's response from ``step_mcu_us``, normalised from ``initial`` to ``target`` (either sign).
-    Times are MCU-time seconds from the step. A zero step is refused (ValueError)."""
+                 gap_us: int = GAP_US) -> StepMetrics:
+    """A wheel rate step's response from ``step_mcu_us`` (the first STATE seen to accept the step), normalised from
+    ``initial`` to ``target`` (either sign). Times are MCU-time seconds from that STATE. The last sample before it is
+    kept (negative time): the step was applied somewhere in between, so a response already under way at the first
+    accepting STATE still has its crossing as an interval. A zero step is refused (ValueError)."""
     span = target - initial
     if span == 0:
         raise ValueError("a zero step has no response")
+    before = [s for s in samples if s.state.mcu_time_us < step_mcu_us]
+    window = [s for s in samples if step_mcu_us <= s.state.mcu_time_us <= step_mcu_us + window_s * 1e6]
     pts = [((s.state.mcu_time_us - step_mcu_us) / 1e6, (_rate(s.state, wheel) - initial) / span)
-           for s in samples if step_mcu_us <= s.state.mcu_time_us <= step_mcu_us + window_s * 1e6]
+           for s in before[-1:] + window]
     gaps = [(a[0], b[0]) for a, b in zip(pts, pts[1:]) if (b[0] - a[0]) * 1e6 > gap_us]
     if not pts:
         return StepMetrics(None, None, None, True, gaps)
@@ -114,7 +123,8 @@ def step_metrics(samples: list[Sample], wheel: int, step_mcu_us: int, initial: f
         if abs(y - 1.0) > band:
             continue
         j = i
-        while j + 1 < len(pts) and abs(pts[j + 1][1] - 1.0) <= band:
+        while (j + 1 < len(pts) and abs(pts[j + 1][1] - 1.0) <= band
+               and (pts[j + 1][0] - pts[j][0]) * 1e6 <= gap_us):  # never held across an observation gap
             j += 1
         if pts[j][0] - t >= hold_s:
             prev_t = pts[i - 1][0] if i > 0 else t
@@ -130,20 +140,24 @@ class Settle:
     reason: str | None  # why undetermined
 
 
-def count_settle(samples: list[Sample], start_index: int = 0, *, tolerance: int = 2, hold_s: float = 0.3) -> Settle:
+def count_settle(samples: list[Sample], start_index: int = 0, *, tolerance: int = 2, hold_s: float = 0.3,
+                 gap_us: int = GAP_US) -> Settle:
     """The first time both wheel counts stayed within ``tolerance`` counts for ``hold_s`` (MCU time) -- a count
-    settle, not a body stop. A boot change, a continuity bit or a time going back is never a settle."""
+    settle, not a body stop. A boot change, any encoder fault or a time going back is never a settle, and a hold is
+    never counted across an observation gap."""
     seq = samples[start_index:]
     for i, first in enumerate(seq):
         boot = first.state.boot_id
         ok = True
+        prev_us = first.state.mcu_time_us
         for cur in seq[i:]:
             st = cur.state
             if st.boot_id != boot or st.mcu_time_us < first.state.mcu_time_us:
                 return Settle(None, None, "observation_broken")
-            if st.fault_flags & (_CUT[0] | _CUT[1]):
+            if st.fault_flags & _ENCODER_ANY or st.mcu_time_us - prev_us > gap_us:
                 ok = False
                 break
+            prev_us = st.mcu_time_us
             if any(abs(wheel_count_delta(_count(st, w), _count(first.state, w))) > tolerance for w in (0, 1)):
                 ok = False
                 break
