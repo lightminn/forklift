@@ -90,6 +90,7 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 - 받아들이는 순서: 프레임 검사(version·길이·CRC) 뒤 **맨 앞에 `wrong_build`**(정상 빌드의 `COMMISSION`, 시운전 빌드의 `DRIVE` 는 내용과 무관하게 14). 그다음은 `DRIVE` 와 같다(형식 → `boot_id` → 모드 → `arm_gen` → 마감 → `seq` → 무장 직후 첫 명령은 듀티 0 `zero_first`). M·H 를 고른 명령은 그 축 측정이 무효면 13 `sensor_invalid` 로 거부한다.
 - 한 번에 한 축만 움직이고, 나머지 축은 정지 상태다.
 - 시간 상한으로 들어간 `STOPPING` 은 `DISARM` 으로 줄일 수 없다. `stop_grace_ms` 가 끝날 때까지 `ARM` 은 `stopping` 으로 거부한다.
+- `CLEAR_FAULTS` 는 `commission_time_limit`(24)을 지우지 않는다. 다음 `ARM` 이 지운다. 상한 뒤 `stop_grace_ms` 동안의 `ARM` 거부는 그 사이에 결함·`CLEAR_FAULTS` 가 끼어도 유지된다.
 - **시운전 빌드의 `STOPPING`** 은 고르지 않은 축까지 **네 축 모두** 듀티 0·DRVOFF low(전기 제동)다. 단 그 채널에 드라이버 결함이 있거나 드라이버가 준비되지 않았으면 끊는다.
 - **시간 상한은 실제 적용 출력으로 잰다**(`ARM`·`DISARM` 으로 지워지지 않는다. 한 주기에 `DISARM`→`ARM`→`COMMISSION`(0)→`COMMISSION`(비영)을 받아도 실제 출력이 0 인 주기가 없으면 시계가 이어진다): 네 축의 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돌고, 모두 0 인 주기가 한 번 지나야 지워진다(같은 주기에 `COMMISSION`(0)→`COMMISSION`(비영)을 보내도 지워지지 않는다). 시계가 상한(빌드 상수, 제안 2 s)을 넘으면 `STOPPING` → `DISARMED` 로 가고 `fault_flags.commission_time_limit` 을 켠다. 이 비트는 다음 `ARM` 까지 남는다.
 - **시운전 빌드의 판정 예외**(S3 는 극성·범위를 처음 찾는 단계다):
