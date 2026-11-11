@@ -27,3 +27,41 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
     add_executable(link_tool ${CMAKE_CURRENT_SOURCE_DIR}/tools/link_tool.c)
     target_link_libraries(link_tool PRIVATE fw_core)
 endif()
+
+# MCU model endpoint (sim-to-real plan P0-7): the core on a fake board in real time over a tty.
+# Optional: it needs the vehicle header generated from config/real/vehicle.yaml by a Python that can
+# import forklift_core (FW_PYTHON); the core tests above never depend on Python.
+option(FW_MCU_MODEL "Build the host-only MCU model endpoint (needs FW_PYTHON)" OFF)
+if(FW_MCU_MODEL)
+    if(NOT FW_PYTHON)
+        message(FATAL_ERROR "FW_MCU_MODEL needs -DFW_PYTHON=<python with forklift_core importable>")
+    endif()
+    get_filename_component(FW_REPO ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
+    set(FW_VEHICLE_YAML ${FW_REPO}/config/real/vehicle.yaml CACHE FILEPATH "real vehicle config")
+    set(FW_VEHICLE_HEADER ${CMAKE_CURRENT_BINARY_DIR}/generated/vehicle_config.h)
+    # The header also depends on the chassis model the config names; reconfigure when the config changes.
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${FW_REPO}/src
+                ${FW_PYTHON} ${FW_REPO}/tools/real_vehicle_header.py --config ${FW_VEHICLE_YAML} --print-chassis
+        OUTPUT_VARIABLE FW_CHASSIS_YAML OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _fw_rc)
+    if(NOT _fw_rc EQUAL 0)
+        message(FATAL_ERROR "could not read the chassis model named by ${FW_VEHICLE_YAML}")
+    endif()
+    if(NOT EXISTS ${FW_CHASSIS_YAML})
+        message(FATAL_ERROR "chassis model ${FW_CHASSIS_YAML} named by ${FW_VEHICLE_YAML} not found")
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${FW_VEHICLE_YAML})
+    add_custom_command(
+        OUTPUT ${FW_VEHICLE_HEADER}
+        COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${FW_REPO}/src
+                ${FW_PYTHON} ${FW_REPO}/tools/real_vehicle_header.py
+                --config ${FW_VEHICLE_YAML} --out ${FW_VEHICLE_HEADER}
+        DEPENDS ${FW_VEHICLE_YAML}
+                ${FW_CHASSIS_YAML}
+                ${FW_REPO}/tools/real_vehicle_header.py
+                ${FW_REPO}/src/forklift_core/plant/real_vehicle.py
+        COMMENT "Generating vehicle_config.h from ${FW_VEHICLE_YAML}")
+    add_executable(mcu_model ${CMAKE_CURRENT_SOURCE_DIR}/tools/mcu_model.c ${FW_VEHICLE_HEADER})
+    target_include_directories(mcu_model PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
+    target_link_libraries(mcu_model PRIVATE fw_core)
+endif()
