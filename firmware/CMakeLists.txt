@@ -52,6 +52,18 @@ target_include_directories(test_weact_h743_board_pure PRIVATE
 target_link_libraries(test_weact_h743_board_pure PRIVATE fw_core)
 add_test(NAME test_weact_h743_board_pure COMMAND test_weact_h743_board_pure)
 
+# motor_out_tim1.c on the host register model (motor output design 4.2): the fake device header in
+# test/regmodel comes first on the include path.
+set(W ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743)
+add_library(weact_h743_regmodel STATIC ${W}/test/regmodel/regmodel.c ${W}/src/motor_out_tim1.c)
+target_include_directories(weact_h743_regmodel PUBLIC ${W}/test/regmodel ${W}/include)
+target_compile_definitions(weact_h743_regmodel PUBLIC FW_HOST_REGMODEL=1)
+target_link_libraries(weact_h743_regmodel PUBLIC fw_core)
+add_executable(test_weact_h743_motor_out ${W}/test/test_motor_out.c)
+target_include_directories(test_weact_h743_motor_out PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
+target_link_libraries(test_weact_h743_motor_out PRIVATE weact_h743_regmodel)
+add_test(NAME test_weact_h743_motor_out COMMAND test_weact_h743_motor_out)
+
 add_executable(test_plant ${CMAKE_CURRENT_SOURCE_DIR}/plant/test_plant.c)
 target_include_directories(test_plant PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/test)
 target_link_libraries(test_plant PRIVATE fw_plant)
@@ -65,8 +77,19 @@ add_test(NAME test_weact_h743_link COMMAND test_weact_h743_link)
 # The board's real configuration needs the generated vehicle header (FW_PYTHON).
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/vehicle_header.cmake)
 if(FW_PYTHON)
+    # The core driving motor_out_tim1.c on the register model (motor output design 4.2).
+    add_executable(test_weact_h743_motor_out_e2e
+        ${W}/test/test_motor_out_e2e.c ${W}/src/board_config.c ${W}/src/board_rules.c
+        ${CMAKE_CURRENT_SOURCE_DIR}/plant/plant.c)
+    target_include_directories(test_weact_h743_motor_out_e2e PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/plant)
+    target_compile_definitions(test_weact_h743_motor_out_e2e PRIVATE FW_BUILD_normal=1)
+    target_link_libraries(test_weact_h743_motor_out_e2e PRIVATE weact_h743_regmodel)
+    fw_vehicle_header(test_weact_h743_motor_out_e2e ${CMAKE_CURRENT_BINARY_DIR}/generated_e2e)
+    add_test(NAME test_weact_h743_motor_out_e2e COMMAND test_weact_h743_motor_out_e2e)
+
     # One configuration test per build kind (board design 2.2, 9).
-    foreach(kind normal commission hil iwdg_stall)
+    foreach(kind normal commission hil iwdg_stall commission_open)
         set(t test_weact_h743_board_config_${kind})
         add_executable(${t}
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
@@ -76,6 +99,8 @@ if(FW_PYTHON)
             ${CMAKE_CURRENT_SOURCE_DIR}/core/test ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/include)
         if(kind STREQUAL "iwdg_stall") # the S5 test build: a normal build that stalls (design 9)
             target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_TEST_IWDG_STALL_S=5)
+        elseif(kind STREQUAL "commission_open") # behind the gate (motor output design 2)
+            target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1)
         else()
             target_compile_definitions(${t} PRIVATE FW_BUILD_${kind}=1)
         endif()

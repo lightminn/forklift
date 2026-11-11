@@ -44,7 +44,7 @@ PR 나누기(총괄 승인 2026-11-11, 계약 PR 은 먼저 끝냄):
 | 옵션 | 값 | 기본 | 뜻 |
 |---|---|---|---|
 | `FW_BUILD` | `normal`·`commission`·`hil` | `normal` | 코어 설정 `commission_build`·`hil_plant` |
-| `FW_MOTOR_OUTPUT` | `0`·`1` | **`0`** | 0 이면 출력 잠금(3.4). 1 은 `FW_IPROPI_PROTECTION_RECORD=<검증 문서 경로>` 없이는 구성 단계에서 멈춤. `hil` 은 늘 0 |
+| `FW_MOTOR_OUTPUT` | `0`·`1` | **`0`** | 0 이면 출력 잠금(3.4). 1 은 커밋된 보호 확인 기록(`FW_IPROPI_PROTECTION_RECORD`)과 `FW_BUILD=commission` 이 있어야 구성된다 — 계약은 [모터 출력 설계](2026-11-12-weact-h743-motor-output.md) 2절. 그 기록을 쓰고 커밋하는 것이 사용자 결정(Q6)이다. `hil`·`normal`·IWDG 강제 시험 빌드는 늘 0 |
 | `FW_LINK` | `usb`·`uart7` | `usb` | 링크 전송로(5절) |
 | `FW_ESTOP_PIN` | `none`·핀 이름 | `none` | 코어 설정 `estop_wired`. 회로도에 넷이 없어 지금은 `none`(7절) |
 

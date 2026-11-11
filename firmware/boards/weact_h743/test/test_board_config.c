@@ -27,8 +27,13 @@ int main(void)
     CHECK(drive_config_valid(c));
     CHECK(board_config_valid(c));
     /* IPROPI on the ADC pins is unprotected on schematic V1.0: outputs stay locked by default
-       (plan 5 precondition, lead decision Q6). */
+       (plan 5 precondition, lead decision Q6); only the gated commissioning build opens them
+       (motor output design 2). */
+#if defined(FW_MOTOR_OUTPUT_OPEN)
+    CHECK(!c->outputs_locked && c->commission_build);
+#else
     CHECK(c->outputs_locked);
+#endif
 #if defined(FW_BUILD_hil)
     CHECK(c->hil_plant && !c->commission_build); /* board design 9 */
 #elif defined(FW_BUILD_commission)
@@ -37,10 +42,15 @@ int main(void)
     CHECK(!c->hil_plant && !c->commission_build);
 #endif
     CHECK(!c->estop_wired); /* no e-stop net on schematic V1.0 */
-    /* Every build reports outputs_locked (bit6), the IWDG stall test build included (lead
-       condition 2026-11-12): the real executor then refuses teleop and autonomy. */
+    /* Every locked build reports outputs_locked (bit6), the IWDG stall test build included (lead
+       condition 2026-11-12): the real executor then refuses teleop and autonomy. The output
+       build clears it and is refused as a commissioning build instead. */
     uint8_t flags = state_flags(c);
+#if defined(FW_MOTOR_OUTPUT_OPEN)
+    CHECK((flags & DRIVE_STATE_OUTPUTS_LOCKED) == 0u);
+#else
     CHECK((flags & DRIVE_STATE_OUTPUTS_LOCKED) != 0u);
+#endif
     printf("STATE flags 0x%02x\n", flags);
     CHECK(kth_raw_zero_outside_range(&c->steer));
     CHECK(kth_raw_zero_outside_range(&c->lift));
@@ -49,9 +59,13 @@ int main(void)
     bad.steer.zero_offset_rad = 0.0f;
     CHECK(drive_config_valid(&bad));
     CHECK(!board_config_valid(&bad));
-    /* An unlocked configuration is refused by this board build. */
+    /* Outputs open only in a commissioning configuration (motor output design 2). */
     drive_config open = *c;
     open.outputs_locked = false;
+    open.commission_build = false;
+    open.hil_plant = false;
     CHECK(!board_config_valid(&open));
+    open.commission_build = true;
+    CHECK(board_config_valid(&open));
     return FW_TEST_RESULT();
 }
