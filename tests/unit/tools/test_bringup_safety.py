@@ -122,8 +122,8 @@ def test_analyze_reads_the_timeline_from_a_marker(tmp_path):
     assert sw["new_boot_ms"] is not None and sw["new_boot_reset_cause"] == "IWDG"
     assert out["external"]["output_response_ms"] == {"value": 40.0, "limit": 100.0, "pass": True}
     # a value without a threshold is still kept
-    assert bringup.verdict("disarm", {"stop_time_ms": "300"})["stop_time_ms"] == {"value": 300.0, "limit": None,
-                                                                                 "pass": None}
+    assert bringup.verdict("iwdg", {"stop_time_ms": "300"}, floor=True)["stop_time_ms"] == {
+        "value": 300.0, "limit": None, "pass": None}
 
 
 def test_a_state_not_naming_the_disarm_never_confirms_the_cleanup():

@@ -57,8 +57,12 @@ HANDOVER_S = 0.05  # a nonzero hold stops sending this much before its end, so t
 # while the last nonzero one is still valid -- and no nonzero command outlives its hold (Codex re-review P2-1)
 # plan 3.4 thresholds (provisional, 0.2 m/s empty truck)
 OUTPUT_RESPONSE_MS = {"disarm": 100.0, "iwdg": 100.0}
-WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0}
-STOP_DISTANCE_MM = {"tx_cut": 100.0, "expiry": 100.0}
+# DISARM: provisional, the link loss's values (lead decision 2026-11-12, plan 3.4) -- reviewed after the S5
+# measurements, never relaxed to fit them; a coasting wheel that misses them argues for safe_brake=true on the wheels
+WHEEL_STOP_MS = {"tx_cut": 500.0, "expiry": 500.0, "disarm": 500.0}
+STOP_DISTANCE_MM = {"tx_cut": 100.0, "expiry": 100.0, "disarm": 100.0}
+STAND_NOTE = ("over the threshold on the stand: report the cause (coast, safe_brake) first -- the threshold is not "
+              "relaxed; the pass is the floor S5 measurement's")
 # ② the DISARMs in a commissioning time limit's STOPPING take the general DISARM's thresholds, provisionally until
 # the S5 measurements (lead decision 2026-11-12; plan 3.4) -- whatever the DISARM rows hold, these follow
 THRESHOLD_KIND = {"limit_disarm": "disarm", "hold_disarm": "disarm"}
@@ -699,9 +703,12 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
                    "note": "software evidence only: stop time and distance pass on external measurements"}, session)
 
 
-def verdict(kind: str, external: dict) -> dict:
+def verdict(kind: str, external: dict, *, floor: bool = False) -> dict:
     """Design 4: external measurements against the plan 3.4 thresholds. Every value given is kept, with or without
-    a threshold (Codex impl P2-10); 'unavailable' stays so."""
+    a threshold (Codex impl P2-10); 'unavailable' stays so. Off the floor (wheels lifted on the stand, the default)
+    a wheel's stop time and distance have no body inertia or floor drag: they are shown against the threshold as a
+    reference only, the pass left to the floor S5 measurement (lead decision 2026-11-12); the output response is
+    judged either way."""
     out = {}
     for name, table in (("output_response_ms", OUTPUT_RESPONSE_MS), ("stop_time_ms", WHEEL_STOP_MS),
                         ("stop_distance_mm", STOP_DISTANCE_MM)):
@@ -711,11 +718,18 @@ def verdict(kind: str, external: dict) -> dict:
         if value is None or value == "unavailable":
             out[name] = {"value": "unavailable", "limit": limit, "pass": None}
         else:
-            out[name] = {"value": float(value), "limit": limit, "pass": None if limit is None else float(value) <= limit}
+            v = float(value)
+            if name != "output_response_ms" and not floor:
+                over = None if limit is None else v > limit
+                out[name] = {"value": v, "limit": limit, "pass": None, "reference": "stand", "over_limit": over}
+                if over:
+                    out[name]["note"] = STAND_NOTE
+            else:
+                out[name] = {"value": v, "limit": limit, "pass": None if limit is None else v <= limit}
     return out
 
 
-def analyze(record: Path, marker: int, kind: str, external: dict) -> dict:
+def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool = False) -> dict:
     """A recorded run around one operator marker (IWDG, e-stop, main power): the software timeline from the marker's
     host time -- the last STATE before a gap or the record's end, the first mode change, the first all-zero duty,
     a new boot and its reset cause, the count settle -- and the external verdict."""
@@ -743,7 +757,7 @@ def analyze(record: Path, marker: int, kind: str, external: dict) -> dict:
                          "last_state_ms": rel(after[-1]) if after else None,
                          "count_settle_ms": None if settle is None or settle.host_ns is None
                          else (settle.host_ns - m_ns) / 1e6},
-            "external": verdict(kind, external),
+            "external": verdict(kind, external, floor=floor),
             "note": "software evidence only: the S5 verdict takes the external measurements"}
 
 
@@ -815,6 +829,7 @@ def main(argv=None) -> int:
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1)
+    an.add_argument("--floor", action="store_true", help="the marker's run was on the floor (else the stand)")
     an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power") + COMMISSION_SCENARIOS,
                     required=True)
     for p in (sc, an, cm):
@@ -824,7 +839,7 @@ def main(argv=None) -> int:
     if args.cmd == "analyze":
         print(json.dumps(analyze(Path(args.record), args.marker, args.kind, {
             "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
-            "stop_distance_mm": args.stop_distance_mm}), default=str))
+            "stop_distance_mm": args.stop_distance_mm}, floor=args.floor), default=str))
         return 0
     link = ReconnectingLink(args.device, baud=args.baud)
     with open(args.out, "a", encoding="utf-8") as out:
@@ -920,7 +935,7 @@ def execute(args, bench: Bench) -> dict:
             result = run_scenario(bench, session, args.kind, args.rate)
             result["external"] = verdict(args.kind, {
                 "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
-                "stop_distance_mm": args.stop_distance_mm})
+                "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)
     except Refused as exc:
         result = {"result": "refused", "why": str(exc)}
     except BaseException as exc:  # Ctrl-C and anything else: an aborted run (Codex impl review P1-1)

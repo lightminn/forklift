@@ -330,4 +330,7 @@ def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp
     rec = tmp_path / "run.jsonl"
     rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
     out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"})
+    assert out["external"]["stop_time_ms"]["reference"] == "stand"  # the commissioning scenarios run lifted
+    assert out["external"]["stop_time_ms"]["limit"] == 400.0 and out["external"]["stop_time_ms"]["over_limit"]
+    out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"}, floor=True)
     assert out["external"]["stop_time_ms"] == {"value": 450.0, "limit": 400.0, "pass": False}
