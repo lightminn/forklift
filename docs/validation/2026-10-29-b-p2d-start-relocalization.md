@@ -97,6 +97,7 @@ Recorded in `docs/validation/assets/b-p2d/freeze1.json` by `tools/reloc_judge.py
   - The arguments are stored with the paths under the session's own run root (its `live_web_root`) as repository paths, the world and per-session arguments left out. A path elsewhere stays absolute, so a changed copy outside the run root does not pass as the frozen file, and a session run from a root other than the judged code root is off the freeze (`d8cc6c87`).
   - The external inputs are stored as their recorded content hashes: `forklift_urdf_sha256`, `pallet_urdf_sha256`, `pallet_geometry_sha256` and `scene_sha256`.
   - The base scene and URDF stay named by their absolute ws1 paths.
+  - `freeze1.json` names the reference session's result by the session-temporary path it was read from (`reference_result`). The judge only records that path; it judges against the stored input hashes. The file itself is kept at `docs/validation/assets/b-p2d/ref_frame_0_result.json` (md5 `4f9f71c94cc5f4dd7ec3998a368ad076`, moved 2026-11-11); the frozen record is left unchanged.
 - **Bridge image:** `forklift/ros2-dev@sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659`, by digest. The collection runs it as `BRIDGE_IMAGE`, and each session's recorded image id is held to it.
 - **Bridge stage bound: 40 s.** That is 2 × the development maximum of 19.67 s, rounded up (plan 4.3).
 
