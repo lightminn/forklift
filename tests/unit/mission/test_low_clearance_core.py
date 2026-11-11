@@ -14,6 +14,7 @@ from forklift_core.mission.state import MissionState
 from forklift_core.planning import Bounds, Footprint, Rectangle
 from forklift_core.planning.geometry import Pose2D
 from forklift_core.planning.pallet_mission import AssetSpec, PalletSite, PlacedProp, TransportScenario
+from forklift_core.safety.truth_access import SafetySpeed, TruthAccessViolation
 
 GEOMETRY = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1, max_steering_rad=0.8,
                              max_wheel_rate_rad_s=50.0)
@@ -258,3 +259,28 @@ def test_another_tracker_on_the_same_return_keeps_the_search_props():
     core, state = _return_start_backoff_core(lambda planned: tracker(0.0, -1.0, direction=-1))
     core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, -0.15, False)
     assert "slot_to_m" not in state["low_clearance"]["legs"][0] and core._low_clearance_cap == (10.0, 0.0)
+
+
+@pytest.mark.parametrize("speed", [
+    SafetySpeed(0.0, 0.05, (1, -1)),
+    SafetySpeed(0.0, 0.0, (1,), valid=False),
+])
+def test_the_real_truck_stops_on_an_unsure_or_invalid_speed_even_with_nothing_near(speed):
+    """Sim-to-real 4d-1 (Codex 4d-1 review P2): the guard's own cap is infinite with nothing near, so the stop is set
+    as this tick's cap directly."""
+    core, state = make(rects=[])
+    core.options.real_vehicle = True
+    core.hooks.safety_speed = lambda: speed
+    core.trackers["transport"].update(np.array([0.0, 0.0, 0.0]), 0.3, 0.01)
+    core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)
+    assert core._low_clearance_cap == (10.0, 0.0)
+    assert state["low_clearance"]["zero_ticks"]["transport"] == 1
+
+
+def test_the_real_truck_has_no_speedless_fallback():
+    core, _ = make(rects=[])
+    core.options.real_vehicle = True
+    del core.hooks.truth_speed
+    core.trackers["transport"].update(np.array([0.0, 0.0, 0.0]), 0.3, 0.01)
+    with pytest.raises(TruthAccessViolation):
+        core.low_clearance_tick(10.0, (0.0, 0.0, 0.0), 0.0, 0.3, True)

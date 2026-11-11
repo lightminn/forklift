@@ -1452,17 +1452,21 @@ class MissionCore:
             if self.exit_exempt_open():
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
+        directions_ = self._check_directions(speed_, direction)
         allowed, why = self._limit_any_direction(lambda d_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=max(abs(requested_speed), speed_.bound_mps),
-        ), speed_, direction)
+        ), directions_)
         if direction is None:
-            direction = speed_.directions[0]  # what the rest of the tick records (unsure: the first checked)
+            direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
         # watchdog stop holds the wheels in every phase, acting or not (Codex impl review P1)
         if why == "layer_latency_exceeded":  # asked only then: no new hook call on a recorded tick (replay gate)
             hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"
+        speed_hold_ = self._speed_hold(speed_)  # 4d-1: an invalid safety speed holds the wheels, acting or not
+        if speed_hold_:
+            allowed, why = 0.0, "safety_speed_invalid"
         if self.exit_exempt_open() and allowed > self.EXIT_EXEMPT_SPEED_MPS:
             allowed = self.EXIT_EXEMPT_SPEED_MPS  # the extract's cruise while exempt (plan D1)
         if exit_closed_ == "watch":
@@ -1521,6 +1525,8 @@ class MissionCore:
             acting = True
             if pocket["check"] is None:
                 allowed, why = 0.0, "pocket_missing"
+            elif len(directions_) > 1:
+                allowed, why = 0.0, "direction_unsure"  # 4d-1: the pocket check answers one direction (real truck only)
             elif pocket.get("await_still_frame"):
                 allowed, why = 0.0, "pocket_settle"
             elif (
@@ -1579,7 +1585,8 @@ class MissionCore:
         # The permission's own limit, applied to the wheels as a step
         # (the stop it was measured with); the path-blocked stop below
         # is a planned one and brakes on the slew.
-        obstacle["permission_cap"] = (t, float(allowed)) if (options.obstacle_act and (acting or budget_stop_)) else None
+        obstacle["permission_cap"] = (t, float(allowed)) if (
+            options.obstacle_act and (acting or budget_stop_ or speed_hold_)) else None
         if obstacle["permission_cap"] is not None and allowed == 0.0 and why.startswith("sensor_silent"):
             # N9 deadlines: the permission's zero reaches the wheels as a
             # step through the final cap whatever the tracker asks (Codex
@@ -1607,7 +1614,7 @@ class MissionCore:
             obstacle["slowed"][ms.phase] = obstacle["slowed"].get(ms.phase, 0) + 1
             key = f"{ms.phase}:{why}"
             obstacle["reasons"][key] = obstacle["reasons"].get(key, 0) + 1
-            if options.obstacle_act and (acting or budget_stop_):
+            if options.obstacle_act and (acting or budget_stop_ or speed_hold_):
                 requested_speed = math.copysign(allowed, requested_speed)
                 # Zero allowed: the emergency stop the check assumed --
                 # wheels to zero, steering held (Codex L0b P1).
@@ -5510,10 +5517,12 @@ class MissionCore:
         allowed, why = self._limit_any_direction(lambda d_: obstacle["layer"].limit(
             t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
             direction=d_, loaded=loaded, cap_mps=speed_.bound_mps,
-        ), speed_, None)
+        ), self._check_directions(speed_, None))
         if why == "layer_latency_exceeded":  # plan 2026-11-11 layer budget; no new hook call on a recorded tick
             self.hooks.require(False, "layer_latency_exceeded")
         budget_stop_ = why == "layer_overdue"  # holds the wheels whether the phase acts or not (Codex impl review P1)
+        if self._speed_hold(speed_):  # 4d-1: an invalid safety speed holds the wheels, acting or not
+            allowed, why, budget_stop_ = 0.0, "safety_speed_invalid", True
         if exit_closed_ == "watch":
             allowed, why = 0.0, "exit_watch"  # plan D2: the ringing tick stops (Codex impl P1-2)
         acting = False
@@ -6073,12 +6082,14 @@ class MissionCore:
         # the largest of the speeds it has or is asked for.
         has_speed_ = (getattr(self.hooks, "safety_speed", None) is not None
                       or getattr(self.hooks, "truth_speed", None) is not None)
-        speed_ = self.safety_speed() if has_speed_ else SafetySpeed.exact(0.0)  # 4d-1
+        # 4d-1: the real truck has no speed-less fallback (a missing hook raises in safety_speed)
+        speed_ = self.safety_speed() if (has_speed_ or self._real_vehicle()) else SafetySpeed.exact(0.0)
         commanded = float(state.get("command_speed", 0.0))
         speed_cap = max(abs(float(requested_speed)), abs(commanded), speed_.bound_mps)
-        if speed_.bound_mps > 0.01 and len(speed_.directions) == 2:
-            speed_cap, direction = 0.0, 1  # 4d-1: moving in a direction it cannot tell -- stop (the real truck only)
-        elif speed_.bound_mps > 0.01:
+        # 4d-1: an invalid speed, or moving in a direction it cannot tell, stops the wheels this tick (real truck only;
+        # the guard below still runs for its record, on the first possible direction)
+        unsure_stop_ = self._speed_hold(speed_) or (speed_.bound_mps > 0.01 and len(speed_.directions) == 2)
+        if speed_.bound_mps > 0.01:
             direction = speed_.directions[0]
         elif abs(commanded) > 1e-6:
             direction = 1 if commanded > 0 else -1
@@ -6110,6 +6121,9 @@ class MissionCore:
                                       "clearance_now_m": _finite_or_none(now_)})
                 else:
                     holds[-1]["last_s"] = float(t)
+        if unsure_stop_:
+            self._low_clearance_cap = (t, 0.0)
+            guard["zero_ticks"][ms.phase] = guard["zero_ticks"].get(ms.phase, 0) + 1
 
     @property
     def kinematics(self):
@@ -6142,13 +6156,35 @@ class MissionCore:
             raise TruthAccessViolation("truth_speed")
         return SafetySpeed.exact(self.hooks.truth_speed())
 
+    STANDING_MPS = 0.01  # the stop confirmation's speed (the N9 trace's, the SLAM-off standing)
+
+    def _speed_hold(self, speed: SafetySpeed) -> bool:
+        """An invalid safety speed holds the wheels (4d-1, truth audit 3a); the simulation's is always valid."""
+        return self._real_vehicle() and not speed.valid
+
+    def _check_directions(self, speed: SafetySpeed, direction) -> list:
+        """The motion directions a safety check covers (4d-1). The simulation: the caller's ``direction`` (the
+        request, a cusp hand-over) or else the true speed's -- one, as before. The real truck: the caller's direction
+        and, unless the truck is standing (a standing truck moves only the way it is asked), every direction the
+        measured speed may have; a standing truck asked nothing reads the first of them (its motion is below the
+        standing speed)."""
+        if not self._real_vehicle():
+            return [direction if direction is not None else speed.directions[0]]
+        out = [] if direction is None else [direction]
+        if direction is None or not speed.standing(self.STANDING_MPS):
+            for d in speed.directions:
+                if d not in out:
+                    out.append(d)
+        if direction is None and speed.standing(self.STANDING_MPS):
+            out = out[:1]
+        return out
+
     @staticmethod
-    def _limit_any_direction(limit_fn, speed: SafetySpeed, direction):
-        """``direction`` decided by the caller, or None to use the safety speed's: one call for a known direction,
-        the smaller of both when it is unsure (the real truck only; the simulation always knows)."""
-        if direction is not None or len(speed.directions) == 1:
-            return limit_fn(direction if direction is not None else speed.directions[0])
-        results = [limit_fn(d) for d in speed.directions]
+    def _limit_any_direction(limit_fn, directions):
+        """The layer's limit over ``directions``: one call for one direction, the smallest when there are more."""
+        if len(directions) == 1:
+            return limit_fn(directions[0])
+        results = [limit_fn(d) for d in directions]
         return min(results, key=lambda r: r[0])
 
     def _kinematic_refusal(self, t: float, reason: str, requested_curvature: float, curvature_range) -> None:
