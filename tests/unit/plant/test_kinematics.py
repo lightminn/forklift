@@ -4,14 +4,13 @@ import math
 
 import numpy as np
 import pytest
+from test_real_vehicle import CHASSIS, PROV, mapping  # noqa: E402
 
 from forklift_core.control.path_tracking import AckermannGeometry, ackermann_command
 from forklift_core.control.speed_chain import CREEP_STEERING_ERROR_RAD
 from forklift_core.mission.scene_replan import SceneReplanConfig
 from forklift_core.plant.kinematics import AckermannKinematics, RealKinematics
 from forklift_core.plant.real_vehicle import DriveRefusal, real_vehicle_from_mapping
-
-from test_real_vehicle import CHASSIS, PROV, mapping  # noqa: E402
 
 GEOM = AckermannGeometry(0.66, 0.53, 0.125, 0.2617993878, 8.0)
 RATE = 1.0  # settings["steering_command_rate_rad_s"]

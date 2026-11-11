@@ -2,15 +2,14 @@
 
 import numpy as np
 import pytest
+from test_mcu_host import BOOT, MS, state  # noqa: E402
+from test_real_vehicle import CHASSIS, mapping  # noqa: E402
 
 from forklift_core.mcu_link.messages import Drive, LinkDecoder, Mode, StateFlag
 from forklift_core.plant.kinematics import RealKinematics
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.port import PortResult, RealPlantPort
 from forklift_core.plant.real_vehicle import real_vehicle_from_mapping
-
-from test_mcu_host import BOOT, MS, state  # noqa: E402
-from test_real_vehicle import CHASSIS, mapping  # noqa: E402
 
 CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=4)
 KIN = RealKinematics(real_vehicle_from_mapping(mapping(), CHASSIS))

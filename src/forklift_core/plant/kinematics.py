@@ -19,7 +19,12 @@ import numpy as np
 
 from forklift_core.control.path_tracking import AckermannGeometry, ackermann_command
 from forklift_core.control.speed_chain import CREEP_STEERING_ERROR_RAD
-from forklift_core.plant.real_vehicle import DriveRefusal, RealVehicleConfig, RearDrive, rear_drive_command
+from forklift_core.plant.real_vehicle import (
+    DriveRefusal,
+    RealVehicleConfig,
+    RearDrive,
+    rear_drive_command,
+)
 
 # The scene replan's presteer tolerance (mission/scene_replan.py SceneReplanConfig default), restated here
 # without importing the mission package into the plant package.
