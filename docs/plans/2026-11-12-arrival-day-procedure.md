@@ -16,7 +16,7 @@
   - `cpr`·`analyze` 는 stdout 에만 남기므로 `| tee result.json` 을 붙인다.
 - **장치 경로**: udev 규칙 설치(3절) 뒤에는 `--device /dev/forklift-mcu`(USB CDC, `--baud` 없음). UART7 대안은 USB-UART 어댑터 경로에 `--baud 460800`.
 - **`--allow-locked` 는 실기에서 쓰지 않는다**(모형·HIL 전용).
-- 공통 판정: 구동 명령은 `result == "ok"`, `aborted == null`, `cleanup_confirmed == true` 셋이 모두 서야 한다.
+- 공통 판정: 구동 명령은 `result == "ok"`, `aborted == null`, `cleanup_confirmed == true` 셋이 모두 서야 한다. 예외는 일부러 리셋·전원 차단을 거는 S5 실행뿐이다(9.1 — 중단이 정상, 외부 측정으로 판정).
 
 ## 1. 준비물
 
@@ -140,8 +140,8 @@ udevadm info -q property /dev/forklift-mcu | grep ID_MM_DEVICE_IGNORE   # =1 이
    - KTH·엔코더 입력
    - PB4 는 이 단계에서 판정하지 않는다: MCU 가 없으면 nSLEEP 이 내려가 있고 nSCS 가 high 라 SDO 는 Hi-Z 이므로, 멀티미터 값은 SDO high 전압이 아니다(Codex).
    - 이 무부하 측정은 단락·레벨 확인일 뿐이다. 모터가 없으면 IPROPI 는 0 이라, 부하 전류에서 보호 회로가 맞는지는 보여 주지 않는다(agy). 그 확인은 7절 선행 조건의 보호 확인 기록이 맡는다.
-5. **모든 전원을 끄고**(벤치 전원·USB), 레일이 내려간 것을 확인한 뒤 MCU 를 꽂는다. 그다음 전원을 넣고 부팅한다.
-6. **PB4 — SDO high 전압**(사용자 결정 2026-11-11): 부팅 뒤 펌웨어가 드라이버를 깨우고 20 ms 마다 상태를 SPI 로 읽는다. 이때 PB4 를 오실로스코프로 보고 **high 의 최고값**을 읽는다(멀티미터 평균값은 쓰지 않는다). 3.6 V 이하이면 플래시를 두고, 넘으면 전원을 끄고 플래시를 뺀다. 3.6 V 이하라도 합격 보장은 아니다. 오실로스코프가 없으면 이 판정은 보류하고 총괄에 올린다.
+5. (6번의 PB4 결정이 난 뒤) **모든 전원을 끄고**(벤치 전원·USB), 레일이 내려간 것을 확인한 뒤 MCU 를 꽂는다. 그다음 전원을 넣고 부팅한다.
+6. **PB4 — SDO high 전압: 결정 대기**(Codex 2라운드). 사용자 결정(2026-11-11)은 "실측해서 3.6 V 이하면 플래시를 둔다"이다. 그런데 DRV8244S 의 SDO high 는 nSLEEP 전압을 따라 nSLEEP = 3.3 V 에서 부하 없이 최대 3.8 V 다(SLVSG24C 7.5.2 `VOH_SDO_NL`). 측정하려면 드라이버를 깨우고 SPI 를 돌려야 하므로 **측정이 곧 플래시의 첫 노출**이다. 총괄에 재결정을 요청했다(권고: 첫 전원 전에 쓰지 않는 SPI 플래시를 뺀다). **결정이 오기 전에는 5번(MCU 를 꽂고 부팅)으로 가지 않는다.** 결정 뒤 측정은 오실로스코프로 SPI 가 도는 동안 PB4 의 high 최고값을 읽는다(멀티미터 평균값은 쓰지 않는다).
 
 STATE 에서 `flags` 에 `outputs_locked`, 그리고 `drivers_ready` 를 확인한다.
 
@@ -158,7 +158,7 @@ python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --s
   - `wheel_count_left/right` 가 회전과 비례하는지
   - `steering_rad`·`lift_m` 이 손 회전을 따라가는지
 - 조향 끝에서 끝까지 KTH 각이 한 바퀴 안에 드는지, **넘김 지점이 사용 범위 밖에 있는지** 보고, 직진 영점을 기록한다(계획 S2).
-- **KTH CRC 변형 확정**(계획 S2): STATE 의 조향·승강 값이 유효(NaN 아님)하고 `rx_errors`·결함에 CRC 오류가 늘지 않으면 지금 설정한 변형(`KTH_CRC_G704_BYTES`)이 맞다. 무효가 계속되면 멈추고 다른 변형으로 보드 설정을 바꿔 다시 굽는다(보드 설계 3.7).
+- **KTH CRC 변형 확정**(계획 S2): **지금 도구로는 할 수 없어 미완료**다(Codex 2라운드). STATE 의 `rx_errors` 는 링크 프레임 오류이고, KTH 의 CRC 오류 계수는 STATE 에 실리지 않는다. 또 CRC 실패가 연속 3 회 미만이면 코어가 이전 유효 위치를 유지하므로, 값이 NaN 이 아니라는 것만으로 변형이 맞다고 할 수 없다. 원시 KTH 프레임이나 CRC 오류 계수를 내보내는 경로가 생기면(계약 변경, 후속) 그때 확정한다. 지금 볼 수 있는 것은 값이 계속 무효(NaN)이면 변형이 틀렸다는 반대 방향 증거뿐이다 — 그러면 멈추고 다른 변형으로 다시 굽는다.
 
 ### 6.3 감속비 G
 
@@ -280,10 +280,11 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
   - 한 프로세스가 링크를 쥐고 구동한다: `python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl --axis L --duty 0.05 --seconds 1.5 --power-switch-in-hand`. 바퀴가 도는 동안 외부 리셋 버튼을 누른다. 두 프로세스가 같은 tty 를 열면 수신을 나눠 읽으므로 `record` 를 함께 돌리지 않는다(Codex).
   - 오실로스코프로 잴 것: MTR_SLEEP·DRVOFF·EN·PH 핀, 모터 단자 전압, 모터 전류. 트리거는 NRST 하강.
   - 합격: 리셋 뒤 MTR_SLEEP 이 low 로 가서 전 채널이 SLEEP(출력 Hi-Z)이 되고, 모터 전류가 0 으로 간다. 리셋 순간의 반대 방향 펄스 유무와 그 길이를 기록한다.
+  - 이 실행의 도구 결과는 **중단이 정상**이다: 의도한 리셋으로 부팅이 바뀌므로 `aborted == "boot_changed"`, `result == "aborted"` 가 나온다(Codex 2라운드). 0절의 공통 합격 조건은 여기 적용하지 않고, 합격은 위 외부 측정으로만 한다. 재부팅 확인(`reset_cause == "PIN"`)은 리셋 뒤 따로 `record --seconds 10` 을 돌려 그 기록에서 본다.
 - **IWDG 판정**(계획 3.4: 주기 정지부터 출력 정지까지 100 ms): ①의 계산값 최대 53.8 ms + 주기 1 ms + ②에서 잰 리셋→차단 시간이 100 ms 안이어야 한다. 셋을 기록하고, 합이 100 ms 안이라는 근거가 없으면 판정을 보류한다. 한계: NRST 버튼과 IWDG 의 리셋 펄스 길이가 다르다(총괄 결정 (A)). 오실로스코프가 없으면 ②와 이 판정은 미룬다.
 - NRST 를 GND 로 붙잡은 상태에서도 위 핀 전압을 잰다. 계산과 다르면 멈추고 올린다(모터 출력 설계 4.1).
 
-**주 전원 차단**(`fw-open`, 받침대): ②와 같이 `commission --seconds 1.5` 로 한 바퀴를 돌리는 동안 차단 스위치를 내린다. 그 실행의 `run.jsonl` 에서 마지막 STATE 시각과 다음 부팅의 `reset_cause`(전원이면 `POWER`)를 읽고, 바퀴가 서는 시간·거리는 영상이나 줄자로 잰다. 구동 중 사건 표시를 하나의 프로세스로 남기는 도구 경로는 아직 없다 — 지금은 이 기록과 외부 측정으로 판정하고, 도구 보강은 콘솔 세션에 넘긴다.
+**주 전원 차단**(`fw-open`, 받침대): ②와 같이 `commission --seconds 1.5` 로 한 바퀴를 돌리는 동안 차단 스위치를 내린다. 이 실행도 **중단이 정상**이고(공통 합격 조건 적용 안 함), 그 `run.jsonl` 에서는 마지막 STATE 시각만 읽는다. 전원을 다시 넣은 뒤 따로 `record --seconds 10` 을 돌려 `reset_cause == "POWER"` 를 본다. 바퀴가 서는 시간·거리는 영상이나 줄자로 잰다. 구동 중 사건 표시를 하나의 프로세스로 남기는 도구 경로는 아직 없다 — 지금은 이 기록과 외부 측정으로 판정하고, 도구 보강은 콘솔 세션에 넘긴다.
 
 ### 9.2 결정 뒤에 할 것
 
