@@ -344,6 +344,32 @@ def test_the_steering_leaving_straight_is_an_immediate_stop():
     assert stopped_by(r, "steering")[0], stopped_by(r, "steering")[1]
 
 
+class ScriptedSteeringMcu(FakeMcu):
+    """Reports the scripted steering angles on its next STATEs (one per STATE), then the commanded one."""
+
+    def __init__(self):
+        super().__init__()
+        self.q_script = []
+
+    def state(self):
+        if self.q_script:
+            self.q = self.q_script.pop(0)
+        return super().state()
+
+
+def test_a_steering_excursion_on_a_state_between_cycles_stops():
+    """Codex impl review P2-1: two STATEs a cycle, 0.011 then 0.009 rad -- the first is past straight (0.01)."""
+    mcu = ScriptedSteeringMcu()
+    r = wall_rig(mcu)
+    escaping(r)
+    r.run(3, teleop={"speed_ratio": 1.0})
+    mcu.q_script = [0.011, 0.009]
+    n = len(r.sent)
+    r.cycle(teleop={"speed_ratio": 1.0})
+    assert stopped_by(r, "steering")[0], stopped_by(r, "steering")[1]
+    assert r.nonzero_sent(n) == []
+
+
 def test_an_operator_stop_ends_the_escape():
     r = wall_rig()
     escaping(r)
@@ -421,6 +447,53 @@ def test_the_final_travel_with_inertia_stays_within_the_budget(mcu_kw):
     c1 = stand_after(r, 200, deadman=False)
     assert all(v == 0.0 for v in mcu.v), mcu.v
     assert travel_m(c0, c1) <= rt.ESCAPE_DISTANCE_M, (travel_m(c0, c1), r.bridge.escape_log)
+
+
+@pytest.mark.parametrize("mcu_kw", [{}, {"late_s": 0.15, "runaway": True}])
+def test_the_travel_after_the_end_is_recorded_to_the_stand(mcu_kw):
+    """Codex impl review P2-3: the record carries the travel from the escape's start to the stand, not only to the
+    end decision."""
+    p = rt.load_bridge_params(__import__("pathlib").Path(__file__).resolve().parents[3]
+                              / "config" / "real" / "teleop_bridge.yaml", VEH)
+    mcu = InertialMcu(accel=p.wheel_accel_mps2, **mcu_kw)
+    r = wall_rig(mcu)
+    c0 = counts(r)
+    escaping(r)
+    mcu.faulty = True
+    while r.bridge.escape is not None:
+        r.cycle(teleop={"speed_ratio": 1.0})
+    end = r.bridge.escape_log[-1]
+    c1 = stand_after(r, 200, deadman=False)
+    settled = [e for e in r.bridge.escape_log if e["event"] == "settled"]
+    assert len(settled) == 1 and settled[0]["offer_id"] == end["offer_id"]
+    assert max(settled[0]["travel_m"]) == pytest.approx(travel_m(c0, c1), abs=1e-4)
+    assert max(settled[0]["travel_m"]) > max(end["travel_m"])  # the inertia after the decision is in it
+    assert settled[0]["after_end_s"] > 0
+
+
+def test_a_hand_over_to_the_general_rule_is_recorded():
+    p = rt.load_bridge_params(__import__("pathlib").Path(__file__).resolve().parents[3]
+                              / "config" / "real" / "teleop_bridge.yaml", VEH)
+    r = wall_rig(InertialMcu(accel=p.wheel_accel_mps2))
+    escaping(r)
+    while r.bridge.escape is not None:
+        r.cycle(teleop={"speed_ratio": 1.0})
+    r.run(20, teleop={"speed_ratio": 1.0})
+    handed = [e for e in r.bridge.escape_log if e["event"] == "handed_over"]
+    assert len(handed) == 1 and len(handed[0]["travel_m"]) == 2
+
+
+def test_the_events_ride_the_cycle_record():
+    r = wall_rig()
+    offer = held(r)
+    _rec, _r = approve(r, {**offer, "offer_id": offer["offer_id"] + 3})
+    approve(r, offer)
+    while r.bridge.escape is not None:
+        r.cycle(teleop={"speed_ratio": 1.0})
+    stand_after(r, 30, deadman=False)
+    events = [e["event"] for x in r.recs for e in x.get("escape_events", [])]
+    assert events[:4] == ["offer", "refused", "approved", "start"] and "end" in events and "settled" in events
+    assert events == [e["event"] for e in r.bridge.escape_log]  # every logged event reaches a record exactly once
 
 
 def test_holding_on_past_the_end_is_the_general_rule():

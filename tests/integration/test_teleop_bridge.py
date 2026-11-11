@@ -3,7 +3,9 @@ speed, arm state machine, port) against the firmware core built as the MCU model
 console/1 through the Channels with request tokens. What it proves: the protocol, arming, the stops and the
 recording on a real core -- not a real motor's currents, directions or stopping (the model's plant is synthetic)."""
 
+import io
 import itertools
+import json
 import math
 import os
 import signal
@@ -82,11 +84,14 @@ class Console:
         self.ch.connect("c1", "op", control=True, token=self.token)
         self.seq, self.rseq = itertools.count(1), itertools.count(1)
         self.tick, self.lease, self.replies = None, None, []
+        self.events = []  # the vehicle's event messages (the console logs them)
 
     def pump(self):
         for _conn, msg in self.ch.take_out():
             if msg.get("t") == "tick":
                 self.tick = msg
+            elif msg.get("t") == "event":
+                self.events.append(msg)
             elif "request_id" in msg:
                 self.replies.append(msg)
                 if msg.get("lease_id"):
@@ -193,6 +198,7 @@ def test_a_wall_escape_against_the_model(run):
     offers the escape on the state message, the operator approves it, the model's wheels drive forward straight and
     slow, and the escape ends on its measured formula within the budget."""
     r = run(floor=lambda c, d, v: (1.0, "ok") if d > 0 else (0.0, "blocked_behind"))
+    r.b.record = io.StringIO()
     r.to_ready()
     r.cycles(60, teleop={"speed_ratio": 1.0}, until=lambda rec: r.b.core.offer is not None)
     offer = r.b.core.offer
@@ -211,11 +217,26 @@ def test_a_wall_escape_against_the_model(run):
     assert drives and all(m.left_wheel_rad_s > 0 and m.right_wheel_rad_s > 0 for m in drives)
     assert max(max(m.left_wheel_rad_s, m.right_wheel_rad_s) for m in drives) * r.b.vehicle.wheel_radius_m[0] \
         <= 0.05 + 1e-9
-    r.cycles(60, teleop={"speed_ratio": 1.0, "deadman": False})
+    # the model's wheel PI creeps the wheels back after the zero (its negative integral, design 3): the record
+    # follows the travel to the stand or to its 5 s limit
+    r.cycles(320, teleop={"speed_ratio": 1.0, "deadman": False},
+             until=lambda rec: any(e["event"] in ("settled", "settle_timeout")
+                                   for e in rec.get("escape_events", ())))
     st1 = r.b.host.state
     m_per = 2 * math.pi * r.b.vehicle.wheel_radius_m[0] / r.b.vehicle.counts_per_wheel_rev[0]
     travel = max(abs(st1.wheel_count_left - c0[0]), abs(st1.wheel_count_right - c0[1])) * m_per
     assert 0.03 < travel <= 0.20, travel
+    # Codex impl review P2-2: every step reaches the JSONL record and the console's event log
+    r.c.pump()  # the last cycle's messages
+    kinds = [m["kind"] for m in r.c.events]
+    assert kinds[:3] == ["escape_offer", "escape_approved", "escape_start"] and "escape_end" in kinds, kinds
+    assert {"escape_settled", "escape_settle_timeout"} & set(kinds), kinds
+    tail = r.b.core.escape_log[-1]
+    # from the start to the tail's end, every count both ways (the creep back adds): at least the net, within budget
+    assert travel - 1e-4 <= max(tail["travel_m"]) <= 0.20
+    rows = [json.loads(x) for x in r.b.record.getvalue().splitlines()]
+    logged = [e["event"] for row in rows for e in row.get("escape_events", [])]
+    assert logged == [e["event"] for e in r.b.core.escape_log]
 
 
 def test_the_cli_floor_without_a_scan_moves_nothing(run):

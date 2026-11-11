@@ -407,6 +407,7 @@ ESCAPE_TIME_S = 4.0
 ESCAPE_BRAKE_MIN_MPS2 = 0.3  # b_min: provisional, set by S5's stop measurement (plan's provisional table)
 ESCAPE_REVERSE_COUNTS = 3  # back from a wheel's best progress; re-set only from S6's count jitter (with a mm cap)
 ESCAPE_YAW_RAD_S = 0.02
+ESCAPE_SETTLE_S = 5.0  # the travel after an end is followed this long at most for the record
 
 
 def escape_stop_reach_m(travel_m: float, reading: EncoderReading, p: EncoderSpeedParams, *, cycle_s: float) -> float:
@@ -466,6 +467,8 @@ class TeleopBridge:
         self._approved: int | None = None
         self.escape: dict | None = None
         self.escape_log: list[dict] = []
+        self._events_out: list[dict] = []  # logged since the last cycle record (the JSONL and the console's events)
+        self._tail: dict | None = None  # an ended escape's travel followed to the stand or the hand-over
         self._offer_ids = itertools.count(secrets.randbelow(1 << 20) + 1)
         self.arbiter.escape = self.approve_escape
 
@@ -561,6 +564,10 @@ class TeleopBridge:
         self._arm_machine(now_ns, reading, rec)
         self._ping(now_ns, rec)
         applied = self._output(now_ns, out, reading, rec)
+        if self._tail is not None and self.escape is None:
+            self._tail_step(now_ns, applied, rec)
+        if self._events_out:
+            rec["escape_events"], self._events_out = self._events_out, []
         a.last_applied = applied  # what was put on the port, not the arbiter's target (Codex P1-3)
         rec["applied_mps"] = applied
         rec["phase"] = self.phase
@@ -796,7 +803,55 @@ class TeleopBridge:
 
     # ------------------------------------------------------- the wall escape (standing-direction-rule design 4)
     def _log_escape(self, now_ns: int, event: str, **fields) -> None:
-        self.escape_log.append({"now_ns": now_ns, "event": event, **fields})
+        entry = {"now_ns": now_ns, "event": event, **fields}
+        self.escape_log.append(entry)
+        self._events_out.append(entry)  # the cycle's record carries it (Codex impl review P2-2)
+
+    def _follow(self, track: dict, d: int | None = None) -> str | None:
+        """Every STATE since ``track["last_t"]``: each wheel's cumulative absolute travel and, while escaping (``d``),
+        the count reverse against the best progress and the steering on every STATE (Codex impl review P2-1)."""
+        for smp in self.samples:
+            st = smp.state
+            if st.mcu_time_us <= track["last_t"]:
+                continue
+            if st.boot_id != track["boot"]:
+                return "boot"
+            c = (st.wheel_count_left, st.wheel_count_right)
+            why = None
+            for w in (0, 1):
+                step = wheel_count_delta(c[w], track["last_c"][w])
+                track["travel"][w] += abs(step) * 2.0 * math.pi * self.params.radius_m[w] / self.params.counts_per_rev[w]
+                if d is not None:
+                    prog = wheel_count_delta(c[w], track["c0"][w]) * d
+                    track["best"][w] = max(track["best"][w], prog)
+                    if track["best"][w] - prog > ESCAPE_REVERSE_COUNTS:
+                        why = why or "wheel_reverse"
+            track["last_c"], track["last_t"] = c, st.mcu_time_us
+            if d is not None and why is None:
+                q = float(st.steering_rad)
+                if not (math.isfinite(q) and abs(q) <= self.kin.straight_threshold_rad):
+                    why = "steering"
+            if why is not None:
+                return why
+        return None
+
+    def _tail_step(self, now_ns: int, applied: float, rec: dict) -> None:
+        """Design 4.3's record after an end: the travel from the escape's start to the stand, or to the general rule
+        driving again (the hand-over), or for ESCAPE_SETTLE_S at most."""
+        t = self._tail
+        if self._follow(t) == "boot":
+            event = "settle_lost"
+        elif applied != 0.0:
+            event = "handed_over"
+        elif counts_still(self.samples, self.params):
+            event = "settled"
+        elif now_ns - t["end_ns"] > ESCAPE_SETTLE_S * 1e9:
+            event = "settle_timeout"
+        else:
+            return
+        self._tail = None
+        self._log_escape(now_ns, event, offer_id=t["offer_id"], travel_m=[round(x, 5) for x in t["travel"]],
+                         after_end_s=round((now_ns - t["end_ns"]) / 1e9, 3))
 
     def _drop_offer(self) -> None:
         self.offer, self._approved = None, None
@@ -882,6 +937,8 @@ class TeleopBridge:
                          travel_m=[round(t, 5) for t in e["travel"]],
                          elapsed_s=round((now_ns - e["start_ns"]) / 1e9, 3), steering_rad=e["q"])
         rec["escape_end"] = reason
+        self._tail = {"offer_id": e["offer_id"], "boot": e["boot"], "last_c": e["last_c"], "last_t": e["last_t"],
+                      "travel": list(e["travel"]), "end_ns": now_ns}
         if stop:
             if self.arbiter.mode != "STOPPED":
                 self._stop(now_ns, f"escape:{reason}", rec)
@@ -898,26 +955,11 @@ class TeleopBridge:
         return True
 
     def _escape_watch(self, reading: EncoderReading) -> str | None:
-        """Every STATE since the last cycle: per wheel cumulative absolute travel and the count reverse against the
-        best progress in the escape's direction (design 4.3); then the yaw and per-wheel overspeed on the reading."""
-        e = self.escape
-        d = e["d"]
-        for smp in self.samples:
-            st = smp.state
-            if st.mcu_time_us <= e["last_t"]:
-                continue
-            if st.boot_id != e["boot"]:
-                return "boot"
-            c = (st.wheel_count_left, st.wheel_count_right)
-            for w in (0, 1):
-                step = wheel_count_delta(c[w], e["last_c"][w])
-                e["travel"][w] += abs(step) * 2.0 * math.pi * self.params.radius_m[w] / self.params.counts_per_rev[w]
-                prog = wheel_count_delta(c[w], e["c0"][w]) * d
-                e["best"][w] = max(e["best"][w], prog)
-                if e["best"][w] - prog > ESCAPE_REVERSE_COUNTS:
-                    e["last_c"], e["last_t"] = c, st.mcu_time_us
-                    return "wheel_reverse"
-            e["last_c"], e["last_t"] = c, st.mcu_time_us
+        """Every STATE since the last cycle (``_follow``: travel, count reverse, steering); then the yaw and per-wheel
+        overspeed on the reading (design 4.3)."""
+        why = self._follow(self.escape, self.escape["d"])
+        if why is not None:
+            return why
         if reading.yaw_rate is not None and abs(reading.yaw_rate) > ESCAPE_YAW_RAD_S:
             return "yaw"
         if reading.wheel_mps is not None and max(abs(v) for v in reading.wheel_mps) > \
