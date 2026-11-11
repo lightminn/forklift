@@ -408,11 +408,14 @@ def test_an_oom_kill_beside_a_run_that_exited_0_does_not_fail_it(tmp_path):
 
 # --- real-time back-off -----------------------------------------------------------------------------------------------
 
+# The fake runs advance their sim time by the wall time that really passed (x the ratio), stamped with that same
+# instant: under load a tick takes longer than its 0.02 s sleep, and a fixed 0.02 s step per tick read a 0.4 run as
+# 0.344 (2026-11-11, test_a_step_up_does_not_delay_the_next_back_off under a concurrent pytest).
 PACED = (
-    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; end=time.monotonic()+float(sys.argv[3])\n"
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; last=time.monotonic(); end=last+float(sys.argv[3])\n"
     "while time.monotonic()<end:\n"
-    "    t+=0.02*float(sys.argv[2]); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n');"
-    " f.flush(); time.sleep(0.02)"
+    "    now=time.monotonic(); t+=(now-last)*float(sys.argv[2]); last=now\n"
+    "    f.write(json.dumps({'tick_t':t,'mono':now,'pacing_ok':False})+'\\n'); f.flush(); time.sleep(0.02)"
 )
 
 
@@ -1114,12 +1117,11 @@ def test_a_stall_steps_back_at_once_even_when_the_pace_is_also_slow(tmp_path):
     assert summary["backoffs"] and "no tick" in summary["backoffs"][0]["reason"]
 
 
-SLOW_THEN_FAST = (
-    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+SLOW_THEN_FAST = (  # sim time from the wall time that passed, as PACED
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic(); last=t0\n"
     "while time.monotonic()<t0+float(sys.argv[3]):\n"
-    "    r=0.25 if time.monotonic()<t0+float(sys.argv[2]) else 0.4\n"
-    "    t+=0.02*r; f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n');"
-    " f.flush(); time.sleep(0.02)"
+    "    now=time.monotonic(); r=0.25 if now<t0+float(sys.argv[2]) else 0.4; t+=(now-last)*r; last=now\n"
+    "    f.write(json.dumps({'tick_t':t,'mono':now,'pacing_ok':False})+'\\n'); f.flush(); time.sleep(0.02)"
 )
 
 
@@ -1149,14 +1151,16 @@ def test_the_default_warm_up_is_start_up_plus_a_window():
     assert inspect.signature(ib.run_bundle).parameters["pace_warmup_s"].default == 540.0
 
 
-PHASED = (
-    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic()\n"
+PHASED = (  # sim time from the wall time that passed, as PACED; a stopped phase writes nothing
+    "import json,sys,time; f=open(sys.argv[1],'a'); t=0.0; t0=time.monotonic(); last=t0\n"
     "for ph in sys.argv[2].split(','):\n"
     "    r, until = ph.split(':')\n"
     "    while time.monotonic() < t0 + float(until):\n"
+    "        now = time.monotonic()\n"
     "        if r != 'stop':\n"
-    "            t += 0.02 * float(r); f.write(json.dumps({'tick_t':t,'mono':time.monotonic(),'pacing_ok':False})+'\\n')\n"
+    "            t += (now - last) * float(r); f.write(json.dumps({'tick_t':t,'mono':now,'pacing_ok':False})+'\\n')\n"
     "            f.flush()\n"
+    "        last = now\n"
     "        time.sleep(0.02)"
 )
 
