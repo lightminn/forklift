@@ -16,9 +16,10 @@ CREEP_STEERING_ERROR_RAD = 0.05
 CREEP_FACTOR = 0.25
 
 
-def creep(target_mps: float, steering_error_rad: float) -> float:
-    """A quarter of the target while the steering is more than 0.05 rad from where it is going."""
-    return target_mps * CREEP_FACTOR if steering_error_rad > CREEP_STEERING_ERROR_RAD else target_mps
+def creep(target_mps: float, steering_error_rad: float, threshold_rad: float = CREEP_STEERING_ERROR_RAD) -> float:
+    """A quarter of the target while the steering is more than ``threshold_rad`` (0.05 rad: the simulation's front
+    wheel angle; the real truck's on its mechanism angle comes from its kinematics) from where it is going."""
+    return target_mps * CREEP_FACTOR if steering_error_rad > threshold_rad else target_mps
 
 
 def slew_cap_stop(previous_mps: float, target_mps: float, *, decel_mps2, accel_mps2: float, dt: float,

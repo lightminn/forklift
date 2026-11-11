@@ -85,3 +85,24 @@ def test_drive_makes_no_direct_actuation_or_gain_call():
     plant_made = [n.lineno for n in ast.walk(drive) if isinstance(n, ast.Call)
                   and isinstance(n.func, ast.Name) and n.func.id == "IsaacPlant"]
     assert len(plant_made) == 1
+
+
+def test_the_shared_contract_on_the_isaac_plant():
+    from forklift_core.control.path_tracking import AckermannGeometry
+    from forklift_core.plant.kinematics import AckermannKinematics
+    from forklift_core.plant.port import PlantCommand, PortResult
+
+    r = Robot()
+    p = IsaacPlant(r, action, WHEELS, STEERS, LIFT)
+    kin = AckermannKinematics(AckermannGeometry(0.66, 0.53, 0.125, 0.26, 8.0), 1.0)
+    d = kin.command(0.3, 0.1)
+    cmd = PlantCommand(0, 0, 0, 0, d, tuple(d.steering_rad), 0.05, "target")
+    assert p.command(cmd) == PortResult("queued")
+    applied = [a for _, a in r.calls]
+    assert np.array_equal(applied[0].joint_velocities, np.asarray(d.wheel_rates_rad_s))
+    assert np.array_equal(applied[1].joint_positions, np.asarray(d.steering_rad))
+    assert np.array_equal(applied[2].joint_positions, np.array([0.05]))
+    keep = PlantCommand(0, 0, 0, 0, d, tuple(d.steering_rad), 0.05, "keep")
+    r.calls.clear()
+    p.command(keep)
+    assert len(r.calls) == 2  # no lift target under keep

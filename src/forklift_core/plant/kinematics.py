@@ -45,9 +45,15 @@ class AckermannKinematics:
     creep_threshold_rad = CREEP_STEERING_ERROR_RAD
     presteer_threshold_rad = SIM_PRESTEER_TOLERANCE_RAD
 
-    def __init__(self, geometry: AckermannGeometry, steering_rate_rad_s: float) -> None:
+    def __init__(self, geometry: AckermannGeometry, steering_rate_rad_s) -> None:
+        """``steering_rate_rad_s``: a number, or a callable read at each slew (the core passes its settings'
+        ``steering_command_rate_rad_s``, read when it slews, as before)."""
         self.geometry = geometry
-        self.steering_rate_rad_s = steering_rate_rad_s
+        self._rate = steering_rate_rad_s
+
+    @property
+    def steering_rate_rad_s(self) -> float:
+        return self._rate() if callable(self._rate) else self._rate
 
     def command(self, speed_mps: float, curvature_inv_m: float):
         return ackermann_command(speed_mps, curvature_inv_m, self.geometry)
@@ -136,6 +142,11 @@ class RealKinematics:
     def curvature_bound(self, steer) -> float | None:
         k = self.held_curvature(steer)
         return None if k is None else abs(k)
+
+    def stopped(self, steering_command) -> RealDrive:
+        """Both wheels at zero with the steering held, needing no curvature (an unknown q included)."""
+        q = float(_vec(steering_command, 1, "steering_command")[0])
+        return RealDrive(0.0, 0.0, (q,), (0.0, 0.0), False)
 
     def finalize(self, drive: RealDrive, steering_command) -> RealDrive:
         """The wheels on the curvature the slewed q holds (speed kept, inside the wheel limit). An unknown q
