@@ -54,6 +54,7 @@ MISSION_KEYS = {
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
         "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
         "exit_prefix_exempt",  # the exit-prefix latches' records (plan 2026-10-28-exit-prefix-extract-rules D5)
+        "operator_checks",  # the real truck's operator confirmations (sim-to-real 4d-2b-1)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",

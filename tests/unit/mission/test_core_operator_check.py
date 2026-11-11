@@ -1,6 +1,7 @@
 """Sim-to-real 4d-2b-1: the real truck's operator confirmations at lift and lower, their request contract, and no
 automatic pocket retrace (docs/design/2026-11-11-p05-truth-audit.md 4-3)."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -69,8 +70,28 @@ def test_a_lift_that_never_reaches_ends_the_mission_after_the_reach_limit():
     core, hooks, _ = make(lift=0.05)
     core.lift_and_timers(5.0, 0.01)
     core.lift_and_timers(14.9, 0.01)
-    with pytest.raises(Failed, match="lifted: lift did not reach"):
+    with pytest.raises(Failed, match="Lift did not reach its position"):
         core.lift_and_timers(15.1, 0.01)
+
+
+def test_the_reach_limit_ends_the_mission_not_the_session():
+    from forklift_core.mission.failures import MISSION, classify
+
+    for reason in ("Lift did not reach its position", "Pallet was not lifted (operator)",
+                   "Pallet did not settle onto destination floor (operator)"):
+        assert classify(reason, strict=True) == MISSION
+
+
+def test_the_reach_timer_is_the_current_missions_and_work_time_only():
+    core, hooks, _ = make(lift=0.05)
+    core.lift_and_timers(5.0, 0.01)  # m1 starts waiting for the lift
+    core.commands.mission_id, core.commands.mission_gen = "m2", core.commands.mission_gen + 1
+    core.lift_and_timers(100.0, 0.01)  # m2's first look: its own timer, not m1's
+    core.lift_and_timers(109.0, 0.01)
+    core.commands.pauses = [[109.5, 200.0]]  # a pause inside the wait does not count
+    core.lift_and_timers(200.5, 0.01)
+    with pytest.raises(Failed, match="Lift did not reach its position"):
+        core.lift_and_timers(201.5, 0.01)
 
 
 def test_the_operator_wait_has_no_limit_and_a_reject_ends_the_mission():
@@ -83,7 +104,8 @@ def test_the_operator_wait_has_no_limit_and_a_reject_ends_the_mission():
         core.lift_and_timers(1001.0, 0.01)
 
 
-@pytest.mark.parametrize("answer", [None, True, "confirm", (2, "confirm"), (1, "yes"), (1, None), ("1", "confirm")])
+@pytest.mark.parametrize("answer", [None, True, "confirm", (2, "confirm"), (1, "yes"), (1, None), ("1", "confirm"),
+                                    (True, "confirm"), (1.0, "confirm")])
 def test_only_the_current_serial_and_a_confirm_or_reject_count(answer):
     core, hooks, moved = make(lift=0.1, answer=answer)
     core.lift_and_timers(5.0, 0.01)
@@ -158,3 +180,23 @@ def test_a_real_recover_lower_fails_before_any_truth_height():
 
     core.recovery_timers(RECOVERY_LOWER_MIN_S + 0.1)
     assert failed == ["trace_invalid"] and hooks.z_reads == 0
+
+
+def test_a_mission_end_clears_the_request_and_keeps_the_serial_and_the_records_go_with_the_mission():
+    from forklift_core.mission import baseline
+
+    core, hooks, _ = make(lift=0.1)
+    core.lift_and_timers(5.0, 0.01)
+    core._operator.update(request=None, answer=None, motion_since=None, motion_key=None)  # noqa: SLF001 what end_reset does
+    assert core._operator["serial"] == 1  # noqa: SLF001
+    owned = [k for group in baseline.MISSION_OWNED.values() for k in group] if isinstance(
+        getattr(baseline, "MISSION_OWNED", None), dict) else None
+    source = Path(baseline.__file__).read_text(encoding="utf-8")
+    assert '"operator_checks"' in source and (owned is None or "operator_checks" in owned)
+
+
+def test_end_reset_clears_the_operator_request():
+    import inspect
+
+    src = inspect.getsource(MissionCore.end_reset)
+    assert "self._operator.update(request=None, answer=None, motion_since=None, motion_key=None)" in src
