@@ -44,6 +44,40 @@ class PlantCommand:
 
 
 @dataclass(frozen=True)
+class PlantSample:
+    """One measurement of the plant (sim-to-real P0-4 4b). A getter result: reading it consumes nothing -- odometry
+    and continuity are computed by their own consumers from the absolute values here.
+
+    ``steering``: the kinematics' steering vector (Isaac: the two front joints, as drive() indexed them; real: (q,)).
+    ``lift_m``: the lift position, None when invalid (never 0 in its place). Real only: ``wheel_counts`` (absolute
+    32-bit modular motor counts), ``mcu_time_us`` (the MCU clock), ``received_host_ns`` (the host monotonic receipt),
+    ``boot_id``. Isaac only: ``raw_joints`` (the joint array of that one read) and ``sample_time_s`` (the
+    simulation time the caller passes; the plant reads no clock). ``valid`` names what can be used."""
+
+    steering: object
+    lift_m: object
+    sample_time_s: float | None = None
+    raw_joints: object = None
+    wheel_counts: tuple | None = None
+    mcu_time_us: int | None = None
+    received_host_ns: int | None = None
+    boot_id: int | None = None
+    valid: dict | None = None
+
+
+@dataclass(frozen=True)
+class PlantHealth:
+    """The plant link's state for the arbiter (4b: the conversion; wiring it to a stop is 4e-2)."""
+
+    fresh: bool
+    mode: object
+    fault_flags: int
+    authorized: bool
+    ready: bool
+    reasons: tuple
+
+
+@dataclass(frozen=True)
 class PortResult:
     kind: str  # "queued" | "refused" | "blocked"
     reason: str | None = None
@@ -146,6 +180,40 @@ class RealPlantPort:
         left = self._unsettled(now_ns)
         return max(left) if left else None
 
+    def sample(self) -> PlantSample | None:
+        """The latest STATE as a measurement (None before the first). A steering the map cannot read and a NaN lift
+        are flagged invalid, never replaced (Codex 4b P2-3). Using an invalid reading is refused where control
+        starts (4e-2)."""
+        s = self.host.state
+        if s is None:
+            return None
+        lift_ok = math.isfinite(s.lift_m)
+        return PlantSample(steering=(float(s.steering_rad),), lift_m=float(s.lift_m) if lift_ok else None,
+                           wheel_counts=(int(s.wheel_count_left), int(s.wheel_count_right)),
+                           mcu_time_us=int(s.mcu_time_us), received_host_ns=self.host.state_rx_ns,
+                           boot_id=int(s.boot_id),
+                           valid={"steering": self.kinematics.cfg.steering.curvature(float(s.steering_rad)) is not None,
+                                  "lift": lift_ok})
+
+    def health(self, now_ns: int) -> PlantHealth:
+        """The link's health now. It reads; it does not run the host's expiry (host.tick, driven by the control
+        loop in 4e-2)."""
+        h = self.host.health(now_ns)
+        reasons = []
+        if h.mode is None:
+            reasons.append("no_state")
+        elif not h.fresh:
+            reasons.append("stale")
+        if h.mode is not None and h.mode != Mode.ARMED:
+            reasons.append(f"mode_{h.mode.name.lower()}")
+        if h.fault_flags:
+            reasons.append("faults")
+        if h.authorized and not h.ready:
+            reasons.append("zero_pending")
+        elif not h.authorized and h.mode == Mode.ARMED:
+            reasons.append("not_authorized")
+        return PlantHealth(h.fresh, h.mode, h.fault_flags, h.authorized, h.ready, tuple(reasons))
+
     def older_nonzero_may_act(self, now_ns: int) -> bool:
         """Release condition (a) of design D4: could an older non-zero DRIVE still move the wheels? Every one
         queued, being written or written and not yet settled counts (Codex 4a' impl P1-1). Not a standstill
@@ -153,4 +221,4 @@ class RealPlantPort:
         return bool(self._unsettled(now_ns))
 
 
-__all__ = ["LIFT_MODES", "PlantCommand", "PortResult", "RealPlantPort"]
+__all__ = ["LIFT_MODES", "PlantCommand", "PlantHealth", "PlantSample", "PortResult", "RealPlantPort"]

@@ -51,6 +51,19 @@ class IsaacPlant:
             self.hold_lift(cmd.lift_m)
         return PortResult("queued")
 
+    def sample(self, t=None):
+        """P0-4 4b: one joint read as a measurement -- exactly one ``get_joint_positions()``, the steering and lift
+        indexed as drive() did (``q[steers]``, ``q[lift_index[0]]``), the array kept (the slip watch reuses it).
+        ``t`` is the caller's simulation time: the plant reads no clock (the world is a recorded port)."""
+        from forklift_core.plant.port import PlantSample
+
+        q = self.robot.get_joint_positions()
+        return PlantSample(steering=q[self.steers], lift_m=q[self.lift_index[0]], sample_time_s=t, raw_joints=q)
+
+    def joint_velocities(self):
+        """Isaac only: the joint velocity read drive() makes (one ``get_joint_velocities()``)."""
+        return self.robot.get_joint_velocities()
+
     def controller(self):
         """Isaac only: the articulation controller whose drive gains the wheel lock reads and sets."""
         return self.robot.get_articulation_controller()
