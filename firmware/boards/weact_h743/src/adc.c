@@ -47,7 +47,7 @@ static bool start(void)
     while (cycles_now() - t0 < 8000u) { /* tADCVREG_STUP 10 us max at 400 MHz = 4000 cycles */
     }
     ADC1->CR = ADC_CR_ADVREGEN | ((uint32_t)boost << ADC_CR_BOOST_Pos);
-    ADC1->CFGR = 0; /* 16-bit, software triggers */
+    ADC1->CFGR = adc_cfgr_value(); /* 16-bit, JQDIS: software injected triggers (before JSQR) */
     iwdg_kick();
     ADC1->CR |= ADC_CR_ADCALLIN | ADC_CR_ADCAL; /* offset and linearity, single-ended */
     for (t0 = cycles_now(); ADC1->CR & ADC_CR_ADCAL;) {
@@ -61,9 +61,22 @@ static bool start(void)
                   (SMP_64_5 << ADC_SMPR1_SMP5_Pos);
     ADC1->SMPR2 = SMP_64_5 << ADC_SMPR2_SMP10_Pos;
     ADC1->JSQR = adc_jsqr_value();
+    /* ADEN set within 4 ADC clocks of the calibration's end can be cleared again (Codex B2b
+       review; the ST HAL re-sets it): wait > 4 clocks (250 ns at 16 MHz), then re-set ADEN while
+       ADRDY has not come, within the timeout. */
+    for (t0 = cycles_now(); cycles_now() - t0 < 400u;) { /* 1 us */
+    }
     ADC1->ISR = ADC_ISR_ADRDY;
     ADC1->CR |= ADC_CR_ADEN;
-    return cycles_wait_flag(&ADC1->ISR, ADC_ISR_ADRDY, WAIT_CYCLES);
+    for (t0 = cycles_now(); !(ADC1->ISR & ADC_ISR_ADRDY);) {
+        if (cycles_now() - t0 > WAIT_CYCLES) {
+            return false;
+        }
+        if (!(ADC1->CR & ADC_CR_ADEN)) {
+            ADC1->CR |= ADC_CR_ADEN;
+        }
+    }
+    return true;
 }
 
 void adc_init(void)

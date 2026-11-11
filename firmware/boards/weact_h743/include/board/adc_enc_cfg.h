@@ -39,6 +39,16 @@ static inline uint32_t adc_jsqr_value(void)
            ((uint32_t)ADC_IPROPI_CHANNEL[3] << 27);
 }
 
+/* ADC_CFGR: 16-bit, regular conversions unused, JQDIS = 1. With the injected queue enabled
+   (JQDIS = 0) and JEXTEN = 00 both hardware and software triggers are disabled (RM0433 ADC_CFGR
+   bit 31, 25.6.11) -- JADSTART would never convert (Codex B2b review). Writing JQDIS clears JSQR,
+   so CFGR is written before JSQR. */
+#define ADC_CFGR_JQDIS_BIT (1u << 31)
+static inline uint32_t adc_cfgr_value(void)
+{
+    return ADC_CFGR_JQDIS_BIT;
+}
+
 /* ADC_PCSEL: the channels must be preselected on the H7. */
 static inline uint32_t adc_pcsel_value(void)
 {

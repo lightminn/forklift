@@ -7,10 +7,15 @@ stacked on each other, plus an exception frame per interrupt level:
 
     main loop + level-2 handler + level-1 handler + fault/NMI handler + frames
 
+Callees without a call graph of their own (libc, libm, libgcc helpers linked from the toolchain)
+are measured from the final ELF's disassembly (--elf, --objdump): push/vpush/stmdb/sub sp/
+pre-decrement stores give the frame, bl/b.w to other functions are followed. An indirect branch,
+a register-sized stack adjustment or a callee found nowhere fails the check (Codex B2b review: no
+assumed sizes).
+
 Indirect calls are bounded by the deepest of the candidates given with --indirect CALLER=TARGET
 (globs on function names; the first rule whose CALLER matches wins), e.g. the tick callback only
-from the TIM6 handler, the fw_hal entries from everywhere else. Functions without a call graph of their own (libc,
-libm) count as --unknown bytes each and are listed. A dynamic frame or recursion fails the check.
+from the TIM6 handler, the fw_hal entries from everywhere else. A dynamic frame or recursion fails the check.
 
   python tools/fw_stack_check.py BUILD_DIR --limit 4096 \\
       --level board_main --level TIM6_DAC_IRQHandler --level SPI1_IRQHandler,SPI2_IRQHandler \\
@@ -23,6 +28,7 @@ import argparse
 import fnmatch
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,16 +58,74 @@ def load(build: Path):
     return size, kind, calls
 
 
-def resolve(name: str, size: dict[str, int]) -> str | None:
-    """A callee title: global names as is; a file-static one by its unique short name."""
+def entry(name: str, size: dict[str, int]) -> str | None:
+    """An entry point given by the user: a global name, or a file-static one by its unique short
+    name. Call edges never use this lookup: GCC names their targets exactly."""
     if name in size:
         return name
     matches = [t for t in size if short(t) == name]
     return matches[0] if len(matches) == 1 else None
 
 
-def analyse(build: Path, levels: list[list[str]], indirect: list[str], unknown: int) -> dict:
+FUNC = re.compile(r"^([0-9a-f]+) <([^>]+)>:$")
+REGS = re.compile(r"\{([^}]*)\}")
+CALL = re.compile(r"\b(bl|blx|b\.w|b|b\.n)\s+[0-9a-f]+ <([^>+]+)>")
+
+
+def reg_count(spec: str) -> list[str]:
+    regs = []
+    for part in spec.replace(" ", "").split(","):
+        if "-" in part:
+            a, b = part.split("-")
+            kind = a[0]
+            regs += [kind] * (int(b[1:]) - int(a[1:]) + 1)
+        elif part:
+            regs.append(part[0])
+    return regs
+
+
+def disassembly(elf: Path, objdump: str) -> dict[str, list[str]]:
+    out = subprocess.run([objdump, "-d", "--no-show-raw-insn", str(elf)], capture_output=True,
+                         text=True, check=True).stdout
+    funcs: dict[str, list[str]] = {}
+    cur = None
+    for line in out.splitlines():
+        m = FUNC.match(line)
+        if m:
+            cur = m.group(2)
+            funcs[cur] = []
+        elif cur and line.strip():
+            funcs[cur].append(line.split("\t", 1)[-1].strip())
+    return funcs
+
+
+def binary_frame(name: str, insns: list[str]) -> tuple[int, set[str]]:
+    """Stack bytes a function pushes, and the functions it calls or tail-calls."""
+    frame, callees = 0, set()
+    for ins in insns:
+        op = ins.split()[0] if ins else ""
+        if op.startswith(("push", "stmdb")) and ("sp!" in ins or op.startswith("push")):
+            frame += 4 * len(reg_count(REGS.search(ins).group(1)))
+        elif op.startswith("vpush"):
+            frame += sum(8 if r == "d" else 4 for r in reg_count(REGS.search(ins).group(1)))
+        elif re.match(r"sub(\.w|w)?\s+sp,\s*(sp,\s*)?#(\d+)", ins):
+            frame += int(re.search(r"#(\d+)", ins).group(1))
+        elif re.search(r"\[sp, #-(\d+)\]!", ins):
+            frame += int(re.search(r"\[sp, #-(\d+)\]!", ins).group(1))
+        elif re.match(r"(sub|add|mov)(\.w|s)?\s+sp,\s*(sp,\s*)?r", ins) or re.match(r"(sub|mov)\S*\s+sp,\s*(ip|lr)", ins):
+            raise SystemExit(f"register-sized stack adjustment in {name}: {ins}")
+        elif re.match(r"(blx|bx)\s+r", ins) and not ins.startswith("bx\tlr") and not re.match(r"bx\s+lr", ins):
+            raise SystemExit(f"indirect branch in {name}: {ins}")
+        m = CALL.search(ins)
+        if m and m.group(2) != name:
+            callees.add(m.group(2))
+    return frame, callees
+
+
+def analyse(build: Path, levels: list[list[str]], indirect: list[str], elf: Path | None = None,
+            objdump: str = "arm-none-eabi-objdump") -> dict:
     size, kind, calls = load(build)
+    binary = disassembly(elf, objdump) if elf else {}
     for title, k in kind.items():
         if "dynamic" in k:
             raise SystemExit(f"dynamic stack frame: {short(title)}")
@@ -76,8 +140,27 @@ def analyse(build: Path, levels: list[list[str]], indirect: list[str], unknown: 
                 return targets
         return []
 
-    unknowns: set[str] = set()
+    measured: dict[str, int] = {}
+    not_linked: set[str] = set()
     memo: dict[str, int] = {}
+
+    def binary_depth(name: str, path: tuple[str, ...]) -> int:
+        if name in path:
+            raise SystemExit("recursion: " + " -> ".join(path + (name,)))
+        if name in memo:
+            return memo[name]
+        if name not in binary:
+            if not binary:
+                raise SystemExit(f"callee without a call graph: {name} (give --elf)")
+            # Named in a call graph but absent from the linked image: the final code does not call
+            # it (an unresolved call would have failed the link), so it adds nothing.
+            not_linked.add(name)
+            return 0
+        frame, callees = binary_frame(name, binary[name])
+        d = frame + max((binary_depth(c, path + (name,)) if c not in size else depth(c, path)
+                         for c in callees), default=0)
+        memo[name] = measured[name] = d
+        return d
 
     def depth(title: str, path: tuple[str, ...]) -> int:
         if title in path:
@@ -91,13 +174,10 @@ def analyse(build: Path, levels: list[list[str]], indirect: list[str], unknown: 
                 if not targets:
                     raise SystemExit(f"indirect call in {short(title)} without --indirect targets")
                 d = max(depth(t, path + (title,)) for t in targets)
+            elif callee in size:
+                d = depth(callee, path + (title,))
             else:
-                t = resolve(callee, size)
-                if t is None:
-                    unknowns.add(callee)
-                    d = unknown
-                else:
-                    d = depth(t, path + (title,))
+                d = binary_depth(callee, tuple(short(p) for p in path + (title,)))
             best = max(best, d)
         memo[title] = size[title] + best
         return memo[title]
@@ -106,7 +186,7 @@ def analyse(build: Path, levels: list[list[str]], indirect: list[str], unknown: 
     for names in levels:
         worst, which = 0, None
         for n in names:
-            t = resolve(n, size)
+            t = entry(n, size)
             if t is None:
                 raise SystemExit(f"entry point without a call graph: {n}")
             d = depth(t, ())
@@ -116,7 +196,7 @@ def analyse(build: Path, levels: list[list[str]], indirect: list[str], unknown: 
     frames = EXCEPTION_FRAME * (len(levels) - 1)
     total = sum(level["worst"] for level in per_level) + frames
     return {"levels": per_level, "exception_frames": frames, "total": total,
-            "unknown_callees": sorted(unknowns), "unknown_bytes_each": unknown}
+            "measured_from_binary": dict(sorted(measured.items())), "not_linked": sorted(not_linked)}
 
 
 def main(argv: list[str]) -> int:
@@ -125,10 +205,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--level", action="append", required=True,
                     help="comma-separated entry points of one preemption level, lowest first")
     ap.add_argument("--indirect", action="append", default=[], help="CALLER=TARGET globs for indirect calls")
-    ap.add_argument("--unknown", type=int, default=256, help="bytes for a callee without a graph")
+    ap.add_argument("--elf", type=Path, help="final ELF, for callees without a call graph")
+    ap.add_argument("--objdump", default="arm-none-eabi-objdump")
     ap.add_argument("--limit", type=int, required=True, help="stack bytes allowed in total")
     args = ap.parse_args(argv)
-    report = analyse(args.build, [lv.split(",") for lv in args.level], args.indirect, args.unknown)
+    report = analyse(args.build, [lv.split(",") for lv in args.level], args.indirect, args.elf,
+                     args.objdump)
     report["limit"] = args.limit
     print(json.dumps(report, indent=1))
     return 0 if report["total"] <= args.limit else 1

@@ -108,6 +108,9 @@ static void adc_values(void)
     CHECK_EQ_U((j >> 21) & 0x1Fu, 5u);
     CHECK_EQ_U((j >> 27) & 0x1Fu, 10u);
     CHECK_EQ_U(adc_pcsel_value(), (1u << 3) | (1u << 4) | (1u << 5) | (1u << 10));
+    /* Software-triggered injected conversions need the queue disabled (JQDIS) when JEXTEN = 00. */
+    CHECK(((j >> 7) & 3u) != 0u || (adc_cfgr_value() & ADC_CFGR_JQDIS_BIT) != 0u);
+    CHECK_EQ_U((adc_cfgr_value() >> 2) & 7u, 0u); /* RES: 16-bit */
 }
 
 typedef struct {

@@ -138,7 +138,10 @@ def test_stack_worst_case_from_call_graphs(locked_build):
         [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(locked_build.parent.parent),
          "--limit", str(MAIN_STACK // 2), "--level", "board_main", "--level", "TIM6_DAC_IRQHandler",
          "--level", "SPI1_IRQHandler,SPI2_IRQHandler",
-         "--level", "NMI_Handler,HardFault_Handler,Default_Handler",
+         # An unexpected IRQ runs at priority 0, HardFault above it, NMI above all (Codex B2b).
+         "--level", "Default_Handler", "--level", "HardFault_Handler", "--level", "NMI_Handler",
+         "--elf", str(locked_build / "fw.elf"),
+         "--objdump", str(TOOLCHAIN / "bin" / "arm-none-eabi-objdump"),
          "--indirect", "TIM6_DAC_IRQHandler=on_tick", "--indirect", "*=hal_*"],
         capture_output=True, text=True)
     assert res.returncode == 0, res.stdout + res.stderr
