@@ -541,6 +541,23 @@ static void refresh_flags(drive *d)
     d->fault_flags = d->latched | live;
 }
 
+static bool commission_over_limit(const drive *d)
+{
+    return d->cfg->commission_build && d->cm_on &&
+           d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS;
+}
+
+/* After the commissioning time limit: the limit bit, and no ARM before stop_grace_ms of zero
+   output from now (Codex PR review). */
+static void hold_commission(drive *d)
+{
+    d->latched |= DRIVE_FAULT_COMMISSION_TIME_LIMIT;
+    uint64_t until = d->time_us + (uint64_t)d->cfg->stop_grace_ms * US_PER_MS;
+    if (until > d->cm_hold_until_us) {
+        d->cm_hold_until_us = until;
+    }
+}
+
 static void enter_stopping(drive *d, uint32_t why)
 {
     d->mode = DRIVE_MODE_STOPPING;
@@ -560,16 +577,19 @@ void drive_begin(drive *d, const drive_inputs *in)
     read_sensors(d, in);
     check_spi_timeout(d);
 
-    /* Expiry first, so a DRIVE arriving after the deadline cannot extend it. */
-    if (d->mode == DRIVE_MODE_ARMED && d->has_deadline && d->time_us > d->deadline_us) {
-        enter_stopping(d, DRIVE_FAULT_COMMAND_TIMEOUT);
-    }
-    /* Commissioning time limit, measured on the applied output (design 3). */
-    if (d->mode == DRIVE_MODE_ARMED && d->cfg->commission_build && d->cm_on &&
-        d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS) {
-        enter_stopping(d, DRIVE_FAULT_COMMISSION_TIME_LIMIT);
-        /* A DISARM cannot shorten this stop: ARM waits the whole grace (Codex PR review). */
-        d->cm_hold_until_us = d->stop_until_us;
+    /* Expiry first, so a DRIVE arriving after the deadline cannot extend it. The command
+       deadline and the commissioning time limit (applied output, design 3) are judged
+       independently before the mode changes, so one cannot hide the other (Codex PR review 2). */
+    if (d->mode == DRIVE_MODE_ARMED) {
+        bool expired = d->has_deadline && d->time_us > d->deadline_us;
+        bool over = commission_over_limit(d);
+        if (expired || over) {
+            enter_stopping(d, (expired ? DRIVE_FAULT_COMMAND_TIMEOUT : 0u) |
+                                  (over ? DRIVE_FAULT_COMMISSION_TIME_LIMIT : 0u));
+        }
+        if (over) {
+            hold_commission(d); /* a DISARM cannot shorten this stop */
+        }
     }
     /* Faults are judged while the outputs are still on, including the cycle the STOPPING
        grace ends, so they latch before the drop to DISARMED. */
@@ -913,8 +933,10 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
             }
             continue;
         }
-        bool over = d->cm_on &&
-                    d->time_us - d->cm_on_since_us > (uint64_t)c->commission_time_ms * US_PER_MS;
+        bool over = commission_over_limit(d);
+        if (over) {
+            hold_commission(d); /* past the limit by whatever path: zero and hold */
+        }
         float u = d->mode == DRIVE_MODE_ARMED && !over ? d->cm_duty : 0.0f;
         if (ch < 2) {
             float lo, hi;
