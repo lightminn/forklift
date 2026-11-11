@@ -71,7 +71,10 @@ def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_ind
                  rate_peak_rad_s=None, value=None, encoder_bits_at_start=[], encoder_bits_new=[])
     if on_index is None or not samples or on_index >= len(samples):
         return CommissionMetrics(False, "not_accepted", axis, duty_e4, **empty)
-    off = len(samples) if off_index is None else min(off_index, len(samples))
+    if off_index is None:
+        # where driving ended is unknown: averaging up to the record's end would mix the stop in (Codex re-review)
+        return CommissionMetrics(False, "end_unknown", axis, duty_e4, **empty)
+    off = min(off_index, len(samples))
     start = max(on_index - 1, 0)
     span = samples[start:]
     driven = samples[on_index:off]

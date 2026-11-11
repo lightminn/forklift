@@ -466,6 +466,12 @@ class CommissionSession(Session):
         bound = end_ns if nonzero else None
         stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero else end_ns
         first = None
+        if stop is not None:
+            # the latest samples are judged before the first nonzero command goes out (Codex re-review P2-4)
+            self.b.cycle()
+            if (reason := stop()) is not None:
+                self.stop_reason = reason
+                return first
         while time.monotonic_ns() < stop_ns:
             seq = self.send_duty(duty_e4, bound)
             first = first if first is not None else seq
@@ -486,11 +492,22 @@ class CommissionSession(Session):
         commands are dropped and the STOPPING is let run out first (bounded by ``STOPPING_WAIT_S``)."""
         b = self.b
         b.host.drop_drives("cleanup")
-        if b.state is not None and b.state.mode == Mode.STOPPING:
-            t0 = time.monotonic()
-            b.run_until(lambda: b.state.mode != Mode.STOPPING, STOPPING_WAIT_S)
+        stale = not b.samples or time.monotonic_ns() - b.samples[-1].host_ns > STATE_GAP_S * 1e9
+        if stale or b.state.mode == Mode.STOPPING:
+            # the MCU may be STOPPING unseen (the last STATE is old) or seen: wait for a fresh STATE out of it.
+            # Not seen within STOPPING_WAIT_S (or the I/O failing): the DISARM still goes out -- a stop command is
+            # never withheld (contract 3.4) -- and the run records that the brake's end was not observed
+            # (Codex re-review P2-1, P2-5)
+            t0, n0 = time.monotonic(), len(b.samples)
+            try:
+                seen = b.run_until(lambda: len(b.samples) > n0 and b.state.mode != Mode.STOPPING, STOPPING_WAIT_S)
+            except Exception as exc:  # noqa: BLE001 -- the DISARM below must still be tried
+                seen = False
+                b.emit({"t": "cleanup_error", "where": "stopping_wait", "error": f"{type(exc).__name__}: {exc}"})
             self.stopping_waited_ms = (time.monotonic() - t0) * 1000
-            b.emit({"t": "stopping_waited", "ms": self.stopping_waited_ms, "mode": b.state.mode.name})
+            b.emit({"t": "stopping_waited", "ms": self.stopping_waited_ms, "observed_end": seen})
+            if not seen:
+                self.aborted = self.aborted or "stopping_end_unobserved"
         return super().cleanup()
 
     def early_stop(self, state: McuState, at_start: FaultFlag) -> str | None:
@@ -511,6 +528,21 @@ class CommissionSession(Session):
         return None
 
 
+def session_abort_reason(samples: list, i_arm: int) -> str | None:
+    """A commissioning session's samples from the arm on (the cleanup included): a fault or e-stop latch, or a new
+    boot, is an abort whatever the dynamics' window says. STOPPING -> DISARMED (time limit, expiry) is judged by the
+    authorization the run lost, not here."""
+    if i_arm >= len(samples):
+        return None
+    boot = samples[max(i_arm - 1, 0)].state.boot_id
+    for smp in samples[i_arm:]:
+        if smp.state.boot_id != boot:
+            return "boot_changed"
+        if smp.state.mode in (Mode.FAULT, Mode.ESTOP):
+            return f"mode_{smp.state.mode.name.lower()}"
+    return None
+
+
 def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float) -> dict:
     b, axis = bench, session.axis
     duty_e4 = int(round(duty * 10000))
@@ -518,8 +550,15 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     i_arm = len(b.samples)
     at_start = b.state.fault_flags & _AXIS_ENCODER_BITS.get(axis, FaultFlag(0))
 
+    seen = {"i": len(b.samples) - 1}
+
     def early_stop() -> str | None:
-        return session.early_stop(b.state, at_start)
+        # every sample since the last look: an excursion and its return inside one read is not missed
+        for smp in b.samples[max(seen["i"], 0):]:
+            if (reason := session.early_stop(smp.state, at_start)) is not None:
+                return reason
+        seen["i"] = len(b.samples)
+        return None
 
     session.hold_duty(0, PRE_ZERO_S)
     n_zero = len(session.sent)
@@ -534,18 +573,25 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     on_seqs = {q for q, d in session.sent[n_zero:n_on] if d != 0}
     off_seqs = {q for q, _d in session.sent[n_on:]}
     on_index = next((i for i in range(i_arm, len(b.samples)) if b.samples[i].state.last_rx_seq in on_seqs), None)
+    # the driven span ends at the first sample accepting a later zero, or at the MCU's own stop (it left ARMED:
+    # time limit, expiry, fault) -- never at the record's end (Codex re-review P2-3)
     off_index = None if on_index is None else next(
-        (i for i in range(on_index, len(b.samples)) if b.samples[i].state.last_rx_seq in off_seqs), None)
+        (i for i in range(on_index, len(b.samples))
+         if b.samples[i].state.last_rx_seq in off_seqs or b.samples[i].state.mode != Mode.ARMED), None)
     # the motion window ends with the post-zero hold, before the cleanup's DISARM
     end = len(b.samples)
     disarm_seqs = {q for q, (k, _t, _m) in b.written.items() if k == "DISARM"}
     end = next((i for i in range(i_arm, end) if b.samples[i].state.last_rx_seq in disarm_seqs), end)
     metrics = commission_metrics(b.samples[:end], axis=axis, duty_e4=duty_e4, on_index=on_index,
                                  off_index=off_index)
+    # the whole session, the cleanup included, apart from the dynamics' cut (Codex re-review P2-2)
+    why = session_abort_reason(b.samples, i_arm)
+    if why is not None:
+        session.aborted = session.aborted or why
     faults = FaultFlag(0)
     for smp in b.samples[i_arm:]:
         faults |= smp.state.fault_flags
-    result = "ok" if on_index is not None else "no_acceptance"
+    result = "no_acceptance" if on_index is None else ("ok" if metrics.valid else "invalid_measurement")
     return _final({"result": result, "metrics": asdict(metrics), "stop": session.stop_reason,
                    "faults_seen": [f.name for f in FaultFlag if f in faults],
                    "stopping_waited_ms": session.stopping_waited_ms,
@@ -758,7 +804,12 @@ def execute(args, bench: Bench) -> dict:
     finally:
         # once an ARM may have gone out, clean up whatever the last cached STATE says
         if session.arm_requested and session.cleanup_confirmed is not True:
-            session.cleanup()
+            try:
+                session.cleanup()
+            except BaseException as exc:  # noqa: BLE001 -- the result row is still written (Codex re-review P2-5)
+                session.cleanup_confirmed = False
+                result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+                result["result"] = "aborted" if result.get("result") == "ok" else result.get("result", "aborted")
             result["cleanup_confirmed"] = session.cleanup_confirmed
     result["record_errors"] = bench.record_errors
     bench.emit({"t": "result", **result})

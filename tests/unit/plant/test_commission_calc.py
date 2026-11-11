@@ -138,3 +138,8 @@ def test_nan_rates_are_skipped():
     s[10] = Sample(s[10].host_ns, McuState(**{**s[10].state.__dict__, "wheel_rate_left_rad_s": math.nan}))
     m = commission_metrics(s, axis=0, duty_e4=1000, on_index=2, off_index=12)
     assert math.isfinite(m.rate_mean_rad_s)
+
+
+def test_an_unknown_end_of_driving_is_not_a_measurement():
+    m = commission_metrics(wheel_run(), axis=0, duty_e4=1000, on_index=2, off_index=None)
+    assert not m.valid and m.reason == "end_unknown"

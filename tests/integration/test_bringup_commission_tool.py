@@ -160,6 +160,9 @@ def test_the_mcu_time_limit_aborts_and_the_cleanup_never_cuts_its_stopping(model
     disarms = [t for k, t, _m in b.written.values() if k == "DISARM"]
     assert disarms and min(disarms) >= disarmed.host_ns
     assert res["cleanup_confirmed"]
+    # the driven span ends where the MCU left ARMED, not at the record's end (Codex re-review P2-3)
+    m = res["metrics"]
+    assert m["valid"] and m["driven_ms_max"] is not None and m["driven_ms_max"] <= 300 + 60
 
 
 def test_a_new_polarity_bit_of_the_driven_wheel_stops_its_duty_while_still_armed(model):
@@ -218,3 +221,27 @@ def test_the_record_holds_the_result(model):
     rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
     (result,) = [r for r in rows if r["t"] == "result"]
     assert result["cmd"] == "commission" and result["axis"] == "L" and result["metrics"]["valid"]
+
+
+def test_a_link_failing_through_the_cleanup_still_writes_the_result(model):
+    """Codex re-review P2-5: the I/O raises from the nonzero hold on, the cleanup's included."""
+    b = model()
+    real = bringup.CommissionSession.hold_duty
+
+    def broken_on_nonzero(self, duty_e4, seconds, stop=None):
+        if duty_e4 != 0:
+            def boom(host, now_ns):
+                raise OSError(5, "Input/output error")
+            self.b.link.service = boom
+        return real(self, duty_e4, seconds, stop)
+
+    import pytest as _pytest
+    mp = _pytest.MonkeyPatch()
+    mp.setattr(bringup.CommissionSession, "hold_duty", broken_on_nonzero)
+    try:
+        res = bringup.execute(args(), b)
+    finally:
+        mp.undo()
+    assert res["result"] == "aborted" and res["cleanup_confirmed"] is False
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    assert [r for r in rows if r["t"] == "result"]

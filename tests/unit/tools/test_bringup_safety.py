@@ -238,3 +238,69 @@ def test_the_commission_session_refuses_a_normal_build_and_any_drive():
         s.preflight(state())
     with pytest.raises(bringup.Refused, match="no DRIVE"):
         s.send(0.1, 0.1)
+
+
+class _WriteOnlyLink:
+    """Frames are written, nothing is ever received (a lost RX)."""
+
+    tx_enabled = True
+
+    def service(self, host, now_ns):
+        while (f := host.next_frame(now_ns)) is not None:
+            host.frame_written(f, now_ns)
+        return []
+
+
+def _sample(mode, *, age_s=0.0, boot=1, t_us=1):
+    import time as _t
+    from dataclasses import replace
+
+    from forklift_core.plant.bringup import Sample
+
+    return Sample(_t.monotonic_ns() - int(age_s * 1e9),
+                  replace(state(StateFlag.COMMISSION_BUILD), mode=mode, boot_id=boot, mcu_time_us=t_us))
+
+
+@pytest.mark.parametrize("mode,age_s", [(Mode.STOPPING, 0.0), (Mode.ARMED, 0.5)])
+def test_an_unseen_stopping_end_still_disarms_and_is_an_abort(mode, age_s, monkeypatch):
+    """Codex re-review P2-1: a STOPPING seen, or an old ARMED that may hide one -- no fresh STATE out of it within
+    the wait: the DISARM still goes out, and the run is aborted as stopping_end_unobserved."""
+    import io
+
+    monkeypatch.setattr(bringup, "STOPPING_WAIT_S", 0.1)
+    monkeypatch.setattr(bringup, "CLEANUP_S", 0.1)
+    b = bringup.Bench(_WriteOnlyLink(), io.StringIO(), commission=True)
+    b.samples.append(_sample(mode, age_s=age_s))
+    s = bringup.CommissionSession(b, 0, None)
+    assert s.cleanup() is False
+    assert s.aborted == "stopping_end_unobserved" and s.stopping_waited_ms >= 90
+    assert any(k == "DISARM" for k, _t, _m in b.written.values())
+
+
+def test_a_fresh_armed_state_disarms_at_once():
+    import io
+
+    b = bringup.Bench(_WriteOnlyLink(), io.StringIO(), commission=True)
+    b.samples.append(_sample(Mode.ARMED))
+    s = bringup.CommissionSession(b, 0, None)
+    s.cleanup()
+    assert s.stopping_waited_ms is None and s.aborted is None
+
+
+def test_session_faults_and_new_boots_are_aborts_wherever_they_appear():
+    ok = [_sample(Mode.DISARMED), _sample(Mode.ARMED), _sample(Mode.STOPPING), _sample(Mode.DISARMED)]
+    assert bringup.session_abort_reason(ok, 1) is None
+    assert bringup.session_abort_reason(ok + [_sample(Mode.FAULT)], 1) == "mode_fault"
+    assert bringup.session_abort_reason(ok + [_sample(Mode.ESTOP)], 1) == "mode_estop"
+    assert bringup.session_abort_reason(ok + [_sample(Mode.DISARMED, boot=2)], 1) == "boot_changed"
+
+
+def test_a_window_already_left_sends_no_nonzero_duty(monkeypatch):
+    """Codex re-review P2-4: the stop is judged before the first nonzero command."""
+    s = _commission_session(2, (0.2, 0.3))
+    sent = []
+    monkeypatch.setattr(s.b, "cycle", lambda: None)
+    monkeypatch.setattr(s, "send_duty", lambda d, end_ns=None: sent.append(d))
+    monkeypatch.setattr(s, "_abort_reason", lambda: None)
+    s.hold_duty(1000, 0.2, lambda: "window")
+    assert sent == [] and s.stop_reason == "window"
