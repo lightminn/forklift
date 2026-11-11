@@ -62,6 +62,9 @@ class CargoState:
         self.insert_end = None  # the rear pose at the insert's end (insert -> lift)
         self.placed: list | None = None  # the trace placed at the destination (once, at -> lower)
         self.trace_valid = True  # the simulation's truth check on the trace's premise (plan D4)
+        # Sim-to-real 4d-2b-1: what an insert's start assumes of that premise. The simulation checks it against truth
+        # every tick; the real truck cannot measure it, so it never assumes it -- no automatic pocket retrace there.
+        self.assume_trace_valid = True
         self.last_rear = None  # the control pose at the last tick's end
         # Plan D14: what a manual recovery needs once the mission that left the forks in a pocket is gone (the
         # pallet's ID and estimate, the SLAM hold's basis, the stage); None when there is none.
@@ -83,7 +86,7 @@ class CargoState:
     def on_insert_start(self, rear) -> None:
         self.anchor, self.depth0 = tuple(float(v) for v in rear), -APPROACH_GAP_M
         self.trace = [(self.anchor, -APPROACH_GAP_M)]
-        self.insert_end, self.placed, self.trace_valid = None, None, True
+        self.insert_end, self.placed, self.trace_valid = None, None, self.assume_trace_valid
 
     def on_insert_end(self, rear) -> None:
         self.insert_end = tuple(float(v) for v in rear)
