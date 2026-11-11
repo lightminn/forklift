@@ -571,7 +571,8 @@ def test_d8b_every_read_is_recorded_before_the_d5_check_can_drop_it() -> None:
     assert "if check is None:" in read
     # Without the recorder the D5 path keeps its order: time checks before the reshape and
     # the joint read (Codex D8b impl P2).
-    assert read.index("frames_bad_time") < read.index("normalize_depth(") < read.index("get_joint_positions")
+    # (P0-4 4b: the joint read is the plant's sample)
+    assert read.index("frames_bad_time") < read.index("normalize_depth(") < read.index("plant.sample()")
     assert "recorder.record_read(" in functions["record_pocket_read"]
     # The truth of every tick, capture steps included, comes from step_world, after its
     # encoders and odometry.
