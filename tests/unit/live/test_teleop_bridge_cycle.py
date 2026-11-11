@@ -552,3 +552,43 @@ def test_states_the_host_rejects_never_reach_the_speed():
     good = replace(bad, mcu_time_us=last.state.mcu_time_us + 10_000)
     r.host.on_bytes(encode(good, 1), r.now + 3)
     assert r.bridge.samples[-1].state == good  # an accepted one does arrive
+
+
+@pytest.mark.parametrize("offset_ns,case", [(-1, "preempt"), (0, "hold"), (1, "hold"), (999_999, "hold"),
+                                            (5_000_000, "follow")])
+def test_a_teleop_command_steers_only_before_its_deadline(offset_ns, case):
+    """Codex re-review P2: past the deadline the arbiter preempts; at it, or with less life than the link's 1 ms
+    validity step, the old steering target is not renewed -- the steering is held where it is measured; with life
+    left, it is followed and the frame's expiry stays within the deadline."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.0, "curvature_ratio": 1.0})
+    a = r.arbiter
+    nxt = r.now + 20 * MS  # the next cycle's time
+    a.teleop["deadline"] = (nxt + offset_ns) / 1e9
+    n = len(r.sent)
+    rec = r.cycle(echo=True, teleop=None)
+    drives = [m for _t, m in r.sent[n:] if isinstance(m, Drive)]
+    if case == "preempt":
+        # the arbiter preempts the missed deadline (its latch goes again at once on the confirmed stand): disarmed,
+        # the MCU disarmed, no frame renews the old target
+        assert not rec["armed"] and any(e.get("event") == "disarm" or e.get("reason") for e in a.events[-4:])
+        assert any(isinstance(m, Disarm) for _t, m in r.sent[n:]) and drives == []
+    elif case == "hold":
+        assert r.bridge.holding and drives and rec.get("stop") is None
+        assert drives[-1].steering_rad == pytest.approx(r.bridge.reading.steering_rad, abs=1e-9)
+    else:
+        assert not r.bridge.holding and drives and rec.get("stop") is None
+        assert r.host.drive_traffic()["written"][-1]["expires_ns"] <= nxt + offset_ns
+
+
+def test_the_final_output_after_a_stop_is_a_preempt_zero():
+    r = armed_rig()
+    r.mcu.extra_rate = 1.0
+    for _ in range(40):
+        rec = r.cycle(teleop={"speed_ratio": 1.0})
+        if rec.get("stop") == "overspeed":
+            break
+    out = rec["_out"]
+    assert (out.mode, out.stop_kind, out.source, out.speed_mps, out.armed) == ("STOPPED", "preempt", "zero", 0.0,
+                                                                                False)
+    assert rec["mode"] == "STOPPED" and rec["armed"] is False

@@ -250,6 +250,65 @@ def test_the_loop_never_catches_up():
     assert min(gaps) >= 20_000_000 and gaps[0] == 35_000_000
 
 
+def test_the_cli_exits_armed_and_leaves_the_mcu_disarmed(mcu_model, tmp_path, monkeypatch, capsys):  # noqa: F811
+    """Codex re-review P3: armed (READY) when the loop ends -- the closing DISARM, written after the ARM, is the
+    frame the MCU took last, and it is DISARMED."""
+    m = Model(mcu_model)
+    seen = {}
+
+    def run_armed(bridge, *, duration_s, **_kw):
+        c = Console(bridge)
+        recs = []
+
+        def cycles(n, until=None):
+            for _ in range(n):
+                c.pump()
+                c.echo()
+                rec = bridge.cycle(time.monotonic_ns())
+                recs.append(rec)
+                if until is not None and until(rec):
+                    return
+                time.sleep(tb.CYCLE_S)
+
+        cycles(25)
+        c.request("lease_request")
+        cycles(50)
+        c.request("mode_request", to="TELEOP")
+        cycles(5)
+        c.request("arm")
+        cycles(60, until=lambda r: r["phase"] == "ready")
+        seen["ready"] = bridge.core.phase == "ready" and bridge.host.state.mode == Mode.ARMED
+        seen["seq_at_ready"] = bridge.host._seq
+        seen["bridge"] = bridge
+
+    try:
+        dev = PtyDevice(m.master)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "run", run_armed)
+
+        class NoServer:  # the stand-in console reads the channels itself (a real server would drain them)
+            port = 0
+
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        monkeypatch.setattr(tb, "LiveServer", NoServer)
+        code = tb.main(["--device", "pty", "--port", "0", "--record", str(tmp_path / "r.jsonl"),
+                        *[f"--{n.replace('_', '-')}" for n in ALL]])
+        assert code == 0 and seen["ready"]
+        b = seen["bridge"]
+        assert b.host.state.mode == Mode.DISARMED
+        assert b.host.state.last_rx_seq >= seen["seq_at_ready"]  # a frame queued after READY: the closing DISARM
+    finally:
+        m.close()
+
+
 def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model, tmp_path, monkeypatch,  # noqa: F811
                                                                        capsys):
     m = Model(mcu_model)

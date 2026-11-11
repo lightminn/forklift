@@ -246,22 +246,22 @@ def test_a_late_state_ages_by_its_delay_over_the_best_case():
 
 
 def test_a_sustained_delay_never_becomes_the_new_best_case():
-    """Codex impl P1-1: 1 ms once, then 80 ms for 6 s -- the excess stays about 79 ms (less the drift allowance)."""
+    """Codex impl P1-1 and re-review P1: 1 ms once, then 80 ms -- still 79 ms late after 6 s and after 600 s."""
     tr = rt.DelayTracker()
     tr.add(st(0, 0, 0, rx_ms=1))
-    last = None
-    for k in range(1, 601):
+    for k in range(1, 60_001):
         t = k * 10
         last = st(t, 0, 0, rx_ms=t + 80)
         tr.add(last)
-    assert tr.excess_s(last) == pytest.approx(0.079, abs=0.001)
+        if k in (600, 60_000):
+            assert tr.excess_s(last) == pytest.approx(0.079, abs=1e-6), k
 
 
-def test_the_base_follows_a_slow_clock_drift():
+def test_a_slow_mcu_clock_ages_the_states_the_safe_way():
     tr = rt.DelayTracker()
     last = None
-    for k in range(0, 601):  # 50 ppm: the offset grows 0.5 ms over 10 s
+    for k in range(0, 601):  # the offset grows 50 ppm of the elapsed time (an MCU clock 50 ppm slow)
         t = k * 10
         last = st(t, 0, 0, rx_ms=t + 1 + t * 50e-6)
         tr.add(last)
-    assert tr.excess_s(last) < 1e-4
+    assert tr.excess_s(last) == pytest.approx(0.0003, abs=1e-5)  # 6 s x 50 ppm, counted as delay

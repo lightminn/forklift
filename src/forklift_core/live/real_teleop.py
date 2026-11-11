@@ -146,35 +146,28 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
                           (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q)
 
 
-CLOCK_DRIFT_MAX = 100e-6  # premise A3: the MCU and host clocks differ in rate by at most this (100 ppm)
-
-
 class DelayTracker:
     """Each STATE's delay over the link's best case (design 2): the offset ``host receipt - MCU time`` of a STATE
-    minus the base offset. The base is the smallest offset seen this boot, allowed to rise only as fast as the two
-    clocks may drift apart (premise A3) -- a sustained higher delay is never taken for the new best case (Codex impl
-    P1-1: a 5 s window let 80 ms become 0 after 6 s). The base delay itself is the premise L's; what a STATE takes
-    beyond it is measured here and added to its age, so a late STATE never reads as fresh."""
+    minus the smallest offset seen this boot. The base never rises: one-way timing cannot tell a slow MCU clock from
+    a delay that grew, and a rising base turned a sustained 80 ms delay fresh (Codex impl P1-1, re-review P1). A
+    slow MCU clock therefore ages every STATE a little more as the boot goes on -- the fail-safe side: past
+    ``max_age_s`` the speed is invalid and the truck stops; the real drift is measured in P0-9's long HIL run.
+    The base delay itself is the premise L's."""
 
-    def __init__(self, drift_max: float = CLOCK_DRIFT_MAX) -> None:
-        self.drift_max = float(drift_max)
-        self._base: tuple[int, int, int] | None = None  # (offset_ns, host_ns, boot)
-
-    def _base_at(self, host_ns: int) -> int:
-        off, t, _boot = self._base
-        return off + int(self.drift_max * max(0, host_ns - t))
+    def __init__(self) -> None:
+        self._base: tuple[int, int] | None = None  # (offset_ns, boot)
 
     def add(self, sample: Sample) -> None:
         off = sample.host_ns - sample.state.mcu_time_us * 1000
         boot = sample.state.boot_id
-        if self._base is None or self._base[2] != boot or off <= self._base_at(sample.host_ns):
-            self._base = (off, sample.host_ns, boot)  # a new boot is a new MCU clock
+        if self._base is None or self._base[1] != boot or off < self._base[0]:
+            self._base = (off, boot)  # a new boot is a new MCU clock
 
     def excess_s(self, sample: Sample) -> float:
-        if self._base is None or self._base[2] != sample.state.boot_id:
+        if self._base is None or self._base[1] != sample.state.boot_id:
             return 0.0
         off = sample.host_ns - sample.state.mcu_time_us * 1000
-        return max(0.0, (off - self._base_at(sample.host_ns)) / 1e9)
+        return max(0.0, (off - self._base[0]) / 1e9)
 
 
 STILL_WINDOW_S = 0.2  # a stand before an MCU ARM: counts still over at least this much of contiguous STATEs ...
@@ -319,6 +312,7 @@ def load_bridge_params(path: str | Path, vehicle) -> EncoderSpeedParams:
 
 
 # ------------------------------------------------------------------------------------- the bridge's cycle (design 4-6)
+MIN_LIFE_NS = 1_000_000  # a command with less life left than the link's 1 ms validity step is not followed
 OUT_LIFE_NS = 100_000_000  # a DRIVE's life from its decision, before the console's own deadlines cut it
 STOPPING_WAIT_NS = 1_000_000_000  # an MCU-originated STOPPING runs out before the DISARM, for at most this
 IDLE, ARMING, READY, DISARMING, HELD = "idle", "arming", "ready", "disarming", "held"
@@ -437,8 +431,11 @@ class TeleopBridge:
                           "curvature_inv_m": None if q is None else self.kin.held_curvature((q,))}
         self.records.append(rec)
         # the state after every stop this cycle took (Codex impl P3): the console reads the final mode and gen
+        stopped = a.mode == "STOPPED" or a.preempt_latch is not None
+        rec.update(mode=a.mode, armed=a.armed)
         rec["_out"] = replace(out, mode=a.mode, armed=a.armed, control_gen=a.control_gen, speed_mps=applied,
-                              reason=a.preempt_latch)
+                              reason=a.preempt_latch,
+                              **({"stop_kind": "preempt", "source": "zero"} if stopped else {}))
         return rec
 
     # ------------------------------------------------------------------ design 4
@@ -532,8 +529,11 @@ class TeleopBridge:
         if self.phase != READY or not self.host.ready:
             return 0.0  # arming: the host owns the zero; STOPPING/unauthorized: observe only
         q_meas = reading.steering_rad
+        # a teleop command counts until its deadline, not at it (Codex re-review P2: the arbiter expires only past
+        # the deadline -- at it, the old steering target must not be renewed)
+        active = a.teleop is not None and int(a.teleop["deadline"] * 1e9) - now_ns >= MIN_LIFE_NS
         follow = (out.source == "teleop" and out.policy.drive_allowed and a.armed and a.preempt_latch is None
-                  and a.teleop is not None and bool(a.teleop.get("deadman")) and reading.speed.valid)
+                  and active and bool(a.teleop.get("deadman")) and reading.speed.valid)
         if not follow:
             if not self.holding and q_meas is not None:
                 self.q_cmd = q_meas  # entering the hold: the steering stays where it is measured
@@ -582,8 +582,14 @@ class TeleopBridge:
             speed = drive.speed_mps
         expires = self._deadline_ns(now_ns, follow)  # an active teleop command, wheels or steering only
         if expires <= now_ns:
+            # the lease's end has come: nothing renews the old target -- the steering held where it is measured
+            if q_meas is not None:
+                self.q_cmd, self.holding = q_meas, True
+            q_cmd = [self.q_cmd]
             speed, drive = 0.0, self.kin.stopped(q_cmd)
-            expires = self._deadline_ns(now_ns, False)
+            expires = now_ns + OUT_LIFE_NS if self.arbiter.lease is None else self._deadline_ns(now_ns, False)
+            if expires <= now_ns:
+                return 0.0  # no lease life left: no frame at all (the MCU's own expiry stops it)
         cmd = self.port.make_command(now_ns, expires, drive, q_cmd, 0.0, "keep")
         res = self.port.command(cmd, now_ns)
         rec["port"] = res.kind if res.reason is None else f"{res.kind}:{res.reason}"
