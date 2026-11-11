@@ -89,6 +89,7 @@ class Bridge:
         self.record_errors = 0
         self.overruns = 0
         self._started_ns: int | None = None
+        self._last_rx_ns: int | None = None
 
     def _log(self, what, now_ns, data, info) -> None:
         """Every frame written (or abandoned part-way, counted as possibly delivered): a round-trip anchor's start."""
@@ -97,6 +98,7 @@ class Bridge:
 
     def _on_state(self, state: McuState, received_ns: int) -> None:
         """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""
+        self._last_rx_ns = received_ns  # kept here: the host forgets its receipt time on a disconnect
         self.core.add_sample(Sample(received_ns, state))
 
     def cycle(self, now_ns: int) -> dict:
@@ -134,10 +136,9 @@ class Bridge:
         """The console's session row (state.notes): the power-cycle hint while the MCU sends nothing. The truck is
         already stopping by then -- the arbiter's feedback loss and the MCU's own command expiry -- so this only tells
         the operator what to do."""
-        rx = self.host.state_rx_ns
         if self._started_ns is None:
             self._started_ns = now_ns
-        since = self._started_ns if rx is None else rx
+        since = self._started_ns if self._last_rx_ns is None else self._last_rx_ns
         return [NO_STATE_HINT] if now_ns - since >= NO_STATE_HINT_S * 1e9 else []
 
     def close(self, now_ns: int) -> None:

@@ -33,7 +33,9 @@ udevadm info -q property /dev/forklift-mcu | grep -E 'ID_MM_DEVICE_IGNORE|ID_MOD
 ```
 
 Then the tools take `--device /dev/forklift-mcu` (USB CDC ignores `--baud`; the UART7 alternative uses its adapter's
-path with `--baud 460800`).
+path with `--baud 460800`). With more than one board plugged in, `/dev/forklift-mcu` points at whichever came last: use
+`/dev/forklift-mcu-<serial>`. On a USB-UART adapter the adapter's own DTR/RTS pins really move when the port opens
+(the link raises them); the UART7 wiring is TX/RX/GND only, so they must stay unconnected.
 
 ## When the link goes silent
 

@@ -172,3 +172,23 @@ def test_the_console_is_told_to_cycle_the_power_when_states_stop():
     late = [n for t, n in seen if t >= 2.0e9]
     assert all(not n for n in early) and late and all(n == [tb.NO_STATE_HINT] for n in late)
     assert "주 전원" in tb.NO_STATE_HINT
+
+
+def test_a_disconnect_right_after_a_state_waits_two_seconds_before_the_hint():
+    """Codex P3: the host forgets its receipt time on a disconnect; the bridge keeps the last one."""
+    import teleop_bridge as tb
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag, encode
+
+    b = tb.Bridge(_Silent(), confirmed=set())
+    t0 = 1_000_000_000_000
+    for k in range(5):  # STATEs flow for 5 cycles
+        now = t0 + k * 20_000_000
+        st = McuState(1_000_000 + k * 20_000, 9, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
+                      0.0, 0.0, (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY)
+        b.host.on_bytes(encode(st, 1), now)
+        b.cycle(now)
+    last_rx = t0 + 4 * 20_000_000
+    b.host.disconnected(last_rx + 20_000_000)
+    assert b.notes(last_rx + 40_000_000) == []  # 40 ms after the last STATE: not yet
+    assert b.notes(last_rx + 1_900_000_000) == []
+    assert b.notes(last_rx + 2_000_000_000) == [tb.NO_STATE_HINT]
