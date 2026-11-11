@@ -252,6 +252,7 @@ def test_a_link_failing_through_the_cleanup_still_writes_the_result(model):
 def sargs(**kw):
     base = dict(cmd="commission", axis="L", duty=0.15, seconds=None, window=None, observed=None, yes=True,
                 power_switch_in_hand=True, scenario="limit_disarm", limit_s=2.0, disarm_delay_ms=50.0,
+                stop_grace_ms=100.0,
                 output_response_ms=None, stop_time_ms=None, stop_distance_mm=None)
     return argparse.Namespace(**{**base, **kw})
 
@@ -268,6 +269,7 @@ def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
     res = bringup.execute(sargs(scenario=kind, stop_time_ms="180", output_response_ms="unavailable"), b)
     assert res["result"] == "ok", res
     assert res["limit_reached"] and res["disarm_accepted"] and res["disarm_during_stopping"] is True
+    assert res["mode_before_acceptance"] == "STOPPING" and res["natural_end_bound_mcu_us"] is not None
     assert res["mode_at_acceptance"] == "DISARMED"
     acc = next(s for s in b.samples if s.state.last_rx_seq == res["disarm_seq"])
     assert acc.state.fault_flags & bringup.FaultFlag.COMMISSION_TIME_LIMIT  # the latch survives the DISARM
@@ -289,10 +291,20 @@ def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
 
 
 def test_a_hold_disarm_after_the_stopping_ended_is_not_met(model):
+    """The operator's stop_grace is wrong (the build's is 100 ms): a 150 ms delay lands after the natural end."""
     b = model("--commission-time-ms", "300")
-    res = bringup.execute(sargs(scenario="hold_disarm", disarm_delay_ms=300.0), b)
+    res = bringup.execute(sargs(scenario="hold_disarm", disarm_delay_ms=150.0, stop_grace_ms=400.0), b)
     assert res["result"] == "not_met" and res["hold_ended_before_disarm"], res
     assert res["disarm_during_stopping"] is False and res["cleanup_confirmed"]
+
+
+def test_a_new_polarity_bit_stops_the_scenario_before_the_limit(model):
+    """Codex scenario review P2-3: only the 1.5 s bound is lifted, not the encoder stop."""
+    b = model("--commission-time-ms", "1800", "--encoder-sign-flip", "0", "--encoder-test-thresholds", "1")
+    res = bringup.execute(sargs(), b)
+    assert res["result"] == "aborted" and res["aborted"] == "encoder_bit_before_limit", res
+    assert not res["limit_reached"] and res["cleanup_confirmed"]
+    assert "DISARM" in kinds_written(b)
 
 
 def test_a_limit_that_never_comes_is_an_abort(model):
@@ -304,6 +316,8 @@ def test_a_limit_that_never_comes_is_an_abort(model):
 
 @pytest.mark.parametrize("kw,why", [({"axis": "M"}, "wheel only"), ({"limit_s": 1.5}, "limit-s"),
                                     ({"limit_s": 3.1}, "limit-s"), ({"disarm_delay_ms": -1.0}, "delay"),
+                                    ({"disarm_delay_ms": 100.0}, "delay"), ({"stop_grace_ms": None}, "stop-grace"),
+                                    ({"seconds": 0.5}, "seconds"),
                                     ({"power_switch_in_hand": False}, "power switch"), ({"duty": 0.2}, "duty")])
 def test_scenario_limits_refuse_before_anything_is_sent(model, kw, why):
     b = model()
@@ -315,14 +329,14 @@ def test_scenario_limits_refuse_before_anything_is_sent(model, kw, why):
 def test_the_scenario_cli_parses():
     ap_args = ["commission", "--device", "/dev/null", "--out", "/dev/null", "--axis", "R", "--duty", "0.1",
                "--scenario", "hold_disarm", "--disarm-delay-ms", "40", "--power-switch-in-hand", "--stop-time-ms",
-               "unavailable"]
+               "unavailable", "--stop-grace-ms", "120"]
     import unittest.mock as um
     with um.patch.object(bringup, "ReconnectingLink"), um.patch.object(bringup, "execute",
                                                                        return_value={}) as ex:
         bringup.main(ap_args)
     a = ex.call_args[0][0]
-    assert (a.scenario, a.limit_s, a.disarm_delay_ms, a.stop_time_ms, a.seconds) == ("hold_disarm", 2.0, 40.0,
-                                                                                        "unavailable", None)
+    assert (a.scenario, a.limit_s, a.disarm_delay_ms, a.stop_time_ms, a.seconds, a.stop_grace_ms) == (
+        "hold_disarm", 2.0, 40.0, "unavailable", None, 120.0)
 
 
 def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp_path, monkeypatch):
@@ -334,3 +348,25 @@ def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp
     assert out["external"]["stop_time_ms"]["limit"] == 400.0 and out["external"]["stop_time_ms"]["over_limit"]
     out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"}, floor=True)
     assert out["external"]["stop_time_ms"] == {"value": 450.0, "limit": 400.0, "pass": False}
+
+
+@pytest.mark.parametrize("what", ["fault", "boot"])
+def test_a_fault_or_reboot_first_seen_in_the_scenario_cleanup_is_an_abort(model, monkeypatch, what):
+    """Codex scenario review P2-2: the session-wide check runs after the cleanup."""
+    from dataclasses import replace
+
+    from forklift_core.plant.bringup import Sample
+
+    b = model("--commission-time-ms", "300")
+    real = bringup.CommissionSession.cleanup
+
+    def cleanup_then_bad_state(self):
+        ok = real(self)
+        last = self.b.samples[-1]
+        bad = replace(last.state, mode=Mode.FAULT) if what == "fault" else replace(last.state, boot_id=0x0BAD)
+        self.b.samples.append(Sample(last.host_ns + 1, bad))
+        return ok
+
+    monkeypatch.setattr(bringup.CommissionSession, "cleanup", cleanup_then_bad_state)
+    res = bringup.execute(sargs(), b)
+    assert res["result"] == "aborted" and res["aborted"] == ("mode_fault" if what == "fault" else "boot_changed")

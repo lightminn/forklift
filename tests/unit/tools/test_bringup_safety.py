@@ -304,3 +304,27 @@ def test_a_window_already_left_sends_no_nonzero_duty(monkeypatch):
     monkeypatch.setattr(s, "_abort_reason", lambda: None)
     s.hold_duty(1000, 0.2, lambda: "window")
     assert sent == [] and s.stop_reason == "window"
+
+
+def _st(mode, t_us, rx=0):
+    from dataclasses import replace
+
+    from forklift_core.plant.bringup import Sample
+
+    return Sample(t_us * 1000, replace(state(StateFlag.COMMISSION_BUILD), mode=mode, mcu_time_us=t_us,
+                                       last_rx_seq=rx))
+
+
+def test_a_disarm_inside_the_stopping_is_proved_by_the_grace_bound():
+    """Codex scenario review P2-1: last ARMED at 1000 us, grace 100 ms -> the STOPPING lasts past 101000 us."""
+    base = [_st(Mode.ARMED, 1000), _st(Mode.STOPPING, 11000)]
+    ok = base + [_st(Mode.STOPPING, 21000), _st(Mode.DISARMED, 31000, rx=9)]
+    assert bringup.disarm_acceptance(ok, 1, 9, 100)["disarm_during_stopping"] is True
+    # the samples between were lost and the acceptance is reported past the bound: unproven, not assumed
+    late = base + [_st(Mode.DISARMED, 150000, rx=9)]
+    out = bringup.disarm_acceptance(late, 1, 9, 100)
+    assert out["disarm_during_stopping"] is None and out["mode_before_acceptance"] == "STOPPING"
+    # a natural DISARMED seen before the acceptance: not inside
+    ended = base + [_st(Mode.DISARMED, 102000), _st(Mode.DISARMED, 112000, rx=9)]
+    assert bringup.disarm_acceptance(ended, 1, 9, 100)["disarm_during_stopping"] is False
+    assert bringup.disarm_acceptance(base, 1, 9, 100)["disarm_accepted"] is False

@@ -617,8 +617,33 @@ LIMIT_MAX_S = 3.0  # the scenario drives a wheel up to the build's time limit (p
 LIMIT_SLACK_S = 0.3  # how long past --limit-s the scenario waits for the MCU's limit before giving up
 
 
+def disarm_acceptance(samples: list, limit_i: int, seq: int, grace_ms: float) -> dict:
+    """Design ② 10: where the scenario's DISARM (``seq``) was accepted, and whether that was inside the limit's
+    STOPPING -- proved, not guessed from the sample before (Codex scenario review P2-1). The STOPPING began after the
+    last ARMED sample before the limit sample, so it cannot end on its own before that sample's MCU time plus the
+    build's ``stop_grace_ms``; an acceptance reported by a STATE earlier than that bound, after a STOPPING sample,
+    was inside it. A DISARMED sample before the acceptance means it was not; anything else stays unproven (None)."""
+    acc = next((i for i in range(limit_i, len(samples)) if samples[i].state.last_rx_seq == seq), None)
+    out = {"disarm_accepted": acc is not None, "mode_before_acceptance": None, "mode_at_acceptance": None,
+           "disarm_during_stopping": None, "natural_end_bound_mcu_us": None}
+    if acc is None:
+        return out
+    prev = samples[acc - 1].state
+    out["mode_before_acceptance"], out["mode_at_acceptance"] = prev.mode.name, samples[acc].state.mode.name
+    armed = next((samples[i].state for i in range(limit_i - 1, -1, -1) if samples[i].state.mode == Mode.ARMED), None)
+    if armed is None:
+        return out
+    bound = armed.mcu_time_us + int(grace_ms * 1000)
+    out["natural_end_bound_mcu_us"] = bound
+    if any(samples[i].state.mode == Mode.DISARMED for i in range(limit_i, acc)):
+        out["disarm_during_stopping"] = False  # the STOPPING was seen over before the DISARM landed
+    elif prev.mode == Mode.STOPPING and samples[acc].state.mcu_time_us < bound:
+        out["disarm_during_stopping"] = True
+    return out
+
+
 def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str, duty: float, limit_s: float,
-                            delay_ms: float) -> dict:
+                            delay_ms: float, grace_ms: float) -> dict:
     """Design ② 10 (lead decision 2026-11-12): drive one wheel until the MCU's own commissioning time limit, then a
     DISARM at once (``limit_disarm``) or ``delay_ms`` into the limit's STOPPING (``hold_disarm``). The record is the
     command order, the DISARM's acceptance (its seq in a STATE) and every STATE; the stop time and distance pass only
@@ -635,6 +660,7 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
         return _final({**out, "result": "aborted"}, session)
     # drive on until the MCU's limit: STOPPING with commission_time_limit, judged over every new sample
     limit_i, on_i, scanned = None, None, len(b.samples)
+    at_start = b.state.fault_flags & _AXIS_ENCODER_BITS[axis]
     give_up = time.monotonic() + limit_s + LIMIT_SLACK_S
     on_seqs = set()
     while time.monotonic() < give_up:
@@ -649,8 +675,14 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
             if st.mode == Mode.STOPPING and st.fault_flags & FaultFlag.COMMISSION_TIME_LIMIT:
                 limit_i = i
                 break
+            if session.early_stop(st, at_start) is not None:
+                # the driven wheel's new stuck/polarity bit still stops it here: only the 1.5 s bound is lifted
+                # (Codex scenario review P2-3)
+                session.stop_reason = "encoder_bit"
+                session.aborted = "encoder_bit_before_limit"
+                break
         scanned = len(b.samples)
-        if limit_i is not None:
+        if limit_i is not None or session.aborted is not None:
             break
         why = session._abort_reason()
         if why is not None:
@@ -659,6 +691,8 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
         time.sleep(0.01)
     if limit_i is None:
         session.aborted = session.aborted or "limit_not_reached"
+        if session.aborted == "encoder_bit_before_limit":
+            session.hold_duty(0, POST_ZERO_S)  # the picked wheel at 0 (electric brake) as in a normal run
         session.cleanup()
         return _final({**out, "result": "aborted"}, session)
     out["limit_reached"] = True
@@ -678,21 +712,18 @@ def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str,
         out["event_host_ns"], out["disarm_seq"] = sent[0]
         q = out["disarm_seq"]
         b.run_until(lambda: any(s.state.last_rx_seq == q for s in b.samples[limit_i:]), 0.5)
-        acc = next((i for i in range(limit_i, len(b.samples)) if b.samples[i].state.last_rx_seq == q), None)
-        if acc is not None:
-            out["disarm_accepted"] = True
-            out["mode_before_acceptance"] = b.samples[acc - 1].state.mode.name
-            out["disarm_during_stopping"] = b.samples[acc - 1].state.mode == Mode.STOPPING
-            out["mode_at_acceptance"] = b.samples[acc].state.mode.name
     b.run_until(lambda: False, 0.6)  # keep observing the counts after DISARMED
+    if out["disarm_seq"] is not None:
+        out.update(disarm_acceptance(b.samples, limit_i, out["disarm_seq"], grace_ms))
     i0 = limit_i
     settle = count_settle(b.samples, i0)
     disarmed = next((s for s in b.samples[i0:] if s.state.mode == Mode.DISARMED), None)
-    why = session_abort_reason(b.samples, i_arm)
+    # both scenarios are about a DISARM inside the STOPPING: proved, or not met
+    met = bool(out["disarm_accepted"] and out["disarm_during_stopping"] is True)
+    session.cleanup()
+    why = session_abort_reason(b.samples, i_arm)  # after the cleanup: its samples count (Codex scenario P2-2)
     if why is not None:
         session.aborted = session.aborted or why
-    met = bool(out["disarm_accepted"] and (out["disarm_during_stopping"] if kind == "hold_disarm" else True))
-    session.cleanup()
     ev = out["event_host_ns"]
     rel = (lambda ns: None if ns is None or ev is None else (ns - ev) / 1e6)
     return _final({**out, "result": "ok" if met else "not_met",
@@ -823,6 +854,7 @@ def main(argv=None) -> int:
     cm.add_argument("--scenario", choices=COMMISSION_SCENARIOS)
     cm.add_argument("--limit-s", type=float, default=2.0)
     cm.add_argument("--disarm-delay-ms", type=float, default=50.0)
+    cm.add_argument("--stop-grace-ms", type=float)
     cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
     cm.add_argument("--observed", choices=("pos", "neg", "none"))
     cm.add_argument("--power-switch-in-hand", action="store_true")
@@ -866,8 +898,12 @@ def _check_commission_args(args) -> None:
             raise Refused("scenario: a wheel only (steering and lift would run into their mechanical limits)")
         if not COMMISSION_HOLD_MAX_S < args.limit_s <= LIMIT_MAX_S:
             raise Refused(f"limit-s: the build's time limit, in ({COMMISSION_HOLD_MAX_S}, {LIMIT_MAX_S}]")
-        if not 0 <= args.disarm_delay_ms <= 1000:
-            raise Refused("disarm-delay-ms: the delay must be in [0, 1000]")
+        if args.seconds is not None:
+            raise Refused("seconds: a scenario runs to the build's limit -- give --limit-s, not --seconds")
+        if args.stop_grace_ms is None or not 0 < args.stop_grace_ms <= 1000:
+            raise Refused("stop-grace-ms: the build's stop_grace_ms is needed to prove the DISARM was in the STOPPING")
+        if not 0 <= args.disarm_delay_ms < args.stop_grace_ms:
+            raise Refused("disarm-delay-ms: the delay must be in [0, stop_grace_ms)")
         if args.window is not None:
             raise Refused("window: a wheel takes no window")
         if not args.power_switch_in_hand:
@@ -912,12 +948,19 @@ def execute(args, bench: Bench) -> dict:
     try:
         if args.cmd == "commission":
             _check_commission_args(args)
-            _confirm(args, f"commission: will ARM and drive axis {args.axis} at duty {args.duty} for at most "
-                           f"{args.seconds} s (window {args.window}). Outputs on only after the IPROPI protection is "
-                           "confirmed (user decision); the window inside the mechanical limits.")
+            if getattr(args, "scenario", None) is not None:
+                what = (f"commission scenario {args.scenario}: will ARM and drive wheel {args.axis} at duty {args.duty} "
+                        f"up to the build's time limit ({args.limit_s} s, giving up at {args.limit_s + LIMIT_SLACK_S} s),"
+                        f" then DISARM {'at once' if args.scenario == 'limit_disarm' else f'{args.disarm_delay_ms} ms in'}"
+                        f" (build stop_grace_ms {args.stop_grace_ms}).")
+            else:
+                what = (f"commission: will ARM and drive axis {args.axis} at duty {args.duty} for at most "
+                        f"{args.seconds} s (window {args.window}).")
+            _confirm(args, what + " Outputs on only after the IPROPI protection is confirmed (user decision); "
+                                  "the window inside the mechanical limits.")
             if getattr(args, "scenario", None) is not None:
                 result = run_commission_scenario(bench, session, args.scenario, args.duty, args.limit_s,
-                                                 args.disarm_delay_ms)
+                                                 args.disarm_delay_ms, args.stop_grace_ms)
                 result["external"] = verdict(args.scenario, {
                     "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
                     "stop_distance_mm": args.stop_distance_mm})

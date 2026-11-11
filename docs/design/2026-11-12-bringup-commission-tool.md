@@ -112,7 +112,7 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
 
 ```
 bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
-                      [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand
+                      [--limit-s 2.0] [--disarm-delay-ms 50] --stop-grace-ms G --power-switch-in-hand
                       [--output-response-ms X|unavailable] [--stop-time-ms X|unavailable] [--stop-distance-mm X|unavailable]
 ```
 
@@ -120,13 +120,19 @@ bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario 
 - 이 시나리오만 2절의 1.5 s 상한을 넘겨 **빌드의 시간 상한까지** 비영 듀티를 이어 보낸다. `--limit-s` 는 빌드 상한(제안 2 s)을 운용자가 적는 값이고 (1.5, 3.0] s 만 받는다. `--limit-s` + 0.3 s 안에 MCU 의 상한(`STOPPING` + `commission_time_limit`)이 보이지 않으면 `limit_not_reached` 로 중단한다. 비영 명령의 유효시간은 그대로 60 ms 이하라, 도구가 멈추면 MCU 만료가 구동을 끝낸다.
 - 순서: 무장 → 고른 바퀴 0 듀티 0.3 s → 비영 듀티(MCU 상한까지, 매 주기 새 표본 전체에서 상한을 찾음) → 사건:
   - `limit_disarm`: 상한 표본을 본 즉시 `DISARM`.
-  - `hold_disarm`: 상한 뒤 `--disarm-delay-ms`(기본 50 ms, `stop_grace_ms` 보다 짧아야 함) 기다렸다 `DISARM`. 그 사이 `STOPPING` 이 끝났으면 시나리오의 뜻이 없으므로 `not_met`(`hold_ended_before_disarm`).
+  - `hold_disarm`: 상한 뒤 `--disarm-delay-ms`(기본 50 ms, `--stop-grace-ms` 보다 짧아야 함) 기다렸다 `DISARM`. 그 사이 `STOPPING` 이 끝났으면 시나리오의 뜻이 없으므로 `not_met`(`hold_ended_before_disarm`).
+  - 비영 구동 중에도 고른 바퀴의 새 stuck·polarity 비트는 기본 도구처럼 구동을 멈춘다(`encoder_bit_before_limit` 중단). 이 시나리오가 푸는 것은 1.5 s 상한 하나뿐이다(Codex 시나리오 검토 P2-3).
+  - `--seconds` 와 함께 줄 수 없다. 운용자 확인 문구에 시나리오·`--limit-s`·포기 시각·`DISARM` 시점·`stop_grace_ms` 를 보인다.
   - 그 뒤 0.6 s 카운트 관찰 → 정리(도구 ① 과 같은 `DISARM` 확인).
 - 기록(소프트웨어 근거): 명령 순서(쓰기 완료 시각), 상한까지의 MCU 시간(`limit_after_ms`), 사건 `DISARM` 의 seq·쓰기 시각, 그 seq 를 담은 첫 `STATE`(수락)와 그 직전 표본의 모드(`disarm_during_stopping`), 수락 표본의 모드, 상한 표본에서 `DISARM` 쓰기까지(`limit_seen_to_disarm_write_ms`), `DISARMED` 까지·카운트 정착까지의 시각. 수락 표본에서 비트 24 가 남아 있는지는 시험이 본다.
-- 결과: `DISARM` 이 수락되고(`hold_disarm` 은 `STOPPING` 에서 수락돼야) 세션 전체 검사(3절)를 통과하면 `ok`, 아니면 `not_met`·`aborted`.
+- **`STOPPING` 안에서 받았는지는 입증한다**(Codex 시나리오 검토 P2-1). 수락 직전 표본의 모드만 보면, 그 사이 자연 종료 표본이 빠지거나 한 묶음으로 오면 이미 `DISARMED` 에서 받은 `DISARM` 도 통과한다. 그래서:
+  - `STOPPING` 은 상한 표본 앞의 마지막 `ARMED` 표본 뒤에 시작했으므로, 스스로 끝나는 것은 그 표본의 MCU 시각 + 빌드의 `stop_grace_ms`(`--stop-grace-ms`, 필수) 보다 이르지 않다.
+  - 수락을 알린 `STATE` 가 그 경계보다 이르고 직전 표본이 `STOPPING` 이면 `STOPPING` 안의 수락으로 입증된다(`disarm_during_stopping=true`).
+  - 수락 전에 `DISARMED` 표본이 보였으면 `false`, 그 밖은 입증 못 함(`null`).
+- 결과: 두 시나리오 모두 `disarm_during_stopping=true` 일 때만 `ok`, 아니면 `not_met`. 세션 전체 검사(3절)는 **정리 뒤에** 해 정리 중 처음 보인 결함·재부팅도 중단으로 친다(P2-2).
 - **합격 판정은 외부 측정값으로만** 한다(다른 S5 항목과 같다, 도구 ① 4절). 문턱은 일반 `DISARM` 의 것을 잠정 적용한다(총괄 결정 2026-11-12, 계획 3.4): 도구의 문턱 표에서 두 시나리오는 `disarm` 행을 따른다(`THRESHOLD_KIND`). 그 행은 출력 반응 0.1 s, 바퀴 정지 0.5 s·0.10 m(잠정, 총괄 결정 2026-11-12)다. 시운전 시나리오는 받침대(바퀴 띄움)에서만 하므로 정지 시간·거리는 문턱 대비 **참고(받침대)**로만 보인다(`reference: stand`, `over_limit`, `pass: null`). 합격은 바닥 S5 외부 측정의 몫이고, 받침대에서 넘으면 문턱을 늦추지 않고 원인(코스트·`safe_brake`)부터 보고한다. 출력 반응은 받침대에서도 판정한다. `analyze --kind limit_disarm|hold_disarm` 도 같다(`--floor` 를 줄 때만 정지 시간·거리를 판정한다). 이 받침대 규칙은 도구 ① 의 `scenario`(`--floor` 없이)에도 똑같이 적용된다.
 - 재무장 보류의 확인(보류 중 `ARM` 거부)은 실기 도구에 넣지 않는다(총괄 결정 2026-11-12). 펌웨어 회귀 시험 v2r6 가 고정하고 있고, 실기 확인은 펌웨어 HIL 빌드 시험(펌웨어 PR ⑤)으로 넘긴다.
-- 시험(MCU 모형, 상한 300 ms·`stop_grace_ms` 100 ms): 두 시나리오 모두 `STOPPING` 에서 수락·`DISARMED`·비트 24 유지, 명령 순서(`ARM` → `COMMISSION`… → `DISARM`, `DRIVE` 없음), 외부 값 기록. 지연이 `stop_grace_ms` 보다 길면 `not_met`. 상한이 오지 않으면 `limit_not_reached`. 인자 거부(축·`--limit-s`·지연·주 전원·듀티). CLI 파싱.
+- 시험(MCU 모형, 상한 300 ms·`stop_grace_ms` 100 ms): 두 시나리오 모두 `STOPPING` 안 수락 입증·`DISARMED`·비트 24 유지, 명령 순서(`ARM` → `COMMISSION`… → `DISARM`, `DRIVE` 없음), 외부 값 기록. 운용자 `stop_grace_ms` 가 실제보다 길어 지연이 자연 종료 뒤로 가면 `not_met`. 상한이 오지 않으면 `limit_not_reached`. 낮춘 문턱의 polarity 비트 → `encoder_bit_before_limit`. 정리 중 처음 보인 `FAULT`·재부팅 → 중단. 인자 거부(축·`--limit-s`·지연·`--stop-grace-ms`·`--seconds`·주 전원·듀티). CLI 파싱. 단위: 입증 규칙(경계 안·표본 누락으로 경계 밖·자연 종료 먼저·미수락).
 
 ## 9. 자체 검토
 
@@ -160,3 +166,12 @@ Codex 재검토 3회차(P1 없음, P2 1·P3 1). 반영했다.
 |---|---|
 | P2 정리의 신선도 기준(0.2 s)이 호스트(50 ms)와 달라 50–200 ms 공백에서 보이지 않는 `STOPPING` 을 기다리지 않음 | 호스트 설정의 `state_max_age_s` 로 맞춤, 60 ms 공백 시험 |
 | P3 끝 표본이 `DISARM` 확인 표본이면 절단으로 경계가 사라짐 | 끝 표본은 절단해도 남김, 계산은 끝이 입력 밖이면 `end_unknown` |
+
+Codex 시나리오 검토(10절, P1 없음, P2 3·P3 1). 모두 반영했다.
+
+| 지적 | 처리 |
+|---|---|
+| P2-1 수락 직전 표본으로 `STOPPING` 안 수락을 확정할 수 없음(표본 누락·묶음 수신) | `stop_grace_ms` 경계로 입증, 못 하면 `null` → `not_met`(10절) |
+| P2-2 정리 중 처음 보인 결함 누락 재발 | 세션 전체 검사를 정리 뒤로 |
+| P2-3 새 구동 루프가 엔코더 조기 정지를 우회 | 고른 바퀴의 새 비트로 중단, 낮춘 문턱 시험 |
+| P3-4 확인 문구가 시나리오 시간을 보이지 않음 | `--seconds` 와 배타, 문구에 시나리오 조건 |
