@@ -30,6 +30,7 @@ bool clock_usb_init(void);
 void timebase_init(void); /* TIM2 free-running 1 MHz */
 uint32_t timebase_now_us(void);
 void tick_start(void (*on_tick)(void)); /* TIM6 at CLK_TICK_HZ */
+void tick_stop(void);                   /* IWDG stall test build only (board design 9) */
 
 uint32_t reset_cause_read_and_clear(void);
 

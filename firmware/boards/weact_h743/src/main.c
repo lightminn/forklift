@@ -21,8 +21,24 @@ static fw_app g_app;
 static volatile clock_source g_clock_source;
 static uint32_t g_ticks;
 
+#if defined(FW_TEST_IWDG_STALL_S)
+#if !FW_OUTPUTS_LOCKED
+#error "the IWDG stall test build needs the outputs locked (lead condition 2026-11-12)"
+#endif
+_Static_assert(FW_TEST_IWDG_STALL_S >= 1 && FW_TEST_IWDG_STALL_S <= 60, "1..60 s");
+#endif
+
 static void on_tick(void)
 {
+#if defined(FW_TEST_IWDG_STALL_S)
+    /* S5 test build (board design 9): N s after boot the tick stops for good -- no cycle, no IWDG
+       refresh -- and the watchdog resets the board in 47.6-53.8 ms. The outputs are left as they
+       are: whether the reset cuts them is what S5 measures. */
+    if (g_ticks >= FW_TEST_IWDG_STALL_S * 1000u) {
+        tick_stop();
+        return;
+    }
+#endif
     fw_app_tick(&g_app);
     board_hal_tick_end();
     g_ticks++;

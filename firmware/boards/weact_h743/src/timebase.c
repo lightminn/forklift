@@ -48,3 +48,10 @@ void TIM6_DAC_IRQHandler(void)
         tick_fn();
     }
 }
+
+void tick_stop(void)
+{
+    TIM6->DIER = 0;
+    TIM6->CR1 = 0;
+    NVIC_DisableIRQ(TIM6_DAC_IRQn);
+}
