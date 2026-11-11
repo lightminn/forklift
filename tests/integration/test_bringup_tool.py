@@ -105,11 +105,23 @@ def test_a_scenario_records_its_software_timeline_without_aborting_on_the_expect
 
 
 def test_the_verdict_takes_only_external_measurements():
-    v = bringup.verdict("tx_cut", {"stop_time_ms": "420", "stop_distance_mm": "unavailable"})
+    v = bringup.verdict("tx_cut", {"stop_time_ms": "420", "stop_distance_mm": "unavailable"}, floor=True)
     assert v["stop_time_ms"]["pass"] is True and v["stop_distance_mm"] == {"value": "unavailable", "limit": 100.0,
                                                                            "pass": None}
     assert "output_response_ms" not in v  # the link loss has no 0.1 s output-response bound (plan 3.4)
     assert bringup.verdict("disarm", {"output_response_ms": "150"})["output_response_ms"]["pass"] is False
+
+
+def test_a_stand_stop_is_a_reference_against_the_threshold_never_a_pass():
+    """Lead decision 2026-11-12: lifted wheels have no body inertia or floor drag."""
+    v = bringup.verdict("disarm", {"stop_time_ms": "620", "stop_distance_mm": "40", "output_response_ms": "30"})
+    assert v["stop_time_ms"] == {"value": 620.0, "limit": 500.0, "pass": None, "reference": "stand",
+                                 "over_limit": True, "note": bringup.STAND_NOTE}
+    assert v["stop_distance_mm"] == {"value": 40.0, "limit": 100.0, "pass": None, "reference": "stand",
+                                     "over_limit": False}
+    assert v["output_response_ms"]["pass"] is True  # the output response is judged on the stand too
+    floor = bringup.verdict("disarm", {"stop_time_ms": "620"}, floor=True)
+    assert floor["stop_time_ms"] == {"value": 620.0, "limit": 500.0, "pass": False}
 
 
 # --- Codex impl review: the cleanup and the record are independent of what goes wrong ---
@@ -189,3 +201,19 @@ def test_cpr_from_a_known_hand_turn(mcu_model):
         proc.wait(timeout=5)
         os.close(master)
         os.close(slave)
+
+
+@pytest.mark.parametrize("raw", ["-1", "-inf", "inf", "nan", "fast"])
+def test_an_invalid_external_value_never_passes(raw):
+    """Codex review: only 'unavailable' or a finite value >= 0."""
+    for floor in (True, False):
+        with pytest.raises(ValueError):
+            bringup.verdict("disarm", {"stop_time_ms": raw}, floor=floor)
+    with pytest.raises(ValueError):
+        bringup.verdict("disarm", {"output_response_ms": raw})
+
+
+def test_an_invalid_external_value_is_refused_before_the_arm(bench):
+    res = bringup.execute(_args(cmd="scenario", kind="disarm", stop_distance_mm="-150"), bench)
+    assert res["result"] == "refused" and "stop_distance_mm" in res["why"]
+    assert not any(k == "ARM" for k, _t, _m in bench.written.values())

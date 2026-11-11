@@ -6,12 +6,19 @@
    usage: mcu_model --link PATH [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
                     [--estop-release-ms N] [--silent-at-ms N]
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T --hand-turn-duration-ms D]
+                    [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
+                    [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1]
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
    only; it is not an IWDG and proves nothing about output cut-off).
    --hand-turn-*: a known encoder trajectory independent of the drive (bring-up tool 1's CPR test): from T ms
    the wheel's counts advance by N wheel revolutions at an even rate over D ms, forward rolling, whatever the
-   outputs. */
+   outputs.
+   --commission-build 1: an FW_COMMISSION build (COMMISSION only; synthetic duty limit 0.15 and time limit
+   2000 ms, the plan's proposals, or --commission-time-ms). --outputs-locked 1: the outputs_locked build bit
+   (the model's plant still follows the outputs the core computes). --encoder-sign-flip W: wheel W's counts run
+   against its motion (a wrong encoder sign for the commissioning tool's tests). --encoder-test-thresholds 1:
+   stuck/polarity judged from duty 0.05 within 100-300 ms, so a commissioning-limited duty can raise the bits. */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -46,6 +53,7 @@ typedef struct {
     size_t tx_len;
     long fault_at_ms, estop_at_ms, estop_release_ms, silent_at_ms;
     long hand_wheel, hand_revs, hand_at_ms, hand_duration_ms;
+    long enc_flip;
     bool fault_fired;
 } board;
 
@@ -96,7 +104,8 @@ static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
     for (int i = 0; i < 2; i++) {
-        in->wheel_hw[i] = (uint16_t)(int64_t)llround(B.wheel_counts[i]);
+        double c = B.enc_flip == i ? -B.wheel_counts[i] : B.wheel_counts[i];
+        in->wheel_hw[i] = (uint16_t)(int64_t)llround(c);
     }
     in->abs_frame[0] = kth_frame(B.steer_rad, 1.0);
     in->abs_frame[1] = kth_frame(B.lift_m, 10.0);
@@ -226,7 +235,7 @@ static void step_plant(double dt)
     B.lift_m += dl * LIFT_M_S_PER_DUTY * dt;
 }
 
-static drive_config make_config(void)
+static drive_config make_config(bool commission, long commission_time_ms, bool locked, bool enc_test)
 {
     drive_config c;
     memset(&c, 0, sizeof c);
@@ -290,6 +299,20 @@ static drive_config make_config(void)
     c.enc_polarity_ms = 200;
     c.enc_polarity_rise_rad_s = 5.0f;
     c.enc_polarity_persist_ms = 2000;
+    c.commission_build = commission;
+    if (commission) {
+        c.commission_duty_max = 0.15f;
+        c.commission_time_ms = (uint32_t)commission_time_ms;
+    }
+    c.outputs_locked = locked;
+    if (enc_test) {
+        c.enc_stuck_duty = 0.05f;
+        c.enc_stuck_ms = 200;
+        c.enc_polarity_duty = 0.05f;
+        c.enc_polarity_ms = 100;
+        c.enc_polarity_rise_rad_s = 0.5f;
+        c.enc_polarity_persist_ms = 300;
+    }
     return c;
 }
 
@@ -339,6 +362,11 @@ int main(int argc, char **argv)
     B.hand_revs = arg_long(argc, argv, "--hand-turn-revs", 0);
     B.hand_at_ms = arg_long(argc, argv, "--hand-turn-ms", 0);
     B.hand_duration_ms = arg_long(argc, argv, "--hand-turn-duration-ms", 0);
+    B.enc_flip = arg_long(argc, argv, "--encoder-sign-flip", -1);
+    bool commission = arg_long(argc, argv, "--commission-build", 0) != 0;
+    long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
+    bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
+    bool enc_test = arg_long(argc, argv, "--encoder-test-thresholds", 0) != 0;
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
     uint32_t boot_id = (uint32_t)arg_long(argc, argv, "--boot-id", 0x0B00700L);
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
@@ -350,7 +378,7 @@ int main(int argc, char **argv)
 
     static drive_config cfg;
     static fw_app app;
-    cfg = make_config();
+    cfg = make_config(commission, commission_time_ms, locked, enc_test);
     B.t0_ns = B.now_ns = mono_ns();
     if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id, DRIVE_RESET_POWER)) {
         fprintf(stderr, "fw_app_init refused the configuration\n");
