@@ -211,3 +211,35 @@ def test_the_config_is_strict(tmp_path):
     bad.write_text("schema: teleop_bridge/1\nencoder_speed: {axle_accel_mps2: 0.8}\n")
     with pytest.raises(ValueError):
         rt.load_bridge_params(bad, veh)
+
+
+def test_the_output_check_takes_the_operators_direction_not_the_slews():
+    """Codex round 3 P1: old command -0.15, new request +0.15, the slew's output still -0.08, bound 0.05, the rear
+    allows 0.08 -- the output direction would pass it; the request direction holds (the core's result)."""
+    speed = SafetySpeed(-0.05, 0.05, (-1,))
+    fn = limits(1.0, 0.08)
+    by_output = rt.direction_limits(fn, speed, -1, 0.08, -0.15)
+    assert by_output[0] == 0.08 and not by_output[2]  # the wrong reading the check must not use
+    out, why = rt.output_direction_check(fn, speed, requested_mps=0.15, output_mps=-0.08, commanded_mps=-0.15)
+    assert out == 0.0 and why == "blocked_-1"
+    assert core_rule(fn, speed, 1, 0.08, -0.15)[2] is True  # the core holds too
+
+
+def test_the_output_check_passes_a_clear_drive():
+    out, why = rt.output_direction_check(limits(1.0, 1.0), SafetySpeed(0.1, 0.13, (1,)), 0.13, 0.12, 0.1)
+    assert out == 0.12 and why is None
+
+
+def test_a_late_state_ages_by_its_delay_over_the_best_case():
+    tr = rt.DelayTracker()
+    early = st(80, 0, 0, rx_ms=81)  # 1 ms after its MCU time: the best case
+    late = st(100, 0, 0, rx_ms=125)  # 25 ms after its MCU time: 24 ms late
+    tr.add(early)
+    tr.add(late)
+    assert tr.excess_s(late) == pytest.approx(0.024, abs=1e-6)
+    now = late.host_ns + 1_000_000
+    fresh = rt.encoder_speed([early, late], now, P, ok)
+    aged = rt.encoder_speed([early, late], now, P, ok, tr.excess_s(late))
+    assert aged.age_s == pytest.approx(fresh.age_s + 0.024) and aged.speed.bound_mps > fresh.speed.bound_mps
+    # later than the age limit allows: no safety speed at all
+    assert not rt.encoder_speed([early, late], now, P, ok, 0.05).speed.valid

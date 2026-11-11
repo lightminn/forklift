@@ -98,7 +98,7 @@ def _invalid(reason: str, *, age_s=None) -> EncoderReading:
 
 
 def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
-                  steering_ok: Callable[[float], bool]) -> EncoderReading:
+                  steering_ok: Callable[[float], bool], extra_delay_s: float = 0.0) -> EncoderReading:
     """The safety speed from the newest STATE and the latest earlier STATE of the same boot at least ``dt_min_s``
     before it (MCU time), at most ``dt_max_s``: per wheel ``v = 2 pi r dc / (CPR dt)``, the mean, the yaw rate from
     the wheel difference, the bound on the outer wheel, the directions from ``signed +- e`` (design 2)."""
@@ -106,7 +106,9 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
         return _invalid("no_state")
     cur = samples[-1]
     s1 = cur.state
-    age = (now_ns - cur.host_ns) / 1e9
+    # the receipt age plus how much later than the link's best case this STATE arrived (design 2, A2 split): the
+    # premise L covers only the base delay
+    age = (now_ns - cur.host_ns) / 1e9 + max(0.0, float(extra_delay_s))
     if age > p.max_age_s or age < -1e-3:
         return _invalid("stale", age_s=age)
     age = max(age, 0.0)
@@ -142,6 +144,34 @@ def encoder_speed(samples: Sequence[Sample], now_ns: int, p: EncoderSpeedParams,
     directions = (1, -1) if (lo < 0.0 < hi) else ((1,) if lo >= 0.0 else (-1,))
     return EncoderReading(SafetySpeed(signed, bound, directions, valid=True, age_s=age),
                           (v[1] - v[0]) / p.track_m, None, dt_s=dt, age_s=age, steering_rad=q)
+
+
+class DelayTracker:
+    """Each STATE's delay over the link's best case (design 2): the offset ``host receipt - MCU time`` of a STATE
+    minus the smallest offset seen over ``window_s``. The base (smallest) delay is the premise L's; whatever a STATE
+    takes beyond it is measured here and added to its age, so a late STATE never reads as fresh."""
+
+    def __init__(self, window_s: float = 5.0) -> None:
+        self.window_ns = int(window_s * 1e9)
+        self._seen: list[tuple[int, int, int]] = []  # (host_ns, offset_ns, boot)
+
+    def add(self, sample: Sample) -> None:
+        off = sample.host_ns - sample.state.mcu_time_us * 1000
+        if self._seen and self._seen[-1][2] != sample.state.boot_id:
+            self._seen = []  # a new boot is a new MCU clock
+        self._seen.append((sample.host_ns, off, sample.state.boot_id))
+        cut = sample.host_ns - self.window_ns
+        while self._seen and self._seen[0][0] < cut:
+            self._seen.pop(0)
+
+    def excess_s(self, sample: Sample) -> float:
+        if not self._seen:
+            return 0.0
+        base = min(o for _h, o, b in self._seen if b == sample.state.boot_id) if any(
+            b == sample.state.boot_id for _h, _o, b in self._seen) else None
+        if base is None:
+            return 0.0
+        return max(0.0, (sample.host_ns - sample.state.mcu_time_us * 1000 - base) / 1e9)
 
 
 STILL_WINDOW_S = 0.2  # a stand before an MCU ARM: counts still over at least this much of contiguous STATEs ...
@@ -222,6 +252,19 @@ def direction_limits(limit_fn, speed: SafetySpeed, direction, cap_mps: float, co
     return allowed, why, hold, driving, len(possible) > 1
 
 
+def output_direction_check(limit_fn, speed: SafetySpeed, requested_mps: float, output_mps: float,
+                           commanded_mps: float) -> tuple[float, str | None]:
+    """Design 8 on this cycle's output: the driving direction is the operator's request (before the slew -- a slew
+    still on the old command's side must not take the residual motion out of the unasked check, Codex round 3 P1),
+    none when nothing is asked; the output passes only when ``direction_limits`` neither holds nor limits it below
+    its magnitude. Returns (speed, why cut or None)."""
+    direction = None if requested_mps == 0.0 else (1 if requested_mps > 0 else -1)
+    allowed, why, hold, _drv, _uns = direction_limits(limit_fn, speed, direction, abs(output_mps), commanded_mps)
+    if hold or allowed < abs(output_mps):
+        return 0.0, why
+    return output_mps, None
+
+
 # ---------------------------------------------------------------------------------------- the safety state (design 7)
 CONFIRMATIONS = ("empty_forks", "forks_clear", "lift_low", "no_open_recovery")
 
@@ -297,6 +340,7 @@ class TeleopBridge:
         self.cycle_s = float(cycle_s)
         self.samples: list[Sample] = []
         self.samples_max = int(samples_max)
+        self.delays = DelayTracker()
         self.phase = IDLE
         self.bound_gen: int | None = None  # the arbiter arm_gen the MCU authorization belongs to
         self.used_gens: set[int] = set()  # arm_gens an MCU ARM was asked for (once each, never again)
@@ -310,6 +354,7 @@ class TeleopBridge:
 
     # ------------------------------------------------------------------ inputs
     def add_sample(self, sample: Sample) -> None:
+        self.delays.add(sample)
         self.samples.append(sample)
         if len(self.samples) > self.samples_max:
             del self.samples[: len(self.samples) - self.samples_max]
@@ -335,7 +380,9 @@ class TeleopBridge:
     def cycle(self, now_ns: int) -> dict:
         a, now = self.arbiter, now_ns / 1e9
         rec: dict = {"now_ns": now_ns}
-        reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok)
+        extra = self.delays.excess_s(self.samples[-1]) if self.samples else 0.0
+        reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok, extra)
+        rec["late_s"] = extra
         self.reading = reading
         st = self.host.state
         was_driving = a.mode == "TELEOP" and a.armed  # before observe can disarm it (design 4)
@@ -496,13 +543,12 @@ class TeleopBridge:
             self.q_cmd = float(arr[0])
             q_cmd = [self.q_cmd]
         if speed != 0.0:
+            requested = a.drive.target(a.teleop, loaded=out.policy.loaded)[0] if a.teleop is not None else 0.0
             curvs = sorted({float(out.curvature_inv_m), float(a.drive.kappa)})
-            allowed, why, hold, _drv, _uns = direction_limits(
-                lambda d, v: self.floor_permit(curvs, d, v), reading.speed, 1 if speed > 0 else -1, abs(speed),
-                self._commanded(now_ns))
-            if hold or allowed < abs(speed):
+            speed, why = output_direction_check(lambda d, v: self.floor_permit(curvs, d, v), reading.speed,
+                                                requested, speed, self._commanded(now_ns))
+            if why is not None:
                 rec["direction_cut"] = why
-                speed = 0.0
         if speed == 0.0:
             drive = self.kin.stopped(q_cmd)
         else:
@@ -530,4 +576,4 @@ class TeleopBridge:
 
 
 __all__ = ["CONFIRMATIONS", "EncoderReading", "EncoderSpeedParams", "STANDING_MPS", "bench_safety", "command_cap_mps",
-           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still"]
+           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayTracker", "output_direction_check"]
