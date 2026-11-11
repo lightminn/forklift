@@ -44,10 +44,9 @@ class EncoderSpeedParams:
     max_age_s: float  # the newest STATE older than this (host receipt) is too old for a safety speed
     dt_min_s: float  # the two STATEs differenced are at least this far apart (MCU time) ...
     dt_max_s: float  # ... and at most this
-    mcu_cycle_s: float = 0.001  # the firmware's control period: a measurement precedes a frame's handling by at most it
 
     def __post_init__(self) -> None:
-        for name in ("track_m", "axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s", "mcu_cycle_s"):
+        for name in ("track_m", "axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"):
             v = getattr(self, name)
             if not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
                 raise ValueError(f"{name} must be a positive finite number")
@@ -153,27 +152,27 @@ class DelayBound:
     """An upper bound on each STATE's delay from its measurement to its receipt, by round trip (design 2; Codex
     re-review 3 P1: no offset baseline survives a clock rate difference -- a fast MCU clock hid a growing delay).
 
-    The firmware's cycle reads its inputs, then handles the link's frames, then sends a STATE (``app.c``). A STATE
-    whose ``last_rx_seq`` moved to ``k`` -- the previous accepted STATE of the boot named another seq, so ``k`` was
-    taken between the two (Codex re-review 4 P1: the initial seq 0 is no acknowledgement) -- was measured at most one
-    cycle's work before ``k`` was handled (re-review 4 P2), and ``k`` was handled after it was written. Its delay is
-    therefore at most ``receipt - write of k + mcu_cycle_s`` whatever either clock's rate: an anchor
-    ``(offset, receipt, MCU time, bound)`` with ``offset = receipt - MCU time``. A cycle that overran (the count
-    moved) is not used. Another STATE ``j`` of the same boot is bounded from an anchor ``a`` by
-    ``bound_a + (offset_j - offset_a) + drift |MCU_j - MCU_a| / (1 - drift)`` -- the measurement interval taken from
-    the MCU clock, never the receipt interval (re-review 4 P2) -- over at most ``anchor_max_age_s`` (premise A3); the
-    smallest counts. No recent anchor: no bound, no safety speed. A write is forgotten after ``anchor_max_age_s``,
-    long before a 16-bit seq comes round (22 min at 50 Hz)."""
+    The firmware runs one cycle at a time: inputs read, the link's frames handled, a STATE sent (``app.c``). When a
+    STATE's ``last_rx_seq`` moves to ``k`` -- a frame this session wrote (the host starts each session at a random
+    seq: re-review 5 P1, an earlier session's late STATE) -- ``k`` was handled in that STATE's cycle or before. The
+    **next** STATE of the boot was measured in a later cycle, so after ``k`` was handled and so after ``k`` was
+    written: its delay is at most ``its receipt - write of k`` whatever either clock's rate or how long a cycle took
+    (re-review 5 P2: the overrun count is updated a cycle late; re-review 4 P1: the initial seq 0 is no
+    acknowledgement). That STATE is an anchor ``(offset, receipt, MCU time, bound)``, ``offset = receipt - MCU time``.
+    Another STATE ``j`` of the same boot is bounded from an anchor ``a`` by
+    ``bound_a + (offset_j - offset_a) + drift |MCU_j - MCU_a| / (1 - drift)`` -- the measurement interval taken from the
+    MCU clock (re-review 4 P2) -- over at most ``anchor_max_age_s`` (premise A3); the smallest counts. No recent
+    anchor: no bound, no safety speed. A write is forgotten after ``anchor_max_age_s``, long before a 16-bit seq comes
+    round (22 min at 50 Hz)."""
 
-    def __init__(self, *, mcu_cycle_s: float = 0.001, anchor_max_age_s: float = 2.0, drift_max: float = 100e-6,
-                 anchors_max: int = 32) -> None:
-        self.mcu_cycle_ns = int(mcu_cycle_s * 1e9)
+    def __init__(self, *, anchor_max_age_s: float = 2.0, drift_max: float = 100e-6, anchors_max: int = 32) -> None:
         self.anchor_max_age_ns = int(anchor_max_age_s * 1e9)
         self.drift_max = float(drift_max)
         self.anchors_max = int(anchors_max)
-        self._writes: dict[int, int] = {}  # seq -> write host ns
+        self._writes: dict[int, int] = {}  # seq -> write host ns (this session's frames)
         self._anchors: list[tuple[int, int, int, int, int]] = []  # (offset_ns, receipt_ns, mcu_ns, bound_ns, boot)
-        self._prev: tuple[int, int, int] | None = None  # the previous accepted STATE: (boot, last_rx_seq, overruns)
+        self._prev: tuple[int, int] | None = None  # the previous accepted STATE: (boot, last_rx_seq)
+        self._pending: tuple[int, int, int] | None = None  # an acknowledgement seen: (write ns, its STATE's MCU ns, boot)
 
     def written(self, seq: int, write_ns: int) -> None:
         self._writes[int(seq) & 0xFFFF] = int(write_ns)
@@ -184,21 +183,25 @@ class DelayBound:
     def add(self, sample: Sample) -> None:
         st = sample.state
         seq = int(st.last_rx_seq) & 0xFFFF
-        prev, self._prev = self._prev, (st.boot_id, seq, int(st.cycle_overruns))
+        mcu_ns = st.mcu_time_us * 1000
+        rx = sample.host_ns
+        prev, self._prev = self._prev, (st.boot_id, seq)
         if prev is None or prev[0] != st.boot_id:
             self._anchors = [a for a in self._anchors if a[4] == st.boot_id]
-            return  # nothing seen before on this boot: no acknowledgement can be told from the initial seq
-        if prev[1] == seq or prev[2] != int(st.cycle_overruns):
-            return  # no new acknowledgement, or a cycle overran in between
-        w = self._writes.get(seq)
-        rx = sample.host_ns
-        if w is None or rx < w or rx - w > self.anchor_max_age_ns:
-            return
-        del self._writes[seq]  # one anchor per frame: the first STATE naming it
-        mcu_ns = st.mcu_time_us * 1000
-        self._anchors.append((rx - mcu_ns, rx, mcu_ns, rx - w + self.mcu_cycle_ns, st.boot_id))
-        cut = rx - self.anchor_max_age_ns
-        self._anchors = [a for a in self._anchors if a[1] >= cut and a[4] == st.boot_id][-self.anchors_max:]
+            self._pending = None
+            return  # nothing seen before on this boot: no acknowledgement can be told from the initial value
+        # a STATE after an acknowledging one: measured after the acknowledged frame's handling -> an anchor
+        p = self._pending
+        if p is not None and p[2] == st.boot_id and mcu_ns > p[1] and rx >= p[0] \
+                and rx - p[0] <= self.anchor_max_age_ns:
+            self._pending = None
+            self._anchors.append((rx - mcu_ns, rx, mcu_ns, rx - p[0], st.boot_id))
+            cut = rx - self.anchor_max_age_ns
+            self._anchors = [a for a in self._anchors if a[1] >= cut and a[4] == st.boot_id][-self.anchors_max:]
+        if prev[1] != seq:
+            w = self._writes.pop(seq, None)
+            if w is not None and rx >= w:
+                self._pending = (w, mcu_ns, st.boot_id)
 
     def delay_s(self, sample: Sample) -> float | None:
         mcu_ns = sample.state.mcu_time_us * 1000
@@ -343,7 +346,7 @@ def load_bridge_params(path: str | Path, vehicle) -> EncoderSpeedParams:
     if not isinstance(data, dict) or set(data) != {"schema", "encoder_speed"} or data["schema"] != SCHEMA:
         raise ValueError(f"teleop bridge config must hold schema {SCHEMA!r} and encoder_speed only")
     es = data["encoder_speed"]
-    keys = {"axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s", "mcu_cycle_s"}
+    keys = {"axle_accel_mps2", "max_age_s", "dt_min_s", "dt_max_s"}
     if not isinstance(es, dict) or set(es) != keys | {"provenance"}:
         raise ValueError(f"encoder_speed must hold {sorted(keys)} and provenance")
     prov = es["provenance"]
@@ -380,7 +383,7 @@ class TeleopBridge:
         self.cycle_s = float(cycle_s)
         self.samples: list[Sample] = []
         self.samples_max = int(samples_max)
-        self.delays = DelayBound(mcu_cycle_s=params.mcu_cycle_s)
+        self.delays = DelayBound()
         self.last_ping_ns: int | None = None
         self.phase = IDLE
         self.bound_gen: int | None = None  # the arbiter arm_gen the MCU authorization belongs to

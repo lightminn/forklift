@@ -72,7 +72,10 @@ class Bridge:
                                lambda: secrets.token_hex(16), mission=None)
         self.channels = Channels()
         self.link = Link(self.arbiter, self.channels)
-        self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state, log=self._log)
+        # a random first seq per session: a STATE an earlier session left in flight is never taken for this one's
+        # acknowledgement (the delay bound's causality, design 2)
+        self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state, log=self._log,
+                                initial_seq=secrets.randbelow(0x10000))
         self.port = RealPlantPort(self.host, self.kin)
         self.safety = rt.bench_safety(confirmed)
         self.core = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,

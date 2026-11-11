@@ -8,6 +8,4 @@ encoder_speed:
   max_age_s: 0.05        # receipt age + the STATE's round-trip delay bound past this: no safety speed
   dt_min_s: 0.01         # the two STATEs differenced: at least this far apart (MCU time) ...
   dt_max_s: 0.025        # ... at most this (a STATE period over 25 ms gives no safety speed)
-  mcu_cycle_s: 0.001     # the firmware's control period (TIM6 1 kHz tick, board design B1): a STATE's measurement
-                         # precedes the handling of a frame it acknowledges by at most one cycle (app.c order)
   provenance: {source: plan_provisional_table_lead_2026_11_12, measured: false, until: S5}

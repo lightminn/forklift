@@ -236,56 +236,78 @@ def _with(sample, **kw):
     return Sample(kw.pop("host_ns", sample.host_ns), McuState(**{**sample.state.__dict__, **kw}))
 
 
-def test_a_state_naming_a_frame_is_bounded_by_the_round_trip():
+def test_the_state_after_an_acknowledgement_is_bounded_by_the_round_trip():
+    """Frame 7 written; the STATE whose last_rx_seq moves to 7 may have been measured before 7 was handled -- the
+    next STATE was not: its delay is at most its receipt minus the write."""
     db = rt.DelayBound()
-    db.written(7, NOW - 30 * 1_000_000)  # frame 7 written 30 ms before the acknowledging STATE's receipt
-    before = _with(st(90, 0, 0), host_ns=NOW - 10_000_000, last_rx_seq=6)
-    s1 = _with(st(100, 0, 0), host_ns=NOW, last_rx_seq=7)
-    db.add(before)
-    db.add(s1)
-    assert db.delay_s(s1) == pytest.approx(0.030 + 0.001)  # plus one MCU cycle (measured before the frame's handling)
-    # a later STATE: bounded from the anchor by the offset change (+5 ms) and the drift over the MCU interval (10 ms)
-    s2 = _with(s1, host_ns=NOW + 15_000_000, mcu_time_us=s1.state.mcu_time_us + 10_000)
-    assert db.delay_s(s2) == pytest.approx(0.031 + 0.005 + 100e-6 / (1 - 100e-6) * 0.010, abs=1e-9)
+    db.written(7, NOW - 30_000_000)
+    db.add(_with(st(80, 0, 0), host_ns=NOW - 20_000_000, last_rx_seq=6))
+    ack = _with(st(90, 0, 0), host_ns=NOW - 10_000_000, last_rx_seq=7)
+    db.add(ack)
+    assert db.delay_s(ack) is None  # the acknowledging STATE itself is no anchor
+    nxt = _with(st(100, 0, 0), host_ns=NOW, last_rx_seq=7)
+    db.add(nxt)
+    assert db.delay_s(nxt) == pytest.approx(0.030)
+    later = _with(nxt, host_ns=NOW + 15_000_000, mcu_time_us=nxt.state.mcu_time_us + 10_000)
+    assert db.delay_s(later) == pytest.approx(0.030 + 0.005 + 100e-6 / (1 - 100e-6) * 0.010, abs=1e-9)
 
 
 def test_the_initial_seq_is_no_acknowledgement():
-    """Codex re-review 4 P1: the host's first frame is seq 0 and the MCU starts at last_rx_seq 0 -- a late STATE
-    measured before the first write still names 0. Only a seq that moved between two STATEs anchors."""
+    """Codex re-review 4 P1: a late STATE still naming the MCU's initial seq gives no bound."""
     db = rt.DelayBound()
-    first = _with(st(100, 0, 0), host_ns=NOW, last_rx_seq=0)
     db.written(0, NOW - 10_000_000)
-    late = _with(st(110, 0, 0), host_ns=NOW + 2_000_000, last_rx_seq=0)  # measured long before; 80 ms late
-    db.add(first)
+    db.add(_with(st(100, 0, 0), host_ns=NOW, last_rx_seq=0))
+    late = _with(st(110, 0, 0), host_ns=NOW + 2_000_000, last_rx_seq=0)
     db.add(late)
     assert db.delay_s(late) is None
 
 
-def test_a_cycle_that_overran_is_not_an_anchor():
+def test_an_earlier_sessions_late_states_are_not_this_sessions_acknowledgements():
+    """Codex re-review 5 P1: a restarted host on the same MCU boot; the old session's late STATEs move 0 -> 1 -> 2.
+    This session starts at a random seq, so those moves name no frame it wrote."""
+    import secrets as _secrets
+
+    start = 40_000
     db = rt.DelayBound()
-    db.written(3, NOW - 5_000_000)
-    db.add(_with(st(90, 0, 0), host_ns=NOW - 10_000_000, last_rx_seq=2))
-    s1 = _with(st(100, 0, 0), host_ns=NOW, last_rx_seq=3, cycle_overruns=1)
-    db.add(s1)
-    assert db.delay_s(s1) is None
+    for k in range(3):
+        db.written(start + k, NOW - 5_000_000 + k)
+    for k, seq in enumerate((0, 1, 2, 2)):  # 130 ms late STATEs of the old session
+        db.add(_with(st(100 + 10 * k, 0, 0), host_ns=NOW + k * 10_000_000, last_rx_seq=seq))
+    assert db.delay_s(_with(st(130, 0, 0), host_ns=NOW + 30_000_000, last_rx_seq=2)) is None
+    assert 0 <= _secrets.randbelow(0x10000) < 0x10000  # the CLI's start (tools/teleop_bridge.py)
+
+
+def test_a_cycle_that_ran_long_after_its_measurement_cannot_shrink_the_bound():
+    """Codex re-review 5 P2: the acknowledging cycle measured 4.1 ms before its STATE; the bound comes from the next
+    STATE, measured after the frame was handled, whatever the cycle took."""
+    db = rt.DelayBound()
+    w_ = NOW - 2_000_000
+    db.written(9, w_)
+    db.add(_with(st(80, 0, 0), host_ns=NOW - 12_000_000, last_rx_seq=8))
+    ack = _with(st(90, 0, 0), host_ns=NOW + 2_100_000, last_rx_seq=9)  # measured at about w_ - 2 ms
+    db.add(ack)
+    nxt = _with(st(100, 0, 0), host_ns=NOW + 10_500_000, last_rx_seq=9)
+    db.add(nxt)
+    measured_ack = w_ - 2_000_000
+    assert db.delay_s(ack) is None or db.delay_s(ack) * 1e9 >= ack.host_ns - measured_ack
+    assert db.delay_s(nxt) == pytest.approx((nxt.host_ns - w_) / 1e9)
 
 
 def test_the_drift_allowance_runs_on_the_measurement_interval():
-    """Codex re-review 4 P2: a falling delay -- measured 1.91 s apart, received 11 ms apart, the MCU clock 100 ppm
-    fast -- the receipt interval would undercount the drift; the MCU interval does not."""
+    """Codex re-review 4 P2 (re-review 5 P3: with a real, positive delay). The anchor measured at host 0 and received
+    1.000 s later; j measured 1.910 s later on the host (the MCU clock 100 ppm fast), received 1 ms after -- the delay
+    fell from 1 s to 1 ms. The receipt interval (0.911 s) would undercount the drift; the MCU interval does not."""
     db = rt.DelayBound()
-    t_meas_a = 0
-    rx_a = t_meas_a + 1_000_000_000  # 1 s late at the anchor (a stalled link)...
-    db.written(5, rx_a - 1_000_000_000)  # ... written at the measurement: the bound is exactly the delay + a cycle
-    db.add(_with(st(0, 0, 0), host_ns=rx_a - 1, mcu_time_us=0, last_rx_seq=4))
-    a = _with(st(0, 0, 0), host_ns=rx_a, mcu_time_us=1, last_rx_seq=5)
+    db.written(5, 0)
+    db.add(_with(st(0, 0, 0), host_ns=1, mcu_time_us=0, last_rx_seq=4))
+    db.add(_with(st(0, 0, 0), host_ns=2, mcu_time_us=1, last_rx_seq=5))  # acknowledges 5 (written at 0)
+    a = _with(st(0, 0, 0), host_ns=1_000_000_000, mcu_time_us=2, last_rx_seq=5)  # measured ~0, received 1 s later
     db.add(a)
-    t_meas_j = t_meas_a + 1_910_000_000
-    rx_j = rx_a + 11_000_000  # 11 ms later: the delay fell to about 1 ms
-    mcu_j = int(t_meas_j * (1 + 100e-6) / 1000)
-    j = _with(a, host_ns=rx_j, mcu_time_us=mcu_j)
+    t_meas_j = 1_910_000_000
+    rx_j = t_meas_j + 1_000_000
+    j = _with(a, host_ns=rx_j, mcu_time_us=int(t_meas_j * (1 + 100e-6) / 1000))
     true_delay = (rx_j - t_meas_j) / 1e9
-    assert db.delay_s(j) >= true_delay
+    assert true_delay == pytest.approx(0.001) and db.delay_s(j) >= true_delay
 
 
 def test_no_anchor_no_bound_no_speed():
