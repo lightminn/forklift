@@ -5786,7 +5786,7 @@ def drive(S, isaac) -> None:
             row["skipped"] = "uncovered"
             keep_near_frame(near, row, NEAR_FRAMES_KEPT if getattr(args, "live", False) else None)
             return None
-        lift_ = float(robot.get_joint_positions()[lift_index[0]])
+        lift_ = float(plant.sample().lift_m)  # P0-4 4b: the plant's measurement (one joint read, as before)
         scene_ = SceneInput(
             rgb=np.zeros((k_.height, k_.width, 3), dtype=np.uint8),
             depth_m=near_tracking.quantize_depth_mm(depth_),
@@ -5875,7 +5875,7 @@ def drive(S, isaac) -> None:
         speed_now = abs(slam["odom_speed"]) if slam is not None else abs(requested_speed)
         yaw_rate_now = abs(slam.get("odom_yaw_rate", 0.0)) if slam is not None else 0.0
         record = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_rate_now,
-                                 lift_m=float(robot.get_joint_positions()[lift_index[0]]))
+                                 lift_m=float(plant.sample().lift_m))  # 4b
         if pocket.get("await_still_frame") and record.get("new") and speed_now < 0.01 and yaw_rate_now < 0.01:
             pocket["await_still_frame"] = False
             pocket["still_frame_s"] = stamp
@@ -7102,9 +7102,10 @@ def drive(S, isaac) -> None:
     joints_tick_ = {"q": None, "t": None}
 
     def steering_position_():
-        joints_tick_["q"] = robot.get_joint_positions()
+        sample_ = plant.sample(t)  # P0-4 4b: one joint read, its array kept for the slip watch
+        joints_tick_["q"] = sample_.raw_joints
         joints_tick_["t"] = t  # the tick it was read in: the lift's reach covers the physics since (round 3 P2)
-        return joints_tick_["q"][steers]
+        return sample_.steering
 
     core = MissionCore(
         ms, state=state, obstacle=obstacle, slam=slam, pocket=pocket, paths=paths, trackers=trackers,
@@ -7118,7 +7119,7 @@ def drive(S, isaac) -> None:
                 base, q, float(robot.get_joint_positions()[lift_index[0]]), ppos, pq, geometry.pallet_depth_m),
             truth_relative_yaw=lambda: yaw_and_tilt(q)[0] - yaw_and_tilt(pq)[0],
             pallet_z=lambda: ppos[2],
-            lift_position=lambda: robot.get_joint_positions()[lift_index[0]],
+            lift_position=lambda: plant.sample().lift_m,  # P0-4 4b
             truth_rear=lambda: truth_rear,
             # defined further down run()
             slam_rear=lambda t_: slam_rear(t_),
@@ -7155,7 +7156,7 @@ def drive(S, isaac) -> None:
             # called), the held steering and the standing test (Vehicle reads; truth without SLAM).
             loaded=lambda: loaded, signed_speed=lambda: signed_speed, held_kappa=lambda: held_kappa(),
             # the scene-mode replan's presteer: each front wheel's measured steering (FL, FR)
-            steering_actual=lambda: np.asarray(robot.get_joint_positions()[steers], dtype=float),
+            steering_actual=lambda: np.asarray(plant.sample().steering, dtype=float),  # 4b
             cusp_standing=lambda: cusp_standing(),
             # M-a1 slice 6b: the docking's ports -- the loop's control and true pose, the world clock and stage,
             # the truth obstacles its dry run checks (SimTruth), the recorded planners and the LiDAR geometry.
@@ -7344,17 +7345,9 @@ def drive(S, isaac) -> None:
 
     def held_kappa() -> float:
         """The curvature the wheels actually hold, from the steering joints."""
-        steer_now_ = robot.get_joint_positions()[steers]
-        half_track_ = args.drive_geometry.track_m / 2
-        wheelbase_ = args.drive_geometry.wheelbase_m
-        return float(
-            np.mean(
-                [
-                    math.tan(steer_now_[0]) / (wheelbase_ + math.tan(steer_now_[0]) * half_track_),
-                    math.tan(steer_now_[1]) / (wheelbase_ - math.tan(steer_now_[1]) * half_track_),
-                ]
-            )
-        )
+        # P0-4 4b: the plant's measured steering through the core's kinematics (the simulation's: the same mean of
+        # the two wheels' curvatures, bit for bit)
+        return core.kinematics.held_curvature(plant.sample().steering)
 
     # Plan cusp position stall v7 (docs/plans/2026-10-04-lidar-obstacle-map.md): the stall machine
     # (forklift_core.control.cusp_stall) and the checks it needs from this world.
@@ -7377,7 +7370,7 @@ def drive(S, isaac) -> None:
                 "measured_speed_mps": float(np.dot(robot.get_linear_velocity()[:2], forward)),
                 "truth_rear": np.asarray(truth_rear, dtype=float).tolist(),
                 "steering_command_rad": np.asarray(steering_command, dtype=float).tolist(),
-                "steering_actual_rad": np.asarray(robot.get_joint_positions()[steers], dtype=float).tolist()}
+                "steering_actual_rad": np.asarray(plant.sample().steering, dtype=float).tolist()}  # 4b
 
     cusp_holds = CUSP_HOLD.CuspHeadingHolds(state)  # fix A's hold records
 
@@ -8448,7 +8441,7 @@ def drive(S, isaac) -> None:
             start_block_ = None if start_block_ is None else (start_block_, (start_reloc or {}).get("source"))
             live = LiveRuntime(
                 core, LiveHooks(zero_wheels=live_zero_wheels, hold_lift=live_hold_lift,
-                                lift_position=lambda: float(robot.get_joint_positions()[lift_index[0]]),
+                                lift_position=lambda: float(plant.sample().lift_m),  # 4b
                                 camera=live_camera, grid=live_grid, scan=live_scan),
                 output=Path(args.output), port_file=args.live_port_file, dt=1 / 120, factor=args.live_factor,
                 # The human and network time limits scaled by the declared factor f (plan C4a): the truck in the sim
@@ -8570,16 +8563,16 @@ def drive(S, isaac) -> None:
                     odom_xy_ = tuple(float(v) for v in slam["odom_rear"][:2])  # with the speed, same update
                 else:
                     made_ = live.clock()
-                    rates_ = robot.get_joint_velocities()[wheels]
+                    rates_ = plant.joint_velocities()[wheels]  # 4b
                     speed_, yaw_rate_ = float(np.mean(rates_[2:4])) * args.drive_geometry.wheel_radius_m, 0.0
-                joints_ = robot.get_joint_positions()
+                sample_ = plant.sample()  # 4b: the live loop's measured lift and steering (one read)
                 live.after_step(float(world.current_time - initial_time), odom_speed=speed_, yaw_rate=yaw_rate_,
                                 odom_mono=made_, rendered=camera_, render_sim_time_of=lambda rt: rt - initial_time,
-                                lift_m=float(joints_[lift_index[0]]),  # plan D14: measured, for the manual lift
-                                steering_rad=float(np.max(np.abs(joints_[steers]))), odom_xy=odom_xy_)
+                                lift_m=float(sample_.lift_m),  # plan D14: measured, for the manual lift
+                                steering_rad=float(np.max(np.abs(sample_.steering))), odom_xy=odom_xy_)
                 if live_marker_ is not None:
                     live.log({"lift_sim_t": float(world.current_time - initial_time),
-                              "lift_m": float(robot.get_joint_positions()[lift_index[0]]),
+                              "lift_m": float(plant.sample().lift_m),
                               "step_start_mono": live.step_start[-1][1]})  # sim -> wall for the lag (round 16 P1)
 
             def live_pallet_zones():

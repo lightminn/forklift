@@ -106,3 +106,30 @@ def test_the_shared_contract_on_the_isaac_plant():
     r.calls.clear()
     p.command(keep)
     assert len(r.calls) == 2  # no lift target under keep
+
+
+class JointRobot(Robot):
+    def __init__(self, q, qd=None):
+        super().__init__()
+        self.q, self.qd = q, qd
+
+    def get_joint_positions(self):
+        self.calls.append(("get_joint_positions", None))
+        return self.q
+
+    def get_joint_velocities(self):
+        self.calls.append(("get_joint_velocities", None))
+        return self.qd
+
+
+def test_a_sample_is_one_joint_read_with_todays_indexing():
+    """P0-4 4b: steering and lift come from the one read, as drive() indexed them (q[steers], q[lift_index[0]])."""
+    q = np.arange(8, dtype=np.float32) / 10
+    r = JointRobot(q, qd=np.ones(8))
+    p = IsaacPlant(r, action, WHEELS, STEERS, LIFT)
+    s = p.sample(1.5)
+    assert r.calls == [("get_joint_positions", None)]
+    assert np.array_equal(s.steering, q[STEERS]) and s.steering.dtype == q.dtype
+    assert s.lift_m == q[LIFT[0]] and type(s.lift_m) is type(q[LIFT[0]])
+    assert s.raw_joints is q and s.sample_time_s == 1.5 and s.wheel_counts is None
+    assert np.array_equal(p.joint_velocities(), np.ones(8)) and r.calls[-1] == ("get_joint_velocities", None)

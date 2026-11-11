@@ -49,7 +49,8 @@ def test_the_lift_comes_from_the_steering_reads_joints_with_no_new_recorded_call
     assert 'joints_tick_["q"][lift_index[0]]' in SOURCE[at - 900:at + 900]
     assert "steering_position=steering_position_," in SOURCE
     hook = _block("def steering_position_():", "return")
-    assert 'joints_tick_["q"] = robot.get_joint_positions()' in hook
+    # P0-4 4b: the read is the plant's sample (exactly one get_joint_positions, the array kept)
+    assert "sample_ = plant.sample(t)" in hook and 'joints_tick_["q"] = sample_.raw_joints' in hook
     assert "steering_position=lambda: robot.get_joint_positions()[steers]" not in SOURCE
 
 

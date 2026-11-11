@@ -256,3 +256,47 @@ def test_an_unknown_steering_stops_on_the_last_intent_or_disarms():
     assert b2.port.command(cmd2, b2.now) == PortResult("queued")
     (z,) = b2.drain()
     assert (z.left_wheel_rad_s, z.right_wheel_rad_s) == (0.0, 0.0) and math.isfinite(z.steering_rad)
+
+
+def test_the_real_sample_reads_the_latest_state_without_consuming_it():
+    """Absolute counts, MCU time and host receipt kept; repeated reads see the same values (Codex 4b P2-2)."""
+    b = Bench()
+    assert b.port.sample() is None
+    b.arm()
+    s1, s2 = b.port.sample(), b.port.sample()
+    assert s1 == s2
+    assert s1.steering == (pytest.approx(0.01),) and s1.valid["steering"] and s1.wheel_counts == (0, 0)
+    assert s1.boot_id == BOOT and s1.received_host_ns == b.now and s1.mcu_time_us == b.t_us
+    assert s1.raw_joints is None  # an Isaac-only field
+
+
+@pytest.mark.parametrize("steer,lift,ok_s,ok_l", [(0.5, 0.0, False, True), (float("nan"), float("nan"), False, False)])
+def test_the_real_sample_marks_invalid_readings_without_zeroing_them(steer, lift, ok_s, ok_l):
+    """An out-of-map or NaN steering and a NaN lift are flagged, never replaced by 0 (Codex 4b P2-3)."""
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, encode
+
+    b = Bench()
+    b.host.on_bytes(encode(McuState(1000, BOOT, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 5, 6, 0.0, 0.0,
+                                    steer, lift, (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0, StateFlag(0)), 1), b.now)
+    s = b.port.sample()
+    assert s.valid["steering"] is ok_s and s.valid["lift"] is ok_l
+    assert s.lift_m is None if not ok_l else s.lift_m == 0.0
+    assert (math.isnan(s.steering[0]) if math.isnan(steer) else s.steering == (steer,))
+
+
+def test_the_real_health_tells_authorized_from_ready():
+    b = Bench()
+    h = b.port.health(b.now)
+    assert not h.fresh and "no_state" in h.reasons
+    b.feed()
+    b.host.request_arm(b.now)
+    b.drain()
+    b.gen += 1
+    b.feed(mode=Mode.ARMED, gen=b.gen)
+    h = b.port.health(b.now)
+    assert h.authorized and not h.ready and "zero_pending" in h.reasons
+    b.drain()
+    b.feed(mode=Mode.ARMED, gen=b.gen, flags=READY)
+    h = b.port.health(b.now)
+    assert h.ready and h.reasons == () and h.mode == Mode.ARMED
+    assert "stale" in b.port.health(b.now + 60 * MS).reasons

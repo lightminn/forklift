@@ -153,3 +153,30 @@
 - 반영: 무효 조향의 곡률 없는 0 제동, 게이트 범위의 한계 명시, 부분 송신·버퍼 회수 불가, 승강 높이별 한계(후속 결정·저속 단계 제한), 맵 이력(S8).
 - 이미 다룬 것: 시계 동기화(echo 기반이라 전제하지 않음).
 - 의도된 결과로 기록한 것: 재계획 한 번 뒤 영구 정체(가용성보다 정지).
+
+## 5. 4b: 측정 계약과 측정 읽기 추출 (2026-11-11)
+
+Codex 4b 범위 상의(P2 3·P3 1)를 반영했다. 4b 도 Isaac 경로 동작 불변이다(재생 게이트 29/29).
+
+- **측정 계약** `PlantSample`(`forklift_core/plant/port.py`):
+  - 읽어도 아무것도 소비하지 않는 getter 결과다. 오도메트리·연속성은 그 값을 쓰는 쪽이 계산한다(`RealOdometry.update` 처럼 상태를 바꾸는 계산을 getter 안에 두지 않는다).
+  - 실차는 절대 모터 카운트·`mcu_time_us`·호스트 수신 단조 시각·`boot_id` 를 그대로 싣는다.
+  - Isaac 은 그 한 번 읽은 관절 배열(`raw_joints`)과 호출자가 넘긴 시뮬 시각을 싣는다. plant 는 시계를 읽지 않는다(`world` 도 기록 포트다).
+  - 무효 조향·승강은 `valid` 로 표시하고, 승강은 `None` 이다. 0 으로 바꾸지 않는다.
+- **`PlantHealth`**: 신선도·모드·결함·`authorized` 와 `ready` 의 구분·이유. 읽기만 하고 호스트 만료(`host.tick`)는 돌리지 않는다.
+- **Isaac**: `IsaacPlant.sample(t)` 는 `get_joint_positions()` 를 정확히 한 번 부르고 지금처럼 `q[steers]`·`q[lift_index[0]]` 로 뽑는다. 지금 한 번 읽던 자리마다 한 번씩 바꿔서 호출 횟수·순서를 지킨다.
+- **4b 에서 바꾼 자리**:
+  - 코어 훅 `steering_position`(관절 배열을 미끄럼 감시에 그대로 넘김)·`lift_position`·`steering_actual`.
+  - 러너 `held_kappa`(→ `core.kinematics.held_curvature`, 시뮬은 비트 동치).
+  - `cusp_heading_motion` 의 조향, live 훅의 승강, live `after_step` 의 승강·조향(속도 읽기 포함), live 마커 승강.
+  - 근접 영상의 카메라 높이용 승강, 포켓 판정의 승강.
+- **남은 측정 입력과 담당**:
+  | 입력 | 지금 | 담당 |
+  |---|---|---|
+  | `step_world` 의 엔코더 모형·자이로·오도메트리 입력(관절 q·qd) | 직접 읽기 | 4c(센서 시각·비동기와 함께). Isaac 관절각을 엔코더 카운트로 이름만 바꾸지 않는다 |
+  | 실차 바퀴 증분·오도메트리 소비자(`RealOdometry`) | 모듈만 있음 | 4e-2(실차 진입점이 STATE 마다 한 번 갱신) |
+  | 무효 측정의 제어 진입 전 차단(`lift_position() < 0.012` 같은 소비자, `held_kappa` 의 `float()`) | Isaac 은 항상 유효 | 4e-2 |
+  | health → 중재기 정지·미션 정지·재무장 정책 | `PlantHealth` 변환만 | 4e-2(`host.tick`·수신 이벤트 → 중재기 STOP) |
+  | stand_hold·dwell 잠금의 q·qd·게인 | 직접 읽기(Isaac 정지 유지 흉내) | 4e-1(드라이버 묶기 때 Isaac 전용으로) |
+  | 기록·평가 전용 읽기(truth·insertion·records) | 직접 읽기 | 4d(P0-5 감사표) |
+- #442 의 drive() 다섯 지점(층 설정, 매 틱 감시, `layer_clock_box_`, 시계 연결, 끝 기록)은 옮기지 않았다.
