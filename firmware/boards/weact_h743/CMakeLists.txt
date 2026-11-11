@@ -36,7 +36,7 @@ add_custom_target(build_info
 file(GLOB FW_CORE_ARM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../../core/src/*.c)
 add_library(fw_core_arm STATIC ${FW_CORE_ARM_SOURCES})
 target_include_directories(fw_core_arm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../core/include)
-target_compile_options(fw_core_arm PRIVATE -O2 -Wdouble-promotion -fstack-usage)
+target_compile_options(fw_core_arm PRIVATE -O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su)
 
 set(BOARD_SOURCES
     ${BOARD_DIR}/startup_stm32h743.S
@@ -51,6 +51,8 @@ set(BOARD_SOURCES
     ${BOARD_DIR}/src/gpio.c
     ${BOARD_DIR}/src/drv_spi.c
     ${BOARD_DIR}/src/kth_spi.c
+    ${BOARD_DIR}/src/encoder.c
+    ${BOARD_DIR}/src/adc.c
     ${BOARD_DIR}/src/board_hal.c
     ${BOARD_DIR}/src/board_config.c
     ${BOARD_DIR}/src/board_rules.c
@@ -64,7 +66,7 @@ target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINAR
 target_include_directories(fw SYSTEM PRIVATE ${TP}/cmsis_core/CMSIS/Core/Include
                                                ${TP}/cmsis_device_h7/Include)
 target_compile_definitions(fw PRIVATE STM32H743xx FW_BUILD_${FW_BUILD}=1)
-target_compile_options(fw PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2 -Wdouble-promotion -fstack-usage>)
+target_compile_options(fw PRIVATE $<$<COMPILE_LANGUAGE:C>:-O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su>)
 # Locked outputs (board design 3.6): every board C source sees TIM1 poisoned.
 target_compile_options(fw PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-include ${BOARD_DIR}/include/board/lock_guard.h>)

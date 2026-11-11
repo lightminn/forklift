@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "board/adc_enc_cfg.h"
 #include "board/board_config.h"
 #include "board/mailbox.h"
 #include "board/spi_cfg.h"
@@ -94,8 +95,57 @@ static void spi_cfg1(void)
     CHECK_EQ_U(v & (1u << 22), 0u);    /* CRCEN off */
 }
 
+static void adc_values(void)
+{
+    CHECK_EQ_I(adc_boost_bits(REV_ID_Y), 1); /* 32 MHz analog clock: BOOST on */
+    CHECK_EQ_I(adc_boost_bits(REV_ID_V), 2); /* 16 MHz: 12.5-25 MHz band */
+    CHECK_EQ_I(adc_boost_bits(0x2001u), -1); /* unknown revision: ADC stays off */
+    uint32_t j = adc_jsqr_value();
+    CHECK_EQ_U(j & 3u, 3u);        /* JL: 4 conversions */
+    CHECK_EQ_U((j >> 7) & 3u, 0u); /* JEXTEN: software trigger */
+    CHECK_EQ_U((j >> 9) & 0x1Fu, 3u);
+    CHECK_EQ_U((j >> 15) & 0x1Fu, 4u);
+    CHECK_EQ_U((j >> 21) & 0x1Fu, 5u);
+    CHECK_EQ_U((j >> 27) & 0x1Fu, 10u);
+    CHECK_EQ_U(adc_pcsel_value(), (1u << 3) | (1u << 4) | (1u << 5) | (1u << 10));
+    /* Software-triggered injected conversions need the queue disabled (JQDIS) when JEXTEN = 00. */
+    CHECK(((j >> 7) & 3u) != 0u || (adc_cfgr_value() & ADC_CFGR_JQDIS_BIT) != 0u);
+    CHECK_EQ_U((adc_cfgr_value() >> 2) & 7u, 0u); /* RES: 16-bit */
+}
+
+typedef struct {
+    const uint16_t *seq;
+    int n, i;
+} fake_cnt;
+
+static uint16_t fake_read(void *ctx)
+{
+    fake_cnt *f = ctx;
+    return f->seq[f->i < f->n ? f->i++ : f->n - 1];
+}
+
+static void lptim_reads(void)
+{
+    uint16_t out = 0xDEAD;
+    const uint16_t steady[] = {7, 7};
+    fake_cnt a = {steady, 2, 0};
+    CHECK(lptim_stable_read(fake_read, &a, 3, &out));
+    CHECK_EQ_U(out, 7);
+    const uint16_t moving[] = {7, 8, 8};
+    fake_cnt b = {moving, 3, 0};
+    CHECK(lptim_stable_read(fake_read, &b, 3, &out));
+    CHECK_EQ_U(out, 8);
+    const uint16_t never[] = {1, 2, 3};
+    fake_cnt c = {never, 3, 0};
+    out = 0xBEEF;
+    CHECK(!lptim_stable_read(fake_read, &c, 3, &out));
+    CHECK_EQ_U(out, 0xBEEF);
+}
+
 int main(void)
 {
+    adc_values();
+    lptim_reads();
     spi_cfg1();
     sensor_slot();
     mailbox_rules();

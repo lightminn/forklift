@@ -1,7 +1,5 @@
-/* The core's HAL table on the WeAct H743 (board design 4, core design 3). B2a: DRV8244 SPI, KTH
-   frames, nFAULT, locked outputs, IWDG. Wheel encoders and IPROPI come in B2b (until then the
-   wheel counters read 0 and no current sample is fresh, so the core keeps current_sense invalid
-   and refuses ARM -- the safe direction). The link comes in B3. */
+/* The core's HAL table on the WeAct H743 (board design 4, core design 3): DRV8244 SPI, KTH frames,
+   wheel encoders, IPROPI current sense, nFAULT, locked outputs, IWDG. The link comes in B3. */
 #include "board/board_hal.h"
 #include "board/board.h"
 #include "board/drv_spi.h"
@@ -20,14 +18,12 @@ static uint32_t hal_now(void *ctx)
 static void hal_read(void *ctx, drive_inputs *in)
 {
     (void)ctx;
-    in->wheel_hw[0] = 0; /* B2b: LPTIM1/LPTIM2, read twice */
-    in->wheel_hw[1] = 0;
+    encoder_read(in->wheel_hw);
     kth_spi_snapshot(in->abs_frame, in->abs_fresh);
+    in->adc_fresh = adc_take(in->adc_raw);
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
-        in->adc_raw[ch] = 0;
         in->nfault_low[ch] = gpio_read(GPIOB, nfault_pin[ch]) == 0u;
     }
-    in->adc_fresh = false;    /* B2b: ADC1 injected conversions */
     in->estop_active = false; /* no e-stop net on schematic V1.0 (estop_wired = false) */
 }
 
@@ -92,6 +88,8 @@ const fw_hal *board_hal_init(void)
     }
     drv_spi_init();
     kth_spi_init();
+    encoder_init();
+    adc_init();
     motor_out_wake_drivers();
     return &g_hal;
 }
