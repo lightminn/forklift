@@ -370,6 +370,36 @@ def test_a_steering_excursion_on_a_state_between_cycles_stops():
     assert r.nonzero_sent(n) == []
 
 
+def test_states_received_together_are_each_watched():
+    """Codex impl re-review 2 P2: one read hands every STATE in it the same receipt time -- a 0 -> +6 -> 0 count
+    excursion in one read is a reverse past 3 counts, and both steps are travel."""
+    from forklift_core.mcu_link.messages import encode
+
+    r = wall_rig()
+    escaping(r)
+    r.run(3, teleop={"speed_ratio": 1.0})
+    travel0 = max(r.bridge.escape["travel"])
+
+    def burst(rig):
+        m = rig.mcu
+        base = list(m.counts)
+        frames = b""
+        for extra in (6, 0):
+            m.t_us += 1_000
+            m.counts = [base[0] + extra, base[1] + extra]
+            frames += encode(m.state(), 1)
+        m.counts = base
+        rig.host.on_bytes(frames, rig.now)  # one read, one receipt time
+
+    n = len(r.sent)
+    r.mcu.cmd = (0.0, 0.0)  # the burst is the only motion this cycle
+    r.cycle(teleop={"speed_ratio": 1.0}, before=burst)
+    assert stopped_by(r, "wheel_reverse")[0], (stopped_by(r, "wheel_reverse")[1], r.recs[-1].get("escape"))
+    assert r.nonzero_sent(n) == []
+    end = r.bridge.escape_log[-1]
+    assert max(end["travel_m"]) - travel0 >= 11 * M_PER_COUNT  # 6 out and 6 back, not 6
+
+
 def test_an_operator_stop_ends_the_escape():
     r = wall_rig()
     escaping(r)
