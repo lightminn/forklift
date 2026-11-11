@@ -152,6 +152,10 @@ def test_the_conclusion_rules_order_and_unread_arms():
     ok_eq, ok_det = {"line_2": {"S0": True, "L0": True}}, {"line_2": True}
     out = A.conclusions(rows, ok_eq, ok_det)
     assert [d["arm"] for d in out["defects"]] == ["S6", "U6", "U3", "C6", "S12"]
+    assert [d["priority"] for d in out["defects"]] == [1, 2, 3, 3.5, 5]  # S12's safe failure after the 50 ms band
+    rows2 = {**rows, "lat_J_line_2_s0": crow("J", "observed_end"), "lat_D12_line_2_s1": crow("D12", "operating_degraded")}
+    out2 = A.conclusions(rows2, ok_eq, ok_det)
+    assert [(d["arm"], d["priority"]) for d in out2["defects"]][-2:] == [("J", 4), ("S12", 5)]  # D12 degraded: not listed
     out = A.conclusions(rows, {"line_2": {"S0": False, "L0": True}}, ok_det)
     assert [d["arm"] for d in out["defects"]] == ["S6", "U6", "U3"]  # SLAM arms unread, the dangerous one kept
     out = A.conclusions(rows, {"line_2": {"S0": None, "L0": True}}, ok_det)  # not confirmed: unread too
@@ -173,3 +177,9 @@ def test_a_safety_event_survives_an_invalid_run_a_rerun_and_a_baseline():
     runs = {d["run"]: d for d in out["defects"]}
     assert runs["lat_U6_line_2_s1"]["class"] == "dangerous" and runs["lat_U6_line_2_s1"]["invalid"]
     assert runs["lat_B0_line_2_s1"]["baseline_violation"] is True and "lat_r_lat_U6_line_2_s1" not in runs
+
+
+def test_a_completed_arm_without_a_baseline_comparison_is_no_defect():
+    rows = {"lat_S12_aisle_rack_s1": {**crow("S12", "tolerated_no_operating_comparison"), "scene": "aisle_rack",
+                                      "seed": 1}}
+    assert A.conclusions(rows, {"aisle_rack": {"S0": True}}, {})["defects"] == []
