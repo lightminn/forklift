@@ -71,7 +71,7 @@ MCU 는 받은 시각만으로 명령의 나이를 알 수 없다. 전송로에 
 `ARM` 거부 이유는 이 순서로 정한다: `boot_id` 다름 → `boot_mismatch`, 신선도 실패 → `stale_echo`, 모드가 `BOOT` → `driver_not_ready`, `STOPPING` → `stopping`, `ARMED` → `not_disarmed`, `FAULT`·`ESTOP` → `latched`, 비상정지 입력 → `estop_active`, 비상정지 핀이 없는 출력 잠금 아닌 정상 빌드 → `estop_unwired`(v2), 조향·승강 측정이 무효이거나 범위 밖이거나 전류 측정이 무효 → `sensor_invalid`(시운전 빌드는 3.4 의 예외).
 
 - `ARM`: 위 검사를 모두 통과하면 `arm_gen` 을 올리고, 바퀴 목표 0, **조향·승강 목표 = 지금 측정값**, 적분 초기화, 마감 = `echo + command_timeout_ms`(뒤따르는 `DRIVE` 가 없으면 `STOPPING` 을 거쳐 `DISARMED`)로 `ARMED` 가 된다. 그 뒤 **두 바퀴 목표가 모두 0 인 `DRIVE` 를 먼저 받아야** 0 이 아닌 바퀴 목표를 받아들인다(`zero_first`).
-- `DISARM`: `ARMED`·`STOPPING` 이면 바로 `DISARMED`(출력은 채널별 정지 상태). 다른 모드에서는 아무 것도 바꾸지 않는다.
+- `DISARM`: `ARMED`·`STOPPING` 이면 바로 `DISARMED`(출력은 채널별 정지 상태). 다른 모드에서는 아무 것도 바꾸지 않는다(`FAULT`·`ESTOP` 래치는 그대로 남는다).
 - `CLEAR_FAULTS`: `FAULT`·`ESTOP` 에서, `boot_id` 가 같고 비상정지 입력이 풀려 있고 조향·승강·전류 측정이 유효하면(v2: 시운전 빌드는 `ARM` 과 같이 **전류 측정 유효만** 요구한다) 래치를 지우고 `BOOT` 로 가 드라이버를 다시 초기화한다. **과전류와 드라이버 결함은 해제 조건에 넣지 않는다** — 드라이버 결함은 `CLR_FLT` 전까지 nFAULT 가 low 로 남고, 고압측 과전류 뒤에는 출력이 꺼져도 IPROPI 가 클램프 전압에 붙어 있어 "지금 전류"가 높게 읽히기 때문이다(SLVSG24C 8.3.4.1). 다시 초기화는 모든 DRVOFF 를 세운 다음에 `CLR_FLT` 를 보낸다(`CLR_FLT` 가 출력을 다시 켜기 때문). 초기화가 끝나고 nFAULT 가 정상이면 `DISARMED`, 아니면 `FAULT`(`driver_not_ready`). 주행 재개에는 그 뒤 `ARM` 이 또 필요하다.
 
 ### 3.4 `COMMISSION` (version 2)
@@ -89,7 +89,10 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 
 - 받아들이는 순서: 프레임 검사(version·길이·CRC) 뒤 **맨 앞에 `wrong_build`**(정상 빌드의 `COMMISSION`, 시운전 빌드의 `DRIVE` 는 내용과 무관하게 14). 그다음은 `DRIVE` 와 같다(형식 → `boot_id` → 모드 → `arm_gen` → 마감 → `seq` → 무장 직후 첫 명령은 듀티 0 `zero_first`). M·H 를 고른 명령은 그 축 측정이 무효면 13 `sensor_invalid` 로 거부한다.
 - 한 번에 한 축만 움직이고, 나머지 축은 정지 상태다.
-- 시간 상한으로 들어간 `STOPPING` 에서도 `DISARM` 은 언제나 받아들여 바로 `DISARMED`(채널별 정지 상태)로 간다(3.2 와 같다. 정지 명령에는 예외를 두지 않는다). 이때 네 축 전기 제동이 끝나고, `safe_brake=false` 채널은 코스트가 된다. 줄일 수 없는 것은 **재무장 금지**다. 상한이 걸린 때부터 `stop_grace_ms` 가 끝날 때까지 `ARM` 은 `stopping` 으로 거부되고, 그 사이에 `DISARM`·결함·`CLEAR_FAULTS` 가 끼어도 유지된다. 제동 상태를 끝까지 보려는 도구는 `STOPPING` 이 끝날 때까지 `DISARM` 을 보내지 않는다(시운전 도구가 그렇게 한다).
+- 시간 상한으로 들어간 `STOPPING` 에서도 `DISARM` 은 언제나 받아들여 바로 `DISARMED`(채널별 정지 상태)로 간다(3.2 와 같다. 정지 명령에는 예외를 두지 않는다). `FAULT`·`ESTOP` 래치는 그대로 남는다. 이때 네 축 전기 제동이 끝나고, `safe_brake=false` 채널은 코스트가 된다.
+  - 줄일 수 없는 것은 **재무장 금지**다. 상한이 걸린 때부터 `stop_grace_ms` 가 끝날 때까지 `ARM` 은 `stopping` 으로 거부된다. `DISARM`·`CLEAR_FAULTS`·결함은 이 보류의 만료 시각을 앞당기거나 지우지 못한다.
+  - 보류 시간은 **구동 재개 금지만** 보장한다. 전기 제동 유지나 실제 바퀴 정지를 뜻하지 않는다. 상한과 `DISARM` 이 같은 주기에 오면 전기 제동이 한 주기도 걸리지 않을 수 있다(`safe_brake=false` 면 바로 코스트).
+  - 제동 상태를 끝까지 보려는 도구는 `STOPPING` 이 끝날 때까지 `DISARM` 을 보내지 않는다(시운전 도구가 그렇게 한다).
 - `CLEAR_FAULTS` 는 `commission_time_limit`(24)을 지우지 않는다. 다음 `ARM` 이 지운다. 상한 뒤 `stop_grace_ms` 동안의 `ARM` 거부는 그 사이에 결함·`CLEAR_FAULTS` 가 끼어도 유지된다.
 - **시운전 빌드의 `STOPPING`** 은 고르지 않은 축까지 **네 축 모두** 듀티 0·DRVOFF low(전기 제동)다. 단 그 채널에 드라이버 결함이 있거나 드라이버가 준비되지 않았으면 끊는다.
 - **시간 상한은 실제 적용 출력으로 잰다**(`ARM`·`DISARM` 으로 지워지지 않는다. 한 주기에 `DISARM`→`ARM`→`COMMISSION`(0)→`COMMISSION`(비영)을 받아도 실제 출력이 0 인 주기가 없으면 시계가 이어진다): 네 축의 적용 듀티 가운데 하나라도 0 이 아닌 주기가 이어지는 동안 시계가 돌고, 모두 0 인 주기가 한 번 지나야 지워진다(같은 주기에 `COMMISSION`(0)→`COMMISSION`(비영)을 보내도 지워지지 않는다). 시계가 상한(빌드 상수, 제안 2 s)을 넘으면 `STOPPING` → `DISARMED` 로 가고 `fault_flags.commission_time_limit` 을 켠다. 이 비트는 다음 `ARM` 까지 남는다.
@@ -179,4 +182,4 @@ C·Python 시험은 아래 바이트와 같아야 한다(형식 시험용 값이
   - `STATE.flags` 의 bit4–7 로 빌드 종류를 알린다.
   - `STATE` 끝에 `reset_cause` 를 붙였다.
   - 승강 원점 비트는 승강 방식 결정(계획 3.5) 뒤 version 3 으로 미룬다.
-  - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다. 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
+  - 2026-11-12 정정(필드·코어 동작 무변경, 펌웨어-H743 권고): 3.2·3.4 의 시간 상한 `STOPPING` 과 `DISARM` 문구를 코어 동작에 맞췄다(래치 유지, 보류 만료 시각 고정, 보류는 구동 재개 금지일 뿐 제동·정지가 아님 — Codex 동의). 이전 문구('`DISARM` 으로 줄일 수 없다')는 재무장 금지만 뜻하는 것으로 읽는다.
