@@ -340,7 +340,7 @@ class MissionCore:
         self.field_recovery: dict | None = None  # 4d-2b-2: the open field recovery (real truck)
         self._field_recovery_serial = 0
         self._relocalize_serial = 0
-        self._last_pose_hold = None  # 4d-2b-2: the hold (by its release count) a carried pallet's last pose is in
+        self._last_pose_hold = None  # 4d-2b-2: (pallet, hold by its release count) a carried pallet's last pose is in
         self._operator = {"serial": 0, "request": None, "answer": None, "motion_since": None,  # 4d-2b-1
                           "motion_key": None}
         self._recovery_install_gen = None  # plan D4: the commands generation the retrace was installed under
@@ -5887,14 +5887,15 @@ class MissionCore:
         the targets list follows (M-a4). Returns the tracker's (position, yaw) jump."""
         # 4d-2b-2 (real truck): a pallet lifted in this hold keeps its last known pose in the hold's frame -- carried
         # into the map frame by this release, once (whichever release path ends the hold; the simulation reads nothing)
-        move_ = self.cargo.field_recovery and self._last_pose_hold == self.slam_releases
+        move_ = (self.cargo.field_recovery and self._last_pose_hold is not None
+                 and self._last_pose_hold[1] == self.slam_releases)
         before_ = self._applied_or_identity() if move_ else None
         jump = self.slam["tracker"].release(odom_from_base=odom_from_base)
         if move_:
             change_ = compose(self._applied_or_identity(), invert(before_))
-            mission_ = self.commands.mission
-            if mission_ is not None and mission_.pallet_id in self.targets.pallets:
-                self.targets.move_last_pose(mission_.pallet_id, lambda p_: TargetPose(
+            pid_ = self._last_pose_hold[0]  # kept with the mark: a deferred end release runs after the mission is gone
+            if pid_ in self.targets.pallets:
+                self.targets.move_last_pose(pid_, lambda p_: TargetPose(
                     *compose(change_, (float(p_.x_m), float(p_.y_m), float(p_.yaw_rad)))))
             self._last_pose_hold = None
         self.slam_releases += 1
@@ -5941,7 +5942,7 @@ class MissionCore:
             return  # plan D4/D4b: the recovery puts the pallet back itself; no branch below applies
         if ms.phase in ("lift", "extract", "transport", "lower"):
             if tb.carried(pid) and self.cargo.field_recovery and self.in_hold:
-                self._last_pose_hold = self.slam_releases  # 4d-2b-2: its last pose is this hold's estimate
+                self._last_pose_hold = (pid, self.slam_releases)  # 4d-2b-2: its last pose is this hold's estimate
         elif ms.phase in ("withdraw", "settle", "return_home", "home_settle", "complete"):
             if tb.pallets[pid].state == "carried":
                 self.put_down_target(pid, site_pose, uncertainty_m=RECOGNISED_MARGIN_M)  # plan D10

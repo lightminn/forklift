@@ -316,6 +316,27 @@ def test_the_simulation_reads_no_correction_around_a_release():
             pass
 
     core.slam = {"tracker": Watch(), "holds": []}
-    core._last_pose_hold = 0  # noqa: SLF001
+    core._last_pose_hold = ("P1", 0)  # noqa: SLF001
     core.release_slam("ODOM")
     assert reads == []
+
+
+def test_a_deferred_end_release_after_the_mission_is_gone_still_moves_the_last_pose():
+    """Codex 4d-2b-2 P2: lift -> the mission ends with the release deferred -> the mission is cleared -> the release."""
+    core = field_core(entered=False)
+    core.targets.update_pose("P1", Pose(1.0, 0.0, 0.0), basis="recognised", uncertainty_m=0.05)
+    core.slam = {"tracker": _Tracker(), "holds": []}
+    core.options.scenario = SimpleNamespace(destination=SimpleNamespace(x_m=5.0, y_m=0.0, yaw_rad=0.0))
+    core.commands.adopted_id = core.commands.mission_id
+    core.in_hold = True
+    core.ms.phase = "lift"
+    core.refresh_targets()
+    core.cargo.on_insert_start((0.0, 0.0, 0.0))
+    core._open_field_recovery(10.0)  # noqa: SLF001  the mission ended in the hold
+    core.commands.mission = None  # commands.apply clears a final mission on the next tick
+    core.release_slam("ODOM")  # the deferred end release
+    assert core.targets.pallets["P1"].last_pose == Pose(2.0, 0.0, 0.0)
+    core.commands.status = "cancelled"
+    core.abandon_jobs = lambda t: None
+    assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
+    assert core.targets.pallets["P1"].pose == Pose(2.0, 0.0, 0.0)
