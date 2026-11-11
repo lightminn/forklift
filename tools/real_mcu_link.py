@@ -127,6 +127,9 @@ class ReconnectingLink:
         self.path, self.baud, self.retry_ns, self.opener = path, baud, int(retry_s * 1e9), opener
         self.link: TtyLink | None = None
         self._next_try = 0
+        # Bring-up tx_cut (docs/design/2026-11-12-bringup-host-tools.md 2): False stops writing to the MCU while
+        # its STATE is still read -- the MCU's command-expiry path with the stop kept in view.
+        self.tx_enabled = True
 
     def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
         events: list[HostEvent] = []
@@ -142,7 +145,8 @@ class ReconnectingLink:
                 if data:
                     events += host.on_bytes(data, now_ns)
                 events += host.tick(now_ns)
-                self.link.pump_writes(host, now_ns)
+                if self.tx_enabled:
+                    self.link.pump_writes(host, now_ns)
                 return events
             except LinkLost:
                 self.link.abandon(host, now_ns)
@@ -155,19 +159,20 @@ class ReconnectingLink:
         return events
 
 
-def service_fd(link: TtyLink, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+def service_fd(link: TtyLink, host: McuLinkHost, now_ns: int, *, tx_enabled: bool = True) -> list[HostEvent]:
     """One cycle on an endpoint that is not reopened (a pty master in tests)."""
     events = []
     data = link.read_available()
     if data:
         events += host.on_bytes(data, now_ns)
     events += host.tick(now_ns)
-    link.pump_writes(host, now_ns)
+    if tx_enabled:
+        link.pump_writes(host, now_ns)
     return events
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description="Listen to an MCU over mcu-link/1 and print link events (never arms).")
+    ap = argparse.ArgumentParser(description="Listen to an MCU over mcu-link/2 and print link events (never arms).")
     ap.add_argument("--device", required=True)
     ap.add_argument("--baud", type=int, choices=sorted(_BAUDS))
     ap.add_argument("--seconds", type=float, default=10.0)
