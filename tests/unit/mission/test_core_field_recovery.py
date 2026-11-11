@@ -189,3 +189,60 @@ def test_a_new_insertion_forgets_the_last_confirmation_and_an_invalidation_overr
     c.confirm_out()
     c.invalidate("dropped")
     assert c.cancel_decision((0.0, 0.0, 0.0), in_withdraw=False) == "recovery_required"
+
+
+@pytest.mark.parametrize("kw,why", [
+    (dict(recovery_id=True, disarmed=True, outstanding=False), "stale_recovery"),
+    (dict(recovery_id=1.0, disarmed=True, outstanding=False), "stale_recovery"),
+    (dict(recovery_id=1, disarmed="false", outstanding=False), "state_unknown"),
+    (dict(recovery_id=1, disarmed=True, outstanding=None), "state_unknown"),
+    (dict(recovery_id=1, disarmed=1, outstanding=0), "state_unknown"),
+])
+def test_recovery_done_takes_only_exact_types(kw, why):
+    core = field_core()
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.commands.status = "failed"
+    assert core.field_recovery_done(20.0, **kw) == (False, why)
+
+
+def test_a_relocalization_generation_must_be_an_int():
+    core = field_core()
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.commands.status = "failed"
+    core.abandon_jobs = lambda t: None
+    core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False)
+    assert core.relocalized(21.0, True) is False and core.relocalized(21.0, 1.0) is False
+    assert core.relocalized(21.0, 1) is True
+
+
+def test_a_pallet_taken_off_the_forks_keeps_out_where_it_was_last_known():
+    from forklift_core.safety.pallet_permit import session_pallet_props
+
+    core = field_core()
+    core.targets.carried("P1")  # lifted: no pose while carried
+    assert core.targets.pallets["P1"].pose is None
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.commands.status = "cancelled"
+    core.abandon_jobs = lambda t: None
+    assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
+    p = core.targets.pallets["P1"]
+    assert p.state == "unlocated" and p.pose == Pose(1.0, 0.0, 0.0)
+    props = session_pallet_props(core.targets, exclude_id=None, nominal={}, shape=(1.2, 0.8, 0.144), prior_grow_m=0.1)
+    assert [x.asset.uri for x in props] == ["session:pallet:P1"]
+
+
+def test_an_open_field_recovery_holds_the_wheels_whatever_is_asked():
+    import numpy as np
+
+    from forklift_core.control.path_tracking import AckermannGeometry
+
+    core = field_core()
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.options.drive_geometry = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1,
+                                                    max_steering_rad=0.8, max_wheel_rate_rad_s=50.0)
+    core.hooks.steering_position = lambda: np.zeros(2)
+    core.state["command_speed"] = 0.2
+    held = np.array([0.1, 0.1])
+    res = core.assemble_command(11.0, 0.01, 0.4, 0.0, 0.0, held, False, False, False, False, False)
+    assert res.drive.speed_mps == 0.0 and res.requested_speed == 0.0
+    np.testing.assert_array_equal(res.steering_command, [0.1, 0.1])  # held, not steered

@@ -245,12 +245,16 @@ rt 9920–9929(`rear`·`signed_speed`), rt 7680–7681(장애물 층 자세), rt
 - 자동 재개는 없다.
 
 **F4b. '위치 모름' 팔레트의 장애물이 풀리는 길 (총괄 추가 요청)**
-- 마지막 추정 자세는 계획 장애물(prop)과 텔레옵 허가 구역으로 남는다. 기본은 이대로 막힌 쪽이다.
+- 마지막 추정 자세는 계획 장애물(prop)과 텔레옵 허가 구역으로 남는다. 기본은 이대로 막힌 쪽이다. 포크에 실려 있던 팔레트(carried 는 자세가 없다)는 들기 전 마지막 자세(`last_pose`)를 쓴다.
 - 풀리는 길은 둘이다.
   - 인식이 그 팔레트를 다시 관측하면 `update_pose(basis="recognised")` 로 새 자세와 `available` 이 된다.
   - 운용자가 '치웠음'을 확인하면 `clear_unlocated` 로 자세를 지운다. 장애물에서 빠지지만 여전히 선택할 수 없다.
 - 실시간 장애물 층은 이와 별개로 지금 보이는 것만 막는다. 따라서 팔레트를 옮겼다면 새 위치는 장애물 층의 신선한 관측이 막는다. 마지막 자세만으로 다른 곳이 비었다고 판정하지 않는다. 복구 뒤 첫 미션은 그 영역을 다시 관측한 뒤에 계획하도록 4e-2 에서 묶는다.
 - 시험: `tests/unit/mission/test_targets_unlocated.py`.
+
+**F4c. 입력과 출력의 경계 (Codex 구현 리뷰)**
+- `field_recovery_done` 은 id 가 정확히 int 이고, DISARM·미해결 여부가 정확히 bool 일 때만 판단한다. 모르는 상태(None 등)는 거부한다. `relocalized` 의 세대도 int 만 받는다.
+- 열린 현장 복구 동안 core 의 `assemble_command` 는 요청과 관계없이 바퀴 0 에 조향을 유지한다. 중재기의 AUTO 출력 차단(복구 래치를 AUTO 게이트에 연결)은 4e-2 몫이다.
 
 **F5. 시험(표)**: (phase, pocket_entered, 확인 여부, relation) × 실차/시뮬 → cancelled+clear_out / recovery_required / recover. 최종 바퀴·승강 출력(assemble 과 텔레옵 정책), 남은 명령 없음까지 본다. F4 의 조건별 거부와 순서.
 

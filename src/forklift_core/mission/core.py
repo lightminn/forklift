@@ -6292,8 +6292,10 @@ class MissionCore:
         open_ = self.field_recovery
         if open_ is None:
             return False, "no_open_recovery"
-        if recovery_id != open_["id"]:
+        if type(recovery_id) is not int or recovery_id != open_["id"]:
             return False, "stale_recovery"
+        if type(disarmed) is not bool or type(outstanding) is not bool:
+            return False, "state_unknown"  # an unknown DISARM or outstanding state is not a yes
         if self.commands.status not in ("idle", "done", "failed", "cancelled", "recovery_required"):
             return False, "mission_active"
         if not disarmed:
@@ -6304,8 +6306,7 @@ class MissionCore:
         # before it, answering late, does not count; 4e-2 voids the SLAM, pose and match evidence from before)
         self._relocalize_serial += 1
         self.cargo.relocalize_required = self._relocalize_serial
-        if self.jobs is not None:  # 2: the work of the ended mission, without a resume's undo (abandon_jobs)
-            self.abandon_jobs(t)
+        self.abandon_jobs(t)  # 2: the ended mission's plan wait, re-asks, capture and observation, no resume's undo
         pallet_id = open_["pallet_id"]
         if pallet_id is not None and pallet_id in self.targets.pallets:  # 3: kept as an obstacle, never a pick
             self.targets.unlocate(pallet_id)
@@ -6324,7 +6325,8 @@ class MissionCore:
         """A relocalization confirmed the truck's place for ``generation`` (4e-2 wires the start relocalization, asked
         after ``field_recovery_done`` with ``relocalize_generation()``): submits are taken again -- still no automatic
         resume. Another generation's answer changes nothing (False)."""
-        if not self.cargo.relocalize_required or generation != self.cargo.relocalize_required:
+        if (not self.cargo.relocalize_required or type(generation) is not int
+                or generation != self.cargo.relocalize_required):
             return False
         self.cargo.relocalize_required = False
         self.state.setdefault("field_recoveries", []).append({"event": "relocalized", "time_s": float(t),
@@ -6485,6 +6487,10 @@ class MissionCore:
         escape_stop_ = (getattr(options, "escape_start_release", "off") == "on"
                         and getattr(self, "_escape_guard_stop_t", None) == float(t))
         obstacle_hold = obstacle_hold or escape_stop_  # a released escape stopped: a hold, then a step to zero
+        if getattr(self, "field_recovery", None) is not None:
+            # 4d-2b-2: an open field recovery holds the wheels whatever is asked (the steering held; the vehicle side's
+            # AUTO gate is 4e-2's)
+            obstacle_hold = True
         if estop_holding or obstacle_hold or dwell_hold or cusp_hold:
             # Zero every wheel target at once, steering held (plan D4; D8b dwells; a cusp stall).
             requested_speed = 0.0

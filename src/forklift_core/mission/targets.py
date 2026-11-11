@@ -42,6 +42,9 @@ class Pallet:
     # frame -- a re-pick's adoption rectangle sits about it; a later observation's pose does not move it. None: never
     # put down in this session (its first place's zone applies). Not part of the targets message.
     put_down_pose: Pose | None = None
+    # Sim-to-real 4d-2b-2: the last pose it was known at before it was lifted (carried keeps no pose) -- what an
+    # unlocated pallet is kept out of when it was on the forks at a field recovery. Not part of the targets message.
+    last_pose: Pose | None = None
 
 
 @dataclass
@@ -115,7 +118,9 @@ class TargetsBook:
         return True
 
     def carried(self, pallet_id: str) -> bool:
-        return self._set(pallet_id, pose=None, state="carried", at=None)  # lifted: its verified place is gone
+        last_ = self.pallets[pallet_id].pose or self.pallets[pallet_id].last_pose
+        return self._set(pallet_id, pose=None, state="carried", at=None,  # lifted: its verified place is gone
+                         last_pose=last_)
 
     def verify_at(self, pallet_id: str, destination_id: str | None) -> bool:
         """The pallet's verified place (plan D3): a destination after its delivery verdict passed, None when it is
@@ -127,7 +132,11 @@ class TargetsBook:
         Never a pick (no submit names it); its last pose stays an obstacle (planning props, teleop permit) until an
         observation places it again (``update_pose`` with basis "recognised") or the operator clears it; its verified
         place and put-down snapshot (and with them a slot anchor or a re-pick's zone) are gone."""
-        return self._set(pallet_id, state="unlocated", at=None, put_down_pose=None)
+        pallet = self.pallets[pallet_id]
+        # a pallet taken off the forks keeps out the last place it was known at (it carries no pose while carried);
+        # where it really is now is the live obstacle layer's (audit 4-4 F4b)
+        return self._set(pallet_id, state="unlocated", at=None, put_down_pose=None,
+                         pose=pallet.pose if pallet.pose is not None else pallet.last_pose)
 
     def clear_unlocated(self, pallet_id: str) -> bool:
         """The operator says the unlocated pallet is not where it was last known: its pose (the obstacle) goes; it
