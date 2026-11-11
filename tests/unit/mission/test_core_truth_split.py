@@ -58,47 +58,61 @@ def test_a_slam_off_truth_read_raises_on_the_real_truck():
         core(real=True)._truth("truth_velocity")  # noqa: SLF001
 
 
-def test_the_simulation_checks_one_direction_as_before():
-    c = core()
-    assert c._check_directions(SafetySpeed.exact(0.3), None) == ([1], [])  # noqa: SLF001
-    assert c._check_directions(SafetySpeed.exact(0.0), None) == ([-1], [])  # noqa: SLF001
-    assert c._check_directions(SafetySpeed.exact(-0.3), 1) == ([1], [])  # noqa: SLF001  the request wins, as before
-
-
-def test_the_real_truck_checks_every_direction_it_may_move():
-    c = core(real=True)
-    unsure = SafetySpeed(0.0, 0.05, (1, -1))
-    assert c._check_directions(unsure, 1) == ([1], [-1])  # noqa: SLF001  the request does not erase the doubt
-    assert c._check_directions(unsure, None) == ([1, -1], [])  # noqa: SLF001
-    assert c._check_directions(SafetySpeed(-0.2, 0.2, (-1,)), 1) == ([1], [-1])  # noqa: SLF001  rolling back
-    # a "standing" reading still has its residual motion checked (Codex 4d-1 2nd P2)
-    assert c._check_directions(SafetySpeed(-0.009, 0.009, (-1,)), 1) == ([1], [-1])  # noqa: SLF001
-
-
-def test_the_limit_keeps_the_smallest_and_a_braking_direction_only_stops():
+def recording_limit(blocked=None):
     calls = []
 
     def limit(d, cap):
         calls.append((d, cap))
-        return (min(cap, 0.4), "ok") if d > 0 else (0.0, "occupied")
+        return (0.0, "occupied") if d == blocked else (min(cap, 0.4), "ok")
 
-    assert MissionCore._limit_any_direction(limit, [1, -1], 0.3) == (0.0, "occupied", False)  # noqa: SLF001
-    assert calls == [(1, 0.3), (-1, 0.3)]
-    calls.clear()
-    assert MissionCore._limit_any_direction(limit, [1], 0.3) == (0.3, "ok", False) and calls == [(1, 0.3)]  # noqa: SLF001
-    calls.clear()
-    # braking: rearward at the bound only; blocked behind while rolling back stops the forward request
-    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.02) == (0.0, "occupied", True)  # noqa: SLF001
-    assert calls == [(1, 0.3), (-1, 0.02)]
-    calls.clear()
-    # no motion: no braking check, the forward request is not blocked by what is behind
-    assert MissionCore._limit_any_direction(limit, [1], 0.3, [-1], 0.0) == (0.3, "ok", False) and calls == [(1, 0.3)]  # noqa: SLF001
+    return limit, calls
 
-    def free(d, cap):
-        return (min(cap, 0.4), "ok")
 
-    # a free braking direction that allows the bound leaves the driving limit alone
-    assert MissionCore._limit_any_direction(free, [1], 0.3, [-1], 0.02) == (0.3, "ok", False)  # noqa: SLF001
+def test_the_simulation_checks_one_direction_as_before():
+    c = core()
+    for speed, direction, want in ((SafetySpeed.exact(0.3), None, 1), (SafetySpeed.exact(0.0), None, -1),
+                                   (SafetySpeed.exact(-0.3), 1, 1)):
+        limit, calls = recording_limit(blocked=-1)
+        c.state["command_speed"] = -0.2  # never read in the simulation
+        out = c._direction_limits(limit, speed, direction, 0.3)  # noqa: SLF001
+        assert calls == [(want, 0.3)] and out[2:] == (False, [want], False)
+
+
+def test_the_real_truck_checks_the_motion_it_may_have_unasked():
+    c = core(real=True)
+    # asked forward, rolling back: the request at the cap, the rearward motion at the bound, a hold when blocked
+    limit, calls = recording_limit(blocked=-1)
+    assert c._direction_limits(limit, SafetySpeed(-0.2, 0.2, (-1,)), 1, 0.4) == (  # noqa: SLF001
+        0.0, "occupied", True, [1], True)
+    assert calls == [(1, 0.4), (-1, 0.2)]
+    # a standing reading still has its residual motion checked (Codex 4d-1 2nd P2)
+    limit, calls = recording_limit()
+    assert c._direction_limits(limit, SafetySpeed(-0.009, 0.009, (-1,)), 1, 0.4)[2:] == (False, [1], True)  # noqa: SLF001
+    assert calls == [(1, 0.4), (-1, 0.009)]
+    # a standstill asked forward: one direction, no unasked motion
+    limit, calls = recording_limit(blocked=-1)
+    assert c._direction_limits(limit, SafetySpeed(0.0, 0.0, (1, -1)), 1, 0.4) == (0.4, "ok", False, [1], False)  # noqa: SLF001
+    assert calls == [(1, 0.4)]
+
+
+def test_the_command_still_in_effect_is_motion_too():
+    c = core(real=True)
+    c.state["command_speed"] = 0.1
+    limit, calls = recording_limit(blocked=1)
+    # asked nothing, rolling back, the slew still forward: both driven, the forward one held
+    out = c._direction_limits(limit, SafetySpeed(-0.02, 0.02, (-1,)), None, 0.02)  # noqa: SLF001
+    assert out == (0.0, "occupied", True, [-1, 1], True)
+    assert calls == [(-1, 0.1), (1, 0.1), (-1, 0.02), (1, 0.1)]
+
+
+def test_a_failed_check_of_a_motion_direction_holds_even_when_it_is_also_driven():
+    """Codex 4d-1 6th P1: rolling back with the command still rearward, asked forward -- the rearward motion's
+    failed check is a hold although that direction is in the motion the request does not cover."""
+    c = core(real=True)
+    c.state["command_speed"] = -0.1
+    limit, calls = recording_limit(blocked=-1)
+    out = c._direction_limits(limit, SafetySpeed(-0.2, 0.2, (-1,)), 1, 0.4)  # noqa: SLF001
+    assert out == (0.0, "occupied", True, [1], True) and calls == [(1, 0.4), (-1, 0.2)]
 
 
 class _Tracker:
@@ -202,13 +216,6 @@ def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way(act):
     assert c.obstacle["permission_cap"] == (1.0, 0.0)
 
 
-def test_the_command_still_in_effect_is_a_driving_direction():
-    c = core(real=True)
-    assert c._check_directions(SafetySpeed(-0.02, 0.02, (-1,)), None, 0.1) == ([-1, 1], [])  # noqa: SLF001
-    assert c._check_directions(SafetySpeed(-0.02, 0.02, (-1,)), -1, 0.1) == ([-1, 1], [])  # noqa: SLF001
-    assert core()._check_directions(SafetySpeed.exact(-0.02), None, 0.1) == ([-1], [])  # noqa: SLF001  sim: as before
-
-
 @pytest.mark.parametrize("phase,blocked", [("insert", None), ("transport", 1)])
 def test_a_zero_request_with_the_slew_still_forward_checks_forward(phase, blocked):
     """Codex 4d-1 5th P1: asked 0 while rolling back, the slew from +0.1 would still drive forward."""
@@ -226,10 +233,29 @@ def test_a_zero_request_with_the_slew_still_forward_checks_forward(phase, blocke
     c.options.drive_geometry = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1,
                                                  max_steering_rad=0.8, max_wheel_rate_rad_s=50.0)
     c.hooks.steering_position = lambda: np.zeros(2)
-    c.assemble_command(1.0, 0.01, out.requested_speed, 0.0, 0.0, np.zeros(2), False, out.obstacle_hold, False,
-                       False, False)
-    assert c.state["command_speed"] == 0.0
+    res = c.assemble_command(1.0, 0.01, out.requested_speed, 0.0, 0.0, np.zeros(2), False, out.obstacle_hold, False,
+                             False, False)
+    assert c.state["command_speed"] == 0.0 and res.drive.speed_mps == 0.0
     if phase == "insert":
         assert out.why == "direction_unsure" and asked == []
     else:
-        assert layer.calls == [-1, 1] and out.why == "occupied"
+        assert layer.calls == [-1, 1, -1, 1] and out.why == "occupied"
+
+
+@pytest.mark.parametrize("act", [True, False])
+def test_rolling_back_on_a_rearward_command_into_a_block_holds_through_the_assembly(act):
+    """Codex 4d-1 6th P1 end to end: the delivery straight (not acting), asked forward, rolling back with the command
+    still rearward, blocked behind -- no wheel speed comes out."""
+    from forklift_core.control.path_tracking import AckermannGeometry
+
+    c, layer = permission_core(SafetySpeed(-0.2, 0.2, (-1,)), blocked=-1, act=act)
+    c.trackers["transport"].remaining = 0.2
+    c.state["command_speed"] = -0.1
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    assert not out.acting and out.obstacle_hold and c.obstacle["permission_cap"] == (1.0, 0.0)
+    c.options.drive_geometry = AckermannGeometry(wheelbase_m=1.0, track_m=0.6, wheel_radius_m=0.1,
+                                                 max_steering_rad=0.8, max_wheel_rate_rad_s=50.0)
+    c.hooks.steering_position = lambda: np.zeros(2)
+    res = c.assemble_command(1.0, 0.01, out.requested_speed, 0.0, 0.0, np.zeros(2), False, out.obstacle_hold, False,
+                             False, False)
+    assert res.drive.speed_mps == 0.0  # (without the obstacle switch: no slew, no command_speed record)
