@@ -344,6 +344,8 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 
 ## 11. 다음 PCB 판 요구 사항 (사용자 결정 2026-11-12)
 
+다음 판 전체 요구 사항(IPROPI 보호, MCU 무관 차단, PB4, 승강 리밋, 배터리 ADC 등)은 [메인보드 다음 판 요구 사항](../design/2026-11-12-next-board-requirements.md)에 모았다. 이 절은 비상정지 부분만 적는다.
+
 **비상정지 커넥터와 입력**
 - **배선**: 접점은 상시 닫힘(NC)으로, 한쪽은 MCU 입력 핀에, 다른 쪽은 GND 에 잇는다. 핀은 외부 저항 4.7–10 kΩ 으로 3.3 V 에 풀업한다. 버튼을 누르거나 선이 끊기면 접점이 열려 핀이 high 가 된다. **high = 정지**다.
 - **핀 후보**:
