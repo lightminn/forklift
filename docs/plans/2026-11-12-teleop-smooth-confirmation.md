@@ -43,42 +43,55 @@
 |---|---|
 | 세션 | `r1c_session.sh` line_m far confirm, seed 0, INSTR off, `LAYER_BUDGET=off`, G3(`FORKLIFT_GRID_CLEAR_KERNEL=1`, `FORKLIFT_SHADOW_KERNEL=1`, `LIDAR_CAST=fast`), 지연 주입 없음. 지연 B 배치와 같은 장면·프로브(미션 1회 = AUTO 대조 구간, 이어서 같은 세션에서 텔레옵 hold 열) |
 | 팔 | **K09**: `ARM=K`(catch-up 6), `FACTOR=0.9` — r1c 등록 조합에 `far:K:0.9` 추가. **L04**: `ARM=L`(catch-up 0), `FACTOR=0.4` — 콘솔 런처 기본, 이미 등록 |
-| 반복·순서 | 팔마다 3 세션, K L L K K L (`ts_lists.py`) |
+| 반복·순서 | 팔마다 3 자리, K L L K K L (`ts_lists.py`). 겹침 규칙에 걸린 자리만 한 번 다시 돈다(3절) |
 | 제출 | `ts_submit.sh`: 단일 세션 잡 6 개를 afterany 로 직렬, `--slots 1 --retries 0`, shard 4·CPU 6·8G·40 분(지연 B 와 같음), 1e 단계 1 래퍼(다른 사용자 CPU 표본기) |
 | 스냅숏 | 제출 직전 main(캐시 없음)에 이 등록과 `far:K:0.9` 줄, 판정 도구를 더한 커밋. 이름은 제출 직전에 한 번 고정해 총괄에 보낸다 |
 | 예상 시간 | K09 약 8 분, L04 약 12 분(AUTO 148 sim s / 0.38 + 텔레옵 + 기동) → 합계 약 1 시간 |
 | ws1 순서 | 시뮬-물성 lat_r_ 뒤, 58 회 예산 확인 앞, 단독(총괄) |
 
-## 3. 판정 (결과 전 고정, `tools/teleop_realtime_report.py --factor F --verdict`)
+## 3. 판정 (결과 전 고정, `tools/teleop_realtime_report.py --factor F --verdict --slots 3`)
 
-팔마다 따로 판정한다. 남은 세션 모두가 아래를 모두 지켜야 그 팔이 통과다.
+팔마다 따로 판정한다.
 
-1. **pacing 실패 0.** TELEOP 구간 안에서 ok 틱 다음에 not-ok 틱이 오는 일이 없어야 한다(Codex P2-4: 회복에 1 s 가 걸리므로 '끊김 ≤ 100 ms' 는 사실상 실패 0 이다).
-2. **직접 hold 출력 ≥ 0.95.** 종류별(loaded_forward·forward·reverse·left·right), 세션마다. hold 벽시간 가운데 중재기 속도 목표가 0 이 아닌 비율이다.
-3. **출력 끊김 ≤ 100 ms.** 첫 출력 뒤 hold 안에서 출력이 0 인 가장 긴 구간이다(직접 구동 hold).
-4. **pacing not-ok 구간 ≤ 100 ms.** 모든 직접 hold(구동·승강)에서 가장 긴 연속 not-ok 구간이다.
-5. **회전 첫 출력 ≤ 100 ms.** left·right 가운데 ok 로 시작한 hold 만 판정한다. not-ok 로 시작한 hold 는 보고만 한다(규칙 1 이 이미 막는다).
-6. **안전 비열화 0.**
-   - `scene_damaged` 없음.
+**자리(slot)와 재실행.**
+- 팔마다 등록 세션 세 자리(`ts_lists.py` 이름)가 있다.
+- 원래 세션이 CPU 겹침 규칙에 걸리면(다른 사용자 CPU 가 1 코어를 넘은 표본이 5 % 초과, 지연 1e (c)) 그 자리만 한 번 다시 돈다. 이름은 `<원래 이름>_re` 이고 `ts_submit.sh … -- <이름>` 으로 낸다.
+- 원래가 유효하면 원래를 쓴다. 재실행도 걸리거나 재실행의 재실행이 있으면 그 자리는 미평가다.
+- 팔이 통과하려면 **세 자리 모두** 판정 가능한 세션이 하나씩 있고, 그 세 세션이 아래 규칙을 모두 지켜야 한다(Codex 2라운드 P2-3).
+
+**판정 가능 조건(하나라도 없으면 미평가, 미평가는 통과가 아니다; P2-2).**
+- CPU 표본기 기록이 있어야 한다.
+- live 로그가 `read_live_log` 를 통과해야 한다(잃은 줄·잘린 부분 없음).
+- `tick_trace.npz`(pacing 창)가 있어야 한다.
+- hold 일곱 종류가 모두 있어야 한다: loaded_forward·forward·reverse·left·right·lift_up·lift_down.
+- 각 hold 의 [시작, 끝) 이 틱 기록으로 덮여야 한다. 시작 이전과 끝 이후에 틱이 있어야 한다는 뜻이다.
+- result.json 과 spool `slam.control`(완전성 검사 통과)이 있고, TELEOP 참값 행이 1 개 이상이어야 한다.
+
+**규칙(판정 가능한 세션마다 모두).** hold 의 값은 probe 의 [start_mono, end_mono) 를 직전 틱 상태로 이어 붙여 적분한다(Codex 2라운드 P2-1: 안쪽 첫·끝 틱이 아니라 hold 경계).
+1. **pacing 실패 0.** TELEOP 연속 틱에서 ok 다음에 not-ok 가 오는 일이 없어야 한다(1라운드 P2-4: 회복에 1 s 가 걸리므로 '끊김 ≤ 100 ms' 는 사실상 실패 0 이다).
+2. **TELEOP 진입 not-ok ≤ 100 ms.** 각 TELEOP 구간의 첫 틱이 not-ok 이면, 첫 ok 틱까지의 시간이 100 ms 이하여야 한다(2라운드 P3: 규칙 1 은 앞 모드에서 이어진 not-ok 를 세지 않는다).
+3. **직접 구동 hold 출력 ≥ 0.95.** 종류별(loaded_forward·forward·reverse·left·right), 세션마다. 중재기 속도 목표가 0 이 아닌 시간 ÷ hold 시간이다.
+4. **출력 끊김 ≤ 100 ms.** 직접 구동 hold 에서 첫 출력 뒤 출력이 0 인 가장 긴 구간이다.
+5. **pacing not-ok 구간 ≤ 100 ms.** 모든 직접 hold(구동·승강)에서 가장 긴 연속 not-ok 구간이다.
+6. **회전 첫 출력 ≤ 100 ms.** left·right 가운데 ok 로 시작한 hold 만 이 규칙으로 판정한다. not-ok 로 시작한 hold 는 규칙 2·5 가 판정한다.
+7. **안전 비열화 0.**
+   - `scene_damaged` 없음. 적재 운반(`loaded_forward`)의 적재 외곽 겹침은 러너가 이것으로 기록한다.
    - `forbidden_pocket_contacts` 0.
    - 러너 참값 평가기의 `unpermitted_entries`·`unpermitted_dir_entries` 0. 이 평가기는 AUTO 에서만 돈다(Codex 설계 3라운드 P2: 멈춘 미션에서는 돌지 않는다).
-   - TELEOP 의 모든 제어 행에서, 참값 뒤 차축 자세(spool `slam.control` 4–6)의 hull 이 장면 장애물과 겹치는 틱 0.
+   - TELEOP 의 모든 제어 행에서, 참값 뒤 차축 자세(spool `slam.control` 4–6, 0 열은 로그 `tick_t` 와 같은 시계)의 hull 이 장면 장애물과 겹치는 틱 0. 적재 외곽 여유는 무적재 틱에도 계산한 보고값이라 판정에 쓰지 않는다.
    - 보호 판정 유지는 실행이 아니라 코드로 보인다. 이번 변경은 실행 설정(배속·catch-up)뿐이고, 게이트·허가 코드는 그대로다.
-
-**무효·미평가.**
-- 다른 사용자 CPU 가 1 코어를 넘은 표본이 5 % 를 넘은 세션은 뺀다(지연 1e (c) 규칙). 빠진 세션은 같은 팔로 한 번만 다시 돈다.
-- 기록(result.json, spool, probe)이 없거나 hold 종류가 빠진 세션은 미평가다. 미평가가 있으면 그 팔은 통과가 아니다.
 
 **함께 보고만 하는 것.**
 - 팔별 AUTO 대조: 배율, ok, 미션 성공.
-- TELEOP 배율, pacing 창 최솟값·p1·문턱 아래 스텝 수(L04 는 필수).
+- TELEOP 배율, pacing 창 최솟값·p1·문턱 아래 스텝 수(L04 는 필수, 창은 step_end 로 재구성한 근사).
 - 승강 변화량, 영상 hold 결과. 영상 hold 의 `permit:limit` 은 미진단이라 판정에서 뺀다.
 - 참값 최소 여유(hull·적재 외곽).
 
-**결과에 따른 처리.**
-- K09 가 통과하면 결과 문서와 콘솔 텔레옵 도움말에 "매끄러운 텔레옵은 f ≤ 0.9 + catch-up 6"을 적는다.
-- L04 가 통과하면 "콘솔 기본(f 0.4)에서도 매끄럽다"를 함께 적는다.
-- 통과하지 못한 팔은 실패 규칙과 원인 분류만 보고하고, 문구를 적지 않는다.
+**결과에 따른 처리(Codex 2라운드 P2-4: 검증한 점으로만 적는다).**
+- K09 가 통과하면 결과 문서와 콘솔 텔레옵 도움말에 "검증한 설정: f 0.9 + catch-up 6 에서 텔레옵이 끊기지 않았다(line_m, 직접 조작 hold)"를 적는다.
+  - 'f ≤ 0.9' 처럼 범위로 넓히지 않는다. 배속이 낮다고 단조롭게 좋아지지 않는다. 예를 들어 f 0.02 의 스텝 간격 417 ms 는 절대 stall 문턱 250 ms 를 넘는다.
+- L04 가 통과하면 "콘솔 기본(f 0.4, catch-up 0)에서도 끊기지 않았다"를 같은 범위로 적는다.
+- 통과하지 못한 팔은 실패 규칙과 원인 분류만 보고하고, 문구를 적지 않는다. 미평가인 팔도 문구를 적지 않는다.
 - catch-up 6 의 런처 기본 승격은 이 결과를 근거로 나중에 따로 결정한다(총괄).
 
 ## 4. 주장의 범위
@@ -99,7 +112,14 @@
   - P2-4 끊김 기준·주장 범위: 규칙 1·3 과 4 절.
   - P2-5 0.4 와 1.0 의 분리: 팔을 둘로 나눴다.
   - P3: 표현을 고쳤다(창 시각은 step_end 근사, 감속 비율의 기준).
-- 등록 문서 Codex 검토: (진행 중)
+- Codex 2라운드(등록 문서, fb135eeb) 지적과 처리:
+  - P1: 없음.
+  - P2-1 hold 경계 적분: 도구가 [start, end) 를 직전 틱 상태로 적분한다. 덮이지 않는 hold 는 미평가다. 시험: `test_a_hold_is_judged_over_its_own_edges`.
+  - P2-2 결측 통과: 판정 가능 조건을 두었다. 표본기·`read_live_log`·창·hold 일곱 종류·덮임·안전 기록이 없으면 미평가다.
+  - P2-3 세 자리: 자리·재실행 규칙과 `--slots 3` 을 두었다. 시험: `test_three_registered_slots_must_each_hold_one_judged_session`.
+  - P2-4 문구 일반화: 검증한 설정으로만 적는다(3절).
+  - P3 진입 not-ok: 규칙 2 를 추가했다. 안전 시각·hull 범위는 확인됐고, 적재 외곽 보고값의 성격을 적었다.
+- 등록 문서 Codex 3라운드: (진행 중)
 
 ## 부록 — 재생 결과의 출처
 

@@ -4,7 +4,8 @@ single-session live jobs, r1c_session.sh line_m far confirm, seed 0, INSTR off, 
 injected latency -- arm K09 (FACTOR 0.9, catch-up 6) and arm L04 (FACTOR 0.4, catch-up 0: the console launcher's
 default), in the registered order K L L K K L.
 
-    python ts_lists.py SNAP OUT     # writes OUT/<name>.jsonl, prints "<name> <arm>" per job in order
+    python ts_lists.py SNAP OUT              # writes OUT/<name>.jsonl, prints "<name> <arm>" per job in order
+    python ts_lists.py SNAP OUT NAME ...     # the one rerun of each named job (over the overlap rule): <name>_re
 """
 
 from __future__ import annotations
@@ -41,10 +42,21 @@ def jobs(snap: str, out: str) -> list[dict]:
     return rows
 
 
+def reruns(snap: str, out: str, names: list) -> list[dict]:
+    """The registration's one rerun per slot (plan 3): the same job under <name>_re; a rerun of a rerun is refused."""
+    by_name = {j["name"]: j for j in jobs(snap, out)}
+    rows = []
+    for n in names:
+        if n not in by_name:
+            raise SystemExit(f"{n}: not a registered job (a rerun is of an original, once)")
+        rows.append(entry(snap, out, f"{n}_re", by_name[n]["env"]["TS_ARM"]))
+    return rows
+
+
 def main(argv: list) -> int:
     snap, out = argv[1], argv[2]
     Path(out).mkdir(parents=True, exist_ok=True)
-    for j in jobs(snap, out):
+    for j in (reruns(snap, out, argv[3:]) if len(argv) > 3 else jobs(snap, out)):
         (Path(out) / f"{j['name']}.jsonl").write_text(json.dumps(j) + "\n", encoding="utf-8")
         print(j["name"], j["env"]["TS_ARM"])
     return 0
