@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import os
 import socket
 import struct
 import time
@@ -204,6 +205,21 @@ class ScanFeed:
         return out
 
 
+def bind_socket(path: str | Path, *, rcvbuf: int = 1 << 20) -> socket.socket:
+    """The receiving end the adapter sends to: a non-blocking Unix datagram socket bound at ``path`` (a stale path a
+    crash left behind is replaced), group-writable so the container's user can send. A datagram is a whole frame or
+    none -- a full receiver makes the adapter drop, never block (design 1.2)."""
+    p = Path(path)
+    if p.exists() or p.is_symlink():
+        p.unlink()
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(rcvbuf))
+    s.bind(str(p))
+    os.chmod(p, 0o660)
+    s.setblocking(False)
+    return s
+
+
 def replay(path: str | Path) -> dict:
     """A record's frames through a new ScanFeed, in order: ``verdicts`` (now) beside ``recorded`` (then)."""
     feed = ScanFeed()
@@ -217,5 +233,5 @@ def replay(path: str | Path) -> dict:
     return {"recorded": recorded, "verdicts": verdicts, "feed": feed}
 
 
-__all__ = ["ESTABLISH_COUNT", "FrameError", "MAX_BEAMS", "RealScan", "ScanFeed", "decode_frame", "encode_frame",
+__all__ = ["ESTABLISH_COUNT", "bind_socket", "FrameError", "MAX_BEAMS", "RealScan", "ScanFeed", "decode_frame", "encode_frame",
            "replay"]
