@@ -3,6 +3,7 @@
    ROM DFU device (0483:df11) is never mistaken for the link. */
 #include "board/link_cfg.h"
 #include "build_info.h"
+#include "fw/link.h"
 #include "stm32h7xx.h"
 #include "tusb.h"
 
