@@ -3,6 +3,7 @@
 # "forklift-mcu <kind> <locked|unlocked> <git>", so neither the ROM DFU device (0483:df11) nor a NUCLEO's ST-LINK
 # port matches. ModemManager is told to leave the port alone (its AT probes would reach the MCU's decoder), and the
 # port gets a stable name: /dev/forklift-mcu and /dev/forklift-mcu-<serial> (the MCU's 96-bit UID).
+# No GROUP: the distribution's own serial group stays (dialout on Ubuntu/Jetson, uucp on Arch).
 # Install: deploy/udev/README.md (sudo, run by the user).
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1"
-SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="forklift-mcu", SYMLINK+="forklift-mcu-$attr{serial}", MODE="0660", GROUP="dialout"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="forklift-mcu", SYMLINK+="forklift-mcu-$attr{serial}", MODE="0660"
