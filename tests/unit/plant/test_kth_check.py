@@ -132,3 +132,24 @@ def test_the_configured_variants_and_the_image_are_required():
         kth_check(run(good()), configured={"M": "crc8", "H": "g704_bytes"}, image="x")
     with pytest.raises(ValueError):
         kth_check(run(good()), configured=CONF, image="")
+
+
+def test_a_counter_reset_inside_one_boot_is_invalid_not_a_huge_rise():
+    """Codex v3 impl P2-1: frames and alt going 1000 -> 0 in 10 ms read as +64536."""
+    s = run(good(100))
+    t = s[-1].state
+    s.append(Sample(s[-1].host_ns + 10_000_000, dataclasses.replace(
+        t, mcu_time_us=t.mcu_time_us + 10_000, kth_frames=(0, 0), kth_alt_crc_errors=(0, 0))))
+    res = kth_check(s, configured=CONF, image="x")
+    assert res["result"] == "invalid" and "rise" in res["why"]
+
+
+def test_errors_past_frames_in_one_interval_is_invalid_even_when_the_sums_balance():
+    """Codex v3 impl P2-1: (0, 0, 100) then (1000, 0, 0) sums to a clean configured_ok."""
+    res = kth_check(run([(0, 0, 0, 0, 100, 100)] + [(1000, 1000, 0, 0, 0, 0)]), configured=CONF, image="x")
+    assert res["result"] == "invalid" and "interval" in res["why"]
+
+
+def test_frames_faster_than_the_contract_allows_is_invalid():
+    res = kth_check(run([(50, 50, 0, 0, 40, 40)] * 30), configured=CONF, image="x")  # 50 frames in 10 ms
+    assert res["result"] == "invalid" and "rise" in res["why"]

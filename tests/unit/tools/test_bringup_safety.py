@@ -353,3 +353,30 @@ def test_the_kth_subcommand_reads_a_record(tmp_path, capsys):
     assert out["configured"] == {"M": "g704_bytes", "H": "reflected_msb_first"} and out["image"] == "fw@1234abcd"
     with pytest.raises(SystemExit):
         bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"])
+
+
+@pytest.mark.parametrize("drop, value", [("kth_crc_errors", None), ("kth_frames", [1]), ("kth_alt_crc_errors", [0, 70000]),
+                                         ("kth_crc_errors", [0.5, 0])])
+def test_the_kth_subcommand_refuses_rows_without_well_formed_counters(tmp_path, capsys, drop, value):
+    """Codex v3 impl P2-2: a row missing a counter must not default to zeros (a false configured_ok)."""
+    import dataclasses
+    import json
+
+    from forklift_core.plant.bringup import Sample
+
+    rec = tmp_path / "run.jsonl"
+    rows = []
+    for k in range(201):
+        st = dataclasses.replace(state(), mcu_time_us=1_000_000 + k * 10_000, kth_frames=(10 * k, 10 * k),
+                                 kth_crc_errors=(9 * k, 9 * k), kth_alt_crc_errors=(9 * k, 9 * k))
+        row = bringup.state_row(Sample(k * 10_000_000, st))
+        if value is None:
+            del row[drop]
+        else:
+            row[drop] = value
+        rows.append(row)
+    rec.write_text("\n".join(json.dumps(r, default=str) for r in rows))
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--configured-h",
+                         "g704_bytes", "--image", "x"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"] == "invalid" and drop in out["why"]

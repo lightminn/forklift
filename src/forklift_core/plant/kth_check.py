@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from forklift_core.mcu_link.messages import FaultFlag, StateFlag, kth_counter_delta
 
 GAP_MAX_S = 30.0
+RATE_MAX_HZ = 1000.0  # contract 3.3: each counter rises at most once a control cycle, the cycle >= 1 ms
 MIN_FRAMES = 1000
 MIN_DISTINGUISHING = 100
 VARIANTS = ("g704_bytes", "reflected_msb_first")  # firmware/core/include/fw/crc.h kth_crc_variant
@@ -54,10 +55,22 @@ def kth_check(samples: Sequence, *, configured: dict, image: str) -> dict:
             return {**base, "result": "invalid", "why": "MCU time went back or stood"}
         if dt > GAP_MAX_S:
             return {**base, "result": "invalid", "why": f"gap of {dt:.1f} s between STATEs (over {GAP_MAX_S} s)"}
+        # each interval on its own, before any sum (Codex v3 impl P2-1): a rise past the contract's rate is a reset or
+        # a wrap the gap hid; errors past frames inside one interval is a contradiction the sums would balance away
+        rise_max = math.ceil(dt * RATE_MAX_HZ) + 1  # one cycle of slack at either end
         for i, ax in enumerate(AXES):
-            sums[ax][0] += kth_counter_delta(sb.kth_frames[i], sa.kth_frames[i])
-            sums[ax][1] += kth_counter_delta(sb.kth_crc_errors[i], sa.kth_crc_errors[i])
-            sums[ax][2] += kth_counter_delta(sb.kth_alt_crc_errors[i], sa.kth_alt_crc_errors[i])
+            df = kth_counter_delta(sb.kth_frames[i], sa.kth_frames[i])
+            de = kth_counter_delta(sb.kth_crc_errors[i], sa.kth_crc_errors[i])
+            da = kth_counter_delta(sb.kth_alt_crc_errors[i], sa.kth_alt_crc_errors[i])
+            if df > rise_max:
+                return {**base, "result": "invalid",
+                        "why": f"axis {ax}: frames rise {df} in {dt * 1e3:.1f} ms (over {rise_max}): a reset or a hidden wrap"}
+            if de > df or da > df:
+                return {**base, "result": "invalid",
+                        "why": f"axis {ax}: errors past frames within one interval ({df}, {de}, {da})"}
+            sums[ax][0] += df
+            sums[ax][1] += de
+            sums[ax][2] += da
     for ax in AXES:
         frames, errors, alt = sums[ax]
         if errors > frames or alt > frames:
