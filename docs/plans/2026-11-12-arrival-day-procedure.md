@@ -172,7 +172,7 @@ python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --s
   - `wheel_count_left/right` 가 회전과 비례하는지
   - `steering_rad`·`lift_m` 이 손 회전을 따라가는지
 - 조향 끝에서 끝까지 KTH 각이 한 바퀴 안에 드는지, **넘김 지점이 사용 범위 밖에 있는지** 보고, 직진 영점을 기록한다(계획 S2).
-- **KTH CRC 변형 확정**(계획 S2, mcu-link/3 계약 3.3): 위 기록의 STATE 에 축별 KTH 계수 셋(받은 프레임, 설정 변형 CRC 오류, 다른 변형이었다면 났을 오류)이 실린다. 펌웨어의 설정 변형은 두 축 모두 `g704_bytes` 다(`board_config.c`). 기록 동안 **조향·승강을 범위 안에서 천천히 끝까지 움직인다** — 두 변형은 4096 개 각도 중 256 개에서 CRC 가 같으므로, 축이 멈춰 있으면 판정이 나지 않는다.
+- **KTH CRC 변형 확정**(계획 S2, mcu-link/3 계약 3.3): 위 기록의 STATE 에 축별 KTH 계수 셋(받은 프레임, 설정 변형 CRC 오류, 다른 변형이었다면 났을 오류)이 실린다. 펌웨어의 설정 변형은 두 축 모두 `g704_bytes` 다(`board_config.c`). 기록 동안 **조향·승강을 범위 안에서 천천히 끝까지 움직인다** — 두 변형은 4096 개 각도 중 256 개에서 CRC 가 같다. 축이 그런 각도에 멈춰 있으면 판정이 나지 않는다. 다른 각도에 멈춰 있어도 `configured_ok` 는 나올 수 있지만, 범위 전체를 지나는지는 S2 가 따로 본다(Codex).
   ```bash
   python tools/bringup.py kth --record $D/run.jsonl --configured-m g704_bytes --configured-h g704_bytes \
     --image "<3.1 의 udevadm 으로 읽은 제품 문자열>" | tee $D/kth.json

@@ -380,3 +380,29 @@ def test_receive_never_writes_and_transmit_writes_what_is_still_queued():
     finally:
         os.close(master)
         os.close(slave)
+
+
+def test_the_model_skips_late_cycles_so_kth_counts_stay_within_one_per_ms(bench_factory):
+    """mcu-link/3 3.3: at most one KTH count per axis per control cycle and a cycle of at least 1 ms. A model
+    stalled (SIGSTOP) and resumed must not run the missed cycles back to back -- the counters would then
+    outrun the MCU clock (Codex, mcu-link/3 C review P2)."""
+    b = bench_factory()
+    assert b.run_until(lambda: b.state() is not None and b.state().mode == Mode.DISARMED), "no DISARMED STATE"
+    seen = []
+
+    def keep(_now):
+        s = b.state()
+        if s is not None and (not seen or s.mcu_time_us != seen[-1].mcu_time_us):
+            seen.append(s)
+
+    b.run_until(lambda: False, timeout_s=0.2, every=keep)
+    b.proc.send_signal(signal.SIGSTOP)
+    time.sleep(0.3)
+    b.proc.send_signal(signal.SIGCONT)
+    b.run_until(lambda: False, timeout_s=0.5, every=keep)
+    assert len(seen) > 20
+    for a, c in zip(seen, seen[1:]):
+        dt_ms = (c.mcu_time_us - a.mcu_time_us) / 1000.0
+        for axis in range(2):
+            frames = (c.kth_frames[axis] - a.kth_frames[axis]) % 0x10000
+            assert frames <= math.floor(dt_ms) + 1, (axis, frames, dt_ms)
