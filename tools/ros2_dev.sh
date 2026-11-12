@@ -33,6 +33,7 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
         exit 2
     fi
     mkdir -p "${sock_dir}"
+    image="${FORKLIFT_ROS2_SCAN_IMAGE:-forklift/ros2-scan:jazzy}"  # deploy/ros2/Dockerfile.scan
     docker_args+=(
         --device "${device}:${device}"
         --group-add "$(stat -c %g "${device}")"

@@ -24,7 +24,7 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
 ```
 
 ### 1.1 드라이버와 시각의 뜻 (Codex P1-1)
-- `sllidar_ros2` 를 커밋 고정으로 소스 빌드해 `deploy/ros2/`(x86, 노트북 시험) 이미지에 넣는다. ARM64 는 계획의 `deploy/ros2-real/`(P0-2)에서 같은 커밋을 쓴다.
+- `sllidar_ros2` 를 커밋 고정으로 소스 빌드해 개발 이미지 위의 얹는 이미지(`deploy/ros2/Dockerfile.scan`, `forklift/ros2-scan:jazzy`, x86 노트북 시험)에 넣는다. 개발 이미지 자체는 다시 빌드하지 않는다(그 바탕 이미지는 다이제스트 고정이고, 이 노트북의 기존 빌더로는 다시 받지 못했다, 2026-11-12). ARM64 는 계획의 `deploy/ros2-real/`(P0-2)에서 같은 커밋을 쓴다.
 - 확인된 사실(upstream main, Codex 대조): 노드는 `grabScanDataHq()` **호출 직전**의 시각을 stamp 로 쓰고, 호출 전후 차이를 `scan_time` 으로 낸다. SDK 는 스캔마다 자기 timestamp 를 갖지만 이 호출에서 버린다. 그래서 **stamp 는 취득 시각이 아니다.** 버퍼에 있던 스캔이 빨리 돌아오면 오래된 관측이 신선해 보인다.
 - ⑦a 에서 할 일:
   1. 고정할 커밋에서 위 사실을 다시 확인한다.
@@ -75,7 +75,7 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
 # 1. 장치 정보 (꽂은 뒤)
 ls -l /dev/serial/by-id/
 # 2. 드라이버+어댑터 (ROS 컨테이너), 다른 창에서 확인 도구
-docker build -t forklift/ros2-dev:jazzy -f deploy/ros2/Dockerfile .      # 한 번(sllidar_ros2 포함)
+docker build -t forklift/ros2-scan:jazzy -f deploy/ros2/Dockerfile.scan deploy/ros2   # 한 번(개발 이미지 위에 sllidar_ros2)
 python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 30 --record a2m12_first.scan.jsonl &
 tools/ros2_dev.sh scan-a2m12 /dev/ttyUSB0
 # 3. 각도 확인: 라이다 오른쪽 30 cm 에 상자를 두고
@@ -124,7 +124,7 @@ python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 5 --p
 |---|---|
 | `src/forklift_core/sensors/scan_feed.py` | `scan/1` 해석, `ScanFeed`, `RealScan` |
 | `ros2/src/forklift_ros/forklift_ros/real_scan_adapter.py` + 진입점 | 어댑터 노드(버림·계수) |
-| `deploy/ros2/Dockerfile` | sllidar_ros2 커밋 고정 빌드 |
+| `deploy/ros2/Dockerfile.scan` | 개발 이미지 위에 sllidar_ros2 커밋 고정 빌드(`forklift/ros2-scan:jazzy`) |
 | `tools/ros2_dev.sh` | `scan-a2m12 <장치>` 하위 명령(드라이버+어댑터) |
 | `tools/scan_check.py` | 1.4 |
 | `deploy/udev/99-forklift-lidar.rules` | 연결 뒤 VID/PID 로 채움(초안) |

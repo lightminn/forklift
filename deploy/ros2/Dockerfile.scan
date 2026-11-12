@@ -1,0 +1,18 @@
+# The real A2M12 driver on top of the dev image (bring-up 7a, docs/design/2026-11-12-real-scan-obstacle-layer.md 1.1):
+#   docker build -t forklift/ros2-scan:jazzy -f deploy/ros2/Dockerfile.scan deploy/ros2
+# An overlay, so the dev image is not rebuilt (its base is pinned by digest). sllidar_ros2 is pinned by commit; its
+# stamp is taken before it fetches a scan -- not the acquisition time -- and the design records what that means.
+ARG BASE_IMAGE=forklift/ros2-dev:jazzy
+FROM ${BASE_IMAGE}
+
+USER root
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+ARG SLLIDAR_ROS2_COMMIT=34300099fadfc772965962dec837bf436706188f
+RUN git clone https://github.com/Slamtec/sllidar_ros2.git /opt/sllidar_ws/src/sllidar_ros2 \
+    && git -C /opt/sllidar_ws/src/sllidar_ros2 checkout --detach "${SLLIDAR_ROS2_COMMIT}" \
+    && rm -rf /opt/sllidar_ws/src/sllidar_ros2/.git \
+    && source /opt/ros/jazzy/setup.bash \
+    && cd /opt/sllidar_ws \
+    && colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && rm -rf /opt/sllidar_ws/build /opt/sllidar_ws/log
+USER forklift-dev

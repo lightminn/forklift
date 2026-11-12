@@ -41,7 +41,15 @@ def test_scan_a2m12_refuses_a_missing_device(tmp_path):
     assert res.returncode != 0 and "device" in res.stderr
 
 
+def test_scan_a2m12_runs_the_scan_image(tmp_path):
+    dev = tmp_path / "ttyUSB9"
+    dev.write_text("")
+    argv = run_launcher(tmp_path, "scan-a2m12", str(dev), str(tmp_path / "s")).stdout.splitlines()
+    assert argv[-4] == "forklift/ros2-scan:jazzy"  # image, then bash -c <command>
+
+
 def test_the_image_pins_sllidar_ros2_by_commit():
-    text = (REPO / "deploy/ros2/Dockerfile").read_text(encoding="utf-8")
+    text = (REPO / "deploy/ros2/Dockerfile.scan").read_text(encoding="utf-8")
+    assert "FROM ${BASE_IMAGE}" in text and "ARG BASE_IMAGE=forklift/ros2-dev:jazzy" in text
     assert f"SLLIDAR_ROS2_COMMIT={PINNED}" in text
     assert re.search(r"git -C \S+ checkout --detach \"?\$\{SLLIDAR_ROS2_COMMIT\}", text)
