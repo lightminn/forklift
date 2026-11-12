@@ -3,6 +3,7 @@
    ROM DFU device (0483:df11) is never mistaken for the link. */
 #include "board/link_cfg.h"
 #include "build_info.h"
+#include "fw/link.h"
 #include "stm32h7xx.h"
 #include "tusb.h"
 
@@ -21,7 +22,7 @@ static const tusb_desc_device_t g_device = {
     .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
     .idVendor = USB_VID,
     .idProduct = USB_PID,
-    .bcdDevice = 0x0200, /* mcu-link/2 */
+    .bcdDevice = LINK_VERSION << 8, /* mcu-link/3 -> 0x0300 */
     .iManufacturer = STR_MANUFACTURER,
     .iProduct = STR_PRODUCT,
     .iSerialNumber = STR_SERIAL,

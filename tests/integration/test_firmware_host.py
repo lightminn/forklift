@@ -24,6 +24,7 @@ from forklift_core.mcu_link.messages import (
     McuState,
     Mode,
     RejectReason,
+    ResetCause,
     StateFlag,
     decode,
     encode,
@@ -125,6 +126,9 @@ def _random_messages(rng: random.Random) -> list[tuple[str, int, object, list[st
             rng.randint(0, 0xFFFF),
             rng.randint(0, 0xFFFF),
             StateFlag(rng.randint(0, 15)),
+            ResetCause(rng.randint(0, 4)),
+            # v3: six distinct nonzero KTH counters, edges included (Codex v3 design P2-3: zeros would pass blind)
+            *_kth_counters(rng),
         )
         values = [
             state.mcu_time_us,
@@ -150,8 +154,21 @@ def _random_messages(rng: random.Random) -> list[tuple[str, int, object, list[st
         args += [str(v) for v in (*state.current_ma, *state.duty_e4)]
         args += [str(v) for v in state.driver_status]
         args += [str(state.rx_errors), str(state.cycle_overruns), str(int(state.flags))]
+        # v3 order after flags: reset_cause, kth_frames (M, H), kth_crc_errors (M, H), kth_alt_crc_errors (M, H)
+        args += [str(int(state.reset_cause)), *(str(v) for v in (*state.kth_frames, *state.kth_crc_errors,
+                                                                 *state.kth_alt_crc_errors))]
         cases.append(("state", rng.randint(0, 0xFFFF), state, args))
     return cases
+
+
+def _kth_counters(rng):
+    """Six distinct nonzero 16-bit counters, the edges 1 and 0xFFFF among them."""
+    pool = {1, 0xFFFF}
+    while len(pool) < 6:
+        pool.add(rng.randint(2, 0xFFFE))
+    vals = list(pool)
+    rng.shuffle(vals)
+    return tuple(vals[0:2]), tuple(vals[2:4]), tuple(vals[4:6])
 
 
 def _parse_c_line(line: str):
@@ -186,6 +203,10 @@ def _parse_c_line(line: str):
             tail[12],
             tail[13],
             StateFlag(tail[14]),
+            ResetCause(tail[15]),
+            tuple(tail[16:18]),
+            tuple(tail[18:20]),
+            tuple(tail[20:22]),
         )
     else:
         raise AssertionError(line)

@@ -21,7 +21,11 @@ typedef struct {
     bool valid;
     bool out_of_range;
     uint16_t bad_streak;
+    /* Fresh frames, and of those the ones whose CRC fails under the configured variant and under the
+       other variant (diagnostic only, mcu-link/3 3.3). Cleared by abs_axis_init alone, i.e. at boot. */
+    uint32_t frames;
     uint32_t crc_errors;
+    uint32_t alt_crc_errors;
 } abs_axis;
 
 /* 16-bit SPI word = angle (bits 15..4) | CRC-4 (bits 3..0). */

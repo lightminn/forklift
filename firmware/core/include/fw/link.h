@@ -1,4 +1,4 @@
-/* mcu-link/2 messages (docs/interfaces/2026-10-22-mcu-link-contract.md). */
+/* mcu-link/3 messages (docs/interfaces/2026-10-22-mcu-link-contract.md). */
 #ifndef FW_LINK_H
 #define FW_LINK_H
 
@@ -8,9 +8,9 @@
 
 #include "fw/crc.h"
 
-#define LINK_VERSION 2u
-#define LINK_BODY_MAX 80u
-#define LINK_WIRE_MAX 83u /* COBS(LINK_BODY_MAX) + delimiter, with room for one more code */
+#define LINK_VERSION 3u
+#define LINK_BODY_MAX 90u /* v3: the 84-byte STATE payload + 6 */
+#define LINK_WIRE_MAX 93u /* COBS(LINK_BODY_MAX) + delimiter, with room for one more code */
 
 #define LINK_DRIVE 0x01u
 #define LINK_ARM 0x02u
@@ -62,6 +62,9 @@ typedef struct {
     uint16_t rx_errors, cycle_overruns;
     uint8_t flags;
     uint8_t reset_cause; /* v2 */
+    /* v3, contract 3.3: per axis (0 M steering, 1 H lift) fresh KTH7801 frames, configured-variant CRC
+       errors, other-variant CRC errors; each 16-bit modular, cleared only at boot. */
+    uint16_t kth_frames[2], kth_crc_errors[2], kth_alt_crc_errors[2];
 } link_state;
 
 typedef struct {

@@ -33,7 +33,8 @@ bool drive_config_valid(const drive_config *c)
 {
     const uint32_t max_us = 0x7FFFFFFFu;
     const uint32_t max_ms = max_us / US_PER_MS;
-    if (c->period_us == 0 || c->period_us > max_us / 2u || c->command_timeout_ms == 0 ||
+    /* period >= 1 ms: mcu-link/3 3.3 promises at most 1000 KTH counts per axis per second. */
+    if (c->period_us < 1000u || c->period_us > max_us / 2u || c->command_timeout_ms == 0 ||
         c->command_timeout_ms > 0xFFFFu || c->stop_grace_ms > max_ms || c->driver_retry_ms == 0 ||
         c->driver_retry_ms > max_ms || c->driver_wake_us > max_us ||
         c->spi_timeout_us < 2u * c->period_us || c->spi_timeout_us > max_us ||
@@ -1031,6 +1032,12 @@ void drive_fill_state(const drive *d, link_state *s)
     s->wheel_rate_right_rad_s = d->wheel[1].rate_rad_s;
     s->steering_rad = d->steer.valid ? d->steer.position : NAN;
     s->lift_m = d->lift.valid ? d->lift.position : NAN;
+    const abs_axis *ax[2] = {&d->steer, &d->lift};
+    for (int i = 0; i < 2; i++) { /* the wire carries them mod 2^16 */
+        s->kth_frames[i] = (uint16_t)ax[i]->frames;
+        s->kth_crc_errors[i] = (uint16_t)ax[i]->crc_errors;
+        s->kth_alt_crc_errors[i] = (uint16_t)ax[i]->alt_crc_errors;
+    }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         s->current_ma[ch] = sat16(d->current_a[ch] * 1000.0f);
         s->duty_e4[ch] = sat16(d->out.duty[ch] * 10000.0f);
