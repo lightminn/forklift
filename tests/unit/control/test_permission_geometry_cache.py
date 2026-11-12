@@ -275,3 +275,45 @@ def test_a_float32_outline_and_a_float_outline_of_one_value_are_different_keys()
         finally:
             dp.GEOMETRY_CACHE = True
     assert outs[True] == outs[False]
+
+
+def test_a_number_a_float_cannot_hold_is_never_keyed():
+    """Codex cache review round 2 P2: two longdouble origins one ulp apart would share a key through float(); a
+    number a float does not hold exactly is computed every call, never cached. Codex's case: (80, 80) grid, origin x
+    -2 and its next longdouble, RETAINED (53, 32), resolution and band 0.0625, own outline (1.25, 0.25, 0.25)."""
+    a = np.longdouble(-2)
+    b = np.nextafter(a, np.longdouble(0))
+    assert a != b and float(a) == float(b)
+    fp = Footprint(np.longdouble(1.25), np.longdouble(0.25), np.longdouble(0.25))
+    cfg = config(start_band_m=0.0, shadow_band_m=0.0625)
+    snaps = []
+    for ox in (a, b):
+        state = np.full((80, 80), FREE, dtype=np.uint8)
+        state[53, 32] = RETAINED
+        snaps.append(GridSnapshot(state, np.full((80, 80), 0.25), 0.3, (0.0, 0.0, 0.0), 0, 1, {"high": 0.3}, ox,
+                                  np.longdouble(-2), np.longdouble(0.0625)))
+    pose = (0.0, 0.0, 0.0)
+    outs = {}
+    for on in (False, True):
+        dp.clear_geometry_cache()
+        dp.GEOMETRY_CACHE = on
+        try:
+            for snap in snaps:
+                band = dp.shadow_band(snap, pose, fp, np.longdouble(0.0625))
+                arc = DrivePermission(cfg).check_arc(snap, pose, 0.0, 1, fp, fp, 0.13)
+                outs.setdefault(on, []).append((band.tobytes(), arc))
+        finally:
+            dp.GEOMETRY_CACHE = True
+    assert outs[True] == outs[False]
+    assert not any(k[0] == "band" for k, _, _ in dp.geometry_cache_entries())  # computed, never stored
+
+
+@pytest.mark.parametrize("value,keyed", [(0.5, True), (3, True), (np.float32(0.5), True), (np.float16(0.5), True),
+                                         (np.int64(3), True), (np.longdouble(0.5), False), (True, False),
+                                         (2 ** 60 + 1, False), ("0.5", False)])
+def test_only_numbers_a_float_holds_exactly_are_keyed(value, keyed):
+    if keyed:
+        assert dp._scalar(value)[0] == type(value).__name__
+    else:
+        with pytest.raises(dp._Uncacheable):
+            dp._scalar(value)

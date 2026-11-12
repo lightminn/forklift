@@ -289,9 +289,21 @@ GEOMETRY_CACHE_MAX = 16
 _geometry_cache: dict = {}
 
 
+class _Uncacheable(Exception):
+    """A number whose value a float does not hold exactly (np.longdouble): the call is computed, not cached."""
+
+
 def _scalar(v) -> tuple:
     """A number in a key: its type and its bits (a float32 and a float of one value compute differently; a signed
-    zero is another key -- Codex cache review P2)."""
+    zero is another key -- Codex cache review P2). Only types a float holds exactly (Python float and int, NumPy
+    floats of at most 8 bytes and integers): a longdouble's extra bits would be lost and two values share a key
+    (Codex cache review round 2 P2), so it raises _Uncacheable."""
+    if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, float, np.integer, np.floating)):
+        raise _Uncacheable(type(v).__name__)
+    if isinstance(v, np.floating) and np.dtype(type(v)).itemsize > 8:
+        raise _Uncacheable(type(v).__name__)
+    if isinstance(v, (int, np.integer)) and float(v) != v:
+        raise _Uncacheable(type(v).__name__)  # an integer past 2**53
     return type(v).__name__, float(v).hex()
 
 
@@ -307,8 +319,13 @@ def _geometry_key(kind: str, frame: tuple, pose: tuple, outline: tuple, *extra) 
                   for fp, lat, lon in outline), tuple(_scalar(v) for v in extra))
 
 
-def _cached(key: tuple, compute):
+def _cached(key, compute):
+    """compute() on a hit-or-store of key; key is a function building it (it may find a value it cannot key)."""
     if not GEOMETRY_CACHE:
+        return compute()
+    try:
+        key = key()
+    except _Uncacheable:
         return compute()
     hit = _geometry_cache.get(key)
     if hit is not None:
@@ -355,7 +372,7 @@ def own_lookup_cached(snapshot, own_pose, own_footprint):
                       dtype=float) for n in range(5)]
         return nb.own_lookup(frame[0], frame[1], frame[2], frame[3], frame[4], x, y, cos(yaw), sin(yaw), *o)
 
-    return _cached(_geometry_key("own", frame, (x, y, yaw), outline), compute)
+    return _cached(lambda: _geometry_key("own", frame, (x, y, yaw), outline), compute)
 
 
 def shadow_band(snapshot, own_pose, own_footprint, band_m) -> np.ndarray:
@@ -366,7 +383,7 @@ def shadow_band(snapshot, own_pose, own_footprint, band_m) -> np.ndarray:
     type and bits."""
     frame = _frame_raw(snapshot)
     if own_pose is None or own_footprint is None or not band_m > 0 or not (snapshot.state == RETAINED).any():
-        return _cached(("none", frame[3:]), lambda: np.zeros(frame[3:], dtype=bool))
+        return _cached(lambda: ("none", frame[3:]), lambda: np.zeros(frame[3:], dtype=bool))
     pose, outline = tuple(own_pose), tuple(parts_of(own_footprint))
 
     def compute():
@@ -377,7 +394,7 @@ def shadow_band(snapshot, own_pose, own_footprint, band_m) -> np.ndarray:
         band[near[:, 0], near[:, 1]] = True
         return band
 
-    return _cached(_geometry_key("band", frame, pose, outline, band_m), compute)
+    return _cached(lambda: _geometry_key("band", frame, pose, outline, band_m), compute)
 
 
 def _own_lookup_flat(snapshot, own_cells, own_pose, own_footprint):
