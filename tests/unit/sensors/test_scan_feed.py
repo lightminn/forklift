@@ -217,3 +217,16 @@ def test_bind_socket_refuses_a_regular_file_and_a_live_socket(tmp_path):
         live.close()
     stale = sf.bind_socket(str(path))  # the first is gone: its leftover path is replaced
     stale.close()
+
+
+def test_a_refused_tenth_frame_still_leaves_a_reference_for_the_next():
+    """Codex 7a re-review P2: the frame that completes the window is refused for its latency; the next must not
+    crash on a missing reference."""
+    feed = sf.ScanFeed()
+    for k in range(sf.ESTABLISH_COUNT - 1):
+        assert feed.judge(frame(k), 0)[1] == "establishing"
+    h = head(sf.ESTABLISH_COUNT)
+    h["ros_stamp_ns"] = h["recv_mono_ns"] + OFF + 10 * MS
+    assert feed.judge(sf.encode_frame(h, np.ones(8, dtype=np.float32), None), 0)[1] == "negative_latency"
+    scan, why = feed.judge(frame(sf.ESTABLISH_COUNT + 1), 0)
+    assert why is None and scan is not None

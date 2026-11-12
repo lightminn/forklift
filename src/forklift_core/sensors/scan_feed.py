@@ -157,7 +157,9 @@ class ScanFeed:
         med = int(np.median(self._window))
         if any(abs(p - med) > ESTABLISH_TOL_NS for p in self._window):
             return False
-        self.establishing, self._window = False, []
+        # established with its reference: the agreeing ten's median -- set here, so a refusal of this very frame
+        # (its latency) still leaves one for the next (Codex 7a re-review P2)
+        self.establishing, self._window, self._last_pair = False, [], med
         return True
 
     # ------------------------------------------------------------------ one frame
