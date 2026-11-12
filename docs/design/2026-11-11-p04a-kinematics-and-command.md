@@ -213,4 +213,9 @@ Codex 4c 범위 상의(P2 4·P3 1)를 반영해 4c 를 둘로 나눴다.
     - 정지 규칙: 연속 N 회 초과 또는 한 주기 > 20 ms × k 면 STOP 이다.
     - N·k 는 Jetson 실측 벤치(`tools/permit_bench.py`) 뒤에 정한다. 그 전에는 보수적인 잠정값을 쓰고, 계획의 잠정값 표에 올린다.
     - 실차 텔레옵 구동은 비상정지가 들어가는 다음 PCB 판 뒤라 일정 손해는 없다.
+    - 허가 계산 단가(총괄 2026-11-12, 정확 키 캐시 `drive_permission` 밴드·own_lookup):
+      - `permit_bench` 를 노트북(numba)에서 캐시 끔/켬 교대로 4 회씩 돌린 중앙값이다.
+      - 틱당 감시 + 텔레옵 허가는 0.954 → 0.689 ms(−28 %)다. 호 재설치는 2.02 → 1.63 ms(−20 %)다.
+      - Jetson 은 미측정이다. 같은 비율이 든다고 가정하면, 재설치 평균의 민감도 표(배율 2·3·4 에 4.2·6.2·8.3 ms)도 약 20 % 내려간다.
+      - 20 ms 주기 판단과 N·k 는 그대로 Jetson 실측 뒤다.
   - 실차 훅 객체는 `fail_closed_hooks` 로 감싼다(4d-2a). 혼합 훅(`cusp_heading_motion`, `far_recognition*`)은 참값 필드를 `None` 으로 채운 같은 모양으로 구현하고, `options.G2.planning_target` 의 oracle 옵션은 조립하지 않는다.
