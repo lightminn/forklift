@@ -159,6 +159,8 @@ test("every reason the live arbiter gives for refusing manual driving reads in K
     assert.doesNotMatch(forbidText(r), /^[a-z_:]+$/, r);
   }
   assert.match(forbidText("fork_in_pocket"), /포켓/);
+  // only the tested setting, with its scope and condition (the registration's section 3)
+  assert.match(forbidText("pacing"), /기본 배속\(0\.4, catch-up 0\).*직접 조작.*line_m.*예산 off/);
   assert.match(forbidText("no_feedback:rear_axle_speed"), /rear_axle_speed/); // the missing feedback is named
   assert.equal(forbidText("brand_new"), "brand_new");
   assert.equal(forbidText(null), "");
@@ -209,7 +211,8 @@ test("a disarm the page asked for is excused once, and only in the arm period it
 });
 
 test("a forbidden drive names the policy's reason, not the permit's code (2026-10-18 demo: pacing read as drive_forbidden)", () => {
-  assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, "pacing"), "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 상한 0.00 m/s");
+  assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, "pacing"),
+    "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 콘솔 기본 배속(0.4, catch-up 0)에서 직접 조작이 끊기지 않음을 확인했습니다(line_m 장면, 층 지연 예산 off 조건) · 상한 0.00 m/s");
   assert.equal(permitText({ reason: "drive_forbidden", limit_mps: 0 }, null), "수동 주행 금지 · 상한 0.00 m/s");
   assert.equal(permitText({ reason: "clear", limit_mps: 0.3 }, "pacing"), "clear · 상한 0.30 m/s");
 });
