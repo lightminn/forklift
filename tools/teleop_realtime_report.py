@@ -15,22 +15,40 @@ Per session:
   timers  per mode and key: seconds per wall second, calls per wall second, mean ms per call, max ms
           (nested timers overlap: never add them)
   overlap the share of sampler rows with other users' CPU over 1 core
+  windows (with ``--factor`` and ``tick_trace.npz``) the pacer's 1 s window (steps over step-end wall times) in
+          TELEOP: its minimum and the steps whose window fell below 0.9 x factor
+  safety  ``result.json``'s safety records (scene damage, forbidden pocket contacts, the runner's unpermitted entries
+          -- AUTO only: its evaluator does not run while the mission is held) and, from the spool's ``slam.control``
+          (truth rear pose, columns 4-6), the hull's clearance to every scene obstacle at every TELEOP control row
 
 The summary leaves out sessions whose overlap is over ``--overlap-max`` (0.05: the latency plan's 1e (c) rule).
+``--verdict`` judges the sessions by the smoothness confirmation's registered rules
+(docs/plans/2026-11-12-teleop-smooth-confirmation.md).
 
-    python tools/teleop_realtime_report.py SESSION_DIR... [--overlap-max 0.05] [--json out.json]
+    python tools/teleop_realtime_report.py SESSION_DIR... [--overlap-max 0.05] [--factor F --verdict] [--json out]
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import sys
 from pathlib import Path
 
+import numpy as np
+
+REPO = Path(__file__).resolve().parents[1]
 GAP_S = 1.0
 OVERLAP_CORES = 1.0
+DT = 1 / 120
+# The registered rules (docs/plans/2026-11-12-teleop-smooth-confirmation.md 3)
+DRIVE_HOLDS = ("loaded_forward", "forward", "reverse", "left", "right")
+TURN_HOLDS = ("left", "right")
+OUTPUT_MIN = 0.95
+GAP_MAX_MS = 100.0  # the longest pacing not-ok stretch in a direct hold, and the longest no-output stretch after output
+TURN_FIRST_MAX_MS = 100.0
 
 
 def _load(path: Path) -> list:
@@ -75,7 +93,9 @@ def _modes(ticks: list) -> dict:
         if seg is not None and ticks:
             span_sim += ticks[-1]["tick_t"] - seg["tick_t"]
             span_wall += ticks[-1]["mono"] - seg["mono"]
-        out[m] = {"ratio": sim / wall if wall else None, "ratio_span": span_sim / span_wall if span_wall else None,
+        drops = sum(1 for a, b in zip(ticks, ticks[1:]) if a["mode"] == m and b["mode"] == m
+                    and a["pacing_ok"] and not b["pacing_ok"])
+        out[m] = {"pacing_drops": drops, "ratio": sim / wall if wall else None, "ratio_span": span_sim / span_wall if span_wall else None,
                   "sim_s": sim, "gap_wall_s": gap, "ok_ticks": ok_n / n if n else None,
                   "ok_wall": ok_wall / tot_wall if tot_wall else None, "longest_not_ok_s": longest}
     return out
@@ -101,7 +121,22 @@ def _holds(probe: dict, ticks: list) -> list:
         def ms(r):
             return None if r is None else (r["mono"] - t0) * 1e3
 
+        longest = cur = 0.0
+        for a, b in pairs:
+            cur = 0.0 if a["pacing_ok"] else cur + (b["mono"] - a["mono"])
+            longest = max(longest, cur)
+        # the longest stretch without output once the hold has output (a stutter), and the pacing failures in it
+        quiet = cur = 0.0
+        started = False
+        for a, b in pairs:
+            moving = abs(a.get("speed_mps") or 0.0) > 1e-6
+            started = started or moving
+            cur = 0.0 if (moving or not started) else cur + (b["mono"] - a["mono"])
+            quiet = max(quiet, cur)
+        drops = sum(1 for a, b in pairs if a["pacing_ok"] and not b["pacing_ok"])
         out.append({"label": h.get("label"), "lift_dir": h.get("lift_dir"), "mode_kind": h.get("mode"),
+                    "longest_not_ok_ms": longest * 1e3, "longest_quiet_after_output_ms": quiet * 1e3,
+                    "pacing_drops": drops,
                     "wall_s": wall, "ok_at_start": win[0]["pacing_ok"] if win else None,
                     "ok_share": (sum(b["mono"] - a["mono"] for a, b in pairs if a["pacing_ok"]) / wall
                                  if wall else None),
@@ -135,17 +170,155 @@ def _timers(recs: list, ticks: list) -> dict:
                 for k, e in a["keys"].items()} for m, a in acc.items() if a["wall"]}
 
 
-def session(sd: Path) -> dict:
+def _spans(ticks: list, mode: str) -> list:
+    """(first, last) sim time of each run of consecutive ticks in mode."""
+    out, prev = [], None
+    for r in sorted(ticks, key=lambda r: r["tick_t"]):
+        if r["mode"] == mode:
+            if prev == mode:
+                out[-1][1] = r["tick_t"]
+            else:
+                out.append([r["tick_t"], r["tick_t"]])
+        prev = r["mode"]
+    return [tuple(x) for x in out]
+
+
+def _windows(run: Path, ticks: list, factor: float) -> dict | None:
+    path = run / "tick_trace.npz"
+    if not path.exists():
+        return None
+    sys.path.insert(0, str(REPO / "sim" / "isaac"))
+    from tick_trace import COLUMNS
+
+    c = {n: i for i, n in enumerate(COLUMNS)}
+    with np.load(path) as z:
+        data = z["data"]
+    data = data[np.isfinite(data[:, c["S"]])]
+    sim = data[:, c["tick"]] * DT
+    end = np.where(np.isfinite(data[:, c["step_end"]]), data[:, c["step_end"]], data[:, c["S"]])
+    win = np.full(len(end), np.nan)
+    j = 0
+    for i in range(len(end)):  # the pacer's window: steps over the wall between step ends, at least half full
+        while end[i] - end[j] > 1.0:
+            j += 1
+        if end[i] - end[j] >= 0.5:
+            win[i] = (i - j) * DT / (end[i] - end[j])
+    tele = np.zeros(len(end), dtype=bool)
+    for a, b in _spans(ticks, "TELEOP"):
+        tele |= (sim >= a - 1e-9) & (sim <= b + 1e-9)
+    w = win[tele & np.isfinite(win)]
+    thr = 0.9 * factor
+    return {"threshold": thr, "teleop_steps": int(len(w)), "teleop_min": float(w.min()) if len(w) else None,
+            "teleop_p1": float(np.percentile(w, 1)) if len(w) else None,
+            "teleop_below": int((w < thr).sum())}
+
+
+def _safety(run: Path, ticks: list) -> dict:
+    out = {"result": False, "teleop_rows": 0, "teleop_overlap_ticks": 0, "teleop_min_clearance_m": None,
+           "teleop_min_clearance_loaded_m": None, "unevaluated": []}
+    try:
+        res = json.loads((run / "result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        out["unevaluated"].append("no result.json")
+        return out
+    out["result"] = True
+    lay = res.get("obstacle_layer") or {}
+    out.update(scene_damaged=res.get("scene_damaged"), forbidden_pocket_contacts=len(res.get("forbidden_pocket_contacts")
+                                                                                     or []),
+               unpermitted_auto=int(lay.get("unpermitted_entries") or 0) + int(lay.get("unpermitted_dir_entries") or 0),
+               success=res.get("success"))
+    sys.path.insert(0, str(REPO / "src"))
+    from forklift_core.control.low_clearance import shape_clearance
+    from forklift_core.live.spool import load_list
+    from forklift_core.planning.geometry import Footprint, Rectangle
+
+    try:
+        rows = load_list(run / "spool", "slam.control")
+    except (OSError, ValueError, KeyError) as e:
+        out["unevaluated"].append(f"slam.control: {e}")
+        return out
+    g = res.get("geometry") or {}
+    hull, loaded = Footprint(**g["unloaded_footprint"]), Footprint(**g["loaded_footprint"])
+    rects = [Rectangle(float(o["x_m"]), float(o["y_m"]), float(o["length_m"]), float(o["width_m"]),
+                       float(o["yaw_rad"])) for o in (res.get("scene_layout") or {}).get("obstacles") or []]
+    spans = _spans(ticks, "TELEOP")
+    lo = lo_l = math.inf
+    for r in rows:
+        t = float(r[0])
+        if not any(a - 1e-9 <= t <= b + 1e-9 for a, b in spans):
+            continue
+        out["teleop_rows"] += 1
+        if not rects:
+            continue
+        pose = (float(r[4]), float(r[5]), float(r[6]))
+        d = shape_clearance(pose, hull, rects)
+        lo, lo_l = min(lo, d), min(lo_l, shape_clearance(pose, loaded, rects))
+        out["teleop_overlap_ticks"] += 1 if d <= 0.0 else 0
+    if out["teleop_rows"]:
+        out["teleop_min_clearance_m"] = None if math.isinf(lo) else float(lo)
+        out["teleop_min_clearance_loaded_m"] = None if math.isinf(lo_l) else float(lo_l)
+    return out
+
+
+def session(sd: Path, factor: float | None = None) -> dict:
     sd = Path(sd)
     name = sd.parent.name if sd.name == "s" else sd.name
-    recs = _load(sd / "live" / "epoch_1" / "run" / "live_log.jsonl")
+    run = sd / "live" / "epoch_1" / "run"
+    recs = _load(run / "live_log.jsonl")
     ticks = sorted((r for r in recs if {"tick_t", "mode", "pacing_ok", "mono"} <= set(r)), key=lambda r: r["mono"])
     probe = json.loads((sd / "probe.json").read_text(encoding="utf-8"))
     ps = sd.parent.parent / f"{name}_ps.jsonl" if sd.name == "s" else sd.parent / f"{name}_ps.jsonl"
     rows = [r for r in _load(ps) if "other_cores" in r] if ps.exists() else []
     overlap = sum(1 for r in rows if r["other_cores"] > OVERLAP_CORES) / len(rows) if rows else None
     return {"session": name, "modes": _modes(ticks), "holds": _holds(probe, ticks), "timers": _timers(recs, ticks),
-            "overlap": overlap}
+            "overlap": overlap, "safety": _safety(run, ticks),
+            "windows": None if factor is None else _windows(run, ticks, factor)}
+
+
+def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05) -> dict:
+    """The registered rules (plan 3): every kept session's TELEOP has no pacing failure (an ok tick followed by a
+    not-ok one); every direct drive hold outputs at least 0.95 of its wall time and, once it has output, never stops
+    for over 100 ms; no direct hold (driving or lifting) has a pacing not-ok stretch over 100 ms; a turn hold that
+    starts with pacing ok answers within 100 ms; no safety record. A session over the overlap rule, a missing record
+    or hold kind is unevaluated, and an unevaluated verdict never passes."""
+    failures, unevaluated, left_out = [], [], []
+    for s in sessions:
+        name = s["session"]
+        if (s.get("overlap") or 0.0) > overlap_max:
+            left_out.append(name)
+            continue
+        if (s.get("modes") or {}).get("TELEOP", {}).get("pacing_drops"):
+            failures.append({"rule": "pacing_drops", "session": name, "value": s["modes"]["TELEOP"]["pacing_drops"]})
+        direct = [h for h in s["holds"] if h.get("mode_kind") == "direct"]
+        for kind in DRIVE_HOLDS:
+            if not any(h["label"] == kind for h in direct):
+                unevaluated.append({"session": name, "missing_hold": kind})
+        for h in direct:
+            lab = h["label"]
+            if lab in DRIVE_HOLDS and (h["output_share"] is None or h["output_share"] < OUTPUT_MIN):
+                failures.append({"rule": "hold_output", "session": name, "hold": lab, "value": h["output_share"]})
+            if lab in DRIVE_HOLDS and (h.get("longest_quiet_after_output_ms") or 0.0) > GAP_MAX_MS:
+                failures.append({"rule": "output_stutter", "session": name, "hold": lab,
+                                 "value": h["longest_quiet_after_output_ms"]})
+            if h.get("longest_not_ok_ms") is None or h["longest_not_ok_ms"] > GAP_MAX_MS:
+                failures.append({"rule": "pacing_gap", "session": name, "hold": lab, "value": h.get("longest_not_ok_ms")})
+            if lab in TURN_HOLDS and h["ok_at_start"] and (h["first_output_ms"] is None
+                                                           or h["first_output_ms"] > TURN_FIRST_MAX_MS):
+                failures.append({"rule": "turn_first_output", "session": name, "hold": lab,
+                                 "value": h["first_output_ms"]})
+        safe = s.get("safety") or {}
+        if not safe.get("result") or not safe.get("teleop_rows") or safe.get("unevaluated"):
+            unevaluated.append({"session": name, "safety": safe.get("unevaluated") or "no truth rows in TELEOP"})
+        bad = {k: safe.get(k) for k in ("scene_damaged", "forbidden_pocket_contacts", "unpermitted_auto",
+                                        "teleop_overlap_ticks") if safe.get(k)}
+        if bad:
+            failures.append({"rule": "safety", "session": name, "value": bad})
+    kept = [s for s in sessions if s["session"] not in left_out]
+    if not kept:
+        unevaluated.append({"sessions": "none kept"})
+    return {"factor": factor, "pass": not failures and not unevaluated, "failures": failures,
+            "unevaluated": unevaluated, "left_out": left_out,
+            "windows": {s["session"]: s.get("windows") for s in kept}}
 
 
 def _med(values):
@@ -185,10 +358,16 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("sessions", nargs="+")
     ap.add_argument("--overlap-max", type=float, default=0.05)
+    ap.add_argument("--factor", type=float, help="the sessions' declared factor (pacing windows; needed by --verdict)")
+    ap.add_argument("--verdict", action="store_true", help="judge by the smoothness confirmation's registered rules")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
-    per = [session(Path(p)) for p in args.sessions]
+    if args.verdict and args.factor is None:
+        ap.error("--verdict needs --factor")
+    per = [session(Path(p), args.factor) for p in args.sessions]
     out = {"summary": summarize(per, args.overlap_max), "sessions": per}
+    if args.verdict:
+        out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max)
     text = json.dumps(out, indent=1, default=float)
     if args.json:
         Path(args.json).write_text(text + "\n", encoding="utf-8")
