@@ -319,6 +319,12 @@ def session(sd: Path, factor: float | None = None) -> dict:
     sys.path.insert(0, str(REPO / "src"))
     from forklift_core.live.spool import read_live_log
 
+    # a session whose run left no live log or probe record (an infrastructure failure before it started): a stub that
+    # the verdict can leave out (--overlapped) or report unevaluated, never a crash (2nd registration, Codex P2-3)
+    missing = [str(p) for p in (run / "live_log.jsonl", sd / "probe.json") if not p.exists()]
+    if missing:
+        return {"session": name, "missing": missing, "modes": {}, "holds": [], "timers": {}, "overlap": None,
+                "log_error": None, "safety": {}, "windows": None}
     log_error = None
     try:
         recs = read_live_log(run)  # refuses a log that lost lines or parts (Codex registration P2-2)
@@ -344,6 +350,8 @@ def _session_problems(s: dict, budget_on: bool = False) -> list:
     """What keeps a session from being judged at all (Codex registration P2-2): a missing or incomplete record, a
     missing hold, a hold its ticks do not cover."""
     out = []
+    if s.get("missing"):
+        return [f"no record: {m}" for m in s["missing"]]
     if s.get("overlap") is None:
         out.append("no CPU sampler rows")
     if s.get("log_error"):
@@ -508,7 +516,7 @@ def main(argv=None) -> int:
     if args.verdict and (args.factor is None or not args.slots):
         ap.error("--verdict needs --factor and --slots")
     per = [session(Path(p), args.factor) for p in args.sessions]
-    out = {"summary": summarize(per, args.overlap_max), "sessions": per}
+    out = {"summary": summarize([s for s in per if not s.get("missing")], args.overlap_max), "sessions": per}
     if args.verdict:
         out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max,
                                  slots=[x for x in args.slots.split(",") if x],
@@ -516,7 +524,8 @@ def main(argv=None) -> int:
                                  budget_on=args.budget_on)
         # the summary of the sessions the verdict judged (a rerun it did not pick is left out; Codex round 3 P3)
         picked = set(out["verdict"]["judged"].values())
-        out["summary"] = summarize([s for s in per if s["session"] in picked], args.overlap_max)
+        out["summary"] = summarize([s for s in per if s["session"] in picked and not s.get("missing")],
+                                   args.overlap_max)
     text = json.dumps(out, indent=1, default=float)
     if args.json:
         Path(args.json).write_text(text + "\n", encoding="utf-8")

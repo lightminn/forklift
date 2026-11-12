@@ -347,3 +347,22 @@ def test_the_safety_record_reads_the_layer_budget(tmp_path):
     lb = tr.session(sd)["safety"]["layer_budget"]
     assert lb["budget_s"] == 0.1 and lb["invariant_violations"] == 0 and lb["latency_record"] is True
     assert lb["watchdog"]["events"] == 1
+
+
+def test_a_run_with_no_record_is_a_stub_its_rerun_can_stand_in_for(tmp_path):
+    """2nd registration (Codex P2-3): an original that an infrastructure failure left without a live log or probe is
+    read as a stub; listed --overlapped it is left out and its rerun judged; otherwise it is unevaluated, never a
+    crash."""
+    reg = ["t01_l04_r1", "t10_l04_r2", "t11_l04_r3"]
+    dead = tmp_path / "t10_l04_r2" / "s"
+    (dead / "live" / "epoch_1" / "run").mkdir(parents=True)
+    stub = tr.session(dead)
+    assert stub["missing"] and stub["session"] == "t10_l04_r2"
+    base = copy_ok(judged(tmp_path, "ts_x"))
+    a, c, re = (copy_ok(base, n) for n in ("t01_l04_r1", "t11_l04_r3", "t10_l04_r2_re"))
+    v = tr.verdict([a, stub, c, re], factor=0.4, slots=reg, overlapped=("t10_l04_r2",))
+    assert v["pass"] is True and v["judged"]["t10_l04_r2"] == "t10_l04_r2_re"
+    v2 = tr.verdict([a, stub, c], factor=0.4, slots=reg)
+    assert v2["pass"] is False and any("no record" in p for u in v2["unevaluated"] for p in u.get("problems", []))
+    out = tmp_path / "o.json"  # the command line reads it too, without a crash
+    assert tr.main([str(dead), "--json", str(out)]) == 0
