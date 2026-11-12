@@ -177,6 +177,7 @@ README에는 프로젝트가 요구하는 버전과 설치·실행 절차를 적
 - 시나리오 이름은 `case_a_straight`, `case_b_curved`, `case_c_reverse`, `case_d_rear_obstacle`로 통일한다. 입력 조건과 기대 행동도 같이 명시한다.
 - 무작위 시험은 seed를 저장한다. 기대값을 구현 함수로 다시 계산하지 않는다. 경계·반례·실패 처리와 사용자가 관찰하는 결과를 검증한다.
 - 시뮬레이션·ROS·장치 의존 시험은 `simulation`, `ros`, `hardware` marker 등으로 의존성을 드러내고 별도 명령/CI job에서 실행한다. 필요한 환경이 없으면 skip 사유와 개수를 보고하며 pass로 세지 않는다.
+- Isaac 실행에서만 도는 러너 경로(`sim/isaac/run_transport.py` 의 설정·초기화·제어 틱)를 바꾸면서 그 경로를 런처 기본으로 켜는 PR 은, 머지 전에 그 경로를 지나는 Isaac smoke 를 1 회 이상 돌려 결과를 PR 에 적는다. 재생 게이트는 기록된 인자로 재생해 새 기본값을 거치지 않고, 단위시험은 Isaac 을 띄우지 않는다. 미정의 이름은 `tests/unit/test_no_undefined_names.py`(ruff F821/F823)가 막지만 런타임 오류는 smoke 로만 드러난다(#442 의 층 지연 예산이 시작 27 s 에 모든 예산 실행을 끝낸 사례, 2026-11-12).
 - 기본 검사 흐름은 Ruff lint → Ruff format check → 단위·로컬 통합시험이다. 패키지 레이아웃·의존성·배포 경로를 바꾸면 설치된 wheel을 소스 트리 밖에서 import/실행하는 검사도 한다. 운용 콘솔의 웹 모듈은 `node --test "console/web/test/*.test.mjs"`로 시험한다(Node 18 이상; Node 22는 디렉터리 인자를 받지 않는다). 브라우저 화면은 자동 시험 범위 밖이므로 변경 시 렌더 확인을 남긴다.
 - CI는 로컬과 같은 명령을 사용한다. ROS·Jetson·센서 장치가 필요한 job을 기본 Python job의 성공으로 대체하지 않는다.
 
