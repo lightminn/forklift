@@ -274,6 +274,12 @@ def _safety(run: Path, ticks: list) -> dict:
     out["result"] = True
     out.update(scene_damaged=res.get("scene_damaged"), forbidden_pocket_contacts=len(res["forbidden_pocket_contacts"]),
                unpermitted_auto=lay["unpermitted_entries"] + lay["unpermitted_dir_entries"], success=res.get("success"))
+    # the layer latency budget (2nd registration, Codex P2): what was applied, its invariant and watchdog record
+    lb = res.get("layer_budget")
+    out["layer_budget"] = None if not isinstance(lb, dict) else {
+        "budget_s": lb.get("budget_s"), "source": lb.get("source"),
+        "invariant_violations": lb.get("invariant_violations"), "watchdog": lb.get("watchdog"),
+        "latency_record": (run / "layer_latency.json").exists()}
     sys.path.insert(0, str(REPO / "src"))
     from forklift_core.control.low_clearance import shape_clearance
     from forklift_core.live.spool import load_list
@@ -334,7 +340,7 @@ def slot_of(name: str) -> str:
     return name[:-3] if name.endswith("_re") else name
 
 
-def _session_problems(s: dict) -> list:
+def _session_problems(s: dict, budget_on: bool = False) -> list:
     """What keeps a session from being judged at all (Codex registration P2-2): a missing or incomplete record, a
     missing hold, a hold its ticks do not cover."""
     out = []
@@ -356,6 +362,13 @@ def _session_problems(s: dict) -> list:
     safe = s.get("safety") or {}
     if not safe.get("result") or not safe.get("teleop_rows") or safe.get("unevaluated"):
         out.append(f"safety: {safe.get('unevaluated') or 'no truth rows in TELEOP'}")
+    if budget_on:  # the budget the registration asks for must be the one applied, with its records
+        lb = safe.get("layer_budget")
+        if not lb or not (isinstance(lb.get("budget_s"), (int, float)) and lb["budget_s"] > 0):
+            out.append("layer budget: not applied (no layer_budget record with a budget)")
+        elif not isinstance(lb.get("invariant_violations"), int) or not isinstance(lb.get("watchdog"), dict) \
+                or not lb.get("latency_record"):
+            out.append("layer budget: its invariant count, watchdog record or layer_latency.json is missing")
     return out
 
 
@@ -382,13 +395,16 @@ def _session_failures(s: dict) -> list:
     safe = s.get("safety") or {}
     bad = {k: safe.get(k) for k in ("scene_damaged", "forbidden_pocket_contacts", "unpermitted_auto",
                                     "teleop_overlap_ticks") if safe.get(k)}
+    inv = (safe.get("layer_budget") or {}).get("invariant_violations")
+    if isinstance(inv, int) and inv > 0:  # a command left standing through a watchdog stop (core.py), budget on
+        bad["layer_budget_invariant_violations"] = inv
     if bad:
         out.append({"rule": "safety", "session": name, "value": bad})
     return out
 
 
 def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: list | None = None,
-            overlapped: tuple = ()) -> dict:
+            overlapped: tuple = (), budget_on: bool = False) -> dict:
     """The registered rules (plan 3). Every slot (a registered session; its one rerun, ``<name>_re``, stands in only
     when the original is over the overlap rule) must hold one session that is valid and judged, and ``slots`` of
     them must be judged; a judged session passes when TELEOP has no pacing failure (an ok tick followed by a not-ok
@@ -428,7 +444,7 @@ def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: 
         if chosen is None:
             unevaluated.append({"slot": slot, "problem": "every run of the slot over the overlap rule"})
             continue
-        problems = _session_problems(chosen)
+        problems = _session_problems(chosen, budget_on)
         if problems:
             unevaluated.append({"slot": slot, "session": chosen["session"], "problems": problems})
             continue
@@ -485,6 +501,8 @@ def main(argv=None) -> int:
     ap.add_argument("--overlapped", default="",
                     help="sessions a same-account job of another project overlapped (sacct), comma separated: "
                          "treated as over the overlap rule")
+    ap.add_argument("--budget-on", action="store_true",
+                    help="the sessions ran with the layer latency budget: its record is required (2nd registration)")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
     if args.verdict and (args.factor is None or not args.slots):
@@ -494,7 +512,8 @@ def main(argv=None) -> int:
     if args.verdict:
         out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max,
                                  slots=[x for x in args.slots.split(",") if x],
-                                 overlapped=tuple(x for x in args.overlapped.split(",") if x))
+                                 overlapped=tuple(x for x in args.overlapped.split(",") if x),
+                                 budget_on=args.budget_on)
         # the summary of the sessions the verdict judged (a rerun it did not pick is left out; Codex round 3 P3)
         picked = set(out["verdict"]["judged"].values())
         out["summary"] = summarize([s for s in per if s["session"] in picked], args.overlap_max)

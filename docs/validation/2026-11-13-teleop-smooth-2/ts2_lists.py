@@ -48,6 +48,8 @@ def jobs(snap: str, out: str) -> list[dict]:
 
 def reruns(snap: str, out: str, names: list) -> list[dict]:
     by_name = {j["name"]: j for j in jobs(snap, out)}
+    if len(set(names)) != len(names):
+        raise SystemExit(f"{names}: a name given twice (one rerun per slot)")
     rows = []
     for n in names:
         if n not in by_name:

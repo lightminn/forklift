@@ -311,3 +311,39 @@ def test_the_pacing_windows_are_read_from_the_tick_trace(tmp_path):
     assert w["teleop_min"] == pytest.approx(0.9, abs=0.01)  # TELEOP runs at 0.9 of real time
     assert w["teleop_below"] > 0 and w["threshold"] == pytest.approx(0.99)
     assert tr.session(sd, factor=0.9)["windows"]["teleop_below"] == 0
+
+
+def test_the_budget_on_verdict_needs_the_budget_records_and_fails_an_invariant_violation(tmp_path):
+    """2nd registration (Codex P2): with --budget-on the applied budget, its invariant count, watchdog record and
+    layer_latency.json are required; a positive invariant count fails a session either way."""
+    base = copy_ok(judged(tmp_path, "ts_b"))
+    assert base["safety"]["layer_budget"] is None  # make_session's result.json carries no budget
+    v = tr.verdict([base], factor=0.4, budget_on=True)
+    assert v["pass"] is False and any("not applied" in p for u in v["unevaluated"] for p in u.get("problems", []))
+    assert tr.verdict([base], factor=0.4)["pass"] is True  # the 1st registration's sessions: no budget asked
+    lb = {"budget_s": 0.1, "source": "config/layer_latency_budget.yaml", "invariant_violations": 0,
+          "watchdog": {"events": 2, "longest_s": 0.3}, "latency_record": True}
+    ok = dict(base, safety=dict(base["safety"], layer_budget=lb))
+    assert tr.verdict([ok], factor=0.4, budget_on=True)["pass"] is True
+    for missing in ({**lb, "latency_record": False}, {**lb, "watchdog": None}, {**lb, "invariant_violations": None},
+                    {**lb, "budget_s": 0.0}):
+        bad = dict(base, safety=dict(base["safety"], layer_budget=missing))
+        assert tr.verdict([bad], factor=0.4, budget_on=True)["unevaluated"], missing
+    broke = dict(base, safety=dict(base["safety"], layer_budget={**lb, "invariant_violations": 1}))
+    for on in (True, False):
+        assert [c["rule"] for c in tr.verdict([broke], factor=0.4, budget_on=on)["failures"]] == ["safety"]
+
+
+def test_the_safety_record_reads_the_layer_budget(tmp_path):
+    sd = make_session(tmp_path, "ts_lb")
+    add_records(sd, rows=teleop_rows(sd), obstacles=[(3.0, 0.0)])
+    run = sd / "live/epoch_1/run"
+    res = json.loads((run / "result.json").read_text())
+    res["layer_budget"] = {"budget_s": 0.1, "invariant_violations": 0, "overdue_end_s": 1.0, "source": "x",
+                           "watchdog": {"events": 1, "ticks": 3, "longest_s": 0.2, "total_s": 0.2,
+                                        "longest_event_s": 0.2}}
+    (run / "result.json").write_text(json.dumps(res))
+    (run / "layer_latency.json").write_text("{}")
+    lb = tr.session(sd)["safety"]["layer_budget"]
+    assert lb["budget_s"] == 0.1 and lb["invariant_violations"] == 0 and lb["latency_record"] is True
+    assert lb["watchdog"]["events"] == 1
