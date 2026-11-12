@@ -310,7 +310,9 @@ def test_a_number_a_float_cannot_hold_is_never_keyed():
 
 @pytest.mark.parametrize("value,keyed", [(0.5, True), (3, True), (np.float32(0.5), True), (np.float16(0.5), True),
                                          (np.int64(3), True), (np.longdouble(0.5), False), (True, False),
-                                         (2 ** 60 + 1, False), ("0.5", False)])
+                                         (2 ** 60 + 1, False), ("0.5", False), (2 ** 53, True),
+                                         (np.int64(2 ** 53 + 1), False), (np.uint64(2 ** 53 + 1), False),
+                                         (np.int64(-(2 ** 53) - 1), False), (2 ** 53 + 1, False)])
 def test_only_numbers_a_float_holds_exactly_are_keyed(value, keyed):
     if keyed:
         assert dp._scalar(value)[0] == type(value).__name__

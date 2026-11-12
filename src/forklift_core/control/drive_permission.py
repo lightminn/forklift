@@ -302,8 +302,8 @@ def _scalar(v) -> tuple:
         raise _Uncacheable(type(v).__name__)
     if isinstance(v, np.floating) and np.dtype(type(v)).itemsize > 8:
         raise _Uncacheable(type(v).__name__)
-    if isinstance(v, (int, np.integer)) and float(v) != v:
-        raise _Uncacheable(type(v).__name__)  # an integer past 2**53
+    if isinstance(v, (int, np.integer)) and abs(int(v)) > 2 ** 53:
+        raise _Uncacheable(type(v).__name__)  # an integer past 2**53: compared as Python ints (Codex round 3 P2)
     return type(v).__name__, float(v).hex()
 
 
