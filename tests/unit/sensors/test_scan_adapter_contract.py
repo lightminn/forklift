@@ -73,6 +73,7 @@ def test_sending_with_no_receiver_drops_without_blocking(tmp_path):
     for k in range(50):
         assert sender.send(b"x" * 1000) is False
     assert time.monotonic() - t0 < 0.5 and sender.dropped == 50 and sender.sent == 0
+    sender.close()
 
 
 def test_a_full_receiver_drops_and_a_reader_gets_whole_frames(tmp_path):
@@ -89,6 +90,7 @@ def test_a_full_receiver_drops_and_a_reader_gets_whole_frames(tmp_path):
         assert sender.sent > 0 and sender.dropped > 0
         data = rx.recv(sf.RECV_BYTES)
         assert data == frame  # a datagram is whole or absent
+        sender.close()
     finally:
         rx.close()
 

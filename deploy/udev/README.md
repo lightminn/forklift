@@ -6,7 +6,9 @@
 - tells ModemManager to leave the port alone (`ID_MM_DEVICE_IGNORE=1`) — its AT probes would otherwise reach the
   MCU's frame decoder (they are thrown away by the CRC, but they cost the link);
 - names the port `/dev/forklift-mcu` (and `/dev/forklift-mcu-<serial>`, the MCU's UID, when several are plugged in);
-- lets the `dialout` group open it.
+- keeps it group-readable and writable (`MODE=0660`) without naming a group, so the distribution's own serial
+  group stays: `dialout` on Ubuntu and Jetson (JetPack), `uucp` on Arch (a `GROUP` the system lacks is ignored with
+  an error, 2026-11-12 on the Arch laptop).
 
 The rule is a host-side premise of the firmware's link design (`docs/design/2026-11-12-weact-h743-board-firmware.md`
 section 5). The other two live in `tools/real_mcu_link.py`: DTR is never lowered after the open, and every opening
@@ -22,7 +24,8 @@ sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=tty --subsystem-match=usb
 ```
 
-Your user must be in `dialout` (`groups`; else `sudo usermod -aG dialout $USER` and log in again).
+Your user must be in the serial group: `dialout` on Ubuntu/Jetson, `uucp` on Arch (`groups`; else
+`sudo usermod -aG <group> $USER` and log in again). `stat -c %G /dev/ttyACM0` shows the port's group.
 
 ## Check (with the MCU plugged in)
 

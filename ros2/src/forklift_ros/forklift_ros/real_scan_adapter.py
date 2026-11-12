@@ -82,6 +82,9 @@ class DatagramSender:
         self.sent += 1
         return True
 
+    def close(self) -> None:
+        self.sock.close()
+
 
 def main(argv=None) -> int:
     import argparse
@@ -120,6 +123,7 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        node.sender.close()
         node.destroy_node()
         rclpy.try_shutdown()
     return 0

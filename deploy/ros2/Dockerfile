@@ -23,6 +23,17 @@ RUN apt-get update \
         ros-jazzy-slam-toolbox \
     && rm -rf /var/lib/apt/lists/*
 
+# The real A2M12 driver (bring-up 7a, docs/design/2026-11-12-real-scan-obstacle-layer.md 1.1), pinned by commit.
+# Its stamp is taken before it fetches a scan (not the acquisition time); the design records what that means.
+ARG SLLIDAR_ROS2_COMMIT=34300099fadfc772965962dec837bf436706188f
+RUN git clone https://github.com/Slamtec/sllidar_ros2.git /opt/sllidar_ws/src/sllidar_ros2 \
+    && git -C /opt/sllidar_ws/src/sllidar_ros2 checkout --detach "${SLLIDAR_ROS2_COMMIT}" \
+    && rm -rf /opt/sllidar_ws/src/sllidar_ros2/.git \
+    && source /opt/ros/jazzy/setup.bash \
+    && cd /opt/sllidar_ws \
+    && colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && rm -rf /opt/sllidar_ws/build /opt/sllidar_ws/log
+
 # Noble's ROS base image already has an ubuntu account at UID/GID 1000. Reuse
 # that numeric identity when it matches, and create an account for other host IDs.
 RUN set -eux; \

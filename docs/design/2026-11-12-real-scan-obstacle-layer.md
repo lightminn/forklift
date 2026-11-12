@@ -32,11 +32,18 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
   3. 그 값을 메시지로 꺼낼 수 있는지 본다. 필요하면 노드를 작게 고친 사본(fork, 커밋 고정)을 둔다.
   4. **드라이버 정체·버퍼 지연 주입 시험**으로 스캔 나이 추정이 늦은 스캔을 신선하다고 하지 않는지 검증한다.
 - 그 전까지 ⑦a 의 지연 수치는 **'stamp → 수신'** 으로만 이름 붙인다. 취득 나이라고 부르지 않는다.
+- **고정 커밋에서 확인한 것**(2026-11-12, `34300099`, 2024-06-17 — 이미지가 이 커밋을 쓴다):
+  - 노드(`src/sllidar_node.cpp` 362–365 행)는 `grabScanDataHq()` 직전의 `this->now()` 를 `header.stamp` 로, 호출 전후 차이를 `scan_time` 으로 낸다. 1.1 의 사실 그대로다.
+  - SDK 에는 `grabScanDataHqWithTimeStamp` 가 있다(`sdk/src/sl_lidar_driver.cpp` 783 행). 그 값은 **스캔 첫 표본의 시각**이다(`_scan_begin_timestamp_uS`, 293 행).
+  - 이 시각은 호스트 `CLOCK_MONOTONIC`(`arch/linux/timer.cpp`)으로 디코드한 시각에서 표본·필터·전송·묶음 지연 모형을 뺀 값이다(`handler_hqnode.cpp` 등). `native_timestamp_support = false` 라 장치 시각이 아니다.
+  - 컨테이너는 호스트 커널의 단조 시계를 같이 쓴다. 그래서 이 값은 다리의 단조 시계에서 **취득 시작의 추정치**로 쓸 수 있다. 다만 노드가 이 값을 내지 않으므로, 쓰려면 노드를 고친 사본이 필요하다. 이 결정은 ⑦b(3절 1)에서 한다.
+  - A2M12 launch 기본값: `serial_baudrate` 256000, `scan_mode` Sensitivity, `angle_compensate` true, `frame_id` laser. upstream launch 파일 이름에 공백이 있어(`sllidar_a2m12_launch .py`) 런처는 `ros2 run` 으로 같은 인자를 준다.
+  - 각도: 노드가 `angle_min = π − angle_max` 로 ROS 규약(반시계)에 맞춘다. 거리 0 은 `inf` 로 내고, `range_min` 은 0.05 m 로 고정이다. `ScanFeed` 에서는 둘 다 NaN 이다.
 - 원시 토픽은 `/sensors/lidar/scan_raw` 로 remap 한다(2.1 토픽 소유).
-- 포트는 udev 규칙으로 고정 이름(`/dev/forklift-lidar`)을 준다. VID/PID 는 연결 뒤 확인한다. USB-UART 의 `latency_timer` 값도 함께 기록한다(agy).
+- 포트는 udev 규칙으로 고정 이름(`/dev/forklift-lidar`)을 준다. 연결 뒤 VID/PID·일련번호를 확인해서 규칙을 만든다. 흔한 USB-UART 칩(예: CP2102)은 다른 장치와 VID/PID 를 같이 쓰므로, 일련번호 없이 맞추지 않는다. `GROUP` 은 정하지 않는다(배포판마다 직렬 그룹이 다름: Ubuntu/Jetson dialout, Arch uucp). USB-UART 의 `latency_timer` 값도 함께 기록한다(agy).
 
 ### 1.2 어댑터 (`ros2/src/forklift_ros/forklift_ros/real_scan_adapter.py`, ROS 컨테이너)
-- `/sensors/lidar/scan_raw` 를 구독해 메시지마다 한 프레임을 Unix 소켓(SOCK_SEQPACKET, 경로는 인자)으로 보낸다. 받는 쪽이 없거나 느리면 **그 스캔을 버리고 센다**(막고 기다리지 않음).
+- `/sensors/lidar/scan_raw` 를 구독해 메시지마다 한 프레임을 **Unix 데이터그램 소켓**(경로는 인자, 호스트가 bind)으로 보낸다. 데이터그램이라 한 프레임은 통째로 가거나 안 간다. 받는 쪽이 없거나(`ENOENT`·`ECONNREFUSED`) 가득 차면(`EAGAIN`) **그 스캔을 버리고 센다**(막고 기다리지 않음). 1판의 SEQPACKET 은 연결 수락이 필요해 데이터그램으로 바꿨다.
 - 프레임 `scan/1`:
   - 머리(JSON): `scan_id`(어댑터 단조 증가), `ros_stamp_ns`(드라이버 stamp 그대로), `recv_mono_ns`(수신 `CLOCK_MONOTONIC`), `sys_minus_mono_ns`(그 순간 시스템 시각 − 단조 시각), `angle_min`, `angle_increment`, `time_increment`, `scan_time`, `range_min`, `range_max`, `frame_id`, `n`, 1.1 에서 꺼낸 SDK timestamp(있으면).
   - 본문: `ranges`(f32 × n), `intensities`(있으면 f32 × n).
@@ -68,10 +75,11 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
 # 1. 장치 정보 (꽂은 뒤)
 ls -l /dev/serial/by-id/
 # 2. 드라이버+어댑터 (ROS 컨테이너), 다른 창에서 확인 도구
+docker build -t forklift/ros2-dev:jazzy -f deploy/ros2/Dockerfile .      # 한 번(sllidar_ros2 포함)
+python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 30 --record a2m12_first.scan.jsonl &
 tools/ros2_dev.sh scan-a2m12 /dev/ttyUSB0
-python tools/scan_check.py --socket /tmp/forklift-scan.sock --seconds 30 --record a2m12_first.scan.jsonl
 # 3. 각도 확인: 라이다 오른쪽 30 cm 에 상자를 두고
-python tools/scan_check.py --socket /tmp/forklift-scan.sock --seconds 5 --probe right
+python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 5 --probe right
 ```
 - 포트·보율·스캔 모드는 1 의 출력과 sllidar_ros2 의 A2M12 launch 기본값으로 정한다. 나머지는 내가 직접 확인한다(총괄 지시).
 - ⑦a 의 합격은 **연결과 정적 경로**다(실차 문턱을 정하지 않음, Codex P2-8):
