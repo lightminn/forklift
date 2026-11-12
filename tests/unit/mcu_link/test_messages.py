@@ -24,23 +24,24 @@ from forklift_core.mcu_link.messages import (
     wheel_count_delta,
 )
 
-# mcu-link/2 contract section 6 golden vectors.
-ARM_1234 = "0e02023412efbeadde04030201050101033bad00"
+# mcu-link/3 contract section 6 golden vectors (v3: every vector remade, the version is in every CRC).
+ARM_1234 = "0e03023412efbeadde04030201050101031f0500"
 DRIVE_0007 = (
-    "04020107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab020101010374b200"
+    "04030107010103c03f010310c00101073e9a99993e960b010302efbeaddeefcdab0201"
+    "0101033f4600"
 )
-CLEAR_0008 = "0402040807efbeadde778600"
-DISARM_0009 = "0402030903608a00"
-COMMISSION_000A = "0402050a050224fa960a0302efbeaddeefcdab0201010103742000"
+CLEAR_0008 = "0403040807efbeaddea4c100"
+DISARM_0009 = "0403030903d4fc00"
+COMMISSION_000A = "0403050a050224fa960a0302efbeaddeefcdab02010101037f4500"
 STATE_0102 = (
-    "0a02810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
+    "0a03810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
     "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
-    "02110202020b03150900"
+    "02110202020b063412ffff0301010103010703c0b000"
 )
 STATE_0103 = (
-    "0a02810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb0901"
+    "0a03810301443322110201010befbeadde030202010207010a4a01c01dfefff1fb0901"
     "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
-    "0211020205d90275f100"
+    "0211020203d90203800104ffff02020505ff7fc42100"
 )
 
 DRIVE = Drive(
@@ -76,6 +77,9 @@ STATE = McuState(
     rx_errors=17,
     cycle_overruns=2,
     flags=StateFlag.LIMITED | StateFlag.COMMAND_FRESH | StateFlag.DRIVERS_READY,
+    kth_frames=(0x1234, 0xFFFF),
+    kth_crc_errors=(3, 0),
+    kth_alt_crc_errors=(0x0100, 7),
 )
 # v2: one axis's commissioning duty, and the new fault and build bits with a reset cause (every flag bit is defined)
 COMMISSION = Commission(axis=2, duty_e4=-1500, valid_after_echo_ms=150, arm_gen=0x0203, boot_id=0xDEADBEEF,
@@ -86,7 +90,8 @@ STATE_V2_BITS = McuState(
        | FaultFlag.COMMISSION_TIME_LIMIT,
        "flags": StateFlag.LIMITED | StateFlag.DRIVERS_READY | StateFlag.COMMISSION_BUILD | StateFlag.OUTPUTS_LOCKED
        | StateFlag.ESTOP_UNWIRED,
-       "reset_cause": ResetCause.IWDG},
+       "reset_cause": ResetCause.IWDG,
+       "kth_frames": (0x8000, 1), "kth_crc_errors": (0xFFFF, 2), "kth_alt_crc_errors": (5, 0x7FFF)},
 )
 
 GOLDEN = [
@@ -147,10 +152,10 @@ def test_drive_rejects_bad_values():
 
 
 def _body(type_: int, payload: bytes) -> bytes:
-    return struct.pack("<BBH", 2, type_, 5) + payload
+    return struct.pack("<BBH", 3, type_, 5) + payload
 
 
-STATE_FORMAT = "<QIHHBBIiiffff4h4h4BHHBB"
+STATE_FORMAT = "<QIHHBBIiiffff4h4h4BHHBB6H"
 
 
 @pytest.mark.parametrize(
@@ -216,14 +221,15 @@ def test_the_golden_vectors_are_the_contract_formats_with_the_standard_crc():
     """Independent of the module: struct formats of the contract and binascii's CRC-16/CCITT-FALSE."""
     import binascii
 
-    body = struct.pack("<BBH", 2, 0x05, 0x000A) + struct.pack("<BhHHIQ", 2, -1500, 150, 0x0203, 0xDEADBEEF,
+    body = struct.pack("<BBH", 3, 0x05, 0x000A) + struct.pack("<BhHHIQ", 2, -1500, 150, 0x0203, 0xDEADBEEF,
                                                                0x00000001_00ABCDEF)
     body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
     assert cobs_encode(body) + b"\x00" == bytes.fromhex(COMMISSION_000A)
     fields = (0x00000002_11223344, 0xDEADBEEF, 0x0203, 0x0102, 2, 7, (1 << 17) | (1 << 19) | (1 << 22) | (1 << 24),
               -123456, 654321, 1.25, -0.5, 0.0625, 0.75, 1500, -200, 30, 4000, 5000, -10000, 2500, 0,
-              0xC0, 0xC4, 0xE0, 0x00, 17, 2, 0x01 | 0x08 | 0x10 | 0x40 | 0x80, 2)
-    body = struct.pack("<BBH", 2, 0x81, 0x0103) + struct.pack("<QIHHBBIiiffff4h4h4BHHBB", *fields)
+              0xC0, 0xC4, 0xE0, 0x00, 17, 2, 0x01 | 0x08 | 0x10 | 0x40 | 0x80, 2,
+              0x8000, 1, 0xFFFF, 2, 5, 0x7FFF)  # v3: kth_frames, kth_crc_errors, kth_alt_crc_errors (M, H)
+    body = struct.pack("<BBH", 3, 0x81, 0x0103) + struct.pack("<QIHHBBIiiffff4h4h4BHHBB6H", *fields)
     body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
     assert cobs_encode(body) + b"\x00" == bytes.fromhex(STATE_0103)
 
@@ -234,3 +240,40 @@ def test_commission_rejects_out_of_range_values(kw):
     base = dict(axis=0, duty_e4=0, valid_after_echo_ms=150, arm_gen=1, boot_id=1, echo_mcu_time_us=0)
     with pytest.raises(ValueError):
         Commission(**{**base, **kw})
+
+
+# --- v3: the KTH counters (contract 3.3) ---------------------------------------------------------------------------
+
+def test_version_2_frames_are_refused():
+    body = struct.pack("<BBH", 2, 0x03, 9)
+    with pytest.raises(LinkError, match="version"):
+        decode(body)
+
+
+def test_the_kth_counters_round_trip_at_their_bounds():
+    for vals in ((0, 0, 0, 0, 0, 0), (0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF), (1, 2, 3, 4, 5, 6)):
+        st = McuState(**{**STATE.__dict__, "kth_frames": vals[0:2], "kth_crc_errors": vals[2:4],
+                         "kth_alt_crc_errors": vals[4:6]})
+        _seq, back = decode(body_of(encode(st, 1).hex()))
+        assert (back.kth_frames, back.kth_crc_errors, back.kth_alt_crc_errors) == (vals[0:2], vals[2:4], vals[4:6])
+
+
+@pytest.mark.parametrize("field, bad", [("kth_frames", (0x10000, 0)), ("kth_crc_errors", (0, -1)),
+                                        ("kth_alt_crc_errors", (1,))])
+def test_a_kth_counter_out_of_range_is_not_encoded(field, bad):
+    with pytest.raises((LinkError, ValueError, struct.error)):
+        encode(McuState(**{**STATE.__dict__, field: bad}), 1)
+
+
+def test_the_kth_counter_delta_is_unsigned_modular():
+    from forklift_core.mcu_link.messages import kth_counter_delta
+
+    assert kth_counter_delta(5, 0xFFFE) == 7
+    assert kth_counter_delta(0x8000, 0) == 0x8000  # never the signed half-range reading
+    assert kth_counter_delta(3, 3) == 0
+
+
+def test_a_v3_state_fills_the_largest_body():
+    from forklift_core.mcu_link.framing import BODY_MAX
+
+    assert len(body_of(STATE_0102)) + 2 == BODY_MAX == 90  # body_of drops the CRC

@@ -67,7 +67,7 @@ def test_decoder_joins_a_frame_split_across_feeds():
 
 
 def test_decoder_drops_oversize_frames():
-    body = bytes([1, 2, 0, 0]) + bytes(80)  # 84-byte body > 80
+    body = bytes([1, 2, 0, 0]) + bytes(86)  # 90-byte body + CRC = 92 > BODY_MAX (90, v3)
     crc = crc16_ccitt_false(body)
     wire = cobs_encode(body + crc.to_bytes(2, "little")) + b"\x00"
     decoder = FrameDecoder()

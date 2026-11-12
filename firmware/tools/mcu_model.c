@@ -170,12 +170,15 @@ static void step_plant(double dt)
 {
     plant_step(&B.p, &B.out, dt);
     if (B.hand_wheel >= 0 && B.hand_wheel < 2 && B.hand_duration_ms > 0) {
-        long t = elapsed_ms() - B.hand_at_ms;
-        if (t >= 0 &&
-            t < B.hand_duration_ms) { /* a hand turn: counts only, the modelled rate untouched */
+        /* A hand turn: counts only, the modelled rate untouched. Only the part of this step inside the
+           turn's window counts, so the total is exactly hand_revs turns whatever the steps' phase. */
+        double t1 = (double)(B.now_ns - B.t0_ns) / 1e6, t0 = t1 - dt * 1000.0;
+        double lo = (double)B.hand_at_ms, hi = lo + (double)B.hand_duration_ms;
+        double in_ms = fmin(t1, hi) - fmax(t0, lo);
+        if (in_ms > 0.0) {
             const int w = (int)B.hand_wheel;
-            B.p.wheel_counts[w] += B.p.counts_per_rev[w] * (double)B.hand_revs * dt /
-                                   ((double)B.hand_duration_ms / 1000.0);
+            B.p.wheel_counts[w] +=
+                B.p.counts_per_rev[w] * (double)B.hand_revs * in_ms / (double)B.hand_duration_ms;
         }
     }
 }
@@ -340,6 +343,11 @@ int main(int argc, char **argv)
         }
         uint64_t prev = B.now_ns;
         B.now_ns = mono_ns();
+        if (next < B.now_ns) {
+            /* Late (the host stalled us): skip the missed cycles rather than run them back to back, so
+               cycles stay at least 1 ms apart like the MCU's (mcu-link/3 3.3: <= 1 KTH count per ms). */
+            next = B.now_ns;
+        }
         step_plant((double)(B.now_ns - prev) / 1e9);
         fw_app_tick(&app);
         if (!silent()) {
