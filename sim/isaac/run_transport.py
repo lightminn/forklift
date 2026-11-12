@@ -4819,6 +4819,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             if getattr(args, "layer_worker", "off") != "off":
                 require((int(args.layer_worker_k) - 1) / 120.0 <= layer_budget_s_ + obstacle_module.LATENCY_EPS_S,
                         f"--layer-worker-k {args.layer_worker_k}: its delay passes the layer latency budget {layer_budget_s_}")
+            import yaml
+
             rate_ = int(yaml.safe_load(args.lidar.read_text())["rate_hz"])
             timeout_ = float(layer_config["permission"]["sensor_timeout_s"])
             require(timeout_ + 1e-9 >= 1.0 / rate_ + layer_budget_s_,
