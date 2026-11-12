@@ -1,11 +1,11 @@
-/* Host-only mcu-link/1 encoder/decoder for the C <-> Python cross-check tests.
+/* Host-only mcu-link/3 encoder/decoder for the C <-> Python cross-check tests.
  *
  *   link_tool encode drive <seq> <left> <right> <steer> <lift> <valid_after_echo_ms> <flags>
  *                          <arm_gen> <boot_id> <echo>
  *   link_tool encode arm <seq> <boot_id> <echo>
  *   link_tool encode disarm <seq>
  *   link_tool encode clear <seq> <boot_id>
- *   link_tool encode state <seq> <28 values in contract 3.3 order, arrays flattened>
+ *   link_tool encode state <seq> <35 values in contract 3.3 order, arrays flattened>
  *   link_tool decode            (hex wire per stdin line -> "<type> <seq> <values...>")
  */
 #include <stdio.h>
@@ -53,7 +53,7 @@ static int encode(int argc, char **argv)
     } else if (strcmp(kind, "clear") == 0 && n == 1) {
         m.type = LINK_CLEAR_FAULTS;
         m.u.clear.boot_id = (uint32_t)num(a[0]);
-    } else if (strcmp(kind, "state") == 0 && n == 28) {
+    } else if (strcmp(kind, "state") == 0 && n == 35) {
         link_state *s = &m.u.state;
         m.type = LINK_STATE;
         s->mcu_time_us = (uint64_t)num(a[0]);
@@ -77,6 +77,12 @@ static int encode(int argc, char **argv)
         s->rx_errors = (uint16_t)num(a[25]);
         s->cycle_overruns = (uint16_t)num(a[26]);
         s->flags = (uint8_t)num(a[27]);
+        s->reset_cause = (uint8_t)num(a[28]); /* v2 */
+        for (int i = 0; i < 2; i++) {            /* v3 */
+            s->kth_frames[i] = (uint16_t)num(a[29 + i]);
+            s->kth_crc_errors[i] = (uint16_t)num(a[31 + i]);
+            s->kth_alt_crc_errors[i] = (uint16_t)num(a[33 + i]);
+        }
     } else {
         return 2;
     }
@@ -128,7 +134,9 @@ static void print_msg(const link_msg *m)
         for (int i = 0; i < 4; i++) {
             printf(" %u", s->driver_status[i]);
         }
-        printf(" %u %u %u\n", s->rx_errors, s->cycle_overruns, s->flags);
+        printf(" %u %u %u %u %u %u %u %u %u %u\n", s->rx_errors, s->cycle_overruns, s->flags, s->reset_cause,
+               s->kth_frames[0], s->kth_frames[1], s->kth_crc_errors[0], s->kth_crc_errors[1],
+               s->kth_alt_crc_errors[0], s->kth_alt_crc_errors[1]);
         break;
     }
     default:

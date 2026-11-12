@@ -12,7 +12,7 @@
 #define ARM_LEN 12u
 #define CLEAR_LEN 4u
 #define COMMISSION_LEN 19u
-#define STATE_LEN 72u
+#define STATE_LEN 84u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
 typedef struct {
@@ -165,6 +165,15 @@ static void put_payload(wr *w, const link_msg *m)
         put_u16(w, s->cycle_overruns);
         put_u8(w, s->flags);
         put_u8(w, s->reset_cause);
+        for (int i = 0; i < 2; i++) {
+            put_u16(w, s->kth_frames[i]);
+        }
+        for (int i = 0; i < 2; i++) {
+            put_u16(w, s->kth_crc_errors[i]);
+        }
+        for (int i = 0; i < 2; i++) {
+            put_u16(w, s->kth_alt_crc_errors[i]);
+        }
         break;
     }
     default:
@@ -233,6 +242,15 @@ static void get_payload(rd *r, link_msg *m)
         s->cycle_overruns = get_u16(r);
         s->flags = get_u8(r);
         s->reset_cause = get_u8(r);
+        for (int i = 0; i < 2; i++) {
+            s->kth_frames[i] = get_u16(r);
+        }
+        for (int i = 0; i < 2; i++) {
+            s->kth_crc_errors[i] = get_u16(r);
+        }
+        for (int i = 0; i < 2; i++) {
+            s->kth_alt_crc_errors[i] = get_u16(r);
+        }
         break;
     }
     default:

@@ -9,7 +9,7 @@
 
 #include "board/link_ring.h"
 
-/* Board design 5: receive 512 B, send 1024 B (an 80 B STATE times 10 cycles, with room). */
+/* Board design 5: receive 512 B, send 1024 B (a 92 B mcu-link/3 STATE times 10 cycles, with room). */
 #define LINK_RX_RING_SIZE 512u
 #define LINK_TX_RING_SIZE 1024u
 _Static_assert((LINK_RX_RING_SIZE & (LINK_RX_RING_SIZE - 1u)) == 0, "power of two");

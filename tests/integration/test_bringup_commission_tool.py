@@ -387,12 +387,17 @@ def test_markers_mark_events_while_the_commission_drives(model, monkeypatch, tmp
     calls = {"n": 0}
 
     def reader(bench):
+        marked = {"done": False}
+
         def poll():
+            # cheap on every cycle, like the real reader: re-parsing the whole record each poll starved the drive loop
+            # under load (COMMAND_TIMEOUT, seen by the firmware session)
             calls["n"] += 1
-            nonzero = any(k == "COMMISSION" and m is not None and m.duty_e4 != 0
-                          for k, _t, m in bench.written.values())
-            if nonzero and not any(r.get("t") == "marker" for r in rows(bench)):
+            if marked["done"]:
+                return
+            if any(k == "COMMISSION" and m is not None and m.duty_e4 != 0 for k, _t, m in bench.written.values()):
                 bench.emit({"t": "marker", "host_ns": bringup.time.monotonic_ns(), "label": "power"})
+                marked["done"] = True
         return poll
 
     monkeypatch.setattr(bringup, "_marker_reader", reader)
