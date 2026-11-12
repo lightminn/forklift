@@ -237,6 +237,9 @@ def test_three_registered_slots_must_each_hold_one_judged_session(tmp_path):
     v2 = tr.verdict(over + [re_b, re_c], factor=0.9, slots=reg)
     assert v2["judged"] == {"ts1_k09_r1": "ts1_k09_r1", "ts4_k09_r2": "ts4_k09_r2_re"} and v2["pass"] is False
     assert tr.verdict(over + [re_b, copy_ok(base, "ts5_k09_r3_re")], factor=0.9, slots=reg)["pass"] is True
+    # a session a same-account job overlapped counts as over the overlap rule: its rerun stands in
+    v5 = tr.verdict([a, b, c, re_b], factor=0.9, slots=reg, overlapped=("ts4_k09_r2",))
+    assert v5["judged"]["ts4_k09_r2"] == "ts4_k09_r2_re" and "ts4_k09_r2" in v5["left_out"] and v5["pass"] is True
     # a valid original is judged even when a rerun exists; a missing slot fails the count
     assert tr.verdict([a, b, re_b, c], factor=0.9, slots=reg)["judged"]["ts4_k09_r2"] == "ts4_k09_r2"
     assert tr.verdict([a, b], factor=0.9, slots=reg)["pass"] is False
