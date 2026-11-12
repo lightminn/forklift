@@ -67,6 +67,7 @@ case "${SET:-}:${ARM}:${FACTOR}" in
   far:L:0.4|far:K:0.4|far:L:0.3|far:K:0.3|off:L:0.4|off:KP:0.4|mark:L:0.4|mark:K:0.4|mark:KP:0.4|mark:L:0.3|mark:K:0.3) ;;
   wall:L:0.4|wall:K:0.4|wall:KP:0.4) ;;
   far:K:1.0) ;;  # real-time plan 5.26/5.27 stage checks (1b, 1c closed loop): line_m far K at f 1.0 (V3')
+  far:K:0.9) ;;  # teleop smoothness confirmation (docs/plans/2026-11-12-teleop-smooth-confirmation.md): line_m far K at f 0.9
   *) echo "SET:ARM:FACTOR ${SET:-}:${ARM}:${FACTOR} is not in plan 5.17's registration" >&2; exit 2 ;;
 esac
 TRACE="--max-sim-seconds 1500"  # the trace buffer (plan 5.17 T6: dropped must be 0); the live loop is not bounded by it

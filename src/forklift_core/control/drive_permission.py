@@ -278,6 +278,125 @@ def _shape_cells_batch(snapshot: GridSnapshot, poses, parts, margins, direction:
     return np.column_stack((ii, jj)), owner, outside
 
 
+# Teleop pacing (docs/design/2026-11-12-teleop-pacing.md, lead decision 2026-11-12): the numba walk's own-outline
+# lookup and shadow band depend only on the grid's frame (origin, resolution, shape), the own outline at its pose and
+# the band width -- the band also on whether the grid holds a RETAINED cell, read again every call. Every walk of a
+# tick (the core's watch, each arc of the teleop permit) asks them at the same pose, so they are kept on an exact key,
+# every float by its bits (a signed zero is another key), across permissions: no permission state (start-band anchor,
+# last stop arc, release statistics), no time and no cell state is in the computation. The walk only reads them.
+GEOMETRY_CACHE = True  # tests turn it off to compare
+GEOMETRY_CACHE_MAX = 16
+_geometry_cache: dict = {}
+
+
+class _Uncacheable(Exception):
+    """A number whose value a float does not hold exactly (np.longdouble): the call is computed, not cached."""
+
+
+def _scalar(v) -> tuple:
+    """A number in a key: its type and its bits (a float32 and a float of one value compute differently; a signed
+    zero is another key -- Codex cache review P2). Only types a float holds exactly (Python float and int, NumPy
+    floats of at most 8 bytes and integers): a longdouble's extra bits would be lost and two values share a key
+    (Codex cache review round 2 P2), so it raises _Uncacheable."""
+    if isinstance(v, (bool, np.bool_)) or not isinstance(v, (int, float, np.integer, np.floating)):
+        raise _Uncacheable(type(v).__name__)
+    if isinstance(v, np.floating) and np.dtype(type(v)).itemsize > 8:
+        raise _Uncacheable(type(v).__name__)
+    if isinstance(v, (int, np.integer)) and abs(int(v)) > 2 ** 53:
+        raise _Uncacheable(type(v).__name__)  # an integer past 2**53: compared as Python ints (Codex round 3 P2)
+    return type(v).__name__, float(v).hex()
+
+
+def _frame_raw(snapshot) -> tuple:
+    """The grid frame as the snapshot holds it: origin x, origin y, resolution (their own types), nx, ny."""
+    nx, ny = snapshot.state.shape
+    return snapshot.origin_x_m, snapshot.origin_y_m, snapshot.resolution_m, int(nx), int(ny)
+
+
+def _geometry_key(kind: str, frame: tuple, pose: tuple, outline: tuple, *extra) -> tuple:
+    return (kind, tuple(_scalar(v) for v in frame[:3]), frame[3:], tuple(_scalar(v) for v in pose),
+            tuple((_scalar(fp.front_m), _scalar(fp.rear_m), _scalar(fp.half_width_m), _scalar(lat), _scalar(lon))
+                  for fp, lat, lon in outline), tuple(_scalar(v) for v in extra))
+
+
+def _cached(key, compute):
+    """compute() on a hit-or-store of key; key is a function building it (it may find a value it cannot key)."""
+    if not GEOMETRY_CACHE:
+        return compute()
+    try:
+        key = key()
+    except _Uncacheable:
+        return compute()
+    hit = _geometry_cache.get(key)
+    if hit is not None:
+        return hit[0]
+    value = compute()
+    if len(_geometry_cache) >= GEOMETRY_CACHE_MAX:
+        _geometry_cache.clear()
+    _geometry_cache[key] = (value, compute)  # compute holds the key's values only, never the snapshot
+    return value
+
+
+def clear_geometry_cache() -> None:
+    _geometry_cache.clear()
+
+
+def geometry_cache_entries() -> list:
+    """(key, cached value, a function that computes it afresh) of every entry (tests)."""
+    return [(k, v, c) for k, (v, c) in list(_geometry_cache.items())]
+
+
+class _FrameView:
+    """What footprint_cells reads of a snapshot: the origin, the resolution (as the snapshot holds them) and the
+    state's shape."""
+
+    def __init__(self, frame: tuple):
+        self.origin_x_m, self.origin_y_m, self.resolution_m = frame[:3]
+        self.state = np.broadcast_to(np.zeros(1, dtype=np.uint8), frame[3:])
+
+
+def own_lookup_cached(snapshot, own_pose, own_footprint):
+    """``permission_numba.own_lookup`` for the own outline at own_pose on snapshot's frame (cached on an exact key).
+    The call takes every number as a float (the outline through a float array), as the walk always did, so the key
+    holds the values in those forms."""
+    nx, ny = snapshot.state.shape
+    frame = (float(snapshot.origin_x_m), float(snapshot.origin_y_m), float(snapshot.resolution_m), int(nx), int(ny))
+    x, y, yaw = (float(v) for v in own_pose)
+    outline = tuple((Footprint(float(fp.front_m), float(fp.rear_m), float(fp.half_width_m)), lat, lon)
+                    for fp, lat, lon in parts_of(own_footprint))
+
+    def compute():
+        from forklift_core.control import permission_numba as nb
+
+        o = [np.array([v[n] for v in [(fp.front_m, fp.rear_m, fp.half_width_m, lat, lon) for fp, lat, lon in outline]],
+                      dtype=float) for n in range(5)]
+        return nb.own_lookup(frame[0], frame[1], frame[2], frame[3], frame[4], x, y, cos(yaw), sin(yaw), *o)
+
+    return _cached(lambda: _geometry_key("own", frame, (x, y, yaw), outline), compute)
+
+
+def shadow_band(snapshot, own_pose, own_footprint, band_m) -> np.ndarray:
+    """The cells (nx, ny) near the present outline where RETAINED passes: none without a pose, an outline, a width or
+    a RETAINED cell on this snapshot (read every call), else the outline grown by band_m (cached on an exact key).
+    The cells come from the values as the caller gave them -- the snapshot's origin and resolution, the pose, the
+    outline's parts and the width in their own types, as shape_cells always read them -- and the key holds each one's
+    type and bits."""
+    frame = _frame_raw(snapshot)
+    if own_pose is None or own_footprint is None or not band_m > 0 or not (snapshot.state == RETAINED).any():
+        return _cached(lambda: ("none", frame[3:]), lambda: np.zeros(frame[3:], dtype=bool))
+    pose, outline = tuple(own_pose), tuple(parts_of(own_footprint))
+
+    def compute():
+        nx, ny = frame[3:]
+        band = np.zeros((nx, ny), dtype=bool)
+        near, _ = shape_cells(_FrameView(frame), pose, list(outline), band_m)
+        near = near[(near[:, 0] >= 0) & (near[:, 0] < nx) & (near[:, 1] >= 0) & (near[:, 1] < ny)]
+        band[near[:, 0], near[:, 1]] = True
+        return band
+
+    return _cached(lambda: _geometry_key("band", frame, pose, outline, band_m), compute)
+
+
 def _own_lookup_flat(snapshot, own_cells, own_pose, own_footprint):
     """DrivePermission._own_lookup with the partial cells' outside sub-samples in one flat array: (whole mask,
     partial index grid, (points (m, 2), start per partial cell, count per partial cell)), the same points in the
@@ -523,12 +642,8 @@ class DrivePermission:
         margins = np.array([self._margin(s, pad, extra_margin_m, extra_ramp_m) for _, s, pad in checks])
         nx, ny = snapshot.state.shape
         if own_cells is None:  # the own outline found here (check_arc and check_path leave it to the kernel)
-            o_parts = parts_of(own_footprint)
-            o = [np.array([v[n] for v in [(fp.front_m, fp.rear_m, fp.half_width_m, lat, lon)
-                                         for fp, lat, lon in o_parts]], dtype=float) for n in range(5)]
-            oi0, oj0, whole_box, pid_box, pts, pstart, pcount, has_own = nb.own_lookup(
-                float(snapshot.origin_x_m), float(snapshot.origin_y_m), float(snapshot.resolution_m), nx, ny,
-                float(own_pose[0]), float(own_pose[1]), cos(own_pose[2]), sin(own_pose[2]), *o)
+            oi0, oj0, whole_box, pid_box, pts, pstart, pcount, has_own = own_lookup_cached(snapshot, own_pose,
+                                                                                           own_footprint)
         else:
             whole, partial = own_cells
             has_own = bool(whole or partial)
@@ -540,12 +655,7 @@ class DrivePermission:
                 whole_box = np.zeros((1, 1), dtype=bool)
                 pid_box = np.full((1, 1), -1, dtype=np.int64)
                 pts, pstart, pcount = np.zeros((0, 2)), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
-        band = np.zeros(snapshot.state.shape, dtype=bool)
-        if (own_pose is not None and own_footprint is not None and cfg.shadow_band_m > 0
-                and (snapshot.state == RETAINED).any()):
-            near, _ = shape_cells(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
-            near = near[(near[:, 0] >= 0) & (near[:, 0] < nx) & (near[:, 1] >= 0) & (near[:, 1] < ny)]
-            band[near[:, 0], near[:, 1]] = True
+        band = shadow_band(snapshot, own_pose, own_footprint, cfg.shadow_band_m)
         verified, code, oldest, first_unknown, cells = nb.walk(
             snapshot.state, snapshot.free_stamp, float(snapshot.origin_x_m), float(snapshot.origin_y_m),
             float(snapshot.resolution_m), xs, ys, cs, ss, svals, margins, int(direction), bool(unknown_passes),
