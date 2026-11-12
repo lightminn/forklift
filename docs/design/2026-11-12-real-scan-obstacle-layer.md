@@ -49,7 +49,8 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
 - 거리: `range_min ≤ r ≤ range_max` 이고 유한한 값만 쓴다. 나머지는 NaN 이다.
 - 시각:
   - 'stamp 단조 시각' = `ros_stamp_ns − sys_minus_mono_ns`, 'stamp → 수신' = `recv_mono_ns − stamp 단조 시각`.
-  - `sys_minus_mono` 가 직전보다 50 ms 넘게 바뀌면 **그 스캔부터 거부**한다. 변환을 다시 세우는 조건(같은 값이 연속 N 개, 잠정 10)이 찰 때까지 스캔을 내지 않는다(Codex P1-1).
+  - `sys_minus_mono` 의 기준값을 둔다. 한 스캔의 값이 기준값에서 **50 ms 넘게** 벗어나면(시스템 시각 조정) 그 스캔부터 거부하고 재수립 상태로 간다(Codex P1-1).
+  - 재수립: 연속한 스캔 **10 개**의 값이 그 10 개의 중앙값에서 모두 **±1 ms** 안이면 그 중앙값이 새 기준값이 되고, 다음 스캔부터 낸다. 두 시계를 따로 읽어 생기는 정상 흔들림은 1 ms 보다 훨씬 작다(정수 ns 완전 일치를 요구하지 않음, Codex 2판 P2-1). 10 개 안에서 다시 50 ms 넘게 뛰면 처음부터 다시 센다. 기준값 안에서의 작은 흔들림(≤ 50 ms)은 거부하지 않고 기록한다.
   - 'stamp → 수신' 이 음수(−5 ms 아래)면 거부한다.
 - 결과는 `RealScan(scan_id, stamp_mono_ns, recv_mono_ns, angles, ranges, intensities, meta)` 다. 층이 쓸 시각(취득 구간)은 ⑦b 가 1.1 의 결과로 정한다.
 
@@ -59,7 +60,7 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
   - NaN 비율, 'stamp → 수신' 분포(p50·p99·최대), `sys_minus_mono` 변화.
   - 버린 스캔 수와 사유, 어댑터가 버린 수(`scan_id` 틈).
   - **각도 규약 확인**: `--probe right|left|front|back` 이면 그쪽 가까이 놓은 상자의 최소 거리 빔의 각도를 보여 준다. ROS 규약(앞 0, 왼쪽 +, 반시계)과 맞는지 판정한다(agy).
-- 원시 기록: `--record out.scan.jsonl` 이면 각 스캔의 머리·시각 짝·거리(base64)를 남긴다. ⑦b 의 재생 입력이다(Codex P2-8).
+- 원시 기록: `--record out.scan.jsonl` 이면 **`ScanFeed` 판정 전의 수신 프레임**을 그대로 남긴다(머리 JSON + 본문 base64 + 호스트 수신 단조 시각). 그 뒤에 `ScanFeed` 의 판정(수락, 또는 거부 사유와 재수립 상태)을 함께 적는다. 재생은 기록한 프레임을 같은 순서로 새 `ScanFeed` 에 넣는 것이고, 수락·거부 순서가 기록과 같아야 한다(Codex 2판 P2-2). ⑦b 의 재생 입력이다.
 
 ### 1.5 노트북 시험 (사용자 연결 뒤)
 사용자에게 칠 명령:
@@ -123,7 +124,8 @@ python tools/scan_check.py --socket /tmp/forklift-scan.sock --seconds 5 --probe 
 시험:
 - `ScanFeed`:
   - 형식 오류별 버림·계수, 무효 거리 → NaN, 빔 수가 다른 두 스캔.
-  - 시각 변환, 음수 지연 거부, `sys_minus_mono` 점프 → 거부와 재수립.
+  - 시각 변환, 음수 지연 거부, `sys_minus_mono` 점프 → 거부와 재수립(정상 흔들림 ±0.3 ms 섞인 값으로 재수립됨, 재수립 중 다시 점프하면 처음부터).
+  - 기록 재생: 점프·재수립이 든 기록을 새 `ScanFeed` 에 넣으면 수락·거부 순서가 같음.
   - 비차단(읽을 것이 없을 때 즉시 돌아옴).
 - 어댑터: `scan/1` 왕복(ROS 없이 직렬화 함수만), 받는 쪽이 없을 때 버림(막지 않음).
 - `scan_check`: 합성 스캔 소켓으로 통계·각도 판정·기록 형식. 늦게 보내는 합성 드라이버로 'stamp → 수신' 꼬리가 드러남.
@@ -138,4 +140,5 @@ python tools/scan_check.py --socket /tmp/forklift-scan.sock --seconds 5 --probe 
 |---|---|---|
 | ① 원자료 재계산(Claude) | 시뮬 칸 나이(free 0.2 s)와 실제 지연 비교 | 1판 3.3 에 적음 → ② 가 '늘 0' 은 과장이라고 바로잡음 → 3절 6 의 한 묶음 계산으로 |
 | ② Codex 적대 검토(1판) | P1 5: stamp 는 취득 시각 아님·점프는 정지, 회전 뒤틀림과 `sensor_bound_m` 미사용, STATE 측정 시각 없음, 시뮬 오차표·감속 승계, 높이 전제·시작 기억; P2 3: 시간 문턱 묶음, `BundlePermit`·캐시, 노트북 합격 조건 | ⑦a/⑦b 로 나눔. ⑦a 는 스캔 경로와 시각 사실 확인(1.1·1.3), ⑦b 는 3절 요구사항 1–9 로 별도 설계 |
+| Codex 2판 재검토 | 새 P1 없음, P2 2: 재수립 조건에 허용폭, 원시 기록의 위치와 재생 경계 | 기준값·±1 ms 중앙값 10 개 재수립·재점프 초기화, 판정 전 수신 프레임 + 판정을 기록하고 재생 순서 일치 시험 |
 | ③ agy(Gemini 3.8 Flash, 1·2 를 보지 않은 '적히지 않은 전제') | 스캔 평면 수평·바닥 맞음, 2D 평면 밖 장애물, 각도 규약, USB 지연(`latency_timer`), 미끄럼, 마스크 진동, 반사 재질, 정지 체인; 노트북 시험의 한계 | 각도 규약 확인과 `latency_timer` 기록을 ⑦a 에(1.1·1.4), 나머지는 2절(노트북 한계)·3절 4·5·10 에 |
