@@ -289,23 +289,22 @@ GEOMETRY_CACHE_MAX = 16
 _geometry_cache: dict = {}
 
 
-def _bits(v) -> str:
-    return float(v).hex()
+def _scalar(v) -> tuple:
+    """A number in a key: its type and its bits (a float32 and a float of one value compute differently; a signed
+    zero is another key -- Codex cache review P2)."""
+    return type(v).__name__, float(v).hex()
 
 
-def _frame(snapshot) -> tuple:
+def _frame_raw(snapshot) -> tuple:
+    """The grid frame as the snapshot holds it: origin x, origin y, resolution (their own types), nx, ny."""
     nx, ny = snapshot.state.shape
-    return float(snapshot.origin_x_m), float(snapshot.origin_y_m), float(snapshot.resolution_m), int(nx), int(ny)
-
-
-def _outline(shape) -> tuple:
-    return tuple((fp, float(lat), float(lon)) for fp, lat, lon in parts_of(shape))
+    return snapshot.origin_x_m, snapshot.origin_y_m, snapshot.resolution_m, int(nx), int(ny)
 
 
 def _geometry_key(kind: str, frame: tuple, pose: tuple, outline: tuple, *extra) -> tuple:
-    return (kind, tuple(_bits(v) for v in frame[:3]), frame[3:], tuple(_bits(v) for v in pose),
-            tuple((_bits(fp.front_m), _bits(fp.rear_m), _bits(fp.half_width_m), _bits(lat), _bits(lon))
-                  for fp, lat, lon in outline), tuple(_bits(v) for v in extra))
+    return (kind, tuple(_scalar(v) for v in frame[:3]), frame[3:], tuple(_scalar(v) for v in pose),
+            tuple((_scalar(fp.front_m), _scalar(fp.rear_m), _scalar(fp.half_width_m), _scalar(lat), _scalar(lon))
+                  for fp, lat, lon in outline), tuple(_scalar(v) for v in extra))
 
 
 def _cached(key: tuple, compute):
@@ -331,7 +330,8 @@ def geometry_cache_entries() -> list:
 
 
 class _FrameView:
-    """What footprint_cells reads of a snapshot: the origin, the resolution and the state's shape."""
+    """What footprint_cells reads of a snapshot: the origin, the resolution (as the snapshot holds them) and the
+    state's shape."""
 
     def __init__(self, frame: tuple):
         self.origin_x_m, self.origin_y_m, self.resolution_m = frame[:3]
@@ -339,8 +339,14 @@ class _FrameView:
 
 
 def own_lookup_cached(snapshot, own_pose, own_footprint):
-    """``permission_numba.own_lookup`` for the own outline at own_pose on snapshot's frame (cached on an exact key)."""
-    frame, (x, y, yaw), outline = _frame(snapshot), tuple(float(v) for v in own_pose), _outline(own_footprint)
+    """``permission_numba.own_lookup`` for the own outline at own_pose on snapshot's frame (cached on an exact key).
+    The call takes every number as a float (the outline through a float array), as the walk always did, so the key
+    holds the values in those forms."""
+    nx, ny = snapshot.state.shape
+    frame = (float(snapshot.origin_x_m), float(snapshot.origin_y_m), float(snapshot.resolution_m), int(nx), int(ny))
+    x, y, yaw = (float(v) for v in own_pose)
+    outline = tuple((Footprint(float(fp.front_m), float(fp.rear_m), float(fp.half_width_m)), lat, lon)
+                    for fp, lat, lon in parts_of(own_footprint))
 
     def compute():
         from forklift_core.control import permission_numba as nb
@@ -352,19 +358,21 @@ def own_lookup_cached(snapshot, own_pose, own_footprint):
     return _cached(_geometry_key("own", frame, (x, y, yaw), outline), compute)
 
 
-def shadow_band(snapshot, own_pose, own_footprint, band_m: float) -> np.ndarray:
+def shadow_band(snapshot, own_pose, own_footprint, band_m) -> np.ndarray:
     """The cells (nx, ny) near the present outline where RETAINED passes: none without a pose, an outline, a width or
-    a RETAINED cell on this snapshot (read every call), else the outline grown by band_m (cached on an exact key)."""
-    frame = _frame(snapshot)
+    a RETAINED cell on this snapshot (read every call), else the outline grown by band_m (cached on an exact key).
+    The cells come from the values as the caller gave them -- the snapshot's origin and resolution, the pose, the
+    outline's parts and the width in their own types, as shape_cells always read them -- and the key holds each one's
+    type and bits."""
+    frame = _frame_raw(snapshot)
     if own_pose is None or own_footprint is None or not band_m > 0 or not (snapshot.state == RETAINED).any():
         return _cached(("none", frame[3:]), lambda: np.zeros(frame[3:], dtype=bool))
-    pose, outline, band_m = tuple(float(v) for v in own_pose), _outline(own_footprint), float(band_m)
-    x, y, yaw = pose
+    pose, outline = tuple(own_pose), tuple(parts_of(own_footprint))
 
     def compute():
         nx, ny = frame[3:]
         band = np.zeros((nx, ny), dtype=bool)
-        near, _ = shape_cells(_FrameView(frame), (x, y, yaw), list(outline), band_m)
+        near, _ = shape_cells(_FrameView(frame), pose, list(outline), band_m)
         near = near[(near[:, 0] >= 0) & (near[:, 0] < nx) & (near[:, 1] >= 0) & (near[:, 1] < ny)]
         band[near[:, 0], near[:, 1]] = True
         return band

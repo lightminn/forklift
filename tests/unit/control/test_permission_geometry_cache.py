@@ -193,8 +193,8 @@ def sequence(seed: int) -> tuple[list, list]:
         if k % 4 == 0:
             if k % 16 == 12:
                 origin = (origin[0] + 0.05, origin[1])  # the rolling grid moved by a cell
-            if k % 20 == 15:
-                version += 1
+            if k % 16 == 8:
+                version += 1  # a correction: the start-band anchor must be dropped and latched again
             snap = grid(rng, retained=[0.0, 0.02][(k // 4) % 2], origin=origin, stamp_s=0.3 + 0.1 * k,
                         version=version, clear_m=2.5, wall_x_m=[None, 1.5, 1.32][(k // 4) % 3])
             snap.free_stamp[:] = np.where(np.isfinite(snap.free_stamp), 0.3 + 0.1 * k - 0.05, np.nan)
@@ -229,6 +229,8 @@ def test_a_sequence_gives_the_same_outputs_and_state_with_and_without_the_cache(
     assert differences(on[0], off[0], limit=5) == []
     assert differences(on[1], off[1], limit=5) == []
     assert any(o[0][0] > 0 for o in on[0]) and any(o[0][0] == 0 for o in on[0])  # both outcomes were met
+    versions = {st[0]["release_anchor"]["version"] for st in on[1] if st[0]["release_anchor"]}
+    assert len(versions) > 1  # the correction branch ran (Codex cache review P3)
 
 
 def test_the_walk_leaves_the_cached_arrays_as_it_found_them():
@@ -247,3 +249,29 @@ def test_the_cache_stays_bounded():
         dp.own_lookup_cached(snap, (0.001 * k, 0.0, 0.0), HULL)
         dp.shadow_band(snap, (0.001 * k, 0.0, 0.0), HULL, 0.05)
     assert len(dp.geometry_cache_entries()) <= dp.GEOMETRY_CACHE_MAX
+
+
+def test_a_float32_outline_and_a_float_outline_of_one_value_are_different_keys():
+    """Codex cache review P2: footprint_cells computes with the outline's own number types, so a float32 outline and
+    a float one of the same value can give different bands; they must not share an entry. Codex's case: one RETAINED
+    cell, the float band cached first, then a compiled check_arc with the float32 outline."""
+    f32 = Footprint(np.float32(1.29), np.float32(0.17), np.float32(0.36))
+    f64 = Footprint(float(np.float32(1.29)), float(np.float32(0.17)), float(np.float32(0.36)))
+    state = np.full((160, 160), FREE, dtype=np.uint8)
+    state[108, 71] = RETAINED
+    stamp = np.where(state == FREE, 0.25, 0.25)
+    snap = GridSnapshot(state, stamp, 0.3, (0.0, 0.0, 0.0), 0, 1, {"high": 0.3}, -4.060000108146973, -4.0, 0.05)
+    cfg = config(start_band_m=0.0)
+    pose = (0.0, 0.0, 0.0)
+    outs = {}
+    for on in (False, True):
+        dp.clear_geometry_cache()
+        dp.GEOMETRY_CACHE = on
+        try:
+            for shape in (f64, f32, f64, f32):  # alternate, the float one first
+                band = dp.shadow_band(snap, pose, shape, cfg.shadow_band_m)
+                arc = DrivePermission(cfg).check_arc(snap, pose, 0.0, 1, shape, shape, 0.13)
+                outs.setdefault(on, []).append((band.tobytes(), arc))
+        finally:
+            dp.GEOMETRY_CACHE = True
+    assert outs[True] == outs[False]
