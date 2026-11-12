@@ -48,6 +48,7 @@ DT = 1 / 120
 DRIVE_HOLDS = ("loaded_forward", "forward", "reverse", "left", "right")
 TURN_HOLDS = ("left", "right")
 LIFT_HOLDS = ("lift_up", "lift_down")
+SLOTS_PER_ARM = 3
 OUTPUT_MIN = 0.95
 GAP_MAX_MS = 100.0  # the longest pacing not-ok stretch in a direct hold, and the longest no-output stretch after output
 TURN_FIRST_MAX_MS = 100.0
@@ -99,12 +100,14 @@ def _modes(ticks: list) -> dict:
                     and a["pacing_ok"] and not b["pacing_ok"])
         # entering the mode not ok (pacing carried over from the mode before, Codex registration P3): how long until
         # the first ok tick of each stretch, the longest of them
-        entry = 0.0
+        entry, never_ok = 0.0, 0
         for k, r in enumerate(ticks):
             if r["mode"] == m and (k == 0 or ticks[k - 1]["mode"] != m) and not r["pacing_ok"]:
-                ok_at = next((x["mono"] for x in ticks[k:] if x["mode"] != m or x["pacing_ok"]), ticks[-1]["mono"])
-                entry = max(entry, ok_at - r["mono"])
-        out[m] = {"pacing_drops": drops, "entry_not_ok_s": entry,
+                rest = ticks[k:]
+                end = next((i for i, x in enumerate(rest) if x["mode"] != m or x["pacing_ok"]), len(rest) - 1)
+                entry = max(entry, rest[end]["mono"] - r["mono"])
+                never_ok += 0 if (rest[end]["mode"] == m and rest[end]["pacing_ok"]) else 1  # left (or ended) not ok
+        out[m] = {"pacing_drops": drops, "entry_not_ok_s": entry, "stretches_never_ok": never_ok,
                   "ratio": sim / wall if wall else None, "ratio_span": span_sim / span_wall if span_wall else None,
                   "sim_s": sim, "gap_wall_s": gap, "ok_ticks": ok_n / n if n else None,
                   "ok_wall": ok_wall / tot_wall if tot_wall else None, "longest_not_ok_s": longest}
@@ -237,7 +240,9 @@ def _windows(run: Path, ticks: list, factor: float) -> dict | None:
         tele |= (sim >= a - 1e-9) & (sim <= b + 1e-9)
     w = win[tele & np.isfinite(win)]
     thr = 0.9 * factor
-    return {"threshold": thr, "teleop_steps": int(len(w)), "teleop_min": float(w.min()) if len(w) else None,
+    return {"threshold": thr, "teleop_trace_rows": int(tele.sum()),
+            "teleop_ticks": sum(1 for r in ticks if r["mode"] == "TELEOP"),
+            "teleop_steps": int(len(w)), "teleop_min": float(w.min()) if len(w) else None,
             "teleop_p1": float(np.percentile(w, 1)) if len(w) else None,
             "teleop_below": int((w < thr).sum())}
 
@@ -250,12 +255,25 @@ def _safety(run: Path, ticks: list) -> dict:
     except (OSError, ValueError):
         out["unevaluated"].append("no result.json")
         return out
+    # every safety field must be there in its form (Codex registration round 3 P2-2); scene_damaged alone may be
+    # absent or null: the runner writes it only when the scene was damaged
+    lay = res.get("obstacle_layer")
+    g = res.get("geometry") or {}
+    missing = [k for k, ok in (
+        ("forbidden_pocket_contacts", isinstance(res.get("forbidden_pocket_contacts"), list)),
+        ("obstacle_layer.unpermitted_entries", isinstance(lay, dict) and isinstance(lay.get("unpermitted_entries"), int)),
+        ("obstacle_layer.unpermitted_dir_entries", isinstance(lay, dict)
+         and isinstance(lay.get("unpermitted_dir_entries"), int)),
+        ("scene_layout.obstacles", isinstance((res.get("scene_layout") or {}).get("obstacles"), list)
+         and len(res["scene_layout"]["obstacles"]) > 0),
+        ("geometry footprints", isinstance(g.get("unloaded_footprint"), dict) and isinstance(g.get("loaded_footprint"),
+                                                                                            dict))) if not ok]
+    if missing:
+        out["unevaluated"].append(f"result.json lacks {missing}")
+        return out
     out["result"] = True
-    lay = res.get("obstacle_layer") or {}
-    out.update(scene_damaged=res.get("scene_damaged"), forbidden_pocket_contacts=len(res.get("forbidden_pocket_contacts")
-                                                                                     or []),
-               unpermitted_auto=int(lay.get("unpermitted_entries") or 0) + int(lay.get("unpermitted_dir_entries") or 0),
-               success=res.get("success"))
+    out.update(scene_damaged=res.get("scene_damaged"), forbidden_pocket_contacts=len(res["forbidden_pocket_contacts"]),
+               unpermitted_auto=lay["unpermitted_entries"] + lay["unpermitted_dir_entries"], success=res.get("success"))
     sys.path.insert(0, str(REPO / "src"))
     from forklift_core.control.low_clearance import shape_clearance
     from forklift_core.live.spool import load_list
@@ -266,8 +284,7 @@ def _safety(run: Path, ticks: list) -> dict:
     except (OSError, ValueError, KeyError) as e:
         out["unevaluated"].append(f"slam.control: {e}")
         return out
-    g = res.get("geometry") or {}
-    hull, loaded = Footprint(**g["unloaded_footprint"]), Footprint(**g["loaded_footprint"])
+    hull, loaded = Footprint(**g["unloaded_footprint"]), Footprint(**g["loaded_footprint"])  # checked above
     rects = [Rectangle(float(o["x_m"]), float(o["y_m"]), float(o["length_m"]), float(o["width_m"]),
                        float(o["yaw_rad"])) for o in (res.get("scene_layout") or {}).get("obstacles") or []]
     spans = _spans(ticks, "TELEOP")
@@ -325,8 +342,12 @@ def _session_problems(s: dict) -> list:
         out.append("no CPU sampler rows")
     if s.get("log_error"):
         out.append(f"live log: {s['log_error']}")
-    if not s.get("windows"):
+    w = s.get("windows")
+    if not w:
         out.append("no pacing windows (tick_trace.npz)")
+    elif w.get("teleop_min") is None or not w.get("teleop_ticks") or w["teleop_trace_rows"] < 0.95 * w["teleop_ticks"]:
+        out.append(f"pacing windows do not cover TELEOP ({w.get('teleop_trace_rows')} trace rows, "
+                   f"{w.get('teleop_ticks')} ticks)")
     direct = [h for h in s["holds"] if h.get("mode_kind") == "direct"]
     for kind in DRIVE_HOLDS + LIFT_HOLDS:
         if not any(h["label"] == kind for h in direct):
@@ -343,8 +364,9 @@ def _session_failures(s: dict) -> list:
     tele = (s.get("modes") or {}).get("TELEOP", {})
     if tele.get("pacing_drops"):
         out.append({"rule": "pacing_drops", "session": name, "value": tele["pacing_drops"]})
-    if (tele.get("entry_not_ok_s") or 0.0) * 1e3 > GAP_MAX_MS:
-        out.append({"rule": "entry_not_ok", "session": name, "value": tele["entry_not_ok_s"] * 1e3})
+    if (tele.get("entry_not_ok_s") or 0.0) * 1e3 > GAP_MAX_MS or tele.get("stretches_never_ok"):
+        out.append({"rule": "entry_not_ok", "session": name, "value": tele.get("entry_not_ok_s", 0.0) * 1e3,
+                    "never_ok": tele.get("stretches_never_ok", 0)})
     for h in (h for h in s["holds"] if h.get("mode_kind") == "direct" and h.get("covered", True)):
         lab = h["label"]
         if lab in DRIVE_HOLDS and (h["output_share"] is None or h["output_share"] < OUTPUT_MIN):
@@ -377,6 +399,8 @@ def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: 
     by_slot: dict = {}
     for s in sessions:
         by_slot.setdefault(slot_of(s["session"]), []).append(s)
+    if slots is not None and (len(set(slots)) != SLOTS_PER_ARM or len(slots) != SLOTS_PER_ARM):
+        unevaluated.append({"problem": f"{SLOTS_PER_ARM} distinct registered names needed, given {list(slots)}"})
     if slots is not None:  # exactly the registered names: no other arm's, no stray rerun, none missing
         for slot in sorted(set(by_slot) - set(slots)):
             unevaluated.append({"slot": slot, "problem": "not a registered slot of this arm"})
@@ -464,6 +488,9 @@ def main(argv=None) -> int:
     if args.verdict:
         out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max,
                                  slots=[x for x in args.slots.split(",") if x])
+        # the summary of the sessions the verdict judged (a rerun it did not pick is left out; Codex round 3 P3)
+        picked = set(out["verdict"]["judged"].values())
+        out["summary"] = summarize([s for s in per if s["session"] in picked], args.overlap_max)
     text = json.dumps(out, indent=1, default=float)
     if args.json:
         Path(args.json).write_text(text + "\n", encoding="utf-8")

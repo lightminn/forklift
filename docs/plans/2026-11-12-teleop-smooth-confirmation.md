@@ -58,18 +58,21 @@
 - 원래 세션이 CPU 겹침 규칙에 걸리면(다른 사용자 CPU 가 1 코어를 넘은 표본이 5 % 초과, 지연 1e (c)) 그 자리만 한 번 다시 돈다. 이름은 `<원래 이름>_re` 이고 `ts_submit.sh … -- <이름>` 으로 낸다.
 - 원래가 유효하면 원래를 쓴다. 재실행도 걸리거나 재실행의 재실행이 있으면 그 자리는 미평가다.
 - 팔이 통과하려면 **세 자리 모두** 판정 가능한 세션이 하나씩 있고, 그 세 세션이 아래 규칙을 모두 지켜야 한다(Codex 2라운드 P2-3).
+- 판정 도구는 그 팔의 등록 이름 **서로 다른 셋**을 `--slots` 로 받는다. 셋이 아니거나, 다른 팔·원본 없는 재실행·모르는 이름이 섞이면 미평가다(3라운드 P2-1).
+- 요약 통계는 판정에 고른 세션만으로 낸다(3라운드 P3).
 
 **판정 가능 조건(하나라도 없으면 미평가, 미평가는 통과가 아니다; P2-2).**
 - CPU 표본기 기록이 있어야 한다.
 - live 로그가 `read_live_log` 를 통과해야 한다(잃은 줄·잘린 부분 없음).
-- `tick_trace.npz`(pacing 창)가 있어야 한다.
+- `tick_trace.npz`(pacing 창)가 있고, TELEOP 틱의 95 % 이상을 덮으며, 창 값이 하나 이상 있어야 한다(3라운드 P2-3).
 - hold 일곱 종류가 모두 있어야 한다: loaded_forward·forward·reverse·left·right·lift_up·lift_down.
 - 각 hold 의 [시작, 끝) 이 틱 기록으로 덮여야 한다. 시작 이전과 끝 이후에 틱이 있어야 한다는 뜻이다.
-- result.json 과 spool `slam.control`(완전성 검사 통과)이 있고, TELEOP 참값 행이 1 개 이상이어야 한다.
+- result.json 에 안전 필드가 제 형식으로 있어야 한다: `forbidden_pocket_contacts`(목록), `obstacle_layer.unpermitted_entries`·`unpermitted_dir_entries`(정수), `scene_layout.obstacles`(비지 않은 목록), 외곽 형상. `scene_damaged` 만은 없거나 null 일 수 있다. 러너가 손상 때만 쓰기 때문이다(3라운드 P2-2).
+- spool `slam.control`(완전성 검사 통과)이 있고, TELEOP 참값 행이 1 개 이상이어야 한다.
 
 **규칙(판정 가능한 세션마다 모두).** hold 의 값은 probe 의 [start_mono, end_mono) 를 직전 틱 상태로 이어 붙여 적분한다(Codex 2라운드 P2-1: 안쪽 첫·끝 틱이 아니라 hold 경계).
 1. **pacing 실패 0.** TELEOP 연속 틱에서 ok 다음에 not-ok 가 오는 일이 없어야 한다(1라운드 P2-4: 회복에 1 s 가 걸리므로 '끊김 ≤ 100 ms' 는 사실상 실패 0 이다).
-2. **TELEOP 진입 not-ok ≤ 100 ms.** 각 TELEOP 구간의 첫 틱이 not-ok 이면, 첫 ok 틱까지의 시간이 100 ms 이하여야 한다(2라운드 P3: 규칙 1 은 앞 모드에서 이어진 not-ok 를 세지 않는다).
+2. **TELEOP 진입 not-ok ≤ 100 ms.** 각 TELEOP 구간의 첫 틱이 not-ok 이면, 첫 ok 틱까지의 시간이 100 ms 이하여야 한다(2라운드 P3: 규칙 1 은 앞 모드에서 이어진 not-ok 를 세지 않는다). ok 틱 없이 구간이 끝나면 길이와 상관없이 실패다(3라운드 P3).
 3. **직접 구동 hold 출력 ≥ 0.95.** 종류별(loaded_forward·forward·reverse·left·right), 세션마다. 중재기 속도 목표가 0 이 아닌 시간 ÷ hold 시간이다.
 4. **출력 끊김 ≤ 100 ms.** 직접 구동 hold 에서 첫 출력 뒤 출력이 0 인 가장 긴 구간이다.
 5. **pacing not-ok 구간 ≤ 100 ms.** 모든 직접 hold(구동·승강)에서 가장 긴 연속 not-ok 구간이다.
@@ -119,7 +122,14 @@
   - P2-3 세 자리: 자리·재실행 규칙과 `--slots`(그 팔의 등록 이름, 다른 팔·원본 없는 재실행·모르는 이름은 미평가)를 두었다. 시험: `test_three_registered_slots_must_each_hold_one_judged_session`.
   - P2-4 문구 일반화: 검증한 설정으로만 적는다(3절).
   - P3 진입 not-ok: 규칙 2 를 추가했다. 안전 시각·hull 범위는 확인됐고, 적재 외곽 보고값의 성격을 적었다.
-- 등록 문서 Codex 3라운드: (진행 중)
+- Codex 3라운드(새 스레드, 3b5bb93a; 이전 스레드는 메모리 부족으로 중단):
+  - P1: 없음.
+  - P2-1 세 자리: 서로 다른 등록 이름 셋을 요구한다.
+  - P2-2 안전 필드 결측: 형식 검사, 결측은 미평가.
+  - P2-3 빈 창: TELEOP 덮임 95 % 와 창 값 존재를 요구한다.
+  - P3: ok 없이 끝난 진입 구간은 실패로 하고, 요약은 고른 세션만으로 낸다.
+  - 2라운드 P2-1·P2-4 는 해소로 확인됐다.
+- Codex 4라운드: (진행 중)
 
 ## 부록 — 재생 결과의 출처
 

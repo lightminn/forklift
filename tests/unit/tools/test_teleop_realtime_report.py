@@ -126,6 +126,24 @@ def test_a_hold_reports_its_longest_pacing_gap(tmp_path):
     assert s["modes"]["TELEOP"]["pacing_drops"] == 0  # not ok from the start, then ok: no ok -> not-ok
 
 
+@pytest.mark.parametrize("drop", ["forbidden_pocket_contacts", "obstacle_layer", "unpermitted_dir_entries",
+                                  "scene_layout", "geometry"])
+def test_a_missing_safety_field_is_unevaluated_not_zero(tmp_path, drop):
+    """Codex registration round 3 P2-2: scene_damaged alone may be absent; every other safety field is required."""
+    sd = make_session(tmp_path, "ts_m")
+    add_records(sd, rows=teleop_rows(sd), obstacles=[(3.0, 0.0)])
+    path = sd / "live/epoch_1/run/result.json"
+    res = json.loads(path.read_text())
+    if drop == "unpermitted_dir_entries":
+        del res["obstacle_layer"][drop]
+    else:
+        del res[drop]
+    path.write_text(json.dumps(res))
+    safe = tr.session(sd)["safety"]
+    assert safe["result"] is False and safe["unevaluated"]
+    res.pop("scene_damaged", None)
+
+
 def test_the_safety_check_finds_truth_overlap_in_teleop_only(tmp_path):
     sd = make_session(tmp_path, "lat_s")
     rows = teleop_rows(sd)
@@ -137,6 +155,13 @@ def test_the_safety_check_finds_truth_overlap_in_teleop_only(tmp_path):
     sd2 = make_session(tmp_path, "lat_t")
     add_records(sd2, rows=teleop_rows(sd2, pose=(2.0, 0.0, 0.0)), obstacles=[(3.0, 0.0)])
     assert tr.session(sd2)["safety"]["teleop_overlap_ticks"] > 0
+    sd3 = make_session(tmp_path, "lat_u")  # scene_damaged absent (the runner writes it only on damage): evaluated
+    add_records(sd3, rows=teleop_rows(sd3), obstacles=[(3.0, 0.0)])
+    path = sd3 / "live/epoch_1/run/result.json"
+    res = json.loads(path.read_text())
+    del res["scene_damaged"]
+    path.write_text(json.dumps(res))
+    assert tr.session(sd3)["safety"]["result"] is True
 
 
 def copy_ok(s: dict, name: str | None = None) -> dict:
@@ -149,10 +174,11 @@ def copy_ok(s: dict, name: str | None = None) -> dict:
     have = {h["label"] for h in holds}
     holds += [dict(drive, label=k) for k in tr.DRIVE_HOLDS if k not in have]
     holds += [dict(lift, label=k) for k in tr.LIFT_HOLDS if k not in have]
-    modes = dict(s["modes"], TELEOP=dict(s["modes"]["TELEOP"], pacing_drops=0, entry_not_ok_s=0.0))
+    modes = dict(s["modes"], TELEOP=dict(s["modes"]["TELEOP"], pacing_drops=0, entry_not_ok_s=0.0,
+                                         stretches_never_ok=0))
     return dict(s, session=name or s["session"], holds=holds, modes=modes,
-                windows={"threshold": 0.81, "teleop_steps": 100, "teleop_min": 0.88, "teleop_p1": 0.89,
-                         "teleop_below": 0})
+                windows={"threshold": 0.81, "teleop_trace_rows": 216, "teleop_ticks": 216, "teleop_steps": 100,
+                         "teleop_min": 0.88, "teleop_p1": 0.89, "teleop_below": 0})
 
 
 def judged(tmp_path, name="ts_a"):
@@ -183,9 +209,14 @@ def test_the_verdict_passes_and_fails_by_the_registered_rules(tmp_path):
         assert [c["rule"] for c in tr.verdict([bad], factor=0.9)["failures"]] == [rule]
     bad = dict(ok, safety=dict(ok["safety"], scene_damaged={"reason": "pallet_moved"}))
     assert {c["rule"] for c in tr.verdict([bad], factor=0.9)["failures"]} == {"safety"}
+    never = copy_ok(s)
+    never["modes"]["TELEOP"]["stretches_never_ok"] = 1  # entered not ok and left before any ok tick (round 3 P3)
+    assert [c["rule"] for c in tr.verdict([never], factor=0.9)["failures"]] == ["entry_not_ok"]
     # missing records: unevaluated
     for missing in (dict(ok, safety=dict(ok["safety"], teleop_rows=0)), dict(ok, overlap=None),
                     dict(ok, log_error="lost lines"), dict(ok, windows=None),
+                    dict(ok, windows=dict(ok["windows"], teleop_min=None, teleop_steps=0)),
+                    dict(ok, windows=dict(ok["windows"], teleop_trace_rows=100)),
                     dict(ok, holds=[dict(h, covered=False) if h["label"] == "left" else h for h in ok["holds"]])):
         v3 = tr.verdict([missing], factor=0.9)
         assert v3["pass"] is False and v3["unevaluated"], missing.get("overlap")
@@ -209,6 +240,9 @@ def test_three_registered_slots_must_each_hold_one_judged_session(tmp_path):
     # a valid original is judged even when a rerun exists; a missing slot fails the count
     assert tr.verdict([a, b, re_b, c], factor=0.9, slots=reg)["judged"]["ts4_k09_r2"] == "ts4_k09_r2"
     assert tr.verdict([a, b], factor=0.9, slots=reg)["pass"] is False
+    # fewer (or repeated) registered names than the arm's three: never a pass on one session (round 3 P2-1)
+    assert tr.verdict([a], factor=0.9, slots=["ts1_k09_r1"])["pass"] is False
+    assert tr.verdict([a, b, c], factor=0.9, slots=reg + ["ts1_k09_r1"])["pass"] is False
     # another arm's session, a rerun without its original, a stray name: never judged into this arm
     other = copy_ok(base, "ts2_l04_r1")
     v3 = tr.verdict([a, b, c, other], factor=0.9, slots=reg)
@@ -270,6 +304,7 @@ def test_the_pacing_windows_are_read_from_the_tick_trace(tmp_path):
         data[i, c["step_end"]] = r["mono"] + 0.001
     np.savez(sd / "live/epoch_1/run/tick_trace.npz", data=data)
     w = tr.session(sd, factor=1.1)["windows"]
+    assert w["teleop_trace_rows"] == w["teleop_ticks"] == 216
     assert w["teleop_min"] == pytest.approx(0.9, abs=0.01)  # TELEOP runs at 0.9 of real time
     assert w["teleop_below"] > 0 and w["threshold"] == pytest.approx(0.99)
     assert tr.session(sd, factor=0.9)["windows"]["teleop_below"] == 0
