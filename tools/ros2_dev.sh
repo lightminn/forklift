@@ -36,7 +36,7 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
     image="${FORKLIFT_ROS2_SCAN_IMAGE:-forklift/ros2-scan:jazzy}"  # deploy/ros2/Dockerfile.scan
     docker_args+=(
         --device "${device}:${device}"
-        --group-add "$(stat -c %g "${device}")"
+        --group-add "$(stat -L -c %g "${device}")"  # the device's own group, through a by-id link
         --mount "type=bind,src=${sock_dir},dst=/run/forklift-scan"
     )
     driver="ros2 run sllidar_ros2 sllidar_node --ros-args -p serial_port:=${device} -p serial_baudrate:=256000"

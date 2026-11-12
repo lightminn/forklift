@@ -18,7 +18,7 @@ def head(k, *, n=8, recv=None, off=OFF, stamp=None, **kw):
     recv = recv if recv is not None else 10_000 * MS + k * 100 * MS
     stamp = stamp if stamp is not None else recv - 20 * MS + off  # 20 ms stamp -> receipt
     h = {"scan_id": k, "ros_stamp_ns": stamp, "recv_mono_ns": recv, "sys_minus_mono_ns": off,
-         "angle_min": -math.pi, "angle_increment": 2 * math.pi / n, "time_increment": 0.1 / n, "scan_time": 0.1,
+         "angle_min": -math.pi, "angle_increment": 2 * math.pi / max(n, 1), "time_increment": 0.1 / max(n, 1), "scan_time": 0.1,
          "range_min": 0.2, "range_max": 12.0, "frame_id": "laser", "n": n}
     h.update(kw)
     return h
@@ -153,3 +153,67 @@ def test_the_poll_never_blocks_and_records_frames_before_the_verdict(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+# --- Codex 7a review ------------------------------------------------------------------------------------------------
+
+def test_a_refused_frame_does_not_move_the_clock_reference():
+    """P2-1: +40 ms refused for its latency, then +80 ms: an 80 ms step from the last accepted pair."""
+    feed = sf.ScanFeed()
+    settled(feed)
+    h = head(30, off=OFF + 40 * MS)
+    h["ros_stamp_ns"] = h["recv_mono_ns"] + OFF + 40 * MS + 10 * MS  # stamped after its receipt
+    assert feed.judge(sf.encode_frame(h, np.ones(8, dtype=np.float32), None), 0)[1] == "negative_latency"
+    assert feed.judge(frame(31, off=OFF + 80 * MS), 0)[1] == "clock_jump"
+
+
+def test_a_window_within_1ms_of_its_median_establishes_even_when_alternating():
+    """P2-2: -0.9 / +0.9 ms alternating is within +-1 ms of the ten's median."""
+    feed = sf.ScanFeed()
+    v = [feed.judge(frame(k, off=OFF + (900_000 if k % 2 else -900_000)), 0)[1] for k in range(12)]
+    assert v[:9] == ["establishing"] * 9 and v[9] is None
+
+
+def test_scan_id_gaps_count_every_received_frame_not_only_accepted_ones():
+    """P2-3: a clock jump's refusals are not the adapter's losses."""
+    feed = sf.ScanFeed()
+    settled(feed)
+    feed.judge(frame(sf.ESTABLISH_COUNT, off=OFF + 3_000 * MS), 0)  # refused (a jump), but received
+    for k in range(sf.ESTABLISH_COUNT + 1, 22):
+        feed.judge(frame(k, off=OFF + 3_000 * MS), 0)
+    feed.judge(frame(25, off=OFF + 3_000 * MS), 0)  # 22-24 never arrived
+    assert feed.id_gaps == 3
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"n": 0, "angle_increment": 0.1, "time_increment": 0.0}, "bad_meta"),
+    ({"n": 1, "angle_increment": 0.1}, "bad_meta"),
+    ({"angle_min": 10**400}, "bad_meta"),
+    ({"scan_time": 10**400}, "bad_meta"),
+    ({"ros_stamp_ns": 10**400}, "bad_meta"),
+    ({"sys_minus_mono_ns": -(10**30)}, "bad_meta"),
+])
+def test_empty_or_absurd_scans_are_refused_not_raised(change, why):
+    feed = sf.ScanFeed()
+    settled(feed)
+    h = head(30, **change)
+    n = h["n"]
+    scan, got = feed.judge(sf.encode_frame(h, np.ones(n, dtype=np.float32), None), 0)
+    assert scan is None and got == why
+
+
+def test_bind_socket_refuses_a_regular_file_and_a_live_socket(tmp_path):
+    f = tmp_path / "notes.txt"
+    f.write_text("keep me")
+    with pytest.raises(FileExistsError):
+        sf.bind_socket(str(f))
+    assert f.read_text() == "keep me"
+    path = tmp_path / "scan.sock"
+    live = sf.bind_socket(str(path))
+    try:
+        with pytest.raises(FileExistsError):
+            sf.bind_socket(str(path))  # a second check must not steal the first one's path
+    finally:
+        live.close()
+    stale = sf.bind_socket(str(path))  # the first is gone: its leftover path is replaced
+    stale.close()

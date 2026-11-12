@@ -16,6 +16,7 @@ import json
 import math
 import os
 import socket
+import stat
 import struct
 import time
 from collections import Counter
@@ -91,16 +92,29 @@ def decode_frame(data: bytes) -> tuple[dict, np.ndarray, np.ndarray | None]:
     return head, ranges, inten
 
 
-def _int(v) -> bool:
-    return isinstance(v, int) and not isinstance(v, bool)
+I64 = 1 << 63
+NUM_MAX = 1e9  # no scan field (radians, seconds, metres) is anywhere near this
+
+
+def _int(v, lo: int = -I64, hi: int = I64) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and lo <= v < hi
 
 
 def _num(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        f = float(v)
+    except OverflowError:  # an int too large for a float (Codex 7a P2-7)
+        return False
+    return math.isfinite(f) and abs(f) < NUM_MAX
 
 
 def _meta_ok(h: dict) -> bool:
-    if not all(_int(h.get(k)) for k in ("scan_id", "ros_stamp_ns", "recv_mono_ns", "sys_minus_mono_ns")):
+    if not (_int(h.get("scan_id"), 0) and _int(h.get("ros_stamp_ns"), 0) and _int(h.get("recv_mono_ns"), 0)
+            and _int(h.get("sys_minus_mono_ns"))):
+        return False
+    if not h.get("n", 0) >= 2:  # an empty or one-beam scan has no angle step to read (Codex 7a P2-7)
         return False
     if not all(_num(h.get(k)) for k in ("angle_min", "angle_increment", "time_increment", "scan_time",
                                         "range_min", "range_max")):
@@ -125,30 +139,26 @@ class ScanFeed:
         self.refused: Counter = Counter()
         self.accepted = 0
         self._last_pair: int | None = None  # the last accepted scan's (system - monotonic)
-        self._window: list[int] = []  # establishing: the pairs gathered so far
+        self._window: list[int] = []  # establishing: the latest pairs (at most ESTABLISH_COUNT)
         self.establishing = True
+        self._last_id: int | None = None
+        self.id_gaps = 0  # scan_ids missing between received frames: the adapter's (or the socket's) losses
 
     # ------------------------------------------------------------------ the clock pair
-    def _clock(self, pair: int) -> str | None:
-        """None: use this scan; else why not (establishing, clock_jump)."""
-        if not self.establishing:
-            if abs(pair - self._last_pair) > JUMP_NS:
-                self.establishing, self._window = True, []
-                return "clock_jump"
-            self._last_pair = pair
-            return None
-        if self._window and abs(pair - int(np.median(self._window))) > ESTABLISH_TOL_NS:
-            self._window = [pair]  # a step while establishing: count again from this scan
-            return "establishing"
-        self._window.append(pair)
+    def _establish(self, pair: int) -> bool:
+        """Establishing: the latest ESTABLISH_COUNT pairs, all within ESTABLISH_TOL_NS of their median, establish
+        the conversion (a rolling window -- alternating jitter inside the band is fine, Codex 7a P2-2); a pair
+        JUMP_NS off the window's median starts it again from that pair."""
+        if self._window and abs(pair - int(np.median(self._window))) > JUMP_NS:
+            self._window = []
+        self._window = (self._window + [pair])[-ESTABLISH_COUNT:]
         if len(self._window) < ESTABLISH_COUNT:
-            return "establishing"
+            return False
         med = int(np.median(self._window))
         if any(abs(p - med) > ESTABLISH_TOL_NS for p in self._window):
-            self._window = self._window[1:]
-            return "establishing"
-        self.establishing, self._last_pair, self._window = False, pair, []
-        return None
+            return False
+        self.establishing, self._window = False, []
+        return True
 
     # ------------------------------------------------------------------ one frame
     def judge(self, data: bytes, host_recv_ns: int) -> tuple[RealScan | None, str | None]:
@@ -167,16 +177,26 @@ class ScanFeed:
             h, ranges, inten = decode_frame(data)
         except FrameError as exc:
             return None, str(exc)
+        sid = h.get("scan_id")
+        if _int(sid, 0):  # every received frame, accepted or not, for the gap count (Codex 7a P2-3)
+            if self._last_id is not None and sid > self._last_id + 1:
+                self.id_gaps += sid - self._last_id - 1
+            self._last_id = sid if self._last_id is None else max(self._last_id, sid)
         if not _meta_ok(h):
             return None, "bad_meta"
         pair = int(h["sys_minus_mono_ns"])
         stamp_mono = int(h["ros_stamp_ns"]) - pair
         latency = int(h["recv_mono_ns"]) - stamp_mono
-        why = self._clock(pair)
-        if why is not None:
-            return None, why
+        # the reference moves only with an accepted scan (Codex 7a P2-1): judge first, then update
+        if self.establishing:
+            if not self._establish(pair):
+                return None, "establishing"
+        elif abs(pair - self._last_pair) > JUMP_NS:
+            self.establishing, self._window = True, []
+            return None, "clock_jump"
         if latency < NEGATIVE_LATENCY_NS:
             return None, "negative_latency"
+        self._last_pair = pair
         n = int(h["n"])
         angles = float(h["angle_min"]) + float(h["angle_increment"]) * np.arange(n)
         with np.errstate(invalid="ignore"):
@@ -210,8 +230,18 @@ def bind_socket(path: str | Path, *, rcvbuf: int = 1 << 20) -> socket.socket:
     crash left behind is replaced), group-writable so the container's user can send. A datagram is a whole frame or
     none -- a full receiver makes the adapter drop, never block (design 1.2)."""
     p = Path(path)
-    if p.exists() or p.is_symlink():
-        p.unlink()
+    if p.is_symlink() or (p.exists() and not stat.S_ISSOCK(p.stat().st_mode)):
+        raise FileExistsError(f"{p} exists and is not a socket")  # never delete a file given by mistake
+    if p.exists():
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            probe.connect(str(p))
+        except ConnectionRefusedError:
+            p.unlink()  # a socket nobody holds: a crash left it behind
+        else:
+            raise FileExistsError(f"{p} is held by a running receiver")  # never steal a live one's path
+        finally:
+            probe.close()
     s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, int(rcvbuf))
     s.bind(str(p))

@@ -23,6 +23,8 @@ import numpy as np
 from forklift_core.sensors.scan_feed import ScanFeed, bind_socket
 
 PROBE_NEAR_M = 1.0  # the probe's box is put this close or closer
+PROBE_SUPPORT = 0.8  # this share of the scans with a near return must put it on the asked side
+PROBE_MIN_SCANS = 5
 SECTORS = {"front": (-math.pi / 4, math.pi / 4), "left": (math.pi / 4, 3 * math.pi / 4),
            "right": (-3 * math.pi / 4, -math.pi / 4)}  # back: the rest (ROS: zero ahead, positive to the left)
 
@@ -43,7 +45,6 @@ def summarize(scans, feed) -> dict:
     unknown = sum(int(np.isnan(s.ranges).sum()) for s in scans) / max(1, sum(beams))
     stamps = np.array([s.stamp_mono_ns for s in scans], dtype=float) / 1e9
     recvs = np.array([s.recv_mono_ns for s in scans], dtype=float) / 1e9
-    ids = [s.scan_id for s in scans]
     pairs = [s.meta["sys_minus_mono_ns"] for s in scans]
     out.update({
         "beams": {"min": int(min(beams)), "max": int(max(beams))},
@@ -58,7 +59,7 @@ def summarize(scans, feed) -> dict:
         "receipt_gap_max_s": float(np.diff(recvs).max()) if len(recvs) > 1 else None,
         "stamp_to_receipt_ms": {**_dist([s.stamp_to_recv_ns / 1e6 for s in scans]),
                                 "note": "driver stamp to adapter receipt -- not the acquisition age (design 1.1)"},
-        "adapter_dropped": int(sum(max(0, b - a - 1) for a, b in zip(ids, ids[1:]))),
+        "adapter_dropped": int(feed.id_gaps),  # gaps among every received frame, refused ones included
         "sys_minus_mono_span_ms": float((max(pairs) - min(pairs)) / 1e6),
     })
     return out
@@ -72,7 +73,9 @@ def _side(angle: float) -> str:
 
 
 def probe(scans, side: str) -> dict:
-    """The nearest valid return in each scan; its side must be ``side`` (a box put there, PROBE_NEAR_M or closer)."""
+    """Each scan's nearest valid return; the box (PROBE_NEAR_M or closer) must be on ``side`` in at least
+    PROBE_SUPPORT of the scans that saw it -- per scan, never a mean angle (two sides can average to a third,
+    Codex 7a P2-4)."""
     near = []
     for s in scans:
         if np.all(np.isnan(s.ranges)):
@@ -81,14 +84,18 @@ def probe(scans, side: str) -> dict:
         near.append((float(s.ranges[i]), float(s.angles[i])))
     if not near:
         return {"side": side, "ok": False, "why": "no return in any scan"}
-    dist = float(np.median([d for d, _a in near]))
-    ang = float(np.angle(np.mean(np.exp(1j * np.array([a for _d, a in near])))))
-    if dist > PROBE_NEAR_M:
-        return {"side": side, "ok": False, "nearest_m": dist, "nearest_angle_rad": ang,
-                "why": f"no return within {PROBE_NEAR_M} m: put the box closer"}
-    seen = _side(ang)
-    return {"side": side, "ok": seen == side, "seen_side": seen, "nearest_m": dist, "nearest_angle_rad": ang,
-            "nearest_angle_deg": math.degrees(ang)}
+    close = [(d, a) for d, a in near if d <= PROBE_NEAR_M]
+    if len(close) < PROBE_MIN_SCANS:
+        return {"side": side, "ok": False, "nearest_m": float(np.median([d for d, _a in near])),
+                "why": f"no return within {PROBE_NEAR_M} m in {PROBE_MIN_SCANS}+ scans: put the box closer"}
+    sides = [_side(a) for _d, a in close]
+    support = sides.count(side) / len(sides)
+    seen = max(set(sides), key=sides.count)
+    on_side = [a for (_d, a), s_ in zip(close, sides) if s_ == seen]
+    return {"side": side, "ok": support >= PROBE_SUPPORT, "support": support, "seen_side": seen,
+            "scans": len(close), "nearest_m": float(np.median([d for d, _a in close])),
+            "nearest_angle_rad": float(np.angle(np.mean(np.exp(1j * np.array(on_side))))),
+            "nearest_angle_deg": float(np.degrees(np.angle(np.mean(np.exp(1j * np.array(on_side))))))}
 
 
 def main(argv=None) -> int:

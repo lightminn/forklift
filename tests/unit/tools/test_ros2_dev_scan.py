@@ -53,3 +53,14 @@ def test_the_image_pins_sllidar_ros2_by_commit():
     assert "FROM ${BASE_IMAGE}" in text and "ARG BASE_IMAGE=forklift/ros2-dev:jazzy" in text
     assert f"SLLIDAR_ROS2_COMMIT={PINNED}" in text
     assert re.search(r"git -C \S+ checkout --detach \"?\$\{SLLIDAR_ROS2_COMMIT\}", text)
+
+
+def test_a_device_given_by_link_passes_the_real_devices_group(tmp_path):
+    """Codex 7a P2-6: /dev/serial/by-id/... is a link; its own group is not the port's."""
+    dev = tmp_path / "ttyUSB9"
+    dev.write_text("")
+    link = tmp_path / "by-id-link"
+    link.symlink_to(dev)
+    argv = run_launcher(tmp_path, "scan-a2m12", str(link), str(tmp_path / "s")).stdout.splitlines()
+    assert argv[argv.index("--group-add") + 1] == str(os.stat(link).st_gid)  # followed
+    assert "stat -L" in (REPO / "tools/ros2_dev.sh").read_text()

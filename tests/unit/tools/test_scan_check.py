@@ -119,3 +119,17 @@ def test_main_binds_reads_and_records(tmp_path):
     assert s["scans"] == 15 - (sf.ESTABLISH_COUNT - 1)
     replay = sf.replay(rec)
     assert replay["verdicts"] == replay["recorded"] and len(replay["recorded"]) == 15
+
+
+def test_the_probe_needs_most_scans_on_the_side_not_a_mean_between_two():
+    """Codex 7a P2-4: nearest returns alternating +60 and -60 degrees average to ahead; that is not 'front'."""
+    frames = [frame(k, ranges=with_box(360, math.radians(60 if k % 2 else -60))) for k in range(30)]
+    _feed, scans = accepted(frames)
+    p = sc.probe(scans, "front")
+    assert p["ok"] is False and p["support"] < 0.8
+
+
+def test_adapter_drops_come_from_received_ids():
+    frames = [frame(k) for k in range(30) if k not in (20, 21)]
+    feed, scans = accepted(frames)
+    assert sc.summarize(scans, feed)["adapter_dropped"] == 2
