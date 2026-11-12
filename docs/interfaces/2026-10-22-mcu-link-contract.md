@@ -135,7 +135,7 @@ S3 축별 개루프 시운전 전용이다(계획 `docs/plans/2026-11-11-sim-to-
 - 세 계수는 같은 신선 프레임 집합에서 같은 주기에 갱신한다. 신선한 프레임 하나에 `kth_frames` 가 1 오르고, 그 프레임이 설정 변형으로 틀리면 `kth_crc_errors`, 다른 변형으로 틀리면 `kth_alt_crc_errors` 가 1 오른다. 신선하지 않은(받지 못한) 프레임은 어느 계수도 올리지 않는다.
 - 축마다 제어 주기당 많아야 1 오르고, 제어 주기는 1 ms 이상이다 — 축당 초당 1000 이하.
 - **부팅 때만** 0 으로 초기화한다. `ARM`·`DISARM`·`CLEAR_FAULTS`·재연결에는 그대로 둔다.
-- 호스트는 같은 부팅 안의 **인접** `STATE` 사이 차분 `(new − old) mod 2¹⁶`(부호 없는 차분, `wheel_count_delta` 의 반범위 부호 차분이 아님)을 정수로 더해 읽는다. 첫 `STATE` 와 마지막 `STATE` 만 빼면 랩을 놓친다. 인접 `STATE` 간격(`mcu_time_us`)이 30 s 를 넘거나(1000/s × 30 s < 2¹⁶), MCU 시각이 되돌아가거나, `boot_id` 가 바뀐 구간은 복원할 수 없어 그 판정을 무효로 한다. 짧은 `STATE` 누락은 누적 계수라서 복원된다. 복원한 합이 `errors ≤ frames`, `alt ≤ frames` 가 아니면 무효다.
+- 호스트는 같은 부팅 안의 **인접** `STATE` 사이 차분 `(new − old) mod 2¹⁶`(부호 없는 차분, `wheel_count_delta` 의 반범위 부호 차분이 아님)을 정수로 더해 읽는다. 첫 `STATE` 와 마지막 `STATE` 만 빼면 랩을 놓친다. 인접 `STATE` 간격(`mcu_time_us`)이 30 s 를 넘거나(1000/s × 30 s < 2¹⁶), MCU 시각이 되돌아가거나, `boot_id` 가 바뀐 구간은 복원할 수 없어 그 판정을 무효로 한다. 짧은 `STATE` 누락은 누적 계수라서 복원된다. 합하기 **전에 구간마다** `Δerrors ≤ Δframes`, `Δalt ≤ Δframes` 이고 `Δframes ≤ ⌈Δt × 1000⌉ + 1` 이어야 한다. 아니면(같은 부팅 안의 초기화, 간격이 숨긴 랩, 구간 안의 모순) 무효다. 기록 행에 세 계수 중 하나라도 없거나 형식이 틀리면 0 으로 채우지 않고 무효다.
 - `flags.hil_plant` 인 빌드의 계수는 모형이 만든 프레임의 것이다 — 합성 진단으로만 보고 실물 S2 확정에 쓰지 않는다.
 - 판정 도구: `tools/bringup.py kth --record run.jsonl --configured-m V --configured-h V --image ID`(`src/forklift_core/plant/kth_check.py`). 축마다 `configured_ok`(frames ≥ 1000, errors = 0, alt ≥ 100, 마지막 `STATE` 에서 축이 유효하고 범위 안), `other_variant`(frames ≥ 1000, alt = 0, errors ≥ 100), 그 밖은 `undecided`(이유와 함께). 문턱은 작업용 값이고 검증된 신뢰수준이 아니다. alt 증거는 두 변형을 가르는 프레임을 지났다는 뜻이지 범위 전체를 지났다는 뜻이 아니다 — 범위는 S2 가 따로 본다. 판정 결과에 설정 변형과 이미지 식별자가 함께 남는다.
 

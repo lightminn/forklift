@@ -172,6 +172,19 @@ def state_row(s: Sample) -> dict:
     return row
 
 
+KTH_FIELDS = ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors")
+
+
+def kth_row_problem(row: dict) -> str | None:
+    """A recorded STATE row's v3 KTH counters: present, two each, 16-bit unsigned integers."""
+    for name in KTH_FIELDS:
+        v = row.get(name)
+        if not (isinstance(v, list) and len(v) == 2
+                and all(isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 0xFFFF for x in v)):
+            return f"{name} missing or malformed in a STATE row (a v3 record is needed)"
+    return None
+
+
 def sample_from_row(row: dict) -> Sample:
     """A recorded state row back into a Sample (analyze)."""
     faults, flags = FaultFlag(0), StateFlag(0)
@@ -934,7 +947,14 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.cmd == "kth":
         rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
-        samples = [sample_from_row(r) for r in rows if r.get("t") == "state"]
+        states = [r for r in rows if r.get("t") == "state"]
+        bad = next((why for r in states if (why := kth_row_problem(r)) is not None), None)
+        if bad is not None:  # never the dataclass defaults (Codex v3 impl P2-2: a missing error count read as zeros)
+            print(json.dumps({"result": "invalid", "why": bad, "configured": {"M": args.configured_m,
+                                                                                "H": args.configured_h},
+                              "image": args.image}))
+            return 0
+        samples = [sample_from_row(r) for r in states]
         print(json.dumps(kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
                                    image=args.image)))
         return 0
