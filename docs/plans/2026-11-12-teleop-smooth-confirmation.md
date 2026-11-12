@@ -49,7 +49,7 @@
 | 예상 시간 | K09 약 8 분, L04 약 12 분(AUTO 148 sim s / 0.38 + 텔레옵 + 기동) → 합계 약 1 시간 |
 | ws1 순서 | 시뮬-물성 lat_r_ 뒤, 58 회 예산 확인 앞, 단독(총괄) |
 
-## 3. 판정 (결과 전 고정, `tools/teleop_realtime_report.py --factor F --verdict --slots 3`)
+## 3. 판정 (결과 전 고정, `tools/teleop_realtime_report.py --factor F --verdict --slots <그 팔의 등록 이름 셋>`)
 
 팔마다 따로 판정한다.
 
@@ -116,7 +116,7 @@
   - P1: 없음.
   - P2-1 hold 경계 적분: 도구가 [start, end) 를 직전 틱 상태로 적분한다. 덮이지 않는 hold 는 미평가다. 시험: `test_a_hold_is_judged_over_its_own_edges`.
   - P2-2 결측 통과: 판정 가능 조건을 두었다. 표본기·`read_live_log`·창·hold 일곱 종류·덮임·안전 기록이 없으면 미평가다.
-  - P2-3 세 자리: 자리·재실행 규칙과 `--slots 3` 을 두었다. 시험: `test_three_registered_slots_must_each_hold_one_judged_session`.
+  - P2-3 세 자리: 자리·재실행 규칙과 `--slots`(그 팔의 등록 이름, 다른 팔·원본 없는 재실행·모르는 이름은 미평가)를 두었다. 시험: `test_three_registered_slots_must_each_hold_one_judged_session`.
   - P2-4 문구 일반화: 검증한 설정으로만 적는다(3절).
   - P3 진입 not-ok: 규칙 2 를 추가했다. 안전 시각·hull 범위는 확인됐고, 적재 외곽 보고값의 성격을 적었다.
 - 등록 문서 Codex 3라운드: (진행 중)

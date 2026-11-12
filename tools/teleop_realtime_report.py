@@ -22,7 +22,7 @@ Per session:
           (truth rear pose, columns 4-6), the hull's clearance to every scene obstacle at every TELEOP control row
 
 The summary leaves out sessions whose overlap is over ``--overlap-max`` (0.05: the latency plan's 1e (c) rule).
-``--verdict`` judges the sessions by the smoothness confirmation's registered rules
+``--verdict --slots NAME,...`` judges the sessions by the smoothness confirmation's registered rules
 (docs/plans/2026-11-12-teleop-smooth-confirmation.md).
 
     python tools/teleop_realtime_report.py SESSION_DIR... [--overlap-max 0.05] [--factor F --verdict] [--json out]
@@ -365,7 +365,7 @@ def _session_failures(s: dict) -> list:
     return out
 
 
-def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: int | None = None) -> dict:
+def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: list | None = None) -> dict:
     """The registered rules (plan 3). Every slot (a registered session; its one rerun, ``<name>_re``, stands in only
     when the original is over the overlap rule) must hold one session that is valid and judged, and ``slots`` of
     them must be judged; a judged session passes when TELEOP has no pacing failure (an ok tick followed by a not-ok
@@ -377,11 +377,19 @@ def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: 
     by_slot: dict = {}
     for s in sessions:
         by_slot.setdefault(slot_of(s["session"]), []).append(s)
+    if slots is not None:  # exactly the registered names: no other arm's, no stray rerun, none missing
+        for slot in sorted(set(by_slot) - set(slots)):
+            unevaluated.append({"slot": slot, "problem": "not a registered slot of this arm"})
+        for slot in sorted(set(slots) - set(by_slot)):
+            unevaluated.append({"slot": slot, "problem": "no session"})
     for slot, group in sorted(by_slot.items()):
-        group.sort(key=lambda s: s["session"].endswith("_re"))  # the original first
-        if len(group) > 2 or (len(group) == 2 and not group[1]["session"].endswith("_re")):
-            unevaluated.append({"slot": slot, "problem": "more than one rerun"})
+        if slots is not None and slot not in slots:
             continue
+        names = sorted(s["session"] for s in group)
+        if names not in ([slot], [slot, f"{slot}_re"]):
+            unevaluated.append({"slot": slot, "problem": f"sessions {names}: the original and at most one rerun"})
+            continue
+        group.sort(key=lambda s: s["session"].endswith("_re"))  # the original first
         chosen = None
         for s in group:
             ov = s.get("overlap")
@@ -399,8 +407,6 @@ def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: 
             continue
         used[slot] = chosen["session"]
         failures += _session_failures(chosen)
-    if slots is not None and len(by_slot) != slots:
-        unevaluated.append({"problem": f"{len(by_slot)} slots given, {slots} registered"})
     if not used:
         unevaluated.append({"problem": "no slot judged"})
     judged = [s for s in sessions if s["session"] in used.values()]
@@ -448,15 +454,16 @@ def main(argv=None) -> int:
     ap.add_argument("--overlap-max", type=float, default=0.05)
     ap.add_argument("--factor", type=float, help="the sessions' declared factor (pacing windows; needed by --verdict)")
     ap.add_argument("--verdict", action="store_true", help="judge by the smoothness confirmation's registered rules")
-    ap.add_argument("--slots", type=int, default=3, help="registered sessions of the arm (--verdict)")
+    ap.add_argument("--slots", help="the arm's registered session names, comma separated (--verdict; required)")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
-    if args.verdict and args.factor is None:
-        ap.error("--verdict needs --factor")
+    if args.verdict and (args.factor is None or not args.slots):
+        ap.error("--verdict needs --factor and --slots")
     per = [session(Path(p), args.factor) for p in args.sessions]
     out = {"summary": summarize(per, args.overlap_max), "sessions": per}
     if args.verdict:
-        out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max, slots=args.slots)
+        out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max,
+                                 slots=[x for x in args.slots.split(",") if x])
     text = json.dumps(out, indent=1, default=float)
     if args.json:
         Path(args.json).write_text(text + "\n", encoding="utf-8")

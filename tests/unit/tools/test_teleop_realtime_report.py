@@ -87,6 +87,8 @@ def test_the_cli_writes_json(tmp_path):
     out = tmp_path / "o.json"
     assert tr.main([str(sd), "--json", str(out)]) == 0
     assert json.loads(out.read_text())["summary"]["kept"] == ["lat_c"]
+    with pytest.raises(SystemExit):
+        tr.main([str(sd), "--verdict", "--factor", "0.9"])  # the registered slots are required
 
 
 # --- the smoothness confirmation's verdict (docs/plans/2026-11-12-teleop-smooth-confirmation.md) ----------------------
@@ -191,21 +193,28 @@ def test_the_verdict_passes_and_fails_by_the_registered_rules(tmp_path):
 
 def test_three_registered_slots_must_each_hold_one_judged_session(tmp_path):
     base = copy_ok(judged(tmp_path))
-    a, b, c = (copy_ok(base, n) for n in ("ts1_k09_r1", "ts4_k09_r2", "ts5_k09_r3"))
-    assert tr.verdict([a, b, c], factor=0.9, slots=3)["pass"] is True
+    reg = ["ts1_k09_r1", "ts4_k09_r2", "ts5_k09_r3"]
+    a, b, c = (copy_ok(base, n) for n in reg)
+    assert tr.verdict([a, b, c], factor=0.9, slots=reg)["pass"] is True
     # two of three over the overlap rule: never a pass on one session (Codex registration P2-3)
     over = [a, dict(b, overlap=0.2), dict(c, overlap=0.2)]
-    v = tr.verdict(over, factor=0.9, slots=3)
+    v = tr.verdict(over, factor=0.9, slots=reg)
     assert v["pass"] is False and sorted(v["left_out"]) == ["ts4_k09_r2", "ts5_k09_r3"]
     # a rerun stands in for its original only; its own rerun is not allowed
     re_b = copy_ok(base, "ts4_k09_r2_re")
     re_c = dict(copy_ok(base, "ts5_k09_r3_re"), overlap=0.3)
-    v2 = tr.verdict(over + [re_b, re_c], factor=0.9, slots=3)
+    v2 = tr.verdict(over + [re_b, re_c], factor=0.9, slots=reg)
     assert v2["judged"] == {"ts1_k09_r1": "ts1_k09_r1", "ts4_k09_r2": "ts4_k09_r2_re"} and v2["pass"] is False
-    assert tr.verdict(over + [re_b, copy_ok(base, "ts5_k09_r3_re")], factor=0.9, slots=3)["pass"] is True
+    assert tr.verdict(over + [re_b, copy_ok(base, "ts5_k09_r3_re")], factor=0.9, slots=reg)["pass"] is True
     # a valid original is judged even when a rerun exists; a missing slot fails the count
-    assert tr.verdict([a, b, re_b, c], factor=0.9, slots=3)["judged"]["ts4_k09_r2"] == "ts4_k09_r2"
-    assert tr.verdict([a, b], factor=0.9, slots=3)["pass"] is False
+    assert tr.verdict([a, b, re_b, c], factor=0.9, slots=reg)["judged"]["ts4_k09_r2"] == "ts4_k09_r2"
+    assert tr.verdict([a, b], factor=0.9, slots=reg)["pass"] is False
+    # another arm's session, a rerun without its original, a stray name: never judged into this arm
+    other = copy_ok(base, "ts2_l04_r1")
+    v3 = tr.verdict([a, b, c, other], factor=0.9, slots=reg)
+    assert v3["pass"] is False and v3["judged"] == {n: n for n in reg}
+    v4 = tr.verdict([a, b, copy_ok(base, "ts5_k09_r3_re")], factor=0.9, slots=reg)
+    assert v4["pass"] is False and "ts5_k09_r3" not in v4["judged"]
 
 
 def test_a_hold_is_judged_over_its_own_edges():
