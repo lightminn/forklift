@@ -387,7 +387,8 @@ def _session_failures(s: dict) -> list:
     return out
 
 
-def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: list | None = None) -> dict:
+def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: list | None = None,
+            overlapped: tuple = ()) -> dict:
     """The registered rules (plan 3). Every slot (a registered session; its one rerun, ``<name>_re``, stands in only
     when the original is over the overlap rule) must hold one session that is valid and judged, and ``slots`` of
     them must be judged; a judged session passes when TELEOP has no pacing failure (an ok tick followed by a not-ok
@@ -417,7 +418,9 @@ def verdict(sessions: list, *, factor: float, overlap_max: float = 0.05, slots: 
         chosen = None
         for s in group:
             ov = s.get("overlap")
-            if ov is not None and ov > overlap_max:
+            # overlapped: sessions a same-account job of another project overlapped (sacct; the sampler leaves the
+            # job's own uid out, so it cannot see them -- plan 3, added 2026-11-12 before any result was read)
+            if (ov is not None and ov > overlap_max) or s["session"] in overlapped:
                 left_out.append(s["session"])
                 continue
             chosen = s
@@ -479,6 +482,9 @@ def main(argv=None) -> int:
     ap.add_argument("--factor", type=float, help="the sessions' declared factor (pacing windows; needed by --verdict)")
     ap.add_argument("--verdict", action="store_true", help="judge by the smoothness confirmation's registered rules")
     ap.add_argument("--slots", help="the arm's registered session names, comma separated (--verdict; required)")
+    ap.add_argument("--overlapped", default="",
+                    help="sessions a same-account job of another project overlapped (sacct), comma separated: "
+                         "treated as over the overlap rule")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
     if args.verdict and (args.factor is None or not args.slots):
@@ -487,7 +493,8 @@ def main(argv=None) -> int:
     out = {"summary": summarize(per, args.overlap_max), "sessions": per}
     if args.verdict:
         out["verdict"] = verdict(per, factor=args.factor, overlap_max=args.overlap_max,
-                                 slots=[x for x in args.slots.split(",") if x])
+                                 slots=[x for x in args.slots.split(",") if x],
+                                 overlapped=tuple(x for x in args.overlapped.split(",") if x))
         # the summary of the sessions the verdict judged (a rerun it did not pick is left out; Codex round 3 P3)
         picked = set(out["verdict"]["judged"].values())
         out["summary"] = summarize([s for s in per if s["session"] in picked], args.overlap_max)
