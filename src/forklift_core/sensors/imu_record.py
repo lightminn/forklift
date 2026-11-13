@@ -43,9 +43,10 @@ def continuous_segments(dev_us, host_ns, *, max_mismatch_s: float = MAX_MISMATCH
                         restart_back_us: int = RESTART_BACK_US) -> list[tuple[int, int]]:
     """``[start, end)`` index ranges over which the unwrapped device clock and the host clock advance together. A new
     range starts where the device time goes back more than ``restart_back_us`` (a restart) or the device and host
-    intervals differ by more than ``max_mismatch_s`` (a gap the unwrap cannot resolve, a delay jump). A restart whose
-    new device time lands less than ``restart_back_us`` behind the old one is not detectable here: the fit then
-    carries that step (at most ``restart_back_us``)."""
+    intervals differ by more than ``max_mismatch_s`` (a gap the unwrap cannot resolve, a delay jump). Not every restart
+    is detectable: one whose new device time, once unwrapped, lands less than ``restart_back_us`` behind the old one
+    or ahead of it by less than ``max_mismatch_s`` (a restart to 0 just before a wrap reads as a short step forward)
+    stays inside a range, and its fit carries that step."""
     n = len(dev_us)
     if n == 0:
         return []

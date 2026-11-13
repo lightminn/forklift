@@ -111,6 +111,8 @@ def test_non_finite_short_or_misshapen_input_is_refused():
         im.up_from_gravity(np.tile(up * G, (3, 1)))
     with pytest.raises(ValueError, match="N x 3"):
         im.bias_from_still(np.zeros((100, 2)))
+    with pytest.raises(ValueError, match="non-finite"):
+        im.angle_deg([np.nan, 1.0, 0.0], up)
 
 
 def test_no_rotation_is_refused_by_the_sign_check_not_read_as_clockwise():

@@ -53,7 +53,8 @@ class RealSenseSource:
                 self.motion.set_option(getattr(rs.option, opt), value)
         self.chosen = None
         self.fallback = None
-        self.opened = self.started = False
+        # None (not tried), "calling" (the call may have taken effect: interrupted inside it), "done", "failed"
+        self.open_state = self.start_state = None
 
     def _options(self) -> dict:
         """Each option as supported / set / read back on the sensor that streams."""
@@ -134,27 +135,44 @@ class RealSenseSource:
             on_sample(s, dev_us, f.get_timestamp(), dom, (d.x, d.y, d.z))
 
         self.chosen, self.fallback = self._profiles()
-        self.motion.open(self.chosen)
-        self.opened = True
-        self.motion.start(cb)
-        self.started = True
+        self.open_state = "calling"
+        try:
+            self.motion.open(self.chosen)
+        except RuntimeError:
+            self.open_state = "failed"
+            raise
+        self.open_state = "done"
+        self.start_state = "calling"
+        try:
+            self.motion.start(cb)
+        except RuntimeError:
+            self.start_state = "failed"
+            raise
+        self.start_state = "done"
 
     def stop(self) -> None:
-        """Stop and close whatever was reached; safe after a partial start. The SDK's callbacks have ended when
-        ``stop`` returns."""
+        """Stop and close whatever may have been reached -- including a call interrupted inside it, whose effect is
+        unknown. A step that fails keeps its state, so a later ``stop`` tries it again. The SDK's callbacks have
+        ended when ``stop`` returns."""
         errors = []
-        if self.started:
+        if self.start_state in ("calling", "done"):
             try:
                 self.motion.stop()
+                self.start_state = None
             except RuntimeError as e:
-                errors.append(f"stop: {e}")
-            self.started = False
-        if self.opened:
+                if self.start_state == "calling":
+                    self.start_state = None  # it never started streaming: nothing to stop
+                else:
+                    errors.append(f"stop: {e}")
+        if self.open_state in ("calling", "done") and self.start_state in (None, "failed"):  # never under a live stream
             try:
                 self.motion.close()
+                self.open_state = None
             except RuntimeError as e:
-                errors.append(f"close: {e}")
-            self.opened = False
+                if self.open_state == "calling":
+                    self.open_state = None
+                else:
+                    errors.append(f"close: {e}")
         if errors:
             raise RuntimeError("; ".join(errors))
 

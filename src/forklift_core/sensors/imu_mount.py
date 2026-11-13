@@ -83,7 +83,7 @@ def up_from_spin(gyro, *, bias, operator_ccw: bool) -> np.ndarray:
 
 
 def angle_deg(u, v) -> float:
-    c = float(np.clip(_unit(u) @ _unit(v), -1.0, 1.0))
+    c = float(np.clip(_unit(_vec3(u)) @ _unit(_vec3(v)), -1.0, 1.0))
     return math.degrees(math.acos(c))
 
 

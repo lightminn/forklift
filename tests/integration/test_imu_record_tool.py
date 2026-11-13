@@ -449,3 +449,52 @@ def test_stop_after_a_partial_start_closes_what_was_opened():
         src.start(lambda *a: None)
     src.stop()
     assert motion.events[-1] == ("close",) and ("stop",) not in motion.events
+
+
+class StreamingSensor(FakeSensor):
+    """Close is refused while streaming, as the SDK does."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.streaming = False
+
+    def start(self, cb):
+        self.streaming = True
+        self.events.append(("start",))
+        raise KeyboardInterrupt  # Ctrl-C after the SDK turned the stream on, before start() returned
+
+    def stop(self):
+        if not self.streaming:
+            raise RuntimeError("not streaming")
+        self.streaming = False
+        self.events.append(("stop",))
+
+    def close(self):
+        if self.streaming:
+            raise RuntimeError("close while streaming")
+        self.events.append(("close",))
+
+
+def test_an_interrupt_inside_start_still_stops_and_closes_the_stream():
+    motion = StreamingSensor("Motion Module", [FakeProfile("stream.gyro", 400), FakeProfile("stream.accel", 200)])
+    src = tool.RealSenseSource(gyro_hz=400, accel_hz=200, global_time=False, rs=fake_rs(motion))
+    with pytest.raises(KeyboardInterrupt):
+        src.start(lambda *a: None)
+    src.stop()
+    assert motion.events[-2:] == [("stop",), ("close",)] and not motion.streaming
+
+
+def test_a_failed_stop_keeps_its_state_and_is_retried():
+    motion = StreamingSensor("Motion Module", [FakeProfile("stream.gyro", 400), FakeProfile("stream.accel", 200)])
+    motion.start = lambda cb: setattr(motion, "streaming", True)
+    src = tool.RealSenseSource(gyro_hz=400, accel_hz=200, global_time=False, rs=fake_rs(motion))
+    src.start(lambda *a: None)
+    real_stop = motion.stop
+    motion.stop = lambda: (_ for _ in ()).throw(RuntimeError("usb busy"))
+    with pytest.raises(RuntimeError, match="usb busy"):
+        src.stop()
+    assert motion.streaming and ("close",) not in motion.events  # nothing closed under a live stream
+    motion.stop = real_stop
+    src.stop()
+    assert not motion.streaming and motion.events[-1] == ("close",)
+
