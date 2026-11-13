@@ -231,5 +231,9 @@ def test_the_fixed_feed_queues_scans_on_time_behind_a_slow_bridge_and_records_ev
     assert stats["max_depth"] >= 3  # scans kept being queued while the bridge was busy
     assert all(q <= s <= r for _, q, s, r in rows)
     assert all(q - anchor >= due[k] - 1e-3 for k, q, _, _ in rows)  # never queued before its due time
-    with pytest.raises(ValueError):  # a due list that does not match the stream is refused
-        rd.feed_sim(client, rd.noisy_stream(plan, [a], seed=3), due[:-1], lambda *x: None)
+    try:
+        with pytest.raises(ValueError):  # a due list that does not match the stream is refused
+            rd.feed_sim(client, rd.noisy_stream(plan, [a], seed=3), due[:-1], lambda *x: None)
+    finally:
+        ours.close()
+        theirs.close()
