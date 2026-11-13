@@ -282,6 +282,18 @@ class Localization:
                 "start": list(self.start), "passed": self.passed, "failure": self.failure}
 
 
+def map_policy(*, localizing: bool, adopted: bool, first_processed: bool, keep: bool) -> tuple:
+    """(store, adopt) for one /map message. A mapping bridge stores every map. A localization bridge adopts the first
+    map after its first processed scan for the start check (plan L3) and ignores the later ones, unless
+    ``keep_map_subscription`` asks it to store them too (online-SLAM plan criterion 4); a stored later map is never
+    adopted, so the start check reads the same map either way."""
+    if not localizing:
+        return True, False
+    if adopted:
+        return keep, False
+    return True, first_processed
+
+
 class IsaacSlamBridge(Node):
     def __init__(self):
         super().__init__("isaac_slam_bridge")
@@ -300,6 +312,11 @@ class IsaacSlamBridge(Node):
         # slam_loc_replay_drive.py): after the start-up scans every scan received is a keyframe -- the driver sends the
         # recorded session's keyframes alone, so its odometry can change without changing which scans are matched.
         self.declare_parameter("keyframe_gate", "live")
+        # Online-SLAM plan criterion 4 (H's map measurement): a localization bridge keeps /map after its start check
+        # and stores every later map. Off by default and never set by a live session -- a replay job turns it on
+        # (KEEP_MAP_SUBSCRIPTION, deploy/slurm/slam_cost_replay.sbatch); it costs the grid rebuild plan L3 avoids.
+        self.declare_parameter("keep_map_subscription", False)
+        self.keep_map_subscription = bool(self.get_parameter("keep_map_subscription").value)
         self.keyframe_gate = self.get_parameter("keyframe_gate").value
         if self.keyframe_gate not in ("live", "every"):
             raise ValueError(f"keyframe_gate must be live or every, not {self.keyframe_gate!r}")
@@ -363,11 +380,13 @@ class IsaacSlamBridge(Node):
     def on_map(self, msg: OccupancyGrid) -> None:
         loc = self.localization
         with self.cond:
-            if loc is not None and loc.map is not None:
-                return  # localization keeps the first /map after the first processed scan only (plan L3)
             # decided at the entry (Codex S3 review P2): a map that came before the first processed reply is not
             # adopted because the reply landed while it was being stored
-            eligible = loc is not None and loc.first_processed
+            store, eligible = map_policy(localizing=loc is not None, adopted=loc is not None and loc.map is not None,
+                                         first_processed=loc is not None and loc.first_processed,
+                                         keep=self.keep_map_subscription)
+        if not store:
+            return  # localization keeps the first /map after the first processed scan only (plan L3)
         with self.map_lock:
             self._add_map(msg)
         if eligible:
@@ -525,7 +544,8 @@ class IsaacSlamBridge(Node):
                                 status = "failed"
                             else:
                                 map_id = loc.bundle.map_id
-                            self._drop_map_subscription()
+                            if not self.keep_map_subscription:
+                                self._drop_map_subscription()
                         elif loc.passed:
                             map_id = loc.bundle.map_id
                 elif expected:

@@ -15,6 +15,8 @@
 # it (< 1 s). Both phases' cost summaries run after the switch, so they are not in the wait.
 #   sbatch deploy/slurm/slam_h_switch.sbatch OUT RUN_DIR "key=value ..." [driver args: --noise-seed S
 #       --splice-to-sim-s T [--splice-runs ...] ...]
+#   KEEP_MAP_SUBSCRIPTION=1 (environment): the localization phase keeps /map and stores every map (plan criterion 4,
+#   H's map-measurement run; its cost is not judged).
 #   LOC_SETS (environment): as slam_cost_replay.sbatch; BASELINE: an R0 replay's drive.jsonl of the same input
 #   (the localization phase's excess error).
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.

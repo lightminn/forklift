@@ -1,0 +1,9 @@
+18806           lightminn               pytest  COMPLETED 2026-11-13T15:00:39 2026-11-13T15:11:16          8 
+18807           lightminn               pytest  COMPLETED 2026-11-13T15:03:07 2026-11-13T15:12:52          8 
+18808           lightminn              s2_r0_1  COMPLETED 2026-11-13T15:13:51 2026-11-13T15:25:29          2 
+18809           lightminn               s2_a_1  COMPLETED 2026-11-13T15:25:29 2026-11-13T15:35:31          2 
+18810           lightminn               s2_h_1  COMPLETED 2026-11-13T15:35:31 2026-11-13T15:39:29          2 
+18811           lightminn              s2_r0_2  COMPLETED 2026-11-13T15:39:29 2026-11-13T15:47:41          2 
+18812           lightminn               s2_h_2  COMPLETED 2026-11-13T15:47:41 2026-11-13T15:51:37          2 
+18813           lightminn           s2_r0_mapq  COMPLETED 2026-11-13T15:51:37 2026-11-13T15:56:01          2 
+18814           lightminn               pytest    RUNNING 2026-11-13T15:56:01             Unknown          8 
