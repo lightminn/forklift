@@ -61,7 +61,8 @@ def test_state_classes():
     for f in ("obstacle_replan_failed in transport: no_path", "obstacle_live_plan_failed in transport: no_path",
               "docking_retry_no_plan:no_path:no_path"):
         assert lj.state_of(result(state="transport_planning", failure=f)) == "transport_planning", f
-    assert lj.state_of(result(state="other", failure="obstacle_replan_failed in return_home: no_path")) == "other"
+    assert lj.state_of(result(state="other", failure="obstacle_replan_failed in return_home: no_path",
+                              phase="return_home")) == "other"
 
 
 def test_the_ended_phase_is_the_last_transition_without_a_tracking_failure():
