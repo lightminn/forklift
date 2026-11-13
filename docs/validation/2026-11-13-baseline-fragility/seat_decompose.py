@@ -48,6 +48,7 @@ RESIDUAL_FRACTION = 0.1
 MOTION_M = 0.0005
 MOTION_RAD = 0.001
 MOTION_GAP_S = 0.2  # samples are 0.1 s apart: a wider gap (or a first/last sample further off) is not coverage
+GAP_EPS_S = 1e-9  # float slack on that comparison (5.81 -> 6.01 s is 0.20000000000000018)
 QE_TOL_M = 1e-6
 TIME_TOL_S = 1e-6  # the lift transition, its slam_control row and the seat's baseline share one tick
 NEGLIGIBLE_M = 1e-4  # the tables' 0.1 mm resolution: a smaller term is neither same-sign nor cancelling
@@ -104,13 +105,15 @@ def pallet_motion(samples: list, t_from: float, t_lift: float) -> dict:
     if end is None:
         return {"covered": False, "samples": 0}
     window = window[: end + 1]
+    if not all(finite(s["time_s"], *s["pallet_position_m"][:2], s["pallet_yaw_rad"]) for s in window):
+        return {"covered": False, "finite": False, "samples": 0}
     times = [t_from] + [s["time_s"] for s in window]
-    covered = (len(window) >= 2 and max(b - a for a, b in zip(times, times[1:])) <= MOTION_GAP_S
-               and window[-1]["time_s"] - t_lift <= MOTION_GAP_S)
+    covered = (len(window) >= 2 and max(b - a for a, b in zip(times, times[1:])) <= MOTION_GAP_S + GAP_EPS_S
+               and window[-1]["time_s"] - t_lift <= MOTION_GAP_S + GAP_EPS_S)
     x0, y0 = window[0]["pallet_position_m"][:2]
     yaw0 = window[0]["pallet_yaw_rad"]
     return {
-        "covered": covered, "from_t": window[0]["time_s"], "to_t": window[-1]["time_s"], "samples": len(window),
+        "covered": covered, "finite": True, "from_t": window[0]["time_s"], "to_t": window[-1]["time_s"], "samples": len(window),
         "max_move_m": max(math.hypot(s["pallet_position_m"][0] - x0, s["pallet_position_m"][1] - y0) for s in window),
         "max_yaw_rad": max(abs(math.remainder(s["pallet_yaw_rad"] - yaw0, math.tau)) for s in window),
     }
@@ -167,6 +170,10 @@ def decompose(result: dict, sc) -> dict:
     V = lift_sample["pallet_position_m"][:2]
     G = path["poses"][-1]
     E, A = row[1:4], row[4:7]
+    if not finite(*V, *G[:3], *E, *A):  # before any trigonometry: math.sin(inf) raises
+        out["missing"].append("nonfinite_lift_inputs")
+        out["hold"] = sorted(set(hold + ["nonfinite_terms"]))
+        return out
     out["V"], out["G"] = [float(v) for v in V], [float(v) for v in G[:3]]
     out["E"], out["A"] = [float(v) for v in E], [float(v) for v in A]
     g_A, g_E, g_G = lateral(V, A), lateral(V, E), lateral(V, G)
@@ -190,6 +197,10 @@ def decompose(result: dict, sc) -> dict:
         out["missing"].append("pocket_observation")
     elif offset is None or depth is None:
         out["missing"].append("offset_or_depth")
+    elif not finite(*cap["truth_rear"][:3], *cap["control_rear"][:3], *obs["left"]["center_m"][:2],
+                    *obs["right"]["center_m"][:2], obs["insertion_yaw_rad"], offset, depth):
+        out["missing"].append("nonfinite_capture_inputs")
+        hold.append("nonfinite_terms")
     else:
         q = observed_centre(obs, float(depth))
         Qd = to_world(q, base_from_rear(cap["truth_rear"], offset))
@@ -229,7 +240,9 @@ def decompose(result: dict, sc) -> dict:
     if "capture_t" in out:
         motion = pallet_motion(result.get("samples") or [], out["capture_t"], t_lift)
         out["pallet_motion"] = motion
-        if not motion["covered"]:
+        if not motion.get("finite", True):
+            hold.append("nonfinite_terms")
+        elif not motion["covered"]:
             hold.append("insufficient_motion_coverage")
         if motion["samples"] and (motion["max_move_m"] > MOTION_M or motion["max_yaw_rad"] > MOTION_RAD):
             hold.append("pallet_moved")

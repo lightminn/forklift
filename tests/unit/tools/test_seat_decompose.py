@@ -129,6 +129,29 @@ def test_holds():
         del r["samples"][120:125]
     assert hold_of(gap)["hold"] == ["insufficient_motion_coverage"]
 
+    def gap_of_exactly_two_tenths(r, sc):  # Codex review round 2 P3: 5.81 -> 6.01 s is 0.2 s up to float error
+        del r["samples"][59]
+    assert hold_of(gap_of_exactly_two_tenths)["hold"] == []
+
+    def nan_sample(r, sc):  # Codex review round 2 P2: a NaN pallet sample mid-window
+        r["samples"][150]["pallet_yaw_rad"] = float("nan")
+    assert hold_of(nan_sample)["hold"] == ["nonfinite_terms"]
+
+    def nan_sample_xy(r, sc):
+        r["samples"][150]["pallet_position_m"] = [float("nan"), 0.0, 0.0]
+    assert hold_of(nan_sample_xy)["hold"] == ["nonfinite_terms"]
+
+    def inf_lift_yaw(r, sc):  # Codex review round 2 P2: an infinite yaw must hold, not raise
+        sc[:, 3] = np.inf
+    d = hold_of(inf_lift_yaw)
+    assert d["missing"] == ["nonfinite_lift_inputs"] and "nonfinite_terms" in d["hold"]
+    assert R.judge(d)["status"] == "held"
+
+    def inf_capture_yaw(r, sc):
+        r["observation_attempts"][1]["capture_control"]["truth_rear"][2] = float("inf")
+    d = hold_of(inf_capture_yaw)
+    assert d["missing"] == ["nonfinite_capture_inputs"] and "nonfinite_terms" in d["hold"] and "D" not in d["terms_m"]
+
     def slam_shifted(r, sc):  # Codex review P2: the nearest row 1000 s off is not the lift row
         sc[:, 0] -= 1000.0
     d = hold_of(slam_shifted)
@@ -145,7 +168,13 @@ def test_holds():
     def nan_estimate(r, sc):  # Codex review P2: NaN passes a > comparison
         sc[:, 1] = np.nan
     d = hold_of(nan_estimate)
-    assert d["hold"] == ["nonfinite_terms"] and d["terms_m"]["F"] is None and R.judge(d)["status"] == "held"
+    assert d["hold"] == ["nonfinite_terms"]
+    assert d["missing"] == ["nonfinite_lift_inputs"] and "terms_m" not in d and R.judge(d)["status"] == "held"
+
+    def nan_seat(r, sc):  # a non-finite seat passes the inputs but not the residuals
+        r["slip_watch"]["baseline"]["seat"][1] = float("nan")
+    d = hold_of(nan_seat)
+    assert d["hold"] == ["nonfinite_terms"] and d["residuals_m"]["seat_minus_S"] is None
 
     def replaced(r, sc):
         r["tracker_versions"][1]["replaced_s"] = 15.0
@@ -249,7 +278,7 @@ def test_the_folders_are_read_and_written(tmp_path):
     names = {r["name"]: r for r in payload["runs"]}
     assert names["dg_Pn_aisle_rack_s12"]["arm"] == "Pn" and names["dg_Pn_aisle_rack_s12"]["scene"] == "aisle_rack"
     assert names["dg_Pn_aisle_rack_s12"]["seed"] == 12
-    assert names["lbg_Ub3_random_1_s0"]["terms_m"]["L"] is None
+    assert names["lbg_Ub3_random_1_s0"]["missing"] == ["nonfinite_lift_inputs"]
     assert names["lbg_Ub3_random_1_s0"]["judgement"]["status"] == "held"
     assert set(payload["tallies"]) == {"5mm", "10mm", "15mm"}
     assert "| lbg_B0_random_1_s1 | -20.0 | -4.0 | -1.0 | -3.0 | +0.0 | -6.0 | -10.0 | -13.0 | -20.0 | judged: L" \
