@@ -94,6 +94,8 @@ def test_the_step_is_accepted_by_any_of_its_seqs_when_a_state_skips_the_first():
     assert bringup.mcu_time_of_acceptance(samples, [5, 6, 7]) == (3000, 30, 6)
     assert bringup.mcu_time_of_acceptance(samples, [8, 9]) == (None, None, None)
     assert bringup.mcu_time_of_acceptance(samples, []) == (None, None, None)
+    # a STATE from before the hold naming a reused seq never answers (Codex review)
+    assert bringup.mcu_time_of_acceptance(samples, [4, 7], start=2) == (4000, 40, 7)
 
 
 def test_a_target_over_the_cap_is_refused_before_anything_moves(bench):

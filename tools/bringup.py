@@ -312,13 +312,14 @@ class Session:
         return ok
 
 
-def mcu_time_of_acceptance(samples, seqs):
+def mcu_time_of_acceptance(samples, seqs, start: int = 0):
     """(MCU time, received host time, seq) of the first STATE that reports any of ``seqs`` accepted (last_rx_seq).
     A STATE names only the last DRIVE received, so when two land between STATEs the first seq is never named
     (ws1 19006, under load): any seq of the step's hold is its acceptance. The STATE's time is then up to one DRIVE
-    cycle after the step's first DRIVE reached the MCU -- the rise time can read that much short."""
+    cycle after the step's first DRIVE reached the MCU -- the rise time can read that much short. Only samples from
+    ``start`` on count (taken when the hold began), so an older STATE naming a reused seq never answers."""
     wanted = set(seqs)
-    for s in samples:
+    for s in samples[start:]:
         if s.state.last_rx_seq in wanted:
             return s.state.mcu_time_us, s.host_ns, s.state.last_rx_seq
     return None, None, None
@@ -336,14 +337,16 @@ def run_step(bench: Bench, session: Session, wheel: str, target: float) -> dict:
     left, right = (target if wheel in ("left", "both") else 0.0), (target if wheel in ("right", "both") else 0.0)
     w = 0 if wheel != "right" else 1
     initial = bench.state.wheel_rate_left_rad_s if w == 0 else bench.state.wheel_rate_right_rad_s
-    step_seqs = []
+    step_seqs, step_start = [], len(bench.samples)
     if session.aborted is None:
         session.hold(left, right, STEP_MAX_S)
         step_seqs = list(session.last_hold_seqs)
     if session.aborted is None:
         session.hold(0.0, 0.0, 1.0)
     session.cleanup()
-    step_us, step_host, seq = mcu_time_of_acceptance(bench.samples, step_seqs)
+    if session.aborted is None and not step_seqs:
+        return _final({"result": "step_not_sent"}, session)  # the host queued no step DRIVE at all
+    step_us, step_host, seq = mcu_time_of_acceptance(bench.samples, step_seqs, step_start)
     if step_us is None:
         return _final({"result": "no_acceptance"}, session)
     m = step_metrics(bench.samples, w, step_us, initial, target, window_s=STEP_MAX_S)
