@@ -1,0 +1,38 @@
+{
+ "drive": "/home/projects/forklift/test_runs/live/slam_online/s2r_5fef1091/h_mapq/map/drive.jsonl",
+ "cost": {
+  "keyframes": 167,
+  "max_s": 0.09837373392656446,
+  "last_tenth_mean_s": 0.04423106543981703,
+  "unit_mean_s": [
+   0.03256364373495791
+  ],
+  "unit_max_s": [
+   0.09837373392656446
+  ],
+  "units_complete": 1,
+  "slope_s_per_s": 4.903599999506718e-05,
+  "intercept_s": 0.0239157507329089,
+  "at_8h_s": 1.4361525505908437,
+  "mean_at_8h_s": null,
+  "max_at_8h_s": null
+ },
+ "accuracy": {
+  "pos_median_m": 0.04260708392039436,
+  "pos_max_m": 0.14594091828440878,
+  "yaw_median_deg": 0.10225171678557143,
+  "yaw_max_deg": 0.39124129846206546,
+  "unit_pos_median_m": [
+   0.04260708392039436
+  ],
+  "growth_m": 0.0,
+  "source_growth_m": null
+ },
+ "graph": {
+  "nodes": 167,
+  "edges": 227,
+  "components": 1,
+  "reachable_from_first": 167,
+  "connected": true
+ }
+}
