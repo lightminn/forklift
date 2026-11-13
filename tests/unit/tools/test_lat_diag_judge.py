@@ -115,3 +115,15 @@ def test_unexposed_pn_leaves_the_seed_out_and_two_leave_the_scene_unjudged():
     rows["Pn:random_1:4"]["exposure"]["exposed"] = False
     c = J.conclusions(rows, {"random_1": [3, 4, 5]})
     assert not c["per_scene"]["random_1"]["judged"] and c["pooled"]["ga"]["n"] == 0
+
+
+def test_an_unexposed_pn_counts_even_where_another_arm_is_invalid_and_an_unjudged_scene_has_no_verdict():
+    ok, fail = (True, 1.0), (False, 1.0)
+    rows = scene_rows("random_1", {s: (ok, ok, fail) for s in (3, 4, 5, 6, 7, 8, 9, 10)})
+    rows["Pn:random_1:3"]["exposure"]["exposed"] = False
+    rows["Pn:random_1:4"]["exposure"]["exposed"] = False
+    rows["Bb10:random_1:4"]["invalid"] = ["no result.json"]  # must not hide the unexposed Pn
+    c = J.conclusions(rows, {"random_1": list(range(3, 11))})
+    sc = c["per_scene"]["random_1"]
+    assert not sc["judged"] and sc["ga"]["verdict"] == "unjudged" and sc["na"]["verdict"] == "unjudged"
+    assert c["pooled"]["ga"]["n"] == 0 and c["pooled"]["ga"]["verdict"] == "not_confirmed"

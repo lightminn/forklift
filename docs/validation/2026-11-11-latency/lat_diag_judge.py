@@ -106,12 +106,15 @@ def triplets_for(rows: dict, scene: str, seeds) -> tuple[list, list]:
     out, left = [], []
     for s in seeds:
         r = {arm: rows.get(f"{arm}:{scene}:{s}") for arm in ARMS}
+        pn = r["Pn"]
+        if pn is not None and "exposure" in pn and not pn["exposure"]["exposed"]:
+            # counted before the other arms' validity: an unexposed Pn counts towards the scene's limit whatever else
+            # happened at that seed (Codex tools review P2)
+            left.append({"seed": s, "unexposed": pn["exposure"]})
+            continue
         why = [arm for arm, x in r.items() if x is None or x.get("invalid") or "mission" not in x]
         if why:
             left.append({"seed": s, "invalid": why})
-            continue
-        if not r["Pn"]["exposure"]["exposed"]:
-            left.append({"seed": s, "unexposed": r["Pn"]["exposure"]})
             continue
         out.append({"seed": s, "Pn": worsened(r["Pn"], r["B0"]), "Bb10": worsened(r["Bb10"], r["B0"])})
     return out, left
@@ -125,6 +128,9 @@ def conclusions(rows: dict, seeds_by_scene: dict) -> dict:
         judged = unexposed < 2
         per_scene[scene] = {"triplets": len(t), "left_out": left, "judged": judged,
                             "ga": judge_endpoint(t, "ga"), "na": judge_endpoint(t, "na")}
+        if not judged:  # the statistics stay for the record; no verdict (Codex tools review P3)
+            for key in ("ga", "na"):
+                per_scene[scene][key]["verdict"] = "unjudged"
         if judged:
             all_t += t
     pooled = {"ga": judge_endpoint(all_t, "ga"), "na": judge_endpoint(all_t, "na")}
@@ -230,7 +236,8 @@ def main(argv=None) -> int:
     G.strip_affinity(dc)
     canaries = {}
     for scene, seed in lists.DIAG_CANARIES:
-        mine = rows.get(f"lbd_B0_{scene}_s{seed}_can")
+        name = f"lbd_B0_{scene}_s{seed}_can"
+        mine = rows.get(f"lat_r_{name}") or rows.get(name)  # the effective run (Codex tools review P2)
         ref = a.batch58 / f"lbg_B0_{scene}_s{seed}" / "run"
         if mine is None or mine["invalid"] or not ref.exists():
             canaries[f"{scene}_s{seed}"] = None
