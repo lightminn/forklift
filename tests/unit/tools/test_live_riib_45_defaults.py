@@ -140,3 +140,67 @@ def test_an_abbreviation_of_either_is_refused(tmp_path, extra):
 def test_a_near_tracking_run_judges_the_last_return_start_backoff(tmp_path, extra, refused):
     p = _launch(tmp_path, EXTRA_ARGS=extra)
     assert ("--near-tracking keeps the return-start backoff off" in p.stdout) is refused, p.stdout + p.stderr
+
+
+# ---- K1 (the lead's promotion decision 2026-11-14, docs/validation/2026-11-14-k1-comparison.md) ------------------
+
+
+def test_k1_is_on_with_the_near_end_stand_by_default(tmp_path):
+    p = _launch(tmp_path)
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "near_observe_arrival=0.05,0.05" in p.stdout
+    import shlex
+    assert shlex.split(_env_sh(tmp_path)["NEAR_OBSERVE_ARRIVAL"]) == ["0.05,0.05"]  # printf %q may escape the comma
+    assert _values(tmp_path, "--near-observe-arrival") == ["0.05,0.05"]
+
+
+@pytest.mark.parametrize("env", [{"NEAR_END_STAND": "shadow"}, {"NEAR_END_STAND": "off"},
+                                 {"EXTRA_ARGS": "--near-end-stand off"}, {"EXTRA_ARGS": "--near-end-stand=shadow"},
+                                 {"EXTRA_ARGS": "--near-tracking"}, {"NEAR_OBSERVE_ARRIVAL": "off"}])
+def test_k1_is_off_without_the_near_end_stand_on_or_when_switched_off(tmp_path, env):
+    p = _launch(tmp_path, **env)
+    if "--near-tracking" not in env.get("EXTRA_ARGS", ""):
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert _values(tmp_path, "--near-observe-arrival") == []
+    assert "near_observe_arrival=off" in p.stdout
+    assert _env_sh(tmp_path)["NEAR_OBSERVE_ARRIVAL"] == "off"
+
+
+def test_an_extra_args_k1_value_is_the_only_one_the_runner_reads(tmp_path):
+    for extra in ("--near-observe-arrival 0.04,0.06", "--near-observe-arrival=0.04,0.06"):
+        p = _launch(tmp_path, EXTRA_ARGS=extra)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert _values(tmp_path, "--near-observe-arrival") == ["0.04,0.06"]
+        assert "near_observe_arrival=0.04,0.06" in p.stdout
+
+
+@pytest.mark.parametrize("env", [{"NEAR_OBSERVE_ARRIVAL": "0.05,0.05", "NEAR_END_STAND": "off"},
+                                 {"EXTRA_ARGS": "--near-end-stand shadow --near-observe-arrival 0.05,0.05"},
+                                 {"NEAR_OBSERVE_ARRIVAL": "narrow"}])
+def test_k1_without_the_near_end_stand_on_or_malformed_is_refused(tmp_path, env):
+    p = _launch(tmp_path, **env)
+    assert p.returncode == 2 and "NEAR_OBSERVE_ARRIVAL" in p.stdout, p.stdout + p.stderr
+
+
+def test_an_abbreviation_of_k1_is_refused(tmp_path):
+    p = _launch(tmp_path, EXTRA_ARGS="--near-observe 0.05,0.05")
+    assert p.returncode == 2 and "in full" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_log_shows_the_near_end_stand_applied(tmp_path):
+    """Codex promotion review P3: an EXTRA_ARGS --near-end-stand is what the runner gets, and what the log says."""
+    p = _launch(tmp_path, EXTRA_ARGS="--near-end-stand off")
+    assert "near_end_stand=off near_observe_arrival=off" in p.stdout, p.stdout
+
+
+def test_k1_numbers_are_the_runners_check(tmp_path):
+    """The launcher checks the shape M,RAD only: the runner's parser takes .05 and 5e-2 too."""
+    for value in (".05,.05", "5e-2,5e-2"):
+        p = _launch(tmp_path, EXTRA_ARGS=f"--near-observe-arrival {value}")
+        assert p.returncode == 0, (value, p.stdout + p.stderr)
+        assert _values(tmp_path, "--near-observe-arrival") == [value]
+
+
+def test_the_survey_keeps_k1_off():
+    survey = (ROOT / "deploy/console/slam_survey.sbatch").read_text()
+    assert "printf 'NEAR_OBSERVE_ARRIVAL=off\\n'" in survey

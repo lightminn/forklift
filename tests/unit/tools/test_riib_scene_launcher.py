@@ -684,3 +684,38 @@ def test_a_scene_file_past_scene_is_refused(tmp_path, extra):
     assert out.returncode == 2 and "SCENE= sets the scene" in out.stdout, out.stdout
     out = dry_run(tmp_path, out=tmp_path / "o2", EXTRA_ARGS="--scene-requirements-override {}")
     assert "SCENE= sets the scene" not in out.stdout  # the other --scene-... option is not a scene file
+
+
+# ---- K1 (the lead's promotion decision 2026-11-14, docs/validation/2026-11-14-k1-comparison.md) ------------------
+
+
+def test_k1_follows_the_near_end_stand_applied(tmp_path):
+    args = args_of(dry_run(tmp_path))
+    assert contains(args, ["--near-observe-arrival", "0.05,0.05"]) and args.count("--near-observe-arrival") == 1
+    assert "NEAR_OBSERVE_ARRIVAL=0.05,0.05 NEAR_OBSERVE_ARRIVAL_FROM=launcher" in (
+        tmp_path / "out/riib_defaults.txt").read_text()
+    for env in ({"NEAR_END_STAND": "off"}, {"NEAR_END_STAND": "shadow"}, {"MODE": "truth"},
+                {"EXTRA_ARGS": "--near-end-stand off"}, {"NEAR_OBSERVE_ARRIVAL": "off"}):
+        out = dry_run(tmp_path, **env)
+        assert out.returncode == 0, (env, out.stdout + out.stderr)
+        assert "--near-observe-arrival" not in args_of(out), env
+        assert "NEAR_OBSERVE_ARRIVAL=off NEAR_OBSERVE_ARRIVAL_FROM=launcher" in (
+            tmp_path / "out/riib_defaults.txt").read_text(), env
+
+
+@pytest.mark.parametrize("extra", ["--near-observe-arrival 0.04,0.06", "--near-observe-arrival=0.04,0.06",
+                                   "--near-obs 0.04,0.06"])
+def test_k1_named_in_extra_args_wins_and_is_recorded(tmp_path, extra):
+    out = dry_run(tmp_path, EXTRA_ARGS=extra)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert len([a for a in args_of(out) if a.startswith("--near-o")]) == 1  # the launcher adds none of its own
+    assert "NEAR_OBSERVE_ARRIVAL=0.04,0.06 NEAR_OBSERVE_ARRIVAL_FROM=EXTRA_ARGS" in (
+        tmp_path / "out/riib_defaults.txt").read_text()
+
+
+@pytest.mark.parametrize("env", [{"NEAR_OBSERVE_ARRIVAL": "0.05,0.05", "NEAR_END_STAND": "off"},
+                                 {"EXTRA_ARGS": "--near-end-stand shadow --near-observe-arrival 0.05,0.05"},
+                                 {"NEAR_OBSERVE_ARRIVAL": "narrow"}])
+def test_k1_without_the_near_end_stand_on_or_malformed_is_refused(tmp_path, env):
+    out = dry_run(tmp_path, **env)
+    assert out.returncode == 2 and "NEAR_OBSERVE_ARRIVAL" in out.stdout, out.stdout + out.stderr
