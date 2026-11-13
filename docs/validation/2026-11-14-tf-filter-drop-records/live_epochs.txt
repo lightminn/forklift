@@ -1,0 +1,10 @@
+ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1 | sync_slam_toolbox_node | drops=0 | "failure_reason": "slam_link_failed: scan 4888: no reply within 1.00 s"
+ct2_41a2a7e8_fixed_line_m_s2/live/epoch_2 | sync_slam_toolbox_node | drops=0 | no failure_reason
+ct2_624d0616_auto_line_m_s1/live/epoch_1 | sync_slam_toolbox_node | drops=0 | "failure_reason": "slam_link_failed: scan 4874: no reply within 1.00 s"
+ct2_624d0616_auto_line_m_s1/live/epoch_2 | sync_slam_toolbox_node | drops=0 | no failure_reason
+ct2_624d0616_auto_line_m_s4/live/epoch_1 | sync_slam_toolbox_node | drops=0 | "failure_reason": "slam_link_failed: scan 4898: no reply within 1.00 s"
+ct2_624d0616_auto_line_m_s4/live/epoch_2 | sync_slam_toolbox_node | drops=0 | no failure_reason
+ct2_624d0616_fixed_line_m_s3/live/epoch_1 | sync_slam_toolbox_node | drops=0 | "failure_reason": "slam_link_failed: scan 4851: no reply within 1.00 s"
+ct2_624d0616_fixed_line_m_s3/live/epoch_2 | sync_slam_toolbox_node | drops=0 | no failure_reason
+lf_67694d16_main_line_m_s0/live/epoch_1 | sync_slam_toolbox_node | drops=0 | "failure_reason": "slam_link_failed: scan 5019: no reply within 1.00 s"
+lf_67694d16_main_line_m_s0/live/epoch_2 | sync_slam_toolbox_node | drops=0 | no failure_reason
