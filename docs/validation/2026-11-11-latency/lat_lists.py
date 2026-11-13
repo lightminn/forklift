@@ -4,6 +4,8 @@
                                               # OUT/RUNS_smoke.jsonl and the live B row in OUT/lat_sm_B50.jsonl
     python lat_lists.py a SNAP OUT            # A: 80 riib rows in OUT/RUNS_A.jsonl
     python lat_lists.py b SNAP OUT            # B: 15 single-slot live jobs, one OUT/<name>.jsonl each, in order
+    python lat_lists.py diag SNAP OUT         # the budget diagnosis' perturbation batch (docs/plans/2026-11-13-
+                                              # layer-budget-diagnosis.md 3): 50 riib rows in OUT/RUNS_diag.jsonl
     python lat_lists.py budget SNAP OUT       # the layer budget check (docs/plans/2026-11-11-layer-latency-budget.md 3):
                                               # 58 riib rows in OUT/RUNS_budget.jsonl
     python lat_lists.py rerun SNAP OUT NAME.. # one row per named A run under lat_r_<name> (the first record stays),
@@ -49,6 +51,13 @@ BUDGET_ARMS = {"B0": ("off", ""), "Bb10": (BUDGET_FILE, ""),
                "Ub12": (BUDGET_FILE, "--latency-layer undeclared:12"),
                "Uo9": (BUDGET_FILE, "--layer-latency-budget-s 0.05 --latency-layer undeclared:9")}
 BUDGET_SCENES = ("aisle_rack", "random_1", "line_2")  # the longer runs first in a bundle
+# the budget diagnosis' perturbation batch (plan 2026-11-13-layer-budget-diagnosis 3.1): new seeds, disjoint per
+# scene; Pn = B0 with the LiDAR and pocket noise resampled (--seed s+1000 after the launcher's --seed s); two
+# determinism canaries re-running completed 58-run B0s, for exploratory linking only
+DIAG_SEEDS = {"aisle_rack": tuple(range(11, 19)), "random_1": tuple(range(3, 11))}  # the longer runs first
+DIAG_ARMS = ("B0", "Pn", "Bb10")
+DIAG_PN_OFFSET = 1000
+DIAG_CANARIES = (("random_1", 0), ("aisle_rack", 2))
 B_WRAPPER = "docs/validation/2026-11-08-r1-confirmation/r1c_session.sh"
 B_BASE = {"SET": "far", "ARM": "K", "FACTOR": "1.0", "SEED": "0", "INSTR": "off", "LAYER_BUDGET": "off",
           "FORKLIFT_GRID_CLEAR_KERNEL": "1",
@@ -78,6 +87,22 @@ def budget_rows(snap: str, out: str) -> list[dict]:
         for arm in ("B0", "Ub6"):
             rows.append(budget_row(snap, out, f"lbg_{arm}_{scene}_s0_rep", arm, scene, 0))
     assert len(rows) == 58 and len({r["name"] for r in rows}) == 58
+    return rows
+
+
+def diag_row(snap: str, out: str, name: str, arm: str, scene: str, seed: int) -> dict:
+    if arm == "Pn":
+        row = budget_row(snap, out, name, "B0", scene, seed)
+        row["env"].update(EXTRA_ARGS=f"{BASE_ARGS} --seed {seed + DIAG_PN_OFFSET}", LAT_ARM="Pn")
+        return row
+    return budget_row(snap, out, name, arm, scene, seed)
+
+
+def diag_rows(snap: str, out: str) -> list[dict]:
+    rows = [diag_row(snap, out, f"lbd_{arm}_{scene}_s{seed}", arm, scene, seed)
+            for scene, seeds in DIAG_SEEDS.items() for seed in seeds for arm in DIAG_ARMS]
+    rows += [diag_row(snap, out, f"lbd_B0_{scene}_s{seed}_can", "B0", scene, seed) for scene, seed in DIAG_CANARIES]
+    assert len(rows) == 50 and len({r["name"] for r in rows}) == 50
     return rows
 
 
@@ -142,7 +167,7 @@ def write(path: Path, rows: list[dict]) -> None:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 3 or argv[0] not in ("smoke", "a", "b", "budget", "rerun"):
+    if len(argv) < 3 or argv[0] not in ("smoke", "a", "b", "budget", "diag", "rerun"):
         raise SystemExit(__doc__)
     mode, snap, out = argv[0], argv[1], argv[2].rstrip("/")
     Path(out).mkdir(parents=True, exist_ok=True)
@@ -153,6 +178,8 @@ def main(argv: list) -> int:
         write(Path(out) / "RUNS_A.jsonl", a_rows(snap, out))
     elif mode == "budget":
         write(Path(out) / "RUNS_budget.jsonl", budget_rows(snap, out))
+    elif mode == "diag":
+        write(Path(out) / "RUNS_diag.jsonl", diag_rows(snap, out))
     elif mode == "b":
         for j in b_jobs(snap, out):
             write(Path(out) / f"{j['name']}.jsonl", [j])
@@ -162,9 +189,13 @@ def main(argv: list) -> int:
         a = {r["name"]: r for r in a_rows(snap, out)}
         b = {j["name"]: j for j in b_jobs(snap, out)}
         g = {r["name"]: r for r in budget_rows(snap, out)}
+        dg = {r["name"]: r for r in diag_rows(snap, out)}
         rows = []
         for name in names:
-            if name in g:
+            if name in dg:
+                e = dg[name]["env"]
+                rows.append(diag_row(snap, out, f"lat_r_{name}", e["LAT_ARM"], e["SCENE"], int(e["SEED"])))
+            elif name in g:
                 e = g[name]["env"]
                 rows.append(budget_row(snap, out, f"lat_r_{name}", e["LAT_ARM"], e["SCENE"], int(e["SEED"])))
             elif name in a:

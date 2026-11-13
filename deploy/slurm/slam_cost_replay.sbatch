@@ -21,6 +21,8 @@
 #   SLAM_NODE=localization: MAP_BUNDLE (a bundle folder, tools/slam_replay_bundle.py), MAP_ID, MAP_START_POSE "x,y,yaw"
 #   and LOC_SETS "key=value ..." (applied to the localization params) -- candidate A; no graph dump (localization
 #   refuses serialize_map).
+#   KEEP_MAP_SUBSCRIPTION=1 (environment, localization only): the bridge keeps /map after its start check and stores
+#   every map (online-SLAM plan criterion 4, a map-measurement run; its cost is not judged).
 #   SUMMARY=off (environment): skip the summary (the caller runs it; deploy/slurm/slam_h_switch.sbatch).
 #   A paced replay runs at the live wall rate (0.4 live factor: sim 1,500 s ~ 63 min) -- give it --time; the driver
 #   refuses a plan longer than the job's remaining time less 5 min (--wall-budget-s).
@@ -66,7 +68,8 @@ trap 'docker rm -f "$NAME" >/dev/null 2>&1' EXIT
 LOC_DOCKER=()
 if [ "${SLAM_NODE:-sync}" = localization ]; then
   LOC_DOCKER=(-v "$(realpath "${MAP_BUNDLE:?the bundle}"):/bundle:ro" -e SLAM_EXPECTED_MAP_ID="${MAP_ID:?the map id}"
-              -e SLAM_MAP_START_POSE="${MAP_START_POSE:?the start pose}" -e LOC_SETS="${LOC_SETS:-}")
+              -e SLAM_MAP_START_POSE="${MAP_START_POSE:?the start pose}" -e LOC_SETS="${LOC_SETS:-}"
+              -e KEEP_MAP_SUBSCRIPTION="${KEEP_MAP_SUBSCRIPTION:-0}")
 fi
 docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 "${LOC_DOCKER[@]}" \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
