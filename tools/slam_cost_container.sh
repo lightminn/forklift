@@ -34,6 +34,8 @@ case $NODE in
     POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>"$OUT/pose_list.log") || exit 3
     LOC_ARGS=(-p localization_bundle:=/bundle -p expected_map_id:="$SLAM_EXPECTED_MAP_ID"
               -p "map_start_pose:=[$POSE_LIST]")
+    # online-SLAM plan criterion 4: keep /map after the start check and store every map (H's map measurement)
+    [ "${KEEP_MAP_SUBSCRIPTION:-0}" = 1 ] && LOC_ARGS+=(-p keep_map_subscription:=true)
     ros2 launch slam_toolbox localization_launch.py slam_params_file:="$OUT/localization_params.yaml" \
       use_sim_time:=true autostart:=true > "$OUT/slam_toolbox.log" 2>&1 & ;;
   *) echo "unknown node $NODE" > "$OUT/slam_toolbox.log"; exit 2 ;;
