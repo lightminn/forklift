@@ -4,6 +4,7 @@ the SLAM pose at the running tick against the same tick's truth; success with th
 success floors and bounds; the F1/F2 records; and the verdict-path fingerprint that decides what may be pooled."""
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -536,3 +537,11 @@ def test_a_development_session_with_a_record_click_is_never_judged(tmp_path):
     (d / "probe.json").write_text(json.dumps({**probe, "click_kind": "pos1.5"}))
     with pytest.raises(ValueError, match="record click"):
         J.judge_sessions(tmp_path, _starts("s1"))
+
+
+def test_the_fingerprint_covers_every_file_the_bridge_container_runs():
+    """Codex #482 review P2: a helper the live bridge container calls (tools/ros_float_list.py) changes the start the
+    bridge is given, so a frozen fingerprint has to see it."""
+    script = (ROOT / "tools" / "slam_bridge_container.sh").read_text()
+    for rel in re.findall(r"/workspace/(tools/[\w./-]+\.py)", script):
+        assert rel in J.FINGERPRINT_FILES and (ROOT / rel).is_file(), rel
