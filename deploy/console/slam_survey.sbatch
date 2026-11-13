@@ -65,6 +65,7 @@ CPU0=$(taskset -cp $$ | awk -F': ' '{print $2}' | cut -d, -f1 | cut -d- -f1)
   # the G3 scan-step switches stay off in a survey (real-time plan 5.26-5.27): its maps are compared across runs
   printf 'FORKLIFT_GRID_CLEAR_KERNEL=0\nFORKLIFT_SHADOW_KERNEL=0\nLIDAR_CAST=loop\n'
   printf 'RETURN_START=off\nNEAR_END_STAND=off\n'  # ④⑤: the console's runner reads them; a survey keeps both off
+  printf 'NEAR_OBSERVE_ARRIVAL=off\n'  # K1: needs the near-end stand on, which a survey keeps off
   printf 'SLAM_CHOICE=%q\n' "mapping (survey epoch)"  # the console's runner shows it (live-default plan 5d)
 } > "$OUT/env.sh"
 
@@ -107,6 +108,9 @@ LAYER=config/obstacle_layer_single.yaml
 # apart from the obstacle-layer one (a survey bundle's shared input); LAYER_BUDGET=off runs without it
 LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}
 BUDGET=(--layer-latency-budget "$LAYER_BUDGET")
+# K1 (env.sh): the near-leg loose arrival narrowed unless off (an EXTRA_ARGS --near-observe-arrival left it off here)
+NOA_ARGS=()
+[ "${NEAR_OBSERVE_ARRIVAL:-off}" = off ] || NOA_ARGS=(--near-observe-arrival "$NEAR_OBSERVE_ARRIVAL")
 [ "$LAYER_BUDGET" = off ] && BUDGET=()
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
@@ -140,6 +144,7 @@ ARGS=(
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   --lidar-cast "${LIDAR_CAST:-loop}" \
   --return-start-backoff "${RETURN_START:-off}" --near-end-stand "${NEAR_END_STAND:-off}" \
+  ${NOA_ARGS[@]+"${NOA_ARGS[@]}"} \
   $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
