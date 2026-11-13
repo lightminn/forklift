@@ -218,7 +218,7 @@ def main(argv=None) -> int:
     seeds_by_scene = {sc: list(seeds) for sc, seeds in lists.DIAG_SEEDS.items()}
     concl = conclusions(by_key, seeds_by_scene)
     # report only: improvements, approach divergence
-    report = {"improved": [], "diverged": {"Pn": 0, "Bb10": 0, "pairs": 0}}
+    report = {"improved": [], "diverged": {"Pn": 0, "Bb10": 0, "pairs": {"Pn": 0, "Bb10": 0}}}
     for sc, seeds in seeds_by_scene.items():
         for s in seeds:
             b0 = by_key.get(f"B0:{sc}:{s}")
@@ -229,7 +229,7 @@ def main(argv=None) -> int:
                 if not b0["mission"]["done"] and x["mission"]["done"]:
                     report["improved"].append(x["name"])
                 if b0.get("approach_s") is not None and x.get("approach_s") is not None:
-                    report["diverged"]["pairs"] += arm == "Pn"
+                    report["diverged"]["pairs"][arm] += 1  # each arm its own comparable pairs (Codex P2)
                     report["diverged"][arm] += abs(x["approach_s"] - b0["approach_s"]) > DIVERGE_S
     # canaries against the 58-run B0 (exceptions 1 and 2), exploratory linking only
     LA.strip_layer_timing(dc)
