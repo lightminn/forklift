@@ -1,0 +1,5724 @@
+{
+ "runs": [
+  {
+   "name": "lbg_B0_aisle_rack_s1",
+   "failure": "Tracking failed in transport: pos=0.0113,yaw=0.0575",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 12,
+    "yaw_error_rad": 0.057523970264493796,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 91.0333,
+   "leg": 0,
+   "leg_length_m": 1.35,
+   "tau": 0.05,
+   "e_E": 0.0502,
+   "e_T": 0.0494,
+   "D": true,
+   "sat_end": {
+    "moving_s": 5.6,
+    "saturated_s": 2.5,
+    "agreeing_s": 0.3,
+    "S": false,
+    "share": 0.446,
+    "ach_over_cmd": 0.8577,
+    "ach_minus_plan": 0.0188,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     -0.0323,
+     -0.0164
+    ],
+    "wheel_curvature": [
+     -0.2999,
+     -0.3382
+    ]
+   },
+   "Short": false,
+   "leg_start_truth": {
+    "lateral_m": 0.0109,
+    "yaw_rad": 0.0002
+   },
+   "O": false,
+   "installs_inside_window": [],
+   "path_sha": "4dc4bc1f8e685f2c",
+   "primary": "localisation_decision",
+   "root": "budget_0092bcf7"
+  },
+  {
+   "name": "lbg_Bb10_random_1_s0",
+   "failure": "Tracking failed in transport: pos=2.9974,yaw=1.0147",
+   "kind": "cross_track",
+   "leg": 2,
+   "leg_range": [
+    41,
+    215
+   ],
+   "leg_start_s": 87.4417,
+   "t_fail": 115.7417,
+   "path_sha": "fa8875c9e080375f",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3502,
+   "dT": 0.2958,
+   "L": 0.0544,
+   "progress_gap_m": 0.0561,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0785,
+   "yaw_E_minus_T": 0.0036,
+   "samples_window": 283,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 111.85,
+    "ET": 0.1109,
+    "yawET": -0.0051,
+    "jump_0_5s": 0.0006
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 3.892,
+    "saturated_s": 3.892,
+    "agreeing_s": 3.892,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8738,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0562,
+    "1.0": 0.0573,
+    "2.0": 0.0595
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0655,
+    "yaw_rad": 0.0211
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0247,
+    "yaw_rad": 0.0191
+   },
+   "O": true,
+   "max_dT_leg": 0.2958,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.387759734193757,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2908,
+    "leg_start_est_lateral_m": -0.0247,
+    "leg_start_est_yaw_rad": 0.0191,
+    "sat_share": 0.889,
+    "ach_over_cmd": 0.8442,
+    "ach_minus_plan": 0.0139,
+    "wheel_curvature": [
+     -0.1354,
+     -0.1657
+    ],
+    "steer_deficit": [
+     -0.0136,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0655,
+    "leg_start_yaw_rad": 0.0211
+   },
+   "window_digest": "f7c4eda1f7b06cc8",
+   "root": "budget_0092bcf7"
+  },
+  {
+   "name": "lbg_Ub12_aisle_rack_s1",
+   "failure": "docking_retry_match_refused:start_rejected:degenerate",
+   "kind": "separate_ending",
+   "primary": "separate_ending",
+   "root": "budget_0092bcf7"
+  },
+  {
+   "name": "lbg_Ub3_aisle_rack_s0",
+   "failure": "Tracking failed in transport: pos=0.0142,yaw=-0.0611",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 2,
+    "yaw_error_rad": -0.061096205857939734,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 107.75,
+   "leg": 2,
+   "leg_length_m": 0.75,
+   "tau": 0.05,
+   "e_E": -0.0902,
+   "e_T": -0.0905,
+   "D": false,
+   "sat_end": {
+    "moving_s": 4.4,
+    "saturated_s": 2.9,
+    "agreeing_s": 1.1,
+    "S": true,
+    "share": 0.659,
+    "ach_over_cmd": 0.9919,
+    "ach_minus_plan": 0.0671,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     0.0044,
+     -0.0017
+    ],
+    "wheel_curvature": [
+     0.3542,
+     0.3632
+    ]
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": 0.0092,
+    "yaw_rad": 0.0377
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "f6d28a34e7da42a6",
+   "primary": "unresolved_saturated_no_curvature",
+   "root": "budget_0092bcf7"
+  },
+  {
+   "name": "lbg_Ub6_aisle_rack_s2",
+   "failure": "Tracking failed in transport: pos=0.0128,yaw=0.0509",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 7,
+    "yaw_error_rad": 0.05094301289790992,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 129.2417,
+   "leg": 2,
+   "leg_length_m": 0.5,
+   "tau": 0.05,
+   "e_E": -0.0639,
+   "e_T": -0.0661,
+   "D": false,
+   "sat_end": {
+    "moving_s": 3.9,
+    "saturated_s": 1.8,
+    "agreeing_s": 0.5,
+    "S": false,
+    "share": 0.462,
+    "ach_over_cmd": 0.9577,
+    "ach_minus_plan": 0.0548,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     0.0157,
+     0.0008
+    ],
+    "wheel_curvature": [
+     0.3391,
+     0.3585
+    ]
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": 0.0093,
+    "yaw_rad": 0.0239
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "e067a7754de04cc8",
+   "primary": "plan_short_leg",
+   "root": "budget_0092bcf7"
+  },
+  {
+   "name": "lbd_B0_random_1_s9",
+   "failure": "Tracking failed in transport: pos=2.9372,yaw=0.9878",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 93.8583,
+   "t_fail": 122.9083,
+   "path_sha": "078b0b597a88ed58",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3606,
+   "dT": 0.318,
+   "L": 0.0426,
+   "progress_gap_m": 0.0126,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0444,
+   "yaw_E_minus_T": -0.0003,
+   "samples_window": 290,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 118.25,
+    "ET": 0.0967,
+    "yawET": 0.0033,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.658,
+    "saturated_s": 4.658,
+    "agreeing_s": 4.6,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8737,
+    "ach_minus_plan": 0.0245,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0345,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3141,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0496,
+    "1.0": 0.0508,
+    "2.0": 0.0529
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.04,
+    "yaw_rad": -0.0305
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0234,
+    "yaw_rad": -0.0304
+   },
+   "O": true,
+   "max_dT_leg": 0.318,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.504149570858633,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3151,
+    "leg_start_est_lateral_m": -0.0234,
+    "leg_start_est_yaw_rad": -0.0304,
+    "sat_share": 0.888,
+    "ach_over_cmd": 0.8438,
+    "ach_minus_plan": 0.0138,
+    "wheel_curvature": [
+     -0.1267,
+     -0.1559
+    ],
+    "steer_deficit": [
+     -0.0129,
+     -0.0002
+    ],
+    "leg_start_lateral_m": -0.04,
+    "leg_start_yaw_rad": -0.0305
+   },
+   "window_digest": "6c3fe5ef3fb772fe",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s12",
+   "failure": "Tracking timeout in transport",
+   "kind": "timeout",
+   "last_sample": {
+    "t": 284.7500148508698,
+    "status": "tracking",
+    "position_error_m": 6.893038038055042,
+    "yaw_error_rad": -0.6907252236695056,
+    "at_cusp": true,
+    "segment_index": 79,
+    "speed_command_mps": 0.0
+   },
+   "endpoint_stall": false,
+   "primary": "separate_ending",
+   "stops": {
+    "cusp_replans": 1,
+    "stall_replans": 0,
+    "cusp_stalls": 1
+   },
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s15",
+   "failure": "transport:invalid_start",
+   "kind": "separate_ending",
+   "primary": "separate_ending",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s18",
+   "failure": "Tracking failed in transport: pos=0.0177,yaw=0.0532",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 0,
+    "yaw_error_rad": 0.05317349680881393,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 111.025,
+   "leg": 6,
+   "leg_length_m": 0.25,
+   "tau": 0.05,
+   "e_E": 0.0759,
+   "e_T": 0.0767,
+   "D": false,
+   "sat_end": {
+    "moving_s": 1.9,
+    "saturated_s": 0.5,
+    "agreeing_s": 0.0,
+    "S": false,
+    "share": 0.263,
+    "ach_over_cmd": null,
+    "ach_minus_plan": null,
+    "P": null,
+    "M": null,
+    "steer_deficit": null,
+    "wheel_curvature": null
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": -0.0305,
+    "yaw_rad": -0.0226
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "b794bc546cc8c5e0",
+   "primary": "plan_short_leg",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Bb10_random_1_s8",
+   "failure": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 82.2,
+   "t_fail": 111.3,
+   "path_sha": "ed96bcc2ff87e2bb",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3032,
+   "L": 0.0471,
+   "progress_gap_m": 0.0147,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0493,
+   "yaw_E_minus_T": 0.0022,
+   "samples_window": 291,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 106.85,
+    "ET": 0.0807,
+    "yawET": 0.0008,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.45,
+    "saturated_s": 4.45,
+    "agreeing_s": 4.4,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8754,
+    "ach_minus_plan": 0.0251,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0491,
+    "1.0": 0.0502,
+    "2.0": 0.0524
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0423,
+    "yaw_rad": 0.0101
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0343,
+    "yaw_rad": 0.0121
+   },
+   "O": true,
+   "max_dT_leg": 0.3032,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.51676405774022,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3009,
+    "leg_start_est_lateral_m": -0.0343,
+    "leg_start_est_yaw_rad": 0.0121,
+    "sat_share": 0.886,
+    "ach_over_cmd": 0.8446,
+    "ach_minus_plan": 0.0141,
+    "wheel_curvature": [
+     -0.1362,
+     -0.1665
+    ],
+    "steer_deficit": [
+     -0.0137,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0423,
+    "leg_start_yaw_rad": 0.0101
+   },
+   "window_digest": "6553451285840762",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s15",
+   "failure": "Tracking timeout in transport",
+   "kind": "timeout",
+   "last_sample": {
+    "t": 413.1500215474516,
+    "status": "tracking",
+    "position_error_m": 0.8887446995668017,
+    "yaw_error_rad": 0.2866336872799912,
+    "at_cusp": true,
+    "segment_index": 64,
+    "speed_command_mps": 0.0
+   },
+   "endpoint_stall": false,
+   "primary": "separate_ending",
+   "stops": {
+    "cusp_replans": 2,
+    "stall_replans": 0,
+    "cusp_stalls": 3
+   },
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s16",
+   "failure": "slam_release_replan_failed: invalid_start (exit_prefix unmet:search_no_path)",
+   "kind": "no_slam_control",
+   "primary": "unresolved",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s17",
+   "failure": "Tracking failed in transport: pos=0.0118,yaw=-0.0554",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 10,
+    "yaw_error_rad": -0.0554467590452486,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 106.65,
+   "leg": 1,
+   "leg_length_m": 1.75,
+   "tau": 0.05,
+   "e_E": -0.0711,
+   "e_T": -0.0814,
+   "D": false,
+   "sat_end": {
+    "moving_s": 5.0,
+    "saturated_s": 3.4,
+    "agreeing_s": 2.2,
+    "S": true,
+    "share": 0.68,
+    "ach_over_cmd": 0.8445,
+    "ach_minus_plan": 0.014,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     -0.0054,
+     -0.0005
+    ],
+    "wheel_curvature": [
+     -0.048,
+     -0.0649
+    ]
+   },
+   "Short": false,
+   "leg_start_truth": {
+    "lateral_m": 0.0054,
+    "yaw_rad": -0.0452
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "343babce9d0eb987",
+   "primary": "mixed_plan_margin_and_plant",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Pn_random_1_s5",
+   "failure": "Tracking failed in transport: pos=2.1623,yaw=0.6860",
+   "kind": "cross_track",
+   "leg": 3,
+   "leg_range": [
+    42,
+    216
+   ],
+   "leg_start_s": 93.4667,
+   "t_fail": 124.2333,
+   "path_sha": "f148c075b3469bdc",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3501,
+   "dT": 0.2766,
+   "L": 0.0735,
+   "progress_gap_m": -0.0084,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.074,
+   "yaw_E_minus_T": -0.0044,
+   "samples_window": 307,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 117.95,
+    "ET": 0.0689,
+    "yawET": -0.0011,
+    "jump_0_5s": 0.0003
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 6.283,
+    "saturated_s": 6.283,
+    "agreeing_s": 6.283,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8742,
+    "ach_minus_plan": 0.0247,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0343,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0252,
+    "1.0": 0.026,
+    "2.0": 0.0281
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0314,
+    "yaw_rad": 0.0512
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0288,
+    "yaw_rad": 0.0514
+   },
+   "O": true,
+   "max_dT_leg": 0.2766,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.372618014414599,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2746,
+    "leg_start_est_lateral_m": -0.0288,
+    "leg_start_est_yaw_rad": 0.0514,
+    "sat_share": 0.902,
+    "ach_over_cmd": 0.8469,
+    "ach_minus_plan": 0.0149,
+    "wheel_curvature": [
+     -0.0841,
+     -0.1061
+    ],
+    "steer_deficit": [
+     -0.0084,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0314,
+    "leg_start_yaw_rad": 0.0512
+   },
+   "window_digest": "177011009687307f",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "lbd_Pn_random_1_s7",
+   "failure": "Tracking failed in transport: pos=2.9277,yaw=0.9784",
+   "kind": "cross_track",
+   "leg": 3,
+   "leg_range": [
+    45,
+    221
+   ],
+   "leg_start_s": 96.0083,
+   "t_fail": 124.8167,
+   "path_sha": "4649dd4c950ab85e",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3165,
+   "L": 0.0338,
+   "progress_gap_m": 0.0594,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0713,
+   "yaw_E_minus_T": -0.0012,
+   "samples_window": 288,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 120.25,
+    "ET": 0.1141,
+    "yawET": -0.0004,
+    "jump_0_5s": 0.0001
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.567,
+    "saturated_s": 4.567,
+    "agreeing_s": 4.5,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8739,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0343,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0508,
+    "1.0": 0.0519,
+    "2.0": 0.0543
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0573,
+    "yaw_rad": 0.002
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0344,
+    "yaw_rad": 0.0037
+   },
+   "O": true,
+   "max_dT_leg": 0.3165,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.456210618057277,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3133,
+    "leg_start_est_lateral_m": -0.0344,
+    "leg_start_est_yaw_rad": 0.0037,
+    "sat_share": 0.898,
+    "ach_over_cmd": 0.8444,
+    "ach_minus_plan": 0.014,
+    "wheel_curvature": [
+     -0.1275,
+     -0.1563
+    ],
+    "steer_deficit": [
+     -0.0127,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0573,
+    "leg_start_yaw_rad": 0.002
+   },
+   "window_digest": "bbdb884e3bfe0225",
+   "root": "diag_0092bcf7"
+  },
+  {
+   "name": "k1c_B0_random_1_s0",
+   "failure": "Tracking failed in transport: pos=2.9974,yaw=1.0147",
+   "kind": "cross_track",
+   "leg": 2,
+   "leg_range": [
+    41,
+    215
+   ],
+   "leg_start_s": 87.4417,
+   "t_fail": 115.7417,
+   "path_sha": "fa8875c9e080375f",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3502,
+   "dT": 0.2958,
+   "L": 0.0544,
+   "progress_gap_m": 0.0561,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0785,
+   "yaw_E_minus_T": 0.0036,
+   "samples_window": 283,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 111.85,
+    "ET": 0.1109,
+    "yawET": -0.0051,
+    "jump_0_5s": 0.0006
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 3.892,
+    "saturated_s": 3.892,
+    "agreeing_s": 3.892,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8738,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0562,
+    "1.0": 0.0573,
+    "2.0": 0.0595
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0655,
+    "yaw_rad": 0.0211
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0247,
+    "yaw_rad": 0.0191
+   },
+   "O": true,
+   "max_dT_leg": 0.2958,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.387759734193757,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2908,
+    "leg_start_est_lateral_m": -0.0247,
+    "leg_start_est_yaw_rad": 0.0191,
+    "sat_share": 0.889,
+    "ach_over_cmd": 0.8442,
+    "ach_minus_plan": 0.0139,
+    "wheel_curvature": [
+     -0.1354,
+     -0.1657
+    ],
+    "steer_deficit": [
+     -0.0136,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0655,
+    "leg_start_yaw_rad": 0.0211
+   },
+   "window_digest": "f7c4eda1f7b06cc8",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_B0_random_1_s19",
+   "failure": "Tracking failed in transport: pos=1.9861,yaw=0.5992",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    39,
+    215
+   ],
+   "leg_start_s": 78.75,
+   "t_fail": 110.8333,
+   "path_sha": "40144392051df514",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3501,
+   "dT": 0.3012,
+   "L": 0.049,
+   "progress_gap_m": 0.0439,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0695,
+   "yaw_E_minus_T": -0.0025,
+   "samples_window": 321,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 103.35,
+    "ET": 0.0837,
+    "yawET": -0.0019,
+    "jump_0_5s": 0.0002
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 7.483,
+    "saturated_s": 7.483,
+    "agreeing_s": 7.483,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8779,
+    "ach_minus_plan": 0.026,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0335,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3154,
+     0.3593
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0198,
+    "1.0": 0.0208,
+    "2.0": 0.023
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0485,
+    "yaw_rad": -0.0019
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0371,
+    "yaw_rad": -0.0021
+   },
+   "O": true,
+   "max_dT_leg": 0.3012,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.518389898494627,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2996,
+    "leg_start_est_lateral_m": -0.0371,
+    "leg_start_est_yaw_rad": -0.0021,
+    "sat_share": 0.918,
+    "ach_over_cmd": 0.8522,
+    "ach_minus_plan": 0.0168,
+    "wheel_curvature": [
+     -0.0703,
+     -0.089
+    ],
+    "steer_deficit": [
+     -0.0064,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0485,
+    "leg_start_yaw_rad": -0.0019
+   },
+   "window_digest": "2dc39fc0e6cf6351",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_B0_random_1_s23",
+   "failure": "Tracking failed in transport: pos=2.2105,yaw=0.6871",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 102.3583,
+   "t_fail": 134.0083,
+   "path_sha": "9461b5f9297399c8",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3597,
+   "dT": 0.2884,
+   "L": 0.0713,
+   "progress_gap_m": 0.0679,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.1062,
+   "yaw_E_minus_T": -0.0077,
+   "samples_window": 316,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 127.75,
+    "ET": 0.137,
+    "yawET": -0.0003,
+    "jump_0_5s": 0.0002
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 6.258,
+    "saturated_s": 6.258,
+    "agreeing_s": 6.2,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.875,
+    "ach_minus_plan": 0.025,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.034,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3147,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0274,
+    "1.0": 0.0284,
+    "2.0": 0.0306
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0861,
+    "yaw_rad": -0.0111
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0281,
+    "yaw_rad": -0.0143
+   },
+   "O": true,
+   "max_dT_leg": 0.2884,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.550371432958006,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2869,
+    "leg_start_est_lateral_m": -0.0281,
+    "leg_start_est_yaw_rad": -0.0143,
+    "sat_share": 0.901,
+    "ach_over_cmd": 0.8486,
+    "ach_minus_plan": 0.0155,
+    "wheel_curvature": [
+     -0.0798,
+     -0.1006
+    ],
+    "steer_deficit": [
+     -0.0076,
+     -0.0
+    ],
+    "leg_start_lateral_m": -0.0861,
+    "leg_start_yaw_rad": -0.0111
+   },
+   "window_digest": "7134c90180ed79e8",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_B0_random_1_s8",
+   "failure": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 82.2,
+   "t_fail": 111.3,
+   "path_sha": "ed96bcc2ff87e2bb",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3032,
+   "L": 0.0471,
+   "progress_gap_m": 0.0147,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0493,
+   "yaw_E_minus_T": 0.0022,
+   "samples_window": 291,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 106.85,
+    "ET": 0.0807,
+    "yawET": 0.0008,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.45,
+    "saturated_s": 4.45,
+    "agreeing_s": 4.4,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8754,
+    "ach_minus_plan": 0.0251,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0491,
+    "1.0": 0.0502,
+    "2.0": 0.0524
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0423,
+    "yaw_rad": 0.0101
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0343,
+    "yaw_rad": 0.0121
+   },
+   "O": true,
+   "max_dT_leg": 0.3032,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.51676405774022,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3009,
+    "leg_start_est_lateral_m": -0.0343,
+    "leg_start_est_yaw_rad": 0.0121,
+    "sat_share": 0.886,
+    "ach_over_cmd": 0.8446,
+    "ach_minus_plan": 0.0141,
+    "wheel_curvature": [
+     -0.1362,
+     -0.1665
+    ],
+    "steer_deficit": [
+     -0.0137,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0423,
+    "leg_start_yaw_rad": 0.0101
+   },
+   "window_digest": "6553451285840762",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_K1_random_1_s0",
+   "failure": "Tracking failed in transport: pos=2.9974,yaw=1.0147",
+   "kind": "cross_track",
+   "leg": 2,
+   "leg_range": [
+    41,
+    215
+   ],
+   "leg_start_s": 87.4417,
+   "t_fail": 115.7417,
+   "path_sha": "fa8875c9e080375f",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3502,
+   "dT": 0.2958,
+   "L": 0.0544,
+   "progress_gap_m": 0.0561,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0785,
+   "yaw_E_minus_T": 0.0036,
+   "samples_window": 283,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 111.85,
+    "ET": 0.1109,
+    "yawET": -0.0051,
+    "jump_0_5s": 0.0006
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 3.892,
+    "saturated_s": 3.892,
+    "agreeing_s": 3.892,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8738,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0562,
+    "1.0": 0.0573,
+    "2.0": 0.0595
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0655,
+    "yaw_rad": 0.0211
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0247,
+    "yaw_rad": 0.0191
+   },
+   "O": true,
+   "max_dT_leg": 0.2958,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.387759734193757,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2908,
+    "leg_start_est_lateral_m": -0.0247,
+    "leg_start_est_yaw_rad": 0.0191,
+    "sat_share": 0.889,
+    "ach_over_cmd": 0.8442,
+    "ach_minus_plan": 0.0139,
+    "wheel_curvature": [
+     -0.1354,
+     -0.1657
+    ],
+    "steer_deficit": [
+     -0.0136,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0655,
+    "leg_start_yaw_rad": 0.0211
+   },
+   "window_digest": "f7c4eda1f7b06cc8",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_K1_random_1_s23",
+   "failure": "Tracking failed in transport: pos=2.2105,yaw=0.6871",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 102.3583,
+   "t_fail": 134.0083,
+   "path_sha": "9461b5f9297399c8",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3597,
+   "dT": 0.2884,
+   "L": 0.0713,
+   "progress_gap_m": 0.0679,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.1062,
+   "yaw_E_minus_T": -0.0077,
+   "samples_window": 316,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 127.75,
+    "ET": 0.137,
+    "yawET": -0.0003,
+    "jump_0_5s": 0.0002
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 6.258,
+    "saturated_s": 6.258,
+    "agreeing_s": 6.2,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.875,
+    "ach_minus_plan": 0.025,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.034,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3147,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0274,
+    "1.0": 0.0284,
+    "2.0": 0.0306
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0861,
+    "yaw_rad": -0.0111
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0281,
+    "yaw_rad": -0.0143
+   },
+   "O": true,
+   "max_dT_leg": 0.2884,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.550371432958006,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2869,
+    "leg_start_est_lateral_m": -0.0281,
+    "leg_start_est_yaw_rad": -0.0143,
+    "sat_share": 0.901,
+    "ach_over_cmd": 0.8486,
+    "ach_minus_plan": 0.0155,
+    "wheel_curvature": [
+     -0.0798,
+     -0.1006
+    ],
+    "steer_deficit": [
+     -0.0076,
+     -0.0
+    ],
+    "leg_start_lateral_m": -0.0861,
+    "leg_start_yaw_rad": -0.0111
+   },
+   "window_digest": "7134c90180ed79e8",
+   "root": "cmp_c7701296"
+  },
+  {
+   "name": "k1c_K1_random_1_s8",
+   "failure": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 82.2,
+   "t_fail": 111.3,
+   "path_sha": "ed96bcc2ff87e2bb",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3032,
+   "L": 0.0471,
+   "progress_gap_m": 0.0147,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0493,
+   "yaw_E_minus_T": 0.0022,
+   "samples_window": 291,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 106.85,
+    "ET": 0.0807,
+    "yawET": 0.0008,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.45,
+    "saturated_s": 4.45,
+    "agreeing_s": 4.4,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8754,
+    "ach_minus_plan": 0.0251,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0491,
+    "1.0": 0.0502,
+    "2.0": 0.0524
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0423,
+    "yaw_rad": 0.0101
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0343,
+    "yaw_rad": 0.0121
+   },
+   "O": true,
+   "max_dT_leg": 0.3032,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.51676405774022,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3009,
+    "leg_start_est_lateral_m": -0.0343,
+    "leg_start_est_yaw_rad": 0.0121,
+    "sat_share": 0.886,
+    "ach_over_cmd": 0.8446,
+    "ach_minus_plan": 0.0141,
+    "wheel_curvature": [
+     -0.1362,
+     -0.1665
+    ],
+    "steer_deficit": [
+     -0.0137,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0423,
+    "leg_start_yaw_rad": 0.0101
+   },
+   "window_digest": "6553451285840762",
+   "root": "cmp_c7701296"
+  }
+ ],
+ "cases": [
+  {
+   "name": "lbg_B0_aisle_rack_s1",
+   "failure": "Tracking failed in transport: pos=0.0113,yaw=0.0575",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 12,
+    "yaw_error_rad": 0.057523970264493796,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 91.0333,
+   "leg": 0,
+   "leg_length_m": 1.35,
+   "tau": 0.05,
+   "e_E": 0.0502,
+   "e_T": 0.0494,
+   "D": true,
+   "sat_end": {
+    "moving_s": 5.6,
+    "saturated_s": 2.5,
+    "agreeing_s": 0.3,
+    "S": false,
+    "share": 0.446,
+    "ach_over_cmd": 0.8577,
+    "ach_minus_plan": 0.0188,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     -0.0323,
+     -0.0164
+    ],
+    "wheel_curvature": [
+     -0.2999,
+     -0.3382
+    ]
+   },
+   "Short": false,
+   "leg_start_truth": {
+    "lateral_m": 0.0109,
+    "yaw_rad": 0.0002
+   },
+   "O": false,
+   "installs_inside_window": [],
+   "path_sha": "4dc4bc1f8e685f2c",
+   "primary": "localisation_decision",
+   "root": "budget_0092bcf7",
+   "runs": [
+    "lbg_B0_aisle_rack_s1"
+   ]
+  },
+  {
+   "name": "k1c_B0_random_1_s0",
+   "failure": "Tracking failed in transport: pos=2.9974,yaw=1.0147",
+   "kind": "cross_track",
+   "leg": 2,
+   "leg_range": [
+    41,
+    215
+   ],
+   "leg_start_s": 87.4417,
+   "t_fail": 115.7417,
+   "path_sha": "fa8875c9e080375f",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3502,
+   "dT": 0.2958,
+   "L": 0.0544,
+   "progress_gap_m": 0.0561,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0785,
+   "yaw_E_minus_T": 0.0036,
+   "samples_window": 283,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 111.85,
+    "ET": 0.1109,
+    "yawET": -0.0051,
+    "jump_0_5s": 0.0006
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 3.892,
+    "saturated_s": 3.892,
+    "agreeing_s": 3.892,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8738,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0562,
+    "1.0": 0.0573,
+    "2.0": 0.0595
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0655,
+    "yaw_rad": 0.0211
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0247,
+    "yaw_rad": 0.0191
+   },
+   "O": true,
+   "max_dT_leg": 0.2958,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.387759734193757,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2908,
+    "leg_start_est_lateral_m": -0.0247,
+    "leg_start_est_yaw_rad": 0.0191,
+    "sat_share": 0.889,
+    "ach_over_cmd": 0.8442,
+    "ach_minus_plan": 0.0139,
+    "wheel_curvature": [
+     -0.1354,
+     -0.1657
+    ],
+    "steer_deficit": [
+     -0.0136,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0655,
+    "leg_start_yaw_rad": 0.0211
+   },
+   "window_digest": "f7c4eda1f7b06cc8",
+   "root": "cmp_c7701296",
+   "runs": [
+    "k1c_B0_random_1_s0",
+    "k1c_K1_random_1_s0",
+    "lbg_Bb10_random_1_s0"
+   ],
+   "reference": [
+    {
+     "name": "k1c_B0_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s13",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.104,
+     "leg_start_est_lateral_m": 0.0066,
+     "leg_start_est_yaw_rad": 0.0446,
+     "sat_share": 0.774,
+     "ach_over_cmd": 0.8561,
+     "ach_minus_plan": 0.0181,
+     "wheel_curvature": [
+      0.0137,
+      0.0089
+     ],
+     "steer_deficit": [
+      0.0025,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0259,
+     "leg_start_yaw_rad": 0.0469,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s22",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.014,
+     "leg_start_est_yaw_rad": 0.0165,
+     "sat_share": 0.691,
+     "ach_over_cmd": 0.8628,
+     "ach_minus_plan": 0.0206,
+     "wheel_curvature": [
+      0.0664,
+      0.07
+     ],
+     "steer_deficit": [
+      0.0074,
+      -0.0004
+     ],
+     "leg_start_lateral_m": -0.046,
+     "leg_start_yaw_rad": 0.0204,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.0009,
+     "leg_start_est_yaw_rad": 0.0128,
+     "sat_share": 0.677,
+     "ach_over_cmd": 0.8554,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0501,
+      0.0506
+     ],
+     "steer_deficit": [
+      0.0058,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0369,
+     "leg_start_yaw_rad": 0.0111,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s19",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0941,
+     "leg_start_est_lateral_m": -0.0158,
+     "leg_start_est_yaw_rad": 0.0044,
+     "sat_share": 0.806,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.0065,
+      -0.0001
+     ],
+     "steer_deficit": [
+      0.0014,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0256,
+     "leg_start_yaw_rad": 0.0056,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    }
+   ]
+  },
+  {
+   "name": "lbg_Ub12_aisle_rack_s1",
+   "failure": "docking_retry_match_refused:start_rejected:degenerate",
+   "kind": "separate_ending",
+   "primary": "separate_ending",
+   "root": "budget_0092bcf7",
+   "runs": [
+    "lbg_Ub12_aisle_rack_s1"
+   ]
+  },
+  {
+   "name": "lbg_Ub3_aisle_rack_s0",
+   "failure": "Tracking failed in transport: pos=0.0142,yaw=-0.0611",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 2,
+    "yaw_error_rad": -0.061096205857939734,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 107.75,
+   "leg": 2,
+   "leg_length_m": 0.75,
+   "tau": 0.05,
+   "e_E": -0.0902,
+   "e_T": -0.0905,
+   "D": false,
+   "sat_end": {
+    "moving_s": 4.4,
+    "saturated_s": 2.9,
+    "agreeing_s": 1.1,
+    "S": true,
+    "share": 0.659,
+    "ach_over_cmd": 0.9919,
+    "ach_minus_plan": 0.0671,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     0.0044,
+     -0.0017
+    ],
+    "wheel_curvature": [
+     0.3542,
+     0.3632
+    ]
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": 0.0092,
+    "yaw_rad": 0.0377
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "f6d28a34e7da42a6",
+   "primary": "unresolved_saturated_no_curvature",
+   "root": "budget_0092bcf7",
+   "runs": [
+    "lbg_Ub3_aisle_rack_s0"
+   ]
+  },
+  {
+   "name": "lbg_Ub6_aisle_rack_s2",
+   "failure": "Tracking failed in transport: pos=0.0128,yaw=0.0509",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 7,
+    "yaw_error_rad": 0.05094301289790992,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 129.2417,
+   "leg": 2,
+   "leg_length_m": 0.5,
+   "tau": 0.05,
+   "e_E": -0.0639,
+   "e_T": -0.0661,
+   "D": false,
+   "sat_end": {
+    "moving_s": 3.9,
+    "saturated_s": 1.8,
+    "agreeing_s": 0.5,
+    "S": false,
+    "share": 0.462,
+    "ach_over_cmd": 0.9577,
+    "ach_minus_plan": 0.0548,
+    "P": null,
+    "M": null,
+    "steer_deficit": [
+     0.0157,
+     0.0008
+    ],
+    "wheel_curvature": [
+     0.3391,
+     0.3585
+    ]
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": 0.0093,
+    "yaw_rad": 0.0239
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "e067a7754de04cc8",
+   "primary": "plan_short_leg",
+   "root": "budget_0092bcf7",
+   "runs": [
+    "lbg_Ub6_aisle_rack_s2"
+   ]
+  },
+  {
+   "name": "lbd_B0_random_1_s9",
+   "failure": "Tracking failed in transport: pos=2.9372,yaw=0.9878",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 93.8583,
+   "t_fail": 122.9083,
+   "path_sha": "078b0b597a88ed58",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3606,
+   "dT": 0.318,
+   "L": 0.0426,
+   "progress_gap_m": 0.0126,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0444,
+   "yaw_E_minus_T": -0.0003,
+   "samples_window": 290,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 118.25,
+    "ET": 0.0967,
+    "yawET": 0.0033,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.658,
+    "saturated_s": 4.658,
+    "agreeing_s": 4.6,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8737,
+    "ach_minus_plan": 0.0245,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0345,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3141,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0496,
+    "1.0": 0.0508,
+    "2.0": 0.0529
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.04,
+    "yaw_rad": -0.0305
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0234,
+    "yaw_rad": -0.0304
+   },
+   "O": true,
+   "max_dT_leg": 0.318,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.504149570858633,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3151,
+    "leg_start_est_lateral_m": -0.0234,
+    "leg_start_est_yaw_rad": -0.0304,
+    "sat_share": 0.888,
+    "ach_over_cmd": 0.8438,
+    "ach_minus_plan": 0.0138,
+    "wheel_curvature": [
+     -0.1267,
+     -0.1559
+    ],
+    "steer_deficit": [
+     -0.0129,
+     -0.0002
+    ],
+    "leg_start_lateral_m": -0.04,
+    "leg_start_yaw_rad": -0.0305
+   },
+   "window_digest": "6c3fe5ef3fb772fe",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_B0_random_1_s9"
+   ],
+   "reference": [
+    {
+     "name": "lbd_B0_random_1_s5",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0824,
+     "leg_start_est_lateral_m": -0.0006,
+     "leg_start_est_yaw_rad": 0.0122,
+     "sat_share": 0.803,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      -0.001,
+      -0.0085
+     ],
+     "steer_deficit": [
+      0.0007,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0591,
+     "leg_start_yaw_rad": 0.0096,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1046,
+     "leg_start_est_lateral_m": -0.0185,
+     "leg_start_est_yaw_rad": -0.0199,
+     "sat_share": 0.769,
+     "ach_over_cmd": 0.8597,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      -0.003,
+      -0.0102
+     ],
+     "steer_deficit": [
+      0.0009,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0498,
+     "leg_start_yaw_rad": -0.02,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s8",
+     "leg": 3,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.0913,
+     "leg_start_est_lateral_m": -0.02,
+     "leg_start_est_yaw_rad": -0.0109,
+     "sat_share": 0.78,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      -0.0273,
+      -0.0391
+     ],
+     "steer_deficit": [
+      -0.0019,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0503,
+     "leg_start_yaw_rad": -0.0098,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "diag_0092bcf7"
+    }
+   ]
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s12",
+   "failure": "Tracking timeout in transport",
+   "kind": "timeout",
+   "last_sample": {
+    "t": 284.7500148508698,
+    "status": "tracking",
+    "position_error_m": 6.893038038055042,
+    "yaw_error_rad": -0.6907252236695056,
+    "at_cusp": true,
+    "segment_index": 79,
+    "speed_command_mps": 0.0
+   },
+   "endpoint_stall": false,
+   "primary": "separate_ending",
+   "stops": {
+    "cusp_replans": 1,
+    "stall_replans": 0,
+    "cusp_stalls": 1
+   },
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Bb10_aisle_rack_s12"
+   ]
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s15",
+   "failure": "transport:invalid_start",
+   "kind": "separate_ending",
+   "primary": "separate_ending",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Bb10_aisle_rack_s15"
+   ]
+  },
+  {
+   "name": "lbd_Bb10_aisle_rack_s18",
+   "failure": "Tracking failed in transport: pos=0.0177,yaw=0.0532",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 0,
+    "yaw_error_rad": 0.05317349680881393,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 111.025,
+   "leg": 6,
+   "leg_length_m": 0.25,
+   "tau": 0.05,
+   "e_E": 0.0759,
+   "e_T": 0.0767,
+   "D": false,
+   "sat_end": {
+    "moving_s": 1.9,
+    "saturated_s": 0.5,
+    "agreeing_s": 0.0,
+    "S": false,
+    "share": 0.263,
+    "ach_over_cmd": null,
+    "ach_minus_plan": null,
+    "P": null,
+    "M": null,
+    "steer_deficit": null,
+    "wheel_curvature": null
+   },
+   "Short": true,
+   "leg_start_truth": {
+    "lateral_m": -0.0305,
+    "yaw_rad": -0.0226
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "b794bc546cc8c5e0",
+   "primary": "plan_short_leg",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Bb10_aisle_rack_s18"
+   ]
+  },
+  {
+   "name": "k1c_B0_random_1_s8",
+   "failure": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 82.2,
+   "t_fail": 111.3,
+   "path_sha": "ed96bcc2ff87e2bb",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3032,
+   "L": 0.0471,
+   "progress_gap_m": 0.0147,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0493,
+   "yaw_E_minus_T": 0.0022,
+   "samples_window": 291,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 106.85,
+    "ET": 0.0807,
+    "yawET": 0.0008,
+    "jump_0_5s": 0.0
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.45,
+    "saturated_s": 4.45,
+    "agreeing_s": 4.4,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8754,
+    "ach_minus_plan": 0.0251,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0342,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0491,
+    "1.0": 0.0502,
+    "2.0": 0.0524
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0423,
+    "yaw_rad": 0.0101
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0343,
+    "yaw_rad": 0.0121
+   },
+   "O": true,
+   "max_dT_leg": 0.3032,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.51676405774022,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3009,
+    "leg_start_est_lateral_m": -0.0343,
+    "leg_start_est_yaw_rad": 0.0121,
+    "sat_share": 0.886,
+    "ach_over_cmd": 0.8446,
+    "ach_minus_plan": 0.0141,
+    "wheel_curvature": [
+     -0.1362,
+     -0.1665
+    ],
+    "steer_deficit": [
+     -0.0137,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0423,
+    "leg_start_yaw_rad": 0.0101
+   },
+   "window_digest": "6553451285840762",
+   "root": "cmp_c7701296",
+   "runs": [
+    "k1c_B0_random_1_s8",
+    "k1c_K1_random_1_s8",
+    "lbd_Bb10_random_1_s8"
+   ],
+   "reference": [
+    {
+     "name": "k1c_B0_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s13",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.104,
+     "leg_start_est_lateral_m": 0.0066,
+     "leg_start_est_yaw_rad": 0.0446,
+     "sat_share": 0.774,
+     "ach_over_cmd": 0.8561,
+     "ach_minus_plan": 0.0181,
+     "wheel_curvature": [
+      0.0137,
+      0.0089
+     ],
+     "steer_deficit": [
+      0.0025,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0259,
+     "leg_start_yaw_rad": 0.0469,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": 0.0059,
+     "leg_start_est_yaw_rad": 0.0473,
+     "sat_share": 0.779,
+     "ach_over_cmd": 0.8567,
+     "ach_minus_plan": 0.0184,
+     "wheel_curvature": [
+      0.0189,
+      0.0146
+     ],
+     "steer_deficit": [
+      0.0029,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0357,
+     "leg_start_yaw_rad": 0.0523,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s22",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.014,
+     "leg_start_est_yaw_rad": 0.0165,
+     "sat_share": 0.691,
+     "ach_over_cmd": 0.8628,
+     "ach_minus_plan": 0.0206,
+     "wheel_curvature": [
+      0.0664,
+      0.07
+     ],
+     "steer_deficit": [
+      0.0074,
+      -0.0004
+     ],
+     "leg_start_lateral_m": -0.046,
+     "leg_start_yaw_rad": 0.0204,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.0009,
+     "leg_start_est_yaw_rad": 0.0128,
+     "sat_share": 0.677,
+     "ach_over_cmd": 0.8554,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0501,
+      0.0506
+     ],
+     "steer_deficit": [
+      0.0058,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0369,
+     "leg_start_yaw_rad": 0.0111,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s19",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0941,
+     "leg_start_est_lateral_m": -0.0158,
+     "leg_start_est_yaw_rad": 0.0044,
+     "sat_share": 0.806,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.0065,
+      -0.0001
+     ],
+     "steer_deficit": [
+      0.0014,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0256,
+     "leg_start_yaw_rad": 0.0056,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "lbd_B0_random_1_s5",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0824,
+     "leg_start_est_lateral_m": -0.0006,
+     "leg_start_est_yaw_rad": 0.0122,
+     "sat_share": 0.803,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      -0.001,
+      -0.0085
+     ],
+     "steer_deficit": [
+      0.0007,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0591,
+     "leg_start_yaw_rad": 0.0096,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1046,
+     "leg_start_est_lateral_m": -0.0185,
+     "leg_start_est_yaw_rad": -0.0199,
+     "sat_share": 0.769,
+     "ach_over_cmd": 0.8597,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      -0.003,
+      -0.0102
+     ],
+     "steer_deficit": [
+      0.0009,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0498,
+     "leg_start_yaw_rad": -0.02,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s8",
+     "leg": 3,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.0913,
+     "leg_start_est_lateral_m": -0.02,
+     "leg_start_est_yaw_rad": -0.0109,
+     "sat_share": 0.78,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      -0.0273,
+      -0.0391
+     ],
+     "steer_deficit": [
+      -0.0019,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0503,
+     "leg_start_yaw_rad": -0.0098,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "diag_0092bcf7"
+    }
+   ]
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s15",
+   "failure": "Tracking timeout in transport",
+   "kind": "timeout",
+   "last_sample": {
+    "t": 413.1500215474516,
+    "status": "tracking",
+    "position_error_m": 0.8887446995668017,
+    "yaw_error_rad": 0.2866336872799912,
+    "at_cusp": true,
+    "segment_index": 64,
+    "speed_command_mps": 0.0
+   },
+   "endpoint_stall": false,
+   "primary": "separate_ending",
+   "stops": {
+    "cusp_replans": 2,
+    "stall_replans": 0,
+    "cusp_stalls": 3
+   },
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Pn_aisle_rack_s15"
+   ]
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s16",
+   "failure": "slam_release_replan_failed: invalid_start (exit_prefix unmet:search_no_path)",
+   "kind": "no_slam_control",
+   "primary": "unresolved",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Pn_aisle_rack_s16"
+   ]
+  },
+  {
+   "name": "lbd_Pn_aisle_rack_s17",
+   "failure": "Tracking failed in transport: pos=0.0118,yaw=-0.0554",
+   "kind": "endpoint_heading",
+   "final": {
+    "leg": 10,
+    "yaw_error_rad": -0.0554467590452486,
+    "at_cusp": true
+   },
+   "cusp_replans": 2,
+   "t_judged": 106.65,
+   "leg": 1,
+   "leg_length_m": 1.75,
+   "tau": 0.05,
+   "e_E": -0.0711,
+   "e_T": -0.0814,
+   "D": false,
+   "sat_end": {
+    "moving_s": 5.0,
+    "saturated_s": 3.4,
+    "agreeing_s": 2.2,
+    "S": true,
+    "share": 0.68,
+    "ach_over_cmd": 0.8445,
+    "ach_minus_plan": 0.014,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     -0.0054,
+     -0.0005
+    ],
+    "wheel_curvature": [
+     -0.048,
+     -0.0649
+    ]
+   },
+   "Short": false,
+   "leg_start_truth": {
+    "lateral_m": 0.0054,
+    "yaw_rad": -0.0452
+   },
+   "O": true,
+   "installs_inside_window": [],
+   "path_sha": "343babce9d0eb987",
+   "primary": "mixed_plan_margin_and_plant",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Pn_aisle_rack_s17"
+   ]
+  },
+  {
+   "name": "lbd_Pn_random_1_s5",
+   "failure": "Tracking failed in transport: pos=2.1623,yaw=0.6860",
+   "kind": "cross_track",
+   "leg": 3,
+   "leg_range": [
+    42,
+    216
+   ],
+   "leg_start_s": 93.4667,
+   "t_fail": 124.2333,
+   "path_sha": "f148c075b3469bdc",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3501,
+   "dT": 0.2766,
+   "L": 0.0735,
+   "progress_gap_m": -0.0084,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.074,
+   "yaw_E_minus_T": -0.0044,
+   "samples_window": 307,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 117.95,
+    "ET": 0.0689,
+    "yawET": -0.0011,
+    "jump_0_5s": 0.0003
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 6.283,
+    "saturated_s": 6.283,
+    "agreeing_s": 6.283,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8742,
+    "ach_minus_plan": 0.0247,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0343,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0252,
+    "1.0": 0.026,
+    "2.0": 0.0281
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0314,
+    "yaw_rad": 0.0512
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0288,
+    "yaw_rad": 0.0514
+   },
+   "O": true,
+   "max_dT_leg": 0.2766,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.372618014414599,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2746,
+    "leg_start_est_lateral_m": -0.0288,
+    "leg_start_est_yaw_rad": 0.0514,
+    "sat_share": 0.902,
+    "ach_over_cmd": 0.8469,
+    "ach_minus_plan": 0.0149,
+    "wheel_curvature": [
+     -0.0841,
+     -0.1061
+    ],
+    "steer_deficit": [
+     -0.0084,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0314,
+    "leg_start_yaw_rad": 0.0512
+   },
+   "window_digest": "177011009687307f",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Pn_random_1_s5"
+   ],
+   "reference": [
+    {
+     "name": "lbd_B0_random_1_s5",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0824,
+     "leg_start_est_lateral_m": -0.0006,
+     "leg_start_est_yaw_rad": 0.0122,
+     "sat_share": 0.803,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      -0.001,
+      -0.0085
+     ],
+     "steer_deficit": [
+      0.0007,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0591,
+     "leg_start_yaw_rad": 0.0096,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1046,
+     "leg_start_est_lateral_m": -0.0185,
+     "leg_start_est_yaw_rad": -0.0199,
+     "sat_share": 0.769,
+     "ach_over_cmd": 0.8597,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      -0.003,
+      -0.0102
+     ],
+     "steer_deficit": [
+      0.0009,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0498,
+     "leg_start_yaw_rad": -0.02,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s8",
+     "leg": 3,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.0913,
+     "leg_start_est_lateral_m": -0.02,
+     "leg_start_est_yaw_rad": -0.0109,
+     "sat_share": 0.78,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      -0.0273,
+      -0.0391
+     ],
+     "steer_deficit": [
+      -0.0019,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0503,
+     "leg_start_yaw_rad": -0.0098,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "diag_0092bcf7"
+    }
+   ]
+  },
+  {
+   "name": "lbd_Pn_random_1_s7",
+   "failure": "Tracking failed in transport: pos=2.9277,yaw=0.9784",
+   "kind": "cross_track",
+   "leg": 3,
+   "leg_range": [
+    45,
+    221
+   ],
+   "leg_start_s": 96.0083,
+   "t_fail": 124.8167,
+   "path_sha": "4649dd4c950ab85e",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3503,
+   "dT": 0.3165,
+   "L": 0.0338,
+   "progress_gap_m": 0.0594,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0713,
+   "yaw_E_minus_T": -0.0012,
+   "samples_window": 288,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 120.25,
+    "ET": 0.1141,
+    "yawET": -0.0004,
+    "jump_0_5s": 0.0001
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 4.567,
+    "saturated_s": 4.567,
+    "agreeing_s": 4.5,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8739,
+    "ach_minus_plan": 0.0246,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0343,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3144,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0508,
+    "1.0": 0.0519,
+    "2.0": 0.0543
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0573,
+    "yaw_rad": 0.002
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0344,
+    "yaw_rad": 0.0037
+   },
+   "O": true,
+   "max_dT_leg": 0.3165,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.456210618057277,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.3133,
+    "leg_start_est_lateral_m": -0.0344,
+    "leg_start_est_yaw_rad": 0.0037,
+    "sat_share": 0.898,
+    "ach_over_cmd": 0.8444,
+    "ach_minus_plan": 0.014,
+    "wheel_curvature": [
+     -0.1275,
+     -0.1563
+    ],
+    "steer_deficit": [
+     -0.0127,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0573,
+    "leg_start_yaw_rad": 0.002
+   },
+   "window_digest": "bbdb884e3bfe0225",
+   "root": "diag_0092bcf7",
+   "runs": [
+    "lbd_Pn_random_1_s7"
+   ],
+   "reference": [
+    {
+     "name": "lbd_B0_random_1_s5",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0824,
+     "leg_start_est_lateral_m": -0.0006,
+     "leg_start_est_yaw_rad": 0.0122,
+     "sat_share": 0.803,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      -0.001,
+      -0.0085
+     ],
+     "steer_deficit": [
+      0.0007,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0591,
+     "leg_start_yaw_rad": 0.0096,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1046,
+     "leg_start_est_lateral_m": -0.0185,
+     "leg_start_est_yaw_rad": -0.0199,
+     "sat_share": 0.769,
+     "ach_over_cmd": 0.8597,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      -0.003,
+      -0.0102
+     ],
+     "steer_deficit": [
+      0.0009,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0498,
+     "leg_start_yaw_rad": -0.02,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_B0_random_1_s8",
+     "leg": 3,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.0913,
+     "leg_start_est_lateral_m": -0.02,
+     "leg_start_est_yaw_rad": -0.0109,
+     "sat_share": 0.78,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      -0.0273,
+      -0.0391
+     ],
+     "steer_deficit": [
+      -0.0019,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0503,
+     "leg_start_yaw_rad": -0.0098,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "diag_0092bcf7"
+    },
+    {
+     "name": "lbd_Bb10_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "diag_0092bcf7"
+    }
+   ]
+  },
+  {
+   "name": "k1c_B0_random_1_s19",
+   "failure": "Tracking failed in transport: pos=1.9861,yaw=0.5992",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    39,
+    215
+   ],
+   "leg_start_s": 78.75,
+   "t_fail": 110.8333,
+   "path_sha": "40144392051df514",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3501,
+   "dT": 0.3012,
+   "L": 0.049,
+   "progress_gap_m": 0.0439,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.0695,
+   "yaw_E_minus_T": -0.0025,
+   "samples_window": 321,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 103.35,
+    "ET": 0.0837,
+    "yawET": -0.0019,
+    "jump_0_5s": 0.0002
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 7.483,
+    "saturated_s": 7.483,
+    "agreeing_s": 7.483,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.8779,
+    "ach_minus_plan": 0.026,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.0335,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3154,
+     0.3593
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0198,
+    "1.0": 0.0208,
+    "2.0": 0.023
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0485,
+    "yaw_rad": -0.0019
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0371,
+    "yaw_rad": -0.0021
+   },
+   "O": true,
+   "max_dT_leg": 0.3012,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.518389898494627,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2996,
+    "leg_start_est_lateral_m": -0.0371,
+    "leg_start_est_yaw_rad": -0.0021,
+    "sat_share": 0.918,
+    "ach_over_cmd": 0.8522,
+    "ach_minus_plan": 0.0168,
+    "wheel_curvature": [
+     -0.0703,
+     -0.089
+    ],
+    "steer_deficit": [
+     -0.0064,
+     -0.0001
+    ],
+    "leg_start_lateral_m": -0.0485,
+    "leg_start_yaw_rad": -0.0019
+   },
+   "window_digest": "2dc39fc0e6cf6351",
+   "root": "cmp_c7701296",
+   "runs": [
+    "k1c_B0_random_1_s19"
+   ],
+   "reference": [
+    {
+     "name": "k1c_B0_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s13",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.104,
+     "leg_start_est_lateral_m": 0.0066,
+     "leg_start_est_yaw_rad": 0.0446,
+     "sat_share": 0.774,
+     "ach_over_cmd": 0.8561,
+     "ach_minus_plan": 0.0181,
+     "wheel_curvature": [
+      0.0137,
+      0.0089
+     ],
+     "steer_deficit": [
+      0.0025,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0259,
+     "leg_start_yaw_rad": 0.0469,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": 0.0059,
+     "leg_start_est_yaw_rad": 0.0473,
+     "sat_share": 0.779,
+     "ach_over_cmd": 0.8567,
+     "ach_minus_plan": 0.0184,
+     "wheel_curvature": [
+      0.0189,
+      0.0146
+     ],
+     "steer_deficit": [
+      0.0029,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0357,
+     "leg_start_yaw_rad": 0.0523,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s22",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.014,
+     "leg_start_est_yaw_rad": 0.0165,
+     "sat_share": 0.691,
+     "ach_over_cmd": 0.8628,
+     "ach_minus_plan": 0.0206,
+     "wheel_curvature": [
+      0.0664,
+      0.07
+     ],
+     "steer_deficit": [
+      0.0074,
+      -0.0004
+     ],
+     "leg_start_lateral_m": -0.046,
+     "leg_start_yaw_rad": 0.0204,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.0009,
+     "leg_start_est_yaw_rad": 0.0128,
+     "sat_share": 0.677,
+     "ach_over_cmd": 0.8554,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0501,
+      0.0506
+     ],
+     "steer_deficit": [
+      0.0058,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0369,
+     "leg_start_yaw_rad": 0.0111,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s19",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0941,
+     "leg_start_est_lateral_m": -0.0158,
+     "leg_start_est_yaw_rad": 0.0044,
+     "sat_share": 0.806,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.0065,
+      -0.0001
+     ],
+     "steer_deficit": [
+      0.0014,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0256,
+     "leg_start_yaw_rad": 0.0056,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    }
+   ]
+  },
+  {
+   "name": "k1c_B0_random_1_s23",
+   "failure": "Tracking failed in transport: pos=2.2105,yaw=0.6871",
+   "kind": "cross_track",
+   "leg": 1,
+   "leg_range": [
+    42,
+    218
+   ],
+   "leg_start_s": 102.3583,
+   "t_fail": 134.0083,
+   "path_sha": "9461b5f9297399c8",
+   "installs_inside_window": [],
+   "limit_m": 0.35,
+   "dE": 0.3597,
+   "dT": 0.2884,
+   "L": 0.0713,
+   "progress_gap_m": 0.0679,
+   "D": true,
+   "row_overwritten": false,
+   "E_minus_T_m": 0.1062,
+   "yaw_E_minus_T": -0.0077,
+   "samples_window": 316,
+   "samples_dropped": 0,
+   "onset": {
+    "t": 127.75,
+    "ET": 0.137,
+    "yawET": -0.0003,
+    "jump_0_5s": 0.0002
+   },
+   "E0": true,
+   "sat": {
+    "moving_s": 6.258,
+    "saturated_s": 6.258,
+    "agreeing_s": 6.2,
+    "S": true,
+    "share": 1.0,
+    "ach_over_cmd": 0.875,
+    "ach_minus_plan": 0.025,
+    "P": true,
+    "M": true,
+    "steer_deficit": [
+     0.034,
+     0.0003
+    ],
+    "wheel_curvature": [
+     0.3147,
+     0.3594
+    ]
+   },
+   "dT_slope": {
+    "0.5": 0.0274,
+    "1.0": 0.0284,
+    "2.0": 0.0306
+   },
+   "leg_start_truth": {
+    "lateral_m": -0.0861,
+    "yaw_rad": -0.0111
+   },
+   "leg_start_estimate": {
+    "lateral_m": -0.0281,
+    "yaw_rad": -0.0143
+   },
+   "O": true,
+   "max_dT_leg": 0.2884,
+   "unknown_path": false,
+   "primary": "mixed_plan_margin_and_plant",
+   "shape": {
+    "direction": 1,
+    "signs": [
+     -1,
+     1
+    ],
+    "length_m": 10.550371432958006,
+    "max_kappa": 0.29
+   },
+   "whole_leg": {
+    "max_dT": 0.2869,
+    "leg_start_est_lateral_m": -0.0281,
+    "leg_start_est_yaw_rad": -0.0143,
+    "sat_share": 0.901,
+    "ach_over_cmd": 0.8486,
+    "ach_minus_plan": 0.0155,
+    "wheel_curvature": [
+     -0.0798,
+     -0.1006
+    ],
+    "steer_deficit": [
+     -0.0076,
+     -0.0
+    ],
+    "leg_start_lateral_m": -0.0861,
+    "leg_start_yaw_rad": -0.0111
+   },
+   "window_digest": "7134c90180ed79e8",
+   "root": "cmp_c7701296",
+   "runs": [
+    "k1c_B0_random_1_s23",
+    "k1c_K1_random_1_s23"
+   ],
+   "reference": [
+    {
+     "name": "k1c_B0_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s13",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.104,
+     "leg_start_est_lateral_m": 0.0066,
+     "leg_start_est_yaw_rad": 0.0446,
+     "sat_share": 0.774,
+     "ach_over_cmd": 0.8561,
+     "ach_minus_plan": 0.0181,
+     "wheel_curvature": [
+      0.0137,
+      0.0089
+     ],
+     "steer_deficit": [
+      0.0025,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0259,
+     "leg_start_yaw_rad": 0.0469,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": 0.0059,
+     "leg_start_est_yaw_rad": 0.0473,
+     "sat_share": 0.779,
+     "ach_over_cmd": 0.8567,
+     "ach_minus_plan": 0.0184,
+     "wheel_curvature": [
+      0.0189,
+      0.0146
+     ],
+     "steer_deficit": [
+      0.0029,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0357,
+     "leg_start_yaw_rad": 0.0523,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s22",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.014,
+     "leg_start_est_yaw_rad": 0.0165,
+     "sat_share": 0.691,
+     "ach_over_cmd": 0.8628,
+     "ach_minus_plan": 0.0206,
+     "wheel_curvature": [
+      0.0664,
+      0.07
+     ],
+     "steer_deficit": [
+      0.0074,
+      -0.0004
+     ],
+     "leg_start_lateral_m": -0.046,
+     "leg_start_yaw_rad": 0.0204,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_B0_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s10",
+     "leg": 1,
+     "replans_in_transport": 3,
+     "registered": false,
+     "max_dT": 0.1429,
+     "leg_start_est_lateral_m": -0.0169,
+     "leg_start_est_yaw_rad": 0.0051,
+     "sat_share": 0.804,
+     "ach_over_cmd": 0.8543,
+     "ach_minus_plan": 0.0176,
+     "wheel_curvature": [
+      0.0042,
+      -0.0025
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0
+     ],
+     "leg_start_lateral_m": 0.0008,
+     "leg_start_yaw_rad": 0.0048,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s15",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1025,
+     "leg_start_est_lateral_m": -0.0162,
+     "leg_start_est_yaw_rad": 0.0108,
+     "sat_share": 0.805,
+     "ach_over_cmd": 0.8572,
+     "ach_minus_plan": 0.0186,
+     "wheel_curvature": [
+      0.0104,
+      0.0046
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0515,
+     "leg_start_yaw_rad": 0.0107,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s16",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.1209,
+     "leg_start_est_lateral_m": -0.0002,
+     "leg_start_est_yaw_rad": 0.0357,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0108,
+      0.005
+     ],
+     "steer_deficit": [
+      0.0019,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0446,
+     "leg_start_yaw_rad": 0.0388,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s17",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": 0.0015,
+     "leg_start_est_yaw_rad": 0.0169,
+     "sat_share": 0.641,
+     "ach_over_cmd": 0.8596,
+     "ach_minus_plan": 0.0195,
+     "wheel_curvature": [
+      0.0948,
+      0.1027
+     ],
+     "steer_deficit": [
+      0.0105,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0272,
+     "leg_start_yaw_rad": 0.0167,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s18",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0958,
+     "leg_start_est_lateral_m": 0.0009,
+     "leg_start_est_yaw_rad": 0.0128,
+     "sat_share": 0.677,
+     "ach_over_cmd": 0.8554,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0501,
+      0.0506
+     ],
+     "steer_deficit": [
+      0.0058,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0369,
+     "leg_start_yaw_rad": 0.0111,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s19",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0941,
+     "leg_start_est_lateral_m": -0.0158,
+     "leg_start_est_yaw_rad": 0.0044,
+     "sat_share": 0.806,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.0065,
+      -0.0001
+     ],
+     "steer_deficit": [
+      0.0014,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0256,
+     "leg_start_yaw_rad": 0.0056,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s2",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.1195,
+     "leg_start_est_lateral_m": -0.0102,
+     "leg_start_est_yaw_rad": -0.0167,
+     "sat_share": 0.775,
+     "ach_over_cmd": 0.8565,
+     "ach_minus_plan": 0.0183,
+     "wheel_curvature": [
+      0.0151,
+      0.0099
+     ],
+     "steer_deficit": [
+      0.0023,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.049,
+     "leg_start_yaw_rad": -0.0137,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s24",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0999,
+     "leg_start_est_lateral_m": 0.0004,
+     "leg_start_est_yaw_rad": 0.0145,
+     "sat_share": 0.633,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0337,
+      0.0314
+     ],
+     "steer_deficit": [
+      0.004,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0263,
+     "leg_start_yaw_rad": 0.011,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s26",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0967,
+     "leg_start_est_lateral_m": -0.0137,
+     "leg_start_est_yaw_rad": 0.001,
+     "sat_share": 0.714,
+     "ach_over_cmd": 0.8551,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      -0.0042,
+      -0.0123
+     ],
+     "steer_deficit": [
+      0.0003,
+      -0.0001
+     ],
+     "leg_start_lateral_m": 0.0123,
+     "leg_start_yaw_rad": 0.0013,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s27",
+     "leg": 1,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0906,
+     "leg_start_est_lateral_m": 0.0033,
+     "leg_start_est_yaw_rad": 0.0352,
+     "sat_share": 0.72,
+     "ach_over_cmd": 0.8556,
+     "ach_minus_plan": 0.018,
+     "wheel_curvature": [
+      0.0159,
+      0.0111
+     ],
+     "steer_deficit": [
+      0.0026,
+      0.0001
+     ],
+     "leg_start_lateral_m": -0.0211,
+     "leg_start_yaw_rad": 0.0403,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s3",
+     "leg": 3,
+     "replans_in_transport": 2,
+     "registered": false,
+     "max_dT": 0.0784,
+     "leg_start_est_lateral_m": -0.0111,
+     "leg_start_est_yaw_rad": 0.0123,
+     "sat_share": 0.754,
+     "ach_over_cmd": 0.8527,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0044,
+      -0.0028
+     ],
+     "steer_deficit": [
+      0.0011,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0315,
+     "leg_start_yaw_rad": 0.0114,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s4",
+     "leg": 1,
+     "replans_in_transport": 5,
+     "registered": false,
+     "max_dT": 0.0728,
+     "leg_start_est_lateral_m": 0.001,
+     "leg_start_est_yaw_rad": 0.0135,
+     "sat_share": 0.686,
+     "ach_over_cmd": 0.8552,
+     "ach_minus_plan": 0.0179,
+     "wheel_curvature": [
+      0.0204,
+      0.0162
+     ],
+     "steer_deficit": [
+      0.0029,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0219,
+     "leg_start_yaw_rad": 0.0081,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s5",
+     "leg": 1,
+     "replans_in_transport": 6,
+     "registered": false,
+     "max_dT": 0.0626,
+     "leg_start_est_lateral_m": 0.0016,
+     "leg_start_est_yaw_rad": 0.0191,
+     "sat_share": 0.693,
+     "ach_over_cmd": 0.855,
+     "ach_minus_plan": 0.0178,
+     "wheel_curvature": [
+      0.0384,
+      0.0369
+     ],
+     "steer_deficit": [
+      0.0047,
+      0.0
+     ],
+     "leg_start_lateral_m": -0.0236,
+     "leg_start_yaw_rad": 0.0168,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s6",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0816,
+     "leg_start_est_lateral_m": -0.0092,
+     "leg_start_est_yaw_rad": -0.0301,
+     "sat_share": 0.74,
+     "ach_over_cmd": 0.8528,
+     "ach_minus_plan": 0.017,
+     "wheel_curvature": [
+      0.0067,
+      0.0
+     ],
+     "steer_deficit": [
+      0.0013,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0195,
+     "leg_start_yaw_rad": -0.0312,
+     "root": "cmp_c7701296"
+    },
+    {
+     "name": "k1c_K1_random_1_s7",
+     "leg": 1,
+     "replans_in_transport": 4,
+     "registered": false,
+     "max_dT": 0.0901,
+     "leg_start_est_lateral_m": -0.0232,
+     "leg_start_est_yaw_rad": -0.007,
+     "sat_share": 0.755,
+     "ach_over_cmd": 0.854,
+     "ach_minus_plan": 0.0174,
+     "wheel_curvature": [
+      0.002,
+      -0.005
+     ],
+     "steer_deficit": [
+      0.0011,
+      -0.0001
+     ],
+     "leg_start_lateral_m": -0.0533,
+     "leg_start_yaw_rad": -0.0058,
+     "root": "cmp_c7701296"
+    }
+   ]
+  }
+ ],
+ "tally": {
+  "endpoint_heading": {
+   "localisation_decision": 1,
+   "unresolved_saturated_no_curvature": 1,
+   "plan_short_leg": 2,
+   "mixed_plan_margin_and_plant": 1
+  },
+  "cross_track": {
+   "mixed_plan_margin_and_plant": 7
+  },
+  "separate_ending": {
+   "separate_ending": 2
+  },
+  "timeout": {
+   "separate_ending": 2
+  },
+  "no_slam_control": {
+   "unresolved": 1
+  }
+ }
+}
