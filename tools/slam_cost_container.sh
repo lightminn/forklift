@@ -31,7 +31,7 @@ case $NODE in
       sed -i "s/^    $k: .*/    $k: $v/" "$OUT/localization_params.yaml"
     done
     # every value a float (tools/ros_float_list.py; S2 a_1 2026-11-13: "-2.612,0,0" kept the bridge from starting)
-    POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>>"$OUT/bundle_check.log") || exit 3
+    POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>"$OUT/pose_list.log") || exit 3
     LOC_ARGS=(-p localization_bundle:=/bundle -p expected_map_id:="$SLAM_EXPECTED_MAP_ID"
               -p "map_start_pose:=[$POSE_LIST]")
     ros2 launch slam_toolbox localization_launch.py slam_params_file:="$OUT/localization_params.yaml" \

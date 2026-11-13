@@ -28,8 +28,8 @@ if [ -n "${SLAM_MAP_BUNDLE:-}" ]; then
   # no loop closure); an unusable bundle starts no slam_toolbox -- the bridge answers the first scan with the reason.
   : "${SLAM_EXPECTED_MAP_ID:?the session map id}" "${SLAM_MAP_START_POSE:?the start pose x,y,yaw}"
   # every value a float (tools/ros_float_list.py: rclpy refuses a list mixing integers and floats); a value that is
-  # not a number stays as given and fails as before, its reason in bundle_check.log
-  POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>>"$OUT/bundle_check.log") \
+  # not a number stays as given and fails as before, its reason in pose_list.log
+  POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>"$OUT/pose_list.log") \
     || POSE_LIST=$SLAM_MAP_START_POSE
   LOC_ARGS=(-p localization_bundle:="$SLAM_MAP_BUNDLE" -p expected_map_id:="$SLAM_EXPECTED_MAP_ID"
             -p "map_start_pose:=[$POSE_LIST]")
