@@ -2,7 +2,7 @@
 
 - 작성: 2026-11-13, 시뮬-물성 세션(총괄 배정)
 - 상위: 기준선 취약성 ① 결과(`docs/validation/2026-11-13-baseline-fragility-results.md`, #489), 삽입 가로 어긋남 계획(`docs/plans/2026-10-27-insertion-lateral-drift.md`)의 C2(b)
-- 상태: 초판. 독립 검토 3 회 전이다.
+- 상태: 독립 검토 3 회를 마쳤다. 1 단계 결과는 mapping 탐색 불통과이고(`docs/validation/2026-11-13-c2b-stage1-results.md`), 총괄 결정(2026-11-13)으로 **보류**한다. 재개 계기는 결과 문서에 적었다.
 
 ## 0. 결정과 범위
 
