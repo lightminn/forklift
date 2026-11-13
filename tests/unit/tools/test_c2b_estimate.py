@@ -45,7 +45,8 @@ def case(mfo_by_time):
     V = [3.5, 0.0]
     E, A = sc[-1, 1:4], sc[-1, 4:7]
     decomp = {"name": "lbg_B0_random_1_s0", "scene": "random_1", "arm": "B0", "capture_t": t_cap, "t_insert": t_ins,
-              "t_lift": t_lift, "V": V, "E": list(E), "A": list(A), "terms_m": {"S": C.lateral(V, A)}}
+              "t_lift": t_lift, "V": V, "E": list(E), "A": list(A),
+              "terms_m": {"S": C.lateral(V, A), "S_const": 0.0}}
     result = {"samples": [{"time_s": 15.0, "phase": "lift", "pallet_yaw_rad": 0.0}],
               "arguments": {"rear_axle_offset_m": -0.34},
               "chassis_model": {"drive_geometry": {"wheel_radius_m": 0.125}},
@@ -73,6 +74,7 @@ def test_no_correction_change_leaves_the_offset():
     d, r, sc, rec, log = case([])
     e = C.run_estimate(d, r, sc, rec, log)["end_hold"]
     assert e["S_C2b_m"] == pytest.approx(d["terms_m"]["S"], abs=1e-12) and abs(e["check_identity_m"]) < 1e-12
+    assert e["dB_C2b_m"] == pytest.approx(d["terms_m"]["S"] - d["terms_m"]["S_const"], abs=1e-12)
     assert e["jump_m"] == pytest.approx(0.0, abs=1e-12) and not e["over_jump"]
 
 

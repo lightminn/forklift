@@ -21,7 +21,9 @@ Per run (the decomposition's judged / not-selected runs, i.e. reached lift and n
 - The jumps as the code returns them (the base position under the two corrections at the same odometry pose, and the
   wrapped yaw difference), at every change of the applied correction from the release at the capture to t_k; the
   conservative variant uses the largest of them, not only the end-to-end one.
-- Also: replies received from the capture to t_k and their spread, the age of the held correction when the hold
+- dB_C2b = S_C2b - S_const: the C2(b) bias change's effect on the same pallet point at the same end time and axes as
+  the decomposition's dB (S_const from DECOMP), so the two compare directly.
+- Also: replies received from the capture to t_k and the range of the map<-odom components, the age of the held correction when the hold
   began, and the received correction's error against the truth at t_k.
 The plan's 2.2 rule is applied as written: the mapping exploratory pass needs all of its five conditions; not
 judgeable runs count as unchanged. Results are a conditional end-point estimate on mapping records, not a bound on the
@@ -237,7 +239,9 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=
                 entry.update(
                     jumps=seq, max_jump_m=max((j["jump_m"] for j in seq), default=0.0),
                     max_jump_rad=max((j["jump_rad"] for j in seq), default=0.0),
-                    correction_stamp_s=stamp, S_C2b_m=cf["S_m"], yaw_C2b_rad=cf["yaw_rad"],
+                    correction_stamp_s=stamp, S_C2b_m=cf["S_m"],
+                    dB_C2b_m=(cf["S_m"] - decomp["terms_m"]["S_const"]
+                              if decomp["terms_m"].get("S_const") is not None else None), yaw_C2b_rad=cf["yaw_rad"],
                     yaw_actual_rad=cf["yaw_actual_rad"], check_identity_m=counterfactual(
                         V, V_yaw, decomp["E"], decomp["A"], M_hold, M_hold)["S_m"] - cf["S_actual_m"],
                     jump_m=pos_jump, jump_rad=yaw_jump,
@@ -254,8 +258,9 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=
                                if t_cap < r["stamp_s"] <= t_k and r["status"] == "processed"]
                 if len(window_rows) >= 2:
                     arr = np.array(window_rows)
-                    entry["reply_spread"] = {"x_m": float(np.ptp(arr[:, 0])), "y_m": float(np.ptp(arr[:, 1])),
-                                             "yaw_rad": float(np.ptp(arr[:, 2]))}
+                    # ranges of the map<-odom transform's own components, not a lateral spread of the truck
+                    entry["map_from_odom_range"] = {"x_m": float(np.ptp(arr[:, 0])), "y_m": float(np.ptp(arr[:, 1])),
+                                                    "yaw_rad": float(np.ptp(arr[:, 2]))}
         out[key] = entry
     out["end_hold"]["t_k_travel_sum"] = t_travel
     if t_travel is not None and out["end_hold"].get("t_k") is not None:
