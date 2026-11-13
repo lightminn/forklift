@@ -261,6 +261,76 @@ def test_c_plus_l_is_not_a_bias_change_by_itself():
     expected = (n_E[0] - n_G[0]) * b[0] + (n_E[1] - n_G[1]) * b[1]
     assert d["hold"] == [] and d["terms_m"]["C+L"] == pytest.approx(expected, abs=1e-12)
     assert abs(expected) > 5e-4
+    # the bias did not change: dB is zero and S is all S_const
+    assert d["terms_m"]["dB"] == pytest.approx(0.0, abs=1e-12)
+    assert d["terms_m"]["S_const"] == pytest.approx(d["terms_m"]["S"], abs=1e-12)
+
+
+def test_db_is_the_lateral_effect_of_the_bias_change():
+    """The fixture's estimate is 3 mm left of the truth at the capture (W_c a 3 mm shift) and 10 mm left at lift
+    (E - A = -10 mm lateral in the frame, i.e. the estimate is 10 mm right): the bias changed by 13 mm, all lateral,
+    with no yaw, so dB = C + L = -13 mm and S_const = S - dB = -7 mm."""
+    d = R.decompose(*world())
+    assert d["terms_m"]["dB"] == pytest.approx(-0.013, abs=1e-12)
+    assert d["terms_m"]["S_const"] == pytest.approx(-0.007, abs=1e-12)
+    course = d["bias_course"]  # the fixture's slam rows start at 19.95 s: the course covers only those
+    assert course["rows"] == 2 and course["dpsi_rad"] == pytest.approx(0.0, abs=1e-12)
+    assert course["dB_max_step_m"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_the_course_shows_a_jump_and_where_it_happened():
+    """Rows every 0.1 s from the capture: the truth at lift's pose throughout, the estimate at the capture's bias
+    (3 mm left) until 15 s, then 10 mm right -- one 13 mm step during insert."""
+    result, sc = world()
+    t = np.round(np.arange(5.0, 20.06, 0.05), 2)
+    A = np.array([0.5, 0.020, 0.0])
+    est = np.where(t[:, None] < 15.0, A + [0.0, 0.003, 0.0], A + [0.0, -0.010, 0.0])
+    cap = result["observation_attempts"][1]["capture_control"]
+    cap["truth_rear"], cap["control_rear"] = list(A), list(A + [0.0, 0.003, 0.0])
+    q = R.to_world(R.observed_centre(result["observation_attempts"][1]["pocket_observation"], 0.6),
+                   R.base_from_rear(cap["control_rear"], -0.34))
+    result["near_capture"]["near_estimate_m"] = {"x_m": q[0], "y_m": q[1]}
+    sc = np.column_stack([t, est, np.tile(A, (len(t), 1))])
+    result["slip_watch"]["baseline"]["t"] = float(t[-1])
+    result["transitions"][-1]["time_s"] = float(t[-1])
+    d = R.decompose(result, sc)
+    c = d["bias_course"]
+    assert c["dB_first_row_m"] == pytest.approx(0.0, abs=1e-12) and c["first_row_t"] == 5.0
+    assert c["dB_at_insert_m"] == pytest.approx(0.0, abs=1e-12)
+    assert c["dB_max_step_m"] == pytest.approx(0.013, abs=1e-12)
+    assert d["terms_m"]["dB"] == pytest.approx(-0.013, abs=1e-12)
+    assert c["dB_after_insert_max_change_m"] == pytest.approx(0.013, abs=1e-12)  # the step came at 15 s, in insert
+    assert c["dB_max_against_final_m"] == pytest.approx(0.0, abs=1e-12)
+    assert c["dB_position_m"] == pytest.approx(-0.013, abs=1e-12) and c["dB_yaw_m"] == pytest.approx(0.0, abs=1e-12)
+
+
+def test_the_course_reports_the_yaw_of_the_bias_change():
+    result, sc = world()
+    sc[:, 3] += 0.01  # the estimate turns 0.01 rad more than the truth by lift
+    d = R.decompose(result, sc)
+    c = d["bias_course"]
+    assert c["dpsi_rad"] == pytest.approx(0.01, abs=1e-12)
+    assert c["dB_position_m"] + c["dB_yaw_m"] == pytest.approx(d["terms_m"]["dB"], abs=1e-12)
+    # the capture's bias is a 3 mm shift, so E* = W_c^-1 E = (0.5, 0.007, 0.01) and E_p = (0.5, 0.007, 0)
+    E_star, E_p = (0.5, 0.007, 0.01), (0.5, 0.007, 0.0)
+    assert c["dB_position_m"] == pytest.approx(R.lateral([2.0, 0.0], sc[1, 4:7]) - R.lateral([2.0, 0.0], E_p),
+                                               abs=1e-12)
+    assert c["dB_yaw_m"] == pytest.approx(R.lateral([2.0, 0.0], E_p) - R.lateral([2.0, 0.0], E_star), abs=1e-12)
+    assert abs(c["dB_yaw_m"]) > 0.01
+
+
+def test_db_with_a_rotated_constant_bias_is_zero():
+    """A constant rigid bias with a rotation (2 deg about a far point) at the capture and at lift: dB = 0."""
+    result, sc = world()
+    W = R.se2([0.3, -0.2, math.radians(2.0)])
+    cap = result["observation_attempts"][1]["capture_control"]
+    cap["control_rear"] = list(R.pose_of(W @ R.se2(cap["truth_rear"])))
+    attempt = result["observation_attempts"][1]
+    est = R.to_world(R.observed_centre(attempt["pocket_observation"], 0.6), R.base_from_rear(cap["control_rear"], -0.34))
+    result["near_capture"]["near_estimate_m"] = {"x_m": est[0], "y_m": est[1]}
+    sc[:, 1:4] = R.pose_of(W @ R.se2(sc[1, 4:7]))
+    d = R.decompose(result, sc)
+    assert d["hold"] == [] and d["terms_m"]["dB"] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_the_folders_are_read_and_written(tmp_path):
@@ -286,7 +356,7 @@ def test_the_folders_are_read_and_written(tmp_path):
     assert names["lbg_Ub3_random_1_s0"]["missing"] == ["nonfinite_lift_inputs"]
     assert names["lbg_Ub3_random_1_s0"]["judgement"]["status"] == "held"
     assert set(payload["tallies"]) == {"5mm", "10mm", "15mm"}
-    assert "| lbg_B0_random_1_s1 | -20.0 | -4.0 | -1.0 | -3.0 | +0.0 | -6.0 | -10.0 | -13.0 | -20.0 | judged: L" \
+    assert "| lbg_B0_random_1_s1 | -20.0 | -4.0 | -1.0 | -3.0 | +0.0 | -6.0 | -10.0 | -13.0 | -13.0 | -20.0 | judged: L" \
         in summary.read_text()
 
 
@@ -295,3 +365,47 @@ def test_the_input_is_not_changed():
     before, sc_before = copy.deepcopy(result), sc.copy()
     R.decompose(result, sc)
     assert result == before and np.array_equal(sc, sc_before)
+
+
+def test_repeats_and_canaries_are_compared_with_their_original_and_not_counted_twice(tmp_path):
+    check, diag = tmp_path / "check", tmp_path / "diag"
+    for root, name, shift in ((check, "lbg_B0_random_1_s0", 0.0), (check, "lbg_B0_random_1_s0_rep", 0.0),
+                              (diag, "lbd_B0_random_1_s0_can", 0.0005), (check, "lbg_Ub6_line_2_s0_rep", 0.0)):
+        run = root / name / "run"
+        run.mkdir(parents=True)
+        result, sc = world()
+        sc[:, 5] += shift  # the canary's truth rear 0.5 mm further left at lift
+        result["slip_watch"]["baseline"]["seat"][1] = R.lateral([2.0, 0.0], sc[1, 4:7])
+        (run / "result.json").write_text(json.dumps(result))
+        np.save(run / "slam_control.npy", sc)
+    live = diag / "lbd_live_s0" / "run"  # no slam_control: held as missing, not a crash
+    live.mkdir(parents=True)
+    (live / "result.json").write_text(json.dumps(world()[0]))
+    runs = {r["name"]: r for r in R.collect([check, diag])}
+    rep, can = runs["lbg_B0_random_1_s0_rep"], runs["lbd_B0_random_1_s0_can"]
+    assert R.parse_name("lbd_B0_aisle_rack_s2_can") == {"arm": "B0", "scene": "aisle_rack", "seed": 2,
+                                                        "duplicate": "can", "rerun": False}
+    assert rep["duplicate_of"] == "lbg_B0_random_1_s0" and rep["duplicate_max_term_diff_m"] == 0.0
+    assert can["duplicate_of"] == "lbg_B0_random_1_s0"
+    assert can["duplicate_max_term_diff_m"] == pytest.approx(0.0005) and can["duplicate_status_match"] is True
+    assert runs["lbg_Ub6_line_2_s0_rep"]["duplicate_max_term_diff_m"] is None  # its original is not in the data
+    assert rep["judgement"]["status"] == "duplicate"
+    assert runs["lbd_live_s0"]["missing"] == ["slam_row_at_lift"]
+    t = R.tally(list(runs.values()), 0.010)
+    assert t["B0"]["duplicates"] == 2 and t["B0"]["judged"] == 1 and t["perturbed"]["duplicates"] == 1
+
+
+def test_a_resubmission_replaces_its_invalid_original(tmp_path):
+    root = tmp_path / "check"
+    for name in ("lbg_Ub6_aisle_rack_s0", "lat_r_lbg_Ub6_aisle_rack_s0"):
+        run = root / name / "run"
+        run.mkdir(parents=True)
+        result, sc = world()
+        (run / "result.json").write_text(json.dumps(result))
+        np.save(run / "slam_control.npy", sc)
+    runs = {r["name"]: r for r in R.collect([root])}
+    rerun, orig = runs["lat_r_lbg_Ub6_aisle_rack_s0"], runs["lbg_Ub6_aisle_rack_s0"]
+    assert (rerun["arm"], rerun["scene"], rerun["seed"], rerun["rerun"]) == ("Ub6", "aisle_rack", 0, True)
+    assert orig["judgement"]["status"] == "superseded" and rerun["judgement"]["status"] == "judged"
+    t = R.tally(list(runs.values()), 0.010)["perturbed"]
+    assert (t["superseded"], t["judged"]) == (1, 1)
