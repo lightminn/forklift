@@ -24,8 +24,11 @@ SOCK_TAIL = "/live/epoch_999/sock/slam.sock"
 
 def entry(snap: str, out: str, name: str, arm: str) -> dict:
     run = f"{out}/{name}/s"
-    if len((run + SOCK_TAIL).encode()) > 107:
-        raise SystemExit(f"{run}: the SLAM socket path would pass 107 bytes -- a shorter OUT")
+    # checked with the slot's _re name from the first run on, so an OUT that fits the originals fits their reruns
+    # (Codex registration review P3)
+    probe = run if name.endswith("_re") else f"{out}/{name}_re/s"
+    if len((probe + SOCK_TAIL).encode()) > 107:
+        raise SystemExit(f"{probe}: the SLAM socket path would pass 107 bytes -- a shorter OUT")
     env = {**BASE, **ARMS[arm], "TS_ARM": arm}
     assert "LAYER_BUDGET" not in env
     return {"name": name, "argv": ["bash", f"{snap}/{WRAPPER}", run], "cwd": snap, "env": env,

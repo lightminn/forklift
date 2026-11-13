@@ -3,7 +3,7 @@
 배경:
 - [2차 결과](../validation/2026-11-13-teleop-smooth-2.md)(중간판): K08(f 0.8, catch-up 6)이 예산 on·캐시에서 3/3 통과했다.
 - [2차 등록](2026-11-13-teleop-smooth-2.md) 3 절: "K08 이 통과하면 K09 재실행을 등록한다."
-- 1차의 K09 는 예산 off·캐시 없음에서 불통과였다(TELEOP 배율 0.854–0.863, 후진 hold 에서 pacing 실패, [1차 결과](../validation/2026-11-12-teleop-smooth.md)).
+- 1차의 K09 는 예산 off·캐시 없음에서 불통과였다(TELEOP 배율 0.854–0.863, pacing 실패 넷 가운데 셋은 후진 hold, 하나는 ts1 의 승강(lift_up) hold, [1차 결과](../validation/2026-11-12-teleop-smooth.md)).
 - 총괄 결정(2026-11-13): 캐시 포함 같은 조건으로 등록하고 Codex 를 수렴시킨다. 제출은 58 회가 끝난 뒤 총괄 신호로 한다. ws1 순서는 `_re` 3 → 58 회 → K09 → SLAM S2 다.
 
 ## 1. 실행
@@ -15,14 +15,15 @@
 | 자리 | 3: `u01_k09_r1`, `u02_k09_r2`, `u03_k09_r3`(`docs/validation/2026-11-13-teleop-smooth-3/ts3_lists.py`) |
 | 제출 | `ts3_submit.sh SNAP OUT [FIRST_DEPENDENCY] [-- NAME ...]`: 2차와 같은 단일 세션 잡 직렬, shard 4·CPU 6·8G·40 분, `--slots 1 --retries 0` |
 | 스냅숏 | 이 브랜치의 커밋. 코드는 2차 스냅숏 `ts2_65a862dd` 와 같고(main 0092bcf7 위, 캐시 포함), 문서·목록 스크립트만 다르다 — 제출 전에 `git diff --stat 65a862dd` 로 코드 차이가 없음을 확인해 적는다. 이름은 제출 직전에 한 번 고정한다 |
-| 시간 | 1차 K09 실측(잡 241–260 s)과 2차 K08(261–271 s)로 잡당 약 4.5 분 → 3 잡 약 14 분 |
+| 시간 | 1차 K09 실측(잡 241–260 s, 평균 약 4.2 분)과 2차 K08(261–271 s, 약 4.4 분)로 잡당 약 4.5 분 → 3 잡 약 14 분. 큐 대기·VM 복구·추가 `_re` 는 뺀 추정이다 |
+| OUT 길이 | `ts3_lists.py` 가 원래 자리부터 `_re` 이름으로 SLAM 소켓 경로(107 바이트)를 검사한다 — 원래 세 잡이 들어가는 OUT 이면 재실행도 들어간다(Codex P3) |
 | 제출 직전 조건 | 두 GPU 모두 `nvidia-smi` 에 보이고 persistence Enabled(VM `ws1-win-gpu1` 꺼짐), `isaac_bundle check` 3/3, squeue 0 |
 
 ## 2. 판정 (결과 전 고정)
 
 - 2차 등록 2 절과 같다: 1차 등록 3 절의 규칙·판정 가능 조건·자리 규칙, 같은 계정 겹침(sacct, 원출력 보관), `--budget-on`(예산 기록 필수·불변조건 위반 실패), `infra_failed` 만 추가 재실행.
 - 도구: `tools/teleop_realtime_report.py --verdict --factor 0.9 --slots u01_k09_r1,u02_k09_r2,u03_k09_r3 --budget-on [--overlapped ...]`.
-- **VM 규칙(추가, 결과 전).** 세션 창 안에 GPU 1 이 VM(`vfio-pci`)에 넘어가 있었거나 qemu 가 돌았으면, 그 세션은 겹침과 같이 다룬다. qemu 는 사용자 uid 가 아니라서 CPU 표본기에 잡히지 않을 수 있다. 판정 때 세션 창마다 ws1 의 VM 시작·정지 기록(총괄·workstation-07 의 기록 또는 `journalctl -u libvirtd`)과 대조한다.
+- **VM 규칙(추가, 결과 전).** 세션 창 안에 GPU 1 이 VM(`vfio-pci`)에 넘어가 있었거나 qemu 가 돌았으면, 그 세션은 겹침과 같이 다룬다. qemu 는 사용자 uid 가 아니라서 CPU 표본기에 잡히지 않을 수 있다. 증거와 판정은 2차 등록 2 절의 VM 규칙과 같다: 제출 직전부터 끝까지 `vm_watch.py sample`(30 s)을 돌려 원출력을 `2026-11-13-teleop-smooth-3/vm_watch_k09.jsonl` 로 보관하고, sacct 세션 창마다 `vm_watch.py judge` 의 `vm`·`clear`·미평가를 따른다. 기록이 끊겨 미평가인 세션은 재실행하지 않는다(Codex 등록 검토 P2).
 
 ## 3. 결과에 따른 처리
 
@@ -37,4 +38,8 @@
 ## 5. 자체 검토
 
 - ① 원자료 재계산: 시간은 1차 K09 sacct(`docs/validation/2026-11-12-teleop-smooth/sacct_16-30_17-30.txt` 의 260·251·241 s)와 2차 K08 sacct(271·261·261 s)에서 셈.
-- ② Codex 검토: (진행 중)
+- ② Codex 검토 1라운드(스레드 01a1d2c5): P1 없음.
+  - P2(VM 기록이 없거나 불완전할 때의 처리): 표본기 `vm_watch.py`·보관 위치·세션 창 대응·결측은 미평가(재실행 없음)로 고정했다. 2차 등록의 VM 규칙에도 같은 증거 절차를 넣었다(`_re` 제출 전).
+  - P3(OUT 길이를 `_re` 까지): `ts3_lists.py` 가 원래 자리부터 `_re` 이름으로 검사한다.
+  - P3(1차 실패 요약): 승강 실패를 배경에 넣었다.
+  - 순차 설계·1차와의 비교·스크립트·시간은 지적 없음(선택된 관측값일 뿐 성공 확률이 아니라는 점은 2차 2 절 그대로).
