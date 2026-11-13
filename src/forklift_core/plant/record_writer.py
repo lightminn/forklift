@@ -66,7 +66,7 @@ class RecordWriter:
         self._closing = False
         self._stop = threading.Event()
         self._footer: dict | None = None
-        self._inflight = 0  # a row taken from the queue and not yet written
+        self._pending = 0  # rows accepted and not yet written: from the put to the end of the write (one counter)
         self.close_result: dict | None = None
         self._thread = threading.Thread(target=self._run, name="record-writer", daemon=True)
         self._thread.start()
@@ -84,6 +84,7 @@ class RecordWriter:
                 return
             try:
                 self.q.put_nowait(item)
+                self._pending += 1
             except queue.Full:
                 self.dropped += 1
 
@@ -94,9 +95,9 @@ class RecordWriter:
             self.write_errors += 1
 
     def _take_and_write(self, item) -> None:
-        self._inflight = 1
         self._write(item)
-        self._inflight = 0
+        with self._lock:
+            self._pending -= 1
 
     def _run(self) -> None:
         while not self._stop.is_set():
@@ -130,6 +131,8 @@ class RecordWriter:
         self._stop.set()
         self._thread.join(timeout_s)
         finished = not self._thread.is_alive()
-        self.close_result = {"finished": finished, "unwritten": 0 if finished else self.q.qsize() + self._inflight,
+        with self._lock:
+            unwritten = 0 if finished else self._pending
+        self.close_result = {"finished": finished, "unwritten": unwritten,
                              "dropped": self.dropped, "write_errors": self.write_errors}
         return self.close_result

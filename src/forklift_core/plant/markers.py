@@ -59,7 +59,7 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
     if not os.isatty(fd):
         return MarkerReader(lambda: None, False, "stdin is not a terminal")
     buf = bytearray()
-    state = {"eof": False, "pending": bytearray()}
+    state = {"eof": False, "skip": False}  # skip: an unfinished label hit its limit -- drop bytes up to the newline
 
     def poll():
         if state["eof"]:
@@ -76,6 +76,11 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
             if not chunk:
                 break  # a Ctrl-D on an empty line (a tty: later lines still come) -- this poll is done
             read += len(chunk)
+            if state["skip"]:
+                i = chunk.find(b"\n")
+                if i < 0:
+                    continue  # still the cut label's tail
+                chunk, state["skip"] = chunk[i:], False
             buf.extend(chunk)
         now = clock()
         while marks < max_marks and (i := buf.find(b"\n")) >= 0:
@@ -86,5 +91,6 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
         if buf.find(b"\n") < 0 and len(buf) > max_label:  # an unfinished label: keep its first whole characters
             keep = len(_utf8_prefix(bytes(buf), max_label))
             del buf[keep:]
+            state["skip"] = True
 
     return MarkerReader(poll, True, None)

@@ -129,3 +129,21 @@ def test_an_unfinished_long_label_is_kept_to_whole_characters_and_an_exact_bound
     finally:
         os.close(master)
         os.close(slave)
+
+
+def test_the_tail_of_a_cut_label_is_dropped_up_to_its_newline():
+    # Codex code re-review 3: a label cut at its limit, its tail in the next poll -- the tail's bytes (a lone
+    # continuation byte among them) must not join the kept prefix
+    master, slave, r, marks = raw_pty_reader(max_label=200)
+    try:
+        raw = ("가" * 100).encode()
+        os.write(master, raw[:203])
+        time.sleep(0.05)
+        r.poll()
+        os.write(master, raw[203:] + b"\r\nnext\r\n")
+        time.sleep(0.05)
+        r.poll()
+        assert marks == ["가" * 66, "next"]
+    finally:
+        os.close(master)
+        os.close(slave)
