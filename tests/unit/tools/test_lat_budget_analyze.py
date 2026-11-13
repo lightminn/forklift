@@ -96,3 +96,43 @@ def test_the_conclusion_rules():
     assert set(c["uo9"]) == {"d", "e"}
     c = G.conclusions(rows, {"line_2": False, "random_1": True})  # line_2 unread, safety still listed
     assert [d["run"] for d in c["defects"]] == ["f", "e", "g"] and ["line_2", "Ub12"] in c["unread"]
+
+
+def test_exception_2_strips_the_slot_cpu_set_only_when_the_worker_does_not_pin_itself():
+    from types import SimpleNamespace
+
+    def doc(mode, cpus=None, affinity=None):
+        return {"layer_worker": {"mode": mode, "cpus": cpus, "affinity": affinity, "k": 6,
+                                 "process_affinity": [4, 5], "process_cores": [[[4], [5]]]}}
+
+    docs = [doc("delay"), doc("thread", cpus=[1], affinity=[1]), doc("delay", cpus=[1])]
+    dc = SimpleNamespace(_items=lambda run: {"result.json": ("json", [dict(d, layer_worker=dict(d["layer_worker"]))
+                                                                      for d in docs])})
+    G.strip_affinity(dc)
+    got = [d["layer_worker"] for d in dc._items(None)["result.json"][1]]
+    assert got[0]["process_affinity"] == {"count": 2} and got[0]["process_cores"] == {"count": 1} and got[0]["k"] == 6
+    assert got[1]["process_affinity"] == [4, 5] and got[2]["process_cores"] == [[[4], [5]]]  # pinned: kept
+    assert not G.affinity_exempt(None) and not G.affinity_exempt({"mode": "thread"})
+
+
+def test_exception_2_keeps_the_cpu_count_so_different_sized_sets_still_differ():
+    from types import SimpleNamespace
+
+    def run(cpus):
+        return {"result.json": ("json", [{"layer_worker": {"mode": "delay", "cpus": None, "affinity": None,
+                                                           "process_affinity": cpus,
+                                                           "process_cores": [[[c], [c]] for c in cpus]}}])}
+
+    sets = {"a": [4, 5, 6, 16, 17, 18], "b": [0, 1, 2, 12, 13, 14], "c": [0, 1, 2, 12]}
+    dc = SimpleNamespace(_items=lambda r: run(list(sets[r])))
+    G.strip_affinity(dc)
+    a, b, c = (dc._items(k)["result.json"][1][0]["layer_worker"] for k in "abc")
+    assert a == b  # same size: equal once the numbers are gone
+    assert a["process_affinity"] != c["process_affinity"]  # a different size still differs
+
+
+def test_a_bb10_mission_failure_is_a_defect_and_its_degradation_goes_to_the_lead():
+    rows = {"a": crow("Bb10", "observed_end"), "b": crow("Bb10", "operating_degraded"), "c": crow("Bb10", "safe_failure")}
+    c = G.conclusions(rows, {"line_2": True})
+    assert [(d["run"], d["priority"]) for d in c["defects"]] == [("a", 2), ("c", 3)]
+    assert [d["run"] for d in c["bb10_to_lead"]] == ["a", "b", "c"]
