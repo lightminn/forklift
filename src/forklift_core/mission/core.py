@@ -3335,9 +3335,14 @@ class MissionCore:
             state["near_loose_pending"] = index
         else:
             record = state["near_loose_refusals"][state["near_loose_pending"]]
-        if tracking.status == "arrived" and ms.phase == "observe" and "arrival" not in record:
+        if tracking.status == "arrived" and self.near_reobserve_leg():
+            # the near observation goal's own arrival (a backoff's end was already turned back into tracking); one
+            # on another leg is kept apart from the recovery's
+            key_ = "arrival" if record["leg_serial"] == state["observe_replan_leg"]["serial"] else "other_leg_arrival"
+            if key_ in record:
+                return
             narrow = options.near_observe_arrival
-            record["arrival"] = {
+            record[key_] = {
                 "time_s": float(t), "bounds_source": source,
                 "inside_narrow": bool(tracking.position_error_m <= narrow[0]
                                       and abs(tracking.yaw_error_rad) <= narrow[1]),
@@ -3346,13 +3351,21 @@ class MissionCore:
                 "leg_serial": state["observe_replan_leg"]["serial"]}
 
     def near_loose_outcome(self, t: float) -> None:
-        """K1 2.2: a waiting record takes the near capture's status when it leaves ``pending`` (the capture ran
-        between the last tick and this one); called at the top of command() only while a record waits."""
+        """K1 2.2: a waiting record takes the near capture's status when it leaves ``pending`` some way the explicit
+        settlements (near_loose_settle) did not see; called at the top of command() only while a record waits."""
         state = self.state
         status = (state.get("near_capture") or {}).get("status")
         if status != "pending":
-            record = state["near_loose_refusals"][state.pop("near_loose_pending")]
-            record["capture"] = {"time_s": float(t), "status": status}
+            self.near_loose_settle(t, status if status is not None else "absent", "next_tick")
+
+    def near_loose_settle(self, t: float, status: str, how: str) -> None:
+        """K1 2.2: the waiting record's outcome where the near capture is decided -- accepted (``done``), not
+        detected (``failed``, before the run ends on it), refused into a realignment (``realign_refused``, before
+        the capture record is moved away). A record still waiting when the run ends some other way keeps no
+        ``capture``: the run's own end says how it ended."""
+        state = self.state
+        record = state["near_loose_refusals"][state.pop("near_loose_pending")]
+        record["capture"] = {"time_s": float(t), "status": status, "how": how}
 
     def near_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
         """Plan 2026-11-02-near-leg-end-stand-c2 (C2): O1's rule on the near re-observation leg. A stop at its final
@@ -3592,11 +3605,6 @@ class MissionCore:
                 tracking = replace(tracking, status="arrived")
         else:
             state.pop("observe_loose_arrival", None)
-        if state.get("near_loose_open") is not None or state.get("near_loose_pending") is not None:
-            # the stand goes on while the leg stands at its end (stop detection aside: C2's wait spans it)
-            stand_on_ = (ms.phase == "observe" and tracking.status == "tracking"
-                         and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12)
-            self.near_loose_close(t, tracking, loose_src_, stand_on_)
         if (
             tracking.status == "arrived" and obstacle is not None
             and obstacle.get("backoff", {}).get("phase") == ms.phase
@@ -3631,6 +3639,12 @@ class MissionCore:
                 obstacle["force_replan"] = ms.phase
             tracking = replace(tracking, status="tracking", speed_mps=0.0)
             requested_speed = 0.0
+        if state.get("near_loose_open") is not None or state.get("near_loose_pending") is not None:
+            # K1 2.2, after a backoff's end was turned back into tracking: the stand goes on while the leg stands at
+            # its end (stop detection aside: C2's wait spans it)
+            stand_on_ = (ms.phase == "observe" and tracking.status == "tracking"
+                         and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12)
+            self.near_loose_close(t, tracking, loose_src_, stand_on_)
         self._command_curvature = float(curvature)  # the exit-prefix watch's commanded stop arc (plan D2)
         return SimpleNamespace(requested_speed=requested_speed, curvature=curvature, tracking=tracking, rear=rear,
                                dwell_hold=dwell_hold, dwell_standing=dwell_standing, safety_hold=safety_hold)
@@ -3667,6 +3681,8 @@ class MissionCore:
         if state.get("near_capture", {}).get("status") == "pending":
             # No silent fallback to the far estimate (v3.6).
             state["near_capture"]["status"] = "failed"
+            if state.get("near_loose_pending") is not None:  # K1 2.2: before the run ends on it
+                self.near_loose_settle(t, "failed", "observe_failed")
             require(
                 False,
                 f"near_capture_failed:{attempt['retry_reason']}",
@@ -5017,6 +5033,8 @@ class MissionCore:
                         ],
                         near_error=state["perception"]["perception_error"],
                     )
+                    if state.get("near_loose_pending") is not None:  # K1 2.2
+                        self.near_loose_settle(t, "done", "accepted")
                     # C3 (plan 2026-10-27 T2): the follower stops at the second capture's gap first (off: no change).
                     self.second_near_split(t, rear, straight, approach_config)
                     if realign_active():
@@ -10270,6 +10288,8 @@ class MissionCore:
         transition = self.transition
         state["near_tracking"]["realigns"] = state["near_tracking"].get("realigns", 0) + 1
         state["near_capture"]["refused_attempt"] = attempt_
+        if state.get("near_loose_pending") is not None:  # K1 2.2: before the capture record moves away
+            self.near_loose_settle(now_s, "realign_refused", "start_near_realign")
         state.setdefault("near_capture_refused", []).append(json.loads(record_json(state.pop("near_capture"))))
         record_ = {"time_s": now_s, "refused_attempt": attempt_, "installs": [], "end": None}
         state["near_tracking"]["realign"] = record_

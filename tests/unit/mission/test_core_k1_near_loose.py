@@ -9,6 +9,9 @@ Without the option nothing changes and nothing is written."""
 
 import copy
 import json
+from types import SimpleNamespace
+
+import pytest
 from dataclasses import replace
 
 import test_core_near_end_stand as ne
@@ -290,7 +293,8 @@ def test_c2_then_a_move_then_an_arrival_then_the_capture_are_all_on_the_one_reco
     assert "capture" not in ev and w.state["near_loose_pending"] == 0
     w.state["near_capture"]["status"] = "done"  # the runner's capture_and_detect between two ticks
     w.tick(close, t=21.5)
-    assert ev["capture"] == {"time_s": 21.5, "status": "done"} and "near_loose_pending" not in w.state
+    assert ev["capture"] == {"time_s": 21.5, "status": "done", "how": "next_tick"}
+    assert "near_loose_pending" not in w.state
     assert ev["arrival"]["time_s"] == 21.0  # the first arrival is kept
 
 
@@ -335,3 +339,95 @@ def test_without_the_option_command_never_reads_the_pending_key():
     for k in range(3):
         w.tick(CMID, t=10.0 + k)
     assert called == []
+
+
+def pending_world():
+    """A stand that ended by a move: its record waits for the outcome."""
+    w = cmd_world()
+    w.tick(CMID, t=10.0)
+    w.tick(replace(CMID, speed_mps=0.1), t=10.5)
+    assert w.state["near_loose_pending"] == 0
+    return w
+
+
+ARRIVED = replace(CMID, status="arrived", position_error_m=0.02, yaw_error_rad=0.01)
+
+
+def test_a_backoffs_end_is_not_the_near_goals_arrival():
+    """Codex review 2: the backoff's end is turned back into tracking first; only the near goal's arrival links."""
+    layer = SimpleNamespace(permission=SimpleNamespace(path_check=SimpleNamespace(blocked=None), last_estop=None))
+    w = pending_world()
+    w.core.obstacle = w.obstacle = {"layer": layer, "backoff": {"phase": "observe", "time_s": 11.0}}
+    out = w.tick(ARRIVED, t=12.0)
+    assert out.tracking.status == "tracking"
+    ev = w.state["near_loose_refusals"][0]
+    assert "arrival" not in ev and w.state["near_loose_pending"] == 0
+    w.obstacle.pop("backoff")
+    w.tick(ARRIVED, t=20.0)
+    assert ev["arrival"]["time_s"] == 20.0 and ev["arrival"]["inside_narrow"] is True
+
+
+def test_a_start_backoffs_arrival_is_not_linked_either():
+    w = pending_world()
+    w.core.observe_backoff = {"time_s": 11.0}
+    w.tick(ARRIVED, t=12.0)
+    assert "arrival" not in w.state["near_loose_refusals"][0]
+
+
+def test_an_arrival_on_another_leg_is_kept_apart():
+    w = pending_world()
+    w.state["observe_replan_leg"] = {"start": 0, "serial": 8}
+    w.tick(ARRIVED, t=12.0)
+    ev = w.state["near_loose_refusals"][0]
+    assert "arrival" not in ev and ev["other_leg_arrival"]["leg_serial"] == 8
+
+
+def test_a_failed_near_capture_settles_before_the_run_ends_on_it():
+    """Codex review 2: observe_failed raises right after the status: the record is settled first."""
+    w = pending_world()
+    w.core.options.planner_config = w.core.options.scenario = w.core.options.pickup_bounds = None
+    w.core.options.speeds, w.core.options.cusp_heading_hold_rad = None, 0.1
+    w.hooks.wall = w.hooks.grid_world = w.hooks.grid_kwargs = w.hooks.plan_observation_leg = None
+    w.core.bottom_deck_returning = lambda: False
+    obs = SimpleNamespace(status="not_detected", reason="no_candidate")
+    with pytest.raises(RuntimeError, match="near_capture_failed"):
+        w.core.observe_failed(13.0, [0.0, 0.0, 0.0], {}, 2, obs)
+    ev = w.state["near_loose_refusals"][0]
+    assert ev["capture"] == {"time_s": 13.0, "status": "failed", "how": "observe_failed"}
+    assert "near_loose_pending" not in w.state
+
+
+def test_a_refused_near_capture_settles_before_the_realignment_moves_it():
+    w = pending_world()
+    w.state["near_tracking"] = {}
+    w.hooks.record_json = lambda v: json.dumps(v, default=str)
+    w.core.release_and_stand = lambda t, event: {}
+    w.core.realign_install = lambda kind: None
+    w.core.transition = lambda phase, t: None
+    w.core.near = {}
+    w.core.start_near_realign(14.0, 3)
+    ev = w.state["near_loose_refusals"][0]
+    assert ev["capture"] == {"time_s": 14.0, "status": "realign_refused", "how": "start_near_realign"}
+    assert "near_capture" not in w.state and "near_loose_pending" not in w.state
+
+
+def test_without_a_waiting_record_the_settlement_points_write_nothing():
+    w = cmd_world()
+    w.state["near_tracking"] = {}
+    w.hooks.record_json = lambda v: json.dumps(v, default=str)
+    w.core.release_and_stand = lambda t, event: {}
+    w.core.realign_install = lambda kind: None
+    w.core.transition = lambda phase, t: None
+    w.core.near = {}
+    w.core.start_near_realign(14.0, 3)
+    assert not any(k.startswith("near_loose") for k in w.state)
+
+
+def test_an_accepted_near_capture_settles_where_it_is_marked_done():
+    """The acceptance sits deep in capture_and_detect: the settlement follows the status write directly."""
+    import inspect
+    from forklift_core.mission.core import MissionCore
+    source = inspect.getsource(MissionCore)
+    i = source.index('state["near_capture"].update(\n                        status="done",')
+    j = source.index('self.near_loose_settle(t, "done", "accepted")')
+    assert 0 < j - i < 600 and source.count("near_loose_settle(t, \"done\"") == 1
