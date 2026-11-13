@@ -1807,12 +1807,14 @@ def plan_loaded_delivery(
     exit_prefix: ExitPrefix | None = None,
     return_start_backoff_m: float = 0.0,
     return_start_backoff_boxed: bool = False,
+    transport_travel_config: PlannerConfig | None = None,
 ) -> MissionPlan:
     """The delivery of a pallet already on the forks (persistent console plan D5 6c): from ``start_rear`` the same
     steps plan_transport takes from its extracted pose on -- the transport search with the loaded footprint (on a
     grid, once more with no clearance when the start is invalid), the delivery straight, the withdraw straight and,
     with ``return_to``, the return with the delivered pallet as an obstacle. plan_transport is left as it is; the
-    tests hold the two equal from the extracted pose. approach, insert and extract are None."""
+    tests hold the two equal from the extracted pose. approach, insert and extract are None. transport_travel_config
+    replaces travel_config for the transport search alone, as in plan_transport (the loaded curvature rule)."""
     geometry = geometry if geometry is not None else SyntheticMissionGeometry()
     config = config if config is not None else make_transport_planner_config()
     travel_config = travel_config if travel_config is not None else config
@@ -1834,15 +1836,16 @@ def plan_loaded_delivery(
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
     exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
+    loaded_travel = transport_travel_config if transport_travel_config is not None else travel_config
     transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], search_props,
-                                                           geometry.loaded_footprint, scenario.bounds, travel_config,
+                                                           geometry.loaded_footprint, scenario.bounds, loaded_travel,
                                                            occupancy=grid, deadline=deadline, exit_prefix=exit_,
                                                            straight_props=props))
     if transport.status == "invalid_start" and occupancy is not None:
         transport = note("transport_search_tight", _transport_search(start_rear, destination["predelivery"],
                                                                      search_props, geometry.loaded_footprint,
                                                                      scenario.bounds,
-                                                                     replace(travel_config, clearance_m=0.0),
+                                                                     replace(loaded_travel, clearance_m=0.0),
                                                                      occupancy=grid, deadline=deadline,
                                                                      exit_prefix=exit_, straight_props=props))
     if not transport.success:
@@ -1890,6 +1893,7 @@ def plan_transport(
     exit_prefix: ExitPrefix | None = None,
     return_start_backoff_m: float = 0.0,
     return_start_backoff_boxed: bool = False,
+    transport_travel_config: PlannerConfig | None = None,
 ) -> MissionPlan:
     """Plan all stages with exact final straight approaches and loaded geometry.
 
@@ -1911,6 +1915,8 @@ def plan_transport(
     large floor this keeps the pickup search as tight as in the original bay.
     travel_config optionally replaces config for the two long Hybrid A* legs,
     transport and return_home, e.g. to add the obstacle heuristic there only.
+    transport_travel_config optionally replaces it for the loaded transport search alone (its tight retry too):
+    docs/plans/2026-11-14-loaded-curvature-rule.md, the loaded curvature rule; None leaves every stage as before.
     trace optionally receives one dict per planning step, in order and up to
     the step that failed -- search and appended straight parts separately --
     because a failed MissionPlan keeps no paths. Anything with ``append``
@@ -2039,6 +2045,7 @@ def plan_transport(
     if not extract.success:
         return MissionPlan(False, f"extract:{extract.status}")
     exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
+    loaded_travel = transport_travel_config if transport_travel_config is not None else travel_config
     transport = note(
         "transport_search",
         _transport_search(
@@ -2047,7 +2054,7 @@ def plan_transport(
             search_props,
             geometry.loaded_footprint,
             scenario.bounds,
-            travel_config,
+            loaded_travel,
             occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
             deadline=deadline,
             exit_prefix=exit_,
@@ -2067,7 +2074,7 @@ def plan_transport(
                 search_props,
                 geometry.loaded_footprint,
                 scenario.bounds,
-                replace(travel_config, clearance_m=0.0),
+                replace(loaded_travel, clearance_m=0.0),
                 occupancy=docking_occupancy if docking_occupancy is not None else occupancy,
                 deadline=deadline,
                 exit_prefix=exit_,

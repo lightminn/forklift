@@ -848,6 +848,15 @@ def arguments() -> argparse.Namespace:
         "Records the interventions and a record-only safety watch. Absent: as every earlier run.",
     )
     parser.add_argument(
+        "--loaded-curvature-rule",
+        default=None,
+        metavar="FILE",
+        help="docs/plans/2026-11-14-loaded-curvature-rule.md: paths driven loaded in transport (the transport leg, its "
+        "replans, the D7 re-approach, the mission plan's transport stage) are planned with curvature k x kappa_sat from "
+        "this rule file (k, saturated_curvature_inv_m, source); the other stages keep planner_curvature_inv_m. The "
+        "tracker is unchanged. Absent: as every earlier run.",
+    )
+    parser.add_argument(
         "--return-start-backoff",
         choices=("on", "boxed", "off"),
         default="off",
@@ -2090,6 +2099,13 @@ def arguments() -> argparse.Namespace:
         try:
             near_observe_arrival_of(args)
         except ValueError as exc:
+            parser.error(str(exc))
+    if getattr(args, "loaded_curvature_rule", None) is not None:
+        from loaded_curvature_rule import load_rule
+
+        try:
+            load_rule(args.loaded_curvature_rule)
+        except (OSError, ValueError) as exc:
             parser.error(str(exc))
     detour_size_ = getattr(args, "inject_near_end_detour_size", None)
     if detour_size_ is not None:
@@ -4129,6 +4145,20 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     # The pose the mission began at, or None when no return leg was requested.
     return_to_pose = scenario.start_rear if args.return_home else None
     state["scenario"] = asdict(scenario)
+    # docs/plans/2026-11-14-loaded-curvature-rule.md: the configs for paths driven loaded in transport (None: off, every
+    # call as before)
+    loaded_planner_config = loaded_travel_config = None
+    if getattr(args, "loaded_curvature_rule", None) is not None:
+        from chassis_contract import kinematic_curvature_limit_inv_m
+        from loaded_curvature_rule import load_rule, loaded_configs, planned_curvature
+
+        rule_ = load_rule(args.loaded_curvature_rule)
+        kappa_plan_ = planned_curvature(rule_, float(settings["tracker_curvature_inv_m"]),
+                                        kinematic_curvature_limit_inv_m(args.drive_geometry))
+        loaded_planner_config, loaded_travel_config = loaded_configs(planner_config, travel_config, kappa_plan_)
+        state["loaded_curvature_rule"] = {"file": str(args.loaded_curvature_rule), **rule_,
+                                          "planned_curvature_inv_m": kappa_plan_,
+                                          "base_curvature_inv_m": float(planner_config.curvature_limit_inv_m)}
     # the fields a record keeps (P1c's keepout fields only when set), so a run with it off records as before
     from forklift_core.mission.replay_codec import recorded_fields
 
@@ -5560,6 +5590,9 @@ def drive(S, isaac) -> None:
         pose_box = _bound["pose_box"]
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
+    # the loaded curvature rule's configs: None when off and in a setup recorded before the rule (every call as before)
+    loaded_planner_config = _bound.get("loaded_planner_config")
+    loaded_travel_config = _bound.get("loaded_travel_config")
     if "truth_destination" in _bound:
         truth_destination = _bound["truth_destination"]
     if "unloaded_shape" in _bound:
@@ -6497,6 +6530,9 @@ def drive(S, isaac) -> None:
             **grid_kwargs("mission"),
             **({} if transport_exit is None else {"exit_prefix": transport_exit}),
             **return_start_backoff_kw(args),
+            # the loaded curvature rule: the transport stage alone (nothing when off)
+            **({} if loaded_planner_config is None else {"transport_travel_config": (
+                loaded_travel_config if loaded_travel_config is not None else loaded_planner_config)}),
         )
         state.setdefault("planning_traces", []).append(planning_trace)
         # docs/plans/2026-10-27-return-start-withdraw-extension.md R6: the first mission plan's backoff attempts, as the
@@ -7279,6 +7315,8 @@ def drive(S, isaac) -> None:
                                 grid_planning=grid_planning, return_turnaround=args.return_turnaround,
                                 pickup_prior=getattr(args, "layout", "bay") == "scene",
                                 planner_config=planner_config, travel_config=travel_config, scenario=scenario,
+                                # the loaded curvature rule's configs (None: off, the core uses the run's own)
+                                loaded_planner_config=loaded_planner_config, loaded_travel_config=loaded_travel_config,
                                 return_to_pose=return_to_pose, obstacle_act=args.obstacle_act,
                                 pocket_check=args.pocket_check, mid_still_decel_mps2=MID_STILL_DECEL_MPS2,
                                 pickup_bounds=pickup_bounds, mission_stages=mission_stages,
@@ -9533,7 +9571,7 @@ def drive(S, isaac) -> None:
                                        "return_to": live_session_["wait"], "travel_config": travel_config,
                                        "occupancy": grid_["occupancy"], "deadline": determinism.deadline(3 * 20.0),
                                        **({} if transport_exit is None else {"exit_prefix": transport_exit}),
-                                       **return_start_backoff_kw(args)},
+                                       **return_start_backoff_kw(args), **core.loaded_mission_kwargs()},
                             "keep_m": geometry.delivery_straight_m}
                 inputs_ = {"scenario": scenario_, "wait_pose": live_session_["wait"], "waypoints": [],
                            "pickup_bounds": None, "pickup_zone": None,
@@ -11871,6 +11909,16 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     )
     args.carriage_limit_m = read_carriage_limit_m(args.forklift_urdf)
     require_curvature_within_model(settings, args.drive_geometry)
+    if getattr(args, "loaded_curvature_rule", None) is not None:
+        # the loaded curvature rule: refused before Isaac when the tracker or the model cannot command it
+        from chassis_contract import kinematic_curvature_limit_inv_m
+        from loaded_curvature_rule import load_rule, planned_curvature
+
+        try:
+            planned_curvature(load_rule(args.loaded_curvature_rule), float(settings["tracker_curvature_inv_m"]),
+                              kinematic_curvature_limit_inv_m(args.drive_geometry))
+        except ValueError as exc:
+            require(False, f"--settings: {exc}")
     if args.odometry_wheel_radius_m is not None:
         # A typo guard: a rolling-radius calibration moves the radius by well under 10 %.
         geometric_ = args.drive_geometry.wheel_radius_m
