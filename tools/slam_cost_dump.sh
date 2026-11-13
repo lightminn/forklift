@@ -14,14 +14,23 @@ mkdir -p "$OUT/bundle" "$OUT/dump" /tmp/build
 timeout 300 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '$OUT/bundle/map'}" \
   > "$OUT/serialize.log" 2>&1
 echo "serialize exit $?" >> "$OUT/serialize.log"
-INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done)
-g++ -std=c++17 -O2 -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 /workspace/tools/slam_graph_dump.cpp \
-  -o /tmp/build/slam_graph_dump -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
-  -lboost_serialization -lboost_system -lboost_thread -ltbb > "$OUT/dump_build.log" 2>&1 || exit 4
+if [ -x /opt/slam_patched/bin/slam_graph_dump ]; then
+  # a source-built slam_toolbox ships its own dumper, built against its own headers and libraries: compiling here
+  # against /opt/ros/jazzy would pair the apt headers' Mapper layout with the overlay's library (design v2 1, P1)
+  DUMPER=/opt/slam_patched/bin/slam_graph_dump
+  echo "prebuilt $DUMPER" > "$OUT/dump_build.log"
+else
+  INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done)
+  g++ -std=c++17 -O2 -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 /workspace/tools/slam_graph_dump.cpp \
+    -o /tmp/build/slam_graph_dump -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
+    -lboost_serialization -lboost_system -lboost_thread -ltbb > "$OUT/dump_build.log" 2>&1 || exit 4
+  DUMPER=/tmp/build/slam_graph_dump
+fi
+ldd "$DUMPER" | grep -E "karto|toolbox" >> "$OUT/dump_build.log" 2>&1
 read -r RES PASS THRESH < <(python3 - "$OUT/params_effective.yaml" <<'PY'
 import sys, yaml
 p = yaml.safe_load(open(sys.argv[1]))["/slam_toolbox"]["ros__parameters"]
 print(p["resolution"], p["min_pass_through"], p["occupancy_threshold"])
 PY
 )
-/tmp/build/slam_graph_dump "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5
+"$DUMPER" "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5

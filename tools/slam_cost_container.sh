@@ -12,6 +12,13 @@
 #   slam_cost_container.sh <socket> <out> <params> [sync|lifelong] [graph]
 set +u
 source /opt/ros/jazzy/setup.bash
+# A source-built slam_toolbox (deploy/ros2/Dockerfile.slam_patched: the unpatched U0 or a patch series) is installed
+# over the apt one; SLAM_IMAGE_KIND=u0|patched says one must be there -- never a silent fall back to apt
+# (docs/design/2026-11-13-slam-patch-build.md 2).
+if [ -n "${SLAM_IMAGE_KIND:-}" ]; then
+  [ -f /opt/slam_patched/install/setup.bash ] || { echo "SLAM_IMAGE_KIND=$SLAM_IMAGE_KIND without /opt/slam_patched" >&2; exit 7; }
+  source /opt/slam_patched/install/setup.bash
+fi
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 export PYTHONPATH=/workspace/ros2/src/forklift_ros:/workspace/src:${PYTHONPATH}
 SOCKET=$1; OUT=$2; PARAMS=$3; NODE=${4:-sync}
@@ -41,7 +48,15 @@ python3 -m forklift_ros.isaac_slam_bridge --ros-args \
   -p socket_path:="$SOCKET" -p output_dir:="$OUT" -p "laser_xyz_yaw:=[-0.12,0.0,1.05,0.0]" -p persistent:=true \
   "${LOC_ARGS[@]}" > "$OUT/bridge.log" 2>&1
 STATUS=$?
+# the libraries the slam_toolbox node really loaded (overlay or apt), read before it is stopped
+for p in $(pgrep -f "slam_toolbox_node|slam_toolbox/lib" 2>/dev/null); do
+  grep -oE "/[^ ]*(kartoSlamToolbox|toolbox_common|ceres|solver_plugins)[^ ]*\.so[^ ]*" "/proc/$p/maps" 2>/dev/null \
+    | sort -u | sed "s|^|$p |"
+done > "$OUT/slam_libs.txt"
 bash /workspace/tools/slam_cost_dump.sh "$OUT" "${5:-}" > "$OUT/dump_run.log" 2>&1
-echo "dump exit $?" >> "$OUT/dump_run.log"
+DUMP=$?
+echo "dump exit $DUMP" >> "$OUT/dump_run.log"
+# a requested graph dump that failed fails the run (it was only logged; design v2 4)
+[ "${5:-}" = graph ] && [ "$DUMP" != 0 ] && [ "$STATUS" = 0 ] && STATUS=6
 kill $SLAM 2>/dev/null; wait $SLAM 2>/dev/null
 exit $STATUS

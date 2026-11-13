@@ -68,9 +68,14 @@ if [ "${SLAM_NODE:-sync}" = localization ]; then
   LOC_DOCKER=(-v "$(realpath "${MAP_BUNDLE:?the bundle}"):/bundle:ro" -e SLAM_EXPECTED_MAP_ID="${MAP_ID:?the map id}"
               -e SLAM_MAP_START_POSE="${MAP_START_POSE:?the start pose}" -e LOC_SETS="${LOC_SETS:-}")
 fi
+# the source-built slam_toolbox (docs/design/2026-11-13-slam-patch-build.md 2): SLAM_IMAGE the image,
+# SLAM_IMAGE_KIND=u0|patched (the container refuses a missing overlay), SLAM_PATCH_ENV "K=V ..." its switches
+PATCH_DOCKER=()
+[ -n "${SLAM_IMAGE_KIND:-}" ] && PATCH_DOCKER+=(-e SLAM_IMAGE_KIND="$SLAM_IMAGE_KIND")
+for kv in ${SLAM_PATCH_ENV:-}; do PATCH_DOCKER+=(-e "$kv"); done
 docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 "${LOC_DOCKER[@]}" \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
-  -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
+  -v "$OUT/sock:/run/slam" "${PATCH_DOCKER[@]}" "${SLAM_IMAGE:-forklift/ros2-dev:jazzy}" bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
   "${SLAM_NODE:-sync}" "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" >/dev/null
 CID=$(docker inspect -f '{{.Id}}' "$NAME" 2>/dev/null)
 LEFT=$(squeue -h -j "$JOB" -o %L 2>/dev/null)
