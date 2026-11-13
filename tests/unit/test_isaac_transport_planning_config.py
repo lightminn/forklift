@@ -156,7 +156,11 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         # The observation travel's bounds (persistent console plan D2): the pickup bounds in a batch run.
         observe_bounds_=None,
         # the return-start backoff off (plan 2026-10-27): the mission plans see what they always saw
-        self=SimpleNamespace(observe_bounds=lambda: None, _mission_backoff_kwargs=lambda: {}),
+        self=SimpleNamespace(observe_bounds=lambda: None, _mission_backoff_kwargs=lambda: {},
+                             # the loaded curvature rule off: no transport-stage keyword
+                             loaded_mission_kwargs=lambda tight=False: {}),
+        loaded_planner_config=None,
+        loaded_travel_config=None,
         return_start_backoff_kw=lambda args: {},
         travel_config=None,
         # The initial observation loop's ladder pass (earlier, then extended).
@@ -571,7 +575,8 @@ def test_the_replan_waits_for_a_stop_and_keeps_the_tracker_rules():
         "plan_transport_leg(grid_world(slam.get('transport_scenario', scenario) if slam is not None else scenario), PlanningPose("
         in branch
     )
-    assert "planner_config" in branch and "travel_config=travel_config" in branch
+    # the loaded curvature rule's configs (docs/plans/2026-11-14-loaded-curvature-rule.md; the run's own when off)
+    assert "lcfg_, ltravel_ = self.loaded_planner_configs()" in branch and "travel_config=ltravel_" in branch
     # Same tracker configuration as the leg it replaces.
     assert "trackers[ms.phase].config" in branch.split("RearAxlePathTracker(")[1]
     source = SCRIPT.read_text()

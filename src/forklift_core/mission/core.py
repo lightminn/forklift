@@ -4003,7 +4003,7 @@ class MissionCore:
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                            trace=planning_trace, **grid_kwargs("mission", planning_pickup),
-                           **self._mission_backoff_kwargs(), **self._exit_prefix_kwargs(), **self.loaded_mission_kwargs())
+                           **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(), **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -8206,7 +8206,7 @@ class MissionCore:
         otherwise, so every call is as before."""
         options = self.options
         if getattr(options, "loaded_planner_config", None) is None:
-            return options.planner_config, options.travel_config
+            return options.planner_config, getattr(options, "travel_config", None)
         return options.loaded_planner_config, options.loaded_travel_config
 
     def loaded_tight_configs(self, tight, tight_travel):

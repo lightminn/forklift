@@ -5591,8 +5591,14 @@ def drive(S, isaac) -> None:
     if "travel_config" in _bound:
         travel_config = _bound["travel_config"]
     # the loaded curvature rule's configs: None when off and in a setup recorded before the rule (every call as before)
-    loaded_planner_config = _bound.get("loaded_planner_config")
-    loaded_travel_config = _bound.get("loaded_travel_config")
+    if "loaded_planner_config" not in _bound:
+        _bound["loaded_planner_config"] = None
+    if "loaded_travel_config" not in _bound:
+        _bound["loaded_travel_config"] = None
+    if "loaded_planner_config" in _bound:
+        loaded_planner_config = _bound["loaded_planner_config"]
+    if "loaded_travel_config" in _bound:
+        loaded_travel_config = _bound["loaded_travel_config"]
     if "truth_destination" in _bound:
         truth_destination = _bound["truth_destination"]
     if "unloaded_shape" in _bound:

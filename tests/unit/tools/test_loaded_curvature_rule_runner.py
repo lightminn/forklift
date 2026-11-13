@@ -67,7 +67,7 @@ def test_the_near_tracking_contract_names_the_option():
 
 def test_the_runner_wiring():
     assert '"--loaded-curvature-rule"' in RUNNER
-    assert 'loaded_planner_config = _bound.get("loaded_planner_config")' in RUNNER  # an old setup: off
+    assert '_bound["loaded_planner_config"] = None' in RUNNER  # an old setup: off
     assert "loaded_planner_config=loaded_planner_config, loaded_travel_config=loaded_travel_config" in RUNNER
     # the first mission plan: the transport stage keyword only when on
     assert '**({} if loaded_planner_config is None else {"transport_travel_config": (' in RUNNER
