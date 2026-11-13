@@ -34,6 +34,7 @@ class PtyDevice:
 
     def __init__(self, fd):
         self.tty, self.tx_enabled = TtyLink(fd), True
+        self.last_read_ns = None
         self.dec = LinkDecoder()
         self.sent = []
 
@@ -52,6 +53,7 @@ class PtyDevice:
         events = []
         data = self.tty.read_available()
         if data:
+            self.last_read_ns = time.monotonic_ns()  # as ReconnectingLink: the read time the record keeps
             events += host.on_bytes(data, now_ns)
         return events + host.tick(now_ns)
 
@@ -234,7 +236,7 @@ def test_a_wall_escape_against_the_model(run):
     tail = r.b.core.escape_log[-1]
     # from the start to the tail's end, every count both ways (the creep back adds): at least the net, within budget
     assert travel - 1e-4 <= max(tail["travel_m"]) <= 0.20
-    rows = [json.loads(x) for x in r.b.record.getvalue().splitlines()]
+    rows = [json.loads(x) for x in r.b.record.sink.getvalue().splitlines()]
     logged = [e["event"] for row in rows for e in row.get("escape_events", [])]
     assert logged == [e["event"] for e in r.b.core.escape_log]
 
@@ -381,8 +383,47 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
         out = capsys.readouterr().out
         assert code == 0 and '"command_cap_mps"' in out and "no_scan" in out
         assert rec.read_text().count("\n") >= 20
+        rows = [json.loads(x) for x in rec.read_text().splitlines()]
+        # record design 3: a header first, a footer last with the counts, STATE rows with their read time, and the
+        # STATEs taken while closing (after the last cycle row) are in it
+        assert rows[0]["t"] == "header" and rows[0]["schema"] == tb.RECORD_SCHEMA
+        assert rows[-1]["t"] == "footer" and rows[-1]["dropped"] == 0 and rows[-1]["write_errors"] == 0
+        states = [i for i, r in enumerate(rows) if r.get("t") == "state"]
+        cycles = [i for i, r in enumerate(rows) if "t" not in r]
+        assert states and all("read_ns" in rows[i] and "mcu_time_us" in rows[i] for i in states)
+        assert states[-1] > cycles[-1]
         b = made[0]
         assert b.host.state is not None and b.host.state.mode == Mode.DISARMED
         assert b.host.state.last_rx_seq == b.host._seq - 1  # the closing DISARM was the last frame the MCU took
     finally:
         m.close()
+
+
+def test_the_record_keeps_every_state_the_host_took_and_the_markers(run):
+    """Record design 3/4: one state row per STATE the host accepted (not the core's trimmed samples), each with the
+    host time it was given and the read time, and an operator marker as a row of its own."""
+    r = run()
+    r.b.record = io.StringIO()
+    taken = []
+    orig = r.b.core.add_sample
+    r.b.core.add_sample = lambda s: (taken.append(s), orig(s))[1]
+    r.cycles(30)
+    r.b.mark("m1 fwd #1 start", 123)
+    r.cycles(5)
+    rows = [json.loads(x) for x in r.b.record.sink.getvalue().splitlines()]
+    states = [x for x in rows if x.get("t") == "state"]
+    assert len(states) == len(taken) > 10
+    assert [x["host_ns"] for x in states] == [s.host_ns for s in taken]
+    assert all(x["read_ns"] >= x["host_ns"] for x in states)  # read after the cycle started
+    marks = [x for x in rows if x.get("t") == "marker"]
+    assert marks == [{"t": "marker", "host_ns": 123, "index": 0, "label": "m1 fwd #1 start"}]
+
+
+def test_the_cli_refuses_an_existing_record_and_markers_without_a_record(tmp_path, capsys):
+    rec = tmp_path / "old.jsonl"
+    rec.write_text("x\n")
+    flags = [f"--{n.replace('_', '-')}" for n in ALL]
+    assert tb.main(["--device", "pty", "--record", str(rec), *flags]) == 2
+    assert "exists" in capsys.readouterr().err and rec.read_text() == "x\n"
+    assert tb.main(["--device", "pty", "--markers", *flags]) == 2
+    assert "--markers needs --record" in capsys.readouterr().err

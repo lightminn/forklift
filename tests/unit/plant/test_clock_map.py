@@ -124,3 +124,27 @@ def test_a_repeated_device_time_never_brings_back_a_host_time_before_the_previou
     f = cm.fit_clock(dev, host)
     # the repeat is dropped without touching the kept point: the same fit as without it
     assert f.valid and (f.offset_ns, f.slope) == (base.offset_ns, base.slope)
+
+
+def test_the_bring_up_clock_command_reads_a_record_without_markers(tmp_path, capsys):
+    import json
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
+    import bringup
+
+    dev, host = synth(n=200, span_s=8.0, drift_ppm=20.0)
+    rec = tmp_path / "teleop.jsonl"
+    rows = [{"t": "header", "host_boot_id": "hb"}] + [
+        {"t": "state", "boot_id": 3, "mcu_time_us": d, "host_ns": h - 7_000_000, "read_ns": h} for d, h in
+        zip(dev, host)] + [{"phase": "ready"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    assert bringup.main(["clock", "--record", str(rec)]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"] == "ok" and len(out["fits"]) == 1
+    f = out["fits"][0]
+    assert f["valid"] and f["boot_id"] == 3 and f["host_boot"] == "hb" and abs(f["drift_ppm"] - 20.0) < 5.0
+    (tmp_path / "empty.jsonl").write_text(json.dumps({"phase": "idle"}) + "\n")
+    assert bringup.main(["clock", "--record", str(tmp_path / "empty.jsonl")]) == 0
+    assert json.loads(capsys.readouterr().out)["result"] == "no_state_rows"
