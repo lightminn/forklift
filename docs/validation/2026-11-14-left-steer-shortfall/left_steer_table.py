@@ -1,6 +1,7 @@
 """The left steering shortfall table of docs/validation/2026-11-14-left-steer-shortfall.md 2.
 
-    python left_steer_table.py FIELDS.json.gz --out OUT.json
+    python docs/validation/2026-11-14-left-steer-shortfall/left_steer_table.py \
+        docs/validation/assets/transport-departure/tdep_fields.json.gz --out OUT.json   # from the repository root
 
 FIELDS is docs/validation/assets/transport-departure/tdep_fields.json.gz: per run (key "<root>/<run>") the transport
 samples (result.samples: time_s, signed_speed_mps, curvature_inv_m = the tracker's commanded curvature,
