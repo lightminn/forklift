@@ -1,9 +1,12 @@
 """K1 comparison, judged by the rules fixed before the results (docs/plans/2026-11-13-k1-near-loose-arrival.md 5).
 
-    python k1_judge.py RAW_ROOT --out K1.json
+    python k1_judge.py RAW_ROOT --out K1.json [--random1-seeds 0-29]
+    python k1_judge.py --raw-fields k1_raw_fields.json.gz --out K1.json
 
-RAW_ROOT holds k1c_<B0|K1>_<scene>_s<seed>/run/result.json for random_1 seeds 0-29, line_2 and aisle_rack seeds 0-4.
-Reads only. Every run is first checked: exactly one run per arm and cell, deterministic.enabled true and
+RAW_ROOT holds k1c_<B0|K1>_<scene>_s<seed>/run/result.json; --raw-fields reads the same results reduced to the keys
+judged (keyed by run name). The cells are random_1 seeds 0-29 (or the pre-registered extension 0-59, plan 4), line_2
+and aisle_rack seeds 0-4; a run outside them stops the judgement instead of being ignored. Needs forklift_core on the
+path (the scene-damage class is mission.failures'). Reads only. Every run is first checked: exactly one run per arm and cell, deterministic.enabled true and
 deterministic.broken empty. A run is then put in one class: complete, insert (reached the insert phase, not complete),
 refused (ended at the near capture: near_capture_failed / near_capture_misaligned), accepted (near capture accepted,
 insert never reached) or pre_capture (anything else). The cycle time is the home_settle transition's simulated time
@@ -13,18 +16,28 @@ insert never reached) or pre_capture (anything else). The cycle time is the home
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
+import math
 import re
 import statistics
 from pathlib import Path
 
+from forklift_core.mission.failures import SCENE, classify
+
 ARMS = ("B0", "K1")
-CELLS = [("random_1", s) for s in range(30)] + [("line_2", s) for s in range(5)] + [("aisle_rack", s) for s in range(5)]
+
+
+def cells_for(random1_seeds: int = 30) -> list:
+    return ([("random_1", s) for s in range(random1_seeds)] + [("line_2", s) for s in range(5)]
+            + [("aisle_rack", s) for s in range(5)])
+
+
+CELLS = cells_for(30)
 NAME = re.compile(r"^k1c_(B0|K1)_(.+)_s(\d+)$")
 NEAR_FAILS = ("near_capture_failed", "near_capture_misaligned")
 OFFSET_LIMIT_M = 0.08
 MOVE_LIMIT_M = 0.005
-DAMAGE_WORDS = ("tip", "tilt", "pallet_moved", "pushed", "scene_damage", "forbidden")
 
 
 def failure_of(r: dict) -> str | None:
@@ -80,6 +93,10 @@ def event_success(r: dict, ev: dict) -> str:
     return "success" if capture.get("status") == "done" else f"capture_{capture.get('status')}"
 
 
+def scene_damage(failure) -> bool:
+    return bool(failure) and classify(str(failure)) == SCENE
+
+
 def summarize(run: dict) -> dict:
     r = run["result"]
     det = r.get("deterministic") or {}
@@ -106,19 +123,52 @@ def median(xs):
     return statistics.median(xs) if xs else None
 
 
-def judge(rows: list[dict]) -> dict:
+def finite(v) -> bool:
+    return isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def record_gaps(pairs: list) -> list:
+    """What the judgement needs and a run does not carry: every intervention's watch window (closed, with steps and
+    finite measurements) and every joint completion's cycle time. Any gap stops the judgement."""
+    gaps = []
+    for b, k in pairs:
+        if k["events"]:
+            if len(k["watch"]) < 1:
+                gaps.append(f"{k['name']}: interventions without a watch window")
+            for w in k["watch"]:
+                if w["end_s"] is None or not (w["steps"] or 0) > 0 or not finite(w["max_move_m"]) \
+                        or not isinstance(w["contact_steps"], int):
+                    gaps.append(f"{k['name']}: watch window open, empty or not finite")
+        for x in (b, k):
+            if x["events"] and x["arm"] == "B0":
+                gaps.append(f"{x['name']}: a B0 run with K1 interventions")
+        if b["success"] and k["success"] and not (finite(b["cycle_s"]) and finite(k["cycle_s"])):
+            gaps.append(f"{b['name']}/{k['name']}: joint completion without a home_settle time")
+    return gaps
+
+
+def judge(rows: list[dict], cells: list | None = None) -> dict:
+    cells = CELLS if cells is None else cells
     by = {(x["arm"], x["scene"], x["seed"]): x for x in rows}
     out: dict = {"checks": {}, "criteria": {}, "records": {}}
     counts = {}
     for x in rows:
         counts[(x["arm"], x["scene"], x["seed"])] = counts.get((x["arm"], x["scene"], x["seed"]), 0) + 1
-    missing = [f"{a}_{c}_s{s}" for c, s in CELLS for a in ARMS if counts.get((a, c, s), 0) != 1]
+    missing = [f"{a}_{c}_s{s}" for c, s in cells for a in ARMS if counts.get((a, c, s), 0) != 1]
+    selected = {(a, c, s) for c, s in cells for a in ARMS}
+    outside = sorted(x["name"] for x in rows if (x["arm"], x["scene"], x["seed"]) not in selected)
     invalid = [x["name"] for x in rows if not x["valid"]]
-    out["checks"] = {"pairs_complete": not missing, "missing_or_duplicate": missing, "invalid": invalid}
-    if missing or invalid:
-        out["verdict"] = "not_judged: incomplete or invalid pairs"
+    out["checks"] = {"pairs_complete": not missing, "missing_or_duplicate": missing, "outside_cells": outside,
+                     "invalid": invalid, "cells": len(cells)}
+    if missing or invalid or outside:
+        out["verdict"] = "not_judged: incomplete, invalid or unselected runs"
         return out
-    pairs = [(by[("B0", c, s)], by[("K1", c, s)]) for c, s in CELLS]
+    pairs = [(by[("B0", c, s)], by[("K1", c, s)]) for c, s in cells]
+    gaps = record_gaps(pairs)
+    out["checks"]["record_gaps"] = gaps
+    if gaps:
+        out["verdict"] = "not_judged: missing records"
+        return out
     r1 = [(b, k) for b, k in pairs if b["scene"] == "random_1"]
     others = [(b, k) for b, k in pairs if b["scene"] != "random_1"]
     k1_runs = [k for _, k in pairs]
@@ -128,12 +178,15 @@ def judge(rows: list[dict]) -> dict:
     watch_contacts = sum(w["contact_steps"] or 0 for k in intervened for w in k["watch"])
     watch_move = max((w["max_move_m"] or 0.0 for k in intervened for w in k["watch"]), default=0.0)
     open_windows = [k["name"] for k in intervened for w in k["watch"] if w["end_s"] is None]
-    damage = [x["name"] for x in rows if any(w in str(x["failure"] or "").lower() for w in DAMAGE_WORDS)]
+    damage = [k["name"] for k in intervened if scene_damage(k["failure"])]  # registered scope: the intervened runs
     after_accept = [k["name"] for k in intervened
                     if k["outcome"] in ("accepted", "insert") and k["phase"] in ("approach", "insert")]
     forbidden = sum(x["forbidden_contacts"] for x in rows)
-    c1 = {"intervened_runs": len(intervened), "watch_contact_steps": watch_contacts, "watch_max_move_m": watch_move,
+    c1 = {"intervened_runs": len(intervened), "watch_windows": sum(len(k["watch"]) for k in intervened),
+          "watch_steps": sum(w["steps"] for k in intervened for w in k["watch"]),
+          "watch_contact_steps": watch_contacts, "watch_max_move_m": watch_move,
           "watch_windows_open_at_end": open_windows, "damage_failures": damage,
+          "damage_failures_all_runs_record": [x["name"] for x in rows if scene_damage(x["failure"])],
           "approach_insert_failures_after_accepted_capture": after_accept, "forbidden_contacts_all": forbidden}
     c1["pass"] = (watch_contacts == 0 and watch_move <= MOVE_LIMIT_M and not damage and not after_accept
                   and forbidden == 0)
@@ -170,7 +223,7 @@ def judge(rows: list[dict]) -> dict:
     out["criteria"]["4_recovery"] = c4
 
     # 5 time cost (random_1)
-    joint = [(b, k) for b, k in r1 if b["success"] and k["success"] and b["cycle_s"] and k["cycle_s"]]
+    joint = [(b, k) for b, k in r1 if b["success"] and k["success"]]  # every one has its time (record_gaps)
     ratio = (median([k["cycle_s"] for _, k in joint]) / median([b["cycle_s"] for b, _ in joint])) if joint else None
     inter = [k["cycle_s"] - b["cycle_s"] for b, k in joint if k["events"]]
     new_timeouts = [k["name"] for b, k in pairs if k["observe_timeout"] and not b["observe_timeout"]]
@@ -184,23 +237,28 @@ def judge(rows: list[dict]) -> dict:
     # 6 non-regression (line_2, aisle_rack)
     diff = [k["name"] for b, k in others if (b["success"], b["failure"]) != (k["success"], k["failure"])]
     other_events = [{"name": k["name"], "verdict": e["verdict"]} for _, k in others for e in k["events"]]
-    c6 = {"pairs": len(others), "different_outcome": diff, "k1_events": other_events}
-    c6["pass"] = not diff
+    # an intervention there is no regression only when it meets criterion 4's success definition
+    failed_events = [e for e in other_events if e["verdict"] != "success"]
+    c6 = {"pairs": len(others), "different_outcome": diff, "k1_events": other_events,
+          "k1_events_not_successful": failed_events}
+    c6["pass"] = not diff and not failed_events
     out["criteria"]["6_non_regression"] = c6
 
     cr = out["criteria"]
     if not (cr["1_safety"]["pass"] and cr["2_completion"]["pass"] and cr["6_non_regression"]["pass"]):
         verdict = "worse"
-    elif not (c3["pass"] and c4["pass"] and c5["pass"]):
-        verdict = "no_difference_confirmed"  # a judged (exposed) term failed
     elif c3["underexposed"] or c4["underexposed"] or c5["underexposed"]:
-        verdict = "effect_unconfirmed_promotion_held"  # ask the lead for the pre-registered extension (plan 4)
+        # plan 5: any underexposed second term holds promotion whatever else 3-5 say; ask the lead for the
+        # pre-registered extension (plan 4). The other 3-5 failures, if any, are reported with it.
+        verdict = "effect_unconfirmed_promotion_held"
+    elif not (c3["pass"] and c4["pass"] and c5["pass"]):
+        verdict = "no_difference_confirmed"
     else:
         verdict = "k1_better"
     out["verdict"] = verdict
 
     # records (not judgements)
-    all_joint = [(b, k) for b, k in pairs if b["success"] and k["success"] and b["cycle_s"] and k["cycle_s"]]
+    all_joint = [(b, k) for b, k in pairs if b["success"] and k["success"]]
     out["records"] = {
         "cycle_delta_s_all_joint": sorted(round(k["cycle_s"] - b["cycle_s"], 3) for b, k in all_joint),
         "cycle_delta_s_intervened": sorted(round(k["cycle_s"] - b["cycle_s"], 3) for b, k in all_joint if k["events"]),
@@ -219,24 +277,44 @@ def judge(rows: list[dict]) -> dict:
     return out
 
 
+def row(name: str, result: dict) -> dict:
+    m = NAME.match(name)
+    return summarize({"name": name, "arm": m[1], "scene": m[2], "seed": int(m[3]), "result": result})
+
+
 def load(root: Path) -> list[dict]:
     rows = []
     for d in sorted(root.iterdir()):
-        m = NAME.match(d.name)
         p = d / "run" / "result.json"
-        if not m or not p.exists():
-            continue
-        rows.append(summarize({"name": d.name, "arm": m[1], "scene": m[2], "seed": int(m[3]),
-                               "result": json.loads(p.read_text())}))
+        if NAME.match(d.name) and p.exists():
+            rows.append(row(d.name, json.loads(p.read_text())))
     return rows
+
+
+def load_fields(path: Path) -> list[dict]:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as f:
+        return [row(name, result) for name, result in sorted(json.load(f).items())]
+
+
+def parse_seeds(text: str) -> int:
+    lo, hi = (int(v) for v in text.split("-"))
+    if lo != 0 or hi not in (29, 59):
+        raise SystemExit("--random1-seeds is 0-29 (registered) or 0-59 (the pre-registered extension)")
+    return hi + 1
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("root", type=Path)
+    ap.add_argument("root", type=Path, nargs="?")
+    ap.add_argument("--raw-fields", type=Path)
+    ap.add_argument("--random1-seeds", default="0-29")
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
-    res = judge(load(a.root))
+    if (a.root is None) == (a.raw_fields is None):
+        raise SystemExit("give RAW_ROOT or --raw-fields")
+    rows = load(a.root) if a.root is not None else load_fields(a.raw_fields)
+    res = judge(rows, cells_for(parse_seeds(a.random1_seeds)))
     a.out.write_text(json.dumps(res, indent=1, allow_nan=False) + "\n")
     print(res.get("verdict"))
     for k, v in res.get("criteria", {}).items():

@@ -2,15 +2,21 @@
  "checks": {
   "pairs_complete": true,
   "missing_or_duplicate": [],
-  "invalid": []
+  "outside_cells": [],
+  "invalid": [],
+  "cells": 40,
+  "record_gaps": []
  },
  "criteria": {
   "1_safety": {
    "intervened_runs": 6,
+   "watch_windows": 6,
+   "watch_steps": 7507,
    "watch_contact_steps": 0,
    "watch_max_move_m": 2.6656007498500226e-07,
    "watch_windows_open_at_end": [],
    "damage_failures": [],
+   "damage_failures_all_runs_record": [],
    "approach_insert_failures_after_accepted_capture": [],
    "forbidden_contacts_all": 0,
    "pass": true
@@ -58,6 +64,7 @@
    "pairs": 10,
    "different_outcome": [],
    "k1_events": [],
+   "k1_events_not_successful": [],
    "pass": true
   }
  },

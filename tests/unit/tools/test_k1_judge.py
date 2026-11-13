@@ -119,3 +119,66 @@ def test_outcome_classes():
 def test_the_output_is_strict_json():
     out = kj.judge(rows_for(k1_override=intervened(6)))
     json.dumps(out, allow_nan=False)
+
+
+# ---- Codex result review 1 ---------------------------------------------------------------------------------------
+
+
+def test_a_scene_damage_failure_in_an_intervened_run_makes_k1_worse():
+    """The class is mission.failures' SCENE, not a word list (Pallet dropped during transport)."""
+    k1 = intervened(6)
+    k1[("random_1", 0)] = result(success=False, failure="Pallet dropped during transport: z=0.01", phase="transport",
+                                 events=[event()], watch=[WATCH], stands=[STAND])
+    out = kj.judge(rows_for(k1_override=k1))
+    assert out["criteria"]["1_safety"]["damage_failures"] == ["k1c_K1_random_1_s0"]
+    assert out["verdict"] == "worse"
+
+
+def test_missing_watch_records_stop_the_judgement():
+    for bad in ([], [{**WATCH, "end_s": None}], [{**WATCH, "steps": 0}], [{**WATCH, "max_move_m": float("nan")}]):
+        k1 = intervened(6)
+        k1[("random_1", 0)]["near_loose_watch"] = bad
+        out = kj.judge(rows_for(k1_override=k1))
+        assert out["verdict"] == "not_judged: missing records", bad
+
+
+def test_a_joint_completion_without_its_cycle_time_stops_the_judgement():
+    r = result()
+    r["transitions"] = [t for t in r["transitions"] if t["to"] != "home_settle"]
+    out = kj.judge(rows_for(k1_override={("random_1", 3): r}))
+    assert out["verdict"] == "not_judged: missing records"
+
+
+def test_the_extension_is_judged_on_its_own_cells_and_runs_outside_them_stop_it():
+    rows = rows_for()
+    extra = [kj.row(f"k1c_{a}_random_1_s{s}", result()) for s in range(30, 60) for a in kj.ARMS]
+    out = kj.judge(rows + extra)  # the registered cells: the extension's runs are outside them
+    assert out["verdict"].startswith("not_judged") and len(out["checks"]["outside_cells"]) == 60
+    out = kj.judge(rows + extra, kj.cells_for(60))
+    assert out["checks"]["cells"] == 70 and not out["verdict"].startswith("not_judged")
+
+
+def test_a_failed_intervention_on_line_2_is_a_regression():
+    k1 = intervened(6)
+    k1[("line_2", 1)] = result(events=[{**event(), "c2_record_index": None}], watch=[WATCH])
+    out = kj.judge(rows_for(k1_override=k1))
+    assert out["criteria"]["6_non_regression"]["k1_events_not_successful"] == [
+        {"name": "k1c_K1_line_2_s1", "verdict": "no_c2_install"}]
+    assert out["verdict"] == "worse"
+
+
+def test_underexposure_holds_promotion_even_when_another_term_fails():
+    """Plan 5: an underexposed second term holds promotion whatever 3-5 otherwise say."""
+    k1 = intervened(6, inside=False)  # 4 fails (0/6) while 3 is underexposed (B0 has no offset over 0.08)
+    out = kj.judge(rows_for(k1_override=k1))
+    assert out["criteria"]["3_near_refusals"]["underexposed"] and not out["criteria"]["4_recovery"]["pass"]
+    assert out["verdict"] == "effect_unconfirmed_promotion_held"
+
+
+def test_the_raw_fields_file_judges_the_same(tmp_path):
+    import gzip
+    fields = {f"k1c_{a}_{c}_s{s}": result() for c, s in kj.CELLS for a in kj.ARMS}
+    path = tmp_path / "f.json.gz"
+    with gzip.open(path, "wt") as f:
+        json.dump(fields, f)
+    assert kj.judge(kj.load_fields(path)) == kj.judge(rows_for())
