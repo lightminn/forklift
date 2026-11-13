@@ -66,6 +66,7 @@ class RecordWriter:
         self._closing = False
         self._stop = threading.Event()
         self._footer: dict | None = None
+        self._inflight = 0  # a row taken from the queue and not yet written
         self.close_result: dict | None = None
         self._thread = threading.Thread(target=self._run, name="record-writer", daemon=True)
         self._thread.start()
@@ -92,15 +93,26 @@ class RecordWriter:
         except (OSError, ValueError, TypeError):
             self.write_errors += 1
 
+    def _take_and_write(self, item) -> None:
+        self._inflight = 1
+        self._write(item)
+        self._inflight = 0
+
     def _run(self) -> None:
-        while True:
+        while not self._stop.is_set():
             try:
                 item = self.q.get(timeout=0.05)
             except queue.Empty:
-                if self._stop.is_set():
-                    break
                 continue
-            self._write(item)
+            self._take_and_write(item)
+        # close set ``_closing`` under the lock before the stop: no row can be accepted any more, so draining what is
+        # queued now is complete (Codex code re-review P2-1: a row accepted between an empty get and the stop)
+        while True:
+            try:
+                item = self.q.get_nowait()
+            except queue.Empty:
+                break
+            self._take_and_write(item)
         if self._footer is not None:
             self._write({"t": "footer", **self._footer, "dropped": self.dropped, "write_errors": self.write_errors})
         try:
@@ -118,6 +130,6 @@ class RecordWriter:
         self._stop.set()
         self._thread.join(timeout_s)
         finished = not self._thread.is_alive()
-        self.close_result = {"finished": finished, "unwritten": 0 if finished else self.q.qsize(),
+        self.close_result = {"finished": finished, "unwritten": 0 if finished else self.q.qsize() + self._inflight,
                              "dropped": self.dropped, "write_errors": self.write_errors}
         return self.close_result

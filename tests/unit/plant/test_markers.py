@@ -110,3 +110,22 @@ def test_a_flood_never_grows_the_buffer_past_its_bound():
     finally:
         os.close(master)
         os.close(slave)
+
+
+def test_an_unfinished_long_label_is_kept_to_whole_characters_and_an_exact_boundary_keeps_its_last():
+    from forklift_core.plant.markers import _utf8_prefix
+
+    assert _utf8_prefix("가나".encode(), 6).decode() == "가나"  # exact boundary: both kept
+    assert _utf8_prefix("가나".encode(), 5).decode() == "가"
+    master, slave, r, marks = raw_pty_reader(max_label=200)
+    try:
+        os.write(master, ("가" * 70).encode())  # no newline yet: the buffer is cut while unfinished
+        time.sleep(0.05)
+        r.poll()
+        os.write(master, b"\r\n")  # the newline alone, in the next poll
+        time.sleep(0.05)
+        r.poll()
+        assert marks == ["가" * 66]
+    finally:
+        os.close(master)
+        os.close(slave)

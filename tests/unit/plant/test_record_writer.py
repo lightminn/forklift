@@ -115,3 +115,25 @@ def test_the_inline_record_writes_at_once():
     r.close({"x": 1})
     rows = [json.loads(x) for x in sink.getvalue().splitlines()]
     assert rows[0]["t"] == "state" and rows[0]["read_ns"] == 6 and rows[1]["t"] == "footer"
+
+
+def test_a_row_accepted_just_before_close_is_written_and_a_row_being_written_counts_as_unwritten():
+    # Codex code re-review: (1) a row put between the writer's empty get and the stop must still be written;
+    # (2) on a timeout the row the writer holds is unwritten too
+    sink = Sink()
+    w = RecordWriter(sink)
+    import time as _t
+
+    _t.sleep(0.12)  # the writer is in its empty-get wait
+    w.put_row({"k": "last"})
+    w.close({})
+    rows = [json.loads(x) for x in sink.final.splitlines()]
+    assert rows[0] == {"k": "last"} and rows[-1]["t"] == "footer"
+    gate = threading.Event()
+    sink2 = Sink(gate=gate)
+    w2 = RecordWriter(sink2)
+    w2.put_row({"k": 1})
+    _t.sleep(0.1)  # taken and held in write
+    res = w2.close({}, timeout_s=0.1)
+    assert res["finished"] is False and res["unwritten"] == 1
+    gate.set()

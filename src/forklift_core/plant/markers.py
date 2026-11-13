@@ -19,15 +19,25 @@ MAX_LABEL = 200
 MAX_BUFFER = 4 * MAX_BYTES  # read no more while this much is waiting: a flood stays in the terminal, not here
 
 
+def _utf8_prefix(raw: bytes, limit: int) -> bytes:
+    """The longest prefix of at most ``limit`` bytes that ends on a whole UTF-8 character (a trailing character cut
+    short is left out; an exact boundary keeps its last character)."""
+    raw = raw[:limit]
+    i = len(raw) - 1
+    back = 0
+    while i >= 0 and (raw[i] & 0xC0) == 0x80 and back < 3:  # continuation bytes at the end
+        i -= 1
+        back += 1
+    if i < 0:
+        return raw
+    lead = raw[i]
+    need = 2 if lead >> 5 == 0b110 else 3 if lead >> 4 == 0b1110 else 4 if lead >> 3 == 0b11110 else 1
+    return raw if len(raw) - i >= need else raw[:i]
+
+
 def _cut_utf8(raw: bytes, limit: int) -> str:
-    """At most ``limit`` bytes, cut on a UTF-8 character boundary (never half a character)."""
-    if len(raw) > limit:
-        raw = raw[:limit]
-        while raw and (raw[-1] & 0xC0) == 0x80:  # a continuation byte: back off to the character's lead
-            raw = raw[:-1]
-        if raw and raw[-1] >= 0xC0:  # a lead byte whose continuation was cut
-            raw = raw[:-1]
-    return raw.decode("utf-8", "replace").strip()
+    """A label: at most ``limit`` bytes, never half a character."""
+    return _utf8_prefix(raw, limit).decode("utf-8", "replace").strip()
 
 
 @dataclass(frozen=True)
@@ -73,7 +83,8 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
             del buf[: i + 1]
             emit(label, now)
             marks += 1
-        if buf.find(b"\n") < 0 and len(buf) > max_label:  # an unfinished label: keep its first max_label bytes
-            del buf[max_label:]
+        if buf.find(b"\n") < 0 and len(buf) > max_label:  # an unfinished label: keep its first whole characters
+            keep = len(_utf8_prefix(bytes(buf), max_label))
+            del buf[keep:]
 
     return MarkerReader(poll, True, None)
