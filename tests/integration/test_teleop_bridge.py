@@ -125,10 +125,10 @@ class Console:
 
 
 class Run:
-    def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL):
+    def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL, profile=None):
         self.model = Model(exe, *extra)
         self.dev = PtyDevice(self.model.master)
-        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor)
+        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile)
         self.dev.watch(self.b.host)
         self.c = Console(self.b)
         self.recs = []
