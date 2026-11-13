@@ -108,3 +108,5 @@ SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)
 printf '{"state": "done", "driver_exit": %s, "container_exit": %s, "summary_exit": %s, "sent": %s}\n' \
   "$DRV" "${CON:-null}" "$SUM" "${SENT:-null}" > "$OUT/status.json"
 cat "$OUT/status.json"
+# the job fails when any part did (the status file says which), so a dependent job does not run on a failed replay
+[ "$DRV" = 0 ] && [ "${CON:-1}" = 0 ] && { [ "$SUM" = 0 ] || [ "$SUM" = null ]; } || exit 1

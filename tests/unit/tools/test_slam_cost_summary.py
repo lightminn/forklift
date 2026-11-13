@@ -171,10 +171,12 @@ def test_the_replay_container_propagates_a_failed_graph_dump_and_checks_its_slam
     # a patched or unpatched source image must have its overlay; the libraries the node loaded are recorded
     assert 'SLAM_IMAGE_KIND' in box and "/opt/slam_patched/install/setup.bash" in box
     assert "slam_libs.txt" in box and "/proc/" in box
+    assert "tools/slam_patch_check.py" in box and "STATUS=8" in box  # the run is the slam_toolbox it asked for
     dump = (root / "tools" / "slam_cost_dump.sh").read_text()
     assert "/opt/slam_patched/bin/slam_graph_dump" in dump and 'ldd "$DUMPER"' in dump  # no apt-header build there
     job = (root / "deploy" / "slurm" / "slam_cost_replay.sbatch").read_text()
     assert '"${SLAM_IMAGE:-forklift/ros2-dev:jazzy}"' in job and "SLAM_PATCH_ENV" in job and "SLAM_IMAGE_KIND" in job
+    assert job.rstrip().endswith("|| exit 1")  # a failed part fails the job (Codex patch review P2-4)
     live = (root / "tools" / "slam_bridge_container.sh").read_text() + (
         root / "deploy" / "console" / "isaac_live.sbatch").read_text()
     assert "slam_patched" not in live and "SLAM_PATCH_ENV" not in live

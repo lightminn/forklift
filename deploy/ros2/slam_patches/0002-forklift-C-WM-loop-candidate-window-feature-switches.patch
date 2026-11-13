@@ -1,8 +1,8 @@
-From 2b5cee4ce5f4e79421f8e9c5e1c407cca17767e0 Mon Sep 17 00:00:00 2001
+From 8a29985703b5018d76bfec65c4d838de68da50c0 Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 17:06:30 +0900
-Subject: [PATCH] forklift: C-WM loop candidate window, feature switches and
- their refusals
+Subject: [PATCH 2/3] forklift: C-WM loop candidate window, feature switches
+ and their refusals
 
 FORKLIFT_SLAM_CWM_S=T starts FindPossibleLoopClosure at the first state id whose scan is
 at most T sim seconds old (binary search; ids are contiguous in a fresh sync mapping) --
@@ -15,7 +15,7 @@ gtest forklift_patch_test covers the window search.
 ---
  CMakeLists.txt                                |  8 +++
  .../include/karto_sdk/ForkliftPatch.h         | 38 +++++++++-
- lib/karto_sdk/src/ForkliftPatch.cpp           | 36 +++++++++-
+ lib/karto_sdk/src/ForkliftPatch.cpp           | 52 +++++++++++++-
  lib/karto_sdk/src/Mapper.cpp                  | 26 +++++++
  src/experimental/slam_toolbox_lifelong.cpp    |  2 +
  .../slam_toolbox_map_and_localization.cpp     |  2 +
@@ -23,7 +23,7 @@ gtest forklift_patch_test covers the window search.
  src/slam_toolbox_common.cpp                   |  1 +
  src/slam_toolbox_localization.cpp             |  2 +
  test/forklift_patch_test.cpp                  | 70 +++++++++++++++++++
- 10 files changed, 183 insertions(+), 4 deletions(-)
+ 10 files changed, 199 insertions(+), 4 deletions(-)
  create mode 100644 test/forklift_patch_test.cpp
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
@@ -46,7 +46,7 @@ index 3880aa7..21066b1 100644
  #  find_package(ament_cmake_gtest REQUIRED)
  #  find_package(ament_lint_auto REQUIRED)
 diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
-index 0ed7010..9c40358 100644
+index dfc841b..1d11222 100644
 --- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 +++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 @@ -13,6 +13,7 @@
@@ -109,10 +109,18 @@ index 0ed7010..9c40358 100644
  bool tracing();
  
 diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
-index b22da2d..abefa8d 100644
+index 5bb1809..37580b8 100644
 --- a/lib/karto_sdk/src/ForkliftPatch.cpp
 +++ b/lib/karto_sdk/src/ForkliftPatch.cpp
-@@ -100,6 +100,23 @@ const Config & config()
+@@ -4,6 +4,7 @@
+  */
+ #include "karto_sdk/ForkliftPatch.h"
+ 
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <sstream>
+@@ -101,6 +102,38 @@ const Config & config()
        if (trace != nullptr) {
          c.trace = trace;
        }
@@ -123,8 +131,8 @@ index b22da2d..abefa8d 100644
 +          }
 +          char * end = nullptr;
 +          const double x = std::strtod(v, &end);
-+          if (end == v || *end != '\0') {
-+            std::fprintf(stderr, "forklift_slam_patch refused: %s=%s is not a number\n", name, v);
++          if (end == v || *end != '\0' || !std::isfinite(x)) {
++            std::fprintf(stderr, "forklift_slam_patch refused: %s=%s is not a finite number\n", name, v);
 +            std::exit(3);
 +          }
 +          return x;
@@ -132,11 +140,26 @@ index b22da2d..abefa8d 100644
 +      c.cwm_s = number("FORKLIFT_SLAM_CWM_S", 0.0);
 +      c.delete_s = number("FORKLIFT_SLAM_DELETE_OLDER_S", 0.0);
 +      c.s1 = number("FORKLIFT_SLAM_S1", 0.0) != 0.0;
-+      c.s1_buffer = static_cast<int>(number("FORKLIFT_SLAM_S1_BUFFER", 10.0));
-       if (!c.trace.empty()) {
-         std::atexit(flush_at_exit);
-       }
-@@ -113,12 +130,27 @@ void announce()
++      const double buffer = number("FORKLIFT_SLAM_S1_BUFFER", 10.0);
++      if (buffer < 1.0 || buffer != std::floor(buffer) || buffer > 1000.0) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1_BUFFER must be an integer 1..1000\n");
++        std::exit(3);
++      }
++      c.s1_buffer = static_cast<int>(buffer);
++      // a feature this series does not build is refused, never run as P0 under its name (Codex patch review P2-8);
++      // each later patch lifts its own line
++      if (c.delete_s > 0.0) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_DELETE_OLDER_S is not built in this series\n");
++        std::exit(3);
++      }
++      if (c.s1) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1 is not built in this series\n");
++        std::exit(3);
++      }
+       // at exit the buffered lines are written by TraceState's destructor alone: TraceState is created after this
+       // configuration, so it is destroyed before it
+       return c;
+@@ -113,12 +146,27 @@ void announce()
    static std::once_flag once;
    std::call_once(once, [] {
        const Config & c = config();
@@ -271,10 +294,10 @@ index 2c20fab..1a72266 100644
  
  /*****************************************************************************/
 diff --git a/src/slam_toolbox_common.cpp b/src/slam_toolbox_common.cpp
-index e570a13..89bc8c8 100644
+index a328951..7fcd17a 100644
 --- a/src/slam_toolbox_common.cpp
 +++ b/src/slam_toolbox_common.cpp
-@@ -1014,6 +1014,7 @@ void SlamToolbox::loadSerializedPoseGraph(
+@@ -1017,6 +1017,7 @@ void SlamToolbox::loadSerializedPoseGraph(
    std::unique_ptr<Dataset> & dataset)
  /*****************************************************************************/
  {

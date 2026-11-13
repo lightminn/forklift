@@ -26,7 +26,7 @@ COPY slam_source /tmp/slam_source
 RUN set -eux; \
     mkdir -p /opt/slam_patched/src; cd /opt/slam_patched/src; \
     if [[ "${SLAM_SOURCE}" == bundle ]]; then \
-        git clone /tmp/slam_source/slam_toolbox-2.8.5.bundle slam_toolbox; \
+        git clone --branch 2.8.5 /tmp/slam_source/slam_toolbox-2.8.5.bundle slam_toolbox; \
     else \
         git clone --branch 2.8.5 --depth 1 https://github.com/SteveMacenski/slam_toolbox.git slam_toolbox; \
     fi; \
@@ -82,7 +82,8 @@ RUN set -eux; \
     P=/opt/slam_patched/install/slam_toolbox; \
     INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done); \
     mkdir -p /opt/slam_patched/bin; \
-    g++ -std=c++17 -O2 -I"$P/include" -I"$P/include/slam_toolbox" -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 \
+    asan=(); if [[ "${SANITIZE}" == address ]]; then asan=(-fsanitize=address); fi; \
+    g++ "${asan[@]}" -std=c++17 -O2 -I"$P/include" -I"$P/include/slam_toolbox" -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 \
         /opt/slam_patched/tools/slam_graph_dump.cpp -o /opt/slam_patched/bin/slam_graph_dump \
         -L"$P/lib" -Wl,-rpath,"$P/lib" -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
         -lboost_serialization -lboost_system -lboost_thread -ltbb; \

@@ -1,0 +1,441 @@
+From 4828d98f74bbcacba43db6cdfd16ca54c94a821d Mon Sep 17 00:00:00 2001
+From: forklift <forklift@localhost>
+Date: Fri, 13 Nov 2026 17:16:44 +0900
+Subject: [PATCH 3/3] forklift: live-id loops, the deletion contract, anchor by
+ id, and C (delete older than T)
+
+With a deleting feature (C now, S1 later) state ids get holes: FindPossibleLoopClosure and
+FindNearChains bound their id loops by one past the largest live id instead of size().
+A node is deleted in the lifelong order -- RemoveNodeFromGraph, the sensor manager's maps,
+the dataset (its owner frees the scan; SlamToolbox registers itself as the remover), then
+the vertex -- under smapper_mutex_. The Ceres solver holds the fixed node by id and looks
+it up when used; when the fixed node is deleted the oldest live node becomes fixed at the
+solver's current value. C: after each processed keyframe the nodes older than
+FORKLIFT_SLAM_DELETE_OLDER_S sim seconds are deleted in id order, sparing the running
+scans, the last scan and the new scan. All of it is off unless a deleting feature is on.
+gtests: C's victims, the id bound, the new anchor.
+---
+ .../include/karto_sdk/ForkliftPatch.h         | 53 ++++++++++++++
+ lib/karto_sdk/src/ForkliftPatch.cpp           | 39 +++++++++-
+ lib/karto_sdk/src/Mapper.cpp                  | 73 +++++++++++++++++++
+ solvers/ceres_solver.cpp                      | 35 +++++++++
+ solvers/ceres_solver.hpp                      |  3 +
+ src/slam_toolbox_common.cpp                   | 10 +++
+ test/forklift_patch_test.cpp                  | 34 +++++++++
+ 7 files changed, 243 insertions(+), 4 deletions(-)
+
+diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+index 1d11222..36b02c0 100644
+--- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
++++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+@@ -11,6 +11,7 @@
+ 
+ #include <chrono>
+ #include <cstdint>
++#include <functional>
+ #include <map>
+ #include <mutex>
+ #include <optional>
+@@ -19,6 +20,8 @@
+ 
+ namespace karto
+ {
++class LocalizedRangeScan;
++
+ namespace forklift
+ {
+ 
+@@ -31,6 +34,8 @@ struct Config
+   int s1_buffer = 10;     // FORKLIFT_SLAM_S1_BUFFER: S1's B
+   // any graph-changing feature on (the trace alone is not one)
+   bool any_feature() const {return cwm_s > 0.0 || delete_s > 0.0 || s1;}
++  // a feature that deletes nodes (C, S1): ids get holes, and the anchor may be deleted
++  bool deleting() const {return delete_s > 0.0 || s1;}
+ };
+ 
+ // The configuration, read from the environment on first use (thread-safe).
+@@ -66,6 +71,54 @@ long window_start(long n, double threshold, TimeOf time_of)
+   return lo;
+ }
+ 
++// The scan store's owner (SlamToolbox's dataset_) frees a deleted scan: it registers here, the deletion calls it
++// (design v3 3.3, the lifelong order). Deleting with no owner registered ends the node.
++void set_dataset_remover(std::function<void(LocalizedRangeScan *)> remover);
++void remove_from_dataset(LocalizedRangeScan * scan);
++
++// The id bound for a loop over state ids once ids can have holes: one past the largest live id (size() would leave
++// the newest ids out). With nothing deleted the two are the same.
++template<class ScanMap>
++long live_id_end(const ScanMap & scans)
++{
++  return scans.empty() ? 0 : static_cast<long>(scans.rbegin()->first) + 1;
++}
++
++// C's victims: in state id order (time nondecreasing), the ids older than the threshold, stopping at the first that
++// is not; a protected id (running scans, the last scan, the scan being added) is kept and does not stop the walk.
++struct Candidate
++{
++  int id;
++  double time;
++  bool kept;
++};
++inline std::vector<int> older_than(const std::vector<Candidate> & by_id, double threshold)
++{
++  std::vector<int> out;
++  for (const Candidate & c : by_id) {
++    if (c.time >= threshold) {
++      break;
++    }
++    if (!c.kept) {
++      out.push_back(c.id);
++    }
++  }
++  return out;
++}
++
++// The new anchor once the fixed node is deleted: the oldest live node, i.e. the smallest id (-1 when none).
++template<class NodeMap>
++int oldest_id(const NodeMap & nodes)
++{
++  int best = -1;
++  for (const auto & kv : nodes) {
++    if (best < 0 || kv.first < best) {
++      best = kv.first;
++    }
++  }
++  return best;
++}
++
+ // True when the trace is on; a timer or a counter does nothing (not even read a clock) when it is off.
+ bool tracing();
+ 
+diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
+index 37580b8..3b95269 100644
+--- a/lib/karto_sdk/src/ForkliftPatch.cpp
++++ b/lib/karto_sdk/src/ForkliftPatch.cpp
+@@ -126,10 +126,6 @@ const Config & config()
+       c.s1_buffer = static_cast<int>(buffer);
+       // a feature this series does not build is refused, never run as P0 under its name (Codex patch review P2-8);
+       // each later patch lifts its own line
+-      if (c.delete_s > 0.0) {
+-        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_DELETE_OLDER_S is not built in this series\n");
+-        std::exit(3);
+-      }
+       if (c.s1) {
+         std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1 is not built in this series\n");
+         std::exit(3);
+@@ -158,6 +154,41 @@ void announce()
+     });
+ }
+ 
++namespace
++{
++std::mutex & remover_mutex()
++{
++  static std::mutex m;
++  return m;
++}
++std::function<void(LocalizedRangeScan *)> & remover_slot()
++{
++  static std::function<void(LocalizedRangeScan *)> f;
++  return f;
++}
++}  // namespace
++
++void set_dataset_remover(std::function<void(LocalizedRangeScan *)> remover)
++{
++  std::lock_guard<std::mutex> lock(remover_mutex());
++  remover_slot() = std::move(remover);
++}
++
++void remove_from_dataset(LocalizedRangeScan * scan)
++{
++  std::function<void(LocalizedRangeScan *)> f;
++  {
++    std::lock_guard<std::mutex> lock(remover_mutex());
++    f = remover_slot();
++  }
++  if (!f) {
++    std::fprintf(stderr, "forklift_slam_patch abort: a node was deleted with no dataset owner registered\n");
++    std::fflush(stderr);
++    std::abort();
++  }
++  f(scan);
++}
++
+ void refuse_unless_fresh_sync_mapping(const char * where)
+ {
+   if (config().any_feature()) {
+diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
+index 805930c..df79001 100644
+--- a/lib/karto_sdk/src/Mapper.cpp
++++ b/lib/karto_sdk/src/Mapper.cpp
+@@ -1769,6 +1769,10 @@ std::vector<LocalizedRangeScanVector> MapperGraph::FindNearChains(LocalizedRange
+     kt_int32u end =
+       static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(
+         pNearScan->GetSensorName()).size());
++    if (forklift::config().deleting()) {  // holes in the ids (design v3 3.3)
++      end = static_cast<kt_int32u>(forklift::live_id_end(
++          m_pMapper->m_pMapperSensorManager->GetScans(pNearScan->GetSensorName())));
++    }
+     for (kt_int32u candidateScanNum = pNearScan->GetStateId() + 1; candidateScanNum < end;
+       candidateScanNum++)
+     {
+@@ -1998,6 +2002,10 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+ 
+   kt_int32u nScans =
+     static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(rSensorName).size());
++  if (forklift::config().deleting()) {
++    // ids have holes once nodes are deleted: size() would leave the newest ids out (design v3 3.3)
++    nScans = static_cast<kt_int32u>(forklift::live_id_end(m_pMapper->m_pMapperSensorManager->GetScans(rSensorName)));
++  }
+   // C-WM (forklift design v3 3.2): loop candidates only from the scans of the last T sim seconds
+   const double cwm_s = forklift::config().cwm_s;
+   if (cwm_s > 0.0) {
+@@ -2768,6 +2776,70 @@ kt_bool Mapper::Process(Object *  /*pObject*/)  // NOLINT
+   return true;
+ }
+ 
++namespace
++{
++// Deletes one scan's node in the lifelong order (design v3 3.3): graph edges, constraints and solver node, the
++// sensor manager's maps, the dataset (which frees the scan), then the vertex. The caller holds smapper_mutex_.
++bool forklift_delete_node(Mapper * pMapper, LocalizedRangeScan * pVictim)
++{
++  MapperGraph * pGraph = pMapper->GetGraph();
++  const auto & vertexMap = pGraph->GetVertices();
++  auto byName = vertexMap.find(pVictim->GetSensorName());
++  if (byName == vertexMap.end()) {
++    return false;
++  }
++  auto found = byName->second.find(pVictim->GetStateId());
++  if (found == byName->second.end() || found->second == NULL) {
++    return false;
++  }
++  Vertex<LocalizedRangeScan> * pVertex = found->second;
++  if (!pMapper->RemoveNodeFromGraph(pVertex)) {
++    return false;
++  }
++  pMapper->GetMapperSensorManager()->RemoveScan(pVictim);
++  forklift::remove_from_dataset(pVictim);  // frees the scan
++  pVertex->RemoveObject();
++  delete pVertex;
++  return true;
++}
++
++// C (design v3 3.3): after a processed keyframe, the nodes older than T sim seconds, in state id order, except the
++// running scans, the last scan and the scan just added.
++void forklift_delete_older(Mapper * pMapper, LocalizedRangeScan * pScan)
++{
++  const double delete_s = forklift::config().delete_s;
++  if (delete_s <= 0.0) {
++    return;
++  }
++  forklift::ScopedTimer timer("delete_older");
++  MapperSensorManager * pManager = pMapper->GetMapperSensorManager();
++  const Name & name = pScan->GetSensorName();
++  LocalizedRangeScanVector & running = pManager->GetRunningScans(name);
++  LocalizedRangeScan * pLast = pManager->GetLastScan(name);
++  std::vector<forklift::Candidate> byId;
++  for (const auto & kv : pManager->GetScans(name)) {
++    LocalizedRangeScan * s = kv.second;
++    if (s == NULL) {
++      continue;
++    }
++    if (s->GetTime() >= pScan->GetTime() - delete_s) {
++      break;  // ids are in time order: the rest are newer
++    }
++    const bool kept = s == pScan || s == pLast ||
++      std::find(running.begin(), running.end(), s) != running.end();
++    byId.push_back({kv.first, s->GetTime(), kept});
++  }
++  for (int id : forklift::older_than(byId, pScan->GetTime() - delete_s)) {
++    LocalizedRangeScan * pVictim = pManager->GetScan(name, id);
++    if (pVictim != NULL && forklift_delete_node(pMapper, pVictim)) {
++      forklift::add_count("deleted_nodes", 1);
++    } else {
++      forklift::add_count("delete_failed", 1);
++    }
++  }
++}
++}  // namespace
++
+ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+ {
+   if (pScan != NULL) {
+@@ -2839,6 +2911,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+     }
+ 
+     m_pMapperSensorManager->SetLastScan(pScan);
++    forklift_delete_older(this, pScan);
+ 
+     return true;
+   }
+diff --git a/solvers/ceres_solver.cpp b/solvers/ceres_solver.cpp
+index f48fe0d..cd78adc 100644
+--- a/solvers/ceres_solver.cpp
++++ b/solvers/ceres_solver.cpp
+@@ -7,6 +7,7 @@
+ #include <string>
+ #include <utility>
+ #include "ceres_solver.hpp"
++#include "karto_sdk/ForkliftPatch.h"
+ 
+ namespace solver_plugins
+ {
+@@ -224,6 +225,20 @@ void CeresSolver::Compute()
+     return;
+   }
+ 
++  // forklift design v3 3.3: with a deleting feature the anchor is found by id each time
++  if (karto::forklift::config().deleting()) {
++    auto anchor = anchor_id_ >= 0 ? nodes_->find(anchor_id_) : nodes_->end();
++    if (!was_constant_set_ && anchor != nodes_->end() &&
++      problem_->HasParameterBlock(&anchor->second(0)) &&
++      problem_->HasParameterBlock(&anchor->second(1)) &&
++      problem_->HasParameterBlock(&anchor->second(2)))
++    {
++      problem_->SetParameterBlockConstant(&anchor->second(0));
++      problem_->SetParameterBlockConstant(&anchor->second(1));
++      problem_->SetParameterBlockConstant(&anchor->second(2));
++      was_constant_set_ = true;
++    }
++  } else
+   // populate contraint for static initial pose
+   if (!was_constant_set_ && first_node_ != nodes_->end() &&
+       problem_->HasParameterBlock(&first_node_->second(0)) &&
+@@ -309,6 +324,7 @@ void CeresSolver::Reset()
+   blocks_ = new std::unordered_map<std::size_t, ceres::ResidualBlockId>();
+   problem_ = new ceres::Problem(options_problem_);
+   first_node_ = nodes_->end();
++  anchor_id_ = -1;
+ 
+   angle_manifold_ = AngleManifold::Create();
+ }
+@@ -332,6 +348,7 @@ void CeresSolver::AddNode(karto::Vertex<karto::LocalizedRangeScan> * pVertex)
+ 
+   if (nodes_->size() == 1) {
+     first_node_ = nodes_->find(id);
++    anchor_id_ = id;
+   }
+ }
+ 
+@@ -417,6 +434,24 @@ void CeresSolver::RemoveNode(kt_int32s id)
+         "node id %d", nodeit->first);
+     }
+     nodes_->erase(nodeit);
++    // forklift design v3 3.3: the fixed node deleted -> the oldest live node, at the solver's current value for it
++    // (AddNode's copy before the first Compute, the last Compute's result after), becomes the new fixed node
++    if (karto::forklift::config().deleting() && id == anchor_id_) {
++      anchor_id_ = karto::forklift::oldest_id(*nodes_);
++      was_constant_set_ = false;
++      first_node_ = anchor_id_ >= 0 ? nodes_->find(anchor_id_) : nodes_->end();
++      if (first_node_ != nodes_->end() &&
++        problem_->HasParameterBlock(&first_node_->second(0)) &&
++        problem_->HasParameterBlock(&first_node_->second(1)) &&
++        problem_->HasParameterBlock(&first_node_->second(2)))
++      {
++        problem_->SetParameterBlockConstant(&first_node_->second(0));
++        problem_->SetParameterBlockConstant(&first_node_->second(1));
++        problem_->SetParameterBlockConstant(&first_node_->second(2));
++        was_constant_set_ = true;
++      }
++      karto::forklift::add_count("anchor_moves", 1);
++    }
+   } else {
+     RCLCPP_ERROR(
+       logger_, "RemoveNode: Failed to find node matching id %i",
+diff --git a/solvers/ceres_solver.hpp b/solvers/ceres_solver.hpp
+index e752ab9..a3010ea 100644
+--- a/solvers/ceres_solver.hpp
++++ b/solvers/ceres_solver.hpp
+@@ -74,6 +74,9 @@ private:
+   std::unordered_map<int, Eigen::Vector3d> * nodes_;
+   std::unordered_map<size_t, ceres::ResidualBlockId> * blocks_;
+   std::unordered_map<int, Eigen::Vector3d>::iterator first_node_;
++  // forklift design v3 3.3: with a deleting feature the fixed node is held by id and looked up when used (an
++  // unordered_map rehash invalidates first_node_); -1 when there is none
++  int anchor_id_ = -1;
+   boost::mutex nodes_mutex_;
+ 
+   // ros
+diff --git a/src/slam_toolbox_common.cpp b/src/slam_toolbox_common.cpp
+index 7fcd17a..78764a5 100644
+--- a/src/slam_toolbox_common.cpp
++++ b/src/slam_toolbox_common.cpp
+@@ -106,6 +106,14 @@ CallbackReturn SlamToolbox::on_configure(const rclcpp_lifecycle::State &)
+   process_near_pose_ = nullptr;
+   smapper_ = std::make_unique<mapper_utils::SMapper>();
+   dataset_ = std::make_unique<Dataset>();
++  // the dataset owns the scans: a node the forklift patch deletes is freed here (design v3 3.3)
++  karto::forklift::set_dataset_remover([this](LocalizedRangeScan * scan) {
++      if (!dataset_) {
++        std::fprintf(stderr, "forklift_slam_patch abort: delete with no dataset\n");
++        std::abort();
++      }
++      dataset_->RemoveData(scan);
++    });
+ 
+   setParams();
+   setSolver();
+@@ -211,6 +219,7 @@ CallbackReturn SlamToolbox::on_cleanup(const rclcpp_lifecycle::State &)
+ /*****************************************************************************/
+ {
+   RCLCPP_INFO(get_logger(), "Cleaning up");
++  karto::forklift::set_dataset_remover(nullptr);
+   closure_assistant_.reset();
+   smapper_.reset();
+   dataset_.reset();
+@@ -248,6 +257,7 @@ SlamToolbox::~SlamToolbox()
+   }
+   threads_.clear();
+ 
++  karto::forklift::set_dataset_remover(nullptr);
+   smapper_.reset();
+   dataset_.reset();
+   closure_assistant_.reset();
+diff --git a/test/forklift_patch_test.cpp b/test/forklift_patch_test.cpp
+index f0347a2..fa89cbb 100644
+--- a/test/forklift_patch_test.cpp
++++ b/test/forklift_patch_test.cpp
+@@ -68,3 +68,37 @@ TEST(forklift_cwm_window, repeated_calls_only_move_the_start_forward)
+   if (static_cast<unsigned>(start(t, 3.0)) > r) {r = 0;}
+   EXPECT_EQ(r, 5u);
+ }
++
++#include <map>
++#include <unordered_map>
++
++TEST(forklift_delete, older_than_stops_at_the_first_newer_scan_and_skips_kept_ones)
++{
++  using karto::forklift::Candidate;
++  const std::vector<Candidate> by_id{{0, 0.0, false}, {1, 1.0, true}, {2, 2.0, false}, {5, 3.0, false},
++    {6, 9.0, false}};
++  EXPECT_EQ(karto::forklift::older_than(by_id, 3.0), (std::vector<int>{0, 2}));   // 1 kept (running/last)
++  EXPECT_EQ(karto::forklift::older_than(by_id, 0.0), (std::vector<int>{}));       // nothing older
++  EXPECT_EQ(karto::forklift::older_than(by_id, 100.0), (std::vector<int>{0, 2, 5, 6}));
++}
++
++TEST(forklift_delete, the_id_bound_is_one_past_the_largest_live_id)
++{
++  std::map<int, int *> scans;
++  EXPECT_EQ(karto::forklift::live_id_end(scans), 0);
++  scans[0] = nullptr; scans[1] = nullptr; scans[2] = nullptr;
++  EXPECT_EQ(karto::forklift::live_id_end(scans), 3);   // no holes: the same as size()
++  scans.erase(0); scans.erase(1); scans[7] = nullptr;  // holes: size() would be 2
++  EXPECT_EQ(karto::forklift::live_id_end(scans), 8);
++}
++
++TEST(forklift_anchor, the_new_anchor_is_the_oldest_live_node_even_after_a_rehash)
++{
++  std::unordered_map<int, double> nodes;
++  EXPECT_EQ(karto::forklift::oldest_id(nodes), -1);
++  for (int id = 10; id < 200; ++id) {nodes[id] = id;}   // grows through several rehashes
++  nodes.erase(10);
++  EXPECT_EQ(karto::forklift::oldest_id(nodes), 11);
++  nodes.erase(11); nodes.erase(12);
++  EXPECT_EQ(karto::forklift::oldest_id(nodes), 13);
++}
+-- 
+2.56.0
+

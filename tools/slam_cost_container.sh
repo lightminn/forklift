@@ -53,6 +53,10 @@ for p in $(pgrep -f "slam_toolbox_node|slam_toolbox/lib" 2>/dev/null); do
   grep -oE "/[^ ]*(kartoSlamToolbox|toolbox_common|ceres|solver_plugins)[^ ]*\.so[^ ]*" "/proc/$p/maps" 2>/dev/null \
     | sort -u | sed "s|^|$p |"
 done > "$OUT/slam_libs.txt"
+# the slam_toolbox this run asked for: image kind, loaded library, identification line and switches (design v3 2)
+python3 /workspace/tools/slam_patch_check.py --kind "${SLAM_IMAGE_KIND:-}" --libs "$OUT/slam_libs.txt" \
+  --log "$OUT/slam_toolbox.log" --out "$OUT/patch_check.json" > "$OUT/patch_check.log" 2>&1 \
+  || { [ "$STATUS" = 0 ] && STATUS=8; }
 bash /workspace/tools/slam_cost_dump.sh "$OUT" "${5:-}" > "$OUT/dump_run.log" 2>&1
 DUMP=$?
 echo "dump exit $DUMP" >> "$OUT/dump_run.log"
