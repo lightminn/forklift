@@ -1053,6 +1053,9 @@ RUN_SPECIFIC_ARGUMENTS = (
     "near_end_stand",
     # docs/plans/2026-11-03-near-end-stand-c2-injection.md 2: its diagnostic detour
     "inject_near_end_detour",
+    # docs/plans/2026-11-13-k1-near-loose-arrival.md 2.3: K1's near-leg bounds and its smoke's detour size
+    "near_observe_arrival",
+    "inject_near_end_detour_size",
     # docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2: diagnostic dumps only
     "occupied_dumps",
     "near_bounds",

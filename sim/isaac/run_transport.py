@@ -62,6 +62,28 @@ ROUND2_KEEP_M = 0.6
 # An observation waypoint missed by at most this much, standing, is arrival.
 OBSERVE_ARRIVAL_M = 0.10
 OBSERVE_ARRIVAL_YAW_RAD = 0.10
+
+
+def parse_bounds_pair(text: str, name: str, upper: tuple[float, float]) -> tuple[float, float]:
+    """'M,RAD' as two finite numbers, each in (0, its upper bound]; ValueError otherwise."""
+    parts = str(text).split(",")
+    if len(parts) != 2:
+        raise ValueError(f"{name} takes M,RAD (two numbers), got {text!r}")
+    try:
+        m, rad = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError(f"{name} takes M,RAD (two numbers), got {text!r}") from None
+    if not (math.isfinite(m) and math.isfinite(rad) and 0.0 < m <= upper[0] and 0.0 < rad <= upper[1]):
+        raise ValueError(f"{name} must be finite, in (0, {upper[0]}] m and (0, {upper[1]}] rad, got {text!r}")
+    return m, rad
+
+
+def near_observe_arrival_of(args):
+    """K1's narrow near-leg bounds, or None (absent, or a record from before the option)."""
+    text = getattr(args, "near_observe_arrival", None)
+    if text is None:
+        return None
+    return parse_bounds_pair(text, "--near-observe-arrival", (OBSERVE_ARRIVAL_M, OBSERVE_ARRIVAL_YAW_RAD))
 # EPAL 6 fork spacing plan, fix A: an observe cusp reached inside its window but missed in heading by
 # 0.05-0.08 rad holds; once standing it is released when the next leg's judgement (cusp_stall.judge
 # with these limits for that cusp only) passes, else it fails as before.
@@ -708,6 +730,14 @@ def arguments() -> argparse.Namespace:
         "original target. The goal, the paths, the path arrays, SLAM and the grid are untouched. Off: every earlier run.",
     )
     parser.add_argument(
+        "--inject-near-end-detour-size",
+        default=None,
+        metavar="M,RAD",
+        help="Diagnostic only (docs/plans/2026-11-13-k1-near-loose-arrival.md 3): the detour's offset and turn instead "
+        "of 0.06 m and 0.15 rad (each in (0, 0.2] m / (0, 0.3] rad), for K1's smoke -- a stand inside the common loose "
+        "bounds and outside the narrow ones. Needs --inject-near-end-detour.",
+    )
+    parser.add_argument(
         "--diag-return-stall-budget",
         type=int,
         default=None,
@@ -807,6 +837,15 @@ def arguments() -> argparse.Namespace:
         help="docs/plans/2026-11-02-near-leg-end-stand-c2.md: the near re-observation leg's final-goal stand outside the "
         "loose arrival bounds for 3 s is planned again to the same target under the final-goal SLAM hold (once per "
         "leg, within its replan budget; a failure waits). shadow records the judgement only. Off: as every earlier run.",
+    )
+    parser.add_argument(
+        "--near-observe-arrival",
+        default=None,
+        metavar="M,RAD",
+        help="docs/plans/2026-11-13-k1-near-loose-arrival.md (K1): on the near re-observation leg the loose arrival and "
+        "C2's outside judgement use these bounds (position m, |yaw| rad; each in (0, the common 0.10]) until C2 was "
+        "tried on the leg, its replan budget is spent or under 5 s of its time limit remain. Needs --near-end-stand on. "
+        "Records the interventions and a record-only safety watch. Absent: as every earlier run.",
     )
     parser.add_argument(
         "--return-start-backoff",
@@ -2044,6 +2083,22 @@ def arguments() -> argparse.Namespace:
         parser.error("--near-inject-roof-off needs --near-tracking")
     if args.inject_near_end_detour and args.near_end_stand == "off":
         parser.error("--inject-near-end-detour needs --near-end-stand shadow or on")
+    if getattr(args, "near_observe_arrival", None) is not None:
+        if args.near_end_stand != "on":
+            parser.error("--near-observe-arrival needs --near-end-stand on (off has no taker for a narrowed stand, "
+                         "shadow only delays the arrival)")
+        try:
+            near_observe_arrival_of(args)
+        except ValueError as exc:
+            parser.error(str(exc))
+    detour_size_ = getattr(args, "inject_near_end_detour_size", None)
+    if detour_size_ is not None:
+        if not getattr(args, "inject_near_end_detour", False):
+            parser.error("--inject-near-end-detour-size needs --inject-near-end-detour")
+        try:
+            parse_bounds_pair(detour_size_, "--inject-near-end-detour-size", (0.2, 0.3))
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.near_drop_frames_from_m is not None:
         if not args.near_tracking:
             parser.error("--near-drop-frames-from-m needs --near-tracking")
@@ -7241,6 +7296,8 @@ def drive(S, isaac) -> None:
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
                                 # docs/plans/2026-11-02-near-leg-end-stand-c2.md: off in a record from before the option
                                 near_end_stand=getattr(args, "near_end_stand", "off"),
+                                # docs/plans/2026-11-13-k1-near-loose-arrival.md: None in a record from before it
+                                near_observe_arrival=near_observe_arrival_of(args),
                                 # docs/plans/2026-10-27-return-start-withdraw-extension.md R1: 0 (off) in a record from
                                 # before the option
                                 return_start_backoff_m=return_start_backoff_m_of(args),
@@ -7825,7 +7882,14 @@ def drive(S, isaac) -> None:
         if getattr(args, "inject_near_end_detour", False):
             from near_end_detour import NearEndDetour
 
-            near_end_detour_ = NearEndDetour()
+            size_ = getattr(args, "inject_near_end_detour_size", None)  # K1's smoke (plan 3); None: the C2 values
+            near_end_detour_ = (NearEndDetour() if size_ is None else
+                                NearEndDetour(*parse_bounds_pair(size_, "--inject-near-end-detour-size", (0.2, 0.3))))
+        near_loose_watch_ = None  # K1 2.2: the record-only safety watch, built only with --near-observe-arrival
+        if near_observe_arrival_of(args) is not None:
+            from near_loose_watch import NearLooseWatch
+
+            near_loose_watch_ = NearLooseWatch()
         if session is not None:
             from session_pallets import NeighbourGap
 
@@ -7993,6 +8057,21 @@ def drive(S, isaac) -> None:
                 phase_key_ = "observe" if ms.phase == "observe" else "other"
                 steps_shift_[phase_key_] = max(steps_shift_.get(phase_key_, 0.0), float(np.linalg.norm(
                     np.asarray(pallet.get_world_pose()[0])[:2] - initial_pallet[:2])))
+            if near_loose_watch_ is not None and near_loose_watch_.active:
+                # K1 2.2 (docs/plans/2026-11-13-k1-near-loose-arrival.md): every physics step of an open window, a
+                # capture's steps included -- the pallet's move since the intervention and the fork/body-to-pallet
+                # geometric contacts. Record only; without the option there is no watch and only the test above runs.
+                base_w_, q_w_ = robot.get_world_pose()
+                joints_w_ = robot.get_joint_positions()
+                ppos_w_, pq_w_ = pallet.get_world_pose()
+                lift_w_ = float(joints_w_[lift_index[0]])
+                margin_w_ = state["pocket_clearance_margin_m"]
+                contacts_w_ = insertion_geometry.forbidden_contacts(
+                    base_w_, q_w_, lift_w_, ppos_w_, pq_w_, clearance_m=margin_w_) + insertion_geometry.body_contacts(
+                    base_w_, q_w_, lift_w_, ppos_w_, pq_w_,
+                    steering={"left_steer": float(joints_w_[steers[0]]), "right_steer": float(joints_w_[steers[1]])},
+                    clearance_m=margin_w_)
+                near_loose_watch_.step(state, np.asarray(ppos_w_)[:2], contacts_w_, float(world.current_time - initial_time))
             if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
                 import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
 
@@ -8887,7 +8966,9 @@ def drive(S, isaac) -> None:
                       # M-a3 (plan E9): a preempt sets the applied command and its slew inside the step
                       **({"state": ["tyre_contact_rows", "applied_command", "command_speed", "preempt_seen_s",
                                     # the C2 injection's step pallet shift (review 2 P2-2: a replay runs no step)
-                                    *(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ())]}
+                                    *(("near_end_step_shift_max_m",) if near_end_detour_ is not None else ()),
+                                    # K1's watch (plan 2.2), written by the physics steps; only with the option
+                                    *(("near_loose_watch",) if near_loose_watch_ is not None else ())]}
                          if early_ports else {}),
                       **({"recognition": list(FAR_SUMMARY_LISTS)} if far_lists_ is not None else {})},
                 append_only={"records", "scans", *(slam_log if watched_log_ else ()),
@@ -10416,6 +10497,10 @@ def drive(S, isaac) -> None:
                                                                       command_.tracking, command_.rear)
                         tick_vars.sync(rear=rear, requested_speed=requested_speed)  # 4e-1a
                         dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
+                        if near_loose_watch_ is not None:
+                            # K1 2.2: after the core opened this tick's intervention (the recovery's C2, command()'s
+                            # blocked arrival) and before any physics step or capture; closed once the capture is done
+                            near_loose_watch_.tick(t, state, ppos[:2], core.commands.mission_id)
                         if tracking.status == "arrived":
                             if args.use_perception and ms.phase == "observe":
                                 if core.bottom_deck_side_leg():
