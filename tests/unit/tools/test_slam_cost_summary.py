@@ -177,6 +177,10 @@ def test_the_replay_container_propagates_a_failed_graph_dump_and_checks_its_slam
     assert "_slam_toolbox" in box  # the node's own lib<mode>_slam_toolbox is recorded for the check
     dump = (root / "tools" / "slam_cost_dump.sh").read_text()
     assert "detect_leaks=0" in dump  # the one-shot dumper's exit is not a sanitizer failure (P2-6)
+    # the node is stopped with SIGINT and waited for before the launcher (a trace's tail is written at its exit)
+    assert 'kill -INT "$p"' in box and box.index('kill -INT "$p"') < box.index("kill $SLAM")
+    # the effective parameters come without the daemon, retried, and an empty dump fails the dump step
+    assert "--no-daemon" in dump and 'grep -q "ros__parameters" "$OUT/params_effective.yaml" || exit 3' in dump
     assert "/opt/slam_patched/bin/slam_graph_dump" in dump and 'ldd "$DUMPER"' in dump  # no apt-header build there
     job = (root / "deploy" / "slurm" / "slam_cost_replay.sbatch").read_text()
     assert '"${SLAM_IMAGE:-forklift/ros2-dev:jazzy}"' in job and "SLAM_PATCH_ENV" in job and "SLAM_IMAGE_KIND" in job

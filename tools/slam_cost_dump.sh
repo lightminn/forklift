@@ -8,7 +8,15 @@ set +u
 source /opt/ros/jazzy/setup.bash
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 OUT=$1
-timeout 60 ros2 param dump /slam_toolbox > "$OUT/params_effective.yaml" 2> "$OUT/params_effective.err"
+# without the daemon, retried: through the daemon it sometimes answered "Node not found" right after the bridge closed,
+# leaving the file empty (S1 equivalence r0_1, r0_2, p0_1: jobs 18832, 18835, 18834)
+for attempt in 1 2 3; do
+  timeout 60 ros2 param dump /slam_toolbox --no-daemon --spin-time 5 > "$OUT/params_effective.yaml" \
+    2>> "$OUT/params_effective.err"
+  grep -q "ros__parameters" "$OUT/params_effective.yaml" && break
+  echo "param dump attempt $attempt gave no parameters" >> "$OUT/params_effective.err"
+done
+grep -q "ros__parameters" "$OUT/params_effective.yaml" || exit 3
 [ "${2:-}" = "graph" ] || exit 0
 mkdir -p "$OUT/bundle" "$OUT/dump" /tmp/build
 timeout 300 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '$OUT/bundle/map'}" \
