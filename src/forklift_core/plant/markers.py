@@ -16,6 +16,18 @@ from typing import Callable
 MAX_BYTES = 4096
 MAX_MARKS = 16
 MAX_LABEL = 200
+MAX_BUFFER = 4 * MAX_BYTES  # read no more while this much is waiting: a flood stays in the terminal, not here
+
+
+def _cut_utf8(raw: bytes, limit: int) -> str:
+    """At most ``limit`` bytes, cut on a UTF-8 character boundary (never half a character)."""
+    if len(raw) > limit:
+        raw = raw[:limit]
+        while raw and (raw[-1] & 0xC0) == 0x80:  # a continuation byte: back off to the character's lead
+            raw = raw[:-1]
+        if raw and raw[-1] >= 0xC0:  # a lead byte whose continuation was cut
+            raw = raw[:-1]
+    return raw.decode("utf-8", "replace").strip()
 
 
 @dataclass(frozen=True)
@@ -26,7 +38,8 @@ class MarkerReader:
 
 
 def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, max_bytes: int = MAX_BYTES,
-                  max_marks: int = MAX_MARKS, max_label: int = MAX_LABEL, clock=time.monotonic_ns) -> MarkerReader:
+                  max_marks: int = MAX_MARKS, max_label: int = MAX_LABEL, max_buffer: int = MAX_BUFFER,
+                  clock=time.monotonic_ns) -> MarkerReader:
     """``emit(label, host_ns)`` for every whole line. Inactive (a no-op poll and the reason) without a tty."""
     if fd is None:
         try:
@@ -42,7 +55,7 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
         if state["eof"]:
             return
         read = marks = 0
-        while read < max_bytes and select.select([fd], [], [], 0)[0]:
+        while read < max_bytes and len(buf) < max_buffer and select.select([fd], [], [], 0)[0]:
             try:
                 chunk = os.read(fd, max_bytes - read)
             except (BlockingIOError, InterruptedError):
@@ -56,7 +69,7 @@ def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, ma
             buf.extend(chunk)
         now = clock()
         while marks < max_marks and (i := buf.find(b"\n")) >= 0:
-            label = bytes(buf[:i][:max_label]).decode("utf-8", "replace").strip()
+            label = _cut_utf8(bytes(buf[:i]), max_label)
             del buf[: i + 1]
             emit(label, now)
             marks += 1

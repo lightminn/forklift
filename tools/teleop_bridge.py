@@ -260,27 +260,37 @@ def main(argv=None) -> int:
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "host_boot_id": host_boot_id(), "start_wall": time.time(),
                         "start_mono_ns": time.monotonic_ns()})
-    bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record)
-    if args.markers:
-        reader = marker_reader(bridge.mark)
-        bridge.marker_poll = reader.poll if reader.active else None
-        print(json.dumps({"markers": "on" if reader.active else f"off: {reader.reason}"}), flush=True)
-    server = LiveServer(bridge.channels, MediaStore(), welcome(bridge.epoch), host=args.host, port=args.port,
-                        web_root=Path(args.web_root))
-    server.start()
-    print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
-                      "floor_permit": "no_scan (bring-up 7 adds the scan)"}), flush=True)
+    # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
+    # and the sink open)
+    bridge = server = None
+    started = False
+    out: dict = {}
     try:
-        run(bridge, duration_s=args.duration_s)
-    except KeyboardInterrupt:
-        pass
+        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record)
+        if args.markers:
+            reader = marker_reader(bridge.mark)
+            bridge.marker_poll = reader.poll if reader.active else None
+            print(json.dumps({"markers": "on" if reader.active else f"off: {reader.reason}"}), flush=True)
+        server = LiveServer(bridge.channels, MediaStore(), welcome(bridge.epoch), host=args.host, port=args.port,
+                            web_root=Path(args.web_root))
+        server.start()
+        started = True
+        print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
+                          "floor_permit": "no_scan (bring-up 7 adds the scan)"}), flush=True)
+        try:
+            run(bridge, duration_s=args.duration_s)
+        except KeyboardInterrupt:
+            pass
     finally:
-        bridge.close(time.monotonic_ns())
-        server.stop()
-        out = {"overruns": bridge.overruns}
+        if bridge is not None:
+            bridge.close(time.monotonic_ns())
+            out["overruns"] = bridge.overruns
+        if started:
+            server.stop()
         if record is not None:
-            record.close({"overruns": bridge.overruns, "markers": bridge._markers, "end_mono_ns": time.monotonic_ns()})
-            out.update(record_dropped=record.dropped, record_write_errors=record.write_errors)
+            out["record"] = record.close({"overruns": out.get("overruns"),
+                                          "markers": 0 if bridge is None else bridge._markers,
+                                          "end_mono_ns": time.monotonic_ns()})
         print(json.dumps(out), flush=True)
     return 0
 

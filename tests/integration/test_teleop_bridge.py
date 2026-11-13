@@ -427,3 +427,54 @@ def test_the_cli_refuses_an_existing_record_and_markers_without_a_record(tmp_pat
     assert "exists" in capsys.readouterr().err and rec.read_text() == "x\n"
     assert tb.main(["--device", "pty", "--markers", *flags]) == 2
     assert "--markers needs --record" in capsys.readouterr().err
+
+
+def test_a_failed_start_or_ctrl_c_still_closes_the_record_with_its_footer(mcu_model, tmp_path, monkeypatch):  # noqa: F811
+    """Codex code review P2-3: from the record's creation on every exit path closes it -- a console that fails to
+    start, and Ctrl-C in the loop."""
+    flags = [f"--{n.replace('_', '-')}" for n in ALL]
+    m = Model(mcu_model)
+    try:
+        dev = PtyDevice(m.master)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+
+        class BadServer:
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                raise OSError("port in use")
+
+        monkeypatch.setattr(tb, "LiveServer", BadServer)
+        rec = tmp_path / "fail.jsonl"
+        with pytest.raises(OSError):
+            tb.main(["--device", "pty", "--record", str(rec), *flags])
+        rows = [json.loads(x) for x in rec.read_text().splitlines()]
+        assert rows[0]["t"] == "header" and rows[-1]["t"] == "footer"
+
+        class NoServer:
+            port = 0
+
+            def __init__(self, *a, **k):
+                pass
+
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        monkeypatch.setattr(tb, "LiveServer", NoServer)
+        real_run = tb.run
+
+        def run_then_interrupt(bridge, *, duration_s):
+            real_run(bridge, duration_s=0.4)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(tb, "run", run_then_interrupt)
+        rec2 = tmp_path / "ctrlc.jsonl"
+        assert tb.main(["--device", "pty", "--record", str(rec2), *flags]) == 0
+        rows = [json.loads(x) for x in rec2.read_text().splitlines()]
+        assert rows[-1]["t"] == "footer" and any(r.get("t") == "state" for r in rows)
+    finally:
+        m.close()

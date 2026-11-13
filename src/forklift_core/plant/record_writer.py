@@ -53,11 +53,20 @@ class InlineRecord:
 
 
 class RecordWriter:
+    """The writer thread owns the sink: it writes the rows, then -- once ``close`` asks and the queue is empty -- the
+    footer, and closes the sink. ``close`` never touches the sink itself; it waits ``timeout_s`` and reports whether
+    the writer finished (``close_result``). A row offered after ``close`` began is dropped and counted."""
+
     def __init__(self, sink, *, max_rows: int = MAX_ROWS) -> None:
         self.sink = sink
         self.q: queue.Queue = queue.Queue(maxsize=max_rows)
         self.dropped = 0
         self.write_errors = 0
+        self._lock = threading.Lock()
+        self._closing = False
+        self._stop = threading.Event()
+        self._footer: dict | None = None
+        self.close_result: dict | None = None
         self._thread = threading.Thread(target=self._run, name="record-writer", daemon=True)
         self._thread.start()
 
@@ -68,41 +77,47 @@ class RecordWriter:
         self._put(("state", sample, read_ns))
 
     def _put(self, item) -> None:
+        with self._lock:
+            if self._closing:
+                self.dropped += 1
+                return
+            try:
+                self.q.put_nowait(item)
+            except queue.Full:
+                self.dropped += 1
+
+    def _write(self, item) -> None:
         try:
-            self.q.put_nowait(item)
-        except queue.Full:
-            self.dropped += 1
+            self.sink.write(_line(item) + "\n")
+        except (OSError, ValueError, TypeError):
+            self.write_errors += 1
 
     def _run(self) -> None:
         while True:
-            item = self.q.get()
-            if item is _STOP:
-                return
             try:
-                self.sink.write(_line(item) + "\n")
-            except (OSError, ValueError, TypeError):
-                self.write_errors += 1
-
-    def close(self, footer: dict | None = None, timeout_s: float = 5.0) -> None:
-        """Drain, write the footer (the counts as they stand), close the sink. A writer that does not finish within
-        ``timeout_s`` leaves the rest unwritten and counts it as dropped."""
-        while True:
-            try:
-                self.q.put(_STOP, timeout=timeout_s)
-                break
-            except queue.Full:
-                self.dropped += 1
-                break
-        self._thread.join(timeout_s)
-        if self._thread.is_alive():
-            self.dropped += self.q.qsize()
-        elif footer is not None:
-            try:
-                self.sink.write(_line({"t": "footer", **footer, "dropped": self.dropped,
-                                       "write_errors": self.write_errors}) + "\n")
-            except (OSError, ValueError, TypeError):
-                self.write_errors += 1
+                item = self.q.get(timeout=0.05)
+            except queue.Empty:
+                if self._stop.is_set():
+                    break
+                continue
+            self._write(item)
+        if self._footer is not None:
+            self._write({"t": "footer", **self._footer, "dropped": self.dropped, "write_errors": self.write_errors})
         try:
             self.sink.close()
         except OSError:
             self.write_errors += 1
+
+    def close(self, footer: dict | None = None, timeout_s: float = 5.0) -> dict:
+        """Stop taking rows, let the writer drain and close. Returns (and keeps as ``close_result``) the counts as
+        they stood: ``finished`` False when the writer did not end within ``timeout_s`` -- its ``unwritten`` rows and
+        the footer may then never reach the file, and the sink is left to the writer."""
+        with self._lock:
+            self._closing = True
+            self._footer = footer
+        self._stop.set()
+        self._thread.join(timeout_s)
+        finished = not self._thread.is_alive()
+        self.close_result = {"finished": finished, "unwritten": 0 if finished else self.q.qsize(),
+                             "dropped": self.dropped, "write_errors": self.write_errors}
+        return self.close_result

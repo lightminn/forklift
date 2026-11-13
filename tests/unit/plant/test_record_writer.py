@@ -76,15 +76,36 @@ def test_write_and_close_failures_are_counted_and_the_rest_goes_on():
     assert [json.loads(x).get("k") for x in sink.final.splitlines()][:3] == [0, 2, 3]
 
 
-def test_a_writer_that_does_not_finish_counts_the_rest_as_dropped():
+def test_a_writer_that_does_not_finish_is_reported_and_keeps_the_sink():
+    # Codex code review P2-1: close must not close the sink under a writer that is still writing; it reports instead
     gate = threading.Event()
     sink = Sink(gate=gate)
     w = RecordWriter(sink, max_rows=100)
     for k in range(10):
         w.put_row({"k": k})
-    w.close({}, timeout_s=0.1)
-    assert w.dropped >= 9
+    res = w.close({"why": "timeout"}, timeout_s=0.1)
+    assert res["finished"] is False and res["unwritten"] >= 8 and not sink.closed
+    w.put_row({"late": True})  # offered after close began: dropped and counted
+    assert w.dropped == 1
     gate.set()
+    w._thread.join(2.0)
+    assert not w._thread.is_alive() and sink.closed  # the writer drained, wrote the footer and closed
+    rows = [json.loads(x) for x in sink.final.splitlines()]
+    assert [r.get("k") for r in rows[:-1]] == list(range(10)) and rows[-1]["t"] == "footer"
+
+
+def test_a_saturated_queue_still_closes_and_the_counts_stay_put():
+    gate = threading.Event()
+    sink = Sink(gate=gate)
+    w = RecordWriter(sink, max_rows=3)
+    for k in range(20):
+        w.put_row({"k": k})
+    gate.set()
+    res = w.close({})
+    assert res["finished"] is True and res["unwritten"] == 0
+    assert (w.dropped, w.write_errors) == (res["dropped"], res["write_errors"])
+    footer = json.loads(sink.final.splitlines()[-1])
+    assert footer["dropped"] == res["dropped"] >= 16
 
 
 def test_the_inline_record_writes_at_once():
