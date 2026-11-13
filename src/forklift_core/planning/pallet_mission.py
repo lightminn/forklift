@@ -1835,8 +1835,8 @@ def plan_loaded_delivery(
     slot_props = scenario_props(scenario, "slot")  # the delivery straight and the withdraw (plan 2026-10-22 2.4)
     destination = site_poses(scenario.destination, geometry)
     grid = docking_occupancy if docking_occupancy is not None else occupancy
-    exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
     loaded_travel = transport_travel_config if transport_travel_config is not None else travel_config
+    exit_ = keepout_exit_prefix(scenario, geometry, loaded_travel.clearance_m, exit_prefix)
     transport = note("transport_search", _transport_search(start_rear, destination["predelivery"], search_props,
                                                            geometry.loaded_footprint, scenario.bounds, loaded_travel,
                                                            occupancy=grid, deadline=deadline, exit_prefix=exit_,
@@ -2044,8 +2044,8 @@ def plan_transport(
     )
     if not extract.success:
         return MissionPlan(False, f"extract:{extract.status}")
-    exit_ = keepout_exit_prefix(scenario, geometry, travel_config.clearance_m, exit_prefix)
     loaded_travel = transport_travel_config if transport_travel_config is not None else travel_config
+    exit_ = keepout_exit_prefix(scenario, geometry, loaded_travel.clearance_m, exit_prefix)
     transport = note(
         "transport_search",
         _transport_search(
