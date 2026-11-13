@@ -1,0 +1,7 @@
+{"dir": "/home/projects/forklift/test_runs/live/orin_cmp/ws1_map_r1/bridge", "mode": "sync", "drops": [["laser", 3460.909, "the timestamp on the message is earlier than all the data in the transform cache"]], "n_drops": 1, "failed_replies": [{"scan_id": 34609, "stamp_s": 3460.9085138337687, "wall_s": 60.00058599107433}], "n_failed": 1, "slam_link_failed_mentions": 0}
+{"dir": "/home/projects/forklift/test_runs/live/ct2_624d0616_fixed_line_m_s3/live/epoch_1/bridge", "mode": "sync", "drops": [], "n_drops": 0, "failed_replies": [], "n_failed": 0, "slam_link_failed_mentions": 3}
+{"dir": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s1/live/epoch_1/bridge", "mode": "sync", "drops": [], "n_drops": 0, "failed_replies": [], "n_failed": 0, "slam_link_failed_mentions": 3}
+{"dir": "/home/projects/forklift/test_runs/live/ct2_41a2a7e8_fixed_line_m_s2/live/epoch_1/bridge", "mode": "sync", "drops": [], "n_drops": 0, "failed_replies": [], "n_failed": 0, "slam_link_failed_mentions": 3}
+{"dir": "/home/projects/forklift/test_runs/live/ct2_624d0616_auto_line_m_s4/live/epoch_1/bridge", "mode": "sync", "drops": [], "n_drops": 0, "failed_replies": [], "n_failed": 0, "slam_link_failed_mentions": 3}
+{"dir": "/home/projects/forklift/test_runs/live/lf_67694d16_main_line_m_s0/live/epoch_1/bridge", "mode": "sync", "drops": [], "n_drops": 0, "failed_replies": [], "n_failed": 0, "slam_link_failed_mentions": 3}
+{"summary": {"bridge_dirs": 96, "modes": {"localization": 29, "sync": 67}, "with_drop": 1, "with_failed_reply": 1, "drop_and_failed": 1}}
