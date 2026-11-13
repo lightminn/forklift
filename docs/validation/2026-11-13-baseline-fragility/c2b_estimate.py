@@ -131,7 +131,7 @@ def applied_jumps(records: list, t_cap: float, t_k: float, M_hold, sc: np.ndarra
     for t, M in changes:
         if list(M) == current:
             continue
-        pos, yaw = jump(current, M, rear_row(sc, t)[1:4], offset_m)
+        pos, yaw = jump(M_hold, current, M, rear_row(sc, t)[1:4], offset_m)
         out.append({"t": t, "jump_m": pos, "jump_rad": yaw})
         current = list(M)
     return out
@@ -187,12 +187,14 @@ def counterfactual(V, V_yaw, E_lift, A_lift, M_hold, M_k) -> dict:
             "S_actual_m": lateral(V, A_lift), "yaw_actual_rad": wrap(V_yaw - float(A_lift[2]))}
 
 
-def jump(M_hold, M_k, E_k, offset_m: float) -> tuple[float, float]:
-    """The base position jump and the yaw jump the code would report at the estimate pose E_k (rear)."""
+def jump(M_hold, M_prev, M_new, E_k, offset_m: float) -> tuple[float, float]:
+    """The base position jump and the yaw jump the code would report when the applied correction goes from M_prev to
+    M_new at the recorded estimate pose E_k (rear). The record's estimate is always M_hold * odom, so the odometry
+    pose is recovered with M_hold, then both corrections are applied to that same pose."""
     odom = np.linalg.inv(se2(M_hold)) @ se2(E_k)
     base = se2([abs(offset_m), 0.0, 0.0])
-    a = pose_of(se2(M_k) @ odom @ base)
-    b = pose_of(se2(M_hold) @ odom @ base)
+    a = pose_of(se2(M_new) @ odom @ base)
+    b = pose_of(se2(M_prev) @ odom @ base)
     return math.hypot(a[0] - b[0], a[1] - b[1]), abs(wrap(a[2] - b[2]))
 
 
@@ -227,7 +229,7 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=
             else:
                 E_k = rear_row(sc, t_k)
                 cf = counterfactual(V, V_yaw, decomp["E"], decomp["A"], M_hold, M_k)
-                pos_jump, yaw_jump = jump(M_hold, M_k, E_k[1:4], offset)
+                pos_jump, yaw_jump = jump(M_hold, M_hold, M_k, E_k[1:4], offset)
                 odom_k = np.linalg.inv(se2(M_hold)) @ se2(E_k[1:4])
                 rec = pose_of(se2(M_k) @ odom_k)
                 truth = E_k[4:7]
@@ -242,7 +244,12 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=
                     over_jump=bool(any(j["jump_m"] > JUMP_M or j["jump_rad"] > JUMP_RAD for j in seq)),
                     received_error_lateral_m=lateral(rec, truth),
                     received_error_yaw_rad=wrap(rec[2] - float(truth[2])),
-                    replies_to_t_k=sum(1 for r in records if t_cap < r["stamp_s"] <= t_k and r["status"] == "processed"))
+                    replies_to_t_k=sum(1 for r in records if t_cap < r["stamp_s"] <= t_k),
+                    processed_to_t_k=sum(1 for r in records if t_cap < r["stamp_s"] <= t_k and r["status"] == "processed"),
+                    last_received_age_s=t_k - stamp,
+                    last_processed_age_s=next((t_k - r["stamp_s"] for r in reversed(records)
+                                               if r["stamp_s"] <= t_k + TIME_TOL_S and r["status"] == "processed"),
+                                              None))
                 window_rows = [r["map_from_odom"] for r in records
                                if t_cap < r["stamp_s"] <= t_k and r["status"] == "processed"]
                 if len(window_rows) >= 2:
@@ -260,7 +267,8 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=
     if holds:
         t_hold = holds[-1]["time_s"]
         prior = [r for r in records if r["stamp_s"] <= t_hold + TIME_TOL_S and r["status"] == "processed"]
-        out["held_correction_age_s"] = (t_hold - prior[-1]["stamp_s"]) if prior else None
+        # the held correction's age when the hold began: since the last new (processed) correction
+        out["held_correction_processed_age_s"] = (t_hold - prior[-1]["stamp_s"]) if prior else None
     out["judgeable"] = "S_C2b_m" in out["end_hold"]
     return out
 

@@ -86,7 +86,9 @@ def test_a_correction_that_removes_the_estimate_error_removes_the_offset():
     assert e["S_C2b_m"] == pytest.approx(C.lateral(d["V"], d["E"]), abs=1e-12) == pytest.approx(0.0, abs=1e-12)
     assert e["jump_m"] == pytest.approx(0.02, abs=1e-12) and not e["over_jump"]
     assert e["received_error_lateral_m"] == pytest.approx(0.0, abs=1e-12)
-    assert e["replies_to_t_k"] == 1 and out["held_correction_age_s"] == pytest.approx(0.5)
+    assert e["processed_to_t_k"] == 1 and e["replies_to_t_k"] > 40 and out["held_correction_processed_age_s"] == \
+        pytest.approx(0.5)
+    assert e["last_received_age_s"] <= 0.1 and e["last_processed_age_s"] > 1.0
 
 
 def test_a_correction_after_the_window_is_not_taken():
@@ -108,7 +110,7 @@ def test_the_jump_is_the_base_position_change_at_the_same_odometry_pose():
     base = (1.0, 2.0, 0.3)
     rear = C.pose_of(C.se2(base) @ C.se2([-0.34, 0.0, 0.0]))
     rot = C.se2(base) @ C.se2([0, 0, 0.03]) @ np.linalg.inv(C.se2(base))
-    pos, yaw = C.jump((0.0, 0.0, 0.0), C.pose_of(rot), rear, -0.34)
+    pos, yaw = C.jump((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), C.pose_of(rot), rear, -0.34)
     assert pos == pytest.approx(0.0, abs=1e-12) and yaw == pytest.approx(0.03)
     assert np.hypot(*C.pose_of(rot)[:2]) > 0.05
 
@@ -172,3 +174,17 @@ def test_the_tracker_speed_and_the_path_progress():
     rem = C.path_remaining(path, np.array([[0.5, 0.1], [0.4, 0.0], [1.0, 0.5], [0.9, 0.95]]))
     assert rem[0] == pytest.approx(1.5) and rem[1] == pytest.approx(1.5)  # progress does not go back
     assert rem[2] == pytest.approx(0.5) and rem[3] == pytest.approx(0.05)
+
+
+def test_successive_jumps_recover_the_odometry_pose_with_the_held_correction():
+    """Codex review round 3 P2: the record's estimate is M_hold * odom whatever was applied since; a second jump from a
+    non-identity previous correction, with rotation and translation, is measured on that same odometry pose."""
+    M_hold, M1, M2 = (0.01, -0.02, 0.005), (0.02, 0.0, 0.012), (0.015, 0.018, 0.03)
+    E = (2.0, 1.0, 0.4)
+    odom = np.linalg.inv(C.se2(M_hold)) @ C.se2(E)
+    base = C.se2([0.34, 0.0, 0.0])
+    a, b = C.pose_of(C.se2(M2) @ odom @ base), C.pose_of(C.se2(M1) @ odom @ base)
+    pos, yaw = C.jump(M_hold, M1, M2, E, -0.34)
+    assert pos == pytest.approx(np.hypot(a[0] - b[0], a[1] - b[1]), abs=1e-12) and yaw == pytest.approx(0.018)
+    wrong = C.pose_of(C.se2(M2) @ np.linalg.inv(C.se2(M1)) @ C.se2(E) @ base)  # odom recovered with M1
+    assert abs(np.hypot(wrong[0] - b[0], wrong[1] - b[1]) - pos) > 1e-4
