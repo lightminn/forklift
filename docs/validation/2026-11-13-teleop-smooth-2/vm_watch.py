@@ -44,25 +44,30 @@ def parse(text: str) -> dict:
             "gpus": [[c.strip() for c in x[4:].split(",")] for x in lines if x.startswith("gpu ") and x[4:].strip()]}
 
 
+def probe_once() -> dict:
+    """One attempt, whatever happens to it: its own laptop clock, exit code, parsed output (partial on a timeout)."""
+    t_try = time.time()
+    try:
+        r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
+                            "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
+        return {"t_local": t_try, "ssh_exit": r.returncode, **parse(r.stdout), "err": r.stderr[-200:]}
+    except subprocess.TimeoutExpired as exc:  # keep what came before the cut (a qemu line is still a positive)
+        out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+        return {"t_local": t_try, "ssh_exit": None, **parse(out), "err": "timeout"}
+    except ValueError as exc:
+        return {"t_local": t_try, "ssh_exit": None, "t_ws1": None, "err": repr(exc)[-200:]}
+
+
 def sample(path: str, every: float) -> int:
     while True:
         t_local = time.time()
-        try:
-            tries = []
-            for attempt in range(3):  # a failed probe (2026-11-13 K09: a Wi-Fi DNS blip) is retried within the period
-                r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
-                                    "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
-                # every attempt kept: a positive seen by a failed attempt stays a positive (Codex K09 results P2)
-                tries.append({"ssh_exit": r.returncode, **parse(r.stdout), "err": r.stderr[-200:]})
-                if r.returncode == 0 or time.time() - t_local > every / 2:
-                    break
-                time.sleep(5)
-            row = {"t_local": t_local, **tries[-1], "attempts": len(tries), "tries": tries}
-        except subprocess.TimeoutExpired as exc:  # keep what came before the cut (a qemu line is still a positive)
-            out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
-            row = {"t_local": t_local, "ssh_exit": None, **parse(out), "err": "timeout"}
-        except ValueError as exc:
-            row = {"t_local": t_local, "t_ws1": None, "err": repr(exc)[-200:]}
+        tries = []
+        for _ in range(3):  # a failed probe (2026-11-13 K09: a Wi-Fi DNS blip) is retried within the period
+            tries.append(probe_once())  # every attempt kept, a timeout too (Codex K09 results P2 rounds 1-2)
+            if tries[-1]["ssh_exit"] == 0 or time.time() - t_local > every / 2:
+                break
+            time.sleep(5)
+        row = {**tries[-1], "t_local": t_local, "attempts": len(tries), "tries": tries}
         with open(path, "a") as f:
             f.write(json.dumps(row) + "\n")
         time.sleep(max(0.0, t_local + every - time.time()))
@@ -75,9 +80,25 @@ def gpu_counted(row: dict) -> bool:
     return row.get("gpu_marker") == "done" or row.get("ssh_exit") == 0
 
 
+def _positive_try(t: dict) -> bool:
+    return bool(t.get("qemu")) or (gpu_counted(t) and len(t.get("gpus", [])) < 2)
+
+
 def positive(row: dict) -> bool:
     """Any attempt of the sample that saw qemu or fewer than two GPUs (earlier rows have no ``tries``)."""
-    return any(bool(t.get("qemu")) or (gpu_counted(t) and len(t.get("gpus", [])) < 2) for t in row.get("tries", [row]))
+    return any(_positive_try(t) for t in row.get("tries", [row]))
+
+
+def positive_times(row: dict) -> list:
+    """Each positive attempt's time: its own ws1 clock, or, cut off before the clock line, its laptop clock (within a
+    few seconds of ws1's in these records). Judged by these times, not the row's last attempt (Codex round 2 P2)."""
+    out = []
+    for t in row.get("tries", [row]):
+        if _positive_try(t):
+            when = t.get("t_ws1") if t.get("t_ws1") is not None else t.get("t_local")
+            if when is not None:
+                out.append(when)
+    return out
 
 
 def complete(row: dict) -> bool:
@@ -86,10 +107,10 @@ def complete(row: dict) -> bool:
 
 def judge(rows: list, start: float, end: float, every: float) -> str:
     lo, hi = start - 1.5 * every, end + 1.5 * every
+    if any(lo <= when <= hi for r in rows for when in positive_times(r)):
+        return "vm"
     seen = sorted((r for r in rows if r.get("t_ws1") is not None and lo <= r["t_ws1"] <= hi),
                   key=lambda r: r["t_ws1"])
-    if any(positive(r) for r in seen):
-        return "vm"
     full = [r for r in seen if complete(r)]
     if not any(r["t_ws1"] <= start for r in full) or not any(r["t_ws1"] >= end for r in full):
         return "unevaluated"
