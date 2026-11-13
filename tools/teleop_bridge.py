@@ -7,8 +7,13 @@ The floor permission has no scan source yet (bring-up 7 adds the A2M12): it is a
 operator confirms four things separately (design 7); ``--yes`` is not one of them.
 
 usage: teleop_bridge.py --device D [--baud B] --empty-forks --forks-clear --lift-low --no-open-recovery
-                        [--port 8765] [--host 127.0.0.1] [--web-root console/web] [--record run.jsonl]
+                        [--port 8765] [--host 127.0.0.1] [--web-root console/web] [--record run.jsonl [--markers]]
                         [--duration-s S]
+
+The record (docs/design/2026-11-14-teleop-record-state-markers-clock.md): a header line, every STATE the host took
+(``{"t": "state", "host_ns", "read_ns", ...}``, the bring-up record's row), every cycle's row as before (no ``t``),
+``--markers`` lines (Enter on the terminal: ``{"t": "marker", "host_ns", "index", "label"}``) and a footer with the
+dropped and failed writes. A new path only: an existing file is refused.
 """
 
 from __future__ import annotations
@@ -33,7 +38,9 @@ from forklift_core.mcu_link.messages import McuState  # noqa: E402
 from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.kinematics import RealKinematics, teleop_limit_overrides  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
+from forklift_core.plant.markers import marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
+from forklift_core.plant.record_writer import InlineRecord, RecordWriter  # noqa: E402
 from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
@@ -86,7 +93,8 @@ class Bridge:
                                     cycle_s=CYCLE_S)
         self.dev = device_link
         self.record = record
-        self.record_errors = 0
+        self.marker_poll = None  # set by the CLI's --markers
+        self._markers = 0
         self.overruns = 0
         self._started_ns: int | None = None
         self._last_rx_ns: int | None = None
@@ -99,7 +107,30 @@ class Bridge:
     def _on_state(self, state: McuState, received_ns: int) -> None:
         """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""
         self._last_rx_ns = received_ns  # kept here: the host forgets its receipt time on a disconnect
-        self.core.add_sample(Sample(received_ns, state))
+        sample = Sample(received_ns, state)
+        if self.record is not None:
+            # every STATE the host took, before the core filters it (record design 3): queued, written by the writer
+            self.record.put_state(sample, getattr(self.dev, "last_read_ns", None))
+        self.core.add_sample(sample)
+
+    def mark(self, label: str, host_ns: int) -> None:
+        """An operator marker (record design 4): queued like any row."""
+        if self.record is not None:
+            self.record.put_row({"t": "marker", "host_ns": host_ns, "index": self._markers, "label": label})
+        self._markers += 1
+
+    @property
+    def record(self):
+        return self._record
+
+    @record.setter
+    def record(self, value) -> None:
+        # a plain file (a test's StringIO) is written at once; the CLI passes a RecordWriter (bounded queue + thread)
+        self._record = InlineRecord(value) if value is not None and not hasattr(value, "put_row") else value
+
+    @property
+    def record_errors(self) -> int:
+        return 0 if self.record is None else self.record.write_errors + self.record.dropped
 
     def cycle(self, now_ns: int) -> dict:
         """Design 5: receive only, decide, transmit only."""
@@ -136,10 +167,9 @@ class Bridge:
         if events:
             rec["link_events"] = [e.kind for e in events]
         if self.record is not None:
-            try:
-                self.record.write(json.dumps(rec, default=str) + "\n")
-            except (OSError, ValueError):
-                self.record_errors += 1
+            self.record.put_row(rec)
+        if self.marker_poll is not None:
+            self.marker_poll()
         return rec
 
     def notes(self, now_ns: int) -> list[str]:
@@ -159,6 +189,17 @@ class Bridge:
             self.dev.receive(self.host, now_ns)
             self.dev.transmit(self.host, now_ns)
             time.sleep(CYCLE_S)
+
+
+RECORD_SCHEMA = "teleop_bridge_record/1"
+
+
+def host_boot_id() -> str | None:
+    """The host's boot id: a record's monotonic times belong to one boot (record design 3)."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
 
 
 OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun
@@ -197,6 +238,7 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--web-root", default=str(REPO / "console" / "web"))
     ap.add_argument("--record")
+    ap.add_argument("--markers", action="store_true")
     ap.add_argument("--duration-s", type=float)
     args = ap.parse_args(argv)
     confirmed = {n for n in rt.CONFIRMATIONS if getattr(args, n)}
@@ -204,23 +246,52 @@ def main(argv=None) -> int:
     if missing:
         print(f"teleop stays closed until confirmed: {', '.join('--' + m.replace('_', '-') for m in missing)}",
               file=sys.stderr)
-    record = open(args.record, "a", encoding="utf-8") if args.record else None  # noqa: SIM115
-    bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record)
-    server = LiveServer(bridge.channels, MediaStore(), welcome(bridge.epoch), host=args.host, port=args.port,
-                        web_root=Path(args.web_root))
-    server.start()
-    print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
-                      "floor_permit": "no_scan (bring-up 7 adds the scan)"}), flush=True)
+    if args.markers and not args.record:
+        print("--markers needs --record", file=sys.stderr)
+        return 2
+    record = None
+    if args.record:
+        try:
+            sink = open(args.record, "x", encoding="utf-8")  # noqa: SIM115 -- a new record per run (design 3)
+        except FileExistsError:
+            print(f"the record {args.record} exists: give a new path", file=sys.stderr)
+            return 2
+        record = RecordWriter(sink)
+        record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
+                        "host_boot_id": host_boot_id(), "start_wall": time.time(),
+                        "start_mono_ns": time.monotonic_ns()})
+    # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
+    # and the sink open)
+    bridge = server = None
+    started = False
+    out: dict = {}
     try:
-        run(bridge, duration_s=args.duration_s)
-    except KeyboardInterrupt:
-        pass
+        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record)
+        if args.markers:
+            reader = marker_reader(bridge.mark)
+            bridge.marker_poll = reader.poll if reader.active else None
+            print(json.dumps({"markers": "on" if reader.active else f"off: {reader.reason}"}), flush=True)
+        server = LiveServer(bridge.channels, MediaStore(), welcome(bridge.epoch), host=args.host, port=args.port,
+                            web_root=Path(args.web_root))
+        server.start()
+        started = True
+        print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
+                          "floor_permit": "no_scan (bring-up 7 adds the scan)"}), flush=True)
+        try:
+            run(bridge, duration_s=args.duration_s)
+        except KeyboardInterrupt:
+            pass
     finally:
-        bridge.close(time.monotonic_ns())
-        server.stop()
+        if bridge is not None:
+            bridge.close(time.monotonic_ns())
+            out["overruns"] = bridge.overruns
+        if started:
+            server.stop()
         if record is not None:
-            record.close()
-        print(json.dumps({"overruns": bridge.overruns, "record_errors": bridge.record_errors}), flush=True)
+            out["record"] = record.close({"overruns": out.get("overruns"),
+                                          "markers": 0 if bridge is None else bridge._markers,
+                                          "end_mono_ns": time.monotonic_ns()})
+        print(json.dumps(out), flush=True)
     return 0
 
 

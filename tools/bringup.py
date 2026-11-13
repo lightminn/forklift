@@ -24,14 +24,15 @@ usage:
                       [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
   bringup.py kth      --record run.jsonl --configured-m V --configured-h V --image ID
                       (S2: the KTH CRC variant from the v3 counters; record while moving each axis through its range)
+  bringup.py clock    --record run.jsonl
+                      (G7: MCU time -> host monotonic time per host boot and MCU boot, the delay envelope fit and its
+                      quality figures; a teleop record's read_ns, a bring-up record's host_ns. No marker needed.)
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import select
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -39,17 +40,42 @@ from pathlib import Path
 
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
-    Drive, FaultFlag, LinkDecoder, McuState, Mode, RejectReason, ResetCause, StateFlag,
+    Drive,
+    FaultFlag,
+    LinkDecoder,
+    McuState,
+    Mode,
+    RejectReason,
+    ResetCause,  # noqa: F401 -- re-exported for the tool's tests
+    StateFlag,
 )
-from forklift_core.plant.bringup import Sample, count_settle, step_metrics, wheel_cpr, wheel_rate_cap
+from forklift_core.plant.bringup import (
+    Sample,
+    count_settle,
+    step_metrics,
+    wheel_cpr,
+    wheel_rate_cap,
+)
+from forklift_core.plant.clock_map import clock_fits_from_rows
 from forklift_core.plant.commission import (
-    AXES, AXIS_HOLD_MAX_S, COMMISSION_CAP_MS, COMMISSION_DUTY_MAX, COMMISSION_HOLD_MAX_S, COMMISSION_HOLD_MIN_S,
-    commission_metrics, sign_verdict,
+    AXES,
+    AXIS_HOLD_MAX_S,
+    COMMISSION_CAP_MS,
+    COMMISSION_DUTY_MAX,
+    COMMISSION_HOLD_MAX_S,
+    COMMISSION_HOLD_MIN_S,
+    commission_metrics,
+    sign_verdict,
 )
 from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
 from forklift_core.plant.kth_check import kth_check
+from forklift_core.plant.markers import marker_reader
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
+from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here by name
+    sample_from_row,
+    state_row,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
@@ -163,15 +189,6 @@ class Bench:
         return self.samples[-1].state if self.samples else None
 
 
-def state_row(s: Sample) -> dict:
-    st = s.state
-    row = asdict(st)
-    row.update(t="state", host_ns=s.host_ns, mode=st.mode.name, reject_reason=st.reject_reason.name,
-               fault_flags=[f.name for f in FaultFlag if f in st.fault_flags],
-               flags=[f.name for f in StateFlag if f in st.flags], reset_cause=st.reset_cause.name)
-    return row
-
-
 KTH_FIELDS = ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors")
 
 
@@ -183,24 +200,6 @@ def kth_row_problem(row: dict) -> str | None:
                 and all(isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 0xFFFF for x in v)):
             return f"{name} missing or malformed in a STATE row (a v3 record is needed)"
     return None
-
-
-def sample_from_row(row: dict) -> Sample:
-    """A recorded state row back into a Sample (analyze)."""
-    faults, flags = FaultFlag(0), StateFlag(0)
-    for name in row["fault_flags"]:
-        faults |= FaultFlag[name]
-    for name in row["flags"]:
-        flags |= StateFlag[name]
-    fields = {k: row[k] for k in McuState.__dataclass_fields__ if k in row}
-    fields.update(mode=Mode[row["mode"]], reject_reason=RejectReason[row["reject_reason"]], fault_flags=faults,
-                  flags=flags, reset_cause=ResetCause[row["reset_cause"]],
-                  current_ma=tuple(row["current_ma"]), duty_e4=tuple(row["duty_e4"]),
-                  driver_status=tuple(row["driver_status"]))
-    for name in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors"):  # v3; JSON gives lists
-        if name in row:
-            fields[name] = tuple(row[name])
-    return Sample(int(row["host_ns"]), McuState(**fields))
 
 
 def check_build(state: McuState, *, allow_locked: bool) -> None:
@@ -847,39 +846,9 @@ def _confirm(args, what: str) -> None:
 
 
 def _marker_reader(bench: Bench, fd: int | None = None):
-    """Enter on the terminal marks an operator event (design 2). Never blocks the drive loop: the bytes there are
-    are read (``os.read`` after ``select``) and only whole lines mark -- a ``readline`` would wait for a newline after
-    a label flushed with Ctrl-D (Codex P2, commission --markers)."""
-    if fd is None:
-        try:
-            fd = sys.stdin.fileno()
-        except (AttributeError, OSError, ValueError):
-            return lambda: None
-    if not os.isatty(fd):
-        return lambda: None
-    buf = bytearray()
-    state = {"eof": False}
-
-    def poll():
-        if state["eof"]:
-            return
-        while select.select([fd], [], [], 0)[0]:
-            try:
-                chunk = os.read(fd, 4096)
-            except (BlockingIOError, InterruptedError):
-                return
-            except OSError:
-                state["eof"] = True
-                return
-            if not chunk:
-                return  # a Ctrl-D on an empty line (a tty: later lines still come) -- this poll is done
-            buf.extend(chunk)
-            now = time.monotonic_ns()
-            while (i := buf.find(b"\n")) >= 0:
-                label = bytes(buf[:i]).decode("utf-8", "replace").strip()
-                del buf[: i + 1]
-                bench.emit({"t": "marker", "host_ns": now, "label": label})
-    return poll
+    """Enter on the terminal marks an operator event (design 2), through the shared reader
+    (``forklift_core.plant.markers``: never blocks the drive loop, whole lines only, a bounded amount per poll)."""
+    return marker_reader(lambda label, now: bench.emit({"t": "marker", "host_ns": now, "label": label}), fd).poll
 
 
 def main(argv=None) -> int:
@@ -934,6 +903,8 @@ def main(argv=None) -> int:
         kt.add_argument(f"--configured-{ax}", required=True, choices=KTH_VARIANTS,
                         help=f"the CRC variant axis {ax.upper()} is configured with in the image under test")
     kt.add_argument("--image", required=True, help="the firmware image under test (its identity string or hash)")
+    ck = sub.add_parser("clock", help="G7: the MCU-to-host clock fit of a record (teleop record design 5)")
+    ck.add_argument("--record", required=True)
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
     an.add_argument("--marker", type=int, default=-1,
@@ -957,6 +928,11 @@ def main(argv=None) -> int:
         samples = [sample_from_row(r) for r in states]
         print(json.dumps(kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
                                    image=args.image)))
+        return 0
+    if args.cmd == "clock":
+        rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
+        fits = clock_fits_from_rows(rows)
+        print(json.dumps({"result": "ok" if fits else "no_state_rows", "fits": [f.summary() for f in fits]}))
         return 0
     if args.cmd == "analyze":
         try:

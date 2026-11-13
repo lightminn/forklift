@@ -158,6 +158,9 @@ class ReconnectingLink:
         # Bring-up tx_cut (docs/design/2026-11-12-bringup-host-tools.md 2): False stops writing to the MCU while
         # its STATE is still read -- the MCU's command-expiry path with the stop kept in view.
         self.tx_enabled = True
+        # when the last read returned (monotonic ns): the read time a record keeps beside the cycle time the host
+        # is given (teleop record design 3) -- it never feeds a control decision
+        self.last_read_ns: int | None = None
 
     def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
         events: list[HostEvent] = []
@@ -171,6 +174,7 @@ class ReconnectingLink:
             try:
                 data = self.link.read_available()
                 if data:
+                    self.last_read_ns = time.monotonic_ns()
                     events += host.on_bytes(data, now_ns)
                 events += host.tick(now_ns)
                 if self.tx_enabled:
