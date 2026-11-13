@@ -34,6 +34,12 @@
 #   than off; an EXTRA_ARGS value comes later and wins; records made before this default ran with both off: do not mix
 #   them with later ones; measurement wrappers that call this launcher inherit the defaults unless they name the two,
 #   so a measurement's registration names them,
+#   NEAR_OBSERVE_ARRIVAL (0.05,0.05 when the near-end stand applied -- NEAR_END_STAND or an EXTRA_ARGS --near-end-stand
+#   -- is on, else off: --near-observe-arrival, K1, docs/plans/2026-11-13-k1-near-loose-arrival.md; its registered
+#   80-run comparison judged K1 better, docs/validation/2026-11-14-k1-comparison.md, lead decision 2026-11-14; off as
+#   before; an explicit value needs the near-end stand on; an EXTRA_ARGS --near-observe-arrival comes later and wins;
+#   records made before this default ran it off: a comparison names both arms' value and earlier off results are not
+#   pooled with later on ones),
 #   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
 #   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
@@ -100,21 +106,30 @@ g3_words() { local IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}; set +f; 
 G3_NEAR=0
 G3_EXTRA_CAST=""
 G3_EXTRA_RSB=""  # an EXTRA_ARGS --return-start-backoff's last value (other than off refused with --near-tracking)
+G3_EXTRA_NES=""  # an EXTRA_ARGS --near-end-stand's last value (K1's default follows the value applied)
+G3_EXTRA_NOA=""  # an EXTRA_ARGS --near-observe-arrival's last value
 g3_next=0
 rsb_next=0
+nes_next=0
+noa_next=0
 while IFS= read -r w; do
   if [ "$g3_next" = 1 ]; then G3_EXTRA_CAST=$w; g3_next=0; continue; fi
   if [ "$rsb_next" = 1 ]; then G3_EXTRA_RSB=$w; rsb_next=0; continue; fi
+  if [ "$nes_next" = 1 ]; then G3_EXTRA_NES=$w; nes_next=0; continue; fi
+  if [ "$noa_next" = 1 ]; then G3_EXTRA_NOA=$w; noa_next=0; continue; fi
   case "$w" in
     --near-tracking) G3_NEAR=1;;
     --lidar-cast) g3_next=1;;
     --lidar-cast=*) G3_EXTRA_CAST=${w#--lidar-cast=};;
     --return-start-backoff) rsb_next=1;;
     --return-start-backoff=*) G3_EXTRA_RSB=${w#--return-start-backoff=};;
-    --near-end-stand|--near-end-stand=*) ;;  # comes after the launcher's and wins (argparse keeps the last)
+    --near-end-stand) nes_next=1;;  # comes after the launcher's and wins (argparse keeps the last)
+    --near-end-stand=*) G3_EXTRA_NES=${w#--near-end-stand=};;
+    --near-observe-arrival) noa_next=1;;  # K1: the launcher then adds none of its own
+    --near-observe-arrival=*) G3_EXTRA_NOA=${w#--near-observe-arrival=};;
     --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
       o=${w%%=*}
-      for full in --near-tracking --lidar-cast --return-start-backoff --near-end-stand; do
+      for full in --near-tracking --lidar-cast --return-start-backoff --near-end-stand --near-observe-arrival; do
         case "$full" in "$o"*) echo "EXTRA_ARGS $o: write $full in full"; exit 2;; esac
       done;;
   esac
@@ -153,7 +168,21 @@ if [ "$G3_NEAR" = 1 ] && { [ "$RETURN_START" != off ] || { [ -n "$G3_EXTRA_RSB" 
   echo "--near-tracking keeps the return-start backoff off (RETURN_START and any EXTRA_ARGS --return-start-backoff off)"
   exit 2
 fi
-echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NEAR_END_STAND"
+# K1 follows the near-end stand applied (the runner refuses it without --near-end-stand on); an explicit value needs on
+NES_APPLIED=${G3_EXTRA_NES:-$NEAR_END_STAND}
+if [ -n "$G3_EXTRA_NOA" ]; then NOA_APPLIED=$G3_EXTRA_NOA
+elif [ -n "${NEAR_OBSERVE_ARRIVAL:-}" ]; then NOA_APPLIED=$NEAR_OBSERVE_ARRIVAL
+elif [ "$NES_APPLIED" = on ]; then NOA_APPLIED=0.05,0.05
+else NOA_APPLIED=off; fi
+if [ "$NOA_APPLIED" != off ] && [ "$NES_APPLIED" != on ]; then
+  echo "NEAR_OBSERVE_ARRIVAL (or EXTRA_ARGS --near-observe-arrival) needs the near-end stand on, not $NES_APPLIED"; exit 2
+fi
+[ "$NOA_APPLIED" = off ] || [[ "$NOA_APPLIED" =~ ^[0-9]+([.][0-9]+)?,[0-9]+([.][0-9]+)?$ ]] \
+  || { echo "NEAR_OBSERVE_ARRIVAL must be M,RAD (metres, radians) or off"; exit 2; }
+# what the launcher passes: nothing when off or when EXTRA_ARGS names its own (the runner reads one)
+NEAR_OBSERVE_ARRIVAL=$NOA_APPLIED
+[ -n "$G3_EXTRA_NOA" ] && NEAR_OBSERVE_ARRIVAL=off
+echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NEAR_END_STAND near_observe_arrival=$NOA_APPLIED"
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"
@@ -301,6 +330,7 @@ echo "cpus: bridge $CPU0, session ${SESSION_CPUS:-unpinned}"
   printf 'FORKLIFT_GRID_CLEAR_KERNEL=%q\nFORKLIFT_SHADOW_KERNEL=%q\nLIDAR_CAST=%q\n' \
     "$FORKLIFT_GRID_CLEAR_KERNEL" "$FORKLIFT_SHADOW_KERNEL" "$LIDAR_CAST"
   printf 'RETURN_START=%q\nNEAR_END_STAND=%q\n' "$RETURN_START" "$NEAR_END_STAND"  # ④⑤ (the runner passes them)
+  printf 'NEAR_OBSERVE_ARRIVAL=%q\n' "$NEAR_OBSERVE_ARRIVAL"  # K1 (the runner passes it unless off)
   printf 'START_POSE=%q\n' "${START_POSE:-}"  # B-P2: the placed start (empty: the scene's, known)
   printf 'START_POSE_KNOWN=%q\n' "${START_POSE_KNOWN:-}"  # the repro batch's H0: placed and known (empty: off)
   printf 'START_RELOC=%q\nSTART_MODE=%q\n' "$START_RELOC" "$START_MODE"  # plan 7.1: what the start is, and why
@@ -363,6 +393,9 @@ LAYER=config/obstacle_layer_single.yaml
 # apart from the obstacle-layer one (a survey bundle's shared input); LAYER_BUDGET=off runs without it
 LAYER_BUDGET=${LAYER_BUDGET:-config/layer_latency_budget.yaml}
 BUDGET=(--layer-latency-budget "$LAYER_BUDGET")
+# K1 (env.sh): the near-leg loose arrival narrowed unless off (an EXTRA_ARGS --near-observe-arrival left it off here)
+NOA_ARGS=()
+[ "${NEAR_OBSERVE_ARRIVAL:-off}" = off ] || NOA_ARGS=(--near-observe-arrival "$NEAR_OBSERVE_ARRIVAL")
 [ "$LAYER_BUDGET" = off ] && BUDGET=()
 RELOC=()  # B-P2b: placed at START_POSE, the start found on the survey map; the epoch folder holds the estimate
 # one word: a pose with a negative x would read as an option (Codex B-P2b review P2)
@@ -396,6 +429,7 @@ ARGS=(
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   --lidar-cast "${LIDAR_CAST:-loop}" \
   --return-start-backoff "${RETURN_START:-off}" --near-end-stand "${NEAR_END_STAND:-off}" \
+  ${NOA_ARGS[@]+"${NOA_ARGS[@]}"} \
   $EXTRA_ARGS "${LOC[@]}" "${RELOC[@]}" "${POSE[@]}" "${REQ[@]}" \
   --output "$2/run")
 if [ -n "${RUNNER_CHECK:-}" ]; then  # the launcher's preflight: these arguments, then the runner's own checks on them
