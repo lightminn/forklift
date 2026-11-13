@@ -40,7 +40,7 @@ from forklift_core.plant.kinematics import RealKinematics, teleop_limit_override
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.markers import marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
-from forklift_core.plant.record_writer import InlineRecord, RecordWriter  # noqa: E402
+from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
 from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
@@ -192,14 +192,6 @@ class Bridge:
 
 
 RECORD_SCHEMA = "teleop_bridge_record/1"
-
-
-def host_boot_id() -> str | None:
-    """The host's boot id: a record's monotonic times belong to one boot (record design 3)."""
-    try:
-        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
-    except OSError:
-        return None
 
 
 OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun

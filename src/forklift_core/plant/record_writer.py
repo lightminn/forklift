@@ -11,12 +11,21 @@ from __future__ import annotations
 import json
 import queue
 import threading
+from pathlib import Path
 
 from forklift_core.plant.bringup import Sample
 from forklift_core.plant.record_rows import state_row
 
 MAX_ROWS = 20_000
 _STOP = object()
+
+
+def host_boot_id() -> str | None:
+    """The host's boot id: a record's monotonic times belong to one boot (record design 3)."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        return None
 
 
 def _line(item) -> str:
