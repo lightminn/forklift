@@ -21,6 +21,7 @@
 #   SLAM_NODE=localization: MAP_BUNDLE (a bundle folder, tools/slam_replay_bundle.py), MAP_ID, MAP_START_POSE "x,y,yaw"
 #   and LOC_SETS "key=value ..." (applied to the localization params) -- candidate A; no graph dump (localization
 #   refuses serialize_map).
+#   SUMMARY=off (environment): skip the summary (the caller runs it; deploy/slurm/slam_h_switch.sbatch).
 #   A paced replay runs at the live wall rate (0.4 live factor: sim 1,500 s ~ 63 min) -- give it --time; the driver
 #   refuses a plan longer than the job's remaining time less 5 min (--wall-budget-s).
 # Run from the repository root (a snapshot); docker image forklift/ros2-dev:jazzy.
@@ -93,8 +94,11 @@ SUMMARY_ARGS=()
 [ -n "${LIVE_EPOCH:-}" ] && SUMMARY_ARGS+=(--live-epoch "$LIVE_EPOCH")
 [ -n "${BASELINE:-}" ] && SUMMARY_ARGS+=(--baseline "$BASELINE")
 [ "${DUMP_GRAPH:-0}" = 1 ] && SUMMARY_ARGS+=(--graph-dump "$OUT/bridge/dump")
-"$PY" "$ROOT/tools/slam_cost_summary.py" "$OUT/drive.jsonl" "${SUMMARY_ARGS[@]}" > "$OUT/summary.json"
-SUM=$?
+SUM=null
+if [ "${SUMMARY:-on}" != off ]; then  # off: the caller summarizes later (slam_h_switch.sbatch keeps it out of H's wait)
+  "$PY" "$ROOT/tools/slam_cost_summary.py" "$OUT/drive.jsonl" "${SUMMARY_ARGS[@]}" > "$OUT/summary.json"
+  SUM=$?
+fi
 SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)
 printf '{"state": "done", "driver_exit": %s, "container_exit": %s, "summary_exit": %s, "sent": %s}\n' \
   "$DRV" "${CON:-null}" "$SUM" "${SENT:-null}" > "$OUT/status.json"
