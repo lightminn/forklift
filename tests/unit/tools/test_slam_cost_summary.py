@@ -172,7 +172,11 @@ def test_the_replay_container_propagates_a_failed_graph_dump_and_checks_its_slam
     assert 'SLAM_IMAGE_KIND' in box and "/opt/slam_patched/install/setup.bash" in box
     assert "slam_libs.txt" in box and "/proc/" in box
     assert "tools/slam_patch_check.py" in box and "STATUS=8" in box  # the run is the slam_toolbox it asked for
+    # a patched node that aborted or refused, or a trace without its end record, fails the run (Codex review 2 P2-5)
+    assert "forklift_slam_patch (abort|refused)" in box and '"kind":"end"' in box and "STATUS=9" in box
+    assert "_slam_toolbox" in box  # the node's own lib<mode>_slam_toolbox is recorded for the check
     dump = (root / "tools" / "slam_cost_dump.sh").read_text()
+    assert "detect_leaks=0" in dump  # the one-shot dumper's exit is not a sanitizer failure (P2-6)
     assert "/opt/slam_patched/bin/slam_graph_dump" in dump and 'ldd "$DUMPER"' in dump  # no apt-header build there
     job = (root / "deploy" / "slurm" / "slam_cost_replay.sbatch").read_text()
     assert '"${SLAM_IMAGE:-forklift/ros2-dev:jazzy}"' in job and "SLAM_PATCH_ENV" in job and "SLAM_IMAGE_KIND" in job

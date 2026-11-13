@@ -50,7 +50,7 @@ python3 -m forklift_ros.isaac_slam_bridge --ros-args \
 STATUS=$?
 # the libraries the slam_toolbox node really loaded (overlay or apt), read before it is stopped
 for p in $(pgrep -f "slam_toolbox_node|slam_toolbox/lib" 2>/dev/null); do
-  grep -oE "/[^ ]*(kartoSlamToolbox|toolbox_common|ceres|solver_plugins)[^ ]*\.so[^ ]*" "/proc/$p/maps" 2>/dev/null \
+  grep -oE "/[^ ]*(kartoSlamToolbox|toolbox_common|ceres|solver_plugin|_slam_toolbox)[^ ]*\.so[^ ]*" "/proc/$p/maps" 2>/dev/null \
     | sort -u | sed "s|^|$p |"
 done > "$OUT/slam_libs.txt"
 # the slam_toolbox this run asked for: image kind, loaded library, identification line and switches (design v3 2)
@@ -62,5 +62,18 @@ DUMP=$?
 echo "dump exit $DUMP" >> "$OUT/dump_run.log"
 # a requested graph dump that failed fails the run (it was only logged; design v2 4)
 [ "${5:-}" = graph ] && [ "$DUMP" != 0 ] && [ "$STATUS" = 0 ] && STATUS=6
+# ros2 launch takes SIGTERM (a background job of this shell ignores SIGINT) and stops the node with SIGINT, so the
+# node exits through its destructors, where a trace writes its tail
 kill $SLAM 2>/dev/null; wait $SLAM 2>/dev/null
+# a patched node that ended itself (abort or refusal) fails the run even after a clean bridge, and a trace must end
+# with its end record: one without it lost its tail (Codex code review 2 P2-5; docs/design/2026-11-13-slam-patch-build.md 2)
+if grep -qE "forklift_slam_patch (abort|refused)" "$OUT/slam_toolbox.log"; then
+  echo "slam_toolbox ended itself: $(grep -m1 -E 'forklift_slam_patch (abort|refused)' "$OUT/slam_toolbox.log")" \
+    >> "$OUT/exit_check.log"
+  [ "$STATUS" = 0 ] && STATUS=9
+fi
+if [ -n "${FORKLIFT_SLAM_TRACE:-}" ] && ! tail -n 1 "$FORKLIFT_SLAM_TRACE" 2>/dev/null | grep -q '"kind":"end"'; then
+  echo "trace $FORKLIFT_SLAM_TRACE does not end with its end record" >> "$OUT/exit_check.log"
+  [ "$STATUS" = 0 ] && STATUS=9
+fi
 exit $STATUS

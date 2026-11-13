@@ -8,18 +8,46 @@ import pytest
 
 from tools import slam_patch_check as pc
 
-APT = "/opt/ros/jazzy/lib/libkartoSlamToolbox.so"
-OVL = "/opt/slam_patched/install/slam_toolbox/lib/libkartoSlamToolbox.so"
+APT_DIR, OVL_DIR = "/opt/ros/jazzy/lib/", "/opt/slam_patched/install/slam_toolbox/lib/"
+NAMES = ("libkartoSlamToolbox.so", "libtoolbox_common.so", "libceres_solver_plugin.so")
+APT_ALL = tuple(APT_DIR + n for n in NAMES)
+OVL_ALL = tuple(OVL_DIR + n for n in NAMES)
+APT, OVL = APT_ALL[0], OVL_ALL[0]
 IDENT = ("[sync_slam_toolbox_node-1] forklift_slam_patch series=1a2b3c4d trace=1 cwm_s=600 delete_s=0 s1=0 "
          "s1_buffer=10")
 
 
 def libs(*paths):
-    return "".join(f"123 {p}\n" for p in paths)
+    """The node's maps: APT or OVL stands for all three slam_toolbox libraries from that place."""
+    full = []
+    for p in paths:
+        full += APT_ALL if p == APT else OVL_ALL if p == OVL else (p,)
+    return "".join(f"123 {p}\n" for p in full)
 
 
 def test_the_deployed_image_runs_apt_libraries_and_prints_no_identification():
-    assert pc.check(kind="", series=None, libs=libs(APT, "/opt/ros/jazzy/lib/libtoolbox_common.so"), log="", env={}) == []
+    assert pc.check(kind="", series=None, libs=libs(APT, "/usr/lib/x86_64-linux-gnu/libceres.so.4"), log="",
+                    env={}) == []  # the system Ceres library is neither apt slam_toolbox nor the overlay
+
+
+def test_every_slam_toolbox_library_must_come_from_the_asked_build():
+    # karto from the overlay but toolbox_common or the solver plugin from apt: a mixed load (Codex review 2 P2-4)
+    for i in (1, 2):
+        mixed = "".join(f"1 {p}\n" for p in OVL_ALL[:i] + (APT_ALL[i],) + OVL_ALL[i + 1:])
+        assert any("apt" in p for p in pc.check(kind="u0", series="none", libs=mixed, log="", env={}))
+    node = "".join(f"1 {p}\n" for p in OVL_ALL) + f"1 {APT_DIR}libsync_slam_toolbox.so\n"
+    assert any("libsync_slam_toolbox" in p for p in pc.check(kind="u0", series="none", libs=node, log="", env={}))
+    assert pc.check(kind="u0", series="none", libs=node.replace(APT_DIR, OVL_DIR), log="", env={}) == []
+    missing = "".join(f"1 {p}\n" for p in OVL_ALL[:2])
+    assert any("libceres_solver_plugin" in p for p in pc.check(kind="u0", series="none", libs=missing, log="", env={}))
+
+
+def test_an_unknown_forklift_switch_is_refused():
+    env = {"FORKLIFT_SLAM_TRACE": "/out/trace.jsonl", "FORKLIFT_SLAM_CWM_S": "600", "FORKLIFT_SLAM_DELET_OLDER_S": "60"}
+    problems = pc.check(kind="patched", series="1a2b3c4d", libs=libs(OVL), log=IDENT, env=env)
+    assert any("unknown switch FORKLIFT_SLAM_DELET_OLDER_S" in p for p in problems)
+    assert any("unknown switch" in p for p in pc.check(kind="", series=None, libs=libs(APT), log="",
+                                                       env={"FORKLIFT_SLAM_CWM": "600"}))
 
 
 def test_a_source_image_must_load_its_overlay_and_match_its_kind():

@@ -4,8 +4,11 @@
 Run inside the replay container after the bridge returns (tools/slam_cost_container.sh):
 - the image kind (SLAM_IMAGE_KIND: '' the deployed apt image, 'u0' the unpatched source build, 'patched') against the
   image's build record (/opt/slam_patched/series: 'none' for U0, the series id for a patch image);
-- the libkartoSlamToolbox the node really loaded (slam_libs.txt, from /proc/<pid>/maps): apt for the deployed image,
-  the overlay for a source image, never both;
+- the slam_toolbox libraries the node really loaded (slam_libs.txt, from /proc/<pid>/maps): libkartoSlamToolbox,
+  libtoolbox_common and the Ceres solver plugin must be there, and they and the node's lib<mode>_slam_toolbox each come
+  from apt for the deployed image and from the overlay for a source image, never both (Codex code review 2 P2-4: karto alone would miss a mixed load);
+- no FORKLIFT_SLAM_* name in this environment that the patch does not read (P2-3: a misspelt switch is refused rather
+  than run as P0 under the arm's name);
 - the patch identification line in the node's log: none from apt or U0; from a patch image exactly one, its series the
   image's and its switches those the replay passed (FORKLIFT_SLAM_* in this environment) -- a misspelt switch would
   otherwise run an arm under another's name.
@@ -26,7 +29,19 @@ from pathlib import Path
 
 APT_PREFIX = "/opt/ros/jazzy/"
 OVERLAY_PREFIX = "/opt/slam_patched/"
+LIBRARIES = ("libkartoSlamToolbox", "libtoolbox_common", "libceres_solver_plugin")
+SWITCHES = ("FORKLIFT_SLAM_TRACE", "FORKLIFT_SLAM_CWM_S", "FORKLIFT_SLAM_DELETE_OLDER_S", "FORKLIFT_SLAM_S1",
+            "FORKLIFT_SLAM_S1_BUFFER")
 IDENT = re.compile(r"forklift_slam_patch series=(\S+) trace=(\d) cwm_s=(\S+) delete_s=(\S+) s1=(\d) s1_buffer=(\d+)")
+
+
+def _name(path: str) -> str:
+    return path.rsplit("/", 1)[-1]
+
+
+def _ours(name: str) -> bool:
+    return any(name.startswith(library + ".so") for library in LIBRARIES) or bool(
+        re.match(r"lib\w*_slam_toolbox\.so", name))
 
 
 def _wanted(env: dict) -> dict:
@@ -47,10 +62,15 @@ def check(*, kind: str, series: str | None, libs: str, log: str, env: dict) -> l
         problems.append(f"kind u0 but the image's series is {series!r}")
     if kind == "patched" and (series is None or series == "none"):
         problems.append(f"kind patched but the image's series is {series!r}")
-    karto = sorted({line.split()[-1] for line in libs.splitlines() if "libkartoSlamToolbox" in line})
-    if not karto:
-        problems.append("no libkartoSlamToolbox in the node's maps")
-    for path in karto:
+    unknown = sorted(k for k in env if k.startswith("FORKLIFT_SLAM_") and k not in SWITCHES)
+    if unknown:
+        problems.append(f"unknown switch {', '.join(unknown)} (known: {', '.join(SWITCHES)})")
+    paths = sorted({line.split()[-1] for line in libs.splitlines() if line.strip()})
+    for library in LIBRARIES:
+        if not any(_name(p).startswith(library + ".so") for p in paths):
+            problems.append(f"no {library} in the node's maps")
+    # the three above and the node's own lib<mode>_slam_toolbox; the system Ceres library is neither build's
+    for path in (p for p in paths if _ours(_name(p))):
         if kind == "" and not path.startswith(APT_PREFIX):
             problems.append(f"deployed image loaded a non-apt {path}")
         if kind in ("u0", "patched") and not path.startswith(OVERLAY_PREFIX):

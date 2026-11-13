@@ -33,4 +33,9 @@ p = yaml.safe_load(open(sys.argv[1]))["/slam_toolbox"]["ros__parameters"]
 print(p["resolution"], p["min_pass_through"], p["occupancy_threshold"])
 PY
 )
-"$DUMPER" "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5
+# The dumper is a one-shot reader: karto's Mapper, Dataset and the sensor registry share ownership of the scans and
+# lasers it loads, so it frees only its grid and leaves the rest to the process exit. Under an AddressSanitizer build
+# (Dockerfile.slam_patched SANITIZE=address) the leak check would report that exit as a failure; it is off for the
+# dumper alone, and every other sanitizer check stays on (Codex code review 2 P2-6).
+ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0" \
+  "$DUMPER" "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5

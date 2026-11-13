@@ -1,4 +1,4 @@
-From 8a29985703b5018d76bfec65c4d838de68da50c0 Mon Sep 17 00:00:00 2001
+From 0f653475ff6bc75ed363ed3af5bd5d65f49699ec Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 17:06:30 +0900
 Subject: [PATCH 2/3] forklift: C-WM loop candidate window, feature switches
@@ -109,7 +109,7 @@ index dfc841b..1d11222 100644
  bool tracing();
  
 diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
-index 5bb1809..37580b8 100644
+index 24cbc14..e691233 100644
 --- a/lib/karto_sdk/src/ForkliftPatch.cpp
 +++ b/lib/karto_sdk/src/ForkliftPatch.cpp
 @@ -4,6 +4,7 @@
@@ -120,7 +120,7 @@ index 5bb1809..37580b8 100644
  #include <cstdio>
  #include <cstdlib>
  #include <sstream>
-@@ -101,6 +102,38 @@ const Config & config()
+@@ -106,6 +107,38 @@ const Config & config()
        if (trace != nullptr) {
          c.trace = trace;
        }
@@ -159,13 +159,13 @@ index 5bb1809..37580b8 100644
        // at exit the buffered lines are written by TraceState's destructor alone: TraceState is created after this
        // configuration, so it is destroyed before it
        return c;
-@@ -113,12 +146,27 @@ void announce()
+@@ -118,12 +151,27 @@ void announce()
    static std::once_flag once;
    std::call_once(once, [] {
        const Config & c = config();
 -      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d\n", FORKLIFT_SLAM_PATCH_SERIES,
 -      c.trace.empty() ? 0 : 1);
-+      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d cwm_s=%g delete_s=%g s1=%d s1_buffer=%d\n",
++      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d cwm_s=%.17g delete_s=%.17g s1=%d s1_buffer=%d\n",
 +      FORKLIFT_SLAM_PATCH_SERIES, c.trace.empty() ? 0 : 1, c.cwm_s, c.delete_s, c.s1 ? 1 : 0, c.s1_buffer);
 +      const int features = (c.cwm_s > 0.0) + (c.delete_s > 0.0) + (c.s1 ? 1 : 0);
 +      if (features > 1) {

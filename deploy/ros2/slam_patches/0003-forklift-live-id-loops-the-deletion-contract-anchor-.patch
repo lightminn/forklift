@@ -1,4 +1,4 @@
-From 4828d98f74bbcacba43db6cdfd16ca54c94a821d Mon Sep 17 00:00:00 2001
+From c294aa2b19cfd849b3a298ae8c229e4396123acf Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 17:16:44 +0900
 Subject: [PATCH 3/3] forklift: live-id loops, the deletion contract, anchor by
@@ -13,19 +13,22 @@ it up when used; when the fixed node is deleted the oldest live node becomes fix
 solver's current value. C: after each processed keyframe the nodes older than
 FORKLIFT_SLAM_DELETE_OLDER_S sim seconds are deleted in id order, sparing the running
 scans, the last scan and the new scan. All of it is off unless a deleting feature is on.
-gtests: C's victims, the id bound, the new anchor.
+When deleting, the id loops step over live ids by map lookup (lower/upper_bound), so their cost follows the
+live nodes rather than every id ever made. The dataset remover is registered only with a deleting feature on and
+has one owner: a second node in one process is refused (exit 3), and clearing works only for the owner.
+gtests: C's victims, the id bound, the live-id steps, the one-owner remover, the new anchor.
 ---
- .../include/karto_sdk/ForkliftPatch.h         | 53 ++++++++++++++
- lib/karto_sdk/src/ForkliftPatch.cpp           | 39 +++++++++-
- lib/karto_sdk/src/Mapper.cpp                  | 73 +++++++++++++++++++
- solvers/ceres_solver.cpp                      | 35 +++++++++
- solvers/ceres_solver.hpp                      |  3 +
- src/slam_toolbox_common.cpp                   | 10 +++
- test/forklift_patch_test.cpp                  | 34 +++++++++
- 7 files changed, 243 insertions(+), 4 deletions(-)
+ .../include/karto_sdk/ForkliftPatch.h         |  82 ++++++++++++++
+ lib/karto_sdk/src/ForkliftPatch.cpp           |  60 ++++++++++-
+ lib/karto_sdk/src/Mapper.cpp                  | 101 +++++++++++++++++-
+ solvers/ceres_solver.cpp                      |  35 ++++++
+ solvers/ceres_solver.hpp                      |   3 +
+ src/slam_toolbox_common.cpp                   |  14 +++
+ test/forklift_patch_test.cpp                  | 101 ++++++++++++++++++
+ 7 files changed, 387 insertions(+), 9 deletions(-)
 
 diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
-index 1d11222..36b02c0 100644
+index 1d11222..e47bfe0 100644
 --- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 +++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 @@ -11,6 +11,7 @@
@@ -54,13 +57,15 @@ index 1d11222..36b02c0 100644
  };
  
  // The configuration, read from the environment on first use (thread-safe).
-@@ -66,6 +71,54 @@ long window_start(long n, double threshold, TimeOf time_of)
+@@ -66,6 +71,83 @@ long window_start(long n, double threshold, TimeOf time_of)
    return lo;
  }
  
 +// The scan store's owner (SlamToolbox's dataset_) frees a deleted scan: it registers here, the deletion calls it
-+// (design v3 3.3, the lifelong order). Deleting with no owner registered ends the node.
-+void set_dataset_remover(std::function<void(LocalizedRangeScan *)> remover);
++// (design v3 3.3, the lifelong order). Deleting with no owner registered ends the node. The slot has one owner at a
++// time: a second owner registering ends the node, and clearing takes effect only for the owner that registered.
++void set_dataset_remover(const void * owner, std::function<void(LocalizedRangeScan *)> remover);
++void clear_dataset_remover(const void * owner);
 +void remove_from_dataset(LocalizedRangeScan * scan);
 +
 +// The id bound for a loop over state ids once ids can have holes: one past the largest live id (size() would leave
@@ -69,6 +74,33 @@ index 1d11222..36b02c0 100644
 +long live_id_end(const ScanMap & scans)
 +{
 +  return scans.empty() ? 0 : static_cast<long>(scans.rbegin()->first) + 1;
++}
++
++// Stepping a state id loop over the live ids only once ids can have holes (Codex code review 2 P2-1): a numeric step
++// would walk every deleted id since 0, so a loop's cost would grow with the ids ever made rather than the live ones.
++// at_or_after: the first live id >= id, else end. next: the first live id > id, else end. prev: the last live id < id,
++// else -1. Each is one map lookup.
++template<class ScanMap>
++long live_id_at_or_after(const ScanMap & scans, long id, long end)
++{
++  auto it = scans.lower_bound(static_cast<int>(id));
++  return it == scans.end() ? end : static_cast<long>(it->first);
++}
++template<class ScanMap>
++long live_id_next(const ScanMap & scans, long id, long end)
++{
++  auto it = scans.upper_bound(static_cast<int>(id));
++  return it == scans.end() ? end : static_cast<long>(it->first);
++}
++template<class ScanMap>
++long live_id_prev(const ScanMap & scans, long id)
++{
++  auto it = scans.lower_bound(static_cast<int>(id));
++  if (it == scans.begin()) {
++    return -1;
++  }
++  --it;
++  return static_cast<long>(it->first);
 +}
 +
 +// C's victims: in state id order (time nondecreasing), the ids older than the threshold, stopping at the first that
@@ -110,10 +142,10 @@ index 1d11222..36b02c0 100644
  bool tracing();
  
 diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
-index 37580b8..3b95269 100644
+index e691233..3fc93a0 100644
 --- a/lib/karto_sdk/src/ForkliftPatch.cpp
 +++ b/lib/karto_sdk/src/ForkliftPatch.cpp
-@@ -126,10 +126,6 @@ const Config & config()
+@@ -131,10 +131,6 @@ const Config & config()
        c.s1_buffer = static_cast<int>(buffer);
        // a feature this series does not build is refused, never run as P0 under its name (Codex patch review P2-8);
        // each later patch lifts its own line
@@ -124,7 +156,7 @@ index 37580b8..3b95269 100644
        if (c.s1) {
          std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1 is not built in this series\n");
          std::exit(3);
-@@ -158,6 +154,41 @@ void announce()
+@@ -163,6 +159,62 @@ void announce()
      });
  }
  
@@ -140,12 +172,33 @@ index 37580b8..3b95269 100644
 +  static std::function<void(LocalizedRangeScan *)> f;
 +  return f;
 +}
++const void * & remover_owner()
++{
++  static const void * owner = nullptr;
++  return owner;
++}
 +}  // namespace
 +
-+void set_dataset_remover(std::function<void(LocalizedRangeScan *)> remover)
++void set_dataset_remover(const void * owner, std::function<void(LocalizedRangeScan *)> remover)
 +{
 +  std::lock_guard<std::mutex> lock(remover_mutex());
++  if (remover_owner() != nullptr && remover_owner() != owner) {
++    std::fprintf(stderr, "forklift_slam_patch refused: a second slam_toolbox node in one process with a deleting "
++      "feature on\n");
++    std::fflush(stderr);
++    std::exit(3);
++  }
++  remover_owner() = owner;
 +  remover_slot() = std::move(remover);
++}
++
++void clear_dataset_remover(const void * owner)
++{
++  std::lock_guard<std::mutex> lock(remover_mutex());
++  if (remover_owner() == owner) {
++    remover_owner() = nullptr;
++    remover_slot() = nullptr;
++  }
 +}
 +
 +void remove_from_dataset(LocalizedRangeScan * scan)
@@ -167,21 +220,46 @@ index 37580b8..3b95269 100644
  {
    if (config().any_feature()) {
 diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
-index 805930c..df79001 100644
+index 805930c..96ebea5 100644
 --- a/lib/karto_sdk/src/Mapper.cpp
 +++ b/lib/karto_sdk/src/Mapper.cpp
-@@ -1769,6 +1769,10 @@ std::vector<LocalizedRangeScanVector> MapperGraph::FindNearChains(LocalizedRange
+@@ -1731,8 +1731,15 @@ std::vector<LocalizedRangeScanVector> MapperGraph::FindNearChains(LocalizedRange
+     std::list<LocalizedRangeScan *> chain;
+ 
+     // add scans before current scan being processed
+-    for (kt_int32s candidateScanNum = pNearScan->GetStateId() - 1; candidateScanNum >= 0;
+-      candidateScanNum--)
++    const bool forkliftLive = forklift::config().deleting();  // step over live ids only (Codex review 2 P2-1)
++    const LocalizedRangeScanMap & forkliftScans =
++      m_pMapper->m_pMapperSensorManager->GetScans(pNearScan->GetSensorName());
++    for (kt_int32s candidateScanNum = forkliftLive ?
++      static_cast<kt_int32s>(forklift::live_id_prev(forkliftScans, pNearScan->GetStateId())) :
++      pNearScan->GetStateId() - 1;
++      candidateScanNum >= 0;
++      candidateScanNum = forkliftLive ?
++      static_cast<kt_int32s>(forklift::live_id_prev(forkliftScans, candidateScanNum)) : candidateScanNum - 1)
+     {
+       LocalizedRangeScan * pCandidateScan = m_pMapper->m_pMapperSensorManager->GetScan(
+         pNearScan->GetSensorName(),
+@@ -1769,8 +1776,15 @@ std::vector<LocalizedRangeScanVector> MapperGraph::FindNearChains(LocalizedRange
      kt_int32u end =
        static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(
          pNearScan->GetSensorName()).size());
-+    if (forklift::config().deleting()) {  // holes in the ids (design v3 3.3)
-+      end = static_cast<kt_int32u>(forklift::live_id_end(
-+          m_pMapper->m_pMapperSensorManager->GetScans(pNearScan->GetSensorName())));
+-    for (kt_int32u candidateScanNum = pNearScan->GetStateId() + 1; candidateScanNum < end;
+-      candidateScanNum++)
++    if (forkliftLive) {  // holes in the ids (design v3 3.3)
++      end = static_cast<kt_int32u>(forklift::live_id_end(forkliftScans));
 +    }
-     for (kt_int32u candidateScanNum = pNearScan->GetStateId() + 1; candidateScanNum < end;
-       candidateScanNum++)
++    for (kt_int32u candidateScanNum = forkliftLive ?
++      static_cast<kt_int32u>(forklift::live_id_next(forkliftScans, pNearScan->GetStateId(), end)) :
++      pNearScan->GetStateId() + 1;
++      candidateScanNum < end;
++      candidateScanNum = forkliftLive ?
++      static_cast<kt_int32u>(forklift::live_id_next(forkliftScans, candidateScanNum, end)) : candidateScanNum + 1)
      {
-@@ -1998,6 +2002,10 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+       LocalizedRangeScan * pCandidateScan = m_pMapper->m_pMapperSensorManager->GetScan(
+         pNearScan->GetSensorName(),
+@@ -1998,6 +2012,10 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
  
    kt_int32u nScans =
      static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(rSensorName).size());
@@ -192,7 +270,24 @@ index 805930c..df79001 100644
    // C-WM (forklift design v3 3.2): loop candidates only from the scans of the last T sim seconds
    const double cwm_s = forklift::config().cwm_s;
    if (cwm_s > 0.0) {
-@@ -2768,6 +2776,70 @@ kt_bool Mapper::Process(Object *  /*pObject*/)  // NOLINT
+@@ -2021,7 +2039,15 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+       rStartNum = static_cast<kt_int32u>(start);
+     }
+   }
+-  for (; rStartNum < nScans; rStartNum++) {
++  const bool forkliftLive = forklift::config().deleting();  // step over live ids only (Codex review 2 P2-1)
++  const LocalizedRangeScanMap & forkliftScans = m_pMapper->m_pMapperSensorManager->GetScans(rSensorName);
++  if (forkliftLive) {
++    rStartNum = static_cast<kt_int32u>(forklift::live_id_at_or_after(forkliftScans, rStartNum, nScans));
++  }
++  for (; rStartNum < nScans;
++    rStartNum = forkliftLive ?
++    static_cast<kt_int32u>(forklift::live_id_next(forkliftScans, rStartNum, nScans)) : rStartNum + 1)
++  {
+     forklift::add_count("loop_ids_visited", 1);
+     LocalizedRangeScan * pCandidateScan = m_pMapper->m_pMapperSensorManager->GetScan(rSensorName,
+         rStartNum);
+@@ -2768,6 +2794,70 @@ kt_bool Mapper::Process(Object *  /*pObject*/)  // NOLINT
    return true;
  }
  
@@ -263,7 +358,7 @@ index 805930c..df79001 100644
  kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
  {
    if (pScan != NULL) {
-@@ -2839,6 +2911,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+@@ -2839,6 +2929,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
      }
  
      m_pMapperSensorManager->SetLastScan(pScan);
@@ -360,45 +455,49 @@ index e752ab9..a3010ea 100644
  
    // ros
 diff --git a/src/slam_toolbox_common.cpp b/src/slam_toolbox_common.cpp
-index 7fcd17a..78764a5 100644
+index 7fcd17a..c01d462 100644
 --- a/src/slam_toolbox_common.cpp
 +++ b/src/slam_toolbox_common.cpp
-@@ -106,6 +106,14 @@ CallbackReturn SlamToolbox::on_configure(const rclcpp_lifecycle::State &)
+@@ -106,6 +106,18 @@ CallbackReturn SlamToolbox::on_configure(const rclcpp_lifecycle::State &)
    process_near_pose_ = nullptr;
    smapper_ = std::make_unique<mapper_utils::SMapper>();
    dataset_ = std::make_unique<Dataset>();
-+  // the dataset owns the scans: a node the forklift patch deletes is freed here (design v3 3.3)
-+  karto::forklift::set_dataset_remover([this](LocalizedRangeScan * scan) {
-+      if (!dataset_) {
-+        std::fprintf(stderr, "forklift_slam_patch abort: delete with no dataset\n");
-+        std::abort();
-+      }
-+      dataset_->RemoveData(scan);
-+    });
++  // the dataset owns the scans: a node the forklift patch deletes is freed here (design v3 3.3). Only a run with a
++  // deleting feature registers, and the slot has one owner: a second node in the same process is refused rather than
++  // have one node's deletion free another's scans (Codex code review 2 P2-2).
++  if (karto::forklift::config().deleting()) {
++    karto::forklift::set_dataset_remover(this, [this](LocalizedRangeScan * scan) {
++        if (!dataset_) {
++          std::fprintf(stderr, "forklift_slam_patch abort: delete with no dataset\n");
++          std::abort();
++        }
++        dataset_->RemoveData(scan);
++      });
++  }
  
    setParams();
    setSolver();
-@@ -211,6 +219,7 @@ CallbackReturn SlamToolbox::on_cleanup(const rclcpp_lifecycle::State &)
+@@ -211,6 +223,7 @@ CallbackReturn SlamToolbox::on_cleanup(const rclcpp_lifecycle::State &)
  /*****************************************************************************/
  {
    RCLCPP_INFO(get_logger(), "Cleaning up");
-+  karto::forklift::set_dataset_remover(nullptr);
++  karto::forklift::clear_dataset_remover(this);
    closure_assistant_.reset();
    smapper_.reset();
    dataset_.reset();
-@@ -248,6 +257,7 @@ SlamToolbox::~SlamToolbox()
+@@ -248,6 +261,7 @@ SlamToolbox::~SlamToolbox()
    }
    threads_.clear();
  
-+  karto::forklift::set_dataset_remover(nullptr);
++  karto::forklift::clear_dataset_remover(this);
    smapper_.reset();
    dataset_.reset();
    closure_assistant_.reset();
 diff --git a/test/forklift_patch_test.cpp b/test/forklift_patch_test.cpp
-index f0347a2..fa89cbb 100644
+index f0347a2..8f1eba6 100644
 --- a/test/forklift_patch_test.cpp
 +++ b/test/forklift_patch_test.cpp
-@@ -68,3 +68,37 @@ TEST(forklift_cwm_window, repeated_calls_only_move_the_start_forward)
+@@ -68,3 +68,104 @@ TEST(forklift_cwm_window, repeated_calls_only_move_the_start_forward)
    if (static_cast<unsigned>(start(t, 3.0)) > r) {r = 0;}
    EXPECT_EQ(r, 5u);
  }
@@ -426,6 +525,45 @@ index f0347a2..fa89cbb 100644
 +  EXPECT_EQ(karto::forklift::live_id_end(scans), 8);
 +}
 +
++TEST(forklift_delete, live_id_steps_skip_the_holes_with_one_lookup_each)
++{
++  std::map<int, int *> scans;
++  EXPECT_EQ(karto::forklift::live_id_at_or_after(scans, 0, 5), 5);
++  EXPECT_EQ(karto::forklift::live_id_prev(scans, 3), -1);
++  for (int id : {4, 5, 9, 12}) {scans[id] = nullptr;}   // 0..3, 6..8, 10, 11 deleted
++  const long end = karto::forklift::live_id_end(scans);
++  EXPECT_EQ(end, 13);
++  EXPECT_EQ(karto::forklift::live_id_at_or_after(scans, 0, end), 4);
++  EXPECT_EQ(karto::forklift::live_id_at_or_after(scans, 5, end), 5);
++  EXPECT_EQ(karto::forklift::live_id_next(scans, 5, end), 9);
++  EXPECT_EQ(karto::forklift::live_id_next(scans, 12, end), 13);
++  EXPECT_EQ(karto::forklift::live_id_prev(scans, 9), 5);
++  EXPECT_EQ(karto::forklift::live_id_prev(scans, 4), -1);
++  // a forward walk visits the live ids and nothing else
++  std::vector<long> seen;
++  for (long id = karto::forklift::live_id_at_or_after(scans, 0, end); id < end;
++    id = karto::forklift::live_id_next(scans, id, end)) {seen.push_back(id);}
++  EXPECT_EQ(seen, (std::vector<long>{4, 5, 9, 12}));
++  seen.clear();
++  for (long id = karto::forklift::live_id_prev(scans, 12); id >= 0; id = karto::forklift::live_id_prev(scans, id)) {
++    seen.push_back(id);
++  }
++  EXPECT_EQ(seen, (std::vector<long>{9, 5, 4}));
++}
++
++TEST(forklift_delete, the_dataset_remover_has_one_owner)
++{
++  int a = 0, b = 0, calls = 0;
++  karto::forklift::set_dataset_remover(&a, [&](karto::LocalizedRangeScan *) {calls++;});
++  karto::forklift::clear_dataset_remover(&b);           // not the owner: no effect
++  karto::forklift::remove_from_dataset(nullptr);
++  EXPECT_EQ(calls, 1);
++  EXPECT_EXIT(karto::forklift::set_dataset_remover(&b, [](karto::LocalizedRangeScan *) {}),
++    ::testing::ExitedWithCode(3), "second slam_toolbox node");
++  karto::forklift::clear_dataset_remover(&a);
++  EXPECT_DEATH(karto::forklift::remove_from_dataset(nullptr), "no dataset owner");
++}
++
 +TEST(forklift_anchor, the_new_anchor_is_the_oldest_live_node_even_after_a_rehash)
 +{
 +  std::unordered_map<int, double> nodes;
@@ -435,6 +573,34 @@ index f0347a2..fa89cbb 100644
 +  EXPECT_EQ(karto::forklift::oldest_id(nodes), 11);
 +  nodes.erase(11); nodes.erase(12);
 +  EXPECT_EQ(karto::forklift::oldest_id(nodes), 13);
++}
++
++#include <cstdlib>
++#include <fstream>
++#include <string>
++
++TEST(forklift_trace, a_trace_ends_with_its_end_record_at_exit)
++{
++  // a fresh process (threadsafe death tests re-run the binary), so the configuration reads this trace path
++  ::testing::FLAGS_gtest_death_test_style = "threadsafe";
++  const std::string path = ::testing::TempDir() + "forklift_trace_end.jsonl";
++  std::remove(path.c_str());
++  EXPECT_EXIT(
++  {
++    setenv("FORKLIFT_SLAM_TRACE", path.c_str(), 1);
++    karto::forklift::begin_scan();
++    karto::forklift::add_time("scan_match", 0.5);
++    karto::forklift::end_scan(true, 7, 1.25, 0.0);
++    std::exit(0);
++  }, ::testing::ExitedWithCode(0), "");
++  std::ifstream in(path);
++  std::string line, last, first;
++  while (std::getline(in, line)) {
++    if (first.empty()) {first = line;}
++    last = line;
++  }
++  EXPECT_NE(first.find("\"state_id\":7"), std::string::npos);
++  EXPECT_EQ(last, "{\"kind\":\"end\",\"flushes\":1}");
 +}
 -- 
 2.56.0
