@@ -14,6 +14,8 @@ ARG PATCHES=all
 ARG SLAM_SOURCE=github
 ARG SANITIZE=
 ARG SLAM_COMMIT=ec8f7635dea317b531c419f798f87d90a336f32e
+# compile jobs: docker build runs outside the Slurm job's cgroup, so the job's CPU count is passed in
+ARG JOBS=8
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 USER root
 
@@ -57,7 +59,8 @@ RUN set -eux; \
     cd /opt/slam_patched; \
     extra=(); \
     if [[ "${SANITIZE}" == address ]]; then extra=(-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address); fi; \
-    colcon build --base-paths src --build-base build --install-base install --event-handlers console_direct+ \
+    MAKEFLAGS="-j${JOBS}" colcon build --parallel-workers 1 --base-paths src --build-base build --install-base install \
+        --event-handlers console_direct+ \
         --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "-DFORKLIFT_SLAM_PATCH_SERIES=$(cat series)" "${extra[@]}" \
         2>&1 | tee build.log; \
     cp build/slam_toolbox/compile_commands.json /opt/slam_patched/compile_commands.json; \

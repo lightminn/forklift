@@ -24,13 +24,14 @@ cp "$ROOT/tools/slam_graph_dump.cpp" "$CTX/tools/"
 SERIES=$(cat "$ROOT"/deploy/ros2/slam_patches/*.patch 2>/dev/null | sha256sum | cut -c1-8)
 build() {  # kind patches tag
   docker build -f "$ROOT/deploy/ros2/Dockerfile.slam_patched" --build-arg PATCHES="$2" \
-    --build-arg SLAM_SOURCE="${SLAM_SOURCE:-github}" --build-arg SANITIZE="$SANITIZE" -t "$3" "$CTX" \
+    --build-arg SLAM_SOURCE="${SLAM_SOURCE:-github}" --build-arg SANITIZE="$SANITIZE" \
+    --build-arg JOBS="${SLURM_CPUS_PER_TASK:-8}" -t "$3" "$CTX" \
     > "$OUT/build_$1.log" 2>&1
   docker image inspect -f '{{.Id}}' "$3" > "$OUT/image_$1.txt"
   docker run --rm "$3" bash -c 'cat /opt/slam_patched/series /opt/slam_patched/toolchain.txt /opt/slam_patched/source_log.txt' \
     > "$OUT/meta_$1.txt"
   docker run --rm "$3" cat /opt/slam_patched/compile_commands.json > "$OUT/compile_commands_$1.json"
-  echo "$1 $3 $(cat "$OUT/image_$1.txt")"
+  echo "$1 $3 $(cat "$OUT/image_$1.txt") $(date -Is)" | tee -a "$OUT/built.txt"
 }
 SUFFIX=${SANITIZE:+-$SANITIZE}
 [ "$WHICH" = u0 ] || [ "$WHICH" = both ] && build u0 none "forklift/ros2-slam:jazzy-2.8.5-u0$SUFFIX"
