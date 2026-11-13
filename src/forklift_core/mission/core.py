@@ -828,12 +828,13 @@ class MissionCore:
                 return True
             if ms.phase == "transport":
                 sc_ = slam.get("transport_scenario", scenario) if slam is not None else scenario
-                live = hooks.plan_transport_leg(grid_world(sc_), start, planner_config, geometry=geometry,
-                                                travel_config=travel_config, **grid_kwargs(None))
+                lcfg_, ltravel_ = self.loaded_planner_configs()  # loaded curvature rule (the run's own when off)
+                live = hooks.plan_transport_leg(grid_world(sc_), start, lcfg_, geometry=geometry,
+                                                travel_config=ltravel_, **grid_kwargs(None))
                 if live.status in ("invalid_start", "no_path"):
-                    live = hooks.plan_transport_leg(grid_world(sc_), start, replace(planner_config, clearance_m=0.0),
+                    live = hooks.plan_transport_leg(grid_world(sc_), start, replace(lcfg_, clearance_m=0.0),
                                                     geometry=geometry,
-                                                    travel_config=replace(travel_config, clearance_m=0.0) if travel_config is not None else None,
+                                                    travel_config=replace(ltravel_, clearance_m=0.0) if ltravel_ is not None else None,
                                                     **grid_kwargs(None))
             else:
                 sc_ = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
@@ -1890,7 +1891,7 @@ class MissionCore:
                 **grid_kwargs("observe"),
             )
         elif ms.phase == "transport":
-            replanned = transport_replan(start, planner_config, travel_config)
+            replanned = transport_replan(start, *self.loaded_planner_configs())  # the loaded curvature rule
         else:
             back = scenario if slam is None else slam.get("return_scenario", slam.get("transport_scenario", scenario))
             replanned = plan_return_leg(
@@ -1940,7 +1941,7 @@ class MissionCore:
                     **grid_kwargs("observe"),
                 )
             elif ms.phase == "transport":
-                replanned = transport_replan(start, tight, tight_travel)
+                replanned = transport_replan(start, *self.loaded_tight_configs(tight, tight_travel))
             else:
                 replanned = plan_return_leg(
                     grid_world(back), start, return_to_pose, tight, geometry=geometry,
@@ -2011,7 +2012,7 @@ class MissionCore:
                 target_pickup=pocket["planning_pickup"], start_rear=start,
                 return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                 trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
-                **self._mission_backoff_kwargs(),
+                **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(),
             )
             mission_clearance_ = float(planner_config.clearance_m)
             if "invalid_start" in mission_again.status or "invalid_goal" in mission_again.status:
@@ -2024,7 +2025,7 @@ class MissionCore:
                     target_pickup=pocket["planning_pickup"], start_rear=start,
                     return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=tight_travel,
                     trace=planning_trace, **grid_kwargs("mission", pocket["planning_pickup"]),
-                    **self._mission_backoff_kwargs(),
+                    **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(tight=True),
                 )
             near_again = (
                 final_straight_prefix(mission_again.approach, geometry.alignment_straight_m)
@@ -2532,9 +2533,10 @@ class MissionCore:
                 start = PlanningPose(float(rear_now[0]), float(rear_now[1]), float(rear_now[2]))
             if ms.phase == "transport":
                 # After docking, the corrected drop (v3.8, Codex P1).
+                lcfg_, ltravel_ = self.loaded_planner_configs()  # loaded curvature rule (the run's own when off)
                 replanned = plan_transport_leg(
-                    grid_world(slam.get("transport_scenario", scenario)), start, planner_config,
-                    geometry=geometry, travel_config=travel_config,
+                    grid_world(slam.get("transport_scenario", scenario)), start, lcfg_,
+                    geometry=geometry, travel_config=ltravel_,
                     **grid_kwargs(None),
                 )
             else:
@@ -2690,14 +2692,15 @@ class MissionCore:
                     "transport_recovery_after_docking",
                 )
                 replan_start = wall()
+                lcfg_, ltravel_ = self.loaded_planner_configs()  # loaded curvature rule (the run's own when off)
                 replanned = plan_transport_leg(
                     grid_world(slam.get("transport_scenario", scenario)
                     if slam is not None
                     else scenario),
                     PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
-                    planner_config,
+                    lcfg_,
                     geometry=geometry,
-                    travel_config=travel_config,
+                    travel_config=ltravel_,
                     **grid_kwargs(None),
                 )
                 replan_wall_s = wall() - replan_start
@@ -4000,7 +4003,7 @@ class MissionCore:
             kwargs_ = dict(geometry=geometry, target_pickup=planning_pickup, start_rear=start_rear_pose,
                            return_to=return_to_pose, pickup_bounds=pickup_bounds, travel_config=travel_config,
                            trace=planning_trace, **grid_kwargs("mission", planning_pickup),
-                           **self._mission_backoff_kwargs(), **self._exit_prefix_kwargs())
+                           **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(), **self._exit_prefix_kwargs())
             self._request("observe", "plan_transport", {"args": (grid_world(scenario), planner_config),
                                                         "kwargs": kwargs_},
                           t, rear, self._applied_now(),
@@ -4023,6 +4026,7 @@ class MissionCore:
             trace=planning_trace,
             **grid_kwargs("mission", planning_pickup),
             **self._mission_backoff_kwargs(),
+            **self.loaded_mission_kwargs(),
         )
         near_leg = self._observe_install(plans, planning_trace, planning_start, attempt_number)
         return SimpleNamespace(stop=False, observation=observation, near_leg=near_leg)
@@ -7198,7 +7202,7 @@ class MissionCore:
             grid_world(slam.get("transport_scenario", scenario)),
             PlanningPose(*(float(v) for v in start_rear)),
             PlanningPose(*(float(v) for v in line)),
-            self.reapproach_planner_config(config if config is not None else planner_config),
+            self.reapproach_planner_config(config if config is not None else self.loaded_planner_configs()[0]),
             geometry=geometry,
             keep_m=geometry.delivery_straight_m,
             deadline=deadline_ if deadline_ is not None else SearchBudget(determinism.budget(20.0)),
@@ -8011,8 +8015,9 @@ class MissionCore:
                                       "return_scenario": return_scenario, "redo": False})
             return
         if leg == "transport":
+            lcfg_, ltravel_ = self.loaded_planner_configs()  # loaded curvature rule (the run's own when off)
             replanned = plan_transport_leg(
-                grid_world(scenario), start, planner_config, geometry=geometry, travel_config=travel_config,
+                grid_world(scenario), start, lcfg_, geometry=geometry, travel_config=ltravel_,
                 **grid_kwargs(None, own=after, applied=released_),
             )
         else:
@@ -8054,8 +8059,9 @@ class MissionCore:
             tight_cfg = replace(planner_config, clearance_m=0.0)
             tight_travel_cfg = replace(travel_config, clearance_m=0.0) if travel_config is not None else None
             if leg == "transport":
+                ltight_, ltight_travel_ = self.loaded_tight_configs(tight_cfg, tight_travel_cfg)
                 replanned = plan_transport_leg(
-                    grid_world(scenario), start, tight_cfg, geometry=geometry, travel_config=tight_travel_cfg,
+                    grid_world(scenario), start, ltight_, geometry=geometry, travel_config=ltight_travel_,
                     **grid_kwargs(None, own=after, applied=released_),
                 )
             else:
@@ -8194,11 +8200,40 @@ class MissionCore:
     ASYNC_FRESH_DEPTH_S = 2.0
     ASYNC_STAND_CONFIRM_S = 2.0  # how long a finished plan waits for the stop detector before it is dropped
 
+    def loaded_planner_configs(self):
+        """docs/plans/2026-11-14-loaded-curvature-rule.md 3: the (planner, travel) configs for a path driven loaded in
+        transport -- the rule's (curvature k x kappa_sat) with ``--loaded-curvature-rule``, the run's own objects
+        otherwise, so every call is as before."""
+        options = self.options
+        if getattr(options, "loaded_planner_config", None) is None:
+            return options.planner_config, getattr(options, "travel_config", None)
+        return options.loaded_planner_config, options.loaded_travel_config
+
+    def loaded_tight_configs(self, tight, tight_travel):
+        """The zero-clearance retry's configs for a loaded transport plan: the caller's own tight pair when the rule is
+        off, the rule's configs with no clearance otherwise."""
+        cfg, travel = self.loaded_planner_configs()
+        if cfg is self.options.planner_config:
+            return tight, tight_travel
+        return replace(cfg, clearance_m=0.0), (replace(travel, clearance_m=0.0) if travel is not None else None)
+
+    def loaded_mission_kwargs(self, tight: bool = False) -> dict:
+        """The mission planner's transport-stage config (plan_transport's ``transport_travel_config``) under the rule;
+        nothing when off, so the call is as before. The transport search uses the travel config (the planner config
+        when the run has none)."""
+        cfg, travel = self.loaded_planner_configs()
+        if cfg is self.options.planner_config:
+            return {}
+        chosen = travel if travel is not None else cfg
+        return {"transport_travel_config": replace(chosen, clearance_m=0.0) if tight else chosen}
+
     def _leg_payload(self, kind: str, scenario_, start, grid_kw: dict, *, retry_on, extra_kw=None) -> dict:
         """A ``leg`` job: the leg planner's call and its tight retry, as the tick would make them; ``extra_kw`` goes to
         both (the return-start backoff, plan 2026-10-27 R2)."""
         options = self.options
-        cfg, travel = options.planner_config, options.travel_config
+        # a transport leg is driven loaded: the loaded curvature rule's configs (the run's own when off)
+        cfg, travel = self.loaded_planner_configs() if kind == "transport" else (options.planner_config,
+                                                                                 options.travel_config)
         tight_cfg = replace(cfg, clearance_m=0.0)
         tight_travel = replace(travel, clearance_m=0.0) if travel is not None else None
         exit_kw = dict(extra_kw or {})
@@ -8904,7 +8939,9 @@ class MissionCore:
             return sc_
 
         def submit(extra, clearance_m):
-            cfg_, travel_ = options.planner_config, options.travel_config
+            # a transport replan is driven loaded: the loaded curvature rule's configs (the run's own when off)
+            cfg_, travel_ = (core.loaded_planner_configs() if ms.phase == "transport"
+                             else (options.planner_config, options.travel_config))
             if clearance_m is not None:
                 cfg_ = replace(cfg_, clearance_m=float(clearance_m))
                 travel_ = replace(travel_, clearance_m=float(clearance_m)) if travel_ is not None else None
