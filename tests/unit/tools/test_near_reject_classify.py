@@ -60,6 +60,19 @@ def test_the_arrival_history_and_the_median():
     assert N.median([1, 2, 3, 4]) == 2.5 and N.median([3, 1, 2]) == 2
 
 
+def test_a_loose_arrival_at_the_far_waypoint_is_not_counted():
+    r = result(None, candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}])
+    r["near_capture"]["far_attempt"] = 1
+    far = {"t_before_capture_s": 10.0, "capture_control": {"truth_rear": [0.0, 0.0, 0.0]}}
+    r["observation_attempts"] = [far] + r["observation_attempts"]
+    r["observation_attempts"][1]["t_before_capture_s"] = 20.0
+    r["observe_loose_arrivals"] = [{"time_s": 9.5, "position_error_m": 0.05, "yaw_error_rad": 0.05}]
+    assert N.classify("lbd_Pn_random_1_s10", r)["loose_arrival"] is False
+    r["observe_loose_arrivals"].append({"time_s": 19.0, "position_error_m": 0.06, "yaw_error_rad": -0.09})
+    c = N.classify("lbd_Pn_random_1_s10", r)
+    assert c["loose_arrival"] and c["loose_yaw_error_rad"] == -0.09
+
+
 def test_a_passing_run_is_not_labelled_and_scenes_parse():
     r = result(None, candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}])
     c = N.classify("lbg_B0_line_2_s0", r)

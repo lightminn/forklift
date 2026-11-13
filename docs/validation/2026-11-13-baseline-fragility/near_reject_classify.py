@@ -10,8 +10,8 @@ capture record:
 - the expected-site check of the last observation attempt: the expected site's distance from the true pallet centre,
   the nearest candidate's distance from the expected site (against radius_m) and from the true pallet centre (all in
   the truth base frame of that capture; the true centre is scenario.pickup);
-- how the near observation stand was reached: a loose arrival accepted (observe_loose_arrivals, with its position and
-  yaw error), a re-plan of the observe leg triggered by near_end_stand (observe_replans[].trigger) and the end-stand
+- how the near observation stand was reached: a loose arrival accepted on the near observation leg (observe_loose_arrivals
+  after the far capture began and up to the near capture, with its position and yaw error), a re-plan of the observe leg triggered by near_end_stand (observe_replans[].trigger) and the end-stand
   outcomes (observe_end_stands); result["near_end_stand"] itself is only the waiting state (since_s), not a re-plan;
   and the arrived estimate yaw minus the waypoint's yaw.
 A run that ended at the near capture is labelled: 'perception' (the expected site was within the radius of the true
@@ -84,9 +84,16 @@ def classify(name: str, result: dict) -> dict | None:
             out["candidate_vs_truth_min_m"] = min(math.hypot(c["centre_m"][0] - tp[0], c["centre_m"][1] - tp[1])
                                                   for c in cands)
     out["near_end_stand_waiting"] = bool(result.get("near_end_stand"))
+    # the near observation leg only: after the far capture began, up to the near capture (a loose arrival at the far
+    # waypoint is a different leg, Codex round 5 P2)
     cap_t = attempt.get("t_before_capture_s")
+    far_no = nc.get("far_attempt")
+    attempts = result["observation_attempts"]
+    far_t = (attempts[far_no - 1].get("t_before_capture_s")
+             if isinstance(far_no, int) and 0 < far_no <= len(attempts) else None)
     loose = [a for a in result.get("observe_loose_arrivals") or []
-             if cap_t is None or a.get("time_s", 0.0) <= cap_t + 1e-6]
+             if (far_t is None or a.get("time_s", 0.0) > far_t + 1e-6)
+             and (cap_t is None or a.get("time_s", 0.0) <= cap_t + 1e-6)]
     out["loose_arrival"] = bool(loose)
     if loose:
         out["loose_position_error_m"] = loose[-1].get("position_error_m")
