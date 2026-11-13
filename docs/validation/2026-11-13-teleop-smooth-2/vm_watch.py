@@ -90,8 +90,10 @@ def positive(row: dict) -> bool:
 
 
 def positive_times(row: dict) -> list:
-    """Each positive attempt's time: its own ws1 clock, or, cut off before the clock line, its laptop clock (within a
-    few seconds of ws1's in these records). Judged by these times, not the row's last attempt (Codex round 2 P2)."""
+    """Each positive attempt's time: its own ws1 clock, or, cut off before the clock line, its laptop clock. The laptop
+    clock is an approximation at a window's edge: t_ws1 - t_local was 1.4-3.6 s in these records, and that includes
+    the ssh connection, so it does not bound the clock offset (Codex round 3 P3). Judged by these times, not the row's
+    last attempt (Codex round 2 P2)."""
     out = []
     for t in row.get("tries", [row]):
         if _positive_try(t):
