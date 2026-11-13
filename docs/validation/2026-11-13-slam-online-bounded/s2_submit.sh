@@ -8,6 +8,7 @@
 #               map id 66a7f00f...), variant J, start -2.612,0,0 (a0's loc_j)
 #   h_1, h_2    H: deploy/slurm/slam_h_switch.sbatch (unit 0 mapped, then localized on its own bundle)
 #   h_mapq      H map measurement: KEEP_MAP_SUBSCRIPTION=1 (needs the bridge parameter, PR #477), cost not judged
+#   a_mapq      A map measurement (plan amendment 3): a_1 with KEEP_MAP_SUBSCRIPTION=1, cost not judged
 #   r0_mapq     R0 map measurement: the same replay again, its cost not judged (plan 4: a mapping bridge already keeps
 #               /map, so it is an R0 replay whose maps are read)
 #   bash s2_submit.sh SNAP OUT [FIRST_DEPENDENCY] [-- NAME ...]
@@ -38,6 +39,9 @@ for NAME in "${NAMES[@]}"; do
   [ -n "$prev" ] && DEPARG=(--dependency=afterany:"$prev")
   case $NAME in
     r0_*) JOB=(deploy/slurm/slam_cost_replay.sbatch "$OUT/$NAME" "$RUN" "$SETS" "${ARGS[@]}"); ENV=() ;;
+    a_mapq) JOB=(deploy/slurm/slam_cost_replay.sbatch "$OUT/$NAME" "$RUN" "$SETS" "${ARGS[@]}")
+         ENV=(SLAM_NODE=localization MAP_BUNDLE="$A_BUNDLE" MAP_ID="$A_ID" MAP_START_POSE="-2.612000,0.000000,0.000000"
+              KEEP_MAP_SUBSCRIPTION=1) ;;
     a_*) JOB=(deploy/slurm/slam_cost_replay.sbatch "$OUT/$NAME" "$RUN" "$SETS" "${ARGS[@]}")
          ENV=(SLAM_NODE=localization MAP_BUNDLE="$A_BUNDLE" MAP_ID="$A_ID" MAP_START_POSE="-2.612000,0.000000,0.000000") ;;  # floats: ROS refuses a mixed int/float list (S2 a_1, 18809)
     h_mapq) JOB=(deploy/slurm/slam_h_switch.sbatch "$OUT/$NAME" "$RUN" "$SETS" "${ARGS[@]}"); ENV=(KEEP_MAP_SUBSCRIPTION=1) ;;
