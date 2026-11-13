@@ -1,0 +1,42 @@
+{
+ "switch_wait_s": 13.224828160949983,
+ "switch_wait_max_s": 60.0,
+ "switch_pass": true,
+ "after_keyframes": 2251,
+ "after_keyframe_max_s": 0.14678606705274433,
+ "after_keyframes_at_or_over_1s": 0,
+ "after_pass": true,
+ "mapping_units": [
+  0
+ ],
+ "localization_units": [
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  10,
+  11,
+  12,
+  13,
+  14
+ ],
+ "mapping_replies": {
+  "processed": 167,
+  "skipped": 3268
+ },
+ "localization_replies": {
+  "processed": 2251,
+  "skipped": 44314
+ },
+ "last_mapping_reply": 3434,
+ "first_localization_reply": 3435,
+ "steps_from_last_mapping_reply_s": {
+  "map_container_end": 9.743286581942812,
+  "bundle_end": 9.923080955981277
+ }
+}
