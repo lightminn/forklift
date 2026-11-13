@@ -39,9 +39,9 @@ def world(angle=0.0):
     observation = {"status": "valid", "insertion_yaw_rad": 0.0,
                    "left": {"center_m": [2.36, 0.191, 0.06]}, "right": {"center_m": [2.36, -0.189, 0.06]}}
     Qe = rotate([2.0, 0.004], angle)
-    samples = [{"time_s": t, "phase": ph, "pallet_position_m": V + [0.0], "pallet_yaw_rad": angle}
-               for t, ph in ((4.0, "approach"), (5.1, "approach"), (12.0, "insert"), (20.0, "insert"), (20.1, "lift"),
-                             (21.0, "lift"))]
+    # 0.1 s samples (as recorded): approach to 10 s, insert to 20.05 s, then lift
+    samples = [{"time_s": round(0.1 * i + 0.01, 2), "phase": "approach" if i < 100 else "insert" if i < 201 else "lift",
+                "pallet_position_m": V + [0.0], "pallet_yaw_rad": angle} for i in range(215)]
     result = {
         "transitions": [{"to": "approach", "time_s": 1.0}, {"to": "insert", "time_s": 10.0},
                         {"to": "lift", "time_s": 20.05}],
@@ -64,7 +64,7 @@ def world(angle=0.0):
     return result, sc
 
 
-EXPECTED = {"S": -0.020, "T": -0.004, "F": -0.006, "L": -0.010, "D": -0.001, "C": -0.003, "P": 0.0}
+EXPECTED = {"S": -0.020, "T": -0.004, "F": -0.006, "L": -0.010, "D": -0.001, "C": -0.003, "P": 0.0, "C+L": -0.013}
 
 
 @pytest.mark.parametrize("angle", [0.0, math.pi / 3, -2.5])
@@ -72,10 +72,10 @@ def test_the_split_matches_the_constructed_offsets_in_any_world_frame(angle):
     d = R.decompose(*world(angle))
     for k, v in EXPECTED.items():
         assert d["terms_m"][k] == pytest.approx(v, abs=1e-12), k
-    assert d["C_plus_L_m"] == pytest.approx(-0.013, abs=1e-12)
     assert d["qe_vs_near_estimate_m"] == pytest.approx(0.0, abs=1e-12)
     assert all(abs(v) < 1e-12 for v in d["residuals_m"].values()) and len(d["residuals_m"]) == 3
-    assert d["pallet_motion"]["from_t"] == 5.1 and d["pallet_motion"]["to_t"] == 20.1
+    motion = d["pallet_motion"]
+    assert motion["covered"] is True and motion["from_t"] == 5.01 and motion["to_t"] == 20.11
     assert d["insert_trackers"] == 1 and d["hold"] == [] and d["reached_lift"] is True
 
 
@@ -104,22 +104,57 @@ def hold_of(edit):
 
 
 def test_holds():
-    def moved(r, sc):
-        r["samples"][3]["pallet_position_m"] = [2.0, 0.0006, 0.0]
-    assert "pallet_moved" in hold_of(moved)["hold"]
+    def moved(r, sc):  # 15.01 s, during insert
+        r["samples"][150]["pallet_position_m"] = [2.0, 0.0006, 0.0]
+    assert hold_of(moved)["hold"] == ["pallet_moved"]
 
-    def turned(r, sc):
-        r["samples"][4]["pallet_yaw_rad"] = 0.0011
-    assert "pallet_moved" in hold_of(turned)["hold"]
+    def turned(r, sc):  # 20.11 s, the first lift sample
+        r["samples"][201]["pallet_yaw_rad"] = 0.0011
+    assert hold_of(turned)["hold"] == ["pallet_moved"]
 
-    def moved_before_capture(r, sc):  # before the capture's own time: outside the window
-        r["samples"][0]["pallet_position_m"] = [2.0, 0.01, 0.0]
+    def moved_before_capture(r, sc):  # 4.01 s, before the capture's own time: outside the window
+        r["samples"][40]["pallet_position_m"] = [2.0, 0.01, 0.0]
     assert hold_of(moved_before_capture)["hold"] == []
+
+    def no_capture_time(r, sc):  # Codex review P2: no capture time must not skip the motion check
+        del r["observation_attempts"][1]["capture_control"]["time_s"]
+    d = hold_of(no_capture_time)
+    assert d["missing"] == ["capture_time"] and d["hold"] == ["missing_terms"] and R.judge(d)["status"] == "held"
+
+    def sparse(r, sc):  # only the lift samples left: no evidence the pallet stood still
+        r["samples"] = r["samples"][201:]
+    assert hold_of(sparse)["hold"] == ["insufficient_motion_coverage"]
+
+    def gap(r, sc):
+        del r["samples"][120:125]
+    assert hold_of(gap)["hold"] == ["insufficient_motion_coverage"]
+
+    def slam_shifted(r, sc):  # Codex review P2: the nearest row 1000 s off is not the lift row
+        sc[:, 0] -= 1000.0
+    d = hold_of(slam_shifted)
+    assert d["missing"] == ["slam_row_at_lift"] and d["hold"] == ["missing_terms"]
+
+    def slam_bad_shape(r, sc):
+        sc.resize((0, 7), refcheck=False)
+    assert hold_of(slam_bad_shape)["missing"] == ["slam_row_at_lift"]
+
+    def seat_time(r, sc):
+        r["slip_watch"]["baseline"]["t"] = 19.0
+    assert hold_of(seat_time)["hold"] == ["seat_time_mismatch"]
+
+    def nan_estimate(r, sc):  # Codex review P2: NaN passes a > comparison
+        sc[:, 1] = np.nan
+    d = hold_of(nan_estimate)
+    assert d["hold"] == ["nonfinite_terms"] and d["terms_m"]["F"] is None and R.judge(d)["status"] == "held"
 
     def replaced(r, sc):
         r["tracker_versions"][1]["replaced_s"] = 15.0
         r["tracker_versions"].append({"phase": "insert", "installed_s": 15.0, "replaced_s": None})
     assert hold_of(replaced)["hold"] == ["insert_tracker_replaced"]
+
+    def empty_version(r, sc):  # Codex review P3: a version replaced at its own install was never active
+        r["tracker_versions"].append({"phase": "insert", "installed_s": 15.0, "replaced_s": 15.0})
+    assert hold_of(empty_version)["hold"] == []
 
     def seat_off(r, sc):  # 3 mm against a bound of max(2 mm, 2 mm)
         r["slip_watch"]["baseline"]["seat"][1] = -0.017
@@ -138,25 +173,60 @@ def test_holds():
         del r["observation_attempts"][1]["capture_control"]
     d = hold_of(no_capture)
     assert d["missing"] == ["capture_control"] and d["hold"] == ["missing_terms"] and "D" not in d["terms_m"]
-    assert R.judge(d)["status"] == "held"
 
     def no_seat(r, sc):
         del r["slip_watch"]
     d = hold_of(no_seat)
-    assert d["missing"] == ["seat"] and "missing_terms" in d["hold"] and "T_minus_DCP" in d["residuals_m"]
+    assert d["missing"] == ["seat"] and d["hold"] == ["missing_terms"] and "T_minus_DCP" in d["residuals_m"]
 
 
-def test_a_run_without_lift_is_outside_the_data_not_held():
+def test_runs_without_lift_are_outside_the_data_and_holding_is_apart_from_selection():
     result, sc = world()
     result["transitions"] = result["transitions"][:2]
-    d = R.decompose(result, sc)
-    assert d["reached_lift"] is False and d["hold"] == []
-    assert R.judge(d) == {"selected": None, "status": "not_reached_lift"}
-    runs = [dict(d, arm="Bb10"), dict(R.decompose(*world()), arm="B0")]
+    no_lift = R.decompose(result, sc)
+    assert no_lift["reached_lift"] is False and no_lift["hold"] == []
+    assert R.judge(no_lift) == {"selected": None, "status": "not_reached_lift"}
+    result["transitions"] = result["transitions"][:1]
+    no_insert = R.decompose(result, sc)
+    assert R.judge(no_insert)["status"] == "not_reached_insert"
+
+    def no_capture(r, sc):
+        del r["observation_attempts"][1]["capture_control"]
+    held = hold_of(no_capture)  # |S| = 20 mm, still known
+    assert R.judge(held, 0.025)["selected"] is False and R.judge(held, 0.010)["selected"] is True
+    runs = [dict(no_lift, arm="Bb10"), dict(no_insert, arm="Pn"), dict(held, arm="Ub3"),
+            dict(R.decompose(*world()), arm="B0")]
     t = R.tally(runs, 0.010)
-    assert t["perturbed"]["not_reached_lift"] == 1 and t["perturbed"]["held"] == 0 and t["perturbed"]["selected"] == 0
+    p = t["perturbed"]
+    assert (p["not_reached_lift"], p["not_reached_insert"], p["held"], p["held_selected"], p["eligible"]) == \
+        (1, 1, 1, 1, 0)
+    assert p["held_reasons"] == {"missing_terms": 1}
+    assert R.tally(runs, 0.025)["perturbed"]["held_selected"] == 0
     assert t["B0"]["judged"] == 1 and t["B0"]["largest_same_sign"] == {"L": 1}
     assert t["B0"]["terms_m"]["C+L"]["median"] == pytest.approx(-0.013)
+    small = R.tally([dict(R.decompose(*world()), arm="B0")], 0.025)["B0"]
+    assert small["eligible"] == 1 and small["judged"] == 0
+
+
+def test_c_plus_l_is_not_a_bias_change_by_itself():
+    """Codex review P3: one constant world bias b at the capture and at lift, the estimate's yaw at lift 0.015 rad off
+    the path end's, gives C + L = (n_E - n_G).b -- non-zero with no change of the bias."""
+    b, dyaw = (0.040, 0.060), 0.015
+    result, sc = world()
+    attempt = result["observation_attempts"][1]
+    cap = attempt["capture_control"]
+    cap["control_rear"] = [cap["truth_rear"][0] + b[0], cap["truth_rear"][1] + b[1], 0.0]
+    est = R.to_world(R.observed_centre(attempt["pocket_observation"], 0.6), R.base_from_rear(cap["control_rear"], -0.34))
+    result["near_capture"]["near_estimate_m"] = {"x_m": est[0], "y_m": est[1]}
+    A = [0.5, 0.020, dyaw]
+    sc[:, 4:7] = A
+    sc[:, 1:4] = [A[0] + b[0], A[1] + b[1], dyaw]
+    result["slip_watch"]["baseline"]["seat"][1] = R.lateral([2.0, 0.0], A)
+    d = R.decompose(result, sc)
+    n_E, n_G = (-math.sin(dyaw), math.cos(dyaw)), (0.0, 1.0)
+    expected = (n_E[0] - n_G[0]) * b[0] + (n_E[1] - n_G[1]) * b[1]
+    assert d["hold"] == [] and d["terms_m"]["C+L"] == pytest.approx(expected, abs=1e-12)
+    assert abs(expected) > 5e-4
 
 
 def test_the_folders_are_read_and_written(tmp_path):
@@ -167,12 +237,20 @@ def test_the_folders_are_read_and_written(tmp_path):
         result, sc = world(angle)
         (run / "result.json").write_text(json.dumps(result))
         np.save(run / "slam_control.npy", sc)
+    bad = raw / "lbg_Ub3_random_1_s0" / "run"
+    bad.mkdir(parents=True)
+    result, sc = world()
+    sc[:, 1] = np.nan
+    (bad / "result.json").write_text(json.dumps(result))
+    np.save(bad / "slam_control.npy", sc)
     out, summary = tmp_path / "d.json", tmp_path / "d.md"
     assert R.main([str(raw), "--out", str(out), "--summary", str(summary)]) == 0
-    payload = json.loads(out.read_text())
+    payload = json.loads(out.read_text())  # standard JSON: the NaN run's terms are null
     names = {r["name"]: r for r in payload["runs"]}
     assert names["dg_Pn_aisle_rack_s12"]["arm"] == "Pn" and names["dg_Pn_aisle_rack_s12"]["scene"] == "aisle_rack"
     assert names["dg_Pn_aisle_rack_s12"]["seed"] == 12
+    assert names["lbg_Ub3_random_1_s0"]["terms_m"]["L"] is None
+    assert names["lbg_Ub3_random_1_s0"]["judgement"]["status"] == "held"
     assert set(payload["tallies"]) == {"5mm", "10mm", "15mm"}
     assert "| lbg_B0_random_1_s1 | -20.0 | -4.0 | -1.0 | -3.0 | +0.0 | -6.0 | -10.0 | -13.0 | -20.0 | judged: L" \
         in summary.read_text()

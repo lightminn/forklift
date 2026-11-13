@@ -7,7 +7,7 @@ Each RAW_ROOT holds <name>/run/{result.json, slam_control.npy} copies; <name> is
 
 g(X) is the lateral coordinate of the true pallet origin V (at the first lift sample) in pose X. A and E are the true
 and estimated rear poses at the insert -> lift transition (slam_control columns: time, estimate x, y, yaw, truth x, y,
-yaw), G is the insert path's end (result.paths.insert).
+yaw; the row of the transition's own tick), G is the insert path's end (result.paths.insert).
 
     S = g(A) = T + F + L,   T = g(G),   F = g(E) - g(G),   L = g(A) - g(E)
     T = D + C + P,   D = n.(V - Qd),   C = n.(Qd - Qe),   P = n.(Qe - G.xy)
@@ -17,14 +17,18 @@ moved half a pallet depth along the observed insertion yaw, as sim/isaac/percept
 placed with the capture's true and estimated base pose (the capture_control rear pose moved |rear_axle_offset_m|
 forward). Qe is checked against near_capture.near_estimate_m. S is checked against slip_watch.baseline.seat.
 
-C + L is also reported, descriptively and outside the judgement: the change of the localisation error's lateral
-effect from the capture to lift (the two terms cancel when the estimate's bias is the same at both times).
+C + L, the net contribution of the two localisation terms, is reported beside the judgement and outside it (added
+after reading 18 runs, where C and L were large and of opposite sign). It is not by itself the change of a localisation
+bias: a constant world-frame bias b alone gives C + L = (n_E - n_G).b when the estimate's yaw at lift differs from G's.
 
-Runs that never reached lift are outside the data (plan 2) and are counted apart, not held. Holds (3.1): a term that cannot be computed, a residual (seat - g(A), T - (D + C + P), seat - leaf sum) above
-max(2 mm, 0.1 |S|), pallet motion above 0.5 mm or 1 mrad from the first sample after the capture to the first lift
-sample, an insert tracker replaced during insert, or Qe off near_estimate_m by more than 1e-6 m. Held runs stay in the
-output with their reasons and are left out of the tallies. Nothing is judged beyond the plan's tally; no thresholds
-change.
+The decomposition covers runs that reached lift (plan 2). Runs that did not are counted apart -- never entered insert,
+or entered insert and ended before lift -- and are not held. A run that reached lift is held (3.1) when a term cannot
+be computed or is not finite, a residual (seat - g(A), T - (D + C + P), seat - leaf sum) exceeds max(2 mm, 0.1 |S|),
+the pallet moved more than 0.5 mm or 1 mrad from the first sample after the capture to the first lift sample or those
+samples do not cover that span, an insert tracker was replaced during insert, the SLAM row or the seat's time is not
+the transition's, or Qe is off near_estimate_m by more than 1e-6 m. Held runs stay in the output with their reasons;
+holding and selection are separate: tallies count held runs (and how many of them |S| would have selected) apart from
+the judged ones. Nothing is judged beyond the plan's tally; no thresholds change.
 """
 
 from __future__ import annotations
@@ -43,11 +47,20 @@ RESIDUAL_FLOOR_M = 0.002
 RESIDUAL_FRACTION = 0.1
 MOTION_M = 0.0005
 MOTION_RAD = 0.001
+MOTION_GAP_S = 0.2  # samples are 0.1 s apart: a wider gap (or a first/last sample further off) is not coverage
 QE_TOL_M = 1e-6
+TIME_TOL_S = 1e-6  # the lift transition, its slam_control row and the seat's baseline share one tick
 NEGLIGIBLE_M = 1e-4  # the tables' 0.1 mm resolution: a smaller term is neither same-sign nor cancelling
 LEAVES = ("D", "C", "P", "F", "L")
 TOPS = ("T", "F", "L")
 NAME_RE = re.compile(r"^(?P<prefix>[^_]+)_(?P<arm>[^_]+)_(?P<scene>.+)_s(?P<seed>\d+)$")
+
+
+def finite(*values) -> bool:
+    try:
+        return all(math.isfinite(float(v)) for v in values)
+    except (TypeError, ValueError):
+        return False
 
 
 def lateral(point, pose) -> float:
@@ -78,77 +91,86 @@ def to_world(q, base) -> tuple[float, float]:
     return x + c * q[0] - s * q[1], y + s * q[0] + c * q[1]
 
 
-def row_at(sc: np.ndarray, t: float) -> np.ndarray:
-    return sc[int(np.argmin(np.abs(sc[:, 0] - t)))]
-
-
 def transition_time(result: dict, to: str) -> float | None:
     times = [float(t["time_s"]) for t in result.get("transitions") or [] if t.get("to") == to]
     return times[0] if times else None
 
 
-def pallet_motion(samples: list, t_from: float, t_lift: float) -> dict | None:
+def pallet_motion(samples: list, t_from: float, t_lift: float) -> dict:
     """Largest planar move and yaw change of the true pallet from the first sample after t_from to the first lift
-    sample, against the first of them."""
+    sample, against the first of them; ``covered`` says whether the samples span that interval without a gap."""
     window = [s for s in samples if s["time_s"] > t_from]
     end = next((i for i, s in enumerate(window) if s.get("phase") == "lift" and s["time_s"] >= t_lift), None)
-    if not window or end is None:
-        return None
+    if end is None:
+        return {"covered": False, "samples": 0}
     window = window[: end + 1]
+    times = [t_from] + [s["time_s"] for s in window]
+    covered = (len(window) >= 2 and max(b - a for a, b in zip(times, times[1:])) <= MOTION_GAP_S
+               and window[-1]["time_s"] - t_lift <= MOTION_GAP_S)
     x0, y0 = window[0]["pallet_position_m"][:2]
     yaw0 = window[0]["pallet_yaw_rad"]
     return {
-        "from_t": window[0]["time_s"], "to_t": window[-1]["time_s"], "samples": len(window),
+        "covered": covered, "from_t": window[0]["time_s"], "to_t": window[-1]["time_s"], "samples": len(window),
         "max_move_m": max(math.hypot(s["pallet_position_m"][0] - x0, s["pallet_position_m"][1] - y0) for s in window),
         "max_yaw_rad": max(abs(math.remainder(s["pallet_yaw_rad"] - yaw0, math.tau)) for s in window),
     }
 
 
 def insert_trackers(result: dict, t_insert: float, t_lift: float) -> int:
-    """Insert-phase tracker versions alive at any time during insert."""
+    """Insert-phase tracker versions with a non-empty life that overlaps [insert, lift]."""
     n = 0
     for v in result.get("tracker_versions") or []:
         if v.get("phase") != "insert":
             continue
-        installed = v.get("installed_s")
-        replaced = v.get("replaced_s")
+        installed, replaced = v.get("installed_s"), v.get("replaced_s")
+        if installed is not None and replaced is not None and replaced <= installed:
+            continue  # never active
         if (installed is None or installed <= t_lift) and (replaced is None or replaced > t_insert):
             n += 1
     return n
 
 
-def decompose(result: dict, sc: np.ndarray) -> dict:
+def lift_row(sc, t_lift: float):
+    """The slam_control row of the lift transition's tick, or None."""
+    sc = np.asarray(sc, dtype=float)
+    if sc.ndim != 2 or sc.shape[0] == 0 or sc.shape[1] != 7:
+        return None
+    i = int(np.argmin(np.abs(sc[:, 0] - t_lift)))
+    return sc[i] if abs(sc[i, 0] - t_lift) <= TIME_TOL_S else None
+
+
+def decompose(result: dict, sc) -> dict:
     """One run's terms, residuals, checks and hold reasons. Missing fields are reported, never filled."""
     out: dict = {"missing": [], "hold": []}
     t_insert, t_lift = transition_time(result, "insert"), transition_time(result, "lift")
+    out["reached_insert"], out["reached_lift"] = t_insert is not None, t_lift is not None
     if t_insert is None or t_lift is None:
-        out["missing"].append("insert_or_lift_transition")
-        out["reached_lift"] = False
         return out
-    out["reached_lift"] = True
     out["t_insert"], out["t_lift"] = t_insert, t_lift
+    hold = out["hold"]
     lift_sample = next((s for s in result.get("samples") or [] if s.get("phase") == "lift" and s["time_s"] >= t_lift),
                        None)
     path = (result.get("paths") or {}).get("insert") or {}
-    seat = ((result.get("slip_watch") or {}).get("baseline") or {}).get("seat")
-    if lift_sample is None:
-        out["missing"].append("lift_sample")
-    if not path.get("poses"):
-        out["missing"].append("insert_path")
-    if seat is None:
-        out["missing"].append("seat")
-    if lift_sample is None or not path.get("poses"):
-        out["hold"].append("missing_terms")
+    baseline = (result.get("slip_watch") or {}).get("baseline") or {}
+    seat = baseline.get("seat")
+    row = lift_row(sc, t_lift)
+    for missing, name in ((lift_sample is None, "lift_sample"), (not path.get("poses"), "insert_path"),
+                          (seat is None, "seat"), (row is None, "slam_row_at_lift")):
+        if missing:
+            out["missing"].append(name)
+    if seat is not None and not (baseline.get("t") is not None and abs(float(baseline["t"]) - t_lift) <= TIME_TOL_S):
+        hold.append("seat_time_mismatch")
+    if lift_sample is None or not path.get("poses") or row is None:
+        hold.append("missing_terms")
+        out["hold"] = sorted(set(hold))
         return out
     V = lift_sample["pallet_position_m"][:2]
     G = path["poses"][-1]
-    row = row_at(sc, t_lift)
-    out["slam_row_dt_s"] = float(row[0] - t_lift)
     E, A = row[1:4], row[4:7]
+    out["V"], out["G"] = [float(v) for v in V], [float(v) for v in G[:3]]
+    out["E"], out["A"] = [float(v) for v in E], [float(v) for v in A]
     g_A, g_E, g_G = lateral(V, A), lateral(V, E), lateral(V, G)
     terms = {"S": g_A, "T": g_G, "F": g_E - g_G, "L": g_A - g_E}
-    out["V"], out["G"], out["E"], out["A"] = [float(v) for v in V], [float(v) for v in G[:3]], \
-        [float(v) for v in E], [float(v) for v in A]
 
     near = result.get("near_capture") or {}
     attempt_no = near.get("near_attempt")
@@ -162,6 +184,8 @@ def decompose(result: dict, sc: np.ndarray) -> dict:
         out["missing"].append("near_attempt")
     elif not cap.get("truth_rear") or not cap.get("control_rear"):
         out["missing"].append("capture_control")
+    elif not finite(cap.get("time_s")):
+        out["missing"].append("capture_time")
     elif not obs or obs.get("status") != "valid":
         out["missing"].append("pocket_observation")
     elif offset is None or depth is None:
@@ -175,44 +199,44 @@ def decompose(result: dict, sc: np.ndarray) -> dict:
         dot = lambda a, b: n[0] * (a[0] - b[0]) + n[1] * (a[1] - b[1])  # noqa: E731
         terms.update(D=dot(V, Qd), C=dot(Qd, Qe), P=dot(Qe, G))
         est = near.get("near_estimate_m")
-        if est is not None:
-            out["qe_vs_near_estimate_m"] = math.hypot(Qe[0] - est["x_m"], Qe[1] - est["y_m"])
-            if out["qe_vs_near_estimate_m"] > QE_TOL_M:
-                out["hold"].append("qe_mismatch")
-        else:
+        if est is None:
             out["missing"].append("near_estimate_m")
-        out["capture_t"] = cap.get("time_s")
-    out["terms_m"] = terms
+        else:
+            out["qe_vs_near_estimate_m"] = math.hypot(Qe[0] - est["x_m"], Qe[1] - est["y_m"])
+            if not out["qe_vs_near_estimate_m"] <= QE_TOL_M:
+                hold.append("qe_mismatch")
+        out["capture_t"] = float(cap["time_s"])
     if "C" in terms:
-        out["C_plus_L_m"] = terms["C"] + terms["L"]
-    S = terms["S"]
-    bound = max(RESIDUAL_FLOOR_M, RESIDUAL_FRACTION * abs(S))
-    out["residual_bound_m"] = bound
+        terms["C+L"] = terms["C"] + terms["L"]
     res = {}
     if seat is not None:
-        res["seat_minus_S"] = float(seat[1]) - S
         out["seat_lateral_m"] = float(seat[1])
-    if all(k in terms for k in ("D", "C", "P")):
+        res["seat_minus_S"] = float(seat[1]) - terms["S"]
+    if "D" in terms:
         res["T_minus_DCP"] = terms["T"] - (terms["D"] + terms["C"] + terms["P"])
         if seat is not None:
             res["seat_minus_leaves"] = float(seat[1]) - sum(terms[k] for k in LEAVES)
-    out["residuals_m"] = res
-    if any(abs(v) > bound for v in res.values()):
-        out["hold"].append("residual")
+    if not finite(*terms.values(), *res.values()):
+        hold.append("nonfinite_terms")
+    out["terms_m"] = {k: (v if finite(v) else None) for k, v in terms.items()}
+    out["residuals_m"] = {k: (v if finite(v) else None) for k, v in res.items()}
+    if finite(terms["S"]):
+        out["residual_bound_m"] = bound = max(RESIDUAL_FLOOR_M, RESIDUAL_FRACTION * abs(terms["S"]))
+        if any(finite(v) and abs(v) > bound for v in res.values()):
+            hold.append("residual")
     if out["missing"]:
-        out["hold"].append("missing_terms")
-
-    if out.get("capture_t") is not None:
-        motion = pallet_motion(result.get("samples") or [], float(out["capture_t"]), t_lift)
+        hold.append("missing_terms")
+    if "capture_t" in out:
+        motion = pallet_motion(result.get("samples") or [], out["capture_t"], t_lift)
         out["pallet_motion"] = motion
-        if motion is None:
-            out["hold"].append("missing_terms")
-        elif motion["max_move_m"] > MOTION_M or motion["max_yaw_rad"] > MOTION_RAD:
-            out["hold"].append("pallet_moved")
+        if not motion["covered"]:
+            hold.append("insufficient_motion_coverage")
+        if motion["samples"] and (motion["max_move_m"] > MOTION_M or motion["max_yaw_rad"] > MOTION_RAD):
+            hold.append("pallet_moved")
     out["insert_trackers"] = insert_trackers(result, t_insert, t_lift)
     if out["insert_trackers"] != 1:
-        out["hold"].append("insert_tracker_replaced")
-    out["hold"] = sorted(set(out["hold"]))
+        hold.append("insert_tracker_replaced")
+    out["hold"] = sorted(set(hold))
     return out
 
 
@@ -227,18 +251,19 @@ def contributions(terms: dict, keys) -> dict:
 
 
 def judge(decomp: dict, select_m: float = SELECT_M) -> dict:
-    """The plan 3.1 per-run reading: selected or not, held or judged, and the contribution if judged."""
-    terms = decomp.get("terms_m") or {}
-    if decomp.get("reached_lift") is False:
-        return {"selected": None, "status": "not_reached_lift"}
-    if "S" not in terms:
-        return {"selected": None, "status": "held", "reasons": decomp.get("hold") or ["missing_terms"]}
-    selected = abs(terms["S"]) > select_m
-    if not selected:
-        return {"selected": False, "status": "not_selected"}
+    """The plan 3.1 per-run reading. Holding comes first and is kept apart from selection: a held run reports whether
+    |S| (when known) would have selected it."""
+    if not decomp.get("reached_lift"):
+        return {"status": "not_reached_lift" if decomp.get("reached_insert") else "not_reached_insert",
+                "selected": None}
+    S = (decomp.get("terms_m") or {}).get("S")
+    selected = None if S is None else abs(S) > select_m
     if decomp.get("hold"):
-        return {"selected": True, "status": "held", "reasons": decomp["hold"]}
-    return {"selected": True, "status": "judged", "leaf": contributions(terms, LEAVES),
+        return {"status": "held", "selected": selected, "reasons": decomp["hold"]}
+    if not selected:
+        return {"status": "not_selected", "selected": False}
+    terms = decomp["terms_m"]
+    return {"status": "judged", "selected": True, "leaf": contributions(terms, LEAVES),
             "top": contributions(terms, TOPS)}
 
 
@@ -253,33 +278,35 @@ def arm_group(arm: str | None) -> str:
 
 
 def tally(runs: list[dict], select_m: float) -> dict:
-    """Counts by arm group: selected, held (with reasons), judged, the largest same-sign leaf, and per-term signed
-    medians and largest magnitudes over the judged runs."""
+    """Counts by arm group: runs that did not reach insert / lift, held (with reasons and how many |S| would have
+    selected), eligible, selected = judged, the largest same-sign leaf, and per-term signed medians and largest
+    magnitudes over the judged runs."""
     groups: dict = {}
     for r in runs:
         j = judge(r, select_m)
-        g = groups.setdefault(arm_group(r.get("arm")), {"runs": 0, "not_reached_lift": 0, "selected": 0, "held": 0,
-                                                        "judged": 0,
-                                                        "held_reasons": {}, "largest_same_sign": {},
-                                                        "_terms": {k: [] for k in LEAVES + ("T", "S", "C+L")}})
+        g = groups.setdefault(arm_group(r.get("arm")), {
+            "runs": 0, "not_reached_insert": 0, "not_reached_lift": 0, "held": 0, "held_selected": 0,
+            "held_reasons": {}, "eligible": 0, "judged": 0, "largest_same_sign": {},
+            "_terms": {k: [] for k in LEAVES + ("T", "S", "C+L")}})
         g["runs"] += 1
-        if j["status"] == "not_reached_lift":
-            g["not_reached_lift"] += 1
+        status = j["status"]
+        if status in ("not_reached_insert", "not_reached_lift"):
+            g[status] += 1
             continue
-        if j["status"] == "not_selected":
-            continue
-        if j["selected"]:
-            g["selected"] += 1
-        if j["status"] == "held":
+        if status == "held":
             g["held"] += 1
+            g["held_selected"] += bool(j["selected"])
             for reason in j["reasons"]:
                 g["held_reasons"][reason] = g["held_reasons"].get(reason, 0) + 1
+            continue
+        g["eligible"] += 1
+        if status != "judged":
             continue
         g["judged"] += 1
         key = j["leaf"]["largest_same_sign"]
         g["largest_same_sign"][key] = g["largest_same_sign"].get(key, 0) + 1
         for k in g["_terms"]:
-            g["_terms"][k].append(r["C_plus_L_m"] if k == "C+L" else r["terms_m"][k])
+            g["_terms"][k].append(r["terms_m"][k])
     for g in groups.values():
         vals = g.pop("_terms")
         g["terms_m"] = {k: {"median": float(np.median(v)), "max_abs_signed": float(max(v, key=abs))}
@@ -309,14 +336,16 @@ def mm(v) -> str:
 
 def summary_md(runs: list[dict]) -> str:
     lines = ["# Seat decomposition (records only)", "",
-             f"Runs read: {len(runs)}. Terms in mm; S = T + F + L, T = D + C + P.", ""]
+             f"Runs read: {len(runs)}. Terms in mm; S = T + F + L, T = D + C + P. C + L is descriptive (the net of "
+             "the two localisation terms), outside the judgement.", ""]
     for sel in SENSITIVITY_M:
-        lines.append(f"## |S| > {1000 * sel:.0f} mm")
-        lines.append("")
-        lines.append("| group | runs | no lift | selected | held | judged | largest same-sign leaf | held reasons |")
-        lines.append("|---|---|---|---|---|---|---|---|")
+        lines += [f"## |S| > {1000 * sel:.0f} mm", "",
+                  "| group | runs | no insert | no lift | held (selected) | eligible | judged | largest same-sign leaf "
+                  "| held reasons |",
+                  "|---|---|---|---|---|---|---|---|---|"]
         for name, g in sorted(tally(runs, sel).items()):
-            lines.append(f"| {name} | {g['runs']} | {g['not_reached_lift']} | {g['selected']} | {g['held']} | {g['judged']} | "
+            lines.append(f"| {name} | {g['runs']} | {g['not_reached_insert']} | {g['not_reached_lift']} | "
+                         f"{g['held']} ({g['held_selected']}) | {g['eligible']} | {g['judged']} | "
                          f"{json.dumps(g['largest_same_sign'], sort_keys=True)} | "
                          f"{json.dumps(g['held_reasons'], sort_keys=True)} |")
         lines.append("")
@@ -330,9 +359,22 @@ def summary_md(runs: list[dict]) -> str:
                         f"{','.join(j['leaf']['cancelling']) or '-'}")
         if j["status"] == "held":
             verdict += f" ({','.join(j['reasons'])})"
-        lines.append(f"| {r['name']} | " + " | ".join(mm(t.get(k)) for k in ("S", "T", "D", "C", "P", "F", "L"))
-                     + f" | {mm(r.get('C_plus_L_m'))} | {mm(r.get('seat_lateral_m'))} | {verdict} |")
+        lines.append(f"| {r['name']} | " + " | ".join(mm(t.get(k)) for k in ("S", "T", "D", "C", "P", "F", "L", "C+L"))
+                     + f" | {mm(r.get('seat_lateral_m'))} | {verdict} |")
     return "\n".join(lines) + "\n"
+
+
+def jsonable(o):
+    """Non-finite floats as null so the output is standard JSON."""
+    if isinstance(o, dict):
+        return {k: jsonable(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [jsonable(v) for v in o]
+    if isinstance(o, (float, np.floating)):
+        return float(o) if math.isfinite(o) else None
+    if isinstance(o, np.integer):
+        return int(o)
+    return o
 
 
 def main(argv=None) -> int:
@@ -343,7 +385,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     runs = collect(args.roots)
     payload = {"runs": runs, "tallies": {f"{1000 * s:.0f}mm": tally(runs, s) for s in SENSITIVITY_M}}
-    args.out.write_text(json.dumps(payload, indent=1, sort_keys=True))
+    args.out.write_text(json.dumps(jsonable(payload), indent=1, sort_keys=True, allow_nan=False))
     if args.summary:
         args.summary.write_text(summary_md(runs))
     return 0
