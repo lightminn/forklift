@@ -431,6 +431,7 @@ def installed_paths(r: dict) -> list[tuple[float, dict | None]]:
         return []
     ev = [(float(c["time_s"]), c.get("replaced_path"), c.get("path")) for c in r.get("cusp_replans") or []]
     ev += [(float(c["time_s"]), c.get("path"), None) for c in r.get("paths_replaced") or [] if c.get("leg") == "transport"]
+    ev += [(float(c["time_s"]), c.get("replaced_path"), c.get("path")) for c in r.get("stall_replans") or []]
     ev += [(e["time_s"], None, None) for e in install_events(r) if not e["recorded"]]
     ev.sort(key=lambda e: e[0])
     final = (r.get("paths") or {}).get("transport")
@@ -500,7 +501,10 @@ def reference_legs(name: str, r: dict, sc: np.ndarray, shapes: list[dict]) -> li
                 continue
             m = measure_leg(r, sc, path, leg, start, end)
             if m is not None:
-                out.append({"name": name, "leg": leg, "shapes": hits, "replans_in_transport": replans, **m})
+                # plan 3.3: the registered reference range is completed runs without a transport replan; the others
+                # are kept as an auxiliary, unregistered range
+                out.append({"name": name, "leg": leg, "shapes": hits, "replans_in_transport": replans,
+                            "registered": replans == 0, **m})
     return out
 
 
