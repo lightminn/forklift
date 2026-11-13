@@ -9,7 +9,7 @@ RAW_ROOT holds <run>/run/{result.json, slam_control.npy, paths.json} copies. Per
   the estimate only), the tracker builds in the window (a near capture builds every later phase's tracker at once:
   a count, not active path changes), the tracking failure's own fields, the near-capture record;
 - (2) the phase entries with the truth and estimate rear pose there (slam_control at the entry time) and the
-  near-capture pose / error;
+  near-capture record's status and far / near errors (not the capture pose: a failed near capture has no near_error);
 - (3) the delivery docking rounds (accepted, reason, goal_error_vs_truth -- the rear-axle goal's error, not the
   pallet's), the delivery error, the pallet's seat offset in the forks at lift (slip_watch baseline), and the pallet's
   planar error to the destination at the first lower sample and at the end (from the recorded samples);
