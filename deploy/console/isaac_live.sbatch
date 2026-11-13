@@ -177,12 +177,13 @@ else NOA_APPLIED=off; fi
 if [ "$NOA_APPLIED" != off ] && [ "$NES_APPLIED" != on ]; then
   echo "NEAR_OBSERVE_ARRIVAL (or EXTRA_ARGS --near-observe-arrival) needs the near-end stand on, not $NES_APPLIED"; exit 2
 fi
-[ "$NOA_APPLIED" = off ] || [[ "$NOA_APPLIED" =~ ^[0-9]+([.][0-9]+)?,[0-9]+([.][0-9]+)?$ ]] \
+# the shape only: the numbers are the runner's check (parse_bounds_pair takes .05 and 5e-2 too)
+[ "$NOA_APPLIED" = off ] || [[ "$NOA_APPLIED" =~ ^[^,[:space:]]+,[^,[:space:]]+$ ]] \
   || { echo "NEAR_OBSERVE_ARRIVAL must be M,RAD (metres, radians) or off"; exit 2; }
 # what the launcher passes: nothing when off or when EXTRA_ARGS names its own (the runner reads one)
 NEAR_OBSERVE_ARRIVAL=$NOA_APPLIED
 [ -n "$G3_EXTRA_NOA" ] && NEAR_OBSERVE_ARRIVAL=off
-echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NEAR_END_STAND near_observe_arrival=$NOA_APPLIED"
+echo "RIIB_DEFAULTS return_start_backoff=$RETURN_START near_end_stand=$NES_APPLIED near_observe_arrival=$NOA_APPLIED"
 # The SLAM mode (live-default plan S3 D2, 5d): MAP_BUNDLE unset (the registry, mapping as a recorded fallback) / none /
 # registry / a folder, deploy/console/slam_choice.sh; the choice goes to the supervisor's log (--slam-choice)
 . "$ROOT/deploy/console/slam_choice.sh"

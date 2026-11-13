@@ -281,7 +281,8 @@ if [ -z "${NEAR_OBSERVE_ARRIVAL:-}" ]; then
 elif [ "$NEAR_OBSERVE_ARRIVAL" != off ] && [ "$NEAR_END_STAND" != on ]; then
   echo "NEAR_OBSERVE_ARRIVAL (or EXTRA_ARGS --near-observe-arrival) needs the near-end stand on, not $NEAR_END_STAND"; exit 2
 fi
-[ "$NEAR_OBSERVE_ARRIVAL" = off ] || [[ "$NEAR_OBSERVE_ARRIVAL" =~ ^[0-9]+([.][0-9]+)?,[0-9]+([.][0-9]+)?$ ]] \
+# the shape only: the numbers are the runner's check (parse_bounds_pair takes .05 and 5e-2 too)
+[ "$NEAR_OBSERVE_ARRIVAL" = off ] || [[ "$NEAR_OBSERVE_ARRIVAL" =~ ^[^,[:space:]]+,[^,[:space:]]+$ ]] \
   || { echo "NEAR_OBSERVE_ARRIVAL must be M,RAD (metres, radians) or off"; exit 2; }
 [[ "$RETURN_CUSP_REPLANS" =~ ^[0-9]+$ ]] || { echo "--return-cusp-replans in EXTRA_ARGS must be a count (0 = off)"; exit 2; }
 case " ${EXTRA_ARGS:-} " in *" --near-tracking "*)

@@ -149,7 +149,8 @@ def test_k1_is_on_with_the_near_end_stand_by_default(tmp_path):
     p = _launch(tmp_path)
     assert p.returncode == 0, p.stdout + p.stderr
     assert "near_observe_arrival=0.05,0.05" in p.stdout
-    assert _env_sh(tmp_path)["NEAR_OBSERVE_ARRIVAL"] == "0.05,0.05"
+    import shlex
+    assert shlex.split(_env_sh(tmp_path)["NEAR_OBSERVE_ARRIVAL"]) == ["0.05,0.05"]  # printf %q may escape the comma
     assert _values(tmp_path, "--near-observe-arrival") == ["0.05,0.05"]
 
 
@@ -184,3 +185,22 @@ def test_k1_without_the_near_end_stand_on_or_malformed_is_refused(tmp_path, env)
 def test_an_abbreviation_of_k1_is_refused(tmp_path):
     p = _launch(tmp_path, EXTRA_ARGS="--near-observe 0.05,0.05")
     assert p.returncode == 2 and "in full" in p.stdout, p.stdout + p.stderr
+
+
+def test_the_log_shows_the_near_end_stand_applied(tmp_path):
+    """Codex promotion review P3: an EXTRA_ARGS --near-end-stand is what the runner gets, and what the log says."""
+    p = _launch(tmp_path, EXTRA_ARGS="--near-end-stand off")
+    assert "near_end_stand=off near_observe_arrival=off" in p.stdout, p.stdout
+
+
+def test_k1_numbers_are_the_runners_check(tmp_path):
+    """The launcher checks the shape M,RAD only: the runner's parser takes .05 and 5e-2 too."""
+    for value in (".05,.05", "5e-2,5e-2"):
+        p = _launch(tmp_path, EXTRA_ARGS=f"--near-observe-arrival {value}")
+        assert p.returncode == 0, (value, p.stdout + p.stderr)
+        assert _values(tmp_path, "--near-observe-arrival") == [value]
+
+
+def test_the_survey_keeps_k1_off():
+    survey = (ROOT / "deploy/console/slam_survey.sbatch").read_text()
+    assert "printf 'NEAR_OBSERVE_ARRIVAL=off\\n'" in survey
