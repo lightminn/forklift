@@ -117,7 +117,8 @@ class Rig:
             self.speed = req_v if self.applied is None else self.applied
             obs = dp.Observation(dt_s=DT, speed_valid=True, speed_mps=self.speed, meas_q=self.q, armed=self.armed,
                                  mode="TELEOP" if self.armed else "IDLE", target_mps=req_v, applied_mps=self.speed,
-                                 applied_q=self.q, permit=(1.0, "ok"), port="queued", direction_cut=None, stop=None)
+                                 applied_q=self.q, permit=(1.0, "ok"), port="queued", direction_cut=None, stop=None,
+                                 deadman=self.deadman)
             row = self.r.step(self.t, obs)
             if row is not None:
                 self.rows.append(row)
@@ -232,3 +233,49 @@ def test_a_max_steering_trial_whose_q_falls_short_is_marked_under_reached():
     rig.r.step = lambda t, obs: real_step(t, obs._replace(meas_q=LIM.q_of_kappa(0.36) - 0.05))
     rig.tick(300)
     assert rig.r.result == "done" and rig.r.under_reached == ["arc"]
+
+
+def test_only_the_accepted_deadman_releases_the_zeros_never_a_messages_own():
+    rig = Rig()
+    rig.start()
+    rig.tick(300)
+    assert rig.r.state == "zeroing"
+    # an observer's message with the deadman off: rewritten to zeros, and the runner is not released by it
+    out = rig.r.rewrite({"t": "teleop", "deadman": False, "speed_ratio": 1.0, "curvature_ratio": 1.0})
+    assert out["speed_ratio"] == 0.0
+    rig.tick()  # the accepted command still holds the deadman
+    assert rig.r.state == "zeroing"
+
+
+def test_the_drop_to_zero_is_flagged_at_the_end_of_a_drive_and_on_a_void():
+    rig = Rig()
+    rig.start()
+    flagged = []
+    for _ in range(300):
+        rig.tick()
+        if rig.r.zero_now:
+            flagged.append((rig.r.state, rig.r.segment.label if rig.r.segment else None))
+            rig.r.zero_now = False
+    assert flagged[0] == ("running", "still_post") and flagged[-1][0] == "zeroing"
+
+
+@pytest.mark.parametrize("bad", [
+    {"segments": ["not a mapping"]},
+    {"segments": [{"label": "p", "presteer_kappa_inv_m": 0.0},
+                  {"label": "m", "speed_mps": 0.1, "s_merge": {"offset_m": 0.02, "length_m": 0}}]},
+    {"segments": [{"label": "p", "presteer_kappa_inv_m": 0.0},
+                  {"label": "m", "speed_mps": 0.1, "s_merge": {"offset_m": float("nan"), "length_m": 0.9}}]},
+    {"segments": [{"label": "p", "presteer_kappa_inv_m": 0.0},
+                  {"label": "d", "speed_mps": "fast", "kappa_inv_m": 0.0, "distance_m": 1}]},
+    {"segments": [{"label": "p", "presteer_kappa_inv_m": 0.0}, {"label": "d", "speed_mps": 0.1}]},
+])
+def test_a_malformed_file_is_one_kind_of_refusal(bad):
+    with pytest.raises(ValueError):
+        dp.parse_profile({"schema": dp.SCHEMA, "load": "empty", **bad}, LIM)
+
+
+def test_a_negative_merge_offset_merges_to_the_other_side():
+    p = dp.parse_profile(prof({"label": "p", "presteer_kappa_inv_m": 0.0},
+                              {"label": "m", "speed_mps": 0.10, "s_merge": {"offset_m": -0.02, "length_m": 0.9}}), LIM)
+    assert p.segments[1].peak_kappa < 0
+

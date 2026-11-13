@@ -94,3 +94,17 @@ def test_a_start_is_refused_while_moving_or_unarmed(run):
     r = run(profile=PROFILE)
     r.cycles(30)
     assert r.b.profile_start(time.monotonic_ns()) == "not_armed"
+
+
+def test_the_end_drops_the_accepted_command_to_zero_at_once(run):
+    """Codex G6 code review P1-2: the drive's end stops the truck in the next cycle, not at the console's next message."""
+    r = run(profile=PROFILE)
+    assert start(r) is None
+    r.cycles(500, teleop={"speed_ratio": 0.0, "deadman": True},
+             until=lambda rec: r.b.profile.segment is not None and r.b.profile.segment.label == "still_post")
+    assert r.b.arbiter.teleop["speed_ratio"] == 0.0  # the accepted command itself, not the next message
+    k = len(r.recs)
+    r.cycles(6)  # the console sends nothing more: the output slews down to zero on the accepted command alone
+    targets = [x["target_mps"] for x in r.recs[k - 1:]]
+    assert all(b <= a for a, b in zip(targets, targets[1:], strict=False)) and targets[-1] == 0.0, targets
+

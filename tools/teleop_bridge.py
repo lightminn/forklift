@@ -156,8 +156,17 @@ class Bridge:
             meas_q=None if reading is None or reading.steering_rad is None else reading.steering_rad,
             armed=bool(rec.get("armed")), mode=str(rec.get("mode")), target_mps=float(rec.get("target_mps") or 0.0),
             applied_mps=float(rec.get("applied_mps") or 0.0), applied_q=self.core.q_cmd, permit=out.permit,
-            port=rec.get("port"), direction_cut=rec.get("direction_cut"), stop=rec.get("stop") or rec.get("disarm"))
+            port=rec.get("port"), direction_cut=rec.get("direction_cut"), stop=rec.get("stop") or rec.get("disarm"),
+            # only the command the arbiter accepted (owner, lease, generation, age) carries the operator's deadman:
+            # an observer's or a refused message never releases anything (Codex G6 code review P1-1)
+            deadman=bool(self.arbiter.teleop and self.arbiter.teleop.get("deadman")), policy=rec.get("policy"))
         row = self.profile.step(now_ns, obs)
+        if self.profile.zero_now:
+            # the request dropped to zero (an end, or a drive finished): the accepted command's speed goes to zero
+            # now, not when the console's next message comes (Codex G6 code review P1-2). Only ever a reduction.
+            self.profile.zero_now = False
+            if self.arbiter.teleop is not None:
+                self.arbiter.teleop["speed_ratio"] = 0.0
         if row is not None and self.record is not None:
             self.record.put_row(row)
         for m in self.profile.take_marks():

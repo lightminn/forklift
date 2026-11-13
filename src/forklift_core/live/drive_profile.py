@@ -102,8 +102,22 @@ def parse_profile(data: dict, lim: ProfileLimits) -> Profile:
     if data.get("load", "empty") != "empty":
         raise ValueError("only empty-truck profiles: loaded teleop is refused on the real truck (lead decision (a))")
     raw = data.get("segments")
-    if not isinstance(raw, list) or not raw:
-        raise ValueError("a profile needs segments")
+    if not isinstance(raw, list) or not raw or not all(isinstance(r, dict) for r in raw):
+        raise ValueError("a profile needs segments, each a mapping")
+    try:
+        return _parse_segments(data, raw, lim)
+    except (TypeError, KeyError) as e:  # a missing or ill-typed field: one kind of refusal
+        raise ValueError(f"malformed profile: {e!r}") from e
+
+
+def _finite(value, where: str, what: str) -> float:
+    v = float(value)
+    if not math.isfinite(v):
+        raise ValueError(f"{where}: {what} must be finite")
+    return v
+
+
+def _parse_segments(data: dict, raw: list, lim: ProfileLimits) -> Profile:
     dq = _dq_dkappa(lim)
     segs, current, planned = [], None, 0.0
     for i, r in enumerate(raw):
@@ -118,19 +132,22 @@ def parse_profile(data: dict, lim: ProfileLimits) -> Profile:
         if current is None:
             raise ValueError(f"{where}: a profile starts with a presteer (the standing q is not known)")
         if "hold_s" in r:
-            h = float(r["hold_s"])
+            h = _finite(r["hold_s"], where, "hold_s")
             if not h > 0:
                 raise ValueError(f"{where}: hold_s must be positive")
             segs.append(Segment(label, "hold", hold_s=h, kappa=current))
             planned += h
             continue
-        v = float(r.get("speed_mps", 0.0))
+        v = _finite(r.get("speed_mps", 0.0), where, "speed_mps")
         if not (math.isfinite(v) and 0.0 < abs(v) <= lim.cap_mps + 1e-12):
             raise ValueError(f"{where}: speed {v} m/s must be nonzero and within the teleop cap {lim.cap_mps:.3f}")
         merge = step = ramp = None
         at_max = False
         if "s_merge" in r:
-            off, length = float(r["s_merge"]["offset_m"]), float(r["s_merge"]["length_m"])
+            off = _finite(r["s_merge"]["offset_m"], where, "offset_m")
+            length = _finite(r["s_merge"]["length_m"], where, "length_m")
+            if not length > 0 or off == 0.0:
+                raise ValueError(f"{where}: a merge needs length_m > 0 and a nonzero offset_m (its sign is the side)")
             peak = 2 * math.pi * off / length ** 2
             _kappa(abs(peak), lim, where)
             rate = abs(peak) * 2 * math.pi / length * abs(v)
@@ -146,7 +163,7 @@ def parse_profile(data: dict, lim: ProfileLimits) -> Profile:
             k0 = (_kappa(r["kappa_inv_m"], lim, where) if "kappa_inv_m" in r
                   else _kappa(lim.kappa_of_q(float(r["q_rad"])), lim, where))
             at_max = r.get("kappa_inv_m") in ("max", "-max")
-            d = float(r["distance_m"])
+            d = _finite(r["distance_m"], where, "distance_m")
             if "q_step" in r:
                 to = _kappa(lim.kappa_of_q(float(r["q_step"]["to_rad"])), lim, where)
                 after = float(r["q_step"]["after_s"])
@@ -184,6 +201,8 @@ class Observation(NamedTuple):
     port: str | None
     direction_cut: object
     stop: object
+    deadman: bool = False  # the deadman of the command the arbiter accepted (never a message it refused)
+    policy: str | None = None  # the arbiter's policy reason
 
 
 @dataclass
@@ -198,7 +217,7 @@ class ProfileRunner:
 
     def __post_init__(self) -> None:
         self._marks: list = []
-        self._deadman = False
+        self.zero_now = False  # the request just dropped to zero (an end, or a drive finished): apply it at once
         self._row_s: float | None = None
         self._reset()
 
@@ -244,9 +263,8 @@ class ProfileRunner:
     def rewrite(self, msg: dict) -> dict:
         """The operator's teleop message with the profile's two ratios (idle: untouched; ended: zeros until the
         deadman is let go). Never makes a message."""
-        if msg.get("t") != "teleop":
+        if msg.get("t") != "teleop" or self.state == "idle":
             return msg
-        self._deadman = msg.get("deadman") is True
         if self.state == "idle":
             return msg
         if self.state == "zeroing":
@@ -261,12 +279,15 @@ class ProfileRunner:
         self.result = result
         self.state = "zeroing"
         self.req_mps = self.req_kappa = 0.0
+        self.zero_now = True
 
     def _next(self, host_ns: int) -> None:
         seg = self.segment
         self._row_s = self.s_m  # the row of this cycle shows where the finished segment ended
         if seg.kind == "drive" and seg.at_max and not self.reached:
             self.under_reached.append(seg.label)
+        if seg.kind == "drive":
+            self.zero_now = True  # the next segment stands: the accepted command's speed goes to zero now
         self.i += 1
         if self.i >= len(self.profile.segments):
             self._end("done")
@@ -278,7 +299,7 @@ class ProfileRunner:
         if self.state == "zeroing":
             self._row_s = None
             row = self._row(now_ns, obs, None)
-            if not self._deadman:
+            if not obs.deadman:
                 self.state = "idle"
             return row
         if self.state != "running":
@@ -311,10 +332,10 @@ class ProfileRunner:
         lim = self.limits
         if not self.moving:
             self.req_mps, self.req_kappa = 0.0, seg.kappa_at(0.0, 0.0)
-            if not self._deadman:
+            if not obs.deadman:
                 return  # waits in place for the deadman (design 2: a drive starts only while it is held)
             self.moving = True
-        elif not self._deadman:
+        elif not obs.deadman:
             self._end("void:deadman")
             return
         sign = 1.0 if seg.speed_mps > 0 else -1.0
@@ -346,5 +367,6 @@ class ProfileRunner:
                 "seg": self.i, "label": None if seg is None else seg.label, "s_m": s_m,
                 "req_mps": self.req_mps, "req_kappa": self.req_kappa,
                 "arb_mps": obs.target_mps, "arb_limit": None if obs.permit is None else list(obs.permit),
+                "arb_policy": obs.policy, "deadman": obs.deadman,
                 "drive_mps": obs.applied_mps, "drive_q": obs.applied_q, "port": obs.port,
                 "direction_cut": obs.direction_cut, "meas_q": obs.meas_q, "result": self.result}
