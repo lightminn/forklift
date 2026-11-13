@@ -164,7 +164,10 @@
 | `bundle_results.jsonl` | 묶음 실행기의 실행별 기록(rc, 시도 수, 벽시계, 인프라 실패) | b3abd680c7828fcef0ce571539e20dc6 |
 | `bundle_summaries.txt` | 두 잡(18912·18913)의 묶음 요약(재시도 0, 인프라 실패 0) | 7399d4b87b183b7afd0ecb00cb20eb00 |
 
-- 원본 실행 폴더는 ws1 `test_runs/k1/cmp_c7701296/k1c_*/` 에 있다. 보관할 때는 이 표에 gdrive 보관명을 덧붙인다.
+- 원본 보관(2026-11-14, ws1 원본은 지움):
+  - Drive `forklift-archive/ws1-cleanup-20261114-e/e_k1cmp.tar.zst`(ws1 rclone `gdrive:ws1-cleanup-20261114-e/e_k1cmp.tar.zst`), md5 `42d99aea6c30c9f8e67952d4c84485e3`(tar.zst 파일), 19,312 항목.
+  - 묶음 안 경로(`/home/projects/forklift` 기준): `test_runs/k1/cmp_c7701296/…`(실행 80), `snapshots/k1cmp_c7701296/…`, `test_runs/k1_RUNS_cmp_c7701296.jsonl`(+ preflight), `test_runs/k1/{k1_judge.py, near_reject_classify.py, smoke_read.py}`.
+  - 같은 폴더에 파일 목록 `e_k1cmp.files.tsv` 와 `archive_map.txt` 가 있다.
 - 판정 재현: `python docs/validation/2026-11-14-k1-comparison/k1_judge.py --raw-fields docs/validation/assets/k1-comparison/k1_raw_fields.json.gz --out K1.json`(forklift_core 설치 필요).
   - 같은 도구를 원본 폴더(`k1_judge.py test_runs/k1/cmp_c7701296 --out …`)에 돌려도 같은 판정이 나왔다.
 - 판정 도구에 대한 Codex 재계산 검토의 지적과 처리:

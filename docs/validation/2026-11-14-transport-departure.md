@@ -31,7 +31,7 @@
 
 - 묶음:
   - 58 회 확인 `budget_0092bcf7`, 진단 50 회 `diag_0092bcf7`: 디스크 세션이 gdrive `f_diag.tar.zst`(md5 `8879035b46112fcb78c0342246b0db00`)에서 ws1 `test_runs/tmp_restore/f_diag_transport/` 로 부분 복원했다.
-  - K1 비교 `cmp_c7701296`: ws1 `test_runs/k1/cmp_c7701296/`.
+  - K1 비교 `cmp_c7701296`: 분석 때 ws1 `test_runs/k1/cmp_c7701296/`. 지금은 `gdrive:ws1-cleanup-20261114-e/e_k1cmp.tar.zst`(md5 `42d99aea6c30c9f8e67952d4c84485e3`)에 보관돼 있다. ws1 분석 폴더 `test_runs/tdep/` 은 같은 폴더의 `e_tdep.tar.zst`(md5 `daf269082bcd2d482b777527b5db8653`)다.
   - 모두 결정 모드다.
 - 운반 단계 종료 23 실행(계획 1 절 표). 모든 실행이 SLAM 피드백이고, 추적기 cross_track 한계는 0.35 m(`tracking_failure.config`)다.
 - 같은 궤적 묶기:
