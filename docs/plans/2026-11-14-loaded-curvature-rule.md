@@ -56,14 +56,16 @@
 | 호출 | 위치 | 단계 조건 | 지금 넘기는 설정 | 바꿀 것 |
 |---|---|---|---|---|
 | 첫 미션 계획 | 러너 `plan_transport`(`run_transport.py` 6489), 관측 성공 때 미리 계획 `observe_succeeded`(`core.py` 4014, 작업자 경유 4004) | 미션 전체를 한 번에 계획. 운반 단계 검색만 바꾼다 | `config`(전 단계), `travel_config`(운반·복귀 긴 다리) | `pallet_mission.plan_transport` 에 운반 단계 전용 키워드(`transport_config`, `transport_travel_config`)를 더한다. 없으면 지금과 같다. 접근·삽입·빼기·하역·복귀는 그대로 |
-| 실시간 다리 | `live_leg`(`core.py` 753–850; 작업자 `_leg_payload("transport", …)` 816, 동기 `plan_transport_leg` 831·834) | `kind == "transport"`(적재)일 때만. `return` 은 그대로 | `planner_config`, 실패 시 `clearance_m=0.0` 재시도 | 운반 쪽 두 호출과 작업자 payload 에 loaded 설정. 0 여유 재시도도 loaded 설정에서 `replace` |
-| 장애물 재계획 | `blocked_replan`(1815–) → `transport_replan`(7410–7438, `plan_transport_leg`); 미션 전체 재계획 `plan_transport`(2009·2022) | 운반 단계면 `transport_replan`, 집기 전이면 미션 전체 재계획 | `planner_config`, `travel_config`, 0 여유 재시도(1875) | 운반 단계 호출에 loaded 설정. 미션 전체 재계획에는 운반 단계 전용 키워드 |
+| 실시간 다리 | `live_leg`(`core.py` 753–850; 작업자 `_leg_payload("transport", …)` 816, 동기 `plan_transport_leg` 831·834) | `kind == "transport"`(적재)일 때만. `return` 은 그대로 | `planner_config`, 실패 시 `clearance_m=0.0` 재시도 | 운반 쪽 두 동기 호출에 loaded 설정. 0 여유 재시도도 loaded 설정에서 `replace` |
+| 작업자 payload | `_leg_payload`(8197–; 호출 816·8264) | `kind == "transport"` 만 | payload 안의 설정과 작업자 쪽 0 여유 재시도(`planner_config` 에서 파생) | 운반 payload 의 최초 호출 설정과 0 여유 재시도 설정이 모두 loaded 에서 나오게 한다 |
+| 장애물 재계획(운반) | `blocked_replan`(1815–) → `transport_replan`(7410–, 실제 호출 `plan_transport_leg` 7438) | 운반 단계 | `planner_config`, `travel_config`, 0 여유 재시도(1875) | loaded 설정, 0 여유 재시도도 loaded 에서 |
+| 장애물 재계획(관측, 인식 뒤 미션 전체) | `blocked_replan` 의 `plan_transport` 2009, 0 여유 재시도 2022 | `ms.phase == "observe"`. 운반과 선택적 복귀를 포함한 미션 전체를 다시 만든다 | `planner_config`, `travel_config` | 운반 단계 전용 키워드만 넘긴다. 복귀(하역 뒤 빈 포크)와 다른 단계는 그대로. 0 여유 재시도도 같은 방식 |
 | 정체 재계획 | `docking_and_stall`(2346–, `plan_transport_leg` 2535) | 운반 단계(적재) 호출만. 같은 함수의 복귀(2542 `plan_return_leg`)는 그대로 | `planner_config` | 운반 호출에 loaded 설정 |
 | cusp 재계획 | `cusp_and_observe_recovery`(2626–, `plan_transport_leg` 2693) | 운반 단계 호출만. 관측·복귀 분기는 그대로 | `planner_config` | 같음 |
 | SLAM 놓기 뒤 재계획 | `slam_release`(7938–, `plan_transport_leg` 8014·8057, 0 여유 재시도 8054) | 운반 단계 호출만 | `planner_config`, `travel_config` | 같음 |
-| 장면 재계획 | `_scene_ports`(8864–, `hooks.plan_transport_leg` 8926) | 운반 단계 | `cfg_` | 같음 |
-| D7 재접근 | `reapproach_plan`(7178–, `plan_docking_reapproach`, `reapproach_planner_config`) | 하역 맞춤(적재) | `planner_config` → `d7_reapproach_curvature_inv_m` 상한(있을 때) | loaded 설정을 넘기고, 기존 상한은 그 위에 `min` 으로 그대로 건다 |
-| 하역 직선, 빼기 | 배송 직선(`arm_docking`), withdraw | 직선·고정 동작, 계획기 곡률과 무관 | — | 바꾸지 않음(기록만) |
+| 장면 재계획 | `_scene_ports`(8864–; `submit()` 의 작업자 payload 와 동기 `hooks.plan_transport_leg` 8926) | 운반 단계 | `cfg_` | 작업자 payload 와 동기 호출 모두 loaded 설정 |
+| D7 재접근 | `reapproach_plan`(7178–, `plan_docking_reapproach`, `reapproach_planner_config`) | 운반 단계 중 하역 맞춤을 위한 대체 경로(일반 운반 경로 대신 docking line 으로 가는 새 경로) | `planner_config` → `d7_reapproach_curvature_inv_m` 상한(있을 때) | loaded 설정을 넘기고, 기존 상한은 그 위에 `min` 으로 그대로 건다 |
+| 하역 직선, 빼기 | 배송 직선(`arm_docking`), withdraw | 직선 경로라 계획 곡률 상한의 영향이 없다 | — | 바꾸지 않음(기록만) |
 | 복귀 | `plan_return_leg`, `_return_cusp_replan`(6903–) | 하역 뒤 빈 포크(lower → withdraw 뒤) | `planner_config` | 바꾸지 않음 |
 
 - 구현 때 위 표를 코드에서 다시 훑어, 운반 단계에서 `planner_config`·`travel_config` 를 넘기는 호출이 표 밖에 없는지 시험으로 확인한다(소스 검사).
@@ -157,6 +159,7 @@
   - P2 안전·비회귀 정의: 필드(`forbidden_pocket_contacts`, SCENE 클래스)를 적고, 비회귀는 상태·원인 분류 수준으로 했다. 계획 실패는 장면별 표로 낸다.
   - P2 추적기 한계: 2 절에 추적기를 바꾸지 않는다고 적었다. 6 절에서 κ_cmd·포화·cross_track 의 대응을 본다.
   - P3 인벤토리 열, 시간 측정의 생존자 편향, 집계 단위, smoke 조건: 3.2·3.3·5.1·5.2 에 반영했다.
+- ② Codex 2 회차: "새 P1/P2 없음". P3 3 개(작업자 payload 와 0 여유 재시도 행, 관측 단계 미션 전체 재계획의 조건과 범위, 직선과 D7 재접근의 구분)를 3.2 표에 반영했다.
 - ③ agy 독립 검토(Codex 결과를 보지 않음)와 처리:
   - `plan_transport` 의 복귀 오염, 관측 시점 선행 계획 실패: 3.2 표와 4 절(갈라지는 곳)에 반영했다.
   - pure pursuit 가 14 mm 에서 포화한다: 2 절에 반대 가능성으로 적고, 6 절에 오프셋 수렴 거리를 더했다.
