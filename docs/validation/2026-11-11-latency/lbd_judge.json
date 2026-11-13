@@ -1,0 +1,1745 @@
+{
+ "rows": {
+  "lbd_B0_aisle_rack_s11": {
+   "name": "lbd_B0_aisle_rack_s11",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 11,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s11",
+   "invalid": [],
+   "control_sha256": "df1b5888b2dbcf64399e6338ad2653afaf96ed4a67dba1980d039541e492b317",
+   "mission": {
+    "done": false,
+    "reason": "near_capture_failed:perception_no_pallet:no_expected_candidate",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 122,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": null,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.20080750606964226,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s11": {
+   "name": "lbd_Pn_aisle_rack_s11",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 11,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s11",
+   "invalid": [],
+   "control_sha256": "b7d7c767a4a322e71773f28a29b3031483bf27fb19c3ca493b0c8b7de3beb877",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 386.7750201718882,
+    "delivery_error_cm": 0.2522177742305484,
+    "docking_rounds": 3,
+    "slowed_ticks": 1918,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 53.95000281371176,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.16639604188659735,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1011,
+    "args_slam_noise_seed": 11,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s11": {
+   "name": "lbd_Bb10_aisle_rack_s11",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 11,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s11",
+   "invalid": [],
+   "control_sha256": "fb8e2b4feadb7face20289049923d90a7edad6442b1973fe71d0084db758e453",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 213.50834446866065,
+    "delivery_error_cm": 2.179872046289511,
+    "docking_rounds": 2,
+    "slowed_ticks": 1851,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 55.11666954122484,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1315454116886386,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s12": {
+   "name": "lbd_B0_aisle_rack_s12",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 12,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s12",
+   "invalid": [],
+   "control_sha256": "452c737247e71a13c43dcfd6ea83d4d49145d426d6c0bcc67d7bbc45c7913b62",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 260.42501358222216,
+    "delivery_error_cm": 1.5235247426111527,
+    "docking_rounds": 3,
+    "slowed_ticks": 1524,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 61.05833651777357,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1592989829290768,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s12": {
+   "name": "lbd_Pn_aisle_rack_s12",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 12,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s12",
+   "invalid": [],
+   "control_sha256": "64146ed93ee1fea97e9ebf6ab7119eec57a57fb85be6a3a25e2261ebfd13a0a6",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 215.93334459513426,
+    "delivery_error_cm": 0.2804086673559799,
+    "docking_rounds": 2,
+    "slowed_ticks": 1850,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 62.67500326875597,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.22820519147664908,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1012,
+    "args_slam_noise_seed": 12,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s12": {
+   "name": "lbd_Bb10_aisle_rack_s12",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 12,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s12",
+   "invalid": [],
+   "control_sha256": "f0f6b904f5207721441fca2d6a578a46ecc3245dffb928219ee87d542bfa8ab4",
+   "mission": {
+    "done": false,
+    "reason": "Tracking timeout in transport",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 1284,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 56.50833628047258,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1602346678641638,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s13": {
+   "name": "lbd_B0_aisle_rack_s13",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 13,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s13",
+   "invalid": [],
+   "control_sha256": "53c9981e86be508c85bcec5c0346f952f3877fa6fc6cbab0fbbc15167f1cfbbd",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 207.81667750515044,
+    "delivery_error_cm": 0.33066963052622966,
+    "docking_rounds": 2,
+    "slowed_ticks": 1404,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 58.508336384780705,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.21449502958068872,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s13": {
+   "name": "lbd_Pn_aisle_rack_s13",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 13,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s13",
+   "invalid": [],
+   "control_sha256": "1da6386c5e2c4c6adab283c8c8b76322bcb8a3374b701e95521609b45ec120dd",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 209.741677605547,
+    "delivery_error_cm": 2.0097276719844226,
+    "docking_rounds": 2,
+    "slowed_ticks": 2422,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 56.016669588163495,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.19212054548402546,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1013,
+    "args_slam_noise_seed": 13,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s13": {
+   "name": "lbd_Bb10_aisle_rack_s13",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 13,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s13",
+   "invalid": [],
+   "control_sha256": "378ae1ff99ed1b97927a6e799a2dffc5737695d916a05851d50b02f32de0cdd6",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 201.9750105338171,
+    "delivery_error_cm": 2.709768547052343,
+    "docking_rounds": 2,
+    "slowed_ticks": 2137,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 60.12500313576311,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.15052855286155908,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s14": {
+   "name": "lbd_B0_aisle_rack_s14",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 14,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s14",
+   "invalid": [],
+   "control_sha256": "c6f4689a89270ffb671a9e2b60e7fe6f58dd1565cb4641324338cd198dbbf753",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 223.0333449654281,
+    "delivery_error_cm": 2.3491280971718687,
+    "docking_rounds": 2,
+    "slowed_ticks": 1311,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 54.69166951905936,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1931868113249527,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s14": {
+   "name": "lbd_Pn_aisle_rack_s14",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 14,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s14",
+   "invalid": [],
+   "control_sha256": "fe1ee03a9fca5e782929bb5c9281dbb5d9ac7b1d7b56770fb3fbc1e91dc0e74f",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 206.91667745821178,
+    "delivery_error_cm": 1.631714877651509,
+    "docking_rounds": 2,
+    "slowed_ticks": 1847,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 56.808336296118796,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.20243115556447522,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1014,
+    "args_slam_noise_seed": 14,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s14": {
+   "name": "lbd_Bb10_aisle_rack_s14",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 14,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s14",
+   "invalid": [],
+   "control_sha256": "47f51f9b5b50c41959c302e005cb0e0bfde71e5d31f8e8519473e58b3420faaf",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 254.65001328103244,
+    "delivery_error_cm": 0.7629087693736286,
+    "docking_rounds": 2,
+    "slowed_ticks": 1968,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 59.00000307708979,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1534165830256214,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s15": {
+   "name": "lbd_B0_aisle_rack_s15",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 15,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s15",
+   "invalid": [],
+   "control_sha256": "064f445bae656c6a7dd8b12d126498dee375d1b55bb7c9088acc89c1c2117b2a",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 300.4166823346168,
+    "delivery_error_cm": 3.986122988766326,
+    "docking_rounds": 2,
+    "slowed_ticks": 1415,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 57.05000297538936,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1712302455077504,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s15": {
+   "name": "lbd_Pn_aisle_rack_s15",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 15,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s15",
+   "invalid": [],
+   "control_sha256": "12519f894d77bea0b8634c4c49af6e760df07ba64ed87a1d33cb8eb2cb81d647",
+   "mission": {
+    "done": false,
+    "reason": "Tracking timeout in transport",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 755,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 53.658336131833494,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.1545142681285947,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1015,
+    "args_slam_noise_seed": 15,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s15": {
+   "name": "lbd_Bb10_aisle_rack_s15",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 15,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s15",
+   "invalid": [],
+   "control_sha256": "a0607c9a1c476bec1ae67112853809a77c094bfeca80cfcf6ce05a469fffde24",
+   "mission": {
+    "done": false,
+    "reason": "transport:invalid_start",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 366,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": null,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.18717589240193389,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s16": {
+   "name": "lbd_B0_aisle_rack_s16",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 16,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s16",
+   "invalid": [],
+   "control_sha256": "73f77526421e832ec06c79e73f8d3bcd89a83d848bb804ffca68120621dd2056",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 257.6916801063344,
+    "delivery_error_cm": 2.200963677557087,
+    "docking_rounds": 2,
+    "slowed_ticks": 1990,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 54.06666948646307,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.21258633266141014,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s16": {
+   "name": "lbd_Pn_aisle_rack_s16",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 16,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s16",
+   "invalid": [],
+   "control_sha256": "fef10c1483de39215a73a6aea3a80711ee3c7e5a410dc814ccdca3efce5c9198",
+   "mission": {
+    "done": false,
+    "reason": "slam_release_replan_failed: invalid_start (exit_prefix unmet:search_no_path)",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 481,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 66.74167014751583,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.29720404024109764,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1016,
+    "args_slam_noise_seed": 16,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s16": {
+   "name": "lbd_Bb10_aisle_rack_s16",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 16,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s16",
+   "invalid": [],
+   "control_sha256": "7966752c395ba938b2d4b290c1734be8f114a24dfca65630728afaf8620ac205",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 209.82501094322652,
+    "delivery_error_cm": 0.632444075972399,
+    "docking_rounds": 2,
+    "slowed_ticks": 1607,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 55.67500290367752,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.16395987422594055,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s17": {
+   "name": "lbd_B0_aisle_rack_s17",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 17,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s17",
+   "invalid": [],
+   "control_sha256": "a730cc312403e0bf7b0b954315c148b839d39d4de528b354efea86384bfd4dfa",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 200.90834381151944,
+    "delivery_error_cm": 4.678435982494459,
+    "docking_rounds": 2,
+    "slowed_ticks": 1104,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 59.591669774614275,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.2143285172950658,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s17": {
+   "name": "lbd_Pn_aisle_rack_s17",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 17,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s17",
+   "invalid": [],
+   "control_sha256": "374faea57475ba75c831439853d1b857942f0a055bc4de7c811f1170c4871279",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=0.0118,yaw=-0.0554",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 1485,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 61.5583365438506,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.17515829969321334,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1017,
+    "args_slam_noise_seed": 17,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s17": {
+   "name": "lbd_Bb10_aisle_rack_s17",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 17,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s17",
+   "invalid": [],
+   "control_sha256": "626c89dbf9b0454c982f47b9604f0a0e8b99d957a9dba8bbf702304d804ee704",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 213.95001115836203,
+    "delivery_error_cm": 0.651679022535622,
+    "docking_rounds": 2,
+    "slowed_ticks": 2254,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 57.79166968073696,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.13127025559700628,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s18": {
+   "name": "lbd_B0_aisle_rack_s18",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 18,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s18",
+   "invalid": [],
+   "control_sha256": "f81e65f2e5c06c23392afe93e87592cfdc324e66b7bd8404c4ee27998335ef6f",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 212.88334443606436,
+    "delivery_error_cm": 0.42773051582485994,
+    "docking_rounds": 2,
+    "slowed_ticks": 2038,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 53.833336140960455,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.18632333210006086,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_aisle_rack_s18": {
+   "name": "lbd_Pn_aisle_rack_s18",
+   "arm": "Pn",
+   "scene": "aisle_rack",
+   "seed": 18,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_aisle_rack_s18",
+   "invalid": [],
+   "control_sha256": "6805bdd5e46366590b6dbb886205e6f8ff3f9c6dd3af3fd876c91316a5c9286d",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 249.85001303069293,
+    "delivery_error_cm": 2.1378355016087482,
+    "docking_rounds": 2,
+    "slowed_ticks": 1721,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 56.35000293888152,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.14944507263393342,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1018,
+    "args_slam_noise_seed": 18,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_aisle_rack_s18": {
+   "name": "lbd_Bb10_aisle_rack_s18",
+   "arm": "Bb10",
+   "scene": "aisle_rack",
+   "seed": 18,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_aisle_rack_s18",
+   "invalid": [],
+   "control_sha256": "3e22c2c3bd1aa52d85025718abb385a7759d6157b1ec21071955202ae2a5d9e7",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=0.0177,yaw=0.0532",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 1713,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 51.30000267550349,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.23561346306034492,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s3": {
+   "name": "lbd_B0_random_1_s3",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 3,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s3",
+   "invalid": [],
+   "control_sha256": "f2d9c436a8eed6f156036f3b3ae057c1adeab871d0f49fdf59ae401357a4fc13",
+   "mission": {
+    "done": false,
+    "reason": "near_capture_misaligned:{'along_m': -0.0068920597246685264, 'lateral_m': -0.10718418452237281, 'yaw_rad': 0.0948013035352382, 'length_left_m': 2.1068920597246685}",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 133,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": null,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s3": {
+   "name": "lbd_Pn_random_1_s3",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 3,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s3",
+   "invalid": [],
+   "control_sha256": "ea62eec2d045febfe0a78943e8e0cb334c5790eff536228826dc7a9504760bd3",
+   "mission": {
+    "done": false,
+    "reason": "observe_replan_failed:invalid_start",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 178,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": null,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1003,
+    "args_slam_noise_seed": 3,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s3": {
+   "name": "lbd_Bb10_random_1_s3",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 3,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s3",
+   "invalid": [],
+   "control_sha256": "5461fa4f1d7c7d22959470ad313c9b7b6f2a80213c6a1eaa080c379a9cb1e32e",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 142.20834075007588,
+    "delivery_error_cm": 0.5633422563020735,
+    "docking_rounds": 2,
+    "slowed_ticks": 720,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 49.42500257771462,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4890818791689728,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s4": {
+   "name": "lbd_B0_random_1_s4",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 4,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s4",
+   "invalid": [],
+   "control_sha256": "609bcb6e4f702ad73d0213a2d59df710265d0a1c33fb2f682cfbbe697bcab9b1",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 148.91667443327606,
+    "delivery_error_cm": 0.647544078954385,
+    "docking_rounds": 2,
+    "slowed_ticks": 415,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 59.40000309795141,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s4": {
+   "name": "lbd_Pn_random_1_s4",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 4,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s4",
+   "invalid": [],
+   "control_sha256": "e43b36bba67729db91477e57322410982ab4cf4262694b9fd8460a3313370384",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 141.97500740457326,
+    "delivery_error_cm": 0.36932244731458325,
+    "docking_rounds": 2,
+    "slowed_ticks": 204,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 47.741669156588614,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1004,
+    "args_slam_noise_seed": 4,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s4": {
+   "name": "lbd_Bb10_random_1_s4",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 4,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s4",
+   "invalid": [],
+   "control_sha256": "cee96f3d6373d6941e61a8925fe2474a57d5c003c74cd9441977d66edc3510bd",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 151.7250079130754,
+    "delivery_error_cm": 0.24907293303747013,
+    "docking_rounds": 3,
+    "slowed_ticks": 330,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 40.64166878629476,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4890818791689728,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s5": {
+   "name": "lbd_B0_random_1_s5",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 5,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s5",
+   "invalid": [],
+   "control_sha256": "45374da2767c7254f4ef6b830ef2cdc4c969fb1c2337a11c3218c1f3830c63ad",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 142.22500741761178,
+    "delivery_error_cm": 0.49916266637708,
+    "docking_rounds": 2,
+    "slowed_ticks": 274,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 63.76666999235749,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.5217812842459943,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s5": {
+   "name": "lbd_Pn_random_1_s5",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 5,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s5",
+   "invalid": [],
+   "control_sha256": "958e81390104da6202c2bf9101bedcf5d5a40187ac76bcfbe2bb18fb7777b5f0",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=2.1623,yaw=0.6860",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 197,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 52.63333607837558,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.2880608738935211,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1005,
+    "args_slam_noise_seed": 5,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s5": {
+   "name": "lbd_Bb10_random_1_s5",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 5,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s5",
+   "invalid": [],
+   "control_sha256": "cb5b5c2767f7c5163626defcdf042a7dc4650a590147ab12a6765e29b8af146b",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 162.17500845808536,
+    "delivery_error_cm": 1.5274676128885458,
+    "docking_rounds": 2,
+    "slowed_ticks": 397,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 53.50000279024243,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.5521587237710431,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s6": {
+   "name": "lbd_B0_random_1_s6",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 6,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s6",
+   "invalid": [],
+   "control_sha256": "5633d236f29cad40f6b47a7611850359f536a99d13a0b9a6fc037b4db9f56da5",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 162.0333417840302,
+    "delivery_error_cm": 1.0617090697842861,
+    "docking_rounds": 2,
+    "slowed_ticks": 390,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 73.63333717361093,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s6": {
+   "name": "lbd_Pn_random_1_s6",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 6,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s6",
+   "invalid": [],
+   "control_sha256": "a73f6b1b28c6c54cfef334ef01ae955f3615afd07f81c6975d5d8aa38c1bd167",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 147.1416743407026,
+    "delivery_error_cm": 1.5853302978410615,
+    "docking_rounds": 2,
+    "slowed_ticks": 262,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 42.42500221263617,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.5119036937795671,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1006,
+    "args_slam_noise_seed": 6,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s6": {
+   "name": "lbd_Bb10_random_1_s6",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 6,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s6",
+   "invalid": [],
+   "control_sha256": "8d6f98ee8eb3769e3b038b355aff8a7bae52c85dce1f02b4fa6a126029b56d25",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 141.46667404472828,
+    "delivery_error_cm": 0.4444020421393537,
+    "docking_rounds": 2,
+    "slowed_ticks": 515,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 52.441669401712716,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4890818791689728,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s7": {
+   "name": "lbd_B0_random_1_s7",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 7,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s7",
+   "invalid": [],
+   "control_sha256": "b4ecfc86e5ceb0abdf0e4f3f5db49248b653b4017c32bb7c9e0ff4c8837be817",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 143.4500074815005,
+    "delivery_error_cm": 3.3310809167640842,
+    "docking_rounds": 3,
+    "slowed_ticks": 316,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 51.008335993625224,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s7": {
+   "name": "lbd_Pn_random_1_s7",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 7,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s7",
+   "invalid": [],
+   "control_sha256": "2939ab2911317a18f8b02b123d9cbeaa04a12773ec6e6d8b589accec8c1930cf",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=2.9277,yaw=0.9784",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 235,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 54.17500282544643,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4119153942468374,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1007,
+    "args_slam_noise_seed": 7,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s7": {
+   "name": "lbd_Bb10_random_1_s7",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 7,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s7",
+   "invalid": [],
+   "control_sha256": "860afc87a382dea8081980c3c454f676ecae6fe5bcc5b4713606c17191604f09",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 156.0333414711058,
+    "delivery_error_cm": 1.5741097372473458,
+    "docking_rounds": 2,
+    "slowed_ticks": 686,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 69.81667030788958,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4890818791689728,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s8": {
+   "name": "lbd_B0_random_1_s8",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 8,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s8",
+   "invalid": [],
+   "control_sha256": "43c4734dca19e5363ded2afd9fed674da34c2f753776b3c624194897536d86dd",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 145.91667427681386,
+    "delivery_error_cm": 2.404182809901607,
+    "docking_rounds": 2,
+    "slowed_ticks": 280,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 56.74166962597519,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.6299232263267108,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s8": {
+   "name": "lbd_Pn_random_1_s8",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 8,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s8",
+   "invalid": [],
+   "control_sha256": "186f2608af38ef2593a3049003595810c062c2b2e9876dab49d1873427356b9b",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 147.1083410056308,
+    "delivery_error_cm": 0.5209516956947083,
+    "docking_rounds": 2,
+    "slowed_ticks": 285,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 50.891669320873916,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4879878117991152,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1008,
+    "args_slam_noise_seed": 8,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s8": {
+   "name": "lbd_Bb10_random_1_s8",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 8,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s8",
+   "invalid": [],
+   "control_sha256": "1504a98177989b3ae23421c2f0d4c78fa9495c26a8ed7a647c09e9c89dea3179",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 276,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 44.76666900143027,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.6299232263267108,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s9": {
+   "name": "lbd_B0_random_1_s9",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 9,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s9",
+   "invalid": [],
+   "control_sha256": "9029f27ee5fce9d7437b0d71baa82db8038bca8acf61df20bf9c6433434da963",
+   "mission": {
+    "done": false,
+    "reason": "Tracking failed in transport: pos=2.9372,yaw=0.9878",
+    "mission_sim_s": null,
+    "delivery_error_cm": null,
+    "docking_rounds": null,
+    "slowed_ticks": 136,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": "observed_end",
+   "approach_s": 58.3916697120294,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.6299232263267108,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s9": {
+   "name": "lbd_Pn_random_1_s9",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 9,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s9",
+   "invalid": [],
+   "control_sha256": "0bcd3a1b569bd6abab3eb6913336365f348cb880a9c09f64d929222c7d24be81",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 157.54167488310486,
+    "delivery_error_cm": 0.5969025816981411,
+    "docking_rounds": 2,
+    "slowed_ticks": 192,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 46.7166691031307,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1009,
+    "args_slam_noise_seed": 9,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s9": {
+   "name": "lbd_Bb10_random_1_s9",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 9,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s9",
+   "invalid": [],
+   "control_sha256": "678b7c856d00b0033bc949638ac93a8c082c5f41ed44f2760e8dd966a04d6e66",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 151.58334123902023,
+    "delivery_error_cm": 2.129982328915429,
+    "docking_rounds": 2,
+    "slowed_ticks": 551,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 45.70833571720868,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.6299232263267108,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s10": {
+   "name": "lbd_B0_random_1_s10",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 10,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s10",
+   "invalid": [],
+   "control_sha256": "faeb7e465646a18c161d0cca649482277f53f6c7ed88e7f6c94102d0a31831f3",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 134.25834033545107,
+    "delivery_error_cm": 1.5026062080711022,
+    "docking_rounds": 2,
+    "slowed_ticks": 390,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 47.758335824124515,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48949607933681955,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_Pn_random_1_s10": {
+   "name": "lbd_Pn_random_1_s10",
+   "arm": "Pn",
+   "scene": "random_1",
+   "seed": 10,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Pn_random_1_s10",
+   "invalid": [],
+   "control_sha256": "6a72f053454cf3389a5dffa4aaa3ff1b40c1feb959f91aaabc00e6e15437a6a2",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 137.52500717248768,
+    "delivery_error_cm": 1.7533793338216044,
+    "docking_rounds": 2,
+    "slowed_ticks": 222,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 52.95833609532565,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.562309314577774,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   },
+   "exposure": {
+    "exposed": true,
+    "args_seed": 1010,
+    "args_slam_noise_seed": 10,
+    "control_equal_to_b0": false
+   }
+  },
+  "lbd_Bb10_random_1_s10": {
+   "name": "lbd_Bb10_random_1_s10",
+   "arm": "Bb10",
+   "scene": "random_1",
+   "seed": 10,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_Bb10_random_1_s10",
+   "invalid": [],
+   "control_sha256": "8432bcd2dd2e77a8cfdbd0d69efe7042f999c2058d1c0b322370d08c7cf3a7b5",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 144.2916741920635,
+    "delivery_error_cm": 0.5099306400197736,
+    "docking_rounds": 3,
+    "slowed_ticks": 472,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 40.50833544600755,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.4890818791689728,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_random_1_s0_can": {
+   "name": "lbd_B0_random_1_s0_can",
+   "arm": "B0",
+   "scene": "random_1",
+   "seed": 0,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_random_1_s0_can",
+   "invalid": [],
+   "control_sha256": "b40bc60e07a41a1cdda6a4865430d1e6e931a0ee92c1fbfbe7b260e9137cb19f",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 152.37500794697553,
+    "delivery_error_cm": 0.45121433112995196,
+    "docking_rounds": 2,
+    "slowed_ticks": 467,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 70.75000368990004,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.48653965248692277,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  },
+  "lbd_B0_aisle_rack_s2_can": {
+   "name": "lbd_B0_aisle_rack_s2_can",
+   "arm": "B0",
+   "scene": "aisle_rack",
+   "seed": 2,
+   "dir": "/home/projects/forklift/test_runs/lat/diag_0092bcf7/lbd_B0_aisle_rack_s2_can",
+   "invalid": [],
+   "control_sha256": "33002ec646c668642cdb88d44ab1afa449fb77ade841ab119425a73ca8c8d3aa",
+   "mission": {
+    "done": true,
+    "reason": null,
+    "mission_sim_s": 287.66668166965246,
+    "delivery_error_cm": 0.6136731036773757,
+    "docking_rounds": 2,
+    "slowed_ticks": 2386,
+    "obstacle_replans": 0,
+    "mission_replans": 0
+   },
+   "stop": null,
+   "approach_s": 55.75000290758908,
+   "safety": {
+    "forbidden_contacts": 0,
+    "unpermitted_entries": 0,
+    "unpermitted_dir_entries": 0,
+    "low_clearance_read": true,
+    "physical_min_m": 0.18789797189750274,
+    "events": [],
+    "unreadable": false,
+    "violations": 0
+   }
+  }
+ },
+ "conclusions": {
+  "per_scene": {
+   "aisle_rack": {
+    "triplets": 8,
+    "left_out": [],
+    "judged": true,
+    "ga": {
+     "n": 7,
+     "b": 2,
+     "c": 2,
+     "both": 1,
+     "p": 0.6875,
+     "verdict": "not_confirmed"
+    },
+    "na": {
+     "n": 2,
+     "b": 0,
+     "c": 0,
+     "both": 1,
+     "p": null,
+     "verdict": "not_confirmed"
+    }
+   },
+   "random_1": {
+    "triplets": 8,
+    "left_out": [],
+    "judged": true,
+    "ga": {
+     "n": 6,
+     "b": 1,
+     "c": 2,
+     "both": 0,
+     "p": 0.875,
+     "verdict": "not_confirmed"
+    },
+    "na": {
+     "n": 3,
+     "b": 0,
+     "c": 0,
+     "both": 0,
+     "p": null,
+     "verdict": "not_confirmed"
+    }
+   }
+  },
+  "pooled": {
+   "ga": {
+    "n": 13,
+    "b": 3,
+    "c": 4,
+    "both": 1,
+    "p": 0.7734375,
+    "verdict": "not_confirmed"
+   },
+   "na": {
+    "n": 5,
+    "b": 0,
+    "c": 0,
+    "both": 1,
+    "p": null,
+    "verdict": "not_confirmed"
+   }
+  },
+  "sentences": {
+   "mission failure": "Bb10 did not worsen mission failure significantly more often than the noise resample Pn (b = 3, c = 4, one-sided p = 0.773). This is not evidence that the budget costs nothing: with at most 16 pairs the test detects only large differences.",
+   "operating exceedance": "Bb10 did not worsen operating exceedance significantly more often than the noise resample Pn (b = 0, c = 0, one-sided p = n/a (no discordant pair)). This is not evidence that the budget costs nothing: with at most 16 pairs the test detects only large differences."
+  }
+ },
+ "report": {
+  "improved": [
+   "lbd_Pn_aisle_rack_s11",
+   "lbd_Bb10_aisle_rack_s11",
+   "lbd_Bb10_random_1_s3",
+   "lbd_Pn_random_1_s9",
+   "lbd_Bb10_random_1_s9"
+  ],
+  "diverged": {
+   "Pn": 7,
+   "Bb10": 7,
+   "pairs": 14
+  }
+ },
+ "canaries": {
+  "random_1_s0": {
+   "equal": true,
+   "differences": []
+  },
+  "aisle_rack_s2": {
+   "equal": true,
+   "differences": []
+  }
+ },
+ "safety_violations": [],
+ "rerun_needed": [],
+ "to_lead": []
+}

@@ -366,3 +366,67 @@ def test_variant_j_holds_its_loop_search_whatever_the_mapping_config():
         p = p["slam_toolbox"]["ros__parameters"]
         assert (p["loop_search_space_resolution"], p["loop_search_space_smear_deviation"]) == (0.10, 0.05)
         assert (p["loop_search_maximum_distance"], p["loop_search_space_dimension"]) == (2.0, 3.0)
+
+
+def test_a_localization_bridge_drops_or_keeps_later_maps_by_its_parameter():
+    """Online-SLAM plan criterion 4 (H map measurement, lead decision (a) 2026-11-13): by default a localization
+    bridge keeps only the first /map after the first processed scan and then drops the subscription (plan L3, so
+    slam_toolbox skips the grid rebuild); keep_map_subscription (default off, replay jobs only) stores every later map
+    as a mapping bridge does, without changing the map the start check adopted."""
+    policy = _rules().map_policy
+    # mapping bridge: every map stored, none adopted
+    assert policy(localizing=False, adopted=False, first_processed=False, keep=False) == (True, False)
+    # localization before the first processed scan: stored, not adopted (Codex S3 review P2)
+    assert policy(localizing=True, adopted=False, first_processed=False, keep=False) == (True, False)
+    # the first map after the first processed scan: stored and adopted
+    assert policy(localizing=True, adopted=False, first_processed=True, keep=False) == (True, True)
+    # after adoption: ignored by default, stored (never re-adopted) with the parameter
+    assert policy(localizing=True, adopted=True, first_processed=True, keep=False) == (False, False)
+    assert policy(localizing=True, adopted=True, first_processed=True, keep=True) == (True, False)
+
+
+def test_keep_map_subscription_is_off_unless_a_replay_job_asks_for_it():
+    root = Path(__file__).resolve().parents[4]
+    src = (root / "ros2/src/forklift_ros/forklift_ros/isaac_slam_bridge.py").read_text()
+    assert 'self.declare_parameter("keep_map_subscription", False)' in src
+    assert "if not self.keep_map_subscription:\n" in src  # the drop after the start check is conditional
+    live = (root / "tools" / "slam_bridge_container.sh").read_text() + (
+        root / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "keep_map_subscription" not in live and "KEEP_MAP_SUBSCRIPTION" not in live
+    replay = (root / "tools" / "slam_cost_container.sh").read_text()
+    assert '[ "${KEEP_MAP_SUBSCRIPTION:-0}" = 1 ] && LOC_ARGS+=(-p keep_map_subscription:=true)' in replay
+    job = (root / "deploy" / "slurm" / "slam_cost_replay.sbatch").read_text()
+    assert '-e KEEP_MAP_SUBSCRIPTION="${KEEP_MAP_SUBSCRIPTION:-0}"' in job
+
+
+def test_a_kept_subscription_stores_later_maps_and_leaves_the_adopted_map_alone(tmp_path):
+    """Codex keep-map review P3: on_map itself, not the policy alone -- after adoption a second, different map is
+    ignored by default and stored with keep_map_subscription, while loc.map stays the first map either way."""
+    import threading
+    from types import SimpleNamespace as NS
+
+    import numpy as np
+
+    module = _rules()
+
+    def msg(value, sec):
+        return NS(header=NS(stamp=NS(sec=sec, nanosec=0), frame_id="map"),
+                  info=NS(resolution=0.05, width=5, height=4,
+                          origin=NS(position=NS(x=0.0, y=0.0), orientation=NS(x=0.0, y=0.0, z=0.0, w=1.0))),
+                  data=[value] * 20)
+
+    for keep, stored in ((False, 1), (True, 2)):
+        bridge = object.__new__(module.IsaacSlamBridge)
+        bridge.keep_map_subscription = keep
+        bridge.cond, bridge.map_lock, bridge.last_scan_id = threading.Condition(), threading.Lock(), 7
+        (tmp_path / str(keep)).mkdir()
+        bridge.map_store = module.MapStore(tmp_path / str(keep), persistent=False)
+        bridge.localization = NS(map=None, first_processed=True)
+        bridge.on_map(msg(0, 1))  # adopted for the start check
+        first = bridge.localization.map
+        assert first is not None and int(np.asarray(first.data).max()) == 0
+        bridge.on_map(msg(100, 2))  # a later, different map
+        assert bridge.localization.map is first
+        bridge.map_store.save()
+        maps = np.load(tmp_path / str(keep) / "maps.npz")
+        assert len([k for k in maps.files if k.startswith("map_")]) == stored, (keep, maps.files)

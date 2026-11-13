@@ -1,0 +1,69 @@
+{
+ "truth_cells": 1197,
+ "units": [
+  {
+   "unit": 1,
+   "map_index": 9,
+   "truth_cells": 1197,
+   "grid_cells": 2302,
+   "preservation": 0.974937343358396,
+   "registration": 0.9995655951346655
+  },
+  {
+   "unit": 2,
+   "map_index": 19,
+   "truth_cells": 1197,
+   "grid_cells": 2191,
+   "preservation": 0.9766081871345029,
+   "registration": 0.9945230488361478
+  },
+  {
+   "unit": 3,
+   "map_index": 34,
+   "truth_cells": 1197,
+   "grid_cells": 2533,
+   "preservation": 0.9799498746867168,
+   "registration": 0.9885511251480458
+  },
+  {
+   "unit": 4,
+   "map_index": 54,
+   "truth_cells": 1197,
+   "grid_cells": 2735,
+   "preservation": 0.9774436090225563,
+   "registration": 0.9473491773308957
+  },
+  {
+   "unit": 5,
+   "map_index": 76,
+   "truth_cells": 1197,
+   "grid_cells": 2349,
+   "preservation": 0.9791144527986633,
+   "registration": 0.9995742869306088
+  },
+  {
+   "unit": 6,
+   "map_index": 108,
+   "truth_cells": 1197,
+   "grid_cells": 2620,
+   "preservation": 0.9807852965747702,
+   "registration": 0.999618320610687
+  },
+  {
+   "unit": 7,
+   "map_index": 142,
+   "truth_cells": 1197,
+   "grid_cells": 2612,
+   "preservation": 0.9807852965747702,
+   "registration": 0.9938744257274119
+  },
+  {
+   "unit": 8,
+   "map_index": 186,
+   "truth_cells": 1197,
+   "grid_cells": 2819,
+   "preservation": 0.9824561403508771,
+   "registration": 0.9588506562610855
+  }
+ ]
+}

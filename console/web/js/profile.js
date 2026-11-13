@@ -142,7 +142,7 @@ const FORBID = {
   near_section_unknown: "근접 구간인지 판단할 수 없어 수동 조종을 받지 않습니다",
   state_unknown: "적재·포크 상태를 알 수 없어 수동 조종을 받지 않습니다",
   // docs/validation/2026-11-12-teleop-smooth.md: only the tested setting is named (the registration's section 3)
-  pacing: "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 콘솔 기본 배속(0.4, catch-up 0)에서 직접 조작이 끊기지 않음을 확인했습니다(line_m 장면, 층 지연 예산 off 조건)",
+  pacing: "시뮬레이션이 실시간을 따라가지 못해 수동 조종을 받지 않습니다 · 콘솔 기본 배속(0.4, catch-up 0)에서 직접 조작이 끊기지 않음을 확인했습니다(line_m 장면)",
   // persistent console plan D14: the recovery rows
   "recovery:lower_first": "포크가 들려 있습니다. 먼저 내려 주세요(내리기만 됩니다)",
   "recovery:ground_wait": "팔레트가 바닥에 놓였는지 확인하는 중입니다",

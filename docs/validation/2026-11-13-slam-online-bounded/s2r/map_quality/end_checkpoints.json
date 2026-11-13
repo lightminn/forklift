@@ -1,0 +1,4 @@
+{"note": "last grid of each map measurement run, scored with tools/slam_map_quality.py quality() against the same 1,197 truth cells (0.05 m, min_hits 3)",
+ "r0_mapq_last_grid": {"map_index": 194, "sim_end_s": 2807.3, "grid_cells": 2784, "preservation": 0.9841269841269841, "registration": 1.0},
+ "h_mapq_loc_last_grid": {"map_index": 220, "grid_cells": 2285, "preservation": 0.974937343358396, "registration": 0.999562363238512},
+ "h_mapq_mapping_unit0_last_grid": {"map_index": 8, "grid_cells": 2265, "preservation": 0.9741019214703425, "registration": 0.9995584988962473}}
