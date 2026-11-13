@@ -137,6 +137,11 @@ def test_holds():
         r["samples"][150]["pallet_yaw_rad"] = float("nan")
     assert hold_of(nan_sample)["hold"] == ["nonfinite_terms"]
 
+    def nan_sample_time(r, sc):  # Codex review round 3 P2: a NaN time must not drop the sample before the check
+        r["samples"][150]["time_s"] = float("nan")
+        r["samples"][150]["pallet_position_m"] = [2.0, 0.0006, 0.0]
+    assert hold_of(nan_sample_time)["hold"] == ["nonfinite_terms"]
+
     def nan_sample_xy(r, sc):
         r["samples"][150]["pallet_position_m"] = [float("nan"), 0.0, 0.0]
     assert hold_of(nan_sample_xy)["hold"] == ["nonfinite_terms"]

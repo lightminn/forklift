@@ -100,6 +100,8 @@ def transition_time(result: dict, to: str) -> float | None:
 def pallet_motion(samples: list, t_from: float, t_lift: float) -> dict:
     """Largest planar move and yaw change of the true pallet from the first sample after t_from to the first lift
     sample, against the first of them; ``covered`` says whether the samples span that interval without a gap."""
+    if not all(finite(s.get("time_s")) for s in samples):  # before any time filter: NaN > t is False
+        return {"covered": False, "finite": False, "samples": 0}
     window = [s for s in samples if s["time_s"] > t_from]
     end = next((i for i, s in enumerate(window) if s.get("phase") == "lift" and s["time_s"] >= t_lift), None)
     if end is None:
