@@ -54,6 +54,7 @@
 - **동반 신호.** 실패한 9 실행 모두, 그리고 S2 의 R0 세 번(r0_1 4,851.3·r0_2 4,005.6·r0_mapq 2,808.8)도, 끊긴 바로 그 scan 시각에 slam_toolbox 로그 `Message Filter dropping message: frame 'laser' at time T for reason 'the timestamp on the message is earlier than all the data in the transform cache'` 가 정확히 한 번 있다. 완주한 실행(S3 완주 6, S2 의 H·A, 동등성·VM 영향 실행)에는 없다.
 - **해석의 한계(Codex 검토).** 상류 Jazzy 의 `tf2_ros::MessageFilter` 는 TF 대기 중 어떤 예외가 나도(대기 타임아웃 포함) 같은 문구로 탈락을 알린다. 그래서 이 문구만으로 'scan 이 실제로 30 s TF 보존 범위보다 오래됐다' 고 말할 수 없다 — 캐시 범위 초과인지 TF 대기 타임아웃(설정 `transform_timeout` 0.2 s 등)인지 미확정이다. 브리지는 scan 마다 /clock → /tf → (keyframe 이면) /scan 을 같은 stamp 로 내지만, 발행 순서가 수신 측 처리 순서를 보장하지는 않는다.
 - **정리.** 등록 결과는 무응답으로 인한 판정 0 불합격이다. 해당 keyframe 의 TF 메시지 필터 탈락이 함께 있었고, 공통 TF 전달·대기 경로의 결함을 먼저 의심한다. 같은 입력·같은 빌드에서 p0_1 은 끊기고 p0_2 는 완주했고(비결정적), 끊기기 직전 처리 시간이 0.05–0.16 s 인 경우도 있다(c1200_1·c600_2). 그러나 팔의 처리 특성이 탈락 확률에 영향을 주는지는 확정하지 않았다. 같은 탈락이 라이브(Isaac)에서도 일어난다면 1 s 기한 실패로 이어진다 — 그 확인이 다음 진단의 첫 단계다(8 절).
+- 기록 진단(2026-11-14, [별도 문서](2026-11-14-tf-filter-drop-records.md)): 라이브 mapping 에폭 5 개의 slam_link_failed(1 s 기한)에는 탈락이 없었고, 탈락은 오프라인 빠른 재생에서만 관측됐다 → 재생 도구 결함 후보로 보류.
 - 실패한 실행만 골라 다시 돌려 기존 결과를 바꾸지 않는다. 진단을 위해 실패·완주 짝을 골라 재현하는 것은 별도 기록으로 할 수 있다.
 
 ## 6. 판정 4 (지도)
