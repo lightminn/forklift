@@ -29,6 +29,8 @@ def result(arm="B0", state="complete", transport=(65.0, 135.0), cycle=200.0, fai
         r.update(phase=phase or "observe", failure_reason=failure or "transport:no_path")
     else:
         r.update(phase=phase or "observe", failure_reason=failure or "near_capture_failed:x")
+    if state != "complete" and phase not in (None, "transport", "observe"):
+        r["transitions"].append({"to": phase, "time_s": 150.0})  # the run reached that phase before it ended
     return r
 
 
