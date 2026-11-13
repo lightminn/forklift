@@ -240,6 +240,15 @@ def noisy_stream(plan: list, sources: list, *, seed: int, start_unit: int = 0, e
         yield k, item, scan_ranges
 
 
+def next_after(plan: list, end_unit: int) -> dict | None:
+    """The first planned scan an ``--end-unit`` replay did not send: where the next phase starts (its odometry is what
+    H's localization start pose composes the mapping's last correction with)."""
+    item = next((p for p in plan if p.unit >= end_unit), None)
+    if item is None:
+        return None
+    return {"k": plan.index(item), "unit": item.unit, "stamp_s": float(item.stamp_s), "odom": list(item.odom)}
+
+
 def sim_due_offsets(plan: list, *, factor: float, start_unit: int = 0, end_unit: int | None = None) -> list:
     """Each sent scan's wall offset from the first one sent: its stamp's distance from the first sent stamp over the
     factor (online-SLAM plan 4: the D arms are fed at a fixed rate, factor 1.0, not as fast as replies come back)."""
@@ -249,18 +258,46 @@ def sim_due_offsets(plan: list, *, factor: float, start_unit: int = 0, end_unit:
     return [(t - sent[0]) / factor for t in sent] if sent else []
 
 
-def feed_sim(client, stream, due: list, write, *, clock=time.monotonic, sleep=time.sleep) -> dict:
+class ReplyLog:
+    """Every reply's status count and the first and the last reply of any status (the drive.jsonl lines are the
+    processed ones only): H's switch runs from the mapping's last reply to the localization's first (Codex H tools
+    review P2-1), and a skipped reply carries the bridge's current correction too."""
+
+    def __init__(self):
+        self.first, self.last, self.by_status = None, None, {}
+
+    def note(self, k, item, reply, recv_mono) -> None:
+        row = {"k": k, "unit": item.unit, "status": reply.status, "recv_mono": recv_mono,
+               "map_from_odom": list(reply.map_from_odom), "odom_base": list(item.odom)}
+        self.first = self.first or row
+        self.last = row
+        self.by_status[reply.status] = self.by_status.get(reply.status, 0) + 1
+
+    def record(self) -> dict:
+        return {"first": self.first, "last": self.last, "by_status": self.by_status}
+
+
+def check_wall_budget(due: list, budget_s: float | None) -> None:
+    """A fixed feed planned longer than the job's remaining wall time is refused before it starts."""
+    if budget_s is not None and due and due[-1] > budget_s:
+        raise SystemExit(f"--pace-sim needs {due[-1]:.0f} s of wall time, the budget is {budget_s:.0f} s")
+
+
+def feed_sim(client, stream, due: list, write, *, clock=time.monotonic, sleep=time.sleep, note=None) -> dict:
     """The D arms' fixed feed (online-SLAM plan 4): each scan queued at its due wall offset whether or not the bridge
     has answered the last, through the live ``AsyncSlamLink`` (one scan in flight, the rest queued, in order) with
     a deadline and a queue too generous to end a replay -- a slow reply is recorded, the summary judges it.
     ``write(k, item, reply, queued, sent, received)`` gets every processed reply; ``queued`` is when the scan was
-    due and queued (the latency a live runner would see runs from there), ``sent`` when its last byte left."""
+    due and queued (the latency a live runner would see runs from there), ``sent`` when its last byte left;
+    ``note(k, item, reply, received)`` gets every reply of any status."""
     link = slam_link.AsyncSlamLink(client, deadline_s=600.0, queue_max=1_000_000, clock=clock)
     anchor, sent, other = clock(), 0, 0
 
     def take():
         nonlocal other
         for reply, meta, sent_mono, recv_mono in link.poll():
+            if note is not None:
+                note(meta["k"], meta["item"], reply, recv_mono)
             if reply.status == "processed":
                 write(meta["k"], meta["item"], reply, meta["queued"], sent_mono, recv_mono)
             else:
@@ -362,6 +399,9 @@ def main(argv=None) -> int:
         plan = splice_plan_multi(sources, until_sim_s=a.splice_to_sim_s)
     else:
         plan = splice_plan(stamps, src_odom, truth, end=end, until_sim_s=a.splice_to_sim_s)
+    if a.pace_sim is not None:  # Codex H tools review P2-2: the sbatch's wall budget holds for this pacing too
+        check_wall_budget(sim_due_offsets(plan, factor=a.pace_sim, start_unit=a.start_unit, end_unit=a.end_unit),
+                          a.wall_budget_s)
     pace, estimated, first_timed, planned_wall = None, None, None, None
     if a.pace_live:
         pace, estimated, first_timed = pace_offsets(records[:n])
@@ -386,7 +426,7 @@ def main(argv=None) -> int:
             break
         time.sleep(1)
     client = slam_link.SlamLinkClient(a.socket, timeout_s=120.0)
-    started, sent = time.monotonic(), 0
+    started, sent, replies = time.monotonic(), 0, ReplyLog()
     stream = noisy_stream(plan, sources, seed=a.noise_seed, start_unit=a.start_unit, end_unit=a.end_unit,
                           given=given)
 
@@ -401,7 +441,8 @@ def main(argv=None) -> int:
         if a.pace_sim is not None:
             stats = feed_sim(client, stream, sim_due_offsets(plan, factor=a.pace_sim, start_unit=a.start_unit,
                                                              end_unit=a.end_unit),
-                             lambda k, item, reply, q, sm, rm: out.write(line(k, item, reply, sm, rm, q)))
+                             lambda k, item, reply, q, sm, rm: out.write(line(k, item, reply, sm, rm, q)),
+                             note=replies.note)
             sent += stats["sent"]
             print("pace_sim " + json.dumps(stats), flush=True)
         else:
@@ -417,12 +458,17 @@ def main(argv=None) -> int:
                 sent_mono = time.monotonic()
                 reply = client.exchange(slam_link.Scan(k, float(stamp), item.odom, scan_ranges.astype(np.float32),
                                                        ANG0, DANG, RMIN, RMAX))
+                recv_mono = time.monotonic()
                 sent += 1
+                replies.note(k, item, reply, recv_mono)
                 if reply.status == "processed":
-                    out.write(line(k, item, reply, sent_mono, time.monotonic()))
+                    out.write(line(k, item, reply, sent_mono, recv_mono))
     client.close()
     if given:
         raise SystemExit(f"{len(given)} given scans were not sent")
+    print("replies " + json.dumps(replies.record()), flush=True)
+    if a.end_unit is not None:
+        print("next " + json.dumps(next_after(plan, a.end_unit)), flush=True)
     print(f"sent {sent} scans in {time.monotonic() - started:.0f} s", flush=True)
     return 0
 

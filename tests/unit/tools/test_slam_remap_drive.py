@@ -162,6 +162,9 @@ def test_a_replay_from_a_later_unit_draws_the_same_noise_as_the_whole_stream():
     assert [k for k, _, _ in first] + [k for k, _, _ in later] == [k for k, _, _ in whole]
     assert all(np.array_equal(r, by_k[k]) for k, _, r in first)
     assert len(rd.sim_due_offsets(plan, factor=1.0, end_unit=1)) == len(first)
+    nxt = rd.next_after(plan, 1)
+    assert nxt["k"] == len(first) and nxt["unit"] == 1 and nxt["odom"] == list(plan[len(first)].odom)
+    assert rd.next_after(plan, 99) is None
 
 
 def test_sim_pacing_sends_each_scan_at_its_stamp_over_the_factor():
@@ -177,6 +180,10 @@ def test_sim_pacing_sends_each_scan_at_its_stamp_over_the_factor():
     assert later[0] == 0.0 and len(later) == sum(1 for p in plan if p.unit >= 1)
     with pytest.raises(SystemExit):
         rd.sim_due_offsets(plan, factor=0.0)
+    rd.check_wall_budget(due, None)
+    rd.check_wall_budget(due, due[-1])
+    with pytest.raises(SystemExit):  # the sbatch's remaining-time budget refuses a feed that cannot finish
+        rd.check_wall_budget(half, due[-1])
 
 
 def test_the_switched_localization_uses_only_this_sessions_unit_0_map(tmp_path):
@@ -222,13 +229,17 @@ def test_the_fixed_feed_queues_scans_on_time_behind_a_slow_bridge_and_records_ev
     client.sock = ours
     rows = []
     anchor = time.monotonic()
+    log = rd.ReplyLog()
     stats = rd.feed_sim(client, rd.noisy_stream(plan, [a], seed=3), due,
-                        lambda k, item, reply, q, s, r: rows.append((k, q, s, r)))
+                        lambda k, item, reply, q, s, r: rows.append((k, q, s, r)), note=log.note)
     t.join(5)
     assert seen == list(range(len(plan)))
     assert [k for k, *_ in rows] == [k for k in range(len(plan)) if k != 4]
     assert stats == {"sent": len(plan), "not_processed": 1, "max_depth": stats["max_depth"], "long_poll_gaps": 0}
     assert stats["max_depth"] >= 3  # scans kept being queued while the bridge was busy
+    rec = log.record()  # every reply, the skipped one too
+    assert rec["by_status"] == {"processed": len(plan) - 1, "skipped": 1}
+    assert rec["first"]["k"] == 0 and rec["last"]["k"] == len(plan) - 1
     assert all(q <= s <= r for _, q, s, r in rows)
     assert all(q - anchor >= due[k] - 1e-3 for k, q, _, _ in rows)  # never queued before its due time
     try:
