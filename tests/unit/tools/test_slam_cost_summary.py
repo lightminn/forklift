@@ -147,3 +147,44 @@ def test_graph_connectivity_from_a_dump(tmp_path):
     assert g == {"nodes": 5, "edges": 3, "components": 2, "reachable_from_first": 3, "connected": False}
     (tmp_path / "edges.csv").write_text("source,target\n0,1\n1,2\n2,5\n5,6\n")
     assert cs.graph_connectivity(tmp_path)["connected"] is True
+
+
+def test_a_requested_graph_dump_that_is_missing_fails_the_summary(tmp_path):
+    """Patch build design v2 4 (Codex P2): with --graph-dump the dump is required -- an equivalence run cannot pass
+    without the end graph's node and edge counts."""
+    import json
+
+    drive = tmp_path / "drive.jsonl"
+    drive.write_text("\n".join(json.dumps(row(t / 10, 0.01)) for t in range(5)) + "\n")
+    with pytest.raises(SystemExit):
+        cs.main([str(drive), "--graph-dump", str(tmp_path / "no_dump")])
+    assert cs.main([str(drive)]) == 0
+
+
+def test_the_replay_container_propagates_a_failed_graph_dump_and_checks_its_slam_image():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    box = (root / "tools" / "slam_cost_container.sh").read_text()
+    # a requested graph dump that failed ends the container non-zero (it was only logged)
+    assert 'DUMP=$?' in box and '[ "${5:-}" = graph ] && [ "$DUMP" != 0 ] && [ "$STATUS" = 0 ] && STATUS=6' in box
+    # a patched or unpatched source image must have its overlay; the libraries the node loaded are recorded
+    assert 'SLAM_IMAGE_KIND' in box and "/opt/slam_patched/install/setup.bash" in box
+    assert "slam_libs.txt" in box and "/proc/" in box
+    assert "tools/slam_patch_check.py" in box and "STATUS=8" in box  # the run is the slam_toolbox it asked for
+    # a patched node that aborted or refused, or a trace without its end record, fails the run (Codex review 2 P2-5)
+    assert "forklift_slam_patch (abort|refused)" in box and '"kind":"end"' in box and "STATUS=9" in box
+    assert "_slam_toolbox" in box  # the node's own lib<mode>_slam_toolbox is recorded for the check
+    dump = (root / "tools" / "slam_cost_dump.sh").read_text()
+    assert "detect_leaks=0" in dump  # the one-shot dumper's exit is not a sanitizer failure (P2-6)
+    # the node is stopped with SIGINT and waited for before the launcher (a trace's tail is written at its exit)
+    assert 'kill -INT "$p"' in box and box.index('kill -INT "$p"') < box.index("kill $SLAM")
+    # the effective parameters come without the daemon, retried, and an empty dump fails the dump step
+    assert "--no-daemon" in dump and 'grep -q "ros__parameters" "$OUT/params_effective.yaml" || exit 3' in dump
+    assert "/opt/slam_patched/bin/slam_graph_dump" in dump and 'ldd "$DUMPER"' in dump  # no apt-header build there
+    job = (root / "deploy" / "slurm" / "slam_cost_replay.sbatch").read_text()
+    assert '"${SLAM_IMAGE:-forklift/ros2-dev:jazzy}"' in job and "SLAM_PATCH_ENV" in job and "SLAM_IMAGE_KIND" in job
+    assert job.rstrip().endswith("|| exit 1")  # a failed part fails the job (Codex patch review P2-4)
+    live = (root / "tools" / "slam_bridge_container.sh").read_text() + (
+        root / "deploy" / "console" / "isaac_live.sbatch").read_text()
+    assert "slam_patched" not in live and "SLAM_PATCH_ENV" not in live

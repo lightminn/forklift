@@ -8,20 +8,42 @@ set +u
 source /opt/ros/jazzy/setup.bash
 export ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST
 OUT=$1
-timeout 60 ros2 param dump /slam_toolbox > "$OUT/params_effective.yaml" 2> "$OUT/params_effective.err"
+# without the daemon, retried: through the daemon it sometimes answered "Node not found" right after the bridge closed,
+# leaving the file empty (S1 equivalence r0_1, r0_2, p0_1: jobs 18832, 18835, 18834)
+for attempt in 1 2 3; do
+  timeout 60 ros2 param dump /slam_toolbox --no-daemon --spin-time 5 > "$OUT/params_effective.yaml" \
+    2>> "$OUT/params_effective.err"
+  grep -q "ros__parameters" "$OUT/params_effective.yaml" && break
+  echo "param dump attempt $attempt gave no parameters" >> "$OUT/params_effective.err"
+done
+grep -q "ros__parameters" "$OUT/params_effective.yaml" || exit 3
 [ "${2:-}" = "graph" ] || exit 0
 mkdir -p "$OUT/bundle" "$OUT/dump" /tmp/build
 timeout 300 ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '$OUT/bundle/map'}" \
   > "$OUT/serialize.log" 2>&1
 echo "serialize exit $?" >> "$OUT/serialize.log"
-INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done)
-g++ -std=c++17 -O2 -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 /workspace/tools/slam_graph_dump.cpp \
-  -o /tmp/build/slam_graph_dump -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
-  -lboost_serialization -lboost_system -lboost_thread -ltbb > "$OUT/dump_build.log" 2>&1 || exit 4
+if [ -x /opt/slam_patched/bin/slam_graph_dump ]; then
+  # a source-built slam_toolbox ships its own dumper, built against its own headers and libraries: compiling here
+  # against /opt/ros/jazzy would pair the apt headers' Mapper layout with the overlay's library (design v2 1, P1)
+  DUMPER=/opt/slam_patched/bin/slam_graph_dump
+  echo "prebuilt $DUMPER" > "$OUT/dump_build.log"
+else
+  INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done)
+  g++ -std=c++17 -O2 -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 /workspace/tools/slam_graph_dump.cpp \
+    -o /tmp/build/slam_graph_dump -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
+    -lboost_serialization -lboost_system -lboost_thread -ltbb > "$OUT/dump_build.log" 2>&1 || exit 4
+  DUMPER=/tmp/build/slam_graph_dump
+fi
+ldd "$DUMPER" | grep -E "karto|toolbox" >> "$OUT/dump_build.log" 2>&1
 read -r RES PASS THRESH < <(python3 - "$OUT/params_effective.yaml" <<'PY'
 import sys, yaml
 p = yaml.safe_load(open(sys.argv[1]))["/slam_toolbox"]["ros__parameters"]
 print(p["resolution"], p["min_pass_through"], p["occupancy_threshold"])
 PY
 )
-/tmp/build/slam_graph_dump "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5
+# The dumper is a one-shot reader: karto's Mapper, Dataset and the sensor registry share ownership of the scans and
+# lasers it loads, so it frees only its grid and leaves the rest to the process exit. Under an AddressSanitizer build
+# (Dockerfile.slam_patched SANITIZE=address) the leak check would report that exit as a failure; it is off for the
+# dumper alone, and every other sanitizer check stays on (Codex code review 2 P2-6).
+ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_leaks=0" \
+  "$DUMPER" "$OUT/bundle/map" "$OUT/dump" "$RES" "$PASS" "$THRESH" > "$OUT/dump.log" 2>&1 || exit 5

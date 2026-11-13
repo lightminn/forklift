@@ -185,7 +185,10 @@ def main(argv=None) -> int:
     if a.baseline is not None:
         base = [json.loads(line) for line in a.baseline.read_text().splitlines() if line.strip()]
         out["excess"] = excess_over_baseline(rows, base)
-    if a.graph_dump is not None and (a.graph_dump / "edges.csv").exists():
+    if a.graph_dump is not None:
+        # required when asked for (slam patch build design v2 4): an equivalence run cannot pass without it
+        if not (a.graph_dump / "edges.csv").exists():
+            raise SystemExit(f"{a.graph_dump}: no graph dump (edges.csv) -- see the run's dump_run.log")
         out["graph"] = graph_connectivity(a.graph_dump)
     if a.live_epoch is not None:
         import sys

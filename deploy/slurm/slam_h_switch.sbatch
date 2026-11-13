@@ -34,7 +34,8 @@ case " $* " in *" --start-unit "*|*" --end-unit "*|*" --session-"*|*" --pace-sim
 SUMMARY=off DUMP_GRAPH=1 SLAM_NODE=sync bash "$ROOT/deploy/slurm/slam_cost_replay.sbatch" "$OUT/map" "$RUN" "$SETS" \
   "$@" --end-unit 1 > "$OUT/map.log" 2>&1
 field() { "$PY" -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]))' "$1" "$2" 2>/dev/null || echo null; }
-# the replay script itself always ends 0: a phase passed when its driver and its container (the bridge's own save,
+# each phase is judged from its status file (the replay script also exits non-zero on a failure): a phase passed
+# when its driver and its container (the bridge's own save,
 # Codex H tools review P2-3) both ended 0
 MAP=$(field "$OUT/map/status.json" driver_exit); MAP_CON=$(field "$OUT/map/status.json" container_exit)
 step map_container_end

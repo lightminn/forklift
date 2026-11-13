@@ -1,0 +1,92 @@
+# slam_toolbox 2.8.5 built from source over the deployed image's apt one (docs/design/2026-11-13-slam-patch-build.md):
+# the online-SLAM comparison's U0 (PATCHES=none, the unpatched source build) and P1 (PATCHES=all, the patch series
+# in deploy/ros2/slam_patches). The apt slam_toolbox stays; the build is installed at /opt/slam_patched/install and a
+# replay container sources it only when SLAM_IMAGE_KIND says so (tools/slam_cost_container.sh). The graph dumper
+# (tools/slam_graph_dump.cpp) is built here against this install's headers and libraries.
+#   docker build -f deploy/ros2/Dockerfile.slam_patched --build-arg PATCHES=all -t <tag> <context>
+# The context (deploy/slurm/slam_patch_build.sbatch assembles it) holds deploy/ros2/slam_patches/,
+# tools/slam_graph_dump.cpp and slam_source/ -- empty, or, when GitHub is out of reach, slam_toolbox-2.8.5.bundle (a git
+# bundle of the tag, SLAM_SOURCE=bundle).
+ARG BASE_IMAGE=forklift/ros2-dev:jazzy
+FROM ${BASE_IMAGE}
+
+ARG PATCHES=all
+ARG SLAM_SOURCE=github
+ARG SANITIZE=
+ARG SLAM_COMMIT=ec8f7635dea317b531c419f798f87d90a336f32e
+# compile jobs: docker build runs outside the Slurm job's cgroup, so the job's CPU count is passed in
+ARG JOBS=8
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+USER root
+
+COPY deploy/ros2/slam_patches /opt/slam_patched/patches
+COPY tools/slam_graph_dump.cpp /opt/slam_patched/tools/slam_graph_dump.cpp
+COPY slam_source /tmp/slam_source
+
+RUN set -eux; \
+    mkdir -p /opt/slam_patched/src; cd /opt/slam_patched/src; \
+    if [[ "${SLAM_SOURCE}" == bundle ]]; then \
+        git clone --branch 2.8.5 /tmp/slam_source/slam_toolbox-2.8.5.bundle slam_toolbox; \
+    else \
+        git clone --branch 2.8.5 --depth 1 https://github.com/SteveMacenski/slam_toolbox.git slam_toolbox; \
+    fi; \
+    cd slam_toolbox; \
+    test "$(git rev-parse HEAD)" = "${SLAM_COMMIT}"; \
+    git -c user.name=build -c user.email=build@localhost config core.autocrlf false; \
+    if [[ "${PATCHES}" == all ]]; then \
+        shopt -s nullglob; patches=(/opt/slam_patched/patches/*.patch); \
+        (( ${#patches[@]} > 0 )) || { echo "PATCHES=all but no patch files" >&2; exit 2; }; \
+        git -c user.name=build -c user.email=build@localhost am "${patches[@]}"; \
+        series="$(cat "${patches[@]}" | sha256sum | cut -c1-8)"; \
+    elif [[ "${PATCHES}" == none ]]; then \
+        series=none; \
+    else \
+        echo "PATCHES must be all or none" >&2; exit 2; \
+    fi; \
+    echo "${series}" > /opt/slam_patched/series; \
+    git log --oneline -n 8 > /opt/slam_patched/source_log.txt; \
+    rm -rf /tmp/slam_source
+
+RUN set -eux; \
+    apt-get update; \
+    (rosdep init || true); rosdep update --rosdistro jazzy; \
+    rosdep install --from-paths /opt/slam_patched/src --ignore-src --rosdistro jazzy -y; \
+    rm -rf /var/lib/apt/lists/*
+
+# the series id reaches the library as a compile definition (the patch prints it at Mapper construction). The ROS
+# setup scripts read unset variables, so they are sourced with set +u (job 18825 stopped there).
+RUN set -eux; \
+    set +u; source /opt/ros/jazzy/setup.bash; set -u; \
+    cd /opt/slam_patched; \
+    extra=(); \
+    if [[ "${SANITIZE}" == address ]]; then extra=(-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address); fi; \
+    MAKEFLAGS="-j${JOBS}" colcon build --parallel-workers 1 --base-paths src --build-base build --install-base install \
+        --event-handlers console_direct+ \
+        --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=ON "-DFORKLIFT_SLAM_PATCH_SERIES=$(cat series)" "${extra[@]}" \
+        2>&1 | tee build.log; \
+    cp build/slam_toolbox/compile_commands.json /opt/slam_patched/compile_commands.json; \
+    g++ --version | head -1 > /opt/slam_patched/toolchain.txt; \
+    dpkg-query -W -f='${Package} ${Version}\n' libceres-dev libeigen3-dev libboost-dev ros-jazzy-slam-toolbox >> /opt/slam_patched/toolchain.txt
+
+# the patch series' own tests (gtest, none for U0); a failing test fails the image
+RUN set -eux; \
+    set +u; source /opt/ros/jazzy/setup.bash; set -u; cd /opt/slam_patched; \
+    if [[ "$(cat series)" != none ]]; then \
+        colcon test --base-paths src --build-base build --install-base install --packages-select slam_toolbox \
+            --ctest-args -R forklift --event-handlers console_direct+; \
+        colcon test-result --test-result-base build --verbose; \
+    fi
+
+# the graph dumper against this install (an apt-header build would pair a different Mapper layout with this library)
+RUN set -eux; \
+    set +u; source /opt/ros/jazzy/setup.bash; source /opt/slam_patched/install/setup.bash; set -u; \
+    P=/opt/slam_patched/install/slam_toolbox; \
+    INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done); \
+    mkdir -p /opt/slam_patched/bin; \
+    asan=(); if [[ "${SANITIZE}" == address ]]; then asan=(-fsanitize=address); fi; \
+    g++ "${asan[@]}" -std=c++17 -O2 -I"$P/include" -I"$P/include/slam_toolbox" -I/opt/ros/jazzy/include $INC -I/usr/include/eigen3 \
+        /opt/slam_patched/tools/slam_graph_dump.cpp -o /opt/slam_patched/bin/slam_graph_dump \
+        -L"$P/lib" -Wl,-rpath,"$P/lib" -L/opt/ros/jazzy/lib -Wl,-rpath,/opt/ros/jazzy/lib -lkartoSlamToolbox \
+        -lboost_serialization -lboost_system -lboost_thread -ltbb; \
+    ldd /opt/slam_patched/bin/slam_graph_dump | grep -q "$P/lib/libkartoSlamToolbox.so"; \
+    chmod -R a+rX /opt/slam_patched
