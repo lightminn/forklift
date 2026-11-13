@@ -1,0 +1,116 @@
+{
+ "chunks": 132,
+ "rows": 4761306,
+ "streams": {
+  "g": {
+   "n": 3175962,
+   "missing_dev": 0,
+   "wraps": 1,
+   "span_s": 7922.456661,
+   "rate_hz": 400.88082976008593,
+   "step_us": {
+    "median": 2495.0,
+    "min": 2493,
+    "max": 4990,
+    "back": 0,
+    "zero": 0
+   },
+   "segments": [
+    [
+     0,
+     3175962
+    ]
+   ],
+   "fits": [
+    {
+     "valid": true,
+     "reason": null,
+     "n": 3175962,
+     "span_s": 7922.456661,
+     "offset_ns": 1.792703968489416e+18,
+     "slope": 999.9149466664466,
+     "drift_ppm": -85.05333355346423,
+     "drift_split_ppm": 3.421683980708849,
+     "drift_vs_halves_ppm": 6.401179782344883,
+     "split_end_ns": 2811904.0,
+     "split_reason": null,
+     "delay_ns": {
+      "p50": 7351808.0,
+      "p95": 17278464.0,
+      "max": 27329536.0
+     },
+     "dropped": {
+      "device_back": 0,
+      "host_back": 0,
+      "device_repeat": 0
+     },
+     "device_range_us": [
+      58461181,
+      7980917842
+     ],
+     "host_range_ns": [
+      1792704026964716288,
+      1792711948739014400
+     ],
+     "host_boot": null,
+     "boot_id": null
+    }
+   ]
+  },
+  "a": {
+   "n": 1585344,
+   "missing_dev": 0,
+   "wraps": 1,
+   "span_s": 7922.492831,
+   "rate_hz": 200.10658688092414,
+   "step_us": {
+    "median": 4998.0,
+    "min": 2493,
+    "max": 24925,
+    "back": 0,
+    "zero": 0
+   },
+   "segments": [
+    [
+     0,
+     1585344
+    ]
+   ],
+   "fits": [
+    {
+     "valid": true,
+     "reason": null,
+     "n": 1585344,
+     "span_s": 7922.492831,
+     "offset_ns": 1.7927039684894264e+18,
+     "slope": 999.9149470410574,
+     "drift_ppm": -85.05295894256636,
+     "drift_split_ppm": 3.4307854661630444,
+     "drift_vs_halves_ppm": 6.404692061257052,
+     "split_end_ns": 2811136.0,
+     "split_reason": null,
+     "delay_ns": {
+      "p50": 7363072.0,
+      "p95": 17285120.0,
+      "max": 27289856.0
+     },
+     "dropped": {
+      "device_back": 0,
+      "host_back": 0,
+      "device_repeat": 0
+     },
+     "device_range_us": [
+      58423633,
+      7980916464
+     ],
+     "host_range_ns": [
+      1792704026928878336,
+      1792711948737753344
+     ],
+     "host_boot": null,
+     "boot_id": null
+    }
+   ]
+  }
+ }
+}
