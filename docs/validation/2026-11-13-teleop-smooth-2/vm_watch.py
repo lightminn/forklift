@@ -48,14 +48,16 @@ def sample(path: str, every: float) -> int:
     while True:
         t_local = time.time()
         try:
+            tries = []
             for attempt in range(3):  # a failed probe (2026-11-13 K09: a Wi-Fi DNS blip) is retried within the period
                 r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
                                     "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
+                # every attempt kept: a positive seen by a failed attempt stays a positive (Codex K09 results P2)
+                tries.append({"ssh_exit": r.returncode, **parse(r.stdout), "err": r.stderr[-200:]})
                 if r.returncode == 0 or time.time() - t_local > every / 2:
                     break
                 time.sleep(5)
-            row = {"t_local": t_local, "ssh_exit": r.returncode, "attempts": attempt + 1, **parse(r.stdout),
-                   "err": r.stderr[-200:]}
+            row = {"t_local": t_local, **tries[-1], "attempts": len(tries), "tries": tries}
         except subprocess.TimeoutExpired as exc:  # keep what came before the cut (a qemu line is still a positive)
             out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             row = {"t_local": t_local, "ssh_exit": None, **parse(out), "err": "timeout"}
@@ -74,7 +76,8 @@ def gpu_counted(row: dict) -> bool:
 
 
 def positive(row: dict) -> bool:
-    return bool(row.get("qemu")) or (gpu_counted(row) and len(row["gpus"]) < 2)
+    """Any attempt of the sample that saw qemu or fewer than two GPUs (earlier rows have no ``tries``)."""
+    return any(bool(t.get("qemu")) or (gpu_counted(t) and len(t.get("gpus", [])) < 2) for t in row.get("tries", [row]))
 
 
 def complete(row: dict) -> bool:
