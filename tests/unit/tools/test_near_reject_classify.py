@@ -89,3 +89,21 @@ def test_the_offset_splits_into_the_waypoint_shift_and_the_arrival_miss():
     c = N.classify("lbg_B0_random_1_s0", r)
     assert abs(c["waypoint_off_new_line_m"] + 0.04) < 1e-12
     assert abs(c["arrival_miss_across_new_line_m"] + 0.05) < 1e-12 and abs(c["split_check_m"]) < 1e-12
+
+
+def test_the_waypoint_share_takes_out_the_estimate_bias_change():
+    """The far capture's estimate is true; at the near capture the estimate is 30 mm left of the truth (bias change),
+    so a waypoint 40 mm right of the new line carries -30 mm of bias change and -10 mm of observation difference."""
+    r = result(None, candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}],
+               offsets={"lateral_m": -0.04, "yaw_rad": 0.0})
+    r["near_capture"].update(far_attempt=1, waypoint=[0.0, -0.04, 0.0])
+    far = {"t_before_capture_s": 1.0,
+           "capture_control": {"truth_rear": [-2.0, 0.0, 0.0], "control_rear": [-2.0, 0.0, 0.0]}}
+    near = r["observation_attempts"][0]
+    near["capture_control"] = {"truth_rear": [0.0, 0.0, 0.0], "control_rear": [0.0, 0.03, 0.0]}
+    near["arrived_pose"] = [0.0, -0.04, 0.0]
+    r["observation_attempts"] = [far, near]
+    r["perception"] = {"perception_pickup_estimate_m": {"x_m": 3.34, "y_m": 0.0, "yaw_rad": 0.0}}
+    c = N.classify("lbg_B0_random_1_s0", r)
+    assert abs(c["waypoint_share_bias_change_m"] + 0.03) < 1e-12
+    assert abs(c["waypoint_share_after_bias_change_m"] + 0.01) < 1e-12

@@ -112,7 +112,9 @@
    "site_vs_truth_m": 0.029504349788073023,
    "split_check_m": -4.996003610813204e-16,
    "status": "pending",
-   "waypoint_off_new_line_m": -0.0429280077072306
+   "waypoint_off_new_line_m": -0.0429280077072306,
+   "waypoint_share_after_bias_change_m": 0.007150675433565068,
+   "waypoint_share_bias_change_m": -0.050078683140795666
   },
   {
    "arrival_yaw_minus_waypoint_rad": 0.01421474291699669,
@@ -180,7 +182,9 @@
    "site_vs_truth_m": 0.010337046030357448,
    "split_check_m": 3.7470027081099033e-16,
    "status": "pending",
-   "waypoint_off_new_line_m": -0.051205261878050856
+   "waypoint_off_new_line_m": -0.051205261878050856,
+   "waypoint_share_after_bias_change_m": 0.004910984847074307,
+   "waypoint_share_bias_change_m": -0.05611624672512516
   }
  ],
  "runs": [
@@ -215,7 +219,9 @@
    "site_vs_truth_m": 0.045308774322831376,
    "split_check_m": 5.056718932472393e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.006657746958536742
+   "waypoint_off_new_line_m": 0.006657746958536742,
+   "waypoint_share_after_bias_change_m": 0.0063968409744424165,
+   "waypoint_share_bias_change_m": 0.00026090598409432564
   },
   {
    "arrival_miss_across_new_line_m": -0.00013237527953935402,
@@ -248,7 +254,9 @@
    "site_vs_truth_m": 0.06137817779316681,
    "split_check_m": 1.7069679003611782e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.026135465836969643
+   "waypoint_off_new_line_m": 0.026135465836969643,
+   "waypoint_share_after_bias_change_m": 0.005034386677034028,
+   "waypoint_share_bias_change_m": 0.021101079159935615
   },
   {
    "arrival_miss_across_new_line_m": 0.00023520634273573038,
@@ -281,7 +289,9 @@
    "site_vs_truth_m": 0.052542605982513105,
    "split_check_m": -3.434752482434078e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.009244345004450955
+   "waypoint_off_new_line_m": -0.009244345004450955,
+   "waypoint_share_after_bias_change_m": -0.011698661695445922,
+   "waypoint_share_bias_change_m": 0.0024543166909949676
   },
   {
    "arrival_miss_across_new_line_m": 0.0003813163326325669,
@@ -314,7 +324,9 @@
    "site_vs_truth_m": 0.0872596027779078,
    "split_check_m": 3.608224830031759e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.009241674319567628
+   "waypoint_off_new_line_m": 0.009241674319567628,
+   "waypoint_share_after_bias_change_m": -0.008065078897161501,
+   "waypoint_share_bias_change_m": 0.01730675321672913
   },
   {
    "arrival_miss_across_new_line_m": 0.00011346492566939592,
@@ -347,7 +359,9 @@
    "site_vs_truth_m": 0.028584977251266994,
    "split_check_m": -8.673617379884035e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.023081819002927273
+   "waypoint_off_new_line_m": -0.023081819002927273,
+   "waypoint_share_after_bias_change_m": 0.004801682565654358,
+   "waypoint_share_bias_change_m": -0.02788350156858163
   },
   {
    "arrival_miss_across_new_line_m": 0.00019983196729304875,
@@ -380,7 +394,9 @@
    "site_vs_truth_m": 0.02609453144999359,
    "split_check_m": -4.891920202254596e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.028225694969500267
+   "waypoint_off_new_line_m": -0.028225694969500267,
+   "waypoint_share_after_bias_change_m": 0.00046777496458680345,
+   "waypoint_share_bias_change_m": -0.02869346993408707
   },
   {
    "arrival_miss_across_new_line_m": 0.00020935025302025456,
@@ -413,7 +429,9 @@
    "site_vs_truth_m": 0.026192123451974313,
    "split_check_m": 1.3704315460216776e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.012382486879046015
+   "waypoint_off_new_line_m": -0.012382486879046015,
+   "waypoint_share_after_bias_change_m": 0.0027116850065159043,
+   "waypoint_share_bias_change_m": -0.015094171885561919
   },
   {
    "arrival_miss_across_new_line_m": -0.0007449988646159866,
@@ -446,7 +464,9 @@
    "site_vs_truth_m": 0.05896296325864061,
    "split_check_m": 3.2612801348363973e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04108404400455601
+   "waypoint_off_new_line_m": -0.04108404400455601,
+   "waypoint_share_after_bias_change_m": 0.007514661149117252,
+   "waypoint_share_bias_change_m": -0.04859870515367326
   },
   {
    "arrival_miss_across_new_line_m": 0.003952483699112497,
@@ -479,7 +499,9 @@
    "site_vs_truth_m": 0.020645314167143616,
    "split_check_m": 2.582655942943296e-06,
    "status": "done",
-   "waypoint_off_new_line_m": -0.019371271368015086
+   "waypoint_off_new_line_m": -0.019371271368015086,
+   "waypoint_share_after_bias_change_m": 0.006262750627169078,
+   "waypoint_share_bias_change_m": -0.025634021995184164
   },
   {
    "arrival_miss_across_new_line_m": -0.0016030301666838387,
@@ -512,7 +534,9 @@
    "site_vs_truth_m": 0.01862154388262321,
    "split_check_m": 7.251144129583054e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.02299324845061057
+   "waypoint_off_new_line_m": -0.02299324845061057,
+   "waypoint_share_after_bias_change_m": 0.009479285257032677,
+   "waypoint_share_bias_change_m": -0.03247253370764325
   },
   {
    "arrival_miss_across_new_line_m": 5.4651788798362744e-05,
@@ -545,7 +569,9 @@
    "site_vs_truth_m": 0.05474839685339626,
    "split_check_m": 2.8102520310824275e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.01635045227768793
+   "waypoint_off_new_line_m": 0.01635045227768793,
+   "waypoint_share_after_bias_change_m": 0.001110267150570679,
+   "waypoint_share_bias_change_m": 0.01524018512711725
   },
   {
    "arrival_miss_across_new_line_m": 0.0008356900357977953,
@@ -578,7 +604,9 @@
    "site_vs_truth_m": 0.09355533765096903,
    "split_check_m": -1.1449174941446927e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.043283460005730204
+   "waypoint_off_new_line_m": 0.043283460005730204,
+   "waypoint_share_after_bias_change_m": 0.001765267277976365,
+   "waypoint_share_bias_change_m": 0.04151819272775384
   },
   {
    "arrival_yaw_minus_waypoint_rad": 0.009485316573369998,
@@ -636,7 +664,9 @@
    "site_vs_truth_m": 0.02486279699705241,
    "split_check_m": 3.469446951953614e-17,
    "status": "done",
-   "waypoint_off_new_line_m": -0.012202047691161774
+   "waypoint_off_new_line_m": -0.012202047691161774,
+   "waypoint_share_after_bias_change_m": 0.002624072515421863,
+   "waypoint_share_bias_change_m": -0.014826120206583637
   },
   {
    "arrival_miss_across_new_line_m": 0.00011938668571545574,
@@ -669,7 +699,9 @@
    "site_vs_truth_m": 0.029268553439260103,
    "split_check_m": 1.6306400674181987e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01679113634610542
+   "waypoint_off_new_line_m": -0.01679113634610542,
+   "waypoint_share_after_bias_change_m": -0.0012641769849037476,
+   "waypoint_share_bias_change_m": -0.015526959361201673
   },
   {
    "arrival_miss_across_new_line_m": 0.00011897814292380349,
@@ -702,7 +734,9 @@
    "site_vs_truth_m": 0.029268553439260055,
    "split_check_m": 2.0122792321330962e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01678186312140678
+   "waypoint_off_new_line_m": -0.01678186312140678,
+   "waypoint_share_after_bias_change_m": -0.0012548744178348392,
+   "waypoint_share_bias_change_m": -0.015526988703571942
   },
   {
    "arrival_miss_across_new_line_m": -0.011266482942487888,
@@ -735,7 +769,9 @@
    "site_vs_truth_m": 0.019387104772629865,
    "split_check_m": 7.424616477180734e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.02145548250959317
+   "waypoint_off_new_line_m": -0.02145548250959317,
+   "waypoint_share_after_bias_change_m": 0.007126412191168052,
+   "waypoint_share_bias_change_m": -0.028581894700761223
   },
   {
    "arrival_miss_across_new_line_m": -0.014703153202480501,
@@ -774,7 +810,9 @@
    "site_vs_truth_m": 0.019619511629059755,
    "split_check_m": -1.4016565685892601e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.050923973349803475
+   "waypoint_off_new_line_m": -0.050923973349803475,
+   "waypoint_share_after_bias_change_m": 0.006585010888678466,
+   "waypoint_share_bias_change_m": -0.05750898423848194
   },
   {
    "arrival_miss_across_new_line_m": -0.0007993402477124434,
@@ -807,7 +845,9 @@
    "site_vs_truth_m": 0.0335091839338863,
    "split_check_m": 2.8275992658421956e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.009657873732700994
+   "waypoint_off_new_line_m": -0.009657873732700994,
+   "waypoint_share_after_bias_change_m": 0.007387528077051675,
+   "waypoint_share_bias_change_m": -0.01704540180975267
   },
   {
    "arrival_miss_across_new_line_m": 0.0003548923075836069,
@@ -840,7 +880,9 @@
    "site_vs_truth_m": 0.07557464396662569,
    "split_check_m": -1.2836953722228372e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.03694872657946892
+   "waypoint_off_new_line_m": 0.03694872657946892,
+   "waypoint_share_after_bias_change_m": 0.001001334158834244,
+   "waypoint_share_bias_change_m": 0.035947392420634675
   },
   {
    "arrival_miss_across_new_line_m": -0.0017026687605478374,
@@ -873,7 +915,9 @@
    "site_vs_truth_m": 0.05998086380065336,
    "split_check_m": -8.517492267046123e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.01000262266092554
+   "waypoint_off_new_line_m": 0.01000262266092554,
+   "waypoint_share_after_bias_change_m": -0.00988186872315823,
+   "waypoint_share_bias_change_m": 0.01988449138408377
   },
   {
    "arrival_miss_across_new_line_m": -0.0001036942980387201,
@@ -906,7 +950,9 @@
    "site_vs_truth_m": 0.018018094552967056,
    "split_check_m": -2.095545958979983e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.011684852956256334
+   "waypoint_off_new_line_m": -0.011684852956256334,
+   "waypoint_share_after_bias_change_m": 0.003945742644017397,
+   "waypoint_share_bias_change_m": -0.01563059560027373
   },
   {
    "arrival_miss_across_new_line_m": 9.337447215169992e-05,
@@ -939,7 +985,9 @@
    "site_vs_truth_m": 0.05023926497669304,
    "split_check_m": -6.245004513516506e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03860459779820276
+   "waypoint_off_new_line_m": -0.03860459779820276,
+   "waypoint_share_after_bias_change_m": -0.001698858117197874,
+   "waypoint_share_bias_change_m": -0.036905739681004884
   },
   {
    "arrival_miss_across_new_line_m": 0.00026070347225640167,
@@ -972,7 +1020,9 @@
    "site_vs_truth_m": 0.03217418821711038,
    "split_check_m": -1.3530843112619095e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.016991152949619184
+   "waypoint_off_new_line_m": -0.016991152949619184,
+   "waypoint_share_after_bias_change_m": -0.0014018918887055004,
+   "waypoint_share_bias_change_m": -0.015589261060913684
   },
   {
    "arrival_miss_across_new_line_m": 0.0002721610036312966,
@@ -1005,7 +1055,9 @@
    "site_vs_truth_m": 0.029934901746306194,
    "split_check_m": -1.1900203045200897e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.030601000405038964
+   "waypoint_off_new_line_m": -0.030601000405038964,
+   "waypoint_share_after_bias_change_m": -0.002473946472503985,
+   "waypoint_share_bias_change_m": -0.02812705393253498
   },
   {
    "arrival_miss_across_new_line_m": -0.05220887281128728,
@@ -1046,7 +1098,9 @@
    "site_vs_truth_m": 0.0603713564939863,
    "split_check_m": -1.734723475976807e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.020425819916297328
+   "waypoint_off_new_line_m": -0.020425819916297328,
+   "waypoint_share_after_bias_change_m": 0.0018408478987871346,
+   "waypoint_share_bias_change_m": -0.022266667815084462
   },
   {
    "arrival_miss_across_new_line_m": -0.06196252300615257,
@@ -1089,7 +1143,9 @@
    "site_vs_truth_m": 0.029504349788073023,
    "split_check_m": -4.996003610813204e-16,
    "status": "pending",
-   "waypoint_off_new_line_m": -0.0429280077072306
+   "waypoint_off_new_line_m": -0.0429280077072306,
+   "waypoint_share_after_bias_change_m": 0.007150675433565068,
+   "waypoint_share_bias_change_m": -0.050078683140795666
   },
   {
    "arrival_miss_across_new_line_m": -0.0013175507220238858,
@@ -1128,7 +1184,9 @@
    "site_vs_truth_m": 0.03235153856608328,
    "split_check_m": -7.355227538141662e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.05766785774496108
+   "waypoint_off_new_line_m": -0.05766785774496108,
+   "waypoint_share_after_bias_change_m": 0.0010483841939590288,
+   "waypoint_share_bias_change_m": -0.05871624193892011
   },
   {
    "arrival_miss_across_new_line_m": 0.0005091328161986389,
@@ -1161,7 +1219,9 @@
    "site_vs_truth_m": 0.0815905182273002,
    "split_check_m": 5.828670879282072e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.01749603045103175
+   "waypoint_off_new_line_m": 0.01749603045103175,
+   "waypoint_share_after_bias_change_m": -0.0004508839973617895,
+   "waypoint_share_bias_change_m": 0.01794691444839354
   },
   {
    "arrival_miss_across_new_line_m": 0.0009066219035596956,
@@ -1194,7 +1254,9 @@
    "site_vs_truth_m": 0.04977097453416174,
    "split_check_m": -3.7643499428696714e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.014669440090215147
+   "waypoint_off_new_line_m": 0.014669440090215147,
+   "waypoint_share_after_bias_change_m": -0.0003032360165964171,
+   "waypoint_share_bias_change_m": 0.014972676106811564
   },
   {
    "arrival_miss_across_new_line_m": 0.0003585200480827194,
@@ -1227,7 +1289,9 @@
    "site_vs_truth_m": 0.08794180059215614,
    "split_check_m": -1.9081958235744878e-17,
    "status": "done",
-   "waypoint_off_new_line_m": 0.015047154474914275
+   "waypoint_off_new_line_m": 0.015047154474914275,
+   "waypoint_share_after_bias_change_m": -0.0171683493740986,
+   "waypoint_share_bias_change_m": 0.03221550384901287
   },
   {
    "arrival_miss_across_new_line_m": 0.00017932901440993743,
@@ -1260,7 +1324,9 @@
    "site_vs_truth_m": 0.032890912429437764,
    "split_check_m": -1.1206313654810174e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.011388613931225977
+   "waypoint_off_new_line_m": -0.011388613931225977,
+   "waypoint_share_after_bias_change_m": 0.003841947326140946,
+   "waypoint_share_bias_change_m": -0.015230561257366923
   },
   {
    "arrival_miss_across_new_line_m": 0.00015117293293412382,
@@ -1293,7 +1359,9 @@
    "site_vs_truth_m": 0.04793685888237524,
    "split_check_m": 7.563394355258879e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03881368228674521
+   "waypoint_off_new_line_m": -0.03881368228674521,
+   "waypoint_share_after_bias_change_m": -0.0016871734696435325,
+   "waypoint_share_bias_change_m": -0.03712650881710168
   },
   {
    "arrival_miss_across_new_line_m": 0.00015676482072965459,
@@ -1326,7 +1394,9 @@
    "site_vs_truth_m": 0.03278972643798466,
    "split_check_m": 1.4051260155412137e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.027213692212747123
+   "waypoint_off_new_line_m": -0.027213692212747123,
+   "waypoint_share_after_bias_change_m": 0.000682193037437856,
+   "waypoint_share_bias_change_m": -0.02789588525018498
   },
   {
    "arrival_miss_across_new_line_m": -0.033795932267609685,
@@ -1367,7 +1437,9 @@
    "site_vs_truth_m": 0.07901277093138313,
    "split_check_m": 7.840950111415168e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.011321995363237303
+   "waypoint_off_new_line_m": -0.011321995363237303,
+   "waypoint_share_after_bias_change_m": -0.0007624231233398504,
+   "waypoint_share_bias_change_m": -0.010559572239897452
   },
   {
    "arrival_miss_across_new_line_m": -0.057051369921439,
@@ -1408,7 +1480,9 @@
    "site_vs_truth_m": 0.029079748985816608,
    "split_check_m": 7.355227538141662e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04171511570164965
+   "waypoint_off_new_line_m": -0.04171511570164965,
+   "waypoint_share_after_bias_change_m": 0.004818058666351099,
+   "waypoint_share_bias_change_m": -0.04653317436800075
   },
   {
    "arrival_miss_across_new_line_m": 0.000662223164116349,
@@ -1441,7 +1515,9 @@
    "site_vs_truth_m": 0.07436671765979494,
    "split_check_m": 1.0538445116559103e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.0032815922489799476
+   "waypoint_off_new_line_m": -0.0032815922489799476,
+   "waypoint_share_after_bias_change_m": 0.0030130929709656362,
+   "waypoint_share_bias_change_m": -0.006294685219945584
   },
   {
    "arrival_miss_across_new_line_m": 9.713263284064078e-05,
@@ -1474,7 +1550,9 @@
    "site_vs_truth_m": 0.06484739606822586,
    "split_check_m": -5.759281940243e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.03656463711460625
+   "waypoint_off_new_line_m": 0.03656463711460625,
+   "waypoint_share_after_bias_change_m": 0.00360929233323061,
+   "waypoint_share_bias_change_m": 0.03295534478137564
   },
   {
    "arrival_miss_across_new_line_m": -5.0151511226434464e-05,
@@ -1507,7 +1585,9 @@
    "site_vs_truth_m": 0.036744761161745756,
    "split_check_m": 1.0026701691145945e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.01822255264794527
+   "waypoint_off_new_line_m": 0.01822255264794527,
+   "waypoint_share_after_bias_change_m": 0.00011500259541585844,
+   "waypoint_share_bias_change_m": 0.01810755005252941
   },
   {
    "arrival_miss_across_new_line_m": 7.728010086673065e-05,
@@ -1540,7 +1620,9 @@
    "site_vs_truth_m": 0.042671910624715106,
    "split_check_m": -1.1587952819525071e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03927203287025785
+   "waypoint_off_new_line_m": -0.03927203287025785,
+   "waypoint_share_after_bias_change_m": -0.0018844978751886843,
+   "waypoint_share_bias_change_m": -0.037387534995069166
   },
   {
    "arrival_miss_across_new_line_m": 7.728010086673065e-05,
@@ -1573,7 +1655,9 @@
    "site_vs_truth_m": 0.04267191062471511,
    "split_check_m": -1.1657341758564144e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03927203287025785
+   "waypoint_off_new_line_m": -0.03927203287025785,
+   "waypoint_share_after_bias_change_m": -0.0018844978751886565,
+   "waypoint_share_bias_change_m": -0.037387534995069194
   },
   {
    "arrival_miss_across_new_line_m": 0.00011718379442100801,
@@ -1606,7 +1690,9 @@
    "site_vs_truth_m": 0.03344708256210101,
    "split_check_m": -2.8449465006019636e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.029830156903511415
+   "waypoint_off_new_line_m": -0.029830156903511415,
+   "waypoint_share_after_bias_change_m": -0.002177824821073565,
+   "waypoint_share_bias_change_m": -0.02765233208243785
   },
   {
    "arrival_miss_across_new_line_m": 0.0006959469331404566,
@@ -1639,7 +1725,9 @@
    "site_vs_truth_m": 0.018320544116235876,
    "split_check_m": 6.002143226879753e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01777553667530407
+   "waypoint_off_new_line_m": -0.01777553667530407,
+   "waypoint_share_after_bias_change_m": 0.004229020981293852,
+   "waypoint_share_bias_change_m": -0.022004557656597923
   },
   {
    "arrival_miss_across_new_line_m": -0.026135435417835584,
@@ -1672,7 +1760,9 @@
    "site_vs_truth_m": 0.03808195821460047,
    "split_check_m": -1.6167622796103842e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.017885210851325772
+   "waypoint_off_new_line_m": -0.017885210851325772,
+   "waypoint_share_after_bias_change_m": 0.00497397376438391,
+   "waypoint_share_bias_change_m": -0.022859184615709682
   },
   {
    "arrival_miss_across_new_line_m": -0.0005588311614734831,
@@ -1705,7 +1795,9 @@
    "site_vs_truth_m": 0.1038842723309302,
    "split_check_m": 4.440892098500626e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04529691673357161
+   "waypoint_off_new_line_m": -0.04529691673357161,
+   "waypoint_share_after_bias_change_m": 0.0011593755801387884,
+   "waypoint_share_bias_change_m": -0.0464562923137104
   },
   {
    "arrival_yaw_minus_waypoint_rad": 0.01421474291699669,
@@ -1763,7 +1855,9 @@
    "site_vs_truth_m": 0.06466456681098122,
    "split_check_m": -1.0061396160665481e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.028448422362399764
+   "waypoint_off_new_line_m": 0.028448422362399764,
+   "waypoint_share_after_bias_change_m": -0.003941748331793657,
+   "waypoint_share_bias_change_m": 0.03239017069419342
   },
   {
    "arrival_miss_across_new_line_m": -2.5117685496761633e-05,
@@ -1796,7 +1890,9 @@
    "site_vs_truth_m": 0.04187151026473827,
    "split_check_m": 2.2898349882893854e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.018137190606141093
+   "waypoint_off_new_line_m": 0.018137190606141093,
+   "waypoint_share_after_bias_change_m": 0.0022360386871141946,
+   "waypoint_share_bias_change_m": 0.0159011519190269
   },
   {
    "arrival_miss_across_new_line_m": 0.0004843119433423637,
@@ -1829,7 +1925,9 @@
    "site_vs_truth_m": 0.07291153639647255,
    "split_check_m": 4.198030811863873e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.017449775160338854
+   "waypoint_off_new_line_m": 0.017449775160338854,
+   "waypoint_share_after_bias_change_m": -0.003448801705621063,
+   "waypoint_share_bias_change_m": 0.020898576865959917
   },
   {
    "arrival_miss_across_new_line_m": -0.0002644022046989075,
@@ -1862,7 +1960,9 @@
    "site_vs_truth_m": 0.012334357501178766,
    "split_check_m": 2.1371793224034263e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.03527010667956949
+   "waypoint_off_new_line_m": 0.03527010667956949,
+   "waypoint_share_after_bias_change_m": 0.009592264932592104,
+   "waypoint_share_bias_change_m": 0.02567784174697739
   },
   {
    "arrival_miss_across_new_line_m": 1.8235879040123804e-05,
@@ -1895,7 +1995,9 @@
    "site_vs_truth_m": 0.06861525048214852,
    "split_check_m": -4.657732532997727e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.00441856072854338
+   "waypoint_off_new_line_m": -0.00441856072854338,
+   "waypoint_share_after_bias_change_m": -0.0011258248151922168,
+   "waypoint_share_bias_change_m": -0.0032927359133511636
   },
   {
    "arrival_miss_across_new_line_m": 0.0015751019400291472,
@@ -1928,7 +2030,9 @@
    "site_vs_truth_m": 0.07031030396129566,
    "split_check_m": -1.4710455076283324e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.03171745521145716
+   "waypoint_off_new_line_m": 0.03171745521145716,
+   "waypoint_share_after_bias_change_m": -0.0033783388509641132,
+   "waypoint_share_bias_change_m": 0.035095794062421276
   },
   {
    "arrival_miss_across_new_line_m": 0.00019582360868991566,
@@ -1961,7 +2065,9 @@
    "site_vs_truth_m": 0.05362523919515289,
    "split_check_m": -4.935288289154016e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.007321564157553459
+   "waypoint_off_new_line_m": 0.007321564157553459,
+   "waypoint_share_after_bias_change_m": 0.020051400351632165,
+   "waypoint_share_bias_change_m": -0.012729836194078706
   },
   {
    "arrival_miss_across_new_line_m": 0.0005796696253012046,
@@ -1994,7 +2100,9 @@
    "site_vs_truth_m": 0.013090205405608372,
    "split_check_m": -9.367506770274758e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.02889708612517694
+   "waypoint_off_new_line_m": -0.02889708612517694,
+   "waypoint_share_after_bias_change_m": 0.001757187207594657,
+   "waypoint_share_bias_change_m": -0.030654273332771598
   },
   {
    "arrival_miss_across_new_line_m": -0.05597892264432158,
@@ -2037,7 +2145,9 @@
    "site_vs_truth_m": 0.010337046030357448,
    "split_check_m": 3.7470027081099033e-16,
    "status": "pending",
-   "waypoint_off_new_line_m": -0.051205261878050856
+   "waypoint_off_new_line_m": -0.051205261878050856,
+   "waypoint_share_after_bias_change_m": 0.004910984847074307,
+   "waypoint_share_bias_change_m": -0.05611624672512516
   },
   {
    "arrival_miss_across_new_line_m": -0.004428872534089745,
@@ -2078,7 +2188,9 @@
    "site_vs_truth_m": 0.07632852294087937,
    "split_check_m": 9.922618282587337e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04752967483454473
+   "waypoint_off_new_line_m": -0.04752967483454473,
+   "waypoint_share_after_bias_change_m": 0.0028435979818586254,
+   "waypoint_share_bias_change_m": -0.05037327281640336
   },
   {
    "arrival_miss_across_new_line_m": -0.000520130158112253,
@@ -2111,7 +2223,9 @@
    "site_vs_truth_m": 0.11949994671127176,
    "split_check_m": 2.1510571102112408e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03603280077049287
+   "waypoint_off_new_line_m": -0.03603280077049287,
+   "waypoint_share_after_bias_change_m": 0.0015660564564441426,
+   "waypoint_share_bias_change_m": -0.03759885722693701
   },
   {
    "arrival_miss_across_new_line_m": -0.0005609469248463173,
@@ -2144,7 +2258,9 @@
    "site_vs_truth_m": 0.111888691728596,
    "split_check_m": 9.71445146547012e-17,
    "status": "done",
-   "waypoint_off_new_line_m": -0.035399591614431736
+   "waypoint_off_new_line_m": -0.035399591614431736,
+   "waypoint_share_after_bias_change_m": 0.0044877740620539175,
+   "waypoint_share_bias_change_m": -0.03988736567648565
   },
   {
    "arrival_miss_across_new_line_m": -0.053840034750263,
@@ -2185,7 +2301,9 @@
    "site_vs_truth_m": 0.04897728361843019,
    "split_check_m": 3.3306690738754696e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.036508775171554486
+   "waypoint_off_new_line_m": -0.036508775171554486,
+   "waypoint_share_after_bias_change_m": 0.00727903860771284,
+   "waypoint_share_bias_change_m": -0.043787813779267326
   },
   {
    "arrival_miss_across_new_line_m": -0.02700362110728316,
@@ -2224,7 +2342,9 @@
    "site_vs_truth_m": 0.008710468006878368,
    "split_check_m": 4.163336342344337e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.052996724753256785
+   "waypoint_off_new_line_m": -0.052996724753256785,
+   "waypoint_share_after_bias_change_m": 0.00419573954605057,
+   "waypoint_share_bias_change_m": -0.057192464299307355
   },
   {
    "arrival_miss_across_new_line_m": -0.011251261410911595,
@@ -2257,7 +2377,9 @@
    "site_vs_truth_m": 0.00310720681392542,
    "split_check_m": -4.649058915617843e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.021838472686064092
+   "waypoint_off_new_line_m": -0.021838472686064092,
+   "waypoint_share_after_bias_change_m": 0.0023294179028316986,
+   "waypoint_share_bias_change_m": -0.02416789058889579
   },
   {
    "arrival_miss_across_new_line_m": -0.0020060223116700887,
@@ -2290,7 +2412,9 @@
    "site_vs_truth_m": 0.02868884344298586,
    "split_check_m": -1.1050188541972261e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.009475166480957045
+   "waypoint_off_new_line_m": -0.009475166480957045,
+   "waypoint_share_after_bias_change_m": -0.00506037640151015,
+   "waypoint_share_bias_change_m": -0.004414790079446895
   },
   {
    "arrival_miss_across_new_line_m": 0.00044889561373508136,
@@ -2323,7 +2447,9 @@
    "site_vs_truth_m": 0.06584072313462712,
    "split_check_m": 3.937822290467352e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.005014424783575638
+   "waypoint_off_new_line_m": -0.005014424783575638,
+   "waypoint_share_after_bias_change_m": -0.005366398808880318,
+   "waypoint_share_bias_change_m": 0.0003519740253046799
   },
   {
    "arrival_miss_across_new_line_m": -0.0001425884678146333,
@@ -2356,7 +2482,9 @@
    "site_vs_truth_m": 0.06521802793678509,
    "split_check_m": -6.930220286527344e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.007927228446016454
+   "waypoint_off_new_line_m": 0.007927228446016454,
+   "waypoint_share_after_bias_change_m": 0.0007612212687920783,
+   "waypoint_share_bias_change_m": 0.007166007177224376
   },
   {
    "arrival_miss_across_new_line_m": 0.00018224667039735964,
@@ -2389,7 +2517,9 @@
    "site_vs_truth_m": 0.057242864029825494,
    "split_check_m": 1.8821749714348357e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.004046092037079604
+   "waypoint_off_new_line_m": -0.004046092037079604,
+   "waypoint_share_after_bias_change_m": -0.018878484660812808,
+   "waypoint_share_bias_change_m": 0.014832392623733204
   },
   {
    "arrival_miss_across_new_line_m": 0.0006695469409639943,
@@ -2422,7 +2552,9 @@
    "site_vs_truth_m": 0.06421848899030022,
    "split_check_m": -6.314393452555578e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.02629088265291042
+   "waypoint_off_new_line_m": 0.02629088265291042,
+   "waypoint_share_after_bias_change_m": -0.013250050652021908,
+   "waypoint_share_bias_change_m": 0.03954093330493233
   },
   {
    "arrival_miss_across_new_line_m": 0.0006045760547789408,
@@ -2455,7 +2587,9 @@
    "site_vs_truth_m": 0.06236739803537963,
    "split_check_m": -4.553649124439119e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.0038787192707377405
+   "waypoint_off_new_line_m": 0.0038787192707377405,
+   "waypoint_share_after_bias_change_m": -0.018369103976278153,
+   "waypoint_share_bias_change_m": 0.022247823247015894
   },
   {
    "arrival_miss_across_new_line_m": 0.000658991908432105,
@@ -2488,7 +2622,9 @@
    "site_vs_truth_m": 0.0822023183557837,
    "split_check_m": -9.575673587391975e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.011562651280723694
+   "waypoint_off_new_line_m": 0.011562651280723694,
+   "waypoint_share_after_bias_change_m": 0.002663951187822297,
+   "waypoint_share_bias_change_m": 0.008898700092901397
   },
   {
    "arrival_miss_across_new_line_m": -0.01755021859570205,
@@ -2521,7 +2657,9 @@
    "site_vs_truth_m": 0.023475153852170746,
    "split_check_m": 7.216449660063518e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01682969859510708
+   "waypoint_off_new_line_m": -0.01682969859510708,
+   "waypoint_share_after_bias_change_m": 0.003660481174720953,
+   "waypoint_share_bias_change_m": -0.020490179769828032
   },
   {
    "arrival_miss_across_new_line_m": 0.0003454135834642935,
@@ -2554,7 +2692,9 @@
    "site_vs_truth_m": 0.02792787837545545,
    "split_check_m": -6.938893903907228e-18,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04263355575400263
+   "waypoint_off_new_line_m": -0.04263355575400263,
+   "waypoint_share_after_bias_change_m": 0.003952256470408311,
+   "waypoint_share_bias_change_m": -0.04658581222441094
   },
   {
    "arrival_miss_across_new_line_m": 0.0005662448951879728,
@@ -2587,7 +2727,9 @@
    "site_vs_truth_m": 0.07895465422831269,
    "split_check_m": -1.2021633688519273e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01542785468058916
+   "waypoint_off_new_line_m": -0.01542785468058916,
+   "waypoint_share_after_bias_change_m": 0.007292247928739948,
+   "waypoint_share_bias_change_m": -0.022720102609329107
   },
   {
    "arrival_miss_across_new_line_m": -0.030774889523243365,
@@ -2622,7 +2764,9 @@
    "site_vs_truth_m": 0.010128885688298285,
    "split_check_m": -1.2073675392798577e-15,
    "status": "done",
-   "waypoint_off_new_line_m": -0.018602608387566333
+   "waypoint_off_new_line_m": -0.018602608387566333,
+   "waypoint_share_after_bias_change_m": 0.005681640328546234,
+   "waypoint_share_bias_change_m": -0.024284248716112566
   },
   {
    "arrival_miss_across_new_line_m": -0.004497779812831504,
@@ -2657,7 +2801,9 @@
    "site_vs_truth_m": 0.09217579659530185,
    "split_check_m": 1.674774343402019e-06,
    "status": "done",
-   "waypoint_off_new_line_m": -0.03394019720982955
+   "waypoint_off_new_line_m": -0.03394019720982955,
+   "waypoint_share_after_bias_change_m": 0.0023658562913771997,
+   "waypoint_share_bias_change_m": -0.03630605350120675
   },
   {
    "arrival_miss_across_new_line_m": -0.0007329719155019232,
@@ -2690,7 +2836,9 @@
    "site_vs_truth_m": 0.05023315957153042,
    "split_check_m": 2.0816681711721685e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.029500781370656926
+   "waypoint_off_new_line_m": -0.029500781370656926,
+   "waypoint_share_after_bias_change_m": 0.006128151410525251,
+   "waypoint_share_bias_change_m": -0.03562893278118218
   },
   {
    "arrival_miss_across_new_line_m": 0.0006677703250118627,
@@ -2723,7 +2871,9 @@
    "site_vs_truth_m": 0.005925893390278635,
    "split_check_m": 5.134781488891349e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04014677088047214
+   "waypoint_off_new_line_m": -0.04014677088047214,
+   "waypoint_share_after_bias_change_m": 0.0029218567059813294,
+   "waypoint_share_bias_change_m": -0.04306862758645347
   },
   {
    "arrival_miss_across_new_line_m": -0.044213674110239465,
@@ -2764,7 +2914,9 @@
    "site_vs_truth_m": 0.01001044329307384,
    "split_check_m": 1.8041124150158794e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.0384300770635172
+   "waypoint_off_new_line_m": -0.0384300770635172,
+   "waypoint_share_after_bias_change_m": 0.005796412982208787,
+   "waypoint_share_bias_change_m": -0.044226490045725986
   },
   {
    "arrival_miss_across_new_line_m": -0.0006076687233327327,
@@ -2797,7 +2949,9 @@
    "site_vs_truth_m": 0.06487046132773794,
    "split_check_m": 1.5612511283791264e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.003975313353743001
+   "waypoint_off_new_line_m": -0.003975313353743001,
+   "waypoint_share_after_bias_change_m": -0.0006054159677569282,
+   "waypoint_share_bias_change_m": -0.003369897385986073
   },
   {
    "arrival_miss_across_new_line_m": -2.0947679408592212e-05,
@@ -2830,7 +2984,9 @@
    "site_vs_truth_m": 0.07199238534857591,
    "split_check_m": -2.1510571102112408e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.018505601792274895
+   "waypoint_off_new_line_m": 0.018505601792274895,
+   "waypoint_share_after_bias_change_m": -0.006535086143439242,
+   "waypoint_share_bias_change_m": 0.025040687935714137
   },
   {
    "arrival_miss_across_new_line_m": 0.00036330531132020005,
@@ -2863,7 +3019,9 @@
    "site_vs_truth_m": 0.047299474929691984,
    "split_check_m": 1.1388459619787739e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.007083392749428832
+   "waypoint_off_new_line_m": 0.007083392749428832,
+   "waypoint_share_after_bias_change_m": -0.022927175041415754,
+   "waypoint_share_bias_change_m": 0.030010567790844586
   },
   {
    "arrival_miss_across_new_line_m": -9.640820436528086e-05,
@@ -2896,7 +3054,9 @@
    "site_vs_truth_m": 0.016476112306119166,
    "split_check_m": 3.5041414214731503e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.020319063963320352
+   "waypoint_off_new_line_m": -0.020319063963320352,
+   "waypoint_share_after_bias_change_m": -0.00920682618320745,
+   "waypoint_share_bias_change_m": -0.011112237780112902
   },
   {
    "arrival_miss_across_new_line_m": 0.0004767242371897032,
@@ -2929,7 +3089,9 @@
    "site_vs_truth_m": 0.09039336806437512,
    "split_check_m": 1.1449174941446927e-15,
    "status": "done",
-   "waypoint_off_new_line_m": 0.03577464290727183
+   "waypoint_off_new_line_m": 0.03577464290727183,
+   "waypoint_share_after_bias_change_m": 4.570632107549211e-05,
+   "waypoint_share_bias_change_m": 0.03572893658619634
   },
   {
    "arrival_miss_across_new_line_m": 0.00011767117130653815,
@@ -2962,7 +3124,9 @@
    "site_vs_truth_m": 0.05987374392332281,
    "split_check_m": 6.626643678231403e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.020937640468676785
+   "waypoint_off_new_line_m": 0.020937640468676785,
+   "waypoint_share_after_bias_change_m": -0.0013293869087461913,
+   "waypoint_share_bias_change_m": 0.022267027377422977
   },
   {
    "arrival_miss_across_new_line_m": -0.005420155396702278,
@@ -2995,7 +3159,9 @@
    "site_vs_truth_m": 0.04958326776528207,
    "split_check_m": 3.660266534311063e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.010263217551584256
+   "waypoint_off_new_line_m": 0.010263217551584256,
+   "waypoint_share_after_bias_change_m": 0.0010027425928402361,
+   "waypoint_share_bias_change_m": 0.00926047495874402
   },
   {
    "arrival_miss_across_new_line_m": 5.419008719824425e-05,
@@ -3028,7 +3194,9 @@
    "site_vs_truth_m": 0.05411073350973135,
    "split_check_m": -7.28583859910259e-16,
    "status": "done",
-   "waypoint_off_new_line_m": 0.016018589729885582
+   "waypoint_off_new_line_m": 0.016018589729885582,
+   "waypoint_share_after_bias_change_m": -0.009441795277995477,
+   "waypoint_share_bias_change_m": 0.02546038500788106
   },
   {
    "arrival_miss_across_new_line_m": -0.026284880481958206,
@@ -3067,7 +3235,9 @@
    "site_vs_truth_m": 0.05370908074975078,
    "split_check_m": -8.257283745649602e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.027098040529858647
+   "waypoint_off_new_line_m": -0.027098040529858647,
+   "waypoint_share_after_bias_change_m": 0.0035375740116116994,
+   "waypoint_share_bias_change_m": -0.030635614541470346
   },
   {
    "arrival_yaw_minus_waypoint_rad": -0.16478418911077714,
@@ -3118,7 +3288,9 @@
    "site_vs_truth_m": 0.004007259357732445,
    "split_check_m": 4.718447854656915e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.0376161279345435
+   "waypoint_off_new_line_m": -0.0376161279345435,
+   "waypoint_share_after_bias_change_m": 0.0036536135804008385,
+   "waypoint_share_bias_change_m": -0.041269741514944336
   },
   {
    "arrival_miss_across_new_line_m": -0.0005969339338925961,
@@ -3151,7 +3323,9 @@
    "site_vs_truth_m": 0.03532815010388511,
    "split_check_m": 0.0,
    "status": "done",
-   "waypoint_off_new_line_m": -0.04541019685985481
+   "waypoint_off_new_line_m": -0.04541019685985481,
+   "waypoint_share_after_bias_change_m": 0.0009876381032039028,
+   "waypoint_share_bias_change_m": -0.046397834963058715
   },
   {
    "arrival_miss_across_new_line_m": -0.00914248034630527,
@@ -3184,7 +3358,9 @@
    "site_vs_truth_m": 0.03936679563502585,
    "split_check_m": -3.122502256758253e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.013539345286289306
+   "waypoint_off_new_line_m": -0.013539345286289306,
+   "waypoint_share_after_bias_change_m": 0.007645364417139144,
+   "waypoint_share_bias_change_m": -0.02118470970342845
   },
   {
    "arrival_miss_across_new_line_m": -0.005108666713751764,
@@ -3217,7 +3393,9 @@
    "site_vs_truth_m": 0.03410863581776912,
    "split_check_m": 2.914335439641036e-16,
    "status": "done",
-   "waypoint_off_new_line_m": -0.018960993916544044
+   "waypoint_off_new_line_m": -0.018960993916544044,
+   "waypoint_share_after_bias_change_m": 0.008021231874320578,
+   "waypoint_share_bias_change_m": -0.026982225790864622
   },
   {
    "arrival_miss_across_new_line_m": -0.041490883378280774,
@@ -3258,7 +3436,9 @@
    "site_vs_truth_m": 0.049400262364021244,
    "split_check_m": 7.632783294297951e-17,
    "status": "done",
-   "waypoint_off_new_line_m": -0.01108649107474946
+   "waypoint_off_new_line_m": -0.01108649107474946,
+   "waypoint_share_after_bias_change_m": 0.006838703462479723,
+   "waypoint_share_bias_change_m": -0.017925194537229183
   },
   {
    "arrival_miss_across_new_line_m": -0.004199838771354769,
@@ -3297,7 +3477,9 @@
    "site_vs_truth_m": 0.0017669003878098256,
    "split_check_m": -6.938893903907228e-17,
    "status": "done",
-   "waypoint_off_new_line_m": -0.0555480400580991
+   "waypoint_off_new_line_m": -0.0555480400580991,
+   "waypoint_share_after_bias_change_m": 0.006344322297779259,
+   "waypoint_share_bias_change_m": -0.06189236235587836
   }
  ]
 }

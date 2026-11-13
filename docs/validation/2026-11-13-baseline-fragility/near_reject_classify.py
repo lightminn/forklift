@@ -107,6 +107,7 @@ def classify(name: str, result: dict) -> dict | None:
     wp, arr = nc.get("waypoint"), attempt.get("arrived_pose")
     if wp and arr:
         out["arrival_yaw_minus_waypoint_rad"] = math.remainder(arr[2] - wp[2], math.tau)
+    attempts = result["observation_attempts"]
     target = new_line_target(result, nc)
     if wp and arr and target and off:
         # the lateral offset to the new line, split: the waypoint's own offset from the new line (the far estimate ->
@@ -114,6 +115,17 @@ def classify(name: str, result: dict) -> dict | None:
         out["waypoint_off_new_line_m"] = lateral(wp, target)
         out["arrival_miss_across_new_line_m"] = lateral(arr, target) - lateral(wp, target)
         out["split_check_m"] = lateral(arr, target) - off["lateral_m"]
+        # The waypoint share further split (Codex review): the waypoint was set in the far capture's estimate; with
+        # W = estimate * truth^-1 at each capture, W_near * W_far^-1 moves it into the near capture's bias. The
+        # remainder is what the two observations disagree on once the bias change is taken out.
+        far_no = nc.get("far_attempt")
+        far_cap = (attempts[far_no - 1].get("capture_control") if isinstance(far_no, int) and 0 < far_no <= len(attempts)
+                   else None) or {}
+        near_cap = attempt.get("capture_control") or {}
+        if far_cap.get("truth_rear") and near_cap.get("truth_rear"):
+            moved = bias_move(wp, far_cap, near_cap)
+            out["waypoint_share_after_bias_change_m"] = lateral(moved, target)
+            out["waypoint_share_bias_change_m"] = lateral(wp, target) - lateral(moved, target)
     path = (result.get("paths") or {}).get("observe") or {}
     if path.get("curvatures_inv_m"):
         out["observe_path_end"] = {"curvature_inv_m": path["curvatures_inv_m"][-1],
@@ -126,6 +138,29 @@ def classify(name: str, result: dict) -> dict | None:
 
 def lateral(p, frame) -> float:
     return -math.sin(frame[2]) * (p[0] - frame[0]) + math.cos(frame[2]) * (p[1] - frame[1])
+
+
+def se2(p):
+    c, s_ = math.cos(p[2]), math.sin(p[2])
+    return [[c, -s_, p[0]], [s_, c, p[1]], [0.0, 0.0, 1.0]]
+
+
+def mat_mul(a, b):
+    return [[sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def inv(m):
+    c, s_, x, y = m[0][0], m[1][0], m[0][2], m[1][2]
+    return [[c, s_, -(c * x + s_ * y)], [-s_, c, s_ * x - c * y], [0.0, 0.0, 1.0]]
+
+
+def bias_move(pose, far_cap: dict, near_cap: dict) -> tuple[float, float, float]:
+    """A pose expressed in the far capture's estimate, moved into the near capture's: W_near * W_far^-1 * pose with
+    W = se2(control_rear) * se2(truth_rear)^-1 at each capture."""
+    w_far = mat_mul(se2(far_cap["control_rear"]), inv(se2(far_cap["truth_rear"])))
+    w_near = mat_mul(se2(near_cap["control_rear"]), inv(se2(near_cap["truth_rear"])))
+    m = mat_mul(mat_mul(w_near, inv(w_far)), se2(pose))
+    return m[0][2], m[1][2], math.atan2(m[1][0], m[0][0])
 
 
 def new_line_target(result: dict, nc: dict):
