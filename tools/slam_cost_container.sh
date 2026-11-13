@@ -62,8 +62,16 @@ DUMP=$?
 echo "dump exit $DUMP" >> "$OUT/dump_run.log"
 # a requested graph dump that failed fails the run (it was only logged; design v2 4)
 [ "${5:-}" = graph ] && [ "$DUMP" != 0 ] && [ "$STATUS" = 0 ] && STATUS=6
-# ros2 launch takes SIGTERM (a background job of this shell ignores SIGINT) and stops the node with SIGINT, so the
-# node exits through its destructors, where a trace writes its tail
+# The node itself gets SIGINT and is waited for (up to 30 s), so it exits through its destructors, where a trace writes
+# its tail; only then is ros2 launch stopped. SIGTERM to ros2 launch alone ended the launcher at once (exit 143) and
+# left the node to die with the container, so no trace was written (S1 equivalence p0t, job 18838).
+NODE_PIDS=$(pgrep -f "/lib/slam_toolbox/[a-z_]*slam_toolbox_node" 2>/dev/null || true)
+for p in $NODE_PIDS; do kill -INT "$p" 2>/dev/null; done
+for _ in $(seq 1 120); do
+  alive=0; for p in $NODE_PIDS; do kill -0 "$p" 2>/dev/null && alive=1; done
+  [ "$alive" = 0 ] && break; sleep 0.25
+done
+[ "$alive" = 0 ] || echo "slam_toolbox node still running 30 s after SIGINT: $NODE_PIDS" >> "$OUT/exit_check.log"
 kill $SLAM 2>/dev/null; wait $SLAM 2>/dev/null
 # a patched node that ended itself (abort or refusal) fails the run even after a clean bridge, and a trace must end
 # with its end record: one without it lost its tail (Codex code review 2 P2-5; docs/design/2026-11-13-slam-patch-build.md 2)
