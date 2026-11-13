@@ -48,9 +48,14 @@ def sample(path: str, every: float) -> int:
     while True:
         t_local = time.time()
         try:
-            r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
-                                "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
-            row = {"t_local": t_local, "ssh_exit": r.returncode, **parse(r.stdout), "err": r.stderr[-200:]}
+            for attempt in range(3):  # a failed probe (2026-11-13 K09: a Wi-Fi DNS blip) is retried within the period
+                r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
+                                    "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
+                if r.returncode == 0 or time.time() - t_local > every / 2:
+                    break
+                time.sleep(5)
+            row = {"t_local": t_local, "ssh_exit": r.returncode, "attempts": attempt + 1, **parse(r.stdout),
+                   "err": r.stderr[-200:]}
         except subprocess.TimeoutExpired as exc:  # keep what came before the cut (a qemu line is still a positive)
             out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
             row = {"t_local": t_local, "ssh_exit": None, **parse(out), "err": "timeout"}
