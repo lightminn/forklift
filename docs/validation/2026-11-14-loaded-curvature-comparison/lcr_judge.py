@@ -12,8 +12,11 @@ class is mission.failures'). Reads only.
 Run states (plan 5.1, one per run): complete (success); transport_planning (the loaded transport path could not be
 made: the mission plan's transport stage -- a reason "transport:..." or "Mission planning failed: transport:..." --
 or a transport-phase replan's final failure: a reason with replan_failed / invalid_start / search_no_path / no_path /
-deadline / no_plan while the run ended in transport); transport_cross_track (tracking_failure in transport,
-failure cross_track); other.
+deadline / no_plan while the run ended in transport, the obstacle layer's "obstacle_replan_failed in transport" and
+"obstacle_live_plan_failed in transport", and the D7 re-approach's "docking_retry_no_plan" -- a loaded transport path);
+transport_cross_track (tracking_failure in transport, failure cross_track); other. The phase a run ended in is the
+tracking failure's phase when there is one, else the last transition's target (the final state phase is not relied
+on).
 """
 
 from __future__ import annotations
@@ -30,6 +33,9 @@ from forklift_core.mission.failures import SCENE, classify
 ARMS = ("B0", "R")
 NAME = re.compile(r"^lcr_(B0|R)_(.+)_s(\d+)$")
 PLANNING_WORDS = ("replan_failed", "invalid_start", "search_no_path", "no_path", "deadline", "no_plan")
+TRANSPORT_PLANNING_PREFIXES = ("transport:", "Mission planning failed: transport:",
+                               "obstacle_replan_failed in transport", "obstacle_live_plan_failed in transport",
+                               "docking_retry_no_plan")
 
 
 def cells() -> list:
@@ -41,6 +47,14 @@ def failure_of(r: dict) -> str:
     return str(r.get("failure_reason") or (r.get("tracking_failure") or {}).get("reason") or "")
 
 
+def ended_phase(r: dict):
+    tf = r.get("tracking_failure") or {}
+    if tf.get("phase"):
+        return tf["phase"]
+    trans = r.get("transitions") or []
+    return trans[-1].get("to") if trans else r.get("phase")
+
+
 def state_of(r: dict) -> str:
     if r.get("success"):
         return "complete"
@@ -48,9 +62,9 @@ def state_of(r: dict) -> str:
     tf = r.get("tracking_failure") or {}
     if tf.get("phase") == "transport" and (tf.get("tracking") or {}).get("failure") == "cross_track":
         return "transport_cross_track"
-    if f.startswith("transport:") or f.startswith("Mission planning failed: transport:"):
+    if f.startswith(TRANSPORT_PLANNING_PREFIXES):
         return "transport_planning"
-    if r.get("phase") == "transport" and any(w in f for w in PLANNING_WORDS):
+    if ended_phase(r) == "transport" and any(w in f for w in PLANNING_WORDS):
         return "transport_planning"
     return "other"
 
@@ -84,7 +98,7 @@ def summarize(name: str, r: dict) -> dict:
         "name": name, "arm": m[1], "scene": m[2], "seed": int(m[3]),
         "valid": bool(det.get("enabled")) and not det.get("broken"),
         "state": state_of(r), "success": bool(r.get("success")), "failure": failure_of(r)[:120] or None,
-        "failure_class": failure_class(r), "phase": r.get("phase"),
+        "failure_class": failure_class(r), "phase": ended_phase(r),
         "transport_s": (t1 - t0) if t0 is not None and t1 is not None else None,
         "cycle_s": t2,
         "since_transport_s": (float(r.get("simulated_time_s") or 0.0) - t0) if t0 is not None else None,

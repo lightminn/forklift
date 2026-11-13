@@ -56,6 +56,16 @@ def test_state_classes():
                               phase="transport")) == "transport_planning"
     assert lj.state_of(result(state="other", failure="stall_replan_failed: no_path", phase="return_home")) == "other"
     assert lj.state_of(result(state="other")) == "other"
+    for f in ("obstacle_replan_failed in transport: no_path", "obstacle_live_plan_failed in transport: no_path",
+              "docking_retry_no_plan:no_path:no_path"):
+        assert lj.state_of(result(state="transport_planning", failure=f)) == "transport_planning", f
+    assert lj.state_of(result(state="other", failure="obstacle_replan_failed in return_home: no_path")) == "other"
+
+
+def test_the_ended_phase_is_the_last_transition_without_a_tracking_failure():
+    r = result(state="transport_planning", failure="stall_replan_failed: no_path", phase="complete")
+    r["transitions"] = [{"to": "transport", "time_s": 65.0}]
+    assert lj.ended_phase(r) == "transport" and lj.state_of(r) == "transport_planning"
 
 
 def test_the_cross_track_criterion_counts_random_1_runs():
