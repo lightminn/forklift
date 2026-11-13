@@ -3,21 +3,24 @@ the truck accepted SLAM corrections after the near capture until the end-of-leg 
 
     python c2b_estimate.py DECOMP.json --raw-root DIR --out C2B.json [--summary C2B.md]
 
-DECOMP.json is seat_decompose.py's output; under DIR, <root>/<name>/run/ holds result.json, slam_control.npy and
-slam_records.json (the synchronous record: per scan stamp_s, status processed/skipped, map_from_odom = the tracker's
+DECOMP.json is seat_decompose.py's output; under DIR, <root>/<name>/run/ holds result.json, slam_control.npy,
+slam_log.npz and slam_records.json (the synchronous record: per scan stamp_s, status processed/skipped, map_from_odom = the tracker's
 latest received correction, applied_map_from_odom).
 
 Per run (the decomposition's judged / not-selected runs, i.e. reached lift and not held):
 - M_hold: the applied correction from the capture to lift (must be constant, else not judgeable).
-- t_k: the first slam_control row after the capture where the estimate's remaining travel to the insert entry is at
-  most 0.5 + v^2 / (2 * 0.3) (the existing end-of-leg hold, plan premise 3); v is the estimate's speed. The travel is
-  the estimate's own path length, an approximation of the tracker's remaining arc. An exploratory t at 1.0 m is also
-  reported.
+- t_k: the first control tick after the capture where the approach tracker's remaining arc is at most
+  0.5 + v^2 / (2 * 0.3) (the existing end-of-leg hold, plan premise 3). The remaining arc is the approach path's
+  (result.paths.approach) length past the estimate's projection, progress never going back; v is the runner's
+  tracker_speed: the odometry interval speed (slam_log wheel increments x radius / dt) averaged over 0.1 s, kept just
+  above 0.012 m/s while it is below. The estimate's own travel to the insert entry gives a second t_k, reported as a
+  sensitivity (whether it selects another correction). An exploratory t at 1.0 m is also reported.
 - M(t_k): the last record's map_from_odom with stamp <= t_k; none within 0.25 s -> not judgeable.
 - Delta = M(t_k) * M_hold^-1; W' = Delta * W_lift (W_lift = E_lift * A_lift^-1); S_C2b = lateral(W'(V), E_lift), and
   the pallet's yaw relative to the truck at lift the same way. Delta = identity gives S_C2b = S (checked).
-- The jump as the code returns it: the base position under the two corrections at the same odometry pose, and the
-  wrapped yaw difference.
+- The jumps as the code returns them (the base position under the two corrections at the same odometry pose, and the
+  wrapped yaw difference), at every change of the applied correction from the release at the capture to t_k; the
+  conservative variant uses the largest of them, not only the end-to-end one.
 - Also: replies received from the capture to t_k and their spread, the age of the held correction when the hold
   began, and the received correction's error against the truth at t_k.
 The plan's 2.2 rule is applied as written: the mapping exploratory pass needs all of its five conditions; not
@@ -60,6 +63,78 @@ def lateral(point, pose) -> float:
 
 def wrap(a: float) -> float:
     return math.remainder(a, math.tau)
+
+
+STOP_SPEED_MPS = 0.012
+SPEED_WINDOW_TICKS = 12
+
+
+def tracker_speeds(log, wheel_radius_m: float) -> tuple[np.ndarray, np.ndarray]:
+    """(stamps, tracker_speed): the odometry interval speed averaged over 0.1 s, kept just above 0.012 m/s while
+    below (StopDetector.tracker_speed, the stopped state not modelled: the approach does not stop)."""
+    stamps = np.asarray(log["joint_stamps_s"], dtype=float)
+    inc = np.asarray(log["wheel_increments_rad"], dtype=float).mean(axis=1) * wheel_radius_m
+    speed = np.concatenate([[0.0], inc[1:] / np.diff(stamps)])
+    kernel = np.ones(SPEED_WINDOW_TICKS) / SPEED_WINDOW_TICKS
+    mean = np.convolve(speed, kernel, mode="full")[: len(speed)]
+    mean[: SPEED_WINDOW_TICKS - 1] = [speed[: k + 1].mean() for k in range(SPEED_WINDOW_TICKS - 1)]
+    floor = np.abs(mean) <= STOP_SPEED_MPS
+    mean[floor] = STOP_SPEED_MPS * 1.01
+    return stamps, mean
+
+
+def path_remaining(path_xy: np.ndarray, points_xy: np.ndarray) -> np.ndarray:
+    """The remaining arc of a polyline past each point's projection, progress monotone (the tracker never goes
+    back)."""
+    seg = np.diff(path_xy, axis=0)
+    seg_len = np.hypot(seg[:, 0], seg[:, 1])
+    cum = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total, progress, out, i0 = cum[-1], 0.0, [], 0
+    for p in points_xy:
+        best, best_d = progress, None
+        for i in range(i0, len(seg)):
+            if seg_len[i] == 0:
+                continue
+            u = min(1.0, max(0.0, float(np.dot(p - path_xy[i], seg[i]) / seg_len[i] ** 2)))
+            d = float(np.hypot(*(path_xy[i] + u * seg[i] - p)))
+            if best_d is None or d < best_d:
+                best_d, best = d, cum[i] + u * seg_len[i]
+        if best >= progress:
+            progress = best
+            i0 = int(np.searchsorted(cum, progress, side="right")) - 1
+            i0 = max(0, min(i0, len(seg) - 1))
+        out.append(total - progress)
+    return np.array(out)
+
+
+def end_hold_time_tracked(sc: np.ndarray, t_cap: float, t_ins: float, path_xy: np.ndarray, speed_t: np.ndarray,
+                          speed_v: np.ndarray, window_m: float | None = None) -> float | None:
+    """The first control tick after the capture whose approach remaining arc is within the end window."""
+    rows = sc[(sc[:, 0] > t_cap + TIME_TOL_S) & (sc[:, 0] <= t_ins + TIME_TOL_S)]
+    if len(rows) < 2:
+        return None
+    remaining = path_remaining(path_xy, rows[:, 1:3])
+    v = np.interp(rows[:, 0], speed_t, speed_v)
+    limit = np.full(len(rows), window_m) if window_m is not None else END_WINDOW_M + v ** 2 / (2 * ACCEL_MPS2)
+    hit = np.nonzero(remaining <= limit)[0]
+    return float(rows[hit[0], 0]) if len(hit) else None
+
+
+def applied_jumps(records: list, t_cap: float, t_k: float, M_hold, sc: np.ndarray, offset_m: float) -> list[dict]:
+    """Every change of the applied correction from the release at the capture to t_k: (time, position jump, yaw
+    jump) at that time's odometry pose."""
+    current, out = list(M_hold), []
+    first, _ = correction_at(records, t_cap)
+    changes = [(t_cap, first)] if first is not None else []
+    changes += [(r["stamp_s"], r["map_from_odom"]) for r in records
+                if t_cap < r["stamp_s"] <= t_k + TIME_TOL_S and r["status"] == "processed"]
+    for t, M in changes:
+        if list(M) == current:
+            continue
+        pos, yaw = jump(current, M, rear_row(sc, t)[1:4], offset_m)
+        out.append({"t": t, "jump_m": pos, "jump_rad": yaw})
+        current = list(M)
+    return out
 
 
 def end_hold_time(sc: np.ndarray, t_cap: float, t_ins: float, window_m: float | None = None) -> float | None:
@@ -121,7 +196,7 @@ def jump(M_hold, M_k, E_k, offset_m: float) -> tuple[float, float]:
     return math.hypot(a[0] - b[0], a[1] - b[1]), abs(wrap(a[2] - b[2]))
 
 
-def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list) -> dict:
+def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list, log=None) -> dict:
     out: dict = {"name": decomp["name"], "scene": decomp["scene"], "arm": decomp["arm"],
                  "S_m": decomp["terms_m"]["S"], "judgeable": False}
     t_cap, t_ins, t_lift = decomp["capture_t"], decomp["t_insert"], decomp["t_lift"]
@@ -132,8 +207,16 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list) -> d
     lift = next(s for s in result["samples"] if s.get("phase") == "lift" and s["time_s"] >= t_lift - TIME_TOL_S)
     V, V_yaw = decomp["V"], float(lift["pallet_yaw_rad"])
     offset = result["arguments"]["rear_axle_offset_m"]
+    path = (result.get("paths") or {}).get("approach") or {}
+    if log is None or not path.get("poses"):
+        out["why"] = "no slam log or approach path for the end-hold rule"
+        return out
+    path_xy = np.asarray(path["poses"], dtype=float)[:, :2]
+    radius = result["chassis_model"]["drive_geometry"]["wheel_radius_m"]
+    speed_t, speed_v = tracker_speeds(log, radius)
+    t_travel = end_hold_time(sc, t_cap, t_ins)
     for key, window in (("end_hold", None), ("explore_1m", EXPLORE_M)):
-        t_k = end_hold_time(sc, t_cap, t_ins, window)
+        t_k = end_hold_time_tracked(sc, t_cap, t_ins, path_xy, speed_t, speed_v, window)
         entry: dict = {"t_k": t_k}
         if t_k is None:
             entry["why"] = "no row inside the end window"
@@ -148,12 +231,15 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list) -> d
                 odom_k = np.linalg.inv(se2(M_hold)) @ se2(E_k[1:4])
                 rec = pose_of(se2(M_k) @ odom_k)
                 truth = E_k[4:7]
+                seq = applied_jumps(records, t_cap, t_k, M_hold, sc, offset)
                 entry.update(
+                    jumps=seq, max_jump_m=max((j["jump_m"] for j in seq), default=0.0),
+                    max_jump_rad=max((j["jump_rad"] for j in seq), default=0.0),
                     correction_stamp_s=stamp, S_C2b_m=cf["S_m"], yaw_C2b_rad=cf["yaw_rad"],
                     yaw_actual_rad=cf["yaw_actual_rad"], check_identity_m=counterfactual(
                         V, V_yaw, decomp["E"], decomp["A"], M_hold, M_hold)["S_m"] - cf["S_actual_m"],
                     jump_m=pos_jump, jump_rad=yaw_jump,
-                    over_jump=bool(pos_jump > JUMP_M or yaw_jump > JUMP_RAD),
+                    over_jump=bool(any(j["jump_m"] > JUMP_M or j["jump_rad"] > JUMP_RAD for j in seq)),
                     received_error_lateral_m=lateral(rec, truth),
                     received_error_yaw_rad=wrap(rec[2] - float(truth[2])),
                     replies_to_t_k=sum(1 for r in records if t_cap < r["stamp_s"] <= t_k and r["status"] == "processed"))
@@ -164,6 +250,11 @@ def run_estimate(decomp: dict, result: dict, sc: np.ndarray, records: list) -> d
                     entry["reply_spread"] = {"x_m": float(np.ptp(arr[:, 0])), "y_m": float(np.ptp(arr[:, 1])),
                                              "yaw_rad": float(np.ptp(arr[:, 2]))}
         out[key] = entry
+    out["end_hold"]["t_k_travel_sum"] = t_travel
+    if t_travel is not None and out["end_hold"].get("t_k") is not None:
+        a_, _ = correction_at(records, t_travel)
+        b_, _ = correction_at(records, out["end_hold"]["t_k"])
+        out["end_hold"]["travel_sum_selects_other_correction"] = a_ != b_
     holds = [h for h in (result.get("slam_summary") or {}).get("holds", [])
              if h.get("event") == "hold" and h["time_s"] <= t_cap + TIME_TOL_S]
     if holds:
@@ -216,8 +307,10 @@ def analyse(decomp_runs: list[dict], raw_root: Path) -> dict:
     for d in decomp_runs:
         run = raw_root / d["root"] / d["name"] / "run"
         result = json.loads((run / "result.json").read_text())
-        runs.append(run_estimate(d, result, np.load(run / "slam_control.npy"),
-                                 json.loads((run / "slam_records.json").read_text())))
+        with np.load(run / "slam_log.npz") as log:
+            runs.append(run_estimate(d, result, np.load(run / "slam_control.npy"),
+                                     json.loads((run / "slam_records.json").read_text()),
+                                     {k: log[k] for k in ("joint_stamps_s", "wheel_increments_rad")}))
     return {"n": len(runs), "end_hold": judge(runs, "end_hold"), "explore_1m": judge(runs, "explore_1m"),
             "groups_end_hold": by_group(runs, "end_hold"), "runs": runs}
 

@@ -48,13 +48,21 @@ def case(mfo_by_time):
               "t_lift": t_lift, "V": V, "E": list(E), "A": list(A), "terms_m": {"S": C.lateral(V, A)}}
     result = {"samples": [{"time_s": 15.0, "phase": "lift", "pallet_yaw_rad": 0.0}],
               "arguments": {"rear_axle_offset_m": -0.34},
+              "chassis_model": {"drive_geometry": {"wheel_radius_m": 0.125}},
+              "paths": {"approach": {"poses": [[0.0, 0.0, 0.0], [1.05, 0.0, 0.0], [2.1, 0.0, 0.0]]}},
               "slam_summary": {"holds": [{"event": "hold", "time_s": 4.0}]}}
     recs = records(3.0, 15.0, [(3.5, (0.0, 0.0, 0.0))] + list(mfo_by_time))
-    return decomp, result, sc, recs
+    stamps = sc[:, 0]
+    log = {"joint_stamps_s": stamps,
+           "wheel_increments_rad": np.full((len(stamps), 2), 0.3 / 120 / 0.125)}
+    return decomp, result, sc, recs, log
 
 
 def test_the_end_window_is_half_a_metre_plus_the_braking_distance():
-    sc = straight()
+    d, r, sc, rec, log = case([])
+    e = C.run_estimate(d, r, sc, rec, log)["end_hold"]
+    assert e["t_k"] == pytest.approx(12.0 - 0.65 / 0.3, abs=2 / 120 + 1e-9)
+    assert e["t_k_travel_sum"] == pytest.approx(e["t_k"], abs=2 / 120 + 1e-9)
     t_k = C.end_hold_time(sc, 5.0, 12.0)
     # 0.3 m/s: 0.5 + 0.09 / 0.6 = 0.65 m before the insert entry, 0.65 / 0.3 s
     assert t_k == pytest.approx(12.0 - 0.65 / 0.3, abs=1 / 120 + 1e-9)
@@ -62,8 +70,8 @@ def test_the_end_window_is_half_a_metre_plus_the_braking_distance():
 
 
 def test_no_correction_change_leaves_the_offset():
-    d, r, sc, rec = case([])
-    e = C.run_estimate(d, r, sc, rec)["end_hold"]
+    d, r, sc, rec, log = case([])
+    e = C.run_estimate(d, r, sc, rec, log)["end_hold"]
     assert e["S_C2b_m"] == pytest.approx(d["terms_m"]["S"], abs=1e-12) and abs(e["check_identity_m"]) < 1e-12
     assert e["jump_m"] == pytest.approx(0.0, abs=1e-12) and not e["over_jump"]
 
@@ -71,8 +79,8 @@ def test_no_correction_change_leaves_the_offset():
 def test_a_correction_that_removes_the_estimate_error_removes_the_offset():
     """The estimate is 20 mm left of the truth; a correction 20 mm right, received before the window, takes it out:
     the truck stops on the target in truth, so S_C2b is the target's own offset in the estimate (zero here)."""
-    d, r, sc, rec = case([(8.0, (0.0, -0.02, 0.0))])
-    out = C.run_estimate(d, r, sc, rec)
+    d, r, sc, rec, log = case([(8.0, (0.0, -0.02, 0.0))])
+    out = C.run_estimate(d, r, sc, rec, log)
     e = out["end_hold"]
     assert d["terms_m"]["S"] == pytest.approx(0.02)
     assert e["S_C2b_m"] == pytest.approx(C.lateral(d["V"], d["E"]), abs=1e-12) == pytest.approx(0.0, abs=1e-12)
@@ -82,16 +90,16 @@ def test_a_correction_that_removes_the_estimate_error_removes_the_offset():
 
 
 def test_a_correction_after_the_window_is_not_taken():
-    d, r, sc, rec = case([(11.5, (0.0, -0.02, 0.0))])  # after t_k (about 9.83 s)
-    assert C.run_estimate(d, r, sc, rec)["end_hold"]["S_C2b_m"] == pytest.approx(d["terms_m"]["S"], abs=1e-12)
+    d, r, sc, rec, log = case([(11.5, (0.0, -0.02, 0.0))])  # after t_k (about 9.83 s)
+    assert C.run_estimate(d, r, sc, rec, log)["end_hold"]["S_C2b_m"] == pytest.approx(d["terms_m"]["S"], abs=1e-12)
 
 
 def test_stale_and_moving_held_corrections_are_not_judgeable():
-    d, r, sc, rec = case([])
+    d, r, sc, rec, log = case([])
     stale = [x for x in rec if not (9.0 < x["stamp_s"] < 10.5)]
-    assert C.run_estimate(d, r, sc, stale)["end_hold"]["why"] == "no fresh correction at t_k"
+    assert C.run_estimate(d, r, sc, stale, log)["end_hold"]["why"] == "no fresh correction at t_k"
     moved = [dict(x, applied_map_from_odom=[0.0, 0.001, 0.0]) if x["stamp_s"] > 13 else x for x in rec]
-    out = C.run_estimate(d, r, sc, moved)
+    out = C.run_estimate(d, r, sc, moved, log)
     assert out["judgeable"] is False and "not constant" in out["why"]
 
 
@@ -129,12 +137,13 @@ def test_the_pass_rule_and_its_conservative_variant():
 
 
 def test_the_cli(tmp_path):
-    d, r, sc, rec = case([(8.0, (0.0, -0.02, 0.0))])
+    d, r, sc, rec, log = case([(8.0, (0.0, -0.02, 0.0))])
     run_dir = tmp_path / "check" / d["name"] / "run"
     run_dir.mkdir(parents=True)
     (run_dir / "result.json").write_text(json.dumps(r))
     np.save(run_dir / "slam_control.npy", sc)
     (run_dir / "slam_records.json").write_text(json.dumps(rec))
+    np.savez(run_dir / "slam_log.npz", **log)
     decomp = tmp_path / "d.json"
     decomp.write_text(json.dumps({"runs": [dict(d, root="check", judgement={"status": "judged"}),
                                            {"name": "x", "judgement": {"status": "held"}}]}))
@@ -142,3 +151,24 @@ def test_the_cli(tmp_path):
     assert C.main([str(decomp), "--raw-root", str(tmp_path), "--out", str(out)]) == 0
     payload = json.loads(out.read_text())
     assert payload["n"] == 1 and math.isclose(payload["runs"][0]["end_hold"]["S_C2b_m"], 0.0, abs_tol=1e-12)
+
+
+def test_a_large_jump_on_the_way_counts_even_if_the_end_jump_is_small():
+    """Codex review round 2 P2: 30 mm out and back between the capture and t_k."""
+    d, r, sc, rec, log = case([(7.0, (0.0, 0.03, 0.0)), (8.0, (0.0, 0.001, 0.0))])
+    e = C.run_estimate(d, r, sc, rec, log)["end_hold"]
+    assert e["jump_m"] == pytest.approx(0.001, abs=1e-9) and e["max_jump_m"] == pytest.approx(0.03, abs=1e-9)
+    assert e["over_jump"] and [round(j["t"], 3) for j in e["jumps"]] == [7.0, 8.0]
+
+
+def test_the_tracker_speed_and_the_path_progress():
+    stamps = np.arange(1, 61) / 120
+    inc = np.zeros((60, 2))
+    inc[30:] = 0.24 / 120 / 0.125  # 0.24 m/s from the 31st sample
+    t, v = C.tracker_speeds({"joint_stamps_s": stamps, "wheel_increments_rad": inc}, 0.125)
+    assert v[10] == pytest.approx(0.012 * 1.01)  # standing: kept just above the stop speed
+    assert v[-1] == pytest.approx(0.24) and v[35] == pytest.approx(0.24 * 6 / 12)
+    path = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]])
+    rem = C.path_remaining(path, np.array([[0.5, 0.1], [0.4, 0.0], [1.0, 0.5], [0.9, 0.95]]))
+    assert rem[0] == pytest.approx(1.5) and rem[1] == pytest.approx(1.5)  # progress does not go back
+    assert rem[2] == pytest.approx(0.5) and rem[3] == pytest.approx(0.05)
