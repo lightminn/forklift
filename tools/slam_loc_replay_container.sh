@@ -11,13 +11,15 @@ export PYTHONPATH=/workspace/ros2/src/forklift_ros:/workspace/src:${PYTHONPATH}
 SOCKET=$1; OUT=$2; PARAMS=$3
 : "${SLAM_MAP_BUNDLE:?bundle}" "${SLAM_EXPECTED_MAP_ID:?map id}" "${SLAM_MAP_START_POSE:?start pose}"
 mkdir -p "$OUT"
+# every value a float (tools/ros_float_list.py: rclpy refuses a list mixing integers and floats)
+POSE_LIST=$(python3 /workspace/tools/ros_float_list.py 3 "$SLAM_MAP_START_POSE" 2>"$OUT/pose_list.log") || exit 3
 ros2 launch slam_toolbox localization_launch.py slam_params_file:="$PARAMS" use_sim_time:=true autostart:=true \
   > "$OUT/slam_toolbox.log" 2>&1 &
 SLAM=$!
 python3 -m forklift_ros.isaac_slam_bridge --ros-args \
   -p socket_path:="$SOCKET" -p output_dir:="$OUT" -p "laser_xyz_yaw:=[-0.12,0.0,1.05,0.0]" -p keyframe_gate:=every \
   -p localization_bundle:="$SLAM_MAP_BUNDLE" -p expected_map_id:="$SLAM_EXPECTED_MAP_ID" \
-  -p "map_start_pose:=[$SLAM_MAP_START_POSE]" > "$OUT/bridge.log" 2>&1
+  -p "map_start_pose:=[$POSE_LIST]" > "$OUT/bridge.log" 2>&1
 STATUS=$?
 kill $SLAM 2>/dev/null; wait $SLAM 2>/dev/null
 exit $STATUS
