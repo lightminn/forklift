@@ -3,7 +3,12 @@ offset at lift, split records-only by pose transforms at the same time and the s
 
     python seat_decompose.py RAW_ROOT [RAW_ROOT ...] --out DECOMP.json [--summary SUMMARY.md]
 
-Each RAW_ROOT holds <name>/run/{result.json, slam_control.npy} copies; <name> is <prefix>_<arm>_<scene>_s<seed>.
+Each RAW_ROOT holds <name>/run/{result.json, slam_control.npy} copies; <name> is <prefix>_<arm>_<scene>_s<seed>, or
+with _rep (the 58-run check's registered determinism repeat) or _can (the diagnosis batch's canary of a 58-run B0
+run). Those two re-run a seed already in the data: they are decomposed and compared with their original (largest term
+difference), and left out of the tallies so no seed counts twice. lat_r_<name> is the resubmission of an invalid
+run (as the earlier analyses read it): it is parsed as <name>, and an original present beside it is superseded and
+left out of the tallies.
 
 g(X) is the lateral coordinate of the true pallet origin V (at the first lift sample) in pose X. A and E are the true
 and estimated rear poses at the insert -> lift transition (slam_control columns: time, estimate x, y, yaw, truth x, y,
@@ -20,6 +25,15 @@ forward). Qe is checked against near_capture.near_estimate_m. S is checked again
 C + L, the net contribution of the two localisation terms, is reported beside the judgement and outside it (added
 after reading 18 runs, where C and L were large and of opposite sign). It is not by itself the change of a localisation
 bias: a constant world-frame bias b alone gives C + L = (n_E - n_G).b when the estimate's yaw at lift differs from G's.
+
+The change of that bias is reported separately, also descriptive and outside the judgement (added after the 109-run
+read): W_c = Est_cap * Truth_cap^-1 is the rigid map from the true to the estimated world at the capture (rear poses).
+Had it held until lift, the truck at its estimated pose E would see the pallet at W_c(V), so S_const = the lateral
+coordinate of W_c(V) in E, and dB = S - S_const is the lateral effect of the bias changing from the capture to lift
+(zero for any constant rigid bias, the counterexample above included). Its course is reported too: dB(t) =
+lateral(V, A_t) - lateral(W_c(V), E_t) over the slam_control rows from the capture to lift (zero at the capture), its
+value at the insert entry, its largest one-row step (a correction jump would show here), and dpsi, the yaw of the
+bias change W_lift * W_c^-1.
 
 The decomposition covers runs that reached lift (plan 2). Runs that did not are counted apart -- never entered insert,
 or entered insert and ended before lift -- and are not held. A run that reached lift is held (3.1) when a term cannot
@@ -54,7 +68,7 @@ TIME_TOL_S = 1e-6  # the lift transition, its slam_control row and the seat's ba
 NEGLIGIBLE_M = 1e-4  # the tables' 0.1 mm resolution: a smaller term is neither same-sign nor cancelling
 LEAVES = ("D", "C", "P", "F", "L")
 TOPS = ("T", "F", "L")
-NAME_RE = re.compile(r"^(?P<prefix>[^_]+)_(?P<arm>[^_]+)_(?P<scene>.+)_s(?P<seed>\d+)$")
+NAME_RE = re.compile(r"^(?P<prefix>[^_]+)_(?P<arm>[^_]+)_(?P<scene>.+?)_s(?P<seed>\d+)(?:_(?P<dup>rep|can))?$")
 
 
 def finite(*values) -> bool:
@@ -90,6 +104,32 @@ def to_world(q, base) -> tuple[float, float]:
     x, y, yaw = base
     c, s = math.cos(yaw), math.sin(yaw)
     return x + c * q[0] - s * q[1], y + s * q[0] + c * q[1]
+
+
+def se2(pose) -> np.ndarray:
+    x, y, yaw = (float(v) for v in pose[:3])
+    c, s = math.cos(yaw), math.sin(yaw)
+    return np.array([[c, -s, x], [s, c, y], [0.0, 0.0, 1.0]])
+
+
+def pose_of(m: np.ndarray) -> tuple[float, float, float]:
+    return float(m[0, 2]), float(m[1, 2]), math.atan2(float(m[1, 0]), float(m[0, 0]))
+
+
+def bias_course(sc, W_c: np.ndarray, V, t_cap: float, t_insert: float, t_lift: float, E, A) -> dict | None:
+    """dB(t) from the capture to lift: its value at the insert entry, its largest one-row step and the bias change's
+    yaw (descriptive)."""
+    sc = np.asarray(sc, dtype=float)
+    rows = sc[(sc[:, 0] >= t_cap - TIME_TOL_S) & (sc[:, 0] <= t_lift + TIME_TOL_S)]
+    if len(rows) < 2 or not np.all(np.isfinite(rows)):
+        return None
+    Vw = (W_c @ np.array([float(V[0]), float(V[1]), 1.0]))[:2]
+    course = np.array([lateral(V, row[4:7]) - lateral(Vw, row[1:4]) for row in rows])
+    i_insert = min(int(np.searchsorted(rows[:, 0], t_insert - TIME_TOL_S)), len(rows) - 1)
+    W_l = se2(E) @ np.linalg.inv(se2(A))
+    return {"from_t": float(rows[0, 0]), "rows": len(rows), "dB_at_capture_m": float(course[0]),
+            "dB_at_insert_m": float(course[i_insert]), "dB_max_step_m": float(np.abs(np.diff(course)).max()),
+            "dpsi_rad": pose_of(W_l @ np.linalg.inv(W_c))[2]}
 
 
 def transition_time(result: dict, to: str) -> float | None:
@@ -219,6 +259,11 @@ def decompose(result: dict, sc) -> dict:
             if not out["qe_vs_near_estimate_m"] <= QE_TOL_M:
                 hold.append("qe_mismatch")
         out["capture_t"] = float(cap["time_s"])
+        W_c = se2(cap["control_rear"]) @ np.linalg.inv(se2(cap["truth_rear"]))
+        V_est = W_c @ np.array([float(V[0]), float(V[1]), 1.0])
+        terms["S_const"] = lateral(V_est[:2], E)
+        terms["dB"] = terms["S"] - terms["S_const"]
+        out["bias_course"] = bias_course(sc, W_c, V, float(cap["time_s"]), t_insert, t_lift, E, A)
     if "C" in terms:
         terms["C+L"] = terms["C"] + terms["L"]
     res = {}
@@ -267,7 +312,11 @@ def contributions(terms: dict, keys) -> dict:
 
 def judge(decomp: dict, select_m: float = SELECT_M) -> dict:
     """The plan 3.1 per-run reading. Holding comes first and is kept apart from selection: a held run reports whether
-    |S| (when known) would have selected it."""
+    |S| (when known) would have selected it. A repeat or canary is reported as a duplicate, outside the tallies."""
+    if decomp.get("superseded_by"):
+        return {"status": "superseded", "selected": None}
+    if decomp.get("duplicate"):
+        return {"status": "duplicate", "selected": None}
     if not decomp.get("reached_lift"):
         return {"status": "not_reached_lift" if decomp.get("reached_insert") else "not_reached_insert",
                 "selected": None}
@@ -283,9 +332,11 @@ def judge(decomp: dict, select_m: float = SELECT_M) -> dict:
 
 
 def parse_name(name: str) -> dict:
-    m = NAME_RE.match(name)
-    return {"arm": m["arm"], "scene": m["scene"], "seed": int(m["seed"])} if m else {"arm": None, "scene": None,
-                                                                                    "seed": None}
+    rerun = name.startswith("lat_r_")
+    m = NAME_RE.match(name[len("lat_r_"):] if rerun else name)
+    if not m:
+        return {"arm": None, "scene": None, "seed": None, "duplicate": None, "rerun": rerun}
+    return {"arm": m["arm"], "scene": m["scene"], "seed": int(m["seed"]), "duplicate": m["dup"], "rerun": rerun}
 
 
 def arm_group(arm: str | None) -> str:
@@ -300,11 +351,14 @@ def tally(runs: list[dict], select_m: float) -> dict:
     for r in runs:
         j = judge(r, select_m)
         g = groups.setdefault(arm_group(r.get("arm")), {
-            "runs": 0, "not_reached_insert": 0, "not_reached_lift": 0, "held": 0, "held_selected": 0,
+            "runs": 0, "duplicates": 0, "superseded": 0, "not_reached_insert": 0, "not_reached_lift": 0, "held": 0, "held_selected": 0,
             "held_reasons": {}, "eligible": 0, "judged": 0, "largest_same_sign": {},
-            "_terms": {k: [] for k in LEAVES + ("T", "S", "C+L")}})
+            "_terms": {k: [] for k in LEAVES + ("T", "S", "C+L", "dB", "S_const")}})
         g["runs"] += 1
         status = j["status"]
+        if status in ("duplicate", "superseded"):
+            g["duplicates" if status == "duplicate" else "superseded"] += 1
+            continue
         if status in ("not_reached_insert", "not_reached_lift"):
             g[status] += 1
             continue
@@ -330,7 +384,41 @@ def tally(runs: list[dict], select_m: float) -> dict:
 
 
 def load_run(run_dir: Path) -> tuple[dict, np.ndarray]:
-    return json.loads((run_dir / "result.json").read_text()), np.load(run_dir / "slam_control.npy")
+    sc_path = run_dir / "slam_control.npy"
+    sc = np.load(sc_path) if sc_path.is_file() else np.empty((0, 7))  # absent: no lift row, held as missing
+    return json.loads((run_dir / "result.json").read_text()), sc
+
+
+def original_name(name: str) -> str:
+    """A repeat's original in the same check (lbg_X_rep -> lbg_X); a canary's in the 58-run check (lbd_B0_X_can ->
+    lbg_B0_X)."""
+    if name.startswith("lat_r_"):
+        name = name[len("lat_r_"):]
+    if name.endswith("_rep"):
+        return name[: -len("_rep")]
+    if name.endswith("_can"):
+        return "lbg_" + name[: -len("_can")].split("_", 1)[1]
+    return name
+
+
+def compare_duplicates(runs: list[dict]) -> None:
+    """Each repeat or canary gets its original's name and the largest absolute term difference against it."""
+    by_name = {r["name"]: r for r in runs}
+    for r in runs:
+        if not r.get("duplicate"):
+            continue
+        orig = by_name.get(original_name(r["name"]))
+        r["duplicate_of"] = original_name(r["name"])
+        if orig is None:
+            r["duplicate_max_term_diff_m"] = None
+            continue
+        a, b = r.get("terms_m") or {}, orig.get("terms_m") or {}
+        keys = set(a) | set(b)
+        diffs = [abs(a[k] - b[k]) for k in keys if a.get(k) is not None and b.get(k) is not None]
+        r["duplicate_max_term_diff_m"] = (max(diffs) if diffs and all(a.get(k) is not None and b.get(k) is not None
+                                                                      for k in keys) else None)
+        r["duplicate_status_match"] = (r.get("hold") == orig.get("hold")
+                                       and r.get("reached_lift") == orig.get("reached_lift"))
 
 
 def collect(roots: list[Path]) -> list[dict]:
@@ -342,6 +430,12 @@ def collect(roots: list[Path]) -> list[dict]:
             d.update(name=folder.name, root=str(root), **parse_name(folder.name))
             d["judgement"] = judge(d)
             runs.append(d)
+    names = {r["name"] for r in runs}
+    for r in runs:
+        if f"lat_r_{r['name']}" in names:
+            r["superseded_by"] = f"lat_r_{r['name']}"
+            r["judgement"] = judge(r)
+    compare_duplicates(runs)
     return runs
 
 
@@ -355,17 +449,17 @@ def summary_md(runs: list[dict]) -> str:
              "the two localisation terms), outside the judgement.", ""]
     for sel in SENSITIVITY_M:
         lines += [f"## |S| > {1000 * sel:.0f} mm", "",
-                  "| group | runs | no insert | no lift | held (selected) | eligible | judged | largest same-sign leaf "
-                  "| held reasons |",
-                  "|---|---|---|---|---|---|---|---|---|"]
+                  "| group | runs | duplicates | no insert | no lift | held (selected) | eligible | judged "
+                  "| largest same-sign leaf | held reasons |",
+                  "|---|---|---|---|---|---|---|---|---|---|"]
         for name, g in sorted(tally(runs, sel).items()):
-            lines.append(f"| {name} | {g['runs']} | {g['not_reached_insert']} | {g['not_reached_lift']} | "
+            lines.append(f"| {name} | {g['runs']} | {g['duplicates']} | {g['not_reached_insert']} | {g['not_reached_lift']} | "
                          f"{g['held']} ({g['held_selected']}) | {g['eligible']} | {g['judged']} | "
                          f"{json.dumps(g['largest_same_sign'], sort_keys=True)} | "
                          f"{json.dumps(g['held_reasons'], sort_keys=True)} |")
         lines.append("")
-    lines += ["## Runs", "", "| run | S | T | D | C | P | F | L | C+L | seat | judgement |",
-              "|---|---|---|---|---|---|---|---|---|---|---|"]
+    lines += ["## Runs", "", "| run | S | T | D | C | P | F | L | C+L | dB | seat | judgement |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in runs:
         t = r.get("terms_m") or {}
         j = r["judgement"]
@@ -374,7 +468,9 @@ def summary_md(runs: list[dict]) -> str:
                         f"{','.join(j['leaf']['cancelling']) or '-'}")
         if j["status"] == "held":
             verdict += f" ({','.join(j['reasons'])})"
-        lines.append(f"| {r['name']} | " + " | ".join(mm(t.get(k)) for k in ("S", "T", "D", "C", "P", "F", "L", "C+L"))
+        if j["status"] == "duplicate":
+            verdict += f" of {r.get('duplicate_of')}: max term diff {mm(r.get('duplicate_max_term_diff_m'))}"
+        lines.append(f"| {r['name']} | " + " | ".join(mm(t.get(k)) for k in ("S", "T", "D", "C", "P", "F", "L", "C+L", "dB"))
                      + f" | {mm(r.get('seat_lateral_m'))} | {verdict} |")
     return "\n".join(lines) + "\n"
 
