@@ -1,0 +1,9 @@
+p0_1: Message Filter dropping message: frame 'laser' at time 4989.709
+cwm_1: Message Filter dropping message: frame 'laser' at time 3315.909
+c1200_1: Message Filter dropping message: frame 'laser' at time 2024.408
+s1_1: Message Filter dropping message: frame 'laser' at time 3592.409
+cwm_2: Message Filter dropping message: frame 'laser' at time 1920.508
+c600_2: Message Filter dropping message: frame 'laser' at time 4634.109
+s1_2: Message Filter dropping message: frame 'laser' at time 4622.709
+p0_mapq: Message Filter dropping message: frame 'laser' at time 1729.108
+cwm_mapq: Message Filter dropping message: frame 'laser' at time 3955.409

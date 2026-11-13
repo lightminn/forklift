@@ -96,5 +96,9 @@ static int dump(int argc, char ** argv)
     }
   }
   meta << "}\n";
-  return grid != nullptr && nodes.good() && meta.good() && edge_rows.good() ? 0 : 1;
+  const bool ok = grid != nullptr && nodes.good() && meta.good() && edge_rows.good();
+  delete grid;
+  // mapper and dataset are left to the process exit: the scans and lasers they load are shared with the sensor
+  // registry, and freeing them in the wrong order would fail where a leak at exit does not (tools/slam_cost_dump.sh)
+  return ok ? 0 : 1;
 }

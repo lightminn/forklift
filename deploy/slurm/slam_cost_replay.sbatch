@@ -71,9 +71,14 @@ if [ "${SLAM_NODE:-sync}" = localization ]; then
               -e SLAM_MAP_START_POSE="${MAP_START_POSE:?the start pose}" -e LOC_SETS="${LOC_SETS:-}"
               -e KEEP_MAP_SUBSCRIPTION="${KEEP_MAP_SUBSCRIPTION:-0}")
 fi
+# the source-built slam_toolbox (docs/design/2026-11-13-slam-patch-build.md 2): SLAM_IMAGE the image,
+# SLAM_IMAGE_KIND=u0|patched (the container refuses a missing overlay), SLAM_PATCH_ENV "K=V ..." its switches
+PATCH_DOCKER=()
+[ -n "${SLAM_IMAGE_KIND:-}" ] && PATCH_DOCKER+=(-e SLAM_IMAGE_KIND="$SLAM_IMAGE_KIND")
+for kv in ${SLAM_PATCH_ENV:-}; do PATCH_DOCKER+=(-e "$kv"); done
 docker run -d --name "$NAME" --network none --cpuset-cpus "$CPU0" --memory 4g --group-add 2000 "${LOC_DOCKER[@]}" \
   -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$ROOT:/workspace:ro" -v "$YAML:/params.yaml:ro" -v "$OUT/bridge:/out" \
-  -v "$OUT/sock:/run/slam" forklift/ros2-dev:jazzy bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
+  -v "$OUT/sock:/run/slam" "${PATCH_DOCKER[@]}" "${SLAM_IMAGE:-forklift/ros2-dev:jazzy}" bash /workspace/tools/slam_cost_container.sh /run/slam/slam.sock /out /params.yaml \
   "${SLAM_NODE:-sync}" "$([ "${DUMP_GRAPH:-0}" = 1 ] && echo graph)" >/dev/null
 CID=$(docker inspect -f '{{.Id}}' "$NAME" 2>/dev/null)
 LEFT=$(squeue -h -j "$JOB" -o %L 2>/dev/null)
@@ -106,3 +111,5 @@ SENT=$(grep -oE "^sent [0-9]+" "$OUT/drive.log" | cut -d' ' -f2)
 printf '{"state": "done", "driver_exit": %s, "container_exit": %s, "summary_exit": %s, "sent": %s}\n' \
   "$DRV" "${CON:-null}" "$SUM" "${SENT:-null}" > "$OUT/status.json"
 cat "$OUT/status.json"
+# the job fails when any part did (the status file says which), so a dependent job does not run on a failed replay
+[ "$DRV" = 0 ] && [ "${CON:-1}" = 0 ] && { [ "$SUM" = 0 ] || [ "$SUM" = null ]; } || exit 1

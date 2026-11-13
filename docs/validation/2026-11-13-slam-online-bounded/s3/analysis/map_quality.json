@@ -1,0 +1,850 @@
+{
+ "truth_cells": 1197,
+ "runs": {
+  "p0_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 1,
+    "container_exit": 3,
+    "summary_exit": 0,
+    "sent": null
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 8,
+     "truth_cells": 1197,
+     "grid_cells": 2268,
+     "preservation": 0.9741019214703425,
+     "registration": 0.9995590828924162
+    },
+    {
+     "unit": 2,
+     "map_index": 18,
+     "truth_cells": 1197,
+     "grid_cells": 2155,
+     "preservation": 0.9766081871345029,
+     "registration": 1.0
+    },
+    {
+     "unit": 3,
+     "map_index": 33,
+     "truth_cells": 1197,
+     "grid_cells": 2562,
+     "preservation": 0.9799498746867168,
+     "registration": 0.9882903981264637
+    },
+    {
+     "unit": 4,
+     "map_index": 51,
+     "truth_cells": 1197,
+     "grid_cells": 2551,
+     "preservation": 0.9807852965747702,
+     "registration": 0.982359858878871
+    },
+    {
+     "unit": 5,
+     "map_index": 72,
+     "truth_cells": 1197,
+     "grid_cells": 2461,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9995936611133686
+    }
+   ],
+   "first_deletion": null,
+   "end": {
+    "map_index": 74,
+    "truth_cells": 1197,
+    "grid_cells": 2559,
+    "preservation": 0.9807852965747702,
+    "registration": 0.9996092223524814
+   }
+  },
+  "cwm_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 1,
+    "container_exit": 3,
+    "summary_exit": 0,
+    "sent": null
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 8,
+     "truth_cells": 1197,
+     "grid_cells": 2269,
+     "preservation": 0.9741019214703425,
+     "registration": 0.999559277214632
+    },
+    {
+     "unit": 2,
+     "map_index": 18,
+     "truth_cells": 1197,
+     "grid_cells": 2155,
+     "preservation": 0.9766081871345029,
+     "registration": 1.0
+    },
+    {
+     "unit": 3,
+     "map_index": 31,
+     "truth_cells": 1197,
+     "grid_cells": 2425,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9781443298969072
+    },
+    {
+     "unit": 4,
+     "map_index": 44,
+     "truth_cells": 1197,
+     "grid_cells": 2632,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9452887537993921
+    },
+    {
+     "unit": 5,
+     "map_index": 60,
+     "truth_cells": 1197,
+     "grid_cells": 2328,
+     "preservation": 0.9816207184628237,
+     "registration": 1.0
+    },
+    {
+     "unit": 6,
+     "map_index": 81,
+     "truth_cells": 1197,
+     "grid_cells": 2531,
+     "preservation": 0.9841269841269841,
+     "registration": 0.9857763729751087
+    },
+    {
+     "unit": 7,
+     "map_index": 103,
+     "truth_cells": 1197,
+     "grid_cells": 2228,
+     "preservation": 0.9841269841269841,
+     "registration": 0.9887791741472173
+    },
+    {
+     "unit": 8,
+     "map_index": 130,
+     "truth_cells": 1197,
+     "grid_cells": 2687,
+     "preservation": 0.9824561403508771,
+     "registration": 0.9944175660588016
+    },
+    {
+     "unit": 9,
+     "map_index": 158,
+     "truth_cells": 1197,
+     "grid_cells": 2477,
+     "preservation": 0.9841269841269841,
+     "registration": 1.0
+    },
+    {
+     "unit": 10,
+     "map_index": 195,
+     "truth_cells": 1197,
+     "grid_cells": 2490,
+     "preservation": 0.985797827903091,
+     "registration": 0.9991967871485944
+    },
+    {
+     "unit": 11,
+     "map_index": 233,
+     "truth_cells": 1197,
+     "grid_cells": 2594,
+     "preservation": 0.985797827903091,
+     "registration": 0.9969159599074788
+    }
+   ],
+   "first_deletion": null,
+   "end": {
+    "map_index": 257,
+    "truth_cells": 1197,
+    "grid_cells": 2466,
+    "preservation": 0.985797827903091,
+    "registration": 1.0
+   }
+  },
+  "c600_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 0,
+    "container_exit": 0,
+    "summary_exit": 0,
+    "sent": 50000
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 8,
+     "truth_cells": 1197,
+     "grid_cells": 2269,
+     "preservation": 0.9741019214703425,
+     "registration": 0.999559277214632
+    },
+    {
+     "unit": 2,
+     "map_index": 18,
+     "truth_cells": 1197,
+     "grid_cells": 2144,
+     "preservation": 0.974937343358396,
+     "registration": 0.9995335820895522
+    },
+    {
+     "unit": 3,
+     "map_index": 29,
+     "truth_cells": 1197,
+     "grid_cells": 2421,
+     "preservation": 0.9757727652464494,
+     "registration": 0.9368029739776952
+    },
+    {
+     "unit": 4,
+     "map_index": 39,
+     "truth_cells": 1197,
+     "grid_cells": 2513,
+     "preservation": 0.9724310776942355,
+     "registration": 0.9478710704337445
+    },
+    {
+     "unit": 5,
+     "map_index": 49,
+     "truth_cells": 1197,
+     "grid_cells": 2367,
+     "preservation": 0.8822055137844611,
+     "registration": 0.9260667511618081
+    },
+    {
+     "unit": 6,
+     "map_index": 60,
+     "truth_cells": 1197,
+     "grid_cells": 2378,
+     "preservation": 0.7794486215538847,
+     "registration": 0.9142136248948697
+    },
+    {
+     "unit": 7,
+     "map_index": 69,
+     "truth_cells": 1197,
+     "grid_cells": 2377,
+     "preservation": 0.7961570593149541,
+     "registration": 0.8721076987799747
+    },
+    {
+     "unit": 8,
+     "map_index": 79,
+     "truth_cells": 1197,
+     "grid_cells": 2535,
+     "preservation": 0.7510442773600668,
+     "registration": 0.8469428007889547
+    },
+    {
+     "unit": 9,
+     "map_index": 89,
+     "truth_cells": 1197,
+     "grid_cells": 2271,
+     "preservation": 0.5831244778613199,
+     "registration": 0.7357992073976222
+    },
+    {
+     "unit": 10,
+     "map_index": 100,
+     "truth_cells": 1197,
+     "grid_cells": 2248,
+     "preservation": 0.6215538847117794,
+     "registration": 0.797153024911032
+    },
+    {
+     "unit": 11,
+     "map_index": 111,
+     "truth_cells": 1197,
+     "grid_cells": 2334,
+     "preservation": 0.4302422723475355,
+     "registration": 0.5698371893744645
+    },
+    {
+     "unit": 12,
+     "map_index": 122,
+     "truth_cells": 1197,
+     "grid_cells": 2600,
+     "preservation": 0.44110275689223055,
+     "registration": 0.4907692307692308
+    },
+    {
+     "unit": 13,
+     "map_index": 132,
+     "truth_cells": 1197,
+     "grid_cells": 2292,
+     "preservation": 0.4118629908103592,
+     "registration": 0.5266143106457243
+    },
+    {
+     "unit": 14,
+     "map_index": 143,
+     "truth_cells": 1197,
+     "grid_cells": 2344,
+     "preservation": 0.3583959899749373,
+     "registration": 0.4569112627986348
+    }
+   ],
+   "first_deletion": {
+    "scan_id": 6008,
+    "stamp_s": 600.808364668,
+    "map_index": 17,
+    "truth_cells": 1197,
+    "grid_cells": 2120,
+    "preservation": 0.9766081871345029,
+    "registration": 1.0
+   },
+   "end": {
+    "map_index": 149,
+    "truth_cells": 1197,
+    "grid_cells": 2403,
+    "preservation": 0.38345864661654133,
+    "registration": 0.4677486475239284
+   }
+  },
+  "c1200_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 0,
+    "container_exit": 0,
+    "summary_exit": 0,
+    "sent": 50000
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 8,
+     "truth_cells": 1197,
+     "grid_cells": 2269,
+     "preservation": 0.9741019214703425,
+     "registration": 0.999559277214632
+    },
+    {
+     "unit": 2,
+     "map_index": 18,
+     "truth_cells": 1197,
+     "grid_cells": 2161,
+     "preservation": 0.9766081871345029,
+     "registration": 1.0
+    },
+    {
+     "unit": 3,
+     "map_index": 33,
+     "truth_cells": 1197,
+     "grid_cells": 2562,
+     "preservation": 0.9799498746867168,
+     "registration": 0.9882903981264637
+    },
+    {
+     "unit": 4,
+     "map_index": 51,
+     "truth_cells": 1197,
+     "grid_cells": 2470,
+     "preservation": 0.9816207184628237,
+     "registration": 0.9789473684210527
+    },
+    {
+     "unit": 5,
+     "map_index": 69,
+     "truth_cells": 1197,
+     "grid_cells": 2119,
+     "preservation": 0.9799498746867168,
+     "registration": 1.0
+    },
+    {
+     "unit": 6,
+     "map_index": 88,
+     "truth_cells": 1197,
+     "grid_cells": 2349,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9872286079182631
+    },
+    {
+     "unit": 7,
+     "map_index": 104,
+     "truth_cells": 1197,
+     "grid_cells": 2539,
+     "preservation": 0.9799498746867168,
+     "registration": 0.9901536037810161
+    },
+    {
+     "unit": 8,
+     "map_index": 120,
+     "truth_cells": 1197,
+     "grid_cells": 2622,
+     "preservation": 0.9824561403508771,
+     "registration": 0.9984744469870328
+    },
+    {
+     "unit": 9,
+     "map_index": 138,
+     "truth_cells": 1197,
+     "grid_cells": 2507,
+     "preservation": 0.9816207184628237,
+     "registration": 0.9940167530913442
+    },
+    {
+     "unit": 10,
+     "map_index": 158,
+     "truth_cells": 1197,
+     "grid_cells": 2554,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9937353171495693
+    },
+    {
+     "unit": 11,
+     "map_index": 177,
+     "truth_cells": 1197,
+     "grid_cells": 2460,
+     "preservation": 0.9816207184628237,
+     "registration": 0.9983739837398374
+    },
+    {
+     "unit": 12,
+     "map_index": 195,
+     "truth_cells": 1197,
+     "grid_cells": 2503,
+     "preservation": 0.9757727652464494,
+     "registration": 0.9956052736715941
+    },
+    {
+     "unit": 13,
+     "map_index": 214,
+     "truth_cells": 1197,
+     "grid_cells": 2429,
+     "preservation": 0.9732664995822891,
+     "registration": 1.0
+    },
+    {
+     "unit": 14,
+     "map_index": 233,
+     "truth_cells": 1197,
+     "grid_cells": 2509,
+     "preservation": 0.9264828738512949,
+     "registration": 0.9577520924671183
+    }
+   ],
+   "first_deletion": {
+    "scan_id": 12015,
+    "stamp_s": 1201.508395997,
+    "map_index": 44,
+    "truth_cells": 1197,
+    "grid_cells": 2350,
+    "preservation": 0.9799498746867168,
+    "registration": 1.0
+   },
+   "end": {
+    "map_index": 244,
+    "truth_cells": 1197,
+    "grid_cells": 2472,
+    "preservation": 0.9172932330827067,
+    "registration": 0.9575242718446602
+   }
+  },
+  "s1_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 0,
+    "container_exit": 0,
+    "summary_exit": 0,
+    "sent": 50000
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 9,
+     "truth_cells": 1197,
+     "grid_cells": 2137,
+     "preservation": 0.9548872180451128,
+     "registration": 0.9995320542817033
+    },
+    {
+     "unit": 2,
+     "map_index": 20,
+     "truth_cells": 1197,
+     "grid_cells": 1911,
+     "preservation": 0.9657477025898078,
+     "registration": 0.998953427524856
+    },
+    {
+     "unit": 3,
+     "map_index": 33,
+     "truth_cells": 1197,
+     "grid_cells": 2543,
+     "preservation": 0.9665831244778613,
+     "registration": 0.9760125835627212
+    },
+    {
+     "unit": 4,
+     "map_index": 47,
+     "truth_cells": 1197,
+     "grid_cells": 2586,
+     "preservation": 0.9665831244778613,
+     "registration": 0.9926527455529776
+    },
+    {
+     "unit": 5,
+     "map_index": 67,
+     "truth_cells": 1197,
+     "grid_cells": 2567,
+     "preservation": 0.9682539682539683,
+     "registration": 0.9953252824308532
+    },
+    {
+     "unit": 6,
+     "map_index": 91,
+     "truth_cells": 1197,
+     "grid_cells": 2512,
+     "preservation": 0.9690893901420217,
+     "registration": 0.9980095541401274
+    },
+    {
+     "unit": 7,
+     "map_index": 115,
+     "truth_cells": 1197,
+     "grid_cells": 2432,
+     "preservation": 0.9665831244778613,
+     "registration": 0.9995888157894737
+    },
+    {
+     "unit": 8,
+     "map_index": 144,
+     "truth_cells": 1197,
+     "grid_cells": 2503,
+     "preservation": 0.9582289055973267,
+     "registration": 0.9984019176987615
+    },
+    {
+     "unit": 9,
+     "map_index": 175,
+     "truth_cells": 1197,
+     "grid_cells": 2407,
+     "preservation": 0.9682539682539683,
+     "registration": 0.9983381803074366
+    },
+    {
+     "unit": 10,
+     "map_index": 209,
+     "truth_cells": 1197,
+     "grid_cells": 2618,
+     "preservation": 0.9640768588137009,
+     "registration": 0.9912146676852559
+    },
+    {
+     "unit": 11,
+     "map_index": 248,
+     "truth_cells": 1197,
+     "grid_cells": 2356,
+     "preservation": 0.9682539682539683,
+     "registration": 0.9995755517826825
+    },
+    {
+     "unit": 12,
+     "map_index": 290,
+     "truth_cells": 1197,
+     "grid_cells": 2398,
+     "preservation": 0.9649122807017544,
+     "registration": 0.9995829858215179
+    },
+    {
+     "unit": 13,
+     "map_index": 330,
+     "truth_cells": 1197,
+     "grid_cells": 2360,
+     "preservation": 0.9640768588137009,
+     "registration": 0.9995762711864407
+    },
+    {
+     "unit": 14,
+     "map_index": 372,
+     "truth_cells": 1197,
+     "grid_cells": 2575,
+     "preservation": 0.9456975772765246,
+     "registration": 0.9860194174757282
+    }
+   ],
+   "first_deletion": null,
+   "end": {
+    "map_index": 401,
+    "truth_cells": 1197,
+    "grid_cells": 2373,
+    "preservation": 0.9632414369256475,
+    "registration": 0.9995785924989464
+   }
+  },
+  "p0_2": {
+   "status": {
+    "state": "done",
+    "driver_exit": 0,
+    "container_exit": 0,
+    "summary_exit": 0,
+    "sent": 50000
+   },
+   "units": [
+    {
+     "unit": 1,
+     "map_index": 8,
+     "truth_cells": 1197,
+     "grid_cells": 2269,
+     "preservation": 0.9741019214703425,
+     "registration": 0.999559277214632
+    },
+    {
+     "unit": 2,
+     "map_index": 18,
+     "truth_cells": 1197,
+     "grid_cells": 2165,
+     "preservation": 0.9766081871345029,
+     "registration": 0.9995381062355658
+    },
+    {
+     "unit": 3,
+     "map_index": 33,
+     "truth_cells": 1197,
+     "grid_cells": 2562,
+     "preservation": 0.9799498746867168,
+     "registration": 0.9882903981264637
+    },
+    {
+     "unit": 4,
+     "map_index": 51,
+     "truth_cells": 1197,
+     "grid_cells": 2551,
+     "preservation": 0.9807852965747702,
+     "registration": 0.982359858878871
+    },
+    {
+     "unit": 5,
+     "map_index": 72,
+     "truth_cells": 1197,
+     "grid_cells": 2472,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9995954692556634
+    },
+    {
+     "unit": 6,
+     "map_index": 102,
+     "truth_cells": 1197,
+     "grid_cells": 2565,
+     "preservation": 0.9832915622389307,
+     "registration": 0.9992202729044835
+    },
+    {
+     "unit": 7,
+     "map_index": 134,
+     "truth_cells": 1197,
+     "grid_cells": 2612,
+     "preservation": 0.9807852965747702,
+     "registration": 0.9938744257274119
+    },
+    {
+     "unit": 8,
+     "map_index": 175,
+     "truth_cells": 1197,
+     "grid_cells": 2819,
+     "preservation": 0.9824561403508771,
+     "registration": 0.9588506562610855
+    },
+    {
+     "unit": 9,
+     "map_index": 222,
+     "truth_cells": 1197,
+     "grid_cells": 2565,
+     "preservation": 0.9849624060150376,
+     "registration": 0.9996101364522417
+    },
+    {
+     "unit": 10,
+     "map_index": 278,
+     "truth_cells": 1197,
+     "grid_cells": 2697,
+     "preservation": 0.9874686716791979,
+     "registration": 0.9781238413051538
+    },
+    {
+     "unit": 11,
+     "map_index": 335,
+     "truth_cells": 1197,
+     "grid_cells": 2379,
+     "preservation": 0.9866332497911445,
+     "registration": 0.9894913829340058
+    },
+    {
+     "unit": 12,
+     "map_index": 406,
+     "truth_cells": 1197,
+     "grid_cells": 2810,
+     "preservation": 0.9866332497911445,
+     "registration": 0.9220640569395018
+    },
+    {
+     "unit": 13,
+     "map_index": 476,
+     "truth_cells": 1197,
+     "grid_cells": 2438,
+     "preservation": 0.9866332497911445,
+     "registration": 0.9995898277276456
+    },
+    {
+     "unit": 14,
+     "map_index": 556,
+     "truth_cells": 1197,
+     "grid_cells": 2574,
+     "preservation": 0.9866332497911445,
+     "registration": 0.9937839937839937
+    }
+   ],
+   "first_deletion": null,
+   "end": {
+    "map_index": 604,
+    "truth_cells": 1197,
+    "grid_cells": 2434,
+    "preservation": 0.9866332497911445,
+    "registration": 0.9995891536565324
+   }
+  },
+  "a_mapq": {
+   "status": {
+    "state": "done",
+    "driver_exit": 0,
+    "container_exit": 0,
+    "summary_exit": 0,
+    "sent": 50000
+   },
+   "units": [
+    {
+     "unit": 0,
+     "map_index": 0,
+     "truth_cells": 1197,
+     "grid_cells": 2480,
+     "preservation": 0.9415204678362573,
+     "registration": 0.9504032258064516
+    },
+    {
+     "unit": 1,
+     "map_index": 20,
+     "truth_cells": 1197,
+     "grid_cells": 2032,
+     "preservation": 0.9548872180451128,
+     "registration": 1.0
+    },
+    {
+     "unit": 2,
+     "map_index": 35,
+     "truth_cells": 1197,
+     "grid_cells": 2029,
+     "preservation": 0.9540517961570593,
+     "registration": 1.0
+    },
+    {
+     "unit": 3,
+     "map_index": 51,
+     "truth_cells": 1197,
+     "grid_cells": 1991,
+     "preservation": 0.9540517961570593,
+     "registration": 1.0
+    },
+    {
+     "unit": 4,
+     "map_index": 66,
+     "truth_cells": 1197,
+     "grid_cells": 1988,
+     "preservation": 0.9540517961570593,
+     "registration": 1.0
+    },
+    {
+     "unit": 5,
+     "map_index": 81,
+     "truth_cells": 1197,
+     "grid_cells": 1989,
+     "preservation": 0.9540517961570593,
+     "registration": 1.0
+    },
+    {
+     "unit": 6,
+     "map_index": 97,
+     "truth_cells": 1197,
+     "grid_cells": 1988,
+     "preservation": 0.9540517961570593,
+     "registration": 1.0
+    },
+    {
+     "unit": 7,
+     "map_index": 112,
+     "truth_cells": 1197,
+     "grid_cells": 2055,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995133819951338
+    },
+    {
+     "unit": 8,
+     "map_index": 128,
+     "truth_cells": 1197,
+     "grid_cells": 2053,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995129079396006
+    },
+    {
+     "unit": 9,
+     "map_index": 143,
+     "truth_cells": 1197,
+     "grid_cells": 2055,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995133819951338
+    },
+    {
+     "unit": 10,
+     "map_index": 159,
+     "truth_cells": 1197,
+     "grid_cells": 2053,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995129079396006
+    },
+    {
+     "unit": 11,
+     "map_index": 174,
+     "truth_cells": 1197,
+     "grid_cells": 2055,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995133819951338
+    },
+    {
+     "unit": 12,
+     "map_index": 190,
+     "truth_cells": 1197,
+     "grid_cells": 2055,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995133819951338
+    },
+    {
+     "unit": 13,
+     "map_index": 205,
+     "truth_cells": 1197,
+     "grid_cells": 2053,
+     "preservation": 0.9540517961570593,
+     "registration": 0.9995129079396006
+    },
+    {
+     "unit": 14,
+     "map_index": 221,
+     "truth_cells": 1197,
+     "grid_cells": 2055,
+     "preservation": 0.9548872180451128,
+     "registration": 0.9995133819951338
+    }
+   ],
+   "first_deletion": null,
+   "end": {
+    "map_index": 229,
+    "truth_cells": 1197,
+    "grid_cells": 2054,
+    "preservation": 0.9557226399331662,
+    "registration": 0.9995131450827653
+   }
+  }
+ }
+}

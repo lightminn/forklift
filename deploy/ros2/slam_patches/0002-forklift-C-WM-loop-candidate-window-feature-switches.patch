@@ -1,0 +1,406 @@
+From 0f653475ff6bc75ed363ed3af5bd5d65f49699ec Mon Sep 17 00:00:00 2001
+From: forklift <forklift@localhost>
+Date: Fri, 13 Nov 2026 17:06:30 +0900
+Subject: [PATCH 2/4] forklift: C-WM loop candidate window, feature switches
+ and their refusals
+
+FORKLIFT_SLAM_CWM_S=T starts FindPossibleLoopClosure at the first state id whose scan is
+at most T sim seconds old (binary search; ids are contiguous in a fresh sync mapping) --
+max(rStartNum, window start), so TryCloseLoop's repeated calls only move forward. A probed
+id with no scan aborts the node (a broken premise ends the run rather than run another arm).
+The configuration reads FORKLIFT_SLAM_{CWM_S,DELETE_OLDER_S,S1,S1_BUFFER}; more than one
+feature at once, or any feature in a lifelong, localization, async or map-and-localization
+node or on a deserialized graph, ends the node. The identification line prints them all.
+gtest forklift_patch_test covers the window search.
+---
+ CMakeLists.txt                                |  8 +++
+ .../include/karto_sdk/ForkliftPatch.h         | 38 +++++++++-
+ lib/karto_sdk/src/ForkliftPatch.cpp           | 52 +++++++++++++-
+ lib/karto_sdk/src/Mapper.cpp                  | 26 +++++++
+ src/experimental/slam_toolbox_lifelong.cpp    |  2 +
+ .../slam_toolbox_map_and_localization.cpp     |  2 +
+ src/slam_toolbox_async.cpp                    |  2 +
+ src/slam_toolbox_common.cpp                   |  1 +
+ src/slam_toolbox_localization.cpp             |  2 +
+ test/forklift_patch_test.cpp                  | 70 +++++++++++++++++++
+ 10 files changed, 199 insertions(+), 4 deletions(-)
+ create mode 100644 test/forklift_patch_test.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 3880aa7..21066b1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -187,6 +187,14 @@ add_executable(merge_maps_kinematic src/merge_maps_kinematic.cpp)
+ target_link_libraries(merge_maps_kinematic kartoSlamToolbox toolbox_common)
+ 
+ #### testing
++# forklift patch tests (forklift repository docs/design/2026-11-13-slam-patch-build.md 5)
++if(BUILD_TESTING)
++  find_package(ament_cmake_gtest REQUIRED)
++  ament_add_gtest(forklift_patch_test test/forklift_patch_test.cpp)
++  target_include_directories(forklift_patch_test PRIVATE lib/karto_sdk/include)
++  target_link_libraries(forklift_patch_test kartoSlamToolbox)
++endif()
++
+ #if(BUILD_TESTING)
+ #  find_package(ament_cmake_gtest REQUIRED)
+ #  find_package(ament_lint_auto REQUIRED)
+diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+index dfc841b..1d11222 100644
+--- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
++++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+@@ -13,6 +13,7 @@
+ #include <cstdint>
+ #include <map>
+ #include <mutex>
++#include <optional>
+ #include <string>
+ #include <vector>
+ 
+@@ -23,15 +24,48 @@ namespace forklift
+ 
+ struct Config
+ {
+-  std::string trace;  // FORKLIFT_SLAM_TRACE: the trace file ('' = off)
++  std::string trace;      // FORKLIFT_SLAM_TRACE: the trace file ('' = off)
++  double cwm_s = 0.0;     // FORKLIFT_SLAM_CWM_S: C-WM, loop candidates only from the last T sim seconds (<= 0 off)
++  double delete_s = 0.0;  // FORKLIFT_SLAM_DELETE_OLDER_S: C, nodes older than T sim seconds deleted (<= 0 off)
++  bool s1 = false;        // FORKLIFT_SLAM_S1: S1, redundant keyframes kept only temporarily
++  int s1_buffer = 10;     // FORKLIFT_SLAM_S1_BUFFER: S1's B
++  // any graph-changing feature on (the trace alone is not one)
++  bool any_feature() const {return cwm_s > 0.0 || delete_s > 0.0 || s1;}
+ };
+ 
+ // The configuration, read from the environment on first use (thread-safe).
+ const Config & config();
+ 
+-// Prints the identification line once to stderr: "forklift_slam_patch series=<id> trace=<0|1>".
++// Prints the identification line once to stderr:
++// "forklift_slam_patch series=<id> trace=<0|1> cwm_s=<T> delete_s=<T> s1=<0|1> s1_buffer=<B>".
++// More than one feature on at once is refused here (the node exits; design v3 2).
+ void announce();
+ 
++// The features run in a fresh sync mapping only (design v3 2): a lifelong, localization, async or map-and-localization
++// node, or a mapper loaded from a serialized graph, ends the node when any feature is on.
++void refuse_unless_fresh_sync_mapping(const char * where);
++
++// C-WM's window start: the first id in [0, n) whose scan time is >= threshold, the times nondecreasing in id.
++// time_of(id) returns no value for an id with no scan -- a broken premise (no deletion, ids contiguous): -2.
++template<class TimeOf>
++long window_start(long n, double threshold, TimeOf time_of)
++{
++  long lo = 0, hi = n;  // the answer is in [lo, hi]; hi == n: no id in the window
++  while (lo < hi) {
++    const long mid = lo + (hi - lo) / 2;
++    const std::optional<double> t = time_of(mid);
++    if (!t) {
++      return -2;
++    }
++    if (*t >= threshold) {
++      hi = mid;
++    } else {
++      lo = mid + 1;
++    }
++  }
++  return lo;
++}
++
+ // True when the trace is on; a timer or a counter does nothing (not even read a clock) when it is off.
+ bool tracing();
+ 
+diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
+index 24cbc14..e691233 100644
+--- a/lib/karto_sdk/src/ForkliftPatch.cpp
++++ b/lib/karto_sdk/src/ForkliftPatch.cpp
+@@ -4,6 +4,7 @@
+  */
+ #include "karto_sdk/ForkliftPatch.h"
+ 
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <sstream>
+@@ -106,6 +107,38 @@ const Config & config()
+       if (trace != nullptr) {
+         c.trace = trace;
+       }
++      auto number = [](const char * name, double fallback) {
++          const char * v = std::getenv(name);
++          if (v == nullptr || *v == '\0') {
++            return fallback;
++          }
++          char * end = nullptr;
++          const double x = std::strtod(v, &end);
++          if (end == v || *end != '\0' || !std::isfinite(x)) {
++            std::fprintf(stderr, "forklift_slam_patch refused: %s=%s is not a finite number\n", name, v);
++            std::exit(3);
++          }
++          return x;
++        };
++      c.cwm_s = number("FORKLIFT_SLAM_CWM_S", 0.0);
++      c.delete_s = number("FORKLIFT_SLAM_DELETE_OLDER_S", 0.0);
++      c.s1 = number("FORKLIFT_SLAM_S1", 0.0) != 0.0;
++      const double buffer = number("FORKLIFT_SLAM_S1_BUFFER", 10.0);
++      if (buffer < 1.0 || buffer != std::floor(buffer) || buffer > 1000.0) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1_BUFFER must be an integer 1..1000\n");
++        std::exit(3);
++      }
++      c.s1_buffer = static_cast<int>(buffer);
++      // a feature this series does not build is refused, never run as P0 under its name (Codex patch review P2-8);
++      // each later patch lifts its own line
++      if (c.delete_s > 0.0) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_DELETE_OLDER_S is not built in this series\n");
++        std::exit(3);
++      }
++      if (c.s1) {
++        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1 is not built in this series\n");
++        std::exit(3);
++      }
+       // at exit the buffered lines are written by TraceState's destructor alone: TraceState is created after this
+       // configuration, so it is destroyed before it
+       return c;
+@@ -118,12 +151,27 @@ void announce()
+   static std::once_flag once;
+   std::call_once(once, [] {
+       const Config & c = config();
+-      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d\n", FORKLIFT_SLAM_PATCH_SERIES,
+-      c.trace.empty() ? 0 : 1);
++      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d cwm_s=%.17g delete_s=%.17g s1=%d s1_buffer=%d\n",
++      FORKLIFT_SLAM_PATCH_SERIES, c.trace.empty() ? 0 : 1, c.cwm_s, c.delete_s, c.s1 ? 1 : 0, c.s1_buffer);
++      const int features = (c.cwm_s > 0.0) + (c.delete_s > 0.0) + (c.s1 ? 1 : 0);
++      if (features > 1) {
++        std::fprintf(stderr, "forklift_slam_patch refused: %d features on at once (one per run)\n", features);
++        std::fflush(stderr);
++        std::exit(3);
++      }
+       std::fflush(stderr);
+     });
+ }
+ 
++void refuse_unless_fresh_sync_mapping(const char * where)
++{
++  if (config().any_feature()) {
++    std::fprintf(stderr, "forklift_slam_patch refused: features run in a fresh sync mapping only, not %s\n", where);
++    std::fflush(stderr);
++    std::exit(3);
++  }
++}
++
+ bool tracing()
+ {
+   return !config().trace.empty();
+diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
+index d6f8479..805930c 100644
+--- a/lib/karto_sdk/src/Mapper.cpp
++++ b/lib/karto_sdk/src/Mapper.cpp
+@@ -18,6 +18,9 @@
+ 
+ #include <karto_sdk/Types.h>
+ #include "karto_sdk/ForkliftPatch.h"
++#include <cstdio>
++#include <cstdlib>
++#include <optional>
+ #include <math.h>
+ #include <assert.h>
+ #include <boost/serialization/vector.hpp>
+@@ -1995,6 +1998,29 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+ 
+   kt_int32u nScans =
+     static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(rSensorName).size());
++  // C-WM (forklift design v3 3.2): loop candidates only from the scans of the last T sim seconds
++  const double cwm_s = forklift::config().cwm_s;
++  if (cwm_s > 0.0) {
++    MapperSensorManager * pManager = m_pMapper->m_pMapperSensorManager;
++    const long start = forklift::window_start(static_cast<long>(nScans), pScan->GetTime() - cwm_s,
++        [&](long id) -> std::optional<double> {
++          LocalizedRangeScan * pProbe = pManager->GetScan(rSensorName, static_cast<kt_int32s>(id));
++          if (pProbe == NULL) {
++            return std::nullopt;
++          }
++          return pProbe->GetTime();
++        });
++    if (start == -2) {
++      // a hole in the state ids: the premise of the search is broken -- end rather than run another arm
++      std::fprintf(stderr, "forklift_slam_patch abort: C-WM found a state id with no scan (ids not contiguous)\n");
++      std::fflush(stderr);
++      std::abort();
++    }
++    if (static_cast<kt_int32u>(start) > rStartNum) {
++      forklift::add_count("cwm_ids_skipped", static_cast<std::int64_t>(start) - rStartNum);
++      rStartNum = static_cast<kt_int32u>(start);
++    }
++  }
+   for (; rStartNum < nScans; rStartNum++) {
+     forklift::add_count("loop_ids_visited", 1);
+     LocalizedRangeScan * pCandidateScan = m_pMapper->m_pMapperSensorManager->GetScan(rSensorName,
+diff --git a/src/experimental/slam_toolbox_lifelong.cpp b/src/experimental/slam_toolbox_lifelong.cpp
+index 65d31fd..d7411fa 100644
+--- a/src/experimental/slam_toolbox_lifelong.cpp
++++ b/src/experimental/slam_toolbox_lifelong.cpp
+@@ -16,6 +16,7 @@
+ 
+ /* Author: Steven Macenski */
+ 
++#include "karto_sdk/ForkliftPatch.h"
+ #include <algorithm>
+ #include <memory>
+ #include "slam_toolbox/experimental/slam_toolbox_lifelong.hpp"
+@@ -39,6 +40,7 @@ LifelongSlamToolbox::LifelongSlamToolbox(rclcpp::NodeOptions options)
+ : SlamToolbox(options)
+ /*****************************************************************************/
+ {
++  karto::forklift::refuse_unless_fresh_sync_mapping("lifelong");  // forklift design v3 2
+   RCLCPP_WARN(get_logger(), "Lifelong mapping mode in SLAM Toolbox is considered "
+     "experimental and should be understood before proceeding. Please visit: "
+     "https://github.com/SteveMacenski/slam_toolbox/wiki/"
+diff --git a/src/experimental/slam_toolbox_map_and_localization.cpp b/src/experimental/slam_toolbox_map_and_localization.cpp
+index c1f8c3c..4f9bd81 100644
+--- a/src/experimental/slam_toolbox_map_and_localization.cpp
++++ b/src/experimental/slam_toolbox_map_and_localization.cpp
+@@ -14,6 +14,7 @@
+  *
+  */
+ 
++#include "karto_sdk/ForkliftPatch.h"
+ #include <memory>
+ #include <string>
+ #include "slam_toolbox/experimental/slam_toolbox_map_and_localization.hpp"
+@@ -26,6 +27,7 @@ MapAndLocalizationSlamToolbox::MapAndLocalizationSlamToolbox(rclcpp::NodeOptions
+ : LocalizationSlamToolbox(options)
+ /*****************************************************************************/
+ {
++  karto::forklift::refuse_unless_fresh_sync_mapping("map_and_localization");  // forklift design v3 2
+   this->declare_parameter("localization_on_configure", false);
+ }
+ 
+diff --git a/src/slam_toolbox_async.cpp b/src/slam_toolbox_async.cpp
+index 2c20fab..1a72266 100644
+--- a/src/slam_toolbox_async.cpp
++++ b/src/slam_toolbox_async.cpp
+@@ -17,6 +17,7 @@
+ 
+ /* Author: Steven Macenski */
+ 
++#include "karto_sdk/ForkliftPatch.h"
+ #include <memory>
+ #include "slam_toolbox/slam_toolbox_async.hpp"
+ 
+@@ -28,6 +29,7 @@ AsynchronousSlamToolbox::AsynchronousSlamToolbox(rclcpp::NodeOptions options)
+ : SlamToolbox(options)
+ /*****************************************************************************/
+ {
++  karto::forklift::refuse_unless_fresh_sync_mapping("async");  // forklift design v3 2
+ }
+ 
+ /*****************************************************************************/
+diff --git a/src/slam_toolbox_common.cpp b/src/slam_toolbox_common.cpp
+index a328951..7fcd17a 100644
+--- a/src/slam_toolbox_common.cpp
++++ b/src/slam_toolbox_common.cpp
+@@ -1017,6 +1017,7 @@ void SlamToolbox::loadSerializedPoseGraph(
+   std::unique_ptr<Dataset> & dataset)
+ /*****************************************************************************/
+ {
++  karto::forklift::refuse_unless_fresh_sync_mapping("a deserialized graph");  // forklift design v3 2
+   boost::mutex::scoped_lock lock(smapper_mutex_);
+ 
+   solver_->Reset();
+diff --git a/src/slam_toolbox_localization.cpp b/src/slam_toolbox_localization.cpp
+index a49cffd..659404d 100644
+--- a/src/slam_toolbox_localization.cpp
++++ b/src/slam_toolbox_localization.cpp
+@@ -16,6 +16,7 @@
+ 
+ /* Author: Steven Macenski */
+ 
++#include "karto_sdk/ForkliftPatch.h"
+ #include <memory>
+ #include <string>
+ #include "slam_toolbox/slam_toolbox_localization.hpp"
+@@ -28,6 +29,7 @@ LocalizationSlamToolbox::LocalizationSlamToolbox(rclcpp::NodeOptions options)
+ : SlamToolbox(options)
+ /*****************************************************************************/
+ {
++  karto::forklift::refuse_unless_fresh_sync_mapping("localization");  // forklift design v3 2
+ }
+ 
+ /*****************************************************************************/
+diff --git a/test/forklift_patch_test.cpp b/test/forklift_patch_test.cpp
+new file mode 100644
+index 0000000..f0347a2
+--- /dev/null
++++ b/test/forklift_patch_test.cpp
+@@ -0,0 +1,70 @@
++// Forklift patch tests (forklift repository docs/design/2026-11-13-slam-patch-build.md 5): the pure helpers.
++#include <gtest/gtest.h>
++
++#include <optional>
++#include <vector>
++
++#include "karto_sdk/ForkliftPatch.h"
++
++namespace
++{
++
++// scan times by id; a negative time stands for an id with no scan
++std::optional<double> at(const std::vector<double> & times, long id)
++{
++  if (times[id] < 0.0) {
++    return std::nullopt;
++  }
++  return times[id];
++}
++
++long start(const std::vector<double> & times, double threshold)
++{
++  return karto::forklift::window_start(static_cast<long>(times.size()), threshold,
++           [&](long id) {return at(times, id);});
++}
++
++}  // namespace
++
++TEST(forklift_cwm_window, finds_the_first_id_at_or_after_the_threshold)
++{
++  const std::vector<double> t{0.0, 1.0, 2.0, 3.0, 4.0, 5.0};
++  EXPECT_EQ(start(t, 2.0), 2);   // exactly on a scan time
++  EXPECT_EQ(start(t, 2.5), 3);   // between two
++  EXPECT_EQ(start(t, -10.0), 0);  // the whole history is in the window
++  EXPECT_EQ(start(t, 0.0), 0);
++  EXPECT_EQ(start(t, 5.0), 5);   // only the last
++  EXPECT_EQ(start(t, 9.0), 6);   // none: the end, so the candidate loop never runs
++}
++
++TEST(forklift_cwm_window, equal_times_start_at_the_first_of_them)
++{
++  const std::vector<double> t{0.0, 1.0, 1.0, 1.0, 2.0};
++  EXPECT_EQ(start(t, 1.0), 1);
++}
++
++TEST(forklift_cwm_window, an_empty_history_and_a_single_scan)
++{
++  EXPECT_EQ(start({}, 1.0), 0);
++  EXPECT_EQ(start({3.0}, 1.0), 0);
++  EXPECT_EQ(start({3.0}, 4.0), 1);
++}
++
++TEST(forklift_cwm_window, a_probed_id_with_no_scan_breaks_the_premise)
++{
++  const std::vector<double> t{0.0, 1.0, -1.0, 3.0, 4.0};  // id 2 has no scan
++  EXPECT_EQ(start(t, 2.0), -2);
++}
++
++TEST(forklift_cwm_window, repeated_calls_only_move_the_start_forward)
++{
++  // TryCloseLoop calls FindPossibleLoopClosure again with the index it left: max(rStartNum, window start)
++  const std::vector<double> t{0.0, 1.0, 2.0, 3.0, 4.0, 5.0};
++  unsigned r = 0;
++  const long w = start(t, 3.0);
++  if (static_cast<unsigned>(w) > r) {r = static_cast<unsigned>(w);}
++  EXPECT_EQ(r, 3u);
++  r = 5;  // a chain was returned further on
++  if (static_cast<unsigned>(start(t, 3.0)) > r) {r = 0;}
++  EXPECT_EQ(r, 5u);
++}
+-- 
+2.56.0
+

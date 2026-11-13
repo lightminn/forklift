@@ -1,0 +1,637 @@
+From be925600fceedd249246960d9da4332655aca094 Mon Sep 17 00:00:00 2001
+From: forklift <forklift@localhost>
+Date: Fri, 13 Nov 2026 18:05:26 +0900
+Subject: [PATCH 4/4] forklift: S1, redundant keyframes kept only temporarily
+
+With FORKLIFT_SLAM_S1 on, each keyframe is judged at the end of AddEdges (linked, at its final
+pose; before AddRunningScan and loop closing): the nearest live permanent node within 0.3 m and
+0.35 rad of its corrected pose (a nearer temporary or misaligned node does not hide it). That node
+must already be among the scans linked near the new one (FindNearLinkedScans within
+loop_search_maximum_distance, the set loop closing leaves out): a node reached only across an
+unclosed loop stays a loop candidate and the new scan stays permanent, so the loop is closed by the
+loop checks and the optimizer. The new scan is then matched once, without the odometry penalty as
+LinkNearChains does, against that node's chain: the node and its live id neighbours within
+link_scan_maximum_distance of the new scan, never the new scan (timed as s1_match). With at least
+link_match_minimum_response_fine it is temporary and is also linked to that node with this match's
+pose and covariance, so that later deletions do not cut permanent nodes apart; otherwise
+permanent. Temporary nodes are never loop candidates. After each keyframe the temporary nodes born
+at least FORKLIFT_SLAM_S1_BUFFER (B) keyframes ago are deleted in id order through the deletion
+contract, except running, last and new scans; one whose neighbours would not stay connected without
+it (breadth-first check) is promoted to permanent and recorded. The marks live outside the Mapper,
+belong to the mapper that initialized its sensor manager (another mapper using them ends the node)
+and are cleared by that mapper's Initialize and Reset only, not by another's, such as a map read
+into a temporary mapper; the owner is read and written under one lock. The S1 refusal of 0002 is lifted. The trace gains set_value and the S1
+counts, the near node's id, distance, heading difference and the response. gtests: the near
+permanent node, due nodes, the disconnect check and its breadth-first order, and only the owner ending the state.
+---
+ .../include/karto_sdk/ForkliftPatch.h         | 106 +++++++++
+ lib/karto_sdk/src/ForkliftPatch.cpp           |  77 ++++++-
+ lib/karto_sdk/src/Mapper.cpp                  | 218 ++++++++++++++++++
+ test/forklift_patch_test.cpp                  |  74 ++++++
+ 4 files changed, 469 insertions(+), 6 deletions(-)
+
+diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+index d23d8cf..754f987 100644
+--- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
++++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+@@ -9,8 +9,10 @@
+ #ifndef KARTO_SDK__FORKLIFTPATCH_H_
+ #define KARTO_SDK__FORKLIFTPATCH_H_
+ 
++#include <algorithm>
+ #include <chrono>
+ #include <cstdint>
++#include <deque>
+ #include <functional>
+ #include <limits>
+ #include <map>
+@@ -155,6 +157,108 @@ int oldest_id(const NodeMap & nodes)
+   return best;
+ }
+ 
++// S1 (design v3 3 item 4, plan 3.4): redundant keyframes kept only temporarily.
++// A node is permanent unless marked temporary; the marks and each temporary node's birth keyframe live here, outside
++// the Mapper, for the one mapping node of the process (the same scope as the dataset owner). They name state ids of one
++// sensor manager generation, so Mapper::Initialize (a new one) and Mapper::Reset clear them.
++struct S1Mark
++{
++  std::int64_t born;  // the S1 keyframe count when it was judged temporary
++};
++struct S1State
++{
++  std::map<int, S1Mark> temporary;  // live temporary ids
++  std::int64_t keyframes = 0;       // keyframes judged so far
++  std::int64_t deleted = 0;         // temporary nodes deleted so far
++  std::int64_t promoted = 0;        // temporary nodes made permanent so far (deleting them would disconnect the graph)
++  const void * owner = nullptr;     // the mapper whose sensor manager the ids belong to
++};
++// The state; the caller holds the mapper's lock (smapper_mutex_).
++S1State & s1_state();
++// The state, for its owner mapper only: another mapper using S1 ends the node (one mapping node per process).
++S1State & s1_owned_by(const void * mapper);
++// The owner's sensor manager generation begins (cleared, owned by `mapper`) or ends (cleared, unowned -- only when
++// `mapper` owns it; another mapper's reset or destruction leaves the state alone). The owner is read and written
++// under one lock: a temporary mapper can be destroyed on a service thread while the owner initializes (Codex review 6).
++void s1_begin(const void * mapper);
++void s1_end(const void * mapper);
++// True for a live temporary node (never when S1 is off).
++bool s1_temporary(int id);
++
++// S1's near permanent node: of the candidates (offsets from the new scan, heading difference wrapped), the nearest in
++// XY that is permanent and within max_dist and max_yaw; -1 when none. A nearer temporary or misaligned node does not
++// hide a valid one behind it.
++struct NearCandidate
++{
++  int id;
++  double dist;
++  double dyaw;
++  bool permanent;
++};
++inline int nearest_valid_permanent(const std::vector<NearCandidate> & candidates, double max_dist, double max_yaw)
++{
++  int best = -1;
++  double best_dist = 0.0;
++  for (const NearCandidate & c : candidates) {
++    if (!c.permanent || c.dist > max_dist || c.dyaw > max_yaw || c.dyaw < -max_yaw) {
++      continue;
++    }
++    if (best < 0 || c.dist < best_dist || (c.dist == best_dist && c.id < best)) {
++      best = c.id;
++      best_dist = c.dist;
++    }
++  }
++  return best;
++}
++
++// The temporary nodes due for deletion: born at least `buffer` keyframes before `keyframes`, in id order.
++inline std::vector<int> s1_due(const std::map<int, S1Mark> & temporary, std::int64_t keyframes, int buffer)
++{
++  std::vector<int> out;
++  for (const auto & kv : temporary) {
++    if (keyframes - kv.second.born >= buffer) {
++      out.push_back(kv.first);
++    }
++  }
++  return out;
++}
++
++// Would deleting `victim` disconnect the graph? Its neighbours must stay connected to each other without it: a
++// breadth-first search (first in, first out) from the first neighbour, never through the victim, stopping once every
++// neighbour is reached. Its worst case, a deletion that does disconnect, visits the victim's whole component.
++// adjacent(id) gives the ids next to id. Zero or one neighbour never disconnects.
++template<class Adjacent>
++bool still_connected(int victim, const std::vector<int> & neighbours, Adjacent adjacent)
++{
++  std::vector<int> wanted;
++  for (int n : neighbours) {
++    if (n != victim && std::find(wanted.begin(), wanted.end(), n) == wanted.end()) {
++      wanted.push_back(n);
++    }
++  }
++  if (wanted.size() < 2) {
++    return true;
++  }
++  std::map<int, bool> seen{{victim, true}, {wanted[0], true}};
++  std::deque<int> frontier{wanted[0]};
++  std::size_t found = 1;
++  while (!frontier.empty() && found < wanted.size()) {
++    const int at = frontier.front();
++    frontier.pop_front();
++    for (int next : adjacent(at)) {
++      if (seen.count(next)) {
++        continue;
++      }
++      seen[next] = true;
++      if (std::find(wanted.begin(), wanted.end(), next) != wanted.end()) {
++        found++;
++      }
++      frontier.push_back(next);
++    }
++  }
++  return found == wanted.size();
++}
++
+ // True when the trace is on; a timer or a counter does nothing (not even read a clock) when it is off.
+ bool tracing();
+ 
+@@ -162,6 +266,8 @@ bool tracing();
+ void begin_scan();
+ void add_time(const char * name, double seconds);
+ void add_count(const char * name, std::int64_t n);
++// A value (not a sum) in the current record under `name`, e.g. the S1 response.
++void set_value(const char * name, double value);
+ // Ends the record: processed or not, the state id, the scan stamp (s) and the lock wait measured by the caller.
+ void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s);
+ // A separate record for a map regeneration (updateMap): its lock wait and its time.
+diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
+index 3fc93a0..7aacc9c 100644
+--- a/lib/karto_sdk/src/ForkliftPatch.cpp
++++ b/lib/karto_sdk/src/ForkliftPatch.cpp
+@@ -25,6 +25,7 @@ struct Record
+ {
+   std::map<std::string, double> times;
+   std::map<std::string, std::int64_t> counts;
++  std::map<std::string, double> values;
+   std::chrono::steady_clock::time_point started;
+   bool open = false;
+ };
+@@ -129,12 +130,7 @@ const Config & config()
+         std::exit(3);
+       }
+       c.s1_buffer = static_cast<int>(buffer);
+-      // a feature this series does not build is refused, never run as P0 under its name (Codex patch review P2-8);
+-      // each later patch lifts its own line
+-      if (c.s1) {
+-        std::fprintf(stderr, "forklift_slam_patch refused: FORKLIFT_SLAM_S1 is not built in this series\n");
+-        std::exit(3);
+-      }
++      // (0002 refused the features not yet built; 0003 built C and 0004 S1, so nothing is refused here now)
+       // at exit the buffered lines are written by TraceState's destructor alone: TraceState is created after this
+       // configuration, so it is destroyed before it
+       return c;
+@@ -224,6 +220,60 @@ void refuse_unless_fresh_sync_mapping(const char * where)
+   }
+ }
+ 
++S1State & s1_state()
++{
++  static S1State s;
++  return s;
++}
++
++namespace
++{
++std::mutex & s1_owner_mutex()
++{
++  static std::mutex m;
++  return m;
++}
++}  // namespace
++
++void s1_begin(const void * mapper)
++{
++  std::lock_guard<std::mutex> lock(s1_owner_mutex());
++  s1_state() = S1State();
++  s1_state().owner = mapper;
++}
++
++void s1_end(const void * mapper)
++{
++  std::lock_guard<std::mutex> lock(s1_owner_mutex());
++  if (s1_state().owner == mapper) {
++    s1_state() = S1State();
++  }
++}
++
++S1State & s1_owned_by(const void * mapper)
++{
++  S1State & st = s1_state();
++  const void * owner;
++  {
++    std::lock_guard<std::mutex> lock(s1_owner_mutex());
++    owner = st.owner;
++  }
++  if (owner != mapper) {
++    std::fprintf(stderr, "forklift_slam_patch abort: S1 used by a mapper that does not own its marks\n");
++    std::fflush(stderr);
++    std::abort();
++  }
++  return st;
++}
++
++bool s1_temporary(int id)
++{
++  if (!config().s1) {
++    return false;
++  }
++  return s1_state().temporary.count(id) > 0;
++}
++
+ bool tracing()
+ {
+   return !config().trace.empty();
+@@ -265,6 +315,18 @@ void add_count(const char * name, std::int64_t n)
+   }
+ }
+ 
++void set_value(const char * name, double value)
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  if (s.current.open) {
++    s.current.values[name] = value;
++  }
++}
++
+ void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
+ {
+   if (!tracing()) {
+@@ -287,6 +349,9 @@ void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
+   for (const auto & kv : s.current.counts) {
+     line << ",\"" << json_escape(kv.first) << "\":" << kv.second;
+   }
++  for (const auto & kv : s.current.values) {
++    line << ",\"" << json_escape(kv.first) << "\":" << kv.second;
++  }
+   line << "}";
+   s.current.open = false;
+   // only the processed keyframes are kept (a skipped scan never reaches the graph)
+diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
+index 96ebea5..5b63720 100644
+--- a/lib/karto_sdk/src/Mapper.cpp
++++ b/lib/karto_sdk/src/Mapper.cpp
+@@ -1437,6 +1437,127 @@ Vertex<LocalizedRangeScan> * MapperGraph::AddVertex(LocalizedRangeScan * pScan)
+   return nullptr;
+ }
+ 
++namespace forklift_s1
++{
++struct Judgement
++{
++  bool temporary = false;
++  LocalizedRangeScan * pNear = NULL;
++  Pose2 mean;
++  Matrix3 covariance;
++};
++
++// S1's chain for a near permanent node outside the running scans: the node and its live neighbours by id, backward
++// then forward, while within link_scan_maximum_distance of the new scan (as FindNearChains measures); never the new
++// scan.
++LocalizedRangeScanVector chain_around(Mapper * pMapper, LocalizedRangeScan * pScan, int nearId)
++{
++  const LocalizedRangeScanMap & scans = pMapper->GetMapperSensorManager()->GetScans(pScan->GetSensorName());
++  const bool barycenter = pMapper->getParamUseScanBarycenter();
++  const Pose2 pose = pScan->GetReferencePose(barycenter);
++  const double limit = math::Square(pMapper->getParamLinkScanMaximumDistance()) + KT_TOLERANCE;
++  auto near = [&](LocalizedRangeScan * s) {
++      return pose.GetPosition().SquaredDistance(s->GetReferencePose(barycenter).GetPosition()) < limit;
++    };
++  std::list<LocalizedRangeScan *> chain;
++  auto at = scans.find(nearId);
++  if (at == scans.end() || at->second == NULL) {
++    return LocalizedRangeScanVector();
++  }
++  chain.push_back(at->second);
++  for (auto it = std::make_reverse_iterator(at); it != scans.rend(); ++it) {
++    if (it->second == NULL || it->second == pScan) {
++      continue;
++    }
++    if (!near(it->second)) {
++      break;
++    }
++    chain.push_front(it->second);
++  }
++  for (auto it = std::next(at); it != scans.end(); ++it) {
++    if (it->second == NULL || it->second == pScan) {
++      break;  // the new scan is the newest id: the forward walk ends there
++    }
++    if (!near(it->second)) {
++      break;
++    }
++    chain.push_back(it->second);
++  }
++  return LocalizedRangeScanVector(chain.begin(), chain.end());
++}
++
++// S1's judgement (design v3 3 item 4) of the new scan, linked and at its final pose: the nearest live permanent node
++// within 0.3 m and 0.35 rad of its corrected pose. It must already be among the scans linked near the new one
++// (nearLinked(): FindNearLinkedScans within loop_search_maximum_distance, the set loop closing leaves out) -- a node
++// reached only across an unclosed loop stays a loop candidate, and the new scan stays permanent so that the loop is
++// closed by the loop checks and the optimizer (Codex code review 5 P2-1). If the new scan then matches that node's
++// chain with at least link_match_minimum_response_fine (one sequential match without the odometry penalty, as
++// LinkNearChains), it is temporary (with that match's pose and covariance to link it to the node by), otherwise
++// permanent.
++template<class NearLinked>
++Judgement judge(Mapper * pMapper, LocalizedRangeScan * pScan, NearLinked nearLinked)
++{
++  Judgement out;
++  forklift::ScopedTimer timer("s1_judge");
++  forklift::S1State & st = forklift::s1_owned_by(pMapper);
++  st.keyframes++;
++  MapperSensorManager * pManager = pMapper->GetMapperSensorManager();
++  const Name & name = pScan->GetSensorName();
++  const Pose2 me = pScan->GetCorrectedPose();
++  std::vector<forklift::NearCandidate> candidates;
++  for (const auto & kv : pManager->GetScans(name)) {
++    LocalizedRangeScan * s = kv.second;
++    if (s == NULL || s == pScan) {
++      continue;
++    }
++    const Pose2 other = s->GetCorrectedPose();
++    const double dist = std::hypot(other.GetX() - me.GetX(), other.GetY() - me.GetY());
++    if (dist > 0.3) {
++      continue;
++    }
++    candidates.push_back({kv.first, dist, math::NormalizeAngle(other.GetHeading() - me.GetHeading()),
++        st.temporary.count(kv.first) == 0});
++  }
++  int nearId = forklift::nearest_valid_permanent(candidates, 0.3, 0.35);
++  if (nearId >= 0) {
++    const LocalizedRangeScanVector linked = nearLinked();
++    if (std::find(linked.begin(), linked.end(), pManager->GetScan(name, nearId)) == linked.end()) {
++      forklift::add_count("s1_near_not_linked", 1);
++      forklift::set_value("s1_unlinked_near_id", nearId);
++      nearId = -1;
++    }
++  }
++  if (nearId >= 0) {
++    LocalizedRangeScan * pNear = pManager->GetScan(name, nearId);
++    double response = -1.0;
++    {
++      forklift::ScopedTimer match_timer("s1_match");
++      forklift::add_count("s1_matches", 1);
++      const LocalizedRangeScanVector chain = chain_around(pMapper, pScan, nearId);
++      forklift::add_count("s1_chain_scans", static_cast<std::int64_t>(chain.size()));
++      if (!chain.empty()) {
++        response = pMapper->GetSequentialScanMatcher()->MatchScan(pScan, chain, out.mean, out.covariance, false);
++      }
++    }
++    out.temporary = response > pMapper->getParamLinkMatchMinimumResponseFine() - KT_TOLERANCE;
++    out.pNear = pNear;
++    for (const forklift::NearCandidate & c : candidates) {
++      if (c.id == nearId) {
++        forklift::set_value("s1_near_dist_m", c.dist);
++        forklift::set_value("s1_near_dyaw_rad", c.dyaw);
++      }
++    }
++    forklift::set_value("s1_near_id", nearId);
++    forklift::set_value("s1_response", response);
++  }
++  if (out.temporary) {
++    st.temporary[pScan->GetStateId()] = forklift::S1Mark{st.keyframes};
++  }
++  forklift::add_count("s1_temporary", out.temporary ? 1 : 0);
++  return out;
++}
++}  // namespace forklift_s1
++
+ void MapperGraph::AddEdges(LocalizedRangeScan * pScan, const Matrix3 & rCovariance)
+ {
+   MapperSensorManager * pSensorManager = m_pMapper->m_pMapperSensorManager;
+@@ -1504,6 +1625,18 @@ void MapperGraph::AddEdges(LocalizedRangeScan * pScan, const Matrix3 & rCovarian
+   if (!means.empty()) {
+     pScan->SetSensorPose(ComputeWeightedMean(means, covariances));
+   }
++
++  // S1 (design v3 3 item 4): judged once the new scan is linked. A temporary scan is also linked to its near
++  // permanent node, so that deleting temporary nodes later does not cut the permanent ones apart: without it a run of
++  // temporaries is held together only by their links to each other, and each deletion would promote the next one.
++  if (forklift::config().s1 && pSensorManager->GetLastScan(rSensorName) != NULL) {
++    const forklift_s1::Judgement j = forklift_s1::judge(m_pMapper, pScan, [&]() {
++          return FindNearLinkedScans(pScan, m_pMapper->m_pLoopSearchMaximumDistance->GetValue());
++        });
++    if (j.temporary) {
++      LinkScans(j.pNear, pScan, j.mean, j.covariance);
++    }
++  }
+ }
+ 
+ kt_bool MapperGraph::TryCloseLoop(LocalizedRangeScan * pScan, const Name & rSensorName)
+@@ -2055,6 +2188,11 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+     if (pCandidateScan == NULL) {
+       continue;
+     }
++    // S1: a temporary node is never a loop candidate; skipped like an empty id, it does not break the chain
++    if (forklift::s1_temporary(static_cast<int>(rStartNum))) {
++      forklift::add_count("s1_loop_skipped", 1);
++      continue;
++    }
+ 
+     Pose2 candidateScanPose = pCandidateScan->GetReferencePose(
+       m_pMapper->m_pUseScanBarycenter->GetValue());
+@@ -2723,6 +2861,11 @@ void Mapper::Initialize(kt_double rangeThreshold)
+   if (m_Initialized) {
+     return;
+   }
++  // S1's marks name state ids of one sensor manager generation of one mapper: a new one starts them again (Codex
++  // review 4 P2-2), and this mapper becomes their owner
++  if (forklift::config().s1 && !m_Deserialized) {
++    forklift::s1_begin(this);
++  }
+   // create sequential scan and loop matcher, update if deserialized
+ 
+   if (m_pSequentialScanMatcher) {
+@@ -2770,6 +2913,11 @@ void Mapper::LoadFromFile(const std::string & filename)
+ 
+ void Mapper::Reset()
+ {
++  if (forklift::config().s1) {
++    // the ids the marks name are about to go (Codex review 4 P2-2); another mapper's reset or destruction, such as a
++    // map being read into a temporary one, leaves them alone (Codex review 5 P2-2)
++    forklift::s1_end(this);
++  }
+   if (m_pSequentialScanMatcher) {
+     delete m_pSequentialScanMatcher;
+     m_pSequentialScanMatcher = NULL;
+@@ -2856,6 +3004,75 @@ void forklift_delete_older(Mapper * pMapper, LocalizedRangeScan * pScan)
+     }
+   }
+ }
++
++// S1: the temporary nodes born at least B keyframes ago, in id order. A running, last or new scan waits for a later
++// keyframe. Deleting one that would disconnect its neighbours makes it permanent instead.
++void forklift_s1_delete(Mapper * pMapper, LocalizedRangeScan * pScan)
++{
++  if (!forklift::config().s1) {
++    return;
++  }
++  forklift::ScopedTimer timer("s1_delete");
++  forklift::S1State & st = forklift::s1_owned_by(pMapper);
++  MapperSensorManager * pManager = pMapper->GetMapperSensorManager();
++  const Name & name = pScan->GetSensorName();
++  LocalizedRangeScanVector & running = pManager->GetRunningScans(name);
++  LocalizedRangeScan * pLast = pManager->GetLastScan(name);
++  const auto & vertices = pMapper->GetGraph()->GetVertices();
++  auto byName = vertices.find(name);
++  auto vertex = [&](int id) -> Vertex<LocalizedRangeScan> * {
++      if (byName == vertices.end()) {
++        return NULL;
++      }
++      auto found = byName->second.find(id);
++      return found == byName->second.end() ? NULL : found->second;
++    };
++  auto ids = [](const std::vector<Vertex<LocalizedRangeScan> *> & adjacent) {
++      std::vector<int> out;
++      for (Vertex<LocalizedRangeScan> * v : adjacent) {
++        out.push_back(v->GetObject()->GetStateId());
++      }
++      return out;
++    };
++  for (int id : forklift::s1_due(st.temporary, st.keyframes, forklift::config().s1_buffer)) {
++    LocalizedRangeScan * pVictim = pManager->GetScan(name, id);
++    if (pVictim == NULL) {
++      st.temporary.erase(id);  // gone already (never expected): drop its mark
++      forklift::add_count("s1_mark_without_scan", 1);
++      continue;
++    }
++    if (pVictim == pScan || pVictim == pLast || std::find(running.begin(), running.end(), pVictim) != running.end()) {
++      continue;  // still in use; looked at again after a later keyframe
++    }
++    Vertex<LocalizedRangeScan> * pVertex = vertex(id);
++    const std::vector<int> neighbours = pVertex == NULL ? std::vector<int>() : ids(pVertex->GetAdjacentVertices());
++    const bool connected = forklift::still_connected(id, neighbours, [&](int at) {
++          Vertex<LocalizedRangeScan> * v = vertex(at);
++          return v == NULL ? std::vector<int>() : ids(v->GetAdjacentVertices());
++        });
++    st.temporary.erase(id);
++    if (!connected) {
++      st.promoted++;
++      forklift::add_count("s1_promoted", 1);
++      std::fprintf(stderr, "forklift_slam_patch s1 promoted id=%d reason=disconnects\n", id);
++      continue;
++    }
++    if (forklift_delete_node(pMapper, pVictim)) {
++      st.deleted++;
++      forklift::add_count("s1_deleted", 1);
++    } else {
++      forklift::add_count("delete_failed", 1);
++    }
++  }
++  std::int64_t live = 0;
++  for (const auto & kv : pManager->GetScans(name)) {
++    live += kv.second != NULL;
++  }
++  forklift::add_count("s1_temporary_nodes", static_cast<std::int64_t>(st.temporary.size()));
++  forklift::add_count("s1_permanent_nodes", live - static_cast<std::int64_t>(st.temporary.size()));
++  forklift::add_count("s1_promoted_total", st.promoted);
++  forklift::add_count("s1_deleted_total", st.deleted);
++}
+ }  // namespace
+ 
+ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+@@ -2930,6 +3147,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+ 
+     m_pMapperSensorManager->SetLastScan(pScan);
+     forklift_delete_older(this, pScan);
++    forklift_s1_delete(this, pScan);
+ 
+     return true;
+   }
+diff --git a/test/forklift_patch_test.cpp b/test/forklift_patch_test.cpp
+index 8f1eba6..08e94a4 100644
+--- a/test/forklift_patch_test.cpp
++++ b/test/forklift_patch_test.cpp
+@@ -169,3 +169,77 @@ TEST(forklift_trace, a_trace_ends_with_its_end_record_at_exit)
+   EXPECT_NE(first.find("\"state_id\":7"), std::string::npos);
+   EXPECT_EQ(last, "{\"kind\":\"end\",\"flushes\":1}");
+ }
++
++TEST(forklift_s1, the_nearest_valid_permanent_node_is_not_hidden_by_a_nearer_invalid_one)
++{
++  using karto::forklift::NearCandidate;
++  using karto::forklift::nearest_valid_permanent;
++  EXPECT_EQ(nearest_valid_permanent({}, 0.3, 0.35), -1);
++  // nearest is temporary, next is misaligned, then a valid one
++  const std::vector<NearCandidate> c{{1, 0.05, 0.0, false}, {2, 0.10, 0.5, true}, {3, 0.20, -0.30, true},
++    {4, 0.25, 0.0, true}};
++  EXPECT_EQ(nearest_valid_permanent(c, 0.3, 0.35), 3);
++  // out of range in distance or heading
++  EXPECT_EQ(nearest_valid_permanent({{5, 0.31, 0.0, true}, {6, 0.1, -0.36, true}}, 0.3, 0.35), -1);
++  // a tie goes to the older id
++  EXPECT_EQ(nearest_valid_permanent({{9, 0.1, 0.0, true}, {7, 0.1, 0.0, true}}, 0.3, 0.35), 7);
++}
++
++TEST(forklift_s1, due_temporaries_are_those_born_at_least_b_keyframes_ago_in_id_order)
++{
++  std::map<int, karto::forklift::S1Mark> t{{12, {5}}, {3, {1}}, {20, {14}}};
++  EXPECT_EQ(karto::forklift::s1_due(t, 10, 10), (std::vector<int>{}));
++  EXPECT_EQ(karto::forklift::s1_due(t, 11, 10), (std::vector<int>{3}));
++  EXPECT_EQ(karto::forklift::s1_due(t, 15, 10), (std::vector<int>{3, 12}));
++  EXPECT_EQ(karto::forklift::s1_due(t, 24, 10), (std::vector<int>{3, 12, 20}));
++}
++
++TEST(forklift_s1, the_disconnect_check_on_a_chain_a_ring_and_a_leaf)
++{
++  std::map<int, std::vector<int>> g;
++  auto adj = [&](int id) {return g[id];};
++  auto link = [&](int a, int b) {g[a].push_back(b); g[b].push_back(a);};
++  // chain 1-2-3: removing 2 splits 1 from 3
++  link(1, 2); link(2, 3);
++  EXPECT_FALSE(karto::forklift::still_connected(2, g[2], adj));
++  // a ring 1-2-3-4-1: removing 2 keeps 1 and 3 connected through 4
++  link(3, 4); link(4, 1);
++  EXPECT_TRUE(karto::forklift::still_connected(2, g[2], adj));
++  // a leaf 5 on 4: removing it never disconnects
++  link(4, 5);
++  EXPECT_TRUE(karto::forklift::still_connected(5, g[5], adj));
++  // a node with three neighbours, two of them reachable only through it
++  link(6, 7); link(6, 8); link(6, 1);
++  EXPECT_FALSE(karto::forklift::still_connected(6, g[6], adj));
++  link(7, 8); link(8, 3);
++  EXPECT_TRUE(karto::forklift::still_connected(6, g[6], adj));
++}
++
++TEST(forklift_s1, the_disconnect_check_searches_breadth_first)
++{
++  // victim 0 between 1 and 2; 1 reaches 2 in two hops through 3, and also leads into a 1000-node branch listed last
++  // (a stack would take the branch first and walk all of it; Codex code review 5 P3)
++  std::map<int, std::vector<int>> g;
++  for (int i = 100; i < 1100; ++i) {g[i] = {i + 1};}
++  g[1] = {0, 3, 100};
++  g[3] = {1, 2};
++  g[2] = {3, 0};
++  g[0] = {1, 2};
++  int visited = 0;
++  auto adj = [&](int id) {visited++; return g[id];};
++  EXPECT_TRUE(karto::forklift::still_connected(0, g[0], adj));
++  EXPECT_LE(visited, 3);
++}
++
++TEST(forklift_s1, only_the_owner_ends_the_state)
++{
++  int a = 0, b = 0;
++  karto::forklift::s1_begin(&a);
++  karto::forklift::s1_state().temporary[5] = karto::forklift::S1Mark{1};
++  karto::forklift::s1_end(&b);   // another mapper, e.g. a map read into a temporary one
++  EXPECT_EQ(karto::forklift::s1_owned_by(&a).temporary.count(5), 1u);
++  EXPECT_DEATH(karto::forklift::s1_owned_by(&b), "does not own");
++  karto::forklift::s1_end(&a);
++  EXPECT_EQ(karto::forklift::s1_state().temporary.size(), 0u);
++  EXPECT_EQ(karto::forklift::s1_state().owner, nullptr);
++}
+-- 
+2.56.0
+

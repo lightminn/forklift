@@ -1,0 +1,16 @@
+18857        lightminn          s3_p0_1     FAILED      1:0 2026-11-13T22:29:40 2026-11-13T22:41:26 
+18858        lightminn         s3_cwm_1     FAILED      1:0 2026-11-13T22:41:26 2026-11-13T22:45:51 
+18859        lightminn        s3_c600_1  COMPLETED      0:0 2026-11-13T22:45:51 2026-11-13T22:48:36 
+18860        lightminn       s3_c1200_1     FAILED      1:0 2026-11-13T22:48:36 2026-11-13T22:51:19 
+18861        lightminn          s3_s1_1     FAILED      1:0 2026-11-13T22:51:20 2026-11-13T22:56:15 
+18862        lightminn          s3_p0_2  COMPLETED      0:0 2026-11-13T22:56:15 2026-11-13T23:07:01 
+18863        lightminn         s3_cwm_2     FAILED      1:0 2026-11-13T23:07:01 2026-11-13T23:09:32 
+18864        lightminn        s3_c600_2     FAILED      1:0 2026-11-13T23:09:32 2026-11-13T23:13:05 
+18865        lightminn       s3_c1200_2  COMPLETED      0:0 2026-11-13T23:13:08 2026-11-13T23:17:28 
+18866        lightminn          s3_s1_2     FAILED      1:0 2026-11-13T23:17:28 2026-11-13T23:24:23 
+18867        lightminn       s3_p0_mapq     FAILED      1:0 2026-11-13T23:24:23 2026-11-13T23:26:53 
+18868        lightminn      s3_cwm_mapq     FAILED      1:0 2026-11-13T23:26:53 2026-11-13T23:32:28 
+18869        lightminn     s3_c600_mapq  COMPLETED      0:0 2026-11-13T23:32:28 2026-11-13T23:35:13 
+18870        lightminn    s3_c1200_mapq  COMPLETED      0:0 2026-11-13T23:35:13 2026-11-13T23:39:35 
+18871        lightminn       s3_s1_mapq  COMPLETED      0:0 2026-11-13T23:39:35 2026-11-13T23:46:35 
+18872        lightminn        s2_a_mapq  COMPLETED      0:0 2026-11-13T23:46:35 2026-11-13T23:50:29 
