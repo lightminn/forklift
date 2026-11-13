@@ -20,6 +20,7 @@ G = 9.80665
 STILL_SPREAD_MPS2 = 0.5  # a standstill's acceleration samples stay this close to their mean (else: moving)
 STILL_NORM_TOL = 0.1  # and the mean's length is g within this fraction
 MIN_SPIN_RAD_S = 0.05  # an arc turns at least this fast on average once the bias is removed
+MIN_SAMPLES = 10
 
 
 def _unit(v) -> np.ndarray:
@@ -32,13 +33,27 @@ def _unit(v) -> np.ndarray:
 
 def _vec3(v) -> np.ndarray:
     v = np.asarray(v, float).reshape(3)
+    if not np.isfinite(v).all():
+        raise ValueError(f"non-finite vector: {v}")
     return v
+
+
+def _samples(x, what: str) -> np.ndarray:
+    """N x 3 finite samples, at least ``MIN_SAMPLES`` of them."""
+    a = np.asarray(x, float)
+    if a.ndim != 2 or a.shape[1] != 3:
+        raise ValueError(f"{what}: expected N x 3 samples, got shape {a.shape}")
+    if len(a) < MIN_SAMPLES:
+        raise ValueError(f"{what}: {len(a)} samples (< {MIN_SAMPLES})")
+    if not np.isfinite(a).all():
+        raise ValueError(f"{what}: {int((~np.isfinite(a)).any(axis=1).sum())} non-finite samples")
+    return a
 
 
 def up_from_gravity(accel) -> np.ndarray:
     """The body-up axis from a standstill's accelerometer samples (N x 3, m/s^2). Never from a moving segment: an arc
     adds centripetal acceleration."""
-    a = np.asarray(accel, float)
+    a = _samples(accel, "accel")
     mean = a.mean(axis=0)
     spread = float(np.sqrt(((a - mean) ** 2).sum(axis=1)).max())
     if spread > STILL_SPREAD_MPS2 or abs(np.linalg.norm(mean) / G - 1.0) > STILL_NORM_TOL:
@@ -48,7 +63,7 @@ def up_from_gravity(accel) -> np.ndarray:
 
 def bias_from_still(gyro) -> np.ndarray:
     """The gyro bias (rad/s): a standstill's mean rate."""
-    return np.asarray(gyro, float).mean(axis=0)
+    return _samples(gyro, "gyro").mean(axis=0)
 
 
 def bias_between(before, after) -> dict:
@@ -60,7 +75,7 @@ def bias_between(before, after) -> dict:
 def up_from_spin(gyro, *, bias, operator_ccw: bool) -> np.ndarray:
     """The body-up axis from an arc (N x 3, rad/s): the bias-free mean rotation's direction, signed so that the turn
     the operator saw (``operator_ccw``) is positive yaw -- both directions then point up."""
-    mean = np.asarray(gyro, float).mean(axis=0) - _vec3(bias)
+    mean = _samples(gyro, "gyro").mean(axis=0) - _vec3(bias)
     if float(np.linalg.norm(mean)) < MIN_SPIN_RAD_S:
         raise ValueError(f"too little spin: bias-free mean rate {np.linalg.norm(mean):.4f} rad/s < {MIN_SPIN_RAD_S}")
     u = _unit(mean)
@@ -74,20 +89,26 @@ def angle_deg(u, v) -> float:
 
 def yaw_rate(gyro, up, *, bias) -> np.ndarray:
     """Body yaw rate per sample (rad/s) under the planar assumption."""
-    return (np.asarray(gyro, float) - _vec3(bias)) @ _unit(up)
+    return (_samples(gyro, "gyro") - _vec3(bias)) @ _unit(_vec3(up))
 
 
-def off_axis_rate(gyro, up, *, bias) -> float:
-    """The mean bias-free rotation off the up axis (rad/s): a planar-violation diagnostic (roll and pitch rates while
-    driving). It is not the yaw error: a tilted body turning about its own z has none and still differs from the Euler
-    yaw rate."""
-    g = np.asarray(gyro, float) - _vec3(bias)
-    u = _unit(up)
+def off_axis_rate(gyro, up, *, bias) -> dict:
+    """The bias-free rotation off the up axis (rad/s), a planar-violation diagnostic (roll and pitch rates while
+    driving): ``rms`` and ``p95`` of the per-sample size (an oscillation does not cancel) and ``mean_vector``, the
+    size of the mean (a steady tilt of the axis). It is not the yaw error: a tilted body turning about its own z has
+    none and still differs from the Euler yaw rate."""
+    g = _samples(gyro, "gyro") - _vec3(bias)
+    u = _unit(_vec3(up))
     perp = g - np.outer(g @ u, u)
-    return float(np.linalg.norm(perp.mean(axis=0)))
+    size = np.linalg.norm(perp, axis=1)
+    return {"rms": float(np.sqrt((size ** 2).mean())), "p95": float(np.percentile(size, 95)),
+            "mean_vector": float(np.linalg.norm(perp.mean(axis=0)))}
 
 
 def spin_check(gyro, *, bias, up_gravity, operator_ccw: bool) -> dict:
-    """Does the arc turn the way the operator saw, judged against gravity's up (independent of the arc's axis)?"""
+    """Does the arc turn the way the operator saw, judged against gravity's up (independent of the arc's axis)? An
+    arc that does not turn (bias-free mean yaw under ``MIN_SPIN_RAD_S``) is refused, not read as clockwise."""
     mean_yaw = float(yaw_rate(gyro, up_gravity, bias=bias).mean())
+    if abs(mean_yaw) < MIN_SPIN_RAD_S:
+        raise ValueError(f"too little spin to judge the sign: mean yaw {mean_yaw:.4f} rad/s < {MIN_SPIN_RAD_S}")
     return {"mean_yaw_rad_s": mean_yaw, "sign_matches_operator": (mean_yaw > 0) == operator_ccw}

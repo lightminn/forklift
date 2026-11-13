@@ -82,7 +82,41 @@ def test_yaw_rate_is_the_projection_and_the_off_axis_part_is_measured():
     yaw = im.yaw_rate(gyr, up, bias=BIAS)
     assert np.allclose(yaw, 0.3 + float(extra @ up), atol=1e-9)
     off = im.off_axis_rate(gyr, up, bias=BIAS)
-    assert off == pytest.approx(np.linalg.norm(extra - (extra @ up) * up), rel=1e-6)
+    perp = np.linalg.norm(extra - (extra @ up) * up)
+    assert off["mean_vector"] == pytest.approx(perp, rel=1e-6) and off["rms"] == pytest.approx(perp, rel=1e-6)
+
+
+def test_an_oscillation_off_the_axis_does_not_cancel():
+    up = BODY_UP_LEVEL
+    gyr = arc(up, 0.2, n=1000)
+    gyr[0::2] += [0.1, 0.0, 0.0]
+    gyr[1::2] -= [0.1, 0.0, 0.0]  # a mast swaying back and forth
+    off = im.off_axis_rate(gyr, up, bias=BIAS)
+    assert off["mean_vector"] == pytest.approx(0.0, abs=1e-9)
+    assert off["rms"] == pytest.approx(0.1) and off["p95"] == pytest.approx(0.1)
+
+
+def test_non_finite_short_or_misshapen_input_is_refused():
+    up = BODY_UP_LEVEL
+    gyr = arc(up, 0.2, n=100)
+    gyr[7, 1] = np.nan
+    for f in (lambda: im.up_from_spin(gyr, bias=BIAS, operator_ccw=True),
+              lambda: im.spin_check(gyr, bias=BIAS, up_gravity=up, operator_ccw=False),
+              lambda: im.yaw_rate(gyr, up, bias=BIAS)):
+        with pytest.raises(ValueError, match="non-finite"):
+            f()
+    with pytest.raises(ValueError, match="non-finite"):
+        im.up_from_spin(arc(up, 0.2), bias=[np.nan, 0, 0], operator_ccw=True)
+    with pytest.raises(ValueError, match="samples"):
+        im.up_from_gravity(np.tile(up * G, (3, 1)))
+    with pytest.raises(ValueError, match="N x 3"):
+        im.bias_from_still(np.zeros((100, 2)))
+
+
+def test_no_rotation_is_refused_by_the_sign_check_not_read_as_clockwise():
+    up = BODY_UP_LEVEL
+    with pytest.raises(ValueError, match="spin"):
+        im.spin_check(arc(up, 0.0), bias=BIAS, up_gravity=up, operator_ccw=False)
 
 
 def test_too_little_rotation_or_a_moving_standstill_is_refused():

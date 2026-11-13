@@ -36,6 +36,19 @@ def test_a_restart_or_a_long_gap_splits_the_record():
     assert ir.continuous_segments([], []) == []
 
 
+def test_a_restart_with_a_tiny_host_gap_gives_two_fits():
+    """Codex re-review: raw 397500 -> 0 µs after a wrap with the host 2.5 ms on is a restart, not one fit."""
+    rows, _ = synthetic_rows(seconds=20.0, dev0=WRAP - 6_000_000)
+    gy = [r for r in rows if r.get("s") == "g"]
+    k = 4000  # the wrap is at sample 2400; restart 1600 samples later, at raw 4_000_000 µs
+    base = gy[k]["dev_us"]
+    for r in gy[k:]:
+        r["dev_us"] = (r["dev_us"] - base) % WRAP  # the device clock starts again from 0
+    fits = ir.imu_clock_fits(rows, stream="g")
+    assert len(fits) == 2 and all(f.valid for f in fits)
+    assert all(abs(f.drift_ppm - 25.0) < 2.0 for f in fits)
+
+
 def chunk(n, *, dev0, rate_hz, wall0=1.7e9, ts0=1.0e6, xyz=(0.0, -9.8, 0.1)):
     dev = (dev0 + np.round(np.arange(n) * 1e6 / rate_hz)).astype(np.int64) % WRAP
     t = np.arange(n) / rate_hz

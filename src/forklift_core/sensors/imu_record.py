@@ -18,7 +18,8 @@ from forklift_core.plant.clock_map import ClockFit, fit_clock
 SCHEMA = "imu_record/1"
 WRAP_US = 1 << 32
 STREAMS = ("g", "a")
-MAX_MISMATCH_S = 0.5  # device and host intervals differing more than this break continuity
+MAX_MISMATCH_S = 0.5  # device and host intervals differing more than this break continuity (a delay jump or a gap)
+RESTART_BACK_US = 20_000  # the device time going back more than this (8 gyro periods) is a restart, not a late sample
 
 
 def unwrap_u32_us(values) -> list[int]:
@@ -38,18 +39,21 @@ def unwrap_u32_us(values) -> list[int]:
     return out
 
 
-def continuous_segments(dev_us, host_ns, *, max_mismatch_s: float = MAX_MISMATCH_S) -> list[tuple[int, int]]:
-    """``[start, end)`` index ranges over which the unwrapped device clock and the host clock advance together: a
-    step whose device and host intervals differ by more than ``max_mismatch_s`` (a restart, a gap longer than the
-    unwrap can resolve) starts a new range."""
+def continuous_segments(dev_us, host_ns, *, max_mismatch_s: float = MAX_MISMATCH_S,
+                        restart_back_us: int = RESTART_BACK_US) -> list[tuple[int, int]]:
+    """``[start, end)`` index ranges over which the unwrapped device clock and the host clock advance together. A new
+    range starts where the device time goes back more than ``restart_back_us`` (a restart) or the device and host
+    intervals differ by more than ``max_mismatch_s`` (a gap the unwrap cannot resolve, a delay jump). A restart whose
+    new device time lands less than ``restart_back_us`` behind the old one is not detectable here: the fit then
+    carries that step (at most ``restart_back_us``)."""
     n = len(dev_us)
     if n == 0:
         return []
     cuts = [0]
     for i in range(1, n):
-        dd = (int(dev_us[i]) - int(dev_us[i - 1])) * 1e3
+        step_us = int(dev_us[i]) - int(dev_us[i - 1])
         dh = int(host_ns[i]) - int(host_ns[i - 1])
-        if abs(dh - dd) > max_mismatch_s * 1e9:
+        if step_us < -restart_back_us or abs(dh - step_us * 1e3) > max_mismatch_s * 1e9:
             cuts.append(i)
     cuts.append(n)
     return [(a, b) for a, b in zip(cuts[:-1], cuts[1:], strict=True)]
