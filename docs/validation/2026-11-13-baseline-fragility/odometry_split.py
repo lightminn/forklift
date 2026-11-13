@@ -121,7 +121,8 @@ def kinematic_series(result: dict, sc: np.ndarray, log, t_lift: float) -> dict:
 
 
 def lag_gain_residual(series: list[dict], lag: int, gain: float) -> np.ndarray:
-    """Per run: plant heading change minus gain * the kinematic prediction delayed by lag ticks, over the window."""
+    """Per run, over the window: sum over ticks t of (gain * ds[t] * k[t - lag] - true_dyaw[t]), the curvature-lag
+    model's end-to-end net-turn residual (the distance is not delayed)."""
     out = []
     for s in series:
         k = s["k"]
