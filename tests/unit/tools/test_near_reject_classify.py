@@ -42,6 +42,22 @@ def test_a_good_detection_with_the_truck_off_the_line_is_position():
                  offsets={"lateral_m": -0.2, "yaw_rad": 0.09},
                  redraw={"stage": "redraw", "accepted": False, "max_lateral_m": 0.1, "record": {"refused": "box"}})
     assert N.classify("x_B0_random_1_s0", far)["by_mm"] is False
+    exact = result("near_capture_misaligned:{...}", candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}],
+                   offsets={"lateral_m": -0.107, "yaw_rad": 0.09},
+                   redraw={"stage": "redraw", "accepted": False, "max_lateral_m": 0.1, "record": {"refused": "box"}})
+    assert N.classify("x_B0_random_1_s0", exact)["label"] == "position"  # Codex P2: an exact 0.0 is not missing
+
+
+def test_the_arrival_history_and_the_median():
+    r = result(None, candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}])
+    r["near_end_stand"] = {"since_s": 1.0}
+    r["observe_loose_arrivals"] = [{"time_s": 0.0, "position_error_m": 0.06, "yaw_error_rad": -0.09}]
+    r["observe_replans"] = [{"trigger": "near_end_stand"}, {"status": "success"}]
+    r["observation_attempts"][0]["t_before_capture_s"] = 5.0
+    c = N.classify("lbg_B0_random_1_s0", r)
+    assert c["near_end_stand_waiting"] and c["loose_arrival"] and c["loose_yaw_error_rad"] == -0.09
+    assert c["near_end_stand_replans"] == 1
+    assert N.median([1, 2, 3, 4]) == 2.5 and N.median([3, 1, 2]) == 2
 
 
 def test_a_passing_run_is_not_labelled_and_scenes_parse():

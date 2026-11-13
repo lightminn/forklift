@@ -10,8 +10,10 @@ capture record:
 - the expected-site check of the last observation attempt: the expected site's distance from the true pallet centre,
   the nearest candidate's distance from the expected site (against radius_m) and from the true pallet centre (all in
   the truth base frame of that capture; the true centre is scenario.pickup);
-- whether the observe leg's end stand was re-planned (near_end_stand), and the arrived estimate yaw minus the
-  waypoint's yaw.
+- how the near observation stand was reached: a loose arrival accepted (observe_loose_arrivals, with its position and
+  yaw error), a re-plan of the observe leg triggered by near_end_stand (observe_replans[].trigger) and the end-stand
+  outcomes (observe_end_stands); result["near_end_stand"] itself is only the waiting state (since_s), not a re-plan;
+  and the arrived estimate yaw minus the waypoint's yaw.
 A run that ended at the near capture is labelled: 'perception' (the expected site was within the radius of the true
 centre but no candidate near the truth was found), 'position' (the nearest candidate was within 0.02 m of the truth but
 the truck stood off the line beyond the limit), or 'other'; 'by_mm' marks an exceedance of a limit by under 10 mm.
@@ -81,7 +83,17 @@ def classify(name: str, result: dict) -> dict | None:
                                                              cands[0]["centre_m"][1] - tp[1])
             out["candidate_vs_truth_min_m"] = min(math.hypot(c["centre_m"][0] - tp[0], c["centre_m"][1] - tp[1])
                                                   for c in cands)
-    out["near_end_stand"] = bool(result.get("near_end_stand"))
+    out["near_end_stand_waiting"] = bool(result.get("near_end_stand"))
+    cap_t = attempt.get("t_before_capture_s")
+    loose = [a for a in result.get("observe_loose_arrivals") or []
+             if cap_t is None or a.get("time_s", 0.0) <= cap_t + 1e-6]
+    out["loose_arrival"] = bool(loose)
+    if loose:
+        out["loose_position_error_m"] = loose[-1].get("position_error_m")
+        out["loose_yaw_error_rad"] = loose[-1].get("yaw_error_rad")
+    out["near_end_stand_replans"] = sum(1 for r in result.get("observe_replans") or []
+                                        if r.get("trigger") == "near_end_stand")
+    out["end_stand_outcomes"] = [e.get("outcome") for e in result.get("observe_end_stands") or []]
     wp, arr = nc.get("waypoint"), attempt.get("arrived_pose")
     if wp and arr:
         out["arrival_yaw_minus_waypoint_rad"] = math.remainder(arr[2] - wp[2], math.tau)
@@ -98,11 +110,18 @@ def label(c: dict) -> tuple[str, bool]:
             return "perception", 0 < exceed < BY_MM_M
         return "other", 0 < exceed < BY_MM_M
     if "misaligned" in (c.get("failure") or ""):
-        good = (c.get("nearest_candidate_vs_truth_m") or 1.0) <= TRUTH_MATCH_M
+        near = c.get("nearest_candidate_vs_truth_m")
+        good = near is not None and near <= TRUTH_MATCH_M
         lim = (c.get("redraw") or {}).get("max_lateral_m") or (c.get("box") or {}).get("lateral_m") or 0.0
         exceed = abs(c.get("offset_lateral_m") or 0.0) - lim
         return ("position" if good else "other"), 0 < exceed < BY_MM_M
     return "other", False
+
+
+def median(values: list) -> float:
+    v = sorted(values)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
 
 
 def scene_of(name: str) -> str:
@@ -124,18 +143,19 @@ def analyse(roots: list[Path]) -> dict:
     for r in runs:
         if "offset_lateral_m" not in r:
             continue
-        key = f"{r['scene']}|near_end_stand={r['near_end_stand']}"
-        s = summary.setdefault(key, {"n": 0, "lat": [], "yaw_arrival": []})
+        key = f"{r['scene']}|loose_arrival={r['loose_arrival']}"
+        s = summary.setdefault(key, {"n": 0, "rejected": 0, "lat": [], "yaw_arrival": []})
         s["n"] += 1
+        s["rejected"] += int(r["ended_at_near"])
         s["lat"].append(abs(r["offset_lateral_m"]))
         if "arrival_yaw_minus_waypoint_rad" in r:
             s["yaw_arrival"].append(abs(r["arrival_yaw_minus_waypoint_rad"]))
     for s in summary.values():
         lat, ya = sorted(s.pop("lat")), sorted(s.pop("yaw_arrival"))
-        s.update(lateral_median_m=lat[len(lat) // 2], lateral_max_m=lat[-1],
+        s.update(lateral_median_m=median(lat), lateral_max_m=lat[-1],
                  over_0_05=sum(v > 0.05 for v in lat), over_0_08=sum(v > 0.08 for v in lat),
                  over_0_10=sum(v > 0.10 for v in lat),
-                 arrival_yaw_median_rad=ya[len(ya) // 2] if ya else None, arrival_yaw_max_rad=ya[-1] if ya else None)
+                 arrival_yaw_median_rad=median(ya) if ya else None, arrival_yaw_max_rad=ya[-1] if ya else None)
     return {"ended_at_near": [r for r in runs if r["ended_at_near"]], "by_scene": summary, "runs": runs}
 
 
