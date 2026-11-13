@@ -137,3 +137,114 @@ def test_first_unit_only_is_the_record_up_to_its_return_scan():
     truth = _loop_truth(101)
     plan = rd.first_unit_plan([0.1 * i for i in range(101)], truth, truth, end=100)
     assert [p.src for p in plan] == list(range(100)) and {p.unit for p in plan} == {0}
+
+
+# --- online-SLAM plan (docs/plans/2026-11-13-slam-online-bounded.md 5 S1): H's switch and the paced splice -----------
+
+def _ranged_source(name, n, shift, seed):
+    src = _source(name, n, shift)
+    ranges = np.random.default_rng(seed).uniform(1.0, 5.0, (n, 8))
+    return rd.Source(src.name, src.stamps, src.odom, src.truth, ranges, src.end)
+
+
+def test_a_replay_from_a_later_unit_draws_the_same_noise_as_the_whole_stream():
+    """H's second phase sends units 1.. only; each of its scans must carry the noise the whole stream gives it, so the
+    arms see identical scans (the skipped units' draws are taken and dropped)."""
+    a, b = _ranged_source("a", 31, 0.0, 1), _ranged_source("b", 21, 0.001, 2)
+    plan = rd.splice_plan_multi([a, b], until_sim_s=12.0)
+    whole = list(rd.noisy_stream(plan, [a, b], seed=5))
+    later = list(rd.noisy_stream(plan, [a, b], seed=5, start_unit=1))
+    assert [k for k, _, _ in later] == [k for k, item, _ in whole if item.unit >= 1]
+    by_k = {k: r for k, _, r in whole}
+    assert all(np.array_equal(r, by_k[k]) for k, _, r in later)
+    assert len(later) < len(whole) and later[0][1].unit == 1
+    first = list(rd.noisy_stream(plan, [a, b], seed=5, end_unit=1))  # H's first phase: unit 0 only
+    assert [k for k, _, _ in first] + [k for k, _, _ in later] == [k for k, _, _ in whole]
+    assert all(np.array_equal(r, by_k[k]) for k, _, r in first)
+    assert len(rd.sim_due_offsets(plan, factor=1.0, end_unit=1)) == len(first)
+    nxt = rd.next_after(plan, 1)
+    assert nxt["k"] == len(first) and nxt["unit"] == 1 and nxt["odom"] == list(plan[len(first)].odom)
+    assert rd.next_after(plan, 99) is None
+
+
+def test_sim_pacing_sends_each_scan_at_its_stamp_over_the_factor():
+    # the D arms' fixed feed (plan 4: the paced replay at factor 1.0), from the first scan sent
+    a = _source("a", 31, 0.0)
+    plan = rd.splice_plan_multi([a], until_sim_s=8.0)
+    due = rd.sim_due_offsets(plan, factor=1.0)
+    assert due[0] == 0.0 and all(y >= x for x, y in zip(due, due[1:]))
+    assert due[-1] == pytest.approx(plan[-1].stamp_s - plan[0].stamp_s)
+    half = rd.sim_due_offsets(plan, factor=0.5)
+    assert half[-1] == pytest.approx(2 * due[-1])
+    later = rd.sim_due_offsets(plan, factor=1.0, start_unit=1)
+    assert later[0] == 0.0 and len(later) == sum(1 for p in plan if p.unit >= 1)
+    with pytest.raises(SystemExit):
+        rd.sim_due_offsets(plan, factor=0.0)
+    rd.check_wall_budget(due, None)
+    rd.check_wall_budget(due, due[-1])
+    with pytest.raises(SystemExit):  # the sbatch's remaining-time budget refuses a feed that cannot finish
+        rd.check_wall_budget(half, due[-1])
+
+
+def test_the_switched_localization_uses_only_this_sessions_unit_0_map(tmp_path):
+    """H (plan 1-H, lead 2026-11-13): after the switch the localization must run on the map this session built from
+    its own unit 0 -- never a registry bundle or another run's map."""
+    run = tmp_path / "run"
+    run.mkdir()
+    good = {"format": 1, "map_id": "abc", "replay": True, "source": {"run": str(run), "units": [0]}}
+    assert rd.check_session_bundle(good, run=run, map_id="abc") is None
+    for bad in ({**good, "replay": False}, {**good, "source": {"run": str(tmp_path / "other"), "units": [0]}},
+                {**good, "source": {"run": str(run), "units": [0, 1]}}, {**good, "map_id": "zzz"},
+                {k: v for k, v in good.items() if k != "source"}):
+        with pytest.raises(SystemExit):
+            rd.check_session_bundle(bad, run=run, map_id="abc")
+
+
+def test_the_fixed_feed_queues_scans_on_time_behind_a_slow_bridge_and_records_every_reply():
+    import socket
+    import threading
+    import time
+
+    from forklift_core.localization import slam_link
+
+    a = _ranged_source("a", 31, 0.0, 1)
+    plan = rd.splice_plan_multi([a], until_sim_s=3.0)[:12]
+    due = rd.sim_due_offsets(plan, factor=20.0)  # stamps 0.1 s apart -> 5 ms apart
+    ours, theirs = socket.socketpair()
+    seen = []
+
+    def bridge():
+        for _ in plan:
+            scan = slam_link.recv_scan(theirs)
+            seen.append(scan.scan_id)
+            if len(seen) == 3:
+                time.sleep(0.08)  # one slow loop closure: the next scans wait in the queue
+            status = "skipped" if len(seen) == 5 else "processed"
+            theirs.sendall(slam_link.encode_reply(slam_link.Reply(scan.scan_id, scan.stamp_s, status,
+                                                                  (0.0, 0.0, 0.0), 1, 0.001)))
+
+    t = threading.Thread(target=bridge)
+    t.start()
+    client = object.__new__(slam_link.SlamLinkClient)
+    client.sock = ours
+    rows = []
+    anchor = time.monotonic()
+    log = rd.ReplyLog()
+    stats = rd.feed_sim(client, rd.noisy_stream(plan, [a], seed=3), due,
+                        lambda k, item, reply, q, s, r: rows.append((k, q, s, r)), note=log.note)
+    t.join(5)
+    assert seen == list(range(len(plan)))
+    assert [k for k, *_ in rows] == [k for k in range(len(plan)) if k != 4]
+    assert stats == {"sent": len(plan), "not_processed": 1, "max_depth": stats["max_depth"], "long_poll_gaps": 0}
+    assert stats["max_depth"] >= 3  # scans kept being queued while the bridge was busy
+    rec = log.record()  # every reply, the skipped one too
+    assert rec["by_status"] == {"processed": len(plan) - 1, "skipped": 1}
+    assert rec["first"]["k"] == 0 and rec["last"]["k"] == len(plan) - 1
+    assert all(q <= s <= r for _, q, s, r in rows)
+    assert all(q - anchor >= due[k] - 1e-3 for k, q, _, _ in rows)  # never queued before its due time
+    try:
+        with pytest.raises(ValueError):  # a due list that does not match the stream is refused
+            rd.feed_sim(client, rd.noisy_stream(plan, [a], seed=3), due[:-1], lambda *x: None)
+    finally:
+        ours.close()
+        theirs.close()
