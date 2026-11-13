@@ -108,3 +108,19 @@ def test_rows_split_by_host_boot_and_mcu_boot():
     plain = [{"t": "state", "boot_id": 1, "mcu_time_us": r["mcu_time_us"], "host_ns": r["read_ns"]} for r in rows
              if r.get("t") == "state" and r["boot_id"] == 1]
     assert cm.clock_fits_from_rows(plain)[0].valid
+
+
+def test_a_repeated_device_time_never_brings_back_a_host_time_before_the_previous_point():
+    # Codex design review 3: a repeat with an earlier host time replaced the last point even when that time went
+    # before the point ahead of it -- a host going back slipped through and the drift read -333,333 ppm
+    dev, host = synth(n=60, span_s=6.0)
+    base = cm.fit_clock(dev, host)
+    i = next(k for k, d in enumerate(dev) if d >= 3_000_000)
+    dev.insert(i + 1, dev[i])
+    host.insert(i + 1, host[i - 1] - 1_000_000)  # earlier than the point before the repeated one
+    kept, dropped = cm.clean_points(dev, host)
+    assert all(b[1] >= a[1] for a, b in zip(kept, kept[1:]))
+    assert dropped["device_repeat"] == 1
+    f = cm.fit_clock(dev, host)
+    # the repeat is dropped without touching the kept point: the same fit as without it
+    assert f.valid and (f.offset_ns, f.slope) == (base.offset_ns, base.slope)

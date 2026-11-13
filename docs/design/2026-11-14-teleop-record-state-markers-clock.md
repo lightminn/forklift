@@ -48,7 +48,7 @@ clock_fits_from_rows(rows, *, time_key="read_ns") -> list[ClockFit]   # state �
 - **record_rows:** bringup state 행이 옮기기 전과 같다(고정 표본), 왕복이 같다.
 - **기록:** 모형 MCU 기록에 받은 STATE 수만큼 state 행(`host_ns`·`read_ns`), header 가 첫 줄·footer 가 끝 줄, cycle 행은 지금과 같다; 한 번에 64 개를 넘는 STATE; 재연결 뒤 core 가 거부하는 옛 STATE 도 기록됨; 같은 배치 안의 boot 변경; 종료 중(close) 받은 STATE 와 Ctrl-C; 중간 쓰기 실패와 close 실패에서 주행 계속·오류 수; 느린 writer 에서 큐 포화 → 버림 수, 주기 시작 간격 유지; 기존 파일이면 시작 거부; 기록 없이 돌 때 행·스레드 없음.
 - **표시:** tty 가짜로 Enter·라벨 → marker 행, 빈 Enter, 부분 줄·Ctrl-D(기존 회귀 유지), UTF-8 분할, 입력 폭주(한 poll 의 작업량 상한), tty 종료, tty 아님 → 비활성과 이유.
-- **clock_map:** 알려진 오프셋·drift(±50 ppm)·지수 지연에서 여러 고정 시드로 drift 오차와 `drift_split_ppm` 이 함께 작게(값은 시험이 정한 범위), 선형·계단형 지연 변화에서 `drift_split_ppm`·`split_end_ns` 가 그 변화를 드러냄, 중복·연속 역행·호스트 역행 정리, 정확히 20 점·5 s 경계, 공선점의 결정성, 구간 밖 `extrapolated`, 무효 fit 의 예외, boot·호스트 부팅 나누기, marker 없는 기록의 `clock`.
+- **clock_map:** 알려진 오프셋·drift(±50 ppm)·지수 지연에서 여러 고정 시드로 drift 오차와 `drift_split_ppm` 이 함께 작게(값은 시험이 정한 범위), 선형 지연 변화에서는 세 지표가 모두 0 근처(drift 와 구별 불가), 계단형 지연에서는 `drift_vs_halves_ppm` 이 드러냄, 중복·연속 역행·호스트 역행 정리, 정확히 20 점·5 s 경계, 공선점의 결정성, 구간 밖 `extrapolated`, 무효 fit 의 예외, boot·호스트 부팅 나누기, marker 없는 기록의 `clock`.
 
 ## 7. 범위 밖
 
@@ -57,4 +57,4 @@ clock_fits_from_rows(rows, *, time_key="read_ns") -> list[ClockFit]   # state �
 
 ## 8. 검토
 
-- Codex 설계 검토(새 스레드): P1 없음. P2 5 — 포락선 잔차를 정렬 오차로 읽음(→ 5 절 뜻·한계, 반쪽 fit 품질 지표), `received_ns` 는 주기 시작 시각(→ `read_ns` 따로), 송신 뒤 동기 쓰기의 주기 영향(→ 유한 큐 + writer, 포화 때 버림), 종료 중 수신 누락(→ 받는 즉시 큐, close 가 비움, `core.samples` 와 독립), append 와 header(→ 기존 파일 거부, 호스트 부팅 id). P3 3 — 표시의 작업량 상한·활성 여부, 역행·중복 규칙과 구간 밖 변환, `clock` 독립 하위 명령. 모두 반영. 2라운드: P2 3 — 반쪽 지표도 선형 추세를 못 잡음(→ 한계 명시, 시험을 '구별 불가' 로), 반쪽 fit 이 조건 미달일 때(→ 반쪽 지표 가용성 따로, None 과 이유), read_ns·표시 시각의 '한 주기' 보장(→ 앱이 읽은 시각, 차이 보장 없음). 반영.
+- Codex 설계 검토(새 스레드): P1 없음. P2 5 — 포락선 잔차를 정렬 오차로 읽음(→ 5 절 뜻·한계, 반쪽 fit 품질 지표), `received_ns` 는 주기 시작 시각(→ `read_ns` 따로), 송신 뒤 동기 쓰기의 주기 영향(→ 유한 큐 + writer, 포화 때 버림), 종료 중 수신 누락(→ 받는 즉시 큐, close 가 비움, `core.samples` 와 독립), append 와 header(→ 기존 파일 거부, 호스트 부팅 id). P3 3 — 표시의 작업량 상한·활성 여부, 역행·중복 규칙과 구간 밖 변환, `clock` 독립 하위 명령. 모두 반영. 2라운드: P2 3 — 반쪽 지표도 선형 추세를 못 잡음(→ 한계 명시, 시험을 '구별 불가' 로), 반쪽 fit 이 조건 미달일 때(→ 반쪽 지표 가용성 따로, None 과 이유), read_ns·표시 시각의 '한 주기' 보장(→ 앱이 읽은 시각, 차이 보장 없음). 반영. 3라운드: P2 1 — 장치 시각 중복 치환이 호스트 역행을 허용(→ 직전 점보다 이르면 치환하지 않음, 회귀 시험). 반영.

@@ -40,7 +40,8 @@ def clean_points(device_us, host_ns) -> tuple[list[tuple[int, int]], dict]:
                 continue
             if d == ld:
                 dropped["device_repeat"] += 1
-                if h < lh:
+                # the earliest host time stays -- but never one before the previous kept point's (host monotonic)
+                if h < lh and (len(kept) < 2 or h >= kept[-2][1]):
                     kept[-1] = (d, h)
                 continue
             if h < lh:
