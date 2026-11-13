@@ -23,7 +23,7 @@
 
 - 2차 등록 2 절과 같다: 1차 등록 3 절의 규칙·판정 가능 조건·자리 규칙, 같은 계정 겹침(sacct, 원출력 보관), `--budget-on`(예산 기록 필수·불변조건 위반 실패), `infra_failed` 만 추가 재실행.
 - 도구: `tools/teleop_realtime_report.py --verdict --factor 0.9 --slots u01_k09_r1,u02_k09_r2,u03_k09_r3 --budget-on [--overlapped ...]`.
-- **VM 규칙(추가, 결과 전).** 세션 창 안에 GPU 1 이 VM(`vfio-pci`)에 넘어가 있었거나 qemu 가 돌았으면, 그 세션은 겹침과 같이 다룬다. qemu 는 사용자 uid 가 아니라서 CPU 표본기에 잡히지 않을 수 있다. 증거와 판정은 2차 등록 2 절의 VM 규칙과 같다: 제출 직전부터 끝까지 `vm_watch.py sample`(30 s)을 돌려 원출력을 `2026-11-13-teleop-smooth-3/vm_watch_k09.jsonl` 로 보관하고, sacct 세션 창마다 `vm_watch.py judge` 의 `vm`·`clear`·미평가를 따른다. 기록이 끊겨 미평가인 세션은 재실행하지 않는다(Codex 등록 검토 P2).
+- **VM 규칙(추가, 결과 전).** 세션 창 안에 GPU 1 이 VM(`vfio-pci`)에 넘어가 있었거나 qemu 가 돌았으면, 그 세션은 겹침과 같이 다룬다. qemu 는 사용자 uid 가 아니라서 CPU 표본기에 잡히지 않을 수 있다. 증거와 판정은 2차 등록 2 절의 VM 규칙과 같다: 제출 직전부터 끝까지 `vm_watch.py sample`(30 s)을 돌려 원출력을 `2026-11-13-teleop-smooth-3/vm_watch_k09.jsonl` 로 보관하고, sacct 세션 창마다 `vm_watch.py judge` 의 `vm`·`clear`·미평가를 따른다. 기록이 끊겨 미평가인 세션은 재실행하지 않는다(Codex 등록 검토 P2). 표본기는 노트북 절전·덮개 닫힘을 막는 `systemd-inhibit --what=sleep:handle-lid-switch` 아래에서 돌린다 — 2차 `_re` 에서 노트북이 덮개 닫힘으로 절전에 들어가 표본이 약 6 분 끊겨 한 세션이 미평가가 됐다(2026-11-13 12:09:52, 결과 문서).
 
 ## 3. 결과에 따른 처리
 
