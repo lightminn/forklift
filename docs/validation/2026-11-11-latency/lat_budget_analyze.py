@@ -46,6 +46,37 @@ def _load(name: str, path: Path):
 LA = _load("lat_analyze", HERE / "lat_analyze.py")
 
 
+# Exception 2 (a lead's post-result exception, 2026-11-13, with conditions): the slot's CPU set the layer worker's
+# record writes (result.json layer_worker.process_affinity, and process_cores made from it), compared by its size
+# only -- the CPU numbers left out, the count kept, so two repeats on CPU sets of different sizes still differ (a
+# library's thread pool may follow the count: OpenBLAS, Ceres; Codex's review) -- and only while the worker does not
+# pin itself (mode not thread, cpus and affinity None). A thread-mode record keeps both fields as they are.
+AFFINITY_FIELDS = ("process_affinity", "process_cores")
+
+
+def affinity_exempt(layer_worker) -> bool:
+    """Exception 2's condition: the worker never set its CPUs, so the slot's CPU set is a record only."""
+    return (isinstance(layer_worker, dict) and layer_worker.get("mode") != "thread"
+            and layer_worker.get("cpus") is None and layer_worker.get("affinity") is None)
+
+
+def strip_affinity(dc) -> None:
+    """Exception 2 on top of whatever ``dc._items`` does already (exception 1 first)."""
+    inner = dc._items
+
+    def items(run):
+        it = inner(run)
+        for doc in it.get("result.json", ("json", []))[1]:
+            lw = doc.get("layer_worker") if isinstance(doc, dict) else None
+            if affinity_exempt(lw):
+                for key in AFFINITY_FIELDS:
+                    if key in lw:
+                        lw[key] = {"count": len(lw[key]) if isinstance(lw[key], list) else None}
+        return it
+
+    dc._items = items
+
+
 def budget_problems(arm: str, result: dict | None, run: Path) -> list:
     """What the budget check needs beyond A's validity: B0 runs without a budget, the other arms with theirs (0.05 for
     Uo9, 0.10 otherwise) and their watchdog record; the injected arms with their injection record."""
@@ -153,7 +184,10 @@ def conclusions(rows: dict, determinism: dict) -> dict:
         if r["arm"] == "Bb10":
             if c not in ("tolerated", "tolerated_no_operating_comparison"):
                 degraded.append({"run": name, "scene": r["scene"], "seed": r["seed"], "class": c})
-            continue
+            if c not in ("observed_end", "safe_failure", "underexposed"):
+                continue  # a completed run's degradation is the budget's cost, reported to the lead (plan 3)
+            # a mission failure stays a defect at A's priorities as well (post-result fix, Codex results review P2-4:
+            # the registration lowers only Bb10's operating degradation)
         prio = {"observed_end": 2, "safe_failure": 3, "underexposed": 3, "operating_degraded": 3.5}.get(c)
         if prio is not None:
             defects.append({"run": name, "arm": r["arm"], "scene": r["scene"], "seed": r["seed"], "class": c,
@@ -168,6 +202,10 @@ def main(argv=None) -> int:
     ap.add_argument("out_root", type=Path)
     ap.add_argument("--snap", type=Path, required=True)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--determinism-without-affinity", action="store_true",
+                    help="exception 2 (the lead's post-result exception): the repeats compared without result.json "
+                         "layer_worker.process_affinity / process_cores while the worker is not in thread mode; "
+                         "off: as registered")
     a = ap.parse_args(argv)
     lists = _load("lat_lists", HERE / "lat_lists.py")
     low_mod = _load("low_clearance_report", ROOT / "tools/low_clearance_report.py")
@@ -251,6 +289,8 @@ def main(argv=None) -> int:
         if row["arm"] == "Uo9":
             row["uo9"] = uo9_verdict(row)
     LA.strip_layer_timing(dc)
+    if a.determinism_without_affinity:
+        strip_affinity(dc)
 
     def cmp(x, y):
         x, y = eff(x), eff(y)
@@ -263,7 +303,8 @@ def main(argv=None) -> int:
         u = cmp(f"lbg_Ub6_{scene}_s0", f"lbg_Ub6_{scene}_s0_rep")
         determinism[scene] = None if None in (b, u) else (b and u)
     rerun_needed = sorted(n for n, r in rows.items() if r["invalid"] and r.get("effective") and not r.get("rerun_of"))
-    out = {"rows": rows, "determinism": determinism, "rerun_needed": rerun_needed,
+    out = {"determinism_without_affinity": bool(a.determinism_without_affinity),
+           "rows": rows, "determinism": determinism, "rerun_needed": rerun_needed,
            "to_lead": sorted(n for n, r in rows.items() if r["invalid"] and r.get("rerun_of")),
            "conclusions": conclusions(rows, determinism)}
     if a.json is not None:
