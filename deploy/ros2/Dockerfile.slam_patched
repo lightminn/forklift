@@ -53,9 +53,10 @@ RUN set -eux; \
     rosdep install --from-paths /opt/slam_patched/src --ignore-src --rosdistro jazzy -y; \
     rm -rf /var/lib/apt/lists/*
 
-# the series id reaches the library as a compile definition (the patch prints it at Mapper construction)
+# the series id reaches the library as a compile definition (the patch prints it at Mapper construction). The ROS
+# setup scripts read unset variables, so they are sourced with set +u (job 18825 stopped there).
 RUN set -eux; \
-    source /opt/ros/jazzy/setup.bash; \
+    set +u; source /opt/ros/jazzy/setup.bash; set -u; \
     cd /opt/slam_patched; \
     extra=(); \
     if [[ "${SANITIZE}" == address ]]; then extra=(-DCMAKE_CXX_FLAGS=-fsanitize=address -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address); fi; \
@@ -69,7 +70,7 @@ RUN set -eux; \
 
 # the patch series' own tests (gtest, none for U0); a failing test fails the image
 RUN set -eux; \
-    source /opt/ros/jazzy/setup.bash; cd /opt/slam_patched; \
+    set +u; source /opt/ros/jazzy/setup.bash; set -u; cd /opt/slam_patched; \
     if [[ "$(cat series)" != none ]]; then \
         colcon test --base-paths src --build-base build --install-base install --packages-select slam_toolbox \
             --ctest-args -R forklift --event-handlers console_direct+; \
@@ -78,7 +79,7 @@ RUN set -eux; \
 
 # the graph dumper against this install (an apt-header build would pair a different Mapper layout with this library)
 RUN set -eux; \
-    source /opt/ros/jazzy/setup.bash; source /opt/slam_patched/install/setup.bash; \
+    set +u; source /opt/ros/jazzy/setup.bash; source /opt/slam_patched/install/setup.bash; set -u; \
     P=/opt/slam_patched/install/slam_toolbox; \
     INC=$(for d in /opt/ros/jazzy/include/*/; do printf -- '-I%s ' "$d"; done); \
     mkdir -p /opt/slam_patched/bin; \
