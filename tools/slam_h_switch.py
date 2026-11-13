@@ -8,8 +8,10 @@ mapped, its graph serialized into a replay bundle, then the rest of the spliced 
 
 ``pose`` gives the localization's start pose: plan 1-H switches only while the truck is parked at its start pose
 (line_m units end back there), so the pose is the session's own start in the mapping's map frame -- the first mapped
-scan's ``map_from_odom`` composed with its odometry -- never the truth. The bridge's L4 start check (bootstrap scans
-on the map's walls and near this pose) refuses it if the truck is not there. Beside it, the record keeps the mapping's
+scan's ``map_from_odom`` composed with its odometry -- never the truth. That is a prior the operating rule gives H
+(a known start pose), not something the switch finds: the bridge's L4 start check only tests the initial match under
+that premise (bootstrap scans on the map's walls, the estimate near this pose) and cannot by itself tell a wrong
+place in a repeating or symmetric layout (Codex H tools round 2 P3). Beside it, the record keeps the mapping's
 latest estimate at the first localization scan (the correction of its last reply of any status, the driver's
 ``replies`` line, composed with that scan's odometry, its ``next`` line) and its distance from the start: the last keyframe alone is not where the truck stops (ws1 smoke
 18785, scan 1513 against 1604: about 0.10 m and 0.04 rad, over the L4 check), and odometry between the last keyframe
