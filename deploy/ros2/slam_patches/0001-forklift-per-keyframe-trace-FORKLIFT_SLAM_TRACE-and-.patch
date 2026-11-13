@@ -1,0 +1,587 @@
+From a99d5ea90a91192f215145f5d1b2676fe45865dc Mon Sep 17 00:00:00 2001
+From: forklift <forklift@localhost>
+Date: Fri, 13 Nov 2026 17:00:27 +0900
+Subject: [PATCH] forklift: per-keyframe trace (FORKLIFT_SLAM_TRACE) and the
+ patch identification line
+
+Process-wide trace object (no karto class changes layout): per processed keyframe the
+lock wait, the time under the lock, scan match, AddEdges (LinkNearChains), the near-linked
+BFS (nodes, edges, scans), FindPossibleLoopClosure (ids visited, chains), coarse and fine
+matches, loops closed, CorrectPoses and its Ceres Compute; a separate record per map
+regeneration. Buffered in memory, written every 1000 records and at exit. Off (no clock
+read) unless FORKLIFT_SLAM_TRACE names a file. The Mapper constructor prints
+'forklift_slam_patch series=<id> trace=<0|1>' once.
+---
+ lib/karto_sdk/CMakeLists.txt                  |   6 +-
+ .../include/karto_sdk/ForkliftPatch.h         |  78 ++++++
+ lib/karto_sdk/src/ForkliftPatch.cpp           | 223 ++++++++++++++++++
+ lib/karto_sdk/src/Mapper.cpp                  |  51 +++-
+ src/slam_toolbox_common.cpp                   |  30 +++
+ 5 files changed, 379 insertions(+), 9 deletions(-)
+ create mode 100644 lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+ create mode 100644 lib/karto_sdk/src/ForkliftPatch.cpp
+
+diff --git a/lib/karto_sdk/CMakeLists.txt b/lib/karto_sdk/CMakeLists.txt
+index a620bfd..d723709 100644
+--- a/lib/karto_sdk/CMakeLists.txt
++++ b/lib/karto_sdk/CMakeLists.txt
+@@ -28,7 +28,11 @@ include_directories(include ${EIGEN3_INCLUDE_DIRS}
+ add_definitions(${EIGEN3_DEFINITIONS})
+ 
+ include_directories(include ${EIGEN3_INCLUDE_DIRS} ${TBB_INCLUDE_DIRS} ${Boost_INCLUDE_DIRS})
+-add_library(kartoSlamToolbox SHARED src/Karto.cpp src/Mapper.cpp)
++add_library(kartoSlamToolbox SHARED src/Karto.cpp src/Mapper.cpp src/ForkliftPatch.cpp)
++# forklift patch series id (docs/design/2026-11-13-slam-patch-build.md in the forklift repository)
++if(FORKLIFT_SLAM_PATCH_SERIES)
++  target_compile_definitions(kartoSlamToolbox PRIVATE FORKLIFT_SLAM_PATCH_SERIES="${FORKLIFT_SLAM_PATCH_SERIES}")
++endif()
+ ament_target_dependencies(kartoSlamToolbox ${dependencies})
+ target_link_libraries(kartoSlamToolbox ${Boost_LIBRARIES} TBB::tbb)
+ 
+diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+new file mode 100644
+index 0000000..0ed7010
+--- /dev/null
++++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
+@@ -0,0 +1,78 @@
++/*
++ * Forklift online-SLAM comparison patches (forklift repository docs/design/2026-11-13-slam-patch-build.md).
++ *
++ * Everything here is switched by environment variables read once; with none set the mapper runs its upstream code
++ * paths (P0). This file holds what every patch shares: the configuration, the start identification line and the
++ * per-keyframe trace (FORKLIFT_SLAM_TRACE). The trace lives in a process-wide object so that no karto class changes
++ * its layout for it.
++ */
++#ifndef KARTO_SDK__FORKLIFTPATCH_H_
++#define KARTO_SDK__FORKLIFTPATCH_H_
++
++#include <chrono>
++#include <cstdint>
++#include <map>
++#include <mutex>
++#include <string>
++#include <vector>
++
++namespace karto
++{
++namespace forklift
++{
++
++struct Config
++{
++  std::string trace;  // FORKLIFT_SLAM_TRACE: the trace file ('' = off)
++};
++
++// The configuration, read from the environment on first use (thread-safe).
++const Config & config();
++
++// Prints the identification line once to stderr: "forklift_slam_patch series=<id> trace=<0|1>".
++void announce();
++
++// True when the trace is on; a timer or a counter does nothing (not even read a clock) when it is off.
++bool tracing();
++
++// The keyframe record being filled: Process opens it, the node closes it once the scan's lock is released.
++void begin_scan();
++void add_time(const char * name, double seconds);
++void add_count(const char * name, std::int64_t n);
++// Ends the record: processed or not, the state id, the scan stamp (s) and the lock wait measured by the caller.
++void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s);
++// A separate record for a map regeneration (updateMap): its lock wait and its time.
++void map_update(double lock_wait_s, double seconds);
++// Writes what is buffered (also every 1000 records and at exit).
++void flush();
++
++// Adds its lifetime to the current record under `name` when the trace is on.
++class ScopedTimer
++{
++public:
++  explicit ScopedTimer(const char * name)
++  : name_(name), on_(tracing())
++  {
++    if (on_) {
++      start_ = std::chrono::steady_clock::now();
++    }
++  }
++  ~ScopedTimer()
++  {
++    if (on_) {
++      add_time(name_, std::chrono::duration<double>(std::chrono::steady_clock::now() - start_).count());
++    }
++  }
++  ScopedTimer(const ScopedTimer &) = delete;
++  ScopedTimer & operator=(const ScopedTimer &) = delete;
++
++private:
++  const char * name_;
++  bool on_;
++  std::chrono::steady_clock::time_point start_;
++};
++
++}  // namespace forklift
++}  // namespace karto
++
++#endif  // KARTO_SDK__FORKLIFTPATCH_H_
+diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
+new file mode 100644
+index 0000000..b22da2d
+--- /dev/null
++++ b/lib/karto_sdk/src/ForkliftPatch.cpp
+@@ -0,0 +1,223 @@
++/*
++ * Forklift online-SLAM comparison patches: configuration, identification and the per-keyframe trace
++ * (see karto_sdk/ForkliftPatch.h).
++ */
++#include "karto_sdk/ForkliftPatch.h"
++
++#include <cstdio>
++#include <cstdlib>
++#include <sstream>
++
++#ifndef FORKLIFT_SLAM_PATCH_SERIES
++#define FORKLIFT_SLAM_PATCH_SERIES "unknown"
++#endif
++
++namespace karto
++{
++namespace forklift
++{
++
++namespace
++{
++
++struct Record
++{
++  std::map<std::string, double> times;
++  std::map<std::string, std::int64_t> counts;
++  std::chrono::steady_clock::time_point started;
++  bool open = false;
++};
++
++struct TraceState
++{
++  std::mutex mutex;
++  Record current;
++  std::vector<std::string> lines;
++  std::int64_t flushes = 0;
++  ~TraceState();
++};
++
++const std::size_t FLUSH_EVERY = 1000;
++
++TraceState & state()
++{
++  static TraceState s;
++  return s;
++}
++
++std::string json_escape(const std::string & text)
++{
++  std::string out;
++  for (char c : text) {
++    if (c == '"' || c == '\\') {
++      out.push_back('\\');
++    }
++    out.push_back(c);
++  }
++  return out;
++}
++
++// Writes the buffered lines; the caller holds the state mutex.
++void write_locked(TraceState & s)
++{
++  const Config & cfg = config();
++  if (cfg.trace.empty() || s.lines.empty()) {
++    return;
++  }
++  auto start = std::chrono::steady_clock::now();
++  std::FILE * f = std::fopen(cfg.trace.c_str(), "a");
++  if (f != nullptr) {
++    for (const std::string & line : s.lines) {
++      std::fputs(line.c_str(), f);
++      std::fputc('\n', f);
++    }
++    double took = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
++    std::fprintf(f, "{\"kind\":\"flush\",\"lines\":%zu,\"write_s\":%.9f}\n", s.lines.size(), took);
++    std::fclose(f);
++  }
++  s.lines.clear();
++  s.flushes++;
++}
++
++TraceState::~TraceState()
++{
++  std::lock_guard<std::mutex> lock(mutex);
++  write_locked(*this);
++}
++
++void flush_at_exit()
++{
++  flush();
++}
++
++}  // namespace
++
++const Config & config()
++{
++  static const Config cfg = [] {
++      Config c;
++      const char * trace = std::getenv("FORKLIFT_SLAM_TRACE");
++      if (trace != nullptr) {
++        c.trace = trace;
++      }
++      if (!c.trace.empty()) {
++        std::atexit(flush_at_exit);
++      }
++      return c;
++    }();
++  return cfg;
++}
++
++void announce()
++{
++  static std::once_flag once;
++  std::call_once(once, [] {
++      const Config & c = config();
++      std::fprintf(stderr, "forklift_slam_patch series=%s trace=%d\n", FORKLIFT_SLAM_PATCH_SERIES,
++      c.trace.empty() ? 0 : 1);
++      std::fflush(stderr);
++    });
++}
++
++bool tracing()
++{
++  return !config().trace.empty();
++}
++
++void begin_scan()
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  s.current = Record();
++  s.current.open = true;
++  s.current.started = std::chrono::steady_clock::now();
++}
++
++void add_time(const char * name, double seconds)
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  if (s.current.open) {
++    s.current.times[name] += seconds;
++  }
++}
++
++void add_count(const char * name, std::int64_t n)
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  if (s.current.open) {
++    s.current.counts[name] += n;
++  }
++}
++
++void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  if (!s.current.open) {
++    return;
++  }
++  std::ostringstream line;
++  line.precision(9);
++  line << std::fixed << "{\"kind\":\"scan\",\"processed\":" << (processed ? "true" : "false")
++       << ",\"state_id\":" << state_id << ",\"stamp_s\":" << stamp_s << ",\"lock_wait_s\":" << lock_wait_s
++       << ",\"since_begin_s\":"
++       << std::chrono::duration<double>(std::chrono::steady_clock::now() - s.current.started).count();
++  for (const auto & kv : s.current.times) {
++    line << ",\"" << json_escape(kv.first) << "_s\":" << kv.second;
++  }
++  for (const auto & kv : s.current.counts) {
++    line << ",\"" << json_escape(kv.first) << "\":" << kv.second;
++  }
++  line << "}";
++  s.current.open = false;
++  // only the processed keyframes are kept (a skipped scan never reaches the graph)
++  if (processed) {
++    s.lines.push_back(line.str());
++    if (s.lines.size() >= FLUSH_EVERY) {
++      write_locked(s);
++    }
++  }
++}
++
++void map_update(double lock_wait_s, double seconds)
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  std::ostringstream line;
++  line.precision(9);
++  line << std::fixed << "{\"kind\":\"map\",\"lock_wait_s\":" << lock_wait_s << ",\"update_s\":" << seconds << "}";
++  s.lines.push_back(line.str());
++  if (s.lines.size() >= FLUSH_EVERY) {
++    write_locked(s);
++  }
++}
++
++void flush()
++{
++  if (!tracing()) {
++    return;
++  }
++  TraceState & s = state();
++  std::lock_guard<std::mutex> lock(s.mutex);
++  write_locked(s);
++}
++
++}  // namespace forklift
++}  // namespace karto
+diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
+index 6ef0688..d6f8479 100644
+--- a/lib/karto_sdk/src/Mapper.cpp
++++ b/lib/karto_sdk/src/Mapper.cpp
+@@ -17,6 +17,7 @@
+ 
+ 
+ #include <karto_sdk/Types.h>
++#include "karto_sdk/ForkliftPatch.h"
+ #include <math.h>
+ #include <assert.h>
+ #include <boost/serialization/vector.hpp>
+@@ -1275,11 +1276,13 @@ public:
+       Vertex<T> * pNext = toVisit.front();
+       toVisit.pop();
+ 
++      forklift::add_count("bfs_nodes", 1);
+       if (pNext != NULL && pVisitor->Visit(pNext)) {
+         // vertex is valid, explore neighbors
+         validVertices.push_back(pNext);
+ 
+         std::vector<Vertex<T> *> adjacentVertices = pNext->GetAdjacentVertices();
++        forklift::add_count("bfs_edges", static_cast<std::int64_t>(adjacentVertices.size()));
+         forEach(typename std::vector<Vertex<T> *>, &adjacentVertices)
+         {
+           Vertex<T> * pAdjacent = *iter;
+@@ -1490,7 +1493,10 @@ void MapperGraph::AddEdges(LocalizedRangeScan * pScan, const Matrix3 & rCovarian
+   }
+ 
+   // link to other near chains (chains that include new scan are invalid)
+-  LinkNearChains(pScan, means, covariances);
++  {
++    forklift::ScopedTimer timer("link_near_chains");
++    LinkNearChains(pScan, means, covariances);
++  }
+ 
+   if (!means.empty()) {
+     pScan->SetSensorPose(ComputeWeightedMean(means, covariances));
+@@ -1508,8 +1514,13 @@ kt_bool MapperGraph::TryCloseLoop(LocalizedRangeScan * pScan, const Name & rSens
+   while (!candidateChain.empty()) {
+     Pose2 bestPose;
+     Matrix3 covariance;
+-    kt_double coarseResponse = m_pLoopScanMatcher->MatchScan(pScan, candidateChain,
+-        bestPose, covariance, false, false);
++    forklift::add_count("coarse_matches", 1);
++    kt_double coarseResponse;
++    {
++      forklift::ScopedTimer timer("coarse_match");
++      coarseResponse = m_pLoopScanMatcher->MatchScan(pScan, candidateChain,
++          bestPose, covariance, false, false);
++    }
+ 
+     std::stringstream stream;
+     stream << "COARSE RESPONSE: " << coarseResponse <<
+@@ -1530,9 +1541,14 @@ kt_bool MapperGraph::TryCloseLoop(LocalizedRangeScan * pScan, const Name & rSens
+       tmpScan.SetStateId(pScan->GetStateId());
+       tmpScan.SetCorrectedPose(pScan->GetCorrectedPose());
+       tmpScan.SetSensorPose(bestPose);    // This also updates OdometricPose.
+-      kt_double fineResponse = m_pMapper->m_pSequentialScanMatcher->MatchScan(&tmpScan,
+-          candidateChain,
+-          bestPose, covariance, false);
++      forklift::add_count("fine_matches", 1);
++      kt_double fineResponse;
++      {
++        forklift::ScopedTimer timer("fine_match");
++        fineResponse = m_pMapper->m_pSequentialScanMatcher->MatchScan(&tmpScan,
++            candidateChain,
++            bestPose, covariance, false);
++      }
+ 
+       std::stringstream stream1;
+       stream1 << "FINE RESPONSE: " << fineResponse << " (>" <<
+@@ -1546,6 +1562,7 @@ kt_bool MapperGraph::TryCloseLoop(LocalizedRangeScan * pScan, const Name & rSens
+ 
+         pScan->SetSensorPose(bestPose);
+         LinkChainToScan(candidateChain, pScan, bestPose, covariance);
++        forklift::add_count("loops_closed", 1);
+         CorrectPoses();
+ 
+         m_pMapper->FireEndLoopClosure("Loop closed!");
+@@ -1796,11 +1813,14 @@ LocalizedRangeScanVector MapperGraph::FindNearLinkedScans(
+   LocalizedRangeScan * pScan,
+   kt_double maxDistance)
+ {
++  forklift::ScopedTimer timer("near_linked_bfs");
++  forklift::add_count("near_linked_calls", 1);
+   NearScanVisitor * pVisitor = new NearScanVisitor(pScan, maxDistance,
+       m_pMapper->m_pUseScanBarycenter->GetValue());
+   LocalizedRangeScanVector nearLinkedScans = m_pTraversal->TraverseForScans(GetVertex(
+         pScan), pVisitor);
+   delete pVisitor;
++  forklift::add_count("near_linked_scans", static_cast<std::int64_t>(nearLinkedScans.size()));
+ 
+   return nearLinkedScans;
+ }
+@@ -1963,6 +1983,8 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+   kt_int32u & rStartNum)
+ {
+   LocalizedRangeScanVector chain;    // return value
++  forklift::ScopedTimer timer("find_loop");
++  forklift::add_count("find_loop_calls", 1);
+ 
+   Pose2 pose = pScan->GetReferencePose(m_pMapper->m_pUseScanBarycenter->GetValue());
+ 
+@@ -1974,6 +1996,7 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+   kt_int32u nScans =
+     static_cast<kt_int32u>(m_pMapper->m_pMapperSensorManager->GetScans(rSensorName).size());
+   for (; rStartNum < nScans; rStartNum++) {
++    forklift::add_count("loop_ids_visited", 1);
+     LocalizedRangeScan * pCandidateScan = m_pMapper->m_pMapperSensorManager->GetScan(rSensorName,
+         rStartNum);
+ 
+@@ -1999,6 +2022,7 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+     } else {
+       // return chain if it is long "enough"
+       if (chain.size() >= m_pMapper->m_pLoopMatchMinimumChainSize->GetValue()) {
++        forklift::add_count("loop_chains", 1);
+         return chain;
+       } else {
+         chain.clear();
+@@ -2012,9 +2036,13 @@ LocalizedRangeScanVector MapperGraph::FindPossibleLoopClosure(
+ void MapperGraph::CorrectPoses()
+ {
+   // optimize scans!
++  forklift::ScopedTimer timer("correct_poses");
+   ScanSolver * pSolver = m_pMapper->m_pScanOptimizer;
+   if (pSolver != NULL) {
+-    pSolver->Compute();
++    {
++      forklift::ScopedTimer compute_timer("ceres_compute");
++      pSolver->Compute();
++    }
+ 
+     const_forEach(ScanSolver::IdPoseVector, &pSolver->GetCorrections())
+     {
+@@ -2057,6 +2085,7 @@ Mapper::Mapper()
+   m_pGraph(NULL),
+   m_pScanOptimizer(NULL)
+ {
++  forklift::announce();
+   InitializeParameters();
+ }
+ 
+@@ -2744,10 +2773,12 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+ 
+     Matrix3 cov;
+     cov.SetToIdentity();
++    forklift::ScopedTimer process_timer("process_graph");
+ 
+     // correct scan (if not first scan)
+     if (m_pUseScanMatching->GetValue() && pLastScan != NULL) {
+       Pose2 bestPose;
++      forklift::ScopedTimer match_timer("scan_match");
+       m_pSequentialScanMatcher->MatchScan(pScan,
+         m_pMapperSensorManager->GetRunningScans(pScan->GetSensorName()),
+         bestPose,
+@@ -2764,11 +2795,15 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+     if (m_pUseScanMatching->GetValue()) {
+       // add to graph
+       m_pGraph->AddVertex(pScan);
+-      m_pGraph->AddEdges(pScan, cov);
++      {
++        forklift::ScopedTimer timer("add_edges");
++        m_pGraph->AddEdges(pScan, cov);
++      }
+ 
+       m_pMapperSensorManager->AddRunningScan(pScan);
+ 
+       if (m_pDoLoopClosing->GetValue()) {
++        forklift::ScopedTimer timer("try_close_loop");
+         std::vector<Name> deviceNames = m_pMapperSensorManager->GetSensorNames();
+         const_forEach(std::vector<Name>, &deviceNames)
+         {
+diff --git a/src/slam_toolbox_common.cpp b/src/slam_toolbox_common.cpp
+index 89bc024..e570a13 100644
+--- a/src/slam_toolbox_common.cpp
++++ b/src/slam_toolbox_common.cpp
+@@ -22,6 +22,7 @@
+ #include <chrono>
+ #include "slam_toolbox/slam_toolbox_common.hpp"
+ #include "slam_toolbox/serialization.hpp"
++#include "karto_sdk/ForkliftPatch.h"
+ 
+ namespace slam_toolbox
+ {
+@@ -649,7 +650,21 @@ bool SlamToolbox::updateMap()
+   if (!sst_ || !sst_->is_activated() || sst_->get_subscription_count() == 0) {
+     return true;
+   }
++  // forklift trace: the lock wait and the regeneration time under the lock (karto_sdk/ForkliftPatch.h)
++  const auto fk_wait_start = std::chrono::steady_clock::now();
+   boost::mutex::scoped_lock lock(smapper_mutex_);
++  struct FkMapTrace
++  {
++    std::chrono::steady_clock::time_point wait_start, locked;
++    ~FkMapTrace()
++    {
++      if (karto::forklift::tracing()) {
++        const auto now = std::chrono::steady_clock::now();
++        karto::forklift::map_update(std::chrono::duration<double>(locked - wait_start).count(),
++          std::chrono::duration<double>(now - locked).count());
++      }
++    }
++  } fk_map_trace{fk_wait_start, std::chrono::steady_clock::now()};
+   OccupancyGrid * occ_grid = smapper_->getOccupancyGrid(resolution_);
+   if (!occ_grid) {
+     return false;
+@@ -836,8 +851,23 @@ LocalizedRangeScan * SlamToolbox::addScan(
+     laser, scan, odom_pose);
+ 
+   // Add the localized range scan to the smapper
++  const auto fk_wait_start = std::chrono::steady_clock::now();
+   boost::mutex::scoped_lock lock(smapper_mutex_);
++  const double fk_lock_wait =
++    std::chrono::duration<double>(std::chrono::steady_clock::now() - fk_wait_start).count();
+   bool processed = false, update_reprocessing_transform = false;
++  // forklift trace: one record per scan, closed when this function returns (karto_sdk/ForkliftPatch.h)
++  karto::forklift::begin_scan();
++  struct FkScanTrace
++  {
++    const bool & processed;
++    LocalizedRangeScan * const & scan;
++    double stamp_s, lock_wait_s;
++    ~FkScanTrace()
++    {
++      karto::forklift::end_scan(processed, (processed && scan) ? scan->GetStateId() : -1, stamp_s, lock_wait_s);
++    }
++  } fk_scan_trace{processed, range_scan, rclcpp::Time(scan->header.stamp).seconds(), fk_lock_wait};
+ 
+   Matrix3 covariance;
+   covariance.SetToIdentity();
+-- 
+2.56.0
+
