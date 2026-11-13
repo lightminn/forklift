@@ -1,0 +1,138 @@
+{
+ "by_turn": {
+  "left_turn": {
+   "n": 6666,
+   "runs": 56,
+   "k_obs_p10_p50_p90": [
+    0.3129,
+    0.3151,
+    0.3172
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8692,
+    0.8753,
+    0.8811
+   ],
+   "e_L_mrad_p50": 34.0,
+   "e_R_mrad_p50": 0.3,
+   "k_left_wheel_p50": 0.3147,
+   "k_right_wheel_p50": 0.3594,
+   "cmd_left_right_p50": [
+    0.2569,
+    0.2136
+   ]
+  },
+  "right_turn": {
+   "n": 7424,
+   "runs": 56,
+   "k_obs_p10_p50_p90": [
+    0.2974,
+    0.3003,
+    0.3031
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8263,
+    0.8342,
+    0.8418
+   ],
+   "e_L_mrad_p50": 31.1,
+   "e_R_mrad_p50": 0.2,
+   "k_left_wheel_p50": 0.302,
+   "k_right_wheel_p50": 0.3597,
+   "cmd_left_right_p50": [
+    -0.2136,
+    -0.2569
+   ]
+  }
+ },
+ "by_turn_scene": {
+  "left_turn/aisle_rack": {
+   "n": 667,
+   "runs": 8,
+   "k_obs_p10_p50_p90": [
+    0.3118,
+    0.3144,
+    0.3169
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8662,
+    0.8733,
+    0.8802
+   ],
+   "e_L_mrad_p50": 34.3,
+   "e_R_mrad_p50": 0.3,
+   "k_left_wheel_p50": 0.3143,
+   "k_right_wheel_p50": 0.3594,
+   "cmd_left_right_p50": [
+    0.2569,
+    0.2136
+   ]
+  },
+  "left_turn/random_1": {
+   "n": 5999,
+   "runs": 48,
+   "k_obs_p10_p50_p90": [
+    0.313,
+    0.3152,
+    0.3172
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8696,
+    0.8754,
+    0.8812
+   ],
+   "e_L_mrad_p50": 34.0,
+   "e_R_mrad_p50": 0.3,
+   "k_left_wheel_p50": 0.3147,
+   "k_right_wheel_p50": 0.3594,
+   "cmd_left_right_p50": [
+    0.2569,
+    0.2136
+   ]
+  },
+  "right_turn/aisle_rack": {
+   "n": 359,
+   "runs": 8,
+   "k_obs_p10_p50_p90": [
+    0.2937,
+    0.3006,
+    0.3045
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8162,
+    0.8354,
+    0.8458
+   ],
+   "e_L_mrad_p50": 31.0,
+   "e_R_mrad_p50": 0.3,
+   "k_left_wheel_p50": 0.3022,
+   "k_right_wheel_p50": 0.3596,
+   "cmd_left_right_p50": [
+    -0.2136,
+    -0.2569
+   ]
+  },
+  "right_turn/random_1": {
+   "n": 7065,
+   "runs": 48,
+   "k_obs_p10_p50_p90": [
+    0.2975,
+    0.3003,
+    0.303
+   ],
+   "obs_over_cmd_p10_p50_p90": [
+    0.8265,
+    0.8342,
+    0.8417
+   ],
+   "e_L_mrad_p50": 31.1,
+   "e_R_mrad_p50": 0.2,
+   "k_left_wheel_p50": 0.302,
+   "k_right_wheel_p50": 0.3597,
+   "cmd_left_right_p50": [
+    -0.2136,
+    -0.2569
+   ]
+  }
+ }
+}
