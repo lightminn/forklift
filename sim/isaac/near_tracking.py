@@ -1056,6 +1056,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     # docs/plans/2026-11-13-k1-near-loose-arrival.md 2.3: K1's near-leg bounds and its smoke's detour size
     "near_observe_arrival",
     "inject_near_end_detour_size",
+    # docs/plans/2026-11-14-loaded-curvature-rule.md 3: the loaded transport curvature rule
+    "loaded_curvature_rule",
     # docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2: diagnostic dumps only
     "occupied_dumps",
     "near_bounds",
