@@ -27,16 +27,20 @@ import time
 
 PROBE = ("echo T $(date +%s.%N); for p in $(pgrep -f '^/usr/bin/qemu-system'); do echo qemu $p $(ps -o lstart= -p $p); "
          "done; echo QEMU_DONE; g=$(nvidia-smi --query-gpu=index,pci.bus_id,persistence_mode --format=csv,noheader); "
-         "echo GPU_EXIT $?; printf '%s\\n' \"$g\" | sed 's/^/gpu /'")
+         "e=$?; printf '%s\\n' \"$g\" | sed 's/^/gpu /'; echo GPU_DONE $e")
 
 
 def parse(text: str) -> dict:
-    """Each half on its own: qemu_ok once the process scan finished, gpu_ok when nvidia-smi exited 0."""
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
+    """Each half on its own (Codex K09 rounds 2-3): a qemu line received is a positive however the probe ended;
+    the GPU list counts only when its end marker came after it with nvidia-smi's exit 0 (a cut-off list is no count).
+    The 2026-11-13 _re sampler ran the earlier probe (``GPU_EXIT`` before the list): there a GPU count needs the ssh
+    to have ended 0 too (``judge``)."""
+    lines = [x.strip() for x in (text or "").splitlines() if x.strip()]
     t = next((float(x[2:]) for x in lines if x.startswith("T ")), None)
-    gpu_exit = next((x.split()[1] for x in lines if x.startswith("GPU_EXIT ")), None)
+    done = next((x.split()[1] for x in lines if x.startswith("GPU_DONE ")), None)
+    old = next((x.split()[1] for x in lines if x.startswith("GPU_EXIT ")), None)
     return {"t_ws1": t, "qemu_ok": "QEMU_DONE" in lines, "qemu": [x[5:] for x in lines if x.startswith("qemu ")],
-            "gpu_ok": gpu_exit == "0",
+            "gpu_ok": done == "0" if old is None else old == "0", "gpu_marker": "done" if old is None else "exit_first",
             "gpus": [[c.strip() for c in x[4:].split(",")] for x in lines if x.startswith("gpu ") and x[4:].strip()]}
 
 
@@ -47,19 +51,29 @@ def sample(path: str, every: float) -> int:
             r = subprocess.run(["ssh", "-o", "ClearAllForwardings=yes", "-o", "ConnectTimeout=15", "-o",
                                 "BatchMode=yes", "ws1", PROBE], capture_output=True, text=True, timeout=45)
             row = {"t_local": t_local, "ssh_exit": r.returncode, **parse(r.stdout), "err": r.stderr[-200:]}
-        except (subprocess.TimeoutExpired, ValueError) as exc:
+        except subprocess.TimeoutExpired as exc:  # keep what came before the cut (a qemu line is still a positive)
+            out = exc.stdout.decode(errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            row = {"t_local": t_local, "ssh_exit": None, **parse(out), "err": "timeout"}
+        except ValueError as exc:
             row = {"t_local": t_local, "t_ws1": None, "err": repr(exc)[-200:]}
         with open(path, "a") as f:
             f.write(json.dumps(row) + "\n")
         time.sleep(max(0.0, t_local + every - time.time()))
 
 
+def gpu_counted(row: dict) -> bool:
+    if not row.get("gpu_ok"):
+        return False
+    # the earlier probe printed its exit code before the list: only a probe that ended whole counts it
+    return row.get("gpu_marker") == "done" or row.get("ssh_exit") == 0
+
+
 def positive(row: dict) -> bool:
-    return bool(row.get("qemu_ok") and row["qemu"]) or bool(row.get("gpu_ok") and len(row["gpus"]) < 2)
+    return bool(row.get("qemu")) or (gpu_counted(row) and len(row["gpus"]) < 2)
 
 
 def complete(row: dict) -> bool:
-    return bool(row.get("qemu_ok") and row.get("gpu_ok"))
+    return bool(row.get("qemu_ok") and gpu_counted(row))
 
 
 def judge(rows: list, start: float, end: float, every: float) -> str:
