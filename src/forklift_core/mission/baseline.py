@@ -51,6 +51,10 @@ MISSION_KEYS = {
         "near_end_shadow_open",  # its open shadow episode (C2 5.1)
         "near_end_injections",  # its diagnostic --inject-near-end-detour (plan 2026-11-03-near-end-stand-c2-injection)
         "near_end_step_shift_max_m",  # its pallet shift since the last tick, written by the physics steps
+        # docs/plans/2026-11-13-k1-near-loose-arrival.md 2.2: K1's interventions (one per stand), the open stand's
+        # index, its fallbacks to the common bounds, and the record-only safety watch the physics steps write
+        "near_loose_refusals", "near_loose_open", "near_loose_pending", "near_loose_fallbacks",
+        "near_loose_watch",
         "slip_watch",  # the carried load's slip watch record (plan 2026-10-25-slip-check-relative)
         "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
         "exit_prefix_exempt",  # the exit-prefix latches' records (plan 2026-10-28-exit-prefix-extract-rules D5)

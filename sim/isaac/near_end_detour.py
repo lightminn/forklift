@@ -40,8 +40,10 @@ def curvature_sign(tracker, start: int) -> tuple[float, float]:
     return (1.0 if mean >= 0.0 else -1.0), mean
 
 
-def decide(tracker) -> dict:
-    """The arming decision for a tracker on its final leg: armed with s, D and psi, or not armed with the reason."""
+def decide(tracker, d_m: float = D_M, psi_rad: float = PSI_RAD) -> dict:
+    """The arming decision for a tracker on its final leg: armed with s, D and psi, or not armed with the reason. D and
+    psi default to D_M / PSI_RAD; K1's smoke gives smaller ones (--inject-near-end-detour-size, plan
+    2026-11-13-k1-near-loose-arrival 3)."""
     start, length, gear = final_leg(tracker)
     decision = {"final_leg_start": start, "final_leg_length_m": length, "final_leg_direction": gear}
     if gear > 0:
@@ -49,8 +51,8 @@ def decide(tracker) -> dict:
     if length < R1_M:
         return {**decision, "event": "not_armed", "reason": "final_leg_short"}
     s, mean = curvature_sign(tracker, start)
-    return {**decision, "event": "armed", "kappa_mean_inv_m": mean, "s": s, "dx_left_m": -D_M * s,
-            "dpsi_rad": PSI_RAD * s}
+    return {**decision, "event": "armed", "kappa_mean_inv_m": mean, "s": s, "dx_left_m": -d_m * s,
+            "dpsi_rad": psi_rad * s}
 
 
 def path_distance_m(tracker, xy) -> float:
@@ -76,7 +78,8 @@ class NearEndDetour:
     The steps never write the record itself, so one taken after a mission's end cannot touch what it handed over (2 P2-3).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, d_m: float = D_M, psi_rad: float = PSI_RAD) -> None:
+        self.d_m, self.psi_rad = float(d_m), float(psi_rad)
         self.decided = False  # once a run, whatever the missions
         self._reset_mission()
 
@@ -131,7 +134,7 @@ class NearEndDetour:
                 and tracker.leg_index == len(tracker._leg_ends) - 1
                 and tracker.remaining_to_goal_m() <= R1_M):
             self.decided = True
-            decision = decide(tracker)
+            decision = decide(tracker, self.d_m, self.psi_rad)
             record = self._record(state)
             record["events"].append({**decision, "time_s": float(t),
                                      "remaining_m": float(tracker.remaining_to_goal_m()),

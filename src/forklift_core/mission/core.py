@@ -105,6 +105,9 @@ def rollout_callback_spec(config, start) -> dict:
 
 
 OBSERVE_END_STAND_S = 3.0  # plan 2026-10-24-leg-end-budget-stands O1: a final-goal stand outside the loose bounds
+# docs/plans/2026-11-13-k1-near-loose-arrival.md 2.1: the narrow near-leg bounds give way to the common ones when less
+# than C2's wait, the arrival's second and a second of margin are left before the leg's time limit
+NEAR_LOOSE_DEADLINE_MARGIN_S = OBSERVE_END_STAND_S + 1.0 + 1.0
 STALL_REPLANS = 2  # the stall replans per mission (transport and return; #117's R2 band reads the same count)
 CLEAR_OUT_BUDGET_M = 1.0  # plan D4b: the most a cancelled truck backs out to where the next preparation can start
 CLEAR_OUT_MARGIN_M = 0.08  # its end: clear with the arrival and tracking tolerances (0.03 + 0.008 + 0.02 rad x 1.66 m)
@@ -3258,6 +3261,112 @@ class MissionCore:
             return False
         return not self.scene_far_observe()
 
+    def near_loose_bounds(self, t: float) -> tuple[float, float, str]:
+        """K1 (docs/plans/2026-11-13-k1-near-loose-arrival.md 2.1): the loose arrival bounds for this tick and their
+        source. The common observe bounds ("common") unless ``--near-observe-arrival`` is given and this is the near
+        re-observation leg; there the narrow bounds ("narrow") until C2 was tried on the leg serial (any outcome),
+        the leg's replan budget is spent or less than NEAR_LOOSE_DEADLINE_MARGIN_S of its time limit remain, when the
+        common bounds come back ("fallback", recorded once per leg serial and reason). Without the option nothing is
+        read or written beyond the two common values."""
+        options = self.options
+        narrow = getattr(options, "near_observe_arrival", None)
+        if narrow is None or not self.near_reobserve_leg():
+            return options.observe_arrival_m, options.observe_arrival_yaw_rad, "common"
+        state, ms = self.state, self.ms
+        leg_ = state["observe_replan_leg"]
+        reason = None
+        if any(r.get("kind") == "near" and r.get("leg_serial") == leg_["serial"]
+               for r in state.get("observe_end_stands", ())):
+            reason = "c2_tried"
+        elif len(state["observe_replans"]) - leg_["start"] >= options.observe_replans_per_leg:
+            reason = "budget_spent"
+        elif self.tracking_limit(t) - self.commands.work_elapsed(ms.phase_started, t) < NEAR_LOOSE_DEADLINE_MARGIN_S:
+            reason = "deadline"
+        if reason is None:
+            return float(narrow[0]), float(narrow[1]), "narrow"
+        fallbacks = state.setdefault("near_loose_fallbacks", [])
+        if not any(f["leg_serial"] == leg_["serial"] and f["reason"] == reason for f in fallbacks):
+            fallbacks.append({"time_s": float(t), "leg_serial": leg_["serial"], "reason": reason})
+        return options.observe_arrival_m, options.observe_arrival_yaw_rad, "fallback"
+
+    def near_loose_event(self, t: float, kind: str, tracking, rear) -> None:
+        """K1 2.2: the stand's intervention record, opened once per stand (``blocked_arrival``: the common bounds
+        would have started the loose arrival's second; ``extra_c2``: C2 judged outside only by the narrow bounds); a
+        later kind on the same stand is added to it. The waypoint-frame components say how the error lay."""
+        state = self.state
+        if state.get("near_loose_open") is not None:
+            open_ = state["near_loose_refusals"][state["near_loose_open"]]
+            if kind not in open_["kinds"]:
+                open_["kinds"].append(kind)
+            return
+        if state.get("near_loose_pending") is not None:  # a new stand before the last one's outcome: it ends there
+            state["near_loose_refusals"][state.pop("near_loose_pending")]["superseded_by"] = len(
+                state["near_loose_refusals"])
+        leg_ = state["observe_replan_leg"]
+        waypoint = (state.get("near_capture") or {}).get("waypoint")
+        along = lateral = None
+        if waypoint is not None:
+            c_, s_ = math.cos(float(waypoint[2])), math.sin(float(waypoint[2]))
+            dx, dy = float(rear[0]) - float(waypoint[0]), float(rear[1]) - float(waypoint[1])
+            along, lateral = c_ * dx + s_ * dy, -s_ * dx + c_ * dy
+        record = {"time_s": float(t), "mission_id": self.commands.mission_id, "leg_serial": leg_["serial"],
+                  "observe_replans_n": len(state["observe_replans"]), "kinds": [kind],
+                  "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
+                  "along_m": along, "lateral_m": lateral, "rear_pose": [float(v) for v in rear]}
+        state.setdefault("near_loose_refusals", []).append(record)
+        state["near_loose_open"] = len(state["near_loose_refusals"]) - 1
+
+    def near_loose_close(self, t: float, tracking, source: str, standing: bool) -> None:
+        """K1 2.2: the stand and its outcome are two things. The open stand ends at an arrival or when the truck
+        stops standing at the leg's end (a command resumed -- C2's replan --, a new leg, the phase left); the record
+        then waits (``near_loose_pending``) for its outcome: the first observe arrival after it (the bounds source
+        that took it, whether the error was inside the narrow bounds, the leg serial it came on) and the near
+        capture's status once it leaves ``pending``. A new stand before that supersedes it."""
+        state, options, ms = self.state, self.options, self.ms
+        if state.get("near_loose_open") is not None:
+            index = state["near_loose_open"]
+            record = state["near_loose_refusals"][index]
+            if tracking.status != "arrived" and standing:
+                return
+            if tracking.status != "arrived":
+                record.setdefault("ends", []).append({"time_s": float(t), "how": "moved",
+                                                      "observe_replans_n": len(state["observe_replans"])})
+            state.pop("near_loose_open")
+            state["near_loose_pending"] = index
+        else:
+            record = state["near_loose_refusals"][state["near_loose_pending"]]
+        if tracking.status == "arrived" and self.near_reobserve_leg():
+            # the near observation goal's own arrival (a backoff's end was already turned back into tracking); one
+            # on another leg is kept apart from the recovery's
+            key_ = "arrival" if record["leg_serial"] == state["observe_replan_leg"]["serial"] else "other_leg_arrival"
+            if key_ in record:
+                return
+            narrow = options.near_observe_arrival
+            record[key_] = {
+                "time_s": float(t), "bounds_source": source,
+                "inside_narrow": bool(tracking.position_error_m <= narrow[0]
+                                      and abs(tracking.yaw_error_rad) <= narrow[1]),
+                "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
+                "observe_replans_n": len(state["observe_replans"]),
+                "leg_serial": state["observe_replan_leg"]["serial"]}
+
+    def near_loose_outcome(self, t: float) -> None:
+        """K1 2.2: a waiting record takes the near capture's status when it leaves ``pending`` some way the explicit
+        settlements (near_loose_settle) did not see; called at the top of command() only while a record waits."""
+        state = self.state
+        status = (state.get("near_capture") or {}).get("status")
+        if status != "pending":
+            self.near_loose_settle(t, status if status is not None else "absent", "next_tick")
+
+    def near_loose_settle(self, t: float, status: str, how: str) -> None:
+        """K1 2.2: the waiting record's outcome where the near capture is decided -- accepted (``done``), not
+        detected (``failed``, before the run ends on it), refused into a realignment (``realign_refused``, before
+        the capture record is moved away). A record still waiting when the run ends some other way keeps no
+        ``capture``: the run's own end says how it ended."""
+        state = self.state
+        record = state["near_loose_refusals"][state.pop("near_loose_pending")]
+        record["capture"] = {"time_s": float(t), "status": status, "how": how}
+
     def near_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
         """Plan 2026-11-02-near-leg-end-stand-c2 (C2): O1's rule on the near re-observation leg. A stop at its final
         goal without an arrival (remaining 0, tracking, not at a cusp, a zero command) whose zero command lasts
@@ -3288,16 +3397,22 @@ class MissionCore:
             return tracking
         pending_ = state.setdefault("near_end_stand", {"since_s": float(t)})
         stood_ = self.commands.work_elapsed(pending_["since_s"], t)
-        outside_ = (tracking.position_error_m > options.observe_arrival_m
-                    or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad)
+        bound_m_, bound_rad_, bound_src_ = self.near_loose_bounds(t)  # K1 2.1: the same bounds as the loose arrival
+        outside_ = (tracking.position_error_m > bound_m_
+                    or abs(tracking.yaw_error_rad) > bound_rad_)
         if stood_ < OBSERVE_END_STAND_S or not outside_ or not slam["stop_now"]:
             return tracking
+        if bound_src_ == "narrow" and not (tracking.position_error_m > options.observe_arrival_m
+                                           or abs(tracking.yaw_error_rad) > options.observe_arrival_yaw_rad):
+            self.near_loose_event(t, "extra_c2", tracking, rear)  # K1 2.2 (b): before C2 records or installs
         state.pop("near_end_stand", None)
         record = {"time_s": float(t), "kind": "near", "leg_serial": leg_["serial"], "zero_command_s": float(stood_),
                   "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
                   "rear_pose": [float(v) for v in rear], "slam_mode": slam["tracker"].mode}
         records_ = state.setdefault("observe_end_stands", [])
         budget_ = len(state["observe_replans"]) - leg_["start"] < options.observe_replans_per_leg
+        if state.get("near_loose_open") is not None:  # K1 2.2: this C2 judgement belongs to the open stand's record
+            state["near_loose_refusals"][state["near_loose_open"]]["c2_record_index"] = len(records_)
         if mode_ == "shadow":
             # C2 5.1: what ties the judgement to this very stand -- the mission, the leg, the tracker installed at
             # phase_started, its path and goal, the stand's start and the loose arrivals so far; the episode stays open
@@ -3375,6 +3490,8 @@ class MissionCore:
             tracking.status != "failed",
             f"Tracking failed in {ms.phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
         )
+        if state.get("near_loose_pending") is not None:  # K1 2.2: only while an intervention waits for its outcome
+            self.near_loose_outcome(t)
         requested_speed, curvature = (
             tracking.speed_mps,
             tracking.curvature_inv_m,
@@ -3451,12 +3568,25 @@ class MissionCore:
             elif released_:
                 trackers[ms.phase].restart_speed_slew(0.0)
                 requested_speed = 0.0
-        if (
+        # K1 (docs/plans/2026-11-13-k1-near-loose-arrival.md 2.1): on the near re-observation leg the narrow bounds,
+        # with --near-observe-arrival; without the option these are OBSERVE_ARRIVAL_M / _YAW_RAD and nothing is written
+        loose_m_, loose_rad_, loose_src_ = (self.near_loose_bounds(t) if ms.phase == "observe"
+                                            else (OBSERVE_ARRIVAL_M, OBSERVE_ARRIVAL_YAW_RAD, "common"))
+        loose_stand_ = (
             ms.phase == "observe" and tracking.status == "tracking" and self.observe_backoff is None
             and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12
             and (slam["stop_now"] if slam is not None else abs(signed_speed) < 0.01)
-            and tracking.position_error_m <= OBSERVE_ARRIVAL_M
-            and abs(tracking.yaw_error_rad) <= OBSERVE_ARRIVAL_YAW_RAD
+        )
+        if (
+            loose_src_ == "narrow" and loose_stand_
+            and tracking.position_error_m <= OBSERVE_ARRIVAL_M and abs(tracking.yaw_error_rad) <= OBSERVE_ARRIVAL_YAW_RAD
+            and not (tracking.position_error_m <= loose_m_ and abs(tracking.yaw_error_rad) <= loose_rad_)
+        ):
+            self.near_loose_event(t, "blocked_arrival", tracking, rear)  # K1 2.2 (a)
+        if (
+            loose_stand_
+            and tracking.position_error_m <= loose_m_
+            and abs(tracking.yaw_error_rad) <= loose_rad_
         ):
             # The tracker stops at a path end it missed sideways and never
             # arrives (L3c v38 seed 3: 6.1 cm off an arc's end). An
@@ -3509,6 +3639,12 @@ class MissionCore:
                 obstacle["force_replan"] = ms.phase
             tracking = replace(tracking, status="tracking", speed_mps=0.0)
             requested_speed = 0.0
+        if state.get("near_loose_open") is not None or state.get("near_loose_pending") is not None:
+            # K1 2.2, after a backoff's end was turned back into tracking: the stand goes on while the leg stands at
+            # its end (stop detection aside: C2's wait spans it)
+            stand_on_ = (ms.phase == "observe" and tracking.status == "tracking"
+                         and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12)
+            self.near_loose_close(t, tracking, loose_src_, stand_on_)
         self._command_curvature = float(curvature)  # the exit-prefix watch's commanded stop arc (plan D2)
         return SimpleNamespace(requested_speed=requested_speed, curvature=curvature, tracking=tracking, rear=rear,
                                dwell_hold=dwell_hold, dwell_standing=dwell_standing, safety_hold=safety_hold)
@@ -3545,6 +3681,8 @@ class MissionCore:
         if state.get("near_capture", {}).get("status") == "pending":
             # No silent fallback to the far estimate (v3.6).
             state["near_capture"]["status"] = "failed"
+            if state.get("near_loose_pending") is not None:  # K1 2.2: before the run ends on it
+                self.near_loose_settle(t, "failed", "observe_failed")
             require(
                 False,
                 f"near_capture_failed:{attempt['retry_reason']}",
@@ -4895,6 +5033,8 @@ class MissionCore:
                         ],
                         near_error=state["perception"]["perception_error"],
                     )
+                    if state.get("near_loose_pending") is not None:  # K1 2.2
+                        self.near_loose_settle(t, "done", "accepted")
                     # C3 (plan 2026-10-27 T2): the follower stops at the second capture's gap first (off: no change).
                     self.second_near_split(t, rear, straight, approach_config)
                     if realign_active():
@@ -10148,6 +10288,8 @@ class MissionCore:
         transition = self.transition
         state["near_tracking"]["realigns"] = state["near_tracking"].get("realigns", 0) + 1
         state["near_capture"]["refused_attempt"] = attempt_
+        if state.get("near_loose_pending") is not None:  # K1 2.2: before the capture record moves away
+            self.near_loose_settle(now_s, "realign_refused", "start_near_realign")
         state.setdefault("near_capture_refused", []).append(json.loads(record_json(state.pop("near_capture"))))
         record_ = {"time_s": now_s, "refused_attempt": attempt_, "installs": [], "end": None}
         state["near_tracking"]["realign"] = record_
