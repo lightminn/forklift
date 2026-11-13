@@ -82,6 +82,20 @@ def test_a_step_arms_to_ready_steps_and_disarms(bench):
     assert bench.state.mode == Mode.DISARMED and rows(bench, "cleanup")[-1]["confirmed"]
 
 
+def test_the_step_is_accepted_by_any_of_its_seqs_when_a_state_skips_the_first():
+    """ws1 19006: under load two DRIVEs land between STATEs and no STATE names the step's first seq (STATE carries
+    only the last received seq). The acceptance is the first STATE naming any seq the step hold sent."""
+    from types import SimpleNamespace as NS
+
+    def smp(seq, us, host):
+        return NS(state=NS(last_rx_seq=seq, mcu_time_us=us), host_ns=host)
+
+    samples = [smp(3, 1000, 10), smp(4, 2000, 20), smp(6, 3000, 30), smp(7, 4000, 40)]
+    assert bringup.mcu_time_of_acceptance(samples, [5, 6, 7]) == (3000, 30, 6)
+    assert bringup.mcu_time_of_acceptance(samples, [8, 9]) == (None, None, None)
+    assert bringup.mcu_time_of_acceptance(samples, []) == (None, None, None)
+
+
 def test_a_target_over_the_cap_is_refused_before_anything_moves(bench):
     session = bringup.Session(bench, 1.0)
     session.arm(2.0)
