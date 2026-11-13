@@ -341,6 +341,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 - 단계마다 `artifacts/` 경로와 합격·멈춤을 총괄에 보고한다.
 - 실측값(G, 영점, `duty_sign`, 정지 시간·거리)은 계획 5절 표가 가리키는 정본 파일에만 적는다.
 - 끝난 산출물의 보관은 저장소 규칙(CONTRIBUTING 7절)을 따른다.
+- 메모(총괄 2026-11-14): Isaac 런처(`riib_scene`·`isaac_live`)는 K1 승격(#499)으로 near-end-stand 가 켜져 있으면 `--near-observe-arrival 0.05,0.05` 가 기본이다(러너 기본은 끔). 실차 런치 설정에 같은 값을 쓸지는 첫 주행 뒤에 정한다.
 
 ## 11. 다음 PCB 판 요구 사항 (사용자 결정 2026-11-12)
 
