@@ -152,27 +152,22 @@ class RealSenseSource:
 
     def stop(self) -> None:
         """Stop and close whatever may have been reached -- including a call interrupted inside it, whose effect is
-        unknown. A step that fails keeps its state, so a later ``stop`` tries it again. The SDK's callbacks have
-        ended when ``stop`` returns."""
+        unknown. A failure never clears a state (a failed stop is no evidence that nothing streams; the SDK cannot be
+        asked): the error is raised, close is not tried under a possibly live stream, and a later ``stop`` tries
+        again. The SDK's callbacks have ended when ``stop`` returns without an error."""
         errors = []
         if self.start_state in ("calling", "done"):
             try:
                 self.motion.stop()
                 self.start_state = None
             except RuntimeError as e:
-                if self.start_state == "calling":
-                    self.start_state = None  # it never started streaming: nothing to stop
-                else:
-                    errors.append(f"stop: {e}")
+                errors.append(f"stop ({self.start_state}): {e}")
         if self.open_state in ("calling", "done") and self.start_state in (None, "failed"):  # never under a live stream
             try:
                 self.motion.close()
                 self.open_state = None
             except RuntimeError as e:
-                if self.open_state == "calling":
-                    self.open_state = None
-                else:
-                    errors.append(f"close: {e}")
+                errors.append(f"close ({self.open_state}): {e}")
         if errors:
             raise RuntimeError("; ".join(errors))
 

@@ -498,3 +498,19 @@ def test_a_failed_stop_keeps_its_state_and_is_retried():
     src.stop()
     assert not motion.streaming and motion.events[-1] == ("close",)
 
+
+def test_a_failed_stop_after_an_interrupted_start_is_not_taken_as_never_started():
+    """Codex re-review 4: interrupt inside start, then a stop error -- the state must survive for the retry."""
+    motion = StreamingSensor("Motion Module", [FakeProfile("stream.gyro", 400), FakeProfile("stream.accel", 200)])
+    src = tool.RealSenseSource(gyro_hz=400, accel_hz=200, global_time=False, rs=fake_rs(motion))
+    with pytest.raises(KeyboardInterrupt):
+        src.start(lambda *a: None)
+    real_stop = motion.stop
+    motion.stop = lambda: (_ for _ in ()).throw(RuntimeError("usb busy"))
+    with pytest.raises(RuntimeError, match="usb busy"):
+        src.stop()
+    assert motion.streaming and ("close",) not in motion.events
+    motion.stop = real_stop
+    src.stop()
+    assert not motion.streaming and motion.events[-2:] == [("stop",), ("close",)]
+
