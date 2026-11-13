@@ -1,4 +1,4 @@
-From 49a751df659d2b7e203eb0808818ed8964f6066a Mon Sep 17 00:00:00 2001
+From be925600fceedd249246960d9da4332655aca094 Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 18:05:26 +0900
 Subject: [PATCH 4/4] forklift: S1, redundant keyframes kept only temporarily
@@ -20,18 +20,18 @@ contract, except running, last and new scans; one whose neighbours would not sta
 it (breadth-first check) is promoted to permanent and recorded. The marks live outside the Mapper,
 belong to the mapper that initialized its sensor manager (another mapper using them ends the node)
 and are cleared by that mapper's Initialize and Reset only, not by another's, such as a map read
-into a temporary mapper. The S1 refusal of 0002 is lifted. The trace gains set_value and the S1
+into a temporary mapper; the owner is read and written under one lock. The S1 refusal of 0002 is lifted. The trace gains set_value and the S1
 counts, the near node's id, distance, heading difference and the response. gtests: the near
-permanent node, due nodes, the disconnect check and its breadth-first order.
+permanent node, due nodes, the disconnect check and its breadth-first order, and only the owner ending the state.
 ---
- .../include/karto_sdk/ForkliftPatch.h         | 101 ++++++++
- lib/karto_sdk/src/ForkliftPatch.cpp           |  48 +++-
- lib/karto_sdk/src/Mapper.cpp                  | 219 ++++++++++++++++++
- test/forklift_patch_test.cpp                  |  61 +++++
- 4 files changed, 423 insertions(+), 6 deletions(-)
+ .../include/karto_sdk/ForkliftPatch.h         | 106 +++++++++
+ lib/karto_sdk/src/ForkliftPatch.cpp           |  77 ++++++-
+ lib/karto_sdk/src/Mapper.cpp                  | 218 ++++++++++++++++++
+ test/forklift_patch_test.cpp                  |  74 ++++++
+ 4 files changed, 469 insertions(+), 6 deletions(-)
 
 diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
-index d23d8cf..b300844 100644
+index d23d8cf..754f987 100644
 --- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 +++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 @@ -9,8 +9,10 @@
@@ -45,7 +45,7 @@ index d23d8cf..b300844 100644
  #include <functional>
  #include <limits>
  #include <map>
-@@ -155,6 +157,103 @@ int oldest_id(const NodeMap & nodes)
+@@ -155,6 +157,108 @@ int oldest_id(const NodeMap & nodes)
    return best;
  }
  
@@ -69,6 +69,11 @@ index d23d8cf..b300844 100644
 +S1State & s1_state();
 +// The state, for its owner mapper only: another mapper using S1 ends the node (one mapping node per process).
 +S1State & s1_owned_by(const void * mapper);
++// The owner's sensor manager generation begins (cleared, owned by `mapper`) or ends (cleared, unowned -- only when
++// `mapper` owns it; another mapper's reset or destruction leaves the state alone). The owner is read and written
++// under one lock: a temporary mapper can be destroyed on a service thread while the owner initializes (Codex review 6).
++void s1_begin(const void * mapper);
++void s1_end(const void * mapper);
 +// True for a live temporary node (never when S1 is off).
 +bool s1_temporary(int id);
 +
@@ -149,7 +154,7 @@ index d23d8cf..b300844 100644
  // True when the trace is on; a timer or a counter does nothing (not even read a clock) when it is off.
  bool tracing();
  
-@@ -162,6 +261,8 @@ bool tracing();
+@@ -162,6 +266,8 @@ bool tracing();
  void begin_scan();
  void add_time(const char * name, double seconds);
  void add_count(const char * name, std::int64_t n);
@@ -159,7 +164,7 @@ index d23d8cf..b300844 100644
  void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s);
  // A separate record for a map regeneration (updateMap): its lock wait and its time.
 diff --git a/lib/karto_sdk/src/ForkliftPatch.cpp b/lib/karto_sdk/src/ForkliftPatch.cpp
-index 3fc93a0..251947b 100644
+index 3fc93a0..7aacc9c 100644
 --- a/lib/karto_sdk/src/ForkliftPatch.cpp
 +++ b/lib/karto_sdk/src/ForkliftPatch.cpp
 @@ -25,6 +25,7 @@ struct Record
@@ -184,7 +189,7 @@ index 3fc93a0..251947b 100644
        // at exit the buffered lines are written by TraceState's destructor alone: TraceState is created after this
        // configuration, so it is destroyed before it
        return c;
-@@ -224,6 +220,31 @@ void refuse_unless_fresh_sync_mapping(const char * where)
+@@ -224,6 +220,60 @@ void refuse_unless_fresh_sync_mapping(const char * where)
    }
  }
  
@@ -194,10 +199,39 @@ index 3fc93a0..251947b 100644
 +  return s;
 +}
 +
++namespace
++{
++std::mutex & s1_owner_mutex()
++{
++  static std::mutex m;
++  return m;
++}
++}  // namespace
++
++void s1_begin(const void * mapper)
++{
++  std::lock_guard<std::mutex> lock(s1_owner_mutex());
++  s1_state() = S1State();
++  s1_state().owner = mapper;
++}
++
++void s1_end(const void * mapper)
++{
++  std::lock_guard<std::mutex> lock(s1_owner_mutex());
++  if (s1_state().owner == mapper) {
++    s1_state() = S1State();
++  }
++}
++
 +S1State & s1_owned_by(const void * mapper)
 +{
 +  S1State & st = s1_state();
-+  if (st.owner != mapper) {
++  const void * owner;
++  {
++    std::lock_guard<std::mutex> lock(s1_owner_mutex());
++    owner = st.owner;
++  }
++  if (owner != mapper) {
 +    std::fprintf(stderr, "forklift_slam_patch abort: S1 used by a mapper that does not own its marks\n");
 +    std::fflush(stderr);
 +    std::abort();
@@ -216,7 +250,7 @@ index 3fc93a0..251947b 100644
  bool tracing()
  {
    return !config().trace.empty();
-@@ -265,6 +286,18 @@ void add_count(const char * name, std::int64_t n)
+@@ -265,6 +315,18 @@ void add_count(const char * name, std::int64_t n)
    }
  }
  
@@ -235,7 +269,7 @@ index 3fc93a0..251947b 100644
  void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
  {
    if (!tracing()) {
-@@ -287,6 +320,9 @@ void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
+@@ -287,6 +349,9 @@ void end_scan(bool processed, int state_id, double stamp_s, double lock_wait_s)
    for (const auto & kv : s.current.counts) {
      line << ",\"" << json_escape(kv.first) << "\":" << kv.second;
    }
@@ -246,7 +280,7 @@ index 3fc93a0..251947b 100644
    s.current.open = false;
    // only the processed keyframes are kept (a skipped scan never reaches the graph)
 diff --git a/lib/karto_sdk/src/Mapper.cpp b/lib/karto_sdk/src/Mapper.cpp
-index 96ebea5..1780d41 100644
+index 96ebea5..5b63720 100644
 --- a/lib/karto_sdk/src/Mapper.cpp
 +++ b/lib/karto_sdk/src/Mapper.cpp
 @@ -1437,6 +1437,127 @@ Vertex<LocalizedRangeScan> * MapperGraph::AddVertex(LocalizedRangeScan * pScan)
@@ -408,32 +442,31 @@ index 96ebea5..1780d41 100644
  
      Pose2 candidateScanPose = pCandidateScan->GetReferencePose(
        m_pMapper->m_pUseScanBarycenter->GetValue());
-@@ -2723,6 +2861,12 @@ void Mapper::Initialize(kt_double rangeThreshold)
+@@ -2723,6 +2861,11 @@ void Mapper::Initialize(kt_double rangeThreshold)
    if (m_Initialized) {
      return;
    }
 +  // S1's marks name state ids of one sensor manager generation of one mapper: a new one starts them again (Codex
 +  // review 4 P2-2), and this mapper becomes their owner
 +  if (forklift::config().s1 && !m_Deserialized) {
-+    forklift::s1_state() = forklift::S1State();
-+    forklift::s1_state().owner = this;
++    forklift::s1_begin(this);
 +  }
    // create sequential scan and loop matcher, update if deserialized
  
    if (m_pSequentialScanMatcher) {
-@@ -2770,6 +2914,11 @@ void Mapper::LoadFromFile(const std::string & filename)
+@@ -2770,6 +2913,11 @@ void Mapper::LoadFromFile(const std::string & filename)
  
  void Mapper::Reset()
  {
-+  if (forklift::config().s1 && forklift::s1_state().owner == this) {
++  if (forklift::config().s1) {
 +    // the ids the marks name are about to go (Codex review 4 P2-2); another mapper's reset or destruction, such as a
 +    // map being read into a temporary one, leaves them alone (Codex review 5 P2-2)
-+    forklift::s1_state() = forklift::S1State();
++    forklift::s1_end(this);
 +  }
    if (m_pSequentialScanMatcher) {
      delete m_pSequentialScanMatcher;
      m_pSequentialScanMatcher = NULL;
-@@ -2856,6 +3005,75 @@ void forklift_delete_older(Mapper * pMapper, LocalizedRangeScan * pScan)
+@@ -2856,6 +3004,75 @@ void forklift_delete_older(Mapper * pMapper, LocalizedRangeScan * pScan)
      }
    }
  }
@@ -509,7 +542,7 @@ index 96ebea5..1780d41 100644
  }  // namespace
  
  kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
-@@ -2930,6 +3148,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
+@@ -2930,6 +3147,7 @@ kt_bool Mapper::Process(LocalizedRangeScan * pScan, Matrix3 * covariance)
  
      m_pMapperSensorManager->SetLastScan(pScan);
      forklift_delete_older(this, pScan);
@@ -518,10 +551,10 @@ index 96ebea5..1780d41 100644
      return true;
    }
 diff --git a/test/forklift_patch_test.cpp b/test/forklift_patch_test.cpp
-index 8f1eba6..094ff2d 100644
+index 8f1eba6..08e94a4 100644
 --- a/test/forklift_patch_test.cpp
 +++ b/test/forklift_patch_test.cpp
-@@ -169,3 +169,64 @@ TEST(forklift_trace, a_trace_ends_with_its_end_record_at_exit)
+@@ -169,3 +169,77 @@ TEST(forklift_trace, a_trace_ends_with_its_end_record_at_exit)
    EXPECT_NE(first.find("\"state_id\":7"), std::string::npos);
    EXPECT_EQ(last, "{\"kind\":\"end\",\"flushes\":1}");
  }
@@ -585,6 +618,19 @@ index 8f1eba6..094ff2d 100644
 +  auto adj = [&](int id) {visited++; return g[id];};
 +  EXPECT_TRUE(karto::forklift::still_connected(0, g[0], adj));
 +  EXPECT_LE(visited, 3);
++}
++
++TEST(forklift_s1, only_the_owner_ends_the_state)
++{
++  int a = 0, b = 0;
++  karto::forklift::s1_begin(&a);
++  karto::forklift::s1_state().temporary[5] = karto::forklift::S1Mark{1};
++  karto::forklift::s1_end(&b);   // another mapper, e.g. a map read into a temporary one
++  EXPECT_EQ(karto::forklift::s1_owned_by(&a).temporary.count(5), 1u);
++  EXPECT_DEATH(karto::forklift::s1_owned_by(&b), "does not own");
++  karto::forklift::s1_end(&a);
++  EXPECT_EQ(karto::forklift::s1_state().temporary.size(), 0u);
++  EXPECT_EQ(karto::forklift::s1_state().owner, nullptr);
 +}
 -- 
 2.56.0
