@@ -3,7 +3,8 @@ offset at lift, split records-only by pose transforms at the same time and the s
 
     python seat_decompose.py RAW_ROOT [RAW_ROOT ...] --out DECOMP.json [--summary SUMMARY.md]
 
-Each RAW_ROOT holds <name>/run/{result.json, slam_control.npy} copies; <name> is <prefix>_<arm>_<scene>_s<seed>, or
+Each RAW_ROOT holds <name>/run/{result.json, slam_control.npy} copies (the output keeps only RAW_ROOT's own name, e.g.
+budget_0092bcf7, so the later tools resolve it under their --raw-root); <name> is <prefix>_<arm>_<scene>_s<seed>, or
 with _rep (the 58-run check's registered determinism repeat) or _can (the diagnosis batch's canary of a 58-run B0
 run). Those two re-run a seed already in the data: they are decomposed and compared with their original (largest term
 difference), and left out of the tallies so no seed counts twice. lat_r_<name> is the resubmission of an invalid
@@ -439,7 +440,7 @@ def collect(roots: list[Path]) -> list[dict]:
         for folder in sorted(p for p in root.iterdir() if (p / "run" / "result.json").is_file()):
             result, sc = load_run(folder / "run")
             d = decompose(result, sc)
-            d.update(name=folder.name, root=str(root), **parse_name(folder.name))
+            d.update(name=folder.name, root=root.name, **parse_name(folder.name))  # the root's name, not a local path
             d["judgement"] = judge(d)
             runs.append(d)
     names = {r["name"] for r in runs}

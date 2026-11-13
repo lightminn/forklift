@@ -1,7 +1,7 @@
 """Baseline fragility priority 1, descriptive: where the odometry's heading error over the held capture -> lift leg
 comes from (plan 3.2, the L/C route).
 
-    python odometry_split.py DECOMP.json --out SPLIT.json
+    python odometry_split.py DECOMP.json --raw-root DIR --out SPLIT.json
 
 DECOMP.json is seat_decompose.py's output; each run's folder must also hold slam_log.npz (joint_stamps_s,
 wheel_angles_rad, wheel_increments_rad, steering_rad, steering_measured_rad; the same clock as slam_control). The
@@ -15,10 +15,13 @@ Per run that reached lift (not held, not a duplicate), from the joint sample at 
   time gives the quantisation's share of the heading change (recorded - ideal, wheels, steering);
 - ideal - truth is the kinematic model's heading error against the plant (Isaac), which the quantisation does not
   cause.
-Pooled over the runs, the plant's heading change is compared with the kinematic prediction delayed by `lag` ticks and
-scaled by `gain` (grid search on the median run residual), fitted on all runs and with each scene (and the B0 arm)
-held out. This is a descriptive check of one hypothesis (a steering response lag and a rotation gain), not a plant
-identification. Reads only.
+Pooled over the runs, a curvature-lag model is fitted: the plant's heading change per tick is taken as
+gain * (this tick's rolling distance) * (the kinematic curvature `lag` ticks earlier), i.e. the curvature from the
+measured joint angles reaches the chassis late while the distance does not. (gain and lag) are chosen on a grid by the
+median over runs of |the run's end-to-end net-turn residual| -- not a per-tick fit -- on all runs and with each scene
+(and the B0 arm) held out. The steering input is the actual joint angle, so a lag here is not the command -> joint
+lag. This is a descriptive check of one hypothesis, not a plant identification; the best lag is not a measured delay.
+Reads only.
 """
 
 from __future__ import annotations
@@ -128,16 +131,26 @@ def lag_gain_residual(series: list[dict], lag: int, gain: float) -> np.ndarray:
     return np.array(out)
 
 
+def tick_gain(series: list[dict]) -> dict:
+    """Pooled per-tick least squares over the windows: plant heading change = g * kinematic heading change (no lag).
+    1 - g is how much less the plant turns than the kinematics, tick by tick."""
+    kin = np.concatenate([(s["ds"] * s["k"])[s["history"]:] for s in series])
+    true = np.concatenate([s["true_dyaw"][s["history"]:] for s in series])
+    g = float(np.dot(kin, true) / np.dot(kin, kin))
+    return {"gain": g, "r2": float(1 - ((true - g * kin) ** 2).sum() / ((true - true.mean()) ** 2).sum()),
+            "ticks": int(len(kin))}
+
+
 def best_fit(series: list[dict]) -> dict:
     best = min(((lag, gain) for lag in LAGS for gain in GAINS),
                key=lambda p: float(np.median(np.abs(lag_gain_residual(series, *p)))))
     return {"lag_ticks": best[0], "gain": float(best[1])}
 
 
-def analyse(runs: list[dict]) -> dict:
+def analyse(runs: list[dict], raw_root: Path) -> dict:
     per_run, series, labels = [], [], []
     for r in runs:
-        run = Path(r["root"]) / r["name"] / "run"
+        run = raw_root / r["root"] / r["name"] / "run"
         result = json.loads((run / "result.json").read_text())
         sc = np.load(run / "slam_control.npy")
         with np.load(run / "slam_log.npz") as log:
@@ -172,18 +185,19 @@ def analyse(runs: list[dict]) -> dict:
         "kinematic_minus_truth_abs_median_rad": med("kinematic_minus_truth_yaw_rad"),
         "kinematic_minus_truth_abs_max_rad": float(np.abs(plain).max()),
         "corr_dpsi_kinematic_minus_truth": float(np.corrcoef([p["dpsi_rad"] for p in per_run], plain)[0, 1]),
-        "lag_gain_fits": fits, "runs": per_run,
+        "lag_gain_fits": fits, "tick_gain": tick_gain(series), "runs": per_run,
     }
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("decomp", type=Path)
+    ap.add_argument("--raw-root", type=Path, required=True, help="the folder holding the copies named in DECOMP.json")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
     runs = [r for r in json.loads(args.decomp.read_text())["runs"]
             if r["judgement"]["status"] in ("judged", "not_selected") and r.get("bias_course")]
-    args.out.write_text(json.dumps(analyse(runs), indent=1, sort_keys=True))
+    args.out.write_text(json.dumps(analyse(runs, args.raw_root), indent=1, sort_keys=True))
     return 0
 
 

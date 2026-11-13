@@ -75,7 +75,7 @@
     "seat_minus_S": 2.0774438590914768e-07,
     "seat_minus_leaves": 2.0774438590220878e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.016163965310253207,
    "seed": 0,
@@ -170,7 +170,7 @@
     "seat_minus_S": 1.9926970674238875e-08,
     "seat_minus_leaves": 1.9926970674238875e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.020041583273641108,
    "seed": 0,
@@ -252,7 +252,7 @@
     "seat_minus_S": 3.13685500005767e-08,
     "seat_minus_leaves": 3.13685500005767e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.008303868979783455,
    "seed": 1,
@@ -334,7 +334,7 @@
     "seat_minus_S": 2.542310243540402e-07,
     "seat_minus_leaves": 2.542310243609791e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.0021519633901493675,
    "seed": 2,
@@ -416,7 +416,7 @@
     "seat_minus_S": 1.8614447063608486e-08,
     "seat_minus_leaves": 1.8614447067077933e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.003968523746956967,
    "seed": 0,
@@ -501,7 +501,7 @@
     "seat_minus_S": 1.8614447063608486e-08,
     "seat_minus_leaves": 1.8614447067077933e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.003968523746956967,
    "seed": 0,
@@ -583,7 +583,7 @@
     "seat_minus_S": 6.938893903907228e-18,
     "seat_minus_leaves": 0.0
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.0008342347098901359,
    "seed": 1,
@@ -678,7 +678,7 @@
     "seat_minus_S": 3.723409958827917e-09,
     "seat_minus_leaves": 3.72340995535847e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.012951404668782033,
    "seed": 2,
@@ -760,7 +760,7 @@
     "seat_minus_S": -1.0710864184471092e-07,
     "seat_minus_leaves": -1.0710864184471092e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.0016819038230167782,
    "seed": 0,
@@ -845,7 +845,7 @@
     "seat_minus_S": -1.0710864184471092e-07,
     "seat_minus_leaves": -1.0710864184471092e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.0016819038230167782,
    "seed": 0,
@@ -927,7 +927,7 @@
     "seat_minus_S": -1.1737458330274286e-07,
     "seat_minus_leaves": -1.1737458332702899e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.007885018374895802,
    "seed": 1,
@@ -1009,7 +1009,7 @@
     "seat_minus_S": 0.0,
     "seat_minus_leaves": 2.0816681711721685e-17
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.0005571285701951312,
    "seed": 2,
@@ -1091,7 +1091,7 @@
     "seat_minus_S": 2.3824199514230204e-07,
     "seat_minus_leaves": 2.3824199514230204e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.008396722111896387,
    "seed": 0,
@@ -1186,7 +1186,7 @@
     "seat_minus_S": 2.381200760945279e-07,
     "seat_minus_leaves": 2.381200760945279e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.04702266936015571,
    "seed": 1,
@@ -1218,7 +1218,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seed": 2
   },
@@ -1285,7 +1285,7 @@
     "seat_minus_S": 3.5294599534663185e-09,
     "seat_minus_leaves": 3.5294599430579776e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.009336350080615459,
    "seed": 0,
@@ -1367,7 +1367,7 @@
     "seat_minus_S": 1.827649289548594e-08,
     "seat_minus_leaves": 1.8276492888547047e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.007789205454515606,
    "seed": 1,
@@ -1449,7 +1449,7 @@
     "seat_minus_S": -3.3877407969173934e-08,
     "seat_minus_leaves": -3.3877407969173934e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.007597201987268015,
    "seed": 2,
@@ -1531,7 +1531,7 @@
     "seat_minus_S": -9.667212994002305e-08,
     "seat_minus_leaves": -9.667212994002305e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.0013030147542627268,
    "seed": 0,
@@ -1613,7 +1613,7 @@
     "seat_minus_S": 1.0159636743001244e-08,
     "seat_minus_leaves": 1.0159636758613755e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.007544401761406361,
    "seed": 1,
@@ -1708,7 +1708,7 @@
     "seat_minus_S": -1.0502092445685562e-08,
     "seat_minus_leaves": -1.0502092452624456e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.0113560533890949,
    "seed": 2,
@@ -1803,7 +1803,7 @@
     "seat_minus_S": -4.3174527092348924e-08,
     "seat_minus_leaves": -4.317452709928782e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.033064706564467,
    "seed": 0,
@@ -1885,7 +1885,7 @@
     "seat_minus_S": -3.0878077872387166e-16,
     "seat_minus_leaves": -3.0531133177191805e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.0017273243656943278,
    "seed": 1,
@@ -1967,7 +1967,7 @@
     "seat_minus_S": -1.7391032499508574e-08,
     "seat_minus_leaves": -1.7391032499508574e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.00942973300944883,
    "seed": 2,
@@ -2049,7 +2049,7 @@
     "seat_minus_S": -2.308187050173438e-08,
     "seat_minus_leaves": -2.3081870494795487e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.0051089657569109125,
    "seed": 0,
@@ -2131,7 +2131,7 @@
     "seat_minus_S": -7.820704910066478e-09,
     "seat_minus_leaves": -7.820704910066478e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.006729500939584784,
    "seed": 1,
@@ -2213,7 +2213,7 @@
     "seat_minus_S": -3.10661038560589e-09,
     "seat_minus_leaves": -3.10661038560589e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.0007881547150397142,
    "seed": 2,
@@ -2309,7 +2309,7 @@
     "seat_minus_S": 1.1720861320396736e-07,
     "seat_minus_leaves": 1.1720861319008957e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.031154849003732138,
    "seed": 0,
@@ -2341,7 +2341,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seed": 1
   },
@@ -2408,7 +2408,7 @@
     "seat_minus_S": 5.551115123125783e-17,
     "seat_minus_leaves": 2.949029909160572e-17
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.005157122423297578,
    "seed": 2,
@@ -2503,7 +2503,7 @@
     "seat_minus_S": 2.5724694269549375e-07,
     "seat_minus_leaves": 2.5724694270243265e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.014707333012028204,
    "seed": 0,
@@ -2585,7 +2585,7 @@
     "seat_minus_S": 3.677613769070831e-16,
     "seat_minus_leaves": 3.8163916471489756e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.008380851847094181,
    "seed": 1,
@@ -2679,7 +2679,7 @@
     "seat_minus_S": 2.2121587387943786e-07,
     "seat_minus_leaves": 2.2121587386902952e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.014816672154516285,
    "seed": 2,
@@ -2776,7 +2776,7 @@
     "seat_minus_S": 2.2340099763151766e-08,
     "seat_minus_leaves": 2.234009975968232e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": -0.010324951318927446,
    "seed": 0,
@@ -2858,7 +2858,7 @@
     "seat_minus_S": 2.233536356907595e-08,
     "seat_minus_leaves": 2.2335363576014844e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.006462795671249685,
    "seed": 1,
@@ -2940,7 +2940,7 @@
     "seat_minus_S": 7.445625532787048e-09,
     "seat_minus_leaves": 7.445625525848154e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.002095527074629941,
    "seed": 2,
@@ -3034,7 +3034,7 @@
     "seat_minus_S": -9.636986861294439e-08,
     "seat_minus_leaves": -9.63698685990666e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.014407778517010417,
    "seed": 0,
@@ -3128,7 +3128,7 @@
     "seat_minus_S": 1.1382622039368684e-08,
     "seat_minus_leaves": 1.1382622094879835e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.052720306473800965,
    "seed": 1,
@@ -3210,7 +3210,7 @@
     "seat_minus_S": -1.1748396402944117e-07,
     "seat_minus_leaves": -1.174839639947467e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.00913513328169499,
    "seed": 2,
@@ -3305,7 +3305,7 @@
     "seat_minus_S": -1.942890293094024e-16,
     "seat_minus_leaves": -1.8735013540549517e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.03329857454198519,
    "seed": 1,
@@ -3387,7 +3387,7 @@
     "seat_minus_S": 2.7484001484043286e-07,
     "seat_minus_leaves": 2.7484001483349396e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.009279539199011162,
    "seed": 2,
@@ -3469,7 +3469,7 @@
     "seat_minus_S": -6.021338530559639e-08,
     "seat_minus_leaves": -6.021338530559639e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.001457672503708013,
    "seed": 0,
@@ -3554,7 +3554,7 @@
     "seat_minus_S": -6.021338530559639e-08,
     "seat_minus_leaves": -6.021338530559639e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.001457672503708013,
    "seed": 0,
@@ -3636,7 +3636,7 @@
     "seat_minus_S": -6.021338530559639e-08,
     "seat_minus_leaves": -6.021338530559639e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.001457672503708013,
    "seed": 1,
@@ -3718,7 +3718,7 @@
     "seat_minus_S": -4.399147275624404e-09,
     "seat_minus_leaves": -4.3991472686855104e-09
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seat_lateral_m": 0.0010452321827729774,
    "seed": 2,
@@ -3813,7 +3813,7 @@
     "seat_minus_S": 1.1734641289229408e-07,
     "seat_minus_leaves": 1.1734641286453851e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.011806483685778024,
    "seed": 0,
@@ -3898,7 +3898,7 @@
     "seat_minus_S": 1.1734641289229408e-07,
     "seat_minus_leaves": 1.1734641286453851e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.011806483685778024,
    "seed": 0,
@@ -3980,7 +3980,7 @@
     "seat_minus_S": 2.7755575615628914e-17,
     "seat_minus_leaves": 2.0816681711721685e-17
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.002659305429687675,
    "seed": 1,
@@ -4062,7 +4062,7 @@
     "seat_minus_S": -1.0286856699792679e-08,
     "seat_minus_leaves": -1.0286856713670467e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.0028281436793884673,
    "seed": 2,
@@ -4094,7 +4094,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seed": 0
   },
@@ -4111,7 +4111,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seed": 1
   },
@@ -4128,7 +4128,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "aisle_rack",
    "seed": 2
   },
@@ -4145,7 +4145,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seed": 0
   },
@@ -4162,7 +4162,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seed": 1
   },
@@ -4179,7 +4179,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "line_2",
    "seed": 2
   },
@@ -4196,7 +4196,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seed": 0
   },
@@ -4213,7 +4213,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seed": 1
   },
@@ -4230,7 +4230,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/budget_0092bcf7",
+   "root": "budget_0092bcf7",
    "scene": "random_1",
    "seed": 2
   },
@@ -4247,7 +4247,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seed": 11
   },
@@ -4327,7 +4327,7 @@
     "seat_minus_S": 1.9843857928733555e-07,
     "seat_minus_leaves": 1.984385792838661e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.024009074680963423,
    "seed": 12,
@@ -4409,7 +4409,7 @@
     "seat_minus_S": -1.491862189340054e-16,
     "seat_minus_leaves": -1.491862189340054e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.0031070363411523257,
    "seed": 13,
@@ -4504,7 +4504,7 @@
     "seat_minus_S": -1.7986135629477484e-08,
     "seat_minus_leaves": -1.7986135636416378e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.011554327130364264,
    "seed": 14,
@@ -4599,7 +4599,7 @@
     "seat_minus_S": 4.975556740817455e-07,
     "seat_minus_leaves": 4.975556740886844e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.02357321333262157,
    "seed": 15,
@@ -4681,7 +4681,7 @@
     "seat_minus_S": 1.5122635570880005e-08,
     "seat_minus_leaves": 1.5122635569145282e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.007201222784011984,
    "seed": 16,
@@ -4775,7 +4775,7 @@
     "seat_minus_S": -1.6653345369377348e-16,
     "seat_minus_leaves": -1.5959455978986625e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.03377599664339313,
    "seed": 17,
@@ -4870,7 +4870,7 @@
     "seat_minus_S": 2.382560950267565e-07,
     "seat_minus_leaves": 2.382560950267565e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.014231769666484095,
    "seed": 18,
@@ -4955,7 +4955,7 @@
     "seat_minus_S": 2.542310243540402e-07,
     "seat_minus_leaves": 2.542310243609791e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.0021519633901493675,
    "seed": 2,
@@ -5040,7 +5040,7 @@
     "seat_minus_S": -1.0710864184471092e-07,
     "seat_minus_leaves": -1.0710864184471092e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.0016819038230167782,
    "seed": 0,
@@ -5122,7 +5122,7 @@
     "seat_minus_S": 1.0707468039994339e-07,
     "seat_minus_leaves": 1.070746803860656e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.005308659400257348,
    "seed": 10,
@@ -5154,7 +5154,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seed": 3
   },
@@ -5221,7 +5221,7 @@
     "seat_minus_S": 1.0731094451932321e-07,
     "seat_minus_leaves": 1.0731094451932321e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.0076366788778773065,
    "seed": 4,
@@ -5303,7 +5303,7 @@
     "seat_minus_S": -1.0396153243830142e-08,
     "seat_minus_leaves": -1.039615325770793e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.00897914514428852,
    "seed": 5,
@@ -5385,7 +5385,7 @@
     "seat_minus_S": 1.0699428359961516e-07,
     "seat_minus_leaves": 1.0699428359961516e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.005639974774611173,
    "seed": 6,
@@ -5482,7 +5482,7 @@
     "seat_minus_S": -1.120624923411917e-08,
     "seat_minus_leaves": -1.1206249254935852e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.04167728749663069,
    "seed": 7,
@@ -5578,7 +5578,7 @@
     "seat_minus_S": 1.0609430639574313e-08,
     "seat_minus_leaves": 1.0609430629165972e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.016190411906606528,
    "seed": 8,
@@ -5660,7 +5660,7 @@
     "seat_minus_S": -2.0345916867947622e-08,
     "seat_minus_leaves": -2.0345916861008728e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.006134553066322573,
    "seed": 9,
@@ -5742,7 +5742,7 @@
     "seat_minus_S": 2.6849701412895444e-07,
     "seat_minus_leaves": 2.684970141324239e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.00044460180077973005,
    "seed": 11,
@@ -5824,7 +5824,7 @@
     "seat_minus_S": 3.0531133177191805e-16,
     "seat_minus_leaves": 3.0184188481996443e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.004435487665597308,
    "seed": 12,
@@ -5918,7 +5918,7 @@
     "seat_minus_S": -2.7825885012822127e-07,
     "seat_minus_leaves": -2.782588501247518e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.024315214012935016,
    "seed": 13,
@@ -6000,7 +6000,7 @@
     "seat_minus_S": -2.5326962749261384e-16,
     "seat_minus_leaves": -2.5326962749261384e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.005741891015364906,
    "seed": 14,
@@ -6032,7 +6032,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seed": 15
   },
@@ -6111,7 +6111,7 @@
     "seat_minus_S": -2.3824001544811568e-07,
     "seat_minus_leaves": -2.3824001546199347e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.023329723369199407,
    "seed": 16,
@@ -6201,7 +6201,7 @@
     "seat_minus_S": -4.877839830837172e-07,
     "seat_minus_leaves": -4.877839830871866e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.024761503762704164,
    "seed": 17,
@@ -6295,7 +6295,7 @@
     "seat_minus_S": -2.6774206681942636e-07,
     "seat_minus_leaves": -2.6774206681942636e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.012957724502829965,
    "seed": 18,
@@ -6377,7 +6377,7 @@
     "seat_minus_S": 1.2778072513985883e-07,
     "seat_minus_leaves": 1.2778072513985883e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.005328401099697455,
    "seed": 10,
@@ -6459,7 +6459,7 @@
     "seat_minus_S": -2.0435756253878168e-08,
     "seat_minus_leaves": -2.0435756253878168e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.004547241130183399,
    "seed": 3,
@@ -6541,7 +6541,7 @@
     "seat_minus_S": 1.0693909069381391e-07,
     "seat_minus_leaves": 1.0693909066605833e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.005461388543916645,
    "seed": 4,
@@ -6623,7 +6623,7 @@
     "seat_minus_S": -5.551115123125783e-17,
     "seat_minus_leaves": -7.632783294297951e-17
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.0037290381680238627,
    "seed": 5,
@@ -6705,7 +6705,7 @@
     "seat_minus_S": -1.0226072461039237e-08,
     "seat_minus_leaves": -1.022607244716145e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.001442216433796606,
    "seed": 6,
@@ -6787,7 +6787,7 @@
     "seat_minus_S": -1.0354564317083259e-08,
     "seat_minus_leaves": -1.0354564317083259e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.002894607843317437,
    "seed": 7,
@@ -6869,7 +6869,7 @@
     "seat_minus_S": 1.0714568460246099e-07,
     "seat_minus_leaves": 1.0714568456776652e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.002356535973962348,
    "seed": 8,
@@ -6966,7 +6966,7 @@
     "seat_minus_S": -1.066083463452383e-07,
     "seat_minus_leaves": -1.0660834628972715e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.01812029006692792,
    "seed": 9,
@@ -7048,7 +7048,7 @@
     "seat_minus_S": 5.075611420463089e-07,
     "seat_minus_leaves": 5.075611420463089e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.003084613249844062,
    "seed": 11,
@@ -7142,7 +7142,7 @@
     "seat_minus_S": 2.73196095270517e-07,
     "seat_minus_leaves": 2.7319609526357813e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.012074314487464686,
    "seed": 12,
@@ -7238,7 +7238,7 @@
     "seat_minus_S": -2.478649208728645e-07,
     "seat_minus_leaves": -2.478649208728645e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.026415592368339055,
    "seed": 13,
@@ -7332,7 +7332,7 @@
     "seat_minus_S": -1.214306433183765e-16,
     "seat_minus_leaves": -1.214306433183765e-16
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.010628576314377063,
    "seed": 14,
@@ -7427,7 +7427,7 @@
     "seat_minus_S": -5.214413304616139e-07,
     "seat_minus_leaves": -5.21441330454675e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.038925950171475,
    "seed": 15,
@@ -7521,7 +7521,7 @@
     "seat_minus_S": 2.3822372982942874e-07,
     "seat_minus_leaves": 2.3822372982248985e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": -0.016472525757008482,
    "seed": 16,
@@ -7613,7 +7613,7 @@
     "seat_minus_S": 1.4564125610377898e-08,
     "seat_minus_leaves": 1.4564125603439004e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.01864310012723726,
    "seed": 17,
@@ -7695,7 +7695,7 @@
     "seat_minus_S": 1.4298332799006497e-08,
     "seat_minus_leaves": 1.429833279553705e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "aisle_rack",
    "seat_lateral_m": 0.006771874616078002,
    "seed": 18,
@@ -7777,7 +7777,7 @@
     "seat_minus_S": -1.0317534382409121e-08,
     "seat_minus_leaves": -1.0317534382409121e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.003556619665396943,
    "seed": 10,
@@ -7809,7 +7809,7 @@
    "reached_insert": false,
    "reached_lift": false,
    "rerun": false,
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seed": 3
   },
@@ -7876,7 +7876,7 @@
     "seat_minus_S": -1.1742031041928058e-07,
     "seat_minus_leaves": -1.1742031044703616e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.00019665526098824881,
    "seed": 4,
@@ -7958,7 +7958,7 @@
     "seat_minus_S": -9.709680226510642e-08,
     "seat_minus_leaves": -9.709680226510642e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.005476139278676573,
    "seed": 5,
@@ -8040,7 +8040,7 @@
     "seat_minus_S": 1.0469035471860622e-08,
     "seat_minus_leaves": 1.046903549094258e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.007831002938443937,
    "seed": 6,
@@ -8122,7 +8122,7 @@
     "seat_minus_S": 1.0278082412940037e-08,
     "seat_minus_leaves": 1.0278082392123356e-08
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.0022682265446415384,
    "seed": 7,
@@ -8204,7 +8204,7 @@
     "seat_minus_S": 1.1737797009359063e-07,
     "seat_minus_leaves": 1.1737797009359063e-07
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": -0.00558088481043803,
    "seed": 8,
@@ -8298,7 +8298,7 @@
     "seat_minus_S": -2.7755575615628914e-17,
     "seat_minus_leaves": -1.3877787807814457e-17
    },
-   "root": "/home/light/.claude/jobs/2e44f506/tmp/fragility/diag_0092bcf7",
+   "root": "diag_0092bcf7",
    "scene": "random_1",
    "seat_lateral_m": 0.010951421056405175,
    "seed": 9,

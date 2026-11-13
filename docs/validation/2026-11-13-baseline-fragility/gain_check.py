@@ -1,7 +1,8 @@
-"""Baseline fragility priority 1, descriptive: does a rotation-gain error of the odometry (the #332 / #286 H4 axis)
-explain the yaw of the bias change over the capture -> lift leg?
+"""Baseline fragility priority 1, descriptive: does a rotation-gain error of the odometry
+explain the yaw of the bias change over the capture -> lift leg? (#332 measured the held legs' net turn ratio
+odometry/truth; this asks whether one gain carries over.)
 
-    python gain_check.py DECOMP.json --out GAIN.json
+    python gain_check.py DECOMP.json --raw-root DIR --out GAIN.json
 
 DECOMP.json is seat_decompose.py's output (its runs keep root and name, so the raw records are read again). For every
 run that reached lift and was not held or a duplicate, dpsi (the bias change's yaw, est turn - true turn from the
@@ -43,10 +44,10 @@ def r2(y: np.ndarray, pred: np.ndarray) -> float:
     return float(1 - ((y - pred) ** 2).sum() / ((y - y.mean()) ** 2).sum())
 
 
-def analyse(runs: list[dict]) -> dict:
+def analyse(runs: list[dict], raw_root: Path) -> dict:
     X, y, scenes = [], [], []
     for r in runs:
-        run = Path(r["root"]) / r["name"] / "run"
+        run = raw_root / r["root"] / r["name"] / "run"
         result = json.loads((run / "result.json").read_text())
         net, left, right = true_rotation(result, np.load(run / "slam_control.npy"), r["t_lift"])
         X.append([net, left, right])
@@ -75,11 +76,12 @@ def analyse(runs: list[dict]) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("decomp", type=Path)
+    ap.add_argument("--raw-root", type=Path, required=True, help="the folder holding the copies named in DECOMP.json")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
     runs = [r for r in json.loads(args.decomp.read_text())["runs"]
             if r["judgement"]["status"] in ("judged", "not_selected") and r.get("bias_course")]
-    args.out.write_text(json.dumps(analyse(runs), indent=1, sort_keys=True))
+    args.out.write_text(json.dumps(analyse(runs, args.raw_root), indent=1, sort_keys=True))
     return 0
 
 

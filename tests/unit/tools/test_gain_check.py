@@ -27,13 +27,13 @@ def write_run(root: Path, name: str, scene: str, turn: float, k: float) -> dict:
               "observation_attempts": [{"capture_control": {"time_s": 5.0, "truth_rear": [0.0, 0.0, 0.0],
                                                             "control_rear": [0.0, 0.0, 0.0]}}]}
     (run / "result.json").write_text(json.dumps(result))
-    return {"root": str(root), "name": name, "scene": scene, "t_lift": 6.0, "bias_course": {"dpsi_rad": k * turn}}
+    return {"root": root.name, "name": name, "scene": scene, "t_lift": 6.0, "bias_course": {"dpsi_rad": k * turn}}
 
 
 def test_a_true_gain_is_recovered_and_carries_across_scenes(tmp_path):
     runs = [write_run(tmp_path, f"r{i}", ("a", "b", "c")[i % 3], turn, 0.08)
             for i, turn in enumerate((0.05, -0.03, 0.02, -0.06, 0.04, -0.01, 0.07, -0.02, 0.03))]
-    out = G.analyse(runs)
+    out = G.analyse(runs, tmp_path.parent)
     assert out["single_gain"]["k"] == pytest.approx(0.08) and out["single_gain"]["r2"] == pytest.approx(1.0)
     assert out["left_right"]["kL"] == pytest.approx(0.08) and out["left_right"]["kR"] == pytest.approx(0.08)
     assert all(v["r2_on_held_out"] == pytest.approx(1.0) for v in out["scene_held_out"].values())
@@ -46,7 +46,7 @@ def test_unrelated_yaw_errors_give_no_fit(tmp_path):
         r = write_run(tmp_path, f"r{i}", ("a", "b", "c")[i % 3], float(rng.uniform(-0.05, 0.05)), 0.0)
         r["bias_course"]["dpsi_rad"] = float(rng.normal(0, 0.003))
         runs.append(r)
-    out = G.analyse(runs)
+    out = G.analyse(runs, tmp_path.parent)
     assert out["single_gain"]["r2"] < 0.3 and out["n"] == 30
 
 
@@ -59,5 +59,5 @@ def test_the_cli(tmp_path):
             {"name": "x", "judgement": {"status": "held"}}]
     decomp, out = tmp_path / "d.json", tmp_path / "g.json"
     decomp.write_text(json.dumps({"runs": runs}))
-    assert G.main([str(decomp), "--out", str(out)]) == 0
+    assert G.main([str(decomp), "--raw-root", str(tmp_path.parent), "--out", str(out)]) == 0
     assert json.loads(out.read_text())["single_gain"]["k"] == pytest.approx(0.1)
