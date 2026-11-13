@@ -1,64 +1,122 @@
-# slam_toolbox 패치 빌드 설계 — 온라인 SLAM 비교 S3 (2026-11-13)
+# slam_toolbox 패치 빌드 설계 — 온라인 SLAM 비교 S3 (2026-11-13, v2)
 
 계획: [온라인 SLAM keyframe 지연 상한](../plans/2026-11-13-slam-online-bounded.md) 3.3·3.4·5 장(S1 패치 빌드 1). 총괄 결정(S2 뒤): S3 는 C-WM → C → S1 순서로, 셋 모두 패치 빌드와 P0 동등성부터 한다. D 는 S3 결과를 보고 정한다.
 
 ## 1. 이미지
 
 - `deploy/ros2/Dockerfile.slam_patched` → 태그 `forklift/ros2-slam:jazzy-2.8.5-p1-<패치 묶음 해시 8>`.
-- 바탕은 배포 이미지 `forklift/ros2-dev:jazzy` 다. 그 안의 apt 판(`ros-jazzy-slam-toolbox 2.8.5-1noble.20260905`, ceres 2.2.0)을 그대로 두고, 소스 빌드를 `/opt/slam_patched/install` 에 덧씌운다. 같은 ROS·ceres·Eigen·boost 위에서 slam_toolbox 만 다르다.
-- 소스는 GitHub `SteveMacenski/slam_toolbox` 태그 `2.8.5`(커밋 `ec8f7635`)다. 빌드 때 커밋 해시를 단언한다.
-- 패치는 `deploy/ros2/slam_patches/NNNN-*.patch`(`git format-patch`)로 저장소에 두고, 빌드에서 `git am` 한다. 묶음 해시는 패치 파일들의 sha256 이다.
-- 빌드 플래그: slam_toolbox 의 `CMakeLists.txt` 가 `CMAKE_BUILD_TYPE Release` 를 직접 정한다(4 행). 여기에 apt 빌드와 같은 `dpkg-buildflags` 의 CFLAGS·CXXFLAGS·LDFLAGS 를 준다. 부동소수 결과가 apt 판과 같도록 하려는 것이고, 같은지는 동등성(4 절)이 판정한다.
-- 이미지 안 단위 시험(gtest, 패치가 더하는 순수 함수만)은 빌드 단계에서 돌리고, 실패하면 이미지를 만들지 않는다.
+- 바탕은 배포 이미지 `forklift/ros2-dev:jazzy` 다. apt 판(`ros-jazzy-slam-toolbox 2.8.5-1noble.20260905`, ceres 2.2.0)은 그대로 두고, 소스 빌드를 `/opt/slam_patched/install` 에 덧씌운다.
+- 소스: GitHub `SteveMacenski/slam_toolbox` 태그 `2.8.5`(커밋 `ec8f7635`).
+  - 빌드 때 커밋 해시를 단언한다.
+  - ws1 docker 빌드에서 GitHub 에 닿지 않으면, 노트북에서 만든 **git bundle**(해시 확인)을 빌드 문맥으로 넘긴다(tarball 은 `.git` 이 없어 해시 단언·`git am` 이 안 됨, Codex 설계 검토 P3).
+- 패치: `deploy/ros2/slam_patches/NNNN-*.patch`(`git format-patch`)를 `git am` 한다. 묶음 해시는 패치 파일들의 sha256 이다.
+- **같은 Dockerfile 이 두 이미지를 만든다**(빌드 인자 `PATCHES=none|all`):
+  - **U0**: 무패치 소스 빌드. 동등성 실패 원인을 빌드 차이와 패치 차이로 가르려는 것이다(Codex P2).
+  - **P1 이미지**: 패치 묶음.
+- 빌드 플래그: 그대로 colcon 빌드한다. slam_toolbox `CMakeLists.txt` 가 `CMAKE_BUILD_TYPE Release` 를 직접 정한다(4 행, karto 도 7 행).
+  - apt 판과 같은 플래그라는 주장은 하지 않는다(Codex P2). 빌드 로그에 최종 컴파일 명령(`compile_commands.json`)·컴파일러 판·의존성 판을 남긴다.
+  - 같은지는 4 절의 실측 동등성(R0↔U0, U0↔P0)이 판정한다.
+- **그래프 덤퍼도 이미지 안에서, 그 이미지의 헤더·라이브러리로 빌드한다**(Codex P1).
+  - 지금 `tools/slam_cost_dump.sh` 는 컨테이너 안에서 `/opt/ros/jazzy` 헤더로 덤퍼를 컴파일한다. 덧씌운 라이브러리가 로드되면 apt 헤더의 `sizeof(Mapper)` 와 패치된 생성자가 어긋나 메모리가 깨질 수 있다.
+  - 이미지는 `/opt/slam_patched/bin/slam_graph_dump` 를 덧씌운 설치의 include·lib 로 만들어 둔다. `slam_cost_dump.sh` 는 덧씌운 설치가 있으면 그 덤퍼를 쓰고 컴파일하지 않는다.
+  - 덤퍼의 실제 로드 경로(`ldd`)를 `dump_build.log` 에 남긴다.
+- 이미지 안 단위 시험(gtest)은 빌드 단계에서 돌리고, 실패하면 이미지를 만들지 않는다.
 
 ## 2. 켜고 끄기
 
-- 패치 기능은 모두 **환경 변수**로 켠다. Mapper 생성 때 한 번 읽는다. 설정하지 않으면 모든 기능이 꺼지고 원래 코드 경로를 그대로 지난다. 이것이 P0 다.
-  - `FORKLIFT_SLAM_TRACE=<파일>`: 계측(3.3 의 구간 시간). 설정하지 않으면 시계 읽기도 하지 않는다.
-  - `FORKLIFT_SLAM_CWM_S=<T>`: C-WM 창(sim 초, 0 이하는 끔).
-  - `FORKLIFT_SLAM_DELETE_OLDER_S=<T>`: C 삭제 나이.
-  - `FORKLIFT_SLAM_S1=1`, `FORKLIFT_SLAM_S1_BUFFER=10`: S1.
-- ROS 매개변수로 하지 않는 이유: slam_toolbox 의 매개변수 연결(`setParams`)과 직렬화를 건드리지 않고, 끈 상태를 '패치 코드가 한 줄도 돌지 않음'으로 단순하게 하려는 것이다. 값은 브리지 기록 옆 `slam_patch_config.json` 에 남긴다(Mapper 가 처음 읽을 때 씀).
-- 재생 컨테이너(`tools/slam_cost_container.sh`)만 덧씌운 설치를 source 한다(`/opt/slam_patched/install/setup.bash` 가 있을 때). sbatch 는 `SLAM_IMAGE` 로 이미지를, `SLAM_PATCH_ENV="K=V ..."` 로 위 변수들을 docker `-e` 로 넘긴다. 라이브 컨테이너·런처는 바꾸지 않는다.
+- 패치 기능은 모두 **환경 변수**로 켠다. Mapper 생성 때 한 번 읽는다. 설정하지 않으면 모든 기능이 꺼지고 원래 코드 경로를 지난다. 이것이 P0 다.
+  - `FORKLIFT_SLAM_TRACE=<파일>`: 계측.
+  - `FORKLIFT_SLAM_CWM_S=<T>`: C-WM.
+  - `FORKLIFT_SLAM_DELETE_OLDER_S=<T>`: C.
+  - `FORKLIFT_SLAM_S1=1`·`FORKLIFT_SLAM_S1_BUFFER=10`: S1.
+- 이유: slam_toolbox 의 매개변수 연결(`setParams`)과 직렬화를 건드리지 않고, 끈 상태를 '패치 코드가 한 줄도 돌지 않음'으로 단순하게 하려는 것이다.
+- **패치 식별과 로드 확인**(Codex P2):
+  - 패치 라이브러리는 Mapper 생성 때 한 줄을 stderr 에 찍는다: `forklift_slam_patch series=<해시> trace=… cwm=… delete=… s1=…`. U0 는 `series=none`.
+  - 재생 컨테이너는 `SLAM_IMAGE_KIND=patched|u0` 일 때 덧씌운 설치가 없으면 **실패**한다(조용히 apt 로 돌아가지 않음).
+  - 노드가 뜬 뒤 그 프로세스의 `/proc/<pid>/maps` 에서 `libkartoSlamToolbox`·`libtoolbox_common`·ceres 솔버 플러그인의 실제 경로를 `slam_libs.txt` 에 남긴다. 기대 경로가 아니면 실패한다.
+  - 이 확인은 sync·lifelong·localization 세 실행 방식 각각에서 한 번씩 smoke 로 본다.
+- **지원 범위 단언**(Codex P2): 패치 기능(C-WM·C·S1)은 **새 sync mapping** 에서만 켠다.
+  - lifelong·localization 노드이거나 직렬화된 그래프를 읽은(`loadSerializedPoseGraph`) Mapper 에서 기능 변수가 켜져 있으면, 시작 때 거부하고 끝낸다.
+  - 이들은 자체 삭제가 있어 ID 공백이 생기고, Mapper 교체 뒤 콜백 재연결이 필요하기 때문이다.
+- 재생 컨테이너(`tools/slam_cost_container.sh`)만 덧씌운 설치를 source 한다. sbatch 는 `SLAM_IMAGE` 로 이미지를, `SLAM_PATCH_ENV="K=V ..."` 로 위 변수들을 docker `-e` 로 넘긴다. 라이브 컨테이너·런처는 바꾸지 않는다.
 
 ## 3. 패치 묶음 (순서 = 구현 순서)
 
-1. **0001 계측.** keyframe 마다 한 줄 JSON:
-   - 구간 시간: 전체 `Process`, scan 정합, `AddEdges`(그 안 `LinkNearChains`), `FindNearLinkedScans`(BFS 방문 노드·edge 수), `FindPossibleLoopClosure`(방문 ID 수·후보 chain 수), 굵은·고운 정합 수, `CorrectPoses`(Ceres 시간).
-   - `addScan` 의 `smapper_mutex_` 대기, 지도 재생성(`updateMap`) 시간은 별도 줄(종류 표시)로 남긴다.
-   - 쓰기: 링 버퍼에 쌓고 keyframe 처리 끝(잠금 밖)에서 한 번에 씀. 계측 자체의 쓰기 시간도 적는다.
+1. **0001 계측.**
+   - keyframe 마다 한 레코드:
+     - 전체 `Process`, scan 정합, `AddEdges`(그 안 `LinkNearChains`);
+     - `FindNearLinkedScans`(BFS 방문 노드·edge 수);
+     - `FindPossibleLoopClosure`(방문 ID 수·후보 chain 수);
+     - 굵은·고운 정합 수, `CorrectPoses`(Ceres 시간).
+   - `addScan` 의 `smapper_mutex_` 대기, 지도 재생성(`updateMap`) 시간도 같은 방식으로 남긴다.
+   - **쓰기**(Codex P2): 레코드는 메모리 버퍼에만 쌓는다(5,000 s 재생에서 수천 개, 수 MB). 노드 종료 때, 그리고 안전을 위해 1,000 개마다 한 번만 파일에 쓴다. 쓰는 시점과 길이를 기록한다.
+   - 처리 스레드의 동기 쓰기는 다음 scan 을 늦추므로 매 keyframe 에 쓰지 않는다.
+   - **판정용 최종 지연은 같은 기능 설정에 TRACE 만 끈 실행으로 따로 확인한다**(계획 3.3).
 2. **0002 C-WM.**
-   - `FindPossibleLoopClosure` 의 시작 ID 를 '시각이 (현재 scan 시각 − T) 이상인 첫 상태 ID' 로 올린다.
-   - C-WM 만 켤 때는 노드를 지우지 않아 상태 ID 가 연속이므로, 이분 탐색(`GetScan(name, id)->GetTime()`, scan 시각은 ID 순으로 단조)으로 찾는다.
-   - `rStartNum` 이 이미 그보다 크면 그대로 둔다(`TryCloseLoop` 의 반복 호출과 맞음).
-   - BFS·`LinkNearChains`·지도 재생성·Ceres 는 옛 그래프를 그대로 본다(계획 3.6) — 계측이 그 몫을 따로 보인다.
+   - `FindPossibleLoopClosure` 의 시작 ID 를 `max(rStartNum, 창 시작 ID)` 로 올린다. 창 시작 ID 는 '시각이 (현재 scan 시각 − T) 이상인 첫 상태 ID' 다.
+   - 지원 범위가 새 sync mapping 뿐이고 이 패치는 삭제하지 않는다. 그래서 상태 ID 가 연속이고 시각이 단조다(`shouldProcessScan` 이 역행 시각을 거름). 창 시작 ID 는 이분 탐색으로 찾는다.
+   - 전제를 매번 확인한다. 이분 탐색 구간의 `GetScan` 이 nullptr 이면 C-WM 을 끄고 오류를 기록한다.
+   - BFS·`LinkNearChains`·지도 재생성·Ceres 는 옛 그래프를 그대로 본다(계획 3.6). 계측이 그 몫을 따로 보인다.
 3. **0003 살아 있는 ID 순회 + 삭제 계약 + C.**
-   - `FindPossibleLoopClosure`·`FindNearChains` 를 살아 있는 ID 의 `std::map` 반복자로 바꾼다. 이 경로는 삭제 기능(C·S1)이 켜졌을 때만 쓰고, 끄면 원래 순회다.
-   - 삭제는 lifelong 순서를 따른다(`RemoveNodeFromGraph` → `RemoveScan` → `dataset_->RemoveData` → vertex 해제). 이를 위해 `dataset_` 소유자(SlamToolbox)에서 Mapper 로 삭제 콜백을 넘긴다.
-   - running scans·last scan 에 든 노드는 지우지 않는다.
-   - 앵커: 고정 노드를 지우면 살아 있는 가장 오래된 노드를 그 현재 자세로 새 고정점으로 정한다(`CeresSolver` 의 `first_node_`·`was_constant_set_` 갱신). 첫 `Compute` 전·후 두 경우를 시험한다.
-   - C: keyframe 처리 끝에 상태 ID 순으로 sim T 초보다 오래된 노드를 지운다.
-4. **0004 S1.** 계획 3.4(영구/임시, B = 10 뒤 삭제, 끊김이면 승격, 승격 기록).
+   - **순회**: `FindPossibleLoopClosure`·`FindNearChains` 를 살아 있는 ID 의 `std::map` 반복자로 바꾼다. 삭제 기능이 켜졌을 때만 이 경로를 쓰고, 끄면 원래 순회다.
+   - **삭제 순서**: lifelong 순서(`RemoveNodeFromGraph` → `RemoveScan` → `dataset_->RemoveData` → vertex 해제)를 따른다.
+     - `dataset_` 소유자(SlamToolbox)가 Mapper 에 삭제 콜백을 넘긴다. 콜백은 `smapper_mutex_` 를 다시 잡지 않는다(이미 그 안에서 불림, 비재귀 mutex).
+     - running scans·last scan 에 든 노드는 지우지 않는다.
+   - **앵커**(Codex P2):
+     - `first_node_` iterator 를 쓰지 않는다. 앵커 **ID** 를 들고, 쓸 때(`Compute` 의 고정 지점)마다 `nodes_` 에서 다시 찾는다. `unordered_map` rehash 로 iterator 가 무효가 되기 때문이다.
+     - 고정 노드를 지우면 살아 있는 가장 오래된 노드를 새 앵커로 정한다. 고정하는 값은 **solver 가 들고 있는 그 노드의 현재 값**(`nodes_[id]`, 지난 `Compute` 결과)이다. karto scan 자세와 다를 수 있다 — 두 값의 차이를 계측에 남긴다.
+     - 첫 `Compute` 전·후 삭제 두 경우를 시험한다.
+   - **C**: keyframe 처리 끝에 상태 ID 순으로 sim T 초보다 오래된 노드를 지운다.
+4. **0004 S1.** 계획 3.4.
+   - **가까운 영구 노드 탐색**(Codex P2): `FindNearByScan`(모든 노드 중 XY 최근접 하나)을 쓰지 않는다. **영구 노드이면서 위치 0.3 m·방향 0.35 rad 조건을 만족하는 집합에서 최근접**을 고른다. 가장 가까운 노드가 임시이거나 방향이 어긋나도, 다음으로 가까운 유효 영구 노드를 찾는다.
+   - 임시 노드는 B = 10 개 뒤 3.3 의 계약으로 지운다. 지우면 끊기는 노드는 승격하고 기록한다.
 
 ## 4. 빌드와 동등성 (ws1, 총괄 신호)
 
-- 빌드: `deploy/slurm/slam_patch_build.sbatch`(CPU 잡, `docker build`). 빌드 로그·이미지 digest·패치 묶음 해시·커밋 해시를 남긴다. 예상 30–60 분.
-- 동등성 (가)(계획 5 장): P0(패치 이미지, 환경 변수 없음)와 R0(배포 이미지)를 같은 입력(sim 1,500 s 빠른 재생)으로 두 번씩 돌린다. 비교 대상:
+- 빌드: `deploy/slurm/slam_patch_build.sbatch`(CPU 잡, `docker build` 두 번: U0·P1). 빌드 로그·이미지 digest·패치 묶음 해시·커밋 해시·`compile_commands.json` 을 남긴다. 예상 30–60 분 × 2.
+- **동등성 (가)**(계획 5 장). 같은 입력(sim 1,500 s 빠른 재생)으로 두 번씩 돌려 두 쌍을 나눠 본다:
+  - **R0↔U0**: 빌드 차이.
+  - **U0↔P0**: 패치가 꺼진 상태의 차이.
+- 비교 항목:
   - 처리한 scan 열;
   - 응답 자세(차이 ≤ 1e-6 m·1e-6 rad);
   - 끝 그래프의 노드·edge 수(graph dump);
-  - 유효 설정(`params_effective.yaml`).
-  - 같지 않으면 다음 단계로 가지 않는다.
-- 계측 켬(`FORKLIFT_SLAM_TRACE`)도 P0 와 응답이 같아야 한다(계측이 결과를 바꾸지 않음). 비용 차이는 적기만 한다.
-- 패치 묶음이 바뀔 때마다(0002 → 0003 → 0004) 새 이미지로 P0 동등성을 다시 본다(약 20 분).
+  - 유효 설정;
+  - `slam_libs.txt` 의 로드 경로·패치 식별 줄.
+- **실패 전파**(Codex P2):
+  - 동등성 실행에서는 graph dump 가 필수다. `slam_cost_dump.sh` 의 실패(serialize·덤퍼 빌드·덤프)를 컨테이너 종료 코드에 반영한다.
+  - `slam_cost_summary.py --graph-dump` 는 덤프가 없으면 오류로 끝난다(지금은 조용히 생략).
+- 판정:
+  - U0↔P0 가 같아야 다음 단계로 간다.
+  - R0↔U0 가 다르면 그 차이를 적고, C++ 팔의 대조군을 P0 로 하는 계획 3.2 대로 진행할지 총괄에 올린다.
+- 계측 켬(TRACE)도 P0 와 응답이 같아야 한다. 비용 차이는 적기만 한다.
+- 패치 묶음이 바뀔 때마다(0002 → 0003 → 0004) U0↔P0 를 다시 본다(약 20 분).
 
 ## 5. 시험
 
-- gtest(이미지 안): C-WM 창 시작 ID 의 이분 탐색(경계·빈 창·전체 창), 살아 있는 ID 순회가 공백을 건너뛰고 chain 을 끊지 않음, 앵커 재지정(첫 `Compute` 전·후), S1 판정(가까운 영구 노드 있음/없음/정합 실패).
-- 저장소 쪽 pytest: 컨테이너·sbatch 가 패치 환경 변수를 넘기고 라이브 경로는 손대지 않음, 패치 묶음 해시 계산.
-- 재생: C-WM 켬 1 회(sim 1,500 s)에서 계측의 방문 ID 가 창 안에만 있음을 확인(동작 smoke, 판정 아님).
+- **gtest(이미지 안, 빌드 실패 조건)**:
+  - C-WM 창 시작 ID: 경계·빈 창·전체 창. `TryCloseLoop` 처럼 반복 호출할 때 여러 chain·끝 도달 시 `rStartNum` 진행.
+  - 살아 있는 ID 순회: 공백을 건너뛰고 chain 을 끊지 않음.
+  - 앵커: ID 재조회, rehash 뒤에도 유효, 첫 `Compute` 전·후 삭제.
+  - S1 최근접: 가장 가까운 노드가 임시인 경우, 방향이 어긋난 경우에 다음 영구 노드를 고름.
+- **삭제 계약 통합 smoke**(ws1, 판정 아님, Codex P2):
+  - C(T 짧게, 예 60 s)와 S1 을 켠 sim 1,500 s 재생에서 연속 삭제·running/last 보호·앵커 삭제가 일어난 뒤에도 다음 scan 처리, 지도 재생성, 직렬화(`serialize_map`)·graph dump, 정상 종료까지 지나는지 확인한다.
+  - AddressSanitizer 빌드(같은 Dockerfile, `SANITIZE=address`)로 한 번 더 돌려 해제 후 접근이 없음을 본다.
+- **저장소 쪽 pytest**:
+  - 컨테이너·sbatch 가 패치 변수를 넘기고 라이브 경로는 손대지 않음;
+  - `SLAM_IMAGE_KIND` 가 있을 때 덧씌운 설치가 없으면 실패;
+  - dump 실패 전파;
+  - summary 의 graph 필수;
+  - 패치 묶음 해시 계산.
+- **로드 경로 smoke**: sync·lifelong·localization 각각 한 번(2 절).
+- **C-WM 동작 smoke**: sim 1,500 s 에서 계측의 방문 ID 가 창 안에만 있음.
 
 ## 6. 미정·위험
 
-- apt 판과 소스 빌드의 부동소수 결과가 같지 않으면(컴파일러 옵션 차이), 동등성 (가)가 실패한다. 그때는 R0 대신 P0 를 대조군으로 쓰는 것(계획 3.2 의 P0 정의)으로 충분한지, 계획 개정이 필요한지 총괄에 올린다.
-- GitHub 접근이 ws1 docker 빌드에서 막히면 태그 tarball 을 노트북에서 받아 해시를 확인한 뒤 빌드 문맥으로 넘긴다.
+- R0↔U0 가 다를 수 있다(컴파일러 옵션·의존성). 그 경우는 4 절의 판정대로 총괄에 올린다.
+- 앵커를 solver 값으로 고정하면, 마지막 `Compute` 뒤의 karto 자세 변화는 반영되지 않는다(차이는 계측에 남음).
+- 메모리 버퍼 계측은 노드가 비정상 종료하면 마지막 1,000 개 미만을 잃는다.
+
+## 7. 자체 검토
+
+- Codex 적대 설계 검토 1라운드(v1): P1 1 — 덤퍼의 apt 헤더·패치 라이브러리 혼용. P2 7 — 실제 로드 확인, apt 플래그 재현 근거 없음(U0 추가), C-WM 전제의 적용 범위, 앵커 iterator 수명·고정값 출처, 잠금 밖 동기 쓰기의 비용 전가, S1 최근접 함수, 삭제 계약 통합 시험·실패 전파. P3 1 — tarball 과 git 절차. 모두 v2 에 반영했다(각 절의 'Codex' 표시).
