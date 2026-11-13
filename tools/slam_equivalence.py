@@ -5,8 +5,10 @@ patch difference.)
 
 Equivalent when: the processed scans are the same, in the same order; every reply's map<-odom differs by at most 1e-6
 m in position and 1e-6 rad in heading; the end graph (tools/slam_graph_dump.cpp) has the same node and edge counts;
-the effective parameters are the same; and each run's own slam_toolbox check (tools/slam_patch_check.py) passed. Cost
-is reported, never judged. A missing graph dump is an error, not a pass.
+the effective parameters are the same; each run's own slam_toolbox check (tools/slam_patch_check.py) passed; and each
+run finished with every part at exit 0 (status.json: driver, container -- whose checks include the trace's end record
+-- and summary). A difference that is not a finite number fails, never passes. Cost is reported, never judged. A
+missing graph dump is an error, not a pass.
 
     python tools/slam_equivalence.py RUN_A RUN_B > equivalence.json    # each a slam_cost_replay.sbatch OUT
 """
@@ -39,8 +41,19 @@ def _graph(run: Path) -> tuple:
     return nodes, edges
 
 
+def _status_problems(run: Path) -> list:
+    status = run / "status.json"
+    if not status.is_file():
+        return [f"{run}: no status.json"]
+    s = json.loads(status.read_text())
+    if s.get("state") != "done":
+        return [f"{run}: status {s.get('state')!r}, not done"]
+    return [f"{run}: {part} exit {s.get(part)!r}" for part in ("driver_exit", "container_exit", "summary_exit")
+            if s.get(part) != 0]
+
+
 def _wrap(a: float) -> float:
-    return math.atan2(math.sin(a), math.cos(a))
+    return math.atan2(math.sin(a), math.cos(a)) if math.isfinite(a) else math.nan
 
 
 def compare(a: Path, b: Path) -> dict:
@@ -58,6 +71,10 @@ def compare(a: Path, b: Path) -> dict:
         mx, my = x["map_from_odom"], y["map_from_odom"]
         pos.append(math.hypot(mx[0] - my[0], mx[1] - my[1]))
         yaw.append(abs(_wrap(mx[2] - my[2])))
+    bad = sum(1 for v in pos + yaw if not math.isfinite(v))
+    if bad:
+        problems.append(f"{bad} pose differences are not finite numbers")
+    pos, yaw = [v for v in pos if math.isfinite(v)], [v for v in yaw if math.isfinite(v)]
     max_pos, max_yaw = max(pos, default=0.0), max(yaw, default=0.0)
     if max_pos > POSITION_M:
         problems.append(f"position differs by up to {max_pos:.3g} m (> {POSITION_M:g})")
@@ -71,6 +88,7 @@ def compare(a: Path, b: Path) -> dict:
     if pa != pb:
         problems.append("effective parameters differ")
     for run in (a, b):
+        problems += _status_problems(Path(run))
         check = Path(run) / "bridge" / "patch_check.json"
         if not check.is_file() or not json.loads(check.read_text()).get("ok"):
             problems.append(f"{run}: its slam_toolbox check did not pass (bridge/patch_check.json)")

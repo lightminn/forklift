@@ -11,7 +11,7 @@ import pytest
 from tools import slam_equivalence as eq
 
 
-def make_run(root, name, rows, *, nodes=3, edges=2, params="a: 1\n", patch_ok=True, kind=""):
+def make_run(root, name, rows, *, nodes=3, edges=2, params="a: 1\n", patch_ok=True, kind="", status=None):
     d = root / name
     (d / "bridge" / "dump").mkdir(parents=True)
     (d / "drive.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -19,6 +19,9 @@ def make_run(root, name, rows, *, nodes=3, edges=2, params="a: 1\n", patch_ok=Tr
     (d / "bridge" / "dump" / "edges.csv").write_text("source,target\n" + "".join(f"{i},{i + 1}\n" for i in range(edges)))
     (d / "bridge" / "params_effective.yaml").write_text(params)
     (d / "bridge" / "patch_check.json").write_text(json.dumps({"ok": patch_ok, "kind": kind}))
+    st = {"state": "done", "driver_exit": 0, "container_exit": 0, "summary_exit": 0, "sent": len(rows)}
+    st.update(status or {})
+    (d / "status.json").write_text(json.dumps(st))
     return d
 
 
@@ -64,3 +67,30 @@ def test_a_missing_graph_dump_is_a_failure_not_a_pass(tmp_path):
     (b / "bridge" / "dump" / "edges.csv").unlink()
     with pytest.raises(SystemExit):
         eq.compare(a, b)
+
+
+def test_a_run_that_failed_at_exit_or_did_not_finish_is_not_equivalent(tmp_path):
+    rows = [row(k, 0.0) for k in range(3)]
+    a = make_run(tmp_path, "a", rows)
+    # the container's exit checks failed (e.g. a trace without its end record: STATUS 9)
+    out = eq.compare(a, make_run(tmp_path, "b", rows, status={"container_exit": 9}))
+    assert not out["equivalent"] and any("container_exit exit 9" in p for p in out["problems"])
+    assert any("summary_exit" in p for p in eq.compare(a, make_run(tmp_path, "c", rows,
+                                                                   status={"summary_exit": None}))["problems"])
+    assert any("not done" in p for p in eq.compare(a, make_run(tmp_path, "d", rows,
+                                                               status={"state": "pending"}))["problems"])
+    e = make_run(tmp_path, "e", rows)
+    (e / "status.json").unlink()
+    assert any("no status.json" in p for p in eq.compare(a, e)["problems"])
+
+
+def test_a_pose_difference_that_is_not_a_number_fails(tmp_path):
+    rows = [row(k, 0.0) for k in range(3)]
+    a = make_run(tmp_path, "a", rows)
+    nan = [dict(r) for r in rows]
+    nan[0] = row(0, float("nan"))
+    out = eq.compare(a, make_run(tmp_path, "b", nan))
+    assert not out["equivalent"] and any("not finite" in p for p in out["problems"])
+    yaw = [dict(r) for r in rows]
+    yaw[1] = row(1, 0.0, yaw=float("inf"))
+    assert not eq.compare(a, make_run(tmp_path, "c", yaw))["equivalent"]

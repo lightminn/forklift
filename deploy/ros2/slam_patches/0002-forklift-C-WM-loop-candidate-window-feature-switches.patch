@@ -1,7 +1,7 @@
 From 0f653475ff6bc75ed363ed3af5bd5d65f49699ec Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 17:06:30 +0900
-Subject: [PATCH 2/3] forklift: C-WM loop candidate window, feature switches
+Subject: [PATCH 2/4] forklift: C-WM loop candidate window, feature switches
  and their refusals
 
 FORKLIFT_SLAM_CWM_S=T starts FindPossibleLoopClosure at the first state id whose scan is

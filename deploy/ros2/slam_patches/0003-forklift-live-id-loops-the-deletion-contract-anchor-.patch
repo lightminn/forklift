@@ -1,7 +1,7 @@
-From c294aa2b19cfd849b3a298ae8c229e4396123acf Mon Sep 17 00:00:00 2001
+From 67805096de50eee7ea6a6b5e4bebfe45f7f15c64 Mon Sep 17 00:00:00 2001
 From: forklift <forklift@localhost>
 Date: Fri, 13 Nov 2026 17:16:44 +0900
-Subject: [PATCH 3/3] forklift: live-id loops, the deletion contract, anchor by
+Subject: [PATCH 3/4] forklift: live-id loops, the deletion contract, anchor by
  id, and C (delete older than T)
 
 With a deleting feature (C now, S1 later) state ids get holes: FindPossibleLoopClosure and
@@ -18,28 +18,29 @@ live nodes rather than every id ever made. The dataset remover is registered onl
 has one owner: a second node in one process is refused (exit 3), and clearing works only for the owner.
 gtests: C's victims, the id bound, the live-id steps, the one-owner remover, the new anchor.
 ---
- .../include/karto_sdk/ForkliftPatch.h         |  82 ++++++++++++++
+ .../include/karto_sdk/ForkliftPatch.h         |  89 +++++++++++++++
  lib/karto_sdk/src/ForkliftPatch.cpp           |  60 ++++++++++-
  lib/karto_sdk/src/Mapper.cpp                  | 101 +++++++++++++++++-
  solvers/ceres_solver.cpp                      |  35 ++++++
  solvers/ceres_solver.hpp                      |   3 +
  src/slam_toolbox_common.cpp                   |  14 +++
  test/forklift_patch_test.cpp                  | 101 ++++++++++++++++++
- 7 files changed, 387 insertions(+), 9 deletions(-)
+ 7 files changed, 394 insertions(+), 9 deletions(-)
 
 diff --git a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
-index 1d11222..e47bfe0 100644
+index 1d11222..d23d8cf 100644
 --- a/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
 +++ b/lib/karto_sdk/include/karto_sdk/ForkliftPatch.h
-@@ -11,6 +11,7 @@
+@@ -11,6 +11,8 @@
  
  #include <chrono>
  #include <cstdint>
 +#include <functional>
++#include <limits>
  #include <map>
  #include <mutex>
  #include <optional>
-@@ -19,6 +20,8 @@
+@@ -19,6 +21,8 @@
  
  namespace karto
  {
@@ -48,7 +49,7 @@ index 1d11222..e47bfe0 100644
  namespace forklift
  {
  
-@@ -31,6 +34,8 @@ struct Config
+@@ -31,6 +35,8 @@ struct Config
    int s1_buffer = 10;     // FORKLIFT_SLAM_S1_BUFFER: S1's B
    // any graph-changing feature on (the trace alone is not one)
    bool any_feature() const {return cwm_s > 0.0 || delete_s > 0.0 || s1;}
@@ -57,7 +58,7 @@ index 1d11222..e47bfe0 100644
  };
  
  // The configuration, read from the environment on first use (thread-safe).
-@@ -66,6 +71,83 @@ long window_start(long n, double threshold, TimeOf time_of)
+@@ -66,6 +72,89 @@ long window_start(long n, double threshold, TimeOf time_of)
    return lo;
  }
  
@@ -83,19 +84,25 @@ index 1d11222..e47bfe0 100644
 +template<class ScanMap>
 +long live_id_at_or_after(const ScanMap & scans, long id, long end)
 +{
++  if (id > std::numeric_limits<int>::max()) {  // past every int id (no narrowing back to a small id)
++    return end;
++  }
 +  auto it = scans.lower_bound(static_cast<int>(id));
 +  return it == scans.end() ? end : static_cast<long>(it->first);
 +}
 +template<class ScanMap>
 +long live_id_next(const ScanMap & scans, long id, long end)
 +{
++  if (id >= std::numeric_limits<int>::max()) {
++    return end;
++  }
 +  auto it = scans.upper_bound(static_cast<int>(id));
 +  return it == scans.end() ? end : static_cast<long>(it->first);
 +}
 +template<class ScanMap>
 +long live_id_prev(const ScanMap & scans, long id)
 +{
-+  auto it = scans.lower_bound(static_cast<int>(id));
++  auto it = id > std::numeric_limits<int>::max() ? scans.end() : scans.lower_bound(static_cast<int>(id));
 +  if (it == scans.begin()) {
 +    return -1;
 +  }

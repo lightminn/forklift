@@ -38,7 +38,12 @@ for NAME in "${NAMES[@]}"; do
     p0t) ENV=(SLAM_IMAGE="$P1_IMAGE" SLAM_IMAGE_KIND=patched SLAM_PATCH_ENV=FORKLIFT_SLAM_TRACE=/out/slam_trace.jsonl) ;;
     *) echo "unknown arm $NAME"; exit 2 ;;
   esac
-  prev=$(env DUMP_GRAPH=1 "${ENV[@]}" sbatch --parsable "${DEPARG[@]}" --job-name="s3e_$NAME" \
+  # every variable the replay reads is set here or cleared, so nothing exported by the caller runs an arm as another
+  # (Codex code review 3 P2-2): the image, its kind and switches, the node and its localization inputs
+  prev=$(env -u SLAM_IMAGE -u SLAM_IMAGE_KIND -u SLAM_PATCH_ENV -u LIFELONG_PARAMS -u LOC_SETS -u MAP_BUNDLE \
+    -u MAP_ID -u MAP_START_POSE -u LIVE_EPOCH -u BASELINE -u SUMMARY -u BUDGET -u KEEP_MAP_SUBSCRIPTION \
+    $(env | grep -oE '^FORKLIFT_SLAM_[A-Z0-9_]+' | sed 's/^/-u /') \
+    SLAM_NODE=sync DUMP_GRAPH=1 "${ENV[@]}" sbatch --parsable "${DEPARG[@]}" --job-name="s3e_$NAME" \
     --output="$OUT/$NAME-%j.log" --cpus-per-task=2 --mem=1G --time=00:30:00 \
     deploy/slurm/slam_cost_replay.sbatch "$OUT/$NAME" "$RUN" "$SETS" "${ARGS[@]}")
   echo "$NAME job $prev"
