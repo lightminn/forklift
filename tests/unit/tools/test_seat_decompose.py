@@ -295,17 +295,28 @@ def test_the_course_shows_a_jump_and_where_it_happened():
     result["transitions"][-1]["time_s"] = float(t[-1])
     d = R.decompose(result, sc)
     c = d["bias_course"]
-    assert c["dB_at_capture_m"] == pytest.approx(0.0, abs=1e-12)
+    assert c["dB_first_row_m"] == pytest.approx(0.0, abs=1e-12) and c["first_row_t"] == 5.0
     assert c["dB_at_insert_m"] == pytest.approx(0.0, abs=1e-12)
     assert c["dB_max_step_m"] == pytest.approx(0.013, abs=1e-12)
     assert d["terms_m"]["dB"] == pytest.approx(-0.013, abs=1e-12)
+    assert c["dB_after_insert_max_change_m"] == pytest.approx(0.013, abs=1e-12)  # the step came at 15 s, in insert
+    assert c["dB_max_against_final_m"] == pytest.approx(0.0, abs=1e-12)
+    assert c["dB_position_m"] == pytest.approx(-0.013, abs=1e-12) and c["dB_yaw_m"] == pytest.approx(0.0, abs=1e-12)
 
 
 def test_the_course_reports_the_yaw_of_the_bias_change():
     result, sc = world()
     sc[:, 3] += 0.01  # the estimate turns 0.01 rad more than the truth by lift
     d = R.decompose(result, sc)
-    assert d["bias_course"]["dpsi_rad"] == pytest.approx(0.01, abs=1e-12)
+    c = d["bias_course"]
+    assert c["dpsi_rad"] == pytest.approx(0.01, abs=1e-12)
+    assert c["dB_position_m"] + c["dB_yaw_m"] == pytest.approx(d["terms_m"]["dB"], abs=1e-12)
+    # the capture's bias is a 3 mm shift, so E* = W_c^-1 E = (0.5, 0.007, 0.01) and E_p = (0.5, 0.007, 0)
+    E_star, E_p = (0.5, 0.007, 0.01), (0.5, 0.007, 0.0)
+    assert c["dB_position_m"] == pytest.approx(R.lateral([2.0, 0.0], sc[1, 4:7]) - R.lateral([2.0, 0.0], E_p),
+                                               abs=1e-12)
+    assert c["dB_yaw_m"] == pytest.approx(R.lateral([2.0, 0.0], E_p) - R.lateral([2.0, 0.0], E_star), abs=1e-12)
+    assert abs(c["dB_yaw_m"]) > 0.01
 
 
 def test_db_with_a_rotated_constant_bias_is_zero():

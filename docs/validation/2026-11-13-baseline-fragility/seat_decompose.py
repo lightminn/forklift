@@ -31,9 +31,13 @@ read): W_c = Est_cap * Truth_cap^-1 is the rigid map from the true to the estima
 Had it held until lift, the truck at its estimated pose E would see the pallet at W_c(V), so S_const = the lateral
 coordinate of W_c(V) in E, and dB = S - S_const is the lateral effect of the bias changing from the capture to lift
 (zero for any constant rigid bias, the counterexample above included). Its course is reported too: dB(t) =
-lateral(V, A_t) - lateral(W_c(V), E_t) over the slam_control rows from the capture to lift (zero at the capture), its
-value at the insert entry, its largest one-row step (a correction jump would show here), and dpsi, the yaw of the
-bias change W_lift * W_c^-1.
+lateral(V, A_t) - lateral(W_c(V), E_t) over the slam_control rows from the capture to lift (zero at the capture
+instant by construction; the first row is one control tick later and is reported as such), its value at the insert
+entry, its largest one-row step (a correction jump would show here), its largest excursion against the final sign, its
+largest change after the insert entry, and dpsi, the yaw of the bias change W_lift * W_c^-1. dB is also split, position
+first, with E* = W_c^-1 E (the estimate taken back by the capture's bias; A if the bias had not changed) and
+E_p = (E*.x, E*.y, A.yaw): dB = [g(A) - g(E_p)] + [g(E_p) - g(E*)] (position, yaw). The split is an accounting: a
+position error may itself be integrated heading error.
 
 The decomposition covers runs that reached lift (plan 2). Runs that did not are counted apart -- never entered insert,
 or entered insert and ended before lift -- and are not held. A run that reached lift is held (3.1) when a term cannot
@@ -127,9 +131,17 @@ def bias_course(sc, W_c: np.ndarray, V, t_cap: float, t_insert: float, t_lift: f
     course = np.array([lateral(V, row[4:7]) - lateral(Vw, row[1:4]) for row in rows])
     i_insert = min(int(np.searchsorted(rows[:, 0], t_insert - TIME_TOL_S)), len(rows) - 1)
     W_l = se2(E) @ np.linalg.inv(se2(A))
-    return {"from_t": float(rows[0, 0]), "rows": len(rows), "dB_at_capture_m": float(course[0]),
-            "dB_at_insert_m": float(course[i_insert]), "dB_max_step_m": float(np.abs(np.diff(course)).max()),
-            "dpsi_rad": pose_of(W_l @ np.linalg.inv(W_c))[2]}
+    final = course[-1]
+    against = -course * np.sign(final) if final != 0 else np.abs(course)
+    E_star = pose_of(np.linalg.inv(W_c) @ se2(E))
+    E_p = (E_star[0], E_star[1], float(A[2]))
+    return {"capture_t": t_cap, "first_row_t": float(rows[0, 0]), "rows": len(rows),
+            "dB_first_row_m": float(course[0]), "dB_at_insert_m": float(course[i_insert]),
+            "dB_max_step_m": float(np.abs(np.diff(course)).max()),
+            "dB_max_against_final_m": float(max(0.0, against.max())),
+            "dB_after_insert_max_change_m": float(np.abs(course[i_insert:] - course[i_insert]).max()),
+            "dpsi_rad": pose_of(W_l @ np.linalg.inv(W_c))[2],
+            "dB_position_m": lateral(V, A) - lateral(V, E_p), "dB_yaw_m": lateral(V, E_p) - lateral(V, E_star)}
 
 
 def transition_time(result: dict, to: str) -> float | None:
