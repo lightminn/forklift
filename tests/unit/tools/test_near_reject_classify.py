@@ -78,3 +78,14 @@ def test_a_passing_run_is_not_labelled_and_scenes_parse():
     c = N.classify("lbg_B0_line_2_s0", r)
     assert c["ended_at_near"] is False and "label" not in c
     assert N.scene_of("lat_r_lbg_Ub6_aisle_rack_s0") == "aisle_rack" and N.scene_of("lbd_Pn_random_1_s5") == "random_1"
+
+
+def test_the_offset_splits_into_the_waypoint_shift_and_the_arrival_miss():
+    r = result(None, candidates=[{"centre_m": [3.0, 0.0], "distance_m": 0.0}],
+               offsets={"lateral_m": -0.09, "yaw_rad": 0.05})
+    r["near_capture"]["waypoint"] = [0.0, -0.04, 0.0]  # 40 mm right of the new line
+    r["observation_attempts"][0]["arrived_pose"] = [0.0, -0.09, 0.05]  # a further 50 mm right
+    r["perception"] = {"perception_pickup_estimate_m": {"x_m": 3.34, "y_m": 0.0, "yaw_rad": 0.0}}
+    c = N.classify("lbg_B0_random_1_s0", r)
+    assert abs(c["waypoint_off_new_line_m"] + 0.04) < 1e-12
+    assert abs(c["arrival_miss_across_new_line_m"] + 0.05) < 1e-12 and abs(c["split_check_m"]) < 1e-12

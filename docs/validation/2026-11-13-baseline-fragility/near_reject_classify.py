@@ -10,6 +10,9 @@ capture record:
 - the expected-site check of the last observation attempt: the expected site's distance from the true pallet centre,
   the nearest candidate's distance from the expected site (against radius_m) and from the true pallet centre (all in
   the truth base frame of that capture; the true centre is scenario.pickup);
+- the lateral offset to the new line split into the waypoint's own offset from the new line (the far estimate -> near
+  observation change of the target) and the truck's miss of the waypoint, and the observe path's end (curvature,
+  direction, poses; result.paths.observe is the last version);
 - how the near observation stand was reached: a loose arrival accepted on the near observation leg (observe_loose_arrivals
   after the far capture began and up to the near capture, with its position and yaw error), a re-plan of the observe leg triggered by near_end_stand (observe_replans[].trigger) and the end-stand
   outcomes (observe_end_stands); result["near_end_stand"] itself is only the waiting state (since_s), not a re-plan;
@@ -104,9 +107,34 @@ def classify(name: str, result: dict) -> dict | None:
     wp, arr = nc.get("waypoint"), attempt.get("arrived_pose")
     if wp and arr:
         out["arrival_yaw_minus_waypoint_rad"] = math.remainder(arr[2] - wp[2], math.tau)
+    target = new_line_target(result, nc)
+    if wp and arr and target and off:
+        # the lateral offset to the new line, split: the waypoint's own offset from the new line (the far estimate ->
+        # near observation change of the target) plus the truck's miss of the waypoint, both across the new line
+        out["waypoint_off_new_line_m"] = lateral(wp, target)
+        out["arrival_miss_across_new_line_m"] = lateral(arr, target) - lateral(wp, target)
+        out["split_check_m"] = lateral(arr, target) - off["lateral_m"]
+    path = (result.get("paths") or {}).get("observe") or {}
+    if path.get("curvatures_inv_m"):
+        out["observe_path_end"] = {"curvature_inv_m": path["curvatures_inv_m"][-1],
+                                   "direction": (path.get("directions") or [None])[-1],
+                                   "poses": len(path.get("poses") or [])}
     if out["ended_at_near"]:
         out["label"], out["by_mm"] = label(out)
     return out
+
+
+def lateral(p, frame) -> float:
+    return -math.sin(frame[2]) * (p[0] - frame[0]) + math.cos(frame[2]) * (p[1] - frame[1])
+
+
+def new_line_target(result: dict, nc: dict):
+    """The near observation's target the new line was drawn to (the perception estimate, or the last re-draw's)."""
+    pe = (result.get("perception") or {}).get("perception_pickup_estimate_m")
+    if pe:
+        return pe["x_m"], pe["y_m"], pe["yaw_rad"]
+    redraw = [r for r in nc.get("recoveries") or [] if r.get("target")]
+    return tuple(redraw[-1]["target"]) if redraw else None
 
 
 def label(c: dict) -> tuple[str, bool]:
