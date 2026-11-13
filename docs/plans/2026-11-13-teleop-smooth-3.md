@@ -15,6 +15,7 @@
 | 자리 | 3: `u01_k09_r1`, `u02_k09_r2`, `u03_k09_r3`(`docs/validation/2026-11-13-teleop-smooth-3/ts3_lists.py`) |
 | 제출 | `ts3_submit.sh SNAP OUT [FIRST_DEPENDENCY] [-- NAME ...]`: 2차와 같은 단일 세션 잡 직렬, shard 4·CPU 6·8G·40 분, `--slots 1 --retries 0` |
 | 스냅숏 | 이 브랜치의 커밋. 코드는 2차 스냅숏 `ts2_65a862dd` 와 같고(main 0092bcf7 위, 캐시 포함), 문서·목록 스크립트만 다르다 — 제출 전에 `git diff --stat 65a862dd` 로 코드 차이가 없음을 확인해 적는다. 이름은 제출 직전에 한 번 고정한다 |
+| 스냅숏 확인(제출 직전) | 이 브랜치가 main(#475·#476 머지, 1f60d4e2)을 병합한 뒤라 `git diff --stat 65a862dd` 의 문서 밖 차이는 재생 전용 SLAM 도구 여섯 파일(`tools/slam_remap_drive.py`·`tools/slam_h_switch.py`·`deploy/slurm/slam_{cost_replay,h_switch}.sbatch` 와 그 시험)이다. `sim/`·`src/`·`deploy/console/`·`r1c_session.sh` 는 이들을 참조하지 않는다 — 라이브 세션 경로의 코드는 2차와 같다 |
 | 시간 | 1차 K09 실측(잡 241–260 s, 평균 약 4.2 분)과 2차 K08(261–271 s, 약 4.4 분)로 잡당 약 4.5 분 → 3 잡 약 14 분. 큐 대기·VM 복구·추가 `_re` 는 뺀 추정이다 |
 | OUT 길이 | `ts3_lists.py` 가 원래 자리부터 `_re` 이름으로 SLAM 소켓 경로(107 바이트)를 검사한다 — 원래 세 잡이 들어가는 OUT 이면 재실행도 들어간다(Codex P3) |
 | 제출 직전 조건 | 두 GPU 모두 `nvidia-smi` 에 보이고 persistence Enabled(VM `ws1-win-gpu1` 꺼짐), `isaac_bundle check` 3/3, squeue 0 |
