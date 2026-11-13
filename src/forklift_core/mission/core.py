@@ -3299,6 +3299,9 @@ class MissionCore:
             if kind not in open_["kinds"]:
                 open_["kinds"].append(kind)
             return
+        if state.get("near_loose_pending") is not None:  # a new stand before the last one's outcome: it ends there
+            state["near_loose_refusals"][state.pop("near_loose_pending")]["superseded_by"] = len(
+                state["near_loose_refusals"])
         leg_ = state["observe_replan_leg"]
         waypoint = (state.get("near_capture") or {}).get("waypoint")
         along = lateral = None
@@ -3314,24 +3317,42 @@ class MissionCore:
         state["near_loose_open"] = len(state["near_loose_refusals"]) - 1
 
     def near_loose_close(self, t: float, tracking, source: str, standing: bool) -> None:
-        """K1 2.2: end the open stand's record -- at an arrival (with the bounds source that took it and whether the
-        error itself was inside the narrow bounds) or when the stand ends otherwise (a command resumed, a new
-        leg, the phase left)."""
-        state, options = self.state, self.options
-        record = state["near_loose_refusals"][state["near_loose_open"]]
-        if tracking.status == "arrived":
+        """K1 2.2: the stand and its outcome are two things. The open stand ends at an arrival or when the truck
+        stops standing at the leg's end (a command resumed -- C2's replan --, a new leg, the phase left); the record
+        then waits (``near_loose_pending``) for its outcome: the first observe arrival after it (the bounds source
+        that took it, whether the error was inside the narrow bounds, the leg serial it came on) and the near
+        capture's status once it leaves ``pending``. A new stand before that supersedes it."""
+        state, options, ms = self.state, self.options, self.ms
+        if state.get("near_loose_open") is not None:
+            index = state["near_loose_open"]
+            record = state["near_loose_refusals"][index]
+            if tracking.status != "arrived" and standing:
+                return
+            if tracking.status != "arrived":
+                record.setdefault("ends", []).append({"time_s": float(t), "how": "moved",
+                                                      "observe_replans_n": len(state["observe_replans"])})
+            state.pop("near_loose_open")
+            state["near_loose_pending"] = index
+        else:
+            record = state["near_loose_refusals"][state["near_loose_pending"]]
+        if tracking.status == "arrived" and ms.phase == "observe" and "arrival" not in record:
             narrow = options.near_observe_arrival
             record["arrival"] = {
                 "time_s": float(t), "bounds_source": source,
                 "inside_narrow": bool(tracking.position_error_m <= narrow[0]
                                       and abs(tracking.yaw_error_rad) <= narrow[1]),
                 "position_error_m": float(tracking.position_error_m), "yaw_error_rad": float(tracking.yaw_error_rad),
-                "observe_replans_n": len(state["observe_replans"])}
-            state.pop("near_loose_open")
-        elif not standing:
-            record.setdefault("ends", []).append({"time_s": float(t), "how": "moved",
-                                                  "observe_replans_n": len(state["observe_replans"])})
-            state.pop("near_loose_open")
+                "observe_replans_n": len(state["observe_replans"]),
+                "leg_serial": state["observe_replan_leg"]["serial"]}
+
+    def near_loose_outcome(self, t: float) -> None:
+        """K1 2.2: a waiting record takes the near capture's status when it leaves ``pending`` (the capture ran
+        between the last tick and this one); called at the top of command() only while a record waits."""
+        state = self.state
+        status = (state.get("near_capture") or {}).get("status")
+        if status != "pending":
+            record = state["near_loose_refusals"][state.pop("near_loose_pending")]
+            record["capture"] = {"time_s": float(t), "status": status}
 
     def near_end_stand(self, t: float, rear, tracking, signed_speed: float, dt: float):
         """Plan 2026-11-02-near-leg-end-stand-c2 (C2): O1's rule on the near re-observation leg. A stop at its final
@@ -3456,6 +3477,8 @@ class MissionCore:
             tracking.status != "failed",
             f"Tracking failed in {ms.phase}: pos={tracking.position_error_m:.4f},yaw={tracking.yaw_error_rad:.4f}",
         )
+        if state.get("near_loose_pending") is not None:  # K1 2.2: only while an intervention waits for its outcome
+            self.near_loose_outcome(t)
         requested_speed, curvature = (
             tracking.speed_mps,
             tracking.curvature_inv_m,
@@ -3569,7 +3592,7 @@ class MissionCore:
                 tracking = replace(tracking, status="arrived")
         else:
             state.pop("observe_loose_arrival", None)
-        if state.get("near_loose_open") is not None:
+        if state.get("near_loose_open") is not None or state.get("near_loose_pending") is not None:
             # the stand goes on while the leg stands at its end (stop detection aside: C2's wait spans it)
             stand_on_ = (ms.phase == "observe" and tracking.status == "tracking"
                          and trackers[ms.phase].remaining_to_goal_m() <= 1e-9 and abs(tracking.speed_mps) < 1e-12)

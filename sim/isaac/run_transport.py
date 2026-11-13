@@ -8071,7 +8071,7 @@ def drive(S, isaac) -> None:
                     base_w_, q_w_, lift_w_, ppos_w_, pq_w_,
                     steering={"left_steer": float(joints_w_[steers[0]]), "right_steer": float(joints_w_[steers[1]])},
                     clearance_m=margin_w_)
-                near_loose_watch_.step(np.asarray(ppos_w_)[:2], contacts_w_, float(world.current_time - initial_time))
+                near_loose_watch_.step(state, np.asarray(ppos_w_)[:2], contacts_w_, float(world.current_time - initial_time))
             if pose_box["rt"] is not None and pose_box["rt"].contacts is not None:
                 import pose_contacts  # plan 2026-11-06 1.4: this step's contacts, the check's status then
 
@@ -10448,8 +10448,6 @@ def drive(S, isaac) -> None:
                     near_end_detour_.tick(t, ms.phase, trackers.get("observe"), core.near_reobserve_leg(), state,
                                           float(np.linalg.norm(ppos[:2] - initial_pallet[:2])), rear,
                                           can_arm=not paused_ and not warming)
-                if near_loose_watch_ is not None:
-                    near_loose_watch_.tick(t, state, ppos[:2])  # K1 2.2: open at an intervention, close after the capture
                 scene_owned_, scene_presteer_ = False, None
                 if not paused_ and not releasing and not warming and core.scene_replan.active():
                     scene_ = core.scene_replan_tick(t, rear, signed_speed, dt)
@@ -10499,6 +10497,10 @@ def drive(S, isaac) -> None:
                                                                       command_.tracking, command_.rear)
                         tick_vars.sync(rear=rear, requested_speed=requested_speed)  # 4e-1a
                         dwell_hold, dwell_standing, safety_hold = command_.dwell_hold, command_.dwell_standing, command_.safety_hold
+                        if near_loose_watch_ is not None:
+                            # K1 2.2: after the core opened this tick's intervention (the recovery's C2, command()'s
+                            # blocked arrival) and before any physics step or capture; closed once the capture is done
+                            near_loose_watch_.tick(t, state, ppos[:2], core.commands.mission_id)
                         if tracking.status == "arrived":
                             if args.use_perception and ms.phase == "observe":
                                 if core.bottom_deck_side_leg():

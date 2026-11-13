@@ -140,7 +140,8 @@ def test_shadow_is_never_combined_in_the_core_rule_either():
 
 
 def test_the_new_state_keys_are_mission_keys():
-    for key in ("near_loose_refusals", "near_loose_open", "near_loose_fallbacks", "near_loose_watch"):
+    for key in ("near_loose_refusals", "near_loose_open", "near_loose_pending", "near_loose_fallbacks",
+                "near_loose_watch"):
         assert key in MISSION_KEYS["state"]
 
 
@@ -238,8 +239,11 @@ def test_the_stand_closes_when_the_truck_moves_again():
     w.tick(replace(CMID, speed_mps=0.1), t=10.5)
     (ev,) = w.state["near_loose_refusals"]
     assert ev["ends"][0]["how"] == "moved" and "near_loose_open" not in w.state
-    w.tick(CMID, t=11.0)  # a new stand: a new record
+    assert w.state["near_loose_pending"] == 0  # its outcome still to come
+    w.tick(CMID, t=11.0)  # a new stand: a new record, which supersedes the waiting one
     assert len(w.state["near_loose_refusals"]) == 2
+    assert w.state["near_loose_refusals"][0]["superseded_by"] == 1 and "arrival" not in w.state["near_loose_refusals"][0]
+    assert w.state["near_loose_open"] == 1 and "near_loose_pending" not in w.state
 
 
 def test_the_stop_detection_does_not_end_the_stand():
@@ -264,3 +268,70 @@ def test_both_kinds_on_one_stand_make_one_record():
     w.core.near_loose_event(43.0, "extra_c2", MID, [0.1, 0.0, 0.0])
     (ev,) = w.state["near_loose_refusals"]
     assert ev["kinds"] == ["blocked_arrival", "extra_c2"] and ev["time_s"] == 40.0
+
+
+# ---- the outcome after the stand (Codex review: C2 -> move -> arrival -> capture) --------------------------------
+
+
+def test_c2_then_a_move_then_an_arrival_then_the_capture_are_all_on_the_one_record():
+    w = cmd_world()
+    w.tick(CMID, t=10.0)  # the stand: blocked arrival
+    w.core.near_loose_event(13.0, "extra_c2", CMID, [0.0, 0.06, 0.0])  # C2 judged it and installed a replan
+    w.tick(replace(CMID, speed_mps=0.1), t=13.1)  # the replan drives
+    assert w.state["near_loose_pending"] == 0 and "near_loose_open" not in w.state
+    close = replace(CMID, position_error_m=0.03, yaw_error_rad=0.02)
+    w.tick(close, t=20.0)
+    assert w.tick(close, t=21.0).tracking.status == "arrived"
+    (ev,) = w.state["near_loose_refusals"]
+    assert ev["kinds"] == ["blocked_arrival", "extra_c2"] and ev["ends"][0]["how"] == "moved"
+    assert ev["arrival"]["bounds_source"] == "narrow" and ev["arrival"]["inside_narrow"] is True
+    assert ev["arrival"]["leg_serial"] == 7 and "capture" not in ev
+    w.tick(close, t=21.1)  # the capture has not run yet
+    assert "capture" not in ev and w.state["near_loose_pending"] == 0
+    w.state["near_capture"]["status"] = "done"  # the runner's capture_and_detect between two ticks
+    w.tick(close, t=21.5)
+    assert ev["capture"] == {"time_s": 21.5, "status": "done"} and "near_loose_pending" not in w.state
+    assert ev["arrival"]["time_s"] == 21.0  # the first arrival is kept
+
+
+def test_an_arrival_on_the_stand_waits_for_the_capture_too():
+    w = cmd_world()
+    w.tick(CMID, t=10.0)
+    w.core.near_loose_bounds = lambda t: (0.10, 0.10, "fallback")
+    w.tick(CMID, t=11.0)
+    assert w.tick(CMID, t=12.0).tracking.status == "arrived"
+    assert w.state["near_loose_pending"] == 0
+    w.state["near_capture"]["status"] = "failed"
+    w.tick(CMID, t=12.5)
+    assert w.state["near_loose_refusals"][0]["capture"]["status"] == "failed"
+
+
+def test_two_missions_in_a_row_keep_their_records_apart():
+    """The baseline restore at the second mission's start removes every K1 key, so nothing waits across missions."""
+    from forklift_core.mission.baseline import MissionBaseline
+    w = cmd_world()
+    baseline = MissionBaseline.capture(w.core)
+    w.tick(CMID, t=10.0)
+    w.tick(replace(CMID, speed_mps=0.1), t=10.5)
+    assert w.state["near_loose_pending"] == 0
+    first = w.state["near_loose_refusals"]
+    baseline.restore(w.core)
+    w.core.commands.mission_id = "m2"
+    for key in ("near_loose_refusals", "near_loose_open", "near_loose_pending", "near_loose_watch"):
+        assert key not in w.state, key
+    w.state.update({"observe_replan_leg": {"start": 0, "serial": 7}, "observe_replans": []})
+    w.state["near_capture"] = {"status": "pending", "waypoint": [0.0, 0.0, 0.0]}
+    w.tick(CMID, t=30.0)
+    (ev,) = w.state["near_loose_refusals"]
+    assert ev["mission_id"] == "m2" and w.state["near_loose_refusals"] is not first and len(first) == 1
+
+
+def test_without_the_option_command_never_reads_the_pending_key():
+    """Off: the outcome check is a dict lookup that finds nothing, and command()'s output is the same."""
+    w = cc.World("observe", remaining=0.0, near_capture="pending")
+    called = []
+    w.core.near_loose_outcome = lambda t: called.append(t)
+    w.core.near_loose_close = lambda *a: called.append(a)
+    for k in range(3):
+        w.tick(CMID, t=10.0 + k)
+    assert called == []
