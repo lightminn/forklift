@@ -288,3 +288,79 @@ def test_a_negative_merge_offset_merges_to_the_other_side():
                               {"label": "m", "speed_mps": 0.10, "s_merge": {"offset_m": -0.02, "length_m": 0.9}}), LIM)
     assert p.segments[1].peak_kappa < 0
 
+
+
+# --- drive to drive: a continuing drive keeps moving (registration D8) ----------------------------------------------
+
+MERGE_CONT = prof({"label": "p", "presteer_kappa_inv_m": 0.0}, {"label": "still", "hold_s": 0.5},
+                  {"label": "lead", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.2},
+                  {"label": "merge", "speed_mps": 0.10, "s_merge": {"offset_m": 0.02, "length_m": 0.9}},
+                  {"label": "cont", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.2},
+                  {"label": "still_post", "hold_s": 0.5})
+
+
+def _run_flagging(rig, n):
+    flagged = []
+    for _ in range(n):
+        rig.tick()
+        if rig.r.zero_now:
+            flagged.append((rig.r.state, rig.r.segment.label if rig.r.segment else None))
+            rig.r.zero_now = False
+    return flagged
+
+
+def test_a_drive_followed_by_a_drive_the_same_way_is_not_dropped_to_zero_at_the_boundary():
+    rig = Rig(MERGE_CONT)
+    rig.start()
+    flagged = _run_flagging(rig, 1000)
+    # only the stand after the last drive and the end drop the speed at once
+    assert flagged == [("running", "still_post"), ("zeroing", None)]
+    driving = [r for r in rig.rows if r["label"] in ("lead", "merge", "cont")]
+    first = next(i for i, r in enumerate(driving) if r["req_mps"] > 0)
+    # no dip between the drives; the last drive's last row is the cycle it ended into the stand, already zero
+    assert all(r["req_mps"] == pytest.approx(0.10) for r in driving[first:-1]) and driving[-1]["req_mps"] == 0.0
+    assert rig.r.result == "done"
+
+
+def test_a_continuing_drive_carries_the_distance_past_the_boundary():
+    rig = Rig(MERGE_CONT)
+    rig.start()
+    rig.tick(1000)
+    ends = {}
+    for r in rig.rows:
+        if r["label"] in ("lead", "merge", "cont"):
+            ends[r["label"]] = r["s_m"]
+    # each segment ends within one cycle's travel of its own length, and the three add up to the travelled total
+    for label, d in (("lead", 0.2), ("merge", 0.9), ("cont", 0.2)):
+        assert ends[label] == pytest.approx(d, abs=0.10 * DT + 1e-9)
+    travelled = sum(r["drive_mps"] * DT for r in rig.rows if r["label"] in ("lead", "merge", "cont"))
+    assert travelled == pytest.approx(1.3, abs=0.10 * DT + 1e-9)
+
+
+def test_letting_go_at_a_drive_to_drive_boundary_voids_instead_of_waiting():
+    rig = Rig(MERGE_CONT)
+    rig.start()
+    while rig.r.segment is None or rig.r.segment.label != "merge":
+        rig.tick()
+    rig.deadman = False
+    rig.tick()
+    assert rig.r.result == "void:deadman"
+
+
+def test_a_drive_that_reverses_into_the_next_drive_still_drops_to_zero_and_waits_for_the_deadman():
+    rev = prof({"label": "p", "presteer_kappa_inv_m": 0.0},
+               {"label": "fwd", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.2},
+               {"label": "back", "speed_mps": -0.10, "kappa_inv_m": 0.0, "distance_m": 0.2})
+    rig = Rig(rev)
+    rig.start()
+    flagged = _run_flagging(rig, 600)
+    assert flagged[0] == ("running", "back") and rig.r.result == "done"
+
+
+def test_after_a_drive_ends_into_a_stand_a_message_rewritten_before_the_next_cycle_carries_zero_speed():
+    rig = Rig()
+    rig.start()
+    while rig.r.segment is None or rig.r.segment.label != "still_post":
+        rig.tick()
+    # the boundary cycle just ran: an operator message arriving now must not raise the speed the bridge zeroed
+    assert rig.r.rewrite(rig.msg())["speed_ratio"] == 0.0
