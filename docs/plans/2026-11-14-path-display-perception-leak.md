@@ -73,7 +73,10 @@ ws1 의 Isaac Sim 5.1.0(`/opt/isaacsim-env`, extscache: omni.replicator.core 1.1
     - `recorded_arguments` 는 `stage` 일 때 이 인자를 기록하지 않는다. 옛 기록과 같게 하려는 것이다(기존 "기본값이면 기록하지 않음" 규칙과 같은 꼴).
     - `overlay`·`off` 는 기록한다.
     - 그래서 키가 없으면 수정 전 동작(장면 prim)이고, 있으면 수정 뒤다. `near_tracking` 의 RUN_SPECIFIC 이나 POST_MEASUREMENT 에는 넣지 않는다.
-  - 도구별 비교 결과(키 없음 = 옛 기록 또는 새 stage):
+  - 도구별 비교 결과(키 없음 = 옛 기록 또는 새 stage). 방향(어느 쪽이 기대·관측인지)에 관계없이 같다.
+    - `path_display` 는 `POST_MEASUREMENT_ARGUMENTS`·`RECORDING_ONLY_ARGUMENTS` 에 없다. 그래서 `condition_problems` 의 인자 대조(1402–1414)는 한쪽에만 있는 키를 `want.get(key) != have.get(key)` 로, 곧 None 대 값으로 비교한다.
+    - `reference_problems` 도 키 합집합을 직접 대조한다.
+    - 시험은 두 함수 모두 기대·관측을 바꾼 양방향으로 고정한다.
 
 | 비교 | 옛 기록 / 새 stage | overlay | off |
 |---|---|---|---|
@@ -161,6 +164,7 @@ ws1 의 Isaac Sim 5.1.0(`/opt/isaacsim-env`, extscache: omni.replicator.core 1.1
   - 3 회차 P2 2 건을 처리했다:
     - 도구마다 옛 기록 기본값 처리가 다른 문제: stage 는 기록하지 않고 overlay·off 는 기록하는 방식으로 바꿨다. 그래서 near_tracking 과 s4_drive_terms 가 같게 판정한다. 비교 표를 넣었다.
     - stage 차단 위치: 러너 진단 변수, 런처, 묶음 check 세 겹으로 했다.
+  - 4 회차 P2(두 함수가 방향에 따라 다르게 판정한다는 지적): 코드로 확인했다. `path_display` 가 POST_MEASUREMENT 에 없으면 `condition_problems` 도 None 대 값으로 대칭 비교하므로 성립하지 않는다. 표에 근거를 적고, 시험을 양방향으로 고정하기로 했다.
     - 라이브 카메라 모델과 렌더 시각
 - ③ agy(Gemini 4 Hydrogen High) "적히지 않은 전제", ①②를 보지 않은 독립 검토. 처리:
   - 리프트·SLAM: `annotation_pose` 대신 카메라 객체 자세를 쓴다. 경로 좌표는 지금 prim 과 같다.
