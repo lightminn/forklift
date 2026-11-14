@@ -3,12 +3,13 @@
    hardware. Vehicle values come from the generated vehicle_config.h (tools/real_vehicle_header.py);
    every other drive_config value is synthetic, not a hardware value.
 
-   usage: mcu_model --link PATH [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
+   usage: mcu_model (--link PATH | --link-fd N) [--boot-id N] [--duration-ms N] [--fault-at-ms N] [--estop-at-ms N]
                     [--estop-release-ms N] [--silent-at-ms N]
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
    --hand-turn-duration-ms D]
                     [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
                     [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1] [--stop-grace-ms N]
+   --link-fd N: an inherited open fd instead of a path (the rehearsal bench passes the pty master).
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
    only; it is not an IWDG and proves nothing about output cut-off).
@@ -288,15 +289,27 @@ static const char *arg_str(int argc, char **argv, const char *name)
 int main(int argc, char **argv)
 {
     const char *link = arg_str(argc, argv, "--link");
-    if (link == NULL) {
-        fprintf(stderr, "usage: mcu_model --link PATH [options]\n");
+    long link_fd = arg_long(argc, argv, "--link-fd", -1);
+    if ((link == NULL) == (link_fd < 0)) {
+        fprintf(stderr, "usage: mcu_model --link PATH | --link-fd N [options]\n");
         return 2;
     }
     memset(&B, 0, sizeof B);
-    B.fd = open(link, O_RDWR | O_NOCTTY | O_NONBLOCK);
-    if (B.fd < 0) {
-        perror("open link");
-        return 2;
+    if (link != NULL) {
+        B.fd = open(link, O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (B.fd < 0) {
+            perror("open link");
+            return 2;
+        }
+    } else {
+        /* the rehearsal bench (docs/design/2026-11-15-arrival-day-rehearsal.md 2.1): an inherited fd, the pty
+           master, so the model itself holds the peer of the slave the host tools open by path */
+        B.fd = (int)link_fd;
+        int fl = fcntl(B.fd, F_GETFL);
+        if (fl < 0 || fcntl(B.fd, F_SETFL, fl | O_NONBLOCK) < 0) {
+            perror("link fd");
+            return 2;
+        }
     }
     struct termios tio;
     if (tcgetattr(B.fd, &tio) == 0) {
