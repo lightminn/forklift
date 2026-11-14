@@ -129,3 +129,12 @@ def test_too_little_rotation_or_a_moving_standstill_is_refused():
     acc[50:] += np.array([3.0, 0.0, 0.0])  # moving: the mean is not gravity alone
     with pytest.raises(ValueError, match="still"):
         im.up_from_gravity(acc)
+
+
+def test_the_s6_arc_turns_fast_enough_to_be_taken():
+    """The G3 arc at the teleop caps: 0.132 m/s x 0.36 /m, and 8 % less if the truck under-turns as in the sim."""
+    rate = 0.132 * 0.36 * 0.92
+    u = im.up_from_spin(arc(BODY_UP_LEVEL, rate), bias=BIAS, operator_ccw=True)
+    assert np.allclose(u, BODY_UP_LEVEL, atol=1e-6)
+    assert im.spin_check(arc(BODY_UP_LEVEL, rate), bias=BIAS, up_gravity=BODY_UP_LEVEL,
+                         operator_ccw=True)["sign_matches_operator"] is True

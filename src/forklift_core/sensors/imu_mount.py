@@ -19,7 +19,10 @@ import numpy as np
 G = 9.80665
 STILL_SPREAD_MPS2 = 0.5  # a standstill's acceleration samples stay this close to their mean (else: moving)
 STILL_NORM_TOL = 0.1  # and the mean's length is g within this fraction
-MIN_SPIN_RAD_S = 0.05  # an arc turns at least this fast on average once the bias is removed
+# an arc turns at least this fast on average once the bias is removed. The S6 arc at the teleop caps turns at
+# 0.132 m/s x 0.36 /m = 0.0475 rad/s (kinematic; less if the truck under-turns), so the floor sits well below it
+# and well above a desk bias of a few mrad/s
+MIN_SPIN_RAD_S = 0.02
 MIN_SAMPLES = 10
 
 
