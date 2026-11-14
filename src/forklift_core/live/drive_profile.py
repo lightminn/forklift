@@ -224,7 +224,7 @@ class ProfileRunner:
 
     def __post_init__(self) -> None:
         self._marks: list = []
-        self.zero_now = False  # the request just dropped to zero (an end, or a drive finished): apply it at once
+        self.zero_now = False  # the request just dropped to zero (an end, or a drive into a stand): apply it at once
         self._row_s: float | None = None
         self._reset()
 
@@ -293,13 +293,25 @@ class ProfileRunner:
         self._row_s = self.s_m  # the row of this cycle shows where the finished segment ended
         if seg.kind == "drive" and seg.at_max and not self.reached:
             self.under_reached.append(seg.label)
-        if seg.kind == "drive":
-            self.zero_now = True  # the next segment stands: the accepted command's speed goes to zero now
+        segs = self.profile.segments
+        nxt = segs[self.i + 1] if self.i + 1 < len(segs) else None
+        # a drive followed by a drive the same way keeps moving: no drop to zero, the deadman still held, and the
+        # distance past the boundary carried into the next segment (an M3 merge then its continuation)
+        cont = seg.kind == "drive" and nxt is not None and nxt.kind == "drive" and \
+            (nxt.speed_mps > 0) == (seg.speed_mps > 0)
+        carry = self.s_m - seg.distance_m if cont else 0.0
+        if seg.kind == "drive" and not cont:
+            # the next segment stands (or the drive reverses): the accepted command's speed goes to zero now, and so
+            # does the request, so a message rewritten before the next cycle cannot raise it again
+            self.zero_now = True
+            self.req_mps = 0.0
         self.i += 1
-        if self.i >= len(self.profile.segments):
+        if self.i >= len(segs):
             self._end("done")
         else:
             self._enter(host_ns)
+            if cont:
+                self.moving, self.s_m = True, carry
 
     def step(self, now_ns: int, obs: Observation) -> dict | None:
         """Advance one bridge cycle; returns the profile row (None when idle)."""
