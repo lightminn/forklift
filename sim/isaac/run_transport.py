@@ -970,6 +970,15 @@ def arguments() -> argparse.Namespace:
         f"diagnostic only and needs {path_overlay.DIAGNOSTIC_ENV}=stage (=both: prims and overlay, to measure "
         "their alignment). A record carries the mode except stage, which records nothing, as the older records.",
     )
+    parser.add_argument(
+        "--path-display-pixel-lag-s",
+        type=float,
+        default=0.0,
+        help="Sim seconds a non-deterministic video frame's pixels trail its rendering_time: a moving camera's "
+        "planned paths are drawn from the pose that much earlier (path display follow-up 1). 0 (default) draws "
+        "from the render time; the live console's measured lag (--live-camera-pixel-lag-s, 11 physics steps) is "
+        "the candidate value, to be chosen from the console's S4 measurement. Display only: recorded when not 0.",
+    )
     parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto",
                         help="the top-down overview camera clips everything above the ceiling lamps' bottom less 0.3 m "
                              "(read from the stage; that camera only -- lights, perception cameras, LiDAR and physics "
@@ -1665,6 +1674,8 @@ def arguments() -> argparse.Namespace:
         args.path_display = path_overlay.effective_mode(args.path_display)
     except ValueError as exc:
         parser.error(str(exc))
+    if not (math.isfinite(args.path_display_pixel_lag_s) and args.path_display_pixel_lag_s >= 0.0):
+        parser.error(f"--path-display-pixel-lag-s must be finite and >= 0, not {args.path_display_pixel_lag_s}")
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
             args.extra_views, args.video, args.use_perception
@@ -4223,6 +4234,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
     path_overlay.reset()
     path_overlay.set_contrast(args.path_display == "both")  # the S3 alignment smoke (plan 2026-11-14 4)
+    path_overlay.set_pixel_lag(args.path_display_pixel_lag_s)  # follow-up ①: 0 until the console's S4 measurement
 
     def destination_ring(x_, y_, path_="/World/Destination") -> str:
         """The green destination ring, by the display mode as the planned paths (plan 2026-11-14 2): a display
@@ -4711,10 +4723,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     adapter.read_isaac_intrinsics(perception_camera).integer_index
                 ),
             }
-        if not args.deterministic:  # the mounted video cameras (and the perception camera as their fallback) move
+        if not args.deterministic:  # the mounted video cameras move: only those a video sink reads (follow-up ②)
             path_overlay.set_clock(path_overlay.isaac_sim_clock())
-            live_cam_setup_ = live_video_camera if getattr(args, "live", False) else None
-            for cam_ in (perception_camera, perception_display, live_cam_setup_):
+            live_on_ = getattr(args, "live", False)
+            live_cam_setup_ = live_video_camera if live_on_ else None
+            # the perception camera is a video sink only as a fallback: the robot camera with no display camera, or the
+            # live stream with no live camera (each is made whenever its sink is on, so normally neither)
+            percep_sink_ = ((args.robot_camera and perception_display is None)
+                            or (live_on_ and live_cam_setup_ is None))
+            for cam_ in (perception_camera if percep_sink_ else None, perception_display, live_cam_setup_):
                 if cam_ is not None:
                     path_overlay.register_moving(cam_)
         # M-a1 replay plan R2: the capture's callbacks read the run's current stepper, world and robot through
@@ -11894,6 +11911,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # path display plan (2026-11-14): stage records nothing, as every record before the fix (the display prims);
         # overlay, off and both are recorded, so a near-field or D8b comparison with an older record refuses them
         and (k != "path_display" or path_overlay.recorded_value(v) is not None)
+        # path display follow-up 1: the overlay's pixel lag only when set (display only, never a sensor input)
+        and (k != "path_display_pixel_lag_s" or v != 0.0)
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
         and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s",
                        "start_known")
@@ -12238,6 +12257,9 @@ def main() -> None:
 
             state["lidar_cast"] = lidar_mode_.oracle_record()
         state["scan_switches"] = scan_switches_record()  # G3 promotion: what this run applied (plan 5.26-5.27)
+        # path display follow-up: the overlay's failures and clock mismatches, beside the result (never in the state,
+        # which a boundary replay compares)
+        (args.output / "path_display.json").write_text(json.dumps(path_overlay.stats(), indent=2) + "\n")
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 

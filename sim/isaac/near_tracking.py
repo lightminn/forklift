@@ -1028,6 +1028,8 @@ def input_files_skipping(
 # stops) and the near-tracking options themselves.
 RUN_SPECIFIC_ARGUMENTS = (
     "output",
+    # path display follow-up 1 (2026-11-14): the overlay's pixel lag is display only, never a sensor input
+    "path_display_pixel_lag_s",
     # scene requirements plan (2026-10-27): preflight metadata, not a condition of the run (the arguments the
     # requirements name are compared as before)
     "scene_requirements",
