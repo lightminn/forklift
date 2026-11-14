@@ -10,6 +10,9 @@
 | D1 | 12 G6 | 다리가 시행 끝에 `{"t": "profile_end", "trial", "result"}` 행을 쓰지 않는다(G6 설계 2 절은 쓴다고 함). `m_analysis.trials()` 는 `profile` 행의 `result` 로 시행을 나누므로 G8 은 깨지지 않는다 — 설계와 구현의 불일치(낮음) | PR 예정: 다리가 시행 끝에 한 번 쓰고 시험으로 단언(설계대로) |
 | D3 | 12 G6→G8 | **도착일 기록을 G8 이 읽지 못했다.** 일정표 실행기가 구간이 끝나는 주기의 행에 다음 구간 번호(`seg`)와 끝난 구간의 label 을 함께 써서, `m_analysis.trials()` 가 "label 이 두 구간" 으로 모든 다구간 시행을 거부했다. 단위 시험은 합성 행만 써서 못 잡음 | PR `fix/profile-row-seg`(D1 과 함께): 행이 그 주기의 구간을 가리키게, 시험으로 trials() 통과 단언 |
 | D2 | 6 S2 kth | 합성 기록을 `--allow-synthetic` 로 읽으면 출력 맨 위 `synthetic_inputs: true` 와 함께 kth 자신의 `"synthetic": false`(HIL_PLANT 비트로 정함)가 나와 서로 어긋나 보인다 | PR 예정: 머리 줄이 합성이면 kth 의 `synthetic` 도 참, 판정은 `synthetic` |
+| D4 | 12 G8 | G8 을 기록에 돌리는 입구(CLI·적재기)가 없다. 기록 행 → `McuState`(`sample_from_row(r).state`), IMU 행 → `imu_stream`, 서 있는 구간·창 계산을 매번 손으로 이어야 한다. 리허설은 세션 스크립트로 이었다 | `tools/m_analyze.py`(등록 3–5 절 계산, 합성 기본 거부) — D5 다음(총괄) |
+| D5 | 12 G6 | **구조적 민감성, 실제 빈도 미확인.** 호스트는 새 STATE 마다 직전 수신 이후 간격을 먼저 판정하고(`mcu_host._on_state` → `_expire`) 수신 시각이 다리 주기 시각이라, 다리 루프가 약 30 ms(= 50 ms 문턱 − 주기 20 ms) 넘게 멈추면 링크가 멀쩡해도 `stale` → 무장 해제(모형 E2E 하네스에서 30 ms 멈춤으로 결정적 재현). 리허설 M1 시행을 무효로 만든 멈춤은 **리허설 도구 탓이었다** — `SyntheticPermit` 의 1 s 주기 전체 /proc 열거가 제어 루프 안에서 30–50 ms 걸렸다(감시 스레드 스택 19 번 중 16 번). 열거를 시작 때 한 번으로 옮기자 85 s 정지 시행이 `done`, 25 ms 넘는 주기는 1 번 | 리허설 도구 고침(전체 열거는 시작 때만, 루프는 `model_alive_refusal`). MCU 시각 간격 판정은 실제 다리 15–20 분 지터 측정 뒤 결정(총괄) |
+| D6 | 7a 스캔 | 합성 scan/1 머리의 `synthetic` 이 `scan_check` 의 요약·`--record` 에 실리지 않는다 | 낮음: scan_check 가 머리의 synthetic 을 요약·기록에 옮김 |
 
 ## 단계별 기록
 
@@ -31,7 +34,7 @@
 
 ### 12 M1–M3 연결(모형 drive 단계)
 
-- M1 일정표(`config/profiles/m1_m3/m1_fwd_v010.yaml`, 155 s) 를 `rehearsal_drive.py` 로 두 번: 1 번은 3.0 m 주행 뒤 정지 구간에서 `void:disarmed:mcu_stopping`, 2 번은 앞 정지 24 s 에서 `void:disarmed:mcu_armed` — D5. 12 s 정지로 줄인 시행도 22.7 s 에 같은 무효. 5 s 정지·1 m 시행은 `done`.
+- M1 일정표(`config/profiles/m1_m3/m1_fwd_v010.yaml`, 155 s) 를 `rehearsal_drive.py` 로 두 번: 1 번은 3.0 m 주행 뒤 정지 구간에서 `void:disarmed:mcu_stopping`, 2 번은 앞 정지 24 s 에서 `void:disarmed:mcu_armed` — 리허설 도구의 루프 안 열거가 만든 멈춤(D5). 고친 뒤 85 s 정지 시행은 `done`. 12 s 정지로 줄인 시행도 22.7 s 에 같은 무효. 5 s 정지·1 m 시행은 `done`.
 - G7: `bringup.py clock --allow-synthetic` 이 다리 기록으로 `ok`(드리프트 −0.14 ppm, 모형).
 - 대역: `rehearsal_imu_truth.py` 가 같은 기록에서 IMU(`imu_record/1`, 400/200 Hz)와 참값 파일을 씀(둘 다 synthetic).
 - G8(등록 3.3 순서, 세션 스크립트): D3 고친 뒤 `trials(valid_only)` 1 시행, `odometry_heading` Δθ 0(모형 직진), `m1_drift` 계산됨, `heading_sigma_lower` 하한 1.07 mrad(3 s 창·10 s 주행). `quiet_window` 는 5 s 정지에서 창을 찾지 못함(등록의 60 s/50 s 규칙은 긴 정지가 필요한데 D5 가 막음). 오도메트리 연속성 `gap` 1 건(D5 의 멈춤).
