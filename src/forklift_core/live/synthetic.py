@@ -83,3 +83,21 @@ def refuse_or_mark(rows, *, allow: bool) -> dict:
         raise SyntheticRefused("a synthetic (rehearsal) record: not for measurement (give --allow-synthetic to read "
                                "it for a rehearsal; the output is then marked not_for_judgement)")
     return dict(OUTPUT_MARKS)
+
+
+def bench_opener(opener, bench: dict):
+    """Wrap a link opener so a rehearsal link uses only the bench's pty: the opened fd itself (fstat, not the path
+    checked earlier) must be that character device, else it is closed and the open fails -- a path retargeted
+    between the check and an open or a reopen never reaches another device (Codex rehearsal review P1)."""
+    want = bench.get("pts_rdev")
+
+    def open_checked(path, baud=None):
+        fd = opener(path, baud)
+        st = os.fstat(fd)
+        if not stat.S_ISCHR(st.st_mode) or st.st_rdev != want:
+            os.close(fd)
+            raise OSError(f"{path} opened a device that is not the bench's pty (rdev {st.st_rdev} != {want})")
+        return fd
+
+    return open_checked
+

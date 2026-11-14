@@ -56,3 +56,18 @@ def test_is_pty_reads_the_device_major(tmp_path):
     f = tmp_path / "f"
     f.write_text("")
     assert not syn._is_pty(str(f)) and not syn._is_pty(str(tmp_path / "missing"))
+
+
+def test_the_bench_opener_refuses_an_fd_on_another_device(tmp_path):
+    m, sl = os.openpty()
+    try:
+        pts = os.ttyname(sl)
+        bench = {"pts_rdev": os.stat(pts).st_rdev}
+        plain = lambda path, baud=None: os.open(path, os.O_RDWR | os.O_NOCTTY)  # noqa: E731
+        fd = syn.bench_opener(plain, bench)(pts)
+        os.close(fd)
+        with pytest.raises(OSError, match="not the bench"):
+            syn.bench_opener(plain, bench)("/dev/null")
+    finally:
+        os.close(m)
+        os.close(sl)

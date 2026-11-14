@@ -35,7 +35,7 @@ from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
-from forklift_core.live.synthetic import SyntheticRefused, device_identity, writer_marker  # noqa: E402
+from forklift_core.live.synthetic import SyntheticRefused, bench_opener, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
 from forklift_core.mcu_link.messages import McuState  # noqa: E402
@@ -49,7 +49,7 @@ from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
-from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
+from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
 
 CYCLE_S = 0.02
 
@@ -409,7 +409,9 @@ def main(argv=None) -> int:
     out: dict = {}
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
-        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record,
+        link = (ReconnectingLink(args.device, baud=args.baud) if synthetic is None  # the real path: unchanged
+                else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"])))
+        bridge = Bridge(link, confirmed=confirmed, record=record,
                         profile=profile, floor_permit=floor)
         if bridge.profile is not None:
             def on_enter(_label, host_ns):

@@ -35,12 +35,12 @@ import sys
 import time
 from pathlib import Path
 
-from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, device_identity, writer_marker
+from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, writer_marker
 from forklift_core.mcu_link.messages import Arm, ClearFaults, FaultFlag, Mode, RejectReason, StateFlag
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bringup  # noqa: E402
-from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
+from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
 
 ARM_PERIOD_S = 0.01
 REFUSAL_SEEN_NS = 30_000_000  # a written ARM has reached the MCU and its result a STATE (three STATE periods)
@@ -211,7 +211,9 @@ def main(argv: list[str] | None = None) -> int:
                               "synthetic": synthetic, "start_wall": time.time(),
                               "start_mono_ns": time.monotonic_ns()}) + "\n")
         out.flush()
-        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud), out, allow_locked=True, commission=True)
+        opener = open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"])
+        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud, opener=opener), out, allow_locked=True,
+                          commission=True)
         try:
             result = run(b, AXES[args.axis], args.duty, args.limit_s, args.stop_grace_ms)
         except bringup.Refused as exc:

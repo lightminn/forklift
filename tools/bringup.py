@@ -38,7 +38,8 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, device_identity, refuse_or_mark, writer_marker
+from forklift_core.live.synthetic import (OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, refuse_or_mark,
+                                          writer_marker)
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive,
@@ -79,7 +80,7 @@ from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here 
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
+from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 STEP_MAX_S = 3.0
@@ -976,7 +977,8 @@ def main(argv=None) -> int:
     except (SyntheticRefused, OSError, ValueError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
-    link = ReconnectingLink(args.device, baud=args.baud)
+    link = ReconnectingLink(args.device, baud=args.baud,
+                            opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]))
     with open(args.out, "a", encoding="utf-8") as out:
         # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
