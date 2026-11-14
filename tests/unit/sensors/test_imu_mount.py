@@ -138,4 +138,3 @@ def test_the_s6_arc_turns_fast_enough_to_be_taken():
     assert np.allclose(u, BODY_UP_LEVEL, atol=1e-6)
     assert im.spin_check(arc(BODY_UP_LEVEL, rate), bias=BIAS, up_gravity=BODY_UP_LEVEL,
                          operator_ccw=True)["sign_matches_operator"] is True
-
