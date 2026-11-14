@@ -268,6 +268,7 @@ def merge(tables: list[list]) -> list:
 
 
 from sim.isaac.near_tracking import (  # noqa: E402,F401 -- shared with the runner's contract
+    PATH_DISPLAY_REFUSAL,
     SLAM_MAP_ARGUMENTS,
     condition_problems,
     config_paths,
@@ -319,7 +320,8 @@ def reference_problems(key: str, result: dict, reference: dict) -> list[str]:
         if name in ARGUMENTS_BY_DESIGN:
             continue
         if snapshot_relative(args.get(name)) != snapshot_relative(args_ref.get(name)):
-            problems.append(f"{key}: argument {name} differs from the D8b run")
+            problems.append(f"{key}: argument {name} differs from the D8b run"
+                            + (PATH_DISPLAY_REFUSAL if name == "path_display" else ""))
     files = input_files(args, snapshot_root(args))
     files_ref = input_files(args_ref, snapshot_root(args_ref))
     for label in sorted(set(files) | set(files_ref)):

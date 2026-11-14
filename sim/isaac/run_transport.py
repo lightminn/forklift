@@ -30,6 +30,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:  # run through runpy or
 from frame_sync import FrameSync  # noqa: E402
 from isaac_plant import IsaacPlant  # noqa: E402
 from frame_sync import rgba_of as frame_sync_rgba  # noqa: E402
+import path_overlay  # noqa: E402
 
 from forklift_core import determinism
 from forklift_core.safety.truth_access import SafetySpeed  # sim-to-real 4d-1
@@ -959,6 +960,16 @@ def arguments() -> argparse.Namespace:
         help="The videos' x264 preset (crf 20 either way: the same quality, another file size and encoder CPU). "
         "Runs before the option encoded with medium; recorded in the result's camera block.",
     )
+    parser.add_argument(
+        "--path-display",
+        choices=path_overlay.MODES,
+        default="overlay",
+        help="The planned paths and the destination rings (docs/plans/2026-11-14-path-display-perception-leak.md): "
+        "overlay (default) draws them into the video frames only, off draws nothing, stage puts the display prims "
+        "into the scene as every run before 2026-11-14 did -- the perception cameras see them (#509), so stage is "
+        f"diagnostic only and needs {path_overlay.DIAGNOSTIC_ENV}=stage (=both: prims and overlay, to measure "
+        "their alignment). A record carries the mode except stage, which records nothing, as the older records.",
+    )
     parser.add_argument("--overview-clip", choices=("off", "auto"), default="auto",
                         help="the top-down overview camera clips everything above the ceiling lamps' bottom less 0.3 m "
                              "(read from the stage; that camera only -- lights, perception cameras, LiDAR and physics "
@@ -1650,6 +1661,10 @@ def arguments() -> argparse.Namespace:
                          "--recognition-learned-python")
         if not args.recognition_onnx.is_file():
             parser.error(f"--recognition-onnx {args.recognition_onnx} is not a file")
+    try:  # the display mode the run uses (the diagnostic variable may name stage or both; stage alone is refused)
+        args.path_display = path_overlay.effective_mode(args.path_display)
+    except ValueError as exc:
+        parser.error(str(exc))
     try:
         args.extra_views = MISSION_VIEWS.parse_extra_views(
             args.extra_views, args.video, args.use_perception
@@ -2571,6 +2586,16 @@ def open_encoder(path: Path, width: int, height: int, fps: int,
     )
 
 
+def overlay_frame_time(camera, deterministic: bool):
+    """The render time of ``camera``'s current frame, for drawing a moving camera's planned paths from the pose it
+    was rendered at (plan 2026-11-14-path-display-perception-leak 2); None in a deterministic run, whose frame is
+    its own step's (frame_sync)."""
+    if deterministic:
+        return None
+    frame = camera.get_current_frame()
+    return frame.get("rendering_time") if isinstance(frame, dict) else None
+
+
 def record_robot_camera_frame(
     camera,
     calibration,
@@ -2587,8 +2612,10 @@ def record_robot_camera_frame(
     fork_tip_x_m: float,
     overview,
     bounds,
+    deterministic: bool = False,
 ) -> None:
-    """Write one robot-camera RGB and depth frame, pockets drawn while on the floor."""
+    """Write one robot-camera RGB and depth frame, pockets drawn while on the floor (the planned paths under them,
+    on a copy: this camera may be the perception camera itself)."""
     width, height = calibration.width, calibration.height
     if not frames:
         # Floor points to overview pixels, for placing the overview offline.
@@ -2619,7 +2646,8 @@ def record_robot_camera_frame(
         and np.shape(depth)[:2] == (height, width)
     )
     if ready:
-        colour = np.asarray(rgb)[:, :, :3]
+        colour = path_overlay.compose(np.asarray(rgb)[:, :, :3], camera,
+                                      frame_time_s=overlay_frame_time(camera, deterministic))
         if estimate is not None and phase in inset.PALLET_ON_FLOOR_PHASES:
             base, q = pose
             current = (float(base[0]), float(base[1]), yaw_and_tilt(q)[0])
@@ -4193,16 +4221,27 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         state["prism_colliders"] = add_prism_colliders(stage, prism_columns(scenario, factory))
         # The overview has to see the whole hall from above the roof line.
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
+    path_overlay.reset()
+    path_overlay.set_contrast(args.path_display == "both")  # the S3 alignment smoke (plan 2026-11-14 4)
+
+    def destination_ring(x_, y_, path_="/World/Destination") -> str:
+        """The green destination ring, by the display mode as the planned paths (plan 2026-11-14 2): a display
+        prim the perception cameras would see, so in the scene only under the diagnostic stage. The prim path is
+        returned either way (the state keeps it as before)."""
+        if path_overlay.draws_stage(args.path_display):
+            add_destination(stage, x_, y_, path=path_)
+        if path_overlay.draws_overlay(args.path_display):
+            path_overlay.add_ring(path_, x_, y_, (0.01, 0.9, 0.04))
+        return path_
+
     if session is not None:  # a ring at every unloading slot (plan 2026-10-22-rigid-session-pallets 2.3)
         from session_pallets import prim_name as session_prim_name
 
-        state["destination_markers"] = {d_: add_destination(stage, site_.x_m, site_.y_m,
-                                                            path=f"/World/Destinations/{session_prim_name(d_)}")
+        state["destination_markers"] = {d_: destination_ring(site_.x_m, site_.y_m,
+                                                             path_=f"/World/Destinations/{session_prim_name(d_)}")
                                         for d_, site_ in session.destinations}
     else:
-        state["destination_marker"] = add_destination(
-            stage, scenario.destination.x_m, scenario.destination.y_m
-        )
+        state["destination_marker"] = destination_ring(scenario.destination.x_m, scenario.destination.y_m)
     # The scene above and scenario.json keep the true destination; with a prior
     # error (plan D7c δ runs) everything that plans from here on, and the docking
     # match's prior, sees the moved one. The reference scan and the evaluation use
@@ -4400,6 +4439,9 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         )
         chase.set_focal_length(3.0)
         extra_cameras["chase"] = chase
+        if not args.deterministic:  # a frame read some steps after it rendered (plan 2026-11-14-path-display 2)
+            path_overlay.set_clock(path_overlay.isaac_sim_clock())
+            path_overlay.register_moving(chase)
         state["extra_views"]["chase"] = {"focal_length_mm": 3.0}
     if args.use_perception:
         if args.perception_mount == "legacy":
@@ -4669,6 +4711,12 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                     adapter.read_isaac_intrinsics(perception_camera).integer_index
                 ),
             }
+        if not args.deterministic:  # the mounted video cameras (and the perception camera as their fallback) move
+            path_overlay.set_clock(path_overlay.isaac_sim_clock())
+            live_cam_setup_ = live_video_camera if getattr(args, "live", False) else None
+            for cam_ in (perception_camera, perception_display, live_cam_setup_):
+                if cam_ is not None:
+                    path_overlay.register_moving(cam_)
         # M-a1 replay plan R2: the capture's callbacks read the run's current stepper, world and robot through
         # this holder (the drive part rebinds them -- the stepper is made there, the proxies replace world and
         # robot), as they read run()'s own names before the split.
@@ -5307,10 +5355,18 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
 
         return _planar_lidar.cast_scan(*a, **k)
 
+    def display_path(stage_, path_, name_, colour_) -> None:
+        """A planned path for the eye (plan 2026-11-14-path-display-perception-leak 2): into the video frames
+        (overlay), the scene (the diagnostic stage) or both; never seen by a perception camera unless stage."""
+        if path_overlay.draws_stage(args.path_display):
+            add_path_display(stage_, path_, name_, colour_)
+        if path_overlay.draws_overlay(args.path_display):
+            path_overlay.add_path(name_, path_.poses, colour_)
+
     # M-a1 replay plan R2: the Isaac work after this point goes through these adapters (a replay supplies its own).
     isaac = _Cells(
         action=lambda **kw: ArticulationAction(**kw),
-        add_path_display=add_path_display,
+        add_path_display=display_path,
         export_scene=lambda: stage.GetRootLayer().Export(str(args.output / "scene.usda")),
         spawn_box=spawn_box,
         remove_prim=lambda path_: stage.RemovePrim(path_),
@@ -7640,7 +7696,9 @@ def drive(S, isaac) -> None:
                 rgba is not None and rgba.shape == (720, 1280, 4),
                 "Camera did not produce RGB",
             )
-            video_rgb = rgba[:, :, :3]
+            # the planned paths drawn before the inset, so the panel stays clear; the inset is the perception camera's
+            # own picture and shows no line (plan 2026-11-14-path-display-perception-leak 2)
+            video_rgb = path_overlay.compose(rgba[:, :, :3], camera)
             if args.camera_inset:
                 # Pose after this render step, so outline and picture agree;
                 # under SLAM feedback the pose the robot believes.
@@ -7687,6 +7745,7 @@ def drive(S, isaac) -> None:
                     - abs(args.rear_axle_offset_m),
                     overview=camera,
                     bounds=scenario.bounds,
+                    deterministic=bool(args.deterministic),
                 )
                 if slam is not None:
                     # The map panel may show only maps the bridge recorded
@@ -7709,9 +7768,11 @@ def drive(S, isaac) -> None:
                         f"{name} camera did not produce RGB",
                     )
                     view_rgb = np.ascontiguousarray(
-                        view_rgba[:, :, :3], dtype=np.uint8
+                        path_overlay.compose(view_rgba[:, :, :3], view_camera,
+                                             frame_time_s=overlay_frame_time(view_camera, bool(args.deterministic))),
+                        dtype=np.uint8,
                     )
-                    if name == "perception":
+                    if name == "perception":  # the planned paths on the picture half only
                         depth = view_camera.get_depth()
                         require(
                             depth is not None and depth.shape[:2] == (480, 640),
@@ -8091,6 +8152,7 @@ def drive(S, isaac) -> None:
                 tick, observing=far_observing(ms.phase == "observe" and state.get("near_capture", {}).get("status") != "pending"
                 and not core.bottom_deck_side_leg()))  # plan 2026-10-19 task 4: no far frames on a side leg
             world.step(render=render or frame_due or far_due)
+            path_overlay.note_moving()  # the moving video cameras' poses, non-deterministic runs only (plan 2026-11-14)
             if near_end_detour_ is not None:
                 # C2 injection plan 4 0 and 4: every physics step's pallet shift, a capture's steps included (Codex
                 # implementation review 1 P2-1), kept as the largest since the last control tick; the tick gives it
@@ -8422,7 +8484,10 @@ def drive(S, isaac) -> None:
                 rendered_ = frame_.get("rendering_time") if isinstance(frame_, dict) else None
                 if rgba_ is None or rgba_.ndim != 3 or rgba_.size == 0 or rendered_ is None:
                     return None, None
-                rgb_ = np.asarray(rgba_[:, :, :3], dtype=np.uint8)
+                # the planned paths at full size, before the halving (plan 2026-11-14-path-display-perception-leak 2)
+                rgb_ = np.asarray(path_overlay.compose(rgba_[:, :, :3], live_cam_,
+                                                       frame_time_s=None if args.deterministic else float(rendered_)),
+                                  dtype=np.uint8)
                 while rgb_.shape[1] > 640:
                     rgb_ = rgb_[::2, ::2]
                 return rgb_, float(rendered_)
@@ -11826,6 +11891,9 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k not in ("scene_requirements", "requirements_profile", "scene_requirements_override") or v is not None)
         # video plan (2026-10-28): the frame log only when asked, so a run without it records what it always did
         and (k != "frame_log" or v)
+        # path display plan (2026-11-14): stage records nothing, as every record before the fix (the display prims);
+        # overlay, off and both are recorded, so a near-field or D8b comparison with an older record refuses them
+        and (k != "path_display" or path_overlay.recorded_value(v) is not None)
         # B-P2b: the start relocalization only when on, so a run from the scene's start records what it always did
         and (k not in ("start_pose", "start_relocalize", "reloc_dir", "reloc_unattended", "reloc_operator_timeout_s",
                        "start_known")

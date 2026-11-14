@@ -1387,6 +1387,14 @@ def run_condition(result: dict, root: Path | None, far_root: Path | None = None)
     }
 
 
+# docs/plans/2026-11-14-path-display-perception-leak.md 2 (lead decision 2026-11-14): intended, not a fault
+PATH_DISPLAY_REFUSAL = (
+    " (intended: runs before the path display fix of 2026-11-14 rendered the planned-path line into the perception"
+    " cameras, so a run on either side of it is not compared with the other; measure again on the new baseline --"
+    " docs/plans/2026-11-14-path-display-perception-leak.md)"
+)
+
+
 def condition_problems(expected: dict, observed: dict, skip=()) -> list[str]:
     """Differences between the measurement runs' condition and this run's (both JSON);
     ``skip`` names fields checked elsewhere (the runner checks tracker_configs once the
@@ -1412,7 +1420,8 @@ def condition_problems(expected: dict, observed: dict, skip=()) -> list[str]:
                 if want.get(key) != have.get(key) or (
                     name == "input_files" and have.get(key) is None
                 ):
-                    problems.append(f"{name} {key} differs from the measurement runs")
+                    problems.append(f"{name} {key} differs from the measurement runs"
+                                    + (PATH_DISPLAY_REFUSAL if name == "arguments" and key == "path_display" else ""))
         elif want != have or want is None:
             problems.append(f"{name} differs from the measurement runs")
     return problems
