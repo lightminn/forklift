@@ -1,0 +1,15 @@
+# docs/plans/2026-11-14-loaded-curvature-rule.md 2: the loaded transport curvature cap rule (first registered candidate).
+# The loaded transport phase plans with curvature k x saturated_curvature_inv_m (0.90 x 0.300 = 0.270 1/m); the other
+# stages keep planner_curvature_inv_m. saturated_curvature_inv_m is the current Isaac plant's saturated-curvature
+# reference -- re-measure it when the plant or the physics rate changes, and replace it with the arrival-day M2 value
+# on the real truck.
+k: 0.90
+saturated_curvature_inv_m: 0.300
+source:
+  definition: smaller of the per-direction medians of observed curvature, loaded transport, forward, |kappa_cmd| >= 0.355, speed > 0.05 m/s
+  document: docs/validation/2026-11-14-left-steer-shortfall.md
+  tool: docs/validation/2026-11-14-left-steer-shortfall/left_steer_table.py
+  data: docs/validation/assets/transport-departure/tdep_fields.json.gz
+  values: {right_turn_median: 0.3003, left_turn_median: 0.3151, right_turn_pairs: 7424, left_turn_pairs: 6666, runs: 56}
+  plant: config/isaac_transport_measured.yaml (rigid contact)
+  physics_hz: 120
