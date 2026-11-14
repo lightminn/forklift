@@ -7,7 +7,11 @@
 
 콘솔 라이브 세션에서 아래 세 가지를 잰다. 그 값을 보고 총괄이 `--path-display-pixel-lag-s` 를 고른다. 이 문서는 통과·실패 문턱을 두지 않고 값만 보고한다.
 
-- 범위 밖: 표시선이 perception 카메라 입력(원·근접 depth, 인식 RGB)에 섞이는지는 이 실행이 판정하지 않는다. 그것은 결정 모드에서 overlay 두 번과 off 의 센서 해시를 비교한 S1 의 몫이다([smoke 결과](../validation/2026-11-14-path-display-fix-smoke.md)). 이 실행이 기록하는 영상은 콘솔 서버가 내보내는 라이브 영상(캡처가 media_subscribe 로 받는 프레임)뿐이다.
+- 범위 밖: 표시선이 perception 카메라 입력(원·근접 depth, 인식 RGB)에 섞이는지는 이 실행이 판정하지 않는다. 그것은 결정 모드에서 overlay 두 번과 off 의 센서 해시를 비교한 S1 의 몫이다([smoke 결과](../validation/2026-11-14-path-display-fix-smoke.md)). 이 실행이 기록하는 영상은 콘솔 서버의 media socket 스트림(캡처가 media_subscribe 로 받는 JPEG)뿐이다.
+- 결과가 말하는 범위(독립 검토 반영):
+  - 가시성은 **media socket 스트림에서의 가시성**이다. 브라우저 콘솔의 디코드·리사이즈·프레임 드롭·화면 갱신·단말 표시 지연은 들어 있지 않다.
+  - 어긋남은 **모형 기반 오프라인 추정**이다. 카메라 자세를 참값 base 자세 + 마운트 + 리프트로 다시 만들고(overlay 가 읽는 카메라 prim 자세 이력이 아니다, live_frames.py:811-819), 참 지연 11/120 s 를 가정한다(프레임에서 읽은 값이 아니다). 재구성 자세와 실제 카메라 자세의 차이는 재지 않았다 — S3 도 그 비교를 하지 않고 영상의 선 일치(중앙값 1 px 안)만 보였다(smoke 결과 4 절). 그래서 delta 값에는 이 차이를 뺀 오차 범위를 붙일 수 없다고 적는다. 실측 end-to-end 지연도 없다.
+  - 비용·pacing 은 **캡처와 탐침이 같은 CPU 4 개에서 함께 돈 조건**의 값이고, 팔마다 한 세션이다. 캡처 없는 운영 조건의 비용 추정으로 쓰지 않는다.
 
 1. 계획 경로·목적지 고리 선이 콘솔 라이브 영상에 보이는가: `tools/live_frames.py capture` + `judge`.
 2. 오프라인 어긋남 추정: 픽셀 지연 설정 0 과 11/120 s 에서의 값(`tools/live_frames.py delta`, `RUN/path_display.jsonl` 을 읽음).
@@ -94,6 +98,7 @@ ARM=A ... sbatch --chdir=<SNAP> --job-name=s4ov_A deploy/console/s4_overlay_run.
   `"$VENV_PY" tools/live_frames.py delta --run A/epoch_1/run --frames A/frames > A_delta.json`
   - 기본 설정 0 과 11/120, 가정 지연 11/120(live_frames.py:112, 1049-1052).
   - `settings.<lag>.{all,straight,turning}` 의 max·p95·중앙, `no_visible`, `counts.skipped` 를 본다.
+  - 표본 충분성(미리 정함): 선이 보인 프레임 수를 straight·turning 별로 적는다(turning = \|yaw rate\| ≥ 0.05 rad/s, live_frames.py:113). turning 에서 선이 보인 프레임이 30 장 미만이면 turning 값은 "표본 부족" 으로 적고 지연 선택의 근거로 내지 않는다. 한 미션(P-1:D-1)이 회전·근거리 구간을 대표한다는 보장은 없다 — 더 많은 seed·접근 조건이 필요한지는 이 수를 보고 총괄이 정한다.
   - B 는 off 에서 머리 줄만 쓰이므로(#513) 표시 행이 없어 "no path" 로 exit 2 가 난다(live_frames.py:743-744). B 의 delta 는 계산하지 않는다.
 - result.json:
   - `success`, `failure_reason`
@@ -175,4 +180,9 @@ EOF
   - P2 예약 시간이 미션 한도를 보장하지 않음 → 예약 근거를 2 절에 적고, 미션 한도·TERM 으로 끝난 실행은 무효로 했다(6 절).
 - ② Codex 2 회차: P2 "눈 확인 프레임을 judge 기본 출력으로 고를 수 없음" → `--per-frame` 을 명령에 넣고, A 상위 3 장과 B 짝(미션 경과 시각 최근접)의 선택 규칙을 5 절에 정했다. 새 P1 없음.
   - 확인된 것: `--path-display off`·`--near-capture-redraw always`·`--max-sim-seconds` 철자, EXTRA_ARGS 전달 경로, delta 조인 키, B 의 머리 줄만 있는 기록 처리.
-- ③ 독립 검토: 이 등록은 측정 방법이 정해진 실행 준비라 세 번 독립 검토를 하지 않았다. 판정 문턱이 없고 값만 보고한다.
+- ② Codex 3 회차: 새 P1 없음. P2 로 독립 검토가 빠졌다고 지적 → ③ 을 했다.
+- ③ 독립 검토(앞의 검토를 보여주지 않은 새 Codex 스레드, "적히지 않은 전제"): P2 다섯·P3 하나.
+  - 한 미션이 회전·근거리를 대표하지 못할 수 있음 → turning 표본 30 장 문턱과 "표본 부족" 처리를 5 절에 정했다. seed 추가는 총괄 결정으로 남겼다.
+  - 세션 하나씩의 비용 비교, 캡처·탐침이 같은 CPU 를 씀, 캡처의 I/O 가 pacing 을 건드릴 수 있음 → 결과 범위를 "캡처를 켠 조건, 팔마다 한 세션, 탐색적" 으로 1 절에 적었다. 캡처 없는 팔·순서 교차는 더하지 않았다(총괄이 필요하면 정한다).
+  - 캡처 스트림 ≠ 운영자 화면 → 가시성을 "media socket 스트림에서" 로 한정했다(1 절).
+  - delta 의 카메라 자세는 재구성이고 참 지연은 가정값(P3 포함) → 모형 기반 추정이라고 적고, 재구성 자세 오차는 재지 않았다고 밝혔다(1 절).
