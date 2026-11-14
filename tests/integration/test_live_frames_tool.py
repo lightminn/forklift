@@ -332,3 +332,162 @@ def test_judge_takes_an_extra_colour(tmp_path, capsys):
     assert report["colours"]["probe"] == {"rgb": [10, 250, 250], "sources": ["--colour"]}
     assert report["arms"]["arm"]["colours"]["probe"]["frames_with_component"] == 1
     assert "compare" not in report["arms"]
+
+
+# ------------------------------------------------------------------ delta
+# A live run's records as the runner leaves them: base_link's pose per physics step in the spooled SLAM log
+# (meta.json "spool", slam_log.joint: joint_stamps_s, base_pose_world x y z qw qx qy qz), the lift in the spooled
+# state.samples, the camera mount and the live video camera's K in result.json, and each frame's compose step in
+# live_log.jsonl's camera lines.
+
+FX = 465.741156  # the rig's focal length (tools/scene_rig.py), the live video camera's at 640 x 480
+LAG = 11 / 120
+# base_link <- optical (ROS axes): looking along the base's +x, level
+LEVEL = [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
+LINE_Z = 0.012  # path_overlay.LINE_Z_M
+
+
+def q_yaw(a):
+    return [np.cos(a / 2), 0.0, 0.0, np.sin(a / 2)]
+
+
+def make_run(run: Path, base_xy_yaw, *, end_s: float, lift_m: float, mount_z: float = 0.4,
+             frames=(), intrinsics=True) -> None:
+    """``base_xy_yaw(t) -> (x, y, yaw)`` at 120 Hz over [0, end_s]; ``frames``: (frame_id, stamp, compose time)."""
+    from forklift_core.live.spool import RecordSpool
+
+    run.mkdir(parents=True)
+    stamps = list(np.arange(int(round(end_s * 120)) + 1) / 120)
+    poses = [np.array([*base_xy_yaw(t)[:2], 0.0, *q_yaw(base_xy_yaw(t)[2])]) for t in stamps]
+    samples = [{"time_s": t, "phase": "approach", "lift_m": lift_m} for t in stamps[::12]]
+    spool = RecordSpool(run / "spool", interval_s=1e9)
+    spool.register_group("slam_log.joint", {"joint_stamps_s": stamps, "base_pose_world": poses})
+    spool.register_group("slam_log.scan", {"scan_stamps_s": [], "scan_ranges_m": []})
+    spool.register("slam_log.silenced", [])
+    spool.register("state.samples", samples)
+    assert spool.close()["complete"]
+    (run / "meta.json").write_text(json.dumps({"format": "forklift_slam_log_v1", "spool": {
+        "joint": "slam_log.joint", "scan": "slam_log.scan", "silenced": "slam_log.silenced", "root": "spool"}}))
+    result = {"perception_mount": {"name": "test", "parent": "/World/Forklift/fork_carriage",
+                                   "translation_m": [0.0, 0.0, mount_z], "rotation": LEVEL},
+              "spool": {"root": "spool", "complete": True}}
+    if intrinsics:
+        result["live_video_camera"] = {"intrinsics": {"width": 640, "height": 480, "fx": FX, "fy": FX,
+                                                      "cx": 320.0, "cy": 240.0, "frame_id": "camera_optical_frame"}}
+    (run / "result.json").write_text(json.dumps(result))
+    lines = [{"log_writer": "ordered"}]
+    lines += [{"camera": fid, "render_time": 100.0 + stamp, "sim_t": compose} for fid, stamp, compose in frames]
+    lines.append({"log_end": {"dropped_lines": 0, "line_errors": 0}})
+    (run / "live_log.jsonl").write_text("".join(json.dumps(x) + "\n" for x in lines))
+
+
+def make_capture(out: Path, rows) -> None:
+    out.mkdir(parents=True)
+    text = "".join(json.dumps({"t": "frame", "frame_id": fid, "session_epoch": 7, "stamp_sim_s": stamp,
+                               "width": 640, "height": 480, "file": f"frames/{fid}.jpg"}) + "\n"
+                   for fid, stamp in rows)
+    (out / "index.jsonl").write_text(text + json.dumps({"t": "end"}) + "\n")
+
+
+def write_events(path: Path, events) -> Path:
+    path.write_text("".join(json.dumps(e) + "\n" for e in events))
+    return path
+
+
+def run_delta(capsys, *argv):
+    rc = live_frames.main(["delta", *map(str, argv)])
+    captured = capsys.readouterr()
+    return rc, (json.loads(captured.out) if rc == 0 else captured.err)
+
+
+def test_delta_of_a_straight_drive_is_near_zero(tmp_path, capsys):
+    speed = 0.5
+    stamps = [0.5, 1.0, 1.15, 1.5]
+    frames = [(i + 1, s, s + LAG) for i, s in enumerate(stamps)]
+    make_run(tmp_path / "run", lambda t: (speed * t, 0.0, 0.0), end_s=2.0, lift_m=0.0,
+             frames=frames + [(5, 0.05, 0.05 + LAG)])
+    make_capture(tmp_path / "cap", [(f[0], f[1]) for f in frames] + [(99, 1.2), (98, None), (5, 0.05)])
+    ahead = [[x, 0.0, 0.0] for x in np.linspace(6.0, 16.0, 50)]
+    events = write_events(tmp_path / "paths.jsonl", [
+        {"time_s": 0.0, "name": "Approach", "poses": ahead},
+        {"time_s": 1.2, "name": "Transport", "poses": ahead[25:]},  # after 1.15's render, before its compose
+    ])
+    rc, report = run_delta(capsys, "--run", tmp_path / "run", "--frames", tmp_path / "cap", "--paths", events,
+                           "--per-frame")
+    assert rc == 0, report
+    assert report["lag_settings_s"] == [0.0, pytest.approx(LAG)]
+    assert report["sources"]["paths_time_resolved"] is True
+    assert report["sources"]["rides_lift"] is True
+    assert report["sources"]["compose_time"].startswith("live_log.jsonl")
+    assert report["counts"]["measured"] == 4
+    # 99: not in the run's log; 98: no stamp; 5: in the log, but 0.05 - 0.0917 is before the first pose
+    assert report["counts"]["skipped"] == {"no_stamp": 1, "other_epoch": 0, "not_in_run": 1, "outside_poses": 1,
+                                           "no_path": 0}
+    rows = {r["frame_id"]: r for r in report["per_frame"]}
+    assert rows[2]["paths"] == ["Approach"] and rows[3]["paths"] == ["Approach", "Transport"]
+    h = 0.4 - LINE_Z
+    for fid, stamp in zip((1, 2, 3, 4), stamps, strict=True):
+        r = rows[fid]
+        assert r["motion"] == "straight" and r["speed_mps"] == pytest.approx(speed)
+        # the nearest point (6 m) moves most: only v changes, fy h (1/d_drawn - 1/d_true)
+        d_drawn, d_true = 6.0 - speed * stamp, 6.0 - speed * (stamp - LAG)
+        assert r["shift"]["0"]["max_px"] == pytest.approx(FX * h * (1 / d_drawn - 1 / d_true), rel=1e-6)
+        assert r["shift"]["0"]["max_px"] < 0.5
+        assert r["shift"]["0.0916667"]["max_px"] == pytest.approx(0.0, abs=1e-9)
+    s = report["settings"]["0"]
+    assert s["all"]["measured"] == 4 and s["straight"]["measured"] == 4 and s["turning"]["measured"] == 0
+    assert s["all"]["max_px"] == pytest.approx(max(r["shift"]["0"]["max_px"] for r in rows.values()))
+    assert s["turning"]["max_px"] is None
+
+
+def test_delta_of_a_turn_is_fx_tan_omega_lag(tmp_path, capsys):
+    omega = 0.3
+    stamps = [1.95, 2.0, 2.05, 2.1]
+    frames = [(i + 1, s, s + LAG) for i, s in enumerate(stamps)]
+    # turning in place about the camera's own vertical, the forks raised 0.05 m
+    make_run(tmp_path / "run", lambda t: (0.0, 0.0, omega * (t - 2.0)), end_s=4.0, lift_m=0.05, frames=frames)
+    make_capture(tmp_path / "cap", [(f[0], f[1]) for f in frames])
+    events = write_events(tmp_path / "paths.jsonl", [
+        {"time_s": 0.0, "name": "Approach", "poses": [[x, 0.0, 0.0] for x in np.linspace(2.0, 6.0, 40)]}])
+    rc, report = run_delta(capsys, "--run", tmp_path / "run", "--frames", tmp_path / "cap", "--paths", events,
+                           "--lag-setting-s", "0", "--lag-setting-s", "0.05", "--per-frame")
+    assert rc == 0, report
+    assert sorted(report["settings"]) == ["0", "0.05"]
+    h = 0.45 - LINE_Z
+    for r, stamp in zip(report["per_frame"], stamps, strict=True):
+        assert r["motion"] == "turning" and r["yaw_rate_radps"] == pytest.approx(omega)
+        for setting, key in ((0.0, "0"), (0.05, "0.05")):
+            ya, yb = omega * (stamp - setting - 2.0), omega * (stamp - LAG - 2.0)
+            du = FX * (np.tan(ya) - np.tan(yb))  # every point on the ray moves alike across
+            dv = FX * h / 2.0 * (1 / np.cos(ya) - 1 / np.cos(yb))  # the nearest point (2 m) most down
+            assert r["shift"][key]["max_px"] == pytest.approx(np.hypot(du, dv), rel=1e-6)
+        assert r["shift"]["0"]["max_px"] == pytest.approx(FX * np.tan(omega * LAG), rel=0.01)  # about 12.8 px
+    turning = report["settings"]["0"]["turning"]
+    assert turning["measured"] == 4 and report["settings"]["0"]["straight"]["measured"] == 0
+    assert turning["max_px"] == pytest.approx(FX * np.tan(omega * LAG), rel=0.01)
+    assert report["settings"]["0.05"]["all"]["max_px"] == pytest.approx(FX * np.tan(omega * (LAG - 0.05)), rel=0.01)
+
+
+def test_delta_names_what_the_run_does_not_record(tmp_path, capsys):
+    frames = [(1, 1.0, 1.0 + LAG)]
+    make_run(tmp_path / "run", lambda t: (0.5 * t, 0.0, 0.0), end_s=2.0, lift_m=0.0, frames=frames, intrinsics=False)
+    make_capture(tmp_path / "cap", [(1, 1.0)])
+    static = tmp_path / "paths.json"  # paths.json as the runner writes it: the last plan per leg, no time
+    static.write_text(json.dumps({"approach": {"success": True, "poses": [[x, 0.0, 0.0] for x in (6.0, 8.0)]},
+                                  "transport": {"success": True, "poses": [[x, 0.0, 0.0] for x in (9.0, 10.0)]}}))
+    base = ["--run", tmp_path / "run", "--frames", tmp_path / "cap"]
+    rc, err = run_delta(capsys, *base)
+    assert rc == 2 and "--intrinsics-json" in err
+    k = tmp_path / "k.json"
+    k.write_text(json.dumps({"fx": FX, "fy": FX, "cx": 320.0, "cy": 240.0, "width": 640, "height": 480}))
+    rc, err = run_delta(capsys, *base, "--intrinsics-json", k)
+    assert rc == 2 and "--paths" in err and "time" in err
+    rc, report = run_delta(capsys, *base, "--intrinsics-json", k, "--paths", static)
+    assert rc == 0
+    assert report["sources"]["paths_time_resolved"] is False
+    assert report["sources"]["intrinsics"].startswith("--intrinsics-json")
+    assert report["counts"]["measured"] == 1
+    assert '"pass"' not in json.dumps(report) and '"verdict"' not in json.dumps(report)
+    (tmp_path / "run" / "meta.json").unlink()  # no SLAM log: no pose track
+    rc, err = run_delta(capsys, *base, "--intrinsics-json", k, "--paths", static)
+    assert rc == 2 and "--record-slam" in err
