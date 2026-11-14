@@ -189,7 +189,19 @@ def test_note_moving_stamps_with_the_clock_when_no_time_is_given():
     po.note_moving()
     po.note_moving()
     assert math.isclose(po.pose_history_span_s(cam), 0.5)
-    assert po.isaac_sim_clock() is None or callable(po.isaac_sim_clock())
+
+
+def test_the_isaac_clock_is_core_nodes_sim_time(monkeypatch):
+    # never import isaacsim here: outside a running app it bootstraps Kit (the runner calls this after SimulationApp)
+    import types
+
+    interface = types.SimpleNamespace(get_sim_time=lambda: 12.5)
+    bindings = types.ModuleType("isaacsim.core.nodes.bindings")
+    bindings._isaacsim_core_nodes = types.SimpleNamespace(acquire_interface=lambda: interface)
+    for name in ("isaacsim", "isaacsim.core", "isaacsim.core.nodes"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "isaacsim.core.nodes.bindings", bindings)
+    assert po.isaac_sim_clock()() == 12.5
 
 
 def test_contrast_draws_one_pixel_magenta_and_reset_clears_it():
