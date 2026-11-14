@@ -28,6 +28,7 @@ RAMP_SLACK_S = 0.1  # the speed check starts this long after the planned acceler
 OVERTIME_FACTOR = 1.5
 OVERTIME_SLACK_S = 1.0
 UNDER_REACH_TOL_RAD = 0.02
+Q_STEP_SETTLE_S = 1.0  # after a q step's slew, this long at the new curvature before the segment may end
 
 
 @dataclass(frozen=True)
@@ -166,11 +167,16 @@ def _parse_segments(data: dict, raw: list, lim: ProfileLimits) -> Profile:
             d = _finite(r["distance_m"], where, "distance_m")
             if "q_step" in r:
                 to = _kappa(lim.kappa_of_q(float(r["q_step"]["to_rad"])), lim, where)
-                after = float(r["q_step"]["after_s"])
+                after = _finite(r["q_step"]["after_s"], where, "q_step after_s")
                 if after < abs(v) / lim.accel_mps2 + 0.5:
                     raise ValueError(f"{where}: q_step after_s must leave the speed settled (>= ramp + 0.5 s)")
                 step = (to, after)
                 ramp = abs(lim.q_of_kappa(to) - lim.q_of_kappa(k0)) / lim.q_rate
+                # the step, its slew and a settled response must happen before the segment's distance runs out
+                need_s = after + ramp + Q_STEP_SETTLE_S
+                if d / abs(v) + abs(v) / (2 * lim.accel_mps2) < need_s:
+                    raise ValueError(f"{where}: distance {d} m at {abs(v)} m/s ends before the q step settles "
+                                     f"(needs about {need_s:.1f} s)")
         if not d > 0:
             raise ValueError(f"{where}: distance_m must be positive")
         if abs(k0 - current) > 1e-9:

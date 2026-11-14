@@ -83,6 +83,14 @@ def test_a_q_step_is_by_time_after_the_speed_is_reached_and_its_ramp_is_reported
     seg = p.segments[1]
     assert seg.kappa_at(0.1, 1.9) == 0.0 and seg.kappa_at(0.25, 2.0) == pytest.approx(0.2)
     assert seg.q_step_ramp_s == pytest.approx(0.13 / 1.0)
+    with pytest.raises(ValueError, match="settles"):
+        dp.parse_profile(prof({"label": "p", "presteer_kappa_inv_m": 0.0},
+                              {"label": "s", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.25,
+                               "q_step": {"to_rad": 0.13, "after_s": 2.0}}), LIM)
+    with pytest.raises(ValueError, match="finite"):
+        dp.parse_profile(prof({"label": "p", "presteer_kappa_inv_m": 0.0},
+                              {"label": "s", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.6,
+                               "q_step": {"to_rad": 0.13, "after_s": float("nan")}}), LIM)
     with pytest.raises(ValueError, match="after_s"):
         dp.parse_profile(prof({"label": "p", "presteer_kappa_inv_m": 0.0},
                               {"label": "s", "speed_mps": 0.10, "kappa_inv_m": 0.0, "distance_m": 0.6,
