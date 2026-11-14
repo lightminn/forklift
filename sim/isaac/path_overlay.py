@@ -40,6 +40,9 @@ _clock = {"fn": None}
 _contrast = {"on": False}
 _pixel_lag = {"s": 0.0}
 _stats = {"compose_failures": 0, "note_failures": 0, "clock_mismatches": 0, "last_error": None}
+_events = {"path": None, "origin": None, "pending": []}
+EVENT_SCHEMA = "path_display/1"
+TIME_AXIS = "world.current_time - initial_time"  # the live camera frames' stamp_sim_s axis (rendering_time - initial)
 WARN_EVERY = 100  # a repeated warning is printed the first time and every WARN_EVERY-th time after
 CONTRAST_COLOUR = (255, 0, 255)  # the overlay under the diagnostic "both": 1 px magenta over the rendered prims
 
@@ -61,7 +64,70 @@ def reset() -> None:
     _clock["fn"] = None
     _contrast["on"] = False
     _pixel_lag["s"] = 0.0
-    _stats.update(compose_failures=0, note_failures=0, clock_mismatches=0, last_error=None)
+    _stats.update(compose_failures=0, note_failures=0, clock_mismatches=0, last_error=None, event_failures=0)
+    _events.update(path=None, origin=None, pending=[])
+
+
+def start_event_log(path, mode: str, pixel_lag_s: float) -> None:
+    """``path`` (JSON lines) receives a header now and one ``display`` row each time a line is drawn or replaced
+    (path display follow-up, the console's S4: which path was on screen at which time). The rows' ``time_s`` is on the
+    live frames' axis (TIME_AXIS); rows made before drive() sets the origin wait for it. Only overlay and both draw, so
+    off and stage leave the header alone."""
+    _events.update(path=None, origin=None, pending=[])
+    _write_event({"t": "header", "schema": EVENT_SCHEMA, "mode": mode, "pixel_lag_s": float(pixel_lag_s),
+                  "time_axis": TIME_AXIS, "line_width_px_at_1280": line_width(1280)}, path)
+    _events["path"] = path
+
+
+def set_time_origin(initial_time_s: float) -> None:
+    """drive()'s ``initial_time`` (the run's sim time at the hand-over): rows waiting for it are written now."""
+    _events["origin"] = float(initial_time_s)
+    pending, _events["pending"] = _events["pending"], []
+    for row in pending:
+        _emit(row)
+
+
+def close_event_log() -> None:
+    """Rows still waiting for an origin (a run that never reached drive's start) are written with time_s null."""
+    pending, _events["pending"] = _events["pending"], []
+    for row in pending:
+        _write_event({**{k: v for k, v in row.items() if k != "clock_s"}, "time_s": None}, _events["path"])
+
+
+def _write_event(row: dict, path) -> None:
+    if path is None:
+        return
+    try:
+        import json
+
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as exc:  # a display record never stops the run
+        _stats["event_failures"] = _stats.get("event_failures", 0) + 1
+        _stats["last_error"] = f"event log: {type(exc).__name__}: {exc}"
+        _warn("event_failures", _stats["last_error"])
+
+
+def _emit(row: dict) -> None:
+    clock_s = row.pop("clock_s")
+    row["time_s"] = None if clock_s is None else clock_s - _events["origin"]
+    _write_event(row, _events["path"])
+
+
+def _log_display(name: str, item: dict, kind: str) -> None:
+    if _events["path"] is None:
+        return
+    try:
+        clock_s = None if _clock["fn"] is None else float(_clock["fn"]())
+    except Exception:
+        clock_s = None
+    row = {"t": "display", "clock_s": clock_s, "name": name, "kind": kind,
+           "colour": [round(c / 255, 6) for c in item["colour"]], "width_scale": item["width"],
+           "closed": item["closed"], "points": np.round(item["points"], 4).tolist()}
+    if _events["origin"] is None:
+        _events["pending"].append(row)
+    else:
+        _emit(row)
 
 
 def set_pixel_lag(seconds: float) -> None:
@@ -76,7 +142,7 @@ def set_pixel_lag(seconds: float) -> None:
 
 def stats() -> dict:
     """The run's overlay failures and clock mismatches (written beside the result, never into the run's state)."""
-    return {**_stats, "pixel_lag_s": _pixel_lag["s"]}
+    return {**_stats, "pixel_lag_s": _pixel_lag["s"], "event_rows_pending": len(_events["pending"])}
 
 
 def _warn(kind: str, message: str) -> None:
@@ -177,6 +243,7 @@ def add_path(name: str, poses, colour) -> None:
     xy = np.array([(float(p[0]), float(p[1])) for p in poses], dtype=float).reshape(-1, 2)
     points = np.column_stack([xy, np.full(len(xy), LINE_Z_M)])
     _items[name] = {"points": thin(points), "colour": _colour255(colour), "closed": False, "width": 1.0}
+    _log_display(name, _items[name], "path")
 
 
 def add_ring(name: str, x_m: float, y_m: float, colour) -> None:
@@ -185,6 +252,7 @@ def add_ring(name: str, x_m: float, y_m: float, colour) -> None:
     points = np.column_stack([x_m + RING_RADIUS_M * np.cos(a), y_m + RING_RADIUS_M * np.sin(a),
                               np.full(len(a), RING_Z_M)])
     _items[name] = {"points": points, "colour": _colour255(colour), "closed": True, "width": 2.0}
+    _log_display(name, _items[name], "ring")
 
 
 def quaternion_wxyz_from_matrix(r: np.ndarray) -> np.ndarray:
@@ -366,6 +434,7 @@ __all__ = [
     "reset", "effective_mode", "draws_stage", "draws_overlay", "recorded_value", "empty", "items", "thin",
     "add_path", "add_ring", "project_polyline", "line_width", "register_moving", "note_moving",
     "pose_history_span_s", "compose", "set_clock", "set_contrast", "CONTRAST_COLOUR", "isaac_sim_clock",
-    "quaternion_wxyz_from_matrix", "set_pixel_lag", "stats", "CLOCK_SLACK_S",
+    "quaternion_wxyz_from_matrix", "set_pixel_lag", "stats", "CLOCK_SLACK_S", "start_event_log",
+    "set_time_origin", "close_event_log", "EVENT_SCHEMA", "TIME_AXIS",
     "matrix_from_quaternion_wxyz",
 ]

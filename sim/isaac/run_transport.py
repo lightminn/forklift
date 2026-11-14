@@ -4235,6 +4235,10 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     path_overlay.reset()
     path_overlay.set_contrast(args.path_display == "both")  # the S3 alignment smoke (plan 2026-11-14 4)
     path_overlay.set_pixel_lag(args.path_display_pixel_lag_s)  # follow-up ①: 0 until the console's S4 measurement
+    # follow-up (console S4): which path was on screen when, on the live frames' time axis -- its own file, never the
+    # run's state (a boundary replay compares that); the clock is the one a frame's rendering_time is on
+    path_overlay.set_clock(path_overlay.isaac_sim_clock())
+    path_overlay.start_event_log(args.output / "path_display.jsonl", args.path_display, args.path_display_pixel_lag_s)
 
     def destination_ring(x_, y_, path_="/World/Destination") -> str:
         """The green destination ring, by the display mode as the planned paths (plan 2026-11-14 2): a display
@@ -7005,6 +7009,7 @@ def drive(S, isaac) -> None:
         ms.phase = "observe"
     ms.phase_started = 0.0
     initial_time = world.current_time
+    path_overlay.set_time_origin(float(initial_time))  # the display rows' time axis (no port: the value read above)
     if state.get("layer_budget") and obstacle is not None and "layer_clock_box_" in _bound:
         # the layer latency budget's watchdog clock (the sim time every scan stamp and control tick is on)
         layer_clock_box_["fn"] = lambda: float(world.current_time - initial_time)
@@ -12259,6 +12264,7 @@ def main() -> None:
         state["scan_switches"] = scan_switches_record()  # G3 promotion: what this run applied (plan 5.26-5.27)
         # path display follow-up: the overlay's failures and clock mismatches, beside the result (never in the state,
         # which a boundary replay compares)
+        path_overlay.close_event_log()
         try:  # guarded: a failed write never costs the result
             (args.output / "path_display.json").write_text(json.dumps(path_overlay.stats(), indent=2) + "\n")
         except Exception as exc_:

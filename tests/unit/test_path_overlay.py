@@ -333,3 +333,50 @@ def test_a_failing_timer_is_caught_too(monkeypatch):
     po.note_moving(1.0)
     st = po.stats()
     assert st["compose_failures"] == 1 and st["note_failures"] == 1
+
+
+def _rows(path):
+    import json
+
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_the_display_log_times_each_line_on_the_live_frames_axis(tmp_path):
+    log = tmp_path / "path_display.jsonl"
+    now = {"t": 100.0}
+    po.set_clock(lambda: now["t"])
+    po.start_event_log(log, "overlay", 0.0917)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))  # before drive's origin: waits
+    assert len(_rows(log)) == 1
+    po.set_time_origin(99.5)
+    now["t"] = 103.25
+    po.add_ring("/World/Destination", 2.0, 1.0, (0.01, 0.9, 0.04))
+    po.add_path("Transport", [(2.0, 0.0, 0.0), (4.0, 0.0, 0.0)], (1.0, 0.65, 0.04))
+    header, approach, ring, transport = _rows(log)
+    assert header == {"t": "header", "schema": "path_display/1", "mode": "overlay", "pixel_lag_s": 0.0917,
+                      "time_axis": "world.current_time - initial_time", "line_width_px_at_1280": 3}
+    assert approach["t"] == "display" and approach["time_s"] == pytest.approx(0.5) and approach["kind"] == "path"
+    assert approach["points"][0] == [1.0, 0.0, po.LINE_Z_M] and approach["colour"] == pytest.approx([0.05, 0.45, 1.0], abs=0.003)
+    assert ring["kind"] == "ring" and ring["closed"] and ring["width_scale"] == 2.0 and ring["time_s"] == pytest.approx(3.75)
+    assert len(ring["points"]) == po.RING_SEGMENTS and ring["points"][0][2] == po.RING_Z_M
+    assert transport["name"] == "Transport" and "clock_s" not in transport
+
+
+def test_rows_never_given_an_origin_are_written_with_a_null_time(tmp_path):
+    log = tmp_path / "path_display.jsonl"
+    po.set_clock(lambda: 5.0)
+    po.start_event_log(log, "both", 0.0)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))
+    assert po.stats()["event_rows_pending"] == 1
+    po.close_event_log()
+    rows = _rows(log)
+    assert rows[1]["time_s"] is None and rows[1]["name"] == "Approach" and po.stats()["event_rows_pending"] == 0
+
+
+def test_without_a_log_nothing_is_written_and_a_bad_path_never_raises(tmp_path):
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))  # no log started (a replay)
+    po.reset()
+    po.start_event_log(tmp_path / "missing_dir" / "path_display.jsonl", "overlay", 0.0)
+    po.set_time_origin(0.0)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))
+    assert po.stats()["event_failures"] >= 1

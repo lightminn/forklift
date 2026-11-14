@@ -190,3 +190,13 @@ def test_follow_up_wiring():
     stats_at = source.index('(args.output / "path_display.json").write_text(json.dumps(path_overlay.stats()')
     assert stats_at < source.index('(args.output / "result.json").write_text(record_json(state, indent=2)', stats_at)
     assert source.index("def main() -> None:") < stats_at
+
+
+def test_the_display_log_is_started_in_run_and_timed_from_drives_origin():
+    source = SCRIPT.read_text()
+    start = source.index('path_overlay.start_event_log(args.output / "path_display.jsonl", args.path_display,')
+    assert source.index("def run(app, args") < start < source.index("def drive(S, isaac)")
+    origin = source.index("path_overlay.set_time_origin(float(initial_time))")
+    assert source.index("initial_time = world.current_time") < origin
+    assert source.index("def drive(S, isaac)") < origin < source.index("def main() -> None:")
+    assert source.index("path_overlay.close_event_log()") > source.index("def main() -> None:")
