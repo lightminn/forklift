@@ -1162,6 +1162,10 @@ def fit(run, frames_dir, *, paths: Path | None = None, mount_json: Path | None =
         "counts": {"frames": len(rows), "counted": len(counted),
                    "not_counted": {why: sum(1 for r in rows if r.get("why") == why)
                                    for why in ("outside_poses", "no_path", "few_line_pixels", "few_samples")}},
+        "counted_time_s": {kind: (lambda v: {"frames": len(v), "min": min(v) if v else None,
+                                             "quartiles": [float(q) for q in np.percentile(v, [25, 50, 75])] if v
+                                             else None, "max": max(v) if v else None})(
+            [r["stamp_sim_s"] for r in counted if r["motion"] == kind]) for kind in ("turning", "straight")},
         "by_lag": by_lag,
         "comparison": {"judged_steps": list(FIT_JUDGED), "frames": by_lag[a]["turning"]["frames"],
                        "turning_median_px": {a: ta, b: tb},

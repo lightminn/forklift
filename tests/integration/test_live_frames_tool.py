@@ -709,7 +709,7 @@ MAGENTA = (255, 0, 255)  # path_overlay.CONTRAST_COLOUR, the diagnostic overlay
 
 
 def render_both(cap: Path, run: Path, frames, line_pts, *, true_lag: float, overlay_lag: float = 0.0,
-                width: int = 8, distractor: bool = False) -> None:
+                width: int = 8, distractor: bool = False, colour=ORANGE, onto: bool = False) -> None:
     """Each frame as the diagnostic 'both' shows it: the line rendered (``width`` px -- the 18 mm prim is about 8 px
     at 1 m -- in a display colour) where the camera was
     ``true_lag`` before the render time, and the 1 px magenta overlay drawn from the camera ``overlay_lag`` before
@@ -725,15 +725,16 @@ def render_both(cap: Path, run: Path, frames, line_pts, *, true_lag: float, over
     k, _ = live_frames.load_intrinsics(result, None)
     K = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1.0]])
     pts = densify_polyline(np.asarray(line_pts, dtype=float), 0.02)
-    (cap / "frames").mkdir()
+    (cap / "frames").mkdir(exist_ok=onto)
     for fid, stamp, _compose in frames:
         cams = [camera_pose(track.at(stamp - lag), mount, 0.0) for lag in (true_lag, overlay_lag)]
         s = pixel_shift(pts, cams[0], cams[1], K)
-        img = Image.new("RGB", (640, 480), (70, 90, 110))
+        img = (Image.open(cap / "frames" / f"{fid}.jpg").convert("RGB") if onto  # a second line on the same frames
+               else Image.new("RGB", (640, 480), (70, 90, 110)))
         draw = ImageDraw.Draw(img)
         if distractor:  # a yellow board beside the line, as random_m's dock boards
             draw.rectangle([300, 150, 340, 330], fill=(230, 200, 60))
-        draw.line([tuple(p) for p in s["uv_a"]], fill=ORANGE, width=width)
+        draw.line([tuple(p) for p in s["uv_a"]], fill=colour, width=width)
         draw.line([tuple(p) for p in s["uv_b"]], fill=MAGENTA, width=1)
         img.save(cap / "frames" / f"{fid}.jpg", quality=80)
 
@@ -782,3 +783,36 @@ def test_fit_counts_only_frames_with_enough_samples_and_line_pixels(tmp_path, ca
     rows = {r["frame_id"]: r for r in report["per_frame"]}
     assert rows[1]["counted"] is True and rows[2]["counted"] is False and rows[2]["why"] == "few_line_pixels"
     assert report["counts"]["counted"] == 1
+
+
+GREEN = (3, 230, 10)  # the destination ring
+
+
+@pytest.mark.parametrize("true_steps", [11, 0])
+def test_fit_recovers_the_lag_on_a_driven_arc_with_near_lines_and_a_ring(tmp_path, capsys, true_steps):
+    # driving an arc (0.4 m/s, 0.3 rad/s): translation and rotation together, the path from 0.8 m ahead (near lines
+    # move non-linearly) and a destination ring, two colours
+    v, omega = 0.4, 0.3
+
+    def pose(t):
+        a = omega * (t - 1.0)
+        return (v / omega * np.sin(a), v / omega * (1 - np.cos(a)), a)
+
+    stamps = [1.5 + 0.1 * i for i in range(12)]
+    frames = [(i + 1, s, s + LAG) for i, s in enumerate(stamps)]
+    make_run(tmp_path / "run", pose, end_s=4.0, lift_m=0.0, frames=frames)
+    make_capture(tmp_path / "cap", [(f[0], f[1]) for f in frames])
+    path = [[x, 0.25 * x, LINE_Z] for x in np.linspace(1.0, 5.0, 40)]
+    ring = [[4.0 + 0.5 * np.cos(a), 1.6 + 0.5 * np.sin(a), LINE_Z] for a in np.linspace(0, 2 * np.pi, 40)]
+    events = write_events(tmp_path / "paths.jsonl", [{"time_s": 0.0, "name": "Transport", "poses": path},
+                                                     {"time_s": 0.0, "name": "D_1", "kind": "ring", "points": ring,
+                                                      "closed": True}])
+    render_both(tmp_path / "cap", tmp_path / "run", frames, path, true_lag=true_steps / 120, width=6)
+    render_both(tmp_path / "cap", tmp_path / "run", frames, ring, true_lag=true_steps / 120, width=4,
+                colour=GREEN, onto=True)
+    rc, report = run_fit(capsys, "--run", tmp_path / "run", "--frames", tmp_path / "cap", "--paths", events)
+    assert rc == 0, report
+    by_lag = report["by_lag"]
+    best = min(by_lag, key=lambda key: by_lag[key]["turning"]["median_px"])
+    assert abs(int(best) - true_steps) <= 2
+    assert report["comparison"]["better"] == ("0" if true_steps == 0 else "11")

@@ -37,6 +37,11 @@ case "$ARM" in
     if grep -q 'FORKLIFT_PATH_DISPLAY_DIAGNOSTIC is diagnostic only' "$ROOT/deploy/console/isaac_live.sbatch"; then
       echo "ARM=D: this snapshot's launcher still refuses the diagnostic variable" >&2; exit 2
     fi
+    # the launcher must be the one the patch record names (after_sha256), not any copy without the refusal
+    want=$(awk '$1 == "after_sha256" {print $2}' "$ROOT/DIAG_PATCH.txt")
+    have=$(sha256sum "$ROOT/deploy/console/isaac_live.sbatch" | awk '{print $1}')
+    [ -n "$want" ] && [ "$want" = "$have" ] || {
+      echo "ARM=D: the launcher's sha256 $have is not DIAG_PATCH.txt's after_sha256 ${want:-<none>}" >&2; exit 2; }
     export FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=both ;;
   *) echo "ARM must be A, B or D" >&2; exit 2 ;;
 esac
