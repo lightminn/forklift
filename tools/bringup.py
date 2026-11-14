@@ -38,6 +38,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark, writer_marker
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive,
@@ -875,6 +876,8 @@ def main(argv=None) -> int:
         p.add_argument("--out", required=True)
         p.add_argument("--allow-locked", action="store_true")
         p.add_argument("--yes", action="store_true")
+        p.add_argument("--bench", help="the rehearsal bench's bench.json: required on a pty device (the model MCU), "
+                                       "refused otherwise; the record is marked synthetic")
     r = sub.choices["record"]
     r.add_argument("--seconds", type=float, default=30.0)
     r.add_argument("--markers", action="store_true")
@@ -899,6 +902,7 @@ def main(argv=None) -> int:
     cm.add_argument("--out", required=True)
     cm.add_argument("--allow-locked", action="store_true")
     cm.add_argument("--yes", action="store_true")
+    cm.add_argument("--bench", help="as for record: the rehearsal bench's bench.json on a pty device")
     cm.add_argument("--axis", choices=tuple(AXES), required=True)
     cm.add_argument("--duty", type=float, required=True)
     cm.add_argument("--seconds", type=float)
@@ -913,14 +917,17 @@ def main(argv=None) -> int:
                     help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
     kt = sub.add_parser("kth", help="S2: the KTH CRC variant from a record's v3 counters (mcu-link/3 contract 3.3)")
     kt.add_argument("--record", required=True)
+    kt.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
     for ax in ("m", "h"):
         kt.add_argument(f"--configured-{ax}", required=True, choices=KTH_VARIANTS,
                         help=f"the CRC variant axis {ax.upper()} is configured with in the image under test")
     kt.add_argument("--image", required=True, help="the firmware image under test (its identity string or hash)")
     ck = sub.add_parser("clock", help="G7: the MCU-to-host clock fit of a record (teleop record design 5)")
     ck.add_argument("--record", required=True)
+    ck.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
     an = sub.add_parser("analyze")
     an.add_argument("--record", required=True)
+    an.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
     an.add_argument("--marker", type=int, default=-1,
                     help="which marker, counted from 0: 0 = the first, 1 = the second, -1 = the last (default)")
     an.add_argument("--floor", action="store_true", help="the marker's run was on the floor (else the stand)")
@@ -930,23 +937,28 @@ def main(argv=None) -> int:
         for name in ("output-response-ms", "stop-time-ms", "stop-distance-mm"):
             p.add_argument("--" + name)
     args = ap.parse_args(argv)
+    if args.cmd in ("kth", "clock", "analyze"):
+        rows_ = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
+        try:
+            marks = refuse_or_mark(rows_, allow=args.allow_synthetic)
+        except SyntheticRefused as exc:
+            print(json.dumps({"result": "refused", "why": str(exc)}))
+            return 2
     if args.cmd == "kth":
-        rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
+        rows = rows_
         states = [r for r in rows if r.get("t") == "state"]
         bad = next((why for r in states if (why := kth_row_problem(r)) is not None), None)
         if bad is not None:  # never the dataclass defaults (Codex v3 impl P2-2: a missing error count read as zeros)
-            print(json.dumps({"result": "invalid", "why": bad, "configured": {"M": args.configured_m,
-                                                                                "H": args.configured_h},
-                              "image": args.image}))
+            print(json.dumps({**marks, "result": "invalid", "why": bad,
+                              "configured": {"M": args.configured_m, "H": args.configured_h}, "image": args.image}))
             return 0
         samples = [sample_from_row(r) for r in states]
-        print(json.dumps(kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
-                                   image=args.image)))
+        print(json.dumps({**marks, **kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
+                                               image=args.image)}))
         return 0
     if args.cmd == "clock":
-        rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
-        fits = clock_fits_from_rows(rows)
-        print(json.dumps({"result": "ok" if fits else "no_state_rows", "fits": [f.summary() for f in fits]}))
+        fits = clock_fits_from_rows(rows_)
+        print(json.dumps({**marks, "result": "ok" if fits else "no_state_rows", "fits": [f.summary() for f in fits]}))
         return 0
     if args.cmd == "analyze":
         try:
@@ -955,12 +967,22 @@ def main(argv=None) -> int:
         except ValueError as exc:
             print(json.dumps({"result": "refused", "why": str(exc)}))
             return 2
-        print(json.dumps(analyze(Path(args.record), args.marker, args.kind, {
+        print(json.dumps({**marks, **analyze(Path(args.record), args.marker, args.kind, {
             "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
-            "stop_distance_mm": args.stop_distance_mm}, floor=args.floor), default=str))
+            "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)}, default=str))
         return 0
+    try:
+        synthetic = writer_marker(args.device, args.bench)
+    except (SyntheticRefused, OSError, ValueError) as exc:
+        print(json.dumps({"result": "refused", "why": str(exc)}))
+        return 2
     link = ReconnectingLink(args.device, baud=args.baud)
     with open(args.out, "a", encoding="utf-8") as out:
+        # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
+        out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
+                              "device": args.device, "synthetic": synthetic, "start_wall": time.time(),
+                              "start_mono_ns": time.monotonic_ns()}) + "\n")
+        out.flush()
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
         if args.cmd in ("record", "cpr"):
             bench.run_until(lambda: False, args.seconds,

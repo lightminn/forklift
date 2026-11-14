@@ -1,0 +1,68 @@
+"""Synthetic (rehearsal) records: marked where they are written, refused where they are measured
+(docs/design/2026-11-15-arrival-day-rehearsal.md 2.3).
+
+- ``writer_marker(device, bench_path)``: what a record writer puts in its header as ``synthetic``. A pty device needs
+  the rehearsal bench's record and a passing model-peer check (a real MCU never links through a pty); a bench on a
+  real device is refused; a real device without a bench gets no marker (None).
+- ``is_synthetic(header)``: marked, or a header whose device is a pty (an unmarked rehearsal record).
+- ``refuse_or_mark(rows, allow)``: measurement entry points -- SyntheticRefused unless ``allow``; with it, the marks
+  every output then carries (``synthetic_inputs``, ``not_for_judgement``).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+
+from . import model_peer
+
+PTY_PATH = re.compile(r"^/dev/pts/\d+$")
+OUTPUT_MARKS = {"synthetic_inputs": True, "not_for_judgement": True}
+
+
+class SyntheticRefused(Exception):
+    pass
+
+
+def _is_pty(device: str) -> bool:
+    try:
+        st = os.stat(device)
+    except OSError:
+        return False
+    return stat.S_ISCHR(st.st_mode) and os.major(st.st_rdev) in model_peer.PTY_SLAVE_MAJORS
+
+
+def _load_bench(path: str) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def writer_marker(device: str, bench_path: str | None) -> dict | None:
+    pty = _is_pty(device)
+    if not pty:
+        if bench_path is not None:
+            raise SyntheticRefused(f"--bench given but {device} is not a pty: the bench is for the model MCU only")
+        return None
+    if bench_path is None:
+        raise SyntheticRefused(f"{device} is a pty: a rehearsal link needs --bench (a real MCU never links by pty)")
+    bench = _load_bench(bench_path)
+    why = model_peer.model_peer_refusal(device, bench)
+    if why is not None:
+        raise SyntheticRefused(f"the model-peer check refused {device}: {why}")
+    return {"bench": bench}
+
+
+def is_synthetic(header: dict) -> bool:
+    return bool(header.get("synthetic")) or bool(PTY_PATH.match(str(header.get("device") or "")))
+
+
+def refuse_or_mark(rows, *, allow: bool) -> dict:
+    synthetic = any(r.get("t") == "header" and is_synthetic(r) for r in rows)
+    if not synthetic:
+        return {}
+    if not allow:
+        raise SyntheticRefused("a synthetic (rehearsal) record: not for measurement (give --allow-synthetic to read "
+                               "it for a rehearsal; the output is then marked not_for_judgement)")
+    return dict(OUTPUT_MARKS)
