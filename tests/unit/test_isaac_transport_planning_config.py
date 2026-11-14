@@ -963,7 +963,7 @@ def test_a_destination_prior_error_moves_planning_only():
     assert "teach_docking_reference(scenario.destination, truth_destination)" in source
     # the delivery check (a function since the persistent console plan D1) judges on the true destination
     assert source.count("(truth_destination.x_m, truth_destination.y_m, truth_destination.yaw_rad)") == 2
-    marker = source.index('state["destination_marker"] = add_destination(')
+    marker = source.index('state["destination_marker"] = destination_ring(')
     assert source.index("truth_destination = scenario.destination") > marker
     assert source.index('(args.output / "scenario.json").write_text(') < marker
 

@@ -642,6 +642,10 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
     return problems
 
 
+# sim/isaac/path_overlay.DIAGNOSTIC_ENV (kept here as text: this tool imports nothing of the simulator)
+PATH_DISPLAY_DIAGNOSTIC_ENV = "FORKLIFT_PATH_DISPLAY_DIAGNOSTIC"
+
+
 def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[str]:
     """Problems found before a submission: a run whose output (retry_move) already exists, has no output named, or
     whose argv does not name it (none of these is run), a launcher without a DRY_RUN mode (not run either), a DRY_RUN
@@ -655,6 +659,10 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
     problems = []
     for n, run in enumerate(runs):
         r = run.at(1)
+        if PATH_DISPLAY_DIAGNOSTIC_ENV in {**environ, **r.env}:
+            # path display plan (2026-11-14): the diagnostic display modes put the line into the perception renders
+            problems.append(f"{r.name}: {PATH_DISPLAY_DIAGNOSTIC_ENV} is diagnostic only, never in a bundle (not run)")
+            continue
         inherited = inherited_controls(r, environ)
         if inherited:
             problems.append(f"{r.name}: {', '.join(inherited)} set by the submitting environment, not by the list "
