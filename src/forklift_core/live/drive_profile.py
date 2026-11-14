@@ -326,7 +326,8 @@ class ProfileRunner:
         seg = self.segment
         self._row_s = None
         if not obs.armed or obs.mode != "TELEOP":
-            self._end("void:disarmed")
+            # the gate that disarmed (an operator STOP, a lease, command age or feedback loss) stays in the result
+            self._end("void:disarmed" + (f":{obs.stop}" if obs.stop else ""))
             return self._row(now_ns, obs, seg)
         if obs.stop:
             self._end(f"void:stopped:{obs.stop}")
