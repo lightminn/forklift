@@ -4222,6 +4222,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         # The overview has to see the whole hall from above the roof line.
         state["hidden_overhead_prims"] = len(hide_overhead(stage))
     path_overlay.reset()
+    path_overlay.set_contrast(args.path_display == "both")  # the S3 alignment smoke (plan 2026-11-14 4)
 
     def destination_ring(x_, y_, path_="/World/Destination") -> str:
         """The green destination ring, by the display mode as the planned paths (plan 2026-11-14 2): a display

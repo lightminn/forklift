@@ -37,6 +37,8 @@ _intrinsics: dict[str, tuple] = {}
 _moving: dict[str, object] = {}
 _history: dict[str, list] = {}
 _clock = {"fn": None}
+_contrast = {"on": False}
+CONTRAST_COLOUR = (255, 0, 255)  # the overlay under the diagnostic "both": 1 px magenta over the rendered prims
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,13 @@ def reset() -> None:
     _moving.clear()
     _history.clear()
     _clock["fn"] = None
+    _contrast["on"] = False
+
+
+def set_contrast(on: bool) -> None:
+    """Draw every line 1 px wide in CONTRAST_COLOUR (the diagnostic "both", whose rendered prims keep their colours),
+    so the alignment of overlay and render can be measured in the frames."""
+    _contrast["on"] = bool(on)
 
 
 def set_clock(fn) -> None:
@@ -236,6 +245,8 @@ def note_moving(time_s: float | None = None) -> None:
     for key, camera in _moving.items():
         position, q = camera.get_world_pose(camera_axes="ros")
         h = _history.setdefault(key, [])
+        if h and float(time_s) < h[-1][0]:  # the clock went back (a reset, a new epoch): the old poses mean nothing
+            h.clear()
         h.append((float(time_s), np.asarray(position, dtype=float), np.asarray(q, dtype=float)))
         if len(h) > HISTORY:
             del h[: len(h) - HISTORY]
@@ -268,9 +279,12 @@ def compose(rgb, camera, *, frame_time_s: float | None = None):
     position, q = _pose_at(camera, frame_time_s)
     base = line_width(width)
     for item in _items.values():
+        colour = CONTRAST_COLOUR if _contrast["on"] else item["colour"]
+        thickness = 1 if _contrast["on"] else max(1, int(round(base * item["width"])))
+        line_type = cv2.LINE_8 if _contrast["on"] else cv2.LINE_AA  # exact colour pixels to measure by
         for run in project_polyline(item["points"], position, q, k, closed=item["closed"]):
             pts = np.round(np.asarray(run)).clip(-1e5, 1e5).astype(np.int32).reshape(-1, 1, 2)
-            cv2.polylines(out, [pts], False, item["colour"], max(1, int(round(base * item["width"]))), cv2.LINE_AA)
+            cv2.polylines(out, [pts], False, colour, thickness, line_type)
     return out
 
 
@@ -278,6 +292,6 @@ __all__ = [
     "MODES", "DIAGNOSTIC_ENV", "LINE_Z_M", "RING_Z_M", "RING_RADIUS_M", "NEAR_M", "MAX_POINTS", "Intrinsics",
     "reset", "effective_mode", "draws_stage", "draws_overlay", "recorded_value", "empty", "items", "thin",
     "add_path", "add_ring", "project_polyline", "line_width", "register_moving", "note_moving",
-    "pose_history_span_s", "compose", "set_clock", "isaac_sim_clock", "quaternion_wxyz_from_matrix",
+    "pose_history_span_s", "compose", "set_clock", "set_contrast", "CONTRAST_COLOUR", "isaac_sim_clock", "quaternion_wxyz_from_matrix",
     "matrix_from_quaternion_wxyz",
 ]

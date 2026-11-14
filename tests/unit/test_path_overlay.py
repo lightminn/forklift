@@ -190,3 +190,26 @@ def test_note_moving_stamps_with_the_clock_when_no_time_is_given():
     po.note_moving()
     assert math.isclose(po.pose_history_span_s(cam), 0.5)
     assert po.isaac_sim_clock() is None or callable(po.isaac_sim_clock())
+
+
+def test_contrast_draws_one_pixel_magenta_and_reset_clears_it():
+    cam = FakeCamera()
+    po.add_path("Transport", [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)], (1.0, 0.65, 0.04))
+    po.set_contrast(True)
+    out = po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam)
+    magenta = (out == np.array(po.CONTRAST_COLOUR, dtype=np.uint8)).all(axis=2)
+    assert magenta.sum() > 50 and magenta.any(axis=1).sum() == magenta.sum()  # one pixel per row on a vertical line
+    po.reset()
+    assert not po._contrast["on"]
+
+
+def test_a_clock_that_goes_back_restarts_the_history():
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    for t in (10.0, 10.1, 10.2):
+        po.note_moving(t)
+    po.note_moving(0.05)  # a reset
+    assert po.pose_history_span_s(cam) == 0.0
+    po.note_moving(0.1)
+    assert math.isclose(po.pose_history_span_s(cam), 0.05)
