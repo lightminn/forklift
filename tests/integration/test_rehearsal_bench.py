@@ -75,8 +75,28 @@ def test_the_synthetic_permit_opens_on_the_model_and_closes_for_good_when_it_goe
     assert permit([], 1, None) == (1.0, "synthetic_permit")
     proc.terminate()
     proc.wait(timeout=5)
-    assert permit([], 1, None) == (1.0, "synthetic_permit")  # not rechecked yet
-    clock["t"] = int(1.5e9)
+    # the model's master closed with it: the pty is gone, so the next call closes without waiting for a recheck
     assert permit([], 1, None) == (0.0, "synthetic_permit_lost")
     clock["t"] = int(10e9)
     assert permit([], 1, None) == (0.0, "synthetic_permit_lost") and permit.lost is not None
+
+
+def test_the_permit_closes_in_the_same_call_when_the_path_names_another_device(bench, tmp_path):
+    _proc, _path, record = bench
+    link = tmp_path / "mcu"
+    link.symlink_to(record["pts"])
+    permit = tb.SyntheticPermit(str(link), record, recheck_s=1000.0, clock=lambda: 0)
+    assert permit([], 1, None) == (1.0, "synthetic_permit")
+    link.unlink()
+    link.symlink_to("/dev/null")  # retargeted to another device; no recheck is due
+    assert permit([], 1, None) == (0.0, "synthetic_permit_lost") and permit.lost == "device_changed"
+
+
+def test_a_rehearsal_result_on_stdout_is_marked(bench, tmp_path, capsys):
+    _proc, path, record = bench
+    assert bringup.main(["cpr", "--device", record["pts"], "--bench", str(path), "--out", str(tmp_path / "c.jsonl"),
+                         "--seconds", "0.5", "--turns-left", "1", "--turns-right", "1"]) == 0
+    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert out["not_for_judgement"] is True and out["synthetic_inputs"] is True
+    rows = [json.loads(x) for x in (tmp_path / "c.jsonl").read_text().splitlines()]
+    assert rows[0]["device_id"]["major"] in range(136, 144)

@@ -35,7 +35,7 @@ import sys
 import time
 from pathlib import Path
 
-from forklift_core.live.synthetic import SyntheticRefused, writer_marker
+from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, device_identity, writer_marker
 from forklift_core.mcu_link.messages import Arm, ClearFaults, FaultFlag, Mode, RejectReason, StateFlag
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -207,7 +207,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     with open(args.out, "a", encoding="utf-8") as out:
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "rearm_hold_check.py",
-                              "device": args.device, "synthetic": synthetic, "start_wall": time.time(),
+                              "device": args.device, "device_id": device_identity(args.device),
+                              "synthetic": synthetic, "start_wall": time.time(),
                               "start_mono_ns": time.monotonic_ns()}) + "\n")
         out.flush()
         b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud), out, allow_locked=True, commission=True)
@@ -215,7 +216,8 @@ def main(argv: list[str] | None = None) -> int:
             result = run(b, AXES[args.axis], args.duty, args.limit_s, args.stop_grace_ms)
         except bringup.Refused as exc:
             result = {"result": "refused", "why": str(exc)}
-    print(json.dumps(result, default=str))
+    print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
+                     default=str))
     return 0 if result["result"] == "ok" else 1
 
 

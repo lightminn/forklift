@@ -38,7 +38,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark, writer_marker
+from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, device_identity, refuse_or_mark, writer_marker
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive,
@@ -980,7 +980,8 @@ def main(argv=None) -> int:
     with open(args.out, "a", encoding="utf-8") as out:
         # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
-                              "device": args.device, "synthetic": synthetic, "start_wall": time.time(),
+                              "device": args.device, "device_id": device_identity(args.device),
+                              "synthetic": synthetic, "start_wall": time.time(),
                               "start_mono_ns": time.monotonic_ns()}) + "\n")
         out.flush()
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
@@ -990,10 +991,12 @@ def main(argv=None) -> int:
             if args.cmd == "cpr":
                 res = wheel_cpr(bench.samples, (args.turns_left, args.turns_right), (args.dir_left, args.dir_right),
                                 motor_counts_confirmed=args.motor_counts_confirmed)
-                print(json.dumps(asdict(res)))
+                print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **asdict(res)}))
             return 0
         result = execute(args, bench)
-        print(json.dumps(result, default=str))
+        # a rehearsal run's result says so wherever it is copied (Codex impl review P2)
+        print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
+                         default=str))
     return 0
 
 

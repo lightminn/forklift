@@ -54,8 +54,25 @@ def writer_marker(device: str, bench_path: str | None) -> dict | None:
     return {"bench": bench}
 
 
+def device_identity(device: str) -> dict | None:
+    """What a record header keeps about its link device: the character device's major and minor (None: not one)."""
+    try:
+        st = os.stat(device)
+    except OSError:
+        return None
+    if not stat.S_ISCHR(st.st_mode):
+        return None
+    return {"major": os.major(st.st_rdev), "minor": os.minor(st.st_rdev)}
+
+
 def is_synthetic(header: dict) -> bool:
-    return bool(header.get("synthetic")) or bool(PTY_PATH.match(str(header.get("device") or "")))
+    """Marked, or linked through a pty -- by the header's device identity, or (older records) its path."""
+    if header.get("synthetic"):
+        return True
+    ident = header.get("device_id") or {}
+    if ident.get("major") in model_peer.PTY_SLAVE_MAJORS:
+        return True
+    return bool(PTY_PATH.match(str(header.get("device") or "")))
 
 
 def refuse_or_mark(rows, *, allow: bool) -> dict:

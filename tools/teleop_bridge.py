@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import secrets
 import sys
 import time
@@ -34,7 +35,7 @@ from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
-from forklift_core.live.synthetic import SyntheticRefused, writer_marker  # noqa: E402
+from forklift_core.live.synthetic import SyntheticRefused, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
 from forklift_core.mcu_link.messages import McuState  # noqa: E402
@@ -75,6 +76,14 @@ class SyntheticPermit:
         self.next_ns = 0
 
     def __call__(self, curvatures, direction, check_speed):
+        if self.lost is None:
+            # every call: the path still names the bench's pty -- a reopen onto another device (a link the
+            # ReconnectingLink just re-established) closes the permit in the same cycle (Codex impl review P1)
+            try:
+                if os.stat(self.device).st_rdev != self.bench.get("pts_rdev"):
+                    self.lost = "device_changed"
+            except OSError:
+                self.lost = "no_device"
         if self.lost is None:
             now = self.clock()
             if now >= self.next_ns:
@@ -390,7 +399,7 @@ def main(argv=None) -> int:
             return 2
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
-                        "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
+                        "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
                         "start_mono_ns": time.monotonic_ns()})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)

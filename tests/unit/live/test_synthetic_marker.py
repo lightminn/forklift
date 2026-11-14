@@ -15,6 +15,9 @@ def test_a_marked_or_pty_header_is_synthetic():
     assert syn.is_synthetic({"t": "header", "device": "/dev/pts/4"})  # an unmarked rehearsal record
     assert not syn.is_synthetic({"t": "header", "device": "/dev/forklift-mcu"})
     assert not syn.is_synthetic({"t": "header", "device": "/dev/ttyACM0", "synthetic": None})
+    # a pty named through a link: the header's device identity tells
+    assert syn.is_synthetic({"t": "header", "device": "/dev/forklift-mcu", "device_id": {"major": 136, "minor": 4}})
+    assert not syn.is_synthetic({"t": "header", "device": "/dev/forklift-mcu", "device_id": {"major": 166, "minor": 0}})
 
 
 def test_measurement_entry_points_refuse_synthetic_unless_allowed():

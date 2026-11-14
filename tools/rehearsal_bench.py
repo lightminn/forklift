@@ -70,15 +70,19 @@ def start(stage: str, out_dir: Path, build: Path, extra: list[str], duration_ms:
     os.close(slave)
     proc = subprocess.Popen([str(exe), "--link-fd", str(master), *args], pass_fds=(master,))
     os.close(master)  # the model alone holds the master
-    time.sleep(0.2)
-    if proc.poll() is not None:
-        raise SystemExit(f"the model exited at once ({proc.returncode})")
-    bench = bench_record(proc, pts, exe, args, stage)
-    why = model_peer.model_peer_refusal(pts, bench)
-    if why is not None:
-        proc.terminate()
-        proc.wait(timeout=5)
-        raise SystemExit(f"the model-peer check refused the bench's own pty: {why}")
+    try:
+        time.sleep(0.2)
+        if proc.poll() is not None:
+            raise SystemExit(f"the model exited at once ({proc.returncode})")
+        bench = bench_record(proc, pts, exe, args, stage)
+        why = model_peer.model_peer_refusal(pts, bench)
+        if why is not None:
+            raise SystemExit(f"the model-peer check refused the bench's own pty: {why}")
+    except BaseException:  # an interrupt or a refusal while starting never leaves the model running
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=5)
+        raise
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "bench.json"
     path.write_text(json.dumps(bench, indent=1) + "\n", encoding="utf-8")
