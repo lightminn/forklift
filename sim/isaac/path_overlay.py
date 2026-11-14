@@ -38,6 +38,12 @@ _moving: dict[str, object] = {}
 _history: dict[str, list] = {}
 _clock = {"fn": None}
 _contrast = {"on": False}
+_pixel_lag = {"s": 0.0}
+_stats = {"compose_failures": 0, "note_failures": 0, "clock_mismatches": 0, "last_error": None}
+_events = {"path": None, "origin": None, "pending": []}
+EVENT_SCHEMA = "path_display/1"
+TIME_AXIS = "world.current_time - initial_time"  # the live camera frames' stamp_sim_s axis (rendering_time - initial)
+WARN_EVERY = 100  # a repeated warning is printed the first time and every WARN_EVERY-th time after
 CONTRAST_COLOUR = (255, 0, 255)  # the overlay under the diagnostic "both": 1 px magenta over the rendered prims
 
 
@@ -57,6 +63,107 @@ def reset() -> None:
     _history.clear()
     _clock["fn"] = None
     _contrast["on"] = False
+    _pixel_lag["s"] = 0.0
+    _stats.update(compose_failures=0, note_failures=0, clock_mismatches=0, last_error=None, event_failures=0)
+    _events.update(path=None, origin=None, pending=[])
+
+
+def start_event_log(path, mode: str, pixel_lag_s: float) -> None:
+    """``path`` (JSON lines) receives a header now and one ``display`` row each time a line is drawn or replaced
+    (path display follow-up, the console's S4: which path was on screen at which time). The rows' ``time_s`` is on the
+    live frames' axis (TIME_AXIS); rows made before drive() sets the origin wait for it. Only overlay and both draw, so
+    off and stage leave the header alone."""
+    _events.update(path=None, origin=None, pending=[])
+    _write_event({"t": "header", "schema": EVENT_SCHEMA, "mode": mode, "pixel_lag_s": float(pixel_lag_s),
+                  "time_axis": TIME_AXIS, "line_width_px_at_1280": line_width(1280)}, path)
+    _events["path"] = path
+
+
+def set_time_origin(initial_time_s: float) -> None:
+    """drive()'s ``initial_time`` (the run's sim time at the hand-over): rows waiting for it are written now."""
+    _events["origin"] = float(initial_time_s)
+    pending, _events["pending"] = _events["pending"], []
+    for row in pending:
+        _emit(row)
+
+
+def close_event_log() -> None:
+    """Rows still waiting for an origin (a run that never reached drive's start) are written with time_s null."""
+    pending, _events["pending"] = _events["pending"], []
+    for row in pending:
+        _write_event({**{k: v for k, v in row.items() if k != "clock_s"}, "time_s": None}, _events["path"])
+
+
+def _write_event(row: dict, path) -> None:
+    if path is None:
+        return
+    try:
+        import json
+
+        with open(path, "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as exc:  # a display record never stops the run
+        _stats["event_failures"] = _stats.get("event_failures", 0) + 1
+        _stats["last_error"] = f"event log: {type(exc).__name__}: {exc}"
+        _warn("event_failures", _stats["last_error"])
+
+
+def _emit(row: dict) -> None:
+    clock_s = row.pop("clock_s")
+    row["time_s"] = None if clock_s is None else clock_s - _events["origin"]
+    _write_event(row, _events["path"])
+
+
+def _log_display(name: str, item: dict, kind: str) -> None:
+    if _events["path"] is None:
+        return
+    try:
+        clock_s = None if _clock["fn"] is None else float(_clock["fn"]())
+    except Exception:
+        clock_s = None
+    row = {"t": "display", "clock_s": clock_s, "name": name, "kind": kind,
+           "colour": [round(c / 255, 6) for c in item["colour"]], "width_scale": item["width"],
+           "closed": item["closed"], "points": np.round(item["points"], 4).tolist()}
+    if _events["origin"] is None:
+        _events["pending"].append(row)
+    else:
+        _emit(row)
+
+
+def set_pixel_lag(seconds: float) -> None:
+    """How far a frame's pixels trail its ``rendering_time`` (sim s): a moving camera's line is drawn from the pose at
+    ``rendering_time - seconds``. 0 (default) draws from the render time itself; the live console's measured pixel lag
+    (11 physics steps, ``--live-camera-pixel-lag-s``) is the candidate, to be set from the console's S4 measurement."""
+    seconds = float(seconds)
+    if not (np.isfinite(seconds) and seconds >= 0.0):
+        raise ValueError(f"pixel lag must be finite and >= 0, not {seconds}")
+    _pixel_lag["s"] = seconds
+
+
+def stats() -> dict:
+    """The run's overlay failures and clock mismatches (written beside the result, never into the run's state)."""
+    return {**_stats, "pixel_lag_s": _pixel_lag["s"], "event_rows_pending": len(_events["pending"])}
+
+
+def _warn(kind: str, message: str) -> None:
+    """A warning on stderr, the first time and every WARN_EVERY-th time of its kind (a display fault never stops a
+    run: plan 2026-11-14-path-display-perception-leak follow-up)."""
+    import sys
+
+    n = _stats[kind]
+    if n == 1 or n % WARN_EVERY == 0:
+        print(f"PATH_OVERLAY_WARN {kind} #{n}: {message}", file=sys.stderr, flush=True)
+
+
+def _timer(name: str):
+    """The live console's step timers (forklift_core.perf.TIMERS) when importable, else a no-op."""
+    try:
+        from forklift_core.perf import TIMERS
+    except ImportError:
+        from contextlib import nullcontext
+
+        return nullcontext()
+    return TIMERS.region(name)
 
 
 def set_contrast(on: bool) -> None:
@@ -136,6 +243,7 @@ def add_path(name: str, poses, colour) -> None:
     xy = np.array([(float(p[0]), float(p[1])) for p in poses], dtype=float).reshape(-1, 2)
     points = np.column_stack([xy, np.full(len(xy), LINE_Z_M)])
     _items[name] = {"points": thin(points), "colour": _colour255(colour), "closed": False, "width": 1.0}
+    _log_display(name, _items[name], "path")
 
 
 def add_ring(name: str, x_m: float, y_m: float, colour) -> None:
@@ -144,6 +252,7 @@ def add_ring(name: str, x_m: float, y_m: float, colour) -> None:
     points = np.column_stack([x_m + RING_RADIUS_M * np.cos(a), y_m + RING_RADIUS_M * np.sin(a),
                               np.full(len(a), RING_Z_M)])
     _items[name] = {"points": points, "colour": _colour255(colour), "closed": True, "width": 2.0}
+    _log_display(name, _items[name], "ring")
 
 
 def quaternion_wxyz_from_matrix(r: np.ndarray) -> np.ndarray:
@@ -230,7 +339,9 @@ def _intrinsics_for(camera, width: int, height: int) -> Intrinsics:
 def register_moving(camera) -> None:
     """A camera that moves during the run (chase, robot, live): its pose is kept per physics step (note_moving), so
     a frame rendered some steps before it is written is drawn from the pose it was rendered at."""
-    _moving[_camera_key(camera)] = camera
+    key = _camera_key(camera)
+    _moving[key] = camera
+    _history.pop(key, None)  # a (re-)registered camera starts a fresh history
 
 
 def note_moving(time_s: float | None = None) -> None:
@@ -238,18 +349,24 @@ def note_moving(time_s: float | None = None) -> None:
     clock when no time is given)."""
     if not _items or not _moving:
         return
-    if time_s is None:
-        if _clock["fn"] is None:
-            return
-        time_s = _clock["fn"]()
-    for key, camera in _moving.items():
-        position, q = camera.get_world_pose(camera_axes="ros")
-        h = _history.setdefault(key, [])
-        if h and float(time_s) < h[-1][0]:  # the clock went back (a reset, a new epoch): the old poses mean nothing
-            h.clear()
-        h.append((float(time_s), np.asarray(position, dtype=float), np.asarray(q, dtype=float)))
-        if len(h) > HISTORY:
-            del h[: len(h) - HISTORY]
+    if time_s is None and _clock["fn"] is None:
+        return
+    try:  # the timer inside: a display fault never stops the run, the timer's own included
+        with _timer("overlay.note_moving"):
+            if time_s is None:
+                time_s = _clock["fn"]()
+            for key, camera in _moving.items():
+                position, q = camera.get_world_pose(camera_axes="ros")
+                h = _history.setdefault(key, [])
+                if h and float(time_s) < h[-1][0]:  # the clock went back (a reset, a new epoch): old poses mean nothing
+                    h.clear()
+                h.append((float(time_s), np.asarray(position, dtype=float), np.asarray(q, dtype=float)))
+                if len(h) > HISTORY:
+                    del h[: len(h) - HISTORY]
+    except Exception as exc:
+        _stats["note_failures"] += 1
+        _stats["last_error"] = f"note_moving: {type(exc).__name__}: {exc}"
+        _warn("note_failures", _stats["last_error"])
 
 
 def pose_history_span_s(camera) -> float:
@@ -257,12 +374,25 @@ def pose_history_span_s(camera) -> float:
     return h[-1][0] - h[0][0] if h else 0.0
 
 
+CLOCK_SLACK_S = 0.05  # how far outside the kept poses a frame time may fall before it counts as another clock
+
+
 def _pose_at(camera, frame_time_s):
-    h = _history.get(_camera_key(camera)) if frame_time_s is not None else None
+    """The camera's pose for a frame: from the kept history at ``frame_time_s - pixel lag`` when the camera is a
+    moving one with history, else its current pose. A frame time outside the history (by more than CLOCK_SLACK_S)
+    means the frame and the history are not on one clock: that is counted and warned, and the current pose drawn,
+    rather than silently taking the history's nearest end."""
+    key = _camera_key(camera)
+    h = _history.get(key) if frame_time_s is not None and key in _moving else None  # fixed cameras: no history
     if h:
-        times = np.array([e[0] for e in h])
-        i = int(np.argmin(np.abs(times - float(frame_time_s))))
-        return h[i][1], h[i][2]
+        t = float(frame_time_s) - _pixel_lag["s"]
+        if h[0][0] - CLOCK_SLACK_S <= t <= h[-1][0] + CLOCK_SLACK_S:
+            times = np.array([e[0] for e in h])
+            i = int(np.argmin(np.abs(times - t)))
+            return h[i][1], h[i][2]
+        _stats["clock_mismatches"] += 1
+        _warn("clock_mismatches", f"{_camera_key(camera)}: frame time {t:.3f} s outside the kept poses "
+                                  f"{h[0][0]:.3f}-{h[-1][0]:.3f} s (not one clock?)")
     return camera.get_world_pose(camera_axes="ros")
 
 
@@ -271,6 +401,17 @@ def compose(rgb, camera, *, frame_time_s: float | None = None):
     read then). ``frame_time_s``: the frame's render time, for a moving camera's kept pose."""
     if rgb is None or not _items or camera is None:
         return rgb
+    try:  # the timer inside: a display fault skips this frame's lines, never the run (live after_step)
+        with _timer("overlay.compose"):
+            return _compose(rgb, camera, frame_time_s)
+    except Exception as exc:
+        _stats["compose_failures"] += 1
+        _stats["last_error"] = f"compose {_camera_key(camera)}: {type(exc).__name__}: {exc}"
+        _warn("compose_failures", _stats["last_error"])
+        return rgb
+
+
+def _compose(rgb, camera, frame_time_s):
     import cv2
 
     out = np.array(rgb[:, :, :3], dtype=np.uint8, copy=True)
@@ -292,6 +433,8 @@ __all__ = [
     "MODES", "DIAGNOSTIC_ENV", "LINE_Z_M", "RING_Z_M", "RING_RADIUS_M", "NEAR_M", "MAX_POINTS", "Intrinsics",
     "reset", "effective_mode", "draws_stage", "draws_overlay", "recorded_value", "empty", "items", "thin",
     "add_path", "add_ring", "project_polyline", "line_width", "register_moving", "note_moving",
-    "pose_history_span_s", "compose", "set_clock", "set_contrast", "CONTRAST_COLOUR", "isaac_sim_clock", "quaternion_wxyz_from_matrix",
+    "pose_history_span_s", "compose", "set_clock", "set_contrast", "CONTRAST_COLOUR", "isaac_sim_clock",
+    "quaternion_wxyz_from_matrix", "set_pixel_lag", "stats", "CLOCK_SLACK_S", "start_event_log",
+    "set_time_origin", "close_event_log", "EVENT_SCHEMA", "TIME_AXIS",
     "matrix_from_quaternion_wxyz",
 ]
