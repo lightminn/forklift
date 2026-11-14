@@ -41,18 +41,18 @@
 - 입력 파일(①에서 확인): 수정 전 비교 대상과 같은 파일을 쓴다. `SCENE_DIR=test_runs/riibotics/scenes_p1c_81a007b1`, `BASE_SCENE=artifacts/20261013_fork_spacing/base_scene/scene.usda`, `FORKLIFT_URDF=artifacts/20261013_fork_spacing/dd_cfg/old/dls08_measured/forklift.urdf`, `ONNX=test_runs/s3/yolo_runs/yolo11s-seg_p15/weights/best.onnx`, `LEARNED_PY=venvs/learned/bin/python`(곡률 비교 B0 와 K1 재확인 실행 목록의 `env` 가 모두 이 값이다). 라이브는 현황 조사의 장면 묶음(`scenes_ct1_a770031`)과 등록부 지도를 쓴다. 제출 전 각 파일의 sha256 을 실행 폴더에 남긴다.
 - 표시 모드: 수정 뒤 기본(overlay). `FORKLIFT_PATH_DISPLAY_DIAGNOSTIC` 은 R·L 에 넣지 않는다(3.3 의 선택 팔만 예외).
 - 런처 기본을 그대로 쓴다. `EXTRA_ARGS` 는 결정 모드 팔의 `--deterministic` 하나뿐이고, 기본을 바꾸는 환경변수(`NEAR_END_STAND`·`NEAR_OBSERVE_ARRIVAL`·`LAYER_BUDGET`·`RETURN_CUSP_REPLANS` 등)는 주지 않는다.
-- **적용값 확인(제출 전과 첫 완료 실행 뒤).** argv 에 문자열이 있는지가 아니라 적용된 값을 본다. 런처는 일부 값을 다른 값에 따라 정하고(K1 은 적용된 C2 값이 on 일 때만 켜짐, line_2_m 만 `DOCKING_DEGENERATE_CONTINUE` on, aisle_rack 만 `KEEPOUT` 0.15), `EXTRA_ARGS` 가 덮을 수 있기 때문이다.
-  - riib: DRY_RUN 의 `riib_defaults.txt` 와 러너 인자, 첫 완료 실행의 `result.json` `arguments` 에서 장면별로 다음 값을 표로 남긴다: `near_end_stand`, `near_observe_arrival`, `layer_latency_budget`, `return_cusp_replans`, `return_start_backoff`, `exit_prefix_exempt`, `low_clearance_guard`, `restart_confirm_scans`, `d7_reapproach_hold`, `docking_degenerate_continue`, `lidar_keepout_m`, `encoder_model`, `deterministic`, `path_display`.
-  - 라이브: DRY_RUN 의 `RUNNER_ARGS`·`RIIB_DEFAULTS` 줄과 첫 완료 세션의 기록된 `arguments` 에서 같은 항목과 `far_capture_expected`, 지도 묶음, 출발 방식(`START_MODE`)을 남긴다.
-  - 기대값과 다르면 제출하지 않고 총괄에 알린다.
+- **적용값 확인(제출 전 DRY_RUN 으로, 첫 완료 실행 뒤 다시).** argv 에 문자열이 있는지가 아니라 적용된 값을 본다. 런처는 일부 값을 다른 값에 따라 정하고(K1 은 적용된 C2 값이 on 일 때만 켜짐, line_2_m 만 `DOCKING_DEGENERATE_CONTINUE` on, aisle_rack 만 `KEEPOUT` 0.15), `EXTRA_ARGS` 가 덮을 수 있기 때문이다.
+  - riib: 세 장면(random_1·line_2·aisle_rack) 각각 `DRY_RUN=1` 로 런처를 돌린다. 런처는 DRY_RUN 에서도 출력 폴더에 `riib_defaults.txt`(적용된 스위치와 그 출처)를 쓰고(`riib_scene.sbatch` 의 `printf ... > "$OUT/riib_defaults.txt"` 가 DRY_RUN 종료보다 앞), 러너 `--check-args` 로 실제 인자 목록을 찍는다. 이 둘에서 장면별로 다음 값을 표로 남기고, 첫 완료 실행의 `result.json` `arguments` 로 다시 맞춘다: `near_end_stand`, `near_observe_arrival`, `layer_latency_budget`, `return_cusp_replans`, `return_start_backoff`, `exit_prefix_exempt`, `low_clearance_guard`, `restart_confirm_scans`, `d7_reapproach_hold`, `docking_degenerate_continue`, `lidar_keepout_m`, `encoder_model`, `deterministic`, `path_display`.
+  - 라이브: 두 팔 × 두 장면 각각 `DRY_RUN=1` 로 래퍼·런처를 돌려 `RIIB_DEFAULTS` 줄(적용된 C2·K1·복귀 출발 값)과 `RUNNER_ARGS`(러너 `--check-args`)를 남기고, 첫 완료 세션의 기록된 `arguments` 로 다시 맞춘다. 항목은 같은 것과 `far_capture_expected`, 지도 묶음, 출발 방식(`START_MODE`)을 남긴다.
+  - 제출 전 DRY_RUN 의 값이 기대값과 다르면 제출하지 않고 총괄에 알린다. DRY_RUN 에 나오지 않는 항목이 있으면 그 항목을 표에 "DRY_RUN 미확인"으로 적고 첫 완료 실행에서 확인한다. 첫 완료 실행에서 다르면 묶음을 멈추고(`scancel`) 총괄에 알린다.
 - 영상: R 은 `VIDEO=off`(평가 배치 규칙). 라이브 런처는 영상을 켜지 않는다.
 - 결정성 확인에는 RGB 를 쓰지 않는다(RTX RGB 는 결정 모드에서도 프로세스마다 다름). `tools/deterministic_compare.py` 는 RGB 배열을 비교에서 이미 뺀다.
 
 ### 2.2 R — riib 결정 모드
 
-- 장면·seed: random_1 seed 0–59, line_2 seed 0–4, aisle_rack seed 0–4 = 70 실행. 곡률 비교 B0(`lcrcmp_a2b91d2d`, 실행 목록 `assets/loaded-curvature-comparison/RUNS_cmp_a2b91d2d.jsonl`)와 같은 장면·seed 다. 런처가 `MARKERS=on` 이라 random_1·line_2 는 `_m` 사본, `RACK=on` 이라 aisle 는 rack 사본으로 돈다.
+- 장면·seed: random_1 seed 0–59, line_2 seed 0–4, aisle_rack seed 0–4 = 70 실행. 곡률 비교 B0(`lcrcmp_a2b91d2d`, 실행 목록 `docs/validation/assets/loaded-curvature-comparison/RUNS_cmp_a2b91d2d.jsonl`; K1 재확인 목록은 `docs/validation/assets/k1-recheck/RUNS_k1r_k1r_7744f285.jsonl`)와 같은 장면·seed 다. 런처가 `MARKERS=on` 이라 random_1·line_2 는 `_m` 사본, `RACK=on` 이라 aisle 는 rack 사본으로 돈다.
 - 결정성 반복 4 실행: random_1 s0·s1, line_2 s0, aisle_rack s0 을 같은 스냅숏으로 한 번 더 돈다.
-  - 비교: `tools/deterministic_compare.py <원본> <반복> --json` 의 출력(depth·인식 기록·궤적·결과 필드, RGB 제외)이 모두 같으면 "같음"이다. 다르면 처음 다른 항목을 적는다.
+  - 비교: `tools/deterministic_compare.py <원본> <반복> --json`. 이 도구는 실행 폴더의 파일을 모아 비교한다. JSON 은 경로를 정규화해 구조로, `.npz`·`.npy` 는 배열로 비교하고, RGB 배열 멤버와 `.png`·`.mp4`·`.log`·`.txt`·USD 파일, `runtime_clock.json`, spool 의 manifest 는 뺀다. "같음"은 이 범위가 같다는 뜻이고, 그 밖의 파일까지 같다는 뜻은 아니다. 다르면 도구가 낸 처음 다른 항목을 적는다.
   - 두 실행이 모두 끝까지 기록된 짝만 비교한다. 한쪽이 인프라 실패면 그 짝은 "비교 못 함"으로 적고 다시 내지 않는다.
   - 반복은 집계에서 뺀다.
 - 제출: `tools/isaac_bundle.py` riib 묶음 두 잡, 잡마다 3 슬롯, claim-dir 공유, `--retries 2`, `--run-est-min 15`(K1 재확인과 같음).
@@ -204,4 +204,8 @@
   - P2 S 제출 명세·섞임: 3.3 에 실행 목록·출력 루트 분리, 집계 도구의 표시 모드 거부를 넣었다. 세부 array 명령은 제출 전 보고에 적는다.
   - P2 규모 근거: 5 절 추정 근거에 원자료·동시성·반복 여부를 적었다.
   - P3: R 의 역할 이름을 "결정 재현 기준"으로 좁혔다(1 절). 결정성 반복의 비교 도구와 처리(2.2), 기존 표시 끔 근거의 범위(3.2), 제출 전·후 점검(5.1·5.2)을 넣었다. 정리는 디스크 세션 절차로 돌렸다(6 절).
+- **② Codex 2 회차.** 새 P1 없음. 남은 지적 둘을 고쳤다.
+  - 1 회차 P1(적용값)의 처리 부족: 적용값을 첫 완료 실행 뒤에만 보면 잘못된 기본으로 이미 제출된다. 런처가 DRY_RUN 에서도 `riib_defaults.txt` 를 쓰고 러너 `--check-args` 인자를 찍는 것을 코드로 확인하고, 장면별·팔별 DRY_RUN 을 제출 전 확인으로 두었다. DRY_RUN 에 안 나오는 항목은 첫 완료 실행에서 보고, 다르면 묶음을 멈춘다(2.1).
+  - 새 P2: `deterministic_compare` 의 비교 범위를 도구 코드대로 적고, "같음"을 그 범위로 한정했다(2.2).
+  - Codex 가 실행 목록 파일을 찾지 못했다고 해서 경로를 저장소 기준 전체 경로로 고쳤다(2.2).
 - **③ 적히지 않은 전제(독립 검토).** (예정)
