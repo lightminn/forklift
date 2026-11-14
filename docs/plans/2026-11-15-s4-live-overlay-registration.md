@@ -83,10 +83,13 @@ ARM=A ... sbatch --chdir=<SNAP> --job-name=s4ov_A deploy/console/s4_overlay_run.
 
 - 캡처: `tail -n1 OUT/frames/index.jsonl` 의 `reason`(기대 `runner_ended`), `kept`, `reconnects`, `silent_reconnects`.
 - 가시성(두 팔 함께):
-  `"$VENV_PY" tools/live_frames.py judge A/frames --compare B/frames > s4_judge.json`
+  `"$VENV_PY" tools/live_frames.py judge A/frames --compare B/frames --per-frame > s4_judge.json`
   색별·팔별 화소 수와 성분 수를 본다(tol 40, min-component 50 기본, live_frames.py:1031-1038).
   - 읽는 법: B(off)는 같은 장면·같은 색 문턱의 대조군이다. 색 화소는 배경의 비슷한 색도 센다. 그래서 "보인다"는 A 의 값만으로 말하지 않고 A 와 B 를 나란히 적는다.
-  - 색별로 A 에서 화소 수가 가장 많은 프레임 3 장과, 같은 미션 단계의 B 프레임 3 장을 사람이 눈으로 보고, 선이 보이는지 보고서에 적는다(파일 이름을 남긴다). 색 화소 수는 이 확인의 보조 지표다.
+  - 색별로 A 에서 화소 수가 가장 많은 프레임 3 장과, 같은 미션 경과 시각의 B 프레임 3 장을 사람이 눈으로 보고, 선이 보이는지 보고서에 적는다(파일 이름을 남긴다). 색 화소 수는 이 확인의 보조 지표다.
+    - A 의 3 장: `s4_judge.json` 의 `arm.per_frame[]` 에서 그 색의 `colours.<색>.pixels` 가 큰 순서(같으면 `file` 이름 순).
+    - 미션 경과 시각: 각 팔에서 `index.jsonl` 의 frame 행을 `file` 로 이어 `stamp_sim_s` 를 얻고, 그 팔의 미션 기준 시각(`recv_mono_ns / 1e9` 가 `probe.json` 의 `missions_run[0].submitted_mono` 이상인 첫 frame 의 `stamp_sim_s`)을 뺀 값이다.
+    - B 의 3 장: A 의 각 프레임과 미션 경과 시각이 가장 가까운 B 프레임(같으면 앞의 것). 두 팔의 미션 진행 속도가 달라 같은 경과 시각이 같은 장면이라는 보장은 없다 — 고른 B 프레임의 경과 시각 차이를 함께 적는다.
 - 어긋남(A 만):
   `"$VENV_PY" tools/live_frames.py delta --run A/epoch_1/run --frames A/frames > A_delta.json`
   - 기본 설정 0 과 11/120, 가정 지연 11/120(live_frames.py:112, 1049-1052).
@@ -170,5 +173,6 @@ EOF
   - P2 색 화소만으로 표시선을 확정하지 못함 → B 대조와 사람의 눈 확인(색별 6 장)을 5 절에 정하고, 화소 수는 보조 지표로 낮췄다.
   - P2 A → B 한 번씩에는 순서·캐시가 섞임 → 비용 차이는 탐색적 관찰값으로만 보고한다(5 절).
   - P2 예약 시간이 미션 한도를 보장하지 않음 → 예약 근거를 2 절에 적고, 미션 한도·TERM 으로 끝난 실행은 무효로 했다(6 절).
+- ② Codex 2 회차: P2 "눈 확인 프레임을 judge 기본 출력으로 고를 수 없음" → `--per-frame` 을 명령에 넣고, A 상위 3 장과 B 짝(미션 경과 시각 최근접)의 선택 규칙을 5 절에 정했다. 새 P1 없음.
   - 확인된 것: `--path-display off`·`--near-capture-redraw always`·`--max-sim-seconds` 철자, EXTRA_ARGS 전달 경로, delta 조인 키, B 의 머리 줄만 있는 기록 처리.
 - ③ 독립 검토: 이 등록은 측정 방법이 정해진 실행 준비라 세 번 독립 검토를 하지 않았다. 판정 문턱이 없고 값만 보고한다.
