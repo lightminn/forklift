@@ -700,3 +700,85 @@ def test_judge_refuses_when_a_display_colour_is_not_read(tmp_path, monkeypatch, 
     assert rc == 2 and "Return" in capsys.readouterr().err
     monkeypatch.setattr(live_frames, "ROOT", ROOT)
     assert live_frames.main(["judge", str(tmp_path / "a")]) == 0
+
+
+# --- fit: which lag puts the display lines on the rendered ones (S4 both diagnostic) --------------------------------
+
+ORANGE = (255, 166, 10)  # Transport, a display colour the fit's rendered-line mask takes
+MAGENTA = (255, 0, 255)  # path_overlay.CONTRAST_COLOUR, the diagnostic overlay
+
+
+def render_both(cap: Path, run: Path, frames, line_pts, *, true_lag: float, overlay_lag: float = 0.0,
+                width: int = 8, distractor: bool = False) -> None:
+    """Each frame as the diagnostic 'both' shows it: the line rendered (``width`` px -- the 18 mm prim is about 8 px
+    at 1 m -- in a display colour) where the camera was
+    ``true_lag`` before the render time, and the 1 px magenta overlay drawn from the camera ``overlay_lag`` before
+    it -- saved as JPEG q80, as the console sends them."""
+    from PIL import ImageDraw
+
+    from forklift_core.live.frame_judge import PoseTrack, camera_pose, densify_polyline, pixel_shift
+
+    stamps, poses, _ = live_frames.load_poses(run)
+    track = PoseTrack(stamps, poses)
+    result = json.loads((run / "result.json").read_text())
+    mount, _, _ = live_frames.load_mount(result, None)
+    k, _ = live_frames.load_intrinsics(result, None)
+    K = np.array([[k["fx"], 0, k["cx"]], [0, k["fy"], k["cy"]], [0, 0, 1.0]])
+    pts = densify_polyline(np.asarray(line_pts, dtype=float), 0.02)
+    (cap / "frames").mkdir()
+    for fid, stamp, _compose in frames:
+        cams = [camera_pose(track.at(stamp - lag), mount, 0.0) for lag in (true_lag, overlay_lag)]
+        s = pixel_shift(pts, cams[0], cams[1], K)
+        img = Image.new("RGB", (640, 480), (70, 90, 110))
+        draw = ImageDraw.Draw(img)
+        if distractor:  # a yellow board beside the line, as random_m's dock boards
+            draw.rectangle([300, 150, 340, 330], fill=(230, 200, 60))
+        draw.line([tuple(p) for p in s["uv_a"]], fill=ORANGE, width=width)
+        draw.line([tuple(p) for p in s["uv_b"]], fill=MAGENTA, width=1)
+        img.save(cap / "frames" / f"{fid}.jpg", quality=80)
+
+
+def run_fit(capsys, *argv):
+    rc = live_frames.main(["fit", *map(str, argv)])
+    captured = capsys.readouterr()
+    return rc, (json.loads(captured.out) if rc == 0 else captured.err)
+
+
+@pytest.mark.parametrize("true_steps, width, distractor", [(11, 8, False), (0, 8, False), (16, 8, False),
+                                                           (11, 5, True), (11, 12, False)])
+def test_fit_recovers_the_lag_the_frames_were_rendered_with(tmp_path, capsys, true_steps, width, distractor):
+    omega = 0.3  # turning in place: the lag moves every point across the picture
+    stamps = [1.5 + 0.1 * i for i in range(12)]
+    frames = [(i + 1, s, s + LAG) for i, s in enumerate(stamps)]
+    make_run(tmp_path / "run", lambda t: (0.0, 0.0, omega * (t - 2.0)), end_s=4.0, lift_m=0.0, frames=frames)
+    make_capture(tmp_path / "cap", [(f[0], f[1]) for f in frames])
+    line = [[x, y, LINE_Z] for x, y in zip(np.linspace(1.5, 6.0, 30), np.linspace(-0.6, 0.6, 30), strict=True)]
+    events = write_events(tmp_path / "paths.jsonl", [{"time_s": 0.0, "name": "Transport", "poses": line}])
+    render_both(tmp_path / "cap", tmp_path / "run", frames, line, true_lag=true_steps / 120, width=width,
+                distractor=distractor)
+    rc, report = run_fit(capsys, "--run", tmp_path / "run", "--frames", tmp_path / "cap", "--paths", events)
+    assert rc == 0, report
+    by_lag = report["by_lag"]
+    best = min(by_lag, key=lambda key: by_lag[key]["turning"]["median_px"])
+    assert abs(int(best) - true_steps) <= 2  # JPEG and the 1 px overlay over the line leave a step or two
+    cmp_ = report["comparison"]
+    assert cmp_["judged_steps"] == [0, 11] and cmp_["frames"] == 12
+    assert cmp_["better"] == ("0" if true_steps == 0 else "11")
+    assert report["params"]["excluded_colours"] == ["Return", "contrast"]
+
+
+def test_fit_counts_only_frames_with_enough_samples_and_line_pixels(tmp_path, capsys):
+    stamps = [1.5, 1.6]
+    frames = [(i + 1, s, s + LAG) for i, s in enumerate(stamps)]
+    make_run(tmp_path / "run", lambda t: (0.0, 0.0, 0.0), end_s=3.0, lift_m=0.0, frames=frames)
+    make_capture(tmp_path / "cap", [(f[0], f[1]) for f in frames])
+    line = [[x, 0.0, LINE_Z] for x in np.linspace(1.5, 6.0, 30)]
+    events = write_events(tmp_path / "paths.jsonl", [{"time_s": 0.0, "name": "Transport", "poses": line}])
+    render_both(tmp_path / "cap", tmp_path / "run", frames[:1], line, true_lag=0.0)  # 8 px, the overlay on it
+    Image.new("RGB", (640, 480), (70, 90, 110)).save(tmp_path / "cap" / "frames" / "2.jpg", quality=80)  # no line
+    rc, report = run_fit(capsys, "--run", tmp_path / "run", "--frames", tmp_path / "cap", "--paths", events,
+                         "--per-frame")
+    assert rc == 0, report
+    rows = {r["frame_id"]: r for r in report["per_frame"]}
+    assert rows[1]["counted"] is True and rows[2]["counted"] is False and rows[2]["why"] == "few_line_pixels"
+    assert report["counts"]["counted"] == 1

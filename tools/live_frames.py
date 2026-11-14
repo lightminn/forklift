@@ -985,6 +985,195 @@ def delta(run, frames_dir, *, lag_settings=(0.0, PIXEL_LAG_S), true_lag_s: float
     return report
 
 
+# ------------------------------------------------------------------ fit (S4 both diagnostic)
+
+FIT_KIND = "offline lag fit against the rendered display lines"
+FIT_STEPS = tuple(range(21))  # the sweep, in 120 Hz physics steps
+FIT_JUDGED = (0, 11)  # the two settings the both-diagnostic registration compares
+FIT_LINE_TOL = 40  # Chebyshev RGB tolerance of a rendered line pixel to a display colour (60 took a yellow board)
+FIT_EXCLUDED = ("Return", "contrast")  # a JPEG'd magenta drifts to the Return purple; contrast is the overlay itself
+FIT_MAGENTA_OVER_G = 60  # magenta-like: R and B both this much over G ...
+FIT_MAGENTA_MAX_RB = 40  # ... and within this of each other
+FIT_CAP_PX = 40.0  # a rendered pixel's distance is capped here before the mean (a line not displayed, a stray colour)
+FIT_MIN_SAMPLES = 20  # samples on the picture in every pose of the sweep
+FIT_MIN_LINE_PX = 50  # rendered line pixels measured (within FIT_CAP_PX of the projection)
+FIT_INDISTINGUISHABLE_PX = 1.0
+
+
+def rendered_line_mask(rgb: np.ndarray, colours) -> np.ndarray:
+    """The rendered display lines in a decoded frame: pixels within FIT_LINE_TOL of a display colour, not
+    magenta-like (the diagnostic overlay), then closed 3 x 3 so the 1 px the overlay covers on a line counts."""
+    from scipy.ndimage import binary_closing
+
+    px = rgb.astype(np.int16)
+    r, g, b = px[..., 0], px[..., 1], px[..., 2]
+    magenta = (r - g >= FIT_MAGENTA_OVER_G) & (b - g >= FIT_MAGENTA_OVER_G) & (np.abs(r - b) <= FIT_MAGENTA_MAX_RB)
+    line = np.zeros(magenta.shape, dtype=bool)
+    for c in colours:
+        line |= np.abs(px - np.asarray(c, dtype=np.int16)).max(axis=2) <= FIT_LINE_TOL
+    line &= ~magenta
+    return binary_closing(line, structure=np.ones((3, 3), dtype=bool), border_value=0) | line
+
+
+def fit_frame(mask: np.ndarray, points: np.ndarray, cams: dict, K: np.ndarray) -> dict:
+    """Per lag key, the mean distance from each rendered line pixel near the lines (``mask`` within FIT_CAP_PX of
+    the projection at some lag of the sweep) to the displayed lines projected with that key's camera (each distance
+    capped at FIT_CAP_PX). Measured from the rendered side so a wide rendered line is matched at its middle, and a
+    mean so lags a pixel apart are told apart (a median of integer-like distances ties). ``samples``: projected
+    samples on the picture in every pose; ``line_px``: the rendered pixels measured."""
+    from scipy.ndimage import distance_transform_edt
+
+    from forklift_core.live.frame_judge import NEAR_M, _project
+
+    h, w = mask.shape
+    rasters, ok = {}, np.ones(len(points), dtype=bool)
+    for key, cam in cams.items():
+        z, uv = _project(points, cam, K)
+        ui, vi = np.round(uv[:, 0]), np.round(uv[:, 1])
+        inside = (z > NEAR_M) & np.isfinite(ui) & np.isfinite(vi) & (ui >= 0) & (ui < w) & (vi >= 0) & (vi < h)
+        ok &= inside
+        r = np.zeros(mask.shape, dtype=bool)
+        r[vi[inside].astype(int), ui[inside].astype(int)] = True
+        rasters[key] = r
+    out = {"samples": int(ok.sum()), "line_px": 0, "mean_px": {}}
+    if not ok.any():
+        return out
+    near = mask & (distance_transform_edt(~np.logical_or.reduce(list(rasters.values()))) <= FIT_CAP_PX)
+    out["line_px"] = int(near.sum())
+    if not near.any():
+        return out
+    for key, r in rasters.items():
+        out["mean_px"][key] = float(np.mean(np.minimum(distance_transform_edt(~r)[near], FIT_CAP_PX)))
+    return out
+
+
+def fit(run, frames_dir, *, paths: Path | None = None, mount_json: Path | None = None,
+        intrinsics_json: Path | None = None, session_epoch=None, turn_radps: float = TURN_RADPS,
+        rate_window_s: float = RATE_WINDOW_S, sample_m: float = SAMPLE_M, allow_incomplete: bool = False,
+        per_frame: bool = False) -> dict:
+    """Which pixel lag puts the displayed lines on the rendered ones, under FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=both
+    (docs/plans/2026-11-15-s4-both-diagnostic.md): per captured frame, the displayed polylines (RUN/path_display.jsonl
+    at the compose time) are projected with the camera at t - k/120 for every k in FIT_STEPS (t = stamp_sim_s, the
+    reconstructed camera as in ``delta``) and measured against the frame's rendered line pixels
+    (``rendered_line_mask``, ``fit_frame``); summaries are medians of the per-frame means, split straight /
+    turning by the yaw rate at t - PIXEL_LAG_S. ``comparison``: the registered steps' turning medians."""
+    from PIL import Image
+
+    from forklift_core.live.frame_judge import PoseTrack, camera_pose, densify_polyline, displayed_at, interpolate_value
+
+    run, frames_dir = Path(run), Path(frames_dir)
+    result = _result(run)
+    mount, rides_lift, mount_src = load_mount(result, mount_json)
+    k, k_src = load_intrinsics(result, intrinsics_json)
+    if paths is None:
+        if not (run / PATH_DISPLAY_FILE).exists():
+            raise RecordMissing(f"the run has no {PATH_DISPLAY_FILE}: give --paths")
+        paths = run / PATH_DISPLAY_FILE
+    events, resolved, paths_src, display_header = load_path_events(Path(paths))
+    for e in events:
+        if not e.get("clear"):
+            e["samples"] = densify_polyline(e["points"], sample_m, closed=e.get("closed", False))
+    stamps, poses, pose_src = load_poses(run, allow_incomplete)
+    track = PoseTrack(stamps, poses)
+    lift = load_lift(run, result, allow_incomplete) if rides_lift else None
+    if rides_lift and lift is None:
+        raise RecordMissing("the camera rides the lift but the run has no lift record (state.samples lift_m)")
+    entries = read_run_log(run, allow_incomplete)
+    run_epoch, run_epoch_src = run_session_epoch(entries, result)
+    frame_rows = _frame_rows(frames_dir)
+    capture_epochs = sorted({r.get("session_epoch") for r in frame_rows}, key=json.dumps)
+    epoch, epoch_src = _choose_epoch(session_epoch, run_epoch, run_epoch_src, capture_epochs)
+    composed = compose_times(entries, epoch)
+    colours = [tuple(v["rgb"]) for name, v in overlay_colours().items() if not name.startswith(FIT_EXCLUDED)]
+
+    rows = []
+    for row in frame_rows:
+        if row.get("session_epoch") != epoch or row.get("stamp_sim_s") is None:
+            continue
+        t = float(row["stamp_sim_s"])
+        compose_t = t
+        if composed is not None:
+            entry = composed.get((row.get("session_epoch"), row.get("frame_id")))
+            if entry is None or not 0.0 <= entry[1] - t <= COMPOSE_SLACK_S:
+                continue
+            compose_t = entry[1]
+        out = {"frame_id": row.get("frame_id"), "file": row.get("file"), "stamp_sim_s": t, "counted": False}
+        rows.append(out)
+        cams = {}
+        for step in FIT_STEPS:
+            base = track.at(t - step / 120)
+            lift_m = 0.0 if lift is None else _lift_at(lift, t - step / 120, interpolate_value)
+            if base is None or lift_m is None:
+                cams = None
+                break
+            cams[str(step)] = camera_pose(base, mount, lift_m)
+        if cams is None:
+            out["why"] = "outside_poses"
+            continue
+        shown = displayed_at(events, compose_t)
+        if not shown:
+            out["why"] = "no_path"
+            continue
+        with Image.open(frames_dir / row["file"]) as im:
+            rgb = np.asarray(im.convert("RGB"))
+        h, w = rgb.shape[:2]
+        sx, sy = w / k["width"], h / k["height"]
+        K = np.array([[k["fx"] * sx, 0.0, k["cx"] * sx], [0.0, k["fy"] * sy, k["cy"] * sy], [0.0, 0.0, 1.0]])
+        mask = rendered_line_mask(rgb, colours)
+        motion = track.motion(t - PIXEL_LAG_S, rate_window_s)
+        out["motion"] = ("unknown" if motion is None
+                         else "turning" if abs(motion["yaw_rate_radps"]) >= turn_radps else "straight")
+        f = fit_frame(mask, np.vstack([e["samples"] for e in shown.values()]), cams, K)
+        out["samples"], out["line_px"] = f["samples"], f["line_px"]
+        if f["samples"] < FIT_MIN_SAMPLES:
+            out["why"] = "few_samples"
+            continue
+        if f["line_px"] < FIT_MIN_LINE_PX:
+            out["why"] = "few_line_pixels"
+            continue
+        out["counted"], out["mean_px"] = True, f["mean_px"]
+
+    counted = [r for r in rows if r["counted"]]
+
+    def med(subset, key):
+        v = [r["mean_px"][key] for r in subset]
+        return {"frames": len(v), "median_px": float(np.median(v)) if v else None,
+                "p90_px": float(np.percentile(v, 90)) if v else None}
+
+    by_lag = {str(step): {kind: med([r for r in counted if kind == "all" or r["motion"] == kind], str(step))
+                          for kind in ("all", "turning", "straight")} for step in FIT_STEPS}
+    a, b = (str(s) for s in FIT_JUDGED)
+    ta, tb = by_lag[a]["turning"]["median_px"], by_lag[b]["turning"]["median_px"]
+    better = (None if ta is None or tb is None
+              else "indistinguishable" if abs(ta - tb) <= FIT_INDISTINGUISHABLE_PX else (a if ta < tb else b))
+    report = {
+        "tool": "tools/live_frames.py fit", "version": TOOL_VERSION, "kind": FIT_KIND,
+        "run": str(run), "frames": str(frames_dir), "session_epoch": epoch,
+        "params": {"steps": list(FIT_STEPS), "line_tol": FIT_LINE_TOL, "excluded_colours": sorted(FIT_EXCLUDED),
+                   "line_colours": [list(c) for c in colours], "magenta_over_g": FIT_MAGENTA_OVER_G,
+                   "magenta_max_rb": FIT_MAGENTA_MAX_RB, "closing": "3x3", "cap_px": FIT_CAP_PX,
+                   "metric": "per frame: mean distance (capped) from rendered line pixels near the lines to the "
+                             "projection; per lag: median over the counted frames",
+                   "min_samples": FIT_MIN_SAMPLES, "min_line_px": FIT_MIN_LINE_PX, "sample_m": sample_m,
+                   "turn_threshold_radps": turn_radps, "motion_at": "t - PIXEL_LAG_S"},
+        "sources": {"poses": pose_src, "mount": mount_src, "rides_lift": rides_lift, "intrinsics": k_src,
+                    "paths": paths_src, "paths_time_resolved": resolved, "path_display_header": display_header,
+                    "session_epoch": epoch_src},
+        "counts": {"frames": len(rows), "counted": len(counted),
+                   "not_counted": {why: sum(1 for r in rows if r.get("why") == why)
+                                   for why in ("outside_poses", "no_path", "few_line_pixels", "few_samples")}},
+        "by_lag": by_lag,
+        "comparison": {"judged_steps": list(FIT_JUDGED), "frames": by_lag[a]["turning"]["frames"],
+                       "turning_median_px": {a: ta, b: tb},
+                       "straight_median_px": {a: by_lag[a]["straight"]["median_px"],
+                                              b: by_lag[b]["straight"]["median_px"]},
+                       "indistinguishable_within_px": FIT_INDISTINGUISHABLE_PX, "better": better},
+    }
+    if per_frame:
+        report["per_frame"] = rows
+    return report
+
+
 # ------------------------------------------------------------------ command line
 
 
@@ -1062,7 +1251,27 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--allow-incomplete", action="store_true",
                    help="read an incomplete spool or live log (what was written)")
     d.add_argument("--per-frame", action="store_true", help="include every frame's shifts")
+    ft = sub.add_parser("fit", help=f"{FIT_KIND}: the lag (0-20 steps) that puts the displayed lines on the "
+                                     "rendered ones, from a FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=both run (JSON)")
+    ft.add_argument("--run", required=True, type=Path, help="the runner's output directory (epoch_N/run)")
+    ft.add_argument("--frames", required=True, type=Path, help="a capture directory (index.jsonl)")
+    ft.add_argument("--paths", type=Path, default=None, help=f"default RUN/{PATH_DISPLAY_FILE}")
+    ft.add_argument("--mount-json", type=Path, default=None)
+    ft.add_argument("--intrinsics-json", type=Path, default=None)
+    ft.add_argument("--session-epoch", type=int, default=None)
+    ft.add_argument("--allow-incomplete", action="store_true")
+    ft.add_argument("--per-frame", action="store_true")
     args = parser.parse_args(argv)
+    if args.command == "fit":
+        try:
+            report = fit(args.run, args.frames, paths=args.paths, mount_json=args.mount_json,
+                         intrinsics_json=args.intrinsics_json, session_epoch=args.session_epoch,
+                         allow_incomplete=args.allow_incomplete, per_frame=args.per_frame)
+        except (OSError, ValueError, KeyError) as exc:
+            print(f"live_frames: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "capture":
         return _run_capture(args)
     if args.command == "delta":
