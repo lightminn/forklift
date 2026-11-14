@@ -13,7 +13,9 @@ an arm passes; the S4 registration sets those thresholds, and these functions on
   ``pixel_shift_in_view`` keeps only the points on the picture.
 - ``PoseTrack`` (``interpolate_pose``, ``motion_at``) / ``interpolate_value`` / ``camera_pose``: a recorded
   pose track read at any time (linear position, spherical rotation) and the camera on it.
-- ``displayed_at``: which display events stand at a time (the latest per name).
+- ``densify_polyline``: a displayed polyline as world samples at a fixed spacing, so a segment
+  whose end points both lie off the picture still has samples on it.
+- ``displayed_at``: which display events stand at a time (the latest per key, clears applied).
 - ``shift_summary``: max, 95th percentile and median of per-frame shifts.
 """
 
@@ -352,16 +354,49 @@ def yaw_of(world_from_body: np.ndarray) -> float:
     return math.atan2(r[1, 0], r[0, 0])
 
 
+def densify_polyline(points, spacing_m: float, closed: bool = False) -> np.ndarray:
+    """``points`` (N, 3) as a polyline sampled every ``spacing_m`` metres or closer.
+
+    Each segment of length L is cut into ceil(L / spacing_m) equal pieces; every vertex is
+    kept, so the samples are the vertices plus evenly spaced points between them. ``closed``
+    adds the segment from the last point back to the first (a ring). Fewer than two points
+    are returned as they are."""
+    if not (math.isfinite(spacing_m) and spacing_m > 0):
+        raise ValueError(f"spacing_m must be finite and > 0, not {spacing_m}")
+    pts = np.asarray(points, dtype=float)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"points must be (N, 3), not {pts.shape}")
+    if len(pts) < 2:
+        return pts.copy()
+    if closed:
+        pts = np.vstack([pts, pts[:1]])
+    a, b = pts[:-1], pts[1:]
+    pieces = np.maximum(1, np.ceil(np.linalg.norm(b - a, axis=1) / spacing_m).astype(np.int64))
+    seg = np.repeat(np.arange(len(a)), pieces)
+    first = np.repeat(np.cumsum(pieces) - pieces, pieces)
+    frac = (np.arange(int(pieces.sum())) - first) / pieces[seg]
+    out = a[seg] + frac[:, None] * (b - a)[seg]
+    return out if closed else np.vstack([out, pts[-1:]])  # a ring's closing end is its first point
+
+
 def displayed_at(events: Iterable[Mapping], t: float) -> dict[str, Mapping]:
-    """The display standing at ``t``: per ``name``, the latest event with ``time_s <= t``
-    (a later event of one name replaces its earlier line and nothing removes one, as
-    sim/isaac/path_overlay's items). Of two events of one name at one time, the later in
-    order stands."""
+    """The display standing at ``t``: per key (``key`` when the event has one, else
+    ``name``), the latest event with ``time_s <= t`` (a later event of one key replaces its
+    earlier line, as sim/isaac/path_overlay's items). An event with ``clear`` true removes
+    its key, or, without a ``key``, every standing line of its ``name``. Of two events at
+    one time, the later in order wins."""
     out: dict[str, Mapping] = {}
     for event in sorted(events, key=lambda e: float(e["time_s"])):  # stable: equal times keep order
         if float(event["time_s"]) > t:
             break
-        out[str(event["name"])] = event
+        if event.get("clear"):
+            if event.get("key") is not None:
+                out.pop(str(event["key"]), None)
+            else:
+                for k in [k for k, e in out.items() if str(e["name"]) == str(event["name"])]:
+                    del out[k]
+            continue
+        out[str(event.get("key") if event.get("key") is not None else event["name"])] = event
     return out
 
 
@@ -376,6 +411,7 @@ def shift_summary(values: Iterable[float | None]) -> dict:
             "median_px": float(np.median(got)) if got.size else None}
 
 
-__all__ = ["NEAR_M", "PoseTrack", "arm_summary", "camera_pose", "colour_mask", "displayed_at", "frame_summary",
+__all__ = ["NEAR_M", "PoseTrack", "arm_summary", "camera_pose", "colour_mask", "densify_polyline", "displayed_at",
+           "frame_summary",
            "interpolate_pose", "interpolate_value", "label_components", "matrix_from_wxyz", "motion_at",
            "pixel_shift", "pixel_shift_in_view", "shift_summary", "slerp_wxyz", "yaw_of"]

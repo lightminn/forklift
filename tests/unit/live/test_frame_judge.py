@@ -12,6 +12,7 @@ from forklift_core.live.frame_judge import (
     arm_summary,
     camera_pose,
     colour_mask,
+    densify_polyline,
     displayed_at,
     frame_summary,
     interpolate_pose,
@@ -353,6 +354,57 @@ def test_pixel_shift_in_view_drops_points_off_the_picture():
     empty = pixel_shift_in_view(points[1:], a, b, K, 100, 80)
     assert empty["max_px"] is None
     assert empty["shift_px"].size == 0
+
+
+def test_displayed_at_applies_clears_and_keys():
+    ring = {"name": "destination"}
+    events = [
+        {"time_s": 0.0, "name": "Approach", "v": 1},
+        {"time_s": 0.0, **ring, "key": "destination:a", "v": 2},
+        {"time_s": 0.0, **ring, "key": "destination:b", "v": 3},  # two rings of one name stand together
+        {"time_s": 1.0, "name": "Approach", "clear": True},
+        {"time_s": 2.0, **ring, "key": "destination:a", "clear": True},  # one ring by its key
+        {"time_s": 3.0, "name": "Approach", "v": 4},
+        {"time_s": 4.0, **ring, "clear": True},  # no key: every ring
+    ]
+
+    def standing(t):
+        return {k: e["v"] for k, e in displayed_at(events, t).items()}
+
+    assert standing(0.5) == {"Approach": 1, "destination:a": 2, "destination:b": 3}
+    assert standing(1.5) == {"destination:a": 2, "destination:b": 3}
+    assert standing(2.5) == {"destination:b": 3}
+    assert standing(3.5) == {"destination:b": 3, "Approach": 4}
+    assert standing(5.0) == {"Approach": 4}
+
+
+def test_densify_polyline_keeps_vertices_and_spacing():
+    pts = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.1, 0.0]])
+    out = densify_polyline(pts, 0.3)
+    # 1 m in ceil(1/0.3) = 4 pieces, 0.1 m in 1, both ends kept
+    assert out[:, 0].tolist() == pytest.approx([0.0, 0.25, 0.5, 0.75, 1.0, 1.0])
+    assert out[-1] == pytest.approx(pts[-1]) and out[0] == pytest.approx(pts[0])
+    assert np.linalg.norm(np.diff(out, axis=0), axis=1).max() <= 0.3 + 1e-12
+    for v in pts:
+        assert np.min(np.linalg.norm(out - v, axis=1)) == pytest.approx(0.0, abs=1e-12)
+    square = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0]])
+    ring = densify_polyline(square, 0.5, closed=True)
+    assert len(ring) == 8  # four sides of two pieces, the closing end not repeated
+    assert ring[-1] == pytest.approx([0.0, 0.5, 0.0])  # the closing side is sampled
+    assert densify_polyline(pts[:1], 0.1).tolist() == pts[:1].tolist()
+    with pytest.raises(ValueError):
+        densify_polyline(pts, 0.0)
+    with pytest.raises(ValueError):
+        densify_polyline(pts[:, :2], 0.1)
+
+
+def test_a_segment_crossing_the_picture_is_seen_only_once_densified():
+    a = pose(LEVEL, (0.0, 0.0, 0.5))
+    b = pose(rot_z(math.radians(3.0)) @ LEVEL, (0.0, 0.0, 0.5))
+    across = np.array([[2.0, 30.0, 0.0], [2.0, -30.0, 0.0]])  # 2 m ahead, ends far off both sides
+    assert pixel_shift_in_view(across, a, b, K, 100, 80)["max_px"] is None
+    out = pixel_shift_in_view(densify_polyline(across, 0.02), a, b, K, 100, 80)
+    assert out["shift_px"].size > 0 and out["max_px"] is not None
 
 
 def test_shift_summary():

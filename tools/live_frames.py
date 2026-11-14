@@ -18,30 +18,41 @@ operator, and how far they sit from where the pixels are.
     DIR/frames/<frame_id>.jpg (``<frame_id>_e<epoch>.jpg`` when a later session reuses
     the id) with a row in DIR/index.jsonl; DIR/meta.json is written first and an
     ``{"t": "end"}`` row last, also on Ctrl-C. A close with 1001 (the runner ended) ends
-    the capture; any other close reconnects after 1 s, as the page does. DIR must be
-    empty or absent. Prints the end row; exits 0, 1 when it ended ``unreachable``
-    (nothing connected or received for ``--retry-s``), 2 on a refused argument or DIR.
+    the capture; any other close reconnects after 1 s, as the page does, and so does a
+    connection that delivers nothing for ``--retry-s`` (closed by the tool, a ``silent`` row).
+    DIR must be empty or absent. Prints the end row; exits 0, 1 when it ended ``unreachable``
+    (no connection could be opened for ``--retry-s``), 2 on a refused argument or DIR.
 
 ``judge DIR [--compare DIR_B] [--tol 40] [--min-component 50] [--colour NAME=R,G,B]``
     Decodes each indexed frame and counts, per overlay colour, the pixels within
     ``--tol`` per channel and the 4-connected components of at least
     ``--min-component`` pixels (forklift_core.live.frame_judge). Prints JSON. It decides
-    nothing: the S4 registration sets the thresholds.
+    nothing: the S4 registration sets the thresholds. Exits 2 when one of Approach,
+    Transport, Return or destination was not read from its display call (REQUIRED_COLOURS).
 
-``delta --run RUN_DIR --frames DIR --paths EVENTS [--lag-setting-s S]... [--true-lag-s L]``
-    The offline estimate of how far the composited paths sit from the pixels. The overlay
-    draws from the camera pose at the frame's render time t (stamp_sim_s) minus its pixel-lag
-    setting; the pixels show the scene about 11 physics steps before t
-    (run_transport --live-camera-pixel-lag-s). Per frame, the standing paths' points on the
-    picture are projected with the camera at t - setting and at t - L, and the largest pixel
-    distance is kept (frame_judge.pixel_shift_in_view); summarised per setting as max, p95
-    and median over frames, split straight/turning by the yaw rate at t - L. Read from the
-    run: base_link's pose per physics step (slam_log base_pose_world, spooled), the camera
-    mount (result.json perception_mount, lift from state.samples) and K (result.json
-    live_video_camera.intrinsics); live_log.jsonl's camera lines give each frame's compose
-    time, at which the standing paths are taken. A live run does not record the path display
-    calls with their time, so ``--paths`` is required. Prints JSON; exits 2 when a piece is
-    missing, naming it.
+``delta --run RUN_DIR --frames DIR [--paths EVENTS] [--lag-setting-s S]... [--true-lag-s L] [--sample-m M]``
+    An offline point-sample estimate (report ``kind``) of how far the composited lines sit
+    from the pixels. The overlay draws from the camera pose at the frame's render time t
+    (stamp_sim_s) minus its pixel-lag setting; the pixels show the scene about 11 physics
+    steps before t (run_transport --live-camera-pixel-lag-s). Per frame, each standing line
+    (paths and destination rings) is densified to samples every M metres (default 0.02) so a
+    segment whose ends are both off the picture still counts; the samples on the picture are
+    projected with the camera at t - setting and at t - L, and the largest pixel distance is
+    kept (frame_judge.pixel_shift_in_view). A frame with no sample on the picture is counted
+    as ``no_visible`` and left out of the max, p95 and median over frames, which are split
+    straight/turning by the yaw rate at t - L. The approximations are listed in the report
+    (``approximations``): the camera is base_link's truth pose interpolated, times the mount
+    and the lift, not the camera prim's pose history the overlay uses; lines are point
+    samples. Read from the run: base_link's pose per physics step (slam_log base_pose_world,
+    spooled), the camera mount (result.json perception_mount, lift from state.samples) and K
+    (result.json live_video_camera.intrinsics); live_log.jsonl's camera lines give each
+    frame's compose time, at which the standing lines are taken, joined on (session_epoch,
+    frame_id): a run directory is one session epoch's run (its epoch from the live log's
+    start line), frame ids restart with each epoch, and a capture may span several, so frames
+    of another epoch are skipped and counted; when the run does not record its epoch and the
+    capture holds several, ``--session-epoch`` is required. The lines come from
+    RUN/path_display.jsonl (the runner's timed display record) unless ``--paths`` is given.
+    Prints JSON; exits 2 when a piece is missing, naming it.
 
 The overlay colours are not copied here. They are literals at the runner's and the
 mission core's display calls (``show_path``, ``add_path_display``, ``add_path``,
@@ -95,12 +106,14 @@ RUNNER_ENDED = 1001  # LiveServer.stop closes every connection with it
 COLOUR_SOURCES = ("src/forklift_core/mission/core.py", "sim/isaac/run_transport.py")
 DISPLAY_CALLS = ("show_path", "add_path_display", "add_path", "add_ring")
 RING_NAME = "destination"
+REQUIRED_COLOURS = ("Approach", "Transport", "Return", RING_NAME)  # judge refuses to run without any of them
 # sim/isaac/run_transport.py --live-camera-pixel-lag-s help: the pixels trail the render metadata by 11 physics steps
 # (2026-10-17 marker runs) at 120 Hz; that option's own default adds a render of margin (0.2 s)
 PIXEL_LAG_S = 11 / 120
 TURN_RADPS = 0.05  # |yaw rate| at or above this is "turning" in the delta's split (a report split, no verdict)
 RATE_WINDOW_S = 0.1  # the yaw rate's window, centred at t - true lag
 COMPOSE_SLACK_S = 1.0  # a frame is read (composed) at or after its render, within this
+SAMPLE_M = 0.02  # the delta's world spacing of samples along a displayed line
 
 
 # ------------------------------------------------------------------ wire
@@ -153,7 +166,7 @@ class _Capture:
         self.seen: set = set()
         self.files: set[str] = set()
         self.counts = {"frames": 0, "kept": 0, "duplicates": 0, "unparsed": 0,
-                       "connections": 0, "reconnects": 0}
+                       "connections": 0, "reconnects": 0, "silent_reconnects": 0}
 
     def row(self, row: dict) -> None:
         self.index.write(json.dumps(row) + "\n")
@@ -222,7 +235,7 @@ async def _loop(cap: _Capture, url: str, subscribe: dict, stop: asyncio.Event,
     def remaining() -> float:
         return float("inf") if deadline is None else deadline - time.monotonic()
 
-    last_up = time.monotonic()
+    last_up = time.monotonic()  # the last time a connection was open (connected, received or closed)
     while True:
         if stop.is_set():
             return "interrupted"
@@ -233,7 +246,7 @@ async def _loop(cap: _Capture, url: str, subscribe: dict, stop: asyncio.Event,
                                open_timeout=min(5.0, retry_s), close_timeout=1.0) as ws:
                 cap.counts["connections"] += 1
                 cap.counts["reconnects"] = cap.counts["connections"] - 1
-                last_up = time.monotonic()
+                last_up = last_msg = time.monotonic()
                 await ws.send(json.dumps(subscribe))
                 while True:
                     if stop.is_set():
@@ -244,10 +257,18 @@ async def _loop(cap: _Capture, url: str, subscribe: dict, stop: asyncio.Event,
                     try:
                         raw = await asyncio.wait_for(ws.recv(), min(POLL_S, left))
                     except asyncio.TimeoutError:
-                        continue  # recv() is safe to cancel: nothing is lost
-                    last_up = time.monotonic()
+                        # recv() is safe to cancel: nothing is lost. An open socket that stays silent is
+                        # dropped and opened again (the page reconnects too); it is not the run's end.
+                        if time.monotonic() - last_msg > retry_s:
+                            cap.counts["silent_reconnects"] += 1
+                            cap.row({"t": "silent", "after_s": time.monotonic() - last_msg,
+                                     "recv_mono_ns": time.monotonic_ns()})
+                            break
+                        continue
+                    last_up = last_msg = time.monotonic()
                     if cap.message(raw, time.monotonic_ns()):
                         return "max_frames"
+            last_up = time.monotonic()  # closed by us after the silence: connecting again is what is timed
         except ConnectionClosed as exc:
             code = exc.rcvd.code if exc.rcvd is not None else None
             cap.row({"t": "closed", "code": code, "reason": exc.rcvd.reason if exc.rcvd is not None else None,
@@ -268,8 +289,10 @@ async def capture(url: str, out, *, seconds: float | None = None, every: int = 1
     """Capture camera frames from the live console's media socket into ``out``.
 
     Ends on ``max_frames`` kept frames, after ``seconds``, when ``stop`` is set
-    (``interrupted``), when the server closes with 1001 (``runner_ended``) or when nothing
-    could be connected or received for ``retry_s`` (``unreachable``). Returns the end row
+    (``interrupted``), when the server closes with 1001 (``runner_ended``) or when no
+    connection could be opened for ``retry_s`` (``unreachable``). An open connection that
+    delivers nothing for ``retry_s`` is closed and opened again (a ``silent`` row, counted in
+    ``silent_reconnects``), as the page does; it does not end the capture. Returns the end row
     written last to index.jsonl. Raises FileExistsError, before writing anything, when
     ``out`` is not empty.
     """
@@ -363,15 +386,17 @@ def _label_literals(node) -> list[str]:
     return []
 
 
-def overlay_colours(root: Path = ROOT) -> dict[str, dict]:
+def overlay_colours(root: Path | None = None) -> dict[str, dict]:
     """The overlay's colours by display name: ``{name: {"rgb": [r, g, b], "sources":
     ["file:line", ...]}}``, 0-255 as path_overlay draws them.
 
     Read from the literal colours at the display calls in COLOUR_SOURCES (a call whose
     colour or name is a variable is skipped; its literal origin is another call). The
     destination ring is ``destination``; path_overlay's CONTRAST_COLOUR is ``contrast``.
-    A name drawn in two colours gets one entry per colour, ``name@r,g,b``.
+    A name drawn in two colours gets one entry per colour, ``name@r,g,b``. ``root``: the
+    checkout the sources are read from (default ROOT).
     """
+    root = ROOT if root is None else Path(root)
     po = _load_path_overlay()
     found: dict[str, dict[tuple, list[str]]] = {}
     for rel in COLOUR_SOURCES:
@@ -408,6 +433,16 @@ def overlay_colours(root: Path = ROOT) -> dict[str, dict]:
             key = label if len(variants) == 1 else f"{label}@{','.join(map(str, rgb))}"
             out[key] = {"rgb": list(rgb), "sources": sorted(set(sources))}
     return out
+
+
+def check_colours(colours: dict[str, dict]) -> None:
+    """Refuse a colour table without one of REQUIRED_COLOURS (as ``name`` or ``name@r,g,b``):
+    a refactor of the display calls must not drop a colour from the judge unnoticed."""
+    missing = [n for n in REQUIRED_COLOURS if not any(k == n or k.startswith(n + "@") for k in colours)]
+    if missing:
+        raise ValueError(f"overlay colours {missing} were not found at the display calls ({', '.join(DISPLAY_CALLS)}) "
+                         f"in {', '.join(COLOUR_SOURCES)}: a call site changed so its literal colour or name is no "
+                         "longer read; fix overlay_colours to read it")
 
 
 def _parse_colour(text: str) -> tuple[str, list[int]]:
@@ -469,6 +504,7 @@ def judge(directory: Path, compare: Path | None = None, *, tol: int = 40, min_co
     if tol < 0 or min_component < 1:
         raise ValueError("--tol must be >= 0 and --min-component >= 1")
     colours = overlay_colours()
+    check_colours(colours)  # on what the sources gave, before any --colour
     for name, rgb in extra:
         colours[name] = {"rgb": list(rgb), "sources": ["--colour"]}
     plain = {name: c["rgb"] for name, c in colours.items()}
@@ -586,6 +622,56 @@ def load_lift(run: Path, result: dict | None, allow_incomplete: bool = False):
             f"{source}: time_s, lift_m")
 
 
+PATH_DISPLAY_FILE = "path_display.jsonl"
+PATH_DISPLAY_SCHEMA = "path_display/"
+
+
+def parse_path_display(lines: list[str], where: str = PATH_DISPLAY_FILE) -> tuple[list[dict], dict]:
+    """The runner's timed display record (``RUN/path_display.jsonl``, written by sim/isaac/path_overlay.py since
+    PR #513; this is the one place that reads it) -> (raw events, header).
+
+    Line 1: ``{"t": "header", "schema": "path_display/1", "mode", "pixel_lag_s", "time_axis",
+    "line_width_px_at_1280"}``. Then ``{"t": "display", "time_s", "name", "kind": "path"|"ring", "colour",
+    "width_scale", "closed", "points": [[x, y, z], ...]}`` -- the points compose draws (a path thinned to 200 or
+    fewer at z 0.012, a ring a closed 96-point circle at z 0.006). A path's name is its call's label (Approach,
+    Transport, Return, Observe); a ring's is its prim path (``/World/Destination``, ``/World/Destinations/<slot>``),
+    so every line has its own name and a repeated name replaces that line. ``time_s`` is on the frames'
+    ``stamp_sim_s`` axis and may be null when the runner never fixed its origin: such rows are counted in the
+    header's ``untimed_rows`` and not used. A ``clear`` row (none written today) removes its name. Rows of another
+    ``t`` are counted in ``ignored_rows``, not refused."""
+    rows = [json.loads(line) for line in lines if line.strip()]
+    if not rows or rows[0].get("t") != "header" or not str(rows[0].get("schema", "")).startswith(
+            PATH_DISPLAY_SCHEMA):
+        raise ValueError(f"{where}: the first line is not a {PATH_DISPLAY_SCHEMA}* header")
+    header = dict(rows[0])
+    events, ignored, untimed = [], 0, 0
+    for row in rows[1:]:
+        kind = row.get("t")
+        if kind not in ("display", "clear"):
+            ignored += 1
+            continue
+        if row.get("time_s") is None:
+            untimed += 1
+            continue
+        event = {"time_s": float(row["time_s"]), "name": str(row["name"])}
+        if kind == "clear":
+            event["clear"] = True
+        else:
+            ring = row.get("kind") == "ring"
+            event.update(points=row["points"], closed=bool(row.get("closed", ring)), colour=row.get("colour"),
+                         width_scale=row.get("width_scale"), ring=ring)
+        events.append(event)
+    header["ignored_rows"] = ignored
+    header["untimed_rows"] = untimed
+    return events, header
+
+
+def path_display_summary(run: Path) -> dict | None:
+    """``RUN/path_display.json``: the runner's failure and clock-mismatch counts for the overlay, passed through."""
+    f = run / "path_display.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
+
+
 def _event_points(event: dict, po) -> np.ndarray:
     if event.get("points") is not None:
         pts = np.asarray(event["points"], dtype=float)
@@ -599,16 +685,35 @@ def _event_points(event: dict, po) -> np.ndarray:
     return po.thin(pts)
 
 
-def load_path_events(path: Path) -> tuple[list[dict], bool, str]:
-    """The planned paths the overlay showed, as display events ``{"time_s", "name",
-    "poses" | "points"}`` (sim seconds since the run's start, as the frames' stamp_sim_s).
+def _is_path_display(path: Path) -> bool:
+    if path.name == PATH_DISPLAY_FILE:
+        return True
+    with path.open(encoding="utf-8") as f:
+        first = next((line for line in f if line.strip()), "")
+    try:
+        head = json.loads(first)
+    except ValueError:
+        return False
+    return isinstance(head, dict) and str(head.get("schema", "")).startswith(PATH_DISPLAY_SCHEMA)
 
-    ``path``: a JSONL file or a directory of them (a spooled list), or a JSON list of events
-    -- time-resolved; or a JSON object ``{name: {"poses": [...]} | [...]}`` (paths.json,
-    path_record) -- static: every path stands from the start (``time_resolved`` False).
-    Points get path_overlay's line height and thinning, as ``add_path`` gives them."""
+
+def load_path_events(path: Path) -> tuple[list[dict], bool, str, dict | None]:
+    """The lines the overlay showed, as display events ``{"time_s", "name", "points"}`` plus
+    ``key``, ``closed`` and ``clear`` where given (sim seconds since the run's start, as the
+    frames' stamp_sim_s) -> (events, time_resolved, source, path_display header or None).
+
+    ``path``: the runner's ``path_display.jsonl`` (parse_path_display; paths and destination
+    rings, with clears); a JSONL file or a directory of them (a spooled list) or a JSON list
+    of events ``{time_s, name, poses|points}`` -- time-resolved; or a JSON object ``{name:
+    {"poses": [...]} | [...]}`` (paths.json, path_record) -- static: every path stands from the
+    start (``time_resolved`` False). Points get path_overlay's line height and thinning, as
+    ``add_path`` gives them."""
     po = _load_path_overlay()
-    if path.is_dir():
+    header = None
+    if path.is_file() and path.suffix == ".jsonl" and _is_path_display(path):
+        raw, header = parse_path_display(path.read_text(encoding="utf-8").splitlines(), str(path))
+        resolved = True
+    elif path.is_dir():
         lines = [line for f in sorted(path.glob("*.jsonl")) for line in f.read_text().splitlines()]
         raw, resolved = [json.loads(line) for line in lines if line.strip()], True
     elif path.suffix == ".jsonl":
@@ -624,26 +729,60 @@ def load_path_events(path: Path) -> tuple[list[dict], bool, str]:
             raw, resolved = list(data), True
     events = []
     for e in raw:
+        if e.get("clear"):
+            events.append({"time_s": float(e["time_s"]), "name": str(e["name"]), "clear": True,
+                           **({"key": str(e["key"])} if e.get("key") is not None else {})})
+            continue
         if "time_s" not in e or "name" not in e or (e.get("points") is None and e.get("poses") is None):
             raise ValueError(f"{path}: a path event needs time_s, name and points or poses: {sorted(e)}")
-        events.append({"time_s": float(e["time_s"]), "name": str(e["name"]), "points": _event_points(e, po)})
-    if not events:
+        event = {"time_s": float(e["time_s"]), "name": str(e["name"]), "points": _event_points(e, po),
+                 "closed": bool(e.get("closed", False))}
+        if e.get("key") is not None:
+            event["key"] = str(e["key"])
+        events.append(event)
+    if not any(not e.get("clear") for e in events):
         raise RecordMissing(f"{path}: no path in it")
-    return events, resolved, str(path)
+    return events, resolved, str(path), header
 
 
-def load_compose_times(run: Path, allow_incomplete: bool = False) -> dict | None:
-    """frame_id -> (render_time, sim_t) from live_log.jsonl ``camera`` lines: ``sim_t`` is the
-    end of the physics step whose camera read composed the frame -- the overlay draws the
-    lines standing then. None when the run has no live log."""
+def read_run_log(run: Path, allow_incomplete: bool = False) -> list[dict] | None:
+    """The run's live_log.jsonl entries (rolled parts included); None without a live log."""
     from forklift_core.live.spool import read_live_log
 
     if not (run / "live_log.jsonl").exists():
         return None
+    return read_live_log(run, allow_incomplete=allow_incomplete)
+
+
+def run_session_epoch(entries: list[dict] | None, result: dict | None) -> tuple[int | None, str | None]:
+    """The session epoch of a run directory (one runner process, one epoch; the frames' header
+    ``session_epoch``): the live log's ``{"event": "start", "session_epoch"}`` line
+    (live_runtime.LiveRuntime.start), else result.json ``reloc_console.session_epoch`` (a
+    relocalizing run's early console). Not the folder's ``epoch_N``: N counts the supervisor's
+    restarts, the session epoch is a random 48-bit number. (None, None) when neither is there."""
+    found = {e["session_epoch"] for e in entries or () if e.get("event") == "start"
+             and e.get("session_epoch") is not None}
+    if len(found) > 1:
+        raise RecordMissing(f"the live log starts several session epochs {sorted(found)}; give --session-epoch")
+    if found:
+        return found.pop(), "live_log.jsonl start session_epoch"
+    early = ((result or {}).get("reloc_console") or {}).get("session_epoch")
+    if early is not None:
+        return early, "result.json reloc_console.session_epoch"
+    return None, None
+
+
+def compose_times(entries: list[dict] | None, epoch) -> dict | None:
+    """(session_epoch, frame_id) -> (render_time, sim_t) from the live log's ``camera`` lines:
+    ``sim_t`` is the end of the physics step whose camera read composed the frame -- the
+    overlay draws the lines standing then. A run's log is one epoch's (``epoch``), and frame
+    ids restart with each epoch, so the epoch is part of the key. None without a live log."""
+    if entries is None:
+        return None
     out = {}
-    for e in read_live_log(run, allow_incomplete=allow_incomplete):
+    for e in entries:
         if "camera" in e and e.get("sim_t") is not None:
-            out[e["camera"]] = (e.get("render_time"), float(e["sim_t"]))
+            out[(epoch, e["camera"])] = (e.get("render_time"), float(e["sim_t"]))
     return out
 
 
@@ -666,18 +805,54 @@ def _lag_key(lag: float) -> str:
     return f"{lag:.6g}"
 
 
+DELTA_KIND = "offline point-sample estimate"
+DELTA_APPROXIMATIONS = {
+    "pose": "the camera at a time is base_link's truth pose (slam_log base_pose_world, interpolated: linear position, "
+            "spherical rotation) times the perception mount, raised by the lift (state.samples lift_m); the overlay "
+            "itself reads the camera prim's own pose history (path_overlay register_moving/note_moving), which this "
+            "does not see",
+    "lines": "each displayed polyline (and destination ring, closed) is densified at sample_m world spacing and the "
+             "samples are projected as points; a sample counts when it is on the picture in either pose; line "
+             "width, anti-aliasing and the overlay's own segment clipping are not modelled",
+    "pixels": "the pixels are taken to show the scene true_lag_s before the frame's render time (stamp_sim_s); that "
+              "lag is an assumption, not read from the frame",
+}
+
+
+def _choose_epoch(session_epoch, run_epoch, run_src, capture_epochs: list) -> tuple:
+    """The epoch the delta reads: --session-epoch (which must be the run's when the run
+    records one), else the run's, else the capture's only epoch; refused when the capture
+    holds several and nothing says which is the run's."""
+    if session_epoch is not None:
+        if run_epoch is not None and session_epoch != run_epoch:
+            raise RecordMissing(f"--session-epoch {session_epoch} is not this run's session epoch {run_epoch} "
+                                f"({run_src}); a run directory is one epoch's run")
+        return session_epoch, "--session-epoch"
+    if run_epoch is not None:
+        return run_epoch, run_src
+    if len(capture_epochs) <= 1:
+        return (capture_epochs[0] if capture_epochs else None,
+                "the capture's only session epoch (the run records none)")
+    raise RecordMissing(f"the capture holds session epochs {capture_epochs} and the run's own epoch is not recorded "
+                        "(no live_log.jsonl start line with session_epoch, no result.json reloc_console); frame ids "
+                        "restart with each epoch, so give --session-epoch")
+
+
 def delta(run, frames_dir, *, lag_settings=(0.0, PIXEL_LAG_S), true_lag_s: float = PIXEL_LAG_S,
           paths: Path | None = None, mount_json: Path | None = None, intrinsics_json: Path | None = None,
           session_epoch=None, turn_radps: float = TURN_RADPS, rate_window_s: float = RATE_WINDOW_S,
-          allow_incomplete: bool = False, per_frame: bool = False) -> dict:
-    """The offline overlay misalignment: per captured frame (render time t = stamp_sim_s),
-    the pixel shift of the standing planned paths between the camera at ``t - setting``
-    (where the overlay draws them) and at ``t - true_lag_s`` (what the pixels show), for each
-    lag setting; summarised over frames, and split straight / turning by the yaw rate at
-    ``t - true_lag_s``. Raises RecordMissing for a piece neither recorded nor given."""
+          sample_m: float = SAMPLE_M, allow_incomplete: bool = False, per_frame: bool = False) -> dict:
+    """An offline point-sample estimate of the overlay misalignment: per captured frame of the
+    run's session epoch (render time t = stamp_sim_s), the pixel shift of the standing lines'
+    samples between the camera at ``t - setting`` (where the overlay draws them) and at
+    ``t - true_lag_s`` (what the pixels show), for each lag setting; summarised over the
+    frames with a sample on the picture, and split straight / turning by the yaw rate at
+    ``t - true_lag_s``. The approximations are listed in the report (DELTA_APPROXIMATIONS).
+    Raises RecordMissing for a piece neither recorded nor given."""
     from forklift_core.live.frame_judge import (
         PoseTrack,
         camera_pose,
+        densify_polyline,
         displayed_at,
         interpolate_value,
         pixel_shift_in_view,
@@ -690,39 +865,54 @@ def delta(run, frames_dir, *, lag_settings=(0.0, PIXEL_LAG_S), true_lag_s: float
         raise ValueError("lags must be finite and >= 0")
     if not (turn_radps >= 0 and rate_window_s > 0):
         raise ValueError("--turn-threshold-radps must be >= 0 and --rate-window-s > 0")
+    if not (math.isfinite(sample_m) and sample_m > 0):
+        raise ValueError("--sample-m must be finite and > 0")
     result = _result(run)
     mount, rides_lift, mount_src = load_mount(result, mount_json)
     k, k_src = load_intrinsics(result, intrinsics_json)
     if paths is None:
-        raise RecordMissing(
-            "the run does not record which planned paths the overlay showed when: path_overlay.add_path keeps only "
-            "the latest line per name in memory, and no live record (result.json, live_log.jsonl, spool, "
-            "tick_trace.npz) has the display calls with their time; give --paths (display events, JSONL or a "
-            "directory of them, or a static paths.json)")
-    events, resolved, paths_src = load_path_events(Path(paths))
+        if not (run / PATH_DISPLAY_FILE).exists():
+            raise RecordMissing(
+                f"the run has no {PATH_DISPLAY_FILE} (the runner's timed record of the display calls, PR #513), so "
+                "nothing says which lines the overlay showed when: path_overlay.add_path keeps only the latest line "
+                "per name in memory; give --paths (display events, JSONL or a directory of them, or a static "
+                "paths.json)")
+        paths = run / PATH_DISPLAY_FILE
+    events, resolved, paths_src, display_header = load_path_events(Path(paths))
+    for e in events:
+        if not e.get("clear"):
+            e["samples"] = densify_polyline(e["points"], sample_m, closed=e.get("closed", False))
     stamps, poses, pose_src = load_poses(run, allow_incomplete)
     track = PoseTrack(stamps, poses)  # checked once: a live session's track is long
     lift = load_lift(run, result, allow_incomplete) if rides_lift else None
     if rides_lift and lift is None:
         raise RecordMissing("the camera rides the lift but the run has no lift record (state.samples lift_m)")
-    composed = load_compose_times(run, allow_incomplete)
+    entries = read_run_log(run, allow_incomplete)
+    run_epoch, run_epoch_src = run_session_epoch(entries, result)
+    frame_rows = _frame_rows(frames_dir)
+    capture_epochs = sorted({r.get("session_epoch") for r in frame_rows}, key=json.dumps)
+    epoch, epoch_src = _choose_epoch(session_epoch, run_epoch, run_epoch_src, capture_epochs)
+    composed = compose_times(entries, epoch)
 
-    skipped = {k_: 0 for k_ in ("no_stamp", "other_epoch", "not_in_run", "outside_poses", "no_path")}
+    skipped = {k_: 0 for k_ in ("other_epoch", "no_stamp", "no_compose_entry", "compose_before_render",
+                                "outside_poses", "no_path")}
     rows = []
-    for row in _frame_rows(frames_dir):
+    for row in frame_rows:
+        if row.get("session_epoch") != epoch:
+            skipped["other_epoch"] += 1  # another session's frame ids are another numbering
+            continue
         t = row.get("stamp_sim_s")
         if t is None:
             skipped["no_stamp"] += 1
             continue
-        if session_epoch is not None and row.get("session_epoch") != session_epoch:
-            skipped["other_epoch"] += 1
-            continue
         compose_t = float(t)
         if composed is not None:
-            entry = composed.get(row.get("frame_id"))
-            # the frame is read at or after its render, within a second (not another epoch's same id)
-            if entry is None or not 0.0 <= entry[1] - float(t) <= COMPOSE_SLACK_S:
-                skipped["not_in_run"] += 1
+            entry = composed.get((row.get("session_epoch"), row.get("frame_id")))
+            if entry is None:
+                skipped["no_compose_entry"] += 1
+                continue
+            if not 0.0 <= entry[1] - float(t) <= COMPOSE_SLACK_S:  # a check of the join, not a second key
+                skipped["compose_before_render"] += 1
                 continue
             compose_t = entry[1]
         cams, missing = {}, False
@@ -740,7 +930,7 @@ def delta(run, frames_dir, *, lag_settings=(0.0, PIXEL_LAG_S), true_lag_s: float
         if not shown:
             skipped["no_path"] += 1
             continue
-        points = np.vstack([e["points"] for e in shown.values()])
+        points = np.vstack([e["samples"] for e in shown.values()])
         w = int(row.get("width") or k["width"])
         h = int(row.get("height") or k["height"])
         sx, sy = w / k["width"], h / k["height"]  # a picture sent smaller than rendered, as compose scales
@@ -751,30 +941,43 @@ def delta(run, frames_dir, *, lag_settings=(0.0, PIXEL_LAG_S), true_lag_s: float
         shifts = {}
         for lag in lag_settings:
             s = pixel_shift_in_view(points, cams[lag], cams[true_lag_s], K, w, h)
-            shifts[_lag_key(lag)] = {"max_px": s["max_px"], "p95_px": s["p95_px"], "points": int(s["shift_px"].size)}
+            shifts[_lag_key(lag)] = {"max_px": s["max_px"], "p95_px": s["p95_px"],
+                                     "visible_samples": int(s["shift_px"].size)}
         rows.append({"frame_id": row.get("frame_id"), "session_epoch": row.get("session_epoch"),
                      "stamp_sim_s": float(t), "compose_sim_s": compose_t, "motion": kind,
                      "yaw_rate_radps": None if motion is None else motion["yaw_rate_radps"],
                      "speed_mps": None if motion is None else motion["speed_mps"],
-                     "paths": sorted(shown), "shift": shifts})
+                     "paths": sorted(shown), "samples": int(len(points)), "shift": shifts})
+
+    def summary(key: str, subset) -> dict:
+        values = [r["shift"][key]["max_px"] for r in subset]
+        seen = [v for v in values if v is not None]
+        return {"no_visible": len(values) - len(seen), **shift_summary(seen)}  # an unseen frame is never a 0
 
     settings = {}
     for lag in lag_settings:
         key = _lag_key(lag)
-        settings[key] = {"lag_setting_s": lag, "all": shift_summary(r["shift"][key]["max_px"] for r in rows)}
+        settings[key] = {"lag_setting_s": lag, "all": summary(key, rows)}
         for kind in ("straight", "turning", "unknown"):
-            settings[key][kind] = shift_summary(r["shift"][key]["max_px"] for r in rows if r["motion"] == kind)
+            settings[key][kind] = summary(key, [r for r in rows if r["motion"] == kind])
     report = {
-        "tool": "tools/live_frames.py delta", "version": TOOL_VERSION, "run": str(run), "frames": str(frames_dir),
+        "tool": "tools/live_frames.py delta", "version": TOOL_VERSION, "kind": DELTA_KIND,
+        "approximations": DELTA_APPROXIMATIONS, "run": str(run), "frames": str(frames_dir),
         "true_lag_s": true_lag_s, "lag_settings_s": lag_settings, "turn_threshold_radps": turn_radps,
-        "rate_window_s": rate_window_s, "session_epoch": session_epoch,
-        "metric": "per frame, the largest pixel distance of a standing path point on the picture between the camera "
-                  "at t - setting and at t - true_lag (t = stamp_sim_s); summaries are over frames",
+        "rate_window_s": rate_window_s, "sample_m": sample_m,
+        "session_epoch": epoch, "capture_session_epochs": capture_epochs,
+        "metric": "per frame, the largest pixel distance, over the displayed lines' samples on the picture, between "
+                  "the camera at t - setting and at t - true_lag (t = stamp_sim_s); summaries are over the frames "
+                  "with at least one sample on the picture (no_visible counts the others)",
         "sources": {"poses": pose_src, "mount": mount_src, "rides_lift": rides_lift, "intrinsics": k_src,
                     "lift": None if lift is None else lift[2], "paths": paths_src, "paths_time_resolved": resolved,
-                    "compose_time": "live_log.jsonl camera sim_t" if composed is not None
+                    "path_display_header": display_header, "path_display_summary": path_display_summary(run),
+                    "session_epoch": epoch_src,
+                    "compose_time": "live_log.jsonl camera sim_t, joined on (session_epoch, frame_id)"
+                    if composed is not None
                     else "stamp_sim_s (no live_log.jsonl: lines added between render and read are not told apart)"},
-        "counts": {"measured": len(rows), "skipped": skipped},
+        "counts": {"measured": len(rows), "skipped": skipped,
+                   "no_visible": {key: settings[key]["all"]["no_visible"] for key in settings}},
         "settings": settings,
     }
     if per_frame:
@@ -823,7 +1026,8 @@ def main(argv: list[str] | None = None) -> int:
     c.add_argument("--max-frames", type=int, default=None)
     c.add_argument("--hz", type=float, default=CAMERA_HZ, help="subscribed rate (server caps it)")
     c.add_argument("--retry-s", type=float, default=RETRY_S,
-                   help="end as unreachable after this long with no connection or message")
+                   help="reconnect a connection silent this long; end as unreachable when no connection "
+                        "could be opened for this long")
     j = sub.add_parser("judge", help="count the overlay colours in captured frames (JSON)")
     j.add_argument("dir", type=Path)
     j.add_argument("--compare", type=Path, default=None)
@@ -832,12 +1036,16 @@ def main(argv: list[str] | None = None) -> int:
     j.add_argument("--colour", action="append", type=_parse_colour, default=[],
                    help="an extra colour NAME=R,G,B (repeatable; replaces a found name)")
     j.add_argument("--per-frame", action="store_true", help="include every frame's counts")
-    d = sub.add_parser("delta", help="offline pixel shift of the overlay's paths for pixel-lag settings (JSON)")
-    d.add_argument("--run", required=True, type=Path, help="the runner's output directory (EPOCH/run)")
+    d = sub.add_parser("delta", help=f"{DELTA_KIND} of the overlay lines' pixel shift for pixel-lag settings "
+                                     "(JSON; base truth pose + mount + lift, densified lines)")
+    d.add_argument("--run", required=True, type=Path, help="the runner's output directory (epoch_N/run)")
     d.add_argument("--frames", required=True, type=Path, help="a capture directory (index.jsonl)")
     d.add_argument("--paths", type=Path, default=None,
-                   help="display events {time_s, name, poses|points} as JSONL, a directory of JSONL or a JSON list; "
-                        "or a static paths.json {name: {poses}} (not recorded by a live run: required)")
+                   help=f"default RUN/{PATH_DISPLAY_FILE} (the runner's timed display record); or display events "
+                        "{time_s, name, poses|points} as JSONL, a directory of JSONL or a JSON list; or a static "
+                        "paths.json {name: {poses}} (no time: every path stands from the start)")
+    d.add_argument("--sample-m", type=float, default=SAMPLE_M,
+                   help=f"world spacing of the samples along each displayed line (default {SAMPLE_M})")
     d.add_argument("--lag-setting-s", action="append", type=float, default=None,
                    help=f"the overlay's pixel lag setting (repeatable; default 0 and {PIXEL_LAG_S:.4f})")
     d.add_argument("--true-lag-s", type=float, default=PIXEL_LAG_S,
@@ -846,7 +1054,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="{translation_m, rotation, rides_lift} instead of result.json perception_mount")
     d.add_argument("--intrinsics-json", type=Path, default=None,
                    help="{fx, fy, cx, cy, width, height} instead of result.json live_video_camera.intrinsics")
-    d.add_argument("--session-epoch", type=int, default=None, help="only the frames of this session epoch")
+    d.add_argument("--session-epoch", type=int, default=None,
+                   help="the run's session epoch, when the run does not record it and the capture holds several "
+                        "(must match the run's when it does)")
     d.add_argument("--turn-threshold-radps", type=float, default=TURN_RADPS)
     d.add_argument("--rate-window-s", type=float, default=RATE_WINDOW_S)
     d.add_argument("--allow-incomplete", action="store_true",
@@ -862,7 +1072,8 @@ def main(argv: list[str] | None = None) -> int:
                            true_lag_s=args.true_lag_s, paths=args.paths, mount_json=args.mount_json,
                            intrinsics_json=args.intrinsics_json, session_epoch=args.session_epoch,
                            turn_radps=args.turn_threshold_radps, rate_window_s=args.rate_window_s,
-                           allow_incomplete=args.allow_incomplete, per_frame=args.per_frame)
+                           sample_m=args.sample_m, allow_incomplete=args.allow_incomplete,
+                           per_frame=args.per_frame)
         except (OSError, ValueError, KeyError) as exc:  # RecordMissing is a ValueError
             print(f"live_frames: {exc}", file=sys.stderr)
             return 2
