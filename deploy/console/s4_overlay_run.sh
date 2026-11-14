@@ -16,7 +16,8 @@
 #     sbatch --chdir=<snapshot> deploy/console/s4_overlay_run.sh OUT
 #   ARM A: --path-display at its default (overlay); B: --path-display off. Both: --max-sim-seconds 1200 and
 #   FORKLIFT_LIVE_TICK_TRACE=1. Optional: SEED (0), FACTOR (0.4), CYCLE (P-1:D-1), MISSION_TIMEOUT_S (2400),
-#   WAIT_PORT_S (1500), END_GRACE_S (300), CAPTURE_END_S (60). DRY_RUN=1: print what would run, run and write nothing.
+#   WAIT_PORT_S (1500), END_GRACE_S (300), CAPTURE_END_S (60),
+#   FIRST_FRAME_S (120). DRY_RUN=1: print what would run, run and write nothing.
 # Run from the snapshot root.
 set -euo pipefail
 OUT=$(realpath -m "${1:?output directory}")
@@ -37,6 +38,7 @@ MISSION_TIMEOUT_S=${MISSION_TIMEOUT_S:-2400}
 WAIT_PORT_S=${WAIT_PORT_S:-1500}
 END_GRACE_S=${END_GRACE_S:-300}
 CAPTURE_END_S=${CAPTURE_END_S:-60}
+FIRST_FRAME_S=${FIRST_FRAME_S:-120}
 export VENV_PY BASE_SCENE FORKLIFT_URDF SCENE_FILE SLAM_BUNDLE_ROOT
 export START_RELOC=off MAP_BUNDLE=registry MAX_EPOCHS=1 STANDBY_LINGER_S=0 FORKLIFT_LIVE_TICK_TRACE=1
 export SEED=${SEED:-0} FACTOR=${FACTOR:-0.4}
@@ -56,9 +58,10 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
     printf '%s=%q\n' "$v" "${!v}"
   done
   printf 'launcher:'; printf ' %q' "${LAUNCHER[@]}"; echo " > $OUT/launcher.log"
-  printf 'probe:'; printf ' %q' "${PROBE[@]}"; echo " --launcher-pid <launcher pid> > $OUT/probe.log"
   printf 'capture (once %s says running):' "$OUT/live_port.json"; printf ' %q' "${CAPTURE[@]}"
   echo " --url ws://<host>:<port> > $OUT/capture.log"
+  printf 'probe (after the first captured frame, at most %s s):' "$FIRST_FRAME_S"; printf ' %q' "${PROBE[@]}"
+  echo " --launcher-pid <launcher pid> > $OUT/probe.log"
   exit 0
 fi
 
@@ -95,12 +98,10 @@ term_relay_arm
 "${LAUNCHER[@]}" > "$OUT/launcher.log" 2>&1 &
 L=$!
 term_relay_add "$L"
-"${PROBE[@]}" --launcher-pid "$L" > "$OUT/probe.log" 2>&1 &
-P=$!
-term_relay_add "$P"
 
 # the capture starts once the runner's own server is up (the port file says running): the supervisor's standby on the
-# same port serves no media socket
+# same port serves no media socket. The probe (which submits the mission) starts only after the capture has saved its
+# first frame, so the mission's frames are all captured (Codex S4 review P2-1)
 C=""
 deadline=$(( SECONDS + WAIT_PORT_S ))
 while [ "$SECONDS" -lt "$deadline" ] && [ "$TERM_RELAY_GOT" = 0 ] && kill -0 "$L" 2>/dev/null; do
@@ -115,6 +116,22 @@ while [ "$SECONDS" -lt "$deadline" ] && [ "$TERM_RELAY_GOT" = 0 ] && kill -0 "$L
   sleep 1
 done
 [ -n "$C" ] || log "no running session within ${WAIT_PORT_S} s (or the launcher ended): no capture"
+if [ -n "$C" ]; then
+  for _ in $(seq 1 $(( FIRST_FRAME_S * 10 ))); do
+    grep -q '"t": "frame"' "$OUT/frames/index.jsonl" 2>/dev/null && break
+    kill -0 "$C" 2>/dev/null || break
+    sleep 0.1
+  done
+  if grep -q '"t": "frame"' "$OUT/frames/index.jsonl" 2>/dev/null; then
+    log "capture has its first frame: starting the probe"
+  else
+    log "no captured frame within ${FIRST_FRAME_S} s: starting the probe anyway (the run is void, registration 6)"
+  fi
+fi
+"${PROBE[@]}" --launcher-pid "$L" > "$OUT/probe.log" 2>&1 &
+P=$!
+term_relay_add "$P"
+log "probe started"
 
 end_launcher() {
   kill -TERM "$L" 2>/dev/null || true
