@@ -305,3 +305,31 @@ def test_compose_and_note_are_timed_when_the_live_timers_are_on():
         assert TIMERS._count.get("overlay.compose", 0) == before.get("overlay.compose", 0) + 1
     finally:
         TIMERS.enabled = was
+
+
+def test_a_fixed_camera_never_reads_a_history_and_re_registering_starts_fresh():
+    cam = FakeCamera(prim_path="/World/Cam")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    po.note_moving(10.0)
+    po._moving.clear()  # the same prim path, no longer a moving camera
+    po.set_pixel_lag(5.0)
+    po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam, frame_time_s=10.0)
+    assert po.stats()["clock_mismatches"] == 0  # no history, no lag, no mismatch for a fixed camera
+    po.register_moving(cam)
+    assert po.pose_history_span_s(cam) == 0.0 and "/World/Cam" not in po._history
+
+
+def test_a_failing_timer_is_caught_too(monkeypatch):
+    def broken(name):
+        raise RuntimeError("timer broken")
+
+    monkeypatch.setattr(po, "_timer", broken)
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    assert po.compose(frame, cam) is frame
+    po.note_moving(1.0)
+    st = po.stats()
+    assert st["compose_failures"] == 1 and st["note_failures"] == 1

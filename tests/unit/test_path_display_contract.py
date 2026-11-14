@@ -183,6 +183,9 @@ def test_follow_up_wiring():
     assert "percep_sink_ = ((args.robot_camera and perception_display is None)" in source
     assert "for cam_ in (perception_camera if percep_sink_ else None, perception_display, live_cam_setup_):" in source
     assert "path_overlay.set_pixel_lag(args.path_display_pixel_lag_s)" in source
+    # the chase view is a moving sink too, registered where it is made
+    chase_at = source.index('extra_cameras["chase"] = chase')
+    assert source.index("path_overlay.register_moving(chase)", chase_at) - chase_at < 300
     # the overlay's failures and clock mismatches beside the result, never in the state a replay compares
     stats_at = source.index('(args.output / "path_display.json").write_text(json.dumps(path_overlay.stats()')
     assert stats_at < source.index('(args.output / "result.json").write_text(record_json(state, indent=2)', stats_at)

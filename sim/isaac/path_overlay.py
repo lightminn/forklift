@@ -271,7 +271,9 @@ def _intrinsics_for(camera, width: int, height: int) -> Intrinsics:
 def register_moving(camera) -> None:
     """A camera that moves during the run (chase, robot, live): its pose is kept per physics step (note_moving), so
     a frame rendered some steps before it is written is drawn from the pose it was rendered at."""
-    _moving[_camera_key(camera)] = camera
+    key = _camera_key(camera)
+    _moving[key] = camera
+    _history.pop(key, None)  # a (re-)registered camera starts a fresh history
 
 
 def note_moving(time_s: float | None = None) -> None:
@@ -281,8 +283,8 @@ def note_moving(time_s: float | None = None) -> None:
         return
     if time_s is None and _clock["fn"] is None:
         return
-    with _timer("overlay.note_moving"):
-        try:
+    try:  # the timer inside: a display fault never stops the run, the timer's own included
+        with _timer("overlay.note_moving"):
             if time_s is None:
                 time_s = _clock["fn"]()
             for key, camera in _moving.items():
@@ -293,10 +295,10 @@ def note_moving(time_s: float | None = None) -> None:
                 h.append((float(time_s), np.asarray(position, dtype=float), np.asarray(q, dtype=float)))
                 if len(h) > HISTORY:
                     del h[: len(h) - HISTORY]
-        except Exception as exc:  # a display fault never stops the run
-            _stats["note_failures"] += 1
-            _stats["last_error"] = f"note_moving: {type(exc).__name__}: {exc}"
-            _warn("note_failures", _stats["last_error"])
+    except Exception as exc:
+        _stats["note_failures"] += 1
+        _stats["last_error"] = f"note_moving: {type(exc).__name__}: {exc}"
+        _warn("note_failures", _stats["last_error"])
 
 
 def pose_history_span_s(camera) -> float:
@@ -312,7 +314,8 @@ def _pose_at(camera, frame_time_s):
     moving one with history, else its current pose. A frame time outside the history (by more than CLOCK_SLACK_S)
     means the frame and the history are not on one clock: that is counted and warned, and the current pose drawn,
     rather than silently taking the history's nearest end."""
-    h = _history.get(_camera_key(camera)) if frame_time_s is not None else None
+    key = _camera_key(camera)
+    h = _history.get(key) if frame_time_s is not None and key in _moving else None  # fixed cameras: no history
     if h:
         t = float(frame_time_s) - _pixel_lag["s"]
         if h[0][0] - CLOCK_SLACK_S <= t <= h[-1][0] + CLOCK_SLACK_S:
@@ -330,14 +333,14 @@ def compose(rgb, camera, *, frame_time_s: float | None = None):
     read then). ``frame_time_s``: the frame's render time, for a moving camera's kept pose."""
     if rgb is None or not _items or camera is None:
         return rgb
-    with _timer("overlay.compose"):
-        try:
+    try:  # the timer inside: a display fault skips this frame's lines, never the run (live after_step)
+        with _timer("overlay.compose"):
             return _compose(rgb, camera, frame_time_s)
-        except Exception as exc:  # a display fault skips this frame's lines, never the run (live after_step)
-            _stats["compose_failures"] += 1
-            _stats["last_error"] = f"compose {_camera_key(camera)}: {type(exc).__name__}: {exc}"
-            _warn("compose_failures", _stats["last_error"])
-            return rgb
+    except Exception as exc:
+        _stats["compose_failures"] += 1
+        _stats["last_error"] = f"compose {_camera_key(camera)}: {type(exc).__name__}: {exc}"
+        _warn("compose_failures", _stats["last_error"])
+        return rgb
 
 
 def _compose(rgb, camera, frame_time_s):

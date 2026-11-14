@@ -12259,7 +12259,10 @@ def main() -> None:
         state["scan_switches"] = scan_switches_record()  # G3 promotion: what this run applied (plan 5.26-5.27)
         # path display follow-up: the overlay's failures and clock mismatches, beside the result (never in the state,
         # which a boundary replay compares)
-        (args.output / "path_display.json").write_text(json.dumps(path_overlay.stats(), indent=2) + "\n")
+        try:  # guarded: a failed write never costs the result
+            (args.output / "path_display.json").write_text(json.dumps(path_overlay.stats(), indent=2) + "\n")
+        except Exception as exc_:
+            print(f"PATH_OVERLAY_WARN path_display.json not written: {exc_}", file=sys.stderr)
         (args.output / "result.json").write_text(record_json(state, indent=2) + "\n")
         from forklift_core import perf as perf_
 
