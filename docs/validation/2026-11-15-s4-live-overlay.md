@@ -11,9 +11,9 @@
 | A overlay | 19245 | 02:40:31–02:48:20 | P-4:D-1 | done, 모의 159 s | 1585 장, runner_ended, 재연결 0 |
 | B off | 19247 | 02:50:21–02:57:46 | P-4:D-1 | done, 모의 156 s | 1552 장, runner_ended, 재연결 0 |
 
-- 6 절 무효 조건에 두 팔 모두 걸리지 않았다. 확인한 것: epoch 1 개·exit 0, stall.jsonl 없음, 미션 ack, 결과가 세션 끝 전에 옴, `arguments.path_display` 와 path_display.jsonl 머리 줄이 A overlay·B off, SLAM_CHOICE registry 위치 추정·START known, 캡처 첫 frame 이 미션 제출보다 먼저(A 1.27 s, B 1.31 s 앞), 미션 한도·TERM 없음.
+- 6 절 무효 조건에 두 팔 모두 걸리지 않았다. 확인한 것: epoch 1 개·exit 0, stall.jsonl 없음, 미션 ack, 결과가 세션 끝 전에 옴, `arguments.path_display` 와 path_display.jsonl 머리 줄이 A overlay·B off, SLAM_CHOICE registry 위치 추정·START known, 캡처 첫 frame 이 미션 제출보다 먼저(첫 frame `recv_mono_ns/1e9` 대 `missions_run[0].submitted_mono`: A 1,004,267.140 대 1,004,268.409 s → 1.269 s 앞, B 1,004,843.786 대 1,004,845.093 s → 1.307 s 앞; 등록은 늦을 때만 무효), 미션 한도·TERM 없음(`s4_wrapper.log` 에 TERM·void 줄 없음, 탐침 exit 0, `stall.jsonl` 없음).
 - 다른 잡과 겹치지 않았다. 잡 19246(다른 세션의 pytest)은 02:48:27 제출·02:48:28 시작·02:48:46 취소로, A 잡이 02:48:20 에 끝난 뒤다(A 의 supervisor exit 02:48:19). B 동안에는 다른 잡이 없었다.
-- vm_watch(30 s): 두 팔 동안 모든 표본이 qemu 0·GPU 2 개·persistence Enabled 였다.
+- vm_watch(30 s): 각 팔의 세션 구간 ±45 s 안 표본 A 18·B 18 개가 모두 qemu 0·GPU 2 개·persistence Enabled 였다.
 - A·B 의 overlay 실패 기록(`path_display.json`)은 compose·note·clock·event 모두 0 이었다.
 - **첫 제출 19243(스냅숏 `s4ov_c276b33c`, 팔 A)은 쓰지 않았다.** 미션을 `P-1:D-1` 로 냈는데 알려진 출발에서 P-1 의 도킹 목표 후보 12 개가 모두 `invalid_goal` 이라 prepare 에서 끝났다(모의 1.4 s). 등록 설정 오류라 미션을 CT 의 random_m 첫 다리 `P-4:D-1` 로 고치고 새 스냅숏에서 A 부터 다시 냈다(등록 7 절).
 
@@ -29,7 +29,7 @@
 | Approach | 102(6 %), 최대 206 | 0 |
 | Observe·contrast | 0 | 0 |
 
-- 눈 확인(등록 5 절 규칙으로 고름, `eye_pick.json`): 색별 A 상위 프레임(Approach 273, Return 1441, Transport 750, destination 959)에는 해당 색의 선이 보이고, 미션 경과 시각이 같은 B 프레임(274, 1442, 751, 960; 시각 차 0.0 s)에는 선이 없다. 선은 운반 중인 팔레트 위에도 그려진다 — 2D 합성이라 가림이 없다.
+- 눈 확인(등록 5 절 규칙으로 고름, `eye_pick.json`; 콘솔 세션의 관찰 기록): 색별 A 상위 프레임(Approach 273, Return 1441, Transport 750, destination 959)에는 해당 색의 선이 보이고, 미션 경과 시각이 같은 B 프레임(274, 1442, 751, 960; 시각 차 0.0 s)에는 선이 없다. 색별 2·3 위 프레임은 1 위와 0.1–0.6 s 떨어진 이웃이라 1 위만 보았다.
 - 결론: 경로 표시선은 콘솔 media 스트림에 보이고, off 에서는 사라진다.
 
 ## 3. 어긋남(delta, A 만, 640 px 폭)
@@ -58,16 +58,21 @@
 | overlay.note_moving | 스텝당 0.45 ms, 합 8.5 s | — |
 | overlay.compose | 프레임당 2.0 ms, 합 3.2 s | — |
 
-- note_moving 합(8.5 s)은 A 의 isaac.step 합(59.5 s)의 약 14 % 다. step.plain 평균 차 0.42 ms 가 note_moving 0.45 ms 와 거의 같아, 그 비용이 물리 스텝마다 그대로 더해진다.
-- 그래도 배속 0.4 목표에서는 배속 중앙값과 stalls 에 차이가 보이지 않는다(0.379 대 0.378). 이 배속에서는 세션에 여유가 있어 페이서가 그 시간을 흡수한 것으로 읽힌다. 더 높은 배속이나 여유가 적은 조건에서도 그런지는 이 실행이 말하지 않는다.
+- note_moving 합(8.5 s)은 A 의 isaac.step 합(59.5 s)의 약 14 % 다. step.plain 평균 차(0.42 ms)는 note_moving 평균(0.45 ms)과 비슷하다. 다만 호출 수가 다르고(step.plain 17,420 대 note_moving 19,096 — render 스텝에서도 불린다) 팔마다 한 세션이라, 이 차이가 note_moving 때문이라고 단정하지 않는다.
+- 배속 0.4 목표에서는 배속 중앙값과 stalls 에 차이가 보이지 않는다(0.379 대 0.378, stalls 0·0). 세션에 여유가 있어 페이서가 그 시간을 흡수했을 수 있다는 것은 추론이고 잰 것이 아니다. 더 높은 배속이나 여유가 적은 조건에서도 그런지는 이 실행이 말하지 않는다.
 - 한계: 팔마다 한 세션, A → B 순서, 캡처·탐침이 같은 CPU 4 개를 씀 — 탐색적 관찰값이고 운영 비용 추정이 아니다.
 
-## 5. 기타
+## 5. 알려진 한계
+
+- **표시선은 운반 중인 팔레트·차체 위에도 그려진다.** overlay 는 렌더된 이미지 위의 2D 합성이라 장면의 가림을 모른다(Transport 750 에서 주황 경로가 들린 팔레트 판 위를 지난다). 운영자 화면에서 선이 물체 앞에 떠 보인다.
+- 가시성은 media socket 스트림에서, 어긋남은 모형 기반 추정(재구성 카메라 자세 + 가정 지연), 비용은 캡처·탐침을 켠 한 세션씩의 탐색값이다(등록 1 절).
+
+## 6. 기타
 
 - JPEG 크기는 A 32.0 KiB/장, B 30.6 KiB/장, 세션당 50–54 MB 다(등록 3 절의 추정 0.1–0.4 GB 보다 작다).
 - 눈 확인에 쓴 JPEG 13 장은 Claude 가 화면으로 보려고 노트북 작업 폴더로 복사했고, 보고 뒤 지운다.
 
-## 6. 총괄이 정할 것
+## 7. 총괄 결정(2026-11-15)
 
-- `--path-display-pixel-lag-s`: 설정 0 의 어긋남은 위 값이다. 11 스텝 가정의 방향·크기 확인은 눈으로는 판단할 수 없었다. 필요하면 stage+overlay 함께 그리기 진단(비결정 라이브)을 따로 등록한다.
-- note_moving 비용(스텝당 0.45 ms): 배속 0.4 에서는 배속에 보이지 않았다. 줄일지는 총괄이 정한다.
+- 결과를 받아들인다: 가시성 확인, 배속 0.4 에서 비용이 배속에 보이지 않음, 지연 방향은 눈으로 판단 불가.
+- `--path-display-pixel-lag-s` 를 정하기 전에 stage+overlay 함께 그리기 진단을 비결정 라이브 1 세션(A 와 같은 조건)으로 한 번 한다. 지연 0 과 11/120 중 어느 쪽이 렌더된 선에 더 맞는지 보고, 그 결과로 총괄이 라이브 싱크의 기본값을 정한다(진단 변수 사용은 이번 1 회 승인).
