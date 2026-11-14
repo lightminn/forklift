@@ -31,6 +31,7 @@ sys.path.insert(0, str(REPO))  # console/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from console.live.server import LiveServer, MediaStore  # noqa: E402
+from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
@@ -48,6 +49,7 @@ from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
 from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
 
 CYCLE_S = 0.02
+
 NO_STATE_HINT_S = 2.0  # no STATE this long: tell the operator (no automatic USB reset, lead 2026-11-12)
 NO_STATE_HINT = "MCU STATE 없음 — USB 가 멈췄으면 주 전원을 재투입하세요(자동 리셋 없음)"
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.5, zero_valid_ms=100, outbox_max=16)
@@ -67,19 +69,39 @@ def welcome(epoch: int) -> dict:
                 "media": {}, "provisional_limits": True}}
 
 
+class ProfileChannels(Channels):
+    """The console's channels with a drive profile in them (G6 design 2): each ``teleop`` message the console sent
+    gets the profile's two ratios on its way to the arbiter -- nothing else of it changes, and no message is made."""
+
+    def __init__(self, runner, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.runner = runner
+
+    def take_cycle(self):
+        conns, stops, ordered, latest = super().take_cycle()
+        return conns, stops, ordered, [(c, cl, self.runner.rewrite(m)) for c, cl, m in latest]
+
+
 class Bridge:
     """The bridge's parts on one device and one console (the CLI and the end-to-end test build it the same way)."""
 
-    def __init__(self, device_link, *, confirmed, floor_permit=no_scan, session_epoch=None, record=None):
+    def __init__(self, device_link, *, confirmed, floor_permit=no_scan, session_epoch=None, record=None,
+                 profile=None):
         self.vehicle = load_real_vehicle(REPO / "config" / "real" / "vehicle.yaml")
         self.params = rt.load_bridge_params(REPO / "config" / "real" / "teleop_bridge.yaml", self.vehicle)
         self.cap = rt.command_cap_mps(self.vehicle.teleop_speed_limit_mps, self.params)
         self.kin = RealKinematics(self.vehicle)
         limits = rt.real_teleop_limits(TeleopLimits(**teleop_limit_overrides(self.kin)), self.cap)
+        self.limits = limits
         self.epoch = session_epoch if session_epoch is not None else secrets.randbits(48)
         self.arbiter = Arbiter(self.epoch, ArbiterConfig(tick_s=CYCLE_S, teleop_limits=limits, request_tokens=True),
                                lambda: secrets.token_hex(16), mission=None)
-        self.channels = Channels()
+        # G6: a drive profile (its file's dict) replaces the joystick's two ratios; None for the hand alone
+        self.profile = None if profile is None else dprof.ProfileRunner(
+            dprof.parse_profile(profile, self.profile_limits()), self.profile_limits())
+        self.channels = Channels() if self.profile is None else ProfileChannels(self.profile)
+        self._still_since: int | None = None
+        self._last_cycle_ns: int | None = None
         self.link = Link(self.arbiter, self.channels)
         # a random first seq per session: a STATE an earlier session left in flight is never taken for this one's
         # acknowledgement (the delay bound's causality, design 2)
@@ -98,6 +120,57 @@ class Bridge:
         self.overruns = 0
         self._started_ns: int | None = None
         self._last_rx_ns: int | None = None
+
+    def profile_limits(self) -> dprof.ProfileLimits:
+        """What a profile is checked against: the teleop limits this bridge drives under (design 2.1)."""
+        lim, v = self.limits, self.vehicle
+        return dprof.ProfileLimits(cap_mps=min(lim.direct_forward_mps, lim.direct_reverse_mps),
+                                   kappa_max=lim.curvature_inv_m, kappa_rate=lim.curvature_rate_inv_m_s,
+                                   q_rate=self.kin.steering_rate_rad_s, accel_mps2=lim.accel_mps2,
+                                   q_of_kappa=v.steering.angle, kappa_of_q=lambda q: self.kin.held_curvature((q,)))
+
+    def profile_start(self, now_ns: int) -> str | None:
+        """The operator's start (Enter on the bridge's terminal): None when a trial began, else why not."""
+        if self.profile is None:
+            return "no_profile"
+        a = self.arbiter
+        still = 0.0 if self._still_since is None else (now_ns - self._still_since) / 1e9
+        why = self.profile.start(now_ns, standstill_s=still, armed=a.armed and a.mode == "TELEOP")
+        if self.record is not None:
+            self.record.put_row({"t": "profile_start", "host_ns": now_ns, "trial": self.profile.trial,
+                                 "profile": self.profile.profile.name, "refused": why})
+        return why
+
+    def _profile_step(self, now_ns: int, rec: dict, out) -> None:
+        reading = self.core.reading
+        valid = reading is not None and reading.speed.valid
+        speed = reading.speed.signed_mps if valid else 0.0
+        if valid and abs(speed) < self.limits.stop_speed_mps:
+            self._still_since = now_ns if self._still_since is None else self._still_since
+        else:
+            self._still_since = None
+        dt = CYCLE_S if self._last_cycle_ns is None else (now_ns - self._last_cycle_ns) / 1e9
+        self._last_cycle_ns = now_ns
+        obs = dprof.Observation(
+            dt_s=dt, speed_valid=valid, speed_mps=speed,
+            meas_q=None if reading is None or reading.steering_rad is None else reading.steering_rad,
+            armed=bool(rec.get("armed")), mode=str(rec.get("mode")), target_mps=float(rec.get("target_mps") or 0.0),
+            applied_mps=float(rec.get("applied_mps") or 0.0), applied_q=self.core.q_cmd, permit=out.permit,
+            port=rec.get("port"), direction_cut=rec.get("direction_cut"), stop=rec.get("stop") or rec.get("disarm"),
+            # only the command the arbiter accepted (owner, lease, generation, age) carries the operator's deadman:
+            # an observer's or a refused message never releases anything (Codex G6 code review P1-1)
+            deadman=bool(self.arbiter.teleop and self.arbiter.teleop.get("deadman")), policy=rec.get("policy"))
+        row = self.profile.step(now_ns, obs)
+        if self.profile.zero_now:
+            # the request dropped to zero (an end, or a drive finished): the accepted command's speed goes to zero
+            # now, not when the console's next message comes (Codex G6 code review P1-2). Only ever a reduction.
+            self.profile.zero_now = False
+            if self.arbiter.teleop is not None:
+                self.arbiter.teleop["speed_ratio"] = 0.0
+        if row is not None and self.record is not None:
+            self.record.put_row(row)
+        for m in self.profile.take_marks():
+            self.mark(m["label"], m["host_ns"])
 
     def _log(self, what, now_ns, data, info) -> None:
         """Every frame written (or abandoned part-way, counted as possibly delivered): a round-trip anchor's start."""
@@ -168,6 +241,8 @@ class Bridge:
             rec["link_events"] = [e.kind for e in events]
         if self.record is not None:
             self.record.put_row(rec)
+        if self.profile is not None:
+            self._profile_step(now_ns, rec, out)
         if self.marker_poll is not None:
             self.marker_poll()
         return rec
@@ -179,7 +254,15 @@ class Bridge:
         if self._started_ns is None:
             self._started_ns = now_ns
         since = self._started_ns if self._last_rx_ns is None else self._last_rx_ns
-        return [NO_STATE_HINT] if now_ns - since >= NO_STATE_HINT_S * 1e9 else []
+        notes = [NO_STATE_HINT] if now_ns - since >= NO_STATE_HINT_S * 1e9 else []
+        if self.profile is not None:
+            p = self.profile
+            seg = p.segment
+            notes.append(f"일정표 {p.profile.name}: " + (
+                f"시행 {p.trial} {seg.label} ({seg.kind})" if seg is not None else
+                f"시행 {p.trial} 끝 {p.result} — deadman 을 놓으면 손 조작으로 돌아갑니다" if p.state == "zeroing"
+                else "대기 — 정지·무장 뒤 다리 터미널에서 Enter"))
+        return notes
 
     def close(self, now_ns: int) -> None:
         """Leave the MCU disarmed: a DISARM written, a few cycles to let it out."""
@@ -231,6 +314,7 @@ def main(argv=None) -> int:
     ap.add_argument("--web-root", default=str(REPO / "console" / "web"))
     ap.add_argument("--record")
     ap.add_argument("--markers", action="store_true")
+    ap.add_argument("--profile", help="drive profile YAML (G6): Enter on this terminal starts a trial; needs --record")
     ap.add_argument("--duration-s", type=float)
     args = ap.parse_args(argv)
     confirmed = {n for n in rt.CONFIRMATIONS if getattr(args, n)}
@@ -241,6 +325,14 @@ def main(argv=None) -> int:
     if args.markers and not args.record:
         print("--markers needs --record", file=sys.stderr)
         return 2
+    profile = None
+    if args.profile:
+        if not args.record or args.markers:
+            print("--profile needs --record and takes the terminal's Enter (not with --markers)", file=sys.stderr)
+            return 2
+        import yaml
+
+        profile = yaml.safe_load(Path(args.profile).read_text(encoding="utf-8"))
     record = None
     if args.record:
         try:
@@ -258,7 +350,17 @@ def main(argv=None) -> int:
     started = False
     out: dict = {}
     try:
-        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record)
+        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record,
+                        profile=profile)
+        if bridge.profile is not None:
+            def on_enter(_label, host_ns):
+                why = bridge.profile_start(host_ns)
+                print(json.dumps({"profile_start": bridge.profile.trial if why is None else None, "refused": why}),
+                      flush=True)
+            reader = marker_reader(on_enter)
+            bridge.marker_poll = reader.poll if reader.active else None
+            print(json.dumps({"profile": bridge.profile.profile.name, "planned_s": round(bridge.profile.profile.planned_s, 1),
+                              "start": "Enter" if reader.active else f"off: {reader.reason}"}), flush=True)
         if args.markers:
             reader = marker_reader(bridge.mark)
             bridge.marker_poll = reader.poll if reader.active else None
