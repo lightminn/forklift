@@ -15,7 +15,7 @@
 #   ARM=A|B VENV_PY=.. BASE_SCENE=.. FORKLIFT_URDF=.. SCENE_FILE=.. SLAM_BUNDLE_ROOT=.. \
 #     sbatch --chdir=<snapshot> deploy/console/s4_overlay_run.sh OUT
 #   ARM A: --path-display at its default (overlay); B: --path-display off. Both: --max-sim-seconds 1200 and
-#   FORKLIFT_LIVE_TICK_TRACE=1. Optional: SEED (0), FACTOR (0.4), CYCLE (P-1:D-1), MISSION_TIMEOUT_S (2400),
+#   FORKLIFT_LIVE_TICK_TRACE=1. Optional: SEED (0), FACTOR (0.4), CYCLE (P-4:D-1, random_m's first CT leg), MISSION_TIMEOUT_S (2400),
 #   WAIT_PORT_S (1500), END_GRACE_S (300), CAPTURE_END_S (60),
 #   FIRST_FRAME_S (120). DRY_RUN=1: print what would run, run and write nothing.
 # Run from the snapshot root.
@@ -33,7 +33,7 @@ if [ -n "${EXTRA_ARGS:-}" ]; then
 fi
 : "${VENV_PY:?the Isaac Python}" "${BASE_SCENE:?}" "${FORKLIFT_URDF:?}" "${SCENE_FILE:?a registry scene file}"
 : "${SLAM_BUNDLE_ROOT:?where the registry bundle folders are}"
-CYCLE=${CYCLE:-P-1:D-1}
+CYCLE=${CYCLE:-P-4:D-1}  # random_m's CT order starts P-4:D-1; P-1 has no valid docking goal from the known start
 MISSION_TIMEOUT_S=${MISSION_TIMEOUT_S:-2400}
 WAIT_PORT_S=${WAIT_PORT_S:-1500}
 END_GRACE_S=${END_GRACE_S:-300}

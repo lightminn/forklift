@@ -26,11 +26,11 @@
 | 픽셀 지연 | 두 팔 모두 `--path-display-pixel-lag-s` 를 주지 않는다(기본 0). 11/120 s 는 오프라인 delta 로만 본다 | run_transport.py:973-981, 1677-1678 |
 | 스냅숏 | 이 등록의 커밋(origin/main 위에 이 문서와 래퍼만 더함) 하나를 `git archive` 로 `snapshots/s4ov_<커밋 8자>` 에 푼다. 두 팔이 같은 것을 쓴다 | 7 절 |
 | 런처 | 스냅숏 안 `deploy/console/isaac_live.sbatch` 를 래퍼 `deploy/console/s4_overlay_run.sh` 가 부른다 | — |
-| 장면 | `random_m`(registry 행 `random_m_session.json`, sha256 8b8fe554…, `start_relocalizable: true`) | config/slam_map_bundles.yaml:22-35. line_m(:4-17) 대신 random_m: P-1·D-1 이 있고 registry 묶음이 있다(7 절) |
+| 장면 | `random_m`(registry 행 `random_m_session.json`, sha256 8b8fe554…, `start_relocalizable: true`) | config/slam_map_bundles.yaml:22-35. line_m(:4-17) 대신 random_m: registry 묶음이 있고 CT 조사와 같은 첫 다리 P-4:D-1 을 쓴다(7 절) |
 | SLAM | `MAP_BUNDLE=registry`: registry 묶음으로 위치 추정만 한다. 행이 없으면 실행을 거부하고 mapping 으로 대체하지 않는다. `SLAM_BUNDLE_ROOT` 가 있어야 한다 | slam_choice.sh:24-41 |
 | 시작 | `START_RELOC=off` → START_MODE "known (START_RELOC=off)" | isaac_live.sbatch:259-270 |
 | seed / 배속 | `SEED=0`, `FACTOR=0.4`(런처 기본) | isaac_live.sbatch:339 |
-| 미션 | 탐침 cycle 시나리오의 한 다리 `P-1:D-1`, 끝나면 `--end-session` | live_console_probe.py:1142-1444, 2559-2562. random_m 에 있음(7 절) |
+| 미션 | 탐침 cycle 시나리오의 한 다리 `P-4:D-1`(random_m 의 CT 임무 순서 `P-4:D-1,P-5:D-2,P-3:D-3` 의 첫 다리, [라이브 riib 기본 검증 계획](2026-11-08-live-riib-defaults-validation.md) 3 절), 끝나면 `--end-session` | live_console_probe.py:1142-1444, 2559-2562 |
 | epoch | `MAX_EPOCHS=1`, `STANDBY_LINGER_S=0` | isaac_live.sbatch:213, 517-519 |
 | 영상 | VIDEO 끔. 런처가 `--video` 를 넘기지 않는다 | isaac_live.sbatch:433-450, run_transport.py:948 |
 | 원거리 인식 | 런처 기본(`--recognition` 없음 = off, learned 작업자 없음) | run_transport.py:999-1008 |
@@ -98,7 +98,7 @@ ARM=A ... sbatch --chdir=<SNAP> --job-name=s4ov_A deploy/console/s4_overlay_run.
   `"$VENV_PY" tools/live_frames.py delta --run A/epoch_1/run --frames A/frames > A_delta.json`
   - 기본 설정 0 과 11/120, 가정 지연 11/120(live_frames.py:112, 1049-1052).
   - `settings.<lag>.{all,straight,turning}` 의 max·p95·중앙, `no_visible`, `counts.skipped` 를 본다.
-  - 표본 충분성(미리 정함): 선이 보인 프레임 수를 straight·turning 별로 적는다(turning = \|yaw rate\| ≥ 0.05 rad/s, live_frames.py:113). turning 에서 선이 보인 프레임이 30 장 미만이면 turning 값은 "표본 부족" 으로 적고 지연 선택의 근거로 내지 않는다. 한 미션(P-1:D-1)이 회전·근거리 구간을 대표한다는 보장은 없다 — 더 많은 seed·접근 조건이 필요한지는 이 수를 보고 총괄이 정한다.
+  - 표본 충분성(미리 정함): 선이 보인 프레임 수를 straight·turning 별로 적는다(turning = \|yaw rate\| ≥ 0.05 rad/s, live_frames.py:113). turning 에서 선이 보인 프레임이 30 장 미만이면 turning 값은 "표본 부족" 으로 적고 지연 선택의 근거로 내지 않는다. 한 미션(P-4:D-1)이 회전·근거리 구간을 대표한다는 보장은 없다 — 더 많은 seed·접근 조건이 필요한지는 이 수를 보고 총괄이 정한다.
   - B 는 off 에서 머리 줄만 쓰이므로(#513) 표시 행이 없어 "no path" 로 exit 2 가 난다(live_frames.py:743-744). B 의 delta 는 계산하지 않는다.
 - result.json:
   - `success`, `failure_reason`
@@ -155,13 +155,14 @@ EOF
 - 캡처의 첫 frame 행이 미션 제출보다 늦다: `index.jsonl` 첫 frame 의 `recv_mono_ns / 1e9` > `probe.json` 의 `missions_run[0].submitted_mono`(둘 다 같은 노드의 CLOCK_MONOTONIC).
 - 탐침이 미션 제한시간으로 끝났거나, 잡이 Slurm TERM 을 받았다(`s4_wrapper.log`·`probe.log`).
 - 실행 중에 다른 Slurm 잡이 겹쳤거나, persistence·VM 상태가 바뀌었다.
-- 미션이 실패한 것 자체는 무효가 아니다. 값과 함께 보고한다.
+- 미션이 차를 움직이기 전에 끝났다(결과 사유가 `prepare:` 로 시작하거나, 미션 동안 모의 시간이 30 s 미만). 볼 움직임이 없어서다.
+- 그 밖에 미션이 실패한 것 자체는 무효가 아니다. 값과 함께 보고한다.
 
 ## 7. 제출 전 확인 결과(2026-11-15, 콘솔 세션이 직접 확인)
 
 - 스냅숏: 이전 배치와 같은 방식 — 이 브랜치의 커밋(origin/main `23b858b3` 이후에 이 문서와 래퍼만 더한 것)을 `git archive HEAD` 로 ws1 `snapshots/s4ov_<커밋 8자>` 에 풀고, 같은 이름이 있으면 거부(`test ! -e`). 러너·런처 파일은 main 과 바이트가 같다(이 브랜치는 그 둘을 바꾸지 않는다). 두 팔이 같은 스냅숏을 쓴다.
 - ws1 경로(앞선 B-P2e 스모크 `test_runs/live/bp2e_smoke/smoke_registry.sh` 와 같은 값, 존재 확인): `BASE_SCENE=$A/base_scene/scene.usda`, `FORKLIFT_URDF=$A/dd_cfg/old/dls08_measured/forklift.urdf`(`A=/home/projects/forklift/artifacts/20261013_fork_spacing`), `VENV_PY=/home/projects/forklift/.venv/bin/python`, `SLAM_BUNDLE_ROOT=/home/projects/forklift/artifacts/slam_bundles`(`random_m_team_spec_quantized_0facac3eea66` 있음), `SCENE_FILE=/home/projects/forklift/test_runs/riibotics/scenes_ct1_a770031/random_m_session.json`(sha256 `8b8fe554…` 가 registry 와 같음).
-- 장면 random_m 에 P-1~P-5, D-1~D-3 이 있다 → 미션 `P-1:D-1` 가능. random_m 은 registry 에서 `start_relocalizable: true` 지만 이 실행은 `START_RELOC=off`(known start)라 무관하다.
+- 장면 random_m 에 P-1~P-5, D-1~D-3 이 있다. 그러나 **첫 제출(잡 19243, 스냅숏 s4ov_c276b33c, 팔 A)은 `P-1:D-1` 로 내서 미션이 prepare 에서 바로 실패했다**(`prepare:all_candidates_failed:invalid_goal` × 12, 모의 1.4 s, 차가 움직이지 않음). 알려진 출발에서 P-1 의 도킹 목표 후보가 모두 무효였다. 등록 설정 오류라 그 실행은 쓰지 않고(아래 6 절 새 무효 조건), 미션을 CT 조사의 random_m 첫 다리 `P-4:D-1` 로 바꿔 새 스냅숏에서 A 부터 다시 낸다. 그 실행의 다른 단계(포트·캡처 첫 프레임·탐침 순서, session_end, 1001 종료, supervisor exit 0)는 등록대로 돌았다. random_m 은 registry 에서 `start_relocalizable: true` 지만 이 실행은 `START_RELOC=off`(known start)라 무관하다.
 - 장면 파일 세션은 `--near-capture-redraw always` 가 있어야 러너가 받는다(B-P2e 스모크와 같음) — 래퍼의 두 팔 EXTRA_ARGS 에 넣었다.
 - vm_watch: 콘솔 세션의 VM 상태 기록기(S3 때 쓴 `vm_watch_s3.py sample <jsonl> --every 30`, 30 s 마다 ws1 의 VM·qemu 상태)를 두 팔 동안 켠다.
 - 라이브 카메라의 자세 이력: 비결정 실행에서 라이브 카메라가 움직이는 카메라로 등록되고 매 물리 스텝 뒤 기록된다(정적 검토, run_transport.py 의 등록·note_moving 호출). 이 실행은 픽셀 지연 설정을 0 으로 두므로 결과에 영향이 없다.
@@ -171,7 +172,7 @@ EOF
 
 ## 8. 자체 검토
 
-- ① 원자료 재확인(콘솔): ws1 경로·장면 sha·registry 묶음·P-1/D-1·`--near-capture-redraw always` 요구를 직접 확인했다(7 절). 초안은 claude-credit(opus)이 썼고, 7 절과 이 절은 콘솔이 고쳤다.
+- ① 원자료 재확인(콘솔): ws1 경로·장면 sha·registry 묶음·미션 다리(첫 제출의 P-1 오류 뒤 P-4)·`--near-capture-redraw always` 요구를 직접 확인했다(7 절). 초안은 claude-credit(opus)이 썼고, 7 절과 이 절은 콘솔이 고쳤다.
 - ② Codex 적대적 검토 1 회차(2026-11-15):
   - P1 "perception 카메라 누출을 이 실행으로 판정할 수 없다" → 맞다. 그것은 S1 의 몫이라 1 절에 범위 밖으로 적었다.
   - P2 캡처 시작과 미션 제출 순서가 보장되지 않음 → 래퍼가 캡처의 첫 frame 을 본 뒤에 탐침을 띄우게 바꾸고, 6 절에 첫 frame 이 제출보다 늦으면 무효를 더했다.
