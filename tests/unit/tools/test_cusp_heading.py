@@ -506,3 +506,68 @@ def test_the_aggregate_ranges_and_plan4_counts():
     assert p4["non_short_failures"]["n"] == 1 and p4["non_short_failures"]["of"] == 2
     corner = ag["corners"][0]
     assert corner["fail"] >= 1 and corner["runs"] == ["k1r_B0_aisle_rack_s0"]
+
+
+# ---- rules the plan did not fix (Codex tool review 1) --------------------------------------------------------------
+
+
+def _final_failure(phase="transport", after_end=False):
+    rec, _ = base(outcome="replan_failed")
+    rec.r["transitions"] = rec.r["transitions"][:3]
+    tf_t = rec.r["cusp_replans"][0]["time_s"]
+    rec.r["cusp_replans"] = []
+    if after_end:
+        rec.r["transitions"].append({"from": "transport", "to": "lower", "time_s": tf_t - 0.5})
+    tf = {"time_s": tf_t, "path": A, "rear_pose": list(rec.pose),
+          "tracking": {"failure": "endpoint_heading", "at_cusp": True, "yaw_error_rad": 0.07, "position_error_m": 0.0}}
+    if phase is not None:
+        tf["phase"] = phase
+    rec.r["tracking_failure"] = tf
+    return analyse(rec.run())
+
+
+def test_a_final_failure_counts_inside_the_transport_window_only():
+    assert _final_failure()["counts"]["failures_final"] == 1
+    assert _final_failure(phase=None)["counts"]["failures_final"] == 1  # no phase: judged by the window alone
+    out = _final_failure(phase="return_home")
+    assert out["counts"]["failures_final"] == 0 and out["counts"]["excluded"]["tracking_failure"] == {"phase return_home": 1}
+    out = _final_failure(after_end=True)
+    assert out["counts"]["failures_final"] == 0
+    assert out["counts"]["excluded"]["tracking_failure"] == {"outside transport window": 1}
+
+
+def test_an_object_id_differing_between_identical_arms_is_ignored_and_listed():
+    rec, _ = base()
+    rec.r["scene_replans"] = [{"time_s": 11.0, "phase": "transport", "tracker_serial": 1}]
+    a, b = rec.run("k1r_B0_aisle_rack_s0"), rec.run("k1r_K1_aisle_rack_s0")
+    b.result["scene_replans"][0]["tracker_serial"] = 2
+    out = analyse(a, b)
+    assert out["n_cases"] == 1 and out["cases"][0]["ignored_fields_differ"]
+    b.result["scene_replans"][0]["time_s"] = 11.5  # a trajectory value: the arms split
+    assert analyse(a, b)["n_cases"] == 2
+
+
+def test_a_serial_installed_at_the_transport_start_is_the_mission_path():
+    rec, _ = base()
+    assert analyse(rec.run())["judgements"][0]["source"] == "mission"  # serial 5 installed at the transition
+    rec.r["tracker_versions"][0]["installed_s"] = 10.0 + 2 * ch.MISSION_SLACK_S
+    assert analyse(rec.run())["judgements"][0]["source"] == "other"
+
+
+def test_an_unknown_s_end_leaves_the_failure_unresolved():
+    j = {"is_cusp": True, "path_digest": "d", "leg_start_s": 1.0, "installs_inside_window": [], "Short": True,
+         "sat_end": {"S": None}}
+    assert ch.classify(j, 0.07, 0.07) == ("unresolved", ["S_end unknown"])
+    j["sat_end"] = {"S": False}
+    assert ch.classify(j, 0.07, 0.07)[0] == "plan_short_leg"
+
+
+def test_corner_grouping_is_order_free_and_bounded():
+    def j(run, t, pose, kind="pass"):
+        return {"run": run, "time_s": t, "end_pose": pose, "kind": kind}
+    js = [j("r1", 1.0, [0.0, 0.0, 0.0]), j("r2", 2.0, [0.05, 0.05, 0.05], "fail_replan"), j("r1", 3.0, [0.5, 0.0, 0.0])]
+    a, b = ch.corners(js), ch.corners(list(reversed(js)))
+    assert a == b  # the input order does not change the groups
+    assert [(g["pass"], g["fail"]) for g in a] == [(1, 1), (1, 0)]
+    far = ch.corners([j("r1", 1.0, [0.0, 0.0, 0.0]), j("r1", 2.0, [0.0, 0.0, ch.CORNER_YAW_RAD + 0.01])])
+    assert len(far) == 2  # outside the yaw bound: another corner

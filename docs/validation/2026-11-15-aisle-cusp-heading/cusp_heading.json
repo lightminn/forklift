@@ -13935,6 +13935,7 @@
     "classification": {}
    }
   },
+  "corner_grouping_note": "reference only: judged cusp end poses grouped greedily, in (run, time) order, within CORNER_POS_M / CORNER_YAW_RAD of a group's first pose; not a plan value",
   "note": "descriptive only: 'separated' means the two ranges do not overlap in this batch; judgements within a run are not independent; no statistical difference is claimed. margin_star (|e_E*|/tau) separates by construction for a consistent reconstruction (a pass needs |e_E*| <= tau); it is listed only to set the two sides' tick values side by side (plan 2.3)"
  },
  "inputs": {

@@ -654,8 +654,12 @@ def build_judgements(ctx: Ctx) -> tuple[list, dict]:
             ex("tracking_failure", f"failure:{trk.get('failure')}")
         elif not trk.get("at_cusp"):
             ex("tracking_failure", "not at a cusp")
-        elif tf.get("phase", "transport") != "transport" or not ctx.in_window(t):
+        elif not ctx.in_window(t):
             ex("tracking_failure", "outside transport window")
+        elif tf.get("phase") is not None and tf["phase"] != "transport":
+            # a recorded phase must be transport; a record without one is judged by the transport window alone
+            # (the window is the plan's own test: plan 2.2 "운반 구간 안의 최종 tracking_failure")
+            ex("tracking_failure", f"phase {tf['phase']}")
         else:
             fails.append(("fail_final", t, tf.get("path"), tf.get("rear_pose"), trk.get("yaw_error_rad"), tf))
     for kind, t, pd, rear, e_E_rec, rec in fails:
@@ -768,8 +772,10 @@ def outcome(ctx: Ctx, j: dict, js: list):
         if e["time_s"] <= t + 1e-9 or e["kind"] in ("cusp_replan", "mission"):
             continue
         if e["kind"] == "delivery_straight":
-            # 확인 필요: arm_docking installs the delivery straight when the cut search path reaches its end; read as
-            # the final arrival of the replan path (plan 2.2 "도착")
+            # Evidence of arrival (Codex tool review 1 P2): the delivery straight replaces the transport path only
+            # after the docking match at the search path's end accepted a straight (core.py 7785-7810, docking runs at
+            # the cut search path's end, arm_docking). So the install itself records that the replan path's tracker
+            # reached its end: plan 2.2 "도착".
             cands.append((e["time_s"], 1, "recovered", f"final arrival (delivery_straight at {r4(e['time_s'], 4)})"))
         else:
             cands.append((e["time_s"], 1, f"cut:{SOURCE_OF_BY.get(e['kind'], e['kind'])}", f"install at {r4(e['time_s'], 4)}"))
@@ -1066,6 +1072,9 @@ def analyse(runs: list[Run], period: str, tdep_path: Path | None = None) -> dict
     if period == "postfix":
         out["aggregate"] = {"ranges_pass_vs_fail": ranges(passes, fails), "per_case": per_run(case_js),
                             "corners": corners(all_js), "plan4": plan4(fails),
+                            "corner_grouping_note": ("reference only: judged cusp end poses grouped greedily, in "
+                                                     "(run, time) order, within CORNER_POS_M / CORNER_YAW_RAD of a "
+                                                     "group's first pose; not a plan value"),
                             "note": "descriptive only: 'separated' means the two ranges do not overlap in this batch; "
                                     "judgements within a run are not independent; no statistical difference is claimed. "
                                     "margin_star (|e_E*|/tau) separates by construction for a consistent reconstruction "
