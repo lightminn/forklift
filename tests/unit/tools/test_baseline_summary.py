@@ -278,6 +278,8 @@ def test_malformed_events_are_not_comparable(tmp_path):
     twice = copy.deepcopy(TRANSITIONS) + [{"from": "lower", "to": "transport", "time_s": 300.0}]
     rep = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s5", done_result(transitions=twice)), mode="overlay")
     assert rep["transport_reached"] is None and "transitions" in rep["missing"]
+    # a malformed transition list leaves the cusp counts unread, never 0 (Codex tool review 2)
+    assert rep["transport_cusp_replans"] is None and rep["return_cusp_replans"] is None
     elem = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s6", done_result(observation_attempts=[attempt(), 3])),
                          mode="overlay")
     assert elem["far_selected"] is None and "observation_attempts" in elem["missing"]
