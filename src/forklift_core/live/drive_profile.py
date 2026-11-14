@@ -171,7 +171,8 @@ def _parse_segments(data: dict, raw: list, lim: ProfileLimits) -> Profile:
                 if after < abs(v) / lim.accel_mps2 + 0.5:
                     raise ValueError(f"{where}: q_step after_s must leave the speed settled (>= ramp + 0.5 s)")
                 step = (to, after)
-                ramp = abs(lim.q_of_kappa(to) - lim.q_of_kappa(k0)) / lim.q_rate
+                # the step is reshaped twice: TeleopDrive's curvature rate, then the host's q slew -- the longer wins
+                ramp = max(abs(to - k0) / lim.kappa_rate, abs(lim.q_of_kappa(to) - lim.q_of_kappa(k0)) / lim.q_rate)
                 # the step, its slew and a settled response must happen before the segment's distance runs out
                 need_s = after + ramp + Q_STEP_SETTLE_S
                 if d / abs(v) + abs(v) / (2 * lim.accel_mps2) < need_s:
