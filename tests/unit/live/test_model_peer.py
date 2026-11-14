@@ -166,3 +166,19 @@ def test_root_is_refused():
 def test_a_bench_record_that_is_not_one_is_refused():
     assert refusal(FakeProc(), bench={"schema": "something/1"}) == "bad_bench"
     assert refusal(FakeProc(), bench={**BENCH, "synthetic": False}) == "bad_bench"
+
+
+def test_the_cheap_recheck_never_scans_other_processes():
+    proc = FakeProc()
+
+    class NoScan(FakeProc):
+        def pids(self):
+            raise AssertionError("the loop recheck must not enumerate processes")
+
+    n = NoScan()
+    n.__dict__.update(proc.__dict__)
+    assert mp.model_alive_refusal("/dev/pts/7", BENCH, proc=n) is None
+    n.procs[50]["starttime"] = 1
+    assert mp.model_alive_refusal("/dev/pts/7", BENCH, proc=n) == "model_restarted"
+    n.procs.pop(50)
+    assert mp.model_alive_refusal("/dev/pts/7", BENCH, proc=n) == "model_gone"

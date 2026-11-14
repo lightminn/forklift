@@ -115,6 +115,35 @@ def _other_holders(proc, index: int, model_pid: int, model_start: int, skipped: 
     return holders
 
 
+def model_alive_refusal(device: str, bench: dict, *, proc=None) -> str | None:
+    """The cheap recheck a control loop can afford (conditions 1-2 and the model's own master, no scan of other
+    processes): the full ``model_peer_refusal`` scan takes tens of milliseconds and runs once, at start
+    (arrival-day rehearsal: run inside the teleop bridge's 20 ms loop every second it stalled the loop past the
+    50 ms STATE age gate)."""
+    proc = SystemProc() if proc is None else proc
+    try:
+        is_chr, rdev = proc.device(device)
+    except OSError:
+        return "no_device"
+    if not is_chr or os.major(rdev) not in PTY_SLAVE_MAJORS:
+        return "not_a_pty"
+    if rdev != bench.get("pts_rdev"):
+        return "not_the_bench_pty"
+    pid = bench.get("model_pid")
+    try:
+        if proc.starttime(pid) != bench.get("model_starttime"):
+            return "model_restarted"
+        if proc.exe(pid) != bench.get("model_exe"):
+            return "not_mcu_model"
+        if os.minor(rdev) not in _masters(proc, pid).values():
+            return "model_holds_no_master"
+    except (FileNotFoundError, ProcessLookupError):
+        return "model_gone"
+    except OSError:
+        return "model_unreadable"
+    return None
+
+
 def model_peer_refusal(device: str, bench: dict, *, proc=None) -> str | None:
     proc = SystemProc() if proc is None else proc
     if not isinstance(bench, dict) or bench.get("schema") != BENCH_SCHEMA or bench.get("synthetic") is not True:

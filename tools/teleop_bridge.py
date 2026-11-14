@@ -65,12 +65,13 @@ def no_scan(curvatures, direction, check_speed):
 
 class SyntheticPermit:
     """The rehearsal's model-only floor permission (docs/design/2026-11-15-arrival-day-rehearsal.md 2.3): open while
-    the model-peer check passes on the device -- rechecked every ``recheck_s`` (the path's device included, so a
-    reopen onto another device is caught) -- and closed for good once it fails. Never on a real device: a USB CDC or
+    the model-peer check passes on the device -- the full check (with its scan of other processes) once at start, in
+    ``main``; here, every call, the path's device, and every ``recheck_s`` the cheap ``model_alive_refusal`` (the
+    full scan in the 20 ms loop stalled it past the STATE age gate) -- and closed for good once one fails. Never on a real device: a USB CDC or
     UART link fails the check's first condition before this is ever built."""
 
     def __init__(self, device: str, bench: dict, *, recheck_s: float = 1.0, clock=time.monotonic_ns,
-                 check=model_peer.model_peer_refusal) -> None:
+                 check=model_peer.model_alive_refusal) -> None:
         self.device, self.bench, self.recheck_ns, self.clock, self.check = device, bench, int(recheck_s * 1e9), clock, check
         self.lost: str | None = None
         self.next_ns = 0
