@@ -342,6 +342,10 @@ def add_destination(stage: Usd.Stage, x_m: float, y_m: float, path: str = "/Worl
 
 def add_path_display(stage: Usd.Stage, path, name: str, colour: tuple) -> None:
     """A raised visual line documents the planned axle path, not a collision object."""
+    import os
+
+    if os.environ.get("FORKLIFT_PATH_DISPLAY") == "off":
+        return  # diagnostic only: the planned-path line is rendered into the perception camera's depth
     line = UsdGeom.BasisCurves.Define(stage, "/World/PlannedPaths/" + name)
     line.CreateTypeAttr("linear")
     line.CreateCurveVertexCountsAttr([len(path.poses)])
