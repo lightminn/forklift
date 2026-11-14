@@ -117,6 +117,7 @@ class Bridge:
         self.record = record
         self.marker_poll = None  # set by the CLI's --markers
         self._markers = 0
+        self._profile_ended = None  # the last trial whose profile_end row was written
         self.overruns = 0
         self._started_ns: int | None = None
         self._last_rx_ns: int | None = None
@@ -169,6 +170,11 @@ class Bridge:
                 self.arbiter.teleop["speed_ratio"] = 0.0
         if row is not None and self.record is not None:
             self.record.put_row(row)
+            if row.get("result") is not None and self._profile_ended != row["trial"]:
+                # one row per trial at its end (G6 design 2; arrival-day rehearsal defect D1)
+                self._profile_ended = row["trial"]
+                self.record.put_row({"t": "profile_end", "host_ns": row["host_ns"], "trial": row["trial"],
+                                     "result": row["result"]})
         for m in self.profile.take_marks():
             self.mark(m["label"], m["host_ns"])
 
