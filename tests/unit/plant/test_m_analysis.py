@@ -67,9 +67,9 @@ def test_the_heading_uncertainty_is_a_lower_bound_with_its_parts():
     u = ma.heading_sigma_lower(arw_rad_per_sqrt_s=1e-4, drive_s=30.0, bias_window_s=30.0, bias_change_rad_s=2e-5)
     assert u["white"] == pytest.approx(1e-4 * math.sqrt(30))
     assert u["bias_mean"] == pytest.approx(1e-4 / math.sqrt(60) * 30)
-    assert u["bias_change"] == pytest.approx(2e-5 * 30 / 2)
-    assert u["lower_bound"] == pytest.approx(math.sqrt(u["white"] ** 2 + u["bias_mean"] ** 2 + u["bias_change"] ** 2))
-    assert u["is_lower_bound"] is True and "scale" in u["not_included"]
+    assert u["bias_change_range"] == pytest.approx((0.0, 2e-5 * 30))  # linear drift .. a step at one end
+    assert u["lower_bound"] == pytest.approx(math.sqrt(u["white"] ** 2 + u["bias_mean"] ** 2))
+    assert u["is_lower_bound"] is True and {"scale", "bias_change"} <= set(u["not_included"])
 
 
 def test_m1_drift_names_its_distance_source():
@@ -101,7 +101,8 @@ def test_a_step_response_delay_is_from_the_q_onset_to_63_percent(delay_s):
     q = np.where(t >= 1.0, np.minimum((t - 1.0) / 0.2, 1.0) * 0.13, 0.0)  # a slewed step from 1.0 s
     tau = 0.05  # first-order lag after a pure delay
     y = np.where(t >= 1.0 + delay_s, 0.02 * (1 - np.exp(-(t - 1.0 - delay_s) / tau)), 0.0)
-    r = ma.step_response_delay((t * NS).astype(np.int64), q, (t * NS).astype(np.int64), y, q_threshold=0.005)
+    r = ma.step_response_delay((t * NS).astype(np.int64), q, (t * NS).astype(np.int64), y, q_threshold=0.005,
+                               post_window_ns=(int(2.5 * NS), int(3.5 * NS)))
     onset = 1.0 + 0.005 / 0.13 * 0.2
     expected = 1.0 + delay_s + tau * math.log(1 / (1 - 0.63)) - onset
     assert r["delay_s"] == pytest.approx(expected, abs=2 * dt)
@@ -111,8 +112,41 @@ def test_a_step_response_delay_is_from_the_q_onset_to_63_percent(delay_s):
 def test_a_step_with_no_response_is_none():
     t = (np.arange(0, 4, 0.01) * NS).astype(np.int64)
     q = np.where(t >= NS, 0.13, 0.0)
-    r = ma.step_response_delay(t, q, t, np.zeros(len(t)), q_threshold=0.005)
+    r = ma.step_response_delay(t, q, t, np.zeros(len(t)), q_threshold=0.005, post_window_ns=(2 * NS, 3 * NS))
     assert r["delay_s"] is None and r["reason"] == "no_response"
+
+
+def test_a_response_that_changes_again_after_the_step_is_read_from_the_named_window_not_the_record_end():
+    """Codex G8 review P1: the speed changed after the q step; the record's end is not the step's steady value."""
+    dt = 0.0025
+    t = np.arange(0, 5, dt)
+    q = np.where(t >= 1.0, 0.13, 0.0)
+    y = np.where(t >= 1.1, 0.02, 0.0) + np.where(t >= 3.5, 0.03, 0.0)  # a speed change at 3.5 s doubles the rate
+    tn = (t * NS).astype(np.int64)
+    r = ma.step_response_delay(tn, q, tn, y, q_threshold=0.005, post_window_ns=(int(2.0 * NS), int(3.0 * NS)))
+    assert r["y_post"] == pytest.approx(0.02) and r["delay_s"] == pytest.approx(0.1, abs=2 * dt)
+    noisy = y + np.where((t > 2.0) & (t < 3.0), 0.01 * np.sin(t * 50), 0.0)
+    assert ma.step_response_delay(tn, q, tn, noisy, q_threshold=0.005,
+                                  post_window_ns=(int(2.0 * NS), int(3.0 * NS)))["reason"] == "not_steady"
+
+
+def test_a_quiet_window_in_a_stretch_that_mostly_moves_is_still_found():
+    bias = np.array([0.003, -0.002, 0.001])
+    # 12 s of turning, then 6 s standing just before the boundary: the stretch's median is the turn
+    t, w, a = imu_series(0, 18, 200, lambda x: 0.3 if x < 12 else 0.0, bias, noise=0.002)
+    win = ma.quiet_window(t, w, a, boundary_ns=18 * NS, side="before", max_s=18.0, min_s=4.0)
+    assert win is not None and t[win[0]] >= 12 * NS - NS // 100
+    assert np.allclose(w[win[0]:win[1]].mean(axis=0), bias, atol=5e-4)
+
+
+def test_zero_distances_and_curvatures_and_a_backward_clock_are_refused():
+    with pytest.raises(ValueError):
+        ma.m1_drift(odo_dyaw=0.0, imu_dyaw=0.0, distance_m=0.0, distance_source="truth")
+    with pytest.raises(ValueError):
+        ma.m2_gains(imu_dyaw=0.1, distance_m=1.0, kappa_measured_q=0.0, kappa_commanded_q=0.36,
+                    distance_source="truth")
+    with pytest.raises(ValueError):
+        ma.imu_heading(np.array([2, 1]), np.zeros((2, 3)), UP, np.zeros(3))
 
 
 def test_odometry_heading_reruns_the_real_odometry_on_recorded_states():
@@ -140,4 +174,14 @@ def test_the_gyro_scale_comes_from_whole_turns_back_to_the_same_heading():
     assert g["scale"] == pytest.approx(1.004) and g["sigma"] == pytest.approx(math.sqrt(2) * 0.002 / (4 * math.pi))
     with pytest.raises(ValueError):
         ma.gyro_scale(imu_dyaw=1.0, turns=0)
+
+
+def test_a_steady_straight_drive_looks_quiet_to_the_imu_so_the_encoder_standstill_decides():
+    bias = np.array([0.003, -0.002, 0.001])
+    t, w, a = imu_series(0, 20, 200, lambda x: 0.0, bias, noise=0.002)  # 0-10 s standing, 10-20 s straight drive
+    alone = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=20.0, min_s=4.0)
+    assert t[alone[1] - 1] > 15 * NS  # the IMU alone takes the drive for a standstill
+    win = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=20.0, min_s=4.0,
+                          standing=[(0, 10 * NS)])
+    assert win is not None and t[win[1] - 1] <= 10 * NS
 

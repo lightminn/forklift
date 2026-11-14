@@ -20,6 +20,7 @@ from forklift_core.sensors.imu_mount import yaw_rate
 DISTANCE_SOURCES = ("truth", "encoder")
 QUIET_GYRO_RAD_S = 0.01  # a sample's gyro within this of the window's median ...
 QUIET_ACCEL_MPS2 = 0.15  # ... and its acceleration within this: quiet (proposed; registered before measuring)
+QUIET_CHUNK_S = 1.0  # the reference is the median of the stillest chunk this long (not of the whole stretch)
 _ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R
 
 
@@ -57,10 +58,13 @@ def trials(rows, *, valid_only: bool = False) -> list[Trial]:
 # --- IMU -----------------------------------------------------------------------------------------------------------
 
 def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float, min_s: float,
-                 gyro_tol: float = QUIET_GYRO_RAD_S, accel_tol: float = QUIET_ACCEL_MPS2) -> tuple[int, int] | None:
+                 standing=None, gyro_tol: float = QUIET_GYRO_RAD_S,
+                 accel_tol: float = QUIET_ACCEL_MPS2) -> tuple[int, int] | None:
     """``[start, end)`` indices of the bias window next to a trial: within ``max_s`` before (or after) the boundary,
-    the contiguous run of quiet samples (gyro and acceleration near the stretch's median) that is closest to the
-    boundary and at least ``min_s`` long -- motion at the trial's edge (a creep, the end of a drive) is cut off.
+    the contiguous run of quiet samples (gyro and acceleration near the median of the stillest 1 s chunk) that is
+    closest to the boundary and at least ``min_s`` long -- motion at the trial's edge (a creep, the end of a drive)
+    is cut off. ``standing``: host-time intervals where the encoders say the truck stands (design 3: encoder speed
+    zero and IMU quiet) -- a steady straight drive looks quiet to an IMU, so samples outside them never count.
     None when there is no such run."""
     t = np.asarray(t_ns, dtype=np.int64)
     if side == "before":
@@ -71,9 +75,32 @@ def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float
         raise ValueError("side is 'before' or 'after'")
     if len(sel) == 0:
         return None
+    if standing is not None:
+        ok = np.zeros(len(t), dtype=bool)
+        for lo, hi in standing:
+            ok |= (t >= int(lo)) & (t <= int(hi))
+        sel = sel[ok[sel]]
+        if len(sel) == 0:
+            return None
     g, a = np.asarray(gyro, float)[sel], np.asarray(accel, float)[sel]
-    quiet = (np.linalg.norm(g - np.median(g, axis=0), axis=1) <= gyro_tol) & \
-            (np.linalg.norm(a - np.median(a, axis=0), axis=1) <= accel_tol)
+    # the reference standstill: the chunk with the smallest spread, so a stretch that mostly moves does not drag
+    # the reference toward the motion (Codex G8 review P2)
+    ts = t[sel]
+    edges = np.arange(ts[0], ts[-1] + 1, int(QUIET_CHUNK_S * 1e9))
+    best, best_spread = None, math.inf
+    for lo in edges:
+        m = (ts >= lo) & (ts < lo + int(QUIET_CHUNK_S * 1e9))
+        if m.sum() < 5:
+            continue
+        # a steady turn has a small spread too: the chunk's mean rotation counts against it (the bias is small)
+        spread = float(np.linalg.norm(g[m].std(axis=0)) / gyro_tol + np.linalg.norm(a[m].std(axis=0)) / accel_tol
+                       + np.linalg.norm(g[m].mean(axis=0)) / gyro_tol)
+        if spread < best_spread:
+            best, best_spread = m, spread
+    if best is None:
+        return None
+    g_ref, a_ref = np.median(g[best], axis=0), np.median(a[best], axis=0)
+    quiet = (np.linalg.norm(g - g_ref, axis=1) <= gyro_tol) & (np.linalg.norm(a - a_ref, axis=1) <= accel_tol)
     runs, start = [], None
     for i, ok in enumerate(quiet):
         if ok and start is None:
@@ -92,7 +119,12 @@ def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float
 
 def imu_heading(t_ns, gyro, up, bias) -> np.ndarray:
     """The body heading (rad) from the bias-free yaw rate, trapezoid-integrated, 0 at the first sample."""
-    t = (np.asarray(t_ns, dtype=np.int64) - int(t_ns[0])) / 1e9
+    t_ns = np.asarray(t_ns, dtype=np.int64)
+    if t_ns.ndim != 1 or len(t_ns) < 2 or np.any(np.diff(t_ns) <= 0):
+        raise ValueError("imu_heading needs at least two samples on a strictly increasing clock")
+    if len(np.asarray(gyro)) != len(t_ns):
+        raise ValueError("gyro and time lengths differ")
+    t = (t_ns - int(t_ns[0])) / 1e9
     w = yaw_rate(gyro, up, bias=bias)
     out = np.zeros(len(t))
     out[1:] = np.cumsum((w[1:] + w[:-1]) / 2 * np.diff(t))
@@ -101,16 +133,17 @@ def imu_heading(t_ns, gyro, up, bias) -> np.ndarray:
 
 def heading_sigma_lower(*, arw_rad_per_sqrt_s: float, drive_s: float, bias_window_s: float,
                         bias_change_rad_s: float) -> dict:
-    """A lower bound on the 1-sigma heading error over a drive (design 3): white noise over the drive, the bias
-    estimate's noise (the mean of two windows of ``bias_window_s``) carried over the drive, and half the bias change
-    between the windows over the drive. Not included: gyro scale (measured separately), mount axis error and body
-    roll/pitch (diagnostics only), so a value under 1 mrad does not by itself make a heading judgeable."""
+    """A lower bound on the 1-sigma heading error over a drive (design 3): white noise over the drive and the bias
+    estimate's noise (the mean of two windows of ``bias_window_s``) carried over the drive, root-sum-squared.
+    The bias change between the windows is not in the bound: corrected by the windows' mean it adds nothing if the
+    bias drifted linearly and up to ``|change| x drive`` if it stepped at one end -- reported as that range
+    (Codex G8 review P2). Not included either: gyro scale (measured separately), mount axis error and body
+    roll/pitch (diagnostics only). So a bound under 1 mrad does not by itself make a heading judgeable."""
     white = arw_rad_per_sqrt_s * math.sqrt(drive_s)
     bias_mean = arw_rad_per_sqrt_s / math.sqrt(2 * bias_window_s) * drive_s
-    change = abs(bias_change_rad_s) * drive_s / 2
-    return {"white": white, "bias_mean": bias_mean, "bias_change": change,
-            "lower_bound": math.sqrt(white ** 2 + bias_mean ** 2 + change ** 2), "is_lower_bound": True,
-            "not_included": ["scale", "mount_axis", "roll_pitch"]}
+    return {"white": white, "bias_mean": bias_mean, "lower_bound": math.sqrt(white ** 2 + bias_mean ** 2),
+            "bias_change_range": (0.0, abs(bias_change_rad_s) * drive_s), "is_lower_bound": True,
+            "not_included": ["bias_change", "scale", "mount_axis", "roll_pitch"]}
 
 
 def gyro_scale(*, imu_dyaw: float, turns: int, heading_error_rad: float = 0.0) -> dict:
@@ -127,7 +160,8 @@ def gyro_scale(*, imu_dyaw: float, turns: int, heading_error_rad: float = 0.0) -
 
 def odometry_heading(states, cfg, *, max_gap_s: float) -> dict:
     """The real truck's odometry re-run over recorded STATEs (each with mcu_time_us, boot_id, wheel counts,
-    steering_rad, fault_flags): the yaw after each sample and where continuity broke."""
+    steering_rad, fault_flags): the yaw after each sample and where continuity broke. The yaw keeps accumulating
+    across a break; never compare two samples on either side of one as if continuous."""
     odo = RealOdometry(cfg, max_gap_s=max_gap_s)
     t, yaw, broken = [], [], []
     for s in states:
@@ -157,9 +191,24 @@ def _source(distance_source: str) -> str:
     return distance_source
 
 
+def _positive(value: float, what: str) -> float:
+    v = float(value)
+    if not (math.isfinite(v) and v > 0):
+        raise ValueError(f"{what} must be positive and finite")
+    return v
+
+
+def _nonzero(value: float, what: str) -> float:
+    v = float(value)
+    if not math.isfinite(v) or v == 0.0:
+        raise ValueError(f"{what} must be finite and nonzero")
+    return v
+
+
 def m1_drift(*, odo_dyaw: float, imu_dyaw: float, distance_m: float, distance_source: str) -> dict:
     """Odometry heading minus IMU heading per metre. With ``encoder`` distance the drive's own encoder distance is
     the denominator (it also ended the segment), so a radius error enters it -- say so in the result."""
+    _positive(distance_m, "distance_m")
     diff = odo_dyaw - imu_dyaw
     return {"rad_per_m": diff / distance_m, "odo_minus_imu_rad": diff, "distance_m": distance_m,
             "distance_source": _source(distance_source)}
@@ -170,7 +219,9 @@ def m2_gains(*, imu_dyaw: float, distance_m: float, kappa_measured_q: float, kap
     """True curvature = heading change over the segment's distance (not a ratio of means), and two gains:
     ``gain_measured_q`` (the C3 true/kinematic gain's counterpart: the curvature of the steering that was there) and
     ``gain_commanded_q`` (steering tracking included)."""
-    k = imu_dyaw / distance_m
+    k = imu_dyaw / _positive(distance_m, "distance_m")
+    _nonzero(kappa_measured_q, "kappa_measured_q")
+    _nonzero(kappa_commanded_q, "kappa_commanded_q")
     note = ("encoder distance: a wheel radius error scales every condition's gain by the same factor; the M1 "
             "true/encoder distance ratio separates it") if _source(distance_source) == "encoder" else ""
     return {"kappa_true": k, "gain_measured_q": k / kappa_measured_q, "gain_commanded_q": k / kappa_commanded_q,
@@ -179,12 +230,18 @@ def m2_gains(*, imu_dyaw: float, distance_m: float, kappa_measured_q: float, kap
 
 # --- M3 ------------------------------------------------------------------------------------------------------------
 
-def step_response_delay(q_t_ns, q, y_t_ns, y, *, q_threshold: float, frac: float = 0.63, pre_s: float = 0.5,
-                        post_s: float = 1.0) -> dict:
+STEADY_FRACTION = 0.1  # a pre or post window whose spread exceeds this share of the step is not steady
+
+
+def step_response_delay(q_t_ns, q, y_t_ns, y, *, q_threshold: float, post_window_ns: tuple[int, int],
+                        frac: float = 0.63, pre_s: float = 0.5) -> dict:
     """From the q step's onset (the first sample ``q_threshold`` away from the mean before it) to ``y`` reaching
-    ``frac`` of its change (mean over ``pre_s`` before the onset to mean over the last ``post_s`` of the record).
-    The two series may be on different clocks only if both were put on the host clock (G7); the IMU's minimum
-    delay against the MCU's is then an unknown constant in the result."""
+    ``frac`` of its change, from its mean over ``pre_s`` before the onset to its mean over ``post_window_ns`` -- the
+    steady stretch after the step the caller names from the profile (the q-step segment at constant speed), never
+    the record's end (Codex G8 review P1). A pre or post window that is not steady (spread over 10 % of the step)
+    or a crossing after the post window starts is refused with its reason. The two series may be on different
+    clocks only if both were put on the host clock (G7); the IMU's minimum delay against the MCU's is then an
+    unknown constant in the result."""
     qt, q = np.asarray(q_t_ns, dtype=np.int64), np.asarray(q, float)
     yt, y = np.asarray(y_t_ns, dtype=np.int64), np.asarray(y, float)
     q0 = q[: max(1, np.searchsorted(qt, qt[0] + int(pre_s * 1e9)))].mean()
@@ -192,20 +249,28 @@ def step_response_delay(q_t_ns, q, y_t_ns, y, *, q_threshold: float, frac: float
     if len(moved) == 0:
         return {"delay_s": None, "reason": "no_step"}
     onset = int(qt[moved[0]])
+    p0, p1 = int(post_window_ns[0]), int(post_window_ns[1])
+    if not onset < p0 < p1:
+        return {"delay_s": None, "reason": "bad_post_window", "onset_ns": onset}
     pre = y[(yt < onset) & (yt >= onset - int(pre_s * 1e9))]
-    post = y[yt >= yt[-1] - int(post_s * 1e9)]
-    if len(pre) == 0 or len(post) == 0:
+    post = y[(yt >= p0) & (yt <= p1)]
+    if len(pre) < 2 or len(post) < 2:
         return {"delay_s": None, "reason": "no_window", "onset_ns": onset}
     y0, y1 = float(pre.mean()), float(post.mean())
-    if abs(y1 - y0) < 1e-9:
-        return {"delay_s": None, "reason": "no_response", "onset_ns": onset, "y_pre": y0, "y_post": y1}
+    out = {"onset_ns": onset, "y_pre": y0, "y_post": y1, "frac": frac}
+    step = abs(y1 - y0)
+    if step < 1e-9:
+        return {"delay_s": None, "reason": "no_response", **out}
+    if max(float(pre.std()), float(post.std())) > STEADY_FRACTION * step:
+        return {"delay_s": None, "reason": "not_steady", **out}
     level = y0 + frac * (y1 - y0)
-    after = np.flatnonzero((yt >= onset) & ((y - level) * np.sign(y1 - y0) >= 0))
+    after = np.flatnonzero((yt >= onset) & (yt <= p1) & ((y - level) * np.sign(y1 - y0) >= 0))
     if len(after) == 0:
-        return {"delay_s": None, "reason": "not_reached", "onset_ns": onset, "y_pre": y0, "y_post": y1}
+        return {"delay_s": None, "reason": "not_reached", **out}
     i = after[0]
-    # interpolate the crossing between the sample before and this one
     t_cross = float(yt[i])
     if i > 0 and yt[i - 1] >= onset and y[i] != y[i - 1]:
         t_cross = yt[i - 1] + (level - y[i - 1]) / (y[i] - y[i - 1]) * (yt[i] - yt[i - 1])
-    return {"delay_s": (t_cross - onset) / 1e9, "onset_ns": onset, "y_pre": y0, "y_post": y1, "frac": frac}
+    if t_cross > p0:
+        return {"delay_s": None, "reason": "crossed_after_post_window_start", **out}
+    return {"delay_s": (t_cross - onset) / 1e9, **out}
