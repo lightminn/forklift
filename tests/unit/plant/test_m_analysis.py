@@ -48,12 +48,13 @@ def test_a_quiet_window_is_found_next_to_the_trial_and_motion_is_cut_off():
     # standing 0-20 s, the drive starts at 20 s; the last 0.5 s before it the truck already creeps
     t, w, a = imu_series(0, 25, 200, lambda x: 0.2 if x > 19.5 else 0.0, bias, noise=0.002,
                          accel_motion=lambda x: 0.5 if x > 19.5 else 0.0)
-    win = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=15.0, min_s=5.0)
+    win = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=15.0, min_s=5.0, standing=None)
     assert win is not None
     s, e = win
     assert t[e - 1] <= int(19.5 * NS) and (t[e - 1] - t[s]) / NS > 10.0
     assert np.allclose(w[s:e].mean(axis=0), bias, atol=5e-4)
-    assert ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=15.0, min_s=30.0) is None
+    assert ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=15.0, min_s=30.0,
+                           standing=None) is None
 
 
 def test_imu_heading_integrates_the_bias_free_yaw_rate():
@@ -75,14 +76,15 @@ def test_the_heading_uncertainty_is_a_lower_bound_with_its_parts():
 def test_m1_drift_names_its_distance_source():
     m = ma.m1_drift(odo_dyaw=0.012, imu_dyaw=0.003, distance_m=3.0, distance_source="truth")
     assert m == {"rad_per_m": pytest.approx(0.003), "odo_minus_imu_rad": pytest.approx(0.009),
-                 "distance_m": 3.0, "distance_source": "truth"}
+                 "distance_m": 3.0, "distance_source": "truth", "note": ""}
+    assert "radius" in ma.m1_drift(odo_dyaw=0.0, imu_dyaw=0.0, distance_m=3.0, distance_source="encoder")["note"]
     with pytest.raises(ValueError, match="source"):
         ma.m1_drift(odo_dyaw=0.0, imu_dyaw=0.0, distance_m=3.0, distance_source="guess")
 
 
 def test_m2_gains_measured_and_commanded_q_are_told_apart():
     # true curvature 0.3 over 1.5 m; the measured q says 0.33, the command asked 0.36
-    g = ma.m2_gains(imu_dyaw=0.45, distance_m=1.5, kappa_measured_q=0.33, kappa_commanded_q=0.36,
+    g = ma.m2_gains(imu_dyaw=0.45, distance_m=1.5, direction=1, kappa_measured_q=0.33, kappa_commanded_q=0.36,
                     distance_source="encoder")
     assert g["kappa_true"] == pytest.approx(0.3)
     assert g["gain_measured_q"] == pytest.approx(0.3 / 0.33) and g["gain_commanded_q"] == pytest.approx(0.3 / 0.36)
@@ -134,7 +136,7 @@ def test_a_quiet_window_in_a_stretch_that_mostly_moves_is_still_found():
     bias = np.array([0.003, -0.002, 0.001])
     # 12 s of turning, then 6 s standing just before the boundary: the stretch's median is the turn
     t, w, a = imu_series(0, 18, 200, lambda x: 0.3 if x < 12 else 0.0, bias, noise=0.002)
-    win = ma.quiet_window(t, w, a, boundary_ns=18 * NS, side="before", max_s=18.0, min_s=4.0)
+    win = ma.quiet_window(t, w, a, boundary_ns=18 * NS, side="before", max_s=18.0, min_s=4.0, standing=None)
     assert win is not None and t[win[0]] >= 12 * NS - NS // 100
     assert np.allclose(w[win[0]:win[1]].mean(axis=0), bias, atol=5e-4)
 
@@ -143,7 +145,7 @@ def test_zero_distances_and_curvatures_and_a_backward_clock_are_refused():
     with pytest.raises(ValueError):
         ma.m1_drift(odo_dyaw=0.0, imu_dyaw=0.0, distance_m=0.0, distance_source="truth")
     with pytest.raises(ValueError):
-        ma.m2_gains(imu_dyaw=0.1, distance_m=1.0, kappa_measured_q=0.0, kappa_commanded_q=0.36,
+        ma.m2_gains(imu_dyaw=0.1, distance_m=1.0, direction=1, kappa_measured_q=0.0, kappa_commanded_q=0.36,
                     distance_source="truth")
     with pytest.raises(ValueError):
         ma.imu_heading(np.array([2, 1]), np.zeros((2, 3)), UP, np.zeros(3))
@@ -179,7 +181,7 @@ def test_the_gyro_scale_comes_from_whole_turns_back_to_the_same_heading():
 def test_a_steady_straight_drive_looks_quiet_to_the_imu_so_the_encoder_standstill_decides():
     bias = np.array([0.003, -0.002, 0.001])
     t, w, a = imu_series(0, 20, 200, lambda x: 0.0, bias, noise=0.002)  # 0-10 s standing, 10-20 s straight drive
-    alone = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=20.0, min_s=4.0)
+    alone = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=20.0, min_s=4.0, standing=None)
     assert t[alone[1] - 1] > 15 * NS  # the IMU alone takes the drive for a standstill
     win = ma.quiet_window(t, w, a, boundary_ns=20 * NS, side="before", max_s=20.0, min_s=4.0,
                           standing=[(0, 10 * NS)])

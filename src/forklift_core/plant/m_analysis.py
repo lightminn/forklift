@@ -15,7 +15,7 @@ import numpy as np
 
 from forklift_core.mcu_link.messages import FaultFlag
 from forklift_core.plant.real_vehicle import RealOdometry
-from forklift_core.sensors.imu_mount import yaw_rate
+from forklift_core.sensors.imu_mount import _unit, _vec3
 
 DISTANCE_SOURCES = ("truth", "encoder")
 QUIET_GYRO_RAD_S = 0.01  # a sample's gyro within this of the window's median ...
@@ -31,6 +31,7 @@ class Trial:
     trial: int
     result: str | None = None
     spans: dict = field(default_factory=dict)  # segment label -> (first host_ns, last host_ns) of its rows
+    _seg_of: dict = field(default_factory=dict, repr=False)
 
     @property
     def valid(self) -> bool:
@@ -49,6 +50,9 @@ def trials(rows, *, valid_only: bool = False) -> list[Trial]:
             tr.result = r["result"]
         label = r.get("label")
         if label is not None and r.get("state") == "running":
+            seg = r.get("seg")
+            if tr._seg_of.setdefault(label, seg) != seg:
+                raise ValueError(f"trial {tr.trial}: label {label!r} names two segments; labels must be unique")
             s = tr.spans.get(label)
             tr.spans[label] = (int(r["host_ns"]), int(r["host_ns"])) if s is None else (s[0], int(r["host_ns"]))
     found = sorted(out.values(), key=lambda t: t.trial)
@@ -58,14 +62,15 @@ def trials(rows, *, valid_only: bool = False) -> list[Trial]:
 # --- IMU -----------------------------------------------------------------------------------------------------------
 
 def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float, min_s: float,
-                 standing=None, gyro_tol: float = QUIET_GYRO_RAD_S,
+                 standing, gyro_tol: float = QUIET_GYRO_RAD_S,
                  accel_tol: float = QUIET_ACCEL_MPS2) -> tuple[int, int] | None:
     """``[start, end)`` indices of the bias window next to a trial: within ``max_s`` before (or after) the boundary,
     the contiguous run of quiet samples (gyro and acceleration near the median of the stillest 1 s chunk) that is
     closest to the boundary and at least ``min_s`` long -- motion at the trial's edge (a creep, the end of a drive)
     is cut off. ``standing``: host-time intervals where the encoders say the truck stands (design 3: encoder speed
-    zero and IMU quiet) -- a steady straight drive looks quiet to an IMU, so samples outside them never count.
-    None when there is no such run."""
+    zero and IMU quiet) -- a steady straight drive looks quiet to an IMU, so samples outside them never count. It
+    is required; ``None`` (IMU alone) must be passed on purpose and is for diagnostics, never for a measurement.
+    Returns None when there is no such run."""
     t = np.asarray(t_ns, dtype=np.int64)
     if side == "before":
         sel = np.flatnonzero((t <= boundary_ns) & (t >= boundary_ns - int(max_s * 1e9)))
@@ -122,10 +127,11 @@ def imu_heading(t_ns, gyro, up, bias) -> np.ndarray:
     t_ns = np.asarray(t_ns, dtype=np.int64)
     if t_ns.ndim != 1 or len(t_ns) < 2 or np.any(np.diff(t_ns) <= 0):
         raise ValueError("imu_heading needs at least two samples on a strictly increasing clock")
-    if len(np.asarray(gyro)) != len(t_ns):
-        raise ValueError("gyro and time lengths differ")
+    g = np.asarray(gyro, float)
+    if g.shape != (len(t_ns), 3) or not np.isfinite(g).all():
+        raise ValueError("gyro must be N x 3 finite samples, one per time")
     t = (t_ns - int(t_ns[0])) / 1e9
-    w = yaw_rate(gyro, up, bias=bias)
+    w = (g - _vec3(bias)) @ _unit(_vec3(up))  # yaw_rate's projection, without its minimum sample count
     out = np.zeros(len(t))
     out[1:] = np.cumsum((w[1:] + w[:-1]) / 2 * np.diff(t))
     return out
@@ -150,8 +156,9 @@ def gyro_scale(*, imu_dyaw: float, turns: int, heading_error_rad: float = 0.0) -
     """The gyro's scale from G3 arcs: the bias-free IMU rotation over ``turns`` full turns that start and end on the
     same floor-marked heading, over 2 pi turns. ``heading_error_rad`` is the floor marks' 1-sigma heading error at
     each end; it sets the scale's uncertainty (sqrt 2 x error over 2 pi turns)."""
-    if turns < 1:
-        raise ValueError("at least one full turn")
+    if isinstance(turns, bool) or int(turns) != turns or turns < 1:
+        raise ValueError("whole turns only (at least one): the arcs end on the heading they started from")
+    turns = int(turns)
     nominal = 2 * math.pi * turns
     return {"scale": abs(imu_dyaw) / nominal, "sigma": math.sqrt(2) * heading_error_rad / nominal, "turns": turns}
 
@@ -210,22 +217,28 @@ def m1_drift(*, odo_dyaw: float, imu_dyaw: float, distance_m: float, distance_so
     the denominator (it also ended the segment), so a radius error enters it -- say so in the result."""
     _positive(distance_m, "distance_m")
     diff = odo_dyaw - imu_dyaw
+    note = ("encoder distance: the drive's own encoder distance is the denominator (it also ended the segment), so a "
+            "wheel radius error enters the rate") if _source(distance_source) == "encoder" else ""
     return {"rad_per_m": diff / distance_m, "odo_minus_imu_rad": diff, "distance_m": distance_m,
-            "distance_source": _source(distance_source)}
+            "distance_source": distance_source, "note": note}
 
 
-def m2_gains(*, imu_dyaw: float, distance_m: float, kappa_measured_q: float, kappa_commanded_q: float,
-             distance_source: str) -> dict:
+def m2_gains(*, imu_dyaw: float, distance_m: float, direction: int, kappa_measured_q: float,
+             kappa_commanded_q: float, distance_source: str) -> dict:
     """True curvature = heading change over the segment's distance (not a ratio of means), and two gains:
     ``gain_measured_q`` (the C3 true/kinematic gain's counterpart: the curvature of the steering that was there) and
-    ``gain_commanded_q`` (steering tracking included)."""
-    k = imu_dyaw / _positive(distance_m, "distance_m")
+    ``gain_commanded_q`` (steering tracking included). ``distance_m`` is the travelled length (positive, as the
+    profile's ``s_m``) and ``direction`` +1 forward / -1 reverse: reversing with a left curvature turns the heading
+    the other way, so the curvature is heading change over the signed distance."""
+    if direction not in (1, -1):
+        raise ValueError("direction is +1 (forward) or -1 (reverse)")
+    k = imu_dyaw / (_positive(distance_m, "distance_m") * direction)
     _nonzero(kappa_measured_q, "kappa_measured_q")
     _nonzero(kappa_commanded_q, "kappa_commanded_q")
     note = ("encoder distance: a wheel radius error scales every condition's gain by the same factor; the M1 "
             "true/encoder distance ratio separates it") if _source(distance_source) == "encoder" else ""
     return {"kappa_true": k, "gain_measured_q": k / kappa_measured_q, "gain_commanded_q": k / kappa_commanded_q,
-            "distance_m": distance_m, "distance_source": distance_source, "note": note}
+            "distance_m": distance_m, "direction": direction, "distance_source": distance_source, "note": note}
 
 
 # --- M3 ------------------------------------------------------------------------------------------------------------
@@ -235,7 +248,8 @@ STEADY_FRACTION = 0.1  # a pre or post window whose spread exceeds this share of
 
 def step_response_delay(q_t_ns, q, y_t_ns, y, *, q_threshold: float, post_window_ns: tuple[int, int],
                         frac: float = 0.63, pre_s: float = 0.5) -> dict:
-    """From the q step's onset (the first sample ``q_threshold`` away from the mean before it) to ``y`` reaching
+    """Pass the q-step segment (it starts standing on the old q for at least ``pre_s``). From the q step's onset (the
+    first sample ``q_threshold`` away from the mean of the first ``pre_s``) to ``y`` reaching
     ``frac`` of its change, from its mean over ``pre_s`` before the onset to its mean over ``post_window_ns`` -- the
     steady stretch after the step the caller names from the profile (the q-step segment at constant speed), never
     the record's end (Codex G8 review P1). A pre or post window that is not steady (spread over 10 % of the step)

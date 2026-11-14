@@ -14,8 +14,8 @@
   - MCU 와 무관한 하드웨어 차단은 **사람이 손에 든 주 전원 차단 스위치**로 대신한다(사용자 결정 2026-11-12, 다음 PCB 때 재검토). 출력이 열린 실행에서는 늘 그 스위치를 손에 쥔다.
 - **기록**: 실행마다 `artifacts/<UTC 시각>_<단계>_<구분>/` 를 새로 만든다. 예: `artifacts/20261120T093000Z_s3_commission_L_01/`. 덮어쓰지 않는다.
   - 구동 명령은 결과를 `run.jsonl` 의 `{"t":"result"}` 줄과 stdout JSON 두 곳에 남긴다.
-  - `cpr`·`analyze` 는 stdout 에만 남기므로 `| tee result.json` 을 붙인다.
-- **장치 경로**: udev 규칙 설치(3절) 뒤에는 `--device /dev/forklift-mcu`(USB CDC, `--baud` 없음). UART7 대안은 USB-UART 어댑터 경로에 `--baud 460800`.
+  - `cpr`·`analyze`·`kth`·`clock`·`rearm_hold_check.py` 는 stdout 에만 남기므로 `| tee result.json` 을 붙인다.
+- **장치 경로**: udev 규칙 설치(4절) 뒤에는 `--device /dev/forklift-mcu`(USB CDC, `--baud` 없음). UART7 대안은 USB-UART 어댑터 경로에 `--baud 460800`.
 - **`--allow-locked` 는 실기에서 쓰지 않는다**(모형·HIL 전용).
 - 공통 판정: 구동 명령은 `result == "ok"`, `aborted == null`, `cleanup_confirmed == true` 셋이 모두 서야 한다. 예외는 일부러 리셋·전원 차단을 거는 S5 실행뿐이다(9.1 — 중단이 정상, 외부 측정으로 판정).
 
@@ -54,7 +54,7 @@ build_fw() {  # build_fw <이름> [cmake 옵션…]
 build_fw normal                                  # S0·S2: 출력 잠금 정상 빌드
 build_fw commission -DFW_BUILD=commission        # S2: 출력 잠금 시운전 빌드(재무장 보류 확인)
 build_fw stall -DFW_TEST_IWDG_STALL=5            # S5 ①: 부팅 5 s 뒤 주기 정지, 출력 잠금 강제
-# S3·S5 ②: 출력 열린 시운전 빌드 — 사용자가 보호 확인 기록을 커밋한 뒤에만 구성된다
+# S3·S5(9.1 의 ②·시운전 상한 DISARM·주 전원 차단 모두): 출력 열린 시운전 빌드 — 사용자가 보호 확인 기록을 커밋한 뒤에만 구성된다
 build_fw open -DFW_BUILD=commission -DFW_MOTOR_OUTPUT=1 \
   -DFW_IPROPI_PROTECTION_RECORD=<커밋된 기록의 저장소 상대 경로>
 ```
@@ -248,7 +248,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run_M.jso
 ```
 
 - **명령 제약**
-  - 듀티는 0 이 아니고 ±0.15 이하다. 0.15 를 넘으면 펌웨어가 거부하고 이전 명령을 유지한다.
+  - 듀티는 0 이 아니고 ±0.15 이하다. 도구가 그 밖의 값은 보내지 않고 거부하며(`refused`), 펌웨어도 0.15 를 넘으면 거부하고 이전 명령을 유지한다.
   - 시간은 0.1–1.5 s.
   - `--observed` 는 주지 않는다: 실행 뒤 도구가 물으면 **실제로 본 방향**을 답한다(pos = 차체 앞·왼쪽·위). 미리 적어 두면 모터와 센서 극성이 함께 뒤집힌 경우를 놓친다(Codex).
 - **합격**
@@ -329,7 +329,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 링크 끊김·DISARM·명령 만료(`bringup.py scenario --kind tx_cut|disarm|expiry --rate 0.5`)는 정상 빌드의 `DRIVE` 가 필요해 8절과 같은 이유로 기다린다. 바닥 시험은 `--floor --power-switch-reachable` 을 붙이고, `outputs_locked`·`estop_unwired` 가 해제된 빌드에서만 한다.
 
 합격은 `external.<항목>.pass == true` 로만 한다.
-- `output_response_ms` 문턱(100 ms)은 `disarm`·`iwdg` 에만 있다: 받침대에서도 판정한다. `tx_cut`·`expiry` 에는 출력 반응 문턱이 없다.
+- `output_response_ms` 문턱(100 ms)은 `disarm`·`iwdg` 에만 있다(`limit_disarm`·`hold_disarm` 은 `disarm` 의 문턱을 따른다 — 9.1): 받침대에서도 판정한다. `tx_cut`·`expiry` 에는 출력 반응 문턱이 없다.
 - `stop_time_ms` 500 ms·`stop_distance_mm` 100 mm(잠정, `tx_cut`·`expiry`·`disarm`): 바닥에서만 판정한다.
 - `tx_cut` 은 `worst_case.met == true` 여야 한다.
 - 계획 S5 의 비상정지 입력 경로와 Jetson 강제 재부팅(브라운아웃 → MCU 만료 정지)도 여기서 한다 — 그 전까지 **미완료**.
@@ -395,15 +395,15 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
 
 | 필요한 기록 | 지금 | 빠진 것 |
 |---|---|---|
-| MT6701 L·R 모터 축 원 카운트와 바퀴 증분(G·실효 반경 명시) | `bringup.py record` 가 STATE 를 행마다(수신 `host_ns`·`mcu_time_us`·카운트·결함 비트) 남긴다. 텔레옵 주행 중에는 `teleop_bridge.py --record` 만 써야 한다(두 도구가 같은 tty 의 수신 스트림을 나눠 읽게 된다). 그 기록은 주기마다의 명령·상태 요약뿐이다 | **G1** 텔레옵 기록에 STATE 원행(카운트·q·`mcu_time_us`·수신 `host_ns`·결함 비트) 덧붙이기 |
+| MT6701 L·R 모터 축 원 카운트와 바퀴 증분(G·실효 반경 명시) | `bringup.py record` 와 `teleop_bridge.py --record`(G1, #497) 가 STATE 를 원행으로(수신 `host_ns`, 다리는 읽기 시각 `read_ns` 도·`mcu_time_us`·카운트·q·결함 비트) 남긴다. 텔레옵 주행 중에는 `teleop_bridge.py --record` 만 써야 한다(두 도구가 같은 tty 의 수신 스트림을 나눠 읽게 된다). 그 기록은 주기마다의 명령·상태 요약뿐이다 | 구현됨(G1, #497) — 실차 기록에서 행 형식·시각을 확인 |
 | KTH7801 조향 기구각 q 와 q → κ 변환(영점·기구 관계) | STATE 의 `steering_rad`(q), 변환은 `RealKinematics` | 영점·기구 관계의 실측값은 S2–S3 결과로 채운다(계획 5 절 정본) |
 | 구동·조향 명령 | 텔레옵 기록의 `applied`(제출한 속도·q·`curvature_inv_m`)와 목표 곡률 `target_kappa`. 측정 곡률(`measured_kappa`)은 내부 판단에만 쓰이고 파일에는 남지 않는다 | (측정 곡률은 G1 의 원행과 G8 로 다시 낸다) |
 | D435i 세 축 자이로·가속도, 장착 회전으로 차체 yaw rate | `tools/imu_record.py`(G2, [설계](../design/2026-11-14-imu-record-and-mount.md)): 표본마다 32 bit 장치 시각 `dev_us`·시간 영역·호스트 단조 `host_ns`. `forklift_core.sensors.imu_record` 가 되감김을 풀고 연속 구간마다 G7 fit, `imu_mount` 가 차체 위쪽 축과 yaw rate(G3). 책상 정지 측정: `docs/validation/2026-10-27-gyro-model-d435i-static.md`, 형식 회귀: `docs/validation/2026-11-14-imu-record-g2/` | 차체 위 G3 절차(아래)와 그 등록 항목. 텔레옵 다리와 IMU 기록기는 같은 Jetson 에서 돌려 `host_boot_id` 가 같아야 한다 |
 | A2M12 스캔(참값용 벽 정합) | 7a 의 `scan_check --record`·`ScanFeed` 가 원본 프레임·`host_recv_ns`·판정을 파일에 남긴다. 텔레옵 다리에는 아직 스캔 원천이 없다(7b) | **G4** 그 기록 기능을 시행 중에 연결·운용하고 같은 시계로 정렬하기, 그리고 벽 정합으로 heading 을 내는 방법 |
-| 시행 경계 | `bringup.py record --markers` 는 Enter 로 표시하지만 텔레옵 다리에는 표시가 없다 | **G5** 텔레옵 기록에 시행 시작·끝 표시(표시는 시각만 남기고 자세를 재지 않는다) |
+| 시행 경계 | `bringup.py record --markers` 와 `teleop_bridge.py --markers`(G5, #497)가 Enter 로 표시한다. `--profile` 과는 함께 쓰지 않는다(일정표가 구간 표지를 자동으로 남긴다) | 구현됨(G5, #497) — 실차에서 확인 |
 | 위치·자세 참값(시작·끝, M3 는 합류 끝과 0.42 m 뒤 두 곳) | 없음 | **G9** 고른 참값 방법에 맞춘 기준점(바닥 표시·차체 두 기준점), 측정 도구, 좌표 추출, 위치·heading 불확도 계산. 영상을 쓰면 영상 프레임 시각 ↔ 호스트 시각 동기 방법과 오차 |
 | 같은 속도 이력, q 유지·계단, S 자 합류 | `teleop_bridge.py --profile`(G6, #508, [설계](../design/2026-11-14-profile-drive-and-m-analysis.md) 2 절): 콘솔 teleop 메시지의 두 비율만 일정표 값으로 바꾸고 관문은 그대로, 다리 터미널 Enter 로 시작, 관문이 깎거나 deadman 을 놓으면 그 시행은 void. 실차 실행은 G4 뒤 | **G6** S6 범위 안의 개루프 프로필 구동(속도 이력 + q 일정표: 유지·계단·합류 모양). 받침대 전용 `commission` 이 아니라 **정상 빌드에서, S6 의 속도 감시·스캔 허가·정지 조건과 운용자 확인 게이트를 그대로 유지**하고, 손에 든 차단 스위치를 쥔다. M3 의 합류를 경로 추종으로 하려면 자율 단계 뒤가 된다 — 개루프 q 일정표를 M3 로 인정할지는 측정 전에 정한다 |
-| 시각 변환 | STATE 행마다 `mcu_time_us` 와 수신 `host_ns` 가 있다(G1 뒤) | **G7** MCU 시각 ↔ 호스트 시각, IMU 장치 시각 ↔ 호스트 시각의 변환식과 정렬·지연 오차를 내는 분석 함수(상위 계획의 시간 규칙: MCU 시각과 호스트 시각을 섞지 않는다) |
+| 시각 변환 | STATE 행마다 `mcu_time_us` 와 수신 `host_ns` 가 있고, `bringup.py clock --record`(G7, #497)가 MCU 시각 ↔ 호스트 시각을 맞추며, IMU 는 `forklift_core.sensors.imu_record.imu_clock_fits`(G2, #500)가 맞춘다 | 구현됨(G7·G2) — 실차 기록으로 정렬·지연의 한계(G7 설계 5 절)를 확인 |
 | M1–M3 의 값 | `forklift_core.plant.m_analysis`(G8, 설계 3 절): 시행 구분, 편향 구간, IMU heading 과 그 불확도 하한, 자이로 배율, M1 drift, M2 이득 둘, 엔코더 차동·IMU 계단 응답 | 위치 참값이 필요한 값(M1 끝 횡 오차, M3 합류 끝·0.42 m 뒤 상대 위치)은 G9 의 방법이 정해진 뒤 그 입력으로 계산한다. 95 % 구간과 판정은 등록 문서(C3 6.5) |
 
 **G3 차체 위 절차**(S6 텔레옵이 열린 뒤, 포크를 가장 낮게 둔 채 — IMU 가 캐리지에 붙어 승강과 함께 움직인다. 승강하면 다시 잰다). 이 차는 제자리 회전을 못 하므로(뒤축 기준 유한 곡률) 원호로 잰다:
