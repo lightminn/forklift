@@ -227,6 +227,7 @@ class Session:
         self.arm_requested = False  # the cleanup runs whatever the last STATE says once an ARM may have gone out
         self.cleanup_confirmed: bool | None = None
         self.test_end_ns: int | None = None
+        self.last_hold_seqs: list[int] = []  # every seq the latest hold queued (a STATE may skip the first)
 
     def arm(self, budget_s: float) -> None:
         """Arm to ready; ``budget_s`` fixes the run's end, past which no command stays valid."""
@@ -276,9 +277,12 @@ class Session:
         bound = end_ns if nonzero else None  # a nonzero command never expires after its hold's end
         stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero else end_ns  # hand over early, inside the bound
         first = None
+        self.last_hold_seqs = []
         while time.monotonic_ns() < stop_ns:
             seq = self.send(left, right, bound)
             first = first if first is not None else seq
+            if seq is not None:
+                self.last_hold_seqs.append(seq)
             self.b.cycle()
             if not self.b.host.ready and not self.events_started:
                 self.aborted = "authorization_revoked_before_event"
@@ -308,12 +312,17 @@ class Session:
         return ok
 
 
-def mcu_time_of_acceptance(samples, seq: int):
-    """The MCU time of the first STATE that reports ``seq`` accepted (last_rx_seq), and its received host time."""
-    for s in samples:
-        if s.state.last_rx_seq == seq:
-            return s.state.mcu_time_us, s.host_ns
-    return None, None
+def mcu_time_of_acceptance(samples, seqs, start: int = 0):
+    """(MCU time, received host time, seq) of the first STATE that reports any of ``seqs`` accepted (last_rx_seq).
+    A STATE names only the last DRIVE received, so when two land between STATEs the first seq is never named
+    (ws1 19006, under load): any seq of the step's hold is its acceptance. The STATE's time is then up to one DRIVE
+    cycle after the step's first DRIVE reached the MCU -- the rise time can read that much short. Only samples from
+    ``start`` on count (taken when the hold began), so an older STATE naming a reused seq never answers."""
+    wanted = set(seqs)
+    for s in samples[start:]:
+        if s.state.last_rx_seq in wanted:
+            return s.state.mcu_time_us, s.host_ns, s.state.last_rx_seq
+    return None, None, None
 
 
 def _final(result: dict, session: Session) -> dict:
@@ -328,11 +337,16 @@ def run_step(bench: Bench, session: Session, wheel: str, target: float) -> dict:
     left, right = (target if wheel in ("left", "both") else 0.0), (target if wheel in ("right", "both") else 0.0)
     w = 0 if wheel != "right" else 1
     initial = bench.state.wheel_rate_left_rad_s if w == 0 else bench.state.wheel_rate_right_rad_s
-    seq = session.hold(left, right, STEP_MAX_S) if session.aborted is None else None
+    step_seqs, step_start = [], len(bench.samples)
+    if session.aborted is None:
+        session.hold(left, right, STEP_MAX_S)
+        step_seqs = list(session.last_hold_seqs)
     if session.aborted is None:
         session.hold(0.0, 0.0, 1.0)
     session.cleanup()
-    step_us, step_host = mcu_time_of_acceptance(bench.samples, seq) if seq is not None else (None, None)
+    if session.aborted is None and not step_seqs:
+        return _final({"result": "step_not_sent"}, session)  # the host queued no step DRIVE at all
+    step_us, step_host, seq = mcu_time_of_acceptance(bench.samples, step_seqs, step_start)
     if step_us is None:
         return _final({"result": "no_acceptance"}, session)
     m = step_metrics(bench.samples, w, step_us, initial, target, window_s=STEP_MAX_S)
