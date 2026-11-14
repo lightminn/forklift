@@ -156,7 +156,7 @@ class Bridge:
             meas_q=None if reading is None or reading.steering_rad is None else reading.steering_rad,
             armed=bool(rec.get("armed")), mode=str(rec.get("mode")), target_mps=float(rec.get("target_mps") or 0.0),
             applied_mps=float(rec.get("applied_mps") or 0.0), applied_q=self.core.q_cmd, permit=out.permit,
-            port=rec.get("port"), direction_cut=rec.get("direction_cut"), stop=rec.get("stop") or rec.get("disarm"),
+            port=rec.get("port"), direction_cut=rec.get("direction_cut"), stop=rec.get("stop") or rec.get("disarm") or self.arbiter.preempt_latch,
             # only the command the arbiter accepted (owner, lease, generation, age) carries the operator's deadman:
             # an observer's or a refused message never releases anything (Codex G6 code review P1-1)
             deadman=bool(self.arbiter.teleop and self.arbiter.teleop.get("deadman")), policy=rec.get("policy"))
