@@ -1,0 +1,13 @@
+# g3_arc_left -- registered in docs/plans/2026-11-15-m1-m3-registration.md 2.6.
+# G3 mount and gyro scale: teleop-max left arc at 0.12 m/s, half turn 8.727 m + 1.5 turns 26.18 m.
+# Do not edit after registration: a change is a new registration (the same speed history in every trial).
+schema: drive_profile/1
+name: g3_arc_left
+load: empty
+segments:
+  - {label: presteer, presteer_kappa_inv_m: max}
+  - {label: still_0, hold_s: 60.0}
+  - {label: arc_half, speed_mps: 0.12, kappa_inv_m: max, distance_m: 8.727}
+  - {label: still_180, hold_s: 60.0}
+  - {label: arc_rest, speed_mps: 0.12, kappa_inv_m: max, distance_m: 26.18}
+  - {label: still_end, hold_s: 60.0}
