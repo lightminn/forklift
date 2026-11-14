@@ -81,6 +81,21 @@
 set -u
 OUT=$(realpath -m "${1:?output directory}")
 ROOT=$(pwd)
+# Path display plan (docs/plans/2026-11-14-path-display-perception-leak.md 2, lead decision 2026-11-14): the scene's
+# display prims are seen by the perception cameras, so --path-display stage is diagnostic only. The operator's console
+# refuses the diagnostic variable too.
+pd_prev=""
+for pd_w in $(IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}); do
+  pd_o=${pd_w%%=*}
+  if { [ "$pd_w" != "$pd_o" ] && [ "${pd_w#*=}" = stage ] && [ ${#pd_o} -ge 4 ] && [[ --path-display == "$pd_o"* ]]; } \
+     || { [ "$pd_w" = stage ] && [ ${#pd_prev} -ge 4 ] && [[ --path-display == "$pd_prev"* ]]; }; then
+    echo "EXTRA_ARGS --path-display stage: diagnostic only, never in this launcher's runs"; exit 2
+  fi
+  pd_prev=$pd_w
+done
+if [ -n "${FORKLIFT_PATH_DISPLAY_DIAGNOSTIC:-}" ]; then
+  echo "FORKLIFT_PATH_DISPLAY_DIAGNOSTIC is diagnostic only, never in this launcher's runs"; exit 2
+fi
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac Python}"
 # In a bundle (deploy/slurm/isaac_bundle.sbatch) several sessions share one Slurm job: SESSION_ID names this one's

@@ -123,6 +123,21 @@ OUT=${1:?the run directory}
 # Every path absolute before the cd into SNAP below (a relative one would name another directory there).
 OUT=$(realpath -m "$OUT"); SNAP=$(realpath -m "$SNAP"); SCENE_DIR=$(realpath -m "$SCENE_DIR")
 source "$SNAP/deploy/lib/term_relay.sh" || { echo "no $SNAP/deploy/lib/term_relay.sh" >&2; exit 2; }
+# Path display plan (docs/plans/2026-11-14-path-display-perception-leak.md 2, lead decision 2026-11-14): the scene's
+# display prims are seen by the perception cameras, so --path-display stage is diagnostic only. The diagnostic
+# variable (stage or both) passes on to the runner here only: the S3 alignment smoke; a bundle's check refuses it.
+pd_prev=""
+for pd_w in $(IFS=$' \t\n'; set -f; printf '%s\n' ${EXTRA_ARGS:-}); do
+  pd_o=${pd_w%%=*}
+  if { [ "$pd_w" != "$pd_o" ] && [ "${pd_w#*=}" = stage ] && [ ${#pd_o} -ge 4 ] && [[ --path-display == "$pd_o"* ]]; } \
+     || { [ "$pd_w" = stage ] && [ ${#pd_prev} -ge 4 ] && [[ --path-display == "$pd_prev"* ]]; }; then
+    echo "EXTRA_ARGS --path-display stage: diagnostic only, never in this launcher's runs"; exit 2
+  fi
+  pd_prev=$pd_w
+done
+if [ -n "${FORKLIFT_PATH_DISPLAY_DIAGNOSTIC:-}" ]; then  # passed on to the runner, which applies it
+  echo "PATH_DISPLAY_DIAGNOSTIC $FORKLIFT_PATH_DISPLAY_DIAGNOSTIC (a diagnostic run, not an evaluation)"
+fi
 : "${BASE_SCENE:?the base scene (.usda)}" "${FORKLIFT_URDF:?the forklift URDF the scene was built from}"
 : "${VENV_PY:?the Isaac python}"
 MODE=${MODE:-slam}; NEAR=${NEAR:-on}; MARKERS=${MARKERS:-on}; RACK=${RACK:-on}; NOISE=${NOISE:-const}; START_BAND=${START_BAND:-off}; START_BAND_M=${START_BAND_M:-0.03}; ESCAPE_PRESTEER=${ESCAPE_PRESTEER:-off}; ESCAPE_START=${ESCAPE_START:-off}; LOW_CLEARANCE=${LOW_CLEARANCE:-on}; RESTART_CONFIRM=${RESTART_CONFIRM:-3}; D7_HOLD=${D7_HOLD:-on}
