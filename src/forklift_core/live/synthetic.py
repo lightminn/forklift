@@ -97,6 +97,11 @@ def bench_opener(opener, bench: dict):
         if not stat.S_ISCHR(st.st_mode) or st.st_rdev != want:
             os.close(fd)
             raise OSError(f"{path} opened a device that is not the bench's pty (rdev {st.st_rdev} != {want})")
+        # the same pts number reused by another pty after the model went: the model must still hold its master
+        why = model_peer.model_alive_refusal(path, bench)
+        if why is not None:
+            os.close(fd)
+            raise OSError(f"{path}: the bench's model is not on this pty ({why})")
         return fd
 
     return open_checked
