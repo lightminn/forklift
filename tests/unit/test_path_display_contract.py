@@ -163,3 +163,40 @@ def test_the_runner_draws_the_display_by_mode_and_the_inset_stays_clear():
     step = source.index("world.step(render=render or frame_due or far_due)")
     assert source.index("path_overlay.note_moving()", step) - step < 120
     assert source.count("path_overlay.register_moving(") == 2 and source.count("if not args.deterministic:") >= 2
+
+
+def test_the_pixel_lag_is_display_only_and_recorded_only_when_set():
+    import run_transport
+
+    assert run_transport.recorded_arguments(argparse.Namespace(seed=0, path_display_pixel_lag_s=0.0)) == {"seed": 0}
+    got = run_transport.recorded_arguments(argparse.Namespace(seed=0, path_display_pixel_lag_s=0.0917))
+    assert got == {"seed": 0, "path_display_pixel_lag_s": 0.0917}
+    assert "path_display_pixel_lag_s" in NT.RUN_SPECIFIC_ARGUMENTS  # not a run condition: never a sensor input
+    p = _check_args({}, "--path-display-pixel-lag-s", "-0.1")
+    assert p.returncode == 2 and "--path-display-pixel-lag-s" in p.stderr
+    assert _check_args({}, "--path-display-pixel-lag-s", "0.0917").returncode == 0
+
+
+def test_follow_up_wiring():
+    source = SCRIPT.read_text()
+    # only the cameras a video sink reads have their poses kept every step (the perception camera as a fallback only)
+    assert "percep_sink_ = ((args.robot_camera and perception_display is None)" in source
+    assert "for cam_ in (perception_camera if percep_sink_ else None, perception_display, live_cam_setup_):" in source
+    assert "path_overlay.set_pixel_lag(args.path_display_pixel_lag_s)" in source
+    # the chase view is a moving sink too, registered where it is made
+    chase_at = source.index('extra_cameras["chase"] = chase')
+    assert source.index("path_overlay.register_moving(chase)", chase_at) - chase_at < 300
+    # the overlay's failures and clock mismatches beside the result, never in the state a replay compares
+    stats_at = source.index('(args.output / "path_display.json").write_text(json.dumps(path_overlay.stats()')
+    assert stats_at < source.index('(args.output / "result.json").write_text(record_json(state, indent=2)', stats_at)
+    assert source.index("def main() -> None:") < stats_at
+
+
+def test_the_display_log_is_started_in_run_and_timed_from_drives_origin():
+    source = SCRIPT.read_text()
+    start = source.index('path_overlay.start_event_log(args.output / "path_display.jsonl", args.path_display,')
+    assert source.index("def run(app, args") < start < source.index("def drive(S, isaac)")
+    origin = source.index("path_overlay.set_time_origin(float(initial_time))")
+    assert source.index("initial_time = world.current_time") < origin
+    assert source.index("def drive(S, isaac)") < origin < source.index("def main() -> None:")
+    assert source.index("path_overlay.close_event_log()") > source.index("def main() -> None:")

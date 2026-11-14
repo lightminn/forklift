@@ -225,3 +225,158 @@ def test_a_clock_that_goes_back_restarts_the_history():
     assert po.pose_history_span_s(cam) == 0.0
     po.note_moving(0.1)
     assert math.isclose(po.pose_history_span_s(cam), 0.05)
+
+
+class BrokenCamera(FakeCamera):
+    def get_intrinsics_matrix(self):
+        raise RuntimeError("no render product yet")
+
+
+def test_a_compose_failure_skips_the_lines_and_never_raises(capsys):
+    cam = BrokenCamera(prim_path="/World/Live")
+    po.add_path("Transport", [(1.0, 0.0, 0.0), (3.0, 0.0, 0.0)], (1.0, 0.65, 0.04))
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    for _ in range(3):
+        assert po.compose(frame, cam) is frame  # the frame as it was: no lines, no exception
+    st = po.stats()
+    assert st["compose_failures"] == 3 and "no render product yet" in st["last_error"]
+    err = capsys.readouterr().err
+    assert err.count("PATH_OVERLAY_WARN compose_failures") == 1  # the first time, then every WARN_EVERY-th
+
+
+def test_a_note_failure_is_counted_not_raised():
+    class Bad(FakeCamera):
+        def get_world_pose(self, camera_axes="world"):
+            raise RuntimeError("prim gone")
+
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(Bad(prim_path="/World/Chase"))
+    po.note_moving(1.0)
+    assert po.stats()["note_failures"] == 1
+
+
+def test_the_pixel_lag_draws_from_the_earlier_pose():
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    po.note_moving(10.0)
+    cam._pos = np.array([1.0, 0.0, 1.0])
+    po.note_moving(10.2)
+    po.set_pixel_lag(0.2)
+    lagged = po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam, frame_time_s=10.2)
+    row = np.nonzero(lagged[:, :, 2].any(axis=1))[0].mean()
+    assert row == pytest.approx(240 + 320 * 1.0 / 3.0, abs=3)  # the pose at 10.0 s, 3 m from the line
+    assert po.stats()["pixel_lag_s"] == 0.2
+    with pytest.raises(ValueError):
+        po.set_pixel_lag(-0.1)
+
+
+def test_a_frame_time_on_another_clock_is_warned_not_matched_to_an_end(capsys):
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    po.note_moving(10.0)
+    cam._pos = np.array([1.0, 0.0, 1.0])
+    po.note_moving(10.2)
+    # a frame stamped on a wall-clock-like axis: far outside the kept 10.0-10.2 s
+    out = po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam, frame_time_s=1794630000.0)
+    row = np.nonzero(out[:, :, 2].any(axis=1))[0].mean()
+    assert row == pytest.approx(240 + 320 * 1.0 / 2.0, abs=3)  # the current pose, not the history's first
+    assert po.stats()["clock_mismatches"] == 1
+    assert "PATH_OVERLAY_WARN clock_mismatches" in capsys.readouterr().err
+    # within the slack it is matched as before
+    po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam, frame_time_s=10.2 + po.CLOCK_SLACK_S / 2)
+    assert po.stats()["clock_mismatches"] == 1
+
+
+def test_compose_and_note_are_timed_when_the_live_timers_are_on():
+    from forklift_core.perf import TIMERS
+
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    was = TIMERS.enabled
+    TIMERS.enabled = True
+    try:
+        before = dict(TIMERS._count)
+        po.note_moving(1.0)
+        po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam)
+        assert TIMERS._count.get("overlay.note_moving", 0) == before.get("overlay.note_moving", 0) + 1
+        assert TIMERS._count.get("overlay.compose", 0) == before.get("overlay.compose", 0) + 1
+    finally:
+        TIMERS.enabled = was
+
+
+def test_a_fixed_camera_never_reads_a_history_and_re_registering_starts_fresh():
+    cam = FakeCamera(prim_path="/World/Cam")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    po.note_moving(10.0)
+    po._moving.clear()  # the same prim path, no longer a moving camera
+    po.set_pixel_lag(5.0)
+    po.compose(np.zeros((480, 640, 3), dtype=np.uint8), cam, frame_time_s=10.0)
+    assert po.stats()["clock_mismatches"] == 0  # no history, no lag, no mismatch for a fixed camera
+    po.register_moving(cam)
+    assert po.pose_history_span_s(cam) == 0.0 and "/World/Cam" not in po._history
+
+
+def test_a_failing_timer_is_caught_too(monkeypatch):
+    def broken(name):
+        raise RuntimeError("timer broken")
+
+    monkeypatch.setattr(po, "_timer", broken)
+    cam = FakeCamera(prim_path="/World/Robot")
+    po.add_path("Approach", [(3.0, -0.5, 0.0), (3.0, 0.5, 0.0)], (0.0, 0.0, 1.0))
+    po.register_moving(cam)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    assert po.compose(frame, cam) is frame
+    po.note_moving(1.0)
+    st = po.stats()
+    assert st["compose_failures"] == 1 and st["note_failures"] == 1
+
+
+def _rows(path):
+    import json
+
+    return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_the_display_log_times_each_line_on_the_live_frames_axis(tmp_path):
+    log = tmp_path / "path_display.jsonl"
+    now = {"t": 100.0}
+    po.set_clock(lambda: now["t"])
+    po.start_event_log(log, "overlay", 0.0917)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))  # before drive's origin: waits
+    assert len(_rows(log)) == 1
+    po.set_time_origin(99.5)
+    now["t"] = 103.25
+    po.add_ring("/World/Destination", 2.0, 1.0, (0.01, 0.9, 0.04))
+    po.add_path("Transport", [(2.0, 0.0, 0.0), (4.0, 0.0, 0.0)], (1.0, 0.65, 0.04))
+    header, approach, ring, transport = _rows(log)
+    assert header == {"t": "header", "schema": "path_display/1", "mode": "overlay", "pixel_lag_s": 0.0917,
+                      "time_axis": "world.current_time - initial_time", "line_width_px_at_1280": 3}
+    assert approach["t"] == "display" and approach["time_s"] == pytest.approx(0.5) and approach["kind"] == "path"
+    assert approach["points"][0] == [1.0, 0.0, po.LINE_Z_M] and approach["colour"] == pytest.approx([0.05, 0.45, 1.0], abs=0.003)
+    assert ring["kind"] == "ring" and ring["closed"] and ring["width_scale"] == 2.0 and ring["time_s"] == pytest.approx(3.75)
+    assert len(ring["points"]) == po.RING_SEGMENTS and ring["points"][0][2] == po.RING_Z_M
+    assert transport["name"] == "Transport" and "clock_s" not in transport
+
+
+def test_rows_never_given_an_origin_are_written_with_a_null_time(tmp_path):
+    log = tmp_path / "path_display.jsonl"
+    po.set_clock(lambda: 5.0)
+    po.start_event_log(log, "both", 0.0)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))
+    assert po.stats()["event_rows_pending"] == 1
+    po.close_event_log()
+    rows = _rows(log)
+    assert rows[1]["time_s"] is None and rows[1]["name"] == "Approach" and po.stats()["event_rows_pending"] == 0
+
+
+def test_without_a_log_nothing_is_written_and_a_bad_path_never_raises(tmp_path):
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))  # no log started (a replay)
+    po.reset()
+    po.start_event_log(tmp_path / "missing_dir" / "path_display.jsonl", "overlay", 0.0)
+    po.set_time_origin(0.0)
+    po.add_path("Approach", [(1.0, 0.0, 0.0), (2.0, 0.0, 0.0)], (0.05, 0.45, 1.0))
+    assert po.stats()["event_failures"] >= 1
