@@ -64,16 +64,27 @@ ws1 의 Isaac Sim 5.1.0(`/opt/isaacsim-env`, extscache: omni.replicator.core 1.1
   - 카메라 객체가 주는 자세가 그 프레임의 렌더 자세와 같은지는 확인되지 않았다. 로봇에 붙은 카메라의 USD 자세가 물리 뒤에 갱신되는지가 문제다. S3 에서 확인한다.
 - **옵션 `--path-display {overlay,stage,off}`, 기본 overlay.**
   - `stage` 는 지금 동작(장면 prim)이다. 수정 전 기록을 재현하는 **진단용**으로만 쓴다(총괄 결정).
-    - 운영·평가 런처는 `stage` 를 받으면 시작을 거부한다. 대상은 `isaac_live.sbatch`·`riib_scene.sbatch`·`slam_survey.sbatch`, 그리고 `isaac_bundle.py check` 다(실행 목록에 `--path-display stage` 가 있으면 거부).
-    - 러너는 `stage` 일 때 결과에 진단 표시를 남긴다.
   - `off` 는 표시를 아예 하지 않는다.
-  - **조건 비교: `near_tracking.POST_MEASUREMENT_ARGUMENTS` 에 `"path_display": "stage"` 로 넣는다(권고).**
-    - 옛 측정 기록(키 없음)은 수정 전, 곧 stage 로 읽힌다.
-    - 그래서 overlay 실행을 옛 측정 기록과 비교하면 조건이 다르다고 거부된다. 수정 전·후를 섞지 않는다는 규칙을 도구가 지킨다.
-    - stage 로 낸 진단 실행은 옛 기록과 맞는다.
-    - RUN_SPECIFIC 에 넣으면 비교에서 빠져 섞임을 막지 못하므로 그렇게 하지 않는다.
-    - 대가가 있다. 근접 추적 측정 기록(S4 계열)과 비교해야 하는 새 실행은 측정을 다시 할 때까지 거부된다. S4 는 지금 사용자 보류다.
-  - 비교 판정 도구(k1_judge·lcr_judge 같은 것)는 두 팔의 `arguments.path_display` 가 같은지 확인한다.
+  - **stage 차단(세 겹):**
+    - 러너: `--path-display stage` 는 환경 변수 `FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=1` 이 있을 때만 받는다. 없으면 인자 검사(`--check-args` 포함)에서 거부한다. S3 의 stage+overlay 함께 그리기도 같은 변수가 있어야 한다.
+    - 운영·평가 런처: `isaac_live.sbatch`·`riib_scene.sbatch`·`slam_survey.sbatch` 는 이 변수를 설정하지 않는다. `EXTRA_ARGS` 에 `--path-display stage` 가 있으면 시작을 거부한다.
+    - 묶음 preflight: `isaac_bundle.py check` 가 실행 목록의 인자·환경에 stage 나 진단 변수가 있으면 거부한다.
+  - **기록 방식:**
+    - `recorded_arguments` 는 `stage` 일 때 이 인자를 기록하지 않는다. 옛 기록과 같게 하려는 것이다(기존 "기본값이면 기록하지 않음" 규칙과 같은 꼴).
+    - `overlay`·`off` 는 기록한다.
+    - 그래서 키가 없으면 수정 전 동작(장면 prim)이고, 있으면 수정 뒤다. `near_tracking` 의 RUN_SPECIFIC 이나 POST_MEASUREMENT 에는 넣지 않는다.
+  - 도구별 비교 결과(키 없음 = 옛 기록 또는 새 stage):
+
+| 비교 | 옛 기록 / 새 stage | overlay | off |
+|---|---|---|---|
+| `near_tracking.condition_problems`(측정 실행 대 이 실행, 인자별 대조) | 같음 | 다름(거부) | 다름(거부) |
+| `tools/s4_drive_terms.py reference_problems`(D8b 참조 대 실행, 인자 직접 대조) | 같음 | 다름 | 다름 |
+| 비교 판정 도구(두 팔, `arguments.path_display` 확인, 없으면 stage) | 같은 모드끼리만 | 같은 모드끼리만 | 같은 모드끼리만 |
+| overlay 대 off(새 실행끼리) | — | 다름(보수적으로 거부. 센서 입력이 같다는 것은 S1 이 보이지만 조건으로는 따로 둔다) | — |
+
+  - **결과로 생기는 일(총괄 결정 사항):** `--near-tracking` 실행은 수정 뒤 기본 overlay 로 내면 옛 측정 기록과의 조건 비교에서 거부된다. 측정 기록이 표시선이 찍힌 렌더에서 나왔기 때문이다.
+    - 측정을 다시 할 때까지 근접 추적 실행은 못 낸다. S4 는 지금 사용자 보류다.
+    - 섞임을 허용하려면 RUN_SPECIFIC 에 넣으면 되지만, 수정 전·후를 섞지 않는다는 결정과 어긋난다. 권고는 거부다.
 - **목적지 고리(`scene.add_destination`, `/World/Destination`)도 같은 종류의 표시 전용 prim 이다.** z 0.006 m 의 녹색 발광 고리이고 충돌체가 없다. 인식 카메라에 찍힐 수 있다(하역 칸 근처의 다음 팔레트 원거리 인식 등). **이번 수정에 넣을지는 총괄 결정 사항이다.** 권고는 같은 모드로 함께 처리하는 것이다. overlay 면 영상에만 고리를 그린다. 바닥 패치(`add_scene_boxes` 의 2 mm floor)는 장면의 바닥 표지라 실물에도 있을 수 있어 그대로 둔다.
 - 범위 밖:
   - `scene.add_path_display` 함수 자체는 그대로 둔다(`stage` 모드가 쓴다).
@@ -105,8 +116,8 @@ ws1 의 Isaac Sim 5.1.0(`/opt/isaacsim-env`, extscache: omni.replicator.core 1.1
   - 복사본에만 그리는지: 원본 배열이 바뀌지 않아야 한다.
   - 모드별 동작: overlay 는 prim 이 없고 목록에 있음, stage 는 prim, off 는 둘 다 없음
   - 옵션 파싱
-  - `POST_MEASUREMENT_ARGUMENTS` 등록. 키 없는 옛 기록은 stage 와 같고, overlay 와는 다르게 판정되는지 본다.
-  - 운영 런처의 stage 거부
+  - 기록 방식: stage 는 기록하지 않음, overlay·off 는 기록함. 위 표의 네 비교를 시험으로 고정한다(near_tracking·s4_drive_terms 의 실제 함수로).
+  - stage 차단 세 겹: 진단 변수 없는 러너 인자 검사, 런처 `EXTRA_ARGS`, `isaac_bundle.py check`
   - `recorded_arguments` 관련 기존 시험(`tests/unit/test_pallet_mass.py` 등)의 갱신
 - 재생 게이트 runs29: 29/29(`SETUP_INPUTS=recorded`). 기대이지 검증이 아니다. 29/29 가 안 나오면 원인을 먼저 총괄에 보고한다(총괄 지시). 재기록은 총괄이 정한다.
 - ws1 전체 pytest.
@@ -147,6 +158,9 @@ ws1 의 Isaac Sim 5.1.0(`/opt/isaacsim-env`, extscache: omni.replicator.core 1.1
   - P3 2 건(가림 표기, 선 폭·z·근평면)도 반영했다.
   - 2 회차 P2 2 건을 처리했다:
     - 모드 일치 검사의 위치: `POST_MEASUREMENT_ARGUMENTS` 로 옮기고 판정 도구가 확인
+  - 3 회차 P2 2 건을 처리했다:
+    - 도구마다 옛 기록 기본값 처리가 다른 문제: stage 는 기록하지 않고 overlay·off 는 기록하는 방식으로 바꿨다. 그래서 near_tracking 과 s4_drive_terms 가 같게 판정한다. 비교 표를 넣었다.
+    - stage 차단 위치: 러너 진단 변수, 런처, 묶음 check 세 겹으로 했다.
     - 라이브 카메라 모델과 렌더 시각
 - ③ agy(Gemini 4 Hydrogen High) "적히지 않은 전제", ①②를 보지 않은 독립 검토. 처리:
   - 리프트·SLAM: `annotation_pose` 대신 카메라 객체 자세를 쓴다. 경로 좌표는 지금 prim 과 같다.
