@@ -323,15 +323,15 @@ class ProfileRunner:
             return row
         if self.state != "running":
             return None
-        seg = self.segment
+        seg, index = self.segment, self.i  # the row names this cycle's segment, even when the cycle ends it
         self._row_s = None
         if not obs.armed or obs.mode != "TELEOP":
             # the gate that disarmed (an operator STOP, a lease, command age or feedback loss) stays in the result
             self._end("void:disarmed" + (f":{obs.stop}" if obs.stop else ""))
-            return self._row(now_ns, obs, seg)
+            return self._row(now_ns, obs, seg, index)
         if obs.stop:
             self._end(f"void:stopped:{obs.stop}")
-            return self._row(now_ns, obs, seg)
+            return self._row(now_ns, obs, seg, index)
         self.seg_t += obs.dt_s
         if seg.kind == "presteer":
             self.req_mps, self.req_kappa = 0.0, seg.kappa
@@ -346,7 +346,7 @@ class ProfileRunner:
                 self._next(now_ns)
         else:
             self._drive(now_ns, obs, seg)
-        return self._row(now_ns, obs, seg)
+        return self._row(now_ns, obs, seg, index)
 
     def _drive(self, now_ns: int, obs: Observation, seg: Segment) -> None:
         lim = self.limits
@@ -381,10 +381,12 @@ class ProfileRunner:
             return
         self.req_mps, self.req_kappa = seg.speed_mps, seg.kappa_at(self.s_m, self.drive_t)
 
-    def _row(self, now_ns: int, obs: Observation, seg: Segment | None) -> dict:
+    def _row(self, now_ns: int, obs: Observation, seg: Segment | None, index: int | None = None) -> dict:
+        """``index``: the segment the row is about (``seg``'s), not the one the cycle moved on to -- a label names
+        one segment in every row (m_analysis.trials; arrival-day rehearsal defect D3)."""
         s_m = self.s_m if self._row_s is None else self._row_s
         return {"t": "profile", "host_ns": now_ns, "trial": self.trial, "state": self.state,
-                "seg": self.i, "label": None if seg is None else seg.label, "s_m": s_m,
+                "seg": self.i if index is None else index, "label": None if seg is None else seg.label, "s_m": s_m,
                 "req_mps": self.req_mps, "req_kappa": self.req_kappa,
                 "arb_mps": obs.target_mps, "arb_limit": None if obs.permit is None else list(obs.permit),
                 "arb_policy": obs.policy, "deadman": obs.deadman,
