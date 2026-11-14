@@ -1,0 +1,12 @@
+# m2_q003_left_fwd -- registered in docs/plans/2026-11-15-m1-m3-registration.md 4.1.
+# M2 q held at +0.03 rad (left), fwd: 1.5 m at 0.10 m/s.
+# Do not edit after registration: a change is a new registration (the same speed history in every trial).
+schema: drive_profile/1
+name: m2_q003_left_fwd
+load: empty
+segments:
+  - {label: presteer_zero, presteer_q_rad: 0.0}
+  - {label: presteer, presteer_q_rad: 0.03}
+  - {label: still_pre, hold_s: 60.0}
+  - {label: arc, speed_mps: 0.1, q_rad: 0.03, distance_m: 1.5}
+  - {label: still_post, hold_s: 60.0}
