@@ -364,3 +364,21 @@ def test_after_a_drive_ends_into_a_stand_a_message_rewritten_before_the_next_cyc
         rig.tick()
     # the boundary cycle just ran: an operator message arriving now must not raise the speed the bridge zeroed
     assert rig.r.rewrite(rig.msg())["speed_ratio"] == 0.0
+
+
+def test_every_row_names_one_segment_so_the_g8_trials_read_a_recorded_trial():
+    # arrival-day rehearsal defect D3: the row of the cycle a segment ends in carried the next segment's index with
+    # the finished segment's label, and m_analysis.trials() refused the record ("label names two segments")
+    from forklift_core.plant import m_analysis as ma
+
+    rig = Rig()
+    rig.start()
+    rig.tick(300)
+    pairs = {(r["seg"], r["label"]) for r in rig.rows if r["state"] == "running"}
+    by_label: dict = {}
+    for seg, label in pairs:
+        by_label.setdefault(label, set()).add(seg)
+    assert all(len(segs) == 1 for segs in by_label.values()), by_label
+    tr = ma.trials([{"t": "profile", **r} for r in rig.rows])
+    assert [t.result for t in tr] == ["done"]
+    assert list(tr[0].spans) == ["presteer", "still_pre", "arc", "still_post"]
