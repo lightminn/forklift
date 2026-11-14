@@ -30,7 +30,7 @@
 1. `device` 를 따라간(stat -L) 문자 장치가 Unix98 pty slave(주번호 136–143)이고 그 st_rdev 가 `bench.json` 의 `pts_rdev` 와 같다. USB CDC(`ttyACM*`, 166)·UART(`ttyS*` 4, `ttyUSB*` 188)·`/dev/forklift-mcu` 류는 `not_a_pty` 로 거부한다.
 2. `model_pid` 가 살아 있고 `/proc/<pid>/stat` 의 시작 시각이 `model_starttime` 과 같으며 `/proc/<pid>/exe` 가 `model_exe`(파일 이름 `mcu_model`)다.
 3. 그 프로세스가 `/dev/ptmx` fd 를 쥐고 있고, 그 fd 의 `/proc/<pid>/fdinfo/<fd>` `tty-index` 가 `device` 의 pts 번호(소번호)와 같다 — 곧 **다리가 여는 slave 의 짝 master 를 모형 자신이 쥐고 있다.**
-4. 읽을 수 있는 다른 프로세스 가운데 같은 `tty-index` 의 master 를 쥔 것이 없다(socat 같은 중계가 끼면 거부).
+4. 모형 말고는 같은 `tty-index` 의 master 를 쥔 프로세스가 없다(socat 같은 중계가 끼면 거부). **완전 열거, 실패면 닫음(Codex 2 회차 P2):** `/proc` 의 모든 pid 를 돌고, 같은 uid 의 프로세스는 `fd`·`fdinfo` 를 끝까지 읽어야 한다 — 읽기 오류(EACCES 등)나 순회 중 사라진 프로세스·닫힌 fd(ENOENT)가 하나라도 있으면 한 번 다시 돌고, 그래도 생기면 거부(`peer_scan_incomplete`)한다. 다른 uid 의 프로세스는 읽을 수 없다; pty master 는 만든 프로세스가 fd 를 넘겨야만 얻을 수 있으므로 다른 uid 가 쥐는 경우는 우리 프로세스가 넘긴 경우뿐이다 — 이 가정을 남는 한계로 적고, 실행기는 root 로 띄우지 않는다(root 로 띄우면 거부).
 - 이 조건들은 실 MCU 가 pty 중계 뒤에 있는 경우를 막는다: 중계에서는 다리 쪽 master 를 중계 프로세스가 쥐므로 3 이 어긋난다.
 - `/proc`·stat 은 주입할 수 있게 해 시험에서 USB CDC·UART·죽은 pid·재사용된 pid(시작 시각 다름)·다른 exe·master 를 안 쥠·다른 프로세스도 쥠·rdev 다름을 각각 단언한다.
 
@@ -40,7 +40,8 @@
 - 켜지면 바닥 허가 함수가 `no_scan` 대신 `(1.0, "synthetic_permit")` 을 돌려준다. 1 s 마다, 그리고 `ReconnectingLink` 가 다시 열 때마다 1–4 번 조건 전부(경로가 가리키는 장치의 st_rdev 포함)를 다시 보고, 한 번이라도 어긋나면 그 세션 동안 `(0.0, "synthetic_permit_lost")` 로 닫는다(다시 열리지 않음).
 - 다리의 다른 게이트(무장·리스·명령 나이·STATE 나이·S6 속도 감시·운용자 확인 네 개 `--empty-forks --forks-clear --lift-low --no-open-recovery`)는 그대로다. 우회하지 않는다 — 모형 `drive` 설정(출력 열림·e-stop 배선)에서 이 게이트들이 통과하는지 자체가 리허설의 확인 대상이고, 막히면 결함으로 기록한다.
 - 기록: 머리 줄에 `"synthetic": {"permit": true, "bench": <bench.json 내용>}`, 시작 출력의 `floor_permit` 에 `synthetic_permit (rehearsal, model MCU only)`.
-- **분석 진입점의 차단(Codex P2):** 합성 표지를 읽는 공용 함수 `forklift_core.live.synthetic.refuse_or_mark(header, allow_synthetic)` 를 두고, 기록을 읽는 모든 측정 진입점 — `bringup.py analyze`·`clock`·`kth`, G8 의 기록 적재(텔레옵 기록·IMU·참값), 등록 판정 도구 — 이 머리 줄에 `synthetic` 이 있으면 기본으로 거부(exit 2)한다. 리허설에서는 `--allow-synthetic` 를 줘야 돌고, 그 출력의 맨 위에 `"synthetic_inputs": true` 와 `"not_for_judgement": true` 를 붙인다. 여러 기록을 합치는 분석은 하나라도 합성이면 같은 규칙이다.
+- **모든 기록 작성자의 표지(Codex 2 회차 P2):** 기록을 쓰는 도구(`bringup.py record`·`step`·`commission`·`scenario`, `teleop_bridge.py --record`)는 `--device` 가 pty 이면 `--bench BENCH_JSON` 을 요구하고 `model_peer_refusal` 이 None 일 때만 열며, 그때 머리 줄에 `"synthetic": {"bench": …}` 를 늘 넣는다. pty 인데 bench 가 없거나 확인이 실패하면 거부한다(실 MCU 는 pty 로 붙지 않는다). 실 장치(ttyACM 등)의 기록에는 표지가 없다.
+- **분석 진입점의 차단(Codex P2):** 합성 표지를 읽는 공용 함수 `forklift_core.live.synthetic.refuse_or_mark(header, allow_synthetic)` 를 두고(머리 줄의 `device` 가 pty 경로인데 `synthetic` 이 없는 기록도 합성으로 본다 — 표지가 빠진 옛 리허설 기록 대비), 기록을 읽는 모든 측정 진입점 — `bringup.py analyze`·`clock`·`kth`, G8 의 기록 적재(텔레옵 기록·IMU·참값), 등록 판정 도구 — 이 머리 줄에 `synthetic` 이 있으면 기본으로 거부(exit 2)한다. 리허설에서는 `--allow-synthetic` 를 줘야 돌고, 그 출력의 맨 위에 `"synthetic_inputs": true` 와 `"not_for_judgement": true` 를 붙인다. 여러 기록을 합치는 분석은 하나라도 합성이면 같은 규칙이다.
 - "운영 런처": 지금 텔레옵 다리를 띄우는 런처는 저장소에 없다(다리를 직접 띄움). 위 장치 확인이 실차 경로의 거부이고, 앞으로 생길 운영 런처는 이 인자를 넘기지 않는다는 규칙을 다리 도움말과 이 문서에 적는다.
 
 ### 2.4 운용자 대역 `tools/rehearsal_operator.py`
@@ -65,15 +66,17 @@
 
 ## 4. 시험(먼저 쓴다)
 
-- `model_peer_refusal`: pty·살아 있는 mcu_model·그 slave 의 master 를 모형만 쥠 → None. USB CDC(166)·UART(4, 188) → `not_a_pty`. rdev 다름, 죽은 pid, 시작 시각 다른 pid(재사용), 다른 exe, 이름이 mcu_model 아님, master 를 안 쥠, 다른 프로세스도 같은 master 를 쥠 → 각 사유. 실제 모형을 `--link-fd` 로 띄운 통합 시험 하나.
+- `model_peer_refusal`: 열거 중 같은 uid 프로세스의 읽기 오류·사라짐·fd 교체가 다시 돌아도 생기면 `peer_scan_incomplete`, root 로 실행하면 거부. pty·살아 있는 mcu_model·그 slave 의 master 를 모형만 쥠 → None. USB CDC(166)·UART(4, 188) → `not_a_pty`. rdev 다름, 죽은 pid, 시작 시각 다른 pid(재사용), 다른 exe, 이름이 mcu_model 아님, master 를 안 쥠, 다른 프로세스도 같은 master 를 쥠 → 각 사유. 실제 모형을 `--link-fd` 로 띄운 통합 시험 하나.
 - 다리 `--synthetic-permit`: 거부 사유가 있으면 exit 2 와 사유, 기록 파일을 만들지 않음. 켜졌을 때 허가 `synthetic_permit`, 모형이 죽으면 `synthetic_permit_lost` 로 닫힘, 기록 머리 줄의 `synthetic`.
 - 분석 진입점: 합성 머리 줄이면 `--allow-synthetic` 없이는 exit 2, 있으면 결과 맨 위 `synthetic_inputs`·`not_for_judgement`(bringup analyze·clock·kth, G8 적재, 여러 기록 합침).
-- 다리 재연결: 경로가 다른 장치를 가리키게 바뀌면 허가가 `synthetic_permit_lost` 로 닫히고 다시 열리지 않음.
+- 다리 재연결: 경로가 다른 장치를 가리키게 바뀌면 허가가 `synthetic_permit_lost` 로 닫히고 다시 열리지 않음. 실행 중 재검사에서 열거가 불완전해도 닫힘.
+- 기록 작성자: pty 장치에 bench 없음·확인 실패 → 거부, 통과 → 머리 줄 `synthetic`. 실행기가 master fd 를 `pass_fds` 로 모형에 물려주고 자신은 닫는지(모형만 쥠).
 - 운용자 대역·IMU·참값 대역: 모형 E2E 로 G6 시행 하나가 `done` 으로 끝나고, 그 기록으로 G8 이 결과를 내는지.
 
 ## 5. 설계 검토
 
 - Codex 적대 1 회차: P1 pty 끝 배치(다리와 모형이 같은 slave 를 열 뻔함) → 모형이 master 를 쥐는 `--link-fd`, 확인 3·4 를 master 소유·단독으로 바꿈. P2 중계·재연결·pid 재사용 → 조건 1 에 rdev 대조, 2 에 시작 시각, 4 에 단독 소유, 재연결마다 전부 재검사·한 번 어긋나면 세션 동안 닫음. P2 합성 표지가 분석을 막지 못함 → 측정 진입점 기본 거부와 `--allow-synthetic`. P2 게이트 → 단계별 모형 인자와 우회 금지를 적음. P2 운용자 대역 프로토콜 → 순서·간격·끊김을 적고 E2E 로 단언. P3 범위 → 1 절 표를 절마다 좁힘.
+- Codex 2 회차: P2 열거 불완전을 없음으로 취급 → 같은 uid 완전 열거·실패면 닫음·root 거부·다른 uid 가정을 한계로. P2 모든 기록의 표지 → pty 장치면 모든 기록 작성자가 bench 확인 뒤 표지, 분석은 pty 기록의 표지 누락도 합성으로 봄.
 
 ## 6. 기간·자원
 
