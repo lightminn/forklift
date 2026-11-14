@@ -234,3 +234,103 @@ def test_mode_overlay_noheader_for_pre_513_comparators(tmp_path):
     assert bs.run_fields(write_run(tmp_path, "k1r_K1_random_1_s2", pre, header_mode=None), mode="overlay-noheader")["refused"]
     # the baseline's own runs keep both checks
     assert bs.run_fields(write_run(tmp_path, "pfb_R_random_1_s3", done_result(), header_mode=None), mode="overlay")["refused"]
+
+
+# --- review round 1: near attempts, malformed records, pairing guards, real records ---------------------------------
+
+def test_near_attempts_per_try(tmp_path):
+    r = done_result(observation_attempts=[attempt(), attempt(rec=None, pocket="no_pallet"), attempt(rec=None)],
+                    near_capture={"status": "done", "far_attempt": 1, "near_attempt": 3})
+    r["observation_attempts"][1]["pocket_observation"]["reason"] = "no_expected_candidate"
+    f = bs.run_fields(write_run(tmp_path, "pfb_R_random_1_s8", r), mode="overlay")
+    assert f["near_attempts"] == [["no_pallet", "no_expected_candidate"], ["valid", None]] or \
+        f["near_attempts"] == [("no_pallet", "no_expected_candidate"), ("valid", None)]
+    agg = bs.aggregate([f])["all"]["near_attempts"]
+    assert agg == {"n": 2, "valid": 1, "refusals": {"no_pallet:no_expected_candidate": 1}}
+
+
+def test_top_level_not_an_object_is_refused(tmp_path):
+    d = tmp_path / "pfb_R_random_1_s9"
+    (d / "run").mkdir(parents=True)
+    (d / "run" / "result.json").write_text("[1, 2]")
+    assert "not an object" in bs.run_fields(d, mode="overlay")["refused"]
+
+
+def test_missing_success_leaves_the_denominator(tmp_path):
+    r = done_result()
+    r.pop("success")
+    rows = [bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s1", r), mode="overlay"),
+            bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s2", done_result()), mode="overlay")]
+    assert "success" in rows[0]["missing"]
+    assert bs.aggregate(rows)["all"]["success"] == [1, 1]
+
+
+def test_near_capture_without_status_is_missing(tmp_path):
+    f = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s3", done_result(near_capture={"far_attempt": 1})), mode="overlay")
+    assert f["near_status"] is None and "near_capture.status" in f["missing"]
+
+
+def test_malformed_events_are_not_comparable(tmp_path):
+    bad_cusp = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s4", done_result(cusp_replans=[{"time_s": "x"}])),
+                             mode="overlay")
+    assert bad_cusp["transport_cusp_replans"] is None and "cusp_replans" in bad_cusp["missing"]
+    assert bad_cusp["transport_reached"] is True
+    twice = copy.deepcopy(TRANSITIONS) + [{"from": "lower", "to": "transport", "time_s": 300.0}]
+    rep = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s5", done_result(transitions=twice)), mode="overlay")
+    assert rep["transport_reached"] is None and "transitions" in rep["missing"]
+    elem = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s6", done_result(observation_attempts=[attempt(), 3])),
+                         mode="overlay")
+    assert elem["far_selected"] is None and "observation_attempts" in elem["missing"]
+
+
+def test_empty_transitions_mean_transport_not_reached(tmp_path):
+    r = done_result(success=False, phase="observe", transitions=[], cusp_replans=[], failure_reason="Tracking timeout in observe")
+    f = bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s7", r), mode="overlay")
+    assert f["transport_reached"] is False and f["transport_cusp_replans"] == 0
+
+
+def test_other_tracking_kind_is_labelled(tmp_path):
+    r = done_result(success=False, phase="transport", failure_reason="Tracking timeout in transport",
+                    tracking_failure={"phase": "transport", "tracking": {"failure": "timeout"}})
+    assert bs.run_fields(write_run(tmp_path, "pfb_R_line_2_s8", r), mode="overlay")["transport_tracking_failure"] == \
+        "other:timeout"
+
+
+def test_pairing_refuses_duplicates_and_mixed_arms(tmp_path):
+    a1 = bs.run_fields(write_run(tmp_path / "a", "pfb_R_random_1_s0", done_result()), mode="overlay")
+    a2 = bs.run_fields(write_run(tmp_path / "b", "pfb_R_random_1_s0", done_result()), mode="overlay")
+    other = bs.run_fields(write_run(tmp_path / "c", "pfb_S_random_1_s1", done_result()), mode="overlay")
+    with pytest.raises(ValueError, match="twice"):
+        bs.pair_differences([a1, a2], [a1])
+    with pytest.raises(ValueError, match="mixes arms"):
+        bs.pair_differences([a1, other], [a1])
+
+
+RECORDS = json.loads((Path(__file__).with_name("baseline_summary_records.json")).read_text())
+
+
+def real_run(tmp_path, name, header_mode=None):
+    rec = RECORDS[name]
+    return write_run(tmp_path, name, rec["result"], header_mode=header_mode, defaults=rec["riib_defaults"])
+
+
+def test_real_records_read_as_recorded(tmp_path):
+    """Trimmed copies of restored records (plan 4.2): the pre-fix curvature B0 and the post-fix K1 re-check."""
+    f = bs.run_fields(real_run(tmp_path, "lcr_B0_random_1_s0"), mode="prefix")
+    assert f["refused"] is None and f["missing"] == []
+    assert (f["success"], f["failure_class"], f["failure_stage"]) == (False, "tracking", "transport")
+    assert f["transport_tracking_failure"] == "cross_track"
+    assert f["far_selected"] is True and f["near_status"] == "done" and f["near_attempts"] == [("valid", None)]
+    g = bs.run_fields(real_run(tmp_path, "lcr_B0_aisle_rack_s2"), mode="prefix")
+    assert (g["success"], g["failure_class"], g["near_status"]) == (False, "perception", "failed")
+    assert g["near_attempts"][0][0] == "no_pallet"
+    h = bs.run_fields(real_run(tmp_path, "k1r_K1_aisle_rack_s0"), mode="overlay-noheader")
+    assert h["refused"] is None and h["success"] is True and h["delivery_error_m"] > 0
+    assert h["transport_cusp_replans"] >= 1 and h["simulated_time_s"] > 0
+    assert h["applied"]["near_observe_arrival"] == "0.05,0.05" and h["applied"]["path_display"] == "overlay"
+    assert "NEAR_END_STAND=on" in h["riib_defaults"]
+    k = bs.run_fields(real_run(tmp_path, "k1r_K1_random_1_s24"), mode="overlay-noheader")
+    assert (k["success"], k["failure_stage"]) == (False, "return_home")
+    # the pre-fix record is no overlay run, and the post-fix one no pre-fix run
+    assert bs.run_fields(real_run(tmp_path / "x", "lcr_B0_random_1_s0"), mode="overlay")["refused"]
+    assert bs.run_fields(real_run(tmp_path / "y", "k1r_K1_aisle_rack_s0"), mode="prefix")["refused"]

@@ -42,6 +42,7 @@ APPLIED = ("near_end_stand", "near_observe_arrival", "layer_latency_budget", "re
            "d7_reapproach_hold", "docking_degenerate_continue", "lidar_keepout_m", "encoder_model", "deterministic",
            "path_display")
 MODES = ("overlay", "stage", "prefix", "overlay-noheader")
+TRACKING_KINDS = ("cross_track", "endpoint_heading")  # plan 4.1; anything else is reported as other:<kind>
 
 
 def parse_name(name: str) -> tuple[str, str, int]:
@@ -90,24 +91,43 @@ def mode_refusal(mode: str, recorded, header) -> str | None:
     raise ValueError(f"mode {mode!r}")
 
 
+class Malformed(ValueError):
+    """A record's list holds an element of another shape: the metric reading it is not comparable."""
+
+
+def _num(v) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise Malformed(f"not a number: {v!r}")
+    return float(v)
+
+
 def _window(transitions: list, phase: str) -> tuple[float, float] | None:
-    """[entered, left) of ``phase`` from the transitions (left = inf while the run ended in it), None if never entered."""
+    """[entered, left) of ``phase`` from the transitions (left = inf while the run ended in it), None if never entered.
+    An element of another shape, or ``phase`` entered twice, is Malformed (the window would be a guess)."""
     start = end = None
     for t in transitions:
-        if t.get("to") == phase and start is None:
-            start = float(t["time_s"])
+        if not isinstance(t, dict):
+            raise Malformed(f"transition {t!r}")
+        if t.get("to") == phase:
+            if start is not None:
+                raise Malformed(f"{phase} entered twice")
+            start = _num(t.get("time_s"))
         elif t.get("from") == phase and start is not None and end is None:
-            end = float(t["time_s"])
+            end = _num(t.get("time_s"))
     if start is None:
         return None
     return start, (end if end is not None else float("inf"))
 
 
 def _count_in(events: list, window) -> int:
+    for e in events:
+        if not isinstance(e, dict):
+            raise Malformed(f"event {e!r}")
+        _num(e.get("time_s"))
     if window is None:
         return 0
     lo, hi = window
-    return sum(1 for e in events if isinstance(e, dict) and e.get("time_s") is not None and lo <= float(e["time_s"]) < hi)
+    return sum(1 for e in events if lo <= float(e["time_s"]) < hi)
 
 
 def run_fields(run: Path, mode: str) -> dict:
@@ -119,6 +139,9 @@ def run_fields(run: Path, mode: str) -> dict:
         r = json.loads((run / "run" / "result.json").read_text())
     except (OSError, ValueError) as exc:
         out["refused"] = f"result.json unreadable: {exc}"
+        return out
+    if not isinstance(r, dict):
+        out["refused"] = f"result.json holds a {type(r).__name__}, not an object"
         return out
     args = r.get("arguments") if isinstance(r.get("arguments"), dict) else {}
     header = _header_mode(run)
@@ -134,6 +157,8 @@ def run_fields(run: Path, mode: str) -> dict:
         return v
 
     out["success"] = r.get("success") if isinstance(r.get("success"), bool) else None
+    if out["success"] is None:
+        missing.append("success")
     out["phase"] = r.get("phase")
     reason = r.get("failure_reason")
     out["failure_reason"] = reason
@@ -142,8 +167,15 @@ def run_fields(run: Path, mode: str) -> dict:
     out["failure_stage"] = ct_survey.stage_of(reason, out["phase"]) if failed else None
 
     attempts = get("observation_attempts", list)
+    near = get("near_capture", dict)
+    if near is not None and not near.get("status"):
+        missing.append("near_capture.status")
+    out["near_status"] = None if near is None else (near.get("status") or None)
+    if attempts and not all(isinstance(a, dict) for a in attempts):
+        missing.append("observation_attempts")
+        attempts = None
     if attempts:
-        a0 = attempts[0] if isinstance(attempts[0], dict) else {}
+        a0 = attempts[0]
         rec = a0.get("recognition") if isinstance(a0.get("recognition"), dict) else {}
         pocket = a0.get("pocket_observation") if isinstance(a0.get("pocket_observation"), dict) else {}
         out["far_attempts"] = len(attempts)
@@ -157,23 +189,39 @@ def run_fields(run: Path, mode: str) -> dict:
     replans = r.get("observe_replans")
     out["observe_replans"] = len(replans) if isinstance(replans, list) else (replans if isinstance(replans, int) else None)
 
-    near = get("near_capture", dict)
-    out["near_status"] = None if near is None else (near.get("status") or "absent")
+    # Each near capture attempt (ct_survey's rule: an expected site, or after the far attempt) and its result, so a
+    # refused first try and a later adopted one are told apart (plan 4.1)
+    if attempts is None or near is None:
+        out["near_attempts"] = None
+    else:
+        state = {"near_capture": near}
+        out["near_attempts"] = [((a.get("pocket_observation") or {}).get("status") or
+                                 ("capture_failed" if a.get("capture_failure") else "no_observation"),
+                                 (a.get("pocket_observation") or {}).get("reason") or a.get("capture_failure"))
+                                for i, a in enumerate(attempts) if ct_survey._is_near(i, a, state)]
 
     transitions = get("transitions", list)
     cusps = get("cusp_replans", list)
-    if transitions is None:
-        out.update(transport_reached=None, transport_cusp_replans=None, return_cusp_replans=None)
-    else:
-        tw, rw = _window(transitions, "transport"), _window(transitions, "return_home")
-        out["transport_reached"] = tw is not None
-        out["transport_cusp_replans"] = None if cusps is None else _count_in(cusps, tw)
-        out["return_cusp_replans"] = None if cusps is None else _count_in(cusps, rw)
+    out.update(transport_reached=None, transport_cusp_replans=None, return_cusp_replans=None)
+    if transitions is not None:
+        try:
+            tw, rw = _window(transitions, "transport"), _window(transitions, "return_home")
+            out["transport_reached"] = tw is not None
+        except Malformed:
+            missing.append("transitions")
+            tw = rw = None
+        if cusps is not None and out["transport_reached"] is not None:
+            try:
+                out["transport_cusp_replans"] = _count_in(cusps, tw)
+                out["return_cusp_replans"] = _count_in(cusps, rw)
+            except Malformed:
+                missing.append("cusp_replans")
     tf = r.get("tracking_failure")
     out["transport_tracking_failure"] = None
     if isinstance(tf, dict) and tf.get("phase") == "transport":
         tracking = tf.get("tracking") if isinstance(tf.get("tracking"), dict) else {}
-        out["transport_tracking_failure"] = tracking.get("failure") or "unknown"
+        kind = tracking.get("failure")
+        out["transport_tracking_failure"] = kind if kind in TRACKING_KINDS else f"other:{kind}"
 
     de = r.get("delivery_error_m")
     out["delivery_error_m"] = float(de) if isinstance(de, (int, float)) else None
@@ -212,6 +260,7 @@ def _ratio(rows, key) -> list | str:
 
 def _group(rows: list) -> dict:
     ok = [r for r in rows if r["success"]]
+    tries = [t for r in rows if r.get("near_attempts") is not None for t in r["near_attempts"]]
     near = [r["near_status"] for r in rows if r["near_status"] is not None]
     tcr = [r["transport_cusp_replans"] for r in rows if r["transport_cusp_replans"] is not None]
     rcr = [r["return_cusp_replans"] for r in rows if r["return_cusp_replans"] is not None]
@@ -220,12 +269,15 @@ def _group(rows: list) -> dict:
         faults.update(r.get("path_display_faults") or {})
     return {
         "n": len(rows),
-        "success": [len(ok), len(rows)],
+        "success": _ratio(rows, "success"),
         "far_selected": _ratio(rows, "far_selected"),
         "far_pocket_valid": _ratio(rows, "far_pocket_valid"),
         "far_capture_failures": sum(1 for r in rows if r.get("far_capture_failure")),
         "observe_replans": sum(r["observe_replans"] or 0 for r in rows),
         "near_status": dict(Counter(near)) if near else "not_comparable",
+        "near_attempts": ({"n": len(tries), "valid": sum(1 for t in tries if t[0] == "valid"),
+                           "refusals": dict(Counter(f"{t[0]}:{t[1]}" for t in tries if t[0] != "valid"))}
+                          if any(r.get("near_attempts") is not None for r in rows) else "not_comparable"),
         "transport_reached": _ratio(rows, "transport_reached"),
         "transport_tracking_failures": dict(Counter(r["transport_tracking_failure"] for r in rows
                                                     if r["transport_tracking_failure"])),
@@ -233,7 +285,7 @@ def _group(rows: list) -> dict:
         "return_cusp_replans": ({"total": sum(rcr), "runs_with": sum(1 for x in rcr if x)} if rcr else "not_comparable"),
         "delivery_error_m": _stats([r["delivery_error_m"] for r in ok]),
         "delivery_error_failed_runs": [[r["name"], r["delivery_error_m"]] for r in rows
-                                       if not r["success"] and r["delivery_error_m"] is not None],
+                                       if r["success"] is False and r["delivery_error_m"] is not None],
         "simulated_time_s": _stats([r["simulated_time_s"] for r in ok]),
         "failure_classes": dict(Counter(r["failure_class"] for r in rows if r["failure_class"])),
         "failure_stages": dict(Counter(r["failure_stage"] for r in rows if r["failure_stage"])),
@@ -256,10 +308,24 @@ PAIR_KEYS = ("success", "phase", "failure_class", "failure_stage", "failure_reas
              "transport_tracking_failure", "delivery_error_m", "simulated_time_s")
 
 
+def _keyed(rows: list, label: str) -> dict:
+    """{(scene, seed): row} of one set: one arm, each scene and seed once (else the pairing would be a guess)."""
+    kept = [r for r in rows if r["refused"] is None]
+    arms = {r["arm"] for r in kept}
+    if len(arms) > 1:
+        raise ValueError(f"set {label} mixes arms {sorted(arms)}")
+    out: dict = {}
+    for r in kept:
+        k = (r["scene"], r["seed"])
+        if k in out:
+            raise ValueError(f"set {label} holds {k} twice ({out[k]['name']}, {r['name']})")
+        out[k] = r
+    return out
+
+
 def pair_differences(a_rows: list, b_rows: list) -> dict:
     """Same scene and seed in two sets: the pairs whose outcome (success, end phase, failure class) differs."""
-    a = {(r["scene"], r["seed"]): r for r in a_rows if r["refused"] is None}
-    b = {(r["scene"], r["seed"]): r for r in b_rows if r["refused"] is None}
+    a, b = _keyed(a_rows, "a"), _keyed(b_rows, "b")
     common = sorted(set(a) & set(b))
     changed = []
     for k in common:
