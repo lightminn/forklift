@@ -35,11 +35,12 @@ import sys
 import time
 from pathlib import Path
 
+from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, writer_marker
 from forklift_core.mcu_link.messages import Arm, ClearFaults, FaultFlag, Mode, RejectReason, StateFlag
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bringup  # noqa: E402
-from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
+from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
 
 ARM_PERIOD_S = 0.01
 REFUSAL_SEEN_NS = 30_000_000  # a written ARM has reached the MCU and its result a STATE (three STATE periods)
@@ -191,6 +192,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--duty", type=float, default=0.05)
     ap.add_argument("--limit-s", type=float, default=2.0, help="the build's commission_time_ms in seconds")
     ap.add_argument("--baud", type=int, choices=sorted(_BAUDS))
+    ap.add_argument("--bench", help="rehearsal only: the bench's bench.json on a pty device (the model MCU)")
     args = ap.parse_args(argv)
     if args.stop_grace_ms < GRACE_MIN_MS:
         print(json.dumps({"result": "refused", "why": f"stop-grace-ms under {GRACE_MIN_MS:g}: too short to judge"}))
@@ -198,13 +200,26 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 < abs(args.duty) <= bringup.COMMISSION_DUTY_MAX:
         print(json.dumps({"result": "refused", "why": "duty out of the commissioning tool's range"}))
         return 2
+    try:
+        synthetic = writer_marker(args.device, args.bench)
+    except (SyntheticRefused, OSError, ValueError) as exc:
+        print(json.dumps({"result": "refused", "why": str(exc)}))
+        return 2
     with open(args.out, "a", encoding="utf-8") as out:
-        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud), out, allow_locked=True, commission=True)
+        out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "rearm_hold_check.py",
+                              "device": args.device, "device_id": device_identity(args.device),
+                              "synthetic": synthetic, "start_wall": time.time(),
+                              "start_mono_ns": time.monotonic_ns()}) + "\n")
+        out.flush()
+        opener = open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"])
+        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud, opener=opener), out, allow_locked=True,
+                          commission=True)
         try:
             result = run(b, AXES[args.axis], args.duty, args.limit_s, args.stop_grace_ms)
         except bringup.Refused as exc:
             result = {"result": "refused", "why": str(exc)}
-    print(json.dumps(result, default=str))
+    print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
+                     default=str))
     return 0 if result["result"] == "ok" else 1
 
 

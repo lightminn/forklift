@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import os
 import secrets
 import sys
 import time
@@ -32,7 +33,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import drive_profile as dprof  # noqa: E402
+from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
+from forklift_core.live.synthetic import SyntheticRefused, bench_opener, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
 from forklift_core.mcu_link.messages import McuState  # noqa: E402
@@ -46,7 +49,7 @@ from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
-from real_mcu_link import _BAUDS, ReconnectingLink  # noqa: E402
+from real_mcu_link import _BAUDS, ReconnectingLink, open_raw  # noqa: E402
 
 CYCLE_S = 0.02
 
@@ -58,6 +61,40 @@ HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.5, zero_
 def no_scan(curvatures, direction, check_speed):
     """Bring-up 6's floor permission: no scan source, nothing allowed (design 8). Bring-up 7 replaces it."""
     return 0.0, "no_scan"
+
+
+class SyntheticPermit:
+    """The rehearsal's model-only floor permission (docs/design/2026-11-15-arrival-day-rehearsal.md 2.3): open while
+    the model-peer check passes on the device -- the full check (with its scan of other processes) once at start, in
+    ``main``; here, every call, the path's device, and every ``recheck_s`` the cheap ``model_alive_refusal`` (the
+    full scan in the 20 ms loop stalled it past the STATE age gate) -- and closed for good once one fails. Never on a real device: a USB CDC or
+    UART link fails the check's first condition before this is ever built."""
+
+    def __init__(self, device: str, bench: dict, *, recheck_s: float = 1.0, clock=time.monotonic_ns,
+                 check=model_peer.model_alive_refusal) -> None:
+        self.device, self.bench, self.recheck_ns, self.clock, self.check = device, bench, int(recheck_s * 1e9), clock, check
+        self.lost: str | None = None
+        self.next_ns = 0
+
+    def __call__(self, curvatures, direction, check_speed):
+        if self.lost is None:
+            # every call: the path still names the bench's pty -- a reopen onto another device (a link the
+            # ReconnectingLink just re-established) closes the permit in the same cycle (Codex impl review P1)
+            try:
+                if os.stat(self.device).st_rdev != self.bench.get("pts_rdev"):
+                    self.lost = "device_changed"
+            except OSError:
+                self.lost = "no_device"
+        if self.lost is None:
+            now = self.clock()
+            if now >= self.next_ns:
+                why = self.check(self.device, self.bench)
+                if why is not None:
+                    self.lost = why
+                self.next_ns = now + self.recheck_ns
+        if self.lost is not None:
+            return 0.0, "synthetic_permit_lost"
+        return 1.0, "synthetic_permit"
 
 
 def welcome(epoch: int) -> dict:
@@ -322,7 +359,22 @@ def main(argv=None) -> int:
     ap.add_argument("--markers", action="store_true")
     ap.add_argument("--profile", help="drive profile YAML (G6): Enter on this terminal starts a trial; needs --record")
     ap.add_argument("--duration-s", type=float)
+    ap.add_argument("--bench", help="rehearsal only: the bench's bench.json; required on a pty device (the model "
+                                   "MCU), refused on any other; the record is marked synthetic")
+    ap.add_argument("--synthetic-permit", action="store_true",
+                    help="rehearsal only: open the floor permission on the model MCU (needs --bench and a passing "
+                         "model-peer check; refused on a real device). No operating launcher passes it.")
     args = ap.parse_args(argv)
+    try:
+        synthetic = writer_marker(args.device, args.bench)
+    except (SyntheticRefused, OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if args.synthetic_permit and synthetic is None:
+        print("--synthetic-permit is for the rehearsal's model MCU only: give a pty device with --bench", file=sys.stderr)
+        return 2
+    if synthetic is not None:
+        synthetic["permit"] = bool(args.synthetic_permit)
     confirmed = {n for n in rt.CONFIRMATIONS if getattr(args, n)}
     missing = sorted(set(rt.CONFIRMATIONS) - confirmed)
     if missing:
@@ -348,7 +400,7 @@ def main(argv=None) -> int:
             return 2
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
-                        "host_boot_id": host_boot_id(), "start_wall": time.time(),
+                        "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
                         "start_mono_ns": time.monotonic_ns()})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
@@ -356,8 +408,11 @@ def main(argv=None) -> int:
     started = False
     out: dict = {}
     try:
-        bridge = Bridge(ReconnectingLink(args.device, baud=args.baud), confirmed=confirmed, record=record,
-                        profile=profile)
+        floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
+        link = (ReconnectingLink(args.device, baud=args.baud) if synthetic is None  # the real path: unchanged
+                else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"])))
+        bridge = Bridge(link, confirmed=confirmed, record=record,
+                        profile=profile, floor_permit=floor)
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)
@@ -376,7 +431,8 @@ def main(argv=None) -> int:
         server.start()
         started = True
         print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
-                          "floor_permit": "no_scan (bring-up 7 adds the scan)"}), flush=True)
+                          "floor_permit": ("synthetic_permit (rehearsal, model MCU only)" if args.synthetic_permit
+                                           else "no_scan (bring-up 7 adds the scan)")}), flush=True)
         try:
             run(bridge, duration_s=args.duration_s)
         except KeyboardInterrupt:
