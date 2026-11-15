@@ -5,6 +5,7 @@ recording on a real core -- not a real motor's currents, directions or stopping 
 
 import io
 import itertools
+import hashlib
 import json
 import math
 import os
@@ -393,6 +394,14 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
         # record design 3: a header first, a footer last with the counts, STATE rows with their read time, and the
         # STATEs taken while closing (after the last cycle row) are in it
         assert rows[0]["t"] == "header" and rows[0]["schema"] == tb.RECORD_SCHEMA
+        # D4 (lead 2026-11-15): the record names the configuration it was made with, by content hash
+        cfg = rows[0]["config"]
+        vehicle = tb.load_real_vehicle(tb.VEHICLE_YAML)
+        assert cfg["vehicle"]["calibration_id"] == vehicle.calibration_id
+        assert cfg["vehicle"]["sha256"] == hashlib.sha256(tb.VEHICLE_YAML.read_bytes()).hexdigest()
+        assert cfg["vehicle"]["path"] == "config/real/vehicle.yaml"
+        assert cfg["bridge_params"]["sha256"] == hashlib.sha256(tb.BRIDGE_PARAMS_YAML.read_bytes()).hexdigest()
+        assert cfg["profile"] is None
         assert rows[-1]["t"] == "footer" and rows[-1]["dropped"] == 0 and rows[-1]["write_errors"] == 0
         states = [i for i, r in enumerate(rows) if r.get("t") == "state"]
         cycles = [i for i, r in enumerate(rows) if "t" not in r]
@@ -544,3 +553,14 @@ def test_an_mcu_silence_of_60ms_is_a_disconnect(run):
     details = [d for x in r.recs[i:] for d in x.get("stale_detail", [])]
     assert "stale" in _events(r.recs[i:]) and details, r.recs[i:i + 5]
     assert details[0].get("why") in ("age", "mcu_gap") and not r.b.host.authorized
+
+
+def test_the_config_identity_names_a_profile_by_hash_and_name(tmp_path):
+    prof = REPO / "config" / "profiles" / "m1_m3" / "m1_fwd_v010.yaml"
+    cfg = tb.config_identity(str(prof))
+    assert cfg["profile"] == {"path": "config/profiles/m1_m3/m1_fwd_v010.yaml",
+                              "sha256": hashlib.sha256(prof.read_bytes()).hexdigest(), "name": "m1_fwd_v010"}
+    other = tmp_path / "p.yaml"
+    other.write_bytes(prof.read_bytes() + b"# edited\n")
+    assert tb.config_identity(str(other))["profile"]["sha256"] != cfg["profile"]["sha256"]
+

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import itertools
 import json
 import os
@@ -391,6 +392,31 @@ class Bridge:
 
 
 RECORD_SCHEMA = "teleop_bridge_record/1"
+VEHICLE_YAML = REPO / "config" / "real" / "vehicle.yaml"
+BRIDGE_PARAMS_YAML = REPO / "config" / "real" / "teleop_bridge.yaml"
+
+
+def _file_identity(path: Path) -> dict:
+    data = Path(path).read_bytes()
+    try:
+        shown = str(Path(path).resolve().relative_to(REPO))
+    except ValueError:
+        shown = str(path)
+    return {"path": shown, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def config_identity(profile_path: str | None) -> dict:
+    """What the record was made with (D4 design 2, lead 2026-11-15): the vehicle file with its calibration id, the
+    bridge's encoder-speed premises and the drive profile, each by content hash -- an analysis given another file
+    is refused instead of silently using different numbers."""
+    vehicle = {**_file_identity(VEHICLE_YAML), "calibration_id": load_real_vehicle(VEHICLE_YAML).calibration_id}
+    out = {"vehicle": vehicle, "bridge_params": _file_identity(BRIDGE_PARAMS_YAML), "profile": None}
+    if profile_path is not None:
+        import yaml
+
+        name = (yaml.safe_load(Path(profile_path).read_text(encoding="utf-8")) or {}).get("name")
+        out["profile"] = {**_file_identity(Path(profile_path)), "name": name}
+    return out
 
 
 OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun
@@ -474,7 +500,7 @@ def main(argv=None) -> int:
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
-                        "start_mono_ns": time.monotonic_ns()})
+                        "start_mono_ns": time.monotonic_ns(), "config": config_identity(args.profile)})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
     bridge = server = None
