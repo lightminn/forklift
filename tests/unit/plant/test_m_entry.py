@@ -109,7 +109,11 @@ def test_synthetic_refused_without_allow_and_marked_with():
 
 def test_synthetic_truth_alone_refused():
     out = make(synthetic=False)
+    # Codex D4 impl review P1: a truth whose method is synthetic but whose header is unmarked is refused
+    assert "method synthetic" in why_of(lambda: run(out, allow_synthetic=False))
+    out["truth"][0]["method"] = "A_floor_marks"  # an unmarked real-looking day
     assert "synthetic_inputs" not in run(out, allow_synthetic=False)
+    out["truth"][0]["method"] = "synthetic"
     out["truth"][0]["synthetic"] = True
     assert why_of(lambda: run(out, allow_synthetic=False)).startswith("truth")
     assert run(out)["not_for_judgement"] is True
@@ -201,3 +205,32 @@ def test_other_measurements_get_identity_and_void_handling_only():
 def test_drift_sign_is_odo_minus_truth():
     d = run(make(true_yaw_per_m=0.01))["trials"][0]["values"]["d_rad_per_m"]["value"]
     assert math.copysign(1, d) == -1
+
+
+def test_a_record_without_a_started_profile_is_refused():
+    out = make()
+    out["record"] = [r for r in out["record"] if r.get("t") != "profile_start"]
+    assert "profile_start" in why_of(lambda: run(out))
+
+
+def test_an_extrapolated_mcu_time_voids_the_trial(monkeypatch):
+    out = make()
+    real = me._state_times
+
+    def extra(rows):
+        srows, times, fi, fits, ex = real(rows)
+        return srows, times, fi, fits, [True] * len(ex)  # as if every STATE lay outside the fit's device range
+
+    monkeypatch.setattr(me, "_state_times", extra)
+    res = run(out)
+    assert all(tr["status"] == "void" and "mcu_clock_extrapolated" in tr["why"] for tr in res["trials"])
+
+
+def test_an_imu_that_misses_the_bias_search_reports_imu_coverage_not_no_window():
+    """Codex D4 impl review P2: coverage is the whole bias-window search the record allows, not the trial only."""
+    out = make()
+    first_move = min(r["host_ns"] for r in out["record"] if r.get("t") == "profile" and r.get("drive_mps"))
+    out["imu"] = [r for r in out["imu"] if r.get("t") != "imu" or r["host_ns"] > first_move - 1_000_000_000]
+    res = run(out)
+    assert res["trials"][0]["status"] == "valid" and "imu_coverage" in res["trials"][0]["imu"]["why"]
+

@@ -67,6 +67,10 @@ def _finite(*v) -> bool:
 def _check_truth(rows, trial_ids, hdr) -> dict:
     h = _header(rows, "truth")
     _need(h.get("method") in TRUTH_METHODS, "truth: unknown method")
+    # a synthetic method must carry the synthetic mark, or synthetic truth would pass unmarked into judgeable values
+    # (Codex D4 impl review P1)
+    _need(h.get("method") != "synthetic" or h.get("synthetic") is True,
+          "truth: method synthetic without the synthetic mark")
     _need(h.get("body_point") == "rear_axle_center", "truth: body_point is not rear_axle_center")
     _need(h.get("frame") == "floor", "truth: frame is not floor")
     rec = h.get("record") or {}
@@ -130,9 +134,10 @@ def _check_field(rows, hdr, starts) -> None:
 
 
 def _identity_profile(rec_rows, profile, trs) -> None:
-    for r in rec_rows:
-        if r.get("t") == "profile_start" and not r.get("refused"):
-            _need(r.get("profile") == profile["name"], "profile_start names another profile than the given one")
+    starts = [r for r in rec_rows if r.get("t") == "profile_start" and not r.get("refused")]
+    _need(bool(starts), "the record has no started profile (profile_start)")  # Codex D4 impl review P3
+    for r in starts:
+        _need(r.get("profile") == profile["name"], "profile_start names another profile than the given one")
     segs = profile.get("segments") or []
     labels = {s["label"] for s in segs}
     speeds = {s["label"]: float(s["speed_mps"]) for s in segs if "speed_mps" in s}
@@ -159,7 +164,7 @@ def _identity_profile(rec_rows, profile, trs) -> None:
 def _state_times(rec_rows):
     """STATE rows -> (rows, host ns on the fits' clock, fit index per row, fits)."""
     fits = clock_fits_from_rows(rec_rows)
-    rows, times, fi = [], [], []
+    rows, times, fi, extra = [], [], [], []
     key, g, hb = None, -1, None
     for r in rec_rows:
         if r.get("t") == "header":
@@ -174,8 +179,14 @@ def _state_times(rec_rows):
         f = fits[g]
         rows.append(r)
         fi.append(g)
-        times.append(int(round(f.to_host_ns(r["mcu_time_us"])[0])) if f.valid else int(h))
-    return rows, np.asarray(times, dtype=np.int64), fi, fits
+        if f.valid:
+            t_host, extrapolated = f.to_host_ns(r["mcu_time_us"])[:2]
+            times.append(int(round(t_host)))
+            extra.append(bool(extrapolated))
+        else:
+            times.append(int(h))
+            extra.append(False)
+    return rows, np.asarray(times, dtype=np.int64), fi, fits, extra
 
 
 def _imu_series(rows, stream):
@@ -244,11 +255,18 @@ class _Imu:
         self.fits = [f.summary() for f in g["fits"]]
         self.dropped = dict(gyro=g["dropped"], accel=a["dropped"])
 
-    def trial(self, t0, t1, drive0, drive1) -> dict:
-        """The report-only IMU block of one trial: bias windows before and after, N per window, heading between."""
+    def trial(self, t0, t1, drive0, drive1, rec_span=None) -> dict:
+        """The report-only IMU block of one trial: bias windows before and after, N per window, heading between.
+        ``rec_span``: the record's first and last STATE time -- the bias-window search runs ``quiet_max_s`` before
+        the first drive and after the last, as far as the record goes, and the IMU must cover that whole search
+        (entry design 2; Codex impl review P2), not only the trial window."""
         if self.why or self.t is None:
             return dict(report_only=True, why=list(self.why))
-        if self.t[0] > t0 or self.t[-1] < t1:
+        reach = int(REGISTERED["quiet_max_s"] * 1e9)
+        lo, hi = min(t0, drive0 - reach), max(t1, drive1 + reach)
+        if rec_span is not None:
+            lo, hi = max(lo, rec_span[0]), min(hi, rec_span[1])
+        if self.t[0] > lo or self.t[-1] < hi:
             return dict(report_only=True, why=["imu_coverage"])
         if any(t0 < b < t1 for b in self.bounds):
             return dict(report_only=True, why=["imu_clock_break"])
@@ -368,6 +386,8 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
             return void("truth_missing")
     for g in {ctx["fi"][i] for i in range(i0, i1 + 1)}:
         _need(ctx["fits"][g].valid, f"trial {tr.trial}: the MCU clock fit over the trial is invalid")
+    if any(ctx["extrapolated"][i] for i in range(i0, i1 + 1)):
+        return void("mcu_clock_extrapolated")  # the fit must cover the trial (entry design 2; Codex impl review P2)
     drives = [lb for lb in ctx["drive_labels"] if lb in tr.spans]
     d0, d1 = tr.spans[drives[0]][0], tr.spans[drives[-1]][1]
     counts = [(s.wheel_count_left, s.wheel_count_right) for s in ctx["states"]]
@@ -384,7 +404,7 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
                                                  max(s_m, default=None))
     if budget is not None:
         out["truth_budget"] = budget
-    out["imu"] = ctx["imu"].trial(t0, t1, d0, d1)
+    out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
     return out
 
 
@@ -417,12 +437,13 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None
     if field_rows is not None:
         _check_field(field_rows, rec, starts)
-    srows, times, fi, fits = _state_times(rec_rows)
+    srows, times, fi, fits, extrapolated = _state_times(rec_rows)
     states = [sample_from_row(r).state for r in srows]
     odo = ma.odometry_pose(states, cfg, max_gap_s=MAX_GAP_S)
     upv = _unit(_vec3(up))
     imu = _Imu(imu_rows, upv, _standing(times, states, cfg))
     ctx = dict(truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
+               extrapolated=extrapolated,
                states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),
                drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu)
     results = [_trial(t, kind, rec_rows, ctx) for t in trs if trial is None or t.trial == trial]
