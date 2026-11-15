@@ -1,6 +1,6 @@
 # D5 — 링크 신선도를 MCU 시각 간격으로 판정 (설계 메모, 2026-11-15)
 
-상태: 초안(크레딧 opus 초안을 담당 세션이 대조) · 결정: 총괄 (가) 채택, 조건 1–5 고정 · 구현 전 · 독립 검토 전
+상태: 설계(구현 전 — 3 절 이하의 "한다·둔다·더한다"는 모두 구현할 규칙이며, 지금 코드에는 없다) · 결정: 총괄 (가) 채택, 조건 1–5 고정 · 독립 검토 9 절
 
 ## 1. 배경과 측정
 
@@ -83,11 +83,24 @@ newest = accepted[-1]
 
 - 철회는 `_auth` 를 `_NONE` 으로 만든다. `_NONE` 에서 `_advance_auth` 는 아무것도 하지 않으므로(`mcu_host.py:279-316`), 묶음 안에서 철회된 권한이 같은 묶음의 뒤쪽 STATE 로 되살아나는 경로는 지금도 없다. 다시 무장하려면 운전자의 새 `request_arm`(신선도 검사 포함)이 필요하다. 이 성질을 시험으로 고정한다(5.1 추가).
 - 앞으로 가는 전이를 newest 로만 하면, zero DRIVE 의 echo·조향은 가장 새 STATE 의 값이 된다.
-- `tick(now)` 의 나이 검사는 같은 식에 `now` 를 넣는다. 호스트 루프가 도는 동안에는 호스트 시계로 판정되므로, MCU 시계가 틀려도 STATE 가 50 ms − d 넘게 안 오면 `stale` 이 난다.
+- `tick(now)` 의 나이 검사는 같은 식에 `now` 를 넣는다. 호스트 루프가 주기 c(20 ms)로 도는 동안에는 이 검사가 호스트 시계로만 판정한다. 그래서 MCU 시계와 상관없이, 실제 STATE 도착 간격이 `state_max_age_s − d + c` 를 넘으면 반드시 `stale` 이 난다. d ≥ 0 이면 최악 70 ms 다.
+  - 검토 ② 의 반례(MCU 시계 0.5 배, STATE 가 호스트 기준 80 ms 마다, d = 10 ms)에서는 +40 ms tick 의 나이가 50(통과), +60 ms tick 의 나이가 70 > 50 이라 `stale` 이 난다. 시험으로 고정한다.
+  - 여기서 c 는 설정 주기가 아니라 **호스트가 실제로 돈 간격** g 다. 놓칠 수 있는 실제 도착 간격의 상한은 `state_max_age_s − d + g` 이고, g 는 `host_gap_max_s`(150 ms) 넘으면 그 자체로 `stale` 이다. g = 20 ms 일 때의 70 ms 는 **지금 규칙의 입도와 같다**. 지금도 나이가 50 ms 를 넘은 것을 다음 tick 에서야 보므로, 놓치는 상한이 50 + 20 ms 다. 그러므로 (가)는 정상 루프에서 이 상한을 늘리지 않는다. 검토 ② 3 회차의 60 ms 반례(나이 최대 50, 통과)는 이 상한 안에 든다.
+  - 호스트 루프 자체가 느려 사이에 tick 이 없는 경우는 두 가지가 막는다. 하나는 3.12 의 `loop_slow` 이고, 다른 하나는 `"mcu"` 규칙을 `rate_verified` 뒤에만 켠다는 3.11 의 전제다. 이 두 장치가 아직 듣지 않는 동안 한 번 긴 공백이 생기는 경우는, **검출 상한과 운동 상한을 따로** 본다(검토 ② 4 회차).
+  - **검출 상한**(호스트가 알아차리는 때): `state_max_age_s − d + g` 이고, g ≤ 150 ms 이면 최대 200 ms 다. g 가 150 ms 를 넘으면 그 순간 `host_gap` 이다. 정확히 150 ms 는 경계라 통과한다.
+  - **운동 상한**(MCU 가 옛 명령으로 움직이는 시간): 호스트의 검출과 무관하게 MCU 가 강제한다. MCU 의 마감은 `echo 의 방출 시각 + min(valid, command_timeout_ms)` 다(계약 2 절). 여기서 `valid = min(cap, expires − rx(echo))`, `expires` 는 결정 + 100 ms 다.
+    - 호스트가 멈춘 동안에는 새 DRIVE 가 나가지 않는다. 그래서 MCU 는 마지막 결정에서 100 ms 안에 마감을 맞는다.
+    - 호스트가 깨어나 DRIVE 를 다시 보내려면 `_motion_check` 가 신선도를 통과해야 한다. 그 DRIVE 는 묶음의 가장 새 STATE 를 echo 하므로, 마감은 방금 방출된 STATE 에서 센다.
+    - STATE 가 안 오는 채로 호스트만 돌 때도 같다. 마감은 echo 된 STATE 의 방출 시각 + 150 ms 를 넘지 않고, 그 전에 `tick` 이 `stale` 을 낸다(정상 루프에서 ≤ 70 ms).
+  - 정리하면 검출이 200 ms 까지 늦어질 수는 있지만, 그동안 차가 옛 명령으로 가는 시간은 지금과 같은 DRIVE 수명 안이다. 150 ms 경계의 실제 동작은 5.2 시험으로 확인한다.
 
 ### 3.3b 수신 시각은 실제 읽은 시각
 
-지금은 한 주기에 읽은 STATE 가 모두 주기 시작 시각을 받는다(`real_mcu_link.py:165-191`, 실제 읽은 시각 `last_read_ns` 는 `:177` 에서 기록에만 쓰임). 검토 ③ 의 지적이 맞다. 주기 시작과 `read` 사이에서 GIL·GC 로 30 ms 가 멈추면 두 가지가 틀어진다. 첫째, 나이가 30 ms 작게 잡힌다. 둘째, `valid_after_echo_ms` 가 MCU 마감을 30 ms 늦게 잡아 계약 2 절의 보수성이 깨진다. `"mcu"` 모드에서는 `on_bytes` 에 `read` 직후의 monotonic 시각을 넘긴다. 그러면 DRIVE 유효시간 계산의 `rx` 도 같은 값이 되어, 3.5 의 1 ms 미만 문제도 함께 없어진다. DelayBound 기준점의 쓰기 시각도 같은 이유로 `os.write` 직후 시각으로 바꾼다(지금은 주기 시작 `now_ns`, `real_mcu_link.py:136`). 그래야 송신 쪽 지연이 기준점을 부풀리지 않는다(검토 ③ 5).
+지금은 한 주기에 읽은 STATE 가 모두 주기 시작 시각을 받는다(`real_mcu_link.py:165-191`, 실제 읽은 시각 `last_read_ns` 는 `:177` 에서 기록에만 쓰임). 검토 ③ 의 지적이 맞다. 주기 시작과 `read` 사이에서 GIL·GC 로 30 ms 가 멈추면 두 가지가 틀어진다. 첫째, 나이가 30 ms 작게 잡힌다. 둘째, `valid_after_echo_ms` 가 MCU 마감을 30 ms 늦게 잡아 계약 2 절의 보수성이 깨진다. `"mcu"` 모드에서는 시각을 시스템 호출 경계에서 **안전한 쪽**으로 찍는다(구현 예정, 지금 코드는 `real_mcu_link.py:136`·`:178` 둘 다 주기 시작 `now_ns`).
+
+- **수신 시각**은 `os.read` 가 돌아온 **뒤**에 찍는다. 이 값은 바이트가 실제로 도착한 시각보다 늦다. 그래서 세 가지가 모두 보수적인 쪽으로 움직인다. ① `valid_after_echo_ms = expires − rx` 가 짧아진다. ② `D` 에 들어가는 `(rx − mcu)` 가 커진다. ③ 묶음 사이의 호스트 간격이 커진다. 나이 `now − rx + D` 에서는 `rx` 가 지워지므로(3.4) 이득도 손해도 없다. 3.5 의 1 ms 미만 마감 초과도 함께 없어진다.
+- 한 번의 `read` 로 받은 여러 프레임의 개별 도착 시각은 알 수 없다. 모두 같은 읽은 시각을 받는다. 앞쪽 프레임에는 늦은 쪽(보수적) 값이다. 처리 중의 멈춤은 다음 `read` 의 시각에 들어간다. 시각 오차의 실측 분포는 기록 열(5.1a)로 구현 뒤 측정에서 낸다.
+- **DelayBound 기준점의 쓰기 시각**은 `os.write` 를 부르기 **전**에 찍는다. 실제 송신보다 이른 값이라 왕복 `a_b = rx − w` 가 커지므로, 상한이 작게 나오지 않는다. 주기 시작보다 늦은 값이므로, 주기 시작과 쓰기 사이의 멈춤이 기준점을 부풀리는 일(검토 ③ 5)도 줄어든다. 시각을 찍은 뒤 실제 호출까지의 멈춤은 상한을 키우는 쪽(안전)이다. 다만 거짓 `stale` 원인이 될 수 있으므로 같은 기록 열로 잰다.
 
 ### 3.4 조건 3 — 버퍼 지연의 상한
 
@@ -150,8 +163,26 @@ newest = accepted[-1]
 
 `mcu_gap` 판정과 DelayBound 는 둘 다 MCU 시계가 A3(≤ 100 ppm) 안이라는 전제에 기댄다. 그런데 H743 은 HSE 가 `WAIT_CYCLES` 안에 준비되지 않으면 HSI 로 폴백하고(`firmware/boards/weact_h743/src/clock.c:91-99`), 그 시계원은 STATE 에 실리지 않는다. HSI 의 오차는 데이터시트상 % 단위다(확인 필요: H743 HSI 정확도 수치). 그래서 `"mcu"` 모드에 온라인 감시를 둔다.
 
-- DelayBound 기준점 쌍(호스트 쓰기 시각 ↔ MCU 시각)의 2 s 이상 떨어진 두 점으로 MCU 시계 속도 `r = Δmcu / Δhost` 의 범위를 왕복 상한 안에서 구한다. `|r − 1| > ρ_max` 가 확실하면(범위 전체가 밖) `clock_rate` 사건을 내고 `gap_clock` 을 그 세션 동안 `"host"` 로 되돌린다. 값: `ρ_max = 0.005`(5,000 ppm). A3 의 50 배라 정상 크리스털에서는 나지 않고, HSI 폴백(% 단위)은 잡는 크기다. 확인 필요: 실차 HSE 측정 뒤 값 재검토.
+- **속도 범위**: 기준점 하나는 (쓰기 시각 `w`, 그 seq 를 처음 알린 STATE 의 MCU 시각 `m`, 그 다음 STATE 의 수신 `rx`)다. 그 MCU 시각에 해당하는 호스트 시각은 `[w, rx]` 안에 있다. 두 기준점 i<j 사이의 속도 범위는 다음과 같다.
+  `r ∈ [Δm / (rx_j − w_i), Δm / (w_j − rx_i)]`
+  이 식은 경로 지연이 비대칭이든, 그 지연이 변하든 그대로 성립한다. 지연은 두 구간 안에만 들어가기 때문이다. 범위의 폭은 약 `(a_i + a_j) / Δhost` 다(a = 왕복). 2 s 기준점 창으로는 왕복 30 ms 짜리 둘에서 3% 라, 0.5% 를 가를 수 없다(검토 ② P2).
+- 그래서 속도 감시는 DelayBound 의 2 s 창과 따로, **세션의 첫 기준점**(왕복이 가장 짧은 것을 유지)과 현재 기준점으로 기선을 길게 잡는다. 판정은 세 가지다.
+  - 범위가 `[1 − ρ_max, 1 + ρ_max]` 안에 들어오면 `rate_verified`.
+  - 범위 전체가 밖이면 `clock_rate` 사건을 내고, 세션 동안 `"host"` 로 둔다.
+  - 아직 둘 다 아니면 미정.
+  왕복 30 ms 둘이면 기선 약 12 s(60 ms / 0.005)에서 판정이 나온다.
+- **`"mcu"` 규칙은 `rate_verified` 뒤에만 켠다**(검토 ② P1 의 정책안). 그 전에는 지금 규칙이다. 부팅이 바뀌거나 재연결하면 미정으로 돌아간다.
+- **다리의 무장도 `rate_verified` 뒤에만 허용한다**(검토 ② 5 회차). 지금의 DelayBound 와 엔코더 속도 판정도 A3 에 기댄다. HSI 로 부팅한 보드(% 단위 오차)에서는 2 s 기준점 창에서 지연 상한이 수십 ms 작게 나올 수 있다(검토 ③ 1). 그래서 속도가 확인되기 전의 무장은 D5 와 상관없이 근거가 없다. 다리의 `_arm_blocker`(`real_teleop.py:690-704`)에 `clock_rate_unverified` 를 더한다. 범위를 벗어난 보드는 `clock_rate` 로 그 부팅 동안 무장을 거부하고, 콘솔에 이유를 띄운다.
+  - 무장 전 판정에 필요한 기준점은 무장 전 핑이 만든다. 지금도 무장 전에는 DISARM 핑으로 기준점을 잇는다(상한이 없으면 0.1 s, 있으면 0.5 s, 세션 확인 뒤: `real_teleop.py:660-687`). 약 12 s 는 왕복이 약 30 ms 이고 핑이 끊기지 않을 때의 **최소 추정**이다. 세션 확인 재시도, 응답 유실, 지연 변동이 있으면 더 걸린다. 도착일 절차에는 "콘솔이 `rate_verified` 를 보일 때까지 기다린 뒤 무장"으로 적고, 시간을 약속하지 않는다.
+  - **판정이 미정으로 돌아가는 모든 경계에서 권한과 출력을 끊는다.** 경계는 세 가지다.
+    - 부팅이 바뀜: `boot_changed` 로 철회한다. 지금과 같다.
+    - 재연결: `disconnected` 로 철회한다. 지금과 같다.
+    - 범위를 벗어남: `clock_rate` 다. 무장 중이면 `_revoke("clock_rate")` 와 DISARM 을 큐에 넣는다. 새 규칙이다.
+    그 뒤로 판정이 다시 `rate_verified` 가 되기 전까지는 `_arm_blocker` 가 무장을 막는다. 그러므로 READY 는 판정이 확인된 상태에서만 존재한다.
+  - 비용은 세션 시작의 대기 약 12 s 다. 이득은 HSI 보드에서 무장 자체를 막는 것이다. bring-up 도구(`bringup.py`)는 DelayBound 가 없고 저속 시운전용이라 이번 범위 밖이다. 확인 필요: bring-up 에도 같은 확인을 둘지.
+- 값: `ρ_max = 0.005`(5,000 ppm). A3 의 50 배라 정상 크리스털에서는 나지 않는다. HSI 폴백(% 단위)은 잡히는 크기다. 확인 필요: 실차 HSE 측정 뒤 다시 본다.
 - `mcu_gap` 은 `(Δmcu)·(1 + ρ_max)` 로 보수적으로 환산해 판정한다(3.3a 의 ρ).
+- **운행 중에 시계가 바뀌는 경우**: H743 펌웨어는 운행 중 HSE 를 잃으면 CSS → NMI → `safe_stop` 으로 멈추고, IWDG 로 다시 시작한다(`firmware/boards/weact_h743/src/vectors.c:29-33`, CSS 켜기 `clock.c:128`). 그러므로 시계원은 부팅 때만 정해지고, 바뀌면 `boot_id` 가 바뀐다. 호스트는 그때 권한을 철회하고 속도 판정을 미정으로 되돌린다. "검증 뒤 시계가 갑자기 바뀌는" 경우는 펌웨어가 리셋으로 바꿔 놓는다. 그래도 감시는 세션 동안 계속 판정을 갱신하고, 범위를 벗어나면 그 즉시 `"host"` 로 돌아간다.
 - 펌웨어 쪽 근본 대책은 STATE 에 시계원 비트를 싣는 것이다. 이는 다음 판 계약 후보(mcu-link/4)로 넘기고, 펌웨어-H743 과 합의한다.
 
 ### 3.12 느린 루프가 계속될 때 (검토 ③ 4)
@@ -159,6 +190,7 @@ newest = accepted[-1]
 (가)를 적용하면 40–80 ms 간격으로 루프가 계속 늦게 돌아도 링크는 끊기지 않는다. 그런데 다리는 고정 주기 `cycle_s = 0.02` 로 조향 slew(`real_teleop.py:745`), 탈출 정지 거리(`:423`), 중재기 `tick_s` 를 계산한다. 그래서 느린 루프가 지속되면 이 식들이 실제보다 낙관적이 된다. 다음 두 가지를 둔다.
 
 - 다리는 실제 주기 간격 `g` 를 쓴다. 정지 거리는 `t = age + max(g, cycle_s) + OUT_LIFE`, slew 는 `min(g, 0.1)` 로 계산한다.
+- 한 번의 느린 주기(검토 ② P2)를 받아들이는 근거는 이것이다. MCU 가 옛 명령으로 움직이는 시간의 상한은 DRIVE 의 수명이다(결정 + 100 ms, `OUT_LIFE_NS`, MCU 가 강제). (가)는 이 수명을 바꾸지 않고 링크 끊김 판정만 바꾼다. 그러므로 한 번의 80 ms 간격 동안 차가 옛 명령으로 가는 시간은 지금과 같은 100 ms 안이다(텔레옵 0.2 m/s 에서 20 mm 이하). 이를 확인하는 시험을 둔다(5.1a).
 - 1 s 창에서 `g > 40 ms` 인 주기가 3 번 이상이면 `loop_slow` STOP 을 낸다. 운전자가 다시 무장할 수 있게 링크 끊김과는 구분해 기록한다. 값은 측정 근거 없이 정한 첫 값이다. 1,080 s 기록에 대 보면 40 ms 넘은 주기 7 번 가운데 1 s 안에 3 번 모인 곳은 없다(부하 창 687.1–687.2 s 에 2 번). 그래서 이 기록에서는 STOP 이 나지 않는다. 총괄 확인 필요.
 
 ## 4. 위험과 반례
@@ -210,10 +242,18 @@ newest = accepted[-1]
 |---|---|---|
 | `test_a_stale_gap_inside_a_batch_is_not_reauthorized_by_later_states` | READY 에서 300 ms 정지, 묶음 [s0(간격 300), s1, s2](모두 ARMED·ZERO_SEEN) | `stale(host_gap)`·철회, 묶음 끝 `authorized` 거짓, 새 `request_arm` 없이는 READY 로 돌아가지 않음 |
 | `test_forward_transitions_use_the_newest_state_of_a_batch` | ARM_PENDING 중 80 ms 정지, 묶음 [ARMED@t1 … ARMED@t8] | zero DRIVE 한 개, echo = t8 의 `mcu_time_us`, 조향 = t8 의 값 |
-| `test_receipt_time_is_the_read_time` | 주기 시작 뒤 30 ms 늦게 읽힌 STATE | `_state_rx_ns` = 읽은 시각, `valid_after_echo_ms` 가 그 시각 기준(주기 시작 기준보다 30 ms 짧음) |
+| `test_receipt_time_is_the_read_time` | 링크의 시계 함수를 주입: 주기 시작 t0, `os.read` 반환 뒤 호출이 t0+30 ms 를 돌려줌 | `on_bytes` 에 t0+30 ms 가 넘어감, `_state_rx_ns` = t0+30 ms, `valid_after_echo_ms(expires) = expires − (t0+30 ms)` |
+| `test_link_records_the_read_and_write_offsets` | 같은 주입 | 기록 행에 `read_after_cycle_ms`(=30)·`write_before_ms`(쓰기 호출 전 시각 − 주기 시작)가 실림 — 구현 뒤 측정에서 시각 오차의 실측 상한을 내는 근거 |
 | `test_reconnect_resets_the_delay_bound_before_the_first_state` | 무장 중 `transmit` 에서 LinkLost → 0.5 s 뒤 재연결, 첫 `receive` 에 단절 전 STATE 바이트 | 첫 STATE 의 `d is None`(지금 규칙), `authorized` 거짓, `health().delay_s is None`, DelayBound 기준점 0 |
-| `test_slow_mcu_clock_is_caught_by_the_host_tick` | MCU 시계 0.5 배, STATE 가 호스트 기준 100 ms 마다 | 두 번째 STATE 전에 `tick` 에서 `stale(age)` |
-| `test_clock_rate_out_of_range_falls_back_to_the_host_rule` | 기준점 쌍이 MCU 시계 1.02 배를 보임 | `clock_rate` 사건, 이후 30–80 ms 정지 묶음에서 `stale(host_gap)`(지금 규칙) |
+| `test_slow_mcu_clock_is_caught_by_the_host_tick[80,100]` | MCU 시계 0.5 배, STATE 가 호스트 기준 80·100 ms 마다, d = 10 ms, tick 20 ms | 80: +60 ms tick 에서 `stale(age)`, 100: 같음 |
+| `test_arm_waits_for_rate_verification` | 연결 직후(기선 < 12 s), 무장 전 핑만 | `request_arm` 이 `_arm_blocker` 의 `clock_rate_unverified` 로 막힘. 기선이 차면 무장 가능. 시계 1.02 배 보드는 `clock_rate` 로 무장 거부가 그 부팅 동안 유지 |
+| `test_rate_verdict_reset_drops_ready_and_output[boot_change,reconnect,out_of_range]` | READY·주행 중 세 경계 각각 | 그 주기에 `authorized` 거짓, 이후 DRIVE 0 개, out_of_range 는 DISARM 큐, 판정 회복 전 `request_arm` 거부 |
+| `test_unverified_rate_with_sustained_delay_never_moves` | 미정 구간에 STATE 가 40 ms 간격·지속 지연 60 ms, `d` 는 None 또는 작게 나옴 | ARM 거부, DRIVE 한 개도 나가지 않음 |
+| `test_mcu_rule_waits_for_rate_verification` | 세션 시작, 기준점 기선 < 12 s | 30–80 ms 정지 묶음이 `stale(host_gap)`(지금 규칙). 기선을 채워 `rate_verified` 뒤 같은 정지는 `stale` 없음 |
+| `test_rate_range_holds_under_asymmetric_and_varying_delay` | 정상 시계(1.0, 1.0001), 송신 쪽만 0–40 ms 변동하는 지연 | `clock_rate` 사건 없음, 범위가 참값을 포함 |
+| `test_write_time_is_taken_before_the_write` | 쓰기가 30 ms 걸림 | 기준점 `w` = 호출 전 시각, `a_b` 가 30 ms 를 포함 |
+| `test_one_slow_cycle_keeps_motion_within_the_drive_life` | 주행 중 한 번 g = 80 ms(모형) | MCU 가 그 DRIVE 의 수명 뒤 멈추거나 다음 DRIVE 를 받음, 옛 명령으로 가는 시간 ≤ 100 ms |
+| `test_clock_rate_out_of_range_falls_back_to_the_host_rule[0.98,1.01,1.02]` | 기준점 기선이 MCU 시계 0.98·1.01·1.02 배를 보임 | `clock_rate` 사건, 이후 30–80 ms 정지 묶음에서 `stale(host_gap)`(지금 규칙) |
 | `test_mcu_gap_uses_the_rate_margin` | MCU 간격 49.8 ms | `(1+ρ_max)` 환산으로 50.05 ms > 50 → `stale(mcu_gap)` |
 | `test_anchor_expiry_while_armed_falls_back` | 무장 중 기준점이 2 s 경계를 넘음(DRIVE 응답이 끊김) | 2 s 직전 `d` 있음·직후 `None` → 지금 규칙. 다리는 속도 무효(`no_delay_bound`)로 STOP |
 | `test_sustained_slow_loop_stops` | 다리 주기 g = 60 ms 가 1 s 에 3 번 | `loop_slow` STOP, 링크 사건 없음. g = 35 ms 반복은 STOP 없음 |
@@ -229,6 +269,7 @@ newest = accepted[-1]
 |---|---|---|
 | `test_a_bridge_stall_with_states_queued_keeps_the_arm[30,50,70,80]` | `to_ready()` → 데드맨 정지 10주기 → 정지 → 10주기 | 어떤 기록에도 `stale` 없음, `phase == "ready"`, `stop`·`disarm` 없음. MCU `ARMED` 는 측정 G ≤ 80 ms 일 때만 단언(3.6) |
 | `test_a_bridge_stall_between_mcu_expiry_and_the_cap_stops_by_the_mcu` | G ≈ 120 ms, 모형 `--stop-grace-ms 300`(실보드 값)과 100 둘 다 | 호스트 `stale` 없음, MCU 가 멈춤(`mcu_stopping`, grace 100 에서는 `mcu_disarmed` 도 허용 — 검토 ③), 그 뒤 DRIVE 가 정지를 취소하지 않음 |
+| `test_a_bridge_stall_at_the_cap_is_held_by_the_mcu_deadline` | 측정 G 가 145–150 ms(모형) | 호스트 `stale` 없음(경계 ≤), MCU 가 마지막 결정 + 100 ms 안에 STOPPING(또는 grace 100 에서 DISARMED). 깨어난 뒤 첫 DRIVE 의 echo 는 가장 새 STATE |
 | `test_a_bridge_stall_over_the_cap_disconnects[166,328]` | G = 166·327.9 ms 근처 | `stale(why=host_gap)`·`authorization_revoked`, 중재기 STOPPED, 뒤에 MCU `DISARMED` |
 | `test_mcu_silence_is_stale_end_to_end` | 모형 프로세스를 SIGSTOP 60 ms 후 SIGCONT, 다리는 계속 돔 | `stale`, 중재기 STOP. 모형의 시각은 `CLOCK_MONOTONIC`(`firmware/tools/mcu_model.c:68`)이고 주기는 `TIMER_ABSTIME` 잠(`:341`)이라, 멈춘 동안 MCU 시각 간격이 그대로 생긴다 |
 | `test_a_delayed_burst_end_to_end` | 모형 ↔ 다리 사이에 중계 pty(`DelayRelay`: 바이트를 T ms 붙잡았다 한꺼번에 흘림). ① 다리도 T = 60 ms 정지 ② 지속 지연 60 ms | 두 경우 모두 `stale(why=age)`, 철회 |
@@ -280,7 +321,7 @@ newest = accepted[-1]
 | (가) MCU 시각 간격 > 50 ms | 0(최대 30.8 ms, 643.2 s 모형 굶음) |
 | (가) 나이 `now − rx + delay_s` > 50 ms | 0(최대 34.0 ms) |
 
-`delay_s` 는 p50 20.0, p99 22.8, p999 26.3, 최대 34.0 ms 이고 None 이 6 주기다. 수신 시각이 주기 시작이라 왕복 상한에 한 주기 가까이가 들어간다. 정상 운용에서 나이 판정의 여유는 약 16 ms(50 − 34)다. 이 여유가 Jetson 에서도 남는지는 측정해야 한다(7 절 5).
+`delay_s` 는 p50 20.0, p99 22.8, p999 26.3, 최대 34.0 ms 이고 None 이 6 주기다. 수신 시각이 주기 시작이라 왕복 상한에 한 주기 가까이가 들어간다. 정상 운용에서 나이 판정의 여유는 약 16 ms(50 − 34)다. 이 기록의 시각은 주기 시작 값이다. 따라서 위 숫자는 간격 규칙(호스트 150 ms·MCU 50 ms)의 근거일 뿐, 3.3b 의 실제 읽은 시각·쓰기 시각에서 나이가 얼마일지, `rate_verified` 전 구간이 얼마나 길지의 근거는 아니다. 구현 뒤 같은 측정 도구로 다시 재고(노트북·Jetson), 그때 None 구간·판정 전 구간·속도 무효 주기를 함께 센다.
 
 ### ② Codex 적대 검토 (새 스레드, 2026-11-15)
 
@@ -293,6 +334,17 @@ newest = accepted[-1]
 | P2 묶음 안 DelayBound 갱신 순서 불명확 | 맞음 | 3.3a 의사 코드로 고정 |
 | P2 재연결 재생 시험 없음 | 맞음 | 5.1a |
 | 9 절 수치 재현 절차 없음, 16 ms 여유 불충분 가능 | 맞음 | 9 절 ① 에 계산 방법을 적음. 여유는 Jetson 측정으로 확인(7 절 5) |
+
+같은 Codex 스레드의 후속 회차:
+
+| 회차 | 지적 | 처리 |
+|---|---|---|
+| 2 | P1 느린 시계 + 계속 도착하는 STATE, P1 시각을 찍는 위치, P2 속도 범위가 2 s 창으로는 0.5 % 를 못 가름, P2 한 번의 느린 주기 | tick 의 검출 상한을 계산식으로 적음, 읽은 시각은 `read` 뒤·쓰기 시각은 `write` 앞, 구간 산술 속도 범위 + 세션 첫 기준점으로 긴 기선 + `rate_verified` 뒤에만 `"mcu"`, DRIVE 수명 논증 |
+| 3 | P1 60 ms 반례, P2 시각 오차 상한, P2 주기 정의 | 상한 `state_max_age_s − d + g` 는 지금 규칙의 입도와 같음, 운행 중 시계 변경은 펌웨어가 리셋으로 만듦(`vectors.c:29-33`), 시각 주입 시험과 기록 열 |
+| 4 | P1 g = 150 ms 에서 검출 상한 200 ms 가 DRIVE 수명보다 김 | 검출 상한과 운동 상한을 나눔(운동은 MCU 가 강제하는 마감), 145–150 ms 종단 시험 |
+| 5 | P1 `rate_verified` 전에도 무장 가능 | 다리의 무장을 `rate_verified` 뒤로(`clock_rate_unverified`) |
+| 6 | P1 구현 예정임이 안 적힘·판정이 미정으로 돌아가는 경계, P2 12 s 가 보장처럼 보임 | 상태 줄에 구현 전 설계라고 밝힘, 세 경계(부팅·재연결·범위 밖)에서 철회, 12 s 는 최소 추정 |
+| 7 | 새 P1/P2 없음 | — |
 
 ### ③ agy(Gemini 4 Hydrogen High) 적히지 않은 전제 (①② 미공개, 2026-11-15)
 
