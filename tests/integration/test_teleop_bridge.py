@@ -131,6 +131,9 @@ class Run:
         self.dev = PtyDevice(self.model.master)
         # the rate guard widened so the arm is not held tens of seconds (D5 3.11; its operating rho has its own tests)
         self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile, rate_rho=0.05)
+        # this harness is not real time: on a loaded CI node its own cycles can run late three times in a second and
+        # stop the armed truck as loop_slow (D5 3.12) -- a test artefact; loop_slow has its own unit tests
+        self.b.core.loop_slow_count = 10**6
         self.dev.watch(self.b.host)
         self.c = Console(self.b)
         self.recs = []
@@ -162,7 +165,12 @@ class Run:
         assert self.b.core.rate.verdict == "verified", self.b.core.rate.progress_s()
         self.c.request("arm")
         self.cycles(60, until=lambda r: r["phase"] == "ready")
-        assert self.b.core.phase == "ready", self.recs[-1]
+        # on a failure say why: the stops, disarms and arm waits of the arm attempt (ws1 2026-11-16 left only the
+        # last record)
+        why = [(x.get("stop"), x.get("disarm"), x.get("arm_wait"), x.get("rate"), x.get("link_events"))
+               for x in self.recs[-60:] if x.get("stop") or x.get("disarm") or x.get("link_events")
+               or x.get("arm_wait") not in (None, "older_drive_may_act")]
+        assert self.b.core.phase == "ready", (why[-8:], self.recs[-1])
 
     def nonzero(self, since=0):
         return [m for _t, m in self.dev.sent[since:] if isinstance(m, Drive)
