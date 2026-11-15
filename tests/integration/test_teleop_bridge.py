@@ -24,6 +24,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tests" / "integration"))
 import teleop_bridge as tb  # noqa: E402
+from forklift_core.live import real_teleop as rt  # noqa: E402
 from real_mcu_link import TtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
@@ -179,7 +180,21 @@ class Run:
             if key != last:
                 changes.append(key)
                 last = key
-        assert self.b.core.phase == "ready", (changes[-12:], self.c.replies[replies_before:], self.recs[-1])
+        # loop_slow is off in this harness: say whether it WOULD have stopped the truck (D5 3.12 rule: more than
+        # 40 ms three times within 1 s while armed) -- the evidence for or against the xdist-load hypothesis
+        gaps = [(x["now_ns"], x["cycle_gap_ms"]) for x in attempt if x.get("cycle_gap_ms") is not None]
+        slow = [t for t, g in gaps if g > rt.LOOP_SLOW_GAP_S * 1e3]
+        would = [t for i, t in enumerate(slow)
+                 if sum(1 for u in slow[: i + 1] if t - u <= rt.LOOP_SLOW_WINDOW_S * 1e9) >= rt.LOOP_SLOW_COUNT]
+        loop = {"cycles": len(gaps), "over_40ms": len(slow), "max_gap_ms": max((g for _t, g in gaps), default=None),
+                "would_loop_slow": bool(would)}
+        # every attempt, passed or not, into the run's log (ws1 pytest.log, via the conftest summary): the counts
+        # that confirm or refute the hypothesis even when, loop_slow being off here, nothing fails (lead 2026-11-16)
+        path = os.environ.get("FORKLIFT_LOOP_EVIDENCE")  # tests/integration/conftest.py prints it in the summary
+        if path:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({**loop, "ready": self.b.core.phase == "ready"}) + "\n")
+        assert self.b.core.phase == "ready", (loop, changes[-12:], self.c.replies[replies_before:], self.recs[-1])
 
     def nonzero(self, since=0):
         return [m for _t, m in self.dev.sent[since:] if isinstance(m, Drive)
