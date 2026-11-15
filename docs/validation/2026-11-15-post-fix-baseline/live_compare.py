@@ -169,9 +169,10 @@ def summarize(rows: list, scheduled: int = 3) -> dict:
             "start_other": dict(Counter(r["start"] or EMPTY for r in rows
                                         if r["start"] not in ("confirmed", "not_submitted"))),
         },
+        "failed_outcomes": dict(Counter(r["outcome"] or EMPTY for r in failed)),
         "failed_classes": dict(Counter(r["class"] or EMPTY for r in failed)),
         "failed_stages": dict(Counter(r["stage"] or EMPTY for r in failed)),
-        "failed_missions": [{"session": r["session"], "order": r["order"], "outcome": r["outcome"],
+        "failed_missions": [{"session": r["session"], "order": r["order"], "outcome": r["outcome"] or EMPTY,
                              "reason": r["reason"]} for r in order],
         "delivery_error_m": _stats(errors, err_missing),
         "mission_time_s": _stats(times, time_missing),
@@ -202,6 +203,8 @@ def pair_differences(new_idx: dict, pre_idx: dict, new_arm: str, pre_arm: str, s
 
 
 def compare(new_rows: list, pre_rows: list, arm_map: dict, scheduled: int = 3) -> dict:
+    if isinstance(scheduled, bool) or not isinstance(scheduled, int) or scheduled < 1:
+        raise ValueError(f"scheduled missions per session must be a whole number >= 1, not {scheduled!r}")
     wanted_pre = set(arm_map.values())
     ignored = {"new": sorted({r["arm"] for r in new_rows} - set(arm_map)),
                "prefix": sorted({r["arm"] for r in pre_rows} - wanted_pre)}

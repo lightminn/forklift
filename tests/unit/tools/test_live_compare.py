@@ -232,3 +232,28 @@ def test_prefix_survey_counts_match_its_record():
         assert total(arm, ["delivery_error_m", "missing"]) == 0
         assert total(arm, ["mission_time_s", "missing"]) == 0
     assert total("LD", ["delivery_error_m", "n"]) == 48 and total("LO", ["mission_time_s", "n"]) == 10
+
+
+def test_confirmed_without_outcome_is_a_failure_shown_as_empty(tmp_path):
+    """Codex review 1 P2: a confirmed start with no outcome counts as a failure and says so in its outcome."""
+    rows = load(tmp_path, [m("LD", "line_m", 0, 1), m("LD", "line_m", 0, 2, outcome="", de=""),
+                           m("LD", "line_m", 0, 3, outcome="no_record", de="")])
+    g = group(rows)
+    assert g["missions"]["failed"] == 2
+    assert g["failed_outcomes"] == {lc.EMPTY: 1, "no_record": 1}
+    assert [f["outcome"] for f in g["failed_missions"]] == [lc.EMPTY, "no_record"]
+
+
+def test_done_with_blank_or_text_numbers_is_missing(tmp_path):
+    rows = load(tmp_path, [m("LD", "line_m", 0, 1, de=""), m("LD", "line_m", 0, 2, de="abc", t1=""),
+                           m("LD", "line_m", 0, 3)])
+    g = group(rows)
+    assert g["delivery_error_m"]["n"] == 1 and g["delivery_error_m"]["missing"] == 2
+    assert g["mission_time_s"]["n"] == 2 and g["mission_time_s"]["missing"] == 1
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, 2.5])
+def test_scheduled_must_be_a_positive_whole_number(tmp_path, bad):
+    rows = load(tmp_path, full("LD", "line_m", 0))
+    with pytest.raises(ValueError, match="scheduled"):
+        lc.compare(rows, [], {"LD": "D"}, scheduled=bad)
