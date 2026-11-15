@@ -241,7 +241,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 - 나머지 조절값은 쓰는 PR 에서 더한다(Codex 구현 검토 P2).
   - `gain`·`q_offset`(조향 이득·추종 오프셋)은 PR ②(M2)에서 더한다.
   - `delay_s`(yaw 응답 지연)는 PR ③(M3 q 계단)에서 더한다.
-  - `bias_slope`(편향 변화율)는 여러 시행이 한 IMU 파일에 이어지는 블록 생성기와 함께 더한다. 직전 6 구간 맞춤은 시행 하나로는 만들 수 없다. 이 일은 PR ① 의 `m_entry` 편향 변화율 검사 시험에서 한다.
+  - `bias_slope`(편향 변화율)는 여러 시행이 한 IMU 파일에 이어지는 블록 생성기와 함께 더한다. 직전 6 구간 맞춤은 시행 하나로는 만들 수 없다. **편향 변화율 검사(3.3 ⑦)와 함께 PR ③ 으로 옮겼다**(2026-11-16). 이 검사는 IMU 항목을 판정에 쓸 수 있는지만 정한다. 그런데 IMU 를 판정에 쓰는 측정은 M3 주행 중 점뿐이다(등록 6.1·6.3). M1·M2 의 IMU 는 보고값이다. 그래서 PR ① 의 IMU 블록은 `report_only` 이고, 기울기 검사는 그 블록에 결과를 내지 않는다.
 - `rehearsal_imu_truth.py:56-79` 의 IMU 잡음·편향 생성을 옮긴다. 그 도구는 기존 기록에서 IMU·참값만 만들 뿐 STATE·`profile` 행은 만들지 않는다. 그래서 STATE·`profile` 생성은 새로 쓴다.
 - `profile` 행은 `ProfileRunner.step` 에 합성 관측을 넣어 실행기 자신이 쓰게 한다(D3 은 손으로 만든 행이 놓친 결함이었다). STATE 행은 `state_row`(`record_rows.py:13`)로 쓴다.
 - 조절할 수 있는 참 plant 값: `true_radius_scale`, `true_yaw_per_m`, `gain`, `q_offset`, `delay_s`, `up`, `bias`, `bias_step`, `bias_slope`, `arw`, `still_s`, `void`, `seed`.
