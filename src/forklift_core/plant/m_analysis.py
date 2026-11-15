@@ -252,6 +252,10 @@ def _cov3(c, what: str) -> np.ndarray:
     scale = float(np.abs(m).max())
     if not np.allclose(m, m.T, rtol=0.0, atol=1e-12 * scale) or np.any(np.diag(m) < 0):
         raise ValueError(f"{what} must be symmetric with non-negative variances")
+    # positive semi-definite: a matrix with non-negative variances can still have a negative eigenvalue, and the
+    # propagated variances would then hide it (Codex D4 impl review P2)
+    if float(np.linalg.eigvalsh(0.5 * (m + m.T)).min()) < -1e-12 * max(scale, 1e-300):
+        raise ValueError(f"{what} must be positive semi-definite")
     return m
 
 

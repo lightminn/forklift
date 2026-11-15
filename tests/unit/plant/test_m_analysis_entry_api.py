@@ -362,3 +362,12 @@ def test_quiet_window_gap_threshold_is_a_keyword():
     for bad in (0, -1):
         with pytest.raises(ValueError):
             ma.quiet_window(t, w, a, gap_max_ns=bad, **kw)
+
+
+def test_relative_pose_refuses_a_covariance_that_is_not_positive_semidefinite():
+    """Codex D4 impl review P2: non-negative variances but a negative eigenvalue (correlation beyond 1)."""
+    bad = np.array([[1e-6, 2e-6, 0.0], [2e-6, 1e-6, 0.0], [0.0, 0.0, 1e-8]])
+    assert np.diag(bad).min() > 0 and np.linalg.eigvalsh(bad).min() < 0
+    with pytest.raises(ValueError, match="semi-definite"):
+        ma.relative_pose((0, 0, 0), (1, 0, 0), bad, np.diag([1e-6, 1e-6, 1e-8]))
+
