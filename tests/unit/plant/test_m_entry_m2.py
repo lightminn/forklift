@@ -131,3 +131,21 @@ def test_m2_truth_over_budget():
     t = trial1(run(out, name))
     assert t["truth_budget"]["ok"] is False
     assert t["values"]["gain_measured_q"]["why"] == ["truth_over_budget"]
+
+
+def test_m2_reports_the_imu_curvature_never_judgeable_without_the_gyro_scale():
+    """Codex PR 2 review P2 (registration 4.3): IMU kappa is a report value needing the G3 scale."""
+    import yaml as _yaml
+
+    prof = _yaml.safe_load((REPO / "config" / "profiles" / "m1_m3" / "m2_q008_left_fwd.yaml").read_text())
+    out = ms.synth_trial(prof, CFG, still_s=60.0, seed=1)
+    out["truth"][0]["sigma"] = {"pose_yaw_rad": 1e-4, "pose_xy_m": 2e-4, "source": "test"}
+    res = me.analyze(out["record"], out["imu"], out["truth"], None, prof, CFG, (0.0, -1.0, 0.0),
+                     allow_synthetic=True)
+    tr = res["trials"][0]
+    k = tr["values"]["imu_kappa_inv_m"]
+    assert k["judgeable"] is False and k["why"][0] == "no_gyro_scale" and k["report_only"] is True
+    if k["value"] is not None:  # the IMU heading over the arc, over the true arc length
+        assert k["distance_source"] == "truth"
+        assert abs(k["value"] - tr["values"]["kappa_true_inv_m"]["value"]) < 0.05 * abs(tr["values"]["kappa_true_inv_m"]["value"])
+

@@ -456,6 +456,18 @@ def _m2(tr, pts, rec_rows, ctx, i0, i1, move_ns):
     return dist, vals, budget
 
 
+def _imu_kappa(imu: dict, dist: dict, direction: int) -> dict:
+    """M2's IMU curvature (registration 4.3): a report value only -- it needs the G3 gyro scale (2.6), so it is never
+    judgeable here (no_gyro_scale), with the IMU block's own reasons (entry 3.4; Codex PR 2 review P2). The distance
+    is the true arc length when there is one, else the encoder path (labelled)."""
+    s, source = (dist.get("s_true_m"), "truth") if dist.get("s_true_m") else (dist.get("s_enc_path_m"), "encoder")
+    why = ["no_gyro_scale", *imu.get("why", [])]
+    dyaw = imu.get("dyaw_rad")
+    if dyaw is None or not s:
+        return _value(None, False, why if dyaw is not None else [*why, "no_imu_heading"], report_only=True)
+    return _value(float(dyaw) / (float(s) * direction), False, why, report_only=True, distance_source=source)
+
+
 def _trial(tr, kind, rec_rows, ctx) -> dict:
     out: dict = dict(trial=tr.trial, result=tr.result)
 
@@ -503,6 +515,7 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
         if budget is not None:
             out["truth_budget"] = budget
         out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
+        out["values"]["imu_kappa_inv_m"] = _imu_kappa(out["imu"], out["distance"], out["values"]["direction"])
         return out
     if kind != "m1":
         out["values"] = dict(all=_value(None, False, "not_implemented_in_pr1"))
