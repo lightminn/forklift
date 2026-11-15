@@ -328,11 +328,13 @@ def test_the_cli_exits_armed_and_leaves_the_mcu_disarmed(mcu_model, tmp_path, mo
                     return
                 time.sleep(tb.CYCLE_S)
 
+        bridge.core.rate.rho_max = 0.05  # D5 3.11: verify within a second of anchors (the operating 0.001 needs tens)
         cycles(25)
         c.request("lease_request")
         cycles(50)
         c.request("mode_request", to="TELEOP")
         cycles(5)
+        cycles(200, until=lambda r: r.get("rate") == "verified")  # the arrival procedure's order (12.3a)
         c.request("arm")
         cycles(60, until=lambda r: r["phase"] == "ready")
         seen["ready"] = bridge.core.phase == "ready" and bridge.host.state.mode == Mode.ARMED
@@ -341,7 +343,7 @@ def test_the_cli_exits_armed_and_leaves_the_mcu_disarmed(mcu_model, tmp_path, mo
 
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
         monkeypatch.setattr(tb, "run", run_armed)
 
         class NoServer:  # the stand-in console reads the channels itself (a real server would drain them)
@@ -379,7 +381,7 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
 
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
         monkeypatch.setattr(tb.Bridge, "__init__", init)
         rec = tmp_path / "run.jsonl"
         code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--duration-s", "1.0",
@@ -440,7 +442,7 @@ def test_a_failed_start_or_ctrl_c_still_closes_the_record_with_its_footer(mcu_mo
     m = Model(mcu_model)
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
 
         class BadServer:
             def __init__(self, *a, **k):
