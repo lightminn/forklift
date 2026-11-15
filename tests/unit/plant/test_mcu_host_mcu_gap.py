@@ -268,3 +268,12 @@ def test_a_stale_event_names_the_other_clocks_gap():
     r.ready()
     (d,) = [e.detail for e in r.tick(20) + r.tick(20) + r.tick(20) if e.kind == "stale"]
     assert d["why"] == "age" and d["host_gap_s"] == pytest.approx(0.060) and d["delay_s"] == pytest.approx(0.005)
+
+
+def test_a_delayed_newest_state_names_its_delay_and_the_gaps():
+    r = McuRig()
+    r.ready()
+    r.fresh.delay_ms = 60.0
+    (d,) = [e.detail for e in r.burst(60, **ARMED_READY) if e.kind == "stale"]
+    assert d["why"] == "age" and d["delay_s"] == pytest.approx(0.060) and d["n_states"] == 6
+    assert d["host_gap_s"] == pytest.approx(0.060) and d["mcu_gap_s"] == pytest.approx(0.060)

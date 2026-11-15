@@ -330,6 +330,7 @@ class McuLinkHost:
         come back within the read: forward steps start only from an operator's ARM (``_ARM_PENDING``)."""
         newest = None
         first = True
+        rx_before, state_before, n_read = self._state_rx_ns, self._state, 0
         for s in states:
             if s.boot_id == 0:
                 events.append(HostEvent("state_invalid", {"why": "boot_id 0"}))
@@ -388,12 +389,18 @@ class McuLinkHost:
                 continue
             self._advance_auth(s, rx, events, forward=False)
             newest = s
+            n_read += 1
         if newest is None:
             return
         if self._mcu_rule() and self._state_delay_s is not None:
             age = self._age_ns(rx) / 1e9
             if age > self.cfg.state_max_age_s:
-                self._stale("age", age, events)
+                # at the receipt the age is the newest STATE's delay bound alone: it was read that long after the MCU
+                # made it -- with the host gap since the read before and the MCU-time gap over the read
+                same = state_before is not None and state_before.boot_id == newest.boot_id
+                self._stale("age", age, events, delay_s=self._state_delay_s, n_states=n_read,
+                            host_gap_s=None if rx_before is None else (rx - rx_before) / 1e9,
+                            mcu_gap_s=(newest.mcu_time_us - state_before.mcu_time_us) / 1e6 if same else None)
         if newest is self._state:
             self._advance_auth(newest, rx, events, forward=True)
 
