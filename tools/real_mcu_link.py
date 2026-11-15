@@ -69,6 +69,7 @@ class TtyLink:
         self.fd = fd
         self._cur: Outgoing | None = None
         self._off = 0
+        self._cur_t = 0  # the current frame's write time (taken before its first byte)
         self._resync = True  # the delimiter is still to go out on this opening
 
     def read_available(self) -> bytes:
@@ -98,7 +99,9 @@ class TtyLink:
             raise LinkLost(f"hangup (poll 0x{hung:x})")
         return b"".join(chunks)
 
-    def pump_writes(self, host: McuLinkHost, now_ns: int) -> None:
+    def pump_writes(self, host: McuLinkHost, now_ns: int, clock=None) -> None:
+        """``clock``: the D5 write time (design 3.3b) -- each frame's time is taken just before its first byte is
+        written (earlier than the send: a round trip from it is never under-estimated); None: ``now_ns``."""
         if self._resync:
             # before any frame is taken from the host: a frame held back by a full device stays the host's to drop
             try:
@@ -116,6 +119,8 @@ class TtyLink:
                 self._cur, self._off = host.next_frame(now_ns), 0
                 if self._cur is None:
                     return
+            if self._off == 0:
+                self._cur_t = now_ns if clock is None else clock()
             try:
                 n = os.write(self.fd, self._cur.data[self._off:])
             except BlockingIOError:
@@ -133,7 +138,7 @@ class TtyLink:
                 raise
             self._off += n
             if self._off == len(self._cur.data):
-                host.frame_written(self._cur, now_ns)
+                host.frame_written(self._cur, self._cur_t)
                 self._cur = None
 
     def abandon(self, host: McuLinkHost, now_ns: int) -> None:
@@ -151,8 +156,13 @@ class TtyLink:
 class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 
-    def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw) -> None:
+    def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw,
+                 clock=None) -> None:
+        """``clock``: the teleop bridge's D5 times (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.3b) -- the host is
+        given the time a read returned (later than the bytes' arrival: validity shorter, gaps longer) and each frame's
+        write time is taken before its write; None keeps the cycle time for both (every other tool)."""
         self.path, self.baud, self.retry_ns, self.opener = path, baud, int(retry_s * 1e9), opener
+        self.clock = clock
         self.link: TtyLink | None = None
         self._next_try = 0
         # Bring-up tx_cut (docs/design/2026-11-12-bringup-host-tools.md 2): False stops writing to the MCU while
@@ -174,11 +184,12 @@ class ReconnectingLink:
             try:
                 data = self.link.read_available()
                 if data:
-                    self.last_read_ns = time.monotonic_ns()
-                    events += host.on_bytes(data, now_ns)
-                events += host.tick(now_ns)
+                    self.last_read_ns = time.monotonic_ns() if self.clock is None else self.clock()
+                    events += host.on_bytes(data, now_ns if self.clock is None else self.last_read_ns)
+                t = now_ns if self.clock is None else self.clock()
+                events += host.tick(t)
                 if self.tx_enabled:
-                    self.link.pump_writes(host, now_ns)
+                    self.link.pump_writes(host, now_ns, self.clock)
                 return events
             except LinkLost:
                 self.link.abandon(host, now_ns)
@@ -205,7 +216,7 @@ class ReconnectingLink:
         if self.link is None or not self.tx_enabled:
             return []
         try:
-            self.link.pump_writes(host, now_ns)
+            self.link.pump_writes(host, now_ns, self.clock)
             return []
         except LinkLost:
             self.link.abandon(host, now_ns)

@@ -29,6 +29,9 @@ CAP = rt.command_cap_mps(VEH.teleop_speed_limit_mps, PARAMS)
 EPOCH = 5
 ALL = frozenset(rt.CONFIRMATIONS)
 MS = 1_000_000
+# the rate guard's rho (D5 3.11) widened so a rig verifies within a second of anchors; the 0.001 default needs a
+# baseline of tens of seconds (its own tests: test_rate_guard.py)
+TEST_RATE_RHO = 0.05
 
 
 class FakeMcu:
@@ -51,6 +54,7 @@ class FakeMcu:
         self.arms = 0
         self.arm_delay = 0  # ARM answered this many 10 ms steps late
         self.ack_frozen = False  # frames applied but last_rx_seq no longer updated (no round-trip anchor)
+        self.clock_scale = 1.0  # the MCU clock's rate against the host's (D5 3.11)
         self._arm_due = None
 
     def receive(self, msg, seq):
@@ -83,7 +87,7 @@ class FakeMcu:
                 self.rx = seq
 
     def advance(self, dt_us):
-        self.t_us += dt_us
+        self.t_us += int(round(dt_us * self.clock_scale))
         if self._arm_due is not None:
             n, seq = self._arm_due
             if n <= 1:
@@ -117,7 +121,8 @@ def open_floor(curvatures, direction, check):
 
 
 class Rig:
-    def __init__(self, *, confirmed=ALL, safety=None, floor=open_floor, mcu_flags=StateFlag.DRIVERS_READY):
+    def __init__(self, *, confirmed=ALL, safety=None, floor=open_floor, mcu_flags=StateFlag.DRIVERS_READY,
+                 rate_rho=None):
         self.now = 50_000 * MS
         tokens = itertools.count(1)
         limits = rt.real_teleop_limits(TeleopLimits(**teleop_limit_overrides(RealKinematics(VEH))), CAP)
@@ -135,7 +140,8 @@ class Rig:
         provider = (lambda now: safety) if safety is not None else (lambda now: rt.bench_safety(confirmed))
         self.bridge = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
                                       params=PARAMS, limit_mps=VEH.teleop_speed_limit_mps, floor_permit=floor,
-                                      safety_provider=provider)
+                                      safety_provider=provider,
+                                      rate_rho=TEST_RATE_RHO if rate_rho is None else rate_rho)
         self.mcu = FakeMcu(mcu_flags)
         self.dec = LinkDecoder()
         self.sent = []  # (now_ns, message) written to the MCU
@@ -657,6 +663,10 @@ def test_no_anchor_for_two_seconds_invalidates_the_speed_and_stops():
     r = armed_rig()
     r.run(5, teleop={"speed_ratio": 0.5})
     r.mcu.ack_frozen = True
+    # the drift allowance a verified rate gives in operation (rho 0.001); the rig's wide TEST_RATE_RHO would let the
+    # allowance cross the age before the anchors run out (no new anchor arrives to change it back)
+    r.bridge.rate.range = (1 - rt.RATE_RHO_MAX, 1 + rt.RATE_RHO_MAX)
+    r.bridge.rate.rho_max = r.bridge.delays.drift_max = rt.RATE_RHO_MAX
     t0 = r.now
     stopped_at = None
     for _ in range(200):
@@ -692,3 +702,96 @@ def test_the_session_check_steps_far():
     r.cycle(echo=False)
     a, b = r.bridge.delays._step
     assert rt.STEP_MIN <= (b - a) % 0x10000 <= 0x10000 - rt.STEP_MIN
+
+
+# --- D5: rate guard, slow loop, records (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.11, 3.12, 10) -----------
+
+def test_the_arm_waits_for_the_clock_rate_verdict():
+    r = Rig(rate_rho=rt.RATE_RHO_MAX)  # the operating rho: tens of seconds of baseline
+    r.to_teleop()
+    r.arm()
+    assert r.bridge.phase == rt.IDLE and r.recs[-1]["arm_wait"] == "clock_rate_unverified"
+    assert not any(isinstance(m, Arm) for _t, m in r.sent) and r.bridge.rate.progress_s() is not None
+
+
+def test_a_clock_out_of_range_refuses_the_arm_for_the_boot():
+    r = Rig()
+    r.mcu.clock_scale = 1.2
+    r.to_teleop()
+    r.arm()
+    assert r.bridge.rate.verdict == rt.RATE_OUT and r.recs[-1]["arm_wait"] == "clock_rate"
+    assert not any(isinstance(m, Arm) for _t, m in r.sent)
+
+
+def test_a_rate_found_out_of_range_while_armed_disarms():
+    r = armed_rig()
+    r.mcu.clock_scale = 1.5
+    for _ in range(400):
+        rec = r.cycle(teleop={"speed_ratio": 0.3})
+        if rec.get("stop") == "clock_rate":
+            break
+    assert rec.get("stop") == "clock_rate" and rec.get("disarm") == "clock_rate"
+    r.run(3)
+    assert any(isinstance(m, Disarm) for _t, m in r.sent[-5:]) and not r.host.authorized
+
+
+def _late_cycle(r, extra_ms, **kw):
+    """The bridge's cycle starts ``extra_ms`` late; the MCU kept sending meanwhile."""
+    for _ in range(extra_ms // 10):
+        r.now += 10 * MS
+        r.mcu.advance(10_000)
+        r.host.on_bytes(encode(r.mcu.state(), 1), r.now)
+    return r.cycle(**kw)
+
+
+def test_three_slow_cycles_within_a_second_stop_the_armed_truck():
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.3})
+    recs = [_late_cycle(r, 30, teleop={"speed_ratio": 0.3}) for _ in range(2)]
+    assert not any(x.get("stop") for x in recs) and recs[-1]["cycle_gap_ms"] == pytest.approx(50.0)
+    rec = _late_cycle(r, 30, teleop={"speed_ratio": 0.3})
+    assert rec.get("stop") == "loop_slow" and r.arbiter.mode == "STOPPED"
+
+
+def test_one_slow_cycle_is_carried_by_the_real_gap_not_stopped():
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.3})
+    rec = _late_cycle(r, 60, teleop={"speed_ratio": 0.3})
+    assert not rec.get("stop") and r.bridge._step_s() == pytest.approx(0.08)
+    assert r.bridge._decision_gap_s() == pytest.approx(0.08)
+    rec = _late_cycle(r, 280, teleop={"speed_ratio": 0.3})
+    assert r.bridge._step_s() == pytest.approx(rt.SLEW_DT_MAX_S)
+
+
+def test_the_cycle_record_tail_is_bounded():
+    r = armed_rig()
+    r.run(rt.RECORDS_TAIL + 30)
+    assert len(r.bridge.records) == rt.RECORDS_TAIL
+
+
+def test_a_disconnect_forgets_the_rate_and_the_anchors():
+    r = armed_rig()
+    lo, hi = r.bridge.rate.range
+    assert r.bridge.rate.verdict == rt.RATE_VERIFIED
+    assert r.bridge.delays.drift_max == pytest.approx(max(r.bridge.delays.base_drift, 1 - lo, hi - 1))
+    r.bridge.on_disconnect()
+    assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED and not r.bridge.delays.verified
+    assert r.bridge.delays.drift_max == r.bridge.delays.base_drift
+
+
+
+def test_after_a_reconnect_nothing_moves_until_the_rate_is_verified_again_and_the_operator_rearms():
+    """Codex impl review P1 (D5): between a reconnect and the new rate verdict the delay bound runs on premise A3's
+    allowance -- the pre-D5 value -- but no DRIVE can move the truck then: the disconnect revoked the authorization,
+    the output is zero outside READY, and a new arm waits for the verdict."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.5})
+    before = len(r.sent)
+    r.host.disconnected(r.now)
+    r.bridge.on_disconnect()
+    recs = r.run(1, teleop={"speed_ratio": 0.5}) and r.recs[-1:]
+    for _ in range(10):
+        recs.append(r.cycle(teleop={"speed_ratio": 0.5}))
+    assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED
+    assert not r.nonzero_sent(before) and r.bridge.phase != rt.READY and not r.host.authorized
+    assert all(x["applied_mps"] == 0.0 for x in recs)

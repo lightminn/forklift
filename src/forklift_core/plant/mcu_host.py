@@ -12,11 +12,18 @@ adapter (``tools/real_mcu_link.py``) drains one whole frame at a time. Its rules
 - **Deadlines are never extended.** A DRIVE carries the decision's absolute expiry: its validity is
   ``min(cap, floor(expiry - receipt of the echoed STATE))`` (contract section 2), so the MCU's deadline
   is never later than the decision's. A queued DRIVE past its expiry is dropped, not written.
-- **Freshness on the host clock.** A STATE is fresh for ``state_max_age_s`` after its receipt; a STATE
-  of the same boot whose MCU time does not advance, or with boot_id 0, is ignored. ``tick`` must be
-  called every control cycle so silence is noticed without a STATE arriving.
+- **Freshness on the host clock** (``gap_clock="host"``, every tool but the teleop bridge). A STATE is fresh for
+  ``state_max_age_s`` after its receipt; a STATE of the same boot whose MCU time does not advance, or with boot_id
+  0, is ignored. ``tick`` must be called every control cycle so silence is noticed without a STATE arriving.
+- **Freshness by MCU-time gap** (``gap_clock="mcu"``, the teleop bridge; docs/design/2026-11-15-d5-link-gap-mcu-time.md
+  3.3a). A host stall with STATEs queued is not a disconnect: the first STATE of a read is stale past
+  ``host_gap_s`` (150 ms, the DRIVE cap) since the previous read; each STATE past ``state_max_age_s`` of MCU time
+  (widened by the verified rate bound) since the previous one; the newest past ``state_max_age_s`` of age, receipt
+  age plus its round-trip delay bound (``freshness.delay_s``). Forward authorization steps take the newest STATE of
+  a read only. Without a delay bound, or before ``freshness.rate_verified()``, the host rule applies.
 
-Times are host ``time.monotonic_ns()``; MCU time is only echoed and ordered, never mixed with it.
+Times are host ``time.monotonic_ns()``; MCU time is echoed, ordered and, in the "mcu" rule, differenced within one
+boot -- never subtracted from a host time.
 """
 
 from __future__ import annotations
@@ -50,10 +57,20 @@ class HostConfig:
     arm_timeout_s: float  # an operator arm that has not reached ZERO_SEEN by then fails
     zero_valid_ms: int  # validity of the zero DRIVE that follows ARM
     outbox_max: int  # frames waiting to be written
+    gap_clock: str = "host"  # "host": receipt gaps; "mcu": MCU-time gaps (D5, the teleop bridge)
+    host_gap_max_s: float | None = None  # "mcu": a read this long after the previous one is stale (None: the cap)
+
+    @property
+    def host_gap_s(self) -> float:
+        return self.cap_ms / 1000.0 if self.host_gap_max_s is None else float(self.host_gap_max_s)
 
     def __post_init__(self) -> None:
         if not (self.state_max_age_s > 0 and self.arm_timeout_s > 0):
             raise ValueError("ages must be positive")
+        if self.gap_clock not in ("host", "mcu"):
+            raise ValueError("gap_clock is 'host' or 'mcu'")
+        if self.gap_clock == "mcu" and not (self.state_max_age_s <= self.host_gap_s <= self.cap_ms / 1000.0 + 1e-12):
+            raise ValueError("host_gap_max_s must lie between state_max_age_s and the cap")
         for name in ("cap_ms", "zero_valid_ms", "outbox_max"):
             if not isinstance(getattr(self, name), int) or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
@@ -85,6 +102,8 @@ class LinkHealth:
     ready: bool
     rx_errors: int | None
     decode_errors: int
+    delay_s: float | None = None  # "mcu": the newest STATE's delay bound
+    gap_rule: str = "host"  # the rule in force now: "host" or "mcu"
 
 
 @dataclass(frozen=True)
@@ -106,7 +125,8 @@ _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pendin
 class McuLinkHost:
     def __init__(self, cfg: HostConfig, *, log: Callable[..., None] | None = None, client: Client = Client.REAL,
                  allow_locked: bool = False, commission: bool = False,
-                 on_state: Callable[[McuState, int], None] | None = None, initial_seq: int = 0) -> None:
+                 on_state: Callable[[McuState, int], None] | None = None, initial_seq: int = 0,
+                 freshness=None) -> None:
         """``client``: who drives through this host (mcu-link/2 build bits, contract 3.3): the real executor (the
         default), the HIL executor, or a bring-up tool. ``allow_locked``: a bring-up tool's run on a model or HIL
         board whose outputs are locked. ``commission``: the commissioning tool (bring-up only,
@@ -114,8 +134,13 @@ class McuLinkHost:
         never a DRIVE. ``on_state(state, received_ns)``: called with every STATE this host accepted (never one it
         ignored as invalid or out of order) -- the teleop bridge's encoder speed reads these only. ``initial_seq``:
         the first frame's seq (the teleop bridge starts each session at a random one, so a STATE an earlier session's
-        frame left in flight cannot pass for this session's acknowledgement)."""
+        frame left in flight cannot pass for this session's acknowledgement). ``freshness``: the ``gap_clock="mcu"``
+        rule's source -- ``delay_s(state, received_ns)``, ``rate_verified()``, ``rate_bound()``, ``on_disconnect()``."""
+        if cfg.gap_clock == "mcu" and freshness is None:
+            raise ValueError("the MCU-time gap rule needs a freshness source (delay bound and rate verdict)")
         self.cfg = cfg
+        self._freshness = freshness
+        self._state_delay_s: float | None = None
         self._on_state_cb = on_state
         self.client, self.allow_locked = Client(client), bool(allow_locked)
         self.commission_mode = bool(commission)
@@ -178,8 +203,18 @@ class McuLinkHost:
         the adapter and tracked when written: cutting it is not a cancel (4a' design D4)."""
         self._drop(lambda o: o.kind in _MOTION, reason)
 
+    def _mcu_rule(self) -> bool:
+        return self.cfg.gap_clock == "mcu" and bool(self._freshness.rate_verified())
+
+    def _age_ns(self, now_ns: int) -> float:
+        """The receipt age, plus the newest STATE's delay bound under the "mcu" rule."""
+        age = now_ns - self._state_rx_ns
+        if self._mcu_rule() and self._state_delay_s is not None:
+            age += self._state_delay_s * 1e9
+        return age
+
     def _fresh(self, now_ns: int) -> bool:
-        return self._state_rx_ns is not None and now_ns - self._state_rx_ns <= self.cfg.state_max_age_s * 1e9
+        return self._state_rx_ns is not None and self._age_ns(now_ns) <= self.cfg.state_max_age_s * 1e9
 
     def health(self, now_ns: int) -> LinkHealth:
         s = self._state
@@ -195,6 +230,8 @@ class McuLinkHost:
             ready=self.ready,
             rx_errors=None if s is None else s.rx_errors,
             decode_errors=self._decoder.errors,
+            delay_s=self._state_delay_s,
+            gap_rule="mcu" if self._mcu_rule() else "host",
         )
 
     @property
@@ -213,9 +250,12 @@ class McuLinkHost:
         self._log("received", now_ns, bytes(data), None)
         before = self._decoder.errors
         events: list[HostEvent] = []
-        for rec in self._decoder.feed(bytes(data), now_ns):
-            if isinstance(rec.message, McuState):
-                self._on_state(rec.message, now_ns, events)
+        states = [rec.message for rec in self._decoder.feed(bytes(data), now_ns) if isinstance(rec.message, McuState)]
+        if self.cfg.gap_clock == "mcu":
+            self._on_read_mcu(states, now_ns, events)
+        else:
+            for s in states:
+                self._on_state(s, now_ns, events)
         if self._decoder.errors != before:
             events.append(HostEvent("decode_errors", {"total": self._decoder.errors}))
         return events
@@ -276,11 +316,102 @@ class McuLinkHost:
             return
         self._advance_auth(s, now_ns, events)
 
-    def _advance_auth(self, s: McuState, now_ns: int, events: list) -> None:
+    def _stale(self, why: str, value_s: float, events: list, **seen) -> None:
+        """``seen``: the other clock's gap at the same moment (``host_gap_s``, ``mcu_gap_s``, ``delay_s``), so a record
+        tells a host-side stall (the operating path) from an MCU-side silence (lead 2026-11-16)."""
+        if not self._stale_reported:
+            self._stale_reported = True
+            events.append(HostEvent("stale", {"why": why, "value_s": value_s, **seen}))
+            self._revoke("stale", events)
+
+    def _on_read_mcu(self, states: list, rx: int, events: list) -> None:
+        """One read under ``gap_clock="mcu"`` (design 3.3a): per STATE the gap checks and the steps that only
+        revoke; the forward steps and the age check on the newest STATE of the read. A revoked authorization cannot
+        come back within the read: forward steps start only from an operator's ARM (``_ARM_PENDING``)."""
+        newest = None
+        first = True
+        rx_before, state_before, n_read = self._state_rx_ns, self._state, 0
+        for s in states:
+            if s.boot_id == 0:
+                events.append(HostEvent("state_invalid", {"why": "boot_id 0"}))
+                continue
+            prev = self._state
+            if prev is not None and s.boot_id == prev.boot_id and s.mcu_time_us <= prev.mcu_time_us:
+                events.append(HostEvent("state_out_of_order", {"mcu_time_us": s.mcu_time_us}))
+                continue
+            if self._state_rx_ns is not None and rx < self._state_rx_ns:
+                events.append(HostEvent("state_invalid", {"why": "host_clock"}))
+                continue
+            rule = self._mcu_rule()
+            d = self._freshness.delay_s(s, rx) if rule else None
+            if self._state_rx_ns is not None and prev is not None:
+                host_gap = (rx - self._state_rx_ns) / 1e9
+                raw_mcu_gap = (s.mcu_time_us - prev.mcu_time_us) / 1e6 if s.boot_id == prev.boot_id else None
+                if not rule:
+                    if host_gap > self.cfg.state_max_age_s:
+                        # the host rule's own event (unchanged)
+                        if not self._stale_reported:
+                            self._stale_reported = True
+                            events.append(HostEvent("stale", {"age_s": host_gap}))
+                            self._revoke("stale", events)
+                elif first and host_gap > self.cfg.host_gap_s:
+                    self._stale("host_gap", host_gap, events, mcu_gap_s=raw_mcu_gap, delay_s=d)
+                elif d is not None and s.boot_id == prev.boot_id:
+                    mcu_gap = (s.mcu_time_us - prev.mcu_time_us) / 1e6 * (1.0 + float(self._freshness.rate_bound()))
+                    if mcu_gap > self.cfg.state_max_age_s:
+                        self._stale("mcu_gap", mcu_gap, events, host_gap_s=host_gap, mcu_gap_s=raw_mcu_gap, delay_s=d)
+                elif host_gap > self.cfg.state_max_age_s:
+                    self._stale("host_gap", host_gap, events, mcu_gap_s=raw_mcu_gap, delay_s=d)
+            if self._auth in (_ARM_PENDING, _ZERO_PENDING) and rx > self._arm["deadline_ns"]:
+                self._revoke("arm_timeout", events)
+            first = False
+            self._state, self._state_rx_ns, self._state_delay_s = s, rx, d
+            if self._on_state_cb is not None:
+                self._on_state_cb(s, rx)
+            if prev is None:
+                events.append(HostEvent("first_state", {"boot_id": s.boot_id, "mode": s.mode}))
+            if self._stale_reported:
+                self._stale_reported = False
+                events.append(HostEvent("recovered"))
+            if prev is not None and s.boot_id != prev.boot_id:
+                events.append(HostEvent("boot_changed", {"from": prev.boot_id, "to": s.boot_id}))
+                self._revoke("boot_changed", events)
+            if prev is not None and s.mode != prev.mode:
+                events.append(HostEvent("mode_changed", {"from": prev.mode, "to": s.mode}))
+            if prev is not None and s.fault_flags != prev.fault_flags:
+                events.append(HostEvent("faults_changed", {"from": int(prev.fault_flags), "to": int(s.fault_flags)}))
+            if prev is not None and s.reject_reason != prev.reject_reason and s.reject_reason != RejectReason.NONE:
+                events.append(HostEvent("reject", {"reason": s.reject_reason}))
+            refused = self.build_refusal(s)
+            if refused is not None and self._auth != _NONE:
+                self._revoke(f"build_refused: {refused}", events)
+                self._enqueue_disarm(rx)
+                continue
+            self._advance_auth(s, rx, events, forward=False)
+            newest = s
+            n_read += 1
+        if newest is None:
+            return
+        if self._mcu_rule() and self._state_delay_s is not None:
+            age = self._age_ns(rx) / 1e9
+            if age > self.cfg.state_max_age_s:
+                # at the receipt the age is the newest STATE's delay bound alone: it was read that long after the MCU
+                # made it -- with the host gap since the read before and the MCU-time gap over the read
+                same = state_before is not None and state_before.boot_id == newest.boot_id
+                self._stale("age", age, events, delay_s=self._state_delay_s, n_states=n_read,
+                            host_gap_s=None if rx_before is None else (rx - rx_before) / 1e9,
+                            mcu_gap_s=(newest.mcu_time_us - state_before.mcu_time_us) / 1e6 if same else None)
+        if newest is self._state:
+            self._advance_auth(newest, rx, events, forward=True)
+
+    def _advance_auth(self, s: McuState, now_ns: int, events: list, forward: bool = True) -> None:
         a = self._arm
         if self._auth == _ARM_PENDING:
             if s.boot_id != a["boot"]:
                 self._revoke("boot_changed", events)
+            elif not forward:
+                if s.mode != Mode.ARMED and s.reject_reason not in (RejectReason.NONE, a["reject_at_request"]):
+                    self._revoke(f"rejected: {s.reject_reason.name.lower()}", events)
             elif s.mode == Mode.ARMED and s.arm_gen not in (0, a["prev_gen"]) and self.commission_mode:
                 # the zero command of a commissioning build is a zero COMMISSION; axis 0 needs no steering or lift
                 # sensor, so arming does not depend on them (design 3)
@@ -311,16 +442,20 @@ class McuLinkHost:
                 self._revoke("arm_gen_changed", events)
             elif s.mode != Mode.ARMED:
                 self._revoke(f"mode_{s.mode.name.lower()}", events)
-            elif self._auth == _ZERO_PENDING and s.flags & StateFlag.ZERO_SEEN:
+            elif forward and self._auth == _ZERO_PENDING and s.flags & StateFlag.ZERO_SEEN:
                 self._auth = _READY
                 events.append(HostEvent("armed_ready", {"arm_gen": s.arm_gen}))
 
     def _expire(self, now_ns: int, events: list) -> None:
         """Staleness of the last receipt and the arm deadline, as of now_ns."""
         if self._state_rx_ns is not None and not self._fresh(now_ns) and not self._stale_reported:
-            self._stale_reported = True
-            events.append(HostEvent("stale", {"age_s": (now_ns - self._state_rx_ns) / 1e9}))
-            self._revoke("stale", events)
+            if self._mcu_rule():
+                self._stale("age", self._age_ns(now_ns) / 1e9, events, host_gap_s=(now_ns - self._state_rx_ns) / 1e9,
+                            delay_s=self._state_delay_s)
+            else:
+                self._stale_reported = True
+                events.append(HostEvent("stale", {"age_s": (now_ns - self._state_rx_ns) / 1e9}))
+                self._revoke("stale", events)
         if self._auth in (_ARM_PENDING, _ZERO_PENDING) and now_ns > self._arm["deadline_ns"]:
             self._revoke("arm_timeout", events)
 
@@ -335,6 +470,9 @@ class McuLinkHost:
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
         self._state, self._state_rx_ns, self._stale_reported = None, None, False
+        self._state_delay_s = None
+        if self._freshness is not None:
+            self._freshness.on_disconnect()
         self.disconnects += 1
         events.append(HostEvent("disconnected"))
         return events
