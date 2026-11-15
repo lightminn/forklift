@@ -400,6 +400,8 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
         assert cfg["vehicle"]["calibration_id"] == vehicle.calibration_id
         assert cfg["vehicle"]["sha256"] == hashlib.sha256(tb.VEHICLE_YAML.read_bytes()).hexdigest()
         assert cfg["vehicle"]["path"] == "config/real/vehicle.yaml"
+        chassis = tb.chassis_model_path(tb.VEHICLE_YAML)
+        assert cfg["vehicle"]["chassis_model"]["sha256"] == hashlib.sha256(chassis.read_bytes()).hexdigest()
         assert cfg["bridge_params"]["sha256"] == hashlib.sha256(tb.BRIDGE_PARAMS_YAML.read_bytes()).hexdigest()
         assert cfg["profile"] is None
         assert rows[-1]["t"] == "footer" and rows[-1]["dropped"] == 0 and rows[-1]["write_errors"] == 0
@@ -583,7 +585,8 @@ def test_a_configuration_changed_while_starting_closes_the_record_and_refuses(mc
 
         def stale(*a, **kw):
             out = real(*a, **kw)
-            out["vehicle"] = {**out["vehicle"], "calibration_id": "0" * 16}  # the header saw another vehicle file
+            # the header saw another chassis file than the bridge then loads (a file hash, not only the id)
+            out["vehicle"] = {**out["vehicle"], "chassis_model": {**out["vehicle"]["chassis_model"], "sha256": "0" * 64}}
             return out
 
         monkeypatch.setattr(tb, "config_identity", stale)

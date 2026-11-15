@@ -47,7 +47,7 @@ from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.markers import marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
 from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
-from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
+from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
@@ -409,7 +409,8 @@ def config_identity(profile_path: str | None, profile_bytes: bytes | None = None
     """What the record was made with (D4 design 2, lead 2026-11-15): the vehicle file with its calibration id, the
     bridge's encoder-speed premises and the drive profile, each by content hash -- an analysis given another file
     is refused instead of silently using different numbers."""
-    vehicle = {**_file_identity(VEHICLE_YAML), "calibration_id": load_real_vehicle(VEHICLE_YAML).calibration_id}
+    vehicle = {**_file_identity(VEHICLE_YAML), "calibration_id": load_real_vehicle(VEHICLE_YAML).calibration_id,
+               "chassis_model": _file_identity(chassis_model_path(VEHICLE_YAML))}  # the file vehicle.yaml names
     out = {"vehicle": vehicle, "bridge_params": _file_identity(BRIDGE_PARAMS_YAML), "profile": None}
     if profile_path is not None:
         import yaml
@@ -533,9 +534,12 @@ def main(argv=None) -> int:
         if identity is not None:
             # the configuration the bridge loaded is the one the header names (Codex #530 P2: the files are read by
             # the header and by the bridge at two moments)
-            changed = [what for what, now in (("vehicle", _file_identity(VEHICLE_YAML)["sha256"]),
-                                              ("bridge_params", _file_identity(BRIDGE_PARAMS_YAML)["sha256"]))
-                       if identity[what]["sha256"] != now]
+            changed = [what for what, then, now in (
+                ("vehicle", identity["vehicle"]["sha256"], _file_identity(VEHICLE_YAML)["sha256"]),
+                ("chassis_model", identity["vehicle"]["chassis_model"]["sha256"],
+                 _file_identity(chassis_model_path(VEHICLE_YAML))["sha256"]),
+                ("bridge_params", identity["bridge_params"]["sha256"], _file_identity(BRIDGE_PARAMS_YAML)["sha256"]))
+                if then != now]
             if bridge.vehicle.calibration_id != identity["vehicle"]["calibration_id"]:
                 changed.append("calibration_id")
             if changed:
