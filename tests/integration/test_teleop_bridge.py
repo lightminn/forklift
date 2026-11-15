@@ -5,6 +5,7 @@ recording on a real core -- not a real motor's currents, directions or stopping 
 
 import io
 import itertools
+import hashlib
 import json
 import math
 import os
@@ -128,7 +129,8 @@ class Run:
     def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL, profile=None):
         self.model = Model(exe, *extra)
         self.dev = PtyDevice(self.model.master)
-        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile)
+        # the rate guard widened so the arm is not held tens of seconds (D5 3.11; its operating rho has its own tests)
+        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile, rate_rho=0.05)
         self.dev.watch(self.b.host)
         self.c = Console(self.b)
         self.recs = []
@@ -155,6 +157,9 @@ class Run:
         self.c.request("mode_request", to="TELEOP")
         self.cycles(5)
         assert self.b.arbiter.mode == "TELEOP", self.c.replies[-3:]
+        # the arrival procedure's order (D5 3.11): the console shows the clock verified, then the operator arms
+        self.cycles(200, until=lambda r: r.get("rate") == "verified")
+        assert self.b.core.rate.verdict == "verified", self.b.core.rate.progress_s()
         self.c.request("arm")
         self.cycles(60, until=lambda r: r["phase"] == "ready")
         assert self.b.core.phase == "ready", self.recs[-1]
@@ -324,11 +329,13 @@ def test_the_cli_exits_armed_and_leaves_the_mcu_disarmed(mcu_model, tmp_path, mo
                     return
                 time.sleep(tb.CYCLE_S)
 
+        bridge.core.rate.rho_max = 0.05  # D5 3.11: verify within a second of anchors (the operating 0.001 needs tens)
         cycles(25)
         c.request("lease_request")
         cycles(50)
         c.request("mode_request", to="TELEOP")
         cycles(5)
+        cycles(200, until=lambda r: r.get("rate") == "verified")  # the arrival procedure's order (12.3a)
         c.request("arm")
         cycles(60, until=lambda r: r["phase"] == "ready")
         seen["ready"] = bridge.core.phase == "ready" and bridge.host.state.mode == Mode.ARMED
@@ -337,7 +344,7 @@ def test_the_cli_exits_armed_and_leaves_the_mcu_disarmed(mcu_model, tmp_path, mo
 
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
         monkeypatch.setattr(tb, "run", run_armed)
 
         class NoServer:  # the stand-in console reads the channels itself (a real server would drain them)
@@ -375,7 +382,7 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
 
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
         monkeypatch.setattr(tb.Bridge, "__init__", init)
         rec = tmp_path / "run.jsonl"
         code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--duration-s", "1.0",
@@ -387,6 +394,16 @@ def test_the_cli_runs_against_the_model_records_and_disarms_at_the_end(mcu_model
         # record design 3: a header first, a footer last with the counts, STATE rows with their read time, and the
         # STATEs taken while closing (after the last cycle row) are in it
         assert rows[0]["t"] == "header" and rows[0]["schema"] == tb.RECORD_SCHEMA
+        # D4 (lead 2026-11-15): the record names the configuration it was made with, by content hash
+        cfg = rows[0]["config"]
+        vehicle = tb.load_real_vehicle(tb.VEHICLE_YAML)
+        assert cfg["vehicle"]["calibration_id"] == vehicle.calibration_id
+        assert cfg["vehicle"]["sha256"] == hashlib.sha256(tb.VEHICLE_YAML.read_bytes()).hexdigest()
+        assert cfg["vehicle"]["path"] == "config/real/vehicle.yaml"
+        chassis = tb.chassis_model_path(tb.VEHICLE_YAML)
+        assert cfg["vehicle"]["chassis_model"]["sha256"] == hashlib.sha256(chassis.read_bytes()).hexdigest()
+        assert cfg["bridge_params"]["sha256"] == hashlib.sha256(tb.BRIDGE_PARAMS_YAML.read_bytes()).hexdigest()
+        assert cfg["profile"] is None
         assert rows[-1]["t"] == "footer" and rows[-1]["dropped"] == 0 and rows[-1]["write_errors"] == 0
         states = [i for i, r in enumerate(rows) if r.get("t") == "state"]
         cycles = [i for i, r in enumerate(rows) if "t" not in r]
@@ -436,7 +453,7 @@ def test_a_failed_start_or_ctrl_c_still_closes_the_record_with_its_footer(mcu_mo
     m = Model(mcu_model)
     try:
         dev = PtyDevice(m.master)
-        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None: dev)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
 
         class BadServer:
             def __init__(self, *a, **k):
@@ -478,3 +495,107 @@ def test_a_failed_start_or_ctrl_c_still_closes_the_record_with_its_footer(mcu_mo
         assert rows[-1]["t"] == "footer" and any(r.get("t") == "state" for r in rows)
     finally:
         m.close()
+
+
+# --- D5: link freshness by MCU-time gap end to end (docs/design/2026-11-15-d5-link-gap-mcu-time.md 5.2, lead 10) ---
+
+def _stall_then(r, gap_ms, n=10, teleop=None):
+    """One cycle gap of ``gap_ms`` (the loop's own 20 ms sleep included); the model keeps sending meanwhile."""
+    time.sleep(max(0.0, gap_ms / 1000.0 - tb.CYCLE_S))
+    i = len(r.recs)
+    r.cycles(n, teleop=teleop)
+    gaps = [(b["now_ns"] - a["now_ns"]) / 1e6 for a, b in zip(r.recs[i - 1:], r.recs[i:])]
+    return r.recs[i:], gaps[0]
+
+
+def _events(recs):
+    return [e for x in recs for e in x.get("link_events", [])]
+
+
+@pytest.mark.parametrize("gap_ms", [30, 50, 70, 80])
+def test_a_bridge_stall_with_states_queued_keeps_the_arm(run, gap_ms):
+    r = run()
+    r.to_ready()
+    stand = {"speed_ratio": 0.0}
+    r.cycles(10, teleop=stand)
+    for _attempt in range(3):  # a scheduler overshoot past the band is retried, never judged
+        recs, measured = _stall_then(r, gap_ms, teleop=stand)
+        if measured <= gap_ms + 12:
+            break
+    assert measured <= gap_ms + 12, measured
+    assert "stale" not in _events(recs) and "authorization_revoked" not in _events(recs), (measured, recs[0])
+    assert r.b.core.phase == "ready" and r.b.host.ready
+
+
+@pytest.mark.parametrize("gap_ms", [166, 328])
+def test_a_bridge_stall_over_the_cap_is_a_disconnect(run, gap_ms):
+    r = run()
+    r.to_ready()
+    r.cycles(10, teleop={"speed_ratio": 0.0})
+    recs, measured = _stall_then(r, gap_ms, n=15)
+    assert measured > 150
+    details = [d for x in recs for d in x.get("stale_detail", [])]
+    assert "stale" in _events(recs) and any(d.get("why") == "host_gap" for d in details), (measured, details)
+    assert not r.b.host.authorized and r.b.core.phase != "ready"
+
+
+def test_an_mcu_silence_of_60ms_is_a_disconnect(run):
+    r = run()
+    r.to_ready()
+    r.cycles(10, teleop={"speed_ratio": 0.0})
+    i = len(r.recs)
+    r.model.proc.send_signal(signal.SIGSTOP)
+    try:
+        t_end = time.monotonic() + 0.060
+        while time.monotonic() < t_end:
+            r.cycles(1, teleop={"speed_ratio": 0.0})
+    finally:
+        r.model.proc.send_signal(signal.SIGCONT)
+    r.cycles(15, teleop={"speed_ratio": 0.0})
+    details = [d for x in r.recs[i:] for d in x.get("stale_detail", [])]
+    assert "stale" in _events(r.recs[i:]) and details, r.recs[i:i + 5]
+    assert details[0].get("why") in ("age", "mcu_gap") and not r.b.host.authorized
+
+
+def test_the_config_identity_names_a_profile_by_hash_and_name(tmp_path):
+    prof = REPO / "config" / "profiles" / "m1_m3" / "m1_fwd_v010.yaml"
+    cfg = tb.config_identity(str(prof))
+    assert cfg["profile"] == {"path": "config/profiles/m1_m3/m1_fwd_v010.yaml",
+                              "sha256": hashlib.sha256(prof.read_bytes()).hexdigest(), "name": "m1_fwd_v010"}
+    other = tmp_path / "p.yaml"
+    other.write_bytes(prof.read_bytes() + b"# edited\n")
+    assert tb.config_identity(str(other))["profile"]["sha256"] != cfg["profile"]["sha256"]
+
+
+def test_an_unreadable_profile_stops_before_the_record_exists(tmp_path, capsys):
+    """Codex #530 P2: the configuration is identified before the record file is made."""
+    rec = tmp_path / "run.jsonl"
+    code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--profile", str(tmp_path / "none.yaml"),
+                    *[f"--{n.replace('_', '-')}" for n in ALL]])
+    assert code == 2 and not rec.exists() and "cannot be read" in capsys.readouterr().err
+
+
+def test_a_configuration_changed_while_starting_closes_the_record_and_refuses(mcu_model, tmp_path, monkeypatch,  # noqa: F811
+                                                                           capsys):
+    m = Model(mcu_model)
+    try:
+        dev = PtyDevice(m.master)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
+        real = tb.config_identity
+
+        def stale(*a, **kw):
+            out = real(*a, **kw)
+            # the header saw another chassis file than the bridge then loads (a file hash, not only the id)
+            out["vehicle"] = {**out["vehicle"], "chassis_model": {**out["vehicle"]["chassis_model"], "sha256": "0" * 64}}
+            return out
+
+        monkeypatch.setattr(tb, "config_identity", stale)
+        rec = tmp_path / "run.jsonl"
+        code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--duration-s", "1.0",
+                        *[f"--{n.replace('_', '-')}" for n in ALL]])
+        assert code == 2 and "configuration changed" in capsys.readouterr().err
+        rows = [json.loads(x) for x in rec.read_text().splitlines()]
+        assert rows[0]["t"] == "header" and any(r.get("t") == "refused" for r in rows) and rows[-1]["t"] == "footer"
+    finally:
+        m.close()
+
