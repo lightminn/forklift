@@ -207,8 +207,9 @@ def test_bias_step_at_the_drive_start():
     t0 = _move_start_ns(out["record"])
     before = st.xyz[(st.host_ns < t0 - int(0.2e9)) & (st.host_ns > t0 - int(2e9)), 1].mean()
     after = st.xyz[(st.host_ns > t0 + int(0.2e9)) & (st.host_ns < t0 + int(2e9)), 1].mean()
-    assert before == pytest.approx(1e-4, abs=1e-6)
-    assert after - before == pytest.approx(4e-4, abs=2e-6)  # straight, no drift: only the bias moved
+    # white noise of density arw over 1.8 s averages to arw / sqrt(1.8 s) ~ 7.5e-7 rad/s: allow ~5 sigma
+    assert before == pytest.approx(1e-4, abs=4e-6)
+    assert after - before == pytest.approx(4e-4, abs=6e-6)  # straight, no drift: only the bias moved
 
 
 # --- headers -------------------------------------------------------------------------------------------------------
@@ -357,4 +358,4 @@ def test_registered_m1_with_60_s_stills_runs_and_its_windows_are_long():
     assert tr.valid
     for label in ("still_pre", "still_post"):
         lo, hi = tr.spans[label]
-        assert (hi - lo) / 1e9 == pytest.approx(60.0, abs=0.03)
+        assert (hi - lo) / 1e9 == pytest.approx(60.0, abs=0.05)  # first to last row, rows 20 ms apart
