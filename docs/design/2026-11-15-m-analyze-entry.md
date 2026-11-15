@@ -80,7 +80,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 | 편향 변화율. 직전 6 개 편향 구간의 이동 맞춤 | 3.5×10⁻⁷ rad/s² | 2.3 (b)(177·180 행) |
 | 책상 N | 2.054×10⁻⁴ rad/√s | 1.1 표 28 행 |
 | 상대 예산 | heading 변화 1.0 mrad, 상대 위치 1.7 mm | 6 절 413-414 행, 6.1–6.3 |
-| 차체 위 N 의 k 한계 | 0.9 m 합류 끝 1.48, 0.9 m + 주행 중 0.42 m 점 1.13 | 6.3 표(525-532 행) |
+| 차체 위 N 의 k 한계 | 0.9 m 합류 끝 1.48, 0.9 m + 주행 중 0.42 m 점 1.14 | 6.3 표(525-532 행) |
 | 배율 없이 허용하는 회전 | 0.04 rad | 1.1(79 행) |
 | 가속 램프, 평활 창, `pre_s` / `frac` | 0.125 s, 중심 25 ms, 0.5 s / 0.63 | 4.3·5.1·5.2(371 행) |
 
@@ -267,7 +267,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 | `test_quiet_window_absent` / `test_bias_jump` | `still_s` 5 / `bias_step` 2e-4 | `no_bias_window` / `bias_jump`. 둘 다 시행 유효 |
 | `test_bias_slope_field_log` | 기울기 초과; 뒤 시행; 블록 통과 기록 있음·없음 | `bias_slope`; 기록 없으면 `bias_slope_unconfirmed`, 있으면 판정 가능 |
 | `test_allan_irregular_t` | 400.8 Hz, 지터, 백색 N | σ(1 s) ≈ N(±5 %) |
-| `test_allan_false_rejection` | 50 s 창 둘, 참 N = 책상 N, 시드 여럿 | k = 1.13·1.48 에서 창별 판정의 오거부율을 낸다(정보 — 판정 규칙은 등록이 정한다, 9 절) |
+| `test_allan_false_rejection` | 50 s 창 둘, 참 N = 책상 N, 시드 여럿 | k = 1.14·1.48 에서 창별 판정의 오거부율을 낸다(정보 — 판정 규칙은 등록이 정한다, 9 절) |
 | `test_profile_label_mismatch_refused`, `test_registered_constants`, `test_s_m_per_trial` | 앞 판과 같다 | 앞 판과 같다 |
 | `test_rename_paths` | 새 경로(truth·imu), 별칭, 배타 | 두 경로의 반환 dict 전체를 대조, ValueError |
 | `test_odometry_pose_*` | 직진·원호, 껍데기 회귀, 간격, `time_not_increasing` | 앞 판 단언 + reasons |
