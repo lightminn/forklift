@@ -28,6 +28,9 @@ from real_mcu_link import TtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
 ALL = ("empty_forks", "forks_clear", "lift_low", "no_open_recovery")
+# The end-to-end harness does not test loop_slow (D5 3.12; its unit tests do): its own loop is not real time, so a
+# loaded CI node could stop an armed truck through it. Out of reach rather than a magic number.
+HARNESS_LOOP_SLOW_OFF = 10**6
 
 
 class PtyDevice:
@@ -133,7 +136,7 @@ class Run:
         self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile, rate_rho=0.05)
         # this harness is not real time: on a loaded CI node its own cycles can run late three times in a second and
         # stop the armed truck as loop_slow (D5 3.12) -- a test artefact; loop_slow has its own unit tests
-        self.b.core.loop_slow_count = 10**6
+        self.b.core.loop_slow_count = HARNESS_LOOP_SLOW_OFF
         self.dev.watch(self.b.host)
         self.c = Console(self.b)
         self.recs = []
@@ -163,14 +166,20 @@ class Run:
         # the arrival procedure's order (D5 3.11): the console shows the clock verified, then the operator arms
         self.cycles(200, until=lambda r: r.get("rate") == "verified")
         assert self.b.core.rate.verdict == "verified", self.b.core.rate.progress_s()
+        first, replies_before = len(self.recs), len(self.c.replies)
         self.c.request("arm")
         self.cycles(60, until=lambda r: r["phase"] == "ready")
-        # on a failure say why: the stops, disarms and arm waits of the arm attempt (ws1 2026-11-16 left only the
-        # last record)
-        why = [(x.get("stop"), x.get("disarm"), x.get("arm_wait"), x.get("rate"), x.get("link_events"))
-               for x in self.recs[-60:] if x.get("stop") or x.get("disarm") or x.get("link_events")
-               or x.get("arm_wait") not in (None, "older_drive_may_act")]
-        assert self.b.core.phase == "ready", (why[-8:], self.recs[-1])
+        # on a failure say why (ws1 2026-11-16 left only the last record): every change over the whole attempt --
+        # stops, disarms, arm waits, rate verdict changes, link events -- and the arbiter's replies to the arm
+        attempt = self.recs[first:]
+        changes, last = [], None
+        for x in attempt:
+            key = (x.get("phase"), x.get("stop"), x.get("disarm"), x.get("arm_wait"), x.get("rate"),
+                   tuple(x.get("link_events") or ()), x.get("rate_changed"))
+            if key != last:
+                changes.append(key)
+                last = key
+        assert self.b.core.phase == "ready", (changes[-12:], self.c.replies[replies_before:], self.recs[-1])
 
     def nonzero(self, since=0):
         return [m for _t, m in self.dev.sent[since:] if isinstance(m, Drive)
