@@ -196,7 +196,12 @@ class Run:
                  >= rt.LOOP_SLOW_COUNT]
         events = [{k: v for k, v in e.items() if k != "t"} for e in a.events[ev0:]
                   if e.get("event") in ("disarm", "latch_released", "arm", "stand_unconfirmed")]
-        evidence = {"ready": ok, "arms": arms, "cycles": len(gaps), "over_40ms": len(slow),
+        # which side went stale (lead 2026-11-16): host_gap = the bridge stalled past the 150 ms cap (the operating
+        # path); mcu_gap / age = the MCU model's STATEs stopped or came late (this test's own process) -- with the
+        # other clock's gap at that moment and the bridge's cycle gap of that record
+        stale = [{**d, "cycle_gap_ms": x.get("cycle_gap_ms")} for x in recs for d in x.get("stale_detail", ())]
+        evidence = {"ready": ok, "arms": arms, "latches": sum(1 for e in events if e.get("event") == "latch_released"),
+                    "stale": stale, "cycles": len(gaps), "over_40ms": len(slow),
                     "max_gap_ms": max((g for _t, g in gaps), default=None), "would_loop_slow": bool(would),
                     "latch_events": events}
         if not ok:
