@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import itertools
 import json
 import os
@@ -46,7 +47,7 @@ from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.markers import marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
 from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
-from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
+from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
@@ -391,6 +392,36 @@ class Bridge:
 
 
 RECORD_SCHEMA = "teleop_bridge_record/1"
+VEHICLE_YAML = REPO / "config" / "real" / "vehicle.yaml"
+BRIDGE_PARAMS_YAML = REPO / "config" / "real" / "teleop_bridge.yaml"
+
+
+def _file_identity(path: Path) -> dict:
+    data = Path(path).read_bytes()
+    try:
+        shown = str(Path(path).resolve().relative_to(REPO))
+    except ValueError:
+        shown = str(path)
+    return {"path": shown, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def config_identity(profile_path: str | None, profile_bytes: bytes | None = None) -> dict:
+    """What the record was made with (D4 design 2, lead 2026-11-15): the vehicle file with its calibration id, the
+    bridge's encoder-speed premises and the drive profile, each by content hash -- an analysis given another file
+    is refused instead of silently using different numbers."""
+    vehicle = {**_file_identity(VEHICLE_YAML), "calibration_id": load_real_vehicle(VEHICLE_YAML).calibration_id,
+               "chassis_model": _file_identity(chassis_model_path(VEHICLE_YAML))}  # the file vehicle.yaml names
+    out = {"vehicle": vehicle, "bridge_params": _file_identity(BRIDGE_PARAMS_YAML), "profile": None}
+    if profile_path is not None:
+        import yaml
+
+        # the same bytes give the hash and the parsed name -- the CLI passes the bytes it parsed for the run itself
+        # (Codex #530 P2: a file read twice could change between the two reads)
+        data = Path(profile_path).read_bytes() if profile_bytes is None else profile_bytes
+        ident = _file_identity(Path(profile_path))
+        ident["sha256"] = hashlib.sha256(data).hexdigest()
+        out["profile"] = {**ident, "name": (yaml.safe_load(data) or {}).get("name")}
+    return out
 
 
 OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun
@@ -463,8 +494,21 @@ def main(argv=None) -> int:
             return 2
         import yaml
 
-        profile = yaml.safe_load(Path(args.profile).read_text(encoding="utf-8"))
+        try:
+            profile_bytes = Path(args.profile).read_bytes()  # read once: the run and the header use these bytes
+            profile = yaml.safe_load(profile_bytes)
+        except (OSError, yaml.YAMLError) as e:
+            print(f"the profile {args.profile} cannot be read: {e}", file=sys.stderr)
+            return 2
     record = None
+    identity = None
+    if args.record:
+        # computed before the record exists: a file that cannot be read stops here, leaving no half-made record
+        try:
+            identity = config_identity(args.profile, profile_bytes if args.profile else None)
+        except (OSError, ValueError) as e:
+            print(f"the configuration cannot be identified: {e}", file=sys.stderr)
+            return 2
     if args.record:
         try:
             sink = open(args.record, "x", encoding="utf-8")  # noqa: SIM115 -- a new record per run (design 3)
@@ -474,7 +518,7 @@ def main(argv=None) -> int:
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
-                        "start_mono_ns": time.monotonic_ns()})
+                        "start_mono_ns": time.monotonic_ns(), "config": identity})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
     bridge = server = None
@@ -487,6 +531,21 @@ def main(argv=None) -> int:
                                       clock=time.monotonic_ns))
         bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
                         profile=profile, floor_permit=floor)
+        if identity is not None:
+            # the configuration the bridge loaded is the one the header names (Codex #530 P2: the files are read by
+            # the header and by the bridge at two moments)
+            changed = [what for what, then, now in (
+                ("vehicle", identity["vehicle"]["sha256"], _file_identity(VEHICLE_YAML)["sha256"]),
+                ("chassis_model", identity["vehicle"]["chassis_model"]["sha256"],
+                 _file_identity(chassis_model_path(VEHICLE_YAML))["sha256"]),
+                ("bridge_params", identity["bridge_params"]["sha256"], _file_identity(BRIDGE_PARAMS_YAML)["sha256"]))
+                if then != now]
+            if bridge.vehicle.calibration_id != identity["vehicle"]["calibration_id"]:
+                changed.append("calibration_id")
+            if changed:
+                print(f"the configuration changed while starting ({', '.join(changed)}): start again", file=sys.stderr)
+                record.put_row({"t": "refused", "why": "config_changed", "what": changed})
+                return 2
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)
