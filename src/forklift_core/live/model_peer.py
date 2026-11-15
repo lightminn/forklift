@@ -7,8 +7,8 @@ model from a board (its eight flag bits are all used), so the check is on the de
 1. the device (followed) is a Unix98 pty slave (major 136-143) and the bench's pty (st_rdev);
 2. the bench's model pid is alive, started when the bench recorded (no reused pid) and its exe is ``mcu_model``;
 3. the model holds a ``/dev/ptmx`` fd whose tty index is the device's pts number;
-4. no other process holds that master -- a complete scan of the same uid's processes; a read error, or a process
-   or fd vanishing twice, refuses. Two stated limits: other uids cannot be read, and a same-uid process whose fds
+4. no other process holds that master -- a complete scan of the same uid's processes; a process that exits while
+   it is being read is skipped (it holds nothing now), and any other read error twice refuses. Two stated limits: other uids cannot be read, and a same-uid process whose fds
    cannot be read (non-dumpable) is tolerated only if it started before the model -- either could hold this master
    only if one of our processes passed it. Root is refused.
 
@@ -52,6 +52,9 @@ class SystemProc:
     def exe(self, pid):
         return os.readlink(f"/proc/{pid}/exe")
 
+    def exists(self, pid):
+        return os.path.exists(f"/proc/{pid}")
+
     def fds(self, pid):
         """{fd: target}; an fd closed between the listing and its read is left out (it holds nothing now -- the
         listing's own directory fd in this process is one). The process gone raises, as the scan rule wants."""
@@ -85,11 +88,21 @@ def _masters(proc, pid) -> dict[int, int | None]:
     return out
 
 
+def _gone(proc, pid) -> bool:
+    try:
+        return not proc.exists(pid)
+    except OSError:
+        return False
+
+
 def _other_holders(proc, index: int, model_pid: int, model_start: int, skipped: list) -> list[int]:
     """Same-uid processes other than the model holding the master of pts ``index``. A same-uid process whose fds
     cannot be read (non-dumpable session components: sd-pam, the compositor, polkit agents) is tolerated only if it
     started before the model -- it could hold this master only if one of our processes passed it later -- and is
-    listed in ``skipped``; one started after the model, or any other read failure, is _Incomplete."""
+    listed in ``skipped``; one started after the model, or any other read failure, is _Incomplete. A process that
+    exits between the listing and its reads is skipped: gone, it holds no master (a busy host -- parallel test
+    workers -- churns short-lived processes faster than two scans can avoid). A not-found error on a pid that
+    still exists (reused by a new process) is _Incomplete."""
     holders = []
     for pid in proc.pids():
         if pid == model_pid:
@@ -106,11 +119,13 @@ def _other_holders(proc, index: int, model_pid: int, model_start: int, skipped: 
                 raise
             if index in masters.values():
                 holders.append(pid)
-        except (FileNotFoundError, ProcessLookupError, PermissionError) as exc:
-            raise _Incomplete(pid) from exc
         except OSError as exc:
-            if exc.errno in (errno.ENOENT, errno.ESRCH, errno.EACCES, errno.EPERM):
-                raise _Incomplete(pid) from exc
+            not_found = isinstance(exc, (FileNotFoundError, ProcessLookupError)) or exc.errno in (errno.ENOENT,
+                                                                                                    errno.ESRCH)
+            if not_found and _gone(proc, pid):
+                continue
+            if not_found or isinstance(exc, PermissionError) or exc.errno in (errno.EACCES, errno.EPERM):
+                raise _Incomplete(pid, exc) from exc
             raise
     return holders
 
@@ -144,7 +159,8 @@ def model_alive_refusal(device: str, bench: dict, *, proc=None) -> str | None:
     return None
 
 
-def model_peer_refusal(device: str, bench: dict, *, proc=None) -> str | None:
+def model_peer_refusal(device: str, bench: dict, *, proc=None, detail: list | None = None) -> str | None:
+    """``detail``, if given, receives ``(pid, error)`` for each process that left a scan incomplete."""
     proc = SystemProc() if proc is None else proc
     if not isinstance(bench, dict) or bench.get("schema") != BENCH_SCHEMA or bench.get("synthetic") is not True:
         return "bad_bench"
@@ -177,7 +193,9 @@ def model_peer_refusal(device: str, bench: dict, *, proc=None) -> str | None:
             if _other_holders(proc, index, pid, bench.get("model_starttime"), []):
                 return "master_shared"
             return None
-        except _Incomplete:
+        except _Incomplete as inc:
+            if detail is not None:
+                detail.append((inc.args[0], repr(inc.args[1]) if len(inc.args) > 1 else None))
             if attempt:
                 return "peer_scan_incomplete"
     return "peer_scan_incomplete"

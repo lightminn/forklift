@@ -75,9 +75,10 @@ def start(stage: str, out_dir: Path, build: Path, extra: list[str], duration_ms:
         if proc.poll() is not None:
             raise SystemExit(f"the model exited at once ({proc.returncode})")
         bench = bench_record(proc, pts, exe, args, stage)
-        why = model_peer.model_peer_refusal(pts, bench)
+        detail: list = []
+        why = model_peer.model_peer_refusal(pts, bench, detail=detail)
         if why is not None:
-            raise SystemExit(f"the model-peer check refused the bench's own pty: {why}")
+            raise SystemExit(f"the model-peer check refused the bench's own pty: {why} {detail or ''}".rstrip())
     except BaseException:  # an interrupt or a refusal while starting never leaves the model running
         if proc.poll() is None:
             proc.terminate()

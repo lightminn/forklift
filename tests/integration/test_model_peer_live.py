@@ -77,3 +77,22 @@ def test_a_master_held_by_a_relay_is_refused(mcu_model):  # noqa: F811
         for q in (p, relay):
             q.terminate()
             q.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="the check refuses root")
+def test_the_check_passes_while_short_lived_processes_churn(model_on_master):
+    """ws1's parallel test workers start and end processes faster than two scans can miss them (2026-11-15: the
+    bench refused its own pty, peer_scan_incomplete): a process that exits mid-scan holds nothing and is skipped."""
+    p, path, exe = model_on_master
+    bench = bench_for(p.pid, path, exe)
+    churn = subprocess.Popen(["/bin/sh", "-c", "while :; do /bin/true & /bin/true & /bin/true; done"])
+    try:
+        time.sleep(0.2)
+        results = []
+        for _ in range(20):
+            detail = []
+            results.append((mp.model_peer_refusal(path, bench, detail=detail), detail))
+    finally:
+        churn.kill()
+        churn.wait(timeout=5)
+    assert all(why is None for why, _ in results), [r for r in results if r[0] is not None][:3]

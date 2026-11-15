@@ -50,6 +50,9 @@ class FakeProc:
             raise PermissionError(errno.EACCES, "fd")
         return {fd: target for fd, (target, _idx) in fds.items()}
 
+    def exists(self, pid):
+        return pid in self.procs
+
     def tty_index(self, pid, fd):
         return self._get(pid, "fds")[fd][1]
 
@@ -129,7 +132,32 @@ def test_any_other_read_error_closes_the_check():
     assert refusal(proc) == "peer_scan_incomplete"
 
 
-def test_a_process_that_vanishes_during_the_scan_is_rescanned_once():
+def test_a_process_that_exits_during_the_scan_is_skipped():
+    """Gone, it holds no master -- a busy host's short-lived processes must not make every scan incomplete."""
+
+    class Exits(FakeProc):
+        def fds(self, pid):
+            if pid == 60:
+                self.procs.pop(60)  # exited between the listing and the read
+                raise FileNotFoundError(pid)
+            return super().fds(pid)
+
+    e = Exits()
+    e.__dict__.update(FakeProc().__dict__)
+    detail = []
+    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=e, detail=detail) is None and detail == []
+
+
+def test_an_incomplete_scan_names_the_process_and_the_error():
+    proc = FakeProc()
+    proc.procs[60]["fds"] = None
+    proc.procs[60]["starttime"] = 20000
+    detail = []
+    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=proc, detail=detail) == "peer_scan_incomplete"
+    assert [pid for pid, _err in detail] == [60, 60] and "PermissionError" in detail[0][1]
+
+
+def test_a_not_found_error_on_a_pid_that_still_exists_is_rescanned_once():
     proc = FakeProc()
 
     class Vanish(FakeProc):
