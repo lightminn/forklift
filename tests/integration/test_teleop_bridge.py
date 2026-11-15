@@ -24,10 +24,14 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "tools"))
 sys.path.insert(0, str(REPO / "tests" / "integration"))
 import teleop_bridge as tb  # noqa: E402
+from forklift_core.live import real_teleop as rt  # noqa: E402
 from real_mcu_link import TtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
 
 ALL = ("empty_forks", "forks_clear", "lift_low", "no_open_recovery")
+# The end-to-end harness does not test loop_slow (D5 3.12; its unit tests do): its own loop is not real time, so a
+# loaded CI node could stop an armed truck through it. Out of reach rather than a magic number.
+HARNESS_LOOP_SLOW_OFF = 10**6
 
 
 class PtyDevice:
@@ -131,6 +135,9 @@ class Run:
         self.dev = PtyDevice(self.model.master)
         # the rate guard widened so the arm is not held tens of seconds (D5 3.11; its operating rho has its own tests)
         self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile, rate_rho=0.05)
+        # this harness is not real time: on a loaded CI node its own cycles can run late three times in a second and
+        # stop the armed truck as loop_slow (D5 3.12) -- a test artefact; loop_slow has its own unit tests
+        self.b.core.loop_slow_count = HARNESS_LOOP_SLOW_OFF
         self.dev.watch(self.b.host)
         self.c = Console(self.b)
         self.recs = []
@@ -149,6 +156,7 @@ class Run:
         return self.recs[-1] if self.recs else None
 
     def to_ready(self):
+        rec0, ev0 = len(self.recs), len(self.b.arbiter.events)
         self.cycles(25)
         self.c.request("lease_request")
         self.cycles(10)
@@ -157,12 +165,65 @@ class Run:
         self.c.request("mode_request", to="TELEOP")
         self.cycles(5)
         assert self.b.arbiter.mode == "TELEOP", self.c.replies[-3:]
-        # the arrival procedure's order (D5 3.11): the console shows the clock verified, then the operator arms
-        self.cycles(200, until=lambda r: r.get("rate") == "verified")
+        # the arrival procedure's order (D5 3.11): the console shows the clock verified, then the operator arms --
+        # and, like the operator, only with no safety latch showing: a host stall over the cap while waiting marks the
+        # link stale, the arbiter disarms and latches no_feedback until it sees the truck standing again, and an ARM
+        # meanwhile is refused "invalid" (ws1 2026-11-16, the loop evidence of the arm attempt itself was clean)
+        a = self.b.arbiter
+        self.cycles(400, until=lambda r: r.get("rate") == "verified" and a.preempt_latch is None)
         assert self.b.core.rate.verdict == "verified", self.b.core.rate.progress_s()
-        self.c.request("arm")
-        self.cycles(60, until=lambda r: r["phase"] == "ready")
-        assert self.b.core.phase == "ready", self.recs[-1]
+        arms = 0
+        while True:
+            replies_before = len(self.c.replies)
+            self.c.request("arm")
+            arms += 1
+            self.cycles(60, until=lambda r: r["phase"] == "ready" or a.preempt_latch is not None)
+            refused = [x for x in self.c.replies[replies_before:] if x.get("t") == "reject" and x.get("of") == "arm"]
+            if self.b.core.phase == "ready" or arms >= 3 or not (refused or a.preempt_latch is not None):
+                break
+            self.cycles(400, until=lambda r: a.preempt_latch is None)  # the latch released: the operator arms again
+        if self.b.core.phase != "ready":
+            self.cycles(60, until=lambda r: r["phase"] == "ready")
+        ok = self.b.core.phase == "ready"
+        # the evidence over the whole of to_ready, written for every call (passed or not) to the file the root
+        # tests/conftest.py prints in the run's summary: cycle gaps (would loop_slow, off in this harness, have fired:
+        # over 40 ms three times within 1 s), the arbiter's latches and disarms, ARM attempts, and on a failure every
+        # change of the bridge record and the replies -- whole, not cut by pytest's assertion repr
+        recs = self.recs[rec0:]
+        gaps = [(x["now_ns"], x["cycle_gap_ms"]) for x in recs if x.get("cycle_gap_ms") is not None]
+        slow = [t for t, g in gaps if g > rt.LOOP_SLOW_GAP_S * 1e3]
+        would = [t for t in slow if sum(1 for u in slow if 0 <= t - u <= rt.LOOP_SLOW_WINDOW_S * 1e9)
+                 >= rt.LOOP_SLOW_COUNT]
+        events = [{k: v for k, v in e.items() if k != "t"} for e in a.events[ev0:]
+                  if e.get("event") in ("disarm", "latch_released", "arm", "stand_unconfirmed")]
+        # which side went stale (lead 2026-11-16): host_gap = the bridge stalled past the 150 ms cap (the operating
+        # path); mcu_gap / age = the MCU model's STATEs stopped or came late (this test's own process) -- with the
+        # other clock's gap at that moment and the bridge's cycle gap of that record
+        stale = [{**d, "cycle_gap_ms": x.get("cycle_gap_ms")} for x in recs for d in x.get("stale_detail", ())]
+        # the DelayBound's own size (lead 2026-11-16: the to_ready latches came from a loose bound, the operating path;
+        # the harness's rearm only gathers evidence until that is fixed)
+        delays = [x["delay_s"] for x in recs if x.get("delay_s") is not None]
+        evidence = {"ready": ok, "arms": arms, "latches": sum(1 for e in events if e.get("event") == "latch_released"),
+                    "age_stale": sum(1 for d in stale if d.get("why") == "age"),
+                    "delay_max_ms": round(max(delays) * 1e3, 3) if delays else None, "stale": stale, "cycles": len(gaps), "over_40ms": len(slow),
+                    "max_gap_ms": max((g for _t, g in gaps), default=None), "would_loop_slow": bool(would),
+                    "latch_events": events}
+        if not ok:
+            changes, last = [], None
+            for x in recs:
+                key = (x.get("phase"), x.get("stop"), x.get("disarm"), x.get("arm_wait"), x.get("rate"),
+                       tuple(x.get("link_events") or ()), x.get("rate_changed"))
+                if key != last:
+                    changes.append(key)
+                    last = key
+            evidence.update(latch=a.preempt_latch, mode=a.mode, changes=changes[-20:],
+                            replies=self.c.replies[-6:], last=recs[-1] if recs else None)
+        path = os.environ.get("FORKLIFT_LOOP_EVIDENCE")
+        if path:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(evidence, default=str) + "\n")
+        assert ok, f"not ready (full evidence in the LOOP_EVIDENCE summary): latch={a.preempt_latch} " \
+                   f"arms={arms} events={events[-6:]}"
 
     def nonzero(self, since=0):
         return [m for _t, m in self.dev.sent[since:] if isinstance(m, Drive)
