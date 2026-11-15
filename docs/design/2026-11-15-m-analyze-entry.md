@@ -250,7 +250,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 
 | 이름 | 준비 | 단언 |
 |---|---|---|
-| `test_m1_recovers_drift_and_radius` | 드리프트 0.003 rad/m, 반경 1.02 | d = −0.003(±1e-6), `radius_scale` 1.02(경로 길이로), 횡 ≈ d·s²/2 |
+| `test_m1_recovers_drift_and_radius` | 드리프트 0.003 rad/m, 반경 1.02 | d = −0.003(±1e-6), `radius_scale` = s_true/s_enc_path = 1/1.02(엔코더가 1.02 배 과대 계상 — 정의대로), 횡 ≈ d·s²/2 |
 | `test_s_enc_path_vs_chord` | 드리프트가 큰 시행 | `s_enc_path_m` > `disp_enc_m`, 배율은 경로로 |
 | `test_m1_imu_with_tilted_up` | 숙임 0.10 rad, 편향 3e-4 | IMU Δθ 가 하한의 3 배 안. 숙임을 무시하면 cos 배 |
 | `test_relative_budget_camera_numbers` | 등록 6.2 ①③: σ_θ 0.68/0.68, σ_y 0.57/0.57 mrad·mm | 1.32 m 통과(1.21 mm), 3 m `truth_over_budget`(2.19 mm), 정지–주행 0.68/0.74 → 1.005 > 1.0 mrad. ② 3 m(0.34, 0.39)는 1.16 mm 로 통과 |
