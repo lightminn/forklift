@@ -182,8 +182,9 @@ def summarize(rows: list, scheduled: int = 3) -> dict:
 
 def _side(r: dict | None) -> dict:
     if r is None:
-        return {"session": None, "outcome": None, "reason": None, "listed": False}
-    return {"session": r["session"], "outcome": r["outcome"], "reason": r["reason"], "listed": True}
+        return {"session": None, "outcome": None, "reason": None, "stage": None, "listed": False}
+    return {"session": r["session"], "outcome": r["outcome"], "reason": r["reason"], "stage": r["stage"] or None,
+            "listed": True}
 
 
 def pair_differences(new_idx: dict, pre_idx: dict, new_arm: str, pre_arm: str, scene: str) -> dict:

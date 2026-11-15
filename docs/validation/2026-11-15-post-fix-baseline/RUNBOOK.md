@@ -12,7 +12,8 @@
    - `$PY $T/baseline_summary.py $P/pfb/R_pfb_2bea23e5 --mode overlay --compare $PRE/lcr/cmp_a2b91d2d --compare-mode prefix --out R_vs_lcrB0.json --fields-out R_fields.json.gz`
    - `... --compare $PRE/k1/cmp_c7701296 --compare-mode prefix --match-compare --out R_vs_k1cK1.json`
    - `... --compare $PRE/k1r/k1r_7744f285 --compare-mode overlay-noheader --match-compare --out R_vs_k1rK1.json`
-   - `$PY $T/baseline_summary.py $P/pfb/R_pfb_2bea23e5 --mode overlay --compare $P/pfb/S_pfb_2bea23e5 --compare-mode stage --match-compare --out R_vs_S.json --fields-out S_fields.json.gz`
+   - `$PY $T/baseline_summary.py $P/pfb/R_pfb_2bea23e5 --mode overlay --compare $P/pfb/S_pfb_2bea23e5 --compare-mode stage --match-compare --out R_vs_S.json`
+   - S 의 실행별 값(`--fields-out` 은 기준 쪽만 씀): `$PY $T/baseline_summary.py $P/pfb/S_pfb_2bea23e5 --mode stage --out S_summary.json --fields-out S_fields.json.gz`
    - 거부(refused)가 있으면 실행 이름과 사유를 결과 문서에 적고 집계에서 뺀다.
 4. 결정성 반복: 네 짝마다 `$PY tools/deterministic_compare.py $P/pfb/R_pfb_2bea23e5/pfb_R_<scene>_s<n>/run $P/pfb/Rrep_pfb_2bea23e5/pfb_Rrep_<scene>_s<n>/run --json rep_<scene>_s<n>.json` (RGB 는 도구가 뺀다).
 5. 라이브: `$PY tools/ct_survey.py $P/pfb/L_pfb_2bea23e5 --json L_survey.json --csv L_missions.csv --runs $P/pfb/lists/RUNS_pfb_L_pfb_2bea23e5.jsonl --near-tally L_near.json`, 그다음 `$PY $T/live_compare.py --new L_missions.csv --prefix docs/validation/2026-11-06-ct-status-survey/missions.csv --arm-map 'LD=D,LO=O6' --out L_vs_cts.json`. 세션별 배속(`pace.jsonl`)·슬롯 변화는 묶음 결과에서 따로 요약.

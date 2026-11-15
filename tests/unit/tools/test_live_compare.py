@@ -149,11 +149,11 @@ def test_pairs_list_outcome_changes_by_seed_and_order(tmp_path):
     assert pairs["changed"] == [
         {"seed": 3, "order": 2,
          "new": {"session": "LD_random_m_s3", "outcome": "failed", "listed": True,
-                 "reason": "near_capture_failed:perception_no_pallet:no_expected_candidate"},
-         "prefix": {"session": "D_random_m_s3", "outcome": "done", "reason": None, "listed": True}},
+                 "reason": "near_capture_failed:perception_no_pallet:no_expected_candidate", "stage": "observe"},
+         "prefix": {"session": "D_random_m_s3", "outcome": "done", "reason": None, "stage": None, "listed": True}},
         {"seed": 3, "order": 3,
-         "new": {"session": "LD_random_m_s3", "outcome": None, "reason": None, "listed": True},
-         "prefix": {"session": "D_random_m_s3", "outcome": "done", "reason": None, "listed": True}}]
+         "new": {"session": "LD_random_m_s3", "outcome": None, "reason": None, "stage": None, "listed": True},
+         "prefix": {"session": "D_random_m_s3", "outcome": "done", "reason": None, "stage": None, "listed": True}}]
 
 
 def test_pairs_count_a_mission_listed_on_one_side(tmp_path):
