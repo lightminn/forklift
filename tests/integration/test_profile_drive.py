@@ -95,6 +95,11 @@ def test_a_profile_drives_the_model_through_the_operators_gates_and_records_each
     marks = [m["label"] for m in rows(r, "marker") if m["label"].startswith(f"profile:{t}:")]
     assert marks == [f"profile:{t}:presteer:start", f"profile:{t}:still_pre:start", f"profile:{t}:drive:start",
                      f"profile:{t}:still_post:start"]
+    # one profile_end row per trial (G6 design 2; arrival-day rehearsal defect D1), and the G8 trials read the record
+    ends = rows(r, "profile_end")
+    assert [(e["trial"], e["result"]) for e in ends if e["trial"] == t] == [(t, "done")]
+    from forklift_core.plant import m_analysis as ma
+    assert [x.result for x in ma.trials(prof) if x.trial == t] == ["done"]
     assert r.nonzero(), "the model was never driven"
     # ended: zeros until the deadman is let go, then the joystick is the operator's again
     n = len(r.dev.sent)

@@ -14,7 +14,8 @@
 #
 #   ARM=A|B VENV_PY=.. BASE_SCENE=.. FORKLIFT_URDF=.. SCENE_FILE=.. SLAM_BUNDLE_ROOT=.. \
 #     sbatch --chdir=<snapshot> deploy/console/s4_overlay_run.sh OUT
-#   ARM A: --path-display at its default (overlay); B: --path-display off. Both: --max-sim-seconds 1200 and
+#   ARM A: --path-display at its default (overlay); B: --path-display off; D: the both diagnostic (a *diag* snapshot
+#   only, FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=both). All: --max-sim-seconds 1200 and
 #   FORKLIFT_LIVE_TICK_TRACE=1. Optional: SEED (0), FACTOR (0.4), CYCLE (P-4:D-1, random_m's first CT leg), MISSION_TIMEOUT_S (2400),
 #   WAIT_PORT_S (1500), END_GRACE_S (300), CAPTURE_END_S (60),
 #   FIRST_FRAME_S (120). DRY_RUN=1: print what would run, run and write nothing.
@@ -26,7 +27,23 @@ ARM=${ARM:?ARM=A (overlay, the default) or B (--path-display off)}
 case "$ARM" in
   A) ARM_ARGS="" ;;
   B) ARM_ARGS="--path-display off" ;;
-  *) echo "ARM must be A or B" >&2; exit 2 ;;
+  D)
+    # the S4 both diagnostic (docs/plans/2026-11-15-s4-both-diagnostic.md, lead approval for one run): display prims
+    # rendered in the scene + the 1 px magenta overlay at lag 0, from a diag snapshot whose launcher copy has its
+    # diagnostic-variable refusal removed (DIAG_PATCH.txt there); never from an operating checkout
+    ARM_ARGS=""
+    case "$(basename "$ROOT")" in *diag*) ;; *) echo "ARM=D runs only from a snapshot named *diag*" >&2; exit 2 ;; esac
+    [ -f "$ROOT/DIAG_PATCH.txt" ] || { echo "ARM=D: no $ROOT/DIAG_PATCH.txt" >&2; exit 2; }
+    if grep -q 'FORKLIFT_PATH_DISPLAY_DIAGNOSTIC is diagnostic only' "$ROOT/deploy/console/isaac_live.sbatch"; then
+      echo "ARM=D: this snapshot's launcher still refuses the diagnostic variable" >&2; exit 2
+    fi
+    # the launcher must be the one the patch record names (after_sha256), not any copy without the refusal
+    want=$(awk '$1 == "after_sha256" {print $2}' "$ROOT/DIAG_PATCH.txt")
+    have=$(sha256sum "$ROOT/deploy/console/isaac_live.sbatch" | awk '{print $1}')
+    [ -n "$want" ] && [ "$want" = "$have" ] || {
+      echo "ARM=D: the launcher's sha256 $have is not DIAG_PATCH.txt's after_sha256 ${want:-<none>}" >&2; exit 2; }
+    export FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=both ;;
+  *) echo "ARM must be A, B or D" >&2; exit 2 ;;
 esac
 if [ -n "${EXTRA_ARGS:-}" ]; then
   echo "EXTRA_ARGS is this wrapper's (per ARM): unset it" >&2; exit 2
@@ -57,6 +74,7 @@ if [ "${DRY_RUN:-0}" = 1 ]; then
            SCENE_FILE SLAM_BUNDLE_ROOT BASE_SCENE FORKLIFT_URDF VENV_PY; do
     printf '%s=%q\n' "$v" "${!v}"
   done
+  printf 'FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=%s\n' "${FORKLIFT_PATH_DISPLAY_DIAGNOSTIC-unset}"
   printf 'launcher:'; printf ' %q' "${LAUNCHER[@]}"; echo " > $OUT/launcher.log"
   printf 'capture (once %s says running):' "$OUT/live_port.json"; printf ' %q' "${CAPTURE[@]}"
   echo " --url ws://<host>:<port> > $OUT/capture.log"
@@ -78,6 +96,8 @@ log() { echo "$(date -Is) $*" | tee -a "$OUT/s4_wrapper.log"; }
   done
   printf 'FORKLIFT_LIVE_CATCHUP_STEPS=%s\n' "${FORKLIFT_LIVE_CATCHUP_STEPS-unset}"
   printf 'FORKLIFT_LIVE_CAMERA_PHASE=%s\n' "${FORKLIFT_LIVE_CAMERA_PHASE-unset}"
+  printf 'FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=%s\n' "${FORKLIFT_PATH_DISPLAY_DIAGNOSTIC-unset}"
+  [ ! -f "$ROOT/DIAG_PATCH.txt" ] || cat "$ROOT/DIAG_PATCH.txt"
   sha256sum "$0" "$ROOT/deploy/console/isaac_live.sbatch" "$ROOT/tools/live_console_probe.py" \
     "$ROOT/tools/live_frames.py" "$SCENE_FILE"
 } > "$OUT/args.txt"
