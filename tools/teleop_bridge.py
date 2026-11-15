@@ -405,7 +405,7 @@ def _file_identity(path: Path) -> dict:
     return {"path": shown, "sha256": hashlib.sha256(data).hexdigest()}
 
 
-def config_identity(profile_path: str | None) -> dict:
+def config_identity(profile_path: str | None, profile_bytes: bytes | None = None) -> dict:
     """What the record was made with (D4 design 2, lead 2026-11-15): the vehicle file with its calibration id, the
     bridge's encoder-speed premises and the drive profile, each by content hash -- an analysis given another file
     is refused instead of silently using different numbers."""
@@ -414,8 +414,12 @@ def config_identity(profile_path: str | None) -> dict:
     if profile_path is not None:
         import yaml
 
-        name = (yaml.safe_load(Path(profile_path).read_text(encoding="utf-8")) or {}).get("name")
-        out["profile"] = {**_file_identity(Path(profile_path)), "name": name}
+        # the same bytes give the hash and the parsed name -- the CLI passes the bytes it parsed for the run itself
+        # (Codex #530 P2: a file read twice could change between the two reads)
+        data = Path(profile_path).read_bytes() if profile_bytes is None else profile_bytes
+        ident = _file_identity(Path(profile_path))
+        ident["sha256"] = hashlib.sha256(data).hexdigest()
+        out["profile"] = {**ident, "name": (yaml.safe_load(data) or {}).get("name")}
     return out
 
 
@@ -489,8 +493,21 @@ def main(argv=None) -> int:
             return 2
         import yaml
 
-        profile = yaml.safe_load(Path(args.profile).read_text(encoding="utf-8"))
+        try:
+            profile_bytes = Path(args.profile).read_bytes()  # read once: the run and the header use these bytes
+            profile = yaml.safe_load(profile_bytes)
+        except (OSError, yaml.YAMLError) as e:
+            print(f"the profile {args.profile} cannot be read: {e}", file=sys.stderr)
+            return 2
     record = None
+    identity = None
+    if args.record:
+        # computed before the record exists: a file that cannot be read stops here, leaving no half-made record
+        try:
+            identity = config_identity(args.profile, profile_bytes if args.profile else None)
+        except (OSError, ValueError) as e:
+            print(f"the configuration cannot be identified: {e}", file=sys.stderr)
+            return 2
     if args.record:
         try:
             sink = open(args.record, "x", encoding="utf-8")  # noqa: SIM115 -- a new record per run (design 3)
@@ -500,7 +517,7 @@ def main(argv=None) -> int:
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
-                        "start_mono_ns": time.monotonic_ns(), "config": config_identity(args.profile)})
+                        "start_mono_ns": time.monotonic_ns(), "config": identity})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
     bridge = server = None
@@ -513,6 +530,18 @@ def main(argv=None) -> int:
                                       clock=time.monotonic_ns))
         bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
                         profile=profile, floor_permit=floor)
+        if identity is not None:
+            # the configuration the bridge loaded is the one the header names (Codex #530 P2: the files are read by
+            # the header and by the bridge at two moments)
+            changed = [what for what, now in (("vehicle", _file_identity(VEHICLE_YAML)["sha256"]),
+                                              ("bridge_params", _file_identity(BRIDGE_PARAMS_YAML)["sha256"]))
+                       if identity[what]["sha256"] != now]
+            if bridge.vehicle.calibration_id != identity["vehicle"]["calibration_id"]:
+                changed.append("calibration_id")
+            if changed:
+                print(f"the configuration changed while starting ({', '.join(changed)}): start again", file=sys.stderr)
+                record.put_row({"t": "refused", "why": "config_changed", "what": changed})
+                return 2
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)

@@ -564,3 +564,35 @@ def test_the_config_identity_names_a_profile_by_hash_and_name(tmp_path):
     other.write_bytes(prof.read_bytes() + b"# edited\n")
     assert tb.config_identity(str(other))["profile"]["sha256"] != cfg["profile"]["sha256"]
 
+
+def test_an_unreadable_profile_stops_before_the_record_exists(tmp_path, capsys):
+    """Codex #530 P2: the configuration is identified before the record file is made."""
+    rec = tmp_path / "run.jsonl"
+    code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--profile", str(tmp_path / "none.yaml"),
+                    *[f"--{n.replace('_', '-')}" for n in ALL]])
+    assert code == 2 and not rec.exists() and "cannot be read" in capsys.readouterr().err
+
+
+def test_a_configuration_changed_while_starting_closes_the_record_and_refuses(mcu_model, tmp_path, monkeypatch,  # noqa: F811
+                                                                           capsys):
+    m = Model(mcu_model)
+    try:
+        dev = PtyDevice(m.master)
+        monkeypatch.setattr(tb, "ReconnectingLink", lambda path, baud=None, **kw: dev)
+        real = tb.config_identity
+
+        def stale(*a, **kw):
+            out = real(*a, **kw)
+            out["vehicle"] = {**out["vehicle"], "calibration_id": "0" * 16}  # the header saw another vehicle file
+            return out
+
+        monkeypatch.setattr(tb, "config_identity", stale)
+        rec = tmp_path / "run.jsonl"
+        code = tb.main(["--device", "pty", "--port", "0", "--record", str(rec), "--duration-s", "1.0",
+                        *[f"--{n.replace('_', '-')}" for n in ALL]])
+        assert code == 2 and "configuration changed" in capsys.readouterr().err
+        rows = [json.loads(x) for x in rec.read_text().splitlines()]
+        assert rows[0]["t"] == "header" and any(r.get("t") == "refused" for r in rows) and rows[-1]["t"] == "footer"
+    finally:
+        m.close()
+
