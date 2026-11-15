@@ -165,11 +165,14 @@ def test_m3_qstep_delay(name, delay):
 
 def test_m3_imu_delay_carries_the_clock_offset():
     name = "m3_qstep_left"
-    t = trial1(run(make(name, delay_s=0.083, mcu_imu_offset_s=0.015, seed=13), name, truth=False))
-    imu = t["values"]["imu_delay_s"]
+    vals = {off: trial1(run(make(name, delay_s=0.083, mcu_imu_offset_s=off, seed=13), name, truth=False))["values"]
+            for off in (0.0, 0.015)}
+    imu = vals[0.015]["imu_delay_s"]
     assert imu["report_only"] and imu["unknown_clock_offset"] is True
-    assert imu["value"] == pytest.approx(0.083 + 0.015, abs=0.006)
-    assert t["values"]["encoder_delay_s"]["value"] == pytest.approx(0.083, abs=0.005)
+    # the offset goes into the IMU delay as it is; with none, the IMU and the encoder agree
+    assert imu["value"] - vals[0.0]["imu_delay_s"]["value"] == pytest.approx(0.015, abs=0.002)
+    assert vals[0.0]["imu_delay_s"]["value"] == pytest.approx(0.083, abs=0.004)
+    assert vals[0.015]["encoder_delay_s"]["value"] == pytest.approx(0.083, abs=0.005)
 
 
 def test_m3_qstep_delay_void_keeps_the_trial():

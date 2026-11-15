@@ -287,7 +287,9 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
         n = int((imu_t1 - imu_t0) * hz / 1e9)
         t = imu_t0 + np.round(np.arange(n) * 1e9 / hz).astype(np.int64)
         if s == "g":
-            idx = np.clip(np.searchsorted(ticks, t, side="right") - 1, 0, len(om) - 1)
+            # the gyro reads the tick whose STATE time is nearest: the rate a STATE reports at ``host`` is the
+            # tick that starts there, so the staircase is centred on the STATE times (no half-tick lag against them)
+            idx = np.clip(np.searchsorted(ticks, t + STATE_DT_NS // 2, side="right") - 1, 0, len(om) - 1)
             w = np.where((t >= ticks[0]) & (t < ticks[-1] + STATE_DT_NS), om[idx], 0.0)
             xyz = w[:, None] * up[None, :] + bias[None, :]
             if step is not None and moving_since is not None:

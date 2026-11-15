@@ -653,15 +653,18 @@ def _m3_imu_heading(imu, bw, ctx, i_start, move_ns, points) -> dict:
     return out
 
 
-def smooth_centered(t_ns, y, window_s: float) -> np.ndarray:
-    """Centred moving average over +-window/2 of real time (zero phase; registration 5.2, entry 3.8)."""
+def smooth_centered(t_ns, y, window_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """Centred moving average over +-window/2 of real time (zero phase; registration 5.2, entry 3.8): ``(times,
+    values)`` of the samples whose whole window lies inside the series -- the edge samples, averaged over one side
+    only, are dropped (Codex PR 3a review P3)."""
     t = np.asarray(t_ns, dtype=np.int64)
     v = np.asarray(y, float)
     half = int(round(window_s * 1e9 / 2))
     lo = np.searchsorted(t, t - half, side="left")
     hi = np.searchsorted(t, t + half, side="right")
     cs = np.concatenate([[0.0], np.cumsum(v)])
-    return (cs[hi] - cs[lo]) / (hi - lo)
+    full = (t - half >= t[0]) & (t + half <= t[-1])
+    return t[full], ((cs[hi] - cs[lo]) / (hi - lo))[full]
 
 
 def _delay(q_t, q, y_t, y, post) -> dict:
@@ -709,17 +712,17 @@ def _m3_qstep(tr, rec_rows, ctx, i0, i1) -> dict:
     w = c["smooth_window_s"]
     common = dict(post_window_ns=list(post), change_ns=int(change["host_ns"]), reached_ns=int(reached["host_ns"]),
                   smoothing_s=w)
-    vals["encoder_delay_s"] = {**_delay(qt, q, qt, smooth_centered(qt, y, w), post), **common}
+    vals["encoder_delay_s"] = {**_delay(qt, q, *smooth_centered(qt, y, w), post), **common}
     imu = ctx["imu"]
     if imu.why or imu.t is None:
         vals["imu_delay_s"] = _value(None, False, list(imu.why) or ["imu_clock_invalid"], report_only=True,
                                      unknown_clock_offset=True)
-    elif imu.t[0] > t_a or imu.t[-1] < post[1]:
+    elif imu.t[0] > t_a - w * 1e9 or imu.t[-1] < post[1] + w * 1e9:
         vals["imu_delay_s"] = _value(None, False, "imu_coverage", report_only=True, unknown_clock_offset=True)
     else:
-        m = (imu.t >= t_a) & (imu.t <= post[1])
+        m = (imu.t >= t_a - w * 1e9) & (imu.t <= post[1] + w * 1e9)  # padded: the window is whole at both ends
         yi = imu.g[m] @ _unit(_vec3(imu.up))
-        d = _delay(qt, q, imu.t[m], smooth_centered(imu.t[m], yi, w), post)
+        d = _delay(qt, q, *smooth_centered(imu.t[m], yi, w), post)
         vals["imu_delay_s"] = {**d, "report_only": True, "unknown_clock_offset": True, **common}
     return vals
 
