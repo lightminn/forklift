@@ -88,3 +88,32 @@ def test_rho_bounds():
     for bad in (0.0, -1.0, 0.2):
         with pytest.raises(ValueError):
             RateGuard(bad)
+
+
+def test_the_drift_allowance_is_the_verified_range_deviation():
+    g = RateGuard(RATE_RHO_MAX)
+    assert g.drift_allowance(100e-6) == 100e-6
+    allowances = []
+    for a in anchors(1.0, seconds=60):
+        g.add(a)
+        if g.verdict == RATE_VERIFIED:
+            allowances.append(g.drift_allowance(100e-6))
+    assert allowances[0] <= RATE_RHO_MAX and allowances[-1] < allowances[0]  # narrows with the baseline
+    assert all(x >= 100e-6 for x in allowances)
+
+
+def test_a_loose_late_anchor_never_widens_the_range():
+    g = RateGuard(RATE_RHO_MAX)
+    feed(g, anchors(1.0, seconds=30))
+    before = g.range
+    g.add(anchors(1.0, seconds=31, path_ms=lambda i: (2.0, 300.0))[-1])  # a 300 ms stall's round trip
+    assert g.range[0] >= before[0] and g.range[1] <= before[1] and g.verdict == RATE_VERIFIED
+
+
+def test_a_rate_change_within_a_boot_is_out_of_range():
+    g = RateGuard(RATE_RHO_MAX)
+    feed(g, anchors(1.0, seconds=30))
+    assert g.verdict == RATE_VERIFIED
+    feed(g, anchors(1.003, seconds=120, t0=50_000 * MS + 30_000 * MS))  # the pairs no longer intersect
+    assert g.verdict == RATE_OUT
+

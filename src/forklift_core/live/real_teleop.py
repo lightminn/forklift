@@ -266,7 +266,7 @@ class RateGuard:
     width is about ``(b_i + b_j) / (rx_j - rx_i)``, so the guard keeps the boot's tightest early anchor as the far
     end and waits for the baseline: verified when the range lies within ``1 +- rho_max``, out of range (for the
     rest of the boot) when it lies wholly outside, otherwise unverified. A boot change or a lost link starts over.
-    The bridge arms only on a verified rate, and the delay bound's drift allowance is then ``rho_max``."""
+    The bridge arms only on a verified rate; the delay bound's drift allowance is then the range's deviation."""
 
     EARLY_S = 2.0  # the far end is the tightest anchor of the boot's first this-many seconds
 
@@ -301,11 +301,24 @@ class RateGuard:
             return
         lo = dm / (rx - w_i)
         hi = dm / (w_j - rx_i) if w_j > rx_i else float("inf")
+        # every pair's range holds the true rate: keep their intersection (a later loose anchor -- a stall's long
+        # round trip -- never widens it); an empty intersection is a clock that did not keep one rate
+        if self.range is not None:
+            lo, hi = max(lo, self.range[0]), min(hi, self.range[1])
         self.range = (lo, hi)
-        if hi < 1.0 - self.rho_max or lo > 1.0 + self.rho_max:
+        if lo > hi or hi < 1.0 - self.rho_max or lo > 1.0 + self.rho_max:
             self.verdict = RATE_OUT
         elif lo >= 1.0 - self.rho_max and hi <= 1.0 + self.rho_max:
             self.verdict = RATE_VERIFIED
+
+    def drift_allowance(self, base: float) -> float:
+        """The delay bound's drift allowance (D5 3.11): once verified, the measured range's own deviation from 1 --
+        the true rate lies inside it, so it holds even for an HSI that happened to pass, and it narrows as the
+        baseline grows (at most ``rho_max``); before, the premise A3 value ``base`` (the arm is blocked then)."""
+        if self.verdict != RATE_VERIFIED or self.range is None:
+            return base
+        lo, hi = self.range
+        return max(base, 1.0 - lo, hi - 1.0)
 
     def progress_s(self) -> tuple[float, float] | None:
         """(baseline so far, the baseline the newest two ends need) for the console's waiting line."""
@@ -569,8 +582,7 @@ class TeleopBridge:
         if self.delays.last_anchor is not self._last_anchor:
             self._last_anchor = self.delays.last_anchor
             self.rate.add(self._last_anchor)
-            self.delays.drift_max = self.rate.rho_max if self.rate.verdict == RATE_VERIFIED \
-                else self.delays.base_drift
+            self.delays.drift_max = self.rate.drift_allowance(self.delays.base_drift)
         self.samples.append(sample)
         self.rx_count += 1
 

@@ -665,6 +665,7 @@ def test_no_anchor_for_two_seconds_invalidates_the_speed_and_stops():
     r.mcu.ack_frozen = True
     # the drift allowance a verified rate gives in operation (rho 0.001); the rig's wide TEST_RATE_RHO would let the
     # allowance cross the age before the anchors run out (no new anchor arrives to change it back)
+    r.bridge.rate.range = (1 - rt.RATE_RHO_MAX, 1 + rt.RATE_RHO_MAX)
     r.bridge.rate.rho_max = r.bridge.delays.drift_max = rt.RATE_RHO_MAX
     t0 = r.now
     stopped_at = None
@@ -770,7 +771,9 @@ def test_the_cycle_record_tail_is_bounded():
 
 def test_a_disconnect_forgets_the_rate_and_the_anchors():
     r = armed_rig()
-    assert r.bridge.rate.verdict == rt.RATE_VERIFIED and r.bridge.delays.drift_max == TEST_RATE_RHO
+    lo, hi = r.bridge.rate.range
+    assert r.bridge.rate.verdict == rt.RATE_VERIFIED
+    assert r.bridge.delays.drift_max == pytest.approx(max(r.bridge.delays.base_drift, 1 - lo, hi - 1))
     r.bridge.on_disconnect()
     assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED and not r.bridge.delays.verified
     assert r.bridge.delays.drift_max == r.bridge.delays.base_drift
