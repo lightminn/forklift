@@ -48,8 +48,8 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
   - 같은 시행 행이 둘이거나 기록에 없는 시행의 행이 있으면 거부한다. `record`·`body_point` 가 다를 때도 거부한다. 몸체 점은 `RealOdometry` 의 뒤축 중심이어야 하기 때문이다.
   - 현장 void 행: `{"t":"void","trial":N,"reason","closed_before_results":true}`. 등록 1.1(71 행)은 현장 void 를 결과 계산 전에 닫는다고 정했다. 그래서 결과를 계산하기 전에 이 행만 읽고, `closed_before_results` 가 참이 아니면 거부한다.
 - **현장 기록 `field_log/1`**(선택)
-  - 머리 줄(`synthetic`, `record`) 뒤에 `{"t":"bias_recheck","block","exceeded_host_ns","recheck_start_ns","recheck_end_ns","slope_rad_s2","passed":bool}` 행이 온다.
-  - 등록 2.3 의 10 분 재확인 결과를 블록별로 남긴다(3.3 ⑦).
+  - 머리 줄(`synthetic`, `record:{"host_boot_id","start_mono_ns"}` — 텔레옵 기록과 대조) 뒤에, 시각 순으로 `{"t":"bias_recheck","block","exceeded_host_ns","recheck_start_ns","recheck_end_ns","slope_rad_s2","passed":bool}` 행이 온다.
+  - 등록 2.3 의 10 분 재확인 결과를 블록별로 남긴다(3.3 ⑦). 각 재확인 행은 그 블록의 뒤 시행 시작보다 앞서야 한다. 신원이 다르거나 시각 순이 아니거나 이 조건을 어기면 exit 2(9 절).
 - **옛 `rehearsal_truth/1`**(`rehearsal_imu_truth.py:94-99`): `--allow-synthetic` 일 때만 읽고 heading 만 있는 참값으로 다룬다. 거리는 엔코더로 표시한다.
 
 **신원 검사**(값을 계산하기 전에 한다; 실패는 `{"result":"refused","why"}` 와 exit 2 로 낸다. `bringup.py:941-947` 과 같은 방식이다)
@@ -97,7 +97,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 3. 시행 창 [t₀, t₁] 은 첫·끝 `running` 행이다. 주행 구간은 일정표에서 `kind=="drive"` 인 label 이다.
    - **움직임 시작:** 주행 구간이 시작된 뒤 바퀴 카운트가 처음 바뀐 STATE 의 시각(MCU → 호스트)이다. 주행 구간은 deadman 이 눌릴 때까지 제자리에서 기다리므로(`drive_profile.py:353-357`) 구간 시작과 다르다. 등록이 이 정의를 고정하지 않았다(확인 필요).
 4. void 판정(3.4). void 시행은 값을 내지 않는다.
-5. **서 있는 구간:** 두 바퀴 속도가 문턱 아래이고, 조향 |Δq| 가 문턱 아래(presteer 의 조향 슬루를 뺀다)이며, STATE 간격이 `max_gap_s` 이하인 연속 호스트 구간이다. 두 문턱 모두 확인 필요다.
+5. **서 있는 구간:** 두 바퀴 속도가 문턱 아래이고, 조향 |Δq| 가 문턱 아래(presteer 의 조향 슬루를 뺀다)이며, STATE 간격이 `max_gap_s`(0.05 s, 9 절) 이하인 연속 호스트 구간이다. 바퀴 속도·조향 문턱은 확인 필요다.
    - `quiet_window` 는 걸러 낸 표본의 인덱스 연속성만 보고 `sel[s]:sel[e-1]+1` 을 돌려준다(83-87·122 행). 그래서 사이에 낀 비정지 표본까지 들어갈 수 있다.
    - 이것을 고친다(4 절). 입구에서도 돌려받은 창 안에 간격이 없고 비정지 표본이 없는지 다시 확인한다.
 6. **편향 창:**
@@ -113,7 +113,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
    - 파일 안의 구간이 3 개 미만이라 기울기를 낼 수 없을 때도 `field_log` 통과 기록이 없으면 `bias_slope_unconfirmed` 다.
 8. **차체 위 N**(6.3, 531 행):
    - 두 창의 û 투영 rate(창마다 편향을 뺀 것)로 `allan_dev_tau(t_ns, rate, 1.0)` 를 **실제 시각**으로 낸다.
-   - 각 창의 값과 두 창을 합친 값(항 수 가중)을 모두 내고, 합친 값으로 판정한다(max 대 합침은 확인 필요).
+   - 각 창의 값을 내고, **두 창 각각**이 k 한계 안일 때만 자이로 항목을 값으로 낸다(등록 6.3, 9 절). 합친 값은 정보로만 낸다.
 9. **IMU heading:** `imu_heading(t[창0 끝 : 창1 시작], g, up=û, bias=두 창 평균)`(125-137 행).
    - 하한은 `heading_sigma_lower(arw=N_body, drive_s=적분 길이, bias_window_s=짧은 창, bias_change_rad_s=Δb_yaw)`(140-152 행)다. 책상 N 으로 낸 값도 나란히 적는다.
    - `is_lower_bound` 와 `not_included` 를 그대로 옮긴다.
@@ -222,7 +222,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
              "values": {"d_rad_per_m": {"value": -0.0004, "judgeable": true},
                         "end_lateral_m": {"value": 0.0012, "judgeable": true, "report_only": true}},
              "imu": {"why": [], "dyaw_rad": ..., "windows": {...}, "bias_change_yaw_rad_s": ...,
-                     "bias_slope": {"value", "block", "n_windows", "recheck"}, "n_body": {"before", "after", "pooled"},
+                     "bias_slope": {"value", "block", "n_windows", "recheck"}, "n_body": {"before", "after", "pooled_info"},
                      "sigma_lower": {...}, "report_only": true}}]}
 ```
 
@@ -253,6 +253,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 | `test_void_trials_excluded` | `void:deadman`, 엔코더 간격, `ENCODER_JUMP_L`·`STUCK_R`·`POLARITY_L`·`STEER_SENSOR_INVALID`, `time_not_increasing`, MCU boot 변경 | 모두 값 없음, 사유별로 세어짐 |
 | `test_truth_missing_vs_no_truth` | 참값 파일에 시행 1 만 / `--no-truth` | 시행 2 `void:truth_missing` / 모든 시행 유효, 값 `no_truth`, encoder 표시 |
 | `test_truth_rows_dup_extra_refused` | 같은 시행 행 둘, 없는 시행 행 | exit 2 |
+| `test_field_log_identity_and_order` | `field_log` 의 `record` 가 다름 / 행이 시각 역순 / 재확인이 뒤 시행 뒤 | 셋 다 exit 2 |
 | `test_truth_moving_point_needs_time_cov` | `run_042` 에 `host_ns` 나 `cov` 가 없음 | exit 2 |
 | `test_field_void` / `..._not_closed_refused` | `t:"void"` 행 / `closed_before_results` 없음 | void(`field:...`) / exit 2 |
 | `test_header_required_per_file` | 머리 줄 없는 참값 | exit 2 |
@@ -266,14 +267,14 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 | `test_quiet_window_absent` / `test_bias_jump` | `still_s` 5 / `bias_step` 2e-4 | `no_bias_window` / `bias_jump`. 둘 다 시행 유효 |
 | `test_bias_slope_field_log` | 기울기 초과; 뒤 시행; 블록 통과 기록 있음·없음 | `bias_slope`; 기록 없으면 `bias_slope_unconfirmed`, 있으면 판정 가능 |
 | `test_allan_irregular_t` | 400.8 Hz, 지터, 백색 N | σ(1 s) ≈ N(±5 %) |
-| `test_allan_false_rejection` | 50 s 창 둘, 참 N = 책상 N, 시드 여럿 | k = 1.13·1.48 에서 max 와 합침의 오거부율을 내고, 합침이 문턱(시험이 정함) 아래 |
+| `test_allan_false_rejection` | 50 s 창 둘, 참 N = 책상 N, 시드 여럿 | k = 1.13·1.48 에서 창별 판정의 오거부율을 낸다(정보 — 판정 규칙은 등록이 정한다, 9 절) |
 | `test_profile_label_mismatch_refused`, `test_registered_constants`, `test_s_m_per_trial` | 앞 판과 같다 | 앞 판과 같다 |
 | `test_rename_paths` | 새 경로(truth·imu), 별칭, 배타 | 두 경로의 반환 dict 전체를 대조, ValueError |
 | `test_odometry_pose_*` | 직진·원호, 껍데기 회귀, 간격, `time_not_increasing` | 앞 판 단언 + reasons |
 | `test_m2_gains_fwd_rev`(②) | gain 0.9, `q_offset` 0.005 | 두 이득, 후진 부호, `distance_source` "truth" |
 | `test_m2_under_reached_arc_only`(②) | max, arc 의 q 가 0.03 모자람, presteer 는 도달, meas_q 일부 None | `under_reached` 참, None 비율 |
 | `test_m2_small_rotation`(②) | Δθ_true = 0 | `rotation_too_small`, 예외 없음 |
-| `test_m3_merge_judging_point`(③) | A 와 B 각각 | A: `end` + 대체 규칙 표지. B: `run_042` 판정, `end` 보고, `odo_dt_ns` |
+| `test_m3_merge_judging_point`(③) | A 와 B 각각 | A: `end` + 대체 규칙 표지. B: `run_042` 는 `judgeable:false, why:"run_042_definition_pending"`(정의가 정해질 때까지, 9 절), `end` 보고, `odo_dt_ns` |
 | `test_m3_l21_merge_end_not_judgeable`(③) | 2.1 m, 책상 N | `lower_bound_over_budget`(계산으로 나옴) |
 | `test_m3_qstep_delay`(③) | 엔코더 지연 0.083 s, STATE 10 ms | 0.083 ± 0.005 s. ns 입력. 사후 창이 맞지 않으면 사유 붙은 지연 void |
 | `test_m3_imu_delay_offset`(③) | MCU–IMU 오프셋 15 ms | IMU 지연에 오프셋이 그대로 들어가고 `unknown_clock_offset` |
@@ -283,7 +284,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 1. **등록이 초안이다.** 출력에 `status:"draft"` 를 낸다. 0.025·0.15 는 10-23 실기록으로 아직 확인하지 않았다(2.2).
 2. **`truth_missing` 을 void 로 둘지:** 제안은 void 다(등록 1.1 72 행). `--no-truth` 는 유효 + 판정 불가다. 총괄 결정이 필요하다.
 3. **서 있음 문턱**(바퀴 속도: `stop_speed_mps` 후보)과 **조향 |Δq| 문턱**.
-4. **`max_gap_s`:** 리허설은 0.2 s 를 썼다. D5 의 150 ms 와 맞출지.
+4. **간격 문턱(정함, 총괄 확인):** IMU run 10 ms, 서 있음·오도메트리 `max_gap_s` 0.05 s(9 절). D5 의 150 ms 는 호스트 정지 상한이라 쓰지 않는다.
 5. **Δb 의 정의:** û 투영을 제안한다(3 축 노름은 보조값).
 6. **`q_threshold`:** 0.02 rad(`PRESTEER_TOL_RAD`) 또는 계단의 10 %.
 7. **현장 void 와 재확인을 어디에 적을지:** 참값 파일의 void 행으로 둘지 `field_log` 로 모을지. "결과 전에 닫음" 을 어떻게 증명할지(시각, 해시).
@@ -293,7 +294,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 11. **M3 A 대체 판정점**(5.1, 총괄)과 **B `run_042` 의 0.42 m 를 무엇으로 잴지**(G9).
 12. **움직임 시작의 정의**(첫 카운트 변화 STATE)를 등록에 넣을지.
 13. **STATE 주기 `state_period_ms`**(10 ms 가정), 엔코더 y 의 평활(2–3 표본), MCU `wheel_rate` 필터.
-14. **N_body 를 max 로 볼지 합침으로 볼지**(오거부 시험 결과로 정한다).
+14. **N_body 판정은 등록대로 창별**(9 절). 오거부율이 크면 등록 개정을 총괄에 올린다.
 15. **IMU 파일 단위:** 블록 하나(데움부터 이어짐)를 제안한다. 시행마다 파일을 끊으면 6 구간 이동 맞춤이 성립하지 않는다(등록 81 행의 디렉터리 구조).
 16. **M2 θ_min**(제안 0.01 rad).
 17. **텔레옵 꼬리 줄 결함을 거부로 할지**(제안), 시행 창 단위로 완화할지. MCU·IMU fit 품질 지표의 문턱(지금은 보고만 한다).
@@ -331,7 +332,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 | 7 yaw 감김, 뒤축 불일치, B 시각 | 받음. atan2 정규화, host_ns 보간과 `odo_dt_ns`. 뒤축 위치는 G9 변환 문제라 확인 필요 10 에 올렸다 |
 | 8 `under_reached` 범위, Δθ = 0 | 받음. arc 의 움직인 뒤 행만 보고 None 비율을 낸다. sinc 가드와 `rotation_too_small`(3.6) |
 | 9 boot 만으로 부족 | 받음. 덮음, IMU `profile`·꼬리 줄, 텔레옵 꼬리 줄. G3 대조는 확인 필요 |
-| 10 Allan max·비균일 | 받음. 실제 시각으로 계산하고, 합침을 판정에 쓰며, 오거부 시험을 둔다. max 대 합침은 확인 필요 |
+| 10 Allan max·비균일 | 받음. 실제 시각으로 계산하고 오거부 시험을 둔다. 판정은 **9 절에서 창별(등록대로)로 바꿨다** — 이 표의 1 회차 처리(합침 판정)는 대체됨 |
 | 11 결함 비트·움직임 시작 | 받음. 마스크를 넓히고 `time_not_increasing` 을 넣었다(`real_vehicle.py:328-329`). 움직임 시작을 정의했다(확인 필요) |
 | 12 `m_synth` 기본값·이상적 모형 | 받음. 기본 참, 적대적 사례, 실행기가 쓰는 `profile` 행 |
 | 모순 1–3 | 위 1·6·11 과 같이 처리 |
