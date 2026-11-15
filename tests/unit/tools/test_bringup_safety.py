@@ -380,3 +380,29 @@ def test_the_kth_subcommand_refuses_rows_without_well_formed_counters(tmp_path, 
                          "g704_bytes", "--image", "x"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["result"] == "invalid" and drop in out["why"]
+
+
+def test_a_synthetic_record_makes_the_kth_result_synthetic_too(tmp_path, capsys):
+    """Arrival-day rehearsal D2: read with --allow-synthetic, the marks and kth's own verdict agree (synthetic)."""
+    import dataclasses
+    import json
+
+    from forklift_core.plant.bringup import Sample
+
+    rec = tmp_path / "run.jsonl"
+    rows = [{"t": "header", "schema": "bringup_record/1", "synthetic": {"bench": {"pts": "/dev/pts/9"}}}]
+    for k in range(201):
+        st = dataclasses.replace(state(), mcu_time_us=1_000_000 + k * 10_000, kth_frames=(10 * k, 10 * k),
+                                 kth_crc_errors=(0, 0), kth_alt_crc_errors=(9 * k, 0))
+        rows.append(bringup.state_row(Sample(k * 10_000_000, st)))
+    rec.write_text("\n".join(json.dumps(r, default=str) for r in rows))
+    args = ["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--configured-h", "reflected_msb_first",
+            "--image", "fw@x"]
+    assert bringup.main(args) == 2  # synthetic without the flag: refused
+    capsys.readouterr()
+    assert bringup.main([*args, "--allow-synthetic"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["synthetic_inputs"] is True and out["synthetic"] is True
+    assert out["axes"]["M"]["verdict"] == "synthetic" and out["axes"]["M"]["computed"] == "configured_ok"
+    assert out["axes"]["H"]["verdict"] == "synthetic" and out["axes"]["H"]["computed"] == "undecided"
+

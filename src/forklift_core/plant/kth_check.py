@@ -32,7 +32,7 @@ def _axis_ok(state, ax: str) -> bool:
     return math.isfinite(value) and not (state.fault_flags & _AXIS_BAD[ax])
 
 
-def kth_check(samples: Sequence, *, configured: dict, image: str) -> dict:
+def kth_check(samples: Sequence, *, configured: dict, image: str, synthetic_input: bool = False) -> dict:
     """``samples``: the record's STATEs in receipt order. ``configured``: each axis's variant in the image under
     test; ``image``: that image's identity -- both carried into the result so the verdict names what it judged."""
     if set(configured) != set(AXES) or any(v not in VARIANTS for v in configured.values()):
@@ -44,7 +44,9 @@ def kth_check(samples: Sequence, *, configured: dict, image: str) -> dict:
             "note": "alt counts show frames that tell the variants apart, not range coverage (S2 observes that)"}
     if len(samples) < 2:
         return {**base, "result": "invalid", "why": "fewer than two STATEs"}
-    synthetic = any(s.state.flags & StateFlag.HIL_PLANT for s in samples)
+    # a HIL plant, or a record the reader already knows is synthetic (its header, arrival-day rehearsal D2: a
+    # synthetic record read with --allow-synthetic must not print a verdict that looks real beside its marks)
+    synthetic = bool(synthetic_input) or any(s.state.flags & StateFlag.HIL_PLANT for s in samples)
     sums = {ax: [0, 0, 0] for ax in AXES}
     for a, b in zip(samples, samples[1:]):
         sa, sb = a.state, b.state

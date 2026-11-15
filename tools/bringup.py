@@ -955,7 +955,7 @@ def main(argv=None) -> int:
             return 0
         samples = [sample_from_row(r) for r in states]
         print(json.dumps({**marks, **kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
-                                               image=args.image)}))
+                                               image=args.image, synthetic_input=bool(marks))}))
         return 0
     if args.cmd == "clock":
         fits = clock_fits_from_rows(rows_)
