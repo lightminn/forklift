@@ -133,3 +133,25 @@ def test_adapter_drops_come_from_received_ids():
     frames = [frame(k) for k in range(30) if k not in (20, 21)]
     feed, scans = accepted(frames)
     assert sc.summarize(scans, feed)["adapter_dropped"] == 2
+
+
+def test_synthetic_frames_are_counted_and_recorded():
+    """Arrival-day rehearsal D6: a rehearsal sender's synthetic head reaches the feed's count and its record."""
+    import io
+
+    def syn(k):
+        data = frame(k)
+        h, r, _ = sf.decode_frame(data)
+        return sf.encode_frame({**h, "synthetic": True}, r, None)
+
+    buf = io.StringIO()
+    feed = sf.ScanFeed(record=buf)
+    for k in range(5):
+        feed.judge(syn(k), 0)
+    assert feed.synthetic_frames == 5
+    rows = [json.loads(x) for x in buf.getvalue().splitlines()]
+    assert rows and all(r.get("synthetic") is True for r in rows)
+    plain = sf.ScanFeed(record=io.StringIO())
+    plain.judge(frame(0), 0)
+    assert plain.synthetic_frames == 0
+
