@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import errno
 import os
+import time
 from pathlib import Path
 
 PTY_SLAVE_MAJORS = range(136, 144)
@@ -159,7 +160,13 @@ def model_alive_refusal(device: str, bench: dict, *, proc=None) -> str | None:
     return None
 
 
-def model_peer_refusal(device: str, bench: dict, *, proc=None, detail: list | None = None) -> str | None:
+SCAN_ATTEMPTS = 6  # a full scan repeated this many times before an incomplete scan refuses ...
+SCAN_RETRY_S = 0.25  # ... this far apart: a short-lived non-dumpable same-uid process (an sshd session of a status
+# probe, seen on ws1 2026-11-15) is gone by then; each attempt is the whole fail-closed scan, so nothing is relaxed
+
+
+def model_peer_refusal(device: str, bench: dict, *, proc=None, detail: list | None = None,
+                       attempts: int = SCAN_ATTEMPTS, sleep=time.sleep) -> str | None:
     """``detail``, if given, receives ``(pid, error)`` for each process that left a scan incomplete."""
     proc = SystemProc() if proc is None else proc
     if not isinstance(bench, dict) or bench.get("schema") != BENCH_SCHEMA or bench.get("synthetic") is not True:
@@ -188,7 +195,7 @@ def model_peer_refusal(device: str, bench: dict, *, proc=None, detail: list | No
         return "model_gone"
     except OSError:
         return "model_unreadable"
-    for attempt in range(2):
+    for attempt in range(attempts):
         try:
             if _other_holders(proc, index, pid, bench.get("model_starttime"), []):
                 return "master_shared"
@@ -196,6 +203,8 @@ def model_peer_refusal(device: str, bench: dict, *, proc=None, detail: list | No
         except _Incomplete as inc:
             if detail is not None:
                 detail.append((inc.args[0], repr(inc.args[1]) if len(inc.args) > 1 else None))
-            if attempt:
+            if attempt == attempts - 1:
                 return "peer_scan_incomplete"
+            if attempt:
+                sleep(SCAN_RETRY_S)  # the first repeat is immediate (a process vanishing mid-scan)
     return "peer_scan_incomplete"
