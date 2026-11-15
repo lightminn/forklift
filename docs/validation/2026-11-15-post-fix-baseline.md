@@ -13,12 +13,13 @@
 
 | 묶음 | 잡 | 시작–끝 | 실행 | 끝남 / 인프라 실패 / 미완 / 멈춤 | 비고 |
 |---|---|---|---|---|---|
-| R(70 + 반복 4) | 19264 | (sacct) | 74 | | GPU0 한 잡(VM 이 GPU1), `--retries 2` |
-| S(40) | (array) | | 40 | | isaac_array, PREFLIGHT=off 예외(아래) |
+| R(70 + 반복 4) | 19264 | 11-15 16:23:54–19:45:15 | 74 | 69 / 0 / 0 / 0, 비 0 종료 5 는 모두 임무 실패 | GPU0 한 잡(VM 이 GPU1), `--retries 2`. sacct FAILED 는 비 0 종료 실행이 있으면 묶음이 exit 1 을 내기 때문 |
+| S(40) | 19268(array) | 11-16 01:53:41–03:32:40 | 40 | 34 / 0 / 0 / 0, 비 0 종료 6(임무 실패 5, random_1 s24 렌더 동기 실패 1) | isaac_array, PREFLIGHT=off 예외(아래). 두 GPU |
 | L(32) | | | 32 | | 단독 창, 두 잡 |
 
-- 입력 대조(계획 5.2): (결과 뒤)
-- 표시 모드 거부: (baseline_summary 의 refused 목록)
+- 입력 대조(계획 5.2): R·S 뒤 재측정한 입력 해시가 제출 전(`inputs_pfb_2bea23e5.txt`)과 모두 같다. R·Rrep·S 114 실행의 기록 경로(장면 파일 폴더·URDF·기준 장면·ONNX) 불일치 0(집계 잡 19310). L 은 (L 뒤).
+- 표시 모드 거부: R·S·비교 대상 모두 0(R overlay 두 곳 확인, S stage, 곡률 B0·K1 비교 prefix, K1 재확인 overlay-noheader).
+- **S random_1 s24 는 별도 표시한다.** 관측 단계에서 `frame_sync: no frame at 1.016667 s after 20 renders` 로 끝났다. 임무 판단이 아니라 시뮬레이터의 렌더 동기 실패이고, 결정 모드 기록의 `broken` 이 이 실행에서 비어 있지 않다(표의 '결정성 깨짐 실행 1'). 진단 팔이라 다시 내지 않았다(총괄 승인).
 - **VM 과 표본 공백.** R 은 ws1 VM 이 GPU1 을 쥔 채 시작했다(사용자가 18:30 무렵 끔). vm_watch 표본(30 s)의 2 분 넘는 공백은 17:30:04–17:32:34, 18:14:04–18:16:04, 18:23:04–18:26:34, 18:30:34–18:43:34 다(zetin 점프 서버 장애, 그 뒤 연결 빈도 문제로 표본기를 멈춤). R·S 는 결정 모드 배치다. 결정성 반복 4 짝의 비교 결과를 4 절에 적고, VM·배속과의 관계는 판정하지 않는다.
 - **S 의 예외(총괄 2026-11-15, 이 배치 한정).** 묶음 점검이 진단 변수를 설계상 거부하므로 S 는 `isaac_array.sbatch` 에 `PREFLIGHT=off`(PREFLIGHT_WHY: "path display diagnostic arm S (plan 3.3): check refuses the diagnostic variable by design; DRY_RUN of two S scenes passed")로 냈다. stage 는 런처가 `EXTRA_ARGS` 의 `--path-display stage` 를 막으므로 환경변수 `FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=stage` 만으로 켰다(러너 `path_overlay.effective_mode`). S 두 장면 DRY_RUN 은 통과했다.
 
@@ -32,16 +33,118 @@
 ## 3. riib 결정 모드(R)
 
 ### 3.1 R 과 곡률 비교 B0(수정 전, 같은 장면·seed 70 실행)
-(report_tables (a)·(b))
+
+#### riib: R vs 곡률 B0
+
+- a: `/home/projects/forklift/test_runs/pfb/R_pfb_2bea23e5`(mode overlay) · b: `/home/projects/forklift/test_runs/tmp_restore/pfb_prefix/test_runs/lcr/cmp_a2b91d2d`(mode prefix) · 칸은 a / b (a = 이번 기준선)
+- 거부 실행: a 0 · b 0
+
+| 장면 | n | 완주 k/n | 원거리 첫 시도 채택 k/n | 근접 최종 상태 | 근접 시도 valid/n | 운반 이탈(추종 실패) | 운반 cusp 재계획 total(실행 수) | 하역 오차 중앙값·p90·최대 mm | 시뮬 시간 중앙값·p90 s | 실패 분류 | 금지 접촉 / 결정성 깨짐 실행 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| random_1 | 60 / 60 | 55/60 / 55/60 | 60/60 / 60/60 | done 59·pending 1 / done 59·pending 1 | 59/59 / 59/59 | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 8(7) / 9(9) | 8.6·20.1·29.2 / 9.5·19.5·29.2 | 205.0·225.8 / 205.0·221.7 | planning 2·tracking 3 / planning 1·tracking 4 | 0 / 0 / 0 / 0 |
+| line_2 | 5 / 5 | 5/5 / 5/5 | 5/5 / 5/5 | done 5 / done 5 | 5/5 / 5/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 0(0) / 2(1) | 17.8·22.6·24.9 / 10.0·24.0·26.0 | 171.3·180.0 / 178.0·212.8 | 없음 / 없음 | 0 / 0 / 0 / 0 |
+| aisle_rack | 5 / 5 | 5/5 / 4/5 | 5/5 / 5/5 | done 5 / done 4·failed 1 | 5/5 / 4/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 7(4) / 2(2) | 10.3·53.5·53.6 / 21.9·53.4·64.7 | 297.1·307.6 / 276.0·284.2 | 없음 / perception 1 | 0 / 0 / 0 / 0 |
+| 합계 | 70 / 70 | 65/70 / 64/70 | 70/70 / 70/70 | done 69·pending 1 / done 68·failed 1·pending 1 | 69/69 / 68/69 | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 15(11) / 13(12) | 8.6·21.2·53.6 / 9.9·20.9·64.7 | 205.0·234.3 / 205.0·228.4 | planning 2·tracking 3 / perception 1·planning 1·tracking 4 | 0 / 0 / 0 / 0 |
+
+#### 짝 차이(완주·끝 단계·실패 분류가 다른 짝)
+
+- 공통 70 · 바뀐 짝 7 · only_a 0 · only_b 0
+
+| 장면 | seed | a 완주 | a 끝 단계 | a 사유(앞 60 자) | b 완주 | b 끝 단계 | b 사유(앞 60 자) |
+|---|---|---|---|---|---|---|---|
+| aisle_rack | 2 | 완주 | complete | — | 실패 | observe | near_capture_failed:perception_no_pallet:no_expected_candida |
+| random_1 | 0 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.9974,yaw=1.0147 |
+| random_1 | 11 | 실패 | transport | scene_replan_refused:cusp_pose:blocked:occupied | 완주 | complete | — |
+| random_1 | 23 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.2105,yaw=0.6871 |
+| random_1 | 24 | 실패 | return_home | Tracking timeout in return_home | 완주 | complete | — |
+| random_1 | 40 | 완주 | complete | — | 실패 | transport | scene_replan_refused:cusp_pose:blocked:occupied |
+| random_1 | 49 | 실패 | transport | scene_replan_refused:cusp_pose:blocked:occupied | 완주 | complete | — |
+
 
 ### 3.2 R 과 K1 비교·K1 재확인의 K1 팔(같은 장면·seed 40 실행)
-(report_tables (a)·(b), matched)
+
+#### riib: R vs K1 비교 K1(40)
+
+- a: `/home/projects/forklift/test_runs/pfb/R_pfb_2bea23e5`(mode overlay) · b: `/home/projects/forklift/test_runs/tmp_restore/pfb_prefix/test_runs/k1/cmp_c7701296`(mode prefix) · 칸은 a / b (a = 이번 기준선) · 맞댄 짝 40(두 쪽 모두 거부되지 않은 공통 장면·seed; 공통 이름 40, a 에만 30, b 에만 0)
+- 거부 실행: a 0 · b 0
+
+| 장면 | n | 완주 k/n | 원거리 첫 시도 채택 k/n | 근접 최종 상태 | 근접 시도 valid/n | 운반 이탈(추종 실패) | 운반 cusp 재계획 total(실행 수) | 하역 오차 중앙값·p90·최대 mm | 시뮬 시간 중앙값·p90 s | 실패 분류 | 금지 접촉 / 결정성 깨짐 실행 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| random_1 | 30 / 30 | 26/30 / 26/30 | 30/30 / 30/30 | done 29·pending 1 / done 29·pending 1 | 29/29 / 29/29 | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 3(3) / 5(5) | 6.5·18.7·25.3 / 9.9·17.2·19.6 | 198.2·225.8 / 205.7·224.0 | planning 1·tracking 3 / tracking 4 | 0 / 0 / 0 / 0 |
+| line_2 | 5 / 5 | 5/5 / 5/5 | 5/5 / 5/5 | done 5 / done 5 | 5/5 / 5/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 0(0) / 2(1) | 17.8·22.6·24.9 / 10.0·24.0·26.0 | 171.3·180.0 / 178.0·212.8 | 없음 / 없음 | 0 / 0 / 0 / 0 |
+| aisle_rack | 5 / 5 | 5/5 / 4/5 | 5/5 / 5/5 | done 5 / done 4·failed 1 | 5/5 / 4/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 7(4) / 2(2) | 10.3·53.5·53.6 / 21.9·53.4·64.7 | 297.1·307.6 / 276.0·284.2 | 없음 / perception 1 | 0 / 0 / 0 / 0 |
+| 합계 | 40 / 40 | 36/40 / 35/40 | 40/40 / 40/40 | done 39·pending 1 / done 38·failed 1·pending 1 | 39/39 / 38/39 | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 10(7) / 9(8) | 8.2·22.2·53.6 / 11.7·20.4·64.7 | 198.2·267.0 / 206.4·255.2 | planning 1·tracking 3 / perception 1·tracking 4 | 0 / 0 / 0 / 0 |
+
+#### 짝 차이(완주·끝 단계·실패 분류가 다른 짝)
+
+- 공통 40 · 바뀐 짝 5 · only_a 30 · only_b 0
+
+| 장면 | seed | a 완주 | a 끝 단계 | a 사유(앞 60 자) | b 완주 | b 끝 단계 | b 사유(앞 60 자) |
+|---|---|---|---|---|---|---|---|
+| aisle_rack | 2 | 완주 | complete | — | 실패 | observe | near_capture_failed:perception_no_pallet:no_expected_candida |
+| random_1 | 0 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.9974,yaw=1.0147 |
+| random_1 | 11 | 실패 | transport | scene_replan_refused:cusp_pose:blocked:occupied | 완주 | complete | — |
+| random_1 | 23 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.2105,yaw=0.6871 |
+| random_1 | 24 | 실패 | return_home | Tracking timeout in return_home | 완주 | complete | — |
+
+#### riib: R vs K1 재확인 K1(40)
+
+- a: `/home/projects/forklift/test_runs/pfb/R_pfb_2bea23e5`(mode overlay) · b: `/home/projects/forklift/test_runs/tmp_restore/pfb_prefix/test_runs/k1r/k1r_7744f285`(mode overlay-noheader) · 칸은 a / b (a = 이번 기준선) · 맞댄 짝 40(두 쪽 모두 거부되지 않은 공통 장면·seed; 공통 이름 40, a 에만 30, b 에만 0)
+- 거부 실행: a 0 · b 0
+
+| 장면 | n | 완주 k/n | 원거리 첫 시도 채택 k/n | 근접 최종 상태 | 근접 시도 valid/n | 운반 이탈(추종 실패) | 운반 cusp 재계획 total(실행 수) | 하역 오차 중앙값·p90·최대 mm | 시뮬 시간 중앙값·p90 s | 실패 분류 | 금지 접촉 / 결정성 깨짐 실행 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| random_1 | 30 / 30 | 26/30 / 26/30 | 30/30 / 30/30 | done 29·pending 1 / done 29·pending 1 | 29/29 / 29/29 | cross_track 1·endpoint_heading 0 / cross_track 1·endpoint_heading 0 | 3(3) / 3(3) | 6.5·18.7·25.3 / 6.5·18.7·25.3 | 198.2·225.8 / 198.2·225.8 | planning 1·tracking 3 / planning 1·tracking 3 | 0 / 0 / 0 / 0 |
+| line_2 | 5 / 5 | 5/5 / 5/5 | 5/5 / 5/5 | done 5 / done 5 | 5/5 / 5/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 0(0) / 0(0) | 17.8·22.6·24.9 / 17.8·22.6·24.9 | 171.3·180.0 / 171.3·180.0 | 없음 / 없음 | 0 / 0 / 0 / 0 |
+| aisle_rack | 5 / 5 | 5/5 / 5/5 | 5/5 / 5/5 | done 5 / done 5 | 5/5 / 5/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 7(4) / 7(4) | 10.3·53.5·53.6 / 10.3·53.5·53.6 | 297.1·307.6 / 297.1·307.6 | 없음 / 없음 | 0 / 0 / 0 / 0 |
+| 합계 | 40 / 40 | 36/40 / 36/40 | 40/40 / 40/40 | done 39·pending 1 / done 39·pending 1 | 39/39 / 39/39 | cross_track 1·endpoint_heading 0 / cross_track 1·endpoint_heading 0 | 10(7) / 10(7) | 8.2·22.2·53.6 / 8.2·22.2·53.6 | 198.2·267.0 / 198.2·267.0 | planning 1·tracking 3 / planning 1·tracking 3 | 0 / 0 / 0 / 0 |
+
+#### 짝 차이(완주·끝 단계·실패 분류가 다른 짝)
+
+- 공통 40 · 바뀐 짝 0 · only_a 30 · only_b 0
+
+(바뀐 짝 없음)
+
 
 ### 3.3 R 과 S(지금 코드 위의 누출 몫, 같은 장면·seed 40 실행)
-(report_tables (a)·(b), matched. 읽는 법은 계획 3.3: 같은 코드에서 표시 prim 이 인식 카메라에 보일 때와 안 보일 때의 차이이며 #512 전후 차이의 표시선 몫이 아니다)
+
+읽는 법은 계획 3.3: 같은 코드에서 표시 prim 이 인식 카메라에 보일 때와 안 보일 때의 차이이며, #512 전후 차이의 표시선 몫이 아니다.
+
+#### riib: R vs S(40)
+
+- a: `/home/projects/forklift/test_runs/pfb/R_pfb_2bea23e5`(mode overlay) · b: `/home/projects/forklift/test_runs/pfb/S_pfb_2bea23e5`(mode stage) · 칸은 a / b (a = 이번 기준선) · 맞댄 짝 40(두 쪽 모두 거부되지 않은 공통 장면·seed; 공통 이름 40, a 에만 30, b 에만 0)
+- 거부 실행: a 0 · b 0
+
+| 장면 | n | 완주 k/n | 원거리 첫 시도 채택 k/n | 근접 최종 상태 | 근접 시도 valid/n | 운반 이탈(추종 실패) | 운반 cusp 재계획 total(실행 수) | 하역 오차 중앙값·p90·최대 mm | 시뮬 시간 중앙값·p90 s | 실패 분류 | 금지 접촉 / 결정성 깨짐 실행 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| random_1 | 30 / 30 | 26/30 / 25/30 | 30/30 / 29/29 | done 29·pending 1 / done 28·pending 1 (결측 near_capture 1) | 29/29 / 28/28 (결측 near_capture 1) | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 3(3) / 5(5) | 6.5·18.7·25.3 / 9.5·17.5·19.6 | 198.2·225.8 / 206.4·224.4 | planning 1·tracking 3 / other 1·tracking 4 | 0 / 0 / 0 / 1 |
+| line_2 | 5 / 5 | 5/5 / 5/5 | 5/5 / 5/5 | done 5 / done 5 | 5/5 / 5/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 0(0) / 2(1) | 17.8·22.6·24.9 / 10.0·24.0·26.0 | 171.3·180.0 / 178.0·212.8 | 없음 / 없음 | 0 / 0 / 0 / 0 |
+| aisle_rack | 5 / 5 | 5/5 / 4/5 | 5/5 / 5/5 | done 5 / done 4·failed 1 | 5/5 / 4/5 | cross_track 0·endpoint_heading 0 / cross_track 0·endpoint_heading 0 | 7(4) / 2(2) | 10.3·53.5·53.6 / 21.9·53.4·64.7 | 297.1·307.6 / 276.0·284.2 | 없음 / perception 1 | 0 / 0 / 0 / 0 |
+| 합계 | 40 / 40 | 36/40 / 34/40 | 40/40 / 39/39 | done 39·pending 1 / done 37·failed 1·pending 1 (결측 near_capture 1) | 39/39 / 37/38 (결측 near_capture 1) | cross_track 1·endpoint_heading 0 / cross_track 3·endpoint_heading 0 | 10(7) / 9(8) | 8.2·22.2·53.6 / 11.0·20.5·64.7 | 198.2·267.0 / 206.4·258.4 | planning 1·tracking 3 / other 1·perception 1·tracking 4 | 0 / 0 / 0 / 1 |
+
+#### 짝 차이(완주·끝 단계·실패 분류가 다른 짝)
+
+- 공통 40 · 바뀐 짝 5 · only_a 30 · only_b 0
+
+| 장면 | seed | a 완주 | a 끝 단계 | a 사유(앞 60 자) | b 완주 | b 끝 단계 | b 사유(앞 60 자) |
+|---|---|---|---|---|---|---|---|
+| aisle_rack | 2 | 완주 | complete | — | 실패 | observe | near_capture_failed:perception_no_pallet:no_expected_candida |
+| random_1 | 0 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.9974,yaw=1.0147 |
+| random_1 | 11 | 실패 | transport | scene_replan_refused:cusp_pose:blocked:occupied | 완주 | complete | — |
+| random_1 | 23 | 완주 | complete | — | 실패 | transport | Tracking failed in transport: pos=2.2105,yaw=0.6871 |
+| random_1 | 24 | 실패 | return_home | Tracking timeout in return_home | 실패 | observe | frame_sync: no frame at 1.016667 s after 20 renders |
 
 ## 4. 결정성 반복(4 짝)
-(report_tables (d). 비교 범위는 `deterministic_compare.py` 가 모으는 파일이고 RGB 는 뺀다)
+
+비교 범위는 `deterministic_compare.py` 가 모으는 실행 폴더 파일이고 RGB 배열은 뺀다. 반복은 R 과 같은 스냅숏·같은 묶음 잡에서 돌았다.
+
+
+| 짝 | 결과 | 첫 차이(또는 기록 불완전 사유) | 차이 수 | broken 수 | 기록 불완전 수 |
+|---|---|---|---|---|---|
+| rep_random_1_s0 | 같음 | — | 0 | 0 | 0 |
+| rep_random_1_s1 | 같음 | — | 0 | 0 | 0 |
+| rep_line_2_s0 | 같음 | — | 0 | 0 | 0 |
+| rep_aisle_rack_s0 | 같음 | — | 0 | 0 | 0 |
 
 ## 5. 라이브 연속 이송(L)
 (report_tables (c). 세션별 배속·슬롯 변화 요약, L-O 는 짝 비교하지 않음. L-D 짝 비교는 결과·사유·단계까지)
