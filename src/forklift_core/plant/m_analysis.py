@@ -18,6 +18,9 @@ from forklift_core.plant.real_vehicle import RealOdometry
 from forklift_core.sensors.imu_mount import _unit, _vec3
 
 DISTANCE_SOURCES = ("truth", "encoder")
+REF_SOURCES = ("truth", "imu")  # what the M1/M2 heading change is read from (entry design 4 (가))
+QUIET_GAP_MAX_NS = 10_000_000  # neighbouring samples further apart end a quiet run (400 Hz gyro: 4 periods; entry 9)
+ALLAN_GRID_PER_TAU = 10  # the Allan deviation's angle grid is tau / 10
 QUIET_GYRO_RAD_S = 0.01  # a sample's gyro within this of the window's median ...
 QUIET_ACCEL_MPS2 = 0.15  # ... and its acceleration within this: quiet (proposed; registered before measuring)
 QUIET_CHUNK_S = 1.0  # the reference is the median of the stillest chunk this long (not of the whole stretch)
@@ -62,15 +65,20 @@ def trials(rows, *, valid_only: bool = False) -> list[Trial]:
 # --- IMU -----------------------------------------------------------------------------------------------------------
 
 def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float, min_s: float,
-                 standing, gyro_tol: float = QUIET_GYRO_RAD_S,
-                 accel_tol: float = QUIET_ACCEL_MPS2) -> tuple[int, int] | None:
+                 standing, gyro_tol: float = QUIET_GYRO_RAD_S, accel_tol: float = QUIET_ACCEL_MPS2,
+                 gap_max_ns: int = QUIET_GAP_MAX_NS) -> tuple[int, int] | None:
     """``[start, end)`` indices of the bias window next to a trial: within ``max_s`` before (or after) the boundary,
     the contiguous run of quiet samples (gyro and acceleration near the median of the stillest 1 s chunk) that is
     closest to the boundary and at least ``min_s`` long -- motion at the trial's edge (a creep, the end of a drive)
     is cut off. ``standing``: host-time intervals where the encoders say the truck stands (design 3: encoder speed
     zero and IMU quiet) -- a steady straight drive looks quiet to an IMU, so samples outside them never count. It
     is required; ``None`` (IMU alone) must be passed on purpose and is for diagnostics, never for a measurement.
+    A run is contiguous in the record itself: it ends where the next kept sample is not the next sample of the
+    array (a sample outside ``standing`` lies between) or comes more than ``gap_max_ns`` later (samples missing),
+    so the returned ``[start, end)`` never spans a stretch that was not looked at (entry design 3.3 5, 4 (나), 9).
     Returns None when there is no such run."""
+    if isinstance(gap_max_ns, bool) or int(gap_max_ns) != gap_max_ns or gap_max_ns <= 0:
+        raise ValueError("gap_max_ns must be a positive whole number of nanoseconds")
     t = np.asarray(t_ns, dtype=np.int64)
     if side == "before":
         sel = np.flatnonzero((t <= boundary_ns) & (t >= boundary_ns - int(max_s * 1e9)))
@@ -106,13 +114,16 @@ def quiet_window(t_ns, gyro, accel, *, boundary_ns: int, side: str, max_s: float
         return None
     g_ref, a_ref = np.median(g[best], axis=0), np.median(a[best], axis=0)
     quiet = (np.linalg.norm(g - g_ref, axis=1) <= gyro_tol) & (np.linalg.norm(a - a_ref, axis=1) <= accel_tol)
+    # linked[i]: kept sample i follows kept sample i - 1 directly, in the array and in time
+    linked = np.ones(len(sel), dtype=bool)
+    linked[1:] = (np.diff(sel) == 1) & (np.diff(ts) <= int(gap_max_ns))
     runs, start = [], None
     for i, ok in enumerate(quiet):
-        if ok and start is None:
-            start = i
-        elif not ok and start is not None:
+        if start is not None and not (ok and linked[i]):
             runs.append((start, i))
             start = None
+        if ok and start is None:
+            start = i
     if start is not None:
         runs.append((start, len(quiet)))
     long_enough = [(s, e) for s, e in runs if (t[sel[e - 1]] - t[sel[s]]) / 1e9 >= min_s]
@@ -163,23 +174,119 @@ def gyro_scale(*, imu_dyaw: float, turns: int, heading_error_rad: float = 0.0) -
     return {"scale": abs(imu_dyaw) / nominal, "sigma": math.sqrt(2) * heading_error_rad / nominal, "turns": turns}
 
 
+def allan_dev_tau(t_ns, rate, tau_s: float) -> float:
+    """The overlapping Allan deviation of one rate series (rad/s, e.g. the up-projected, bias-free yaw rate of a
+    standing window) at ``tau_s``, on the samples' actual times (entry design 3.3 8, 4 (나)): the rate is
+    trapezoid-integrated to an angle on the real timestamps, the angle linearly interpolated onto a uniform grid of
+    ``tau / 10`` and the overlapping estimator taken there, sigma^2 = mean((th[k+2m] - 2 th[k+m] + th[k])^2) /
+    (2 tau^2) with m = 10. No uniform sample period is assumed (the D435i gyro runs at a measured 400.8 Hz, with
+    jitter). For white rate noise of density N (rad/sqrt(s)) it reads N / sqrt(tau). The caller hands over a window
+    without gaps (``quiet_window``); a record shorter than 2 tau is refused."""
+    t = np.asarray(t_ns, dtype=np.int64)
+    w = np.asarray(rate, float)
+    if t.ndim != 1 or len(t) < 2 or np.any(np.diff(t) <= 0):
+        raise ValueError("allan_dev_tau needs at least two samples on a strictly increasing clock")
+    if w.shape != t.shape or not np.isfinite(w).all():
+        raise ValueError("rate must be one finite value per time (project a 3-axis gyro onto the axis first)")
+    tau = _positive(tau_s, "tau_s")
+    ts = (t - int(t[0])) / 1e9
+    angle = np.zeros(len(ts))
+    angle[1:] = np.cumsum((w[1:] + w[:-1]) / 2 * np.diff(ts))
+    m = ALLAN_GRID_PER_TAU
+    step = tau / m
+    n = int(math.floor(ts[-1] / step + 1e-9)) + 1
+    if n < 2 * m + 1:
+        raise ValueError(f"the record ({ts[-1]:.3f} s) is shorter than 2 tau ({2 * tau:.3f} s)")
+    th = np.interp(np.arange(n) * step, ts, angle)
+    d = th[2 * m:] - 2 * th[m:n - m] + th[:n - 2 * m]
+    return float(math.sqrt(float(np.mean(d * d)) / (2 * tau * tau)))
+
+
 # --- odometry ------------------------------------------------------------------------------------------------------
 
-def odometry_heading(states, cfg, *, max_gap_s: float) -> dict:
+def odometry_pose(states, cfg, *, max_gap_s: float) -> dict:
     """The real truck's odometry re-run over recorded STATEs (each with mcu_time_us, boot_id, wheel counts,
-    steering_rad, fault_flags): the yaw after each sample and where continuity broke. The yaw keeps accumulating
-    across a break; never compare two samples on either side of one as if continuous."""
+    steering_rad, fault_flags): the rear-axle pose ``x``, ``y``, ``yaw`` after each sample (``RealOdometry``'s frame,
+    starting at the origin) and where continuity broke (entry design 3.3 2, 4 (나)). The pose keeps accumulating
+    across a break; never compare two samples on either side of one as if continuous.
+
+    ``broken``: ``(mcu_time_us, reason)`` of every sample after the first that broke continuity (as before).
+    ``reasons``: ``(index, mcu_time_us, reason)`` of every sample whose step gave a reason, the first sample
+    included -- ``time_not_increasing`` (a repeated or late STATE: not integrated, but not a continuity break either,
+    ``real_vehicle.py`` 328-329) and ``rereference`` only show here; the entry voids a trial on them (3.4)."""
     odo = RealOdometry(cfg, max_gap_s=max_gap_s)
-    t, yaw, broken = [], [], []
-    for s in states:
+    t, x, y, yaw, broken, reasons = [], [], [], [], [], []
+    for i, s in enumerate(states):
         cut = bool(int(s.fault_flags) & int(_ENCODER_CUT))
         step = odo.update(s.mcu_time_us, s.boot_id, s.wheel_count_left, s.wheel_count_right, s.steering_rad,
                           encoder_cut=cut)
         t.append(int(s.mcu_time_us))
+        x.append(step.pose[0])
+        y.append(step.pose[1])
         yaw.append(step.pose[2])
-        if step.continuity_broken and len(t) > 1:
+        if step.reason is not None:
+            reasons.append((i, int(s.mcu_time_us), step.reason))
+        if step.continuity_broken and i > 0:
             broken.append((int(s.mcu_time_us), step.reason))
-    return {"mcu_time_us": np.asarray(t, dtype=np.int64), "yaw": np.asarray(yaw), "broken": broken}
+    return {"mcu_time_us": np.asarray(t, dtype=np.int64), "x": np.asarray(x), "y": np.asarray(y),
+            "yaw": np.asarray(yaw), "broken": broken, "reasons": reasons}
+
+
+def odometry_heading(states, cfg, *, max_gap_s: float) -> dict:
+    """``odometry_pose``'s yaw alone, with the keys it always had (``mcu_time_us``, ``yaw``, ``broken``)."""
+    p = odometry_pose(states, cfg, max_gap_s=max_gap_s)
+    return {"mcu_time_us": p["mcu_time_us"], "yaw": p["yaw"], "broken": p["broken"]}
+
+
+def _pose3(p, what: str) -> np.ndarray:
+    v = np.asarray(p, float)
+    if v.shape != (3,) or not np.isfinite(v).all():
+        raise ValueError(f"{what} must be a finite (x, y, yaw)")
+    return v
+
+
+def _cov3(c, what: str) -> np.ndarray:
+    m = np.asarray(c, float)
+    if m.shape != (3, 3) or not np.isfinite(m).all():
+        raise ValueError(f"{what} must be a finite 3 x 3 covariance of (x, y, yaw)")
+    scale = float(np.abs(m).max())
+    if not np.allclose(m, m.T, rtol=0.0, atol=1e-12 * scale) or np.any(np.diag(m) < 0):
+        raise ValueError(f"{what} must be symmetric with non-negative variances")
+    # positive semi-definite: a matrix with non-negative variances can still have a negative eigenvalue, and the
+    # propagated variances would then hide it (Codex D4 impl review P2)
+    if float(np.linalg.eigvalsh(0.5 * (m + m.T)).min()) < -1e-12 * max(scale, 1e-300):
+        raise ValueError(f"{what} must be positive semi-definite")
+    return m
+
+
+def relative_pose(p0, p1, cov0=None, cov1=None) -> dict:
+    """The pose ``p1`` seen from ``p0`` (both ``(x, y, yaw)`` in one floor frame): ``dx_fwd``, ``dy_lat`` = R(-yaw0)
+    (p1 - p0) (forward along p0's heading, + to its left) and ``dyaw`` = yaw1 - yaw0 wrapped by atan2 to (-pi, pi]
+    (entry design 3.3 10). Used alike for the truth and the odometry; ``dist_m`` is |p1 - p0|.
+
+    With both covariances (3 x 3 over x, y, yaw; the two poses independent of each other) it adds ``cov``, the
+    3 x 3 covariance of (dx_fwd, dy_lat, dyaw) carried by the Jacobians, J0 C0 J0^T + J1 C1 J1^T, and its
+    ``sigma_fwd``, ``sigma_lat``, ``sigma_dyaw``. The registration's sqrt(s_th0^2 + s_th1^2) and
+    sqrt(s_y0^2 + s_y1^2 + (|dp| s_th0)^2) (6.1-6.3) are its special case for diagonal covariances and motion along
+    p0's heading; correlated errors are carried as they are (entry 9)."""
+    a, b = _pose3(p0, "p0"), _pose3(p1, "p1")
+    c, s = math.cos(a[2]), math.sin(a[2])
+    ex, ey = float(b[0] - a[0]), float(b[1] - a[1])
+    dx, dy = c * ex + s * ey, -s * ex + c * ey
+    d = float(b[2] - a[2])
+    out = {"dx_fwd": dx, "dy_lat": dy, "dyaw": math.atan2(math.sin(d), math.cos(d)), "dist_m": math.hypot(ex, ey)}
+    if cov0 is None and cov1 is None:
+        return out
+    if cov0 is None or cov1 is None:
+        raise ValueError("give both poses' covariances or neither")
+    c0, c1 = _cov3(cov0, "cov0"), _cov3(cov1, "cov1")
+    j0 = np.array([[-c, -s, dy], [s, -c, -dx], [0.0, 0.0, -1.0]])
+    j1 = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])
+    cov = j0 @ c0 @ j0.T + j1 @ c1 @ j1.T
+    cov = (cov + cov.T) / 2
+    sig = np.sqrt(np.clip(np.diag(cov), 0.0, None))
+    out.update(cov=cov, sigma_fwd=float(sig[0]), sigma_lat=float(sig[1]), sigma_dyaw=float(sig[2]))
+    return out
 
 
 def encoder_yaw_rate(rate_left_rad_s, rate_right_rad_s, *, radius_m, track_m: float) -> np.ndarray:
@@ -212,33 +319,66 @@ def _nonzero(value: float, what: str) -> float:
     return v
 
 
-def m1_drift(*, odo_dyaw: float, imu_dyaw: float, distance_m: float, distance_source: str) -> dict:
-    """Odometry heading minus IMU heading per metre. With ``encoder`` distance the drive's own encoder distance is
-    the denominator (it also ended the segment), so a radius error enters it -- say so in the result."""
+def _heading_ref(heading_ref_dyaw, ref_source, imu_dyaw) -> tuple[float, str, bool]:
+    """The heading change M1/M2 are measured against (entry design 4 (가)): ``heading_ref_dyaw`` with its
+    ``ref_source`` (truth or imu), or the old ``imu_dyaw`` alone (the alias: source imu, old result keys). Exactly
+    one of the two; the alias takes no ``ref_source``. Returns (value, source, alias)."""
+    if imu_dyaw is not None:
+        if heading_ref_dyaw is not None:
+            raise ValueError("give heading_ref_dyaw or the imu_dyaw alias, not both")
+        if ref_source is not None:
+            raise ValueError("imu_dyaw is the imu alias and takes no ref_source; use heading_ref_dyaw with it")
+        return imu_dyaw, "imu", True
+    if heading_ref_dyaw is None:
+        raise ValueError("a heading reference is needed: heading_ref_dyaw with ref_source, or the imu_dyaw alias")
+    if ref_source not in REF_SOURCES:
+        raise ValueError(f"ref_source must be one of {REF_SOURCES}")
+    return heading_ref_dyaw, ref_source, False
+
+
+def m1_drift(*, odo_dyaw: float, heading_ref_dyaw: float | None = None, ref_source: str | None = None,
+             imu_dyaw: float | None = None, distance_m: float, distance_source: str) -> dict:
+    """Odometry heading minus the reference heading per metre (registration 3.3; entry design 3.5, 4 (가)): the
+    reference is ``heading_ref_dyaw`` from ``ref_source`` ("truth": the floor truth's stop poses; "imu"), giving
+    ``odo_minus_ref_rad`` and ``ref_source``. The old ``imu_dyaw`` keyword stays as an alias: source imu and the old
+    key ``odo_minus_imu_rad`` in place of ``odo_minus_ref_rad`` (only on that path). With ``encoder`` distance the
+    drive's own encoder distance is the denominator (it also ended the segment), so a radius error enters it -- say
+    so in the result."""
+    ref, source, alias = _heading_ref(heading_ref_dyaw, ref_source, imu_dyaw)
     _positive(distance_m, "distance_m")
-    diff = odo_dyaw - imu_dyaw
+    diff = odo_dyaw - ref
     note = ("encoder distance: the drive's own encoder distance is the denominator (it also ended the segment), so a "
             "wheel radius error enters the rate") if _source(distance_source) == "encoder" else ""
-    return {"rad_per_m": diff / distance_m, "odo_minus_imu_rad": diff, "distance_m": distance_m,
-            "distance_source": distance_source, "note": note}
+    return {"rad_per_m": diff / distance_m, ("odo_minus_imu_rad" if alias else "odo_minus_ref_rad"): diff,
+            "ref_source": source, "distance_m": distance_m, "distance_source": distance_source, "note": note}
 
 
-def m2_gains(*, imu_dyaw: float, distance_m: float, direction: int, kappa_measured_q: float,
-             kappa_commanded_q: float, distance_source: str) -> dict:
+def m2_gains(*, heading_ref_dyaw: float | None = None, ref_source: str | None = None, imu_dyaw: float | None = None,
+             distance_m: float, direction: int, kappa_measured_q: float, kappa_commanded_q: float,
+             distance_source: str) -> dict:
     """True curvature = heading change over the segment's distance (not a ratio of means), and two gains:
     ``gain_measured_q`` (the C3 true/kinematic gain's counterpart: the curvature of the steering that was there) and
     ``gain_commanded_q`` (steering tracking included). ``distance_m`` is the travelled length (positive, as the
     profile's ``s_m``) and ``direction`` +1 forward / -1 reverse: reversing with a left curvature turns the heading
-    the other way, so the curvature is heading change over the signed distance."""
+    the other way, so the curvature is heading change over the signed distance. The heading change is
+    ``heading_ref_dyaw`` from ``ref_source`` or the old ``imu_dyaw`` alias, as in ``m1_drift`` (entry design 3.6,
+    4 (가)); the result names its ``ref_source``, and an IMU heading carries the gyro's unmeasured scale into every
+    gain -- the note says so; whether such a gain is judgeable is the entry's call (``no_gyro_scale``)."""
+    ref, source, _alias = _heading_ref(heading_ref_dyaw, ref_source, imu_dyaw)
     if direction not in (1, -1):
         raise ValueError("direction is +1 (forward) or -1 (reverse)")
-    k = imu_dyaw / (_positive(distance_m, "distance_m") * direction)
+    k = ref / (_positive(distance_m, "distance_m") * direction)
     _nonzero(kappa_measured_q, "kappa_measured_q")
     _nonzero(kappa_commanded_q, "kappa_commanded_q")
-    note = ("encoder distance: a wheel radius error scales every condition's gain by the same factor; the M1 "
-            "true/encoder distance ratio separates it") if _source(distance_source) == "encoder" else ""
+    notes = []
+    if _source(distance_source) == "encoder":
+        notes.append("encoder distance: a wheel radius error scales every condition's gain by the same factor; the M1 "
+                     "true/encoder distance ratio separates it")
+    if source == "imu":
+        notes.append("imu heading: the gyro's scale error scales every gain; gyro scale needed")
     return {"kappa_true": k, "gain_measured_q": k / kappa_measured_q, "gain_commanded_q": k / kappa_commanded_q,
-            "distance_m": distance_m, "direction": direction, "distance_source": distance_source, "note": note}
+            "distance_m": distance_m, "direction": direction, "distance_source": distance_source,
+            "ref_source": source, "note": "; ".join(notes)}
 
 
 # --- M3 ------------------------------------------------------------------------------------------------------------

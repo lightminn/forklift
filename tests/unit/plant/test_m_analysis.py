@@ -75,7 +75,7 @@ def test_the_heading_uncertainty_is_a_lower_bound_with_its_parts():
 
 def test_m1_drift_names_its_distance_source():
     m = ma.m1_drift(odo_dyaw=0.012, imu_dyaw=0.003, distance_m=3.0, distance_source="truth")
-    assert m == {"rad_per_m": pytest.approx(0.003), "odo_minus_imu_rad": pytest.approx(0.009),
+    assert m == {"rad_per_m": pytest.approx(0.003), "odo_minus_imu_rad": pytest.approx(0.009), "ref_source": "imu",
                  "distance_m": 3.0, "distance_source": "truth", "note": ""}
     assert "radius" in ma.m1_drift(odo_dyaw=0.0, imu_dyaw=0.0, distance_m=3.0, distance_source="encoder")["note"]
     with pytest.raises(ValueError, match="source"):
