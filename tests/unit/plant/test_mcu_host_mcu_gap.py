@@ -252,3 +252,28 @@ def test_drive_validity_still_counts_from_the_receipt_after_a_stall():
     assert r.host.drive(drive_cmd(), 0.0, True, rx + 100 * MS, r.now) is None
     (d,) = r.sent()
     assert d.echo_mcu_time_us == echo and d.valid_after_echo_ms == 100
+
+
+def test_a_stale_event_names_the_other_clocks_gap():
+    # a record must tell a host stall (the operating path) from an MCU silence (lead 2026-11-16)
+    r = McuRig()
+    r.ready()
+    (d,) = [e.detail for e in r.burst(166, **ARMED_READY) if e.kind == "stale"]
+    assert d["why"] == "host_gap" and d["value_s"] == pytest.approx(0.166) and d["mcu_gap_s"] == pytest.approx(0.010)
+    r = McuRig()
+    r.ready()
+    (d,) = [e.detail for e in r.burst(60, mcu_first_ms=60, **ARMED_READY) if e.kind == "stale"]
+    assert d["why"] == "mcu_gap" and d["mcu_gap_s"] == pytest.approx(0.060) and d["host_gap_s"] == pytest.approx(0.060)
+    r = McuRig()
+    r.ready()
+    (d,) = [e.detail for e in r.tick(20) + r.tick(20) + r.tick(20) if e.kind == "stale"]
+    assert d["why"] == "age" and d["host_gap_s"] == pytest.approx(0.060) and d["delay_s"] == pytest.approx(0.005)
+
+
+def test_a_delayed_newest_state_names_its_delay_and_the_gaps():
+    r = McuRig()
+    r.ready()
+    r.fresh.delay_ms = 60.0
+    (d,) = [e.detail for e in r.burst(60, **ARMED_READY) if e.kind == "stale"]
+    assert d["why"] == "age" and d["delay_s"] == pytest.approx(0.060) and d["n_states"] == 6
+    assert d["host_gap_s"] == pytest.approx(0.060) and d["mcu_gap_s"] == pytest.approx(0.060)

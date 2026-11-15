@@ -316,10 +316,12 @@ class McuLinkHost:
             return
         self._advance_auth(s, now_ns, events)
 
-    def _stale(self, why: str, value_s: float, events: list) -> None:
+    def _stale(self, why: str, value_s: float, events: list, **seen) -> None:
+        """``seen``: the other clock's gap at the same moment (``host_gap_s``, ``mcu_gap_s``, ``delay_s``), so a record
+        tells a host-side stall (the operating path) from an MCU-side silence (lead 2026-11-16)."""
         if not self._stale_reported:
             self._stale_reported = True
-            events.append(HostEvent("stale", {"why": why, "value_s": value_s}))
+            events.append(HostEvent("stale", {"why": why, "value_s": value_s, **seen}))
             self._revoke("stale", events)
 
     def _on_read_mcu(self, states: list, rx: int, events: list) -> None:
@@ -328,6 +330,7 @@ class McuLinkHost:
         come back within the read: forward steps start only from an operator's ARM (``_ARM_PENDING``)."""
         newest = None
         first = True
+        rx_before, state_before, n_read = self._state_rx_ns, self._state, 0
         for s in states:
             if s.boot_id == 0:
                 events.append(HostEvent("state_invalid", {"why": "boot_id 0"}))
@@ -343,6 +346,7 @@ class McuLinkHost:
             d = self._freshness.delay_s(s, rx) if rule else None
             if self._state_rx_ns is not None and prev is not None:
                 host_gap = (rx - self._state_rx_ns) / 1e9
+                raw_mcu_gap = (s.mcu_time_us - prev.mcu_time_us) / 1e6 if s.boot_id == prev.boot_id else None
                 if not rule:
                     if host_gap > self.cfg.state_max_age_s:
                         # the host rule's own event (unchanged)
@@ -351,13 +355,13 @@ class McuLinkHost:
                             events.append(HostEvent("stale", {"age_s": host_gap}))
                             self._revoke("stale", events)
                 elif first and host_gap > self.cfg.host_gap_s:
-                    self._stale("host_gap", host_gap, events)
+                    self._stale("host_gap", host_gap, events, mcu_gap_s=raw_mcu_gap, delay_s=d)
                 elif d is not None and s.boot_id == prev.boot_id:
                     mcu_gap = (s.mcu_time_us - prev.mcu_time_us) / 1e6 * (1.0 + float(self._freshness.rate_bound()))
                     if mcu_gap > self.cfg.state_max_age_s:
-                        self._stale("mcu_gap", mcu_gap, events)
+                        self._stale("mcu_gap", mcu_gap, events, host_gap_s=host_gap, mcu_gap_s=raw_mcu_gap, delay_s=d)
                 elif host_gap > self.cfg.state_max_age_s:
-                    self._stale("host_gap", host_gap, events)
+                    self._stale("host_gap", host_gap, events, mcu_gap_s=raw_mcu_gap, delay_s=d)
             if self._auth in (_ARM_PENDING, _ZERO_PENDING) and rx > self._arm["deadline_ns"]:
                 self._revoke("arm_timeout", events)
             first = False
@@ -385,12 +389,18 @@ class McuLinkHost:
                 continue
             self._advance_auth(s, rx, events, forward=False)
             newest = s
+            n_read += 1
         if newest is None:
             return
         if self._mcu_rule() and self._state_delay_s is not None:
             age = self._age_ns(rx) / 1e9
             if age > self.cfg.state_max_age_s:
-                self._stale("age", age, events)
+                # at the receipt the age is the newest STATE's delay bound alone: it was read that long after the MCU
+                # made it -- with the host gap since the read before and the MCU-time gap over the read
+                same = state_before is not None and state_before.boot_id == newest.boot_id
+                self._stale("age", age, events, delay_s=self._state_delay_s, n_states=n_read,
+                            host_gap_s=None if rx_before is None else (rx - rx_before) / 1e9,
+                            mcu_gap_s=(newest.mcu_time_us - state_before.mcu_time_us) / 1e6 if same else None)
         if newest is self._state:
             self._advance_auth(newest, rx, events, forward=True)
 
@@ -440,7 +450,8 @@ class McuLinkHost:
         """Staleness of the last receipt and the arm deadline, as of now_ns."""
         if self._state_rx_ns is not None and not self._fresh(now_ns) and not self._stale_reported:
             if self._mcu_rule():
-                self._stale("age", self._age_ns(now_ns) / 1e9, events)
+                self._stale("age", self._age_ns(now_ns) / 1e9, events, host_gap_s=(now_ns - self._state_rx_ns) / 1e9,
+                            delay_s=self._state_delay_s)
             else:
                 self._stale_reported = True
                 events.append(HostEvent("stale", {"age_s": (now_ns - self._state_rx_ns) / 1e9}))

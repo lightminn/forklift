@@ -536,6 +536,9 @@ class TeleopBridge:
         self._last_cycle_ns: int | None = None
         self.gap_s: float | None = None  # the real time since the previous cycle (D5 3.12)
         self._slow_cycles: deque = deque()  # cycle starts whose gap exceeded LOOP_SLOW_GAP_S (D5 3.12)
+        # the count that stops the armed truck; the operating value is LOOP_SLOW_COUNT -- only a harness that is not
+        # itself real time (the end-to-end tests under a loaded CI node) raises it
+        self.loop_slow_count = LOOP_SLOW_COUNT
         self._newest_mcu: dict[int, int] = {}
         self.dropped_old = 0
         self._disconnects_seen = 0
@@ -686,7 +689,7 @@ class TeleopBridge:
         elif a.armed and reading.speed.valid and reading.speed.bound_mps > self.limit_mps:
             self._stop(now_ns, "overspeed", rec)
             self._urgent = True
-        if a.armed and len(self._slow_cycles) >= LOOP_SLOW_COUNT:
+        if a.armed and len(self._slow_cycles) >= self.loop_slow_count:
             # D5 3.12: the loop itself keeps running late -- every cycle-based bound is optimistic; not a link loss
             self._stop(now_ns, "loop_slow", rec)
             self._slow_cycles.clear()
