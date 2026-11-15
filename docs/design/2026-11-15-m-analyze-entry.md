@@ -121,7 +121,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
     - 정지 자세의 오도메트리는 그 정지 구간 안의 STATE 에서 읽는다(첫 움직임 직전, 마지막 주행 뒤 `still_post`). 그 사이에 카운트 변화가 없음을 확인한다.
     - 주행 중 점은 오도메트리 x, y, yaw 를 그 `host_ns` 에 선형 보간하고, 양옆 STATE 와의 시각 차 `odo_dt_ns` 를 낸다. 간격이 `max_gap_s` 를 넘으면 `odo_interp_gap` 이다.
     - Δ = R(−θ₀)(p₁ − p₀), Δθ = atan2(sin(θ₁ − θ₀), cos(θ₁ − θ₀)) 를 참값과 오도메트리 모두에 쓴다.
-    - **예산은 상대량으로 검사한다**(등록 6.1–6.3): √(σ_θ0² + σ_θ1²) ≤ 1.0 mrad, √(σ_y0² + σ_y1² + (|Δp|·σ_θ0)²) ≤ 1.7 mm. σ_y 는 공분산을 출발 좌표계의 횡축에 투영한 값이다. 넘으면 `truth_over_budget` 이다.
+    - **예산은 상대량으로 검사한다**(등록 6.1–6.3, 9 절): 두 자세의 3×3 공분산(자세끼리 독립)을 (Δ, Δθ) 의 야코비안으로 전파하고, 그 결과의 횡 성분 σ ≤ 1.7 mm, heading σ ≤ 1.0 mrad 를 본다. 등록의 √(σ_θ0² + σ_θ1²)·√(σ_y0² + σ_y1² + (|Δp|·σ_θ0)²) 는 공분산이 대각·독립일 때의 특수형이다(시험 `test_relative_budget_jacobian`). 넘으면 `truth_over_budget` 이다.
 
 ### 3.4 void 와 판정 불가
 
@@ -166,7 +166,7 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 ### 3.7 M3 합류(등록 5.4·5.5; PR ③)
 
 - **판정점은 방법에 따라 갈린다.**
-  - B 이면 `run_042`(moving_point)가 판정점이다. `end` 정지 자세와 `merge_end` 는 보고값이다.
+  - B 이면 `run_042`(moving_point)가 판정점이 될 자리다. 다만 0.42 m 를 무엇으로 재는지 정해지기 전까지는 `judgeable:false, why:"run_042_definition_pending"` 인 보고값으로만 낸다(9 절). `end` 정지 자세와 `merge_end` 도 보고값이다.
   - A 이면 `end`(cont 끝 정지 자세)를 판정점으로 하는 **별도 규칙**으로 낸다. 출력에 `rule:"A_substitute_cont_end_stop", substitute_pending_lead:true` 를 붙인다(5.1, 총괄 승인 대기).
   - e_θ = Δθ_odo − Δθ_true, e_y 는 횡 성분, e_x 는 보고만 한다.
 - **IMU heading(A, 주행 중 점):** 움직임 시작부터 그 점까지 적분한다. T 는 그 **지속 시간**(점 시각 − 움직임 시작)이고, 기록에서 잰다.
