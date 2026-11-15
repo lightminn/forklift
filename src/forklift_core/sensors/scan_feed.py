@@ -144,6 +144,7 @@ class ScanFeed:
         self._last_id: int | None = None
         self.id_gaps = 0  # scan_ids missing between received frames: the adapter's (or the socket's) losses
         self.synthetic_frames = 0  # frames whose head says "synthetic": true (a rehearsal sender; arrival-day D6)
+        self._frame_synthetic = False
 
     # ------------------------------------------------------------------ the clock pair
     def _establish(self, pair: int) -> bool:
@@ -172,17 +173,19 @@ class ScanFeed:
             self.refused[why] += 1
         if self.record is not None:
             row = {"host_recv_ns": int(host_recv_ns), "frame": base64.b64encode(data).decode("ascii"), "verdict": why}
-            if self.synthetic_frames:
-                row["synthetic"] = True  # the record says so without decoding the frame (arrival-day D6)
+            if self._frame_synthetic:
+                row["synthetic"] = True  # this frame's head said so (arrival-day D6; per frame, not cumulative)
             self.record.write(json.dumps(row) + "\n")
         return scan, why
 
     def _judge(self, data: bytes) -> tuple[RealScan | None, str | None]:
+        self._frame_synthetic = False
         try:
             h, ranges, inten = decode_frame(data)
         except FrameError as exc:
             return None, str(exc)
         if h.get("synthetic") is True:
+            self._frame_synthetic = True
             self.synthetic_frames += 1
         sid = h.get("scan_id")
         if _int(sid, 0):  # every received frame, accepted or not, for the gap count (Codex 7a P2-3)

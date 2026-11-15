@@ -154,4 +154,11 @@ def test_synthetic_frames_are_counted_and_recorded():
     plain = sf.ScanFeed(record=io.StringIO())
     plain.judge(frame(0), 0)
     assert plain.synthetic_frames == 0
+    # a mixed stream (real -> synthetic -> real): each record row follows its own frame's head (Codex P3)
+    buf = io.StringIO()
+    mixed = sf.ScanFeed(record=buf)
+    for k, f in enumerate((frame(0), syn(1), frame(2))):
+        mixed.judge(f, 0)
+    flags = [json.loads(x).get("synthetic", False) for x in buf.getvalue().splitlines()]
+    assert flags == [False, True, False] and mixed.synthetic_frames == 1
 

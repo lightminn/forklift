@@ -404,4 +404,5 @@ def test_a_synthetic_record_makes_the_kth_result_synthetic_too(tmp_path, capsys)
     out = json.loads(capsys.readouterr().out)
     assert out["synthetic_inputs"] is True and out["synthetic"] is True
     assert out["axes"]["M"]["verdict"] == "synthetic" and out["axes"]["M"]["computed"] == "configured_ok"
+    assert out["axes"]["H"]["verdict"] == "synthetic" and out["axes"]["H"]["computed"] == "undecided"
 
