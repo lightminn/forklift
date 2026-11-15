@@ -145,7 +145,8 @@ def test_m2_reports_the_imu_curvature_never_judgeable_without_the_gyro_scale():
     tr = res["trials"][0]
     k = tr["values"]["imu_kappa_inv_m"]
     assert k["judgeable"] is False and k["why"][0] == "no_gyro_scale" and k["report_only"] is True
-    if k["value"] is not None:  # the IMU heading over the arc, over the true arc length
+    assert k["value"] is not None  # 60 s stills: the bias windows exist, so the IMU heading does too
+    if True:  # the IMU heading over the arc, over the true arc length
         assert k["distance_source"] == "truth"
         assert abs(k["value"] - tr["values"]["kappa_true_inv_m"]["value"]) < 0.05 * abs(tr["values"]["kappa_true_inv_m"]["value"])
 
