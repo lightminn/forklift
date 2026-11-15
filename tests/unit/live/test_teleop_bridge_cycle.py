@@ -795,3 +795,22 @@ def test_after_a_reconnect_nothing_moves_until_the_rate_is_verified_again_and_th
     assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED
     assert not r.nonzero_sent(before) and r.bridge.phase != rt.READY and not r.host.authorized
     assert all(x["applied_mps"] == 0.0 for x in recs)
+
+
+
+def test_delay_terms_add_up_to_the_bound():
+    from forklift_core.live.real_teleop import DelayBound
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag
+    from forklift_core.plant.bringup import Sample
+
+    db = DelayBound()
+    # two anchors (offset, receipt, MCU time, bound, boot) in reach; the second gives the smaller bound
+    db._anchors = [(5_000_000, 1_000_000_000, 995_000_000, 12_000_000, 7),
+                   (6_000_000, 1_010_000_000, 1_004_000_000, 9_000_000, 7)]
+    st = McuState(1_020_000, 7, 1, 0, Mode.ARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0, 0.0, 0.0,
+                  (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+    smp = Sample(1_030_000_000, st)
+    t = db.terms(smp)
+    assert t["anchors"] == 2 and t["anchor_bound_ms"] == 9.0 and t["anchor_age_ms"] == 20.0
+    assert abs(t["anchor_bound_ms"] + t["offset_diff_ms"] + t["drift_ms"] - db.delay_s(smp) * 1e3) < 1e-6
+    assert DelayBound().terms(smp) is None

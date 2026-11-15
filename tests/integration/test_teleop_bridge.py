@@ -199,7 +199,9 @@ class Run:
         # which side went stale (lead 2026-11-16): host_gap = the bridge stalled past the 150 ms cap (the operating
         # path); mcu_gap / age = the MCU model's STATEs stopped or came late (this test's own process) -- with the
         # other clock's gap at that moment and the bridge's cycle gap of that record
-        stale = [{**d, "cycle_gap_ms": x.get("cycle_gap_ms")} for x in recs for d in x.get("stale_detail", ())]
+        stale = [{**d, "cycle_gap_ms": x.get("cycle_gap_ms"), "terms": x.get("delay_terms"), "rate": x.get("rate"),
+                  "rate_range_at_end": list(self.b.core.rate.range) if self.b.core.rate.range else None}
+                 for x in recs for d in x.get("stale_detail", ())]
         # the DelayBound's own size (lead 2026-11-16: the to_ready latches came from a loose bound, the operating path;
         # the harness's rearm only gathers evidence until that is fixed)
         delays = [x["delay_s"] for x in recs if x.get("delay_s") is not None]

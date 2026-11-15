@@ -253,6 +253,25 @@ class DelayBound:
             best = b if best is None else min(best, b)
         return None if best is None else max(0.0, best / 1e9)
 
+    def terms(self, sample: Sample) -> dict | None:
+        """What made ``delay_s(sample)``: the winning anchor's own bound, the offset difference to it, the drift
+        share, its age and how many anchors were in reach (diagnostics for the record; the bound is unchanged)."""
+        mcu_ns = sample.state.mcu_time_us * 1000
+        off = sample.host_ns - mcu_ns
+        k = self.drift_max / (1.0 - self.drift_max)
+        best, n = None, 0
+        for a_off, a_rx, a_mcu, a_b, boot in self._anchors:
+            if boot != sample.state.boot_id or abs(sample.host_ns - a_rx) > self.anchor_max_age_ns:
+                continue
+            n += 1
+            parts = (a_b, off - a_off, k * abs(mcu_ns - a_mcu), sample.host_ns - a_rx)
+            if best is None or sum(parts[:3]) < sum(best[:3]):
+                best = parts
+        if best is None:
+            return None
+        return {"anchor_bound_ms": best[0] / 1e6, "offset_diff_ms": best[1] / 1e6, "drift_ms": best[2] / 1e6,
+                "anchor_age_ms": best[3] / 1e6, "anchors": n, "drift_k": self.drift_max}
+
 
 RATE_RHO_MAX = 0.001  # D5 3.11: the MCU clock rate verified within 1 +- this (10 x premise A3; HSI is +-0.4 %)
 RATE_UNVERIFIED, RATE_VERIFIED, RATE_OUT = "unverified", "verified", "out_of_range"
@@ -652,6 +671,8 @@ class TeleopBridge:
         delay = self.delays.delay_s(self.samples[-1]) if self.samples else None
         reading = encoder_speed(self.samples, now_ns, self.params, self._steering_ok, delay)
         rec["delay_s"] = delay
+        if delay is not None:
+            rec["delay_terms"] = self.delays.terms(self.samples[-1])
         self.reading = reading
         st = self.host.state
         was_driving = a.mode == "TELEOP" and a.armed  # before observe can disarm it (design 4)
