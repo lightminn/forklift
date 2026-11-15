@@ -7,11 +7,14 @@ must recover:
   against the plant, so its rows, segment boundaries, deadman waits and voids are the runner's own), STATE rows by
   ``state_row`` every 10 ms, ``profile_end``, footer;
 - an ``imu_record/1`` file -- gyro 400 Hz, accelerometer 200 Hz, a 32-bit microsecond device clock;
-- a ``truth/1`` file -- the true start and end standstill poses (``stop_pose``) of the rear-axle centre.
+- a ``truth/1`` file -- the true start and end standstill poses (``stop_pose``) of the rear-axle centre; with
+  ``truth_method="B_camera"`` also the M3 moving points ``merge_end`` and ``run_042`` (the pose at the cycle the
+  runner left ``merge`` / ``cont``, with its ``host_ns`` and covariance).
 
 The plant: the encoder speed follows the command with the profile's acceleration limit; the true speed is the encoder
 speed divided by ``true_radius_scale`` (the encoders over-read distance by it); the true heading turns by the held
-curvature of the measured steering plus ``true_yaw_per_m`` per metre; the gyro reads the true yaw rate on the body
+curvature of the measured steering (``delay_s`` late: the wheel-speed difference and the body yaw follow the
+measured q that long after it) plus ``true_yaw_per_m`` per metre; the gyro reads the true yaw rate on the body
 ``up`` axis plus ``bias`` (``bias_step`` added from the first wheel motion) plus white noise of density ``arw``; the
 accelerometer reads the upward reaction ``G * up``. Headers say ``"synthetic": true`` unless ``synthetic=False``
 (only refusal tests ask for that). Deterministic for a seed.
@@ -45,6 +48,9 @@ PRE_S, POST_S = 1.5, 1.0  # standing before the trial starts (the runner wants >
 IMU_PAD_NS = 500_000_000
 VOIDS = ("deadman", "ENCODER_JUMP_L", "STEER_SENSOR_INVALID", "boot_change", "time_not_increasing", "encoder_gap")
 TRUTH_SIGMA = {"pose_yaw_rad": 5e-4, "pose_xy_m": 1e-3, "source": "synthetic"}
+TRUTH_METHODS = ("synthetic", "B_camera")
+MOVING_COV = [[2.5e-7, 0.0, 0.0], [0.0, 2.5e-7, 0.0], [0.0, 0.0, 9e-8]]  # B camera moving point: 0.5 mm, 0.3 mrad
+MOVING_POINTS = {"merge": "merge_end", "cont": "run_042"}  # the point taken when the runner leaves the segment
 
 
 def unit(v) -> np.ndarray:
@@ -86,7 +92,8 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                 still_s: float | None = None, void: str | None = None, seed: int = 0,
                 mcu_imu_offset_s: float = 0.0, imu_late_sample: bool = False, dev_us_wrap: bool = False,
                 deadman_wait_s: float = 0.0, synthetic: bool = True, trial: int = 1,
-                start_pose=(0.0, 0.0, 0.0)) -> dict:
+                start_pose=(0.0, 0.0, 0.0), delay_s: float = 0.0, truth_method: str = "synthetic",
+                q_slew_rad_s: float | None = None) -> dict:
     """``{"record": rows, "imu": rows, "truth": rows}`` for one trial of ``profile`` (a drive_profile/1 dict).
     ``still_s`` replaces every hold segment's length (tests that need no 60 s windows). ``void`` puts one defect
     into the drive (one of ``VOIDS``).
@@ -94,9 +101,18 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     ``gain``: the true curvature is ``gain`` times the held curvature of the MEASURED q (M2). ``q_offset``: the
     measured q is the commanded q minus it while steering is commanded (the runner's ``drive_q`` stays the commanded
     q). ``q_short_drive``: in drive segments the measured |q| stops this far short of the commanded one (an
-    ``under_reached`` maker; presteer still reaches)."""
+    ``under_reached`` maker; presteer still reaches).
+
+    ``delay_s``: the wheel-speed difference and the true yaw follow the measured q this late (linear between ticks;
+    the M3 q-step delay the entry must recover). ``truth_method``: ``"synthetic"`` (stop poses only) or
+    ``"B_camera"`` (the header says B_camera, still marked synthetic, and the M3 moving points are added).
+    ``q_slew_rad_s``: the measured q moves toward its target at this rate (None: it is there at once)."""
     if not (true_radius_scale > 0 and math.isfinite(true_radius_scale)):
         raise ValueError("true_radius_scale must be positive")
+    if not (delay_s >= 0 and math.isfinite(delay_s)):
+        raise ValueError("delay_s must be non-negative")
+    if truth_method not in TRUTH_METHODS:
+        raise ValueError(f"truth_method must be one of {TRUTH_METHODS}")
     if void is not None and void not in VOIDS:
         raise ValueError(f"void must be one of {VOIDS}")
     up = unit(up)
@@ -135,6 +151,9 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     gap_left = 0
     defect_done = False
     post_left = int(POST_S * 1e9 / STATE_DT_NS)
+    q_hist: list[float] = []  # the measured q of every tick (for the delayed response)
+    moving_pts: dict = {}
+    last_label = None
     k = 0
     while True:
         host = T0_NS + k * STATE_DT_NS
@@ -149,6 +168,10 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                             "profile": runner.profile.name, "refused": None})
             if started and not ended:
                 seg = runner.segment
+                label = None if seg is None else seg.label
+                if last_label in MOVING_POINTS and label != last_label and MOVING_POINTS[last_label] not in moving_pts:
+                    moving_pts[MOVING_POINTS[last_label]] = (host, pose)
+                last_label = label
                 if seg is not None and seg.kind == "drive" and seg_drive_entry is None:
                     seg_drive_entry = host
                 deadman = True
@@ -179,11 +202,25 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
         v_enc = min(cmd, v_enc + dv) if cmd >= v_enc else max(cmd, v_enc - dv)
         if runner.state == "running":
             q_cmd = lim.q_of_kappa(runner.req_kappa)
-            q = q_cmd - q_offset
+            target = q_cmd - q_offset
             if q_short_drive and q_cmd != 0.0 and runner.segment is not None and runner.segment.kind == "drive":
-                q -= math.copysign(q_short_drive, q_cmd)
-        kappa = kin.held_curvature((q,)) or 0.0
+                target -= math.copysign(q_short_drive, q_cmd)
+            if q_slew_rad_s is None:
+                q = target
+            else:
+                dq = q_slew_rad_s * STATE_DT_NS / 1e9
+                q = min(target, q + dq) if target >= q else max(target, q - dq)
         dt = STATE_DT_NS / 1e9
+        q_hist.append(q)
+        lag = delay_s / dt
+        j = len(q_hist) - 1 - lag
+        if j <= 0:
+            q_resp = q_hist[0]
+        else:
+            j0 = int(math.floor(j))
+            f = j - j0
+            q_resp = q_hist[j0] if f == 0.0 else q_hist[j0] * (1 - f) + q_hist[j0 + 1] * f
+        kappa = kin.held_curvature((q_resp,)) or 0.0
         v_true = v_enc / true_radius_scale
         ds_true = v_true * dt
         curv = gain * kappa + true_yaw_per_m
@@ -284,11 +321,15 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     def point(p):
         return {"kind": "stop_pose", "x_m": p[0], "y_m": p[1], "yaw_rad": _wrap(p[2])}
 
-    truth = [{"t": "header", "schema": "truth/1", "method": "synthetic", "synthetic": bool(synthetic),
+    points = {"start": point(truth_start), "end": point(truth_end)}
+    if truth_method == "B_camera":
+        for pid, (h, p) in moving_pts.items():
+            points[pid] = {**point(p), "kind": "moving_point", "host_ns": int(h), "cov": copy.deepcopy(MOVING_COV)}
+    truth = [{"t": "header", "schema": "truth/1", "method": truth_method, "synthetic": bool(synthetic),
               "record": {"host_boot_id": host_boot, "start_mono_ns": T0_NS}, "body_point": "rear_axle_center",
               "frame": "floor", "sigma": dict(TRUTH_SIGMA)},
-             {"t": "truth", "trial": runner.trial, "points": {"start": point(truth_start), "end": point(truth_end)}}]
+             {"t": "truth", "trial": runner.trial, "points": points}]
     return {"record": rec, "imu": imu, "truth": truth}
 
 
-__all__ = ["ARW_DESK", "G", "VOIDS", "profile_limits", "synth_trial", "unit"]
+__all__ = ["ARW_DESK", "G", "TRUTH_METHODS", "VOIDS", "profile_limits", "synth_trial", "unit"]
