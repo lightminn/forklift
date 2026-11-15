@@ -200,8 +200,12 @@ class Run:
         # path); mcu_gap / age = the MCU model's STATEs stopped or came late (this test's own process) -- with the
         # other clock's gap at that moment and the bridge's cycle gap of that record
         stale = [{**d, "cycle_gap_ms": x.get("cycle_gap_ms")} for x in recs for d in x.get("stale_detail", ())]
+        # the DelayBound's own size (lead 2026-11-16: the to_ready latches came from a loose bound, the operating path;
+        # the harness's rearm only gathers evidence until that is fixed)
+        delays = [x["delay_s"] for x in recs if x.get("delay_s") is not None]
         evidence = {"ready": ok, "arms": arms, "latches": sum(1 for e in events if e.get("event") == "latch_released"),
-                    "stale": stale, "cycles": len(gaps), "over_40ms": len(slow),
+                    "age_stale": sum(1 for d in stale if d.get("why") == "age"),
+                    "delay_max_ms": round(max(delays) * 1e3, 3) if delays else None, "stale": stale, "cycles": len(gaps), "over_40ms": len(slow),
                     "max_gap_ms": max((g for _t, g in gaps), default=None), "would_loop_slow": bool(would),
                     "latch_events": events}
         if not ok:
