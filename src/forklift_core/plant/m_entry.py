@@ -11,6 +11,7 @@ import math
 
 import numpy as np
 
+from forklift_core.live import drive_profile as dprof
 from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark
 from forklift_core.mcu_link.messages import FaultFlag
 from forklift_core.plant import m_analysis as ma
@@ -353,6 +354,108 @@ def _m1(pts, thdr, odo, i0, i1, s_m):
                       radius_scale=_value(dist["radius_scale"], report_only=True)), budget
 
 
+THETA_MIN_RAD = 0.01  # M2: a smaller true rotation gives no gain (proposed, entry 3.6; to be confirmed)
+SINC_SERIES_BELOW = 1e-4
+
+
+def arc_length(chord_m: float, dyaw_rad: float) -> float:
+    """Arc length of the circular arc with chord ``chord_m`` and heading change ``dyaw_rad``: c / sinc(dyaw / 2)."""
+    x = abs(dyaw_rad) / 2.0
+    sinc = 1.0 - x * x / 6.0 + x ** 4 / 120.0 if x < SINC_SERIES_BELOW else math.sin(x) / x
+    return chord_m / sinc
+
+
+def under_reached(rows, cfg, move_start_ns: int) -> dict:
+    """``under_reached`` of an ``at_max`` arc, recomputed from the record (entry 3.6): over the arc's ``running`` rows
+    after the movement started only, never met |meas_q - q(req_kappa)| <= UNDER_REACH_TOL_RAD. ``none_fraction``:
+    share of those rows whose meas_q is None; all None (or no rows) -> not judgeable ``meas_q_missing``."""
+    sel = [r for r in rows if r["host_ns"] >= move_start_ns and r.get("req_kappa")]
+    n_none = sum(r.get("meas_q") is None for r in sel)
+    frac = n_none / len(sel) if sel else None
+    seen = [r for r in sel if r.get("meas_q") is not None]
+    if not seen:
+        return dict(value=None, judgeable=False, why=["meas_q_missing"], report_only=True, none_fraction=frac,
+                    n_rows=len(sel))
+    reached = any(abs(r["meas_q"] - cfg.steering.angle(r["req_kappa"])) <= dprof.UNDER_REACH_TOL_RAD for r in seen
+                  if cfg.steering.angle(r["req_kappa"]) is not None)
+    return dict(value=not reached, judgeable=True, report_only=True, none_fraction=frac, n_rows=len(sel))
+
+
+def _m2(tr, pts, rec_rows, ctx, i0, i1, move_ns):
+    """Distance, values and truth budget of M2 (entry 3.6) between odometry samples ``i0`` and ``i1``."""
+    cfg, profile = ctx["cfg"], ctx["profile"]
+    arc = ctx["drive_labels"][0]
+    seg = next(s for s in profile["segments"] if s.get("label") == arc)
+    direction = 1 if float(seg["speed_mps"]) > 0 else -1
+    odo = ctx["odo"]
+    pe = np.stack([odo["x"], odo["y"], odo["yaw"]], axis=1)
+    rel_o = ma.relative_pose(pe[i0], pe[i1])
+    path = float(np.hypot(np.diff(odo["x"][i0:i1 + 1]), np.diff(odo["y"][i0:i1 + 1])).sum())
+    dist = dict(source="encoder" if pts is None else "truth", s_enc_path_m=path, disp_enc_m=rel_o["dist_m"],
+                dyaw_odo_rad=rel_o["dyaw"])
+    rows = [r for r in rec_rows if r.get("t") == "profile" and r.get("trial") == tr.trial and r.get("state") == "running"]
+    arc_rows = [r for r in rows if r.get("label") == arc and r["host_ns"] >= move_ns]
+    after = [r for r in arc_rows if r["host_ns"] >= move_ns + int(REGISTERED["accel_ramp_s"] * 1e9)]
+    mq = [float(r["meas_q"]) for r in after if r.get("meas_q") is not None]
+    pairs = [float(r["drive_q"]) - float(r["meas_q"]) for r in after
+             if r.get("meas_q") is not None and r.get("drive_q") is not None]
+    pre = [float(r["meas_q"]) for r in rows if r.get("label") == "presteer" and r.get("meas_q") is not None]
+    report = dict(
+        meas_q_spread_rad=_value(float(max(mq) - min(mq)) if mq else None, bool(mq), "meas_q_missing",
+                                 report_only=True, n=len(mq)),
+        drive_minus_meas_q_median_rad=_value(float(np.median(pairs)) if pairs else None, bool(pairs),
+                                             "meas_q_missing", report_only=True),
+        presteer_approach=_value(None if len(pre) < 2 else dict(sign=int(np.sign(pre[-1] - pre[0])),
+                                                                from_zero=abs(pre[0]) < abs(pre[-1])),
+                                 len(pre) >= 2, "meas_q_missing", report_only=True))
+    if "kappa_inv_m" in seg and seg["kappa_inv_m"] in ("max", "-max"):
+        report["under_reached"] = under_reached(arc_rows, cfg, move_ns)
+    why: list = []
+    kmq = kcq = None
+    if mq:
+        kmq = cfg.steering.curvature(float(np.mean(mq)))
+        dq = [float(r["drive_q"]) for r in after if r.get("meas_q") is not None and r.get("drive_q") is not None]
+        kcq = cfg.steering.curvature(float(np.mean(dq))) if dq else None
+    if kmq is None or kcq is None:
+        why.append("meas_q_missing")
+    budget = None
+    gains = dict(kappa_true=None, gain_measured_q=None, gain_commanded_q=None)
+    if pts is None:
+        why.insert(0, "no_truth")
+    else:
+        sg = ctx["truth_header"]["sigma"]
+        p0, p1 = pts["start"], pts["end"]
+        rel_t = ma.relative_pose((p0["x_m"], p0["y_m"], p0["yaw_rad"]), (p1["x_m"], p1["y_m"], p1["yaw_rad"]),
+                                 _cov(p0, sg), _cov(p1, sg))
+        c = REGISTERED
+        budget = dict(sigma_dyaw=rel_t["sigma_dyaw"], sigma_lat=rel_t["sigma_lat"],
+                      ok=rel_t["sigma_dyaw"] <= c["budget_dyaw_rad"] and rel_t["sigma_lat"] <= c["budget_lat_m"])
+        dist.update(dyaw_true_rad=rel_t["dyaw"], chord_true_m=rel_t["dist_m"])
+        if not budget["ok"]:
+            why.append("truth_over_budget")
+        if abs(rel_t["dyaw"]) < THETA_MIN_RAD:
+            why.append("rotation_too_small")
+        else:
+            s_true = arc_length(rel_t["dist_m"], rel_t["dyaw"])
+            dist["s_true_m"] = s_true
+            if not why:
+                try:
+                    gains = ma.m2_gains(heading_ref_dyaw=rel_t["dyaw"], ref_source="truth", distance_m=s_true,
+                                        direction=direction, kappa_measured_q=kmq, kappa_commanded_q=kcq,
+                                        distance_source="truth")
+                except ValueError:
+                    why.append("kappa_zero")
+    ok = not why
+    vals = dict(
+        gain_measured_q=_value(gains["gain_measured_q"] if ok else None, ok, why),
+        gain_commanded_q=_value(gains["gain_commanded_q"] if ok else None, ok, why),
+        kappa_true_inv_m=_value(gains["kappa_true"] if ok else None, ok, why, report_only=True),
+        kappa_measured_q_inv_m=_value(kmq, kmq is not None, "meas_q_missing", report_only=True),
+        kappa_commanded_q_inv_m=_value(kcq, kcq is not None, "meas_q_missing", report_only=True),
+        direction=direction, **report)
+    return dist, vals, budget
+
+
 def _trial(tr, kind, rec_rows, ctx) -> dict:
     out: dict = dict(trial=tr.trial, result=tr.result)
 
@@ -395,6 +498,12 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
     if not moved:
         return void("no_motion")
     out.update(status="valid", window_ns=[int(t0), int(t1)], move_start_ns=int(times[moved[0]]))
+    if kind == "m2":
+        out["distance"], out["values"], budget = _m2(tr, pts, rec_rows, ctx, moved[0] - 1, i1, int(times[moved[0]]))
+        if budget is not None:
+            out["truth_budget"] = budget
+        out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
+        return out
     if kind != "m1":
         out["values"] = dict(all=_value(None, False, "not_implemented_in_pr1"))
         return out
@@ -442,7 +551,7 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     odo = ma.odometry_pose(states, cfg, max_gap_s=MAX_GAP_S)
     upv = _unit(_vec3(up))
     imu = _Imu(imu_rows, upv, _standing(times, states, cfg))
-    ctx = dict(truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
+    ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
                extrapolated=extrapolated,
                states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),
                drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu)
