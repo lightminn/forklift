@@ -19,7 +19,7 @@
 
 - 입력 대조(계획 5.2): (결과 뒤)
 - 표시 모드 거부: (baseline_summary 의 refused 목록)
-- **VM 과 표본 공백.** R 은 ws1 VM 이 GPU1 을 쥔 채 시작했다(사용자가 18:30 무렵 끔). vm_watch 표본(30 s)의 2 분 넘는 공백은 17:30:04–17:32:34, 18:14:04–18:16:04, 18:23:04–18:26:34, 18:30:34–18:43:34 다(zetin 점프 서버 장애, 그 뒤 연결 빈도 문제로 표본기를 멈춤). R·S 는 결정 모드라 결과값이 배속·VM 과 무관하다는 것을 결정성 반복 4 짝으로 확인한다(4 절).
+- **VM 과 표본 공백.** R 은 ws1 VM 이 GPU1 을 쥔 채 시작했다(사용자가 18:30 무렵 끔). vm_watch 표본(30 s)의 2 분 넘는 공백은 17:30:04–17:32:34, 18:14:04–18:16:04, 18:23:04–18:26:34, 18:30:34–18:43:34 다(zetin 점프 서버 장애, 그 뒤 연결 빈도 문제로 표본기를 멈춤). R·S 는 결정 모드 배치다. 결정성 반복 4 짝의 비교 결과를 4 절에 적고, VM·배속과의 관계는 판정하지 않는다.
 - **S 의 예외(총괄 2026-11-15, 이 배치 한정).** 묶음 점검이 진단 변수를 설계상 거부하므로 S 는 `isaac_array.sbatch` 에 `PREFLIGHT=off`(PREFLIGHT_WHY: "path display diagnostic arm S (plan 3.3): check refuses the diagnostic variable by design; DRY_RUN of two S scenes passed")로 냈다. stage 는 런처가 `EXTRA_ARGS` 의 `--path-display stage` 를 막으므로 환경변수 `FORKLIFT_PATH_DISPLAY_DIAGNOSTIC=stage` 만으로 켰다(러너 `path_overlay.effective_mode`). S 두 장면 DRY_RUN 은 통과했다.
 
 ## 2. 적용값과 비교 조건
@@ -31,13 +31,13 @@
 
 ## 3. riib 결정 모드(R)
 
-### 3.1 R 과 곡률 비교 B0(수정 전, 70 짝)
+### 3.1 R 과 곡률 비교 B0(수정 전, 같은 장면·seed 70 실행)
 (report_tables (a)·(b))
 
-### 3.2 R 과 K1 비교·K1 재확인의 K1 팔(40 짝)
+### 3.2 R 과 K1 비교·K1 재확인의 K1 팔(같은 장면·seed 40 실행)
 (report_tables (a)·(b), matched)
 
-### 3.3 R 과 S(지금 코드 위의 누출 몫, 40 짝)
+### 3.3 R 과 S(지금 코드 위의 누출 몫, 같은 장면·seed 40 실행)
 (report_tables (a)·(b), matched. 읽는 법은 계획 3.3: 같은 코드에서 표시 prim 이 인식 카메라에 보일 때와 안 보일 때의 차이이며 #512 전후 차이의 표시선 몫이 아니다)
 
 ## 4. 결정성 반복(4 짝)

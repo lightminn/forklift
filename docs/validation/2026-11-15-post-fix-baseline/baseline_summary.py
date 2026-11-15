@@ -29,6 +29,7 @@ import argparse
 import gzip
 import importlib.util
 import json
+import math
 import re
 import sys
 from collections import Counter
@@ -228,10 +229,16 @@ def run_fields(run: Path, mode: str) -> dict:
         kind = tracking.get("failure")
         out["transport_tracking_failure"] = kind if kind in TRACKING_KINDS else f"other:{kind}"
 
-    de = r.get("delivery_error_m")
-    out["delivery_error_m"] = float(de) if isinstance(de, (int, float)) else None
-    st = r.get("simulated_time_s")
-    out["simulated_time_s"] = float(st) if isinstance(st, (int, float)) and out["success"] else None
+    def finite(v):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+    out["delivery_error_m"] = finite(r.get("delivery_error_m"))
+    if r.get("delivery_error_m") is not None and out["delivery_error_m"] is None:
+        missing.append("delivery_error_m")
+    st = finite(r.get("simulated_time_s"))
+    if r.get("simulated_time_s") is not None and st is None:
+        missing.append("simulated_time_s")
+    out["simulated_time_s"] = st if out["success"] else None
     contacts = r.get("forbidden_pocket_contacts")
     out["forbidden_contacts"] = len(contacts) if isinstance(contacts, list) else contacts
     det = r.get("deterministic") if isinstance(r.get("deterministic"), dict) else {}

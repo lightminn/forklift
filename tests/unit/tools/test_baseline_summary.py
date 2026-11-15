@@ -382,3 +382,15 @@ def test_match_compare_keeps_output_unchanged_without_it(tmp_path):
 def test_match_compare_needs_compare(tmp_path):
     with pytest.raises(SystemExit):
         bs.main([str(tmp_path), "--mode", "overlay", "--match-compare", "--out", str(tmp_path / "o.json")])
+
+
+def test_non_finite_numbers_are_missing(tmp_path):
+    """Codex report review 1 P2: NaN or infinite values never reach the statistics."""
+    r = done_result(delivery_error_m=float("nan"), simulated_time_s=float("inf"))
+    d = tmp_path / "pfb_R_line_2_s9"
+    (d / "run").mkdir(parents=True)
+    (d / "run" / "result.json").write_text(json.dumps(r).replace("NaN", "NaN"))
+    (d / "run" / "path_display.jsonl").write_text(json.dumps({"t": "header", "mode": "overlay"}) + "\n")
+    f = bs.run_fields(d, mode="overlay")
+    assert f["delivery_error_m"] is None and f["simulated_time_s"] is None
+    assert {"delivery_error_m", "simulated_time_s"} <= set(f["missing"])

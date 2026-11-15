@@ -117,7 +117,7 @@ def test_riib_single_set(tmp_path):
     assert col(rows, "random_1", "운반 cusp 재계획 total(실행 수)") == "3(3)"
     assert col(rows, "line_2", "운반 이탈(추종 실패)") == "cross_track 1·endpoint_heading 0"
     assert col(rows, "line_2", "실패 분류") == "tracking 1"
-    assert col(rows, "random_1", "실패 분류") == "—"
+    assert col(rows, "random_1", "실패 분류") == "없음"
     # m -> mm, one decimal: median 12.3, p90 of (12.3, 12.3, 20.1) 18.5, max 20.1
     assert col(rows, "random_1", "하역 오차 중앙값·p90·최대 mm") == "12.3·18.5·20.1"
     assert col(rows, "random_1", "시뮬 시간 중앙값·p90 s") == "250.0·258.0"
@@ -160,7 +160,7 @@ def test_riib_matched_aggregates_are_used(tmp_path):
     assert data["compare"]["matched"]["n"] == 3
     md = rt.render([("R vs K1(40)", data)], None, [])
     rows = rows_of(md, "### riib: R vs K1(40)")
-    assert "공통 (장면, seed) 3 실행으로 맞춘 집계" in md
+    assert "맞댄 짝 3(" in md and "a = 이번 기준선" in md
     # random_1 s2 has no B0 pair: the matched a-side holds two random_1 runs, not three
     assert col(rows, "random_1", "n") == "2 / 2"
     assert col(rows, "합계", "n") == "3 / 3"
@@ -228,13 +228,13 @@ def test_live_table(tmp_path):
     assert ld[hdr.index("세션")] == "2 / 2"
     assert ld[hdr.index("세 임무 완주 세션")] == "1/2 / 2/2"
     assert ld[hdr.index("예정·시작 확인·done·실패·미제출")] == "6·5·4·1·1 / 6·6·6·0·0"
-    assert ld[hdr.index("실패 class")] == "perception 1 / —"
+    assert ld[hdr.index("실패 class")] == "perception 1 / 없음"
     assert ld[hdr.index("하역 오차 중앙값·p90·최대 mm")] == "10.0·10.0·10.0 / 20.0·20.0·20.0"
     assert ld[hdr.index("임무 시간 중앙값·p90 s")] == "100.0·100.0 / 100.0·100.0"
     lo = body[("LO(수정 전 O6)", "random_m")]
-    assert lo[hdr.index("그 밖의 시작 상태")] == "unknown 1 / —"
+    assert lo[hdr.index("그 밖의 시작 상태")] == "unknown 1 / 없음"
     # the one done mission has no delivery error: no statistic, the unread value counted
-    assert lo[hdr.index("하역 오차 중앙값·p90·최대 mm")] == "비교 불가 (결측 1) / 10.0·10.0·10.0"
+    assert lo[hdr.index("하역 오차 중앙값·p90·최대 mm")] == "비교 불가 (완주 중 값 없음 1) / 10.0·10.0·10.0"
     # an arm and scene with no session on either side
     empty = body[("LO(수정 전 O6)", "line_m")]
     assert empty[hdr.index("세션")] == "0 / 0"
@@ -314,3 +314,11 @@ def test_main_writes_all_sections(tmp_path, capsys):
                     "### 결정성 반복"):
         assert heading in md
     assert "None" not in md and "not_comparable" not in md
+
+
+def test_counted_none_and_not_comparable_are_told_apart():
+    """Codex review 1 P2: an empty count reads '없음', an unreadable one '비교 불가'."""
+    assert rt.counts({}) == "없음"
+    assert rt.counts("not_comparable") == "비교 불가" and rt.counts(None) == "비교 불가"
+    assert rt.stats({"n": 2, "median": 0.01, "p90": 0.02, "max": 0.03}, ("median", "p90", "max"), 1000.0, 1) == \
+        "10.0·20.0·30.0 (완주 중 값 없음 1)"

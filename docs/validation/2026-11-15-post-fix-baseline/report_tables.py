@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 NA = "비교 불가"
+EMPTY_COUNT = "없음"  # a counted field with no entry (e.g. no failure)
 NONE = "—"
 SCENE_ORDER = ("random_1", "line_2", "aisle_rack")
 REASON_CHARS = 60
@@ -42,13 +43,19 @@ def missing_note(k) -> str:
     return f" (결측 {k})" if isinstance(k, int) and k > 0 else ""
 
 
+def done_missing_note(k) -> str:
+    """Completed runs whose value the statistic could not read (its own denominator, not a field audit)."""
+    return f" (완주 중 값 없음 {k})" if isinstance(k, int) and k > 0 else ""
+
+
 def counts(d) -> str:
-    """{"done": 59, "pending": 1} -> 'done 59·pending 1' (insertion order of the record); {} -> '—'."""
+    """{"done": 59, "pending": 1} -> 'done 59·pending 1' (insertion order of the record); {} -> '없음' (counted,
+    none found); None or not_comparable -> '비교 불가' (no run could read it)."""
     if d is None or d == "not_comparable":
         return NA
     if not isinstance(d, dict):
         return esc(d)
-    return "·".join(f"{esc(k)} {v}" for k, v in d.items()) if d else NONE
+    return "·".join(f"{esc(k)} {v}" for k, v in d.items()) if d else EMPTY_COUNT
 
 
 def ratio(r) -> str:
@@ -64,8 +71,8 @@ def stat(v, scale: float = 1.0) -> str:
 def stats(s: dict | None, keys: tuple, scale: float = 1.0, missing=None) -> str:
     """'median·p90·max' of a statistic, '비교 불가' when it has no value."""
     if not isinstance(s, dict) or s.get("n", 0) == 0 or s.get(keys[0]) is None:
-        return NA + missing_note(missing)
-    return "·".join(stat(s.get(k), scale) for k in keys) + missing_note(missing)
+        return NA + done_missing_note(missing)
+    return "·".join(stat(s.get(k), scale) for k in keys) + done_missing_note(missing)
 
 
 def pair(a: str, b: str | None) -> str:
@@ -159,9 +166,11 @@ def riib_tables(name: str, data: dict) -> list:
     lines = [f"### riib: {esc(name)}", ""]
     src = f"a: `{esc(data.get('root'))}`(mode {esc(data.get('mode'))})"
     if comp is not None:
-        src += f" · b: `{esc(comp.get('root'))}`(mode {esc(comp.get('mode'))}) · 칸은 a / b"
+        src += f" · b: `{esc(comp.get('root'))}`(mode {esc(comp.get('mode'))}) · 칸은 a / b (a = 이번 기준선)"
         if matched is not None:
-            src += f" · 공통 (장면, seed) {matched.get('n')} 실행으로 맞춘 집계"
+            pr = comp.get("pairs") or {}
+            src += (f" · 맞댄 짝 {matched.get('n')}(두 쪽 모두 거부되지 않은 공통 장면·seed; 공통 이름 {pr.get('common')},"
+                    f" a 에만 {len(pr.get('only_a') or [])}, b 에만 {len(pr.get('only_b') or [])})")
     lines += [f"- {src}",
               f"- 거부 실행: a {len(a.get('refused') or [])}"
               + (f" · b {len(b.get('refused') or [])}" if b is not None else ""), ""]
