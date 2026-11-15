@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import math
 import secrets
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -188,6 +189,8 @@ class DelayBound:
         self._pending: tuple[int, int, int] | None = None  # an acknowledgement seen: (write ns, its STATE's MCU ns, boot)
         self._step: tuple[int, int] | None = None  # the session check's (a, b)
         self.verified_boot: int | None = None  # the boot the session check passed on
+        self.last_anchor: tuple[int, int, int, int, int] | None = None  # the newest anchor taken (the rate guard's)
+        self.base_drift = self.drift_max
 
     def written(self, seq: int, write_ns: int) -> None:
         self._writes[int(seq) & 0xFFFF] = int(write_ns)
@@ -230,6 +233,7 @@ class DelayBound:
                 and rx - p[0] <= self.anchor_max_age_ns:
             self._pending = None
             self._anchors.append((rx - mcu_ns, rx, mcu_ns, rx - p[0], st.boot_id))
+            self.last_anchor = self._anchors[-1]
             cut = rx - self.anchor_max_age_ns
             self._anchors = [a for a in self._anchors if a[1] >= cut and a[4] == st.boot_id][-self.anchors_max:]
         if prev[1] != seq:
@@ -248,6 +252,81 @@ class DelayBound:
             b = a_b + (off - a_off) + k * abs(mcu_ns - a_mcu)
             best = b if best is None else min(best, b)
         return None if best is None else max(0.0, best / 1e9)
+
+
+RATE_RHO_MAX = 0.001  # D5 3.11: the MCU clock rate verified within 1 +- this (10 x premise A3; HSI is +-0.4 %)
+RATE_UNVERIFIED, RATE_VERIFIED, RATE_OUT = "unverified", "verified", "out_of_range"
+
+
+class RateGuard:
+    """The MCU clock rate checked online (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.11). An anchor of the
+    delay bound is (offset, receipt ``rx``, MCU time ``m``, bound ``b``, boot): its MCU instant happened at a host
+    time within ``[rx - b, rx]`` (after the acknowledged frame was written, before the receipt). Two anchors i < j
+    bound the rate whatever the path delay or its asymmetry: ``r in [dm / (rx_j - w_i), dm / (w_j - rx_i)]``. The
+    width is about ``(b_i + b_j) / (rx_j - rx_i)``, so the guard keeps the boot's tightest early anchor as the far
+    end and waits for the baseline: verified when the range lies within ``1 +- rho_max``, out of range (for the
+    rest of the boot) when it lies wholly outside, otherwise unverified. A boot change or a lost link starts over.
+    The bridge arms only on a verified rate; the delay bound's drift allowance is then the range's deviation."""
+
+    EARLY_S = 2.0  # the far end is the tightest anchor of the boot's first this-many seconds
+
+    def __init__(self, rho_max: float = RATE_RHO_MAX) -> None:
+        if not 0.0 < rho_max < 0.1:
+            raise ValueError("rho_max out of range")
+        self.rho_max = float(rho_max)
+        self.reset()
+
+    def reset(self) -> None:
+        self.verdict = RATE_UNVERIFIED
+        self._ref: tuple[int, int, int, int] | None = None  # (rx, m, b, boot)
+        self._first_rx: int | None = None
+        self._last: tuple[int, int, int, int] | None = None
+        self.range: tuple[float, float] | None = None
+
+    def add(self, anchor: tuple[int, int, int, int, int]) -> None:
+        _off, rx, m, b, boot = anchor
+        if self._ref is not None and self._ref[3] != boot:
+            self.reset()
+        if self._first_rx is None:
+            self._first_rx = rx
+        self._last = (rx, m, b, boot)
+        if self._ref is None or (rx - self._first_rx <= self.EARLY_S * 1e9 and b < self._ref[2]):
+            self._ref = (rx, m, b, boot)
+            return
+        if self.verdict == RATE_OUT:
+            return
+        rx_i, m_i, b_i, _ = self._ref
+        dm, w_i, w_j = m - m_i, rx_i - b_i, rx - b
+        if dm <= 0 or rx - w_i <= 0:
+            return
+        lo = dm / (rx - w_i)
+        hi = dm / (w_j - rx_i) if w_j > rx_i else float("inf")
+        # every pair's range holds the true rate: keep their intersection (a later loose anchor -- a stall's long
+        # round trip -- never widens it); an empty intersection is a clock that did not keep one rate
+        if self.range is not None:
+            lo, hi = max(lo, self.range[0]), min(hi, self.range[1])
+        self.range = (lo, hi)
+        if lo > hi or hi < 1.0 - self.rho_max or lo > 1.0 + self.rho_max:
+            self.verdict = RATE_OUT
+        elif lo >= 1.0 - self.rho_max and hi <= 1.0 + self.rho_max:
+            self.verdict = RATE_VERIFIED
+
+    def drift_allowance(self, base: float) -> float:
+        """The delay bound's drift allowance (D5 3.11): once verified, the measured range's own deviation from 1 --
+        the true rate lies inside it, so it holds even for an HSI that happened to pass, and it narrows as the
+        baseline grows (at most ``rho_max``); before, the premise A3 value ``base`` (the arm is blocked then)."""
+        if self.verdict != RATE_VERIFIED or self.range is None:
+            return base
+        lo, hi = self.range
+        return max(base, 1.0 - lo, hi - 1.0)
+
+    def progress_s(self) -> tuple[float, float] | None:
+        """(baseline so far, the baseline the newest two ends need) for the console's waiting line."""
+        if self._ref is None or self._last is None:
+            return None
+        have = (self._last[0] - self._ref[0]) / 1e9
+        need = max(self._ref[2], self._last[2]) / 1e9 / self.rho_max  # each side's error is about b / baseline
+        return max(0.0, have), need
 
 
 STILL_WINDOW_S = 0.2  # a stand before an MCU ARM: counts still over at least this much of contiguous STATEs ...
@@ -398,6 +477,11 @@ MIN_LIFE_NS = 1_000_000  # a command with less life left than the link's 1 ms va
 OUT_LIFE_NS = 100_000_000  # a DRIVE's life from its decision, before the console's own deadlines cut it
 STOPPING_WAIT_NS = 1_000_000_000  # an MCU-originated STOPPING runs out before the DISARM, for at most this
 IDLE, ARMING, READY, DISARMING, HELD = "idle", "arming", "ready", "disarming", "held"
+LOOP_SLOW_GAP_S = 0.040  # D5 3.12 (provisional, lead 2026-11-15): a cycle gap over this counts as slow ...
+LOOP_SLOW_WINDOW_S = 1.0  # ... and this many of them within this window
+LOOP_SLOW_COUNT = 3  # ... stop the armed truck (loop_slow, not a link loss)
+SLEW_DT_MAX_S = 0.1  # the steering slew's step never takes more than this of a long gap
+RECORDS_TAIL = 64
 
 # --------------------------------------------------------------- the wall escape (standing-direction-rule design 4)
 ESCAPE_MPS = 0.05  # the escape's command cap (the physical speed is watched per wheel)
@@ -435,7 +519,8 @@ class TeleopBridge:
     the mission core's ``safety_state`` in 4e-2) -- the real truck's refusals are put on it here (``enforce_real``)."""
 
     def __init__(self, *, link, host, port, kinematics, params: EncoderSpeedParams, limit_mps: float, floor_permit,
-                 safety_provider, cycle_s: float = 0.02, samples_max: int = 64) -> None:
+                 safety_provider, cycle_s: float = 0.02, samples_max: int = 64,
+                 rate_rho: float = RATE_RHO_MAX) -> None:
         self.link, self.arbiter = link, link.a
         self.host, self.port, self.kin, self.params = host, port, kinematics, params
         self.limit_mps = float(limit_mps)
@@ -445,6 +530,12 @@ class TeleopBridge:
         self.samples_max = int(samples_max)
         self.rx_count = 0  # every STATE taken into ``samples``, numbered: the escape's cursor (one read shares a time)
         self.delays = DelayBound()
+        self.rate = RateGuard(rate_rho)
+        self._rate_seen = RATE_UNVERIFIED
+        self._last_anchor = None
+        self._last_cycle_ns: int | None = None
+        self.gap_s: float | None = None  # the real time since the previous cycle (D5 3.12)
+        self._slow_cycles: deque = deque()  # cycle starts whose gap exceeded LOOP_SLOW_GAP_S (D5 3.12)
         self._newest_mcu: dict[int, int] = {}
         self.dropped_old = 0
         self._disconnects_seen = 0
@@ -461,7 +552,9 @@ class TeleopBridge:
         self.mcu_wait: dict | None = None  # an MCU-originated STOPPING: {"control_gen", "until_ns"}
         self._urgent = False  # this cycle took a higher-priority stop than an MCU STOPPING
         self.reading: EncoderReading | None = None
-        self.records: list[dict] = []
+        # the newest cycle records only (a debugging tail): the record file is the bridge's RecordWriter (D5 (나): an
+        # unbounded list grew by 50 rows a second for the whole run)
+        self.records: deque = deque(maxlen=RECORDS_TAIL)
         # the wall escape (standing-direction-rule design 4): the current offer, the approval waiting to start, the
         # escape running, every step's record; the arbiter takes escape_approve only through this handler
         self.offer: dict | None = None
@@ -486,8 +579,32 @@ class TeleopBridge:
             return
         self._newest_mcu[st.boot_id] = st.mcu_time_us
         self.delays.add(sample)
+        if self.delays.last_anchor is not self._last_anchor:
+            self._last_anchor = self.delays.last_anchor
+            self.rate.add(self._last_anchor)
+            self.delays.drift_max = self.rate.drift_allowance(self.delays.base_drift)
         self.samples.append(sample)
         self.rx_count += 1
+
+    # ------------------------------------------------------------------ the host's freshness source (D5 3.3a)
+    def delay_s(self, state, rx_ns: int) -> float | None:
+        """The delay bound of a STATE about to be accepted (from anchors earlier STATEs made)."""
+        return self.delays.delay_s(Sample(rx_ns, state))
+
+    def rate_verified(self) -> bool:
+        return self.rate.verdict == RATE_VERIFIED
+
+    def rate_bound(self) -> float:
+        return self.rate.rho_max
+
+    def on_disconnect(self) -> None:
+        """The host lost the device: no anchor or rate verdict of the old link survives into the new one (D5 3.10:
+        the first read after a reopen comes before the cycle's own restart check)."""
+        self.delays.restart_check()
+        self.delays.drift_max = self.delays.base_drift
+        self.rate.reset()
+        self._last_anchor = None
+        self._step_b = None
 
     def frame_written(self, seq: int, write_ns: int) -> None:
         """Every frame the link wrote (the host's log): the round-trip anchors' start times."""
@@ -516,6 +633,15 @@ class TeleopBridge:
     def cycle(self, now_ns: int) -> dict:
         a, now = self.arbiter, now_ns / 1e9
         rec: dict = {"now_ns": now_ns}
+        gap_ns = None if self._last_cycle_ns is None else now_ns - self._last_cycle_ns
+        self._last_cycle_ns = now_ns
+        self.gap_s = None if gap_ns is None else gap_ns / 1e9
+        if self.gap_s is not None:
+            rec["cycle_gap_ms"] = round(self.gap_s * 1e3, 3)
+            if self.gap_s > LOOP_SLOW_GAP_S:
+                self._slow_cycles.append(now_ns)
+            while self._slow_cycles and now_ns - self._slow_cycles[0] > LOOP_SLOW_WINDOW_S * 1e9:
+                self._slow_cycles.popleft()
         if self.host.disconnects != self._disconnects_seen:
             self._disconnects_seen = self.host.disconnects
             self.delays.restart_check()  # a lost link: check the session again before any anchor
@@ -560,6 +686,20 @@ class TeleopBridge:
         elif a.armed and reading.speed.valid and reading.speed.bound_mps > self.limit_mps:
             self._stop(now_ns, "overspeed", rec)
             self._urgent = True
+        if a.armed and len(self._slow_cycles) >= LOOP_SLOW_COUNT:
+            # D5 3.12: the loop itself keeps running late -- every cycle-based bound is optimistic; not a link loss
+            self._stop(now_ns, "loop_slow", rec)
+            self._slow_cycles.clear()
+            self._urgent = True
+        rec["rate"] = self.rate.verdict
+        if self.rate.verdict != self._rate_seen:
+            rec["rate_changed"] = self.rate.verdict
+            self._rate_seen = self.rate.verdict
+        if self.rate.verdict == RATE_OUT and self.phase in (ARMING, READY):
+            # D5 3.11: a rate found out of range takes the authorization away (the host rule is back in force)
+            self._stop(now_ns, "clock_rate", rec)
+            self._disarm(now_ns, "clock_rate", rec)
+            self._urgent = True
         if a.control_gen != self.seen_control_gen:
             self.seen_control_gen = a.control_gen
             self.port.new_control_generation()  # queued DRIVEs go before this cycle's transmit
@@ -584,6 +724,17 @@ class TeleopBridge:
                               reason=a.preempt_latch,
                               **({"stop_kind": "preempt", "source": "zero"} if stopped else {}))
         return rec
+
+    def _step_s(self) -> float:
+        """The time this cycle stands for (D5 3.12): the real gap since the last cycle, capped for the slew."""
+        g = self.gap_s
+        return self.cycle_s if g is None or g <= 0.0 else min(g, SLEW_DT_MAX_S)
+
+    def _decision_gap_s(self) -> float:
+        """The wait to the next decision a stop-reach estimate must assume: never less than a cycle, never less
+        than the last real gap (D5 3.12)."""
+        g = self.gap_s
+        return self.cycle_s if g is None else max(self.cycle_s, g)
 
     # ------------------------------------------------------------------ design 4
     def _want(self) -> bool:
@@ -623,6 +774,7 @@ class TeleopBridge:
             self._stop(now_ns, what, rec)
             if mcu_mode == Mode.STOPPING and h.health(now_ns).fresh and not self._urgent:
                 self.mcu_wait = {"control_gen": a.control_gen, "until_ns": now_ns + STOPPING_WAIT_NS}
+                rec["mcu_stopping"] = True  # the console shows it (D5 decision 2: the grey zone's stop)
                 self.phase, self.bound_gen = HELD, None
                 self.host.drop_drives("mcu_stopping")
                 return
@@ -693,6 +845,10 @@ class TeleopBridge:
         st = self.host.state
         if st is None or not self.host.health(now_ns).fresh:
             return "no_state"
+        if self.rate.verdict == RATE_OUT:
+            return "clock_rate"  # D5 3.11: this boot's clock is outside 1 +- rho_max
+        if self.rate.verdict != RATE_VERIFIED:
+            return "clock_rate_unverified"
         if st.mode != Mode.DISARMED:
             if self.host.authorized:
                 return "mcu_armed"
@@ -742,7 +898,7 @@ class TeleopBridge:
                 self._disarm(now_ns, "steering_invalid", rec)
                 return 0.0
             arr = np.array([self.q_cmd], dtype=float)
-            self.kin.slew_steering(arr, np.array([target[0]], dtype=float), self.cycle_s)
+            self.kin.slew_steering(arr, np.array([target[0]], dtype=float), self._step_s())
             self.q_cmd = float(arr[0])
             q_cmd = [self.q_cmd]
         if speed != 0.0:
@@ -1007,7 +1163,7 @@ class TeleopBridge:
         q_cmd = [e["q"]]
         self.q_cmd, self.holding = e["q"], True
         speed = d * min(abs(float(out.speed_mps)), ESCAPE_MPS) if (out.speed_mps > 0) == (d > 0) else 0.0
-        reach = escape_stop_reach_m(max(e["travel"]), reading, self.params, cycle_s=self.cycle_s)
+        reach = escape_stop_reach_m(max(e["travel"]), reading, self.params, cycle_s=self._decision_gap_s())
         rec["escape"].update(travel_m=list(e["travel"]), reach_m=reach)
         end = None
         if now_ns >= e["deadline_ns"]:

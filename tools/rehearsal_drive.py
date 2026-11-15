@@ -116,6 +116,10 @@ async def operate(port: int, bridge: BridgeOnPty, record: Path, timeout_s: float
     await p.until(lambda s: s.get("stopped_confirmed"), 5.0, label="standing")
     mode = await p.request("mode_request", to="TELEOP")
     report["mode"] = mode
+    # the arrival procedure 12.3a (D5): the bridge arms the MCU only once its clock check is done -- wait for the
+    # console's waiting line to go, as an operator does
+    report["clock_check"] = await p.until(lambda s: not any("MCU 시계" in n for n in s.get("notes", [])), 120.0,
+                                          label="clock_check")
     arm = await p.request("arm")
     report["arm"] = arm
     if not arm or arm.get("t") != "ack":
