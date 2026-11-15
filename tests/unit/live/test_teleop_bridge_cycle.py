@@ -778,3 +778,20 @@ def test_a_disconnect_forgets_the_rate_and_the_anchors():
     assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED and not r.bridge.delays.verified
     assert r.bridge.delays.drift_max == r.bridge.delays.base_drift
 
+
+
+def test_after_a_reconnect_nothing_moves_until_the_rate_is_verified_again_and_the_operator_rearms():
+    """Codex impl review P1 (D5): between a reconnect and the new rate verdict the delay bound runs on premise A3's
+    allowance -- the pre-D5 value -- but no DRIVE can move the truck then: the disconnect revoked the authorization,
+    the output is zero outside READY, and a new arm waits for the verdict."""
+    r = armed_rig()
+    r.run(5, teleop={"speed_ratio": 0.5})
+    before = len(r.sent)
+    r.host.disconnected(r.now)
+    r.bridge.on_disconnect()
+    recs = r.run(1, teleop={"speed_ratio": 0.5}) and r.recs[-1:]
+    for _ in range(10):
+        recs.append(r.cycle(teleop={"speed_ratio": 0.5}))
+    assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED
+    assert not r.nonzero_sent(before) and r.bridge.phase != rt.READY and not r.host.authorized
+    assert all(x["applied_mps"] == 0.0 for x in recs)
