@@ -26,6 +26,10 @@ class FakeFreshness:
         d = self.delay_ms(st, rx_ns) if callable(self.delay_ms) else self.delay_ms
         return None if d is None else d / 1000.0
 
+    def delay_terms(self, st, rx_ns):
+        d = self.delay_s(st, rx_ns)
+        return None if d is None else {"bound_ms": d * 1e3, "mcu_time_us": st.mcu_time_us}
+
     def rate_verified(self):
         return self.verified
 
@@ -277,3 +281,13 @@ def test_a_delayed_newest_state_names_its_delay_and_the_gaps():
     (d,) = [e.detail for e in r.burst(60, **ARMED_READY) if e.kind == "stale"]
     assert d["why"] == "age" and d["delay_s"] == pytest.approx(0.060) and d["n_states"] == 6
     assert d["host_gap_s"] == pytest.approx(0.060) and d["mcu_gap_s"] == pytest.approx(0.060)
+
+
+def test_an_age_stale_carries_the_terms_of_its_own_bound():
+    # the terms are taken with the bound, before the STATE's own receipt can add an anchor (ws1 2026-11-16: terms read
+    # later from the cycle record described a newer anchor than the one that made the stale)
+    r = McuRig()
+    r.ready()
+    r.fresh.delay_ms = 60.0
+    (d,) = [e.detail for e in r.burst(60, **ARMED_READY) if e.kind == "stale"]
+    assert d["terms"] == {"bound_ms": pytest.approx(60.0), "mcu_time_us": r.t_us}

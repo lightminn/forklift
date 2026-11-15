@@ -613,6 +613,10 @@ class TeleopBridge:
         """The delay bound of a STATE about to be accepted (from anchors earlier STATEs made)."""
         return self.delays.delay_s(Sample(rx_ns, state))
 
+    def delay_terms(self, state, rx_ns: int) -> dict | None:
+        """What ``delay_s(state, rx_ns)`` is made of, from the same anchors (diagnostics for a stale's record)."""
+        return self.delays.terms(Sample(rx_ns, state))
+
     def rate_verified(self) -> bool:
         return self.rate.verdict == RATE_VERIFIED
 
