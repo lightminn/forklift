@@ -186,6 +186,54 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
   - 끝은 그 구간의 마지막 `running` 행이다.
 - IMU 지연도 같은 식으로 계산하되 보고만 한다(`unknown_clock_offset:true`).
 
+### 3.9 PR ③ 구현 결정(2026-11-16)
+
+**PR ③ 을 둘로 나눈다.**
+- ③a(이번 PR)는 합류 판정점·보고점, 주행 중 점의 IMU heading, q 계단 지연이다.
+- ③b 는 편향 변화율 검사(3.3 ⑦), `field_log` 재확인 규칙, 여러 시행 블록 생성기다.
+- 나눈 이유: IMU 파일은 데움부터 이어지는 블록 하나다(9 절 15). 그런데 텔레옵 기록 하나에는 일정표가 하나뿐이다(`profile_start` 신원 검사, 2 절). 그래서 "같은 IMU 파일의 직전 6 구간" 에는 **다른 기록**(다른 일정표)의 정지 창이 들어간다. 입구가 기록 하나만 받는 한 이 맞춤은 성립하지 않는다.
+- ③b 는 입구가 같은 블록의 다른 기록들을 정지 창 용도로만 더 받는 형태로 설계한다. 값은 주 기록의 시행에만 낸다.
+- 그때까지 주행 중 점의 IMU heading 에는 늘 `bias_slope_unconfirmed` 가 붙는다. 다른 사유가 모두 통과해도 판정할 수 없다. 시험은 그것이 남는 유일한 사유임을 고정한다.
+
+**합류(3.7)**
+- 판정점·보고점의 오도메트리 기준은 움직임 직전 정지 STATE 다. `end` 는 시행 창의 마지막 STATE(정지)를 쓴다. 이동 점(B)은 참값 `host_ns` 에 보간하고(`odo_dt_ns` = 둘러싼 STATE 간격), 간격이 `MAX_GAP_S` 를 넘거나 시행 STATE 밖이면 `odo_interp_gap` 이다.
+- 참값 예산은 점마다 계산한다(시작 자세 공분산과 그 점의 공분산). 판정점의 예산을 시행의 `truth_budget` 으로 올린다.
+- 결과는 `truth_rule:{method, rule, substitute_pending_lead}` 와 점마다 `{role, e_theta_rad, e_y_m, e_x_m, truth_budget, [host_ns, odo_dt_ns]}` 다. `synthetic` 방법은 A 와 같은 규칙으로 읽는다. B 에서 `run_042` 가 없으면 `truth_missing_point` 다.
+- **A 대체 판정점은 총괄 재확인 대상이다**(총괄 지시: ③ 에서 근거와 함께 다시 올린다). 근거: A 는 정지 자세만 잴 수 있다(등록 6.1). 주행 중 0.42 m 점은 감속 3.3 mm 와 정지 동역학만큼 다른 점이다. 합류 끝 heading 은 0 이므로 감속 동안의 횡 차이는 3.3 mm × heading 오차(≤ 0.006 rad) ≈ 0.02 mm 이고, heading 차이는 감속 중 곡률 0 으로 0 이다. 다만 속도 이력이 다르다(정지 대 계속). 승인 전까지 출력은 `substitute_pending_lead:true` 다.
+
+**주행 중 점 IMU heading(3.7, 등록 6.3)**
+- 점 시각은 기록의 구간 경계다. `merge_end` 는 `cont` 첫 행, `run_042` 는 `still_post` 첫 행이다. 둘 다 실행기가 앞 구간을 끝낸 주기다.
+- T 는 기록에서 잰 지속 시간(점 − 움직임 시작)이다.
+- **k 한계는 등록 6.3 의 식으로 T 마다 계산한다:** k(T) = √(1 mrad² − (7.8×10⁻⁸·(W+T)·T)² − (3.2×10⁻⁵·T)²) / √((N√T)² + (N·T/√(2W))²), N = 책상 2.054×10⁻⁴, W = 60 s. 등록의 T 에서 1.48(9.125 s)·1.14(13.325 s)를 다시 낸다(시험 `test_m3_k_limit_formula_reproduces_the_registered_values`). 2.1 m 합류 끝은 k < 1 이 되어, 그 판정 불가가 따로 박지 않고 계산에서 나온다.
+- 사유는 `bias_jump`, `no_n_body`, `imu_noise_over_limit`(두 창 중 하나라도 N_body/N_desk > k), `lower_bound_over_budget`(N_body 로 낸 하한 > 1 mrad), `no_gyro_scale`(|IMU heading| > 0.04), `bias_slope_unconfirmed`(③b 전까지 늘) 다. 항목은 늘 `report_only` 다(등록 5.5).
+
+**q 계단(3.8)**
+- 사후 창 시작은 `step` 구간에서 `req_kappa` 가 **마지막 값에 처음 닿은 행** + `Q_STEP_SETTLE_S` 다. 이 값은 "바뀐 첫 행 + `q_step_ramp_s`" 와 한 주기 안에서 같다. 다만 램프 길이를 다시 계산하지 않고 기록 자신에서 읽는다(다리의 한계값에 기대지 않는다). 출력에 `change_ns`·`reached_ns` 를 함께 낸다.
+- q 문턱은 0.02 rad(총괄 확정)다. 시리즈는 `step` 구간 시작부터 사후 창 끝까지다.
+- 평활은 실제 시각 ±12.5 ms 의 중심 이동평균이다(`smooth_centered`). 엔코더 차동과 IMU 에 같은 평활을 쓴다.
+- `q` 호출이 None 이면 `q_<사유>`, `y` 호출이 None 이면 그 사유로 지연만 void 다.
+- IMU 지연은 û 투영 rate 로 같은 식을 쓰고 `report_only`·`unknown_clock_offset:true` 다.
+- `m_synth` 는 `delay_s`(바퀴 속도 차와 실제 yaw 가 측정 q 를 그만큼 늦게 따름), `q_slew_rad_s`(측정 q 의 slew), `truth_method="B_camera"`(이동 점 `merge_end`·`run_042` 추가) 를 더한다.
+
+### 3.10 PR ③b — 사후 편향 변화율과 블록 기록(등록 개정 3, 10.1; 2026-11-16)
+
+등록 개정 3(#536)의 10.1 을 그대로 구현한다. 3.9 의 "③b 전까지 늘 `bias_slope_unconfirmed`" 는 이 절로 대체된다.
+
+- **입력:** `analyze(..., block_rows=[...])`, CLI `--block-record`(여러 번). 같은 IMU 연속 구간에 든 다른 텔레옵 기록이다(그날의 G3·M1·M2·M3·q 계단). 블록 기록은 스키마·합성 표시·같은 `host_boot_id`·깨끗한 끝 줄을 검사하고, 기록끼리 STATE 시간이 겹치면 거부한다. 블록 기록의 시행에는 값을 내지 않는다. 출력 `inputs.block_records` 에 경로·sha256 을 남긴다.
+- **정지 판정:** 모든 기록의 정지 구간을 합쳐 `_Imu` 의 정지로 쓴다.
+- **구간(`_bias_intervals`):**
+  - `trial`: 각 기록의 각 시행의 앞·뒤 창. 블록 기록은 일정표 파일이 없으므로 주행 경계는 그 시행의 `profile` 행 가운데 `req_mps ≠ 0` 인 첫·끝 행이다.
+  - `standing_record`: 시행이 없는 기록(G3 정지 등)의 정지 구간마다, 50 s 이상이면 그 끝에서 `quiet_window` 로 찾은 창 하나.
+  - `recheck_piece`: `field_log` 재확인 [시작, 끝] 을 시작부터 반열린 60 s 조각으로 자른 것. 기록이 덮는 조각은 그 STATE 정지 안에서만, 덮지 않으면 IMU 허용치만으로 찾는다. `passed`·`slope_rad_s2` 는 쓰지 않는다.
+  - 표본이 겹치면 `trial` > `standing_record` > `recheck_piece` 순, 같은 종류는 앞의 것을 남긴다.
+  - 값은 창 gyro 평균의 û 성분, 중심은 창 첫·끝 표본 시각의 중간이다.
+- **시행마다(`_bias_slope`):** 뒤 창 끝 이하에 중심이 있는 구간의 마지막 n = min(6, 있는 수). n ≥ 3 이면 최소제곱 기울기, |r| ≤ 3.5×10⁻⁷ 이면 통과, 넘으면 `bias_slope`, n < 3 이면 `bias_slope_unconfirmed`. 결과는 모든 측정의 `imu.bias_slope` 에 정보로 실린다. 판정에 쓰는 것은 M3 주행 중 점 IMU heading 하나다(통과면 그 사유가 빠지고, 아니면 `bias_slope`/`bias_slope_unconfirmed`).
+- `m_synth.synth_block`(시행·정지 기록을 같은 시계로 이어 붙여 IMU 파일 하나를 만든다, `bias_slope` 손잡이)과 `synth_still`(프로필 없는 정지 기록)을 더했다.
+- **연속 구간(Codex ③b 검토 P2):** 맞춤에는 그 시행의 뒤 창과 같은 IMU 시계 구간(장치 재시작·시계 단절이 새 구간)의 구간만 넣는다. 블록 기록은 IMU 파일 시간 안에 있어야 한다(밖이면 거부). 다른 구간의 창·재확인은 맞춤에 들어가지 않는다.
+- **남은 한계(적어 둠):** 기록이 덮지 않는 재확인 조각은 10.1 대로 IMU 허용치만으로 판정하므로, `field_log` 시각이 잘못 적혀 같은 연속 구간 안의 조용한 다른 시간을 가리키면 그 조각이 들어갈 수 있다. 재확인 행은 기록 신원(주 기록)과 시각 순서만 검사한다.
+- **고친 기존 결함(PR ① 코드, 총괄 결정 2026-11-16):** `_imu_series` 가 장치 시각이 직전보다 크지 않은 표본을 모두 버려, 장치가 뒤로 재시작하면(도착일 D435i 재연결) 새 시각이 옛 최대를 넘을 때까지 표본이 조용히 사라졌다. 이제 호스트 시각이 나아가지 않거나 장치 시각이 `RESTART_BACK_US`(20 ms) 이하로 되돌아간 표본(늦은 표본·반복)만 버리고, 더 큰 되돌아감은 재시작으로 남긴다. 새 구간은 `continuous_segments` 가 같은 규칙으로 나눈다(③b 연속 구간 정의와 같다). 시험 `test_a_backward_device_restart_keeps_the_new_stretch`.
+
+
 ## 4. `m_analysis.py` 변경(PR ①)
 
 **(가) 참값 heading 이름**(등록 3.3 261 행, 4.3 314 행)

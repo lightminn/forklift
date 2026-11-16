@@ -31,7 +31,7 @@ def _write(tmp, name, rows):
 def _files(tmp, **kw):
     out = ms.synth_trial(yaml.safe_load(PROFILE.read_text()), CFG, still_s=5.0, true_yaw_per_m=0.003, **kw)
     out["truth"][0]["sigma"] = dict(TIGHT)
-    return {k: _write(tmp, f"{k}.jsonl", v) for k, v in out.items()}, out
+    return {k: _write(tmp, f"{k}.jsonl", out[k]) for k in ("record", "imu", "truth")}, out
 
 
 def _run(capsys, files, *extra):
@@ -79,3 +79,17 @@ def test_bad_inputs_are_refusals_not_tracebacks(tmp_path, capsys):
     code = tool.main(["--record", str(tmp_path / "missing.jsonl"), "--imu", str(files["imu"]), "--profile",
                       str(PROFILE), "--no-truth", "--up", "0,-1,0"])
     assert code == 2 and json.loads(capsys.readouterr().out)["result"] == "refused"
+
+
+def test_block_records_enter_the_bias_slope_fit(tmp_path, capsys):
+    prof = yaml.safe_load(PROFILE.read_text())
+    out = ms.synth_block([{"profile": prof, "still_s": 5.0} for _ in range(3)], CFG, arw=0.2 * ms.ARW_DESK)
+    for t in out["truths"]:
+        t[0]["sigma"] = dict(TIGHT)
+    rec = [_write(tmp_path, f"rec{i}.jsonl", r) for i, r in enumerate(out["records"])]
+    files = {"record": rec[-1], "imu": _write(tmp_path, "imu.jsonl", out["imu"]),
+             "truth": _write(tmp_path, "truth.jsonl", out["truths"][-1])}
+    code, (res,) = _run(capsys, files, "--allow-synthetic", "--block-record", str(rec[0]), "--block-record", str(rec[1]))
+    assert code == 0, res
+    assert [b["path"] for b in res["inputs"]["block_records"]] == [str(rec[0]), str(rec[1])]
+    assert "bias_slope" in res["trials"][0]["imu"]
