@@ -56,6 +56,8 @@ class FakeMcu:
         self.ack_frozen = False  # frames applied but last_rx_seq no longer updated (no round-trip anchor)
         self.clock_scale = 1.0  # the MCU clock's rate against the host's (D5 3.11)
         self._arm_due = None
+        self.current_ma = (0, 0, 0, 0)  # motor currents L, R, M, H (the safety watch's input)
+        self.stuck = None  # a wheel index that does not turn whatever is asked (the safety watch's injection)
 
     def receive(self, msg, seq):
         if self.deaf:
@@ -102,14 +104,14 @@ class FakeMcu:
             self.mode = Mode.DISARMED
         target = self.cmd if self.mode == Mode.ARMED else (0.0, 0.0)
         for i in (0, 1):
-            self.rate[i] = target[i] + (self.extra_rate if target[i] else 0.0)
+            self.rate[i] = 0.0 if i == self.stuck else target[i] + (self.extra_rate if target[i] else 0.0)
             self.counts[i] += self.rate[i] * dt_us / 1e6 * VEH.counts_per_wheel_rev[i] / (2 * math.pi)
 
     def state(self):
         flags = self.flags0 | (StateFlag.ZERO_SEEN if self.zero_seen and self.mode == Mode.ARMED else StateFlag(0))
         return McuState(self.t_us, self.boot, self.gen, self.rx, self.mode, RejectReason.NONE, self.faults,
                         _i32(self.counts[0]), _i32(self.counts[1]),
-                        self.rate[0], self.rate[1], self.q, 0.0, (0,) * 4, (0,) * 4, (0xC0,) * 4, 0, 0, flags)
+                        self.rate[0], self.rate[1], self.q, 0.0, self.current_ma, (0,) * 4, (0xC0,) * 4, 0, 0, flags)
 
 
 def _i32(c):
@@ -122,7 +124,7 @@ def open_floor(curvatures, direction, check):
 
 class Rig:
     def __init__(self, *, confirmed=ALL, safety=None, floor=open_floor, mcu_flags=StateFlag.DRIVERS_READY,
-                 rate_rho=None):
+                 rate_rho=None, watch=None):
         self.now = 50_000 * MS
         tokens = itertools.count(1)
         limits = rt.real_teleop_limits(TeleopLimits(**teleop_limit_overrides(RealKinematics(VEH))), CAP)
@@ -141,7 +143,8 @@ class Rig:
         self.bridge = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
                                       params=PARAMS, limit_mps=VEH.teleop_speed_limit_mps, floor_permit=floor,
                                       safety_provider=provider,
-                                      rate_rho=TEST_RATE_RHO if rate_rho is None else rate_rho)
+                                      rate_rho=TEST_RATE_RHO if rate_rho is None else rate_rho,
+                                      safety_watch=watch)
         self.mcu = FakeMcu(mcu_flags)
         self.dec = LinkDecoder()
         self.sent = []  # (now_ns, message) written to the MCU
@@ -859,3 +862,64 @@ def test_recording_the_delay_terms_changes_no_decision_and_no_frame(monkeypatch)
     strip = [{k: v for k, v in x.items() if k != "delay_terms"} for x in a.recs]
     assert strip == [{k: v for k, v in x.items() if k != "delay_terms"} for x in b.recs]
     assert any("delay_terms" in x for x in a.recs) and not any(x.get("delay_terms") for x in b.recs)
+
+
+# --- the real truck's safety watch (docs/design/2026-11-16-real-safety-watch.md) ---------------------------------
+
+def _watch():
+    from forklift_core.safety.real_watch import SafetyWatch, load_watch_config
+    cfg = load_watch_config(REPO / "config" / "real" / "safety_watch.yaml")
+    return SafetyWatch(cfg, wheel_radius_m=VEH.wheel_radius_m)
+
+
+def test_the_watch_never_trips_in_normal_teleop_with_turns_and_reversal():
+    r = armed_rig(watch=_watch())
+    for k in range(150):
+        cmd = {"speed_ratio": 1.0, "curvature_ratio": 1.0 if 40 <= k < 80 else 0.0}
+        if k >= 100:
+            cmd = {"speed_ratio": -1.0, "curvature_ratio": -1.0}
+        r.cycle(teleop=cmd)
+    assert not [x for x in r.recs if (x.get("watch") or {}).get("trip")], r.recs[-1]
+    assert r.arbiter.mode == "TELEOP" and r.nonzero_sent()
+
+
+def test_a_held_overcurrent_stops_disarms_and_is_counted():
+    r = armed_rig(watch=_watch())
+    r.run(10, teleop={"speed_ratio": 1.0})
+    r.mcu.current_ma = (3500, 500, 200, 0)
+    short = r.run(20, teleop={"speed_ratio": 1.0})  # 0.4 s: under the hold
+    assert short.get("stop") is None and "watch_current" in short["watch"]["pending"]
+    for _ in range(10):
+        rec = r.cycle(teleop={"speed_ratio": 1.0})
+        if rec.get("stop"):
+            break
+    assert rec["stop"] == "watch_current" and rec["watch"]["trip"] == "watch_current"
+    assert rec["watch"]["counts"] == {"watch_current": 1} and rec["watch"]["current_channel"] == 0
+    n = len(r.sent)
+    r.run(5, teleop={"speed_ratio": 1.0})
+    assert r.arbiter.mode == "STOPPED" and r.nonzero_sent(n) == []
+    assert any(isinstance(m, Disarm) for _t, m in r.sent)
+
+
+def test_a_current_under_the_limit_never_stops():
+    r = armed_rig(watch=_watch())
+    r.mcu.current_ma = (2900, 2900, 2900, 2900)
+    r.run(80, teleop={"speed_ratio": 1.0})
+    assert r.arbiter.mode == "TELEOP" and not any(x.get("stop") for x in r.recs)
+
+
+def test_one_wheel_that_does_not_turn_stops_on_the_wheel_watch():
+    r = armed_rig(watch=_watch())
+    r.mcu.stuck = 0
+    for _ in range(80):
+        rec = r.cycle(teleop={"speed_ratio": 1.0})
+        if rec.get("stop"):
+            break
+    assert rec["stop"] == "watch_wheel" and rec["watch"]["wheel"] == 0
+
+
+def test_without_a_watch_nothing_is_recorded():
+    r = armed_rig()
+    r.mcu.current_ma = (9000, 0, 0, 0)
+    r.run(60, teleop={"speed_ratio": 1.0})
+    assert not any("watch" in x for x in r.recs) and r.arbiter.mode == "TELEOP"

@@ -1,0 +1,30 @@
+# The real truck's safety watch (docs/design/2026-11-16-real-safety-watch.md, 4e-2): the host-side checks that stand in
+# for the simulation's truth-based scene-damage judgement. Judged only while armed, on fresh new STATEs; past a hold
+# the teleop bridge stops (arbiter STOP, wheels to zero, no DISARM) and tells the console. Every value is provisional
+# and is set again after the measurements named in its provenance (the firmware's own 5 A / 20 ms FAULT stays below).
+schema: safety_watch/1
+
+current:
+  # Any channel (L, R, M, H) above this for the hold: a provisional sign of something wrong (pushing, a blocked
+  # wheel or lift), not a diagnosis. 80 % of the rated 45 W / 12 V ~ 3.75 A; start-up and reversal currents are
+  # assumed to settle within the hold.
+  limit_a: [3.0, 3.0, 3.0, 3.0]
+  hold_s: 0.5
+  provenance: {source: rated_power_80pct_assumption, measured: false, until: S3}
+
+wheel:
+  # Each rear wheel: the target of the DRIVE last queued against the MCU-measured wheel rate. Over tol for the hold
+  # (both under floor: not judged). tol is a quarter of the 0.2 m/s teleop cap; the hold is twice the time the 0.8 m/s^2
+  # accel limit takes to reach the cap.
+  tol_mps: 0.05
+  floor_mps: 0.03
+  hold_s: 0.5
+  provenance: {source: teleop_cap_quarter_and_accel_limit, measured: false, until: S8}
+
+tilt:
+  # Only when an IMU owner hands the watch acceleration samples (the teleop bridge does not; design 3). The angle
+  # from the gravity direction taken at the arm; the test floor is flat concrete.
+  limit_deg: 8.0
+  hold_s: 0.3
+  max_age_s: 0.5
+  provenance: {source: flat_floor_with_vibration_margin, measured: false, until: S8}

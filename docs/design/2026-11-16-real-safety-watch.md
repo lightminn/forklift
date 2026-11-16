@@ -21,7 +21,7 @@
 
 ## 2. 넘으면
 
-- 중재기 정지(`TeleopBridge._stop(now, "watch_…")`)로 바퀴 목표를 0 으로 둔다. 지금 `overspeed`·`loop_slow` 와 같은 길이다. 결과: 그 주기의 출력(`_output` → `_submit`)이 바퀴 0 DRIVE(조향·승강 의도 유지)를 큐에 넣는다. DISARM 은 보내지 않는다(무장 해제는 운용자 판단, 펌웨어 FAULT·만료·ESTOP 은 그대로 MCU 래치). 다시 달리려면 운용자가 다시 요청해야 한다(중재기 STOPPED). 감시가 따로 래치를 두지는 않는다.
+- 중재기 정지(`TeleopBridge._stop(now, "watch_…")`)로 바퀴 목표를 0 으로 둔다. 지금 `overspeed`·`loop_slow` 와 같은 길이다. 결과: 큐에 있던 DRIVE 는 버려지고(제어 세대 경계), 중재기 정지는 무장도 푼다(`Arbiter.stop`: STOPPED, disarmed). 그래서 브리지가 MCU 에 DISARM 을 보낸다. 과속 정지와 같다. 펌웨어 FAULT·만료·ESTOP 은 그대로 MCU 래치다. 다시 달리려면 운용자가 다시 무장하고 요청해야 한다. 감시가 따로 래치를 두지는 않는다.
 - 같은 주기에 다른 정지가 겹치면 기록의 `stop` 은 먼저 걸린 것이다(`rec.setdefault`). 감시는 속도·loop_slow 판정 뒤에 부르므로 그보다 뒤 순서다. 감시가 넘은 사실은 `stop` 과 별도로 `rec["watch"]` 에 늘 남긴다.
 - 콘솔에 사건으로 알린다: `{"t": "event", "kind": "watch_stop", "reason": "watch_current"}` 처럼 kind 는 `watch_stop` 하나, 사유는 reason 에 둔다. 콘솔은 kind 에 "stop" 이 든 사건을 빨간색으로 보이므로 콘솔을 고치지 않아도 된다(콘솔 세션 확인, `console/web/js/main.js`). 알리는 자리는 지금 `loop_slow`·`clock_rate` 를 알리는 Bridge.cycle 의 사건 목록이다.
 - 기록 행(`rec`)에 감시 값(채널별 전류 최대, 바퀴 차, 기울기)과 넘은 조건을 남긴다. 넘기 전 '경고'(조건은 맞았지만 시간 미달)는 기록만 하고 알리지 않는다. 원인이 계속되면(예: 막힌 바퀴) 재무장 직후 다시 서므로, 사유별로 넘은 횟수를 세션 동안 세어 기록에 남긴다(콘솔 세션 제안).
@@ -29,10 +29,10 @@
 
 ## 3. 구조
 
-- `src/forklift_core/safety/real_watch.py`(새): 순수 판정. `SafetyWatch(config).step(t_s, armed, currents_a, applied_mps, measured_mps, bound_mps, accel=None)` → 넘은 사유(없으면 None)와 기록용 값. 시간 지속은 단조 시각으로 센다. 무장이 풀리면 지속 시간과 기준 중력을 지운다.
+- `src/forklift_core/safety/real_watch.py`(새): 순수 판정. `SafetyWatch(config, wheel_radius_m).step(t_s, armed, fresh, new_state, currents_a, wheel_targets_rad_s, wheel_rates_rad_s, accel=None, accel_t_s=None, imu_expected=False)` → 넘은 사유(없으면 None)와 기록용 값(가장 큰 전류 채널, 가장 큰 바퀴 차, 기울기, 지속 중인 조건 `pending`). 시간은 호출하는 쪽이 넘긴다. 무장이 풀리면 지속 시간과 기준 중력을 지운다. 넘은 횟수는 사유별로 `counts` 에 쌓는다.
 - `config/real/safety_watch.yaml`(새): 문턱·지속 시간·켬/끔, 값마다 `provenance`.
-- `real_teleop.TeleopBridge.cycle`: 속도 판정 바로 뒤에 감시를 부르고, 넘으면 `_stop`. 전류는 `self.host.state` 에서, 측정 속도는 이번 주기의 `reading` 에서, applied 는 직전 주기에 포트에 넣은 값에서 읽는다.
-- `tools/teleop_bridge.py`: 사건 목록에 감시 사유를 더한다.
+- `real_teleop.TeleopBridge(safety_watch=…)`: 속도·loop_slow 판정 바로 뒤에 감시를 부르고, 넘으면 `_stop`. 전류와 측정 바퀴 속도는 `self.host.state` 에서, 바퀴 목표는 `_submit` 이 마지막으로 큐에 넣은 `RealDrive.wheel_rates_rad_s`(그 만료가 지나면 0)에서 읽는다. None 이면 감시하지 않는다.
+- `tools/teleop_bridge.py`: `Bridge` 가 감시를 기본으로 켠다(`--no-safety-watch` 로 끔, 기록 머리에 설정 파일 해시 `safety_watch`). 감시가 넘으면 `watch_stop` 사건을 보낸다.
 - **IMU 는 이번에 브리지에 붙이지 않는다.** 브리지 안에서 RealSense 모션 센서를 열면 M 측정의 `tools/imu_record.py` 와 장치 소유가 겹친다. 기울기 판정은 `SafetyWatch` 에 두고 가속도 표본을 인자로 받게만 한다. 센서를 가진 쪽(실차 자율 진입점, S10 전)이 표본을 넘기는 경계로 연결한다. 그때까지 텔레옵 다리에서는 기울기 감시가 꺼져 있고, 시험 단계는 지금처럼 사람 감시·저속·빈 포크다(이식 계획 5 절).
 - 실차 자율 진입점(S10 전)이 생기면 같은 `SafetyWatch` 를 그 루프에서 부른다. Isaac 런처·러너는 이 모듈을 부르지 않는다.
 
@@ -44,6 +44,8 @@
 - 브리지: 가짜 MCU 상태(전류 3.5 A 를 0.6 s)로 `TeleopBridge.cycle` 이 `watch_current` 로 정지하고 콘솔 사건이 나간다. 문턱 아래에서는 정지하지 않는다. 기존 텔레옵 다리 시험이 모두 그대로 통과한다(정상 주행에서 오탐 없음).
 - 설정 파일: 값마다 `provenance` 가 있고 `measured: false` 다.
 
+- 들어간 시험: `tests/unit/safety/test_real_watch.py`(판정 19 건: 지속 시간 경계, 시동 전류, 채널·부호, 조향 중 한쪽 바퀴, 차이 나는 바퀴 속도 추종, 명령 0 굴러감, 문턱 아래, 가감속 램프와 한 주기 지연, 무장 해제·신선도·새 STATE, 횟수, 기록 값, 기울기·IMU 끊김), `tests/unit/live/test_teleop_bridge_cycle.py` 끝(정상 텔레옵·조향·후진에서 넘지 않음, 전류 지속 → `watch_current` 정지·DISARM·횟수, 문턱 아래 전류, 한쪽 바퀴 멈춤 → `watch_wheel`, 감시 없으면 기록 없음). 기존 브리지 통합 시험은 감시가 켜진 채로 돈다.
+
 ## 5. 남는 것
 
 - 문턱 재조정: S3(전류)·S5(정지)·S8(추종·IMU) 실측 뒤.
@@ -52,3 +54,4 @@
 ## 6. 검토
 
 - **Codex 1 회차.** P1 1 건(축 평균 비교는 조향 중 한쪽 바퀴 멈춤을 놓침 → 바퀴마다 목표·측정 비교)과 P2 4 건(신선한 STATE 에서만 누적, 3 A 는 S3 전 임시 이상 징후·시동 전류 시험, 정지 경로의 결과와 사유 순서, IMU 는 브리지에서 열지 않고 표본을 넘겨받는 경계)을 반영했다.
+- **Codex 2 회차.** 새 P1/P2 없음. P3 2 건(3 절 입력 설명이 바퀴별 방식과 어긋남, 4 절이 끝난 시험처럼 읽힘)은 구현과 함께 3·4 절을 고쳐 반영했다. 구현 중 2 절의 'DISARM 없음'이 틀린 것을 찾아 고쳤다: `Arbiter.stop` 은 무장도 푼다.
