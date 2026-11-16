@@ -28,6 +28,7 @@ testpaths = ["tests"]
 markers = [
     "simulation: requires the optional model dependencies and MuJoCo",
     "rendering: requires an explicitly enabled graphics context",
+    "realtime: drives the MCU model as a live peer on the wall clock (set by tests/conftest.py); run apart from xdist load",
 ]
 
 [tool.ruff]

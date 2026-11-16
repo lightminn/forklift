@@ -52,6 +52,20 @@ def full_t11_pallet_urdf(tmp_path):
 _LOOP_ENV = "FORKLIFT_LOOP_EVIDENCE"
 
 
+# Real time (lead/user 2026-11-16): a test whose fixtures start the firmware core's MCU model (the ``mcu_model``
+# fixture, directly or through a bench, a run or the bridge harness) drives it as a live peer over a pty on the wall
+# clock -- STATE ages, link deadlines, the bridge's 20 ms loop -- and fails when xdist workers starve the process. Those
+# are marked ``realtime`` here, by fixture and not by file, so the synthetic and fake-clock tests beside them stay in the
+# parallel stage; the ws1 wrapper runs ``-m realtime`` alone after it.
+REALTIME_FIXTURES = frozenset({"mcu_model"})
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if REALTIME_FIXTURES.intersection(getattr(item, "fixturenames", ())):
+            item.add_marker(pytest.mark.realtime)
+
+
 def pytest_configure(config):
     import os
     import tempfile
