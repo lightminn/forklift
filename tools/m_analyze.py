@@ -11,6 +11,11 @@ registration's; this tool only says which values can be judged.
 usage: m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profiles/m1_m3/<name>.yaml
                     (--truth TRUTH.jsonl | --no-truth) (--mount G3.json | --up X,Y,Z)
                     [--field-log FIELD.jsonl] [--vehicle config/real/vehicle.yaml] [--trial N] [--allow-synthetic]
+                    [--block-record OTHER.jsonl ...]
+
+--block-record: another teleop record of the same IMU stretch (the same day's G3, M1, M2, M3 or q-step records);
+repeat it for each. Their standing windows enter the in-trial bias-slope fit (registration revision 3, 10.1); no
+values are computed for their trials.
 """
 
 from __future__ import annotations
@@ -67,6 +72,7 @@ def main(argv=None) -> int:
     ap.add_argument("--vehicle", type=Path, default=VEHICLE)
     ap.add_argument("--trial", type=int)
     ap.add_argument("--allow-synthetic", action="store_true")
+    ap.add_argument("--block-record", type=Path, action="append", default=[])
     args = ap.parse_args(argv)
 
     def refused(why: str) -> int:
@@ -82,11 +88,13 @@ def main(argv=None) -> int:
         rec, imu = _rows(args.record), _rows(args.imu)
         truth_rows = None if args.truth is None else _rows(args.truth)
         field_rows = None if args.field_log is None else _rows(args.field_log)
+        block_rows = [_rows(b) for b in args.block_record]
     except (OSError, ValueError, json.JSONDecodeError) as e:
         return refused(f"input: {e}")
     try:
         out = m_entry.analyze(rec, imu, truth_rows, field_rows, profile, cfg, up,
-                              allow_synthetic=args.allow_synthetic, no_truth=args.no_truth, trial=args.trial)
+                              allow_synthetic=args.allow_synthetic, no_truth=args.no_truth, trial=args.trial,
+                              block_rows=block_rows)
     except SyntheticRefused as e:
         return refused(f"synthetic: {e}")
     except m_entry.Refused as e:
@@ -95,7 +103,7 @@ def main(argv=None) -> int:
               "vehicle": {**_ident(args.vehicle), "calibration_id": cfg.calibration_id},
               "truth": None if args.truth is None else _ident(args.truth),
               "field_log": None if args.field_log is None else _ident(args.field_log),
-              "up": {"vector": up, "source": up_source}}
+              "up": {"vector": up, "source": up_source}, "block_records": [_ident(b) for b in args.block_record]}
     header_cfg = (rec[0].get("config") or {}) if rec else {}
     if header_cfg:
         # the record names its configuration (teleop bridge header, PR #530): a different vehicle or profile file is
