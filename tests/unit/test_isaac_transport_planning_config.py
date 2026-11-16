@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from forklift_core.planning import Bounds, PlannerConfig, Pose2D, pallet_mission
+from forklift_core.planning.hybrid_astar import planner_config_record
 from forklift_core.planning.pallet_mission import (
     PalletSite,
     SyntheticMissionGeometry,
@@ -109,6 +110,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         geometry=geometry,
         state=state,
         asdict=asdict,
+        planner_config_record=planner_config_record,
         make_transport_planner_config=build,
     )
     exec(
@@ -118,7 +120,9 @@ def test_all_runner_planning_calls_use_the_recorded_config(
     assert len(built) == 1
     config = built[0]
     record = json.loads(json.dumps(state))
-    assert record["planner_config"] == asdict(
+    # the off short cusp arc fields are left out (plan 2026-11-16-aisle-short-cusp-arc): the record every earlier run
+    # wrote, asdict without them
+    assert record["planner_config"] == planner_config_record(
         PlannerConfig(
             primitive_length_m=0.25,
             clearance_m=clearance,
@@ -226,7 +230,7 @@ def test_all_runner_planning_calls_use_the_recorded_config(
         result = eval(compile(ast.Expression(call), str(SCRIPT), "eval"), namespace)
         assert result.success, result.status
         assert received[-1] is config
-        assert asdict(received[-1]) == record["planner_config"]
+        assert planner_config_record(received[-1]) == record["planner_config"]
         if call.func.id == "plan_transport":
             assert received[0].clearance_m == record["approach_clearance_m"]
             assert received[0].primitive_length_m == 0.25
