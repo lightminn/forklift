@@ -48,6 +48,7 @@ from forklift_core.plant.markers import marker_input_state, marker_reader  # noq
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
 from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
 from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: E402
+from forklift_core.safety.real_watch import SafetyWatch, load_watch_config  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
@@ -151,12 +152,18 @@ class Bridge:
     """The bridge's parts on one device and one console (the CLI and the end-to-end test build it the same way)."""
 
     def __init__(self, device_link, *, confirmed, floor_permit=no_scan, session_epoch=None, record=None,
-                 profile=None, rate_rho=rt.RATE_RHO_MAX, clock=None):
+                 profile=None, rate_rho=rt.RATE_RHO_MAX, clock=None, scan_permit=None, safety_watch=True):
         """``rate_rho``: the MCU clock rate bound the arm waits for (D5 3.11; tests widen it to verify quickly).
         ``clock``: the CLI's monotonic clock -- the decision time is taken after the receive (the D5 read time is
         later than the cycle start) and each cycle's stage times and GC pauses are recorded; None keeps the cycle
-        start for everything (tests drive the time)."""
+        start for everything (tests drive the time). ``safety_watch``: the real truck's safety watch
+        (docs/design/2026-11-16-real-safety-watch.md, config/real/safety_watch.yaml) -- on unless turned off."""
         self.clock = clock
+        # 7b (docs/design/2026-11-16-bridge-scan-permit.md): the scan permit is the floor permission, fed each STATE
+        # and polled each cycle
+        self.scan_permit = scan_permit
+        if scan_permit is not None:
+            floor_permit = scan_permit
         self.vehicle = load_real_vehicle(REPO / "config" / "real" / "vehicle.yaml")
         self.params = rt.load_bridge_params(REPO / "config" / "real" / "teleop_bridge.yaml", self.vehicle)
         self.cap = rt.command_cap_mps(self.vehicle.teleop_speed_limit_mps, self.params)
@@ -183,7 +190,10 @@ class Bridge:
         self.core = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
                                     params=self.params, limit_mps=self.vehicle.teleop_speed_limit_mps,
                                     floor_permit=floor_permit, safety_provider=lambda now: self.safety,
-                                    cycle_s=CYCLE_S, rate_rho=rate_rho)
+                                    cycle_s=CYCLE_S, rate_rho=rate_rho,
+                                    safety_watch=SafetyWatch(load_watch_config(SAFETY_WATCH_YAML),
+                                                             wheel_radius_m=self.vehicle.wheel_radius_m)
+                                    if safety_watch else None)
         self._fresh.target = self.core
         self._gc_ms = 0.0  # GC pause time since the last cycle record (D5 (나) instrumentation)
         self._gc_t0: int | None = None
@@ -263,6 +273,8 @@ class Bridge:
         """Only the STATEs the host accepted reach the safety speed (Codex impl P2-7)."""
         self._last_rx_ns = received_ns  # kept here: the host forgets its receipt time on a disconnect
         sample = Sample(received_ns, state)
+        if self.scan_permit is not None:
+            self.scan_permit.on_state(sample, self.core.delay_s(state, received_ns))
         if self.record is not None:
             # every STATE the host took, before the core filters it (record design 3): queued, written by the writer
             self.record.put_state(sample, getattr(self.dev, "last_read_ns", None))
@@ -304,7 +316,11 @@ class Bridge:
         if self.clock is not None:
             t_rx = self.clock()
             now_ns = max(now_ns, t_rx)
+        if self.scan_permit is not None:
+            self.scan_permit.poll(now_ns)  # the scans received since the last cycle, before the decision
         rec = self.core.cycle(now_ns)
+        if self.scan_permit is not None:
+            rec["scan"] = self.scan_permit.record_view()
         out = rec.pop("_out")
         now = now_ns / 1e9
         if self.link.state_due(now):
@@ -332,6 +348,10 @@ class Bridge:
             self.channels.put(None, {"t": "event", "kind": kind, "reason": e.get("reason"),
                                      **{k: e[k] for k in ("offer_id", "travel_m", "elapsed_s", "after_end_s")
                                         if k in e}})
+        trip = (rec.get("watch") or {}).get("trip")
+        if trip is not None:
+            # the safety watch's stop: one kind (the console paints a kind with "stop" red), the reason the check
+            self.channels.put(None, {"t": "event", "kind": "watch_stop", "reason": trip})
         for why in ("mcu_stopping", "loop_slow", "clock_rate"):
             # D5 decisions 2-3: the grey zone's MCU stop, a slow loop and a clock out of range are shown, not hidden
             if (why == "mcu_stopping" and rec.get("mcu_stopping")) or rec.get("stop") == why:
@@ -397,6 +417,7 @@ class Bridge:
 RECORD_SCHEMA = "teleop_bridge_record/1"
 VEHICLE_YAML = REPO / "config" / "real" / "vehicle.yaml"
 BRIDGE_PARAMS_YAML = REPO / "config" / "real" / "teleop_bridge.yaml"
+SAFETY_WATCH_YAML = REPO / "config" / "real" / "safety_watch.yaml"
 
 
 def _file_identity(path: Path) -> dict:
@@ -464,6 +485,8 @@ def main(argv=None) -> int:
     ap.add_argument("--web-root", default=str(REPO / "console" / "web"))
     ap.add_argument("--record")
     ap.add_argument("--markers", action="store_true")
+    ap.add_argument("--no-safety-watch", action="store_true",
+                    help="turn the real truck's safety watch off (config/real/safety_watch.yaml; on by default)")
     ap.add_argument("--profile", help="drive profile YAML (G6): Enter on this terminal starts a trial; needs --record")
     ap.add_argument("--duration-s", type=float)
     ap.add_argument("--bench", help="rehearsal only: the bench's bench.json; required on a pty device (the model "
@@ -471,7 +494,27 @@ def main(argv=None) -> int:
     ap.add_argument("--synthetic-permit", action="store_true",
                     help="rehearsal only: open the floor permission on the model MCU (needs --bench and a passing "
                          "model-peer check; refused on a real device). No operating launcher passes it.")
+    ap.add_argument("--scan-socket", help="7b: the scan adapter's Unix socket (bind here); with --lidar-mount the "
+                                         "floor permission comes from the real scan")
+    ap.add_argument("--lidar-mount", help="7b: x,y,z,yaw_deg of the LiDAR in the rear-axle frame (measured, S7)")
+    ap.add_argument("--lidar-mask", help="7b: a:b,c:d degree intervals (sensor frame) the truck's body hides")
     args = ap.parse_args(argv)
+    if (args.scan_socket is None) != (args.lidar_mount is None):
+        print("--scan-socket and --lidar-mount go together (the mount has no default: S7 measures it)",
+              file=sys.stderr)
+        return 2
+    if args.scan_socket is not None and args.synthetic_permit:
+        print("--scan-socket is not combined with --synthetic-permit", file=sys.stderr)
+        return 2
+    scan_args = None
+    if args.scan_socket is not None:
+        import bridge_scan
+
+        try:
+            scan_args = (bridge_scan.parse_mount(args.lidar_mount), bridge_scan.parse_mask(args.lidar_mask))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     try:
         synthetic = writer_marker(args.device, args.bench)
     except (SyntheticRefused, OSError, ValueError) as exc:
@@ -527,19 +570,33 @@ def main(argv=None) -> int:
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
                         "start_mono_ns": time.monotonic_ns(), "config": identity,
+                        "safety_watch": None if args.no_safety_watch else _file_identity(SAFETY_WATCH_YAML),
                         **({} if marks is None else {"markers": marks})})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
-    bridge = server = None
+    bridge = server = scan_sock = None
     started = False
     out: dict = {}
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
+        scan_permit = None
+        if scan_args is not None:
+            import bridge_scan
+
+            from forklift_core.sensors.scan_feed import ScanFeed, bind_socket
+
+            scan_sock = bind_socket(args.scan_socket)
+            scan_permit = bridge_scan.ScanPermit(
+                ScanFeed(sock=scan_sock), mount=scan_args[0], mask_deg=scan_args[1],
+                config_path=REPO / "config" / "real" / "obstacle_layer_real.yaml",
+                vehicle=load_real_vehicle(VEHICLE_YAML), v_max_mps=load_real_vehicle(VEHICLE_YAML).teleop_speed_limit_mps,
+                allow_synthetic=synthetic is not None)
         link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns) if synthetic is None
                 else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"]),
                                       clock=time.monotonic_ns))
         bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
-                        profile=profile, floor_permit=floor)
+                        safety_watch=not args.no_safety_watch,
+                        profile=profile, floor_permit=floor, scan_permit=scan_permit)
         if identity is not None:
             # the configuration the bridge loaded is the one the header names (Codex #530 P2: the files are read by
             # the header and by the bridge at two moments)
@@ -574,12 +631,16 @@ def main(argv=None) -> int:
         started = True
         print(json.dumps({"console": f"http://{args.host}:{server.port}/", "command_cap_mps": round(bridge.cap, 4),
                           "floor_permit": ("synthetic_permit (rehearsal, model MCU only)" if args.synthetic_permit
-                                           else "no_scan (bring-up 7 adds the scan)")}), flush=True)
+                                           else "scan (7b, provisional: the memo's operating conditions)"
+                                           if scan_permit is not None else "no_scan (bring-up 7 adds the scan)")}),
+              flush=True)
         try:
             run(bridge, duration_s=args.duration_s)
         except KeyboardInterrupt:
             pass
     finally:
+        if scan_sock is not None:
+            scan_sock.close()
         if bridge is not None:
             bridge.close(time.monotonic_ns())
             out["overruns"] = bridge.overruns

@@ -1,0 +1,50 @@
+# 7b (docs/design/2026-11-16-bridge-scan-permit.md): the teleop bridge's obstacle layer on the real A2M12 scan.
+# Started from config/obstacle_layer_single_a2_team_spec.yaml; every changed value is provisional and says why.
+# Valid only under the memo's operating conditions (empty field, empty truck, the bridge's 0.2 m/s overspeed limit,
+# hand on the main power cut, no objects below the LiDAR band or mirror/glass/black-matte ones).
+clear_max_height_m: 10.0  # the one real LiDAR may clear (operating condition 2); its band is checked per beam (limit_m)
+band_top_m: 10.0          # unused by the bridge (it builds limit_m itself from the mount height and tilt below)
+beams: 1600               # unused by the bridge (each real scan brings its own angles)
+range_min_m: 0.2
+range_max_m: 12.0
+noise_std_m: 0.02
+noise_cut_m: 0.06
+range_noise:
+  model: a2_spec          # Slamtec A2 spec rows read as +-2 sigma (P3a); the A2M12 is not measured yet
+sensors:
+  - {name: lidar, xyz: [0.0, 0.0, 0.0], yaw_deg: 0}  # placeholder: the mount comes from --lidar-mount (S7 measures it)
+grid:
+  resolution_m: 0.05
+  max_mark_m: 5.0
+  max_clear_m: 5.0
+  free_max_age_s: 0.35      # memo 6: first use <= 0.15 s, the next scan arrives by about 0.25 s (10 Hz)
+  free_use_age_s: 0.35
+  occupied_max_age_s: 0.35
+  free_r_cap_m: 0.20
+  free_rho_m: 4.0
+  window_m: 6.0
+  close_gap_m: 0.25
+  free_min_width_m: 0.5
+  planning_memory: false    # no planner on the bridge
+permission:
+  latency_s: 0.30           # memo 4: conservative until the S5 stop is measured (sim 0.15)
+  decel_mps2: 0.5           # memo 4: conservative until the S5 stop is measured (sim 1.5)
+  margin_m: 0.05
+  envelope_m: 0.01          # unchanged: the scan skew goes into the age table (memo, Codex round 1 P1)
+  envelope_ramp_m: 0.0
+  sensor_timeout_s: 0.35    # memo 6
+  lookahead_m: 3.0
+  shape: hull               # no blade list: the layer checks the whole outline both ways
+odometry_age: config/obstacle_odometry_age_team_spec.json  # simulation table, provisional (memo 4)
+known_pallets:
+  enabled: false
+# The bridge's own part (memo): the outline, the timing uncertainty and the height band.
+bridge:
+  footprint: {front_m: 1.29, rear_m: 0.17, half_width_m: 0.36}  # the measured-chassis outline Isaac uses (dls08_measured)
+  body_front_m: 0.94        # axle to fork tip 1.29 - carriage limit 0.346 (run_transport's own outline)
+  scan_period_s: 0.1        # nominal 10 Hz; a measured median beyond 1.5x this closes the permit
+  state_delay_s: 0.03       # STATE measurement-time uncertainty (DelayBound measured <= 28 ms)
+  max_stamp_to_recv_s: 0.15
+  hall_half_m: 20.0         # the grid's area around the start pose (odometry frame)
+  max_tilt_deg: 1.0         # provisional until the mount is measured (S7)
+  band_half_m: 0.10         # the height band the plane speaks for: mount height +- this

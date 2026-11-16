@@ -543,7 +543,7 @@ class TeleopBridge:
 
     def __init__(self, *, link, host, port, kinematics, params: EncoderSpeedParams, limit_mps: float, floor_permit,
                  safety_provider, cycle_s: float = 0.02, samples_max: int = 64,
-                 rate_rho: float = RATE_RHO_MAX) -> None:
+                 rate_rho: float = RATE_RHO_MAX, safety_watch=None) -> None:
         self.link, self.arbiter = link, link.a
         self.host, self.port, self.kin, self.params = host, port, kinematics, params
         self.limit_mps = float(limit_mps)
@@ -591,6 +591,10 @@ class TeleopBridge:
         self._tail: dict | None = None  # an ended escape's travel followed to the stand or the hand-over
         self._offer_ids = itertools.count(secrets.randbelow(1 << 20) + 1)
         self.arbiter.escape = self.approve_escape
+        # the real truck's safety watch (docs/design/2026-11-16-real-safety-watch.md): None = off
+        self.watch = safety_watch
+        self._watch_rx: int | None = None  # the STATE receipt the watch last judged
+        self._wheel_target: tuple[tuple[float, float], int] = ((0.0, 0.0), 0)  # last queued DRIVE's wheels, expiry
 
     # ------------------------------------------------------------------ inputs
     def add_sample(self, sample: Sample) -> None:
@@ -723,6 +727,8 @@ class TeleopBridge:
             self._stop(now_ns, "loop_slow", rec)
             self._slow_cycles.clear()
             self._urgent = True
+        if self.watch is not None:
+            self._watch_step(now_ns, st, rec)
         rec["rate"] = self.rate.verdict
         tele = a.teleop
         # R2-3 (b): how long since the last accepted teleop and the console's own report (diagnostics only)
@@ -761,6 +767,25 @@ class TeleopBridge:
                               reason=a.preempt_latch,
                               **({"stop_kind": "preempt", "source": "zero"} if stopped else {}))
         return rec
+
+    def _watch_step(self, now_ns: int, st, rec: dict) -> None:
+        """The safety watch on this cycle's newest STATE against the wheels of the DRIVE last queued (judged only
+        on a fresh, newly received STATE); a trip is an arbiter STOP like ``overspeed`` (STOPPED, disarmed)."""
+        rx = self.host.state_rx_ns
+        new = st is not None and rx is not None and rx != self._watch_rx
+        self._watch_rx = rx
+        wheels, expires = self._wheel_target
+        target = wheels if now_ns < expires else (0.0, 0.0)  # an expired DRIVE: the MCU's own stop has the wheels
+        res = self.watch.step(
+            now_ns / 1e9, armed=self.arbiter.armed, fresh=self.host.health(now_ns).fresh, new_state=new,
+            currents_a=None if st is None else st.current_a, wheel_targets_rad_s=target,
+            wheel_rates_rad_s=None if st is None else (st.wheel_rate_left_rad_s, st.wheel_rate_right_rad_s))
+        if res.values:
+            rec["watch"] = dict(res.values)
+        if res.trip is not None:
+            rec.setdefault("watch", {}).update(trip=res.trip, counts=dict(self.watch.counts))
+            self._stop(now_ns, res.trip, rec)
+            self._urgent = True
 
     def _step_s(self) -> float:
         """The time this cycle stands for (D5 3.12): the real gap since the last cycle, capped for the slew."""
@@ -990,6 +1015,7 @@ class TeleopBridge:
             self._stop(now_ns, f"port_{res.kind}:{res.reason}", rec)
             self._disarm(now_ns, "port_not_queued", rec)
             return 0.0
+        self._wheel_target = (tuple(float(w) for w in drive.wheel_rates_rad_s), expires)
         if speed != 0.0:
             self.last_cmd = (speed, expires)  # a nonzero DRIVE may act until its expiry, whatever follows it
             if self.escape is not None:

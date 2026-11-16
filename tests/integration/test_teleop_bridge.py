@@ -27,6 +27,13 @@ import teleop_bridge as tb  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
 from real_mcu_link import TtyLink  # noqa: E402
 from test_bringup_tool import mcu_model  # noqa: E402,F401 -- the module-scoped model build
+import importlib.util  # noqa: E402
+
+# 7b: the synthetic scan world of the scan permit's unit tests (boxes, the cast, the stand-in mount)
+_bscan_spec = importlib.util.spec_from_file_location(
+    "test_bridge_scan_helpers", REPO / "tests" / "unit" / "tools" / "test_bridge_scan.py")
+bscan_t = importlib.util.module_from_spec(_bscan_spec)
+_bscan_spec.loader.exec_module(bscan_t)
 
 ALL = ("empty_forks", "forks_clear", "lift_low", "no_open_recovery")
 # The end-to-end harness does not test loop_slow (D5 3.12; its unit tests do): its own loop is not real time, so a
@@ -130,7 +137,7 @@ class Console:
 
 
 class Run:
-    def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL, profile=None):
+    def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL, profile=None, scan_permit=None):
         self.model = Model(exe, *extra)
         self.dev = PtyDevice(self.model.master)
         # the operating rate guard (D5 3.11, rho 0.001): the model MCU runs on the host's monotonic clock, so its rate
@@ -138,7 +145,7 @@ class Run:
         # and that deviation is the delay bound's drift coefficient: ws1 showed age stales of 51-53 ms made of anchor
         # 20.8 + offset 6.7 + drift 23.8 ms at k 0.046 (job 19326) -- a harness artifact, not the operating bound
         self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile,
-                           rate_rho=rt.RATE_RHO_MAX)
+                           rate_rho=rt.RATE_RHO_MAX, scan_permit=scan_permit)
         # this harness is not real time: on a loaded CI node its own cycles can run late three times in a second and
         # stop the armed truck as loop_slow (D5 3.12) -- a test artefact; loop_slow has its own unit tests
         self.b.core.loop_slow_count = HARNESS_LOOP_SLOW_OFF
@@ -321,6 +328,60 @@ def test_the_cli_floor_without_a_scan_moves_nothing(run):
     r.to_ready()
     r.cycles(40, teleop={"speed_ratio": 1.0})
     assert r.nonzero() == [] and r.b.host.state.mode == Mode.ARMED
+
+
+class CastFeed:
+    """7b without the A2M12: a scan every 100 ms cast from the permit's own odometry pose against boxes (the
+    synthetic world of tests/unit/tools/test_bridge_scan.py)."""
+
+    def __init__(self, boxes):
+        self.boxes, self.permit, self.last, self.k = boxes, None, None, 0
+
+    def poll(self):
+        now = time.monotonic_ns()
+        if self.permit is None or not self.permit.hist or (self.last is not None and now - self.last < 100_000_000):
+            return []
+        self.last = now
+        angles, ranges = bscan_t.cast(self.permit.pose, bscan_t.MOUNT, bscan_t.WALLS + self.boxes)
+        self.k += 1
+        return [bscan_t.scan(self.k, now, ranges, angles)]
+
+
+def _scan_run(run, boxes):
+    feed = CastFeed(boxes)
+    permit = bscan_t.bs.ScanPermit(feed, mount=bscan_t.MOUNT, config_path=bscan_t.CONFIG, vehicle=bscan_t.VEH,
+                                   v_max_mps=bscan_t.VEH.teleop_speed_limit_mps)
+    feed.permit = permit
+    return run(scan_permit=permit), permit
+
+
+def test_the_scan_permit_opens_on_an_empty_floor_and_drives(run):
+    r, permit = _scan_run(run, [])
+    r.to_ready()
+    r.cycles(60, teleop={"speed_ratio": 1.0})
+    assert r.nonzero(), (r.recs[-1].get("scan"), permit.status())
+    assert all("scan" in x for x in r.recs[-10:]) and permit.status()["scans_used"] > 10
+
+
+def test_the_scan_permit_holds_the_truck_before_a_box(run):
+    r, permit = _scan_run(run, [bscan_t.BOX_AHEAD])
+    r.to_ready()
+    r.cycles(40, teleop={"speed_ratio": 1.0})
+    assert r.nonzero() == [] and permit.status()["scans_used"] > 10
+
+
+def test_the_cli_refuses_half_a_scan_setup(tmp_path, capsys):
+    flags = [f"--{n.replace('_', '-')}" for n in ALL]
+    assert tb.main(["--device", "pty", "--scan-socket", str(tmp_path / "s.sock"), *flags]) == 2
+    assert "go together" in capsys.readouterr().err
+    assert tb.main(["--device", "pty", "--lidar-mount", "0.9,0,1.05,0", *flags]) == 2
+    assert "go together" in capsys.readouterr().err
+    assert tb.main(["--device", "pty", "--scan-socket", str(tmp_path / "s.sock"), "--lidar-mount", "0.9,0,1.05",
+                    *flags]) == 2
+    assert "four finite" in capsys.readouterr().err
+    assert tb.main(["--device", "pty", "--scan-socket", str(tmp_path / "s.sock"), "--lidar-mount", "0.9,0,1.05,0",
+                    "--synthetic-permit", *flags]) == 2
+    assert "not combined" in capsys.readouterr().err
 
 
 def test_a_tx_cut_lets_the_mcu_expiry_run_and_stops_the_arbiter(run):
