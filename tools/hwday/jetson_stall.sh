@@ -8,7 +8,9 @@ secs="${1:-300}"
 jsync
 rc=0
 jssh "cd ~/forklift && bash tools/hwday/stall_run.sh ~/hwday_stall $secs" > "$HW_OUT/stall_run.txt" 2>&1 || rc=$?
-mkdir -p "$HW_OUT/stall"
-jssh 'cd ~ && tar -cf - hwday_stall' | tar -xf - -C "$HW_OUT/stall" || echo "copying the records back failed" >&2
-grep -h -E '^(PASS|FAIL|info|ALL|NOT)' "$HW_OUT"/stall/hwday_stall/*/verdict.txt || tail -20 "$HW_OUT/stall_run.txt"
+rm -rf "$HW_OUT/stall"; mkdir -p "$HW_OUT/stall"   # never show an older run's verdicts
+if ! jssh 'cd ~ && tar -cf - hwday_stall' | tar -xf - -C "$HW_OUT/stall"; then
+  echo "FAIL  copying the records back failed" >&2; rc=1
+fi
+grep -h -E '^(PASS|FAIL|info|ALL|NOT)' "$HW_OUT"/stall/hwday_stall/*/verdict.txt 2>/dev/null || tail -20 "$HW_OUT/stall_run.txt"
 exit "$rc"

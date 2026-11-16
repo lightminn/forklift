@@ -10,6 +10,9 @@ jsync
 jssh 'ls -l /dev/forklift-mcu* 2>&1; id -nG | tr " " "\n" | grep -x dialout || echo "zetin is NOT in dialout (the udev rule gives 0660)"'
 rc=0
 jssh "cd ~/forklift && mkdir -p data/jetson_check/2026-11-17 && .venv/bin/python tools/h743_link_check.py --device /dev/forklift-mcu --seconds $secs --out data/jetson_check/2026-11-17/h743_link.jsonl" > "$HW_OUT/h743_link.txt" 2>&1 || rc=$?
-jssh 'cat ~/forklift/data/jetson_check/2026-11-17/h743_link.jsonl' > "$HW_OUT/h743_link.jsonl" || echo "copying the record back failed" >&2
+rm -f "$HW_OUT/h743_link.jsonl"
+if ! jssh 'cat ~/forklift/data/jetson_check/2026-11-17/h743_link.jsonl' > "$HW_OUT/h743_link.jsonl"; then
+  echo "FAIL  copying the record back failed" >&2; rc=1
+fi
 tail -3 "$HW_OUT/h743_link.txt"
 exit "$rc"

@@ -32,10 +32,13 @@ A2M12 = {
 }
 # A4 windows on the user's timer (t_s from the script's start): empty 10-20 s (after the driver's start), the person
 # 22-38 s (2 s slack at each edge), clear 60-70 s. A closure counts only for an obstacle or unknown cells while scans
-# keep arriving -- not for no snapshot, synthetic frames, a slow period or a missing STATE (Codex P2).
+# keep arriving -- only the permit's own cell reasons (drive_permission.py: occupied, unknown, unknown_passes, edge),
+# never an input fault such as no snapshot, sensor silence, stale evidence or synthetic frames (Codex P2). Each window
+# needs samples about every second over most of it (the checker logs once a second): no gap over 1.5 s and at least
+# 80 % of its length covered, so a few scattered samples cannot pass it.
 PERMIT = {"empty": (10.0, 20.0), "person": (22.0, 38.0), "end": (60.0, 70.0), "empty_open_min": 0.9,
-          "blocked_s_min": 3.0, "end_open_min": 0.9}
-NOT_A_PERSON = {"no_snapshot", "synthetic_scan", "scan_period", "state_delay_over_budget"}
+          "blocked_s_min": 3.0, "end_open_min": 0.9, "max_gap_s": 1.5, "coverage_min": 0.8}
+PERSON_REASONS = ("occupied", "unknown", "edge")  # unknown_passes starts with unknown
 STALL = {"idle_over_40ms_max": 0, "load_over_80ms_max": 0}
 
 
@@ -96,19 +99,30 @@ def permit(path: Path) -> bool:
     def window(w):
         return (t >= w[0]) & (t < w[1])
 
+    def sampled(w):
+        ts = t[window(w)]
+        if len(ts) < 2:
+            return False
+        gaps = np.diff(np.concatenate(([w[0]], ts, [w[1]])))
+        return bool(gaps.max() <= c["max_gap_s"] + 0.5 and (ts[-1] - ts[0]) >= c["coverage_min"] * (w[1] - w[0]) - 1)
+
+    coverage = [line(sampled(c[k]), f"timeline samples cover the {k} window {c[k][0]:g}-{c[k][1]:g} s",
+                     int(window(c[k]).sum())) for k in ("empty", "person", "end")]
     empty, end = fwd[window(c["empty"])], fwd[window(c["end"])]
-    # the longest stretch in the person window closed by an obstacle or unknown cells, with new scans arriving
+    # the longest stretch in the person window closed by an obstacle or unknown cells, with new scans arriving and
+    # samples no more than max_gap_s apart
     best = run = 0.0
     prev = None
     for i in np.flatnonzero(window(c["person"])):
-        closed = (not fwd[i]) and rows[i].get("why_f") not in NOT_A_PERSON and i > 0 and used[i] > used[i - 1]
-        if closed:
-            run += t[i] - prev if prev is not None else 0.0
+        why = str(rows[i].get("why_f") or "")
+        closed = (not fwd[i]) and why.startswith(PERSON_REASONS) and i > 0 and used[i] > used[i - 1]
+        if closed and prev is not None and t[i] - prev <= c["max_gap_s"]:
+            run += t[i] - prev
             best = max(best, run)
-        else:
+        elif not closed:
             run = 0.0
         prev = t[i] if closed else None
-    return all([
+    return all(coverage) and all([
         line(len(empty) > 0 and empty.mean() >= c["empty_open_min"], "empty floor opens forward (10-20 s)",
              f"{empty.mean() if len(empty) else 0:.2f} of samples"),
         line(best >= c["blocked_s_min"], "the person in front closes it (22-38 s, scans arriving)",

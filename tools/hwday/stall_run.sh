@@ -15,7 +15,8 @@ export PYTHONPATH="$repo/src"
 mkdir -p "$out"
 pids=()
 cleanup() { for p in "${pids[@]}"; do kill "$p" 2>/dev/null || true; done; wait 2>/dev/null || true; }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT TERM
 phase() {
   local name="$1"; local d="$out/$name"; rm -rf "$d"; mkdir -p "$d"
   "$py" tools/rehearsal_bench.py --stage drive --out-dir "$d/bench" > "$d/bench.log" 2>&1 &
