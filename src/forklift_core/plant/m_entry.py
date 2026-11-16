@@ -569,14 +569,23 @@ def _bias_intervals(imu, recs, field_rows) -> list:
     return sorted(out, key=lambda x: x["center_ns"])
 
 
+def _segment(imu, t_ns: int) -> int:
+    """Which continuous IMU clock segment a host time falls in (a device restart or a clock gap starts a new one)."""
+    return int(np.searchsorted(np.asarray(imu.bounds, dtype=np.int64), t_ns, side="right"))
+
+
 def _bias_slope(intervals, imu, bw) -> dict:
-    """The trial's moving fit (10.1): intervals centred no later than its after window's end, the last
-    n = min(6, available); n >= 3 gives the least-squares slope of the yaw-axis bias against time."""
+    """The trial's moving fit (10.1): intervals of the trial's own continuous IMU stretch (a clock break ends the
+    stretch: earlier windows, block records or rechecks before it never enter; Codex PR 3b review P2) centred no later
+    than its after window's end, the last n = min(6, available); n >= 3 gives the least-squares slope of the yaw-axis
+    bias against time."""
     thr = REGISTERED["bias_slope_rad_s2"]
     if bw["why"]:
         return dict(value=None, judgeable=False, why=list(bw["why"]), n_windows=0, threshold=thr)
     end = int(imu.t[bw["w1"][1] - 1])
-    use = [iv for iv in intervals if iv["center_ns"] <= end][-SLOPE_WINDOWS:]
+    seg = _segment(imu, end)
+    use = [iv for iv in intervals if iv["center_ns"] <= end and _segment(imu, iv["start_ns"]) == seg
+           and _segment(imu, iv["end_ns"]) == seg][-SLOPE_WINDOWS:]
     base = dict(n_windows=len(use), centers_ns=[iv["center_ns"] for iv in use], kinds=[iv["kind"] for iv in use],
                 threshold=thr)
     if len(use) < SLOPE_MIN:
@@ -958,6 +967,9 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
         _need(b0 > a1, "block record: records overlap in time (one STATE source at a time)")
     imu = _Imu(imu_rows, upv, [iv for r in recs for iv in r["standing"]])
+    if imu.t is not None:
+        for r in recs[1:]:  # a block record must lie inside the IMU file (Codex PR 3b review P2)
+            _need(imu.t[0] <= r["times"][0] and r["times"][-1] <= imu.t[-1], "block record: outside the IMU file")
     ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
                extrapolated=extrapolated,
                states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),

@@ -119,3 +119,20 @@ def test_m1_reports_the_slope_as_information():
     t = trial1(me.analyze(out["records"][-1], out["imu"], out["truths"][-1], None, profile("m1_fwd_v010"), CFG, UP,
                           allow_synthetic=True, block_rows=out["records"][:-1]))
     assert t["imu"]["report_only"] and t["imu"]["bias_slope"]["n_windows"] == 6
+
+
+def test_an_imu_clock_break_ends_the_stretch():
+    # the device clock restarts before the last trial: the two earlier trials' windows are another stretch
+    out = block(merge_items(3), seed=7, imu_restart_before=2)
+    b = trial1(run_last(out, L09))["imu"]["bias_slope"]
+    assert b["n_windows"] == 2 and b["why"] == ["bias_slope_unconfirmed"]
+
+
+def test_a_block_record_outside_the_imu_file_is_refused():
+    out = block(merge_items(2), seed=8)
+    early = block(merge_items(1), seed=9)["records"][0]  # a record of the same boot from before this IMU file
+    shifted = [{**r, **({"read_ns": r["read_ns"] - 10**12, "host_ns": r["host_ns"] - 10**12} if "read_ns" in r else {})}
+               for r in early]
+    with pytest.raises(me.Refused, match="outside the IMU file"):
+        me.analyze(out["records"][-1], out["imu"], out["truths"][-1], None, profile(L09), CFG, UP,
+                   allow_synthetic=True, block_rows=[shifted])
