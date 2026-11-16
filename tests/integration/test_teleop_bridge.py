@@ -339,6 +339,9 @@ def test_a_locked_board_is_never_armed(run):
     r.cycles(50)
     r.c.request("mode_request", to="TELEOP")
     r.cycles(5)
+    # the operating rate check first (D5 3.11): before it the bridge holds the ARM itself and the board is never asked
+    r.cycles(2500, until=lambda x: x.get("rate") == "verified")
+    assert r.b.core.rate.verdict == "verified", r.b.core.rate.progress_s()
     r.c.request("arm")
     r.cycles(30)
     assert r.b.host.state.mode == Mode.DISARMED and r.b.arbiter.mode == "STOPPED"
