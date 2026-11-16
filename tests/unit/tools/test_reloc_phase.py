@@ -677,3 +677,236 @@ def test_no_injection_records_nothing(tmp_path):
     _go_later(tmp_path)
     out = P.run(_inputs(tmp_path, grid, FakeTruck(grid, base), base))
     assert "inject" not in out
+
+
+# --- the observation move (docs/plans/2026-11-16-reloc-observe-move.md) ------------------------------------------
+
+class DrivenTruck(FakeTruck):
+    """A FakeTruck that rolls straight along its heading at the speed ``drive(v)`` set, 120 steps a second."""
+
+    def __init__(self, grid, base):
+        super().__init__(grid, base)
+        self.v, self.commands = 0.0, []
+
+    def drive(self, v):
+        self.v = float(v)
+        self.commands.append(self.v)
+
+    def step(self):
+        super().step()
+        x, y, yaw = self.base
+        d = self.v / 120.0
+        self.base = (x + d * math.cos(yaw), y + d * math.sin(yaw), yaw)
+
+
+def _fake_matcher(monkeypatch, truck, confirm_when):
+    """G.relocalize replaced: confirmed (top = the truck's own laser pose) iff ``confirm_when(truck.base)``; the
+    points it was given are kept."""
+    seen = []
+
+    def relocalize(grid, points, cfg, **kw):
+        seen.append(np.array(points, copy=True))
+        x, y, yaw = truck.base
+        laser = (x - 0.12 * math.cos(yaw), y - 0.12 * math.sin(yaw), yaw)
+        cand = G.Candidate(pose=laser, score=1.0, endpoint_fraction=1.0)
+        ok = confirm_when(truck.base)
+        return G.GlobalMatch("ok", (cand,), 1), G.Decision(ok, "confirmed" if ok else "competitor", 0.9)
+
+    monkeypatch.setattr(P.G, "relocalize", relocalize)
+    return seen
+
+
+BODY = (0.45, 0.35, 0.20)  # front, rear (from base) and half width (m) for the tests
+
+
+def _move_inputs(tmp_path, grid, truck, base, **kw):
+    return _inputs(tmp_path, grid, truck, base, move_m=0.3, drive=truck.drive, body=BODY, **kw)
+
+
+def test_without_the_move_an_ambiguous_start_ends_as_today(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: False)
+    out = P.run(_inputs(tmp_path, grid, truck, base))
+    assert out["status"] in ("needs_operator", "failed") and len(out["attempts"]) == 3
+    assert truck.commands == [] and "moves" not in out and out.get("static_outcome") is None
+
+
+def test_a_static_failure_moves_forward_and_confirms_there(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: b[0] > base[0] + 0.2)
+    _go_later(tmp_path)
+    out = P.run(_move_inputs(tmp_path, grid, truck, base))
+    assert out["status"] == "chosen" and out["static_outcome"] in ("needs_operator", "failed")
+    assert [a["phase"] for a in out["attempts"]] == ["static"] * 3 + ["move+"]
+    assert [m["dir"] for m in out["moves"]] == [1] and not out["moves"][0]["blocked"]
+    assert out["moves"][0]["travelled_m"] == pytest.approx(0.3, abs=0.02)
+    assert truck.v == 0.0 and math.hypot(out["estimate"][0] - truck.base[0], out["estimate"][1] - truck.base[1]) < 1e-6
+    assert out["truth"] == pytest.approx(list(truck.base), abs=1e-6)  # the place the candidates were made
+
+
+def test_a_failure_forward_goes_back_past_the_start_with_two_attempts_a_place(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: b[0] < base[0] - 0.2)
+    _go_later(tmp_path)
+    out = P.run(_move_inputs(tmp_path, grid, truck, base))
+    assert out["status"] == "chosen"
+    assert [a["phase"] for a in out["attempts"]] == ["static"] * 3 + ["move+"] * 2 + ["move-"]
+    assert [m["dir"] for m in out["moves"]] == [1, -1]
+    assert out["moves"][1]["travelled_m"] == pytest.approx(0.6, abs=0.03)
+    assert truck.base[0] == pytest.approx(base[0] - 0.3, abs=0.03)
+
+
+def test_nowhere_confirmed_ends_after_both_places(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: False)
+    out = P.run(_move_inputs(tmp_path, grid, truck, base))
+    assert out["status"] in ("needs_operator", "failed") and len(out["attempts"]) == 3 + 2 + 2
+    assert [m["dir"] for m in out["moves"]] == [1, -1] and R.read_reloc_pose(tmp_path) is None
+
+
+def test_a_box_ahead_blocks_the_forward_move_only(tmp_path, monkeypatch):
+    base = (2.0, 2.0, 0.0)
+    grid = TG._grid(6.0, 4.0, [(2.7, 1.6, 3.0, 2.4)])  # 0.25 m ahead of the 0.45 m front: inside 0.3 + 0.15
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: b[0] < base[0] - 0.2)
+    _go_later(tmp_path)
+    out = P.run(_move_inputs(tmp_path, grid, truck, base))
+    assert out["status"] == "chosen"
+    assert out["moves"][0] == pytest.approx({**out["moves"][0], "dir": 1, "blocked": True, "travelled_m": 0.0})
+    assert out["moves"][1]["dir"] == -1 and not out["moves"][1]["blocked"]
+    assert out["moves"][1]["travelled_m"] == pytest.approx(0.3, abs=0.02)  # from the start, not from +D
+    assert [a["phase"] for a in out["attempts"]] == ["static"] * 3 + ["move-"]
+
+
+def test_both_ways_blocked_never_moves(tmp_path, monkeypatch):
+    base = (2.0, 2.0, 0.0)
+    grid = TG._grid(6.0, 4.0, [(2.7, 1.6, 3.0, 2.4), (1.0, 1.6, 1.4, 2.4)])
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: True if b != base else False)
+    out = P.run(_move_inputs(tmp_path, grid, truck, base))
+    assert out["status"] in ("needs_operator", "failed") and all(m["blocked"] for m in out["moves"])
+    assert truck.commands == [] and len(out["attempts"]) == 3
+
+
+def test_a_corridor_without_valid_beams_counts_as_blocked():
+    angles = (0.0, 2 * math.pi / 360)
+    free = np.full(360, np.inf)
+    assert not P.corridor_blocked(free, angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    holed = free.copy()
+    holed[355:] = np.nan
+    holed[:5] = np.nan  # no beam ahead
+    assert P.corridor_blocked(holed, angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    assert not P.corridor_blocked(holed, angles, (-0.12, 0.0), BODY, -1, 0.3, 0.2, 12.0)
+    fan = np.full(181, np.inf)  # a front half fan, -90..+90 deg: the rear is not measured
+    fan_angles = (-math.pi / 2, math.pi / 180)
+    assert not P.corridor_blocked(fan, fan_angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(fan, fan_angles, (-0.12, 0.0), BODY, -1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(free, (0.0, 0.0), (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(np.array([]), angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    close = free.copy()
+    close[0] = -np.inf
+    assert P.corridor_blocked(close, angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+
+
+def test_a_stop_during_the_move_stops_the_wheels_and_ends_the_session(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: True if b[0] > base[0] + 0.25 else False)
+    holder = {}
+
+    class Console:
+        def attach(self, r):
+            holder["r"] = r
+
+        def note(self, **kw):
+            pass
+
+        def gate(self, stage):
+            if stage == "move" and truck.base[0] > base[0] + 0.1 and holder["r"].state != "stopped":
+                holder["r"].interrupt()
+
+        def service(self, stage):
+            pass
+
+    out = P.run(_move_inputs(tmp_path, grid, truck, base, console=Console(), unattended=True))
+    assert out["status"] == "needs_operator" and truck.v == 0.0
+    assert out["moves"][0]["stopped"] and len(out["moves"]) == 1
+    assert truck.base[0] < base[0] + 0.2 and R.read_reloc_pose(tmp_path) is None
+
+
+def test_the_rebased_target_never_changes_what_the_matcher_reads(tmp_path, monkeypatch):
+    """The stillness check's target follows the truck after the move; the matcher's points are the scans only."""
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    runs = []
+    for target_shift in (0.0, 0.004):
+        truck = DrivenTruck(grid, base)
+        seen = _fake_matcher(monkeypatch, truck, lambda b: False)
+        tgt = (base[0] + target_shift, base[1], base[2])
+        P.run(_move_inputs(tmp_path / f"t{target_shift}", grid, truck, tgt))
+        runs.append(seen)
+    assert len(runs[0]) == len(runs[1]) == 7
+    assert all(np.array_equal(a, b) for a, b in zip(runs[0], runs[1], strict=True))
+
+
+def test_a_stop_while_settling_after_the_move_ends_the_session_with_the_wheels_at_zero(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: b[0] > base[0] + 0.25)
+    holder = {"moves": 0}
+
+    class Console:
+        def attach(self, r):
+            holder["r"] = r
+
+        def note(self, **kw):
+            pass
+
+        def gate(self, stage):
+            if stage == "move":
+                holder["moves"] += 1
+                if truck.v == 0.0 and holder["moves"] > 365 and holder["r"].state != "stopped":
+                    holder["r"].interrupt()  # after the 360 drive steps: in the settle
+
+        def service(self, stage):
+            pass
+
+    out = P.run(_move_inputs(tmp_path, grid, truck, base, console=Console()))
+    assert out["status"] == "needs_operator" and truck.v == 0.0 and out["moves"][0]["stopped"]
+    assert out["moves"][0]["travelled_m"] == pytest.approx(0.3, abs=0.02) and len(out["moves"]) == 1
+    assert [a.get("phase") for a in out["attempts"]] == ["static"] * 3 and R.read_reloc_pose(tmp_path) is None
+
+
+def test_an_exception_while_moving_leaves_the_wheels_at_zero(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: False)
+
+    class Console:
+        def attach(self, r):
+            pass
+
+        def note(self, **kw):
+            pass
+
+        def gate(self, stage):
+            if stage == "move" and truck.v != 0.0:
+                raise RuntimeError("the operator ended the session")
+
+        def service(self, stage):
+            pass
+
+    with pytest.raises(RuntimeError):
+        P.run(_move_inputs(tmp_path, grid, truck, base, console=Console()))
+    assert truck.v == 0.0

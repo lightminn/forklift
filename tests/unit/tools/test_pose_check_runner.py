@@ -410,3 +410,30 @@ def test_the_diagnostic_captures_use_copies_and_the_raw_grid_function():
 def test_the_capture_does_not_go_with_a_boundary_record():
     src = _source()
     assert 'if args.pose_diag_capture and args.record_boundary:' in src
+
+
+def test_the_observation_move_is_for_unattended_relocalization_batches_only(tmp_path):
+    # docs/plans/2026-11-16-reloc-observe-move.md 1: off by default and not recorded off; unattended batches only
+    import near_tracking
+    import run_transport
+
+    off = _runner_args(_live(tmp_path, *_reloc(tmp_path)))
+    assert off.reloc_observe_move == 0.0 and "reloc_observe_move" not in run_transport.recorded_arguments(off)
+    on = _runner_args(_live(tmp_path, *_reloc(tmp_path), "--reloc-unattended", "--reloc-observe-move", "0.3"))
+    assert run_transport.recorded_arguments(on)["reloc_observe_move"] == 0.3
+    for extra in (["--reloc-observe-move", "0.3"], ["--reloc-unattended", "--reloc-observe-move", "1.5"],
+                  ["--reloc-unattended", "--reloc-observe-move", "-0.3"],
+                  ["--reloc-unattended", "--reloc-observe-move", "nan"]):
+        with pytest.raises(SystemExit):
+            _runner_args(_live(tmp_path, *_reloc(tmp_path), *extra))
+    with pytest.raises(SystemExit):
+        _runner_args(_live(tmp_path, "--reloc-observe-move", "0.3"))
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS["reloc_observe_move"] == 0.0
+    src = _source()
+    assert "move_m=float(getattr(args, \"reloc_observe_move\", 0.0) or 0.0), drive=drive, body=body" in src
+    assert "if args.reloc_observe_move > 0.0:" in src
+    assert "reloc_drive_ = reloc_move_drive(robot, wheels, steers, args.drive_geometry, ArticulationAction)" in src
+    import types
+    import run_transport as rt
+    fp = types.SimpleNamespace(front_m=1.29, rear_m=0.17, half_width_m=0.36)
+    assert rt.reloc_move_body(fp, -0.34) == pytest.approx((0.95, 0.51, 0.36))

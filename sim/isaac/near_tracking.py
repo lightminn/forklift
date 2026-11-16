@@ -1232,6 +1232,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "pose_check": "off", "pose_check_bounds": None,
                               # 2026-11-06 the wrong-estimate injection (plan 2026-11-06-unconfirmed-validation 1.2)
                               "reloc_inject": None, "pose_check_contacts": False,
+                              # 2026-11-16 the observation move (plan 2026-11-16-reloc-observe-move): off before
+                              "reloc_observe_move": 0.0,
                               "pose_shadow_audit": False, "correction_inject": None,
                               # 2026-11-07 the lead's item 3b-c: records only, off in every earlier run
                               "pose_diag_capture": False,
