@@ -141,6 +141,7 @@ class McuLinkHost:
         self.cfg = cfg
         self._freshness = freshness
         self._state_delay_s: float | None = None
+        self._state_delay_terms: dict | None = None  # what made _state_delay_s (diagnostics)
         self._on_state_cb = on_state
         self.client, self.allow_locked = Client(client), bool(allow_locked)
         self.commission_mode = bool(commission)
@@ -344,6 +345,8 @@ class McuLinkHost:
                 continue
             rule = self._mcu_rule()
             d = self._freshness.delay_s(s, rx) if rule else None
+            terms_of = getattr(self._freshness, "delay_terms", None)  # diagnostics only (the bridge's source has it)
+            d_terms = terms_of(s, rx) if rule and d is not None and terms_of is not None else None
             if self._state_rx_ns is not None and prev is not None:
                 host_gap = (rx - self._state_rx_ns) / 1e9
                 raw_mcu_gap = (s.mcu_time_us - prev.mcu_time_us) / 1e6 if s.boot_id == prev.boot_id else None
@@ -366,6 +369,7 @@ class McuLinkHost:
                 self._revoke("arm_timeout", events)
             first = False
             self._state, self._state_rx_ns, self._state_delay_s = s, rx, d
+            self._state_delay_terms = d_terms
             if self._on_state_cb is not None:
                 self._on_state_cb(s, rx)
             if prev is None:
@@ -399,6 +403,7 @@ class McuLinkHost:
                 # made it -- with the host gap since the read before and the MCU-time gap over the read
                 same = state_before is not None and state_before.boot_id == newest.boot_id
                 self._stale("age", age, events, delay_s=self._state_delay_s, n_states=n_read,
+                            terms=self._state_delay_terms,
                             host_gap_s=None if rx_before is None else (rx - rx_before) / 1e9,
                             mcu_gap_s=(newest.mcu_time_us - state_before.mcu_time_us) / 1e6 if same else None)
         if newest is self._state:
@@ -471,6 +476,7 @@ class McuLinkHost:
         self._drop(lambda o: True, "disconnected")
         self._state, self._state_rx_ns, self._stale_reported = None, None, False
         self._state_delay_s = None
+        self._state_delay_terms = None
         if self._freshness is not None:
             self._freshness.on_disconnect()
         self.disconnects += 1
