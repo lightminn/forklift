@@ -41,15 +41,26 @@ def _v(kind, name, value, why=None, **extra) -> dict:
     return out
 
 
+def gyro_covers(windows: dict | None, move_ns: int, last_move_ns: int) -> bool:
+    """The gyro heading runs from the end of the standing window before to the start of the one after; it is the
+    same stop-to-stop change as the odometry only if that stretch holds every wheel movement of the trial."""
+    if not windows or "before" not in windows or "after" not in windows:
+        return False
+    return windows["before"][1] <= move_ns and windows["after"][0] >= last_move_ns
+
+
 def left_point(rel: dict, half_track_m: float) -> tuple[float, float]:
     """Where the left rear axle end went, seen from its own start position and the start heading (the tape line,
-    11.2): the rear axle centre's displacement plus the rotation of the half-track lever, (R(dth) - I) (0, w/2)."""
+    11.2): with c the rear axle centre and p = (0, w/2) the lever to the left axle end in the body frame, the end point
+    seen from the start point in the start frame is R(-th0)(c1 - c0) + (R(dth) - I) p -- the rear axle centre's
+    relative pose plus the lever's rotation. The tape line through the left front and rear axle ends is taken
+    parallel to the body axis; its own direction error is the tape method's uncertainty (about 2 cm at 3 m)."""
     dth = rel["dyaw"]
     return (rel["dx_fwd"] - math.sin(dth) * half_track_m, rel["dy_lat"] + (math.cos(dth) - 1.0) * half_track_m)
 
 
 def trial_values(kind: str, *, rel_odo: dict, s_enc_m: float, gyro_dyaw_rad, tape: dict | None, tape_why: str,
-                 half_track_m: float, kappa_q=None) -> dict:
+                 half_track_m: float, kappa_q=None, gyro_why: str = "no_gyro") -> dict:
     """The revision-4 values of one valid trial. ``tape`` is ``{"s_cm", "y_cm"}`` or None (``tape_why`` says why)."""
     if kind == "m2":
         ok = gyro_dyaw_rad is not None and kappa_q not in (None, 0) and s_enc_m > 0
@@ -63,7 +74,7 @@ def trial_values(kind: str, *, rel_odo: dict, s_enc_m: float, gyro_dyaw_rad, tap
     s_pt, y_pt = left_point(rel_odo, half_track_m)
     heading_name = "heading_drift_deg" if kind == "m1" else "heading_diff_deg"
     dh = None if gyro_dyaw_rad is None else math.degrees(rel_odo["dyaw"] - gyro_dyaw_rad)
-    out = {heading_name: _v(kind, heading_name, dh, "no_gyro", odo_dyaw_deg=math.degrees(rel_odo["dyaw"]),
+    out = {heading_name: _v(kind, heading_name, dh, gyro_why, odo_dyaw_deg=math.degrees(rel_odo["dyaw"]),
                             gyro_dyaw_deg=None if gyro_dyaw_rad is None else math.degrees(gyro_dyaw_rad))}
     if tape is None:
         out["end_lateral_cm"] = _v(kind, "end_lateral_cm", None, tape_why, y_odo_cm=100 * y_pt)

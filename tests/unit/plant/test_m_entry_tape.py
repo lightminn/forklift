@@ -187,3 +187,34 @@ def test_summary_cli_reads_m_analyze_lines(tmp_path, capsys):
     bad = tmp_path / "b.json"
     bad.write_text(json.dumps({"result": "refused", "why": "x"}) + "\n")
     assert mod.main([str(a), str(bad)]) == 2
+
+
+def test_a_tape_void_row_voids_the_trial():
+    out = ms.synth_block([{"profile": profile("m1_fwd_v010")}], CFG, seed=15)
+    rows = tape_rows(out["truths"][-1]) + [{"t": "void", "trial": 1, "reason": "tape_bumped",
+                                             "closed_before_results": True}]
+    res = me.analyze(out["records"][-1], out["imu"], rows, None, profile("m1_fwd_v010"), CFG, UP,
+                     allow_synthetic=True)
+    t = res["trials"][0]
+    assert t["status"] == "void" and t["why"] == "field:tape_bumped" and "rev4" not in t
+    rows[-1] = {k: v for k, v in rows[-1].items() if k != "closed_before_results"}
+    with pytest.raises(me.Refused, match="closed_before_results"):
+        me.analyze(out["records"][-1], out["imu"], rows, None, profile("m1_fwd_v010"), CFG, UP,
+                   allow_synthetic=True)
+
+
+def test_gyro_window_must_hold_every_wheel_movement():
+    w = {"before": [100, 200], "after": [900, 1000]}
+    assert r4.gyro_covers(w, 210, 880)
+    assert not r4.gyro_covers(w, 190, 880)  # the before window runs into the motion
+    assert not r4.gyro_covers(w, 210, 950)  # the motion goes on into the after window
+    assert not r4.gyro_covers(None, 210, 880)
+    v = r4.trial_values("m1", rel_odo={"dx_fwd": 3.0, "dy_lat": 0.0, "dyaw": 0.0}, s_enc_m=3.0, gyro_dyaw_rad=None,
+                        gyro_why="gyro_window_not_covering_motion", tape=None, tape_why="no_tape", half_track_m=0.1)
+    assert v["heading_drift_deg"]["why"] == ["gyro_window_not_covering_motion"]
+
+
+def test_the_lever_term_for_a_turn():
+    # rear axle centre turns 90 deg left on the spot: the left axle end swings back by w/2 and right by w/2
+    s, y = r4.left_point({"dx_fwd": 0.0, "dy_lat": 0.0, "dyaw": math.pi / 2}, 0.1)
+    assert s == pytest.approx(-0.1) and y == pytest.approx(-0.1)

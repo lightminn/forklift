@@ -950,7 +950,15 @@ def _rev4(out: dict, kind: str, ctx: dict) -> dict:
     row = None if tape_all is None else tape_all.get(out["trial"])
     why = "no_tape" if tape_all is None else "tape_missing"
     kappa = ((out.get("values") or {}).get("kappa_measured_q_inv_m") or {}).get("value")
-    return r4.trial_values(kind, rel_odo=rel, s_enc_m=path, gyro_dyaw_rad=(out.get("imu") or {}).get("dyaw_rad"),
+    imu = out.get("imu") or {}
+    gyro, gyro_why = imu.get("dyaw_rad"), "no_gyro"
+    times, states = ctx["times"], ctx["states"]
+    moving = [int(times[i]) for i in range(i_start + 1, i1 + 1)
+              if (states[i].wheel_count_left, states[i].wheel_count_right) !=
+              (states[i - 1].wheel_count_left, states[i - 1].wheel_count_right)]
+    if gyro is not None and not (moving and r4.gyro_covers(imu.get("windows"), moving[0], moving[-1])):
+        gyro, gyro_why = None, "gyro_window_not_covering_motion"
+    return r4.trial_values(kind, rel_odo=rel, s_enc_m=path, gyro_dyaw_rad=gyro, gyro_why=gyro_why,
                            tape=row, tape_why=why, half_track_m=ctx["cfg"].track_m / 2, kappa_q=kappa)
 
 
