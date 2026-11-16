@@ -3737,6 +3737,27 @@ def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple
     return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
 
 
+def reloc_move_drive(robot, wheels, steers, drive_geometry, action_type):
+    """The observation move's straight wheel command (plan 2026-11-16-reloc-observe-move): drive(v_mps) sets the
+    wheel rates and the straight steering through the simulation's kinematics (the core's command path)."""
+    from forklift_core.plant.kinematics import AckermannKinematics
+
+    kin_ = AckermannKinematics(drive_geometry, 0.0)  # no slew: the steering is put straight at once
+
+    def drive(v_mps):
+        cmd_ = kin_.command(float(v_mps), 0.0)
+        robot.apply_action(action_type(joint_velocities=np.asarray(cmd_.wheel_rates_rad_s, float), joint_indices=wheels))
+        robot.apply_action(action_type(joint_positions=np.asarray(cmd_.steering_rad, float), joint_indices=steers))
+
+    return drive
+
+
+def reloc_move_body(footprint, rear_axle_offset_m: float) -> tuple:
+    """(front, rear, half width) from base_link: the footprint is from the rear axle, the base the offset ahead."""
+    off_ = abs(rear_axle_offset_m)
+    return (footprint.front_m - off_, footprint.rear_m + off_, footprint.half_width_m)
+
+
 def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
                          clock=None, console=None, sink=None, drive=None, body=None, steps_per_s: float = 120.0) -> dict:
     """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
@@ -5280,16 +5301,8 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
                                            state=state)
         reloc_drive_ = reloc_body_ = None
         if args.reloc_observe_move > 0.0:  # plan 2026-11-16-reloc-observe-move: a straight wheel command, the body
-            def reloc_drive_(v_mps):
-                cmd_ = ackermann_command(float(v_mps), 0.0, args.drive_geometry)
-                robot.apply_action(ArticulationAction(joint_velocities=np.asarray(cmd_.wheel_rates_rad_s, float),
-                                                      joint_indices=wheels))
-                robot.apply_action(ArticulationAction(joint_positions=np.asarray(cmd_.steering_rad, float),
-                                                      joint_indices=steers))
-
-            fp_ = geometry.unloaded_footprint  # from the rear axle; the matcher's base is the offset ahead of it
-            off_ = abs(args.rear_axle_offset_m)
-            reloc_body_ = (fp_.front_m - off_, fp_.rear_m + off_, fp_.half_width_m)
+            reloc_drive_ = reloc_move_drive(robot, wheels, steers, args.drive_geometry, ArticulationAction)
+            reloc_body_ = reloc_move_body(geometry.unloaded_footprint, args.rear_axle_offset_m)
         start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
                                            console=reloc_console, sink=pose_box["sink"], drive=reloc_drive_,
                                            body=reloc_body_, steps_per_s=float(settings["physics_hz"]))

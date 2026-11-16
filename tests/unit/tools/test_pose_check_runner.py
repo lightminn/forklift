@@ -432,3 +432,8 @@ def test_the_observation_move_is_for_unattended_relocalization_batches_only(tmp_
     src = _source()
     assert "move_m=float(getattr(args, \"reloc_observe_move\", 0.0) or 0.0), drive=drive, body=body" in src
     assert "if args.reloc_observe_move > 0.0:" in src
+    assert "reloc_drive_ = reloc_move_drive(robot, wheels, steers, args.drive_geometry, ArticulationAction)" in src
+    import types
+    import run_transport as rt
+    fp = types.SimpleNamespace(front_m=1.29, rear_m=0.17, half_width_m=0.36)
+    assert rt.reloc_move_body(fp, -0.34) == pytest.approx((0.95, 0.51, 0.36))
