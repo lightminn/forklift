@@ -1,0 +1,291 @@
+{
+ "aggregate": {
+  "all": {
+   "delivery_error_failed_runs": [],
+   "delivery_error_m": {
+    "max": 0.06469701723217856,
+    "median": 0.010958785120563362,
+    "n": 34,
+    "p90": 0.020543002373371755
+   },
+   "deterministic_broken_runs": 1,
+   "failure_classes": {
+    "other": 1,
+    "perception": 1,
+    "tracking": 4
+   },
+   "failure_stages": {
+    "observe": 3,
+    "transport": 3
+   },
+   "far_capture_failures": 0,
+   "far_pocket_valid": [
+    39,
+    39
+   ],
+   "far_selected": [
+    39,
+    39
+   ],
+   "forbidden_contacts": 0,
+   "missing_fields": {
+    "near_capture": 1
+   },
+   "n": 40,
+   "near_attempts": {
+    "n": 38,
+    "refusals": {
+     "no_pallet:no_expected_candidate": 1
+    },
+    "valid": 37
+   },
+   "near_status": {
+    "done": 37,
+    "failed": 1,
+    "pending": 1
+   },
+   "observe_replans": 60,
+   "path_display_faults": {
+    "clock_mismatches": 0,
+    "compose_failures": 0,
+    "event_failures": 0,
+    "note_failures": 0
+   },
+   "return_cusp_replans": {
+    "runs_with": 0,
+    "total": 0
+   },
+   "simulated_time_s": {
+    "max": 287.1916816448793,
+    "median": 206.42917743278667,
+    "n": 34,
+    "p90": 258.42501347791404
+   },
+   "success": [
+    34,
+    40
+   ],
+   "transport_cusp_replans": {
+    "runs_with": 8,
+    "total": 9
+   },
+   "transport_reached": [
+    37,
+    40
+   ],
+   "transport_tracking_failures": {
+    "cross_track": 3
+   }
+  },
+  "refused": [],
+  "scenes": {
+   "aisle_rack": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.06469701723217856,
+     "median": 0.02192622293883896,
+     "n": 4,
+     "p90": 0.053384930254743855
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {
+     "perception": 1
+    },
+    "failure_stages": {
+     "observe": 1
+    },
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     5,
+     5
+    ],
+    "far_selected": [
+     5,
+     5
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 5,
+    "near_attempts": {
+     "n": 5,
+     "refusals": {
+      "no_pallet:no_expected_candidate": 1
+     },
+     "valid": 4
+    },
+    "near_status": {
+     "done": 4,
+     "failed": 1
+    },
+    "observe_replans": 2,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 287.1916816448793,
+     "median": 275.96251439256594,
+     "n": 4,
+     "p90": 284.21918148985134
+    },
+    "success": [
+     4,
+     5
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 2,
+     "total": 2
+    },
+    "transport_reached": [
+     4,
+     5
+    ],
+    "transport_tracking_failures": {}
+   },
+   "line_2": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.025991193988205322,
+     "median": 0.010011028110221356,
+     "n": 5,
+     "p90": 0.023978047065020186
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {},
+    "failure_stages": {},
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     5,
+     5
+    ],
+    "far_selected": [
+     5,
+     5
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 5,
+    "near_attempts": {
+     "n": 5,
+     "refusals": {},
+     "valid": 5
+    },
+    "near_status": {
+     "done": 5
+    },
+    "observe_replans": 0,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 219.75834479462355,
+     "median": 177.95834261458367,
+     "n": 5,
+     "p90": 212.79834443163128
+    },
+    "success": [
+     5,
+     5
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 1,
+     "total": 2
+    },
+    "transport_reached": [
+     5,
+     5
+    ],
+    "transport_tracking_failures": {}
+   },
+   "random_1": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.019573912324006734,
+     "median": 0.009531464113670158,
+     "n": 25,
+     "p90": 0.01746750958310318
+    },
+    "deterministic_broken_runs": 1,
+    "failure_classes": {
+     "other": 1,
+     "tracking": 4
+    },
+    "failure_stages": {
+     "observe": 2,
+     "transport": 3
+    },
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     29,
+     29
+    ],
+    "far_selected": [
+     29,
+     29
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {
+     "near_capture": 1
+    },
+    "n": 30,
+    "near_attempts": {
+     "n": 28,
+     "refusals": {},
+     "valid": 28
+    },
+    "near_status": {
+     "done": 28,
+     "pending": 1
+    },
+    "observe_replans": 58,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 236.025012309663,
+     "median": 206.35001076199114,
+     "n": 25,
+     "p90": 224.36001170128586
+    },
+    "success": [
+     25,
+     30
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 5,
+     "total": 5
+    },
+    "transport_reached": [
+     28,
+     30
+    ],
+    "transport_tracking_failures": {
+     "cross_track": 3
+    }
+   }
+  }
+ },
+ "mode": "stage",
+ "root": "/home/projects/forklift/test_runs/pfb/S_pfb_2bea23e5",
+ "schema": "post_fix_baseline_summary/1"
+}

@@ -336,3 +336,61 @@ def test_real_records_read_as_recorded(tmp_path):
     # the pre-fix record is no overlay run, and the post-fix one no pre-fix run
     assert bs.run_fields(real_run(tmp_path / "x", "lcr_B0_random_1_s0"), mode="overlay")["refused"]
     assert bs.run_fields(real_run(tmp_path / "y", "k1r_K1_aisle_rack_s0"), mode="prefix")["refused"]
+
+
+# --- --match-compare: both sets over their common (scene, seed) runs -------------------------------------------------
+
+def test_match_compare_aggregates_common_runs_only(tmp_path):
+    root, comp = tmp_path / "R", tmp_path / "K1"
+    for s in range(4):  # R: random_1 s0-s3, s3 a failure
+        res = done_result(delivery_error_m=0.01 * (s + 1)) if s < 3 else done_result(
+            success=False, phase="transport", failure_reason="Tracking failed in transport: pos=2,yaw=1",
+            tracking_failure={"phase": "transport", "tracking": {"failure": "cross_track"}},
+            delivery_error_m=None, simulated_time_s=None)
+        write_run(root, f"pfb_R_random_1_s{s}", res)
+    write_run(root, "pfb_R_line_2_s0", done_result())
+    write_run(root, "pfb_R_line_2_s1", done_result(), header_mode="stage")  # refused: its pair leaves both sides
+    pre = {k: v for k, v in ARGS.items() if k != "path_display"}
+    for name in ("k1c_K1_random_1_s0", "k1c_K1_random_1_s1", "k1c_K1_line_2_s1", "k1c_K1_aisle_rack_s0"):
+        write_run(comp, name, done_result(arguments=pre, delivery_error_m=0.05), header_mode=None)
+    out = tmp_path / "o.json"
+    assert bs.main([str(root), "--mode", "overlay", "--compare", str(comp), "--compare-mode", "prefix",
+                    "--match-compare", "--out", str(out)]) == 0
+    data = json.loads(out.read_text())
+    # the full aggregates and the pairs are as without the option
+    assert data["aggregate"]["all"]["n"] == 5 and data["compare"]["aggregate"]["all"]["n"] == 4
+    assert data["compare"]["pairs"]["common"] == 2
+    m = data["compare"]["matched"]
+    assert m["n"] == 2
+    assert m["a"]["all"]["n"] == 2 and m["b"]["all"]["n"] == 2
+    assert set(m["a"]["scenes"]) == {"random_1"} and set(m["b"]["scenes"]) == {"random_1"}
+    assert m["a"]["all"]["success"] == [2, 2]
+    assert m["a"]["all"]["delivery_error_m"]["max"] == pytest.approx(0.02)
+    assert m["b"]["all"]["delivery_error_m"]["median"] == pytest.approx(0.05)
+
+
+def test_match_compare_keeps_output_unchanged_without_it(tmp_path):
+    root, comp = tmp_path / "R", tmp_path / "B0"
+    write_run(root, "pfb_R_random_1_s0", done_result())
+    write_run(comp, "lcr_B0_random_1_s0", done_result(arguments={k: v for k, v in ARGS.items() if k != "path_display"}),
+              header_mode=None)
+    out = tmp_path / "o.json"
+    bs.main([str(root), "--mode", "overlay", "--compare", str(comp), "--compare-mode", "prefix", "--out", str(out)])
+    assert set(json.loads(out.read_text())["compare"]) == {"root", "mode", "aggregate", "pairs"}
+
+
+def test_match_compare_needs_compare(tmp_path):
+    with pytest.raises(SystemExit):
+        bs.main([str(tmp_path), "--mode", "overlay", "--match-compare", "--out", str(tmp_path / "o.json")])
+
+
+def test_non_finite_numbers_are_missing(tmp_path):
+    """Codex report review 1 P2: NaN or infinite values never reach the statistics."""
+    r = done_result(delivery_error_m=float("nan"), simulated_time_s=float("inf"))
+    d = tmp_path / "pfb_R_line_2_s9"
+    (d / "run").mkdir(parents=True)
+    (d / "run" / "result.json").write_text(json.dumps(r).replace("NaN", "NaN"))
+    (d / "run" / "path_display.jsonl").write_text(json.dumps({"t": "header", "mode": "overlay"}) + "\n")
+    f = bs.run_fields(d, mode="overlay")
+    assert f["delivery_error_m"] is None and f["simulated_time_s"] is None
+    assert {"delivery_error_m", "simulated_time_s"} <= set(f["missing"])

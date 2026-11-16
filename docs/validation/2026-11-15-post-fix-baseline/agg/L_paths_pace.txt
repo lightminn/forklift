@@ -1,0 +1,40 @@
+epoch records 32 mismatched 0
+bundle 1 row keys ['attempt', 'bridge_cpu', 'cleanup_error', 'containers_removed', 'cpu_s', 'end', 'gpus', 'index', 'infra', 'killed', 'leftover', 'log', 'maxrss_kib', 'missions', 'move_error', 'moved', 'name', 'oom_kills_during', 'ooms', 'pace_min', 'port', 'rc', 'retried', 'session_id', 'signal', 'silence_max_s', 'slot', 'stall_diagnostics', 'stall_reason', 'stalled', 'start', 'startup_crash', 'startup_silent', 'startup_viewport', 'status', 'timeout', 'vram_max_mib', 'wall_s']
+  LO_line_m_s0 ended 0 {'pace_min': 0.3579}
+  LO_random_m_s0 ended 0 {'pace_min': 0.3563}
+  LO_line_m_s1 ended 0 {'pace_min': 0.3571}
+  LO_random_m_s1 ended 0 {'pace_min': 0.3553}
+  LO_line_m_s2 ended 0 {'pace_min': 0.3589}
+  LO_random_m_s2 ended 0 {'pace_min': 0.3562}
+  LO_line_m_s3 ended 0 {'pace_min': 0.3586}
+  LO_random_m_s3 ended 0 {'pace_min': 0.3564}
+  LO_line_m_s4 ended 0 {'pace_min': 0.3571}
+  LO_random_m_s4 ended 0 {'pace_min': 0.353}
+  LD_random_m_s5 ended 0 {'pace_min': 0.3528}
+  LO_random_m_s5 ended 0 {'pace_min': 0.3536}
+  LO_line_m_s6 ended 0 {'pace_min': 0.3623}
+  LD_line_m_s7 ended 0 {'pace_min': 0.3588}
+  LO_line_m_s7 ended 0 {'pace_min': 0.3586}
+  LO_random_m_s7 ended 0 {'pace_min': 0.3746}
+bundle 2 row keys ['attempt', 'bridge_cpu', 'cleanup_error', 'containers_removed', 'cpu_s', 'end', 'gpus', 'index', 'infra', 'killed', 'leftover', 'log', 'maxrss_kib', 'missions', 'move_error', 'moved', 'name', 'oom_kills_during', 'ooms', 'pace_min', 'port', 'rc', 'retried', 'session_id', 'signal', 'silence_max_s', 'slot', 'stall_diagnostics', 'stall_reason', 'stalled', 'start', 'startup_crash', 'startup_silent', 'startup_viewport', 'status', 'timeout', 'vram_max_mib', 'wall_s']
+  LD_line_m_s0 ended 0 {'pace_min': 0.3611}
+  LD_random_m_s0 ended 0 {'pace_min': 0.3587}
+  LD_line_m_s1 ended 0 {'pace_min': 0.3606}
+  LD_random_m_s1 ended 0 {'pace_min': 0.3577}
+  LD_line_m_s2 ended 0 {'pace_min': 0.3606}
+  LD_random_m_s2 ended 0 {'pace_min': 0.3584}
+  LD_line_m_s3 ended 0 {'pace_min': 0.3613}
+  LD_random_m_s3 ended 0 {'pace_min': 0.3589}
+  LD_line_m_s4 ended 0 {'pace_min': 0.3601}
+  LD_random_m_s4 ended 0 {'pace_min': 0.3583}
+  LD_line_m_s5 ended 0 {'pace_min': 0.3599}
+  LO_line_m_s5 ended 0 {'pace_min': 0.3601}
+  LD_line_m_s6 ended 0 {'pace_min': 0.3586}
+  LD_random_m_s6 ended 0 {'pace_min': 0.3556}
+  LO_random_m_s6 ended 0 {'pace_min': 0.357}
+  LD_random_m_s7 ended 0 {'pace_min': 0.3739}
+pace.jsonl
+results.jsonl
+runs
+summary.json
+vram.jsonl
