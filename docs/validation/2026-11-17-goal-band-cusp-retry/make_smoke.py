@@ -4,6 +4,9 @@ non-deterministic, nothing in EXTRA_ARGS, so riib_defaults.txt must read GOAL_CR
   python make_smoke.py SNAP_NAME OUT_DIR
 random_1 s24 (the seed the band was found on) and one run each of line_2 and aisle_rack (scenes the pair never ran),
 to see completion and that the band latches nowhere a truck was not standing (goal_creep_stalls band entries).
+Read per run: riib_defaults.txt's GOAL_CREEP_BAND line, success, failure_reason, and every goal_creep_stalls entry with
+band true (its time, remaining, commanded and odometry); a run with no band entry and a normal arrival is the
+"not taken" case the smoke must contain, and any band entry is checked against the truck standing (odometry ~0).
 """
 import importlib.util
 import json

@@ -830,3 +830,19 @@ def test_goal_creep_band_on_refuses_near_tracking(tmp_path):
     assert out.returncode == 2 and "needs GOAL_CREEP_BAND=off" in out.stdout + out.stderr
     out = dry_run(tmp_path, scene="line_2", out=tmp_path / "b", GOAL_CREEP_BAND="off", **near)
     assert out.returncode == 0, out.stdout + out.stderr
+
+
+@pytest.mark.parametrize("env, extra, ok", [
+    ({"GOAL_CREEP_BAND": "off"}, "--near-tracking --goal-creep-band on", False),
+    ({}, "--near-tracking --goal-creep-band on --goal-creep-band off", True),
+    ({"GOAL_CREEP_BAND": "off"}, "--near-tracking --go=on", False),
+    ({}, "--near-tracking\t--goal-creep-band\noff --record-boundary", True)])
+def test_goal_creep_band_from_extra_args_meets_the_near_check(tmp_path, env, extra, ok):
+    # Codex review P3: EXTRA_ARGS's own value (the last one, any prefix, any whitespace) is what the near check reads
+    near = dict(RETURN_CUSP_REPLANS="0", EXIT_EXEMPT="off", DOCKING_DEGENERATE_CONTINUE="off")
+    out = dry_run(tmp_path, EXTRA_ARGS=extra, **near, **env)
+    if ok:
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert gcb_record(tmp_path) == ["GOAL_CREEP_BAND=off GOAL_CREEP_BAND_FROM=EXTRA_ARGS"]
+    else:
+        assert out.returncode == 2 and "needs GOAL_CREEP_BAND=off" in out.stdout + out.stderr

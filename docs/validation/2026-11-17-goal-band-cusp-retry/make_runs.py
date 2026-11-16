@@ -16,18 +16,21 @@ pfb = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(pfb)
 P = pfb.P
 A_ON, B_ON = "--goal-creep-band on", "--cusp-replan-retry on"
+# the riib launcher turns A on by default since the 2026-11-17 decision: every arm names its own value, so a later
+# snapshot builds the same arms (the A arm's --goal-creep-band on in EXTRA_ARGS wins over this; Codex review P2)
+A_OFF = {"GOAL_CREEP_BAND": "off"}
 REC = "--record-boundary --record-boundary-format 2"
 
 
 def rows(snap: str) -> list:
     root = f"{P}/test_runs/gbc/{snap}"
-    out = [pfb.riib(snap, f"{root}/off", f"gbcOff_random_1_s{s}", "random_1", s) for s in (24, 11, 49)]
+    out = [pfb.riib(snap, f"{root}/off", f"gbcOff_random_1_s{s}", "random_1", s, A_OFF) for s in (24, 11, 49)]
     out.append(pfb.riib(snap, f"{root}/A", "gbcA_random_1_s24", "random_1", 24,
-                        {"EXTRA_ARGS": f"--deterministic {A_ON}"}))
-    out += [pfb.riib(snap, f"{root}/B", f"gbcB_random_1_s{s}", "random_1", s, {"EXTRA_ARGS": f"--deterministic {B_ON}"})
+                        {**A_OFF, "EXTRA_ARGS": f"--deterministic {A_ON}"}))
+    out += [pfb.riib(snap, f"{root}/B", f"gbcB_random_1_s{s}", "random_1", s, {**A_OFF, "EXTRA_ARGS": f"--deterministic {B_ON}"})
             for s in (11, 49)]
-    out.append(pfb.riib(snap, f"{root}/rec", "gbcArec_random_1_s24", "random_1", 24, {"EXTRA_ARGS": f"{A_ON} {REC}"}))
-    out.append(pfb.riib(snap, f"{root}/rec", "gbcBrec_random_1_s11", "random_1", 11, {"EXTRA_ARGS": f"{B_ON} {REC}"}))
+    out.append(pfb.riib(snap, f"{root}/rec", "gbcArec_random_1_s24", "random_1", 24, {**A_OFF, "EXTRA_ARGS": f"{A_ON} {REC}"}))
+    out.append(pfb.riib(snap, f"{root}/rec", "gbcBrec_random_1_s11", "random_1", 11, {**A_OFF, "EXTRA_ARGS": f"{B_ON} {REC}"}))
     return out
 
 
