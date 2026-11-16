@@ -274,3 +274,23 @@ def test_a_frame_without_a_time_is_recorded_as_none_and_the_trace_is_json():
     reads = sync.summary()["failure"]["reads"]
     assert [r["rendering_time"] for r in reads] == [None, None, None]
     json.dumps(sync.summary(), allow_nan=False)
+
+
+def test_the_trace_changes_neither_the_render_calls_nor_the_messages():
+    """Codex review 1 P3: a successful call renders exactly as many times as it returns; the two failure messages
+    keep their wording."""
+    cam = FakeCamera(5.0, lag=3)
+    calls = []
+
+    def render():
+        calls.append(1)
+        cam.render()
+
+    assert FrameSync(cap=20).sync(cam, render, 5.0) == 3 and len(calls) == 3
+    with pytest.raises(determinism.DeterministicBroken) as e1:
+        FrameSync(cap=2).sync(FakeCamera(5.0, lag=3), lambda: None, 5.0)
+    assert str(e1.value) == "frame_sync: no frame at 5.000000 s after 2 renders"
+    cold = ColdCamera(5.0, lag=0, warm=10**6)
+    with pytest.raises(determinism.DeterministicBroken) as e2:
+        FrameSync(cap=2).sync(cold, cold.render, 5.0, rgb=True)
+    assert str(e2.value) == "frame_sync: no rgb in the frame at 5.000000 s after 2 renders"
