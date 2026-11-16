@@ -47,6 +47,10 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
     set -- bash -c "source /opt/sllidar_ws/install/setup.bash || exit 1; trap 'kill 0' EXIT; ${driver} & ${adapter}"
 fi
 
+if [[ -n "${FORKLIFT_DOCKER_NAME:-}" ]]; then
+    docker_args+=(--name "${FORKLIFT_DOCKER_NAME}")  # so a caller can stop the container by name (tools/hwday)
+fi
+
 if [[ -t 0 && -t 1 ]]; then
     docker_args+=(--tty)
 fi
