@@ -1,0 +1,325 @@
+{
+ "arms": {
+  "A": {
+   "per_seed": {
+    "0": {
+     "all": 5,
+     "n_paths": 4,
+     "transport": 5
+    },
+    "1": {
+     "all": 4,
+     "n_paths": 2,
+     "transport": 4
+    },
+    "2": {
+     "all": 1,
+     "n_paths": 2,
+     "transport": 1
+    },
+    "3": {
+     "all": 4,
+     "n_paths": 2,
+     "transport": 4
+    },
+    "4": {
+     "all": 14,
+     "n_paths": 2,
+     "transport": 14
+    },
+    "5": {
+     "all": 9,
+     "n_paths": 1,
+     "transport": 9
+    },
+    "6": {
+     "all": 10,
+     "n_paths": 3,
+     "transport": 4
+    },
+    "7": {
+     "all": 3,
+     "n_paths": 2,
+     "transport": 3
+    },
+    "8": {
+     "all": 3,
+     "n_paths": 2,
+     "transport": 3
+    },
+    "9": {
+     "all": 0,
+     "n_paths": 3,
+     "transport": 0
+    }
+   },
+   "sum_all": 53,
+   "sum_transport": 47
+  },
+  "B": {
+   "per_seed": {
+    "0": {
+     "all": 0,
+     "n_paths": 4,
+     "transport": 0
+    },
+    "1": {
+     "all": 0,
+     "n_paths": 2,
+     "transport": 0
+    },
+    "2": {
+     "all": 7,
+     "n_paths": 3,
+     "transport": 7
+    },
+    "3": {
+     "all": 7,
+     "n_paths": 4,
+     "transport": 7
+    },
+    "4": {
+     "all": 0,
+     "n_paths": 0,
+     "transport": 0
+    },
+    "5": {
+     "all": 1,
+     "n_paths": 3,
+     "transport": 1
+    },
+    "6": {
+     "all": 0,
+     "n_paths": 2,
+     "transport": 0
+    },
+    "7": {
+     "all": 0,
+     "n_paths": 3,
+     "transport": 0
+    },
+    "8": {
+     "all": 1,
+     "n_paths": 3,
+     "transport": 1
+    },
+    "9": {
+     "all": 4,
+     "n_paths": 3,
+     "transport": 4
+    }
+   },
+   "sum_all": 20,
+   "sum_transport": 20
+  }
+ },
+ "failed_runs": {
+  "acsA_aisle_rack_s5": {
+   "classification": {
+    "mixed_plan_margin_and_plant": 1,
+    "plan_short_leg": 2
+   },
+   "failure": "None",
+   "judgements": [
+    {
+     "classification": "mixed_plan_margin_and_plant",
+     "kind": "fail_replan",
+     "leg_length_m": 2.0,
+     "time_s": 114.025006
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.5,
+     "time_s": 122.15834
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.75,
+     "time_s": 132.600007
+    },
+    {
+     "classification": "plan_short_leg",
+     "kind": "fail_replan",
+     "leg_length_m": 0.25,
+     "time_s": 136.05834
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.25,
+     "time_s": 139.125007
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.5,
+     "time_s": 142.908341
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.5,
+     "time_s": 146.825008
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.0,
+     "time_s": 152.891675
+    },
+    {
+     "classification": "plan_short_leg",
+     "kind": "fail_final",
+     "leg_length_m": 0.25,
+     "time_s": 155.858341
+    }
+   ],
+   "outcome": {
+    "final_failure": 1,
+    "recovered": 2
+   }
+  },
+  "acsB_aisle_rack_s4": {
+   "classification": {
+    "mixed_plan_margin_and_plant": 1,
+    "plan_short_leg": 2
+   },
+   "failure": "None",
+   "judgements": [
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.35,
+     "time_s": 105.941672
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.0,
+     "time_s": 113.033339
+    },
+    {
+     "classification": "plan_short_leg",
+     "kind": "fail_replan",
+     "leg_length_m": 0.5,
+     "time_s": 117.883339
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.25,
+     "time_s": 121.466673
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.75,
+     "time_s": 126.300007
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.75,
+     "time_s": 135.08334
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.75,
+     "time_s": 145.116674
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.0,
+     "time_s": 151.900008
+    },
+    {
+     "classification": "plan_short_leg",
+     "kind": "fail_replan",
+     "leg_length_m": 0.75,
+     "time_s": 158.283342
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.25,
+     "time_s": 161.483342
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.5,
+     "time_s": 165.475009
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.75,
+     "time_s": 170.600009
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 1.25,
+     "time_s": 178.000009
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.5,
+     "time_s": 182.616676
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.75,
+     "time_s": 187.483343
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.5,
+     "time_s": 191.72501
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 9.25,
+     "time_s": 227.125012
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 2.0,
+     "time_s": 236.683346
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.25,
+     "time_s": 239.741679
+    },
+    {
+     "classification": null,
+     "kind": "pass",
+     "leg_length_m": 0.75,
+     "time_s": 244.708346
+    },
+    {
+     "classification": "mixed_plan_margin_and_plant",
+     "kind": "fail_final",
+     "leg_length_m": 0.841,
+     "time_s": 250.708346
+    }
+   ],
+   "outcome": {
+    "final_failure": 1,
+    "recovered": 2
+   }
+  }
+ },
+ "note": "post-hoc, not pre-registered, not part of the verdict"
+}
