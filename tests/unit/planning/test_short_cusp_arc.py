@@ -128,3 +128,32 @@ def test_the_on_search_is_deterministic():
     a = H.plan_hybrid_astar(start, goal, obstacles, FOOT, bounds, cfg(max_expansions=20000, **ON))
     b = H.plan_hybrid_astar(start, goal, obstacles, FOOT, bounds, cfg(max_expansions=20000, **ON))
     assert np.array_equal(a.poses, b.poses) and a.expanded_nodes == b.expanded_nodes
+
+
+def test_the_threshold_is_strict():
+    c = cfg(**ON)
+    assert not H.short_leg(c, (0.6, 1, 1)) and H.short_leg(c, (0.59, 1, 1)) and H.short_leg(c, (0.5, -1, -1))
+
+
+def test_a_turn_cycle_child_pays_each_closed_leg_once(monkeypatch):
+    """D7b cycles: the first half closes the node's short curved leg (pen1), the cycle's own gear change closes the
+    first half's 0.25 m curved leg (pen2); the child's cost holds each once (cost2 is built on cost1 before pen1)."""
+    start, goal, obstacles, bounds = _scene()
+    seen = []
+    real = H.leg_step
+
+    def spy(config, leg, direction, steer, length):
+        out = real(config, leg, direction, steer, length)
+        seen.append(out[0])
+        return out
+
+    monkeypatch.setattr(H, "leg_step", spy)
+    on = cfg(max_expansions=3000, turn_cycles=True, turn_cycle_m=0.25, **ON)
+    res = H.plan_hybrid_astar(start, goal, obstacles, FOOT, bounds, on)
+    off = H.plan_hybrid_astar(start, goal, obstacles, FOOT, bounds, cfg(max_expansions=3000, turn_cycles=True,
+                                                                         turn_cycle_m=0.25))
+    assert res.success and off.success and any(p > 0 for p in seen)
+    import inspect
+    src = inspect.getsource(H.plan_hybrid_astar)
+    i, j = src.index("cost2 = cost1 + length"), src.index("cost1 += pen1")
+    assert i < j and "cost2 += pen1 + pen2" in src[j:]
