@@ -1,6 +1,6 @@
 # ⑦b — 텔레옵 다리의 스캔 허가 (설계 메모, 학교 규모)
 
-작성 2026-11-16 · 2판(Codex 1 회차 반영) · 총괄 배정(Jetson 대기 중) · 선행 [⑦a 설계](2026-11-12-real-scan-obstacle-layer.md)(#470) 3 절 요구사항
+작성 2026-11-16 · 3판(Codex 2 회차 반영) · 총괄 배정(Jetson 대기 중) · 선행 [⑦a 설계](2026-11-12-real-scan-obstacle-layer.md)(#470) 3 절 요구사항
 
 ## 목적과 범위
 
@@ -26,7 +26,9 @@ MCU STATE ─ RealOdometry ─┴─ ScanPermit ─ grid.add_scan(ObstacleScan) 
 핵심은 **시각 불확실성을 나이 오차표에 더해 격자의 OCCUPIED 팽창과 FREE 축소 양쪽에 함께 넣는 것**이다. 격자는 점마다 `e(age) + 2ρ sin(ψ(age)/2)` 를 쓰고(`ObstacleGrid.radius_m`, OCCUPIED 와 FREE 띠 모두), ρ 는 뒤축에서 점까지의 거리라 센서 지레팔이 들어 있다. 그래서 오차표의 위치·방향 열 전체에 상수 δ_e·δ_ψ 를 더하면 양쪽이 같이 보수적이 된다. 격자 코드는 고치지 않는다.
 
 - 시각 불확실성 δt = 스캔 한 바퀴 T(빔들의 취득 시각이 퍼진 폭, 비뒤틀림 보정을 안 함) + 취득 시작의 불확실성 T(stamp 는 grab 직전 시각이라 시작은 그보다 앞) + STATE 측정 시각의 불확실성(다리의 지연 상한 `DelayBound`, 실측 ≤ 28 ms → 0.03 s). T = 0.1 s 면 δt = 0.23 s.
-- δ_e = v_max·δt = 0.1321 × 0.23 = 30 mm, δ_ψ = v_max·κ_max·δt = 0.1321 × 0.36 × 0.23 = 11 mrad(ρ 4 m 에서 44 mm). 상한 속도·곡률은 다리의 명령 상한에서 읽어 계산하고, 상한이 바뀌면 같이 바뀐다.
+- 차가 δt 동안 움직이는 동안 뒤축에서 ρ 떨어진 점(센서 지레팔 포함)이 옮겨 가는 거리는 많아야 `v·δt + 2ρ sin(ω·δt/2)`, ω ≤ v·κ 다. 격자의 반경이 `e + 2ρ sin(ψ/2)` 이므로 e 에 δ_e = v_max·δt, ψ 에 δ_ψ = v_max·κ_max·δt 를 더하면 **점마다 자기 ρ 로 이 두 항을 함께** 덮는다(회전 지레팔 변위가 ψ 항에 들어 있음, Codex 2 회차 P1).
+- v_max 는 다리가 overspeed 로 세우기 전의 속도 한계 `limit_mps`(지금 0.2 m/s, 명령 상한 0.1321 보다 큼)를, κ_max 는 조향 지도의 물리 최대 곡률 `max|cfg.steering.curvatures_inv_m|` 를 코드에서 읽는다(명령 상한이나 묶음 여유보다 크거나 같음, Codex 2 회차 P2). 지금 값으로 δ_e = 0.2 × 0.23 = 46 mm, δ_ψ = 0.2 × κ_max × 0.23(κ_max 0.367 이면 16.9 mrad, ρ 4 m 에서 68 mm).
+- 오차표는 0.1 s 부터 10 s 까지 있고 `at()` 은 다음 행 값을 돌려주므로 0.35 s 까지의 나이는 모두 값이 있다. `ScanPermit` 은 시작 때 표의 마지막 나이가 `max(free_use_age_s, occupied_max_age_s)` 이상인지 확인한다. 표 증분은 격자 반경(OCCUPIED 와 FREE 띠)만 바꾸고, `DrivePermission`·`BundlePermit` 의 나이 제한은 바꾸지 않는다.
 
 | # | 요구 | 처리 |
 |---|---|---|
@@ -62,7 +64,7 @@ MCU STATE ─ RealOdometry ─┴─ ScanPermit ─ grid.add_scan(ObstacleScan) 
 3. 장착 yaw 180° 면 앞 상자가 뒤로 간다(각도·좌표 규약). `mask_deg` 안의 빔은 쓰지 않는다(`self_hit`).
 4. NaN 이 진행 방향을 덮으면 0.
 5. `scan_check --record` 형식 기록을 재생해 1–2 가 같은 결과.
-6. 시각: 침묵 0.35 s 직전은 열림·넘으면 0; 'stamp → 수신' 과대 스캔 버림; 가장 오래된 STATE 보다 앞선 스캔 버림; δ 를 더한 오차표가 상한 속도·곡률로 계산됨.
+6. 시각: 침묵 0.35 s 직전은 열림·넘으면 0; 'stamp → 수신' 과대 스캔 버림; 가장 오래된 STATE 보다 앞선 스캔 버림; δ 를 더한 오차표가 `limit_mps`·조향 지도 최대 곡률로 계산되고, 격자 반경이 ρ 에서 원래 반경 + δ_e + (2ρ sin((ψ+δ_ψ)/2) − 2ρ sin(ψ/2)) 만큼 커짐; 표가 0.35 s 를 못 덮으면 시작 거부.
 7. 오도메트리 단절 → 즉시 0, 옛 snapshot·허가 캐시를 다시 쓰지 않음, 새 스캔 뒤 회복; `advance()` 가 이동량만큼 캐시를 진행.
 8. 다리 통합: 인자 없으면 `no_scan`; 하나만 주면 시작 거부; `--synthetic-permit` 과 함께면 거부.
 
@@ -75,5 +77,6 @@ MCU STATE ─ RealOdometry ─┴─ ScanPermit ─ grid.add_scan(ObstacleScan) 
 | 회차 | 지적 | 처리 |
 |---|---|---|
 | Codex 1 | P1 3: 뒤틀림을 `envelope_m` 으로 대신할 수 없음, STATE 수신 시각 ≠ 측정 시각, 높이·오인 전제 미흡; P2 4: 시간 문턱 경계, refresh 입력과 호출 정책, 모양 설명 틀림, 단절 처리·advance; 시험 빈틈 | 시각 불확실성 δt 를 오차표 양쪽 열에 더해 OCCUPIED·FREE 양쪽에(envelope 안 씀), STATE 를 `host_ns − DelayBound` 에 붙이고 그 폭을 δt 에, `beam_limits`·θ_max·마스크·운용 조건(총괄 확인), 경계 시험, refresh 를 러너 텔레옵과 같은 인자로, 모양을 `blades=()` 로 명시, 단절·advance 규칙과 시험 추가 |
+| Codex 2 | P1 1: 회전 지레팔 변위가 표 증분에 들어 있는지 근거 부족; P2 2: 표 나이 범위 확인, κ_max 를 실제 곡률 상한에서 | 점 이동 상한 `v·δt + 2ρ sin(ωδt/2)` 와 격자 반경식의 대응을 적음(시험 6 에 반경 확인 추가), v_max 를 overspeed 한계 0.2 m/s 로, κ_max 를 조향 지도 물리 최대로, 표 범위 시작 검사 |
 
 기존 설계 범위 안이라 3 중 독립 검토는 생략한다(총괄 2026-11-16).
