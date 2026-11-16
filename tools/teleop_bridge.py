@@ -72,6 +72,9 @@ class LateFreshness:
     def delay_s(self, state, rx_ns):
         return None if self.target is None else self.target.delay_s(state, rx_ns)
 
+    def delay_terms(self, state, rx_ns):
+        return None if self.target is None else self.target.delay_terms(state, rx_ns)
+
     def rate_verified(self):
         return self.target is not None and self.target.rate_verified()
 
