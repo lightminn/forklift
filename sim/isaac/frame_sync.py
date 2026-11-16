@@ -23,6 +23,7 @@ class FrameSync:
         self.calls = 0
         self.renders = 0
         self.max_renders = 0
+        self.failure = None  # the failed call's per-read trace (only when a call ends at the cap)
 
     def sync(self, camera, render, sim_time: float, rgb: bool = False) -> int:
         """Renders (``render()``) until ``camera``'s frame is at ``sim_time``; the number of renders it took.
@@ -36,14 +37,18 @@ class FrameSync:
             return 0
         self.calls += 1
         done = 0
+        reads = []  # (render, rendering_time, holds_rgb): kept only if the call fails (2026-11-16 s24 diagnosis)
         while True:
             frame = camera.get_current_frame()
             rendered = frame.get("rendering_time") if isinstance(frame, dict) else None
             at_time = (rendered is not None and math.isfinite(float(rendered))
                        and abs(float(rendered) - sim_time) <= TOLERANCE_S)
-            if at_time and (not rgb or _holds_rgb(frame)):
+            holds = _holds_rgb(frame) if rgb else None
+            if at_time and (not rgb or holds):
                 break
+            reads.append((done, rendered, holds))
             if done >= self.cap:
+                self.failure = _failure_record(self.calls, sim_time, rgb, self.cap, reads)
                 if at_time:
                     determinism.mark("frame_sync:no_rgba")
                     raise determinism.DeterministicBroken(
@@ -57,7 +62,31 @@ class FrameSync:
         return done
 
     def summary(self) -> dict:
-        return {"calls": self.calls, "renders": self.renders, "max_renders": self.max_renders, "cap": self.cap}
+        """The counters of the successful calls; a ``failure`` record only when a call ended at the cap, so a run
+        with no failed sync records exactly what it did before."""
+        out = {"calls": self.calls, "renders": self.renders, "max_renders": self.max_renders, "cap": self.cap}
+        if self.failure is not None:
+            out["failure"] = self.failure
+        return out
+
+
+def _failure_record(call: int, sim_time: float, rgb: bool, cap: int, reads: list) -> dict:
+    """Every frame the failed call read before giving up: whether its rendering_time moved on too slowly or not at all
+    (and, waiting for RGB, whether it held RGB). It does not say why the renderer stalled."""
+    def time_of(v):
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return None
+        return v if math.isfinite(v) else None
+
+    rows = []
+    for render, rendered, holds in reads:
+        row = {"render": render, "rendering_time": time_of(rendered)}
+        if rgb:
+            row["holds_rgb"] = bool(holds)
+        rows.append(row)
+    return {"call": call, "sim_time": float(sim_time), "rgb": bool(rgb), "cap": cap, "reads": rows}
 
 
 def _holds_rgb(frame) -> bool:
