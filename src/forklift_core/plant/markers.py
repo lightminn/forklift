@@ -10,8 +10,8 @@ import os
 import select
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 MAX_BYTES = 4096
 MAX_MARKS = 16
@@ -47,17 +47,28 @@ class MarkerReader:
     reason: str | None
 
 
-def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, max_bytes: int = MAX_BYTES,
-                  max_marks: int = MAX_MARKS, max_label: int = MAX_LABEL, max_buffer: int = MAX_BUFFER,
-                  clock=time.monotonic_ns) -> MarkerReader:
-    """``emit(label, host_ns)`` for every whole line. Inactive (a no-op poll and the reason) without a tty."""
+def marker_input_state(fd: int | None = None) -> tuple[bool, str | None]:
+    """Whether Enter on this process's stdin can mark events: ``(True, None)`` on a terminal, else ``(False, why)``
+    -- the reason a tool writes in its record header and warns with (rehearsal 2 R2-1: markers silently off)."""
     if fd is None:
         try:
             fd = sys.stdin.fileno()
         except (AttributeError, OSError, ValueError):
-            return MarkerReader(lambda: None, False, "no stdin")
+            return False, "no stdin"
     if not os.isatty(fd):
-        return MarkerReader(lambda: None, False, "stdin is not a terminal")
+        return False, "stdin is not a terminal"
+    return True, None
+
+
+def marker_reader(emit: Callable[[str, int], None], fd: int | None = None, *, max_bytes: int = MAX_BYTES,
+                  max_marks: int = MAX_MARKS, max_label: int = MAX_LABEL, max_buffer: int = MAX_BUFFER,
+                  clock=time.monotonic_ns) -> MarkerReader:
+    """``emit(label, host_ns)`` for every whole line. Inactive (a no-op poll and the reason) without a tty."""
+    active, why = marker_input_state(fd)
+    if not active:
+        return MarkerReader(lambda: None, False, why)
+    if fd is None:
+        fd = sys.stdin.fileno()
     buf = bytearray()
     state = {"eof": False, "skip": False}  # skip: an unfinished label hit its limit -- drop bytes up to the newline
 

@@ -49,6 +49,20 @@ def test_a_record_on_the_bench_is_marked_and_refused_for_measurement(bench, tmp_
     assert report["not_for_judgement"] is True and report["result"] == "ok"
 
 
+def test_markers_asked_for_without_a_terminal_are_said_and_recorded(bench, tmp_path, capsys):
+    # rehearsal 2 R2-1: pytest's stdin is not a terminal -- the header says the markers are off and why, and stderr warns
+    proc, path, record = bench
+    out = tmp_path / "m.jsonl"
+    assert bringup.main(["record", "--device", record["pts"], "--bench", str(path), "--out", str(out),
+                         "--seconds", "0.5", "--markers"]) == 0
+    err = capsys.readouterr().err
+    head = json.loads(out.read_text().splitlines()[0])
+    # under pytest's capture stdin has no descriptor ("no stdin"); from a pipe it is "stdin is not a terminal"
+    assert head["markers"]["requested"] is True and head["markers"]["active"] is False
+    assert head["markers"]["why"] in ("no stdin", "stdin is not a terminal")
+    assert "--markers is off" in err
+
+
 def test_a_pty_without_the_bench_and_a_bench_on_a_real_device_are_refused(bench, tmp_path, capsys):
     _proc, path, record = bench
     assert bringup.main(["record", "--device", record["pts"], "--out", str(tmp_path / "a.jsonl"),

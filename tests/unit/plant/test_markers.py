@@ -147,3 +147,23 @@ def test_the_tail_of_a_cut_label_is_dropped_up_to_its_newline():
     finally:
         os.close(master)
         os.close(slave)
+
+
+def test_the_input_state_says_why_markers_cannot_work():
+    # rehearsal 2 R2-1: a pipe (ssh -T, nohup, a script) is not a terminal -- the tools record and say so
+    import os
+
+    from forklift_core.plant.markers import marker_input_state
+
+    r, w = os.pipe()
+    try:
+        assert marker_input_state(r) == (False, "stdin is not a terminal")
+    finally:
+        os.close(r)
+        os.close(w)
+    master, slave = os.openpty()
+    try:
+        assert marker_input_state(slave) == (True, None)
+    finally:
+        os.close(master)
+        os.close(slave)

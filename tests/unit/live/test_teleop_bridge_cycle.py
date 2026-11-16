@@ -820,3 +820,42 @@ def test_a_teleop_without_a_client_field_still_drives():
     r = armed_rig()
     rec = r.cycle(teleop={"speed_ratio": 0.0})
     assert rec["teleop_client"] is None and rec["teleop_age_ms"] is not None
+
+
+def test_delay_terms_add_up_to_the_bound():
+    from forklift_core.live.real_teleop import DelayBound
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag
+    from forklift_core.plant.bringup import Sample
+
+    db = DelayBound()
+    # two anchors (offset, receipt, MCU time, bound, boot) in reach; the second gives the smaller bound
+    db._anchors = [(5_000_000, 1_000_000_000, 995_000_000, 12_000_000, 7),
+                   (6_000_000, 1_010_000_000, 1_004_000_000, 9_000_000, 7)]
+    st = McuState(1_020_000, 7, 1, 0, Mode.ARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0, 0.0, 0.0,
+                  (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+    smp = Sample(1_030_000_000, st)
+    t = db.terms(smp)
+    assert t["anchors"] == 2 and t["anchor_bound_ms"] == 9.0 and t["anchor_age_ms"] == 20.0
+    # the terms are rounded to the microsecond for the record
+    assert abs(t["anchor_bound_ms"] + t["offset_diff_ms"] + t["drift_ms"] - db.delay_s(smp) * 1e3) < 2e-3
+    assert DelayBound().terms(smp) is None
+    before = (list(db._anchors), db.drift_max, db.delay_s(smp))
+    db.terms(smp)
+    assert (list(db._anchors), db.drift_max, db.delay_s(smp)) == before  # reading the terms changes nothing
+
+
+def test_recording_the_delay_terms_changes_no_decision_and_no_frame(monkeypatch):
+    """The diagnostics only add a record field: two identical armed runs, one with the terms switched off, send the
+    same frames and record the same values (lead 2026-11-16: the diagnostics PR must not move a judgement)."""
+    def drive(rig):
+        for i in range(40):
+            rig.cycle(teleop={"speed_ratio": 1.0 if i < 30 else 0.0})
+        return rig
+
+    a = drive(armed_rig())
+    monkeypatch.setattr(rt.DelayBound, "terms", lambda self, sample: None)
+    b = drive(armed_rig())
+    assert [m for _t, m in a.sent] == [m for _t, m in b.sent]
+    strip = [{k: v for k, v in x.items() if k != "delay_terms"} for x in a.recs]
+    assert strip == [{k: v for k, v in x.items() if k != "delay_terms"} for x in b.recs]
+    assert any("delay_terms" in x for x in a.recs) and not any(x.get("delay_terms") for x in b.recs)
