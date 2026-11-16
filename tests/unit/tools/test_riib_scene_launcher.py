@@ -162,7 +162,7 @@ def test_near_tracking_goes_with_the_exemption_turned_off(tmp_path):
     # and with the return cusp replan budget at the 0 its contract was measured at (the slam default is 2)
     # and, on line_2_m, with the degenerate-continue switch off as its contract was measured
     out = dry_run(tmp_path, EXIT_EXEMPT="off", EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0",
-                  DOCKING_DEGENERATE_CONTINUE="off")
+                  DOCKING_DEGENERATE_CONTINUE="off", GOAL_CREEP_BAND="off")
     assert out.returncode == 0, out.stderr
     assert contains(args_of(out), ["--exit-prefix-exempt", "off"])
 
@@ -776,10 +776,73 @@ def test_short_cusp_arc_on_refuses_near_tracking(tmp_path):
     near = dict(EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0", EXIT_EXEMPT="off")
     out = dry_run(tmp_path, scene="aisle", out=tmp_path / "a", **near)
     assert out.returncode == 2 and "needs SHORT_CUSP_ARC=off" in out.stdout + out.stderr
-    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "b", SHORT_CUSP_ARC="off", **near)
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "b", SHORT_CUSP_ARC="off", GOAL_CREEP_BAND="off", **near)
     assert out.returncode == 0, out.stdout + out.stderr
 
 
 def test_short_cusp_arc_float_forms_pass_the_shape_check(tmp_path):
     out = dry_run(tmp_path, scene="aisle", SHORT_CUSP_ARC="6e-1,1e0")
     assert out.returncode == 0 and contains(args_of(out), ["--short-cusp-arc", "6e-1,1e0"])
+
+
+def gcb_record(tmp_path, out="out"):
+    return [l for l in (tmp_path / out / "riib_defaults.txt").read_text().splitlines()
+            if l.startswith("GOAL_CREEP_BAND=")]
+
+
+@pytest.mark.parametrize("scene, env, value", [
+    ("line_2", {}, "on"), ("aisle", {}, "on"), ("trailer", {}, "on"), ("line_2", {"MODE": "truth"}, "off")])
+def test_goal_creep_band_is_on_in_the_slam_mode(tmp_path, scene, env, value):
+    # lead decision 2026-11-17 (docs/validation/2026-11-17-goal-band-cusp-retry.md): the riib launcher, every scene
+    out = dry_run(tmp_path, scene=scene, **env)
+    assert out.returncode == 0, out.stdout + out.stderr
+    args = args_of(out)
+    if value == "off":
+        assert "--goal-creep-band" not in args  # the runner's own default
+    else:
+        assert contains(args, ["--goal-creep-band", "on"]) and args.count("--goal-creep-band") == 1
+    assert gcb_record(tmp_path) == [f"GOAL_CREEP_BAND={value} GOAL_CREEP_BAND_FROM=launcher"]
+
+
+@pytest.mark.parametrize("extra, value", [("--goal-creep-band off", "off"), ("--goal-creep-band=off", "off"),
+                                          ("--go off --record-boundary", "off"),
+                                          ("--goal-creep-band off --goal-creep-band on", "on")])
+def test_goal_creep_band_named_in_extra_args_wins_and_is_recorded(tmp_path, extra, value):
+    out = dry_run(tmp_path, EXTRA_ARGS=extra)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert sum(a.startswith("--go") for a in args_of(out)) == len([w for w in extra.split() if w.startswith("--go")])
+    assert gcb_record(tmp_path) == [f"GOAL_CREEP_BAND={value} GOAL_CREEP_BAND_FROM=EXTRA_ARGS"]
+
+
+def test_goal_creep_band_can_be_switched_and_is_checked(tmp_path):
+    out = dry_run(tmp_path, out=tmp_path / "a", GOAL_CREEP_BAND="off")
+    assert out.returncode == 0 and "--goal-creep-band" not in args_of(out)
+    out = dry_run(tmp_path, out=tmp_path / "b", MODE="truth", GOAL_CREEP_BAND="on")
+    assert out.returncode == 0 and contains(args_of(out), ["--goal-creep-band", "on"])
+    out = dry_run(tmp_path, out=tmp_path / "c", GOAL_CREEP_BAND="yes")
+    assert out.returncode == 2 and "must be on or off" in out.stdout + out.stderr
+
+
+def test_goal_creep_band_on_refuses_near_tracking(tmp_path):
+    near = dict(EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0", EXIT_EXEMPT="off",
+                DOCKING_DEGENERATE_CONTINUE="off")
+    out = dry_run(tmp_path, scene="line_2", out=tmp_path / "a", **near)
+    assert out.returncode == 2 and "needs GOAL_CREEP_BAND=off" in out.stdout + out.stderr
+    out = dry_run(tmp_path, scene="line_2", out=tmp_path / "b", GOAL_CREEP_BAND="off", **near)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+@pytest.mark.parametrize("env, extra, ok", [
+    ({"GOAL_CREEP_BAND": "off"}, "--near-tracking --goal-creep-band on", False),
+    ({}, "--near-tracking --goal-creep-band on --goal-creep-band off", True),
+    ({"GOAL_CREEP_BAND": "off"}, "--near-tracking --go=on", False),
+    ({}, "--near-tracking\t--goal-creep-band\noff --record-boundary", True)])
+def test_goal_creep_band_from_extra_args_meets_the_near_check(tmp_path, env, extra, ok):
+    # Codex review P3: EXTRA_ARGS's own value (the last one, any prefix, any whitespace) is what the near check reads
+    near = dict(RETURN_CUSP_REPLANS="0", EXIT_EXEMPT="off", DOCKING_DEGENERATE_CONTINUE="off")
+    out = dry_run(tmp_path, EXTRA_ARGS=extra, **near, **env)
+    if ok:
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert gcb_record(tmp_path) == ["GOAL_CREEP_BAND=off GOAL_CREEP_BAND_FROM=EXTRA_ARGS"]
+    else:
+        assert out.returncode == 2 and "needs GOAL_CREEP_BAND=off" in out.stdout + out.stderr
