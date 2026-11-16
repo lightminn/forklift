@@ -119,6 +119,13 @@ udevadm info -q property /dev/forklift-mcu | grep ID_MM_DEVICE_IGNORE   # =1 이
 cat "/sys$(udevadm info -q path /dev/forklift-mcu | sed 's,/[^/]*:[^/]*/tty/.*,,')/power/control"   # on (USB autosuspend 끔)
 ```
 
+DFU 로 펌웨어를 올리는 노트북에는 STM32 DFU 장치(0483:df11)를 일반 사용자가 열 수 있게 하는 규칙 한 줄도 둔다(STM32CubeProgrammer 의 규칙과 같은 내용). 사용자 권한 임시 파일에 쓴 뒤 설치한다:
+
+```bash
+printf '%s\n' 'SUBSYSTEMS=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="df11", GROUP="users", MODE="0666"' > /tmp/50-stm32-dfu.rules && \
+  sudo install -m 644 /tmp/50-stm32-dfu.rules /etc/udev/rules.d/ && sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=usb
+```
+
 ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5 설계 4.10, 총괄 2026-11-15). 펌웨어는 DTR·suspend 때 송신 링을 통째로 버리고, 다리는 그것을 MCU 침묵으로 읽는다. 노트북에서 재연습할 때도 같은 규칙을 깐다. **되돌리기**는 `deploy/udev/README.md` 의 Undo 절을 따른다. 규칙 파일을 지우고 reload·trigger 한다. 꽂혀 있는 포트는 `power/control` 에 `auto` 를 쓰거나 다시 꽂으면 커널 기본으로 돌아간다.
 
 규칙은 0483:5740 과 제품 문자열 `forklift-mcu *` 로 고른다. 보드가 여럿이면 `/dev/forklift-mcu-<UID>` 를 쓴다. 호스트 도구는 DTR 을 내리지 않고, 열 때마다 첫 프레임 앞에 0x00 을 보낸다(#462).
