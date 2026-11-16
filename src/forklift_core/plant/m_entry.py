@@ -1,8 +1,10 @@
-"""G8 entry: bridge record + IMU record + truth -> per-trial M values (docs/design/2026-11-15-m-analyze-entry.md, PR 1).
+"""G8 entry: bridge record + IMU record + truth -> per-trial M values (docs/design/2026-11-15-m-analyze-entry.md).
 
-``analyze`` checks identity (section 2), voids what 3.4 voids, and computes M1 (3.5) with the report-only IMU block;
-M2/M3 get their identity and void handling here and their values in later PRs. No threshold of the registered
-reading is applied beyond the truth budget: the output (section 5) is per-trial values plus whether each can be judged.
+``analyze`` checks identity (section 2), voids what 3.4 voids, and computes M1 (3.5) with the report-only IMU block,
+M2 (3.6, PR 2) and M3 (3.7 merge points and moving-point IMU heading, 3.8 q-step delay; PR 3a). The bias-slope check
+over a block of trials (3.3 7) is PR 3b: until then a moving-point IMU heading is ``bias_slope_unconfirmed``. No
+threshold of the registered reading is applied beyond the truth budget and the IMU limits: the output (section 5)
+is per-trial values plus whether each can be judged.
 """
 
 from __future__ import annotations
@@ -27,6 +29,9 @@ REGISTERED = {
     "desk_n_rad_sqrt_s": 2.054e-4, "budget_dyaw_rad": 1.0e-3, "budget_lat_m": 1.7e-3,
     "k_limit_merge_end_l09": 1.48, "k_limit_run_042_l09": 1.14, "free_rotation_rad": 0.04,
     "accel_ramp_s": 0.125, "smooth_window_s": 0.025, "pre_s": 0.5, "frac": 0.63,
+    # the k-limit inputs (registration 6.3: N, W, the warm-up's residual bias drift x D = W + T, the bias instability)
+    "bias_window_s": 60.0, "warm_drift_rad_s2": 7.8e-8, "bias_instability_rad_s": 3.2e-5,
+    "q_threshold_rad": 0.02,  # M3 q step onset (lead decision, D4 provisional values)
 }
 IMU_GAP_NS = 10_000_000  # an IMU quiet run breaks past this (entry 9)
 MAX_GAP_S = 0.05  # STATE gap that ends a standing stretch / breaks odometry (entry 9)
@@ -256,42 +261,63 @@ class _Imu:
         self.fits = [f.summary() for f in g["fits"]]
         self.dropped = dict(gyro=g["dropped"], accel=a["dropped"])
 
-    def trial(self, t0, t1, drive0, drive1, rec_span=None) -> dict:
-        """The report-only IMU block of one trial: bias windows before and after, N per window, heading between.
-        ``rec_span``: the record's first and last STATE time -- the bias-window search runs ``quiet_max_s`` before
-        the first drive and after the last, as far as the record goes, and the IMU must cover that whole search
-        (entry design 2; Codex impl review P2), not only the trial window."""
+    def windows(self, t0, t1, drive0, drive1, rec_span=None) -> dict:
+        """The bias windows of one trial: ``{"why": [...]}`` when there are none, else the windows (sample index
+        ranges), their means ``b0``/``b1``, the up axis ``u``, the yaw-axis change ``db``, the per-window body N and
+        the shorter window's length. ``rec_span``: the record's first and last STATE time -- the bias-window search
+        runs ``quiet_max_s`` before the first drive and after the last, as far as the record goes, and the IMU must
+        cover that whole search (entry design 2; Codex impl review P2), not only the trial window."""
         if self.why or self.t is None:
-            return dict(report_only=True, why=list(self.why))
+            return dict(why=list(self.why))
         reach = int(REGISTERED["quiet_max_s"] * 1e9)
         lo, hi = min(t0, drive0 - reach), max(t1, drive1 + reach)
         if rec_span is not None:
             lo, hi = max(lo, rec_span[0]), min(hi, rec_span[1])
         if self.t[0] > lo or self.t[-1] < hi:
-            return dict(report_only=True, why=["imu_coverage"])
+            return dict(why=["imu_coverage"])
         if any(t0 < b < t1 for b in self.bounds):
-            return dict(report_only=True, why=["imu_clock_break"])
+            return dict(why=["imu_clock_break"])
         c = REGISTERED
         kw = dict(max_s=c["quiet_max_s"], min_s=c["quiet_min_s"], standing=self.standing,
                   gyro_tol=c["quiet_gyro_tol_rad_s"], accel_tol=c["quiet_accel_tol_mps2"], gap_max_ns=IMU_GAP_NS)
         w0 = ma.quiet_window(self.t, self.g, self.a, boundary_ns=drive0, side="before", **kw)
         w1 = ma.quiet_window(self.t, self.g, self.a, boundary_ns=drive1, side="after", **kw)
         if w0 is None or w1 is None or w0[1] > w1[0]:
-            return dict(report_only=True, why=["no_bias_window"])
+            return dict(why=["no_bias_window"])
         u = _unit(_vec3(self.up))
         b0, b1 = self.g[w0[0]:w0[1]].mean(axis=0), self.g[w1[0]:w1[1]].mean(axis=0)
-        db = float((b1 - b0) @ u)
         n = {}
         for name, (s, e), b in (("before", w0, b0), ("after", w1, b1)):
             try:
                 n[name] = ma.allan_dev_tau(self.t[s:e], (self.g[s:e] - b) @ u, 1.0)
             except ValueError:
                 n[name] = None
+        win_s = min(float(self.t[w[1] - 1] - self.t[w[0]]) / 1e9 for w in (w0, w1))
+        return dict(why=[], w0=w0, w1=w1, b0=b0, b1=b1, u=u, db=float((b1 - b0) @ u), n=n, win_s=win_s)
+
+    def heading_between(self, t_a: int, t_b: int, bias) -> float | None:
+        """The bias-free up-axis heading change from host time ``t_a`` to ``t_b`` (interpolated at both ends);
+        None when the IMU does not cover the stretch."""
+        if self.t is None or self.t[0] > t_a or self.t[-1] < t_b or t_b <= t_a:
+            return None
+        a = max(int(np.searchsorted(self.t, t_a, side="right")) - 1, 0)
+        b = min(int(np.searchsorted(self.t, t_b, side="left")) + 1, len(self.t))
+        h = ma.imu_heading(self.t[a:b], self.g[a:b], self.up, bias)
+        ends = np.interp([t_a, t_b], self.t[a:b], h)
+        return float(ends[1] - ends[0])
+
+    def trial(self, t0, t1, drive0, drive1, rec_span=None) -> dict:
+        """The report-only IMU block of one trial: bias windows before and after, N per window, heading between."""
+        bw = self.windows(t0, t1, drive0, drive1, rec_span)
+        if bw["why"]:
+            return dict(report_only=True, why=bw["why"])
+        c = REGISTERED
+        w0, w1, b0, b1, u, db, n = (bw[k] for k in ("w0", "w1", "b0", "b1", "u", "db", "n"))
         mid = slice(w0[1] - 1, w1[0] + 1)
         heading = ma.imu_heading(self.t[mid], self.g[mid], u, (b0 + b1) / 2)
         known = [v for v in n.values() if v is not None]
         drive_s = float(self.t[mid][-1] - self.t[mid][0]) / 1e9
-        win_s = min(float(self.t[w[1] - 1] - self.t[w[0]]) / 1e9 for w in (w0, w1))
+        win_s = bw["win_s"]
         arws = dict(desk=c["desk_n_rad_sqrt_s"])
         if known:
             arws["body"] = max(known)
@@ -468,6 +494,239 @@ def _imu_kappa(imu: dict, dist: dict, direction: int) -> dict:
     return _value(float(dyaw) / (float(s) * direction), False, why, report_only=True, distance_source=source)
 
 
+# --- M3 ------------------------------------------------------------------------------------------------------------
+
+M3_RULES = dict(A_floor_marks="A_substitute_cont_end_stop", synthetic="A_substitute_cont_end_stop",
+                B_camera="B_run_042_moving_point")
+
+
+def k_limit(drive_s: float) -> float:
+    """The registration 6.3 limit on body N over desk N for a moving-point gyro heading of duration ``drive_s``: the
+    factor k on the two N-proportional terms (white, bias-mean over two W windows) at which the root sum with the
+    bias-change (warm drift x (W + T) x T) and bias-instability (x T) terms reaches the 1 mrad budget. Gives the
+    registered 1.48 (0.9 m merge end, T 9.125 s) and 1.14 (0.42 m point, 13.325 s); under 1 for the 2.1 m merge end
+    -- that point's being unjudgeable comes out of this, it is not written in (entry 3.7)."""
+    c = REGISTERED
+    n, w, t = c["desk_n_rad_sqrt_s"], c["bias_window_s"], float(drive_s)
+    prop = math.hypot(n * math.sqrt(t), n / math.sqrt(2 * w) * t)
+    rest = c["budget_dyaw_rad"] ** 2 - (c["warm_drift_rad_s2"] * (w + t) * t) ** 2 - \
+        (c["bias_instability_rad_s"] * t) ** 2
+    return math.sqrt(rest) / prop if rest > 0 else 0.0
+
+
+def _odo_at(ctx, host_ns: int, i0: int, i1: int):
+    """The odometry pose interpolated at ``host_ns`` between the two STATEs around it inside [i0, i1]: ``(pose,
+    bracket_ns)`` or ``(None, why)``. A bracket wider than MAX_GAP_S, or a time outside the trial's STATEs, is
+    ``odo_interp_gap`` (entry 3.3 10)."""
+    times = ctx["times"]
+    i = int(np.searchsorted(times, host_ns, side="left"))
+    if i <= i0 or i > i1:
+        if i <= i1 and i == i0 and int(times[i0]) == host_ns:
+            i = i0 + 1
+        else:
+            return None, "odo_interp_gap"
+    a, b = int(times[i - 1]), int(times[i])
+    if b - a > MAX_GAP_S * 1e9 or b <= a:
+        return None, "odo_interp_gap"
+    f = (host_ns - a) / (b - a)
+    odo = ctx["odo"]
+    pose = tuple(float(odo[k][i - 1] + f * (odo[k][i] - odo[k][i - 1])) for k in ("x", "y", "yaw"))
+    return pose, b - a
+
+
+def _errors(rel_o, rel_t, ok, why, report) -> dict:
+    """e_theta, e_y (odometry minus truth in the start frame) and e_x (always report-only)."""
+    if rel_t is None or not ok:
+        none = dict(value=None, judgeable=False, why=why if isinstance(why, list) else [why])
+        r = dict(report_only=True) if report else {}
+        return dict(e_theta_rad={**none, **r}, e_y_m={**none, **r}, e_x_m={**none, "report_only": True})
+    extra = dict(report_only=True) if report else {}
+    return dict(e_theta_rad=_value(rel_o["dyaw"] - rel_t["dyaw"], **extra),
+                e_y_m=_value(rel_o["dy_lat"] - rel_t["dy_lat"], **extra),
+                e_x_m=_value(rel_o["dx_fwd"] - rel_t["dx_fwd"], report_only=True))
+
+
+def _m3_merge(tr, pts, ctx, i_start, i1):
+    """The merge's points (entry 3.7): A (and synthetic) judge the ``cont`` end stop pose under the substitute rule
+    awaiting the lead; B judges ``run_042``, report-only until its 0.42 m is defined. Every other point is a report."""
+    odo = ctx["odo"]
+    pe = np.stack([odo["x"], odo["y"], odo["yaw"]], axis=1)
+    rel_end = ma.relative_pose(pe[i_start], pe[i1])
+    path = float(np.hypot(np.diff(odo["x"][i_start:i1 + 1]), np.diff(odo["y"][i_start:i1 + 1])).sum())
+    dist = dict(source="encoder" if pts is None else "truth", s_enc_path_m=path, disp_enc_m=rel_end["dist_m"],
+                dyaw_odo_rad=rel_end["dyaw"])
+    c = REGISTERED
+    if pts is None:
+        return dist, dict(end=dict(role="judging_point", **_errors(rel_end, None, False, "no_truth", False))), \
+            None, None
+    method = ctx["truth_header"]["method"]
+    rule = dict(method=method, rule=M3_RULES[method], substitute_pending_lead=method != "B_camera")
+    judging = "end" if method != "B_camera" else "run_042"
+    sg = ctx["truth_header"]["sigma"]
+    p0 = pts["start"]
+    t0 = (p0["x_m"], p0["y_m"], p0["yaw_rad"])
+    vals, budget = {}, None
+    for pid in ("end", "merge_end", "run_042"):
+        if pid not in pts:
+            if pid == judging:
+                vals[pid] = dict(role="judging_point", **_errors(None, None, False, "truth_missing_point", False))
+            continue
+        p = pts[pid]
+        role = "judging_point" if pid == judging else "report"
+        entry: dict = dict(role=role)
+        if p["kind"] == "stop_pose":
+            o_pose, why = tuple(pe[i1]), None
+        else:
+            o_pose, why = _odo_at(ctx, int(p["host_ns"]), i_start, i1)
+            entry["host_ns"] = int(p["host_ns"])
+            if o_pose is not None:
+                entry["odo_dt_ns"], why = int(why), None
+        rel_t = ma.relative_pose(t0, (p["x_m"], p["y_m"], p["yaw_rad"]), _cov(p0, sg), _cov(p, sg))
+        b = dict(sigma_dyaw=rel_t["sigma_dyaw"], sigma_lat=rel_t["sigma_lat"],
+                 ok=rel_t["sigma_dyaw"] <= c["budget_dyaw_rad"] and rel_t["sigma_lat"] <= c["budget_lat_m"])
+        entry["truth_budget"] = b
+        reasons = [] if why is None else [why]
+        if not b["ok"]:
+            reasons.append("truth_over_budget")
+        if pid == "run_042":
+            reasons.append("run_042_definition_pending")  # until G9 and the lead say what the 0.42 m is (entry 9)
+        if o_pose is None:
+            entry.update(_errors(None, None, False, reasons, role == "report"))
+        else:
+            rel_o = ma.relative_pose(pe[i_start], o_pose)
+            entry.update(_errors(rel_o, rel_t, True, None, role == "report"))
+            if reasons:
+                for k in ("e_theta_rad", "e_y_m"):
+                    entry[k] = _value(entry[k]["value"], False, reasons, **({"report_only": True}
+                                                                              if role == "report" else {}))
+        if pid == "end":
+            dist.update(s_true_m=rel_t["dist_m"], dyaw_true_rad=rel_t["dyaw"])
+        if pid == judging:
+            budget = b
+        vals[pid] = entry
+    return dist, vals, budget, rule
+
+
+def _m3_imu_heading(imu, bw, ctx, i_start, move_ns, points) -> dict:
+    """The gyro heading at the moving points (A, registration 5.4, 6.3): odometry minus IMU heading change from the
+    standstill before the movement to the point, bias = the two windows' mean. A value only when the body N of each
+    window is within k(T) x desk N, its lower bound within 1 mrad, the net rotation within the free rotation and
+    the bias slope confirmed -- the slope check over a block is PR 3b, so it is ``bias_slope_unconfirmed`` here."""
+    c = REGISTERED
+    out = {}
+    odo = ctx["odo"]
+    t_stand = int(ctx["times"][i_start])
+    for pid, t_pt in points.items():
+        drive_s = (t_pt - move_ns) / 1e9
+        k = k_limit(drive_s)
+        base = dict(report_only=True, point_ns=int(t_pt), drive_s=drive_s, k_limit=k)
+        if bw["why"]:
+            out[pid] = dict(value=None, judgeable=False, why=list(bw["why"]), **base)
+            continue
+        bias = (bw["b0"] + bw["b1"]) / 2
+        h = imu.heading_between(t_stand, t_pt, bias)
+        o_pose, why = _odo_at(ctx, t_pt, i_start, len(ctx["times"]) - 1)
+        if h is None or o_pose is None:
+            out[pid] = dict(value=None, judgeable=False, why=["imu_coverage" if h is None else why], **base)
+            continue
+        odo_dyaw = o_pose[2] - float(odo["yaw"][i_start])
+        n = bw["n"]
+        ratio = {kk: (None if v is None else v / c["desk_n_rad_sqrt_s"]) for kk, v in n.items()}
+        known = [v for v in n.values() if v is not None]
+        arws = dict(desk=c["desk_n_rad_sqrt_s"], **({"body": max(known)} if known else {}))
+        lower = {kk: ma.heading_sigma_lower(arw_rad_per_sqrt_s=v, drive_s=drive_s, bias_window_s=bw["win_s"],
+                                            bias_change_rad_s=bw["db"]) for kk, v in arws.items()}
+        why_l = []
+        if abs(bw["db"]) > c["bias_jump_rad_s"]:
+            why_l.append("bias_jump")
+        if len(known) < 2:
+            why_l.append("no_n_body")
+        elif any(r > k for r in ratio.values()):
+            why_l.append("imu_noise_over_limit")
+        if "body" in lower and lower["body"]["lower_bound"] > c["budget_dyaw_rad"]:
+            why_l.append("lower_bound_over_budget")
+        if abs(h) > c["free_rotation_rad"]:
+            why_l.append("no_gyro_scale")
+        why_l.append("bias_slope_unconfirmed")
+        out[pid] = dict(value=odo_dyaw - h, judgeable=False, why=why_l, imu_dyaw_rad=h, odo_dyaw_rad=odo_dyaw,
+                        n_body_over_desk=ratio, sigma_lower=lower, bias_change_yaw_rad_s=bw["db"], **base)
+    return out
+
+
+def smooth_centered(t_ns, y, window_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """Centred moving average over +-window/2 of real time (zero phase; registration 5.2, entry 3.8): ``(times,
+    values)`` of the samples whose whole window lies inside the series -- the edge samples, averaged over one side
+    only, are dropped (Codex PR 3a review P3)."""
+    t = np.asarray(t_ns, dtype=np.int64)
+    v = np.asarray(y, float)
+    half = int(round(window_s * 1e9 / 2))
+    lo = np.searchsorted(t, t - half, side="left")
+    hi = np.searchsorted(t, t + half, side="right")
+    cs = np.concatenate([[0.0], np.cumsum(v)])
+    full = (t - half >= t[0]) & (t + half <= t[-1])
+    return t[full], ((cs[hi] - cs[lo]) / (hi - lo))[full]
+
+
+def _delay(q_t, q, y_t, y, post) -> dict:
+    """t63(y) - t63(q) from the measured q's onset (entry 3.8): the two calls share the onset, so it cancels."""
+    c = REGISTERED
+    kw = dict(q_threshold=c["q_threshold_rad"], post_window_ns=post, frac=c["frac"], pre_s=c["pre_s"])
+    dq = ma.step_response_delay(q_t, q, q_t, q, **kw)
+    dy = ma.step_response_delay(q_t, q, y_t, y, **kw)
+    if dq["delay_s"] is None:
+        return dict(value=None, judgeable=False, why=["q_" + dq["reason"]], y=dy, q=dq)
+    if dy["delay_s"] is None:
+        return dict(value=None, judgeable=False, why=[dy["reason"]], y=dy, q=dq)
+    return dict(value=dy["delay_s"] - dq["delay_s"], judgeable=True, y=dy, q=dq)
+
+
+def _m3_qstep(tr, rec_rows, ctx, i0, i1) -> dict:
+    """The q-step delay (entry 3.8, registration 5.2): encoder-differential yaw rate (25 ms centred) against the
+    measured q, from the q onset; the post window from the record's own rows -- the first ``step`` row at the final
+    curvature (the change row + the ramp) + ``Q_STEP_SETTLE_S`` to the segment's last running row. The IMU delay is
+    reported with the unknown MCU-IMU clock offset in it."""
+    cfg, c = ctx["cfg"], REGISTERED
+    seg = next(s for s in ctx["profile"]["segments"] if s.get("label") == "step")
+    rows = [r for r in rec_rows if r.get("t") == "profile" and r.get("trial") == tr.trial
+            and r.get("state") == "running" and r.get("label") == "step"]
+    direction = 1 if float(seg["q_step"]["to_rad"]) > 0 else -1
+    k_first = float(rows[0].get("req_kappa") or 0.0) if rows else 0.0
+    k_last = float(rows[-1].get("req_kappa") or 0.0) if rows else 0.0
+    change = next((r for r in rows if abs(float(r.get("req_kappa") or 0.0) - k_first) > 1e-12), None)
+    reached = next((r for r in rows if change is not None and r["host_ns"] >= change["host_ns"]
+                    and abs(float(r.get("req_kappa") or 0.0) - k_last) <= 1e-12), None)
+    vals: dict = dict(direction=direction)
+    if change is None or reached is None:
+        vals["encoder_delay_s"] = _value(None, False, "no_step")
+        vals["imu_delay_s"] = _value(None, False, "no_step", report_only=True, unknown_clock_offset=True)
+        return vals
+    post = (int(reached["host_ns"] + dprof.Q_STEP_SETTLE_S * 1e9), int(rows[-1]["host_ns"]))
+    t_a = int(tr.spans["step"][0])
+    times = ctx["times"]
+    sel = [i for i in range(i0, i1 + 1) if t_a <= times[i] <= post[1]]
+    st = [ctx["states"][i] for i in sel]
+    qt = times[sel]
+    q = np.array([s.steering_rad for s in st])
+    y = ma.encoder_yaw_rate([s.wheel_rate_left_rad_s for s in st], [s.wheel_rate_right_rad_s for s in st],
+                            radius_m=cfg.wheel_radius_m, track_m=cfg.track_m)
+    w = c["smooth_window_s"]
+    common = dict(post_window_ns=list(post), change_ns=int(change["host_ns"]), reached_ns=int(reached["host_ns"]),
+                  smoothing_s=w)
+    vals["encoder_delay_s"] = {**_delay(qt, q, *smooth_centered(qt, y, w), post), **common}
+    imu = ctx["imu"]
+    if imu.why or imu.t is None:
+        vals["imu_delay_s"] = _value(None, False, list(imu.why) or ["imu_clock_invalid"], report_only=True,
+                                     unknown_clock_offset=True)
+    elif imu.t[0] > t_a - w * 1e9 or imu.t[-1] < post[1] + w * 1e9:
+        vals["imu_delay_s"] = _value(None, False, "imu_coverage", report_only=True, unknown_clock_offset=True)
+    else:
+        m = (imu.t >= t_a - w * 1e9) & (imu.t <= post[1] + w * 1e9)  # padded: the window is whole at both ends
+        yi = imu.g[m] @ _unit(_vec3(imu.up))
+        d = _delay(qt, q, *smooth_centered(imu.t[m], yi, w), post)
+        vals["imu_delay_s"] = {**d, "report_only": True, "unknown_clock_offset": True, **common}
+    return vals
+
+
 def _trial(tr, kind, rec_rows, ctx) -> dict:
     out: dict = dict(trial=tr.trial, result=tr.result)
 
@@ -517,8 +776,21 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
         out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
         out["values"]["imu_kappa_inv_m"] = _imu_kappa(out["imu"], out["distance"], out["values"]["direction"])
         return out
-    if kind != "m1":
-        out["values"] = dict(all=_value(None, False, "not_implemented_in_pr1"))
+    rec_span = (int(times[0]), int(times[-1]))
+    if kind == "m3_merge":
+        i_start = moved[0] - 1
+        out["distance"], out["values"], budget, out["truth_rule"] = _m3_merge(tr, pts, ctx, i_start, i1)
+        if budget is not None:
+            out["truth_budget"] = budget
+        imu = ctx["imu"]
+        bw = imu.windows(t0, t1, d0, d1, rec_span=rec_span)
+        points = {"merge_end": int(tr.spans["cont"][0]), "run_042": int(tr.spans["still_post"][0])}
+        out["values"]["imu_heading"] = _m3_imu_heading(imu, bw, ctx, i_start, int(times[moved[0]]), points)
+        out["imu"] = imu.trial(t0, t1, d0, d1, rec_span=rec_span)
+        return out
+    if kind == "m3_qstep":
+        out["values"] = _m3_qstep(tr, rec_rows, ctx, i0, i1)
+        out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span)
         return out
     s_m = [float(r["s_m"]) for r in rec_rows if r.get("t") == "profile" and r.get("trial") == tr.trial
            and r.get("s_m") is not None]
