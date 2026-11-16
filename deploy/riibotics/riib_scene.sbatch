@@ -112,6 +112,14 @@
 #                  L,P; an explicit --short-cusp-arc in EXTRA_ARGS wins (the launcher then adds none of its own) and
 #                  riib_defaults.txt records the value applied. Earlier riib aisle_rack batches ran off: name both arms'
 #                  value in every comparison and never pool off results with on results.
+#   GOAL_CREEP_BAND=on for MODE=slam (off for MODE=truth) --goal-creep-band: the goal creep watch's R2 also takes a stand
+#                  in the leg end filter's bend band, latching only at 1/20 of the commanded travel
+#                  (docs/plans/2026-11-17-goal-band-and-cusp-retry.md A); on: its deterministic pair turned random_1 s24's
+#                  return_home timeout into a completion (docs/validation/2026-11-17-goal-band-cusp-retry.md, evidence one
+#                  seed; lead decision 2026-11-17: the riib launcher, no scene limit); the runner's default and the live
+#                  launcher stay off. GOAL_CREEP_BAND=off turns it off; an explicit --goal-creep-band in EXTRA_ARGS wins
+#                  and riib_defaults.txt records the value applied. Earlier riib batches ran off: name both arms' value
+#                  in every comparison and never pool off results with on results.
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -124,7 +132,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [SHORT_CUSP_ARC=0.6,1.0|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [SHORT_CUSP_ARC=0.6,1.0|off] [GOAL_CREEP_BAND=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -225,6 +233,10 @@ DOCKING_DEGENERATE_CONTINUE_FROM=launcher  # or EXTRA_ARGS (the runner takes the
 if [ "$MODE" = slam ] && [ "$NAME" = aisle_rack ]; then SCA_DEFAULT=0.6,1.0; else SCA_DEFAULT=off; fi
 SHORT_CUSP_ARC=${SHORT_CUSP_ARC:-$SCA_DEFAULT}
 SHORT_CUSP_ARC_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --short-cusp-arc)
+# the goal creep band (docs/validation/2026-11-17-goal-band-cusp-retry.md): on in the slam mode, every scene
+if [ "$MODE" = slam ]; then GCB_DEFAULT=on; else GCB_DEFAULT=off; fi
+GOAL_CREEP_BAND=${GOAL_CREEP_BAND:-$GCB_DEFAULT}
+GOAL_CREEP_BAND_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --goal-creep-band)
 # the aisle's rack copy keeps its uprights 0.15 m wider in the searches; every other scene plans as before
 [ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
@@ -254,6 +266,7 @@ NEAR_OBSERVE_ARRIVAL_FROM=launcher  # or EXTRA_ARGS, when it names its own (the 
 RCR_NEXT=0
 DDC_NEXT=0
 SCA_NEXT=0
+GCB_NEXT=0
 EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
@@ -278,6 +291,13 @@ for w in ${EXTRA_ARGS:-}; do
     continue
   fi
   # and the degenerate-continue switch (--docking-d... can only be --docking-degenerate-continue)
+  if [ "$GCB_NEXT" = 1 ]; then GOAL_CREEP_BAND=$w; GOAL_CREEP_BAND_FROM=EXTRA_ARGS; GCB_NEXT=0; continue; fi
+  # any unique prefix the runner's parser takes: no other runner argument starts with --go
+  w1=${w%%=*}
+  if [ ${#w1} -ge 4 ] && [[ "--goal-creep-band" == "$w1"* ]]; then
+    if [[ "$w" == *=* ]]; then GOAL_CREEP_BAND=${w#*=}; GOAL_CREEP_BAND_FROM=EXTRA_ARGS; else GCB_NEXT=1; fi
+    continue
+  fi
   if [ "$SCA_NEXT" = 1 ]; then SHORT_CUSP_ARC=$w; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; SCA_NEXT=0; continue; fi
   # any unique prefix the runner's parser takes: no other runner argument starts with --sh (Codex review P2)
   w0=${w%%=*}
@@ -336,6 +356,10 @@ if [ "$DOCKING_DEGENERATE_CONTINUE" = on ]; then
   [ "$EXTRA_NEAR_TRACKING" = 0 ] \
     || { echo "--near-tracking needs DOCKING_DEGENERATE_CONTINUE=off (its contract was measured off)"; exit 2; }
 fi
+# after the earlier switches' checks, so their messages come first
+case "$GOAL_CREEP_BAND" in on|off) ;; *) echo "GOAL_CREEP_BAND (or EXTRA_ARGS --goal-creep-band) must be on or off"; exit 2;; esac
+[ "$GOAL_CREEP_BAND" = off ] || [ "$EXTRA_NEAR_TRACKING" = 0 ] \
+  || { echo "--near-tracking needs GOAL_CREEP_BAND=off (its contract was measured off)"; exit 2; }
 if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
   EXIT_CLEARANCE=0.30
@@ -368,6 +392,7 @@ printf 'RETURN_CUSP_REPLANS=%s RETURN_CUSP_REPLANS_FROM=%s\n' "$RETURN_CUSP_REPL
 printf 'DOCKING_DEGENERATE_CONTINUE=%s DOCKING_DEGENERATE_CONTINUE_FROM=%s\n' "$DOCKING_DEGENERATE_CONTINUE" \
   "$DOCKING_DEGENERATE_CONTINUE_FROM" >> "$OUT/riib_defaults.txt"
 printf 'SHORT_CUSP_ARC=%s SHORT_CUSP_ARC_FROM=%s\n' "$SHORT_CUSP_ARC" "$SHORT_CUSP_ARC_FROM" >> "$OUT/riib_defaults.txt"
+printf 'GOAL_CREEP_BAND=%s GOAL_CREEP_BAND_FROM=%s\n' "$GOAL_CREEP_BAND" "$GOAL_CREEP_BAND_FROM" >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
@@ -404,6 +429,8 @@ COMMON=(--base-scene "$BASE_SCENE"
 [ "$DOCKING_DEGENERATE_CONTINUE_FROM" = launcher ] && COMMON+=(--docking-degenerate-continue "$DOCKING_DEGENERATE_CONTINUE")
 # the short cusp arc: the launcher's value only when EXTRA_ARGS names none, and nothing when off (the runner has no off)
 [ "$SHORT_CUSP_ARC_FROM" = launcher ] && [ "$SHORT_CUSP_ARC" != off ] && COMMON+=(--short-cusp-arc "$SHORT_CUSP_ARC")
+# the goal creep band: the launcher's value only when EXTRA_ARGS names none, and nothing when off (the runner's default)
+[ "$GOAL_CREEP_BAND_FROM" = launcher ] && [ "$GOAL_CREEP_BAND" = on ] && COMMON+=(--goal-creep-band on)
 [ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
