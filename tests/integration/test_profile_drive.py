@@ -159,7 +159,3 @@ def test_a_gate_that_fires_mid_drive_voids_with_its_reason_and_the_trial_is_run_
     assert result == "done" and retried, (result, retried)
     assert all(v.startswith(GATE_VOIDS) and v.count(":") >= 2 for v in retried), retried  # the gate is named
 
-# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
-# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
-# fail when xdist workers starve the process, which is the harness and not the code under test.
-pytestmark = pytest.mark.realtime

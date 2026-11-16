@@ -733,7 +733,3 @@ def test_a_configuration_changed_while_starting_closes_the_record_and_refuses(mc
     finally:
         m.close()
 
-# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
-# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
-# fail when xdist workers starve the process, which is the harness and not the code under test.
-pytestmark = pytest.mark.realtime

@@ -96,8 +96,3 @@ def test_the_check_passes_while_short_lived_processes_churn(model_on_master):
         churn.kill()
         churn.wait(timeout=5)
     assert all(why is None for why, _ in results), [r for r in results if r[0] is not None][:3]
-
-# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
-# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
-# fail when xdist workers starve the process, which is the harness and not the code under test.
-pytestmark = pytest.mark.realtime

@@ -406,8 +406,3 @@ def test_the_model_skips_late_cycles_so_kth_counts_stay_within_one_per_ms(bench_
         for axis in range(2):
             frames = (c.kth_frames[axis] - a.kth_frames[axis]) % 0x10000
             assert frames <= math.floor(dt_ms) + 1, (axis, frames, dt_ms)
-
-# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
-# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
-# fail when xdist workers starve the process, which is the harness and not the code under test.
-pytestmark = pytest.mark.realtime
