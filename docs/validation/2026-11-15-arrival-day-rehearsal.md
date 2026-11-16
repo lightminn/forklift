@@ -9,10 +9,10 @@
 |---|---|---|---|
 | D1 | 12 G6 | 다리가 시행 끝에 `{"t": "profile_end", "trial", "result"}` 행을 쓰지 않는다(G6 설계 2 절은 쓴다고 함). `m_analysis.trials()` 는 `profile` 행의 `result` 로 시행을 나누므로 G8 은 깨지지 않는다 — 설계와 구현의 불일치(낮음) | PR 예정: 다리가 시행 끝에 한 번 쓰고 시험으로 단언(설계대로) |
 | D3 | 12 G6→G8 | **도착일 기록을 G8 이 읽지 못했다.** 일정표 실행기가 구간이 끝나는 주기의 행에 다음 구간 번호(`seg`)와 끝난 구간의 label 을 함께 써서, `m_analysis.trials()` 가 "label 이 두 구간" 으로 모든 다구간 시행을 거부했다. 단위 시험은 합성 행만 써서 못 잡음 | PR `fix/profile-row-seg`(D1 과 함께): 행이 그 주기의 구간을 가리키게, 시험으로 trials() 통과 단언 |
-| D2 | 6 S2 kth | 합성 기록을 `--allow-synthetic` 로 읽으면 출력 맨 위 `synthetic_inputs: true` 와 함께 kth 자신의 `"synthetic": false`(HIL_PLANT 비트로 정함)가 나와 서로 어긋나 보인다 | PR 예정: 머리 줄이 합성이면 kth 의 `synthetic` 도 참, 판정은 `synthetic` |
+| D2 | 6 S2 kth | 합성 기록을 `--allow-synthetic` 로 읽으면 출력 맨 위 `synthetic_inputs: true` 와 함께 kth 자신의 `"synthetic": false`(HIL_PLANT 비트로 정함)가 나와 서로 어긋나 보인다 | 고침(fix/rehearsal-d2-d6): 머리 줄이 합성이면 kth 의 `synthetic` 도 참, 축 판정은 `synthetic`(계산값은 `computed`) |
 | D4 | 12 G8 | G8 을 기록에 돌리는 입구(CLI·적재기)가 없다. 기록 행 → `McuState`(`sample_from_row(r).state`), IMU 행 → `imu_stream`, 서 있는 구간·창 계산을 매번 손으로 이어야 한다. 리허설은 세션 스크립트로 이었다 | `tools/m_analyze.py`(등록 3–5 절 계산, 합성 기본 거부) — D5 다음(총괄) |
 | D5 | 12 G6 | **구조적 민감성 — 실제 다리에서도 넘음(아래 측정).** 호스트는 새 STATE 마다 직전 수신 이후 간격을 먼저 판정하고(`mcu_host._on_state` → `_expire`) 수신 시각이 다리 주기 시각이라, 다리 루프가 약 30 ms(= 50 ms 문턱 − 주기 20 ms) 넘게 멈추면 링크가 멀쩡해도 `stale` → 무장 해제(모형 E2E 하네스에서 30 ms 멈춤으로 결정적 재현). 리허설 M1 시행을 무효로 만든 멈춤은 **리허설 도구 탓이었다** — `SyntheticPermit` 의 1 s 주기 전체 /proc 열거가 제어 루프 안에서 30–50 ms 걸렸다(감시 스레드 스택 19 번 중 16 번). 열거를 시작 때 한 번으로 옮기자 85 s 정지 시행이 `done`, 25 ms 넘는 주기는 1 번 | 리허설 도구 고침(전체 열거는 시작 때만, 루프는 `model_alive_refusal`). 실제 다리 측정에서 무부하에도 50 ms 를 넘어 총괄이 (가) MCU 시각 간격 판정으로 결정(호스트 상한 150 ms = MCU cap, USB 버퍼 지연 상한, 50 ms 문턱 불변), (나) 지터 줄이기는 후보로 설계 메모에 — D5 PR |
-| D6 | 7a 스캔 | 합성 scan/1 머리의 `synthetic` 이 `scan_check` 의 요약·`--record` 에 실리지 않는다 | 낮음: scan_check 가 머리의 synthetic 을 요약·기록에 옮김 |
+| D6 | 7a 스캔 | 합성 scan/1 머리의 `synthetic` 이 `scan_check` 의 요약·`--record` 에 실리지 않는다 | 고침(fix/rehearsal-d2-d6): ScanFeed 가 합성 머리 프레임 수를 세고 기록 행에 `synthetic`, scan_check 요약은 표지를 맨 앞에 |
 
 ## 단계별 기록
 

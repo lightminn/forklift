@@ -133,8 +133,12 @@ class Run:
     def __init__(self, exe, *extra, floor=lambda c, d, v: (1.0, "ok"), confirmed=ALL, profile=None):
         self.model = Model(exe, *extra)
         self.dev = PtyDevice(self.model.master)
-        # the rate guard widened so the arm is not held tens of seconds (D5 3.11; its operating rho has its own tests)
-        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile, rate_rho=0.05)
+        # the operating rate guard (D5 3.11, rho 0.001): the model MCU runs on the host's monotonic clock, so its rate
+        # verifies in ~20 s. A widened rho (0.05 until 2026-11-16) verified early with a range deviation of up to 5 %,
+        # and that deviation is the delay bound's drift coefficient: ws1 showed age stales of 51-53 ms made of anchor
+        # 20.8 + offset 6.7 + drift 23.8 ms at k 0.046 (job 19326) -- a harness artifact, not the operating bound
+        self.b = tb.Bridge(self.dev, confirmed=set(confirmed), floor_permit=floor, profile=profile,
+                           rate_rho=rt.RATE_RHO_MAX)
         # this harness is not real time: on a loaded CI node its own cycles can run late three times in a second and
         # stop the armed truck as loop_slow (D5 3.12) -- a test artefact; loop_slow has its own unit tests
         self.b.core.loop_slow_count = HARNESS_LOOP_SLOW_OFF
@@ -170,7 +174,8 @@ class Run:
         # link stale, the arbiter disarms and latches no_feedback until it sees the truck standing again, and an ARM
         # meanwhile is refused "invalid" (ws1 2026-11-16, the loop evidence of the arm attempt itself was clean)
         a = self.b.arbiter
-        self.cycles(400, until=lambda r: r.get("rate") == "verified" and a.preempt_latch is None)
+        # the operating rate check takes ~20 s on the model (laptop 20.7 s); 2,500 cycles leave room under ws1 load
+        self.cycles(2500, until=lambda r: r.get("rate") == "verified" and a.preempt_latch is None)
         assert self.b.core.rate.verdict == "verified", self.b.core.rate.progress_s()
         arms = 0
         while True:
@@ -334,6 +339,9 @@ def test_a_locked_board_is_never_armed(run):
     r.cycles(50)
     r.c.request("mode_request", to="TELEOP")
     r.cycles(5)
+    # the operating rate check first (D5 3.11): before it the bridge holds the ARM itself and the board is never asked
+    r.cycles(2500, until=lambda x: x.get("rate") == "verified")
+    assert r.b.core.rate.verdict == "verified", r.b.core.rate.progress_s()
     r.c.request("arm")
     r.cycles(30)
     assert r.b.host.state.mode == Mode.DISARMED and r.b.arbiter.mode == "STOPPED"
