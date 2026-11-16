@@ -6,7 +6,6 @@
 
 | 항목 | 사용자가 할 일 |
 |---|---|
-| STM32CubeProgrammer CLI | 노트북에 `STM32_Programmer_CLI`(2.21 이상)를 설치한다(지금 PATH 에 없음, 절차서 1·3 절). |
 | udev 규칙 | 노트북(그리고 Jetson)에서 절차서 4 절 명령을 sudo 로 한 번 돌린다(지금 미설치). |
 | A2M12 연결(G4) | A2M12 를 노트북에 연결해 `scan_check.py` 실측을 할 수 있게 한다. 이것이 7b(다리 스캔 원천)와 G6 실차 주행의 선행 조건이다. |
 | Jetson LAN | Jetson 을 LAN 에 연결하고 접속 정보를 총괄에 알린다. 다리 정체 측정(nvpmodel 모드·jetson_clocks 고정·기록)과 실차 운용 경로 확인에 필요하다. |
@@ -20,6 +19,7 @@
 | 항목 | 근거 |
 |---|---|
 | Arm GNU Toolchain 13.3.rel1 | 노트북 `~/opt/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi`(절차서 2 절의 `<TC>`) |
+| STM32CubeProgrammer CLI | 노트북에 2.23.0 설치(2026-11-16, `STM32_Programmer_CLI --version`, `-l usb` 동작 — 장치 없음) |
 | bring-up 도구 S2–S5(기록·kth·clock·cpr·재무장 보류·commission·step·시나리오·analyze) | 리허설 1·2 차 모두 통과(모형 MCU) |
 | 텔레옵 다리(D5 링크 판정·시계 확인 무장·loop_slow·기록 머리 줄) | #533·#530·#534·#540, 절차서 12.3a |
 | 단말 정지·다리 정체 void 의 운용 문구 | 절차서 12.3b(#538) |
