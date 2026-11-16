@@ -56,3 +56,15 @@ def test_the_mission_config_records_as_before_when_off():
     on = make_transport_planner_config(curvature_limit_inv_m=0.29, clearance_m=0.10, short_cusp_arc_m=0.6,
                                        short_cusp_arc_penalty_m=1.0)
     assert planner_config_record(on)["short_cusp_arc_penalty_m"] == 1.0
+
+
+@pytest.mark.parametrize("name", ["goal_creep_band", "cusp_replan_retry"])
+def test_the_goal_band_and_cusp_retry_options_are_off_unrecorded_and_registered(name):
+    # docs/plans/2026-11-17-goal-band-and-cusp-retry.md
+    off = run_transport.recorded_arguments(argparse.Namespace(**{name: "off"}, seed=1))
+    assert name not in off
+    on = run_transport.recorded_arguments(argparse.Namespace(**{name: "on"}, seed=1))
+    assert on[name] == "on"
+    assert near_tracking.POST_MEASUREMENT_ARGUMENTS[name] == "off"
+    assert f'{name}=getattr(args, "{name}", "off")' in RUNNER
+    assert f'"--{name.replace("_", "-")}"' in RUNNER

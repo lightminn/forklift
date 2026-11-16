@@ -37,10 +37,11 @@ RADIUS, TRACK = 0.125, 0.53
 SPEC = encoder_model_spec("team_spec_quantized")
 
 
-def _watch(tracker):
-    """A core with only what goal_creep() reads."""
+def _watch(tracker, band=False):
+    """A core with only what goal_creep() reads (band: the goal creep band option, plan 2026-11-17 A)."""
     ns = SimpleNamespace(ms=MissionState(phase="return_home"), slam={}, trackers={"return_home": tracker}, state={},
-                         goal_creep_watch={"key": None, "last_t": None, "window": [], "latched": False})
+                         goal_creep_watch={"key": None, "last_t": None, "window": [], "latched": False},
+                         options=SimpleNamespace(goal_creep_band="on" if band else "off"))
     for name in dir(MissionCore):
         if name.startswith("GOAL_CREEP_"):
             setattr(ns, name, getattr(MissionCore, name))
@@ -66,7 +67,7 @@ class _TeamSpec:
 
 
 def run(path, config, setup, start, *, odometry="ideal", deadband=0.0, v0=0.0, hold=(0, 0), watch=True,
-        reversed_before=False, seconds=20.0, seed=0):
+        reversed_before=False, seconds=20.0, seed=0, band=False, response=1.0):
     """Returns ("arrived" | "end" | "taken" | "stuck", time): "end" is the existing receivers' state (remaining
     within 1 um, command zero, stopped); "taken" is an R2 latch (its time) that then reached the stall rules' state
     -- the command held at zero, the stop detector stopped for 120 ticks."""
@@ -74,7 +75,7 @@ def run(path, config, setup, start, *, odometry="ideal", deadband=0.0, v0=0.0, h
     for pose in setup:
         tracker.update(pose, 0.1, 0.02)
     tracker.restart_speed_slew(v0)
-    core = _watch(tracker)
+    core = _watch(tracker, band=band)
     truth = np.array(start, float)
     odom = truth.copy()
     stop = StopDetector(tick_s=DT)
@@ -104,7 +105,7 @@ def run(path, config, setup, start, *, odometry="ideal", deadband=0.0, v0=0.0, h
         if standing >= 120:
             return "taken", round(taken, 3)
         applied = 0.0 if hold[0] <= k < hold[1] else command
-        v = applied if abs(applied) >= deadband else 0.0
+        v = response * applied if abs(applied) >= deadband else 0.0  # response: the plant's share of the command
         step = v * DT
         truth = truth + [step * math.cos(truth[2]), step * math.sin(truth[2]), step * c.curvature_inv_m]
         if odometry == "ideal":
@@ -219,3 +220,49 @@ def test_the_window_is_long_enough_for_the_team_spec_counts():
     bent = 0.36 * TRACK / 2
     ratio = (counted_min(window * (1 - bent)) + counted_min(window * (1 + bent))) / 2 / window
     assert ratio > 0.5 > MissionCore.GOAL_CREEP_RATIO
+
+
+
+# --- the goal creep band (docs/plans/2026-11-17-goal-band-and-cusp-retry.md A) ------------------------------------
+
+@pytest.mark.parametrize("name,args,kw", _arrivals(), ids=[c[0] for c in _arrivals()])
+@pytest.mark.parametrize("odometry", ["ideal", "team_spec", "reported"])
+def test_every_arrival_the_reviews_found_is_kept_with_the_band_on(name, args, kw, odometry):
+    seeds = range(10) if odometry == "reported" else (0,)
+    for seed in seeds:
+        before = run(*args, odometry=odometry, watch=False, seed=seed, **kw)
+        after = run(*args, odometry=odometry, watch=True, band=True, seed=seed, **kw)
+        if before[0] == "arrived":
+            assert after == before, (name, odometry, seed)
+
+
+@pytest.mark.parametrize("across", [0.00805, 0.00812])
+def test_a_stand_in_the_band_the_filter_misses_is_taken_with_the_band_on(across):
+    # #567 (random_1 s24): along the goal, across just outside the 8 mm tolerance and inside the filter's bend allowance
+    args = (straight(), GOAL, along(0.99996, across, 0.0), [0.99996, across, 0.0])
+    assert run(*args, odometry="team_spec", deadband=0.001)[0] == "stuck"  # the band off: as before
+    outcome, t = run(*args, odometry="team_spec", deadband=0.001, band=True)
+    assert outcome == "taken" and t < 20.0
+
+
+def test_a_slow_convergence_in_the_band_is_not_taken():
+    # Codex plan review P2: the r3 arc approach with the plant at 20 % of the command arrives; the band's 1/20 ratio
+    # must not latch it
+    yaw03 = TrackerConfig(**{**BASE, "yaw_tolerance_rad": 0.03})
+    path, p0 = _arc(2.0)
+    start = [0.005428873102837442, 0.00818, -0.029]
+    args = (path, yaw03, [p0 + f * (np.array(start) - p0) for f in np.linspace(0, 1, 80)], start)
+    before = run(*args, watch=False, response=0.2, seconds=40)
+    assert before[0] == "arrived"
+    assert run(*args, band=True, response=0.2, seconds=40) == before
+
+
+def test_r1_keeps_the_filter_with_the_band_on():
+    # Codex plan review P2: the kappa 0.29 arc end, 0.5 um remaining -- the band alone never makes R1 stop it
+    path = (np.array([[-2.3291833812108655, 5.991012812211191, -2.4], [0.0, 0.0, 0.0]]), np.ones(2, np.int8),
+            np.full(2, 0.29))
+    start = np.array([0.012458352, 0.008000010, -0.049])
+    args = (path, GOAL, [path[0][0] + f * (start - path[0][0]) for f in np.linspace(0, 1, 80)], start)
+    before = run(*args, watch=False)
+    after = run(*args, band=True)
+    assert after == before

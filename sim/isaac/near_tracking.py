@@ -1202,6 +1202,9 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "d7_reapproach_curvature_inv_m": None, "d7_reapproach_cruise_mps": None,
                               # 2026-10-26: the first far observation's start backoff; off in every earlier run.
                               "observe_start_backoff": "off",
+                              # 2026-11-17 the goal creep band and the cusp_pose replan retry (plan
+                              # 2026-11-17-goal-band-and-cusp-retry): off in every earlier run
+                              "goal_creep_band": "off", "cusp_replan_retry": "off",
                               # 2026-10-27: the return-start backoff; off in every earlier run.
                               "return_start_backoff": "off",
                               # 2026-10-25 re-approach hold plan H1: off in every earlier run.

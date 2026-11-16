@@ -498,3 +498,89 @@ def test_a_permit_stop_the_follower_cannot_resume_after_the_release_ends_the_mis
     dev2, records2 = _device()
     _permit(dev2)
     assert _run(dev2, ports2)[-1].owned is False and records2[-1]["mission_end"] is False
+
+
+# ---- one cusp_pose replan retry on the candidate's blocked cells (docs/plans/2026-11-17-goal-band-and-cusp-retry.md B)
+
+BLOCKED = {"status": "tracking", "ok": False, "why": "blocked:occupied", "steer": 0.14}
+PASSED = {"status": "tracking", "ok": True, "why": "ok", "steer": 0.1}
+
+
+class RetryPorts(Ports):
+    def __init__(self, rects=("cell-box",), **kw):
+        super().__init__(**kw)
+        self.rects = tuple(rects)
+
+    def blocked_rectangles(self, candidate):
+        self.log.append(("blocked_rectangles", candidate.get("why")))
+        return self.rects
+
+
+def _retry_device(**cfg):
+    return _device(retry_blocked_triggers=("cusp_pose",), **cfg)
+
+
+def test_a_blocked_candidate_is_planned_again_once_with_its_cells_and_installed():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok", "path-2")], candidates=[BLOCKED, PASSED])
+    _ask(dev)
+    steps = _run(dev, ports)
+    assert steps[-1].owned is False and steps[-1].end is None
+    submits = [x for x in ports.log if isinstance(x, tuple) and x[0] == "submit"]
+    assert submits == [("submit", (), None), ("submit", ("cell-box",), None)]
+    assert ("install", "path-2") in ports.log and ("install", "path-1") not in ports.log
+    rec = records[-1]
+    assert rec["outcome"] == "installed" and rec["retry"] == {"rects": 1, "first_why": "blocked:occupied",
+                                                              "status": "ok", "why": "ok"}
+    assert rec["budget_left"] == {"total": 3, "cusp_pose": 2}  # no budget spent on it
+
+
+def test_a_retry_still_blocked_is_refused_as_before_and_never_retried_twice():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok", "path-2")], candidates=[BLOCKED])
+    _ask(dev)
+    steps = _run(dev, ports, n=200)
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:blocked:occupied"
+    assert sum(1 for x in ports.log if isinstance(x, tuple) and x[0] == "submit") == 2
+    assert records[-1]["retry"]["why"] == "blocked:occupied"
+
+
+def test_a_retry_whose_plan_fails_is_refused_without_an_escape():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok_fail", "invalid_start")], candidates=[BLOCKED], escape="esc")
+    _ask(dev)
+    steps = _run(dev, ports)
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:retry_invalid_start"
+    assert not any(isinstance(x, tuple) and x[0] in ("escape_plan", "escape_install") for x in ports.log)
+    assert records[-1]["retry"]["status"] == "invalid_start"
+
+
+def test_no_occupied_cells_means_no_retry():
+    dev, records = _retry_device()
+    ports = RetryPorts(rects=(), candidates=[BLOCKED])
+    _ask(dev)
+    steps = _run(dev, ports, n=200)
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:blocked:occupied"
+    assert sum(1 for x in ports.log if isinstance(x, tuple) and x[0] == "submit") == 1
+
+
+def test_a_drop_after_the_retry_clears_its_rectangles_and_it_is_not_retried_again():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("dropped", "moving"), ("ok", "path-3")], candidates=[BLOCKED])
+    _ask(dev)
+    _run(dev, ports, n=200)
+    submits = [x[1] for x in ports.log if isinstance(x, tuple) and x[0] == "submit"]
+    assert submits == [(), ("cell-box",), ()]  # the old frame's cells are gone after the drop
+
+
+def test_the_retry_is_only_for_its_trigger_and_off_by_default():
+    dev, records = _device()
+    ports = RetryPorts(candidates=[BLOCKED])
+    _ask(dev)
+    _run(dev, ports, n=200)
+    assert "retry" not in records[-1] and not any(x[0] == "blocked_rectangles" for x in ports.log if isinstance(x, tuple))
+    dev, records = _retry_device()
+    ports = RetryPorts(candidates=[BLOCKED])
+    _ask(dev, trigger="cusp_handed")
+    _run(dev, ports, n=200)
+    assert "retry" not in records[-1]
