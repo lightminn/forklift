@@ -255,7 +255,9 @@ class DelayBound:
 
     def terms(self, sample: Sample) -> dict | None:
         """What made ``delay_s(sample)``: the winning anchor's own bound, the offset difference to it, the drift
-        share, its age and how many anchors were in reach (diagnostics for the record; the bound is unchanged)."""
+        share, its age and how many anchors were in reach (diagnostics for the record; the bound is unchanged). The
+        three shares sum to the bound before ``delay_s`` clamps it at 0, so a negative sum reads as a bound of 0, and
+        the rounding to the microsecond leaves up to 1.5 us between the sum and the bound (Codex review P3-note)."""
         mcu_ns = sample.state.mcu_time_us * 1000
         off = sample.host_ns - mcu_ns
         k = self.drift_max / (1.0 - self.drift_max)
