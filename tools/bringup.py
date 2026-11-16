@@ -71,7 +71,7 @@ from forklift_core.plant.commission import (
 )
 from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
 from forklift_core.plant.kth_check import kth_check
-from forklift_core.plant.markers import marker_reader
+from forklift_core.plant.markers import marker_input_state, marker_reader
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here by name
@@ -979,12 +979,21 @@ def main(argv=None) -> int:
         return 2
     link = ReconnectingLink(args.device, baud=args.baud,
                             opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]))
+    markers = None
+    if getattr(args, "markers", False):
+        # an asked-for marker input that cannot work (no terminal) is said out loud and in the record, not left to
+        # a record with no markers in it (rehearsal 2 R2-1)
+        active, why = marker_input_state()
+        markers = {"requested": True, "active": active, "why": why}
+        if not active:
+            print(f"bringup.py: --markers is off ({why}): no Enter marks will be recorded", file=sys.stderr)
     with open(args.out, "a", encoding="utf-8") as out:
         # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
                               "device": args.device, "device_id": device_identity(args.device),
                               "synthetic": synthetic, "start_wall": time.time(),
-                              "start_mono_ns": time.monotonic_ns()}) + "\n")
+                              "start_mono_ns": time.monotonic_ns(),
+                              **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
         if args.cmd in ("record", "cpr"):
