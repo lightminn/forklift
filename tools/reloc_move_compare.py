@@ -97,10 +97,15 @@ def compare(rows: list, recs: dict) -> dict:
     valid = [r for r in rows if r.get("class") == "valid" and r.get("outcome") != "not_run"]
     # every valid session must show it ran with the move on (its record's "moves", empty when the static stage
     # confirmed): a missing record would silently move a session into arm A's success (Codex code review P2)
-    missing = [r["id"] for r in valid if not isinstance(recs.get(r["id"]), dict) or "moves" not in recs[r["id"]]]
+    # a session whose runner ended before the relocalization (no start_reloc at all: an Isaac start-up failure) has
+    # no static stage -- both arms fail it alike, it is kept as such (not a pair that can differ) and listed
+    no_reloc = [r["id"] for r in valid if recs.get(r["id"]) is None]
+    missing = [r["id"] for r in valid if recs.get(r["id"]) is not None
+               and (not isinstance(recs[r["id"]], dict) or "moves" not in recs[r["id"]])]
     if missing:
         raise ValueError(f"valid sessions without a move-on start_reloc record: {missing}")
-    odd = [r["id"] for r in valid if bool(recs[r["id"]]["moves"]) != (recs[r["id"]].get("static_outcome") is not None)]
+    odd = [r["id"] for r in valid if r["id"] not in no_reloc
+           and bool(recs[r["id"]]["moves"]) != (recs[r["id"]].get("static_outcome") is not None)]
     if odd:
         raise ValueError(f"sessions whose moves and static_outcome disagree: {odd}")
     pairs = [pair(r, recs.get(r["id"])) for r in valid]
@@ -113,7 +118,7 @@ def compare(rows: list, recs: dict) -> dict:
     both_blocked = sum(1 for p in pairs if p["times"] and len(p["times"]["blocked"]) == 2)
     n = len(pairs)
     return {
-        "valid": n, "static_failed": n_static_failed, "a_failed": n_fail,
+        "valid": n, "no_reloc": no_reloc, "static_failed": n_static_failed, "a_failed": n_fail,
         "a_success": sum(p["a_success"] for p in pairs), "b_success": sum(p["b_success"] for p in pairs),
         "rescued": b, "worse": c, "mcnemar_p_one_sided": binom_tail_ge(b, b + c),
         "rescue_rate": None if not n_static_failed else b / n_static_failed,

@@ -65,7 +65,7 @@ def test_the_two_sided_interval():
 def test_a_valid_session_without_a_move_on_record_stops_the_comparison():
     with pytest.raises(ValueError, match="without a move-on"):
         M.compare([row("a", "success", "success")], {"a": {"attempts": []}})
-    with pytest.raises(ValueError, match="without a move-on"):
-        M.compare([row("a", "success", "success")], {})
+    out = M.compare([row("a", "not_started")], {})  # no start_reloc at all: both arms fail it, listed
+    assert out["no_reloc"] == ["a"] and out["rescued"] == 0 and out["a_success"] == out["b_success"] == 0
     with pytest.raises(ValueError, match="disagree"):
         M.compare([row("a", "success", "success")], {"a": {"moves": [], "static_outcome": "failed"}})
