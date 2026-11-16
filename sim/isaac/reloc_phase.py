@@ -74,6 +74,109 @@ class RelocInputs:
     # the unconfirmed position check (docs/plans/2026-11-02-unconfirmed-runner.md 3.2): the chosen search group's last
     # scan set goes here as "gen_points" (not JSON: the runner keeps it in memory); None: not kept
     sink: dict | None = None
+    # the observation move (docs/plans/2026-11-16-reloc-observe-move.md, unattended only): after a static failure the
+    # truck goes +move_m, then to -move_m from the start, re-matching at each; 0: off. ``drive(v_mps)`` sets the
+    # straight wheel command (the runner's), ``body`` = (front, rear, half width) of the truck from base (m)
+    move_m: float = 0.0
+    drive: object = None
+    body: tuple | None = None
+    steps_per_s: float = 120.0  # physics steps a second (the move's duration and settle)
+
+
+MOVE_SPEED_MPS = 0.10  # the teleop recovery reverse's speed (teleop_drive.recovery_reverse_mps)
+MOVE_SETTLE_S = 1.0  # stand still after the move before the scans (the start settle's length)
+MOVE_ATTEMPTS = 2  # scan sets at each moved place: one and a rescan (plan 1)
+CORRIDOR_SIDE_M = 0.10  # each side beyond the body's half width
+CORRIDOR_EXTRA_M = 0.15  # beyond the move's own length
+CORRIDOR_STEP_M = 0.05  # the corridor's sample spacing
+CORRIDOR_SLACK_M = 0.02  # a beam this much short of a sample point still sees it free
+CONTACT_FRACTION = 0.7  # travelled below this share of the commanded distance: recorded as a contact (truth, record)
+
+
+def corridor_blocked(ranges, angles: tuple, laser_xy: tuple, body: tuple, direction: int, d_m: float,
+                     range_min_m: float, range_max_m: float) -> bool:
+    """Whether the straight corridor the move would sweep (base frame: beyond the front, or behind the rear, by
+    ``d_m`` + CORRIDOR_EXTRA_M, the body's half width + CORRIDOR_SIDE_M each side) is not seen free in one scan:
+    every sample point needs a beam (nearest bearing) that is +inf or reaches it; a NaN, a short or a missing beam is
+    blocked. Plan 1: a static-scene check, no stop while moving."""
+    import numpy as np  # noqa: PLC0415
+
+    r = np.asarray(ranges, float)
+    n = len(r)
+    if n == 0 or not (angles[1] > 0 and math.isfinite(angles[0]) and math.isfinite(angles[1])):
+        return True
+    full = n * angles[1] >= 2 * math.pi - 1e-6  # a full turn wraps; a partial fan has unmeasured bearings
+    front, rear, half = body
+    length = d_m + CORRIDOR_EXTRA_M
+    x0, x1 = (front, front + length) if direction > 0 else (-(rear + length), -rear)
+    w = half + CORRIDOR_SIDE_M
+    xs = np.arange(x0, x1 + 1e-9, CORRIDOR_STEP_M)
+    ys = np.arange(-w, w + 1e-9, CORRIDOR_STEP_M)
+    lx, ly = laser_xy
+    for x in xs:
+        for y in ys:
+            dx, dy = x - lx, y - ly
+            dist = math.hypot(dx, dy)
+            rel = math.atan2(dy, dx) - angles[0]
+            if full:
+                k = int(round(rel / angles[1])) % n
+            else:
+                rel = math.remainder(rel - math.pi, 2 * math.pi) + math.pi  # [0, 2 pi) from angle_min
+                k = int(round(rel / angles[1]))
+                if k >= n:
+                    return True  # a bearing the fan does not measure: no beam sees it free
+            beam = r[k]
+            if math.isinf(beam) and beam > 0:
+                continue
+            if not math.isfinite(beam) or beam < range_min_m or beam < min(dist, range_max_m) - CORRIDOR_SLACK_M:
+                return True
+    return False
+
+
+def _observe_move(inputs: RelocInputs, relocalizer, out: dict, step, plan: list, offset: float, last_sent):
+    """The next place of ``plan`` (popped): the corridor checked in the last scan, then a straight open-loop drive at
+    MOVE_SPEED_MPS and a settle. Returns (offset, target) -- target None when the corridor was blocked -- or None when
+    a STOP came while moving (the wheels are set to zero first)."""
+    goal = plan.pop(0)
+    d = goal - offset
+    direction = 1 if d > 0 else -1
+    engine = inputs.engine
+    rec = {"dir": direction, "d_m": round(abs(d), 3), "blocked": False, "travelled_m": 0.0, "stopped": False}
+    out["moves"].append(rec)
+    lx, ly, _ = engine.laser_xyz_m
+    ranges = last_sent[0] if last_sent else None
+    if ranges is None or corridor_blocked(ranges, (inputs.angle_min_rad, inputs.angle_increment_rad), (lx, ly),
+                                          inputs.body, direction, abs(d), engine.range_min_m, engine.range_max_m):
+        rec["blocked"] = True
+        return offset, None
+    t0 = time.monotonic()
+    pos0, _ = engine.pose()
+    generation = relocalizer.generation
+    n = int(round(abs(d) / MOVE_SPEED_MPS * inputs.steps_per_s))
+    stopped = False
+    try:
+        inputs.drive(direction * MOVE_SPEED_MPS)
+        for _ in range(n):
+            step("move")
+            if relocalizer.generation != generation or inputs.cancel.is_set():
+                stopped = True
+                break
+    finally:
+        inputs.drive(0.0)  # also when a step raised (the console's session end): the wheels are not left running
+    if not stopped:
+        for _ in range(int(round(MOVE_SETTLE_S * inputs.steps_per_s))):
+            step("move")
+            if relocalizer.generation != generation or inputs.cancel.is_set():
+                stopped = True
+                break
+    pos1, q1 = engine.pose()
+    travelled = math.hypot(pos1[0] - pos0[0], pos1[1] - pos0[1])  # truth, the record only
+    rec.update(travelled_m=round(travelled, 4), wall_s=round(time.monotonic() - t0, 3), stopped=stopped,
+               move_contact=(not stopped) and travelled < CONTACT_FRACTION * abs(d))
+    if stopped:
+        return None
+    yaw = scan_capture.yaw_roll_pitch(q1)[0]
+    return goal, (float(pos1[0]), float(pos1[1]), yaw)  # the stillness check's place (not the matcher's input)
 
 
 def _points(inputs: RelocInputs, sent) -> object:
@@ -214,6 +317,14 @@ def _run(inputs: RelocInputs) -> dict:
     for _ in range(inputs.settle_steps):  # settle where it was placed (plan 1.2 step 3)
         step("settle")
     scan_key = 0  # every scan set of the session its own noise (a retry never reuses one, Codex B-P2c design P3)
+    target = inputs.target  # the stillness check's place: the placed start, then where a move stood (plan 1)
+    moving = inputs.move_m > 0.0 and unattended
+    if inputs.move_m > 0.0 and (inputs.drive is None or inputs.body is None):
+        raise ValueError("the observation move needs a drive and the body")
+    plan = [inputs.move_m, -inputs.move_m] if moving else []  # the places, relative to the start
+    offset, phase, last_sent = 0.0, "static", None
+    if moving:
+        out["moves"], out["truth_by_phase"] = [], []
     while True:
         if inputs.cancel.is_set():
             relocalizer.cancel()
@@ -230,11 +341,14 @@ def _run(inputs: RelocInputs) -> dict:
             relocalizer.start()  # the generation's first scan: its session deadline (plan 1.2 step 6)
             generation = relocalizer.generation  # the scans and the match belong to it (Codex impl round 2 P2)
             search = relocalizer.searches
-            got = scan_capture.scan_set(engine, inputs.target, lambda s, k=scan_key: inputs.noise_for(k, s),
+            got = scan_capture.scan_set(engine, target, lambda s, k=scan_key: inputs.noise_for(k, s),
                                         settle_steps=0)
             scan_key += 1
             if out["truth"] is None:
                 out["truth"] = list(got["base_truth"])
+                if moving:
+                    out["truth_by_phase"].append({"phase": phase, "truth": list(got["base_truth"])})
+            last_sent = got["sent"]
             if not got["valid"]:
                 # the session's input check is its first scan set only (plan 1.2 step 3, 4.0: fixed before any
                 # matching); a later set finding the truck moved fails a valid session (Codex B-P2d freeze review P2)
@@ -257,7 +371,8 @@ def _run(inputs: RelocInputs) -> dict:
                       # plan 7 F1: every candidate of the matcher (not only those shown), for B-P2d's record
                       "candidates": [_candidate(c) for c in match.candidates],
                       # the unconfirmed position check's search group, only with the check (Codex 2b P2-5)
-                      **({} if inputs.sink is None else {"search": search})}
+                      **({} if inputs.sink is None else {"search": search}),
+                      **({"phase": phase} if moving else {})}
             if relocalizer.state != "relocalizing" or relocalizer.generation != generation:
                 # a STOP (and maybe a retry since) came while it matched: the result is its old generation's
                 out["attempts"].append({**record, "reason": "interrupted", "matcher_reason": decision.reason})
@@ -313,6 +428,20 @@ def _run(inputs: RelocInputs) -> dict:
                              preview_twins=twins)
             continue
         if state in WAITING:
+            if unattended and plan and state != "stopped":
+                if out.get("static_outcome") is None:
+                    out["static_outcome"] = {"awaiting_pick": "needs_operator"}.get(state, "failed")
+                moved = _observe_move(inputs, relocalizer, out, step, plan, offset, last_sent)
+                if moved is None:  # a STOP while moving: the session ends here (no move resumed)
+                    break
+                offset, where = moved
+                if where is None:
+                    continue  # that place's corridor was blocked: the next place, or the end
+                target, phase = where, "move+" if offset > 0 else "move-"
+                out["truth"] = None  # the next scan set's: the place the candidates are made at
+                if relocalizer.retry(relocalizer.generation, attempts=MOVE_ATTEMPTS)[0]:
+                    continue
+                break
             if unattended:
                 break
             step(state)  # the operator's pick or retry comes through the console

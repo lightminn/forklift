@@ -1270,6 +1270,11 @@ def arguments() -> argparse.Namespace:
                         "relocalization chose, its estimate is replaced by the named map-frame hypothesis (a "
                         "synthetic twin such as 'shift x+1' or 'turn', or 'slide': 0.35 m along the hall's axis). "
                         "Unattended relocalization batches only (--reloc-unattended).")
+    parser.add_argument("--reloc-observe-move", type=float, default=0.0, metavar="M",
+                        help="Experiment (docs/plans/2026-11-16-reloc-observe-move.md): when the unattended start "
+                        "relocalization ends without a confirmation, drive straight +M, re-match (two scan sets), "
+                        "then to -M from the start and re-match again, each only if that corridor reads free in the "
+                        "last scan. 0 (default): off. Unattended relocalization batches only (--reloc-unattended).")
     parser.add_argument("--correction-inject", type=_correction_inject, default=None,
                         help="Test only (docs/plans/2026-11-07-unconfirmed-monitor-revision.md 2 D): at that simulated "
                         "second every SLAM correction from then on is offset by x,y,yaw (the yaw about the truck), as "
@@ -1810,6 +1815,11 @@ def arguments() -> argparse.Namespace:
         parser.error("--pose-check on needs --start-relocalize and --pose-check-bounds (every development value)")
     if args.reloc_inject is not None and not (args.start_relocalize and args.reloc_unattended):
         parser.error("--reloc-inject is for unattended relocalization batches (--start-relocalize --reloc-unattended)")
+    if not (math.isfinite(args.reloc_observe_move) and 0.0 <= args.reloc_observe_move <= 1.0):
+        parser.error("--reloc-observe-move takes a distance in [0, 1] m")
+    if args.reloc_observe_move > 0.0 and not (args.start_relocalize and args.reloc_unattended):
+        parser.error("--reloc-observe-move is for unattended relocalization batches "
+                     "(--start-relocalize --reloc-unattended)")
     if args.correction_inject is not None and (not args.reloc_unattended or args.pose_check == "off"):
         parser.error("--correction-inject is for unattended relocalization batches with --pose-check on or shadow")
     if args.pose_check_contacts and args.pose_check == "off":
@@ -3727,8 +3737,29 @@ def reloc_lidar(args, settings: dict, world, robot, layer, settle_base) -> tuple
     return engine, (pattern.angle_min_rad, pattern.angle_increment_rad)
 
 
+def reloc_move_drive(robot, wheels, steers, drive_geometry, action_type):
+    """The observation move's straight wheel command (plan 2026-11-16-reloc-observe-move): drive(v_mps) sets the
+    wheel rates and the straight steering through the simulation's kinematics (the core's command path)."""
+    from forklift_core.plant.kinematics import AckermannKinematics
+
+    kin_ = AckermannKinematics(drive_geometry, 0.0)  # no slew: the steering is put straight at once
+
+    def drive(v_mps):
+        cmd_ = kin_.command(float(v_mps), 0.0)
+        robot.apply_action(action_type(joint_velocities=np.asarray(cmd_.wheel_rates_rad_s, float), joint_indices=wheels))
+        robot.apply_action(action_type(joint_positions=np.asarray(cmd_.steering_rad, float), joint_indices=steers))
+
+    return drive
+
+
+def reloc_move_body(footprint, rear_axle_offset_m: float) -> tuple:
+    """(front, rear, half width) from base_link: the footprint is from the rear axle, the base the offset ahead."""
+    off_ = abs(rear_axle_offset_m)
+    return (footprint.front_m - off_, footprint.rear_m + off_, footprint.half_width_m)
+
+
 def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, frozen=None, pace_s: float = 1 / 120,
-                         clock=None, console=None, sink=None) -> dict:
+                         clock=None, console=None, sink=None, drive=None, body=None, steps_per_s: float = 120.0) -> dict:
     """B-P2b (docs/plans/2026-10-29-start-relocalization.md 1.2 steps 3-10, unattended): the stopped truck's start
     relocalization on the survey bundle's grid with B-P1b's frozen settings (sim/isaac/reloc_phase.py). Returns the
     record (``state["start_reloc"]``) with the estimate (map base) and its rear axle, once the supervisor answered
@@ -3759,7 +3790,9 @@ def start_relocalization(args, state: dict, engine, angles: tuple, bundle, *, fr
         # B-P2c: the early console, and the operator's whole time from the runner's start
         console=console, unattended=console is None or bool(getattr(args, "reloc_unattended", False)),
         operator_deadline_at=None if console is None else operator_deadline(args), place_cfg=place_cfg, sink=sink,
-        inject=getattr(args, "reloc_inject", None)))
+        inject=getattr(args, "reloc_inject", None),
+        # the observation move (plan 2026-11-16-reloc-observe-move): off unless given
+        move_m=float(getattr(args, "reloc_observe_move", 0.0) or 0.0), drive=drive, body=body, steps_per_s=steps_per_s))
     record = {**out, "map_id": bundle.map_id, "settings": settings_record, "place_settings": place_record,
               "index_build_s": round(index_s, 3),
               "estimate_rear": (list(R.rear_from_base(out["estimate"], abs(args.rear_axle_offset_m)))
@@ -5266,8 +5299,13 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
             state["reloc_reference"]["frames"] = {"error": f"{type(exc).__name__}: {exc}"}
         reloc_console = open_reloc_console(args, settings, robot, slam_bundle_, lift_index=lift_index, steers=steers,
                                            state=state)
+        reloc_drive_ = reloc_body_ = None
+        if args.reloc_observe_move > 0.0:  # plan 2026-11-16-reloc-observe-move: a straight wheel command, the body
+            reloc_drive_ = reloc_move_drive(robot, wheels, steers, args.drive_geometry, ArticulationAction)
+            reloc_body_ = reloc_move_body(geometry.unloaded_footprint, args.rear_axle_offset_m)
         start_reloc = start_relocalization(args, state, reloc_engine_, reloc_angles_, slam_bundle_,
-                                           console=reloc_console, sink=pose_box["sink"])
+                                           console=reloc_console, sink=pose_box["sink"], drive=reloc_drive_,
+                                           body=reloc_body_, steps_per_s=float(settings["physics_hz"]))
         reloc_console.service("setup")
     if known_start_rear(args) is not None:  # the repro batch's H0: a known start at the placed pose (no matching)
         state["start_known"] = {"base": list(spawn_base_pose(args, scenario)), "rear": list(known_start_rear(args))}
@@ -11894,6 +11932,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # line2 robustness plan (2026-11-04): not recorded at their defaults, so a run without them records what it did
         and (k != "docking_degenerate_continue" or v != "off") and (k != "inject_round1_degenerate" or v)
         and (k != "destination_prior_error_along_m" or v != 0.0)
+        # plan 2026-11-16-reloc-observe-move: not recorded off, so a run without it records what it always did
+        and (k != "reloc_observe_move" or v != 0.0)
         # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
         and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
