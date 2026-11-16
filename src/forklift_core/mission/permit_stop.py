@@ -102,5 +102,19 @@ def current_blocked_rectangles(layer, *, rear, leg, direction: int, loaded: bool
     return blocked_rectangles(snap, seeds, grow_m=grow_m)
 
 
+def candidate_blocked_rectangles(snapshot, cells: dict, *, grow_m: float = PERMIT_STOP_GROW_M) -> list:
+    """Plan 2026-11-17-goal-band-and-cusp-retry B: a refused candidate check's own cells (``cells`` = the permit's
+    {"walk", "ahead", "zone"} lists of (i, j)) that ``snapshot`` marks OCCUPIED -- an unknown cell is never made an
+    obstacle -- grown into rectangles as ``blocked_rectangles`` does. Empty without a snapshot or cells."""
+    if snapshot is None or not cells:
+        return []
+    state = np.asarray(snapshot.state)
+    nx, ny = state.shape
+    seeds = [c for c in dict.fromkeys(tuple(int(v) for v in c) for name in ("walk", "ahead", "zone")
+                                      for c in (cells.get(name) or ()))
+             if 0 <= c[0] < nx and 0 <= c[1] < ny and state[c] == OCCUPIED]
+    return blocked_rectangles(snapshot, seeds, grow_m=grow_m)
+
+
 __all__ = ["PERMIT_STOP_CLEARANCE_ADD_M", "PERMIT_STOP_GAP_S", "PERMIT_STOP_GROW_M", "PERMIT_STOP_S", "blocked_rectangles",
-           "current_blocked_rectangles"]
+           "candidate_blocked_rectangles", "current_blocked_rectangles"]

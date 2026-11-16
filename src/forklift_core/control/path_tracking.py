@@ -352,6 +352,26 @@ class RearAxlePathTracker:
         bent = cfg.max_curvature_inv_m * travel**2 / 2
         return across_end - bent - OUT_OF_REACH_MARGIN_M > cfg.position_tolerance_m
 
+    def leg_end_in_band(self) -> bool:
+        """The goal creep band (docs/plans/2026-11-17-goal-band-and-cusp-retry.md A): the leg end filter's own
+        preconditions (a final goal not yet reached, 0 < remaining <= LEG_END_SLACK_M, the floor off) and the end -- on
+        the present heading -- across the position tolerance at all. It holds wherever ``leg_end_out_of_reach`` does
+        and also in the filter's bend allowance band, which the filter leaves to a curvature that may still bend the
+        truck back in (#567: 8.10 mm across, along 0)."""
+        endpoint = int(self._leg_ends[self._leg])
+        if (self._last_eval is None or endpoint != len(self._poses) - 1
+                or self._pending or self._failed or self._arrived):
+            return False
+        remaining = max(0.0, float(self._distance[endpoint] - self._progress))
+        if not 0.0 < remaining <= LEG_END_SLACK_M:
+            return False
+        cfg = self.config
+        pose, goal = np.asarray(self._last_eval[0], dtype=float), self._poses[endpoint]
+        if self._leg_end_floor(pose, goal, endpoint, remaining, cfg.position_tolerance_m) != 0.0:
+            return False
+        _, _, across_end, _ = self._leg_end_geometry(pose, goal, endpoint, remaining)
+        return across_end > cfg.position_tolerance_m
+
     def distance_to_end_normal_m(self) -> float:
         """How far the last update()'s pose stands short of the current leg end's normal (0 at or past it)."""
         if self._last_eval is None:

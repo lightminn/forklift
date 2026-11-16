@@ -370,6 +370,8 @@ class MissionCore:
         self.scene_replan = SceneReplan(None, SceneReplanConfig(
             # docs/plans/2026-10-27-escape-presteer.md D2; off (and an options object from before it): as before
             escape_presteer=getattr(options, "escape_presteer", "off") == "on",
+            # docs/plans/2026-11-17-goal-band-and-cusp-retry.md B; off (and an options object from before it): as before
+            retry_blocked_triggers=("cusp_pose",) if getattr(options, "cusp_replan_retry", "off") == "on" else (),
             # sim-to-real 4a' D1: a given (real) kinematics' presteer tolerance, in its own steering angle
             **({"presteer_tolerance_rad": given_kinematics_.presteer_threshold_rad}
                if given_kinematics_ is not None else {})))
@@ -2289,6 +2291,9 @@ class MissionCore:
     GOAL_CREEP_WINDOW_M = 8e-4  # commanded travel; team-spec counts with hysteresis read >= 0.599 of it (worst case)
     GOAL_CREEP_WINDOW_TICKS = 120
     GOAL_CREEP_RATIO = 0.25
+    # Plan 2026-11-17-goal-band-and-cusp-retry A: a watch that entered through the band only (the filter false) latches
+    # only on a truck that hardly moved -- a slow convergence a curvature may still bend in is not taken
+    GOAL_CREEP_BAND_RATIO = 0.05
 
     def goal_creep(self, t: float, tracking, dt: float) -> str | None:
         """Plan 2026-10-24-goal-creep-stall G2, before the docking stop and stall rules read ``tracking``:
@@ -2308,9 +2313,17 @@ class MissionCore:
         key = [ms.phase, id(tracker), getattr(tracker, "leg_index", None)]
         if st["key"] != key:
             st.update(key=key, last_t=None, window=[], latched=False)
+        # Plan 2026-11-17 A (--goal-creep-band, off by default): R2 also enters in the filter's bend allowance band;
+        # R1 keeps the filter alone (Codex plan review P2). Off, the band is never asked and nothing below changes.
+        band_on = getattr(getattr(self, "options", None), "goal_creep_band", "off") == "on"
+        in_band = getattr(tracker, "leg_end_in_band", None)
         if (out_of_reach is None or applied is None or ms.phase not in ("transport", "return_home")
-                or tracking.status not in ("tracking", "braking") or tracking.at_cusp or tracking.off_path
-                or not out_of_reach()):
+                or tracking.status not in ("tracking", "braking") or tracking.at_cusp or tracking.off_path):
+            st.update(last_t=None, window=[], latched=False)
+            return None
+        reach = bool(out_of_reach())
+        band = (not reach) and band_on and in_band is not None and bool(in_band())
+        if not (reach or band):
             st.update(last_t=None, window=[], latched=False)
             return None
         if st["latched"]:
@@ -2321,7 +2334,8 @@ class MissionCore:
         if remaining <= self.GOAL_CREEP_R1_REMAINING_M:
             st["window"] = []
             creep = 1.5 * remaining + 1e-12
-            if (tracking.status == "tracking" and tracker.distance_to_end_normal_m() <= self.GOAL_CREEP_R1_NORMAL_M
+            if (reach and tracking.status == "tracking"
+                    and tracker.distance_to_end_normal_m() <= self.GOAL_CREEP_R1_NORMAL_M
                     and abs(tracking.speed_mps) <= creep and abs(applied) <= 1.5 * self.GOAL_CREEP_R1_REMAINING_M + 1e-12):
                 return "r1"
             return None
@@ -2335,12 +2349,15 @@ class MissionCore:
                and sum(a for a, _ in window) - window[0][0] >= self.GOAL_CREEP_WINDOW_M):
             window.pop(0)
         commanded, moved = sum(a for a, _ in window), sum(b for _, b in window)
+        ratio = self.GOAL_CREEP_RATIO if reach else self.GOAL_CREEP_BAND_RATIO
         if (len(window) >= self.GOAL_CREEP_WINDOW_TICKS and commanded >= self.GOAL_CREEP_WINDOW_M
-                and moved < self.GOAL_CREEP_RATIO * commanded):
+                and moved < ratio * commanded):
             st["latched"] = True
-            self.state.setdefault("goal_creep_stalls", []).append(
-                {"phase": ms.phase, "time_s": float(t), "remaining_m": float(remaining),
-                 "commanded_m": float(commanded), "odometry_m": float(moved), "ticks": len(window)})
+            entry = {"phase": ms.phase, "time_s": float(t), "remaining_m": float(remaining),
+                     "commanded_m": float(commanded), "odometry_m": float(moved), "ticks": len(window)}
+            if band:
+                entry["band"] = True  # entered through the band only (plan 2026-11-17 A); off records as before
+            self.state.setdefault("goal_creep_stalls", []).append(entry)
             return "r2"
         return None
 
@@ -8770,12 +8787,16 @@ class MissionCore:
         # Leg-failures plan A1: the strict check covers the zone's part of the leg only, from where it begins
         zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         dumps_ = getattr(self.options, "occupied_dumps", False)
+        # plan 2026-11-17 B: the retry needs this check's own cells; off (and no dumps): the call as before
+        req_ = getattr(self.scene_replan, "request_", None)
+        cells_ = dumps_ or (getattr(self.options, "cusp_replan_retry", "off") == "on" and req_ is not None
+                            and req_.get("trigger") == "cusp_pose")  # its own trigger's checks only (Codex review P3)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
             cap_mps=float(tracker.config.cruise_speed_mps), strict=strict_,
             strict_from_m=max(0.0, float(zone_start_)) if zone_start_ is not None else 0.0,
-            **({"with_cells": True} if dumps_ else {}))  # the diagnostic's cells; off: the call as before
+            **({"with_cells": True} if cells_ else {}))  # the diagnostic's or the retry's cells; off: as before
         out.update(ok=bool(permit_["ok"]), why=permit_["why"], permit=permit_)
         if dumps_:
             self._candidate_dump("candidate", t, pose_, permit_, leg=np.asarray(leg_, dtype=float),
@@ -9198,8 +9219,16 @@ class MissionCore:
             snap_ = getattr(layer_, "snapshot", None)
             return None if snap_ is None else (id(snap_), snap_.stamp_s)
 
+        def blocked_rectangles_(candidate_):
+            """Plan 2026-11-17 B: the candidate check's own cells (its walk, the ahead check, the zone) that the same
+            snapshot marks OCCUPIED -- an unknown cell is never an obstacle here -- grown into rectangles."""
+            from forklift_core.mission.permit_stop import candidate_blocked_rectangles
+
+            snap_ = getattr((obstacle or {}).get("layer"), "snapshot", None)
+            return candidate_blocked_rectangles(snap_, (candidate_.get("permit") or {}).get("cells") or {})
+
         return SimpleNamespace(stopped=stopped, busy=busy, release_hold=release_hold, submit=submit, poll=poll,
-                               snapshot_id=snapshot_id,
+                               snapshot_id=snapshot_id, blocked_rectangles=blocked_rectangles_,
                                candidate=candidate, install=install, escape_plan=escape_plan,
                                escape_probe=escape_probe, correction_version=correction_version,
                                grid_current=grid_current,

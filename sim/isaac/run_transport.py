@@ -834,6 +834,24 @@ def arguments() -> argparse.Namespace:
         "sweep for the trigger's rectangles. Off: as every earlier run (a record without this option replays off).",
     )
     parser.add_argument(
+        "--goal-creep-band",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-11-17-goal-band-and-cusp-retry.md A: the goal creep watch's R2 also takes a stand in the "
+        "leg end filter's bend allowance band (across the 8 mm tolerance by less than the curvature could bend back), "
+        "latching only on a truck that hardly moved (1/20 of the commanded travel); R1 keeps the filter. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
+        "--cusp-replan-retry",
+        choices=("on", "off"),
+        default="off",
+        help="docs/plans/2026-11-17-goal-band-and-cusp-retry.md B: a cusp_pose scene replan whose candidate the layer "
+        "refuses as blocked:occupied is planned again once, in the same request and budget, with that check's "
+        "occupied cells as obstacles; still refused, or the plan failing, it is refused as before. Off: as every "
+        "earlier run.",
+    )
+    parser.add_argument(
         "--observe-start-backoff",
         choices=("on", "off"),
         default="off",
@@ -7478,6 +7496,9 @@ def drive(S, isaac) -> None:
                                 observe_replans_per_leg=OBSERVE_REPLANS_PER_LEG, dwell_d_end_m=dwell_d_end_m,
                                 # docs/plans/2026-10-26-observe-start-backoff.md: off in a record from before the option
                                 observe_start_backoff=getattr(args, "observe_start_backoff", "off"),
+                                # docs/plans/2026-11-17-goal-band-and-cusp-retry.md A and B: off in a record from before them
+                                goal_creep_band=getattr(args, "goal_creep_band", "off"),
+                                cusp_replan_retry=getattr(args, "cusp_replan_retry", "off"),
                                 # docs/plans/2026-11-02-near-leg-end-stand-c2.md: off in a record from before the option
                                 near_end_stand=getattr(args, "near_end_stand", "off"),
                                 # docs/plans/2026-11-13-k1-near-loose-arrival.md: None in a record from before it
@@ -11958,6 +11979,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k != "destination_prior_error_along_m" or v != 0.0)
         # plan 2026-11-16-aisle-short-cusp-arc: not recorded absent, so a run without it records what it always did
         and (k != "short_cusp_arc" or v is not None)
+        # plan 2026-11-17-goal-band-and-cusp-retry: not recorded off, so a run without them records what it always did
+        and (k not in ("goal_creep_band", "cusp_replan_retry") or v != "off")
         # plan 2026-11-16-reloc-observe-move: not recorded off, so a run without it records what it always did
         and (k != "reloc_observe_move" or v != 0.0)
         # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did

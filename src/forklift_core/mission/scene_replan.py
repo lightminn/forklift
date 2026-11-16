@@ -56,6 +56,9 @@ class SceneReplanConfig:
     # measured steering before it is installed
     escape_presteer: bool = False
     escape_presteer_kappas: tuple = (0.05, -0.05)
+    # docs/plans/2026-11-17-goal-band-and-cusp-retry.md B: the triggers whose candidate, refused as blocked:occupied, is
+    # planned again once (same request, no budget) with the candidate check's occupied cells as obstacles; () off
+    retry_blocked_triggers: tuple = ()
 
 
 @dataclass
@@ -182,6 +185,8 @@ class SceneReplan:
 
     def _drop(self, t: float, back_to: str) -> StepResult | None:
         r = self.request_
+        if r.get("retry") is not None:
+            r["retry"]["rects"] = ()  # plan B: the old frame's cells never go into a later plan (the retry stays spent)
         r["record"]["drops"] += 1
         if r["record"]["drops"] > self.config.drops_per_request:
             return self._end("failed", f"scene_replan_failed:{r['trigger']}:dropped")
@@ -285,6 +290,8 @@ class SceneReplan:
             elif state == "plan":
                 try:
                     r["extra"] = tuple(r["extra_fn"]()) if r["extra_fn"] is not None else ()
+                    if r.get("retry") is not None and r["retry"]["rects"]:
+                        r["extra"] = r["extra"] + tuple(r["retry"]["rects"])  # plan B: added, never replacing
                 except Exception as exc:  # noqa: BLE001 -- the trigger's obstacles failed: no plan without them
                     r["record"]["obstacles_error"] = f"{type(exc).__name__}: {exc}"
                     return self._end("failed", f"scene_replan_failed:{trigger}:obstacles_error")
@@ -299,6 +306,13 @@ class SceneReplan:
                 if kind == "dropped":
                     out = self._drop(t, "wait_stop" if value == "moving" else "wait_jobs")
                     return out or hold
+                retry_ = r.get("retry")
+                if retry_ is not None and retry_["rects"] and r["record"]["retry"]["status"] is None:
+                    r["record"]["retry"]["status"] = "ok" if kind == "ok" else value
+                    if kind == "ok_fail":
+                        # plan B: the retry's own failure is a refusal of its trigger, not an escape (Codex plan P2)
+                        r["record"]["plan_status"] = value
+                        return self._end("refused", f"scene_replan_refused:{trigger}:retry_{value}")
                 if kind == "ok_fail":
                     r["record"]["plan_status"] = value
                     if value == "invalid_start" and r["escapes"] < self.config.escapes_per_request:
@@ -335,6 +349,9 @@ class SceneReplan:
                 r["seen"] = seen_
                 candidate = ports.candidate(value)
                 r["record"]["candidate"] = candidate
+                if (r.get("retry") is not None and r["record"]["retry"]["why"] is None
+                        and r["record"]["retry"]["status"] == "ok"):
+                    r["record"]["retry"]["why"] = candidate.get("why")  # the retry's own candidate, before any branch
                 status = candidate.get("status")
                 if status in REPLAN_STATUSES:
                     out = self._drop(t, "wait_jobs")
@@ -343,6 +360,17 @@ class SceneReplan:
                     r["changed"] = True
                     ports.install(value)  # its own rule takes it from here (arrival, the cusp heading hold)
                     return self._hand_back()
+                retry_ = r.get("retry")
+                if (not candidate.get("ok") and retry_ is None and trigger in self.config.retry_blocked_triggers
+                        and candidate.get("why") == "blocked:occupied"):
+                    # plan B: once per request, the candidate check's occupied cells as obstacles, planned again
+                    rects_ = tuple(ports.blocked_rectangles(candidate))
+                    r["retry"] = {"done": True, "rects": rects_}
+                    r["record"]["retry"] = {"rects": len(rects_), "first_why": candidate.get("why"), "status": None,
+                                            "why": None}
+                    if rects_:
+                        self._go("plan", t)
+                        continue
                 if not candidate.get("ok"):
                     # 7판: re-checked standing on every tick (new scans fill the grid in) for permit_wait_s, then refused.
                     if t - r["permit_since"] < self.config.permit_wait_s:
