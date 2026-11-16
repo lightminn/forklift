@@ -165,7 +165,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     armed = false;
   }
 
-  function teleopCommand({ mode, deadman, speedRatio, curvatureRatio, liftDir, frameId }) {
+  function teleopCommand({ mode, deadman, speedRatio, curvatureRatio, liftDir, frameId, client }) {
     if (!armed || lastTick === null || armGen === null || leaseId === null) return null;
     if (seqArmGen !== armGen) {
       seqArmGen = armGen;
@@ -187,6 +187,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
       lift_dir: liftDir > 0 ? 1 : liftDir < 0 ? -1 : 0,
     };
     if (mode === "video" && Number.isInteger(frameId)) msg.frame_echo = { frame_id: frameId };
+    if (client) msg.client = client; // the page's own report (send gap, visible, focused): recorded, never a decision
     return msg;
   }
 

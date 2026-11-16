@@ -724,6 +724,11 @@ class TeleopBridge:
             self._slow_cycles.clear()
             self._urgent = True
         rec["rate"] = self.rate.verdict
+        tele = a.teleop
+        # R2-3 (b): how long since the last accepted teleop and the console's own report (diagnostics only)
+        rec["teleop_age_ms"] = None if tele is None or tele.get("rx_mono") is None \
+            else round((now - tele["rx_mono"]) * 1e3, 1)
+        rec["teleop_client"] = None if tele is None else tele.get("client")
         if self.rate.verdict != self._rate_seen:
             rec["rate_changed"] = self.rate.verdict
             self._rate_seen = self.rate.verdict

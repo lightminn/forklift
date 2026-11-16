@@ -181,13 +181,16 @@ class Rig:
                                                "echo": {"state_seq": self.tick["state_seq"],
                                                         "token": self.tick["token"]}})
 
-    def teleop(self, speed_ratio=1.0, curvature_ratio=0.0, deadman=True):
+    def teleop(self, speed_ratio=1.0, curvature_ratio=0.0, deadman=True, client=None):
         a = self.arbiter
-        self.channels.message("c1", "op", {
+        msg = {
             "t": "teleop", "session_epoch": EPOCH, "lease_id": self.lease, "control_gen": a.control_gen,
             "arm_gen": a.arm_gen, "seq": next(self.seq), "mode": "direct", "lift_dir": 0, "deadman": deadman,
             "speed_ratio": speed_ratio, "curvature_ratio": curvature_ratio,
-            "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}})
+            "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}}
+        if client is not None:
+            msg["client"] = client
+        self.channels.message("c1", "op", msg)
 
     def cycle(self, *, echo=True, transmit=True, teleop=None, before=None):
         """20 ms: two MCU STATEs received, the bridge's cycle, then transmit (design 5's order)."""
@@ -796,6 +799,27 @@ def test_after_a_reconnect_nothing_moves_until_the_rate_is_verified_again_and_th
     assert not r.nonzero_sent(before) and r.bridge.phase != rt.READY and not r.host.authorized
     assert all(x["applied_mps"] == 0.0 for x in recs)
 
+
+
+def test_the_record_carries_the_teleop_age_and_the_consoles_own_state():
+    """R2-3 (b): every cycle with an accepted teleop names how long ago it came and what the console said of itself
+    (its send gap, whether its page was visible and focused) -- so a void can be put down to the console's pause."""
+    r = armed_rig()
+    client = {"vis": "visible", "focus": True, "gap_ms": 34.5}
+    for _ in range(3):
+        rec = r.cycle(teleop={"speed_ratio": 0.0, "client": client})
+    assert rec["teleop_age_ms"] is not None and 0 <= rec["teleop_age_ms"] <= 30
+    assert rec["teleop_client"] == client
+    rec = r.cycle()  # no teleop this cycle: the age grows
+    assert rec["teleop_age_ms"] >= 20
+    rec = r.cycle(teleop={"speed_ratio": 0.0, "client": {"vis": "x", "focus": "yes", "gap_ms": -1, "extra": 1}})
+    assert rec["teleop_client"] == {"vis": None, "focus": None, "gap_ms": None}  # cleaned, never trusted as is
+
+
+def test_a_teleop_without_a_client_field_still_drives():
+    r = armed_rig()
+    rec = r.cycle(teleop={"speed_ratio": 0.0})
+    assert rec["teleop_client"] is None and rec["teleop_age_ms"] is not None
 
 
 def test_delay_terms_add_up_to_the_bound():
