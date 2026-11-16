@@ -215,6 +215,25 @@ tools/m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profil
 - IMU 지연은 û 투영 rate 로 같은 식을 쓰고 `report_only`·`unknown_clock_offset:true` 다.
 - `m_synth` 는 `delay_s`(바퀴 속도 차와 실제 yaw 가 측정 q 를 그만큼 늦게 따름), `q_slew_rad_s`(측정 q 의 slew), `truth_method="B_camera"`(이동 점 `merge_end`·`run_042` 추가) 를 더한다.
 
+### 3.10 PR ③b — 사후 편향 변화율과 블록 기록(등록 개정 3, 10.1; 2026-11-16)
+
+등록 개정 3(#536)의 10.1 을 그대로 구현한다. 3.9 의 "③b 전까지 늘 `bias_slope_unconfirmed`" 는 이 절로 대체된다.
+
+- **입력:** `analyze(..., block_rows=[...])`, CLI `--block-record`(여러 번). 같은 IMU 연속 구간에 든 다른 텔레옵 기록이다(그날의 G3·M1·M2·M3·q 계단). 블록 기록은 스키마·합성 표시·같은 `host_boot_id`·깨끗한 끝 줄을 검사하고, 기록끼리 STATE 시간이 겹치면 거부한다. 블록 기록의 시행에는 값을 내지 않는다. 출력 `inputs.block_records` 에 경로·sha256 을 남긴다.
+- **정지 판정:** 모든 기록의 정지 구간을 합쳐 `_Imu` 의 정지로 쓴다.
+- **구간(`_bias_intervals`):**
+  - `trial`: 각 기록의 각 시행의 앞·뒤 창. 블록 기록은 일정표 파일이 없으므로 주행 경계는 그 시행의 `profile` 행 가운데 `req_mps ≠ 0` 인 첫·끝 행이다.
+  - `standing_record`: 시행이 없는 기록(G3 정지 등)의 정지 구간마다, 50 s 이상이면 그 끝에서 `quiet_window` 로 찾은 창 하나.
+  - `recheck_piece`: `field_log` 재확인 [시작, 끝] 을 시작부터 반열린 60 s 조각으로 자른 것. 기록이 덮는 조각은 그 STATE 정지 안에서만, 덮지 않으면 IMU 허용치만으로 찾는다. `passed`·`slope_rad_s2` 는 쓰지 않는다.
+  - 표본이 겹치면 `trial` > `standing_record` > `recheck_piece` 순, 같은 종류는 앞의 것을 남긴다.
+  - 값은 창 gyro 평균의 û 성분, 중심은 창 첫·끝 표본 시각의 중간이다.
+- **시행마다(`_bias_slope`):** 뒤 창 끝 이하에 중심이 있는 구간의 마지막 n = min(6, 있는 수). n ≥ 3 이면 최소제곱 기울기, |r| ≤ 3.5×10⁻⁷ 이면 통과, 넘으면 `bias_slope`, n < 3 이면 `bias_slope_unconfirmed`. 결과는 모든 측정의 `imu.bias_slope` 에 정보로 실린다. 판정에 쓰는 것은 M3 주행 중 점 IMU heading 하나다(통과면 그 사유가 빠지고, 아니면 `bias_slope`/`bias_slope_unconfirmed`).
+- `m_synth.synth_block`(시행·정지 기록을 같은 시계로 이어 붙여 IMU 파일 하나를 만든다, `bias_slope` 손잡이)과 `synth_still`(프로필 없는 정지 기록)을 더했다.
+- **연속 구간(Codex ③b 검토 P2):** 맞춤에는 그 시행의 뒤 창과 같은 IMU 시계 구간(장치 재시작·시계 단절이 새 구간)의 구간만 넣는다. 블록 기록은 IMU 파일 시간 안에 있어야 한다(밖이면 거부). 다른 구간의 창·재확인은 맞춤에 들어가지 않는다.
+- **남은 한계(적어 둠):** 기록이 덮지 않는 재확인 조각은 10.1 대로 IMU 허용치만으로 판정하므로, `field_log` 시각이 잘못 적혀 같은 연속 구간 안의 조용한 다른 시간을 가리키면 그 조각이 들어갈 수 있다. 재확인 행은 기록 신원(주 기록)과 시각 순서만 검사한다.
+- **고친 기존 결함(PR ① 코드, 총괄 결정 2026-11-16):** `_imu_series` 가 장치 시각이 직전보다 크지 않은 표본을 모두 버려, 장치가 뒤로 재시작하면(도착일 D435i 재연결) 새 시각이 옛 최대를 넘을 때까지 표본이 조용히 사라졌다. 이제 호스트 시각이 나아가지 않거나 장치 시각이 `RESTART_BACK_US`(20 ms) 이하로 되돌아간 표본(늦은 표본·반복)만 버리고, 더 큰 되돌아감은 재시작으로 남긴다. 새 구간은 `continuous_segments` 가 같은 규칙으로 나눈다(③b 연속 구간 정의와 같다). 시험 `test_a_backward_device_restart_keeps_the_new_stretch`.
+
+
 ## 4. `m_analysis.py` 변경(PR ①)
 
 **(가) 참값 heading 이름**(등록 3.3 261 행, 4.3 314 행)

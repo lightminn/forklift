@@ -44,6 +44,7 @@ CYCLE_STATES = 2  # a bridge cycle every second STATE (20 ms)
 GYRO_HZ, ACCEL_HZ = 400.0, 200.0
 BOOT = 0x5E57
 T0_NS = 100_000_000_000  # the record's start (host monotonic)
+DEV0_US = 123_456_789  # the IMU device clock at T0_NS - IMU_PAD_NS (a block's trials share it)
 PRE_S, POST_S = 1.5, 1.0  # standing before the trial starts (the runner wants >= 1 s) and after it ends
 IMU_PAD_NS = 500_000_000
 VOIDS = ("deadman", "ENCODER_JUMP_L", "STEER_SENSOR_INVALID", "boot_change", "time_not_increasing", "encoder_gap")
@@ -93,7 +94,8 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                 mcu_imu_offset_s: float = 0.0, imu_late_sample: bool = False, dev_us_wrap: bool = False,
                 deadman_wait_s: float = 0.0, synthetic: bool = True, trial: int = 1,
                 start_pose=(0.0, 0.0, 0.0), delay_s: float = 0.0, truth_method: str = "synthetic",
-                q_slew_rad_s: float | None = None) -> dict:
+                q_slew_rad_s: float | None = None, t0_ns: int = T0_NS, host_boot: str | None = None,
+                bias_slope: float = 0.0) -> dict:
     """``{"record": rows, "imu": rows, "truth": rows}`` for one trial of ``profile`` (a drive_profile/1 dict).
     ``still_s`` replaces every hold segment's length (tests that need no 60 s windows). ``void`` puts one defect
     into the drive (one of ``VOIDS``).
@@ -106,7 +108,11 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     ``delay_s``: the wheel-speed difference and the true yaw follow the measured q this late (linear between ticks;
     the M3 q-step delay the entry must recover). ``truth_method``: ``"synthetic"`` (stop poses only) or
     ``"B_camera"`` (the header says B_camera, still marked synthetic, and the M3 moving points are added).
-    ``q_slew_rad_s``: the measured q moves toward its target at this rate (None: it is there at once)."""
+    ``q_slew_rad_s``: the measured q moves toward its target at this rate (None: it is there at once).
+
+    Block use (``synth_block``): ``t0_ns`` starts the record later on the same host and MCU clocks (the MCU time,
+    the IMU device clock and the bias slope all count from ``T0_NS``, so trials of one block line up), ``host_boot``
+    names the host boot, ``bias_slope`` (rad/s^2) adds a bias growing along the up axis."""
     if not (true_radius_scale > 0 and math.isfinite(true_radius_scale)):
         raise ValueError("true_radius_scale must be positive")
     if not (delay_s >= 0 and math.isfinite(delay_s)):
@@ -128,10 +134,11 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     runner = dprof.ProfileRunner(dprof.parse_profile(data, lim), lim)
     runner.trial = trial - 1
     kin = RealKinematics(cfg)
-    host_boot = f"synthetic-{seed}"
+    host_boot = host_boot or f"synthetic-{seed}"
+    t0 = int(t0_ns)
     rec = [{"t": "header", "schema": "teleop_bridge_record/1", "tool": "m_synth", "device": "synthetic",
             "device_id": None, "synthetic": bool(synthetic), "host_boot_id": host_boot, "start_wall": 0.0,
-            "start_mono_ns": T0_NS}]
+            "start_mono_ns": t0}]
 
     # the plant
     pose = tuple(float(v) for v in start_pose)
@@ -156,12 +163,12 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     last_label = None
     k = 0
     while True:
-        host = T0_NS + k * STATE_DT_NS
+        host = t0 + k * STATE_DT_NS
         cycle = k % CYCLE_STATES == 0
         # the bridge cycle (before the plant moves this tick: it decides on what it saw)
         if cycle:
-            if not started and host - T0_NS >= PRE_S * 1e9:
-                why = runner.start(host, standstill_s=(host - T0_NS) / 1e9, armed=True)
+            if not started and host - t0 >= PRE_S * 1e9:
+                why = runner.start(host, standstill_s=(host - t0) / 1e9, armed=True)
                 assert why is None, why
                 started, start_ns, truth_start = True, host, pose
                 rec.append({"t": "profile_start", "host_ns": host, "trial": runner.trial,
@@ -271,17 +278,17 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                 break
         if k > 10_000_000:
             raise RuntimeError("the synthetic trial did not end")
-    rec.append({"t": "footer", "host_ns": T0_NS + k * STATE_DT_NS, "finished": True, "unwritten": 0, "dropped": 0,
+    rec.append({"t": "footer", "host_ns": t0 + k * STATE_DT_NS, "finished": True, "unwritten": 0, "dropped": 0,
                 "write_errors": 0})
 
     # the IMU
     ticks = np.asarray(ticks_ns, dtype=np.int64)
     om = np.asarray(omega, float)
-    imu_t0 = T0_NS - IMU_PAD_NS
+    imu_t0 = t0 - IMU_PAD_NS
     imu_t1 = ticks_ns[-1] + IMU_PAD_NS
     off_ns = int(round(mcu_imu_offset_s * 1e9))
     mid = moving_since + (moving_last - moving_since) // 2 if moving_since is not None else (imu_t0 + imu_t1) // 2
-    dev0 = (WRAP_US - (mid - imu_t0) // 1000) if dev_us_wrap else 123_456_789
+    dev0 = (WRAP_US - (mid - imu_t0) // 1000) if dev_us_wrap else DEV0_US + (imu_t0 - (T0_NS - IMU_PAD_NS)) // 1000
     rows = []
     for s, hz in (("g", GYRO_HZ), ("a", ACCEL_HZ)):
         n = int((imu_t1 - imu_t0) * hz / 1e9)
@@ -291,7 +298,7 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
             # tick that starts there, so the staircase is centred on the STATE times (no half-tick lag against them)
             idx = np.clip(np.searchsorted(ticks, t + STATE_DT_NS // 2, side="right") - 1, 0, len(om) - 1)
             w = np.where((t >= ticks[0]) & (t < ticks[-1] + STATE_DT_NS), om[idx], 0.0)
-            xyz = w[:, None] * up[None, :] + bias[None, :]
+            xyz = w[:, None] * up[None, :] + bias[None, :] + (bias_slope * (t - T0_NS) / 1e9)[:, None] * up[None, :]
             if step is not None and moving_since is not None:
                 xyz = xyz + (t >= moving_since)[:, None] * step[None, :]
             xyz = xyz + rng.normal(0.0, arw * math.sqrt(hz), size=(n, 3))
@@ -328,10 +335,94 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
         for pid, (h, p) in moving_pts.items():
             points[pid] = {**point(p), "kind": "moving_point", "host_ns": int(h), "cov": copy.deepcopy(MOVING_COV)}
     truth = [{"t": "header", "schema": "truth/1", "method": truth_method, "synthetic": bool(synthetic),
-              "record": {"host_boot_id": host_boot, "start_mono_ns": T0_NS}, "body_point": "rear_axle_center",
+              "record": {"host_boot_id": host_boot, "start_mono_ns": t0}, "body_point": "rear_axle_center",
               "frame": "floor", "sigma": dict(TRUTH_SIGMA)},
              {"t": "truth", "trial": runner.trial, "points": points}]
-    return {"record": rec, "imu": imu, "truth": truth}
+    return {"record": rec, "imu": imu, "truth": truth, "imu_span": (int(imu_t0), int(imu_t1))}
 
 
-__all__ = ["ARW_DESK", "G", "TRUTH_METHODS", "VOIDS", "profile_limits", "synth_trial", "unit"]
+def _imu_still(t_from: int, t_to: int, *, host_boot, up, bias, bias_slope, arw, rng, synthetic) -> list:
+    """Gyro and accelerometer rows of a standing truck over [t_from, t_to) on the block's clocks."""
+    rows = []
+    for s_, hz in (("g", GYRO_HZ), ("a", ACCEL_HZ)):
+        n = int((t_to - t_from) * hz / 1e9)
+        t = t_from + np.round(np.arange(n) * 1e9 / hz).astype(np.int64)
+        if s_ == "g":
+            xyz = bias[None, :] + (bias_slope * (t - T0_NS) / 1e9)[:, None] * up[None, :]
+            xyz = xyz + rng.normal(0.0, arw * math.sqrt(hz), size=(n, 3))
+        else:
+            xyz = np.repeat((G * up)[None, :], n, axis=0)
+        for ti, v in zip(t.tolist(), xyz.tolist(), strict=True):
+            rows.append({"t": "imu", "s": s_, "dev_us": int((DEV0_US + (ti - (T0_NS - IMU_PAD_NS)) // 1000) % WRAP_US),
+                         "ts_ms": (ti - t_from) / 1e6, "dom": "GLOBAL_TIME", "host_ns": ti, "x": v[0], "y": v[1],
+                         "z": v[2]})
+    return rows
+
+
+def synth_still(cfg, *, seconds: float, t0_ns: int = T0_NS, host_boot: str = "synthetic-block",
+                up=(0.0, -1.0, 0.0), bias=(0.0, 0.0, 0.0), bias_slope: float = 0.0, arw: float = ARW_DESK,
+                seed: int = 0, synthetic: bool = True) -> dict:
+    """A record of a truck standing ``seconds`` with no profile (a G3 stop, or any standstill of the day): STATE
+    rows every 10 ms with no wheel motion, and its IMU rows. Same keys as ``synth_trial`` (truth None)."""
+    up = unit(up)
+    rng = np.random.default_rng(seed)
+    t0 = int(t0_ns)
+    n = int(seconds * 1e9 / STATE_DT_NS)
+    rec = [{"t": "header", "schema": "teleop_bridge_record/1", "tool": "m_synth", "device": "synthetic",
+            "device_id": None, "synthetic": bool(synthetic), "host_boot_id": host_boot, "start_wall": 0.0,
+            "start_mono_ns": t0}]
+    for k in range(n):
+        host = t0 + k * STATE_DT_NS
+        row = state_row(Sample(host, _state(1_000_000 + (host - T0_NS) // 1000, BOOT, (0, 0), (0.0, 0.0), 0.0)))
+        row["read_ns"] = host
+        rec.append(row)
+    rec.append({"t": "footer", "host_ns": t0 + n * STATE_DT_NS, "finished": True, "unwritten": 0, "dropped": 0,
+                "write_errors": 0})
+    imu_t0, imu_t1 = t0 - IMU_PAD_NS, t0 + n * STATE_DT_NS + IMU_PAD_NS
+    rows = _imu_still(imu_t0, imu_t1, host_boot=host_boot, up=up, bias=np.asarray(bias, float),
+                      bias_slope=bias_slope, arw=arw, rng=rng, synthetic=synthetic)
+    return {"record": rec, "imu": rows, "truth": None, "imu_span": (imu_t0, imu_t1)}
+
+
+def synth_block(items: list, cfg, *, host_boot: str = "synthetic-block", bias_slope: float = 0.0,
+                arw: float = ARW_DESK, up=(0.0, -1.0, 0.0), bias=(0.0, 0.0, 0.0), seed: int = 0,
+                synthetic: bool = True, imu_restart_before: int | None = None,
+                imu_jump_us: int = 50_000_000) -> dict:
+    """One IMU file over several records of one day (entry design 3.10; registration revision 3, 10.1): each item is
+    ``{"profile": p, **synth_trial kwargs}`` or ``{"stand_s": seconds}``, laid end to end on the same host and MCU
+    clocks so the IMU runs on without a gap. Returns ``{"records": [rows...], "truths": [rows or None...], "imu":
+    rows}``; the bias grows by ``bias_slope`` throughout. ``imu_restart_before``: the IMU device clock jumps by
+    ``imu_jump_us`` (ahead, or back -- a device restart such as a D435i reconnect) at the start of that item while the
+    host clock runs on -- a new continuous IMU stretch."""
+    records, truths, imu = [], [], []
+    cursor = T0_NS
+    common = dict(host_boot=host_boot, bias_slope=bias_slope, arw=arw, up=up, bias=bias, synthetic=synthetic)
+    for i, item in enumerate(items):
+        item = dict(item)
+        if "stand_s" in item:
+            out = synth_still(cfg, seconds=float(item.pop("stand_s")), t0_ns=cursor, seed=seed + i, **common, **item)
+            body = out["imu"]
+        else:
+            prof = item.pop("profile")
+            out = synth_trial(prof, cfg, t0_ns=cursor, seed=seed + i, trial=1, **common, **item)
+            body = [r for r in out["imu"] if r.get("t") == "imu"]
+        records.append(out["record"])
+        truths.append(out["truth"])
+        if imu_restart_before is not None and i >= imu_restart_before:
+            body = [{**r, "dev_us": (r["dev_us"] + imu_jump_us) % WRAP_US} for r in body]
+        imu.extend(body)
+        cursor = out["imu_span"][1] + IMU_PAD_NS  # the next IMU span starts where this one ended
+    imu.sort(key=lambda r: (r["host_ns"], r["s"]))
+    t_from, t_to = imu[0]["host_ns"], imu[-1]["host_ns"]
+    head = [{"t": "header", "schema": "imu_record/1", "tool": "m_synth", "host_clock": "monotonic",
+             "host_boot_id": host_boot, "start_wall": 0.0, "start_host_ns": t_from, "synthetic": bool(synthetic)},
+            {"t": "profile", "host_ns": t_from, "rate_mismatch": False,
+             "actual": {"gyro_hz": GYRO_HZ, "accel_hz": ACCEL_HZ},
+             "options": {"enable_motion_correction": {"requested": 0, "read_back": 0},
+                         "global_time_enabled": {"requested": 1, "read_back": 1}}}]
+    foot = {"t": "footer", "stop": "seconds", "seconds": (t_to - t_from) / 1e9, "dropped": 0, "write_errors": 0}
+    return {"records": records, "truths": truths, "imu": head + imu + [foot]}
+
+
+__all__ = ["ARW_DESK", "G", "TRUTH_METHODS", "VOIDS", "profile_limits", "synth_block", "synth_still", "synth_trial",
+           "unit"]

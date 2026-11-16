@@ -1,10 +1,10 @@
 """G8 entry: bridge record + IMU record + truth -> per-trial M values (docs/design/2026-11-15-m-analyze-entry.md).
 
 ``analyze`` checks identity (section 2), voids what 3.4 voids, and computes M1 (3.5) with the report-only IMU block,
-M2 (3.6, PR 2) and M3 (3.7 merge points and moving-point IMU heading, 3.8 q-step delay; PR 3a). The bias-slope check
-over a block of trials (3.3 7) is PR 3b: until then a moving-point IMU heading is ``bias_slope_unconfirmed``. No
-threshold of the registered reading is applied beyond the truth budget and the IMU limits: the output (section 5)
-is per-trial values plus whether each can be judged.
+M2 (3.6, PR 2) and M3 (3.7 merge points and moving-point IMU heading, 3.8 q-step delay; PR 3a), and the in-trial
+bias-slope check judged afterwards over every record of the IMU stretch (``block_rows``; registration revision 3,
+10.1; entry 3.10, PR 3b). No threshold of the registered reading is applied beyond the truth budget and the IMU
+limits: the output (section 5) is per-trial values plus whether each can be judged.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from forklift_core.plant import m_analysis as ma
 from forklift_core.plant.clock_map import clock_fits_from_rows, fit_clock
 from forklift_core.plant.record_rows import sample_from_row
 from forklift_core.sensors.imu_mount import _unit, _vec3
-from forklift_core.sensors.imu_record import continuous_segments, imu_stream
+from forklift_core.sensors.imu_record import RESTART_BACK_US, continuous_segments, imu_stream
 
 REGISTRATION_DOC = "docs/plans/2026-11-15-m1-m3-registration.md"
 REGISTERED = {
@@ -196,10 +196,14 @@ def _state_times(rec_rows):
 
 
 def _imu_series(rows, stream):
+    """One stream on the host clock. A sample whose host time does not advance, or whose device time repeats or
+    steps back by no more than ``RESTART_BACK_US`` (a late sample), is dropped; a larger step back is a device
+    restart (a D435i reconnect) and is kept -- ``continuous_segments`` starts a new stretch there by the same rule,
+    so the samples after it are not lost until they pass the old maximum (entry 3.10; lead 2026-11-16)."""
     st = imu_stream(rows, stream=stream)
     keep, dropped, ld, lh = [], 0, None, None
     for i, (d, h) in enumerate(zip(st.dev_us.tolist(), st.host_ns.tolist())):
-        if ld is not None and (d <= ld or h <= lh):
+        if ld is not None and (h <= lh or (d <= ld and ld - d <= RESTART_BACK_US)):
             dropped += 1
             continue
         keep.append(i)
@@ -494,6 +498,109 @@ def _imu_kappa(imu: dict, dist: dict, direction: int) -> dict:
     return _value(float(dyaw) / (float(s) * direction), False, why, report_only=True, distance_source=source)
 
 
+# --- bias slope over the IMU stretch (registration revision 3, 10.1; entry 3.10, PR 3b) ------------------------------
+
+SLOPE_WINDOWS = 6  # the moving fit's last n intervals
+SLOPE_MIN = 3  # fewer: no slope, bias_slope_unconfirmed
+RECHECK_PIECE_S = 60.0
+INTERVAL_KINDS = ("trial", "standing_record", "recheck_piece")  # kept in this order where windows overlap
+
+
+def _drive_bounds(rows, trial):
+    """The first and last host time a trial's profile asked for motion (a block record's profile file is not at
+    hand: its rows say where it drove)."""
+    drive = [r["host_ns"] for r in rows if r.get("t") == "profile" and r.get("trial") == trial
+             and abs(float(r.get("req_mps") or 0.0)) > 0.0]
+    return (min(drive), max(drive)) if drive else None
+
+
+def _bias_intervals(imu, recs, field_rows) -> list:
+    """Every bias interval of the IMU stretch (10.1): trial before/after windows of every record, one window per
+    standstill of a record without trials (a G3 stop), and the 60 s pieces of the field log's rechecks; windows that
+    share samples count once (trial windows over standstill windows over recheck pieces, the earlier first)."""
+    if imu.why or imu.t is None:
+        return []
+    c = REGISTERED
+    kw = dict(max_s=c["quiet_max_s"], min_s=c["quiet_min_s"], gyro_tol=c["quiet_gyro_tol_rad_s"],
+              accel_tol=c["quiet_accel_tol_mps2"], gap_max_ns=IMU_GAP_NS)
+    found = []
+    for rec in recs:
+        trs = [t for t in ma.trials(rec["rows"], valid_only=False) if t.spans]
+        span = (int(rec["times"][0]), int(rec["times"][-1]))
+        if trs:
+            for tr in trs:
+                d = _drive_bounds(rec["rows"], tr.trial)
+                if d is None:
+                    continue
+                t0, t1 = min(s[0] for s in tr.spans.values()), max(s[1] for s in tr.spans.values())
+                bw = imu.windows(t0, t1, d[0], d[1], rec_span=span)
+                if not bw["why"]:
+                    found += [("trial", bw["w0"]), ("trial", bw["w1"])]
+        else:
+            for lo, hi in rec["standing"]:
+                if hi - lo >= c["quiet_min_s"] * 1e9:
+                    w = ma.quiet_window(imu.t, imu.g, imu.a, boundary_ns=hi, side="before", standing=[(lo, hi)], **kw)
+                    if w is not None:
+                        found.append(("standing_record", w))
+    covered = [(int(r["times"][0]), int(r["times"][-1])) for r in recs]
+    standing = [iv for r in recs for iv in r["standing"]]
+    piece = int(RECHECK_PIECE_S * 1e9)
+    for r in field_rows or ():
+        if r.get("t") != "bias_recheck":
+            continue
+        k = int(r["recheck_start_ns"])
+        while k + piece <= int(r["recheck_end_ns"]):
+            # a piece a record covers must also stand by its STATEs; elsewhere the IMU tolerances alone (10.1)
+            # pieces are half-open [k, k + 60 s): adjacent pieces never share their boundary sample
+            end = k + piece - 1
+            on_rec = any(a <= k and end <= b for a, b in covered)
+            within = [(max(lo, k), min(hi, end)) for lo, hi in standing if lo <= end and hi >= k] if on_rec \
+                else [(k, end)]
+            w = ma.quiet_window(imu.t, imu.g, imu.a, boundary_ns=end, side="before", standing=within, **kw) \
+                if within else None
+            if w is not None and imu.t[w[0]] >= k:
+                found.append(("recheck_piece", w))
+            k += piece
+    found.sort(key=lambda x: (INTERVAL_KINDS.index(x[0]), x[1][0]))
+    kept: list = []
+    for kind, (s_, e_) in found:
+        if all(e_ <= a or s_ >= b for _k, (a, b) in kept):
+            kept.append((kind, (s_, e_)))
+    u = _unit(_vec3(imu.up))
+    out = [dict(kind=kind, start_ns=int(imu.t[s_]), end_ns=int(imu.t[e_ - 1]),
+                center_ns=(int(imu.t[s_]) + int(imu.t[e_ - 1])) // 2, value=float(imu.g[s_:e_].mean(axis=0) @ u))
+           for kind, (s_, e_) in kept]
+    return sorted(out, key=lambda x: x["center_ns"])
+
+
+def _segment(imu, t_ns: int) -> int:
+    """Which continuous IMU clock segment a host time falls in (a device restart or a clock gap starts a new one)."""
+    return int(np.searchsorted(np.asarray(imu.bounds, dtype=np.int64), t_ns, side="right"))
+
+
+def _bias_slope(intervals, imu, bw) -> dict:
+    """The trial's moving fit (10.1): intervals of the trial's own continuous IMU stretch (a clock break ends the
+    stretch: earlier windows, block records or rechecks before it never enter; Codex PR 3b review P2) centred no later
+    than its after window's end, the last n = min(6, available); n >= 3 gives the least-squares slope of the yaw-axis
+    bias against time."""
+    thr = REGISTERED["bias_slope_rad_s2"]
+    if bw["why"]:
+        return dict(value=None, judgeable=False, why=list(bw["why"]), n_windows=0, threshold=thr)
+    end = int(imu.t[bw["w1"][1] - 1])
+    seg = _segment(imu, end)
+    use = [iv for iv in intervals if iv["center_ns"] <= end and _segment(imu, iv["start_ns"]) == seg
+           and _segment(imu, iv["end_ns"]) == seg][-SLOPE_WINDOWS:]
+    base = dict(n_windows=len(use), centers_ns=[iv["center_ns"] for iv in use], kinds=[iv["kind"] for iv in use],
+                threshold=thr)
+    if len(use) < SLOPE_MIN:
+        return dict(value=None, judgeable=False, why=["bias_slope_unconfirmed"], **base)
+    x = np.array([(iv["center_ns"] - use[0]["center_ns"]) / 1e9 for iv in use])
+    y = np.array([iv["value"] for iv in use])
+    r = float(np.polyfit(x, y, 1)[0])
+    ok = abs(r) <= thr
+    return dict(value=r, judgeable=ok, **({} if ok else {"why": ["bias_slope"]}), **base)
+
+
 # --- M3 ------------------------------------------------------------------------------------------------------------
 
 M3_RULES = dict(A_floor_marks="A_substitute_cont_end_stop", synthetic="A_substitute_cont_end_stop",
@@ -607,11 +714,11 @@ def _m3_merge(tr, pts, ctx, i_start, i1):
     return dist, vals, budget, rule
 
 
-def _m3_imu_heading(imu, bw, ctx, i_start, move_ns, points) -> dict:
+def _m3_imu_heading(imu, bw, ctx, i_start, move_ns, points, slope=None) -> dict:
     """The gyro heading at the moving points (A, registration 5.4, 6.3): odometry minus IMU heading change from the
     standstill before the movement to the point, bias = the two windows' mean. A value only when the body N of each
     window is within k(T) x desk N, its lower bound within 1 mrad, the net rotation within the free rotation and
-    the bias slope confirmed -- the slope check over a block is PR 3b, so it is ``bias_slope_unconfirmed`` here."""
+    the bias slope within its limit (``slope``: the trial's moving fit, 10.1; none given: unconfirmed)."""
     c = REGISTERED
     out = {}
     odo = ctx["odo"]
@@ -647,7 +754,10 @@ def _m3_imu_heading(imu, bw, ctx, i_start, move_ns, points) -> dict:
             why_l.append("lower_bound_over_budget")
         if abs(h) > c["free_rotation_rad"]:
             why_l.append("no_gyro_scale")
-        why_l.append("bias_slope_unconfirmed")
+        if slope is None or slope["value"] is None:
+            why_l.append("bias_slope_unconfirmed")
+        elif not slope["judgeable"]:
+            why_l.append("bias_slope")
         out[pid] = dict(value=odo_dyaw - h, judgeable=False, why=why_l, imu_dyaw_rad=h, odo_dyaw_rad=odo_dyaw,
                         n_body_over_desk=ratio, sigma_lower=lower, bias_change_yaw_rad_s=bw["db"], **base)
     return out
@@ -769,14 +879,15 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
     if not moved:
         return void("no_motion")
     out.update(status="valid", window_ns=[int(t0), int(t1)], move_start_ns=int(times[moved[0]]))
+    rec_span = (int(times[0]), int(times[-1]))
+    slope = _bias_slope(ctx["intervals"], ctx["imu"], ctx["imu"].windows(t0, t1, d0, d1, rec_span=rec_span))
     if kind == "m2":
         out["distance"], out["values"], budget = _m2(tr, pts, rec_rows, ctx, moved[0] - 1, i1, int(times[moved[0]]))
         if budget is not None:
             out["truth_budget"] = budget
-        out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
+        out["imu"] = {**ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
         out["values"]["imu_kappa_inv_m"] = _imu_kappa(out["imu"], out["distance"], out["values"]["direction"])
         return out
-    rec_span = (int(times[0]), int(times[-1]))
     if kind == "m3_merge":
         i_start = moved[0] - 1
         out["distance"], out["values"], budget, out["truth_rule"] = _m3_merge(tr, pts, ctx, i_start, i1)
@@ -785,12 +896,12 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
         imu = ctx["imu"]
         bw = imu.windows(t0, t1, d0, d1, rec_span=rec_span)
         points = {"merge_end": int(tr.spans["cont"][0]), "run_042": int(tr.spans["still_post"][0])}
-        out["values"]["imu_heading"] = _m3_imu_heading(imu, bw, ctx, i_start, int(times[moved[0]]), points)
-        out["imu"] = imu.trial(t0, t1, d0, d1, rec_span=rec_span)
+        out["values"]["imu_heading"] = _m3_imu_heading(imu, bw, ctx, i_start, int(times[moved[0]]), points, slope)
+        out["imu"] = {**imu.trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
         return out
     if kind == "m3_qstep":
         out["values"] = _m3_qstep(tr, rec_rows, ctx, i0, i1)
-        out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span)
+        out["imu"] = {**ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
         return out
     s_m = [float(r["s_m"]) for r in rec_rows if r.get("t") == "profile" and r.get("trial") == tr.trial
            and r.get("s_m") is not None]
@@ -798,12 +909,26 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
                                                  max(s_m, default=None))
     if budget is not None:
         out["truth_budget"] = budget
-    out["imu"] = ctx["imu"].trial(t0, t1, d0, d1, rec_span=(int(times[0]), int(times[-1])))
+    out["imu"] = {**ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
     return out
 
 
+def _check_block(rows, rec, marks, allow_synthetic) -> None:
+    """A block record (another teleop record of the same IMU stretch, 10.1): a clean teleop record of the same host
+    boot; it adds standing windows only."""
+    try:
+        hdr = _header(rows, "record")
+        marks.update(refuse_or_mark([hdr], allow=allow_synthetic))
+    except (Refused, SyntheticRefused) as e:
+        raise Refused(f"block record: {getattr(e, 'why', e)}") from e
+    _need(hdr.get("host_boot_id") == rec.get("host_boot_id"), "block record: host_boot_id differs from the record")
+    foot = rows[-1]
+    _need(foot.get("t") == "footer" and foot.get("dropped") == 0 and foot.get("write_errors") == 0,
+          "block record: no clean footer as the last row")
+
+
 def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, allow_synthetic=False, no_truth=False,
-            trial=None) -> dict:
+            trial=None, block_rows=None) -> dict:
     """The m_analyze/1 result for one bridge record (entry design 5); raises ``Refused`` on any identity failure."""
     name = profile.get("name") if isinstance(profile, dict) else None
     kind = next((k for p, k in MEASUREMENTS if isinstance(name, str) and name.startswith(p)), None)
@@ -835,11 +960,25 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     states = [sample_from_row(r).state for r in srows]
     odo = ma.odometry_pose(states, cfg, max_gap_s=MAX_GAP_S)
     upv = _unit(_vec3(up))
-    imu = _Imu(imu_rows, upv, _standing(times, states, cfg))
+    recs = [dict(rows=rec_rows, times=times, standing=_standing(times, states, cfg))]
+    for rows in block_rows or ():
+        _check_block(rows, rec, marks, allow_synthetic)
+        _b_rows, b_times, _fi, _fits, _x = _state_times(rows)
+        _need(len(b_times) >= 2, "block record: fewer than two STATEs")
+        recs.append(dict(rows=rows, times=b_times,
+                         standing=_standing(b_times, [sample_from_row(r).state for r in _b_rows], cfg)))
+    spans = sorted((int(r["times"][0]), int(r["times"][-1])) for r in recs)
+    for (a0, a1), (b0, b1) in zip(spans, spans[1:]):
+        _need(b0 > a1, "block record: records overlap in time (one STATE source at a time)")
+    imu = _Imu(imu_rows, upv, [iv for r in recs for iv in r["standing"]])
+    if imu.t is not None:
+        for r in recs[1:]:  # a block record must lie inside the IMU file (Codex PR 3b review P2)
+            _need(imu.t[0] <= r["times"][0] and r["times"][-1] <= imu.t[-1], "block record: outside the IMU file")
     ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
                extrapolated=extrapolated,
                states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),
-               drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu)
+               drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu,
+               intervals=_bias_intervals(imu, recs, field_rows))
     results = [_trial(t, kind, rec_rows, ctx) for t in trs if trial is None or t.trial == trial]
     voids: dict = {}
     for r in results:
