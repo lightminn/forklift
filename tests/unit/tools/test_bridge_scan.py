@@ -336,3 +336,28 @@ def test_parse_mask():
     assert bs.parse_mask(None) == [] and bs.parse_mask("") == []
     with pytest.raises(ValueError):
         bs.parse_mask("10:5")
+
+
+def test_a_scan_newer_than_the_newest_state_is_dropped_not_pinned():
+    w = World()
+    w.step(25)
+    angles, ranges = cast((0.0, 0.0, 0.0), MOUNT, WALLS)
+    future = w.host + 400 * MS
+    w.feed.queue.append(scan(700, future, ranges, angles))  # its time is past every STATE so far
+    w.permit.poll(w.host)
+    assert w.permit.status()["dropped"].get("after_states", 0) == 1
+
+
+def test_a_slow_scan_period_closes_and_a_normal_one_reopens():
+    w = World()
+    w.step(25)
+    assert w.ask()[0] > 0.0
+    angles, ranges = cast((0.0, 0.0, 0.0), MOUNT, WALLS)
+    for _ in range(12):  # scans every 200 ms: past 1.5 x the nominal 100 ms
+        w.step(10, scans=False)
+        w.feed.queue.append(scan(w.k, w.host, ranges, angles))
+        w.k += 1
+        w.permit.poll(w.host)
+    assert w.ask() == (0.0, "scan_period")
+    w.step(60)
+    assert w.ask()[0] > 0.0

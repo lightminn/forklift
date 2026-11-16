@@ -53,8 +53,11 @@ def parse_mount(text: str) -> tuple[float, float, float, float]:
 
 
 def _interp_pose(hist, t: float):
-    """The pose at ``t`` between the two history entries around it (yaw unwrapped); the newest past its end."""
-    if t >= hist[-1][0]:
+    """The pose at ``t`` between the two history entries around it (yaw unwrapped); None outside the history (a
+    scan newer than the newest STATE is never pinned to it)."""
+    if t > hist[-1][0]:
+        return None
+    if t == hist[-1][0]:
         return hist[-1][1]
     items = list(hist)
     for (ta, pa), (tb, pb) in zip(items, items[1:], strict=False):
@@ -195,7 +198,7 @@ class ScanPermit:
                 continue
             pose = _interp_pose(self.hist, t_scan)
             if pose is None:
-                self._drop("before_states")
+                self._drop("after_states")
                 continue
             angles = np.asarray(scan.angles, dtype=float)
             ranges = np.asarray(scan.ranges, dtype=float)
