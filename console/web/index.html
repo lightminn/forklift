@@ -272,6 +272,8 @@
             <div class="notice warn">영상이 끊겨 조종 준비가 풀렸습니다. 육안으로 계속하려면 지게차가 직접 보이는지 확인하세요.</div>
             <button class="btn" id="direct-ok" type="button">지게차가 직접 보인다</button>
           </div>
+          <div class="tele-hidden" id="tele-hidden" hidden><b>화면이 가려졌습니다</b> 이 탭이 앞에 있고 창이 선택돼 있어야 텔레옵이 이어집니다. 가려진 동안에는 차가 멈추고 시행이 무효가 됩니다.</div>
+          <div class="tele-gap mono" id="tele-gap">송신 간격 —</div>
           <div class="pads">
             <button class="deadman" id="deadman" type="button" data-on="false"><b>누르고 있기</b><small>누르는 동안만 움직임<br>떼면 즉시 0 속도</small></button>
             <div class="joy" id="joy" aria-disabled="true" aria-label="주행 조이스틱: 위아래 속도, 좌우 조향">

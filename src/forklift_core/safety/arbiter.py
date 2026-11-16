@@ -594,7 +594,10 @@ class Arbiter:
         self.teleop = {"deadline": deadline, "mode": mode, "deadman": msg.get("deadman") is True,
                        "speed_ratio": _ratio(msg.get("speed_ratio")), "curvature_ratio": _ratio(msg.get("curvature_ratio")),
                        "lift_dir": int(msg.get("lift_dir") or 0), "expiry": "stale_video" if mode == "video" and
-                       deadline < sent + self.config.command_max_age_s else "expired"}
+                       deadline < sent + self.config.command_max_age_s else "expired",
+                       # diagnostics only, never a decision input (R2-3 (b)): when it came and what the console said
+                       # of its own page -- its send gap and whether it was visible and focused
+                       "rx_mono": now_mono, "client": _client(msg.get("client"))}
         return None
 
     def _check_deadline(self, now_mono: float) -> None:
@@ -995,6 +998,20 @@ class Arbiter:
             return self._reply("mission_cancel", request_id, "stopped_locked" if self.mode == "STOPPED" else "invalid")
         return self._mission_request(client_id, request_id, "mission_cancel",
                                      Cancel(msg.get("mission_id"), request_id=request_id))
+
+
+def _client(value) -> dict | None:
+    """The console's report of its own page in a teleop (R2-3 (b)): kept for the record, cleaned field by field --
+    a wrong type reads as None, unknown fields are dropped. Never used for a decision."""
+    if not isinstance(value, dict):
+        return None
+    vis = value.get("vis")
+    focus = value.get("focus")
+    gap = value.get("gap_ms")
+    ok_gap = isinstance(gap, (int, float)) and not isinstance(gap, bool) and math.isfinite(gap) and 0 <= gap <= 1e6
+    return {"vis": vis if vis in ("visible", "hidden") else None,
+            "focus": focus if isinstance(focus, bool) else None,
+            "gap_ms": float(gap) if ok_gap else None}
 
 
 def _ratio(value) -> float:
