@@ -60,6 +60,7 @@ def test_m1_tape_values_follow_their_definitions():
     res = run("m1_fwd_v010")
     v = rev4(res)
     assert res["profile_name"] == "m1_fwd_v010" and res["verdict"]["revision"] == r4.REVISION
+    assert res["inputs"]["truth"] == {"schema": "truth/1", "method": "tape"}
     assert set(res["verdict"]["gates_not_applied"]) >= {"truth_budget", "k_limit", "bias_slope"}
     t = res["trials"][0]
     s_enc = t["distance"]["s_enc_path_m"]

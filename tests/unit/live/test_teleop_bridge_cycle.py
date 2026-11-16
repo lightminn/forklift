@@ -181,13 +181,16 @@ class Rig:
                                                "echo": {"state_seq": self.tick["state_seq"],
                                                         "token": self.tick["token"]}})
 
-    def teleop(self, speed_ratio=1.0, curvature_ratio=0.0, deadman=True):
+    def teleop(self, speed_ratio=1.0, curvature_ratio=0.0, deadman=True, client=None):
         a = self.arbiter
-        self.channels.message("c1", "op", {
+        msg = {
             "t": "teleop", "session_epoch": EPOCH, "lease_id": self.lease, "control_gen": a.control_gen,
             "arm_gen": a.arm_gen, "seq": next(self.seq), "mode": "direct", "lift_dir": 0, "deadman": deadman,
             "speed_ratio": speed_ratio, "curvature_ratio": curvature_ratio,
-            "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}})
+            "echo": {"state_seq": self.tick["state_seq"], "token": self.tick["token"]}}
+        if client is not None:
+            msg["client"] = client
+        self.channels.message("c1", "op", msg)
 
     def cycle(self, *, echo=True, transmit=True, teleop=None, before=None):
         """20 ms: two MCU STATEs received, the bridge's cycle, then transmit (design 5's order)."""
@@ -795,3 +798,64 @@ def test_after_a_reconnect_nothing_moves_until_the_rate_is_verified_again_and_th
     assert r.bridge.rate.verdict == rt.RATE_UNVERIFIED
     assert not r.nonzero_sent(before) and r.bridge.phase != rt.READY and not r.host.authorized
     assert all(x["applied_mps"] == 0.0 for x in recs)
+
+
+
+def test_the_record_carries_the_teleop_age_and_the_consoles_own_state():
+    """R2-3 (b): every cycle with an accepted teleop names how long ago it came and what the console said of itself
+    (its send gap, whether its page was visible and focused) -- so a void can be put down to the console's pause."""
+    r = armed_rig()
+    client = {"vis": "visible", "focus": True, "gap_ms": 34.5}
+    for _ in range(3):
+        rec = r.cycle(teleop={"speed_ratio": 0.0, "client": client})
+    assert rec["teleop_age_ms"] is not None and 0 <= rec["teleop_age_ms"] <= 30
+    assert rec["teleop_client"] == client
+    rec = r.cycle()  # no teleop this cycle: the age grows
+    assert rec["teleop_age_ms"] >= 20
+    rec = r.cycle(teleop={"speed_ratio": 0.0, "client": {"vis": "x", "focus": "yes", "gap_ms": -1, "extra": 1}})
+    assert rec["teleop_client"] == {"vis": None, "focus": None, "gap_ms": None}  # cleaned, never trusted as is
+
+
+def test_a_teleop_without_a_client_field_still_drives():
+    r = armed_rig()
+    rec = r.cycle(teleop={"speed_ratio": 0.0})
+    assert rec["teleop_client"] is None and rec["teleop_age_ms"] is not None
+
+
+def test_delay_terms_add_up_to_the_bound():
+    from forklift_core.live.real_teleop import DelayBound
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag
+    from forklift_core.plant.bringup import Sample
+
+    db = DelayBound()
+    # two anchors (offset, receipt, MCU time, bound, boot) in reach; the second gives the smaller bound
+    db._anchors = [(5_000_000, 1_000_000_000, 995_000_000, 12_000_000, 7),
+                   (6_000_000, 1_010_000_000, 1_004_000_000, 9_000_000, 7)]
+    st = McuState(1_020_000, 7, 1, 0, Mode.ARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0, 0.0, 0.0,
+                  (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+    smp = Sample(1_030_000_000, st)
+    t = db.terms(smp)
+    assert t["anchors"] == 2 and t["anchor_bound_ms"] == 9.0 and t["anchor_age_ms"] == 20.0
+    # the terms are rounded to the microsecond for the record
+    assert abs(t["anchor_bound_ms"] + t["offset_diff_ms"] + t["drift_ms"] - db.delay_s(smp) * 1e3) < 2e-3
+    assert DelayBound().terms(smp) is None
+    before = (list(db._anchors), db.drift_max, db.delay_s(smp))
+    db.terms(smp)
+    assert (list(db._anchors), db.drift_max, db.delay_s(smp)) == before  # reading the terms changes nothing
+
+
+def test_recording_the_delay_terms_changes_no_decision_and_no_frame(monkeypatch):
+    """The diagnostics only add a record field: two identical armed runs, one with the terms switched off, send the
+    same frames and record the same values (lead 2026-11-16: the diagnostics PR must not move a judgement)."""
+    def drive(rig):
+        for i in range(40):
+            rig.cycle(teleop={"speed_ratio": 1.0 if i < 30 else 0.0})
+        return rig
+
+    a = drive(armed_rig())
+    monkeypatch.setattr(rt.DelayBound, "terms", lambda self, sample: None)
+    b = drive(armed_rig())
+    assert [m for _t, m in a.sent] == [m for _t, m in b.sent]
+    strip = [{k: v for k, v in x.items() if k != "delay_terms"} for x in a.recs]
+    assert strip == [{k: v for k, v in x.items() if k != "delay_terms"} for x in b.recs]
+    assert any("delay_terms" in x for x in a.recs) and not any(x.get("delay_terms") for x in b.recs)
