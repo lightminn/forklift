@@ -217,3 +217,60 @@ def test_the_rgb_wait_renders_without_stepping_physics_or_drawing_random_numbers
     after = np.random.get_state()
     assert all(np.array_equal(a, b) if isinstance(a, np.ndarray) else a == b for a, b in zip(np_state, after))
     assert random.getstate() == py_state
+
+
+# --- a failed sync's per-render trace (2026-11-16 s24 diagnosis, candidate 2, lead decision) -------------------------
+
+def test_a_successful_sync_adds_no_failure_record():
+    cam = FakeCamera(5.0, lag=3)
+    sync = FrameSync(cap=20)
+    sync.sync(cam, cam.render, 5.0)
+    assert "failure" not in sync.summary()
+    assert sync.summary() == {"calls": 1, "renders": 3, "max_renders": 3, "cap": 20}
+
+
+def test_a_frame_that_never_arrives_records_every_read_of_the_failed_call():
+    cam = FakeCamera(5.0, lag=3)
+    sync = FrameSync(cap=4)
+    with pytest.raises(determinism.DeterministicBroken, match="no frame at 5.000000 s after 4 renders"):
+        sync.sync(cam, lambda: None, 5.0)
+    f = sync.summary()["failure"]
+    assert f["sim_time"] == pytest.approx(5.0) and f["cap"] == 4 and f["rgb"] is False and f["call"] == 1
+    assert [r["render"] for r in f["reads"]] == [0, 1, 2, 3, 4]
+    assert all(r["rendering_time"] == pytest.approx(5.0 - 3 / 120) for r in f["reads"])  # no update: a frozen frame
+    assert all("holds_rgb" not in r for r in f["reads"])
+    # the counters stay those of the successful calls, as before
+    assert sync.summary()["renders"] == 0 and sync.summary()["max_renders"] == 0
+
+
+def test_a_trailing_frame_shows_its_trend_in_the_trace():
+    cam = FakeCamera(5.0, lag=10)
+    sync = FrameSync(cap=3)
+    with pytest.raises(determinism.DeterministicBroken):
+        sync.sync(cam, cam.render, 5.0)
+    times = [r["rendering_time"] for r in sync.summary()["failure"]["reads"]]
+    assert times == sorted(times) and times[-1] > times[0]  # moving on, only too slowly
+
+
+def test_an_rgb_wait_that_fails_records_whether_each_frame_held_rgb():
+    cam = ColdCamera(5.0, lag=1, warm=10**6)
+    sync = FrameSync(cap=3)
+    with pytest.raises(determinism.DeterministicBroken, match="no rgb"):
+        sync.sync(cam, cam.render, 5.0, rgb=True)
+    reads = sync.summary()["failure"]["reads"]
+    assert [r["holds_rgb"] for r in reads] == [False] * 4 and sync.summary()["failure"]["rgb"] is True
+
+
+def test_a_frame_without_a_time_is_recorded_as_none_and_the_trace_is_json():
+    import json
+
+    class NoTime:
+        def get_current_frame(self):
+            return {"rendering_time": float("nan")}
+
+    sync = FrameSync(cap=2)
+    with pytest.raises(determinism.DeterministicBroken):
+        sync.sync(NoTime(), lambda: None, 1.0)
+    reads = sync.summary()["failure"]["reads"]
+    assert [r["rendering_time"] for r in reads] == [None, None, None]
+    json.dumps(sync.summary(), allow_nan=False)
