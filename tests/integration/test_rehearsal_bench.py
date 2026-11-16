@@ -21,7 +21,8 @@ import bringup  # noqa: E402
 import rehearsal_bench  # noqa: E402
 import teleop_bridge as tb  # noqa: E402
 
-pytestmark = pytest.mark.skipif(os.geteuid() == 0, reason="the bench refuses root")
+# realtime: the bench runs the MCU model and the bridge as live peers on the wall clock (ws1 wrapper: serial stage)
+pytestmark = [pytest.mark.skipif(os.geteuid() == 0, reason="the bench refuses root"), pytest.mark.realtime]
 
 
 @pytest.fixture

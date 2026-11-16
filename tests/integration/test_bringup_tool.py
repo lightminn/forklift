@@ -235,3 +235,8 @@ def test_an_invalid_external_value_is_refused_before_the_arm(bench):
     res = bringup.execute(_args(cmd="scenario", kind="disarm", stop_distance_mm="-150"), bench)
     assert res["result"] == "refused" and "stop_distance_mm" in res["why"]
     assert not any(k == "ARM" for k, _t, _m in bench.written.values())
+
+# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
+# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
+# fail when xdist workers starve the process, which is the harness and not the code under test.
+pytestmark = pytest.mark.realtime

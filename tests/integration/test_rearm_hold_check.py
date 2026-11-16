@@ -143,3 +143,8 @@ def test_judge_fails_when_states_are_missing():
     arm_ns = [t * 1000 for t in range(1_035_000, 1_280_000, 10_000)]
     res = check.judge(samples, 2, GRACE_MS, 10, 1_060_000_000, arm_ns)
     assert res["result"] == "not_met" and not res["checks"]["no_state_gap"], res
+
+# Real time (ws1 wrapper runs these alone, after the parallel stage): every test here drives the firmware core's MCU
+# model as a live peer over a pty on the wall clock -- its STATE ages, link deadlines and the bridge's 20 ms loop
+# fail when xdist workers starve the process, which is the harness and not the code under test.
+pytestmark = pytest.mark.realtime

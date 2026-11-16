@@ -28,6 +28,7 @@ testpaths = ["tests"]
 markers = [
     "simulation: requires the optional model dependencies and MuJoCo",
     "rendering: requires an explicitly enabled graphics context",
+    "realtime: drives a live peer (the MCU model over a pty, the bridge loop) on the wall clock; run apart from xdist load",
 ]
 
 [tool.ruff]
