@@ -16,8 +16,39 @@ import { controlProfile, disarmAsked, escapeRequest, frameAgreement, rejectText,
 import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js";
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
+import { createSendGapMeter, pageReport } from "./sendgap.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
+// R2-3 (b): a teleop is good for 0.30 s from the tick it echoes -- about 0.2 s from this page's send. Past that the MCU
+// stops the truck and a profile trial is void. The page shows its recent send gaps and warns when covered.
+const SEND_GAP_WARN_MS = 200;
+const sendGap = createSendGapMeter({ windowMs: 10000, warnMs: SEND_GAP_WARN_MS });
+let sendGapShownAt = 0;
+let pageHiddenLogged = false;
+
+function pageCovered() {
+  return document.visibilityState !== "visible" || !document.hasFocus();
+}
+
+function updateCoverWarning() {
+  const covered = m.session.armed && pageCovered();
+  $("tele-hidden").hidden = !covered;
+  if (covered && !pageHiddenLogged) {
+    pageHiddenLogged = true;
+    log("화면이 가려짐 · 이 탭이 앞에 있어야 텔레옵이 이어집니다(가려지면 시행 무효)", "warn");
+  }
+  if (!covered) pageHiddenLogged = false;
+}
+
+function showSendGap(now) {
+  if (now - sendGapShownAt < 250) return;
+  sendGapShownAt = now;
+  const st = sendGap.stats(now);
+  const el = $("tele-gap");
+  el.textContent = st.count === 0 ? "송신 간격 —"
+    : `송신 간격 p99 ${Math.round(st.p99_ms)} ms · 최대 ${Math.round(st.max_ms)} ms (10 s)`;
+  el.classList.toggle("warn", st.warn);
+}
 const $ = (id) => document.getElementById(id);
 
 function randomId() {
@@ -940,6 +971,7 @@ function frame(now) {
   const r = inputs.read();
   m.teleop.lastRead = r;
   const allowed = m.teleop.gate.canSend() && m.session.hasLease && teleShown; // hidden controls never drive
+  if (!m.session.armed) sendGap.reset(); // a gap across a disarm says nothing of this page's pace
   if (st && st.mode === "TELEOP" && m.session.armed && allowed && now - m.teleop.lastSentAt >= TELEOP_MIN_INTERVAL_MS) {
     const cmd = m.session.teleopCommand({
       mode: m.teleop.gate.mode,
@@ -948,12 +980,17 @@ function frame(now) {
       curvatureRatio: r.curvatureRatio,
       liftDir: r.liftDir,
       frameId: frames.displayedFrameId,
+      client: pageReport(document.visibilityState, document.hasFocus(), sendGap.pending(now)),
     });
     if (cmd) {
       send(cmd);
       m.teleop.lastSentAt = now;
+      const gap = sendGap.onSend(now);
+      if (gap !== null && gap > SEND_GAP_WARN_MS && !pageCovered()) log(`텔레옵 송신 간격 ${Math.round(gap)} ms — 0.2 s 를 넘으면 차가 멈춥니다`, "warn");
     }
   }
+  showSendGap(now);
+  updateCoverWarning();
   const agree = frameAgreement({ gridFrame: m.grid?.head.frame ?? null, poseFrame: st?.pose?.frame ?? null, scanFrame: m.scan?.frame ?? null });
   m.frameNote = agree.note;
   const scanOk = agree.scan && scanDrawable(m.scan ? { ageS: (now - m.scan.at) / 1000 } : null);
@@ -988,6 +1025,10 @@ function frame(now) {
 readTokens();
 setInterval(readTokens, 1000);
 setInterval(() => m.session.pump(), 100);
+// the cover warning also when no frame runs (a hidden tab's frames are throttled to about 1 Hz)
+document.addEventListener("visibilitychange", updateCoverWarning);
+window.addEventListener("blur", updateCoverWarning);
+window.addEventListener("focus", updateCoverWarning);
 
 // ------------------------------------------------------------------ status and alarms (status panel plan)
 function healthTick() {

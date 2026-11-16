@@ -429,3 +429,10 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .sum-table small { display: block; color: var(--dim); font-size: 10.5px; }
 /* CT-2: the queue's auto item */
 .queue-items li.auto .what { font-weight: 600; }
+
+/* R2-3 (b): the page's teleop send gap and the cover warning */
+.tele-gap { font-size: 12px; color: var(--muted, #9aa4b2); margin: 4px 0; }
+.tele-gap.warn { color: var(--warn, #d9a400); font-weight: 600; }
+.tele-hidden { background: var(--bad, #d14b4b); color: #fff; font-size: 14px; padding: 10px 12px; border-radius: 8px; margin: 6px 0; }
+.tele-hidden b { display: block; font-size: 16px; margin-bottom: 2px; }
+
