@@ -104,6 +104,7 @@ class StartRelocalizer:
         # takes the chosen start's group (docs/plans/2026-11-02-unconfirmed-runner.md 3.2) -- not the generation,
         # which also moves on showing candidates and choosing
         self.searches = 0
+        self._limit = cfg.attempts  # this generation's attempts (a retry may carry its own: the observation move)
         self._picked: tuple | None = None
         self.places = 0  # F1: local re-matches started this session (a retry does not reset it)
         self.placed: tuple | None = None  # the pose the operator placed (the one being matched or previewed)
@@ -146,7 +147,7 @@ class StartRelocalizer:
         if decision.confirmed and not late:
             self._choose(base_from_laser(match.candidates[0].pose), "matcher")
             return self.state
-        if self.attempts < self.cfg.attempts and not late:
+        if self.attempts < self._limit and not late:
             return "rescan"
         self.shown = self._shown()
         self.generation += 1
@@ -221,14 +222,19 @@ class StartRelocalizer:
         self._choose(self.preview, "operator_placed")
         return True, ""
 
-    def retry(self, generation: int) -> tuple[bool, str]:
+    def retry(self, generation: int, attempts: int | None = None) -> tuple[bool, str]:
+        """A new generation from the waiting states. ``attempts``: its own attempt limit (the observation move's
+        places, docs/plans/2026-11-16-reloc-observe-move.md); None keeps ``RelocConfig.attempts`` (the console's)."""
         if self.state not in ("awaiting_pick", "reloc_failed", "stopped", "place_preview"):
             return False, "reloc_not_awaiting"
         if self._expired():
             return False, "reloc_operator_timeout"
         if not _plain_int(generation) or generation != self.generation:
             return False, "reloc_stale_pick"
+        if attempts is not None and not (_plain_int(attempts) and attempts >= 1):
+            raise ValueError(f"retry attempts must be a positive int, not {attempts!r}")
         self.state, self.attempts, self.shown, self._pool = "relocalizing", 0, (), []
+        self._limit = self.cfg.attempts if attempts is None else attempts
         self.searches += 1
         self.preview = self.preview_id = None  # the count of placements stays (plan 1.2)
         self.generation += 1

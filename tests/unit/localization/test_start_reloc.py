@@ -399,3 +399,21 @@ def test_the_block_decision(record, estimate, policy, want):
 def test_an_unknown_policy_is_refused():
     with pytest.raises(ValueError):
         R.autonomy_block({"source": "matcher"}, "maybe")
+
+
+def test_a_retry_may_carry_its_own_attempt_limit_and_a_plain_retry_keeps_the_config():
+    """docs/plans/2026-11-16-reloc-observe-move.md: the observation move's places take two attempts; the console's
+    retry (no limit) keeps RelocConfig.attempts."""
+    import itertools as _it
+    from forklift_core.localization.global_match import Decision, GlobalMatch
+    t = _it.count()
+    r = R.StartRelocalizer(R.RelocConfig(e_min=0.8, r_max=0.9, r_struct=0.8), clock=lambda: next(t) * 0.01)
+    miss = (GlobalMatch("ok", ()), Decision(False, "competitor"))
+    r.start()
+    assert [r.record(*miss) for _ in range(3)][-1] == "reloc_failed"
+    assert r.retry(r.generation, attempts=2) == (True, "")
+    r.start()
+    assert [r.record(*miss) for _ in range(2)] == ["rescan", "reloc_failed"]
+    assert r.retry(r.generation) == (True, "")
+    r.start()
+    assert [r.record(*miss) for _ in range(3)] == ["rescan", "rescan", "reloc_failed"]
