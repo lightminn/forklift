@@ -1,0 +1,23 @@
+## inputs
+6471c8ef90227d457ae23162d29908958cdfa0ed09725bc9c5cd73ee2ec4f49d  artifacts/20261013_fork_spacing/base_scene/scene.usda
+517e8260d0d5257a4381092ce96c6e91d1e58672f7deb44d5f3e86cf3489b760  artifacts/20261013_fork_spacing/dd_cfg/old/dls08_measured/forklift.urdf
+bed77752ceee8e23b26318a3c1f4a18a686884d18b93735054fe798eef086bb5  test_runs/s3/yolo_runs/yolo11s-seg_p15/weights/best.onnx
+a44502d06a4fa0730c374a0f7245839574108e84f827c97a19a41e0ddba84f34  test_runs/live/ct1_queue.sbatch
+83e27b4cd9b36653614e317509211054d1d5298afeee10135aee51cbd6761c70  test_runs/riibotics/scenes_ct1_a770031/line_m_session.json
+8b8fe55499148528e3daec138937b406efaeec46459e520c6429014309858cfa  test_runs/riibotics/scenes_ct1_a770031/random_m_session.json
+scene_dir_p1c b7faa3648db53b87 files 18
+bundle artifacts/slam_bundles/line_m_team_spec_quantized_0ff9e3bdff13 9289a821b56de9f1 files 5
+bundle artifacts/slam_bundles/random_m_team_spec_quantized_0facac3eea66 68c1c69937b70680 files 5
+learned_venv_freeze 930deecc75fd09ce
+## env
+0, NVIDIA GeForce RTX 5070 Ti, 580.178.04, Enabled, 1 MiB
+qemu 1
+forklift/ros2-slam:jazzy-2.8.5-p1-a511d6e5 2d53f2c10584
+forklift/ros2-slam:jazzy-2.8.5-p1-900bc845 b9dc17aeb441
+forklift/ros2-slam:jazzy-2.8.5-u0 39cae585ca96
+forklift/ros2-dev:jazzy-amd64-738215dc 9a77a9618e22
+forklift/ros2-console:jazzy 1e304f6b44d9
+/opt/isaaclab
+/opt/isaacsim-env
+/dev/mapper/vg0-lv_home  768G  691G   38G  95% /home
+19263 pytest lightminn RUNNING

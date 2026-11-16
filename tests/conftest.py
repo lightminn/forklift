@@ -43,3 +43,33 @@ def full_t11_pallet_urdf(tmp_path):
         return _PALLET.write_full_t11_pallet_urdf(tmp_path / "full_t11.urdf", **kwargs)
 
     return write
+
+
+# --- the teleop end-to-end harness's evidence (tests/integration/test_teleop_bridge.py Run.to_ready) ----------------
+# Here, in the root conftest, so the xdist controller loads it whatever the run's arguments are (with "tests" a conftest
+# under tests/integration is only loaded by the workers, and the summary never printed: ws1 2026-11-16). Workers append
+# one JSON line per to_ready to the file named in the environment; the summary prints them into the run's log.
+_LOOP_ENV = "FORKLIFT_LOOP_EVIDENCE"
+
+
+def pytest_configure(config):
+    import os
+    import tempfile
+
+    if _LOOP_ENV not in os.environ and not hasattr(config, "workerinput"):  # the controller; workers inherit it
+        fd, path = tempfile.mkstemp(prefix="forklift_loop_evidence_", suffix=".jsonl")
+        os.close(fd)
+        os.environ[_LOOP_ENV] = path
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    import os
+
+    path = os.environ.get(_LOOP_ENV)
+    if not path or hasattr(config, "workerinput") or not Path(path).exists():
+        return
+    lines = [x for x in Path(path).read_text(encoding="utf-8").splitlines() if x.strip()]
+    if lines:
+        terminalreporter.section("teleop harness evidence (to_ready)")
+        for line in lines:
+            terminalreporter.write_line("LOOP_EVIDENCE " + line)
