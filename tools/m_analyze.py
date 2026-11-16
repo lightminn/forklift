@@ -13,6 +13,11 @@ usage: m_analyze.py --record TELEOP.jsonl --imu IMU.jsonl --profile config/profi
                     [--field-log FIELD.jsonl] [--vehicle config/real/vehicle.yaml] [--trial N] [--allow-synthetic]
                     [--block-record OTHER.jsonl ...]
 
+--truth with method "tape" (registration revision 4, 11.2): a truth/1 file whose header names
+body_point "left_rear_axle_end", frame "start_tape_line" and sigma {"pos_m": 0.02}, and one row per trial
+{"t": "tape", "trial": N, "s_cm": distance along the start line, "y_cm": offset to its left}. Each valid trial then
+carries "rev4" (the 11.3 cm/degree values with their bands); tools/m_summary.py makes the day's table from the outputs.
+
 --block-record: another teleop record of the same IMU stretch (the same day's G3, M1, M2, M3 or q-step records);
 repeat it for each. Their standing windows enter the in-trial bias-slope fit (registration revision 3, 10.1); no
 values are computed for their trials.
