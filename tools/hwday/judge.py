@@ -5,7 +5,7 @@ PASS / FAIL line per item and a last line ALL PASS / NOT ALL PASS. School scale:
 usage: judge.py a2m12 SUMMARY.json [--minutes N]     scan_check summary (A1)
        judge.py probe SUMMARY.json                   scan_check --probe summary (A3)
        judge.py permit TIMELINE.jsonl                tools/hwday/scan_permit_check.py timeline (A4)
-       judge.py stall RECORD.jsonl --phase idle|load teleop bridge record (B5)
+       judge.py stall RECORD.jsonl --phase idle|load --seconds N   teleop bridge record (B5)
 """
 
 from __future__ import annotations
@@ -22,14 +22,20 @@ import numpy as np
 A2M12 = {
     "period_p50_s": (0.08, 0.125),        # 8-12.5 Hz
     "period_p99_max_s": 0.15,             # the permit's slow-period line
-    "receipt_gap_max_s": 0.35,            # the permit's silence line: no gap this long in the whole run ("끊김 0")
+    "silence_s": 0.35,                    # the permit's sensor_timeout_s: it counts from the scan's layer time
+                                          # (stamp - period), so the receipt gap it allows is 0.35 - period - lag
     "stamp_to_receipt_p99_max_ms": 150.0,  # the permit drops later scans
     "beams_min": 400,                     # points per revolution (catalogue 16 kHz / 10 Hz = 1600)
     "valid_fraction_min": 0.5,            # indoor room; NaN = no return
-    "refused_max": 10,                    # the clock pair's first ESTABLISH_COUNT (10) scans only
+    "establishing_max": 10,               # the clock pair's first ESTABLISH_COUNT (10) scans; any other refusal fails
     "adapter_dropped_max": 0,
 }
-PERMIT = {"empty_open_min": 0.9, "blocked_s_min": 3.0, "end_open_min": 0.9}
+# A4 windows on the user's timer (t_s from the script's start): empty 10-20 s (after the driver's start), the person
+# 22-38 s (2 s slack at each edge), clear 60-70 s. A closure counts only for an obstacle or unknown cells while scans
+# keep arriving -- not for no snapshot, synthetic frames, a slow period or a missing STATE (Codex P2).
+PERMIT = {"empty": (10.0, 20.0), "person": (22.0, 38.0), "end": (60.0, 70.0), "empty_open_min": 0.9,
+          "blocked_s_min": 3.0, "end_open_min": 0.9}
+NOT_A_PERSON = {"no_snapshot", "synthetic_scan", "scan_period", "state_delay_over_budget"}
 STALL = {"idle_over_40ms_max": 0, "load_over_80ms_max": 0}
 
 
@@ -52,14 +58,16 @@ def a2m12(path: Path, minutes: float) -> bool:
         line(c["period_p50_s"][0] <= p50 <= c["period_p50_s"][1], "rotation (period p50)",
              f"{p50 * 1e3:.1f} ms = {1 / p50:.2f} Hz"),
         line(p99 <= c["period_p99_max_s"], "period p99", f"{p99 * 1e3:.1f} ms (max {s['period_s']['max'] * 1e3:.1f})"),
-        line(s["receipt_gap_max_s"] <= c["receipt_gap_max_s"], f"no cut over {minutes:g} min (largest receipt gap)",
+        line(s["receipt_gap_max_s"] <= (allowed := c["silence_s"] - p50 - s["stamp_to_receipt_ms"]["p99"] / 1e3),
+             f"no cut over {minutes:g} min (largest receipt gap <= {allowed * 1e3:.0f} ms the permit tolerates)",
              f"{s['receipt_gap_max_s'] * 1e3:.1f} ms"),
         line(s["stamp_to_receipt_ms"]["p99"] <= c["stamp_to_receipt_p99_max_ms"], "stamp->receipt p99",
              f"{s['stamp_to_receipt_ms']['p99']:.1f} ms"),
         line(s["beams"]["min"] >= c["beams_min"], "points per revolution", f"{s['beams']['min']}-{s['beams']['max']}"),
         line(1 - s["unknown_fraction"] >= c["valid_fraction_min"], "valid range fraction",
              f"{1 - s['unknown_fraction']:.3f}"),
-        line(sum(s["refused"].values()) <= c["refused_max"], "refused scans", s["refused"]),
+        line(s["refused"].get("establishing", 0) <= c["establishing_max"]
+             and sum(v for k, v in s["refused"].items() if k != "establishing") == 0, "refused scans", s["refused"]),
         line(s["adapter_dropped"] <= c["adapter_dropped_max"], "adapter drops (scan_id gaps)", s["adapter_dropped"]),
         line(s["scans"] >= 0.9 * minutes * 60 * 10 * 0.8, "scans received", f"{s['scans']} in {minutes:g} min"),
     ]
@@ -80,34 +88,44 @@ def permit(path: Path) -> bool:
     rows = [r for r in rows if "t_s" in r]
     if not rows:
         return line(False, "timeline", "empty")
+    c = PERMIT
     t = np.array([r["t_s"] for r in rows])
     fwd = np.array([r["forward"] > 0 for r in rows])
-    empty = fwd[(t >= 5) & (t < 20)]
-    end = fwd[t >= t.max() - 10]
-    # the longest closed stretch in the middle (someone standing in front)
-    mid = (t >= 20) & (t < t.max() - 10)
+    used = np.array([r.get("used", 0) for r in rows])
+
+    def window(w):
+        return (t >= w[0]) & (t < w[1])
+
+    empty, end = fwd[window(c["empty"])], fwd[window(c["end"])]
+    # the longest stretch in the person window closed by an obstacle or unknown cells, with new scans arriving
     best = run = 0.0
     prev = None
-    for ti, f, m in zip(t, fwd, mid, strict=True):
-        if m and not f:
-            run = run + (ti - prev if prev is not None else 0.0)
+    for i in np.flatnonzero(window(c["person"])):
+        closed = (not fwd[i]) and rows[i].get("why_f") not in NOT_A_PERSON and i > 0 and used[i] > used[i - 1]
+        if closed:
+            run += t[i] - prev if prev is not None else 0.0
             best = max(best, run)
         else:
             run = 0.0
-        prev = ti
-    c = PERMIT
+        prev = t[i] if closed else None
     return all([
-        line(len(empty) > 0 and empty.mean() >= c["empty_open_min"], "empty floor opens forward (5-20 s)",
+        line(len(empty) > 0 and empty.mean() >= c["empty_open_min"], "empty floor opens forward (10-20 s)",
              f"{empty.mean() if len(empty) else 0:.2f} of samples"),
-        line(best >= c["blocked_s_min"], "a person in front closes it (20 s to the last 10 s)", f"{best:.1f} s closed"),
-        line(len(end) > 0 and end.mean() >= c["end_open_min"], "clear again reopens (last 10 s)",
+        line(best >= c["blocked_s_min"], "the person in front closes it (22-38 s, scans arriving)",
+             f"{best:.1f} s closed"),
+        line(len(end) > 0 and end.mean() >= c["end_open_min"], "clear again reopens (60-70 s)",
              f"{end.mean() if len(end) else 0:.2f} of samples"),
     ])
 
 
-def stall(path: Path, phase: str) -> bool:
+def stall(path: Path, phase: str, seconds: float) -> bool:
     rows = [json.loads(x) for x in path.read_text().splitlines() if x.strip()]
     starts = np.array([r["cycle_start_ns"] for r in rows if "cycle_start_ns" in r], dtype=np.int64)
+    foot = rows[-1] if rows else {}
+    span = (starts[-1] - starts[0]) / 1e9 if len(starts) > 1 else 0.0
+    whole = [line(span >= 0.95 * seconds, f"{phase}: the record covers the run", f"{span:.0f} s of {seconds:g} s"),
+             line(foot.get("t") == "footer" and foot.get("dropped") == 0 and foot.get("write_errors") == 0,
+                  f"{phase}: clean footer", {k: foot.get(k) for k in ("t", "dropped", "write_errors")})]
     if len(starts) < 100:
         return line(False, "cycles", len(starts))
     gaps = np.diff(starts) / 1e6
@@ -116,10 +134,12 @@ def stall(path: Path, phase: str) -> bool:
           f"max {gaps.max():.1f} ms, >40 ms {int((gaps > 40).sum())}, >80 ms {int((gaps > 80).sum())}, "
           f">124 ms {int((gaps > 124).sum())}, gc max {max(gc):.1f} ms")
     if phase == "idle":
-        return line(int((gaps > 40).sum()) <= STALL["idle_over_40ms_max"], "idle: no cycle gap over 40 ms",
-                    int((gaps > 40).sum()))
-    return line(int((gaps >= 80).sum()) <= STALL["load_over_80ms_max"], "load: no cycle gap of 80 ms or more",
-                int((gaps >= 80).sum()))
+        ok = line(int((gaps > 40).sum()) <= STALL["idle_over_40ms_max"], "idle: no cycle gap over 40 ms",
+                  int((gaps > 40).sum()))
+    else:
+        ok = line(int((gaps >= 80).sum()) <= STALL["load_over_80ms_max"], "load: no cycle gap of 80 ms or more",
+                  int((gaps >= 80).sum()))
+    return ok and all(whole)
 
 
 def main(argv=None) -> int:
@@ -135,10 +155,11 @@ def main(argv=None) -> int:
     d = sub.add_parser("stall")
     d.add_argument("path", type=Path)
     d.add_argument("--phase", choices=("idle", "load"), required=True)
+    d.add_argument("--seconds", type=float, required=True)
     args = ap.parse_args(argv)
     try:
         ok = {"a2m12": lambda: a2m12(args.path, args.minutes), "probe": lambda: probe(args.path),
-              "permit": lambda: permit(args.path), "stall": lambda: stall(args.path, args.phase)}[args.kind]()
+              "permit": lambda: permit(args.path), "stall": lambda: stall(args.path, args.phase, args.seconds)}[args.kind]()
     except (OSError, ValueError, KeyError) as e:
         print(f"FAIL  cannot judge {args.path}: {e}")
         ok = False

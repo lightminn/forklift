@@ -13,10 +13,14 @@ else JHOST=jetson; fi
 command -v sshpass >/dev/null || { echo "sshpass is not installed (sudo pacman -S sshpass)" >&2; exit 2; }
 JOPTS=(-o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=accept-new -o ClearAllForwardings=yes)
 jssh() { SSHPASS="$JETSON_SSH_PASS" sshpass -e ssh "${JOPTS[@]}" "$JHOST" "$@"; }
-# jsudo '<command>' : the command must not read stdin (sudo takes the password line from it)
+# jsudo '<command>' : sudo takes the password line from ssh's stdin; the command itself runs with stdin from
+# /dev/null (exec </dev/null inside the sudo'd shell), so a prompt such as nvpmodel's reboot question never sees the
+# password, also when sudo had it cached and did not read it (Codex P1). No single quotes inside <command>.
 jsudo() {
   : "${JETSON_SUDO_PASS:?JETSON_SUDO_PASS is not in this session environment}"
-  printf '%s\n' "$JETSON_SUDO_PASS" | SSHPASS="$JETSON_SSH_PASS" sshpass -e ssh "${JOPTS[@]}" "$JHOST" "sudo -S -p '' $1"
+  case "$1" in *"'"*) echo "jsudo: no single quotes in the command" >&2; return 2;; esac
+  printf '%s\n' "$JETSON_SUDO_PASS" | SSHPASS="$JETSON_SSH_PASS" sshpass -e ssh "${JOPTS[@]}" "$JHOST" \
+    "sudo -S -p '' sh -c 'exec </dev/null; $1'"
 }
 # the repo's tracked files to ~/forklift on the Jetson (uncommitted edits included, like the ws1 pytest wrapper)
 jsync() {

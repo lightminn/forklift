@@ -6,7 +6,8 @@ The A2M12's scans (ScanFeed on the adapter's socket) go into the bridge's own Sc
 with the host clock, delay 0) -- so this shows the scan side of the permit, not the odometry side. Each second the
 forward and reverse permits go to the timeline; tools/hwday/judge.py permit reads it. Nothing is driven.
 
-usage: scan_permit_check.py --socket SOCK --seconds 60 --mount X,Y,Z,YAW_DEG --out TIMELINE.jsonl
+usage: scan_permit_check.py --socket SOCK --until 70 [--t0 EPOCH_S] --mount X,Y,Z,YAW_DEG --out TIMELINE.jsonl
+       (t_s in the timeline counts from --t0, the moment the wrapper script started: the user's phone timer)
        (the LiDAR on the floor or a box in an open area; the virtual truck's rear axle sits X m behind it)
 """
 
@@ -46,7 +47,8 @@ def standing(t_us: int) -> McuState:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--socket", required=True)
-    ap.add_argument("--seconds", type=float, default=60.0)
+    ap.add_argument("--until", type=float, default=70.0, help="stop at this t_s")
+    ap.add_argument("--t0", type=float, default=None, help="wall-clock epoch seconds t_s counts from (default: now)")
     ap.add_argument("--mount", default="0.9,0,0.3,0")
     ap.add_argument("--mask", default=None)
     ap.add_argument("--out", required=True, type=Path)
@@ -58,14 +60,15 @@ def main(argv=None) -> int:
                                     mask_deg=bridge_scan.parse_mask(args.mask),
                                     config_path=REPO / "config" / "real" / "obstacle_layer_real.yaml",
                                     vehicle=veh, v_max_mps=veh.teleop_speed_limit_mps)
-    t0 = time.monotonic_ns()
-    next_log = t0
+    wall0 = time.time() if args.t0 is None else args.t0
+    t0 = time.monotonic_ns() - int((time.time() - wall0) * 1e9)  # the same origin on the monotonic clock
+    next_log = time.monotonic_ns()
     with args.out.open("x", encoding="utf-8") as out:
         out.write(json.dumps({"t": "header", "tool": "scan_permit_check.py", "mount": args.mount, "mask": args.mask,
                               "state": "standing stand-in, no MCU"}) + "\n")
         try:
-            while (now := time.monotonic_ns()) - t0 < args.seconds * 1e9:
-                permit.on_state(Sample(now, standing(int((now - t0) / 1000) + 1_000_000)), delay_s=0.0)
+            while (now := time.monotonic_ns()) - t0 < args.until * 1e9:
+                permit.on_state(Sample(now, standing(int((now - t0) / 1000) + 1_000_000)), delay_s=0.0)  # standing
                 permit.poll(now)
                 if now >= next_log:
                     fwd, why_f = permit(CURVS, 1, 0.13)

@@ -21,17 +21,25 @@ phase() {
   "$py" tools/rehearsal_bench.py --stage drive --out-dir "$d/bench" > "$d/bench.log" 2>&1 &
   local bench=$!; pids+=("$bench")
   for _ in $(seq 1 120); do [[ -f "$d/bench/bench.json" ]] && break; sleep 1; done
-  [[ -f "$d/bench/bench.json" ]] || { echo "bench did not start (see $d/bench.log)"; return 2; }
+  [[ -f "$d/bench/bench.json" ]] || { echo "FAIL  $name: bench did not start (see $d/bench.log)" | tee "$d/verdict.txt"; return 1; }
   local dev; dev=$("$py" -c 'import json,sys; print(json.load(open(sys.argv[1]))["pts"])' "$d/bench/bench.json")
+  local busy=()
   if [[ "$name" == load ]]; then
-    for _ in $(seq 1 "$(nproc)"); do "$py" -c 'while True: pass' & pids+=("$!"); done
+    for _ in $(seq 1 "$(nproc)"); do "$py" -c 'while True: pass' & busy+=("$!"); pids+=("$!"); done
   fi
+  local brc=0
   "$py" tools/teleop_bridge.py --device "$dev" --bench "$d/bench/bench.json" --record "$d/teleop.jsonl" \
-    --port 0 --duration-s "$secs" > "$d/bridge.log" 2>&1 || true
+    --port 0 --duration-s "$secs" > "$d/bridge.log" 2>&1 || brc=$?
+  for p in "${busy[@]}"; do kill "$p" 2>/dev/null || true; done
   kill "$bench" 2>/dev/null || true
-  if [[ "$name" == load ]]; then pkill -P $$ -f 'while True: pass' 2>/dev/null || true; fi
-  "$py" tools/hwday/judge.py stall "$d/teleop.jsonl" --phase "$name" | tee "$d/verdict.txt"
+  local jrc=0
+  "$py" tools/hwday/judge.py stall "$d/teleop.jsonl" --phase "$name" --seconds "$secs" > "$d/verdict.txt" 2>&1 || jrc=$?
+  (( brc == 0 )) || echo "FAIL  $name: the bridge exited $brc (see $d/bridge.log)" >> "$d/verdict.txt"
+  cat "$d/verdict.txt"
+  (( brc == 0 && jrc == 0 ))
 }
 { echo "== $(hostname) $(date -Is) nproc $(nproc)"; command -v nvpmodel >/dev/null && nvpmodel -q 2>/dev/null | head -2 || true; } | tee "$out/host.txt"
-phase idle
-phase load
+rc=0
+phase idle || rc=1   # the load phase runs even when idle fails: both are needed to read the result
+phase load || rc=1
+exit "$rc"

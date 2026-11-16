@@ -17,7 +17,10 @@ if ! jssh "docker image inspect $img >/dev/null 2>&1"; then
   else zstd -dc "$tarball" | jssh 'docker load'; fi
 fi
 jsync
-jssh "cd ~/forklift && FORKLIFT_ROS2_SCAN_IMAGE=$img FORKLIFT_PY=\$HOME/forklift/.venv/bin/python bash tools/hwday/a2m12_run.sh jetson $minutes" 2>&1 | tee "$HW_OUT/a2m12_run.txt"
+rc=0
+jssh "cd ~/forklift && FORKLIFT_ROS2_SCAN_IMAGE=$img bash tools/hwday/a2m12_run.sh jetson $minutes" > "$HW_OUT/a2m12_run.txt" 2>&1 || rc=$?
 mkdir -p "$HW_REPO/data/a2m12_check"
-jssh 'cd ~/forklift/data/a2m12_check && tar -cf - 2026-11-17_jetson' | tar -xf - -C "$HW_REPO/data/a2m12_check"
-cat "$HW_REPO/data/a2m12_check/2026-11-17_jetson/verdict.txt"
+jssh 'cd ~/forklift/data/a2m12_check && tar -cf - 2026-11-17_jetson' | tar -xf - -C "$HW_REPO/data/a2m12_check" \
+  || echo "copying the results back failed" >&2
+tail -15 "$HW_OUT/a2m12_run.txt"
+exit "$rc"

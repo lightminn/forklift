@@ -6,7 +6,9 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/jetson_lib.sh"
 secs="${1:-300}"
 jsync
-jssh "cd ~/forklift && bash tools/hwday/stall_run.sh ~/hwday_stall $secs" 2>&1 | tee "$HW_OUT/stall_run.txt"
+rc=0
+jssh "cd ~/forklift && bash tools/hwday/stall_run.sh ~/hwday_stall $secs" > "$HW_OUT/stall_run.txt" 2>&1 || rc=$?
 mkdir -p "$HW_OUT/stall"
-jssh 'cd ~ && tar -cf - hwday_stall' | tar -xf - -C "$HW_OUT/stall"
-grep -h -E '^(PASS|FAIL|info|ALL|NOT)' "$HW_OUT"/stall/hwday_stall/*/verdict.txt
+jssh 'cd ~ && tar -cf - hwday_stall' | tar -xf - -C "$HW_OUT/stall" || echo "copying the records back failed" >&2
+grep -h -E '^(PASS|FAIL|info|ALL|NOT)' "$HW_OUT"/stall/hwday_stall/*/verdict.txt || tail -20 "$HW_OUT/stall_run.txt"
+exit "$rc"

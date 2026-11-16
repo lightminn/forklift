@@ -4,7 +4,7 @@
 source "$(dirname -- "${BASH_SOURCE[0]}")/jetson_lib.sh"
 {
   echo "== host $JHOST $(date -Is)"
-  jssh 'hostname; cat /etc/nv_tegra_release 2>/dev/null; dpkg-query -W -f="nvidia-jetpack ${Version}\n" nvidia-jetpack 2>/dev/null;
+  jssh 'hostname; cat /etc/nv_tegra_release 2>/dev/null; dpkg-query -W -f="nvidia-jetpack \${Version}\n" nvidia-jetpack 2>/dev/null;
         lsb_release -ds 2>/dev/null; uname -r; nproc; free -h | sed -n 2p; df -h / | tail -1;
         echo "python3 $(python3 --version 2>&1)"; command -v cmake >/dev/null && cmake --version | head -1 || echo "cmake: none";
         gcc --version 2>/dev/null | head -1 || echo "gcc: none";
