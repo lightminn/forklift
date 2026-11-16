@@ -349,6 +349,9 @@ class SceneReplan:
                 r["seen"] = seen_
                 candidate = ports.candidate(value)
                 r["record"]["candidate"] = candidate
+                if (r.get("retry") is not None and r["record"]["retry"]["why"] is None
+                        and r["record"]["retry"]["status"] == "ok"):
+                    r["record"]["retry"]["why"] = candidate.get("why")  # the retry's own candidate, before any branch
                 status = candidate.get("status")
                 if status in REPLAN_STATUSES:
                     out = self._drop(t, "wait_jobs")
@@ -358,8 +361,6 @@ class SceneReplan:
                     ports.install(value)  # its own rule takes it from here (arrival, the cusp heading hold)
                     return self._hand_back()
                 retry_ = r.get("retry")
-                if retry_ is not None and r["record"]["retry"]["why"] is None and r["record"]["retry"]["status"] == "ok":
-                    r["record"]["retry"]["why"] = candidate.get("why")
                 if (not candidate.get("ok") and retry_ is None and trigger in self.config.retry_blocked_triggers
                         and candidate.get("why") == "blocked:occupied"):
                     # plan B: once per request, the candidate check's occupied cells as obstacles, planned again

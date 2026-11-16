@@ -584,3 +584,35 @@ def test_the_retry_is_only_for_its_trigger_and_off_by_default():
     _ask(dev, trigger="cusp_handed")
     _run(dev, ports, n=200)
     assert "retry" not in records[-1]
+
+
+def test_the_retry_adds_its_rectangles_to_the_trigger_s_own_extra_obstacles():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok", "path-2")], candidates=[BLOCKED, PASSED])
+    _ask(dev, extra_obstacles_fn=lambda: ["box"], clearance_m=0.2)
+    _run(dev, ports)
+    submits = [x[1] for x in ports.log if isinstance(x, tuple) and x[0] == "submit"]
+    assert submits == [("box",), ("box", "cell-box")]
+
+
+def test_the_retry_s_candidate_gets_its_own_permit_wait():
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok", "path-2")], candidates=[BLOCKED])
+    _ask(dev)
+    steps = _run(dev, ports, n=200)
+    rec = records[-1]
+    assert steps[-1].end == "scene_replan_refused:cusp_pose:blocked:occupied"
+    candidates_at = [t for state, t in rec["states"] if state == "candidate"]
+    assert len(candidates_at) == 2  # the first candidate, then the retry's
+    end_t = rec["permit_waits"][-1]["until_s"]
+    assert end_t >= candidates_at[1] + 3.0 - 0.1 - 1e-9  # the retry's candidate waits its own permit_wait_s
+
+
+@pytest.mark.parametrize("second", [{"status": "arrived", "ok": True, "why": "arrived"},
+                                    {"status": "failed", "ok": False, "why": "failed:x"}])
+def test_the_retry_s_candidate_why_is_recorded_before_any_branch(second):
+    dev, records = _retry_device()
+    ports = RetryPorts(plans=[("ok", "path-1"), ("ok", "path-2"), ("ok", "path-3")], candidates=[BLOCKED, second, PASSED])
+    _ask(dev)
+    _run(dev, ports, n=200)
+    assert records[-1]["retry"]["why"] == second["why"]

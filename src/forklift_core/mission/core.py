@@ -8788,7 +8788,9 @@ class MissionCore:
         zone_start_ = self._scene_zone_start_m(tracker, uncut) if strict_ else None
         dumps_ = getattr(self.options, "occupied_dumps", False)
         # plan 2026-11-17 B: the retry needs this check's own cells; off (and no dumps): the call as before
-        cells_ = dumps_ or getattr(self.options, "cusp_replan_retry", "off") == "on"
+        req_ = getattr(self.scene_replan, "request_", None)
+        cells_ = dumps_ or (getattr(self.options, "cusp_replan_retry", "off") == "on" and req_ is not None
+                            and req_.get("trigger") == "cusp_pose")  # its own trigger's checks only (Codex review P3)
         permit_ = obstacle["layer"].candidate_permit(
             t, leg_, current_pose=tuple(float(v) for v in pose_), direction=int(direction_), loaded=hooks.loaded(),
             curvature_inv_m=kappa_, measured_curvature_inv_m=float(hooks.held_kappa()),
