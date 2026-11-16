@@ -20,7 +20,7 @@ from forklift_core.plant import m_analysis as ma
 from forklift_core.plant.clock_map import clock_fits_from_rows, fit_clock
 from forklift_core.plant.record_rows import sample_from_row
 from forklift_core.sensors.imu_mount import _unit, _vec3
-from forklift_core.sensors.imu_record import continuous_segments, imu_stream
+from forklift_core.sensors.imu_record import RESTART_BACK_US, continuous_segments, imu_stream
 
 REGISTRATION_DOC = "docs/plans/2026-11-15-m1-m3-registration.md"
 REGISTERED = {
@@ -196,10 +196,14 @@ def _state_times(rec_rows):
 
 
 def _imu_series(rows, stream):
+    """One stream on the host clock. A sample whose host time does not advance, or whose device time repeats or
+    steps back by no more than ``RESTART_BACK_US`` (a late sample), is dropped; a larger step back is a device
+    restart (a D435i reconnect) and is kept -- ``continuous_segments`` starts a new stretch there by the same rule,
+    so the samples after it are not lost until they pass the old maximum (entry 3.10; lead 2026-11-16)."""
     st = imu_stream(rows, stream=stream)
     keep, dropped, ld, lh = [], 0, None, None
     for i, (d, h) in enumerate(zip(st.dev_us.tolist(), st.host_ns.tolist())):
-        if ld is not None and (d <= ld or h <= lh):
+        if ld is not None and (h <= lh or (d <= ld and ld - d <= RESTART_BACK_US)):
             dropped += 1
             continue
         keep.append(i)

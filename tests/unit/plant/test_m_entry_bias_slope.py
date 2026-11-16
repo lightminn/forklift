@@ -136,3 +136,14 @@ def test_a_block_record_outside_the_imu_file_is_refused():
     with pytest.raises(me.Refused, match="outside the IMU file"):
         me.analyze(out["records"][-1], out["imu"], out["truths"][-1], None, profile(L09), CFG, UP,
                    allow_synthetic=True, block_rows=[shifted])
+
+
+def test_a_backward_device_restart_keeps_the_new_stretch():
+    # a D435i reconnect: the device clock starts again 50 s behind. The samples after it are a new stretch, not
+    # dropped as "late" until they pass the old maximum (the trial after it keeps its own bias windows)
+    out = block(merge_items(3), seed=10, imu_restart_before=2, imu_jump_us=-50_000_000)
+    res = run_last(out, L09)
+    t = trial1(res)
+    assert t["imu"]["why"] == [] and t["imu"]["bias_slope"]["n_windows"] == 2
+    assert res["clock"]["imu_dropped"] == {"gyro": 0, "accel": 0}
+    assert len(res["clock"]["imu_fits"]) == 2

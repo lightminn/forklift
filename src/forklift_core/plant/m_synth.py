@@ -386,12 +386,14 @@ def synth_still(cfg, *, seconds: float, t0_ns: int = T0_NS, host_boot: str = "sy
 
 def synth_block(items: list, cfg, *, host_boot: str = "synthetic-block", bias_slope: float = 0.0,
                 arw: float = ARW_DESK, up=(0.0, -1.0, 0.0), bias=(0.0, 0.0, 0.0), seed: int = 0,
-                synthetic: bool = True, imu_restart_before: int | None = None) -> dict:
+                synthetic: bool = True, imu_restart_before: int | None = None,
+                imu_jump_us: int = 50_000_000) -> dict:
     """One IMU file over several records of one day (entry design 3.10; registration revision 3, 10.1): each item is
     ``{"profile": p, **synth_trial kwargs}`` or ``{"stand_s": seconds}``, laid end to end on the same host and MCU
     clocks so the IMU runs on without a gap. Returns ``{"records": [rows...], "truths": [rows or None...], "imu":
-    rows}``; the bias grows by ``bias_slope`` throughout. ``imu_restart_before``: the IMU device clock jumps
-    (50 s ahead while the host clock runs on) at the start of that item -- a new continuous IMU stretch."""
+    rows}``; the bias grows by ``bias_slope`` throughout. ``imu_restart_before``: the IMU device clock jumps by
+    ``imu_jump_us`` (ahead, or back -- a device restart such as a D435i reconnect) at the start of that item while the
+    host clock runs on -- a new continuous IMU stretch."""
     records, truths, imu = [], [], []
     cursor = T0_NS
     common = dict(host_boot=host_boot, bias_slope=bias_slope, arw=arw, up=up, bias=bias, synthetic=synthetic)
@@ -407,7 +409,7 @@ def synth_block(items: list, cfg, *, host_boot: str = "synthetic-block", bias_sl
         records.append(out["record"])
         truths.append(out["truth"])
         if imu_restart_before is not None and i >= imu_restart_before:
-            body = [{**r, "dev_us": (r["dev_us"] + 50_000_000) % WRAP_US} for r in body]
+            body = [{**r, "dev_us": (r["dev_us"] + imu_jump_us) % WRAP_US} for r in body]
         imu.extend(body)
         cursor = out["imu_span"][1] + IMU_PAD_NS  # the next IMU span starts where this one ended
     imu.sort(key=lambda r: (r["host_ns"], r["s"]))
