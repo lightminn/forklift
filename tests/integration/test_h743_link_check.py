@@ -101,3 +101,41 @@ def test_a_short_run_against_the_host_model(mcu_model, tmp_path):
     assert s["disarm_sent"] >= 4 and s["disarm_lost"] == 0 and s["round_trip_ms"] is not None, s
     lines = out.read_text().splitlines()
     assert '"t": "summary"' in lines[-1] and any('"t": "rtt"' in x for x in lines)
+
+
+def test_silence_before_the_end_and_late_rx_errors_fail():
+    rows = _rows(1000)
+    end = rows[-1]["host_ns"]
+    assert _summary(rows)["checks"]["host_gap"]
+    s = chk.summarize(rows, [12.0], 0, 1, 0, 10.0, 10.0, None, end_ns=end + 600_000_000)
+    assert not s["checks"]["host_gap"]  # the link went quiet 600 ms before the end
+    rows[0]["rx_errors"] = 0
+    for r in rows[1:]:
+        r["rx_errors"] = 1  # the opening delimiter closed a half frame once, early
+    early = chk.summarize(rows, [12.0], 0, 1, 0, 10.0, 10.0, None, rx_baseline_ns=rows[20]["host_ns"])
+    assert early["checks"]["mcu_rx_errors_zero"]
+    rows[-1]["rx_errors"] = 2  # a later one is a real receive error
+    late = chk.summarize(rows, [12.0], 0, 1, 0, 10.0, 10.0, None, rx_baseline_ns=rows[20]["host_ns"])
+    assert not late["checks"]["mcu_rx_errors_zero"]
+
+
+def test_a_device_lost_while_writing_still_leaves_a_failing_summary(tmp_path, monkeypatch):
+    import errno
+
+    master, slave = os.openpty()
+    os.set_blocking(master, False)
+    real_write = chk.os.write
+    calls = {"n": 0}
+
+    def write(fd, data):
+        calls["n"] += 1
+        if calls["n"] > 1:  # the delimiter goes out, the first DISARM meets a vanished device
+            raise OSError(errno.EIO, "Input/output error")
+        return real_write(fd, data)
+
+    monkeypatch.setattr(chk.os, "write", write)
+    out = tmp_path / "lost.jsonl"
+    s = chk.run("pty", out, 2.0, 0.2, None, fd=master)
+    os.close(slave)
+    assert s["result"] == "FAIL" and s["link_lost"] and not s["checks"]["link_kept"]
+    assert '"t": "summary"' in out.read_text().splitlines()[-1]

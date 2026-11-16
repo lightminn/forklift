@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from real_mcu_link import LinkLost, TtyLink, open_raw  # noqa: E402
+from real_mcu_link import _LOST, LinkLost, TtyLink, open_raw  # noqa: E402
 
 from forklift_core.mcu_link.messages import VERSION, Disarm, LinkDecoder, McuState, encode  # noqa: E402
 
@@ -34,6 +34,8 @@ MCU_PERIOD_MEAN_TOL_MS = 0.05
 HOST_GAP_MAX_MS = 100.0  # the executor treats an older STATE as stale (HostConfig.state_max_age_s = 0.1)
 RTT_MAX_MS = 50.0  # one 10 ms STATE period plus USB both ways, with margin; the DRIVE validity cap is 150 ms
 RTT_TIMEOUT_S = 1.0  # a DISARM not seen in a STATE within this counts as lost
+RX_BASELINE_S = 0.2  # MCU rx_errors are counted from the first STATE this long after the opening delimiter: that
+# delimiter may close a half frame left from an earlier connection, which the MCU rightly counts once
 
 
 def _pct(xs: list[float], q: float) -> float | None:
@@ -52,10 +54,17 @@ def _write_all(fd: int, data: bytes, deadline: float) -> None:
             if time.monotonic() > deadline:
                 raise LinkLost("write stalled")
             time.sleep(0.001)
+        except OSError as exc:
+            if exc.errno in _LOST:  # the device went away mid-write: a link loss, judged like a read loss
+                raise LinkLost(str(exc)) from exc
+            raise
 
 
 def summarize(states: list[dict], rtts: list[float], lost: int, sent: int, decoder_errors: int, seconds: float,
-              elapsed_s: float, link_lost: str | None) -> dict:
+              elapsed_s: float, link_lost: str | None, *, end_ns: int | None = None,
+              rx_baseline_ns: int | None = None) -> dict:
+    """``end_ns``: when listening stopped -- the silence after the last STATE counts as a host gap too.
+    ``rx_baseline_ns``: MCU rx_errors are counted from the first STATE received at or after it."""
     seq_gaps = 0
     mcu_steps, host_steps = [], []
     boots = []
@@ -69,7 +78,10 @@ def summarize(states: list[dict], rtts: list[float], lost: int, sent: int, decod
         if not boots or boots[-1] != s["boot_id"]:
             boots.append(s["boot_id"])
     first, last = (states[0], states[-1]) if states else (None, None)
-    rx_err = None if not states else (last["rx_errors"] - first["rx_errors"]) % 0x10000
+    if states and end_ns is not None:
+        host_steps.append((end_ns - last["host_ns"]) / 1e6)  # a link that went quiet before the end
+    base = next((x for x in states if rx_baseline_ns is None or x["host_ns"] >= rx_baseline_ns), None)
+    rx_err = None if base is None else (last["rx_errors"] - base["rx_errors"]) % 0x10000
     overruns = None if not states else (last["cycle_overruns"] - first["cycle_overruns"]) % 0x10000
     mean_mcu = statistics.fmean(mcu_steps) if mcu_steps else None
     checks = {
@@ -136,6 +148,7 @@ def run(device: str, out: Path, seconds: float, disarm_every_s: float, baud: int
     lost = sent = 0
     seq = 0
     link_lost = None
+    rx_base_ns = None
     t0 = time.monotonic()
     next_disarm = t0 + 0.5
     with out.open("w", encoding="utf-8") as f:
@@ -143,6 +156,7 @@ def run(device: str, out: Path, seconds: float, disarm_every_s: float, baud: int
                             "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n")
         try:
             _write_all(fd, b"\x00", time.monotonic() + 1.0)  # close any half frame the MCU holds (board design 5)
+            rx_base_ns = time.monotonic_ns() + int(RX_BASELINE_S * 1e9)
             while time.monotonic() - t0 < seconds:
                 now = time.monotonic()
                 if now >= next_disarm:
@@ -182,15 +196,16 @@ def run(device: str, out: Path, seconds: float, disarm_every_s: float, baud: int
             f.write(json.dumps({"t": "link_lost", "host_ns": time.monotonic_ns(), "why": link_lost}) + "\n")
         finally:
             link.close()
-        # still unanswered at the end: one written within the last RTT_TIMEOUT_S may be in flight and is not
-        # judged; older ones are lost
+        # still unanswered at the end: one written less than RTT_MAX_MS ago may still be in flight and is not
+        # judged; any older one has already missed the limit and counts as lost
         end_ns = time.monotonic_ns()
         for t_w in pending.values():
-            if end_ns - t_w > RTT_TIMEOUT_S * 1e9:
+            if end_ns - t_w > RTT_MAX_MS * 1e6:
                 lost += 1
             else:
                 sent -= 1
-        summary = summarize(states, rtts, lost, sent, dec.errors, seconds, time.monotonic() - t0, link_lost)
+        summary = summarize(states, rtts, lost, sent, dec.errors, seconds, time.monotonic() - t0, link_lost,
+                            end_ns=end_ns, rx_baseline_ns=rx_base_ns)
         f.write(json.dumps(summary) + "\n")
     return summary
 
@@ -206,8 +221,8 @@ def main(argv=None) -> int:
     if a.seconds <= 0 or a.disarm_every_s <= 0:
         p.error("--seconds and --disarm-every-s must be positive")
     s = run(a.device, a.out, a.seconds, a.disarm_every_s, a.baud)
-    print(one_line(s))
     print(f"record: {a.out}")
+    print(one_line(s))  # the last line: the verdict to paste
     return 0 if s["result"] == "PASS" else 1
 
 
