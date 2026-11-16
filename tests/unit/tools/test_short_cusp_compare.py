@@ -64,3 +64,21 @@ def test_the_run_lists():
     assert len(comp) == 20 and sum("--short-cusp-arc" in r["env"]["EXTRA_ARGS"] for r in comp) == 10
     assert all("--deterministic" in r["env"]["EXTRA_ARGS"] and r["env"]["SCENE"] == "aisle_rack" for r in comp)
     assert {r["env"]["SEED"] for r in comp} == {str(s) for s in range(10)}
+
+
+def test_arm_reads_cusp_heading_runs(monkeypatch, tmp_path):
+    """arm() takes cusp_heading.Run objects (.name, .result), one analyse per run (a bug first met on the batch)."""
+    class FakeCH:
+        class Run:
+            def __init__(self, name, result):
+                self.name, self.result = name, result
+
+        def runs_from_raw(self, roots, name_filter):
+            return [self.Run("acsA_aisle_rack_s3", {"success": True, "planning_wall_s": 4.0, "paths": {}})]
+
+        def analyse(self, runs, period, tdep):
+            assert len(runs) == 1 and period == "postfix"
+            return {"counts": {"failures_replan": 1, "failures_final": 0, "judgements": 7}}
+
+    out = C.arm(tmp_path, FakeCH())
+    assert out[3]["fail_replan"] == 1 and out[3]["success"] is True and out[3]["planning_wall_max_s"] == 4.0

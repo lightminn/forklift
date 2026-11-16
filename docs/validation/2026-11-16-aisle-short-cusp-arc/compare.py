@@ -68,14 +68,13 @@ def run_measures(result: dict) -> dict:
 def arm(root: Path, ch) -> dict:
     out = {}
     for run in ch.runs_from_raw([root], "aisle_rack"):
-        m = re.search(r"_s(\d+)$", run["name"])
+        m = re.search(r"_s(\d+)$", run.name)  # cusp_heading.Run: .name, .result (the loaded result.json)
         if m is None:
-            raise ValueError(f"{run['name']}: no seed in the name")
+            raise ValueError(f"{run.name}: no seed in the name")
         seed = int(m.group(1))
         c = ch.analyse([run], "postfix", None)["counts"]
-        res = json.loads((root / run["name"] / "run" / "result.json").read_text())
-        out[seed] = {"name": run["name"], "fail_replan": c["failures_replan"], "fail_final": c["failures_final"],
-                     "judgements": c["judgements"], **run_measures(res)}
+        out[seed] = {"name": run.name, "fail_replan": c["failures_replan"], "fail_final": c["failures_final"],
+                     "judgements": c["judgements"], **run_measures(run.result)}
     return out
 
 
