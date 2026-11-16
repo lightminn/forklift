@@ -17,6 +17,11 @@ shape) is ``None`` and named in ``missing`` -- never a default; a metric no run 
 
   python baseline_summary.py RUNS_ROOT --mode overlay --out summary.json [--fields-out fields.json.gz]
   python baseline_summary.py RUNS_ROOT --mode overlay --compare PREFIX_ROOT --compare-mode prefix --out ...
+  python baseline_summary.py RUNS_ROOT --mode overlay --compare K1_ROOT --compare-mode prefix --match-compare --out ...
+
+``--match-compare`` adds ``compare.matched``: both sets' aggregates again over the (scene, seed) runs the two share
+(kept runs only, the pairing ``pairs`` uses), for a comparator that holds a subset of the seeds (the 40-run K1 arms and
+S beside R's 70). The full aggregates and ``pairs`` are written as without it.
 """
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ import argparse
 import gzip
 import importlib.util
 import json
+import math
 import re
 import sys
 from collections import Counter
@@ -223,10 +229,16 @@ def run_fields(run: Path, mode: str) -> dict:
         kind = tracking.get("failure")
         out["transport_tracking_failure"] = kind if kind in TRACKING_KINDS else f"other:{kind}"
 
-    de = r.get("delivery_error_m")
-    out["delivery_error_m"] = float(de) if isinstance(de, (int, float)) else None
-    st = r.get("simulated_time_s")
-    out["simulated_time_s"] = float(st) if isinstance(st, (int, float)) and out["success"] else None
+    def finite(v):
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else None
+
+    out["delivery_error_m"] = finite(r.get("delivery_error_m"))
+    if r.get("delivery_error_m") is not None and out["delivery_error_m"] is None:
+        missing.append("delivery_error_m")
+    st = finite(r.get("simulated_time_s"))
+    if r.get("simulated_time_s") is not None and st is None:
+        missing.append("simulated_time_s")
+    out["simulated_time_s"] = st if out["success"] else None
     contacts = r.get("forbidden_pocket_contacts")
     out["forbidden_contacts"] = len(contacts) if isinstance(contacts, list) else contacts
     det = r.get("deterministic") if isinstance(r.get("deterministic"), dict) else {}
@@ -337,6 +349,14 @@ def pair_differences(a_rows: list, b_rows: list) -> dict:
             "only_a": [list(k) for k in sorted(set(a) - set(b))], "only_b": [list(k) for k in sorted(set(b) - set(a))]}
 
 
+def matched_aggregates(a_rows: list, b_rows: list) -> dict:
+    """Both sets' aggregates over the (scene, seed) runs they share -- kept runs only, as ``pair_differences`` keys
+    them (a refused run leaves its pair out on both sides)."""
+    a, b = _keyed(a_rows, "a"), _keyed(b_rows, "b")
+    common = sorted(set(a) & set(b))
+    return {"a": aggregate([a[k] for k in common]), "b": aggregate([b[k] for k in common]), "n": len(common)}
+
+
 def collect(root: Path, mode: str) -> list:
     rows = []
     for d in sorted(p for p in Path(root).iterdir() if p.is_dir()):
@@ -354,15 +374,21 @@ def main(argv=None) -> int:
     ap.add_argument("--mode", choices=MODES, required=True)
     ap.add_argument("--compare", type=Path, default=None, help="a second folder of run folders (same scene and seed)")
     ap.add_argument("--compare-mode", choices=MODES, default="prefix")
+    ap.add_argument("--match-compare", action="store_true",
+                    help="with --compare: also aggregate both sets over their common (scene, seed) runs only")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--fields-out", type=Path, default=None, help="per-run fields, gzip JSON")
     a = ap.parse_args(argv)
+    if a.match_compare and a.compare is None:
+        ap.error("--match-compare needs --compare")
     rows = collect(a.root, a.mode)
     out = {"schema": "post_fix_baseline_summary/1", "root": str(a.root), "mode": a.mode, "aggregate": aggregate(rows)}
     if a.compare is not None:
         crows = collect(a.compare, a.compare_mode)
         out["compare"] = {"root": str(a.compare), "mode": a.compare_mode, "aggregate": aggregate(crows),
                           "pairs": pair_differences(rows, crows)}
+        if a.match_compare:
+            out["compare"]["matched"] = matched_aggregates(rows, crows)
     a.out.write_text(json.dumps(out, indent=1, sort_keys=True) + "\n")
     if a.fields_out is not None:
         with gzip.open(a.fields_out, "wt") as f:
