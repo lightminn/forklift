@@ -119,7 +119,10 @@
     "mixed_plan_margin_and_plant": 1,
     "plan_short_leg": 2
    },
-   "failure": "None",
+   "failure_reason": "Tracking failed in transport: pos=0.0161,yaw=-0.0648",
+   "final_classification": [
+    "plan_short_leg"
+   ],
    "judgements": [
     {
      "classification": "mixed_plan_margin_and_plant",
@@ -186,7 +189,10 @@
     "mixed_plan_margin_and_plant": 1,
     "plan_short_leg": 2
    },
-   "failure": "None",
+   "failure_reason": "Tracking failed in transport: pos=0.0172,yaw=0.0604",
+   "final_classification": [
+    "mixed_plan_margin_and_plant"
+   ],
    "judgements": [
     {
      "classification": null,

@@ -52,7 +52,10 @@ seed 별(성공 / 재계획 / 최종 실패 / 계획 벽시계 합·최대 s / �
 | 8 | 1 / 2 / 0 / 622·428 / 19 | 1 / 1 / 0 / 772·687 / 1 |
 | 9 | 1 / 1 / 0 / 734·544 / 4 | 1 / 0 / 0 / 324·324 / 0 |
 
-- **실패가 갈린 두 seed.** A s5 와 B s4 가 하나씩 최종 실패했다. 둘 다 "Tracking failed in transport"(운반 cusp 방향 오차)다. #522 규칙 분류도 둘이 같다: 짧은 다리 재계획 2(회복) + 최종 실패 1(`mixed_plan_margin_and_plant`). 그 판정 출력은 `assets/aisle-short-cusp-arc/supplement.json` 의 `failed_runs` 에 남겼다. 이 근거가 말하는 것은 '관측된 두 최종 실패가 같은 #522 규칙 분류'까지다. B s4 의 최종 실패는 짧은 곡선 다리 분류가 아니다. 다른 실패 기전이 없다는 증명은 아니다.
+- **실패가 갈린 두 seed.** A s5 와 B s4 가 하나씩 최종 실패했다. 실패 문구는 둘 다 "Tracking failed in transport"(운반 cusp 방향 오차)다. #522 규칙 분류는 최종 실패에서 갈린다(`assets/aisle-short-cusp-arc/supplement.json` 의 `failed_runs`).
+  - A s5: 재계획 `mixed_plan_margin_and_plant`(2.0 m 다리)·`plan_short_leg`(0.25 m) 뒤, **최종 실패 `plan_short_leg`(0.25 m 다리)**. 이 옵션이 겨냥한 유형이다. B 에서는 이 seed 가 재계획 없이 완주했다.
+  - B s4: 재계획 `plan_short_leg`(0.5 m·0.75 m) 둘을 회복한 뒤, **최종 실패 `mixed_plan_margin_and_plant`(0.841 m 다리)**. 0.6 m 기준으로는 짧은 다리가 아니다. A 에서는 이 seed 가 재계획 없이 완주했다.
+  - 혼합 유형은 A 에서도 나온다(A s5 의 첫 재계획). 그래서 켬 쪽에 처음 보는 분류는 없다. 다만 s4 는 B 가 나빠진 짝이고, 그 최종 실패는 비용이 겨냥하지 않은 혼합 유형이다. 다른 실패 기전이 없다는 증명은 아니다.
 - 재계획이 늘어난 seed 도 있다(s3: 1 → 2, s4: 0 → 2). 결정 모드라 이 차이는 옵션 하나에서 온다. 다만 계획이 바뀌면 이후 경로 전체가 바뀌므로, 짝 사이 차이를 그 다리 하나의 효과로 읽지 않는다.
 
 ## 3. 한계
@@ -60,14 +63,14 @@ seed 별(성공 / 재계획 / 최종 실패 / 계획 벽시계 합·최대 s / �
 - aisle_rack 한 장면, seed 10 개다. 방향을 보는 비교이고 유의성 검정은 하지 않았다(계획 2 절).
 - 옵션은 모든 임무 탐색(접근·운반·복귀)에 걸린다. 다른 장면(random_1, line_2, 라이브 장면)에서는 확인하지 않았다. 런처 기본으로 올리면 riib 의 다른 장면 경로도 바뀌므로, 승격하면 그 장면들의 기준선이 새로 잡혀야 한다.
 - 계획 벽시계는 시뮬 CPU 시간이다. 실차·Jetson 시간을 대표하지 않는다.
-- 차체 조향 응답 부족(#522·③ 의 실제 추종 문제)은 고치지 않는다. 남은 최종 실패 둘은 그 혼합 유형이다.
+- 차체 조향 응답 부족(#522·③ 의 실제 추종 문제)은 고치지 않는다. B 에 남은 최종 실패(s4)는 그 혼합 유형이다.
 
 ## 4. 원자료와 재현
 
 | 파일 | 내용 | md5 |
 |---|---|---|
 | `assets/aisle-short-cusp-arc/compare.json` | 판정 도구 출력(팔별 seed 별 값, 판정) | 47557e79f75aef068650e99066481ffb |
-| `assets/aisle-short-cusp-arc/supplement.json` | 사후 보충: `paths_replaced` 짧은 곡선 cusp 수, 최종 실패 두 실행의 #522 판정 | 9b8120daf91f895ee18b2bfaa8000e23 |
+| `assets/aisle-short-cusp-arc/supplement.json` | 사후 보충: `paths_replaced` 짧은 곡선 cusp 수, 최종 실패 두 실행의 #522 판정 | 85e5dad1d32834818925572528e1fce5 |
 
 - 재현: ws1 `cd snapshots/acs_d45bb1e1; PYTHONPATH=src python <5e8f091e 의 compare.py> --a test_runs/acs/compare_acs_d45bb1e1/A --b test_runs/acs/compare_acs_d45bb1e1/B --out compare.json`
 - 원본: ws1 `test_runs/acs/compare_acs_d45bb1e1`(A·B 20 실행), `test_runs/acs/smoke_acs_d45bb1e1`, `snapshots/acs_d45bb1e1`. 머지 뒤 Drive 보관과 정리는 디스크 세션에 넘긴다.
@@ -75,3 +78,4 @@ seed 별(성공 / 재계획 / 최종 실패 / 계획 벽시계 합·최대 s / �
 ## 5. 검토
 
 - **Codex 재계산(1 회차).** compare.json 에서 합계·판정·seed 별 20 칸이 반올림까지 일치하고, 네 판정은 모두 참이다(P1 없음). P2: 짧은 곡선 cusp 셈이 `paths_replaced` 를 빠뜨린다는 한계를 적고, 사후 보충 셈과 운반 길이 미보고를 적었다. 두 실패 seed 의 #522 판정 출력을 원자료로 첨부하고 주장을 '같은 규칙 분류'로 좁혔다. P3: bundle 의 재시도·멈춤·미시작 기록과 B s9 의 잡 차이를 적었다.
+- **Codex 재계산(2 회차).** P2: 두 최종 실패가 '같은 분류'라는 서술이 틀렸다(같은 것은 실행별 분류 합계뿐). A s5 최종은 `plan_short_leg`, B s4 최종은 `mixed` 로 바로잡았다. 보충 도구가 실패 문구를 `failure` 키에서 읽어 비어 있던 것을 `failure_reason` 으로 고쳐 다시 뽑았다.

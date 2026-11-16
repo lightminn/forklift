@@ -58,7 +58,9 @@ def main(argv=None) -> None:
             if not run.result.get("success"):
                 res = ch.analyse([run], "postfix", None)
                 out["failed_runs"][run.name] = {
-                    "failure": str(run.result.get("failure"))[:300],
+                    "failure_reason": str(run.result.get("failure_reason"))[:300],  # the key #522's tool reads
+                    "final_classification": [j.get("classification") for j in (res.get("judgements") or [])
+                                             if j.get("kind") == "fail_final"],
                     "classification": res["counts"]["classification"], "outcome": res["counts"].get("outcome"),
                     "judgements": [{k: j.get(k) for k in ("kind", "leg_length_m", "classification", "time_s")}
                                    for j in (res.get("judgements") or [])]}
