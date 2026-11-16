@@ -44,7 +44,7 @@ from forklift_core.mcu_link.messages import McuState  # noqa: E402
 from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.kinematics import RealKinematics, teleop_limit_overrides  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
-from forklift_core.plant.markers import marker_reader  # noqa: E402
+from forklift_core.plant.markers import marker_input_state, marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
 from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
 from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: E402
@@ -519,9 +519,15 @@ def main(argv=None) -> int:
             print(f"the record {args.record} exists: give a new path", file=sys.stderr)
             return 2
         record = RecordWriter(sink)
+        marks = None
+        if args.markers or args.profile:
+            # Enter marks events (--markers) or starts the trial (--profile): whether it can, in the record (R2-1)
+            active, why = marker_input_state()
+            marks = {"requested": "profile_start" if args.profile else "markers", "active": active, "why": why}
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
-                        "start_mono_ns": time.monotonic_ns(), "config": identity})
+                        "start_mono_ns": time.monotonic_ns(), "config": identity,
+                        **({} if marks is None else {"markers": marks})})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
     bridge = server = None

@@ -40,6 +40,7 @@ STAND_DQ_RAD = 5e-4
 MEASUREMENTS = (("m1_", "m1"), ("m2_", "m2"), ("m3_merge_", "m3_merge"), ("m3_qstep_", "m3_qstep"))
 SCHEMAS = dict(record="teleop_bridge_record/1", imu="imu_record/1", truth="truth/1", field="field_log/1")
 TRUTH_METHODS = ("A_floor_marks", "B_camera", "synthetic")
+REHEARSAL_TRUTH_SCHEMA = "rehearsal_truth/1"
 POINT_KINDS = dict(start="stop_pose", end="stop_pose", merge_end="moving_point", run_042="moving_point")
 FAULT_VOIDS = tuple(FaultFlag[n] for n in ("ENCODER_GAP", "ENCODER_JUMP_L", "ENCODER_JUMP_R", "ENCODER_STUCK_L",
                                            "ENCODER_STUCK_R", "ENCODER_POLARITY_L", "ENCODER_POLARITY_R",
@@ -907,6 +908,21 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
            and r.get("s_m") is not None]
     out["distance"], out["values"], budget = _m1(pts, ctx["truth_header"], ctx["odo"], moved[0] - 1, i1,
                                                  max(s_m, default=None))
+    heading = (ctx.get("truth_heading") or {}).get(tr.trial)
+    if pts is None and heading is not None:
+        # heading-only truth (the rehearsal's stand-in): the drift on the encoder path, nothing that needs positions
+        odo = ctx["odo"]
+        pe = np.stack([odo["x"], odo["y"], odo["yaw"]], axis=1)
+        rel_o = ma.relative_pose(pe[moved[0] - 1], pe[i1])
+        path = out["distance"]["s_enc_path_m"]
+        if path > 0:
+            d = ma.m1_drift(odo_dyaw=rel_o["dyaw"], heading_ref_dyaw=heading, ref_source="truth", distance_m=path,
+                            distance_source="encoder")
+            out["values"] = dict(
+                d_rad_per_m=_value(d["rad_per_m"], odo_minus_ref_rad=d["odo_minus_ref_rad"], distance_source="encoder",
+                                   truth="heading_only"),
+                end_lateral_m=_value(None, False, "heading_only_truth", report_only=True),
+                radius_scale=_value(None, False, "heading_only_truth", report_only=True))
     if budget is not None:
         out["truth_budget"] = budget
     out["imu"] = {**ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
@@ -936,10 +952,16 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     _need(truth_rows is None or not no_truth, "give a truth file or no_truth, not both")
     _need(truth_rows is not None or no_truth, "a truth file or no_truth is required")
     marks: dict = {}
+    # the rehearsal's truth stand-in (rehearsal_truth/1: per trial the heading change only) is read under
+    # --allow-synthetic alone, as heading-only truth (entry design 2; rehearsal 2 R2-2)
+    rehearsal_truth = truth_rows is not None and bool(truth_rows) and truth_rows[0].get("t") == "header" \
+        and truth_rows[0].get("schema") == REHEARSAL_TRUTH_SCHEMA
+    if rehearsal_truth:
+        _need(allow_synthetic, "truth: rehearsal_truth/1 is the rehearsal's stand-in: give --allow-synthetic")
     for fname, rows in (("record", rec_rows), ("imu", imu_rows), ("truth", truth_rows), ("field", field_rows)):
         if rows is None:
             continue
-        hdr = _header(rows, fname)
+        hdr = rows[0] if fname == "truth" and rehearsal_truth else _header(rows, fname)
         try:
             marks.update(refuse_or_mark([hdr], allow=allow_synthetic))
         except SyntheticRefused as e:
@@ -953,7 +975,21 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     trs = ma.trials(rec_rows, valid_only=False)
     _identity_profile(rec_rows, profile, trs)
     starts = [min(s[0] for s in t.spans.values()) for t in trs if t.spans]
-    truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None
+    truth_heading = None
+    if rehearsal_truth:
+        truth_heading = {}
+        for r in truth_rows[1:]:
+            if r.get("t") != "truth":
+                continue
+            n = r.get("trial")
+            # the same identity rules as truth/1 (Codex review P3): a row for a trial the record has, once, finite
+            _need(n in {t.trial for t in trs}, f"truth: row for trial {n!r}, which the record does not have")
+            _need(n not in truth_heading, f"truth: two rows for trial {n}")
+            _need(_finite(r.get("dyaw_rad")), f"truth trial {n}: dyaw_rad is not a finite number")
+            truth_heading[n] = float(r["dyaw_rad"])
+        truth = None
+    else:
+        truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None
     if field_rows is not None:
         _check_field(field_rows, rec, starts)
     srows, times, fi, fits, extrapolated = _state_times(rec_rows)
@@ -974,9 +1010,11 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     if imu.t is not None:
         for r in recs[1:]:  # a block record must lie inside the IMU file (Codex PR 3b review P2)
             _need(imu.t[0] <= r["times"][0] and r["times"][-1] <= imu.t[-1], "block record: outside the IMU file")
-    ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
+    ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_heading=truth_heading,
+               truth_header=truth_rows[0] if truth_rows is not None and not rehearsal_truth else None, times=times,
                extrapolated=extrapolated,
-               states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),
+               states=states, odo=odo, fi=fi, fits=fits,
+               field_void=_field_voids((None if rehearsal_truth else truth_rows, field_rows)),
                drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu,
                intervals=_bias_intervals(imu, recs, field_rows))
     results = [_trial(t, kind, rec_rows, ctx) for t in trs if trial is None or t.trial == trial]
@@ -991,8 +1029,9 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
             "inputs": dict(record=dict(host_boot_id=boot, footer=foot),
                            imu=dict(serial=imu_rows[0].get("serial"), profile_ok=imu.profile_ok,
                                     footer_ok=imu.footer_ok),
-                           truth=None if truth is None else dict(schema=truth_rows[0]["schema"],
-                                                                 method=truth_rows[0]["method"]),
+                           truth=dict(schema=REHEARSAL_TRUTH_SCHEMA, method="heading_only") if rehearsal_truth
+                           else None if truth is None else dict(schema=truth_rows[0]["schema"],
+                                                                method=truth_rows[0]["method"]),
                            field_log=None if field_rows is None else dict(rows=len(field_rows) - 1),
                            profile=dict(name=name), up=dict(vector=[float(x) for x in upv])),
             "clock": dict(domain="host_monotonic_ns", mcu_fits=[f.summary() for f in fits], imu_fits=imu.fits,
