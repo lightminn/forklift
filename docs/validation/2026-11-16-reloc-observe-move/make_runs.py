@@ -2,7 +2,7 @@
 """The observation move's isaac_bundle run list (docs/plans/2026-11-16-reloc-observe-move.md 3): one unattended
 start relocalization session per start (deploy/console/reloc_session.sh), the B-P2d shape -- the seed-5 hall's survey
 map hall_s5b_G0 (map 3edf24b0), the same scene, URDF, launcher factor and odometry/obstacle-layer arguments as its
-survey (bp2d_survey/submit_s5b_gyro.sh, without the survey's SLAM noise seed) -- with --reloc-observe-move D.
+survey (bp2d_survey/submit_s5b_gyro.sh, its noise seed 0) -- with --reloc-observe-move D.
 
     make_runs.py --starts val_s5.json --snap SNAP --out OUT --move 0.3 [--ids val4_000,val4_001] > RUNS.jsonl
 """
@@ -14,7 +14,8 @@ from pathlib import Path
 P = "/home/projects/forklift"
 A = f"{P}/artifacts/20261013_fork_spacing"
 MAP_BUNDLE = f"{P}/test_runs/live/bp2d_survey/hall_s5b_G0/bundle"
-EXTRA = ("--obstacle-layer config/obstacle_layer_single_team_spec_gyro.yaml --odometry-heading gyro "
+# the survey's own EXTRA_ARGS word for word: localization refuses a run whose SLAM noise seed differs from the survey's
+EXTRA = ("--slam-noise-seed 0 --obstacle-layer config/obstacle_layer_single_team_spec_gyro.yaml --odometry-heading gyro "
          "--gyro-model config/gyro_model_spec_typical.yaml")
 
 
