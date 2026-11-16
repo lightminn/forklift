@@ -90,7 +90,7 @@ def short_curved_cusps(res, length_m=0.6) -> int:
     n, start, out = len(dirs), 0, 0
     for i in range(1, n):
         if dirs[i] != dirs[i - 1]:
-            seg = poses[start:i]
+            seg = poses[max(start - 1, 0):i]  # from the previous cusp (pose start-1) to this one (pose i-1)
             length = float(np.sum(np.hypot(np.diff(seg[:, 0]), np.diff(seg[:, 1])))) if len(seg) > 1 else 0.0
             if abs(curv[i - 1]) > 1e-9 and length < length_m:
                 out += 1
