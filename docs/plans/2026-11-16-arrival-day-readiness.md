@@ -10,7 +10,6 @@
 | A2M12 연결(G4) | A2M12 를 노트북에 연결해 `scan_check.py` 실측을 할 수 있게 한다. 이것이 7b(다리 스캔 원천)와 G6 실차 주행의 선행 조건이다. |
 | Jetson LAN | Jetson 을 LAN 에 연결하고 접속 정보를 총괄에 알린다. 다리 정체 측정(nvpmodel 모드·jetson_clocks 고정·기록)과 실차 운용 경로 확인에 필요하다. |
 | D435i 실기 확인 | `python tools/imu_record.py --out data/imu_check/<날짜>.jsonl --seconds 120` 을 한 번 돌린다(약 3 분). |
-| 모터 출력 보호 확인 기록 | 출력 열린 시운전 빌드(S3·S5)에 필요한 IPROPI 보호 확인 기록을 사용자가 작성·커밋한다(절차서 2 절, 사용자만 작성). |
 | 현장 준비물 | bring-up 안전 물건(절차서 1 절: 받침대·스트랩, 손에 쥐는 주 전원 차단 스위치, 승강 낙하 방지 블록, 멀티미터, 전류 제한 벤치 전원, 오실로스코프, 외부 리셋 버튼)과 M1–M3 용 **줄자·마스킹 테이프**만 갖춘다(등록 개정 4: 바닥 십자·지시봉·천장 카메라는 필요 없음). |
 
 ## 준비됨
@@ -19,6 +18,7 @@
 |---|---|
 | Arm GNU Toolchain 13.3.rel1 | 노트북 `~/opt/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi`(절차서 2 절의 `<TC>`) |
 | STM32CubeProgrammer CLI | 노트북에 2.23.0 설치(2026-11-16, `STM32_Programmer_CLI --version`, `-l usb` 동작 — 장치 없음) |
+| 모터 출력 보호 확인 기록 | 사용자가 작성·커밋(#552, `docs/validation/2026-11-16-ipropi-protection-record.md`): 보호 회로 없이 출력을 연다, 예비 보드 있음. 게이트 검사 `rec=1f4207f4` 통과(총괄 확인). 절차서 2 절의 open 빌드 명령에 경로를 채움 |
 | udev 규칙(노트북) | 2026-11-16 설치: `/etc/udev/rules.d/99-forklift-mcu.rules`(main `deploy/udev` 와 같음)와 DFU 규칙 `50-stm32-dfu.rules`(0483:df11, 절차서 4 절), reload·trigger 완료. 보드를 꽂은 확인(절차서 4 절의 `ls`·`udevadm` 세 줄)은 아직 |
 | 콘솔 단말 | 사용자 결정(2026-11-16): 노트북 Chrome, 앞쪽 탭·화면 켬. 콘솔이 송신 간격(10 s p99·최대)을 보여 주고 0.2 s 를 넘거나 화면이 가려지면 경고한다(#550). 리허설 모형에서 무장·TELEOP 앞쪽 탭 송신 간격 최대 49.9 ms(리허설 2 차 기록 R2-3 후속) |
 | bring-up 도구 S2–S5(기록·kth·clock·cpr·재무장 보류·commission·step·시나리오·analyze) | 리허설 1·2 차 모두 통과(모형 MCU) |

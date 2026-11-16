@@ -56,7 +56,7 @@ build_fw commission -DFW_BUILD=commission        # S2: 출력 잠금 시운전 �
 build_fw stall -DFW_TEST_IWDG_STALL=5            # S5 ①: 부팅 5 s 뒤 주기 정지, 출력 잠금 강제
 # S3·S5(9.1 의 ②·시운전 상한 DISARM·주 전원 차단 모두): 출력 열린 시운전 빌드 — 사용자가 보호 확인 기록을 커밋한 뒤에만 구성된다
 build_fw open -DFW_BUILD=commission -DFW_MOTOR_OUTPUT=1 \
-  -DFW_IPROPI_PROTECTION_RECORD=<커밋된 기록의 저장소 상대 경로>
+  -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md   # 사용자 기록 #552
 ```
 
 - ELF: `build/fw-<이름>/boards/weact_h743/fw.elf`(stall 은 `fw_iwdg_stall.elf`).
