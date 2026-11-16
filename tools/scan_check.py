@@ -20,6 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
+from forklift_core.live.synthetic import OUTPUT_MARKS  # noqa: E402
 from forklift_core.sensors.scan_feed import ScanFeed, bind_socket
 
 PROBE_NEAR_M = 1.0  # the probe's box is put this close or closer
@@ -123,6 +124,10 @@ def main(argv=None) -> int:
         if record is not None:
             record.close()
     summary = summarize(scans, feed)
+    if feed.synthetic_frames:
+        # the sender marked its frames synthetic (tools/rehearsal_scan.py): the summary carries the marks first, as
+        # every other rehearsal output does (arrival-day D6)
+        summary = {**OUTPUT_MARKS, "synthetic_frames": feed.synthetic_frames, **summary}
     if args.probe:
         summary["probe"] = probe(scans, args.probe)
     text = json.dumps(summary, indent=2)

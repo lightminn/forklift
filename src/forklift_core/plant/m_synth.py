@@ -1,0 +1,283 @@
+"""Synthetic M1-M3 trials for the G8 entry's tests (docs/design/2026-11-15-m-analyze-entry.md 6, PR 1).
+
+One call makes what a measurement day leaves behind for one trial, from a drive profile and a TRUE plant the analysis
+must recover:
+
+- the teleop bridge record -- header, ``profile_start``, the profile rows of the real ``ProfileRunner`` (it is run
+  against the plant, so its rows, segment boundaries, deadman waits and voids are the runner's own), STATE rows by
+  ``state_row`` every 10 ms, ``profile_end``, footer;
+- an ``imu_record/1`` file -- gyro 400 Hz, accelerometer 200 Hz, a 32-bit microsecond device clock;
+- a ``truth/1`` file -- the true start and end standstill poses (``stop_pose``) of the rear-axle centre.
+
+The plant: the encoder speed follows the command with the profile's acceleration limit; the true speed is the encoder
+speed divided by ``true_radius_scale`` (the encoders over-read distance by it); the true heading turns by the held
+curvature of the measured steering plus ``true_yaw_per_m`` per metre; the gyro reads the true yaw rate on the body
+``up`` axis plus ``bias`` (``bias_step`` added from the first wheel motion) plus white noise of density ``arw``; the
+accelerometer reads the upward reaction ``G * up``. Headers say ``"synthetic": true`` unless ``synthetic=False``
+(only refusal tests ask for that). Deterministic for a seed.
+"""
+
+from __future__ import annotations
+
+import copy
+import math
+
+import numpy as np
+
+from forklift_core.live import drive_profile as dprof
+from forklift_core.live import real_teleop as rt
+from forklift_core.mcu_link.messages import FaultFlag, McuState, Mode, RejectReason, StateFlag
+from forklift_core.plant.bringup import Sample
+from forklift_core.plant.kinematics import RealKinematics, teleop_limit_overrides
+from forklift_core.plant.real_vehicle import advance_arc
+from forklift_core.plant.record_rows import state_row
+from forklift_core.safety.teleop_drive import TeleopLimits
+from forklift_core.sensors.imu_record import WRAP_US
+
+ARW_DESK = 2.054e-4  # rad/sqrt(s): the bench gyro y (registration 1.1)
+G = 9.80665
+STATE_DT_NS = 10_000_000  # one STATE per 10 ms
+CYCLE_STATES = 2  # a bridge cycle every second STATE (20 ms)
+GYRO_HZ, ACCEL_HZ = 400.0, 200.0
+BOOT = 0x5E57
+T0_NS = 100_000_000_000  # the record's start (host monotonic)
+PRE_S, POST_S = 1.5, 1.0  # standing before the trial starts (the runner wants >= 1 s) and after it ends
+IMU_PAD_NS = 500_000_000
+VOIDS = ("deadman", "ENCODER_JUMP_L", "STEER_SENSOR_INVALID", "boot_change", "time_not_increasing", "encoder_gap")
+TRUTH_SIGMA = {"pose_yaw_rad": 5e-4, "pose_xy_m": 1e-3, "source": "synthetic"}
+
+
+def unit(v) -> np.ndarray:
+    a = np.asarray(v, float)
+    n = float(np.linalg.norm(a))
+    if a.shape != (3,) or not math.isfinite(n) or n == 0.0:
+        raise ValueError("a 3-vector of non-zero length is needed")
+    return a / n
+
+
+def profile_limits(cfg) -> dprof.ProfileLimits:
+    """The limits the teleop bridge checks a profile against (tools/teleop_bridge.py Bridge.profile_limits)."""
+    import pathlib
+
+    kin = RealKinematics(cfg)
+    params = rt.load_bridge_params(pathlib.Path(__file__).resolve().parents[3] / "config" / "real" /
+                                   "teleop_bridge.yaml", cfg)
+    cap = rt.command_cap_mps(cfg.teleop_speed_limit_mps, params)
+    lim = rt.real_teleop_limits(TeleopLimits(**teleop_limit_overrides(kin)), cap)
+    return dprof.ProfileLimits(cap_mps=min(lim.direct_forward_mps, lim.direct_reverse_mps),
+                               kappa_max=lim.curvature_inv_m, kappa_rate=lim.curvature_rate_inv_m_s,
+                               q_rate=kin.steering_rate_rad_s, accel_mps2=lim.accel_mps2,
+                               q_of_kappa=cfg.steering.angle, kappa_of_q=lambda q: kin.held_curvature((q,)))
+
+
+def _wrap(a: float) -> float:
+    return math.atan2(math.sin(a), math.cos(a))
+
+
+def _state(t_us, boot, counts, rates, q, faults=FaultFlag(0), mode=Mode.ARMED) -> McuState:
+    return McuState(int(t_us), boot, 1, 0, mode, RejectReason.NONE, faults, int(counts[0]), int(counts[1]),
+                    float(rates[0]), float(rates[1]), float(q), 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0,
+                    StateFlag.DRIVERS_READY | StateFlag.ZERO_SEEN)
+
+
+def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_per_m: float = 0.0,
+                up=(0.0, -1.0, 0.0), bias=(0.0, 0.0, 0.0), bias_step=None, arw: float = ARW_DESK,
+                still_s: float | None = None, void: str | None = None, seed: int = 0,
+                mcu_imu_offset_s: float = 0.0, imu_late_sample: bool = False, dev_us_wrap: bool = False,
+                deadman_wait_s: float = 0.0, synthetic: bool = True, trial: int = 1,
+                start_pose=(0.0, 0.0, 0.0)) -> dict:
+    """``{"record": rows, "imu": rows, "truth": rows}`` for one trial of ``profile`` (a drive_profile/1 dict).
+    ``still_s`` replaces every hold segment's length (tests that need no 60 s windows). ``void`` puts one defect
+    into the drive (one of ``VOIDS``)."""
+    if not (true_radius_scale > 0 and math.isfinite(true_radius_scale)):
+        raise ValueError("true_radius_scale must be positive")
+    if void is not None and void not in VOIDS:
+        raise ValueError(f"void must be one of {VOIDS}")
+    up = unit(up)
+    bias = np.asarray(bias, float)
+    step = None if bias_step is None else np.asarray(bias_step, float)
+    rng = np.random.default_rng(seed)
+    data = copy.deepcopy(profile)
+    if still_s is not None:
+        for seg in data["segments"]:
+            if "hold_s" in seg:
+                seg["hold_s"] = float(still_s)
+    lim = profile_limits(cfg)
+    runner = dprof.ProfileRunner(dprof.parse_profile(data, lim), lim)
+    runner.trial = trial - 1
+    kin = RealKinematics(cfg)
+    host_boot = f"synthetic-{seed}"
+    rec = [{"t": "header", "schema": "teleop_bridge_record/1", "tool": "m_synth", "device": "synthetic",
+            "device_id": None, "synthetic": bool(synthetic), "host_boot_id": host_boot, "start_wall": 0.0,
+            "start_mono_ns": T0_NS}]
+
+    # the plant
+    pose = tuple(float(v) for v in start_pose)
+    v_enc = 0.0  # the encoder's signed speed (what the bridge sees)
+    q = 0.0
+    counts = [0.0, 0.0]
+    boot, last_us = BOOT, None
+    omega: list[float] = []  # the true yaw rate over each 10 ms tick
+    ticks_ns: list[int] = []
+    deadman = True
+    started = ended = False
+    start_ns = end_ns = None
+    truth_start = truth_end = None
+    seg_drive_entry = None
+    moving_since = moving_last = None
+    gap_left = 0
+    defect_done = False
+    post_left = int(POST_S * 1e9 / STATE_DT_NS)
+    k = 0
+    while True:
+        host = T0_NS + k * STATE_DT_NS
+        cycle = k % CYCLE_STATES == 0
+        # the bridge cycle (before the plant moves this tick: it decides on what it saw)
+        if cycle:
+            if not started and host - T0_NS >= PRE_S * 1e9:
+                why = runner.start(host, standstill_s=(host - T0_NS) / 1e9, armed=True)
+                assert why is None, why
+                started, start_ns, truth_start = True, host, pose
+                rec.append({"t": "profile_start", "host_ns": host, "trial": runner.trial,
+                            "profile": runner.profile.name, "refused": None})
+            if started and not ended:
+                seg = runner.segment
+                if seg is not None and seg.kind == "drive" and seg_drive_entry is None:
+                    seg_drive_entry = host
+                deadman = True
+                if seg_drive_entry is not None and host < seg_drive_entry + deadman_wait_s * 1e9:
+                    deadman = False
+                if void == "deadman" and moving_since is not None and host >= moving_since + 1e9:
+                    deadman = False
+                if runner.state == "zeroing":
+                    deadman = False
+                applied = runner.req_mps
+                obs = dprof.Observation(dt_s=CYCLE_STATES * STATE_DT_NS / 1e9, speed_valid=True, speed_mps=v_enc,
+                                        meas_q=q, armed=True, mode="TELEOP", target_mps=applied,
+                                        applied_mps=applied, applied_q=q, permit=(1.0, "ok"), port=None,
+                                        direction_cut=None, stop=None, deadman=deadman, policy=None)
+                row = runner.step(host, obs)
+                if row is not None:
+                    rec.append(row)
+                    if row["result"] is not None and end_ns is None:
+                        end_ns = host
+                        rec.append({"t": "profile_end", "host_ns": host, "trial": row["trial"],
+                                    "result": row["result"]})
+                if runner.state == "idle" and end_ns is not None:
+                    ended = True
+        # the plant over this tick
+        cmd = 0.0 if (runner.zero_now or runner.state != "running") else runner.req_mps
+        runner.zero_now = False
+        dv = lim.accel_mps2 * STATE_DT_NS / 1e9
+        v_enc = min(cmd, v_enc + dv) if cmd >= v_enc else max(cmd, v_enc - dv)
+        q = lim.q_of_kappa(runner.req_kappa) if runner.state == "running" else q
+        kappa = kin.held_curvature((q,)) or 0.0
+        dt = STATE_DT_NS / 1e9
+        v_true = v_enc / true_radius_scale
+        ds_true = v_true * dt
+        curv = kappa + true_yaw_per_m
+        omega.append(v_true * curv)
+        ticks_ns.append(host)
+        pose = advance_arc(*pose, ds_true, curv)
+        if v_enc != 0.0:
+            if moving_since is None:
+                moving_since = host
+            moving_last = host
+        ds_enc = v_enc * dt  # what the encoders count (scaled)
+        rates = []
+        for i, side in enumerate((-1.0, 1.0)):
+            d = ds_enc * (1.0 + side * kappa * cfg.track_m / 2.0)
+            counts[i] += d / (2 * math.pi * cfg.wheel_radius_m[i]) * cfg.counts_per_wheel_rev[i]
+            rates.append(d / dt / cfg.wheel_radius_m[i])
+        # the STATE of this tick (with the asked defect once, in the drive)
+        t_us = 1_000_000 + (host - T0_NS) // 1000
+        faults = FaultFlag(0)
+        in_drive = moving_since is not None and host >= moving_since + 500_000_000 and not ended \
+            and runner.state == "running"
+        emit = True
+        if in_drive and not defect_done and void in VOIDS[1:]:
+            defect_done = True
+            if void in ("ENCODER_JUMP_L", "STEER_SENSOR_INVALID"):
+                faults = FaultFlag[void]
+            elif void == "boot_change":
+                boot = BOOT + 1
+            elif void == "time_not_increasing":
+                t_us = last_us
+            elif void == "encoder_gap":
+                gap_left = 8
+        if gap_left > 0:
+            gap_left -= 1
+            emit = False
+        if emit:
+            st = _state(t_us, boot, (round(counts[0]), round(counts[1])), rates, q, faults)
+            row = state_row(Sample(host, st))
+            row["read_ns"] = host
+            rec.append(row)
+            last_us = t_us
+        k += 1
+        if ended:
+            if truth_end is None and abs(v_enc) < 1e-12:
+                truth_end = pose
+            post_left -= 1
+            if post_left <= 0 and truth_end is not None:
+                break
+        if k > 10_000_000:
+            raise RuntimeError("the synthetic trial did not end")
+    rec.append({"t": "footer", "host_ns": T0_NS + k * STATE_DT_NS, "finished": True, "unwritten": 0, "dropped": 0,
+                "write_errors": 0})
+
+    # the IMU
+    ticks = np.asarray(ticks_ns, dtype=np.int64)
+    om = np.asarray(omega, float)
+    imu_t0 = T0_NS - IMU_PAD_NS
+    imu_t1 = ticks_ns[-1] + IMU_PAD_NS
+    off_ns = int(round(mcu_imu_offset_s * 1e9))
+    mid = moving_since + (moving_last - moving_since) // 2 if moving_since is not None else (imu_t0 + imu_t1) // 2
+    dev0 = (WRAP_US - (mid - imu_t0) // 1000) if dev_us_wrap else 123_456_789
+    rows = []
+    for s, hz in (("g", GYRO_HZ), ("a", ACCEL_HZ)):
+        n = int((imu_t1 - imu_t0) * hz / 1e9)
+        t = imu_t0 + np.round(np.arange(n) * 1e9 / hz).astype(np.int64)
+        if s == "g":
+            idx = np.clip(np.searchsorted(ticks, t, side="right") - 1, 0, len(om) - 1)
+            w = np.where((t >= ticks[0]) & (t < ticks[-1] + STATE_DT_NS), om[idx], 0.0)
+            xyz = w[:, None] * up[None, :] + bias[None, :]
+            if step is not None and moving_since is not None:
+                xyz = xyz + (t >= moving_since)[:, None] * step[None, :]
+            xyz = xyz + rng.normal(0.0, arw * math.sqrt(hz), size=(n, 3))
+        else:
+            xyz = np.repeat((G * up)[None, :], n, axis=0)
+        for ti, v in zip(t.tolist(), xyz.tolist()):
+            rows.append({"t": "imu", "s": s, "dev_us": int((dev0 + (ti - imu_t0) // 1000) % WRAP_US),
+                         "ts_ms": (ti - imu_t0) / 1e6, "dom": "GLOBAL_TIME", "host_ns": ti + off_ns,
+                         "x": v[0], "y": v[1], "z": v[2]})
+    rows.sort(key=lambda r: (r["host_ns"], r["s"]))
+    if imu_late_sample:
+        gi = [i for i, r in enumerate(rows) if r["s"] == "g" and r["host_ns"] - off_ns >= mid]
+        i, j = gi[0], gi[3]
+        late = rows.pop(i)
+        late = {**late, "host_ns": rows[j - 1]["host_ns"]}  # arrived with the third sample after it
+        rows.insert(j, late)
+    imu = [{"t": "header", "schema": "imu_record/1", "tool": "m_synth", "host_clock": "monotonic",
+            "host_boot_id": host_boot, "start_wall": 0.0, "start_host_ns": imu_t0 + off_ns,
+            "synthetic": bool(synthetic)},
+           {"t": "profile", "host_ns": imu_t0 + off_ns, "rate_mismatch": False,
+            "actual": {"gyro_hz": GYRO_HZ, "accel_hz": ACCEL_HZ},
+            "options": {"enable_motion_correction": {"requested": 0, "read_back": 0},
+                        "global_time_enabled": {"requested": 1, "read_back": 1}}},
+           *rows,
+           {"t": "footer", "stop": "seconds", "seconds": (imu_t1 - imu_t0) / 1e9, "dropped": 0,
+            "write_errors": 0}]
+
+    # the truth
+    def point(p):
+        return {"kind": "stop_pose", "x_m": p[0], "y_m": p[1], "yaw_rad": _wrap(p[2])}
+
+    truth = [{"t": "header", "schema": "truth/1", "method": "synthetic", "synthetic": bool(synthetic),
+              "record": {"host_boot_id": host_boot, "start_mono_ns": T0_NS}, "body_point": "rear_axle_center",
+              "frame": "floor", "sigma": dict(TRUTH_SIGMA)},
+             {"t": "truth", "trial": runner.trial, "points": {"start": point(truth_start), "end": point(truth_end)}}]
+    return {"record": rec, "imu": imu, "truth": truth}
+
+
+__all__ = ["ARW_DESK", "G", "VOIDS", "profile_limits", "synth_trial", "unit"]
