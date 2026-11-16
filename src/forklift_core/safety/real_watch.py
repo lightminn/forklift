@@ -21,6 +21,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REASONS = ("watch_current", "watch_wheel", "watch_tilt", "watch_imu_stale")
+# The longest gap between two judged STATEs a hold may run across: longer, and the hold starts again on the new STATE
+# (a gap is not evidence the condition held; Codex code review P2). Twice the link's 50 ms freshness age.
+STATE_GAP_MAX_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ class SafetyWatch:
         self._since: dict[str, float | None] = {r: None for r in REASONS}
         self._baseline = None  # gravity direction at the arm (tilt)
         self._armed = False
+        self._last_state_t: float | None = None  # the time of the last STATE judged (current, wheels)
 
     def _clear(self, *reasons) -> None:
         for r in reasons:
@@ -109,6 +113,7 @@ class SafetyWatch:
             self._armed = False
             self._baseline = None
             self._clear(*REASONS)
+            self._last_state_t = None
             return WatchResult(None, values)
         if not self._armed:
             self._armed = True
@@ -117,7 +122,11 @@ class SafetyWatch:
         c = self.cfg
         if not fresh:
             self._clear("watch_current", "watch_wheel")
+            self._last_state_t = None
         elif new_state:
+            if self._last_state_t is None or t_s - self._last_state_t > STATE_GAP_MAX_S:
+                self._clear("watch_current", "watch_wheel")
+            self._last_state_t = t_s
             if currents_a is not None:
                 mags = [abs(float(x)) for x in currents_a]
                 ch = max(range(len(mags)), key=lambda i: mags[i])

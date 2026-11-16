@@ -205,3 +205,15 @@ def test_a_short_tilt_does_not_trip_and_a_stale_imu_does():
         res = w.step(t, **base(accel=None, accel_t_s=last, imu_expected=True))
         first = first or res.trip
     assert first == "watch_imu_stale"
+
+
+def test_a_gap_between_states_restarts_the_hold():
+    """High current, then no STATE for 0.6 s, then one more: the gap is not counted as held (Codex P2)."""
+    w = rw.SafetyWatch(CFG, wheel_radius_m=R)
+    hot = base(currents_a=(3.5, 0.5, 0.2, 0.0))
+    first, t = run(w, 0.1, **hot)
+    first2, t = run(w, 0.6, t0=t, **{**hot, "new_state": False})
+    res = w.step(round(t + 0.01, 9), **hot)
+    assert first is None and first2 is None and res.trip is None
+    first3, _ = run(w, 0.6, t0=round(t + 0.01, 9), **hot)
+    assert first3[0] == "watch_current"  # held again on consecutive STATEs
