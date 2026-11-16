@@ -32,6 +32,9 @@ def runs(starts: list, snap: str, out: str, move: float, ids=None) -> list:
                     "FORKLIFT_URDF": f"{A}/dd_cfg/old/dls08_measured/forklift.urdf",
                     "VENV_PY": f"{P}/.venv/bin/python", "SEED": "5", "FACTOR": "0.3", "MAP_BUNDLE": MAP_BUNDLE,
                     "START_POSE": f"{x!r},{y!r},{yaw!r}", "RELOC_UNATTENDED": "1", "MAX_EPOCHS": "1",
+                    # the launcher asks a map folder's start pose; with START_POSE the bridge takes the runner's
+                    # estimate instead (isaac_live.sbatch bridge.sh), so this value is not used
+                    "MAP_START_POSE": f"{x!r},{y!r},{yaw!r}",
                     "EXTRA_ARGS": extra},
             "retry_move": [d], "pace_log": f"{d}/epoch_*/run/live_log.jsonl"})
     if ids is not None and len(rows) != len(ids):
