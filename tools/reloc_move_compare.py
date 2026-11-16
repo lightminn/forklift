@@ -95,6 +95,14 @@ def pair(row: dict, rec: dict | None) -> dict:
 
 def compare(rows: list, recs: dict) -> dict:
     valid = [r for r in rows if r.get("class") == "valid" and r.get("outcome") != "not_run"]
+    # every valid session must show it ran with the move on (its record's "moves", empty when the static stage
+    # confirmed): a missing record would silently move a session into arm A's success (Codex code review P2)
+    missing = [r["id"] for r in valid if not isinstance(recs.get(r["id"]), dict) or "moves" not in recs[r["id"]]]
+    if missing:
+        raise ValueError(f"valid sessions without a move-on start_reloc record: {missing}")
+    odd = [r["id"] for r in valid if bool(recs[r["id"]]["moves"]) != (recs[r["id"]].get("static_outcome") is not None)]
+    if odd:
+        raise ValueError(f"sessions whose moves and static_outcome disagree: {odd}")
     pairs = [pair(r, recs.get(r["id"])) for r in valid]
     b = sum(1 for p in pairs if p["b_success"] and not p["a_success"])
     c = sum(1 for p in pairs if p["a_success"] and not p["b_success"])

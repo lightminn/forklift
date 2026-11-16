@@ -26,7 +26,7 @@ def moved(static="needs_operator", phases=("move+",), blocked=(), wall=4.0, late
 def test_a_static_success_is_both_arms_and_a_rescue_is_counted_once():
     rows = [row("s1", "success", "success"), row("s2", "success", "success"), row("s3", "needs_operator"),
             row("s4", "success", "success"), row("x", "not_run", cls="not_run"), row("v", "invalid", cls="invalid")]
-    recs = {"s1": {"attempts": []}, "s2": moved(), "s3": moved(phases=("move+", "move+", "move-", "move-")),
+    recs = {"s1": {"attempts": [], "moves": []}, "s2": moved(), "s3": moved(phases=("move+", "move+", "move-", "move-")),
             "s4": moved(static="failed", blocked=(1,), phases=("move-",))}
     out = M.compare(rows, recs)
     assert out["valid"] == 4 and out["static_failed"] == 3
@@ -60,3 +60,12 @@ def test_the_two_sided_interval():
     lo, hi = M.cp_two_sided(2, 10)
     assert lo == pytest.approx(0.0252, abs=5e-4) and hi == pytest.approx(0.5561, abs=5e-4)
     assert M.cp_two_sided(0, 5)[0] == 0.0 and M.cp_two_sided(5, 5)[1] == 1.0 and M.cp_two_sided(0, 0) is None
+
+
+def test_a_valid_session_without_a_move_on_record_stops_the_comparison():
+    with pytest.raises(ValueError, match="without a move-on"):
+        M.compare([row("a", "success", "success")], {"a": {"attempts": []}})
+    with pytest.raises(ValueError, match="without a move-on"):
+        M.compare([row("a", "success", "success")], {})
+    with pytest.raises(ValueError, match="disagree"):
+        M.compare([row("a", "success", "success")], {"a": {"moves": [], "static_outcome": "failed"}})

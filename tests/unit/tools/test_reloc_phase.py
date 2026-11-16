@@ -805,6 +805,15 @@ def test_a_corridor_without_valid_beams_counts_as_blocked():
     holed[:5] = np.nan  # no beam ahead
     assert P.corridor_blocked(holed, angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
     assert not P.corridor_blocked(holed, angles, (-0.12, 0.0), BODY, -1, 0.3, 0.2, 12.0)
+    fan = np.full(181, np.inf)  # a front half fan, -90..+90 deg: the rear is not measured
+    fan_angles = (-math.pi / 2, math.pi / 180)
+    assert not P.corridor_blocked(fan, fan_angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(fan, fan_angles, (-0.12, 0.0), BODY, -1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(free, (0.0, 0.0), (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    assert P.corridor_blocked(np.array([]), angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
+    close = free.copy()
+    close[0] = -np.inf
+    assert P.corridor_blocked(close, angles, (-0.12, 0.0), BODY, 1, 0.3, 0.2, 12.0)
 
 
 def test_a_stop_during_the_move_stops_the_wheels_and_ends_the_session(tmp_path, monkeypatch):
@@ -847,3 +856,57 @@ def test_the_rebased_target_never_changes_what_the_matcher_reads(tmp_path, monke
         runs.append(seen)
     assert len(runs[0]) == len(runs[1]) == 7
     assert all(np.array_equal(a, b) for a, b in zip(runs[0], runs[1], strict=True))
+
+
+def test_a_stop_while_settling_after_the_move_ends_the_session_with_the_wheels_at_zero(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: b[0] > base[0] + 0.25)
+    holder = {"moves": 0}
+
+    class Console:
+        def attach(self, r):
+            holder["r"] = r
+
+        def note(self, **kw):
+            pass
+
+        def gate(self, stage):
+            if stage == "move":
+                holder["moves"] += 1
+                if truck.v == 0.0 and holder["moves"] > 365 and holder["r"].state != "stopped":
+                    holder["r"].interrupt()  # after the 360 drive steps: in the settle
+
+        def service(self, stage):
+            pass
+
+    out = P.run(_move_inputs(tmp_path, grid, truck, base, console=Console()))
+    assert out["status"] == "needs_operator" and truck.v == 0.0 and out["moves"][0]["stopped"]
+    assert out["moves"][0]["travelled_m"] == pytest.approx(0.3, abs=0.02) and len(out["moves"]) == 1
+    assert [a.get("phase") for a in out["attempts"]] == ["static"] * 3 and R.read_reloc_pose(tmp_path) is None
+
+
+def test_an_exception_while_moving_leaves_the_wheels_at_zero(tmp_path, monkeypatch):
+    grid = TG._grid(6.0, 4.0, [])
+    base = (2.0, 2.0, 0.0)
+    truck = DrivenTruck(grid, base)
+    _fake_matcher(monkeypatch, truck, lambda b: False)
+
+    class Console:
+        def attach(self, r):
+            pass
+
+        def note(self, **kw):
+            pass
+
+        def gate(self, stage):
+            if stage == "move" and truck.v != 0.0:
+                raise RuntimeError("the operator ended the session")
+
+        def service(self, stage):
+            pass
+
+    with pytest.raises(RuntimeError):
+        P.run(_move_inputs(tmp_path, grid, truck, base, console=Console()))
+    assert truck.v == 0.0

@@ -103,6 +103,9 @@ def corridor_blocked(ranges, angles: tuple, laser_xy: tuple, body: tuple, direct
 
     r = np.asarray(ranges, float)
     n = len(r)
+    if n == 0 or not (angles[1] > 0 and math.isfinite(angles[0]) and math.isfinite(angles[1])):
+        return True
+    full = n * angles[1] >= 2 * math.pi - 1e-6  # a full turn wraps; a partial fan has unmeasured bearings
     front, rear, half = body
     length = d_m + CORRIDOR_EXTRA_M
     x0, x1 = (front, front + length) if direction > 0 else (-(rear + length), -rear)
@@ -114,7 +117,14 @@ def corridor_blocked(ranges, angles: tuple, laser_xy: tuple, body: tuple, direct
         for y in ys:
             dx, dy = x - lx, y - ly
             dist = math.hypot(dx, dy)
-            k = int(round((math.atan2(dy, dx) - angles[0]) / angles[1])) % n
+            rel = math.atan2(dy, dx) - angles[0]
+            if full:
+                k = int(round(rel / angles[1])) % n
+            else:
+                rel = math.remainder(rel - math.pi, 2 * math.pi) + math.pi  # [0, 2 pi) from angle_min
+                k = int(round(rel / angles[1]))
+                if k >= n:
+                    return True  # a bearing the fan does not measure: no beam sees it free
             beam = r[k]
             if math.isinf(beam) and beam > 0:
                 continue
@@ -143,14 +153,16 @@ def _observe_move(inputs: RelocInputs, relocalizer, out: dict, step, plan: list,
     pos0, _ = engine.pose()
     generation = relocalizer.generation
     n = int(round(abs(d) / MOVE_SPEED_MPS * inputs.steps_per_s))
-    inputs.drive(direction * MOVE_SPEED_MPS)
     stopped = False
-    for _ in range(n):
-        step("move")
-        if relocalizer.generation != generation or inputs.cancel.is_set():
-            stopped = True
-            break
-    inputs.drive(0.0)
+    try:
+        inputs.drive(direction * MOVE_SPEED_MPS)
+        for _ in range(n):
+            step("move")
+            if relocalizer.generation != generation or inputs.cancel.is_set():
+                stopped = True
+                break
+    finally:
+        inputs.drive(0.0)  # also when a step raised (the console's session end): the wheels are not left running
     if not stopped:
         for _ in range(int(round(MOVE_SETTLE_S * inputs.steps_per_s))):
             step("move")
