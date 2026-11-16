@@ -17,6 +17,7 @@ from forklift_core.live import drive_profile as dprof
 from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark
 from forklift_core.mcu_link.messages import FaultFlag
 from forklift_core.plant import m_analysis as ma
+from forklift_core.plant import m_rev4 as r4
 from forklift_core.plant.clock_map import clock_fits_from_rows, fit_clock
 from forklift_core.plant.record_rows import sample_from_row
 from forklift_core.sensors.imu_mount import _unit, _vec3
@@ -39,7 +40,7 @@ STAND_SPEED_MPS = 0.005  # standing thresholds: proposed, to be confirmed (entry
 STAND_DQ_RAD = 5e-4
 MEASUREMENTS = (("m1_", "m1"), ("m2_", "m2"), ("m3_merge_", "m3_merge"), ("m3_qstep_", "m3_qstep"))
 SCHEMAS = dict(record="teleop_bridge_record/1", imu="imu_record/1", truth="truth/1", field="field_log/1")
-TRUTH_METHODS = ("A_floor_marks", "B_camera", "synthetic")
+TRUTH_METHODS = ("A_floor_marks", "B_camera", "synthetic", "tape")  # tape: registration revision 4 (11.2)
 POINT_KINDS = dict(start="stop_pose", end="stop_pose", merge_end="moving_point", run_042="moving_point")
 FAULT_VOIDS = tuple(FaultFlag[n] for n in ("ENCODER_GAP", "ENCODER_JUMP_L", "ENCODER_JUMP_R", "ENCODER_STUCK_L",
                                            "ENCODER_STUCK_R", "ENCODER_POLARITY_L", "ENCODER_POLARITY_R",
@@ -68,6 +69,30 @@ def _header(rows, name: str) -> dict:
 
 def _finite(*v) -> bool:
     return all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v)
+
+
+def _check_tape(rows, trial_ids, hdr) -> dict:
+    """The tape truth of revision 4 (11.2): per trial the left rear axle end's distance along the start tape line
+    (``s_cm``) and its offset to the left of it (``y_cm``), at the end stop."""
+    h = rows[0]
+    _need(h.get("body_point") == "left_rear_axle_end", "truth tape: body_point is not left_rear_axle_end")
+    _need(h.get("frame") == "start_tape_line", "truth tape: frame is not start_tape_line")
+    rec = h.get("record") or {}
+    _need(rec.get("host_boot_id") == hdr.get("host_boot_id"), "truth: host_boot_id differs from the record")
+    _need(rec.get("start_mono_ns") == hdr.get("start_mono_ns"), "truth: record.start_mono_ns differs from the record")
+    _need(_finite((h.get("sigma") or {}).get("pos_m")), "truth tape: header sigma needs pos_m")
+    out: dict = {}
+    for r in rows[1:]:
+        kind = r.get("t")
+        if kind != "tape":
+            _need(kind == "void", f"truth tape: unknown row type {kind!r}")
+            continue
+        n = r.get("trial")
+        _need(n in trial_ids, f"truth tape: row for trial {n!r}, which the record does not have")
+        _need(n not in out, f"truth tape: two rows for trial {n}")
+        _need(_finite(r.get("s_cm"), r.get("y_cm")) and r["s_cm"] > 0, f"truth tape trial {n}: s_cm, y_cm")
+        out[n] = {"s_cm": float(r["s_cm"]), "y_cm": float(r["y_cm"])}
+    return out
 
 
 def _check_truth(rows, trial_ids, hdr) -> dict:
@@ -878,7 +903,8 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
     moved = [i for i in range(max(i0, 1), i1 + 1) if times[i] >= d0 and counts[i] != counts[i - 1]]
     if not moved:
         return void("no_motion")
-    out.update(status="valid", window_ns=[int(t0), int(t1)], move_start_ns=int(times[moved[0]]))
+    out.update(status="valid", window_ns=[int(t0), int(t1)], move_start_ns=int(times[moved[0]]),
+               start_index=(moved[0] - 1, i1))
     rec_span = (int(times[0]), int(times[-1]))
     slope = _bias_slope(ctx["intervals"], ctx["imu"], ctx["imu"].windows(t0, t1, d0, d1, rec_span=rec_span))
     if kind == "m2":
@@ -911,6 +937,21 @@ def _trial(tr, kind, rec_rows, ctx) -> dict:
         out["truth_budget"] = budget
     out["imu"] = {**ctx["imu"].trial(t0, t1, d0, d1, rec_span=rec_span), "bias_slope": slope}
     return out
+
+
+def _rev4(out: dict, kind: str, ctx: dict) -> dict:
+    """Revision 4 values of one valid trial (11.3) from its start and end stop odometry, gyro and tape row."""
+    i_start, i1 = out["start_index"]
+    odo = ctx["odo"]
+    pe = np.stack([odo["x"], odo["y"], odo["yaw"]], axis=1)
+    rel = ma.relative_pose(pe[i_start], pe[i1])
+    path = float(np.hypot(np.diff(odo["x"][i_start:i1 + 1]), np.diff(odo["y"][i_start:i1 + 1])).sum())
+    tape_all = ctx["tape"]
+    row = None if tape_all is None else tape_all.get(out["trial"])
+    why = "no_tape" if tape_all is None else "tape_missing"
+    kappa = ((out.get("values") or {}).get("kappa_measured_q_inv_m") or {}).get("value")
+    return r4.trial_values(kind, rel_odo=rel, s_enc_m=path, gyro_dyaw_rad=(out.get("imu") or {}).get("dyaw_rad"),
+                           tape=row, tape_why=why, half_track_m=ctx["cfg"].track_m / 2, kappa_q=kappa)
 
 
 def _check_block(rows, rec, marks, allow_synthetic) -> None:
@@ -953,7 +994,11 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     trs = ma.trials(rec_rows, valid_only=False)
     _identity_profile(rec_rows, profile, trs)
     starts = [min(s[0] for s in t.spans.values()) for t in trs if t.spans]
-    truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None
+    tape = None
+    if truth_rows is not None and truth_rows[0].get("method") == "tape":
+        tape, truth = _check_tape(truth_rows, {t.trial for t in trs}, rec), None
+    else:
+        truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None
     if field_rows is not None:
         _check_field(field_rows, rec, starts)
     srows, times, fi, fits, extrapolated = _state_times(rec_rows)
@@ -974,18 +1019,26 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     if imu.t is not None:
         for r in recs[1:]:  # a block record must lie inside the IMU file (Codex PR 3b review P2)
             _need(imu.t[0] <= r["times"][0] and r["times"][-1] <= imu.t[-1], "block record: outside the IMU file")
-    ctx = dict(cfg=cfg, profile=profile, truth=truth, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
+    ctx = dict(cfg=cfg, profile=profile, truth=truth, tape=tape, truth_header=truth_rows[0] if truth_rows is not None else None, times=times,
                extrapolated=extrapolated,
                states=states, odo=odo, fi=fi, fits=fits, field_void=_field_voids((truth_rows, field_rows)),
                drive_labels=[s["label"] for s in profile["segments"] if "speed_mps" in s], imu=imu,
                intervals=_bias_intervals(imu, recs, field_rows))
     results = [_trial(t, kind, rec_rows, ctx) for t in trs if trial is None or t.trial == trial]
+    for r in results:
+        if r["status"] == "valid" and "start_index" in r:
+            r["rev4"] = _rev4(r, kind, ctx)
+        r.pop("start_index", None)
     voids: dict = {}
     for r in results:
         if r["status"] == "void":
             key = r["why"] if r["why"].startswith("void:") else "void:" + r["why"]
             voids[key] = voids.get(key, 0) + 1
-    return {**marks, "schema": "m_analyze/1", "result": "ok", "measurement": kind,
+    return {**marks, "schema": "m_analyze/1", "result": "ok", "measurement": kind, "profile_name": name,
+            # revision 4 (11.1, 11.4): the cm/degree values under each trial's "rev4" are the verdict; the gates
+            # listed here stay in the older values as information only
+            "verdict": dict(revision=r4.REVISION, values="trials[].rev4",
+                            gates_not_applied=list(r4.GATES_NOT_APPLIED)),
             "registration": dict(doc=REGISTRATION_DOC, revision=REGISTERED["revision"], status="draft",
                                  constants=dict(REGISTERED)),
             "inputs": dict(record=dict(host_boot_id=boot, footer=foot),
