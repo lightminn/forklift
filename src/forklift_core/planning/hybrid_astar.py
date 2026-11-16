@@ -15,7 +15,7 @@ instantaneously; an adapter must account for steering rate and stop at cusps.
 import heapq
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from itertools import count
 from math import acos, atan2, ceil, cos, hypot, isfinite, pi, sin, sqrt
 
@@ -76,6 +76,12 @@ class PlannerConfig:
     # turn_cycle_m (four variants). Its first half is never a search state.
     turn_cycles: bool = False
     turn_cycle_m: float = 0.5
+    # A curved leg shorter than short_cusp_arc_m that ends at a gear change costs short_cusp_arc_penalty_m more
+    # (docs/plans/2026-11-16-aisle-short-cusp-arc.md: every aisle_rack transport cusp failure of
+    # docs/validation/2026-11-15-aisle-cusp-heading.md was such a leg). A cost, not a ban: with no other way the
+    # short leg stays. 0 (default): off -- the closed-set key, the records and the search are as before.
+    short_cusp_arc_m: float = field(default=0.0, metadata={"record_omit_default": True})
+    short_cusp_arc_penalty_m: float = field(default=0.0, metadata={"record_omit_default": True})
 
     def __post_init__(self) -> None:
         positive = (
@@ -119,6 +125,51 @@ class PlannerConfig:
         if isinstance(self.shot_cap_patience, bool) or not isinstance(self.shot_cap_patience, int) \
                 or self.shot_cap_patience <= 0:
             raise ValueError("shot_cap_patience must be a positive integer")
+        for name in ("short_cusp_arc_m", "short_cusp_arc_penalty_m"):
+            if _finite_scalar(getattr(self, name), name) < 0:
+                raise ValueError(f"{name} must be nonnegative")
+
+
+def short_leg(config: PlannerConfig, leg: tuple) -> bool:
+    """Whether a leg (length m, end steering sign, gear) is a short curved one (the rule on)."""
+    return config.short_cusp_arc_m > 0 and leg[1] != 0 and leg[0] < config.short_cusp_arc_m - 1e-9
+
+
+def leg_step(config: PlannerConfig, leg: tuple, direction: int, steer: int, length: float) -> tuple:
+    """(penalty, the new leg) for one more piece of path (gear, steering sign, length) after ``leg`` = (length m,
+    end steering sign, gear; gear 0 at the root): a gear change closes the leg -- a short curved one costs the
+    penalty -- and starts a new one; the same gear goes on with it."""
+    if leg[2] and direction != leg[2]:
+        return (config.short_cusp_arc_penalty_m if short_leg(config, leg) else 0.0), (length, steer, direction)
+    return 0.0, (leg[0] + length, steer, direction)
+
+
+def shot_leg_penalty(config: PlannerConfig, leg: tuple, segments) -> float:
+    """The penalties a goal shot's segments (gear, curvature, length) add from the node's leg: zero-length segments
+    are no boundary, the last leg ends at the goal (no cusp)."""
+    if config.short_cusp_arc_m <= 0:
+        return 0.0
+    total = 0.0
+    for direction, curvature, length in segments:
+        if length < 1e-10:
+            continue
+        steer = 0 if abs(curvature) < 1e-12 else (1 if curvature > 0 else -1)
+        pen, leg = leg_step(config, leg, direction, steer, length)
+        total += pen
+    return total
+
+
+_RECORD_OFF = ("short_cusp_arc_m", "short_cusp_arc_penalty_m")
+
+
+def planner_config_record(config: PlannerConfig) -> dict:
+    """The config as a run records it: asdict without the fields added later while they hold their default (off),
+    so an off run records what every earlier run did (the near-field contract compares this dict)."""
+    out = asdict(config)
+    for name in _RECORD_OFF:
+        if out[name] == 0.0:
+            del out[name]
+    return out
 
 
 @dataclass(frozen=True)
@@ -417,7 +468,7 @@ def _dubins_words(start, goal, curvature):
     return candidates
 
 
-def _connection(pose, goal, previous_direction, checker, config, cap_length=None):
+def _connection(pose, goal, previous_direction, checker, config, cap_length=None, leg=None):
     """(connector, its cost) for the cheapest collision-free goal shot no longer than
     cap_length (None: any length), and (over, its cost) for the cheapest collision-free
     one longer than the cap -- None where there is none. Cost is the candidates' own:
@@ -455,6 +506,9 @@ def _connection(pose, goal, previous_direction, checker, config, cap_length=None
             if previous_direction and gears[0] != previous_direction:
                 cost += config.gear_change_penalty_m
             candidates.append((cost, tuple((gear, turn * k, length) for turn, gear, length in used)))
+    if leg is not None and config.short_cusp_arc_m > 0:
+        # the short curved leg before a cusp, from the node's leg through the shot (plan 2026-11-16 aisle short cusp)
+        candidates = [(cost + shot_leg_penalty(config, leg, segments), segments) for cost, segments in candidates]
     candidates.sort(key=lambda candidate: candidate[0])
     over = over_cost = None
     for cost, segments in candidates:
@@ -499,6 +553,7 @@ class _Node:
     samples: list
     cycle_half: bool = False  # the first half of a D7b turn cycle (never a search state)
     length_m: float = 0.0  # path length this node adds (its primitive or cycle half)
+    leg: tuple = (0.0, 0, 0)  # the leg it ends: (length m, end steering sign, gear) -- the short cusp arc rule
 
 
 def _result(node, connector, expanded, config, counts=(0, 0, 0)):
@@ -592,14 +647,19 @@ def plan_hybrid_astar(
         return _failure("invalid_goal")
     yaw_bins = ceil(2 * pi / config.yaw_resolution_rad)
 
-    def key(pose, direction, steering):
-        return (
+    rule = config.short_cusp_arc_m > 0
+
+    def key(pose, direction, steering, leg=None):
+        base = (
             round((pose[0] - bounds.x_min_m) / config.xy_resolution_m),
             round((pose[1] - bounds.y_min_m) / config.xy_resolution_m),
             round(pose[2] / (2 * pi) * yaw_bins) % yaw_bins,
             direction,
             steering,
         )
+        # the short cusp arc rule on: whether the leg ending here is a short curved one keeps two states apart (a
+        # cheaper one carrying such a leg must not hide one that does not); off: the key is as before
+        return (*base, short_leg(config, leg)) if rule else base
 
     field = (
         None
@@ -619,7 +679,7 @@ def plan_hybrid_astar(
     root = _Node(start_pose, 0.0, 0, 0, None, [])
     serial = count()
     queue = [(heuristic(start_pose), next(serial), root)]
-    best = {key(start_pose, 0, 0): 0.0}
+    best = {key(start_pose, 0, 0, root.leg): 0.0}
     expanded = 0
     # pruned children, superseded pops, cycles queued, shots capped, cycles generated
     counts = [0, 0, 0, 0, 0]
@@ -641,7 +701,7 @@ def plan_hybrid_astar(
         _, _, node = heapq.heappop(queue)
         if (
             node.cost
-            > best.get(key(node.pose, node.direction, node.steering), float("inf"))
+            > best.get(key(node.pose, node.direction, node.steering, node.leg), float("inf"))
             + 1e-10
         ):
             counts[1] += 1
@@ -653,7 +713,7 @@ def plan_hybrid_astar(
                 else hypot(node.pose[0] - goal_pose[0], node.pose[1] - goal_pose[1]) + config.shot_cap_m
             )
             connector, _, over, over_cost = _connection(
-                node.pose, goal_pose, node.direction, checker, config, cap_length
+                node.pose, goal_pose, node.direction, checker, config, cap_length, leg=node.leg if rule else None
             )
             if connector is not None:
                 if expanded == 1:
@@ -685,13 +745,18 @@ def plan_hybrid_astar(
             cost += config.steering_change_penalty_m * abs(steering - node.steering)
             if node.direction and node.direction != direction:
                 cost += config.gear_change_penalty_m
-            state_key = key(samples[-1], direction, steering)
+            leg = node.leg
+            if rule:
+                pen, leg = leg_step(config, node.leg, direction, steering, config.primitive_length_m)
+                cost += pen
+            state_key = key(samples[-1], direction, steering, leg)
             if cost >= best.get(state_key, float("inf")) - 1e-10:
                 counts[0] += 1
                 continue
             best[state_key] = cost
             child = _Node(samples[-1], cost, direction, steering, node, samples)
             child.length_m = config.primitive_length_m
+            child.leg = leg
             heapq.heappush(
                 queue,
                 (
@@ -724,15 +789,23 @@ def plan_hybrid_astar(
                 )
                 cost2 += config.steering_change_penalty_m * abs(second_steer - first_steer)
                 cost2 += config.gear_change_penalty_m
-                state_key = key(second[-1], second_dir, second_steer)
+                leg1 = leg2 = node.leg
+                if rule:
+                    pen1, leg1 = leg_step(config, node.leg, first_dir, first_steer, length)
+                    pen2, leg2 = leg_step(config, leg1, second_dir, second_steer, length)
+                    cost1 += pen1
+                    cost2 += pen1 + pen2
+                state_key = key(second[-1], second_dir, second_steer, leg2)
                 if cost2 >= best.get(state_key, float("inf")) - 1e-10:
                     counts[0] += 1
                     continue
                 best[state_key] = cost2
                 half = _Node(first[-1], cost1, first_dir, first_steer, node, first, cycle_half=True)
                 half.length_m = length
+                half.leg = leg1
                 child = _Node(second[-1], cost2, second_dir, second_steer, half, second)
                 child.length_m = length
+                child.leg = leg2
                 counts[2] += 1
                 heapq.heappush(
                     queue,

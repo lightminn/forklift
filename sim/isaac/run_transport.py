@@ -318,6 +318,17 @@ def _correction_inject(value: str) -> tuple:
     return parts + wait
 
 
+def _short_cusp_arc(value: str) -> tuple:
+    """--short-cusp-arc L,P (plan 2026-11-16-aisle-short-cusp-arc): two positive finite metres."""
+    try:
+        parts = tuple(float(v) for v in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("--short-cusp-arc takes L,P in metres") from exc
+    if len(parts) != 2 or not all(math.isfinite(v) and v > 0 for v in parts):
+        raise argparse.ArgumentTypeError("--short-cusp-arc takes two positive finite numbers L,P")
+    return parts
+
+
 def _reloc_inject(value: str) -> str:
     """A wrong-estimate injection's kind (plan 2026-11-06-unconfirmed-validation 1.2)."""
     import reloc_phase
@@ -1101,6 +1112,15 @@ def arguments() -> argparse.Namespace:
         help="Plan with the D7 CPU judgement's adopted options (Reeds-Shepp goal "
         "connection, 4 m connection cap; pallet_mission.D7_PLANNER_OPTIONS) -- the "
         "'D7 on' arm of the Isaac D7 off/on comparison.",
+    )
+    parser.add_argument(
+        "--short-cusp-arc",
+        type=_short_cusp_arc,
+        default=None,
+        metavar="L,P",
+        help="Planner cost (docs/plans/2026-11-16-aisle-short-cusp-arc.md): a curved leg shorter than L m that ends "
+        "at a gear change costs P m more, in every mission search (as --d7-planner). A cost, not a ban. Absent: off, "
+        "as every earlier run.",
     )
     parser.add_argument(
         "--d7-docking",
@@ -3884,6 +3904,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
     from forklift_core.control.rollout import bicycle_rollout
     from forklift_core.control import cusp_stall as CUSP_STALL
     from forklift_core.planning import Pose2D as PlanningPose
+    from forklift_core.planning.hybrid_astar import planner_config_record
     from forklift_core.planning.pallet_mission import (
         SyntheticMissionGeometry,
         make_scenario,
@@ -4048,12 +4069,15 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         clearance_m=settings["planning_clearance_m"],
         max_expansions=30000,
         **(D7_PLANNER_OPTIONS if args.d7_planner else {}),
+        # plan 2026-11-16-aisle-short-cusp-arc: off unless given (the fields then stay at their defaults)
+        **({} if getattr(args, "short_cusp_arc", None) is None else
+           {"short_cusp_arc_m": args.short_cusp_arc[0], "short_cusp_arc_penalty_m": args.short_cusp_arc[1]}),
     )
     mission_stages = ["approach", "insert", "extract", "transport", "withdraw"]
     if args.return_home:
         mission_stages.append("return_home")
     state["mission_stages"] = list(mission_stages)
-    state["planner_config"] = asdict(planner_config)
+    state["planner_config"] = planner_config_record(planner_config)  # off fields left out, as every earlier run
     state["approach_clearance_m"] = min(
         planner_config.clearance_m, geometry.approach_gap_m / 2
     )
@@ -4118,7 +4142,7 @@ def run(app, args: argparse.Namespace, settings: dict, state: dict) -> None:
         pickup_bounds = factory.pickup_bounds
         # The long legs cross the hall; only they get the obstacle heuristic.
         travel_config = replace(planner_config, obstacle_heuristic_resolution_m=0.25)
-        state["travel_planner_config"] = asdict(travel_config)
+        state["travel_planner_config"] = planner_config_record(travel_config)
         state["factory"] = {
             "layout": str(args.factory_layout),
             "layout_version": factory.layout_version,
@@ -11894,6 +11918,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         # line2 robustness plan (2026-11-04): not recorded at their defaults, so a run without them records what it did
         and (k != "docking_degenerate_continue" or v != "off") and (k != "inject_round1_degenerate" or v)
         and (k != "destination_prior_error_along_m" or v != 0.0)
+        # plan 2026-11-16-aisle-short-cusp-arc: not recorded absent, so a run without it records what it always did
+        and (k != "short_cusp_arc" or v is not None)
         # gyro-heading plan G2 (A): not recorded at their defaults, so a steering run records what it always did
         and (k != "odometry_heading" or v != "steering") and (k not in ("gyro_model", "gyro_fault_at") or v is not None)
         # deterministic-run plan D1/D1b: what a deterministic run replaced is kept in its deterministic block, not
