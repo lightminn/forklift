@@ -103,8 +103,10 @@ def permit(path: Path) -> bool:
         ts = t[window(w)]
         if len(ts) < 2:
             return False
-        gaps = np.diff(np.concatenate(([w[0]], ts, [w[1]])))
-        return bool(gaps.max() <= c["max_gap_s"] + 0.5 and (ts[-1] - ts[0]) >= c["coverage_min"] * (w[1] - w[0]) - 1)
+        inner = np.diff(ts)
+        edges = (ts[0] - w[0], w[1] - ts[-1])  # the 1 s logging may start or end up to a second off the edge
+        return bool(inner.max() <= c["max_gap_s"] and max(edges) <= c["max_gap_s"] + 0.5
+                    and (ts[-1] - ts[0]) >= c["coverage_min"] * (w[1] - w[0]) - 1)
 
     coverage = [line(sampled(c[k]), f"timeline samples cover the {k} window {c[k][0]:g}-{c[k][1]:g} s",
                      int(window(c[k]).sum())) for k in ("empty", "person", "end")]
@@ -119,8 +121,8 @@ def permit(path: Path) -> bool:
         if closed and prev is not None and t[i] - prev <= c["max_gap_s"]:
             run += t[i] - prev
             best = max(best, run)
-        elif not closed:
-            run = 0.0
+        else:
+            run = 0.0  # open, an input fault, or a gap over max_gap_s: the next closed sample starts a new run
         prev = t[i] if closed else None
     return all(coverage) and all([
         line(len(empty) > 0 and empty.mean() >= c["empty_open_min"], "empty floor opens forward (10-20 s)",
