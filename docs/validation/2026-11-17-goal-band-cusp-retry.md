@@ -38,7 +38,15 @@
 
 - **A:** riib 런처 기본 켬(`GOAL_CREEP_BAND=on`, `MODE=slam` 의 모든 장면; `MODE=truth` 는 끔). 러너 기본과 라이브 런처는 끔으로 둔다. 런처는 적용한 값을 `riib_defaults.txt` 에 남긴다. **근거는 seed 1 개(random_1 s24)**이고, 띠 안에서 명령의 1/20 보다 느리게 수렴하는 접근을 가로챌 위험은 남는다. 이전 riib 배치는 끔이었으니 비교할 때는 두 팔의 값을 적고 섞지 않는다. near-tracking 계약은 끔에서 측정했으므로 `--near-tracking` 은 `GOAL_CREEP_BAND=off` 를 요구한다.
 - **B:** 끔으로 종결한다. `--occupied-dumps` 추가 실행은 하지 않는다(70 중 2 건이고, 칸의 정체가 SLAM 오차라면 실측 뒤 일이다).
-- Isaac smoke: SMOKE_PLACEHOLDER
+- **Isaac smoke(#442 규칙, 합격):** ws1 잡 19570, 스냅숏 `gcbd_abbb112a`, 런처 기본 그대로(EXTRA_ARGS 비움), 비결정. 생성기 [make_smoke.py](2026-11-17-goal-band-cusp-retry/make_smoke.py).
+
+| 실행 | riib_defaults | 결과 | 띠 발동(`band:true`) |
+|---|---|---|---|
+| random_1 s24 | GOAL_CREEP_BAND=on FROM=launcher | 완주 | 0 (이번에는 띠 정지 없음) |
+| line_2 s0 | 같음 | 완주 | 0 (기존 정체 재계획 1 회, 크리프 규칙 항목 없음) |
+| aisle_rack s1 | 같음 | 완주 | 0 |
+
+  - 셋 다 완주했고, 띠에 걸리지 않은 세 실행 모두 발동 0 이었다. 기록된 인자는 셋 다 `goal_creep_band: on` 이다. 가로챔은 이 세 실행에서 나타나지 않았지만, 세 실행으로 그 위험이 없다고 말할 수는 없다.
 
 ## 5. 범위와 한계
 
