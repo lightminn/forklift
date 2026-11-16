@@ -81,6 +81,7 @@ def _state(t_us, boot, counts, rates, q, faults=FaultFlag(0), mode=Mode.ARMED) -
 
 
 def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_per_m: float = 0.0,
+                gain: float = 1.0, q_offset: float = 0.0, q_short_drive: float = 0.0,
                 up=(0.0, -1.0, 0.0), bias=(0.0, 0.0, 0.0), bias_step=None, arw: float = ARW_DESK,
                 still_s: float | None = None, void: str | None = None, seed: int = 0,
                 mcu_imu_offset_s: float = 0.0, imu_late_sample: bool = False, dev_us_wrap: bool = False,
@@ -88,7 +89,12 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                 start_pose=(0.0, 0.0, 0.0)) -> dict:
     """``{"record": rows, "imu": rows, "truth": rows}`` for one trial of ``profile`` (a drive_profile/1 dict).
     ``still_s`` replaces every hold segment's length (tests that need no 60 s windows). ``void`` puts one defect
-    into the drive (one of ``VOIDS``)."""
+    into the drive (one of ``VOIDS``).
+
+    ``gain``: the true curvature is ``gain`` times the held curvature of the MEASURED q (M2). ``q_offset``: the
+    measured q is the commanded q minus it while steering is commanded (the runner's ``drive_q`` stays the commanded
+    q). ``q_short_drive``: in drive segments the measured |q| stops this far short of the commanded one (an
+    ``under_reached`` maker; presteer still reaches)."""
     if not (true_radius_scale > 0 and math.isfinite(true_radius_scale)):
         raise ValueError("true_radius_scale must be positive")
     if void is not None and void not in VOIDS:
@@ -114,7 +120,8 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
     # the plant
     pose = tuple(float(v) for v in start_pose)
     v_enc = 0.0  # the encoder's signed speed (what the bridge sees)
-    q = 0.0
+    q = 0.0  # the measured steering angle
+    q_cmd = 0.0  # the commanded one (what the bridge applied)
     counts = [0.0, 0.0]
     boot, last_us = BOOT, None
     omega: list[float] = []  # the true yaw rate over each 10 ms tick
@@ -154,7 +161,7 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
                 applied = runner.req_mps
                 obs = dprof.Observation(dt_s=CYCLE_STATES * STATE_DT_NS / 1e9, speed_valid=True, speed_mps=v_enc,
                                         meas_q=q, armed=True, mode="TELEOP", target_mps=applied,
-                                        applied_mps=applied, applied_q=q, permit=(1.0, "ok"), port=None,
+                                        applied_mps=applied, applied_q=q_cmd, permit=(1.0, "ok"), port=None,
                                         direction_cut=None, stop=None, deadman=deadman, policy=None)
                 row = runner.step(host, obs)
                 if row is not None:
@@ -170,12 +177,16 @@ def synth_trial(profile: dict, cfg, *, true_radius_scale: float = 1.0, true_yaw_
         runner.zero_now = False
         dv = lim.accel_mps2 * STATE_DT_NS / 1e9
         v_enc = min(cmd, v_enc + dv) if cmd >= v_enc else max(cmd, v_enc - dv)
-        q = lim.q_of_kappa(runner.req_kappa) if runner.state == "running" else q
+        if runner.state == "running":
+            q_cmd = lim.q_of_kappa(runner.req_kappa)
+            q = q_cmd - q_offset
+            if q_short_drive and q_cmd != 0.0 and runner.segment is not None and runner.segment.kind == "drive":
+                q -= math.copysign(q_short_drive, q_cmd)
         kappa = kin.held_curvature((q,)) or 0.0
         dt = STATE_DT_NS / 1e9
         v_true = v_enc / true_radius_scale
         ds_true = v_true * dt
-        curv = kappa + true_yaw_per_m
+        curv = gain * kappa + true_yaw_per_m
         omega.append(v_true * curv)
         ticks_ns.append(host)
         pose = advance_arc(*pose, ds_true, curv)

@@ -194,10 +194,10 @@ def test_no_truth_and_truth_missing():
 
 
 def test_other_measurements_get_identity_and_void_handling_only():
-    path = REPO / "config" / "profiles" / "m1_m3" / "m2_q003_left_fwd.yaml"
+    path = REPO / "config" / "profiles" / "m1_m3" / "m3_merge_o05_l09_left.yaml"
     prof = yaml.safe_load(path.read_text(encoding="utf-8"))
     res = run(make(prof), profile=prof)
-    assert res["measurement"] == "m2"
+    assert res["measurement"] == "m3_merge"
     v = res["trials"][0]["values"]["all"]
     assert v == dict(value=None, judgeable=False, why=["not_implemented_in_pr1"])
 
