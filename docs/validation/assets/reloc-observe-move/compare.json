@@ -1,0 +1,1130 @@
+{
+ "a_failed": 17,
+ "a_success": 67,
+ "added_s_max": 36.186,
+ "added_s_median": 20.883,
+ "b_success": 69,
+ "b_wrong": 0,
+ "both_blocked": 0,
+ "mcnemar_p_one_sided": 0.25,
+ "no_reloc": [
+  "val4_092"
+ ],
+ "pairs": [
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_000",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_001",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 22.65,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.952
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 11.006
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_002",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 27.43,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 11.732
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 14.007
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_003",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_004",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_005",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_006",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_008",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_009",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_010",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_012",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 19.794,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 8.491
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.606
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_013",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_014",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_015",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_017",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_018",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_019",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_020",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_021",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 20.598,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 6.244
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 12.683
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_022",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_023",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_024",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_025",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_026",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_027",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_028",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_029",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_030",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_031",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_032",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 36.186,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 20.101999999999997
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 14.251999999999999
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_033",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 19.462,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 8.632
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.142
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_034",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 22.221,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.429
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 11.088000000000001
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_035",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_036",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_037",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_038",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_039",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_040",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 21.168,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.64
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.823
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_041",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_042",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_043",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 6.72,
+    "blocked": [
+     -1
+    ],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 6.1
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_044",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_045",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 26.32,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 11.282
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 13.343
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_046",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_047",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_048",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_049",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_050",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_051",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_052",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 26.528,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 10.405999999999999
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 14.338000000000001
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_053",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_054",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_055",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_056",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_057",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_058",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_059",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_060",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_061",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_062",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_064",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_065",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_068",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_069",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 17.892,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 6.968999999999999
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 9.219999999999999
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_070",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_072",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_073",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_074",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_075",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 7.903,
+    "blocked": [
+     -1
+    ],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 7.287
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_076",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_077",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 12.88,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 5.916
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 5.292
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_078",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_079",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_080",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "needs_operator",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_081",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 28.54,
+    "blocked": [],
+    "contact": false,
+    "places": {
+     "move+": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 13.04
+     },
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 2,
+      "wall_s": 13.808
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_082",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_084",
+   "moved": true,
+   "static_outcome": "needs_operator",
+   "times": {
+    "added_s": 2.933,
+    "blocked": [
+     1
+    ],
+    "contact": false,
+    "places": {
+     "move-": {
+      "deadline_hit": false,
+      "scan_sets": 1,
+      "wall_s": 2.317
+     }
+    },
+    "stopped": false
+   }
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_085",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_087",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_088",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_089",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_090",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": true,
+   "b_outcome": "success",
+   "b_success": true,
+   "b_wrong": false,
+   "id": "val4_091",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  },
+  {
+   "a_success": false,
+   "b_outcome": "no_record",
+   "b_success": false,
+   "b_wrong": false,
+   "id": "val4_092",
+   "moved": false,
+   "static_outcome": null,
+   "times": null
+  }
+ ],
+ "rejected_for_safety": false,
+ "rescue_rate": 0.125,
+ "rescue_rate_cp95": [
+  0.015513603815413946,
+  0.3834762368492636
+ ],
+ "rescued": 2,
+ "run_0_6": false,
+ "static_failed": 16,
+ "structural_defect": false,
+ "valid": 84,
+ "worse": 0
+}
