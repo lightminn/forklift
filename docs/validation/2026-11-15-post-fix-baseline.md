@@ -185,7 +185,8 @@
   - 라이브: `L_missions.csv`, `L_survey.json.gz`, `L_near.json.gz`, `L_vs_cts.json`.
 - 집계 출력과 잡 스크립트: `2026-11-15-post-fix-baseline/agg/`(표·결정성 비교·입력 재측정·경로 대조·배속), `agg.sbatch`(잡 19310), `agg_L.sbatch`(잡 19315). 두 잡은 이 브랜치 코드 사본(ws1 `test_runs/tmp_restore/pfb_code_cd57c65a`)으로 돌았다.
 - 표 재현: `RUNBOOK.md` 3–6 단계. 비교 대상 집계(`R_vs_*.json` 의 compare)는 ws1 복원본(`test_runs/tmp_restore/pfb_prefix`, hold)에서 낸 것이다.
-- 원본: ws1 `test_runs/pfb/{R,Rrep,S,L}_pfb_2bea23e5`, 묶음·array 기록 `test_runs/pfb/{bundle_R,array_S,bundle_L1,bundle_L2}_pfb_2bea23e5`, 실행 목록 `test_runs/pfb/lists/`, 스냅숏 `snapshots/pfb_2bea23e5`. 이 문서가 머지되면 디스크 세션 정리 목록으로 넘긴다(원본과 스냅숏은 짝으로 보관). 이 기준선은 다른 스냅숏의 B0 로 그대로 쓰지 않는다(계획 1 절).
+- 원본: ws1 `test_runs/pfb/{R,Rrep,S,L}_pfb_2bea23e5`, 묶음·array 기록 `test_runs/pfb/{bundle_R,array_S,bundle_L1,bundle_L2}_pfb_2bea23e5`, 실행 목록 `test_runs/pfb/lists/`, 스냅숏 `snapshots/pfb_2bea23e5`. 이 기준선은 다른 스냅숏의 B0 로 그대로 쓰지 않는다(계획 1 절).
+- **원본 보관(2026-11-16, 디스크 세션).** 위 원본과 스냅숏은 ws1 에서 지우고 Drive `forklift-archive/ws1-cleanup-20261116-a/a_pfb.tar.zst`(ws1 rclone `gdrive:ws1-cleanup-20261116-a/a_pfb.tar.zst`, md5 `e9cbd890d3fd4e3f353246afdaa532f0`, 60,022 항목·13.5 GB)에 한 묶음으로 두었다. 묶음 안 경로는 `/home/projects/forklift` 기준 `test_runs/pfb/{R,Rrep,S,L}_pfb_2bea23e5`, `test_runs/pfb/{bundle_R,array_S,bundle_L1,bundle_L2,claim_L}_pfb_2bea23e5`, `test_runs/pfb/lists/`, `test_runs/pfb/{dry,agg,aggL}_pfb_2bea23e5`, `snapshots/pfb_2bea23e5` 다. 집계 코드 사본·임시 스크립트·pytest 폴더는 같은 폴더의 `b_small.tar.zst`(md5 `f8e0fca79fe48bfea20f82ea57c8f015`), 파일 목록은 같은 폴더의 `*.files.tsv`·`archive_map.txt` 다. 수정 전 복원본 `test_runs/tmp_restore/pfb_prefix` 는 원래 보관본(f_cmp·e_k1cmp·h_k1r·c_cts)과 대조한 뒤 지웠다.
 
 ## 7. 검토
 
