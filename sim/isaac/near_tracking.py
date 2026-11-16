@@ -1060,6 +1060,8 @@ RUN_SPECIFIC_ARGUMENTS = (
     "inject_near_end_detour_size",
     # docs/plans/2026-11-14-loaded-curvature-rule.md 3: the loaded transport curvature rule
     "loaded_curvature_rule",
+    # docs/plans/2026-11-16-aisle-short-cusp-arc.md 1: the short curved leg before a cusp as a planner cost
+    "short_cusp_arc",
     # docs/validation/2026-11-09-live-riib-v2-lifecycle4-confirmation.md 2: diagnostic dumps only
     "occupied_dumps",
     "near_bounds",

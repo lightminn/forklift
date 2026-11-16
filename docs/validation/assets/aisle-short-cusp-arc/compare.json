@@ -1,0 +1,301 @@
+{
+ "A": {
+  "0": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 15,
+   "name": "acsA_aisle_rack_s0",
+   "planning_wall_max_s": 357.893,
+   "planning_wall_sum_s": 411.374,
+   "short_curved_cusps_all": 5,
+   "short_curved_cusps_transport": 5,
+   "success": true,
+   "transport_length_m": 0.6505492302405467
+  },
+  "1": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 16,
+   "name": "acsA_aisle_rack_s1",
+   "planning_wall_max_s": 709.858,
+   "planning_wall_sum_s": 1077.148,
+   "short_curved_cusps_all": 19,
+   "short_curved_cusps_transport": 14,
+   "success": true,
+   "transport_length_m": 0.6497955391601472
+  },
+  "2": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 16,
+   "name": "acsA_aisle_rack_s2",
+   "planning_wall_max_s": 391.127,
+   "planning_wall_sum_s": 471.022,
+   "short_curved_cusps_all": 11,
+   "short_curved_cusps_transport": 4,
+   "success": true,
+   "transport_length_m": 0.650775540208949
+  },
+  "3": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 12,
+   "name": "acsA_aisle_rack_s3",
+   "planning_wall_max_s": 300.59,
+   "planning_wall_sum_s": 312.299,
+   "short_curved_cusps_all": 5,
+   "short_curved_cusps_transport": 4,
+   "success": true,
+   "transport_length_m": 0.6686950475683429
+  },
+  "4": {
+   "fail_final": 0,
+   "fail_replan": 0,
+   "judgements": 19,
+   "name": "acsA_aisle_rack_s4",
+   "planning_wall_max_s": 370.796,
+   "planning_wall_sum_s": 370.796,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6532770122848318
+  },
+  "5": {
+   "fail_final": 1,
+   "fail_replan": 2,
+   "judgements": 9,
+   "name": "acsA_aisle_rack_s5",
+   "planning_wall_max_s": 486.393,
+   "planning_wall_sum_s": 615.226,
+   "short_curved_cusps_all": 28,
+   "short_curved_cusps_transport": 20,
+   "success": false,
+   "transport_length_m": 19.4464834614577
+  },
+  "6": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 15,
+   "name": "acsA_aisle_rack_s6",
+   "planning_wall_max_s": 398.336,
+   "planning_wall_sum_s": 483.156,
+   "short_curved_cusps_all": 16,
+   "short_curved_cusps_transport": 10,
+   "success": true,
+   "transport_length_m": 0.6514082967881709
+  },
+  "7": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 16,
+   "name": "acsA_aisle_rack_s7",
+   "planning_wall_max_s": 304.667,
+   "planning_wall_sum_s": 353.99,
+   "short_curved_cusps_all": 14,
+   "short_curved_cusps_transport": 10,
+   "success": true,
+   "transport_length_m": 0.6524042037183742
+  },
+  "8": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 27,
+   "name": "acsA_aisle_rack_s8",
+   "planning_wall_max_s": 428.413,
+   "planning_wall_sum_s": 621.874,
+   "short_curved_cusps_all": 19,
+   "short_curved_cusps_transport": 19,
+   "success": true,
+   "transport_length_m": 0.6512502482397967
+  },
+  "9": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 14,
+   "name": "acsA_aisle_rack_s9",
+   "planning_wall_max_s": 543.574,
+   "planning_wall_sum_s": 733.648,
+   "short_curved_cusps_all": 4,
+   "short_curved_cusps_transport": 4,
+   "success": true,
+   "transport_length_m": 0.6497592567276976
+  }
+ },
+ "B": {
+  "0": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 16,
+   "name": "acsB_aisle_rack_s0",
+   "planning_wall_max_s": 197.398,
+   "planning_wall_sum_s": 197.422,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6655023369582047
+  },
+  "1": {
+   "fail_final": 0,
+   "fail_replan": 0,
+   "judgements": 15,
+   "name": "acsB_aisle_rack_s1",
+   "planning_wall_max_s": 227.604,
+   "planning_wall_sum_s": 227.604,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6563886046557684
+  },
+  "2": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 19,
+   "name": "acsB_aisle_rack_s2",
+   "planning_wall_max_s": 461.892,
+   "planning_wall_sum_s": 637.116,
+   "short_curved_cusps_all": 7,
+   "short_curved_cusps_transport": 7,
+   "success": true,
+   "transport_length_m": 0.6619638215651314
+  },
+  "3": {
+   "fail_final": 0,
+   "fail_replan": 2,
+   "judgements": 22,
+   "name": "acsB_aisle_rack_s3",
+   "planning_wall_max_s": 583.145,
+   "planning_wall_sum_s": 802.9,
+   "short_curved_cusps_all": 7,
+   "short_curved_cusps_transport": 7,
+   "success": true,
+   "transport_length_m": 0.6526012823385463
+  },
+  "4": {
+   "fail_final": 1,
+   "fail_replan": 2,
+   "judgements": 21,
+   "name": "acsB_aisle_rack_s4",
+   "planning_wall_max_s": 628.674,
+   "planning_wall_sum_s": 1088.416,
+   "short_curved_cusps_all": 3,
+   "short_curved_cusps_transport": 3,
+   "success": false,
+   "transport_length_m": 21.655275958769423
+  },
+  "5": {
+   "fail_final": 0,
+   "fail_replan": 0,
+   "judgements": 16,
+   "name": "acsB_aisle_rack_s5",
+   "planning_wall_max_s": 340.196,
+   "planning_wall_sum_s": 340.196,
+   "short_curved_cusps_all": 1,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6520210638390419
+  },
+  "6": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 13,
+   "name": "acsB_aisle_rack_s6",
+   "planning_wall_max_s": 366.65,
+   "planning_wall_sum_s": 366.694,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6554124575486082
+  },
+  "7": {
+   "fail_final": 0,
+   "fail_replan": 0,
+   "judgements": 12,
+   "name": "acsB_aisle_rack_s7",
+   "planning_wall_max_s": 306.584,
+   "planning_wall_sum_s": 306.584,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.648603611341963
+  },
+  "8": {
+   "fail_final": 0,
+   "fail_replan": 1,
+   "judgements": 15,
+   "name": "acsB_aisle_rack_s8",
+   "planning_wall_max_s": 687.134,
+   "planning_wall_sum_s": 771.755,
+   "short_curved_cusps_all": 1,
+   "short_curved_cusps_transport": 1,
+   "success": true,
+   "transport_length_m": 0.652569505006569
+  },
+  "9": {
+   "fail_final": 0,
+   "fail_replan": 0,
+   "judgements": 16,
+   "name": "acsB_aisle_rack_s9",
+   "planning_wall_max_s": 324.338,
+   "planning_wall_sum_s": 324.338,
+   "short_curved_cusps_all": 0,
+   "short_curved_cusps_transport": 0,
+   "success": true,
+   "transport_length_m": 0.6550041902449962
+  }
+ },
+ "verdict": {
+  "adopt": true,
+  "rules": {
+   "completion_not_lower": true,
+   "final_not_higher": true,
+   "replans_fewer": true,
+   "wall_max_within": true
+  },
+  "seeds": [
+   0,
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8,
+   9
+  ],
+  "sums": {
+   "fail_final": {
+    "A": 1,
+    "B": 1
+   },
+   "fail_replan": {
+    "A": 16,
+    "B": 8
+   },
+   "judgements": {
+    "A": 159,
+    "B": 165
+   },
+   "planning_wall_sum_s": {
+    "A": 5450.532999999999,
+    "B": 5063.024999999999
+   },
+   "short_curved_cusps_all": {
+    "A": 121,
+    "B": 19
+   },
+   "short_curved_cusps_transport": {
+    "A": 90,
+    "B": 18
+   },
+   "success": {
+    "A": 9,
+    "B": 9
+   }
+  },
+  "wall_max_s": {
+   "A": 709.858,
+   "B": 687.134
+  }
+ }
+}
