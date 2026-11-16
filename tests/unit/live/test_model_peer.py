@@ -69,7 +69,7 @@ BENCH = {"schema": "rehearsal_bench/1", "pts": "/dev/pts/7", "pts_rdev": os.make
 
 
 def refusal(proc, device="/dev/pts/7", bench=None):
-    return mp.model_peer_refusal(device, BENCH if bench is None else bench, proc=proc)
+    return mp.model_peer_refusal(device, BENCH if bench is None else bench, proc=proc, sleep=lambda s: None)
 
 
 def test_the_benchs_model_holding_the_master_alone_passes():
@@ -153,8 +153,9 @@ def test_an_incomplete_scan_names_the_process_and_the_error():
     proc.procs[60]["fds"] = None
     proc.procs[60]["starttime"] = 20000
     detail = []
-    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=proc, detail=detail) == "peer_scan_incomplete"
-    assert [pid for pid, _err in detail] == [60, 60] and "PermissionError" in detail[0][1]
+    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=proc, detail=detail,
+                                 sleep=lambda s: None) == "peer_scan_incomplete"
+    assert [pid for pid, _err in detail] == [60] * mp.SCAN_ATTEMPTS and "PermissionError" in detail[0][1]
 
 
 def test_a_not_found_error_on_a_pid_that_still_exists_is_rescanned_once():
@@ -210,3 +211,30 @@ def test_the_cheap_recheck_never_scans_other_processes():
     assert mp.model_alive_refusal("/dev/pts/7", BENCH, proc=n) == "model_restarted"
     n.procs.pop(50)
     assert mp.model_alive_refusal("/dev/pts/7", BENCH, proc=n) == "model_gone"
+
+
+def test_a_short_lived_unreadable_process_is_waited_out_and_a_lasting_one_still_refuses():
+    """ws1 2026-11-15: an sshd session of a status probe (same uid, non-dumpable, started after the model) made
+    every back-to-back pair of scans incomplete. The check repeats the whole scan a few times, apart."""
+    slept = []
+
+    class Session(FakeProc):
+        scans = 0
+
+        def pids(self):
+            Session.scans += 1
+            if Session.scans > 2:
+                self.procs.pop(80, None)  # the session ended
+            return super().pids()
+
+    s = Session()
+    s.__dict__.update(FakeProc().__dict__)
+    s.procs[80] = {"uid": ME, "starttime": 20000, "exe": None, "fds": None}
+    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=s, sleep=slept.append) is None
+    assert slept == [mp.SCAN_RETRY_S]
+    lasting = FakeProc()
+    lasting.procs[80] = {"uid": ME, "starttime": 20000, "exe": None, "fds": None}
+    slept.clear()
+    assert mp.model_peer_refusal("/dev/pts/7", BENCH, proc=lasting, sleep=slept.append) == "peer_scan_incomplete"
+    assert len(slept) == mp.SCAN_ATTEMPTS - 2
+

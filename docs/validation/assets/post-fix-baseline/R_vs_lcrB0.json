@@ -1,0 +1,733 @@
+{
+ "aggregate": {
+  "all": {
+   "delivery_error_failed_runs": [],
+   "delivery_error_m": {
+    "max": 0.05355010506468907,
+    "median": 0.008601528037456395,
+    "n": 65,
+    "p90": 0.02115375497236275
+   },
+   "deterministic_broken_runs": 0,
+   "failure_classes": {
+    "planning": 2,
+    "tracking": 3
+   },
+   "failure_stages": {
+    "observe": 1,
+    "return_home": 1,
+    "transport": 3
+   },
+   "far_capture_failures": 0,
+   "far_pocket_valid": [
+    70,
+    70
+   ],
+   "far_selected": [
+    70,
+    70
+   ],
+   "forbidden_contacts": 0,
+   "missing_fields": {},
+   "n": 70,
+   "near_attempts": {
+    "n": 69,
+    "refusals": {},
+    "valid": 69
+   },
+   "near_status": {
+    "done": 69,
+    "pending": 1
+   },
+   "observe_replans": 117,
+   "path_display_faults": {
+    "clock_mismatches": 0,
+    "compose_failures": 0,
+    "event_failures": 0,
+    "note_failures": 0
+   },
+   "return_cusp_replans": {
+    "runs_with": 0,
+    "total": 0
+   },
+   "simulated_time_s": {
+    "max": 309.3750161351636,
+    "median": 204.95001068897545,
+    "n": 65,
+    "p90": 234.30167888645084
+   },
+   "success": [
+    65,
+    70
+   ],
+   "transport_cusp_replans": {
+    "runs_with": 11,
+    "total": 15
+   },
+   "transport_reached": [
+    69,
+    70
+   ],
+   "transport_tracking_failures": {
+    "cross_track": 1
+   }
+  },
+  "refused": [],
+  "scenes": {
+   "aisle_rack": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.05355010506468907,
+     "median": 0.01028517925583934,
+     "n": 5,
+     "p90": 0.053458114889255726
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {},
+    "failure_stages": {},
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     5,
+     5
+    ],
+    "far_selected": [
+     5,
+     5
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 5,
+    "near_attempts": {
+     "n": 5,
+     "refusals": {},
+     "valid": 5
+    },
+    "near_status": {
+     "done": 5
+    },
+    "observe_replans": 2,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 309.3750161351636,
+     "median": 297.1416821638122,
+     "n": 5,
+     "p90": 307.5750160412863
+    },
+    "success": [
+     5,
+     5
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 4,
+     "total": 7
+    },
+    "transport_reached": [
+     5,
+     5
+    ],
+    "transport_tracking_failures": {}
+   },
+   "line_2": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.024917155475969142,
+     "median": 0.01779645100142684,
+     "n": 5,
+     "p90": 0.022625464358109793
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {},
+    "failure_stages": {},
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     5,
+     5
+    ],
+    "far_selected": [
+     5,
+     5
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 5,
+    "near_attempts": {
+     "n": 5,
+     "refusals": {},
+     "valid": 5
+    },
+    "near_status": {
+     "done": 5
+    },
+    "observe_replans": 0,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 180.6333427540958,
+     "median": 171.27500893268734,
+     "n": 5,
+     "p90": 180.00000938773155
+    },
+    "success": [
+     5,
+     5
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "transport_reached": [
+     5,
+     5
+    ],
+    "transport_tracking_failures": {}
+   },
+   "random_1": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.029193860651516843,
+     "median": 0.00858289065614311,
+     "n": 55,
+     "p90": 0.020083049628450506
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {
+     "planning": 2,
+     "tracking": 3
+    },
+    "failure_stages": {
+     "observe": 1,
+     "return_home": 1,
+     "transport": 3
+    },
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     60,
+     60
+    ],
+    "far_selected": [
+     60,
+     60
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 60,
+    "near_attempts": {
+     "n": 59,
+     "refusals": {},
+     "valid": 59
+    },
+    "near_status": {
+     "done": 59,
+     "pending": 1
+    },
+    "observe_replans": 115,
+    "path_display_faults": {
+     "clock_mismatches": 0,
+     "compose_failures": 0,
+     "event_failures": 0,
+     "note_failures": 0
+    },
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 238.96667912974954,
+     "median": 204.95001068897545,
+     "n": 55,
+     "p90": 225.77667844183742
+    },
+    "success": [
+     55,
+     60
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 7,
+     "total": 8
+    },
+    "transport_reached": [
+     59,
+     60
+    ],
+    "transport_tracking_failures": {
+     "cross_track": 1
+    }
+   }
+  }
+ },
+ "compare": {
+  "aggregate": {
+   "all": {
+    "delivery_error_failed_runs": [],
+    "delivery_error_m": {
+     "max": 0.06469701723217856,
+     "median": 0.00993315478800871,
+     "n": 64,
+     "p90": 0.02089045798145769
+    },
+    "deterministic_broken_runs": 0,
+    "failure_classes": {
+     "perception": 1,
+     "planning": 1,
+     "tracking": 4
+    },
+    "failure_stages": {
+     "observe": 2,
+     "transport": 4
+    },
+    "far_capture_failures": 0,
+    "far_pocket_valid": [
+     70,
+     70
+    ],
+    "far_selected": [
+     70,
+     70
+    ],
+    "forbidden_contacts": 0,
+    "missing_fields": {},
+    "n": 70,
+    "near_attempts": {
+     "n": 69,
+     "refusals": {
+      "no_pallet:no_expected_candidate": 1
+     },
+     "valid": 68
+    },
+    "near_status": {
+     "done": 68,
+     "failed": 1,
+     "pending": 1
+    },
+    "observe_replans": 117,
+    "path_display_faults": {},
+    "return_cusp_replans": {
+     "runs_with": 0,
+     "total": 0
+    },
+    "simulated_time_s": {
+     "max": 287.1916816448793,
+     "median": 204.95001068897545,
+     "n": 64,
+     "p90": 228.35251190951095
+    },
+    "success": [
+     64,
+     70
+    ],
+    "transport_cusp_replans": {
+     "runs_with": 12,
+     "total": 13
+    },
+    "transport_reached": [
+     68,
+     70
+    ],
+    "transport_tracking_failures": {
+     "cross_track": 3
+    }
+   },
+   "refused": [],
+   "scenes": {
+    "aisle_rack": {
+     "delivery_error_failed_runs": [],
+     "delivery_error_m": {
+      "max": 0.06469701723217856,
+      "median": 0.02192622293883896,
+      "n": 4,
+      "p90": 0.053384930254743855
+     },
+     "deterministic_broken_runs": 0,
+     "failure_classes": {
+      "perception": 1
+     },
+     "failure_stages": {
+      "observe": 1
+     },
+     "far_capture_failures": 0,
+     "far_pocket_valid": [
+      5,
+      5
+     ],
+     "far_selected": [
+      5,
+      5
+     ],
+     "forbidden_contacts": 0,
+     "missing_fields": {},
+     "n": 5,
+     "near_attempts": {
+      "n": 5,
+      "refusals": {
+       "no_pallet:no_expected_candidate": 1
+      },
+      "valid": 4
+     },
+     "near_status": {
+      "done": 4,
+      "failed": 1
+     },
+     "observe_replans": 2,
+     "path_display_faults": {},
+     "return_cusp_replans": {
+      "runs_with": 0,
+      "total": 0
+     },
+     "simulated_time_s": {
+      "max": 287.1916816448793,
+      "median": 275.96251439256594,
+      "n": 4,
+      "p90": 284.21918148985134
+     },
+     "success": [
+      4,
+      5
+     ],
+     "transport_cusp_replans": {
+      "runs_with": 2,
+      "total": 2
+     },
+     "transport_reached": [
+      4,
+      5
+     ],
+     "transport_tracking_failures": {}
+    },
+    "line_2": {
+     "delivery_error_failed_runs": [],
+     "delivery_error_m": {
+      "max": 0.025991193988205322,
+      "median": 0.010011028110221356,
+      "n": 5,
+      "p90": 0.023978047065020186
+     },
+     "deterministic_broken_runs": 0,
+     "failure_classes": {},
+     "failure_stages": {},
+     "far_capture_failures": 0,
+     "far_pocket_valid": [
+      5,
+      5
+     ],
+     "far_selected": [
+      5,
+      5
+     ],
+     "forbidden_contacts": 0,
+     "missing_fields": {},
+     "n": 5,
+     "near_attempts": {
+      "n": 5,
+      "refusals": {},
+      "valid": 5
+     },
+     "near_status": {
+      "done": 5
+     },
+     "observe_replans": 0,
+     "path_display_faults": {},
+     "return_cusp_replans": {
+      "runs_with": 0,
+      "total": 0
+     },
+     "simulated_time_s": {
+      "max": 219.75834479462355,
+      "median": 177.95834261458367,
+      "n": 5,
+      "p90": 212.79834443163128
+     },
+     "success": [
+      5,
+      5
+     ],
+     "transport_cusp_replans": {
+      "runs_with": 1,
+      "total": 2
+     },
+     "transport_reached": [
+      5,
+      5
+     ],
+     "transport_tracking_failures": {}
+    },
+    "random_1": {
+     "delivery_error_failed_runs": [],
+     "delivery_error_m": {
+      "max": 0.029193860651516843,
+      "median": 0.009517629236421,
+      "n": 55,
+      "p90": 0.019473678671661034
+     },
+     "deterministic_broken_runs": 0,
+     "failure_classes": {
+      "planning": 1,
+      "tracking": 4
+     },
+     "failure_stages": {
+      "observe": 1,
+      "transport": 4
+     },
+     "far_capture_failures": 0,
+     "far_pocket_valid": [
+      60,
+      60
+     ],
+     "far_selected": [
+      60,
+      60
+     ],
+     "forbidden_contacts": 0,
+     "missing_fields": {},
+     "n": 60,
+     "near_attempts": {
+      "n": 59,
+      "refusals": {},
+      "valid": 59
+     },
+     "near_status": {
+      "done": 59,
+      "pending": 1
+     },
+     "observe_replans": 115,
+     "path_display_faults": {},
+     "return_cusp_replans": {
+      "runs_with": 0,
+      "total": 0
+     },
+     "simulated_time_s": {
+      "max": 236.025012309663,
+      "median": 204.95001068897545,
+      "n": 55,
+      "p90": 221.69167822878808
+     },
+     "success": [
+      55,
+      60
+     ],
+     "transport_cusp_replans": {
+      "runs_with": 9,
+      "total": 9
+     },
+     "transport_reached": [
+      59,
+      60
+     ],
+     "transport_tracking_failures": {
+      "cross_track": 3
+     }
+    }
+   }
+  },
+  "mode": "prefix",
+  "pairs": {
+   "changed": [
+    {
+     "a": {
+      "delivery_error_m": 0.01028517925583934,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 309.3750161351636,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": null,
+      "failure_class": "perception",
+      "failure_reason": "near_capture_failed:perception_no_pallet:no_expected_candidate",
+      "failure_stage": "observe",
+      "near_status": "failed",
+      "phase": "observe",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": null
+     },
+     "scene": "aisle_rack",
+     "seed": 2
+    },
+    {
+     "a": {
+      "delivery_error_m": 0.0033425358223040627,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 194.7666768245399,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": null,
+      "failure_class": "tracking",
+      "failure_reason": "Tracking failed in transport: pos=2.9974,yaw=1.0147",
+      "failure_stage": "transport",
+      "near_status": "done",
+      "phase": "transport",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": "cross_track"
+     },
+     "scene": "random_1",
+     "seed": 0
+    },
+    {
+     "a": {
+      "delivery_error_m": null,
+      "failure_class": "planning",
+      "failure_reason": "scene_replan_refused:cusp_pose:blocked:occupied",
+      "failure_stage": "transport",
+      "near_status": "done",
+      "phase": "transport",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": 0.0032303442737301276,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 212.95834443997592,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "scene": "random_1",
+     "seed": 11
+    },
+    {
+     "a": {
+      "delivery_error_m": 0.01430408392335181,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 225.66667843610048,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": null,
+      "failure_class": "tracking",
+      "failure_reason": "Tracking failed in transport: pos=2.2105,yaw=0.6871",
+      "failure_stage": "transport",
+      "near_status": "done",
+      "phase": "transport",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": "cross_track"
+     },
+     "scene": "random_1",
+     "seed": 23
+    },
+    {
+     "a": {
+      "delivery_error_m": null,
+      "failure_class": "tracking",
+      "failure_reason": "Tracking timeout in return_home",
+      "failure_stage": "return_home",
+      "near_status": "done",
+      "phase": "return_home",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": 0.015643914690150418,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 191.71667666547,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "scene": "random_1",
+     "seed": 24
+    },
+    {
+     "a": {
+      "delivery_error_m": 0.007207691765178534,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 190.86667662113905,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": null,
+      "failure_class": "planning",
+      "failure_reason": "scene_replan_refused:cusp_pose:blocked:occupied",
+      "failure_stage": "transport",
+      "near_status": "done",
+      "phase": "transport",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": null
+     },
+     "scene": "random_1",
+     "seed": 40
+    },
+    {
+     "a": {
+      "delivery_error_m": null,
+      "failure_class": "planning",
+      "failure_reason": "scene_replan_refused:cusp_pose:blocked:occupied",
+      "failure_stage": "transport",
+      "near_status": "done",
+      "phase": "transport",
+      "simulated_time_s": null,
+      "success": false,
+      "transport_tracking_failure": null
+     },
+     "b": {
+      "delivery_error_m": 0.006795687944763239,
+      "failure_class": null,
+      "failure_reason": null,
+      "failure_stage": null,
+      "near_status": "done",
+      "phase": "complete",
+      "simulated_time_s": 195.6083435351029,
+      "success": true,
+      "transport_tracking_failure": null
+     },
+     "scene": "random_1",
+     "seed": 49
+    }
+   ],
+   "common": 70,
+   "only_a": [],
+   "only_b": []
+  },
+  "root": "/home/projects/forklift/test_runs/tmp_restore/pfb_prefix/test_runs/lcr/cmp_a2b91d2d"
+ },
+ "mode": "overlay",
+ "root": "/home/projects/forklift/test_runs/pfb/R_pfb_2bea23e5",
+ "schema": "post_fix_baseline_summary/1"
+}

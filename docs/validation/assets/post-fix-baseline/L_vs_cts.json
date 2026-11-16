@@ -1,0 +1,429 @@
+{
+ "arm_map": {
+  "LD": "D",
+  "LO": "O6"
+ },
+ "arms": {
+  "LD": {
+   "prefix_arm": "D",
+   "scenes": {
+    "line_m": {
+     "new": {
+      "delivery_error_m": {
+       "max": 0.03433221491901313,
+       "median": 0.014340255951560549,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.02870988784636792
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 170.66667556762695,
+       "median": 154.69167473446578,
+       "missing": 0,
+       "n": 24,
+       "p90": 161.60250842822717
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     },
+     "pairs": {
+      "changed": [],
+      "common_seeds": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7
+      ],
+      "only_new_seeds": [],
+      "only_prefix_seeds": []
+     },
+     "prefix": {
+      "delivery_error_m": {
+       "max": 0.04044626764199337,
+       "median": 0.013238868688698481,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.025984290997958515
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 168.59167545940727,
+       "median": 155.22084142873064,
+       "missing": 0,
+       "n": 24,
+       "p90": 164.53834191467612
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     }
+    },
+    "random_m": {
+     "new": {
+      "delivery_error_m": {
+       "max": 0.04814141642852826,
+       "median": 0.013865399070108038,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.04316572662791988
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 171.91667563281953,
+       "median": 158.28334158845246,
+       "missing": 0,
+       "n": 24,
+       "p90": 167.55417540529743
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     },
+     "pairs": {
+      "changed": [],
+      "common_seeds": [
+       0,
+       1,
+       2,
+       3,
+       4,
+       5,
+       6,
+       7
+      ],
+      "only_new_seeds": [],
+      "only_prefix_seeds": []
+     },
+     "prefix": {
+      "delivery_error_m": {
+       "max": 0.04266134860763127,
+       "median": 0.015709966179332152,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.032349431581958604
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 167.3583420617506,
+       "median": 157.06667485833168,
+       "missing": 0,
+       "n": 24,
+       "p90": 166.49000868313016
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     }
+    }
+   }
+  },
+  "LO": {
+   "prefix_arm": "O6",
+   "scenes": {
+    "line_m": {
+     "new": {
+      "delivery_error_m": {
+       "max": 0.038514939407575215,
+       "median": 0.010532591082616217,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.03192009698461356
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 175.85834250506014,
+       "median": 156.49584149522707,
+       "missing": 0,
+       "n": 24,
+       "p90": 164.18334189616144
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     },
+     "pairs": {
+      "changed": [],
+      "common_seeds": [
+       0,
+       1
+      ],
+      "only_new_seeds": [
+       2,
+       3,
+       4,
+       5,
+       6,
+       7
+      ],
+      "only_prefix_seeds": []
+     },
+     "prefix": {
+      "delivery_error_m": {
+       "max": 0.027982205020372505,
+       "median": 0.011036047176575699,
+       "missing": 0,
+       "n": 6,
+       "p90": 0.026240022406931508
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 160.40834169927984,
+       "median": 154.91250807931647,
+       "missing": 0,
+       "n": 6,
+       "p90": 160.37500836420804
+      },
+      "missions": {
+       "confirmed": 6,
+       "done": 6,
+       "failed": 0,
+       "listed": 6,
+       "not_submitted": 0,
+       "scheduled": 6,
+       "start_other": {}
+      },
+      "sessions": 2,
+      "sessions_all_done": 2
+     }
+    },
+    "random_m": {
+     "new": {
+      "delivery_error_m": {
+       "max": 0.045398720172528405,
+       "median": 0.015245579365185146,
+       "missing": 0,
+       "n": 24,
+       "p90": 0.03717213608460051
+      },
+      "failed_classes": {},
+      "failed_missions": [],
+      "failed_outcomes": {},
+      "failed_stages": {},
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 173.60000905394554,
+       "median": 158.28750825533643,
+       "missing": 0,
+       "n": 24,
+       "p90": 169.89500886071474
+      },
+      "missions": {
+       "confirmed": 24,
+       "done": 24,
+       "failed": 0,
+       "listed": 24,
+       "not_submitted": 0,
+       "scheduled": 24,
+       "start_other": {}
+      },
+      "sessions": 8,
+      "sessions_all_done": 8
+     },
+     "pairs": {
+      "changed": [
+       {
+        "new": {
+         "listed": true,
+         "outcome": "done",
+         "reason": null,
+         "session": "LO_random_m_s0",
+         "stage": null
+        },
+        "order": 2,
+        "prefix": {
+         "listed": true,
+         "outcome": "failed",
+         "reason": "near_capture_failed:perception_no_pallet:no_expected_candidate",
+         "session": "O6_random_m_s0",
+         "stage": "observe"
+        },
+        "seed": 0
+       },
+       {
+        "new": {
+         "listed": true,
+         "outcome": "done",
+         "reason": null,
+         "session": "LO_random_m_s0",
+         "stage": null
+        },
+        "order": 3,
+        "prefix": {
+         "listed": true,
+         "outcome": null,
+         "reason": null,
+         "session": "O6_random_m_s0",
+         "stage": null
+        },
+        "seed": 0
+       }
+      ],
+      "common_seeds": [
+       0,
+       1
+      ],
+      "only_new_seeds": [
+       2,
+       3,
+       4,
+       5,
+       6,
+       7
+      ],
+      "only_prefix_seeds": []
+     },
+     "prefix": {
+      "delivery_error_m": {
+       "max": 0.030561783489240456,
+       "median": 0.013997902294676259,
+       "missing": 0,
+       "n": 4,
+       "p90": 0.02668897730316462
+      },
+      "failed_classes": {
+       "perception": 1
+      },
+      "failed_missions": [
+       {
+        "order": 2,
+        "outcome": "failed",
+        "reason": "near_capture_failed:perception_no_pallet:no_expected_candidate",
+        "session": "O6_random_m_s0"
+       }
+      ],
+      "failed_outcomes": {
+       "failed": 1
+      },
+      "failed_stages": {
+       "observe": 1
+      },
+      "forbidden_contacts": {
+       "missing": 0,
+       "total": 0
+      },
+      "mission_time_s": {
+       "max": 170.04167553503066,
+       "median": 156.7750081764534,
+       "missing": 0,
+       "n": 4,
+       "p90": 166.17167533319443
+      },
+      "missions": {
+       "confirmed": 5,
+       "done": 4,
+       "failed": 1,
+       "listed": 6,
+       "not_submitted": 1,
+       "scheduled": 6,
+       "start_other": {}
+      },
+      "sessions": 2,
+      "sessions_all_done": 1
+     }
+    }
+   }
+  }
+ },
+ "ignored_arms": {
+  "new": [],
+  "prefix": [
+   "Dp",
+   "O0"
+  ]
+ },
+ "new": "L_missions.csv",
+ "prefix": "/home/projects/forklift/test_runs/tmp_restore/pfb_code_cd57c65a/docs/validation/2026-11-06-ct-status-survey/missions.csv",
+ "scheduled_per_session": 3,
+ "schema": "post_fix_live_compare/1"
+}

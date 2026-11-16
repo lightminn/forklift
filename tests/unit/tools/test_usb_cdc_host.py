@@ -141,6 +141,8 @@ def test_the_udev_rule_matches_the_firmwares_usb_identity_and_keeps_modemmanager
         assert 'ATTRS{product}=="forklift-mcu *"' in ln  # the build identity's prefix: never the ROM DFU or a NUCLEO
         assert 'ENV{ID_MM_DEVICE_IGNORE}="1"' in ln
     assert any('SUBSYSTEM=="tty"' in ln and 'SYMLINK+="forklift-mcu"' in ln for ln in rules)
+    # D5 4.10 (lead 2026-11-15): autosuspend off for the board's USB device -- a suspend drops the MCU's TX ring
+    assert any('ENV{DEVTYPE}=="usb_device"' in ln and 'ATTR{power/control}="on"' in ln for ln in rules)
 
 
 def test_the_install_steps_are_written_for_the_user_to_run():
@@ -148,6 +150,8 @@ def test_the_install_steps_are_written_for_the_user_to_run():
     assert "sudo install -m 644 deploy/udev/99-forklift-mcu.rules /etc/udev/rules.d/" in readme
     assert "udevadm control --reload" in readme and "udevadm trigger" in readme
     assert "ID_MM_DEVICE_IGNORE" in readme and "/dev/forklift-mcu" in readme
+    assert "## Undo" in readme and "sudo rm /etc/udev/rules.d/99-forklift-mcu.rules" in readme
+    assert "power/control" in readme
 
 
 @pytest.mark.parametrize("lowered", ["TIOCMBIC", "B0"])

@@ -2,8 +2,11 @@
 # VID:PID is ST's virtual COM pair (0483:5740); the product string is the build identity
 # "forklift-mcu <kind> <locked|unlocked> <git>", so neither the ROM DFU device (0483:df11) nor a NUCLEO's ST-LINK
 # port matches. ModemManager is told to leave the port alone (its AT probes would reach the MCU's decoder), and the
-# port gets a stable name: /dev/forklift-mcu and /dev/forklift-mcu-<serial> (the MCU's 96-bit UID).
+# port gets a stable name: /dev/forklift-mcu and /dev/forklift-mcu-<serial> (the MCU's 96-bit UID). USB autosuspend is
+# kept off for the board (power/control=on): a suspend makes the firmware drop its whole transmit ring
+# (link_usb.c), which the teleop bridge sees as an MCU silence (docs/design/2026-11-15-d5-link-gap-mcu-time.md 4.10).
 # No GROUP: the distribution's own serial group stays (dialout on Ubuntu/Jetson, uucp on Arch).
 # Install: deploy/udev/README.md (sudo, run by the user).
 SUBSYSTEM=="usb", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1", ATTR{power/control}="on"
 SUBSYSTEM=="tty", ATTRS{idVendor}=="0483", ATTRS{idProduct}=="5740", ATTRS{product}=="forklift-mcu *", ENV{ID_MM_DEVICE_IGNORE}="1", SYMLINK+="forklift-mcu", SYMLINK+="forklift-mcu-$attr{serial}", MODE="0660"

@@ -19,6 +19,8 @@ dropped and failed writes. A new path only: an existing file is refused.
 from __future__ import annotations
 
 import argparse
+import gc
+import hashlib
 import itertools
 import json
 import os
@@ -45,7 +47,7 @@ from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.markers import marker_reader  # noqa: E402
 from forklift_core.plant.port import RealPlantPort  # noqa: E402
 from forklift_core.plant.record_writer import InlineRecord, RecordWriter, host_boot_id  # noqa: E402
-from forklift_core.plant.real_vehicle import load_real_vehicle  # noqa: E402
+from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: E402
 from forklift_core.safety.arbiter import Arbiter, ArbiterConfig  # noqa: E402
 from forklift_core.safety.state import state_message  # noqa: E402
 from forklift_core.safety.teleop_drive import TeleopLimits  # noqa: E402
@@ -55,7 +57,30 @@ CYCLE_S = 0.02
 
 NO_STATE_HINT_S = 2.0  # no STATE this long: tell the operator (no automatic USB reset, lead 2026-11-12)
 NO_STATE_HINT = "MCU STATE 없음 — USB 가 멈췄으면 주 전원을 재투입하세요(자동 리셋 없음)"
-HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.5, zero_valid_ms=100, outbox_max=16)
+# D5 (docs/design/2026-11-15-d5-link-gap-mcu-time.md): freshness by MCU-time gap, 150 ms host cap = the DRIVE cap
+HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.5, zero_valid_ms=100, outbox_max=16,
+                      gap_clock="mcu", host_gap_max_s=0.15)
+
+
+class LateFreshness:
+    """The host is made before the bridge core whose delay bound and rate guard it reads (D5 3.3a): the core is
+    bound once it exists."""
+
+    def __init__(self) -> None:
+        self.target = None
+
+    def delay_s(self, state, rx_ns):
+        return None if self.target is None else self.target.delay_s(state, rx_ns)
+
+    def rate_verified(self):
+        return self.target is not None and self.target.rate_verified()
+
+    def rate_bound(self):
+        return rt.RATE_RHO_MAX if self.target is None else self.target.rate_bound()
+
+    def on_disconnect(self):
+        if self.target is not None:
+            self.target.on_disconnect()
 
 
 def no_scan(curvatures, direction, check_speed):
@@ -123,7 +148,12 @@ class Bridge:
     """The bridge's parts on one device and one console (the CLI and the end-to-end test build it the same way)."""
 
     def __init__(self, device_link, *, confirmed, floor_permit=no_scan, session_epoch=None, record=None,
-                 profile=None):
+                 profile=None, rate_rho=rt.RATE_RHO_MAX, clock=None):
+        """``rate_rho``: the MCU clock rate bound the arm waits for (D5 3.11; tests widen it to verify quickly).
+        ``clock``: the CLI's monotonic clock -- the decision time is taken after the receive (the D5 read time is
+        later than the cycle start) and each cycle's stage times and GC pauses are recorded; None keeps the cycle
+        start for everything (tests drive the time)."""
+        self.clock = clock
         self.vehicle = load_real_vehicle(REPO / "config" / "real" / "vehicle.yaml")
         self.params = rt.load_bridge_params(REPO / "config" / "real" / "teleop_bridge.yaml", self.vehicle)
         self.cap = rt.command_cap_mps(self.vehicle.teleop_speed_limit_mps, self.params)
@@ -142,14 +172,20 @@ class Bridge:
         self.link = Link(self.arbiter, self.channels)
         # a random first seq per session: a STATE an earlier session left in flight is never taken for this one's
         # acknowledgement (the delay bound's causality, design 2)
+        self._fresh = LateFreshness()
         self.host = McuLinkHost(HOST_CFG, client=Client.REAL, on_state=self._on_state, log=self._log,
-                                initial_seq=secrets.randbelow(0x10000))
+                                initial_seq=secrets.randbelow(0x10000), freshness=self._fresh)
         self.port = RealPlantPort(self.host, self.kin)
         self.safety = rt.bench_safety(confirmed)
         self.core = rt.TeleopBridge(link=self.link, host=self.host, port=self.port, kinematics=self.kin,
                                     params=self.params, limit_mps=self.vehicle.teleop_speed_limit_mps,
                                     floor_permit=floor_permit, safety_provider=lambda now: self.safety,
-                                    cycle_s=CYCLE_S)
+                                    cycle_s=CYCLE_S, rate_rho=rate_rho)
+        self._fresh.target = self.core
+        self._gc_ms = 0.0  # GC pause time since the last cycle record (D5 (나) instrumentation)
+        self._gc_t0: int | None = None
+        if self.clock is not None:
+            gc.callbacks.append(self._gc_cb)
         self.dev = device_link
         self.record = record
         self.marker_poll = None  # set by the CLI's --markers
@@ -248,9 +284,23 @@ class Bridge:
     def record_errors(self) -> int:
         return 0 if self.record is None else self.record.write_errors + self.record.dropped
 
+    def _gc_cb(self, phase, info) -> None:
+        t = self.clock()
+        if phase == "start":
+            self._gc_t0 = t
+        elif self._gc_t0 is not None:
+            self._gc_ms += (t - self._gc_t0) / 1e6
+            self._gc_t0 = None
+
     def cycle(self, now_ns: int) -> dict:
-        """Design 5: receive only, decide, transmit only."""
+        """Design 5: receive only, decide, transmit only. With a clock (the CLI) the decision time is taken after the
+        receive (D5 3.3b) and the stage times go in the record."""
+        t0 = now_ns
         events = self.dev.receive(self.host, now_ns)
+        t_rx = now_ns
+        if self.clock is not None:
+            t_rx = self.clock()
+            now_ns = max(now_ns, t_rx)
         rec = self.core.cycle(now_ns)
         out = rec.pop("_out")
         now = now_ns / 1e9
@@ -279,9 +329,24 @@ class Bridge:
             self.channels.put(None, {"t": "event", "kind": kind, "reason": e.get("reason"),
                                      **{k: e[k] for k in ("offer_id", "travel_m", "elapsed_s", "after_end_s")
                                         if k in e}})
+        for why in ("mcu_stopping", "loop_slow", "clock_rate"):
+            # D5 decisions 2-3: the grey zone's MCU stop, a slow loop and a clock out of range are shown, not hidden
+            if (why == "mcu_stopping" and rec.get("mcu_stopping")) or rec.get("stop") == why:
+                self.channels.put(None, {"t": "event", "kind": why, "reason": why})
+        if self.clock is not None:
+            t_dec = self.clock()
         events += self.dev.transmit(self.host, now_ns)
         if events:
             rec["link_events"] = [e.kind for e in events]
+            stale = [e.detail for e in events if e.kind == "stale"]
+            if stale:
+                rec["stale_detail"] = stale
+        if self.clock is not None:
+            t_tx = self.clock()
+            rec["cycle_start_ns"] = t0
+            rec["stage_ms"] = {"rx": round((t_rx - t0) / 1e6, 3), "dec": round((t_dec - now_ns) / 1e6, 3),
+                               "tx": round((t_tx - t_dec) / 1e6, 3)}
+            rec["gc_ms"], self._gc_ms = round(self._gc_ms, 3), 0.0
         if self.record is not None:
             self.record.put_row(rec)
         if self.profile is not None:
@@ -298,6 +363,13 @@ class Bridge:
             self._started_ns = now_ns
         since = self._started_ns if self._last_rx_ns is None else self._last_rx_ns
         notes = [NO_STATE_HINT] if now_ns - since >= NO_STATE_HINT_S * 1e9 else []
+        rate = self.core.rate
+        if rate.verdict == rt.RATE_OUT:
+            notes.append("MCU 시계 속도가 범위 밖입니다 — 이 부팅에서는 무장할 수 없습니다(전원을 다시 켜고 HSE 를 확인)")
+        elif rate.verdict != rt.RATE_VERIFIED and self.host.state is not None:
+            prog = rate.progress_s()
+            notes.append("MCU 시계 확인 중 — 확인 뒤 무장할 수 있습니다" if prog is None else
+                         f"MCU 시계 확인 중 {prog[0]:.0f}/{max(prog[1], prog[0]):.0f} s — 확인 뒤 무장할 수 있습니다")
         if self.profile is not None:
             p = self.profile
             seg = p.segment
@@ -309,6 +381,8 @@ class Bridge:
 
     def close(self, now_ns: int) -> None:
         """Leave the MCU disarmed: a DISARM written, a few cycles to let it out."""
+        if self._gc_cb in gc.callbacks:
+            gc.callbacks.remove(self._gc_cb)
         self.host.request_disarm(now_ns)
         for _ in range(5):
             now_ns = time.monotonic_ns()
@@ -318,6 +392,36 @@ class Bridge:
 
 
 RECORD_SCHEMA = "teleop_bridge_record/1"
+VEHICLE_YAML = REPO / "config" / "real" / "vehicle.yaml"
+BRIDGE_PARAMS_YAML = REPO / "config" / "real" / "teleop_bridge.yaml"
+
+
+def _file_identity(path: Path) -> dict:
+    data = Path(path).read_bytes()
+    try:
+        shown = str(Path(path).resolve().relative_to(REPO))
+    except ValueError:
+        shown = str(path)
+    return {"path": shown, "sha256": hashlib.sha256(data).hexdigest()}
+
+
+def config_identity(profile_path: str | None, profile_bytes: bytes | None = None) -> dict:
+    """What the record was made with (D4 design 2, lead 2026-11-15): the vehicle file with its calibration id, the
+    bridge's encoder-speed premises and the drive profile, each by content hash -- an analysis given another file
+    is refused instead of silently using different numbers."""
+    vehicle = {**_file_identity(VEHICLE_YAML), "calibration_id": load_real_vehicle(VEHICLE_YAML).calibration_id,
+               "chassis_model": _file_identity(chassis_model_path(VEHICLE_YAML))}  # the file vehicle.yaml names
+    out = {"vehicle": vehicle, "bridge_params": _file_identity(BRIDGE_PARAMS_YAML), "profile": None}
+    if profile_path is not None:
+        import yaml
+
+        # the same bytes give the hash and the parsed name -- the CLI passes the bytes it parsed for the run itself
+        # (Codex #530 P2: a file read twice could change between the two reads)
+        data = Path(profile_path).read_bytes() if profile_bytes is None else profile_bytes
+        ident = _file_identity(Path(profile_path))
+        ident["sha256"] = hashlib.sha256(data).hexdigest()
+        out["profile"] = {**ident, "name": (yaml.safe_load(data) or {}).get("name")}
+    return out
 
 
 OVERRUN_TOLERANCE_NS = 2_000_000  # a cycle starting this much past its slot counts as an overrun
@@ -390,8 +494,21 @@ def main(argv=None) -> int:
             return 2
         import yaml
 
-        profile = yaml.safe_load(Path(args.profile).read_text(encoding="utf-8"))
+        try:
+            profile_bytes = Path(args.profile).read_bytes()  # read once: the run and the header use these bytes
+            profile = yaml.safe_load(profile_bytes)
+        except (OSError, yaml.YAMLError) as e:
+            print(f"the profile {args.profile} cannot be read: {e}", file=sys.stderr)
+            return 2
     record = None
+    identity = None
+    if args.record:
+        # computed before the record exists: a file that cannot be read stops here, leaving no half-made record
+        try:
+            identity = config_identity(args.profile, profile_bytes if args.profile else None)
+        except (OSError, ValueError) as e:
+            print(f"the configuration cannot be identified: {e}", file=sys.stderr)
+            return 2
     if args.record:
         try:
             sink = open(args.record, "x", encoding="utf-8")  # noqa: SIM115 -- a new record per run (design 3)
@@ -401,7 +518,7 @@ def main(argv=None) -> int:
         record = RecordWriter(sink)
         record.put_row({"t": "header", "schema": RECORD_SCHEMA, "tool": "teleop_bridge.py", "device": args.device,
                         "device_id": device_identity(args.device), "synthetic": synthetic, "host_boot_id": host_boot_id(), "start_wall": time.time(),
-                        "start_mono_ns": time.monotonic_ns()})
+                        "start_mono_ns": time.monotonic_ns(), "config": identity})
     # from the record's creation on, every exit path closes it (Codex code review P2-3: a failed start left the writer
     # and the sink open)
     bridge = server = None
@@ -409,10 +526,26 @@ def main(argv=None) -> int:
     out: dict = {}
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
-        link = (ReconnectingLink(args.device, baud=args.baud) if synthetic is None  # the real path: unchanged
-                else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"])))
-        bridge = Bridge(link, confirmed=confirmed, record=record,
+        link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns) if synthetic is None
+                else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"]),
+                                      clock=time.monotonic_ns))
+        bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
                         profile=profile, floor_permit=floor)
+        if identity is not None:
+            # the configuration the bridge loaded is the one the header names (Codex #530 P2: the files are read by
+            # the header and by the bridge at two moments)
+            changed = [what for what, then, now in (
+                ("vehicle", identity["vehicle"]["sha256"], _file_identity(VEHICLE_YAML)["sha256"]),
+                ("chassis_model", identity["vehicle"]["chassis_model"]["sha256"],
+                 _file_identity(chassis_model_path(VEHICLE_YAML))["sha256"]),
+                ("bridge_params", identity["bridge_params"]["sha256"], _file_identity(BRIDGE_PARAMS_YAML)["sha256"]))
+                if then != now]
+            if bridge.vehicle.calibration_id != identity["vehicle"]["calibration_id"]:
+                changed.append("calibration_id")
+            if changed:
+                print(f"the configuration changed while starting ({', '.join(changed)}): start again", file=sys.stderr)
+                record.put_row({"t": "refused", "why": "config_changed", "what": changed})
+                return 2
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)

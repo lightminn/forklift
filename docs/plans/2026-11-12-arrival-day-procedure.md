@@ -115,8 +115,11 @@ S2 부터는 단계마다 다른 이미지를 쓴다(`fw-normal`·`fw-commission
 sudo install -m 644 deploy/udev/99-forklift-mcu.rules /etc/udev/rules.d/ && \
   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=tty --subsystem-match=usb
 ls -l /dev/forklift-mcu
-udevadm info -q property /dev/forklift-mcu | grep ID_MM_DEVICE_IGNORE   # =1 이어야 한다
+udevadm info -q property /dev/forklift-mcu | grep ID_MM_DEVICE_IGNORE   # =1 이어야 한다(ModemManager 무시)
+cat "/sys$(udevadm info -q path /dev/forklift-mcu | sed 's,/[^/]*:[^/]*/tty/.*,,')/power/control"   # on (USB autosuspend 끔)
 ```
+
+ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5 설계 4.10, 총괄 2026-11-15). 펌웨어는 DTR·suspend 때 송신 링을 통째로 버리고, 다리는 그것을 MCU 침묵으로 읽는다. 노트북에서 재연습할 때도 같은 규칙을 깐다. **되돌리기**는 `deploy/udev/README.md` 의 Undo 절을 따른다. 규칙 파일을 지우고 reload·trigger 한다. 꽂혀 있는 포트는 `power/control` 에 `auto` 를 쓰거나 다시 꽂으면 커널 기본으로 돌아간다.
 
 규칙은 0483:5740 과 제품 문자열 `forklift-mcu *` 로 고른다. 보드가 여럿이면 `/dev/forklift-mcu-<UID>` 를 쓴다. 호스트 도구는 DTR 을 내리지 않고, 열 때마다 첫 프레임 앞에 0x00 을 보낸다(#462).
 
@@ -412,6 +415,21 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
 2. 데움 → 정지 60 s → 왼쪽 최대 곡률 원호 2 바퀴(S6 속도, 지름 2/κ_max 의 빈 바닥) → 정지 60 s → 오른쪽 최대 곡률 2 바퀴 → 정지 60 s. 원호의 정상 구간 시작·끝을 G5 표지로 남긴다.
 3. 결과: 정지 중력으로 잰 위쪽 `û_g`, 앞뒤 정지 편향을 뺀 두 방향 원호 축 `û_ω`, 세 벡터 사이 각, 정지 구간 사이 편향 변화, 중력 기준 회전 부호(왼쪽 양·오른쪽 음)와 바퀴 오도메트리 부호의 일치, 원호 중 위쪽에 수직인 회전 성분(평면 가정 진단값, yaw 오차 상한 아님).
 4. 측정 전에 시뮬-물성과 등록할 것: 최소 데움 시간과 정지 구간 사이 편향 변화 허용치(넘으면 다시 기다림), `û_g`·`û_ω` 사이 각의 문턱(넘으면 평면 가정이나 장착을 의심하고 멈춤). 책상 실측의 450–960 s 는 데움 시정수이지 완료 시간이 아니다.
+
+### 12.3a 무장 전 MCU 시계 확인 (D5, 총괄 2026-11-15)
+
+`teleop_bridge.py` 는 MCU 시계 속도가 1 ± 0.001 안에 든다고 확인한 뒤에만 무장한다. 판정은 무장 전 DISARM 핑의 왕복으로 낸다. 연결마다, 그리고 부팅이 바뀔 때마다 처음부터 다시 잰다.
+- 콘솔 상태 줄에 `MCU 시계 확인 중 n/m s — 확인 뒤 무장할 수 있습니다` 가 보이는 동안은 무장 요청이 대기한다(`arm_wait: clock_rate_unverified`). 노트북 리허설 기준 20–40 s 가 걸린다. 시간을 약속하지 않고 확인이 끝나기를 기다린다.
+- `MCU 시계 속도가 범위 밖입니다` 가 뜨면 그 부팅에서는 무장할 수 없다(`clock_rate`). HSE 가 안 잡혀 HSI 로 부팅한 보드일 수 있다. 전원을 다시 켜고, 되풀이되면 크리스털·배선을 본다. 무장 중에 범위 밖이 확인되면 다리가 STOP·DISARM 한다.
+- 링크 끊김 판정은 MCU 시각 간격으로 한다(D5). 다리가 30–80 ms 멈춰도 끊김이 아니다. 150 ms 를 넘거나, MCU 가 50 ms 넘게 침묵하거나, 가장 새 STATE 의 나이(지연 상한 포함)가 50 ms 를 넘으면 끊김이다. 85–150 ms 멈춤에서는 MCU 의 DRIVE 만료(100 ms)가 먼저 멈춘다. 콘솔에 `mcu_stopping` 사건이 뜬다. 1 s 안에 40 ms 넘는 주기가 세 번이면 `loop_slow` STOP 이다.
+
+### 12.3b 단말 정지·다리 정체로 난 void (총괄 2026-11-16)
+
+- **운용자 단말은 유선이나 AP 근거리로 둔다.** 단말이 멈추면 DRIVE 의 유효 기간이 다하고 MCU 가 스스로 멈춘다.
+  - 일정표 주행 구간에서는 텔레옵 명령 기한(0.30 s)이, 정지 구간에서는 lease(1.0 s)가 DRIVE 만료에 들어간다. 단말이 그만큼 멈추면 MCU 가 멈추고 그 시행은 `void:disarmed:mcu_stopping` 이다.
+- **다리 정체:** 다리 루프가 약 100 ms 넘게 멈추면 DRIVE 가 끊기고 같은 결과가 난다(85–150 ms 구간은 12.3a).
+- **단말 정지나 다리 정체로 난 `void:disarmed:mcu_stopping` 도 다른 void 와 같이 그날 블록 끝에 같은 일정표로 다시 한다**(등록 1.1). 현장 점검표에는 원인(단말·다리)을 결과 계산 전에 적는다.
+- 확인한 사실(노트북 리허설, 2026-11-16): 운용자 대역(websocket 클라이언트)이 약 1 s 멈춘 정지 중 시행이 `COMMAND_TIMEOUT` 으로 void 됐다. CPU 절반을 점유한 부하 창에서 다리 루프가 한 번 124 ms 멈춰 `mcu_stopping` 이 났다(80 ms 한 번은 견딤). Jetson 에서는 아직 재지 않았다(Jetson 을 LAN 에 연결한 뒤 같은 측정을 한다).
 
 ### 12.4 참값 (출처 6.3)
 

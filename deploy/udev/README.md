@@ -6,6 +6,9 @@
 - tells ModemManager to leave the port alone (`ID_MM_DEVICE_IGNORE=1`) — its AT probes would otherwise reach the
   MCU's frame decoder (they are thrown away by the CRC, but they cost the link);
 - names the port `/dev/forklift-mcu` (and `/dev/forklift-mcu-<serial>`, the MCU's UID, when several are plugged in);
+- keeps USB autosuspend off for the board (`power/control=on`): a suspend makes the firmware drop its transmit ring,
+  which the teleop bridge's link check reads as an MCU silence (`docs/design/2026-11-15-d5-link-gap-mcu-time.md`
+  4.10);
 - keeps it group-readable and writable (`MODE=0660`) without naming a group, so the distribution's own serial
   group stays: `dialout` on Ubuntu and Jetson (JetPack), `uucp` on Arch (a `GROUP` the system lacks is ignored with
   an error, 2026-11-12 on the Arch laptop).
@@ -33,7 +36,20 @@ Your user must be in the serial group: `dialout` on Ubuntu/Jetson, `uucp` on Arc
 ls -l /dev/forklift-mcu                       # a link to /dev/ttyACM<n>
 udevadm info -q property /dev/forklift-mcu | grep -E 'ID_MM_DEVICE_IGNORE|ID_MODEL|ID_SERIAL_SHORT'
 # ID_MM_DEVICE_IGNORE=1 must be listed
+cat "/sys$(udevadm info -q path /dev/forklift-mcu | sed 's,/[^/]*:[^/]*/tty/.*,,')/power/control"   # on
 ```
+
+## Undo
+
+```bash
+sudo rm /etc/udev/rules.d/99-forklift-mcu.rules
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=tty --subsystem-match=usb
+# the port keeps power/control=on until it is unplugged; to give it back to the kernel's default now:
+echo auto | sudo tee "/sys$(udevadm info -q path /dev/forklift-mcu | sed 's,/[^/]*:[^/]*/tty/.*,,')/power/control"
+```
+
+ModemManager then probes the port again on the next plug-in (it sends AT strings the MCU's decoder throws away).
 
 Then the tools take `--device /dev/forklift-mcu` (USB CDC ignores `--baud`; the UART7 alternative uses its adapter's
 path with `--baud 460800`). With more than one board plugged in, `/dev/forklift-mcu` points at whichever came last: use
