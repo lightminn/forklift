@@ -977,8 +977,16 @@ def analyze(rec_rows, imu_rows, truth_rows, field_rows, profile, cfg, up, *, all
     starts = [min(s[0] for s in t.spans.values()) for t in trs if t.spans]
     truth_heading = None
     if rehearsal_truth:
-        truth_heading = {int(r["trial"]): float(r["dyaw_rad"]) for r in truth_rows[1:]
-                         if r.get("t") == "truth" and _finite(r.get("dyaw_rad"))}
+        truth_heading = {}
+        for r in truth_rows[1:]:
+            if r.get("t") != "truth":
+                continue
+            n = r.get("trial")
+            # the same identity rules as truth/1 (Codex review P3): a row for a trial the record has, once, finite
+            _need(n in {t.trial for t in trs}, f"truth: row for trial {n!r}, which the record does not have")
+            _need(n not in truth_heading, f"truth: two rows for trial {n}")
+            _need(_finite(r.get("dyaw_rad")), f"truth trial {n}: dyaw_rad is not a finite number")
+            truth_heading[n] = float(r["dyaw_rad"])
         truth = None
     else:
         truth = _check_truth(truth_rows, {t.trial for t in trs}, rec) if truth_rows is not None else None

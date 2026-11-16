@@ -43,3 +43,15 @@ def test_rehearsal_truth_gives_the_m1_heading_drift_on_encoder_distance():
     assert v["d_rad_per_m"]["value"] == pytest.approx(-yaw, rel=0.05)
     assert v["d_rad_per_m"]["distance_source"] == "encoder"
     assert v["end_lateral_m"]["why"] == ["heading_only_truth"] and v["radius_scale"]["why"] == ["heading_only_truth"]
+
+
+def test_rehearsal_truth_rows_are_checked():
+    out = ms.synth_trial(M1, CFG, still_s=3.0)
+    for bad in ({"trial": 99}, {"dyaw_rad": float("nan")}):
+        rows = rehearsal_truth(out)
+        rows[1] = {**rows[1], **bad}
+        with pytest.raises(me.Refused):
+            me.analyze(out["record"], out["imu"], rows, None, M1, CFG, (0, -1, 0), allow_synthetic=True)
+    rows = rehearsal_truth(out)
+    with pytest.raises(me.Refused, match="two rows"):
+        me.analyze(out["record"], out["imu"], rows + [rows[1]], None, M1, CFG, (0, -1, 0), allow_synthetic=True)
