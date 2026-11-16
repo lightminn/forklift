@@ -103,6 +103,15 @@
 #                  value applied. on needs --d7-docking (MODE=slam), and the near-tracking contract was measured off, so
 #                  EXTRA_ARGS=--near-tracking on line_2_m needs DOCKING_DEGENERATE_CONTINUE=off. Earlier riib line_2_m
 #                  batches ran off: name both arms' value in every comparison and never pool off results with on results.
+#   SHORT_CUSP_ARC=0.6,1.0 only for MODE=slam with the final scene NAME aisle_rack (an allow list; off for every other
+#                  scene and for MODE=truth) --short-cusp-arc: a curved leg shorter than 0.6 m that ends at a gear change
+#                  costs 1.0 m more in every mission search (docs/plans/2026-11-16-aisle-short-cusp-arc.md); on: its
+#                  registered aisle_rack comparison met all four rules (transport cusp replans 16 -> 8, completion 9 = 9;
+#                  docs/validation/2026-11-16-aisle-short-cusp-arc.md, lead decision 2026-11-16: scene-limited); the
+#                  runner's default stays off. A scene joins only with its own paired comparison. SHORT_CUSP_ARC=off or
+#                  L,P; an explicit --short-cusp-arc in EXTRA_ARGS wins (the launcher then adds none of its own) and
+#                  riib_defaults.txt records the value applied. Earlier riib aisle_rack batches ran off: name both arms'
+#                  value in every comparison and never pool off results with on results.
 # Regression runs choose the older combinations explicitly: MODE=truth (truck and pallet poses as truth, no camera,
 # no SLAM -- the fleet demo setting), NEAR=off, MARKERS=off, RACK=off, KEEPOUT=0. Anything else goes through EXTRA_ARGS.
 # shard:2 -- Isaac with the learned proposal worker peaks at 3.9 GB of a 4 GB shard (PR #98); a MODE=truth run may ask
@@ -115,7 +124,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [SHORT_CUSP_ARC=0.6,1.0|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -212,6 +221,10 @@ if [ "$MODE" = slam ] && [ "$NAME" = line_2_m ]; then DDC_DEFAULT=on; else DDC_D
 DOCKING_DEGENERATE_CONTINUE=${DOCKING_DEGENERATE_CONTINUE:-$DDC_DEFAULT}
 case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "DOCKING_DEGENERATE_CONTINUE must be on or off"; exit 2;; esac
 DOCKING_DEGENERATE_CONTINUE_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --docking-degenerate-continue)
+# the short cusp arc allow list (docs/validation/2026-11-16-aisle-short-cusp-arc.md): the final NAME aisle_rack, slam only
+if [ "$MODE" = slam ] && [ "$NAME" = aisle_rack ]; then SCA_DEFAULT=0.6,1.0; else SCA_DEFAULT=off; fi
+SHORT_CUSP_ARC=${SHORT_CUSP_ARC:-$SCA_DEFAULT}
+SHORT_CUSP_ARC_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --short-cusp-arc)
 # the aisle's rack copy keeps its uprights 0.15 m wider in the searches; every other scene plans as before
 [ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
@@ -240,6 +253,7 @@ NOA_NEXT=0
 NEAR_OBSERVE_ARRIVAL_FROM=launcher  # or EXTRA_ARGS, when it names its own (the runner takes the last one)
 RCR_NEXT=0
 DDC_NEXT=0
+SCA_NEXT=0
 EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
@@ -264,6 +278,11 @@ for w in ${EXTRA_ARGS:-}; do
     continue
   fi
   # and the degenerate-continue switch (--docking-d... can only be --docking-degenerate-continue)
+  if [ "$SCA_NEXT" = 1 ]; then SHORT_CUSP_ARC=$w; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; SCA_NEXT=0; continue; fi
+  case "$w" in --short-cusp-arc|--short-cusp-arc=*|--short-cusp-a|--short-cusp-a=*|--short-cusp-ar|--short-cusp-ar=*)
+    if [[ "$w" == *=* ]]; then SHORT_CUSP_ARC=${w#*=}; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; else SCA_NEXT=1; fi
+    continue;;
+  esac
   if [ "$DDC_NEXT" = 1 ]; then DOCKING_DEGENERATE_CONTINUE=$w; DOCKING_DEGENERATE_CONTINUE_FROM=EXTRA_ARGS; DDC_NEXT=0; continue; fi
   if [[ "$k" == --docking-d* && "--docking-degenerate-continue" == "$k"* ]]; then
     if [[ "$w" == *=* ]]; then DOCKING_DEGENERATE_CONTINUE=${w#*=}; DOCKING_DEGENERATE_CONTINUE_FROM=EXTRA_ARGS; else DDC_NEXT=1; fi
@@ -303,6 +322,8 @@ fi
 case " ${EXTRA_ARGS:-} " in *" --near-tracking "*)
   [ "$RETURN_CUSP_REPLANS" = 0 ] || { echo "--near-tracking needs RETURN_CUSP_REPLANS=0 (its contract was measured at 0)"; exit 2; };; esac
 case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "--docking-degenerate-continue in EXTRA_ARGS must be on or off"; exit 2;; esac
+[ "$SHORT_CUSP_ARC" = off ] || [[ "$SHORT_CUSP_ARC" =~ ^[0-9.]+,[0-9.]+$ ]] \
+  || { echo "SHORT_CUSP_ARC (or EXTRA_ARGS --short-cusp-arc) must be L,P (metres) or off"; exit 2; }
 if [ "$DOCKING_DEGENERATE_CONTINUE" = on ]; then
   # the round-2 stop and its retry are D7 docking's, which only the slam mode builds (the runner refuses it otherwise)
   [ "$MODE" = slam ] || { echo "DOCKING_DEGENERATE_CONTINUE=on needs MODE=slam (--d7-docking)"; exit 2; }
@@ -340,6 +361,7 @@ printf 'NEAR_OBSERVE_ARRIVAL=%s NEAR_OBSERVE_ARRIVAL_FROM=%s\n' "$NEAR_OBSERVE_A
 printf 'RETURN_CUSP_REPLANS=%s RETURN_CUSP_REPLANS_FROM=%s\n' "$RETURN_CUSP_REPLANS" "$RETURN_CUSP_REPLANS_FROM" >> "$OUT/riib_defaults.txt"
 printf 'DOCKING_DEGENERATE_CONTINUE=%s DOCKING_DEGENERATE_CONTINUE_FROM=%s\n' "$DOCKING_DEGENERATE_CONTINUE" \
   "$DOCKING_DEGENERATE_CONTINUE_FROM" >> "$OUT/riib_defaults.txt"
+printf 'SHORT_CUSP_ARC=%s SHORT_CUSP_ARC_FROM=%s\n' "$SHORT_CUSP_ARC" "$SHORT_CUSP_ARC_FROM" >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
@@ -374,6 +396,8 @@ COMMON=(--base-scene "$BASE_SCENE"
 [ "$RETURN_CUSP_REPLANS_FROM" = launcher ] && COMMON+=(--return-cusp-replans "$RETURN_CUSP_REPLANS")
 # and one --docking-degenerate-continue
 [ "$DOCKING_DEGENERATE_CONTINUE_FROM" = launcher ] && COMMON+=(--docking-degenerate-continue "$DOCKING_DEGENERATE_CONTINUE")
+# the short cusp arc: the launcher's value only when EXTRA_ARGS names none, and nothing when off (the runner has no off)
+[ "$SHORT_CUSP_ARC_FROM" = launcher ] && [ "$SHORT_CUSP_ARC" != off ] && COMMON+=(--short-cusp-arc "$SHORT_CUSP_ARC")
 [ "$VIDEO" = on ] && COMMON+=(--video)
 case "$VIEWS" in
   none) COMMON+=(--frame-log) ;;  # the bundle watches run/frames.jsonl for progress
