@@ -279,10 +279,12 @@ for w in ${EXTRA_ARGS:-}; do
   fi
   # and the degenerate-continue switch (--docking-d... can only be --docking-degenerate-continue)
   if [ "$SCA_NEXT" = 1 ]; then SHORT_CUSP_ARC=$w; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; SCA_NEXT=0; continue; fi
-  case "$w" in --short-cusp-arc|--short-cusp-arc=*|--short-cusp-a|--short-cusp-a=*|--short-cusp-ar|--short-cusp-ar=*)
+  # any unique prefix the runner's parser takes: no other runner argument starts with --sh (Codex review P2)
+  w0=${w%%=*}
+  if [ ${#w0} -ge 4 ] && [[ "--short-cusp-arc" == "$w0"* ]]; then
     if [[ "$w" == *=* ]]; then SHORT_CUSP_ARC=${w#*=}; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; else SCA_NEXT=1; fi
-    continue;;
-  esac
+    continue
+  fi
   if [ "$DDC_NEXT" = 1 ]; then DOCKING_DEGENERATE_CONTINUE=$w; DOCKING_DEGENERATE_CONTINUE_FROM=EXTRA_ARGS; DDC_NEXT=0; continue; fi
   if [[ "$k" == --docking-d* && "--docking-degenerate-continue" == "$k"* ]]; then
     if [[ "$w" == *=* ]]; then DOCKING_DEGENERATE_CONTINUE=${w#*=}; DOCKING_DEGENERATE_CONTINUE_FROM=EXTRA_ARGS; else DDC_NEXT=1; fi
@@ -322,8 +324,12 @@ fi
 case " ${EXTRA_ARGS:-} " in *" --near-tracking "*)
   [ "$RETURN_CUSP_REPLANS" = 0 ] || { echo "--near-tracking needs RETURN_CUSP_REPLANS=0 (its contract was measured at 0)"; exit 2; };; esac
 case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "--docking-degenerate-continue in EXTRA_ARGS must be on or off"; exit 2;; esac
-[ "$SHORT_CUSP_ARC" = off ] || [[ "$SHORT_CUSP_ARC" =~ ^[0-9.]+,[0-9.]+$ ]] \
+# the shape only (two numbers as the runner writes floats); the runner's own check refuses a non-positive value
+[ "$SHORT_CUSP_ARC" = off ] || [[ "$SHORT_CUSP_ARC" =~ ^[0-9eE.+-]+,[0-9eE.+-]+$ ]] \
   || { echo "SHORT_CUSP_ARC (or EXTRA_ARGS --short-cusp-arc) must be L,P (metres) or off"; exit 2; }
+# the near-tracking contract compares the planner config with its measurement runs', which ran the cost off
+[ "$SHORT_CUSP_ARC" = off ] || [ "$EXTRA_NEAR_TRACKING" = 0 ] \
+  || { echo "--near-tracking needs SHORT_CUSP_ARC=off (its contract was measured off)"; exit 2; }
 if [ "$DOCKING_DEGENERATE_CONTINUE" = on ]; then
   # the round-2 stop and its retry are D7 docking's, which only the slam mode builds (the runner refuses it otherwise)
   [ "$MODE" = slam ] || { echo "DOCKING_DEGENERATE_CONTINUE=on needs MODE=slam (--d7-docking)"; exit 2; }

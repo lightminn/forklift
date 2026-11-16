@@ -760,3 +760,26 @@ def test_short_cusp_arc_can_be_switched_and_is_checked(tmp_path):
     assert out.returncode == 0 and contains(args_of(out), ["--short-cusp-arc", "0.6,1.0"])
     out = dry_run(tmp_path, scene="aisle", out=tmp_path / "c", SHORT_CUSP_ARC="on")
     assert out.returncode == 2 and "must be L,P" in out.stdout + out.stderr
+
+
+@pytest.mark.parametrize("extra", ["--sh 0.5,2.0", "--short=0.5,2.0", "--short-c 0.5,2.0",
+                                   "--short-cusp-arc 0.4,1.0 --short-cusp-arc 0.5,2.0"])
+def test_short_cusp_arc_any_unique_prefix_and_the_last_value_win(tmp_path, extra):
+    # Codex review P2: the runner takes any unique prefix (no other argument starts with --sh) and the last value
+    out = dry_run(tmp_path, scene="aisle", EXTRA_ARGS=extra)
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert "--short-cusp-arc" not in [a for a in args_of(out) if a == "--short-cusp-arc"][len(extra.split()) // 2:]
+    assert sca_record(tmp_path) == ["SHORT_CUSP_ARC=0.5,2.0 SHORT_CUSP_ARC_FROM=EXTRA_ARGS"]
+
+
+def test_short_cusp_arc_on_refuses_near_tracking(tmp_path):
+    near = dict(EXTRA_ARGS="--near-tracking", RETURN_CUSP_REPLANS="0", EXIT_EXEMPT="off")
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "a", **near)
+    assert out.returncode == 2 and "needs SHORT_CUSP_ARC=off" in out.stdout + out.stderr
+    out = dry_run(tmp_path, scene="aisle", out=tmp_path / "b", SHORT_CUSP_ARC="off", **near)
+    assert out.returncode == 0, out.stdout + out.stderr
+
+
+def test_short_cusp_arc_float_forms_pass_the_shape_check(tmp_path):
+    out = dry_run(tmp_path, scene="aisle", SHORT_CUSP_ARC="6e-1,1e0")
+    assert out.returncode == 0 and contains(args_of(out), ["--short-cusp-arc", "6e-1,1e0"])
