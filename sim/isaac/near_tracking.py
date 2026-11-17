@@ -1101,6 +1101,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "odometry_heading": "steering", "gyro_model": None, "gyro_fault_at": None,
                               "return_turnaround": False, "repeat_at_near_capture": False, "steering_probe": False,
                               "tyre_contact_log": False, "steering_probe_set": "standard",
+                              # 2026-11-17 the model dump (plan 2026-11-17-model-symmetry-check): off before
+                              "steering_probe_dump": False,
                               # 2026-11-04 steering left-asymmetry plan A10 (--steering-probe only): the drive
                               # geometry's URDF; unset = --forklift-urdf, as every earlier record
                               "probe_geometry_urdf": None,

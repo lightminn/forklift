@@ -1,0 +1,754 @@
+{
+ "verdict": "no_mismatch_in_scope",
+ "crossing": [],
+ "undecided": [],
+ "items": [
+  {
+   "item": "mass base_link vs expected",
+   "value": 1.897859293043064e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com base_link vs expected (m)",
+   "value": 3.769728727043543e-09,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia base_link vs expected",
+   "value": 4.668845135587448e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass fork_carriage vs expected",
+   "value": 1.4901160916291903e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com fork_carriage vs expected (m)",
+   "value": 2.4575624641523372e-08,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia fork_carriage vs expected",
+   "value": 2.0629552541955605e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass left_steering_carrier vs expected",
+   "value": 1.4901160916291903e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com left_steering_carrier vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia left_steering_carrier vs expected",
+   "value": 1.07102097373149e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass rear_left_wheel vs expected",
+   "value": 2.1674415731436425e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com rear_left_wheel vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia rear_left_wheel vs expected",
+   "value": 4.966236006990524e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass rear_right_wheel vs expected",
+   "value": 2.1674415731436425e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com rear_right_wheel vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia rear_right_wheel vs expected",
+   "value": 4.966236006990524e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass right_steering_carrier vs expected",
+   "value": 1.4901160916291903e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com right_steering_carrier vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia right_steering_carrier vs expected",
+   "value": 1.07102097373149e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass front_left_wheel vs expected",
+   "value": 2.1674415731436425e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com front_left_wheel vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia front_left_wheel vs expected",
+   "value": 4.966236006990524e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass front_right_wheel vs expected",
+   "value": 2.1674415731436425e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "com front_right_wheel vs expected (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "inertia front_right_wheel vs expected",
+   "value": 4.966236006990524e-08,
+   "limit": 0.01,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "mass front_left_wheel~front_right_wheel",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "com mirror front_left_wheel~front_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "inertia mirror front_left_wheel~front_right_wheel",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "mass rear_left_wheel~rear_right_wheel",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "com mirror rear_left_wheel~rear_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "inertia mirror rear_left_wheel~rear_right_wheel",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "mass left_steering_carrier~right_steering_carrier",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "com mirror left_steering_carrier~right_steering_carrier (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "inertia mirror left_steering_carrier~right_steering_carrier",
+   "value": 0.0,
+   "limit": 0.01,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "composite com |y| at zero pose (m)",
+   "value": 0.0,
+   "limit": 0.001,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre radius front_left_wheel~front_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre height front_left_wheel~front_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "wheel body scale front_left_wheel vs 1",
+   "value": 0.0,
+   "limit": 1e-06,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "wheel body scale front_right_wheel vs 1",
+   "value": 1.1102230246251565e-16,
+   "limit": 1e-06,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre extent in body front_left_wheel~front_right_wheel (m)",
+   "value": 5.551115123125783e-17,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre axis front_left_wheel~front_right_wheel",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre centre in body mirror front_left_wheel~front_right_wheel (m)",
+   "value": 4.510281037539698e-16,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre material front_left_wheel~front_right_wheel",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre static_friction front_left_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre dynamic_friction front_left_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre static_friction front_right_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre dynamic_friction front_right_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre radius rear_left_wheel~rear_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre height rear_left_wheel~rear_right_wheel (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "wheel body scale rear_left_wheel vs 1",
+   "value": 0.0,
+   "limit": 1e-06,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "wheel body scale rear_right_wheel vs 1",
+   "value": 0.0,
+   "limit": 1e-06,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre extent in body rear_left_wheel~rear_right_wheel (m)",
+   "value": 2.7755575615628914e-17,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre axis rear_left_wheel~rear_right_wheel",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre centre in body mirror rear_left_wheel~rear_right_wheel (m)",
+   "value": 4.440892098500626e-16,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre material rear_left_wheel~rear_right_wheel",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "tyre static_friction rear_left_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre dynamic_friction rear_left_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre static_friction rear_right_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "tyre dynamic_friction rear_right_wheel vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive type left_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness left_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping left_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force left_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "limits left_steer vs urdf",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive type right_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness right_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping right_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force right_steer vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "limits right_steer vs urdf",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "joint max_joint_velocity left_steer~right_steer",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint axis left_steer~right_steer",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot0 left_steer~right_steer",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot1 left_steer~right_steer",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos0 mirror left_steer~right_steer (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos1 mirror left_steer~right_steer (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "drive type front_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness front_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping front_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force front_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive type front_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness front_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping front_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force front_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "joint max_joint_velocity front_left_spin~front_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint axis front_left_spin~front_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot0 front_left_spin~front_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot1 front_left_spin~front_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos0 mirror front_left_spin~front_right_spin (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos1 mirror front_left_spin~front_right_spin (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "drive type rear_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness rear_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping rear_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force rear_left_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive type rear_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive stiffness rear_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive damping rear_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "drive max_force rear_right_spin vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  },
+  {
+   "item": "joint max_joint_velocity rear_left_spin~rear_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint axis rear_left_spin~rear_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot0 rear_left_spin~rear_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_rot1 rear_left_spin~rear_right_spin",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos0 mirror rear_left_spin~rear_right_spin (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "joint local_pos1 mirror rear_left_spin~rear_right_spin (m)",
+   "value": 0.0,
+   "limit": 0.0005,
+   "kind": "pair",
+   "crosses": false
+  },
+  {
+   "item": "solver iterations vs settings",
+   "value": 0.0,
+   "limit": 0.5,
+   "kind": "expected",
+   "crosses": false
+  }
+ ],
+ "settled": {
+  "tyres": [
+   "/World/Forklift/front_left_wheel",
+   "/World/Forklift/front_right_wheel",
+   "/World/Forklift/rear_left_wheel",
+   "/World/Forklift/rear_right_wheel"
+  ],
+  "floor_fz_n": [
+   117.45081577205701,
+   30.91127178274746,
+   28.435610618194914,
+   78.26324695189783
+  ],
+  "wheel_center_z_m": {
+   "front_left_wheel": 0.12499931479493777,
+   "front_right_wheel": 0.12499931020041306,
+   "rear_left_wheel": 0.124999392653505,
+   "rear_right_wheel": 0.1249993889282147
+  },
+  "base_roll_rad": 6.740125392334816e-09,
+  "base_pitch_rad": 1.2314762350238532e-07,
+  "samples": 120
+ },
+ "floor": {
+  "/World/Environment/GroundPlane/CollisionPlane": null
+ }
+}
