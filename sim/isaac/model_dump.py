@@ -118,7 +118,7 @@ def joints(stage, root: str = ROOT) -> dict:
 
 
 def colliders(stage, root: str = ROOT) -> dict:
-    from pxr import Usd, UsdGeom, UsdPhysics
+    from pxr import Usd, UsdGeom, UsdPhysics, UsdShade
 
     cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_, UsdGeom.Tokens.proxy,
                                                         UsdGeom.Tokens.guide], useExtentsHint=False)
@@ -139,14 +139,44 @@ def colliders(stage, root: str = ROOT) -> dict:
                          else None)
         box = cache.ComputeWorldBound(prim).ComputeAlignedRange()
         lo, hi = (None, None) if box.IsEmpty() else (_vec(box.GetMin()), _vec(box.GetMax()))
+        # the collider's centre in its rigid body's own frame: the zero-pose geometry, independent of the stand
+        body = prim
+        while body and body.GetPath() != body.GetStage().GetPseudoRoot().GetPath() and not body.HasAPI(UsdPhysics.RigidBodyAPI):
+            body = body.GetParent()
+        in_body = None
+        if body and body.HasAPI(UsdPhysics.RigidBodyAPI):
+            rel = cache.ComputeRelativeBound(prim, body).ComputeAlignedRange()
+            in_body = None if rel.IsEmpty() else [(a + b) / 2 for a, b in zip(rel.GetMin(), rel.GetMax(), strict=True)]
+        material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
+        mat_prim = material.GetPrim() if material else None
+        mat = None
+        if mat_prim and mat_prim.IsValid():
+            mapi = UsdPhysics.MaterialAPI(mat_prim)
+            mat = {"path": str(mat_prim.GetPath()),
+                   "static_friction": _num(mapi.GetStaticFrictionAttr().Get()) if mapi.GetStaticFrictionAttr() else None,
+                   "dynamic_friction": _num(mapi.GetDynamicFrictionAttr().Get()) if mapi.GetDynamicFrictionAttr() else None,
+                   "restitution": _num(mapi.GetRestitutionAttr().Get()) if mapi.GetRestitutionAttr() else None}
         out[str(prim.GetPath())] = {
             **shape,
             "world_min_m": lo, "world_max_m": hi,
             "world_center_m": None if lo is None else [(a + b) / 2 for a, b in zip(lo, hi, strict=True)],
+            "body": None if in_body is None else str(body.GetPath()), "in_body_center_m": in_body, "material": mat,
             "contact_offset": _attr(prim, "physxCollision:contactOffset"),
             "rest_offset": _attr(prim, "physxCollision:restOffset"),
         }
     return out
+
+
+def articulation(stage, root: str = ROOT) -> dict:
+    """The articulation root's solver iterations as authored (PhysxArticulationAPI attributes by name)."""
+    from pxr import Usd, UsdPhysics
+
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(root)):
+        if prim.HasAPI(UsdPhysics.ArticulationRootAPI):
+            return {"root": str(prim.GetPath()),
+                    "solver_position_iterations": _attr(prim, "physxArticulation:solverPositionIterationCount"),
+                    "solver_velocity_iterations": _attr(prim, "physxArticulation:solverVelocityIterationCount")}
+    return {"root": None}
 
 
 def settled_summary(tyre_rows: list, tyre_names: tuple, dt: float, wheel_z: dict, roll_pitch: list) -> dict:

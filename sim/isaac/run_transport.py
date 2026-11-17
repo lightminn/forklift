@@ -2441,7 +2441,8 @@ def probe_model_dump(world, robot, wheels, steers, steering, action_type, dt, st
         world.step(render=False)
         tyre_rows.append(tyre_floor_forces(stage_wheels))
         poses = steering_probe_arms._link_poses(robot)
-        for name in stage_wheels:
+        for path in stage_wheels:
+            name = str(path).rstrip("/").rsplit("/", 1)[-1]  # the probe's tyre links are prim paths; poses by body name
             if name in poses:
                 wheel_z.setdefault(name, []).append(float(poses[name][0][2]))
         w, x, y, z = poses["base_link"][1]
@@ -2451,7 +2452,8 @@ def probe_model_dump(world, robot, wheels, steers, steering, action_type, dt, st
     out = {"plan": "docs/plans/2026-11-17-model-symmetry-check.md",
            "engine": model_dump.engine_bodies(robot._articulation_view),
            "authored_masses": model_dump.authored_masses(stage), "joints": model_dump.joints(stage),
-           "colliders": model_dump.colliders(stage),
+           "colliders": model_dump.colliders(stage), "articulation": model_dump.articulation(stage),
+           "steering_at_stand_rad": np.asarray(steering, float).tolist(),
            "body_poses": {n: {"position_m": p.tolist(), "quat_wxyz": q.tolist()}
                           for n, (p, q) in steering_probe_arms._link_poses(robot).items()},
            "settled": model_dump.settled_summary(tyre_rows, tuple(stage_wheels), dt, wheel_z, tilt)}
