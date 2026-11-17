@@ -128,3 +128,24 @@ def test_a_stratum_the_candidate_loses_counts_against_it():
     assert p["lost"] == ["fwd_left_slow"]
     v = M.judge([{**p, "R_o": 0.9, "R_x": 0.99, "A_o": 0.02, "A_x": 0.0}] * 6)
     assert v["mechanism"] == "does_not_fix" and v["asymmetry"] == "does_not_reduce"
+
+
+def test_a_pair_that_lost_every_common_stratum_stays_in_the_denominator():
+    good, rg = arc(0.0, 20, 0.3, 0.36, 0.30)
+    o = M.strata(*run((good, rg)))
+    bad, rb = arc(0.0, 20, 0.3, 0.36, -0.05)
+    x = M.strata(*run((bad, rb)))
+    lost_pair = M.pair_metric(o, x)
+    assert lost_pair["common"] == [] and lost_pair["lost"]
+    better = {"common": ["fwd_left_slow"], "lost": [], "R_o": 0.88, "R_x": 0.97, "A_o": 0.02, "A_x": 0.005}
+    v = M.judge([better] * 6 + [lost_pair] * 3)
+    assert v["pairs"] == 9 and v["mechanism"] == "does_not_fix"
+
+
+def test_a_stratum_lost_to_short_steps_is_still_lost():
+    good, rg = arc(0.0, 20, 0.3, 0.36, 0.30)
+    o = M.strata(*run((good, rg)))
+    creep, rc = arc(0.0, 20, 0.1, 0.36, 0.30)  # 0.01 m per sample: moving and saturated, nothing measurable
+    x = M.strata(*run((creep, rc)))
+    assert x["fwd_left_slow"]["exposure_s"] >= 1.9 and x["fwd_left_slow"]["saturated_s"] == 0
+    assert M.pair_metric(o, x)["lost"] == ["fwd_left_slow"]

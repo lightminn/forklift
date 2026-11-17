@@ -15,7 +15,8 @@ displacement (signed by the travel direction) and must share the command's sign.
 mean achieved/commanded, mabs = time-weighted mean |command - actual| steering angle per wheel; valid when the
 agreeing time is >= 0.5 s and >= half the stratum's saturated time. A pair's metric is the equal-weight mean over the
 strata valid in both arms; a stratum valid in O that the candidate saturates (>= 0.5 s) but no longer holds is
-'lost' and that pair counts as no improvement. Reads only.
+'lost' (by moving saturated exposure, measurable or not) and that pair
+counts as no improvement, also when it has no common stratum left. Reads only.
 """
 
 from __future__ import annotations
@@ -73,7 +74,7 @@ def strata(r: dict, sc: np.ndarray) -> dict:
     samples = sorted((s for s in r.get("samples") or [] if s.get("phase") == "transport"),
                      key=lambda s: float(s["time_s"]))
     bounds = np.asarray(boundaries(r), float)
-    acc = {k: {"saturated_s": 0.0, "agree_s": 0.0, "ratio": [], "mabs": []} for k in STRATA}
+    acc = {k: {"exposure_s": 0.0, "saturated_s": 0.0, "agree_s": 0.0, "ratio": [], "mabs": []} for k in STRATA}
     excluded = {"last_sample": 0.0, "path_install": 0.0, "unpaired_row": 0.0, "short_step": 0.0}
     for i, s in enumerate(samples):
         t = float(s["time_s"])
@@ -95,13 +96,15 @@ def strata(r: dict, sc: np.ndarray) -> dict:
         kc = float(s["curvature_inv_m"])
         if abs(kc) < SAT:
             continue
+        key = (("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
+               + ("_slow" if abs(speed) < SLOW_FAST_MPS else "_fast"))
+        st = acc[key]
+        # exposure: moving and saturated, whether or not the curvature is measurable (the lost-stratum test reads it)
+        st["exposure_s"] += w
         step = math.hypot(b[4] - a[4], b[5] - a[5])
         if step < MIN_STEP_M:
             excluded["short_step"] += w
             continue
-        key = (("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
-               + ("_slow" if abs(speed) < SLOW_FAST_MPS else "_fast"))
-        st = acc[key]
         st["saturated_s"] += w
         kach = wrap(b[6] - a[6]) / step * (1 if speed > 0 else -1)
         if np.sign(kach) != np.sign(kc):
@@ -116,7 +119,7 @@ def strata(r: dict, sc: np.ndarray) -> dict:
         tw = sum(w for w, _ in st["ratio"])
         mw = sum(w for w, _ in st["mabs"])
         valid = st["agree_s"] >= MIN_AGREE_S - 1e-9 and st["agree_s"] >= AGREE_SHARE * st["saturated_s"] - 1e-9
-        out[k] = {"saturated_s": round(st["saturated_s"], 4), "agree_s": round(st["agree_s"], 4),
+        out[k] = {"exposure_s": round(st["exposure_s"], 4), "saturated_s": round(st["saturated_s"], 4), "agree_s": round(st["agree_s"], 4),
                   "valid": bool(valid and tw > 0 and mw > 0),
                   "ratio": None if tw <= 0 else sum(w * v for w, v in st["ratio"]) / tw,
                   "mabs": None if mw <= 0 else [sum(w * v[j] for w, v in st["mabs"]) / mw for j in range(2)]}
@@ -126,7 +129,7 @@ def strata(r: dict, sc: np.ndarray) -> dict:
 def pair_metric(o: dict, x: dict) -> dict:
     common = [k for k in STRATA if o[k]["valid"] and x[k]["valid"]]
     # a stratum valid in O that the candidate saturates but no longer holds (Codex plan review): counted against it
-    lost = [k for k in STRATA if o[k]["valid"] and not x[k]["valid"] and x[k]["saturated_s"] >= MIN_AGREE_S]
+    lost = [k for k in STRATA if o[k]["valid"] and not x[k]["valid"] and x[k]["exposure_s"] >= MIN_AGREE_S - 1e-9]
     if not common:
         return {"common": [], "lost": lost}
 
@@ -140,13 +143,16 @@ def pair_metric(o: dict, x: dict) -> dict:
 
 
 def judge(pairs: list[dict]) -> dict:
-    ok = [p for p in pairs if "R_o" in p]
+    # a pair counts when it has a common stratum or lost one (Codex plan review: a pair that lost every common
+    # stratum stays in the denominator as no improvement)
+    ok = [p for p in pairs if "R_o" in p or p.get("lost")]
     n = len(ok)
     if n < MIN_PAIRS:
         return {"pairs": n, "mechanism": "undecided", "asymmetry": "undecided"}
-    up = sum(p["R_x"] > p["R_o"] and not p.get("lost") for p in ok) / n
-    med = float(np.median([p["R_x"] for p in ok]))
-    down = sum(p["A_x"] < p["A_o"] and not p.get("lost") for p in ok) / n
+    up = sum("R_o" in p and p["R_x"] > p["R_o"] and not p.get("lost") for p in ok) / n
+    have_r = [p["R_x"] for p in ok if "R_o" in p]
+    med = float(np.median(have_r)) if have_r else float("nan")
+    down = sum("R_o" in p and p["A_x"] < p["A_o"] and not p.get("lost") for p in ok) / n
     return {"pairs": n, "median_R_x": med, "share_R_up": up, "share_A_down": down,
             "mechanism": "fixes" if med >= RATIO_FLOOR and up >= MAJORITY else "does_not_fix",
             "asymmetry": "reduces" if down >= MAJORITY else "does_not_reduce"}
