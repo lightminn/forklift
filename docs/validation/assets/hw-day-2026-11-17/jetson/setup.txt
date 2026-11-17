@@ -1,0 +1,41 @@
+Warning: Permanently added 'jetson.local' (ED25519) to the list of known hosts.
+OK    repo -> ~/forklift (1ea7e044)
+OK    udev rule installed
+OK    udev reload
+OK    udev trigger
+OK    udev rule matches the repo
+FAIL  zetin in dialout (the rule gives 0660) (see /home/light/school/2-2/embedded-design/forklift/.claude/worktrees/hwday-1117/data/jetson_check/2026-11-17/setup.txt)
+OK    venv ~/forklift/.venv with .[real,console] (needs internet)
+2.5.5
+OK    venv imports (numpy, yaml, websockets, forklift_core)
+/usr/bin/cmake
+OK    cmake present (else ask the user: sudo apt-get install -y cmake)
+-- The C compiler identification is GNU 13.3.0
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Configuring done (2.8s)
+-- Generating done (0.1s)
+-- Build files have been written to: /home/scienceowl/forklift/build/rehearsal_mcu_model
+[ 20%] Building C object CMakeFiles/fw_core.dir/core/src/abs_axis.c.o
+[ 20%] Building C object CMakeFiles/fw_core.dir/core/src/app.c.o
+[ 20%] Building C object CMakeFiles/fw_core.dir/core/src/crc.c.o
+[ 26%] Building C object CMakeFiles/fw_core.dir/core/src/cobs.c.o
+[ 40%] Building C object CMakeFiles/fw_core.dir/core/src/drv8244.c.o
+[ 40%] Building C object CMakeFiles/fw_core.dir/core/src/drive.c.o
+[ 46%] Building C object CMakeFiles/fw_core.dir/core/src/link.c.o
+[ 53%] Building C object CMakeFiles/fw_core.dir/core/src/pi.c.o
+[ 60%] Building C object CMakeFiles/fw_core.dir/core/src/wheel_enc.c.o
+[ 66%] Linking C static library libfw_core.a
+[ 66%] Built target fw_core
+[ 73%] Building C object CMakeFiles/fw_plant.dir/plant/plant.c.o
+[ 80%] Linking C static library libfw_plant.a
+[ 80%] Built target fw_plant
+[ 86%] Generating vehicle_config.h from /home/scienceowl/forklift/config/real/vehicle.yaml
+[ 93%] Building C object CMakeFiles/mcu_model.dir/tools/mcu_model.c.o
+[100%] Linking C executable mcu_model
+[100%] Built target mcu_model
+OK    MCU model built
+NOT READY: zetin in dialout (the rule gives 0660)

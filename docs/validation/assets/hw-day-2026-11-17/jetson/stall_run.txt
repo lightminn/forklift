@@ -1,0 +1,13 @@
+== jetson 2026-11-17T20:27:38+09:00 nproc 6
+NV Power Mode: MAXN_SUPER
+2
+PASS  idle: the record covers the run: 300 s of 300 s
+PASS  idle: clean footer: {'t': 'footer', 'dropped': 0, 'write_errors': 0}
+info  idle: 14954 cycles, gap p50 20.1 p99 20.1 max 21.9 ms, >40 ms 0, >80 ms 0, >124 ms 0, gc max 2.0 ms
+PASS  idle: no cycle gap over 40 ms: 0
+ALL PASS
+PASS  load: the record covers the run: 300 s of 300 s
+PASS  load: clean footer: {'t': 'footer', 'dropped': 0, 'write_errors': 0}
+info  load: 14678 cycles, gap p50 20.1 p99 23.8 max 29.6 ms, >40 ms 0, >80 ms 0, >124 ms 0, gc max 1.8 ms
+PASS  load: no cycle gap of 80 ms or more: 0
+ALL PASS

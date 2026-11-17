@@ -4,7 +4,7 @@
 set -euo pipefail
 H=$(cd "$(dirname "$0")" && pwd)
 WANT=$(head -1 "$H/fw/BUILD.txt")
-DEV=/dev/forklift-mcu
+DEV=${FORKLIFT_MCU_DEV:-/dev/forklift-mcu}  # tests point it at a stand-in
 
 for _ in $(seq 1 15); do
   [ -e "$DEV" ] && break
@@ -16,8 +16,11 @@ if [ ! -e "$DEV" ]; then
   echo "lsusb (0483): $(lsusb | grep 0483 || echo none)"
   exit 1
 fi
-PRODUCT=$(udevadm info -a -n "$DEV" | grep -m1 'ATTRS{product}' | sed 's/.*=="\(.*\)"/\1/')
-SERIAL=$(udevadm info -a -n "$DEV" | grep -m1 'ATTRS{serial}' | sed 's/.*=="\(.*\)"/\1/')
+# read the whole listing first, then pick the first match: `udevadm ... | grep -m1` closed the pipe while udevadm
+# was still writing the parent devices' attributes, and with pipefail the script died of SIGPIPE (exit 141, 2026-11-17)
+ATTRS=$(udevadm info -a -n "$DEV")
+PRODUCT=$(sed -n '/ATTRS{product}==/{s/.*=="\(.*\)"/\1/p;q;}' <<<"$ATTRS")
+SERIAL=$(sed -n '/ATTRS{serial}==/{s/.*=="\(.*\)"/\1/p;q;}' <<<"$ATTRS")
 echo "device: $DEV -> $(readlink -f "$DEV")"
 echo "product: $PRODUCT"
 echo "serial:  $SERIAL"

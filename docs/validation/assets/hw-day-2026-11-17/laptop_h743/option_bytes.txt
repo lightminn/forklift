@@ -1,0 +1,97 @@
+[36m[01m      -------------------------------------------------------------------
+[39;49m[0m[36m[01m                        STM32CubeProgrammer v2.23.0                  
+[39;49m[0m[36m[01m      -------------------------------------------------------------------
+
+[39;49m[0m[39;49m
+[39;49m[0m[39;49m
+[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49mUSB speed   : Full Speed (12MBit/s)
+[39;49m[0m[39;49mManuf. ID   : STMicroelectronics
+[39;49m[0m[39;49mProduct ID  : DFU in FS Mode
+[39;49m[0m[39;49mSN          : 200364500000
+[39;49m[0m[39;49mDFU protocol: 1.1
+[39;49m[0m[39;49mBoard       : --
+[39;49m[0m[39;49mDevice ID   : 0x450
+[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49mDevice name : STM32H7xx
+[39;49m[0m[39;49mNVM size    : 2 MBytes (default)
+[39;49m[0m[00;33mWarning: Available NVM size can be less than displayed value depending on part number
+[39;49m[0m[39;49mDevice type : MCU
+[39;49m[0m[39;49mRevision ID : --  
+[39;49m[0m[39;49mDevice CPU  : Cortex-M7
+[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m
+[39;49m[39;49m[0mUPLOADING OPTION BYTES DATA ...
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m  Bank          : 0x00
+[39;49m[39;49m[0m  Address       : 0x5200201c 
+[39;49m[39;49m[0m  Size          : 308 Bytes
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m[00;32m[==================================================] 100% [39;49m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m[39;49m[0m
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m
+[39;49m[39;49m[0mOPTION BYTES BANK: 0
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   Read Out Protection:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     RDP          : 0xAA (Level 0, no protection) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   BOR Level:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     BOR_LEV      : 0x0 (reset level is set to VBOR0) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   User Configuration:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     IWDG1_SW     : 0x1 (Independent watchdog is controlled by software) 
+[39;49m[39;49m[0m     IWDG2_SW     : 0x1 (Independent watchdog is controlled by software) 
+[39;49m[39;49m[0m     NRST_STOP_D1 : 0x1 (STOP mode on Domain 1 is entering without reset) 
+[39;49m[39;49m[0m     NRST_STBY_D1 : 0x1 (STANDBY mode on Domain 1 is entering without reset) 
+[39;49m[39;49m[0m     FZ_IWDG_STOP : 0x1 (Independent watchdog is running in STOP mode) 
+[39;49m[39;49m[0m     FZ_IWDG_SDBY : 0x1 (Independent watchdog is running in STANDBY mode) 
+[39;49m[39;49m[0m     SECURITY     : 0x0 (Security feature disabled) 
+[39;49m[39;49m[0m     SWAP_BANK    : 0x0 (after boot loading, no swap for user sectors) 
+[39;49m[39;49m[0m     IO_HSLV      : 0x0 (Product working in the full voltage range, I/O speed optimization at low-voltage disabled) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   Boot address Option Bytes:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     BOOT_ADD0    : 0x800  (0x8000000) 
+[39;49m[39;49m[0m     BOOT_ADD1    : 0x1FF0  (0x1FF00000) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   PCROP Protection:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     PROT_AREA_START1: 0xFF  (0x800FF00) 
+[39;49m[39;49m[0m     PROT_AREA_END1: 0x0  (0x80000FF) 
+[39;49m[39;49m[0m     DMEP1        : 0x0 (Flash Bank 1 PCROP zone is kept when RDP level regression (change from level 1 to 0) occurs) 
+[39;49m[39;49m[0m     PROT_AREA_START2: 0xFF  (0x810FF00) 
+[39;49m[39;49m[0m     PROT_AREA_END2: 0x0  (0x81000FF) 
+[39;49m[39;49m[0m     DMEP2        : 0x0 (Flash Bank 2 PCROP zone is kept when RDP level regression (change from level 1 to 0) occurs) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   Secure Protection:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     SEC_AREA_START1: 0xFF  (0x800FF00) 
+[39;49m[39;49m[0m     SEC_AREA_END1: 0x0  (0x80000FF) 
+[39;49m[39;49m[0m     DMES1        : 0x0 (Flash Bank 1 secure area is kept when RDP level regression (change from level 1 to 0) occurs) 
+[39;49m[39;49m[0m     SEC_AREA_START2: 0xFF  (0x810FF00) 
+[39;49m[39;49m[0m     SEC_AREA_END2: 0x0  (0x81000FF) 
+[39;49m[39;49m[0m     DMES2        : 0x0 (Flash Bank 2 secure area is kept when RDP level regression (change from level 1 to 0) occurs) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   DTCM RAM Protection:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     ST_RAM_SIZE  : 0x0 (2 KB) 
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m   Write Protection:
+[39;49m[39;49m[0m
+[39;49m[39;49m[0m     nWRP0        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP1        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP2        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP3        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP4        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP5        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP6        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP7        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP8        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP9        : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP10       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP11       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP12       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP13       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP14       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m     nWRP15       : 0x1 (Write protection not active on this sector) 
+[39;49m[39;49m[0m

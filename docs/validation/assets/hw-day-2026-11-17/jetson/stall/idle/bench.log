@@ -1,0 +1,2 @@
+{"device": "/dev/pts/0", "bench": "/home/scienceowl/hwday_stall/idle/bench/bench.json", "stage": "drive", "model_pid": 8873, "synthetic": true}
+{"model_exit": 0}

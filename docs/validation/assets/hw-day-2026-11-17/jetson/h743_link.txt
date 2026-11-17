@@ -1,0 +1,2 @@
+record: data/jetson_check/2026-11-17/h743_link.jsonl
+PASS v3 600.0s states=59999 seq_gaps=0 frame_errors=0 mcu_period=10.0/10.0ms host_gap_max=10.661ms rtt_p50/max=3.97/10.26ms disarm_lost=0/600 resets=0
