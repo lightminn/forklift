@@ -102,7 +102,8 @@ O6_MORE = "--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-sc
 
 
 def b2(snap: str, out: Path) -> list:
-    row = pfb.live(snap, f"{P}/test_runs/f2i/batch_{snap}/b2", "f2ib_O6_random_m_s0", "random_m", 0, False)
+    # a short root: the SLAM socket path under OUT/live/epoch_999/sock must stay within AF_UNIX's 107 bytes
+    row = pfb.live(snap, f"{P}/test_runs/f2ib", "f2ib_O6_random_m_s0", "random_m", 0, False)
     row["env"]["MORE"] = O6_MORE
     return [row]
 
