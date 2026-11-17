@@ -32,17 +32,25 @@ def stage(tmp_path: Path, product: str, *, lines: int = 200_000, writable: bool 
     bin_.mkdir()
     # a udevadm that names the device first and then keeps writing parent attributes, far past a pipe buffer
     fake = bin_ / "udevadm"
-    fake.write_text("#!/usr/bin/env bash\n"
-                    f"echo '    ATTRS{{product}}==\"{product}\"'\n"
-                    "echo '    ATTRS{serial}==\"200364500000\"'\n"
-                    f"seq 1 {lines} | sed 's/.*/    ATTRS{{idle_&}}==\"&\"/'\n")
+    fake.write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo '    ATTRS{{product}}==\"{product}\"'\n"
+        "echo '    ATTRS{serial}==\"200364500000\"'\n"
+        f"seq 1 {lines} | sed 's/.*/    ATTRS{{idle_&}}==\"&\"/'\n"
+    )
     fake.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "FORKLIFT_MCU_DEV": str(dev)}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_}:{os.environ['PATH']}",
+        "FORKLIFT_MCU_DEV": str(dev),
+    }
     return h / "2_enumerate.sh", env
 
 
 def run(script, env):
-    return subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=60)
+    return subprocess.run(
+        ["bash", str(script)], env=env, capture_output=True, text=True, timeout=60
+    )
 
 
 def test_a_long_udevadm_listing_reads_the_product_without_sigpipe(tmp_path):
@@ -56,7 +64,10 @@ def test_a_long_udevadm_listing_reads_the_product_without_sigpipe(tmp_path):
 def test_a_different_product_still_fails_the_check(tmp_path):
     script, env = stage(tmp_path, "forklift-mcu fw-hil 000000000000")
     done = run(script, env)
-    assert done.returncode == 1 and "FAIL: product string is not the staged image" in done.stdout
+    assert (
+        done.returncode == 1
+        and "FAIL: product string is not the staged image" in done.stdout
+    )
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can write a read-only file")

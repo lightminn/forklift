@@ -16,14 +16,26 @@ SRC=~/src/librealsense
 PY=~/forklift/.venv/bin/python
 mkdir -p ~/src
 if [ ! -d "$SRC/.git" ]; then git clone -q --depth 1 -b "$TAG" https://github.com/IntelRealSense/librealsense.git "$SRC"; fi
+# an existing checkout must be that tag and unmodified (the build dir is untracked and not counted)
+have=$(git -C "$SRC" describe --tags --exact-match 2>/dev/null || echo "not-a-tag")
+[ "$have" = "$TAG" ] || { echo "STOP: $SRC is at $have, not $TAG"; exit 2; }
+[ -z "$(git -C "$SRC" status --porcelain --untracked-files=no)" ] || { echo "STOP: $SRC has local changes"; exit 2; }
 cmake -S "$SRC" -B "$SRC/build" -DCMAKE_BUILD_TYPE=Release -DFORCE_RSUSB_BACKEND=ON \
   -DBUILD_PYTHON_BINDINGS=ON -DPYTHON_EXECUTABLE="$PY" -DBUILD_EXAMPLES=OFF -DBUILD_GRAPHICAL_EXAMPLES=OFF \
   -DBUILD_TOOLS=OFF -DBUILD_UNIT_TESTS=OFF -DBUILD_WITH_CUDA=OFF -DCHECK_FOR_UPDATES=OFF
 cmake --build "$SRC/build" -j4
 # point the venv at the built module instead of the PyPI wheel (which has no IMU on this kernel)
-"$PY" -m pip uninstall -y -q pyrealsense2 || true
+"$PY" -m pip uninstall -y -q pyrealsense2  # not installed: pip warns and exits 0; a real failure stops here
 SITE=$("$PY" -c 'import site; print(site.getsitepackages()[0])')
 MOD=$(find "$SRC/build" -name 'pyrealsense2*.so' -printf '%h\n' -quit)  # -quit, not | head: pipefail and SIGPIPE
 echo "$MOD" > "$SITE/pyrealsense2_src.pth"
-"$PY" -c 'import pyrealsense2 as rs; print("built", rs.__file__)'
+# the module the venv imports must be the one just built, not a wheel left behind
+"$PY" - "$SRC/build" <<'PYEOF'
+import os, sys
+import pyrealsense2 as rs
+path = os.path.realpath(rs.__file__ or "")
+build = os.path.realpath(sys.argv[1])
+print("imported", path)
+sys.exit(0 if path.startswith(build + os.sep) else "STOP: pyrealsense2 is not the source build")
+PYEOF
 echo RS_BUILD_DONE
