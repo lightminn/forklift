@@ -102,15 +102,24 @@ O6_MORE = "--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-sc
 
 
 def b2(snap: str, out: Path) -> list:
-    row = pfb.live(snap, f"{P}/test_runs/f2i/batch_{snap}/b2", "f2ib_O6_random_m_s0", "random_m", 0, False)
+    # a short root: the SLAM socket path under OUT/live/epoch_999/sock must stay within AF_UNIX's 107 bytes
+    row = pfb.live(snap, f"{P}/test_runs/f2ib", "f2ib_O6_random_m_s0", "random_m", 0, False)
     row["env"]["MORE"] = O6_MORE
     return [row]
 
 
+def video(snap: str, out: Path) -> list:
+    """Deck video (lead 2026-11-18): random_1 s8 O/F2, deterministic, VIDEO=on, the top-down overview only."""
+    root = f"{P}/test_runs/f2i/batch_{snap}/video"
+    return [pfb.riib(snap, root, f"f2iw_{arm}_random_1_s8", "random_1", 8,
+                     {"VIDEO": "on", "VIEWS": "none",
+                      "EXTRA_ARGS": f"--deterministic --settings {out / f'settings_{arm}.yaml'}"}) for arm in ("O", "F2")]
+
+
 def main(snap: str, out_dir: str, kind: str) -> None:
     out = Path(out_dir)
-    rows = {"batch": batch, "pace": pace, "deck": deck, "recheck": recheck, "b2": b2}[kind](snap, out)
-    assert len({x["name"] for x in rows}) == len(rows) == {"batch": 48, "pace": 9, "deck": 8, "recheck": 4, "b2": 1}[kind]
+    rows = {"batch": batch, "pace": pace, "deck": deck, "recheck": recheck, "b2": b2, "video": video}[kind](snap, out)
+    assert len({x["name"] for x in rows}) == len(rows) == {"batch": 48, "pace": 9, "deck": 8, "recheck": 4, "b2": 1, "video": 2}[kind]
     path = out / f"RUNS_f2i_{kind}_{snap}.jsonl"
     path.write_text("".join(json.dumps(x) + "\n" for x in rows))
     print(path, len(rows))

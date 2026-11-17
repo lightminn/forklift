@@ -1,0 +1,198 @@
+{
+ "f2ix_F2_aisle_rack_s1": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 2.023080750564732,
+  "cusp_replans": 1,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2ix_F2_aisle_rack_s18": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 10.417124110915358,
+  "cusp_replans": 1,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2ix_F2_aisle_rack_s2": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 5.519610674512098,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2ix_F2_random_1_s12": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 3.350611471803913,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2ix_O_aisle_rack_s1": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 41.00163345911512,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ix_O_aisle_rack_s18": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 46.62780764077388,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ix_O_aisle_rack_s2": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 16.779103591637966,
+  "cusp_replans": 1,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ix_O_random_1_s12": {
+  "success": false,
+  "phase": "observe",
+  "failure": "Tracking timeout in observe",
+  "delivery_mm": null,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ir_O_random_1_s13": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 3.2807347570432372,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ir_O_random_1_s22": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 6.915315917621064,
+  "cusp_replans": 1,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ir_O_random_1_s24": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 8.879789025905847,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 1,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2ir_O_random_1_s28": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 10.168700818602376,
+  "cusp_replans": 1,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iw_F2_random_1_s8": {
+  "success": true,
+  "phase": "complete",
+  "failure": null,
+  "delivery_mm": 1.7511661678479735,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2iw_O_random_1_s8": {
+  "success": false,
+  "phase": "transport",
+  "failure": "Tracking failed in transport: pos=2.9726,yaw=0.9957",
+  "delivery_mm": null,
+  "cusp_replans": 0,
+  "goal_creep_stalls": 0,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ }
+}

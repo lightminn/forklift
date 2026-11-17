@@ -1,0 +1,23 @@
+{
+ "session": "f2ib_O6_random_m_s0",
+ "job": 19828,
+ "mode": "operating, learned proposals, MORE=--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-scans 3 --return-cusp-replans 2",
+ "missions": {
+  "m1": {
+   "outcome": "done",
+   "reason": null,
+   "delivery_mm": 26.653298079995242
+  },
+  "m2": {
+   "outcome": "done",
+   "reason": null,
+   "delivery_mm": 12.750781789889219
+  },
+  "m3": {
+   "outcome": "done",
+   "reason": null,
+   "delivery_mm": 34.16277530722338
+  }
+ },
+ "m2_near_attempt": 2
+}

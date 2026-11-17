@@ -1,0 +1,119 @@
+{
+ "f2iv_O_r0_random_1_s1": {
+  "success": false,
+  "failure": "Tracking failed in transport: pos=3.2710,yaw=1.1432",
+  "simulated_time_s": null,
+  "simulation_wall_s": null,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iv_F2_r0_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 161.06667506694794,
+  "simulation_wall_s": 238.32723224302754,
+  "deterministic": false,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2iv_I_r0_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 162.33334179967642,
+  "simulation_wall_s": 244.35307045606896,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iv_O_r1_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 229.02501194458455,
+  "simulation_wall_s": 325.7078306619078,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iv_F2_r1_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 170.5583422286436,
+  "simulation_wall_s": 252.17131594312377,
+  "deterministic": false,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2iv_I_r1_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 162.8750084945932,
+  "simulation_wall_s": 250.08308202400804,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iv_O_r2_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 198.5416770214215,
+  "simulation_wall_s": 295.115437772125,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ },
+ "f2iv_F2_r2_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 163.57500853110105,
+  "simulation_wall_s": 241.25741879083216,
+  "deterministic": false,
+  "tyre_k": [
+   140000.0,
+   140000.0,
+   140000.0,
+   140000.0
+  ]
+ },
+ "f2iv_I_r2_random_1_s1": {
+  "success": true,
+  "failure": null,
+  "simulated_time_s": 160.6833417136222,
+  "simulation_wall_s": 243.46046746498905,
+  "deterministic": false,
+  "tyre_k": [
+   null,
+   null,
+   null,
+   null
+  ]
+ }
+}
