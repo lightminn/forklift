@@ -1,10 +1,14 @@
 """Run lists and settings copies of the F2/I re-registration (docs/plans/2026-11-18-f2-i-reregistration.md 1, 3, 6, 7).
 
-  python make_runs.py SNAP_NAME OUT_DIR batch|pace
+  python make_runs.py SNAP_NAME OUT_DIR batch|pace|deck|recheck
 
 Run from the snapshot's root (the settings copies start from its config/isaac_transport_measured.yaml).
 batch: settings_<arm>[_240].yaml, RUNS_f2i_batch_<snap>.jsonl = 9 probes + 39 paired transport runs (deterministic).
 pace: RUNS_f2i_pace_<snap>.jsonl = random_1 s1 x O, F2, I x 3 in the operating (non-deterministic) mode.
+deck: the week-11 deck's steering-related cases the batch lacks (lead 2026-11-18): aisle_rack s1, s2, s18 and
+  random_1 s12 x O, F2 (prefix f2ix: reported beside, never in the registered judgement). Uses batch's settings copies.
+recheck: cases already fixed by other changes, O only on the current defaults (prefix f2ir): random_1 s13, s22,
+  s28 (K1 near loose arrival) and s24 (return-home stop).
 """
 import importlib.util
 import json
@@ -75,10 +79,26 @@ def pace(snap: str, out: Path) -> list:
     return rows
 
 
+DECK = [("aisle_rack", 1), ("aisle_rack", 2), ("aisle_rack", 18), ("random_1", 12)]
+RECHECK = [("random_1", 13), ("random_1", 22), ("random_1", 28), ("random_1", 24)]
+
+
+def deck(snap: str, out: Path) -> list:
+    root = f"{P}/test_runs/f2i/batch_{snap}"
+    return [pfb.riib(snap, f"{root}/deck", f"f2ix_{arm}_{scene}_s{seed}", scene, seed,
+                     {"EXTRA_ARGS": f"--deterministic --settings {out / f'settings_{arm}.yaml'}"})
+            for scene, seed in DECK for arm in ("O", "F2")]
+
+
+def recheck(snap: str, out: Path) -> list:
+    root = f"{P}/test_runs/f2i/batch_{snap}"
+    return [pfb.riib(snap, f"{root}/recheck", f"f2ir_O_{scene}_s{seed}", scene, seed) for scene, seed in RECHECK]
+
+
 def main(snap: str, out_dir: str, kind: str) -> None:
     out = Path(out_dir)
-    rows = batch(snap, out) if kind == "batch" else pace(snap, out)
-    assert len({x["name"] for x in rows}) == len(rows) == (48 if kind == "batch" else 9)
+    rows = {"batch": batch, "pace": pace, "deck": deck, "recheck": recheck}[kind](snap, out)
+    assert len({x["name"] for x in rows}) == len(rows) == {"batch": 48, "pace": 9, "deck": 8, "recheck": 4}[kind]
     path = out / f"RUNS_f2i_{kind}_{snap}.jsonl"
     path.write_text("".join(json.dumps(x) + "\n" for x in rows))
     print(path, len(rows))
