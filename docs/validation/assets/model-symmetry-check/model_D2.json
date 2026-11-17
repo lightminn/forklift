@@ -1,0 +1,3726 @@
+{
+ "plan": "docs/plans/2026-11-17-model-symmetry-check.md",
+ "engine": {
+  "bodies": {
+   "base_link": {
+    "mass_kg": 20.100000381469727,
+    "com_m": [
+     -0.09000000357627869,
+     0.0,
+     0.2800000011920929
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.7646642923355103,
+     0.0,
+     0.0,
+     0.0,
+     2.0478549003601074,
+     0.0,
+     0.0,
+     0.0,
+     2.1341443061828613
+    ]
+   },
+   "fork_carriage": {
+    "mass_kg": 1.600000023841858,
+    "com_m": [
+     0.6499999761581421,
+     0.0,
+     0.15000000596046448
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.05410666763782501,
+     0.0,
+     0.0,
+     0.0,
+     0.04817333444952965,
+     0.0,
+     0.0,
+     0.0,
+     0.05297333374619484
+    ]
+   },
+   "left_steering_carrier": {
+    "mass_kg": 0.05000000074505806,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     5.208333277550992e-06,
+     0.0,
+     0.0,
+     0.0,
+     5.208333277550992e-06,
+     0.0,
+     0.0,
+     0.0,
+     5.208333277550992e-06
+    ]
+   },
+   "rear_left_wheel": {
+    "mass_kg": 0.550000011920929,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.0024366863071918488,
+     0.0,
+     0.0,
+     0.0,
+     0.004286705516278744,
+     0.0,
+     0.0,
+     0.0,
+     0.0024366863071918488
+    ]
+   },
+   "rear_right_wheel": {
+    "mass_kg": 0.550000011920929,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.0024366863071918488,
+     0.0,
+     0.0,
+     0.0,
+     0.004286705516278744,
+     0.0,
+     0.0,
+     0.0,
+     0.0024366863071918488
+    ]
+   },
+   "right_steering_carrier": {
+    "mass_kg": 0.05000000074505806,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     5.208333277550992e-06,
+     0.0,
+     0.0,
+     0.0,
+     5.208333277550992e-06,
+     0.0,
+     0.0,
+     0.0,
+     5.208333277550992e-06
+    ]
+   },
+   "left_fork_tip": {
+    "mass_kg": 1.0,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     9.999999747378752e-05,
+     0.0,
+     0.0,
+     0.0,
+     9.999999747378752e-05,
+     0.0,
+     0.0,
+     0.0,
+     9.999999747378752e-05
+    ]
+   },
+   "right_fork_tip": {
+    "mass_kg": 1.0,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     9.999999747378752e-05,
+     0.0,
+     0.0,
+     0.0,
+     9.999999747378752e-05,
+     0.0,
+     0.0,
+     0.0,
+     9.999999747378752e-05
+    ]
+   },
+   "front_left_wheel": {
+    "mass_kg": 0.550000011920929,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.0024366863071918488,
+     0.0,
+     0.0,
+     0.0,
+     0.004286705516278744,
+     0.0,
+     0.0,
+     0.0,
+     0.0024366863071918488
+    ]
+   },
+   "front_right_wheel": {
+    "mass_kg": 0.550000011920929,
+    "com_m": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "com_quat_wxyz": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "inertia": [
+     0.0024366863071918488,
+     0.0,
+     0.0,
+     0.0,
+     0.004286705516278744,
+     0.0,
+     0.0,
+     0.0,
+     0.0024366863071918488
+    ]
+   }
+  },
+  "errors": {}
+ },
+ "authored_masses": {
+  "base_link": {
+   "mass_kg": 20.100000381469727,
+   "com_m": [
+    -0.09000000357627869,
+    0.0,
+    0.2800000011920929
+   ],
+   "diagonal_inertia": [
+    0.7646642923355103,
+    2.0478549003601074,
+    2.1341443061828613
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "fork_carriage": {
+   "mass_kg": 1.600000023841858,
+   "com_m": [
+    0.6499999761581421,
+    0.0,
+    0.15000000596046448
+   ],
+   "diagonal_inertia": [
+    0.05410666763782501,
+    0.04817333444952965,
+    0.05297333374619484
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "left_fork_tip": {
+   "mass_kg": 0.0,
+   "com_m": [
+    -Infinity,
+    -Infinity,
+    -Infinity
+   ],
+   "diagonal_inertia": [
+    9.999999747378752e-05,
+    9.999999747378752e-05,
+    9.999999747378752e-05
+   ],
+   "principal_axes_wxyz": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "right_fork_tip": {
+   "mass_kg": 0.0,
+   "com_m": [
+    -Infinity,
+    -Infinity,
+    -Infinity
+   ],
+   "diagonal_inertia": [
+    9.999999747378752e-05,
+    9.999999747378752e-05,
+    9.999999747378752e-05
+   ],
+   "principal_axes_wxyz": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "left_steering_carrier": {
+   "mass_kg": 0.05000000074505806,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    5.208333277550992e-06,
+    5.208333277550992e-06,
+    5.208333277550992e-06
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "front_left_wheel": {
+   "mass_kg": 0.550000011920929,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    0.0024366863071918488,
+    0.004286705516278744,
+    0.0024366863071918488
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "rear_left_wheel": {
+   "mass_kg": 0.550000011920929,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    0.0024366863071918488,
+    0.004286705516278744,
+    0.0024366863071918488
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "rear_right_wheel": {
+   "mass_kg": 0.550000011920929,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    0.0024366863071918488,
+    0.004286705516278744,
+    0.0024366863071918488
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "right_steering_carrier": {
+   "mass_kg": 0.05000000074505806,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    5.208333277550992e-06,
+    5.208333277550992e-06,
+    5.208333277550992e-06
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "front_right_wheel": {
+   "mass_kg": 0.550000011920929,
+   "com_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diagonal_inertia": [
+    0.0024366863071918488,
+    0.004286705516278744,
+    0.0024366863071918488
+   ],
+   "principal_axes_wxyz": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  }
+ },
+ "joints": {
+  "fork_lift": {
+   "body0": [
+    "/World/Forklift/base_link"
+   ],
+   "body1": [
+    "/World/Forklift/fork_carriage"
+   ],
+   "local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "prismatic",
+   "axis": "Z",
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": {
+    "type": "force",
+    "stiffness": 4000.0,
+    "damping": 400.0,
+    "max_force": 180.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 1.0
+  },
+  "left_fork_tip_fixed": {
+   "body0": [
+    "/World/Forklift/fork_carriage"
+   ],
+   "body1": [
+    "/World/Forklift/left_fork_tip"
+   ],
+   "local_pos0": [
+    0.949999988079071,
+    0.1862500011920929,
+    0.03999999910593033
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "PhysicsFixedJoint",
+   "axis": null,
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": null,
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": null
+  },
+  "right_fork_tip_fixed": {
+   "body0": [
+    "/World/Forklift/fork_carriage"
+   ],
+   "body1": [
+    "/World/Forklift/right_fork_tip"
+   ],
+   "local_pos0": [
+    0.949999988079071,
+    -0.1862500011920929,
+    0.03999999910593033
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "PhysicsFixedJoint",
+   "axis": null,
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": null,
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": null
+  },
+  "left_steer": {
+   "body0": [
+    "/World/Forklift/base_link"
+   ],
+   "body1": [
+    "/World/Forklift/left_steering_carrier"
+   ],
+   "local_pos0": [
+    0.3199999928474426,
+    0.26499998569488525,
+    0.125
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Z",
+   "lower_deg": -15.0,
+   "upper_deg": 15.0,
+   "drive": {
+    "type": "force",
+    "stiffness": 1000.0,
+    "damping": 100.0,
+    "max_force": 20.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 57.2957763671875
+  },
+  "front_left_spin": {
+   "body0": [
+    "/World/Forklift/left_steering_carrier"
+   ],
+   "body1": [
+    "/World/Forklift/front_left_wheel"
+   ],
+   "local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Y",
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": {
+    "type": "force",
+    "stiffness": 0.0,
+    "damping": 20.0,
+    "max_force": 3.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 458.3662414550781
+  },
+  "rear_left_spin": {
+   "body0": [
+    "/World/Forklift/base_link"
+   ],
+   "body1": [
+    "/World/Forklift/rear_left_wheel"
+   ],
+   "local_pos0": [
+    -0.3400000035762787,
+    0.26499998569488525,
+    0.125
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Y",
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": {
+    "type": "force",
+    "stiffness": 0.0,
+    "damping": 20.0,
+    "max_force": 3.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 458.3662414550781
+  },
+  "rear_right_spin": {
+   "body0": [
+    "/World/Forklift/base_link"
+   ],
+   "body1": [
+    "/World/Forklift/rear_right_wheel"
+   ],
+   "local_pos0": [
+    -0.3400000035762787,
+    -0.26499998569488525,
+    0.125
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Y",
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": {
+    "type": "force",
+    "stiffness": 0.0,
+    "damping": 20.0,
+    "max_force": 3.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 458.3662414550781
+  },
+  "right_steer": {
+   "body0": [
+    "/World/Forklift/base_link"
+   ],
+   "body1": [
+    "/World/Forklift/right_steering_carrier"
+   ],
+   "local_pos0": [
+    0.3199999928474426,
+    -0.26499998569488525,
+    0.125
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Z",
+   "lower_deg": -15.0,
+   "upper_deg": 15.0,
+   "drive": {
+    "type": "force",
+    "stiffness": 1000.0,
+    "damping": 100.0,
+    "max_force": 20.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 57.2957763671875
+  },
+  "front_right_spin": {
+   "body0": [
+    "/World/Forklift/right_steering_carrier"
+   ],
+   "body1": [
+    "/World/Forklift/front_right_wheel"
+   ],
+   "local_pos0": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_pos1": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot0": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "local_rot1": [
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "kind": "revolute",
+   "axis": "Y",
+   "lower_deg": null,
+   "upper_deg": null,
+   "drive": {
+    "type": "force",
+    "stiffness": 0.0,
+    "damping": 20.0,
+    "max_force": 3.0
+   },
+   "armature": null,
+   "joint_friction": null,
+   "max_joint_velocity": 458.3662414550781
+  }
+ },
+ "colliders": {
+  "/World/Forklift/base_link/collisions/underbody_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.2680321075051064,
+    -0.0917633212190979,
+    0.18198685952871982
+   ],
+   "world_max_m": [
+    -1.2479321162832309,
+    0.09176329654210744,
+    0.19301200945403738
+   ],
+   "world_center_m": [
+    -1.7579821118941688,
+    -1.2338495232466773e-08,
+    0.1874994344913786
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.004999999888241291,
+    0.0,
+    0.1875
+   ],
+   "in_body_min_m": [
+    -0.5150499902561306,
+    -0.09176328422853475,
+    0.18198750034421682
+   ],
+   "in_body_max_m": [
+    0.505049990479648,
+    0.09176328422853475,
+    0.19301249965578318
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/footwell_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.8679821075800704,
+    -0.12073700057178784,
+    0.2587494039575554
+   ],
+   "world_max_m": [
+    -1.617982095549148,
+    0.120736974884939,
+    0.261249441538678
+   ],
+   "world_center_m": [
+    -1.7429821015646092,
+    -1.2843424421205007e-08,
+    0.2599994227481167
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.009999999776482582,
+    0.0,
+    0.2599999904632569
+   ],
+   "in_body_min_m": [
+    -0.11500000022351742,
+    -0.12073698168708802,
+    0.258749990426004
+   ],
+   "in_body_max_m": [
+    0.13499999977648258,
+    0.12073698168708802,
+    0.2612499905005098
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/rear_counterweight_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.167360096875037,
+    -0.14002632412077903,
+    0.294886976835949
+   ],
+   "world_max_m": [
+    -2.1126040764522327,
+    0.14002633716263355,
+    0.3501119854586342
+   ],
+   "world_center_m": [
+    -2.1399820866636348,
+    6.520927256503661e-09,
+    0.3224994811472916
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.3869999945163729,
+    0.0,
+    0.3224999904632569
+   ],
+   "in_body_min_m": [
+    -0.4143779939026835,
+    -0.14002632923572556,
+    0.2948874906033278
+   ],
+   "in_body_max_m": [
+    -0.3596219951300623,
+    0.14002632923572556,
+    0.350112490323186
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/rear_hood_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.1579820992596885,
+    -0.16074448062347388,
+    0.4484869677013885
+   ],
+   "world_max_m": [
+    -2.06798207613426,
+    0.160744491829414,
+    0.45151198188136143
+   ],
+   "world_center_m": [
+    -2.1129820876969743,
+    5.602970060136769e-09,
+    0.449999474791375
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.36000001430511497,
+    0.0,
+    0.4499999880790711
+   ],
+   "in_body_min_m": [
+    -0.4050000178813937,
+    -0.16074448404836694,
+    0.44848748809546235
+   ],
+   "in_body_max_m": [
+    -0.3150000107288362,
+    0.16074448404836694,
+    0.45151248806267985
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/dashboard_body_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.4457820955610912,
+    -0.10575402928115277,
+    0.37874936928112624
+   ],
+   "world_max_m": [
+    -1.4201820831799041,
+    0.10575397443577687,
+    0.40124937547561923
+   ],
+   "world_center_m": [
+    -1.4329820893704976,
+    -2.74226879468098e-08,
+    0.38999937237837273
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.3199999928474424,
+    0.0,
+    0.3899999856948853
+   ],
+   "in_body_min_m": [
+    0.307199993419647,
+    -0.10575400120615486,
+    0.3787499848008156
+   ],
+   "in_body_max_m": [
+    0.3327999922752378,
+    0.10575400120615486,
+    0.401249986588955
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_door_top_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.949782045296485,
+    0.2890754744661787,
+    0.5490749275515034
+   ],
+   "world_max_m": [
+    -1.636182042264904,
+    0.2909244897442201,
+    0.5509239738136267
+   ],
+   "world_center_m": [
+    -1.7929820437806945,
+    0.2899999821051994,
+    0.5499994506825651
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.03999999910593033,
+    0.2899999916553498,
+    0.5500000119209288
+   ],
+   "in_body_min_m": [
+    -0.1968000004410744,
+    0.2890754915925563,
+    0.5490755118581353
+   ],
+   "in_body_max_m": [
+    0.11680000222921375,
+    0.2909244917181433,
+    0.5509245119837224
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_door_rear_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.035986857204566,
+    0.2889874920932065,
+    0.41299778989867875
+   ],
+   "world_max_m": [
+    -2.0099772859648968,
+    0.2910124936688758,
+    0.4670011505227798
+   ],
+   "world_center_m": [
+    -2.0229820715847313,
+    0.28999999288104117,
+    0.43999947021072927
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.27000001072883584,
+    0.2899999916553498,
+    0.43999999761581426
+   ],
+   "in_body_min_m": [
+    -0.2830048001484825,
+    0.2889874915748835,
+    0.41299831894867006
+   ],
+   "in_body_max_m": [
+    -0.25699522130918917,
+    0.29101249173581606,
+    0.46700167628295847
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_door_bottom_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.864182073604948,
+    0.28898747984842915,
+    0.32898694720157046
+   ],
+   "world_max_m": [
+    -1.7617820777868984,
+    0.2910124849614059,
+    0.33101196243179803
+   ],
+   "world_center_m": [
+    -1.8129820756959232,
+    0.28999998240491753,
+    0.32999945481668425
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.05999999865889549,
+    0.28999999165534973,
+    0.33000001311302185
+   ],
+   "in_body_min_m": [
+    -0.11119999637007716,
+    0.28898749157488346,
+    0.3289875130325556
+   ],
+   "in_body_max_m": [
+    -0.008800000947713826,
+    0.291012491735816,
+    0.3310125131934881
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_door_front_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.6022077264230532,
+    0.2888479707654504,
+    0.41069643908235987
+   ],
+   "world_max_m": [
+    -1.5637563917124693,
+    0.29115197249270214,
+    0.46930237189003887
+   ],
+   "world_center_m": [
+    -1.5829820590677612,
+    0.28999997162907626,
+    0.43999940548619937
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.17000000178813934,
+    0.2899999916553498,
+    0.43999999761581426
+   ],
+   "in_body_min_m": [
+    0.1507743386170322,
+    0.2888479916353226,
+    0.4106970286732799
+   ],
+   "in_body_max_m": [
+    0.18922566495924648,
+    0.291151991675377,
+    0.46930296655834863
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_door_brace_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.765967642491852,
+    0.2893874793944538,
+    0.4269588518543262
+   ],
+   "world_max_m": [
+    -1.7399964777489347,
+    0.2906124803159566,
+    0.4630399995957379
+   ],
+   "world_center_m": [
+    -1.7529820601203934,
+    0.2899999798552052,
+    0.44499942572503204
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.0,
+    0.28999999165534973,
+    0.4449999928474427
+   ],
+   "in_body_min_m": [
+    -0.012985584950914357,
+    0.2893874905148984,
+    0.42695942074156995
+   ],
+   "in_body_max_m": [
+    0.012985584950914357,
+    0.29061249279580104,
+    0.4630405649533154
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_sill_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.8141820895599703,
+    0.288749977171407,
+    0.22819943106602827
+   ],
+   "world_max_m": [
+    -1.7117820934872943,
+    0.29124998220272696,
+    0.23179944597582933
+   ],
+   "world_center_m": [
+    -1.7629820915236323,
+    0.289999979687067,
+    0.2299994385209288
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.009999999776482804,
+    0.28999999165534973,
+    0.23000000417232513
+   ],
+   "in_body_min_m": [
+    -0.06119999748766447,
+    0.28874999161809684,
+    0.2282000042527914
+   ],
+   "in_body_max_m": [
+    0.04119999793469886,
+    0.29124999169260263,
+    0.23180000409185886
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_rear_post_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.1439945248411743,
+    0.28898749889301123,
+    0.5540314959814486
+   ],
+   "world_max_m": [
+    -2.1419694911793483,
+    0.2910125000480076,
+    0.8499675283816749
+   ],
+   "world_center_m": [
+    -2.1429820080102613,
+    0.2899999994705094,
+    0.7019995121815618
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.3899999856948855,
+    0.2899999916553498,
+    0.7020000219345092
+   ],
+   "in_body_min_m": [
+    -0.39101249084008116,
+    0.2889874915748835,
+    0.5540320058170888
+   ],
+   "in_body_max_m": [
+    -0.3889874805496898,
+    0.29101249173581606,
+    0.8499680380519296
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_front_post_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.556397936513622,
+    0.28898746559943933,
+    0.38894310236489843
+   ],
+   "world_max_m": [
+    -1.419566157321541,
+    0.2910124696446921,
+    0.875055743600778
+   ],
+   "world_center_m": [
+    -1.4879820469175815,
+    0.2899999676220657,
+    0.6319994229828382
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.26499998569488503,
+    0.28999999165534973,
+    0.6320000290870667
+   ],
+   "in_body_min_m": [
+    0.19658406037579101,
+    0.28898748559377385,
+    0.38894371824924273
+   ],
+   "in_body_max_m": [
+    0.33341591101397905,
+    0.2910124977169256,
+    0.8750563399248905
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/left_roof_rail_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.041181969509769,
+    0.28919997917470464,
+    0.9771994110386949
+   ],
+   "world_max_m": [
+    -1.7047819885567195,
+    0.29079999535611645,
+    0.9787994604568558
+   ],
+   "world_center_m": [
+    -1.872981979033244,
+    0.28999998726541054,
+    0.9779994357477754
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.119999997317791,
+    0.28999999165534973,
+    0.9779999852180481
+   ],
+   "in_body_min_m": [
+    -0.2881999876379968,
+    0.28919999169111255,
+    0.9771999852538109
+   ],
+   "in_body_max_m": [
+    0.048199993002414815,
+    0.2907999916195869,
+    0.9787999851822853
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_door_top_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.9497820733104367,
+    -0.2909245088445201,
+    0.5490749293080645
+   ],
+   "world_max_m": [
+    -1.6361820702788559,
+    -0.2890754935664787,
+    0.5509239755701877
+   ],
+   "world_center_m": [
+    -1.7929820717946463,
+    -0.2900000012054994,
+    0.5499994524391261
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.03999999910593055,
+    -0.28999999165534973,
+    0.550000011920929
+   ],
+   "in_body_min_m": [
+    -0.19680000044107462,
+    -0.2909244917181432,
+    0.5490755118581354
+   ],
+   "in_body_max_m": [
+    0.11680000222921352,
+    -0.28907549159255624,
+    0.5509245119837225
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_door_rear_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.035986885218518,
+    -0.2910124912174923,
+    0.41299779165523964
+   ],
+   "world_max_m": [
+    -2.009977313978849,
+    -0.28898748964182297,
+    0.4670011522793407
+   ],
+   "world_center_m": [
+    -2.0229820995986834,
+    -0.28999999042965763,
+    0.43999947196729017
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.27000001072883584,
+    -0.2899999916553497,
+    0.43999999761581426
+   ],
+   "in_body_min_m": [
+    -0.2830048001484825,
+    -0.29101249173581595,
+    0.41299831894867006
+   ],
+   "in_body_max_m": [
+    -0.25699522130918917,
+    -0.2889874915748834,
+    0.46700167628295847
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_door_bottom_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.8641821016188997,
+    -0.29101250346226964,
+    0.3289869489581314
+   ],
+   "world_max_m": [
+    -1.7617821058008503,
+    -0.2889874983492929,
+    0.331011964188359
+   ],
+   "world_center_m": [
+    -1.812982103709875,
+    -0.29000000090578126,
+    0.3299994565732452
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.05999999865889549,
+    -0.28999999165534973,
+    0.33000001311302185
+   ],
+   "in_body_min_m": [
+    -0.11119999637007716,
+    -0.291012491735816,
+    0.3289875130325556
+   ],
+   "in_body_max_m": [
+    -0.008800000947713826,
+    -0.28898749157488346,
+    0.3310125131934881
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_door_front_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.6022077544370052,
+    -0.2911520125452484,
+    0.41069644083892076
+   ],
+   "world_max_m": [
+    -1.5637564197264213,
+    -0.28884801081799666,
+    0.4693023736465999
+   ],
+   "world_center_m": [
+    -1.5829820870817133,
+    -0.29000001168162254,
+    0.4399994072427603
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.17000000178813912,
+    -0.28999999165534973,
+    0.43999999761581426
+   ],
+   "in_body_min_m": [
+    0.150774338617032,
+    -0.29115199167537686,
+    0.4106970286732799
+   ],
+   "in_body_max_m": [
+    0.18922566495924625,
+    -0.2888479916353226,
+    0.46930296655834863
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_door_brace_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.7659676705058038,
+    -0.290612503916245,
+    0.4269588536108871
+   ],
+   "world_max_m": [
+    -1.7399965057628866,
+    -0.2893875029947422,
+    0.4630400013522988
+   ],
+   "world_center_m": [
+    -1.7529820881343452,
+    -0.2900000034554936,
+    0.44499942748159294
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.0,
+    -0.2899999916553498,
+    0.4449999928474427
+   ],
+   "in_body_min_m": [
+    -0.012985584950914357,
+    -0.2906124927958011,
+    0.42695942074156995
+   ],
+   "in_body_max_m": [
+    0.012985584950914357,
+    -0.2893874905148985,
+    0.4630405649533154
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_sill_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.8141821175739221,
+    -0.2912500061392918,
+    0.2281994328225892
+   ],
+   "world_max_m": [
+    -1.711782121501246,
+    -0.28875000110797183,
+    0.23179944773239025
+   ],
+   "world_center_m": [
+    -1.762982119537584,
+    -0.2900000036236318,
+    0.22999944027748973
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.009999999776482582,
+    -0.28999999165534973,
+    0.23000000417232513
+   ],
+   "in_body_min_m": [
+    -0.06119999748766425,
+    -0.29124999169260263,
+    0.2282000042527914
+   ],
+   "in_body_max_m": [
+    0.041199997934699084,
+    -0.28874999161809684,
+    0.23180000409185886
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_rear_post_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.1439945528551263,
+    -0.29101248441768757,
+    0.5540314977380095
+   ],
+   "world_max_m": [
+    -2.1419695191933004,
+    -0.2889874832626912,
+    0.849967530138236
+   ],
+   "world_center_m": [
+    -2.1429820360242133,
+    -0.2899999838401894,
+    0.7019995139381228
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.3899999856948855,
+    -0.28999999165534973,
+    0.7020000219345093
+   ],
+   "in_body_min_m": [
+    -0.39101249084008116,
+    -0.291012491735816,
+    0.5540320058170889
+   ],
+   "in_body_max_m": [
+    -0.3889874805496898,
+    -0.28898749157488346,
+    0.8499680380519297
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_front_post_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.556397964527574,
+    -0.29101251771125947,
+    0.3889431041214593
+   ],
+   "world_max_m": [
+    -1.419566185335493,
+    -0.2889875136660067,
+    0.8750557453573389
+   ],
+   "world_center_m": [
+    -1.4879820749315336,
+    -0.2900000156886331,
+    0.6319994247393991
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.26499998569488503,
+    -0.28999999165534973,
+    0.6320000290870667
+   ],
+   "in_body_min_m": [
+    0.19658406037579101,
+    -0.2910124977169256,
+    0.38894371824924273
+   ],
+   "in_body_max_m": [
+    0.33341591101397905,
+    -0.28898748559377385,
+    0.8750563399248905
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/right_roof_rail_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.041181997523721,
+    -0.29080000413599416,
+    0.9771994127952558
+   ],
+   "world_max_m": [
+    -1.7047820165706715,
+    -0.28919998795458235,
+    0.9787994622134167
+   ],
+   "world_center_m": [
+    -1.872982007047196,
+    -0.28999999604528826,
+    0.9779994375043363
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.11999999731779122,
+    -0.28999999165534973,
+    0.977999985218048
+   ],
+   "in_body_min_m": [
+    -0.28819998763799703,
+    -0.2907999916195869,
+    0.9771999852538108
+   ],
+   "in_body_max_m": [
+    0.04819999300241459,
+    -0.28919999169111255,
+    0.9787999851822852
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_0_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.144903985161968,
+    -0.13886449665925166,
+    0.9977115161662424
+   ],
+   "world_max_m": [
+    -2.141059971788595,
+    0.1388645140824711,
+    0.9982875175828303
+   ],
+   "world_center_m": [
+    -2.1429819784752815,
+    8.711609725264857e-09,
+    0.9979995168745364
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.3899999856948855,
+    0.0,
+    0.9980000257492065
+   ],
+   "in_body_min_m": [
+    -0.39192198563206215,
+    -0.13886450527715688,
+    0.9977120257441997
+   ],
+   "in_body_max_m": [
+    -0.3880779857577088,
+    0.13886450527715688,
+    0.9982880257542134
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.039903995890805,
+    -0.1388645017307426,
+    0.997711500720618
+   ],
+   "world_max_m": [
+    -2.0360599825174326,
+    0.13886450901098013,
+    0.9982875021372059
+   ],
+   "world_center_m": [
+    -2.037981989204119,
+    3.640118761971678e-09,
+    0.9979995014289119
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.28499999642372154,
+    0.0,
+    0.9980000257492065
+   ],
+   "in_body_min_m": [
+    -0.2869219963608982,
+    -0.13886450527715688,
+    0.9977120257441997
+   ],
+   "in_body_max_m": [
+    -0.28307799648654486,
+    0.13886450527715688,
+    0.9982880257542134
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_2_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.9349040066196421,
+    -0.13886450680223358,
+    0.9977114852749935
+   ],
+   "world_max_m": [
+    -1.93105999324627,
+    0.13886450393948915,
+    0.9982874866915814
+   ],
+   "world_center_m": [
+    -1.932981999932956,
+    -1.4313722151992891e-09,
+    0.9979994859832875
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.1800000071525576,
+    0.0,
+    0.9980000257492064
+   ],
+   "in_body_min_m": [
+    -0.1819220070897343,
+    -0.13886450527715688,
+    0.9977120257441996
+   ],
+   "in_body_max_m": [
+    -0.1780780072153809,
+    0.13886450527715688,
+    0.9982880257542133
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_3_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.829904002447318,
+    -0.13886451187372528,
+    0.9977114698293669
+   ],
+   "world_max_m": [
+    -1.826059989073946,
+    0.13886449886799748,
+    0.9982874712459547
+   ],
+   "world_center_m": [
+    -1.827981995760632,
+    -6.5028639001374344e-09,
+    0.9979994705376608
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.07500000298023224,
+    0.0,
+    0.9980000257492064
+   ],
+   "in_body_min_m": [
+    -0.07692200291740894,
+    -0.13886450527715688,
+    0.9977120257441996
+   ],
+   "in_body_max_m": [
+    -0.07307800304305553,
+    0.13886450527715688,
+    0.9982880257542133
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_4_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.7249040001376394,
+    -0.13886451694521687,
+    0.9977114543837405
+   ],
+   "world_max_m": [
+    -1.7210599867642673,
+    0.13886449379650587,
+    0.9982874558003284
+   ],
+   "world_center_m": [
+    -1.7229819934509534,
+    -1.1574355501808853e-08,
+    0.9979994550920345
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.029999999329447746,
+    0.0,
+    0.9980000257492064
+   ],
+   "in_body_min_m": [
+    0.02807799939227104,
+    -0.13886450527715688,
+    0.9977120257441996
+   ],
+   "in_body_max_m": [
+    0.03192199926662445,
+    0.13886450527715688,
+    0.9982880257542133
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_slat_5_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.6199039941026705,
+    -0.13886452201670865,
+    0.9977114389381136
+   ],
+   "world_max_m": [
+    -1.6160599807292984,
+    0.13886448872501408,
+    0.9982874403547015
+   ],
+   "world_center_m": [
+    -1.6179819874159844,
+    -1.6645847283891513e-08,
+    0.9979994396464076
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.1350000053644178,
+    0.0,
+    0.9980000257492064
+   ],
+   "in_body_min_m": [
+    0.1330780054272411,
+    -0.13886450527715688,
+    0.9977120257441996
+   ],
+   "in_body_max_m": [
+    0.1369220053015945,
+    0.13886450527715688,
+    0.9982880257542133
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_edge_neg_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.0520319909768316,
+    -0.28054451368312067,
+    0.9971869297617707
+   ],
+   "world_max_m": [
+    -1.7039320217790295,
+    -0.27945549687982935,
+    0.9978119809896185
+   ],
+   "world_center_m": [
+    -1.8779820063779304,
+    -0.280000005281475,
+    0.9974994553756946
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.12500000000000044,
+    -0.28000000119209284,
+    0.9975000023841857
+   ],
+   "in_body_min_m": [
+    -0.299049984526635,
+    -0.280544501186192,
+    0.9971875023748724
+   ],
+   "in_body_max_m": [
+    0.04904998452663409,
+    -0.27945550119799367,
+    0.997812502393499
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/roof_edge_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -2.052031963928877,
+    0.27945548870106446,
+    0.9971869280657808
+   ],
+   "world_max_m": [
+    -1.703931994731075,
+    0.2805445055043558,
+    0.9978119792936286
+   ],
+   "world_center_m": [
+    -1.877981979329976,
+    0.2799999971027101,
+    0.9974994536797047
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    -0.125,
+    0.2800000011920929,
+    0.9975000023841857
+   ],
+   "in_body_min_m": [
+    -0.29904998452663456,
+    0.2794555011979938,
+    0.9971875023748724
+   ],
+   "in_body_max_m": [
+    0.04904998452663453,
+    0.280544501186192,
+    0.997812502393499
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/mast_rail_neg_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.2143341012685702,
+    -0.16080003517487423,
+    0.16779936595321082
+   ],
+   "world_max_m": [
+    -1.2116300445340082,
+    -0.15920003395162363,
+    0.552199372268595
+   ],
+   "world_center_m": [
+    -1.2129820729012892,
+    -0.16000003456324893,
+    0.3599993691109029
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576721,
+    -0.15999999642372134,
+    0.36000001430511475
+   ],
+   "in_body_min_m": [
+    0.5386480214018822,
+    -0.16079999638795855,
+    0.16780001134872435
+   ],
+   "in_body_max_m": [
+    0.5413520215134621,
+    -0.15919999645948413,
+    0.5522000172615051
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/mast_rail_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.2143340858125968,
+    0.159199957672568,
+    0.16779936498407377
+   ],
+   "world_max_m": [
+    -1.2116300290780349,
+    0.1607999588958186,
+    0.5521993712994578
+   ],
+   "world_center_m": [
+    -1.2129820574453158,
+    0.1599999582841933,
+    0.3599993681417658
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576721,
+    0.1599999964237213,
+    0.36000001430511475
+   ],
+   "in_body_min_m": [
+    0.5386480214018822,
+    0.1591999964594841,
+    0.16780001134872435
+   ],
+   "in_body_max_m": [
+    0.5413520215134621,
+    0.16079999638795853,
+    0.5522000172615051
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/mast_cross_0_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.2142321089109034,
+    -0.06480004418501714,
+    0.08419935487092822
+   ],
+   "world_max_m": [
+    -1.2117321023413656,
+    0.06479996624026099,
+    0.0857993555596562
+   ],
+   "world_center_m": [
+    -1.2129821056261345,
+    -3.897237807470866e-08,
+    0.08499935521529221
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576721,
+    0.0,
+    0.08500000089406967
+   ],
+   "in_body_min_m": [
+    0.5387500214204192,
+    -0.06480000514984141,
+    0.08420000092983246
+   ],
+   "in_body_max_m": [
+    0.5412500214949251,
+    0.06480000514984141,
+    0.08580000085830689
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/mast_cross_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.2142320625740246,
+    -0.06480004323102503,
+    0.3991993599373196
+   ],
+   "world_max_m": [
+    -1.2117320560044869,
+    0.0647999671942531,
+    0.4007993606260476
+   ],
+   "world_center_m": [
+    -1.2129820592892557,
+    -3.801838596717566e-08,
+    0.3999993602816836
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576721,
+    0.0,
+    0.4000000059604645
+   ],
+   "in_body_min_m": [
+    0.5387500214204192,
+    -0.06480000514984141,
+    0.3992000059962273
+   ],
+   "in_body_max_m": [
+    0.5412500214949251,
+    0.06480000514984141,
+    0.40080000592470166
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/mast_cross_2_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.214232025798729,
+    -0.06480004247388856,
+    0.6491993301349946
+   ],
+   "world_max_m": [
+    -1.2117320192291912,
+    0.06479996795138959,
+    0.6507993308237224
+   ],
+   "world_center_m": [
+    -1.21298202251396,
+    -3.726124948172371e-08,
+    0.6499993304793585
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576721,
+    0.0,
+    0.649999976158142
+   ],
+   "in_body_min_m": [
+    0.5387500214204192,
+    -0.06480000514984141,
+    0.6491999761939048
+   ],
+   "in_body_max_m": [
+    0.5412500214949251,
+    0.06480000514984141,
+    0.6507999761223792
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/base_link/collisions/lift_drive_cover_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.2146640875138237,
+    -0.004050039000549606,
+    0.20879934681360657
+   ],
+   "world_max_m": [
+    -1.211300072253028,
+    0.004049962115784607,
+    0.31119934275534844
+   ],
+   "world_center_m": [
+    -1.2129820798834259,
+    -3.8442382499070255e-08,
+    0.2599993447844775
+   ],
+   "body": "/World/Forklift/base_link",
+   "in_body_center_m": [
+    0.5400000214576723,
+    0.0,
+    0.25999999046325684
+   ],
+   "in_body_min_m": [
+    0.5383180215544703,
+    -0.004050000321865088,
+    0.20879999275207517
+   ],
+   "in_body_max_m": [
+    0.5416820213608744,
+    0.004050000321865088,
+    0.3111999881744385
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/left_fork_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.047782029840564,
+    0.18473744786006047,
+    0.03968761414646727
+   ],
+   "world_max_m": [
+    -0.9181820193028372,
+    0.18776245408884074,
+    0.04031263323857214
+   ],
+   "world_center_m": [
+    -0.9829820245717006,
+    0.1862499509744506,
+    0.04000012369251971
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.7699999809265136,
+    0.1862500011920929,
+    0.03999999910593033
+   ],
+   "in_body_min_m": [
+    0.7051999757766721,
+    0.18473750120848417,
+    0.039687499096617104
+   ],
+   "in_body_max_m": [
+    0.834799986076355,
+    0.18776250117570162,
+    0.04031249911524355
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/left_fork_heel_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633200185303898,
+    0.18473745994193116,
+    0.13028403124772628
+   ],
+   "world_max_m": [
+    -1.162644010128687,
+    0.18776246011119277,
+    0.18621627898811574
+   ],
+   "world_center_m": [
+    -1.1629820143295384,
+    0.18624996002656197,
+    0.158250155117921
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739559,
+    0.1862500011920929,
+    0.15825000405311587
+   ],
+   "in_body_min_m": [
+    0.5896619737600084,
+    0.18473750120848417,
+    0.13028388023722173
+   ],
+   "in_body_max_m": [
+    0.5903379737879033,
+    0.18776250117570162,
+    0.18621612786901
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_side_left_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633200122311633,
+    0.21688746001804385,
+    0.16255014307461635
+   ],
+   "world_max_m": [
+    -1.1626439849450882,
+    0.21811246062110365,
+    0.34745014932896423
+   ],
+   "world_center_m": [
+    -1.1629819985881258,
+    0.21749996031957375,
+    0.2550001462017903
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.21750000119209287,
+    0.2549999952316285
+   ],
+   "in_body_min_m": [
+    0.5896619737600088,
+    0.21688750118687747,
+    0.16254999215602878
+   ],
+   "in_body_max_m": [
+    0.5903379737879038,
+    0.21811250119730827,
+    0.34744999830722817
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/right_fork_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.0477820478322837,
+    -0.18776255452412488,
+    0.039687615274603426
+   ],
+   "world_max_m": [
+    -0.9181820372945568,
+    -0.1847375482953446,
+    0.040312634366708296
+   ],
+   "world_center_m": [
+    -0.9829820425634203,
+    -0.18625005140973475,
+    0.04000012482065586
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.7699999809265137,
+    -0.18625000119209292,
+    0.03999999910593033
+   ],
+   "in_body_min_m": [
+    0.7051999757766723,
+    -0.18776250117570165,
+    0.039687499096617104
+   ],
+   "in_body_max_m": [
+    0.8347999860763551,
+    -0.1847375012084842,
+    0.04031249911524355
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/right_fork_heel_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633200365221095,
+    -0.18776254244225418,
+    0.13028403237586245
+   ],
+   "world_max_m": [
+    -1.1626440281204067,
+    -0.18473754227299258,
+    0.1862162801162519
+   ],
+   "world_center_m": [
+    -1.162982032321258,
+    -0.18625004235762338,
+    0.15825015624605718
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    -0.18625000119209292,
+    0.15825000405311587
+   ],
+   "in_body_min_m": [
+    0.5896619737600088,
+    -0.18776250117570165,
+    0.13028388023722173
+   ],
+   "in_body_max_m": [
+    0.5903379737879038,
+    -0.1847375012084842,
+    0.18621612786901
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_side_right_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633200332416282,
+    -0.2181125423661414,
+    0.16255014439203708
+   ],
+   "world_max_m": [
+    -1.1626440059555532,
+    -0.2168875417630816,
+    0.34745015064638496
+   ],
+   "world_center_m": [
+    -1.1629820195985907,
+    -0.2175000420646115,
+    0.255000147519211
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739561,
+    -0.2175000011920929,
+    0.2549999952316285
+   ],
+   "in_body_min_m": [
+    0.5896619737600086,
+    -0.2181125011973083,
+    0.16254999215602878
+   ],
+   "in_body_max_m": [
+    0.5903379737879035,
+    -0.2168875011868775,
+    0.34744999830722817
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_cross_0_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633740395348027,
+    -0.11045004084757212,
+    0.08448815208213892
+   ],
+   "world_max_m": [
+    -1.1625900286663202,
+    0.11044995807282869,
+    0.08551215296374848
+   ],
+   "world_center_m": [
+    -1.1629820341005614,
+    -4.1387371717271915e-08,
+    0.0850001525229437
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.0,
+    0.08500000089406966
+   ],
+   "in_body_min_m": [
+    0.5896079737497568,
+    -0.11044999943971635,
+    0.08448800084543226
+   ],
+   "in_body_max_m": [
+    0.5903919737981558,
+    0.11044999943971635,
+    0.08551200094270706
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_cross_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.163374007908043,
+    -0.11045004019643463,
+    0.29948816310899595
+   ],
+   "world_max_m": [
+    -1.1625899970395606,
+    0.11044995872396618,
+    0.30051216399060543
+   ],
+   "world_center_m": [
+    -1.1629820024738018,
+    -4.073623422612416e-08,
+    0.3000001635498007
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.0,
+    0.30000001192092896
+   ],
+   "in_body_min_m": [
+    0.5896079737497568,
+    -0.11044999943971635,
+    0.29948801187229157
+   ],
+   "in_body_max_m": [
+    0.5903919737981558,
+    0.11044999943971635,
+    0.30051201196956634
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_cross_2_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1633739858428664,
+    -0.11045003974215276,
+    0.44948813926713643
+   ],
+   "world_max_m": [
+    -1.162589974974384,
+    0.11044995917824806,
+    0.4505121401487459
+   ],
+   "world_center_m": [
+    -1.1629819804086252,
+    -4.0281952350118555e-08,
+    0.45000013970794117
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.0,
+    0.4499999880790711
+   ],
+   "in_body_min_m": [
+    0.5896079737497568,
+    -0.11044999943971635,
+    0.4494879880304337
+   ],
+   "in_body_max_m": [
+    0.5903919737981558,
+    0.11044999943971635,
+    0.4505119881277085
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_grille_0_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1631819982002265,
+    -0.1600720369238892,
+    0.3815501383985746
+   ],
+   "world_max_m": [
+    -1.1627819957251424,
+    -0.15992803685088333,
+    0.3984501372180744
+   ],
+   "world_center_m": [
+    -1.1629819969626845,
+    -0.16000003688738626,
+    0.3900001378083245
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    -0.15999999642372134,
+    0.38999998569488525
+   ],
+   "in_body_min_m": [
+    0.589799973782897,
+    -0.16007199642497305,
+    0.38154998631477355
+   ],
+   "in_body_max_m": [
+    0.5901999737650157,
+    -0.15992799642246963,
+    0.39844998507499696
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_grille_1_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1631819943362331,
+    -0.08007203871202859,
+    0.38155013815629035
+   ],
+   "world_max_m": [
+    -1.162781991861149,
+    -0.07992803863902281,
+    0.3984501369757901
+   ],
+   "world_center_m": [
+    -1.162981993098691,
+    -0.0800000386755257,
+    0.39000013756604024
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739561,
+    -0.07999999821186067,
+    0.38999998569488525
+   ],
+   "in_body_min_m": [
+    0.5897999737828967,
+    -0.08007199821311237,
+    0.38154998631477355
+   ],
+   "in_body_max_m": [
+    0.5901999737650154,
+    -0.07992799821060897,
+    0.39844998507499696
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_grille_2_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1631819904722396,
+    -7.20405001680318e-05,
+    0.3815501379140061
+   ],
+   "world_max_m": [
+    -1.1627819879971555,
+    7.195957283775871e-05,
+    0.3984501367335059
+   ],
+   "world_center_m": [
+    -1.1629819892346975,
+    -4.046366513654477e-08,
+    0.390000137323756
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.0,
+    0.3899999856948853
+   ],
+   "in_body_min_m": [
+    0.589799973782897,
+    -7.200000125169755e-05,
+    0.3815499863147736
+   ],
+   "in_body_max_m": [
+    0.5901999737650157,
+    7.200000125169755e-05,
+    0.398449985074997
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_grille_3_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1631819866082465,
+    0.07992795771169253,
+    0.3815501376717218
+   ],
+   "world_max_m": [
+    -1.1627819841331624,
+    0.0800719577846983,
+    0.3984501364912216
+   ],
+   "world_center_m": [
+    -1.1629819853707044,
+    0.07999995774819542,
+    0.3900001370814717
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739559,
+    0.07999999821186066,
+    0.38999998569488525
+   ],
+   "in_body_min_m": [
+    0.5897999737828965,
+    0.07992799821060896,
+    0.38154998631477355
+   ],
+   "in_body_max_m": [
+    0.5901999737650152,
+    0.08007199821311235,
+    0.39844998507499696
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/fork_carriage/collisions/carriage_grille_4_collision/box": {
+   "type": "Cube",
+   "size": 1.0,
+   "world_min_m": [
+    -1.1631819827442529,
+    0.15992795592355305,
+    0.38155013742943755
+   ],
+   "world_max_m": [
+    -1.1627819802691688,
+    0.1600719559965589,
+    0.3984501362489373
+   ],
+   "world_center_m": [
+    -1.1629819815067108,
+    0.15999995596005598,
+    0.39000013683918744
+   ],
+   "body": "/World/Forklift/fork_carriage",
+   "in_body_center_m": [
+    0.5899999737739563,
+    0.1599999964237213,
+    0.38999998569488525
+   ],
+   "in_body_min_m": [
+    0.589799973782897,
+    0.1599279964224696,
+    0.38154998631477355
+   ],
+   "in_body_max_m": [
+    0.5901999737650157,
+    0.16007199642497302,
+    0.39844998507499696
+   ],
+   "body_scale": [
+    1.0,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/front_left_wheel/collisions/front_left_tire_collision/cylinder": {
+   "type": "Cylinder",
+   "radius": 0.125,
+   "height": 0.07999999821186066,
+   "axis": "Z",
+   "world_min_m": [
+    -1.558008709614173,
+    0.22499995345863777,
+    -2.7225326178482544e-05
+   ],
+   "world_max_m": [
+    -1.3079554646564568,
+    0.30500001793113274,
+    0.2500260034309606
+   ],
+   "world_center_m": [
+    -1.432982087135315,
+    0.26499998569488525,
+    0.12499938905239105
+   ],
+   "body": "/World/Forklift/front_left_wheel",
+   "in_body_center_m": [
+    2.2898349882893854e-16,
+    0.0,
+    0.0
+   ],
+   "in_body_min_m": [
+    -0.12499999999999976,
+    -0.04000000338449802,
+    -0.12500000136914155
+   ],
+   "in_body_max_m": [
+    0.12500000000000022,
+    0.04000000338449802,
+    0.12500000136914155
+   ],
+   "body_scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/rear_left_wheel/collisions/rear_left_tire_collision/cylinder": {
+   "type": "Cylinder",
+   "radius": 0.125,
+   "height": 0.07999999821186066,
+   "axis": "Z",
+   "world_min_m": [
+    -2.2180088995283715,
+    0.2249999766857117,
+    -2.712822451288841e-05
+   ],
+   "world_max_m": [
+    -1.9679556848222144,
+    0.3049999947040588,
+    0.2500260851432293
+   ],
+   "world_center_m": [
+    -2.092982292175293,
+    0.26499998569488525,
+    0.12499947845935822
+   ],
+   "body": "/World/Forklift/rear_left_wheel",
+   "in_body_center_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "in_body_min_m": [
+    -0.12499999999999999,
+    -0.04000000338449802,
+    -0.12500000136914155
+   ],
+   "in_body_max_m": [
+    0.12499999999999999,
+    0.04000000338449802,
+    0.12500000136914155
+   ],
+   "body_scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/rear_right_wheel/collisions/rear_right_tire_collision/cylinder": {
+   "type": "Cylinder",
+   "radius": 0.125,
+   "height": 0.07999999821186066,
+   "axis": "Z",
+   "world_min_m": [
+    -2.2180088004365204,
+    -0.30499999470404215,
+    -2.7029132658731986e-05
+   ],
+   "world_max_m": [
+    -1.9679557839140656,
+    -0.22499997668572835,
+    0.25002598605137516
+   ],
+   "world_center_m": [
+    -2.092982292175293,
+    -0.26499998569488525,
+    0.12499947845935822
+   ],
+   "body": "/World/Forklift/rear_right_wheel",
+   "in_body_center_m": [
+    4.440892098500626e-16,
+    0.0,
+    0.0
+   ],
+   "in_body_min_m": [
+    -0.12499999999999956,
+    -0.04000000338449802,
+    -0.12500000136914155
+   ],
+   "in_body_max_m": [
+    0.12500000000000044,
+    0.04000000338449802,
+    0.12500000136914155
+   ],
+   "body_scale": [
+    1.0,
+    1.0,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  },
+  "/World/Forklift/front_right_wheel/collisions/front_right_tire_collision/cylinder": {
+   "type": "Cylinder",
+   "radius": 0.125,
+   "height": 0.07999999821186066,
+   "axis": "Z",
+   "world_min_m": [
+    -1.558004109921894,
+    -0.30500007886221314,
+    -2.2615673805608845e-05
+   ],
+   "world_max_m": [
+    -1.307960064348736,
+    -0.22499995213220217,
+    0.25002139377858773
+   ],
+   "world_center_m": [
+    -1.432982087135315,
+    -0.26500001549720764,
+    0.12499938905239107
+   ],
+   "body": "/World/Forklift/front_right_wheel",
+   "in_body_center_m": [
+    -2.220446049250313e-16,
+    0.0,
+    0.0
+   ],
+   "in_body_min_m": [
+    -0.12500000000000025,
+    -0.04000000338449803,
+    -0.12500000136914158
+   ],
+   "in_body_max_m": [
+    0.1249999999999998,
+    0.04000000338449803,
+    0.12500000136914158
+   ],
+   "body_scale": [
+    0.9999999999999999,
+    0.9999999999999999,
+    1.0
+   ],
+   "material": {
+    "path": "/World/ContactMaterial",
+    "static_friction": 0.800000011920929,
+    "dynamic_friction": 0.699999988079071,
+    "restitution": 0.0,
+    "friction_combine": null
+   },
+   "contact_offset": 0.0020000000949949026,
+   "rest_offset": 0.0
+  }
+ },
+ "floor": {
+  "/World/Environment/GroundPlane/CollisionPlane": {
+   "type": "Plane",
+   "world_min_m": [
+    -0.009999999776482582,
+    -0.009999999776482582,
+    0.0
+   ],
+   "world_max_m": [
+    0.009999999776482582,
+    0.009999999776482582,
+    0.0
+   ],
+   "world_center_m": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "body": null,
+   "in_body_center_m": null,
+   "in_body_min_m": null,
+   "in_body_max_m": null,
+   "body_scale": null,
+   "material": null,
+   "contact_offset": null,
+   "rest_offset": null
+  }
+ },
+ "articulation": {
+  "root": "/World/Forklift/base_link",
+  "solver_position_iterations": 128.0,
+  "solver_velocity_iterations": 8.0
+ },
+ "steering_at_stand_rad": [
+  3.846489349257354e-08,
+  -1.4713930340803927e-07
+ ],
+ "body_poses": {
+  "base_link": {
+   "position_m": [
+    -1.7529821395874023,
+    -1.3147847255368106e-08,
+    -5.662441253662109e-07
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039002265737622e-09,
+    7.304668514507284e-08,
+    -2.3984501495988297e-08
+   ]
+  },
+  "fork_carriage": {
+   "position_m": [
+    -1.7529820203781128,
+    -1.3147847255368106e-08,
+    2.384185791015625e-07
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039002265737622e-09,
+    7.304668514507284e-08,
+    -2.3984501495988297e-08
+   ]
+  },
+  "left_steering_carrier": {
+   "position_m": [
+    -1.432982087135315,
+    0.26499998569488525,
+    0.12499938905239105
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039181011644587e-09,
+    7.304668514507284e-08,
+    -1.1687303924645676e-07
+   ]
+  },
+  "rear_left_wheel": {
+   "position_m": [
+    -2.092982292175293,
+    0.26499998569488525,
+    0.12499947845935822
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.4886701871219543e-09,
+    0.00010643306450219825,
+    -2.3984661368103843e-08
+   ]
+  },
+  "rear_right_wheel": {
+   "position_m": [
+    -2.092982292175293,
+    -0.26499998569488525,
+    0.12499947845935822
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.4887269195185127e-09,
+    0.00010603661212371662,
+    -2.3984661368103843e-08
+   ]
+  },
+  "right_steering_carrier": {
+   "position_m": [
+    -1.432982087135315,
+    -0.26500001549720764,
+    0.12499938905239105
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039419709594881e-09,
+    7.304668514507284e-08,
+    -2.413727600014681e-07
+   ]
+  },
+  "left_fork_tip": {
+   "position_m": [
+    -0.8029820322990417,
+    0.18624994158744812,
+    0.040000103414058685
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039002265737622e-09,
+    7.304668514507284e-08,
+    -2.3984501495988297e-08
+   ]
+  },
+  "right_fork_tip": {
+   "position_m": [
+    -0.8029820919036865,
+    -0.18625006079673767,
+    0.040000103414058685
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.5039002265737622e-09,
+    7.304668514507284e-08,
+    -2.3984501495988297e-08
+   ]
+  },
+  "front_left_wheel": {
+   "position_m": [
+    -1.432982087135315,
+    0.26499998569488525,
+    0.12499938905239105
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.4788011926114564e-09,
+    0.00010646384907886386,
+    -1.1687320267128598e-07
+   ]
+  },
+  "front_right_wheel": {
+   "position_m": [
+    -1.432982087135315,
+    -0.26500001549720764,
+    0.12499938905239105
+   ],
+   "quat_wxyz": [
+    1.0,
+    -1.4722293384394902e-09,
+    8.802165393717587e-05,
+    -2.413729021100153e-07
+   ]
+  }
+ },
+ "settled": {
+  "tyres": [
+   "/World/Forklift/front_left_wheel",
+   "/World/Forklift/front_right_wheel",
+   "/World/Forklift/rear_left_wheel",
+   "/World/Forklift/rear_right_wheel"
+  ],
+  "floor_fz_n": [
+   117.45081577205701,
+   30.91127178274746,
+   28.435610618194914,
+   78.26324695189783
+  ],
+  "wheel_center_z_m": {
+   "front_left_wheel": 0.12499931479493777,
+   "front_right_wheel": 0.12499931020041306,
+   "rear_left_wheel": 0.124999392653505,
+   "rear_right_wheel": 0.1249993889282147
+  },
+  "base_roll_rad": 6.740125392334816e-09,
+  "base_pitch_rad": 1.2314762350238532e-07,
+  "samples": 120
+ }
+}
