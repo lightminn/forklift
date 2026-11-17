@@ -57,7 +57,9 @@ R_O → R_F2: 0.851–0.955 → 0.918–0.966. A_O → A_F2: 18–33 → 8–19 
 | random_1 s12 (`Tracking timeout in observe`, R·B0 둘 다 실패) | 실패(같은 사유) | 완주 3.4 mm — 원인 미확인(조향 S 자 아님) |
 | aisle_rack s1·s2·s18 | 3/3 완주(41.0·16.8·46.6 mm) | 3/3 완주(2.0·5.5·10.4 mm) |
 | 재확인(O 만): random_1 s13·s22·s28(K1), s24(복귀 정지) | 4/4 완주(3.3·6.9·10.2·8.9 mm, s24 는 목표 사각 띠 정체 1 회 뒤) | — |
+| B2 연속 이송 random_m s0 대기열(11주차 O6: 두 번째 임무 P-5:D-2 근접 캡처 '예상 후보 없음') — 현 main 재확인(라이브, 비결정 1 회) | 재현 안 됨: 세 임무 모두 완료(26.7·12.8·34.2 mm). 두 번째 임무의 근접 캡처는 2 번째 시도에서 통과 | — |
 
+- B2 는 운영 모드·학습 인식 + 11주차 O6 의 riib 기본 넷(`--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-scans 3 --return-cusp-replans 2`; 나머지 둘은 지금 라이브 런처 기본)으로, 노드에 다른 잡이 없을 때 Slurm 19828 로 단독 실행했다(출력 `test_runs/f2ib/`, 긴 출력 경로는 SLAM 소켓 107 바이트 한도에 걸려 줄였다). 순응 타이어와 무관한 인식 쪽 사례다.
 - 덱 목록 13 짝(random_1 s0·5·7·8·9·12·19·23, aisle_rack s1·2·4·17·18): 완주 O 10/13 → F2 13/13, 하역 오차 중앙(두 팔 완주 10 짝) 16.0 → 4.5 mm, R 은 12 짝(s12 는 O 가 운반 전에 끝나 비교 구간 없음) 모두 개선, F2 중앙 0.960.
 - 덱 영상(random_1 s8, 위에서 본 개관 1280×720, 결정 모드): VIDEO=off 짝과 궤적이 같다(`deterministic_compare` 차이는 영상 인자와 영상용 계획 기록뿐).
   - O: `video/f2iw_O_random_1_s8/run/transport.mp4`, 111.3 s, sha256 `8cb8c30eedc098240b288e2e621efb0e2d2bedb22d82719570ef85e08ca2aa34`
@@ -115,6 +117,7 @@ R_O → R_F2: 0.851–0.955 → 0.918–0.966. A_O → A_F2: 18–33 → 8–19 
 | `assets/f2i-reregistration/summary_f2i.json.gz` | 운반 짝 39 의 결과 요약(완주·사유·하역·재계획·정체·타이어 readback)과 탐침 9 의 정지 하중·구간 | 4c19395cb4c641ba8c8dc3f76d75a800 |
 | `assets/f2i-reregistration/mechanism.json` | `mechanism.py` 출력(실행별 8 층, 짝별 R·A·잃은 층, 판정) | 031e2dead8e334bc0be89b55051a7925 |
 | `assets/f2i-reregistration/deck_cases.json` | 덱 사례 f2ix 8·재확인 f2ir 4·영상 f2iw 2 의 결과 요약 | b509d9f883e1ae0630878601844fd8ab |
+| `assets/f2i-reregistration/b2_live.json` | B2 라이브 세 임무의 결과·하역 오차·두 번째 임무 근접 시도 수 | 0f9e290925c0e1c0005f9c5edcfe631a |
 | `assets/f2i-reregistration/pace.json` | 비용 측정 9 실행의 완주·사유·시뮬 시간·벽시계·모드·타이어 readback | 8c0395b84fbf239c12a4960815b7bbef |
 | `assets/f2i-reregistration/pace_log.txt` | 비용 측정 실행 순서·시각·GPU0·노드 부하 기록 | 0b0a4a89c2a6b6c7c8702d2c8544ae74 |
 | `assets/f2i-reregistration/mechanism_deckset.json.gz` | 덱 목록 13 짝(O·F2)의 `mechanism.py` 출력(등록 밖) | 27feb5f24e68d6190e8b0aaca157454f |
