@@ -2452,7 +2452,8 @@ def probe_model_dump(world, robot, wheels, steers, steering, action_type, dt, st
     out = {"plan": "docs/plans/2026-11-17-model-symmetry-check.md",
            "engine": model_dump.engine_bodies(robot._articulation_view),
            "authored_masses": model_dump.authored_masses(stage), "joints": model_dump.joints(stage),
-           "colliders": model_dump.colliders(stage), "articulation": model_dump.articulation(stage),
+           "colliders": model_dump.colliders(stage), "floor": model_dump.floor_colliders(stage),
+           "articulation": model_dump.articulation(stage),
            "steering_at_stand_rad": np.asarray(steering, float).tolist(),
            "body_poses": {n: {"position_m": p.tolist(), "quat_wxyz": q.tolist()}
                           for n, (p, q) in steering_probe_arms._link_poses(robot).items()},

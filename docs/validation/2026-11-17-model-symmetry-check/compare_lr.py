@@ -94,6 +94,38 @@ def _inertia(v):
     return None if v is None else np.asarray(v, float).reshape(3, 3)
 
 
+def _qmat(q):
+    w, x, y, z = q
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
+                     [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
+                     [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)]])
+
+
+def _tf(pos, rot):
+    t = np.eye(4)
+    t[:3, :3] = _qmat(rot if rot is not None else [1, 0, 0, 0])
+    t[:3, 3] = pos if pos is not None else [0, 0, 0]
+    return t
+
+
+def zero_pose_frames(joints: dict) -> tuple:
+    """Each body's frame in base_link's at zero joint values, from the joints' two frames: T_child = T_parent @
+    T(pos0, rot0) @ inv(T(pos1, rot1)). Returns (frames, problems)."""
+    frames, problems = {"base_link": np.eye(4)}, []
+    edges = {}
+    for name, j in joints.items():
+        b0, b1 = (j.get("body0") or [None])[0], (j.get("body1") or [None])[0]
+        if b0 and b1:
+            edges[b1.rsplit("/", 1)[-1]] = (b0.rsplit("/", 1)[-1], j)
+    for _ in range(len(edges) + 1):
+        for child, (parent, j) in edges.items():
+            if child not in frames and parent in frames:
+                frames[child] = frames[parent] @ _tf(j.get("local_pos0"), j.get("local_rot0")) @ np.linalg.inv(
+                    _tf(j.get("local_pos1"), j.get("local_rot1")))
+    problems += [c for c in edges if c not in frames]
+    return frames, problems
+
+
 def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None = None) -> dict:
     items, undecided = [], []
 
@@ -142,6 +174,22 @@ def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None =
             il, ir = _inertia(L["inertia"]), MIRROR @ _inertia(R["inertia"]) @ MIRROR
             add(f"inertia mirror {left}~{right}", float(np.abs(il - ir).max() / max(np.abs(il).max(), 1e-12)),
                 INERTIA_REL, "pair")
+    # composite centre of mass at the zero pose (the joint tree, not the stand)
+    frames, problems = zero_pose_frames(dump.get("joints") or {})
+    tot, mc, missing = 0.0, np.zeros(3), []
+    for n, b in bodies.items():
+        if not _finite(b.get("mass_kg"), b.get("com_m")):
+            continue
+        if n not in frames:
+            missing.append(n)
+            continue
+        c = frames[n] @ np.r_[np.asarray(b["com_m"], float), 1.0]
+        tot += b["mass_kg"]
+        mc += b["mass_kg"] * c[:3]
+    if missing or problems:
+        undecided.append(f"zero-pose frame missing: {sorted(set(missing) | set(problems))}")
+    elif tot > 0:
+        add("composite com |y| at zero pose (m)", abs(float(mc[1] / tot)), COM_M, "pair")
     # 3. tyre colliders: one cylinder per wheel, compared in the wheel's own frame
     tyres = {}
     for path, c in (dump.get("colliders") or {}).items():
@@ -156,6 +204,12 @@ def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None =
         ca, cb = a[0], b[0]
         for f in ("radius", "height"):
             add(f"tyre {f} {left}~{right} (m)", abs(ca[f] - cb[f]), SHAPE_M, "pair")
+        if None in (ca.get("in_body_min_m"), ca.get("in_body_max_m"), cb.get("in_body_min_m"), cb.get("in_body_max_m")):
+            undecided.append(f"tyre extent in body {left}/{right}")
+        else:  # the extents in the body frame carry the collider's own rotation and scale
+            sa = np.subtract(ca["in_body_max_m"], ca["in_body_min_m"])
+            sb = np.subtract(cb["in_body_max_m"], cb["in_body_min_m"])
+            add(f"tyre extent in body {left}~{right} (m)", float(np.abs(sa - sb).max()), SHAPE_M, "pair")
         same(f"tyre axis {left}~{right}", ca.get("axis"), cb.get("axis"))
         if ca.get("in_body_center_m") is None or cb.get("in_body_center_m") is None:
             undecided.append(f"tyre centre in body {left}/{right}")
@@ -164,8 +218,15 @@ def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None =
                 float(np.linalg.norm(np.asarray(ca["in_body_center_m"]) - MIRROR @ np.asarray(cb["in_body_center_m"]))),
                 SHAPE_M, "pair")
         ma, mb = ca.get("material") or {}, cb.get("material") or {}
-        same(f"tyre material {left}~{right}", (ma.get("path"), ma.get("static_friction"), ma.get("dynamic_friction")),
-             (mb.get("path"), mb.get("static_friction"), mb.get("dynamic_friction")))
+        same(f"tyre material {left}~{right}",
+             (ma.get("path"), ma.get("static_friction"), ma.get("dynamic_friction"), ma.get("friction_combine")),
+             (mb.get("path"), mb.get("static_friction"), mb.get("dynamic_friction"), mb.get("friction_combine")))
+        for side, m in ((left, ma), (right, mb)):  # against the settings (scene.configure_drives binds them)
+            for f, key in (("static_friction", "static_friction"), ("dynamic_friction", "dynamic_friction")):
+                if key in settings:
+                    got = m.get(f)
+                    add(f"tyre {f} {side} vs settings", 0.0 if (got is not None and _rel(got, float(settings[key])) <= EQ_REL)
+                        else 1.0, 0.5, "expected")
     for path, c in (dump.get("colliders") or {}).items():
         if not path.startswith("/World/Forklift"):
             continue
@@ -212,7 +273,9 @@ def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None =
     crossing = [i for i in items if i["crosses"]]
     verdict = "defect" if crossing else ("undecided" if undecided else "no_mismatch_in_scope")
     return {"verdict": verdict, "crossing": crossing, "undecided": undecided, "items": items,
-            "settled": dump.get("settled")}
+            "settled": dump.get("settled"),
+            # the floor's own material is reported, not judged (the environment authors it, not configure_drives)
+            "floor": {p: c.get("material") for p, c in (dump.get("floor") or {}).items()}}
 
 
 def main(argv=None) -> int:

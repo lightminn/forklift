@@ -36,6 +36,10 @@ def _vec(v):
     return None if v is None else [float(x) for x in v]
 
 
+def _quat(q):
+    return None if q is None else [float(q.GetReal()), *map(float, q.GetImaginary())]
+
+
 def _attr(prim, name):
     """A PhysX schema attribute by its name (no PhysxSchema import: the readers also run on a plain USD build)."""
     a = prim.GetAttribute(name)
@@ -93,10 +97,12 @@ def joints(stage, root: str = ROOT) -> dict:
 
     out = {}
     for prim in Usd.PrimRange(stage.GetPrimAtPath(root)):
-        if not prim.IsA(UsdPhysics.RevoluteJoint):
+        if not prim.IsA(UsdPhysics.Joint):
             continue
-        j = UsdPhysics.RevoluteJoint(prim)
-        drive = UsdPhysics.DriveAPI(prim, "angular")
+        revolute, prismatic = prim.IsA(UsdPhysics.RevoluteJoint), prim.IsA(UsdPhysics.PrismaticJoint)
+        j = UsdPhysics.RevoluteJoint(prim) if revolute else (UsdPhysics.PrismaticJoint(prim) if prismatic
+                                                             else UsdPhysics.Joint(prim))
+        drive = UsdPhysics.DriveAPI(prim, "angular" if revolute else "linear")
 
         def get(attr):
             return _num(attr.Get()) if attr else None
@@ -105,10 +111,12 @@ def joints(stage, root: str = ROOT) -> dict:
             "body0": [str(t) for t in j.GetBody0Rel().GetTargets()],
             "body1": [str(t) for t in j.GetBody1Rel().GetTargets()],
             "local_pos0": _vec(j.GetLocalPos0Attr().Get()), "local_pos1": _vec(j.GetLocalPos1Attr().Get()),
-            "local_rot0": str(j.GetLocalRot0Attr().Get()), "local_rot1": str(j.GetLocalRot1Attr().Get()),
-            "axis": str(j.GetAxisAttr().Get()),
-            "lower_deg": get(j.GetLowerLimitAttr()), "upper_deg": get(j.GetUpperLimitAttr()),
-            "drive": None if not prim.HasAPI(UsdPhysics.DriveAPI, "angular") else {
+            "local_rot0": _quat(j.GetLocalRot0Attr().Get()), "local_rot1": _quat(j.GetLocalRot1Attr().Get()),
+            "kind": "revolute" if revolute else ("prismatic" if prismatic else prim.GetTypeName()),
+            "axis": str(j.GetAxisAttr().Get()) if (revolute or prismatic) else None,
+            "lower_deg": get(j.GetLowerLimitAttr()) if revolute else None,
+            "upper_deg": get(j.GetUpperLimitAttr()) if revolute else None,
+            "drive": None if not prim.HasAPI(UsdPhysics.DriveAPI, "angular" if revolute else "linear") else {
                 "type": str(drive.GetTypeAttr().Get()), "stiffness": get(drive.GetStiffnessAttr()),
                 "damping": get(drive.GetDampingAttr()), "max_force": get(drive.GetMaxForceAttr())},
             "armature": _attr(prim, "physxJoint:armature"), "joint_friction": _attr(prim, "physxJoint:jointFriction"),
@@ -143,10 +151,13 @@ def colliders(stage, root: str = ROOT) -> dict:
         body = prim
         while body and body.GetPath() != body.GetStage().GetPseudoRoot().GetPath() and not body.HasAPI(UsdPhysics.RigidBodyAPI):
             body = body.GetParent()
-        in_body = None
+        in_body = in_lo = in_hi = None
         if body and body.HasAPI(UsdPhysics.RigidBodyAPI):
+            # the bounds in the body's frame carry the collider's own rotation and scale (Codex review P2)
             rel = cache.ComputeRelativeBound(prim, body).ComputeAlignedRange()
-            in_body = None if rel.IsEmpty() else [(a + b) / 2 for a, b in zip(rel.GetMin(), rel.GetMax(), strict=True)]
+            if not rel.IsEmpty():
+                in_lo, in_hi = _vec(rel.GetMin()), _vec(rel.GetMax())
+                in_body = [(a + b) / 2 for a, b in zip(in_lo, in_hi, strict=True)]
         material, _ = UsdShade.MaterialBindingAPI(prim).ComputeBoundMaterial("physics")
         mat_prim = material.GetPrim() if material else None
         mat = None
@@ -155,15 +166,29 @@ def colliders(stage, root: str = ROOT) -> dict:
             mat = {"path": str(mat_prim.GetPath()),
                    "static_friction": _num(mapi.GetStaticFrictionAttr().Get()) if mapi.GetStaticFrictionAttr() else None,
                    "dynamic_friction": _num(mapi.GetDynamicFrictionAttr().Get()) if mapi.GetDynamicFrictionAttr() else None,
-                   "restitution": _num(mapi.GetRestitutionAttr().Get()) if mapi.GetRestitutionAttr() else None}
+                   "restitution": _num(mapi.GetRestitutionAttr().Get()) if mapi.GetRestitutionAttr() else None,
+                   "friction_combine": (str(mat_prim.GetAttribute("physxMaterial:frictionCombineMode").Get())
+                                        if mat_prim.GetAttribute("physxMaterial:frictionCombineMode") else None)}
         out[str(prim.GetPath())] = {
             **shape,
             "world_min_m": lo, "world_max_m": hi,
             "world_center_m": None if lo is None else [(a + b) / 2 for a, b in zip(lo, hi, strict=True)],
-            "body": None if in_body is None else str(body.GetPath()), "in_body_center_m": in_body, "material": mat,
+            "body": None if in_body is None else str(body.GetPath()), "in_body_center_m": in_body,
+            "in_body_min_m": in_lo, "in_body_max_m": in_hi, "material": mat,
             "contact_offset": _attr(prim, "physxCollision:contactOffset"),
             "rest_offset": _attr(prim, "physxCollision:restOffset"),
         }
+    return out
+
+
+def floor_colliders(stage, root: str = "/World") -> dict:
+    """The floor's collider(s) (a path holding GroundPlane) with their bound material, as colliders() reads them."""
+    from pxr import Usd, UsdPhysics
+
+    out = {}
+    for prim in Usd.PrimRange(stage.GetPrimAtPath(root)):
+        if "GroundPlane" in str(prim.GetPath()) and prim.HasAPI(UsdPhysics.CollisionAPI):
+            out.update({k: v for k, v in colliders(stage, str(prim.GetPath())).items()})
     return out
 
 

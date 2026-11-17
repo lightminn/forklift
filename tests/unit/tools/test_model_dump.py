@@ -151,7 +151,9 @@ def _compare():
     return mod
 
 
-SETTINGS = {"steering_stiffness": 1000.0, "steering_damping": 100.0, "steering_torque_nm": 20.0, "wheel_torque_nm": 3.0}
+SETTINGS = {"steering_stiffness": 1000.0, "steering_damping": 100.0, "steering_torque_nm": 20.0, "wheel_torque_nm": 3.0,
+            "static_friction": 0.8, "dynamic_friction": 0.7}
+Q0 = [1.0, 0.0, 0.0, 0.0]
 WHEELS = {"front_left_wheel": 0.265, "front_right_wheel": -0.265, "rear_left_wheel": 0.265, "rear_right_wheel": -0.265}
 
 
@@ -169,16 +171,23 @@ def _full_dump():
         bodies[w] = {"mass_kg": 0.55, "com_m": [0, 0, 0], "inertia": _inertia(0.002, 0.004, 0.002)}
         colliders[f"/World/Forklift/{w}/tire"] = {
             "type": "Cylinder", "radius": 0.125, "height": 0.08, "axis": "Y", "in_body_center_m": [0, 0, 0],
+            "in_body_min_m": [-0.125, -0.04, -0.125], "in_body_max_m": [0.125, 0.04, 0.125],
             "contact_offset": 0.002, "rest_offset": 0.0,
             "material": {"path": "/World/TyreMaterial", "static_friction": 0.8, "dynamic_friction": 0.7}}
-    joints = {}
+    F = "/World/Forklift/"
+    joints = {"lift": {"kind": "prismatic", "body0": [F + "base_link"], "body1": [F + "fork_carriage"],
+                       "local_pos0": [0.74, 0.0, 0.025], "local_pos1": [0, 0, 0], "local_rot0": Q0, "local_rot1": Q0}}
     for side, y in (("left", 0.265), ("right", -0.265)):
         joints[f"{side}_steer"] = {"lower_deg": -15.0, "upper_deg": 15.0, "axis": "Z", "armature": 0.0,
-                                   "local_pos0": [0.32, y, 0.0], "local_pos1": [0, 0, 0], "local_rot0": "(1,0,0,0)",
+                                   "body0": [F + "base_link"], "body1": [F + f"{side}_steering_carrier"],
+                                   "local_pos0": [0.41, y, 0.0], "local_pos1": [0, 0, 0], "local_rot0": Q0, "local_rot1": Q0,
                                    "drive": {"type": "force", "stiffness": 1000.0, "damping": 100.0, "max_force": 20.0}}
     for w in ("front_left", "front_right", "rear_left", "rear_right"):
         y = 0.265 if "left" in w else -0.265
-        joints[f"{w}_spin"] = {"axis": "Y", "local_pos0": [0.0 if "front" in w else -0.34, y, 0.0], "local_pos1": [0, 0, 0],
+        parent = f"{'left' if 'left' in w else 'right'}_steering_carrier" if "front" in w else "base_link"
+        joints[f"{w}_spin"] = {"axis": "Y", "body0": [F + parent], "body1": [F + f"{w}_wheel"],
+                               "local_pos0": [0.0, 0.0, 0.0] if "front" in w else [-0.25, y, 0.0], "local_pos1": [0, 0, 0],
+                               "local_rot0": Q0, "local_rot1": Q0,
                                "drive": {"type": "force", "stiffness": 0.0, "damping": 20.0, "max_force": 3.0}}
     return {"engine": {"bodies": bodies, "errors": {}}, "colliders": colliders, "joints": joints,
             "articulation": {"solver_position_iterations": 32, "solver_velocity_iterations": 8},
@@ -204,7 +213,13 @@ def test_a_symmetric_full_dump_has_no_mismatch_even_with_unequal_loads():
     (lambda d: [j["drive"].update(stiffness=100000.0) for n, j in d["joints"].items() if "steer" in n],
      "drive stiffness left_steer vs settings"),  # both sides wrong alike
     (lambda d: d["joints"]["right_steer"].update(axis="X"), "joint axis left_steer~right_steer"),
-    (lambda d: d["joints"]["right_steer"].update(local_rot0="(0.7,0,0,0.7)"), "joint local_rot0 left_steer~right_steer"),
+    (lambda d: d["joints"]["right_steer"].update(local_rot0=[0.7071, 0, 0, 0.7071]), "joint local_rot0 left_steer~right_steer"),
+    (lambda d: d["joints"]["lift"].update(local_pos0=[0.74, 0.03, 0.025]), "composite com |y| at zero pose (m)"),
+    (lambda d: d["colliders"]["/World/Forklift/front_right_wheel/tire"].update(
+        in_body_min_m=[-0.1375, -0.044, -0.1375], in_body_max_m=[0.1375, 0.044, 0.1375]),
+     "tyre extent in body front_left_wheel~front_right_wheel (m)"),  # scaled 1.1 with the raw radius unchanged
+    (lambda d: [c["material"].update(static_friction=0.1) for c in d["colliders"].values()],
+     "tyre static_friction front_left_wheel vs settings"),  # all four wrong alike
     (lambda d: d["joints"]["right_steer"]["drive"].update(type="acceleration"), "drive type right_steer vs settings"),
     (lambda d: d["colliders"]["/World/Forklift/rear_right_wheel/tire"]["material"].update(static_friction=0.5),
      "tyre material rear_left_wheel~rear_right_wheel"),
