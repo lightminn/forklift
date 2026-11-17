@@ -38,7 +38,9 @@ def test_riib_tyre_can_be_switched_and_extra_args_wins(tmp_path, env, extra, val
     out = RB.dry_run(tmp_path, EXTRA_ARGS=extra, **env) if extra else RB.dry_run(tmp_path, **env)
     assert out.returncode == 0, out.stdout + out.stderr
     args = RB.args_of(out)
-    assert sum(a == "--tyre-contact" or a.startswith("--tyre-contact=") for a in args) == 1
+    given = [args[i + 1] if a == "--tyre-contact" else a.split("=", 1)[1]
+             for i, a in enumerate(args) if a == "--tyre-contact" or a.startswith("--tyre-contact=")]
+    assert given == [value]  # one value reaches the runner, the one recorded
     assert tyre_record(tmp_path) == [f"TYRE_CONTACT={value} TYRE_CONTACT_FROM={src}"]
 
 
@@ -77,3 +79,32 @@ def test_live_off_and_abbreviation(tmp_live):
     assert p.returncode == 0 and LV._values(tmp_live, "--tyre-contact") == ["off"]
     p = LV._launch(tmp_live, EXTRA_ARGS="--tyre off")
     assert p.returncode == 2 and "write --tyre-contact in full" in p.stdout + p.stderr
+
+
+def test_riib_the_last_extra_args_value_is_recorded(tmp_path):
+    out = RB.dry_run(tmp_path, EXTRA_ARGS="--tyre-contact off\t--record-boundary\n--tyre-contact=f2")
+    assert out.returncode == 0, out.stdout + out.stderr
+    assert tyre_record(tmp_path) == ["TYRE_CONTACT=f2 TYRE_CONTACT_FROM=EXTRA_ARGS"]
+    args = RB.args_of(out)
+    # the launcher adds none of its own: the two words are EXTRA_ARGS's, the runner keeps the last (f2)
+    assert sum(a == "--tyre-contact" or a.startswith("--tyre-contact=") for a in args) == 2
+    assert [a for a in args if a.startswith("--tyre-contact=")] == ["--tyre-contact=f2"]
+
+
+def test_live_near_tracking_keeps_the_tyre_rigid(tmp_live):
+    p = LV._launch(tmp_live, EXTRA_ARGS="--near-tracking")
+    assert "TYRE_CONTACT=off TYRE_CONTACT_FROM=launcher" in p.stdout, p.stdout + p.stderr
+    p = LV._launch(tmp_live, EXTRA_ARGS="--near-tracking", TYRE_CONTACT="f2")
+    assert p.returncode == 2 and "needs TYRE_CONTACT=off" in p.stdout + p.stderr
+
+
+def test_live_the_last_extra_args_value_wins(tmp_live):
+    p = LV._launch(tmp_live, EXTRA_ARGS="--tyre-contact off --tyre-contact=f2")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "TYRE_CONTACT=f2 TYRE_CONTACT_FROM=EXTRA_ARGS" in p.stdout
+    assert LV._values(tmp_live, "--tyre-contact")[-1] == "f2"
+
+
+def test_the_survey_keeps_the_tyre_rigid():
+    survey = (ROOT / "deploy/console/slam_survey.sbatch").read_text()
+    assert '--tyre-contact "${TYRE_CONTACT:-off}"' in survey and "TYRE_CONTACT=${TYRE_CONTACT:-f2}" not in survey
