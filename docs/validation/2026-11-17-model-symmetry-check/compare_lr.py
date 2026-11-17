@@ -204,6 +204,12 @@ def check(dump: dict, urdf: dict, settings: dict, expect_carriage: dict | None =
         ca, cb = a[0], b[0]
         for f in ("radius", "height"):
             add(f"tyre {f} {left}~{right} (m)", abs(ca[f] - cb[f]), SHAPE_M, "pair")
+        for side, c in ((left, ca), (right, cb)):  # the wheel body itself unscaled (its extents are in its frame)
+            if c.get("body_scale") is None:
+                undecided.append(f"body scale unread: {side}")
+            else:
+                add(f"wheel body scale {side} vs 1", float(np.abs(np.subtract(c["body_scale"], 1.0)).max()), 1e-6,
+                    "expected")
         if None in (ca.get("in_body_min_m"), ca.get("in_body_max_m"), cb.get("in_body_min_m"), cb.get("in_body_max_m")):
             undecided.append(f"tyre extent in body {left}/{right}")
         else:  # the extents in the body frame carry the collider's own rotation and scale

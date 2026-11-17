@@ -108,6 +108,7 @@ def test_stage_readers_report_both_sides():
     assert left["world_min_m"][2] == pytest.approx(0.0, abs=1e-6) and left["contact_offset"] == pytest.approx(0.02)
     assert cs["/World/Forklift/front_right_wheel/tire"]["world_center_m"][1] == pytest.approx(-0.265)
     assert left["in_body_center_m"] == pytest.approx([0, 0, 0]) and left["body"] == "/World/Forklift/front_left_wheel"
+    assert left["body_scale"] == pytest.approx([1.0, 1.0, 1.0])
     assert left["material"]["path"] == "/World/TyreMaterial" and left["material"]["static_friction"] == pytest.approx(0.8)
     art = M.articulation(s)
     assert art["solver_position_iterations"] == 32 and art["solver_velocity_iterations"] is None
@@ -171,7 +172,7 @@ def _full_dump():
         bodies[w] = {"mass_kg": 0.55, "com_m": [0, 0, 0], "inertia": _inertia(0.002, 0.004, 0.002)}
         colliders[f"/World/Forklift/{w}/tire"] = {
             "type": "Cylinder", "radius": 0.125, "height": 0.08, "axis": "Y", "in_body_center_m": [0, 0, 0],
-            "in_body_min_m": [-0.125, -0.04, -0.125], "in_body_max_m": [0.125, 0.04, 0.125],
+            "in_body_min_m": [-0.125, -0.04, -0.125], "in_body_max_m": [0.125, 0.04, 0.125], "body_scale": [1.0, 1.0, 1.0],
             "contact_offset": 0.002, "rest_offset": 0.0,
             "material": {"path": "/World/TyreMaterial", "static_friction": 0.8, "dynamic_friction": 0.7}}
     F = "/World/Forklift/"
@@ -218,6 +219,8 @@ def test_a_symmetric_full_dump_has_no_mismatch_even_with_unequal_loads():
     (lambda d: d["colliders"]["/World/Forklift/front_right_wheel/tire"].update(
         in_body_min_m=[-0.1375, -0.044, -0.1375], in_body_max_m=[0.1375, 0.044, 0.1375]),
      "tyre extent in body front_left_wheel~front_right_wheel (m)"),  # scaled 1.1 with the raw radius unchanged
+    (lambda d: d["colliders"]["/World/Forklift/front_right_wheel/tire"].update(body_scale=[1.0, 1.1, 1.0]),
+     "wheel body scale front_right_wheel vs 1"),
     (lambda d: [c["material"].update(static_friction=0.1) for c in d["colliders"].values()],
      "tyre static_friction front_left_wheel vs settings"),  # all four wrong alike
     (lambda d: d["joints"]["right_steer"]["drive"].update(type="acceleration"), "drive type right_steer vs settings"),

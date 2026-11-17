@@ -151,8 +151,11 @@ def colliders(stage, root: str = ROOT) -> dict:
         body = prim
         while body and body.GetPath() != body.GetStage().GetPseudoRoot().GetPath() and not body.HasAPI(UsdPhysics.RigidBodyAPI):
             body = body.GetParent()
-        in_body = in_lo = in_hi = None
+        in_body = in_lo = in_hi = body_scale = None
         if body and body.HasAPI(UsdPhysics.RigidBodyAPI):
+            # the body's own world scale (the relative bound leaves it out; Codex review P2): 1 for an unscaled body
+            m = UsdGeom.XformCache().GetLocalToWorldTransform(body)
+            body_scale = [float(m.GetRow3(i).GetLength()) for i in range(3)]
             # the bounds in the body's frame carry the collider's own rotation and scale (Codex review P2)
             rel = cache.ComputeRelativeBound(prim, body).ComputeAlignedRange()
             if not rel.IsEmpty():
@@ -174,7 +177,7 @@ def colliders(stage, root: str = ROOT) -> dict:
             "world_min_m": lo, "world_max_m": hi,
             "world_center_m": None if lo is None else [(a + b) / 2 for a, b in zip(lo, hi, strict=True)],
             "body": None if in_body is None else str(body.GetPath()), "in_body_center_m": in_body,
-            "in_body_min_m": in_lo, "in_body_max_m": in_hi, "material": mat,
+            "in_body_min_m": in_lo, "in_body_max_m": in_hi, "body_scale": body_scale, "material": mat,
             "contact_offset": _attr(prim, "physxCollision:contactOffset"),
             "rest_offset": _attr(prim, "physxCollision:restOffset"),
         }
