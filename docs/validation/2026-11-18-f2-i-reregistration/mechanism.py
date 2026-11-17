@@ -83,6 +83,16 @@ def strata(r: dict, sc: np.ndarray) -> dict:
             continue
         t_next = float(samples[i + 1]["time_s"])
         w = max(0.0, t_next - t)
+        speed = float(s.get("signed_speed_mps", 0.0))
+        kc = float(s["curvature_inv_m"])
+        st = None
+        if abs(speed) > MOVING and abs(kc) >= SAT:
+            key = (("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
+                   + ("_slow" if abs(speed) < SLOW_FAST_MPS else "_fast"))
+            st = acc[key]
+            # exposure: moving and saturated, before any measurability check (path install, row pairing, step);
+            # the lost-stratum test reads it (Codex plan review)
+            st["exposure_s"] += w
         if bounds.size and np.any((bounds > t + 1e-9) & (bounds <= t_next + 1e-9)):
             excluded["path_install"] += w
             continue
@@ -90,17 +100,8 @@ def strata(r: dict, sc: np.ndarray) -> dict:
         if a is None or b is None:
             excluded["unpaired_row"] += w
             continue
-        speed = float(s.get("signed_speed_mps", 0.0))
-        if abs(speed) <= MOVING:
+        if st is None:
             continue
-        kc = float(s["curvature_inv_m"])
-        if abs(kc) < SAT:
-            continue
-        key = (("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
-               + ("_slow" if abs(speed) < SLOW_FAST_MPS else "_fast"))
-        st = acc[key]
-        # exposure: moving and saturated, whether or not the curvature is measurable (the lost-stratum test reads it)
-        st["exposure_s"] += w
         step = math.hypot(b[4] - a[4], b[5] - a[5])
         if step < MIN_STEP_M:
             excluded["short_step"] += w

@@ -149,3 +149,13 @@ def test_a_stratum_lost_to_short_steps_is_still_lost():
     x = M.strata(*run((creep, rc)))
     assert x["fwd_left_slow"]["exposure_s"] >= 1.9 and x["fwd_left_slow"]["saturated_s"] == 0
     assert M.pair_metric(o, x)["lost"] == ["fwd_left_slow"]
+
+
+def test_a_stratum_lost_to_unpaired_rows_is_still_lost():
+    good, rg = arc(0.0, 20, 0.3, 0.36, 0.30)
+    o = M.strata(*run((good, rg)))
+    r, sc = run(arc(0.0, 20, 0.3, 0.36, 0.30))
+    sc[:, 0] += 0.01  # no row pairs with any sample
+    x = M.strata(r, sc)
+    assert x["excluded_s"]["unpaired_row"] > 1.9 and x["fwd_left_slow"]["exposure_s"] > 1.9
+    assert M.pair_metric(o, x)["lost"] == ["fwd_left_slow"]
