@@ -1,0 +1,17 @@
+[36m[01m      -------------------------------------------------------------------
+[39;49m[0m[36m[01m                        STM32CubeProgrammer v2.23.0                  
+[39;49m[0m[36m[01m      -------------------------------------------------------------------
+
+[39;49m[0m[00;32m=====  DFU Interface   =====
+[39;49m[0m[39;49m
+[39;49m[0m[39;49mTotal number of available STM32 device in DFU mode: 1
+[39;49m[0m[39;49m
+[39;49m[0m[39;49m  Device Index           : USB1
+[39;49m[0m[39;49m  USB Bus Number         : 003
+[39;49m[0m[39;49m  USB Address Number     : 003
+[39;49m[0m[39;49m  Product ID             : DFU in FS Mode
+[39;49m[0m[39;49m  Serial number          : 200364500000
+[39;49m[0m[39;49m  Firmware version       : 0x011a
+[39;49m[0m[39;49m  Device ID              : 0x0450
+[39;49m[0m[39;49m
+[39;49m[0m

@@ -1,0 +1,3 @@
+teleop stays closed until confirmed: --empty-forks, --forks-clear, --lift-low, --no-open-recovery
+{"console": "http://127.0.0.1:41367/", "command_cap_mps": 0.1321, "floor_permit": "no_scan (bring-up 7 adds the scan)"}
+{"overruns": 1454, "record": {"finished": true, "unwritten": 0, "dropped": 0, "write_errors": 0}}

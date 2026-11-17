@@ -9,7 +9,7 @@ repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 out="$repo/data/jetson_check/2026-11-17"; mkdir -p "$out"
 try_ssh() {
   SSHPASS="$JETSON_SSH_PASS" sshpass -e ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
-    -o ClearAllForwardings=yes "zetin@$1" 'hostname; cat /etc/nv_tegra_release 2>/dev/null | head -1' 2>/dev/null
+    -o ClearAllForwardings=yes "${JETSON_USER:-zetin}@$1" 'hostname; cat /etc/nv_tegra_release 2>/dev/null | head -1' 2>/dev/null
 }
 : "${JETSON_SSH_PASS:?JETSON_SSH_PASS is not in this session environment}"
 cands=()
@@ -36,5 +36,5 @@ for entry in "${tries[@]}"; do
   ip="${entry%% *}"
   if who=$(try_ssh "$ip"); then echo "$ip" > "$out/host.txt"; echo "ssh OK: $entry ($who)"; exit 0; fi
 done
-echo "no host answered ssh as zetin (port 22 open: $(wc -l < "$out/port22.txt")). Read the IP off the Jetson's screen (ip -4 addr) and run: bash tools/hwday/jetson_find.sh <IP>"
+echo "no host answered ssh as ${JETSON_USER:-zetin} (port 22 open: $(wc -l < "$out/port22.txt")). Read the IP off the Jetson's screen (ip -4 addr) and run: bash tools/hwday/jetson_find.sh <IP>"
 exit 2
