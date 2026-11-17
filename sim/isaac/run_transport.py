@@ -318,6 +318,28 @@ def _correction_inject(value: str) -> tuple:
     return parts + wait
 
 
+# F2 compliant tyre contact (docs/validation/2026-11-18-f2-i-reregistration.md, user decision 2026-11-18: on by default in
+# the launchers, the runner's default stays off): the tyre colliders' compliant contact, scene.py's tyre material. The
+# values are estimates, validated at 120 Hz only (the runner requires 120 Hz outside a --steering-probe check).
+TYRE_CONTACT = {"f2": {"tyre_contact_stiffness_n_per_m": 140000.0, "tyre_contact_damping_n_s_per_m": 108.5}}
+TYRE_CONTACT_KEYS = ("tyre_contact_stiffness_n_per_m", "tyre_contact_damping_n_s_per_m", "contact_stiffness_n_per_m")
+
+
+def apply_tyre_contact(settings: dict, tyre: str) -> dict:
+    """The settings with the named tyre contact on (user decision 2026-11-18); ``off``: unchanged (the same object).
+    Refused over a contact the settings set themselves, and outside 120 Hz (the only rate F2 was validated at)."""
+    if tyre == "off":
+        return settings
+    if tyre not in TYRE_CONTACT:
+        raise ValueError(f"--tyre-contact {tyre}: one of off, {', '.join(TYRE_CONTACT)}")
+    clash = [k for k in TYRE_CONTACT_KEYS if k in settings]
+    if clash:
+        raise ValueError(f"--tyre-contact {tyre}: the settings already set {', '.join(clash)}")
+    if settings.get("physics_hz") != 120:
+        raise ValueError(f"--tyre-contact {tyre} is validated at 120 Hz only")
+    return {**settings, **TYRE_CONTACT[tyre]}
+
+
 def _short_cusp_arc(value: str) -> tuple:
     """--short-cusp-arc L,P (plan 2026-11-16-aisle-short-cusp-arc): two positive finite metres."""
     try:
@@ -1130,6 +1152,15 @@ def arguments() -> argparse.Namespace:
         help="Plan with the D7 CPU judgement's adopted options (Reeds-Shepp goal "
         "connection, 4 m connection cap; pallet_mission.D7_PLANNER_OPTIONS) -- the "
         "'D7 on' arm of the Isaac D7 off/on comparison.",
+    )
+    parser.add_argument(
+        "--tyre-contact",
+        choices=("off", *TYRE_CONTACT),
+        default="off",
+        help="The tyre colliders' compliant contact (docs/validation/2026-11-18-f2-i-reregistration.md): f2 = stiffness "
+        "140000 N/m, damping 108.5 N s/m (estimates, 120 Hz only). off (default): the rigid contact, as every earlier "
+        "run. The launchers turn f2 on (user decision 2026-11-18); a settings file that sets a tyre or common compliant "
+        "contact itself is refused with f2.",
     )
     parser.add_argument(
         "--short-cusp-arc",
@@ -12029,6 +12060,8 @@ def recorded_arguments(args: argparse.Namespace) -> dict:
         and (k != "steering_probe_dump" or v)
         # plan 2026-11-16-aisle-short-cusp-arc: not recorded absent, so a run without it records what it always did
         and (k != "short_cusp_arc" or v is not None)
+        # F2 tyre contact (user decision 2026-11-18): not recorded off, so a run without it records what it always did
+        and (k != "tyre_contact" or v != "off")
         # plan 2026-11-17-goal-band-and-cusp-retry: not recorded off, so a run without them records what it always did
         and (k not in ("goal_creep_band", "cusp_replan_retry") or v != "off")
         # plan 2026-11-16-reloc-observe-move: not recorded off, so a run without it records what it always did
@@ -12100,6 +12133,10 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     import yaml
 
     settings = yaml.safe_load(args.settings.read_text())
+    try:
+        settings = apply_tyre_contact(settings, getattr(args, "tyre_contact", "off"))
+    except ValueError as exc:
+        require(False, str(exc))
     from pallet_mass import resolve_pallet_mass
 
     # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every

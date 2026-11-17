@@ -103,6 +103,15 @@
 #                  value applied. on needs --d7-docking (MODE=slam), and the near-tracking contract was measured off, so
 #                  EXTRA_ARGS=--near-tracking on line_2_m needs DOCKING_DEGENERATE_CONTINUE=off. Earlier riib line_2_m
 #                  batches ran off: name both arms' value in every comparison and never pool off results with on results.
+#   TYRE_CONTACT=f2 (every scene and mode; off for a --near-tracking run) --tyre-contact f2: the F2 compliant tyre
+#                  contact (user decision 2026-11-18, "on across the simulation", after
+#                  docs/validation/2026-11-18-f2-i-reregistration.md); the runner's default stays off. Its five limits:
+#                  validated at 120 Hz only (an exception to the operating rate rule), the curvature ratio's median 0.951
+#                  with 6 of 13 below the bound, a residual left/right asymmetry of 8-19 mrad, low speed only, estimated
+#                  tyre values. TYRE_CONTACT=off is rigid as before; an EXTRA_ARGS --tyre-contact (written in full: the
+#                  runner also has --tyre-contact-log) wins and riib_defaults.txt records the value applied. The
+#                  near-tracking contract was measured rigid, so --near-tracking defaults it off and refuses f2.
+#                  Comparisons run both arms on the same tyre setting; never pool rigid baselines with f2 ones.
 #   SHORT_CUSP_ARC=0.6,1.0 only for MODE=slam with the final scene NAME aisle_rack (an allow list; off for every other
 #                  scene and for MODE=truth) --short-cusp-arc: a curved leg shorter than 0.6 m that ends at a gear change
 #                  costs 1.0 m more in every mission search (docs/plans/2026-11-16-aisle-short-cusp-arc.md); on: its
@@ -132,7 +141,7 @@
 # Usage (paths of this machine come from the caller, nothing host-specific is kept here):
 #   SNAP=<code checkout> SCENE_DIR=<scene files> SCENE=<name> BASE_SCENE=<scene.usda> FORKLIFT_URDF=<urdf> \
 #   VENV_PY=<python> [ONNX=<proposal weights> LEARNED_PY=<python with onnxruntime> BRIDGE_IMAGE=<ros2 image>] \
-#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [SHORT_CUSP_ARC=0.6,1.0|off] [GOAL_CREEP_BAND=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
+#   [MODE=slam|truth] [NEAR=on|off] [NEAR_REDRAW_LATERAL=0.10] [VIDEO=on|off] [VIEWS=quarter,chase|none|...] [MARKERS=on|off] [RACK=on|off] [KEEPOUT=0] [NOISE=const|a2] [START_BAND=off|on] [START_BAND_M=0.03] [ESCAPE_PRESTEER=off|on] [ESCAPE_START=off|on] [D7_HOLD=on|off] [EXIT_EXEMPT=on|off] [RETURN_START=on|boxed|off] [NEAR_END_STAND=on|shadow|off] [NEAR_OBSERVE_ARRIVAL=0.05,0.05|off] [RETURN_CUSP_REPLANS=2] [DOCKING_DEGENERATE_CONTINUE=on|off] [SHORT_CUSP_ARC=0.6,1.0|off] [TYRE_CONTACT=f2|off] [GOAL_CREEP_BAND=on|off] [GYRO=off|measured] [SEED=0] [MAX_SIM=1500] [EXTRA_ARGS=...] \
 #   sbatch --output=<dir>/riib-%j.log deploy/riibotics/riib_scene.sbatch OUT
 set -u
 OUT=${1:?the run directory}
@@ -266,6 +275,8 @@ NEAR_OBSERVE_ARRIVAL_FROM=launcher  # or EXTRA_ARGS, when it names its own (the 
 RCR_NEXT=0
 DDC_NEXT=0
 SCA_NEXT=0
+TYC_NEXT=0
+TYRE_CONTACT_EXTRA=""  # an EXTRA_ARGS --tyre-contact's last value
 GCB_NEXT=0
 EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
 # shellcheck disable=SC2086
@@ -298,6 +309,8 @@ for w in ${EXTRA_ARGS:-}; do
     if [[ "$w" == *=* ]]; then GOAL_CREEP_BAND=${w#*=}; GOAL_CREEP_BAND_FROM=EXTRA_ARGS; else GCB_NEXT=1; fi
     continue
   fi
+  if [ "$TYC_NEXT" = 1 ]; then TYRE_CONTACT_EXTRA=$w; TYC_NEXT=0; continue; fi
+  case "$w" in --tyre-contact) TYC_NEXT=1; continue;; --tyre-contact=*) TYRE_CONTACT_EXTRA=${w#*=}; continue;; esac
   if [ "$SCA_NEXT" = 1 ]; then SHORT_CUSP_ARC=$w; SHORT_CUSP_ARC_FROM=EXTRA_ARGS; SCA_NEXT=0; continue; fi
   # any unique prefix the runner's parser takes: no other runner argument starts with --sh (Codex review P2)
   w0=${w%%=*}
@@ -347,6 +360,14 @@ case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "--docking-degenerate-
 # the shape only (two numbers as the runner writes floats); the runner's own check refuses a non-positive value
 [ "$SHORT_CUSP_ARC" = off ] || [[ "$SHORT_CUSP_ARC" =~ ^[0-9eE.+-]+,[0-9eE.+-]+$ ]] \
   || { echo "SHORT_CUSP_ARC (or EXTRA_ARGS --short-cusp-arc) must be L,P (metres) or off"; exit 2; }
+# the F2 tyre contact (user decision 2026-11-18): f2 by default, off for --near-tracking (its contract was measured rigid)
+if [ "$EXTRA_NEAR_TRACKING" = 1 ]; then TYRE_CONTACT=${TYRE_CONTACT:-off}; else TYRE_CONTACT=${TYRE_CONTACT:-f2}; fi
+case "$TYRE_CONTACT" in off|f2) ;; *) echo "TYRE_CONTACT must be f2 or off"; exit 2;; esac
+TYRE_CONTACT_FROM=launcher
+if [ -n "$TYRE_CONTACT_EXTRA" ]; then TYRE_CONTACT=$TYRE_CONTACT_EXTRA; TYRE_CONTACT_FROM=EXTRA_ARGS; fi
+case "$TYRE_CONTACT" in off|f2) ;; *) echo "--tyre-contact in EXTRA_ARGS must be f2 or off"; exit 2;; esac
+[ "$TYRE_CONTACT" = off ] || [ "$EXTRA_NEAR_TRACKING" = 0 ] \
+  || { echo "--near-tracking needs TYRE_CONTACT=off (its contract was measured rigid)"; exit 2; }
 # the near-tracking contract compares the planner config with its measurement runs', which ran the cost off
 [ "$SHORT_CUSP_ARC" = off ] || [ "$EXTRA_NEAR_TRACKING" = 0 ] \
   || { echo "--near-tracking needs SHORT_CUSP_ARC=off (its contract was measured off)"; exit 2; }
@@ -392,6 +413,7 @@ printf 'RETURN_CUSP_REPLANS=%s RETURN_CUSP_REPLANS_FROM=%s\n' "$RETURN_CUSP_REPL
 printf 'DOCKING_DEGENERATE_CONTINUE=%s DOCKING_DEGENERATE_CONTINUE_FROM=%s\n' "$DOCKING_DEGENERATE_CONTINUE" \
   "$DOCKING_DEGENERATE_CONTINUE_FROM" >> "$OUT/riib_defaults.txt"
 printf 'SHORT_CUSP_ARC=%s SHORT_CUSP_ARC_FROM=%s\n' "$SHORT_CUSP_ARC" "$SHORT_CUSP_ARC_FROM" >> "$OUT/riib_defaults.txt"
+printf 'TYRE_CONTACT=%s TYRE_CONTACT_FROM=%s\n' "$TYRE_CONTACT" "$TYRE_CONTACT_FROM" >> "$OUT/riib_defaults.txt"
 printf 'GOAL_CREEP_BAND=%s GOAL_CREEP_BAND_FROM=%s\n' "$GOAL_CREEP_BAND" "$GOAL_CREEP_BAND_FROM" >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
@@ -429,6 +451,8 @@ COMMON=(--base-scene "$BASE_SCENE"
 [ "$DOCKING_DEGENERATE_CONTINUE_FROM" = launcher ] && COMMON+=(--docking-degenerate-continue "$DOCKING_DEGENERATE_CONTINUE")
 # the short cusp arc: the launcher's value only when EXTRA_ARGS names none, and nothing when off (the runner has no off)
 [ "$SHORT_CUSP_ARC_FROM" = launcher ] && [ "$SHORT_CUSP_ARC" != off ] && COMMON+=(--short-cusp-arc "$SHORT_CUSP_ARC")
+# the tyre contact: the launcher's value only when EXTRA_ARGS names none (then the runner reads one)
+[ "$TYRE_CONTACT_FROM" = launcher ] && COMMON+=(--tyre-contact "$TYRE_CONTACT")
 # the goal creep band: the launcher's value only when EXTRA_ARGS names none, and nothing when off (the runner's default)
 [ "$GOAL_CREEP_BAND_FROM" = launcher ] && [ "$GOAL_CREEP_BAND" = on ] && COMMON+=(--goal-creep-band on)
 [ "$VIDEO" = on ] && COMMON+=(--video)
