@@ -44,7 +44,7 @@ def run(*parts, extra=None):
 def test_ratio_and_absolute_wheel_error_per_stratum():
     r, sc = run(arc(0.0, 30, 0.3, 0.36, 0.32))
     out = M.strata(r, sc)
-    fl = out["fwd_left"]
+    fl = out["fwd_left_slow"]
     assert fl["valid"]
     assert abs(fl["ratio"] - 0.32 / 0.36) < 1e-3
     assert abs(fl["mabs"][0] - 0.02) < 1e-9 and abs(fl["mabs"][1]) < 1e-9
@@ -55,7 +55,7 @@ def test_absolute_error_does_not_cancel_signs():
     b, rb = arc(2.1, 20, 0.3, 0.36, 0.32, cmd=(0.30, 0.25), act=(0.32, 0.25), x0=ra[-1][4], y0=ra[-1][5],
                 yaw0=ra[-1][6])
     r, sc = run((a, ra), (b, rb))
-    fl = M.strata(r, sc)["fwd_left"]
+    fl = M.strata(r, sc)["fwd_left_slow"]
     assert abs(fl["mabs"][0] - 0.02) < 1e-6  # signed mean would be 0
 
 
@@ -69,7 +69,7 @@ def test_composition_change_alone_does_not_move_the_pair_metric():
     o, x = arm(90, 10), arm(10, 90)
     pair = M.pair_metric(o, x)
     assert abs(pair["R_o"] - pair["R_x"]) < 1e-3
-    assert sorted(pair["common"]) == ["fwd_left", "fwd_right"]
+    assert sorted(pair["common"]) == ["fwd_left_slow", "fwd_right_slow"]
 
 
 def test_samples_across_a_path_install_or_unpaired_rows_are_excluded():
@@ -87,20 +87,20 @@ def test_a_stratum_with_mostly_disagreeing_signs_is_invalid():
     good, rg = arc(0.0, 6, 0.3, 0.36, 0.32)  # 0.6 s agreeing
     bad, rb = arc(0.7, 20, 0.3, 0.36, -0.10, x0=rg[-1][4], y0=rg[-1][5], yaw0=rg[-1][6])  # 2.0 s disagreeing
     out = M.strata(*run((good, rg), (bad, rb)))
-    assert not out["fwd_left"]["valid"]
+    assert not out["fwd_left_slow"]["valid"]
 
 
 def test_slow_or_unsaturated_samples_do_not_count():
     a, ra = arc(0.0, 20, 0.03, 0.36, 0.32)
     b, rb = arc(2.1, 20, 0.3, 0.20, 0.20, x0=ra[-1][4], y0=ra[-1][5], yaw0=ra[-1][6])
     out = M.strata(*run((a, ra), (b, rb)))
-    assert out["fwd_left"]["saturated_s"] == 0
+    assert out["fwd_left_slow"]["saturated_s"] == 0
 
 
 def test_reverse_is_its_own_stratum():
     a, ra = arc(0.0, 20, -0.3, 0.36, 0.30)
     out = M.strata(*run((a, ra)))
-    assert out["rev_left"]["valid"] and out["fwd_left"]["saturated_s"] == 0
+    assert out["rev_left_slow"]["valid"] and out["fwd_left_slow"]["saturated_s"] == 0
 
 
 def test_rule_needs_six_pairs_median_and_majority():
@@ -110,3 +110,21 @@ def test_rule_needs_six_pairs_median_and_majority():
     assert M.judge(pairs[:5])["mechanism"] == "undecided"
     worse = pairs[:4] + [{"R_o": 0.97, "R_x": 0.90, "A_o": 0.01, "A_x": 0.02}] * 2
     assert M.judge(worse)["mechanism"] == "does_not_fix"
+
+
+def test_speed_bins_keep_slow_and_fast_apart():
+    slow, rs = arc(0.0, 20, 0.3, 0.36, 0.36 * 0.98)
+    fast, rf = arc(2.1, 20, 0.6, 0.36, 0.36 * 0.85, x0=rs[-1][4], y0=rs[-1][5], yaw0=rs[-1][6])
+    out = M.strata(*run((slow, rs), (fast, rf)))
+    assert abs(out["fwd_left_slow"]["ratio"] - 0.98) < 1e-3 and abs(out["fwd_left_fast"]["ratio"] - 0.85) < 1e-3
+
+
+def test_a_stratum_the_candidate_loses_counts_against_it():
+    good, rg = arc(0.0, 20, 0.3, 0.36, 0.30)
+    o = M.strata(*run((good, rg)))
+    bad, rb = arc(0.0, 20, 0.3, 0.36, -0.05)  # saturated, signs disagree: the stratum is lost in X
+    x = M.strata(*run((bad, rb)))
+    p = M.pair_metric(o, x)
+    assert p["lost"] == ["fwd_left_slow"]
+    v = M.judge([{**p, "R_o": 0.9, "R_x": 0.99, "A_o": 0.02, "A_x": 0.0}] * 6)
+    assert v["mechanism"] == "does_not_fix" and v["asymmetry"] == "does_not_reduce"

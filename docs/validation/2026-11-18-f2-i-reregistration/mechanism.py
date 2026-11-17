@@ -9,12 +9,13 @@ time, estimated rear x, y, yaw, true rear x, y, yaw (as docs/validation/2026-11-
 Per run, over every transport-phase sample in time order (none filtered beforehand), sample i weighs the time to the
 next transport sample and is excluded (reason counted) when there is no next sample, a path install or a leg switch
 falls between the two, either time lacks a slam_control row within 1e-6 s, or the true rear moved less than 0.02 m.
-Moving (|speed| > 0.05 m/s) and saturated (|commanded curvature| >= 0.355 /m) samples go to one of four strata
-(forward/reverse x left/right by the commanded sign); the achieved curvature is the true yaw change over the true
+Moving (|speed| > 0.05 m/s) and saturated (|commanded curvature| >= 0.355 /m) samples go to one of eight strata
+(forward/reverse x left/right by the commanded sign x slow/fast at 0.4 m/s); the achieved curvature is the true yaw change over the true
 displacement (signed by the travel direction) and must share the command's sign. Per stratum: ratio = time-weighted
 mean achieved/commanded, mabs = time-weighted mean |command - actual| steering angle per wheel; valid when the
 agreeing time is >= 0.5 s and >= half the stratum's saturated time. A pair's metric is the equal-weight mean over the
-strata valid in both arms. Reads only.
+strata valid in both arms; a stratum valid in O that the candidate saturates (>= 0.5 s) but no longer holds is
+'lost' and that pair counts as no improvement. Reads only.
 """
 
 from __future__ import annotations
@@ -36,7 +37,8 @@ AGREE_SHARE = 0.5
 MIN_PAIRS = 6
 RATIO_FLOOR = 0.95
 MAJORITY = 0.75
-STRATA = ("fwd_left", "fwd_right", "rev_left", "rev_right")
+SLOW_FAST_MPS = 0.4
+STRATA = tuple(f"{d}_{t}_{v}" for d in ("fwd", "rev") for t in ("left", "right") for v in ("slow", "fast"))
 NAME = re.compile(r"^(?P<prefix>[a-z0-9]+)_(?P<arm>O|F2|I)_(?P<scene>.+)_s(?P<seed>\d+)$")
 
 
@@ -97,7 +99,8 @@ def strata(r: dict, sc: np.ndarray) -> dict:
         if step < MIN_STEP_M:
             excluded["short_step"] += w
             continue
-        key = ("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
+        key = (("fwd" if speed > 0 else "rev") + ("_left" if kc > 0 else "_right")
+               + ("_slow" if abs(speed) < SLOW_FAST_MPS else "_fast"))
         st = acc[key]
         st["saturated_s"] += w
         kach = wrap(b[6] - a[6]) / step * (1 if speed > 0 else -1)
@@ -122,13 +125,15 @@ def strata(r: dict, sc: np.ndarray) -> dict:
 
 def pair_metric(o: dict, x: dict) -> dict:
     common = [k for k in STRATA if o[k]["valid"] and x[k]["valid"]]
+    # a stratum valid in O that the candidate saturates but no longer holds (Codex plan review): counted against it
+    lost = [k for k in STRATA if o[k]["valid"] and not x[k]["valid"] and x[k]["saturated_s"] >= MIN_AGREE_S]
     if not common:
-        return {"common": []}
+        return {"common": [], "lost": lost}
 
     def mean(d, f):
         return float(np.mean([f(d[k]) for k in common]))
 
-    return {"common": common,
+    return {"common": common, "lost": lost,
             "R_o": mean(o, lambda s: s["ratio"]), "R_x": mean(x, lambda s: s["ratio"]),
             "A_o": mean(o, lambda s: abs(s["mabs"][0] - s["mabs"][1])),
             "A_x": mean(x, lambda s: abs(s["mabs"][0] - s["mabs"][1]))}
@@ -139,9 +144,9 @@ def judge(pairs: list[dict]) -> dict:
     n = len(ok)
     if n < MIN_PAIRS:
         return {"pairs": n, "mechanism": "undecided", "asymmetry": "undecided"}
-    up = sum(p["R_x"] > p["R_o"] for p in ok) / n
+    up = sum(p["R_x"] > p["R_o"] and not p.get("lost") for p in ok) / n
     med = float(np.median([p["R_x"] for p in ok]))
-    down = sum(p["A_x"] < p["A_o"] for p in ok) / n
+    down = sum(p["A_x"] < p["A_o"] and not p.get("lost") for p in ok) / n
     return {"pairs": n, "median_R_x": med, "share_R_up": up, "share_A_down": down,
             "mechanism": "fixes" if med >= RATIO_FLOOR and up >= MAJORITY else "does_not_fix",
             "asymmetry": "reduces" if down >= MAJORITY else "does_not_reduce"}
