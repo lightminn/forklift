@@ -9,6 +9,9 @@ deck: the week-11 deck's steering-related cases the batch lacks (lead 2026-11-18
   random_1 s12 x O, F2 (prefix f2ix: reported beside, never in the registered judgement). Uses batch's settings copies.
 recheck: cases already fixed by other changes, O only on the current defaults (prefix f2ir): random_1 s13, s22,
   s28 (K1 near loose arrival) and s24 (return-home stop).
+b2: the week-11 deck's B2 (lead 2026-11-18): one live queue session, random_m s0, the operating mode (learned
+  proposals) with the four riib defaults the live launcher still lacks (the status survey's O6 had all six; the
+  launcher now carries return-start-backoff and near-end-stand itself). Measurement-like: submitted alone.
 """
 import importlib.util
 import json
@@ -95,10 +98,19 @@ def recheck(snap: str, out: Path) -> list:
     return [pfb.riib(snap, f"{root}/recheck", f"f2ir_O_{scene}_s{seed}", scene, seed) for scene, seed in RECHECK]
 
 
+O6_MORE = "--exit-prefix-exempt on --low-clearance-guard on --restart-confirm-scans 3 --return-cusp-replans 2"
+
+
+def b2(snap: str, out: Path) -> list:
+    row = pfb.live(snap, f"{P}/test_runs/f2i/batch_{snap}/b2", "f2ib_O6_random_m_s0", "random_m", 0, False)
+    row["env"]["MORE"] = O6_MORE
+    return [row]
+
+
 def main(snap: str, out_dir: str, kind: str) -> None:
     out = Path(out_dir)
-    rows = {"batch": batch, "pace": pace, "deck": deck, "recheck": recheck}[kind](snap, out)
-    assert len({x["name"] for x in rows}) == len(rows) == {"batch": 48, "pace": 9, "deck": 8, "recheck": 4}[kind]
+    rows = {"batch": batch, "pace": pace, "deck": deck, "recheck": recheck, "b2": b2}[kind](snap, out)
+    assert len({x["name"] for x in rows}) == len(rows) == {"batch": 48, "pace": 9, "deck": 8, "recheck": 4, "b2": 1}[kind]
     path = out / f"RUNS_f2i_{kind}_{snap}.jsonl"
     path.write_text("".join(json.dumps(x) + "\n" for x in rows))
     print(path, len(rows))
