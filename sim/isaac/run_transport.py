@@ -2426,41 +2426,6 @@ def tyre_floor_forces(stage_wheels: tuple[str, ...]) -> list[list[float]]:
     return out
 
 
-def probe_model_dump(world, robot, wheels, steers, steering, action_type, dt, stage_wheels, out_dir) -> None:
-    """The model dump of plan 2026-11-17-model-symmetry-check: stand 1 s holding the wheels at zero and the steering
-    where it is, recording each tyre's floor contact, the wheel centres' z and the base tilt, then write
-    steering_probe_model.json with the engine's and the stage's values (sim/isaac/model_dump.py)."""
-    import model_dump
-    import omni.usd
-    import steering_probe_arms
-
-    tyre_rows, wheel_z, tilt = [], {}, []
-    for _ in range(int(round(1.0 / dt))):
-        robot.apply_action(action_type(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
-        robot.apply_action(action_type(joint_positions=np.asarray(steering, float).copy(), joint_indices=steers))
-        world.step(render=False)
-        tyre_rows.append(tyre_floor_forces(stage_wheels))
-        poses = steering_probe_arms._link_poses(robot)
-        for path in stage_wheels:
-            name = str(path).rstrip("/").rsplit("/", 1)[-1]  # the probe's tyre links are prim paths; poses by body name
-            if name in poses:
-                wheel_z.setdefault(name, []).append(float(poses[name][0][2]))
-        w, x, y, z = poses["base_link"][1]
-        tilt.append([math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
-                     math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))])
-    stage = omni.usd.get_context().get_stage()
-    out = {"plan": "docs/plans/2026-11-17-model-symmetry-check.md",
-           "engine": model_dump.engine_bodies(robot._articulation_view),
-           "authored_masses": model_dump.authored_masses(stage), "joints": model_dump.joints(stage),
-           "colliders": model_dump.colliders(stage), "floor": model_dump.floor_colliders(stage),
-           "articulation": model_dump.articulation(stage),
-           "steering_at_stand_rad": np.asarray(steering, float).tolist(),
-           "body_poses": {n: {"position_m": p.tolist(), "quat_wxyz": q.tolist()}
-                          for n, (p, q) in steering_probe_arms._link_poses(robot).items()},
-           "settled": model_dump.settled_summary(tyre_rows, tuple(stage_wheels), dt, wheel_z, tilt)}
-    (Path(out_dir) / "steering_probe_model.json").write_text(json.dumps(out, indent=1, default=float))
-
-
 def run_steering_probe(world, robot, wheels, steers, settings, args, action_type, ackermann, out_dir,
                        arms=None, lift_index=None, scene_pallet=None) -> dict:
     """Drive probe_segments() (or probe_segments_long()) and return a per-segment summary; the per-tick
@@ -2613,6 +2578,41 @@ def run_steering_probe(world, robot, wheels, steers, settings, args, action_type
         # a window without contact (A3b, the base lifted) averages to NaN; the record keeps it as null (JSON)
         out = finite_or_none(out)
     return out
+
+
+def probe_model_dump(world, robot, wheels, steers, steering, action_type, dt, stage_wheels, out_dir) -> None:
+    """The model dump of plan 2026-11-17-model-symmetry-check: stand 1 s holding the wheels at zero and the steering
+    where it is, recording each tyre's floor contact, the wheel centres' z and the base tilt, then write
+    steering_probe_model.json with the engine's and the stage's values (sim/isaac/model_dump.py)."""
+    import model_dump
+    import omni.usd
+    import steering_probe_arms
+
+    tyre_rows, wheel_z, tilt = [], {}, []
+    for _ in range(int(round(1.0 / dt))):
+        robot.apply_action(action_type(joint_velocities=np.zeros(len(wheels)), joint_indices=wheels))
+        robot.apply_action(action_type(joint_positions=np.asarray(steering, float).copy(), joint_indices=steers))
+        world.step(render=False)
+        tyre_rows.append(tyre_floor_forces(stage_wheels))
+        poses = steering_probe_arms._link_poses(robot)
+        for path in stage_wheels:
+            name = str(path).rstrip("/").rsplit("/", 1)[-1]  # the probe's tyre links are prim paths; poses by body name
+            if name in poses:
+                wheel_z.setdefault(name, []).append(float(poses[name][0][2]))
+        w, x, y, z = poses["base_link"][1]
+        tilt.append([math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)),
+                     math.asin(max(-1.0, min(1.0, 2 * (w * y - z * x))))])
+    stage = omni.usd.get_context().get_stage()
+    out = {"plan": "docs/plans/2026-11-17-model-symmetry-check.md",
+           "engine": model_dump.engine_bodies(robot._articulation_view),
+           "authored_masses": model_dump.authored_masses(stage), "joints": model_dump.joints(stage),
+           "colliders": model_dump.colliders(stage), "floor": model_dump.floor_colliders(stage),
+           "articulation": model_dump.articulation(stage),
+           "steering_at_stand_rad": np.asarray(steering, float).tolist(),
+           "body_poses": {n: {"position_m": p.tolist(), "quat_wxyz": q.tolist()}
+                          for n, (p, q) in steering_probe_arms._link_poses(robot).items()},
+           "settled": model_dump.settled_summary(tyre_rows, tuple(stage_wheels), dt, wheel_z, tilt)}
+    (Path(out_dir) / "steering_probe_model.json").write_text(json.dumps(out, indent=1, default=float))
 
 
 def finite_or_none(value):
