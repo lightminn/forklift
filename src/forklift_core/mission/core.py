@@ -1495,6 +1495,41 @@ class MissionCore:
         ) and not docking_straight
         return acting, docking_straight
 
+    KNOWN_FRAME_LEAD_M = 0.20  # the first-frame stand begins this far before the D5 straight (the brake's room)
+    KNOWN_FRAME_MAX_AGE_S = 0.5  # the first depth frame's age at most when it is taken
+    KNOWN_FRAME_WAIT_S = 5.0  # standing for it at most (work time), as a pocket stop
+
+    def _known_first_frame(self, t: float, rear, speed_):
+        """A known start's first pocket-check frame (design 2026-11-19-known-pallet-start 2): from KNOWN_FRAME_LEAD_M
+        before the approach's D5 straight until the check is built, the wheels held at 0; once standing, the frame
+        from ``known_pocket_frame`` (``scene`` -- what a capture carries for the check --, ``stamp_s``, ``rear``,
+        ``base``) builds the check when it is at most KNOWN_FRAME_MAX_AGE_S old, and the next tick runs on. No frame
+        within KNOWN_FRAME_WAIT_S ends the mission. Returns (0.0, reason) while it holds, else None."""
+        ms, pocket, options, hooks = self.ms, self.pocket, self.options, self.hooks
+        if not (options.pocket_check and ms.phase == "approach" and pocket.get("check") is None
+                and self.operator_target()):
+            return None
+        if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
+            return None
+        since_ = pocket.setdefault("first_frame_since", float(t))
+        if speed_.standing(self.STANDING_MPS):
+            frame_ = hooks.known_pocket_frame()
+            fresh_ = frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
+            if fresh_:
+                pocket["capture"] = frame_.scene
+                hooks.build_pocket_check(float(self.paths["approach"].poses[-1][2]), rear, frame_.base,
+                                         float(frame_.stamp_s), frame_.rear)
+                self.state.setdefault("pocket_check", {})["first_frame"] = {
+                    "source": "known_pocket_frame", "stamp_s": float(frame_.stamp_s), "taken_s": float(t)}
+                pocket.pop("first_frame_since", None)
+                return 0.0, "pocket_first_frame"  # built: the next tick runs under the check
+            reason_ = "pocket_first_frame:none" if frame_ is None else "pocket_first_frame:stale"
+        else:
+            reason_ = "pocket_first_frame"
+        hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
+                      f"pocket_stop in approach: {reason_}")
+        return 0.0, reason_
+
     def permission(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool, cusp_handed_) -> SimpleNamespace:
         """One tick of the obstacle permission while the truck follows a path (or a stall is handed over): the
         grid re-projected after a correction change, the permission's limit and its diagnostics dump, the
@@ -1597,12 +1632,17 @@ class MissionCore:
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
         acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
+        first_frame_ = self._known_first_frame(t, rear, speed_)
+        if first_frame_ is not None:
+            # design 2026-11-19-known-pallet-start 2: a known start has no capture -- the check's first depth frame is
+            # taken standing before the straight it applies to; the straight is not entered without it
+            acting, speed_hold_, (allowed, why) = True, True, first_frame_  # held whatever the obstacle switch
         gate_only = False
         if int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and acting and not pocket_phase:
             # docs/plans/2026-10-25-restart-confirmation.md: on the permission's own limit only (before the pocket
             # check and the D4 path-blocked stop); off, nothing is read
             allowed, why, gate_only = self._restart_gate(t, allowed, why)
-        if pocket_phase:
+        if pocket_phase and first_frame_ is None:
             # D5: the approach straight and the insertion run under the
             # permission too; inside the pallet region the depth check
             # answers (its region is waived in the grid only while set).

@@ -306,3 +306,77 @@ def test_at_50_hz_a_blocked_path_stops_after_0_30_s_too():
     assert out.allowed == 0.5 and obstacle["path_blocked_ticks"] == 14
     out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
     assert (out.allowed, out.why) == (0.0, "occupied")
+
+
+def known_start(frames, *, truth_speed=0.3, velocity=(0.3, 0.0)):
+    """A known start's approach (design 2026-11-19-known-pallet-start 2): no capture; ``frames`` answer
+    known_pocket_frame in turn; build_pocket_check installs a check answering ok."""
+    core, obstacle, pocket, calls = make("approach", remaining=2.0, pocket_check=True, check=None,
+                                         truth_speed=truth_speed, velocity=velocity)
+    core.state["planning_target_source"] = "operator_input"
+    core.paths["approach"] = SimpleNamespace(poses=np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.25]]))
+    asked, built = [], []
+    core.hooks.known_pocket_frame = lambda: asked.append(True) or (frames.pop(0) if frames else None)
+
+    def build(axis_yaw, rear, base, stamp_s, rear_at_stamp):
+        built.append((axis_yaw, base, stamp_s, rear_at_stamp, pocket.get("capture")))
+        pocket["check"] = SimpleNamespace(limit=lambda *a: (0.9, "ok"), summary=lambda: {})
+
+    core.hooks.build_pocket_check = build
+    return core, pocket, asked, built
+
+
+def frame(stamp_s):
+    return SimpleNamespace(scene="SCENE", stamp_s=stamp_s, rear=(1.0, 2.0, 0.1), base=(1.2, 2.0, 0.3))
+
+
+def remaining(core, value):
+    core.trackers["approach"].remaining_to_goal_m = lambda: value
+
+
+def test_a_known_start_stands_for_its_first_depth_frame_before_the_d5_straight_then_runs_under_the_check():
+    core, pocket, asked, built = known_start([None, frame(9.0), frame(10.2)])
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.5, "ok") and not asked  # farther than the lead: nothing yet
+    remaining(core, 1.15)  # 0.15 m before the 1.0 m straight
+    out = core.permission(10.1, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why, out.acting) == (0.0, "pocket_first_frame", True) and not asked  # still rolling
+    assert out.obstacle_hold and out.requested_speed == 0.0
+    core.hooks.truth_speed = lambda: 0.0
+    core.hooks.truth_velocity = lambda: np.zeros(3)
+    out = core.permission(10.2, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:none")
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:stale") and not built  # 1.3 s old
+    out = core.permission(10.4, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame") and len(asked) == 3
+    assert built == [(0.25, (1.2, 2.0, 0.3), 10.2, (1.0, 2.0, 0.1), "SCENE")]
+    assert core.state["pocket_check"]["first_frame"] == {"source": "known_pocket_frame", "stamp_s": 10.2,
+                                                         "taken_s": 10.4}
+    out = core.permission(10.5, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.5, "ok") and len(asked) == 3  # built: the approach runs on
+    remaining(core, 0.9)
+    out = core.permission(10.6, REAR, 0.0, 0.4, True, None)
+    assert out.pocket_phase and (out.allowed, out.why) == (0.5, "ok")  # in the straight, under the check
+    remaining(core, 0.44)
+    out = core.permission(10.7, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_settle") and pocket["await_still_frame"]  # the standing frame
+
+
+def test_a_known_start_without_a_first_frame_ends_after_five_seconds_and_never_enters_the_straight():
+    core, pocket, asked, built = known_start([], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 0.95)  # braked into the straight: still held for the frame, not pocket_missing
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:none")
+    core.permission(14.9, REAR, 0.0, 0.4, True, None)
+    with pytest.raises(RuntimeError, match="pocket_stop in approach: pocket_first_frame:none"):
+        core.permission(15.0, REAR, 0.0, 0.4, True, None)
+    assert not built
+
+
+def test_a_recognised_start_keeps_pocket_missing():
+    core, pocket, asked, built = known_start([frame(10.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    core.state["planning_target_source"] = "oracle"
+    remaining(core, 0.9)
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_missing") and not asked
