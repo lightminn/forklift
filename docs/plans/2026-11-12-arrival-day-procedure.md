@@ -136,7 +136,7 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
 
 1. 모터 전원 경로를 뺀다. 배터리 → F1 → LM74801 → VCC·5 V·**3.3 V**·19 V 레일을 무부하·부하로 잰다. 각 레일 공칭 ±5 % 안이어야 한다.
 2. Jetson 을 19 V 로 켜고 MAXN SUPER 로 둔 채 **최대 부하를 실제로 건다**(CPU·GPU 를 함께 쓰는 부하 프로그램 — 모드만 바꿔 놓고 쉬는 것은 최대 부하가 아니다). 10 분 동안 19 V 와 Jetson 이 안정한지 본다.
-   - 장치는 Orin Nano Super(`scienceowl@jetson.local`, zetin Wi-Fi, 2026-11-17 기록 [hw-day](../validation/2026-11-17-hw-day.md)). 부하는 `HW_DAY=<날짜> bash tools/hwday/jetson_stall.sh 300`(정지 5 분 + 모든 코어 부하 5 분, 다리 정체 판정 포함)이다. **GPU 부하 도구는 아직 없다** — 이 부하는 CPU 만이고, 그렇게 기록한다.
+   - 장치는 Orin Nano Super(`scienceowl@jetson.local`, zetin Wi-Fi, 2026-11-17 기록 [hw-day](../validation/2026-11-17-hw-day.md)). 부하는 `HW_DAY=<날짜> bash tools/hwday/jetson_stall.sh 300`(정지 5 분 + 모든 코어 부하 5 분, 다리 정체 판정 포함)이다. 이 부하는 CPU 만이고, **S1-2 는 이것으로 합격 처리**한다(총괄 2026-11-18: 지금 실차 스택은 GPU 를 무겁게 쓰지 않음. GPU 부하는 인식을 Jetson GPU 로 돌릴 때 다시).
    - 재부팅 뒤 `jetson_clocks` 가 풀리는지는 전날 `tools/hwday/jetson_prep.sh` 가 기록한다. 풀렸으면 부하 전에 `bash tools/hwday/jetson_power.sh` 를 한 번 돌린다.
    - 당일 순서·판정 한 장: [11-20 순서표](2026-11-20-arrival-day-sequence.md).
 3. **역전원**: WeAct 를 메인보드에 꽂고 USB-C 를 연결한 채 주 전원을 끈다. 메인보드 5 V 레일에 전압이 생기면 역전원이다(보드 설계 3.1). 그러면 VBUS 를 끊은 케이블이나 UART7 을 쓴다.
