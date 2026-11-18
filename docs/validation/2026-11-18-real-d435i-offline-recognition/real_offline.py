@@ -25,7 +25,6 @@ spacing is reported apart (a non-standard reading measures its own lanes). There
 import argparse
 import dataclasses
 import json
-import math
 import multiprocessing
 import sys
 import time
@@ -40,13 +39,20 @@ sys.path[:0] = [str(REPO), str(REPO / "tools"), str(REPO / "docs/validation/2026
 
 import e4_diagnose as E  # noqa: E402
 import near_refit_compare as N  # noqa: E402
+
 from forklift_core.perception import geometric_proposals as G  # noqa: E402
-from forklift_core.perception.fork_fit import ForkSetup, load_site_defaults  # noqa: E402
 from forklift_core.perception import instance_fit as F  # noqa: E402
+from forklift_core.perception.fork_fit import (  # noqa: E402
+    ForkSetup,
+    load_site_defaults,
+)
 from forklift_core.perception.instance_fit import FitParams, fit_scene  # noqa: E402
 from forklift_core.perception.instance_proposals import InstanceProposal  # noqa: E402
 from forklift_core.perception.pallet_geometry import load_pallet_geometry  # noqa: E402
-from forklift_core.perception.pallet_model import KNOWN_ENTRY_AXES, spec_from_geometry  # noqa: E402
+from forklift_core.perception.pallet_model import (  # noqa: E402
+    KNOWN_ENTRY_AXES,
+    spec_from_geometry,
+)
 from forklift_core.perception.target_selection import select_target  # noqa: E402
 
 FORK_SPACING_M = 0.3725  # sim/models/dls08_measured/parameters.yaml fork_spacing_m (the measured chassis)
@@ -181,7 +187,7 @@ def candidate_record(c, ref: dict | None, lanes: float | None) -> dict:
 
 
 def frame_record(scene, proposals, failures, specs, setup, load_for, ref, roi_mask, lanes, kind, threshold,
-                 params: FitParams = FitParams()) -> dict:
+                 params: FitParams) -> dict:
     t0 = time.perf_counter()
     fit = fit_scene(scene, proposals, specs=specs, setup=setup, load_for=load_for, params=params,
                     identity_threshold=threshold)
