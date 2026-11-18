@@ -105,6 +105,16 @@ def test_a_stall_or_clock_or_counter_fault_inside_the_window_is_invalid():
     assert first_boot_check(reset)["result"] == "invalid"
 
 
+def test_errors_past_frames_are_invalid():
+    rec = record()
+    bad = [dataclasses.replace(s, state=dataclasses.replace(s.state, kth_crc_errors=(5 * k, 0))) for k, s in
+           enumerate(rec)]  # frames +10 per STATE but errors +5 is fine; +11 is not
+    assert first_boot_check(bad)["result"] == "pass"
+    worse = [dataclasses.replace(s, state=dataclasses.replace(s.state, kth_alt_crc_errors=(0, 11 * k))) for k, s in
+             enumerate(rec)]
+    assert first_boot_check(worse)["result"] == "invalid"
+
+
 def test_a_reboot_after_the_window_is_not_judged():
     rec = record(n=1300)
     later = [dataclasses.replace(s, state=dataclasses.replace(s.state, boot_id=9, mcu_time_us=k * 10_000))

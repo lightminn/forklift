@@ -59,6 +59,9 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
                  for f in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors") for i in range(2)]
         if max(rises) > cap:
             return {**base, "result": "invalid", "why": "a KTH counter rose faster than once a millisecond (reset?)"}
+        # per axis: errors and other-variant errors are counted among the fresh frames (contract 3.3, Codex P2)
+        if any(rises[2 + i] > rises[i] or rises[4 + i] > rises[i] for i in range(2)):
+            return {**base, "result": "invalid", "why": "KTH error counts rose past the frame count (contract 3.3)"}
         win.append(st)
         if st.mcu_time_us >= end_us:
             break
