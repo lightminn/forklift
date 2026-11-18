@@ -81,11 +81,16 @@ class RealHooks:
         scenario's reference one (Codex 4b P2) -- never a write to the core's pickup estimate."""
         from forklift_core.planning.geometry import Rectangle
 
-        out = {} if self._occupancy is None else {"occupancy": self._occupancy()}
+        occupancy = None if self._occupancy is None else self._occupancy()
+        out = {} if occupancy is None else {"occupancy": occupancy}
         if kind == "mission" and target is not None:
             g = self._geometry
             out["pickup_obstacle"] = Rectangle(float(target.x_m), float(target.y_m), g.pallet_depth_m,
                                                g.pallet_width_m, float(target.yaw_rad))
+            if occupancy is not None:
+                # the docking straights see the grid without the target pallet's own band (the insert goes into
+                # it; Isaac's docking_band, Codex 4b P2) -- the approach keeps the shared grid and the obstacle
+                out["docking_occupancy"] = docking_occupancy(occupancy, target, g)
         return out
 
     def known_pocket_frame(self):
@@ -122,6 +127,32 @@ class RealHooks:
 
     def snapshot(self, phase):
         pass  # display only
+
+
+DOCKING_BAND_ALONG_M = 0.025 + 0.40  # Isaac's docking_band: the estimate grown along the insertion axis
+DOCKING_BAND_ACROSS_M = 0.20  # and across
+
+
+def docking_occupancy(occupancy, target, geometry):
+    """``occupancy`` without the cells of the target pallet's band (the band Isaac's runner clears for a docking
+    plan): the estimate grown by 0.425 m along its insertion axis and 0.20 m across."""
+    import math
+
+    import numpy as np
+
+    from forklift_core.planning.grid_collision import OccupancyGrid
+
+    occ = np.array(occupancy.occupied, dtype=bool, copy=True)
+    nx, ny = occ.shape
+    gi, gj = np.meshgrid(np.arange(nx), np.arange(ny), indexing="ij")
+    dx = occupancy.origin_x_m + (gi + 0.5) * occupancy.resolution_m - float(target.x_m)
+    dy = occupancy.origin_y_m + (gj + 0.5) * occupancy.resolution_m - float(target.y_m)
+    c, s = math.cos(float(target.yaw_rad)), math.sin(float(target.yaw_rad))
+    band = (np.abs(dx * c + dy * s) <= geometry.pallet_depth_m / 2 + DOCKING_BAND_ALONG_M) & (
+        np.abs(-dx * s + dy * c) <= geometry.pallet_width_m / 2 + DOCKING_BAND_ACROSS_M)
+    occ[band] = False
+    return OccupancyGrid(occupancy.origin_x_m, occupancy.origin_y_m, occupancy.resolution_m, occ,
+                         getattr(occupancy, "version", 0))
 
 
 class AssemblyRefused(RuntimeError):
@@ -191,18 +222,25 @@ class FrozenSubmit:
     targets_revision: int
 
 
-def freeze_submit(core: MissionCore, pallet_id: str, destination_id: str, targets_revision: int) -> FrozenSubmit:
-    """At the submit's approval: the operator_input pose as it is now, with the submit's revision."""
-    why = s10_submit_refusal(core, pallet_id)
+def freeze_submit(core: MissionCore, submit) -> FrozenSubmit:
+    """At the approval of ``submit`` (the commands' ``Submit``: pallet, destination, revision): the operator_input
+    pose as it is now, with that submit's ids and revision."""
+    why = s10_submit_refusal(core, submit.pallet_id)
     if why is not None:
         raise ValueError(why)
-    p = core.targets.pallets[pallet_id].pose
-    return FrozenSubmit(pallet_id, destination_id, (float(p.x_m), float(p.y_m), float(p.yaw_rad)),
-                        int(targets_revision))
+    p = core.targets.pallets[submit.pallet_id].pose
+    return FrozenSubmit(submit.pallet_id, submit.destination_id, (float(p.x_m), float(p.y_m), float(p.yaw_rad)),
+                        int(submit.targets_revision))
 
 
 def known_request(core: MissionCore, t: float, rear, inputs: dict, frozen: FrozenSubmit):
-    """The preparation's request (and re-request) on the frozen submit."""
+    """The preparation's request (and re-request) on the frozen submit; a frozen value that is not the accepted
+    mission's (another pallet or destination) ends the preparation instead."""
+    mission = core.commands.mission
+    if mission is None or (mission.pallet_id, mission.destination_id) != (frozen.pallet_id, frozen.destination_id):
+        if core.commands.status in ("accepted", "preparing"):
+            core.commands.terminate("failed", t, "prepare:known:submit_mismatch")
+        return "submit_mismatch"
     return core.known_pallet_request(t, rear, inputs, frozen.pose, targets_revision=frozen.targets_revision)
 
 
@@ -268,6 +306,6 @@ def assembly_record(core: MissionCore, cfg: ra.S10AConfig, curvatures: dict) -> 
             "steering_rate_rad_s": kin.steering_rate_rad_s, "s10a": {k: v for k, v in vars(cfg).items()}}
 
 
-__all__ = ["ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "FrozenSubmit", "OperatorStart", "STAND_AND_END_HOOKS",
+__all__ = ["DOCKING_BAND_ACROSS_M", "DOCKING_BAND_ALONG_M", "docking_occupancy", "ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "FrozenSubmit", "OperatorStart", "STAND_AND_END_HOOKS",
            "freeze_submit", "known_request", "AssemblyRefused", "RealHooks", "RealRequireFailed", "assemble", "assembly_record",
            "register_pallet", "s10_submit_refusal", "scenario_of"]

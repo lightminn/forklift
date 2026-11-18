@@ -48,7 +48,7 @@ class Bench:
         while (f := self.host.next_frame(self.now)) is not None:
             self.host.frame_written(f, self.now)
             self.written.append((f.seq, self.now))
-            self.permit.stop_written(f.seq, self.now)
+            self.permit.written(f.kind, f.seq, self.now)
             for r in self.dec.feed(f.data, self.now):
                 self.sent.append(r.message)
                 self.mcu.receive(r.message, f.seq)
@@ -262,3 +262,39 @@ def test_only_the_arbiters_rearm_transition_releases_the_latch():
     assert b.permit.state == ra.LATCHED  # the inputs back alone do nothing
     b.permit.rearmed(b.now, 3)
     assert b.permit.state == ra.OFF
+
+
+def test_a_session_disarm_never_written_does_not_start_the_session():
+    """Codex 4b P2: a cached DISARMED is not the answer to a DISARM that was not written."""
+    b = Bench(start=False)
+    b.permit.bind(transmit=None, arbiter_stop=None, collect=None)
+    b.permit.start_session(b.now)  # queued, never written
+    b.cycle(3, transmit=False)
+    assert not b.permit.session_started
+
+
+def test_after_a_latch_the_watch_waits_for_a_disarmed_received_after_the_disarms_write():
+    b = Bench()
+    b.permit.adopted(b.now, pre_arm_refusal=None)
+    b.transmit()  # the ARM goes out; the MCU is armed, the host's cached STATE still says DISARMED
+    b.permit.bind(transmit=None, arbiter_stop=None, collect=None)
+    b.permit.latch(b.now, "stop")
+    assert b.permit.armed  # its DISARM not written yet
+    b.permit.bind(transmit=b.transmit, arbiter_stop=None, collect=None)
+    b.transmit()
+    assert b.permit.armed  # written, no STATE since
+    b.cycle(1)
+    assert not b.permit.armed
+
+
+def test_a_stale_state_never_confirms_the_control_stop():
+    b = Bench()
+    b.armed_ready()
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.transmit()
+    b.now += 60 * MS  # the echo arrives, but the host's state is past its 50 ms freshness by the judging tick
+    b.mcu.advance(10_000)
+    b.host.on_bytes(encode(b.mcu.state(), 1), b.now - 55 * MS)
+    b.permit.tick(b.now)
+    assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)

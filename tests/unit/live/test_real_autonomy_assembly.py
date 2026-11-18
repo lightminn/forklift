@@ -93,8 +93,8 @@ def evidence(**over):
               measurement=lambda n: ra.MeasurementView(True, True, True, True),
               odometry_continuous=lambda n: True,
               slam=lambda n: ra.SlamView("tracking", n - 10**8),
-              snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**8),
-              operator_start_ok=lambda n: True, core_refusal=lambda n: None)
+              snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**8, False, 4, 4),
+              operator_start_ok=lambda n: True, core_refusal=lambda n: None, mission_gen=lambda n: 3)
     ok.update(over)
     return ra.Evidence(**ok)
 
@@ -110,9 +110,13 @@ def evidence(**over):
     ({"slam": lambda n: ra.SlamView("holding", n)}, "slam:mode_holding"),
     ({"slam": lambda n: ra.SlamView("tracking", n - 10**9)}, "slam:stale"),
     ({"slam": lambda n: ra.SlamView("tracking", None)}, "slam:stale"),
-    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**9)}, "snapshot:scan_stale"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**9, False, 4, 4)},
+     "snapshot:scan_stale"),
     ({"operator_start_ok": lambda n: False}, "operator_start:unconfirmed"),
-    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n)}, "wait:snapshot_installing"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, False, 4, 4)},
+     "wait:snapshot_installing"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 3, 4)},
+     "wait:snapshot_installing"),  # the same values from an older generation (Codex 4b P2)
 ])
 def test_each_readiness_condition_refuses_a_submit_by_its_reason(over, why):
     assert ra.auto_ready_refusal(NOW, "submit", evidence(**over)) == why
@@ -128,9 +132,11 @@ def test_a_latch_reason_is_never_hidden_by_an_installing_snapshot():
 
 
 def test_driving_accepts_the_missions_hold_within_its_travel():
-    assert ra.auto_ready_refusal(NOW, "drive", evidence(slam=lambda n: ra.SlamView("holding", n, 0.5))) is None
+    assert ra.auto_ready_refusal(NOW, "drive", evidence(slam=lambda n: ra.SlamView("holding", n, 0.5, 3))) is None
     assert ra.auto_ready_refusal(NOW, "drive", evidence(
-        slam=lambda n: ra.SlamView("holding", n, 2.0))) == "slam:hold_too_long"
+        slam=lambda n: ra.SlamView("holding", n, 2.0, 3))) == "slam:hold_too_long"
+    assert ra.auto_ready_refusal(NOW, "drive", evidence(
+        slam=lambda n: ra.SlamView("holding", n, 0.5, 2))) == "slam:hold_not_this_missions"
 
 
 def test_all_met_is_ready_and_the_operator_check_is_the_submits_only():
@@ -138,3 +144,8 @@ def test_all_met_is_ready_and_the_operator_check_is_the_submits_only():
     assert ra.auto_ready_refusal(NOW, "drive", evidence(operator_start_ok=lambda n: False)) is None
     with pytest.raises(ValueError):
         ra.auto_ready_refusal(NOW, "arm", evidence())
+
+
+def test_every_mission_stage_needs_its_speed():
+    assert "speed_missing:insert" in refusal(options(speeds={"approach": 0.1}))
+    assert "mission_stages_missing" in refusal(options(mission_stages=()))

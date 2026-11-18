@@ -114,7 +114,7 @@ def test_the_known_preparation_and_adoption_read_only_the_adoption_hooks():
     core.commands.queue(Submit("P-S10", "D-S10", rev))
     core.commands.apply(10.0)
     assert core.commands.status == "accepted"
-    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
+    frozen = asm.freeze_submit(core, Submit("P-S10", "D-S10", rev))
     inputs = {"scenario": core.options.scenario, "wait_pose": "WAIT", "pickup_bounds": None, "pickup_zone": None}
     core.slam["stop_now"] = True  # the loop's still span (4c sets it from new samples)
     hooks.read.clear()
@@ -163,9 +163,9 @@ def test_the_dry_record_names_the_options_the_hooks_and_the_caps():
 def test_the_submit_is_frozen_with_its_registered_pose_and_revision():
     core, hooks, _ = build()
     with pytest.raises(ValueError):
-        asm.freeze_submit(core, "P-S10", "D-S10", core.targets.revision)  # not registered yet
+        asm.freeze_submit(core, Submit("P-S10", "D-S10", core.targets.revision))  # not registered yet
     rev = asm.register_pallet(core, "P-S10", PALLET)
-    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
+    frozen = asm.freeze_submit(core, Submit("P-S10", "D-S10", rev))
     asm.register_pallet(core, "P-S10", (3.3, 0.2, 0.0))  # changed afterwards
     assert frozen.pose == PALLET and frozen.targets_revision == rev
 
@@ -188,7 +188,7 @@ def test_the_first_frame_stand_and_the_s10_end_read_only_their_hooks():
     rev = asm.register_pallet(core, "P-S10", PALLET)
     core.commands.queue(_S("P-S10", "D-S10", rev))
     core.commands.apply(10.0)
-    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
+    frozen = asm.freeze_submit(core, Submit("P-S10", "D-S10", rev))
     core.slam["stop_now"] = True
     inputs = {"scenario": core.options.scenario, "wait_pose": "WAIT", "pickup_bounds": None, "pickup_zone": None}
     asm.known_request(core, 11.0, np.array([0.0, 0.0, 0.0]), inputs, frozen)
@@ -210,3 +210,29 @@ def test_the_first_frame_stand_and_the_s10_end_read_only_their_hooks():
     assert hooks.read <= asm.STAND_AND_END_HOOKS | asm.ADOPTION_HOOKS, sorted(
         hooks.read - asm.STAND_AND_END_HOOKS - asm.ADOPTION_HOOKS)
     assert {"known_pocket_frame", "operator_check", "lift_position", "require"} <= hooks.read
+
+
+def test_a_frozen_submit_of_another_destination_ends_the_preparation():
+    core, hooks, _ = build()
+    rev = asm.register_pallet(core, "P-S10", PALLET)
+    core.commands.queue(Submit("P-S10", "D-S10", rev))
+    core.commands.apply(10.0)
+    wrong = asm.FrozenSubmit("P-S10", "D-OTHER", PALLET, rev)
+    inputs = {"scenario": core.options.scenario, "wait_pose": "WAIT", "pickup_bounds": None, "pickup_zone": None}
+    assert asm.known_request(core, 11.0, np.zeros(3), inputs, wrong) == "submit_mismatch"
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:known:submit_mismatch"
+    assert not core.jobs.submitted
+
+
+def test_the_docking_grid_clears_only_the_registered_pallets_band():
+    from forklift_core.planning.grid_collision import OccupancyGrid
+
+    occ = np.zeros((70, 50), bool)  # x from -1.0, y from -2.5, 0.1 m
+    occ[38:42, 23:27] = True  # cells at the registered pallet (x 2.8-3.2, y -0.2-0.2)
+    occ[10, 10] = True  # a far wall cell
+    grid = OccupancyGrid(-1.0, -2.5, 0.1, occ)
+    core, hooks, _ = build(hooks_kw={"occupancy": lambda: grid})
+    out = core.hooks.grid_kwargs("mission", SimpleNamespace(x_m=3.0, y_m=0.0, yaw_rad=0.0))
+    assert out["occupancy"] is grid and out["occupancy"].occupied[39, 24]  # the approach still sees it
+    dock = out["docking_occupancy"].occupied
+    assert not dock[38:42, 23:27].any() and dock[10, 10]

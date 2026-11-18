@@ -88,3 +88,12 @@ def test_unreadable_settings_are_refused(tmp_path):
     partial.write_text("lift_target_m: 0.2\n")
     code, rec = run("--settings", str(partial), out=tmp_path / "b.json")
     assert code == 2 and "setting_missing" in rec["refused"][0]
+
+
+def test_an_unreadable_vehicle_file_is_a_structural_refusal(tmp_path):
+    folder, map_id = bundle(tmp_path)
+    empty = tmp_path / "vehicle.yaml"
+    empty.write_text("")
+    code, rec = run("--s10a", str(filled(tmp_path, map_id)), "--map-bundle", str(folder), "--vehicle", str(empty),
+                    out=tmp_path / "a.json")
+    assert code == 2 and rec["refused"][0].startswith("vehicle_unreadable")

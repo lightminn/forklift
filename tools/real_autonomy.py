@@ -92,8 +92,13 @@ def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_b
             record.update(assembled=False, refused=[f"map:{err}"])
             _write(record, out)
             return 2
-    vehicle = load_real_vehicle(vehicle_path)
-    kin = RealKinematics(vehicle)
+    try:
+        vehicle = load_real_vehicle(vehicle_path)
+        kin = RealKinematics(vehicle)
+    except Exception as err:  # noqa: BLE001 -- any malformed vehicle file is a structural refusal (exit 2)
+        record.update(assembled=False, refused=[f"vehicle_unreadable:{type(err).__name__}:{err}"])
+        _write(record, out)
+        return 2
     low, high = kin.cfg.steering.curvature_range
     cap = min(-float(low), float(high))
     settings = {k: data[k] for k in ("lift_target_m", "lift_rate_mps", "drive_acceleration_mps2",

@@ -49,6 +49,7 @@ class AutoPermit:
         self._collected = True  # nothing to collect before a mission runs
         self._stop: dict | None = None  # the control stop: seq, boot/arm generation, written time
         self._disarm_asked_ns: int | None = None
+        self._disarm_written_ns: int | None = None  # the newest DISARM's write (the transmitter's ``written``)
         self.session_started = False
 
     def bind(self, *, transmit, arbiter_stop, collect) -> None:
@@ -61,8 +62,11 @@ class AutoPermit:
         until a DISARMED is seen -- with no STATE at all (a lost link) too: unknown is not disarmed."""
         if self.state in (ARMING, READY, DRIVING, STOP_PENDING, DISARMING):
             return True
-        s = self.host.state
-        return self.state == LATCHED and (s is None or s.mode != Mode.DISARMED)
+        if self.state != LATCHED:
+            return False
+        if self._disarm_written_ns is None and self._disarm_asked_ns is not None:
+            return True  # the latch's DISARM not written yet
+        return not self._disarmed_after_write_any()
 
     def drive_allowed(self) -> bool:
         """A mission DRIVE may be submitted (and only then)."""
@@ -77,7 +81,7 @@ class AutoPermit:
         DISARMED answered it (``tick``)."""
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._disarm_asked_ns = int(now_ns)
+        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
 
@@ -122,10 +126,9 @@ class AutoPermit:
         """Each loop cycle after the host's STATEs and ``host.tick``."""
         host = self.host
         s, rx = host.state, host.state_rx_ns
-        if not self.session_started and self._disarm_asked_ns is not None:
-            if s is not None and s.mode == Mode.DISARMED and rx is not None and rx > self._disarm_asked_ns:
-                self.session_started = True
-                self._note(now_ns, "session_ready")
+        if not self.session_started and self._disarm_asked_ns is not None and self._disarmed_after_write(now_ns):
+            self.session_started = True
+            self._note(now_ns, "session_ready")
         if self.state == ARMING:
             if host.ready:
                 self.state = READY
@@ -138,6 +141,7 @@ class AutoPermit:
         elif self.state == STOP_PENDING:
             stop = self._stop
             if stop["written_ns"] is not None and s is not None and rx is not None and rx > stop["written_ns"] \
+                    and host.health(now_ns).fresh and host.authorized \
                     and int(s.last_rx_seq) == stop["seq"] and (s.boot_id, s.arm_gen) == stop["boot_gen"] \
                     and rx - stop["written_ns"] <= self.stop_ack_ns:
                 self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
@@ -145,7 +149,7 @@ class AutoPermit:
             elif not host.authorized or now_ns - (stop["written_ns"] or stop["since_ns"]) > self.stop_ack_ns:
                 self._disarm(now_ns, "control_stop_unconfirmed")
         elif self.state == DISARMING:
-            if s is not None and s.mode == Mode.DISARMED and rx is not None and rx > self._disarm_asked_ns:
+            if self._disarmed_after_write(now_ns):
                 self.state = LATCHED
                 self._note(now_ns, "disarmed")
 
@@ -172,7 +176,7 @@ class AutoPermit:
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
         errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
-        self._disarm_asked_ns = int(now_ns)
+        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
         errors.append(self._try(self._transmit))
         if first:
             errors.append(self._try(self._arbiter_stop, reason))
@@ -195,14 +199,33 @@ class AutoPermit:
         self.state = STOP_PENDING
         self._note(now_ns, "control_stop", seq=self._stop["seq"])
 
-    def stop_written(self, seq: int, written_ns: int) -> None:
-        if self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
+    def written(self, kind: str, seq: int, written_ns: int) -> None:
+        """The transmitter wrote a whole frame (every frame, in order): a DISARM's write time, the stop frame's."""
+        if kind == "DISARM":
+            self._disarm_written_ns = int(written_ns)
+        elif self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
             self._stop["written_ns"] = int(written_ns)
+
+    def stop_written(self, seq: int, written_ns: int) -> None:
+        self.written("DRIVE", seq, written_ns)
+
+    def _disarmed_after_write_any(self) -> bool:
+        host, w = self.host, self._disarm_written_ns
+        s, rx = host.state, host.state_rx_ns
+        return w is not None and s is not None and rx is not None and rx > w and s.mode == Mode.DISARMED
+
+    def _disarmed_after_write(self, now_ns: int) -> bool:
+        """A fresh DISARMED received after the newest DISARM was written (a cached one, or one before the write,
+        is not the answer)."""
+        host, w = self.host, self._disarm_written_ns
+        s, rx = host.state, host.state_rx_ns
+        return (w is not None and s is not None and rx is not None and rx > w and s.mode == Mode.DISARMED
+                and host.health(now_ns).fresh)
 
     def _disarm(self, now_ns: int, reason: str) -> None:
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._disarm_asked_ns = int(now_ns)
+        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
         self._try(self._transmit)
         self.reason = self.reason or reason
         self.state = DISARMING
@@ -316,6 +339,11 @@ def real_option_refusal(options, *, tracker_curvature_inv_m, preview_curvature_i
         out.append("max_speed_invalid")
     else:
         speeds = dict(getattr(options, "speeds", None) or {})
+        for stage in getattr(options, "mission_stages", ()) or ():
+            if stage not in speeds:
+                out.append(f"speed_missing:{stage}")
+        if not getattr(options, "mission_stages", None):
+            out.append("mission_stages_missing")
         straight = getattr(options, "approach_straight_speed_mps", None)
         if straight is not None:
             speeds["approach_straight"] = straight
@@ -385,6 +413,7 @@ class SlamView:
     mode: str  # tracking | holding | warming_up | lost ...
     pose_reply_ns: int | None  # the newest reply that computed a new pose (a "skipped" reply does not count)
     hold_travel_m: float = 0.0
+    hold_mission_gen: int | None = None  # the mission generation whose transition began the hold
 
 
 @dataclass(frozen=True)
@@ -393,6 +422,8 @@ class SnapshotView:
     applied_correction: tuple  # the correction applied now
     newest_scan_ns: int | None  # the installed result's newest scan acquisition (not the snapshot's re-projection)
     installing: bool = False  # a new result asked after a correction change, not yet installed
+    installed_generation: int | None = None  # the correction generations (a release counts one): equal values of
+    applied_generation: int | None = None  # two generations are two corrections
 
 
 @dataclass(frozen=True)
@@ -418,6 +449,7 @@ class Evidence:
     snapshot: object  # -> SnapshotView
     operator_start_ok: object  # this session's, this lease's physical check for the next submit
     core_refusal: object  # real_auto_refusal on the core's safety state
+    mission_gen: object = None  # -> the running mission's generation (a hold must be this mission's)
 
 
 def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
@@ -450,15 +482,19 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
         return f"slam:mode_{sl.mode}"
     if sl.pose_reply_ns is None or now_ns - sl.pose_reply_ns > SLAM_MAX_AGE_S * 1e9:
         return "slam:stale"
-    if sl.mode == "holding" and sl.hold_travel_m > HOLD_MAX_M:
-        return "slam:hold_too_long"
+    if sl.mode == "holding":
+        if ev.mission_gen is None or sl.hold_mission_gen is None or sl.hold_mission_gen != ev.mission_gen(now_ns):
+            return "slam:hold_not_this_missions"
+        if sl.hold_travel_m > HOLD_MAX_M:
+            return "slam:hold_too_long"
     sn = ev.snapshot(now_ns)
     if sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9:
         return "snapshot:scan_stale"
     if stage == "submit" and not ev.operator_start_ok(now_ns):
         return "operator_start:unconfirmed"
     if sn.installing or sn.installed_correction is None \
-            or tuple(sn.installed_correction) != tuple(sn.applied_correction):
+            or tuple(sn.installed_correction) != tuple(sn.applied_correction) \
+            or sn.installed_generation is None or sn.installed_generation != sn.applied_generation:
         return "wait:snapshot_installing"
     return None
 
