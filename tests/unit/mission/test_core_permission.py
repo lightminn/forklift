@@ -295,3 +295,14 @@ def test_the_limit_past_the_watchdog_end_ends_the_mission():
     core, _, _, _ = make(limit=(0.0, "layer_latency_exceeded"))
     with pytest.raises(RuntimeError, match="layer_latency_exceeded"):
         core.permission(10.0, REAR, 0.0, 0.3, True, None)
+
+
+def test_at_50_hz_a_blocked_path_stops_after_0_30_s_too():
+    # real autonomy plan PR 2: the window is a time; the real entry point's options carry dt = 1/50 -> 15 ticks
+    core, obstacle, _, _ = make("transport", path_check=SimpleNamespace(blocked="occupied"))
+    core.options.dt = 1 / 50
+    for _ in range(14):
+        out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert out.allowed == 0.5 and obstacle["path_blocked_ticks"] == 14
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "occupied")

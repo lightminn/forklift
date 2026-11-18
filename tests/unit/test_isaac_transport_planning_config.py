@@ -739,7 +739,7 @@ def test_wheel_target_brakes_at_the_stopping_model_deceleration():
     # The e-stop and the plan D8 S4 safety stop (scheduled or near-field) cut it last.
     assert block.index('obstacle.get("permission_cap")') < block.index("if estop_holding or safety_hold or field_open_:")
     j = source.index('obstacle["permission_cap"] = ')  # the permission tick (M-a1 slice 3b)
-    assert j < source.index('if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:')
+    assert j < source.index('if obstacle["path_blocked_ticks"] >= ticks_for(self.PATH_BLOCKED_S, self._tick_dt()) and allowed > 0.0:')
     for text in (runner, source):
         assert 'obstacle.get("act")' not in text and 'obstacle["act"]' not in text
 
@@ -1023,7 +1023,7 @@ def test_obstacle_recovery_v4_an_escape_end_bypasses_docking_stall_and_failure()
     # An endpoint failure is the end only standing; rolling, it brakes (Codex implementation review P2-1).
     assert '(standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))' in window
     assert 'elif tracking.status == "failed":' in window and 'status="braking", speed_mps=0.0' in window
-    assert 'back_e["stand_ticks"] >= 120' in window
+    assert 'back_e["stand_ticks"] >= ticks_for(1.0, dt)' in window
     assert 'tracking = replace(tracking, status="arrived", speed_mps=0.0)' in window
 
 

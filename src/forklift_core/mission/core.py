@@ -288,6 +288,13 @@ def _refused_degenerate(result):
     return SimpleNamespace(**{**vars(result), **fields})
 
 
+def ticks_for(seconds: float, dt: float) -> int:
+    """A time window as a count of control ticks of length ``dt`` (sim-to-real plan 2026-11-18 PR 2): the core's
+    windows were tick counts at 120 Hz; Isaac (dt = 1/120) keeps every count it had (1 s -> 120, 0.30 s -> 36), the
+    real truck's 50 Hz loop gets the same times."""
+    return int(round(float(seconds) / float(dt)))
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -1665,7 +1672,7 @@ class MissionCore:
                 trace.pop("rear_stopped", None)
             # The N9 outcome: stopped and standing 1 s (Codex stage-1 P1-1, 2nd P2-4) ends the run.
             hooks.require(not ("stopped_s" in trace and t - trace["stopped_s"] >= 1.0), "sensor_silence_stopped")
-        if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
+        if obstacle["path_blocked_ticks"] >= ticks_for(self.PATH_BLOCKED_S, self._tick_dt()) and allowed > 0.0:
             allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         if abs(requested_speed) > allowed + 1e-9:
@@ -2249,7 +2256,7 @@ class MissionCore:
             if (
                 "end_s" in back_e or tracking.status == "arrived"
                 or (standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))
-                or back_e["stand_ticks"] >= 120
+                or back_e["stand_ticks"] >= ticks_for(1.0, dt)
             ):
                 tracking = replace(tracking, status="arrived", speed_mps=0.0)
             elif tracking.status == "failed":
@@ -2289,7 +2296,14 @@ class MissionCore:
     GOAL_CREEP_R1_REMAINING_M = 1e-6  # the "remaining 0" rules' own zero
     GOAL_CREEP_R1_NORMAL_M = 1e-5  # the pose at the progress point
     GOAL_CREEP_WINDOW_M = 8e-4  # commanded travel; team-spec counts with hysteresis read >= 0.599 of it (worst case)
-    GOAL_CREEP_WINDOW_TICKS = 120
+    def _tick_dt(self) -> float:
+        """The control tick for a window in a method not handed ``dt``: the options' (the runner always passes it;
+        the real entry point must). Options built by hand without one -- the unit tests' -- are Isaac's 120 Hz."""
+        dt = getattr(self.options, "dt", None)
+        return 1 / 120 if dt is None else float(dt)
+
+    PATH_BLOCKED_S = 0.30  # the permission's blocked path this long counts (36 ticks at 120 Hz)
+    GOAL_CREEP_WINDOW_S = 1.0  # at least this long of ticks with a nonzero command (120 ticks at 120 Hz)
     GOAL_CREEP_RATIO = 0.25
     # Plan 2026-11-17-goal-band-and-cusp-retry A: a watch that entered through the band only (the filter false) latches
     # only on a truck that hardly moved -- a slow convergence a curvature may still bend in is not taken
@@ -2299,7 +2313,7 @@ class MissionCore:
         """Plan 2026-10-24-goal-creep-stall G2, before the docking stop and stall rules read ``tracking``:
         "r1" -- 0 < remaining <= 1 um, the tracker's leg end filter true, the pose at the progress point, its output
         and the last applied wheel speed at the creep's level; "r2" -- 1 um < remaining, the filter true and, over the
-        last GOAL_CREEP_WINDOW_M of applied wheel travel (at least GOAL_CREEP_WINDOW_TICKS ticks, each with a nonzero
+        last GOAL_CREEP_WINDOW_M of applied wheel travel (at least GOAL_CREEP_WINDOW_S of ticks, each with a nonzero
         applied speed), odometry travel under GOAL_CREEP_RATIO of it: latched until the filter turns false or the
         tracker, leg or phase changes; None otherwise. Reads slam["applied_speed"] (the wheel speed the last physics
         step ran on) and slam["odom_speed"] (the odometry over that step); without the former (an older record) or
@@ -2345,12 +2359,13 @@ class MissionCore:
                 return None
         window = st["window"]
         window.append((abs(float(applied)) * dt, abs(float(slam.get("odom_speed", 0.0))) * dt))
-        while (len(window) > self.GOAL_CREEP_WINDOW_TICKS
+        window_ticks = ticks_for(self.GOAL_CREEP_WINDOW_S, dt)
+        while (len(window) > window_ticks
                and sum(a for a, _ in window) - window[0][0] >= self.GOAL_CREEP_WINDOW_M):
             window.pop(0)
         commanded, moved = sum(a for a, _ in window), sum(b for _, b in window)
         ratio = self.GOAL_CREEP_RATIO if reach else self.GOAL_CREEP_BAND_RATIO
-        if (len(window) >= self.GOAL_CREEP_WINDOW_TICKS and commanded >= self.GOAL_CREEP_WINDOW_M
+        if (len(window) >= window_ticks and commanded >= self.GOAL_CREEP_WINDOW_M
                 and moved < ratio * commanded):
             st["latched"] = True
             entry = {"phase": ms.phase, "time_s": float(t), "remaining_m": float(remaining),
@@ -2427,7 +2442,7 @@ class MissionCore:
             # than a stall replan (l8_measured seed 1 + N1: 37.5 mm lateral).
             tracking = replace(tracking, status="braking", speed_mps=0.0)
             ms.dock_stop_ticks = ms.dock_stop_ticks + 1 if slam["stop_now"] else 0
-            if ms.dock_stop_ticks >= 120:
+            if ms.dock_stop_ticks >= ticks_for(1.0, dt):
                 ms.dock_stop_ticks = 0
                 state.setdefault("docking_retries", []).append(
                     {"trigger": "a", "time_s": t, "counted": False, "round": d7_docking_.get("round", 1),
@@ -2490,9 +2505,9 @@ class MissionCore:
             )
         )
         if stalled and goal_heading_miss:
-            ms.slam_stall_ticks = max(ms.slam_stall_ticks, 119)
+            ms.slam_stall_ticks = max(ms.slam_stall_ticks, ticks_for(1.0, dt) - 1)
         ms.slam_stall_ticks = ms.slam_stall_ticks + 1 if stalled else 0
-        if ms.slam_stall_ticks >= 120 and d7_owned:
+        if ms.slam_stall_ticks >= ticks_for(1.0, dt) and d7_owned:
             # Plan D7c (c)/(d): after a docked straight or during a
             # re-approach, a retry instead of transport_recovery_after_docking.
             ms.slam_stall_ticks = 0
@@ -2504,7 +2519,7 @@ class MissionCore:
             slam["control"][-1][1:4] = rear.tolist()
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
-        elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < (
+        elif ms.slam_stall_ticks >= ticks_for(1.0, dt) and len(state["stall_replans"]) < (
                 getattr(options, "return_stall_budget", STALL_REPLANS) if ms.phase == "return_home" else STALL_REPLANS):
             # (--diag-return-stall-budget: the return's budget, a diagnostic; plan 2026-10-24-leg-end-budget-stands 3)
             # Stopped at the end of the path but outside the goal
@@ -2607,7 +2622,7 @@ class MissionCore:
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
         elif (
-            ms.slam_stall_ticks >= 120 and ms.slam_stall_ticks % 120 == 0
+            ms.slam_stall_ticks >= ticks_for(1.0, dt) and ms.slam_stall_ticks % ticks_for(1.0, dt) == 0
             and ms.phase == "return_home"
             and not (obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase)
             and trackers[ms.phase].remaining_to_goal_m() <= 1e-6
@@ -2841,7 +2856,7 @@ class MissionCore:
             and (
                 (tracking.status == "failed" and tracking.failure == "endpoint_heading"
                  and not tracking.off_path)
-                or ms.observe_stall_ticks >= 120
+                or ms.observe_stall_ticks >= ticks_for(1.0, dt)
             )
         ):
             # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
@@ -2874,7 +2889,7 @@ class MissionCore:
                     and tracking.failure == "endpoint_heading"
                     and not tracking.off_path
                 )
-                or ms.observe_stall_ticks >= 120
+                or ms.observe_stall_ticks >= ticks_for(1.0, dt)
             )
         )
         observe_miss = (
