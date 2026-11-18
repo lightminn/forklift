@@ -186,4 +186,167 @@ class AutoPermit:
             self._note(now_ns, "rearmed", control_gen=int(control_gen))
 
 
-__all__ = ["ARMING", "AutoPermit", "DISARMING", "DRIVING", "LATCHED", "OFF", "READY", "STOP_ACK_S", "STOP_PENDING"]
+# --- options (design 2026-11-19-real-assembly 3) ------------------------------------------------------------------
+REAL_DT = 1 / 50
+# the names the core reads with a default (getattr), each set explicitly on the real truck: on only what S10-A uses
+FEATURES_OFF = {
+    "near_tracking": None, "near_tracking_stop_at": None, "bottom_deck_check": "off", "pickup_prior": False,
+    "occupied_dumps": False, "low_clearance_guard": "off", "escape_start_release": "off", "start_band_release": "off",
+    "return_start_backoff_m": 0.0, "return_start_backoff_boxed": False, "restart_confirm_scans": 0,
+    "near_end_stand": "off", "near_capture_lower": "off", "cusp_replan_retry": "off", "adoption_zone": None,
+    "adoption_zone_check": "off", "return_stall_budget": None, "return_cusp_replans": 0, "permit_stop_replan": "off",
+    "observe_start_backoff": "off", "near_recapture_gap_m": None, "near_observe_arrival": "off",
+    "near_capture_refit": "off", "near_capture_redraw": "off", "near_capture_expected": "off",
+    "far_capture_expected": "off", "inject_round1_degenerate": False, "exit_prefix_exempt": "off",
+    "escape_presteer": "off", "docking_degenerate_continue": False, "d7_reapproach_hold": "off",
+    "d7_docking": None, "dwells": None, "safety_stops": None, "near_inject": None, "repeat_captures": 0,
+    "repeat_at_attempt": None, "extra_views": False, "goal_creep_band": "off",
+}
+REQUIRED_ON = {"real_vehicle": True, "grid_planning": True, "obstacle_act": True, "pocket_check": True,
+               "s10_stop_at_lift": True}
+
+
+def real_options(*, kinematics, planner_config, travel_config, scenario, speeds: dict, mission_stages, **extra):
+    """The real truck's options, every one named (design 3): dt 1/50, the S10-A switches on, the rest off."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(dt=REAL_DT, kinematics=kinematics, planner_config=planner_config,
+                           travel_config=travel_config, scenario=scenario, speeds=dict(speeds),
+                           mission_stages=tuple(mission_stages), observation_waypoints=[], pickup_bounds=None,
+                           observe_bounds=None, pickup_zone=None, return_to_pose=None, home_rear=None,
+                           **REQUIRED_ON, **FEATURES_OFF, **extra)
+
+
+def real_option_refusal(options, *, curvatures: dict, max_speed_mps: float) -> list[str]:
+    """Why these options may not run on the real truck (empty: they may). ``curvatures``: the caps actually handed to
+    the planner, the tracker and the preview, by name; they must agree and stay inside the steering map's symmetric
+    range min(-kmin, kmax). ``max_speed_mps``: S10-A's approved rear-axle cap; every phase speed within it."""
+    import math
+
+    out = []
+    if getattr(options, "dt", None) != REAL_DT:
+        out.append("dt_not_1_50")
+    for name, value in REQUIRED_ON.items():
+        if getattr(options, name, None) is not value:
+            out.append(f"{name}_not_{value}")
+    if getattr(options, "near_tracking", None) is not None:
+        out.append("near_tracking_on")
+    if getattr(options, "bottom_deck_check", "off") != "off":
+        out.append("bottom_deck_check_on")
+    kin = getattr(options, "kinematics", None)
+    if kin is None:
+        out.append("kinematics_missing")
+    else:
+        low, high = kin.cfg.steering.curvature_range
+        cap = min(-float(low), float(high))
+        values = {k: float(v) for k, v in curvatures.items()}
+        if len(set(values.values())) != 1:
+            out.append("curvature_caps_differ:" + ",".join(f"{k}={v:g}" for k, v in sorted(values.items())))
+        if any(v > cap + 1e-9 for v in values.values()):
+            out.append(f"curvature_beyond_steering:{cap:g}")
+    if not (isinstance(max_speed_mps, (int, float)) and math.isfinite(max_speed_mps) and max_speed_mps > 0):
+        out.append("max_speed_invalid")
+    else:
+        for name, v in sorted((getattr(options, "speeds", None) or {}).items()):
+            if not (math.isfinite(float(v)) and abs(float(v)) <= max_speed_mps + 1e-9):
+                out.append(f"speed_over_cap:{name}")
+        straight = getattr(options, "approach_straight_speed_mps", None)
+        if straight is not None and abs(float(straight)) > max_speed_mps + 1e-9:
+            out.append("speed_over_cap:approach_straight")
+    return out
+
+
+# --- S10-A settings (design 2) -------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class S10AConfig:
+    map_id: str | None
+    start_rear: tuple  # the taped start (map x, y, yaw at the rear axle)
+    bounds: tuple  # the test field (x_min, x_max, y_min, y_max)
+    pallet_id: str
+    pallet_kind: str
+    pallet_depth_m: float | None
+    pallet_width_m: float | None
+    destination_id: str
+    destination: tuple  # the planning destination (S10 stops at the lift; the planner needs the whole mission)
+    wait_pose: tuple
+    max_speed_mps: float
+    check_pallet_pose: tuple | None  # a reference pallet pose the dry assembly plans once to
+
+
+def load_s10a(path) -> S10AConfig:
+    import yaml
+
+    with open(path) as f:
+        d = yaml.safe_load(f)
+    return S10AConfig(map_id=d.get("map_id"), start_rear=tuple(d["start_rear"]), bounds=tuple(d["bounds"]),
+                      pallet_id=str(d["pallet"]["id"]), pallet_kind=str(d["pallet"]["kind"]),
+                      pallet_depth_m=d["pallet"].get("depth_m"), pallet_width_m=d["pallet"].get("width_m"),
+                      destination_id=str(d["destination"]["id"]), destination=tuple(d["destination"]["pose"]),
+                      wait_pose=tuple(d["wait_pose"]), max_speed_mps=float(d["max_speed_mps"]),
+                      check_pallet_pose=None if d.get("check_pallet_pose") is None else tuple(d["check_pallet_pose"]))
+
+
+def s10a_refusal(cfg: S10AConfig, loaded_map_id: str | None) -> list[str]:
+    """Structural problems of the S10-A settings (the dry assembly's exit 2)."""
+    out = []
+    if not cfg.map_id:
+        out.append("map_id_unset")
+    elif loaded_map_id != cfg.map_id:
+        out.append(f"map_id_mismatch:{loaded_map_id}")
+    for name in ("pallet_depth_m", "pallet_width_m"):
+        if getattr(cfg, name) is None:
+            out.append(f"{name}_unset")
+    x0, x1, y0, y1 = (float(v) for v in cfg.bounds)
+    if not (x0 < x1 and y0 < y1):
+        out.append("bounds_invalid")
+    for name, pose in (("start_rear", cfg.start_rear), ("destination", cfg.destination), ("wait_pose", cfg.wait_pose)):
+        if not (x0 <= float(pose[0]) <= x1 and y0 <= float(pose[1]) <= y1):
+            out.append(f"{name}_outside_bounds")
+    return out
+
+
+# --- readiness (design 6) ------------------------------------------------------------------------------------------
+@dataclass
+class Evidence:
+    """What readiness reads, each a callable of now_ns supplied by the executor (4c wires them to new STATEs, the
+    host's events, the SLAM link and the layer). ``*_reason`` callables return None when fine."""
+
+    worker_ok: object
+    layer_ok: object
+    baseline_ok: object
+    link_reason: object  # freshness, build and clock rate (the common MCU checks)
+    measurement_reason: object  # steering, lift (finite with a valid origin), the counts' fault bit
+    odometry_continuous: object
+    slam_reason: object  # None: a fresh reply that computed a pose; the stage decides tracking or holding
+    snapshot_reason: object  # None: installed for the applied correction, its newest scan fresh; "installing" waits
+    operator_start_ok: object  # this session's, this lease's physical check for the next submit
+    core_refusal: object  # real_auto_refusal on the core's safety state
+
+
+def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
+    """The first unmet readiness condition (design 6), or None. ``stage``: "submit" (a submit and the adoption) or
+    "drive" (arming and driving). A snapshot being installed after a correction change answers "installing"
+    (the output closes, no latch)."""
+    if stage not in ("submit", "drive"):
+        raise ValueError(stage)
+    checks = (
+        ("worker", lambda: None if ev.worker_ok(now_ns) else "dead"),
+        ("layer", lambda: None if ev.layer_ok(now_ns) else "missing"),
+        ("baseline", lambda: None if ev.baseline_ok(now_ns) else "missing"),
+        ("link", lambda: ev.link_reason(now_ns)),
+        ("measurement", lambda: ev.measurement_reason(now_ns)),
+        ("odometry", lambda: None if ev.odometry_continuous(now_ns) else "cut"),
+        ("slam", lambda: ev.slam_reason(now_ns, stage)),
+        ("snapshot", lambda: ev.snapshot_reason(now_ns)),
+        ("core", lambda: ev.core_refusal(now_ns)),
+        ("operator_start", lambda: None if stage == "drive" or ev.operator_start_ok(now_ns) else "unconfirmed"),
+    )
+    for name, check in checks:
+        why = check()
+        if why is not None:
+            return f"{name}:{why}"
+    return None
+
+
+__all__ = ["ARMING", "AutoPermit", "Evidence", "FEATURES_OFF", "REAL_DT", "REQUIRED_ON", "S10AConfig", "auto_ready_refusal",
+           "load_s10a", "real_option_refusal", "real_options", "s10a_refusal", "DISARMING", "DRIVING", "LATCHED", "OFF", "READY", "STOP_ACK_S", "STOP_PENDING"]
