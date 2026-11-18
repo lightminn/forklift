@@ -29,10 +29,13 @@ int main(void)
     /* IPROPI on the ADC pins is unprotected on schematic V1.0: outputs stay locked by default
        (plan 5 precondition, lead decision Q6); only the gated commissioning build opens them
        (motor output design 2). */
-#if defined(FW_MOTOR_OUTPUT_OPEN)
-    CHECK(!c->outputs_locked && c->commission_build);
+#if defined(FW_ESTOP_WAIVED)
+    /* V1.0 e-stop waiver (plan 2026-11-18): the open normal build, behind both records. */
+    CHECK(!c->outputs_locked && !c->commission_build && c->estop_waived);
+#elif defined(FW_MOTOR_OUTPUT_OPEN)
+    CHECK(!c->outputs_locked && c->commission_build && !c->estop_waived);
 #else
-    CHECK(c->outputs_locked);
+    CHECK(c->outputs_locked && !c->estop_waived);
 #endif
 #if defined(FW_BUILD_hil)
     CHECK(c->hil_plant && !c->commission_build); /* board design 9 */
@@ -59,12 +62,17 @@ int main(void)
     bad.steer.zero_offset_rad = 0.0f;
     CHECK(drive_config_valid(&bad));
     CHECK(!board_config_valid(&bad));
-    /* Outputs open only in a commissioning configuration (motor output design 2). */
+    /* Outputs open only in a commissioning configuration (motor output design 2) or a normal one
+       with the user's e-stop waiver (plan 2026-11-18). */
     drive_config open = *c;
     open.outputs_locked = false;
     open.commission_build = false;
     open.hil_plant = false;
+    open.estop_waived = false;
     CHECK(!board_config_valid(&open));
+    open.estop_waived = true;
+    CHECK(board_config_valid(&open));
+    open.estop_waived = false;
     open.commission_build = true;
     CHECK(board_config_valid(&open));
     return FW_TEST_RESULT();

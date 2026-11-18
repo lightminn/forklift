@@ -262,7 +262,8 @@ def test_board_configuration_test_is_built(firmware_build):
         assert f"test_weact_h743_board_config_{kind}" in result.stdout
 
 
-@pytest.mark.parametrize("kind", ["normal", "commission", "hil", "iwdg_stall", "commission_open"])
+@pytest.mark.parametrize("kind", ["normal", "commission", "hil", "iwdg_stall", "commission_open",
+                                  "normal_waived"])
 def test_every_board_build_is_refused_by_the_real_executor(firmware_build, kind):
     """Board design 3.6, 9; lead condition 2026-11-12 for the IWDG stall test build: each locked
     build's STATE.flags (from the core, under the board's own configuration) carries outputs_locked,
@@ -275,7 +276,7 @@ def test_every_board_build_is_refused_by_the_real_executor(firmware_build, kind)
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
     flags = StateFlag(int(re.search(r"STATE flags 0x([0-9a-f]{2})", result.stdout).group(1), 16))
-    assert bool(flags & StateFlag.OUTPUTS_LOCKED) == (kind != "commission_open")
+    assert bool(flags & StateFlag.OUTPUTS_LOCKED) == (kind not in ("commission_open", "normal_waived"))
     assert drive_refusal(flags, Client.REAL) is not None  # the open build: as a commissioning build
     if kind in ("normal", "iwdg_stall"):
         assert drive_refusal(flags, Client.REAL) == "outputs_locked"
@@ -283,3 +284,7 @@ def test_every_board_build_is_refused_by_the_real_executor(firmware_build, kind)
         assert flags & StateFlag.HIL_PLANT and drive_refusal(flags, Client.HIL) is None
     if kind == "commission_open":  # motor output design 2: open, and refused as commissioning
         assert drive_refusal(flags, Client.REAL) == "commission_build"
+    if kind == "normal_waived":  # plan 2026-11-18: the flags alone still say no e-stop pin; the host
+        # lets it drive only from the product string's waiver= token (console's part)
+        assert flags & StateFlag.ESTOP_UNWIRED and not flags & StateFlag.COMMISSION_BUILD
+        assert drive_refusal(flags, Client.REAL) == "estop_unwired"

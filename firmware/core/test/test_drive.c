@@ -654,6 +654,21 @@ static void config_validation(void)
     c = make_config();
     c.period_us = 999; /* contract 3.3: at most one KTH count per axis per ms */
     CHECK(!drive_config_valid(&c));
+    /* The e-stop waiver only means something for an open normal build without a pin. */
+    c = make_config();
+    c.estop_wired = false;
+    c.estop_waived = true;
+    CHECK(drive_config_valid(&c));
+    c.estop_wired = true;
+    CHECK(!drive_config_valid(&c));
+    c.estop_wired = false;
+    c.outputs_locked = true;
+    CHECK(!drive_config_valid(&c));
+    c.outputs_locked = false;
+    c.commission_build = true;
+    c.commission_duty_max = 0.15f;
+    c.commission_time_ms = 2000;
+    CHECK(!drive_config_valid(&c));
     c = make_config();
     c.ipropi_ohm = NAN;
     CHECK(!drive_config_valid(&c));
@@ -988,6 +1003,13 @@ static void mod_hil(drive_config *c)
     c->hil_plant = true;
 }
 
+/* V1.0 e-stop waiver (plan 2026-11-18): open normal build, no pin, a committed user record. */
+static void mod_waived(drive_config *c)
+{
+    c->estop_wired = false;
+    c->estop_waived = true;
+}
+
 static void mod_commission(drive_config *c)
 {
     c->estop_wired = false;
@@ -1012,6 +1034,13 @@ static void v2_build_bits_and_estop_unwired(void)
     CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
     drive_fill_state(&d, &s);
     CHECK_EQ_U(s.flags & 0xF0u, DRIVE_STATE_ESTOP_UNWIRED);
+
+    boot_with(mod_waived); /* outputs open, no pin, waived by the user's record: allowed */
+    send(arm_msg(1, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    drive_fill_state(&d, &s);
+    CHECK_EQ_U(s.flags & 0xF0u, DRIVE_STATE_ESTOP_UNWIRED); /* the pin is still missing */
 
     boot_with(mod_locked); /* locked outputs: allowed */
     send(arm_msg(1, d.boot_id, echo_now()));
