@@ -631,8 +631,9 @@ class MissionCore:
                     return SimpleNamespace(stop=True, rear=rear)
                 deck_["permitted"] = {"time_s": t, **at_}
             # a known start inserts only under a check built from its first frame (design 2026-11-19 2; Codex 4a P2)
-            hooks.require(not (self.options.pocket_check and self.operator_target() and self.pocket.get("check") is None),
-                          "pocket_check_missing_at_insert")
+            if (self.operator_target() and getattr(self.options, "pocket_check", False)
+                    and self.pocket.get("check") is None):
+                hooks.require(False, "pocket_check_missing_at_insert")  # no hook call on any other arrival
             transition("insert", t)
         elif ms.phase == "insert":
             state["insertion_error"] = {
