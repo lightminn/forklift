@@ -12136,7 +12136,7 @@ def validate_before_isaac(args: argparse.Namespace) -> dict:
     try:
         settings = apply_tyre_contact(settings, getattr(args, "tyre_contact", "off"))
     except ValueError as exc:
-        require(False, str(exc))
+        require(False, f"--settings: {exc}")
     from pallet_mass import resolve_pallet_mass
 
     # plan 2026-11-01-pallet-mass: a table by shape is read for this run's pallet (its geometry's version), and every
