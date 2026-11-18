@@ -105,8 +105,10 @@ class TargetsBook:
             changes["put_down_pose"] = pose
         if basis is not None:
             changes.update(basis=basis, uncertainty_m=uncertainty_m)
-            if self.pallets[pallet_id].state == "unlocated" and basis == "recognised":
-                changes["state"] = "available"  # 4d-2b-2: an observation places a pallet lost in a field recovery
+            if self.pallets[pallet_id].state == "unlocated" and basis in ("recognised", "operator_input"):
+                # 4d-2b-2: an observation places a pallet lost in a field recovery -- or the operator registers its
+                # map pose again, tape-measured (design 2026-11-19-known-pallet-start 3)
+                changes["state"] = "available"
         return self._set(pallet_id, **changes)
 
     def update_destination(self, destination_id: str, pose: Pose) -> bool:

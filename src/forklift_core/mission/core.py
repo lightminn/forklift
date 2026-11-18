@@ -552,7 +552,9 @@ class MissionCore:
         # seen, and a later SLAM correction cannot slide the truck against the
         # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
         if ms.phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
-            self.hold_slam(t, held_frame_pallet=True)  # the capture's estimate was made with this correction
+            # the capture's estimate was made with this correction; an operator's map pose was not (design
+            # 2026-11-19-known-pallet-start 1: it stays a map estimate at the end release)
+            self.hold_slam(t, held_frame_pallet=not self.operator_target())
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": hooks.slam_error()}
             )
@@ -4120,14 +4122,13 @@ class MissionCore:
             max_cross_track_error_m=0.35,
         )
 
-    def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
-        """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
-        and (the first far observation under SLAM) the near leg to the near capture point."""
-        state, slam, hooks, options = self.state, self.slam, self.hooks, self.options
-        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+    def _install_mission_plan(self, plans, planning_trace: list, planning_start: float) -> None:
+        """A mission plan's records, its followers and the paths shown and saved -- shared by the observation's
+        install and the known-pallet start (design 2026-11-19-known-pallet-start 1; moved as it was)."""
+        state, hooks, options = self.state, self.hooks, self.options
+        paths, trackers = self.paths, self.trackers
         mission_stages = options.mission_stages
         require, wall, path_record, record_json = hooks.require, hooks.wall, hooks.path_record, hooks.record_json
-        final_straight_prefix = hooks.final_straight_prefix
         apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
         state.setdefault("planning_traces", []).append(
             planning_trace
@@ -4165,6 +4166,13 @@ class MissionCore:
                     for k, v in paths.items()
                 }
             ))
+
+    def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
+        """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
+        and (the first far observation under SLAM) the near leg to the near capture point."""
+        state, slam, hooks, geometry = self.state, self.slam, self.hooks, self.geometry
+        require, final_straight_prefix, paths = hooks.require, hooks.final_straight_prefix, self.paths
+        self._install_mission_plan(plans, planning_trace, planning_start)
         near_leg = None
         if slam is not None and "near_capture" not in state:
             # Plan v3.6: see the pallet again where the final
@@ -6127,7 +6135,8 @@ class MissionCore:
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
             tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
-                           basis="recognised", uncertainty_m=RECOGNISED_MARGIN_M)  # the observation placed it (D10)
+                           basis="operator_input" if self.operator_target() else "recognised",
+                           uncertainty_m=RECOGNISED_MARGIN_M)  # the observation (or the operator) placed it (D10)
 
     def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds
@@ -8583,7 +8592,50 @@ class MissionCore:
         self.prepare_attempts += 1
         self._request("prepare", job, payload, t, rear, self._applied_now(),
                       {"inputs": inputs, "targets_revision": self.targets.revision,
-                       "loaded": job == "loaded_delivery"})
+                       "loaded": job == "loaded_delivery", "known": job == "plan_transport"})
+
+    def known_pallet_refusal(self) -> str | None:
+        """Why a known-pallet start may not be asked (design 2026-11-19-known-pallet-start 1): near tracking or the
+        bottom-deck check configured, no SLAM or SLAM neither tracking nor holding, no plan worker, or the obstacle
+        layer's known pallets on (an operator's pose is map-fixed; the layer keeps its rectangles in odometry -- the
+        real layer runs them off). None: it may."""
+        slam, obstacle = self.slam, self.obstacle
+        if self.near is not None:
+            return "near_tracking"
+        if self.bottom_deck_on():
+            return "bottom_deck_check"
+        if slam is None:
+            return "no_slam"
+        if slam["tracker"].mode not in ("tracking", "holding"):
+            return "slam_invalid"
+        if self.jobs is None:
+            return "no_worker"
+        if obstacle is not None and obstacle["layer"].known_enabled:
+            return "known_pallets_on"
+        return None
+
+    def known_pallet_request(self, t: float, rear, inputs: dict, pickup) -> str | None:
+        """A submit whose pallet pose the operator entered in map coordinates (design 2026-11-19-known-pallet-start 1;
+        the S10 case A): the mission plan asked from where the truck stands, as an observation's would be (the worker's
+        ``plan_transport`` on the mission's inputs), through the preparation. ``pickup``: (x, y, yaw) in the map --
+        recorded as operator_input, never as recognition. Refused (the submit fails, the reason returned) under
+        ``known_pallet_refusal``; None when asked."""
+        hooks, options, cmds = self.hooks, self.options, self.commands
+        why = self.known_pallet_refusal()
+        if why is not None:
+            if cmds.status == "accepted":
+                cmds.terminate("failed", t, f"prepare:known:{why}")
+            return why
+        target = PlanningPose(float(pickup[0]), float(pickup[1]), float(pickup[2]))
+        inputs = {**inputs, "known_pickup": [target.x_m, target.y_m, target.yaw_rad]}
+        kwargs_ = dict(geometry=self.geometry, target_pickup=target,
+                       start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+                       return_to=inputs["wait_pose"], pickup_bounds=inputs["pickup_bounds"],
+                       travel_config=options.travel_config, trace=[], **hooks.grid_kwargs("mission", target),
+                       **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(), **self._exit_prefix_kwargs())
+        self.prepare_request(t, rear, inputs, {"args": (hooks.grid_world(inputs["scenario"]), options.planner_config),
+                                               "kwargs": kwargs_}, job="plan_transport")
+        return None
 
     def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
         """A preparation's answer: dropped and asked again once when what it rests on changed (not counted as a
@@ -8599,6 +8651,8 @@ class MissionCore:
             return  # the runner asks again on the next tick (preparing, nothing pending)
         if not ok:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
+        elif p.ctx.get("known") and not value["result"].success:
+            cmds.terminate("failed", t, f"prepare:known:{value['result'].status}")  # a planned failure is no plan
         elif loaded and not value["result"].success:
             for rec_ in value.get("return_backoffs", ()):  # R6: the refused attempts too
                 note_return_backoff(self.state, "mission_plan", rec_, False)
@@ -8613,7 +8667,10 @@ class MissionCore:
             except Exception as exc:  # noqa: BLE001 -- the preparation fails, the session goes on (P4)
                 cmds.terminate("failed", t, f"prepare:reference:{exc}")
                 return
-            if loaded:
+            if p.ctx.get("known"):
+                self.start_known_pallet_mission(t, value["result"], p.ctx["inputs"], ready,
+                                                trace=value.get("trace") or [], planning_start=p.wall)
+            elif loaded:
                 self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
                 recs_ = list(value.get("return_backoffs", ()))
                 for i_, rec_ in enumerate(recs_):  # R6, after the adoption's baseline reset
@@ -9615,6 +9672,49 @@ class MissionCore:
         self.commands.adopt()
         if getattr(options, "occupied_dumps", False):
             self._occupied_new_mission(t, getattr(plan, "transport", plan))  # a loaded start's plan holds its transport
+        if self.record_start_digest:
+            self.start_digest = start_digest(self)
+
+    def operator_target(self) -> bool:
+        """This mission's pallet pose is the operator's map-fixed entry (design 2026-11-19-known-pallet-start 1)."""
+        return self.state.get("planning_target_source") == "operator_input"
+
+    def start_known_pallet_mission(self, t: float, plan, inputs: dict, ready=None, *, trace=(),
+                                   planning_start: float | None = None) -> None:
+        """A known-pallet start's adoption (design 2026-11-19-known-pallet-start 1, the pair of ``start_mission``): the
+        baseline back, the mission's inputs into the options (no observation waypoints, no adoption zone), the
+        operator's pallet pose recorded as operator_input, the mission plan installed as an observation's would be
+        (``_install_mission_plan``, none of the observation's own after-steps), the runner's own start, then the
+        approach entered through ``transition`` -- its SLAM hold keeps the pallet a map estimate."""
+        ms, state, options, pocket, hooks = self.ms, self.state, self.options, self.pocket, self.hooks
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = []
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = None  # no recognition to check against a zone
+        ms.lift_command = float(hooks.lift_position())
+        x_, y_, yaw_ = (float(v) for v in inputs["known_pickup"])
+        pocket["planning_pickup"] = PlanningPose(x_, y_, yaw_)
+        if self.obstacle is not None:
+            # what grid_kwargs("mission", target) sets after an observation (the plans see this pallet); the same
+            # object as the planned pickup, as there
+            self.obstacle["pickup_estimate"] = pocket["planning_pickup"]
+        state["planning_target_source"] = "operator_input"
+        state["perception"] = {"perception_pickup_estimate_m": {"x_m": x_, "y_m": y_, "yaw_rad": yaw_},
+                               "source": "operator_input, not recognition"}
+        self.paths.clear()
+        getattr(self.trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        self.trackers.clear()
+        self._install_mission_plan(plan, list(trace), hooks.wall() if planning_start is None else planning_start)
+        hooks.live_mission_start(t, inputs, plan, ready)
+        self.commands.adopt()
+        self.transition("approach", t)
+        state["transitions"][-1]["mission_id"] = self.commands.mission_id
+        if getattr(options, "occupied_dumps", False):
+            self._occupied_new_mission(t, getattr(plan, "approach", plan))
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 
