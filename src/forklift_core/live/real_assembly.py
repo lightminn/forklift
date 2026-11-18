@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from types import SimpleNamespace
 
 from forklift_core.live import real_autonomy as ra
@@ -32,6 +32,11 @@ ADOPTION_HOOKS = frozenset({
 })
 
 
+# The first-frame stand and the S10 end at the lift read these (design 4); the follow / command / permission tick's
+# table is 4c's, with its loop.
+STAND_AND_END_HOOKS = frozenset({"known_pocket_frame", "build_pocket_check", "require", "operator_check",
+                                 "lift_position"})
+
 # Optional hooks those paths try and the real truck leaves absent (the core falls back to its default).
 ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix"})
 
@@ -46,9 +51,13 @@ class RealHooks:
     check (fresh obstacle evidence -- raises to fail the preparation), ``started(t, inputs, plan, ready)`` the
     executor's own start, ``record(name, obj)`` the run folder."""
 
-    def __init__(self, *, lift_m, odom_base, ready, started, record, occupancy=None) -> None:
+    def __init__(self, *, lift_m, odom_base, ready, started, record, geometry, occupancy=None,
+                 pocket_frame=None, pocket_check=None, operator=None) -> None:
         self._lift_m, self._odom_base, self._ready, self._started = lift_m, odom_base, ready, started
-        self._record, self._occupancy = record, occupancy
+        self._record, self._occupancy, self._geometry = record, occupancy, geometry
+        # PR 7 supplies the depth frame and the check (until then: no frame -- 4a's wait ends the mission); the
+        # console supplies the operator's answers (PR 5)
+        self._pocket_frame, self._pocket_check, self._operator = pocket_frame, pocket_check, operator
 
     def require(self, ok, reason):
         if not ok:
@@ -67,9 +76,28 @@ class RealHooks:
         return replace(scenario, props=())  # a grid plan sees no prior props (the plan audit table)
 
     def grid_kwargs(self, kind=None, target=None, *args, **kwargs) -> dict:
-        """Side-effect free at a preparation (design 4; Codex 4a P3): the layer's occupancy as it is, never a write
-        to the core's pickup estimate (the adoption sets it)."""
-        return {} if self._occupancy is None else {"occupancy": self._occupancy()}
+        """Side-effect free at a preparation (design 4; Codex 4a P3): the layer's occupancy as it is and, for a
+        mission plan, the target pallet as the approach's obstacle -- the operator's registered pose, not the
+        scenario's reference one (Codex 4b P2) -- never a write to the core's pickup estimate."""
+        from forklift_core.planning.geometry import Rectangle
+
+        out = {} if self._occupancy is None else {"occupancy": self._occupancy()}
+        if kind == "mission" and target is not None:
+            g = self._geometry
+            out["pickup_obstacle"] = Rectangle(float(target.x_m), float(target.y_m), g.pallet_depth_m,
+                                               g.pallet_width_m, float(target.yaw_rad))
+        return out
+
+    def known_pocket_frame(self):
+        return None if self._pocket_frame is None else self._pocket_frame()
+
+    def build_pocket_check(self, axis_yaw, rear, base, stamp_s=None, rear_at_stamp=None):
+        if self._pocket_check is None:
+            raise RealRequireFailed("pocket_check_unavailable")  # PR 7: the D435i depth path
+        self._pocket_check(axis_yaw, rear, base, stamp_s, rear_at_stamp)
+
+    def operator_check(self, request):
+        return None if self._operator is None else self._operator(request)
 
     def live_mission_ready(self, t, inputs):
         return self._ready(t, inputs)
@@ -127,7 +155,9 @@ def assemble(*, cfg: ra.S10AConfig, loaded_map_id, geometry, pallet_geometry, ki
     options = ra.real_options(kinematics=kinematics, planner_config=planner_config, travel_config=travel_config,
                               scenario=scenario, speeds=speeds, mission_stages=mission_stages,
                               **(extra_options or {}))
-    refusals = ra.real_option_refusal(options, curvatures=curvatures, max_speed_mps=cfg.max_speed_mps)
+    refusals = ra.real_option_refusal(options, tracker_curvature_inv_m=settings["tracker_curvature_inv_m"],
+                                      preview_curvature_inv_m=curvatures.get("preview"),
+                                      max_speed_mps=cfg.max_speed_mps)
     if refusals:
         raise AssemblyRefused(refusals)
     state = {"transitions": [], "planning_wall_s": 0.0, "paths": {}}
@@ -148,6 +178,63 @@ def assemble(*, cfg: ra.S10AConfig, loaded_map_id, geometry, pallet_geometry, ki
     core.jobs = jobs
     core.baseline = MissionBaseline.capture(core)
     return core
+
+
+@dataclass(frozen=True)
+class FrozenSubmit:
+    """What an approved S10 submit fixes (design 2): the pallet's registered pose and the targets revision, used for
+    the request and every re-request."""
+
+    pallet_id: str
+    destination_id: str
+    pose: tuple
+    targets_revision: int
+
+
+def freeze_submit(core: MissionCore, pallet_id: str, destination_id: str, targets_revision: int) -> FrozenSubmit:
+    """At the submit's approval: the operator_input pose as it is now, with the submit's revision."""
+    why = s10_submit_refusal(core, pallet_id)
+    if why is not None:
+        raise ValueError(why)
+    p = core.targets.pallets[pallet_id].pose
+    return FrozenSubmit(pallet_id, destination_id, (float(p.x_m), float(p.y_m), float(p.yaw_rad)),
+                        int(targets_revision))
+
+
+def known_request(core: MissionCore, t: float, rear, inputs: dict, frozen: FrozenSubmit):
+    """The preparation's request (and re-request) on the frozen submit."""
+    return core.known_pallet_request(t, rear, inputs, frozen.pose, targets_revision=frozen.targets_revision)
+
+
+class OperatorStart:
+    """The operator's physical check before a submit (design 2, 13): empty forks, out of any pocket, the lift down.
+    Bound to the session, the lease that gave it and the next submit only; any motion, a lease change, a link loss or
+    a field recovery voids it."""
+
+    def __init__(self, session_epoch: int) -> None:
+        self.session_epoch = int(session_epoch)
+        self._given: tuple | None = None
+        self.voided: str | None = None
+
+    def confirm(self, session_epoch: int, lease_id: str) -> bool:
+        if int(session_epoch) != self.session_epoch:
+            return False
+        self._given, self.voided = (int(session_epoch), str(lease_id)), None
+        return True
+
+    def void(self, reason: str) -> None:
+        if self._given is not None:
+            self._given, self.voided = None, reason
+
+    def ok(self, lease_id: str | None) -> bool:
+        return self._given is not None and lease_id is not None and self._given[1] == str(lease_id)
+
+    def take(self, lease_id: str | None) -> bool:
+        """A submit uses it up (one submit only)."""
+        if not self.ok(lease_id):
+            return False
+        self._given, self.voided = None, "used"
+        return True
 
 
 def register_pallet(core: MissionCore, pallet_id: str, pose) -> int:
@@ -171,12 +258,16 @@ def assembly_record(core: MissionCore, cfg: ra.S10AConfig, curvatures: dict) -> 
     opts = vars(core.options)
     kin = opts["kinematics"]
     low, high = kin.cfg.steering.curvature_range
-    return {"options": {k: (v if isinstance(v, (bool, int, float, str, type(None))) else type(v).__name__)
+    return {"options": {k: (v if isinstance(v, (bool, int, float, str, type(None), tuple, list, dict)) else repr(v))
                         for k, v in sorted(opts.items())},
             "adoption_hooks": sorted(ADOPTION_HOOKS), "settings": dict(core.settings),
-            "curvature_caps": dict(curvatures), "steering_curvature_range": [low, high],
+            "curvature_caps": {"planner": opts["planner_config"].curvature_limit_inv_m,
+                               "travel": opts["travel_config"].curvature_limit_inv_m,
+                               "tracker": core.settings.get("tracker_curvature_inv_m"), **dict(curvatures)},
+            "steering_curvature_range": [low, high],
             "steering_rate_rad_s": kin.steering_rate_rad_s, "s10a": {k: v for k, v in vars(cfg).items()}}
 
 
-__all__ = ["ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "AssemblyRefused", "RealHooks", "RealRequireFailed", "assemble", "assembly_record",
+__all__ = ["ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "FrozenSubmit", "OperatorStart", "STAND_AND_END_HOOKS",
+           "freeze_submit", "known_request", "AssemblyRefused", "RealHooks", "RealRequireFailed", "assemble", "assembly_record",
            "register_pallet", "s10_submit_refusal", "scenario_of"]

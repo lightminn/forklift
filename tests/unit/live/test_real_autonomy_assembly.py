@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,16 +17,19 @@ LOW, HIGH = KIN.cfg.steering.curvature_range
 CAP = min(-LOW, HIGH)
 
 
+PLAN = SimpleNamespace(curvature_limit_inv_m=CAP)
+
+
 def options(**over):
-    o = ra.real_options(kinematics=KIN, planner_config="PC", travel_config="TC", scenario="SC",
+    o = ra.real_options(kinematics=KIN, planner_config=PLAN, travel_config=PLAN, scenario="SC",
                         speeds={"approach": 0.1, "insert": 0.05}, mission_stages=("approach", "insert"))
     for k, v in over.items():
         setattr(o, k, v)
     return o
 
 
-def refusal(o, curv=None, cap=0.15):
-    return ra.real_option_refusal(o, curvatures=curv or {"planner": CAP, "tracker": CAP, "preview": CAP},
+def refusal(o, tracker=CAP, preview=CAP, cap=0.15):
+    return ra.real_option_refusal(o, tracker_curvature_inv_m=tracker, preview_curvature_inv_m=preview,
                                   max_speed_mps=cap)
 
 
@@ -51,15 +55,22 @@ def test_each_required_value_missing_or_wrong_refuses(over, why):
     assert why in refusal(options(**over))
 
 
-def test_the_curvature_caps_must_agree_and_stay_inside_the_steering_map():
-    assert any(r.startswith("curvature_caps_differ") for r in refusal(options(), {"planner": CAP, "tracker": CAP / 2}))
-    assert any(r.startswith("curvature_beyond_steering") for r in refusal(options(), {"planner": CAP * 1.1,
-                                                                                         "tracker": CAP * 1.1}))
+def test_the_curvature_caps_are_read_from_the_real_configs_and_must_agree_inside_the_steering_map():
+    assert any(r.startswith("curvature_caps_differ") for r in refusal(options(), tracker=CAP / 2))
+    other = SimpleNamespace(curvature_limit_inv_m=CAP / 2)
+    assert any(r.startswith("curvature_caps_differ") for r in refusal(options(travel_config=other)))
+    wide = SimpleNamespace(curvature_limit_inv_m=CAP * 1.1)
+    assert any(r.startswith("curvature_beyond_steering") for r in refusal(
+        options(planner_config=wide, travel_config=wide), tracker=CAP * 1.1, preview=CAP * 1.1))
+    assert "curvature_invalid:preview" in refusal(options(), preview=None)
+    neg = SimpleNamespace(curvature_limit_inv_m=-CAP)
+    assert "curvature_invalid:planner" in refusal(options(planner_config=neg))
 
 
-def test_speeds_stay_within_the_s10_cap():
+def test_speeds_are_finite_and_within_the_s10_cap():
     assert "speed_over_cap:approach" in refusal(options(speeds={"approach": 0.3}))
     assert "speed_over_cap:approach_straight" in refusal(options(approach_straight_speed_mps=0.2))
+    assert "speed_over_cap:approach_straight" in refusal(options(approach_straight_speed_mps=float("nan")))
     assert "max_speed_invalid" in refusal(options(), cap=float("nan"))
 
 
@@ -73,11 +84,17 @@ def test_the_repository_s10a_template_loads_and_refuses_until_its_field_values_a
     assert "start_rear_outside_bounds" in ra.s10a_refusal(replace(good, start_rear=(50.0, 0.0, 0.0)), "hall-1")
 
 
+NOW = 10 * 10**9
+
+
 def evidence(**over):
     ok = dict(worker_ok=lambda n: True, layer_ok=lambda n: True, baseline_ok=lambda n: True,
-              link_reason=lambda n: None, measurement_reason=lambda n: None, odometry_continuous=lambda n: True,
-              slam_reason=lambda n, stage: None, snapshot_reason=lambda n: None, operator_start_ok=lambda n: True,
-              core_refusal=lambda n: None)
+              link_reason=lambda n: None,
+              measurement=lambda n: ra.MeasurementView(True, True, True, True),
+              odometry_continuous=lambda n: True,
+              slam=lambda n: ra.SlamView("tracking", n - 10**8),
+              snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**8),
+              operator_start_ok=lambda n: True, core_refusal=lambda n: None)
     ok.update(over)
     return ra.Evidence(**ok)
 
@@ -86,26 +103,38 @@ def evidence(**over):
     ({"worker_ok": lambda n: False}, "worker:dead"),
     ({"layer_ok": lambda n: False}, "layer:missing"),
     ({"baseline_ok": lambda n: False}, "baseline:missing"),
-    ({"link_reason": lambda n: "clock_rate_unverified"}, "link:clock_rate_unverified"),
-    ({"measurement_reason": lambda n: "lift_origin"}, "measurement:lift_origin"),
-    ({"odometry_continuous": lambda n: False}, "odometry:cut"),
-    ({"slam_reason": lambda n, stage: "stale"}, "slam:stale"),
-    ({"snapshot_reason": lambda n: "installing"}, "snapshot:installing"),
     ({"core_refusal": lambda n: "relocalize_required"}, "core:relocalize_required"),
+    ({"link_reason": lambda n: "clock_rate_unverified"}, "link:clock_rate_unverified"),
+    ({"measurement": lambda n: ra.MeasurementView(True, True, False, True)}, "measurement:lift_origin"),
+    ({"odometry_continuous": lambda n: False}, "odometry:cut"),
+    ({"slam": lambda n: ra.SlamView("holding", n)}, "slam:mode_holding"),
+    ({"slam": lambda n: ra.SlamView("tracking", n - 10**9)}, "slam:stale"),
+    ({"slam": lambda n: ra.SlamView("tracking", None)}, "slam:stale"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**9)}, "snapshot:scan_stale"),
     ({"operator_start_ok": lambda n: False}, "operator_start:unconfirmed"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n)}, "wait:snapshot_installing"),
 ])
 def test_each_readiness_condition_refuses_a_submit_by_its_reason(over, why):
-    assert ra.auto_ready_refusal(1, "submit", evidence(**over)) == why
+    assert ra.auto_ready_refusal(NOW, "submit", evidence(**over)) == why
+
+
+def test_a_latch_reason_is_never_hidden_by_an_installing_snapshot():
+    """Codex 4b P2: a recovery lock and a snapshot being installed at once -- the lock is what the permit sees."""
+    ev = evidence(core_refusal=lambda n: "recovery_required",
+                  snapshot=lambda n: ra.SnapshotView(None, (0.1, 0.0, 0.0), n, installing=True))
+    why = ra.auto_ready_refusal(NOW, "drive", ev)
+    assert why == "core:recovery_required" and ra.latches(why)
+    assert not ra.latches("wait:snapshot_installing") and not ra.latches(None)
+
+
+def test_driving_accepts_the_missions_hold_within_its_travel():
+    assert ra.auto_ready_refusal(NOW, "drive", evidence(slam=lambda n: ra.SlamView("holding", n, 0.5))) is None
+    assert ra.auto_ready_refusal(NOW, "drive", evidence(
+        slam=lambda n: ra.SlamView("holding", n, 2.0))) == "slam:hold_too_long"
 
 
 def test_all_met_is_ready_and_the_operator_check_is_the_submits_only():
-    assert ra.auto_ready_refusal(1, "submit", evidence()) is None
-    assert ra.auto_ready_refusal(1, "drive", evidence(operator_start_ok=lambda n: False)) is None
-
-
-def test_the_slam_check_is_told_the_stage():
-    seen = []
-    ra.auto_ready_refusal(1, "drive", evidence(slam_reason=lambda n, stage: seen.append(stage)))
-    assert seen == ["drive"]
+    assert ra.auto_ready_refusal(NOW, "submit", evidence()) is None
+    assert ra.auto_ready_refusal(NOW, "drive", evidence(operator_start_ok=lambda n: False)) is None
     with pytest.raises(ValueError):
-        ra.auto_ready_refusal(1, "arm", evidence())
+        ra.auto_ready_refusal(NOW, "arm", evidence())

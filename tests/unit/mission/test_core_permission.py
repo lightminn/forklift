@@ -430,3 +430,26 @@ def test_moving_again_ends_the_still_span():
     core.slam["stop_now"] = True
     out = core.permission(10.3, REAR, 0.0, 0.4, True, None)  # the span starts again at 10.3; the 10.25 frame is older
     assert out.why == "pocket_first_frame:stale" and not built
+
+
+def test_a_still_span_broken_outside_the_lead_does_not_survive_into_it():
+    """Codex 4b P2: stop_now false while still farther than the lead must end the span too."""
+    core, pocket, asked, built = known_start([None, frame(10.25)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.2, REAR, 0.0, 0.4, True, None)  # the span begins at 10.2 inside the lead
+    remaining(core, 2.0)
+    core.slam["stop_now"] = False
+    core.permission(10.22, REAR, 0.0, 0.4, True, None)  # moving, outside the lead
+    assert "first_frame_still_since" not in pocket
+    remaining(core, 1.1)
+    core.slam["stop_now"] = True
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)  # a new span from 10.3: the 10.25 frame is older
+    assert out.why == "pocket_first_frame:stale" and not built
+
+
+def test_the_loops_still_span_start_is_used_when_given():
+    core, pocket, asked, built = known_start([frame(10.15)], truth_speed=0.0, velocity=(0.0, 0.0))
+    core.slam["still_since"] = 10.1  # the loop saw the stop begin at 10.1 on the frames' clock
+    remaining(core, 1.1)
+    core.permission(10.3, REAR, 0.0, 0.4, True, None)
+    assert built and built[0][2] == 10.15

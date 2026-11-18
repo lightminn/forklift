@@ -46,16 +46,21 @@ def cfg():
     return replace(base, map_id="hall-1", pallet_depth_m=0.6, pallet_width_m=0.4, check_pallet_pose=(3.0, 0.0, 0.0))
 
 
-def build(**over):
+GEOM = SyntheticMissionGeometry()
+PLAN = SimpleNamespace(curvature_limit_inv_m=CAP)
+
+
+def build(hooks_kw=None, **over):
     started, records = [], []
     hooks = Recording(lift_m=lambda: 0.003, odom_base=lambda: (0.0, 0.0, 0.0), ready=lambda t, inputs: None,
-                      started=lambda *a: started.append(a), record=lambda *a: records.append(a))
+                      started=lambda *a: started.append(a), record=lambda *a: records.append(a), geometry=GEOM,
+                      **(hooks_kw or {}))
     layer = SimpleNamespace(known_enabled=False, refresh=lambda *a, **k: None,
                             permission=SimpleNamespace(path_check=None))
-    kw = dict(cfg=cfg(), loaded_map_id="hall-1", geometry=SyntheticMissionGeometry(), pallet_geometry=None,
-              kinematics=KIN, settings=SETTINGS, planner_config="PC", travel_config="TC",
+    kw = dict(cfg=cfg(), loaded_map_id="hall-1", geometry=GEOM, pallet_geometry=None,
+              kinematics=KIN, settings=SETTINGS, planner_config=PLAN, travel_config=PLAN,
               speeds={name: 0.1 for name in STAGES}, mission_stages=STAGES,
-              curvatures={"planner": CAP, "tracker": CAP, "preview": CAP}, layer=layer, applied=(0.0, 0.0, 0.0),
+              curvatures={"preview": CAP}, layer=layer, applied=(0.0, 0.0, 0.0),
               slam_tracker=Tracker(), jobs=FakeJobs(), hooks=hooks,
               extra_options={"cusp_heading_hold_rad": 0.05, "cusp_heading_hold_phases": ("return_home",),
                              "tracker_profile": None})
@@ -89,7 +94,7 @@ def test_the_pallet_is_no_pick_until_the_operator_registers_its_map_pose():
     ({"settings": {k: v for k, v in SETTINGS.items() if k != "tracker_curvature_inv_m"}},
      "setting_missing:tracker_curvature_inv_m"),
     ({"speeds": {name: 0.5 for name in STAGES}}, "speed_over_cap:approach"),
-    ({"curvatures": {"planner": CAP, "tracker": CAP / 2}}, "curvature_caps_differ"),
+    ({"curvatures": {"preview": CAP / 2}}, "curvature_caps_differ"),
 ])
 def test_a_structural_problem_refuses_the_assembly(over, why):
     with pytest.raises(asm.AssemblyRefused) as err:
@@ -109,10 +114,15 @@ def test_the_known_preparation_and_adoption_read_only_the_adoption_hooks():
     core.commands.queue(Submit("P-S10", "D-S10", rev))
     core.commands.apply(10.0)
     assert core.commands.status == "accepted"
+    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
     inputs = {"scenario": core.options.scenario, "wait_pose": "WAIT", "pickup_bounds": None, "pickup_zone": None}
     core.slam["stop_now"] = True  # the loop's still span (4c sets it from new samples)
     hooks.read.clear()
-    assert core.known_pallet_request(11.0, np.array([0.0, 0.0, 0.0]), inputs, PALLET, targets_revision=rev) is None
+    assert asm.known_request(core, 11.0, np.array([0.0, 0.0, 0.0]), inputs, frozen) is None
+    kw = core.jobs.submitted[-1][1]["kwargs"]
+    ob = kw["pickup_obstacle"]  # the registered pose, not the scenario's reference pallet (Codex 4b P2)
+    assert (ob.x_m, ob.y_m, ob.yaw_rad) == PALLET and ob.length_m == GEOM.pallet_depth_m
+    assert core.obstacle.get("pickup_estimate") is None  # the preparation wrote nothing
     core.jobs.answers[core.pending.job] = (True, {"result": MissionPlan(), "trace": []})
     core.job_hold(12.0, np.array([0.0, 0.0, 0.0]), 0.0, False)
     assert core.commands.status == "running" and core.ms.phase == "approach" and started
@@ -148,3 +158,55 @@ def test_the_dry_record_names_the_options_the_hooks_and_the_caps():
     rec = asm.assembly_record(core, cfg(), {"planner": CAP})
     assert rec["options"]["dt"] == 1 / 50 and rec["options"]["near_tracking"] is None
     assert rec["adoption_hooks"] == sorted(asm.ADOPTION_HOOKS) and rec["s10a"]["map_id"] == "hall-1"
+
+
+def test_the_submit_is_frozen_with_its_registered_pose_and_revision():
+    core, hooks, _ = build()
+    with pytest.raises(ValueError):
+        asm.freeze_submit(core, "P-S10", "D-S10", core.targets.revision)  # not registered yet
+    rev = asm.register_pallet(core, "P-S10", PALLET)
+    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
+    asm.register_pallet(core, "P-S10", (3.3, 0.2, 0.0))  # changed afterwards
+    assert frozen.pose == PALLET and frozen.targets_revision == rev
+
+
+def test_the_operator_start_check_is_one_lease_one_submit_and_voided_by_motion():
+    op = asm.OperatorStart(7)
+    assert not op.confirm(8, "L1")  # another session's
+    assert op.confirm(7, "L1") and op.ok("L1") and not op.ok("L2")
+    op.void("motion")
+    assert not op.ok("L1") and op.voided == "motion"
+    op.confirm(7, "L1")
+    assert op.take("L1") and not op.ok("L1") and not op.take("L1")  # one submit only
+
+
+def test_the_first_frame_stand_and_the_s10_end_read_only_their_hooks():
+    answers = []
+    core, hooks, _ = build(hooks_kw={"operator": lambda request: answers.pop(0) if answers else None})
+    from forklift_core.mission.commands import Submit as _S
+
+    rev = asm.register_pallet(core, "P-S10", PALLET)
+    core.commands.queue(_S("P-S10", "D-S10", rev))
+    core.commands.apply(10.0)
+    frozen = asm.freeze_submit(core, "P-S10", "D-S10", rev)
+    core.slam["stop_now"] = True
+    inputs = {"scenario": core.options.scenario, "wait_pose": "WAIT", "pickup_bounds": None, "pickup_zone": None}
+    asm.known_request(core, 11.0, np.array([0.0, 0.0, 0.0]), inputs, frozen)
+    core.jobs.answers[core.pending.job] = (True, {"result": MissionPlan(), "trace": []})
+    core.job_hold(12.0, np.array([0.0, 0.0, 0.0]), 0.0, False)
+    core.trackers["approach"] = SimpleNamespace(remaining_to_goal_m=lambda: 0.9)
+    hooks.read.clear()
+    assert core._known_first_frame(13.0, (0.0, 0.0, 0.0), None) == (0.0, "pocket_first_frame:none")  # noqa: SLF001
+    with pytest.raises(asm.RealRequireFailed, match="pocket_first_frame"):  # no frame until PR 7: 5 s, then the end
+        core._known_first_frame(18.5, (0.0, 0.0, 0.0), None)  # noqa: SLF001
+    core.ms.phase, core.ms.phase_started = "lift", 20.0
+    core.commands.status = "running"
+    core.cargo.relation, core.cargo.load = "constrained", "acquiring"
+    hooks._lift_m = lambda: SETTINGS["lift_target_m"]  # noqa: SLF001
+    core.lift_and_timers(25.0, 0.02)  # the request
+    answers.append((1, "confirm"))
+    core.lift_and_timers(25.1, 0.02)
+    assert core.commands.end_reason == "s10_lifted" and core.take_s10_stop() == 25.1
+    assert hooks.read <= asm.STAND_AND_END_HOOKS | asm.ADOPTION_HOOKS, sorted(
+        hooks.read - asm.STAND_AND_END_HOOKS - asm.ADOPTION_HOOKS)
+    assert {"known_pocket_frame", "operator_check", "lift_position", "require"} <= hooks.read

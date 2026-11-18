@@ -28,28 +28,41 @@ class PermitEvent:
 
 
 class AutoPermit:
-    """One AUTO permit for the real truck. ``host`` is the ``McuLinkHost``, ``port`` the ``RealPlantPort``.
-    ``stop_confirmed(now_ns)`` says the truck was seen standing on new samples after the last drive settled (the
-    evidence the executor supplies, design 6)."""
+    """One AUTO permit for the real truck (design 7). ``host``: the ``McuLinkHost``; ``port``: the ``RealPlantPort``.
 
-    def __init__(self, host, port, *, stop_confirmed, stop_ack_s: float = STOP_ACK_S) -> None:
-        self.host, self.port, self.stop_confirmed = host, port, stop_confirmed
+    Evidence the executor supplies (4c wires it to the transmitter and new STATEs):
+    - ``outstanding(now_ns) -> ("settled", t_ns) | ("pending", None) | ("unknown", None)``: every earlier command,
+      a zero-wheel lift and a frame still in the transmitter included, settled since ``t_ns`` (4b: until 4c tracks the
+      whole transmit path, "unknown" refuses);
+    - ``stop_since(now_ns) -> (t_ns, boot_id) | None``: the truck seen standing on new samples since ``t_ns``.
+    Callbacks bound once (``bind``): ``transmit()``, ``arbiter_stop(reason)`` -- the arbiter STOPPED, skipping a
+    second boundary in the same tick --, ``collect(reason)`` -- the running mission ended and collected."""
+
+    def __init__(self, host, port, *, outstanding, stop_since, stop_ack_s: float = STOP_ACK_S) -> None:
+        self.host, self.port = host, port
+        self.outstanding, self.stop_since = outstanding, stop_since
         self.stop_ack_ns = int(stop_ack_s * 1e9)
         self.state = OFF
         self.reason: str | None = None
         self.events: list[PermitEvent] = []
-        self._stop_seq: int | None = None
-        self._stop_since_ns: int | None = None
-        self._stop_boot_gen: tuple | None = None
+        self._transmit = self._arbiter_stop = self._collect = None
+        self._collected = True  # nothing to collect before a mission runs
+        self._stop: dict | None = None  # the control stop: seq, boot/arm generation, written time
+        self._disarm_asked_ns: int | None = None
+        self.session_started = False
+
+    def bind(self, *, transmit, arbiter_stop, collect) -> None:
+        self._transmit, self._arbiter_stop, self._collect = transmit, arbiter_stop, collect
 
     # --- what the rest reads ------------------------------------------------------------------------------------
     @property
     def armed(self) -> bool:
-        """The watches' input (design 7): the arbiter drops ``armed`` on entering AUTO, so they read this."""
+        """The watches' input (design 7; the arbiter drops ``armed`` on entering AUTO). After a latch it stays on
+        until a DISARMED is seen -- with no STATE at all (a lost link) too: unknown is not disarmed."""
         if self.state in (ARMING, READY, DRIVING, STOP_PENDING, DISARMING):
             return True
-        s = self.host.state  # a latch's DISARM not yet seen: the MCU may still be armed
-        return self.state == LATCHED and s is not None and s.mode != Mode.DISARMED
+        s = self.host.state
+        return self.state == LATCHED and (s is None or s.mode != Mode.DISARMED)
 
     def drive_allowed(self) -> bool:
         """A mission DRIVE may be submitted (and only then)."""
@@ -58,12 +71,24 @@ class AutoPermit:
     def _note(self, now_ns: int, event: str, reason: str | None = None, **detail) -> None:
         self.events.append(PermitEvent(int(now_ns), event, reason, detail))
 
+    # --- the session's start (design 13: always from the stopped side) -------------------------------------------
+    def start_session(self, now_ns: int) -> None:
+        """The executor's first act: a DISARM, whatever the last executor left; ``session_started`` once a fresh
+        DISARMED answered it (``tick``)."""
+        self.port.new_control_generation()
+        self.host.request_disarm(now_ns)
+        self._disarm_asked_ns = int(now_ns)
+        self._try(self._transmit)
+        self._note(now_ns, "session_disarm")
+
     # --- arming ---------------------------------------------------------------------------------------------------
     def adopted(self, now_ns: int, *, pre_arm_refusal: str | None) -> bool:
-        """The core adopted the submitted mission's plan (``adopted_id == mission_id``, running, approach) and the
-        lease and generation were checked again by the caller: the control generation moves, the queue goes, and
-        the MCU ARM is asked once. ``pre_arm_refusal``: the pre-ARM checks' first failure (design 6: DISARMED, a
-        fresh stop, the old commands settled). Returns whether the ARM was asked."""
+        """The core adopted the submitted mission's plan and the caller checked the lease and generation again: the
+        control generation moves, the queue goes, and the MCU ARM is asked once. ``pre_arm_refusal``: the pre-ARM
+        checks' first failure (design 6). Returns whether the ARM was asked; a refusal latches (the full order)."""
+        self._collected = False  # a mission runs from here: any latch collects it, once
+        if not self.session_started:
+            pre_arm_refusal = pre_arm_refusal or "session_not_started"
         if self.state != OFF:
             self.latch(now_ns, f"adopted_in_{self.state.lower()}")
             return False
@@ -85,81 +110,110 @@ class AutoPermit:
             self.state = DRIVING
             self._note(now_ns, "driving")
 
-    def tick(self, now_ns: int, transmit=None, arbiter_stop=None, collect=None) -> None:
-        """Each loop cycle after the host's STATEs and ``host.tick``: ARMING -> READY on the host's ready, the
-        authorization's loss latches, the control stop's confirmation and its DISARM run their course."""
+    def mission_ended(self, now_ns: int, reason: str) -> None:
+        """Any mission end other than S10's control stop (cancel, pause -- S10-A stops there --, failure, the first
+        frame's wait running out) leaves the MCU authority through the common latch (design 13)."""
+        if self.state in (ARMING, READY, DRIVING):
+            self.latch(now_ns, f"mission_end:{reason}")
+        else:
+            self._collected = True  # ended without an AUTO authority: nothing left to collect here
+
+    def tick(self, now_ns: int) -> None:
+        """Each loop cycle after the host's STATEs and ``host.tick``."""
         host = self.host
+        s, rx = host.state, host.state_rx_ns
+        if not self.session_started and self._disarm_asked_ns is not None:
+            if s is not None and s.mode == Mode.DISARMED and rx is not None and rx > self._disarm_asked_ns:
+                self.session_started = True
+                self._note(now_ns, "session_ready")
         if self.state == ARMING:
             if host.ready:
                 self.state = READY
                 self._note(now_ns, "ready")
             elif not host.arming and not host.authorized:
-                self.latch(now_ns, "arm_failed", transmit, arbiter_stop, collect)
+                self.latch(now_ns, "arm_failed")
         elif self.state in (READY, DRIVING):
             if not host.authorized:
-                self.latch(now_ns, "authorization_revoked", transmit, arbiter_stop, collect)
+                self.latch(now_ns, "authorization_revoked")
         elif self.state == STOP_PENDING:
-            s = host.state
-            if s is not None and self._seq_echoed(s) and (s.boot_id, s.arm_gen) == self._stop_boot_gen:
-                self._note(now_ns, "control_stop_confirmed", seq=self._stop_seq)
-                self._disarm(now_ns, "s10_stopped", transmit)
-            elif now_ns - self._stop_since_ns > self.stop_ack_ns or not host.authorized:
-                self._disarm(now_ns, "control_stop_unconfirmed", transmit)
+            stop = self._stop
+            if stop["written_ns"] is not None and s is not None and rx is not None and rx > stop["written_ns"] \
+                    and int(s.last_rx_seq) == stop["seq"] and (s.boot_id, s.arm_gen) == stop["boot_gen"] \
+                    and rx - stop["written_ns"] <= self.stop_ack_ns:
+                self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
+                self._disarm(now_ns, "s10_stopped")
+            elif not host.authorized or now_ns - (stop["written_ns"] or stop["since_ns"]) > self.stop_ack_ns:
+                self._disarm(now_ns, "control_stop_unconfirmed")
         elif self.state == DISARMING:
-            s = host.state
-            if s is not None and s.mode == Mode.DISARMED and host.health(now_ns).fresh:
+            if s is not None and s.mode == Mode.DISARMED and rx is not None and rx > self._disarm_asked_ns:
                 self.state = LATCHED
                 self._note(now_ns, "disarmed")
 
-    def _seq_echoed(self, s) -> bool:
-        # the 16-bit seq the MCU last received is this frame's or a later one (mod 2^16, within half the space)
-        return ((int(s.last_rx_seq) - int(self._stop_seq)) & 0xFFFF) < 0x8000
-
     # --- stops ------------------------------------------------------------------------------------------------------
-    def latch(self, now_ns: int, reason: str, transmit=None, arbiter_stop=None, collect=None) -> None:
-        """Any latch reason (design 7): (1) unsent candidates and earlier requests dropped, (2) a DISARM queued and a
-        transmit tried, (3) the arbiter STOPPED (``arbiter_stop(reason)``; the caller skips a second boundary in the
-        same tick), (4) the running mission collected (``collect(reason)``). A latch while latched keeps the first
-        reason."""
+    @staticmethod
+    def _try(fn, *args):
+        if fn is None:
+            return None
+        try:
+            fn(*args)
+        except Exception as exc:  # noqa: BLE001 -- the next step still runs; the caller sees it after
+            return exc
+        return None
+
+    def latch(self, now_ns: int, reason: str) -> None:
+        """Any latch reason (design 7). The permit closes first, then (1) the queue and the intent dropped, (2) a
+        DISARM queued and a transmit tried, (3) the arbiter STOPPED, (4) the running mission collected -- each runs
+        whatever the one before raised, and the first error is raised after all four. A latch while latched retries
+        the DISARM only; the mission is collected once."""
         first = self.state != LATCHED
         if first:
             self.reason = reason
-        self.port.new_control_generation()  # (1) the queue and the intent go
-        self.host.request_disarm(now_ns)  # (2)
-        if transmit is not None:
-            transmit()
         self.state = LATCHED
-        self._stop_seq = None
+        self._stop = None
         self._note(now_ns, "latched", reason, first=first)
-        if arbiter_stop is not None:
-            arbiter_stop(reason)  # (3)
-        if collect is not None:
-            collect(reason)  # (4): last -- its failure cannot undo (1)-(3)
+        errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
+        self._disarm_asked_ns = int(now_ns)
+        errors.append(self._try(self._transmit))
+        if first:
+            errors.append(self._try(self._arbiter_stop, reason))
+        if not self._collected:
+            self._collected = True
+            errors.append(self._try(self._collect, reason))
+        error = next((e for e in errors if e is not None), None)
+        if error is not None:
+            raise error
 
     def control_stop(self, now_ns: int, seq: int) -> None:
         """S10's end (design 7): the caller made the stop frame (wheels 0, the measured lift) on a new generation and
-        queued it as ``seq``; it is confirmed by a STATE of this boot and arm generation naming the seq within
-        STOP_ACK_S, then DISARM. The normal recovery lock does not drop it."""
+        queued it as ``seq``; ``stop_written(seq, written_ns)`` tells when the transmitter finished writing it. It is
+        confirmed by a STATE received after that write, naming exactly that u16 seq, of the same boot and arm
+        generation, within STOP_ACK_S of the write -- then DISARM. The normal recovery lock does not drop it."""
         s = self.host.state
-        self._stop_seq, self._stop_since_ns = int(seq) & 0xFFFF, int(now_ns)
-        self._stop_boot_gen = None if s is None else (s.boot_id, s.arm_gen)
+        self._stop = {"seq": int(seq) & 0xFFFF, "since_ns": int(now_ns), "written_ns": None,
+                      "boot_gen": None if s is None else (s.boot_id, s.arm_gen)}
+        self._collected = True  # S10's end is collected by the core's own terminate (no common latch)
         self.state = STOP_PENDING
-        self._note(now_ns, "control_stop", seq=self._stop_seq)
+        self._note(now_ns, "control_stop", seq=self._stop["seq"])
 
-    def _disarm(self, now_ns: int, reason: str, transmit=None) -> None:
+    def stop_written(self, seq: int, written_ns: int) -> None:
+        if self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
+            self._stop["written_ns"] = int(written_ns)
+
+    def _disarm(self, now_ns: int, reason: str) -> None:
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        if transmit is not None:
-            transmit()
+        self._disarm_asked_ns = int(now_ns)
+        self._try(self._transmit)
         self.reason = self.reason or reason
         self.state = DISARMING
+        self._stop = None
         self._note(now_ns, "disarm", reason)
 
     # --- rearm --------------------------------------------------------------------------------------------------
     def rearm_refusal(self, now_ns: int) -> str | None:
         """The real conditions a rearm passes before its ACK (design 7; the arbiter's ``rearm_refusal``): a fresh
-        DISARMED with no faults on this boot, no earlier command that may still act -- a queued or written DRIVE of
-        any kind not yet expired counts, since a zero-wheel lift is not tracked yet (4c) -- and a stop seen after."""
+        DISARMED with no faults, every earlier command settled (unknown refuses), and a stop seen on this boot since
+        they settled."""
         if self.state not in (LATCHED, OFF):
             return f"permit_{self.state.lower()}"
         host = self.host
@@ -172,18 +226,23 @@ class AutoPermit:
             return "mcu_faults"
         if self.port.older_nonzero_may_act(now_ns):
             return "old_command_may_act"
-        traffic = host.drive_traffic()
-        if traffic["pending_nonzero_expiries"] or any(w["expires_ns"] > now_ns for w in traffic["written"]):
-            return "outstanding_unknown"
-        if not self.stop_confirmed(now_ns):
+        kind, settled_ns = self.outstanding(now_ns)
+        if kind != "settled":
+            return f"outstanding_{kind}"
+        stop = self.stop_since(now_ns)
+        if stop is None:
             return "stop_unconfirmed"
+        if stop[1] != s.boot_id or stop[0] < settled_ns:
+            return "stop_before_settled"
         return None
 
     def rearmed(self, now_ns: int, control_gen: int) -> None:
-        """The arbiter's ``on_rearmed``: the latch goes with the arbiter's STOPPED -> PAUSED, nowhere else."""
+        """The arbiter's ``on_rearmed``: the latch goes with the arbiter's STOPPED -> PAUSED, nowhere else; the old
+        reason stays in the events only."""
         if self.state == LATCHED:
             self.state = OFF
-            self._note(now_ns, "rearmed", control_gen=int(control_gen))
+            self._note(now_ns, "rearmed", self.reason, control_gen=int(control_gen))
+            self.reason = None
 
 
 # --- options (design 2026-11-19-real-assembly 3) ------------------------------------------------------------------
@@ -217,11 +276,15 @@ def real_options(*, kinematics, planner_config, travel_config, scenario, speeds:
                            **REQUIRED_ON, **FEATURES_OFF, **extra)
 
 
-def real_option_refusal(options, *, curvatures: dict, max_speed_mps: float) -> list[str]:
-    """Why these options may not run on the real truck (empty: they may). ``curvatures``: the caps actually handed to
-    the planner, the tracker and the preview, by name; they must agree and stay inside the steering map's symmetric
-    range min(-kmin, kmax). ``max_speed_mps``: S10-A's approved rear-axle cap; every phase speed within it."""
+def real_option_refusal(options, *, tracker_curvature_inv_m, preview_curvature_inv_m, max_speed_mps: float) -> list[str]:
+    """Why these options may not run on the real truck (empty: they may). The curvature caps are the ones actually
+    handed over -- the planner's and the travel planner's ``curvature_limit_inv_m`` read from their configs, the
+    tracker's setting and the preview's -- and must be positive, equal and inside the steering map's symmetric range
+    min(-kmin, kmax). ``max_speed_mps``: S10-A's approved rear-axle cap; every phase speed finite and within it."""
     import math
+
+    def finite_pos(v):
+        return isinstance(v, (int, float)) and math.isfinite(v) and v > 0
 
     out = []
     if getattr(options, "dt", None) != REAL_DT:
@@ -234,25 +297,31 @@ def real_option_refusal(options, *, curvatures: dict, max_speed_mps: float) -> l
     if getattr(options, "bottom_deck_check", "off") != "off":
         out.append("bottom_deck_check_on")
     kin = getattr(options, "kinematics", None)
+    caps = {"planner": getattr(getattr(options, "planner_config", None), "curvature_limit_inv_m", None),
+            "travel": getattr(getattr(options, "travel_config", None), "curvature_limit_inv_m", None),
+            "tracker": tracker_curvature_inv_m, "preview": preview_curvature_inv_m}
+    for name, v in sorted(caps.items()):
+        if not finite_pos(v):
+            out.append(f"curvature_invalid:{name}")
     if kin is None:
         out.append("kinematics_missing")
-    else:
+    elif all(finite_pos(v) for v in caps.values()):
         low, high = kin.cfg.steering.curvature_range
         cap = min(-float(low), float(high))
-        values = {k: float(v) for k, v in curvatures.items()}
-        if len(set(values.values())) != 1:
-            out.append("curvature_caps_differ:" + ",".join(f"{k}={v:g}" for k, v in sorted(values.items())))
-        if any(v > cap + 1e-9 for v in values.values()):
+        if len({float(v) for v in caps.values()}) != 1:
+            out.append("curvature_caps_differ:" + ",".join(f"{k}={float(v):g}" for k, v in sorted(caps.items())))
+        if any(float(v) > cap + 1e-9 for v in caps.values()):
             out.append(f"curvature_beyond_steering:{cap:g}")
-    if not (isinstance(max_speed_mps, (int, float)) and math.isfinite(max_speed_mps) and max_speed_mps > 0):
+    if not finite_pos(max_speed_mps):
         out.append("max_speed_invalid")
     else:
-        for name, v in sorted((getattr(options, "speeds", None) or {}).items()):
-            if not (math.isfinite(float(v)) and abs(float(v)) <= max_speed_mps + 1e-9):
-                out.append(f"speed_over_cap:{name}")
+        speeds = dict(getattr(options, "speeds", None) or {})
         straight = getattr(options, "approach_straight_speed_mps", None)
-        if straight is not None and abs(float(straight)) > max_speed_mps + 1e-9:
-            out.append("speed_over_cap:approach_straight")
+        if straight is not None:
+            speeds["approach_straight"] = straight
+        for name, v in sorted(speeds.items()):
+            if not (isinstance(v, (int, float)) and math.isfinite(v) and 0 < abs(float(v)) <= max_speed_mps + 1e-9):
+                out.append(f"speed_over_cap:{name}")
     return out
 
 
@@ -306,47 +375,98 @@ def s10a_refusal(cfg: S10AConfig, loaded_map_id: str | None) -> list[str]:
 
 
 # --- readiness (design 6) ------------------------------------------------------------------------------------------
+SLAM_MAX_AGE_S = 0.5  # a reply that computed a pose, at most this old (provisional, PR 7 measures the link)
+HOLD_MAX_M = 1.5  # the travel a mission's hold may cover before it is no longer trusted (provisional)
+SCAN_MAX_AGE_S = 0.35  # the installed snapshot's newest scan (the real layer's free_max_age_s)
+
+
+@dataclass(frozen=True)
+class SlamView:
+    mode: str  # tracking | holding | warming_up | lost ...
+    pose_reply_ns: int | None  # the newest reply that computed a new pose (a "skipped" reply does not count)
+    hold_travel_m: float = 0.0
+
+
+@dataclass(frozen=True)
+class SnapshotView:
+    installed_correction: tuple | None  # the correction the installed layer snapshot was made for
+    applied_correction: tuple  # the correction applied now
+    newest_scan_ns: int | None  # the installed result's newest scan acquisition (not the snapshot's re-projection)
+    installing: bool = False  # a new result asked after a correction change, not yet installed
+
+
+@dataclass(frozen=True)
+class MeasurementView:
+    steering_ok: bool
+    lift_ok: bool
+    lift_origin_ok: bool  # the lift reading has a valid origin and range, not just a finite value
+    counts_ok: bool  # the wheel counts' fault bit clear
+
+
 @dataclass
 class Evidence:
-    """What readiness reads, each a callable of now_ns supplied by the executor (4c wires them to new STATEs, the
-    host's events, the SLAM link and the layer). ``*_reason`` callables return None when fine."""
+    """What readiness reads (design 6), each a callable of now_ns the executor supplies (4c wires them to new
+    STATEs, the host's events, the SLAM link and the layer); every time is on the host's monotonic clock."""
 
     worker_ok: object
     layer_ok: object
     baseline_ok: object
-    link_reason: object  # freshness, build and clock rate (the common MCU checks)
-    measurement_reason: object  # steering, lift (finite with a valid origin), the counts' fault bit
+    link_reason: object  # None, or why the link is not fit: freshness, build, clock rate (the common MCU checks)
+    measurement: object  # -> MeasurementView
     odometry_continuous: object
-    slam_reason: object  # None: a fresh reply that computed a pose; the stage decides tracking or holding
-    snapshot_reason: object  # None: installed for the applied correction, its newest scan fresh; "installing" waits
+    slam: object  # -> SlamView
+    snapshot: object  # -> SnapshotView
     operator_start_ok: object  # this session's, this lease's physical check for the next submit
     core_refusal: object  # real_auto_refusal on the core's safety state
 
 
 def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
     """The first unmet readiness condition (design 6), or None. ``stage``: "submit" (a submit and the adoption) or
-    "drive" (arming and driving). A snapshot being installed after a correction change answers "installing"
-    (the output closes, no latch)."""
+    "drive" (arming and driving). Every latch reason comes before a wait: a reason starting "wait:" (a snapshot
+    being installed after a correction change) closes the output without a latch (``latches``)."""
     if stage not in ("submit", "drive"):
         raise ValueError(stage)
-    checks = (
-        ("worker", lambda: None if ev.worker_ok(now_ns) else "dead"),
-        ("layer", lambda: None if ev.layer_ok(now_ns) else "missing"),
-        ("baseline", lambda: None if ev.baseline_ok(now_ns) else "missing"),
-        ("link", lambda: ev.link_reason(now_ns)),
-        ("measurement", lambda: ev.measurement_reason(now_ns)),
-        ("odometry", lambda: None if ev.odometry_continuous(now_ns) else "cut"),
-        ("slam", lambda: ev.slam_reason(now_ns, stage)),
-        ("snapshot", lambda: ev.snapshot_reason(now_ns)),
-        ("core", lambda: ev.core_refusal(now_ns)),
-        ("operator_start", lambda: None if stage == "drive" or ev.operator_start_ok(now_ns) else "unconfirmed"),
-    )
-    for name, check in checks:
-        why = check()
-        if why is not None:
-            return f"{name}:{why}"
+    if not ev.worker_ok(now_ns):
+        return "worker:dead"
+    if not ev.layer_ok(now_ns):
+        return "layer:missing"
+    if not ev.baseline_ok(now_ns):
+        return "baseline:missing"
+    why = ev.core_refusal(now_ns)
+    if why is not None:
+        return f"core:{why}"
+    why = ev.link_reason(now_ns)
+    if why is not None:
+        return f"link:{why}"
+    m = ev.measurement(now_ns)
+    for name in ("steering_ok", "lift_ok", "lift_origin_ok", "counts_ok"):
+        if not getattr(m, name):
+            return f"measurement:{name[:-3]}"
+    if not ev.odometry_continuous(now_ns):
+        return "odometry:cut"
+    sl = ev.slam(now_ns)
+    allowed = ("tracking",) if stage == "submit" else ("tracking", "holding")
+    if sl.mode not in allowed:
+        return f"slam:mode_{sl.mode}"
+    if sl.pose_reply_ns is None or now_ns - sl.pose_reply_ns > SLAM_MAX_AGE_S * 1e9:
+        return "slam:stale"
+    if sl.mode == "holding" and sl.hold_travel_m > HOLD_MAX_M:
+        return "slam:hold_too_long"
+    sn = ev.snapshot(now_ns)
+    if sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9:
+        return "snapshot:scan_stale"
+    if stage == "submit" and not ev.operator_start_ok(now_ns):
+        return "operator_start:unconfirmed"
+    if sn.installing or sn.installed_correction is None \
+            or tuple(sn.installed_correction) != tuple(sn.applied_correction):
+        return "wait:snapshot_installing"
     return None
 
 
-__all__ = ["ARMING", "AutoPermit", "Evidence", "FEATURES_OFF", "REAL_DT", "REQUIRED_ON", "S10AConfig", "auto_ready_refusal",
+def latches(reason: str | None) -> bool:
+    """A readiness refusal that latches the AUTO permit (a "wait:" one only closes the output)."""
+    return reason is not None and not reason.startswith("wait:")
+
+
+__all__ = ["ARMING", "AutoPermit", "Evidence", "MeasurementView", "SlamView", "SnapshotView", "latches", "FEATURES_OFF", "REAL_DT", "REQUIRED_ON", "S10AConfig", "auto_ready_refusal",
            "load_s10a", "real_option_refusal", "real_options", "s10a_refusal", "DISARMING", "DRIVING", "LATCHED", "OFF", "READY", "STOP_ACK_S", "STOP_PENDING"]

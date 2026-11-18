@@ -212,3 +212,23 @@
 - **계획용 목적지가 실제로 계획되는가**: `--dry-assemble` 은 설정의 기준 팔레트 자세(`check_pallet_pose`)로 테이프 시작에서 `plan_transport` 를 한 번 돌려, 목적지·대기 자세가 막혀 있지 않은지 본다.
 - **가짜는 원천만 바꾼다**: 허가·준비·래치 코드는 진짜를 쓴다. Jetson 50 Hz 여유, USB 단절, 실제 제동 거리와 포크 거동은 HIL·S10 실측으로 남긴다.
 - 4b 밖(기록만): 상시 현장 감독·주 전원 차단 담당(S10 조건), 적재 판정의 시야(PR 5/7), 단일 송신자와 실제 콘솔 STOP 배선(PR 5), 2D LiDAR 사각의 시험장 통제(PR 5/7·S10), D435i 포켓 깊이(PR 7), 확인 프레임 수락 ≠ 물리 정지(4c·HIL).
+
+## 14. 구현에서 정한 것 (4b)
+
+- 모듈: `live/real_autonomy.py`(`AutoPermit`, `real_options`·`real_option_refusal`, `S10AConfig`·`s10a_refusal`, `Evidence`·`SlamView`·`SnapshotView`·`MeasurementView`·`auto_ready_refusal`·`latches`), `live/real_assembly.py`(`assemble`, `RealHooks`, `FrozenSubmit`·`freeze_submit`·`known_request`, `OperatorStart`, `register_pallet`·`s10_submit_refusal`), `tools/real_autonomy.py --dry-assemble`, `config/real/s10a.yaml`(측정 전 값은 null — 조립 거부)·`config/real/autonomy.yaml`(잠정 설정).
+- 허가 증거:
+  - `outstanding(now)` 은 `("settled", t) / ("pending", None) / ("unknown", None)` 을 돌려준다. 4c 가 송신 경로 전체를 추적하기 전까지 `unknown` 은 재무장을 거부한다.
+  - `stop_since(now)` 은 `(t, boot_id)` 를 돌려준다. 옛 명령 해소 뒤, 같은 부팅이어야 한다.
+  - 정지 프레임의 쓰기 시각은 `stop_written(seq, t)` 로 받는다.
+  - 콜백 `transmit`·`arbiter_stop`·`collect` 는 `bind` 로 한 번만 묶는다.
+- 래치: 허가를 먼저 닫고, 네 단계가 앞 단계 예외와 무관하게 모두 돈다(첫 예외는 뒤에 다시 냄). 반복 래치는 DISARM 만 다시 하고, 수거는 한 번이다.
+- 준비 판정 순서: 래치 사유 전부 → `wait:snapshot_installing`. `SLAM_MAX_AGE_S` 0.5, `HOLD_MAX_M` 1.5, `SCAN_MAX_AGE_S` 0.35 는 잠정값이다.
+- 훅 표:
+  - 준비·채택은 `ADOPTION_HOOKS`, 첫 프레임 대기·S10 끝은 `STAND_AND_END_HOOKS` 다. `exit_prefix` 는 선택이고 실차에는 없다.
+  - 추종·명령·허가 틱의 표는 4c 의 루프와 함께 고정한다.
+  - `grid_kwargs("mission", target)` 은 등록 자세를 접근 장애물(`pickup_obstacle`)로 준다.
+- `--dry-assemble`:
+  - 지도 묶음(`--map-bundle`)은 `load_bundle(expected_map_id=s10a.map_id)` 로 확인하고, 그 격자(회전 원점은 거부)로 기준 계획을 푼다.
+  - 설정 파일이 깨졌거나 키가 빠지면 종료 2 다.
+  - 기록: 파일 해시, 실제 곡률 상한(planner·travel·tracker·preview), 옵션 값.
+- 남긴 것(Codex P3): `FORKLIFT_LIVE_START_DIGEST=1` 의 U21 기록에 `pocket.first_frame_still_since: "absent"` 가 한 줄 더 생긴다(4a 의 `first_frame_since` 와 같은 종류). 진단 기록이라 그대로 둔다.

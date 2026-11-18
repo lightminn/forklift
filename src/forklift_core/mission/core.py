@@ -1517,6 +1517,8 @@ class MissionCore:
         if not (options.pocket_check and ms.phase == "approach" and pocket.get("check") is None
                 and self.operator_target()):
             return None
+        if not self.slam["stop_now"]:
+            pocket.pop("first_frame_still_since", None)  # the still span ends wherever the truck is (Codex 4b P2)
         if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
             return None
         since_ = pocket.setdefault("first_frame_since", float(t))
@@ -1526,7 +1528,10 @@ class MissionCore:
             # design 2026-11-19-real-assembly 8: the loop's still span (a fresh stop on new samples and no earlier
             # drive still able to act; the encoder SafetySpeed's bound cannot reach 0.01 m/s on the real truck) --
             # only a frame acquired inside it, for this mission, phase and applied correction, is taken
-            still_ = pocket.setdefault("first_frame_still_since", float(t))
+            # the loop's own still-span start on the frames' clock when it gives one, else this tick's time
+            loop_still_ = self.slam.get("still_since")
+            still_ = (float(loop_still_) if loop_still_ is not None
+                      else pocket.setdefault("first_frame_still_since", float(t)))
             frame_ = hooks.known_pocket_frame()
             fresh_ = (frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
                       and float(frame_.stamp_s) >= still_ and frame_.mission_gen == self.commands.mission_gen
