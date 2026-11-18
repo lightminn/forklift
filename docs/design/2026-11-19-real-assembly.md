@@ -1,6 +1,6 @@
 # 실차 조립 · AUTO 허가 상태 — 4b (설계)
 
-작성 2026-11-19 · 2판(Codex 1 회차 반영) · 상위 [실차 자율 계획](../plans/2026-11-18-real-autonomy-entry.md) PR 4 · [제어 틱 계약](2026-11-18-real-control-tick.md) · 앞 단계 [4a 알려진 팔레트 시작](2026-11-19-known-pallet-start.md)(#598)
+작성 2026-11-19 · 3판(Codex 2 회차 반영) · 상위 [실차 자율 계획](../plans/2026-11-18-real-autonomy-entry.md) PR 4 · [제어 틱 계약](2026-11-18-real-control-tick.md) · 앞 단계 [4a 알려진 팔레트 시작](2026-11-19-known-pallet-start.md)(#598)
 
 ## 범위와 책임 나누기
 
@@ -26,7 +26,10 @@
 
 - 지도 기준(조사 지도 묶음 경로), 테이프 시작 자세, 시험장 경계(`pickup_bounds`·`pickup_zone`).
 - 팔레트 형상·ID, 계획용 고정 목적지(코어의 `plan_transport` 와 설치는 `transport` 를 포함한 경로를 요구한다; 실제 주행은 S10 에서 승강으로 끝난다), `scenario`·`wait_pose`.
-- 팔레트 자세는 설정이 아니라 운용자가 미션마다 입력한다(4a, `operator_input`).
+- 팔레트 자세는 설정이 아니라 운용자가 미션마다 입력한다(4a, `operator_input`). 순서는 **등록 뒤 제출**이다.
+  - 지금 lease 의 운용자가 그 팔레트의 지도 자세를 등록한다(`update_pose(basis="operator_input")`). 그러면 대상 revision 이 오르고, 그 revision 으로 제출한다.
+  - 준비는 대상 목록의 그 자세를 고정해 `known_pallet_request` 에 넘긴다. 준비 중 등록이 바뀌어 revision 이 달라지면 기존 `_job_invalid` 의 `targets` 로 옛 답을 버린다.
+  - 처음 등록과 현장 복구 뒤 재등록(`unlocated → available`)은 같은 흐름이다.
 - 조립은 이 설정으로 `TargetsBook` 에 팔레트·목적지를 등록한다. 그래서 첫 제출이 기존 명령 경로(팔레트 ID·목적지 ID·대상 revision 승인)를 지난다.
 - 첫 제출 전에 운용자가 빈 포크·포켓 밖·승강 내림을 확인한다(코어의 초기 `free/none` 은 물리 측정이 아님). 그 확인이 없으면 준비 판정이 거부한다.
 
@@ -57,55 +60,73 @@
 - `state = {"transitions": [], "planning_wall_s": 0.0, "paths": {}}`, `pocket = {"check": None, "frames_read": 0}`.
 - `obstacle`: 실차 층(알려진 팔레트 꺼짐), `applied` = 지금 적용 보정, `version: 0`, 집계 dict 들.
 - `slam`: `tracker`(SLAM 링크 추적기), `records: []`, `docking: {}`, `stop_now: False`, `holds: []`, `control: []`.
-- `settings`: 코어가 직접 읽는 다섯 키(`drive_acceleration_mps2`·`lift_rate_mps`·`lift_target_m`(운반 높이)·`steering_command_rate_rad_s`·`withdraw_speed_mps`).
+- `settings`: 코어가 직접 읽는 키 — `drive_acceleration_mps2`·`lift_rate_mps`·`lift_target_m`(운반 높이)·`steering_command_rate_rad_s`·`withdraw_speed_mps`, 그리고 추종기의 `tracker_curvature_inv_m`.
+- `options.speeds[단계]` 와 접근 직선 속도는 `s10a.yaml` 의 승인된 저속 상한(`max_speed_mps`) 이하여야 한다. 조립 검사가 거부하고, 4c 는 최종 바퀴 후보도 그 상한으로 자른다.
+- 시험은 `--dry-assemble` 과 같은 조립 결과로 첫 채택까지 간다(시험이 따로 설정을 보충하지 않음).
 - `Arbiter(mission=core.commands, config=… auto_lease_loss="stop")`, `core.jobs = PlanWorker(...)`, 마지막으로 `core.baseline = MissionBaseline.capture(core)`.
 
 ## 6. 준비 판정과 증거 공급
 
-- `auto_ready_refusal(now, stage) -> str | None` 을 두 단계로 판정한다.
-  - **제출·채택(`stage="submit"`)**: SLAM `tracking` 이고 응답이 신선, 재위치·현장 복구 잠금 없음(`real_auto_refusal`), 운용자 시작 확인(2절).
-  - **무장·주행(`stage="drive"`)**: 이 미션의 정상 `holding` 을 허용한다(`transition("approach")` 가 hold 를 건다). 대신 다음을 모두 본다.
-    - 최신 유효 SLAM 응답의 취득 시각이 나이 상한 안.
-    - hold 이동 한도 안.
-    - 오도메트리 연속.
-    - **적용 중인** 보정과 설치된 층 스냅숏의 보정이 같음.
-    - 스캔 신선도는 설치 결과의 최신 스캔 취득 시각으로 판정(스냅숏 `stamp_s` 는 재투영 시각이라 쓰지 않음).
-  - 보정이 바뀐 뒤에는 새 결과가 설치될 때까지 출력을 닫는다.
-- 공통: 작업자 준비(`PlanWorker._dead` 없음 → 공개 `worker_ok()` 를 조립 쪽에서 감쌈), 층 있음, 기준선 캡처됨, 링크 `health` 정상·빌드·시계율 검증(텔레옵의 `_arm_blocker` 와 같은 검사를 공용 함수로), 측정 유효(조향·승강, 계수 결함 비트).
+- **위치·장애물 증거 — 모든 단계 공통**:
+  - 연속 오도메트리.
+  - 신선한 설치 스냅숏: 적용 중인 보정의 값·세대에 묶이고, 스캔 신선도는 설치 결과의 최신 스캔 취득 시각으로 판정(스냅숏 `stamp_s` 는 재투영 시각이라 쓰지 않음).
+  - 최신 유효 SLAM 응답의 취득 시각이 나이 상한 안.
+  - 제출 때, 그리고 채택 직전(`live_mission_ready()` 가 검사하고 실패하면 `prepare:reference:…` 로 준비 실패)에도 요구한다.
+  - 판정 순서: hold 이동 거리를 갱신하는 `map_from_base()` 가 그 틱에 돈 뒤에 판정한다(4c 루프 순서).
+  - 상태를 둘로 나눈다. **새 스냅숏 설치 대기**(보정이 바뀐 직후)는 출력만 닫고 래치하지 않는다. **센서 만료**(나이 상한 초과)는 래치 사유다.
+- **SLAM 모드**: 제출·채택에는 `tracking`. 무장·주행에는 이 미션의 정상 `holding` 도 받는다(`transition("approach")` 가 hold 를 건다; hold 이동 한도 안).
+- **잠금**: 재위치·현장 복구 잠금이 없어야 한다(`real_auto_refusal`). 운용자 시작 확인(2절)도 필요하다.
+- **MCU 검사는 단계별로 나눈다**(`RealPlantPort.health()` 는 `DISARMED`·`zero_pending` 을 사유로 내고 텔레옵 `_arm_blocker()` 는 `ARMED` 를 거부하므로, 그대로 공용으로 쓰지 않는다).
+  - 공통: STATE 신선도·빌드·시계율 검증.
+  - ARM 직전: `DISARMED`, 신선한 정지, 옛 명령 해소.
+  - ARMING: 그 ARM 과 확인용 0 의 진행.
+  - 주행: 같은 부팅·권한 세대의 `ARMED`·`ready`.
+  - 무장 전 시계율·지연 추정에 쓰는 DISARM 응답 경로(텔레옵의 `_ping`)는 4c 배선에 둔다.
+- 그 밖: 작업자 준비(`PlanWorker._dead` 없음 → 조립 쪽 `worker_ok()`), 층 있음, 기준선 캡처됨, 측정 유효(조향·승강, 계수 결함 비트).
 - 증거 공급 인터페이스(4b 는 인터페이스와 가짜, 4c 가 새 STATE·호스트 이벤트에 연결):
-  - `odometry_continuous()`: `RealOdometry.update()` 의 부팅 변경·시간 공백. 단절이면 이전 위치·정지 증거를 버린다.
-  - `stop_confirmed()`: 새 고유 표본 기준 정지 확인.
+  - `odometry_continuous()`: `RealOdometry.update()` 의 부팅 변경·시간 공백. 단절이면 이전 위치·정지 증거를 버리고 `stop_now` 를 즉시 무효로 한다.
+  - `stop_confirmed()` 와 그 정지가 시작된 표본 시각: 새 고유 표본 기준.
   - `scan_fresh()`, `slam_fresh()`.
 - 준비가 안 되면 미션 제출은 그 사유로 거부되고(`prepare` 전), 구동 출력도 없다.
 
 ## 7. AUTO 허가 상태
 
-- 상태: `OFF → ARMING → READY → DRIVING`. 래치는 `LATCHED` 다.
+- 상태: `OFF → ARMING → READY → DRIVING`, 그리고 `STOP_PENDING`(제어 정지의 확인 대기)·`HOLDING`(확인된 정지, 승강 유지)·`LATCHED`.
 - **AUTO 요청 = 새 사용자 `mission_submit` 한 건**(S10-A, 일회성). 콘솔의 `arm`·`mode_request(AUTO)` 는 쓰지 않는다(지금 TELEOP 전용·거부).
-- ACK 뒤 계획 중에는 무장하지 않는다. 무장 순서:
-  1. `job_hold()` 가 성공 답을 채택해 `adopted_id == mission_id`·`running`·`approach` 가 확정되면, 지금 lease 와 세대를 다시 검사한다.
-  2. 제어 세대 변경과 큐 폐기(`port.new_control_generation()`) 뒤 `host.request_arm()` 을 **한 번** 부른다 → `ARMING`.
-  3. `ARMING` 동안 루프는 코어 틱을 돌리되 최종 출력은 0 이다(허가 정지처럼 추종기는 움직임이 없음). 무장 시한은 호스트 `arm_timeout_s` 0.5 s 이고 추종 시한(≥ 30 s)에 비해 작다.
-  4. 호스트가 확인용 0 DRIVE 를 직접 보내고 `ZERO_SEEN` 으로 `ready` → `READY`. 이때 `health`·현재 권한 세대를 같이 확인한다.
-  5. 그 뒤 **새 후보**부터 제출하고, 첫 DRIVE 가 큐에 들어가면 `DRIVING`.
-  - `Blocked`, 시간 초과, 무장 중 권한 철회는 래치 사유다.
-- **래치**: 다음 사유가 오면 실차 허가 상태가 직접 받아 이전 요청·후보를 버리고 `LATCHED` 로 간다.
+- **무장 대기는 별도 분기**다. 채택한 틱부터 `ZERO_SEEN` 확인까지 루프는 링크·SLAM·층·감시만 갱신한다. 추종·도착·승강 램프·포켓 채택은 부르지 않는다. 작업 시계는 기존 계획 대기 시계(`commands.begin_wait`/`end_wait`)로 멈춘다.
+- 무장 순서:
+  1. `job_hold()` 가 성공 답을 채택해 `adopted_id == mission_id`·`running`·`approach` 가 되면, 지금 lease·세대를 다시 검사하고 `begin_wait`.
+  2. 제어 세대 변경과 큐 폐기 뒤 ARM 직전 검사(6절)를 통과하면 `host.request_arm()` 을 **한 번** → `ARMING`.
+  3. 호스트가 확인용 0 DRIVE 한 건을 직접 보내고, `ZERO_SEEN` 으로 `ready` 가 되면 주행 검사(같은 부팅·권한 세대) → `READY`, `end_wait`.
+  4. 첫 허가 틱은 확인된 바퀴 0 과 신선한 실측 조향·승강에서 후보를 만든다. 첫 미션 DRIVE 가 큐에 들어가면 `DRIVING`.
+  - `Blocked`, 무장 시한 초과(호스트 `arm_timeout_s` 0.5 s), 무장 중 권한 철회는 래치 사유다.
+- **래치(`LATCHED`)**: 다음 사유가 오면 실차 허가 상태가 직접 받는다.
   - STOP, 운용자 DISARM, lease 상실, 세션 종료, 링크 상실.
-  - 측정 무효, 포트 `refused`/`blocked`, 감시 trip(과속·주기 초과·SafetyWatch), 준비 판정(drive) 실패, `real_auto_refusal` 사유.
-  - 긴급 정지는 즉시 DISARM 을 큐에 넣고, 첫 바이트를 아직 쓰지 않은 후보를 제거한다.
-  - S10 종료처럼 승강을 유지하는 정지는 제어 정지다(4c: 래치 → 세대 변경·큐 폐기 → 측정 위치 정지 DRIVE → 그 seq 를 같은 부팅·무장 세대의 STATE 로 100 ms 안에 확인, 아니면 DISARM).
-- **재무장**: 지금 lease 의 운용자 재무장 요청이 래치만 푼다. S10-A 는 이전 미션을 재개하지 않는다. 정지 처리 뒤 새 제출을 받고, 포켓에 들어간 뒤였다면 현장 복구가 먼저다(4d-2b).
-- 래치를 푸는 조건은 셋 다다: 신선한 `DISARMED`, 옛 명령 해소, 그 뒤 고유 표본으로 확인한 정지. **outstanding 을 모르면 거부한다**(4b). 바퀴 0 인 승강·`keep` 을 포함한 큐·부분 송신·송신 완료 명령의 추적은 4c 에서 한다(지금 `older_nonzero_may_act()` 는 바퀴만 봄). 입력이 돌아오는 것만으로는 재개하지 않는다.
-- 감시는 이 상태를 본다: `armed = state in (ARMING, READY, DRIVING)`(중재기는 AUTO 진입 때 `armed` 를 내린다).
+  - 측정 무효, 센서 만료, 포트 `refused`/`blocked`, 감시 trip(과속·주기 초과·SafetyWatch), `real_auto_refusal` 사유.
+  - 처리: 즉시 DISARM 을 큐에 넣고, 첫 바이트를 아직 쓰지 않은 후보와 이전 요청을 버린다.
+  - **달리던 미션은 그 틱에 끝내 수거한다**: 기존 취소 판단(`cargo.cancel_decision`)으로 `cancelled` 이거나, 포켓에 들어간 뒤면 `recovery_required` → 현장 복구. 그래서 재개할 미션이 남지 않는다.
+- **S10 제어 정지(`STOP_PENDING` → `HOLDING`)**: `take_s10_stop()` 이 오면 그 틱에 래치 → 세대 변경·큐 폐기 → 측정 위치 정지 DRIVE.
+  - 그 seq 를 같은 부팅·무장 세대의 STATE 로 100 ms 안에 확인하면 `HOLDING`(바퀴 0, 승강 유지, MCU 는 무장된 채)이다.
+  - 그동안 미션 출력은 닫히고 **안전 감시는 켠 채**다. 정상 복구 잠금(`end_reset()` 의 현장 복구)은 그대로 게시한다.
+  - 거부·시한 초과·새 긴급 정지·감시 trip 은 즉시 DISARM 이 우선이다.
+  - `HOLDING` 에서 일반 DRIVE 는 다시 열리지 않는다. 운용자 DISARM(현장 복구 1 단계) 뒤 신선한 `DISARMED` 가 확인돼야 현장 복구 완료(`field_recovery_done(disarmed=True)`)를 받는다.
+- **재무장**:
+  - 지금 lease 의 운용자 `rearm` 이 래치만 푼다. 새 미션은 새 제출로 시작한다.
+  - 중재기에 `rearm_refusal` 콜백(기본 None = Isaac 그대로)을 넘긴다. 실차 조건을 **ACK 와 모드 변경 전에** 확인하고, 실패하면 래치와 모드를 모두 유지한다.
+  - 실차 조건(셋 다): 신선한 `DISARMED`, 옛 명령 해소, 그 뒤 고유 표본으로 확인한 정지. outstanding 을 모르면 거부한다(4b). 바퀴 0 인 승강·`keep`·부분 송신·송신 완료의 추적은 4c 에서 한다(지금 `older_nonzero_may_act()` 는 바퀴만 봄).
+  - 입력이 돌아오는 것만으로는 재개하지 않는다.
+- 감시는 이 상태를 본다: `armed = state in (ARMING, READY, DRIVING, STOP_PENDING, HOLDING)`(중재기는 AUTO 진입 때 `armed` 를 내린다).
 - **중재기 설정 `ArbiterConfig.auto_lease_loss = "continue" | "stop"`**
   - 기본 `continue`: 지금 그대로(세대 증가, AUTO 출력, 미션 유지).
-  - 실차 `stop`: AUTO 에서 lease 를 잃으면 `STOPPED`(`PAUSED` 가 아님 — `rearm` 은 `STOPPED` 에서만 받는다).
-  - 공유 `preempt_latch` 는 정지 확인으로 자동으로 풀리므로, 실차 재무장 강제는 실차 허가 상태의 `LATCHED` 가 맡는다.
+  - 실차 `stop`: AUTO 에서 lease 를 잃으면 `stop()` 으로 `STOPPED`(제어 세대는 한 번만 바뀜, `rearm` 은 `STOPPED` 에서만 받음).
+  - 제출 ACK 와 채택 사이의 lease 상실도 시험한다.
+  - 공유 `preempt_latch` 는 정지 확인으로 자동으로 풀리므로, 실차 재무장 강제는 실차 허가 상태의 `LATCHED` 와 `rearm_refusal` 이 맡는다.
 
 ## 8. 4a 첫 프레임의 정지 판정 (코어, 알려진 시작에서만)
 
 - 지금 `_known_first_frame` 은 `SafetySpeed.standing(0.01)` 을 쓴다. 실차 엔코더 모델에서는 가속도 오차 항만 0.024 m/s 라 서지 못한다.
-- 알려진 시작에서는 `slam["stop_now"]`(표본 기준 정지 검출기; 4c 가 새 표본마다 갱신)로 판정한다. 알려진 시작은 SLAM 을 요구하므로 늘 있다. Isaac 의 인식 시작 경로는 그대로다.
+- 알려진 시작에서는 `slam["stop_now"]`(표본 기준 정지 검출기; 4c 가 새 표본마다 갱신하고 표본 공백·연속성 단절에서 즉시 무효)로 판정한다. 알려진 시작은 SLAM 을 요구하므로 늘 있다. Isaac 의 인식 시작 경로는 그대로다.
+- **첫 프레임은 정지 구간에서 취득한 것만** 받는다. 서 있음을 처음 본 시각을 `pocket["first_frame_still_since"]`(미션 키)에 두고, 서 있지 않으면 지운다. 프레임의 `stamp_s` 가 그 시각 이후여야 하고, 프레임에 붙은 미션 세대·단계·적용 보정이 지금과 같아야 한다(`known_pocket_frame` 반환에 `mission_gen`·`phase`·`correction` 추가). 제동 중 찍혀 늦게 온 프레임은 거부된다.
 - 정지 뒤 출발은 남은 운동 방향을 판정할 수 있을 때만이다. 지금 `direction_unsure` 가 막는 것을 4c 에서 실제 엔코더 모델로 시험하고, 실차 삽입은 PR 5 의 방향 판정과 PR 7 의 깊이 입력 검증에 묶는다.
 - 첫 프레임 뒤 중간·삽입 전 정지 프레임(`await_still_frame`)의 공급은 실차 프레임 원천(PR 7)이다. 취득 시각의 자세·승강·미션·단계·보정에 묶어 검사기가 새 정지 프레임을 받아들였을 때만 푼다. 4c 는 가짜 깊이로 이 경계를 본다.
 
@@ -123,12 +144,15 @@
 - 부팅·설정: 대상 등록, 첫 제출이 명령 경로를 통과, 운용자 시작 확인 없으면 거부, 기준선 캡처 뒤 첫 채택에서 미션 키가 깨끗함.
 - 준비 판정: submit/drive 각 조건을 하나씩 깨면 그 사유. hold 중 drive 판정은 받고, 적용 보정과 스냅숏 보정이 다르면 닫힘.
 - AUTO 허가(실제 `McuLinkHost` + 가짜 MCU 로 ARM → 0 DRIVE → `ZERO_SEEN`):
-  - 계획 중 ARM 없음, 채택 뒤 한 번, ready 전 DRIVE 없음.
+  - 계획 중 ARM 없음, 채택 뒤 한 번. ready 전 **미션** DRIVE 없음(호스트 확인용 0 DRIVE 한 건은 `ZERO_SEEN` 전에 나감). 무장 대기 중 추종·승강·작업 시계 정지, 첫 허가 틱 후보는 바퀴 0·실측 조향에서.
+  - S10 제어 정지: ACK 대기 중 감시 켜짐, ACK 뒤 `HOLDING` 에서 DRIVE 없음, DISARM 확인 전 현장 복구 완료 거부, 시한 초과 → DISARM.
+  - 래치 때 달리던 미션 종료·수거(포켓 진입 뒤면 현장 복구), 재무장 조건 실패면 ACK·모드 변경 없음.
   - 무장 중 Blocked·시한 초과·권한 철회 → 래치.
   - 각 래치 사유 → 즉시 DISARM·후보 제거.
   - outstanding 모름이면 재무장 거부, 입력 복구만으로 재개 없음.
 - 중재기: `stop` 이면 AUTO lease 상실 → `STOPPED`. 기본 `continue` 는 세대 증가·AUTO 출력·미션 유지(고정 시험).
-- 4a 첫 프레임: 알려진 시작은 `stop_now` 로 판정(SafetySpeed 경계가 넓어도 받음), 인식 시작은 그대로. 게이트 29/29.
+- 4a 첫 프레임: 알려진 시작은 `stop_now` 로 판정(SafetySpeed 경계가 넓어도 받음), 정지 전 취득·다른 세대·다른 보정의 프레임 거부, 인식 시작은 그대로. 게이트 29/29.
+- 운영 깊이 원천은 PR 7 전까지 None 이다. 4c 완주 시험은 가짜 깊이와 받아들일 수 있는 방향 증거를 주입한다(엔코더 `direction_unsure` 차단 시험과 따로).
 
 ## 11. 4c 로 넘기는 것
 
@@ -143,3 +167,7 @@
   - P1: 제출 ACK ≠ 채택 → 채택 뒤 한 번 무장. 주행 중 tracking 요구 → hold 허용 + 신선도 판정. 공유 래치로 재무장 강제 불가 → 실차 상태가 래치, lease 상실은 STOPPED. 바퀴 0 승강 outstanding → 4b 는 모름이면 거부, 4c 추적. 실차 엔코더로 첫 프레임 정지 불가 → `stop_now`. 실 MCU 경계 → 4b 장치 안 엶, 4c 운영 장치 불가 시험.
   - P2: 증거 공급 인터페이스, 훅 경로 표, S10-A 설정·대상 등록·시작 확인, 단계별 책임.
   - P3: 조향률 키, dry-assemble 종료 코드, `loop_slow` 차이·상위 계획 문구.
+- Codex 2 회차(2판): P1 4, P2 4, P3 1. 반영했다.
+  - P1: 무장 대기는 별도 분기(계획 대기 시계로 작업 시간 정지, 첫 후보는 바퀴 0 에서). MCU 검사는 단계별. 첫 프레임은 정지 구간 취득·같은 세대·보정만. S10 제어 정지는 `STOP_PENDING`/`HOLDING` 에서 감시 유지.
+  - P2: 재무장은 `rearm_refusal` 로 ACK 전에 막고 래치 때 미션 종료·수거, lease 상실은 `stop()` 한 번. 제출·채택에도 신선한 장애물 증거(설치 대기와 만료 구분). `tracker_curvature_inv_m`·`speeds`·저속 상한. 등록 뒤 제출.
+  - P3: 시험 문구(미션 DRIVE·확인용 0 DRIVE, 가짜 깊이).
