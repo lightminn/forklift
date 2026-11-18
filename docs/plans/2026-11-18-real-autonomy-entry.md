@@ -1,39 +1,56 @@
 # 실차 자율 실행 경로 — PR 나누기와 순서 (짧은 계획)
 
-작성 2026-11-18 · 총괄 배정(사용자 "모두 해") · 상위 계획 [sim-to-real bring-up](2026-11-11-sim-to-real-bringup.md) P0-4 ⑤·P0-9·S10, 설계 [4a'](../design/2026-11-11-p04a-kinematics-and-command.md)(4e-2 필수 항목), [4e-1](../design/2026-11-11-p04e1-control-tick.md)
+작성 2026-11-18 · 2판(검토 둘 반영) · 총괄 배정(사용자 "모두 해") · 상위 계획 [sim-to-real bring-up](2026-11-11-sim-to-real-bringup.md) P0-4 ⑤·P0-5·P0-9·S10, 설계 [4a'](../design/2026-11-11-p04a-kinematics-and-command.md)(4e-2 필수 항목), [4e-1](../design/2026-11-11-p04e1-control-tick.md)
 
 ## 지금 있는 것 / 없는 것
 
-- 있음: `MissionCore`(공통 미션 로직), `RealPlantPort`(`src/forklift_core/plant/port.py`: 명령·만료·`zero_wheels`·`hold_lift`·`sample`·`health`), `RealKinematics`·`RealOdometry`, `McuLinkHost`·`ReconnectingLink`, `fail_closed_hooks`(4d-2a), SafetySpeed·실차 방향 규칙(4d-1), 현장 복구 상태(4d-2b), 텔레옵 다리(#459)와 스캔 허가(#559), 실차 안전 감시(#557), 비상정지 면제(#584·#585), 4e-1a `tick_vars`.
-- 없음: 실차 자율 진입점. 제어 틱은 아직 `sim/isaac/run_transport.py` 의 `drive()`(5588 행부터) 루프(10201 행) 안에 있고, 루프를 끝내는 `break` 가 11 곳이다. 공통 조립(MissionCore·층·SLAM 링크·콘솔)도 `drive()` 안이다.
+- 있음: `MissionCore`, `RealPlantPort`(`src/forklift_core/plant/port.py`), `RealKinematics`·`RealOdometry`, `McuLinkHost`·`ReconnectingLink`, `fail_closed_hooks`(4d-2a), SafetySpeed·실차 방향 규칙(4d-1), 현장 복구 상태(4d-2b), 텔레옵 다리(#459)와 스캔 허가(#559), 실차 안전 감시(#557), 비상정지 면제(#584·#585), 4e-1a `tick_vars`.
+- 없음: 실차 자율 진입점. 제어 틱은 `sim/isaac/run_transport.py` `drive()`(5588 행) 루프(10201–11555 행) 안에 있고, 루프를 끝내는 `break` 가 13 곳이다(머리의 세션 종료 1, 정지 출력 뒤 `cancel_stop_` 1, 제어 구간 11). 공통 조립도 `drive()` 안이다.
+- 텔레옵 다리는 `mission=None` 이고, 중재기 `arm` 은 TELEOP 에서만 받으며 다리의 MCU 무장 상태기도 TELEOP 만 본다. AUTO 를 MCU 까지 잇는 경로는 아직 없다.
 
 ## 원칙 (바꾸지 않음)
 
-- Isaac 경로는 동작 보존: 호출 순서·횟수가 바뀌면 멈추고 보고. 러너·미션 코어·층을 건드리는 PR 은 재생 게이트 29/29 + ws1 전체 pytest, 머지 직전 main 병합 뒤 최종 트리.
+- Isaac 경로는 동작 보존: 호출 순서·횟수가 바뀌면 멈추고 보고. 러너·미션 코어·층을 건드리는 PR 은 재생 게이트 29/29 + ws1 전체 pytest, 머지 직전 main 병합 뒤 최종 트리. 게이트는 초기 조립을 지나지 않으므로 조립을 옮기는 PR 은 Isaac live smoke(단독)도 한다.
 - 50 Hz 벽시계 루프는 실차 진입점에만(따라잡지 않음). Isaac 은 120 Hz 1:1.
 - 실차 진입점은 참값 경로를 조립하지 않고(P0-5 감사표), 훅은 `fail_closed_hooks` 로 감싼다.
-- SLAM 이 없거나 무효면 정지, 자동 재개 없음. 사람 감시·저속·빈 포크, 승강은 운반 높이까지. V1.0 비상정지 면제 조건(#580·#584·#585) 유지.
+- SLAM 이 없거나 무효면 정지, 입력이 돌아와도 자동 재개 없음. 사람 감시·저속·빈 포크, 승강은 운반 높이까지. V1.0 비상정지 면제 조건(#580·#584·#585) 유지.
+- **실제 MCU 로 AUTO 를 내보내는 일은 5 까지 끝나고 S10 선행 조건(아래)을 채운 뒤에만 연다.** 4 는 가짜 포트에서만 AUTO 출력을 낸다.
+- MCU 는 실행기 하나만 쥔다(텔레옵 다리와 자율 실행기가 같은 장치를 동시에 열지 않음).
 
 ## PR 순서
 
 | # | PR | 내용 | 검증 |
 |---|---|---|---|
-| 1 | 4e-1b 제어 틱 함수 | `drive()` 루프의 제어 구간을 함수 몇 개로 뗀다(설계 4e-1 2절: 제어 전반 → 층 감시·새 장애물·estop probe(drive 에 남음) → low_clearance·명령 조립). `break` 11 곳의 반환 계약(출력 전 종료 / 정지 출력 뒤 종료)과 밖에서 쓰는 결과 목록을 정한다. **착수 전 반환 계약을 Codex 와 다시 상의**. 참값·Isaac 입력은 콜백 뒤로. | 게이트 29/29, 전체 pytest, 원문 고정 시험 갱신 |
-| 2 | 틱 수 상수 → 시간 정의 | 설계 4e-1 3절 표의 120 틱 창(정체·dock·slam·observe·blocked·cusp_stall 등)을 `dt` 로 계산한 시간 정의로. Isaac 은 `dt = 1/120` 이라 값이 같다. 근접 추적 `DriveTerms`(120 Hz 시간축 표)는 건드리지 않고 실차에서는 끈다(아래 질문 2). | 게이트 29/29, 전체 pytest |
-| 3 | 4e-1c 공통 조립 | MissionCore·장애물 층·SLAM 링크·콘솔 서버를 Isaac 없이 조립하는 함수. 훅은 호출자가 넘김. Isaac 드라이버 묶기(`IsaacPlant.command`, stand_hold·dwell). | 게이트, 전체 pytest, **Isaac live smoke 단독**, Isaac 없는 가짜 포트 기동 시험 |
-| 4 | 4e-2a 실차 진입점 골격 | `tools/real_autonomy.py`: 50 Hz 벽시계 루프, `McuLinkHost`+`RealPlantPort` 로 DRIVE, STATE 마다 `RealOdometry`, health → 중재기 STOP, `fail_closed_hooks`, 래치 위 AUTO 게이트, 확인 넷(다리와 같음), 빈 포크·운반 높이 상한. SLAM 링크가 없거나 무효면 미션 시작 거부·진행 중 정지(자동 재개 없음). | 가짜 포트 단위·통합 시험(정상 미션 시작, SLAM 무효 → 정지, health 끊김 → STOP) |
-| 5 | 4e-2b 안전 배선 | 무장 전 장애물 층 존재·`obstacle_act=True` 강제(실행 중 해제 금지), 실제 스캔을 층에(7b 경로, unknown 은 지우지 않음), `config/real/safety_watch.yaml` 감시, 콘솔 입력(lease·STOP·재무장·미션·운용자 확인), 재위치 배선(`field_recovery_done` → 재위치 세대), 포켓 구간 재개 조건(각 방향 답함, 그 전까지 삽입은 감독·저속·빈 포크). | 단위 시험 + 4 의 통합 시험 확장 |
-| 6 | P0-9 HIL 루프 | 실행기 → MCU 모형(`firmware/tools/mcu_model.c`, pty) → STATE → 오도메트리가 닫힘. 링크 끊김·STATE 지연·스캔 끊김·SLAM 끊김 주입 → 입력 나이 상한 안에 정지. 스캔·SLAM 은 합성 원천(실 장치에서는 거부, 다리의 `--synthetic-permit` 과 같은 방식). | realtime 표시 통합 시험, ws1 |
+| 1 | 4e-1b 제어 틱 | **착수 전 Codex 재상의**: (가) 설계대로 제어 구간을 함수로 떼기 — 제어 구간 `break` 11 곳의 반환 계약(출력 전 종료 / 정지 출력 뒤 종료), 밖에서 쓰는 결과 목록, `set_rear()` 직후 읽기·층 감시 순서·라이브 예외 경로의 출력·물리 스텝 1 회 보존. 머리의 세션 종료와 `cancel_stop_` 는 `drive()` 에 남김. (나) 대안: Isaac 루프는 그대로 두고 실차 루프가 같은 `MissionCore` 호출을 같은 순서로 부르며, 두 루프의 core 호출 순서를 AST 로 대조하는 시험을 둠. 어느 쪽이든 Isaac 동작 보존. | 게이트 29/29, 전체 pytest, 원문 고정 시험 |
+| 2 | 틱 수 상수 → 시간 | 설계 4e-1 3절 표의 틱 창을 `round(T / dt)` 로. Isaac(`dt = 1/120`)에서 문턱·경계가 그대로인지 하나씩 고정: `slam_stall_ticks` 의 119 선설정, `% 120` 재판정 간격, `cusp_stall` 121 표본, `goal_creep` 의 이동량·연속성 조건, 표에서 빠졌던 `path_blocked_ticks >= 36`(0.30 s). 실차의 실제 경과 시간·유효 표본 처리는 4 에서. 근접 추적 `DriveTerms` 는 건드리지 않음. | 게이트 29/29, 전체 pytest, 경계 시험 |
+| 3 | 4e-1c 공통 조립 | MissionCore·장애물 층·SLAM 링크·콘솔 서버를 Isaac 없이 조립하는 함수. 시뮬 시계·잠금·층 작업자 설치 정책은 어댑터로. `slam["applied_speed"]` 를 바퀴와 조향 액션 사이에 쓰는 지금 순서를 보존하는 출력 계약. 실차 조립은 `RealKinematics` 곡률 범위를 추종·계획·미리보기에 넘김. | 게이트, 전체 pytest, Isaac live smoke 단독, Isaac 없는 가짜 포트 기동 시험 |
+| 4 | 4e-2a 실차 진입점(가짜 포트) | `tools/real_autonomy.py`: 50 Hz 벽시계 루프(주기 초과 기록·장기 초과 STOP — 다리의 `loop_slow` 와 같은 규칙), STATE 는 새 표본마다 한 번 `RealOdometry` 에, 무효 조향·승강·오도메트리 단절은 제어 진입 전 차단, `StopDetector`·정체 판정은 표본 시각·중복·공백 기준(50 Hz 틱이 아님), health → 중재기 STOP. AUTO 무장 순서: 운용자 요청 → 미션 승인 → MCU ARM → ready → 첫 DRIVE, 송신자는 하나. 포트 거부 뒤 해제는 (a) 옛 비영 DRIVE 가 더 작동할 수 없음 + (b) 신선한 측정의 정지 확인 둘 다. 승강: `target` 으로 새 목표, STOP 때 승강은 측정 위치 유지, 들림 확인 뒤 `extract` 로 넘어가지 않는 실차 종료 상태(S10 은 운반 높이에서 멈춤). SLAM 링크 없거나 무효 → 시작 거부·진행 중 정지. 기록: 최종 목표·제출 결과·만료·세대·측정 STATE 를 구분. | 가짜 포트 시험: 하역·복귀까지 완주(참값 없는 평가는 `판정 불가` 로 기록 — 라이브 완료 경로가 `judge_delivery().ok` 를 바로 읽는 곳 처리), SLAM 무효 → 정지·재개 없음, health 끊김 → STOP, 거부 뒤 해제 조건 |
+| 5 | 4e-2b 안전 배선 | 무장 전 장애물 층 존재·`obstacle_act=True` 강제(실행 중 해제 금지); 실제 스캔을 층에 — 제어 스레드에서 `refresh()` 결과를 기다리지 않고 설치된 스냅숏의 취득 시각·보정 세대가 유효할 때만 허가(7b 의 동기 갱신을 비동기로); `config/real/safety_watch.yaml` 감시와 D435i IMU 입력·끊김 처리; 콘솔 입력(lease·STOP·재무장·미션·운용자 확인)과 **실차 AUTO 의 lease 상실 정책**(제안: 실차는 lease 를 잃으면 정지 — 총괄 확인); 재위치 배선(`field_recovery_done` → 이전 자세·보정 증거 폐기 → 새 세대 재위치 확인); 포켓 구간 재개 조건(각 방향 답함, 그 전까지 삽입은 감독·저속·빈 포크); 단일 실행기 점유. | 단위 시험, 4 의 통합 시험 확장(실제 콘솔 요청으로 AUTO 무장, STOP·DISARM·센서 무효 뒤 금지 명령 없음·입력 복구만으로 재개 없음) |
+| 6 | P0-9 HIL | (6a, 저장소) 실행기 → MCU 모형(pty) → STATE → 오도메트리가 닫힘; 링크 끊김·STATE 지연·스캔·SLAM 끊김 주입 → 입력 나이 상한 안에 정지, 4 의 기록으로 정지 시한 판정; 합성 스캔·SLAM 원천은 검증된 pty 또는 출력 잠금 HIL 빌드에만 묶고 일반 실차 빌드에서 거부됨을 시험. (6b, 하드웨어) Jetson ↔ 출력 잠금 STM(`Client.HIL`)에서 비영 명령 수락 뒤 단절 → 만료 + `stop_grace_ms` 안에 `STOPPING → DISARMED`, 센서·SLAM 부하 중 링크 왕복 p99. | 6a realtime 표시 통합 시험(ws1), 6b Jetson 연결 뒤 |
+| 7 | 실입력(하드웨어 뒤) | 실차 SLAM 링크: 조사 지도·구역·팔레트·하역 칸·시작 자세 설정, 원 ROS stamp 를 유지하는 브리지(지금 브리지는 `/clock` 발행), 늦게 온 보정 거부(`AsyncSlamLink` 는 오래 기다린 응답도 받음), 같은 실스캔이 SLAM 과 층에 들어가는 bag 시험. 인식: `instance_ids` 없는 proposer·ARM64 ONNX provider, 영상 취득 시각의 승강 외부 변환, 방향 불명·깊이 오래됨이면 삽입 정지, D5 포켓 검사의 깊이 입력. | A2M12·Jetson·D435i 실기 뒤 |
 
-- 1·2·3 은 Isaac 쪽 이동이라 차례로(서로 같은 파일). 4 는 3 의 공통 조립을 쓰고, 5·6 은 4 뒤.
+- 1·2·3 은 같은 파일이라 차례로. 4 는 3 의 공통 조립을 쓰고, 5·6a 는 4 뒤. 7 은 하드웨어가 생기는 대로(지도 조사 주행은 7b 스캔 허가로 감독 텔레옵).
 - 11-19 Jetson `jetson_prep.sh`, 11-20 보드 확인일 지원이 오면 그것이 먼저다.
-- 뒤로 미루는 것(하드웨어·실측 뒤): 4c-2(Isaac 센서 추출), 실차 SLAM 링크(ROS 컨테이너의 slam_toolbox, P0-3·P0-5a), 근접 추적의 50 Hz 표, S10 점검표.
+- 뒤로 미루는 것: 4c-2(Isaac 센서 추출), 근접 추적의 50 Hz 표(실차 첫 자율은 근접 추적 끔 — D5 포켓 검사는 별개로 켬).
+
+## S10 선행 조건 (소프트웨어와 별개, 첫 실차 자율 전에)
+
+- V1.0 면제 이미지로 예정된 자율 속도에서 링크 단절·명령 만료·`DISARM` 뒤 굴러가는 거리까지 재어 허용 범위 안(면제 계획 4절), IPROPI·워치독 출력 차단 확인.
+- AUTO 동안 차를 직접 보며 주 전원을 즉시 끊을 사람이 계속 있다.
+- 시험장 지도와 시작 자세가 준비·확인됨(7).
+- 시작 정렬 허용 오차, 접촉 판정·중단 기준, 빈 포크로 어디까지·들기 여부(운반 높이에서 멈춤)를 정함.
+- 승강 센서 A/B 결정과 보정(실제 팔레트를 드는 시험의 전제).
 
 ## 총괄에게 물을 것
 
-1. **실차 SLAM**: S10 은 시험장 지도가 먼저 필요하다(지도 먼저·위치 추정 기본, 2026-11-14 결정). 실차 지도 만들기(조사 주행)는 텔레옵으로 하는가? 4–6 은 합성 SLAM 원천으로 시험하고, 실 SLAM 링크는 A2M12·Jetson 뒤 별도 PR 로 둔다.
-2. **근접 추적**: `DriveTerms` 표가 120 Hz 시간축이라, 실차 첫 자율(S10 사례 A, 정렬된 직진 삽입)은 근접 추적을 끈 채로 한다고 제안한다. 켜려면 50 Hz 재측정이 필요하다.
+1. **(가)/(나)**: 4e-1b 를 설계대로 떼기(가)와, Isaac 루프는 두고 core 호출 순서를 대조하는 실차 루프(나) 가운데 — 1 의 Codex 재상의 결과와 함께 권고를 보낸다.
+2. **실차 AUTO 의 lease 상실**: 실차는 lease(콘솔 연결)를 잃으면 정지하자고 제안한다(지금 Isaac 콘솔은 AUTO 를 계속).
+3. **실차 지도**: 조사 주행을 감독 텔레옵으로 하는지, 시험장 지도·시작 자세를 누가 언제 준비하는지.
 
 ## 자체 검토
 
-(검토 뒤 채움)
+| 검토 | 지적 | 처리 |
+|---|---|---|
+| ① 원자료 재계산(Claude) | 루프 `break` 수 | AST 로 13 곳(설계의 11 은 제어 구간만) — 1 에 반영 |
+| ② Codex 적대 검토(1판) | P1 3: AUTO→MCU 무장 경로 없음, 승강 정지·종료 상태, 거부 뒤 해제·`StopDetector` 표본 주기; P2 5: 틱 환산 경계(119·%120·121·36 틱), `applied_speed` 쓰기 순서·어댑터·곡률 범위, 50 Hz 에서 층 갱신 대기·주기 초과 STOP, 실입력 PR 의 내용, P0-5 완주·기록·HIL 두 단계; P3: break 13 | 4 에 무장 순서·해제 조건·표본 기준·승강 정책·기록, 2 에 경계, 3 에 출력 계약·곡률, 5 에 비동기 층·주기 초과, 7 신설, 6 을 6a/6b 로, 원칙에 '실 MCU AUTO 는 5 뒤' |
+| ③ Codex 새 스레드(①②를 보지 않음, 적히지 않은 전제) | 14 개: 실 무장은 5 뒤, 정지 거리 실측, 지속 감독·lease 정책, 단일 실행기·재연결, Jetson 50 Hz 부하, 표본 신선도·오도메트리 단절, STOP 뒤 상태, 7b·SLAM·지도·D435i, 근접 추적 끈 S10 범위, 가짜 포트 완주, pty 와 실물 HIL 구분, Isaac 경계 보존 | 원칙·4·5·6·7 과 'S10 선행 조건' 절에 반영, lease 정책은 총괄 질문 2 |
