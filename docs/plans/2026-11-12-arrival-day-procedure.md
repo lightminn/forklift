@@ -305,7 +305,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run_M.jso
 python tools/bringup.py step --device /dev/forklift-mcu --out $D/run.jsonl --wheel left --target 0.8
 ```
 
-- 바퀴 반경 실측 전 상한은 1.0 rad/s, 계단은 최대 3 s 다.
+- 바퀴 목표 상한은 0.2 m/s 를 설정된 바퀴 반경(지금 공칭 0.125 m, S8 실측 전)으로 바꾼 1.6 rad/s 다(V1.0 e-stop 면제 계획 3절: 1.0 rad/s 면 0.132 m/s 시험이 막혔다). 계단은 최대 3 s 다.
 - 기록할 값: `rise_s`·`overshoot_pct`·`settle_s`·`unsettled`·`gaps`.
 - 계획 S4 의 조향 추종 응답과 엔코더 고장 주입(커넥터 뽑기·A/B 바꾸기)도 이때 한다 — 그 전까지 **미완료**.
 

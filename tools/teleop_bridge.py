@@ -359,6 +359,13 @@ class Bridge:
         if self.clock is not None:
             t_dec = self.clock()
         events += self.dev.transmit(self.host, now_ns)
+        for e in events:
+            if e.kind == "estop_waived":
+                # V1.0 e-stop waiver (plan 3): shown, not hidden -- the console paints a kind with "stop" red
+                why = f"no e-stop input; waived by the board image ({e.detail.get('product')})"
+                self.channels.put(None, {"t": "event", "kind": "estop_waived", "reason": why})
+                print(f"WARNING {why} -- the main power switch is the only stop outside the MCU", file=sys.stderr,
+                      flush=True)
         if events:
             rec["link_events"] = [e.kind for e in events]
             stale = [e.detail for e in events if e.kind == "stale"]

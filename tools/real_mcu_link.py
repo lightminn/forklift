@@ -18,9 +18,11 @@ import errno
 import fcntl
 import os
 import select
+import stat
 import sys
 import termios
 import time
+from pathlib import Path
 
 from forklift_core.plant.mcu_host import HostConfig, HostEvent, McuLinkHost, Outgoing
 
@@ -55,6 +57,41 @@ def open_raw(path: str, baud: int | None = None) -> int:
     except OSError:
         pass  # no modem control on this endpoint
     return fd
+
+
+def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:
+    """The USB product string of the device a character node belongs to: from ``/sys/dev/char/<major>:<minor>`` up
+    the device tree to the nearest USB device (the directory with ``idVendor``) and its own ``product`` -- never a
+    hub's above it (Linux omits ``product`` when the device has no string, Codex P2). None for a node with no USB
+    device above it (a UART such as ttyS or ttyTHS, a pty), a device without the string, or one that cannot be
+    read."""
+    root = Path(sys_root)
+    try:
+        node = (root / "dev" / "char" / f"{os.major(rdev)}:{os.minor(rdev)}").resolve(strict=True)
+    except OSError:
+        return None
+    top = root.resolve()
+    for d in (node, *node.parents):
+        if d == top or top not in d.parents:
+            break
+        if (d / "idVendor").is_file():  # the nearest USB device: its own string or none
+            try:
+                return (d / "product").read_text(encoding="ascii", errors="replace").strip()
+            except OSError:
+                return None
+    return None
+
+
+def usb_product_of_fd(fd: int) -> str | None:
+    """The USB product string of the device ``fd`` is open on (the opened tty itself, never the path looked up again:
+    a reconnect or a swapped board must not lend another device's string; plan v1 e-stop waiver 3, Codex)."""
+    try:
+        st = os.fstat(fd)
+    except OSError:
+        return None
+    if not stat.S_ISCHR(st.st_mode):
+        return None
+    return usb_product_for_rdev(st.st_rdev)
 
 
 DELIMITER = b"\x00"
@@ -157,11 +194,12 @@ class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 
     def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw,
-                 clock=None) -> None:
+                 clock=None, product_reader=usb_product_of_fd) -> None:
         """``clock``: the teleop bridge's D5 times (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.3b) -- the host is
         given the time a read returned (later than the bytes' arrival: validity shorter, gaps longer) and each frame's
         write time is taken before its write; None keeps the cycle time for both (every other tool)."""
         self.path, self.baud, self.retry_ns, self.opener = path, baud, int(retry_s * 1e9), opener
+        self.product_reader = product_reader  # the opened device's USB product string, read at each opening
         self.clock = clock
         self.link: TtyLink | None = None
         self._next_try = 0
@@ -177,7 +215,9 @@ class ReconnectingLink:
         if self.link is None and now_ns >= self._next_try:
             try:
                 self.link = TtyLink(self.opener(self.path, self.baud))
-                events.append(HostEvent("connected", {"path": self.path}))
+                product = self.product_reader(self.link.fd)
+                events.append(HostEvent("connected", {"path": self.path, "product": product}))
+                events += host.link_identity(product)
             except OSError:
                 self._next_try = now_ns + self.retry_ns
         if self.link is not None:

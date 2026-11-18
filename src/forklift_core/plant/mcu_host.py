@@ -46,7 +46,7 @@ from forklift_core.mcu_link.messages import (
     encode,
     valid_after_echo_ms,
 )
-from forklift_core.mcu_link.build_policy import Client, commission_allowed, drive_refusal
+from forklift_core.mcu_link.build_policy import Client, commission_allowed, drive_refusal, estop_waived
 from forklift_core.plant.real_vehicle import RearDrive
 
 
@@ -154,6 +154,10 @@ class McuLinkHost:
         self._stale_reported = False
         self._seq = int(initial_seq) & 0xFFFF
         self.disconnects = 0  # how many times the adapter lost the device (the teleop bridge rechecks its session)
+        # the e-stop waiver (docs/plans/2026-11-18-v1-estop-waiver.md 3): the opened tty's USB product string, read by
+        # the adapter at each opening and forgotten on a disconnect; only it makes bit 7 a warning
+        self.usb_product: str | None = None
+        self.estop_waived = False
         self._outbox: deque[Outgoing] = deque()
         self._auth = _NONE
         self._auth_gen = 0  # bumps whenever authorization starts or ends
@@ -280,7 +284,7 @@ class McuLinkHost:
             if s.flags & StateFlag.OUTPUTS_LOCKED and not self.allow_locked:
                 return "outputs_locked"
             return None
-        return drive_refusal(s.flags, self.client)
+        return drive_refusal(s.flags, self.client, estop_waived=self.estop_waived)
 
     def _on_state(self, s: McuState, now_ns: int, events: list) -> None:
         if s.boot_id == 0:
@@ -469,8 +473,16 @@ class McuLinkHost:
         self._expire(now_ns, events)
         return events
 
+    def link_identity(self, product: str | None) -> list[HostEvent]:
+        """The adapter opened the device and read its USB product string (None: none to read). A waiver image is a
+        warning event, once per connection."""
+        self.usb_product = product
+        self.estop_waived = estop_waived(product)
+        return [HostEvent("estop_waived", {"product": product})] if self.estop_waived else []
+
     def disconnected(self, now_ns: int) -> list[HostEvent]:
         """The adapter lost the device: forget the link, drop everything queued."""
+        self.usb_product, self.estop_waived = None, False
         events: list[HostEvent] = []
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
