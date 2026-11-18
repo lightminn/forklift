@@ -35,7 +35,7 @@ class Bench:
         self.cycle(3)
         if start:
             self.permit.start_session(self.now)
-            self.cycle(2)
+            self.cycle(4)
             assert self.permit.session_started
 
     def collect(self, reason):
@@ -319,3 +319,33 @@ def test_a_disarmed_naming_another_seq_is_not_the_disarms_answer(seq_shift):
     assert b.permit.armed  # but it is not the DISARM's answer
     b.permit.tick(b.now)
     assert b.permit.state == ra.LATCHED and b.permit.armed
+
+
+def test_a_late_state_of_an_earlier_executor_naming_the_first_seq_does_not_start_the_session():
+    """Codex 4b round 5: one exact seq can be an earlier executor's; the session check needs two, far apart."""
+    from dataclasses import replace as _r
+
+    b = Bench(start=False)
+    b.permit.start_session(b.now)  # the first DISARM written (seq a), the MCU answers it
+    b.cycle(1)
+    first = b.permit._session["first"]  # noqa: SLF001
+    assert first is not None and not b.permit.session_started  # the second DISARM is out now
+    b.mcu.deaf = True  # the second is never processed
+    b.now += 5 * MS
+    b.mcu.advance(5_000)
+    late = _r(b.mcu.state(), mode=Mode.DISARMED, last_rx_seq=first)  # an old STATE naming the first seq again
+    b.host.on_bytes(encode(late, 1), b.now)
+    b.permit.tick(b.now)
+    assert not b.permit.session_started
+
+
+def test_the_session_check_steps_by_at_least_1024():
+    b = Bench(start=False)
+    b.permit.start_session(b.now)
+    seqs = []
+    b.cycle(1)
+    seqs.append(b.permit._session["first"])  # noqa: SLF001
+    b.cycle(2)
+    assert b.permit.session_started
+    disarms = [q for q, _ in b.written]
+    assert ((disarms[-1] - seqs[0]) & 0xFFFF) >= 1024

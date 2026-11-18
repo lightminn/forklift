@@ -232,3 +232,6 @@
   - 설정 파일이 깨졌거나 키가 빠지면 종료 2 다.
   - 기록: 파일 해시, 실제 곡률 상한(planner·travel·tracker·preview), 옵션 값.
 - 남긴 것(Codex P3): `FORKLIFT_LIVE_START_DIGEST=1` 의 U21 기록에 `pocket.first_frame_still_since: "absent"` 가 한 줄 더 생긴다(4a 의 `first_frame_since` 와 같은 종류). 진단 기록이라 그대로 둔다.
+- 세션 확인(Codex 4b 5 회차): 첫 DISARM 의 seq 를 정확히 단 `DISARMED` 를 받은 뒤, 1024–64512 떨어진 seq 로 두 번째 DISARM 을 쓰고 같은 부팅에서 그것도 정확히 답해야 `session_started` 다(텔레옵 다리의 세션 확인과 같은 생각). 실행기의 호스트는 무작위 seq 로 시작한다(4c 배선).
+- 도킹 격자: 등록 외곽 안의 셀만 지운다(여유 0). 자세가 어긋난 팔레트는 계획 실패로 끝난다(안전한 실패 — 다시 재서 등록).
+- **PR 5 요구(Codex 4b 5 회차 P2, 4b 범위 밖으로 둠)**: 실차 층(`ObstacleGrid`)은 반사를 격자 셀로 팽창하므로, 정확히 등록한 팔레트의 전면 반사도 외곽 밖 셀(예: 전면 2.70 m 앞 2.675 m 셀)로 남아 삽입 계획을 막는다. 실차 층 배선에서 등록 팔레트로 확인된 반사를 팽창 **전에** 분리하고 나머지 점유는 유지해야 한다. 회귀 시험은 `ObstacleGrid → plan_transport` 경로로 한다. 4b 에는 격자를 만드는 쪽이 없어(장치·층 없음) 함수와 수동 격자 시험만 둔다.

@@ -38,7 +38,7 @@ class AutoPermit:
     Callbacks bound once (``bind``): ``transmit()``, ``arbiter_stop(reason)`` -- the arbiter STOPPED, skipping a
     second boundary in the same tick --, ``collect(reason)`` -- the running mission ended and collected."""
 
-    def __init__(self, host, port, *, outstanding, stop_since, stop_ack_s: float = STOP_ACK_S) -> None:
+    def __init__(self, host, port, *, outstanding, stop_since, stop_ack_s: float = STOP_ACK_S, rng=None) -> None:
         self.host, self.port = host, port
         self.outstanding, self.stop_since = outstanding, stop_since
         self.stop_ack_ns = int(stop_ack_s * 1e9)
@@ -52,6 +52,10 @@ class AutoPermit:
         self._disarm_written_ns: int | None = None  # the newest DISARM's write (the transmitter's ``written``)
         self._disarm_seq: int | None = None  # and its seq: the MCU records it in last_rx_seq when it processed it
         self.session_started = False
+        import random
+
+        self._rng = rng or random.SystemRandom()
+        self._session: dict | None = None  # the session check: the two DISARMs' seqs and the boot
 
     def bind(self, *, transmit, arbiter_stop, collect) -> None:
         self._transmit, self._arbiter_stop, self._collect = transmit, arbiter_stop, collect
@@ -78,11 +82,14 @@ class AutoPermit:
 
     # --- the session's start (design 13: always from the stopped side) -------------------------------------------
     def start_session(self, now_ns: int) -> None:
-        """The executor's first act: a DISARM, whatever the last executor left; ``session_started`` once a fresh
-        DISARMED answered it (``tick``)."""
+        """The executor's first act: a DISARM, whatever the last executor left. ``session_started`` only after the
+        session check (Codex 4b round 5, the teleop bridge's): a fresh DISARMED naming exactly the first DISARM's
+        seq, then a second DISARM written a random distance of 1024 to 64512 seqs on, answered exactly on the same
+        boot -- an earlier executor's late STATEs cannot match both (about 2^-32)."""
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
         self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+        self._session = {"stage": "first", "first": None, "boot": None}
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
 
@@ -127,9 +134,19 @@ class AutoPermit:
         """Each loop cycle after the host's STATEs and ``host.tick``."""
         host = self.host
         s, rx = host.state, host.state_rx_ns
-        if not self.session_started and self._disarm_asked_ns is not None and self._disarmed_after_write(now_ns):
-            self.session_started = True
-            self._note(now_ns, "session_ready")
+        sess = self._session
+        if not self.session_started and sess is not None and self._disarmed_after_write(now_ns):
+            if sess["stage"] == "first":
+                sess.update(stage="second", first=self._disarm_seq, boot=s.boot_id)
+                host.skip_seq(self._rng.randint(1024, 64512))
+                host.request_disarm(now_ns)
+                self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+                self._try(self._transmit)
+            elif sess["stage"] == "second" and s.boot_id == sess["boot"] \
+                    and ((self._disarm_seq - sess["first"]) & 0xFFFF) >= 1024:
+                self.session_started = True
+                self._session = None
+                self._note(now_ns, "session_ready")
         if self.state == ARMING:
             if host.ready:
                 self.state = READY
