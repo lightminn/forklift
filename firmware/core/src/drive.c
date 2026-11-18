@@ -68,6 +68,11 @@ bool drive_config_valid(const drive_config *c)
     if ((c->hil_plant && !c->outputs_locked) || (c->hil_plant && c->commission_build)) {
         return false;
     }
+    /* The waiver only means something for an open normal build without a pin. */
+    if (c->estop_waived &&
+        (c->estop_wired || c->outputs_locked || c->commission_build || c->hil_plant)) {
+        return false;
+    }
     if (c->commission_build &&
         (!finite_pos(c->commission_duty_max) || c->commission_duty_max > 1.0f ||
          c->commission_time_ms == 0 || c->commission_time_ms > max_ms)) {
@@ -667,10 +672,11 @@ static uint8_t arm_check(const drive *d, const link_arm *a)
     if (d->estop_now) {
         return DRIVE_REJECT_ESTOP_ACTIVE;
     }
-    /* No e-stop pin: only a build whose outputs are locked, or a commission build on the stand
-       with a hand on the main switch, may arm (lead decision Q3 as revised 2026-11-11). */
+    /* No e-stop pin: only a build whose outputs are locked, a commission build on the stand
+       with a hand on the main switch (lead decision Q3 as revised 2026-11-11), or a normal build
+       under the user's e-stop waiver record (plan 2026-11-18) may arm. */
     const drive_config *c = d->cfg;
-    if (!c->estop_wired && !c->outputs_locked && !c->commission_build) {
+    if (!c->estop_wired && !c->outputs_locked && !c->commission_build && !c->estop_waived) {
         return DRIVE_REJECT_ESTOP_UNWIRED;
     }
     if (!sensors_valid(d)) {

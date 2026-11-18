@@ -280,6 +280,7 @@ def test_motor_output_needs_the_protection_record(tmp_path):
     cfg = _configure(tmp_path / "open", "-DFW_MOTOR_OUTPUT=1", "-DFW_BUILD=commission")
     assert cfg.returncode != 0
     assert "user's decision" in _flat(cfg.stderr) and "IPROPI" in cfg.stderr
+    assert "(lead decision Q6); being able" in _flat(cfg.stderr)  # the text kept whole (Codex)
 
 
 def _flat(text: str) -> str:
@@ -289,6 +290,8 @@ def _flat(text: str) -> str:
 
 MARKER = ("IPROPI protection record: confirmed-by=test fixture; date=2026-11-12; "
           "evidence=not a real record (tests/integration/test_firmware_cross.py)\n")
+WAIVER_MARKER = ("E-stop waiver record: confirmed-by=test fixture; date=2026-11-18; "
+                 "evidence=not a real record (tests/integration/test_firmware_cross.py)\n")
 
 
 @pytest.fixture(scope="module")
@@ -300,6 +303,7 @@ def record_repo(tmp_path_factory):
     shutil.copytree(FIRMWARE, repo / "firmware", ignore=shutil.ignore_patterns("build"))
     (repo / "records").mkdir()
     (repo / "records" / "ipropi.md").write_text("# fake\n" + MARKER)
+    (repo / "records" / "waiver.md").write_text("# fake\n" + WAIVER_MARKER)
     header = root / "vehicle_config.h"
     gen = subprocess.run([sys.executable, str(REPO / "tools" / "real_vehicle_header.py"), "--config",
                           str(REPO / "config" / "real" / "vehicle.yaml"), "--out", str(header)],
@@ -474,12 +478,95 @@ def test_output_build_refuses_a_bad_record(record_repo, tmp_path, case, message)
 @pytest.mark.parametrize("extra", [("-DFW_BUILD=normal",), ("-DFW_BUILD=hil",),
                                    ("-DFW_BUILD=commission", "-DFW_TEST_IWDG_STALL=5")])
 def test_only_the_commissioning_build_may_open_the_outputs(record_repo, tmp_path, extra):
-    """Motor output design 2, lead condition 2: normal waits for the e-stop pin, hil and the IWDG
-    stall build stay locked -- even with a good record."""
+    """Motor output design 2, lead condition 2: normal needs the e-stop waiver record too (plan
+    2026-11-18), hil and the IWDG stall build stay locked -- even with a good record."""
     repo, header = record_repo
     cfg = _configure_in(repo, header, tmp_path / "b", "-DFW_MOTOR_OUTPUT=1",
                         "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md", *extra)
     assert cfg.returncode != 0
+
+
+WAIVED = ("-DFW_MOTOR_OUTPUT=1", "-DFW_BUILD=normal", "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+
+
+def _sha8(repo: Path, rel: str) -> str:
+    blob = subprocess.run(["git", "show", f"HEAD:{rel}"], cwd=repo, capture_output=True, check=True).stdout
+    return hashlib.sha256(blob).hexdigest()[:8]
+
+
+def test_normal_build_opens_only_with_the_waiver_record(record_repo, tmp_path):
+    """Plan 2026-11-18 (V1.0 e-stop waiver): the open normal build is built only with both
+    committed records, and its identity carries both hashes, waiver= last (the console's host check
+    reads the product string's tokens)."""
+    repo, header = record_repo
+    build = tmp_path / "b"
+    cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "warning" not in (res.stdout + res.stderr).lower(), res.stdout + res.stderr
+    d = build / "boards" / "weact_h743"
+    data = (d / "fw.elf").read_bytes()
+    want = (rb"forklift-mcu normal OPEN \S+ rec=" + _sha8(repo, "records/ipropi.md").encode() +
+            rb" waiver=" + _sha8(repo, "records/waiver.md").encode() + rb" link=usb")
+    assert re.search(want, data), "identity without both hashes"
+    map_text = (d / "fw.map").read_text()
+    assert "motor_out_tim1" in map_text and "motor_out_locked" not in map_text
+    # Re-checked at every build like the IPROPI record (Codex design review of the IPROPI gate).
+    rec = repo / "records" / "waiver.md"
+    original = rec.read_text()
+    try:
+        rec.write_text(original + "edited\n")
+        # the image target itself, so a missing add_dependencies(fw waiver_record) fails here (Codex)
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "fw"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "differs from its committed version" in _flat(res.stdout + res.stderr)
+    finally:
+        rec.write_text(original)
+    # A git description long enough to cut waiver= out of the 126-character USB string is refused.
+    _git(repo, "tag", "-a", "-m", "long", "t" + "x" * 80)  # git describe reads annotated tags
+    try:
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "build_info"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "would cut the waiver= token" in _flat(res.stdout + res.stderr)
+    finally:
+        _git(repo, "tag", "-d", "t" + "x" * 80)
+
+
+def test_the_commissioning_open_build_carries_no_waiver(open_build):
+    data = (open_build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=[0-9a-f]{8} link=usb", data)
+    assert b"waiver=" not in data
+
+
+@pytest.mark.parametrize("extra, message", [
+    ((), "E-stop waiver record"),                                       # normal, outputs, no waiver
+    (("-DFW_ESTOP_WAIVER_RECORD=records/ipropi.md",), "no marker line"),  # the other record's marker
+    (("-DFW_ESTOP_WAIVER_RECORD=records/missing.md",), "is not a file"),
+    (("-DFW_ESTOP_WAIVER_RECORD=records/waiver.md", "-DFW_IPROPI_PROTECTION_RECORD="), "IPROPI"),
+])
+def test_normal_build_refuses_without_a_good_waiver(record_repo, tmp_path, extra, message):
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, *extra)
+    assert cfg.returncode != 0
+    assert message in _flat(cfg.stderr), cfg.stderr
+    assert "user's decision" in _flat(cfg.stderr)
+
+
+@pytest.mark.parametrize("extra", [
+    ("-DFW_BUILD=commission", "-DFW_MOTOR_OUTPUT=1", "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md"),
+    ("-DFW_BUILD=normal",),                                           # locked normal
+    ("-DFW_BUILD=hil",),
+    ("-DFW_BUILD=normal", "-DFW_TEST_IWDG_STALL=5"),
+])
+def test_the_waiver_is_only_for_the_open_normal_build(record_repo, tmp_path, extra):
+    """A waiver record given anywhere else is refused, not ignored (plan 2026-11-18)."""
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", *extra, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "FW_ESTOP_WAIVER_RECORD" in _flat(cfg.stderr), cfg.stderr
 
 
 def _identity(build: Path) -> str:

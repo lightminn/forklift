@@ -11,8 +11,14 @@
 #else
 #include "protection_record.h" /* FW_RECORD_TAG " rec=<record sha256, 8 hex>" */
 #endif
+#define FW_ESTOP_WAIVED_BUILD @FW_ESTOP_WAIVED@
+#if FW_ESTOP_WAIVED_BUILD
+#include "waiver_record.h" /* FW_WAIVER_TAG " waiver=<record sha256, 8 hex>" (plan 2026-11-18) */
+#else
+#define FW_WAIVER_TAG ""
+#endif
 #define FW_TOOLCHAIN "@FW_TOOLCHAIN_VERSION@"
 /* Board design 3.7: the USB product string and the head of the ELF identity. */
-#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG
+#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG FW_WAIVER_TAG
 
 #endif
