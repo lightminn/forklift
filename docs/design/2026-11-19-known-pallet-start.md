@@ -55,6 +55,15 @@ S10 사례 A: 테이프로 표시한 알려진 시작 → 접근 → 삽입 → 
 - 재위치 잠금: 복구 전·복구 직후·옛 세대 응답·현재 세대 확인에서 AUTO 와 텔레옵(주행·승강) 모두.
 - 재생 게이트 29/29(옵션 꺼짐 = 기록과 같은 호출, `_install_mission_plan` 옮기기 포함), 전체 pytest.
 
+## 5a. 구현에서 정한 것 (4a)
+
+- 이름: `known_pallet_request(t, rear, inputs, pickup)`·`known_pallet_refusal()`·`start_known_pallet_mission(...)`·`operator_target()`, 훅 `known_pocket_frame()`(scene·stamp_s·rear·base), `_s10_end`·`take_s10_stop()`.
+- **알려진 팔레트 층(`known_pallets`)이 켜져 있으면 거부**(`known_pallets_on`). 그 층의 사각형은 오도메트리 기준이라(보정과 함께 옮겨지고 나이에 따라 반경이 커짐) 지도 고정 자세를 그대로 담지 못한다. 실차 층 설정은 꺼져 있다(`config/real/obstacle_layer_real.yaml`). 지도 고정 사각형은 필요해질 때 따로 만든다.
+- 접근의 SLAM hold 는 `held_frame_pallet=False` 로 시작한다. 운용자 자세는 hold 전에 있던 지도 추정이 되어 끝 해제 때 옮겨지지 않는다. 대상 기록의 출처는 `operator_input` 이다.
+- **들어 올린 팔레트의 `last_pose` 는 지금처럼 hold 의 틀을 따라 옮긴다(설계 1절과 다름)**. 들린 팔레트는 포크가 있는 곳에 있고, 포크는 hold 의 틀(오도메트리)로 거기까지 갔기 때문이다. 현장 복구 뒤에는 어차피 `unlocated` 가 되고 다시 등록해야 한다.
+- 첫 깊이 프레임: D5 직선 0.20 m 앞(`KNOWN_FRAME_LEAD_M`)부터 검사가 만들어질 때까지 바퀴를 잡는다(장애물 스위치와 무관한 hold). 서 있을 때 훅을 읽고, 0.5 s 이내 프레임으로 검사를 만든다. 5 s 작업 시간 안에 못 받으면 `pocket_stop in approach: pocket_first_frame:*` 로 끝난다. 제동으로 직선에 들어가 섰어도 같은 대기를 하며, `pocket_missing` 으로 가지 않는다.
+- S10 의 그 틱 제어 정지는 코어가 `take_s10_stop()` 신호까지 낸다. 최종 바퀴 0·옛 DRIVE 폐기·측정 승강 정지 프레임은 4c 루프의 시험이다.
+
 ## 6. 자체 검토
 
 - Codex 1 회차: P1 2(S10 확인 틱의 바퀴 0 을 `terminate` 가 보장하지 않음 → 그 틱 제어 정지 + 배달 판정 없이 한 번 수거; 재위치 확인 전 텔레옵이 열림 → 4절), P2 4(설치와 관측 뒤처리 분리 → `_install_mission_plan`; 준비 경로로 계획·실패 처리; 지도 고정·출처; 포켓 검사의 첫 깊이 프레임 계약), P3 1(콘솔 표시·`s10_end` 소유). 반영.
