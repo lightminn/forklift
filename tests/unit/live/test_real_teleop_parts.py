@@ -165,6 +165,7 @@ def test_the_bench_safety_is_unknown_unless_all_four_are_confirmed():
 @pytest.mark.parametrize("change,reason", [
     ({"load": {"loaded": True}}, "real_loaded"),
     ({"recovery_required": True}, "real_recovery_required"),
+    ({"relocalize_required": True}, "real_relocalize_required"),
     ({"fork_in_pocket": {"value": True, "relation": "carrying"}}, "real_in_pocket"),
 ])
 def test_the_real_truck_overrides_come_before_the_policy(change, reason):
@@ -186,6 +187,22 @@ def test_a_recovery_context_cannot_open_the_straight_reverse():
 
 def test_unknown_stays_unknown():
     assert rt.enforce_real(None) is None
+
+
+@pytest.mark.parametrize("safety,reason", [
+    (None, "state_unknown"),
+    ({}, "state_unknown"),
+    ({"recovery_required": True}, "recovery_required"),
+    ({"relocalize_required": True}, "relocalize_required"),
+    ({"recovery_required": True, "relocalize_required": True}, "recovery_required"),
+])
+def test_the_real_auto_permit_refuses_on_the_core_keys(safety, reason):
+    base = rt.bench_safety(ALL) if safety else safety
+    assert rt.real_auto_refusal(base if safety is None or safety == {} else {**base, **safety}) == reason
+
+
+def test_the_real_auto_permit_opens_on_a_clear_picture():
+    assert rt.real_auto_refusal(rt.bench_safety(ALL)) is None
 
 
 def test_the_repository_config_loads_and_gives_a_command_cap():

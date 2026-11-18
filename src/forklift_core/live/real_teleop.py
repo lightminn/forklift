@@ -456,6 +456,19 @@ def bench_safety(confirmed) -> dict | None:
             "frame": {"hold": "none", "slam": False}, "mission": {"phase": "idle"}}
 
 
+def real_auto_refusal(safety: dict | None) -> str | None:
+    """The real truck's AUTO permit from the mission core's safety picture (plan 2026-11-18 PR 4: the real loop reads
+    it at arm and every tick; a submit is refused on the same cargo state already): unknown, a field recovery still
+    required, or a relocalization not yet confirmed for the generation the recovery's end asked for. None: open."""
+    if not safety:
+        return "state_unknown"
+    if safety.get("recovery_required"):
+        return "recovery_required"
+    if safety.get("relocalize_required"):
+        return "relocalize_required"
+    return None
+
+
 def enforce_real(safety: dict | None) -> dict | None:
     """The real truck's refusals put before the policy, whatever the provider gave (design 7): loaded teleop, a
     recovery still required, forks in a pocket or a recovery context (the policy would open its straight reverse;
@@ -467,6 +480,10 @@ def enforce_real(safety: dict | None) -> dict | None:
         s["teleop_refused"] = "real_loaded"
     elif s.get("recovery_required"):
         s["teleop_refused"] = "real_recovery_required"
+    elif s.get("relocalize_required"):
+        # 4d-2b-2's end: the truck may have been carried away -- nothing moves before this generation's
+        # relocalization (design 2026-11-19-known-pallet-start 4; the policy alone opened both)
+        s["teleop_refused"] = "real_relocalize_required"
     elif (s.get("fork_in_pocket") or {}).get("value") or s.get("recovery"):
         s["teleop_refused"] = "real_in_pocket"
     return s
@@ -1249,5 +1266,5 @@ class TeleopBridge:
 
 
 __all__ = ["CONFIRMATIONS", "EncoderReading", "EncoderSpeedParams", "STANDING_MPS", "bench_safety", "command_cap_mps",
-           "direction_limits", "encoder_speed", "enforce_real", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayBound", "output_direction_check", "ESCAPE_MPS", "ESCAPE_DISTANCE_M",
+           "direction_limits", "encoder_speed", "enforce_real", "real_auto_refusal", "load_bridge_params", "real_teleop_limits", "TeleopBridge", "counts_still", "DelayBound", "output_direction_check", "ESCAPE_MPS", "ESCAPE_DISTANCE_M",
            "ESCAPE_TIME_S", "ESCAPE_BRAKE_MIN_MPS2", "escape_stop_reach_m"]
