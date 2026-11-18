@@ -239,8 +239,12 @@ class Session:
         self.preflight(b.state)
         if self.floor:
             # design 3: a floor run needs real outputs, a wired e-stop and the main switch in reach
-            if b.allow_locked or b.state.flags & (StateFlag.OUTPUTS_LOCKED | StateFlag.ESTOP_UNWIRED):
-                raise Refused("floor: outputs locked or e-stop unwired (or --allow-locked given)")
+            why = floor_refusal(b.state.flags, allow_locked=b.allow_locked, estop_waived=b.host.estop_waived)
+            if why is not None:
+                raise Refused(why)
+            if b.state.flags & StateFlag.ESTOP_UNWIRED:
+                print(f"WARNING floor: no e-stop input on this board; waived by its image ({b.host.usb_product}) -- "
+                      "the main power switch is the only stop outside the MCU", file=sys.stderr, flush=True)
             if not self.power_switch_reachable:
                 raise Refused("floor: confirm the main power switch is reachable (--power-switch-reachable)")
         self.steer_hold = b.state.steering_rad  # the other axes stay where they are (design 3)
@@ -848,9 +852,21 @@ def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool
             "note": "software evidence only: the S5 verdict takes the external measurements"}
 
 
+def floor_refusal(flags, *, allow_locked: bool, estop_waived: bool) -> str | None:
+    """Why a --floor run must not arm (design 3): real outputs only, and a wired e-stop -- or, on V1.0, a board whose
+    USB product string names the waiver image (plan v1 e-stop waiver 3)."""
+    if allow_locked or flags & StateFlag.OUTPUTS_LOCKED:
+        return "floor: outputs locked (or --allow-locked given)"
+    if flags & StateFlag.ESTOP_UNWIRED and not estop_waived:
+        return "floor: e-stop unwired and the board's image names no waiver"
+    return None
+
+
 def _cap() -> float:
     cfg = load_real_vehicle(REPO / "config" / "real" / "vehicle.yaml")
-    return wheel_rate_cap(cfg.wheel_rate_limit_rad_s, None)  # the radius stays unmeasured until S2
+    # 0.2 m/s on the larger wheel radius (the configured one: nominal until S8, plan v1 e-stop waiver 3 -- without it
+    # the cap stayed 1.0 rad/s and the 0.132 m/s test, 1.06 rad/s, was refused)
+    return wheel_rate_cap(cfg.wheel_rate_limit_rad_s, max(cfg.wheel_radius_m))
 
 
 def _confirm(args, what: str) -> None:
