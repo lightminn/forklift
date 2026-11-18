@@ -20,7 +20,7 @@ OK = McuState(mcu_time_us=0, boot_id=7, arm_gen=0, last_rx_seq=0, mode=Mode.DISA
               flags=StateFlag.DRIVERS_READY | StateFlag.OUTPUTS_LOCKED)
 
 
-def write(tmp_path, header, n=200, **change):
+def write(tmp_path, header, n=1100, **change):
     rows = [header] if header else []
     for k in range(n):
         st = dataclasses.replace(OK, mcu_time_us=k * 10_000, kth_frames=(10 * k, 10 * k), **change)
@@ -49,6 +49,24 @@ def test_a_synthetic_record_is_refused_or_never_a_pass(tmp_path, capsys):
     assert code == 2 and out["result"] == "refused"
     code, out = run(capsys, "--record", str(path), "--allow-synthetic")
     assert code == 1 and out["result"] == "synthetic" and out["not_for_judgement"]
+
+
+def test_two_appended_runs_are_invalid(tmp_path, capsys):
+    path = write(tmp_path, {"t": "header", "device": "/dev/forklift-mcu"})
+    text = path.read_text()
+    path.write_text(text + text)  # bringup.py appends a second run to the same file (Codex P2-3)
+    code, out = run(capsys, "--record", str(path))
+    assert code == 1 and out["result"] == "invalid" and "several runs" in out["why"]
+
+
+def test_malformed_v3_counters_are_invalid(tmp_path, capsys):
+    for bad in ([], "12", None, [1], [1, -1], [1, 70000], [True, 1]):
+        path = write(tmp_path, {"t": "header", "device": "/dev/forklift-mcu"})
+        rows = [json.loads(x) for x in path.read_text().splitlines()]
+        rows[5]["kth_crc_errors"] = bad
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        code, out = run(capsys, "--record", str(path))
+        assert code == 1 and out["result"] == "invalid", bad
 
 
 def test_a_record_without_v3_counters_is_invalid(tmp_path, capsys):

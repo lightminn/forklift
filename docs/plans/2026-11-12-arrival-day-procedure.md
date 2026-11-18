@@ -175,7 +175,7 @@ python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --s
 python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/result.json   # 승강 KTH 를 달았으면 --lift-absent 를 뺀다
 ```
 
-합격은 `result == "pass"` 이고, 처음 10 s 를 다음 여섯 항목으로 본다. 기준값은 첫 확인용 작업값이라 **실측 뒤 재검토**한다.
+합격은 `result == "pass"` 이고, 처음 10 s 를 다음 여섯 항목으로 본다. 기록이 10 s 에 못 미치거나, 그 안에 재부팅·STATE 끊김(0.1 s 넘게)·MCU 시각 역행·계약보다 빠른 KTH 계수 증가가 있으면 `invalid` 다 — 새 파일로 다시 기록한다(한 파일에 여러 번 이어 쓴 기록도 `invalid`). 기준값은 첫 확인용 작업값이라 **실측 뒤 재검토**한다.
 
 | 항목 | 합격 | 근거 |
 |---|---|---|
@@ -190,7 +190,7 @@ python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/res
 
 **실패하면 볼 것**:
 - `drivers` 가 실패하면: VM 이 들어왔는지, `bad_status` 값, nFAULT 핀.
-- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이면 CRC 변형 문제다(6.2 `kth`).
+- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이거나 범위 밖이면, 아직 실측 전인 설정(CRC 변형·영점) 때문일 수 있다 — 고장으로 단정하지 말고 6.2 의 `kth` 판정과 영점 기록으로 가린다(Codex).
 - `current`·`faults` 가 실패하면: 6.1 4번에서 잰 핀 전압과 대조한다.
 
 ### 6.2 기록과 손 회전

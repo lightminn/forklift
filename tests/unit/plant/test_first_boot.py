@@ -82,8 +82,34 @@ def test_only_the_window_is_judged():
 
 
 def test_unusable_records_are_invalid_not_pass():
-    assert first_boot_check(record(n=30))["result"] == "invalid"            # under a second of STATEs
+    assert first_boot_check(record(n=30))["result"] == "invalid"            # ends before the window does
+    assert first_boot_check(record(n=900))["result"] == "invalid"           # 9 s: still short of 10
     assert first_boot_check(record(boot_id=8))["result"] == "invalid"      # a reboot inside the window
+
+
+def _edit(rec, k0, k1, **change):
+    return [dataclasses.replace(s, state=dataclasses.replace(s.state, **change)) if k0 <= k < k1 else s
+            for k, s in enumerate(rec)]
+
+
+def test_a_stall_or_clock_or_counter_fault_inside_the_window_is_invalid():
+    rec = record()
+    # 50 good STATEs, then nothing for 3 s: not a pass (Codex P2-1)
+    stalled = rec[:50] + [dataclasses.replace(s, state=dataclasses.replace(
+        s.state, mcu_time_us=s.state.mcu_time_us + 3_000_000)) for s in rec[50:]]
+    assert first_boot_check(stalled)["result"] == "invalid"
+    back = _edit(rec, 500, 1200, mcu_time_us=1_000)                          # the MCU clock jumps back (P2-4)
+    assert first_boot_check(back)["result"] == "invalid"
+    reset = [dataclasses.replace(s, state=dataclasses.replace(s.state, kth_frames=(0, 0))) if k == 500 else s
+             for k, s in enumerate(rec)]                                      # a counter reset reads as a wrap (P2-4)
+    assert first_boot_check(reset)["result"] == "invalid"
+
+
+def test_a_reboot_after_the_window_is_not_judged():
+    rec = record(n=1300)
+    later = [dataclasses.replace(s, state=dataclasses.replace(s.state, boot_id=9, mcu_time_us=k * 10_000))
+             if k >= 1200 else s for k, s in enumerate(rec)]                  # reboot at 12 s, its clock from 0 (P2-2)
+    assert first_boot_check(later)["result"] == "pass"
 
 
 def test_a_hil_or_synthetic_record_is_never_a_pass():

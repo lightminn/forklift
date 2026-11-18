@@ -10,6 +10,10 @@ whether the board came up as it should before anyone turns a wheel.
 - wheels_still: the wheel counts move at most ``WHEEL_STILL_COUNTS`` -- nobody touches the truck in the window;
 - link: no rise in ``rx_errors`` or ``cycle_overruns`` and no ``cycle_overrun`` bit.
 
+The window is the receipt-order prefix of one boot from the first STATE: it must reach ``window_s`` on the MCU clock
+with no STATE gap over ``GAP_MAX_S``, the clock only moving forward and each KTH counter rising at most once a
+millisecond (mcu-link/3 3.3) -- otherwise the record cannot be judged (invalid), never a pass.
+
 The thresholds are working values for a first look, not calibrations. A HIL plant's or a synthetic record's STATEs
 are never a pass."""
 
@@ -21,7 +25,8 @@ from collections.abc import Sequence
 from forklift_core.mcu_link.messages import FaultFlag, StateFlag, kth_counter_delta, wheel_count_delta
 
 WINDOW_S = 10.0
-MIN_STATES = 50  # half a second of STATEs at 100 Hz
+GAP_MAX_S = 0.1  # STATE every 10 ms (board design 5): a tenth of a second without one is a stall, not a first boot
+KTH_RATE_PER_MS = 1  # contract 3.3: each counter rises at most once a control cycle, the cycle >= 1 ms
 CURRENT_ZERO_MA = 50
 WHEEL_STILL_COUNTS = 2
 STATUS_TOP = 0xC0  # the DRV8244 SPI response's top bits are always 11 (SLVSG24C table 8-21)
@@ -35,13 +40,33 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
             "thresholds": {"current_zero_ma": CURRENT_ZERO_MA, "wheel_still_counts": WHEEL_STILL_COUNTS}}
     if not samples:
         return {**base, "result": "invalid", "why": "no STATE in the record"}
-    t0 = samples[0].state.mcu_time_us
-    win = [s.state for s in samples if s.state.mcu_time_us - t0 <= window_s * 1e6]
-    if len(win) < MIN_STATES:
-        return {**base, "result": "invalid", "why": f"{len(win)} STATEs in the window (need {MIN_STATES})"}
-    if any(st.boot_id != win[0].boot_id for st in win):
-        return {**base, "result": "invalid", "why": "the board rebooted inside the window: look at reset_cause"}
-    first, last = win[0], win[-1]
+    # the window in receipt order: stop at its end; a reboot, the clock going back, a gap or a counter rising faster
+    # than the contract allows before the end makes the record unjudgeable (Codex first-boot review P2-1, -2, -4)
+    first = samples[0].state
+    win = [first]
+    end_us = first.mcu_time_us + window_s * 1e6
+    for s in samples[1:]:
+        st, prev = s.state, win[-1]
+        if st.boot_id != first.boot_id:
+            return {**base, "result": "invalid", "why": "the board rebooted inside the window: look at reset_cause"}
+        dt_us = st.mcu_time_us - prev.mcu_time_us
+        if dt_us <= 0:
+            return {**base, "result": "invalid", "why": "the MCU clock went back or stood inside the window"}
+        if dt_us > GAP_MAX_S * 1e6:
+            return {**base, "result": "invalid", "why": f"a {dt_us / 1e6:.2f} s gap between STATEs inside the window"}
+        cap = KTH_RATE_PER_MS * (dt_us // 1000 + 1)
+        rises = [kth_counter_delta(getattr(st, f)[i], getattr(prev, f)[i])
+                 for f in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors") for i in range(2)]
+        if max(rises) > cap:
+            return {**base, "result": "invalid", "why": "a KTH counter rose faster than once a millisecond (reset?)"}
+        win.append(st)
+        if st.mcu_time_us >= end_us:
+            break
+    else:
+        return {**base, "result": "invalid",
+                "why": f"the record ends {(win[-1].mcu_time_us - first.mcu_time_us) / 1e6:.2f} s into the "
+                       f"{window_s:g} s window: record longer"}
+    last = win[-1]
     checks = {}
 
     bad_status = sorted({f"{'LRMH'[i]}=0x{v:02X}" for st in win for i, v in enumerate(st.driver_status)
