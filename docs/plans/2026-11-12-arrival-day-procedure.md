@@ -10,8 +10,8 @@
 - **결정 경계** — 아래는 이 절차가 대신 넘지 않는다.
   - 모터 전원(VM)은 IPROPI 보호 확인 전에는 S2 의 VM 투입 순서로만 넣는다(사용자 결정 2026-11-11).
   - 출력이 열린 빌드는 **커밋된 보호 확인 기록**이 있어야 구성된다(모터 출력 설계 2절). 출력을 열지는 사용자 결정(Q6)이다. 사용자가 채팅에서 결정을 말하면 에이전트가 기록을 써도 된다(사용자 2026-11-18, evidence 에 결정 원문).
-  - 지금 출력을 열 수 있는 빌드는 **시운전(`commission`) 하나뿐**이다. 지금 판(회로도 V1.0)에는 비상정지 입력이 없고, **다음 PCB 판에 커넥터를 더한다**(사용자 결정 2026-11-12). 그래서 출력이 열린 정상 빌드, **S4, S5 의 정상 빌드 시나리오(`tx_cut`·`disarm`·`expiry`), S6 텔레옵은 다음 판을 기다린다**(8절, 9.2, 11절).
-  - MCU 와 무관한 하드웨어 차단은 **사람이 손에 든 주 전원 차단 스위치**로 대신한다(사용자 결정 2026-11-12, 다음 PCB 때 재검토). 출력이 열린 실행에서는 늘 그 스위치를 손에 쥔다.
+  - 회로도 V1.0 이 최종판이고 비상정지 입력이 없다(사용자 2026-11-18). 출력이 열린 정상 빌드는 **사용자의 비상정지 면제 기록**이 있어야 구성된다([면제 계획](2026-11-18-v1-estop-waiver.md), #580·#584, 기록 #582). 그래서 **S4, S5 의 정상 빌드 시나리오(`tx_cut`·`disarm`·`expiry`), S6 텔레옵은 면제 이미지(2절 `fw-waived`)로 면제 계획 4절의 순서대로** 한다: S4 축별 폐루프(받침대) → 받침대 정지 확인 다섯 가지 → 바닥 0.05 m/s → 0.132 m/s. 8절·9.2·11절의 '다음 PCB 판' 문구는 이 결정 전의 것이다.
+  - MCU 와 무관한 하드웨어 차단은 **사람이 손에 든 주 전원 차단 스위치**(또는 배터리 커넥터 뽑기)로 대신한다(사용자 결정 2026-11-12, V1.0 최종판이라 그대로 — 면제 계획 0절). 출력이 열린 실행에서는 늘 손 닿는 곳에 둔다.
 - **기록**: 실행마다 `artifacts/<UTC 시각>_<단계>_<구분>/` 를 새로 만든다. 예: `artifacts/20261120T093000Z_s3_commission_L_01/`. 덮어쓰지 않는다.
   - 구동 명령은 결과를 `run.jsonl` 의 `{"t":"result"}` 줄과 stdout JSON 두 곳에 남긴다.
   - `cpr`·`analyze`·`kth`·`clock`·`rearm_hold_check.py` 는 stdout 에만 남기므로 `| tee result.json` 을 붙인다.
@@ -57,10 +57,14 @@ build_fw stall -DFW_TEST_IWDG_STALL=5            # S5 ①: 부팅 5 s 뒤 주기
 # S3·S5(9.1 의 ②·시운전 상한 DISARM·주 전원 차단 모두): 출력 열린 시운전 빌드 — 사용자가 보호 확인 기록을 커밋한 뒤에만 구성된다
 build_fw open -DFW_BUILD=commission -DFW_MOTOR_OUTPUT=1 \
   -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md   # 사용자 기록 #552
+# S4·S5 정상 빌드 시나리오·S6: 출력 열린 정상 빌드(면제 이미지) — 면제 계획 4절 순서(S4 → 받침대 정지 확인 다섯 가지 → 바닥 0.05 m/s → 0.132 m/s)
+build_fw waived -DFW_BUILD=normal -DFW_MOTOR_OUTPUT=1 \
+  -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md \
+  -DFW_ESTOP_WAIVER_RECORD=docs/validation/2026-11-18-estop-waiver-record.md        # 사용자 기록 #582
 ```
 
 - ELF: `build/fw-<이름>/boards/weact_h743/fw.elf`(stall 은 `fw_iwdg_stall.elf`).
-- 굽기 전 정체 확인: `strings build/fw-<이름>/boards/weact_h743/fw*.elf | grep '^forklift-mcu'`. 빌드 종류, `locked` 또는 `OPEN … rec=<기록 해시>`, git 커밋, `link=usb` 가 맞는지 본다.
+- 굽기 전 정체 확인: `strings build/fw-<이름>/boards/weact_h743/fw*.elf | grep '^forklift-mcu'`. 빌드 종류, `locked` 또는 `OPEN … rec=<기록 해시>`(면제 이미지는 끝에 `waiver=<면제 기록 해시>` 까지), git 커밋, `link=usb` 가 맞는지 본다.
 - 크로스 시험(로컬 전용): `python -m pytest tests/integration/test_firmware_cross.py -q`.
 
 ## 3. S0 — 첫 굽기와 옵션 바이트 (메인보드에서 뺀 WeAct 만)
@@ -421,7 +425,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 
 ### 12.1 언제
 
-- 바닥 주행이 열린 뒤다: 다음 PCB 판 → S6 텔레옵 단계, 자율 단계 전(0 절 결정 경계, 계획 5 절).
+- 바닥 주행이 열린 뒤다: 면제 이미지로 면제 계획 4절의 받침대·바닥 정지 확인을 마친 뒤([면제 계획](2026-11-18-v1-estop-waiver.md) 4절 7번), S6 텔레옵 단계, 자율 단계 전(0 절 결정 경계, 계획 5 절).
 - 속도는 지금의 S6 범위 안이다(텔레옵 명령 상한 0.132 m/s, 안전 상한 0.2 m/s). 속도 이력(가감속 포함)을 시행마다 같게 정하고 기록한다.
 - **측정 전에 고정할 것(시뮬-물성 세션과 함께):** 시행 수, 속도 이력, 참값 방법(12.4), 그리고 출처 6.5 의 읽는 법 전체. 고정한 값은 `docs/plans/` 의 별도 등록 문서로 남기고 그 뒤에 잰다. 등록 문서는 6.5 를 빠짐없이 이어받는다(제안값):
   - M3 의 **0.9 m 합류에서 0.42 m 뒤**의 |heading 오차|·|횡 오차| 를 시행마다 구해 그 절댓값들의 중앙값으로 읽고, 오프셋·방향별로도 낸다.
