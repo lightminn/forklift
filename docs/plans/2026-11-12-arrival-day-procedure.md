@@ -9,7 +9,7 @@
 - **멈춤**: 단계의 멈춤 조건이 하나라도 생기면 그 단계에서 멈추고, 원인과 기록 경로를 남긴 뒤 총괄에 올린다. 다음 단계로 넘어가지 않는다.
 - **결정 경계** — 아래는 이 절차가 대신 넘지 않는다.
   - 모터 전원(VM)은 IPROPI 보호 확인 전에는 S2 의 VM 투입 순서로만 넣는다(사용자 결정 2026-11-11).
-  - 출력이 열린 빌드는 **사용자가 쓰고 커밋한 보호 확인 기록**이 있어야 구성된다(모터 출력 설계 2절). 그 기록을 쓰는 것이 사용자 결정(Q6)이고, 에이전트는 만들지 않는다.
+  - 출력이 열린 빌드는 **커밋된 보호 확인 기록**이 있어야 구성된다(모터 출력 설계 2절). 출력을 열지는 사용자 결정(Q6)이다. 사용자가 채팅에서 결정을 말하면 에이전트가 기록을 써도 된다(사용자 2026-11-18, evidence 에 결정 원문).
   - 지금 출력을 열 수 있는 빌드는 **시운전(`commission`) 하나뿐**이다. 지금 판(회로도 V1.0)에는 비상정지 입력이 없고, **다음 PCB 판에 커넥터를 더한다**(사용자 결정 2026-11-12). 그래서 출력이 열린 정상 빌드, **S4, S5 의 정상 빌드 시나리오(`tx_cut`·`disarm`·`expiry`), S6 텔레옵은 다음 판을 기다린다**(8절, 9.2, 11절).
   - MCU 와 무관한 하드웨어 차단은 **사람이 손에 든 주 전원 차단 스위치**로 대신한다(사용자 결정 2026-11-12, 다음 PCB 때 재검토). 출력이 열린 실행에서는 늘 그 스위치를 손에 쥔다.
 - **기록**: 실행마다 `artifacts/<UTC 시각>_<단계>_<구분>/` 를 새로 만든다. 예: `artifacts/20261120T093000Z_s3_commission_L_01/`. 덮어쓰지 않는다.
@@ -136,6 +136,9 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
 
 1. 모터 전원 경로를 뺀다. 배터리 → F1 → LM74801 → VCC·5 V·**3.3 V**·19 V 레일을 무부하·부하로 잰다. 각 레일 공칭 ±5 % 안이어야 한다.
 2. Jetson 을 19 V 로 켜고 MAXN SUPER 로 둔 채 **최대 부하를 실제로 건다**(CPU·GPU 를 함께 쓰는 부하 프로그램 — 모드만 바꿔 놓고 쉬는 것은 최대 부하가 아니다). 10 분 동안 19 V 와 Jetson 이 안정한지 본다.
+   - 장치는 Orin Nano Super(`scienceowl@jetson.local`, zetin Wi-Fi, 2026-11-17 기록 [hw-day](../validation/2026-11-17-hw-day.md)). 부하는 `HW_DAY=<날짜> bash tools/hwday/jetson_stall.sh 300`(정지 5 분 + 모든 코어 부하 5 분, 다리 정체 판정 포함)이다. 이 부하는 CPU 만이고, **S1-2 는 이것으로 합격 처리**한다(총괄 2026-11-18: 지금 실차 스택은 GPU 를 무겁게 쓰지 않음. GPU 부하는 인식을 Jetson GPU 로 돌릴 때 다시).
+   - 재부팅 뒤 `jetson_clocks` 가 풀리는지는 전날 `tools/hwday/jetson_prep.sh` 가 기록한다. 풀렸으면 부하 전에 `bash tools/hwday/jetson_power.sh` 를 한 번 돌린다.
+   - 당일 순서·판정 한 장: [11-20 순서표](2026-11-20-arrival-day-sequence.md).
 3. **역전원**: WeAct 를 메인보드에 꽂고 USB-C 를 연결한 채 주 전원을 끈다. 메인보드 5 V 레일에 전압이 생기면 역전원이다(보드 설계 3.1). 그러면 VBUS 를 끊은 케이블이나 UART7 을 쓴다.
 4. **멈춤**: 어느 레일이든 정격 밖, 발열, 역전원.
 
@@ -167,7 +170,31 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
      - 플래시 실장 여부와 판정 결과
    - **오실로스코프가 없으면**: 플래시를 단 채로는 부팅하지 않는다. 멀티미터로는 SDO high 를 판정할 수 없으므로, 그렇게 부팅하면 노출만 있고 판정은 없다. 오실로스코프를 구할 때까지 5번을 미룬다. 미룰 수 없으면, 플래시를 먼저 떼고 진행할지를 총괄에 올린다(사용자 결정).
 
-STATE 에서 `flags` 에 `outputs_locked`, 그리고 `drivers_ready` 를 확인한다.
+**첫 부팅 판정**: 부팅하고 링크가 열리면, 아무것도 만지지 않은 채 15 s 를 기록해 도구로 판정한다. 손작업은 없다(기다리기만 한다).
+
+```bash
+D=artifacts/20261120T095000Z_s2_first_boot_01; mkdir -p $D
+python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --seconds 15
+python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/result.json   # 승강 KTH 를 달았으면 --lift-absent 를 뺀다
+```
+
+합격은 `result == "pass"` 이고, 처음 10 s 를 다음 여섯 항목으로 본다. 기록이 10 s 에 못 미치거나, 그 안에 재부팅·STATE 끊김(0.1 s 넘게)·MCU 시각 역행·계약보다 빠른 KTH 계수 증가가 있으면 `invalid` 다 — 새 파일로 다시 기록한다(한 파일에 여러 번 이어 쓴 기록도 `invalid`). 기준값은 첫 확인용 작업값이라 **실측 뒤 재검토**한다.
+
+| 항목 | 합격 | 근거 |
+|---|---|---|
+| `drivers` | 모든 STATE 에서 `drivers_ready`, DRV8244 네 개의 `driver_status` 가 상위 2비트 11·하위 결함 6비트 0 | 응답의 상위 비트는 언제나 11(SLVSG24C 표 8-21). VM 이 없으면 0x0000 이 온다 |
+| `current` | `current_sense_invalid` 없음, 네 채널 모두 \|`current_ma`\| ≤ 50 mA | 모터를 떼었으니 0 이어야 한다. 1 ADC 카운트 ≈ 0.24 mA(R_IPROPI 1 kΩ, A_IPROPI 4,750). 50 mA 는 약 200 카운트로, 영점 오프셋·잡음을 넉넉히 덮는 작업값이다 |
+| `faults` | 예상 밖 결함 비트 없음(`--lift-absent` 면 승강 축 두 비트는 허용) | 손대지 않은 부팅에는 결함이 없어야 한다 |
+| `kth` | 조향(승강을 달았으면 승강도)이 NaN 아님, 축마다 받은 프레임 수(`kth_frames`)가 오름 | mcu-link/3 3.3 |
+| `wheels_still` | 바퀴 카운트가 2 카운트 넘게 움직이지 않음 | 엔코더 떨림 허용량(작업값). 아무도 만지지 않는 동안이다 |
+| `link` | `rx_errors`·`cycle_overruns` 가 오르지 않고 `cycle_overrun` 비트 없음 | 링크·주기가 깨끗해야 한다 |
+
+함께 나오는 `report` 에서 `outputs_locked`(출력 잠금 빌드)와 `reset_cause`(첫 전원이면 `POWER`)를 확인한다.
+
+**실패하면 볼 것**:
+- `drivers` 가 실패하면: VM 이 들어왔는지, `bad_status` 값, nFAULT 핀.
+- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이거나 범위 밖이면, 아직 실측 전인 설정(CRC 변형·영점) 때문일 수 있다 — 고장으로 단정하지 말고 6.2 의 `kth` 판정과 영점 기록으로 가린다(Codex).
+- `current`·`faults` 가 실패하면: 6.1 4번에서 잰 핀 전압과 대조한다.
 
 ### 6.2 기록과 손 회전
 
@@ -278,7 +305,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run_M.jso
 python tools/bringup.py step --device /dev/forklift-mcu --out $D/run.jsonl --wheel left --target 0.8
 ```
 
-- 바퀴 반경 실측 전 상한은 1.0 rad/s, 계단은 최대 3 s 다.
+- 바퀴 목표 상한은 0.2 m/s 를 설정된 바퀴 반경(지금 공칭 0.125 m, S8 실측 전)으로 바꾼 1.6 rad/s 다(V1.0 e-stop 면제 계획 3절: 1.0 rad/s 면 0.132 m/s 시험이 막혔다). 계단은 최대 3 s 다.
 - 기록할 값: `rise_s`·`overshoot_pct`·`settle_s`·`unsettled`·`gaps`.
 - 계획 S4 의 조향 추종 응답과 엔코더 고장 주입(커넥터 뽑기·A/B 바꾸기)도 이때 한다 — 그 전까지 **미완료**.
 
@@ -437,7 +464,7 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
 
 **G3 차체 위 절차**(S6 텔레옵이 열린 뒤, 포크를 가장 낮게 둔 채 — IMU 가 캐리지에 붙어 승강과 함께 움직인다. 승강하면 다시 잰다). 이 차는 제자리 회전을 못 하므로(뒤축 기준 유한 곡률) 원호로 잰다:
 
-1. `imu_record.py --out artifacts/<UTC>_g3/imu.jsonl` 과 `teleop_bridge.py --record … --markers` 를 같은 Jetson 에서 띄운다.
+1. `imu_record.py --out artifacts/<UTC>_g3/imu.jsonl` 과 `teleop_bridge.py --record … --markers` 를 같은 Jetson 에서 띄운다. Jetson 의 `pyrealsense2` 는 PyPI 휠이 아니라 `~/src/librealsense`(v2.59.2) 소스 빌드다 — 휠로는 Motion Module 이 보이지 않았다(2026-11-17, 설치 `tools/hwday/jetson_librealsense_build.sh`).
 2. 데움 → 정지 60 s → 왼쪽 최대 곡률 원호 2 바퀴(S6 속도, 지름 2/κ_max 의 빈 바닥) → 정지 60 s → 오른쪽 최대 곡률 2 바퀴 → 정지 60 s. 원호의 정상 구간 시작·끝을 G5 표지로 남긴다.
 3. 결과: 정지 중력으로 잰 위쪽 `û_g`, 앞뒤 정지 편향을 뺀 두 방향 원호 축 `û_ω`, 세 벡터 사이 각, 정지 구간 사이 편향 변화, 중력 기준 회전 부호(왼쪽 양·오른쪽 음)와 바퀴 오도메트리 부호의 일치, 원호 중 위쪽에 수직인 회전 성분(평면 가정 진단값, yaw 오차 상한 아님).
 4. 측정 전에 시뮬-물성과 등록할 것: 최소 데움 시간과 정지 구간 사이 편향 변화 허용치(넘으면 다시 기다림), `û_g`·`û_ω` 사이 각의 문턱(넘으면 평면 가정이나 장착을 의심하고 멈춤). 책상 실측의 450–960 s 는 데움 시정수이지 완료 시간이 아니다.
@@ -455,7 +482,7 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
   - 일정표 주행 구간에서는 텔레옵 명령 기한(0.30 s)이, 정지 구간에서는 lease(1.0 s)가 DRIVE 만료에 들어간다. 단말이 그만큼 멈추면 MCU 가 멈추고 그 시행은 `void:disarmed:mcu_stopping` 이다.
 - **다리 정체:** 다리 루프가 약 100 ms 넘게 멈추면 DRIVE 가 끊기고 같은 결과가 난다(85–150 ms 구간은 12.3a).
 - **단말 정지나 다리 정체로 난 `void:disarmed:mcu_stopping` 도 다른 void 와 같이 그날 블록 끝에 같은 일정표로 다시 한다**(등록 1.1). 현장 점검표에는 원인(단말·다리)을 결과 계산 전에 적는다.
-- 확인한 사실(노트북 리허설, 2026-11-16): 운용자 대역(websocket 클라이언트)이 약 1 s 멈춘 정지 중 시행이 `COMMAND_TIMEOUT` 으로 void 됐다. CPU 절반을 점유한 부하 창에서 다리 루프가 한 번 124 ms 멈춰 `mcu_stopping` 이 났다(80 ms 한 번은 견딤). Jetson 에서는 아직 재지 않았다(Jetson 을 LAN 에 연결한 뒤 같은 측정을 한다).
+- 확인한 사실(노트북 리허설, 2026-11-16): 운용자 대역(websocket 클라이언트)이 약 1 s 멈춘 정지 중 시행이 `COMMAND_TIMEOUT` 으로 void 됐다. CPU 절반을 점유한 부하 창에서 다리 루프가 한 번 124 ms 멈춰 `mcu_stopping` 이 났다(80 ms 한 번은 견딤). Jetson(Orin Nano Super, MAXN_SUPER + `jetson_clocks`)에서는 2026-11-17 에 정지·모든 코어 부하 5 분씩 40 ms 넘는 주기 0, 최대 29.6 ms 였다([hw-day](../validation/2026-11-17-hw-day.md)) — 실차 다리의 기준선은 이 값이다.
 
 ### 12.4 참값 (출처 6.3)
 

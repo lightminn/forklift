@@ -6,9 +6,8 @@
 
 | 항목 | 사용자가 할 일 |
 |---|---|
-| udev 규칙(Jetson) | Jetson 을 연결한 뒤 Jetson 에서 절차서 4 절 명령을 sudo 로 한 번 돌린다(노트북은 설치됨). |
+| Jetson 켜기(11-19) | Jetson 을 켜고 zetin Wi-Fi 에 붙인다(1 분). 콘솔 세션이 `tools/hwday/jetson_prep.sh` 로 main 반영·스캔 이미지 적재·부팅 뒤 전원 상태를 기록한다([11-20 순서표](2026-11-20-arrival-day-sequence.md)) |
 | A2M12 연결(G4) | A2M12 를 노트북에 연결해 `scan_check.py` 실측을 할 수 있게 한다. 이것이 7b(다리 스캔 원천)와 G6 실차 주행의 선행 조건이다. |
-| Jetson LAN | Jetson 을 LAN 에 연결하고 접속 정보를 총괄에 알린다. 다리 정체 측정(nvpmodel 모드·jetson_clocks 고정·기록)과 실차 운용 경로 확인에 필요하다. |
 | 현장 준비물 | bring-up 안전 물건(절차서 1 절: 받침대·스트랩, 손에 쥐는 주 전원 차단 스위치, 승강 낙하 방지 블록, 멀티미터, 전류 제한 벤치 전원, 오실로스코프, 외부 리셋 버튼)과 M1–M3 용 **줄자·마스킹 테이프**만 갖춘다(등록 개정 4: 바닥 십자·지시봉·천장 카메라는 필요 없음). |
 | A2M12 장착 | A2M12 는 **차체 둘레가 가리지 않는 높이·위치**에 단다(7b: 가림이 차체 둘레에 걸리면 그 방향 허가가 늘 0). 장착 뒤 뒤축 기준 x·y·z·yaw 를 줄자로 재어 절차서 11a 대로 다리에 넣는다. |
 
@@ -16,6 +15,7 @@
 
 | 항목 | 근거 |
 |---|---|
+| Jetson(Orin Nano Super, `scienceowl@jetson.local`) | 2026-11-17([hw-day](../validation/2026-11-17-hw-day.md)): 저장소·venv `.[real,console]`, udev, `dialout`·`docker` 그룹, MAXN_SUPER + `jetson_clocks`, 다리 정체 정지·부하 PASS(최대 29.6 ms), H743 HIL 링크 PASS, D435i IMU 400/200 Hz(librealsense 소스 빌드). `tools/hwday` 기본값은 이 장치(#577) |
 | Arm GNU Toolchain 13.3.rel1 | 노트북 `~/opt/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi`(절차서 2 절의 `<TC>`) |
 | STM32CubeProgrammer CLI | 노트북에 2.23.0 설치(2026-11-16, `STM32_Programmer_CLI --version`, `-l usb` 동작 — 장치 없음) |
 | 모터 출력 보호 확인 기록 | 사용자가 작성·커밋(#552, `docs/validation/2026-11-16-ipropi-protection-record.md`): 보호 회로 없이 출력을 연다, 예비 보드 있음. 게이트 검사 `rec=1f4207f4` 통과(총괄 확인). 절차서 2 절의 open 빌드 명령에 경로를 채움 |
@@ -36,5 +36,6 @@
 
 | 항목 | 상태 |
 |---|---|
-| Jetson 다리 정체 측정 | Jetson LAN 연결 뒤. nvpmodel·jetson_clocks 를 고정해 기록 |
-| 절차서의 Jetson 전원 모드 지정 항목 | 제안 단계(측정 결과로 정한다) |
+| 재부팅 뒤 `jetson_clocks` | 11-19 `jetson_prep.sh` 기록으로 확인. 풀리면 S1 부하 전에 `jetson_power.sh` |
+| S1 의 GPU 부하 도구 | 만들지 않음(총괄 2026-11-18): S1-2 는 CPU 모든 코어 부하로 합격 처리, GPU 부하는 인식을 Jetson GPU 로 돌릴 때 다시 |
+| Wi-Fi + ssh 터널 텔레옵 송신 간격 | 바닥 주행 전(콘솔 표시로 5 분, 모형 MCU) |

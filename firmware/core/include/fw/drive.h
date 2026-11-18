@@ -107,6 +107,9 @@ typedef struct {
     bool hil_plant;              /* FW_HIL_PLANT: an in-MCU model fills the inputs */
     bool outputs_locked;         /* the board never drives the motor outputs */
     bool estop_wired;            /* an e-stop input pin exists */
+    /* V1.0 e-stop waiver (plan 2026-11-18): an open normal build without a pin may arm, behind a
+       committed user record checked at build time. STATE still reports estop_unwired. */
+    bool estop_waived;
     float commission_duty_max;   /* COMMISSION |duty| limit, (0, 1]; commission builds only */
     uint32_t commission_time_ms; /* continuous non-zero COMMISSION duty limit */
     float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */

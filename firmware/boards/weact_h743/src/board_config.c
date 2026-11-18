@@ -85,6 +85,11 @@ static drive_config make(void)
     c.outputs_locked = true;
 #endif
     c.estop_wired = false;          /* no e-stop net on schematic V1.0 */
+#if defined(FW_ESTOP_WAIVED)
+    c.estop_waived = true; /* behind the e-stop waiver record gate (plan 2026-11-18) */
+#else
+    c.estop_waived = false;
+#endif
     c.commission_duty_max = 0.15f;  /* plan 3.4 */
     c.commission_time_ms = 2000;    /* plan 3.4 */
     c.wheel_duty_slew_per_s = 2.0f; /* S1/S3 실측 대기 */

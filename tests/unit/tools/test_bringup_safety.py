@@ -33,8 +33,10 @@ def test_the_drive_holds_the_other_axes():
     assert (d.left_wheel_rad_s, d.right_wheel_rad_s, d.steering_rad) == (0.5, 0.0, 0.25)
 
 
-def test_the_cap_comes_from_the_vehicle_limit_and_the_unmeasured_radius():
-    assert bringup._cap() == pytest.approx(1.0)  # radius unmeasured: 1.0 rad/s, under the 8 rad/s operating limit
+def test_the_cap_comes_from_the_vehicle_limit_and_the_configured_radius():
+    # 0.2 m/s on the configured (nominal, until S8) radius 0.125 m: 1.6 rad/s, under the 8 rad/s operating limit
+    # (plan v1 e-stop waiver 3: the 1.0 rad/s of an unmeasured radius refused the 0.132 m/s test, 1.06 rad/s)
+    assert bringup._cap() == pytest.approx(1.6)
 
 
 def test_an_unconfirmed_operator_refuses(monkeypatch):
