@@ -107,6 +107,7 @@ KNOWN = {
         "near_capture_no_final_straight", "slam_release_no_stop after ", "docking_retry_match_refused:",
         "obstacle_live_plan_failed in ", "planning_wait_moving", "async_plan_discarded:", "near_field_",
         "withdraw_not_certified:no_pallet_estimate", "withdraw_not_certified:", "pocket_stop in ",
+        "pocket_stop in approach: pocket_first_frame", "pocket_check_missing_at_insert",
         "obstacle_replan_failed in ", "transport_recovery_after_docking", "stall_replan_failed:",
         "observe_replan_failed:", "obstacle_blocked in ", "obstacle_replan_limit in ", "async_near_no_fresh_depth",
         "plan_worker_dead: ",

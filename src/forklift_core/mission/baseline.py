@@ -59,6 +59,7 @@ MISSION_KEYS = {
         "escape_presteer_drives",  # the presteered escapes' cuts and ends (plan 2026-10-27-escape-presteer D3)
         "exit_prefix_exempt",  # the exit-prefix latches' records (plan 2026-10-28-exit-prefix-extract-rules D5)
         "operator_checks",  # the real truck's operator confirmations (sim-to-real 4d-2b-1)
+        "s10_end",  # S10 case A's end at the carry height (design 2026-11-19-known-pallet-start 3)
     ),
     "obstacle": (
         "pickup_estimate", "pallet_rel", "delivered_pending", "withdraw_line",
@@ -80,6 +81,7 @@ MISSION_KEYS = {
         "capture", "history", "planning_pickup", "await_still_frame", "mid_still_done", "zero_since",
         "control_stamped", "still_frame_s", "still_frames", "last_reason",
         "frames_read", "frames_bad_time", "frames_without_time", "silenced_frames",
+        "first_frame_since",  # a known start's first-frame stand (design 2026-11-19-known-pallet-start 2)
     ),
 }
 # Inside a session dict, the mission's fields only (D0 7: near_tracking's run fields; its settings are the session's).

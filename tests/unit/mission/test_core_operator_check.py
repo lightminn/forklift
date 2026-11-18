@@ -200,3 +200,54 @@ def test_end_reset_clears_the_operator_request():
 
     src = inspect.getsource(MissionCore.end_reset)
     assert "self._operator.update(request=None, answer=None, motion_since=None, motion_key=None)" in src
+
+
+def s10_core(*, on=True):
+    core, hooks, moved = make(lift=0.1)
+    core.options.s10_stop_at_lift = on
+    core.commands.status, core.commands.mission_id = "running", "m1"
+    core.state["planning_target_source"] = "operator_input"
+    core.cargo.relation, core.cargo.load = "constrained", "acquiring"
+    core.lift_and_timers(5.0, 0.01)  # the request
+    hooks.answer = (1, "confirm")
+    return core, hooks, moved
+
+
+def test_s10_stops_at_the_carry_height_once_without_extract_or_a_delivery_verdict():
+    """Design 2026-11-19-known-pallet-start 3: the confirm tick carries the pallet, signals a control stop for this
+    tick and ends the mission recovery_required/s10_lifted once; no extract (its obstacle memory change) follows."""
+    core, hooks, moved = s10_core()
+    assert core.lift_and_timers(5.1, 0.01) is False  # no delivery verdict
+    assert moved == [] and core.ms.phase == "lift"
+    assert (core.cargo.relation, core.cargo.load) == ("carrying", "confirmed")
+    assert core.state["s10_end"] == {"time_s": 5.1, "lift_m": 0.1, "pallet_source": "operator_input"}
+    assert core.take_s10_stop() == 5.1 and core.take_s10_stop() is None  # read once, in the confirm tick
+    cmds = core.commands
+    assert (cmds.status, cmds.end_reason) == ("recovery_required", "s10_lifted")
+    ends = [e for e in cmds.log if e.get("command") == "end"]
+    assert len(ends) == 1
+    asked = len(hooks.asked)
+    core.lift_and_timers(5.2, 0.01)
+    core.lift_and_timers(20.0, 0.01)
+    assert len(hooks.asked) == asked and "s10_end" in core.state and core.state["s10_end"]["time_s"] == 5.1
+    assert [e for e in cmds.log if e.get("command") == "end"] == ends and core.take_s10_stop() is None
+
+
+def test_s10_off_lifts_into_extract_as_before():
+    core, hooks, moved = s10_core(on=False)
+    core.lift_and_timers(5.1, 0.01)
+    assert moved == ["extract"] and "s10_end" not in core.state and core.take_s10_stop() is None
+    assert core.commands.status == "running"
+
+
+def test_s10_keeps_the_reject_and_the_reach_limit():
+    core, hooks, moved = s10_core()
+    hooks.answer = (1, "reject")
+    with pytest.raises(Failed, match="Pallet was not lifted"):
+        core.lift_and_timers(5.1, 0.01)
+    core, hooks, moved = make(lift=0.05)
+    core.options.s10_stop_at_lift = True
+    core.commands.status = "running"
+    core.lift_and_timers(5.0, 0.01)
+    with pytest.raises(Failed, match="Lift did not reach its position"):
+        core.lift_and_timers(15.1, 0.01)

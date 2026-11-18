@@ -371,3 +371,31 @@ def test_teleop_and_auto_stay_shut_until_this_generation_relocalizes(lift_m):
     assert core.relocalized(23.0, gen) is True
     teleop, auto = gates()
     assert teleop.drive_allowed and teleop.lift_allowed and auto is None
+
+
+def test_an_s10_end_on_the_forks_locks_teleop_and_auto_through_the_recovery_and_the_relocalization():
+    """Design 2026-11-19-known-pallet-start 3-4: after S10's carry-height end the field recovery opens (the pallet on
+    the forks), nothing moves until it is done, then nothing until this generation's relocalization."""
+    from forklift_core.live.real_teleop import enforce_real, real_auto_refusal
+
+    core = field_core(relation="constrained")
+    core.cargo.confirm_lifted()  # S10's confirm tick
+    core.baseline = SimpleNamespace()
+    core.commands.status, core.commands.adopted_id = "recovery_required", None
+    core.jobs, core.abandon_jobs = None, lambda t: None
+    core._open_field_recovery(10.0)  # noqa: SLF001 -- what end_reset does
+    assert core.field_recovery is not None
+
+    def gates(t):
+        s = core.safety_state(t)
+        return teleop_policy(enforce_real(s), feedback_ok=True, standing=True, lift_m=0.1), real_auto_refusal(s)
+
+    teleop, auto = gates(11.0)
+    assert not teleop.drive_allowed and not teleop.lift_allowed and auto == "recovery_required"
+    assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
+    teleop, auto = gates(21.0)
+    assert not teleop.drive_allowed and not teleop.lift_allowed and auto == "relocalize_required"
+    assert core.targets.pallets["P1"].state == "unlocated"
+    assert core.relocalized(22.0, core.relocalize_generation()) is True
+    teleop, auto = gates(23.0)
+    assert teleop.drive_allowed and auto is None

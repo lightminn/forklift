@@ -67,7 +67,8 @@ PREFIXES = {
     "--latency-layer declared is not combined with a layer latency budget": SESSION, "--layer-worker-k ": SESSION,
     "sensor_timeout_s ": SESSION,
     "perception_capture_failed": MISSION, "observation_discarded": MISSION, "near_capture_": MISSION,
-    "pocket_check_refused": MISSION,  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
+    "pocket_check_refused": MISSION,
+    "pocket_check_missing_at_insert": MISSION,  # a known start's approach arrived with no check (design 2026-11-19)  # the insertion refused (it turns on the observed yaw too; Codex D6 P2-5)
     "near_field_": MISSION, "observe:": MISSION, "observe_replan_failed": MISSION, "docking_": MISSION,
     "observe_start_backoff_": MISSION,  # plan 2026-10-26-observe-start-backoff: short / stopped
     "slam_release_": MISSION, "async_plan_failed": MISSION, "async_plan_discarded": MISSION,
