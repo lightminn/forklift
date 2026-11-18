@@ -12,7 +12,7 @@ echo "== before $(date -Is)"; jsudo 'nvpmodel -q'
 id=$(jssh "awk -v n=$mode '/POWER_MODEL/ {for(i=1;i<=NF;i++){if(\$i ~ /^ID=/) id=substr(\$i,4); if(\$i ~ /^NAME=/) nm=substr(\$i,6)} if(nm==n) print id}' /etc/nvpmodel.conf" | head -1)
 [[ -n "$id" ]] || { echo "mode $mode not in /etc/nvpmodel.conf:"; jssh "grep POWER_MODEL /etc/nvpmodel.conf"; exit 2; }
 echo "== store clocks (once)"
-jsudo "test -e /home/${JETSON_USER:-zetin}/forklift-jetson_clocks.conf || jetson_clocks --store /home/${JETSON_USER:-zetin}/forklift-jetson_clocks.conf"
+jsudo "test -e /home/${JETSON_USER:-scienceowl}/forklift-jetson_clocks.conf || jetson_clocks --store /home/${JETSON_USER:-scienceowl}/forklift-jetson_clocks.conf"
 jssh 'test -s ~/forklift-jetson_clocks.conf' || { echo "the clock backup is missing: nothing changed"; exit 2; }
 echo "== nvpmodel -m $id ($mode)"; jsudo "nvpmodel -m $id" || true
 now=$(jsudo 'nvpmodel -q' | head -1)

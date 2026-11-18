@@ -1,16 +1,19 @@
 # 11-17 (plan B): sourced by the jetson_*.sh scripts (run those with bash; this file reads BASH_SOURCE, so sourcing it
 # from zsh does not work). The Jetson's address comes from data/jetson_check/2026-11-17/host.txt (written by
-# jetson_find.sh), else $JETSON_HOST, else the ssh alias "jetson" (zetin@jetson-orin.local). The account is
-# $JETSON_USER (default zetin; the Orin Nano Super of 2026-11-17 is scienceowl@jetson.local).
+# jetson_find.sh), else $JETSON_HOST, else <account>@jetson.local. The account is $JETSON_USER (default scienceowl:
+# the truck's Orin Nano Super since 2026-11-17, on the zetin Wi-Fi; the older Jetson, zetin@jetson-orin.local, is not
+# this device). $HW_DAY (default 2026-11-17) names the record folder data/jetson_check/<day>/.
 # Passwords only from the environment: ssh through `sshpass -e` ($JETSON_SSH_PASS in SSHPASS), sudo with
 # $JETSON_SUDO_PASS on ssh's stdin -- never on a command line, never in a file (global rules, wiki remote-hosts).
+# Both Jetsons take the same passwords (user 2026-11-18); for the older one set JETSON_USER=zetin and JETSON_HOST.
 set -euo pipefail
 HW_REPO="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-HW_OUT="$HW_REPO/data/jetson_check/2026-11-17"
+HW_OUT="$HW_REPO/data/jetson_check/${HW_DAY:-2026-11-17}"
 mkdir -p "$HW_OUT"
-if [[ -s "$HW_OUT/host.txt" ]]; then JHOST="${JETSON_USER:-zetin}@$(head -1 "$HW_OUT/host.txt")"
+JUSER="${JETSON_USER:-scienceowl}"
+if [[ -s "$HW_OUT/host.txt" ]]; then JHOST="$JUSER@$(head -1 "$HW_OUT/host.txt")"
 elif [[ -n "${JETSON_HOST:-}" ]]; then JHOST="$JETSON_HOST"
-else JHOST=jetson; fi
+else JHOST="$JUSER@jetson.local"; fi
 : "${JETSON_SSH_PASS:?JETSON_SSH_PASS is not in this session environment (restart the session after adding it)}"
 command -v sshpass >/dev/null || { echo "sshpass is not installed (sudo pacman -S sshpass)" >&2; exit 2; }
 JOPTS=(-o ConnectTimeout=10 -o ServerAliveInterval=15 -o StrictHostKeyChecking=accept-new -o ClearAllForwardings=yes)
