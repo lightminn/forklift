@@ -1,0 +1,18 @@
+# S10 case A on the real truck (docs/design/2026-11-19-real-assembly.md 2): taped start -> approach -> insert -> lift
+# to the carry height and stop. A template: every null is still to be set from the surveyed map and the field, and
+# the dry assembly refuses while one is unset. The pallet's map pose is not here -- the operator registers it per
+# mission (operator_input), then submits.
+map_id: null              # the surveyed map bundle's identifier (A2M12 -> S6 -> S7 survey); the loaded map must match
+start_rear: [0.0, 0.0, 0.0]        # the floor tape's rear-axle pose in the map (x, y, yaw); to be measured on the field
+bounds: [-1.0, 6.0, -2.5, 2.5]     # the test field (x_min, x_max, y_min, y_max), map metres; provisional
+pallet:
+  id: P-S10
+  kind: s10_pallet
+  depth_m: null           # measured by the team (the bundled toy pallet's or the test pallet's); no estimate here
+  width_m: null
+destination:
+  id: D-S10
+  pose: [4.0, -1.5, -1.5708]       # for planning only: the planner needs the whole mission; S10 stops at the lift
+wait_pose: [0.0, 0.0, 0.0]
+max_speed_mps: 0.15       # the approved low-speed rear-axle cap; provisional until the lead approves the S10 speed
+check_pallet_pose: null   # a reference pallet pose the dry assembly plans once to (set with the field)

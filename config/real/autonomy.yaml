@@ -1,0 +1,15 @@
+# The real truck's mission settings for S10-A (docs/design/2026-11-19-real-assembly.md 3, 5). Provisional: taken from
+# config/isaac_transport_measured.yaml (the measured chassis' Isaac settings) unless noted; the steering rate and
+# every curvature cap come from config/real/vehicle.yaml at assembly, not from here.
+lift_target_m: 0.20          # the carry height S10 lifts to and stops at (isaac_transport_measured)
+lift_rate_mps: 0.06
+drive_acceleration_mps2: 0.30
+withdraw_speed_mps: 0.06     # within s10a.yaml max_speed_mps
+speeds:                      # rear-axle m/s per phase, all within s10a.yaml max_speed_mps (provisional)
+  approach: 0.12
+  insert: 0.06
+  extract: 0.06
+  transport: 0.12
+  withdraw: 0.06
+  return_home: 0.12
+mission_stages: [approach, insert, extract, transport, withdraw, return_home]
