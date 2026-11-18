@@ -82,6 +82,7 @@ MISSION_KEYS = {
         "control_stamped", "still_frame_s", "still_frames", "last_reason",
         "frames_read", "frames_bad_time", "frames_without_time", "silenced_frames",
         "first_frame_since",  # a known start's first-frame stand (design 2026-11-19-known-pallet-start 2)
+        "first_frame_still_since",  # its still span's start (design 2026-11-19-real-assembly 8)
     ),
 }
 # Inside a session dict, the mission's fields only (D0 7: near_tracking's run fields; its settings are the session's).

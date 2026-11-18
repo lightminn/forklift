@@ -158,9 +158,8 @@ def test_a_plan_that_failed_or_a_worker_error_adopts_nothing(plan, ok, reason):
 
 @pytest.mark.parametrize("change, why", [
     (lambda core, k: setattr(core.slam["tracker"], "applied", ((0.2 * k, 0.0, 0.0), k)), "correction"),
-    (lambda core, k: core.targets.add_pallet(f"P-{9 + k}", "epal6", Pose(9.0, 9.0 + k, 0.0)), "targets"),
 ])
-def test_an_answer_on_a_changed_state_is_asked_again_then_fails(change, why):
+def test_an_answer_on_a_changed_correction_is_asked_again_then_fails(change, why):
     core, ms, state, started, inputs, calls = known_core()
     ask(core, inputs)
     change(core, 1)
@@ -243,3 +242,39 @@ def test_a_known_start_never_inserts_without_its_check():
     with pytest.raises(RuntimeError, match="pocket_check_missing_at_insert"):
         core.arrive(20.0, SimpleNamespace(position_error_m=0.0, yaw_error_rad=0.0))
     assert ms.phase == "approach"
+
+
+def test_a_registration_changed_during_the_preparation_ends_it_without_asking_again():
+    """Design 2026-11-19-real-assembly 2: the submit's pose and revision are fixed; a new pose is a new submit."""
+    core, ms, state, started, inputs, calls = known_core()
+    rev = core.targets.revision
+    core.known_pallet_request(11.0, REAR, inputs, PICKUP, targets_revision=rev)
+    core.targets.update_pose("P-1", Pose(3.3, 0.6, 0.0), basis="operator_input", uncertainty_m=0.05)
+    answer(core)
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:known:targets_changed"
+    assert not started
+
+
+@pytest.mark.parametrize("when", ["before_first", "before_reask"])
+def test_a_registration_changed_before_a_request_ends_the_preparation(when):
+    core, ms, state, started, inputs, calls = known_core()
+    rev = core.targets.revision
+    if when == "before_reask":
+        core.known_pallet_request(11.0, REAR, inputs, PICKUP, targets_revision=rev)
+        core.slam["tracker"].applied = ((0.3, 0.0, 0.0), 1)
+        answer(core)  # dropped for the correction; the runner asks again
+        assert core.commands.status == "preparing"
+    core.targets.update_pose("P-1", Pose(3.3, 0.6, 0.0), basis="operator_input", uncertainty_m=0.05)
+    asked = len(core.jobs.submitted)
+    assert core.known_pallet_request(12.5, REAR, inputs, PICKUP, targets_revision=rev) == "targets_changed"
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:known:targets_changed"
+    assert len(core.jobs.submitted) == asked
+    if when == "before_reask":
+        assert core.pending is None
+
+
+def test_the_frozen_revision_is_the_one_the_job_is_judged_on():
+    core, ms, state, started, inputs, calls = known_core()
+    rev = core.targets.revision
+    core.known_pallet_request(11.0, REAR, inputs, PICKUP, targets_revision=rev)
+    assert core.pending.ctx["targets_revision"] == rev

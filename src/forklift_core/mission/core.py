@@ -1510,7 +1510,8 @@ class MissionCore:
         """A known start's first pocket-check frame (design 2026-11-19-known-pallet-start 2): from KNOWN_FRAME_LEAD_M
         before the approach's D5 straight until the check is built, the wheels held at 0; once standing, the frame
         from ``known_pocket_frame`` (``scene`` -- what a capture carries for the check --, ``stamp_s``, ``rear``,
-        ``base``) builds the check when it is at most KNOWN_FRAME_MAX_AGE_S old, and the next tick runs on. No frame
+        ``base``, ``mission_gen``, ``phase``, ``correction``) builds the check when it is at most
+        KNOWN_FRAME_MAX_AGE_S old and was acquired in the still span, and the next tick runs on. No frame
         within KNOWN_FRAME_WAIT_S ends the mission. Returns (0.0, reason) while it holds, else None."""
         ms, pocket, options, hooks = self.ms, self.pocket, self.options, self.hooks
         if not (options.pocket_check and ms.phase == "approach" and pocket.get("check") is None
@@ -1521,9 +1522,16 @@ class MissionCore:
         since_ = pocket.setdefault("first_frame_since", float(t))
         hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
                       "pocket_stop in approach: pocket_first_frame")  # checked before a late frame is taken
-        if speed_.standing(self.STANDING_MPS):
+        if self.slam["stop_now"]:
+            # design 2026-11-19-real-assembly 8: the loop's still span (a fresh stop on new samples and no earlier
+            # drive still able to act; the encoder SafetySpeed's bound cannot reach 0.01 m/s on the real truck) --
+            # only a frame acquired inside it, for this mission, phase and applied correction, is taken
+            still_ = pocket.setdefault("first_frame_still_since", float(t))
             frame_ = hooks.known_pocket_frame()
-            fresh_ = frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
+            fresh_ = (frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
+                      and float(frame_.stamp_s) >= still_ and frame_.mission_gen == self.commands.mission_gen
+                      and frame_.phase == ms.phase
+                      and tuple(float(v) for v in frame_.correction) == tuple(self._applied_now() or (0.0, 0.0, 0.0)))
             if fresh_:
                 pocket["capture"] = frame_.scene
                 hooks.build_pocket_check(float(self.paths["approach"].poses[-1][2]), rear, frame_.base,
@@ -1531,9 +1539,11 @@ class MissionCore:
                 self.state.setdefault("pocket_check", {})["first_frame"] = {
                     "source": "known_pocket_frame", "stamp_s": float(frame_.stamp_s), "taken_s": float(t)}
                 pocket.pop("first_frame_since", None)
+                pocket.pop("first_frame_still_since", None)
                 return 0.0, "pocket_first_frame"  # built: the next tick runs under the check
             reason_ = "pocket_first_frame:none" if frame_ is None else "pocket_first_frame:stale"
         else:
+            pocket.pop("first_frame_still_since", None)  # moving again or a gap: the span ends
             reason_ = "pocket_first_frame"
         return 0.0, reason_
 
@@ -8653,7 +8663,8 @@ class MissionCore:
     # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
     PREPARE_ATTEMPTS = 2  # a preparation whose inputs changed is asked again once
 
-    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder") -> None:
+    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder", *,
+                        targets_revision: int | None = None) -> None:
         """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands -- or,
         a loaded submit (plan D5 6c), its whole delivery (``loaded_delivery``). ``inputs`` (the mission's scenario,
         waiting pose, candidates, bounds, prior zone) are fixed here and used as they are at the adoption; nothing of
@@ -8664,7 +8675,8 @@ class MissionCore:
             self.prepare_attempts = 0
         self.prepare_attempts += 1
         self._request("prepare", job, payload, t, rear, self._applied_now(),
-                      {"inputs": inputs, "targets_revision": self.targets.revision,
+                      {"inputs": inputs,
+                       "targets_revision": self.targets.revision if targets_revision is None else targets_revision,
                        "loaded": job == "loaded_delivery", "known": job == "plan_transport"})
 
     def known_pallet_refusal(self) -> str | None:
@@ -8688,14 +8700,17 @@ class MissionCore:
             return "known_pallets_on"
         return None
 
-    def known_pallet_request(self, t: float, rear, inputs: dict, pickup) -> str | None:
+    def known_pallet_request(self, t: float, rear, inputs: dict, pickup, targets_revision: int | None = None) -> str | None:
         """A submit whose pallet pose the operator entered in map coordinates (design 2026-11-19-known-pallet-start 1;
         the S10 case A): the mission plan asked from where the truck stands, as an observation's would be (the worker's
         ``plan_transport`` on the mission's inputs), through the preparation. ``pickup``: (x, y, yaw) in the map --
         recorded as operator_input, never as recognition. Refused (the submit fails, the reason returned) under
-        ``known_pallet_refusal``; None when asked."""
+        ``known_pallet_refusal``; None when asked. ``targets_revision``: the submit's, fixed with the operator's pose
+        (design 2026-11-19-real-assembly 2) -- a registration changed since ends the preparation, asked or re-asked."""
         hooks, options, cmds = self.hooks, self.options, self.commands
         why = self.known_pallet_refusal()
+        if why is None and targets_revision is not None and self.targets.revision != targets_revision:
+            why = "targets_changed"
         if why is not None:
             if cmds.status in ("accepted", "preparing"):  # a preparation asked again refused too (Codex 4a P2)
                 cmds.terminate("failed", t, f"prepare:known:{why}")
@@ -8708,7 +8723,8 @@ class MissionCore:
                        travel_config=options.travel_config, trace=[], **hooks.grid_kwargs("mission", target),
                        **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(), **self._exit_prefix_kwargs())
         self.prepare_request(t, rear, inputs, {"args": (hooks.grid_world(inputs["scenario"]), options.planner_config),
-                                               "kwargs": kwargs_}, job="plan_transport")
+                                               "kwargs": kwargs_}, job="plan_transport",
+                             targets_revision=targets_revision)
         return None
 
     def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
@@ -8718,6 +8734,9 @@ class MissionCore:
         loaded = bool(p.ctx.get("loaded"))
         if why == "cargo":
             cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
+            return
+        if why == "targets" and p.ctx.get("known"):
+            cmds.terminate("failed", t, "prepare:known:targets_changed")  # a new pose is a new submit (design 4b 2)
             return
         if why is not None:
             if why != "mission" and self.prepare_attempts >= self.PREPARE_ATTEMPTS:
