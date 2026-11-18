@@ -369,7 +369,7 @@ def test_a_known_start_without_a_first_frame_ends_after_five_seconds_and_never_e
     out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
     assert (out.allowed, out.why) == (0.0, "pocket_first_frame:none")
     core.permission(14.9, REAR, 0.0, 0.4, True, None)
-    with pytest.raises(RuntimeError, match="pocket_stop in approach: pocket_first_frame:none"):
+    with pytest.raises(RuntimeError, match="pocket_stop in approach: pocket_first_frame"):
         core.permission(15.0, REAR, 0.0, 0.4, True, None)
     assert not built
 
@@ -380,3 +380,23 @@ def test_a_recognised_start_keeps_pocket_missing():
     remaining(core, 0.9)
     out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
     assert (out.allowed, out.why) == (0.0, "pocket_missing") and not asked
+
+
+def test_a_late_fresh_frame_after_the_wait_is_not_taken():
+    core, pocket, asked, built = known_start([None, frame(15.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    with pytest.raises(RuntimeError, match="pocket_first_frame"):
+        core.permission(15.0, REAR, 0.0, 0.4, True, None)  # fresh, but past the 5 s: ended before it is read
+    assert not built and len(asked) == 1
+
+
+def test_once_built_before_the_straight_the_depth_check_answers_where_the_grid_waives_the_pallet():
+    """Codex 4a P2: the check's region is waived in the grid from its build; the depth check answers from then."""
+    core, pocket, asked, built = known_start([frame(10.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert built
+    pocket["check"].limit = lambda *a: (0.0, "pocket_obstacle")
+    out = core.permission(10.1, REAR, 0.0, 0.4, True, None)
+    assert out.pocket_phase and (out.allowed, out.why) == (0.0, "pocket_obstacle")

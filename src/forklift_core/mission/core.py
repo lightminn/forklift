@@ -630,6 +630,9 @@ class MissionCore:
                     transition("bottom_deck_refused", t)
                     return SimpleNamespace(stop=True, rear=rear)
                 deck_["permitted"] = {"time_s": t, **at_}
+            # a known start inserts only under a check built from its first frame (design 2026-11-19 2; Codex 4a P2)
+            hooks.require(not (self.options.pocket_check and self.operator_target() and self.pocket.get("check") is None),
+                          "pocket_check_missing_at_insert")
             transition("insert", t)
         elif ms.phase == "insert":
             state["insertion_error"] = {
@@ -711,6 +714,9 @@ class MissionCore:
                     settings["lift_rate_mps"] * dt,
                 )
             )
+        if (ms.phase == "lift" and getattr(self.options, "s10_stop_at_lift", False)
+                and self.commands.status != "running"):
+            return False  # S10 ended (or no mission runs): no new confirmation request (Codex 4a P3)
         if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             if self._real_vehicle():
                 # 4d-2b-1: the lift at its target, then the operator says the pallet came up (no truth height)
@@ -1512,6 +1518,8 @@ class MissionCore:
         if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
             return None
         since_ = pocket.setdefault("first_frame_since", float(t))
+        hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
+                      "pocket_stop in approach: pocket_first_frame")  # checked before a late frame is taken
         if speed_.standing(self.STANDING_MPS):
             frame_ = hooks.known_pocket_frame()
             fresh_ = frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
@@ -1526,8 +1534,6 @@ class MissionCore:
             reason_ = "pocket_first_frame:none" if frame_ is None else "pocket_first_frame:stale"
         else:
             reason_ = "pocket_first_frame"
-        hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
-                      f"pocket_stop in approach: {reason_}")
         return 0.0, reason_
 
     def permission(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool, cusp_handed_) -> SimpleNamespace:
@@ -1632,6 +1638,11 @@ class MissionCore:
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
         acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
+        if (options.pocket_check and ms.phase == "approach" and pocket.get("check") is not None
+                and self.operator_target()):
+            # a known start's check is built before the straight: from then on the depth check answers wherever its
+            # region is waived in the grid (Codex 4a P2) -- the recognised start builds it at the straight's start
+            pocket_phase = True
         first_frame_ = self._known_first_frame(t, rear, speed_)
         if first_frame_ is not None:
             # design 2026-11-19-known-pallet-start 2: a known start has no capture -- the check's first depth frame is
@@ -8657,7 +8668,7 @@ class MissionCore:
 
     def known_pallet_refusal(self) -> str | None:
         """Why a known-pallet start may not be asked (design 2026-11-19-known-pallet-start 1): near tracking or the
-        bottom-deck check configured, no SLAM or SLAM neither tracking nor holding, no plan worker, or the obstacle
+        bottom-deck check configured, no SLAM or SLAM not tracking (a hold included), no plan worker, or the obstacle
         layer's known pallets on (an operator's pose is map-fixed; the layer keeps its rectangles in odometry -- the
         real layer runs them off). None: it may."""
         slam, obstacle = self.slam, self.obstacle
@@ -8667,8 +8678,9 @@ class MissionCore:
             return "bottom_deck_check"
         if slam is None:
             return "no_slam"
-        if slam["tracker"].mode not in ("tracking", "holding"):
-            return "slam_invalid"
+        if slam["tracker"].mode != "tracking":
+            # holding too: an operator's map pose taken inside a hold would read as the hold's estimate (Codex 4a P2)
+            return "slam_not_tracking"
         if self.jobs is None:
             return "no_worker"
         if obstacle is not None and obstacle["layer"].known_enabled:
@@ -8684,7 +8696,7 @@ class MissionCore:
         hooks, options, cmds = self.hooks, self.options, self.commands
         why = self.known_pallet_refusal()
         if why is not None:
-            if cmds.status == "accepted":
+            if cmds.status in ("accepted", "preparing"):  # a preparation asked again refused too (Codex 4a P2)
                 cmds.terminate("failed", t, f"prepare:known:{why}")
             return why
         target = PlanningPose(float(pickup[0]), float(pickup[1]), float(pickup[2]))

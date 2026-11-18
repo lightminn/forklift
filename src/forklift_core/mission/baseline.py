@@ -81,6 +81,7 @@ MISSION_KEYS = {
         "capture", "history", "planning_pickup", "await_still_frame", "mid_still_done", "zero_since",
         "control_stamped", "still_frame_s", "still_frames", "last_reason",
         "frames_read", "frames_bad_time", "frames_without_time", "silenced_frames",
+        "first_frame_since",  # a known start's first-frame stand (design 2026-11-19-known-pallet-start 2)
     ),
 }
 # Inside a session dict, the mission's fields only (D0 7: near_tracking's run fields; its settings are the session's).

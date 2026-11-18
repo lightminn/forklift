@@ -186,7 +186,8 @@ def test_a_late_answer_of_a_cancelled_preparation_is_not_taken():
     (lambda core: setattr(core, "near", {}), "near_tracking"),
     (lambda core: setattr(core.options, "bottom_deck_check", "structure"), "bottom_deck_check"),
     (lambda core: setattr(core, "slam", None), "no_slam"),
-    (lambda core: setattr(core.slam["tracker"], "mode", "warming_up"), "slam_invalid"),
+    (lambda core: setattr(core.slam["tracker"], "mode", "warming_up"), "slam_not_tracking"),
+    (lambda core: setattr(core.slam["tracker"], "mode", "holding"), "slam_not_tracking"),
     (lambda core: setattr(core, "jobs", None), "no_worker"),
     (lambda core: setattr(core.obstacle["layer"], "known_enabled", True), "known_pallets_on"),
 ])
@@ -209,3 +210,36 @@ def test_an_unlocated_pallet_registered_again_by_the_operator_is_available():
     tb.update_pose("P-1", Pose(3.0, 0.6, 0.0), basis="operator_input", uncertainty_m=0.05)
     assert tb.pallets["P-1"].state == "available" and tb.pallets["P-1"].basis == "operator_input"
     assert np.isclose(tb.pallets["P-1"].pose.x_m, 3.0)
+
+
+def test_a_preparation_asked_again_and_refused_ends_the_mission():
+    """Codex 4a P2: the runner asks again after a dropped answer; a refusal then must not leave it preparing."""
+    core, ms, state, started, inputs, calls = known_core()
+    ask(core, inputs)
+    core.slam["tracker"].applied = ((0.3, 0.0, 0.0), 1)
+    answer(core)
+    assert core.commands.status == "preparing" and core.pending is None
+    core.slam["tracker"].mode = "warming_up"
+    assert ask(core, inputs, t=12.5) == "slam_not_tracking"
+    assert core.commands.status == "failed" and core.commands.end_reason == "prepare:known:slam_not_tracking"
+
+
+def test_the_first_frame_stand_is_the_missions_and_starts_clean_in_the_next_one():
+    core, ms, state, started, inputs, calls = known_core()
+    core.pocket["first_frame_since"] = 3.0  # the last mission's stand, never finished
+    core.baseline.restore(core)  # its end (end_reset)
+    assert "first_frame_since" not in core.pocket
+    ask(core, inputs)
+    answer(core)
+    assert "first_frame_since" not in core.pocket
+
+
+def test_a_known_start_never_inserts_without_its_check():
+    """Codex 4a P2: an approach arrival with no check built (the first-frame stand skipped) does not go in."""
+    core, ms, state, started, inputs, calls = known_core(pocket_check=True)
+    ask(core, inputs)
+    answer(core)
+    assert ms.phase == "approach" and core.pocket["check"] is None
+    with pytest.raises(RuntimeError, match="pocket_check_missing_at_insert"):
+        core.arrive(20.0, SimpleNamespace(position_error_m=0.0, yaw_error_rad=0.0))
+    assert ms.phase == "approach"

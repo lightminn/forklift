@@ -61,7 +61,8 @@ S10 사례 A: 테이프로 표시한 알려진 시작 → 접근 → 삽입 → 
 - **알려진 팔레트 층(`known_pallets`)이 켜져 있으면 거부**(`known_pallets_on`). 그 층의 사각형은 오도메트리 기준이라(보정과 함께 옮겨지고 나이에 따라 반경이 커짐) 지도 고정 자세를 그대로 담지 못한다. 실차 층 설정은 꺼져 있다(`config/real/obstacle_layer_real.yaml`). 지도 고정 사각형은 필요해질 때 따로 만든다.
 - 접근의 SLAM hold 는 `held_frame_pallet=False` 로 시작한다. 운용자 자세는 hold 전에 있던 지도 추정이 되어 끝 해제 때 옮겨지지 않는다. 대상 기록의 출처는 `operator_input` 이다.
 - **들어 올린 팔레트의 `last_pose` 는 지금처럼 hold 의 틀을 따라 옮긴다(설계 1절과 다름)**. 들린 팔레트는 포크가 있는 곳에 있고, 포크는 hold 의 틀(오도메트리)로 거기까지 갔기 때문이다. 현장 복구 뒤에는 어차피 `unlocated` 가 되고 다시 등록해야 한다.
-- 첫 깊이 프레임: D5 직선 0.20 m 앞(`KNOWN_FRAME_LEAD_M`)부터 검사가 만들어질 때까지 바퀴를 잡는다(장애물 스위치와 무관한 hold). 서 있을 때 훅을 읽고, 0.5 s 이내 프레임으로 검사를 만든다. 5 s 작업 시간 안에 못 받으면 `pocket_stop in approach: pocket_first_frame:*` 로 끝난다. 제동으로 직선에 들어가 섰어도 같은 대기를 하며, `pocket_missing` 으로 가지 않는다.
+- 첫 깊이 프레임: D5 직선 0.20 m 앞(`KNOWN_FRAME_LEAD_M`)부터 검사가 만들어질 때까지 바퀴를 잡는다(장애물 스위치와 무관한 hold). 서 있을 때 훅을 읽고, 0.5 s 이내 프레임으로 검사를 만든다. 대기 시작 5 s(작업 시간)가 지나면 프레임을 읽기 전에 `pocket_stop in approach: pocket_first_frame` 로 끝난다. 제동으로 직선에 들어가 섰어도 같은 대기를 하며, `pocket_missing` 으로 가지 않는다. 검사가 생긴 뒤부터는 직선 전이라도 깊이 검사가 답한다(격자 면제와 함께 시작). 검사 없이 접근이 도착하면 삽입으로 가지 않고 `pocket_check_missing_at_insert` 로 끝난다. 대기 시각은 미션 키(`first_frame_since`)다.
+- SLAM 은 `tracking` 일 때만 받는다(hold 중 채택은 운용자 자세가 그 hold 의 추정으로 읽히므로 거부). 준비를 다시 물을 때의 거부도 미션을 끝낸다. S10 이 끝난 뒤의 `lift_and_timers` 는 새 확인 요청을 열지 않는다.
 - S10 의 그 틱 제어 정지는 코어가 `take_s10_stop()` 신호까지 낸다. 최종 바퀴 0·옛 DRIVE 폐기·측정 승강 정지 프레임은 4c 루프의 시험이다.
 
 ## 6. 자체 검토

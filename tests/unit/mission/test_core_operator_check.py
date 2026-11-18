@@ -224,9 +224,13 @@ def test_s10_stops_at_the_carry_height_once_without_extract_or_a_delivery_verdic
     assert core.take_s10_stop() == 5.1 and core.take_s10_stop() is None  # read once, in the confirm tick
     cmds = core.commands
     assert (cmds.status, cmds.end_reason) == ("recovery_required", "s10_lifted")
-    ends = [e for e in cmds.log if e.get("event") == "end"]
+    ends = [e for e in cmds.log if e.get("command") == "end"]
+    assert len(ends) == 1
+    asked = len(hooks.asked)
     core.lift_and_timers(5.2, 0.01)
-    assert [e for e in cmds.log if e.get("event") == "end"] == ends and core.take_s10_stop() is None
+    core.lift_and_timers(20.0, 0.01)
+    assert len(hooks.asked) == asked and "s10_end" in core.state and core.state["s10_end"]["time_s"] == 5.1
+    assert [e for e in cmds.log if e.get("command") == "end"] == ends and core.take_s10_stop() is None
 
 
 def test_s10_off_lifts_into_extract_as_before():
@@ -243,6 +247,7 @@ def test_s10_keeps_the_reject_and_the_reach_limit():
         core.lift_and_timers(5.1, 0.01)
     core, hooks, moved = make(lift=0.05)
     core.options.s10_stop_at_lift = True
+    core.commands.status = "running"
     core.lift_and_timers(5.0, 0.01)
     with pytest.raises(Failed, match="Lift did not reach its position"):
         core.lift_and_timers(15.1, 0.01)
