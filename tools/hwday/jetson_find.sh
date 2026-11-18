@@ -2,11 +2,11 @@
 # 11-17 (plan B1): find the Jetson on the school LAN and check ssh. Plug the Jetson's Ethernet into the same LAN
 # (or switch) as the laptop and power it on, then:  bash tools/hwday/jetson_find.sh [IP]
 # 1) the IP you give, 2) mDNS jetson.local, 3) the laptop's neighbour table after one ping sweep of its own
-# /24 (only when 1-2 fail): entries with an NVIDIA MAC prefix are listed first. Writes data/jetson_check/2026-11-17/
-# host.txt with the address that answered ssh.
+# /24 (only when 1-2 fail): entries with an NVIDIA MAC prefix are listed first. Writes data/jetson_check/<HW_DAY>/
+# host.txt (HW_DAY default 2026-11-17, the folder jetson_lib.sh reads) with the address that answered ssh.
 set -euo pipefail
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-out="$repo/data/jetson_check/2026-11-17"; mkdir -p "$out"
+out="$repo/data/jetson_check/${HW_DAY:-2026-11-17}"; mkdir -p "$out"
 try_ssh() {
   SSHPASS="$JETSON_SSH_PASS" sshpass -e ssh -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new \
     -o ClearAllForwardings=yes "${JETSON_USER:-scienceowl}@$1" 'hostname; cat /etc/nv_tegra_release 2>/dev/null | head -1' 2>/dev/null
