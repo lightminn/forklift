@@ -7,4 +7,15 @@ execute_process(COMMAND git describe --always --dirty --abbrev=12
 if(NOT FW_GIT_DESCRIBE)
     set(FW_GIT_DESCRIBE unknown)
 endif()
+# The USB product string is the identity cut at 126 characters (board design 5). In the waived
+# build the host reads the last token, waiver=<8 hex>, so it must fit whole (plan 2026-11-18,
+# Codex): refuse a build whose identity would be cut.
+if(FW_ESTOP_WAIVED)
+    set(ID "forklift-mcu ${FW_BUILD} ${FW_OUTPUTS_WORD} ${FW_GIT_DESCRIBE} rec=00000000 waiver=00000000")
+    string(LENGTH "${ID}" ID_LEN)
+    if(ID_LEN GREATER 126)
+        message(FATAL_ERROR "build identity is ${ID_LEN} characters; the USB product string keeps 126 "
+            "and would cut the waiver= token. Shorten the git description (tag name).")
+    endif()
+endif()
 configure_file(${IN} ${OUT} @ONLY)

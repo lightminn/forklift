@@ -12,18 +12,19 @@ if(KIND STREQUAL "waiver")
     set(LABEL "E-stop waiver record")
     set(TAG_MACRO FW_WAIVER_TAG)
     set(TAG_KEY waiver)
-    set(WHY_TAIL "The open normal build needs a committed record (FW_ESTOP_WAIVER_RECORD): board V1.0 has "
-        "no e-stop input, and opening the normal build's motor outputs without one is the user's "
-        "decision (plan 2026-11-18-v1-estop-waiver); being able to build this code is not that decision.")
+    string(CONCAT WHY_TAIL "The open normal build needs a committed record (FW_ESTOP_WAIVER_RECORD): "
+        "board V1.0 has no e-stop input, and opening the normal build's motor outputs without one is "
+        "the user's decision (plan 2026-11-18-v1-estop-waiver); being able to build this code is not "
+        "that decision.")
 else()
     set(LABEL "IPROPI protection record")
     set(TAG_MACRO FW_RECORD_TAG)
     set(TAG_KEY rec)
-    set(WHY_TAIL "FW_MOTOR_OUTPUT=1 needs a committed record (FW_IPROPI_PROTECTION_RECORD). Opening the "
-        "motor outputs on the vehicle is the user's decision after the IPROPI protection is confirmed "
-        "(lead decision Q6); being able to build this code is not that decision.")
+    # string(CONCAT) with quoted pieces: a list would drop the ';' inside the text (Codex).
+    string(CONCAT WHY_TAIL "FW_MOTOR_OUTPUT=1 needs a committed record (FW_IPROPI_PROTECTION_RECORD). "
+        "Opening the motor outputs on the vehicle is the user's decision after the IPROPI protection "
+        "is confirmed (lead decision Q6); being able to build this code is not that decision.")
 endif()
-string(CONCAT WHY_TAIL ${WHY_TAIL})
 
 function(refuse why)
     message(FATAL_ERROR "${LABEL}: ${why}. ${WHY_TAIL}")

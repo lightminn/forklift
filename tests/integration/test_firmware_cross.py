@@ -280,6 +280,7 @@ def test_motor_output_needs_the_protection_record(tmp_path):
     cfg = _configure(tmp_path / "open", "-DFW_MOTOR_OUTPUT=1", "-DFW_BUILD=commission")
     assert cfg.returncode != 0
     assert "user's decision" in _flat(cfg.stderr) and "IPROPI" in cfg.stderr
+    assert "(lead decision Q6); being able" in _flat(cfg.stderr)  # the text kept whole (Codex)
 
 
 def _flat(text: str) -> str:
@@ -516,12 +517,22 @@ def test_normal_build_opens_only_with_the_waiver_record(record_repo, tmp_path):
     original = rec.read_text()
     try:
         rec.write_text(original + "edited\n")
-        res = subprocess.run(["cmake", "--build", str(build), "--target", "waiver_record"],
+        # the image target itself, so a missing add_dependencies(fw waiver_record) fails here (Codex)
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "fw"],
                              capture_output=True, text=True)
         assert res.returncode != 0
         assert "differs from its committed version" in _flat(res.stdout + res.stderr)
     finally:
         rec.write_text(original)
+    # A git description long enough to cut waiver= out of the 126-character USB string is refused.
+    _git(repo, "tag", "-a", "-m", "long", "t" + "x" * 80)  # git describe reads annotated tags
+    try:
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "build_info"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "would cut the waiver= token" in _flat(res.stdout + res.stderr)
+    finally:
+        _git(repo, "tag", "-d", "t" + "x" * 80)
 
 
 def test_the_commissioning_open_build_carries_no_waiver(open_build):
