@@ -1,6 +1,6 @@
 # 실차 조립 · AUTO 허가 상태 — 4b (설계)
 
-작성 2026-11-19 · 4판(Codex 3 회차 반영) · 상위 [실차 자율 계획](../plans/2026-11-18-real-autonomy-entry.md) PR 4 · [제어 틱 계약](2026-11-18-real-control-tick.md) · 앞 단계 [4a 알려진 팔레트 시작](2026-11-19-known-pallet-start.md)(#598)
+작성 2026-11-19 · 5판(Codex 4 회차 반영) · 상위 [실차 자율 계획](../plans/2026-11-18-real-autonomy-entry.md) PR 4 · [제어 틱 계약](2026-11-18-real-control-tick.md) · 앞 단계 [4a 알려진 팔레트 시작](2026-11-19-known-pallet-start.md)(#598)
 
 ## 범위와 책임 나누기
 
@@ -28,7 +28,7 @@
 - 팔레트 형상·ID, 계획용 고정 목적지(코어의 `plan_transport` 와 설치는 `transport` 를 포함한 경로를 요구한다; 실제 주행은 S10 에서 승강으로 끝난다), `scenario`·`wait_pose`.
 - 팔레트 자세는 설정이 아니라 운용자가 미션마다 입력한다(4a, `operator_input`). 순서는 **등록 뒤 제출**이다.
   - 지금 lease 의 운용자가 그 팔레트의 지도 자세를 등록한다(`update_pose(basis="operator_input")`). 그러면 대상 revision 이 오르고, 그 revision 으로 제출한다.
-  - 제출이 승인되는 순간의 `operator_input` 자세와 revision 을 그 미션에 고정해 `known_pallet_request` 에 넘긴다. 준비 중 등록이 바뀌면(`_job_invalid` 의 `targets`) 알려진 시작은 다시 묻지 않고 준비를 끝낸다(`prepare:known:targets_changed`, 코어의 작은 변경). 새 자세는 새 제출로 받는다.
+  - 제출이 승인되는 순간의 `operator_input` 자세와 revision(`Submit.targets_revision`)을 그 미션에 고정해 `known_pallet_request` 에 넘긴다. 처음 요청과 재요청 모두 그 고정 revision 을 작업 문맥에 쓰고, 작업을 넣기 전에도 지금 값과 비교해 다르면 `prepare:known:targets_changed` 로 끝낸다. 준비 중 등록이 바뀌면(`_job_invalid` 의 `targets`) 알려진 시작은 다시 묻지 않고 준비를 끝낸다(`prepare:known:targets_changed`, 코어의 작은 변경). 새 자세는 새 제출로 받는다.
   - 그 팔레트에 `operator_input` 자세가 없으면(ID 만 등록, 또는 다른 출처) 제출을 거부한다.
   - 처음 등록과 현장 복구 뒤 재등록(`unlocated → available`)은 같은 흐름이다.
 - 조립은 이 설정으로 `TargetsBook` 에 팔레트·목적지를 등록한다. 그래서 첫 제출이 기존 명령 경로(팔레트 ID·목적지 ID·대상 revision 승인)를 지난다.
@@ -110,7 +110,7 @@
     3. 중재기를 `stop()` 으로 `STOPPED` 로 보낸다. 같은 틱에 STOP·lease 상실로 이미 `STOPPED` 면 세대를 다시 올리지 않는다.
     4. 달리던 미션을 끝내 수거한다.
   - 미션 수거: 기존 취소 판단(`cargo.cancel_decision`)으로 `cancelled` 이거나, 포켓에 들어간 뒤면 `recovery_required` → 현장 복구. 그래서 재개할 미션이 남지 않는다.
-  - 수거는 SLAM 이 무효여도 종료 기록과 복구 잠금을 남긴다. hold 해제는 유효한 새 위치 증거가 생길 때까지 미룬다(4c: 코어의 기존 미룬 해제 `end_release_due` 경로를 쓰고, 그 틱에 만료된 SLAM 을 `slam_rear` 로 다시 읽지 않음).
+  - 수거는 SLAM 이 무효여도 종료 기록과 복구 잠금을 남긴다. hold 해제는 유효한 새 위치 증거가 생길 때까지 미룬다(4c: 코어의 기존 미룬 해제 `end_release_due` 경로를 쓴다). 처음 수거와 이후의 해제 시도(`release_gate`) 양쪽에서 정지와 함께 SLAM 신선도를 확인한다. 실차 루프는 SLAM 이 유효하지 않으면 해제 시도를 부르지 않는다. 만료된 SLAM 을 `slam_rear` 로 다시 읽지 않는다. 여러 틱 동안 만료된 채여도 종료 기록은 한 번이고 해제만 기다린다.
   - 수거 중 예외가 나도 1–3 은 이미 끝나 있다.
 - **S10 제어 정지(유한한 절차: `STOP_PENDING` → `DISARMING` → `LATCHED`)**: `take_s10_stop()` 이 오면 그 틱에 다음을 한다.
   1. 래치 → 세대 변경·큐 폐기 → 측정 위치 정지 DRIVE(바퀴 0, 승강 측정 위치).
@@ -121,7 +121,7 @@
   - 정상 `end_reset()` 이 게시하는 `recovery_required`(현장 복구)는 후속 AUTO·텔레옵만 막는다. 이미 큐에 넣은 그 정지 DRIVE 를 폐기하지 않는다(시험: 실제 만료를 반영한 MCU 모형으로).
   - 현장 복구 완료(`field_recovery_done(disarmed=True)`)는 신선한 `DISARMED` 뒤에만 받는다.
 - **재무장**:
-  - 지금 lease 의 운용자 `rearm` 이 래치만 푼다. 실차 래치는 그 `rearm` 의 ACK 가 확정될 때만 풀린다. 새 미션은 새 제출로 시작한다.
+  - 지금 lease 의 운용자 `rearm` 이 래치만 푼다. 실차 래치는 중재기가 지금 lease·제어 세대를 통과한 새 `rearm` 으로 **실제로 `STOPPED → PAUSED` 를 확정하는 곳**에서 함께 풀린다(중재기에 `on_rearmed` 콜백, 기본 None). 저장된 ACK 의 재전송·중복 요청은 풀지 않는다(새 STOP 뒤 옛 `rearm` 재전송에도 두 래치 유지 — 시험). 새 미션은 새 제출로 시작한다.
   - 중재기에 `rearm_refusal` 콜백(기본 None = Isaac 그대로)을 넘긴다. 실차 조건을 **ACK 와 모드 변경 전에** 확인하고, 실패하면 래치와 모드를 모두 유지한다.
   - 실차 조건(셋 다): 신선한 `DISARMED`, 옛 명령 해소, 그 뒤 고유 표본으로 확인한 정지. outstanding 을 모르면 거부한다(4b). 바퀴 0 인 승강·`keep`·부분 송신·송신 완료의 추적은 4c 에서 한다(지금 `older_nonzero_may_act()` 는 바퀴만 봄).
   - 입력이 돌아오는 것만으로는 재개하지 않는다.
@@ -136,7 +136,9 @@
 
 - 지금 `_known_first_frame` 은 `SafetySpeed.standing(0.01)` 을 쓴다. 실차 엔코더 모델에서는 가속도 오차 항만 0.024 m/s 라 서지 못한다.
 - 알려진 시작에서는 `slam["stop_now"]`(표본 기준 정지 검출기; 4c 가 새 표본마다 갱신하고 표본 공백·연속성 단절에서 즉시 무효)로 판정한다. 알려진 시작은 SLAM 을 요구하므로 늘 있다. Isaac 의 인식 시작 경로는 그대로다.
-- **첫 프레임은 정지 구간에서 취득한 것만** 받는다. 정지 구간은 신선한 정지 측정과 이전 구동 영향 해소(포트에 남은 비영 DRIVE 없음 — `StopDetector` 는 명령과 속도만 읽어 스스로 모른다)가 함께 성립하는 동안이다. 4c 루프가 `slam["stop_now"]` 를 그 둘의 곱으로 넣는다. 새 구동이나 표본 공백이 구간을 끊는다. 구간이 시작된 시각을 `pocket["first_frame_still_since"]`(미션 키 — baseline 에 추가, 다음 미션에 남지 않음)에 두고, 서 있지 않으면 지운다. 프레임의 `stamp_s` 가 그 시각 이후여야 하고, 프레임에 붙은 미션 세대·단계·적용 보정이 지금과 같아야 한다(`known_pocket_frame` 반환에 `mission_gen`·`phase`·`correction` 추가). 제동 중 찍혀 늦게 온 프레임은 거부된다.
+- **첫 프레임은 정지 구간에서 취득한 것만** 받는다. 정지 구간은 신선한 정지 측정과 이전 구동 영향 해소(포트에 남은 비영 DRIVE 없음 — `StopDetector` 는 명령과 속도만 읽어 스스로 모른다)가 함께 성립하는 동안이다. 4c 루프가 `slam["stop_now"]` 를 그 둘의 곱으로 넣는다. 새 구동이나 표본 공백이 구간을 끊는다.
+- 대기 중에도 MCU 의 DRIVE 만료로 무장이 풀리지 않도록 루프는 **대기 프레임**을 낸다: 바퀴 0, 조향은 측정값 유지, 승강은 `target` = 측정 위치(이전 이동 목표를 이어 가는 `keep` 이 아님). 대기 프레임은 '이전 구동 영향'으로 세지 않는다. 이전 이동 목표를 잇는 `keep`·비영 바퀴는 센다. 4c 는 실제 만료를 적용한 가짜 MCU 로, 대기 중 무장이 유지되며 첫 프레임이 채택되는 경우와 이전 이동 명령이 남아 채택이 막히는 경우를 모두 시험한다.
+- 구간이 시작된 시각을 `pocket["first_frame_still_since"]`(미션 키 — baseline 에 추가, 다음 미션에 남지 않음)에 두고, 서 있지 않으면 지운다. 프레임의 `stamp_s` 가 그 시각 이후여야 하고, 프레임에 붙은 미션 세대·단계·적용 보정이 지금과 같아야 한다(`known_pocket_frame` 반환에 `mission_gen`·`phase`·`correction` 추가). 제동 중 찍혀 늦게 온 프레임은 거부된다.
 - 정지 뒤 출발은 남은 운동 방향을 판정할 수 있을 때만이다. 지금 `direction_unsure` 가 막는 것을 4c 에서 실제 엔코더 모델로 시험하고, 실차 삽입은 PR 5 의 방향 판정과 PR 7 의 깊이 입력 검증에 묶는다.
 - 첫 프레임 뒤 중간·삽입 전 정지 프레임(`await_still_frame`)의 공급은 실차 프레임 원천(PR 7)이다. 취득 시각의 자세·승강·미션·단계·보정에 묶어 검사기가 새 정지 프레임을 받아들였을 때만 푼다. 4c 는 가짜 깊이로 이 경계를 본다.
 
@@ -156,7 +158,9 @@
 - AUTO 허가(실제 `McuLinkHost` + 가짜 MCU 로 ARM → 0 DRIVE → `ZERO_SEEN`):
   - 계획 중 ARM 없음, 채택 뒤 한 번. ready 전 **미션** DRIVE 없음(호스트 확인용 0 DRIVE 한 건은 `ZERO_SEEN` 전에 나감). 무장 대기 중 추종·승강·작업 시계 정지, 첫 허가 틱 후보는 바퀴 0·실측 조향에서.
   - S10 제어 정지: ACK 대기 중 감시 켜짐, ACK 뒤 DISARM → `DISARMED` → `LATCHED`, 그 뒤 DRIVE 없음, `DISARMED` 확인 전 현장 복구 완료 거부, 시한 초과 → DISARM, 복구 잠금 게시가 큐의 정지 DRIVE 를 폐기하지 않음.
-  - 긴급 래치 순서: SLAM 만료로 래치될 때 DISARM 이 수거보다 먼저 큐에 들어가고, 수거가 만료 SLAM 을 다시 읽지 않음. 모든 래치 경로에서 중재기 `STOPPED`(세대는 한 번).
+  - 긴급 래치 순서: SLAM 만료로 래치될 때 DISARM 이 큐에 들어가고 **가짜 전송기의 송신 호출이 수거보다 먼저**다(수거가 예외를 내도 그 순서). 수거와 이후 해제 시도가 만료 SLAM 을 다시 읽지 않고, 여러 틱 만료여도 종료 기록은 한 번이다.
+  - 등록 revision: 제출 ACK 뒤 첫 요청 전·보정 변경으로 버린 뒤 재요청 전에 등록이 바뀌면 `targets_changed` 로 끝남.
+  - 재무장: 새 STOP 뒤 옛 `rearm` 재전송·중복에도 래치 유지. 모든 래치 경로에서 중재기 `STOPPED`(세대는 한 번).
   - 등록: 준비 중 자세 변경 → 준비 종료(재질문 없음), `operator_input` 자세 없는 제출 거부.
   - 래치 때 달리던 미션 종료·수거(포켓 진입 뒤면 현장 복구), 재무장 조건 실패면 ACK·모드 변경 없음.
   - 무장 중 Blocked·시한 초과·권한 철회 → 래치.
@@ -187,3 +191,6 @@
   - P1: 무장한 승강 유지 상태 없음 — S10 은 정지 DRIVE 확인 → DISARM 의 유한 절차이고 승강은 무전원 유지 조건. 래치는 후보 폐기 → DISARM 송신 → 중재기 STOPPED → 수거 순서, 무효 SLAM 수거는 해제 보류.
   - P2: 모든 래치에서 중재기 STOPPED, 래치는 rearm ACK 확정 때만 풀림. 제출 자세·revision 고정, 준비 중 변경은 종료. 정지 구간은 이전 구동 해소와 함께, `first_frame_still_since` 는 미션 키.
   - P3: 저속 상한의 단위(후륜축 m/s)와 좌우 바퀴 목표 계산 위치.
+- Codex 4 회차(4판): 새 P1 없음, P2 4, P3 1. 반영했다.
+  - P2: 미룬 해제도 SLAM 신선도를 확인. 고정 revision 을 모든 작업 요청에. 래치 해제는 중재기의 실제 `STOPPED → PAUSED` 전이에(`on_rearmed`). 첫 프레임 대기 프레임(바퀴 0·조향 유지·승강 `target` = 측정)과 이전 이동 `keep` 을 구분.
+  - P3: 송신 호출 순서 시험.
