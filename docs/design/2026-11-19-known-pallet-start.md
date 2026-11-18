@@ -41,7 +41,8 @@ S10 사례 A: 테이프로 표시한 알려진 시작 → 접근 → 삽입 → 
 ## 4. 재위치 확인 전 잠금 (기존 빈틈)
 
 - `field_recovery_done()` 은 복구를 마치고 새 재위치 세대를 두며, 그때부터 AUTO 제출은 `relocalize_required` 로 거부된다. 그러나 지금 `enforce_real()` 과 실차 텔레옵 정책은 그 키를 읽지 않아, 정상 피드백·정지 조건에서 주행과 승강이 다시 열린다(Codex 가 메모리에서 재현).
-- 4a 는 코어가 `relocalize_required`(현재 세대의 확인 전)를 노출하고, 실차 텔레옵 정책(`real_teleop`)과 실차 AUTO 허가가 그것을 읽어 **주행·승강을 모두 거부**하게 한다. 옛 세대의 확인 응답은 풀지 못한다.
+- **4a 보다 먼저 별도 PR #597 로 머지했다**(총괄 2026-11-19; 실차 텔레옵 S6 이 4a 보다 먼저 올 수 있어서). 코어는 이미 미션이 없을 때 `relocalize_required` 를 안전 상태에 내고 있었고, `enforce_real()` 이 그것을 `teleop_refused = "real_relocalize_required"` 로 바꿔 **주행·승강을 모두 거부**한다. 새 `real_auto_refusal(safety)` 는 실차 AUTO 허가가 무장 때와 매 틱 읽는다(4b/4c 에서 배선; baseline 이 설치된 코어의 안전 상태를 넘기고, SLAM·입력 신선도는 따로 확인). 옛 세대의 확인 응답은 풀지 못한다. `tools/teleop_bridge.py` 는 `bench_safety()` 를 써서 이 빈틈이 닿지 않았다.
+- 4a 에 남는 것: S10 의 `recovery_required/s10_lifted` 뒤 현장 복구 → 재위치 잠금이 같은 경로로 걸리는지 확인하는 시험(5절).
 
 ## 5. 시험 (가짜 훅, Isaac 없음)
 
