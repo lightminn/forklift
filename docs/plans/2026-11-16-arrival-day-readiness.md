@@ -15,7 +15,7 @@
 
 | 항목 | 근거 |
 |---|---|
-| Jetson(Orin Nano Super, `scienceowl@jetson.local`) | 2026-11-17([hw-day](../validation/2026-11-17-hw-day.md)): 저장소·venv `.[real,console]`, udev, `dialout`·`docker` 그룹, MAXN_SUPER + `jetson_clocks`, 다리 정체 정지·부하 PASS(최대 29.6 ms), H743 HIL 링크 PASS, D435i IMU 400/200 Hz(librealsense 소스 빌드). `tools/hwday` 기본값은 이 장치(#이 PR) |
+| Jetson(Orin Nano Super, `scienceowl@jetson.local`) | 2026-11-17([hw-day](../validation/2026-11-17-hw-day.md)): 저장소·venv `.[real,console]`, udev, `dialout`·`docker` 그룹, MAXN_SUPER + `jetson_clocks`, 다리 정체 정지·부하 PASS(최대 29.6 ms), H743 HIL 링크 PASS, D435i IMU 400/200 Hz(librealsense 소스 빌드). `tools/hwday` 기본값은 이 장치(#577) |
 | Arm GNU Toolchain 13.3.rel1 | 노트북 `~/opt/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi`(절차서 2 절의 `<TC>`) |
 | STM32CubeProgrammer CLI | 노트북에 2.23.0 설치(2026-11-16, `STM32_Programmer_CLI --version`, `-l usb` 동작 — 장치 없음) |
 | 모터 출력 보호 확인 기록 | 사용자가 작성·커밋(#552, `docs/validation/2026-11-16-ipropi-protection-record.md`): 보호 회로 없이 출력을 연다, 예비 보드 있음. 게이트 검사 `rec=1f4207f4` 통과(총괄 확인). 절차서 2 절의 open 빌드 명령에 경로를 채움 |
