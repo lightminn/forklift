@@ -340,3 +340,34 @@ def test_a_deferred_end_release_after_the_mission_is_gone_still_moves_the_last_p
     core.abandon_jobs = lambda t: None
     assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
     assert core.targets.pallets["P1"].pose == Pose(2.0, 0.0, 0.0)
+
+
+@pytest.mark.parametrize("lift_m", [0.0, 0.3])
+def test_teleop_and_auto_stay_shut_until_this_generation_relocalizes(lift_m):
+    """The gap Codex reproduced (design 2026-11-19-known-pallet-start 4): after 'recovery done' the core's safety
+    state carries relocalize_required, but the real teleop opened driving and the lift on it."""
+    from forklift_core.live.real_teleop import enforce_real, real_auto_refusal
+
+    core = field_core()
+    core.baseline = SimpleNamespace()  # a live session: the safety state carries the session's cargo fields
+    core._open_field_recovery(10.0)  # noqa: SLF001
+    core.commands.status = "failed"
+    core.jobs = None
+    core.abandon_jobs = lambda t: None
+    core.commands.adopted_id = None
+    assert core.field_recovery_done(20.0, 1, disarmed=True, outstanding=False) == (True, None)
+
+    def gates():
+        s = core.safety_state(21.0)
+        return teleop_policy(enforce_real(s), feedback_ok=True, standing=True, lift_m=lift_m), real_auto_refusal(s)
+
+    teleop, auto = gates()
+    assert not teleop.drive_allowed and not teleop.lift_allowed and teleop.reason == "real_relocalize_required"
+    assert auto == "relocalize_required"
+    gen = core.relocalize_generation()
+    assert core.relocalized(22.0, gen - 1) is False  # an older generation's late answer opens nothing
+    teleop, auto = gates()
+    assert not teleop.drive_allowed and not teleop.lift_allowed and auto == "relocalize_required"
+    assert core.relocalized(23.0, gen) is True
+    teleop, auto = gates()
+    assert teleop.drive_allowed and teleop.lift_allowed and auto is None
