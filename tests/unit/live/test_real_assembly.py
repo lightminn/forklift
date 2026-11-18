@@ -258,10 +258,11 @@ def test_the_docking_grid_clears_only_the_registered_pallets_own_cells():
     occ = np.zeros((70, 50), bool)  # x from -1.0, y from -2.5, 0.1 m
     occ[38:42, 23:27] = True  # cells at the registered pallet (x 2.8-3.2, y -0.2-0.2)
     occ[34, 25] = True  # a separate obstacle 0.6 m in front of the pallet's centre (0.3 m before its face)
+    occ[36, 25] = True  # and one just in front of the face (x 2.6-2.7 m; the face at 2.7 m)
     occ[10, 10] = True  # a far wall cell
     grid = OccupancyGrid(-1.0, -2.5, 0.1, occ)
     core, hooks, _ = build(hooks_kw={"occupancy": lambda: grid})
     out = core.hooks.grid_kwargs("mission", SimpleNamespace(x_m=3.0, y_m=0.0, yaw_rad=0.0))
     assert out["occupancy"] is grid and out["occupancy"].occupied[39, 24]  # the approach still sees it
     dock = out["docking_occupancy"].occupied
-    assert not dock[38:42, 23:27].any() and dock[10, 10] and dock[34, 25]  # the separate obstacle stays
+    assert not dock[38:42, 23:27].any() and dock[10, 10] and dock[34, 25] and dock[36, 25]  # the separate ones stay

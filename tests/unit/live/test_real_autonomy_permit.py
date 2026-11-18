@@ -300,16 +300,22 @@ def test_a_stale_state_never_confirms_the_control_stop():
     assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
 
 
-def test_a_disarmed_sample_made_before_the_disarm_and_arriving_after_its_write_is_not_its_answer():
-    """Codex 4b round 3: the answer names the DISARM's seq (or a later one) -- time alone is not enough."""
-    b = Bench()
-    b.armed_ready()
-    old = b.mcu.state()  # an ARMED-era sample...
+@pytest.mark.parametrize("seq_shift", [-3, +100])
+def test_a_disarmed_naming_another_seq_is_not_the_disarms_answer(seq_shift):
+    """Codex 4b rounds 3-4: an accepted STATE (its MCU time moving on) that says DISARMED but names another seq --
+    an earlier sample of this executor or a larger seq left by an earlier executor -- is not the DISARM's answer."""
     from dataclasses import replace as _r
 
-    early = _r(old, mode=Mode.DISARMED)  # ...shaped DISARMED, naming an older seq
+    b = Bench()
+    b.armed_ready()
     b.mcu.deaf = True  # the DISARM is written but the MCU never processes it
     b.permit.latch(b.now, "stop")
+    awaited = b.permit._disarm_seq  # noqa: SLF001
     b.now += 5 * MS
-    b.host.on_bytes(encode(early, 1), b.now)
-    assert b.permit.armed  # not the DISARM's answer
+    b.mcu.advance(5_000)
+    forged = _r(b.mcu.state(), mode=Mode.DISARMED, last_rx_seq=(awaited + seq_shift) & 0xFFFF)
+    b.host.on_bytes(encode(forged, 1), b.now)
+    assert b.host.state.mode == Mode.DISARMED  # the host took it
+    assert b.permit.armed  # but it is not the DISARM's answer
+    b.permit.tick(b.now)
+    assert b.permit.state == ra.LATCHED and b.permit.armed

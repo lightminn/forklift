@@ -129,7 +129,10 @@ class RealHooks:
         pass  # display only
 
 
-DOCKING_CLEAR_MARGIN_M = 0.10  # the registered pose's tape-measure error the pallet's own cells are taken within
+# Only cells whose centre lies inside the registered footprint are taken as the pallet's own: a cell outside it cannot
+# be told from a separate obstacle (Codex 4b round 4), so it stays -- a pallet placed off its registered pose blocks
+# the docking plan instead (the safe failure: the operator measures and registers it again).
+DOCKING_CLEAR_MARGIN_M = 0.0
 
 
 def docking_occupancy(occupancy, target, geometry, margin_m: float = DOCKING_CLEAR_MARGIN_M):

@@ -211,12 +211,13 @@ class AutoPermit:
         self.written("DRIVE", seq, written_ns)
 
     def _disarmed_after_write_any(self) -> bool:
-        """A DISARMED received after the newest DISARM's write that names that DISARM's seq or a later one (the MCU
-        processes frames in order and records the seq: a sample made before the DISARM, arriving late, does not)."""
+        """A DISARMED received after the newest DISARM's write that names exactly that DISARM's seq (the MCU records the
+        seq of the frame it processed: a sample made before it -- this executor's or an earlier one's, whatever its
+        seq -- does not; nothing else is sent while a DISARM is awaited, and a retry renews the seq awaited)."""
         host, w, q = self.host, self._disarm_written_ns, self._disarm_seq
         s, rx = host.state, host.state_rx_ns
         return (w is not None and q is not None and s is not None and rx is not None and rx > w
-                and s.mode == Mode.DISARMED and ((int(s.last_rx_seq) - q) & 0xFFFF) < 0x8000)
+                and s.mode == Mode.DISARMED and (int(s.last_rx_seq) & 0xFFFF) == q)
 
     def _disarmed_after_write(self, now_ns: int) -> bool:
         """A fresh DISARMED received after the newest DISARM was written (a cached one, or one before the write,
