@@ -1239,6 +1239,8 @@ POST_MEASUREMENT_ARGUMENTS = {
                               "reloc_inject": None, "pose_check_contacts": False,
                               # 2026-11-16 the observation move (plan 2026-11-16-reloc-observe-move): off before
                               "reloc_observe_move": 0.0,
+                              # 2026-11-18 the F2 tyre contact (user decision): the near contract was measured rigid
+                              "tyre_contact": "off",
                               "pose_shadow_audit": False, "correction_inject": None,
                               # 2026-11-07 the lead's item 3b-c: records only, off in every earlier run
                               "pose_diag_capture": False,

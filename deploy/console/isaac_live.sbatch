@@ -40,6 +40,14 @@
 #   before; an explicit value needs the near-end stand on; an EXTRA_ARGS --near-observe-arrival comes later and wins;
 #   records made before this default ran it off: a comparison names both arms' value and earlier off results are not
 #   pooled with later on ones),
+#   TYRE_CONTACT (f2: --tyre-contact f2, the F2 compliant tyre contact -- user decision 2026-11-18 after
+#   docs/validation/2026-11-18-f2-i-reregistration.md, "on across the simulation"; off: rigid as before). Its five
+#   limits travel with it: validated at 120 Hz only (an exception to the operating rate rule), the curvature ratio's
+#   median 0.951 with 6 of 13 below the bound, a residual left/right asymmetry of 8-19 mrad, low speed only, and
+#   estimated tyre values. A --near-tracking run defaults it off (its contract was measured rigid) and refuses f2; an
+#   EXTRA_ARGS --tyre-contact (written in full) comes later and wins; env.sh and the launch log record the value
+#   applied. Comparisons run both arms on the same tyre setting and never pool rigid baselines with f2 ones. The survey
+#   maps were made rigid; the map check does not compare the tyre, so localization on them is not refused.
 #   FAR_EXPECTED (on: --far-capture-expected on, the far capture without far recognition looks only in the mission's
 #   adoption rectangle, so a neighbouring pallet is not adopted -- the lead's exception decision of 2026-10-28 after
 #   docs/validation/2026-10-28-far-target-binding.md, which missed its pre-registered "no false refusal"; inert with
@@ -123,6 +131,8 @@ G3_EXTRA_CAST=""
 G3_EXTRA_RSB=""  # an EXTRA_ARGS --return-start-backoff's last value (other than off refused with --near-tracking)
 G3_EXTRA_NES=""  # an EXTRA_ARGS --near-end-stand's last value (K1's default follows the value applied)
 G3_EXTRA_NOA=""  # an EXTRA_ARGS --near-observe-arrival's last value
+G3_EXTRA_TYC=""  # an EXTRA_ARGS --tyre-contact's last value (it comes after the launcher's and wins)
+tyc_next=0
 g3_next=0
 rsb_next=0
 nes_next=0
@@ -132,6 +142,7 @@ while IFS= read -r w; do
   if [ "$rsb_next" = 1 ]; then G3_EXTRA_RSB=$w; rsb_next=0; continue; fi
   if [ "$nes_next" = 1 ]; then G3_EXTRA_NES=$w; nes_next=0; continue; fi
   if [ "$noa_next" = 1 ]; then G3_EXTRA_NOA=$w; noa_next=0; continue; fi
+  if [ "$tyc_next" = 1 ]; then G3_EXTRA_TYC=$w; tyc_next=0; continue; fi
   case "$w" in
     --near-tracking) G3_NEAR=1;;
     --lidar-cast) g3_next=1;;
@@ -142,9 +153,12 @@ while IFS= read -r w; do
     --near-end-stand=*) G3_EXTRA_NES=${w#--near-end-stand=};;
     --near-observe-arrival) noa_next=1;;  # K1: the launcher then adds none of its own
     --near-observe-arrival=*) G3_EXTRA_NOA=${w#--near-observe-arrival=};;
+    --tyre-contact) tyc_next=1;;
+    --tyre-contact=*) G3_EXTRA_TYC=${w#--tyre-contact=};;
     --?*)  # argparse also takes an unambiguous abbreviation: refused here, so what is printed is what runs
       o=${w%%=*}
-      for full in --near-tracking --lidar-cast --return-start-backoff --near-end-stand --near-observe-arrival; do
+      for full in --near-tracking --lidar-cast --return-start-backoff --near-end-stand --near-observe-arrival \
+                  --tyre-contact; do
         case "$full" in "$o"*) echo "EXTRA_ARGS $o: write $full in full"; exit 2;; esac
       done;;
   esac
@@ -158,6 +172,15 @@ if [ "$G3_NEAR" = 1 ]; then
 fi
 G3_DEFAULT=1
 [ "$G3_NEAR" = 1 ] && G3_DEFAULT=0
+# the F2 tyre contact (user decision 2026-11-18): f2 by default, off for a --near-tracking run (measured rigid)
+if [ "$G3_NEAR" = 1 ]; then TYRE_CONTACT=${TYRE_CONTACT:-off}; else TYRE_CONTACT=${TYRE_CONTACT:-f2}; fi
+case "$TYRE_CONTACT" in off|f2) ;; *) echo "TYRE_CONTACT must be f2 or off"; exit 2;; esac
+TYRE_CONTACT_APPLIED=${G3_EXTRA_TYC:-$TYRE_CONTACT}
+TYRE_CONTACT_FROM=$([ -n "$G3_EXTRA_TYC" ] && echo EXTRA_ARGS || echo launcher)
+case "$TYRE_CONTACT_APPLIED" in off|f2) ;; *) echo "--tyre-contact in EXTRA_ARGS must be f2 or off"; exit 2;; esac
+[ "$G3_NEAR" = 1 ] && [ "$TYRE_CONTACT_APPLIED" != off ] \
+  && { echo "--near-tracking needs TYRE_CONTACT=off (its contract was measured rigid)"; exit 2; }
+echo "TYRE_CONTACT=$TYRE_CONTACT_APPLIED TYRE_CONTACT_FROM=$TYRE_CONTACT_FROM"
 FORKLIFT_GRID_CLEAR_KERNEL=${FORKLIFT_GRID_CLEAR_KERNEL:-$G3_DEFAULT}
 FORKLIFT_SHADOW_KERNEL=${FORKLIFT_SHADOW_KERNEL:-$G3_DEFAULT}
 if [ "$G3_NEAR" = 1 ]; then LIDAR_CAST=${LIDAR_CAST:-loop}; else LIDAR_CAST=${LIDAR_CAST:-fast}; fi
@@ -342,6 +365,8 @@ echo "cpus: bridge $CPU0, session ${SESSION_CPUS:-unpinned}"
   printf 'ENCODER_MODEL=%q\n' "$ENCODER_MODEL"
   printf 'D7_HOLD=%q\n' "$D7_HOLD"
   printf 'FAR_EXPECTED=%q\n' "$FAR_EXPECTED"
+  printf 'TYRE_CONTACT=%q\nTYRE_CONTACT_APPLIED=%q\nTYRE_CONTACT_FROM=%q\n' "$TYRE_CONTACT" "$TYRE_CONTACT_APPLIED" \
+    "$TYRE_CONTACT_FROM"  # the F2 tyre contact (the runner passes TYRE_CONTACT; an EXTRA_ARGS value comes later)
   # the G3 scan-step switches (real-time plan 5.26-5.27): the runner exports the two and passes --lidar-cast
   printf 'FORKLIFT_GRID_CLEAR_KERNEL=%q\nFORKLIFT_SHADOW_KERNEL=%q\nLIDAR_CAST=%q\n' \
     "$FORKLIFT_GRID_CLEAR_KERNEL" "$FORKLIFT_SHADOW_KERNEL" "$LIDAR_CAST"
@@ -441,6 +466,7 @@ ARGS=(
   --obstacle-layer "$LAYER" ${BUDGET[@]+"${BUDGET[@]}"} --encoder-model "$ENCODER_MODEL" --obstacle-act --seed "$SEED" \
   --slam-feedback "$2/sock/slam.sock" --slam-map-dir "$2/bridge" --slam-noise-seed "$SEED" \
   --d7-planner --d7-docking --d7-reapproach-hold "$D7_HOLD" --far-capture-expected "$FAR_EXPECTED" \
+  --tyre-contact "${TYRE_CONTACT:-off}" \
   --live --live-supervised --live-port "$PORT" --live-port-file "$3" \
   --live-factor "$FACTOR" --live-web-root "$ROOT/console/web" --live-epoch "$1" --slam-choice "$SLAM_CHOICE" \
   --lidar-cast "${LIDAR_CAST:-loop}" \
