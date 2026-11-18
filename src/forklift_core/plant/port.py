@@ -15,7 +15,7 @@ hold_lift into the same frame. The link's queue and frame writing stay with ``Mc
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -81,17 +81,29 @@ class PlantHealth:
 class PortResult:
     kind: str  # "queued" | "refused" | "blocked"
     reason: str | None = None
+    # the queued frame's link seq (control tick contract 2: queued is not the MCU's acceptance -- a STATE naming
+    # this seq is); left out of equality, so a result still equals PortResult("queued")
+    seq: int | None = field(default=None, compare=False)
 
 
 def _seq_at_or_after(a: int, b: int) -> bool:
     return ((a - b) & 0xFFFF) < 0x8000
 
 
+LIFT_STILL_M = 0.003  # a lift target this close to the measured lift moves nothing (a wait frame's)
+
+
 class RealPlantPort:
-    def __init__(self, host: McuLinkHost, kinematics: RealKinematics) -> None:
+    def __init__(self, host: McuLinkHost, kinematics: RealKinematics, *, lift_motion_counts: bool = False,
+                 lift_still_m: float = LIFT_STILL_M) -> None:
+        """``lift_motion_counts`` (the real autonomy's port, control tick contract 2): a zero-wheel frame whose lift
+        target is away from the measured lift, and ``keep`` (an earlier lift target kept), count as commands that
+        may still act. Off (the teleop bridge's): the wheels only, as before."""
         self.host, self.kinematics = host, kinematics
+        self.lift_motion_counts, self.lift_still_m = bool(lift_motion_counts), float(lift_still_m)
         self.control_gen = 0
         self._intent: tuple | None = None  # (auth_epoch, steering q, lift_m, lift_mode, expires_ns)
+        self._settled_since: int | None = None  # the outstanding evidence's: first look with nothing left
 
     def new_control_generation(self) -> int:
         """A lease or mission command change: queued DRIVEs go, the latest intent is forgotten."""
@@ -106,9 +118,33 @@ class RealPlantPort:
                             tuple(float(v) for v in np.asarray(steering_command, dtype=float)), float(lift_m),
                             lift_mode)
 
-    def _submit(self, rear: RearDrive, lift_m: float, lift_mode: str, expires_ns: int, now_ns: int) -> PortResult:
-        out = self.host.drive(rear, lift_m, lift_mode == "keep", expires_ns, now_ns)
-        return PortResult("blocked", out.reason) if isinstance(out, Blocked) else PortResult("queued")
+    def _movable(self, lift_m: float, lift_mode: str) -> bool | None:
+        if not self.lift_motion_counts:
+            return None
+        if lift_mode == "keep":
+            return True
+        s = self.host.state
+        measured = None if s is None or not math.isfinite(s.lift_m) else float(s.lift_m)
+        return measured is None or abs(float(lift_m) - measured) > self.lift_still_m
+
+    def _submit(self, rear: RearDrive, lift_m: float, lift_mode: str, expires_ns: int, now_ns: int, *,
+                movable: bool | None = ...) -> PortResult:
+        movable = self._movable(lift_m, lift_mode) if movable is ... else movable
+        out = self.host.drive(rear, lift_m, lift_mode == "keep", expires_ns, now_ns, movable=movable)
+        if isinstance(out, Blocked):
+            return PortResult("blocked", out.reason)
+        return PortResult("queued", seq=self.host.last_queued_seq)
+
+    def control_stop(self, *, steering_rad: float, lift_m: float, now_ns: int, expires_ns: int) -> PortResult:
+        """The control stop's frame in one call (control tick contract 2 ①): a new generation (the queue and the
+        intent go), then wheels 0 at the measured steering ``steering_rad`` and the lift's target at the measured
+        ``lift_m`` -- not through the cached intent a generation change forgets. The frame itself moves nothing."""
+        self.new_control_generation()
+        out = self._submit(RearDrive(0.0, 0.0, 0.0, 0.0, float(steering_rad), False), float(lift_m), "target",
+                           int(expires_ns), now_ns, movable=False if self.lift_motion_counts else None)
+        if out.kind == "queued":
+            self._intent = (self.host.auth_epoch, float(steering_rad), float(lift_m), "target", int(expires_ns))
+        return out
 
     def command(self, cmd: PlantCommand, now_ns: int) -> PortResult:
         if cmd.control_gen != self.control_gen:
@@ -174,6 +210,20 @@ class RealPlantPort:
                     continue  # accepted, and its deadline has passed
             out.append(w["expires_ns"])
         return out
+
+    def outstanding(self, now_ns: int) -> tuple:
+        """The AUTO permit's evidence (real assembly design 7): ("unknown", None) before any STATE, ("pending", None)
+        while a command that may still act is queued, being written or written and unsettled, else ("settled",
+        since) -- since the first look that found nothing left (looked at every cycle)."""
+        if self.host.state is None:
+            self._settled_since = None
+            return ("unknown", None)
+        if self._unsettled(now_ns):
+            self._settled_since = None
+            return ("pending", None)
+        if self._settled_since is None:
+            self._settled_since = int(now_ns)
+        return ("settled", self._settled_since)
 
     def outstanding_until(self, now_ns: int) -> int | None:
         """The latest original expiry among the non-zero DRIVEs that could still act at ``now_ns``."""
