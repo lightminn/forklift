@@ -93,13 +93,19 @@
    - 원본과 세션 파일 바이트 불변.
    - `side_census` 기준으로 12 사본 모두 세 경로 성공. Codex 가 같은 조건에서 12 변형 모두 성공을 확인했다.
 2. **riib 런처**(`deploy/riibotics/riib_scene.sbatch`):
-   - `SIDE=on|off`(기본 `on`)를 더한다. `MARKERS`·`RACK` 처럼 line·random 장면을 `_side` 사본 이름으로 바꾸는 스위치다.
-   - `BOTTOM_DECK=structure|on|off` 를 더한다. 런처가 정하는 기본은 아래 조건을 모두 만족할 때만 `structure` 이고, 아니면 `off` 와 그 이유를 `riib_defaults.txt` 에 적는다.
-     - 장면이 `_side` 사본이다.
+   - `BOTTOM_DECK=auto|structure|on|off` 를 더한다. `auto` 는 아래 조건을 모두 만족할 때만 `structure` 이고, 아니면 `off` 와 그 이유를 `riib_defaults.txt` 에 적는다.
+     - 장면이 line·random 이다(사본이 있는 장면).
      - `MODE=slam` 이다.
-     - `NEAR_RECAPTURE_GAP` 이 비어 있다.
-     - `EXTRA_ARGS` 에 `--near-tracking`·`--pocket-check`·`--repeat-captures`·`--live` 가 없다.
-   - `BOTTOM_DECK=structure` 를 사람이 직접 줬는데 위 조건과 맞지 않으면, Isaac 을 띄우기 전에 거부한다.
+     - 두 번째 근거리 촬영이 없다. `NEAR_RECAPTURE_GAP` 과 `EXTRA_ARGS` 의 `--near-recapture-gap-m` 둘 다 본다.
+     - `EXTRA_ARGS` 가 실제로 적용할 값에 `--near-tracking`·`--pocket-check`·`--live` 가 없고, `--repeat-captures` 가 0 보다 크지 않다.
+       - 러너가 받는 고유 접두어를 그대로 읽는다(`--near-recapt`·`--repeat-capt` 등).
+       - `--repeat-captures` 는 마지막 값을 쓴다.
+       - `--live` 는 정확히 그 단어일 때만이다(`--live-` 로 시작하는 다른 인자가 있다).
+   - `SIDE=auto|on|off` 를 더한다. 기본 `auto` 는 `BOTTOM_DECK=auto` 가 검사를 켤 때만 `_side` 사본을 쓰고, 검사가 꺼지면 원본을 쓴다.
+     - 이렇게 두 결정을 묶는 이유(Codex 2 차 P1): `MODE=truth`·근접 추적 실행이 사본을 열면 근접 추적 계약의 입력 해시가 원본과 달라 거부된다. 또 사본이 없는 옛 장면 폴더에서 런처가 멈춘다.
+     - `SIDE=on` 은 짝 비교의 `off` 팔처럼 검사 없이 사본만 쓸 때다. `_side` 이름을 직접 주면 `SIDE=on` 과 같고, `SIDE=off` 와 함께면 거부한다.
+   - `BOTTOM_DECK=structure`·`on` 을 직접 줬는데 위 조건(장면 종류를 뺀 나머지)과 맞지 않으면, Isaac 을 띄우기 전에 거부한다.
+   - `EXTRA_ARGS` 의 `--bottom-deck-check` 는 거부한다. 스위치는 `BOTTOM_DECK` 하나라서 기록과 러너가 어긋나지 않는다.
    - 장면별 허용 목록이 최종 `NAME` 으로 정해지는 곳(`line_2_m` 의 degenerate-continue, `aisle_rack` 의 short cusp·keepout, `trailer` 의 exit clearance)은 `_side` 를 뗀 이름으로 비교한다. 그래야 사본에서도 같은 기본값이 붙는다.
    - 시험: 런처 인자 조합(`DRY_RUN`/러너 `--check-args`)으로 18 장면 × `MODE=slam/truth`, `NEAR_RECAPTURE_GAP`, `EXTRA_ARGS=--near-tracking` 의 최종 인자와 거부를 확인한다. Codex 가 `line_2_m`·`random_2_m` 기본 SLAM 인자 + `structure` 를 `--check-args` 로 돌려 `ARGS_OK` 를 확인했다.
 3. **선반 시험체(S−)를 넣는다.**
@@ -110,8 +116,8 @@
 
 | 묶음 | 장면·시험체 | 실행 | 합격 / 기록 |
 |---|---|---|---|
-| S+ | `line_2_m_side`, `random_1_m_side`(둘 다 경계 수정이 필요한 장면), 진짜 EPAL 6 | seed 0–2, `structure` 와 `off` 짝(같은 사본) | 장면마다 3 회 모두 두 면 판정까지 가서 허가, 완주 ≥ 2. 단계별 시각 기록 |
-| S+g | `random_1_m_side`, grounded EPAL 6 | seed 0–2, `structure` | 3 회 모두 두 면 판정 `absent`/`present` 로 허가(`no_bottom_deck` 0), 완주 ≥ 2 |
+| S+ | `line_2_m_side`, `random_1_m_side`(둘 다 경계 수정이 필요한 장면), 진짜 EPAL 6 | seed 0–2, `BOTTOM_DECK=structure` 와 `BOTTOM_DECK=off SIDE=on` 짝(같은 사본) | 장면마다 3 회 모두 두 면 판정까지 가서 허가, 완주 ≥ 2. 단계별 시각 기록. 사이클 시간 차이는 두 팔이 모두 완주한 seed 짝에서만 계산하고, 짝 수와 팔별 멈춘 단계를 함께 적는다. 완주 짝이 없으면 사이클 비용은 판단 보류이고, 두 팔이 함께 닿은 단계까지의 시각만 비교한다 |
+| S+g | `random_1_m_side`, grounded EPAL 6(이웃도 grounded 로 복제된다 — 결과에 "전체 grounded 배치"로 적는다) | seed 0–2, `structure` | 3 회 모두 서로 다른 두 면을 관측하고, 최종 기록이 `absent`(하판 없음을 본 것)인 상태에서 삽입이 허가됨(`no_bottom_deck` 0). 두 면이 `present` 로 나오면 이 분기를 지나지 않은 것이라 따로 적는다. 완주 ≥ 2 |
 | S− | 이웃 팔레트 없는 배치(기본 bay 또는 이웃 없는 장면 — 이웃은 미션 시험체를 복제하므로), `shelf_closed` | seed 0–2(원거리에서 걸러진 실행은 따로 적고 다음 seed 로, 최대 6) | 각 실행이 원거리 채택 → 옆면 단계 → 저장 프레임 재계산에서 `closed_face`(`unobserved`) → 그 판정으로 거부 → `insert` 전환 없음 |
 
    - 단계별 시각: 첫 원거리 채택, 옆면 이동·촬영, 복귀·재관측, 첫 접근 시작, 완주.
@@ -178,6 +184,15 @@
 | P2 | 결정 모드 짝 비교는 운영 스택을 보지 못한다. `random_2_m` 대신 경계 수정이 필요한 `random_1_m`. grounded 는 3 seed | 러너 1734 행 | §3-4 |
 | P2 | 시간 표는 근사이고, 한 면 절반 절약 근거 없음. 근거리 절단 변화를 옆면 비용에 섞지 말 것 | 러너 4739 행 | §4·§5 |
 | P3 | 1.35 m 는 카메라 거리, 뒤차축 목표는 약 2.31 m. CLAUDE.md·AGENTS.md 같이 | | §1·§3-6 |
+
+**2 차(같은 스레드, `38dd7f4c` 기준).** 1 차 처리는 확인했다. `need_margin` +1.59·+1.02 m 재현, 넣을 값으로 12 사본 모두 세 경로 성공, `line_3` 계열 차이 유지.
+
+| 등급 | 지적 | 처리 |
+|---|---|---|
+| P1 | `SIDE=on` 을 따로 기본으로 두면 검사가 꺼진 실행(`MODE=truth`·근접 추적)도 사본을 열어, 사본 없는 장면 폴더에서 멈추거나 근접 추적 계약 해시가 거부한다 | §3-2: `SIDE=auto` 기본, `BOTTOM_DECK=auto` 가 켤 때만 사본. 런처 시험으로 고정 |
+| P1 | `EXTRA_ARGS` 의 `--near-recapture-gap-m`(축약 포함)·`--repeat-capt 1` 이 빠졌고, `--repeat-captures=0` 은 통과해야 한다. `EXTRA_ARGS` 의 `--bottom-deck-check` 와의 우선순위 | §3-2: 적용값 기준, 축약 접두어, 마지막 값. `EXTRA_ARGS` 의 검사 인자는 거부 |
+| P2 | S+g 는 `absent` 허가를 실제로 지났는지 봐야 한다. 이웃도 grounded 로 복제된다 | §3-4 S+g |
+| P2 | S+ 합격이어도 시간 비교 짝이 0 일 수 있다 | §3-4 S+: 두 팔 완주 짝만, 짝 수·멈춘 단계 기록, 없으면 판단 보류 |
 
 ### ③ 다른 관점 독립 검토 — agy(Gemini 4 Hydrogen High), 2026-11-18
 

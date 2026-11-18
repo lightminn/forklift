@@ -21,6 +21,15 @@
 #   MARKERS=on     line_* / random_* run their slot-marker copy <scene>_m.json (PR #99); the other scenes have none
 #   RACK=on        aisle / aisle_out run their rack copy <scene>_rack.json: rack uprights, wider slot gaps and the
 #                  0.20 m back gap (user decision 2026-10-22, docs/plans/2026-10-22-riibotics-aisle.md D-A, D-C)
+#   SIDE=auto      the side-room copy <scene>[_m]_side.json of line_* / random_* (tools/riibotics_isaac_scenes.py
+#                  --side-room: the hall box grown on +y so the bottom-deck side stands fit; nothing else moved): auto
+#                  takes it exactly when BOTTOM_DECK=auto turns the check on, on always (e.g. a paired off arm), off never.
+#                  The per-scene defaults below follow the scene without its _side suffix.
+#   BOTTOM_DECK=off  --bottom-deck-check (docs/plans/2026-11-18-bottom-deck-structure-default.md 3-2): auto turns
+#                  structure on (and takes the side copy) only for line / random in the slam mode with no second near
+#                  capture (NEAR_RECAPTURE_GAP or EXTRA_ARGS) and no --near-tracking, --pocket-check, --repeat-captures
+#                  above 0 or --live in EXTRA_ARGS, and off elsewhere on the original scene (the reason recorded);
+#                  structure / on are refused there before Isaac; off as before. riib_defaults.txt says what was applied
 #   KEEPOUT=0      --lidar-keepout-m: the planner's searches keep the LiDAR-visible props this much wider (P1c,
 #                  docs/plans/2026-10-23-planner-permission-clearance.md); 0 plans as before. 0.15 by default for the
 #                  aisle's rack copy only (aisle_rack, release off, within the same batches: transports passed 0/9 at 0
@@ -171,6 +180,11 @@ case "$MODE" in slam|truth) ;; *) echo "MODE must be slam or truth"; exit 2;; es
 case "$NEAR" in on|off) ;; *) echo "NEAR must be on or off"; exit 2;; esac
 case "$MARKERS" in on|off) ;; *) echo "MARKERS must be on or off"; exit 2;; esac
 case "$RACK" in on|off) ;; *) echo "RACK must be on or off"; exit 2;; esac
+SIDE=${SIDE:-auto}
+case "$SIDE" in auto|on|off) ;; *) echo "SIDE must be auto, on or off"; exit 2;; esac
+BOTTOM_DECK_GIVEN=${BOTTOM_DECK:+1}
+BOTTOM_DECK=${BOTTOM_DECK:-off}
+case "$BOTTOM_DECK" in auto|structure|on|off) ;; *) echo "BOTTOM_DECK must be auto, structure, on or off"; exit 2;; esac
 ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported) AGE=;; team_spec_quantized) AGE=_team_spec;;
   *) echo "ENCODER_MODEL must be reported or team_spec_quantized"; exit 2;; esac
@@ -227,19 +241,25 @@ if [ -n "$NEAR_RECAPTURE_GAP" ]; then
   { [ "$MODE" = slam ] && [ "$NEAR" = on ]; } || { echo "NEAR_RECAPTURE_GAP needs MODE=slam and NEAR=on"; exit 2; }
 fi
 NAME=$SCENE
-case "$SCENE" in
+case "$NAME" in *_side)
+  [ "$SIDE" = off ] && { echo "SCENE=$SCENE is a side copy but SIDE=off"; exit 2; }
+  SIDE=on; NAME=${NAME%_side} ;; esac
+case "$NAME" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
-  line_*|random_*) [ "$MARKERS" = on ] && NAME=${SCENE}_m ;;
+  line_*|random_*) [ "$MARKERS" = on ] && NAME=${NAME}_m ;;
   *_rack) [ "$RACK" = off ] && { echo "SCENE=$SCENE is a rack copy but RACK=off"; exit 2; } ;;
-  aisle|aisle_out) [ "$RACK" = on ] && NAME=${SCENE}_rack ;;
+  aisle|aisle_out) [ "$RACK" = on ] && NAME=${NAME}_rack ;;
 esac
+# the per-scene allow lists below read the scene without its side-room suffix (the copy moves nothing but the hall box);
+# the suffix itself is added once the bottom-deck check is decided, after EXTRA_ARGS
+BASE_NAME=$NAME
 # the degenerate-continue allow list is on the final NAME (line_2 with its marker copy), in the slam mode only
-if [ "$MODE" = slam ] && [ "$NAME" = line_2_m ]; then DDC_DEFAULT=on; else DDC_DEFAULT=off; fi
+if [ "$MODE" = slam ] && [ "$BASE_NAME" = line_2_m ]; then DDC_DEFAULT=on; else DDC_DEFAULT=off; fi
 DOCKING_DEGENERATE_CONTINUE=${DOCKING_DEGENERATE_CONTINUE:-$DDC_DEFAULT}
 case "$DOCKING_DEGENERATE_CONTINUE" in on|off) ;; *) echo "DOCKING_DEGENERATE_CONTINUE must be on or off"; exit 2;; esac
 DOCKING_DEGENERATE_CONTINUE_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --docking-degenerate-continue)
 # the short cusp arc allow list (docs/validation/2026-11-16-aisle-short-cusp-arc.md): the final NAME aisle_rack, slam only
-if [ "$MODE" = slam ] && [ "$NAME" = aisle_rack ]; then SCA_DEFAULT=0.6,1.0; else SCA_DEFAULT=off; fi
+if [ "$MODE" = slam ] && [ "$BASE_NAME" = aisle_rack ]; then SCA_DEFAULT=0.6,1.0; else SCA_DEFAULT=off; fi
 SHORT_CUSP_ARC=${SHORT_CUSP_ARC:-$SCA_DEFAULT}
 SHORT_CUSP_ARC_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --short-cusp-arc)
 # the goal creep band (docs/validation/2026-11-17-goal-band-cusp-retry.md): on in the slam mode, every scene
@@ -247,7 +267,7 @@ if [ "$MODE" = slam ]; then GCB_DEFAULT=on; else GCB_DEFAULT=off; fi
 GOAL_CREEP_BAND=${GOAL_CREEP_BAND:-$GCB_DEFAULT}
 GOAL_CREEP_BAND_FROM=launcher  # or EXTRA_ARGS (the runner takes the last --goal-creep-band)
 # the aisle's rack copy keeps its uprights 0.15 m wider in the searches; every other scene plans as before
-[ "$NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
+[ "$BASE_NAME" = aisle_rack ] && KEEPOUT=${KEEPOUT:-0.15}
 KEEPOUT=${KEEPOUT:-0}
 [[ "$KEEPOUT" =~ ^[0-9]+([.][0-9]+)?$ ]] || { echo "KEEPOUT must be a non-negative number of metres"; exit 2; }
 # scene requirements (config/scene_requirements.yaml, docs/plans/2026-10-27-scene-requirements.md): trailer's loaded
@@ -279,11 +299,16 @@ TYC_NEXT=0
 TYRE_CONTACT_EXTRA=""  # an EXTRA_ARGS --tyre-contact's last value
 GCB_NEXT=0
 EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
+# EXTRA_ARGS options the bottom-deck check is not defined with (run_transport.py's refusals), as the runner applies them
+EXTRA_POCKET=0; EXTRA_LIVE=0; EXTRA_GAP=0
+EXTRA_REPEAT=""  # the last --repeat-captures value (0 is the runner's off)
+RPC_NEXT=0
 # shellcheck disable=SC2086
 for w in ${EXTRA_ARGS:-}; do
   # C2: an explicit --near-end-stand in EXTRA_ARGS is the value applied (the runner's parser takes a unique prefix and
   # the last occurrence); recorded below as what the run got
   if [ "$NES_NEXT" = 1 ]; then NEAR_END_STAND=$w; NEAR_END_STAND_FROM=EXTRA_ARGS; NES_NEXT=0; continue; fi
+  if [ "$RPC_NEXT" = 1 ]; then EXTRA_REPEAT=$w; RPC_NEXT=0; continue; fi
   k=${w%%=*}
   if [[ "$k" == --near-e* && "--near-end-stand" == "$k"* ]]; then
     if [[ "$w" == *=* ]]; then NEAR_END_STAND=${w#*=}; NEAR_END_STAND_FROM=EXTRA_ARGS; else NES_NEXT=1; fi
@@ -338,11 +363,49 @@ for w in ${EXTRA_ARGS:-}; do
   if [[ "$k" == --return-s* && "--return-start-backoff" == "$k"* ]]; then
     echo "RETURN_START=on|boxed|off sets the return-start backoff, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2
   fi
+  # the bottom-deck check has one switch, BOTTOM_DECK (--bottom-d... can only be --bottom-deck-check)
+  if [ ${#k} -ge 10 ] && [[ "--bottom-deck-check" == "$k"* ]]; then
+    echo "BOTTOM_DECK=auto|structure|on|off sets the bottom-deck check, not EXTRA_ARGS (riib_defaults.txt records it)"; exit 2
+  fi
+  # the options the runner refuses the check with, by the unique prefixes its parser takes (--live exactly: other
+  # options start with --live-), and the --repeat-captures value applied (the last one)
+  if [ ${#k} -ge 10 ] && [[ "--pocket-check" == "$k"* ]]; then EXTRA_POCKET=1; fi
+  if [ ${#k} -ge 10 ] && [[ "--near-recapture-gap-m" == "$k"* ]]; then EXTRA_GAP=1; fi
+  [ "$k" = --live ] && EXTRA_LIVE=1
+  if [ ${#k} -ge 10 ] && [[ "--repeat-captures" == "$k"* ]]; then
+    if [[ "$w" == *=* ]]; then EXTRA_REPEAT=${w#*=}; else RPC_NEXT=1; continue; fi
+  fi
   case "$w" in --near-tracking)
     EXTRA_NEAR_TRACKING=1
     [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
 done
 set +f
+# the bottom-deck check (docs/plans/2026-11-18-bottom-deck-structure-default.md 3-2): what blocks it here, then the value
+BD_BLOCK=""
+if [ "$MODE" != slam ]; then BD_BLOCK=mode_truth
+elif [ -n "$NEAR_RECAPTURE_GAP" ] || [ "$EXTRA_GAP" = 1 ]; then BD_BLOCK=near_recapture_gap
+elif [ "$EXTRA_NEAR_TRACKING" = 1 ]; then BD_BLOCK=extra_args:--near-tracking
+elif [ "$EXTRA_POCKET" = 1 ]; then BD_BLOCK=extra_args:--pocket-check
+elif [ -n "$EXTRA_REPEAT" ] && [ "$EXTRA_REPEAT" != 0 ]; then BD_BLOCK=extra_args:--repeat-captures
+elif [ "$EXTRA_LIVE" = 1 ]; then BD_BLOCK=extra_args:--live
+fi
+case "$BASE_NAME" in line_*|random_*) SIDE_KIND=1 ;; *) SIDE_KIND=0 ;; esac
+case "$BOTTOM_DECK" in
+  off) BOTTOM_DECK_REASON=$([ -n "$BOTTOM_DECK_GIVEN" ] && echo explicit || echo default_off) ;;
+  auto)
+    # structure only on a side-room copy: it takes the copy itself (SIDE=auto), and SIDE=off keeps the original
+    if [ "$SIDE_KIND" = 0 ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:no_side_copy_for_scene
+    elif [ "$SIDE" = off ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:side_off
+    elif [ -n "$BD_BLOCK" ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:$BD_BLOCK
+    else BOTTOM_DECK=structure; BOTTOM_DECK_REASON=auto; SIDE=on
+    fi ;;
+  *)
+    [ -z "$BD_BLOCK" ] || { echo "BOTTOM_DECK=$BOTTOM_DECK cannot run here ($BD_BLOCK; run_transport.py refuses the check with it)"; exit 2; }
+    BOTTOM_DECK_REASON=explicit ;;
+esac
+# the side-room copy: SIDE=on, or taken by BOTTOM_DECK=auto above; SIDE=auto otherwise keeps the original
+[ "$SIDE" = auto ] && SIDE=off
+[ "$SIDE" = on ] && [ "$SIDE_KIND" = 1 ] && NAME=${NAME}_side
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "--near-end-stand in EXTRA_ARGS must be on, shadow or off"; exit 2;; esac
 # K1 follows the near-end stand applied (the runner refuses it without --near-end-stand on); an explicit value needs on
 if [ -z "${NEAR_OBSERVE_ARRIVAL:-}" ]; then
@@ -381,7 +444,7 @@ fi
 case "$GOAL_CREEP_BAND" in on|off) ;; *) echo "GOAL_CREEP_BAND (or EXTRA_ARGS --goal-creep-band) must be on or off"; exit 2;; esac
 [ "$GOAL_CREEP_BAND" = off ] || [ "$EXTRA_NEAR_TRACKING" = 0 ] \
   || { echo "--near-tracking needs GOAL_CREEP_BAND=off (its contract was measured off)"; exit 2; }
-if [ "$NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
+if [ "$BASE_NAME" = trailer ] && [ -z "$EXIT_CLEARANCE" ] && [ "$EXTRA_SETS_EXIT" = 0 ] \
     && awk -v k="$KEEPOUT" 'BEGIN { exit !(k + 0 == 0) }'; then
   EXIT_CLEARANCE=0.30
 fi
@@ -415,6 +478,9 @@ printf 'DOCKING_DEGENERATE_CONTINUE=%s DOCKING_DEGENERATE_CONTINUE_FROM=%s\n' "$
 printf 'SHORT_CUSP_ARC=%s SHORT_CUSP_ARC_FROM=%s\n' "$SHORT_CUSP_ARC" "$SHORT_CUSP_ARC_FROM" >> "$OUT/riib_defaults.txt"
 printf 'TYRE_CONTACT=%s TYRE_CONTACT_FROM=%s\n' "$TYRE_CONTACT" "$TYRE_CONTACT_FROM" >> "$OUT/riib_defaults.txt"
 printf 'GOAL_CREEP_BAND=%s GOAL_CREEP_BAND_FROM=%s\n' "$GOAL_CREEP_BAND" "$GOAL_CREEP_BAND_FROM" >> "$OUT/riib_defaults.txt"
+printf 'SIDE=%s\n' "$SIDE" >> "$OUT/riib_defaults.txt"
+printf 'BOTTOM_DECK=%s BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON=%s\n' "$BOTTOM_DECK" "$BOTTOM_DECK_REASON" \
+  >> "$OUT/riib_defaults.txt"
 [ -n "$NEAR_REDRAW_LATERAL" ] && printf 'NEAR_REDRAW_LATERAL=%s\n' "$NEAR_REDRAW_LATERAL" >> "$OUT/riib_defaults.txt"
 # scene requirements: the same, for the exit prefix, a profile and an override reason
 [ -n "$EXIT_CLEARANCE" ] && printf 'EXIT_CLEARANCE=%s\n' "$EXIT_CLEARANCE" >> "$OUT/riib_defaults.txt"
@@ -483,6 +549,8 @@ else
     # C3 (docs/plans/2026-10-27-insertion-lateral-drift.md T2): NEAR_RECAPTURE_GAP=<m> adds the second near capture.
     [ -n "$NEAR_RECAPTURE_GAP" ] && MODE_ARGS+=(--near-recapture-gap-m "$NEAR_RECAPTURE_GAP")
   fi
+  # the bottom-deck check as decided above (off adds nothing: the runner's default)
+  [ "$BOTTOM_DECK" = off ] || MODE_ARGS+=(--bottom-deck-check "$BOTTOM_DECK")
 fi
 # the SLAM socket is a Unix socket: its path fits in 107 bytes or the runner dies at connect (AF_UNIX path too long)
 if [ "$MODE" != truth ] && [ "$(printf %s "$OUT/sock/slam.sock" | wc -c)" -gt 107 ]; then
