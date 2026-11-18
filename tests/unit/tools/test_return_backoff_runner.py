@@ -32,7 +32,8 @@ def test_the_mission_planners_get_it():
     # the core's own mission plans (observe, its worker job, the blocked replan and its tight retry) add it themselves,
     # as they add the exit prefix: the runner's hook stays a pass-through
     core = (ROOT / "src/forklift_core/mission/core.py").read_text()
-    assert core.count("**self._mission_backoff_kwargs()") == 4
+    # ... and the known-pallet start's preparation (design 2026-11-19-known-pallet-start)
+    assert core.count("**self._mission_backoff_kwargs()") == 5
 
 
 def test_the_first_mission_plan_records_its_attempts():
