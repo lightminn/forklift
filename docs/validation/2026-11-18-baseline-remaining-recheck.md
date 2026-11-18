@@ -1,4 +1,4 @@
-# 기준선 남은 실패 재확인 — random_1 seed 11·49 (2026-11-18)
+# 기준선 남은 실패 재확인 — random_1 seed 11·49·40 (2026-11-18)
 
 - 배정(총괄, 사용자 승인 2026-11-18): 기준선 R(스냅숏 2bea23e5)에서 아직 못 고친 random_1 seed 11·49 의 전환점 재계획 거부([#568](2026-11-17-cusp-pose-replan-refused.md), `scene_replan_refused:cusp_pose:blocked:occupied`)가 순응 타이어 기본([#576](2026-11-18-f2-i-reregistration.md)) 뒤에도 남는지 본다. 새 고침은 하지 않는다.
 
@@ -19,9 +19,12 @@
 |---|---|---|
 | 11 | 운반 마지막 cusp 에서 방향 오차 −0.06495 rad 로 정지 → `cusp_pose` 재계획 거부 | **완주**(`complete`). cusp 정지·cusp 재계획·장면 재계획 0. 운반 cusp 도착 방향 오차 −0.0059·+0.0116 rad |
 | 49 | 같은 꼴, −0.06628 rad | **완주**(`complete`). 위와 같이 0. 운반 cusp 도착 방향 오차 +0.0121·−0.0003 rad |
+| 40(B0, 추가) | 수정 전 곡률 B0(`cmp_a2b91d2d`) 같은 꼴, −0.06635 rad | **완주**(`complete`, 스냅숏 `main_0b167934` — 코드는 89f9cee1 과 같음). 위와 같이 0. 운반 cusp 도착 방향 오차 −0.0016·+0.0073 rad |
 
 - 두 seed 모두 운반 cusp 도착 방향 오차가 허용치 0.05 rad 안이라, #568 의 정지와 재계획 거부가 생기지 않았다.
 - **`89f9cee1` 의 riib 기본값과 `--deterministic` 으로 random_1 s11·s49 를 각 1 회 돌렸고, 두 실행 모두 완주했으며 #568 의 실패는 관측되지 않았다.** 두 실행 모두 `deterministic.broken` 은 비어 있고, 결정 모드가 바꾼 값은 `recognition_proposals`(oracle)·`recognition_pixel_lag_steps` 둘이다.
+
+- **추가(같은 날, 총괄 배정 "덱 04 장의 미해결 1 건"):** #568 의 세 번째 사례 B0 s40(random_1 seed 40)을 같은 방식으로 돌렸다. ws1 19922, 스냅숏 `main_0b167934`(89f9cee1 뒤로는 문서만 바뀐 main), 런처 기본(`TYRE_CONTACT=f2`·`GOAL_CREEP_BAND=on`·`SHORT_CUSP_ARC=off` 기록 확인), 결정 모드 1 회. 완주했고 `deterministic.broken` 은 비어 있다. **이로써 #568 의 세 사례(R s11·s49, B0 s40) 모두 지금 main 기본에서 실패가 관측되지 않았다.** B0 는 곡률 비교의 '수정 전' 팔(적재 곡률 규칙 끔)이고, 그 규칙은 지금도 기본 끔이라 같은 조건이다.
 
 ## 3. 해석과 한계
 
@@ -31,7 +34,7 @@
 
 ## 4. 원자료
 
-- ws1 `test_runs/acs/r11_49_89f9cee1/`(두 실행, `bundle/`, `RUNS.jsonl`), 스냅숏 `snapshots/main_89f9cee1`. 이 문서가 머지되면 정리 목록으로 넘긴다.
+- ws1 `test_runs/acs/r11_49_89f9cee1/`(두 실행, `bundle/`, `RUNS.jsonl`), 스냅숏 `snapshots/main_89f9cee1`(이미 정리됨); s40 은 `test_runs/acs/r40_0b167934/`, 스냅숏 `snapshots/main_0b167934`. 이 문서가 머지되면 정리 목록으로 넘긴다.
 - 읽은 값: `run/result.json` 의 `success`·`transitions`·`cusp_stalls`·`cusp_replans`·`scene_replans`·`leg_switches[].yaw_error_rad`(운반 `phase == "transport"`), `riib_defaults.txt`.
 
 ## 5. 검토
