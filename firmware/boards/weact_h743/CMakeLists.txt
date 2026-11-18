@@ -5,9 +5,9 @@ set(FW_BUILD normal CACHE STRING "normal | commission | hil (board design 2.2)")
 set_property(CACHE FW_BUILD PROPERTY STRINGS normal commission hil)
 set(FW_MOTOR_OUTPUT 0 CACHE STRING "0 = outputs locked (default); 1 needs FW_IPROPI_PROTECTION_RECORD")
 set(FW_IPROPI_PROTECTION_RECORD "" CACHE STRING
-    "committed IPROPI protection record (motor output design 2); written by the user, never by an agent")
+    "committed IPROPI protection record (motor output design 2); the user's decision, written by the user or by an agent on the user's stated decision")
 set(FW_ESTOP_WAIVER_RECORD "" CACHE STRING
-    "committed e-stop waiver record for the open normal build (plan 2026-11-18); written by the user, never by an agent")
+    "committed e-stop waiver record for the open normal build (plan 2026-11-18); the user's decision, written by the user or by an agent on the user's stated decision")
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
 set(FW_TEST_IWDG_STALL 0 CACHE STRING "0, or N = 1..60: S5 test build that stops the tick N s after boot")
