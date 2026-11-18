@@ -70,6 +70,15 @@ def summarize(data: dict) -> dict:
             v = [c["err"][key] for c in cands]
             rec[f"err_{key}_p50"] = pct(v, 50)
             rec[f"err_{key}_absmax"] = float(np.max(np.abs(v))) if v else None
+        good = [c["err"] for c in cands if c["consistent"]]
+        rec["geometry"] = dict(collections.Counter(c["geometry"] for c in cands))
+        if good:  # the consistent readings alone (the document's table)
+            rec["consistent_x_mm"] = [1e3 * min(e["x_m"] for e in good), 1e3 * max(e["x_m"] for e in good)]
+            rec["consistent_abs_y_mm_max"] = 1e3 * max(abs(e["y_m"]) for e in good)
+            rec["consistent_yaw_deg_max"] = max(e["yaw_deg"] for e in good)
+            rec["consistent_spacing_mm"] = [1e3 * min(e["spacing_m"] for e in good),
+                                            1e3 * max(e["spacing_m"] for e in good)]
+        rec["inconsistent_spacing_mm"] = [1e3 * c["err"]["spacing_m"] for c in cands if not c["consistent"]]
         rec["decision"] = dict(collections.Counter(f["decision"]["status"] + ":" + ",".join(f["decision"]["reasons"])
                                                    for f in frames if "decision" in f))
         rec["decision_toy"] = sum(1 for f in frames if f.get("decision", {}).get("toy"))

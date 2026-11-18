@@ -54,6 +54,8 @@
    "err_yaw_deg_absmax": null,
    "err_spacing_m_p50": null,
    "err_spacing_m_absmax": null,
+   "geometry": {},
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 1,
@@ -101,6 +103,8 @@
    "err_yaw_deg_absmax": null,
    "err_spacing_m_p50": null,
    "err_spacing_m_absmax": null,
+   "geometry": {},
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 59,
     "none:no_candidate_in_radius": 1
@@ -159,6 +163,25 @@
    "err_yaw_deg_absmax": 2.753470779793304,
    "err_spacing_m_p50": -0.0050000000000000044,
    "err_spacing_m_absmax": 0.17000000000000015,
+   "geometry": {
+    "ambiguous": 57,
+    "fitted": 3
+   },
+   "consistent_x_mm": [
+    17.4448745358291,
+    23.30768369125924
+   ],
+   "consistent_abs_y_mm_max": 4.083043395071255,
+   "consistent_yaw_deg_max": 2.753470779793304,
+   "consistent_spacing_mm": [
+    -10.000000000000009,
+    -2.4999999999999885
+   ],
+   "inconsistent_spacing_mm": [
+    170.00000000000003,
+    170.00000000000014,
+    170.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -210,6 +233,20 @@
    "err_yaw_deg_absmax": 1.7615153118495925,
    "err_spacing_m_p50": -0.0050000000000000044,
    "err_spacing_m_absmax": 0.009999999999999995,
+   "geometry": {
+    "ambiguous": 17
+   },
+   "consistent_x_mm": [
+    17.284980639834856,
+    21.729288016863467
+   ],
+   "consistent_abs_y_mm_max": 3.1242316097425324,
+   "consistent_yaw_deg_max": 1.7615153118495925,
+   "consistent_spacing_mm": [
+    -9.999999999999995,
+    -2.4999999999999885
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 43,
     "reobserve:uncertain_in_radius": 17
@@ -259,6 +296,21 @@
    "err_yaw_deg_absmax": 2.125300090530601,
    "err_spacing_m_p50": -0.007499999999999993,
    "err_spacing_m_absmax": 0.010000000000000023,
+   "geometry": {
+    "ambiguous": 38,
+    "fitted": 1
+   },
+   "consistent_x_mm": [
+    17.818971871637057,
+    22.18667277123032
+   ],
+   "consistent_abs_y_mm_max": 4.185606295572616,
+   "consistent_yaw_deg_max": 2.125300090530601,
+   "consistent_spacing_mm": [
+    -10.000000000000023,
+    -2.4999999999999885
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 21,
     "reobserve:uncertain_in_radius": 38,
@@ -307,6 +359,20 @@
    "err_yaw_deg_absmax": 2.240653457535217,
    "err_spacing_m_p50": -0.0050000000000000044,
    "err_spacing_m_absmax": 0.010000000000000009,
+   "geometry": {
+    "ambiguous": 60
+   },
+   "consistent_x_mm": [
+    15.77370894865837,
+    21.729288016863467
+   ],
+   "consistent_abs_y_mm_max": 4.223728841907998,
+   "consistent_yaw_deg_max": 2.240653457535217,
+   "consistent_spacing_mm": [
+    -10.000000000000009,
+    -2.4999999999999742
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 60
    },
@@ -363,6 +429,21 @@
    "err_yaw_deg_absmax": 4.48855045792871,
    "err_spacing_m_p50": -0.007499999999999993,
    "err_spacing_m_absmax": 0.010000000000000009,
+   "geometry": {
+    "fitted": 1,
+    "ambiguous": 8
+   },
+   "consistent_x_mm": [
+    21.318522741060384,
+    31.55028575674379
+   ],
+   "consistent_abs_y_mm_max": 7.619580925901995,
+   "consistent_yaw_deg_max": 4.48855045792871,
+   "consistent_spacing_mm": [
+    -10.000000000000009,
+    -1.3877787807814457e-14
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -425,6 +506,24 @@
    "err_yaw_deg_absmax": 4.580350226648704,
    "err_spacing_m_p50": -0.007500000000000034,
    "err_spacing_m_absmax": 0.16999999999999998,
+   "geometry": {
+    "unfit": 1,
+    "fitted": 1,
+    "ambiguous": 9
+   },
+   "consistent_x_mm": [
+    19.976309692296468,
+    27.842389265752665
+   ],
+   "consistent_abs_y_mm_max": 7.905590665809065,
+   "consistent_yaw_deg_max": 4.47516374752945,
+   "consistent_spacing_mm": [
+    -12.499999999999996,
+    -2.4999999999999885
+   ],
+   "inconsistent_spacing_mm": [
+    169.99999999999997
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 57,
     "reobserve:uncertain_in_radius": 2,
@@ -481,6 +580,21 @@
    "err_yaw_deg_absmax": 4.48855045792871,
    "err_spacing_m_p50": -0.007499999999999993,
    "err_spacing_m_absmax": 0.010000000000000009,
+   "geometry": {
+    "ambiguous": 54,
+    "fitted": 6
+   },
+   "consistent_x_mm": [
+    21.318522741060384,
+    33.16238265590354
+   ],
+   "consistent_abs_y_mm_max": 8.871497616086298,
+   "consistent_yaw_deg_max": 4.48855045792871,
+   "consistent_spacing_mm": [
+    -10.000000000000009,
+    -1.3877787807814457e-14
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -532,6 +646,21 @@
    "err_yaw_deg_absmax": 4.299014061504636,
    "err_spacing_m_p50": -0.009999999999999995,
    "err_spacing_m_absmax": 0.012500000000000011,
+   "geometry": {
+    "ambiguous": 22,
+    "fitted": 4
+   },
+   "consistent_x_mm": [
+    21.074034296238775,
+    31.509782316729186
+   ],
+   "consistent_abs_y_mm_max": 6.516915275535023,
+   "consistent_yaw_deg_max": 4.299014061504636,
+   "consistent_spacing_mm": [
+    -12.50000000000001,
+    -7.499999999999965
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 22,
     "reobserve:unresolved_in_radius": 34,
@@ -582,6 +711,21 @@
    "err_yaw_deg_absmax": 4.734923344295396,
    "err_spacing_m_p50": -0.010000000000000009,
    "err_spacing_m_absmax": 0.014999999999999986,
+   "geometry": {
+    "ambiguous": 35,
+    "fitted": 4
+   },
+   "consistent_x_mm": [
+    20.306175142279503,
+    33.590561326223735
+   ],
+   "consistent_abs_y_mm_max": 9.600896059737691,
+   "consistent_yaw_deg_max": 4.734923344295396,
+   "consistent_spacing_mm": [
+    -14.999999999999986,
+    -5.000000000000004
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 35,
     "reobserve:unresolved_in_radius": 21,
@@ -630,6 +774,21 @@
    "err_yaw_deg_absmax": 4.299014061504636,
    "err_spacing_m_p50": -0.009999999999999995,
    "err_spacing_m_absmax": 0.012500000000000011,
+   "geometry": {
+    "ambiguous": 53,
+    "fitted": 7
+   },
+   "consistent_x_mm": [
+    21.074034296238775,
+    33.856892512327484
+   ],
+   "consistent_abs_y_mm_max": 8.422341512850034,
+   "consistent_yaw_deg_max": 4.299014061504636,
+   "consistent_spacing_mm": [
+    -12.50000000000001,
+    -5.000000000000004
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 53,
     "not_pickable:fork_spacing_adjust,support_unverified": 7
@@ -676,6 +835,8 @@
    "err_yaw_deg_absmax": null,
    "err_spacing_m_p50": null,
    "err_spacing_m_absmax": null,
+   "geometry": {},
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 53,
     "reobserve:uncertain_in_radius": 7
@@ -735,6 +896,12 @@
    "err_yaw_deg_absmax": 6.6229937338415255,
    "err_spacing_m_p50": 0.10000000000000003,
    "err_spacing_m_absmax": 0.10000000000000003,
+   "geometry": {
+    "unfit": 1
+   },
+   "inconsistent_spacing_mm": [
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 45,
     "reobserve:uncertain_in_radius": 5,
@@ -795,6 +962,31 @@
    "err_yaw_deg_absmax": 1.9678983932255392,
    "err_spacing_m_p50": -0.005000000000000032,
    "err_spacing_m_absmax": 0.10000000000000009,
+   "geometry": {
+    "ambiguous": 60
+   },
+   "consistent_x_mm": [
+    13.583564919011915,
+    16.850291482890746
+   ],
+   "consistent_abs_y_mm_max": 4.630846209895248,
+   "consistent_yaw_deg_max": 1.9004112136108233,
+   "consistent_spacing_mm": [
+    -7.500000000000062,
+    -2.500000000000002
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999993,
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999993,
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 53,
     "reobserve:uncertain_in_radius": 7
@@ -835,6 +1027,8 @@
    "err_yaw_deg_absmax": null,
    "err_spacing_m_p50": null,
    "err_spacing_m_absmax": null,
+   "geometry": {},
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 60
    },
@@ -883,6 +1077,13 @@
    "err_yaw_deg_absmax": 18.22522475773053,
    "err_spacing_m_p50": 0.09999999999999998,
    "err_spacing_m_absmax": 0.10000000000000003,
+   "geometry": {
+    "unfit": 2
+   },
+   "inconsistent_spacing_mm": [
+    99.99999999999993,
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -930,6 +1131,20 @@
    "err_yaw_deg_absmax": 2.1796291070512837,
    "err_spacing_m_p50": -0.007500000000000007,
    "err_spacing_m_absmax": 0.010000000000000037,
+   "geometry": {
+    "ambiguous": 60
+   },
+   "consistent_x_mm": [
+    11.524584649734493,
+    15.092558557706969
+   ],
+   "consistent_abs_y_mm_max": 4.447932094618475,
+   "consistent_yaw_deg_max": 2.1796291070512837,
+   "consistent_spacing_mm": [
+    -10.000000000000037,
+    -4.999999999999977
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 60
    },
@@ -986,6 +1201,12 @@
    "err_yaw_deg_absmax": 1.5416968505797968,
    "err_spacing_m_p50": 0.10000000000000003,
    "err_spacing_m_absmax": 0.10000000000000003,
+   "geometry": {
+    "unfit": 1
+   },
+   "inconsistent_spacing_mm": [
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 4,
     "reobserve:unresolved_in_radius": 54,
@@ -1033,6 +1254,8 @@
    "err_yaw_deg_absmax": null,
    "err_spacing_m_p50": null,
    "err_spacing_m_absmax": null,
+   "geometry": {},
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 54,
     "reobserve:uncertain_in_radius": 4,
@@ -1089,6 +1312,20 @@
    "err_yaw_deg_absmax": 2.257374335687018,
    "err_spacing_m_p50": -0.0050000000000000044,
    "err_spacing_m_absmax": 0.010000000000000009,
+   "geometry": {
+    "ambiguous": 60
+   },
+   "consistent_x_mm": [
+    12.86302844485876,
+    24.483950301052992
+   ],
+   "consistent_abs_y_mm_max": 5.0716188520065275,
+   "consistent_yaw_deg_max": 2.257374335687018,
+   "consistent_spacing_mm": [
+    -10.000000000000009,
+    2.7755575615628914e-14
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 6,
     "reobserve:unresolved_in_radius": 54
@@ -1140,6 +1377,20 @@
    "err_yaw_deg_absmax": 0.8534173659586486,
    "err_spacing_m_p50": -0.0050000000000000044,
    "err_spacing_m_absmax": 0.007500000000000007,
+   "geometry": {
+    "ambiguous": 2
+   },
+   "consistent_x_mm": [
+    17.11609577469142,
+    18.087782137435447
+   ],
+   "consistent_abs_y_mm_max": 3.6076913017539654,
+   "consistent_yaw_deg_max": 0.8534173659586486,
+   "consistent_spacing_mm": [
+    -7.500000000000007,
+    -2.500000000000002
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -1189,6 +1440,20 @@
    "err_yaw_deg_absmax": 0.5577093438202212,
    "err_spacing_m_p50": -0.005000000000000032,
    "err_spacing_m_absmax": 0.005000000000000032,
+   "geometry": {
+    "ambiguous": 1
+   },
+   "consistent_x_mm": [
+    18.466815679346382,
+    18.466815679346382
+   ],
+   "consistent_abs_y_mm_max": 2.261031928657578,
+   "consistent_yaw_deg_max": 0.5577093438202212,
+   "consistent_spacing_mm": [
+    -5.000000000000032,
+    -5.000000000000032
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:unresolved_in_radius": 59,
     "reobserve:uncertain_in_radius": 1
@@ -1236,6 +1501,21 @@
    "err_yaw_deg_absmax": 2.4431009466667604,
    "err_spacing_m_p50": -0.004999999999999977,
    "err_spacing_m_absmax": 0.010000000000000037,
+   "geometry": {
+    "ambiguous": 58,
+    "fitted": 2
+   },
+   "consistent_x_mm": [
+    11.255621654692405,
+    25.15573582188324
+   ],
+   "consistent_abs_y_mm_max": 4.823040062230839,
+   "consistent_yaw_deg_max": 2.4431009466667604,
+   "consistent_spacing_mm": [
+    -10.000000000000037,
+    2.7755575615628914e-14
+   ],
+   "inconsistent_spacing_mm": [],
    "decision": {
     "reobserve:uncertain_in_radius": 58,
     "not_pickable:fork_spacing_adjust,support_unverified": 2
@@ -1296,6 +1576,25 @@
    "err_yaw_deg_absmax": 9.97516959409839,
    "err_spacing_m_p50": 0.007500000000000007,
    "err_spacing_m_absmax": 0.11000000000000004,
+   "geometry": {
+    "ambiguous": 29,
+    "fitted": 10,
+    "unfit": 2
+   },
+   "consistent_x_mm": [
+    8.720276826092555,
+    50.004183874082564
+   ],
+   "consistent_abs_y_mm_max": 54.90733084589879,
+   "consistent_yaw_deg_max": 9.97516959409839,
+   "consistent_spacing_mm": [
+    -5.000000000000004,
+    110.00000000000004
+   ],
+   "inconsistent_spacing_mm": [
+    100.00000000000003,
+    99.99999999999997
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 59,
     "reobserve:uncertain_in_radius": 1
@@ -1362,6 +1661,38 @@
    "err_yaw_deg_absmax": 7.239128888578335,
    "err_spacing_m_p50": 0.10000000000000003,
    "err_spacing_m_absmax": 0.11249999999999999,
+   "geometry": {
+    "unfit": 18,
+    "ambiguous": 11,
+    "fitted": 5
+   },
+   "consistent_x_mm": [
+    13.580137711174833,
+    43.93579026816896
+   ],
+   "consistent_abs_y_mm_max": 52.154799452532835,
+   "consistent_yaw_deg_max": 6.054600458880003,
+   "consistent_spacing_mm": [
+    -14.999999999999986,
+    112.49999999999999
+   ],
+   "inconsistent_spacing_mm": [
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999993,
+    100.00000000000003,
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 59,
     "reobserve:uncertain_in_radius": 1
@@ -1423,6 +1754,26 @@
    "err_yaw_deg_absmax": 9.97516959409839,
    "err_spacing_m_p50": 0.007500000000000007,
    "err_spacing_m_absmax": 0.11000000000000004,
+   "geometry": {
+    "ambiguous": 40,
+    "fitted": 13,
+    "unfit": 3
+   },
+   "consistent_x_mm": [
+    8.720276826092555,
+    50.004183874082564
+   ],
+   "consistent_abs_y_mm_max": 54.90733084589879,
+   "consistent_yaw_deg_max": 9.97516959409839,
+   "consistent_spacing_mm": [
+    -5.000000000000004,
+    110.00000000000004
+   ],
+   "inconsistent_spacing_mm": [
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999997
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 59,
     "reobserve:uncertain_in_radius": 1
@@ -1477,6 +1828,24 @@
    "err_yaw_deg_absmax": 5.984834861826158,
    "err_spacing_m_p50": 0.010000000000000009,
    "err_spacing_m_absmax": 0.1175,
+   "geometry": {
+    "ambiguous": 34,
+    "fitted": 17,
+    "unfit": 1
+   },
+   "consistent_x_mm": [
+    7.855858312374897,
+    47.76094126017449
+   ],
+   "consistent_abs_y_mm_max": 53.93989718548193,
+   "consistent_yaw_deg_max": 5.984834861826158,
+   "consistent_spacing_mm": [
+    -2.500000000000002,
+    117.5
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 35,
     "not_pickable:fork_spacing_adjust,support_unverified": 17,
@@ -1533,6 +1902,26 @@
    "err_yaw_deg_absmax": 7.633464933455372,
    "err_spacing_m_p50": 0.09999999999999998,
    "err_spacing_m_absmax": 0.10000000000000009,
+   "geometry": {
+    "ambiguous": 14,
+    "unfit": 25,
+    "fitted": 5
+   },
+   "consistent_x_mm": [
+    3.1251979247652883,
+    48.175616567249115
+   ],
+   "consistent_abs_y_mm_max": 18.000301322773375,
+   "consistent_yaw_deg_max": 7.633464933455372,
+   "consistent_spacing_mm": [
+    -22.50000000000002,
+    100.00000000000009
+   ],
+   "inconsistent_spacing_mm": [
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 39,
     "reobserve:unresolved_in_radius": 16,
@@ -1585,6 +1974,24 @@
    "err_yaw_deg_absmax": 5.984834861826158,
    "err_spacing_m_p50": 0.010000000000000009,
    "err_spacing_m_absmax": 0.1175,
+   "geometry": {
+    "ambiguous": 38,
+    "fitted": 19,
+    "unfit": 1
+   },
+   "consistent_x_mm": [
+    7.855858312374897,
+    47.76094126017449
+   ],
+   "consistent_abs_y_mm_max": 53.93989718548193,
+   "consistent_yaw_deg_max": 5.984834861826158,
+   "consistent_spacing_mm": [
+    -2.500000000000002,
+    117.5
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 39,
     "not_pickable:fork_spacing_adjust,support_unverified": 19,
@@ -1647,6 +2054,56 @@
    "err_yaw_deg_absmax": 13.707333589599472,
    "err_spacing_m_p50": 0.026250000000000023,
    "err_spacing_m_absmax": 0.12000000000000005,
+   "geometry": {
+    "unfit": 26,
+    "fitted": 17,
+    "ambiguous": 7
+   },
+   "consistent_x_mm": [
+    22.759527660440426,
+    59.448851108983014
+   ],
+   "consistent_abs_y_mm_max": 20.786183513815587,
+   "consistent_yaw_deg_max": 13.707333589599472,
+   "consistent_spacing_mm": [
+    2.7755575615628914e-14,
+    100.00000000000009
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997,
+    17.50000000000007,
+    100.00000000000003,
+    19.99999999999999,
+    99.99999999999997,
+    32.5,
+    100.00000000000009,
+    107.5000000000001,
+    20.000000000000018,
+    100.00000000000003,
+    25.00000000000002,
+    17.49999999999999,
+    2.4999999999999467,
+    17.50000000000007,
+    102.50000000000009,
+    100.00000000000009,
+    17.49999999999999,
+    2.4999999999999742,
+    112.49999999999999,
+    14.999999999999986,
+    17.500000000000014,
+    120.00000000000006,
+    100.00000000000003,
+    85.00000000000001,
+    35.00000000000003,
+    5.000000000000004,
+    115.00000000000004,
+    99.99999999999997,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000009,
+    14.999999999999986,
+    14.999999999999986
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 57,
     "reobserve:uncertain_in_radius": 3
@@ -1712,6 +2169,70 @@
    "err_yaw_deg_absmax": 76.6657390346598,
    "err_spacing_m_p50": 0.10000000000000003,
    "err_spacing_m_absmax": 0.10000000000000014,
+   "geometry": {
+    "unfit": 43,
+    "fitted": 5,
+    "ambiguous": 2
+   },
+   "consistent_x_mm": [
+    30.32997726182618,
+    55.36309985762777
+   ],
+   "consistent_abs_y_mm_max": 14.214614953604086,
+   "consistent_yaw_deg_max": 7.10366603485835,
+   "consistent_spacing_mm": [
+    2.7755575615628914e-14,
+    99.99999999999997
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997,
+    10.000000000000009,
+    7.500000000000035,
+    99.99999999999993,
+    17.500000000000043,
+    99.99999999999959,
+    15.00000000000007,
+    100.00000000000003,
+    100.00000000000014,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    12.50000000000001,
+    2.500000000000002,
+    7.499999999999951,
+    100.00000000000003,
+    99.99999999999997,
+    100.00000000000009,
+    100.00000000000003,
+    12.499999999999984,
+    100.00000000000003,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999997,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999997,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000009,
+    99.99999999999997,
+    100.00000000000003,
+    99.99999999999993,
+    100.00000000000003,
+    100.00000000000003,
+    99.99999999999993,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 58,
     "reobserve:uncertain_in_radius": 2
@@ -1775,6 +2296,56 @@
    "err_yaw_deg_absmax": 13.707333589599472,
    "err_spacing_m_p50": 0.026250000000000023,
    "err_spacing_m_absmax": 0.12000000000000005,
+   "geometry": {
+    "unfit": 26,
+    "fitted": 17,
+    "ambiguous": 7
+   },
+   "consistent_x_mm": [
+    22.759527660440426,
+    59.448851108983014
+   ],
+   "consistent_abs_y_mm_max": 20.786183513815587,
+   "consistent_yaw_deg_max": 13.707333589599472,
+   "consistent_spacing_mm": [
+    2.7755575615628914e-14,
+    100.00000000000009
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999997,
+    17.50000000000007,
+    100.00000000000003,
+    19.99999999999999,
+    99.99999999999997,
+    32.5,
+    100.00000000000009,
+    107.5000000000001,
+    20.000000000000018,
+    100.00000000000003,
+    25.00000000000002,
+    17.49999999999999,
+    2.4999999999999467,
+    17.50000000000007,
+    102.50000000000009,
+    100.00000000000009,
+    17.49999999999999,
+    2.4999999999999742,
+    112.49999999999999,
+    14.999999999999986,
+    17.500000000000014,
+    120.00000000000006,
+    100.00000000000003,
+    85.00000000000001,
+    35.00000000000003,
+    5.000000000000004,
+    115.00000000000004,
+    99.99999999999997,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000009,
+    14.999999999999986,
+    14.999999999999986
+   ],
    "decision": {
     "reobserve:unresolved_in_radius": 57,
     "reobserve:uncertain_in_radius": 3
@@ -1831,6 +2402,57 @@
    "err_yaw_deg_absmax": 75.69573772296174,
    "err_spacing_m_p50": 0.02000000000000003,
    "err_spacing_m_absmax": 0.14999999999999997,
+   "geometry": {
+    "unfit": 14,
+    "ambiguous": 13,
+    "fitted": 23
+   },
+   "consistent_x_mm": [
+    30.00133515561476,
+    59.91023264166362
+   ],
+   "consistent_abs_y_mm_max": 58.725450980639735,
+   "consistent_yaw_deg_max": 11.978695486201872,
+   "consistent_spacing_mm": [
+    7.499999999999951,
+    114.99999999999999
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999993,
+    22.500000000000046,
+    5.00000000000006,
+    17.500000000000014,
+    12.500000000000039,
+    15.00000000000004,
+    19.99999999999999,
+    120.0,
+    -17.500000000000014,
+    27.500000000000078,
+    7.500000000000007,
+    20.000000000000046,
+    149.99999999999997,
+    22.500000000000046,
+    99.99999999999997,
+    17.49999999999999,
+    17.49999999999999,
+    100.00000000000009,
+    12.499999999999984,
+    20.000000000000018,
+    125.00000000000006,
+    99.99999999999976,
+    19.99999999999999,
+    114.99999999999999,
+    7.500000000000062,
+    27.500000000000025,
+    117.49999999999994,
+    100.00000000000009,
+    112.49999999999999,
+    100.00000000000003,
+    14.999999999999986,
+    115.0000000000001,
+    17.500000000000014,
+    117.50000000000004
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 27,
     "reobserve:unresolved_in_radius": 10,
@@ -1887,6 +2509,66 @@
    "err_yaw_deg_absmax": 13.683504715535094,
    "err_spacing_m_p50": 0.09999999999999998,
    "err_spacing_m_absmax": 0.11000000000000004,
+   "geometry": {
+    "unfit": 26,
+    "ambiguous": 12,
+    "fitted": 9
+   },
+   "consistent_x_mm": [
+    51.07435017174922,
+    56.57809706671024
+   ],
+   "consistent_abs_y_mm_max": 54.42833605771437,
+   "consistent_yaw_deg_max": 6.937454860152599,
+   "consistent_spacing_mm": [
+    12.499999999999956,
+    110.00000000000004
+   ],
+   "inconsistent_spacing_mm": [
+    100.00000000000003,
+    25.00000000000005,
+    99.99999999999997,
+    7.500000000000007,
+    20.000000000000018,
+    20.000000000000046,
+    17.500000000000014,
+    12.499999999999956,
+    22.499999999999964,
+    4.999999999999977,
+    100.00000000000003,
+    99.99999999999987,
+    17.500000000000014,
+    15.000000000000014,
+    14.999999999999986,
+    10.000000000000009,
+    12.500000000000123,
+    100.00000000000009,
+    100.00000000000003,
+    100.00000000000009,
+    12.500000000000068,
+    15.00000000000004,
+    15.000000000000014,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000009,
+    100.00000000000009,
+    100.00000000000003,
+    -2.500000000000002,
+    100.00000000000003,
+    100.00000000000014,
+    99.99999999999997,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    100.00000000000003,
+    35.00000000000006
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 38,
     "not_pickable:fork_spacing_adjust,support_unverified": 9,
@@ -1942,6 +2624,57 @@
    "err_yaw_deg_absmax": 75.69573772296174,
    "err_spacing_m_p50": 0.02000000000000003,
    "err_spacing_m_absmax": 0.14999999999999997,
+   "geometry": {
+    "unfit": 14,
+    "ambiguous": 13,
+    "fitted": 23
+   },
+   "consistent_x_mm": [
+    30.00133515561476,
+    59.91023264166362
+   ],
+   "consistent_abs_y_mm_max": 58.725450980639735,
+   "consistent_yaw_deg_max": 11.978695486201872,
+   "consistent_spacing_mm": [
+    7.499999999999951,
+    114.99999999999999
+   ],
+   "inconsistent_spacing_mm": [
+    99.99999999999993,
+    22.500000000000046,
+    5.00000000000006,
+    17.500000000000014,
+    12.500000000000039,
+    15.00000000000004,
+    19.99999999999999,
+    120.0,
+    -17.500000000000014,
+    27.500000000000078,
+    7.500000000000007,
+    20.000000000000046,
+    149.99999999999997,
+    22.500000000000046,
+    99.99999999999997,
+    17.49999999999999,
+    17.49999999999999,
+    100.00000000000009,
+    12.499999999999984,
+    20.000000000000018,
+    125.00000000000006,
+    99.99999999999976,
+    19.99999999999999,
+    114.99999999999999,
+    7.500000000000062,
+    27.500000000000025,
+    117.49999999999994,
+    100.00000000000009,
+    112.49999999999999,
+    100.00000000000003,
+    14.999999999999986,
+    115.0000000000001,
+    17.500000000000014,
+    117.50000000000004
+   ],
    "decision": {
     "reobserve:uncertain_in_radius": 27,
     "reobserve:unresolved_in_radius": 10,
