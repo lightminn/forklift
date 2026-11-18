@@ -1,6 +1,6 @@
 # 실차 제어 틱 계약 — 4e-1b (나)안 (설계)
 
-작성 2026-11-18 · 2판(Codex 1 회차 반영) · 상위 계획 [실차 자율 실행 경로](../plans/2026-11-18-real-autonomy-entry.md) PR 1·4 · 앞선 설계 [4e-1](2026-11-11-p04e1-control-tick.md) 2절(4e-1b), [4a'](2026-11-11-p04a-kinematics-and-command.md)
+작성 2026-11-18 · 3판(Codex 2 회차 반영) · 상위 계획 [실차 자율 실행 경로](../plans/2026-11-18-real-autonomy-entry.md) PR 1·4 · 앞선 설계 [4e-1](2026-11-11-p04e1-control-tick.md) 2절(4e-1b), [4a'](2026-11-11-p04a-kinematics-and-command.md)
 
 ## 0. 결정
 
@@ -17,14 +17,15 @@ Isaac 루프의 같은 자리를 괄호에 적는다. 실차에 없는 것은 3�
 1. **머리**: 링크 수신(`receive`) → 새 STATE 마다 한 번 `RealOdometry`·`SafetySpeed`(표본 시각 기준, 중복·공백 처리) → `health` → **AUTO 허가 상태** 갱신(lease, 과속, 주기 초과, `SafetyWatch`, 엔코더 유효성) → 콘솔 명령 반영(Isaac `live.tick_start()` 10255).
 2. **SLAM·층·준비**: `core.slam_replies`(10342)로 제어 자세 → 장애물 층의 설치된 스냅숏(비동기, 계획 PR 5) → 미션 준비 요청(`live_prepare*()` → `prepare_request()`, 10372) — 이 순서가 `release_gate`·`job_hold` 앞이다.
 3. **제어**(10628–11131): `release_gate` → `paused_`·`plan_wait_`(`job_hold`, 실측 `SafetySpeed`) → 관측 받기(실차 원천은 PR 7; PR 4 는 가짜 관측) → `loaded_wait_`(`loaded_start_wait`) → `scene_replan_tick`(틱 소유) → `follow`(`scene_raised_`) → `observe_backoff_tick` / `docking_and_stall` → `cusp_and_observe_recovery` → `command` → 도착 처리(`arrive`) → `job_pending` → `lift_and_timers` → `cusp_handed_` → `permission` / `permission_watch` / `blocked_replan` → `paused_tick` / 선회 정지 / `plan_wait_` / `live_leg` → `loaded_wait_` 정지.
-4. **출력 조립**: `low_clearance_tick`(11242) → `assemble_command`(11245) → `observe_motion`(오도메트리, 11275) → `manual_recovery_tick`(11292) → `safety_state` → 최종 중재(Isaac `live.tick_end()` 11301 — preempt·STOP 이면 후보를 0 으로).
+4. **출력 조립**: `low_clearance_tick`(11242) → `assemble_command`(11245) → `observe_motion`(오도메트리, 11275) → `safety_state` → 최종 중재(Isaac `live.tick_end()` 11301 — preempt·STOP 이면 후보를 0 으로).
 5. **제출**: STOP·AUTO 허가를 **다시 읽고**(2절 ①) `RealPlantPort` 로 한 프레임 → 기록.
-6. **다음 틱으로 넘김**: 실제로 제출되고 MCU 가 확인한 출력만 `command_speed`·`applied_command`·`slam["applied_speed"]` 에 넣는다(Isaac 11327 의 중재 결과 반영과 같은 자리). STOP·포트 거부·미확인 후보는 '적용된 출력'으로 넘기지 않는다 — 다음 틱의 감속·취소·정체 판정(core 2298 등)이 옛 후보를 적용된 것으로 읽지 않게.
+6. **다음 틱으로 넘김**: 실제로 제출되고 MCU 가 확인한 출력만 `command_speed`·`applied_command`·`slam["applied_speed"]` 에 넣는다(Isaac 11327 의 중재 결과 반영과 같은 자리). STOP·포트 거부·미확인 후보는 '적용된 출력'으로 넘기지 않는다 — 다음 틱의 감속·취소·정체 판정(core 2298 등)이 옛 후보를 적용된 것으로 읽지 않게. 그러나 **확인되지 않았어도 아직 작동할 수 있는 DRIVE**(송신됐고 만료 전)는 방향 허가(core 6550 `command_speed`)와 취소·정지 완료 판정(core 5810 `applied_command`)에 포함한다 — 확인 출력이 0 이고 전진 DRIVE 의 확인 STATE 가 늦는 동안 MCU 는 이미 전진할 수 있다. 그 영향이 해소될 때(확인되거나 만료)까지 방향 전환·정지 완료를 보류한다. 확인 출력은 틱 머리에서 갱신한다.
 
 ## 2. 계약 (Codex P1·P2)
 
 ① **STOP 의 기준점은 최종 제출이다.** 머리에서만 STOP 을 읽으면 중재가 끝난 뒤 온 STOP 을 놓친다. 제출 직전에 다시 읽고, STOP·허가 없음이면 옛 후보를 내지 않는다(아직 첫 바이트를 쓰지 않은 후보 포함). 송신이 시작된 프레임은 취소되지 않는다 — 그 프레임의 만료가 상한이다. 출력 직전 예외는 정지 경로로 간다.
-   - **STOP 처리는 송신자 한 곳에서 이 순서로**: STOP 래치 → 옛 DRIVE 폐기(세대 변경) → 측정 위치를 담은 새 정지 DRIVE(바퀴 0, 승강 `target` = 측정 위치) 제출. 지금 포트는 `new_control_generation()` 이 방금 큐에 넣은 유지 DRIVE 까지 버리고, 먼저 세대를 바꾸면 `hold_lift()` 에 필요한 `_intent` 가 지워진다. 그래서 PR 4 에서 포트에 '세대를 바꾸고 측정 위치로 정지 프레임을 내는' 한 호출을 둔다(의도 캐시를 거치지 않음).
+   - **어느 STOP 에 무엇을**: 운용자 DISARM·lease 상실·링크 상실·측정 무효·제출 거절은 응답을 기다리지 않고 즉시 DISARM(상위 계획 PR 4 와 같음). 신선하고 유효한 조향·승강 측정과 MCU 허가가 있는 **제어 정지**만 아래 순서로 승강을 유지하고, 그 유지 DRIVE 자체가 거절되면 확인 시한을 기다리지 않고 DISARM 한다.
+   - **제어 정지의 처리는 송신자 한 곳에서 이 순서로**: STOP 래치 → 옛 DRIVE 폐기(세대 변경) → 측정 위치를 담은 새 정지 DRIVE(바퀴 0, 승강 `target` = 측정 위치) 제출. 지금 포트는 `new_control_generation()` 이 방금 큐에 넣은 유지 DRIVE 까지 버리고, 먼저 세대를 바꾸면 `hold_lift()` 에 필요한 `_intent` 가 지워진다. 그래서 PR 4 에서 포트에 '세대를 바꾸고 측정 위치로 정지 프레임을 내는' 한 호출을 둔다(의도 캐시를 거치지 않음).
 
 ② **포트 결과에 seq 가 있다.** 지금 `PortResult` 에는 확인할 seq 가 없고, 호스트의 `nonzero`(움직일 수 있는 명령)는 바퀴만 본다. PR 4 에서 `PortResult.seq` 를 더하고, 바퀴 0 인 승강 명령과 `keep`(진행 중인 상승 목표를 유지하면서 MCU 만료를 갱신)도 움직일 수 있는 명령으로 센다. 큐 제출(`queued`)과 MCU 수락(그 seq 를 알린 STATE)을 구분한다. 승강 유지가 필요한 제어 정지는 그 seq 를 알린 STATE 를 짧은 시한(잠정 100 ms) 안에 못 받으면 DISARM 이다(계획 PR 4).
 
@@ -56,8 +57,9 @@ Isaac 루프의 같은 자리를 괄호에 적는다. 실차에 없는 것은 3�
 
 - **AST 부분 순서**(평탄한 목록이 아님): ① 명령 반영·SLAM 응답·제어 자세 → 미션 작업, ② `scene_replan_tick` 이 틱을 가지면 추종 없음, `follow` 가 `scene_raised_` 면 stall·도착 없음, ③ `permission`/`permission_watch`/`paused_tick` 의 분기와 감시 횟수, ④ 층 감시·명령 조립 → 최종 중재 → 포트 제출. `core.commands.apply()` 처럼 한 단계 더 들어간 호출과 어댑터 경계도 포함한다. Isaac 루프와 실차 루프에 같은 검사를 돌려, 어느 쪽이든 순서를 바꾸면 실패한다.
 - **가짜 훅 값 시험**: 같은 core 호출 안에서 `set_rear()` 다음 `grid_kwargs()` 가 새 자세를 읽음, 반환된 `rear`·hold 플래그가 다음 호출에 전달됨.
+- **미확인 DRIVE 시험**: 확인된 0 → 전진 DRIVE 송신 → 확인 지연 중 반대 방향 요청 또는 취소 → 방향 전환·정지 완료가 보류됨.
 - **순서 시험**: SLAM 응답 → 제어 자세 → `prepare_request()` → `release_gate`·`job_hold`.
-- **가짜 포트 출력 시험**: 정상 틱의 최종 `command()` 1 회; 중재와 제출 사이 STOP → 옛 후보 제출 0 회; 큐에 들어간 뒤 STOP → 폐기; 출력 직전 예외 → 정지 경로; 세대·만료·MCU 확인까지 검증; STOP·거부 뒤 다음 틱이 옛 후보를 적용된 출력으로 읽지 않음; 바퀴 0·승강 상승 중 STOP — **성공 경로**(실제 호스트 큐를 거쳐 정지 프레임의 정확한 seq 가 STATE 로 확인됨)와 확인 STATE 유실(→ 시한 뒤 DISARM) 둘 다.
+- **가짜 포트 출력 시험**: 정상 틱의 최종 `command()` 1 회; 중재와 제출 사이 STOP → 옛 후보 제출 0 회; 큐에 들어간 뒤 STOP → 폐기; 출력 직전 예외 → 정지 경로; 세대·만료·MCU 확인까지 검증; STOP·거부 뒤 다음 틱이 옛 후보를 적용된 출력으로 읽지 않음; 바퀴 0·승강 상승 중 STOP — **성공 경로**(실제 호스트 큐를 거쳐 정지 프레임의 정확한 seq 가 STATE 로 확인됨)와 확인 STATE 유실(→ 시한 뒤 DISARM) 둘 다, 그리고 유지 DRIVE 가 거절되면 시한을 기다리지 않고 DISARM.
 - **분기 시험**: ③ 표의 각 행과 겹침 — `plan_wait_` + 선조향, `loaded_wait_` + 선조향, `cusp_handed_` + wait.
 - **S10 종료 시험**: 들림 확인에서 멈춤, `extract` 전이 없음(그 장애물 기억 삭제도 없음), 화물이 `carrying/confirmed`, 확인 틱과 다음 틱 모두 최종 바퀴 출력 0, AUTO·텔레옵이 현장 복구와 새 세대 재위치 확인 전까지 거부.
 - **관측 태그 시험**: 요청 뒤 세대·단계·보정이 각각 바뀐 뒤 도착한 결과는 버려지고, 일치하는 결과는 채택된다.
@@ -67,3 +69,4 @@ Isaac 루프의 같은 자리를 괄호에 적는다. 실차에 없는 것은 3�
 
 - Codex 착수 전 상의(새 스레드, 2026-11-18): (나) 권고에 동의. P1 3(STOP 기준점은 최종 제출 — `PortResult` seq·호스트 nonzero 의 승강; 분기별 건너뜀·계속 계약; S10 종료는 전이 전), P2 2(AST 는 부분 순서·분기 소속 + 가짜 훅 값 시험; 관측 채택 조건·틱 끝 기록), P3 1(break 13·core 직접 호출 52 곳·43 종). 모두 2·4 절에 반영.
 - 이 문서의 Codex 검토 1 회차: P1 1(STOP 이 승강 유지 프레임까지 지움 — 송신자 한 곳의 순서와 포트의 '세대 변경 + 측정 위치 정지 프레임' 한 호출, `keep` 도 outstanding, 성공 경로 시험), P2 5(분기 겹침 우선순위·`scene_raised_`·`cusp_handed_` 조건·조기 중단 규칙, 준비 요청 순서와 다음 틱으로 넘길 적용 출력, 실차에 남는 D5 입력·`withdraw_tracking`·`manual_recovery_tick` 은 Isaac, 관측 태그는 요청·취득 시, S10 종료 상태의 화물·출력·잠금 확인). 모두 1–4 절에 반영.
+- 2 회차: P1 1(확인 출력만으로는 현재 움직일 수 있는 방향을 모름 — 송신됐고 만료 전인 미확인 DRIVE 를 방향 허가·취소 판정에 포함, 해소까지 보류, 시험), P2 1(승강 유지 경로는 제어 정지에만, 나머지는 즉시 DISARM, 유지 DRIVE 거절 시 즉시 DISARM — 상위 계획과 맞춤), P3 1(`manual_recovery_tick` 을 1 절 목록에서 뺌). 반영.
