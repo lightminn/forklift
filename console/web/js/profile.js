@@ -241,6 +241,7 @@ export const REJECT = {
   stale_targets: "대상 목록이 바뀌었습니다 · 다시 고르세요",
   state_forbids_teleop: "지금 상태에서는 수동 조종을 할 수 없습니다",
   stopped_locked: "정지됨 상태입니다 · 재무장을 먼저 하세요",
+  real_rearm_refused: "실차 재무장 조건이 아직 맞지 않습니다 · 정지·DISARM·이전 명령 해소를 확인하세요",
   unknown_mission: "그 미션은 지금 미션이 아닙니다",
   unsupported: "이 차량이 지원하지 않는 요청입니다",
   stopping: "차가 멈추는 중입니다",

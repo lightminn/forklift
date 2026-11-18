@@ -56,7 +56,8 @@ def test_a_rearm_the_real_conditions_refuse_changes_neither_the_mode_nor_the_per
     stopped(r)
     gen = r.a.control_gen
     (reply,) = r.cycle(r.msg("rearm"))
-    assert reply["t"] == "reject" and reply["reason"] == "outstanding_unknown"
+    assert reply["t"] == "reject" and reply["reason"] == "real_rearm_refused"
+    assert reply["detail"] == "outstanding_unknown"
     assert r.a.mode == "STOPPED" and r.a.control_gen == gen and calls == []
 
 

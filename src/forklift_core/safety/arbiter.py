@@ -931,8 +931,8 @@ class Arbiter:
             return self._reply("rearm", request_id, "invalid")
         if self.rearm_refusal is not None:
             why = self.rearm_refusal(now_mono)  # the real truck's conditions, before the ACK and the mode change
-            if why is not None:
-                return self._reply("rearm", request_id, str(why))
+            if why is not None:  # one reason on the screen, the real truck's condition in the detail
+                return self._reply("rearm", request_id, "real_rearm_refused", detail=str(why))
         waived = self.stand_waiver()
         refused = None if waived else self._needs_stand("rearm", request_id)
         if refused is not None:
