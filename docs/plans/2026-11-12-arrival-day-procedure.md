@@ -136,6 +136,9 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
 
 1. 모터 전원 경로를 뺀다. 배터리 → F1 → LM74801 → VCC·5 V·**3.3 V**·19 V 레일을 무부하·부하로 잰다. 각 레일 공칭 ±5 % 안이어야 한다.
 2. Jetson 을 19 V 로 켜고 MAXN SUPER 로 둔 채 **최대 부하를 실제로 건다**(CPU·GPU 를 함께 쓰는 부하 프로그램 — 모드만 바꿔 놓고 쉬는 것은 최대 부하가 아니다). 10 분 동안 19 V 와 Jetson 이 안정한지 본다.
+   - 장치는 Orin Nano Super(`scienceowl@jetson.local`, zetin Wi-Fi, 2026-11-17 기록 [hw-day](../validation/2026-11-17-hw-day.md)). 부하는 `HW_DAY=<날짜> bash tools/hwday/jetson_stall.sh 300`(정지 5 분 + 모든 코어 부하 5 분, 다리 정체 판정 포함)이다. **GPU 부하 도구는 아직 없다** — 이 부하는 CPU 만이고, 그렇게 기록한다.
+   - 재부팅 뒤 `jetson_clocks` 가 풀리는지는 전날 `tools/hwday/jetson_prep.sh` 가 기록한다. 풀렸으면 부하 전에 `bash tools/hwday/jetson_power.sh` 를 한 번 돌린다.
+   - 당일 순서·판정 한 장: [11-20 순서표](2026-11-20-arrival-day-sequence.md).
 3. **역전원**: WeAct 를 메인보드에 꽂고 USB-C 를 연결한 채 주 전원을 끈다. 메인보드 5 V 레일에 전압이 생기면 역전원이다(보드 설계 3.1). 그러면 VBUS 를 끊은 케이블이나 UART7 을 쓴다.
 4. **멈춤**: 어느 레일이든 정격 밖, 발열, 역전원.
 
@@ -437,7 +440,7 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
 
 **G3 차체 위 절차**(S6 텔레옵이 열린 뒤, 포크를 가장 낮게 둔 채 — IMU 가 캐리지에 붙어 승강과 함께 움직인다. 승강하면 다시 잰다). 이 차는 제자리 회전을 못 하므로(뒤축 기준 유한 곡률) 원호로 잰다:
 
-1. `imu_record.py --out artifacts/<UTC>_g3/imu.jsonl` 과 `teleop_bridge.py --record … --markers` 를 같은 Jetson 에서 띄운다.
+1. `imu_record.py --out artifacts/<UTC>_g3/imu.jsonl` 과 `teleop_bridge.py --record … --markers` 를 같은 Jetson 에서 띄운다. Jetson 의 `pyrealsense2` 는 PyPI 휠이 아니라 `~/src/librealsense`(v2.59.2) 소스 빌드다 — 휠로는 Motion Module 이 보이지 않았다(2026-11-17, 설치 `tools/hwday/jetson_librealsense_build.sh`).
 2. 데움 → 정지 60 s → 왼쪽 최대 곡률 원호 2 바퀴(S6 속도, 지름 2/κ_max 의 빈 바닥) → 정지 60 s → 오른쪽 최대 곡률 2 바퀴 → 정지 60 s. 원호의 정상 구간 시작·끝을 G5 표지로 남긴다.
 3. 결과: 정지 중력으로 잰 위쪽 `û_g`, 앞뒤 정지 편향을 뺀 두 방향 원호 축 `û_ω`, 세 벡터 사이 각, 정지 구간 사이 편향 변화, 중력 기준 회전 부호(왼쪽 양·오른쪽 음)와 바퀴 오도메트리 부호의 일치, 원호 중 위쪽에 수직인 회전 성분(평면 가정 진단값, yaw 오차 상한 아님).
 4. 측정 전에 시뮬-물성과 등록할 것: 최소 데움 시간과 정지 구간 사이 편향 변화 허용치(넘으면 다시 기다림), `û_g`·`û_ω` 사이 각의 문턱(넘으면 평면 가정이나 장착을 의심하고 멈춤). 책상 실측의 450–960 s 는 데움 시정수이지 완료 시간이 아니다.
@@ -455,7 +458,7 @@ M2 추가 조건(총괄 2026-11-14, 근거 [왼쪽 조향 부족 기록](../vali
   - 일정표 주행 구간에서는 텔레옵 명령 기한(0.30 s)이, 정지 구간에서는 lease(1.0 s)가 DRIVE 만료에 들어간다. 단말이 그만큼 멈추면 MCU 가 멈추고 그 시행은 `void:disarmed:mcu_stopping` 이다.
 - **다리 정체:** 다리 루프가 약 100 ms 넘게 멈추면 DRIVE 가 끊기고 같은 결과가 난다(85–150 ms 구간은 12.3a).
 - **단말 정지나 다리 정체로 난 `void:disarmed:mcu_stopping` 도 다른 void 와 같이 그날 블록 끝에 같은 일정표로 다시 한다**(등록 1.1). 현장 점검표에는 원인(단말·다리)을 결과 계산 전에 적는다.
-- 확인한 사실(노트북 리허설, 2026-11-16): 운용자 대역(websocket 클라이언트)이 약 1 s 멈춘 정지 중 시행이 `COMMAND_TIMEOUT` 으로 void 됐다. CPU 절반을 점유한 부하 창에서 다리 루프가 한 번 124 ms 멈춰 `mcu_stopping` 이 났다(80 ms 한 번은 견딤). Jetson 에서는 아직 재지 않았다(Jetson 을 LAN 에 연결한 뒤 같은 측정을 한다).
+- 확인한 사실(노트북 리허설, 2026-11-16): 운용자 대역(websocket 클라이언트)이 약 1 s 멈춘 정지 중 시행이 `COMMAND_TIMEOUT` 으로 void 됐다. CPU 절반을 점유한 부하 창에서 다리 루프가 한 번 124 ms 멈춰 `mcu_stopping` 이 났다(80 ms 한 번은 견딤). Jetson(Orin Nano Super, MAXN_SUPER + `jetson_clocks`)에서는 2026-11-17 에 정지·모든 코어 부하 5 분씩 40 ms 넘는 주기 0, 최대 29.6 ms 였다([hw-day](../validation/2026-11-17-hw-day.md)) — 실차 다리의 기준선은 이 값이다.
 
 ### 12.4 참값 (출처 6.3)
 

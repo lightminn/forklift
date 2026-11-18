@@ -14,7 +14,7 @@ run "udev rule installed" jsudo 'install -m 644 /tmp/99-forklift-mcu.rules /etc/
 run "udev reload" jsudo 'udevadm control --reload'
 run "udev trigger" jsudo 'udevadm trigger --subsystem-match=tty --subsystem-match=usb'
 run "udev rule matches the repo" jssh 'cmp /tmp/99-forklift-mcu.rules /etc/udev/rules.d/99-forklift-mcu.rules'
-run "${JETSON_USER:-zetin} in dialout (the rule gives 0660)" jssh 'id -nG | tr " " "\n" | grep -qx dialout'
+run "${JETSON_USER:-scienceowl} in dialout (the rule gives 0660)" jssh 'id -nG | tr " " "\n" | grep -qx dialout'
 run "venv ~/forklift/.venv with .[real,console] (needs internet)" \
   jssh 'cd ~/forklift && { [ -x .venv/bin/python ] || python3 -m venv .venv; } && .venv/bin/python -m pip install -q -e ".[real,console]"'
 run "venv imports (numpy, yaml, websockets, forklift_core)" \
