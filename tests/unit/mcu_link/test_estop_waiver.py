@@ -67,11 +67,16 @@ def test_the_host_keeps_the_identity_for_one_connection():
     assert h.link_identity(None) == [] and h.estop_waived is False
 
 
-def _fake_sysfs(tmp_path, product: str | None, major=166, minor=0):
-    """/sys/dev/char/M:m -> .../usb1/1-1/1-1:1.0/tty/ttyACM0, with the USB device's product two levels up."""
-    dev = tmp_path / "sys" / "devices" / "pci0000:00" / "usb1" / "1-1"
+def _fake_sysfs(tmp_path, product: str | None, major=166, minor=0, *, hub_product="xHCI Host Controller"):
+    """/sys/dev/char/M:m -> .../usb1/1-1/1-1:1.0/tty/ttyACM0: the USB device (idVendor) two levels up, its root hub
+    (with its own product) above it."""
+    hub = tmp_path / "sys" / "devices" / "pci0000:00" / "usb1"
+    dev = hub / "1-1"
     tty = dev / "1-1:1.0" / "tty" / "ttyACM0"
     tty.mkdir(parents=True)
+    for d in (hub, dev):
+        (d / "idVendor").write_text("0483\n")
+    (hub / "product").write_text(hub_product + "\n")
     if product is not None:
         (dev / "product").write_text(product + "\n")
     char = tmp_path / "sys" / "dev" / "char"
@@ -85,10 +90,20 @@ def test_the_product_is_read_from_the_usb_device_of_the_opened_tty(tmp_path):
     assert rml.usb_product_for_rdev(rdev, sys_root=root) == WAIVED
 
 
-def test_no_usb_parent_or_no_node_reads_none(tmp_path):
-    root, rdev = _fake_sysfs(tmp_path, None)  # a UART (ttyS/ttyTHS): no product file above it
+def test_a_device_without_its_own_string_never_lends_the_hubs(tmp_path):
+    root, rdev = _fake_sysfs(tmp_path, None, hub_product=WAIVED)  # even a hub string that would pass the rule
     assert rml.usb_product_for_rdev(rdev, sys_root=root) is None
-    assert rml.usb_product_for_rdev(os.makedev(4, 64), sys_root=root) is None  # no such node
+
+
+def test_a_uart_or_no_node_reads_none(tmp_path):
+    uart = tmp_path / "sys" / "devices" / "platform" / "3100000.serial" / "tty" / "ttyTHS1"
+    uart.mkdir(parents=True)
+    (uart.parent.parent / "product").write_text(WAIVED + "\n")  # not a USB device: never read
+    char = tmp_path / "sys" / "dev" / "char"
+    char.mkdir(parents=True)
+    (char / "4:65").symlink_to(uart)
+    assert rml.usb_product_for_rdev(os.makedev(4, 65), sys_root=tmp_path / "sys") is None
+    assert rml.usb_product_for_rdev(os.makedev(4, 64), sys_root=tmp_path / "sys") is None  # no such node
 
 
 def test_a_pty_or_a_pipe_has_no_product():
@@ -149,3 +164,32 @@ def test_bringup_cap_takes_the_wheel_radius():
     cap = bu._cap()
     assert cap == pytest.approx(min(cfg.wheel_rate_limit_rad_s, 0.2 / max(cfg.wheel_radius_m)))
     assert cap >= 0.132 / max(cfg.wheel_radius_m)  # the 0.132 m/s floor test (1.06 rad/s) is not refused
+
+
+def test_the_bridge_shows_the_waiver_to_the_console_and_on_stderr(capsys):
+    import teleop_bridge as tb
+    from forklift_core.plant.mcu_host import HostEvent
+
+    class Dev:
+        last_read_ns = None
+
+        def __init__(self):
+            self.first = True
+
+        def receive(self, host, now_ns):
+            if self.first:
+                self.first = False
+                return [HostEvent("connected", {"path": "/dev/x", "product": WAIVED})] + host.link_identity(WAIVED)
+            return []
+
+        def transmit(self, host, now_ns):
+            return []
+
+    b = tb.Bridge(Dev(), confirmed=set())
+    rec = b.cycle(1_000_000_000)
+    shown = [m for _c, m in b.channels.take_out() if m.get("t") == "event" and m.get("kind") == "estop_waived"]
+    assert len(shown) == 1 and WAIVED in shown[0]["reason"]
+    assert "WARNING no e-stop input" in capsys.readouterr().err
+    assert "estop_waived" in rec["link_events"]
+    b.cycle(1_020_000_000)
+    assert not [m for _c, m in b.channels.take_out() if m.get("kind") == "estop_waived"]  # once per connection

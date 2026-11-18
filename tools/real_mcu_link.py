@@ -61,8 +61,10 @@ def open_raw(path: str, baud: int | None = None) -> int:
 
 def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:
     """The USB product string of the device a character node belongs to: from ``/sys/dev/char/<major>:<minor>`` up
-    the device tree to the first ``product`` file (the USB device of a CDC tty). None for a node with none above it
-    (a UART such as ttyS or ttyTHS, a pty) or that cannot be read."""
+    the device tree to the nearest USB device (the directory with ``idVendor``) and its own ``product`` -- never a
+    hub's above it (Linux omits ``product`` when the device has no string, Codex P2). None for a node with no USB
+    device above it (a UART such as ttyS or ttyTHS, a pty), a device without the string, or one that cannot be
+    read."""
     root = Path(sys_root)
     try:
         node = (root / "dev" / "char" / f"{os.major(rdev)}:{os.minor(rdev)}").resolve(strict=True)
@@ -72,10 +74,9 @@ def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:
     for d in (node, *node.parents):
         if d == top or top not in d.parents:
             break
-        product = d / "product"
-        if product.is_file():
+        if (d / "idVendor").is_file():  # the nearest USB device: its own string or none
             try:
-                return product.read_text(encoding="ascii", errors="replace").strip()
+                return (d / "product").read_text(encoding="ascii", errors="replace").strip()
             except OSError:
                 return None
     return None
