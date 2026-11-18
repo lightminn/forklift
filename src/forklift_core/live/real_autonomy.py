@@ -50,6 +50,7 @@ class AutoPermit:
         self._stop: dict | None = None  # the control stop: seq, boot/arm generation, written time
         self._disarm_asked_ns: int | None = None
         self._disarm_written_ns: int | None = None  # the newest DISARM's write (the transmitter's ``written``)
+        self._disarm_seq: int | None = None  # and its seq: the MCU records it in last_rx_seq when it processed it
         self.session_started = False
 
     def bind(self, *, transmit, arbiter_stop, collect) -> None:
@@ -81,7 +82,7 @@ class AutoPermit:
         DISARMED answered it (``tick``)."""
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
+        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
 
@@ -176,7 +177,7 @@ class AutoPermit:
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
         errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
-        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
+        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         errors.append(self._try(self._transmit))
         if first:
             errors.append(self._try(self._arbiter_stop, reason))
@@ -202,7 +203,7 @@ class AutoPermit:
     def written(self, kind: str, seq: int, written_ns: int) -> None:
         """The transmitter wrote a whole frame (every frame, in order): a DISARM's write time, the stop frame's."""
         if kind == "DISARM":
-            self._disarm_written_ns = int(written_ns)
+            self._disarm_written_ns, self._disarm_seq = int(written_ns), int(seq) & 0xFFFF
         elif self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
             self._stop["written_ns"] = int(written_ns)
 
@@ -210,22 +211,22 @@ class AutoPermit:
         self.written("DRIVE", seq, written_ns)
 
     def _disarmed_after_write_any(self) -> bool:
-        host, w = self.host, self._disarm_written_ns
+        """A DISARMED received after the newest DISARM's write that names that DISARM's seq or a later one (the MCU
+        processes frames in order and records the seq: a sample made before the DISARM, arriving late, does not)."""
+        host, w, q = self.host, self._disarm_written_ns, self._disarm_seq
         s, rx = host.state, host.state_rx_ns
-        return w is not None and s is not None and rx is not None and rx > w and s.mode == Mode.DISARMED
+        return (w is not None and q is not None and s is not None and rx is not None and rx > w
+                and s.mode == Mode.DISARMED and ((int(s.last_rx_seq) - q) & 0xFFFF) < 0x8000)
 
     def _disarmed_after_write(self, now_ns: int) -> bool:
         """A fresh DISARMED received after the newest DISARM was written (a cached one, or one before the write,
         is not the answer)."""
-        host, w = self.host, self._disarm_written_ns
-        s, rx = host.state, host.state_rx_ns
-        return (w is not None and s is not None and rx is not None and rx > w and s.mode == Mode.DISARMED
-                and host.health(now_ns).fresh)
+        return self._disarmed_after_write_any() and self.host.health(now_ns).fresh
 
     def _disarm(self, now_ns: int, reason: str) -> None:
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._disarm_asked_ns, self._disarm_written_ns = int(now_ns), None
+        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         self._try(self._transmit)
         self.reason = self.reason or reason
         self.state = DISARMING
@@ -284,6 +285,7 @@ FEATURES_OFF = {
     "d7_docking": None, "dwells": None, "safety_stops": None, "near_inject": None, "repeat_captures": 0,
     "repeat_at_attempt": None, "extra_views": False, "goal_creep_band": "off",
 }
+S10A_STAGES = ("approach", "insert", "extract", "transport", "withdraw", "return_home")  # what plan_transport plans
 REQUIRED_ON = {"real_vehicle": True, "grid_planning": True, "obstacle_act": True, "pocket_check": True,
                "s10_stop_at_lift": True}
 
@@ -339,11 +341,11 @@ def real_option_refusal(options, *, tracker_curvature_inv_m, preview_curvature_i
         out.append("max_speed_invalid")
     else:
         speeds = dict(getattr(options, "speeds", None) or {})
-        for stage in getattr(options, "mission_stages", ()) or ():
+        if tuple(getattr(options, "mission_stages", ()) or ()) != S10A_STAGES:
+            out.append("mission_stages_not_s10a")
+        for stage in S10A_STAGES:
             if stage not in speeds:
                 out.append(f"speed_missing:{stage}")
-        if not getattr(options, "mission_stages", None):
-            out.append("mission_stages_missing")
         straight = getattr(options, "approach_straight_speed_mps", None)
         if straight is not None:
             speeds["approach_straight"] = straight
@@ -504,5 +506,5 @@ def latches(reason: str | None) -> bool:
     return reason is not None and not reason.startswith("wait:")
 
 
-__all__ = ["ARMING", "AutoPermit", "Evidence", "MeasurementView", "SlamView", "SnapshotView", "latches", "FEATURES_OFF", "REAL_DT", "REQUIRED_ON", "S10AConfig", "auto_ready_refusal",
+__all__ = ["S10A_STAGES", "ARMING", "AutoPermit", "Evidence", "MeasurementView", "SlamView", "SnapshotView", "latches", "FEATURES_OFF", "REAL_DT", "REQUIRED_ON", "S10AConfig", "auto_ready_refusal",
            "load_s10a", "real_option_refusal", "real_options", "s10a_refusal", "DISARMING", "DRIVING", "LATCHED", "OFF", "READY", "STOP_ACK_S", "STOP_PENDING"]

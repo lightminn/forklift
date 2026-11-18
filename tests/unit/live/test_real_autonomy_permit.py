@@ -298,3 +298,18 @@ def test_a_stale_state_never_confirms_the_control_stop():
     b.host.on_bytes(encode(b.mcu.state(), 1), b.now - 55 * MS)
     b.permit.tick(b.now)
     assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
+
+
+def test_a_disarmed_sample_made_before_the_disarm_and_arriving_after_its_write_is_not_its_answer():
+    """Codex 4b round 3: the answer names the DISARM's seq (or a later one) -- time alone is not enough."""
+    b = Bench()
+    b.armed_ready()
+    old = b.mcu.state()  # an ARMED-era sample...
+    from dataclasses import replace as _r
+
+    early = _r(old, mode=Mode.DISARMED)  # ...shaped DISARMED, naming an older seq
+    b.mcu.deaf = True  # the DISARM is written but the MCU never processes it
+    b.permit.latch(b.now, "stop")
+    b.now += 5 * MS
+    b.host.on_bytes(encode(early, 1), b.now)
+    assert b.permit.armed  # not the DISARM's answer

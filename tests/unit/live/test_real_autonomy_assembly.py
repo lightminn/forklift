@@ -22,7 +22,7 @@ PLAN = SimpleNamespace(curvature_limit_inv_m=CAP)
 
 def options(**over):
     o = ra.real_options(kinematics=KIN, planner_config=PLAN, travel_config=PLAN, scenario="SC",
-                        speeds={"approach": 0.1, "insert": 0.05}, mission_stages=("approach", "insert"))
+                        speeds={name: 0.05 for name in ra.S10A_STAGES}, mission_stages=ra.S10A_STAGES)
     for k, v in over.items():
         setattr(o, k, v)
     return o
@@ -68,7 +68,7 @@ def test_the_curvature_caps_are_read_from_the_real_configs_and_must_agree_inside
 
 
 def test_speeds_are_finite_and_within_the_s10_cap():
-    assert "speed_over_cap:approach" in refusal(options(speeds={"approach": 0.3}))
+    assert "speed_over_cap:approach" in refusal(options(speeds={**{n: 0.05 for n in ra.S10A_STAGES}, "approach": 0.3}))
     assert "speed_over_cap:approach_straight" in refusal(options(approach_straight_speed_mps=0.2))
     assert "speed_over_cap:approach_straight" in refusal(options(approach_straight_speed_mps=float("nan")))
     assert "max_speed_invalid" in refusal(options(), cap=float("nan"))
@@ -146,6 +146,7 @@ def test_all_met_is_ready_and_the_operator_check_is_the_submits_only():
         ra.auto_ready_refusal(NOW, "arm", evidence())
 
 
-def test_every_mission_stage_needs_its_speed():
+def test_the_stages_are_s10as_and_every_one_needs_its_speed():
     assert "speed_missing:insert" in refusal(options(speeds={"approach": 0.1}))
-    assert "mission_stages_missing" in refusal(options(mission_stages=()))
+    assert "mission_stages_not_s10a" in refusal(options(mission_stages=("insert",)))
+    assert "mission_stages_not_s10a" in refusal(options(mission_stages=()))
