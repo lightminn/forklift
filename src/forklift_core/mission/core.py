@@ -350,6 +350,7 @@ class MissionCore:
         self.field_recovery: dict | None = None  # 4d-2b-2: the open field recovery (real truck)
         self._field_recovery_serial = 0
         self._relocalize_serial = 0
+        self.s10_stop = None  # design 2026-11-19-known-pallet-start 3: the S10 control stop asked, until it is read
         self._last_pose_hold = None  # 4d-2b-2: (pallet, hold by its release count) a carried pallet's last pose is in
         self._operator = {"serial": 0, "request": None, "answer": None, "motion_since": None,  # 4d-2b-1
                           "motion_key": None}
@@ -674,6 +675,23 @@ class MissionCore:
             transition("home_settle", t)
         return SimpleNamespace(stop=False, rear=rear)
 
+    def _s10_end(self, t: float) -> None:
+        """S10 case A's end at the carry height (design 2026-11-19-known-pallet-start 3): the forks carry the pallet
+        (the lift -> extract row of the cargo table, without the transition's obstacle memory change), the end
+        recorded in the mission's ``s10_end``, a control stop signalled for this very tick (``take_s10_stop``: the
+        real loop stops before its final submit -- the end alone does not zero this tick's wheels), and the mission
+        ended once as recovery_required/s10_lifted; the field recovery and a relocalization follow."""
+        self.cargo.confirm_lifted()
+        self.state["s10_end"] = {"time_s": float(t), "lift_m": float(self.hooks.lift_position()),
+                                 "pallet_source": self.state.get("planning_target_source")}
+        self.s10_stop = float(t)
+        self.commands.terminate("recovery_required", t, "s10_lifted")
+
+    def take_s10_stop(self):
+        """The S10 control stop asked this tick (its time), cleared as it is read; None: none asked."""
+        stop, self.s10_stop = self.s10_stop, None
+        return stop
+
     def lift_and_timers(self, t: float, dt: float) -> bool:
         """The lift target's ramp and the timed transitions (lift, lower, settle, home settle). True ends the
         mission loop."""
@@ -701,6 +719,9 @@ class MissionCore:
                 hooks.require(verdict_ != "timeout", "Lift did not reach its position")
                 if verdict_ == "reject":
                     hooks.require(False, "Pallet was not lifted (operator)")
+                elif verdict_ == "confirm" and getattr(self.options, "s10_stop_at_lift", False):
+                    self._s10_end(t)  # design 2026-11-19-known-pallet-start 3: no extract, no delivery verdict
+                    return False
                 elif verdict_ == "confirm":
                     transition("extract", t)
             else:

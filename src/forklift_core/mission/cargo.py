@@ -193,6 +193,12 @@ class CargoState:
         if self.placed is not None:
             self.placed = [(move(pose), depth) for pose, depth in self.placed]
 
+    def confirm_lifted(self) -> None:
+        """The operator confirmed the pallet up at the carry height and the mission stops there (S10, design
+        2026-11-19-known-pallet-start 3): what the lift -> extract row sets, without the transition."""
+        self.relation, self.load = _ON_STEP[("lift", "extract")]
+        self.invalidated = None
+
     def confirm_out(self) -> None:
         """The operator confirmed the forks out of the pocket (the real truck's settle, 4d-2b-2)."""
         self.pocket_entered = False
