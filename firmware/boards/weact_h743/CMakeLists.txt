@@ -5,7 +5,9 @@ set(FW_BUILD normal CACHE STRING "normal | commission | hil (board design 2.2)")
 set_property(CACHE FW_BUILD PROPERTY STRINGS normal commission hil)
 set(FW_MOTOR_OUTPUT 0 CACHE STRING "0 = outputs locked (default); 1 needs FW_IPROPI_PROTECTION_RECORD")
 set(FW_IPROPI_PROTECTION_RECORD "" CACHE STRING
-    "committed IPROPI protection record (motor output design 2); written by the user, never by an agent")
+    "committed IPROPI protection record (motor output design 2); the user's decision, written by the user or by an agent on the user's stated decision")
+set(FW_ESTOP_WAIVER_RECORD "" CACHE STRING
+    "committed e-stop waiver record for the open normal build (plan 2026-11-18); the user's decision, written by the user or by an agent on the user's stated decision")
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
 set(FW_TEST_IWDG_STALL 0 CACHE STRING "0, or N = 1..60: S5 test build that stops the tick N s after boot")
@@ -30,10 +32,24 @@ endif()
 set(FW_OPEN_MSG "Opening the motor outputs on the vehicle is the user's decision after the IPROPI "
     "protection is confirmed (lead decision Q6); being able to build this code is not that decision.")
 string(CONCAT FW_OPEN_MSG ${FW_OPEN_MSG})
-if(FW_MOTOR_OUTPUT AND NOT FW_BUILD STREQUAL "commission")
-    # Motor output design 2: only the commissioning build may open the outputs now -- normal waits
-    # for the e-stop pin (Q3), hil and the IWDG stall test build stay locked.
-    message(FATAL_ERROR "FW_MOTOR_OUTPUT=1 is only for FW_BUILD=commission. ${FW_OPEN_MSG}")
+if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "hil")
+    # Motor output design 2: hil and the IWDG stall test build (refused above) stay locked.
+    message(FATAL_ERROR "FW_MOTOR_OUTPUT=1 is not for FW_BUILD=hil. ${FW_OPEN_MSG}")
+endif()
+# Plan 2026-11-18 (V1.0 e-stop waiver): board V1.0 has no e-stop input, so the open normal build
+# also needs the user's committed waiver record; a waiver given to any other build is refused.
+set(FW_ESTOP_WAIVED 0)
+if(FW_ESTOP_WAIVER_RECORD AND NOT (FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal"))
+    message(FATAL_ERROR "FW_ESTOP_WAIVER_RECORD is only for FW_BUILD=normal with FW_MOTOR_OUTPUT=1.")
+endif()
+if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal")
+    if(NOT FW_ESTOP_WAIVER_RECORD)
+        message(FATAL_ERROR "E-stop waiver record: none given. The open normal build needs a committed "
+            "record (FW_ESTOP_WAIVER_RECORD): board V1.0 has no e-stop input, and opening the normal "
+            "build's motor outputs without one is the user's decision (plan 2026-11-18-v1-estop-waiver); "
+            "being able to build this code is not that decision.")
+    endif()
+    set(FW_ESTOP_WAIVED 1)
 endif()
 
 set(BOARD_DIR ${CMAKE_CURRENT_SOURCE_DIR})
@@ -52,6 +68,17 @@ if(FW_MOTOR_OUTPUT)
                       COMMENT "IPROPI protection record" VERBATIM)
     set(FW_OUTPUTS_WORD OPEN)
     set(FW_OUTPUTS_LOCKED 0)
+    if(FW_ESTOP_WAIVED) # the e-stop waiver record gate, the same checks (plan 2026-11-18)
+        set(WAIVER_H ${CMAKE_CURRENT_BINARY_DIR}/generated/waiver_record.h)
+        set(WAIVER_CHECK ${CMAKE_COMMAND} -DKIND=waiver -DSRC_DIR=${BOARD_DIR}
+            -DRECORD=${FW_ESTOP_WAIVER_RECORD} -DOUT=${WAIVER_H} -P ${BOARD_DIR}/check_protection_record.cmake)
+        execute_process(COMMAND ${WAIVER_CHECK} RESULT_VARIABLE rc ERROR_VARIABLE err)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "${err}")
+        endif()
+        add_custom_target(waiver_record COMMAND ${WAIVER_CHECK} BYPRODUCTS ${WAIVER_H}
+                          COMMENT "e-stop waiver record" VERBATIM)
+    endif()
 else()
     set(FW_OUTPUTS_WORD locked)
     set(FW_OUTPUTS_LOCKED 1)
@@ -74,6 +101,7 @@ add_custom_target(build_info
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${BOARD_DIR} -DIN=${BOARD_DIR}/build_info.h.in
             -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD_KIND} -DFW_LINK=${FW_LINK}
             -DFW_OUTPUTS_WORD=${FW_OUTPUTS_WORD} -DFW_OUTPUTS_LOCKED=${FW_OUTPUTS_LOCKED}
+            -DFW_ESTOP_WAIVED=${FW_ESTOP_WAIVED}
             "-DFW_TOOLCHAIN_VERSION=${FW_TOOLCHAIN_VERSION}"
             -P ${BOARD_DIR}/gen_build_info.cmake
     BYPRODUCTS ${BUILD_INFO_H}
@@ -162,6 +190,10 @@ add_dependencies(fw build_info)
 if(FW_MOTOR_OUTPUT)
     add_dependencies(fw protection_record)
     target_compile_definitions(fw PRIVATE FW_MOTOR_OUTPUT_OPEN=1)
+endif()
+if(FW_ESTOP_WAIVED)
+    add_dependencies(fw waiver_record)
+    target_compile_definitions(fw PRIVATE FW_ESTOP_WAIVED=1)
 endif()
 set_target_properties(fw PROPERTIES SUFFIX ".elf" OUTPUT_NAME ${FW_IMAGE})
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated

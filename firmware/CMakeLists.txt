@@ -89,7 +89,7 @@ if(FW_PYTHON)
     add_test(NAME test_weact_h743_motor_out_e2e COMMAND test_weact_h743_motor_out_e2e)
 
     # One configuration test per build kind (board design 2.2, 9).
-    foreach(kind normal commission hil iwdg_stall commission_open)
+    foreach(kind normal commission hil iwdg_stall commission_open normal_waived)
         set(t test_weact_h743_board_config_${kind})
         add_executable(${t}
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
@@ -101,6 +101,9 @@ if(FW_PYTHON)
             target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_TEST_IWDG_STALL_S=5)
         elseif(kind STREQUAL "commission_open") # behind the gate (motor output design 2)
             target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1)
+        elseif(kind STREQUAL "normal_waived") # V1.0 e-stop waiver (plan 2026-11-18)
+            target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_MOTOR_OUTPUT_OPEN=1
+                                                    FW_ESTOP_WAIVED=1)
         else()
             target_compile_definitions(${t} PRIVATE FW_BUILD_${kind}=1)
         endif()
