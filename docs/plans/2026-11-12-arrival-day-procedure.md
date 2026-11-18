@@ -167,7 +167,31 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
      - 플래시 실장 여부와 판정 결과
    - **오실로스코프가 없으면**: 플래시를 단 채로는 부팅하지 않는다. 멀티미터로는 SDO high 를 판정할 수 없으므로, 그렇게 부팅하면 노출만 있고 판정은 없다. 오실로스코프를 구할 때까지 5번을 미룬다. 미룰 수 없으면, 플래시를 먼저 떼고 진행할지를 총괄에 올린다(사용자 결정).
 
-STATE 에서 `flags` 에 `outputs_locked`, 그리고 `drivers_ready` 를 확인한다.
+**첫 부팅 판정**: 부팅하고 링크가 열리면, 아무것도 만지지 않은 채 15 s 를 기록해 도구로 판정한다. 손작업은 없다(기다리기만 한다).
+
+```bash
+D=artifacts/20261120T095000Z_s2_first_boot_01; mkdir -p $D
+python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --seconds 15
+python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/result.json   # 승강 KTH 를 달았으면 --lift-absent 를 뺀다
+```
+
+합격은 `result == "pass"` 이고, 처음 10 s 를 다음 여섯 항목으로 본다. 기준값은 첫 확인용 작업값이라 **실측 뒤 재검토**한다.
+
+| 항목 | 합격 | 근거 |
+|---|---|---|
+| `drivers` | 모든 STATE 에서 `drivers_ready`, DRV8244 네 개의 `driver_status` 가 상위 2비트 11·하위 결함 6비트 0 | 응답의 상위 비트는 언제나 11(SLVSG24C 표 8-21). VM 이 없으면 0x0000 이 온다 |
+| `current` | `current_sense_invalid` 없음, 네 채널 모두 \|`current_ma`\| ≤ 50 mA | 모터를 떼었으니 0 이어야 한다. 1 ADC 카운트 ≈ 0.24 mA(R_IPROPI 1 kΩ, A_IPROPI 4,750). 50 mA 는 약 200 카운트로, 영점 오프셋·잡음을 넉넉히 덮는 작업값이다 |
+| `faults` | 예상 밖 결함 비트 없음(`--lift-absent` 면 승강 축 두 비트는 허용) | 손대지 않은 부팅에는 결함이 없어야 한다 |
+| `kth` | 조향(승강을 달았으면 승강도)이 NaN 아님, 축마다 받은 프레임 수(`kth_frames`)가 오름 | mcu-link/3 3.3 |
+| `wheels_still` | 바퀴 카운트가 2 카운트 넘게 움직이지 않음 | 엔코더 떨림 허용량(작업값). 아무도 만지지 않는 동안이다 |
+| `link` | `rx_errors`·`cycle_overruns` 가 오르지 않고 `cycle_overrun` 비트 없음 | 링크·주기가 깨끗해야 한다 |
+
+함께 나오는 `report` 에서 `outputs_locked`(출력 잠금 빌드)와 `reset_cause`(첫 전원이면 `POWER`)를 확인한다.
+
+**실패하면 볼 것**:
+- `drivers` 가 실패하면: VM 이 들어왔는지, `bad_status` 값, nFAULT 핀.
+- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이면 CRC 변형 문제다(6.2 `kth`).
+- `current`·`faults` 가 실패하면: 6.1 4번에서 잰 핀 전압과 대조한다.
 
 ### 6.2 기록과 손 회전
 
