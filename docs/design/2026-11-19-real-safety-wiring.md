@@ -30,7 +30,7 @@
 | 5c-1 | 5 | **수렴**(29판, Codex 10 회차) — 머지는 11-20 보드 확인 뒤 |
 | 5c-1b | 5.1 | **수렴**(13판, Codex 13 회차) — 실차 콘솔 조작 화면, 5c-2 보다 먼저(총괄) |
 | 5c-2 | 6 | **수렴**(14판, Codex 14 회차), 구현 수렴(Codex 7 회차, `9321857f`) — 재위치 배선, 가짜 SLAM 원천 계약. 5c 머지 뒤 main 에 맞춰 따로 PR(총괄) |
-| 5d | 7 | **검토 중**(2판) — 두 방향 질의, D5 포켓 확인 우회(`d5_pocket`) |
+| 5d | 7 | **검토 중**(3판) — 두 방향 질의, D5 포켓 확인 우회(`d5_pocket`) |
 
 '가장 새 DRIVE 하나' 규칙(3 절)은 4c 의 빈틈이라 **단독 수정 PR**(`fix/real-loop-newest-drive`)로 먼저 머지한다(총괄): 미송신 옛 DRIVE 를 버린다. **반쯤 쓴 옛 DRIVE**(7 회차 P1)는 그 PR 에서 뺐다 — 반쪽을 버리는 재동기화가 실 TTY 에서는 구분자 `0x00` 으로 그 반쪽을 오히려 완성할 수 있고(그 PR 의 Codex 검토), 대기 프레임 경로도 같이 봐야 해서 **실 전송기 계약과 함께 6a** 에서 닫는다. 4c 운영 전송기는 DISARM 만 쓰므로 그동안 실차 경로는 없다. 실차 경계의 세부는 각 단계와 S10 선행 조건에서 닫는다 — 실 MCU AUTO 는 여전히 막혀 있다(총괄).
 
@@ -300,20 +300,19 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 
 ## 7. 정지 뒤 출발과 포켓 구간 — 두 방향 질의와 D5 우회 (5d)
 
-> **검토 중**(5d, 2판 — Codex 1 회차 P1 2·P2 4 반영). 예전 판(7 회차까지 반영, 미수렴)의 두 방향 질의를 지금 코드 이름에 맞추고, 총괄 결정(2026-11-19, 사용자 원칙: 예전 'D5 끔 우회는 만들지 않음'을 바꿈)의 D5 포켓 확인 우회를 더했다. 실 D435i 깊이 경로와 실차 `PocketCheck` 생성기는 PR 7 이다(지금 `RealHooks.build_pocket_check` 는 생성기가 없으면 `pocket_check_unavailable`).
+> **검토 중**(5d, 3판 — Codex 1 회차 P1 2·P2 4, 2 회차 P1 3·P2 3 반영). 예전 판(7 회차까지 반영, 미수렴)의 두 방향 질의를 지금 코드 이름에 맞추고, 총괄 결정(2026-11-19, 사용자 원칙: 예전 'D5 끔 우회는 만들지 않음'을 바꿈)의 D5 포켓 확인 우회를 더했다. 실 D435i 깊이 경로와 실차 `PocketCheck` 생성기는 PR 7 이다(지금 `RealHooks.build_pocket_check` 는 생성기가 없으면 `pocket_check_unavailable`).
 
 ### 7.1 두 방향 질의 (4b 8 절이 넘긴 '정지 뒤 방향 판정')
 
 실차 엔코더 속도 모형은 서 있어도 가속도 오차 항 때문에 두 방향을 남긴다. 지금 코어의 D5 분기(`MissionCore.permission`, 포켓 구간)는 그때 `_direction_limits` 의 `unsure` 로 `direction_unsure` 0·hold 를 낸다(4c 시험 `test_real_loop_s10` 이 고정). 정지 증거로 `SafetySpeed` 를 0 으로 바꾸면 역방향 정지 호 검사가 빠지므로(3 회차 P1-1) 그렇게 하지 않는다. 속도 상한·가능한 방향은 그대로 둔다.
 
-**바꾸는 것**(코어, 실차에서만 참인 `unsure` 분기만; Isaac 은 `_direction_limits` 가 한 방향이라 불변):
+**바꾸는 것**(코어 포켓 구간의 **실차 경로만** — `self._real_vehicle()` 이 참일 때, 가능한 방향이 하나여도 둘이어도 이 규칙(2 회차 P2-1: 요청 0 의 감속 slew 가 한 방향으로 남는 경우 포함); Isaac 은 지금 경로 그대로이고 새 속성·훅을 읽지 않는다):
 1. **순서**: 포켓 구간을 `pocket_missing` → 정지 프레임 관문(`await_still_frame`) → 접근 중간 정지 프레임 걸기(`mid_still_done`) → (두 방향 질의 또는 지금의 한 방향 질의) 로 한다. 관문이 0 을 내면 그대로 0 이고 질의는 부르지 않는다. 지금은 `unsure` 검사가 관문 앞에 있다.
 2. **가능한 운동**(방향 → 속도): `_direction_limits` 와 같은 규칙 — 측정 속도의 가능한 방향마다 엔코더 상한, 지금 명령의 방향에 그 크기, 루프의 `outstanding_motion`(미확인 출력)의 방향마다 그 값, 각 방향의 최대. 함수 `_possible_motion(speed)` 로 떼어 둘이 같이 쓴다. 미확인 출력 `residual(d)` 는 따로 둔다.
 3. **질의**: 요청이 있으면(방향 `r`) `r` 은 `max(새 요청 속도, possible(r))` 로, 나머지 가능한 방향 `d ≠ r` 는 `possible(d)` 로 `check.limit(t, rear, kappa, d, v, lift)` 를 부른다. 요청이 0 이면 가능한 방향마다 `possible(d)` 로 부른다(`directions_[0]` 은 기록용일 뿐).
 4. **판정**(1 회차 P2-2):
-   - 요청이 아닌 방향 `d`: 허용치 `< possible(d)` 이면 hold(`speed_hold_`, `motion_hold`) — 사유는 검사기의 사유, 그것이 `ok`(부족한 양의 허용치)이면 `pocket_other_direction`.
-   - 요청 방향 `r`: 새 속도를 허용치로 제한하고, `residual(r)`(미확인 출력 — 엔코더 상한이 아님)이 허용치보다 크면 지금처럼 hold(`residual_over_allowed`). 엔코더 상한은 지금 명령하는 방향의 운동이므로 hold 사유가 아니다.
-   - 요청이 0 이면 모든 가능한 방향이 위의 '요청이 아닌 방향' 규칙이다.
+   - **모든 가능한 방향** `d`(요청 방향 포함): 허용치 `< possible(d)` 이면 hold(`speed_hold_`, `motion_hold`) — 그 방향으로 지금 있을 수 있는 운동의 정지 호가 덮이지 않았다(2 회차 P1-1: 낮은 양의 목표를 보내는 것으로는 그 정지 거리를 보장하지 못함). 사유는 검사기의 사유, 그것이 `ok`(부족한 양의 허용치)이면 요청 방향은 `residual_over_allowed`, 다른 방향은 `pocket_other_direction`.
+   - hold 가 아니면 요청 방향의 새 속도를 그 방향 허용치로 제한한다.
 5. **호출 조건**(5 회차 P1-2): 4c 루프는 요청이 0 이고 측정 속도가 0.05 m/s 이하이면 `core.permission()` 을 건너뛴다. 포켓 검사기가 있는 구간(`pocket["check"]` 있음 — 7.2 의 우회 검사기 포함)에서는 요청이 0 이어도 `outstanding_motion` 이 있거나 엔코더 상한이 0 보다 크면 부른다.
 - D5 의 답은 면제 영역에 해당하는 부분만이다. 영역 밖은 주행 격자(층의 방향별 검사, 다른 방향 hold)가 지금처럼 맡는다.
 - 그래서 정지 직후의 첫 출발과, 첫 DRIVE 뒤 수락·구동 지연 동안 엔코더가 아직 두 방향을 보일 때(3 회차 P2-1)도 D5 가 두 방향을 답하는 한 출발이 이어진다.
@@ -324,9 +323,9 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 
 **우회 검사기**(1 회차 P1-1·P1-2·P2-1 을 한 장치로 닫음): 우회 중에는 포켓 검사기 자리에 **우회 검사기**를 넣는다 — 그 밖의 코어 경로(면제 설치·해제, 삽입 진입 요구, 삽입 끝 재검사, `acting`, 두 방향 질의)는 검사기가 있는 지금 경로 그대로 탄다.
 - **루프 → 코어**: 루프는 틱 머리에서 `core.d5_bypassed = "d5_pocket" in 이 틱의 우회 집합` 을 둔다(코어 속성, 기본 False — Isaac 은 두지 않으므로 불변).
-- **설치**(`_known_first_frame`, 알려진 시작의 직선 앞 정지): 우회 중이면 깊이 프레임을 기다리지 않고 같은 자리에서 새 훅 `hooks.build_bypass_pocket_check(axis_yaw)` 를 부른다(`hook_contract.HOOKS` 에 등록, 실차만 구현 — Isaac 은 부르지 않음). `RealHooks` 는 `BypassPocketCheck` 를 만들어 돌려주고 층의 면제 영역을 그 `region_control()` 로 건다. 코어는 그것을 `pocket["check"]` 에 넣는다 — 지금의 프레임 경로가 검사기를 세운 뒤와 같다(그 틱은 0 `pocket_first_frame`, 다음 틱부터 진행).
+- **설치**(`_known_first_frame`, 알려진 시작의 직선 앞 정지): 실차이고 `core.d5_bypassed` 이면(이 순서로 읽음 — Isaac 은 새 속성을 읽지 않음, 2 회차 P1-2) 깊이 프레임을 기다리지 않고 같은 자리에서 새 훅 `hooks.build_bypass_pocket_check(axis_yaw, pickup)` 를 부른다 — `pickup` 은 미션이 고정한 계획 자세 `pocket["planning_pickup"]`(제출 자세, 2 회차 P2-2; 조립의 기준 팔레트 자세가 아님). 훅(`hook_contract.HOOKS` 에 등록, 실차만 구현)은 `BypassPocketCheck` 를 **만들어 돌려주기만** 한다(부수 효과 없음). 코어가 그것을 **먼저** `pocket["check"]` 에 넣고, 그다음 층의 면제 영역을 그 `region_control()` 로 걸고 기록한다(2 회차 P1-3: 그 사이에 실패해도 검사기가 있으므로 수거가 면제를 지운다). 그 틱은 0 `pocket_first_frame`, 다음 틱부터 진행 — 지금의 프레임 경로가 검사기를 세운 뒤와 같다.
 - **`BypassPocketCheck`**(새, `live/real_assembly.py`): `valid = True`, `bypass = True`; `region_control()` = **등록 팔레트 자세(운용자 입력)** 중심, 길이 = 팔레트 깊이 + 2 × 0.60 m, 폭 = 팔레트 폭 + 2 × 0.20 m, 방향 = `axis_yaw`(`PocketCheck.region_control` 과 같은 띠, `PocketConfig.band_along_m`·`band_across_m`; 팔레트 치수는 S10-A 설정의 `pallet_depth_m`·`pallet_width_m`); `limit(...)` = `(inf, "ok")`; `add_frame` = 아무것도 안 함(`{"new": False}`); `summary()` = `{"bypass": True, "region": ...}`; `last_new_s = -inf`.
-- **우회 검사기에서만 건너뛰는 것**(코어 D5 분기, `getattr(check, "bypass", False)`): 정지 프레임 관문을 걸지 않음(`next_phase == "insert"` 의 `await_still_frame` 설정과 접근 중간 정지 프레임) — 기다릴 깊이 프레임이 없다. `check.limit` 은 늘 `inf, ok` 이므로 두 방향 질의와 남은 출력 hold 는 자연히 통과한다.
+- **우회 검사기에서만 건너뛰는 것**(코어 D5 분기와 `transition()`, 읽는 순서는 `self._real_vehicle() and getattr(check, "bypass", False)` — Isaac 재생의 검사기 프록시가 이 속성 읽기를 기록과 대조하므로 실차가 아니면 읽지 않음, 2 회차 P1-2): 정지 프레임 관문을 걸지 않음(`next_phase == "insert"` 의 `await_still_frame` 설정과 접근 중간 정지 프레임) — 기다릴 깊이 프레임이 없다. 루프의 `_feed_depth` 는 검사기가 우회 검사기이면 깊이 원천을 부르기 **전에** 돌아간다(2 회차 P2-3: 원천의 예외가 우회 중에 비상을 일으키지 않게). `check.limit` 은 늘 `inf, ok` 이므로 질의와 hold 는 자연히 통과한다.
 - **그대로인 것**: `acting = True`(포켓 구간 분기 그대로 — 영역 밖 주행 격자의 0 이 출력에 걸림, 1 회차 P1-2); 면제 해제는 `insert → lift` 전이와 미션 끝 수거(`end_reset`)의 지금 경로(`pocket["check"]` 가 있으면 `layer.exempt = None` — 층의 `exempt_serial` 이 올라 옛 결과가 다시 설치되지 않음, 1 회차 P1-1); 삽입 진입의 `pocket_check_missing_at_insert` 요구(검사기가 있으므로 통과); 삽입 끝(`_real_insert_end`)의 실측 정지·목표 자세 재검사(검사기의 답은 `ok`); 층의 0 이 5 s 이어지면 `pocket_stop`.
 - **저속 상한**: `d5_pocket` 이 우회 집합에 있는 동안 출력 상한을 `declared_speed_mps`(0.06 m/s, 잠정 — S10 속도 승인 목록, 6 절 7b·`slam` 우회와 같은 자리·값). 상한 규칙: `slam` 우회 또는 `d5_pocket` 우회 또는 선언 표식이면 0.06.
 - **표시·기록**: `real_status.bypassed` 에 `d5_pocket`, 콘솔 띠 "우회 중: 포켓 확인". 사건 기록 `d5_bypass_check{region, pallet, axis_yaw}`.
@@ -334,8 +333,8 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 
 ### 7.3 시험
 
-- 7.1(방향별로 답이 다른 가짜 검사기, 실제 엔코더 모형 — 배선 검증에 충분, 1 회차 P2-3): 정지 프레임 대기 중에는 질의 호출·비영 DRIVE 0; 프레임 뒤 양쪽이 허용하면 출발하고 몇 틱 동안 이어짐; 한쪽만 부족하면 대기 프레임(hold, `pocket_other_direction` 또는 검사기 사유); 요청 방향의 미확인 출력이 허용치보다 크면 `residual_over_allowed`, 엔코더 상한만 크면 hold 아님; 요청 0 에서 모든 방향 질의; 요청 0·`outstanding_motion` 있음에서도 `permission()` 이 불림; 4c 의 `direction_unsure` 시험은 새 규칙으로 바꿈; Isaac(한 방향)은 그대로(기존 시험). 실제 `PocketCheck` 합성 깊이의 양방향 정지 호 시험은 PR 7 의 깊이 경로와 함께(지금 합성 시험은 전진만 묻는다).
-- 7.2(실제 `RealLayer`, 등록 치수 = 면제 치수 — rig 의 계획 형상 폭 0.80 과 등록 폭 0.40 차이를 맞춤, 1 회차 P2-4): 우회 없이 프레임이 있고 생성기가 없는 차는 `pocket_check_unavailable`, 프레임도 없으면 `pocket_stop in approach: pocket_first_frame`(지금 동작); `d5_pocket` 우회로 같은 차가 프레임 없이 첫 정지 자리에서 우회 검사기를 세우고 삽입·승강·S10 정지까지 감; 그동안 쓰인 비영 DRIVE 가 모두 0.06 m/s 이하이고 적어도 하나는 요청이 0.06 을 넘었음; 영역 밖에 장애물을 두어 요청 방향만 막히면 비영 DRIVE 0(1 회차 P1-2); 삽입 끝 뒤와 미션 취소 뒤 `layer.exempt` 가 None 이고 해제 전 결과가 다시 설치되지 않음(1 회차 P1-1); `real_status.bypassed` 에 `d5_pocket`; 새 세션에서 우회가 사라짐; 무장 중·미션 중 `check_bypass{d5_pocket}` 거절.
+- 7.1(방향별로 답이 다른 가짜 검사기, 실제 엔코더 모형 — 배선 검증에 충분, 1 회차 P2-3): 정지 프레임 대기 중에는 질의 호출·비영 DRIVE 0; 프레임 뒤 양쪽이 허용하면 출발하고 몇 틱 동안 이어짐; 한쪽만 부족하면 대기 프레임(hold, `pocket_other_direction` 또는 검사기 사유); 요청 방향의 가능한 속도(엔코더 상한이나 미확인 출력)가 허용치보다 크면 `residual_over_allowed` hold(2 회차 P1-1: 엔코더 상한 0.07·미확인 0.03·허용 0.037 m/s 에서도 hold); 요청 0 에서 모든 방향 질의, 가능한 방향이 하나인 감속 slew 도 같은 규칙; 요청 0·`outstanding_motion` 있음에서도 `permission()` 이 불림; 4c 의 `direction_unsure` 시험은 새 규칙으로 바꿈; Isaac(한 방향)은 그대로(기존 시험). 실제 `PocketCheck` 합성 깊이의 양방향 정지 호 시험은 PR 7 의 깊이 경로와 함께(지금 합성 시험은 전진만 묻는다).
+- 7.2(실제 `RealLayer`, 등록 치수 = 면제 치수 — rig 의 계획 형상 폭 0.80 과 등록 폭 0.40 차이를 맞춤, 1 회차 P2-4): 우회 없이 프레임이 있고 생성기가 없는 차는 `pocket_check_unavailable`, 프레임도 없으면 `pocket_stop in approach: pocket_first_frame`(지금 동작); `d5_pocket` 우회로 같은 차가 프레임 없이 첫 정지 자리에서 우회 검사기를 세우고 삽입·승강·S10 정지까지 감, 면제 중심이 조립의 기준 자세가 아니라 제출 자세(등록 자세를 기준과 다르게 둔 경우); 면제를 걸기 직전에 실패를 주입해도 수거 뒤 면제가 남지 않음; 조회하면 예외를 내는 깊이 원천으로도 우회 중 비상 없음; Isaac 재생 게이트 29/29(새 속성 읽기 없음); 그동안 쓰인 비영 DRIVE 가 모두 0.06 m/s 이하이고 적어도 하나는 요청이 0.06 을 넘었음; 영역 밖에 장애물을 두어 요청 방향만 막히면 비영 DRIVE 0(1 회차 P1-2); 삽입 끝 뒤와 미션 취소 뒤 `layer.exempt` 가 None 이고 해제 전 결과가 다시 설치되지 않음(1 회차 P1-1); `real_status.bypassed` 에 `d5_pocket`; 새 세션에서 우회가 사라짐; 무장 중·미션 중 `check_bypass{d5_pocket}` 거절.
 
 ## 8. 단일 실행기
 
