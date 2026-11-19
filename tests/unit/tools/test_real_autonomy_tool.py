@@ -97,3 +97,26 @@ def test_an_unreadable_vehicle_file_is_a_structural_refusal(tmp_path):
     code, rec = run("--s10a", str(filled(tmp_path, map_id)), "--map-bundle", str(folder), "--vehicle", str(empty),
                     out=tmp_path / "a.json")
     assert code == 2 and rec["refused"][0].startswith("vehicle_unreadable")
+
+
+def test_run_refuses_any_device_before_opening_anything(tmp_path, monkeypatch, capsys):
+    """4c design 5: ``--run --device X`` exits 2 naming the refusal; nothing is opened (an open() of the device path
+    would fail the test); without a device the run is refused as not wired."""
+    import builtins
+
+    opened = []
+    real_open = builtins.open
+
+    def spy(path, *a, **k):
+        opened.append(str(path))
+        return real_open(path, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", spy)
+    assert tool.main(["--run", "--device", "/dev/ttyACM0"]) == 2
+    assert not any("ttyACM0" in p for p in opened)
+    record = json.loads(capsys.readouterr().out)
+    assert record["refused"] == ["device_refused:4c"] and record["run"] is False
+    assert tool.main(["--dry-assemble", "--device", "/dev/ttyACM0"]) == 2  # a device never rides along a dry assembly
+    capsys.readouterr()
+    assert tool.main(["--run"]) == 2
+    assert json.loads(capsys.readouterr().out)["refused"] == ["run_not_wired:4c"]

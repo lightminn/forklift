@@ -103,3 +103,26 @@ def test_an_unsupported_state_latches_before_it_acts():
     rec = r.tick()
     assert rec.branch == "emergency" and rec.reason == "unsupported:observe_backoff"
     assert r.permit.state == ra.LATCHED
+
+
+def test_the_run_crosses_the_u16_seq_wrap():
+    """The executor's first seq is random (``real_host``); the rig starts it so the S10 run crosses the wrap."""
+    r = s10_rig()
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED)
+    seqs = [seq for _, _, seq, _ in r.transport.sent]
+    assert max(seqs) >= 0xFF00 and min(seqs) < 0x100
+    assert [e["reason"] for e in r.loop.session.results] == ["s10_lifted"]
+
+
+def test_an_operating_transport_writes_no_arm_and_no_drive_of_any_kind():
+    """Design 5: on any transport that is not the internal fake MCU, ARM and the four DRIVEs (normal, the host's zero
+    after ARM, the wait frame, S10's stop frame) stay at 0 written; the DISARM still goes out."""
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.transport.fake_mcu = False  # an operating link
+    r.start()
+    r.submit()
+    r.tick(300)
+    kinds = [kind for _, kind, _, _ in r.transport.sent]
+    assert "ARM" not in kinds and "DRIVE" not in kinds
+    assert "DISARM" in kinds and r.mcu.mode == Mode.DISARMED
+    assert r.permit.state in (ra.LATCHED, ra.OFF)

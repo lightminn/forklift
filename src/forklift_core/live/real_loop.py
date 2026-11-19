@@ -11,6 +11,7 @@ output branch (emergency DISARM -> S10 control stop -> an output wait -> the nor
 from __future__ import annotations
 
 import math
+import secrets
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -21,8 +22,10 @@ from forklift_core.live.output_book import Frame, OutputBook
 from forklift_core.live.real_assembly import freeze_submit, known_request
 from forklift_core.live.real_channels import send_boundary
 from forklift_core.live.real_teleop import counts_still, encoder_speed, real_auto_refusal
+from forklift_core.mcu_link.build_policy import Client
 from forklift_core.mission.commands import FINAL
 from forklift_core.plant.bringup import Sample
+from forklift_core.plant.mcu_host import McuLinkHost
 from forklift_core.safety.arbiter import Feedback
 from forklift_core.safety.truth_access import SafetySpeed
 
@@ -33,6 +36,21 @@ LATE_TICK_S = 0.060  # over this (or the start interval), the emergency branch
 SLOW_STARTS = 3  # this many start intervals over SLOW_TICK_S in a row: the emergency branch
 MAX_STATES_PER_TICK = 64
 SAMPLES_KEPT = 128
+
+
+def real_host(cfg, *, initial_seq: int | None = None, **kw) -> McuLinkHost:
+    """The executor's host: the real client, its first seq random unless given (4c design: a new executor's frames are
+    never mistaken for an earlier one's by seq; the teleop bridge does the same)."""
+    seq = secrets.randbelow(0x10000) if initial_seq is None else int(initial_seq)
+    return McuLinkHost(cfg, client=Client.REAL, initial_seq=seq, **kw)
+
+
+def motion_allowed(transport) -> bool:
+    """The device block (4c design 5): ARM and every DRIVE (the normal one, the host's zero after ARM, the wait frame,
+    S10's stop frame) go out only on a transport that declares itself the internal fake MCU (``fake_mcu is True``);
+    any other transport -- an operating serial link included -- passes the DISARM only. The real MCU's AUTO opens
+    with PR 5 and S10's preconditions."""
+    return getattr(transport, "fake_mcu", False) is True
 
 
 @dataclass
@@ -583,10 +601,14 @@ class RealLoop:
         """Every queued frame through the send boundary: the transport calls ``gate(frame, write)`` for each and the
         write happens inside it -- a motion frame under the channels' lock only when no emergency came in since this
         tick's batch, a DISARM always; written frames reported to the permit and the record."""
+        motion = motion_allowed(self.transport)
+
         def gate(frame, write) -> bool:
             if frame.kind == "DISARM":
                 write()
                 return True
+            if not motion:
+                return False  # the device block: nothing but a DISARM on an operating transport
             return send_boundary(self.channels, self.serial, write)
 
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
@@ -595,4 +617,4 @@ class RealLoop:
                 self.book.written(seq, written_ns)
 
 
-__all__ = ["RealLoop", "RealSession", "TickRecord"]
+__all__ = ["RealLoop", "RealSession", "TickRecord", "motion_allowed", "real_host"]

@@ -2,8 +2,12 @@
 """The real truck's autonomy executor (docs/design/2026-11-19-real-assembly.md). 4b: ``--dry-assemble`` only -- the
 core is assembled from the repository's real settings without opening a device, the assembly record written, and
 the exit code says whether the assembly is structurally sound (0) or refused (2). Readiness needs the link, the SLAM
-link and the layer, which a dry assembly does not have: it is recorded as not ready, not as an error. The 50 Hz loop
-is 4c."""
+link and the layer, which a dry assembly does not have: it is recorded as not ready, not as an error.
+
+``--run`` (4c, docs/design/2026-11-19-real-loop.md 5): any device argument is refused before anything is opened, and
+the wall-clock run is not wired yet (its SLAM, layer and depth sources come with the HIL and real-input PRs); the 50 Hz
+loop itself (``forklift_core.live.real_loop``) runs on the internal fake MCU in the tests only, and on any other
+transport it writes nothing but a DISARM (``real_loop.motion_allowed``)."""
 
 from __future__ import annotations
 
@@ -138,6 +142,14 @@ def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_b
     return 0 if plan.success else 2
 
 
+def run_refused(device: str | None, out: Path | None) -> int:
+    """4c's ``--run``: nothing is opened. A device is refused by name before any transport exists; without one the run
+    is refused as not wired (design 5)."""
+    reason = "device_refused:4c" if device is not None else "run_not_wired:4c"
+    _write({"run": False, "device": device, "refused": [reason], "opened": []}, out)
+    return 2
+
+
 def _write(record: dict, out: Path | None) -> None:
     text = json.dumps(record, indent=2, default=str)
     if out is not None:
@@ -147,7 +159,11 @@ def _write(record: dict, out: Path | None) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--dry-assemble", action="store_true", required=True)
+    mode = ap.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-assemble", action="store_true")
+    mode.add_argument("--run", action="store_true",
+                      help="4c: refuses any device; the wall-clock run is not wired yet (fake MCU in the tests only)")
+    ap.add_argument("--device", default=None, help="refused in 4c (no real MCU AUTO before PR 5 and S10's preconditions)")
     ap.add_argument("--s10a", type=Path, default=REPO / "config/real/s10a.yaml")
     ap.add_argument("--settings", type=Path, default=REPO / "config/real/autonomy.yaml")
     ap.add_argument("--vehicle", type=Path, default=REPO / "config/real/vehicle.yaml")
@@ -155,6 +171,8 @@ def main(argv=None) -> int:
                     help="the surveyed map bundle (verified by its manifest; its map id must be s10a.yaml's)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
+    if args.run or args.device is not None:
+        return run_refused(args.device, args.out)
     return dry_assemble(args.s10a, args.settings, args.vehicle, args.map_bundle, args.out)
 
 

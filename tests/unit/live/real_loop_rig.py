@@ -16,13 +16,12 @@ import numpy as np
 from forklift_core.live import real_assembly as asm
 from forklift_core.live import real_autonomy as ra
 from forklift_core.live.real_channels import RealChannels, RealLink
-from forklift_core.live.real_loop import RealLoop, RealSession
+from forklift_core.live.real_loop import RealLoop, RealSession, real_host
 from forklift_core.live.real_teleop import EncoderSpeedParams, real_auto_refusal
-from forklift_core.mcu_link.build_policy import Client
 from forklift_core.mcu_link.messages import LinkDecoder, encode
 from forklift_core.mission.commands import Submit
 from forklift_core.plant.kinematics import RealKinematics
-from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
+from forklift_core.plant.mcu_host import HostConfig
 from forklift_core.plant.port import RealPlantPort
 from forklift_core.plant.real_vehicle import RealOdometry
 from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
@@ -138,7 +137,15 @@ class FreshMcu(FakeMcu):
         return st
 
 
+class _FixedSkip:
+    @staticmethod
+    def randint(lo, hi):
+        return lo
+
+
 class FakeTransport:
+    fake_mcu = True  # the internal fake MCU: the loop's device block lets ARM and DRIVE through (design 5)
+
     def __init__(self, mcu):
         self.mcu, self.dec, self.last_ns, self.sent = mcu, LinkDecoder(), None, []
         self.refuse_next = 0
@@ -171,11 +178,13 @@ class FakeTransport:
 
 
 class Rig:
-    def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True):
+    def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
+                 initial_seq=None):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
-        self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
-                                           outbox_max=16), client=Client.REAL)
+        # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
+        self.host = real_host(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
+                                         outbox_max=16), initial_seq=0xFB80 if initial_seq is None else initial_seq)
         self.port = RealPlantPort(self.host, KIN, lift_motion_counts=True)
         self.mcu = FreshMcu()
         self.transport = FakeTransport(self.mcu)
@@ -242,8 +251,9 @@ class Rig:
                                lambda: f"t{next(tokens)}", mission=core.commands)
         self.channels = RealChannels()
         self.link = RealLink(self.arbiter, self.channels, tick_period_s=0.05, state_period_s=0.1)
+        # the session check's random skip fixed at its least (1024) so the mission's frames cross the u16 wrap
         self.permit = ra.AutoPermit(self.host, self.port, outstanding=self.port.outstanding,
-                                    stop_since=self._stop_since)
+                                    stop_since=self._stop_since, rng=_FixedSkip())
         self.arbiter.rearm_refusal = self.permit.rearm_refusal
         self.arbiter.on_rearmed = self.permit.rearmed
         params = EncoderSpeedParams(radius_m=VEH.wheel_radius_m, counts_per_rev=VEH.counts_per_wheel_rev,
