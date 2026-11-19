@@ -452,3 +452,4 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 @media (max-width: 760px) {
   .real-panel { left: 8px; right: 8px; max-width: none; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); max-height: 45vh; overflow: auto; }
 }
+.real-panel.stale { opacity: 0.6; } /* disconnected: the last values (5c-1b r12 P3) */
