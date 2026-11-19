@@ -802,6 +802,11 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
         candidates = scene_candidates(r)
+        if any(line.split()[:1] == ["--scene-file"] and line != "--scene-file" for line in printed):
+            # one argument per line is the contract the scene check reads (Codex round 13)
+            problems.append(f"{r.name}: the DRY_RUN prints --scene-file and its value on one line (one argument per "
+                            "line, please)")
+            continue
         chosen = last_option_value(printed, "--scene-file")
         if candidates and chosen is not None:
             # the file the launch chose must be one the proof hashes: both read as scene_digest reads them (the folder

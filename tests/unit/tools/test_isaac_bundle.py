@@ -2312,3 +2312,14 @@ def test_a_relative_scene_file_is_the_runs_own_and_a_path_holding_dashes_is_no_o
                      env={"SCENE_DIR": "run --stage/scenes", "SCENE": "line_2"}, retry_move=[str(out)])
         problems = ib.check_runs([run], tmp_path / "runner.py")
         assert (problems == []) is ok, (n, problems)
+
+
+def test_a_scene_file_and_its_value_on_one_printed_line_is_refused(tmp_path):
+    # Codex round 13: the scene check reads one argument per line; a joined line would hide the value
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "s").mkdir()
+    (tmp_path / "f.sh").write_text("# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\necho '--scene-file /outside.json'\n"
+                                   "echo ARGS_OK\n")
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(tmp_path / "o")], cwd=str(tmp_path),
+                 env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2"}, retry_move=[str(tmp_path / "o")])
+    assert any("on one line" in p for p in ib.check_runs([run], tmp_path / "runner.py"))
