@@ -410,3 +410,34 @@ def test_an_older_waiting_scan_expires_after_a_newer_one_was_installed():
     lay.install_ready(1.21)
     lay.install_ready(1.25)  # the first one's wait ran out
     assert lay.counts["scans_dropped"] == 1 and lay.watchdog(1.25) is None
+
+
+def test_the_timing_bypass_skips_the_deadlines_and_the_scan_age_but_not_the_worker_or_the_source():
+    """Real safety wiring design 5 (5c-1): layer_timing bypassed."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.1)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    assert lay.watchdog(1.5) == "layer_overdue"
+    lay.timing_bypassed = True
+    assert lay.watchdog(1.5) is None and lay.ok(5.0)
+    assert lay.limit(5.0, current_pose=(0, 0, 0), curvature_inv_m=0.0, direction=1, loaded=False,
+                     cap_mps=0.1)[1] != "scan_stale"
+    lay.source_lost("lidar")
+    assert lay.watchdog(5.1) == "scan_source_lost" and not lay.ok(5.1)
+    lay = layer()
+    lay.timing_bypassed = True
+    lay.worker.alive = False
+    assert lay.watchdog(1.0) == "layer_worker_dead"
+
+
+def test_installing_may_ignore_only_the_correction_generation():
+    """5c-1 r2 P2-3: the snapshot bypass waits for no correction-only install, but still for another key's."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.1)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    ask(lay, 1.13, version=1)  # a new correction generation, not installed
+    assert lay.installing() and not lay.installing(ignore_correction=True)
+    lay.exempt = (2.0, 0.0, 0.4, 0.6, 0.0)  # another exemption too
+    assert lay.installing(ignore_correction=True)

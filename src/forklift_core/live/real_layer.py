@@ -224,6 +224,9 @@ class RealLayer:
         self.last_beam_s: dict = {}  # sensor -> the placed scan's last beam (the first-use deadline)
         self.defer_submit = False  # the loop: placements only mark, ``flush`` submits after this tick's track()
         self.disconnected: set = set()  # sources that said they are disconnected and not yet back
+        # the operator's session bypass of the layer's timing (real safety wiring design 5, 5c-1): the deadlines and
+        # the scan age are not judged; a dead worker, a lost source and the permission's speed limit still are
+        self._timing_bypassed = False
         self._dirty = False
         self.counts = {"scans": 0, "scans_dropped": 0, "stale_results": 0, "installs": 0}
         self._request = None  # the newest refresh request (dict)
@@ -240,6 +243,15 @@ class RealLayer:
         self._overdue_since = None
         self._exceeded = None  # a watchdog end is sticky: an install after it does not undo it (round 2 P1-2)
         self._watch_cache = None
+
+    @property
+    def timing_bypassed(self) -> bool:
+        return self._timing_bypassed
+
+    @timing_bypassed.setter
+    def timing_bypassed(self, value: bool) -> None:
+        self._timing_bypassed = bool(value)
+        self._watch_cache = None  # the next read judges under the new setting
 
     # --- the exemption -----------------------------------------------------------------------------------------
     @property
@@ -436,15 +448,25 @@ class RealLayer:
         """The installed result's newest scan (first beam), not the newest placed one (Codex 5a impl P2-7)."""
         return None if self._installed is None else self._installed["newest_scan_s"]
 
-    def installing(self) -> bool:
-        return self._installed is None or self._installed["key"] != self.current_key()
+    def installing(self, ignore_correction: bool = False) -> bool:
+        """No result yet, or the installed one is not the current key's. ``ignore_correction``: only a different
+        correction generation does not count (the operator's snapshot bypass, 5c-1 r2 P2-3) -- a different mission,
+        path, exemption or load still does."""
+        if self._installed is None:
+            return True
+        cur = self.current_key()
+        if cur is None:
+            return True
+        if ignore_correction:
+            return replace(self._installed["key"], correction_gen=0) != replace(cur, correction_gen=0)
+        return self._installed["key"] != cur
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
-              cap_mps: float):
-        if self.installing():
+              cap_mps: float, ignore_correction: bool = False):
+        if self.installing(ignore_correction):
             return 0.0, "snapshot_installing"
         newest = self._installed["newest_scan_s"]
-        if newest is None or now_s - newest > self.scan_max_age_s:
+        if not self.timing_bypassed and (newest is None or now_s - newest > self.scan_max_age_s):
             return 0.0, "scan_stale"
         watch_ = self.watchdog(now_s)
         if watch_ is not None:
@@ -460,9 +482,12 @@ class RealLayer:
         if not self.worker.alive:
             self._watch_cache = (now_s, "layer_worker_dead")
             return "layer_worker_dead"
-        if self._exceeded is not None:
+        if self._exceeded is not None and not (self.timing_bypassed and self._exceeded == "layer_latency_exceeded"):
             self._watch_cache = (now_s, self._exceeded)
             return self._exceeded
+        if self.timing_bypassed:
+            self._watch_cache = (now_s, None)  # the deadlines are bypassed; the worker and the source were judged
+            return None
         passed = any(d < now_s for d, _ in self._deadlines.values())
         if self._expected_s is not None and now_s > self._expected_s and self._missed_expected is None:
             # held until a result holding a later-received scan is installed (a late receipt alone does not release)
@@ -505,6 +530,8 @@ class RealLayer:
         for good is the watchdog's ``layer_latency_exceeded`` at its end."""
         if not self.worker.alive or self._installed is None or self.disconnected:
             return False
+        if self.timing_bypassed:
+            return True  # the scan age is bypassed (5c-1); the worker and the source were judged above
         newest = max(self.last_scan_s.values(), default=None)
         if newest is not None and now_s - newest <= self.scan_max_age_s + self.scan_period_s:
             return True

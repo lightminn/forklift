@@ -217,3 +217,25 @@ def test_a_gap_between_states_restarts_the_hold():
     assert first is None and first2 is None and res.trip is None
     first3, _ = run(w, 0.6, t0=round(t + 0.01, 9), **hot)
     assert first3[0] == "watch_current"  # held again on consecutive STATEs
+
+
+def test_a_skipped_check_is_not_judged_and_does_not_hide_the_other():
+    """Real safety wiring design 5 (5c-1 r1 P2-6): with watch_current skipped (bypassed), a wheel fault on the same
+    STATEs still trips -- the current check does not take the trip or clear the wheel's hold."""
+    from forklift_core.safety.real_watch import SafetyWatch
+
+    cfg = CFG
+    w = SafetyWatch(cfg, wheel_radius_m=(0.05, 0.05))
+    trips = []
+    for k in range(40):
+        t = k * 0.02
+        res = w.step(t, armed=True, fresh=True, new_state=True, currents_a=(9.0, 9.0, 0.0, 0.0),
+                     wheel_targets_rad_s=(10.0, 10.0), wheel_rates_rad_s=(0.0, 0.0), skip={"watch_current"})
+        trips.append(res.trip)
+    assert "watch_wheel" in trips and "watch_current" not in trips
+    w2 = SafetyWatch(cfg, wheel_radius_m=(0.05, 0.05))
+    for k in range(40):
+        res = w2.step(k * 0.02, armed=True, fresh=True, new_state=True, currents_a=(9.0, 9.0, 0.0, 0.0),
+                      wheel_targets_rad_s=(10.0, 10.0), wheel_rates_rad_s=(0.0, 0.0),
+                      skip={"watch_current", "watch_wheel"})
+        assert res.trip is None

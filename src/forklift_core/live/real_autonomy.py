@@ -592,7 +592,12 @@ class Evidence:
     mission_gen: object = None  # -> the running mission's generation (a hold must be this mission's)
 
 
-def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
+# the readiness checks the operator may bypass for the session (real safety wiring design 5, 5c-1); everything else
+# in auto_ready_refusal (worker, layer missing, baseline, core, link) is not bypassable
+READY_BYPASSABLE = ("measurement", "odometry", "slam", "layer_timing", "operator_start", "snapshot")
+
+
+def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence, bypass=frozenset()) -> str | None:
     """The first unmet readiness condition (design 6), or None. ``stage``: "submit" (a submit and the adoption) or
     "drive" (arming and driving). Every latch reason comes before a wait: a reason starting "wait:" (a snapshot
     being installed after a correction change) closes the output without a latch (``latches``)."""
@@ -610,34 +615,42 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
     why = ev.link_reason(now_ns)
     if why is not None:
         return f"link:{why}"
-    m = ev.measurement(now_ns)
-    for name in ("steering_ok", "lift_ok", "lift_origin_ok", "counts_ok"):
-        if not getattr(m, name):
-            return f"measurement:{name[:-3]}"
-    if not ev.odometry_continuous(now_ns):
+    if "measurement" not in bypass:
+        m = ev.measurement(now_ns)
+        for name in ("steering_ok", "lift_ok", "lift_origin_ok", "counts_ok"):
+            if not getattr(m, name):
+                return f"measurement:{name[:-3]}"
+    if "odometry" not in bypass and not ev.odometry_continuous(now_ns):
         return "odometry:cut"
-    sl = ev.slam(now_ns)
-    allowed = ("tracking",) if stage == "submit" else ("tracking", "holding")
-    if sl.mode not in allowed:
-        return f"slam:mode_{sl.mode}"
-    if sl.pose_reply_ns is None or now_ns - sl.pose_reply_ns > SLAM_MAX_AGE_S * 1e9:
-        return "slam:stale"
-    if sl.mode == "holding":
-        if ev.mission_gen is None or sl.hold_mission_gen is None or sl.hold_mission_gen != ev.mission_gen(now_ns):
-            return "slam:hold_not_this_missions"
-        if sl.hold_travel_m > HOLD_MAX_M:
-            return "slam:hold_too_long"
+    if "slam" not in bypass:
+        sl = ev.slam(now_ns)
+        allowed = ("tracking",) if stage == "submit" else ("tracking", "holding")
+        if sl.mode not in allowed:
+            return f"slam:mode_{sl.mode}"
+        if sl.pose_reply_ns is None or now_ns - sl.pose_reply_ns > SLAM_MAX_AGE_S * 1e9:
+            return "slam:stale"
+        if sl.mode == "holding":
+            if ev.mission_gen is None or sl.hold_mission_gen is None or sl.hold_mission_gen != ev.mission_gen(now_ns):
+                return "slam:hold_not_this_missions"
+            if sl.hold_travel_m > HOLD_MAX_M:
+                return "slam:hold_too_long"
     sn = ev.snapshot(now_ns)
-    layer_wait = getattr(sn, "layer_wait", None)
-    if (sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9) and layer_wait is None:
+    timing = "layer_timing" not in bypass
+    layer_wait = getattr(sn, "layer_wait", None) if timing else None
+    if timing and (sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9) \
+            and layer_wait is None:
         return "snapshot:scan_stale"
-    if stage == "submit" and not ev.operator_start_ok(now_ns):
+    if stage == "submit" and "operator_start" not in bypass and not ev.operator_start_ok(now_ns):
         return "operator_start:unconfirmed"
     if layer_wait is not None:
         return f"wait:{layer_wait}"
-    if sn.installing or sn.installed_correction is None \
-            or tuple(sn.installed_correction) != tuple(sn.applied_correction) \
-            or sn.installed_generation is None or sn.installed_generation != sn.applied_generation:
+    # the correction generation's match is what the snapshot bypass skips; an install still waited for (another
+    # mission, path, exemption, load) stays a wait (5c-1 r2 P2-3: the view's ``installing`` ignores the correction then)
+    if sn.installing:
+        return "wait:snapshot_installing"
+    if "snapshot" not in bypass and (
+            sn.installed_correction is None or tuple(sn.installed_correction) != tuple(sn.applied_correction)
+            or sn.installed_generation is None or sn.installed_generation != sn.applied_generation):
         return "wait:snapshot_installing"
     return None
 
