@@ -73,7 +73,10 @@ export function bindRealPanel(m, rejectText, clientId) {
     let input = inputOf(ev);
     // a click without a pointer id after a pointer press: not current Chrome -- unsupported, told once (scope 2026-11-19)
     if (input === "kbd" && panel.pointerPressed[key] && !("kbd" in rec)) $("rp-unsupported").hidden = false;
-    if (panel.blocked[key]) return { refused: true };
+    if (panel.blocked[key]) {
+      delete rec.kbd; // a keyboard press refused while blocked is consumed (r11 P3)
+      return { refused: true };
+    }
     if (input === "kbd" && !("kbd" in rec)) {
       const pointers = Object.keys(rec).filter((k) => k !== "kbd");
       if (pointers.length === 1) input = pointers[0];
