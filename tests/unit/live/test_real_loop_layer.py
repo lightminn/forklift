@@ -441,3 +441,19 @@ def test_a_source_loss_before_the_arm_names_its_cause():
     r.layer.source_lost("lidar")
     rec = r.tick()
     assert rec.reason == "prepare:layer:scan_source_lost"
+
+
+def test_any_latch_before_the_arm_ends_the_mission():
+    """Codex 5a impl round 6 P2-2: a receive failure latching first ends the adopted mission at once (no paused
+    mission left for a later source loss to miss)."""
+    r, _hold = _adopted_waiting_rig()
+    orig = r.transport.receive
+
+    def fail(host, now_ns, limit=None):
+        raise OSError("read")
+
+    r.transport.receive = fail
+    r.tick()
+    r.transport.receive = orig
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert r.core.commands.status not in ("accepted", "preparing", "running", "paused"), r.core.commands.status

@@ -304,11 +304,9 @@ class RealLoop:
         if self.frozen is not None:
             depth, width = self.pallet_size
             x, y, yaw = self.frozen.pose
-            # the range bound the grid places the face's returns with, at the farthest the pallet is from here
-            # (the configured range model, Codex 5a impl round 5 P2-2)
-            reach = math.hypot(x - float(rear[0]), y - float(rear[1])) + math.hypot(depth, width) / 2
-            bound = float(lay.grid_config.sensor_bound_at(np.array([reach]))[0])
-            rect = (x, y, yaw, depth / 2 + bound, width / 2 + bound)
+            # the registered pallet's half sizes: the worker grows them by the range bound of each stored scan's
+            # own sensor position (Codex 5a impl round 6 P2-1)
+            rect = (x, y, yaw, depth / 2, width / 2)
             lay.planning_pallet = (rect, self._planning_key())
         else:
             lay.planning_pallet = None
@@ -617,12 +615,17 @@ class RealLoop:
         self.waiting = None
         if self.permit.state == ra.LATCHED:
             return  # latched already: its DISARM is retried every 100 ms, not renewed each tick (round 2 P2-2)
+        # a mission the permit does not collect yet (before its ARM) ends with any latch, whatever the cause (5a,
+        # Codex impl round 6 P2-2): read before the latch moves the permit off OFF
+        before_arm = self.real_layer is not None and self._before_arm()
         # the DISARM is tried before the arbiter's stop and the collection (4b design 7)
         self._bind_permit(now_ns)
         try:
             self.permit.latch(now_ns, reason)
         except Exception:  # noqa: BLE001 -- the DISARM is queued and the arbiter stopped before a collection fails
             pass
+        if before_arm:
+            self._end_now(now_ns, reason)
 
     def _end_now(self, now_ns: int, reason: str) -> None:
         cmds = self.core.commands
