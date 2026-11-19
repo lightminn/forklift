@@ -22,7 +22,15 @@
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
    within 100-300 ms, so a commissioning-limited duty can raise the bits. --stop-grace-ms: the
-   STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300). */
+   STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300).
+   Real HIL 6a (docs/design/2026-11-20-real-hil-6a.md 1, 6): --hil-plant 1 sets the hil_plant and outputs_locked
+   build bits together (the core refuses one without the other, and either with a commissioning build).
+   --state-silent-at-ms N --state-silent-ms D: from N for D ms no STATE is written while frames are still read and
+   handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken). --accept-log PATH: the link
+   bytes reach the core one frame per tick, and each frame the core handled is a line "MCU-us seq kind verdict
+   prior-mode prior-expiry-us" (verdict "accepted" or "rejected:<reason>", expiry -1 when none) -- several frames
+   of one tick cannot be told apart from STATE alone. --axis-log PATH: each tick a line "MCU-us wall-gap-ns mode
+   lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -41,6 +49,7 @@
 
 #define TWO_PI 6.28318530717958647692
 #define TX_CAP 4096u
+#define RX_CAP 8192u
 
 typedef struct {
     int fd;
@@ -52,6 +61,11 @@ typedef struct {
     long fault_at_ms, estop_at_ms, estop_release_ms, silent_at_ms;
     long hand_wheel, hand_revs, hand_at_ms, hand_duration_ms;
     bool fault_fired;
+    long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
+    FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
+    uint8_t rx[RX_CAP];                       /* 6a with --accept-log: bytes read, handed one frame per tick */
+    size_t rx_len, rx_frame_len;              /* rx_frame_len: the frame's bytes still to hand this tick */
+    bool handed;                              /* this tick's frame was started (no second one this tick) */
 } board;
 
 static board B;
@@ -78,6 +92,13 @@ static long elapsed_ms(void)
 static bool silent(void)
 {
     return B.silent_at_ms >= 0 && elapsed_ms() >= B.silent_at_ms;
+}
+
+static bool state_silent(void)
+{
+    long t = elapsed_ms();
+    return B.state_silent_at_ms >= 0 && t >= B.state_silent_at_ms &&
+           t < B.state_silent_at_ms + B.state_silent_ms;
 }
 
 /* ---- HAL ---------------------------------------------------------------------------- */
@@ -112,14 +133,36 @@ static size_t hal_link_read(void *ctx, uint8_t *buf, size_t cap)
     if (silent()) {
         return 0;
     }
-    ssize_t n = read(B.fd, buf, cap);
-    return n > 0 ? (size_t)n : 0;
+    if (B.accept_log == NULL) {
+        ssize_t n = read(B.fd, buf, cap);
+        return n > 0 ? (size_t)n : 0;
+    }
+    /* --accept-log: the core gets one frame (through its delimiter) per tick, the bytes read before the tick
+       (fill_rx), so each handled frame's verdict is the core's state after this tick; a frame longer than cap goes
+       in pieces within the tick */
+    if (!B.handed) {
+        size_t k = 0;
+        while (k < B.rx_len && B.rx[k] != 0) {
+            k++;
+        }
+        if (k == B.rx_len) {
+            return 0; /* no whole frame yet */
+        }
+        B.rx_frame_len = k + 1;
+        B.handed = true;
+    }
+    size_t n = B.rx_frame_len < cap ? B.rx_frame_len : cap;
+    memcpy(buf, B.rx, n);
+    memmove(B.rx, B.rx + n, B.rx_len - n);
+    B.rx_len -= n;
+    B.rx_frame_len -= n;
+    return n;
 }
 
 static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
 {
     (void)ctx;
-    if (silent()) {
+    if (silent() || state_silent()) {
         return true; /* swallowed: the host sees silence */
     }
     if (B.tx_len + len > TX_CAP) {
@@ -286,6 +329,38 @@ static const char *arg_str(int argc, char **argv, const char *name)
     return NULL;
 }
 
+static void fill_rx(void)
+{
+    while (B.rx_len < RX_CAP) {
+        ssize_t n = read(B.fd, B.rx + B.rx_len, RX_CAP - B.rx_len);
+        if (n <= 0) {
+            break;
+        }
+        B.rx_len += (size_t)n;
+    }
+    if (B.rx_len == RX_CAP) {
+        size_t k = 0;
+        while (k < B.rx_len && B.rx[k] != 0) {
+            k++;
+        }
+        if (k == B.rx_len) {
+            B.rx_len = 0; /* a full buffer with no delimiter: nothing in it can be a frame */
+        }
+    }
+}
+
+static const char *kind_name(uint8_t t)
+{
+    switch (t) {
+    case LINK_DRIVE: return "DRIVE";
+    case LINK_ARM: return "ARM";
+    case LINK_DISARM: return "DISARM";
+    case LINK_CLEAR_FAULTS: return "CLEAR_FAULTS";
+    case LINK_COMMISSION: return "COMMISSION";
+    default: return "OTHER";
+    }
+}
+
 int main(int argc, char **argv)
 {
     const char *link = arg_str(argc, argv, "--link");
@@ -329,6 +404,19 @@ int main(int argc, char **argv)
     long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
     long stop_grace_ms = arg_long(argc, argv, "--stop-grace-ms", 100);
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
+    bool hil_plant = arg_long(argc, argv, "--hil-plant", 0) != 0;
+    B.state_silent_at_ms = arg_long(argc, argv, "--state-silent-at-ms", -1);
+    B.state_silent_ms = arg_long(argc, argv, "--state-silent-ms", 0);
+    const char *accept_path = arg_str(argc, argv, "--accept-log");
+    const char *axis_path = arg_str(argc, argv, "--axis-log");
+    if (accept_path != NULL && (B.accept_log = fopen(accept_path, "w")) == NULL) {
+        perror("accept log");
+        return 2;
+    }
+    if (axis_path != NULL && (B.axis_log = fopen(axis_path, "w")) == NULL) {
+        perror("axis log");
+        return 2;
+    }
     bool enc_test = arg_long(argc, argv, "--encoder-test-thresholds", 0) != 0;
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
     uint32_t boot_id = (uint32_t)arg_long(argc, argv, "--boot-id", 0x0B00700L);
@@ -338,7 +426,8 @@ int main(int argc, char **argv)
 
     static drive_config cfg;
     static fw_app app;
-    cfg = make_config(commission, commission_time_ms, locked, enc_test, stop_grace_ms);
+    cfg = make_config(commission, commission_time_ms, locked || hil_plant, enc_test, stop_grace_ms);
+    cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.t0_ns = B.now_ns = mono_ns();
@@ -362,10 +451,57 @@ int main(int argc, char **argv)
             next = B.now_ns;
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
+        /* 6a --accept-log: the frame handed this tick, decoded on the side, and the core before it */
+        link_msg seen;
+        bool have = false;
+        uint8_t prior_mode = app.d.mode;
+        long long prior_expiry = app.d.has_deadline ? (long long)app.d.deadline_us : -1;
+        uint16_t prior_rx = app.d.last_rx_seq;
+        B.handed = false;
+        if (B.accept_log != NULL && !silent()) {
+            fill_rx();
+        }
+        if (B.accept_log != NULL && B.rx_len > 0) {
+            /* peek: the next frame (through its delimiter) is what hal_link_read hands the core now */
+            size_t k = 0;
+            while (k < B.rx_len && B.rx[k] != 0) {
+                k++;
+            }
+            if (k < B.rx_len) {
+                link_rx side;
+                link_rx_init(&side);
+                for (size_t i = 0; i <= k && !have; i++) {
+                    have = link_rx_feed(&side, B.rx[i], &seen);
+                }
+            }
+        }
         fw_app_tick(&app);
+        if (have) {
+            bool took = app.d.last_rx_seq == seen.seq && (prior_rx != seen.seq || app.d.reject_reason == 0);
+            if (took) {
+                fprintf(B.accept_log, "%llu %u %s accepted %u %lld\n", (unsigned long long)app.d.time_us,
+                        (unsigned)seen.seq, kind_name(seen.type), (unsigned)prior_mode, prior_expiry);
+            } else {
+                fprintf(B.accept_log, "%llu %u %s rejected:%u %u %lld\n", (unsigned long long)app.d.time_us,
+                        (unsigned)seen.seq, kind_name(seen.type), (unsigned)app.d.reject_reason,
+                        (unsigned)prior_mode, prior_expiry);
+            }
+            fflush(B.accept_log);
+        }
+        if (B.axis_log != NULL) {
+            fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
+                    (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
+                    B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]);
+        }
         if (!silent()) {
             flush_tx();
         }
+    }
+    if (B.accept_log != NULL) {
+        fclose(B.accept_log);
+    }
+    if (B.axis_log != NULL) {
+        fclose(B.axis_log);
     }
     close(B.fd);
     return 0;
