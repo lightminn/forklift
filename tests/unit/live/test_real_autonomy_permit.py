@@ -349,3 +349,20 @@ def test_the_session_check_steps_by_at_least_1024():
     assert b.permit.session_started
     disarms = [q for q, _ in b.written]
     assert ((disarms[-1] - seqs[0]) & 0xFFFF) >= 1024
+
+
+def test_a_command_timeout_bit_does_not_refuse_the_rearm_but_another_fault_does():
+    from forklift_core.mcu_link.messages import FaultFlag
+
+    b = Bench()
+    latched(b)
+    b.cycle(10)
+    b.settled = ("settled", b.now - 50 * MS)
+    b.still = (b.now - 20 * MS, b.mcu.boot)
+    b.mcu.faults = FaultFlag.COMMAND_TIMEOUT
+    b.cycle(1)
+    b.still = (b.now - 20 * MS, b.mcu.boot)
+    assert b.permit.rearm_refusal(b.now) is None
+    b.mcu.faults = FaultFlag.DRIVER_FAULT_L
+    b.cycle(1)
+    assert b.permit.rearm_refusal(b.now) == "mcu_faults"

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from forklift_core.mcu_link.messages import Mode
+from forklift_core.mcu_link.messages import FaultFlag, Mode
 
 OFF, ARMING, READY, DRIVING, STOP_PENDING, DISARMING, LATCHED = (
     "OFF", "ARMING", "READY", "DRIVING", "STOP_PENDING", "DISARMING", "LATCHED")
@@ -264,8 +264,8 @@ class AutoPermit:
             return "state_stale"
         if s.mode != Mode.DISARMED:
             return f"mcu_{s.mode.name.lower()}"
-        if int(s.fault_flags):
-            return "mcu_faults"
+        if int(s.fault_flags) & ~int(FaultFlag.COMMAND_TIMEOUT):
+            return "mcu_faults"  # a command's expiry (cleared by the next ARM) is no fault for a rearm (4c design 8)
         if self.port.older_nonzero_may_act(now_ns):
             return "old_command_may_act"
         kind, settled_ns = self.outstanding(now_ns)
