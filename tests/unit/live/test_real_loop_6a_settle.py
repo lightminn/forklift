@@ -429,5 +429,3 @@ def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
     r = holding(driving())
     r.loop._axis_judge(_r(r.host.state, lift_m=float("nan")))  # noqa: SLF001
     assert r.loop.axis_watch_times[-1][1] is False
-
-
