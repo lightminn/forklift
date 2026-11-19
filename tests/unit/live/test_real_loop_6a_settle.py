@@ -429,3 +429,38 @@ def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
     r = holding(driving())
     r.loop._axis_judge(_r(r.host.state, lift_m=float("nan")))  # noqa: SLF001
     assert r.loop.axis_watch_times[-1][1] is False
+
+
+# --- 6a-2b design 10.1 ----------------------------------------------------------------------------------------------
+def rearm_after_stop(stale):
+    r = ready_to_submit()
+    r.say("disarm")
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED or r.link.a.mode == "STOPPED", limit=50)
+    r.link.a.stop(r.now / 1e9, "test")
+    r.tick(30)  # standing, DISARMED
+    if stale:
+        r.transport.silent = True
+        r.tick(3)  # no STATE for 60 ms: the host's limit (50 ms) passed, the arbiter's feedback (100 ms) not yet
+    replies(r)
+    r.say("rearm")
+    r.tick()
+    return [m for m in replies(r) if m.get("of") == "rearm"]
+
+
+def test_a_console_rearm_is_taken_on_a_fresh_state_and_refused_on_a_stale_one():
+    """6a-2b design 10.1: the arbiter's seconds reach the permit as ns -- the fresh case is the control (with seconds
+    passed straight it is refused for another condition), the stale case the check itself."""
+    fresh = rearm_after_stop(False)
+    assert fresh and fresh[-1]["t"] == "ack", fresh
+    stale = rearm_after_stop(True)
+    assert stale and stale[-1].get("reason") == "real_rearm_refused" and stale[-1].get("detail") == "state_stale", stale
+
+
+def test_the_run_host_takes_the_runs_client():
+    from forklift_core.live.real_loop import real_host
+    from forklift_core.mcu_link.build_policy import Client
+    from forklift_core.plant.mcu_host import HostConfig
+
+    cfg = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
+    assert real_host(cfg).client is Client.REAL
+    assert real_host(cfg, client=Client.HIL).client is Client.HIL

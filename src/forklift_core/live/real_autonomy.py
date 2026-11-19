@@ -411,6 +411,13 @@ class AutoPermit:
             return "stop_before_settled"
         return None
 
+    def arbiter_callbacks(self):
+        """The arbiter's ``rearm_refusal`` and ``on_rearmed`` for this permit: the arbiter passes monotonic **seconds**,
+        the permit works in ns (6a-2b design 10.1: wired straight, a stale STATE's age came out hugely negative and
+        passed the freshness check)."""
+        return (lambda now_s: self.rearm_refusal(int(round(float(now_s) * 1e9))),
+                lambda now_s, control_gen: self.rearmed(int(round(float(now_s) * 1e9)), control_gen))
+
     def rearmed(self, now_ns: int, control_gen: int) -> None:
         """The arbiter's ``on_rearmed``: the latch goes with the arbiter's STOPPED -> PAUSED, nowhere else; the old
         reason stays in the events only."""

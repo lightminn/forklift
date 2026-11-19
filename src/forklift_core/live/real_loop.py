@@ -62,11 +62,12 @@ START_TOL_RAD = math.radians(5.0)
 DECLARED_SPEED_MPS = 0.06  # the slam-bypass / declared-start cap (provisional, S10 speed approval)
 
 
-def real_host(cfg, *, initial_seq: int | None = None, **kw) -> McuLinkHost:
-    """The executor's host: the real client, its first seq random unless given (4c design: a new executor's frames are
-    never mistaken for an earlier one's by seq; the teleop bridge does the same)."""
+def real_host(cfg, *, initial_seq: int | None = None, client: Client = Client.REAL, **kw) -> McuLinkHost:
+    """The executor's host: the real client unless the run says HIL (6a-2b design 10.1: the HIL board's ARM is refused
+    to Client.REAL), its first seq random unless given (4c design: a new executor's frames are never mistaken for an
+    earlier one's by seq; the teleop bridge does the same)."""
     seq = secrets.randbelow(0x10000) if initial_seq is None else int(initial_seq)
-    return McuLinkHost(cfg, client=Client.REAL, initial_seq=seq, **kw)
+    return McuLinkHost(cfg, client=Client(client), initial_seq=seq, **kw)
 
 
 def motion_allowed(transport) -> bool:
