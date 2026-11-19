@@ -50,7 +50,7 @@ TICK_HOOKS = frozenset({
 })
 
 # Optional hooks those paths try and the real truck leaves absent (the core falls back to its default).
-ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix"})
+ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix", "far_recognition_mission_end"})
 
 
 class RealRequireFailed(RuntimeError):
