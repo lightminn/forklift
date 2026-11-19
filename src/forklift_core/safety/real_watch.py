@@ -237,7 +237,8 @@ class ImuWatch:
         self.samples: list = []  # (ns, unit vector) of valid samples, oldest first, within window_s
         self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
         self._baseline = None  # the unit gravity direction frozen before the ARM
-        self._armed_ns = None
+        self._prev_ns = None  # the newest sample judged
+        self._tilt_start = None  # the first sample of the current tilted run
         self._trip = None
 
     def add(self, sample_ns: int, accel, now_ns: int) -> str | None:
@@ -269,8 +270,9 @@ class ImuWatch:
         return None
 
     def baseline(self, still_since_ns):
-        """``(direction, None)`` from the valid samples taken in the current stand, or ``(None, reason)``:
-        ``imu_not_still``, ``imu_no_baseline``, ``imu_baseline_gap``, ``imu_baseline_unsteady``."""
+        """``((direction, last_ns), None)`` from the valid samples taken in the current stand -- ``last_ns`` the
+        newest one used --, or ``(None, reason)``: ``imu_not_still``, ``imu_no_baseline``, ``imu_baseline_gap``,
+        ``imu_baseline_unsteady``."""
         if still_since_ns is None:
             return None, "imu_not_still"
         c = self.cfg
@@ -286,17 +288,21 @@ class ImuWatch:
         d = tuple(x / size for x in mean)
         if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
             return None, "imu_baseline_unsteady"
-        return d, None
+        return (d, part[-1][0]), None
 
-    def arm(self, direction, armed_ns: int) -> None:
-        """Freeze the baseline before the ARM is asked (kept while armed)."""
+    def arm(self, baseline) -> None:
+        """Freeze ``(direction, last_ns)`` from ``baseline()`` before the ARM is asked (kept while armed); the
+        judgement starts at ``last_ns``: the first sample after it is measured from it (13th draft, round 2 P2-1)."""
+        direction, last_ns = baseline
         d = _unit(tuple(float(x) for x in direction))
         if d is None:
             raise ValueError("imu baseline direction")
-        self._baseline, self._armed_ns, self._trip = d, int(armed_ns), None
+        self._baseline, self._trip = d, None
+        self._prev_ns = int(last_ns)  # the newest sample judged (the baseline's last at first)
+        self._tilt_start = None
 
     def disarm(self) -> None:
-        self._baseline = self._armed_ns = self._trip = None
+        self._baseline = self._trip = self._prev_ns = self._tilt_start = None
 
     @property
     def armed(self) -> bool:
@@ -304,31 +310,31 @@ class ImuWatch:
 
     def judge(self, now_ns: int) -> str | None:
         """With a frozen baseline: ``watch_imu_stale``, ``watch_imu_gap`` or ``watch_tilt`` (each kept until the
-        disarm), else None."""
+        disarm), else None. The samples received since the last call are taken in order into an incremental state
+        (the previous sample's time, the tilt hold's start): a hold of any length is measured, whatever the window
+        (13th draft, round 2 P1-1)."""
         if self._baseline is None:
             return None
         if self._trip is not None:
             return self._trip
         c = self.cfg
-        if not self.samples or int(now_ns) - self.samples[-1][0] > c.max_age_s * 1e9:
-            self._trip = "watch_imu_stale"
-            return self._trip
-        start = prev = None
         for ns, u in self.samples:
-            if prev is not None and ns > self._armed_ns and ns - prev > c.gap_max_s * 1e9:
+            if ns <= self._prev_ns:
+                continue  # judged already (or the baseline's own)
+            if ns - self._prev_ns > c.gap_max_s * 1e9:
                 self._trip = "watch_imu_gap"  # sparse samples cannot carry a hold: the watch is lost
                 return self._trip
-            prev = ns
-            if ns <= self._armed_ns:
-                continue  # before the baseline was frozen
+            self._prev_ns = ns
             if _angle_deg(u, self._baseline) > c.limit_deg:
-                start = ns if start is None else start
-                if ns - start >= c.hold_s * 1e9:
+                self._tilt_start = ns if self._tilt_start is None else self._tilt_start
+                if ns - self._tilt_start >= c.hold_s * 1e9:
                     self._trip = "watch_tilt"
                     return self._trip
             else:
-                start = None
-        return None
+                self._tilt_start = None
+        if int(now_ns) - self._prev_ns > c.max_age_s * 1e9:
+            self._trip = "watch_imu_stale"
+        return self._trip
 
 
 def _angle_deg(u, v) -> float:

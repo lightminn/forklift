@@ -31,9 +31,9 @@ def fed(watch, start_ms, n, accel=G, step_ms=5):
 def armed():
     w = ImuWatch(CFG)
     end = fed(w, 1000, 20)
-    d, why = w.baseline(1000 * MS)
+    b, why = w.baseline(1000 * MS)
     assert why is None
-    w.arm(d, end * MS)
+    w.arm(b)
     return w, end
 
 
@@ -110,8 +110,8 @@ def test_the_baseline_is_frozen_before_the_arm():
     """Parked on a slight slope: the stand's mean is the baseline; it does not follow later samples."""
     w = ImuWatch(CFG)
     t = fed(w, 1000, 20, tilted(5))
-    d, why = w.baseline(1000 * MS)
-    w.arm(d, t * MS)
+    b, why = w.baseline(1000 * MS)
+    w.arm(b)
     t = fed(w, t, 80, tilted(5))
     assert w.judge(t * MS) is None
     t = fed(w, t, 80, tilted(14))  # 9 deg off the frozen baseline
@@ -141,3 +141,25 @@ def test_the_yaml_imu_part_loads():
     root = Path(__file__).resolve().parents[3]
     cfg = load_imu_config(root / "config/real/safety_watch.yaml")
     assert cfg.max_age_s == 0.1 and cfg.gap_max_s == 0.05 and cfg.norm_tol_frac == 0.30
+
+
+def test_a_long_hold_is_measured_past_the_sample_window():
+    """13th draft (round 2 P1-1): a hold of 3 s with samples kept for 2 s still trips."""
+    w = ImuWatch(replace(CFG, hold_s=3.0, max_age_s=0.1))
+    t = fed(w, 1000, 20)
+    w.arm(w.baseline(1000 * MS)[0])
+    for _ in range(80):  # 4 s of 12 deg, judged every 50 ms
+        t = fed(w, t, 10, tilted(12))
+        if w.judge(t * MS) is not None:
+            break
+    assert w.judge(t * MS) == "watch_tilt"
+
+
+def test_the_gap_is_measured_from_the_baselines_last_sample():
+    """13th draft (round 2 P2-1): a sample taken just after the baseline's last but received after the freeze."""
+    w = ImuWatch(CFG)
+    fed(w, 1000, 10)  # 1000..1045 ms
+    b, _ = w.baseline(1000 * MS)
+    w.arm(b)
+    assert w.add(1100 * MS, G, 1101 * MS) is None  # 55 ms after the baseline's last
+    assert w.judge(1101 * MS) == "watch_imu_gap"
