@@ -545,8 +545,9 @@ def scene_candidates(run) -> list[str]:
     scene_dir, scene = run.env.get("SCENE_DIR"), run.env.get("SCENE")
     if not scene_dir or not scene:
         return []
-    base = scene.removesuffix("_side").removesuffix("_m").removesuffix("_rack")
-    names = {f"{base}{s}.json" for s in ("", "_m", "_rack", "_side", "_m_side")}
+    # the launcher's own suffix order: SCENE without _side, then a marker or rack copy maybe added, then _side maybe
+    base = scene.removesuffix("_side")
+    names = {f"{base}{m}{s}.json" for m in ("", "_m", "_rack") for s in ("", "_side")}
     return [os.path.join(run.cwd or ".", scene_dir, n) for n in sorted(names)]
 
 
@@ -785,6 +786,12 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
+        candidates = scene_candidates(r)
+        if candidates and "--scene-file" in args:
+            # the file the launch chose must be one the proof hashes (its candidates, read the same way)
+            chosen = os.path.realpath(args[args.index("--scene-file") + 1])
+            if chosen not in {os.path.join(os.path.realpath(os.path.dirname(c)), os.path.basename(c)) for c in candidates}:
+                problems.append(f"{r.name}: the DRY_RUN chose {chosen}, not one of the scene files the proof covers")
     return problems
 
 

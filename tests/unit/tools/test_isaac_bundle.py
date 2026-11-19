@@ -2256,3 +2256,20 @@ def test_verify_refuses_a_scene_folder_that_depends_on_the_attempt_even_with_an_
         {"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": ib.preflight_inputs([run], tmp_path / "runner.py"),
          "gpu_persistence": {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}}))
     assert any("may not depend on the attempt" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {}))
+
+
+def test_a_custom_scene_names_marker_copy_is_a_candidate_and_the_chosen_file_must_be_one(tmp_path):
+    # Codex round 10: SCENE=line_2_rack with MARKERS=on opens line_2_rack_m.json (the launcher's suffix order)
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2_rack"})
+    assert str(tmp_path / "s/line_2_rack_m.json") in ib.scene_candidates(run)
+    assert str(tmp_path / "s/line_2_rack_m_side.json") in ib.scene_candidates(run)
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "s").mkdir()
+    for chosen, ok in (("s/line_2_rack_m.json", True), ("elsewhere.json", False)):
+        (tmp_path / "f.sh").write_text(f'# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\necho --scene-file\n'
+                                       f'echo {tmp_path / chosen}\necho ARGS_OK\n')
+        out = tmp_path / f"o_{ok}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2_rack"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, problems
