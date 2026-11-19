@@ -168,3 +168,168 @@ class SafetyWatch:
         if pending:
             values["pending"] = pending  # a condition met, its hold not yet reached: recorded, not told
         return WatchResult(trip, values)
+
+
+# --- the IMU watch of the real autonomy (docs/design/2026-11-19-real-safety-wiring.md 4, stage 5b) -----------------
+GRAVITY_MPS2 = 9.81
+IMU_REASONS = ("watch_imu_stale", "watch_imu_gap", "watch_tilt")
+
+
+@dataclass(frozen=True)
+class ImuConfig:
+    limit_deg: float  # the tilt from the baseline over which a sample counts toward the hold
+    hold_s: float  # how long consecutive tilted samples must last
+    max_age_s: float  # the newest valid sample older than this (host clock): watch_imu_stale
+    gap_max_s: float  # two consecutive valid samples further apart than this, armed: watch_imu_gap
+    baseline_min: int  # valid samples taken in the current stand the baseline needs
+    baseline_spread_deg: float  # every baseline sample within this of their mean direction
+    baseline_wait_s: float  # a stand shorter than this may still be gathering its baseline (the ARM waits)
+    norm_tol_frac: float  # |‖a‖ - g| over this fraction of g: not a valid sample
+    window_s: float = 2.0  # how long valid samples are kept
+
+    def __post_init__(self) -> None:
+        for name in ("limit_deg", "hold_s", "max_age_s", "gap_max_s", "baseline_spread_deg", "baseline_wait_s",
+                     "norm_tol_frac", "window_s"):
+            v = getattr(self, name)
+            if isinstance(v, bool) or not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+                raise ValueError(f"imu_config:{name}")
+        if isinstance(self.baseline_min, bool) or not (isinstance(self.baseline_min, int) and self.baseline_min >= 2):
+            raise ValueError("imu_config:baseline_min")
+        # only settings the watch can judge with (5b round 1 P2-4)
+        if not self.limit_deg < 90.0:
+            raise ValueError("imu_config:limit_deg")
+        if not self.baseline_spread_deg < self.limit_deg:
+            raise ValueError("imu_config:baseline_spread_deg")
+        if not self.gap_max_s <= self.max_age_s:
+            raise ValueError("imu_config:gap_max_s")
+        if not self.hold_s > self.gap_max_s:
+            raise ValueError("imu_config:hold_s")
+        if not self.norm_tol_frac < 1.0:
+            raise ValueError("imu_config:norm_tol_frac")
+
+
+def load_imu_config(path) -> ImuConfig:
+    """The ``imu:`` part of ``config/real/safety_watch.yaml`` (it must carry a provenance: provisional values)."""
+    import yaml
+
+    raw = yaml.safe_load(Path(path).read_text())
+    part = raw.get("imu") if isinstance(raw, dict) else None
+    if not isinstance(part, dict) or "provenance" not in part:
+        raise ValueError("imu_config:missing")
+    names = ("limit_deg", "hold_s", "max_age_s", "gap_max_s", "baseline_min", "baseline_spread_deg",
+             "baseline_wait_s", "norm_tol_frac")
+    for name in names:
+        if name not in part:
+            raise ValueError(f"imu_config:{name}")
+    return ImuConfig(**{k: part[k] for k in names})
+
+
+class ImuWatch:
+    """The tilt and the IMU's loss while armed, on distinct valid samples (design 4; the SafetyWatch tilt part counted
+    a re-handed sample as continuing and took a missing time as now). Every time is host monotonic ns; the caller
+    passes the clock."""
+
+    def __init__(self, cfg: ImuConfig) -> None:
+        if not isinstance(cfg, ImuConfig):
+            raise TypeError("ImuConfig expected")
+        cfg.__post_init__()
+        self.cfg = cfg
+        self.samples: list = []  # (ns, unit vector) of valid samples, oldest first, within window_s
+        self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
+        self._baseline = None  # the unit gravity direction frozen before the ARM
+        self._armed_ns = None
+        self._trip = None
+
+    def add(self, sample_ns: int, accel, now_ns: int) -> str | None:
+        """One sample from the source: None when valid, else why it was not counted."""
+        why = None
+        try:
+            v = tuple(float(x) for x in accel)
+        except (TypeError, ValueError):
+            v = ()
+        n = 0.0
+        if len(v) != 3 or not all(math.isfinite(x) for x in v):
+            why = "not_finite"
+        elif self.samples and int(sample_ns) <= self.samples[-1][0]:
+            why = "not_newer"
+        elif int(sample_ns) > int(now_ns):
+            why = "future"
+        else:
+            n = math.sqrt(sum(x * x for x in v))
+            if abs(n - GRAVITY_MPS2) > self.cfg.norm_tol_frac * GRAVITY_MPS2:
+                why = "norm"
+        if why is not None:
+            self.counts[why] += 1
+            return why
+        self.counts["valid"] += 1
+        self.samples.append((int(sample_ns), tuple(x / n for x in v)))
+        cut = int(sample_ns) - int(self.cfg.window_s * 1e9)
+        while len(self.samples) > 1 and self.samples[0][0] < cut:
+            self.samples.pop(0)
+        return None
+
+    def baseline(self, still_since_ns):
+        """``(direction, None)`` from the valid samples taken in the current stand, or ``(None, reason)``:
+        ``imu_not_still``, ``imu_no_baseline``, ``imu_baseline_gap``, ``imu_baseline_unsteady``."""
+        if still_since_ns is None:
+            return None, "imu_not_still"
+        c = self.cfg
+        part = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
+        if len(part) < c.baseline_min:
+            return None, "imu_no_baseline"
+        if any(b[0] - a[0] > c.gap_max_s * 1e9 for a, b in zip(part, part[1:])):
+            return None, "imu_baseline_gap"
+        mean = tuple(sum(u[k] for _, u in part) / len(part) for k in range(3))
+        size = math.sqrt(sum(x * x for x in mean))
+        if size < 0.9:
+            return None, "imu_baseline_unsteady"
+        d = tuple(x / size for x in mean)
+        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
+            return None, "imu_baseline_unsteady"
+        return d, None
+
+    def arm(self, direction, armed_ns: int) -> None:
+        """Freeze the baseline before the ARM is asked (kept while armed)."""
+        d = _unit(tuple(float(x) for x in direction))
+        if d is None:
+            raise ValueError("imu baseline direction")
+        self._baseline, self._armed_ns, self._trip = d, int(armed_ns), None
+
+    def disarm(self) -> None:
+        self._baseline = self._armed_ns = self._trip = None
+
+    @property
+    def armed(self) -> bool:
+        return self._baseline is not None
+
+    def judge(self, now_ns: int) -> str | None:
+        """With a frozen baseline: ``watch_imu_stale``, ``watch_imu_gap`` or ``watch_tilt`` (each kept until the
+        disarm), else None."""
+        if self._baseline is None:
+            return None
+        if self._trip is not None:
+            return self._trip
+        c = self.cfg
+        if not self.samples or int(now_ns) - self.samples[-1][0] > c.max_age_s * 1e9:
+            self._trip = "watch_imu_stale"
+            return self._trip
+        start = prev = None
+        for ns, u in self.samples:
+            if prev is not None and ns > self._armed_ns and ns - prev > c.gap_max_s * 1e9:
+                self._trip = "watch_imu_gap"  # sparse samples cannot carry a hold: the watch is lost
+                return self._trip
+            prev = ns
+            if ns <= self._armed_ns:
+                continue  # before the baseline was frozen
+            if _angle_deg(u, self._baseline) > c.limit_deg:
+                start = ns if start is None else start
+                if ns - start >= c.hold_s * 1e9:
+                    self._trip = "watch_tilt"
+                    return self._trip
+            else:
+                start = None
+        return None
+
+
+def _angle_deg(u, v) -> float:
+    return math.degrees(math.acos(max(-1.0, min(1.0, sum(a * b for a, b in zip(u, v))))))

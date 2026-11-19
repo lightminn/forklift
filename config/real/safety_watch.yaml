@@ -28,3 +28,17 @@ tilt:
   hold_s: 0.3
   max_age_s: 0.5
   provenance: {source: flat_floor_with_vibration_margin, measured: false, until: S8}
+
+imu:
+  # The real autonomy's IMU watch (docs/design/2026-11-19-real-safety-wiring.md 4, stage 5b; the D435i accelerometer
+  # through the PR 7 bridge). Armed only: the tilt from a baseline frozen before the ARM (the mean of a steady stand),
+  # the newest sample's age and the gap between samples. Separate from `tilt:` above (the teleop bridge's SafetyWatch).
+  limit_deg: 8.0             # as `tilt:`; the test floor is flat concrete
+  hold_s: 0.3
+  max_age_s: 0.1             # the newest valid sample older than this: watch_imu_stale
+  gap_max_s: 0.05            # two valid samples further apart (10 x the D435i's 200 Hz accel period): watch_imu_gap
+  baseline_min: 10           # valid samples in the stand the baseline is the mean of
+  baseline_spread_deg: 2.0   # every baseline sample within this of the mean direction
+  baseline_wait_s: 0.5       # a stand shorter than this may still be gathering its baseline (the ARM waits)
+  norm_tol_frac: 0.30        # | |a| - 9.81 | over 0.30 x 9.81 m/s^2: not a valid sample (a fraction, not m/s^2)
+  provenance: {source: d435i_accel_200hz_and_flat_floor_assumption, measured: false, until: S8}
