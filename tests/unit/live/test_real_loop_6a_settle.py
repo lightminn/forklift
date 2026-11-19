@@ -292,15 +292,16 @@ def test_a_failing_end_collection_after_an_early_return_still_answers_the_ticks_
     assert [m for m in got if m.get("of") == "mission_submit"], got  # answered in this tick, not invalid next tick
 
 
-def test_a_collection_that_raised_once_is_done_at_the_next_collection():
+def test_a_collection_that_raised_is_kept_with_the_failure_and_new_missions_are_refused():
     r = Rig(frames=True, operator=[(1, "confirm")])
     r.start()
     r.submit()
     run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
     failing_once(r.core, "abandon_jobs")
     run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
-    assert r.loop.session.results[-1]["reason"] == "s10_lifted"
-
+    res = r.loop.session.results[-1]
+    assert res["reason"] == "s10_lifted" and res["collect_failed"].startswith("RuntimeError")
+    assert r.loop._submit_refusal(r.now) == "not_ready:collect_failed"  # noqa: SLF001
 
 def test_an_arming_zero_first_judged_after_its_expiry_ends_the_exchange():
     """Impl round 3 P3: the zero's first gate opens 98 ms after its queueing (the queue still hands it out, the gate's
@@ -388,38 +389,21 @@ def test_an_axis_judgement_on_a_sample_past_the_age_bound_is_marked_invalid():
     assert r.loop.axis_watch_times[-1][1] is False
 
 
-def test_a_collection_retried_after_a_late_step_keeps_the_first_clock_and_end_time():
-    r = Rig(frames=True, operator=[(1, "confirm")])
-    r.start()
-    r.submit()
-    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
-    taken = {}
-    real_take = r.core.commands.take_clock
-
-    def take():
-        c = real_take()
-        taken.setdefault("clock", c)
-        taken.setdefault("t", r.loop._t(r.now))  # noqa: SLF001
-        return c
-
-    r.core.commands.take_clock = take
-    failing_once(r.core, "end_reset")
-    run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
-    res = r.loop.session.results[-1]
-    assert res["clock"] is taken["clock"] and res["ended_s"] == taken["t"]
-
-
-# --- Codex 6a-1 impl round 4 -------------------------------------------------------------------------------------
 def test_an_s10_stop_discarded_at_its_first_byte_records_the_disarm_decision():
     r = Rig(frames=True, operator=[(1, "confirm")])
     r.start()
     r.submit()
-    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
-    r.transport.eagain = {"DRIVE"}
-    n = len(r.loop.disarm_decisions)
-    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=400)
-    assert len(r.loop.disarm_decisions) > n
+    real = r.transport.transmit
 
+    def eagain_stop(host, now, gate):
+        r.transport.eagain = {"DRIVE"} if r.permit.state == ra.STOP_PENDING else set()
+        return real(host, now, gate)
+
+    r.transport.transmit = eagain_stop
+    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=4000)
+    assert r.permit.reason == "control_stop_discarded"
+    assert r.loop.disarm_decisions[-1][1] == "control_stop_discarded"
+    assert [kind for _, kind, _, _ in r.transport.sent if kind == "DISARM"]
 
 def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
     from dataclasses import replace as _r
@@ -431,22 +415,3 @@ def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
     assert r.loop.axis_watch_times[-1][1] is False
 
 
-def test_a_retried_end_reset_opens_the_relocalization_generation_once():
-    r = Rig(frames=True, operator=[(1, "confirm")])
-    r.start()
-    r.submit()
-    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
-    r.loop._release_allowed = lambda now_ns: "relocalize"  # noqa: SLF001
-    real_refresh = r.core.refresh_targets
-    state = {"armed": True}
-
-    def refresh():
-        if state["armed"]:  # after the relocalization opened in end_reset
-            state["armed"] = False
-            raise RuntimeError("injected:refresh_targets")
-        return real_refresh()
-
-    r.core.refresh_targets = refresh
-    run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
-    opened = [e for e in r.core.state.get("field_recoveries", []) if e.get("event") == "relocalize_required"]
-    assert len(opened) == 1

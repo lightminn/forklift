@@ -100,7 +100,9 @@ class RealSession:
         # 6a (design 5): this tick's apply records once made (None: not yet), and whether link.begin was entered
         self.last_records: list | None = None
         self.began = False
-        self._end_partial: tuple | None = None  # (mission id, clock, end time) taken by a collection that then raised
+        # a mission collection that raised (6a impl rounds 2-5): not retried part-way (its steps are not idempotent);
+        # the run refuses new missions until the executor restarts (the stopping side)
+        self.collect_failed: str | None = None
 
     def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict, collect=None) -> tuple:
         """``link.begin`` -> collect -> ``commands.apply`` -> collect (design 2.1 5): a mission the head ended (a latch
@@ -131,25 +133,27 @@ class RealSession:
         mission_id, mission = cmds.mission_id, cmds.mission
         if mission_id is None or mission_id == self._ended_id:
             return None
-        if lift_m is not None:
-            core.ms.lift_command = float(lift_m)
-        pend = self._end_partial if self._end_partial is not None and self._end_partial[0] == mission_id else None
-        if pend is None:
+        self._ended_id = mission_id
+        clock = None
+        try:
+            if lift_m is not None:
+                core.ms.lift_command = float(lift_m)
             core.abandon_jobs(t)
             cmds.close_open(t)
             if cmds.end_logged_for != mission_id:
                 cmds.note_end(t, cmds.end_reason)
-            # the clock is taken once (it empties the pauses and waits): a later step that raises keeps it for the
-            # retry, with this collection's end time (6a impl round 3 P2-3)
-            self._end_partial = (mission_id, cmds.take_clock(), float(t))
-            pend = self._end_partial
-        _, clock, ended_s = pend
-        core.end_reset(t, release_allowed=release_allowed)
-        # marked collected only once every step ran (6a impl round 2 P2-2): a step that raised is tried again at the
-        # next collection (before the next apply clears the final status), so the field recovery still opens
-        self._ended_id = mission_id
-        self._end_partial = None
-        entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": ended_s,
+            clock = cmds.take_clock()
+            core.end_reset(t, release_allowed=release_allowed)
+        except Exception as exc:
+            # 6a impl rounds 2-5: kept as collected with the failure; the caller's emergency latches, and no new
+            # mission runs on a half-reset core until the executor restarts
+            self.collect_failed = f"{type(exc).__name__}:{exc}"
+            self.results.append({"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason,
+                                 "ended_s": float(t), "pallet_id": None if mission is None else mission.pallet_id,
+                                 "destination_id": None if mission is None else mission.destination_id,
+                                 "clock": clock, "collect_failed": self.collect_failed})
+            raise
+        entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": float(t),
                  "pallet_id": None if mission is None else mission.pallet_id,
                  "destination_id": None if mission is None else mission.destination_id, "clock": clock}
         self.results.append(entry)
@@ -1427,6 +1431,8 @@ class RealLoop:
             self.permit.restart_session(now_ns)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
+        if self.session.collect_failed is not None:
+            return "not_ready:collect_failed"  # 6a: a mission collection raised -- restart the executor
         why = self._ready(now_ns, "submit")
         return None if why is None else f"not_ready:{why}"
 
