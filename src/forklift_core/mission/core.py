@@ -636,6 +636,13 @@ class MissionCore:
                 hooks.require(False, "pocket_check_missing_at_insert")  # no hook call on any other arrival
             transition("insert", t)
         elif ms.phase == "insert":
+            if self._real_vehicle():
+                held_ = self._real_insert_end(t)
+                if held_ == "wait":
+                    return SimpleNamespace(stop=False, rear=rear)  # the insert (and D5) go on; wheels 0 (the loop)
+                if held_ is not None:
+                    self.commands.terminate("recovery_required", t, f"insert_end:{held_}")
+                    return SimpleNamespace(stop=False, rear=rear)
             state["insertion_error"] = {
                 "position_m": tracking.position_error_m,
                 "yaw_rad": tracking.yaw_error_rad,
@@ -695,6 +702,30 @@ class MissionCore:
         """The S10 control stop asked this tick (its time), cleared as it is read; None: none asked."""
         stop, self.s10_stop = self.s10_stop, None
         return stop
+
+    def _real_insert_end(self, t: float) -> str | None:
+        """The real truck's insert end (docs/design/2026-11-19-real-loop.md 2.4): "wait" until the loop's still span
+        (the old wheel command settled and a fresh stop since); then the pose re-checked against the insert goal (the
+        follower's arrival is latched) and D5 asked afresh at the standing pose -- a refusal reason, or None (lift)."""
+        slam, pocket, hooks = self.slam, self.pocket, self.hooks
+        if slam is None or not slam.get("stop_now"):
+            return "wait"
+        rear = np.asarray(hooks.rear(), dtype=float)
+        tracker = self.trackers["insert"]
+        goal = np.asarray(tracker.path_arrays()[0][-1], dtype=float)
+        cfg = tracker.config
+        yaw_err = math.atan2(math.sin(float(rear[2] - goal[2])), math.cos(float(rear[2] - goal[2])))
+        if (math.hypot(float(rear[0] - goal[0]), float(rear[1] - goal[1])) > cfg.position_tolerance_m
+                or abs(yaw_err) > cfg.yaw_tolerance_rad):
+            return "pose_out_of_range"
+        check = pocket.get("check")
+        if getattr(self.options, "pocket_check", False):
+            if check is None:
+                return "pocket_check_missing"
+            _, why_ = check.limit(t, tuple(float(v) for v in rear), 0.0, 1, 0.0, float(hooks.lift_position()))
+            if why_ != "ok":
+                return f"pocket:{why_}"
+        return None
 
     def lift_and_timers(self, t: float, dt: float) -> bool:
         """The lift target's ramp and the timed transitions (lift, lower, settle, home settle). True ends the
@@ -6608,6 +6639,17 @@ class MissionCore:
         self.field_recovery = None
         return True, None
 
+    def require_relocalization(self, t: float, reason: str) -> int:
+        """The real truck's relocalization lock without a field recovery (docs/design/2026-11-19-real-loop.md 2.2): a
+        new generation, a deferred release dropped (the hold is not trusted any more); returns the generation."""
+        self._relocalize_serial += 1
+        self.cargo.relocalize_required = self._relocalize_serial
+        self.end_release_due = None
+        self.state.setdefault("field_recoveries", []).append({"event": "relocalize_required", "time_s": float(t),
+                                                              "reason": reason,
+                                                              "generation": int(self._relocalize_serial)})
+        return self._relocalize_serial
+
     def relocalize_generation(self):
         """The relocalization generation a field recovery's end asked for (None: none needed)."""
         return self.cargo.relocalize_required or None
@@ -6620,6 +6662,7 @@ class MissionCore:
                 or generation != self.cargo.relocalize_required):
             return False
         self.cargo.relocalize_required = False
+        self.end_release_due = None  # the old hold's deferred release goes with the new place (real-loop design 2.2)
         self.state.setdefault("field_recoveries", []).append({"event": "relocalized", "time_s": float(t),
                                                               "generation": int(generation)})
         return True
@@ -6691,9 +6734,14 @@ class MissionCore:
         if commanded != 0.0:
             c_ = 1 if commanded > 0 else -1
             motion[c_] = max(motion.get(c_, 0.0), abs(commanded))
+        # docs/design/2026-11-19-real-loop.md 2.5: the real loop's outputs that may still act, by direction
+        for d_, v_ in (self.state.get("outstanding_motion") or {}).items():
+            if float(v_) > 0.0:
+                motion[int(d_)] = max(motion.get(int(d_), 0.0), float(v_))
         possible = set(motion) | ({direction} if direction is not None else set())
         if direction is not None:
-            driving, cap = [direction], cap_mps
+            # the asked direction at the larger of the request and what may still act that way (same direction too)
+            driving, cap = [direction], max(cap_mps, motion.get(direction, 0.0))
         else:
             driving = list(motion) or [speed.directions[0]]
             cap = max([cap_mps, *motion.values()])
@@ -9560,9 +9608,12 @@ class MissionCore:
         self.state.setdefault("escape_presteer_drives", []).append(
             {"time_s": float(t), **{k_: v_ for k_, v_ in clip_.items() if k_ != "goal"}})
 
-    def end_reset(self, t: float) -> dict:
+    def end_reset(self, t: float, release_allowed=None) -> dict:
         """A live mission's end (D1 steps 3 and 8): the pocket check closed as the insertion's end closes it, then
-        the mission-owned state back to the baseline. Returns the mission's records (for its own record)."""
+        the mission-owned state back to the baseline. Returns the mission's records (for its own record).
+        ``release_allowed`` (the real loop's, docs/design/2026-11-19-real-loop.md 2.2): None -- the hold released now
+        when ``slam["stop_now"]`` (as before); True/False -- the loop's own decision at this moment (False defers);
+        "relocalize" -- not released and the relocalization lock opened (a hold no new reply can release)."""
         pocket, obstacle, state, slam = self.pocket, self.obstacle, self.state, self.slam
         self.capture_recovery_context()  # plan D14: before the mission-owned state goes
         self._open_field_recovery(t)  # 4d-2b-2 (real truck): before the mission-owned state goes too
@@ -9572,8 +9623,10 @@ class MissionCore:
             # The mission's release reservation goes with it (Codex D6 P2-3: its 10 s limit failed every tick after);
             # a hold left with the forks free is released for the end (D1 step 4), now or once standing.
             slam["pending_release"] = slam["release_wait_from"] = None
-            if slam["tracker"].mode == "holding" and self.cargo.release_allowed():  # free or carrying (plan D5a)
-                if slam["stop_now"]:
+            if release_allowed == "relocalize":
+                self.require_relocalization(t, "hold_unrecoverable")
+            elif slam["tracker"].mode == "holding" and self.cargo.release_allowed():  # free or carrying (plan D5a)
+                if slam["stop_now"] if release_allowed is None else bool(release_allowed):
                     self.end_release(t, deferred=False)
                 else:
                     mission = self.commands.mission
