@@ -123,6 +123,7 @@ def test_on_without_a_callback_is_unsupported():
     ("pallet_register", {"pallet_id": "", "pose": [3.0, 0.0, 0.0]}),
     ("pallet_register", {"pallet_id": "P1", "pose": [3.0, 0.0]}),
     ("pallet_register", {"pallet_id": "P1", "pose": [3.0, 0.0, float("nan")]}),
+    ("pallet_register", {"pallet_id": "P1", "pose": [3.0, 0.0, 10 ** 400]}),
     ("operator_answer", {"kind": "lifted", "serial": True, "verdict": "confirm"}),
     ("operator_answer", {"kind": "lifted", "serial": 1, "verdict": "maybe"}),
     ("check_bypass", {"check": "imu", "on": 1}),
@@ -135,3 +136,13 @@ def test_on_a_malformed_request_is_invalid_and_never_reaches_the_loop(kind, bad)
     lease_id = tokened_lease(a)
     assert leased(a, "laptop", lease_id, kind, "X1", 0.1, **bad)["reason"] == "invalid"
     assert not calls
+
+
+def test_on_the_ledger_is_purged_without_request_tokens_on():
+    """5c-1 r2 P2-4: the real requests use the ledger, so it is purged each cycle with real_requests alone."""
+    a, calls = real()
+    lease_id = tokened_lease(a)
+    seen = []
+    a.ledger.purge = lambda now: seen.append(now)
+    a.mission_context(1.0)  # the cycle's start
+    assert seen == [1.0]

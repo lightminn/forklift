@@ -797,8 +797,9 @@ class Arbiter:
         self.provisional_auto = False
         self._context_gen = self.control_gen
         self._cycle_mono = now_mono
-        if self.config.request_tokens:
-            self.ledger.purge(now_mono)  # once a cycle; bounded by the ledger's own limits (D7)
+        if self.config.request_tokens or self.config.real_requests:
+            # once a cycle; bounded by the ledger's own limits (D7); the real requests always use it (5c-1 r2 P2-4)
+            self.ledger.purge(now_mono)
         if self.mission is not None:
             # The hold follows the cycle's final mode, once, in the mission's own time (Codex M-b review P2/P2:
             # queuing at each transition replayed TELEOP-then-STOP in the wrong order and the vehicle clock).
@@ -1137,9 +1138,12 @@ def _real_payload_ok(kind: str, msg: dict) -> bool:
 
     if kind == "pallet_register":
         pose = msg.get("pose")
-        return (isinstance(msg.get("pallet_id"), str) and bool(msg["pallet_id"]) and isinstance(pose, list)
-                and len(pose) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                                           and math.isfinite(v) for v in pose))
+        try:
+            return (isinstance(msg.get("pallet_id"), str) and bool(msg["pallet_id"]) and isinstance(pose, list)
+                    and len(pose) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                               and math.isfinite(v) for v in pose))
+        except OverflowError:
+            return False  # an integer too large for a float is not a pose (5c-1 r2 P3-2)
     if kind == "operator_start":
         return True  # the session epoch is checked with the generations
     if kind == "operator_answer":

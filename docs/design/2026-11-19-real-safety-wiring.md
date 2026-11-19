@@ -27,7 +27,8 @@
 |---|---|---|
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
 | 5b | 4 | **수렴**(19판, Codex 9 회차) |
-| 5c-1 | 5 | **검토 중**(21판) — 머지는 11-20 보드 확인 뒤 |
+| 5c-1 | 5 | **검토 중**(22판) — 머지는 11-20 보드 확인 뒤 |
+| 5c-1b | 5 끝 | 실차 콘솔 조작 화면(등록·시작 확인·확인 답·복구 완료·우회 단추), 5c-2 보다 먼저(총괄: S10 전에 현장에서 우회를 누를 수 있어야 함) |
 | 5c-2 | 6 | **미수렴 — 5c-2 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
@@ -155,7 +156,7 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 
 ## 5. 콘솔 (5c-1)
 
-> **5c-1 검토 중**(21판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19: 5c 를 5c-1 = 5 절, 5c-2 = 6 절로 나눔). 중재기·`validate` 는 텔레옵 브리지의 import 경로라 **머지는 11-20 보드 확인 뒤**(총괄).
+> **5c-1 검토 중**(22판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19: 5c 를 5c-1 = 5 절, 5c-2 = 6 절로 나눔). 중재기·`validate` 는 텔레옵 브리지의 import 경로라 **머지는 11-20 보드 확인 뒤**(총괄).
 
 4b·4c 에서 lease·STOP·DISARM·재무장 정책은 끝났다. 실차에서 콘솔로 끝까지 가려면 요청이 더 있어야 한다(적대 1 회차 P2-3, 2 회차 P2-5).
 
@@ -163,21 +164,21 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 - `ArbiterConfig.real_requests: bool = False`. `False` 면 지금과 **같다**: 새 요청 이름은 신뢰 요청(`RELIABLE`)이 아니라 지금처럼 응답 없이 끝나고, `recovery` 는 지금처럼 `unsupported` 다(2 회차 P3).
 - `True`(실차 설정만): `REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass")` 를 신뢰·lease 요청으로 다루고(세션·lease·제어 세대 검사, 요청 저장·원장, `session_ending` 등 기존 순서 그대로), 처리기는 `Arbiter.real_request(kind, msg, now)` 콜백(루프가 설정)을 불러 그 답 `(사유 | None, 필드)` 를 ack/reject 로 돌려준다. `recovery` 도 같은 콜백으로 간다(5c-1 은 `action: "done"` 만). 콜백이 없으면 `unsupported`.
 - **공유 `validate.problem` 은 바꾸지 않는다**(1 차 P2-1: 채널이 중재기 전에 검증해 기본값의 응답이 바뀜). 새 요청의 필드 검사는 중재기의 실차 처리기 안에서만(`real_requests` 켬일 때, 세대 검사 뒤): `pallet_register` = `pallet_id` 비지 않은 문자열·`pose` 유한한 수 셋; `operator_answer` = `kind` 문자열·`serial` 정수(불리언 아님)·`verdict ∈ {confirm, reject}`; `recovery` = `recovery_id` 정수·`action == "done"`; `check_bypass` = `check` 문자열·`on` 불리언. 아니면 `invalid`.
-- **연결 토큰 원장 필수**(1 차 P2-2): `real_requests` 켬에서 `REAL_LEASED` 와 `recovery` 는 `request_token` 이 없으면 `token_required` 로 거절한다(저장 안 함) — 원장(연결 토큰·요청 번호)을 거쳐서만 실행된다. 기존 요청은 지금 규칙 그대로.
+- **연결 토큰 원장 필수**(1 차 P2-2): `real_requests` 켬에서 `REAL_LEASED` 와 `recovery` 는 `request_token` 이 없으면 `token_required` 로 거절한다(저장 안 함) — 원장(연결 토큰·요청 번호)을 거쳐서만 실행된다. 기존 요청은 지금 규칙 그대로. 원장 정리(`purge`)는 `request_tokens` 나 `real_requests` 가 켜져 있으면 주기마다 한다(2 차 P2-4). 필드 검사에서 부동소수로 못 바꾸는 큰 정수는 `invalid`(2 차 P3-2).
 
 **루프의 처리**(`RealLoop._real_request`, 콘솔 주기 안 — 4c 루프 스레드, 틱 머리):
 
 | 요청 | 처리 | 거절 사유 |
 |---|---|---|
 | `pallet_register{pallet_id, pose}` | `register_pallet` → ack 에 새 `targets_revision` | 진행 중 미션(`accepted`…`resuming`·`held`) `mission_active`; 등록 목록에 없는 ID `unknown_pallet`(1 차 P3-2) |
-| `operator_start{session_epoch}` | `OperatorStart.confirm(epoch, 지금 lease)` | 세션 다름 `stale_session`; 무장 중(허가가 OFF·LATCHED 아님) `armed`; 정지 아님 `not_still` |
+| `operator_start{session_epoch}` | `OperatorStart.confirm(epoch, 지금 lease)` | 세션 다름은 원장의 `stale_epoch`(2 차 P3-1); 무장 중(허가가 OFF·LATCHED 아님) `armed`; 정지 아님 `not_still` |
 | `operator_answer{kind, serial, verdict}` | 루프가 `(serial, verdict)` 를 답 상자에 둔다 → 코어 운용자 훅(`operator_check`)이 다음 판정에서 읽고, 지금 요청의 `kind`·`serial` 이 맞을 때만 쓴다(코어 규칙 그대로). ack 는 **접수**다(코어 반영은 `real_status` 로 보임). 한 `serial` 에는 **첫 답만** 받는다(1 차 P2-3) | 열린 확인 요청 없음 `no_operator_request`; `kind`·`serial` 다름 `stale_operator_request`; 그 `serial` 에 이미 답함 `already_answered` |
 | `recovery{recovery_id, action:"done"}` | `core.field_recovery_done(t, id, disarmed=허가.disarm_confirmed(now), outstanding=포트 outstanding ≠ settled)` → 받아들이면 재위치 세대가 열림(이후는 5c-2) | 코어의 거절 사유 그대로(`no_open_recovery`·`stale_recovery`·`mission_active`·`not_disarmed`·`commands_outstanding`) |
 
 | `check_bypass{check, on}` | 아래 **검사 우회**: 우회 집합에 넣거나 뺀다, 기록 | 우회할 수 없는 검사 `not_bypassable`; 모르는 이름 `unknown_check`; 무장 중(허가가 OFF·LATCHED 아님) `armed`(1 차 P1) |
 
-- `AutoPermit.disarm_confirmed(now_ns)`: 기다리는 DISARM 일화가 없고, **호스트 큐와 전송기의 반쯤 쓴 프레임에 DISARM 이 없으며**(앵커 DISARM 포함, 1 차 P2-4), 가장 새로 **다 쓴** DISARM 의 seq 를 담은 **같은 부팅의 신선한** DISARMED 상태가 있음(적대 P1-6: `disarm_unconfirmed` 플래그는 시한 전까지 거짓이라 쓰지 않음).
-- 운용자 시작 확인의 무효화 호출점(1 차 P2-5; 4c 에는 없었음): 틱 머리에서 정지가 끊기면 `void("moved")`, 장치 연결이 끊기면 `void("link_lost")`, lease 가 바뀌면 `ok()` 가 lease 로 거름, `recovery` 가 받아들여지면 `void("field_recovery")`. `operator_start` 를 우회하면 제출 판정과 채택 준비의 `take()` 가 **둘 다** 건너뛴다. 같은 콘솔 묶음의 시작 확인과 제출은 제출이 그 틱 머리에 계산한 거절로 판정되어 **보수적으로 거절**된다(운용자가 다시 제출; 제출 판정의 순서는 공유 명령 코드라 바꾸지 않음).
+- `AutoPermit.disarm_confirmed(now_ns)`: 기다리는 DISARM 일화가 없고, **호스트 큐와 전송기의 반쯤 쓴 프레임에 DISARM 이 없으며**(앵커 DISARM 포함, 1 차 P2-4) **받아들였지만 아직 처리 전인 콘솔 DISARM 도 없으며**(같은 묶음의 `disarm` 뒤 `recovery`, 2 차 P2-1), 가장 새로 **다 쓴** DISARM 의 seq 를 담은 **같은 부팅의 신선한** DISARMED 상태가 있음(적대 P1-6: `disarm_unconfirmed` 플래그는 시한 전까지 거짓이라 쓰지 않음).
+- 운용자 시작 확인의 무효화 호출점(1 차 P2-5; 4c 에는 없었음): 틱 머리에서 정지가 끊기면 `void("moved")`, 장치 연결이 끊기면 `void("link_lost")`, lease 가 바뀌면 `ok()` 가 lease 로 거름, `recovery` 가 받아들여지면 `void("field_recovery")`. `operator_start` 를 우회하면 제출 판정과 채택 준비의 `take()` 가 **둘 다** 건너뛴다. `operator_start` 우회를 켜거나 끄면 남아 있는 확인을 `void("bypass_changed")` 로 버린다(2 차 P2-2: 우회 중 남은 확인이 우회를 끈 뒤 다른 제출에 쓰이지 않음). 같은 콘솔 묶음의 시작 확인과 제출은 제출이 그 틱 머리에 계산한 거절로 판정되어 **보수적으로 거절**된다(운용자가 다시 제출; 제출 판정의 순서는 공유 명령 코드라 바꾸지 않음).
 - 코어의 열린 확인 요청은 읽기 전용 접근자 `MissionCore.operator_open()`(종류·일련번호·단계, 없으면 None)로 읽는다 — 코어의 판정·상태는 바꾸지 않는다.
 
 **검사 우회**(사용자 지시 2026-11-19, 총괄 전달: "실제 상황에서는 유동적으로 조절할 일 많을테니까 너무 고정적으로 작동하게 설계하지는 마 … imu체크 부분을 잠깐 내려두고 구동 가능하게"): 실차 검사는 조건이 안 맞을 때 운용자가 콘솔에서 **그 검사를 잠깐 내려 두고** 진행할 수 있다. 검사마다 **켬/우회** 둘뿐이다(학교 규모).
@@ -185,7 +186,7 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 - 우회된 검사는 그 판정을 **통과로 본다**(거부·대기·① 모두 내지 않음). 우회를 켜도 이미 걸린 래치는 그대로이고, 풀려면 재무장(우회할 수 없음)이 필요하다.
 - **켜고 끄기는 무장하지 않았을 때만**(허가 OFF·LATCHED, 1 차 P1): 무장 중 전환은 `armed` 로 거절한다 — IMU 를 우회한 채 기준 없이 무장한 차가 주행 중 `imu` 를 다시 켜도 감시가 생기지 않는 빈틈을 막는다. 다시 켠 검사는 다음 정상 ARM 에서 기준부터 다시 얻는다.
 - 세션: 우회 집합은 그 세션의 `session_epoch` 에 묶인다 — 같은 세션의 재접속에서는 유지되고, 세션 종료 요청(`session_end`)이 받아들여지거나 새 세션이면 비운다(1 차 P3-1).
-- **적용점**(1 차 P2-6·P2-7): 우회는 그 사유가 나는 모든 곳에서 같은 규칙으로 건너뛴다 — `imu` 는 ARM 전 기준 관문·틱 머리 판정·첫 바이트 판정(`ImuWatch` 를 무장하지 않음); `layer_timing` 은 층에 `timing_bypassed` 를 켜 watchdog 의 `layer_overdue`·`layer_latency_exceeded`·`limit()` 의 `scan_stale` 과 overdue·`ok()` 의 스캔 나이·준비 판정 `snapshot:scan_stale`·ARM 대기·첫 바이트 판정을 모두 건너뛰되 `layer_worker_dead`·`scan_source_lost`·허가 판정(장애물 속도 제한)은 그대로; 준비 판정 항목은 `auto_ready_refusal(..., bypass=)` 가 그 범주만 건너뜀(틱 머리·채택 전·ARM 대기·첫 바이트 모두 같은 함수); `watch_current`·`watch_wheel` 은 `SafetyWatch.step(..., skip=)`(기본 빈 집합 — 텔레옵 브리지 불변)이 그 판정을 하지 않아 다른 쪽 판정의 지속을 지우지 않음.
+- **적용점**(1 차 P2-6·P2-7): 우회는 그 사유가 나는 모든 곳에서 같은 규칙으로 건너뛴다 — `imu` 는 ARM 전 기준 관문·틱 머리 판정·첫 바이트 판정(`ImuWatch` 를 무장하지 않음); `layer_timing` 은 층에 `timing_bypassed` 를 켜 watchdog 의 `layer_overdue`·`layer_latency_exceeded`·`limit()` 의 `scan_stale` 과 overdue·`ok()` 의 스캔 나이·준비 판정 `snapshot:scan_stale`·ARM 대기·첫 바이트 판정을 모두 건너뛰되 `layer_worker_dead`·`scan_source_lost`·허가 판정(장애물 속도 제한)은 그대로; 준비 판정 항목은 `auto_ready_refusal(..., bypass=)` 가 그 범주만 건너뜀(틱 머리·채택 전·ARM 대기·첫 바이트 모두 같은 함수); `snapshot` 우회는 **보정 세대만 다른** 설치 대기만 건너뛴다 — 층의 `installing(ignore_correction=True)` 는 설치 결과 열쇠가 보정 세대를 뺀 나머지(면제 일련번호·미션·경로·적재)에서 지금 열쇠와 같으면 거짓이고, ARM 대기·첫 바이트·`limit()` 이 같은 판정을 쓴다(2 차 P2-3: 경로·면제가 바뀐 대기는 그대로); `watch_current`·`watch_wheel` 은 `SafetyWatch.step(..., skip=)`(기본 빈 집합 — 텔레옵 브리지 불변)이 그 판정을 하지 않아 다른 쪽 판정의 지속을 지우지 않음.
 
 | 검사 이름 | 우회 시 건너뛰는 판정 |
 |---|---|
@@ -209,7 +210,7 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 | 층 작업자 죽음(`layer_worker_dead`)·`obstacle_layer_off` | 층을 쓰지 않으려면 `obstacle_act` 를 끄는 별도 결정(조립)이 필요 |
 | 과속(`overspeed`)·느린 루프(`loop_slow`)·오도메트리 단절의 무장 중 ① | 지금 차가 통제 밖 |
 
-**실차 상태 발행**(4c 루프는 아직 상태 메시지를 내지 않는다): 루프가 `link.state_due(now)` 마다 채널에 `{"t": "real_status", "session_epoch", "control_gen", ...}` 를 낸다 — 허가 상태·사유, 미션 상태·ID, 열린 운용자 확인(`kind`·`serial`·`phase`), 열린 현장 복구 ID, 열린 재위치 세대, 운용자 시작 확인 유무, `targets_revision`, 마지막 거절(요청 종류·사유), `bypassed`(우회 중인 검사). `safety/state.py`(텔레옵·Isaac 의 `state`)는 바꾸지 않는다. **콘솔**(1 차 P2-8): `console/web/js/protocol.js` 가 `real_status` 를 받아 같은 세션이면 제어 세대를 갱신하고 마지막 값을 둔다; 화면은 `bypassed` 가 비어 있지 않으면 '우회 중: <검사…>' 띠를 늘 보이고, 우회 패널(검사마다 켬/우회 단추 → `check_bypass`)과 운용자 확인 단추(→ `operator_answer`)를 둔다. 표시 문자열은 작은 순수 함수 모듈(`realstatus.js`)로 두고 Node 로 시험한다.
+**실차 상태 발행**(4c 루프는 아직 상태 메시지를 내지 않는다): 루프가 `link.state_due(now)` 마다 채널에 `{"t": "real_status", "session_epoch", "control_gen", ...}` 를 낸다 — 허가 상태·사유, 미션 상태·ID, 열린 운용자 확인(`kind`·`serial`·`phase`), 열린 현장 복구 ID, 열린 재위치 세대, 운용자 시작 확인 유무, `targets_revision`, 마지막 거절(요청 종류·사유), `bypassed`(우회 중인 검사). `safety/state.py`(텔레옵·Isaac 의 `state`)는 바꾸지 않는다. **콘솔**(1 차 P2-8; 범위 총괄 승인 2026-11-19): 5c-1 은 `console/web/js/protocol.js` 가 `real_status` 를 받아 같은 세션이면 제어 세대와 **lease 보유자**를 갱신하고 마지막 값을 두며, 화면은 `bypassed` 가 비어 있지 않으면 '우회 중: <검사…>' 띠를 늘 보이는 데까지다(표시 문자열은 순수 함수 모듈 `realstatus.js`, Node 시험). 실차 조작 화면(팔레트 등록 뒤 `targets` 갱신과 그 revision 으로 제출, `real_status` 만 받는 실차의 제출 가능 판정, 시작 확인·복구 완료 단추, 우회 패널, 운용자 확인 단추를 화면에 표시한 `(session_epoch, kind, serial)` 에 묶기, lease 반납 → 같은 연결 재획득)은 **5c-1b**(2 차 P2-5·P2-6·P2-7).
 
 **통합 시험**(4c 가짜 트럭 확장, `operator_start_ok`·가짜 운용자 훅 주입 대신 실제 요청): lease → `pallet_register` → `operator_start` → 제출 → 채택·무장 → AUTO → 운반 높이 → `real_status` 의 확인 요청 → `operator_answer` → S10 정지; 각 거절 사유; IMU 기준이 없는(수평 아님) 차가 `check_bypass{imu}` 뒤 출발해 S10 까지, `real_status.bypassed` 표시, 새 세션에서 우회가 사라짐; 우회할 수 없는 이름의 거절; `real_requests=False` 에서 새 이름은 응답 없음·`recovery` 는 `unsupported`(중재기 기존 시험 불변).
 
@@ -302,6 +303,7 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 - Codex 적대 8 회차(8판, 5a 만): P1 없음, P2 3(채택과 오차표의 같은 v_scan, 도착하지 않은 스캔의 마감, D5 면제의 설치 주체), P3 1(마감 해소는 스캔 ID 로). 9판에 반영.
 - Codex 적대 9 회차(9판, 5a 만): P1 없음, P2 1(지난 예상 마감은 결과 설치까지 유지), P3 1(마감 초과 뒤 해소 시험). 10판에 반영.
 - Codex 5a 구현 검토 1–8 회차(같은 스레드, `fb356eef` … `27a3726a`): 1 회차 P1 4·P2 7, 2 회차 P1 3·P2 5, 3 회차 P1 1·P2 3, 4 회차 P1 1·P2 3, 5 회차 P1 1·P2 2, 6 회차 P2 2, 7 회차 P2 1, 8 회차 새 P1/P2 없음. 구현에서 정한 것: 첫 바이트가 층 watchdog·`obstacle_act`·층 동일성을 다시 읽음; 늦은 수신은 지난 예상 마감을 지우지 않고 첫 사용 지연은 마지막 빔 + B 로 스캔마다 한 번; watchdog 끝은 설치 전에 읽고 래치 때까지 고정; 같은 부팅 단절마다 재위치 세대 하나(빈 틱은 단절을 풀지 않음), 재부팅 뒤 세션 확인·지연 기준 재시작; 스캔 이동 판정은 엔코더 상한(가속 dt/2 + 양자화)으로 첫 빔 − dt 부터; 경로 검사는 작업자에서, 경로 길이로 차감; 계획 열쇠에 팔레트 자세; ARM 전(채택 뒤 포함) 어떤 래치든 미션 종료, ARMING 중 고장도 래치; 원천의 명시적 단절은 즉시 끝이고 다시 연결될 때까지 층 미준비; 거리 오차 모형은 YAML(`a2_spec`)을 따르고 계획 분리는 반사마다 자기 거리 오차만큼 키움(`suppress` 여섯째 원소, 기본 호출은 바이트 불변).
+- Codex 5c-1 2 회차(21판): P1 없음, P2 7(같은 묶음 콘솔 DISARM 처리 전 복구 완료, `operator_start` 우회 중 남은 확인, `snapshot` 우회와 `installing()`, 원장 정리 꺼짐, 브라우저 등록 뒤 revision·lease 동기화·확인 단추 묶기), P3 2(`stale_epoch`, 큰 정수 좌표). 22판: 서버 쪽 반영, 브라우저 3 건은 5c-1b(총괄 분할 승인). 같은 묶음 시작 확인+제출의 보수적 거절은 Codex 동의.
 - Codex 5c-1 1 회차(20판, 5 절만): P1 1(무장 중 IMU 우회 해제가 기준 없는 감시를 남김), P2 8(공유 validate 기본값 변경, 토큰 원장 필수 아님, 같은 확인에 두 답, 앵커 DISARM 대기 중 복구 완료, 시작 확인과 제출의 시점·무효화 호출점, 전류 우회가 바퀴를 가림, 층 우회 적용점, 콘솔이 `real_status` 를 안 봄), P3 2(세션 종료의 우회 폐기, 미등록 ID). 21판에 반영. 같은 묶음의 시작 확인+제출은 보수적 거절로 둠(공유 명령 코드 불변).
 - Codex 5b 9 회차(19판 + 구현): **새 P1/P2 없음**(수렴). P3 1(다른 IMU 숫자 설정의 큰 정수) 반영.
 - Codex 5b 8 회차(18판 + 구현): P1 없음, P2 1(READY 경계가 조회 순서로 갈림), P3 1(`level_ref` 큰 정수). 19판에 반영: 경계는 취득 시각(`settled(경계)`), 큰 정수 거부.
