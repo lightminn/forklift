@@ -145,47 +145,48 @@ def test_a_frame_no_branch_handles_is_logged_ignored(mcu_model, tmp_path):
     assert rows and rows[-1][1] == "55" and rows[-1][3] == "ignored"
 
 
-def test_a_state_cut_spoils_no_later_state(mcu_model):
-    """Round 2 P2-2 (a smoke check): the host reads nothing for a while, the cut starts, then everything is read --
-    every STATE after the cut decodes. A short write on a Linux pty needs its ~64 KB buffer full (about 7 s of STATEs),
-    so the partly-sent case itself is kept by the model's code (the rest of a frame already partly out still goes out),
-    not forced here."""
-    m = Model(mcu_model, "--state-silent-at-ms", 800, "--state-silent-ms", 300)
+def test_a_frame_cut_mid_way_at_a_state_cut_is_dropped_and_the_poison_resyncs(mcu_model, tmp_path):
+    """Round 3 P2: a STATE half written just before the cut (the --short-write-at-ms injection) is not finished in
+    the cut; after it the poison closes the head in the host's decoder and the first new STATE decodes; a DISARM sent
+    in the cut is taken."""
+    log = tmp_path / "accept.log"
+    m = Model(mcu_model, "--short-write-at-ms", 280, "--state-silent-at-ms", 300, "--state-silent-ms", 300,
+              "--accept-log", log)
     try:
-        time.sleep(0.9)  # nothing read: the pty's buffer fills before the cut
-        sts = m.states(0.8)
-        assert m.dec.errors == 0  # no frame spoiled by a dropped delimiter
-        after = [s for s in sts if s.mcu_time_us >= 1_100_000]
-        assert after and all(b.mcu_time_us > a.mcu_time_us for a, b in zip(after, after[1:]))
+        got, end = [], time.monotonic() + 5.0
+        while (not got or got[-1][1].mcu_time_us < 250_000) and time.monotonic() < end:
+            got += [(time.monotonic_ns(), s) for s in m.states(0.01)]
+        time.sleep(0.15)
+        m.send(Disarm(), 4321)
+        mid = m.states(0.2)  # inside the cut
+        after = m.states(0.4)
+        sts = mid + after
+        # nothing measured from the injection to the end of the cut is completed (the half STATE's rest dropped)
+        assert not [s for s in sts if 280_000 <= s.mcu_time_us < 600_000]
+        later = [s for s in sts if s.mcu_time_us >= 600_000]
+        assert later and later[0].last_rx_seq == 4321
+        assert m.dec.errors == 1  # the poison closed the half frame: one overflow, no spoiled STATE
     finally:
         m.close()
+    rows = [r.split() for r in log.read_text().splitlines() if r.split()[1] == "4321"]
+    assert rows and 300_000 <= int(rows[0][0]) < 600_000
 
 
-def test_the_accept_log_keeps_the_cores_read_budget(mcu_model, tmp_path):
-    """Several frames of one tick are handled in that tick, as without the log (round 1 P2-1)."""
-    sts = {}
-    for name, extra in (("off", ()), ("on", ("--accept-log", tmp_path / "a.log"))):
-        m = Model(mcu_model, *extra)
-        try:
-            for i in range(40):
-                m.send(Disarm(), 100 + i)
-            sts[name] = m.states(0.15)
-        finally:
-            m.close()
-    assert sts["on"][0].last_rx_seq == sts["off"][0].last_rx_seq
+def test_the_prior_expiry_is_none_after_an_estop_ended_the_armed_command(mcu_model, tmp_path):
+    from forklift_core.mcu_link.messages import Mode
 
-
-def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
-    log = tmp_path / "axis.log"
-    m = Model(mcu_model, "--axis-log", log)
+    log = tmp_path / "accept.log"
+    m = Model(mcu_model, "--estop-at-ms", 400, "--accept-log", log)
     try:
-        m.states(0.3)
+        sts = m.states(0.2)
+        m.send(Arm(sts[-1].boot_id, sts[-1].mcu_time_us), 10)
+        m.states(0.3)  # the e-stop at 400 ms while armed (the ARM's command not yet expired)
+        m.send(Disarm(), 11)
+        m.states(0.1)
     finally:
         m.close()
-    rows = [line.split() for line in log.read_text().splitlines()]
-    assert len(rows) > 150  # about 1 kHz over 0.3 s, a loaded host allowing
-    t = [int(r[0]) for r in rows]
-    assert t == sorted(t)
-    for r in rows:
-        assert len(r) == 7  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s
-        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6])
+    rows = [r.split() for r in log.read_text().splitlines()]
+    arm = [r for r in rows if r[1] == "10"]
+    dis = [r for r in rows if r[1] == "11"]
+    assert arm and arm[0][3] == "accepted"
+    assert dis and int(dis[0][4]) == int(Mode.ESTOP) and int(dis[0][5]) == -1

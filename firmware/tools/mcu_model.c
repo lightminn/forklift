@@ -29,7 +29,10 @@
    handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken; STATEs queued before it are
    dropped, none goes out in it). --accept-log PATH: each frame the core handled (the core's own frame_handled hook,
    at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us"
-   (verdict "accepted", "rejected:<reason>" or "handled" for CLEAR_FAULTS; expiry -1 when none). --axis-log PATH:
+   (verdict "accepted", "rejected:<reason>", "handled" for CLEAR_FAULTS, "ignored"; expiry -1 when none). A frame
+   cut mid-way at a STATE cut is dropped and the poison (0x01 x 96, 0x00) goes before the first STATE after it.
+   --short-write-at-ms N (a test injection): from N the next write sends 10 bytes, then EAGAIN until a STATE cut.
+   --axis-log PATH:
    each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
@@ -64,6 +67,9 @@ typedef struct {
     FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
     bool was_state_silent;
     bool tx_mid; /* the last flush stopped inside a frame (its delimiter not yet out) */
+    bool resync_after_cut; /* a frame was cut mid-way at a STATE cut: the poison goes first when it ends */
+    long short_write_at_ms; /* test injection (see --short-write-at-ms) */
+    bool short_written;
 } board;
 
 static board B;
@@ -152,12 +158,24 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
 static void flush_tx(void)
 {
     while (B.tx_len > 0) {
-        ssize_t n = write(B.fd, B.tx, B.tx_len);
+        size_t want = B.tx_len;
+        if (B.short_write_at_ms >= 0 && elapsed_ms() >= B.short_write_at_ms) {
+            /* --short-write-at-ms (a test injection): 10 bytes once, then EAGAIN until a STATE cut starts */
+            if (B.short_written) {
+                return;
+            }
+            want = want < 10 ? want : 10;
+            B.short_written = true;
+        }
+        ssize_t n = write(B.fd, B.tx, want);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
             }
             return; /* EAGAIN or a closed peer: keep the bytes, try next tick */
+        }
+        if (n == 0) {
+            return; /* no progress: the buffer and tx_mid stay as they are */
         }
         B.tx_mid = B.tx[n - 1] != 0;
         memmove(B.tx, B.tx + n, B.tx_len - (size_t)n);
@@ -393,6 +411,7 @@ int main(int argc, char **argv)
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
     bool hil_plant = arg_long(argc, argv, "--hil-plant", 0) != 0;
     B.state_silent_at_ms = arg_long(argc, argv, "--state-silent-at-ms", -1);
+    B.short_write_at_ms = arg_long(argc, argv, "--short-write-at-ms", -1);
     B.state_silent_ms = arg_long(argc, argv, "--state-silent-ms", 0);
     const char *accept_path = arg_str(argc, argv, "--accept-log");
     const char *axis_path = arg_str(argc, argv, "--axis-log");
@@ -446,20 +465,26 @@ int main(int argc, char **argv)
         }
         bool ss = state_silent();
         if (ss && !B.was_state_silent) {
-            /* 6a: the STATEs queued before the cut are dropped, not sent late in it -- except the rest of a frame
-               already partly out (impl round 2 P2-2: its head is in the host's decoder; dropping its delimiter would
-               spoil the first STATE after the cut), which still goes out */
-            size_t keep = 0;
-            if (B.tx_mid) {
-                while (keep < B.tx_len && B.tx[keep] != 0) {
-                    keep++;
-                }
-                keep = keep < B.tx_len ? keep + 1 : B.tx_len;
+            /* 6a: every STATE queued before the cut is dropped -- a frame already partly out too (impl round 3 P2: its
+               rest sent in the cut would refresh the host on a STATE measured before it); its head left in the host's
+               decoder is closed by the poison (design 3) before the first STATE after the cut */
+            B.resync_after_cut = B.tx_mid;
+            B.tx_len = 0;
+            B.tx_mid = false;
+            B.short_write_at_ms = -1; /* the injection ends with the cut */
+        }
+        if (!ss && B.was_state_silent && B.resync_after_cut) {
+            static const size_t POISON_LEN = 97u;
+            if (B.tx_len + POISON_LEN <= TX_CAP) {
+                memmove(B.tx + POISON_LEN, B.tx, B.tx_len);
+                memset(B.tx, 0x01, POISON_LEN - 1u);
+                B.tx[POISON_LEN - 1u] = 0x00;
+                B.tx_len += POISON_LEN;
             }
-            B.tx_len = keep;
+            B.resync_after_cut = false;
         }
         B.was_state_silent = ss;
-        if (!silent() && (!ss || B.tx_mid)) {
+        if (!silent() && !ss) {
             flush_tx();
         }
     }
