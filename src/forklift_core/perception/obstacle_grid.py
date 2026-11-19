@@ -467,7 +467,12 @@ class ObstacleGrid:
         changed("grid_snapshot.correction", tuple(float(v) for v in a[1])), min(r.scans_used, 4),
         bool((r.state == FREE).any())))
     @dual("grid_snapshot")
-    def snapshot(self, now_s: float, map_from_odom, correction_version: int = 0) -> GridSnapshot:
+    def snapshot(self, now_s: float, map_from_odom, correction_version: int = 0, *, suppress=None) -> GridSnapshot:
+        """``suppress`` (real safety wiring design 2, the real truck's planning grid only): map-frame rectangles
+        ``(cx, cy, yaw, half_length, half_width)``, or with a sixth element True, grown for each hit by that hit's
+        own range bound (``sensor_bound_at`` of its range: where the grid places it); a normal finite hit whose end
+        point lies in one does not mark (clearing, the bounds and the near sector are as always). None: the
+        snapshot as before."""
         cfg = self.config
         self.prune(now_s)
         nx, ny = cfg.shape
@@ -494,7 +499,7 @@ class ObstacleGrid:
             if age <= cfg.free_max_age_s:
                 fresh.append((scan, age, geo))
                 continue
-            marks = self._marks(scan, age, geo)
+            marks = self._marks(scan, age, geo, suppress)
             if marks is not None:
                 old_x.append(marks[0]), old_y.append(marks[1]), old_r.append(marks[2])
         if old_x:
@@ -515,7 +520,7 @@ class ObstacleGrid:
             if clearing:
                 self._clear_group(clearing, state, free_stamp)
             for scan, age, geo in group:
-                marks = self._marks(scan, age, geo)
+                marks = self._marks(scan, age, geo, suppress)
                 if marks is not None:
                     self._mark_disks(state, *marks)
                     free_stamp[state == OCCUPIED] = np.nan
@@ -571,8 +576,8 @@ class ObstacleGrid:
         limit = np.asarray(scan.limit_m, dtype=float) if scan.limit_m is not None else np.full(len(ranges), np.inf)
         return rear_map, laser, ranges, np.cos(angles), np.sin(angles), usable, limit
 
-    def _marks(self, scan, age, geo):
-        """(x, y, radius) of every OCCUPIED disk this scan places, or None."""
+    def _marks(self, scan, age, geo, suppress=None):
+        """(x, y, radius) of every OCCUPIED disk this scan places, or None. ``suppress``: see ``snapshot``."""
         cfg = self.config
         rear_map, laser, ranges, cos_a, sin_a, usable, limit = geo
         r_occ = self.radius_m(age, 0.0)
@@ -584,6 +589,16 @@ class ObstacleGrid:
             usable & np.isfinite(ranges) & (ranges >= cfg.range_min_m) & (ranges <= cfg.max_mark_m)
             & (ranges <= limit)
         )
+        if suppress:
+            hx = laser[0] + np.where(hit, ranges, 0.0) * cos_a
+            hy = laser[1] + np.where(hit, ranges, 0.0) * sin_a
+            for entry in suppress:
+                cx, cy, yaw, half_l, half_w = entry[:5]
+                grow = cfg.sensor_bound_at(np.where(hit, ranges, 0.0)) if len(entry) > 5 and entry[5] else 0.0
+                c, s_ = cos(yaw), sin(yaw)
+                along = (hx - cx) * c + (hy - cy) * s_
+                across = -(hx - cx) * s_ + (hy - cy) * c
+                hit = hit & ~((np.abs(along) <= half_l + grow) & (np.abs(across) <= half_w + grow))
         if hit.any():
             px = laser[0] + ranges[hit] * cos_a[hit]
             py = laser[1] + ranges[hit] * sin_a[hit]

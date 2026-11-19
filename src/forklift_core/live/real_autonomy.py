@@ -98,6 +98,14 @@ class AutoPermit:
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
 
+    def restart_session(self, now_ns: int) -> None:
+        """An MCU reboot under this executor (real safety wiring 5a, Codex impl round 2 P2-4): the new boot's session
+        check from the start -- no ARM until it passes; the caller restarts the delay bound's check with it."""
+        if self.state not in (OFF, LATCHED):
+            raise RuntimeError(f"restart_session in {self.state}")
+        self.session_started = False
+        self.start_session(now_ns)
+
     # --- arming ---------------------------------------------------------------------------------------------------
     def adopted(self, now_ns: int, *, pre_arm_refusal: str | None) -> bool:
         """The core adopted the submitted mission's plan and the caller checked the lease and generation again: the
@@ -223,6 +231,28 @@ class AutoPermit:
         """The sender dropped a frame before its first byte: S10's stop frame among them DISARMs at once."""
         if self.state == STOP_PENDING and self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
             self._disarm(now_ns, "control_stop_discarded")
+
+    def session_pair(self):
+        """The session check's two DISARM seqs once the second is written (the delay bound's expected step), or None."""
+        sess = self._session
+        if sess is None or sess.get("stage") != "second" or self._disarm_seq is None or self._disarm_written_ns is None:
+            return None
+        return int(sess["first"]), int(self._disarm_seq)
+
+    ANCHOR_DISARM_S = 1.0  # while off: a DISARM this often keeps the delay bound's anchors young (safety design 1.1)
+
+    def anchor_disarm(self, now_ns: int) -> bool:
+        """A DISARM for the delay bound's anchors (real safety wiring design 1.1): only with the session started, off or
+        latched, no DISARM episode awaited, and not during S10's stop confirmation; one per ANCHOR_DISARM_S. Not an
+        episode: no retry, no deadline (an answered or unanswered one changes no state). True when one was asked."""
+        if not self.session_started or self.state not in (OFF, LATCHED) or self._disarm_first_ns is not None:
+            return False
+        last = getattr(self, "_anchor_ns", None)
+        if last is not None and now_ns - last < int(self.ANCHOR_DISARM_S * 1e9):
+            return False
+        self._anchor_ns = int(now_ns)
+        self.host.request_disarm(now_ns)
+        return True
 
     def link_reset(self, now_ns: int) -> None:
         """The link was closed and reopened (a stuck write abandoned): an unanswered DISARM is asked again at once on
@@ -532,6 +562,8 @@ class SnapshotView:
     installing: bool = False  # a new result asked after a correction change, not yet installed
     installed_generation: int | None = None  # the correction generations (a release counts one): equal values of
     applied_generation: int | None = None  # two generations are two corrections
+    layer_wait: str | None = None  # the layer watchdog's wait ("layer_overdue"): a scan late within its end is a
+    # wait, not a stale-scan latch (Codex 5a impl P2-7); past the end the loop latches on the watchdog itself
 
 
 @dataclass(frozen=True)
@@ -596,10 +628,13 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
         if sl.hold_travel_m > HOLD_MAX_M:
             return "slam:hold_too_long"
     sn = ev.snapshot(now_ns)
-    if sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9:
+    layer_wait = getattr(sn, "layer_wait", None)
+    if (sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9) and layer_wait is None:
         return "snapshot:scan_stale"
     if stage == "submit" and not ev.operator_start_ok(now_ns):
         return "operator_start:unconfirmed"
+    if layer_wait is not None:
+        return f"wait:{layer_wait}"
     if sn.installing or sn.installed_correction is None \
             or tuple(sn.installed_correction) != tuple(sn.applied_correction) \
             or sn.installed_generation is None or sn.installed_generation != sn.applied_generation:

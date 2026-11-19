@@ -28,6 +28,7 @@ from forklift_core.mcu_link.messages import FaultFlag, Mode
 from forklift_core.mission.commands import FINAL
 from forklift_core.plant.bringup import Sample
 from forklift_core.plant.mcu_host import McuLinkHost
+from forklift_core.plant.real_vehicle import wheel_count_delta
 from forklift_core.safety.arbiter import Feedback
 from forklift_core.safety.truth_access import SafetySpeed
 
@@ -120,11 +121,17 @@ class RealSession:
         return entry
 
 
+# the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
+LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
+
+
 class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
-                 depth_source=None, watch=None, clock=None, operator_start=None) -> None:
+                 depth_source=None, watch=None, clock=None, operator_start=None, real_layer=None,
+                 delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
+                 kappa_max_inv_m: float = 0.0, pallet_size=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -136,6 +143,12 @@ class RealLoop:
         self.book = OutputBook()
         self.samples: deque = deque(maxlen=SAMPLES_KEPT)
         self.odom_pose = (0.0, 0.0, 0.0)
+        self.odom_travel = 0.0  # the raw odometry's path length (both directions), for the layer's verified distance
+        self._travel_ticked = 0.0  # the path length the layer was last told about
+        self._break_open = False  # a same-boot odometry break has asked its relocalization (once per break)
+        self._ever_continuous = False  # the start's own first reference is not a break of anything
+        self._odom_good = False  # the newest STATE did not break the odometry
+        self._resession = False  # a reboot seen: the session check runs again once the permit is off or latched
         self.odom_continuous = False
         self.speed = SafetySpeed(0.0, 0.0, (1, -1), valid=False)
         self.still_since_ns: int | None = None
@@ -154,6 +167,19 @@ class RealLoop:
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
         self.operator_start = operator_start  # the operator's physical check, one submit only (4b design 2, 13)
+        # 5a (docs/design/2026-11-19-real-safety-wiring.md 1-3): the real obstacle layer, the delay bound for the
+        # STATEs' measurement intervals, the raw odometry history the layer places scans on
+        self.real_layer = real_layer
+        if real_layer is not None:
+            real_layer.defer_submit = True  # placements at the tick head, the computation after this tick's track()
+        self.delay_bound = delay_bound
+        self.state_delay_s = float(state_delay_s)
+        self.v_scan_mps = (1.5 * float(max_speed_mps)) if v_scan_mps is None else float(v_scan_mps)
+        self.kappa_max = float(kappa_max_inv_m)
+        self.pallet_size = pallet_size  # (depth, width) of the S10-A pallet (s10a.yaml): the planning grid's split
+        self.odom_history: deque = deque(maxlen=256)  # (lo_s, hi_s, pose, continuous, included, speed_ok, yaw_ok)
+        self._layer_asked = None  # the last (mission gen, path id, loaded) a refresh was asked for
+        self._planning_gen = None  # the correction generation the planning request used (design 1.2, round 3 P2-3)
         self.watch = watch  # the real safety watch (the teleop leg's SafetyWatch); None: off (design 3)
         self._watch_rx: int | None = None
         # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
@@ -192,14 +218,157 @@ class RealLoop:
         step = self.odometry.update(int(state.mcu_time_us), int(state.boot_id), int(state.wheel_count_left),
                                     int(state.wheel_count_right), float(state.steering_rad),
                                     encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
+        before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
+        if step.integrated:
+            self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
+            self._odom_good = False
             self.still_since_ns = None
+        else:
+            self._odom_good = True
         self.book.on_state(state, int(rx_ns))
         self.permit.on_state(state, int(rx_ns))
+        if self.real_layer is not None:
+            self._odom_entry(state, int(rx_ns), step)
         if self.watch is not None and self._watch_trip is None:
             self._watch_trip = self._watch_state(state)
+
+    def _odom_entry(self, state, rx_ns: int, step) -> None:
+        """5a (design 1.1): the STATE's measurement interval ``[receipt - delay bound, receipt]`` (core seconds) with
+        its raw odometry pose; excluded (``included`` False) without a bound or with one over ``state_delay_s``; the
+        motion bounds the scan placement checks against ``v_scan``: each wheel's speed over the interval from the
+        previous STATE (MCU time) plus its error width -- the acceleration over half the interval and a count at each
+        end (``EncoderSpeedParams.error``), so the largest speed inside the interval, not its mean (Codex 5a impl
+        P1-4); the yaw rate from the wheel difference with both widths."""
+        sample = Sample(rx_ns, state)
+        b = None
+        if self.delay_bound is not None:
+            self.delay_bound.add(sample)
+            b = self.delay_bound.delay_s(sample)
+        hi = self._t(rx_ns)
+        included = b is not None and b <= self.state_delay_s
+        lo = hi - (self.state_delay_s if b is None else b)
+        pose = tuple(float(v) for v in step.pose)
+        speed_ok = yaw_ok = True
+        mcu_s = int(state.mcu_time_us) / 1e6
+        counts = (int(state.wheel_count_left), int(state.wheel_count_right))
+        prev = getattr(self, "_odom_prev", None)
+        self._odom_prev = (int(state.boot_id), mcu_s, counts)
+        if self.odom_history and prev is not None and prev[0] == int(state.boot_id):
+            dt = mcu_s - prev[1]  # the MCU's own interval between the two measurements
+            if dt <= 0.0:
+                speed_ok = yaw_ok = False
+            else:
+                p = self.params
+                v, e = [], []
+                for w in (0, 1):
+                    dc = wheel_count_delta(counts[w], prev[2][w])
+                    v.append(2.0 * math.pi * p.radius_m[w] * dc / (p.counts_per_rev[w] * dt))
+                    e.append(p.error(w, dt, 0.0))
+                if max(abs((v[0] + v[1]) / 2.0) + max(e), 0.0) > self.v_scan_mps + 1e-9:
+                    speed_ok = False
+                if (abs(v[1] - v[0]) + e[0] + e[1]) / p.track_m > self.v_scan_mps * max(self.kappa_max, 1e-9) + 1e-9:
+                    yaw_ok = False
+        self.odom_history.append((lo, hi, pose, not step.continuity_broken, included, speed_ok, yaw_ok))
+
+    def _layer_context(self):
+        core = self.core
+        tracker = core.trackers.get(core.ms.phase) if getattr(core, "trackers", None) else None
+        leg = getattr(tracker, "leg_index", 0) if tracker is not None else 0
+        leg = leg() if callable(leg) else leg
+        path_id = (core.ms.phase,) if tracker is None else (
+            core.ms.phase, (getattr(tracker, "_book", None) or {}).get("serial", id(tracker)), int(leg or 0))
+        return core.commands.mission_gen, path_id, bool(core.cargo.relation == "carrying")
+
+    def _layer_tick(self, t: float, rear) -> None:
+        """5a (design 1.2 (c)): the key's parts this tick; when they changed, a refresh with the current path; the
+        frozen pallet the planning grid suppresses."""
+        core, lay = self.core, self.real_layer
+        mission_gen, path_id, loaded = self._layer_context()
+        lay.context = (mission_gen, path_id)
+        tracker = core.trackers.get(core.ms.phase) if getattr(core, "trackers", None) else None
+        path, direction = None, 0
+        if tracker is not None and hasattr(tracker, "leg_ahead"):
+            poses, direction = tracker.leg_ahead()  # the gear leg's direction too (Codex 5a impl round 2 P2-5)
+            path, direction = np.asarray(poses, dtype=float), int(direction)
+        if (mission_gen, path_id, loaded) != self._layer_asked:
+            self._layer_asked = (mission_gen, path_id, loaded)
+            lay.refresh(t, core.obstacle["applied"], int(core.obstacle["version"]),
+                        current_pose=tuple(float(v) for v in rear), path_ahead=path, loaded=loaded,
+                        direction=direction)
+        else:
+            # the next scan's check from here, along what is left
+            lay.track(tuple(float(v) for v in rear), path, direction)
+        if self.frozen is not None:
+            depth, width = self.pallet_size
+            x, y, yaw = self.frozen.pose
+            # the registered pallet's half sizes: the worker grows them by the range bound of each stored scan's
+            # own sensor position (Codex 5a impl round 6 P2-1)
+            rect = (x, y, yaw, depth / 2, width / 2)
+            lay.planning_pallet = (rect, self._planning_key())
+        else:
+            lay.planning_pallet = None
+
+    def planning_occupancy(self):
+        """The assembly's planning-grid hook (design 1.2): the installed planning grid of the frozen pallet and the
+        applied correction generation, or ``planning_grid_not_ready`` (no grid-less plan)."""
+        from forklift_core.live.real_assembly import RealRequireFailed
+
+        grid = None if self.real_layer is None else self.real_layer.planning_grid(self._planning_key())
+        if grid is None:
+            raise RealRequireFailed("planning_grid_not_ready")
+        return grid
+
+    def _planning_ready(self) -> bool:
+        if self.real_layer is None:
+            return True
+        return self.real_layer.planning_grid(self._planning_key()) is not None
+
+    def _planning_key(self):
+        """The frozen pallet -- its id and its registered pose (a re-registration of the same id elsewhere is another
+        grid, Codex 5a impl P2-4) -- and the applied correction generation."""
+        if self.frozen is None:
+            return None
+        return (self.frozen.pallet_id, tuple(float(v) for v in self.frozen.pose), int(self.core.obstacle["version"]))
+
+    def _reset_layer(self, now_ns: int) -> None:
+        """A new grid, no installed or computing result (the worker's late answer is stale by its key) -- the odometry
+        the stored scans were placed on is gone."""
+        lay = self.real_layer
+        lay.grid = type(lay.grid)(lay.grid_config)
+        lay._installed = None  # noqa: SLF001 -- the layer's own reset
+        lay._unplaced.clear()  # noqa: SLF001 -- placed on the old odometry or not at all
+        lay.exempt_serial += 1
+        lay.last_scan_s.clear()
+        lay.last_beam_s.clear()
+        self.odom_history.clear()
+
+    def place_scan(self, first_s: float, last_s: float):
+        """The layer's placer (design 1.1, the teleop scan bridge's way): a continuous, included history whose
+        entries reach before the first beam and after the last, every entry in between within the motion bounds;
+        the bounds checked from the first beam less the timing uncertainty ``dt = 2 period + state_delay_s`` (the
+        age table's, Codex 5a impl P1-4); the pose interpolated at the first beam (entry interval midpoints), or
+        None."""
+        h = list(self.odom_history)
+        dt = 2.0 * float(self.real_layer.scan_period_s) + self.state_delay_s
+        before = [k for k, e in enumerate(h) if e[1] <= first_s]
+        early = [k for k, e in enumerate(h) if e[1] <= first_s - dt]
+        after = [k for k, e in enumerate(h) if e[0] >= last_s]
+        if not before or not early or not after:
+            return None
+        k0, k1, ke = before[-1], after[0], early[-1]
+        span = h[k0:k1 + 1]
+        if not all(e[3] and e[4] for e in h[ke:k1 + 1]) or not all(e[5] and e[6] for e in h[ke + 1:k1 + 1]):
+            return None  # a break, an excluded STATE or a motion over the bound inside the scan's window
+        mids = [((e[0] + e[1]) / 2, e[2]) for e in span]
+        for (ta, pa), (tb, pb) in zip(mids, mids[1:]):
+            if ta <= first_s <= tb:
+                a = 0.0 if tb <= ta else (first_s - ta) / (tb - ta)
+                dyaw = math.atan2(math.sin(pb[2] - pa[2]), math.cos(pb[2] - pa[2]))
+                return (pa[0] + a * (pb[0] - pa[0]), pa[1] + a * (pb[1] - pa[1]), pa[2] + a * dyaw)
+        return mids[0][1] if first_s < mids[0][0] else mids[-1][1]
 
     def _watch_state(self, st):
         """The safety watch on one STATE (design 3; Codex 4c impl round 2 P2-4: every STATE of a batch, on its own MCU
@@ -292,6 +461,7 @@ class RealLoop:
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
+            self._odometry_head(now_ns, t)  # the STATEs taken before the failure count (a break among them locks)
             host.tick(now_ns)
             self._bind_permit(now_ns)
             permit.tick(now_ns)
@@ -303,7 +473,9 @@ class RealLoop:
             self._disconnects = host.disconnects
             self.samples.clear()
             self._odom_broken = True
+            self._odom_good = False
             self.still_since_ns = None
+        self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
         stuck = self._cut_stuck_write(now_ns)
         if stuck:
             # the host's and the permit's ticks still run (its DISARM asked again on the new link, its deadline kept)
@@ -314,11 +486,6 @@ class RealLoop:
             rec.branch, rec.reason = "emergency", stuck
             self._emergency(now_ns, stuck)
             return
-        self.odom_continuous = bool(self.samples) and not self._odom_broken
-        if self._rebooted:
-            # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
-            self._rebooted = False
-            core.require_relocalization(t, "mcu_reboot")
         if self._odom_broken and permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
             rec.branch, rec.reason = "emergency", "odometry_break"  # S10-A does not drive across a broken odometry
             self._emergency(now_ns, "odometry_break")
@@ -385,6 +552,50 @@ class RealLoop:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
 
+    def _before_arm(self) -> bool:
+        """A mission the permit does not collect yet: accepted or preparing, or adopted and running with the permit
+        still off before its ARM (``AutoPermit`` collects from ``adopted()`` on)."""
+        cmds = self.core.commands
+        if cmds.status in ("accepted", "preparing"):
+            return True
+        return (cmds.status == "running" and self.permit.state == ra.OFF and self.adopted_for != cmds.mission_id)
+
+    def _odometry_head(self, now_ns: int, t: float) -> None:
+        """The odometry's part of the head, whatever follows: the continuity, the layer's reset on a break, the path
+        driven and the installs, and the relocalization lock of a reboot or a same-boot break."""
+        core = self.core
+        # continuous: no break this tick and a good STATE since the last one (an empty tick does not mend a break,
+        # Codex 5a impl round 3 P2-2)
+        self.odom_continuous = bool(self.samples) and not self._odom_broken and self._odom_good
+        if self.real_layer is not None:
+            if self._odom_broken:
+                self._reset_layer(now_ns)  # a same-boot break: the layer starts again (design 1.1, round 6 P1-3)
+            # the path driven since the last tick off the verified distance, then the installs (whose own travel
+            # since their request replaces it) -- Codex 5a impl P2-3
+            self.real_layer.advance(self.odom_travel - self._travel_ticked)
+            self._travel_ticked = self.odom_travel
+            self.real_layer.install_ready(self._t(now_ns), self.odom_travel)
+        if self._rebooted:
+            # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
+            self._rebooted = False
+            self._break_open = True
+            core.require_relocalization(t, "mcu_reboot")
+            if self.delay_bound is not None:
+                self._resession = True  # the new boot's session check and delay anchors (round 2 P2-4)
+        elif self._odom_broken and self._ever_continuous and not self._break_open:
+            # a same-boot break (a gap, an encoder cut, an invalid steering, a device loss): the motion meanwhile
+            # was not integrated, so the map pose is not trusted either (Codex 5a impl P1-3)
+            self._break_open = True
+            core.require_relocalization(t, "odometry_break")
+        if self.odom_continuous:
+            self._break_open = False
+            self._ever_continuous = True
+        if self._resession and self.permit.state in (ra.OFF, ra.LATCHED) \
+                and getattr(self.permit, "_disarm_first_ns", None) is None:
+            self._resession = False
+            self.delay_bound.restart_check()
+            self.permit.restart_session(now_ns)
+
     def _submit_refusal(self, now_ns: int) -> str | None:
         why = ra.auto_ready_refusal(now_ns, "submit", self.evidence)
         return None if why is None else f"not_ready:{why}"
@@ -404,12 +615,17 @@ class RealLoop:
         self.waiting = None
         if self.permit.state == ra.LATCHED:
             return  # latched already: its DISARM is retried every 100 ms, not renewed each tick (round 2 P2-2)
+        # a mission the permit does not collect yet (before its ARM) ends with any latch, whatever the cause (5a,
+        # Codex impl round 6 P2-2): read before the latch moves the permit off OFF
+        before_arm = self.real_layer is not None and self._before_arm()
         # the DISARM is tried before the arbiter's stop and the collection (4b design 7)
         self._bind_permit(now_ns)
         try:
             self.permit.latch(now_ns, reason)
         except Exception:  # noqa: BLE001 -- the DISARM is queued and the arbiter stopped before a collection fails
             pass
+        if before_arm:
+            self._end_now(now_ns, reason)
 
     def _end_now(self, now_ns: int, reason: str) -> None:
         cmds = self.core.commands
@@ -430,6 +646,21 @@ class RealLoop:
         self.pose_history.append((t, tuple(float(v) for v in rear), self.odom_continuous,
                                   max(abs(self.speed.signed_mps), self.speed.bound_mps), lift_, applied_))
         self._feed_depth(now_ns, t)
+        if self.real_layer is not None:
+            self._layer_tick(t, rear)
+            if self._before_arm():
+                # a fault before the ARM latches and ends the mission whether or not a plan is out yet (design 1.2,
+                # round 3 P2-4; Codex 5a impl P2-2: waiting for the planning grid included; round 3 P1: the adopted
+                # mission waiting for its new grid before the ARM too)
+                why_ = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+                lw_ = self.real_layer.watchdog(t)
+                if lw_ in LAYER_ENDS:
+                    why_ = f"layer:{lw_}"  # the layer's own end names the cause, not "missing" (round 5 P3)
+                if why_ is not None and ra.latches(why_):
+                    rec.branch, rec.reason = "emergency", f"prepare:{why_}"
+                    self._emergency(now_ns, rec.reason)
+                    self._end_now(now_ns, rec.reason)
+                    return
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
             if self.operator_start is not None:
@@ -439,7 +670,8 @@ class RealLoop:
                     return
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
-            if self.frozen is not None:
+            if self.frozen is not None and self._planning_ready():
+                self._planning_gen = int(core.obstacle["version"]) if self.real_layer is not None else None
                 known_request(core, t, rear, self.frozen, base_scenario=self.base_scenario, wait_pose=self.wait_pose)
         if core.end_release_due is not None:
             sl = self.evidence.slam(now_ns)
@@ -453,21 +685,48 @@ class RealLoop:
         # impl P1-12): past its end it is ①, a watchdog stop holds the wheels and the lift (the wait frame)
         layer_ = None if core.obstacle is None else core.obstacle.get("layer")
         layer_stop = layer_.watchdog(t) if layer_ is not None and hasattr(layer_, "watchdog") else None
-        if layer_stop == "layer_latency_exceeded":
-            rec.branch, rec.reason = "emergency", "layer_latency_exceeded"
-            self._emergency(now_ns, "layer_latency_exceeded")
+        if layer_stop in LAYER_ENDS:
+            rec.branch, rec.reason = "emergency", layer_stop
+            before_arm = self._before_arm()  # read before the latch turns the permit off OFF (round 4 P2-1)
+            self._emergency(now_ns, layer_stop)
+            if before_arm:
+                self._end_now(now_ns, layer_stop)  # a mission the latch does not collect yet (design 3, round 3 P2-1)
+            if layer_stop in ("layer_latency_exceeded", "scan_source_lost") and hasattr(layer_, "end_taken") \
+                    and self.permit.state in (ra.LATCHED, ra.DISARMING):
+                layer_.end_taken()  # latched on it: the next result's deadlines start afresh (a rearm follows)
             return
+        if self.real_layer is not None and (not getattr(core.options, "obstacle_act", False)
+                                            or layer_ is not self.real_layer):
+            rec.branch, rec.reason = "emergency", "obstacle_layer_off"  # never released while running (design 3)
+            before_arm = self._before_arm()
+            self._emergency(now_ns, "obstacle_layer_off")
+            if before_arm:
+                self._end_now(now_ns, "obstacle_layer_off")  # before the ARM too (Codex 5a impl round 2 P2-3)
+            return
+        if self.real_layer is not None and cmds.status in ("accepted", "preparing") and core.job_pending():
+            # before the adoption (design 1.2, round 3 P2-3/P2-4): a planning answer from another correction
+            # generation is dropped and asked again; a fault latches and ends the preparation; a wait defers it
+            if self._planning_gen is not None and int(core.obstacle["version"]) != self._planning_gen:
+                core.abandon_jobs(t)
         # as the Isaac loop: paused, resuming or cancelling, or no mission yet (or over) -- a preparation is not
         paused_ = cmds.stopped or cmds.status in ("idle", *FINAL)
-        plan_wait_ = core.jobs is not None and core.job_hold(t, rear, self.speed, paused_).hold
+        defer_ = self.real_layer is not None and cmds.status in ("accepted", "preparing") and (
+            layer_stop is not None or (ra.auto_ready_refusal(now_ns, "drive", self.evidence) or "").startswith("wait:"))
+        plan_wait_ = core.jobs is not None and (defer_ or core.job_hold(t, rear, self.speed, paused_).hold)
         if cmds.status in ("accepted", "preparing"):
             plan_wait_ = True
         if cmds.status in FINAL:
             self.frozen = None
+        if self.real_layer is not None:
+            # the adoption may have changed the mission, the tracker or the leg this tick: the key and the request
+            # follow before readiness is read (Codex 5a impl P2-1); then the computation the placements asked for
+            self._layer_tick(t, rear)
+            self.real_layer.flush(t)
         # the adoption and the arming (design 2.3)
         ready_wait = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+        layer_wait = self.real_layer is not None and (self.real_layer.installing() or layer_stop is not None)
         if (cmds.status == "running" and cmds.adopted_id == cmds.mission_id and ms.phase == "approach"
-                and self.adopted_for != cmds.mission_id and permit.state == ra.OFF
+                and self.adopted_for != cmds.mission_id and permit.state == ra.OFF and not layer_wait
                 and not (ready_wait or "").startswith("wait:")):  # no ARM while a wait holds (Codex 4c impl P2-3)
             self.adopted_for = cmds.mission_id
             why = self._pre_arm_refusal(now_ns)
@@ -480,6 +739,11 @@ class RealLoop:
         if bad is not None:
             rec.branch, rec.reason = "emergency", f"unsupported:{bad}"
             self._emergency(now_ns, f"unsupported:{bad}")
+            return
+        if permit.state == ra.ARMING and self.real_layer is not None and ra.latches(ready_wait):
+            # a fault while the ARM is answered: no frame of this tick may carry it to the first byte (round 4 P1)
+            rec.branch, rec.reason = "emergency", f"arming:{ready_wait}"
+            self._emergency(now_ns, rec.reason)
             return
         if permit.state == ra.ARMING:
             rec.branch = "none"  # no loop DRIVE while arming (the host's own zero only)
@@ -916,6 +1180,20 @@ class RealLoop:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
             if not self.host.health(ns).fresh:
                 return "measurement_stale", "alarm"
+            if self.real_layer is not None:
+                # the layer's watchdog at the write too (Codex 5a impl P1-1): a deadline passed since the decision
+                lw = self.real_layer.watchdog(self._t(ns))
+                if lw in LAYER_ENDS:
+                    return f"send:{lw}", "alarm"
+                if lw is not None and why is None:
+                    why = f"wait:{lw}"
+                elif self.real_layer.installing() and why is None:
+                    why = "wait:snapshot_installing"
+            if self.real_layer is not None and (not getattr(self.core.options, "obstacle_act", False)
+                                                or self.core.obstacle.get("layer") is not self.real_layer):
+                return "send:obstacle_layer_off", "alarm"  # design 3 at the write too (Codex 5a impl round 5 P1)
+            if frame.kind == "ARM" and why is not None and not ra.latches(why):
+                return f"arm_wait:{why}", "alarm"  # no new ARM while a wait holds: latch, a rearm (design 3)
             if why is not None and ra.latches(why):
                 return f"send:{why}", "alarm"
             if not self._lease_valid(ns):
@@ -970,10 +1248,17 @@ class RealLoop:
                     waits.append(why)
             return ok
 
+        if self.real_layer is not None and permit.anchor_disarm(now_ns):
+            pass  # an anchor DISARM queued (design 1.1): written with this send
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
             if kind == "DRIVE":
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
+            if self.delay_bound is not None:
+                self.delay_bound.written(seq, written_ns)
+                pair = permit.session_pair()  # after the permit took the write: the second DISARM's seq is known
+                if pair is not None:
+                    self.delay_bound.expect_step(*pair)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)
                 booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)

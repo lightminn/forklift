@@ -231,7 +231,7 @@ class FakeTransport:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None):
+                 initial_seq=None, watch=None, real_layer=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -273,11 +273,50 @@ class Rig:
         def build_check(axis_yaw, rear, base, stamp_s=None, rear_at=None):
             built["check"] = check or _OkCheck()
             loop_box["loop"].core.pocket["check"] = built["check"]
+            return built["check"]
+
+        self.layer = None
+        if real_layer:
+            from forklift_core.live.real_layer import ManualWorker, RealLayer, real_layer_configs
+            from forklift_core.live.real_teleop import DelayBound
+            from forklift_core.perception.obstacle_grid import AgeErrorTable
+            from forklift_core.planning.geometry import Footprint
+
+            class StepWorker(ManualWorker):  # computes at once; the result installs at the next tick head
+                held = False  # tests: hold the computation back (``step()`` releases the newest request)
+
+                def submit(self, job, fn):
+                    if self.held:
+                        self.pending = (job, fn)
+                    else:
+                        self.done.append((job, fn(job)))
+
+            layer_cfg = __import__("yaml").safe_load((ROOT / "config/real/obstacle_layer_real.yaml").read_text())
+            age_ = __import__("json").loads((ROOT / layer_cfg["odometry_age"]).read_text())  # the real layer's table
+            table = AgeErrorTable(tuple(age_["ages_s"]), tuple(age_["cumulative_position_m"]),
+                                  tuple(age_["cumulative_yaw_rad"]))
+            kappa_ = max(abs(k) for k in VEH.steering.curvatures_inv_m)
+            hall = SimpleNamespace(x_min_m=-2.0, x_max_m=7.0, y_min_m=-3.0, y_max_m=3.0)
+            grid_cfg, perm_cfg = real_layer_configs(layer_cfg, error_table=table, budget_s=0.10, scan_period_s=0.10,
+                                                    state_delay_s=0.05, v_scan_mps=0.225, kappa_max_inv_m=kappa_,
+                                                    hall=hall)
+            # the hull with the forks is what the permission checks; the scans' own outline is the body alone (the
+            # Isaac layer's rule) -- the cells under the forks may be FREE
+            hull = geometry.unloaded_footprint
+            body = Footprint(0.35, hull.rear_m, hull.half_width_m)
+            self.layer = RealLayer(grid_cfg, perm_cfg, sensors={"lidar": ((0.0, 0.0, 0.0), True, {"measured": False})},
+                                   unloaded=hull,
+                                   loaded=geometry.loaded_footprint, body=body,
+                                   placer=lambda a, b: loop_box["loop"].place_scan(a, b),
+                                   budget_s=0.10, overdue_end_s=1.0, scan_period_s=0.10, scan_max_age_s=0.35,
+                                   worker=StepWorker(), odom_now=lambda: loop_box["loop"].odom_travel)
+            self.delay_bound = DelayBound()
 
         hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m, odom_base=lambda: (0.0, 0.0, 0.0),
                               ready=lambda t, inputs: None, started=lambda *a: None, record=lambda *a: None,
                               geometry=geometry, pocket_frame=self._frame, pocket_check=build_check,
-                              operator=self._operator, tick=tick)
+                              operator=self._operator, tick=tick, layer=self.layer,
+                              occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None)
         base_cfg = cfg or replace(ra.load_s10a(ROOT / "config/real/s10a.yaml"), map_id="hall-1", pallet_depth_m=0.6,
                                   pallet_width_m=0.4, check_pallet_pose=PALLET)
         settings = {"drive_acceleration_mps2": 0.3, "lift_rate_mps": 0.05, "lift_target_m": 0.08,
@@ -288,7 +327,8 @@ class Rig:
             cfg=base_cfg, loaded_map_id="hall-1", geometry=geometry, pallet_geometry=None, kinematics=KIN,
             settings=settings, planner_config=planner, travel_config=planner,
             speeds={name: 0.1 for name in STAGES}, mission_stages=STAGES, curvatures={"preview": CAP},
-            layer=Layer(), applied=(0.0, 0.0, 0.0), slam_tracker=self.tracker, jobs=self.jobs, hooks=hooks,
+            layer=self.layer if real_layer else Layer(), applied=(0.0, 0.0, 0.0), slam_tracker=self.tracker,
+            jobs=self.jobs, hooks=hooks,
             extra_options={"cusp_heading_hold_rad": 0.05, "cusp_heading_hold_phases": ("return_home",),
                            "tracker_profile": None, "command_accel_mps2": 0.3, "mid_still_decel_mps2": 0.3,
                            "max_cusp_replans": 0, "cusp_stop_needed": False, "cusp_stop_yaw_rate_radps": 0.05,
@@ -311,13 +351,30 @@ class Rig:
         params = EncoderSpeedParams(radius_m=VEH.wheel_radius_m, counts_per_rev=VEH.counts_per_wheel_rev,
                                     track_m=VEH.track_m, kappa_max=CAP, axle_accel_mps2=0.5, max_age_s=0.1,
                                     dt_min_s=0.02, dt_max_s=0.2)
+        def t_of(n):
+            return (int(n) - 10_000 * MS) / 1e9
+
+        def snapshot_view(n):
+            lay = self.layer
+            if lay is None:
+                return ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 0, 0)
+            key, applied_v = lay.installed_key(), int(core.obstacle["version"])
+            newest = lay.installed_newest_s()  # the installed result's, not the newest placed scan (5a impl P2-7)
+            applied_c = tuple(float(v) for v in core.obstacle["applied"])
+            wait_ = lay.watchdog(t_of(n))
+            return ra.SnapshotView(None if key is None else applied_c, applied_c,
+                                   None if newest is None else int(10_000 * MS + newest * 1e9),
+                                   lay.installing(), None if key is None else key.correction_gen, applied_v,
+                                   wait_ if wait_ == "layer_overdue" else None)
+
         evidence = ra.Evidence(
-            worker_ok=lambda n: True, layer_ok=lambda n: True, baseline_ok=lambda n: True,
+            worker_ok=lambda n: True, baseline_ok=lambda n: True,
+            layer_ok=(lambda n: self.layer.ok(t_of(n))) if real_layer else (lambda n: True),
             link_reason=lambda n: None if self.host.health(n).fresh else "stale",
             measurement=lambda n: ra.MeasurementView(True, True, True, True),
             odometry_continuous=lambda n: loop_box["loop"].odom_continuous,
             slam=lambda n: ra.SlamView(self.tracker.mode, n, 0.0, core.commands.mission_gen),
-            snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 0, 0),
+            snapshot=snapshot_view,
             operator_start_ok=lambda n: True, core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
             mission_gen=lambda n: core.commands.mission_gen)
         self.loop = RealLoop(core=core, session=RealSession(core, self.link), permit=self.permit, port=self.port,
@@ -326,7 +383,10 @@ class Rig:
                              start_ns=10_000 * MS, slam_source=SimpleNamespace(replies=lambda n: []),
                              evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
                              depth_source=SimpleNamespace(frames=self._depth_frames),
-                             watch=watch, clock=lambda: self.now + self.tick_cost_ns)
+                             watch=watch, clock=lambda: self.now + self.tick_cost_ns,
+                             real_layer=self.layer, delay_bound=self.delay_bound if real_layer else None,
+                             state_delay_s=0.05, pallet_size=(0.6, 0.4),
+                             kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m))
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
@@ -360,6 +420,51 @@ class Rig:
 
     # --- driving --------------------------------------------------------------------------------------------------
     echo = True  # the console answers every tick (it keeps the lease); False: a console gone quiet
+    scan_on = True  # the fake LiDAR revolves (10 Hz) while the rig has a real layer
+    _next_scan_ns = None
+
+    def _scan_maybe(self):
+        """A revolution every 100 ms: the registered pallet's outline ray-cast from the truck's odometry pose (the
+        rig's truth), first beam 100 ms ago, handed to the layer at its last beam."""
+        from forklift_core.live.real_layer import RealScan
+
+        if not self.permit.session_started:
+            return  # no measurement interval before the session check (the delay bound's anchors), so no scan yet
+        if self._next_scan_ns is None:
+            self._next_scan_ns = self.now + 100 * MS
+            return
+        if self.now < self._next_scan_ns:
+            return
+        self._next_scan_ns += 100 * MS
+        loop = self.loop
+        t = loop._t(self.now)
+        x, y, yaw = loop.odom_pose
+        lx, ly, lyaw = x, y, yaw  # the rig's LiDAR over the rear axle: its 0.2 m blind zone stays inside the body
+        angles = np.linspace(-math.pi, math.pi, 360, endpoint=False)
+        ranges = np.full(len(angles), np.inf)
+        px, py, pyaw = PALLET
+        hl, hw = 0.3, 0.2
+        c, s_ = math.cos(pyaw), math.sin(pyaw)
+        corners = [(px + c * u - s_ * v, py + s_ * u + c * v) for u, v in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
+        for k, a in enumerate(angles):
+            dx, dy = math.cos(lyaw + a), math.sin(lyaw + a)
+            best = math.inf
+            for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+                ex, ey = bx - ax, by - ay
+                den = dx * ey - dy * ex
+                if abs(den) < 1e-12:
+                    continue
+                tt = ((ax - lx) * ey - (ay - ly) * ex) / den
+                uu = ((ax - lx) * dy - (ay - ly) * dx) / den
+                if tt > 0.0 and 0.0 <= uu <= 1.0:
+                    best = min(best, tt)
+            ranges[k] = best
+        # a level mount: every beam stays in its band (the limit an S7-measured tilt would give is finite)
+        scan = RealScan("lidar", t - 0.1, t, angles, ranges, np.ones(len(angles), bool), np.zeros(len(angles), bool),
+                        np.full(len(angles), np.inf))
+        self.layer.add_scan(scan, t, initial_correction=tuple(self.core.obstacle["applied"]),
+                            initial_version=int(self.core.obstacle["version"]))
+
     tick_cost_ns = 0  # the tick's own computing time before its first write (the fake clock's)
     step_ns = 20 * MS  # the start interval
 
@@ -367,6 +472,8 @@ class Rig:
         rec = None
         for _ in range(n):
             self.now += self.step_ns
+            if self.layer is not None and self.scan_on:
+                self._scan_maybe()
             rec = self.loop.cycle(self.now)
             ticks = [m for _, m in self.channels.take_out() if m.get("t") == "tick"]
             if ticks and self.echo and self.lease is not None:
@@ -442,6 +549,10 @@ def _cusp_monitor():
 
 
 class _OkCheck:
+    def region_control(self):
+        """The pallet's pocket region (x, y, length, width, yaw): the layer's exemption while this check gates."""
+        return (PALLET[0], PALLET[1], 0.6 + 2 * 0.6, 0.4 + 2 * 0.2, PALLET[2])  # the pallet plus PocketCheck's bands
+
     def __init__(self):
         self.last_new_s, self.valid = 0.0, True
         self.config = SimpleNamespace(frame_lag_s=0.0, frame_max_age_s=0.2)
