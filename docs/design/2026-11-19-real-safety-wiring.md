@@ -26,7 +26,7 @@
 | 단계 | 절 | 상태 |
 |---|---|---|
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
-| 5b | 4 | **미수렴 — 5b 에 들어갈 때 이 절만 검토** |
+| 5b | 4 | **검토 중**(11판) |
 | 5c | 5, 6 | **미수렴 — 5c 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
@@ -112,18 +112,31 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
   - **신규 ARM 금지**: 대기 사유가 하나라도 있으면 ARM 프레임은 첫 바이트에서도 거부한다. 지금 첫 바이트 판정은 대기 사유를 정상 DRIVE 에만 적용하므로, ARM 에도 적용하고 그때는 허가를 래치한다(`arm_wait` — 재무장 필요, 보수적). ARMING 중 호스트의 확인용 0 DRIVE 는 바퀴 0 이라 그대로 둔다.
 - **정지 뒤 방향 판정**: 7 절.
 
-## 4. 감시
+## 4. 감시 (5b)
 
-> **미수렴**: 이 절은 해당 단계에 들어갈 때 그 절만 다시 검토받는다(총괄 2026-11-19). 7 회차까지의 지적은 반영돼 있으나 수렴 판정을 받지 않았다.
+> **5b 검토 중**(11판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19). 5a 의 결정은 바꾸지 않는다.
 
-- 조립이 `config/real/safety_watch.yaml` 에서 `SafetyWatch` 를 만든다(STATE 마다, MCU 시각, 전류·바퀴). 파일이 없거나 깨지면 조립 거부.
-- **IMU 는 `SafetyWatch` 의 기울기 부분을 쓰지 않는다**(적대 P1-5: `accel_t_s=None` 을 지금 시각으로 보고, 같은 표본 재사용을 지속으로 셈). 새 `ImuWatch`(`src/forklift_core/safety/real_watch.py`):
-  - 입력은 원천이 낸 **서로 다른 표본** `(취득 시각, 가속 3 축)` 이다. 같은 시각 재전달·미래 시각·되감김·비유한 값·크기가 중력에서 크게 벗어난 값(잠정 ±30 %)은 유효 표본으로 세지 않는다.
-  - **기준**(2 회차 P2-4): **취득 시각이 지금 정지 구간 안**(4c `still_since` 이후)인 유효 표본의 평균. ARM 을 낼 때 그 값으로 고정하고 무장 동안 바꾸지 않는다. 그런 표본이 최소 개수(잠정 10) 미만이면 채택·ARM 이 거부된다(`imu_no_baseline`).
-  - **끊김**: 가장 새 유효 표본이 `max_age_s` 보다 오래되면(틱 머리와 첫 바이트 모두에서 호스트 시계로) `watch_imu_stale` → ①.
-  - **기울기**(2 회차 P2-4): 기준 대비 각도가 한도를 넘는 **서로 다른 유효 표본**이, 이웃 표본 사이 공백이 `gap_max_s`(잠정 0.05 s — D435i 가속 200 Hz 의 10 배) 이하로 이어진 시간이 `hold_s` 이상이면 `watch_tilt` → ①. 공백이 그보다 크면 지속은 처음부터 다시 센다. 한 표본은 지속이 아니다. `max_age_s` 는 끊김 판정에만 쓴다.
-  - `imu: required | none` 은 `config/real/autonomy.yaml` 의 설정값이다. 잠정 `required`, `none` 이면 `ImuWatch` 를 만들지 않고 조립 기록에 남긴다.
-- 기울기 임계값·진동 영향은 측정 전 잠정값이다(S10 선행 조건, 전제 8).
+**조립**(`src/forklift_core/live/real_assembly.py` 의 `build_watches`):
+- `config/real/safety_watch.yaml` 에서 `SafetyWatch` 를 만든다(`load_watch_config`). 파일이 없거나 깨지면 조립 거부(`watch_config:<이유>`).
+- `config/real/autonomy.yaml` 의 `imu: required | none`(잠정 `required`). 키가 없거나 다른 값이면 조립 거부. `required` 면 `ImuWatch` 를 같은 파일의 `tilt` 값(`limit_deg`, `hold_s`, `max_age_s`)과 새 `imu` 값(`gap_max_s`, `baseline_min`, `norm_tol`)으로 만들고, `none` 이면 만들지 않고 조립 기록에 `imu: none` 을 남긴다.
+- `SafetyWatch` 의 기울기 부분은 실차 자율에서 쓰지 않는다 — 루프는 `accel` 을 넘기지 않고 `imu_expected=False`(적대 P1-5: `accel_t_s=None` 을 지금 시각으로 보고, 같은 표본 재사용을 지속으로 셈). 전류·바퀴 판정은 4c 그대로 STATE 마다.
+
+**`ImuWatch`**(`src/forklift_core/safety/real_watch.py`, 호스트 단조 시계 ns):
+- `add(sample_ns, accel, now_ns) -> str | None`: 원천이 낸 표본 하나. 유효하면 None, 아니면 버린 이유(셈만). 버림: 비유한 값, `sample_ns` 가 지난 유효 표본 이하(같은 시각 재전달·되감김), `sample_ns > now_ns`(미래), 크기가 9.81 m/s² 에서 `norm_tol`(잠정 0.30) 넘게 벗어남. 유효 표본은 최근 `window_s`(잠정 2 s) 만 둔다.
+- `baseline_refusal(still_since_ns) -> str | None`: 취득 시각이 `still_since_ns` 이상인 유효 표본이 `baseline_min`(잠정 10) 미만이면 `imu_no_baseline`, 정지 중이 아니면(`still_since_ns` None) `imu_not_still`.
+- `arm(still_since_ns)`: 그 표본들의 평균 방향을 기준으로 고정(무장 동안 바꾸지 않음), 기울기 지속을 비움. `disarm()`: 기준을 버림.
+- `judge(now_ns) -> str | None`(무장 중만): 가장 새 유효 표본이 `now_ns - max_age_s` 보다 오래면 `watch_imu_stale`; 아니면 기준 이후 유효 표본들로 기울기 지속 — 기준 대비 각도가 `limit_deg` 를 넘는 표본이 끊기지 않고(이웃 표본 공백 ≤ `gap_max_s`, 잠정 0.05 s = D435i 가속 200 Hz 의 10 배) 이어진 첫 표본부터 마지막 표본까지가 `hold_s` 이상이면 `watch_tilt`. 한도 안 표본이나 공백이 지속을 처음부터 다시 세게 한다. 한 표본은 지속이 아니다. `max_age_s` 는 끊김에만 쓴다. 한 번 낸 사유는 `disarm()` 까지 고정.
+
+**루프 배선**(`RealLoop(imu_watch=, imu_source=)`, 둘 다 None 이면 지금과 같음):
+- 틱 머리에서 `imu_source.samples(now_ns)` 의 표본을 순서대로 `add` 한다(원천이 실패하면 그 틱은 표본 없음 — 끊김은 `judge` 가 잡음).
+- **채택·ARM**: `_pre_arm_refusal` 이 `baseline_refusal(still_since_ns)` 를 묻는다 → 거부면 `pre_arm:imu_no_baseline` 등으로 래치(5a 의 ARM 전 래치 = 미션 종료). 허가가 ARM 을 요청한 뒤 `arm(still_since_ns)`.
+- **무장 중**(ARMING·READY·DRIVING·STOP_PENDING): 틱 머리의 STATE 처리 뒤 `judge(now_ns)` 가 사유를 내면 `watch:<사유>` 로 ①(4c 의 `_watch_trip` 과 같은 경로). 첫 바이트 판정(`judge` 송신 시각 `ns`)에서도 `judge(ns)` 가 사유면 `send:watch:<사유>` alarm(4c·5a 의 첫 바이트 규칙).
+- 허가가 OFF·LATCHED 로 돌아가면 `disarm()`.
+- IMU 원천의 실배선(D435i 가속, PR 7 브리지의 시각 변환)은 이 단계에 없다. 5b 는 가짜 원천으로 판정과 배선만 시험한다.
+
+**고장 구분**(3 절의 셋): `watch_imu_stale`·`watch_tilt` 는 고장 → ①. `imu_no_baseline`·`imu_not_still` 은 ARM 전 거부(래치·미션 종료). 대기 사유는 없다.
+
+- 기울기 임계값·진동 영향·`gap_max_s`·`baseline_min`·`norm_tol` 은 측정 전 잠정값이다(S10 선행 조건, 전제 8).
 
 ## 5. 콘솔
 
