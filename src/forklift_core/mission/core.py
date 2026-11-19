@@ -6664,6 +6664,16 @@ class MissionCore:
         """The relocalization generation a field recovery's end asked for (None: none needed)."""
         return self.cargo.relocalize_required or None
 
+    def relocalization_reset(self, t: float) -> None:
+        """The real truck's relocalization reset (docs/design/2026-11-19-real-safety-wiring.md 6, 2): the core's own
+        SLAM hold marks and a deferred release go with the tracker's ``reset_for_relocalization`` (the real loop calls
+        both together, after the mission is over). The relocalization lock itself is untouched."""
+        self.in_hold = False
+        self.put_downs_in_hold.clear()
+        self._last_pose_hold = None
+        self.end_release_due = None
+        self.state.setdefault("field_recoveries", []).append({"event": "relocalization_reset", "time_s": float(t)})
+
     def relocalized(self, t: float, generation: int) -> bool:
         """A relocalization confirmed the truck's place for ``generation`` (4e-2 wires the start relocalization, asked
         after ``field_recovery_done`` with ``relocalize_generation()``): submits are taken again -- still no automatic
