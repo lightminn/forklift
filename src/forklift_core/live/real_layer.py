@@ -35,7 +35,6 @@ from forklift_core.perception.obstacle_grid import (
     GridConfig,
     ObstacleGrid,
     ObstacleScan,
-    compose,
     snapshot_to_occupancy,
 )
 from forklift_core.planning.geometry import Footprint
@@ -531,29 +530,15 @@ def _compute(job: dict) -> dict:
     if pallet is not None:
         rect, pallet_key = pallet
         planning = (pallet_key, snapshot_to_occupancy(grid.snapshot(
-            now_s, job["correction"], job["version"], suppress=[_grown(grid, job["correction"], rect)])))
+            now_s, job["correction"], job["version"], suppress=[(*rect, True)])))
+        # each hit's own range bound grows the pallet for that hit alone (Codex 5a impl round 7 P2): a far scan's
+        # wide bound does not clear what only a near scan saw beside the pallet
     path = job["path_ahead"]
     if path is None:
         path = np.asarray([job["current_pose"]], dtype=float)
     check = DrivePermission(job["permission_config"]).check_path(
         snapshot, path, job["footprint"], job["own"], current_pose=job["current_pose"], direction=job["direction"])
     return {"snapshot": snapshot, "path_ahead": path, "planning": planning, "check": check}
-
-
-def _grown(grid: ObstacleGrid, correction, rect) -> tuple:
-    """The pallet rectangle ``(x, y, yaw, half length, half width)`` grown by the largest range bound any stored
-    scan gives the pallet's far side from its own sensor position (map = correction o odometry o mount) -- a scan
-    taken farther off or from a sensor mounted away from the axle places the face with its own bound (Codex 5a impl
-    round 6 P2-1)."""
-    x, y, yaw, hl, hw = rect
-    cfg = grid.config
-    extra = math.hypot(hl, hw)
-    reach = [math.hypot(p[0] - x, p[1] - y) + extra
-             for p in (compose(correction, compose(sc.odom_rear, sc.laser_in_rear)) for sc in grid.scans)]
-    bound = float(cfg.sensor_bound_m)
-    if reach:
-        bound = max(bound, float(np.max(cfg.sensor_bound_at(np.asarray(reach, dtype=float)))))
-    return (x, y, yaw, hl + bound, hw + bound)
 
 
 def _beam_valid(scan: RealScan) -> np.ndarray:

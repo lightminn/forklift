@@ -469,8 +469,10 @@ class ObstacleGrid:
     @dual("grid_snapshot")
     def snapshot(self, now_s: float, map_from_odom, correction_version: int = 0, *, suppress=None) -> GridSnapshot:
         """``suppress`` (real safety wiring design 2, the real truck's planning grid only): map-frame rectangles
-        ``(cx, cy, yaw, half_length, half_width)``; a normal finite hit whose end point lies in one does not mark
-        (clearing, the bounds and the near sector are as always). None: the snapshot as before."""
+        ``(cx, cy, yaw, half_length, half_width)``, or with a sixth element True, grown for each hit by that hit's
+        own range bound (``sensor_bound_at`` of its range: where the grid places it); a normal finite hit whose end
+        point lies in one does not mark (clearing, the bounds and the near sector are as always). None: the
+        snapshot as before."""
         cfg = self.config
         self.prune(now_s)
         nx, ny = cfg.shape
@@ -590,11 +592,13 @@ class ObstacleGrid:
         if suppress:
             hx = laser[0] + np.where(hit, ranges, 0.0) * cos_a
             hy = laser[1] + np.where(hit, ranges, 0.0) * sin_a
-            for cx, cy, yaw, half_l, half_w in suppress:
+            for entry in suppress:
+                cx, cy, yaw, half_l, half_w = entry[:5]
+                grow = cfg.sensor_bound_at(np.where(hit, ranges, 0.0)) if len(entry) > 5 and entry[5] else 0.0
                 c, s_ = cos(yaw), sin(yaw)
                 along = (hx - cx) * c + (hy - cy) * s_
                 across = -(hx - cx) * s_ + (hy - cy) * c
-                hit = hit & ~((np.abs(along) <= half_l) & (np.abs(across) <= half_w))
+                hit = hit & ~((np.abs(along) <= half_l + grow) & (np.abs(across) <= half_w + grow))
         if hit.any():
             px = laser[0] + ranges[hit] * cos_a[hit]
             py = laser[1] + ranges[hit] * sin_a[hit]

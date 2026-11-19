@@ -70,3 +70,21 @@ def test_a_rotated_rectangle_is_honoured():
     rect = (3.0, 0.0, math.pi / 2, 0.5, 0.15)  # the same area, its length along y
     snap = g.snapshot(0.05, (0.0, 0.0, 0.0), suppress=[rect])
     assert cell(snap, 3.0, 0.0) != OCCUPIED and cell(snap, 3.0, 1.5) == OCCUPIED
+
+
+def test_a_grown_rectangle_grows_each_hit_by_its_own_range_bound():
+    """Codex 5a impl round 6 P2-1 / round 7 P2: with the sixth element True, a hit is suppressed when it ends within
+    the rectangle grown by its own range bound -- a far scan's face return measured 0.1 m long goes, while the same
+    point seen from 1.1 m (a 2 cm bound) stays: a far scan's wide bound does not clear what a near scan saw."""
+    from dataclasses import replace
+
+    cfg = replace(config(), range_bound_model="a2_spec")
+    rect = (4.0, 0.0, 0.0, 0.05, 0.3, True)
+    far = ObstacleGrid(cfg)
+    far.add_scan(scan(0.0, wall_ranges(4.1)))
+    assert cell(far.snapshot(0.1, (0.0, 0.0, 0.0), suppress=[rect]), 4.1, 0.0) != OCCUPIED
+    assert cell(far.snapshot(0.1, (0.0, 0.0, 0.0), suppress=[rect[:5]]), 4.1, 0.0) == OCCUPIED  # not grown
+    both = ObstacleGrid(cfg)
+    both.add_scan(scan(0.0, wall_ranges(4.1)))
+    both.add_scan(scan(0.05, wall_ranges(1.1), odom=(3.0, 0.0, 0.0)))
+    assert cell(both.snapshot(0.1, (0.0, 0.0, 0.0), suppress=[rect]), 4.1, 0.0) == OCCUPIED

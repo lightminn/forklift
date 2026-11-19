@@ -410,23 +410,3 @@ def test_an_older_waiting_scan_expires_after_a_newer_one_was_installed():
     lay.install_ready(1.21)
     lay.install_ready(1.25)  # the first one's wait ran out
     assert lay.counts["scans_dropped"] == 1 and lay.watchdog(1.25) is None
-
-
-def test_the_planning_split_grows_by_each_scans_own_sensor_distance():
-    """Codex 5a impl round 6 P2-1: a scan whose sensor sat farther from the pallet (a mount off the axle, an earlier
-    pose) widens the split by its own range bound, not by the truck's distance now."""
-    from types import SimpleNamespace as NS
-
-    from forklift_core.live.real_layer import _grown
-
-    grid, _ = configs()
-    near = NS(odom_rear=(1.5, 0.0, 0.0), laser_in_rear=(0.0, 0.0, 0.0))
-    far = NS(odom_rear=(1.5, 0.0, 0.0), laser_in_rear=(-0.85, 0.0, 0.0))
-    rect = (2.5 + 0.6, 0.0, 0.0, 0.6, 0.4)
-    a = _grown(NS(config=grid, scans=[near]), (0.0, 0.0, 0.0), rect)
-    b = _grown(NS(config=grid, scans=[near, far]), (0.0, 0.0, 0.0), rect)
-    reach = 3.1 - 0.65 + math.hypot(0.6, 0.4)
-    assert b[3] > a[3] and math.isclose(b[3] - 0.6, float(grid.sensor_bound_at(np.array([reach]))[0]))
-    # the correction moves the scans with the map: a shifted correction is another distance
-    c = _grown(NS(config=grid, scans=[near]), (-1.0, 0.0, 0.0), rect)
-    assert c[3] > a[3]
