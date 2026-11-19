@@ -237,3 +237,21 @@ def test_a_pose_changed_behind_a_short_gap_in_the_stand_refuses_the_arm():
     r.submit()
     rec = run_until(r, lambda rec: rec.branch == "emergency" or r.mcu.arms > 0, limit=400)
     assert r.mcu.arms == 0 and "imu_baseline_unsteady" in rec.reason
+
+
+def test_sample_times_stay_integers_and_a_non_integer_time_is_dropped_alone():
+    """5b round 5 P2: host ns past 2**53 keep their precision; a float or a huge value is that sample's fault."""
+    r = driving()
+    src = r.imu.samples
+
+    def odd(upto_ns, limit):
+        out = src(upto_ns, limit)
+        return out + [(1.5e18, (0.0, 0.0, 9.81)), ("x", (0.0, 0.0, 9.81))]
+
+    r.imu.samples = odd
+    recs = [r.tick() for _ in range(10)]
+    assert all(x.branch != "emergency" for x in recs)
+    assert r.loop.imu_watch.counts["not_finite"] >= 20
+    w = r.loop.imu_watch
+    big = 2 ** 60
+    assert w.add(big, (0.0, 0.0, 9.81), big) is None and w.samples[-1][0] == big  # exact, not rounded to future

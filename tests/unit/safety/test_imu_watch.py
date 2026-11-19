@@ -166,3 +166,18 @@ def test_the_gap_is_measured_from_the_baselines_last_sample():
     w.arm(b)
     assert w.add(1100 * MS, G, 1101 * MS) is None  # 55 ms after the baseline's last
     assert w.judge(1101 * MS) == "watch_imu_gap"
+
+
+def test_a_pose_change_in_the_stand_is_remembered_past_the_sample_window():
+    """5b round 5 P1: level, a gap, 14 deg -- still refused 3 s later, when the level samples left the 2 s window."""
+    w = ImuWatch(CFG)
+    w.stand(1000 * MS)
+    t = fed(w, 1000, 20)  # level: the stand's reference
+    t = fed(w, t + 80, 20, tilted(14))
+    assert w.baseline(1000 * MS) == (None, "imu_baseline_unsteady")
+    t = fed(w, t, 600, tilted(14))  # 3 s more of the same pose
+    assert w.samples[0][0] > 1100 * MS  # the level samples are gone from the window
+    assert w.baseline(1000 * MS) == (None, "imu_baseline_unsteady")
+    w.stand(t * MS)  # a new stand forgets it
+    fed(w, t, 20, tilted(14))
+    assert w.baseline(t * MS)[1] is None

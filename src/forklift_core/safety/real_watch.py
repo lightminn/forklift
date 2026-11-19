@@ -237,6 +237,13 @@ class ImuWatch:
         self.samples: list = []  # (ns, unit vector) of valid samples, oldest first, within window_s
         self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
         self._baseline = None  # the unit gravity direction frozen before the ARM
+        # the current stand (5b round 5 P1): its start, its reference direction (the mean of its first steady
+        # gapless baseline_min samples), the samples gathering it, and a sticky flag once any later sample of the
+        # stand left the reference -- kept apart from the sample window, for as long as the stand lasts
+        self._stand_ns = None
+        self._ref = None
+        self._gather: list = []
+        self._moved = False
         self._prev_ns = None  # the newest sample judged
         self._tilt_start = None  # the first sample of the current tilted run
         self._trip = None
@@ -264,10 +271,45 @@ class ImuWatch:
             return why
         self.counts["valid"] += 1
         self.samples.append((int(sample_ns), tuple(x / n for x in v)))
+        self._stand_sample(*self.samples[-1])
         cut = int(sample_ns) - int(self.cfg.window_s * 1e9)
         while len(self.samples) > 1 and self.samples[0][0] < cut:
             self.samples.pop(0)
         return None
+
+    def stand(self, still_since_ns) -> None:
+        """The current stand's start (the loop, each tick): a new start forgets the old stand's evidence and takes
+        the kept samples taken in it."""
+        if still_since_ns is None:
+            self._stand_ns, self._ref, self._gather, self._moved = None, None, [], False
+            return
+        if self._stand_ns == int(still_since_ns):
+            return
+        self._stand_ns, self._ref, self._gather, self._moved = int(still_since_ns), None, [], False
+        for ns, u in self.samples:
+            self._stand_sample(ns, u)
+
+    def _stand_sample(self, ns: int, u) -> None:
+        if self._stand_ns is None or ns < self._stand_ns:
+            return
+        c = self.cfg
+        if self._ref is not None:
+            if _angle_deg(u, self._ref) > c.baseline_spread_deg:
+                self._moved = True  # the pose left the stand's reference: sticky for this stand
+            return
+        if self._gather and ns - self._gather[-1][0] > c.gap_max_s * 1e9:
+            self._gather = []  # a gap: the reference gathers after it
+        self._gather.append((ns, u))
+        if len(self._gather) > c.baseline_min:
+            self._gather.pop(0)
+        if len(self._gather) == c.baseline_min:
+            mean = tuple(sum(w[k] for _, w in self._gather) / len(self._gather) for k in range(3))
+            size = math.sqrt(sum(x * x for x in mean))
+            if size >= 0.9:
+                d = tuple(x / size for x in mean)
+                if all(_angle_deg(w, d) <= c.baseline_spread_deg for _, w in self._gather):
+                    self._ref = d  # the stand's first steady direction
+                    self._gather = []
 
     def baseline(self, still_since_ns):
         """``((direction, last_ns), None)`` from the valid samples taken in the current stand -- ``last_ns`` the
@@ -275,6 +317,7 @@ class ImuWatch:
         ``imu_no_baseline``, ``imu_baseline_unsteady``."""
         if still_since_ns is None:
             return None, "imu_not_still"
+        self.stand(still_since_ns)
         c = self.cfg
         stand = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
         # the latest gapless run of the stand: an earlier gap only means the run started later
@@ -290,9 +333,11 @@ class ImuWatch:
         if size < 0.9:
             return None, "imu_baseline_unsteady"
         d = tuple(x / size for x in mean)
-        # every sample of the stand, before a gap too, agrees with it: a pose that changed in the stand (behind a
-        # gap) is not a baseline (5b round 4 P1)
-        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in stand):
+        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
+            return None, "imu_baseline_unsteady"
+        # the stand as a whole, beyond the kept window: no sample left its first steady direction, and the baseline
+        # is that direction (a pose changed behind a gap, however long ago in the stand; 5b rounds 4-5 P1)
+        if self._moved or self._ref is None or _angle_deg(d, self._ref) > c.baseline_spread_deg:
             return None, "imu_baseline_unsteady"
         return (d, part[-1][0]), None
 

@@ -11,6 +11,7 @@ output branch (emergency DISARM -> S10 control stop -> an output wait -> the nor
 from __future__ import annotations
 
 import math
+import numbers
 import secrets
 import time
 from collections import deque
@@ -536,6 +537,7 @@ class RealLoop:
                 return
         s = host.state
         if self.imu_watch is not None:
+            self.imu_watch.stand(self.still_since_ns)  # the stand's own evidence, beyond the sample window
             self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
@@ -589,13 +591,14 @@ class RealLoop:
         for item in batch:
             try:
                 stamp, accel = item
-                t = float(stamp)
             except (TypeError, ValueError):
-                t = math.nan
-            if not math.isfinite(t):
-                self.imu_watch.counts["not_finite"] += 1  # that sample only (design 4; 5b round 4 P2-2)
+                stamp, accel = None, None
+            if isinstance(stamp, bool) or not isinstance(stamp, numbers.Integral):
+                # host ns are integers: anything else is that sample's fault only, kept at full precision otherwise
+                # (design 4; 5b rounds 4-5 P2)
+                self.imu_watch.counts["not_finite"] += 1
                 continue
-            good.append((int(t), accel))
+            good.append((int(stamp), accel))
         for sample_ns, accel in sorted(good, key=lambda b: b[0]):
             self.imu_watch.add(sample_ns, accel, upto)
         return upto
