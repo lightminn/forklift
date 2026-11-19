@@ -407,11 +407,11 @@ class Rig:
                              start_ns=10_000 * MS, slam_source=SimpleNamespace(replies=lambda n: []),
                              evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
                              depth_source=SimpleNamespace(frames=self._depth_frames),
-                             watch=watch, clock=lambda: self.now + self.tick_cost_ns,
+                             clock=lambda: self.now + self.tick_cost_ns,
                              real_layer=self.layer, delay_bound=self.delay_bound if real_layer else None,
                              state_delay_s=0.05, pallet_size=(0.6, 0.4),
                              kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m),
-                             **self._imu_args(imu))
+                             **self._watch_args(watch, imu))
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
@@ -419,16 +419,20 @@ class Rig:
         self.channels.connect("c1", "op", control=True)
         self.lease = None
 
-    def _imu_args(self, imu):
-        """5b: the real IMU watch from config/real/safety_watch.yaml's imu part and a fake 200 Hz source."""
-        if not imu:
-            self.imu = None
-            return {}
-        from forklift_core.safety.real_watch import ImuWatch, load_imu_config
+    def _watch_args(self, watch, imu):
+        """The watches as the assembly builds them: ``imu`` -- build_watches on the real configs (imu: required)
+        with a fake 200 Hz source (5b); a bare SafetyWatch -- with the policy ``none`` (the 4c watch tests)."""
+        self.imu = None
+        if imu:
+            import yaml
 
-        self.imu = FakeImu(lambda: self.now)
-        return {"imu_watch": ImuWatch(load_imu_config(ROOT / "config/real/safety_watch.yaml")),
-                "imu_source": self.imu, "imu_policy": "required"}
+            autonomy = yaml.safe_load((ROOT / "config/real/autonomy.yaml").read_text())
+            watches = asm.build_watches(autonomy, ROOT / "config/real/safety_watch.yaml", VEH.wheel_radius_m)
+            if watch is not None:
+                watches = asm.Watches(watch, watches.imu, watches.imu_policy)
+            self.imu = FakeImu(lambda: self.now)
+            return {"watches": watches, "imu_source": self.imu}
+        return {} if watch is None else {"watches": asm.Watches(watch, None, "none")}
 
     # --- sources --------------------------------------------------------------------------------------------------
     def _stop_since(self, now_ns):

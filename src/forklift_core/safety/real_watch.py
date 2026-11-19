@@ -276,11 +276,12 @@ class ImuWatch:
         if still_since_ns is None:
             return None, "imu_not_still"
         c = self.cfg
-        part = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
+        stand = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
         # the latest gapless run of the stand: an earlier gap only means the run started later
-        for k in range(len(part) - 1, 0, -1):
-            if part[k][0] - part[k - 1][0] > c.gap_max_s * 1e9:
-                part = part[k:]
+        part = stand
+        for k in range(len(stand) - 1, 0, -1):
+            if stand[k][0] - stand[k - 1][0] > c.gap_max_s * 1e9:
+                part = stand[k:]
                 break
         if len(part) < c.baseline_min:
             return None, "imu_no_baseline"
@@ -289,7 +290,9 @@ class ImuWatch:
         if size < 0.9:
             return None, "imu_baseline_unsteady"
         d = tuple(x / size for x in mean)
-        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
+        # every sample of the stand, before a gap too, agrees with it: a pose that changed in the stand (behind a
+        # gap) is not a baseline (5b round 4 P1)
+        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in stand):
             return None, "imu_baseline_unsteady"
         return (d, part[-1][0]), None
 

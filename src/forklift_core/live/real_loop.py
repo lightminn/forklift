@@ -129,10 +129,9 @@ class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
-                 depth_source=None, watch=None, clock=None, operator_start=None, real_layer=None,
+                 depth_source=None, watches=None, clock=None, operator_start=None, real_layer=None,
                  delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
-                 kappa_max_inv_m: float = 0.0, pallet_size=None, imu_watch=None, imu_source=None,
-                 imu_policy=None) -> None:
+                 kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -181,14 +180,17 @@ class RealLoop:
         self.odom_history: deque = deque(maxlen=256)  # (lo_s, hi_s, pose, continuous, included, speed_ok, yaw_ok)
         self._layer_asked = None  # the last (mission gen, path id, loaded) a refresh was asked for
         self._planning_gen = None  # the correction generation the planning request used (design 1.2, round 3 P2-3)
-        self.watch = watch  # the real safety watch (the teleop leg's SafetyWatch); None: off (design 3)
-        # 5b (safety wiring design 4): the IMU watch and its non-blocking source, both or neither when required
-        if imu_policy not in (None, "required", "none"):
+        # the watches as build_watches assembled them, whole (5b, safety wiring design 4: the policy travels with
+        # the watches -- no SafetyWatch alone without its IMU policy); None: off (the 4c and 5a rigs)
+        safety, imu_watch, imu_policy = (None, None, None) if watches is None else (
+            watches.safety, watches.imu, watches.imu_policy)
+        if watches is not None and imu_policy not in ("required", "none"):
             raise ValueError(f"imu_policy {imu_policy!r}")
         if imu_policy == "required" and (imu_watch is None or imu_source is None):
             raise ValueError("imu_required")
         if (imu_watch is None) != (imu_source is None):
             raise ValueError("imu_watch and imu_source go together")
+        self.watch = safety  # the real safety watch (currents and wheels, design 3)
         self.imu_watch, self.imu_source, self.imu_policy = imu_watch, imu_source, imu_policy
         self._imu_wait_until: dict = {}  # mission id -> the baseline's wait deadline (host ns), set once
         self._watch_rx: int | None = None
@@ -583,8 +585,19 @@ class RealLoop:
             batch = list(self.imu_source.samples(upto, self.IMU_BATCH))[: self.IMU_BATCH]
         except Exception:  # noqa: BLE001
             return upto
-        for sample_ns, accel in sorted(batch, key=lambda b: int(b[0])):
-            self.imu_watch.add(int(sample_ns), accel, upto)
+        good = []
+        for item in batch:
+            try:
+                stamp, accel = item
+                t = float(stamp)
+            except (TypeError, ValueError):
+                t = math.nan
+            if not math.isfinite(t):
+                self.imu_watch.counts["not_finite"] += 1  # that sample only (design 4; 5b round 4 P2-2)
+                continue
+            good.append((int(t), accel))
+        for sample_ns, accel in sorted(good, key=lambda b: b[0]):
+            self.imu_watch.add(sample_ns, accel, upto)
         return upto
 
     def _imu_arm_gate(self, now_ns: int, mission_id, *, not_still: bool = False):

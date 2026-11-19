@@ -42,9 +42,15 @@ def driving():
 def test_required_needs_the_watch_and_its_source():
     from forklift_core.live.real_loop import RealLoop
 
-    with pytest.raises(ValueError, match="imu_required"):
-        RealLoop.__init__(object.__new__(RealLoop), **_loop_kwargs(imu_watch=None, imu_source=None,
-                                                                   imu_policy="required"))
+    from forklift_core.live.real_assembly import Watches
+
+    w = rig().loop
+    required = Watches(w.watch, w.imu_watch, "required")
+    with pytest.raises(ValueError, match="imu_required"):  # the assembled watches without a source
+        RealLoop.__init__(object.__new__(RealLoop), **_loop_kwargs(watches=required, imu_source=None))
+    with pytest.raises(ValueError, match="imu_required"):  # required, the IMU watch dropped
+        RealLoop.__init__(object.__new__(RealLoop), **_loop_kwargs(watches=Watches(w.watch, None, "required"),
+                                                                   imu_source=None))
 
 
 def _loop_kwargs(**over):
@@ -194,3 +200,40 @@ def test_samples_are_read_up_to_the_clock_at_the_read():
     r.tick()
     assert seen and all(u >= r.now + 6 * MS for u in seen)
     assert r.loop.imu_watch.counts["future"] == 0
+
+
+def test_a_sample_with_a_broken_time_is_dropped_alone():
+    """5b round 4 P2-2: a NaN acquisition time drops that sample, not the watch."""
+    r = driving()
+    src = r.imu.samples
+
+    def with_nan(upto_ns, limit):
+        out = src(upto_ns, limit)
+        return out[:1] + [(float("nan"), (0.0, 0.0, 9.81))] + out[1:]
+
+    r.imu.samples = with_nan
+    recs = [r.tick() for _ in range(10)]
+    assert all(x.branch != "emergency" for x in recs) and r.permit.state == ra.DRIVING
+    assert r.loop.imu_watch.counts["not_finite"] >= 10
+
+
+def test_a_pose_changed_behind_a_short_gap_in_the_stand_refuses_the_arm():
+    """5b round 4 P1: level, an 80 ms IMU gap, then 14 deg in the same stand -- not a baseline."""
+    r = rig()
+    src = r.imu.samples
+    state = {"n": 0}
+
+    def changed(upto_ns, limit):
+        out = []
+        for ns, a in src(upto_ns, limit):
+            state["n"] += 1
+            if 40 <= state["n"] < 56:
+                continue  # 16 samples (80 ms) lost
+            out.append((ns, tilted(14) if state["n"] >= 56 else a))
+        return out
+
+    r.tick(5)  # the stand's level samples first
+    r.imu.samples = changed
+    r.submit()
+    rec = run_until(r, lambda rec: rec.branch == "emergency" or r.mcu.arms > 0, limit=400)
+    assert r.mcu.arms == 0 and "imu_baseline_unsteady" in rec.reason
