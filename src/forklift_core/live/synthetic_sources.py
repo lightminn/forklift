@@ -99,13 +99,18 @@ class SyntheticScan(_Gated):
         if self._next_ns is None:
             self._next_ns = int(now_ns) + SCAN_PERIOD_NS
             return
-        while now_ns >= self._next_ns:
-            last_s = (self._next_ns - self.start_ns) / 1e9
-            scan = self._cast(last_s - SCAN_PERIOD_NS / 1e9, last_s)
-            self._queue.append(scan)
-            for sub in self.subscribers:
-                sub(scan)
-            self._next_ns += SCAN_PERIOD_NS
+        if now_ns < self._next_ns:
+            return
+        # missed periods are skipped, not filled with the present pose (design 10.5): one revolution, ending at the
+        # latest period boundary reached
+        k = (int(now_ns) - self._next_ns) // SCAN_PERIOD_NS
+        end_ns = self._next_ns + k * SCAN_PERIOD_NS
+        last_s = (end_ns - self.start_ns) / 1e9
+        scan = self._cast(last_s - SCAN_PERIOD_NS / 1e9, last_s)
+        self._queue.append(scan)
+        for sub in self.subscribers:
+            sub(scan)
+        self._next_ns = end_ns + SCAN_PERIOD_NS
 
     def scans(self, now_ns: int) -> list:
         if not self._open():

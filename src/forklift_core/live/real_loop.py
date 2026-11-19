@@ -892,6 +892,13 @@ class RealLoop:
         else:
             self._odom_good = True
         self._axis_judge(state)  # 6a: the displacement first, on every STATE, before the book takes it
+        if self.closing and self.closing_confirmed_ns is None:
+            # 6a-2b (design 10.5): judged on each STATE -- a later one of the same read must not hide it
+            fresh = int(self.clock()) - int(rx_ns) <= int(self.host.cfg.state_max_age_s * 1e9)
+            seq_ = int(state.last_rx_seq) & 0xFFFF
+            if fresh and state.mode == Mode.DISARMED and any(
+                    b == state.boot_id and q == seq_ and int(rx_ns) > int(w) for b, q, w in self.closing_disarms):
+                self.closing_confirmed_ns = int(self.clock())
         self.book.on_state(state, int(rx_ns))
         self._axis_end(state, int(rx_ns))
         self.permit.on_state(state, int(rx_ns))
@@ -1364,6 +1371,11 @@ class RealLoop:
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
                                         "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
+        if self.fatal_source is not None:
+            # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed)
+            rec.branch, rec.reason = "emergency", f"source_fatal:{self.fatal_source}"
+            self._emergency(now_ns, rec.reason)
+            return
         a = self.link.a
         if self._console_disarm:
             self._console_disarm = False
@@ -1883,24 +1895,11 @@ class RealLoop:
             self._transmit(now_ns, escalate=False)
         except Exception as exc:  # noqa: BLE001
             rec.reason = f"{rec.reason or ''};closing:{type(exc).__name__}"
-        if self.closing_confirmed_ns is None and self._closing_confirmed(now_ns):
-            self.closing_confirmed_ns = int(self.clock())
         rec.seqs = list(self._written_now)
         rec.permit = self.permit.state
         self.records.append(rec)
         self.record(rec)
         return rec
-
-    def _closing_confirmed(self, now_ns: int) -> bool:
-        """A DISARM written while closing named exactly by a fresh DISARMED of the same boot received after its write
-        (design 10.3: the permit's 'last DISARM' alone is not used -- a later DISARM would overwrite it)."""
-        host = self.host
-        s = host.state
-        rx = getattr(host, "_state_rx_ns", None)
-        if s is None or rx is None or s.mode != Mode.DISARMED or not host.health(now_ns).fresh:
-            return False
-        seq = int(s.last_rx_seq) & 0xFFFF
-        return any(boot == s.boot_id and q == seq and int(rx) > int(w) for boot, q, w in self.closing_disarms)
 
     def _emit(self, event: dict) -> None:
         if self.events is not None:
@@ -2190,6 +2189,8 @@ class RealLoop:
             first (its ages at ``ns0``); everything timed is then read on the clock after it, and a read that took
             more than EVIDENCE_READ_MAX_S refuses (round 5 P1-3)."""
             self._judged_ns = None
+            if self.fatal_source is not None:
+                return f"source_fatal:{self.fatal_source}", "alarm"  # 6a-2b (design 10.5): at every send
             if permit.state not in authority:
                 return f"permit_{permit.state.lower()}", "drop"  # a latch or a DISARM under way: no motion (P1-1)
             if a.mode == "STOPPED":
