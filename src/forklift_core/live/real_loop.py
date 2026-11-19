@@ -506,6 +506,7 @@ class RealLoop:
             "operator_start": None if start is None else start.ok(None if a.lease is None else a.lease.lease_id),
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
+            "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
             "bypassed": sorted(self.bypass | ({"relocalize"} if self._declared() else set())),
             "mode": a.mode,
             "relocalize": dict(self.relocalize_status),  # 5c-2 (6, 8): the last attempt's, kept after the close
@@ -1324,7 +1325,9 @@ class RealLoop:
         feedback = None if s is None or not self.samples else Feedback(
             stamp_mono=min(self.samples[-1].host_ns, now_ns) / 1e9, rear_axle_speed_mps=float(self.speed.signed_mps),
             lift_m=self._measured_lift(), steering_rad=abs(float(s.steering_rad)), odom_xy=self.odom_pose[:2])
-        refusal = core.cargo.submit_refusal() or self._submit_refusal(now_ns)
+        # 6a impl round 6: a failed collection's restart need comes first (the cargo state after it is half-reset)
+        refusal = ("not_ready:collect_failed" if self.session.collect_failed is not None else None) \
+            or core.cargo.submit_refusal() or self._submit_refusal(now_ns)
         self.serial = self.link.emergency(now_ns / 1e9)  # the emergency batch first (its serial: the send's reference)
         self._stop_kind, self._cmd_records = self.session.tick_start(
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,

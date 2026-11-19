@@ -301,7 +301,15 @@ def test_a_collection_that_raised_is_kept_with_the_failure_and_new_missions_are_
     run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
     res = r.loop.session.results[-1]
     assert res["reason"] == "s10_lifted" and res["collect_failed"].startswith("RuntimeError")
-    assert r.loop._submit_refusal(r.now) == "not_ready:collect_failed"  # noqa: SLF001
+    assert r.loop.real_status(r.now)["restart_required"] == res["collect_failed"]
+    # through the console: rearm, then a submit is refused with the restart need, ahead of the cargo's refusal
+    replies(r)
+    r.say("rearm")
+    r.tick(5)
+    submit_with(r, lambda: None)
+    r.tick()
+    got = [m for m in replies(r) if m.get("of") == "mission_submit"]
+    assert got and got[-1].get("reason") == "not_ready:collect_failed", got
 
 def test_an_arming_zero_first_judged_after_its_expiry_ends_the_exchange():
     """Impl round 3 P3: the zero's first gate opens 98 ms after its queueing (the queue still hands it out, the gate's
@@ -400,10 +408,18 @@ def test_an_s10_stop_discarded_at_its_first_byte_records_the_disarm_decision():
         return real(host, now, gate)
 
     r.transport.transmit = eagain_stop
-    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=4000)
+    k = {"n": len(r.transport.sent)}
+
+    def before(rec):
+        if r.permit.state in (ra.DISARMING, ra.LATCHED):
+            return True
+        k["n"] = len(r.transport.sent)
+        return False
+
+    run_until(r, before, limit=4000)
     assert r.permit.reason == "control_stop_discarded"
     assert r.loop.disarm_decisions[-1][1] == "control_stop_discarded"
-    assert [kind for _, kind, _, _ in r.transport.sent if kind == "DISARM"]
+    assert [kind for _, kind, _, _ in r.transport.sent[k["n"]:] if kind == "DISARM"]  # written in the discard's tick
 
 def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
     from dataclasses import replace as _r
