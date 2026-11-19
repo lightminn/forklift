@@ -188,6 +188,7 @@ class RealLoop:
         core, permit, host = self.core, self.permit, self.host
         self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         host.tick(now_ns)
+        self._bind_permit(now_ns)
         permit.tick(now_ns)
         if self._s10_stopping and permit.state == ra.LATCHED:
             # the control stop confirmed and DISARMED seen (or the DISARM after a failure): the arbiter STOPPED with
@@ -239,17 +240,21 @@ class RealLoop:
         why = ra.auto_ready_refusal(now_ns, "submit", self.evidence)
         return None if why is None else f"not_ready:{why}"
 
-    def _emergency(self, now_ns: int, reason: str) -> None:
-        self.waiting = None
+    def _bind_permit(self, now_ns: int) -> None:
+        """The permit's callbacks at this instant (a latch's or an unanswered DISARM's deadline)."""
         a = self.link.a
 
         def arbiter_stop(r):
             if a.mode != "STOPPED":
                 a.stop(now_ns / 1e9, r)
 
-        # the DISARM is tried before the arbiter's stop and the collection (4b design 7)
         self.permit.bind(transmit=lambda: self._transmit(now_ns), arbiter_stop=arbiter_stop,
                          collect=lambda r: self._end_now(now_ns, r))
+
+    def _emergency(self, now_ns: int, reason: str) -> None:
+        self.waiting = None
+        # the DISARM is tried before the arbiter's stop and the collection (4b design 7)
+        self._bind_permit(now_ns)
         try:
             self.permit.latch(now_ns, reason)
         except Exception:  # noqa: BLE001 -- the DISARM is queued and the arbiter stopped before a collection fails

@@ -366,3 +366,42 @@ def test_a_command_timeout_bit_does_not_refuse_the_rearm_but_another_fault_does(
     b.mcu.faults = FaultFlag.DRIVER_FAULT_L
     b.cycle(1)
     assert b.permit.rearm_refusal(b.now) == "mcu_faults"
+
+
+def test_an_unanswered_disarm_is_asked_again_every_100_ms_then_the_arbiter_stops_once_and_rearm_waits():
+    """4c design 4 7: a DISARM the MCU never takes -- asked again each 100 ms, at 500 ms the arbiter STOPPED and the
+    DISARM marked unconfirmed (once, not a latch each tick); no rearm until a DISARMED names the newest DISARM, and a
+    late answer clears the mark."""
+    b = Bench()
+    b.armed_ready()
+    b.mcu.deaf = True
+    b.order.clear()
+    sent_before = len(b.sent)
+    b.permit.latch(b.now, "overspeed")
+    assert b.order[:2] == ["transmit", ("arbiter", "overspeed")]
+    b.cycle(6)  # 120 ms
+    disarms = [m for m in b.sent[sent_before:] if isinstance(m, Disarm)]
+    assert len(disarms) >= 2 and not b.permit.disarm_unconfirmed
+    assert any(e.event == "disarm_retry" for e in b.permit.events)
+    assert b.permit.rearm_refusal(b.now) == "disarm_unconfirmed"
+    b.cycle(20)  # 520 ms
+    assert b.permit.disarm_unconfirmed and b.order.count(("arbiter", "disarm_unconfirmed")) == 1
+    b.cycle(10)
+    assert b.order.count(("arbiter", "disarm_unconfirmed")) == 1
+    assert sum(e.event == "disarm_unconfirmed" for e in b.permit.events) == 1
+    assert b.permit.rearm_refusal(b.now) == "disarm_unconfirmed"
+    b.mcu.deaf = False
+    b.cycle(8)  # the next retry reaches it
+    assert not b.permit.disarm_unconfirmed
+    assert any(e.event == "disarm_confirmed_late" for e in b.permit.events)
+    assert b.permit.rearm_refusal(b.now) != "disarm_unconfirmed"
+
+
+def test_an_answered_disarm_is_not_asked_again():
+    b = Bench()
+    b.armed_ready()
+    sent_before = len(b.sent)
+    b.permit.latch(b.now, "overspeed")
+    b.cycle(30)
+    assert sum(isinstance(m, Disarm) for m in b.sent[sent_before:]) == 1
+    assert not b.permit.disarm_unconfirmed and not any(e.event == "disarm_retry" for e in b.permit.events)
