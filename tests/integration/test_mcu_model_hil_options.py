@@ -39,6 +39,7 @@ class Model:
         os.set_blocking(self.master, False)
         self.proc = subprocess.Popen([str(exe), "--link", os.ttyname(self.slave), *map(str, args)])
         self.dec = LinkDecoder()
+        self.raw = b""
 
     def states(self, seconds):
         out, end = [], time.monotonic() + seconds
@@ -48,6 +49,7 @@ class Model:
             except BlockingIOError:
                 time.sleep(0.002)
                 continue
+            self.raw += data
             out += [r.message for r in self.dec.feed(data, time.monotonic_ns()) if isinstance(r.message, McuState)]
         return out
 
@@ -166,6 +168,12 @@ def test_a_frame_cut_mid_way_at_a_state_cut_is_dropped_and_the_poison_resyncs(mc
         later = [s for s in sts if s.mcu_time_us >= 600_000]
         assert later and later[0].last_rx_seq == 4321
         assert m.dec.errors == 1  # the poison closed the half frame: one overflow, no spoiled STATE
+        poison = bytes([1]) * 96 + b"\x00"
+        p = m.raw.find(poison)
+        assert p >= 0  # the poison went out
+        tail = [r.message for r in LinkDecoder().feed(m.raw[p + len(poison):], 0) if isinstance(r.message, McuState)]
+        assert tail and tail[0].mcu_time_us >= 600_000 and tail[0] is not None
+        assert tail[0].mcu_time_us == later[0].mcu_time_us  # the first STATE after the cut follows the poison at once
     finally:
         m.close()
     rows = [r.split() for r in log.read_text().splitlines() if r.split()[1] == "4321"]
@@ -173,14 +181,21 @@ def test_a_frame_cut_mid_way_at_a_state_cut_is_dropped_and_the_poison_resyncs(mc
 
 
 def test_the_prior_expiry_is_none_after_an_estop_ended_the_armed_command(mcu_model, tmp_path):
+    """Round 3-4 P3: the e-stop comes while the ARM's command is still live; the DISARM sent once ESTOP shows is handled
+    before that command's own expiry, with prior mode ESTOP and no active expiry."""
     from forklift_core.mcu_link.messages import Mode
 
     log = tmp_path / "accept.log"
-    m = Model(mcu_model, "--estop-at-ms", 400, "--accept-log", log)
+    m = Model(mcu_model, "--estop-at-ms", 250, "--accept-log", log)
     try:
-        sts = m.states(0.2)
-        m.send(Arm(sts[-1].boot_id, sts[-1].mcu_time_us), 10)
-        m.states(0.3)  # the e-stop at 400 ms while armed (the ARM's command not yet expired)
+        sts, end = [], time.monotonic() + 5.0
+        while (not sts or sts[-1].mcu_time_us < 180_000) and time.monotonic() < end:
+            sts += m.states(0.005)
+        echo = sts[-1].mcu_time_us
+        m.send(Arm(sts[-1].boot_id, echo), 10)
+        seen, end = [], time.monotonic() + 2.0
+        while not any(s.mode == Mode.ESTOP for s in seen) and time.monotonic() < end:
+            seen += m.states(0.002)
         m.send(Disarm(), 11)
         m.states(0.1)
     finally:
@@ -190,3 +205,34 @@ def test_the_prior_expiry_is_none_after_an_estop_ended_the_armed_command(mcu_mod
     dis = [r for r in rows if r[1] == "11"]
     assert arm and arm[0][3] == "accepted"
     assert dis and int(dis[0][4]) == int(Mode.ESTOP) and int(dis[0][5]) == -1
+    assert int(dis[0][0]) < echo + 200_000  # before the ARM's own command would have run out
+
+
+def test_the_accept_log_keeps_the_cores_read_budget(mcu_model, tmp_path):
+    """Several frames of one tick are handled in that tick, as without the log (round 1 P2-1)."""
+    sts = {}
+    for name, extra in (("off", ()), ("on", ("--accept-log", tmp_path / "a.log"))):
+        m = Model(mcu_model, *extra)
+        try:
+            for i in range(40):
+                m.send(Disarm(), 100 + i)
+            sts[name] = m.states(0.15)
+        finally:
+            m.close()
+    assert sts["on"][0].last_rx_seq == sts["off"][0].last_rx_seq
+
+
+def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
+    log = tmp_path / "axis.log"
+    m = Model(mcu_model, "--axis-log", log)
+    try:
+        m.states(0.3)
+    finally:
+        m.close()
+    rows = [line.split() for line in log.read_text().splitlines()]
+    assert len(rows) > 150  # about 1 kHz over 0.3 s, a loaded host allowing
+    t = [int(r[0]) for r in rows]
+    assert t == sorted(t)
+    for r in rows:
+        assert len(r) == 7  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s
+        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6])

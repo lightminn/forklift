@@ -165,7 +165,6 @@ static void flush_tx(void)
                 return;
             }
             want = want < 10 ? want : 10;
-            B.short_written = true;
         }
         ssize_t n = write(B.fd, B.tx, want);
         if (n < 0) {
@@ -176,6 +175,9 @@ static void flush_tx(void)
         }
         if (n == 0) {
             return; /* no progress: the buffer and tx_mid stay as they are */
+        }
+        if (B.short_write_at_ms >= 0 && elapsed_ms() >= B.short_write_at_ms) {
+            B.short_written = true; /* only once bytes really went out */
         }
         B.tx_mid = B.tx[n - 1] != 0;
         memmove(B.tx, B.tx + n, B.tx_len - (size_t)n);
