@@ -9743,7 +9743,12 @@ class MissionCore:
             # a hold left with the forks free is released for the end (D1 step 4), now or once standing.
             slam["pending_release"] = slam["release_wait_from"] = None
             if release_allowed == "relocalize":
-                self.require_relocalization(t, "hold_unrecoverable")
+                # once per ended mission: a collection retried after a later step raised does not open a second
+                # generation over the first (real HIL 6a impl round 4 P2-3)
+                mid = self.commands.mission_id
+                if mid is None or getattr(self, "_reloc_end_for", None) != mid:
+                    self._reloc_end_for = mid
+                    self.require_relocalization(t, "hold_unrecoverable")
             elif slam["tracker"].mode == "holding" and self.cargo.release_allowed():  # free or carrying (plan D5a)
                 if slam["stop_now"] if release_allowed is None else bool(release_allowed):
                     self.end_release(t, deferred=False)

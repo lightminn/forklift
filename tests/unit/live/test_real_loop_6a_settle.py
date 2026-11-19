@@ -374,8 +374,8 @@ def test_a_permit_disarm_is_recorded_at_its_decision_before_its_send():
         if len(r.loop.disarm_decisions) > n:
             break
     at, why = r.loop.disarm_decisions[-1]
-    if why.startswith("permit:"):
-        assert at <= entries[0]
+    # taken at the transition: before the send that carried its DISARM (the last send of the tick), never after it
+    assert entries and at <= entries[-1] and at < r.now + r.tick_cost_ns
 
 
 def test_an_axis_judgement_on_a_sample_past_the_age_bound_is_marked_invalid():
@@ -407,3 +407,46 @@ def test_a_collection_retried_after_a_late_step_keeps_the_first_clock_and_end_ti
     run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
     res = r.loop.session.results[-1]
     assert res["clock"] is taken["clock"] and res["ended_s"] == taken["t"]
+
+
+# --- Codex 6a-1 impl round 4 -------------------------------------------------------------------------------------
+def test_an_s10_stop_discarded_at_its_first_byte_records_the_disarm_decision():
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
+    r.transport.eagain = {"DRIVE"}
+    n = len(r.loop.disarm_decisions)
+    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=400)
+    assert len(r.loop.disarm_decisions) > n
+
+
+def test_an_axis_judgement_without_a_lift_measurement_is_marked_invalid():
+    from dataclasses import replace as _r
+
+    from test_real_loop_6a_gate import driving, holding
+
+    r = holding(driving())
+    r.loop._axis_judge(_r(r.host.state, lift_m=float("nan")))  # noqa: SLF001
+    assert r.loop.axis_watch_times[-1][1] is False
+
+
+def test_a_retried_end_reset_opens_the_relocalization_generation_once():
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
+    r.loop._release_allowed = lambda now_ns: "relocalize"  # noqa: SLF001
+    real_refresh = r.core.refresh_targets
+    state = {"armed": True}
+
+    def refresh():
+        if state["armed"]:  # after the relocalization opened in end_reset
+            state["armed"] = False
+            raise RuntimeError("injected:refresh_targets")
+        return real_refresh()
+
+    r.core.refresh_targets = refresh
+    run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
+    opened = [e for e in r.core.state.get("field_recoveries", []) if e.get("event") == "relocalize_required"]
+    assert len(opened) == 1

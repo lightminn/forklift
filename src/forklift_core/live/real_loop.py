@@ -277,8 +277,10 @@ class RealLoop:
         self._axis_trip: str | None = None
         self._sample_delay: dict = {}
         self.axis_watch_times: deque = deque(maxlen=1024)
-        self.disarm_decisions: deque = deque(maxlen=256)  # (clock ns, reason) of each emergency decision
-        self._permit_tx_ns: int | None = None  # the clock at the permit's first send in this head (its decision)
+        # (clock ns, reason) of each stop the permit decides -- a latch or a DISARM, the loop's or its own -- taken at
+        # the transition, before anything is queued or sent (6a impl rounds 1-4: the axis watch's last gap ends here)
+        self.disarm_decisions: deque = deque(maxlen=256)
+        permit.on_stop = lambda reason: self.disarm_decisions.append((int(self.clock()), str(reason)))
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
         # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
@@ -1095,7 +1097,8 @@ class RealLoop:
         else:
             b = None if rx_b is None else rx_b[1]
         valid = smp is not None and b is not None and \
-            now_c - (int(smp.host_ns) - int(round(float(b) * 1e9))) <= int(HOLD_SAMPLE_MAX_AGE_S * 1e9)
+            now_c - (int(smp.host_ns) - int(round(float(b) * 1e9))) <= int(HOLD_SAMPLE_MAX_AGE_S * 1e9) \
+            and math.isfinite(state.lift_m) and math.isfinite(state.steering_rad)  # impl round 4 P2-2
         self.axis_watch_times.append((now_c, bool(valid)))
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
@@ -1214,8 +1217,6 @@ class RealLoop:
         self._odom_broken = False
         core.state.pop("motion_hold", None)  # a hold is this tick's only (round 3 P2-2)
         self._apply_bypass(now_ns)  # 5c-1: the session's bypass for every judgement of this tick
-        before_ = permit.state  # 6a impl round 2 P2-4: a DISARM the permit decides itself is recorded too
-        self._permit_tx_ns = None
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
@@ -1255,7 +1256,6 @@ class RealLoop:
         host.tick(now_ns)
         self._bind_permit(now_ns)
         permit.tick(now_ns)
-        self._note_permit_disarm(before_)
         if self._s10_stopping and permit.state == ra.LATCHED:
             # the control stop confirmed and DISARMED seen (or the DISARM after a failure): the arbiter STOPPED with
             # the permit, so only a rearm in STOPPED goes on (design 4 5)
@@ -1438,24 +1438,10 @@ class RealLoop:
             if a.mode != "STOPPED":
                 a.stop(now_ns / 1e9, r)
 
-        def transmit():
-            if self._permit_tx_ns is None:
-                self._permit_tx_ns = int(self.clock())  # 6a impl round 3 P2-1: the decision, before its own send
-            self._transmit(now_ns, escalate=False)
-
-        self.permit.bind(transmit=transmit, arbiter_stop=arbiter_stop, collect=lambda r: self._end_now(now_ns, r))
-
-    def _note_permit_disarm(self, before: str) -> None:
-        """A latch or a DISARM the permit decided on its own (``permit.tick`` / ``on_state``): its decision instant on
-        the clock, as ``_emergency`` records its own (6a impl round 2 P2-4)."""
-        now_state = self.permit.state
-        if now_state in (ra.DISARMING, ra.LATCHED) and before not in (ra.DISARMING, ra.LATCHED):
-            at = self._permit_tx_ns if self._permit_tx_ns is not None else int(self.clock())
-            self.disarm_decisions.append((at, f"permit:{self.permit.reason}"))
+        self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
+                         collect=lambda r: self._end_now(now_ns, r))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
-        # 6a impl round 1 P2-4: the clock at the decision (the axis watch's last gap runs to here, not the tick start)
-        self.disarm_decisions.append((int(self.clock()), reason))
         self.waiting = None
         self._stop_decided = True  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
