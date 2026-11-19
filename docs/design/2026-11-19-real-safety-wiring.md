@@ -28,7 +28,7 @@
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
 | 5b | 4 | **수렴**(19판, Codex 9 회차) |
 | 5c-1 | 5 | **검토 중**(25판) — 머지는 11-20 보드 확인 뒤 |
-| 5c-1b | 5 끝 | 실차 콘솔 조작 화면(등록·시작 확인·확인 답·복구 완료·우회 단추), 5c-2 보다 먼저(총괄: S10 전에 현장에서 우회를 누를 수 있어야 함) |
+| 5c-1b | 5.1 | **검토 중**(1판) — 실차 콘솔 조작 화면, 5c-2 보다 먼저(총괄) |
 | 5c-2 | 6 | **미수렴 — 5c-2 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
@@ -217,6 +217,22 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 **통합 시험**(4c 가짜 트럭 확장, `operator_start_ok`·가짜 운용자 훅 주입 대신 실제 요청): lease → `pallet_register` → `operator_start` → 제출 → 채택·무장 → AUTO → 운반 높이 → `real_status` 의 확인 요청 → `operator_answer` → S10 정지; 각 거절 사유; IMU 기준이 없는(수평 아님) 차가 `check_bypass{imu}` 뒤 출발해 S10 까지, `real_status.bypassed` 표시, 새 세션에서 우회가 사라짐; 우회할 수 없는 이름의 거절; `real_requests=False` 에서 새 이름은 응답 없음·`recovery` 는 `unsupported`(중재기 기존 시험 불변).
 
 STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 만료 뒤 재무장은 4c·5a·5b 시험이 이미 덮는다. 재위치 확인(`relocalize_confirm`)과 상태의 재위치 세부는 5c-2.
+
+### 5.1 실차 콘솔 조작 화면 (5c-1b)
+
+> **5c-1b 검토 중**(1판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19: 5c-1 의 브라우저 지적 2 차 P2-5·P2-6·P2-7 을 여기서 닫고, 5c-2 보다 먼저 — 현장에서 운용자가 우회를 직접 누를 수 있어야 함). 머지 동결(11-20 보드 확인)은 5c-1 과 같다.
+
+`real_status` 를 받은 뒤에만 보이는 **실차 패널**(자율 실행기만 낸다 — 텔레옵 브리지도 `backend: real` 이지만 `real_status` 가 없음)(`index.html` 의 한 구역, 배선은 `console/web/js/realpanel.js`; 판단은 그 모듈의 순수 함수로 두고 Node 로 시험). 기존 마법사(가짜 차량·Isaac 의 `state` 기반)는 바꾸지 않는다.
+
+- **팔레트 등록과 작업 지시**(2 차 P2-5): 목록(`targets`)에서 팔레트를 고르고 지도 자세 `x, y, yaw`(m, m, °)를 넣어 `pallet_register`. ack 의 `targets_revision` 을 패널이 보관하고 곧 `targets_request` 로 목록을 새로 받는다. 패널의 '작업 지시'는 **그 보관한 revision**(목록이 더 새 것이면 목록의 것)으로 `mission_submit` 을 보낸다 — `stale_targets` 면 등록부터 다시. 실차의 제출 가능 판정은 `state` 가 아니라 `real_status`(lease 보유·허가 OFF·진행 중 미션 없음)로 한다.
+- **시작 확인**: '시작 확인' 단추 → `operator_start`. `real_status.operator_start` 가 참이면 '확인됨' 표시.
+- **운용자 확인 답**(2 차 P2-7): `real_status.operator_request` 를 보이고, 화면에 그린 순간의 `(session_epoch, kind, serial)` 을 단추에 묶는다. 누를 때 최신 `real_status` 의 열쇠와 다르면 **보내지 않고** '요청이 바뀌었습니다' 를 보인다.
+- **현장 복구 완료**: `real_status.field_recovery` 가 있을 때만 단추 → `recovery{recovery_id, action:"done"}`(번호는 화면에 그린 값).
+- **검사 우회**: 5 절의 우회 가능한 검사마다 켬/우회 단추 → `check_bypass{check, on}`. 허가가 OFF·LATCHED 가 아니거나 진행 중 미션이 있거나 lease 가 없으면 단추를 막고 이유를 보인다(서버 거절과 같은 사유). 지금 우회 상태는 `real_status.bypassed` 만 따른다(낙관적 표시 없음 — ack 는 '다음 틱 적용' 이므로).
+- **lease**(2 차 P2-6): 5c-1 의 `protocol.js` 가 `real_status.lease.holder` 로 보유를 맞추므로, 반납·만료 뒤 같은 연결에서 '조종 권한 받기' 가 다시 `lease_request` 를 보낸다(시험: 반납 → 같은 연결 재획득).
+- 거절은 `rejectText` 로 한국어 사유를 패널에 보인다(5c-1 의 `REJECT` 문구).
+
+**시험**: Node 로 `realpanel.js` 의 순수 함수 — 제출 인자의 revision 선택, 답 열쇠 묶기와 바뀐 열쇠 폐기, 우회 단추의 가능·이유, 패널 표시 조건; `protocol.js` 반납 → 같은 연결 재획득. 화면 배선은 가짜 실차 서버 없이 DOM 함수 단위로만(학교 규모).
 
 ## 6. 재위치 배선
 

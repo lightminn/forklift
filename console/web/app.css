@@ -440,3 +440,10 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 /* the real truck's session bypass (5c-1): shown as long as a check is bypassed */
 .banner.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 6px 12px; margin: 6px 12px; font-weight: 600; }
 .banner[hidden] { display: none; }
+
+/* the real truck's operator panel (5c-1b) */
+.real-panel { position: absolute; left: 12px; bottom: 12px; z-index: 5; background: var(--panel, #111a); border: 1px solid var(--line, #3336); border-radius: 10px; padding: 8px 10px; max-width: 560px; display: flex; flex-direction: column; gap: 6px; }
+.real-panel[hidden] { display: none; }
+.real-panel .rp-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.real-panel input { width: 72px; }
+.real-panel .btn.warn { border-color: var(--warn); color: var(--warn); }
