@@ -126,3 +126,30 @@ def test_an_operating_transport_writes_no_arm_and_no_drive_of_any_kind():
     assert "ARM" not in kinds and "DRIVE" not in kinds
     assert "DISARM" in kinds and r.mcu.mode == Mode.DISARMED
     assert r.permit.state in (ra.LATCHED, ra.OFF)
+
+
+def test_the_insert_end_waits_with_wheels_0_until_the_stand():
+    """Codex 4c impl P1-7: after the insert's arrival and before the stand, the output is the wait frame (wheels 0),
+    not a decelerating forward DRIVE."""
+    r = s10_rig()
+    rec = run_until(r, lambda rec: rec.reason == "insert_end_stand")
+    assert rec.branch == "wait" and r.core.ms.phase == "insert"
+    k = len(r.transport.sent)
+    run_until(r, lambda rec: r.core.ms.phase == "lift")
+    waits = [x for x in r.loop.records if x.reason == "insert_end_stand"]
+    assert waits and all(x.branch == "wait" for x in waits)
+    drives = [m for _, kind, _, m in r.transport.sent[k - 1:] if kind == "DRIVE"]
+    assert all(m.left_wheel_rad_s == 0.0 == m.right_wheel_rad_s for m in drives)
+
+
+def test_a_deferred_release_is_dropped_for_a_relocalization_when_the_hold_has_gone_too_far():
+    """Codex 4c impl P1-10: the hold's travel is checked again each tick while a release is deferred."""
+    from dataclasses import replace
+
+    r = Rig(frames=True)
+    r.start()
+    r.core.end_release_due = 1.0
+    gen = r.core.commands.mission_gen
+    r.loop.evidence = replace(r.loop.evidence, slam=lambda n: ra.SlamView("holding", n, ra.HOLD_MAX_M + 0.2, gen))
+    r.tick(1)
+    assert r.core.end_release_due is None and r.core.cargo.relocalize_required

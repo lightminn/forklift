@@ -639,7 +639,8 @@ class MissionCore:
             if self._real_vehicle():
                 held_ = self._real_insert_end(t)
                 if held_ == "wait":
-                    return SimpleNamespace(stop=False, rear=rear)  # the insert (and D5) go on; wheels 0 (the loop)
+                    # the insert (and D5) go on; the loop's output waits with wheels 0 (Codex 4c impl P1-7)
+                    return SimpleNamespace(stop=False, rear=rear, wait="insert_end_stand")
                 if held_ is not None:
                     self.commands.terminate("recovery_required", t, f"insert_end:{held_}")
                     return SimpleNamespace(stop=False, rear=rear)
@@ -1729,11 +1730,13 @@ class MissionCore:
             else:
                 lp, wp = pocket["check"].limit(
                     t, tuple(float(v) for v in rear), kappa, direction,
-                    max(abs(requested_speed), speed_.bound_mps),
+                    max(abs(requested_speed), speed_.bound_mps, self._residual_speed(direction)),
                     float(hooks.lift_position()),
                 )
                 if lp < allowed:
                     allowed, why = lp, wp
+                if self._residual_speed(direction) > lp:  # real only: an unconfirmed faster output holds (P1-9)
+                    allowed, why, speed_hold_ = 0.0, (wp if wp != "ok" else "residual_over_allowed"), True
                 if ms.phase == "approach" and not pocket.get("mid_still_done"):
                     # The standing frame is a planned stop: brake into it at
                     # MID_STILL_DECEL_MPS2, not as a step (L3c v35 seed 4: a step
@@ -6747,6 +6750,10 @@ class MissionCore:
             cap = max([cap_mps, *motion.values()])
         allowed, why = min((limit_fn(d_, cap) for d_ in driving), key=lambda r: r[0])
         hold = False
+        if direction is not None and motion.get(direction, 0.0) > allowed:
+            # what may still act the asked way is beyond what the layer allows that way (a slowing request does not
+            # slow an unconfirmed faster output): the wheels hold (Codex 4c impl P1-9)
+            allowed, why, hold = 0.0, (why if why != "ok" else "residual_over_allowed"), True
         for d_, v_ in motion.items():
             if d_ == direction:
                 continue  # the asked direction: the permission's own limit
@@ -6754,6 +6761,12 @@ class MissionCore:
             if a_ < v_:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
         return allowed, why, hold, driving, len(possible) > 1
+
+    def _residual_speed(self, direction) -> float:
+        """The real loop's output that may still act in ``direction`` (0 in the simulation: no such record)."""
+        if not self._real_vehicle() or direction is None:
+            return 0.0
+        return float((self.state.get("outstanding_motion") or {}).get(int(direction), 0.0))
 
     def _kinematic_refusal(self, t: float, reason: str, requested_curvature: float, curvature_range) -> None:
         """Design D3 as built in 4a': latch a stop with the steering held, record it, and pause the mission -- the

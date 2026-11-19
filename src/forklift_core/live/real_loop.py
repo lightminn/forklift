@@ -345,6 +345,12 @@ class RealLoop:
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None:
                 known_request(core, t, rear, self.frozen, base_scenario=self.base_scenario, wait_pose=self.wait_pose)
+        if core.end_release_due is not None:
+            sl = self.evidence.slam(now_ns)
+            if sl.mode == "holding" and sl.hold_travel_m > ra.HOLD_MAX_M:
+                # a deferred release re-checks the hold's travel each tick, not only at the collection (Codex 4c impl
+                # P1-10): too long a hold is not released -- a relocalization instead
+                core.require_relocalization(t, "hold_too_long")
         gate_ = core.release_gate(t, rear)
         rear = gate_.rear
         # as the Isaac loop: paused, resuming or cancelling, or no mission yet (or over) -- a preparation is not
@@ -378,6 +384,7 @@ class RealLoop:
             return
         requested_speed, curvature, dwell_hold, cusp_hold, safety_hold = 0.0, 0.0, False, False, False
         tracking = None
+        arrival_wait = None
         if (ms.phase in core.trackers and not gate_.releasing and not gate_.warming and not paused_
                 and not plan_wait_ and permit.state in (ra.READY, ra.DRIVING)):
             follow_ = core.follow(t, rear, self.speed.signed_mps, TICK_S)
@@ -399,6 +406,7 @@ class RealLoop:
                 arrival_ = core.arrive(t, tracking)
                 if arrival_.rear is not None:
                     rear = arrival_.rear
+                arrival_wait = getattr(arrival_, "wait", None)
         if core.jobs is not None and not plan_wait_ and core.job_pending():
             plan_wait_ = True
         if not paused_ and (not plan_wait_ or core.lift_ramps_in_plan_wait()) and core.lift_and_timers(t, TICK_S):
@@ -424,7 +432,13 @@ class RealLoop:
             requested_speed, curvature, dwell_hold = 0.0, 0.0, True
         elif core.live_leg(t, rear, False):
             requested_speed = 0.0
-        self._wait_reason = "plan_wait" if plan_wait_ and permit.state in (ra.READY, ra.DRIVING) else None
+        self._wait_reason = None
+        if permit.state in (ra.READY, ra.DRIVING):
+            if arrival_wait is not None:
+                requested_speed, curvature, dwell_hold = 0.0, 0.0, True
+                self._wait_reason = arrival_wait  # the wait frame: wheels 0 at once, the old queue dropped
+            elif plan_wait_:
+                self._wait_reason = "plan_wait"
         self._assemble_and_arbitrate(now_ns, t, rear, requested_speed, curvature, dwell_hold, rec,
                                      obstacle_hold=obstacle_hold, cusp_hold=cusp_hold, safety_hold=safety_hold)
 

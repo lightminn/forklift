@@ -157,3 +157,17 @@ def test_the_simulation_direction_check_is_as_before():
     core._direction_limits(lambda d, cap: asked.append((d, cap)) or (1.0, "ok"),  # noqa: SLF001
                            SafetySpeed.exact(0.0), 1, 0.03)
     assert asked == [(1, 0.03)]
+
+
+def test_a_faster_unconfirmed_output_the_same_way_than_allowed_holds_the_wheels():
+    """Codex 4c impl P1-9: residual +0.15 forward, a request of +0.03, the layer allowing 0.05 that way -> a hold."""
+    core, ms, state, log = make("approach")
+    core.options.real_vehicle = True
+    state["command_speed"] = 0.0
+    state["outstanding_motion"] = {1: 0.15}
+    allowed, why, hold, _, _ = core._direction_limits(lambda d, cap: (0.05, "ok"),  # noqa: SLF001
+                                                      SafetySpeed(0.0, 0.0, (1,)), 1, 0.03)
+    assert (allowed, why, hold) == (0.0, "residual_over_allowed", True)
+    assert core._residual_speed(1) == 0.15 and core._residual_speed(-1) == 0.0  # noqa: SLF001
+    core.options.real_vehicle = False
+    assert core._residual_speed(1) == 0.0  # noqa: SLF001 -- the simulation has no such record
