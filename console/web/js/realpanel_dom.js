@@ -51,20 +51,26 @@ export function bindRealPanel(m, rejectText, clientId) {
   // press's input -- not the keyboard's, never the newest drawing (r7 P2-2)
   const clickInput = (key, ev) => {
     const input = inputOf(ev);
-    if (input === "kbd" && panel.lastPointer[key] && !(panel.press[key] && "kbd" in panel.press[key])) {
-      return panel.lastPointer[key];
-    }
-    return input;
+    if (input !== "kbd") return input;
+    const rec = panel.press[key] || {};
+    if ("kbd" in rec) return "kbd";
+    const pointers = Object.keys(rec).filter((k) => k !== "kbd");
+    if (pointers.length === 1) return pointers[0]; // the one pointer press this click can be
+    // two pointer presses, or a pointer press since cancelled: which one clicked is not known -- refused (r8 P2)
+    if (pointers.length > 1 || panel.lastPointer[key]) return null;
+    return "kbd";
   };
   const pressCtx = (key, ev) => {
     const rec = panel.press[key];
     const input = clickInput(key, ev);
+    if (input === null) return { ambiguous: true };
     const ctx = rec && input in rec ? rec[input] : null;
     if (rec) delete rec[input];
     return ctx;
   };
   const clickOk = (key, ev) => {
     const ctx = pressCtx(key, ev) ?? panel.drawn;
+    if (ctx && ctx.ambiguous) return false;
     return same(ctx, ctxNow()) && same(panel.drawn, ctxNow()) && panel.mine;
   };
   const guard = (fn, key) => (ev) => {
@@ -90,6 +96,10 @@ export function bindRealPanel(m, rejectText, clientId) {
     send("pallet_register", { pallet_id: pallet, pose }, "등록했습니다").then((r) => {
       if (r && r.t === "ack" && Number.isInteger(r.targets_revision)) {
         panel.registered = { session_epoch: d.epoch, revision: r.targets_revision, pallet, pose }; // what was sent
+        const now = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
+        if ($("rp-pallet").value !== pallet || !now || now.some((v, i) => Math.abs(v - pose[i]) > 1e-9)) {
+          say("등록했습니다 · 그 사이 입력을 바꿨으니 지금 입력으로 다시 등록하세요"); // (r8 P3)
+        }
         m.session.request("targets_request", {}); // the list with the registered pose
       }
     });
