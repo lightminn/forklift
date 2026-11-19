@@ -406,3 +406,51 @@ def test_the_model_skips_late_cycles_so_kth_counts_stay_within_one_per_ms(bench_
         for axis in range(2):
             frames = (c.kth_frames[axis] - a.kth_frames[axis]) % 0x10000
             assert frames <= math.floor(dt_ms) + 1, (axis, frames, dt_ms)
+
+
+def test_the_real_loops_frames_on_the_c_firmware_model(bench_factory):
+    """4c design 8 (가짜 MCU 의 충실도): one pass of the real loop's frames through the C firmware core over the pty --
+    the executor's host (real client, first seq near the wrap) ARMs, the host's zero DRIVE makes it ready, a port DRIVE
+    moves the wheels, the control stop's frame is named exactly by a fresh STATE with COMMAND_FRESH and the wheels come
+    to rest, then a DISARM is named exactly by a DISARMED."""
+    from forklift_core.live.real_loop import real_host
+    from forklift_core.plant.kinematics import RealKinematics
+    from forklift_core.plant.port import RealPlantPort
+
+    b = bench_factory()
+    b.host = real_host(CFG, initial_seq=0xFFFA, log=lambda *a: b.log.append(a))
+    port = RealPlantPort(b.host, RealKinematics(VEHICLE), lift_motion_counts=True)
+    arm(b)
+    kin = RealKinematics(VEHICLE)
+    drive = kin.command(0.15, 0.0)
+
+    def send(now):
+        if b.host.ready:
+            port.command(port.make_command(now, now + 100_000_000, drive, np.asarray(drive.steering_rad),
+                                           float(b.state().lift_m), "target"), now)
+
+    start = b.state().wheel_count_left
+    b.run_until(lambda: False, timeout_s=0.5, every=send)
+    assert b.state().mode == Mode.ARMED and b.state().wheel_count_left != start
+    s = b.state()
+    now = time.monotonic_ns()
+    r = port.control_stop(steering_rad=float(s.steering_rad), lift_m=float(s.lift_m), now_ns=now,
+                          expires_ns=now + 100_000_000)
+    assert r.kind == "queued" and r.seq is not None
+    assert b.run_until(lambda: int(b.state().last_rx_seq) == r.seq and bool(b.state().flags & StateFlag.COMMAND_FRESH),
+                       timeout_s=0.5)
+
+    def holding(now):  # the stop frame refreshed on its generation (the wait frame's way) until the wheels rest
+        s = b.state()
+        port.hold_frame(steering_rad=float(s.steering_rad), lift_m=float(s.lift_m), now_ns=now,
+                        expires_ns=now + 100_000_000)
+
+    counts = []
+    b.run_until(lambda: len(counts) > 20 and len(set(counts[-10:])) == 1, timeout_s=2.0,
+                every=lambda now: (holding(now), counts.append(b.state().wheel_count_left)))
+    assert len(set(counts[-10:])) == 1  # the wheels came to rest under the stop frame
+    b.host.request_disarm(time.monotonic_ns())
+    disarm_seq = b.host.last_queued_seq
+    assert b.run_until(lambda: b.state().mode == Mode.DISARMED and int(b.state().last_rx_seq) == disarm_seq,
+                       timeout_s=1.0)
+    assert disarm_seq < 0xFFFA  # the run crossed the u16 wrap

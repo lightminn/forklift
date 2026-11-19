@@ -158,6 +158,7 @@ export const REASONS = {
   // a known-pallet start (design 2026-11-19-known-pallet-start): the operator's map pose, S10 case A
   "prepare:known:": "입력한 팔레트 위치로 시작하지 못했습니다",
   "s10_lifted": "운반 높이 도달 · 현장 복구 필요",
+  "insert_end:": "삽입 끝 확인(정지·자세·포켓 깊이)에 실패해 들지 않았습니다 · 현장 복구 필요",
   "prepare:": "첫 구간을 준비하지 못했습니다",
   // the recovery of a mission that ended with the forks in a pocket
   "recovery:clear_out:budget": "물러나기 거리(1.0 m)를 다 썼습니다 — 수동 복구가 필요합니다",

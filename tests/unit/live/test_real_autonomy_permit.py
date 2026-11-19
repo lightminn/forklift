@@ -13,7 +13,8 @@ from forklift_core.plant.kinematics import RealKinematics
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.port import RealPlantPort
 
-from test_teleop_bridge_cycle import MS, VEH, FakeMcu
+from real_loop_rig import FreshMcu
+from test_teleop_bridge_cycle import MS, VEH
 
 
 class Bench:
@@ -22,7 +23,7 @@ class Bench:
         self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
                                            outbox_max=16), client=Client.REAL)
         self.port = RealPlantPort(self.host, RealKinematics(VEH))
-        self.mcu = FakeMcu()
+        self.mcu = FreshMcu()  # COMMAND_FRESH while a DRIVE lasts (the S10 stop's confirmation reads it)
         self.dec = LinkDecoder()
         self.sent, self.order, self.written = [], [], []
         self.settled = ("settled", 0)
@@ -30,6 +31,7 @@ class Bench:
         self.permit = ra.AutoPermit(self.host, self.port, outstanding=lambda now: self.settled,
                                     stop_since=lambda now: self.still)
         self.collect_raises = False
+        self.host._on_state_cb = self.permit.on_state  # noqa: SLF001 -- every STATE, as the loop passes it
         self.permit.bind(transmit=self.transmit, arbiter_stop=lambda reason: self.order.append(("arbiter", reason)),
                          collect=self.collect)
         self.cycle(3)
@@ -205,7 +207,7 @@ def test_a_stop_frame_never_written_is_not_confirmed_by_a_later_seq():
     b.host.drop_drives("test")  # the frame never goes out
     b.mcu.rx = (seq + 5) & 0xFFFF  # an echo naming a later seq
     b.cycle(6, transmit=False)
-    assert b.permit.reason == "control_stop_unconfirmed"
+    assert b.permit.reason in ("control_stop_unwritten", "control_stop_unauthorized")  # never confirmed: DISARM
 
 
 def test_an_unconfirmed_control_stop_disarms_after_its_limit():
@@ -215,7 +217,8 @@ def test_an_unconfirmed_control_stop_disarms_after_its_limit():
     seq = queue_stop_frame(b)
     b.permit.control_stop(b.now, seq)
     b.cycle(6)  # 120 ms
-    assert b.permit.reason == "control_stop_unconfirmed" and b.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert b.permit.reason in ("control_stop_unconfirmed", "control_stop_unauthorized")
+    assert b.permit.state in (ra.DISARMING, ra.LATCHED)
 
 
 def latched(b):
@@ -349,3 +352,113 @@ def test_the_session_check_steps_by_at_least_1024():
     assert b.permit.session_started
     disarms = [q for q, _ in b.written]
     assert ((disarms[-1] - seqs[0]) & 0xFFFF) >= 1024
+
+
+def test_a_command_timeout_bit_does_not_refuse_the_rearm_but_another_fault_does():
+    from forklift_core.mcu_link.messages import FaultFlag
+
+    b = Bench()
+    latched(b)
+    b.cycle(10)
+    b.settled = ("settled", b.now - 50 * MS)
+    b.still = (b.now - 20 * MS, b.mcu.boot)
+    b.mcu.faults = FaultFlag.COMMAND_TIMEOUT
+    b.cycle(1)
+    b.still = (b.now - 20 * MS, b.mcu.boot)
+    assert b.permit.rearm_refusal(b.now) is None
+    b.mcu.faults = FaultFlag.DRIVER_FAULT_L
+    b.cycle(1)
+    assert b.permit.rearm_refusal(b.now) == "mcu_faults"
+
+
+def test_an_unanswered_disarm_is_asked_again_every_100_ms_then_the_arbiter_stops_once_and_rearm_waits():
+    """4c design 4 7: a DISARM the MCU never takes -- asked again each 100 ms, at 500 ms the arbiter STOPPED and the
+    DISARM marked unconfirmed (once, not a latch each tick); no rearm until a DISARMED names the newest DISARM, and a
+    late answer clears the mark."""
+    b = Bench()
+    b.armed_ready()
+    b.mcu.deaf = True
+    b.order.clear()
+    sent_before = len(b.sent)
+    b.permit.latch(b.now, "overspeed")
+    assert b.order[:2] == ["transmit", ("arbiter", "overspeed")]
+    b.cycle(6)  # 120 ms
+    disarms = [m for m in b.sent[sent_before:] if isinstance(m, Disarm)]
+    assert len(disarms) >= 2 and not b.permit.disarm_unconfirmed
+    assert any(e.event == "disarm_retry" for e in b.permit.events)
+    assert b.permit.rearm_refusal(b.now) == "disarm_unconfirmed"
+    b.cycle(20)  # 520 ms
+    assert b.permit.disarm_unconfirmed and b.order.count(("arbiter", "disarm_unconfirmed")) == 1
+    b.cycle(10)
+    assert b.order.count(("arbiter", "disarm_unconfirmed")) == 1
+    assert sum(e.event == "disarm_unconfirmed" for e in b.permit.events) == 1
+    assert b.permit.rearm_refusal(b.now) == "disarm_unconfirmed"
+    b.mcu.deaf = False
+    b.cycle(8)  # the next retry reaches it
+    assert not b.permit.disarm_unconfirmed
+    assert any(e.event == "disarm_confirmed_late" for e in b.permit.events)
+    assert b.permit.rearm_refusal(b.now) != "disarm_unconfirmed"
+
+
+def test_an_answered_disarm_is_not_asked_again():
+    b = Bench()
+    b.armed_ready()
+    sent_before = len(b.sent)
+    b.permit.latch(b.now, "overspeed")
+    b.cycle(30)
+    assert sum(isinstance(m, Disarm) for m in b.sent[sent_before:]) == 1
+    assert not b.permit.disarm_unconfirmed and not any(e.event == "disarm_retry" for e in b.permit.events)
+
+
+@pytest.mark.parametrize("inject", ["reject", "not_fresh"])
+def test_a_stop_named_by_its_seq_but_rejected_or_not_fresh_is_no_confirmation(inject):
+    """4c design 4 4 (Codex impl P1-2): the exact seq is not enough -- a reject reason DISARMs at once, a STATE
+    without COMMAND_FRESH never confirms."""
+    from forklift_core.mcu_link.messages import RejectReason
+
+    b = Bench()
+    b.armed_ready()
+    if inject == "reject":
+        b.mcu.reject = RejectReason(1)
+    else:
+        b.mcu.fresh_off = True
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.transmit()
+    b.cycle(7)
+    assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
+    assert b.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert b.permit.reason.startswith("control_stop_rejected" if inject == "reject" else "control_stop_un")
+
+
+def test_a_stop_written_after_its_queue_dwell_is_not_confirmed():
+    """Codex 4c impl round 2 P1-3: written 45 ms after it was queued -- whatever echo follows does not count."""
+    b = Bench()
+    b.armed_ready()
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.permit.written("DRIVE", seq, b.now + 45 * MS)  # the transmitter reports its write 45 ms after the queueing
+    b.cycle(1, transmit=False)
+    assert b.permit.reason == "control_stop_late_write"
+    assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
+
+
+def test_a_reject_in_a_batch_is_kept_even_when_a_later_state_of_the_batch_confirms():
+    """Codex 4c impl round 2 P1-3: reject -> NONE read at once; the reject still DISARMs as a rejection."""
+    from forklift_core.mcu_link.messages import RejectReason, encode
+
+    b = Bench()
+    b.armed_ready()
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.transmit()
+    b.now += 10 * MS
+    b.mcu.advance(10_000)
+    b.mcu.reject = RejectReason(1)
+    first = encode(b.mcu.state(), 1)
+    b.mcu.advance(10_000)
+    b.mcu.reject = None
+    b.host.on_bytes(first + encode(b.mcu.state(), 1), b.now)
+    b.host.tick(b.now)
+    b.permit.tick(b.now)
+    assert b.permit.reason.startswith("control_stop_rejected")

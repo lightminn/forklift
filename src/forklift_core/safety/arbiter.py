@@ -70,6 +70,10 @@ class ArbiterConfig:
     # Design 2026-11-19-real-assembly 7: what AUTO does when the lease is lost -- "continue" (the simulation's user
     # decision, design 2) or "stop" (the real truck, lead decision 2026-11-19: STOPPED, a rearm needed)
     auto_lease_loss: str = "continue"
+    # docs/design/2026-11-19-real-loop.md 2.1 (the real truck; off: as before): the stand judged from the loop's own
+    # evidence (``Arbiter.stop_evidence``) inside the one observe(); a DISARM taken whatever its control generation
+    external_stop: bool = False
+    disarm_ignores_control_gen: bool = False
 
     def __post_init__(self):
         if self.auto_lease_loss not in ("continue", "stop"):
@@ -158,6 +162,10 @@ class Arbiter:
         # control_gen), called where a rearm really moves STOPPED -> PAUSED (a replayed ACK never calls it)
         self.rearm_refusal = None
         self.on_rearmed = None
+        # docs/design/2026-11-19-real-loop.md 2.1 (the real executor; None: unused): stop_evidence(now) -> (fresh,
+        # standing) read inside observe() when config.external_stop; on_disarm(now) told of every DISARM taken
+        self.stop_evidence = None
+        self.on_disarm = None
         self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
         # the wall escape's approval handler ``(msg, now_mono) -> reason | None``, injected by the S6 bridge only;
         # None: escape_approve is unsupported (Isaac, every other back end -- standing-direction-rule design 4.2)
@@ -349,7 +357,7 @@ class Arbiter:
         reply.update(fields)
         return reply
 
-    def _generation_problem(self, client_id: str, msg: dict, *, lease: bool) -> str | None:
+    def _generation_problem(self, client_id: str, msg: dict, *, lease: bool, control: bool = True) -> str | None:
         if msg.get("session_epoch") != self.session_epoch:
             return "stale_epoch"
         if not lease:
@@ -358,7 +366,7 @@ class Arbiter:
             return "no_lease"
         if msg.get("lease_id") != self.lease.lease_id:
             return "stale_lease"
-        if msg.get("control_gen") != self.control_gen:
+        if control and msg.get("control_gen") != self.control_gen:
             return "stale_control"
         return None
 
@@ -366,7 +374,9 @@ class Arbiter:
         request_id = msg["request_id"]
         if not self.clients[client_id]:
             return self._reply(kind, request_id, "unsupported")  # an observe-only connection (contract 10)
-        problem = self._generation_problem(client_id, msg, lease=kind in LEASED)
+        problem = self._generation_problem(  # a real truck's DISARM: stopping is the safe way, any generation
+            client_id, msg, lease=kind in LEASED,
+            control=not (kind == "disarm" and self.config.disarm_ignores_control_gen))
         if problem is not None:
             return self._reply(kind, request_id, problem)
         if kind in LEASED and self.session_request is not None:
@@ -647,6 +657,8 @@ class Arbiter:
 
     def _on_disarm(self, client_id, request_id, msg, now_mono):
         self._disarm(now_mono, "disarm")
+        if self.on_disarm is not None:
+            self.on_disarm(now_mono)  # the real executor's emergency DISARM (AUTO has no `armed` to drop)
         return self._reply("disarm", request_id)
 
     def _renew(self, client_id: str, msg: dict) -> bool:
@@ -676,6 +688,10 @@ class Arbiter:
         self._expire(now_mono)
         self._check_deadline(now_mono)
         fresh = _valid_feedback(feedback, now_mono, self.config.feedback_max_age_s)
+        external = self.config.external_stop and self.stop_evidence is not None
+        if external:
+            ev_fresh, ev_standing = self.stop_evidence(now_mono)
+            fresh = bool(fresh and ev_fresh)  # the loop's unique samples decide freshness too
         self.feedback_ok = fresh
         self.lift_m = _finite(getattr(feedback, "lift_m", None)) if fresh else None
         if fresh:
@@ -688,9 +704,12 @@ class Arbiter:
             self._recent_speeds = []
         self.steering_rad = _finite(getattr(feedback, "steering_rad", None)) if fresh else None
         if fresh:
-            self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
-                                                       speed=float(feedback.rear_axle_speed_mps),
-                                                       yaw_rate=float(feedback.yaw_rate_radps))
+            if external:
+                self.stop_confirmed = bool(ev_standing)  # unique samples, outputs settled: the loop's (design 2.1)
+            else:
+                self.stop_confirmed = self.detector.update(commanded_speed=self.last_applied,
+                                                           speed=float(feedback.rear_axle_speed_mps),
+                                                           yaw_rate=float(feedback.yaw_rate_radps))
             self._update_creep(_odom_xy(feedback))
         else:
             self._creep_m = math.inf  # what moved now is not measured (an odometry position may still tell later)

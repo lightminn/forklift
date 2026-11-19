@@ -12,11 +12,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from forklift_core.mcu_link.messages import Mode
+from forklift_core.mcu_link.messages import FaultFlag, Mode, RejectReason, StateFlag
 
 OFF, ARMING, READY, DRIVING, STOP_PENDING, DISARMING, LATCHED = (
     "OFF", "ARMING", "READY", "DRIVING", "STOP_PENDING", "DISARMING", "LATCHED")
 STOP_ACK_S = 0.100  # the control stop's frame confirmed by a STATE naming its seq within this (design 7, provisional)
+STOP_QUEUE_S = 0.040  # and written within this of its queueing (4c design 4 4: the queue dwell)
+DISARM_RETRY_S = 0.100  # an unanswered DISARM asked again (4c design 4 7)
+DISARM_DEADLINE_S = 0.500  # then the arbiter STOPPED and the DISARM recorded unconfirmed (4c design 4 7)
 
 
 @dataclass
@@ -51,6 +54,8 @@ class AutoPermit:
         self._disarm_asked_ns: int | None = None
         self._disarm_written_ns: int | None = None  # the newest DISARM's write (the transmitter's ``written``)
         self._disarm_seq: int | None = None  # and its seq: the MCU records it in last_rx_seq when it processed it
+        self._disarm_first_ns: int | None = None  # the unanswered DISARM episode's first ask (retries keep it)
+        self.disarm_unconfirmed = False  # past DISARM_DEADLINE_S with no answer: no rearm, no recovery done
         self.session_started = False
         import random
 
@@ -88,7 +93,7 @@ class AutoPermit:
         boot -- an earlier executor's late STATEs cannot match both (about 2^-32)."""
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+        self._asked_disarm(now_ns)
         self._session = {"stage": "first", "first": None, "boot": None}
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
@@ -135,12 +140,17 @@ class AutoPermit:
         host = self.host
         s, rx = host.state, host.state_rx_ns
         sess = self._session
+        if self._disarm_first_ns is not None and self._disarmed_after_write(now_ns):
+            self._disarm_first_ns = None  # answered (the episode ends; a later DISARM starts its own)
+            if self.disarm_unconfirmed:
+                self.disarm_unconfirmed = False  # a late answer clears the mark (4c design 8)
+                self._note(now_ns, "disarm_confirmed_late")
         if not self.session_started and sess is not None and self._disarmed_after_write(now_ns):
             if sess["stage"] == "first":
                 sess.update(stage="second", first=self._disarm_seq, boot=s.boot_id)
                 host.skip_seq(self._rng.randint(1024, 64512))
                 host.request_disarm(now_ns)
-                self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+                self._asked_disarm(now_ns)
                 self._try(self._transmit)
             elif sess["stage"] == "second" and s.boot_id == sess["boot"] \
                     and ((self._disarm_seq - sess["first"]) & 0xFFFF) >= 1024:
@@ -157,19 +167,94 @@ class AutoPermit:
             if not host.authorized:
                 self.latch(now_ns, "authorization_revoked")
         elif self.state == STOP_PENDING:
-            stop = self._stop
-            if stop["written_ns"] is not None and s is not None and rx is not None and rx > stop["written_ns"] \
-                    and host.health(now_ns).fresh and host.authorized \
-                    and int(s.last_rx_seq) == stop["seq"] and (s.boot_id, s.arm_gen) == stop["boot_gen"] \
-                    and rx - stop["written_ns"] <= self.stop_ack_ns:
-                self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
-                self._disarm(now_ns, "s10_stopped")
-            elif not host.authorized or now_ns - (stop["written_ns"] or stop["since_ns"]) > self.stop_ack_ns:
-                self._disarm(now_ns, "control_stop_unconfirmed")
+            self._stop_pending(now_ns, s, rx)
         elif self.state == DISARMING:
             if self._disarmed_after_write(now_ns):
                 self.state = LATCHED
                 self._note(now_ns, "disarmed")
+        self._disarm_retry(now_ns)
+
+    def on_state(self, state, rx_ns: int) -> None:
+        """Every STATE the host accepted, in order (a batch read at once included): while S10's stop is pending, a
+        reject of its boot and arm generation received after it was queued is kept (it DISARMs, whatever a later
+        sample says), and the confirmation is taken from the STATE that shows it, not only the batch's last."""
+        stop = self._stop
+        if self.state != STOP_PENDING or stop is None or rx_ns <= stop["since_ns"] \
+                or (state.boot_id, state.arm_gen) != stop["boot_gen"]:
+            return
+        if state.reject_reason != RejectReason.NONE:
+            stop.setdefault("rejected", state.reject_reason.name.lower())
+            return
+        w = stop["written_ns"]
+        if w is not None and rx_ns > w and int(state.last_rx_seq) == stop["seq"] \
+                and state.flags & StateFlag.COMMAND_FRESH and rx_ns - w <= self.stop_ack_ns:
+            stop.setdefault("confirmed_rx", int(rx_ns))
+
+    def _stop_pending(self, now_ns: int, s, rx) -> None:
+        """S10's control stop (4c design 4 3-4), judged conservatively: written within STOP_QUEUE_S of its queueing;
+        then a fresh STATE of the same boot and arm generation received after the write -- any reject reason there
+        DISARMs at once (seq or not); naming exactly the stop's seq with COMMAND_FRESH within STOP_ACK_S of the write
+        confirms it; past that, or the authority gone, DISARM."""
+        host, stop = self.host, self._stop
+        w = stop["written_ns"]
+        # every failure DISARMs at once; the order only names the first that holds
+        if stop.get("rejected") is not None:  # any reject since it was queued, before or after its write
+            self._disarm(now_ns, f"control_stop_rejected:{stop['rejected']}")
+            return
+        queue_ns = int(STOP_QUEUE_S * 1e9)
+        if w is not None and w - stop["since_ns"] > queue_ns:  # written after its queue dwell: no confirmation counts
+            self._disarm(now_ns, "control_stop_late_write")
+            return
+        if not host.authorized:
+            self._disarm(now_ns, "control_stop_unauthorized")
+            return
+        if w is None:
+            if now_ns - stop["since_ns"] > queue_ns:
+                self._disarm(now_ns, "control_stop_unwritten")
+            return
+        if stop.get("confirmed_rx") is not None and host.health(now_ns).fresh:
+            self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
+            self._disarm(now_ns, "s10_stopped")
+            return
+        if now_ns - w > self.stop_ack_ns:
+            self._disarm(now_ns, "control_stop_unconfirmed")
+
+    def stop_discarded(self, now_ns: int, seq: int) -> None:
+        """The sender dropped a frame before its first byte: S10's stop frame among them DISARMs at once."""
+        if self.state == STOP_PENDING and self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
+            self._disarm(now_ns, "control_stop_discarded")
+
+    def link_reset(self, now_ns: int) -> None:
+        """The link was closed and reopened (a stuck write abandoned): an unanswered DISARM is asked again at once on
+        the new link -- its episode's first ask, and so its deadline, kept."""
+        if self._disarm_first_ns is not None and self._disarm_written_ns is None \
+                and not self._disarmed_after_write(now_ns):
+            # only a DISARM that never got out whole: one already written keeps its seq awaited (round 5 P2)
+            self.host.request_disarm(now_ns)
+            self._asked_disarm(now_ns)
+            self._note(now_ns, "disarm_relink")
+
+    def _asked_disarm(self, now_ns: int) -> None:
+        """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept."""
+        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+        if self._disarm_first_ns is None:
+            self._disarm_first_ns = int(now_ns)
+
+    def _disarm_retry(self, now_ns: int) -> None:
+        """An unanswered DISARM (4c design 4 7): asked again every DISARM_RETRY_S (the tick's send writes it); past
+        DISARM_DEADLINE_S from the first ask the arbiter goes STOPPED and the DISARM is marked unconfirmed -- once, not
+        a new latch each tick. A retry changes the awaited seq only."""
+        first = self._disarm_first_ns
+        if first is None or self._disarmed_after_write(now_ns):
+            return
+        if now_ns - self._disarm_asked_ns >= int(DISARM_RETRY_S * 1e9):
+            self.host.request_disarm(now_ns)
+            self._asked_disarm(now_ns)
+            self._note(now_ns, "disarm_retry")
+        if not self.disarm_unconfirmed and now_ns - first >= int(DISARM_DEADLINE_S * 1e9):
+            self.disarm_unconfirmed = True
+            self._note(now_ns, "disarm_unconfirmed")
+            self._try(self._arbiter_stop, "disarm_unconfirmed")
 
     # --- stops ------------------------------------------------------------------------------------------------------
     @staticmethod
@@ -194,7 +279,7 @@ class AutoPermit:
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
         errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
-        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
+        self._asked_disarm(now_ns)
         errors.append(self._try(self._transmit))
         if first:
             errors.append(self._try(self._arbiter_stop, reason))
@@ -242,14 +327,15 @@ class AutoPermit:
         return self._disarmed_after_write_any() and self.host.health(now_ns).fresh
 
     def _disarm(self, now_ns: int, reason: str) -> None:
-        self.port.new_control_generation()
-        self.host.request_disarm(now_ns)
-        self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
-        self._try(self._transmit)
+        # the state first: a send this triggers sees no authority and no pending stop (round 5 P1-1, P2)
         self.reason = self.reason or reason
         self.state = DISARMING
         self._stop = None
+        self.port.new_control_generation()
+        self.host.request_disarm(now_ns)
+        self._asked_disarm(now_ns)
         self._note(now_ns, "disarm", reason)
+        self._try(self._transmit)
 
     # --- rearm --------------------------------------------------------------------------------------------------
     def rearm_refusal(self, now_ns: int) -> str | None:
@@ -258,14 +344,16 @@ class AutoPermit:
         they settled."""
         if self.state not in (LATCHED, OFF):
             return f"permit_{self.state.lower()}"
+        if self.disarm_unconfirmed or self._disarm_first_ns is not None:
+            return "disarm_unconfirmed"  # until a DISARMED names the newest DISARM (4c design 4 7)
         host = self.host
         s = host.state
         if s is None or not host.health(now_ns).fresh:
             return "state_stale"
         if s.mode != Mode.DISARMED:
             return f"mcu_{s.mode.name.lower()}"
-        if int(s.fault_flags):
-            return "mcu_faults"
+        if int(s.fault_flags) & ~int(FaultFlag.COMMAND_TIMEOUT):
+            return "mcu_faults"  # a command's expiry (cleared by the next ARM) is no fault for a rearm (4c design 8)
         if self.port.older_nonzero_may_act(now_ns):
             return "old_command_may_act"
         kind, settled_ns = self.outstanding(now_ns)

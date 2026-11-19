@@ -153,6 +153,7 @@ class McuLinkHost:
         self._state_rx_ns: int | None = None
         self._stale_reported = False
         self._seq = int(initial_seq) & 0xFFFF
+        self.last_queued_seq: int | None = None  # the newest queued frame's seq (the port's result names it)
         self.disconnects = 0  # how many times the adapter lost the device (the teleop bridge rechecks its session)
         # the e-stop waiver (docs/plans/2026-11-18-v1-estop-waiver.md 3): the opened tty's USB product string, read by
         # the adapter at each opening and forgotten on a disconnect; only it makes bit 7 a warning
@@ -544,8 +545,11 @@ class McuLinkHost:
         return None
 
     # ---------------------------------------------------------------- drive
-    def drive(self, cmd: RearDrive, lift_m: float, lift_hold: bool, expires_ns: int, now_ns: int) -> Blocked | None:
-        """Queue one DRIVE for a decision that expires at ``expires_ns`` (host monotonic)."""
+    def drive(self, cmd: RearDrive, lift_m: float, lift_hold: bool, expires_ns: int, now_ns: int, *,
+              movable: bool | None = None) -> Blocked | None:
+        """Queue one DRIVE for a decision that expires at ``expires_ns`` (host monotonic). ``movable``: whether the
+        frame may still move an axis (the real autonomy's port counts a zero-wheel lift move and ``keep`` too, control
+        tick contract 2); None: a non-zero wheel target, as before. Its seq is ``last_queued_seq`` once queued."""
         if self.commission_mode:
             return Blocked("commission_host")
         blocked, valid = self._motion_check(expires_ns, now_ns)
@@ -554,8 +558,9 @@ class McuLinkHost:
         s = self._state
         msg = Drive(cmd.left_wheel_rad_s, cmd.right_wheel_rad_s, cmd.steering_rad, float(lift_m), valid,
                     bool(lift_hold), s.arm_gen, s.boot_id, s.mcu_time_us)
+        wheels_ = cmd.left_wheel_rad_s != 0.0 or cmd.right_wheel_rad_s != 0.0
         self._enqueue("DRIVE", msg, now_ns, expires_ns=expires_ns,
-                      nonzero=cmd.left_wheel_rad_s != 0.0 or cmd.right_wheel_rad_s != 0.0)
+                      nonzero=wheels_ if movable is None else bool(movable) or wheels_)
         return None
 
     def commission(self, axis: int, duty_e4: int, expires_ns: int, now_ns: int) -> Blocked | None:
@@ -602,6 +607,7 @@ class McuLinkHost:
     def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None, nonzero: bool = False) -> None:
         seq = self._seq
         self._seq = (self._seq + 1) & 0xFFFF
+        self.last_queued_seq = seq
         out = Outgoing(kind, seq, encode(msg, seq), expires_ns, self._auth_gen, nonzero)
         self._outbox.append(out)
         self._log("queued", now_ns, out.data, {"kind": kind, "seq": seq})

@@ -81,3 +81,59 @@ def test_without_the_callbacks_a_rearm_is_as_before():
     stopped(r)
     (reply,) = r.cycle(r.msg("rearm"))
     assert reply["t"] == "ack" and r.a.mode == "PAUSED"
+
+
+# --- 4c (docs/design/2026-11-19-real-loop.md 2.1): external stop evidence, DISARM across a generation ---------------
+
+def test_external_stop_evidence_is_taken_inside_the_one_observe_and_a_bad_one_drops_the_stop_at_once():
+    r = Rig()
+    r.a.config = ArbiterConfig(external_stop=True)
+    evidence = {"fresh": True, "standing": False}
+    r.a.stop_evidence = lambda now: (evidence["fresh"], evidence["standing"])
+    r.speed = 0.0  # the arbiter's own detector would confirm a stand from these
+    r.stand()
+    assert r.a.stop_confirmed is False  # the loop's evidence says not standing: it wins
+    evidence["standing"] = True
+    r.cycle()
+    assert r.a.stop_confirmed is True and r.a.feedback_ok is True
+    evidence["fresh"] = False
+    r.cycle()
+    assert r.a.stop_confirmed is False and r.a.feedback_ok is False
+
+
+def test_without_external_stop_the_arbiter_judges_the_stand_itself_as_before():
+    r = Rig()
+    r.a.stop_evidence = lambda now: (False, False)  # ignored while the setting is off
+    r.speed = 0.0
+    r.stand()
+    assert r.a.stop_confirmed is True
+
+
+def test_a_disarm_one_generation_old_is_taken_on_the_real_truck_and_tells_the_loop():
+    r = Rig()
+    r.a.config = ArbiterConfig(disarm_ignores_control_gen=True)
+    calls = []
+    r.a.on_disarm = lambda now: calls.append(now)
+    auto(r)
+    old = r.msg("disarm")  # made at generation G
+    r.a._boundary(r.t, "test")  # noqa: SLF001 -- G -> G+1 (the S10 end's AUTO -> PAUSED does this)
+    (reply,) = r.cycle(old)
+    assert reply["t"] == "ack" and calls
+
+
+def test_by_default_an_old_generation_disarm_is_refused_as_before():
+    r = Rig()
+    auto(r)
+    old = r.msg("disarm")
+    r.a._boundary(r.t, "test")  # noqa: SLF001
+    (reply,) = r.cycle(old)
+    assert reply["t"] == "reject" and reply["reason"] == "stale_control"
+
+
+def test_a_disarm_with_another_lease_is_still_refused():
+    r = Rig()
+    r.a.config = ArbiterConfig(disarm_ignores_control_gen=True)
+    auto(r)
+    bad = dict(r.msg("disarm"), lease_id="not-the-lease")
+    (reply,) = r.cycle(bad)
+    assert reply["t"] == "reject" and reply["reason"] == "stale_lease"
