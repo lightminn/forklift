@@ -758,20 +758,23 @@ def main() -> None:
     if args.rack:
         for name in RACK_KINDS:
             built_scenes[f"{name}_rack"] = rack_scene()
+    records = []
     for name, built in built_scenes.items():
-        if only and name not in only:
-            continue
-        path = args.output / f"{name}.json"
         record = scene_record(name, built)
+        records.append(record)
+        if args.side_room and name.split("_")[0] in SIDE_ROOM_M:
+            records.append(side_room_record(record))
+    if only:  # on the written names, side copies included (a name nothing writes is an error, not a silent skip)
+        unknown = sorted(only - {r["name"] for r in records})
+        if unknown:
+            parser.error(f"--only names no scene this run writes: {', '.join(unknown)}")
+    for record in records:
+        if only and record["name"] not in only:
+            continue
+        path = args.output / f"{record['name']}.json"
         path.write_text(json.dumps(record, indent=1) + "\n")
         paths.append(path)
         print("scene", path)
-        if args.side_room and name.split("_")[0] in SIDE_ROOM_M:
-            side = side_room_record(record)
-            path = args.output / f"{side['name']}.json"
-            path.write_text(json.dumps(side, indent=1) + "\n")
-            paths.append(path)
-            print("scene", path)
     if args.plan:
         with concurrent.futures.ThreadPoolExecutor(args.jobs) as pool:
             grows = [float(g) for g in args.grow_pallets.split(",")]

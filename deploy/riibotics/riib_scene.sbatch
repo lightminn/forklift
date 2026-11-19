@@ -243,7 +243,7 @@ fi
 NAME=$SCENE
 case "$NAME" in *_side)
   [ "$SIDE" = off ] && { echo "SCENE=$SCENE is a side copy but SIDE=off"; exit 2; }
-  SIDE=on; NAME=${NAME%_side} ;; esac
+  SIDE=on; SIDE_NAMED=1; NAME=${NAME%_side} ;; esac
 case "$NAME" in
   *_m) [ "$MARKERS" = off ] && { echo "SCENE=$SCENE is a marker copy but MARKERS=off"; exit 2; } ;;
   line_*|random_*) [ "$MARKERS" = on ] && NAME=${NAME}_m ;;
@@ -303,8 +303,22 @@ EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs 
 EXTRA_POCKET=0; EXTRA_LIVE=0; EXTRA_GAP=0
 EXTRA_REPEAT=""  # the last --repeat-captures value (0 is the runner's off)
 RPC_NEXT=0
-# shellcheck disable=SC2086
-for w in ${EXTRA_ARGS:-}; do
+# EXTRA_ARGS split once, unglobbed: the words this scan reads are the words the runner gets (printed, checked, run)
+# shellcheck disable=SC2206
+EXTRA=(${EXTRA_ARGS:-})
+# the runner's own option names, to resolve an EXTRA_ARGS option as its parser does (exact, else a unique prefix)
+RUNNER_OPTS=$("$VENV_PY" -c 'import re, sys
+print("\n".join(sorted(set(re.findall(r"add_argument\(\s*\"(--[A-Za-z0-9-]+)\"", open(sys.argv[1]).read())))))' \
+  "$SNAP/sim/isaac/run_transport.py") || { echo "preflight: cannot read the runner's options"; exit 2; }
+runner_opt() {  # the runner option a word names, or nothing (not an option, unknown or ambiguous)
+  local k=${1%%=*} hits
+  [[ "$k" == --?* ]] || return 0
+  if printf '%s\n' "$RUNNER_OPTS" | grep -qFx -- "$k"; then printf '%s' "$k"; return 0; fi
+  hits=$(printf '%s\n' "$RUNNER_OPTS" | awk -v p="$k" 'index($0, p) == 1')
+  [ -n "$hits" ] && [ "$(printf '%s\n' "$hits" | wc -l)" = 1 ] && printf '%s' "$hits"
+  return 0
+}
+for w in ${EXTRA[@]+"${EXTRA[@]}"}; do
   # C2: an explicit --near-end-stand in EXTRA_ARGS is the value applied (the runner's parser takes a unique prefix and
   # the last occurrence); recorded below as what the run got
   if [ "$NES_NEXT" = 1 ]; then NEAR_END_STAND=$w; NEAR_END_STAND_FROM=EXTRA_ARGS; NES_NEXT=0; continue; fi
@@ -363,18 +377,19 @@ for w in ${EXTRA_ARGS:-}; do
   if [[ "$k" == --return-s* && "--return-start-backoff" == "$k"* ]]; then
     echo "RETURN_START=on|boxed|off sets the return-start backoff, not EXTRA_ARGS (riib_defaults.txt records the switch)"; exit 2
   fi
-  # the bottom-deck check has one switch, BOTTOM_DECK (--bottom-d... can only be --bottom-deck-check)
-  if [ ${#k} -ge 10 ] && [[ "--bottom-deck-check" == "$k"* ]]; then
-    echo "BOTTOM_DECK=auto|structure|on|off sets the bottom-deck check, not EXTRA_ARGS (riib_defaults.txt records it)"; exit 2
-  fi
-  # the options the runner refuses the check with, by the unique prefixes its parser takes (--live exactly: other
-  # options start with --live-), and the --repeat-captures value applied (the last one)
-  if [ ${#k} -ge 10 ] && [[ "--pocket-check" == "$k"* ]]; then EXTRA_POCKET=1; fi
-  if [ ${#k} -ge 10 ] && [[ "--near-recapture-gap-m" == "$k"* ]]; then EXTRA_GAP=1; fi
-  [ "$k" = --live ] && EXTRA_LIVE=1
-  if [ ${#k} -ge 10 ] && [[ "--repeat-captures" == "$k"* ]]; then
-    if [[ "$w" == *=* ]]; then EXTRA_REPEAT=${w#*=}; else RPC_NEXT=1; continue; fi
-  fi
+  # the bottom-deck check and the options the runner refuses it with, resolved as the runner's parser resolves them
+  # (an exact name, else a unique prefix), and the --repeat-captures value applied (the last one)
+  opt=$(runner_opt "$w")
+  case "$opt" in
+    --bottom-deck-check)
+      echo "BOTTOM_DECK=auto|structure|on|off sets the bottom-deck check, not EXTRA_ARGS (riib_defaults.txt records it)"; exit 2 ;;
+    --pocket-check) EXTRA_POCKET=1 ;;
+    --near-recapture-gap-m) EXTRA_GAP=1 ;;
+    --live) EXTRA_LIVE=1 ;;
+    --near-tracking) EXTRA_NEAR_TRACKING=1 ;;
+    --repeat-captures)
+      if [[ "$w" == *=* ]]; then EXTRA_REPEAT=${w#*=}; else RPC_NEXT=1; continue; fi ;;
+  esac
   case "$w" in --near-tracking)
     EXTRA_NEAR_TRACKING=1
     [ "$EXIT_EXEMPT" = off ] || { echo "--near-tracking needs EXIT_EXEMPT=off (the runner refuses the exemption with it)"; exit 2; };; esac
@@ -386,16 +401,22 @@ if [ "$MODE" != slam ]; then BD_BLOCK=mode_truth
 elif [ -n "$NEAR_RECAPTURE_GAP" ] || [ "$EXTRA_GAP" = 1 ]; then BD_BLOCK=near_recapture_gap
 elif [ "$EXTRA_NEAR_TRACKING" = 1 ]; then BD_BLOCK=extra_args:--near-tracking
 elif [ "$EXTRA_POCKET" = 1 ]; then BD_BLOCK=extra_args:--pocket-check
-elif [ -n "$EXTRA_REPEAT" ] && [ "$EXTRA_REPEAT" != 0 ]; then BD_BLOCK=extra_args:--repeat-captures
+elif [ -n "$EXTRA_REPEAT" ] && ! [[ "$EXTRA_REPEAT" =~ ^[+]?0+$ ]]; then
+  BD_BLOCK=extra_args:--repeat-captures  # any count but zero as the runner's int() reads it (00, +0 are zero)
 elif [ "$EXTRA_LIVE" = 1 ]; then BD_BLOCK=extra_args:--live
 fi
-case "$BASE_NAME" in line_*|random_*) SIDE_KIND=1 ;; *) SIDE_KIND=0 ;; esac
+# the scenes the generator writes a side-room copy of (tools/riibotics_isaac_scenes.py --side-room)
+if [[ "$BASE_NAME" =~ ^(line|random)_[123](_m)?$ ]]; then SIDE_KIND=1; else SIDE_KIND=0; fi
+[ "${SIDE_NAMED:-0}" = 1 ] && [ "$SIDE_KIND" = 0 ] \
+  && { echo "SCENE=$SCENE: the generator writes no side-room copy of $BASE_NAME (line_1..3 / random_1..3 only)"; exit 2; }
 case "$BOTTOM_DECK" in
   off) BOTTOM_DECK_REASON=$([ -n "$BOTTOM_DECK_GIVEN" ] && echo explicit || echo default_off) ;;
   auto)
-    # structure only on a side-room copy: it takes the copy itself (SIDE=auto), and SIDE=off keeps the original
+    # structure only on a side-room copy: it takes the copy itself (SIDE=auto), and SIDE=off keeps the original; an
+    # older scene folder without the copy keeps the original and the check off
     if [ "$SIDE_KIND" = 0 ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:no_side_copy_for_scene
     elif [ "$SIDE" = off ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:side_off
+    elif [ ! -f "$SCENE_DIR/${NAME}_side.json" ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:no_side_copy_file
     elif [ -n "$BD_BLOCK" ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:$BD_BLOCK
     else BOTTOM_DECK=structure; BOTTOM_DECK_REASON=auto; SIDE=on
     fi ;;
@@ -406,6 +427,8 @@ esac
 # the side-room copy: SIDE=on, or taken by BOTTOM_DECK=auto above; SIDE=auto otherwise keeps the original
 [ "$SIDE" = auto ] && SIDE=off
 [ "$SIDE" = on ] && [ "$SIDE_KIND" = 1 ] && NAME=${NAME}_side
+# recorded as the file the run reads: SIDE=on on a scene without a copy runs the original
+if [[ "$NAME" == *_side ]]; then SIDE=on; else SIDE=off; fi
 case "$NEAR_END_STAND" in on|shadow|off) ;; *) echo "--near-end-stand in EXTRA_ARGS must be on, shadow or off"; exit 2;; esac
 # K1 follows the near-end stand applied (the runner refuses it without --near-end-stand on); an explicit value needs on
 if [ -z "${NEAR_OBSERVE_ARRIVAL:-}" ]; then
@@ -567,16 +590,16 @@ fi
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
 if [ "${DRY_RUN:-0}" = 1 ]; then
   echo RUNNER_ARGS
-  printf '%s\n' "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-}
+  printf '%s\n' "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"}
   # preflight (docs/plans/2026-10-27-ws1-preflight.md): the runner's own checks on these arguments, ARGS_OK or exit 2;
   # DRY_RUN_CHECK=0 prints the arguments alone (this launcher's tests of how it builds them)
   [ "${DRY_RUN_CHECK:-1}" = 1 ] || exit 0
-  exec "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
+  exec "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} \
     --output "$OUT/run" --check-args
 fi
 # the same check before the runner starts: arguments it would refuse end the job here, in seconds
 # shellcheck disable=SC2086
-if ! "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} --output "$OUT/run" \
+if ! "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} --output "$OUT/run" \
     --check-args > "$OUT/check_args.log" 2>&1; then
   echo "preflight: the runner refuses these arguments (its check follows)"
   cat "$OUT/check_args.log"
@@ -599,7 +622,7 @@ fi
 # (deploy/lib/term_relay.sh); before this, a TERM ends the launcher and its EXIT trap stops the bridge, as it did
 term_relay_arm
 # shellcheck disable=SC2086  # EXTRA_ARGS is a word list on purpose
-timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA_ARGS:-} \
+timeout "${RUN_TIMEOUT:-6600}" "$VENV_PY" "$SNAP/sim/isaac/run_transport.py" "${COMMON[@]}" "${MODE_ARGS[@]}" ${EXTRA[@]+"${EXTRA[@]}"} \
   --output "$OUT/run" > "$OUT/run.log" 2>&1 &
 term_relay_hold runner
 RUNNER=$!

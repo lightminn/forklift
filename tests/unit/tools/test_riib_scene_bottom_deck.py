@@ -15,7 +15,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 LAUNCHER = ROOT / "deploy/riibotics/riib_scene.sbatch"
-SCENES = ("line_2", "line_2_m", "line_2_side", "line_2_m_side", "random_1_m_side", "aisle", "aisle_rack", "trailer")
+SCENES = ("line_1_m", "line_2", "line_2_m", "line_2_side", "line_2_m_side", "random_1_m_side", "aisle", "aisle_rack",
+          "trailer")
 
 
 def dry_run(tmp_path, scene="line_2", **env):
@@ -94,10 +95,13 @@ def test_auto_turns_structure_on_for_a_side_copy_in_the_slam_mode(tmp_path):
     ({"NEAR_RECAPTURE_GAP": "1.0"}, "auto_off:near_recapture_gap", "line_2_m.json"),
     ({"EXTRA_ARGS": "--near-recapture-gap-m=1.0"}, "auto_off:near_recapture_gap", "line_2_m.json"),
     ({"EXTRA_ARGS": "--near-recapt 1.0"}, "auto_off:near_recapture_gap", "line_2_m.json"),
+    ({"EXTRA_ARGS": "--near-r 1.0"}, "auto_off:near_recapture_gap", "line_2_m.json"),  # the runner's shortest prefix
     ({"EXTRA_ARGS": "--pocket-check"}, "auto_off:extra_args:--pocket-check", "line_2_m.json"),
     ({"EXTRA_ARGS": "--repeat-captures 1"}, "auto_off:extra_args:--repeat-captures", "line_2_m.json"),
     ({"EXTRA_ARGS": "--repeat-capt 1 --repeat-at-attempt 1"}, "auto_off:extra_args:--repeat-captures", "line_2_m.json"),
     ({"EXTRA_ARGS": "--live"}, "auto_off:extra_args:--live", "line_2_m.json"),
+    # an older scene folder without the side copy keeps the original
+    ({"SCENE": "line_1"}, "auto_off:no_side_copy_file", "line_1_m.json"),
     # SIDE=on keeps the copy for a paired arm even where the check stays off
     ({"SIDE": "on", "MODE": "truth"}, "auto_off:mode_truth", "line_2_m_side.json"),
 ])
@@ -112,8 +116,9 @@ def test_auto_stays_off_on_the_original_scene_where_the_check_is_not_defined_and
     assert f"BOTTOM_DECK=off BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON={reason}" in recorded(tmp_path)
 
 
-def test_auto_takes_the_side_copy_itself_and_a_zero_repeat_count_does_not_block_it(tmp_path):
-    out = dry_run(tmp_path, BOTTOM_DECK="auto", EXTRA_ARGS="--repeat-captures=0")
+@pytest.mark.parametrize("zero", ["--repeat-captures=0", "--repeat-captures 00", "--repeat-capt=+0"])
+def test_auto_takes_the_side_copy_itself_and_a_zero_repeat_count_does_not_block_it(tmp_path, zero):
+    out = dry_run(tmp_path, BOTTOM_DECK="auto", EXTRA_ARGS=zero)
     assert out.returncode == 0, out.stderr
     args = args_of(out)
     assert check_of(args) == "structure" and scene_of(args) == "line_2_m_side.json"
@@ -136,7 +141,8 @@ def test_an_explicit_check_runs_on_a_scene_auto_would_leave_off(tmp_path):
     assert "BOTTOM_DECK=structure BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON=explicit" in recorded(tmp_path)
 
 
-@pytest.mark.parametrize("extra", ["--bottom-deck-check structure", "--bottom-deck-check=off", "--bottom-deck structure"])
+@pytest.mark.parametrize("extra", ["--bottom-deck-check structure", "--bottom-deck-check=off", "--bottom-deck structure",
+                                   "--bo=off", "--bo structure"])
 def test_the_check_has_one_switch(tmp_path, extra):
     out = dry_run(tmp_path, EXTRA_ARGS=extra)
     assert out.returncode == 2 and "BOTTOM_DECK" in out.stdout
@@ -170,3 +176,19 @@ def test_the_runner_parser_takes_structure_on_a_real_side_copy(tmp_path):
         os.chdir(cwd)
     assert parsed.bottom_deck_check == "structure" and parsed.kit_arguments == []
     assert parsed.recognition == "far" and parsed.near_capture_lower == "waive"
+
+
+def test_a_side_name_of_a_scene_without_a_copy_is_refused_and_side_on_records_the_file_run(tmp_path):
+    out = dry_run(tmp_path, scene="aisle_side", BOTTOM_DECK="auto")
+    assert out.returncode == 2 and "no side-room copy" in out.stdout
+    out = dry_run(tmp_path, scene="aisle", SIDE="on")
+    assert out.returncode == 0, out.stderr
+    assert scene_of(args_of(out)) == "aisle_rack.json" and "SIDE=off" in recorded(tmp_path)
+
+
+def test_extra_args_reach_the_runner_as_the_scan_read_them_unglobbed(tmp_path):
+    # a glob that matches a file under SNAP (the launcher cds there) stays the literal word
+    word = "config/pallet_prior_epal[6].yaml"
+    out = dry_run(tmp_path, EXTRA_ARGS=f"--pallet-prior {word}")
+    assert out.returncode == 0, out.stderr
+    assert word in args_of(out)

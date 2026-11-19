@@ -77,7 +77,7 @@
 
 **넓힌 사본으로 한다(총괄 조건).** Codex 가 장면 도구 `--plan` 으로 넓힌 상자를 계산했다. 검사 끔에서도 `line_3`·`line_3_m` 의 복귀 길이가 17.04 → 16.36 m 로 바뀌었다. 그래서 원본은 두고 사본을 만든다.
 
-- 장면 도구에 `--side-room` 을 더한다. line·random 마다 `<name>_side.json` 사본을 쓰고, `_m` 사본에는 `<name>_m_side.json` 을 쓴다. 사본의 이름(`name`)도 `_side` 가 붙는다. 사본은 홀 상자 +y 만 위 값만큼 넓히고, 나머지 필드는 원본과 같다.
+- 장면 도구에 `--side-room` 을 더한다. line·random 마다 `<name>_side.json` 사본을 쓰고, `_m` 사본에는 `<name>_m_side.json` 을 쓴다. 사본의 이름(`name`)도 `_side` 가 붙는다. 사본은 홀 상자 +y 만 위 값만큼 넓히고, 출처 기록 `source.side_room_m` 하나를 더한다. 나머지 필드는 원본과 같다. `--only` 는 사본 이름까지 포함한 최종 이름에 적용하고, 아무것도 쓰지 않는 이름은 오류다.
 - 바이트 비교로 확인할 것:
   - 원본 장면 파일 18 개가 바뀌지 않는다.
   - 콘솔 세션 장면(`line_m_session.json`·`random_m_session.json`)도 바뀌지 않는다. 이 둘은 지도 묶음 레지스트리의 해시로 묶여 있고, 바뀌면 콘솔이 매핑으로 바뀌거나 멈춘다.
@@ -94,11 +94,13 @@
    - `side_census` 기준으로 12 사본 모두 세 경로 성공. Codex 가 같은 조건에서 12 변형 모두 성공을 확인했다.
 2. **riib 런처**(`deploy/riibotics/riib_scene.sbatch`):
    - `BOTTOM_DECK=auto|structure|on|off` 를 더한다. `auto` 는 아래 조건을 모두 만족할 때만 `structure` 이고, 아니면 `off` 와 그 이유를 `riib_defaults.txt` 에 적는다.
-     - 장면이 line·random 이다(사본이 있는 장면).
+     - 장면이 생성기가 사본을 쓰는 이름(`line_1..3`·`random_1..3`, `_m` 포함)이고, 장면 폴더에 그 `_side` 파일이 실제로 있다. 없으면(옛 장면 폴더) 원본에 `off` 이고 이유는 `auto_off:no_side_copy_file` 이다.
      - `MODE=slam` 이다.
      - 두 번째 근거리 촬영이 없다. `NEAR_RECAPTURE_GAP` 과 `EXTRA_ARGS` 의 `--near-recapture-gap-m` 둘 다 본다.
      - `EXTRA_ARGS` 가 실제로 적용할 값에 `--near-tracking`·`--pocket-check`·`--live` 가 없고, `--repeat-captures` 가 0 보다 크지 않다.
-       - 러너가 받는 고유 접두어를 그대로 읽는다(`--near-recapt`·`--repeat-capt` 등).
+       - 옵션 이름은 러너 파서처럼 푼다. 정확한 이름이 먼저이고, 아니면 러너 옵션 목록(`run_transport.py` 의 `add_argument` 이름)에서 하나뿐인 접두어다(`--bo`·`--near-r` 처럼 짧은 것도).
+       - `EXTRA_ARGS` 는 한 번만 나눠(glob 없이) 그 배열을 출력·사전 검사·실행 모두에 쓴다. 그래야 런처가 읽은 단어와 러너가 받는 단어가 같다.
+       - `--repeat-captures` 의 0 판정은 정수로 읽은 값이다(`00`·`+0` 도 0).
        - `--repeat-captures` 는 마지막 값을 쓴다.
        - `--live` 는 정확히 그 단어일 때만이다(`--live-` 로 시작하는 다른 인자가 있다).
    - `SIDE=auto|on|off` 를 더한다. 기본 `auto` 는 `BOTTOM_DECK=auto` 가 검사를 켤 때만 `_side` 사본을 쓰고, 검사가 꺼지면 원본을 쓴다.
@@ -118,7 +120,7 @@
 |---|---|---|---|
 | S+ | `line_2_m_side`, `random_1_m_side`(둘 다 경계 수정이 필요한 장면), 진짜 EPAL 6 | seed 0–2, `BOTTOM_DECK=structure` 와 `BOTTOM_DECK=off SIDE=on` 짝(같은 사본) | 장면마다 3 회 모두 두 면 판정까지 가서 허가, 완주 ≥ 2. 단계별 시각 기록. 사이클 시간 차이는 두 팔이 모두 완주한 seed 짝에서만 계산하고, 짝 수와 팔별 멈춘 단계를 함께 적는다. 완주 짝이 없으면 사이클 비용은 판단 보류이고, 두 팔이 함께 닿은 단계까지의 시각만 비교한다 |
 | S+g | `random_1_m_side`, grounded EPAL 6(이웃도 grounded 로 복제된다 — 결과에 "전체 grounded 배치"로 적는다) | seed 0–2, `structure` | 3 회 모두 서로 다른 두 면을 관측하고, 최종 기록이 `absent`(하판 없음을 본 것)인 상태에서 삽입이 허가됨(`no_bottom_deck` 0). 두 면이 `present` 로 나오면 이 분기를 지나지 않은 것이라 따로 적는다. 완주 ≥ 2 |
-| S− | 이웃 팔레트 없는 배치(기본 bay 또는 이웃 없는 장면 — 이웃은 미션 시험체를 복제하므로), `shelf_closed` | seed 0–2(원거리에서 걸러진 실행은 따로 적고 다음 seed 로, 최대 6) | 각 실행이 원거리 채택 → 옆면 단계 → 저장 프레임 재계산에서 `closed_face`(`unobserved`) → 그 판정으로 거부 → `insert` 전환 없음 |
+| S− | `random_2_m_side`, `shelf_closed`. 이웃 팔레트도 선반으로 복제되므로 결과에 "전체 선반 배치"로 적는다. 이 장면은 CPU 점검에서 세 경로가 모두 나온다. 기본 bay 는 Codex 재계산에서 seed 0–5 모두 한쪽 촬영 위치가 bay 경계를 0.21–0.75 m 벗어나 쓰지 않는다. Isaac 의 선반 USD 가져오기는 아직 확인하지 않았으므로 첫 실행이 smoke 를 겸한다 | seed 0–2(원거리에서 걸러진 실행은 따로 적고 다음 seed 로, 최대 6) | 각 실행이 원거리 채택 → 옆면 단계 → 저장 프레임 재계산에서 `closed_face`(`unobserved`) → 그 판정으로 거부 → `insert` 전환 없음 |
 
    - 단계별 시각: 첫 원거리 채택, 옆면 이동·촬영, 복귀·재관측, 첫 접근 시작, 완주.
    - 근거리 절단 변화(§0)는 옆면 이동 전 원거리 단계에서도 차이를 만들 수 있다. 그래서 첫 원거리 채택 시각까지의 차이는 옆면 비용과 따로 적는다.
@@ -193,6 +195,18 @@
 | P1 | `EXTRA_ARGS` 의 `--near-recapture-gap-m`(축약 포함)·`--repeat-capt 1` 이 빠졌고, `--repeat-captures=0` 은 통과해야 한다. `EXTRA_ARGS` 의 `--bottom-deck-check` 와의 우선순위 | §3-2: 적용값 기준, 축약 접두어, 마지막 값. `EXTRA_ARGS` 의 검사 인자는 거부 |
 | P2 | S+g 는 `absent` 허가를 실제로 지났는지 봐야 한다. 이웃도 grounded 로 복제된다 | §3-4 S+g |
 | P2 | S+ 합격이어도 시간 비교 짝이 0 일 수 있다 | §3-4 S+: 두 팔 완주 짝만, 짝 수·멈춘 단계 기록, 없으면 판단 보류 |
+
+**3 차(같은 스레드, 계획과 구현 `18155d84`).**
+
+| 등급 | 지적 | 처리 |
+|---|---|---|
+| P1 | 런처의 접두어 검사가 10 자 이상만 봐서 `--bo=off` 가 기록(`structure`)과 러너(`off`)를 어긋나게 하고, `--near-r` 를 놓친다 | 러너 옵션 목록으로 정확한 이름 → 하나뿐인 접두어 순으로 푼다(`runner_opt`). 시험에 `--bo`·`--near-r` |
+| P1 | `auto` 가 사본 없는 옛 장면 폴더에서 멈추고, 생성기가 사본을 안 쓰는 이름도 고른다 | 생성 대상 이름 + 파일 존재 확인, 없으면 원본·`off`·이유 기록 |
+| P1 | S− 의 기본 bay 는 seed 0–5 모두 옆면 촬영 위치가 bay 밖 | §3-4: S− 는 `random_2_m_side` 전체 선반 배치 |
+| P2 | `SCENE=aisle_side` 가 원본을 열고 `SIDE=on` 으로 기록 | 사본 없는 장면의 `_side` 이름은 거부, `SIDE` 기록은 실제 파일로 |
+| P2 | 스캔과 러너 호출이 다른 단어 목록(glob), `--repeat-captures=00` | `EXTRA` 배열 하나, 정수 0 판정. 시험에 glob 단어 |
+| P2 | `--only line_2_m_side` 가 아무것도 안 쓰고 성공 | 최종 이름에 필터, 모르는 이름은 오류 |
+| P3 | 사본의 `source.side_room_m` 이 계획에 없음 | §2 |
 
 ### ③ 다른 관점 독립 검토 — agy(Gemini 4 Hydrogen High), 2026-11-18
 

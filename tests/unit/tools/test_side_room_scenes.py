@@ -102,3 +102,14 @@ def test_the_cli_writes_side_copies_and_leaves_every_original_and_session_file_a
     for name in expected_copies:
         record = json.loads(side_files[name])
         assert record["name"] == name.removesuffix(".json")
+
+
+def test_only_filters_the_written_names_side_copies_included(tmp_path, monkeypatch):
+    out = tmp_path / "only"
+    monkeypatch.setattr(sys, "argv", ["riibotics_isaac_scenes.py", "--slot-markers", "--side-room",
+                                      "--only", "line_2_m_side,aisle", "--output", str(out)])
+    tool.main()
+    assert sorted(p.name for p in out.glob("*.json")) == ["aisle.json", "line_2_m_side.json"]
+    monkeypatch.setattr(sys, "argv", ["riibotics_isaac_scenes.py", "--only", "line_2_m_side", "--output", str(out)])
+    with pytest.raises(SystemExit):  # without --slot-markers --side-room nothing writes that name
+        tool.main()
