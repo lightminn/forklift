@@ -2174,10 +2174,10 @@ def test_a_riib_runs_candidate_scene_files_are_among_the_inputs_missing_ones_inc
     (tmp_path / "runner.py").write_text("")
     run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(scenes), "SCENE": "line_2"})
     got = ib.preflight_inputs([run], tmp_path / "runner.py")
-    side = os.path.realpath(scenes / "line_2_m_side.json")
-    assert got[side] is None and got[os.path.realpath(scenes / "line_2_m.json")] is not None
+    side = str(scenes / "line_2_m_side.json")  # the launcher's own path, joined as given
+    assert got[side] is None and got[str(scenes / "line_2_m.json")] is not None
     for name in ("line_2", "line_2_side", "line_2_rack"):
-        assert os.path.realpath(scenes / f"{name}.json") in got
+        assert str(scenes / f"{name}.json") in got
     data = b'{"name": "a", "argv": ["true"]}\n'
     proof = tmp_path / "runs.jsonl.preflight.json"
     proof.write_text(json.dumps({"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": got,
@@ -2215,3 +2215,26 @@ def test_a_proof_without_the_scene_candidates_or_behind_a_changed_link_is_refuse
     link.unlink()
     link.symlink_to(b)  # the folder behind the link now holds the side copy
     assert any("line_2_m_side.json changed" in p for p in verify(got))
+
+
+def test_a_scene_dir_with_dotdot_behind_a_link_is_read_as_the_launcher_reads_it(tmp_path):
+    # Codex round 8: the launcher resolves SCENE_DIR with realpath -m (the link first, then ..); so does the system
+    # when the proof's unnormalised path is opened
+    real = tmp_path / "deep/real"
+    real.mkdir(parents=True)
+    (tmp_path / "deep/scenes").mkdir()
+    (tmp_path / "deep/scenes/line_2_m_side.json").write_text("{}")
+    (tmp_path / "link").symlink_to(real)
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/link/../scenes",
+                                                                  "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    assert got[f"{tmp_path}/link/../scenes/line_2_m_side.json"] is not None  # the file the launcher would open
+
+
+def test_a_scene_folder_that_depends_on_the_attempt_is_refused_by_the_check(tmp_path):
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/s{{attempt}}",
+                                                                  "SCENE": "line_2"}, retry_move=[str(tmp_path / "o")])
+    problems = ib.check_runs([run], tmp_path / "runner.py")
+    assert any("may not depend on the attempt" in p for p in problems)

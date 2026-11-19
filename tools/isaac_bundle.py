@@ -523,14 +523,15 @@ def scene_candidates(run) -> list[str]:
     """Every scene file the riib launcher may open for a run naming SCENE_DIR and SCENE -- the plain, marker, rack and
     side-room copies, missing ones too (hashed as None): BOTTOM_DECK=auto takes the side copy when its file exists
     (docs/plans/2026-11-18-bottom-deck-structure-default.md), so a copy added or removed after the check changes the
-    launch and must void the proof. The paths are the launcher's own (absolute, links not resolved), so verify reads
-    what the launcher would read then, through any link changed since (Codex round 7)."""
+    launch and must void the proof. The paths are the launcher's own, joined but not normalised, so the system resolves
+    links and ".." in them as the launcher does (its `realpath -m`), at the check and again at verify (Codex rounds
+    7-8); check_runs refuses a SCENE_DIR or SCENE that depends on the attempt."""
     scene_dir, scene = run.env.get("SCENE_DIR"), run.env.get("SCENE")
     if not scene_dir or not scene:
         return []
     base = scene.removesuffix("_side").removesuffix("_m").removesuffix("_rack")
     names = {f"{base}{s}.json" for s in ("", "_m", "_rack", "_side", "_m_side")}
-    return [os.path.abspath(os.path.join(run.cwd or ".", scene_dir, n)) for n in sorted(names)]
+    return [os.path.join(run.cwd or ".", scene_dir, n) for n in sorted(names)]
 
 
 def gpu_persistence_modes(timeout_s=10.0) -> dict | None:
@@ -679,6 +680,11 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
     problems = []
     for n, run in enumerate(runs):
         r = run.at(1)
+        if any("{attempt}" in run.env.get(k, "") for k in ("SCENE_DIR", "SCENE")):
+            # the proof hashes the scene files a riib run may open (scene_candidates); per-attempt scene folders would
+            # put a retry's choice outside it (Codex round 8)
+            problems.append(f"{r.name}: SCENE_DIR / SCENE may not depend on the attempt (not run)")
+            continue
         if PATH_DISPLAY_DIAGNOSTIC_ENV in {**environ, **r.env}:
             # path display plan (2026-11-14): the diagnostic display modes put the line into the perception renders
             problems.append(f"{r.name}: {PATH_DISPLAY_DIAGNOSTIC_ENV} is diagnostic only, never in a bundle (not run)")
