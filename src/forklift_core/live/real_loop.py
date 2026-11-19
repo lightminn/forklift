@@ -814,10 +814,15 @@ class RealLoop:
 
     def _auto_drive(self, now_ns: int, command_, steer, rec: TickRecord) -> None:
         port, permit = self.port, self.permit
-        if self.waiting is not None:
-            # the wait's unsent hold never follows the normal DRIVE out; the wait itself (its target) ends only when
-            # this DRIVE is written -- refused at its first byte, the wait goes on at the same target (round 5 P1-4)
-            self.host.drop_drives("wait_end")
+        # the newest decision only: every unsent older DRIVE (a held moving frame, the wait's hold) is dropped before
+        # this one is queued -- a tick that decided to stop never lets an older moving frame out first (Codex PR 5
+        # design round 6 P1-1). The wait itself (its target) ends only when this DRIVE is written -- refused at its
+        # first byte, the wait goes on at the same target (4c round 5 P1-4).
+        self.host.drop_drives("superseded")
+        partial = getattr(self.transport, "partial_frame", None)
+        partial_seq = None if partial is None else int(partial.seq) & 0xFFFF
+        for f in [f for f in self.book.frames if f.written_ns is None and f.seq != partial_seq]:
+            self.book.discarded(f.seq)  # never written, now never will be: it cannot act (a half-written one may)
         drive = command_.drive
         speed = float(drive.speed_mps)
         if abs(speed) > self.max_speed_mps:  # the rear-axle command cap (design 2.5 4)
