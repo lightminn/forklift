@@ -282,10 +282,16 @@ def test_no_real_request_changes_anything_after_the_lease_ran_out_during_the_tic
     r.tick(3)
     r.arbiter.lease.renewed_mono -= 100.0
     kind, fields = kind_fields
-    before = (dict(r.core.targets.pallets), set(r.loop.bypass), list(r.loop._bypass_pending))  # noqa: SLF001
+    def snap():
+        start = r.loop.operator_start
+        return (dict(r.core.targets.pallets), r.core.targets.revision, set(r.loop.bypass),
+                list(r.loop._bypass_pending), dict(r.loop.operator_answers),  # noqa: SLF001
+                (start._given, start.voided))  # noqa: SLF001
+
+    before = snap()
     reason, _ = r.loop._real_request_(kind, fields)  # noqa: SLF001
     assert reason == "no_lease"
-    assert (dict(r.core.targets.pallets), set(r.loop.bypass), list(r.loop._bypass_pending)) == before  # noqa: SLF001
+    assert snap() == before  # the answers and the start check too (r10 P3)
 
 
 class _ClockLock:
