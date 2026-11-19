@@ -201,11 +201,13 @@ class RealLayer:
                  valid_fraction_min: float = 0.5, odom_now=None, place_wait_s: float = 0.10) -> None:
         self.grid_config = grid_config
         self.grid = ObstacleGrid(grid_config)
+        if getattr(permission_config, "start_band_m", 0.0) > 0.0:
+            raise ValueError("start_band_release_unsupported")  # the worker's check keeps no start-band anchor
         self.permission = DrivePermission(permission_config)
-        self.sensors = sensors  # name -> (laser_in_rear (x, y, yaw), may_clear)
+        self.sensors = _checked_sensors(sensors)  # name -> (laser_in_rear (x, y, yaw), may_clear, provenance)
         self.unloaded, self.loaded, self.body = unloaded, loaded, body
         self.placer = placer  # (first_s, last_s) -> odometry rear pose (x, y, yaw) at the first beam, or None
-        self.odom_now = odom_now  # () -> the raw odometry pose now (the install's distance driven since the request)
+        self.odom_now = odom_now  # () -> the raw odometry's path length now (the install's travel since the request)
         self.budget_s, self.overdue_end_s = float(budget_s), float(overdue_end_s)
         self.scan_period_s, self.scan_max_age_s = float(scan_period_s), float(scan_max_age_s)
         self.valid_fraction_min = float(valid_fraction_min)
@@ -216,7 +218,10 @@ class RealLayer:
         self.exempt_serial = 0
         self.context = (None, ())  # (mission generation, path id) -- the loop sets it each tick
         self.planning_pallet = None  # (pallet rectangle, key) the planning grid suppresses
-        self.last_scan_s: dict = {}
+        self.last_scan_s: dict = {}  # sensor -> the placed scan's first beam (the FREE age)
+        self.last_beam_s: dict = {}  # sensor -> the placed scan's last beam (the first-use deadline)
+        self.defer_submit = False  # the loop: placements only mark, ``flush`` submits after this tick's track()
+        self._dirty = False
         self.counts = {"scans": 0, "scans_dropped": 0, "stale_results": 0, "installs": 0}
         self._request = None  # the newest refresh request (dict)
         self._installed = None  # {"key", "newest_scan_s", "scan_id", "first_used_s", "planning"}
@@ -268,22 +273,30 @@ class RealLayer:
             self._request["current_pose"] = tuple(float(v) for v in current_pose)
             self._request["path_ahead"] = None if path_ahead is None else np.asarray(path_ahead, dtype=float).copy()
 
+    def flush(self, now_s: float) -> None:
+        """Submit the computation the placements since the last submit asked for (``defer_submit``): after the
+        loop's ``track()``, so the check runs from this tick's pose along this tick's path (Codex 5a impl P2-1)."""
+        if self._dirty:
+            self._submit(now_s)
+
     def _submit(self, now_s: float) -> None:
         r = self._request
         if r is None:
             return
+        self._dirty = False
         job = dict(r)
         job["now_s"] = max(float(now_s), r["now_s"])
         job["key"] = self._key(r["version"], r["loaded"])
         job["exempt"] = copy.deepcopy(self._exempt)
         job["scan_id"] = getattr(self, "_placed_id", 0)  # the newest scan the copy holds
         job["newest_scan_s"] = max(self.last_scan_s.values(), default=None)
+        job["newest_scan_last_s"] = max(self.last_beam_s.values(), default=None)
         job["grid"] = copy.deepcopy(self.grid)  # the worker owns its copy: the control thread never shares state
         job["planning_pallet"] = self.planning_pallet
         footprint, own = self.footprints(r["loaded"], r["direction"])
         job["footprint"], job["own"] = footprint, own
         job["permission_config"] = self.permission.config
-        job["odom_pose"] = None if self.odom_now is None else tuple(float(v) for v in self.odom_now())
+        job["odom_travel"] = None if self.odom_now is None else float(self.odom_now())
         self.worker.submit(job, _compute)
 
     def footprints(self, loaded: bool, direction: int = 0) -> tuple:
@@ -295,15 +308,21 @@ class RealLayer:
         raw odometry must reach past its last beam, so it is placed at a later tick head (``place_pending``) or
         dropped after ``place_wait_s``. Returns why it was dropped at once, or None."""
         self.counts["scans"] += 1
+        if self._expected_s is not None and now_s > self._expected_s and self._missed_expected is None:
+            # the expectation this receipt comes too late for is recorded before it is replaced (Codex 5a impl
+            # P1-2): held until a result holding this or a later scan is installed
+            self._missed_expected = (float(now_s), self._expected_s, self._scan_id)
         self._scan_id += 1
         sid = self._scan_id
         self._deadlines[sid] = (float(scan.last_s) + self.budget_s, False)
         self._expected_s = float(scan.last_s) + self.scan_period_s + self.budget_s
         self._initial = (tuple(float(v) for v in initial_correction), int(initial_version))
-        valid = np.asarray(scan.valid, dtype=bool)
+        valid = _beam_valid(scan)
         why = None
         if scan.sensor not in self.sensors:
             why = "unknown_sensor"
+        elif self.sensors[scan.sensor][1] and (scan.limit_m is None or len(scan.limit_m) != len(valid)):
+            why = "no_beam_limit"  # a sensor that may clear needs its per-beam height limit (design 1.1)
         elif valid.size == 0 or float(np.mean(valid)) < self.valid_fraction_min:
             why = "too_few_valid_beams"
         if why is not None:
@@ -322,12 +341,12 @@ class RealLayer:
         keep = []
         placed = False
         for sid, scan, received in self._unplaced:
+            if now_s - received > self.place_wait_s:
+                self._drop(sid)  # waited too long, whether or not it could be placed now (Codex 5a impl P3)
+                continue
             pose = self.placer(float(scan.first_s), float(scan.last_s))
             if pose is None:
-                if now_s - received > self.place_wait_s:
-                    self._drop(sid)
-                else:
-                    keep.append((sid, scan, received))
+                keep.append((sid, scan, received))
                 continue
             self._place(sid, scan, pose)
             placed = True
@@ -338,11 +357,14 @@ class RealLayer:
                 self._request = {"now_s": float(now_s), "correction": correction, "version": version,
                                  "current_pose": (0.0, 0.0, 0.0), "path_ahead": None, "loaded": False,
                                  "direction": 0, "odom_pose": None}
-            self._submit(now_s)
+            if self.defer_submit:
+                self._dirty = True
+            else:
+                self._submit(now_s)
 
     def _place(self, sid: int, scan: RealScan, pose) -> None:
-        valid = np.asarray(scan.valid, dtype=bool)
-        laser_in_rear, may_clear = self.sensors[scan.sensor]
+        valid = _beam_valid(scan)
+        laser_in_rear, may_clear, _provenance = self.sensors[scan.sensor]
         ranges = np.where(valid, np.asarray(scan.ranges_m, dtype=float), np.nan)
         self.grid.add_scan(ObstacleScan(
             float(scan.first_s), scan.sensor, tuple(float(v) for v in pose), tuple(float(v) for v in laser_in_rear),
@@ -351,12 +373,15 @@ class RealLayer:
             (self.body.front_m, self.body.rear_m, self.body.half_width_m),
             None if scan.limit_m is None else np.asarray(scan.limit_m, dtype=float)))
         self.last_scan_s[scan.sensor] = float(scan.first_s)  # FREE age from the first beam (conservative)
+        self.last_beam_s[scan.sensor] = float(scan.last_s)
         self._placed_id = sid
+        self.grid.prune(float(scan.first_s))  # the original keeps what a snapshot may still use (Codex 5a impl P2-5)
 
     # --- install (control thread, tick head) ---------------------------------------------------------------------
-    def install_ready(self, now_s: float, odom_pose=None) -> int:
+    def install_ready(self, now_s: float, odom_travel=None) -> int:
         """Place the waiting scans, then install the finished results whose key is the current one; others are
-        counted and dropped."""
+        counted and dropped. ``odom_travel``: the raw odometry's path length now (the travel since the request
+        is taken off the result's verified distance)."""
         self.place_pending(now_s)
         installed = 0
         for job, result in self.worker.take():
@@ -364,16 +389,18 @@ class RealLayer:
                 self.counts["stale_results"] += 1
                 continue
             self.snapshot = result["snapshot"]
-            self.permission.update(self.snapshot, result["path_ahead"], job["footprint"], job["own"],
-                                   current_pose=job["current_pose"], direction=job["direction"])
-            start = job.get("odom_pose")
-            if start is not None and odom_pose is not None:
-                self.permission.advance(math.hypot(odom_pose[0] - start[0], odom_pose[1] - start[1]))
+            # the path check ran in the worker (Codex 5a impl P2-5): installed as DrivePermission.update would
+            perm = self.permission
+            perm.snapshot, perm.path_check, perm._driven_since_m = self.snapshot, result["check"], 0.0  # noqa: SLF001
+            start = job.get("odom_travel")
+            if start is not None and odom_travel is not None:
+                perm.advance(float(odom_travel) - start)  # the path driven, not the straight line (P2-3)
             # first used at this tick (installed at the tick head, read by this tick's control)
             self._installed = {"key": job["key"], "newest_scan_s": job["newest_scan_s"], "scan_id": job["scan_id"],
                                "first_used_s": float(now_s), "planning": result.get("planning")}
-            self._first_use_late = job["newest_scan_s"] is not None and \
-                now_s - job["newest_scan_s"] > self.scan_period_s + self.budget_s + 1e-6
+            # first use within B of the newest scan's last beam (design 9, Codex 5a impl P1-2)
+            last = job.get("newest_scan_last_s")
+            self._first_use_late = last is not None and now_s - last > self.budget_s + 1e-6
             for sid in [s for s in self._deadlines if s <= job["scan_id"]]:
                 del self._deadlines[sid]  # held by this result (a dropped one: by this newer result)
             if self._missed_expected is not None and job["scan_id"] > self._missed_expected[2]:
@@ -388,6 +415,10 @@ class RealLayer:
     # --- answers -----------------------------------------------------------------------------------------------
     def installed_key(self):
         return None if self._installed is None else self._installed["key"]
+
+    def installed_newest_s(self):
+        """The installed result's newest scan (first beam), not the newest placed one (Codex 5a impl P2-7)."""
+        return None if self._installed is None else self._installed["newest_scan_s"]
 
     def installing(self) -> bool:
         return self._installed is None or self._installed["key"] != self.current_key()
@@ -458,4 +489,34 @@ def _compute(job: dict) -> dict:
     path = job["path_ahead"]
     if path is None:
         path = np.asarray([job["current_pose"]], dtype=float)
-    return {"snapshot": snapshot, "path_ahead": path, "planning": planning}
+    check = DrivePermission(job["permission_config"]).check_path(
+        snapshot, path, job["footprint"], job["own"], current_pose=job["current_pose"], direction=job["direction"])
+    return {"snapshot": snapshot, "path_ahead": path, "planning": planning, "check": check}
+
+
+def _beam_valid(scan: RealScan) -> np.ndarray:
+    """A beam counts when the source says so and its range is not NaN and above zero (a zero is a no-return code,
+    not an obstacle at the sensor; +inf stays: REP-117 no return in range) -- Codex 5a impl P2-6."""
+    r = np.asarray(scan.ranges_m, dtype=float)
+    valid = np.asarray(scan.valid, dtype=bool)
+    if valid.shape != r.shape:
+        return np.zeros(r.shape, bool)
+    return valid & ~np.isnan(r) & (r > 0.0)
+
+
+def _checked_sensors(sensors: dict) -> dict:
+    """Design 1.1: each sensor's mount, ``may_clear`` and provenance (``measured`` stated) or the assembly refuses."""
+    if not sensors:
+        raise ValueError("sensor_config_missing")
+    out = {}
+    for name, entry in sensors.items():
+        if not isinstance(entry, tuple) or len(entry) != 3:
+            raise ValueError(f"sensor_config_missing:{name}")
+        mount, may_clear, provenance = entry
+        mount = tuple(float(v) for v in mount)
+        if len(mount) != 3 or not all(math.isfinite(v) for v in mount) or type(may_clear) is not bool:
+            raise ValueError(f"sensor_config_invalid:{name}")
+        if not isinstance(provenance, dict) or type(provenance.get("measured")) is not bool:
+            raise ValueError(f"sensor_provenance_missing:{name}")
+        out[name] = (mount, may_clear, dict(provenance))
+    return out

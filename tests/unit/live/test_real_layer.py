@@ -33,7 +33,8 @@ def configs(**kw):
 
 def layer(placer=None):
     grid, perm = configs()
-    return RealLayer(grid, perm, sensors={"lidar": ((0.0, 0.0, 0.0), True)}, unloaded=BODY, loaded=BODY, body=BODY,
+    return RealLayer(grid, perm, sensors={"lidar": ((0.0, 0.0, 0.0), True, {"measured": False})}, unloaded=BODY,
+                     loaded=BODY, body=BODY,
                      placer=placer or (lambda a, b: (0.0, 0.0, 0.0)), budget_s=B, overdue_end_s=1.0,
                      scan_period_s=PERIOD, scan_max_age_s=0.35, worker=ManualWorker())
 
@@ -43,7 +44,8 @@ def wall(first_s, x=3.0, valid=None):
     front = np.abs(ANGLES) < math.radians(40)
     r[front] = x / np.cos(ANGLES[front])
     v = np.ones(len(ANGLES), bool) if valid is None else valid
-    return RealScan("lidar", first_s, first_s + PERIOD, ANGLES, r, v, np.zeros(len(ANGLES), bool))
+    return RealScan("lidar", first_s, first_s + PERIOD, ANGLES, r, v, np.zeros(len(ANGLES), bool),
+                    np.full(len(ANGLES), np.inf))
 
 
 def ask(lay, t, version=0, path=None):
@@ -205,14 +207,119 @@ def test_the_planning_grid_drops_the_frozen_pallet_and_the_driving_snapshot_keep
     assert not occ.occupied[i2, j2]
 
 
-def test_the_install_counts_the_distance_driven_since_the_request():
+def test_the_install_counts_the_path_driven_since_the_request():
+    """Codex 5a impl P2-3: the path length (a there-and-back counts both ways), not the straight line."""
     lay = layer()
-    lay.odom_now = lambda: (0.0, 0.0, 0.0)
+    lay.odom_now = lambda: 1.00
     lay.add_scan(wall(1.0), 1.0)
     ask(lay, 1.05)
     lay.worker.step()
-    lay.install_ready(1.12, odom_pose=(0.03, 0.04, 0.0))
-    assert math.isclose(lay.permission._driven_since_m, 0.05)  # noqa: SLF001
+    lay.install_ready(1.12, odom_travel=1.08)
+    assert math.isclose(lay.permission._driven_since_m, 0.08)  # noqa: SLF001
+    lay.advance(0.01)
+    assert math.isclose(lay.permission._driven_since_m, 0.09)  # noqa: SLF001
+
+
+def test_the_path_check_runs_in_the_worker():
+    """Codex 5a impl P2-5: the control thread installs the worker's check; it does not walk the path itself."""
+    lay = layer()
+    calls = {"n": 0}
+    lay.permission.check_path = lambda *a, **k: calls.__setitem__("n", calls["n"] + 1)
+    lay.add_scan(wall(1.0), 1.0)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    assert calls["n"] == 0 and lay.permission.path_check is not None
+
+
+def test_the_original_grid_keeps_only_what_a_snapshot_may_use():
+    lay = layer()
+    for k in range(30):
+        lay.add_scan(wall(1.0 + 0.1 * k), 1.1 + 0.1 * k)
+    assert len(lay.grid.scans) <= 5  # occupied_max_age_s 0.35 at 10 Hz
+
+
+def test_a_late_receipt_does_not_erase_the_missed_expectation():
+    """Codex 5a impl P1-2: the expectation passed before this receipt is held until its result is installed."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.0)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    assert lay.watchdog(1.29) is None
+    lay.add_scan(wall(1.2), 1.31)  # expected by 1.1 + 0.1 + 0.1 = 1.30; no watchdog call in between
+    assert lay.watchdog(1.311) == "layer_overdue"
+    lay.worker.step()
+    lay.install_ready(1.32)
+    assert lay.watchdog(1.33) is None
+
+
+def test_first_use_is_late_from_the_last_beam():
+    """Design 9 / Codex 5a impl P1-2: a short revolution (last beam 1.05) first used 0.12 s after it is late (B 0.10),
+    though it is within a nominal period + B of the first beam."""
+    lay = layer()
+    scan = wall(1.0)
+    scan.last_s = 1.05
+    lay.add_scan(scan, 1.05)
+    lay.worker.step()
+    lay.install_ready(1.17)
+    assert lay.watchdog(1.17) == "layer_overdue"
+
+
+def test_nan_and_zero_ranges_are_not_valid_beams_whatever_the_flag():
+    """Codex 5a impl P2-6: a NaN never counts toward the valid fraction; a zero range never marks."""
+    lay = layer()
+    scan = wall(1.0)
+    scan.ranges_m = np.full(len(ANGLES), np.nan)
+    assert lay.add_scan(scan, 1.0) == "too_few_valid_beams"
+    lay = layer()
+    scan = wall(1.0)
+    scan.ranges_m = scan.ranges_m.copy()
+    scan.ranges_m[np.abs(ANGLES) < math.radians(5)] = 0.0
+    lay.add_scan(scan, 1.0)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    snap = lay.snapshot
+    i = int((0.0 - snap.origin_x_m) / snap.resolution_m)
+    j = int((0.0 - snap.origin_y_m) / snap.resolution_m)
+    assert snap.state[i, j] != OCCUPIED
+
+
+def test_a_clearing_sensor_needs_its_beam_limit_and_a_sensor_needs_its_provenance():
+    """Design 1.1 / Codex 5a impl P2-6."""
+    lay = layer()
+    scan = wall(1.0)
+    scan.limit_m = None
+    assert lay.add_scan(scan, 1.0) == "no_beam_limit"
+    grid, perm = configs()
+    for bad in ({}, {"lidar": ((0.0, 0.0, 0.0), True)}, {"lidar": ((0.0, 0.0, 0.0), True, {})},
+                {"lidar": ((0.0, 0.0, float("nan")), True, {"measured": False})}):
+        try:
+            RealLayer(grid, perm, sensors=bad, unloaded=BODY, loaded=BODY, body=BODY, placer=lambda a, b: None,
+                      budget_s=B, overdue_end_s=1.0, scan_period_s=PERIOD, scan_max_age_s=0.35, worker=ManualWorker())
+        except ValueError as exc:
+            assert str(exc).startswith("sensor_")
+        else:
+            raise AssertionError(bad)
+
+
+def test_a_scan_waiting_past_its_limit_is_dropped_even_if_now_placeable():
+    """Codex 5a impl P3: the wait's expiry is read before the placement."""
+    reached = {"ok": False}
+    lay = layer(placer=lambda a, b: (0.0, 0.0, 0.0) if reached["ok"] else None)
+    lay.add_scan(wall(1.0), 1.1)
+    reached["ok"] = True
+    lay.install_ready(1.25)
+    assert lay.counts["scans_dropped"] == 1 and not lay.grid.scans
+
+
+def test_placements_wait_for_flush_when_deferred():
+    """Codex 5a impl P2-1: in the loop a placement only marks; the computation goes out after this tick's track()."""
+    lay = layer()
+    lay.defer_submit = True
+    lay.add_scan(wall(1.0), 1.0)
+    assert lay.worker.pending is None
+    lay.track((0.2, 0.0, 0.0), np.array([[0.2, 0.0, 0.0], [0.7, 0.0, 0.0]]))
+    lay.flush(1.01)
+    assert lay.worker.pending is not None and lay.worker.pending[0]["current_pose"] == (0.2, 0.0, 0.0)
 
 
 def test_a_scan_waits_for_the_odometry_past_its_last_beam_then_is_placed():

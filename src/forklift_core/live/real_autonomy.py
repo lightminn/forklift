@@ -554,6 +554,8 @@ class SnapshotView:
     installing: bool = False  # a new result asked after a correction change, not yet installed
     installed_generation: int | None = None  # the correction generations (a release counts one): equal values of
     applied_generation: int | None = None  # two generations are two corrections
+    layer_wait: str | None = None  # the layer watchdog's wait ("layer_overdue"): a scan late within its end is a
+    # wait, not a stale-scan latch (Codex 5a impl P2-7); past the end the loop latches on the watchdog itself
 
 
 @dataclass(frozen=True)
@@ -618,10 +620,13 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence) -> str | None:
         if sl.hold_travel_m > HOLD_MAX_M:
             return "slam:hold_too_long"
     sn = ev.snapshot(now_ns)
-    if sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9:
+    layer_wait = getattr(sn, "layer_wait", None)
+    if (sn.newest_scan_ns is None or now_ns - sn.newest_scan_ns > SCAN_MAX_AGE_S * 1e9) and layer_wait is None:
         return "snapshot:scan_stale"
     if stage == "submit" and not ev.operator_start_ok(now_ns):
         return "operator_start:unconfirmed"
+    if layer_wait is not None:
+        return f"wait:{layer_wait}"
     if sn.installing or sn.installed_correction is None \
             or tuple(sn.installed_correction) != tuple(sn.applied_correction) \
             or sn.installed_generation is None or sn.installed_generation != sn.applied_generation:

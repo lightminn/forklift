@@ -2,6 +2,8 @@
 end on scans, the D5 exemption from the check hook, the planning grid gating the plan request, the layer forced on,
 the layer's faults, scans dropped for an over-bound motion, a same-boot odometry break resetting the layer."""
 
+import math
+
 from forklift_core.live import real_autonomy as ra
 from forklift_core.mcu_link.messages import FaultFlag
 from forklift_core.perception.obstacle_grid import OCCUPIED
@@ -31,6 +33,8 @@ def cell(snap, x, y):
 
 def test_s10_a_runs_end_to_end_on_the_real_layer():
     r = rig()
+    r.tick(40)  # the first scans wait for a history reaching back dt before their first beam (dropped at the start)
+    start_drops = r.layer.counts["scans_dropped"]
     r.submit()
     run_until(r, lambda rec: r.core.ms.phase == "approach" and r.permit.state == ra.DRIVING)
     assert cell(r.layer.snapshot, PALLET[0] - 0.3, PALLET[1]) == OCCUPIED  # the pallet is an obstacle to the drive
@@ -39,7 +43,7 @@ def test_s10_a_runs_end_to_end_on_the_real_layer():
     assert r.layer.exempt is not None  # the D5 check's region, installed by the check hook
     run_until(r, lambda rec: r.permit.state == ra.LATCHED and r.loop.session.results)
     assert [e["reason"] for e in r.loop.session.results] == ["s10_lifted"]
-    assert r.layer.counts["scans_dropped"] == 0 and r.layer.counts["installs"] > 0
+    assert r.layer.counts["scans_dropped"] == start_drops and r.layer.counts["installs"] > 0
 
 
 def test_no_plan_is_asked_before_the_planning_grid_of_the_frozen_pallet_is_installed():
@@ -95,3 +99,124 @@ def test_a_same_boot_odometry_break_resets_the_layer():
     r.mcu.faults = FaultFlag(0)
     assert not r.layer.grid.scans or all(s.stamp_s > r.loop._t(r.now) - 0.2 for s in r.layer.grid.scans)  # noqa: SLF001
     assert r.layer.installing()
+
+
+def _driving_rig():
+    r = rig()
+    r.tick(40)
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and rec.branch == "auto")
+    return r
+
+
+def test_a_layer_deadline_passing_between_the_decision_and_the_write_holds_the_drive():
+    """Codex 5a impl P1-1: the first byte reads the layer watchdog at the write -- a scan deadline passed 5 ms after
+    the tick's decision makes its DRIVE a wait (wheels 0), not the moving frame decided."""
+    from forklift_core.mcu_link.messages import Drive
+    from test_teleop_bridge_cycle import MS
+
+    from dataclasses import replace
+
+    r = _driving_rig()
+    ev = r.loop.evidence
+    view = ev.snapshot
+    # the loop's own read at the write, not the evidence's (which an assembly may not wire the watchdog into)
+    r.loop.evidence = replace(ev, snapshot=lambda n: replace(view(n), layer_wait=None))
+    orig = r.layer.watchdog
+    r.layer.watchdog = lambda now: "layer_overdue" if now > r.loop._t(r.now) + 0.005 else orig(now)  # noqa: SLF001
+    r.tick_cost_ns = 10 * MS
+    k = len(r.transport.sent)
+    r.tick()
+    drives = [m for _, _, _, m in r.transport.sent[k:] if isinstance(m, Drive)]
+    assert drives and all(m.left_wheel_rad_s == 0.0 == m.right_wheel_rad_s for m in drives)
+
+
+def test_a_same_boot_odometry_break_asks_one_relocalization():
+    """Codex 5a impl P1-3: the motion across a same-boot break was not integrated -- the map pose is not trusted
+    until a relocalization; one generation per break, not one per tick."""
+    r = rig()
+    r.tick(15)
+    assert r.core.relocalize_generation() is None
+    r.mcu.faults = FaultFlag.ENCODER_GAP
+    r.tick(3)
+    r.mcu.faults = FaultFlag(0)
+    r.tick(5)
+    events = [e for e in r.core.state.get("field_recoveries", []) if e.get("reason") == "odometry_break"]
+    assert len(events) == 1 and r.core.relocalize_generation() == events[0]["generation"]
+
+
+def test_the_scan_motion_check_uses_the_encoder_bound_and_reaches_dt_before_the_first_beam():
+    """Design 1.1 / Codex 5a impl P1-4: a 0.12 m/s approach at the STATE interval passes the scan check; an entry
+    over the bound 80 ms before the first beam (inside dt = 2 period + state delay) drops the scan."""
+    from types import SimpleNamespace
+
+    loop = rig().loop
+    loop.delay_bound = None
+    loop.odom_history.clear()
+    loop._odom_prev = None  # noqa: SLF001
+    p, dt = loop.params, 0.01
+    counts = [0.0, 0.0]
+    for k in range(5):
+        st = SimpleNamespace(boot_id=1, mcu_time_us=int(k * dt * 1e6),
+                             wheel_count_left=int(counts[0]), wheel_count_right=int(counts[1]))
+        loop._odom_entry(st, 0, SimpleNamespace(pose=(0.0, 0.0, 0.0), continuity_broken=False))  # noqa: SLF001
+        for w in (0, 1):
+            counts[w] += 0.12 * dt * p.counts_per_rev[w] / (2 * math.pi * p.radius_m[w])
+    assert all(e[5] and e[6] for e in list(loop.odom_history)[1:])
+    # the placer's window: entries every 10 ms from 0 to 1.0 s, all fine but one 80 ms before the first beam
+    loop.odom_history.clear()
+    first, last = 0.60, 0.70
+    for k in range(101):
+        t = k * 0.01
+        loop.odom_history.append((t - 0.005, t, (0.0, 0.0, 0.0), True, True, True, True))
+    assert loop.place_scan(first, last) is not None
+    h = list(loop.odom_history)
+    k = next(i for i, e in enumerate(h) if abs(e[1] - (first - 0.08)) < 1e-9)
+    h[k] = h[k][:5] + (False, True)
+    loop.odom_history.clear()
+    loop.odom_history.extend(h)
+    assert loop.place_scan(first, last) is None
+
+
+def test_the_arm_goes_out_on_the_adopted_missions_installed_key():
+    """Codex 5a impl P2-1: on the adoption tick the key follows the new mission before readiness is read -- the ARM
+    is asked only once the installed result is the current key's."""
+    r = rig()
+    r.tick(40)
+    seen = []
+    orig = r.permit.adopted
+
+    def adopted(now_ns, **kw):
+        seen.append((r.layer.installing(), r.layer.installed_key().mission_gen, r.core.commands.mission_gen))
+        return orig(now_ns, **kw)
+
+    r.permit.adopted = adopted
+    r.submit()
+    run_until(r, lambda rec: bool(seen))
+    installing, installed_gen, current_gen = seen[0]
+    assert not installing and installed_gen == current_gen
+
+
+def test_slam_lost_while_waiting_for_the_planning_grid_latches_and_ends_the_preparation():
+    """Codex 5a impl P2-2: a pre-adoption fault latches whether or not a plan is out yet."""
+    r = rig()
+    r.tick(5)
+    r.submit()
+    run_until(r, lambda rec: r.core.commands.status in ("accepted", "preparing"), limit=50)
+    r.tracker.mode = "lost"
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=20)
+    assert rec.reason.startswith("prepare:slam")
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+    r.tick(2)
+    assert r.core.commands.status not in ("accepted", "preparing", "running")
+
+
+def test_the_planning_key_holds_the_frozen_pallets_pose():
+    """Codex 5a impl P2-4: the same pallet id registered elsewhere is another planning grid."""
+    from types import SimpleNamespace
+
+    loop = rig().loop
+    loop.frozen = SimpleNamespace(pallet_id="P1", pose=(3.0, 0.0, 0.0))
+    a = loop._planning_key()  # noqa: SLF001
+    loop.frozen = SimpleNamespace(pallet_id="P1", pose=(3.4, 0.0, 0.0))
+    assert loop._planning_key() != a  # noqa: SLF001

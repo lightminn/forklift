@@ -26,6 +26,26 @@ def test_none_is_the_snapshot_as_before_byte_for_byte():
     assert np.array_equal(np.nan_to_num(a.free_stamp, nan=-1.0), np.nan_to_num(b.free_stamp, nan=-1.0))
 
 
+# sha256 of three snapshots' state and free_stamp bytes and metadata, computed with origin/main's obstacle_grid.py
+# (before suppress=) on the scene below (Codex 5a impl P3: the bytes, not only the values of two calls after it)
+MAIN_BYTES_SHA256 = "8f37e0111137fc566835def2d6cbc4283078d687bec2c5a605e1004a74ba61d2"
+
+
+def test_none_and_the_default_are_main_byte_for_byte():
+    import hashlib
+
+    g = grid_with(scan(0.0, wall_ranges()), scan(0.1, wall_ranges(2.5)), scan(0.2, wall_ranges(1.8)))
+    for kw in ({}, {"suppress": None}):
+        h = hashlib.sha256()
+        for t, corr, ver in ((0.15, (0.0, 0.0, 0.0), 0), (0.25, (0.05, -0.02, 0.01), 1), (0.6, (0.0, 0.0, 0.0), 2)):
+            snap = g.snapshot(t, corr, ver, **kw)
+            h.update(snap.state.tobytes())
+            h.update(snap.free_stamp.tobytes())
+            h.update(repr((snap.origin_x_m, snap.origin_y_m, snap.resolution_m, snap.stamp_s, snap.state.shape,
+                           snap.state.dtype, snap.free_stamp.dtype)).encode())
+        assert h.hexdigest() == MAIN_BYTES_SHA256, kw
+
+
 def test_returns_inside_the_rectangle_do_not_mark_and_the_rest_still_do():
     g = grid_with(scan(0.0, wall_ranges()))
     # the wall at x = 3 spans y in about +-2.5; suppress its middle metre (a pallet face there)

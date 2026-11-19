@@ -299,11 +299,12 @@ class Rig:
             # Isaac layer's rule) -- the cells under the forks may be FREE
             hull = geometry.unloaded_footprint
             body = Footprint(0.35, hull.rear_m, hull.half_width_m)
-            self.layer = RealLayer(grid_cfg, perm_cfg, sensors={"lidar": ((0.0, 0.0, 0.0), True)}, unloaded=hull,
+            self.layer = RealLayer(grid_cfg, perm_cfg, sensors={"lidar": ((0.0, 0.0, 0.0), True, {"measured": False})},
+                                   unloaded=hull,
                                    loaded=geometry.loaded_footprint, body=body,
                                    placer=lambda a, b: loop_box["loop"].place_scan(a, b),
                                    budget_s=0.10, overdue_end_s=1.0, scan_period_s=0.10, scan_max_age_s=0.35,
-                                   worker=StepWorker(), odom_now=lambda: loop_box["loop"].odom_pose)
+                                   worker=StepWorker(), odom_now=lambda: loop_box["loop"].odom_travel)
             self.delay_bound = DelayBound()
 
         hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m, odom_base=lambda: (0.0, 0.0, 0.0),
@@ -353,11 +354,13 @@ class Rig:
             if lay is None:
                 return ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 0, 0)
             key, applied_v = lay.installed_key(), int(core.obstacle["version"])
-            newest = max(lay.last_scan_s.values(), default=None)
+            newest = lay.installed_newest_s()  # the installed result's, not the newest placed scan (5a impl P2-7)
             applied_c = tuple(float(v) for v in core.obstacle["applied"])
+            wait_ = lay.watchdog(t_of(n))
             return ra.SnapshotView(None if key is None else applied_c, applied_c,
                                    None if newest is None else int(10_000 * MS + newest * 1e9),
-                                   lay.installing(), None if key is None else key.correction_gen, applied_v)
+                                   lay.installing(), None if key is None else key.correction_gen, applied_v,
+                                   wait_ if wait_ == "layer_overdue" else None)
 
         evidence = ra.Evidence(
             worker_ok=lambda n: True, baseline_ok=lambda n: True,
@@ -451,7 +454,9 @@ class Rig:
                 if tt > 0.0 and 0.0 <= uu <= 1.0:
                     best = min(best, tt)
             ranges[k] = best
-        scan = RealScan("lidar", t - 0.1, t, angles, ranges, np.ones(len(angles), bool), np.zeros(len(angles), bool))
+        # a level mount: every beam stays in its band (the limit an S7-measured tilt would give is finite)
+        scan = RealScan("lidar", t - 0.1, t, angles, ranges, np.ones(len(angles), bool), np.zeros(len(angles), bool),
+                        np.full(len(angles), np.inf))
         self.layer.add_scan(scan, t, initial_correction=tuple(self.core.obstacle["applied"]),
                             initial_version=int(self.core.obstacle["version"]))
 
