@@ -170,22 +170,49 @@ class FakeTransport:
         if steps == 0:
             host.on_bytes(encode(self.mcu.state(), 1), now_ns)
 
+    stall = False  # the device takes a frame's first bytes and then nothing (EAGAIN until it is reopened)
+    _cur = None  # the frame being written
+    partial_since_ns = None  # when the frame being written started (the loop's stuck-write evidence)
+    resyncs = 0
+
     def transmit(self, host, now_ns, gate):
         out = []
+        if self._cur is not None:
+            if self.stall:
+                return out  # nothing more goes out, a DISARM included
+            f, self._cur, self.partial_since_ns = self._cur, None, None
+            self._deliver(host, f, now_ns)
+            out.append((f.kind, f.seq, now_ns))
         while (f := host.next_frame(now_ns)) is not None:
             def write(f=f):
-                host.frame_written(f, now_ns)
-                for r in self.dec.feed(f.data, now_ns):
-                    self.sent.append((now_ns, f.kind, f.seq, r.message))
-                    self.mcu.receive(r.message, f.seq)
+                if self.stall:
+                    self._cur, self.partial_since_ns = f, now_ns  # its first bytes only
+                    return
+                self._deliver(host, f, now_ns)
 
             if gate(f, write):
+                if self._cur is not None:
+                    break
                 out.append((f.kind, f.seq, now_ns))
             else:
                 host.unsent(f, now_ns)
                 host.drop_drives("send_gate")
                 break
         return out
+
+    def _deliver(self, host, f, now_ns):
+        host.frame_written(f, now_ns)
+        for r in self.dec.feed(f.data, now_ns):
+            self.sent.append((now_ns, f.kind, f.seq, r.message))
+            self.mcu.receive(r.message, f.seq)
+
+    def resync(self, host, now_ns):
+        """The link closed and reopened: the half-written frame abandoned (counted as possibly delivered), the MCU's
+        half frame closed by the opening delimiter (never applied)."""
+        if self._cur is not None:
+            host.frame_abandoned(self._cur, 1, now_ns)
+        self._cur, self.partial_since_ns, self.stall = None, None, False
+        self.resyncs += 1
 
 
 class Rig:

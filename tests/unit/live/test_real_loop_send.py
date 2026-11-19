@@ -195,3 +195,17 @@ def test_a_stop_awaiting_its_disarm_answer_does_not_renew_the_disarm_every_tick(
     r.tick(4)  # 80 ms
     seqs = {seq for _, kind, seq, _ in r.transport.sent[k:] if kind == "DISARM"}
     assert len(seqs) == 1
+
+
+def test_a_write_stuck_past_its_frame_expiry_resyncs_the_link_and_disarms_first():
+    """Design 8 (Codex impl P2-5): a frame whose first bytes went out and then EAGAIN until its expiry -- the link is
+    taken as lost, reopened, and the first frame after it is the DISARM."""
+    r = driving()
+    r.transport.stall = True
+    k = len(r.transport.sent)
+    recs = [r.tick() for _ in range(8)]
+    assert any(x.reason == "link_stuck" for x in recs) and r.transport.resyncs == 1
+    after = [kind for _, kind, _, _ in r.transport.sent[k:]]
+    assert after and after[0] == "DISARM" and "DRIVE" not in after
+    r.tick(3)
+    assert r.mcu.mode.name == "DISARMED" and r.permit.state == ra.LATCHED

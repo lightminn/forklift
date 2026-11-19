@@ -249,6 +249,14 @@ class RealLoop:
         core, permit, host = self.core, self.permit, self.host
         self._odom_broken = False
         self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
+        stuck = getattr(self.transport, "partial_since_ns", None)
+        if stuck is not None and now_ns - int(stuck) > int(DRIVE_LIFE_S * 1e9):
+            # a frame started and not finished by its own expiry (design 8): the link is lost -- closed and reopened,
+            # the stop left to the MCU's command expiry meanwhile, and the first frame after it the DISARM
+            self.transport.resync(host, now_ns)
+            rec.branch, rec.reason = "emergency", "link_stuck"
+            self._emergency(now_ns, "link_stuck")
+            return
         self.odom_continuous = bool(self.samples) and not self._odom_broken
         if self._rebooted:
             # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
