@@ -34,6 +34,9 @@ FLOWS = {
                                                     frozenset({"_real_request_"}))]),
     ("src/forklift_core/live/real_loop.py", "refusal"): (
         "call", "_bypass_refusal", [("src/forklift_core/live/real_loop.py", frozenset({"_bypass_refusal"}))]),
+    # 5c-2 (design 6, 5): the relocalization attempt's refusals
+    ("src/forklift_core/live/real_loop.py", "self._attempt_request(kind, msg, now_ns)"): (
+        "direct", None, [("src/forklift_core/live/real_loop.py", frozenset({"_attempt_request"}))]),
     ("src/forklift_core/live/real_loop.py", "done[1]"): (
         "direct", None, [("src/forklift_core/mission/core.py", frozenset({"field_recovery_done"}))]),
     (MOCK, "verdict"): ("call", "admit", "ledger"),

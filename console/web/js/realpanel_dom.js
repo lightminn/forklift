@@ -2,8 +2,8 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, panelShown, poseOf, statusIsMine, statusSig, submitClosedWhy,
-  submitRevision, toggleShown } from "./realpanel.js";
+import { answerKey, answerStillOpen, bypassButtons, panelShown, poseOf, relocalizeClosedWhy, relocalizeResult,
+  relocalizeView, statusIsMine, statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
 
 const $ = (id) => document.getElementById(id);
 const TOGGLE_WAIT_MS = 2000; // a toggle not seen in real_status by then: told it did not apply
@@ -180,6 +180,19 @@ export function bindRealPanel(m, rejectText, clientId) {
     send("recovery", { recovery_id: drawn, action: "done" }, "현장 복구 완료를 보냈습니다");
   }, "rp-recovery");
   $("rp-rearm").onclick = guard(() => send("rearm", {}, "재무장을 보냈습니다"), "rp-rearm");
+  // 5c-2 (design 6, 9): the generation sent is the one drawn when the press began -- guard() refuses the click when
+  // the status signature (it holds relocalize_generation) changed since, so the drawn and the current one are equal
+  const relocalize = (type, okText) => () => {
+    const gen = m.session.realStatus && m.session.realStatus.relocalize_generation;
+    if (!Number.isInteger(gen)) return say("다시 확인할 위치가 없습니다");
+    send(type, { generation: gen }, okText).then((r) => {
+      if (r && r.t === "ack") panel.relocAck = { generation: r.generation, attempt: r.attempt, type };
+    });
+  };
+  $("rp-reloc-confirm").onclick = guard(relocalize("relocalize_confirm", "재위치 확인을 보냈습니다 · 판정을 기다립니다"),
+    "rp-reloc-confirm");
+  $("rp-reloc-declare").onclick = guard(relocalize("relocalize_declare", "시작 자세 선언을 보냈습니다 · 판정을 기다립니다"),
+    "rp-reloc-declare");
   $("rp-bypass").onclick = (ev) => {
     const btn = ev.target.closest("button[data-check]");
     if (!btn || btn.disabled) return;
@@ -278,6 +291,20 @@ export function renderRealPanel(m, clientId) {
   $("rp-recovery").hidden = panel.recoveryId === null;
   $("rp-recovery").disabled = !mine;
   $("rp-recovery").textContent = panel.recoveryId === null ? "" : `현장 복구 #${panel.recoveryId} 완료`;
+  // 5c-2 (design 6, 9): the relocalization row
+  const rv = relocalizeView(st);
+  const told = relocalizeResult(panel.relocAck, st);
+  $("rp-reloc").hidden = !rv.open && !told;
+  const STATE = { waiting: "판정 대기", confirmed: "확인됨", declared: "선언으로 확인됨", refused: "거부됨", idle: "" };
+  $("rp-reloc-state").textContent = rv.open ? `재위치 필요 · 세대 ${rv.generation}` + (told
+    ? ` · ${STATE[told.state] ?? told.state}${told.reason ? ` (${told.reason})` : ""}` : "") + (rv.gap ? ` · 시작과 ${rv.gap}` : "")
+    : (told ? `재위치 ${STATE[told.state] ?? told.state}` : "");
+  $("rp-standing").textContent = rv.standing ? "정지 ✓" : "정지 아님";
+  const rwhy = mine ? relocalizeClosedWhy(st, true) : "이 콘솔의 실차 상태가 아닙니다(권한·세션)";
+  for (const id of ["rp-reloc-confirm", "rp-reloc-declare"]) {
+    $(id).disabled = rwhy !== null;
+    $(id).dataset.why = rwhy ?? "";
+  }
   const buttons = bypassButtons(st, mine);
   const sig = buttons.map((b) => `${b.check}:${b.bypassed}:${b.enabled}:${b.why}`).join("|"); // the reason too (r1 P3)
   const box = $("rp-bypass");
