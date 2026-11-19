@@ -3,6 +3,7 @@ end on scans, the D5 exemption from the check hook, the planning grid gating the
 the layer's faults, scans dropped for an over-bound motion, a same-boot odometry break resetting the layer."""
 
 import math
+from types import SimpleNamespace
 
 from forklift_core.live import real_autonomy as ra
 from forklift_core.mcu_link.messages import FaultFlag
@@ -296,21 +297,19 @@ def test_scans_keep_installing_at_0_12_mps_with_the_configured_delay_bound():
 
 
 def _adopted_waiting_rig():
-    """Adopted and running, the permit still off: the new path's grid not yet installed (the ARM waits)."""
+    """Adopted and running, the permit still off: the new path's grid held back in the worker (the ARM waits) --
+    Codex 5a impl round 4 P3: the result the adoption tick computed is dropped, later requests are really held."""
     r = rig()
     r.tick(40)
     r.submit()
-    hold = {"on": False}
-    step = r.layer.worker.step
-
-    def held_step():
-        if not hold["on"]:
-            step()
-
-    r.layer.worker.step = held_step
-    run_until(r, lambda rec: r.core.commands.status == "running" and r.core.commands.adopted_id is not None
-              and (hold.__setitem__("on", True) or True) and r.layer.installing())
-    assert r.permit.state == ra.OFF
+    run_until(r, lambda rec: r.core.commands.status == "running" and r.core.commands.adopted_id is not None)
+    w = r.layer.worker
+    w.held = True
+    w.done.clear()
+    w.pending = None
+    r.tick(2)
+    assert r.layer.installing() and r.permit.state == ra.OFF and r.mcu.arms == 0
+    hold = SimpleNamespace(release=lambda: (setattr(w, "held", False), w.step()))
     return r, hold
 
 
@@ -322,7 +321,7 @@ def test_slam_lost_between_the_adoption_and_the_arm_latches_and_ends_the_mission
     rec = run_until(r, lambda rec: rec.branch == "emergency", limit=10)
     assert rec.reason.startswith("prepare:slam")
     r.tracker.mode = "tracking"
-    hold["on"] = False
+    hold.release()
     arms = r.mcu.arms
     r.tick(20)
     assert r.mcu.arms == arms and r.permit.state in (ra.DISARMING, ra.LATCHED)
@@ -363,3 +362,54 @@ def test_an_explicit_source_loss_is_the_end_at_once():
     rec = r.tick()
     assert (rec.branch, rec.reason) == ("emergency", "scan_source_lost")
     assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+
+
+def test_slam_lost_while_the_arm_is_answered_latches():
+    """Codex 5a impl round 4 P1: a tick in ARMING with no frame to judge still latches on a fault -- the input
+    coming back does not let the mission drive."""
+    r = rig()
+    r.tick(40)
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, limit=400)
+    orig = r.transport.receive
+    r.transport.receive = lambda host, now_ns, limit=None: None  # the ARM's answer not in yet
+    r.tracker.mode = "lost"
+    rec = r.tick()
+    r.transport.receive = orig
+    r.tracker.mode = "tracking"
+    assert rec.branch == "emergency" and rec.reason.startswith("arming:slam")
+    r.tick(10)
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+
+
+def test_the_layers_ends_and_the_layer_off_between_the_adoption_and_the_arm_end_the_mission():
+    """Codex 5a impl round 4 P2-1: read before the latch turns the permit off OFF."""
+    for inject in (lambda r: r.layer.source_lost("lidar"),
+                   lambda r: setattr(r.layer, "_exceeded", "layer_latency_exceeded"),
+                   lambda r: setattr(r.core.options, "obstacle_act", False)):
+        r, _hold = _adopted_waiting_rig()
+        inject(r)
+        r.tick(3)
+        assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+        assert r.core.commands.status not in ("accepted", "preparing", "running"), r.core.commands.status
+
+
+def test_a_source_still_disconnected_after_the_latch_keeps_the_layer_not_ok():
+    """Codex 5a impl round 4 P2-3: the loss handled is not the source back."""
+    r = _driving_rig()
+    r.layer.source_lost("lidar")
+    r.tick(3)
+    t = r.loop._t(r.now)  # noqa: SLF001
+    assert not r.layer.ok(t)
+    r.layer.source_connected("lidar")
+    r.tick(5)
+    assert r.layer.ok(r.loop._t(r.now))  # noqa: SLF001
+
+
+def test_a_standing_truck_keeps_its_still_since():
+    """Codex 5a impl round 4 P2-2: a good STATE does not restart the stand (D5's still frames rest on it)."""
+    r = rig()
+    r.tick(30)
+    since = r.loop.still_since_ns
+    r.tick(10)
+    assert since is not None and r.loop.still_since_ns == since

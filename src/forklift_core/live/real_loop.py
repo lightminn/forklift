@@ -225,9 +225,9 @@ class RealLoop:
         if step.continuity_broken:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
             self._odom_good = False
+            self.still_since_ns = None
         else:
             self._odom_good = True
-            self.still_since_ns = None
         self.book.on_state(state, int(rx_ns))
         self.permit.on_state(state, int(rx_ns))
         if self.real_layer is not None:
@@ -678,8 +678,9 @@ class RealLoop:
         layer_stop = layer_.watchdog(t) if layer_ is not None and hasattr(layer_, "watchdog") else None
         if layer_stop in LAYER_ENDS:
             rec.branch, rec.reason = "emergency", layer_stop
+            before_arm = self._before_arm()  # read before the latch turns the permit off OFF (round 4 P2-1)
             self._emergency(now_ns, layer_stop)
-            if self._before_arm():
+            if before_arm:
                 self._end_now(now_ns, layer_stop)  # a mission the latch does not collect yet (design 3, round 3 P2-1)
             if layer_stop in ("layer_latency_exceeded", "scan_source_lost") and hasattr(layer_, "end_taken") \
                     and self.permit.state in (ra.LATCHED, ra.DISARMING):
@@ -688,8 +689,9 @@ class RealLoop:
         if self.real_layer is not None and (not getattr(core.options, "obstacle_act", False)
                                             or layer_ is not self.real_layer):
             rec.branch, rec.reason = "emergency", "obstacle_layer_off"  # never released while running (design 3)
+            before_arm = self._before_arm()
             self._emergency(now_ns, "obstacle_layer_off")
-            if self._before_arm():
+            if before_arm:
                 self._end_now(now_ns, "obstacle_layer_off")  # before the ARM too (Codex 5a impl round 2 P2-3)
             return
         if self.real_layer is not None and cmds.status in ("accepted", "preparing") and core.job_pending():
@@ -728,6 +730,11 @@ class RealLoop:
         if bad is not None:
             rec.branch, rec.reason = "emergency", f"unsupported:{bad}"
             self._emergency(now_ns, f"unsupported:{bad}")
+            return
+        if permit.state == ra.ARMING and self.real_layer is not None and ra.latches(ready_wait):
+            # a fault while the ARM is answered: no frame of this tick may carry it to the first byte (round 4 P1)
+            rec.branch, rec.reason = "emergency", f"arming:{ready_wait}"
+            self._emergency(now_ns, rec.reason)
             return
         if permit.state == ra.ARMING:
             rec.branch = "none"  # no loop DRIVE while arming (the host's own zero only)

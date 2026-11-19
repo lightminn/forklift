@@ -221,6 +221,7 @@ class RealLayer:
         self.last_scan_s: dict = {}  # sensor -> the placed scan's first beam (the FREE age)
         self.last_beam_s: dict = {}  # sensor -> the placed scan's last beam (the first-use deadline)
         self.defer_submit = False  # the loop: placements only mark, ``flush`` submits after this tick's track()
+        self.disconnected: set = set()  # sources that said they are disconnected and not yet back
         self._dirty = False
         self.counts = {"scans": 0, "scans_dropped": 0, "stale_results": 0, "installs": 0}
         self._request = None  # the newest refresh request (dict)
@@ -478,11 +479,16 @@ class RealLayer:
 
     def source_lost(self, sensor: str) -> None:
         """The scan source said it is disconnected (design 3: an explicit loss is the end at once, not the
-        watchdog's wait for a late scan -- Codex 5a impl round 3 P2-3); sticky until the loop latches on it."""
+        watchdog's wait for a late scan -- Codex 5a impl round 3 P2-3); the end is sticky until the loop latches on
+        it, and the layer is not ok until the source says it is back (round 4 P2-3)."""
         self._exceeded = "scan_source_lost"
         self._watch_cache = None
         self.counts["sources_lost"] = self.counts.get("sources_lost", 0) + 1
-        self.lost_sensor = str(sensor)
+        self.disconnected.add(str(sensor))
+
+    def source_connected(self, sensor: str) -> None:
+        """The scan source says it is connected again (its scans still have to come and be installed)."""
+        self.disconnected.discard(str(sensor))
 
     def end_taken(self) -> None:
         """The loop latched on the watchdog's end: the deadlines start again from the next result (a rearm follows)."""
@@ -494,7 +500,7 @@ class RealLayer:
         """Alive, at least one result installed (an invalidated one is a wait, not a fault) and scans arriving -- a
         scan late within the watchdog's end is its wait, not this fault (Codex 5a impl round 2 P2-1): a source gone
         for good is the watchdog's ``layer_latency_exceeded`` at its end."""
-        if not self.worker.alive or self._installed is None:
+        if not self.worker.alive or self._installed is None or self.disconnected:
             return False
         newest = max(self.last_scan_s.values(), default=None)
         if newest is not None and now_s - newest <= self.scan_max_age_s + self.scan_period_s:

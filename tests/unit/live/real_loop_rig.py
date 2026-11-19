@@ -283,8 +283,13 @@ class Rig:
             from forklift_core.planning.geometry import Footprint
 
             class StepWorker(ManualWorker):  # computes at once; the result installs at the next tick head
+                held = False  # tests: hold the computation back (``step()`` releases the newest request)
+
                 def submit(self, job, fn):
-                    self.done.append((job, fn(job)))
+                    if self.held:
+                        self.pending = (job, fn)
+                    else:
+                        self.done.append((job, fn(job)))
 
             layer_cfg = __import__("yaml").safe_load((ROOT / "config/real/obstacle_layer_real.yaml").read_text())
             age_ = __import__("json").loads((ROOT / layer_cfg["odometry_age"]).read_text())  # the real layer's table
