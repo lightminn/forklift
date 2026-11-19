@@ -76,11 +76,17 @@ class RealSession:
         self.results: list = []
         self._ended_id = None
 
-    def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict) -> tuple:
+    def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict, collect=None) -> tuple:
+        """``link.begin`` -> collect -> ``commands.apply`` -> collect (design 2.1 5): a mission the head ended (a latch
+        in ``permit.tick``) is collected before the apply could clear its final status."""
         from forklift_core.mission.commands import Context
 
         stop_kind = self.link.begin(now_mono, feedback)
+        if collect is not None:
+            collect()
         records = self.core.commands.apply(t, Context(stop_kind=stop_kind, **context_kwargs))
+        if collect is not None:
+            collect()
         return stop_kind, records
 
     def tick_end(self, now_mono: float, records: list, safety: dict, candidate: tuple, drive: dict | None):
@@ -117,7 +123,7 @@ class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
-                 depth_source=None, watch=None, clock=None) -> None:
+                 depth_source=None, watch=None, clock=None, operator_start=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -145,6 +151,7 @@ class RealLoop:
         self.pose_history: deque = deque(maxlen=64)  # (t, rear, continuous) per tick, for a frame's own pose
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
+        self.operator_start = operator_start  # the operator's physical check, one submit only (4b design 2, 13)
         self.watch = watch  # the real safety watch (the teleop leg's SafetyWatch); None: off (design 3)
         self._watch_rx: int | None = None
         # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
@@ -296,7 +303,7 @@ class RealLoop:
         self.serial = self.link.emergency(now_ns / 1e9)  # the emergency batch first (its serial: the send's reference)
         self._stop_kind, self._cmd_records = self.session.tick_start(
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
-                                        "localization_ok": True})
+                                        "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
         a = self.link.a
         if self._console_disarm:
             self._console_disarm = False
@@ -373,6 +380,11 @@ class RealLoop:
         self._feed_depth(now_ns, t)
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
+            if self.operator_start is not None:
+                lease = self.link.a.lease
+                if not self.operator_start.take(None if lease is None else lease.lease_id):
+                    cmds.terminate("cancelled", t, "operator_start_unconfirmed")  # its check was used or voided
+                    return
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None:
@@ -401,8 +413,10 @@ class RealLoop:
         if cmds.status in FINAL:
             self.frozen = None
         # the adoption and the arming (design 2.3)
+        ready_wait = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
         if (cmds.status == "running" and cmds.adopted_id == cmds.mission_id and ms.phase == "approach"
-                and self.adopted_for != cmds.mission_id and permit.state == ra.OFF):
+                and self.adopted_for != cmds.mission_id and permit.state == ra.OFF
+                and not (ready_wait or "").startswith("wait:")):  # no ARM while a wait holds (Codex 4c impl P2-3)
             self.adopted_for = cmds.mission_id
             why = self._pre_arm_refusal(now_ns)
             cmds.begin_wait(t)
