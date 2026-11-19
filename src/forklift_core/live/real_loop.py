@@ -143,6 +143,7 @@ class RealLoop:
         self._travel_ticked = 0.0  # the path length the layer was last told about
         self._break_open = False  # a same-boot odometry break has asked its relocalization (once per break)
         self._ever_continuous = False  # the start's own first reference is not a break of anything
+        self._resession = False  # a reboot seen: the session check runs again once the permit is off or latched
         self.odom_continuous = False
         self.speed = SafetySpeed(0.0, 0.0, (1, -1), valid=False)
         self.still_since_ns: int | None = None
@@ -280,15 +281,18 @@ class RealLoop:
         mission_gen, path_id, loaded = self._layer_context()
         lay.context = (mission_gen, path_id)
         tracker = core.trackers.get(core.ms.phase) if getattr(core, "trackers", None) else None
-        path = None
+        path, direction = None, 0
         if tracker is not None and hasattr(tracker, "leg_ahead"):
-            path = np.asarray(tracker.leg_ahead()[0], dtype=float)
+            poses, direction = tracker.leg_ahead()  # the gear leg's direction too (Codex 5a impl round 2 P2-5)
+            path, direction = np.asarray(poses, dtype=float), int(direction)
         if (mission_gen, path_id, loaded) != self._layer_asked:
             self._layer_asked = (mission_gen, path_id, loaded)
             lay.refresh(t, core.obstacle["applied"], int(core.obstacle["version"]),
-                        current_pose=tuple(float(v) for v in rear), path_ahead=path, loaded=loaded)
+                        current_pose=tuple(float(v) for v in rear), path_ahead=path, loaded=loaded,
+                        direction=direction)
         else:
-            lay.track(tuple(float(v) for v in rear), path)  # the next scan's check from here, along what is left
+            # the next scan's check from here, along what is left
+            lay.track(tuple(float(v) for v in rear), path, direction)
         if self.frozen is not None:
             depth, width = self.pallet_size
             x, y, yaw = self.frozen.pose
@@ -448,6 +452,7 @@ class RealLoop:
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
+            self._odometry_head(now_ns, t)  # the STATEs taken before the failure count (a break among them locks)
             host.tick(now_ns)
             self._bind_permit(now_ns)
             permit.tick(now_ns)
@@ -460,6 +465,7 @@ class RealLoop:
             self.samples.clear()
             self._odom_broken = True
             self.still_since_ns = None
+        self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
         stuck = self._cut_stuck_write(now_ns)
         if stuck:
             # the host's and the permit's ticks still run (its DISARM asked again on the new link, its deadline kept)
@@ -470,28 +476,6 @@ class RealLoop:
             rec.branch, rec.reason = "emergency", stuck
             self._emergency(now_ns, stuck)
             return
-        self.odom_continuous = bool(self.samples) and not self._odom_broken
-        if self.real_layer is not None:
-            if self._odom_broken:
-                self._reset_layer(now_ns)  # a same-boot break: the layer starts again (design 1.1, round 6 P1-3)
-            # the path driven since the last tick off the verified distance, then the installs (whose own travel
-            # since their request replaces it) -- Codex 5a impl P2-3
-            self.real_layer.advance(self.odom_travel - self._travel_ticked)
-            self._travel_ticked = self.odom_travel
-            self.real_layer.install_ready(self._t(now_ns), self.odom_travel)
-        if self._rebooted:
-            # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
-            self._rebooted = False
-            self._break_open = True
-            core.require_relocalization(t, "mcu_reboot")
-        elif self._odom_broken and self._ever_continuous and not self._break_open:
-            # a same-boot break (a gap, an encoder cut, an invalid steering, a device loss): the motion meanwhile
-            # was not integrated, so the map pose is not trusted either (Codex 5a impl P1-3)
-            self._break_open = True
-            core.require_relocalization(t, "odometry_break")
-        if self.odom_continuous:
-            self._break_open = False
-            self._ever_continuous = True
         if self._odom_broken and permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
             rec.branch, rec.reason = "emergency", "odometry_break"  # S10-A does not drive across a broken odometry
             self._emergency(now_ns, "odometry_break")
@@ -557,6 +541,40 @@ class RealLoop:
             elif a.lease is None:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
+
+    def _odometry_head(self, now_ns: int, t: float) -> None:
+        """The odometry's part of the head, whatever follows: the continuity, the layer's reset on a break, the path
+        driven and the installs, and the relocalization lock of a reboot or a same-boot break."""
+        core = self.core
+        self.odom_continuous = bool(self.samples) and not self._odom_broken
+        if self.real_layer is not None:
+            if self._odom_broken:
+                self._reset_layer(now_ns)  # a same-boot break: the layer starts again (design 1.1, round 6 P1-3)
+            # the path driven since the last tick off the verified distance, then the installs (whose own travel
+            # since their request replaces it) -- Codex 5a impl P2-3
+            self.real_layer.advance(self.odom_travel - self._travel_ticked)
+            self._travel_ticked = self.odom_travel
+            self.real_layer.install_ready(self._t(now_ns), self.odom_travel)
+        if self._rebooted:
+            # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
+            self._rebooted = False
+            self._break_open = True
+            core.require_relocalization(t, "mcu_reboot")
+            if self.delay_bound is not None:
+                self._resession = True  # the new boot's session check and delay anchors (round 2 P2-4)
+        elif self._odom_broken and self._ever_continuous and not self._break_open:
+            # a same-boot break (a gap, an encoder cut, an invalid steering, a device loss): the motion meanwhile
+            # was not integrated, so the map pose is not trusted either (Codex 5a impl P1-3)
+            self._break_open = True
+            core.require_relocalization(t, "odometry_break")
+        if self.odom_continuous:
+            self._break_open = False
+            self._ever_continuous = True
+        if self._resession and self.permit.state in (ra.OFF, ra.LATCHED) \
+                and getattr(self.permit, "_disarm_first_ns", None) is None:
+            self._resession = False
+            self.delay_bound.restart_check()
+            self.permit.restart_session(now_ns)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         why = ra.auto_ready_refusal(now_ns, "submit", self.evidence)
@@ -643,11 +661,15 @@ class RealLoop:
             self._emergency(now_ns, layer_stop)
             if cmds.status in ("accepted", "preparing"):
                 self._end_now(now_ns, layer_stop)  # a preparation the latch does not collect (design 3)
+            if layer_stop == "layer_latency_exceeded" and self.permit.state in (ra.LATCHED, ra.DISARMING):
+                layer_.end_taken()  # latched on it: the next result's deadlines start afresh (a rearm follows)
             return
         if self.real_layer is not None and (not getattr(core.options, "obstacle_act", False)
                                             or layer_ is not self.real_layer):
             rec.branch, rec.reason = "emergency", "obstacle_layer_off"  # never released while running (design 3)
             self._emergency(now_ns, "obstacle_layer_off")
+            if cmds.status in ("accepted", "preparing"):
+                self._end_now(now_ns, "obstacle_layer_off")  # before the adoption too (Codex 5a impl round 2 P2-3)
             return
         if self.real_layer is not None and cmds.status in ("accepted", "preparing") and core.job_pending():
             # before the adoption (design 1.2, round 3 P2-3/P2-4): a planning answer from another correction

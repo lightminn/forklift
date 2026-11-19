@@ -233,7 +233,9 @@ class RealLayer:
         self._expected_s = None  # the next scan's expected deadline
         self._missed_expected = None  # a passed expected deadline: held until a result past it is installed
         self._first_use_late = False
+        self._first_used_id = 0  # the newest scan id a result was first used for (a re-install is not its first use)
         self._overdue_since = None
+        self._exceeded = None  # a watchdog end is sticky: an install after it does not undo it (round 2 P1-2)
         self._watch_cache = None
 
     # --- the exemption -----------------------------------------------------------------------------------------
@@ -266,10 +268,12 @@ class RealLayer:
         self._submit(now_s)
         return None
 
-    def track(self, current_pose, path_ahead) -> None:
-        """Each control tick (the loop): the pose and the path still ahead the next scan-driven computation checks
-        from -- the Isaac runner refreshes with them at every scan; the key does not change."""
+    def track(self, current_pose, path_ahead, direction: int = 0) -> None:
+        """Each control tick (the loop): the pose, the path still ahead and its gear leg's direction the next
+        scan-driven computation checks from -- the Isaac runner refreshes with them at every scan; the key does not
+        change (the leg is in it, so the direction within it is fixed)."""
         if self._request is not None:
+            self._request["direction"] = int(direction)
             self._request["current_pose"] = tuple(float(v) for v in current_pose)
             self._request["path_ahead"] = None if path_ahead is None else np.asarray(path_ahead, dtype=float).copy()
 
@@ -383,6 +387,10 @@ class RealLayer:
         counted and dropped. ``odom_travel``: the raw odometry's path length now (the travel since the request
         is taken off the result's verified distance)."""
         self.place_pending(now_s)
+        # the deadlines as they stand before anything is installed: an overdue held past its end at this instant is
+        # the end even when a timely result arrives now (Codex 5a impl round 2 P1-2)
+        self._watch_cache = None
+        self.watchdog(now_s)
         installed = 0
         for job, result in self.worker.take():
             if job["key"] != self.current_key():
@@ -398,15 +406,19 @@ class RealLayer:
             # first used at this tick (installed at the tick head, read by this tick's control)
             self._installed = {"key": job["key"], "newest_scan_s": job["newest_scan_s"], "scan_id": job["scan_id"],
                                "first_used_s": float(now_s), "planning": result.get("planning")}
-            # first use within B of the newest scan's last beam (design 9, Codex 5a impl P1-2)
-            last = job.get("newest_scan_last_s")
-            self._first_use_late = last is not None and now_s - last > self.budget_s + 1e-6
+            # first use within B of the newest scan's last beam (design 9, Codex 5a impl P1-2) -- judged once per
+            # scan: a re-projection of a scan first used in time is not late (round 2 P2-2)
+            if job["scan_id"] > self._first_used_id:
+                self._first_used_id = job["scan_id"]
+                last = job.get("newest_scan_last_s")
+                self._first_use_late = last is not None and now_s - last > self.budget_s + 1e-6
             for sid in [s for s in self._deadlines if s <= job["scan_id"]]:
                 del self._deadlines[sid]  # held by this result (a dropped one: by this newer result)
             if self._missed_expected is not None and job["scan_id"] > self._missed_expected[2]:
                 self._missed_expected = None  # a result holding a scan received after the missed expectation
             self.counts["installs"] += 1
             installed += 1
+        self._watch_cache = None  # the next read sees what was just installed
         return installed
 
     def advance(self, distance_m: float) -> None:
@@ -444,6 +456,9 @@ class RealLayer:
         if not self.worker.alive:
             self._watch_cache = (now_s, "layer_worker_dead")
             return "layer_worker_dead"
+        if self._exceeded is not None:
+            self._watch_cache = (now_s, self._exceeded)
+            return self._exceeded
         passed = any(d < now_s for d, _ in self._deadlines.values())
         if self._expected_s is not None and now_s > self._expected_s and self._missed_expected is None:
             # held until a result holding a later-received scan is installed (a late receipt alone does not release)
@@ -454,16 +469,29 @@ class RealLayer:
             if self._overdue_since is None:
                 self._overdue_since = float(now_s)
             reason = "layer_latency_exceeded" if now_s - self._overdue_since > self.overdue_end_s else "layer_overdue"
+            if reason == "layer_latency_exceeded":
+                self._exceeded = reason
         else:
             self._overdue_since = None
         self._watch_cache = (now_s, reason)
         return reason
 
+    def end_taken(self) -> None:
+        """The loop latched on the watchdog's end: the deadlines start again from the next result (a rearm follows)."""
+        self._exceeded = None
+        self._overdue_since = None
+        self._watch_cache = None
+
     def ok(self, now_s: float) -> bool:
-        """Alive, scans arriving, at least one result installed (an invalidated one is a wait, not a fault)."""
+        """Alive, at least one result installed (an invalidated one is a wait, not a fault) and scans arriving -- a
+        scan late within the watchdog's end is its wait, not this fault (Codex 5a impl round 2 P2-1): a source gone
+        for good is the watchdog's ``layer_latency_exceeded`` at its end."""
+        if not self.worker.alive or self._installed is None:
+            return False
         newest = max(self.last_scan_s.values(), default=None)
-        return (self.worker.alive and self._installed is not None and newest is not None
-                and now_s - newest <= self.scan_max_age_s + self.scan_period_s)
+        if newest is not None and now_s - newest <= self.scan_max_age_s + self.scan_period_s:
+            return True
+        return self.watchdog(now_s) == "layer_overdue"
 
     def planning_grid(self, pallet_key):
         """The installed planning occupancy for ``pallet_key`` (the frozen pallet and the correction generation), or
@@ -495,13 +523,14 @@ def _compute(job: dict) -> dict:
 
 
 def _beam_valid(scan: RealScan) -> np.ndarray:
-    """A beam counts when the source says so and its range is not NaN and above zero (a zero is a no-return code,
-    not an obstacle at the sensor; +inf stays: REP-117 no return in range) -- Codex 5a impl P2-6."""
+    """A beam counts when the source says so and its range is a REP-117 reading: positive, +inf (no return in range)
+    or -inf (too close -- the shared grid marks it, Codex 5a impl round 2 P1-1); NaN, zero (a no-return code, not an
+    obstacle at the sensor) and a negative finite value do not (Codex 5a impl P2-6)."""
     r = np.asarray(scan.ranges_m, dtype=float)
     valid = np.asarray(scan.valid, dtype=bool)
     if valid.shape != r.shape:
         return np.zeros(r.shape, bool)
-    return valid & ~np.isnan(r) & (r > 0.0)
+    return valid & ((r > 0.0) | (r == -np.inf))
 
 
 def _checked_sensors(sensors: dict) -> dict:

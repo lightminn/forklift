@@ -98,6 +98,14 @@ class AutoPermit:
         self._try(self._transmit)
         self._note(now_ns, "session_disarm")
 
+    def restart_session(self, now_ns: int) -> None:
+        """An MCU reboot under this executor (real safety wiring 5a, Codex impl round 2 P2-4): the new boot's session
+        check from the start -- no ARM until it passes; the caller restarts the delay bound's check with it."""
+        if self.state not in (OFF, LATCHED):
+            raise RuntimeError(f"restart_session in {self.state}")
+        self.session_started = False
+        self.start_session(now_ns)
+
     # --- arming ---------------------------------------------------------------------------------------------------
     def adopted(self, now_ns: int, *, pre_arm_refusal: str | None) -> bool:
         """The core adopted the submitted mission's plan and the caller checked the lease and generation again: the

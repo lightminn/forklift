@@ -220,3 +220,76 @@ def test_the_planning_key_holds_the_frozen_pallets_pose():
     a = loop._planning_key()  # noqa: SLF001
     loop.frozen = SimpleNamespace(pallet_id="P1", pose=(3.4, 0.0, 0.0))
     assert loop._planning_key() != a  # noqa: SLF001
+
+
+def test_a_same_boot_break_on_a_stuck_write_tick_still_locks():
+    """Codex 5a impl round 2 P1-3: the odometry's part of the head runs before the stuck-write return."""
+    r = rig()
+    r.tick(15)
+    orig = r.loop._cut_stuck_write  # noqa: SLF001
+    r.loop._cut_stuck_write = lambda now_ns: "link_stuck"  # noqa: SLF001
+    r.mcu.faults = FaultFlag.ENCODER_GAP
+    r.tick(1)
+    r.loop._cut_stuck_write = orig  # noqa: SLF001
+    r.mcu.faults = FaultFlag(0)
+    r.tick(3)
+    assert r.core.relocalize_generation() is not None
+
+
+def test_turning_the_layer_off_before_the_adoption_ends_the_preparation():
+    """Codex 5a impl round 2 P2-3."""
+    r = rig()
+    r.tick(5)
+    r.submit()
+    run_until(r, lambda rec: r.core.commands.status in ("accepted", "preparing"), limit=50)
+    r.core.options.obstacle_act = False
+    r.tick(2)
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert r.core.commands.status not in ("accepted", "preparing", "running")
+
+
+def test_after_a_reboot_the_session_check_runs_again_and_scans_are_placed():
+    """Codex 5a impl round 2 P2-4: the new boot's session check and delay anchors under the same executor."""
+    r = rig()
+    r.tick(40)
+    r.mcu.boot = 0x6262
+    r.tick(1)
+    assert not r.permit.session_started
+    installs = r.layer.counts["installs"]
+    r.tick(160)
+    assert r.permit.session_started and r.loop.delay_bound.verified_boot == 0x6262
+    assert r.layer.counts["installs"] > installs and r.layer.grid.scans
+
+
+def test_the_refresh_carries_the_gear_legs_direction():
+    """Codex 5a impl round 2 P2-5: the path check walks the leg's direction, not 0."""
+    r = rig()
+    r.tick(40)
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and rec.branch == "auto")
+    tracker = r.core.trackers[r.core.ms.phase]
+    assert r.layer._request["direction"] == int(tracker.leg_ahead()[1]) != 0  # noqa: SLF001
+
+
+def test_scans_keep_installing_at_0_12_mps_with_the_configured_delay_bound():
+    """Design 1.1 (시험: 0.12 m/s 접근의 스캔이 채택됨) on the whole loop: the truck moved at 0.12 m/s for 1.6 s
+    (here pushed, the fake MCU's counts turning at that speed), the real delay bound and STATE interval -- no scan
+    dropped, results installed throughout."""
+    from test_teleop_bridge_cycle import VEH
+
+    r = rig()
+    r.tick(40)
+    drops, installs = r.layer.counts["scans_dropped"], r.layer.counts["installs"]
+    orig = r.mcu.advance
+
+    def advance(dt_us):
+        orig(dt_us)
+        for i in (0, 1):
+            r.mcu.counts[i] += 0.12 / VEH.wheel_radius_m[i] * dt_us / 1e6 * VEH.counts_per_wheel_rev[i] / (2 * math.pi)
+
+    r.mcu.advance = advance
+    travel = r.loop.odom_travel
+    r.tick(80)
+    assert abs((r.loop.odom_travel - travel) - 0.12 * 1.6) < 0.02
+    assert r.layer.counts["scans_dropped"] == drops
+    assert r.layer.counts["installs"] >= installs + 14

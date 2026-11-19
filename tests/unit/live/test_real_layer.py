@@ -331,3 +331,64 @@ def test_a_scan_waits_for_the_odometry_past_its_last_beam_then_is_placed():
     reached["t"] = 1.12
     lay.install_ready(1.12)
     assert len(lay.grid.scans) == 1 and lay.counts["scans_dropped"] == 0
+
+
+def test_a_too_close_return_marks():
+    """Codex 5a impl round 2 P1-1: REP-117 -inf (too close) is a valid reading the shared grid marks."""
+    lay = layer()
+    scan = wall(1.0)
+    scan.ranges_m = scan.ranges_m.copy()
+    scan.ranges_m[np.argmin(np.abs(ANGLES))] = -np.inf
+    lay.add_scan(scan, 1.0)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    ref = layer()
+    ref.add_scan(wall(1.0), 1.0)
+    ref.worker.step()
+    ref.install_ready(1.12)
+    assert np.count_nonzero(lay.snapshot.state == OCCUPIED) > np.count_nonzero(ref.snapshot.state == OCCUPIED)
+
+
+def test_an_end_reached_at_the_tick_a_timely_result_arrives_is_still_the_end():
+    """Codex 5a impl round 2 P1-2: the deadlines are read before the install; the end is sticky until taken."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.0)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    assert lay.watchdog(1.31) == "layer_overdue"  # the next scan expected by 1.30
+    t = 1.31
+    while t < 2.31:  # scans keep coming, the results are held back
+        t = round(t + 0.1, 6)
+        lay.add_scan(wall(t - 0.1), t)
+        lay.watchdog(t)
+    lay.worker.step()
+    lay.install_ready(2.32)  # past the 1.0 s end at this very tick
+    assert lay.watchdog(2.32) == "layer_latency_exceeded"
+    assert lay.watchdog(2.40) == "layer_latency_exceeded"
+    lay.end_taken()
+    lay.add_scan(wall(2.31), 2.41)
+    lay.worker.step()
+    lay.install_ready(2.42)
+    assert lay.watchdog(2.42) is None
+
+
+def test_a_re_projection_of_a_scan_first_used_in_time_is_not_late():
+    """Codex 5a impl round 2 P2-2: first use is judged once per scan."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.1)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    ask(lay, 1.24, version=1)  # a correction change re-projects the same scan
+    lay.worker.step()
+    assert lay.install_ready(1.24) == 1
+    assert lay.watchdog(1.24) is None
+
+
+def test_a_late_scan_within_the_end_keeps_the_layer_ok():
+    """Codex 5a impl round 2 P2-1: readiness reads a late source as the watchdog's wait, not a missing layer."""
+    lay = layer()
+    lay.add_scan(wall(1.0), 1.1)
+    lay.worker.step()
+    lay.install_ready(1.12)
+    assert lay.watchdog(1.46) == "layer_overdue" and lay.ok(1.46)
+    assert lay.watchdog(2.5) == "layer_latency_exceeded" and not lay.ok(2.5)
