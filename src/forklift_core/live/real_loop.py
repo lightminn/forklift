@@ -164,6 +164,7 @@ class RealLoop:
         self._rebooted = False  # a boot change seen (not the first boot)
         self._disconnects = host.disconnects  # the host's device losses seen so far
         self._last_seen = None  # the newest STATE's (boot, MCU time)
+        self._lift_before = None  # the lift target before this tick's ramp
         self._in_transmit = False
         self._motion_mcu_until: int | None = None  # the latest MCU time a movable frame may act to (its boot's clock)
         self._watch_trip: str | None = None  # the safety watch's trip on a STATE of this tick
@@ -255,6 +256,7 @@ class RealLoop:
         self.last_start_ns = int(now_ns)
         rec = TickRecord(t, interval)
         self._rec = rec
+        self._lift_before = None
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -508,6 +510,7 @@ class RealLoop:
                 arrival_wait = getattr(arrival_, "wait", None)
         if core.jobs is not None and not plan_wait_ and core.job_pending():
             plan_wait_ = True
+        self._lift_before = float(ms.lift_command)  # undone if the output turns into a wait at the first byte
         ramp_hold = layer_stop is not None or (
             permit.state in (ra.READY, ra.DRIVING) and (ready_wait or "").startswith("wait:"))
         if not ramp_hold and not paused_ and (not plan_wait_ or core.lift_ramps_in_plan_wait()) \
@@ -867,6 +870,9 @@ class RealLoop:
 
         def escalate_now(reason: str) -> None:
             if can_escalate and permit.state in authority:
+                rec_ = getattr(self, "_rec", None)
+                if rec_ is not None:
+                    rec_.branch, rec_.reason = "emergency", f"first_byte:{reason}"
                 self._in_transmit = True
                 try:
                     self._emergency(now_ns, f"first_byte:{reason}")
@@ -887,13 +893,15 @@ class RealLoop:
                 return f"permit_{permit.state.lower()}", "drop"  # a latch or a DISARM under way: no motion (P1-1)
             if a.mode == "STOPPED":
                 return "stopped", "alarm"
+            # every timed judgement at ``ns``, the latest instant the write may happen: the evidence's ages too (a
+            # scan judged young at the read's start may be over its limit at the write, round 6 P1-1)
             ns0 = int(self.clock())
-            why = ra.auto_ready_refusal(ns0, "drive", self.evidence)
-            ns = int(self.clock())
+            ns = ns0 + int(EVIDENCE_READ_MAX_S * 1e9)
+            why = ra.auto_ready_refusal(ns, "drive", self.evidence)
+            if int(self.clock()) > ns:
+                return "evidence_slow", "alarm"
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
-            if ns - ns0 > int(EVIDENCE_READ_MAX_S * 1e9):
-                return "evidence_slow", "alarm"
             expires = getattr(frame, "expires_ns", None)
             if expires is not None and ns >= int(expires):
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
@@ -908,8 +916,9 @@ class RealLoop:
             if bound is not None and bound != (None if a.lease is None else a.lease.lease_id, a.control_gen):
                 return "authority_changed", "alarm"
             booked = next((f for f in self.book.frames if f.seq == seq), None)
-            if booked is not None and booked.kind == "drive" and booked.movable:
-                # a normal moving DRIVE: a wait reason that came up since the decision, or 30 ms spent (round 4 P1-4)
+            if booked is not None and booked.kind == "drive":
+                # a normal DRIVE (moving or a small lift step alike, round 6 P1-3): a wait reason that came up since the
+                # decision, or 30 ms spent (round 4 P1-4)
                 if why is not None:
                     return why, "wait"
                 if (ns - now_ns) / 1e9 > SLOW_TICK_S:
@@ -933,8 +942,9 @@ class RealLoop:
                     return verdict[0] is None
 
                 ok = send_boundary(self.channels, self.serial, write, check=check)
-                if not ok and verdict is None:
-                    verdict = ("emergency_event", "alarm")  # a STOP, DISARM or (re)connect since the batch (P2-3)
+                if not ok and (verdict is None or verdict[0] is None):
+                    # a STOP, DISARM or (re)connect since the batch (round 4 P2-3), also one taken during the check
+                    verdict = ("emergency_event", "alarm")
             if not ok:
                 refused.append((frame.kind, frame.seq))
                 why, cls = verdict
@@ -956,6 +966,10 @@ class RealLoop:
                 steer = self._steer_of.get(int(seq) & 0xFFFF)
                 if steer is not None:
                     self.steering_command = steer.copy()  # the next slew starts from what was written (P2-5)
+        rec_ = getattr(self, "_rec", None)
+        if rec_ is not None and refused:
+            gone_ = {int(q) & 0xFFFF for _, q in refused}
+            rec_.seqs = [q for q in rec_.seqs if (int(q) & 0xFFFF) not in gone_]  # the record keeps written seqs only
         for kind, seq in refused:
             if kind == "DRIVE":
                 self.book.discarded(seq)
@@ -967,6 +981,8 @@ class RealLoop:
             escalate_now(alarm[0])
         elif waits and can_escalate and permit.state in (ra.READY, ra.DRIVING):
             # ③ in place of the normal candidate: the wait frame (a new generation drops the old queue), once
+            if self._lift_before is not None:
+                self.core.ms.lift_command = self._lift_before  # this tick's ramp step undone: the wait holds (P2)
             rec = getattr(self, "_rec", None)
             if rec is not None:
                 rec.branch, rec.reason = "wait", waits[0]

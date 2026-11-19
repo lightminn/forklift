@@ -89,8 +89,8 @@ def send_boundary(channels: RealChannels, serial: int, write, check=None) -> boo
     with channels.lock:
         if channels.emergency_serial != serial:
             return False
-        if check is not None and not check():
-            return False
+        if check is not None and (not check() or channels.emergency_serial != serial):
+            return False  # the check may itself take an event in (a re-entrant callback): compared again after it
         write()
         return True
 
