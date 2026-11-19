@@ -249,7 +249,21 @@ def test_recovery_done_is_refused_when_the_lease_ran_out_during_the_tick():
 def test_an_old_connection_closing_does_not_drop_the_new_connections_bypass():
     """5c-1 r7 P3: only the holder's current connection counts."""
     r = rig()
-    r.channels.disconnect("c-old", "op")  # a stale connection id of the same client
     r.say("check_bypass", check="slam", on=True)
-    r.tick(2)
+    r.tick()  # taken (acked); applied at the next head
+    r.channels.disconnect("c-old", "op")  # then a stale connection id of the same client closes (r8 P3: this order)
+    r.tick()
     assert "slam" in r.loop.bypass
+
+
+def test_a_lease_expiring_while_the_bypass_waits_for_the_lock_drops_it():
+    """5c-1 r8 P2: applied on the clock read under the lock, not the tick's start."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    lease = r.arbiter.lease
+    lease.renewed_mono = (r.now + r.step_ns) / 1e9 - r.arbiter.config.lease_timeout_s + 0.001  # 1 ms past the head
+    r.echo = False
+    r.tick_cost_ns = 5 * 10**6  # the apply reads the clock 5 ms later
+    r.tick()
+    assert "imu" not in r.loop.bypass

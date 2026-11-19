@@ -251,7 +251,7 @@ class RealLoop:
         # (r7 P2-1; the channels' lock is re-entrant)
         self.channels.lock.acquire()
         try:
-            self._apply_pending(now_ns)
+            self._apply_pending(int(self.clock()))  # the lease judged at the instant it applies (r8 P2)
         finally:
             self.channels.lock.release()
         self._bypass_pending.clear()
