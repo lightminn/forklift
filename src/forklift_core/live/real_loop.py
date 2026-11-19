@@ -340,18 +340,18 @@ class RealLoop:
                 return "unknown_check", {}
             lease = self.link.a.lease
             lease_id = None if lease is None else lease.lease_id
-            why = self._bypass_refusal(lease_id)
-            if why is not None:
-                return why, {}
+            refusal = self._bypass_refusal(lease_id)
+            if refusal is not None:
+                return refusal, {}
             self._bypass_pending.append((check, bool(msg["on"]), lease_id))  # applied at the next tick head (r3)
             return None, {"applies": "next_tick"}
         if kind == "recovery":
             now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
-            accepted, why = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
-                                                     disarmed=self._disarm_confirmed(now_ns),
-                                                     outstanding=self.port.outstanding(now_ns)[0] != "settled")
-            if not accepted:
-                return why, {}
+            done = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
+                                            disarmed=self._disarm_confirmed(now_ns),
+                                            outstanding=self.port.outstanding(now_ns)[0] != "settled")
+            if not done[0]:
+                return done[1], {}  # the core's refusal reason (accepted, reason)
             if self.operator_start is not None:
                 self.operator_start.void("field_recovery")
             return None, {}

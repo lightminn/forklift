@@ -373,7 +373,9 @@ class Arbiter:
         if self.real_request is None:
             return self._reply(kind, request_id, "unsupported")
         reason, fields = self.real_request(kind, msg, now_mono)
-        return self._reply(kind, request_id, reason, **(fields or {}))
+        reply = self._reply(kind, request_id, reason)
+        reply.update(fields or {})  # not unpacked into _reply: the reasons stay readable by the console's scan
+        return reply
 
     def _on_pallet_register(self, client_id, request_id, msg, now_mono):
         return self._real("pallet_register", request_id, msg, now_mono)
