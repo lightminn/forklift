@@ -1,0 +1,976 @@
+{
+ "rows": [
+  {
+   "name": "sm_random_2_s0",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_2_m_side.json",
+   "exit_code": 1,
+   "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success",
+   "status": "result",
+   "success": false,
+   "mission_result": null,
+   "phases": {},
+   "inserted": false,
+   "completed": false
+  },
+  {
+   "name": "sm_random_2_s1",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_2_m_side.json",
+   "exit_code": 1,
+   "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success",
+   "status": "result",
+   "success": false,
+   "mission_result": null,
+   "phases": {},
+   "inserted": false,
+   "completed": false
+  },
+  {
+   "name": "sm_random_2_s2",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_2_m_side.json",
+   "exit_code": 1,
+   "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success",
+   "status": "result",
+   "success": false,
+   "mission_result": null,
+   "phases": {},
+   "inserted": false,
+   "completed": false
+  },
+  {
+   "name": "sp_line_2_on_s0",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 103.25833871867508,
+    "insert": 109.0500056874007,
+    "lift": 117.37500612158328,
+    "extract": 121.87500635627657,
+    "transport": 127.16667329892516,
+    "lower": 199.09167705010623,
+    "withdraw": 203.59167728479952,
+    "settle": 209.4416775899008,
+    "return_home": 210.44167764205486,
+    "home_settle": 244.01667939312756,
+    "complete": 245.01667944528162
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 109.0500056874007,
+     "target": [
+      1.8063131419225618,
+      0.030486726627530318,
+      -0.03885586245141474
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "-1": "success",
+     "1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 26.241668035276234,
+    "reobserved_s": 95.18333829753101
+   }
+  },
+  {
+   "name": "sp_line_2_off_s0",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 13.208334022201598,
+    "insert": 18.99166765715927,
+    "lift": 27.316668091341853,
+    "extract": 31.816668326035142,
+    "transport": 37.10833526868373,
+    "lower": 114.27500595990568,
+    "withdraw": 118.77500619459897,
+    "settle": 124.62500649970025,
+    "return_home": 125.62500655185431,
+    "home_settle": 161.0916750682518,
+    "complete": 162.09167512040585
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sp_random_1_on_s0",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 118.95000620372593,
+    "insert": 124.72500650491565,
+    "lift": 133.0416736053303,
+    "extract": 137.54167384002358,
+    "transport": 142.82500744890422,
+    "lower": 204.64167733956128,
+    "withdraw": 209.14167757425457,
+    "settle": 214.99167787935585,
+    "return_home": 215.9916779315099,
+    "home_settle": 246.1000128351152,
+    "complete": 247.10001288726926
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 124.72500650491565,
+     "target": [
+      0.6893475180812865,
+      1.1967936131661183,
+      0.17532459019937435
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 50.76666931435466,
+    "reobserved_s": 106.35833888035268
+   }
+  },
+  {
+   "name": "sp_random_1_off_s0",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 37.025001931004226,
+    "insert": 42.83333556726575,
+    "lift": 51.15833600144833,
+    "extract": 55.65833623614162,
+    "transport": 60.95000317879021,
+    "lower": 122.3916730498895,
+    "withdraw": 126.8916732845828,
+    "settle": 132.74167358968407,
+    "return_home": 133.74167364183813,
+    "home_settle": 164.50000857934356,
+    "complete": 165.50000863149762
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sg_random_1_s0",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 119.94167292211205,
+    "insert": 125.73333989083767,
+    "lift": 134.0666736587882,
+    "extract": 138.5666738934815,
+    "transport": 143.85834083613008,
+    "lower": 204.64167733956128,
+    "withdraw": 209.14167757425457,
+    "settle": 214.99167787935585,
+    "return_home": 215.9916779315099,
+    "home_settle": 246.76667953655124,
+    "complete": 247.7666795887053
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "absent",
+      "open_gaps"
+     ],
+     [
+      -1,
+      "absent",
+      "open_gaps"
+     ]
+    ],
+    "record_verdict": "absent",
+    "refused": null,
+    "permitted": {
+     "time_s": 125.73333989083767,
+     "target": [
+      0.68546170939659,
+      1.1931251918972667,
+      0.17464270018847697
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 49.80833593104035,
+    "reobserved_s": 107.79167228844017
+   }
+  },
+  {
+   "name": "sp_line_2_on_s1",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 92.30000481382012,
+    "insert": 98.0833384487778,
+    "lift": 106.40833888296038,
+    "extract": 110.90833911765367,
+    "transport": 116.20000606030226,
+    "lower": 189.2250098688528,
+    "withdraw": 193.72501010354608,
+    "settle": 199.5833437424153,
+    "return_home": 200.58334379456937,
+    "home_settle": 235.25834560301155,
+    "complete": 236.2583456551656
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 98.0833384487778,
+     "target": [
+      1.8062677137779204,
+      0.038805581973582165,
+      -0.03700275176022568
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "-1": "success",
+     "1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 26.458334713242948,
+    "reobserved_s": 83.97500437963754
+   }
+  },
+  {
+   "name": "sp_line_2_off_s1",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 13.458334035240114,
+    "insert": 19.258334337733686,
+    "lift": 27.58333477191627,
+    "extract": 32.08333500660956,
+    "transport": 37.37500194925815,
+    "lower": 107.40833893511444,
+    "withdraw": 111.90833916980773,
+    "settle": 117.75833947490901,
+    "return_home": 118.75833952706307,
+    "home_settle": 153.10000798478723,
+    "complete": 154.1000080369413
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sp_random_1_on_s1",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 120.65000629238784,
+    "insert": 126.66667327284813,
+    "lift": 134.98334037326276,
+    "extract": 139.48334060795605,
+    "transport": 144.77500755060464,
+    "lower": 209.7916776081547,
+    "withdraw": 214.291677842848,
+    "settle": 220.15001148171723,
+    "return_home": 221.1500115338713,
+    "home_settle": 252.02501314412802,
+    "complete": 253.0250131962821
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 126.66667327284813,
+     "target": [
+      0.6844630513196267,
+      1.1773554166953173,
+      0.17070524022996367
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 47.55000247992575,
+    "reobserved_s": 105.68333884514868
+   }
+  },
+  {
+   "name": "sp_random_1_off_s1",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 34.63333513960242,
+    "insert": 40.5166687797755,
+    "lift": 48.841669213958085,
+    "extract": 53.34166944865137,
+    "transport": 58.64166972506791,
+    "lower": 120.46667294949293,
+    "withdraw": 124.96667318418622,
+    "settle": 130.82500682305545,
+    "return_home": 131.8250068752095,
+    "home_settle": 165.57500863540918,
+    "complete": 166.57500868756324
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sg_random_1_s1",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 117.5750061320141,
+    "insert": 123.57500644493848,
+    "lift": 131.90000687912107,
+    "extract": 136.40000711381435,
+    "transport": 141.69167405646294,
+    "lower": 204.0333439745009,
+    "withdraw": 208.53334420919418,
+    "settle": 214.3916778480634,
+    "return_home": 215.39167790021747,
+    "home_settle": 247.9166795965284,
+    "complete": 248.91667964868248
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "absent",
+      "open_gaps"
+     ],
+     [
+      -1,
+      "absent",
+      "open_gaps"
+     ]
+    ],
+    "record_verdict": "absent",
+    "refused": null,
+    "permitted": {
+     "time_s": 123.57500644493848,
+     "target": [
+      0.6856074291972009,
+      1.1772696002961047,
+      0.17579782044280295
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 48.2833358515054,
+    "reobserved_s": 102.69167202245444
+   }
+  },
+  {
+   "name": "sp_line_2_on_s2",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 95.23333830013871,
+    "insert": 101.00833860132843,
+    "lift": 109.33333903551102,
+    "extract": 113.8333392702043,
+    "transport": 119.1250062128529,
+    "lower": 193.12501007225364,
+    "withdraw": 197.62501030694693,
+    "settle": 203.4750106120482,
+    "return_home": 204.47501066420227,
+    "home_settle": 238.5333457738161,
+    "complete": 239.53334582597017
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 101.00833860132843,
+     "target": [
+      1.8085464474483484,
+      0.04364664651958652,
+      -0.03607777806603914
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "-1": "success",
+     "1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 27.700001444667578,
+    "reobserved_s": 85.6500044669956
+   }
+  },
+  {
+   "name": "sp_line_2_off_s2",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "line_2_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 14.33333408087492,
+    "insert": 20.11666771583259,
+    "lift": 28.441668150015175,
+    "extract": 32.941668384708464,
+    "transport": 38.233335327357054,
+    "lower": 119.48333956487477,
+    "withdraw": 123.98333979956806,
+    "settle": 129.83334010466933,
+    "return_home": 130.8333401568234,
+    "home_settle": 165.30834195483476,
+    "complete": 166.30834200698882
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sp_random_1_on_s2",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 121.10833964962512,
+    "insert": 126.9416732871905,
+    "lift": 135.27500705514103,
+    "extract": 139.77500728983432,
+    "transport": 145.0666742324829,
+    "lower": 206.2750107580796,
+    "withdraw": 210.77501099277288,
+    "settle": 216.6333446316421,
+    "return_home": 217.63334468379617,
+    "home_settle": 249.30834633577615,
+    "complete": 250.30834638793021
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "present",
+      "board_in_gaps"
+     ],
+     [
+      -1,
+      "present",
+      "board_in_gaps"
+     ]
+    ],
+    "record_verdict": "present",
+    "refused": null,
+    "permitted": {
+     "time_s": 126.9416732871905,
+     "target": [
+      0.6876316022013986,
+      1.1749118135742065,
+      0.17097524939470285
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 50.32500262465328,
+    "reobserved_s": 106.7083388986066
+   }
+  },
+  {
+   "name": "sp_random_1_off_s2",
+   "bottom_deck": "off",
+   "bottom_deck_reason": "explicit",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 35.42500184755772,
+    "insert": 41.200002148747444,
+    "lift": 49.52500258293003,
+    "extract": 54.02500281762332,
+    "transport": 59.31666976027191,
+    "lower": 120.73333963006735,
+    "withdraw": 125.23333986476064,
+    "settle": 131.0833401698619,
+    "return_home": 132.08334022201598,
+    "home_settle": 163.55834186356515,
+    "complete": 164.5583419157192
+   },
+   "inserted": true,
+   "completed": true
+  },
+  {
+   "name": "sg_random_1_s2",
+   "bottom_deck": "structure",
+   "bottom_deck_reason": "auto",
+   "scene_file": "random_1_m_side.json",
+   "exit_code": 0,
+   "exit_reason": null,
+   "status": "result",
+   "success": true,
+   "mission_result": null,
+   "phases": {
+    "approach": 120.00833959225565,
+    "insert": 125.86667323112488,
+    "lift": 134.19167366530746,
+    "extract": 138.69167390000075,
+    "transport": 143.98334084264934,
+    "lower": 207.04167746473104,
+    "withdraw": 211.54167769942433,
+    "settle": 217.40001133829355,
+    "return_home": 218.40001139044762,
+    "home_settle": 249.05001298896968,
+    "complete": 250.05001304112375
+   },
+   "inserted": true,
+   "completed": true,
+   "deck": {
+    "status": "done",
+    "target": true,
+    "faces": [
+     [
+      1,
+      "absent",
+      "open_gaps"
+     ],
+     [
+      -1,
+      "absent",
+      "open_gaps"
+     ]
+    ],
+    "record_verdict": "absent",
+    "refused": null,
+    "permitted": {
+     "time_s": 125.86667323112488,
+     "target": [
+      0.6919364933514268,
+      1.1840377306345624,
+      0.17331124632220365
+     ],
+     "shape": "epal6"
+    },
+    "reachable": {
+     "1": "success",
+     "-1": "success",
+     "return": "success"
+    },
+    "reobservation": null,
+    "first_leg_s": 50.68333597667515,
+    "reobserved_s": 107.73333895206451
+   }
+  }
+ ],
+ "verdict": {
+  "S-": {
+   "runs": [
+    {
+     "name": "sm_random_2_s0",
+     "side_stage": false,
+     "closed_face": false,
+     "refused": false,
+     "inserted": false,
+     "sample": false,
+     "pass": null,
+     "refusal": null,
+     "mission_result": null,
+     "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success"
+    },
+    {
+     "name": "sm_random_2_s1",
+     "side_stage": false,
+     "closed_face": false,
+     "refused": false,
+     "inserted": false,
+     "sample": false,
+     "pass": null,
+     "refusal": null,
+     "mission_result": null,
+     "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success"
+    },
+    {
+     "name": "sm_random_2_s2",
+     "side_stage": false,
+     "closed_face": false,
+     "refused": false,
+     "inserted": false,
+     "sample": false,
+     "pass": null,
+     "refusal": null,
+     "mission_result": null,
+     "exit_reason": "observe:all_candidates_exhausted:perception_no_pallet:support_unverified:success;success;success;success;success;success"
+    }
+   ],
+   "samples": 0,
+   "pass": false
+  },
+  "S+": {
+   "line_2": {
+    "permitted_both_faces": 3,
+    "completed_on": 3,
+    "completed_off": 3,
+    "completed_pairs": 3,
+    "pairs": [
+     {
+      "seed": 0,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 103.25833871867508,
+      "approach_off_s": 13.208334022201598,
+      "approach_delta_s": 90.05000469647348,
+      "insert_on_s": 109.0500056874007,
+      "insert_off_s": 18.99166765715927,
+      "insert_delta_s": 90.05833803024143,
+      "complete_on_s": 245.01667944528162,
+      "complete_off_s": 162.09167512040585,
+      "complete_delta_s": 82.92500432487577
+     },
+     {
+      "seed": 1,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 92.30000481382012,
+      "approach_off_s": 13.458334035240114,
+      "approach_delta_s": 78.84167077858001,
+      "insert_on_s": 98.0833384487778,
+      "insert_off_s": 19.258334337733686,
+      "insert_delta_s": 78.82500411104411,
+      "complete_on_s": 236.2583456551656,
+      "complete_off_s": 154.1000080369413,
+      "complete_delta_s": 82.15833761822432
+     },
+     {
+      "seed": 2,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 95.23333830013871,
+      "approach_off_s": 14.33333408087492,
+      "approach_delta_s": 80.90000421926379,
+      "insert_on_s": 101.00833860132843,
+      "insert_off_s": 20.11666771583259,
+      "insert_delta_s": 80.89167088549584,
+      "complete_on_s": 239.53334582597017,
+      "complete_off_s": 166.30834200698882,
+      "complete_delta_s": 73.22500381898135
+     }
+    ],
+    "pass": true
+   },
+   "random_1": {
+    "permitted_both_faces": 3,
+    "completed_on": 3,
+    "completed_off": 3,
+    "completed_pairs": 3,
+    "pairs": [
+     {
+      "seed": 0,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 118.95000620372593,
+      "approach_off_s": 37.025001931004226,
+      "approach_delta_s": 81.92500427272171,
+      "insert_on_s": 124.72500650491565,
+      "insert_off_s": 42.83333556726575,
+      "insert_delta_s": 81.8916709376499,
+      "complete_on_s": 247.10001288726926,
+      "complete_off_s": 165.50000863149762,
+      "complete_delta_s": 81.60000425577164
+     },
+     {
+      "seed": 1,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 120.65000629238784,
+      "approach_off_s": 34.63333513960242,
+      "approach_delta_s": 86.01667115278542,
+      "insert_on_s": 126.66667327284813,
+      "insert_off_s": 40.5166687797755,
+      "insert_delta_s": 86.15000449307263,
+      "complete_on_s": 253.0250131962821,
+      "complete_off_s": 166.57500868756324,
+      "complete_delta_s": 86.45000450871885
+     },
+     {
+      "seed": 2,
+      "on_completed": true,
+      "off_completed": true,
+      "on_stop": null,
+      "off_stop": null,
+      "approach_on_s": 121.10833964962512,
+      "approach_off_s": 35.42500184755772,
+      "approach_delta_s": 85.6833378020674,
+      "insert_on_s": 126.9416732871905,
+      "insert_off_s": 41.200002148747444,
+      "insert_delta_s": 85.74167113844305,
+      "complete_on_s": 250.30834638793021,
+      "complete_off_s": 164.5583419157192,
+      "complete_delta_s": 85.750004472211
+     }
+    ],
+    "pass": true
+   }
+  },
+  "S+g": {
+   "runs": [
+    {
+     "name": "sg_random_1_s0",
+     "faces": [
+      [
+       1,
+       "absent",
+       "open_gaps"
+      ],
+      [
+       -1,
+       "absent",
+       "open_gaps"
+      ]
+     ],
+     "record_verdict": "absent",
+     "permitted": true,
+     "completed": true,
+     "absent_branch": true,
+     "mission_result": null
+    },
+    {
+     "name": "sg_random_1_s1",
+     "faces": [
+      [
+       1,
+       "absent",
+       "open_gaps"
+      ],
+      [
+       -1,
+       "absent",
+       "open_gaps"
+      ]
+     ],
+     "record_verdict": "absent",
+     "permitted": true,
+     "completed": true,
+     "absent_branch": true,
+     "mission_result": null
+    },
+    {
+     "name": "sg_random_1_s2",
+     "faces": [
+      [
+       1,
+       "absent",
+       "open_gaps"
+      ],
+      [
+       -1,
+       "absent",
+       "open_gaps"
+      ]
+     ],
+     "record_verdict": "absent",
+     "permitted": true,
+     "completed": true,
+     "absent_branch": true,
+     "mission_result": null
+    }
+   ],
+   "pass": true
+  }
+ }
+}

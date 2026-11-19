@@ -25,7 +25,8 @@
 #                  --side-room: the hall box grown on +y so the bottom-deck side stands fit; nothing else moved): auto
 #                  takes it exactly when BOTTOM_DECK=auto turns the check on, on always (e.g. a paired off arm), off never.
 #                  The per-scene defaults below follow the scene without its _side suffix.
-#   BOTTOM_DECK=off  --bottom-deck-check (docs/plans/2026-11-18-bottom-deck-structure-default.md 3-2): auto turns
+#   BOTTOM_DECK=auto --bottom-deck-check (docs/plans/2026-11-18-bottom-deck-structure-default.md 3-2, default since the
+#                  Isaac check docs/validation/2026-11-19-bottom-deck-structure-isaac.md, lead 2026-11-19): auto turns
 #                  structure on (and takes the side copy) only for line / random in the slam mode with no second near
 #                  capture (NEAR_RECAPTURE_GAP or EXTRA_ARGS) and no --near-tracking, --pocket-check, --repeat-captures
 #                  above 0 or --live in EXTRA_ARGS, and off elsewhere on the original scene (the reason recorded);
@@ -183,7 +184,7 @@ case "$RACK" in on|off) ;; *) echo "RACK must be on or off"; exit 2;; esac
 SIDE=${SIDE:-auto}
 case "$SIDE" in auto|on|off) ;; *) echo "SIDE must be auto, on or off"; exit 2;; esac
 BOTTOM_DECK_GIVEN=${BOTTOM_DECK:+1}
-BOTTOM_DECK=${BOTTOM_DECK:-off}
+BOTTOM_DECK=${BOTTOM_DECK:-auto}
 case "$BOTTOM_DECK" in auto|structure|on|off) ;; *) echo "BOTTOM_DECK must be auto, structure, on or off"; exit 2;; esac
 ENCODER_MODEL=${ENCODER_MODEL:-team_spec_quantized}
 case "$ENCODER_MODEL" in reported) AGE=;; team_spec_quantized) AGE=_team_spec;;
