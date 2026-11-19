@@ -246,9 +246,12 @@ class RealLoop:
             self._bypass_epoch = a.session_epoch
             self.bypass.clear()
             self._bypass_pending.clear()
-        for check, on in self._bypass_pending:
-            if self.permit.state not in (ra.OFF, ra.LATCHED):
-                self.bypass_events.append({"ns": int(now_ns), "event": "bypass_dropped:armed", "check": check})
+        for check, on, lease_id in self._bypass_pending:
+            why = self._bypass_refusal(lease_id)
+            if why is not None:
+                # still off, no mission, the same lease -- else not applied (r4 P1, P2-1); real_status shows the set
+                self.bypass_events.append({"ns": int(now_ns), "event": f"bypass_dropped:{why}", "check": check,
+                                           "lease_id": lease_id})
                 continue
             if on:
                 self.bypass.add(check)
@@ -256,12 +259,26 @@ class RealLoop:
                 self.bypass.discard(check)
             if check == "operator_start" and self.operator_start is not None:
                 self.operator_start.void("bypass_changed")  # a check given before is not carried across (r2 P2-2)
-            self.bypass_events.append({"ns": int(now_ns), "event": "bypass_on" if on else "bypass_off", "check": check})
+            self.bypass_events.append({"ns": int(now_ns), "event": "bypass_on" if on else "bypass_off", "check": check,
+                                       "lease_id": lease_id})
         self._bypass_pending.clear()
         self._tick_bypass = frozenset(self.bypass)
         if self.real_layer is not None:
             self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
             self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
+
+    MISSION_ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering")
+
+    def _bypass_refusal(self, lease_id) -> str | None:
+        """A bypass toggle needs the truck disarmed, no mission under way and the lease that asked (5c-1 r1 P1, r4)."""
+        if self.permit.state not in (ra.OFF, ra.LATCHED):
+            return "armed"
+        if self.core.commands.status in self.MISSION_ACTIVE:
+            return "mission_active"
+        lease = self.link.a.lease
+        if lease is None or lease.lease_id != lease_id:
+            return "lease_changed"
+        return None
 
     def _real_request(self, kind: str, msg: dict, now_mono: float):
         """The arbiter's real requests after its checks (design 5): (refusal reason or None, reply fields)."""
@@ -309,9 +326,12 @@ class RealLoop:
                 return "not_bypassable", {}
             if check not in BYPASSABLE:
                 return "unknown_check", {}
-            if not disarmed:
-                return "armed", {}
-            self._bypass_pending.append((check, bool(msg["on"])))  # applied at the next tick head (r3 P2-1)
+            lease = self.link.a.lease
+            lease_id = None if lease is None else lease.lease_id
+            why = self._bypass_refusal(lease_id)
+            if why is not None:
+                return why, {}
+            self._bypass_pending.append((check, bool(msg["on"]), lease_id))  # applied at the next tick head (r3)
             return None, {"applies": "next_tick"}
         if kind == "recovery":
             now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
@@ -336,6 +356,9 @@ class RealLoop:
         partial = getattr(self.transport, "partial_frame", None)
         if partial is not None and getattr(partial, "kind", None) == "DISARM":
             return False
+        st = self.host.state
+        if st is None or getattr(permit, "disarm_boot", None) != int(st.boot_id):
+            return False  # the answer must come from the boot the DISARM was written to (r4 P2-2)
         return permit._disarmed_after_write(int(now_ns))  # noqa: SLF001 -- the permit's own answer check
 
     def operator_check(self, request):

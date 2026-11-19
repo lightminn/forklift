@@ -2,6 +2,8 @@
 // Pure module: no DOM, no sockets. The caller supplies send(), now() and newId().
 // Freshness is judged by the vehicle; this module only echoes what it last received.
 
+import { applyRealStatus } from "./realstatus.js";
+
 export const API = "console/1";
 const STALE = new Set(["stale_epoch", "stale_lease", "stale_control", "stale_arm", "stale_seq"]);
 
@@ -18,6 +20,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
   let welcome = null;
   let reclaim = false; // held the lease when the connection dropped
   let targets = null;
+  let realStatus = null; // the real truck's real_status (5c-1), the newest of this session
   // persistent console plan D7: the connection's request token (from its welcome) and its seq; none from a back end
   // that gives none (the fake vehicle)
   let requestToken = null;
@@ -46,6 +49,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     lastTick = null;
     state = null; // nothing of the old session is shown as current
     targets = null;
+    realStatus = null;
     armed = false;
     controlGen = null;
     armGen = null;
@@ -103,6 +107,15 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
       case "targets":
         targets = msg;
         break;
+      case "real_status": {
+        // the real truck (5c-1): its generation and lease holder, as a state would give them
+        const v = applyRealStatus(msg, epoch, clientId);
+        if (!v.accepted) return;
+        realStatus = msg;
+        controlGen = v.controlGen;
+        if (!v.leaseHeld) leaseId = null;
+        break;
+      }
       default:
         break;
     }
@@ -221,6 +234,9 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     },
     get targets() {
       return targets;
+    },
+    get realStatus() {
+      return realStatus;
     },
     get generations() {
       return { session_epoch: epoch, lease_id: leaseId, control_gen: controlGen, arm_gen: armGen };

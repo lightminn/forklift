@@ -436,3 +436,7 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .tele-hidden { background: var(--bad, #d14b4b); color: #fff; font-size: 14px; padding: 10px 12px; border-radius: 8px; margin: 6px 0; }
 .tele-hidden b { display: block; font-size: 16px; margin-bottom: 2px; }
 
+
+/* the real truck's session bypass (5c-1): shown as long as a check is bypassed */
+.banner.warn { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); border-radius: 8px; padding: 6px 12px; margin: 6px 12px; font-weight: 600; }
+.banner[hidden] { display: none; }

@@ -336,6 +336,8 @@ class AutoPermit:
         """The transmitter wrote a whole frame (every frame, in order): a DISARM's write time, the stop frame's."""
         if kind == "DISARM":
             self._disarm_written_ns, self._disarm_seq = int(written_ns), int(seq) & 0xFFFF
+            st = self.host.state  # the boot it was written to (5c-1 r4 P2-2: another boot's DISARMED is no answer)
+            self.disarm_boot = None if st is None else int(st.boot_id)
         elif self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
             self._stop["written_ns"] = int(written_ns)
 

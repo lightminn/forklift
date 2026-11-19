@@ -5,6 +5,7 @@ import { controlProfile, escapeState, forbidText, liftControls, recoveryNote, vi
 import { blockReason, carriedLabel, currentDestination, missionProgress, PHASES, selectable, subtaskOf } from "./wizard.js";
 import { badge as alarmBadge, blockedText, queueStopText } from "./health.js";
 import { summarize } from "./summary.js";
+import { bypassBanner } from "./realstatus.js";
 import { bayCheckKey, candidateButtons, placeActions, relocActions, relocOf, relocSummary } from "./reloc.js";
 import { poseBand, poseCheckOf, startBand } from "./posecheck.js";
 import { ACTIVE as MISSION_ACTIVE, adviceText, destinationLabel, reasonText, noteText, recoveryGuide, sessionButtons, slamLabel } from "./results.js";
@@ -160,6 +161,13 @@ export function render(m) {
   if (m.alarms) renderHealth(m); // status panel plan D4: drawn whatever the connection
   const st = m.session.state;
   const gens = m.session.generations;
+  // the real truck's bypassed checks (5c-1): shown as long as they are bypassed
+  const bypass = bypassBanner(m.session.realStatus);
+  const bypassEl = document.getElementById("real-bypass");
+  if (bypassEl) {
+    bypassEl.hidden = bypass === "";
+    bypassEl.textContent = bypass;
+  }
   const lease = m.session.hasLease;
   $("gens").textContent = `epoch ${gens.session_epoch ?? "—"} · control ${gens.control_gen ?? "—"} · arm ${gens.arm_gen ?? "—"}`;
   const w = m.session.welcome;

@@ -158,3 +158,32 @@ def test_an_operator_start_given_then_moved_is_void():
     r.mcu.counts[1] += 500
     r.tick(3)
     assert not r.loop.operator_start.ok(r.lease)
+
+
+def test_a_bypass_toggle_waits_for_no_mission_and_the_same_lease():
+    """5c-1 r4: refused with a mission under way; a pending toggle is dropped when a submit or a lease change came
+    before its tick head."""
+    r = rig()
+    ask(r, "check_bypass", check="operator_start", on=True)
+    r.tick()
+    assert r.loop.bypass == {"operator_start"}
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    r.tick(30)
+    # the toggle off and a submit in the same batch: the submit is taken under the bypass, the toggle is dropped
+    r.say("check_bypass", check="operator_start", on=False)
+    r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
+    r.tick(2)
+    assert r.loop.bypass == {"operator_start"}
+    assert any(e["event"] == "bypass_dropped:mission_active" for e in r.loop.bypass_events)
+    reply2, _ = ask(r, "check_bypass", check="slam", on=True)
+    assert reply2["reason"] in ("mission_active", "armed")
+
+
+def test_a_disarm_answer_from_another_boot_is_not_confirmed():
+    """5c-1 r4 P2-2."""
+    r = rig()
+    r.tick(5)
+    loop = r.loop
+    r.permit.disarm_boot = (r.permit.disarm_boot or 0) + 1
+    assert not loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
