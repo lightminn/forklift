@@ -141,6 +141,11 @@ class RealLoop:
         self.pose_history: deque = deque(maxlen=64)  # (t, rear, continuous) per tick, for a frame's own pose
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
+        self._console_disarm = False
+        link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
+
+    def _on_console_disarm(self, now_mono: float) -> None:
+        self._console_disarm = True  # taken inside the console cycle; the emergency branch runs right after it
 
     # --- the head -------------------------------------------------------------------------------------------------
     def _on_state(self, state, rx_ns: int) -> None:
@@ -246,6 +251,11 @@ class RealLoop:
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
                                         "localization_ok": True})
         a = self.link.a
+        if self._console_disarm:
+            self._console_disarm = False
+            rec.branch, rec.reason = "emergency", "console_disarm"
+            self._emergency(now_ns, "console_disarm")
+            return
         if permit.armed or permit.state == ra.STOP_PENDING:
             if a.mode == "STOPPED":
                 rec.branch, rec.reason = "emergency", "stop"
