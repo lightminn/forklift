@@ -41,3 +41,4 @@ def test_a_held_moving_drive_is_not_written_after_the_next_tick_decides_to_stop(
     assert not [seq for seq, _ in written if seq in queued]  # the older unsent frame never goes out
     assert not [m for _, m in written if m.left_wheel_rad_s or m.right_wheel_rad_s]
     assert not [f for f in r.loop.book.frames if f.seq in queued]  # and the record no longer counts it
+    assert len(written) == 1 and written[0][0] not in queued  # the new decision (wheels 0) went out, once
