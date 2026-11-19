@@ -298,10 +298,10 @@ def test_a_disconnect_queued_before_the_close_voids_the_attempt():
     ask(r, "relocalize_confirm", generation=gen)
     orig = r.loop._commit_void
 
-    def late(t):
+    def late(t, closing=True):
         r.channels.disconnect("c1", "op")  # queued after this tick's batch, before the commit
         r.loop._commit_void = orig
-        return orig(t)
+        return orig(t, closing)
 
     r.loop._commit_void = late
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
@@ -316,15 +316,17 @@ def test_a_disconnect_queued_before_the_seed_leaves_no_seed():
     stand(r)
     orig = r.loop._commit_void
 
-    def late(t):
+    def late(t, closing=True):
         r.channels.disconnect("c1", "op")
         r.loop._commit_void = orig
-        return orig(t)
+        return orig(t, closing)
 
     r.loop._commit_void = late  # the seed is checked in the same tick the declaration is taken
     r.say("relocalize_declare", generation=gen)
     r.tick(2)
     assert not any(c[0] == "seed" for c in r.slam.calls) and not r.loop._declared()
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:lease"
+    assert all("TypeError" not in (rec.reason or "") for rec in r.loop.records[-3:])
 
 
 def test_the_mark_holds_when_the_synthetic_reply_fails_after_the_seed():
@@ -663,3 +665,58 @@ def test_a_push_with_the_start_fixed_is_stopped_at_the_transmit_gate():
             break
     assert rec.branch == "emergency" and "not_at_start" in (rec.reason or ""), rec
     assert r.loop._moved_for != mid
+
+
+
+# --- impl round 3 ---------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("kind", ["stop", "disarm"])
+def test_a_stop_or_disarm_queued_between_the_batch_and_the_acceptance_voids_the_declaration(kind):
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    orig = r.loop._attempt_request
+
+    def first(kind_, msg, now_ns):
+        r.say(kind)  # queued after this tick's emergency batch was taken, before the attempt is accepted
+        r.loop._attempt_request = orig
+        return orig(kind_, msg, now_ns)
+
+    r.loop._attempt_request = first
+    r.say("relocalize_declare", generation=gen)
+    r.tick(3)
+    assert not any(c[0] == "seed" for c in r.slam.calls)
+    assert status(r)["state"] == "refused" and status(r)["reason"] in (
+        "relocalize_voided:emergency", "relocalize_voided:control")
+
+
+def test_a_viewers_connection_does_not_void_the_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    r.channels.connect("v1", "viewer", control=False)
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    assert status(r)["state"] == "confirmed"
+
+
+def test_the_layer_watchdog_is_read_at_the_close():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    orig = r.layer.watchdog
+    seen = []
+
+    def watchdog(now_s):
+        seen.append(now_s)
+        return "layer_latency_exceeded" if now_s > r.loop._t(r.now) else orig(now_s)
+
+    r.layer.watchdog = watchdog
+
+    def later():
+        r.tick_cost_ns = 20 * 1_000_000
+
+    _before_commit(r, later)
+    run_until(r, lambda rec: status(r)["state"] != "waiting" or rec.branch == "emergency", 400)
+    r.tick_cost_ns = 0
+    assert r.core.relocalize_generation() == gen  # the close's own instant saw the fault

@@ -267,6 +267,7 @@ class RealLoop:
         self._moved_for = None  # the mission whose first moving DRIVE has been written whole (design 6, 6)
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
+        self._disarms_taken = 0
         if self._epoch_mode:
             src_ = evidence.slam
             self.evidence = dataclasses.replace(evidence, slam=lambda n: dataclasses.replace(
@@ -552,8 +553,8 @@ class RealLoop:
                         "attempt": self._attempt_serial, "lease_id": None if lease is None else lease.lease_id,
                         "control_gen": self.link.a.control_gen, "bypass": frozenset(self.bypass),
                         "stand": self.stand_since_ns, "t": t, "reference": False, "seeded": False,
-                        # any STOP, DISARM or connection change queued after this (the channels' serial) voids it
-                        "serial": self.channels.serial()}
+                        # a DISARM taken after this voids it (impl round 3: the taken ones counted, not the queue)
+                        "disarms": self._disarms_taken}
         if self.real_layer is not None:
             self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
         if self.attempt["kind"] == "confirm" and self._epoch_mode:
@@ -585,9 +586,15 @@ class RealLoop:
             return "relocalize_voided:bypass"
         if self.stand_since_ns != a["stand"]:
             return "relocalize_moved"
-        if self.channels.serial() != a["serial"]:
-            return "relocalize_voided:emergency"  # impl round 2 P1-1: a STOP or DISARM queued or taken since
+        if self._disarms_taken != a["disarms"] or self._emergency_pending():
+            # impl rounds 2-3: a DISARM taken since, or a STOP or DISARM waiting in the channel (a STOP taken moves the
+            # control generation); a viewer's connection does not count
+            return "relocalize_voided:emergency"
         return None
+
+    def _emergency_pending(self) -> bool:
+        with self.channels.lock:
+            return bool(getattr(self.channels, "_stops", None)) or bool(getattr(self.channels, "_disarms", None))
 
     def _commit_void(self, t: float, closing: bool = True):
         """Just before a commit (the source's seed, the generation's close): the attempt's own voids and then the
@@ -596,7 +603,7 @@ class RealLoop:
         a = self.attempt
         now_ns = int(self.clock())
         t_now = self._t(now_ns)
-        why = self._attempt_void(now_ns, t)
+        why = self._attempt_void(now_ns, t_now)  # the layer's watchdog at the commit's own instant (impl round 3 P1-2)
         if why is None and self._bypass_refusal(a["lease_id"], now_ns) is not None:
             why = "relocalize_voided:lease"
         # impl round 2 P1-2/P1-3: the limit, the freshness and the layer on the clock now, not the tick's start
@@ -770,6 +777,7 @@ class RealLoop:
         self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
 
     def _on_console_disarm(self, now_mono: float) -> None:
+        self._disarms_taken += 1  # 5c-2: a waiting relocalization attempt is void after any DISARM taken
         self._console_disarm = True  # taken inside the console cycle; the emergency branch runs right after it
 
     # --- the head -------------------------------------------------------------------------------------------------
