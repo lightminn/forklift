@@ -94,7 +94,9 @@ export function poseOf(x, y, yawDeg) {
 export function statusSig(status) {
   if (!status) return null;
   const req = status.operator_request;
-  return JSON.stringify([status.session_epoch, status.lease ? status.lease.holder : null, status.permit?.state,
+  // the control generation too: a second STOP moves it with the same mode (5c-1b r4 P2-1)
+  return JSON.stringify([status.session_epoch, status.control_gen ?? null, status.lease ? status.lease.holder : null,
+    status.permit?.state,
     status.mission?.status, status.mode, req ? [req.kind, req.serial] : null, status.field_recovery ?? null,
     status.bypassed ?? [], status.targets_revision ?? null]);
 }

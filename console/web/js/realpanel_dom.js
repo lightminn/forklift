@@ -62,26 +62,31 @@ export function bindRealPanel(m, rejectText, clientId) {
     });
   });
   // the operator answer: the key of the request on screen when the press began (r1 P2-1)
-  // each button its own press record (r3 P2-2: a second pointer on the other button does not change it)
-  panel.pressKey = {};
-  const press = (id) => { panel.pressKey[id] = panel.opKey ? { ...panel.opKey } : null; };
+  // a press record per button and per input (pointer id, or the keyboard) -- a click uses only its own input's
+  // record (r3 P2-2, r4 P2-2: a second pointer, on either button, does not change the first one's)
+  panel.pressKey = { "rp-confirm": {}, "rp-reject": {} };
+  const press = (id, input) => { panel.pressKey[id][input] = panel.opKey ? { ...panel.opKey } : null; };
+  const inputOf = (ev) => (ev && Number.isInteger(ev.pointerId) && ev.pointerId >= 0 ? `p${ev.pointerId}` : "kbd");
   for (const id of ["rp-confirm", "rp-reject"]) {
-    $(id).onpointerdown = () => press(id);
+    $(id).onpointerdown = (ev) => press(id, inputOf(ev));
     $(id).onkeydown = (ev) => {
       if (ev.key !== "Enter") return; // Space is the teleop deadman key (r2 P3): Enter only
       if (ev.repeat) { ev.preventDefault(); return; } // a held key does not take a newer request (r2 P2-1)
-      press(id);
+      press(id, "kbd");
     };
   }
-  const answer = (verdict) => {
+  const answer = (verdict, ev) => {
     const id = verdict === "confirm" ? "rp-confirm" : "rp-reject";
-    const key = id in panel.pressKey ? panel.pressKey[id] : panel.opKey;
-    delete panel.pressKey[id];
+    const records = panel.pressKey[id];
+    const input = inputOf(ev);
+    // its own input's record; none at all (a click with no press seen): the request drawn now
+    const key = input in records ? records[input] : (Object.keys(records).length ? null : panel.opKey);
+    delete records[input];
     if (!answerStillOpen(key, m.session.realStatus)) return say("확인 요청이 바뀌었습니다 · 화면을 다시 보세요");
     send("operator_answer", { kind: key.kind, serial: key.serial, verdict }, verdict === "confirm" ? "확인했습니다" : "거부했습니다");
   };
-  $("rp-confirm").onclick = guard(() => answer("confirm"));
-  $("rp-reject").onclick = guard(() => answer("reject"));
+  $("rp-confirm").onclick = (ev) => guard(() => answer("confirm", ev))();
+  $("rp-reject").onclick = (ev) => guard(() => answer("reject", ev))();
   $("rp-recovery").onclick = guard(() => {
     const st = m.session.realStatus;
     const drawn = panel.recoveryId;
@@ -138,6 +143,8 @@ export function renderRealPanel(m, clientId) {
   let t = panel.toggle;
   if (t && (t.epoch !== gens.session_epoch || t.lease !== gens.lease_id)) {
     panel.toggle = t = null; // another session or lease: that toggle tells nothing of this one (r3 P3)
+    panel.note = ""; // nor its waiting note (r4 P3)
+    $("rp-msg").textContent = "";
   }
   if (t && t.at !== null && (toggleShown(t, st) || performance.now() - t.at > TOGGLE_WAIT_MS)) {
     panel.note = toggleShown(t, st) ? "우회 변경이 적용됐습니다" // (r2 P3)
