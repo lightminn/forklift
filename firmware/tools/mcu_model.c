@@ -28,7 +28,7 @@
    --state-silent-at-ms N --state-silent-ms D: from N for D ms no STATE is written while frames are still read and
    handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken; STATEs queued before it are
    dropped, none goes out in it). --accept-log PATH: each frame the core handled (the core's own frame_handled hook,
-   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us"
+   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us boot-id host-mono-ns"
    (verdict "accepted", "rejected:<reason>", "handled" for CLEAR_FAULTS, "ignored"; expiry -1 when none). A frame
    cut mid-way at a STATE cut is dropped and the poison (0x01 x 96, 0x00) goes before the first STATE after it.
    --short-write-at-ms N (a test injection): from N the next write sends 10 bytes, then EAGAIN until a STATE cut.
@@ -363,8 +363,11 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
     } else {
         snprintf(verdict, sizeof verdict, "rejected:%u", (unsigned)after->reject_reason);
     }
-    fprintf(B.accept_log, "%llu %u %s %s %u %lld\n", (unsigned long long)after->time_us, (unsigned)m->seq,
-            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us);
+    /* + the boot id and this host's CLOCK_MONOTONIC ns (the runner's time.monotonic_ns clock) for the send-to-accept
+       matching (6a-2b design 10.6) */
+    fprintf(B.accept_log, "%llu %u %s %s %u %lld %lu %llu\n", (unsigned long long)after->time_us, (unsigned)m->seq,
+            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us,
+            (unsigned long)after->boot_id, (unsigned long long)mono_ns());
     fflush(B.accept_log);
 }
 

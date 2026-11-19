@@ -110,6 +110,7 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
     m = Model(mcu_model, "--accept-log", log)
     try:
         m.states(0.2)
+        t_sent = time.monotonic_ns()
         m.send(Disarm(), 77)
         os.write(m.master, bytes([1]) * 96 + b"\x00")  # the poison: no frame
         m.send(ClearFaults(0x1234), 77)  # the same seq again, ignored while DISARMED
@@ -128,6 +129,7 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
     for r in rows:
         int(r[0]), int(r[4])  # MCU time, prior mode
         assert int(r[5]) == -1  # no active command while DISARMED (round 2 P3)
+        assert len(r) == 8 and int(r[6]) != 0 and int(r[7]) >= t_sent  # boot id, this host's monotonic ns (10.6)
 
 
 def test_a_frame_no_branch_handles_is_logged_ignored(mcu_model, tmp_path):

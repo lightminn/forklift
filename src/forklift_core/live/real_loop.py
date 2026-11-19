@@ -1372,9 +1372,11 @@ class RealLoop:
                                         "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
         if self.fatal_source is not None:
-            # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed)
+            # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed); the
+            # tick's requests are answered once (design 10.6)
             rec.branch, rec.reason = "emergency", f"source_fatal:{self.fatal_source}"
             self._emergency(now_ns, rec.reason)
+            self._settle_exception(now_ns, t, rec.reason)
             return
         a = self.link.a
         if self._console_disarm:
@@ -1861,6 +1863,9 @@ class RealLoop:
         if self.closing:
             return
         self.closing, self.closing_started_ns = True, int(self.clock())
+        cancel = getattr(self.permit, "cancel_session", None)
+        if cancel is not None:
+            cancel()  # design 10.6: no second session DISARM while closing
         a = self.link.a
         try:
             if a.mode != "STOPPED":

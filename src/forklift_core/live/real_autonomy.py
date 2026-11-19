@@ -411,6 +411,10 @@ class AutoPermit:
             return "stop_before_settled"
         return None
 
+    def cancel_session(self) -> None:
+        """The run is closing (6a-2b design 10.6): a session check under way sends no second DISARM."""
+        self._session = None
+
     def arbiter_callbacks(self):
         """The arbiter's ``rearm_refusal`` and ``on_rearmed`` for this permit: the arbiter passes monotonic **seconds**,
         the permit works in ns (6a-2b design 10.1: wired straight, a stale STATE's age came out hugely negative and

@@ -57,9 +57,11 @@ class SyntheticScan(_Gated):
     the odometry frame (the HIL scene, ``s10a_hil.yaml``). Acquisitions go to the layer's queue and to every subscriber
     (the SLAM side) separately; ``stop_delivery`` stops the layer's feed only (the injection ``scan``)."""
 
-    def __init__(self, transport, client, start_ns: int, *, odom_pose, boxes, sensor: str = "lidar") -> None:
+    def __init__(self, transport, client, start_ns: int, *, odom_pose, boxes, sensor: str = "lidar",
+                 mount=(0.0, 0.0, 0.0)) -> None:
         super().__init__(transport, client)
         self.start_ns, self.odom_pose, self.sensor = int(start_ns), odom_pose, sensor
+        self.mount = tuple(float(v) for v in mount)  # the sensor in the base frame (the layer's lidar mount)
         self.boxes = [tuple(float(v) for v in b) for b in boxes]
         self.stop_delivery = False
         self.events: list = []  # (kind, sensor) loss / recovery notices, in order
@@ -71,7 +73,7 @@ class SyntheticScan(_Gated):
         self._queue, self._next_ns = [], None
 
     def _cast(self, first_s: float, last_s: float) -> RealScan:
-        x, y, yaw = (float(v) for v in self.odom_pose())
+        x, y, yaw = (float(v) for v in compose(tuple(float(v) for v in self.odom_pose()), self.mount))
         angles = np.linspace(-math.pi, math.pi, BEAMS, endpoint=False)
         ranges = np.full(BEAMS, np.inf)
         edges = []
@@ -91,7 +93,7 @@ class SyntheticScan(_Gated):
                 if tt > 0.0 and 0.0 <= uu <= 1.0:
                     best = min(best, tt)
             ranges[k] = best
-        valid = np.isfinite(ranges)
+        valid = ~np.isnan(ranges)  # no return in range is a valid +inf (REP-117, design 10.6), not a bad sample
         return RealScan(self.sensor, first_s, last_s, angles, ranges, valid, np.zeros(BEAMS, bool),
                         np.full(BEAMS, np.inf))
 
@@ -101,16 +103,14 @@ class SyntheticScan(_Gated):
             return
         if now_ns < self._next_ns:
             return
-        # missed periods are skipped, not filled with the present pose (design 10.5): one revolution, ending at the
-        # latest period boundary reached
-        k = (int(now_ns) - self._next_ns) // SCAN_PERIOD_NS
-        end_ns = self._next_ns + k * SCAN_PERIOD_NS
-        last_s = (end_ns - self.start_ns) / 1e9
+        # at most one revolution per call, timed at the call with the pose of that moment (design 10.5-10.6): missed
+        # periods are skipped, never filled with the present pose at past times
+        last_s = (int(now_ns) - self.start_ns) / 1e9
         scan = self._cast(last_s - SCAN_PERIOD_NS / 1e9, last_s)
         self._queue.append(scan)
         for sub in self.subscribers:
             sub(scan)
-        self._next_ns = end_ns + SCAN_PERIOD_NS
+        self._next_ns = int(now_ns) + SCAN_PERIOD_NS
 
     def scans(self, now_ns: int) -> list:
         if not self._open():

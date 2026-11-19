@@ -188,11 +188,11 @@ class LoopTtyTransport:
         self.resyncs += 1
 
     # --- writing ---------------------------------------------------------------------------------------------------
-    def _os_write(self, data: bytes, path: str) -> int | None:
+    def _os_write(self, data: bytes, path: str, frame=None) -> int | None:
         """Bytes written, or None on EAGAIN; a lost device raises DeviceLost."""
         try:
             if self.inject is not None:
-                n = self.inject(self.fd, bytes(data), self._cur)
+                n = self.inject(self.fd, bytes(data), frame if frame is not None else self._cur)
                 if n is not None:
                     return n if n > 0 else None
             return self._write(self.fd, data)
@@ -217,7 +217,7 @@ class LoopTtyTransport:
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         self.first_byte_ns[seq] = entry
-        n = self._os_write(f.data, "write_eio")
+        n = self._os_write(f.data, "write_eio", f)
         if not n:
             return "eagain"
         self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
@@ -231,7 +231,7 @@ class LoopTtyTransport:
         """One os.write per gate pass (6a-2a impl round 1 P1-2): a short write leaves the rest for the next pass."""
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
-        n = self._os_write(f.data[self._cur_at:], "write_eio")
+        n = self._os_write(f.data[self._cur_at:], "write_eio", f)
         if not n:
             return False
         self.judged[seq], self.last_write_ns[seq] = judged_ns, entry

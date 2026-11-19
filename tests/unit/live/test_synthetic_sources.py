@@ -37,7 +37,7 @@ def test_scans_come_every_100_ms_with_the_box_at_its_range():
     out = sc.scans(START + 100 * MS)
     assert len(out) == 1
     scan = out[0]
-    assert scan.sensor == "lidar" and scan.last_s == pytest.approx(0.1) and scan.first_s == pytest.approx(0.0)
+    assert scan.sensor == "lidar" and scan.last_s == pytest.approx(0.1) and scan.first_s == pytest.approx(0.0, abs=1e-9)
     front = abs(scan.angles_rad).argmin()
     assert scan.ranges_m[front] == pytest.approx(2.7, abs=0.02)  # the box's near face 3.0 - 0.3
 
@@ -90,3 +90,23 @@ def test_the_imu_reads_gravity_every_5_ms_up_to_the_asked_instant():
     assert len(out) == 4 and all(abs(a[2] - 9.81) < 0.2 for _, a in out)
     tr.hil_plant = False
     assert imu.samples(START + 40 * MS, 64) == []
+
+
+def test_a_late_call_takes_one_scan_at_the_call_with_its_pose_and_mount():
+    tr = transport()
+    pose = {"p": (0.0, 0.0, 0.0)}
+    sc = ss.SyntheticScan(tr, Client.HIL, START, odom_pose=lambda: pose["p"], boxes=((3.0, 0.0, 0.3, 0.2),),
+                          mount=(0.5, 0.0, 0.0))
+    sc.scans(START)
+    pose["p"] = (1.0, 0.0, 0.0)
+    out = sc.scans(START + 350 * MS)  # three periods late
+    assert len(out) == 1 and out[0].last_s == pytest.approx(0.35)
+    front = abs(out[0].angles_rad).argmin()
+    assert out[0].ranges_m[front] == pytest.approx(3.0 - 0.3 - 1.0 - 0.5, abs=0.02)  # pose at the call, mount added
+
+
+def test_a_beam_with_no_return_is_a_valid_inf():
+    sc = scan_source(transport(), boxes=())
+    sc.scans(START)
+    scan = sc.scans(START + 100 * MS)[0]
+    assert scan.valid.all() and (scan.ranges_m == float("inf")).all()
