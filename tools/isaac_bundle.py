@@ -531,6 +531,18 @@ def scene_digest(raw) -> str | None:
     return _sha256_file(os.path.join(os.path.realpath(folder), name))
 
 
+def last_option_value(words, option) -> str | None:
+    """The value argparse would take for ``option`` from these argument words (one per line, as the launchers print
+    them): the last ``option VALUE`` or ``option=VALUE``."""
+    value = None
+    for i, w in enumerate(words):
+        if w == option and i + 1 < len(words):
+            value = words[i + 1]
+        elif w.startswith(option + "="):
+            value = w[len(option) + 1:]
+    return value
+
+
 def input_digest(key) -> str | None:
     return scene_digest(key[len(SCENE_KEY):]) if key.startswith(SCENE_KEY) else _sha256_file(key)
 
@@ -787,10 +799,14 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
         candidates = scene_candidates(r)
-        if candidates and "--scene-file" in args:
-            # the file the launch chose must be one the proof hashes (its candidates, read the same way)
-            chosen = os.path.realpath(args[args.index("--scene-file") + 1])
-            if chosen not in {os.path.join(os.path.realpath(os.path.dirname(c)), os.path.basename(c)) for c in candidates}:
+        chosen = last_option_value(lines[lines.index("RUNNER_ARGS") + 1:], "--scene-file")
+        if candidates and chosen is not None:
+            # the file the launch chose must be one the proof hashes: both read as scene_digest reads them (the folder
+            # resolved, the name kept), the runner's value the last one given
+            def as_read(path):
+                return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+
+            if as_read(chosen) not in {as_read(c) for c in candidates}:
                 problems.append(f"{r.name}: the DRY_RUN chose {chosen}, not one of the scene files the proof covers")
     return problems
 

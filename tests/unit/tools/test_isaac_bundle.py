@@ -2273,3 +2273,24 @@ def test_a_custom_scene_names_marker_copy_is_a_candidate_and_the_chosen_file_mus
                      env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2_rack"}, retry_move=[str(out)])
         problems = ib.check_runs([run], tmp_path / "runner.py")
         assert (problems == []) is ok, problems
+
+
+def test_the_chosen_scene_file_is_read_like_the_candidates_one_argument_per_line_the_last_value(tmp_path):
+    # Codex round 11: a scene file that is a link, a path with a space, --scene-file=..., and a repeated option
+    assert ib.last_option_value(["--scene-file", "a", "--x", "--scene-file=b"], "--scene-file") == "b"
+    assert ib.last_option_value(["--scene-file=b", "--scene-file", "a b"], "--scene-file") == "a b"
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    scenes = tmp_path / "my scenes"
+    scenes.mkdir()
+    (tmp_path / "real.json").write_text("{}")
+    (scenes / "line_2_m.json").symlink_to(tmp_path / "real.json")
+    cases = ((f'echo --scene-file; echo "{scenes}/line_2_m.json"', True),
+             (f'echo --scene-file="{scenes}/line_2_m.json"', True),
+             (f'echo --scene-file; echo "{scenes}/line_2_m.json"; echo --scene-file=/outside.json', False))
+    for n, (lines, ok) in enumerate(cases):
+        (tmp_path / "f.sh").write_text(f'# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n{lines}\necho ARGS_OK\n')
+        out = tmp_path / f"o{n}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": str(scenes), "SCENE": "line_2"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, (n, problems)
