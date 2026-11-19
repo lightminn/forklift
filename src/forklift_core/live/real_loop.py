@@ -1486,11 +1486,7 @@ class RealLoop:
         kappa = float(self.kin.held_curvature((self._measured_steering() or 0.0,)) or 0.0)
         obstacle_hold = False
         if (not paused_ and core.obstacle is not None and ms.phase in core.trackers and not plan_wait_
-                and (requested_speed != 0.0 or abs(self.speed.signed_mps) > 0.05 or (
-                    # 5d (design 7.1 5): under a pocket check (the bypass check too) a remaining output or a possible
-                    # motion is asked about even with no request
-                    core.pocket.get("check") is not None
-                    and (bool(core.state.get("outstanding_motion")) or self.speed.bound_mps > 0.0)))):
+                and self._permission_needed(requested_speed)):
             perm_ = core.permission(t, rear, kappa, requested_speed, False, None)
             requested_speed, obstacle_hold = perm_.requested_speed, perm_.obstacle_hold
         elif (plan_wait_ or paused_) and core.obstacle is not None and not paused_:
@@ -1583,6 +1579,15 @@ class RealLoop:
         if h and abs(h[-1][0] - stamp) < 1e-9 and h[-1][2] and h[-1][4] is not None:
             return h[-1][1], h[-1][3], rate(len(h) - 2), float(h[-1][4])
         return None
+
+    def _permission_needed(self, requested_speed: float) -> bool:
+        """Whether this tick asks the permission (4c: a request, or a measured speed over 0.05 m/s); 5d (design 7.1 5):
+        under a pocket check (the bypass check too) also a remaining output or a possible motion with no request."""
+        if requested_speed != 0.0 or abs(self.speed.signed_mps) > 0.05:
+            return True
+        core = self.core
+        return core.pocket.get("check") is not None and (
+            bool(core.state.get("outstanding_motion")) or self.speed.bound_mps > 0.0)
 
     def _unsupported(self) -> str | None:
         core = self.core

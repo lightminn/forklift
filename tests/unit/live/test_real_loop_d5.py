@@ -279,7 +279,9 @@ def test_the_bypass_runs_through_the_s10_stop_on_the_real_layer():
     assert r.core.obstacle["layer"].exempt is None
 
 
-def test_an_obstacle_outside_the_region_blocks_the_bypassed_approach():
+def test_an_obstacle_beside_the_truck_outside_the_region_stops_the_bypassed_approach():
+    """In this rig the truck's front is already inside the region at the stand, so an outside obstacle in its way is at
+    its body and blocks both ways; the requested-direction-only case is the core test below."""
     r = bypass_rig(real_layer=True)
     written = written_speeds(r)
     submit(r)
@@ -357,3 +359,86 @@ def test_a_continuation_past_its_decision_plus_w_is_link_stuck():
     rec = r.tick()
     r.tick_cost_ns = 0
     assert "link_stuck" in (rec.reason or "") and r.transport.resyncs == 1
+
+
+# --- impl round 2 ---------------------------------------------------------------------------------------------------
+def test_the_permission_is_asked_with_no_request_under_a_pocket_check():
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    r = Rig(frames=True)
+    loop, core = r.loop, r.core
+    core.pocket["check"] = DirCheck()
+    core.state.pop("outstanding_motion", None)
+    loop.speed = SafetySpeed(0.0, 0.0, (1,), valid=True)
+    assert loop._permission_needed(0.0) is False  # nothing may move
+    core.state["outstanding_motion"] = {1: 0.03}  # an unconfirmed output only
+    assert loop._permission_needed(0.0) is True
+    core.state.pop("outstanding_motion")
+    loop.speed = SafetySpeed(0.0, 0.02, (1, -1), valid=True)  # the encoder's bound only, below 0.05 m/s
+    assert loop._permission_needed(0.0) is True
+    core.pocket["check"] = None
+    assert loop._permission_needed(0.0) is False  # 4c's rule outside a pocket check
+
+
+def test_layer_evidence_expiring_between_t_and_t_plus_w_is_refused_at_the_evidence_instant():
+    """Mid-approach, the scans stop (the deadlines kept quiet so the evidence's own age is what is judged): there is
+    a tick where the layer allows at t and refuses at t + W -- the real permission asks at t + W."""
+    r = Rig(frames=True, real_layer=True)
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and r.core.ms.phase == "approach", 6000)
+    r.tick(20)
+    r.scan_on = False
+    lay = r.layer
+    lay.watchdog = lambda now_s: None
+    found = None
+    for _ in range(60):
+        t = r.loop._t(r.now)
+        kw = dict(current_pose=tuple(r.loop.odom_pose), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.06)
+        at_t = lay.limit(t, **kw)
+        at_w = lay.limit(t, evidence_s=t + MissionCore.WRITE_MARGIN_S, **kw)
+        if at_t[0] > 0.0 and at_w[0] == 0.0:
+            found = (at_t, at_w)
+            break
+        r.tick()
+    assert found is not None, "no instant with the evidence valid at t and not at t + W"
+
+
+def test_voxels_expiring_between_t_and_t_plus_w_hold_that_tick():
+    class Expiring(DirCheck):
+        until = math.inf
+
+        def limit(self, now_s, rear, kappa, direction, speed, lift):
+            self.calls.append((float(now_s), int(direction), float(speed)))
+            return (math.inf, "ok") if now_s < self.until else (0.0, "pocket_unverified")
+
+    check = Expiring()
+    r = Rig(frames=True, check=check)
+    r.start()
+    written = written_speeds(r)
+    r.submit()
+    # mid-insert, driving: the last query was this tick's, forward at a speed well above zero
+    run_until(r, lambda rec: r.core.ms.phase == "insert" and check.calls
+              and check.calls[-1][0] == pytest.approx(r.loop._t(r.now) + MissionCore.WRITE_MARGIN_S)
+              and check.calls[-1][2] > 0.03, 8000)
+    t_next = r.loop._t(r.now + r.step_ns)
+    check.until = t_next + MissionCore.WRITE_MARGIN_S / 2  # valid at the next tick's t, expired at its t + W
+    n = len([v for _, v in written if v])
+    rec = r.tick()
+    assert rec.branch == "wait" and "pocket_unverified" in (rec.reason or "")
+    assert len([v for _, v in written if v]) == n
+
+
+def test_only_the_requested_direction_blocked_outside_the_region_holds_under_the_bypass():
+    from forklift_core.live.real_assembly import BypassPocketCheck
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    from test_core_truth_split import permission_core
+
+    check = BypassPocketCheck((0.0, 0.0), 1.8, 0.8, 0.0)
+    c, layer = permission_core(SafetySpeed(0.0, 0.02, (1, -1)), phase="insert", pocket_check=check, blocked=1)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert out.requested_speed == 0.0 and out.allowed == 0.0 and out.why == "occupied"
+    back = layer.limit(1.0, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=-1, loaded=False,
+                       cap_mps=0.02)
+    assert back[0] >= 0.02  # the other way's possible motion is allowed: only the requested direction blocks
