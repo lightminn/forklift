@@ -23,6 +23,7 @@ from forklift_core.live.real_assembly import freeze_submit, known_request
 from forklift_core.live.real_channels import send_boundary
 from forklift_core.live.real_teleop import counts_still, encoder_speed, real_auto_refusal
 from forklift_core.mcu_link.build_policy import Client
+from forklift_core.mcu_link.messages import FaultFlag, Mode
 from forklift_core.mission.commands import FINAL
 from forklift_core.plant.bringup import Sample
 from forklift_core.plant.mcu_host import McuLinkHost
@@ -35,6 +36,7 @@ SLOW_TICK_S = 0.030  # the tick's own elapsed time before its first write: over 
 LATE_TICK_S = 0.060  # over this (or the start interval), the emergency branch
 SLOW_STARTS = 3  # this many start intervals over SLOW_TICK_S in a row: the emergency branch
 MAX_STATES_PER_TICK = 64
+ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R  # contract 3.3
 SAMPLES_KEPT = 128
 
 
@@ -142,6 +144,8 @@ class RealLoop:
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
         self._console_disarm = False
+        self._odom_broken = False  # a continuity break among this tick's STATEs
+        self._rebooted = False  # a boot change seen (not the first boot)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
 
     def _on_console_disarm(self, now_mono: float) -> None:
@@ -153,12 +157,16 @@ class RealLoop:
                                                                     self.samples[-1].state.mcu_time_us) \
                 and state.boot_id == self.samples[-1].state.boot_id:
             return  # a duplicate (or older) sample of this boot: no second count
+        if self.samples and state.boot_id != self.samples[-1].state.boot_id:
+            self.samples.clear()  # a new boot: the old boot's samples are no evidence of anything now
+            self._rebooted = True
         self.samples.append(Sample(int(rx_ns), state))
         step = self.odometry.update(int(state.mcu_time_us), int(state.boot_id), int(state.wheel_count_left),
-                                    int(state.wheel_count_right), float(state.steering_rad))
+                                    int(state.wheel_count_right), float(state.steering_rad),
+                                    encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
         self.odom_pose = tuple(float(v) for v in step.pose)
-        self.odom_continuous = not step.continuity_broken
         if step.continuity_broken:
+            self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
             self.still_since_ns = None
         self.book.on_state(state, int(rx_ns))
 
@@ -171,12 +179,22 @@ class RealLoop:
         return None if s is None else float(s.steering_rad)
 
     def _still(self, now_ns: int) -> bool:
-        """The still span (design 2.2): a measured stand on new samples, the earlier commands settled, SLAM fresh."""
-        kind, _ = self.port.outstanding(now_ns)
-        standing = counts_still(list(self.samples), self.params) if self.samples else False
-        fresh_slam = self.evidence.slam(now_ns).pose_reply_ns is not None and \
-            now_ns - self.evidence.slam(now_ns).pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
-        still = standing and kind == "settled" and self.odom_continuous and fresh_slam
+        """The still span (design 2.2, 8 축별 정지): the earlier commands settled, then a measured stand on samples
+        measured after that -- taken as received at least the link's latency bound (``state_max_age_s``) after the
+        settlement --, with the link fresh, the speed reading valid, the lift steady over them, the odometry
+        continuous and SLAM fresh."""
+        kind, since = self.port.outstanding(now_ns)
+        standing = False
+        if kind == "settled" and since is not None and self.host.health(now_ns).fresh and self.speed.valid:
+            bound = since + int(self.host.cfg.state_max_age_s * 1e9)
+            after = [x for x in self.samples if x.host_ns >= bound]
+            lifts = [float(x.state.lift_m) for x in after]
+            steady = bool(lifts) and all(math.isfinite(v) for v in lifts) \
+                and max(lifts) - min(lifts) <= self.port.lift_still_m
+            standing = steady and counts_still(after, self.params)
+        sl = self.evidence.slam(now_ns)
+        fresh_slam = sl.pose_reply_ns is not None and now_ns - sl.pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
+        still = standing and self.odom_continuous and fresh_slam
         if not still:
             self.still_since_ns = None
         elif self.still_since_ns is None:
@@ -214,7 +232,17 @@ class RealLoop:
 
     def _head(self, now_ns: int, t: float, interval, rec: TickRecord) -> None:
         core, permit, host = self.core, self.permit, self.host
+        self._odom_broken = False
         self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
+        self.odom_continuous = bool(self.samples) and not self._odom_broken
+        if self._rebooted:
+            # an MCU reboot (design 8 재시작): the position evidence goes too -- relocalize before any submit
+            self._rebooted = False
+            core.require_relocalization(t, "mcu_reboot")
+        if self._odom_broken and permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
+            rec.branch, rec.reason = "emergency", "odometry_break"  # S10-A does not drive across a broken odometry
+            self._emergency(now_ns, "odometry_break")
+            return
         host.tick(now_ns)
         self._bind_permit(now_ns)
         permit.tick(now_ns)

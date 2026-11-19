@@ -153,8 +153,15 @@ class FakeTransport:
     def __init__(self, mcu):
         self.mcu, self.dec, self.last_ns, self.sent = mcu, LinkDecoder(), None, []
         self.refuse_next = 0
+        self.silent = False  # no STATE reaches the host (an RX cut; the MCU keeps running)
 
     def receive(self, host, now_ns, limit=64):
+        if self.silent:
+            steps = 0 if self.last_ns is None else max(0, int((now_ns - self.last_ns) // (10 * MS)))
+            for _ in range(steps):
+                self.mcu.advance(10_000)
+            self.last_ns = now_ns if self.last_ns is None else self.last_ns + steps * 10 * MS
+            return
         steps = 0 if self.last_ns is None else max(0, int((now_ns - self.last_ns) // (10 * MS)))
         self.last_ns = now_ns if self.last_ns is None else self.last_ns + steps * 10 * MS
         for _ in range(min(steps, limit)):

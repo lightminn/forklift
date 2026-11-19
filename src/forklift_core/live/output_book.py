@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from forklift_core.mcu_link.messages import StateFlag
+from forklift_core.mcu_link.messages import Mode, StateFlag
 
 
 @dataclass
@@ -62,6 +62,12 @@ class OutputBook:
     def on_state(self, state, rx_ns: int) -> None:
         """A new STATE: the frame it names, written before it was received, of its boot and arm generation, with its
         command still fresh, becomes the confirmed target; earlier frames are replaced by it."""
+        if state.mode != Mode.ARMED:
+            # not armed (DISARMED, STOPPING, FAULT, ESTOP): no command acts any more and none can be taken until an
+            # ARM, which opens a new arm generation -- nothing recorded here stays confirmed or may act
+            self.dropped += self.frames
+            self.frames, self.confirmed = [], None
+            return
         seq = int(state.last_rx_seq) & 0xFFFF
         fresh = bool(state.flags & StateFlag.COMMAND_FRESH)
         for i, f in enumerate(self.frames):

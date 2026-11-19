@@ -4,7 +4,7 @@ view written from them only."""
 from types import SimpleNamespace
 
 from forklift_core.live.output_book import Frame, OutputBook
-from forklift_core.mcu_link.messages import StateFlag
+from forklift_core.mcu_link.messages import Mode, StateFlag
 
 MS = 1_000_000
 
@@ -13,9 +13,9 @@ def frame(seq, speed, *, expires=100, movable=True, kind="drive"):
     return Frame(seq, 5, 2, expires * MS, speed, 0.0, (0.01,), 0.0, movable, kind, queued_ns=0)
 
 
-def state(seq, *, fresh=True, boot=5, gen=2):
+def state(seq, *, fresh=True, boot=5, gen=2, mode=Mode.ARMED):
     return SimpleNamespace(last_rx_seq=seq, flags=StateFlag.COMMAND_FRESH if fresh else StateFlag(0), boot_id=boot,
-                           arm_gen=gen)
+                           arm_gen=gen, mode=mode)
 
 
 def test_a_frame_is_confirmed_only_when_written_before_the_state_of_its_boot_and_generation_names_it():
@@ -64,3 +64,18 @@ def test_publish_writes_the_confirmed_target_and_the_residuals_never_the_candida
     b.on_state(state(4), 3 * MS)
     b.publish(st, slam, 3 * MS, (0.02,))
     assert st["applied_command"] == (0.1, [0.01]) and st["outstanding_motion"] == {1: 0.1}
+
+
+def test_a_state_not_armed_leaves_nothing_confirmed_or_able_to_act():
+    """Codex impl P2-2: once the MCU reports DISARMED the old target is not published as applied."""
+    b = OutputBook()
+    b.queued(frame(1, 0.1))
+    b.written(1, 1 * MS)
+    b.on_state(state(1), 2 * MS)
+    b.queued(frame(2, 0.1))
+    assert b.confirmed is not None and b.may_act(3 * MS)
+    b.on_state(state(1, fresh=False, mode=Mode.DISARMED), 4 * MS)
+    assert b.confirmed is None and b.may_act(5 * MS) == {}
+    st = {}
+    b.publish(st, None, 5 * MS, (0.02,))
+    assert st["applied_command"] == (0.0, [0.02]) and st["outstanding_motion"] == {}
