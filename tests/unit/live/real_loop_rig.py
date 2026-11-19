@@ -85,6 +85,59 @@ class Tracker:
         return True
 
 
+REAR_OFFSET_M = 0.2  # 5c-2 rigs: a non-zero rear-axle offset (base_link ahead of the rear axle)
+
+
+class FakeSlam:
+    """5c-2 (design 6): the SLAM source's epoch contract. Every ``period_ns`` a processed reply of the current epoch
+    whose first beam is ``lag_ns`` old, with ``correction`` (map <- odom); ``request_processed`` answers the first
+    scan at or after its time; ``relocalize`` keeps the estimate, ``seed`` restarts it at the given base pose."""
+
+    def __init__(self, rig):
+        self.rig, self.epoch, self.correction = rig, 0, (0.0, 0.0, 0.0)
+        self.auto, self.period_ns, self.lag_ns = True, 100 * MS, 0
+        self.status = "processed"  # the auto reply's status ("skipped": a stream without new poses)
+        self.requests, self.calls, self.extra = [], [], []
+        self._next, self._scan = None, 0
+
+    def relocalize(self, epoch):
+        self.calls.append(("relocalize", epoch))
+        self.epoch = epoch
+
+    def seed(self, epoch, base_pose, stamp_s):
+        self.calls.append(("seed", epoch, tuple(base_pose), stamp_s))
+        self.epoch = epoch
+        from forklift_core.localization.slam_pose import compose, invert
+
+        self.correction = tuple(compose(tuple(base_pose), invert(tuple(self.rig.odom_base()))))
+
+    def request_processed(self, epoch, attempt, not_before):
+        self.calls.append(("request_processed", epoch, attempt, not_before))
+        self.requests.append((epoch, attempt, not_before))
+
+    def reply(self, stamp_s, *, status="processed", epoch=None, attempt=None, correction=None, scan_id=None):
+        if scan_id is None:
+            self._scan += 1
+            scan_id = self._scan
+        r = SimpleNamespace(scan_id=scan_id, stamp_s=float(stamp_s), status=status, slam_wall_s=None,
+                            map_from_odom=tuple(self.correction if correction is None else correction),
+                            epoch=self.epoch if epoch is None else epoch, attempt=attempt)
+        return (r, {}, None, None)
+
+    def replies(self, now_ns):
+        t = self.rig.loop._t(now_ns)
+        out, self.extra = list(self.extra), []
+        if self.auto and (self._next is None or now_ns >= self._next):
+            self._next = now_ns + self.period_ns
+            out.append(self.reply(t - self.lag_ns / 1e9, status=self.status))
+        for req in list(self.requests):
+            epoch, attempt, not_before = req
+            if epoch == self.epoch and t >= not_before:
+                self.requests.remove(req)
+                out.append(self.reply(t, attempt=attempt))
+        return sorted(out, key=lambda it: it[0].stamp_s)
+
+
 class Layer:
     known_enabled = False
 
@@ -255,7 +308,7 @@ class FakeImu:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False):
+                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -265,7 +318,15 @@ class Rig:
         self.mcu = FreshMcu()
         self.transport = FakeTransport(self.mcu)
         self.odo = RealOdometry(VEH, max_gap_s=0.2)
-        self.tracker = Tracker()
+        self.reloc = reloc
+        if reloc:
+            from forklift_core.localization.slam_pose import SlamPoseTracker
+
+            # 5c-2: the real tracker, tracking from the start (its first correction: identity)
+            self.tracker = SlamPoseTracker(max_age_s=ra.SLAM_MAX_AGE_S, hold_limit_m=0.3, bootstrap_scan_id=0)
+            self.tracker.receive(0, -1.0, "processed", (0.0, 0.0, 0.0))
+        else:
+            self.tracker = Tracker()
         self.answers = list(operator or [])
         self.frames = frames
         geometry = SyntheticMissionGeometry()
@@ -287,8 +348,17 @@ class Rig:
             q = loop_box["loop"]._measured_steering()
             return (0.0 if q is None else q,)
 
+        def slam_rear(t):
+            if not reloc:
+                return np.asarray(loop_box["loop"].odom_pose, dtype=float)
+            from forklift_core.localization.start_reloc import rear_from_base
+
+            # the real hooks' contract (design 6, 2b): the age and the hold limit not read while the outputs are closed
+            base = self.tracker.map_from_base(t, self.odom_base(), closed=loop_box["loop"].outputs_closed)
+            return np.asarray(rear_from_base(base, REAR_OFFSET_M), dtype=float)
+
         tick = SimpleNamespace(
-            slam_rear=lambda t: np.asarray(loop_box["loop"].odom_pose, dtype=float), speed=speed, steering=steering,
+            slam_rear=slam_rear, speed=speed, steering=steering,
             kinematics=KIN, loaded=lambda: False, cusp_holds=_NullHolds(), cusp_monitor=_cusp_monitor(),
             standing=lambda: bool(loop_box["loop"].core.slam.get("stop_now")),
             now_s=lambda: (self.now - 10_000 * MS) / 1e9)
@@ -336,7 +406,9 @@ class Rig:
                                    worker=StepWorker(), odom_now=lambda: loop_box["loop"].odom_travel)
             self.delay_bound = DelayBound()
 
-        hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m, odom_base=lambda: (0.0, 0.0, 0.0),
+        self._loop_box = loop_box
+        hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m,
+                              odom_base=self.odom_base if reloc else (lambda: (0.0, 0.0, 0.0)),
                               ready=lambda t, inputs: None, started=lambda *a: None, record=lambda *a: None,
                               geometry=geometry, pocket_frame=self._frame, pocket_check=build_check,
                               operator=((lambda r: loop_box["loop"].operator_check(r)) if real_requests
@@ -408,7 +480,8 @@ class Rig:
         self.loop = RealLoop(core=core, session=RealSession(core, self.link), permit=self.permit, port=self.port,
                              host=self.host, link=self.link, channels=self.channels, transport=self.transport,
                              params=params, odometry=self.odo, kinematics=KIN, max_speed_mps=0.15,
-                             start_ns=10_000 * MS, slam_source=SimpleNamespace(replies=lambda n: []),
+                             start_ns=10_000 * MS,
+                             slam_source=FakeSlam(self) if reloc else SimpleNamespace(replies=lambda n: []),
                              evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
                              depth_source=SimpleNamespace(frames=self._depth_frames),
                              clock=lambda: self.now + self.tick_cost_ns,
@@ -416,7 +489,10 @@ class Rig:
                              state_delay_s=0.05, pallet_size=(0.6, 0.4),
                              kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m),
                              operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
+                             **({"start_rear": tuple(base_cfg.start_rear), "rear_offset_m": REAR_OFFSET_M}
+                                if reloc else {}),
                              **self._watch_args(watch, imu))
+        self.slam = self.loop.slam_source
         loop_box["loop"] = self.loop
         # 5c-2 (design 6, 2b): the arbiter's stop evidence is the physical stand (no SLAM term)
         self.arbiter.stop_evidence = lambda now: self.loop.physical_stop(now)
@@ -443,6 +519,12 @@ class Rig:
         return {} if watch is None else {"watches": asm.Watches(watch, None, "none")}
 
     # --- sources --------------------------------------------------------------------------------------------------
+    def odom_base(self):
+        """5c-2 rigs: odom <- base_link from the raw odometry's rear-axle pose."""
+        from forklift_core.localization.start_reloc import base_from_rear
+
+        return base_from_rear(self._loop_box["loop"].odom_pose, REAR_OFFSET_M)
+
     def _stop_since(self, now_ns):
         return self.loop.rearm_stand(now_ns)  # 5c-2 (design 6, 2b): the MCU sample stand and its boot
 
