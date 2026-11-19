@@ -79,11 +79,14 @@ class RealLink(Link):
         return super().begin(now, feedback)
 
 
-def send_boundary(channels: RealChannels, serial: int, write) -> bool:
-    """One first write under the channels' lock, only when no emergency event came in since ``serial``; False: not
-    tried (judge again before the next attempt)."""
+def send_boundary(channels: RealChannels, serial: int, write, check=None) -> bool:
+    """One first write under the channels' lock, only when no emergency event came in since ``serial`` and ``check()``
+    (read under the same lock, just before the write) passes; False: not tried (judge again before the next
+    attempt)."""
     with channels.lock:
         if channels.emergency_serial != serial:
+            return False
+        if check is not None and not check():
             return False
         write()
         return True

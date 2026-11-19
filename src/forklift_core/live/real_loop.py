@@ -296,9 +296,15 @@ class RealLoop:
             self.samples.clear()
             self._odom_broken = True
             self.still_since_ns = None
-        if self._cut_stuck_write(now_ns):
-            rec.branch, rec.reason = "emergency", "link_stuck"
-            self._emergency(now_ns, "link_stuck")
+        stuck = self._cut_stuck_write(now_ns)
+        if stuck:
+            # the host's and the permit's ticks still run (its DISARM asked again on the new link, its deadline kept)
+            host.tick(now_ns)
+            self._bind_permit(now_ns)
+            permit.tick(now_ns)
+            permit.link_reset(now_ns)
+            rec.branch, rec.reason = "emergency", stuck
+            self._emergency(now_ns, stuck)
             return
         self.odom_continuous = bool(self.samples) and not self._odom_broken
         if self._rebooted:
@@ -383,7 +389,7 @@ class RealLoop:
             if a.mode != "STOPPED":
                 a.stop(now_ns / 1e9, r)
 
-        self.permit.bind(transmit=lambda: self._transmit(now_ns), arbiter_stop=arbiter_stop,
+        self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
                          collect=lambda r: self._end_now(now_ns, r))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
@@ -718,7 +724,7 @@ class RealLoop:
         self._candidate = None
         self._transmit(now_ns)
 
-    def _cut_stuck_write(self, now_ns: int) -> bool:
+    def _cut_stuck_write(self, now_ns: int):
         """A frame started and not finished by its own expiry (design 8), read on the clock (round 3 P1-2): the link
         is lost -- closed and reopened (the half frame abandoned, never finished), the stop left to the MCU's command
         expiry meanwhile, the first frame after it the DISARM. True when it cut."""
@@ -730,9 +736,12 @@ class RealLoop:
         elif stuck is not None:
             deadline = int(stuck) + int(DRIVE_LIFE_S * 1e9)
         if deadline is None or int(self.clock()) < deadline:
-            return False
-        self.transport.resync(self.host, now_ns)
-        return True
+            return None
+        try:
+            self.transport.resync(self.host, now_ns)
+        except Exception as exc:  # noqa: BLE001 -- still stuck: judged again next tick, the permit still ticking
+            return f"link_stuck:resync_failed:{type(exc).__name__}"
+        return "link_stuck"
 
     def _lease_valid(self, ns: int) -> bool:
         """The operator's lease still held at ``ns`` by the arbiter's own expiry rule (a lease the next ``begin`` would
@@ -767,7 +776,7 @@ class RealLoop:
             return f"hold:{hold}"  # an unconfirmed output beyond what is allowed: wheels 0 now, its queue dropped
         return getattr(self, "_wait_reason", None)
 
-    def _wait_frame(self, now_ns: int, rec: TickRecord) -> None:
+    def _wait_frame(self, now_ns: int, rec: TickRecord | None) -> None:
         port = self.port
         if self.waiting is None:
             lift, q = self._measured_lift(), self._measured_steering()
@@ -788,7 +797,8 @@ class RealLoop:
         self._book(now_ns, r.seq, 0.0, 0.0, (self.waiting[0],), self.waiting[1],
                    measured is None or abs(self.waiting[1] - measured) > port.lift_still_m, "hold",
                    steer=(self.waiting[0],))
-        rec.seqs.append(r.seq)
+        if rec is not None:
+            rec.seqs.append(r.seq)
 
     def _auto_drive(self, now_ns: int, command_, steer, rec: TickRecord) -> None:
         port, permit = self.port, self.permit
@@ -836,58 +846,98 @@ class RealLoop:
                                now_ns + int(DRIVE_LIFE_S * 1e9), float(speed), float(kappa), tuple(steering),
                                float(lift), bool(movable), kind, queued_ns=int(now_ns)))
 
-    def _transmit(self, now_ns: int) -> None:
-        """Every queued frame through the send boundary: the transport calls ``gate(frame, write)`` for each and the
-        write happens inside it -- a motion frame under the channels' lock only when no emergency came in since this
-        tick's batch, a DISARM always; written frames reported to the permit and the record."""
+    def _transmit(self, now_ns: int, *, escalate: bool = True) -> None:
+        """Every queued frame through the send boundary (design 2.5 5, 5, 8). The transport calls ``gate(frame, write)``
+        for each frame's first byte and again before it continues a frame it started; the write happens inside it.
+        A DISARM always passes. Any other frame (ARM, the host's zero, a loop DRIVE, S10's stop) is judged under the
+        channels' lock just before its write (Codex 4c impl round 4 P1-3): no emergency event since this tick's batch,
+        the arbiter not STOPPED, the tick's time, its own expiry, the measurement, readiness, the lease by its expiry
+        rule and the authority it was decided under. Once any of those fails, no other frame of this call moves
+        (round 4 P1-1); a failure of the authority or the evidence is ① in this very tick, its DISARM written first
+        (the latch drops the queue); a new wait reason, or 30 ms passed, turns a normal moving DRIVE into ③. The
+        permit's own transmits (``escalate=False``) never come back to ①."""
         motion = motion_allowed(self.transport)
-        a = self.link.a
-        refused = []
-        alarm = []
-        if self._cut_stuck_write(now_ns):
-            alarm.append("link_stuck")
+        a, permit = self.link.a, self.permit
+        refused, alarm, waits = [], [], []
+        authority = (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING)
+        can_escalate = escalate and not self._in_transmit
 
-        def first_byte_refusal(frame) -> str | None:
-            """Everything a non-DISARM frame (ARM, the host's zero, a loop DRIVE, S10's stop) needs at its first byte,
-            read on the clock (round 3 P1-1): its own expiry, the tick's time, the measurement, the readiness, the
-            lease by its expiry rule and the authority it was decided under."""
+        def escalate_now(reason: str) -> None:
+            if can_escalate and permit.state in authority:
+                self._in_transmit = True
+                try:
+                    self._emergency(now_ns, f"first_byte:{reason}")
+                finally:
+                    self._in_transmit = False
+
+        stuck = self._cut_stuck_write(now_ns)
+        if stuck:
+            alarm.append(stuck)
+            permit.link_reset(now_ns)
+            escalate_now(stuck)  # the DISARM queued (and the queue dropped) before anything else is sent
+
+        def judge(frame) -> tuple:
+            """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop."""
             ns = int(self.clock())
             if a.mode == "STOPPED":
-                return "stopped"
+                return "stopped", "alarm"
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
-                return "tick_late"  # first: a late tick is ① whatever its frame (design 3)
+                return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
             expires = getattr(frame, "expires_ns", None)
             if expires is not None and ns >= int(expires):
-                return "expired"  # an old frame left in the queue: dropped, no alarm by itself
+                return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             if not self.host.health(ns).fresh:
-                return "measurement_stale"
+                return "measurement_stale", "alarm"
             why = ra.auto_ready_refusal(ns, "drive", self.evidence)
             if why is not None and ra.latches(why):
-                return f"send:{why}"
+                return f"send:{why}", "alarm"
             if not self._lease_valid(ns):
-                return "lease_expired"
-            bound = self._binding.get(int(frame.seq) & 0xFFFF)
+                return "lease_expired", "alarm"
+            seq = int(frame.seq) & 0xFFFF
+            bound = self._binding.get(seq)
             if bound is not None and bound != (None if a.lease is None else a.lease.lease_id, a.control_gen):
-                return "authority_changed"
-            return None
+                return "authority_changed", "alarm"
+            booked = next((f for f in self.book.frames if f.seq == seq), None)
+            if booked is not None and booked.kind == "drive" and booked.movable:
+                # a normal moving DRIVE: a wait reason that came up since the decision, or 30 ms spent (round 4 P1-4)
+                if why is not None:
+                    return why, "wait"
+                if (ns - now_ns) / 1e9 > SLOW_TICK_S:
+                    return "tick_slow", "wait"
+            return None, None
 
         def gate(frame, write) -> bool:
             if frame.kind == "DISARM":
                 write()
                 return True
-            if not motion:
-                refused.append((frame.kind, frame.seq))
-                return False  # the device block: nothing but a DISARM on an operating transport
-            why = first_byte_refusal(frame)
-            ok = why is None and send_boundary(self.channels, self.serial, write)
+            continuing = frame is getattr(self.transport, "partial_frame", None)
+            if not motion or alarm:
+                verdict = ("device_block" if not motion else "after_alarm", "drop")
+                ok = False
+            else:
+                verdict = None
+
+                def check() -> bool:
+                    nonlocal verdict
+                    verdict = judge(frame)
+                    return verdict[0] is None
+
+                ok = send_boundary(self.channels, self.serial, write, check=check)
+                if not ok and verdict is None:
+                    verdict = ("emergency_event", "alarm")  # a STOP, DISARM or (re)connect since the batch (P2-3)
             if not ok:
                 refused.append((frame.kind, frame.seq))
-                if why is not None and why != "expired":
+                why, cls = verdict
+                if continuing:
+                    alarm.append("link_stuck")  # a half frame not finished: the transport abandons it (link reset)
+                elif cls == "alarm":
                     alarm.append(why)
+                elif cls == "wait":
+                    waits.append(why)
             return ok
 
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
-            self.permit.written(kind, seq, written_ns)
+            permit.written(kind, seq, written_ns)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)
                 steer = self._steer_of.get(int(seq) & 0xFFFF)
@@ -896,16 +946,20 @@ class RealLoop:
         for kind, seq in refused:
             if kind == "DRIVE":
                 self.book.discarded(seq)
-                self.permit.stop_discarded(now_ns, seq)
+                permit.stop_discarded(now_ns, seq)
                 self.steering_command = None  # an unwritten candidate is never the next slew's start
-        if alarm and not self._in_transmit and self.permit.state in (
-                ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
-            # the authority or the evidence failed at the first byte: the same tick DISARMs (not left DRIVING)
+        if "link_stuck" in alarm and not stuck:
+            permit.link_reset(now_ns)
+        if alarm and not stuck:
+            escalate_now(alarm[0])
+        elif waits and can_escalate and permit.state in (ra.READY, ra.DRIVING):
+            # ③ in place of the normal candidate: the wait frame (a new generation drops the old queue), once
             self._in_transmit = True
             try:
-                self._emergency(now_ns, f"first_byte:{alarm[0]}")
+                self._wait_frame(now_ns, None)
             finally:
                 self._in_transmit = False
+            self._transmit(now_ns)  # a hold frame never turns into a wait again; its own failure is still ①
 
 
 __all__ = ["RealLoop", "RealSession", "TickRecord", "motion_allowed", "real_host"]

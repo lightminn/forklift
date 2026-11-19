@@ -224,6 +224,14 @@ class AutoPermit:
         if self.state == STOP_PENDING and self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
             self._disarm(now_ns, "control_stop_discarded")
 
+    def link_reset(self, now_ns: int) -> None:
+        """The link was closed and reopened (a stuck write abandoned): an unanswered DISARM is asked again at once on
+        the new link -- its episode's first ask, and so its deadline, kept."""
+        if self._disarm_first_ns is not None and not self._disarmed_after_write(now_ns):
+            self.host.request_disarm(now_ns)
+            self._asked_disarm(now_ns)
+            self._note(now_ns, "disarm_relink")
+
     def _asked_disarm(self, now_ns: int) -> None:
         """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept."""
         self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None

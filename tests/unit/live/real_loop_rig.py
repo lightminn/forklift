@@ -173,6 +173,7 @@ class FakeTransport:
     stall = False  # the device takes a frame's first bytes and then nothing (EAGAIN until it is reopened)
     _cur = None  # the frame being written
     partial_since_ns = None  # when the frame being written started (the loop's stuck-write evidence)
+    before_continue = None  # a hook run just before a started frame is continued (timing injection)
     resyncs = 0
 
     def transmit(self, host, now_ns, gate):
@@ -180,9 +181,18 @@ class FakeTransport:
         if self._cur is not None:
             if self.stall:
                 return out  # nothing more goes out, a DISARM included
-            f, self._cur, self.partial_since_ns = self._cur, None, None
-            self._deliver(host, f, now_ns)
-            out.append((f.kind, f.seq, now_ns))
+            f = self._cur
+
+            def finish(f=f):
+                self._cur, self.partial_since_ns = None, None
+                self._deliver(host, f, now_ns)
+
+            if self.before_continue is not None:
+                self.before_continue()
+            if gate(f, finish):  # a started frame passes the gate again before it is finished (the loop's contract)
+                out.append((f.kind, f.seq, now_ns))
+            else:
+                self.resync(host, now_ns)  # refused half frame: abandoned, the link reopened
         while (f := host.next_frame(now_ns)) is not None:
             def write(f=f):
                 if self.stall:
