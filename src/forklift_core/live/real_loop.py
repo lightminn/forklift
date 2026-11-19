@@ -216,6 +216,7 @@ class RealLoop:
         self.bypass_events: list = []
         if getattr(link.a.config, "real_requests", False):
             link.a.real_request = self._real_request
+            link.a.real_rejected = self._real_rejected  # the arbiter's own refusals of them too (r5 P3-2)
         self._rebooted = False  # a boot change seen (not the first boot)
         self._disconnects = host.disconnects  # the host's device losses seen so far
         self._last_seen = None  # the newest STATE's (boot, MCU time)
@@ -247,11 +248,11 @@ class RealLoop:
             self.bypass.clear()
             self._bypass_pending.clear()
         for check, on, lease_id in self._bypass_pending:
-            why = self._bypass_refusal(lease_id)
+            why = self._bypass_refusal(lease_id, now_ns)
             if why is not None:
                 # still off, no mission, the same lease -- else not applied (r4 P1, P2-1); real_status shows the set
                 self.bypass_events.append({"ns": int(now_ns), "event": f"bypass_dropped:{why}", "check": check,
-                                           "lease_id": lease_id})
+                                           "on": bool(on), "lease_id": lease_id})
                 continue
             if on:
                 self.bypass.add(check)
@@ -269,8 +270,9 @@ class RealLoop:
 
     MISSION_ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering")
 
-    def _bypass_refusal(self, lease_id) -> str | None:
-        """A bypass toggle needs the truck disarmed, no mission under way and the lease that asked (5c-1 r1 P1, r4)."""
+    def _bypass_refusal(self, lease_id, now_ns: int | None = None) -> str | None:
+        """A bypass toggle needs the truck disarmed, no mission under way and the lease that asked -- not expired by
+        the arbiter's own rule and its holder's connection not being closed (5c-1 r1 P1, r4, r5 P2)."""
         if self.permit.state not in (ra.OFF, ra.LATCHED):
             return "armed"
         if self.core.commands.status in self.MISSION_ACTIVE:
@@ -278,7 +280,17 @@ class RealLoop:
         lease = self.link.a.lease
         if lease is None or lease.lease_id != lease_id:
             return "lease_changed"
+        if now_ns is not None and not self._lease_valid(int(now_ns)):
+            return "lease_changed"
+        with self.channels.lock:
+            closing = any(ev[0] == "disconnect" and ev[2] == lease.client_id
+                          for ev in list(getattr(self.channels, "_conns", ())))
+        if closing:
+            return "lease_changed"
         return None
+
+    def _real_rejected(self, kind: str, reason: str) -> None:
+        self.last_refusal = {"kind": kind, "reason": reason}
 
     def _real_request(self, kind: str, msg: dict, now_mono: float):
         """The arbiter's real requests after its checks (design 5): (refusal reason or None, reply fields)."""

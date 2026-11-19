@@ -187,3 +187,31 @@ def test_a_disarm_answer_from_another_boot_is_not_confirmed():
     loop = r.loop
     r.permit.disarm_boot = (r.permit.disarm_boot or 0) + 1
     assert not loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
+
+
+def test_a_pending_bypass_is_dropped_when_the_lease_expires_or_its_connection_closes():
+    """5c-1 r5 P2: the arbiter's own expiry and a pending disconnect of the holder count before the tick head."""
+    r = rig()
+    ask(r, "check_bypass", check="imu", on=True)
+    lease = r.arbiter.lease
+    lease.renewed_mono -= 100.0  # expired by the arbiter's rule before the next tick head
+    r.echo = False
+    r.tick()
+    assert "imu" not in r.loop.bypass
+    assert any(e["event"] == "bypass_dropped:lease_changed" and e["on"] is True for e in r.loop.bypass_events)
+    r2 = rig()
+    r2.say("check_bypass", check="imu", on=True)
+    r2.tick()  # taken; applied at the next head
+    r2.channels.disconnect("c1", "op")  # the holder's connection closes before that head
+    r2.tick()
+    assert "imu" not in r2.loop.bypass
+
+
+def test_real_status_last_refusal_includes_the_arbiters_own():
+    """5c-1 r5 P3-2."""
+    r = rig()
+    ask(r, "check_bypass", check="stop", on=True)
+    assert r.loop.last_refusal == {"kind": "check_bypass", "reason": "not_bypassable"}
+    reply, _ = ask(r, "check_bypass", check="imu", on=True, control_gen=r.arbiter.control_gen - 1)
+    assert reply["reason"] == "stale_control"
+    assert r.loop.last_refusal == {"kind": "check_bypass", "reason": "stale_control"}

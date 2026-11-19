@@ -168,6 +168,7 @@ class Arbiter:
         self.rearm_refusal = None
         # 5c-1: (kind, msg, now) -> (refusal reason or None, reply fields), set by the real loop (real_requests on)
         self.real_request = None
+        self.real_rejected = None  # 5c-1: (kind, reason) of every refusal of a real request (real_status's last)
         self.on_rearmed = None
         # docs/design/2026-11-19-real-loop.md 2.1 (the real executor; None: unused): stop_evidence(now) -> (fresh,
         # standing) read inside observe() when config.external_stop; on_disarm(now) told of every DISARM taken
@@ -387,6 +388,9 @@ class Arbiter:
         return self._real("check_bypass", request_id, msg, now_mono)
 
     def _reply(self, kind: str, request_id, reason: str | None = None, **fields) -> dict:
+        if (reason is not None and self.config.real_requests and self.real_rejected is not None
+                and kind in REAL_LEASED + ("recovery",)):
+            self.real_rejected(kind, reason)
         reply = {"t": "ack" if reason is None else "reject", "of": kind, "request_id": request_id}
         if reason is not None:
             reply["reason"] = reason
