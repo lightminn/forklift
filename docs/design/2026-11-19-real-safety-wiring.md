@@ -27,7 +27,8 @@
 |---|---|---|
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
 | 5b | 4 | **수렴**(19판, Codex 9 회차) |
-| 5c | 5, 6 | **미수렴 — 5c 에 들어갈 때 이 절만 검토** |
+| 5c-1 | 5 | **검토 중**(20판) — 머지는 11-20 보드 확인 뒤 |
+| 5c-2 | 6 | **미수렴 — 5c-2 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
 '가장 새 DRIVE 하나' 규칙(3 절)은 4c 의 빈틈이라 **단독 수정 PR**(`fix/real-loop-newest-drive`)로 먼저 머지한다(총괄): 미송신 옛 DRIVE 를 버린다. **반쯤 쓴 옛 DRIVE**(7 회차 P1)는 그 PR 에서 뺐다 — 반쪽을 버리는 재동기화가 실 TTY 에서는 구분자 `0x00` 으로 그 반쪽을 오히려 완성할 수 있고(그 PR 의 Codex 검토), 대기 프레임 경로도 같이 봐야 해서 **실 전송기 계약과 함께 6a** 에서 닫는다. 4c 운영 전송기는 DISARM 만 쓰므로 그동안 실차 경로는 없다. 실차 경계의 세부는 각 단계와 S10 선행 조건에서 닫는다 — 실 MCU AUTO 는 여전히 막혀 있다(총괄).
@@ -152,23 +153,63 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 
 - 임계값(기울기·진동 영향·공백·나이·기준 분산)은 측정 전 잠정값이다(S10 선행 조건, 전제 8).
 
-## 5. 콘솔
+## 5. 콘솔 (5c-1)
 
-> **미수렴**: 이 절은 해당 단계에 들어갈 때 그 절만 다시 검토받는다(총괄 2026-11-19). 7 회차까지의 지적은 반영돼 있으나 수렴 판정을 받지 않았다.
+> **5c-1 검토 중**(20판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19: 5c 를 5c-1 = 5 절, 5c-2 = 6 절로 나눔). 중재기·`validate` 는 텔레옵 브리지의 import 경로라 **머지는 11-20 보드 확인 뒤**(총괄).
 
-4b·4c 에서 lease·STOP·DISARM·재무장 정책은 끝났다. 실차에서 콘솔로 끝까지 가려면 요청이 더 있어야 한다(적대 1 회차 P2-3, 2 회차 P2-5). 중재기 설정 `real_requests=False`(기본)에서는 **새 요청 이름을 신뢰 요청으로 분류하지도 않는다** — 지금처럼 응답 없이 끝나고, `recovery` 는 지금처럼 `unsupported` 다(2 회차 P3). 실차에서만 lease·세션·제어 세대 검사 뒤 루프 콜백으로 넘긴다:
+4b·4c 에서 lease·STOP·DISARM·재무장 정책은 끝났다. 실차에서 콘솔로 끝까지 가려면 요청이 더 있어야 한다(적대 1 회차 P2-3, 2 회차 P2-5).
 
-| 요청 | 페이로드 | 루프 처리 |
+**중재기**(`src/forklift_core/safety/arbiter.py`, 공유 — 기본값 불변):
+- `ArbiterConfig.real_requests: bool = False`. `False` 면 지금과 **같다**: 새 요청 이름은 신뢰 요청(`RELIABLE`)이 아니라 지금처럼 응답 없이 끝나고, `recovery` 는 지금처럼 `unsupported` 다(2 회차 P3).
+- `True`(실차 설정만): `REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass")` 를 신뢰·lease 요청으로 다루고(세션·lease·제어 세대 검사, 요청 저장·원장, `session_ending` 등 기존 순서 그대로), 처리기는 `Arbiter.real_request(kind, msg, now)` 콜백(루프가 설정)을 불러 그 답 `(사유 | None, 필드)` 를 ack/reject 로 돌려준다. `recovery` 도 같은 콜백으로 간다(5c-1 은 `action: "done"` 만). 콜백이 없으면 `unsupported`.
+- `validate.problem` 에 새 요청의 형식만 더한다(그 이름의 메시지에만 걸림 — Isaac 에서는 그 이름이 어차피 신뢰 요청이 아니라 결과가 같다): `pallet_register` = `pallet_id` 비지 않은 문자열·`pose` 유한한 수 셋; `operator_start` = `session_epoch` 정수; `operator_answer` = `kind` 문자열·`serial` 정수(불리언 아님)·`verdict ∈ {confirm, reject}`; `recovery` = `recovery_id` 정수·`action == "done"`; `check_bypass` = `check` 문자열·`on` 불리언.
+
+**루프의 처리**(`RealLoop._real_request`, 콘솔 주기 안 — 4c 루프 스레드, 틱 머리):
+
+| 요청 | 처리 | 거절 사유 |
 |---|---|---|
-| `pallet_register` | `pallet_id`, `pose` | `register_pallet` → 응답에 새 `targets_revision` |
-| `operator_start` | `session_epoch` | `OperatorStart.confirm(epoch, lease)`; lease 변경·움직임·링크 상실·복구가 무효화(4b) |
-| `recovery` | `recovery_id`, `action: "done"` | 6 절 1 |
-| `relocalize_confirm` | `generation` | 6 절 3 |
-| `operator_answer` | `kind`, `serial`, `verdict` | 코어 운용자 확인(`_operator_gate`, S10-A 의 `lifted`)의 답 — 루프의 `operator` 훅이 지금 요청의 일련번호에 맞는 답만 돌려준다 |
+| `pallet_register{pallet_id, pose}` | `register_pallet` → ack 에 새 `targets_revision` | 진행 중 미션(`accepted`…`resuming`·`held`) `mission_active` |
+| `operator_start{session_epoch}` | `OperatorStart.confirm(epoch, 지금 lease)` | 세션 다름 `stale_session`; 무장 중(허가가 OFF·LATCHED 아님) `armed` |
+| `operator_answer{kind, serial, verdict}` | 루프가 `(serial, verdict)` 를 답 상자에 둔다 → 코어 운용자 훅(`operator_check`)이 다음 판정에서 읽고, 지금 요청의 `kind`·`serial` 이 맞을 때만 쓴다(코어 규칙 그대로) | 열린 확인 요청 없음 `no_operator_request`; `kind`·`serial` 다름 `stale_operator_request` |
+| `recovery{recovery_id, action:"done"}` | `core.field_recovery_done(t, id, disarmed=허가.disarm_confirmed(now), outstanding=포트 outstanding ≠ settled)` → 받아들이면 재위치 세대가 열림(이후는 5c-2) | 코어의 거절 사유 그대로(`no_open_recovery`·`stale_recovery`·`mission_active`·`not_disarmed`·`commands_outstanding`) |
 
-**상태 발행**: 실차 상태 메시지(`safety/state.py` 의 실차 부분)에 지금 운용자 확인 요청(`kind`·`serial`), 열린 현장 복구 ID, 열린 재위치 세대, 마지막 거절 사유를 더한다. Isaac 상태는 그대로(실차 필드는 실차 설정에서만).
+| `check_bypass{check, on}` | 아래 **검사 우회**: 우회 집합에 넣거나 뺀다, 기록 | 우회할 수 없는 검사 `not_bypassable`; 모르는 이름 `unknown_check` |
 
-통합 시험(4c 가짜 트럭 확장, `operator_start_ok`·가짜 운용자 훅 주입 대신 실제 요청): lease → 등록 → 시작 확인 → 제출 → 채택·무장 → AUTO → 운반 높이 → 상태 메시지의 확인 요청 → `operator_answer` → S10 정지; STOP·DISARM·센서 무효(스캔·IMU·SLAM) 각각 뒤 금지 명령(비영 DRIVE·ARM) 0 건; 입력만 돌아와서는 재개 없음; lease 만료 뒤 재무장까지.
+- `AutoPermit.disarm_confirmed(now_ns)`: 기다리는 DISARM 이 없고, 가장 새 DISARM 의 seq 를 담은 **신선한** DISARMED 상태가 있음(적대 P1-6: `disarm_unconfirmed` 플래그는 시한 전까지 거짓이라 쓰지 않음).
+- 운용자 시작 확인의 무효화(움직임·lease 변경·링크 상실·현장 복구)는 4b·4c 그대로; `recovery` 가 받아들여지면 루프가 `OperatorStart.void("field_recovery")`.
+- 코어의 열린 확인 요청은 읽기 전용 접근자 `MissionCore.operator_open()`(종류·일련번호·단계, 없으면 None)로 읽는다 — 코어의 판정·상태는 바꾸지 않는다.
+
+**검사 우회**(사용자 지시 2026-11-19, 총괄 전달: "실제 상황에서는 유동적으로 조절할 일 많을테니까 너무 고정적으로 작동하게 설계하지는 마 … imu체크 부분을 잠깐 내려두고 구동 가능하게"): 실차 검사는 조건이 안 맞을 때 운용자가 콘솔에서 **그 검사를 잠깐 내려 두고** 진행할 수 있다. 검사마다 **켬/우회** 둘뿐이다(학교 규모).
+- 범위는 **세션 한정**: 루프의 우회 집합은 세션이 시작할 때 비어 있고 세션이 끝나면 사라진다. 켜고 끌 때마다 기록(`bypass` 사건: 검사·켬/끔·lease·시각)하고, `real_status` 에 `bypassed: [검사…]` 를 늘 싣는다(콘솔이 '우회 중: <검사>' 를 계속 보임).
+- 우회된 검사는 그 판정을 **통과로 본다**(거부·대기·① 모두 내지 않음). 우회를 켜도 이미 걸린 래치는 그대로이고, 풀려면 재무장(우회할 수 없음)이 필요하다.
+
+| 검사 이름 | 우회 시 건너뛰는 판정 |
+|---|---|
+| `imu` | `ImuWatch` 전체 — ARM 전 기준(`imu_no_baseline`·`imu_not_still`·`imu_baseline_unsteady`·`imu_not_level`, 수평 참조 미측정 포함)과 무장 중 `watch_imu_stale`·`watch_imu_gap`·`watch_imu_moved`·`watch_tilt`(4 절, 5b 소급) |
+| `layer_timing` | 층 마감 `layer_overdue`·`layer_latency_exceeded`, 스캔 신선도 `snapshot:scan_stale`·`layer_ok` 의 스캔 나이(작업자 생존은 아님) |
+| `measurement` | 준비 판정 `measurement:*`(조향·승강·승강 원점·카운트) |
+| `odometry` | 준비 판정 `odometry:cut` |
+| `slam` | 준비 판정 `slam:*`(모드·신선도·hold) |
+| `snapshot` | 준비 판정 `wait:snapshot_installing` 의 보정 세대 일치 |
+| `operator_start` | 제출의 `operator_start:unconfirmed` |
+| `watch_current` / `watch_wheel` | 안전 감시의 전류·바퀴 판정(4c) |
+
+**우회할 수 없는 것**(멈추는 쪽만):
+
+| 항목 | 이유 |
+|---|---|
+| STOP(콘솔·장치), 콘솔 DISARM | 멈추는 명령 자체 |
+| lease 상실·만료 정지, 연결 상실 | 운용자가 없는 차를 움직이지 않음 |
+| 래치 해소 절차(재무장) | 우회도 걸린 래치를 풀지 않음 — 운용자의 명시적 재무장 |
+| MCU 링크 끊김·STATE 신선도(`measurement_stale`·`link:*`)·출력 정체(`link_stuck`)·첫 바이트 읽기 예산 | MCU 와 통하지 않으면 명령이 의미 없음 |
+| 층 작업자 죽음(`layer_worker_dead`)·`obstacle_layer_off` | 층을 쓰지 않으려면 `obstacle_act` 를 끄는 별도 결정(조립)이 필요 |
+| 과속(`overspeed`)·느린 루프(`loop_slow`)·오도메트리 단절의 무장 중 ① | 지금 차가 통제 밖 |
+
+**실차 상태 발행**(4c 루프는 아직 상태 메시지를 내지 않는다): 루프가 `link.state_due(now)` 마다 채널에 `{"t": "real_status", ...}` 를 낸다 — 허가 상태·사유, 미션 상태·ID, 열린 운용자 확인(`kind`·`serial`·`phase`), 열린 현장 복구 ID, 열린 재위치 세대, 운용자 시작 확인 유무, `targets_revision`, 마지막 거절(요청 종류·사유), `bypassed`(우회 중인 검사). `safety/state.py`(텔레옵·Isaac 의 `state`)는 바꾸지 않는다.
+
+**통합 시험**(4c 가짜 트럭 확장, `operator_start_ok`·가짜 운용자 훅 주입 대신 실제 요청): lease → `pallet_register` → `operator_start` → 제출 → 채택·무장 → AUTO → 운반 높이 → `real_status` 의 확인 요청 → `operator_answer` → S10 정지; 각 거절 사유; IMU 기준이 없는(수평 아님) 차가 `check_bypass{imu}` 뒤 출발해 S10 까지, `real_status.bypassed` 표시, 새 세션에서 우회가 사라짐; 우회할 수 없는 이름의 거절; `real_requests=False` 에서 새 이름은 응답 없음·`recovery` 는 `unsupported`(중재기 기존 시험 불변).
+
+STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 만료 뒤 재무장은 4c·5a·5b 시험이 이미 덮는다. 재위치 확인(`relocalize_confirm`)과 상태의 재위치 세부는 5c-2.
 
 ## 6. 재위치 배선
 
