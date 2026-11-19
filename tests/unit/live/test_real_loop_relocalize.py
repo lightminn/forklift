@@ -631,7 +631,8 @@ def test_freshness_is_judged_on_the_clock_at_the_close():
     _before_commit(r, later)
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
     r.tick_cost_ns = 0
-    assert status(r)["state"] == "refused" and status(r)["reason"] in ("relocalize_stale", "relocalize_voided:lease")
+    assert status(r)["state"] == "refused" and status(r)["reason"] in (
+        "relocalize_stale", "relocalize_voided:lease", "relocalize_voided:link")
     assert r.core.relocalize_generation() == gen
 
 
@@ -746,6 +747,38 @@ def test_a_disarm_the_arbiter_refuses_holds_the_close_but_does_not_void_it():
     gen = open_generation(r)
     stand(r)
     ask(r, "relocalize_confirm", generation=gen)
-    _before_commit(r, lambda: r.say("disarm", lease_id="old-lease"))  # refused by the arbiter (stale lease)
+    held = {}
+
+    def inject():
+        held["rid"] = r.say("disarm", lease_id="old-lease")  # the arbiter will refuse it (stale lease)
+        held["tick"] = len(r.loop.records)
+
+    _before_commit(r, inject)
+    run_until(r, lambda rec: "rid" in held, 400)
+    assert status(r)["state"] == "waiting" and r.core.relocalize_generation() == gen  # held while it waits
+    got = []
+    for _ in range(50):
+        r.tick()
+        g, _ = replies(r)
+        got.extend(g)
+        if status(r)["state"] != "waiting":
+            break
+    mine = [m for m in got if m.get("request_id") == held["rid"]]
+    assert mine and mine[0]["t"] == "reject"  # judged (refused) by the arbiter ...
+    assert status(r)["state"] == "confirmed" and r.loop._disarms_taken == 0  # ... and only then the close
+
+
+def test_a_stale_link_at_the_close_voids_the_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+
+    def later():
+        r.tick_cost_ns = 60 * 1_000_000  # the close runs 60 ms after the tick began: the last STATE past 50 ms
+
+    _before_commit(r, later)
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
-    assert status(r)["state"] == "confirmed" and r.loop._disarms_taken == 0  # the DISARM was refused, not taken
+    r.tick_cost_ns = 0
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:link"
+    assert r.core.relocalize_generation() == gen

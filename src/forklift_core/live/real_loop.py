@@ -543,8 +543,8 @@ class RealLoop:
             return "armed", {}
         if self._console_disarm or self._emergency_pending():
             return "emergency_pending", {}  # impl round 4 P1: a DISARM taken in this batch, or a STOP/DISARM queued
-        if self.stand_since_ns is None:
-            return "not_still", {}
+        if self.stand_since_ns is None or not self.host.health(now_ns).fresh:
+            return "not_still", {}  # the stand and its link on the clock now (impl round 5 P1)
         if self.start_rear is None or self.rear_offset_m is None:
             return "no_start_pose", {}
         if self.attempt is not None:
@@ -609,6 +609,8 @@ class RealLoop:
         if self._emergency_pending():
             return "wait"  # a STOP or DISARM waiting: no commit until it is judged (impl round 4 P2)
         why = self._attempt_void(now_ns, t_now)  # the layer's watchdog at the commit's own instant (impl round 3 P1-2)
+        if why is None and not self.host.health(now_ns).fresh:
+            why = "relocalize_voided:link"  # the stand's own evidence on the clock now (impl round 5 P1)
         if why is None and self._bypass_refusal(a["lease_id"], now_ns) is not None:
             why = "relocalize_voided:lease"
         # impl round 2 P1-2/P1-3: the limit, the freshness and the layer on the clock now, not the tick's start
