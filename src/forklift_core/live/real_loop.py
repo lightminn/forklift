@@ -165,7 +165,7 @@ class RealLoop:
         self._disconnects = host.disconnects  # the host's device losses seen so far
         self._last_seen = None  # the newest STATE's (boot, MCU time)
         self._lift_before = None  # the lift target before this tick's ramp
-        self._written_now: set = set()
+        self._written_now: list = []
         self._in_transmit = False
         self._motion_mcu_until: int | None = None  # the latest MCU time a movable frame may act to (its boot's clock)
         self._watch_trip: str | None = None  # the safety watch's trip on a STATE of this tick
@@ -258,7 +258,7 @@ class RealLoop:
         rec = TickRecord(t, interval)
         self._rec = rec
         self._lift_before = None
-        self._written_now = set()  # the seqs written whole in this tick
+        self._written_now = []  # the seqs written whole in this tick, in order
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -275,7 +275,8 @@ class RealLoop:
                 self._transmit(now_ns)
             except Exception as exc2:  # noqa: BLE001 -- the DISARM stays queued; the permit retries it next tick
                 rec.reason = f"{rec.reason};transmit:{type(exc2).__name__}"
-        rec.seqs = [q for q in rec.seqs if (int(q) & 0xFFFF) in self._written_now]  # written whole this tick only
+        # the record: the frames written whole in this tick -- queued now or finished from an earlier tick (round 8 P3)
+        rec.seqs = list(self._written_now)
         self._collect(now_ns, t, rec)
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
@@ -965,7 +966,8 @@ class RealLoop:
             return ok
 
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
-            self._written_now.add(int(seq) & 0xFFFF)
+            if kind == "DRIVE":
+                self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)

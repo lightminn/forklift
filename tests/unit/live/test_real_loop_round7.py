@@ -26,7 +26,9 @@ def driving(**kw):
     return r
 
 
-def test_an_expired_old_frame_does_not_hide_a_stop_taken_during_the_check():
+def test_a_stop_taken_during_the_check_of_an_old_queued_frame_disarms():
+    """An old frame left queued from the tick before (not yet past its expiry here: the expiry-and-STOP overlap is
+    covered by the ordering in ``judge``) and a STOP taken during its check: the same tick DISARMs."""
     r = driving()
     real = r.transport.transmit
     r.transport.transmit = lambda host, now, gate: []  # this tick's frame stays queued, unsent
@@ -42,7 +44,7 @@ def test_an_expired_old_frame_does_not_hide_a_stop_taken_during_the_check():
         return ev.link_reason(n)
 
     r.loop.evidence = replace(ev, link_reason=link_reason)
-    r.tick_cost_ns = 25 * MS  # the old frame is past its expiry at the first byte
+    r.tick_cost_ns = 25 * MS
     k = len(r.transport.sent)
     r.tick()
     r.tick_cost_ns = 0
@@ -69,3 +71,13 @@ def test_a_half_written_frame_stays_out_of_the_record():
     r.transport.stall = True
     rec = r.tick()
     assert r.transport.partial_frame is not None and rec.seqs == []
+
+
+def test_a_frame_finished_in_a_later_tick_is_in_that_ticks_record():
+    r = driving()
+    r.transport.stall = True
+    r.tick()
+    seq = r.transport.partial_frame.seq
+    r.transport.stall = False
+    rec = r.tick()
+    assert seq in rec.seqs or r.transport.resyncs  # finished now (or cut, when it expired first)
