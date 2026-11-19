@@ -200,6 +200,10 @@ class FakeTransport:
                 break
         return out
 
+    @property
+    def partial_frame(self):
+        return self._cur  # the frame being written (its own expiry bounds the stall)
+
     def _deliver(self, host, f, now_ns):
         host.frame_written(f, now_ns)
         for r in self.dec.feed(f.data, now_ns):

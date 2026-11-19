@@ -1737,6 +1737,7 @@ class MissionCore:
                     allowed, why = lp, wp
                 if self._residual_speed(direction) > lp:  # real only: an unconfirmed faster output holds (P1-9)
                     allowed, why, speed_hold_ = 0.0, (wp if wp != "ok" else "residual_over_allowed"), True
+                    self.state["motion_hold"] = why
                 if ms.phase == "approach" and not pocket.get("mid_still_done"):
                     # The standing frame is a planned stop: brake into it at
                     # MID_STILL_DECEL_MPS2, not as a step (L3c v35 seed 4: a step
@@ -6760,6 +6761,8 @@ class MissionCore:
             a_, w_ = limit_fn(d_, v_)
             if a_ < v_:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
+        if hold:
+            self.state["motion_hold"] = why  # the real loop's wait frame: wheels 0 and the old queue dropped (P1-4)
         return allowed, why, hold, driving, len(possible) > 1
 
     def _residual_speed(self, direction) -> float:

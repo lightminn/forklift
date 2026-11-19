@@ -72,11 +72,13 @@ def test_a_depth_frame_gets_the_motion_and_lift_of_its_own_acquisition():
     loop = r.loop
     t = loop._t(r.now)  # noqa: SLF001
     loop.pose_history.clear()
-    loop.pose_history.extend([(t - 0.10, (0.0, 0.0, 0.0), True, 0.12, 0.02),
-                              (t - 0.08, (0.002, 0.0, 0.02), True, 0.12, 0.02),
-                              (t - 0.06, (0.004, 0.0, 0.04), True, 0.10, 0.03),
-                              (t - 0.04, (0.004, 0.0, 0.04), True, 0.0, 0.05)])
-    rear, speed, yaw_rate, lift = loop._pose_at(t - 0.09)  # noqa: SLF001
+    Z = (0.0, 0.0, 0.0)  # the SLAM correction applied (none)
+    loop.pose_history.extend([(t - 0.10, (0.0, 0.0, 0.0), True, 0.12, 0.02, Z),
+                              (t - 0.08, (0.002, 0.0, 0.02), True, 0.12, 0.02, Z),
+                              (t - 0.06, (0.004, 0.0, 0.04), True, 0.10, 0.03, Z),
+                              (t - 0.04, (0.004, 0.0, 0.04), True, 0.0, 0.05, Z)])
+    rear, speed, yaw_rate, lift = loop._pose_at(t - 0.09, Z)  # noqa: SLF001
+    assert loop._pose_at(t - 0.09, (0.2, 0.0, 0.0)) is None  # noqa: SLF001 -- another correction's poses
     assert math.isclose(rear[2], 0.01, abs_tol=1e-9) and speed == 0.12 and lift == 0.02
     assert math.isclose(yaw_rate, 1.0, rel_tol=1e-6)  # 0.02 rad over 20 ms
     seen = []

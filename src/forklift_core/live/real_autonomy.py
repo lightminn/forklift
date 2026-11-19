@@ -174,6 +174,22 @@ class AutoPermit:
                 self._note(now_ns, "disarmed")
         self._disarm_retry(now_ns)
 
+    def on_state(self, state, rx_ns: int) -> None:
+        """Every STATE the host accepted, in order (a batch read at once included): while S10's stop is pending, a
+        reject of its boot and arm generation received after it was queued is kept (it DISARMs, whatever a later
+        sample says), and the confirmation is taken from the STATE that shows it, not only the batch's last."""
+        stop = self._stop
+        if self.state != STOP_PENDING or stop is None or rx_ns <= stop["since_ns"] \
+                or (state.boot_id, state.arm_gen) != stop["boot_gen"]:
+            return
+        if state.reject_reason != RejectReason.NONE:
+            stop.setdefault("rejected", state.reject_reason.name.lower())
+            return
+        w = stop["written_ns"]
+        if w is not None and rx_ns > w and int(state.last_rx_seq) == stop["seq"] \
+                and state.flags & StateFlag.COMMAND_FRESH and rx_ns - w <= self.stop_ack_ns:
+            stop.setdefault("confirmed_rx", int(rx_ns))
+
     def _stop_pending(self, now_ns: int, s, rx) -> None:
         """S10's control stop (4c design 4 3-4), judged conservatively: written within STOP_QUEUE_S of its queueing;
         then a fresh STATE of the same boot and arm generation received after the write -- any reject reason there
@@ -181,22 +197,25 @@ class AutoPermit:
         confirms it; past that, or the authority gone, DISARM."""
         host, stop = self.host, self._stop
         w = stop["written_ns"]
+        # every failure DISARMs at once; the order only names the first that holds
+        if stop.get("rejected") is not None:  # any reject since it was queued, before or after its write
+            self._disarm(now_ns, f"control_stop_rejected:{stop['rejected']}")
+            return
+        queue_ns = int(STOP_QUEUE_S * 1e9)
+        if w is not None and w - stop["since_ns"] > queue_ns:  # written after its queue dwell: no confirmation counts
+            self._disarm(now_ns, "control_stop_late_write")
+            return
         if not host.authorized:
             self._disarm(now_ns, "control_stop_unauthorized")
             return
         if w is None:
-            if now_ns - stop["since_ns"] > int(STOP_QUEUE_S * 1e9):
+            if now_ns - stop["since_ns"] > queue_ns:
                 self._disarm(now_ns, "control_stop_unwritten")
             return
-        if s is not None and rx is not None and rx > w and host.health(now_ns).fresh \
-                and (s.boot_id, s.arm_gen) == stop["boot_gen"]:
-            if s.reject_reason != RejectReason.NONE:
-                self._disarm(now_ns, f"control_stop_rejected:{s.reject_reason.name.lower()}")
-                return
-            if int(s.last_rx_seq) == stop["seq"] and s.flags & StateFlag.COMMAND_FRESH and rx - w <= self.stop_ack_ns:
-                self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
-                self._disarm(now_ns, "s10_stopped")
-                return
+        if stop.get("confirmed_rx") is not None and host.health(now_ns).fresh:
+            self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
+            self._disarm(now_ns, "s10_stopped")
+            return
         if now_ns - w > self.stop_ack_ns:
             self._disarm(now_ns, "control_stop_unconfirmed")
 

@@ -31,6 +31,7 @@ class Bench:
         self.permit = ra.AutoPermit(self.host, self.port, outstanding=lambda now: self.settled,
                                     stop_since=lambda now: self.still)
         self.collect_raises = False
+        self.host._on_state_cb = self.permit.on_state  # noqa: SLF001 -- every STATE, as the loop passes it
         self.permit.bind(transmit=self.transmit, arbiter_stop=lambda reason: self.order.append(("arbiter", reason)),
                          collect=self.collect)
         self.cycle(3)
@@ -428,3 +429,36 @@ def test_a_stop_named_by_its_seq_but_rejected_or_not_fresh_is_no_confirmation(in
     assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
     assert b.permit.state in (ra.DISARMING, ra.LATCHED)
     assert b.permit.reason.startswith("control_stop_rejected" if inject == "reject" else "control_stop_un")
+
+
+def test_a_stop_written_after_its_queue_dwell_is_not_confirmed():
+    """Codex 4c impl round 2 P1-3: written 45 ms after it was queued -- whatever echo follows does not count."""
+    b = Bench()
+    b.armed_ready()
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.permit.written("DRIVE", seq, b.now + 45 * MS)  # the transmitter reports its write 45 ms after the queueing
+    b.cycle(1, transmit=False)
+    assert b.permit.reason == "control_stop_late_write"
+    assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
+
+
+def test_a_reject_in_a_batch_is_kept_even_when_a_later_state_of_the_batch_confirms():
+    """Codex 4c impl round 2 P1-3: reject -> NONE read at once; the reject still DISARMs as a rejection."""
+    from forklift_core.mcu_link.messages import RejectReason, encode
+
+    b = Bench()
+    b.armed_ready()
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.transmit()
+    b.now += 10 * MS
+    b.mcu.advance(10_000)
+    b.mcu.reject = RejectReason(1)
+    first = encode(b.mcu.state(), 1)
+    b.mcu.advance(10_000)
+    b.mcu.reject = None
+    b.host.on_bytes(first + encode(b.mcu.state(), 1), b.now)
+    b.host.tick(b.now)
+    b.permit.tick(b.now)
+    assert b.permit.reason.startswith("control_stop_rejected")
