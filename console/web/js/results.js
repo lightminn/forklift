@@ -6,7 +6,7 @@
 // tests/unit/console/test_results_reasons.py checks that every reason a result can carry has a head here.
 export const REASONS = {
   // the real truck's tick failed while the mission's command was being applied (6a design 5): ended, not resumed
-  tick_failed: "차 쪽 처리 중 오류로 임무를 끝냈습니다 · 정지 상태를 확인하세요",
+  "tick_failed": "차 쪽 처리 중 오류로 임무를 끝냈습니다 · 정지 상태를 확인하세요",
   // the truth checks (simulation only): the scene is damaged, latched until it is reset
   "Excessive body tilt": "차체가 지나치게 기울었습니다(장면 손상)",
   "Actual truck/load footprint overlap": "차나 짐이 장애물과 겹쳤습니다(장면 손상)",
