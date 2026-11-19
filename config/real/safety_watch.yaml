@@ -41,4 +41,7 @@ imu:
   baseline_spread_deg: 2.0   # every baseline sample within this of the mean direction
   baseline_wait_s: 0.5       # a stand shorter than this may still be gathering its baseline (the ARM waits)
   norm_tol_frac: 0.30        # | |a| - 9.81 | over 0.30 x 9.81 m/s^2: not a valid sample (a fraction, not m/s^2)
+  level_ref: [0.0, 0.0, 1.0] # gravity in the IMU frame on the level floor: placeholder until the D435i mount is
+                             # measured (S7) -- the camera is pitched, so the real value is not straight down
+  level_tol_deg: 5.0         # the stand's baseline within this of level_ref, or the ARM is refused (imu_not_level)
   provenance: {source: d435i_accel_200hz_and_flat_floor_assumption, measured: false, until: S8}

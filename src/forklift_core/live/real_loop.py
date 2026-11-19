@@ -537,11 +537,12 @@ class RealLoop:
                 return
         s = host.state
         if self.imu_watch is not None:
-            self.imu_watch.stand(self.still_since_ns)  # the stand's own evidence, beyond the sample window
             self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
             elif permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
+                if permit.state != ra.ARMING:
+                    self.imu_watch.settled()  # the ARM answered: the tilt hold rules from here
                 trip_ = self.imu_watch.judge(now_ns)
                 if trip_ is not None:
                     rec.branch, rec.reason = "emergency", f"watch:{trip_}"  # design 4: a lost watch or a tilt is ①

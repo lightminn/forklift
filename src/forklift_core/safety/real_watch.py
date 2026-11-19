@@ -172,7 +172,7 @@ class SafetyWatch:
 
 # --- the IMU watch of the real autonomy (docs/design/2026-11-19-real-safety-wiring.md 4, stage 5b) -----------------
 GRAVITY_MPS2 = 9.81
-IMU_REASONS = ("watch_imu_stale", "watch_imu_gap", "watch_tilt")
+IMU_REASONS = ("watch_imu_stale", "watch_imu_gap", "watch_imu_moved", "watch_tilt")
 
 
 @dataclass(frozen=True)
@@ -185,11 +185,13 @@ class ImuConfig:
     baseline_spread_deg: float  # every baseline sample within this of their mean direction
     baseline_wait_s: float  # a stand shorter than this may still be gathering its baseline (the ARM waits)
     norm_tol_frac: float  # |‖a‖ - g| over this fraction of g: not a valid sample
+    level_ref: tuple = (0.0, 0.0, 1.0)  # gravity's direction in the IMU frame on the level floor (the mount)
+    level_tol_deg: float = 5.0  # the baseline within this of level_ref, or the stand is not level
     window_s: float = 2.0  # how long valid samples are kept
 
     def __post_init__(self) -> None:
         for name in ("limit_deg", "hold_s", "max_age_s", "gap_max_s", "baseline_spread_deg", "baseline_wait_s",
-                     "norm_tol_frac", "window_s"):
+                     "norm_tol_frac", "level_tol_deg", "window_s"):
             v = getattr(self, name)
             if isinstance(v, bool) or not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
                 raise ValueError(f"imu_config:{name}")
@@ -206,6 +208,14 @@ class ImuConfig:
             raise ValueError("imu_config:hold_s")
         if not self.norm_tol_frac < 1.0:
             raise ValueError("imu_config:norm_tol_frac")
+        if not self.level_tol_deg < self.limit_deg:
+            raise ValueError("imu_config:level_tol_deg")
+        try:
+            ref = tuple(float(v) for v in self.level_ref)
+        except (TypeError, ValueError):
+            ref = ()
+        if len(ref) != 3 or _unit(ref) is None:
+            raise ValueError("imu_config:level_ref")
 
 
 def load_imu_config(path) -> ImuConfig:
@@ -217,11 +227,13 @@ def load_imu_config(path) -> ImuConfig:
     if not isinstance(part, dict) or "provenance" not in part:
         raise ValueError("imu_config:missing")
     names = ("limit_deg", "hold_s", "max_age_s", "gap_max_s", "baseline_min", "baseline_spread_deg",
-             "baseline_wait_s", "norm_tol_frac")
+             "baseline_wait_s", "norm_tol_frac", "level_ref", "level_tol_deg")
     for name in names:
         if name not in part:
             raise ValueError(f"imu_config:{name}")
-    return ImuConfig(**{k: part[k] for k in names})
+    values = {k: part[k] for k in names}
+    values["level_ref"] = tuple(values["level_ref"]) if isinstance(values["level_ref"], list) else values["level_ref"]
+    return ImuConfig(**values)
 
 
 class ImuWatch:
@@ -237,14 +249,8 @@ class ImuWatch:
         self.samples: list = []  # (ns, unit vector) of valid samples, oldest first, within window_s
         self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
         self._baseline = None  # the unit gravity direction frozen before the ARM
-        # the current stand (5b round 5 P1): its start, its reference direction (the mean of its first steady
-        # gapless baseline_min samples), the samples gathering it, and a sticky flag once any later sample of the
-        # stand left the reference -- kept apart from the sample window, for as long as the stand lasts
-        self._stand_ns = None
-        self._ref = None
-        self._gather: list = []
-        self._moved = False
         self._prev_ns = None  # the newest sample judged
+        self._arming = False
         self._tilt_start = None  # the first sample of the current tilted run
         self._trip = None
 
@@ -271,45 +277,10 @@ class ImuWatch:
             return why
         self.counts["valid"] += 1
         self.samples.append((int(sample_ns), tuple(x / n for x in v)))
-        self._stand_sample(*self.samples[-1])
         cut = int(sample_ns) - int(self.cfg.window_s * 1e9)
         while len(self.samples) > 1 and self.samples[0][0] < cut:
             self.samples.pop(0)
         return None
-
-    def stand(self, still_since_ns) -> None:
-        """The current stand's start (the loop, each tick): a new start forgets the old stand's evidence and takes
-        the kept samples taken in it."""
-        if still_since_ns is None:
-            self._stand_ns, self._ref, self._gather, self._moved = None, None, [], False
-            return
-        if self._stand_ns == int(still_since_ns):
-            return
-        self._stand_ns, self._ref, self._gather, self._moved = int(still_since_ns), None, [], False
-        for ns, u in self.samples:
-            self._stand_sample(ns, u)
-
-    def _stand_sample(self, ns: int, u) -> None:
-        if self._stand_ns is None or ns < self._stand_ns:
-            return
-        c = self.cfg
-        if self._ref is not None:
-            if _angle_deg(u, self._ref) > c.baseline_spread_deg:
-                self._moved = True  # the pose left the stand's reference: sticky for this stand
-            return
-        if self._gather and ns - self._gather[-1][0] > c.gap_max_s * 1e9:
-            self._gather = []  # a gap: the reference gathers after it
-        self._gather.append((ns, u))
-        if len(self._gather) > c.baseline_min:
-            self._gather.pop(0)
-        if len(self._gather) == c.baseline_min:
-            mean = tuple(sum(w[k] for _, w in self._gather) / len(self._gather) for k in range(3))
-            size = math.sqrt(sum(x * x for x in mean))
-            if size >= 0.9:
-                d = tuple(x / size for x in mean)
-                if all(_angle_deg(w, d) <= c.baseline_spread_deg for _, w in self._gather):
-                    self._ref = d  # the stand's first steady direction
-                    self._gather = []
 
     def baseline(self, still_since_ns):
         """``((direction, last_ns), None)`` from the valid samples taken in the current stand -- ``last_ns`` the
@@ -317,7 +288,6 @@ class ImuWatch:
         ``imu_no_baseline``, ``imu_baseline_unsteady``."""
         if still_since_ns is None:
             return None, "imu_not_still"
-        self.stand(still_since_ns)
         c = self.cfg
         stand = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
         # the latest gapless run of the stand: an earlier gap only means the run started later
@@ -335,10 +305,10 @@ class ImuWatch:
         d = tuple(x / size for x in mean)
         if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
             return None, "imu_baseline_unsteady"
-        # the stand as a whole, beyond the kept window: no sample left its first steady direction, and the baseline
-        # is that direction (a pose changed behind a gap, however long ago in the stand; 5b rounds 4-5 P1)
-        if self._moved or self._ref is None or _angle_deg(d, self._ref) > c.baseline_spread_deg:
-            return None, "imu_baseline_unsteady"
+        # the stand is on the level floor (5b round 6: an absolute check instead of the stand's own history -- a
+        # pose changed while standing, behind a gap or a lost stand, is caught by where it is, not by when)
+        if _angle_deg(d, _unit(tuple(float(x) for x in c.level_ref))) > c.level_tol_deg:
+            return None, "imu_not_level"
         return (d, part[-1][0]), None
 
     def arm(self, baseline) -> None:
@@ -351,9 +321,15 @@ class ImuWatch:
         self._baseline, self._trip = d, None
         self._prev_ns = int(last_ns)  # the newest sample judged (the baseline's last at first)
         self._tilt_start = None
+        self._arming = True  # until settled(): any sample off the baseline by its spread is the end at once
+
+    def settled(self) -> None:
+        """The ARM was answered (the permit READY): the tilt hold rules from here."""
+        self._arming = False
 
     def disarm(self) -> None:
         self._baseline = self._trip = self._prev_ns = self._tilt_start = None
+        self._arming = False
 
     @property
     def armed(self) -> bool:
@@ -376,6 +352,11 @@ class ImuWatch:
                 self._trip = "watch_imu_gap"  # sparse samples cannot carry a hold: the watch is lost
                 return self._trip
             self._prev_ns = ns
+            if self._arming and _angle_deg(u, self._baseline) > c.baseline_spread_deg:
+                # the truck moved between the baseline and the ARM's answer -- the ARM's own first byte included
+                # (5b round 6 P2-1): the baseline no longer says where it stands
+                self._trip = "watch_imu_moved"
+                return self._trip
             if _angle_deg(u, self._baseline) > c.limit_deg:
                 self._tilt_start = ns if self._tilt_start is None else self._tilt_start
                 if ns - self._tilt_start >= c.hold_s * 1e9:

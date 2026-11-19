@@ -34,6 +34,7 @@ def armed():
     b, why = w.baseline(1000 * MS)
     assert why is None
     w.arm(b)
+    w.settled()
     return w, end
 
 
@@ -112,12 +113,13 @@ def test_an_upright_sample_restarts_the_hold():
 def test_the_baseline_is_frozen_before_the_arm():
     """Parked on a slight slope: the stand's mean is the baseline; it does not follow later samples."""
     w = ImuWatch(CFG)
-    t = fed(w, 1000, 20, tilted(5))
+    t = fed(w, 1000, 20, tilted(3))
     b, why = w.baseline(1000 * MS)
     w.arm(b)
-    t = fed(w, t, 80, tilted(5))
+    w.settled()
+    t = fed(w, t, 80, tilted(3))
     assert w.judge(t * MS) is None
-    t = fed(w, t, 80, tilted(14))  # 9 deg off the frozen baseline
+    t = fed(w, t, 80, tilted(12))  # 9 deg off the frozen baseline
     assert w.judge(t * MS) == "watch_tilt"
 
 
@@ -151,6 +153,7 @@ def test_a_long_hold_is_measured_past_the_sample_window():
     w = ImuWatch(replace(CFG, hold_s=3.0, max_age_s=0.1))
     t = fed(w, 1000, 20)
     w.arm(w.baseline(1000 * MS)[0])
+    w.settled()
     for _ in range(80):  # 4 s of 12 deg, judged every 50 ms
         t = fed(w, t, 10, tilted(12))
         if w.judge(t * MS) is not None:
@@ -168,16 +171,45 @@ def test_the_gap_is_measured_from_the_baselines_last_sample():
     assert w.judge(1101 * MS) == "watch_imu_gap"
 
 
-def test_a_pose_change_in_the_stand_is_remembered_past_the_sample_window():
-    """5b round 5 P1: level, a gap, 14 deg -- still refused 3 s later, when the level samples left the 2 s window."""
+def test_a_stand_off_the_level_reference_is_refused():
+    """5b round 6: where the truck stands, not the stand's history -- a 14 deg pose is not a baseline however it
+    came about (a gap, a lost stand)."""
     w = ImuWatch(CFG)
-    w.stand(1000 * MS)
-    t = fed(w, 1000, 20)  # level: the stand's reference
-    t = fed(w, t + 80, 20, tilted(14))
+    fed(w, 1000, 20, tilted(14))
+    assert w.baseline(1000 * MS) == (None, "imu_not_level")
+    w = ImuWatch(CFG)
+    fed(w, 1000, 20, tilted(3))
+    assert w.baseline(1000 * MS)[1] is None
+
+
+def test_a_move_between_the_baseline_and_the_arms_answer_is_the_end_at_once():
+    """5b round 6 P2-1: while the ARM is unanswered any sample off the baseline by its spread trips -- no hold."""
+    w = ImuWatch(CFG)
+    t = fed(w, 1000, 20)
+    w.arm(w.baseline(1000 * MS)[0])
+    t = fed(w, t, 1, tilted(3))
+    assert w.judge(t * MS) == "watch_imu_moved"
+    w = ImuWatch(CFG)
+    t = fed(w, 1000, 20)
+    w.arm(w.baseline(1000 * MS)[0])
+    w.settled()
+    t = fed(w, t, 1, tilted(3))
+    assert w.judge(t * MS) is None  # armed and answered: the tilt hold rules
+
+
+def test_one_outlier_ages_out_of_the_window():
+    """5b round 6 P2-2: a valid 3 deg outlier makes the stand unsteady only while it is in the window."""
+    w = ImuWatch(CFG)
+    t = fed(w, 1000, 10)
+    t = fed(w, t, 1, tilted(3))
+    t = fed(w, t, 20)
     assert w.baseline(1000 * MS) == (None, "imu_baseline_unsteady")
-    t = fed(w, t, 600, tilted(14))  # 3 s more of the same pose
-    assert w.samples[0][0] > 1100 * MS  # the level samples are gone from the window
-    assert w.baseline(1000 * MS) == (None, "imu_baseline_unsteady")
-    w.stand(t * MS)  # a new stand forgets it
-    fed(w, t, 20, tilted(14))
-    assert w.baseline(t * MS)[1] is None
+    t = fed(w, t, 420)  # 2.1 s more of level samples
+    assert w.baseline(1000 * MS)[1] is None
+
+
+def test_the_level_reference_must_be_a_direction():
+    with pytest.raises(ValueError, match="imu_config:level_ref"):
+        replace(CFG, level_ref=(0.0, 0.0, 0.0))
+    with pytest.raises(ValueError, match="imu_config:level_tol_deg"):
+        replace(CFG, level_tol_deg=9.0)

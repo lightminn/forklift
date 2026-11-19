@@ -218,7 +218,7 @@ def test_a_sample_with_a_broken_time_is_dropped_alone():
 
 
 def test_a_pose_changed_behind_a_short_gap_in_the_stand_refuses_the_arm():
-    """5b round 4 P1: level, an 80 ms IMU gap, then 14 deg in the same stand -- not a baseline."""
+    """5b rounds 4-6 P1: level, an 80 ms IMU gap, then 14 deg in the same stand -- not a baseline."""
     r = rig()
     src = r.imu.samples
     state = {"n": 0}
@@ -236,7 +236,7 @@ def test_a_pose_changed_behind_a_short_gap_in_the_stand_refuses_the_arm():
     r.imu.samples = changed
     r.submit()
     rec = run_until(r, lambda rec: rec.branch == "emergency" or r.mcu.arms > 0, limit=400)
-    assert r.mcu.arms == 0 and "imu_baseline_unsteady" in rec.reason
+    assert r.mcu.arms == 0 and "imu_not_level" in rec.reason  # where it stands, whatever the gap did
 
 
 def test_sample_times_stay_integers_and_a_non_integer_time_is_dropped_alone():
@@ -252,6 +252,30 @@ def test_sample_times_stay_integers_and_a_non_integer_time_is_dropped_alone():
     recs = [r.tick() for _ in range(10)]
     assert all(x.branch != "emergency" for x in recs)
     assert r.loop.imu_watch.counts["not_finite"] >= 20
-    w = r.loop.imu_watch
-    big = 2 ** 60
-    assert w.add(big, (0.0, 0.0, 9.81), big) is None and w.samples[-1][0] == big  # exact, not rounded to future
+
+
+def test_an_integer_time_past_two_to_the_53_goes_through_the_read_exactly():
+    """5b round 6 P3: 2**53 + 3 through the source and _pull_imu, at the read's own bound -- not rounded to future."""
+    from types import SimpleNamespace
+
+    r = rig()
+    loop = r.loop
+    stamp = 2 ** 53 + 3
+    loop.imu_source = SimpleNamespace(samples=lambda upto, limit: [(stamp, (0.0, 0.0, 9.81))])
+    loop.imu_watch.samples.clear()
+    loop._pull_imu(stamp)  # noqa: SLF001
+    assert loop.imu_watch.samples[-1][0] == stamp and loop.imu_watch.counts["future"] == 0
+
+
+def test_a_move_before_the_arm_is_answered_ends_it_before_any_drive():
+    """5b round 6 P2-1 on the loop: a 3 deg sample while ARMING is watch_imu_moved, no moving DRIVE."""
+    r = rig()
+    r.mcu.arm_delay = 6  # the ARM answered 60 ms late
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, limit=400)
+    r.imu.accel = tilted(3)
+    k = len(r.transport.sent)
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=10)
+    assert "watch_imu_moved" in rec.reason
+    assert not [m for _, _, _, m in r.transport.sent[k:] if isinstance(m, Drive)
+                and (m.left_wheel_rad_s or m.right_wheel_rad_s)]
