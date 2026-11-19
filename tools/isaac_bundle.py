@@ -523,13 +523,14 @@ def scene_candidates(run) -> list[str]:
     """Every scene file the riib launcher may open for a run naming SCENE_DIR and SCENE -- the plain, marker, rack and
     side-room copies, missing ones too (hashed as None): BOTTOM_DECK=auto takes the side copy when its file exists
     (docs/plans/2026-11-18-bottom-deck-structure-default.md), so a copy added or removed after the check changes the
-    launch and must void the proof."""
+    launch and must void the proof. The paths are the launcher's own (absolute, links not resolved), so verify reads
+    what the launcher would read then, through any link changed since (Codex round 7)."""
     scene_dir, scene = run.env.get("SCENE_DIR"), run.env.get("SCENE")
     if not scene_dir or not scene:
         return []
     base = scene.removesuffix("_side").removesuffix("_m").removesuffix("_rack")
     names = {f"{base}{s}.json" for s in ("", "_m", "_rack", "_side", "_m_side")}
-    return [os.path.realpath(os.path.join(run.cwd or ".", scene_dir, n)) for n in sorted(names)]
+    return [os.path.abspath(os.path.join(run.cwd or ".", scene_dir, n)) for n in sorted(names)]
 
 
 def gpu_persistence_modes(timeout_s=10.0) -> dict | None:
@@ -641,9 +642,14 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
         if not gpu["allowed_without"] and (not isinstance(modes, dict) or not modes
                                            or any(m != "Enabled" for m in modes.values())):
             problems.append(f"{path}: its GPU persistence record is not all on and was not allowed")
-    for p, digest in (proof.get("inputs") or {}).items():
+    inputs = proof.get("inputs") or {}
+    for p, digest in inputs.items():
         if _sha256_file(p) != digest:
             problems.append(f"{p} changed since the check")
+    # a proof made before the scene candidates were hashed (a missing key, unlike a file recorded as absent with None)
+    missing = sorted({p for run in runs for p in scene_candidates(run)} - set(inputs))
+    if missing:
+        problems.append(f"{path} does not cover the scene files {missing}: run isaac_bundle.py check again")
     for run in runs:
         inherited = inherited_controls(run, environ)
         if inherited:

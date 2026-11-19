@@ -2185,3 +2185,33 @@ def test_a_riib_runs_candidate_scene_files_are_among_the_inputs_missing_ones_inc
     assert ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}) == []
     (scenes / "line_2_m_side.json").write_text("{}")  # a copy added after the check
     assert any("line_2_m_side.json changed" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}))
+
+
+def test_a_proof_without_the_scene_candidates_or_behind_a_changed_link_is_refused(tmp_path):
+    # Codex round 7: an older proof (no candidate keys) must not pass a riib run, and a SCENE_DIR link moved to another
+    # folder is read through the launcher's own path, not the target the check resolved
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "line_2_m.json").write_text("{}")
+    (b / "line_2_m.json").write_text("{}")
+    (b / "line_2_m_side.json").write_text("{}")
+    link = tmp_path / "scenes"
+    link.symlink_to(a)
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(link), "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    gpu = {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}
+
+    def verify(inputs):
+        (tmp_path / "runs.jsonl.preflight.json").write_text(json.dumps(
+            {"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": inputs, "gpu_persistence": gpu}))
+        return ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {})
+
+    assert verify(got) == []
+    old = {p: d for p, d in got.items() if p not in ib.scene_candidates(run)}
+    assert any("does not cover the scene files" in p for p in verify(old))
+    link.unlink()
+    link.symlink_to(b)  # the folder behind the link now holds the side copy
+    assert any("line_2_m_side.json changed" in p for p in verify(got))
