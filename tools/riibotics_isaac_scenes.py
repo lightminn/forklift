@@ -552,6 +552,31 @@ def scene_record(name: str, built) -> dict:
             "visuals": visuals, "views": views(hall), "source": {**info, "placement": placement}}
 
 
+# Side-room copies (docs/plans/2026-11-18-bottom-deck-structure-default.md section 2): the hall box grown on +y so the
+# bottom-deck side stage's stands and retreats fit (with the pallet up to 0.15 m / 5 deg off, worst +1.59 / +1.02 m).
+# Only the box: the hall frame's +y is the drawing's -x side, and growing the generator's margin there moves nothing,
+# but the runner uses the box as its hall (planner, obstacle grid), so line_3 plans change even with the check off --
+# hence copies, the originals kept for their baselines.
+SIDE_ROOM_M = {"line": 1.7, "random": 1.1}
+SIDE_SUFFIX = "_side"
+
+
+def side_room_record(record: dict) -> dict:
+    """The `<name>_side` copy of a line / random scene record: bounds.y_max_m grown by SIDE_ROOM_M, all else equal."""
+    name = record["name"]
+    kind = name.split("_")[0]
+    if kind not in SIDE_ROOM_M or name.endswith(SIDE_SUFFIX):
+        raise ValueError(f"no side-room copy of scene {name!r} (line / random originals only)")
+    out = json.loads(json.dumps(record))
+    bounds = out["scenario"]["bounds"]
+    bounds["y_max_m"] = bounds["y_max_m"] + SIDE_ROOM_M[kind]
+    if bounds["y_max_m"] > HALL.y_max_m:
+        raise ValueError(f"the side-room copy of {name} leaves the south hall {HALL}")
+    out["name"] = name + SIDE_SUFFIX
+    out["source"] = {**out["source"], "side_room_m": SIDE_ROOM_M[kind]}
+    return out
+
+
 # Pallets a session never carries still stand off their slot (component <= 0.08 m, as the carried ones' errors).
 SESSION_EXTRA_ERRORS = {"random": {0: (0.04, -0.03, 1.0), 1: (-0.03, 0.04, -1.0)}}
 
@@ -691,7 +716,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan", action="store_true", help="also plan every scene on the CPU")
-    parser.add_argument("--only", help="comma-separated scene names")
+    parser.add_argument("--only", help="comma-separated scene file names (side copies included; the --session files are written regardless)")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--kappa", type=float, default=None, help="the planner curvature limit (1/m; default 0.29)")
     parser.add_argument("--timeout-s", type=float, default=1200)
@@ -702,6 +727,10 @@ def main() -> None:
                         help="also write <name>_m.json with slot markers for the line / random scenes (plan 2026-10-22)")
     parser.add_argument("--rack", action="store_true",
                         help="also write aisle_rack.json / aisle_out_rack.json with rack frames (plan 2026-10-22 aisle)")
+    parser.add_argument("--side-room", action="store_true",
+                        help="also write <name>_side.json for the line / random scenes (and <name>_m_side.json with "
+                        "--slot-markers): the hall box grown on +y for the bottom-deck side stage "
+                        "(docs/plans/2026-11-18-bottom-deck-structure-default.md)")
     parser.add_argument("--session", choices=tuple(SEQUENCES), action="append", default=[],
                         help="also write this sequence as one session scene (<name>_session.json)")
     args = parser.parse_args()
@@ -709,15 +738,6 @@ def main() -> None:
         global KAPPA
         KAPPA = float(args.kappa)
         os.environ["FORKLIFT_PLAN_KAPPA"] = repr(KAPPA)  # the spawned planners import it from here
-    args.output.mkdir(parents=True, exist_ok=True)
-    for kind in args.session:
-        path = args.output / f"{kind}_session.json"
-        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
-        print("session", path)
-        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
-            path = args.output / f"{kind}_m_session.json"
-            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
-            print("session", path)
     only = set(args.only.split(",")) if args.only else None
     paths = []
     built_scenes = scenes()
@@ -729,11 +749,31 @@ def main() -> None:
     if args.rack:
         for name in RACK_KINDS:
             built_scenes[f"{name}_rack"] = rack_scene()
+    records = []
     for name, built in built_scenes.items():
-        if only and name not in only:
+        record = scene_record(name, built)
+        records.append(record)
+        if args.side_room and name.split("_")[0] in SIDE_ROOM_M:
+            records.append(side_room_record(record))
+    if only:  # on the written names, side copies included (a name nothing writes is an error, not a silent skip)
+        unknown = sorted(only - {r["name"] for r in records})
+        if unknown:
+            parser.error(f"--only names no scene this run writes: {', '.join(unknown)}")
+    # checked before anything is written; --only filters the scene files, never the --session ones
+    args.output.mkdir(parents=True, exist_ok=True)
+    for kind in args.session:
+        path = args.output / f"{kind}_session.json"
+        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
+        print("session", path)
+        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
+            path = args.output / f"{kind}_m_session.json"
+            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
+            print("session", path)
+    for record in records:
+        if only and record["name"] not in only:
             continue
-        path = args.output / f"{name}.json"
-        path.write_text(json.dumps(scene_record(name, built), indent=1) + "\n")
+        path = args.output / f"{record['name']}.json"
+        path.write_text(json.dumps(record, indent=1) + "\n")
         paths.append(path)
         print("scene", path)
     if args.plan:

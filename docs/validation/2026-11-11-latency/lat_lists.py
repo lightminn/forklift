@@ -25,6 +25,7 @@ RIIB_ENV = {  # ws1 paths (the riib batches' template, e.g. test_runs/riibotics/
     "BASE_SCENE": f"{P}/artifacts/20261013_fork_spacing/base_scene/scene.usda",
     "FORKLIFT_URDF": f"{P}/artifacts/20261013_fork_spacing/dd_cfg/old/dls08_measured/forklift.urdf",
     "VENV_PY": f"{P}/.venv/bin/python",
+    "BOTTOM_DECK": "off",  # the riib default since 2026-11-19 is auto (structure on line / random): these records ran without it
     "ONNX": f"{P}/test_runs/s3/yolo_runs/yolo11s-seg_p15/weights/best.onnx",
     "LEARNED_PY": f"{P}/venvs/learned/bin/python",
     "VIDEO": "off", "RETURN_START": "boxed", "NEAR_END_STAND": "on",

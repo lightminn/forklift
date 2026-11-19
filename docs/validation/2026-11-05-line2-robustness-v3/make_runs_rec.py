@@ -9,6 +9,7 @@ assert hashlib.md5((TMPL_LINE + "\n").encode()).hexdigest() == "1ed7ab28b82787fc
 tmpl = json.loads(TMPL_LINE)
 KEEP = ("VENV_PY", "ONNX", "LEARNED_PY", "SCENE_DIR", "BASE_SCENE", "FORKLIFT_URDF")
 env = {k: tmpl["env"][k] for k in KEEP if k in tmpl["env"]}
+env["BOTTOM_DECK"] = "off"  # the riib default since 2026-11-19 is auto (structure on line / random): these records ran without it
 env.update(SNAP=SNAP, VIDEO="off", RETURN_START="boxed", NEAR_END_STAND="on", RETURN_CUSP_REPLANS="2", SCENE="line_2",
            SEED="0", EXTRA_ARGS="--docking-degenerate-continue on --inject-round1-degenerate --record-boundary "
                                 "--record-boundary-format 2")

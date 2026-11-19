@@ -1,5 +1,6 @@
 """The Isaac bundle runner (docs/plans/2026-10-24-ws1-isaac-bundle.md): several runs in one Slurm job, by slots."""
 
+import hashlib
 import json
 import os
 import signal
@@ -2162,3 +2163,163 @@ def test_an_unreadable_boot_id_neither_issues_nor_verifies_a_proof(tmp_path, mon
     assert ib.main(args) == 1 and "boot id cannot be read" in capsys.readouterr().out
     assert not proof_path.exists()
     assert ib.main(args + ["--allow-no-persistence"]) == 1 and not proof_path.exists()  # allowed or not
+
+
+def test_a_riib_runs_candidate_scene_files_are_among_the_inputs_missing_ones_included(tmp_path):
+    # BOTTOM_DECK=auto picks the side-room copy when its file exists (docs/plans/2026-11-18-bottom-deck-structure-
+    # default.md, Codex round 6): a copy added or removed after the check changes the launch, so the proof covers it
+    scenes = tmp_path / "scenes"
+    scenes.mkdir()
+    (scenes / "line_2_m.json").write_text("{}")
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(scenes), "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    side = ib.SCENE_KEY + str(scenes / "line_2_m_side.json")  # the launcher's own path, joined as given
+    assert got[side] is None and got[ib.SCENE_KEY + str(scenes / "line_2_m.json")] is not None
+    for name in ("line_2", "line_2_side", "line_2_rack"):
+        assert ib.SCENE_KEY + str(scenes / f"{name}.json") in got
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    proof = tmp_path / "runs.jsonl.preflight.json"
+    proof.write_text(json.dumps({"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": got,
+                                 "gpu_persistence": {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}}))
+    assert ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}) == []
+    (scenes / "line_2_m_side.json").write_text("{}")  # a copy added after the check
+    assert any("line_2_m_side.json changed" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}))
+
+
+def test_a_proof_without_the_scene_candidates_or_behind_a_changed_link_is_refused(tmp_path):
+    # Codex round 7: an older proof (no candidate keys) must not pass a riib run, and a SCENE_DIR link moved to another
+    # folder is read through the launcher's own path, not the target the check resolved
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir()
+    b.mkdir()
+    (a / "line_2_m.json").write_text("{}")
+    (b / "line_2_m.json").write_text("{}")
+    (b / "line_2_m_side.json").write_text("{}")
+    link = tmp_path / "scenes"
+    link.symlink_to(a)
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(link), "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    gpu = {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}
+
+    def verify(inputs):
+        (tmp_path / "runs.jsonl.preflight.json").write_text(json.dumps(
+            {"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": inputs, "gpu_persistence": gpu}))
+        return ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {})
+
+    assert verify(got) == []
+    old = {p: d for p, d in got.items() if not p.startswith(ib.SCENE_KEY)}
+    assert any("does not cover the scene files" in p for p in verify(old))
+    link.unlink()
+    link.symlink_to(b)  # the folder behind the link now holds the side copy
+    assert any("line_2_m_side.json changed" in p for p in verify(got))
+
+
+def test_a_scene_dir_with_dotdot_behind_a_link_is_read_as_the_launcher_reads_it(tmp_path):
+    # Codex round 8: the launcher resolves SCENE_DIR with realpath -m (the link first, then ..); so does the system
+    # when the proof's unnormalised path is opened
+    real = tmp_path / "deep/real"
+    real.mkdir(parents=True)
+    (tmp_path / "deep/scenes").mkdir()
+    (tmp_path / "deep/scenes/line_2_m_side.json").write_text("{}")
+    (tmp_path / "link").symlink_to(real)
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/link/../scenes",
+                                                                  "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    assert got[f"{ib.SCENE_KEY}{tmp_path}/link/../scenes/line_2_m_side.json"] is not None  # the launcher's file
+    # .. after a folder that does not exist: realpath -m drops both, and so does the digest
+    (tmp_path / "scenes").mkdir()
+    (tmp_path / "scenes/line_2_m_side.json").write_text("{}")
+    run2 = ib.Run(name="b", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/missing/../scenes",
+                                                                   "SCENE": "line_2"})
+    got2 = ib.preflight_inputs([run2], tmp_path / "runner.py")
+    assert got2[f"{ib.SCENE_KEY}{tmp_path}/missing/../scenes/line_2_m_side.json"] is not None
+
+
+def test_a_scene_folder_that_depends_on_the_attempt_is_refused_by_the_check(tmp_path):
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/s{{attempt}}",
+                                                                  "SCENE": "line_2"}, retry_move=[str(tmp_path / "o")])
+    problems = ib.check_runs([run], tmp_path / "runner.py")
+    assert any("may not depend on the attempt" in p for p in problems)
+
+
+def test_verify_refuses_a_scene_folder_that_depends_on_the_attempt_even_with_an_old_proof(tmp_path):
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/s{{attempt}}",
+                                                                  "SCENE": "line_2"})
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    (tmp_path / "runs.jsonl.preflight.json").write_text(json.dumps(
+        {"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": ib.preflight_inputs([run], tmp_path / "runner.py"),
+         "gpu_persistence": {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}}))
+    assert any("may not depend on the attempt" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {}))
+
+
+def test_a_custom_scene_names_marker_copy_is_a_candidate_and_the_chosen_file_must_be_one(tmp_path):
+    # Codex round 10: SCENE=line_2_rack with MARKERS=on opens line_2_rack_m.json (the launcher's suffix order)
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2_rack"})
+    assert str(tmp_path / "s/line_2_rack_m.json") in ib.scene_candidates(run)
+    assert str(tmp_path / "s/line_2_rack_m_side.json") in ib.scene_candidates(run)
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "s").mkdir()
+    for chosen, ok in (("s/line_2_rack_m.json", True), ("elsewhere.json", False)):
+        (tmp_path / "f.sh").write_text(f'# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\necho --scene-file\n'
+                                       f'echo {tmp_path / chosen}\necho ARGS_OK\n')
+        out = tmp_path / f"o_{ok}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2_rack"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, problems
+
+
+def test_the_chosen_scene_file_is_read_like_the_candidates_one_argument_per_line_the_last_value(tmp_path):
+    # Codex round 11: a scene file that is a link, a path with a space, --scene-file=..., and a repeated option
+    assert ib.last_option_value(["--scene-file", "a", "--x", "--scene-file=b"], "--scene-file") == "b"
+    assert ib.last_option_value(["--scene-file=b", "--scene-file", "a b"], "--scene-file") == "a b"
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    scenes = tmp_path / "my scenes"
+    scenes.mkdir()
+    (tmp_path / "real.json").write_text("{}")
+    (scenes / "line_2_m.json").symlink_to(tmp_path / "real.json")
+    cases = ((f'echo --scene-file; echo "{scenes}/line_2_m.json"', True),
+             (f'echo --scene-file="{scenes}/line_2_m.json"', True),
+             (f'echo --scene-file; echo "{scenes}/line_2_m.json"; echo --scene-file=/outside.json', False))
+    for n, (lines, ok) in enumerate(cases):
+        (tmp_path / "f.sh").write_text(f'# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n{lines}\necho ARGS_OK\n')
+        out = tmp_path / f"o{n}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": str(scenes), "SCENE": "line_2"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, (n, problems)
+
+
+def test_a_relative_scene_file_is_the_runs_own_and_a_path_holding_dashes_is_no_option(tmp_path, monkeypatch):
+    # Codex round 12: the DRY_RUN runs in the run's cwd; a printed path with " --" inside is one argument
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    scenes = tmp_path / "run --stage/scenes"
+    scenes.mkdir(parents=True)
+    (scenes / "line_2_m.json").write_text("{}")
+    monkeypatch.chdir("/")
+    for n, (printed, ok) in enumerate((("echo --scene-file; echo 'run --stage/scenes/line_2_m.json'", True),
+                                       (f"echo --scene-file; echo '{scenes}/line_2_m.json'", True),
+                                       ("echo --scene-file; echo elsewhere.json", False))):
+        (tmp_path / "f.sh").write_text(f"# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n{printed}\necho ARGS_OK\n")
+        out = tmp_path / f"o{n}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": "run --stage/scenes", "SCENE": "line_2"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, (n, problems)
+
+
+def test_a_scene_file_and_its_value_on_one_printed_line_is_refused(tmp_path):
+    # Codex round 13: the scene check reads one argument per line; a joined line would hide the value
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    (tmp_path / "s").mkdir()
+    (tmp_path / "f.sh").write_text("# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\necho '--scene-file /outside.json'\n"
+                                   "echo ARGS_OK\n")
+    run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(tmp_path / "o")], cwd=str(tmp_path),
+                 env={"SCENE_DIR": str(tmp_path / "s"), "SCENE": "line_2"}, retry_move=[str(tmp_path / "o")])
+    assert any("on one line" in p for p in ib.check_runs([run], tmp_path / "runner.py"))

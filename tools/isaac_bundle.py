@@ -515,7 +515,52 @@ def preflight_inputs(runs, runner) -> dict:
             path = os.path.join(run.cwd or ".", rel)
             if os.path.isfile(path):
                 paths.add(os.path.realpath(path))
-    return {p: _sha256_file(p) for p in sorted(paths)}
+    out = {p: _sha256_file(p) for p in sorted(paths)}
+    for run in runs:
+        out.update({SCENE_KEY + raw: scene_digest(raw) for raw in scene_candidates(run)})
+    return out
+
+
+SCENE_KEY = "scene:"  # a scene candidate's proof key: its launcher path, hashed through scene_digest
+
+
+def scene_digest(raw) -> str | None:
+    """A scene candidate's sha256 (None when absent) read as the riib launcher reads it: its folder resolved like
+    `realpath -m` (links followed, then "..", missing parts kept), at the check and again at every verify."""
+    folder, name = os.path.split(raw)
+    return _sha256_file(os.path.join(os.path.realpath(folder), name))
+
+
+def last_option_value(words, option) -> str | None:
+    """The value argparse would take for ``option`` from these argument words (one per line, as the launchers print
+    them): the last ``option VALUE`` or ``option=VALUE``."""
+    value = None
+    for i, w in enumerate(words):
+        if w == option and i + 1 < len(words):
+            value = words[i + 1]
+        elif w.startswith(option + "="):
+            value = w[len(option) + 1:]
+    return value
+
+
+def input_digest(key) -> str | None:
+    return scene_digest(key[len(SCENE_KEY):]) if key.startswith(SCENE_KEY) else _sha256_file(key)
+
+
+def scene_candidates(run) -> list[str]:
+    """Every scene file the riib launcher may open for a run naming SCENE_DIR and SCENE -- the plain, marker, rack and
+    side-room copies, missing ones too (hashed as None): BOTTOM_DECK=auto takes the side copy when its file exists
+    (docs/plans/2026-11-18-bottom-deck-structure-default.md), so a copy added or removed after the check changes the
+    launch and must void the proof. The paths are the launcher's own, joined but not normalised, so the system resolves
+    links and ".." in them as the launcher does (its `realpath -m`), at the check and again at verify (Codex rounds
+    7-8); check_runs refuses a SCENE_DIR or SCENE that depends on the attempt."""
+    scene_dir, scene = run.env.get("SCENE_DIR"), run.env.get("SCENE")
+    if not scene_dir or not scene:
+        return []
+    # the launcher's own suffix order: SCENE without _side, then a marker or rack copy maybe added, then _side maybe
+    base = scene.removesuffix("_side")
+    names = {f"{base}{m}{s}.json" for m in ("", "_m", "_rack") for s in ("", "_side")}
+    return [os.path.join(run.cwd or ".", scene_dir, n) for n in sorted(names)]
 
 
 def gpu_persistence_modes(timeout_s=10.0) -> dict | None:
@@ -627,9 +672,18 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
         if not gpu["allowed_without"] and (not isinstance(modes, dict) or not modes
                                            or any(m != "Enabled" for m in modes.values())):
             problems.append(f"{path}: its GPU persistence record is not all on and was not allowed")
-    for p, digest in (proof.get("inputs") or {}).items():
-        if _sha256_file(p) != digest:
+    inputs = proof.get("inputs") or {}
+    for p, digest in inputs.items():
+        if input_digest(p) != digest:
             problems.append(f"{p} changed since the check")
+    # a proof made before the scene candidates were hashed this way (a missing key, unlike a file recorded as absent
+    # with None), and per-attempt scene folders, which no proof covers (check_runs refuses them too)
+    for run in runs:
+        if any("{attempt}" in run.env.get(k, "") for k in ("SCENE_DIR", "SCENE")):
+            problems.append(f"{run.name}: SCENE_DIR / SCENE may not depend on the attempt")
+    missing = sorted({SCENE_KEY + p for run in runs for p in scene_candidates(run)} - set(inputs))
+    if missing:
+        problems.append(f"{path} does not cover the scene files {missing}: run isaac_bundle.py check again")
     for run in runs:
         inherited = inherited_controls(run, environ)
         if inherited:
@@ -659,6 +713,11 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
     problems = []
     for n, run in enumerate(runs):
         r = run.at(1)
+        if any("{attempt}" in run.env.get(k, "") for k in ("SCENE_DIR", "SCENE")):
+            # the proof hashes the scene files a riib run may open (scene_candidates); per-attempt scene folders would
+            # put a retry's choice outside it (Codex round 8)
+            problems.append(f"{r.name}: SCENE_DIR / SCENE may not depend on the attempt (not run)")
+            continue
         if PATH_DISPLAY_DIAGNOSTIC_ENV in {**environ, **r.env}:
             # path display plan (2026-11-14): the diagnostic display modes put the line into the perception renders
             problems.append(f"{r.name}: {PATH_DISPLAY_DIAGNOSTIC_ENV} is diagnostic only, never in a bundle (not run)")
@@ -730,7 +789,10 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
                     parts = line.split()
                     got.update(map_bundle=parts[1], map_id=parts[2] if len(parts) > 2 else None)
             info[r.name] = got
-        args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
+        printed = lines[lines.index("RUNNER_ARGS") + 1:]
+        # each printed line's leading --option (the launchers print one argument per line; a line holding "--opt
+        # value" still names --opt): a value with spaces or " --" inside is never read as an option (Codex round 12)
+        args = [line.split()[0] for line in printed if line.startswith("--") and line.split()]
         if any(a == "--scene-requirements" or a.startswith("--scene-requirements=") for a in args):
             # the proof hashes the snapshot's config/scene_requirements.yaml, not another file (Codex)
             problems.append(f"{r.name}: --scene-requirements names another requirements file, which the preflight "
@@ -739,6 +801,22 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
         unknown = sorted({a.split("=", 1)[0] for a in args if a.startswith("--")} - known)
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
+        candidates = scene_candidates(r)
+        if any(line.split()[:1] == ["--scene-file"] and line != "--scene-file" for line in printed):
+            # one argument per line is the contract the scene check reads (Codex round 13)
+            problems.append(f"{r.name}: the DRY_RUN prints --scene-file and its value on one line (one argument per "
+                            "line, please)")
+            continue
+        chosen = last_option_value(printed, "--scene-file")
+        if candidates and chosen is not None:
+            # the file the launch chose must be one the proof hashes: both read as scene_digest reads them (the folder
+            # resolved, the name kept), the runner's value the last one given
+            def as_read(path):
+                return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
+
+            # a relative value is the launch's own, from the run's working directory
+            if as_read(os.path.join(r.cwd or ".", chosen)) not in {as_read(c) for c in candidates}:
+                problems.append(f"{r.name}: the DRY_RUN chose {chosen}, not one of the scene files the proof covers")
     return problems
 
 

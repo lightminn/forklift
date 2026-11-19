@@ -18,6 +18,7 @@ from forklift_core.control.path_tracking import AckermannGeometry
 from forklift_core.geometry import rotation_matrix_from_quaternion_xyzw
 from forklift_core.perception.pallet_geometry import (
     INSERTION_RESERVE_M,
+    PalletBox,
     PalletGeometry,
     pallet_boxes,
     target_insertion_depth_m,
@@ -412,6 +413,20 @@ def grounded_boxes(boxes) -> list:
     return out
 
 
+def shelf_closed_boxes(geometry: PalletGeometry) -> list[PalletBox]:
+    """The closed-shelf test article (docs/plans/2026-11-18-bottom-deck-structure-default.md 3-3): the N2 catalogue's
+    shelf_closed (tools/negative_structures.py) -- columns at the pallet's block rows running the full depth from the
+    floor up to a solid deck, no gap -- in this module's named boxes. From the entry face it shows the pallet's lanes;
+    from a side, a face closed along its depth. Not a pallet: nothing here is a support or a pocket wall by name."""
+    g = geometry
+    deck_bottom = g.overall_height_m - g.top_board_thickness_m
+    boxes = [PalletBox(f"shelf_column_{i}", (g.overall_depth_m, w, deck_bottom), (0.0, y, deck_bottom / 2))
+             for i, (y, w) in enumerate(zip(g.block_centres_y_m(), g.block_widths_m, strict=True))]
+    boxes.append(PalletBox("shelf_deck", (g.overall_depth_m, g.overall_width_m, g.top_board_thickness_m),
+                           (0.0, 0.0, deck_bottom + g.top_board_thickness_m / 2)))
+    return boxes
+
+
 def assert_pallet_urdf_matches_named_boxes(
     pallet_urdf: Path,
     geometry: PalletGeometry,
@@ -431,6 +446,8 @@ def assert_pallet_urdf_matches_named_boxes(
     boxes = pallet_boxes(geometry)
     if article == "grounded":  # the bottomless test article (a pick target since 2026-10-27): its own boxes, not waived
         boxes = grounded_boxes(boxes)
+    elif article == "shelf_closed":  # the closed-shelf negative (S-): a different object, checked box by box all the same
+        boxes = shelf_closed_boxes(geometry)
     elif article != "nominal":
         raise ValueError(f"unknown pallet article {article!r}")
     expected_boxes = {box.name: box for box in boxes}

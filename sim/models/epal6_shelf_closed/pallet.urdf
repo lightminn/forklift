@@ -1,0 +1,65 @@
+<?xml version='1.0' encoding='utf-8'?>
+<robot name="epal6_pallet">
+  <link name="pallet">
+    <visual name="shelf_column_0">
+      <origin xyz="0 -0.35 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.1 0.122" />
+      </geometry>
+      <material name="grey_shelf_column_0">
+        <color rgba="0.55 0.57 0.60 1" />
+      </material>
+    </visual>
+    <collision name="shelf_column_0">
+      <origin xyz="0 -0.35 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.1 0.122" />
+      </geometry>
+    </collision>
+    <visual name="shelf_column_1">
+      <origin xyz="0 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.145 0.122" />
+      </geometry>
+      <material name="grey_shelf_column_1">
+        <color rgba="0.55 0.57 0.60 1" />
+      </material>
+    </visual>
+    <collision name="shelf_column_1">
+      <origin xyz="0 0 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.145 0.122" />
+      </geometry>
+    </collision>
+    <visual name="shelf_column_2">
+      <origin xyz="0 0.35 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.1 0.122" />
+      </geometry>
+      <material name="grey_shelf_column_2">
+        <color rgba="0.55 0.57 0.60 1" />
+      </material>
+    </visual>
+    <collision name="shelf_column_2">
+      <origin xyz="0 0.35 0.061" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.1 0.122" />
+      </geometry>
+    </collision>
+    <visual name="shelf_deck">
+      <origin xyz="0 0 0.133" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.022" />
+      </geometry>
+      <material name="grey_shelf_deck">
+        <color rgba="0.55 0.57 0.60 1" />
+      </material>
+    </visual>
+    <collision name="shelf_deck">
+      <origin xyz="0 0 0.133" rpy="0 0 0" />
+      <geometry>
+        <box size="0.6 0.8 0.022" />
+      </geometry>
+    </collision>
+  </link>
+</robot>
