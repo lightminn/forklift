@@ -515,3 +515,35 @@ def test_the_layers_zero_on_the_requested_direction_reaches_the_request_under_th
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
     assert out.acting and out.requested_speed == 0.0 and out.why == "occupied"
     assert "motion_hold" not in c.state  # not a hold: the request itself is cut
+
+
+# --- impl round 4 ---------------------------------------------------------------------------------------------------
+def test_a_positive_d5_answer_below_the_requested_directions_possible_speed_holds():
+    """Design 7.3: encoder bound 0.07, unconfirmed output 0.03, D5 allows 0.037 m/s forward -- a hold, not a request
+    capped to 0.037 (a low positive target cannot guarantee the possible motion's stop)."""
+    from types import SimpleNamespace
+
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    from test_core_truth_split import permission_core
+
+    check = SimpleNamespace(limit=lambda *a: (0.037, "ok") if a[3] > 0 else (math.inf, "ok"), summary=lambda: {})
+    c, _ = permission_core(SafetySpeed(0.07, 0.07, (1,)), phase="insert", pocket_check=check)
+    c.state["outstanding_motion"] = {1: 0.03}
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.05, False, None)
+    assert out.allowed == 0.0 and out.requested_speed == 0.0
+    assert out.why == "residual_over_allowed" and c.state["motion_hold"] == "residual_over_allowed"
+
+
+def test_fresh_frames_without_a_check_builder_end_at_the_approach_without_the_bypass():
+    r = Rig(frames=True, real_requests=True, real_layer=True, check_builder=False)  # no PocketCheck builder (PR 7)
+    r.start()
+    phases = []
+    submit(r)
+    for _ in range(9000):
+        rec = r.tick()
+        phases.append(r.core.ms.phase)
+        if r.core.commands.status in ("cancelled", "failed", "recovery_required", "done"):
+            break
+    assert "pocket_check_unavailable" in str(r.core.commands.end_reason)
+    assert "insert" not in phases and r.core.obstacle["layer"].exempt is None

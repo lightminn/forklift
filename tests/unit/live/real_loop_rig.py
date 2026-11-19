@@ -308,7 +308,8 @@ class FakeImu:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False):
+                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False,
+                 check_builder=True):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -410,7 +411,8 @@ class Rig:
         hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m,
                               odom_base=self.odom_base if reloc else (lambda: (0.0, 0.0, 0.0)),
                               ready=lambda t, inputs: None, started=lambda *a: None, record=lambda *a: None,
-                              geometry=geometry, pocket_frame=self._frame, pocket_check=build_check,
+                              geometry=geometry, pocket_frame=self._frame,
+                              pocket_check=build_check if check_builder else None,  # 5d: no builder (PR 7)
                               operator=((lambda r: loop_box["loop"].operator_check(r)) if real_requests
                                         else self._operator), tick=tick, layer=self.layer,
                               occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None)
