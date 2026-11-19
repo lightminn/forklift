@@ -472,7 +472,8 @@ class Rig:
             link_reason=lambda n: None if self.host.health(n).fresh else "stale",
             measurement=lambda n: ra.MeasurementView(True, True, True, True),
             odometry_continuous=lambda n: loop_box["loop"].odom_continuous,
-            slam=lambda n: ra.SlamView(self.tracker.mode, n, 0.0, core.commands.mission_gen),
+            slam=lambda n: ra.SlamView(self.tracker.mode, n, float(getattr(self.tracker, "hold_travel_m", 0.0)),
+                                       core.commands.mission_gen),
             snapshot=snapshot_view,
             operator_start_ok=(lambda n: self.loop.operator_start.ok(self.lease)) if real_requests
             else (lambda n: True), core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),

@@ -255,3 +255,34 @@ def test_the_slam_bypass_caps_the_written_drives():
     moving = [abs(v) for v in written if v]
     assert moving and max(moving) <= 0.06 + 1e-9  # every moving DRIVE written within the cap
     assert max(asked) > 0.06  # while the core asked for more
+
+
+def test_a_skipped_reply_before_any_processed_is_filtered():
+    r = rig()
+    r.tracker.received = r.tracker.applied = None  # a tracker that never had a correction
+    r.slam.auto = False
+    r.slam.extra = [r.slam.reply(r.loop._t(r.now), status="skipped")]
+    r.tick()
+    assert r.loop.reloc_dropped["skipped_first"] == 1
+    assert r.loop.records[-1].branch != "emergency"
+
+
+def test_a_closed_hold_over_its_limit_opens_a_generation():
+    r = rig()
+    stand(r)
+    x, y, yaw = r.odom_base()
+    r.tracker.hold(odom_from_base=(x - ra.HOLD_MAX_M - 0.1, y, yaw))  # the next read counts the travel past the limit
+    r.tick()
+    assert all(rec.branch != "emergency" for rec in r.loop.records[-1:])
+    assert r.core.relocalize_generation() is not None
+    assert any(e.get("reason") == "hold_too_long" for e in r.core.state.get("field_recoveries", []))
+
+
+def test_a_truck_pushed_off_the_start_after_the_arm_is_stopped_at_the_transmit_gate():
+    r = rig()
+    start_and_submit(r)
+    run_until(r, lambda rec: r.permit.state in (ra.ARMING, ra.READY), 600)
+    r.loop.start_rear = (0.3, 0.0, 0.0)  # as if the truck were pushed 0.3 m off while the ARM was answered
+    rec = run_until(r, lambda rec: rec.branch == "emergency", 200)
+    assert "not_at_start" in (rec.reason or "")
+    assert r.loop._moved_for != r.core.commands.mission_id  # no moving DRIVE of this mission was written
