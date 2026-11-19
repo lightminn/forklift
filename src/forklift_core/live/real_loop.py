@@ -130,7 +130,6 @@ class RealSession:
         mission_id, mission = cmds.mission_id, cmds.mission
         if mission_id is None or mission_id == self._ended_id:
             return None
-        self._ended_id = mission_id
         if lift_m is not None:
             core.ms.lift_command = float(lift_m)
         core.abandon_jobs(t)
@@ -139,6 +138,9 @@ class RealSession:
             cmds.note_end(t, cmds.end_reason)
         clock = cmds.take_clock()
         core.end_reset(t, release_allowed=release_allowed)
+        # marked collected only once every step ran (6a impl round 2 P2-2): a step that raised is tried again at the
+        # next collection (before the next apply clears the final status), so the field recovery still opens
+        self._ended_id = mission_id
         entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": float(t),
                  "pallet_id": None if mission is None else mission.pallet_id,
                  "destination_id": None if mission is None else mission.destination_id, "clock": clock}
@@ -1174,6 +1176,7 @@ class RealLoop:
                 self._transmit(now_ns)
             except Exception as exc2:  # noqa: BLE001 -- the DISARM stays queued; the permit retries it next tick
                 rec.reason = f"{rec.reason};transmit:{type(exc2).__name__}"
+            self._settle_exception(now_ns, t, rec.reason)  # impl round 2 P2-1: the tick's requests answered once
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
         self.record(rec)
@@ -1191,6 +1194,7 @@ class RealLoop:
         self._odom_broken = False
         core.state.pop("motion_hold", None)  # a hold is this tick's only (round 3 P2-2)
         self._apply_bypass(now_ns)  # 5c-1: the session's bypass for every judgement of this tick
+        before_ = permit.state  # 6a impl round 2 P2-4: a DISARM the permit decides itself is recorded too
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
@@ -1230,6 +1234,7 @@ class RealLoop:
         host.tick(now_ns)
         self._bind_permit(now_ns)
         permit.tick(now_ns)
+        self._note_permit_disarm(before_)
         if self._s10_stopping and permit.state == ra.LATCHED:
             # the control stop confirmed and DISARMED seen (or the DISARM after a failure): the arbiter STOPPED with
             # the permit, so only a rearm in STOPPED goes on (design 4 5)
@@ -1414,6 +1419,13 @@ class RealLoop:
 
         self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
                          collect=lambda r: self._end_now(now_ns, r))
+
+    def _note_permit_disarm(self, before: str) -> None:
+        """A latch or a DISARM the permit decided on its own (``permit.tick`` / ``on_state``): its decision instant on
+        the clock, as ``_emergency`` records its own (6a impl round 2 P2-4)."""
+        now_state = self.permit.state
+        if now_state in (ra.DISARMING, ra.LATCHED) and before not in (ra.DISARMING, ra.LATCHED):
+            self.disarm_decisions.append((int(self.clock()), f"permit:{self.permit.reason}"))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
         # 6a impl round 1 P2-4: the clock at the decision (the axis watch's last gap runs to here, not the tick start)
@@ -2122,6 +2134,8 @@ class RealLoop:
             # every alarm first: an old frame's expiry never hides one (round 7 P2-1)
             expires = getattr(frame, "expires_ns", None)
             if expires is not None and ns >= int(expires):
+                if arming_ and frame.kind == "DRIVE":
+                    return "zero_expired", "cancel"  # 6a impl round 2 P2-3: the arming zero ran out at the gate
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             booked = next((f for f in self.book.frames if f.seq == seq), None)
             continuing_ = frame is getattr(self.transport, "partial_frame", None)

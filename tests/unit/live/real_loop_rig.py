@@ -251,8 +251,11 @@ class FakeTransport:
                 self.resync(host, now_ns)  # refused half frame: abandoned, the link reopened
         while (f := host.next_frame(now_ns)) is not None:
             if f.kind in self.eagain:
-                gate(f, lambda *, judged_ns=None: None)  # judged, then EAGAIN at its first byte (6a impl round 1)
+                # 6a impl rounds 1-2: EAGAIN only after the gate passed it (a refusal keeps the refusal's own path)
+                passed = gate(f, lambda *, judged_ns=None: None)
                 host.unsent(f, now_ns)
+                if not passed and not getattr(gate, "keep", False):
+                    host.drop_drives("send_gate")
                 break
 
             def write(f=f, *, judged_ns=None):

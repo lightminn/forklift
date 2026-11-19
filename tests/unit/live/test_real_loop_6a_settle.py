@@ -263,3 +263,60 @@ def test_the_disarm_decision_instant_is_recorded_on_the_clock():
     r.loop._emergency(r.now, "injected")  # noqa: SLF001
     r.tick_cost_ns = 0
     assert r.loop.disarm_decisions[-1] == (r.now + 6 * MS, "injected")
+
+
+# --- Codex 6a-1 impl round 2 -------------------------------------------------------------------------------------
+def test_a_failing_end_collection_after_an_early_return_still_answers_the_ticks_requests():
+    r = ready_to_submit()
+    real_ctrl, real_collect = r.loop._control_and_output, r.loop._collect  # noqa: SLF001
+    state = {"armed": False, "calls": 0}
+
+    def early(now_ns, t, rec):
+        if state["armed"]:
+            return None  # an early return before tick_end (as a mission ended at the head)
+        return real_ctrl(now_ns, t, rec)
+
+    def collect(now_ns, t, rec):
+        if state["armed"]:
+            state["calls"] += 1
+            if state["calls"] == 3:  # the tick's final collection
+                state["armed"] = False
+                raise RuntimeError("injected:collect")
+        return real_collect(now_ns, t, rec)
+
+    r.loop._control_and_output, r.loop._collect = early, collect  # noqa: SLF001
+    submit_with(r, lambda: state.update(armed=True))
+    rec = r.tick()
+    assert "exception:collect" in (rec.reason or "")
+    got = replies(r)
+    assert [m for m in got if m.get("of") == "mission_submit"], got  # answered in this tick, not invalid next tick
+
+
+def test_a_collection_that_raised_once_is_done_at_the_next_collection():
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
+    failing_once(r.core, "abandon_jobs")
+    run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
+    assert r.loop.session.results[-1]["reason"] == "s10_lifted"
+
+
+def test_an_arming_zero_that_cannot_go_out_in_time_ends_the_exchange():
+    r = ready_to_submit()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, limit=400)
+    r.transport.eagain = {"DRIVE"}
+    t0 = r.now
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED, limit=100)
+    assert r.now - t0 < int(0.3e9)
+
+
+def test_a_disarm_the_permit_decides_itself_is_recorded():
+    from test_real_loop_6a_gate import driving
+
+    r = driving()
+    n = len(r.loop.disarm_decisions)
+    r.transport.silent = True
+    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=50)
+    assert len(r.loop.disarm_decisions) > n
