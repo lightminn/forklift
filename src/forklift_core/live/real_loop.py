@@ -171,7 +171,6 @@ class RealLoop:
         self._watch_trip: str | None = None  # the safety watch's trip on a STATE of this tick
         self._binding: dict = {}  # seq -> (lease id, arbiter control generation) a loop frame was decided under
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
-        self._superseded: set = set()  # seqs a newer decision replaced: a half-written one of them is never finished
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
 
     def _on_console_disarm(self, now_mono: float) -> None:
@@ -824,12 +823,6 @@ class RealLoop:
         partial_seq = None if partial is None else int(partial.seq) & 0xFFFF
         for f in [f for f in self.book.frames if f.written_ns is None and f.seq != partial_seq]:
             self.book.discarded(f.seq)  # never written, now never will be: it cannot act (a half-written one may)
-        if partial is not None and getattr(partial, "kind", None) == "DRIVE":
-            # a half-written older DRIVE is replaced too: its continuation is refused at the gate, the transport
-            # abandons it (a link reset -- the emergency path, DISARM first), Codex PR 5 design round 7 P1
-            self._superseded = {partial_seq}
-        else:
-            self._superseded = set()
         drive = command_.drive
         speed = float(drive.speed_mps)
         if abs(speed) > self.max_speed_mps:  # the rear-axle command cap (design 2.5 4)
@@ -910,8 +903,6 @@ class RealLoop:
             more than EVIDENCE_READ_MAX_S refuses (round 5 P1-3)."""
             if permit.state not in authority:
                 return f"permit_{permit.state.lower()}", "drop"  # a latch or a DISARM under way: no motion (P1-1)
-            if (int(frame.seq) & 0xFFFF) in self._superseded:
-                return "superseded", "drop"  # a newer decision replaced it (a half-written one is abandoned)
             if a.mode == "STOPPED":
                 return "stopped", "alarm"
             # every timed judgement at ``ns``, the latest instant the write may happen: the evidence's ages too (a
