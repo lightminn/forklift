@@ -17,10 +17,24 @@ const st = (permit, mission, extra = {}) => ({t: "real_status", session_epoch: 3
   mission: {status: mission}, bypassed: [], ...extra});
 const out = {};
 out.shown = [P.panelShown({t: "real_status"}), P.panelShown({t: "state"}), P.panelShown(null)];
-out.rev = [P.submitRevision(5, {targets_revision: 4}), P.submitRevision(null, {targets_revision: 4}),
-           P.submitRevision(5, null), P.submitRevision(null, null), P.submitRevision(5, {targets_revision: 7})];
+const reg = {session_epoch: 3, revision: 5};
+out.rev = [P.submitRevision(reg, st("OFF", "idle", {targets_revision: 5})),
+           P.submitRevision(reg, st("OFF", "idle", {targets_revision: 6})),
+           P.submitRevision(reg, {...st("OFF", "idle", {targets_revision: 5}), session_epoch: 4}),
+           P.submitRevision(null, st("OFF", "idle", {targets_revision: 5}))];
 out.why = [P.closedWhy(st("OFF", "idle"), true), P.closedWhy(st("DRIVING", "running"), true),
            P.closedWhy(st("LATCHED", "running"), true), P.closedWhy(st("OFF", "idle"), false), P.closedWhy(null, true)];
+out.submitWhy = [P.submitClosedWhy(st("OFF", "idle"), true, false), P.submitClosedWhy(st("LATCHED", "idle"), true, false),
+                 P.submitClosedWhy(st("OFF", "idle", {mode: "STOPPED"}), true, false),
+                 P.submitClosedWhy(st("OFF", "idle"), true, true)];
+const gens = {session_epoch: 3, lease_id: "L1"};
+out.mine = [P.statusIsMine(st("OFF", "idle", {lease: {holder: "me"}}), gens, "me"),
+            P.statusIsMine(st("OFF", "idle", {lease: {holder: "other"}}), gens, "me"),
+            P.statusIsMine({...st("OFF", "idle", {lease: {holder: "me"}}), session_epoch: 2}, gens, "me"),
+            P.statusIsMine(st("OFF", "idle", {lease: {holder: "me"}}), {session_epoch: 3, lease_id: null}, "me")];
+out.shownToggle = [P.toggleShown({check: "imu", on: true}, st("OFF", "idle", {bypassed: ["imu"]})),
+                   P.toggleShown({check: "imu", on: false}, st("OFF", "idle", {bypassed: ["imu"]})),
+                   P.toggleShown({check: "imu", on: false}, st("OFF", "idle"))];
 const b = P.bypassButtons(st("OFF", "idle", {bypassed: ["imu"]}), true);
 out.buttons = b.map((x) => [x.check, x.bypassed, x.enabled]);
 out.closed = P.bypassButtons(st("READY", "running"), true).every((x) => !x.enabled && x.why);
@@ -43,7 +57,10 @@ def test_the_panel_decisions(tmp_path):
     script.write_text(DRIVER % (ROOT / "console/web/js/realpanel.js").as_posix())
     out = json.loads(subprocess.run([NODE, str(script)], capture_output=True, text=True, check=True).stdout)
     assert out["shown"] == [True, False, False]
-    assert out["rev"] == [5, 4, 5, None, 7]
+    assert out["rev"] == [5, None, None, None]  # a newer vehicle list or another session: register again
+    assert out["submitWhy"][0] is None and all(isinstance(w, str) for w in out["submitWhy"][1:])
+    assert out["mine"] == [True, False, False, False]
+    assert out["shownToggle"] == [True, False, True]
     assert out["why"][0] is None and all(isinstance(w, str) for w in out["why"][1:])
     assert ["imu", True, True] in out["buttons"] and ["slam", False, True] in out["buttons"]
     assert len(out["buttons"]) == 9 and out["closed"] is True

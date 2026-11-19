@@ -1065,7 +1065,7 @@ setInterval(() => {
 }, 250);
 setInterval(() => {
   render(m);
-  renderRealPanel(m); // 5c-1b: the real truck's operator panel
+  renderRealPanel(m, clientId); // 5c-1b: the real truck's operator panel
   if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
   refreshWizard();
   const stale = staleness({
@@ -1076,7 +1076,7 @@ setInterval(() => {
   $("stale-banner").hidden = !m.stale;
   $("stale-banner").textContent = stale.text;
 }, 100);
-bindRealPanel(m, rejectText);
+bindRealPanel(m, rejectText, clientId);
 connectControl();
 connectMedia();
 requestAnimationFrame(frame);

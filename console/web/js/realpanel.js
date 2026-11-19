@@ -15,22 +15,46 @@ export function panelShown(realStatus) {
   return Boolean(realStatus && realStatus.t === "real_status");
 }
 
-// The revision a submit names: the newest of the registration's ack and the target list (null: none known).
-export function submitRevision(registered, targets) {
-  const a = Number.isInteger(registered) ? registered : null;
-  const b = targets && Number.isInteger(targets.targets_revision) ? targets.targets_revision : null;
-  if (a === null) return b;
-  if (b === null) return a;
-  return Math.max(a, b);
+// The revision a submit names: the one this session's registration got, unless the vehicle's list has moved past it
+// (then register again -- 5c-1b r1 P2-4). null: none usable.
+export function submitRevision(registered, status) {
+  if (!registered || !status || registered.session_epoch !== status.session_epoch) return null;
+  const now = Number.isInteger(status.targets_revision) ? status.targets_revision : null;
+  if (now !== null && now > registered.revision) return null;
+  return registered.revision;
 }
 
-// Why the operator may not act now (null: may): the lease, the permit off, no mission under way.
+// Whether this console may act from this status: the status is this session's and names this client as the holder
+// (5c-1b r1 P2-2: an old session's or connection's status does not open the buttons).
+export function statusIsMine(status, generations, clientId) {
+  return Boolean(status && generations && status.session_epoch === generations.session_epoch
+    && generations.lease_id !== null && status.lease && status.lease.holder === clientId);
+}
+
+// Why the operator may not toggle a bypass now (null: may): the lease, the permit off or latched, no mission.
 export function closedWhy(status, hasLease) {
   if (!hasLease) return "조종 권한이 없습니다";
   if (!status) return "실차 상태를 아직 받지 못했습니다";
   if (!OFF.includes(status.permit?.state)) return "무장 중에는 바꿀 수 없습니다";
   if (ACTIVE.includes(status.mission?.status)) return "진행 중인 미션이 있습니다";
   return null;
+}
+
+// Why a submit (and the start check) may not go now: as above, and not latched or stopped (a rearm first, r1 P2-6),
+// and no bypass toggle still waiting to show in real_status (r1 P2-3).
+export function submitClosedWhy(status, hasLease, pendingToggle) {
+  const why = closedWhy(status, hasLease);
+  if (why) return why;
+  if (status.permit?.state === "LATCHED" || status.mode === "STOPPED") return "재무장이 필요합니다";
+  if (pendingToggle) return "우회 변경이 적용되기를 기다립니다";
+  return null;
+}
+
+// Whether a toggle sent (check, on) shows in the status's bypassed set.
+export function toggleShown(toggle, status) {
+  if (!toggle || !status) return false;
+  const on = Array.isArray(status.bypassed) && status.bypassed.includes(toggle.check);
+  return on === toggle.on;
 }
 
 // One button per bypassable check: its label, whether it is bypassed now (real_status only), enabled, why not.

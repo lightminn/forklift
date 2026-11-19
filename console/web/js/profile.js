@@ -242,6 +242,7 @@ export const REJECT = {
   state_forbids_teleop: "지금 상태에서는 수동 조종을 할 수 없습니다",
   stopped_locked: "정지됨 상태입니다 · 재무장을 먼저 하세요",
   real_rearm_refused: "실차 재무장 조건이 아직 맞지 않습니다 · 정지·DISARM·이전 명령 해소를 확인하세요",
+  "not_ready:": "실차 준비 조건이 맞지 않습니다", // the real truck's submit refusal, its reason after (5c-1b r1 P3)
   // the real truck's console requests (5c-1, real safety wiring design 5)
   already_answered: "이 확인 요청에는 이미 답했습니다",
   armed: "무장 중에는 바꿀 수 없습니다 · 정지·DISARM 뒤에 하세요",

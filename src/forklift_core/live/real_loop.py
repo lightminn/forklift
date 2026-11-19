@@ -411,6 +411,7 @@ class RealLoop:
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "bypassed": sorted(self.bypass),
+            "mode": a.mode,  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
         }
 
     def _on_console_disarm(self, now_mono: float) -> None:
