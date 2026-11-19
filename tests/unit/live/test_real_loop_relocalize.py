@@ -305,7 +305,8 @@ def test_a_disconnect_queued_before_the_close_voids_the_attempt():
 
     r.loop._commit_void = late
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
-    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:lease"
+    assert status(r)["state"] == "refused"
+    assert status(r)["reason"] in ("relocalize_voided:lease", "relocalize_voided:emergency")
     assert r.core.relocalize_generation() == gen
 
 
@@ -390,9 +391,14 @@ def test_the_open_generation_without_replies_stays_warming_up_without_an_emergen
     r = rig()
     gen = open_generation(r)
     r.slam.auto = False
-    r.tick(80)  # 1.6 s of silence
+    r.slam.request_processed = lambda *a, **k: None  # no answer to the confirmation either
+    stand(r)
+    reply, _ = ask(r, "relocalize_confirm", generation=gen)
+    assert reply["t"] == "ack"
+    r.tick(200)  # 4 s of silence, past the attempt's limit
     assert r.tracker.mode == "warming_up" and r.core.relocalize_generation() == gen
-    assert all(rec.branch != "emergency" for rec in r.loop.records[-80:])
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_no_reply"
+    assert all(rec.branch != "emergency" for rec in r.loop.records[-200:])
 
 
 def test_a_reboot_before_the_first_correction():
@@ -402,8 +408,13 @@ def test_a_reboot_before_the_first_correction():
     r.slam.auto = False
     r.mcu.boot = 0x6262  # the MCU reboots
     r.tick(20)
-    assert r.core.relocalize_generation() is not None
-    assert all(rec.branch != "emergency" for rec in r.loop.records[-15:])
+    gen = r.core.relocalize_generation()
+    assert gen is not None
+    stand(r, 40)
+    reply, _ = ask(r, "relocalize_confirm", generation=gen)  # only the confirmation's own reply comes
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 300)
+    assert reply["t"] == "ack" and status(r)["state"] == "confirmed"
+    assert not any(rec.branch == "emergency" for rec in r.loop.records[-300:])  # never the no-correction exception
 
 
 def test_a_long_slam_silence_does_not_stop_the_arbiter_or_refuse_teleop():
@@ -415,6 +426,13 @@ def test_a_long_slam_silence_does_not_stop_the_arbiter_or_refuse_teleop():
     assert r.arbiter.mode != "STOPPED"
     reply, _ = ask(r, "mode_request", to="TELEOP")
     assert reply.get("reason") != "not_stopped", reply
+    r.say("stop")
+    r.tick(3)
+    assert r.arbiter.mode == "STOPPED"
+    stand(r, 5)
+    reply, _ = ask(r, "rearm")
+    r.tick(3)
+    assert reply["t"] == "ack" and r.arbiter.mode == "PAUSED", reply  # the rearm reads the physical stand
 
 
 def test_a_push_off_the_start_during_the_arm_is_stopped_before_it_reaches_the_gate():
@@ -487,8 +505,15 @@ def test_skipped_only_with_both_bypasses_never_arms():
     since = len(r.transport.sent)
     pid = next(iter(r.core.targets.pallets))
     reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
-    r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
-    r.tick(300)
+    rid = r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
+    modes = []
+    for _ in range(300):
+        r.tick()
+        modes.append(r.arbiter.mode)
+    got, _ = replies(r)
+    assert any(m.get("request_id") == rid and m["t"] == "ack" for m in got)  # the submit taken
+    assert "AUTO" in modes and r.jobs.submitted  # AUTO entered and the plan asked for
+    assert [e["reason"] for e in r.loop.session.results] == ["prepare:moving"]  # the adoption's fresh stand refused
     from forklift_core.mcu_link.messages import Arm
 
     assert not any(isinstance(m, Arm) for _, k, _, m in r.transport.sent[since:])
@@ -525,6 +550,14 @@ def test_with_the_slam_bypass_skipped_replies_keep_it_driving_capped_until_the_p
         return ow(seq, written_ns)
 
     r.loop._book, r.loop.book.written = book, wrote
+    asked = []
+    od = r.loop._auto_drive
+
+    def spy(now_ns, command_, steer, rec_):
+        asked.append((r.loop._t(now_ns), abs(float(command_.drive.speed_mps))))
+        return od(now_ns, command_, steer, rec_)
+
+    r.loop._auto_drive = spy
     start_and_submit(r)
     run_until(r, lambda rec: any(v for _, v in written), 1500)
     t_cut = r.loop._t(r.now)
@@ -532,4 +565,101 @@ def test_with_the_slam_bypass_skipped_replies_keep_it_driving_capped_until_the_p
     run_until(r, lambda rec: r.core.commands.status in ("cancelled", "failed", "done"), 2000)
     after = [abs(v) for t, v in written if t > t_cut + ra.SLAM_MAX_AGE_S and v]
     assert after and max(after) <= 0.06 + 1e-9  # driving on after the last processed expired, capped
+    assert max(v for t, v in asked if t > t_cut + ra.SLAM_MAX_AGE_S) > 0.06  # while more was asked then
     assert "pocket_stop" in (r.core.commands.end_reason or "")
+
+
+# --- impl round 2 ---------------------------------------------------------------------------------------------------
+def _before_commit(r, action):
+    orig = r.loop._commit_void
+
+    def late(t, closing=True):
+        action()
+        r.loop._commit_void = orig
+        return orig(t, closing)
+
+    r.loop._commit_void = late
+
+
+@pytest.mark.parametrize("kind", ["stop", "disarm"])
+def test_a_stop_or_disarm_queued_before_the_close_voids_the_attempt(kind):
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    _before_commit(r, lambda: r.say(kind))
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:emergency"
+    assert r.core.relocalize_generation() == gen
+
+
+def test_a_disarm_queued_before_the_seed_leaves_no_seed():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    _before_commit(r, lambda: r.say("disarm"))
+    r.say("relocalize_declare", generation=gen)
+    r.tick(2)
+    assert not any(c[0] == "seed" for c in r.slam.calls) and not r.loop._declared()
+
+
+def test_a_disarm_taken_voids_a_waiting_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    r.slam.request_processed = lambda *a, **k: None  # the confirmation keeps waiting
+    ask(r, "relocalize_confirm", generation=gen)
+    r.say("disarm")
+    r.tick(3)
+    assert status(r)["state"] == "refused"
+    assert status(r)["reason"] in ("relocalize_voided:emergency", "relocalize_voided:control")
+
+
+def test_freshness_is_judged_on_the_clock_at_the_close():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    r.slam.auto = False  # only the reference reply comes
+
+    def later():
+        r.tick_cost_ns = 600 * 1_000_000  # the close runs 0.6 s after the tick began: the correction is too old
+
+    _before_commit(r, later)
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    r.tick_cost_ns = 0
+    assert status(r)["state"] == "refused" and status(r)["reason"] in ("relocalize_stale", "relocalize_voided:lease")
+    assert r.core.relocalize_generation() == gen
+
+
+def test_a_layer_worker_dying_before_the_close_voids_the_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    _before_commit(r, lambda: setattr(r.layer.worker, "alive", False))
+    run_until(r, lambda rec: status(r)["state"] != "waiting" or rec.branch == "emergency", 400)
+    assert r.core.relocalize_generation() == gen
+
+
+def test_a_push_with_the_start_fixed_is_stopped_at_the_transmit_gate():
+    """The start target fixed 0.095 m behind the truck; the ARM answered 150 ms late; both encoders advance 1.5 mm
+    every 20 ms meanwhile -- the first moving DRIVE meets the gate past 0.10 m."""
+    import math as _m
+
+    r = rig()
+    r.loop.start_rear = (-0.095, 0.0, 0.0)
+    r.mcu.arm_delay = 15
+    start_and_submit(r)
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, 800)
+    mid = r.core.commands.mission_id
+    cpm = 327680.0 / (2 * _m.pi * 0.125)
+    rec = None
+    for _ in range(60):
+        r.mcu.counts[0] += 0.0015 * cpm
+        r.mcu.counts[1] += 0.0015 * cpm
+        rec = r.tick()
+        if rec.branch == "emergency":
+            break
+    assert rec.branch == "emergency" and "not_at_start" in (rec.reason or ""), rec
+    assert r.loop._moved_for != mid

@@ -551,7 +551,9 @@ class RealLoop:
         self.attempt = {"kind": "confirm" if kind == "relocalize_confirm" else "declare", "generation": gen,
                         "attempt": self._attempt_serial, "lease_id": None if lease is None else lease.lease_id,
                         "control_gen": self.link.a.control_gen, "bypass": frozenset(self.bypass),
-                        "stand": self.stand_since_ns, "t": t, "reference": False, "seeded": False}
+                        "stand": self.stand_since_ns, "t": t, "reference": False, "seeded": False,
+                        # any STOP, DISARM or connection change queued after this (the channels' serial) voids it
+                        "serial": self.channels.serial()}
         if self.real_layer is not None:
             self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
         if self.attempt["kind"] == "confirm" and self._epoch_mode:
@@ -583,15 +585,30 @@ class RealLoop:
             return "relocalize_voided:bypass"
         if self.stand_since_ns != a["stand"]:
             return "relocalize_moved"
+        if self.channels.serial() != a["serial"]:
+            return "relocalize_voided:emergency"  # impl round 2 P1-1: a STOP or DISARM queued or taken since
         return None
 
-    def _commit_void(self, t: float):
+    def _commit_void(self, t: float, closing: bool = True):
         """Just before a commit (the source's seed, the generation's close): the attempt's own voids and then the
         lease judged on the clock now with the channel's pending connection changes (impl round 1 P1-1: a lease
         expired or a disconnect queued since the tick began)."""
-        why = self._attempt_void(int(self.clock()), t)
-        if why is None and self._bypass_refusal(self.attempt["lease_id"], int(self.clock())) is not None:
+        a = self.attempt
+        now_ns = int(self.clock())
+        t_now = self._t(now_ns)
+        why = self._attempt_void(now_ns, t)
+        if why is None and self._bypass_refusal(a["lease_id"], now_ns) is not None:
             why = "relocalize_voided:lease"
+        # impl round 2 P1-2/P1-3: the limit, the freshness and the layer on the clock now, not the tick's start
+        lay = self.real_layer
+        if why is None and closing and lay is not None and (not lay.worker.alive or not lay.ok(t_now)):
+            why = "relocalize_voided:layer"
+        if why is None and t_now - a["t"] > RELOCALIZE_WAIT_S:
+            why = "relocalize_timeout"
+        prov = self.provenance
+        if why is None and closing and a["kind"] == "confirm" and not self._bypassed("slam") and (
+                prov is None or t_now - prov[3] > ra.SLAM_MAX_AGE_S):
+            why = "relocalize_stale"
         return why
 
     def _declare_apply(self, now_ns: int, t: float, loaded: bool) -> None:
@@ -602,14 +619,17 @@ class RealLoop:
         odom = tuple(float(v) for v in self.core.hooks.slam_odom_base())
         c = tuple(float(v) for v in compose(target, invert(odom)))
         with self.channels.lock:  # the check and the seed under one lock: no connection change slips between
-            why = self._commit_void(t)
+            why = self._commit_void(t, closing=False)  # the layer was just cut: its result is judged at the close
             if why is not None:
                 self._attempt_end(t, "refused", why)
                 return
             self._new_epoch(t)
             self.slam_source.seed(self.epoch, target, t)
-            # the mark and the cap from the seed on, before anything else can fail (impl round 1 P1-2)
+            # the mark, the cap and the record from the seed on, before anything else can fail (impl rounds 1-2)
             self.declared_epoch = self.link.a.session_epoch
+            self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
+                                      "attempt": a["attempt"], "odom_from_base": list(odom),
+                                      "start_rear": list(self.start_rear), "base_target": list(target)})
         reply = SimpleNamespace(scan_id=-1, stamp_s=float(t), status="processed", map_from_odom=c, slam_wall_s=None,
                                 epoch=self.epoch, attempt=None)
         tr = self._tracker()
@@ -619,9 +639,6 @@ class RealLoop:
         if tr is not None and tr.applied is not before:
             self.provenance = (self.epoch, None, "operator_declared", float(t))
         a["seeded"] = True
-        self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
-                                  "attempt": a["attempt"], "odom_from_base": list(odom),
-                                  "start_rear": list(self.start_rear), "base_target": list(target)})
 
     def _filter_replies(self, t: float, raw) -> list:
         """Design 6, 4: the replies the core may take (the epoch mode only)."""
