@@ -73,8 +73,9 @@ def motion_allowed(transport) -> bool:
     """The device block (4c design 5): ARM and every DRIVE (the normal one, the host's zero after ARM, the wait frame,
     S10's stop frame) go out only on a transport that declares itself the internal fake MCU (``fake_mcu is True``);
     any other transport -- an operating serial link included -- passes the DISARM only. The real MCU's AUTO opens
-    with PR 5 and S10's preconditions."""
-    return getattr(transport, "fake_mcu", False) is True
+    with PR 5 and S10's preconditions. 6a (design 1): or a transport that verified an output-locked HIL board
+    (``hil_plant is True``, the loop TTY transport's own check of every STATE of the current boot)."""
+    return getattr(transport, "fake_mcu", False) is True or getattr(transport, "hil_plant", False) is True
 
 
 @dataclass
@@ -2060,7 +2061,6 @@ class RealLoop:
         (round 4 P1-1); a failure of the authority or the evidence is ① in this very tick, its DISARM written first
         (the latch drops the queue); a new wait reason, or 30 ms passed, turns a normal moving DRIVE into ③. The
         permit's own transmits (``escalate=False``) never come back to ①."""
-        motion = motion_allowed(self.transport)
         a, permit = self.link.a, self.permit
         refused, alarm, waits = [], [], []
         authority = (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING)
@@ -2082,6 +2082,7 @@ class RealLoop:
             alarm.append(stuck)
             permit.link_reset(now_ns)
             escalate_now(stuck)  # the DISARM queued (and the queue dropped) before anything else is sent
+        motion = motion_allowed(self.transport)  # 6a (design 1): after a resync that could change it
 
         def judge(frame) -> tuple:
             """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop. The readiness evidence is read
