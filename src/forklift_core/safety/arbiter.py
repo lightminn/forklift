@@ -30,6 +30,9 @@ LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_p
           "relocalize_place", "relocalize_place_confirm",  # F1: the operator's placed pose and its confirmation
           "escape_approve")  # the S6 bridge's wall escape (docs/design/2026-11-12-standing-direction-rule.md 4.2)
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
+# docs/design/2026-11-19-real-safety-wiring.md 5 (5c-1): the real truck's console requests, leased and reliable only
+# with ArbiterConfig.real_requests (off: not reliable -- no answer, as before), answered by ``real_request``
+REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass")
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
 RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_reset")
@@ -74,6 +77,8 @@ class ArbiterConfig:
     # evidence (``Arbiter.stop_evidence``) inside the one observe(); a DISARM taken whatever its control generation
     external_stop: bool = False
     disarm_ignores_control_gen: bool = False
+    # 5c-1 (real safety wiring design 5): the real console requests and recovery go to ``real_request``; off: as before
+    real_requests: bool = False
 
     def __post_init__(self):
         if self.auto_lease_loss not in ("continue", "stop"):
@@ -161,6 +166,8 @@ class Arbiter:
         # rearm_refusal(now) -> reason or None, judged before the rearm's ACK and mode change; on_rearmed(now,
         # control_gen), called where a rearm really moves STOPPED -> PAUSED (a replayed ACK never calls it)
         self.rearm_refusal = None
+        # 5c-1: (kind, msg, now) -> (refusal reason or None, reply fields), set by the real loop (real_requests on)
+        self.real_request = None
         self.on_rearmed = None
         # docs/design/2026-11-19-real-loop.md 2.1 (the real executor; None: unused): stop_evidence(now) -> (fresh,
         # standing) read inside observe() when config.external_stop; on_disarm(now) told of every DISARM taken
@@ -289,7 +296,7 @@ class Arbiter:
         self._expire(now_mono)
         if problem(msg) is not None:
             kind = msg.get("t") if isinstance(msg, dict) else None
-            if kind in RELIABLE:
+            if kind in self._reliable():
                 request_id = msg.get("request_id")
                 return self._reply(kind, request_id if isinstance(request_id, str) else None, "invalid")
             self.last_teleop_reject = "invalid" if kind == "teleop" else self.last_teleop_reject
@@ -302,7 +309,7 @@ class Arbiter:
         if conn_id is not None and self.conns.get(client_id) != conn_id and kind != "stop":
             return None
         self._handling_conn = conn_id  # a mission request answers the connection that asked (Codex M-c r3 P2)
-        if kind not in RELIABLE:
+        if kind not in self._reliable():
             return self._latest_value(client_id, kind, msg, now_mono)
         request_id = msg.get("request_id")
         if not isinstance(request_id, str) or not request_id:
@@ -313,6 +320,8 @@ class Arbiter:
                 return self._reply(kind, request_id, "unsupported")
             self.stop(now_mono, f"stop:{msg.get('source', 'console')}")
             return self._reply(kind, request_id)
+        if self.config.real_requests and kind in REAL_LEASED + ("recovery",) and "request_token" not in msg:
+            return self._reply(kind, request_id, "token_required")  # 5c-1: through the ledger only, not stored
         if self.config.request_tokens or "request_token" in msg:
             return self._handle_ledger(client_id, kind, msg, now_mono, conn_id)
         # 1. Handled before: its original answer, without running it again or checking generations.
@@ -350,6 +359,33 @@ class Arbiter:
         self.ledger.put(token, seq, result if result is not None else PENDING, now_mono)
         return result
 
+    def _reliable(self) -> tuple:
+        return RELIABLE + REAL_LEASED if self.config.real_requests else RELIABLE
+
+    def _leased(self) -> tuple:
+        return LEASED + REAL_LEASED if self.config.real_requests else LEASED
+
+    def _real(self, kind, request_id, msg, now_mono):
+        """5c-1: the payload checked here (real_requests only -- the shared validate is unchanged), then the loop."""
+        if not _real_payload_ok(kind, msg):
+            return self._reply(kind, request_id, "invalid")
+        if self.real_request is None:
+            return self._reply(kind, request_id, "unsupported")
+        reason, fields = self.real_request(kind, msg, now_mono)
+        return self._reply(kind, request_id, reason, **(fields or {}))
+
+    def _on_pallet_register(self, client_id, request_id, msg, now_mono):
+        return self._real("pallet_register", request_id, msg, now_mono)
+
+    def _on_operator_start(self, client_id, request_id, msg, now_mono):
+        return self._real("operator_start", request_id, msg, now_mono)
+
+    def _on_operator_answer(self, client_id, request_id, msg, now_mono):
+        return self._real("operator_answer", request_id, msg, now_mono)
+
+    def _on_check_bypass(self, client_id, request_id, msg, now_mono):
+        return self._real("check_bypass", request_id, msg, now_mono)
+
     def _reply(self, kind: str, request_id, reason: str | None = None, **fields) -> dict:
         reply = {"t": "ack" if reason is None else "reject", "of": kind, "request_id": request_id}
         if reason is not None:
@@ -375,11 +411,11 @@ class Arbiter:
         if not self.clients[client_id]:
             return self._reply(kind, request_id, "unsupported")  # an observe-only connection (contract 10)
         problem = self._generation_problem(  # a real truck's DISARM: stopping is the safe way, any generation
-            client_id, msg, lease=kind in LEASED,
+            client_id, msg, lease=kind in self._leased(),
             control=not (kind == "disarm" and self.config.disarm_ignores_control_gen))
         if problem is not None:
             return self._reply(kind, request_id, problem)
-        if kind in LEASED and self.session_request is not None:
+        if kind in self._leased() and self.session_request is not None:
             return self._reply(kind, request_id, "session_ending")  # the session closes (console plan D7)
         if self.reloc is not None and (kind in RELOC_REFUSED
                                        or (kind == "mode_request" and msg.get("to") in ("AUTO", "TELEOP"))):
@@ -473,6 +509,8 @@ class Arbiter:
         return self._reply(kind, request_id, control_gen=self.control_gen)
 
     def _on_recovery(self, client_id, request_id, msg, now_mono):
+        if self.config.real_requests:
+            return self._real("recovery", request_id, msg, now_mono)  # 5c-1: the field recovery's "done"
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
 
     def block_start(self, source, now_mono: float) -> None:
@@ -1090,3 +1128,25 @@ def _valid_feedback(feedback, now_mono: float, max_age_s: float) -> bool:
     if not all(isinstance(v, (int, float)) and math.isfinite(v) for v in values):
         return False
     return 0.0 <= now_mono - feedback.stamp_mono <= max_age_s
+
+
+def _real_payload_ok(kind: str, msg: dict) -> bool:
+    """5c-1 (real safety wiring design 5): the real requests' own fields."""
+    def is_int(v):
+        return isinstance(v, int) and not isinstance(v, bool)
+
+    if kind == "pallet_register":
+        pose = msg.get("pose")
+        return (isinstance(msg.get("pallet_id"), str) and bool(msg["pallet_id"]) and isinstance(pose, list)
+                and len(pose) == 3 and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                                           and math.isfinite(v) for v in pose))
+    if kind == "operator_start":
+        return True  # the session epoch is checked with the generations
+    if kind == "operator_answer":
+        return (isinstance(msg.get("kind"), str) and is_int(msg.get("serial"))
+                and msg.get("verdict") in ("confirm", "reject"))
+    if kind == "check_bypass":
+        return isinstance(msg.get("check"), str) and isinstance(msg.get("on"), bool)
+    if kind == "recovery":
+        return is_int(msg.get("recovery_id")) and msg.get("action") == "done"
+    return False
