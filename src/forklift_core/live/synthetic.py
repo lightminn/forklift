@@ -91,8 +91,8 @@ def bench_opener(opener, bench: dict):
     between the check and an open or a reopen never reaches another device (Codex rehearsal review P1)."""
     want = bench.get("pts_rdev")
 
-    def open_checked(path, baud=None):
-        fd = opener(path, baud)
+    def open_checked(path, baud=None, **kw):
+        fd = opener(path, baud, **kw)  # kw: the link's before_config (the executor lock) passes through
         st = os.fstat(fd)
         if not stat.S_ISCHR(st.st_mode) or st.st_rdev != want:
             os.close(fd)

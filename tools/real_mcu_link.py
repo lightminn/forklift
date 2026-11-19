@@ -36,12 +36,20 @@ class LinkLost(Exception):
     pass
 
 
-def open_raw(path: str, baud: int | None = None) -> int:
+def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
     """Open the link raw. The USB CDC firmware drops every STATE while the host's DTR is low (firmware board design
     5): Linux cdc_acm raises DTR on open, and nothing here lowers it -- no zero speed (it hangs the line up) and no
     clearing of the modem bits; DTR (and RTS) are asked high once more in case a previous user left them low. A
     device without modem bits (a pty, a UART adapter that refuses) is fine as it is."""
     fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    if before_config is not None:
+        # run on the opened fd before anything is set on the port (the executor lock: a refused opening changes
+        # nothing on a device another executor holds); if it raises, the fd is closed and the error passes on
+        try:
+            before_config(fd)
+        except BaseException:
+            os.close(fd)
+            raise
     try:
         attrs = termios.tcgetattr(fd)
         attrs[0] = attrs[1] = attrs[3] = 0  # iflag, oflag, lflag: raw
@@ -220,13 +228,10 @@ class ReconnectingLink:
         events: list[HostEvent] = []
         if self.link is None and now_ns >= self._next_try:
             try:
-                fd = self.opener(self.path, self.baud)
-                if self.exclusive:
-                    try:
-                        lock_fd(fd, self.path)
-                    except DeviceBusy as busy:
-                        os.close(fd)
-                        raise busy
+                if self.exclusive:  # locked on the opened fd before the port is configured (real safety design 8)
+                    fd = self.opener(self.path, self.baud, before_config=lambda fd_: lock_fd(fd_, self.path))
+                else:
+                    fd = self.opener(self.path, self.baud)
                 self.busy = None
                 self.link = TtyLink(fd)
                 product = self.product_reader(self.link.fd)

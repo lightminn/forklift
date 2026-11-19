@@ -175,3 +175,25 @@ def test_the_teleop_bridge_refuses_to_start_on_a_held_device_naming_the_holder(p
         os.close(other)
     err = capsys.readouterr().err
     assert code == 2 and f"pid {os.getpid()}" in err and "held by another executor" in err
+
+
+def test_a_refused_opening_sets_nothing_on_the_held_port(pty_path, monkeypatch):
+    """Codex PR 5 design round 3 P2-6: the lock is taken before the port is configured -- refused, no termios and no
+    modem-bit call reached the device another executor holds."""
+    rml = _link_module()
+    calls = []
+    monkeypatch.setattr(rml.termios, "tcsetattr", lambda *a: calls.append("tcsetattr"))
+    monkeypatch.setattr(rml.fcntl, "ioctl", lambda *a: calls.append("ioctl"))
+    other = open_dev(pty_path)
+    lock_fd(other, pty_path)
+    link = rml.ReconnectingLink(pty_path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
+    try:
+        link.receive(_host(), 1)
+        assert link.link is None and calls == []
+    finally:
+        os.close(other)
+    link.receive(_host(), 2)
+    try:
+        assert link.link is not None and "tcsetattr" in calls  # configured once it holds the lock
+    finally:
+        link.link.close()
