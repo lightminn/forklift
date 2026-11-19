@@ -21,7 +21,8 @@ const reg = {session_epoch: 3, revision: 5};
 out.rev = [P.submitRevision(reg, st("OFF", "idle", {targets_revision: 5})),
            P.submitRevision(reg, st("OFF", "idle", {targets_revision: 6})),
            P.submitRevision(reg, {...st("OFF", "idle", {targets_revision: 5}), session_epoch: 4}),
-           P.submitRevision(null, st("OFF", "idle", {targets_revision: 5}))];
+           P.submitRevision(null, st("OFF", "idle", {targets_revision: 5})),
+           P.submitRevision(reg, st("OFF", "idle", {targets_revision: 5}), {targets_revision: 6})];
 out.why = [P.closedWhy(st("OFF", "idle"), true), P.closedWhy(st("DRIVING", "running"), true),
            P.closedWhy(st("LATCHED", "running"), true), P.closedWhy(st("OFF", "idle"), false), P.closedWhy(null, true)];
 out.submitWhy = [P.submitClosedWhy(st("OFF", "idle"), true, false), P.submitClosedWhy(st("LATCHED", "idle"), true, false),
@@ -57,7 +58,7 @@ def test_the_panel_decisions(tmp_path):
     script.write_text(DRIVER % (ROOT / "console/web/js/realpanel.js").as_posix())
     out = json.loads(subprocess.run([NODE, str(script)], capture_output=True, text=True, check=True).stdout)
     assert out["shown"] == [True, False, False]
-    assert out["rev"] == [5, None, None, None]  # a newer vehicle list or another session: register again
+    assert out["rev"] == [5, None, None, None, None]  # a newer list (either message) or another session: again
     assert out["submitWhy"][0] is None and all(isinstance(w, str) for w in out["submitWhy"][1:])
     assert out["mine"] == [True, False, False, False]
     assert out["shownToggle"] == [True, False, True]

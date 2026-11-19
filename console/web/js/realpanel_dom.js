@@ -17,34 +17,41 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (el) el.textContent = text;
   };
   const gens = () => m.session.generations;
-  // what the buttons were drawn for: the session and the lease (5c-1b r1 P2-2) -- a send under another is dropped
-  const drawnFor = () => ({ epoch: gens().session_epoch, lease: gens().lease_id });
-  const sameAsDrawn = (d) => d && d.epoch === gens().session_epoch && d.lease === gens().lease_id
-    && statusIsMine(m.session.realStatus, gens(), clientId);
+  // every send: the session, the lease and the status object the buttons were last drawn for, still current and this
+  // console's (5c-1b r1 P2-2, r2 P2-2) -- else dropped
+  const drawnOk = () => {
+    const d = panel.drawn;
+    return Boolean(d && d.epoch === gens().session_epoch && d.lease === gens().lease_id
+      && d.status === m.session.realStatus && panel.mine);
+  };
+  const guard = (fn) => () => {
+    if (!drawnOk()) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
+    return fn();
+  };
   const send = (type, fields, okText) => m.session.request(type, fields).then((r) => {
     if (r && r.t === "reject") say(`거부 · ${rejectText(r.reason, r.detail)}`);
     else if (r && okText) say(okText);
     return r;
   });
-  $("rp-register").onclick = () => {
-    const d = drawnFor();
+  $("rp-register").onclick = guard(() => {
+    const d = { epoch: gens().session_epoch };
     const pose = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
     const pallet = $("rp-pallet").value;
     if (!pallet || !pose) return say("팔레트와 자세(x, y, yaw)를 넣으세요");
-    if (!sameAsDrawn(d)) return say("세션이나 권한이 바뀌었습니다 · 다시 보세요");
     send("pallet_register", { pallet_id: pallet, pose }, "등록했습니다").then((r) => {
       if (r && r.t === "ack" && Number.isInteger(r.targets_revision)) {
         panel.registered = { session_epoch: d.epoch, revision: r.targets_revision };
         m.session.request("targets_request", {}); // the list with the registered pose
       }
     });
-  };
-  $("rp-start").onclick = () => {
-    if (!sameAsDrawn(drawnFor())) return say("세션이나 권한이 바뀌었습니다");
+  });
+  $("rp-start").onclick = guard(() => {
+    if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다");
     send("operator_start", {}, "시작 확인을 보냈습니다");
-  };
-  $("rp-submit").onclick = () => {
-    const rev = submitRevision(panel.registered, m.session.realStatus);
+  });
+  $("rp-submit").onclick = guard(() => {
+    if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다"); // from the toggle's send on (r2 P2-3)
+    const rev = submitRevision(panel.registered, m.session.realStatus, m.session.targets);
     if (rev === null) return say("팔레트를 (다시) 등록하세요");
     send("mission_submit", { pallet_id: $("rp-pallet").value, destination_id: $("rp-dest").value,
       targets_revision: rev }, "작업 지시를 보냈습니다").then((r) => {
@@ -53,12 +60,16 @@ export function bindRealPanel(m, rejectText, clientId) {
         m.session.request("targets_request", {});
       }
     });
-  };
+  });
   // the operator answer: the key of the request on screen when the press began (r1 P2-1)
   const press = () => { panel.pressKey = panel.opKey ? { ...panel.opKey } : null; };
   for (const id of ["rp-confirm", "rp-reject"]) {
     $(id).onpointerdown = press;
-    $(id).onkeydown = (ev) => { if (ev.key === "Enter" || ev.key === " ") press(); };
+    $(id).onkeydown = (ev) => {
+      if (ev.key !== "Enter") return; // Space is the teleop deadman key (r2 P3): Enter only
+      if (ev.repeat) { ev.preventDefault(); return; } // a held key does not take a newer request (r2 P2-1)
+      press();
+    };
   }
   const answer = (verdict) => {
     const key = panel.pressKey ?? panel.opKey;
@@ -66,24 +77,30 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (!answerStillOpen(key, m.session.realStatus)) return say("확인 요청이 바뀌었습니다 · 화면을 다시 보세요");
     send("operator_answer", { kind: key.kind, serial: key.serial, verdict }, verdict === "confirm" ? "확인했습니다" : "거부했습니다");
   };
-  $("rp-confirm").onclick = () => answer("confirm");
-  $("rp-reject").onclick = () => answer("reject");
-  $("rp-recovery").onclick = () => {
+  $("rp-confirm").onclick = guard(() => answer("confirm"));
+  $("rp-reject").onclick = guard(() => answer("reject"));
+  $("rp-recovery").onclick = guard(() => {
     const st = m.session.realStatus;
     const drawn = panel.recoveryId;
     // the newest number, the same as drawn, under the session it was drawn for (r1 P2-2)
-    if (!Number.isInteger(drawn) || !st || st.field_recovery !== drawn || !sameAsDrawn(panel.recoveryFor)) {
+    if (!Number.isInteger(drawn) || !st || st.field_recovery !== drawn) {
       return say("현장 복구 번호가 바뀌었습니다 · 다시 보세요");
     }
     send("recovery", { recovery_id: drawn, action: "done" }, "현장 복구 완료를 보냈습니다");
-  };
-  $("rp-rearm").onclick = () => send("rearm", {}, "재무장을 보냈습니다");
+  });
+  $("rp-rearm").onclick = guard(() => send("rearm", {}, "재무장을 보냈습니다"));
   $("rp-bypass").onclick = (ev) => {
     const btn = ev.target.closest("button[data-check]");
     if (!btn || btn.disabled) return;
-    const toggle = { check: btn.dataset.check, on: btn.dataset.bypassed !== "true", at: performance.now() };
+    if (!drawnOk()) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
+    if (panel.toggle) return say("앞선 우회 변경이 적용되기를 기다립니다"); // one at a time (r2 P2-3)
+    // tracked from the send: the submit and the start check are closed at once; the 2 s run from the ack
+    const toggle = { check: btn.dataset.check, on: btn.dataset.bypassed !== "true", at: null };
+    panel.toggle = toggle;
     send("check_bypass", { check: toggle.check, on: toggle.on }, "다음 틱에 적용합니다").then((r) => {
-      if (r && r.t === "ack") panel.toggle = toggle; // the submit waits until real_status shows it (r1 P2-3)
+      if (panel.toggle !== toggle) return;
+      if (r && r.t === "ack") toggle.at = performance.now();
+      else panel.toggle = null; // refused or lost: nothing to wait for
     });
   };
 }
@@ -96,19 +113,29 @@ export function renderRealPanel(m, clientId) {
   if (el.hidden) return;
   const panel = m.realPanel;
   const gens = m.session.generations;
-  const mine = statusIsMine(st, gens, clientId);
+  // only a status received while this lease was held counts (r2 P2-2; protocol.js records it at receipt)
+  const mine = statusIsMine(st, gens, clientId) && m.session.realStatusLease === gens.lease_id;
+  panel.mine = mine;
+  panel.drawn = { epoch: gens.session_epoch, lease: gens.lease_id, status: st };
   if (panel.registered && panel.registered.session_epoch !== gens.session_epoch) panel.registered = null;
   // the target list once per session when none came with the welcome (r1 P2-5)
   if (!m.session.targets && panel.targetsAsked !== gens.session_epoch && gens.session_epoch !== null) {
-    panel.targetsAsked = gens.session_epoch;
-    m.session.request("targets_request", {});
+    const epoch = gens.session_epoch;
+    panel.targetsAsked = epoch; // one in flight; a refusal clears it to ask again (r2 P2-5)
+    m.session.request("targets_request", {}).then((r) => {
+      if (r && r.t === "reject") {
+        if (panel.targetsAsked === epoch) panel.targetsAsked = null;
+        panel.note = `대상 목록을 받지 못했습니다 · ${r.reason} · 다시 요청합니다`;
+        $("rp-msg").textContent = panel.note;
+      }
+    });
   }
   // a toggle shown, or not by its deadline (then told; r1 P2-3)
-  if (panel.toggle && (toggleShown(panel.toggle, st) || performance.now() - panel.toggle.at > TOGGLE_WAIT_MS)) {
-    if (!toggleShown(panel.toggle, st)) {
-      panel.note = "우회 변경이 적용되지 않았습니다 · 실차 상태의 우회 목록을 보세요";
-      $("rp-msg").textContent = panel.note;
-    }
+  const t = panel.toggle;
+  if (t && t.at !== null && (toggleShown(t, st) || performance.now() - t.at > TOGGLE_WAIT_MS)) {
+    panel.note = toggleShown(t, st) ? "우회 변경이 적용됐습니다" // (r2 P3)
+      : "우회 변경이 적용되지 않았습니다 · 실차 상태의 우회 목록을 보세요";
+    $("rp-msg").textContent = panel.note;
     panel.toggle = null;
   }
   $("rp-status").textContent = st ? `허가 ${st.permit?.state ?? "—"} · 미션 ${st.mission?.status ?? "—"}` : "실차 상태 대기 중";
@@ -132,7 +159,6 @@ export function renderRealPanel(m, clientId) {
   $("rp-op").textContent = key ? `확인 요청 #${key.serial} · ${key.kind}` : "열린 확인 요청 없음";
   $("rp-confirm").disabled = $("rp-reject").disabled = !key || !mine;
   panel.recoveryId = st && Number.isInteger(st.field_recovery) ? st.field_recovery : null;
-  panel.recoveryFor = { epoch: gens.session_epoch, lease: gens.lease_id };
   $("rp-recovery").hidden = panel.recoveryId === null;
   $("rp-recovery").disabled = !mine;
   $("rp-recovery").textContent = panel.recoveryId === null ? "" : `현장 복구 #${panel.recoveryId} 완료`;

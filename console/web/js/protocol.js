@@ -21,6 +21,8 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
   let reclaim = false; // held the lease when the connection dropped
   let targets = null;
   let realStatus = null; // the real truck's real_status (5c-1), the newest of this session
+  let realStatusLease = null; // the lease this console held when that status came (5c-1b: a status from before a
+  // lease was taken back does not open the real panel's buttons)
   // persistent console plan D7: the connection's request token (from its welcome) and its seq; none from a back end
   // that gives none (the fake vehicle)
   let requestToken = null;
@@ -50,6 +52,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     state = null; // nothing of the old session is shown as current
     targets = null;
     realStatus = null;
+    realStatusLease = null;
     armed = false;
     controlGen = null;
     armGen = null;
@@ -114,6 +117,7 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
         realStatus = msg;
         controlGen = v.controlGen;
         if (!v.leaseHeld) leaseId = null;
+        realStatusLease = leaseId;
         break;
       }
       default:
@@ -237,6 +241,9 @@ export function createSession({ clientId, send, now, newId, retryMs = 500, onSta
     },
     get realStatus() {
       return realStatus;
+    },
+    get realStatusLease() {
+      return realStatusLease;
     },
     get generations() {
       return { session_epoch: epoch, lease_id: leaseId, control_gen: controlGen, arm_gen: armGen };

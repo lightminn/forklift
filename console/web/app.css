@@ -442,8 +442,12 @@ select { border: 1px solid var(--line-2); background: var(--panel-2); border-rad
 .banner[hidden] { display: none; }
 
 /* the real truck's operator panel (5c-1b) */
-.real-panel { position: fixed; right: 12px; bottom: 12px; z-index: 50; background: var(--panel, #111a); border: 1px solid var(--line, #3336); border-radius: 10px; padding: 8px 10px; max-width: 560px; display: flex; flex-direction: column; gap: 6px; }
+.real-panel { position: fixed; right: 12px; bottom: 12px; z-index: 30; background: var(--panel, #111a); border: 1px solid var(--line, #3336); border-radius: 10px; padding: 8px 10px; max-width: 560px; display: flex; flex-direction: column; gap: 6px; }
 .real-panel[hidden] { display: none; }
 .real-panel .rp-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .real-panel input { width: 72px; }
 .real-panel .btn.warn { border-color: var(--warn); color: var(--warn); }
+/* phones: the panel above the bottom STOP bar and under it in the stacking (5c-1b r2 P1: STOP never covered) */
+@media (max-width: 760px) {
+  .real-panel { left: 8px; right: 8px; max-width: none; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); max-height: 45vh; overflow: auto; }
+}

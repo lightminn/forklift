@@ -32,12 +32,21 @@ s.onMessage({t: "real_status", session_epoch: 3, control_gen: 8, lease: {holder:
 out.push({gen: s.generations.control_gen, lease: s.generations.lease_id});
 s.onMessage({t: "real_status", session_epoch: 1, control_gen: 99, lease: {holder: "me"}, bypassed: ["slam"]});
 out.push({gen: s.generations.control_gen, bypassed: s.realStatus.bypassed});
-// 5c-1b r1 P3: after the lease is gone the same connection takes it again
+// 5c-1b r1-r2 P3: a real release (its request and ack), the holder gone, then the same connection takes it again
+const rel0 = sent.length;
+s.request("lease_release");
+const rel = sent.slice(rel0).find((x) => x.t === "lease_release");
+s.onMessage({t: "ack", of: "lease_release", request_id: rel ? rel.request_id : "none"});
+s.onMessage({t: "real_status", session_epoch: 3, control_gen: 9, lease: {holder: null}, bypassed: []});
+out.push({released: Boolean(rel), hasLease: s.hasLease});
 const before = sent.length;
 s.request("lease_request");
 const asked = sent.slice(before).find((x) => x.t === "lease_request");
 s.onMessage({t: "ack", of: "lease_request", request_id: asked ? asked.request_id : "none", lease_id: "L2"});
 out.push({asked: Boolean(asked), lease: s.generations.lease_id, hasLease: s.hasLease});
+out.push({statusLease: s.realStatusLease}); // the last status came while no lease was held
+s.onMessage({t: "real_status", session_epoch: 3, control_gen: 9, lease: {holder: "me"}, bypassed: []});
+out.push({statusLease: s.realStatusLease});
 console.log(JSON.stringify(out));
 """
 
@@ -57,4 +66,6 @@ def test_real_status_and_the_bypass_banner(tmp_path):
     assert out[6] == {"gen": 7, "lease": "L1", "bypassed": ["imu"]}
     assert out[7] == {"gen": 8, "lease": None}
     assert out[8] == {"gen": 8, "bypassed": []}  # another session's status is not taken
-    assert out[9] == {"asked": True, "lease": "L2", "hasLease": True}
+    assert out[9] == {"released": True, "hasLease": False}
+    assert out[10] == {"asked": True, "lease": "L2", "hasLease": True}
+    assert out[11] == {"statusLease": None} and out[12] == {"statusLease": "L2"}  # only a status under L2 opens

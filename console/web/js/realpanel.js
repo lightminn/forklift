@@ -17,10 +17,12 @@ export function panelShown(realStatus) {
 
 // The revision a submit names: the one this session's registration got, unless the vehicle's list has moved past it
 // (then register again -- 5c-1b r1 P2-4). null: none usable.
-export function submitRevision(registered, status) {
+export function submitRevision(registered, status, targets = null) {
   if (!registered || !status || registered.session_epoch !== status.session_epoch) return null;
-  const now = Number.isInteger(status.targets_revision) ? status.targets_revision : null;
-  if (now !== null && now > registered.revision) return null;
+  // the vehicle's newest revision from either message (r2 P2-4)
+  for (const rev of [status.targets_revision, targets && targets.targets_revision]) {
+    if (Number.isInteger(rev) && rev > registered.revision) return null;
+  }
   return registered.revision;
 }
 
