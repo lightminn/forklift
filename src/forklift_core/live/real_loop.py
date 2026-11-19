@@ -122,6 +122,11 @@ class RealSession:
         return entry
 
 
+# real safety wiring design 5 (5c-1): the checks the operator may bypass for the session, and the names refused
+BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel")
+NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale", "link_stuck", "layer_worker",
+                  "obstacle_layer", "overspeed", "loop_slow", "worker", "baseline", "core")
+
 # the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
 LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
 
@@ -200,6 +205,17 @@ class RealLoop:
         self.clock = clock or time.monotonic_ns
         self._console_disarm = False
         self._odom_broken = False  # a continuity break among this tick's STATEs
+        # 5c-1 (design 5): the session's bypass set (applied at a tick head; this tick's copy judges), the operator's
+        # answers by serial (the first only), the last refusal told on real_status
+        self.bypass: set = set()
+        self._bypass_epoch = link.a.session_epoch
+        self._bypass_pending: list = []
+        self._tick_bypass: frozenset = frozenset()
+        self.operator_answers: dict = {}
+        self.last_refusal = None
+        self.bypass_events: list = []
+        if getattr(link.a.config, "real_requests", False):
+            link.a.real_request = self._real_request
         self._rebooted = False  # a boot change seen (not the first boot)
         self._disconnects = host.disconnects  # the host's device losses seen so far
         self._last_seen = None  # the newest STATE's (boot, MCU time)
@@ -211,6 +227,140 @@ class RealLoop:
         self._binding: dict = {}  # seq -> (lease id, arbiter control generation) a loop frame was decided under
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
+
+    # --- 5c-1: the real console requests, the bypass, real_status (design 5) --------------------------------------
+    def _ready(self, now_ns: int, stage: str):
+        return ra.auto_ready_refusal(now_ns, stage, self.evidence, bypass=self._tick_bypass)
+
+    def _bypassed(self, check: str) -> bool:
+        return check in self._tick_bypass
+
+    def _apply_bypass(self, now_ns: int) -> None:
+        """The tick head (before the submit is judged): the session's set (a new session or an accepted session end
+        empties it), then the toggles accepted since -- only while the permit is off or latched -- and this tick's
+        copy every judgement uses."""
+        a = self.link.a
+        if a.session_epoch != self._bypass_epoch or a.session_request is not None:
+            if self.bypass or self._bypass_pending:
+                self.bypass_events.append({"ns": int(now_ns), "event": "bypass_cleared:session"})
+            self._bypass_epoch = a.session_epoch
+            self.bypass.clear()
+            self._bypass_pending.clear()
+        for check, on in self._bypass_pending:
+            if self.permit.state not in (ra.OFF, ra.LATCHED):
+                self.bypass_events.append({"ns": int(now_ns), "event": "bypass_dropped:armed", "check": check})
+                continue
+            if on:
+                self.bypass.add(check)
+            else:
+                self.bypass.discard(check)
+            if check == "operator_start" and self.operator_start is not None:
+                self.operator_start.void("bypass_changed")  # a check given before is not carried across (r2 P2-2)
+            self.bypass_events.append({"ns": int(now_ns), "event": "bypass_on" if on else "bypass_off", "check": check})
+        self._bypass_pending.clear()
+        self._tick_bypass = frozenset(self.bypass)
+        if self.real_layer is not None:
+            self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
+            self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
+
+    def _real_request(self, kind: str, msg: dict, now_mono: float):
+        """The arbiter's real requests after its checks (design 5): (refusal reason or None, reply fields)."""
+        reason, fields = self._real_request_(kind, msg)
+        if reason is not None:
+            self.last_refusal = {"kind": kind, "reason": reason}
+        return reason, fields
+
+    def _real_request_(self, kind: str, msg: dict):
+        core, permit = self.core, self.permit
+        disarmed = permit.state in (ra.OFF, ra.LATCHED)
+        if kind == "pallet_register":
+            from forklift_core.live.real_assembly import register_pallet
+
+            if core.commands.status in ("accepted", "preparing", "running", "paused", "resuming", "held",
+                                        "cancelling", "recovering"):
+                return "mission_active", {}
+            if msg["pallet_id"] not in core.targets.pallets:
+                return "unknown_pallet", {}
+            return None, {"targets_revision": register_pallet(core, msg["pallet_id"], msg["pose"])}
+        if kind == "operator_start":
+            if not disarmed:
+                return "armed", {}
+            if self.still_since_ns is None:
+                return "not_still", {}
+            lease = self.link.a.lease
+            if self.operator_start is None or lease is None:
+                return "unsupported", {}
+            if not self.operator_start.confirm(int(msg["session_epoch"]), lease.lease_id):
+                return "stale_epoch", {}
+            return None, {}
+        if kind == "operator_answer":
+            open_ = core.operator_open()
+            if open_ is None:
+                return "no_operator_request", {}
+            if open_["kind"] != msg["kind"] or open_["serial"] != msg["serial"]:
+                return "stale_operator_request", {}
+            if msg["serial"] in self.operator_answers:
+                return "already_answered", {}
+            self.operator_answers[msg["serial"]] = msg["verdict"]
+            return None, {"received": True}
+        if kind == "check_bypass":
+            check = msg["check"]
+            if check in NOT_BYPASSABLE:
+                return "not_bypassable", {}
+            if check not in BYPASSABLE:
+                return "unknown_check", {}
+            if not disarmed:
+                return "armed", {}
+            self._bypass_pending.append((check, bool(msg["on"])))  # applied at the next tick head (r3 P2-1)
+            return None, {"applies": "next_tick"}
+        if kind == "recovery":
+            now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
+            accepted, why = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
+                                                     disarmed=self._disarm_confirmed(now_ns),
+                                                     outstanding=self.port.outstanding(now_ns)[0] != "settled")
+            if not accepted:
+                return why, {}
+            if self.operator_start is not None:
+                self.operator_start.void("field_recovery")
+            return None, {}
+        return "unsupported", {}
+
+    def _disarm_confirmed(self, now_ns: int) -> bool:
+        """Design 5: no DISARM episode awaited, no console DISARM accepted and not yet run, no DISARM queued or half
+        written (the anchor's included), and the newest DISARM written answered by a fresh DISARMED of its seq."""
+        permit = self.permit
+        if getattr(permit, "_disarm_first_ns", None) is not None or self._console_disarm:
+            return False
+        if any(getattr(o, "kind", None) == "DISARM" for o in getattr(self.host, "_outbox", ())):
+            return False
+        partial = getattr(self.transport, "partial_frame", None)
+        if partial is not None and getattr(partial, "kind", None) == "DISARM":
+            return False
+        return permit._disarmed_after_write(int(now_ns))  # noqa: SLF001 -- the permit's own answer check
+
+    def operator_check(self, request):
+        """The core's operator hook (RealHooks.operator): the operator's first answer for this request's serial."""
+        verdict = self.operator_answers.get(request.get("serial"))
+        return None if verdict is None else (request["serial"], verdict)
+
+    def real_status(self, now_ns: int) -> dict:
+        """real_status (design 5): what the console needs beyond the arbiter's tick."""
+        a, core, permit = self.link.a, self.core, self.permit
+        recovery = getattr(core, "field_recovery", None)
+        start = self.operator_start
+        return {
+            "t": "real_status", "session_epoch": a.session_epoch, "control_gen": a.control_gen,
+            "lease": {"holder": None if a.lease is None else a.lease.client_id},
+            "permit": {"state": permit.state, "reason": permit.reason},
+            "mission": {"status": core.commands.status, "mission_id": core.commands.mission_id},
+            "operator_request": core.operator_open(),
+            "field_recovery": None if recovery is None else recovery.get("id"),
+            "relocalize_generation": core.relocalize_generation(),
+            "operator_start": None if start is None else start.ok(None if a.lease is None else a.lease.lease_id),
+            "targets_revision": core.targets.revision,
+            "last_refusal": self.last_refusal,
+            "bypassed": sorted(self.bypass),
+        }
 
     def _on_console_disarm(self, now_mono: float) -> None:
         self._console_disarm = True  # taken inside the console cycle; the emergency branch runs right after it
@@ -394,7 +544,8 @@ class RealLoop:
             target = tuple(float(w) for w in d.wheel_rates_rad_s)
         res = self.watch.step(st.mcu_time_us / 1e6, armed=self.permit.armed, fresh=True, new_state=True,
                               currents_a=st.current_a, wheel_targets_rad_s=target,
-                              wheel_rates_rad_s=(st.wheel_rate_left_rad_s, st.wheel_rate_right_rad_s))
+                              wheel_rates_rad_s=(st.wheel_rate_left_rad_s, st.wheel_rate_right_rad_s),
+                              skip=self._tick_bypass & {"watch_current", "watch_wheel"})
         return res.trip
 
     def _measured_lift(self):
@@ -463,6 +614,11 @@ class RealLoop:
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
         self.record(rec)
+        if getattr(self.link.a.config, "real_requests", False) and self.link.state_due(now_ns / 1e9):
+            try:
+                self.channels.put(None, self.real_status(now_ns))  # 5c-1: the console's real fields (design 5)
+            except Exception:  # noqa: BLE001 -- a status the console misses is not a reason to stop
+                pass
         return rec
 
     def _head(self, now_ns: int, t: float, interval, rec: TickRecord) -> None:
@@ -471,6 +627,7 @@ class RealLoop:
             core.slam["stop_now"] = False  # nothing this tick stands before the stand is judged again (receive may fail)
         self._odom_broken = False
         core.state.pop("motion_hold", None)  # a hold is this tick's only (round 3 P2-2)
+        self._apply_bypass(now_ns)  # 5c-1: the session's bypass for every judgement of this tick
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
@@ -484,6 +641,8 @@ class RealLoop:
         if host.disconnects != self._disconnects:
             # a device loss (a same-boot reconnect included): the queue, the samples and the stand go with it
             self._disconnects = host.disconnects
+            if self.operator_start is not None:
+                self.operator_start.void("link_lost")  # 5c-1: a check given before a device loss does not count
             self.samples.clear()
             self._odom_broken = True
             self._odom_good = False
@@ -518,6 +677,8 @@ class RealLoop:
         reading = encoder_speed(list(self.samples), now_ns, self.params, self.steering_ok, self.delay_s)
         self.speed = reading.speed
         still = self._still(now_ns)
+        if not still and self.operator_start is not None:
+            self.operator_start.void("moved")  # 5c-1: a check given before the truck moved does not count
         if core.slam is not None:
             core.slam["stop_now"] = still
             core.slam["still_since"] = None if self.still_since_ns is None else self._t(self.still_since_ns)
@@ -536,7 +697,7 @@ class RealLoop:
                 self._emergency(now_ns, "overspeed")
                 return
         s = host.state
-        if self.imu_watch is not None:
+        if self.imu_watch is not None and not self._bypassed("imu"):
             self._imu_read_ns = self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
@@ -666,7 +827,7 @@ class RealLoop:
             self.permit.restart_session(now_ns)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
-        why = ra.auto_ready_refusal(now_ns, "submit", self.evidence)
+        why = self._ready(now_ns, "submit")
         return None if why is None else f"not_ready:{why}"
 
     def _bind_permit(self, now_ns: int) -> None:
@@ -721,7 +882,7 @@ class RealLoop:
                 # a fault before the ARM latches and ends the mission whether or not a plan is out yet (design 1.2,
                 # round 3 P2-4; Codex 5a impl P2-2: waiting for the planning grid included; round 3 P1: the adopted
                 # mission waiting for its new grid before the ARM too)
-                why_ = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+                why_ = self._ready(now_ns, "drive")
                 lw_ = self.real_layer.watchdog(t)
                 if lw_ in LAYER_ENDS:
                     why_ = f"layer:{lw_}"  # the layer's own end names the cause, not "missing" (round 5 P3)
@@ -732,7 +893,7 @@ class RealLoop:
                     return
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
-            if self.operator_start is not None:
+            if self.operator_start is not None and not self._bypassed("operator_start"):
                 lease = self.link.a.lease
                 if not self.operator_start.take(None if lease is None else lease.lease_id):
                     cmds.terminate("cancelled", t, "operator_start_unconfirmed")  # its check was used or voided
@@ -780,7 +941,7 @@ class RealLoop:
         # as the Isaac loop: paused, resuming or cancelling, or no mission yet (or over) -- a preparation is not
         paused_ = cmds.stopped or cmds.status in ("idle", *FINAL)
         defer_ = self.real_layer is not None and cmds.status in ("accepted", "preparing") and (
-            layer_stop is not None or (ra.auto_ready_refusal(now_ns, "drive", self.evidence) or "").startswith("wait:"))
+            layer_stop is not None or (self._ready(now_ns, "drive") or "").startswith("wait:"))
         plan_wait_ = core.jobs is not None and (defer_ or core.job_hold(t, rear, self.speed, paused_).hold)
         if cmds.status in ("accepted", "preparing"):
             plan_wait_ = True
@@ -792,20 +953,21 @@ class RealLoop:
             self._layer_tick(t, rear)
             self.real_layer.flush(t)
         # the adoption and the arming (design 2.3)
-        ready_wait = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
-        layer_wait = self.real_layer is not None and (self.real_layer.installing() or layer_stop is not None)
+        ready_wait = self._ready(now_ns, "drive")
+        layer_wait = (self.real_layer is not None and (self.real_layer.installing() or layer_stop is not None)) \
+            or bool(self._bypass_pending)  # 5c-1: no ARM while a bypass toggle waits for the next tick head
         if (cmds.status == "running" and cmds.adopted_id == cmds.mission_id and ms.phase == "approach"
                 and self.adopted_for != cmds.mission_id and permit.state == ra.OFF and not layer_wait
                 and not (ready_wait or "").startswith("wait:")):  # no ARM while a wait holds (Codex 4c impl P2-3)
             why = self._pre_arm_refusal(now_ns)  # the existing refusals first (round 3 P2-2)
             gate_imu = ("ok", None)
-            if self.imu_watch is not None and why in (None, "not_still"):
+            if self.imu_watch is not None and not self._bypassed("imu") and why in (None, "not_still"):
                 gate_imu = self._imu_arm_gate(now_ns, cmds.mission_id, not_still=why == "not_still")
                 if gate_imu[0] == "refuse":
                     why = gate_imu[1]
             if gate_imu[0] != "wait":  # a wait leaves adopted_for unset: the ARM is asked again next tick
                 self.adopted_for = cmds.mission_id
-                if self.imu_watch is not None and why is None:
+                if self.imu_watch is not None and why is None and gate_imu[1] is not None:
                     self.imu_watch.arm(gate_imu[1])  # frozen before the ARM is asked (design 4)
                 cmds.begin_wait(t)
                 if not permit.adopted(now_ns, pre_arm_refusal=why):
@@ -981,7 +1143,7 @@ class RealLoop:
         return None
 
     def _pre_arm_refusal(self, now_ns: int) -> str | None:
-        why = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+        why = self._ready(now_ns, "drive")
         if why is not None and ra.latches(why):
             return why
         s = self.host.state
@@ -1109,7 +1271,7 @@ class RealLoop:
             return "tick_late"
         if not self.host.health(send_ns).fresh:
             return "measurement_stale"
-        why = ra.auto_ready_refusal(send_ns, "drive", self.evidence)
+        why = self._ready(send_ns, "drive")
         if why is not None and ra.latches(why):
             return f"send:{why}"
         if not self._lease_valid(send_ns):
@@ -1118,7 +1280,7 @@ class RealLoop:
 
     def _wait_reason_now(self, now_ns, out) -> str | None:
         hold = self.core.state.pop("motion_hold", None)  # this tick's, consumed whichever reason is returned
-        why = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+        why = self._ready(now_ns, "drive")
         if why is not None and ra.latches(why):
             self._emergency(now_ns, why)
             return "latched"
@@ -1252,9 +1414,9 @@ class RealLoop:
             # scan judged young at the read's start may be over its limit at the write, round 6 P1-1)
             ns0 = int(self.clock())
             ns = ns0 + int(EVIDENCE_READ_MAX_S * 1e9)
-            why = ra.auto_ready_refusal(ns, "drive", self.evidence)
+            why = self._ready(ns, "drive")
             imu_trip = None
-            if self.imu_watch is not None:
+            if self.imu_watch is not None and not self._bypassed("imu"):
                 # the IMU read and judged inside the same budget, at the write's latest instant (design 4)
                 self._pull_imu()  # the samples taken so far; their age judged at the write's latest instant
                 imu_trip = self.imu_watch.judge(ns)

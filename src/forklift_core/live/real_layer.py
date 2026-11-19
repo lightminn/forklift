@@ -227,6 +227,7 @@ class RealLayer:
         # the operator's session bypass of the layer's timing (real safety wiring design 5, 5c-1): the deadlines and
         # the scan age are not judged; a dead worker, a lost source and the permission's speed limit still are
         self._timing_bypassed = False
+        self.correction_bypassed = False  # the operator's snapshot bypass (5c-1): installing()'s default
         self._dirty = False
         self.counts = {"scans": 0, "scans_dropped": 0, "stale_results": 0, "installs": 0}
         self._request = None  # the newest refresh request (dict)
@@ -449,10 +450,12 @@ class RealLayer:
         """The installed result's newest scan (first beam), not the newest placed one (Codex 5a impl P2-7)."""
         return None if self._installed is None else self._installed["newest_scan_s"]
 
-    def installing(self, ignore_correction: bool = False) -> bool:
+    def installing(self, ignore_correction: bool | None = None) -> bool:
         """No result yet, or the installed one is not the current key's. ``ignore_correction``: only a different
         correction generation does not count (the operator's snapshot bypass, 5c-1 r2 P2-3) -- a different mission,
         path, exemption or load still does."""
+        if ignore_correction is None:
+            ignore_correction = self.correction_bypassed
         if self._installed is None:
             return True
         cur = self.current_key()
@@ -466,7 +469,7 @@ class RealLayer:
         return self._installed["key"] != cur
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
-              cap_mps: float, ignore_correction: bool = False):
+              cap_mps: float, ignore_correction: bool | None = None):
         if self.installing(ignore_correction):
             return 0.0, "snapshot_installing"
         newest = self._installed["newest_scan_s"]

@@ -25,7 +25,7 @@ from forklift_core.plant.mcu_host import HostConfig
 from forklift_core.plant.port import RealPlantPort
 from forklift_core.plant.real_vehicle import RealOdometry
 from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
-from forklift_core.safety.arbiter import Arbiter, ArbiterConfig
+from forklift_core.safety.arbiter import REAL_LEASED, Arbiter, ArbiterConfig
 
 from test_teleop_bridge_cycle import MS, VEH, FakeMcu
 
@@ -255,7 +255,7 @@ class FakeImu:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None, real_layer=False, imu=False):
+                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -339,7 +339,8 @@ class Rig:
         hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m, odom_base=lambda: (0.0, 0.0, 0.0),
                               ready=lambda t, inputs: None, started=lambda *a: None, record=lambda *a: None,
                               geometry=geometry, pocket_frame=self._frame, pocket_check=build_check,
-                              operator=self._operator, tick=tick, layer=self.layer,
+                              operator=((lambda r: loop_box["loop"].operator_check(r)) if real_requests
+                                        else self._operator), tick=tick, layer=self.layer,
                               occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None)
         base_cfg = cfg or replace(ra.load_s10a(ROOT / "config/real/s10a.yaml"), map_id="hall-1", pallet_depth_m=0.6,
                                   pallet_width_m=0.4, check_pallet_pose=PALLET)
@@ -362,8 +363,10 @@ class Rig:
         core.obstacle.update(ticks={}, min_allowed={}, slowed={}, reasons={})
         self.plan = plan or Plan()
         tokens = itertools.count(1)
+        self.real_requests = real_requests
+        self.console_out: list = []  # what the console received besides the ticks
         self.arbiter = Arbiter(EPOCH, ArbiterConfig(tick_s=0.02, auto_lease_loss="stop", external_stop=True,
-                                                    disarm_ignores_control_gen=True),
+                                                    disarm_ignores_control_gen=True, real_requests=real_requests),
                                lambda: f"t{next(tokens)}", mission=core.commands)
         self.channels = RealChannels()
         self.link = RealLink(self.arbiter, self.channels, tick_period_s=0.05, state_period_s=0.1)
@@ -399,7 +402,8 @@ class Rig:
             odometry_continuous=lambda n: loop_box["loop"].odom_continuous,
             slam=lambda n: ra.SlamView(self.tracker.mode, n, 0.0, core.commands.mission_gen),
             snapshot=snapshot_view,
-            operator_start_ok=lambda n: True, core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
+            operator_start_ok=(lambda n: self.loop.operator_start.ok(self.lease)) if real_requests
+            else (lambda n: True), core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
             mission_gen=lambda n: core.commands.mission_gen)
         self.loop = RealLoop(core=core, session=RealSession(core, self.link), permit=self.permit, port=self.port,
                              host=self.host, link=self.link, channels=self.channels, transport=self.transport,
@@ -411,12 +415,16 @@ class Rig:
                              real_layer=self.layer, delay_bound=self.delay_bound if real_layer else None,
                              state_delay_s=0.05, pallet_size=(0.6, 0.4),
                              kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m),
+                             operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
                              **self._watch_args(watch, imu))
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
         self.core = core
-        self.channels.connect("c1", "op", control=True)
+        # 5c-1: the real console's connection carries a request token (its real requests go through the ledger)
+        self.token = 900_001 if real_requests else None
+        self._seq = itertools.count(1)
+        self.channels.connect("c1", "op", control=True, token=self.token)
         self.lease = None
 
     def _watch_args(self, watch, imu):
@@ -515,7 +523,9 @@ class Rig:
             if self.layer is not None and self.scan_on:
                 self._scan_maybe()
             rec = self.loop.cycle(self.now)
-            ticks = [m for _, m in self.channels.take_out() if m.get("t") == "tick"]
+            out_ = self.channels.take_out()
+            self.console_out.extend(m for _, m in out_ if m.get("t") != "tick")  # replies, real_status (5c-1)
+            ticks = [m for _, m in out_ if m.get("t") == "tick"]
             if ticks and self.echo and self.lease is not None:
                 last = ticks[-1]
                 self.channels.message("c1", "op", {"t": "echo", "session_epoch": EPOCH, "lease_id": self.lease,
@@ -525,12 +535,17 @@ class Rig:
                 self.jobs.answers[self.core.pending.job] = (True, {"result": self.plan, "trace": []})
         return rec
 
-    def say(self, kind, **fields):
+    def say(self, kind_, /, **fields):
+        kind = kind_  # positional only: a request may carry its own ``kind`` field (operator_answer)
         msg = {"t": kind, "request_id": f"r{next(_REQ)}", "session_epoch": EPOCH,
                "control_gen": self.arbiter.control_gen, **fields}
         if self.lease is not None:
             msg.setdefault("lease_id", self.lease)
+        if self.token is not None and (kind in REAL_LEASED or kind == "recovery"):
+            msg.setdefault("request_token", self.token)
+            msg.setdefault("request_seq", next(self._seq))
         self.channels.message("c1", "op", msg)
+        return msg["request_id"]
 
     def grant(self):
         self.tick(3)
