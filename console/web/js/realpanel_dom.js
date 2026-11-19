@@ -186,7 +186,9 @@ export function bindRealPanel(m, rejectText, clientId) {
     const gen = m.session.realStatus && m.session.realStatus.relocalize_generation;
     if (!Number.isInteger(gen)) return say("다시 확인할 위치가 없습니다");
     send(type, { generation: gen }, okText).then((r) => {
-      if (r && r.t === "ack") panel.relocAck = { generation: r.generation, attempt: r.attempt, type };
+      if (r && r.t === "ack") {
+        panel.relocAck = { session_epoch: gens().session_epoch, generation: r.generation, attempt: r.attempt, type };
+      }
     });
   };
   $("rp-reloc-confirm").onclick = guard(relocalize("relocalize_confirm", "재위치 확인을 보냈습니다 · 판정을 기다립니다"),

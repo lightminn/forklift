@@ -323,7 +323,7 @@ class Rig:
             from forklift_core.localization.slam_pose import SlamPoseTracker
 
             # 5c-2: the real tracker, tracking from the start (its first correction: identity)
-            self.tracker = SlamPoseTracker(max_age_s=ra.SLAM_MAX_AGE_S, hold_limit_m=0.3, bootstrap_scan_id=0)
+            self.tracker = SlamPoseTracker(max_age_s=ra.SLAM_MAX_AGE_S, hold_limit_m=ra.HOLD_MAX_M, bootstrap_scan_id=0)
             self.tracker.receive(0, -1.0, "processed", (0.0, 0.0, 0.0))
         else:
             self.tracker = Tracker()

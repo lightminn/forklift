@@ -60,9 +60,13 @@ out.rwhy = [P.relocalizeClosedWhy(rs, true), P.relocalizeClosedWhy({...rs, stand
             P.relocalizeClosedWhy({...rs, relocalize_generation: null}, true),
             P.relocalizeClosedWhy(st("READY", "running", {relocalize_generation: 2, standing: true}), true),
             P.relocalizeClosedWhy(rs, false)];
-out.rresult = [P.relocalizeResult({generation: 2, attempt: 3}, rs), P.relocalizeResult({generation: 2, attempt: 2}, rs),
-               P.relocalizeResult({generation: 2, attempt: 3},
-                 {...rs, relocalize_generation: null, relocalize: {...rs.relocalize, state: "confirmed", reason: null}})];
+const ack = {session_epoch: 3, generation: 2, attempt: 3};
+out.rresult = [P.relocalizeResult(ack, rs), P.relocalizeResult({...ack, attempt: 2}, rs),
+               P.relocalizeResult(ack,
+                 {...rs, relocalize_generation: null, relocalize: {...rs.relocalize, state: "confirmed", reason: null}}),
+               P.relocalizeResult({...ack, session_epoch: 2}, rs),  // another session's ack
+               P.relocalizeResult(ack, {...rs, relocalize_generation: 3})];  // a newer generation open
+out.rgapNew = P.relocalizeView({...rs, relocalize_generation: 3}).gap;
 out.rsig = P.statusSig(rs) === P.statusSig({...rs, relocalize_generation: 3});
 console.log(JSON.stringify(out));
 """
@@ -90,7 +94,8 @@ def test_the_panel_decisions(tmp_path):
     assert out["rview"]["open"] and out["rview"]["generation"] == 2 and out["rview"]["gap"] == "15.3 cm · 1.2°"
     assert out["rwhy"][0] is None and all(isinstance(w, str) for w in out["rwhy"][1:])
     assert out["rresult"] == [{"state": "refused", "reason": "not_at_start"}, None,
-                              {"state": "confirmed", "reason": None}]  # still told after the close
+                              {"state": "confirmed", "reason": None}, None, None]  # told after the close only
+    assert out["rgapNew"] == ""  # generation 2's gap not under generation 3
     assert out["rsig"] is False  # a press drawn for generation 2 is not taken for 3
 
 

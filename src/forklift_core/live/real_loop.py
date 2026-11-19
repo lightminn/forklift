@@ -585,19 +585,31 @@ class RealLoop:
             return "relocalize_moved"
         return None
 
+    def _commit_void(self, t: float):
+        """Just before a commit (the source's seed, the generation's close): the attempt's own voids and then the
+        lease judged on the clock now with the channel's pending connection changes (impl round 1 P1-1: a lease
+        expired or a disconnect queued since the tick began)."""
+        why = self._attempt_void(int(self.clock()), t)
+        if why is None and self._bypass_refusal(self.attempt["lease_id"], int(self.clock())) is not None:
+            why = "relocalize_voided:lease"
+        return why
+
     def _declare_apply(self, now_ns: int, t: float, loaded: bool) -> None:
         """The declaration's pose (design 6, 5 / 7b), on its first judgement, before the source's replies: the source
         seeded at the start's base_link pose, a synthetic processed reply alone through the core."""
         a = self.attempt
-        why = self._attempt_void(now_ns, t)
-        if why is not None:
-            self._attempt_end(t, "refused", why)
-            return
         target = base_from_rear(self.start_rear, self.rear_offset_m)
         odom = tuple(float(v) for v in self.core.hooks.slam_odom_base())
         c = tuple(float(v) for v in compose(target, invert(odom)))
-        self._new_epoch(t)
-        self.slam_source.seed(self.epoch, target, t) if self._epoch_mode else None
+        with self.channels.lock:  # the check and the seed under one lock: no connection change slips between
+            why = self._commit_void(t)
+            if why is not None:
+                self._attempt_end(t, "refused", why)
+                return
+            self._new_epoch(t)
+            self.slam_source.seed(self.epoch, target, t)
+            # the mark and the cap from the seed on, before anything else can fail (impl round 1 P1-2)
+            self.declared_epoch = self.link.a.session_epoch
         reply = SimpleNamespace(scan_id=-1, stamp_s=float(t), status="processed", map_from_odom=c, slam_wall_s=None,
                                 epoch=self.epoch, attempt=None)
         tr = self._tracker()
@@ -607,7 +619,6 @@ class RealLoop:
         if tr is not None and tr.applied is not before:
             self.provenance = (self.epoch, None, "operator_declared", float(t))
         a["seeded"] = True
-        self.declared_epoch = self.link.a.session_epoch  # the mark and the cap from the seed on (round 3 P1-2)
         self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
                                   "attempt": a["attempt"], "odom_from_base": list(odom),
                                   "start_rear": list(self.start_rear), "base_target": list(target)})
@@ -616,6 +627,7 @@ class RealLoop:
         """Design 6, 4: the replies the core may take (the epoch mode only)."""
         tr = self._tracker()
         out = []
+        has_received = tr is not None and tr.received is not None
         for item in raw:
             reply = item[0]
             ep = getattr(reply, "epoch", None)
@@ -632,14 +644,15 @@ class RealLoop:
                 why = "out_of_order"
             elif self._last_scan is not None and sid <= self._last_scan:
                 why = "repeated"
-            elif reply.status == "skipped" and (tr is None or tr.received is None):
-                why = "skipped_first"
+            elif reply.status == "skipped" and not has_received:
+                why = "skipped_first"  # a processed earlier in this batch counts (impl round 1 P2-2)
             if why is not None:
                 self.reloc_dropped[why] += 1
                 continue
             self._last_stamp, self._last_scan = stamp, sid
             out.append(item)
             if reply.status == "processed":
+                has_received = True
                 ns = self.start_ns + int(round(stamp * 1e9))
                 self._fresh_ns = ns if self._fresh_ns is None else max(self._fresh_ns, ns)
                 a = self.attempt
@@ -659,15 +672,12 @@ class RealLoop:
             self._declare_apply(now_ns, t, loaded)
         passed = self._filter_replies(t, raw)
         tr = self._tracker()
-        before = None if tr is None else tr.applied
         self.core.slam_replies(t, passed, loaded)
-        if tr is not None and tr.applied is not before and tr.applied is not None:
-            stamp, sid = float(tr.applied[1]), int(tr.applied[2])
-            src = next((it[0] for it in reversed(passed)
-                        if it[0].status == "processed" and int(it[0].scan_id) == sid
-                        and float(it[0].stamp_s) == stamp), None)
-            if src is not None:
-                self.provenance = (self.epoch, getattr(src, "attempt", None), sid, stamp)
+        # the applied correction's source (impl round 1 P2-2): outside a hold every processed becomes applied, so the
+        # batch's last processed is it -- a later skipped only refreshes the stamp; under a hold nothing was applied
+        last = next((it[0] for it in reversed(passed) if it[0].status == "processed"), None)
+        if last is not None and tr is not None and getattr(tr, "mode", None) != "holding":
+            self.provenance = (self.epoch, getattr(last, "attempt", None), int(last.scan_id), float(last.stamp_s))
 
     def _start_gap(self, rear):
         """(distance m, |yaw| rad) of a rear-axle pose from the registered start."""
@@ -715,22 +725,32 @@ class RealLoop:
                 self.relocalize_status.update(start_pose_m=float(d), start_pose_deg=float(math.degrees(yaw)))
                 if self._off_start(rear):
                     failed = "not_at_start"
-        if failed is None and self.real_layer is not None:
-            lay = self.real_layer
-            newest = lay.installed_newest_s()
-            if not lay.ok(t) or lay.installing(ignore_correction=False) or newest is None or newest < a["t"]:
-                failed = "relocalize_layer"
         if failed is None:
-            gen = a["generation"]
-            self.core.relocalized(t, gen)
-            if tr is not None and getattr(tr, "_relocalizing", False):
-                tr.relocalization_done()
-            if self.operator_start is not None:
-                self.operator_start.void("relocalized")
-            self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
-            return
+            lay = self.real_layer  # no layer: no generation closes (impl round 1 P2-3)
+            newest = None if lay is None else lay.installed_newest_s()
+            if lay is None or not lay.ok(t) or lay.installing(ignore_correction=False) or newest is None \
+                    or newest < a["t"]:
+                failed = "relocalize_layer"
         if t - a["t"] > RELOCALIZE_WAIT_S:
-            self._attempt_end(t, "refused", failed)
+            self._attempt_end(t, "refused", failed or "relocalize_timeout")  # the limit first (impl round 1 P2-1)
+            return
+        if failed is None:
+            with self.channels.lock:
+                why = self._commit_void(t)
+                if why is not None:
+                    self._attempt_end(t, "refused", why)
+                    return
+                self._close_generation(t, a)
+            return
+
+    def _close_generation(self, t: float, a: dict) -> None:
+        tr = self._tracker()
+        self.core.relocalized(t, a["generation"])
+        if tr is not None and getattr(tr, "_relocalizing", False):
+            tr.relocalization_done()
+        if self.operator_start is not None:
+            self.operator_start.void("relocalized")
+        self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
 
     def _on_console_disarm(self, now_mono: float) -> None:
         self._console_disarm = True  # taken inside the console cycle; the emergency branch runs right after it

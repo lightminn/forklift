@@ -110,7 +110,9 @@ export function relocalizeView(status) {
     open: gen !== null, generation: gen, standing: Boolean(status && status.standing),
     state: r.state ?? "idle", reason: r.reason ?? null, attempt: r.attempt ?? null, kind: r.kind ?? null,
     lastGeneration: r.generation ?? null,
-    gap: Number.isFinite(r.start_pose_m) ? `${(r.start_pose_m * 100).toFixed(1)} cm · ${r.start_pose_deg.toFixed(1)}°` : "",
+    // the last attempt's gap belongs to its own generation: not shown under a newer one (impl round 1 P2-4)
+    gap: Number.isFinite(r.start_pose_m) && (gen === null || r.generation === gen)
+      ? `${(r.start_pose_m * 100).toFixed(1)} cm · ${r.start_pose_deg.toFixed(1)}°` : "",
   };
 }
 
@@ -126,6 +128,10 @@ export function relocalizeClosedWhy(status, hasLease) {
 // The attempt an ack named (generation, attempt) as real_status tells it: its state, or null while not told yet.
 export function relocalizeResult(ack, status) {
   const r = status && status.relocalize;
-  if (!ack || !r || r.generation !== ack.generation || r.attempt !== ack.attempt) return null;
+  // the session too: a reconnect's new session may reuse the generation and attempt numbers (impl round 1 P2-4)
+  if (!ack || !r || ack.session_epoch !== status.session_epoch || r.generation !== ack.generation
+    || r.attempt !== ack.attempt) return null;
+  const gen = Number.isInteger(status.relocalize_generation) ? status.relocalize_generation : null;
+  if (gen !== null && gen !== ack.generation) return null; // an older generation's verdict under a newer one
   return { state: r.state, reason: r.reason ?? null };
 }

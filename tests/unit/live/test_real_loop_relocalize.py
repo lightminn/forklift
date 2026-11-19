@@ -16,6 +16,7 @@ from test_real_loop_console import ask, replies, run_until, start_and_submit
 
 
 def rig(**kw):
+    kw.setdefault("real_layer", True)  # no generation closes without the layer (impl round 1 P2-3)
     r = Rig(frames=True, real_requests=True, reloc=True, **kw)
     r.start()
     r.console_out.clear()
@@ -204,7 +205,7 @@ def test_a_tracker_whose_age_differs_is_refused():
 
 
 def test_with_the_real_layer_the_confirmation_waits_for_a_scan_after_the_attempt():
-    r = rig(real_layer=True)
+    r = rig()
     gen = open_generation(r)
     stand(r)
     ask(r, "relocalize_confirm", generation=gen)
@@ -215,7 +216,7 @@ def test_with_the_real_layer_the_confirmation_waits_for_a_scan_after_the_attempt
 
 
 def test_with_no_scan_after_the_attempt_the_layer_refuses():
-    r = rig(real_layer=True)
+    r = rig()
     gen = open_generation(r)
     stand(r)
     r.scan_on = False  # the LiDAR stops: no scan after the cut
@@ -282,7 +283,253 @@ def test_a_truck_pushed_off_the_start_after_the_arm_is_stopped_at_the_transmit_g
     r = rig()
     start_and_submit(r)
     run_until(r, lambda rec: r.permit.state in (ra.ARMING, ra.READY), 600)
+    mid = r.core.commands.mission_id
     r.loop.start_rear = (0.3, 0.0, 0.0)  # as if the truck were pushed 0.3 m off while the ARM was answered
     rec = run_until(r, lambda rec: rec.branch == "emergency", 200)
     assert "not_at_start" in (rec.reason or "")
-    assert r.loop._moved_for != r.core.commands.mission_id  # no moving DRIVE of this mission was written
+    assert mid is not None and r.loop._moved_for != mid  # no moving DRIVE of this mission was written
+
+
+# --- impl round 1 ---------------------------------------------------------------------------------------------------
+def test_a_disconnect_queued_before_the_close_voids_the_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    orig = r.loop._commit_void
+
+    def late(t):
+        r.channels.disconnect("c1", "op")  # queued after this tick's batch, before the commit
+        r.loop._commit_void = orig
+        return orig(t)
+
+    r.loop._commit_void = late
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:lease"
+    assert r.core.relocalize_generation() == gen
+
+
+def test_a_disconnect_queued_before_the_seed_leaves_no_seed():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    orig = r.loop._commit_void
+
+    def late(t):
+        r.channels.disconnect("c1", "op")
+        r.loop._commit_void = orig
+        return orig(t)
+
+    r.loop._commit_void = late  # the seed is checked in the same tick the declaration is taken
+    r.say("relocalize_declare", generation=gen)
+    r.tick(2)
+    assert not any(c[0] == "seed" for c in r.slam.calls) and not r.loop._declared()
+
+
+def test_the_mark_holds_when_the_synthetic_reply_fails_after_the_seed():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    orig = r.core.slam_replies
+
+    def fail_once(t, replies, loaded):
+        if replies and replies[0][1].get("source") == "operator_declared":
+            r.core.slam_replies = orig
+            raise RuntimeError("injected")
+        return orig(t, replies, loaded)
+
+    r.core.slam_replies = fail_once
+    ask(r, "relocalize_declare", generation=gen)
+    r.tick(2)
+    assert any(c[0] == "seed" for c in r.slam.calls)
+    assert r.loop._declared() and "relocalize" in r.loop.real_status(r.now)["bypassed"]
+    assert r.loop._speed_cap() == pytest.approx(0.06)
+
+
+def test_a_reference_after_the_limit_is_refused():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    held = []
+    r.slam.request_processed = lambda epoch, attempt, not_before: held.append((epoch, attempt, not_before))
+    ask(r, "relocalize_confirm", generation=gen)
+    t0 = r.loop.attempt["t"]
+    while r.loop._t(r.now) - t0 <= ra.SLAM_MAX_AGE_S * 0 + 3.0 - 0.02:
+        r.tick()
+    r.slam.requests.extend(held)  # the reference comes only now, past the 3 s limit
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 50)
+    assert status(r)["state"] == "refused"
+
+
+def test_processed_then_skipped_in_one_batch():
+    r = rig()
+    r.slam.auto = False
+    t = r.loop._t(r.now)
+    r.slam.extra = [r.slam.reply(t + 0.005, correction=(0.01, 0.0, 0.0)), r.slam.reply(t + 0.01, status="skipped")]
+    r.tick()
+    first = r.loop.provenance
+    assert first is not None and first[3] == pytest.approx(t + 0.005)  # the processed, not the later skipped
+    r.tracker.received = r.tracker.applied = None
+    t = r.loop._t(r.now)
+    r.slam.extra = [r.slam.reply(t + 0.005), r.slam.reply(t + 0.01, status="skipped")]
+    r.tick()
+    assert r.loop.reloc_dropped["skipped_first"] == 0  # the skipped after a processed of the same batch passes
+
+
+def test_no_layer_no_close():
+    r = rig(real_layer=False)
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_layer"
+    assert r.core.relocalize_generation() == gen
+
+
+def test_the_open_generation_without_replies_stays_warming_up_without_an_emergency():
+    r = rig()
+    gen = open_generation(r)
+    r.slam.auto = False
+    r.tick(80)  # 1.6 s of silence
+    assert r.tracker.mode == "warming_up" and r.core.relocalize_generation() == gen
+    assert all(rec.branch != "emergency" for rec in r.loop.records[-80:])
+
+
+def test_a_reboot_before_the_first_correction():
+    r = rig()
+    r.tracker.received = r.tracker.applied = None
+    r.tracker.mode = "warming_up"
+    r.slam.auto = False
+    r.mcu.boot = 0x6262  # the MCU reboots
+    r.tick(20)
+    assert r.core.relocalize_generation() is not None
+    assert all(rec.branch != "emergency" for rec in r.loop.records[-15:])
+
+
+def test_a_long_slam_silence_does_not_stop_the_arbiter_or_refuse_teleop():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    r.slam.auto = False
+    r.tick(int(10.5 / 0.02))  # past the arbiter's not_stopped_s with no SLAM reply
+    assert r.arbiter.mode != "STOPPED"
+    reply, _ = ask(r, "mode_request", to="TELEOP")
+    assert reply.get("reason") != "not_stopped", reply
+
+
+def test_a_push_off_the_start_during_the_arm_is_stopped_before_it_reaches_the_gate():
+    """A physical push: ARM times out after 0.3 s, so 0.10 m off the start inside it needs > 0.33 m/s -- the overspeed
+    watch (0.225 m/s) or the ARM timeout latches first; either way no moving DRIVE of the mission is written."""
+    import math as _m
+
+    r = rig()
+    start_and_submit(r)
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, 800)
+    mid = r.core.commands.mission_id
+    cpm = 327680.0 / (2 * _m.pi * 0.125)
+    for _ in range(20):
+        if r.permit.state != ra.ARMING:
+            break
+        r.mcu.counts[0] += 0.007 * cpm  # 0.35 m/s
+        r.mcu.counts[1] += 0.007 * cpm
+        r.tick()
+    r.tick(10)
+    assert mid is not None and r.permit.state == ra.LATCHED and r.loop._moved_for != mid
+
+
+def test_a_half_written_first_drive_continued_off_the_start_is_link_stuck():
+    r = rig()
+    orig = r.loop._book
+
+    def book(now_ns, seq, speed, *a, **k):
+        if speed != 0.0 and k.get("steer") is not None and not getattr(r, "_stalled", False):
+            r._stalled = True
+            r.transport.stall = True  # the first moving DRIVE gets only its first bytes out
+        return orig(now_ns, seq, speed, *a, **k)
+
+    r.loop._book = book
+    start_and_submit(r)
+    run_until(r, lambda rec: r.transport.partial_frame is not None and getattr(r, "_stalled", False), 800)
+    mid = r.core.commands.mission_id
+    r.loop.start_rear = (0.3, 0.0, 0.0)  # off the start before the rest of the frame
+    r.transport.stall = False
+    rec = run_until(r, lambda rec: rec.branch == "emergency", 50)
+    assert "link_stuck" in (rec.reason or "") and r.transport.resyncs == 1, rec  # the half frame abandoned
+    assert mid is not None and r.loop._moved_for != mid
+
+
+def test_the_cap_follows_the_slam_bypass_and_the_declaration():
+    r = rig()
+    ask(r, "check_bypass", check="slam", on=True)
+    r.tick()
+    assert r.loop._speed_cap() == pytest.approx(0.06)
+    ask(r, "check_bypass", check="slam", on=False)
+    r.tick()
+    assert r.loop._speed_cap() == pytest.approx(0.15)  # no declaration in this session: lifted
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_declare", generation=gen)
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 200)
+    ask(r, "check_bypass", check="slam", on=True)
+    r.tick()
+    ask(r, "check_bypass", check="slam", on=False)
+    r.tick()
+    assert r.loop._speed_cap() == pytest.approx(0.06)  # the declaration's mark keeps it
+
+
+def test_skipped_only_with_both_bypasses_never_arms():
+    r = rig()
+    for check in ("slam", "operator_start"):
+        ask(r, "check_bypass", check=check, on=True)
+        r.tick()
+    r.slam.status = "skipped"  # the source keeps answering, never with a new pose
+    r.tick(40)
+    since = len(r.transport.sent)
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
+    r.tick(300)
+    from forklift_core.mcu_link.messages import Arm
+
+    assert not any(isinstance(m, Arm) for _, k, _, m in r.transport.sent[since:])
+    assert not any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
+
+
+def test_a_complete_source_loss_while_driving_latches():
+    r = rig()
+    ask(r, "check_bypass", check="slam", on=True)
+    r.tick()
+    start_and_submit(r)
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING, 800)
+    r.slam.auto = False  # nothing at all from the source
+    rec = run_until(r, lambda rec: rec.branch == "emergency", 100)
+    assert rec.branch == "emergency"
+
+
+def test_with_the_slam_bypass_skipped_replies_keep_it_driving_capped_until_the_pocket_stop():
+    """Design 6, 2b (the start/continue boundary): after the arm, processed replies stop and skipped ones go on -- the
+    truck keeps driving within 0.06 m/s on the last correction and odometry, stops before the pocket (that stop needs
+    a fresh SLAM stand) and that stage's timeout ends the mission."""
+    r = rig()
+    ask(r, "check_bypass", check="slam", on=True)
+    r.tick()
+    booked, written = {}, []
+    ob, ow = r.loop._book, r.loop.book.written
+
+    def book(now_ns, seq, speed, *a, **k):
+        booked[int(seq) & 0xFFFF] = float(speed)
+        return ob(now_ns, seq, speed, *a, **k)
+
+    def wrote(seq, written_ns):
+        written.append((r.loop._t(r.now), booked.get(int(seq) & 0xFFFF)))
+        return ow(seq, written_ns)
+
+    r.loop._book, r.loop.book.written = book, wrote
+    start_and_submit(r)
+    run_until(r, lambda rec: any(v for _, v in written), 1500)
+    t_cut = r.loop._t(r.now)
+    r.slam.status = "skipped"
+    run_until(r, lambda rec: r.core.commands.status in ("cancelled", "failed", "done"), 2000)
+    after = [abs(v) for t, v in written if t > t_cut + ra.SLAM_MAX_AGE_S and v]
+    assert after and max(after) <= 0.06 + 1e-9  # driving on after the last processed expired, capped
+    assert "pocket_stop" in (r.core.commands.end_reason or "")
