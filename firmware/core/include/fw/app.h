@@ -24,6 +24,10 @@ typedef struct {
     /* A completed transaction, if any, with the tag it was started with. */
     bool (*drv_spi_take)(void *ctx, uint8_t *ch, uint16_t *rx, uint32_t *tag);
     void (*watchdog_kick)(void *ctx);
+    /* Optional (NULL on the boards): after each link frame the core handled, with the mode and the active command
+       expiry it found just before handling it (-1: none) -- the MCU model's --accept-log (real HIL 6a). */
+    void (*frame_handled)(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after);
 } fw_hal;
 
 typedef struct {

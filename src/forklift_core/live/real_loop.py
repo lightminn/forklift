@@ -2260,7 +2260,10 @@ class RealLoop:
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
             if self.delay_bound is not None:
-                self.delay_bound.written(seq, written_ns)
+                # the round trip's write is the first byte's (6a-2a impl round 1 P1-3): a write that returned late does
+                # not shrink the bound of a STATE measured after the bytes went out
+                first_ = getattr(self.transport, "first_byte_ns", {}).get(int(seq) & 0xFFFF, written_ns)
+                self.delay_bound.written(seq, first_)
                 pair = permit.session_pair()  # after the permit took the write: the second DISARM's seq is known
                 if pair is not None:
                     self.delay_bound.expect_step(*pair)

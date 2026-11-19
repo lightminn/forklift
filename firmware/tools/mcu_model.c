@@ -26,11 +26,11 @@
    Real HIL 6a (docs/design/2026-11-20-real-hil-6a.md 1, 6): --hil-plant 1 sets the hil_plant and outputs_locked
    build bits together (the core refuses one without the other, and either with a commissioning build).
    --state-silent-at-ms N --state-silent-ms D: from N for D ms no STATE is written while frames are still read and
-   handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken). --accept-log PATH: the link
-   bytes reach the core one frame per tick, and each frame the core handled is a line "MCU-us seq kind verdict
-   prior-mode prior-expiry-us" (verdict "accepted" or "rejected:<reason>", expiry -1 when none) -- several frames
-   of one tick cannot be told apart from STATE alone. --axis-log PATH: each tick a line "MCU-us wall-gap-ns mode
-   lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
+   handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken; STATEs queued before it are
+   dropped, none goes out in it). --accept-log PATH: each frame the core handled (the core's own frame_handled hook,
+   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us"
+   (verdict "accepted", "rejected:<reason>" or "handled" for CLEAR_FAULTS; expiry -1 when none). --axis-log PATH:
+   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -49,7 +49,6 @@
 
 #define TWO_PI 6.28318530717958647692
 #define TX_CAP 4096u
-#define RX_CAP 8192u
 
 typedef struct {
     int fd;
@@ -63,9 +62,7 @@ typedef struct {
     bool fault_fired;
     long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
     FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
-    uint8_t rx[RX_CAP];                       /* 6a with --accept-log: bytes read, handed one frame per tick */
-    size_t rx_len, rx_frame_len;              /* rx_frame_len: the frame's bytes still to hand this tick */
-    bool handed;                              /* this tick's frame was started (no second one this tick) */
+    bool was_state_silent;
 } board;
 
 static board B;
@@ -133,30 +130,8 @@ static size_t hal_link_read(void *ctx, uint8_t *buf, size_t cap)
     if (silent()) {
         return 0;
     }
-    if (B.accept_log == NULL) {
-        ssize_t n = read(B.fd, buf, cap);
-        return n > 0 ? (size_t)n : 0;
-    }
-    /* --accept-log: the core gets one frame (through its delimiter) per tick, the bytes read before the tick
-       (fill_rx), so each handled frame's verdict is the core's state after this tick; a frame longer than cap goes
-       in pieces within the tick */
-    if (!B.handed) {
-        size_t k = 0;
-        while (k < B.rx_len && B.rx[k] != 0) {
-            k++;
-        }
-        if (k == B.rx_len) {
-            return 0; /* no whole frame yet */
-        }
-        B.rx_frame_len = k + 1;
-        B.handed = true;
-    }
-    size_t n = B.rx_frame_len < cap ? B.rx_frame_len : cap;
-    memcpy(buf, B.rx, n);
-    memmove(B.rx, B.rx + n, B.rx_len - n);
-    B.rx_len -= n;
-    B.rx_frame_len -= n;
-    return n;
+    ssize_t n = read(B.fd, buf, cap);
+    return n > 0 ? (size_t)n : 0;
 }
 
 static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
@@ -205,9 +180,12 @@ static void hal_kick(void *ctx)
     (void)ctx;
 }
 
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after);
+
 static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
-    hal_spi_take, hal_kick};
+    hal_spi_take, hal_kick, frame_handled};
 
 /* ---- plant: the shared model, plus the host-only hand turn ------------------------------ */
 static void step_plant(double dt)
@@ -329,25 +307,8 @@ static const char *arg_str(int argc, char **argv, const char *name)
     return NULL;
 }
 
-static void fill_rx(void)
-{
-    while (B.rx_len < RX_CAP) {
-        ssize_t n = read(B.fd, B.rx + B.rx_len, RX_CAP - B.rx_len);
-        if (n <= 0) {
-            break;
-        }
-        B.rx_len += (size_t)n;
-    }
-    if (B.rx_len == RX_CAP) {
-        size_t k = 0;
-        while (k < B.rx_len && B.rx[k] != 0) {
-            k++;
-        }
-        if (k == B.rx_len) {
-            B.rx_len = 0; /* a full buffer with no delimiter: nothing in it can be a frame */
-        }
-    }
-}
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after);
 
 static const char *kind_name(uint8_t t)
 {
@@ -359,6 +320,28 @@ static const char *kind_name(uint8_t t)
     case LINK_COMMISSION: return "COMMISSION";
     default: return "OTHER";
     }
+}
+
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after)
+{
+    (void)ctx;
+    if (B.accept_log == NULL) {
+        return;
+    }
+    char verdict[24];
+    if (m->type == LINK_DISARM) {
+        snprintf(verdict, sizeof verdict, "accepted"); /* always taken (it names its seq) */
+    } else if (m->type == LINK_CLEAR_FAULTS) {
+        snprintf(verdict, sizeof verdict, "handled");
+    } else if (after->reject_reason == 0) {
+        snprintf(verdict, sizeof verdict, "accepted"); /* ARM / DRIVE / COMMISSION set it on every frame */
+    } else {
+        snprintf(verdict, sizeof verdict, "rejected:%u", (unsigned)after->reject_reason);
+    }
+    fprintf(B.accept_log, "%llu %u %s %s %u %lld\n", (unsigned long long)after->time_us, (unsigned)m->seq,
+            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us);
+    fflush(B.accept_log);
 }
 
 int main(int argc, char **argv)
@@ -451,49 +434,18 @@ int main(int argc, char **argv)
             next = B.now_ns;
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
-        /* 6a --accept-log: the frame handed this tick, decoded on the side, and the core before it */
-        link_msg seen;
-        bool have = false;
-        uint8_t prior_mode = app.d.mode;
-        long long prior_expiry = app.d.has_deadline ? (long long)app.d.deadline_us : -1;
-        uint16_t prior_rx = app.d.last_rx_seq;
-        B.handed = false;
-        if (B.accept_log != NULL && !silent()) {
-            fill_rx();
-        }
-        if (B.accept_log != NULL && B.rx_len > 0) {
-            /* peek: the next frame (through its delimiter) is what hal_link_read hands the core now */
-            size_t k = 0;
-            while (k < B.rx_len && B.rx[k] != 0) {
-                k++;
-            }
-            if (k < B.rx_len) {
-                link_rx side;
-                link_rx_init(&side);
-                for (size_t i = 0; i <= k && !have; i++) {
-                    have = link_rx_feed(&side, B.rx[i], &seen);
-                }
-            }
-        }
         fw_app_tick(&app);
-        if (have) {
-            bool took = app.d.last_rx_seq == seen.seq && (prior_rx != seen.seq || app.d.reject_reason == 0);
-            if (took) {
-                fprintf(B.accept_log, "%llu %u %s accepted %u %lld\n", (unsigned long long)app.d.time_us,
-                        (unsigned)seen.seq, kind_name(seen.type), (unsigned)prior_mode, prior_expiry);
-            } else {
-                fprintf(B.accept_log, "%llu %u %s rejected:%u %u %lld\n", (unsigned long long)app.d.time_us,
-                        (unsigned)seen.seq, kind_name(seen.type), (unsigned)app.d.reject_reason,
-                        (unsigned)prior_mode, prior_expiry);
-            }
-            fflush(B.accept_log);
-        }
         if (B.axis_log != NULL) {
             fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
                     (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
                     B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]);
         }
-        if (!silent()) {
+        bool ss = state_silent();
+        if (ss && !B.was_state_silent) {
+            B.tx_len = 0; /* 6a: the STATEs queued before the cut are dropped, not sent late in it */
+        }
+        B.was_state_silent = ss;
+        if (!silent() && !ss) {
             flush_tx();
         }
     }

@@ -259,3 +259,118 @@ def test_the_runner_pty_refuses_reserved_model_arguments_and_a_shared_slave(tmp_
     finally:
         if "fd" in held:
             os.close(held["fd"])
+
+
+# --- Codex 6a-2a impl round 1 ------------------------------------------------------------------------------------
+def raw_pair():
+    master, slave = os.openpty()
+    rlt._raw(slave)  # noqa: SLF001 -- the runner's own settings (VMIN 0, VTIME 0)
+    os.set_blocking(master, False)
+    os.set_blocking(slave, False)
+    return master, slave
+
+
+def test_an_empty_read_on_the_runners_pty_is_nothing_yet_and_a_hangup_is_lost():
+    m, s = raw_pair()
+    t = rlt.LoopTtyTransport(s)
+    h = Host()
+    t.receive(h, 0)  # nothing yet: not lost
+    assert t.lost is None
+    os.write(m, encode(state(), 1))
+    t.receive(h, 0)
+    assert t.lost is None and h.rx and t.hil_plant
+    os.close(m)
+    with pytest.raises(rlt.DeviceLost):
+        t.receive(h, 0)
+    assert t.lost["first"] in ("read_hup", "read_eio")
+
+
+class Pieces:
+    def __init__(self, k):
+        self.k = k
+
+    def __call__(self, fd, data):
+        return min(self.k, len(data))
+
+
+def test_each_piece_of_a_frame_passes_the_gate_again():
+    w = Pieces(3)
+    t = rlt.LoopTtyTransport(-1, writer=w)
+    t._poison_at = None  # noqa: SLF001
+    h = Host()
+    h.queue("DISARM", 4)
+    gates = []
+
+    def gate(frame, write):
+        gates.append(frame.seq)
+        write(judged_ns=len(gates))
+        return True
+
+    for _ in range(40):
+        t.transmit(h, 0, gate)
+        if 4 in t.written_ns:
+            break
+    pieces = -(-len(encode(Disarm(), 4)) // 3)
+    assert len(gates) == pieces  # one os.write per gate pass
+    assert t.judged[4] == pieces and t.last_write_ns[4] <= t.written_ns[4]
+
+
+def test_a_boot_id_zero_state_neither_opens_nor_resets_the_hil_check():
+    m, s = pair()
+    t = rlt.LoopTtyTransport(s)
+    h = Host()
+    os.write(m, encode(state(boot_id=0), 1))
+    t.receive(h, 0)
+    assert t.hil_plant is False
+    os.write(m, encode(state(flags=StateFlag.HIL_PLANT), 2))  # boot 7, a bit missing
+    t.receive(h, 0)
+    os.write(m, encode(state(boot_id=0, mcu_time_us=5000), 3))
+    os.write(m, encode(state(mcu_time_us=6000), 4))  # boot 7 again: still refused
+    t.receive(h, 0)
+    assert t.hil_plant is False
+
+
+class LossHost(Host):
+    def __init__(self):
+        super().__init__()
+        self.disconnects = 0
+
+    def disconnected(self, now_ns):
+        self.disconnects += 1
+
+
+def test_a_loss_tells_the_host_once_and_returns_the_frames_finished_before_it():
+    calls = {"n": 0}
+
+    def writer(fd, data):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise OSError(errno.EIO, "gone")
+        return len(data)
+
+    t = rlt.LoopTtyTransport(-1, writer=writer)
+    t._poison_at = None  # noqa: SLF001
+    h = LossHost()
+    h.queue("DISARM", 1)
+    h.queue("DISARM", 2)
+    out = t.transmit(h, 0, gate_all)
+    assert [o[1] for o in out] == [1] and h.disconnects == 1
+    with pytest.raises(rlt.DeviceLost):
+        t.transmit(h, 0, gate_all)
+    with pytest.raises(rlt.DeviceLost):
+        t.receive(h, 0)
+    assert h.disconnects == 1
+
+
+def test_closing_the_runner_pty_twice_never_closes_a_reused_number(tmp_path):
+    exe = fake_model(tmp_path)
+    hp = rlt.HilPty(exe, 3.0)
+    n = hp.slave
+    hp.close()
+    reused = os.open(os.devnull, os.O_RDONLY)
+    try:
+        hp.close()
+        os.fstat(reused)  # still open
+    finally:
+        os.close(reused)
+    assert n >= 0 and hp.slave == -1

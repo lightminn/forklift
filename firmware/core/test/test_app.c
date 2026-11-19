@@ -210,7 +210,7 @@ static void hal_kick(void *ctx)
 
 static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
-    hal_spi_take, hal_kick};
+    hal_spi_take, hal_kick, 0};
 
 static drive_config CFG;
 static fw_app app;

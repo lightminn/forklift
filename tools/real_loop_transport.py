@@ -27,6 +27,7 @@ from __future__ import annotations
 import errno
 import fcntl
 import os
+import select
 import subprocess
 import termios
 import time
@@ -71,8 +72,10 @@ class LoopTtyTransport:
         self._boot_bad = False
         self.hil_plant = False
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
-        self.first_byte_ns: dict = {}
-        self.written_ns: dict = {}
+        self.first_byte_ns: dict = {}  # seq -> clock just before its first os.write (D5's round trip)
+        self.last_write_ns: dict = {}  # seq -> clock just before the os.write that sent its last byte
+        self.written_ns: dict = {}  # seq -> clock after that os.write returned (the book's and the permit's)
+        self._host = None
         self.resyncs = 0
         self.read_done_ns: int | None = None
 
@@ -82,18 +85,24 @@ class LoopTtyTransport:
         return self._cur
 
     def receive(self, host, now_ns: int, limit: int = 64) -> None:
+        """One read of at most READ_CAP bytes (``limit`` is not counted here: the byte cap bounds a read to about 45
+        STATEs). On a raw tty with VMIN 0 an empty read is "nothing yet"; a hangup shows as POLLHUP/POLLERR or as EIO
+        (6a-2a impl round 1 P1-1)."""
+        self._host = host
         if self.lost is not None:
             raise DeviceLost(self.lost["reason"])
         try:
             data = self._read(self.fd, READ_CAP)
         except BlockingIOError:
-            return
+            data = b""
         except OSError as exc:
             if exc.errno in _LOST:
                 self._lose("read_eio")
             raise
         if not data:
-            self._lose("read_eof")
+            if self._hung():
+                self._lose("read_hup")
+            return
         rx_ns = int(self.clock())  # the actual read time (design 2): the host's echo validity starts here
         self.read_done_ns = rx_ns
         for rec in self._dec.feed(data, rx_ns):
@@ -101,12 +110,31 @@ class LoopTtyTransport:
                 self._check_hil(rec.message)
         host.on_bytes(data, rx_ns)
 
+    def _hung(self) -> bool:
+        try:
+            poller = select.poll()
+            poller.register(self.fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+            return any(ev & (select.POLLHUP | select.POLLERR | select.POLLNVAL) for _, ev in poller.poll(0))
+        except (OSError, ValueError):
+            return True
+
     def transmit(self, host, now_ns: int, gate) -> list:
+        """Frames written whole in this call. A device lost part-way returns the ones finished before it (the loop
+        books them); the next call raises (6a-2a impl round 1 P2-5)."""
+        self._host = host
         if self.lost is not None:
             raise DeviceLost(self.lost["reason"])
         out: list = []
+        try:
+            self._transmit(host, now_ns, gate, out)
+        except DeviceLost:
+            if not out:
+                raise
+        return out
+
+    def _transmit(self, host, now_ns: int, gate, out: list) -> None:
         if not self._poison_out():
-            return out
+            return
         if self._cur is not None:
             f = self._cur
             finished = {}
@@ -120,11 +148,11 @@ class LoopTtyTransport:
                     host.frame_written(f, self.written_ns[int(f.seq) & 0xFFFF])
                     self._cur, self.partial_since_ns = None, None
                 else:
-                    return out  # still half written (EAGAIN)
+                    return  # still half written: the next piece passes the gate again
             else:
                 self.resync(host, now_ns)  # a refused continuation: abandoned on this fd, the poison next
                 if not self._poison_out():
-                    return out
+                    return
         while (f := host.next_frame(now_ns)) is not None:
             state = {}
 
@@ -145,7 +173,6 @@ class LoopTtyTransport:
                 break
             out.append((f.kind, f.seq, self.written_ns[int(f.seq) & 0xFFFF]))
             host.frame_written(f, self.written_ns[int(f.seq) & 0xFFFF])
-        return out
 
     def resync(self, host, now_ns: int) -> None:
         """A half frame abandoned on the same fd (counted as possibly delivered); the poison goes out before anything
@@ -180,11 +207,12 @@ class LoopTtyTransport:
 
     def _write_first(self, f, judged_ns) -> str:
         seq = int(f.seq) & 0xFFFF
-        self.first_byte_ns[seq] = int(self.clock())
+        entry = int(self.clock())
+        self.first_byte_ns[seq] = entry
         n = self._os_write(f.data, "write_eio")
         if not n:
             return "eagain"
-        self.judged[seq] = judged_ns
+        self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
         if n < len(f.data):
             self._cur, self._cur_at, self.partial_since_ns = f, n, int(self.clock())
             return "partial"
@@ -192,18 +220,23 @@ class LoopTtyTransport:
         return "done"
 
     def _write_rest(self, f, judged_ns) -> bool:
+        """One os.write per gate pass (6a-2a impl round 1 P1-2): a short write leaves the rest for the next pass."""
         seq = int(f.seq) & 0xFFFF
-        while self._cur_at < len(f.data):
-            n = self._os_write(f.data[self._cur_at:], "write_eio")
-            if not n:
-                return False
-            self.judged[seq] = judged_ns
-            self._cur_at += n
+        entry = int(self.clock())
+        n = self._os_write(f.data[self._cur_at:], "write_eio")
+        if not n:
+            return False
+        self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
+        self._cur_at += n
+        if self._cur_at < len(f.data):
+            return False
         self.written_ns[seq] = int(self.clock())
         return True
 
     # --- the HIL check and the loss ----------------------------------------------------------------------------------
     def _check_hil(self, s: McuState) -> None:
+        if s.boot_id == 0:
+            return  # the host refuses it too (state_invalid): neither opens the check nor resets a boot's record
         if s.boot_id != self._boot:
             self._boot, self._boot_bad = s.boot_id, False
         if not hil_bits_ok(s):
@@ -215,30 +248,47 @@ class LoopTtyTransport:
             tainted = self._cur is not None or self._poison_at is not None
             self.lost = {"first": path, "stream_tainted": tainted,
                          "reason": f"device_lost:first={path}:stream_tainted={int(tainted)}"}
+            if self._host is not None:
+                try:
+                    self._host.disconnected(int(self.clock()))  # the queue and the authorization go (once)
+                except Exception:  # noqa: BLE001 -- the loss is raised whatever the host does
+                    pass
         self.hil_plant = False
         raise DeviceLost(self.lost["reason"])
 
 
 # --- the runner's own pty and model ---------------------------------------------------------------------------------
-def _other_openers(rdev: int, own_fd: int) -> list[int]:
-    """Pids (other than this process's own fd) holding an fd on the device ``rdev`` (Linux /proc)."""
-    me, out = os.getpid(), []
+def _other_openers(rdev: int, own_fd: int) -> tuple[list[int], list[int]]:
+    """``(holders, uninspected)``: pids (other than this process's own fd) holding an fd on the device ``rdev``, and
+    pids of this user whose fds could not be read (non-dumpable agents; recorded, not refused -- the lock comes first
+    and the master is drained, so only an opener inside the openpty-to-lock instant could hold it). Another user's
+    process cannot open this user's slave read-write (mode 0620) and is skipped; an fd that vanished is skipped."""
+    me, uid, out, unseen = os.getpid(), os.getuid(), [], []
     for pid in os.listdir("/proc"):
         if not pid.isdigit():
             continue
         try:
+            owner = os.stat(f"/proc/{pid}").st_uid
             fds = os.listdir(f"/proc/{pid}/fd")
-        except OSError:
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            if owner == uid:
+                unseen.append(int(pid))
             continue
         for fd in fds:
             try:
                 st = os.stat(f"/proc/{pid}/fd/{fd}")
-            except OSError:
+            except FileNotFoundError:
+                continue
+            except PermissionError:
+                if owner == uid and int(pid) not in unseen:
+                    unseen.append(int(pid))
                 continue
             if st.st_rdev == rdev and not (int(pid) == me and int(fd) == own_fd):
                 out.append(int(pid))
                 break
-    return out
+    return out, unseen
 
 
 def _raw(fd: int) -> None:
@@ -268,7 +318,7 @@ class HilPty:
             os.set_blocking(slave, False)
             os.set_inheritable(slave, False)
             _raw(slave)
-            others = _other_openers(os.fstat(slave).st_rdev, slave)
+            others, self.uninspected = _other_openers(os.fstat(slave).st_rdev, slave)
             if others:
                 raise HilRefused(f"device_shared:{others[0]}")
             while True:  # whatever reached the slave before the lock: gone before the model reads
@@ -291,10 +341,12 @@ class HilPty:
         return self.proc.poll()
 
     def close(self, wait_s: float = 1.0) -> int | None:
-        try:
-            os.close(self.slave)
-        except OSError:
-            pass
+        if self.slave >= 0:
+            fd, self.slave = self.slave, -1  # released once: a second close never closes a reused number
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         if self.proc.poll() is None:
             self.proc.terminate()
             try:

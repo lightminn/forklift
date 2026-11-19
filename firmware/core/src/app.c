@@ -76,7 +76,12 @@ void fw_app_tick(fw_app *app)
         for (size_t i = 0; i < n; i++) {
             link_msg m;
             if (link_rx_feed(&app->rx, buf[i], &m)) {
+                uint8_t prior_mode = app->d.mode;
+                int64_t prior_expiry = app->d.has_deadline ? (int64_t)app->d.deadline_us : -1;
                 drive_handle(&app->d, &m);
+                if (hal->frame_handled != 0) {
+                    hal->frame_handled(hal->ctx, &m, prior_mode, prior_expiry, &app->d);
+                }
             }
         }
         if (n < sizeof buf) {

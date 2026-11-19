@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from forklift_core.mcu_link.messages import Disarm, LinkDecoder, McuState, StateFlag, encode
+from forklift_core.mcu_link.messages import Arm, ClearFaults, Disarm, LinkDecoder, McuState, StateFlag, encode
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -81,22 +81,26 @@ def test_hil_plant_with_a_commission_build_is_refused(mcu_model):
         m.close()
 
 
-def test_state_silence_keeps_taking_commands(mcu_model):
-    m = Model(mcu_model, "--state-silent-at-ms", 300, "--state-silent-ms", 300)
+def test_state_silence_keeps_taking_commands(mcu_model, tmp_path):
+    log = tmp_path / "accept.log"
+    m = Model(mcu_model, "--state-silent-at-ms", 300, "--state-silent-ms", 300, "--accept-log", log)
     try:
-        seen = []
-        while not seen or seen[-1].mcu_time_us < 290_000:
+        seen, end = [], time.monotonic() + 5.0
+        while (not seen or seen[-1].mcu_time_us < 290_000) and time.monotonic() < end and m.proc.poll() is None:
             seen += m.states(0.01)
+        assert seen and seen[-1].mcu_time_us >= 290_000
         time.sleep(0.1)  # inside the window (300-600 ms of the model's clock)
         m.send(Disarm(), 4321)
         seen += m.states(0.6)
         quiet = [s for s in seen if 301_000 <= s.mcu_time_us < 599_000]
-        assert not quiet
+        assert not quiet  # none measured in it, none queued before it sent late in it
         after = [s for s in seen if s.mcu_time_us >= 600_000]
-        assert after and after[0].last_rx_seq == 4321  # the DISARM sent in the silence was taken
-        assert all(s.last_rx_seq != 4321 for s in seen if s.mcu_time_us < 300_000)
+        assert after and after[0].last_rx_seq == 4321
     finally:
         m.close()
+    rows = [r.split() for r in log.read_text().splitlines()]
+    took = [r for r in rows if r[1] == "4321"]
+    assert took and 300_000 <= int(took[0][0]) < 600_000  # handled inside the silence
 
 
 def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_path):
@@ -106,16 +110,35 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
         m.states(0.2)
         m.send(Disarm(), 77)
         os.write(m.master, bytes([1]) * 96 + b"\x00")  # the poison: no frame
-        m.send(Disarm(), 78)
+        m.send(ClearFaults(0x1234), 77)  # the same seq again, ignored while DISARMED
+        m.send(Arm(0x1234, 1), 78)  # a wrong boot: refused
+        m.send(Disarm(), 78)  # the same seq after a refusal: taken
         m.states(0.2)
     finally:
         m.close()
     rows = [line.split() for line in log.read_text().splitlines()]
-    seqs = [(r[1], r[2], r[3]) for r in rows]
-    assert ("77", "DISARM", "accepted") in seqs and ("78", "DISARM", "accepted") in seqs
+    got = [(r[1], r[2], r[3]) for r in rows]
+    assert got[0] == ("77", "DISARM", "accepted")
+    assert got[1] == ("77", "CLEAR_FAULTS", "handled")
+    assert got[2][:2] == ("78", "ARM") and got[2][2].startswith("rejected:")
+    assert got[3] == ("78", "DISARM", "accepted")
+    assert len(rows) == 4
     for r in rows:
         int(r[0]), int(r[4]), int(r[5])  # MCU time, prior mode, prior active expiry (-1: none)
-    assert len(rows) == 2
+
+
+def test_the_accept_log_keeps_the_cores_read_budget(mcu_model, tmp_path):
+    """Several frames of one tick are handled in that tick, as without the log (round 1 P2-1)."""
+    sts = {}
+    for name, extra in (("off", ()), ("on", ("--accept-log", tmp_path / "a.log"))):
+        m = Model(mcu_model, *extra)
+        try:
+            for i in range(40):
+                m.send(Disarm(), 100 + i)
+            sts[name] = m.states(0.15)
+        finally:
+            m.close()
+    assert sts["on"][0].last_rx_seq == sts["off"][0].last_rx_seq
 
 
 def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
