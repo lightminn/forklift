@@ -650,9 +650,12 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence, bypass=frozenset()
     # mission, path, exemption, load) stays a wait (5c-1 r2 P2-3: the view's ``installing`` ignores the correction then)
     if sn.installing:
         return "wait:snapshot_installing"
-    if "snapshot" not in bypass and (
-            sn.installed_correction is None or tuple(sn.installed_correction) != tuple(sn.applied_correction)
-            or sn.installed_generation is None or sn.installed_generation != sn.applied_generation):
+    # the values always match (5c-1 r6 P2-3: another correction's grid with this correction's pose mixes frames); the
+    # snapshot bypass skips only the generation number
+    if sn.installed_correction is None or tuple(sn.installed_correction) != tuple(sn.applied_correction):
+        return "wait:snapshot_installing"
+    if "snapshot" not in bypass and (sn.installed_generation is None
+                                     or sn.installed_generation != sn.applied_generation):
         return "wait:snapshot_installing"
     return None
 

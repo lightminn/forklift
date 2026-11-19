@@ -215,3 +215,23 @@ def test_real_status_last_refusal_includes_the_arbiters_own():
     reply, _ = ask(r, "check_bypass", check="imu", on=True, control_gen=r.arbiter.control_gen - 1)
     assert reply["reason"] == "stale_control"
     assert r.loop.last_refusal == {"kind": "check_bypass", "reason": "stale_control"}
+
+
+
+def test_a_pending_bypass_is_dropped_when_the_same_client_reconnects():
+    """5c-1 r6 P2-1: a new connection of the lease holder (it takes the lease back) waiting before the tick head."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    r.channels.connect("c2", "op", control=True, token=r.token + 1)
+    r.tick()
+    assert "imu" not in r.loop.bypass
+
+
+def test_a_console_disarm_still_in_the_channel_blocks_the_disarm_confirmation():
+    """5c-1 r6 P2-2: a DISARM queued in the channel, not yet through the arbiter."""
+    r = rig()
+    r.tick(5)
+    r.channels.message("c1", "op", {"t": "disarm", "request_id": "dq1", "session_epoch": EPOCH,
+                                    "control_gen": r.arbiter.control_gen, "lease_id": r.lease})
+    assert not r.loop._disarm_confirmed(int(r.loop.clock()))  # noqa: SLF001

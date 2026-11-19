@@ -161,8 +161,15 @@ BYPASS_CASES = [
     ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 4, 4, "layer_overdue")},
      "layer_timing"),
     ({"operator_start_ok": lambda n: False}, "operator_start"),
-    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, False, 3, 4)}, "snapshot"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 3, 4)}, "snapshot"),
 ]
+
+
+def test_the_snapshot_bypass_never_passes_other_correction_values():
+    """5c-1 r6 P2-3: only the generation's number is bypassed."""
+    ev = evidence(snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, False, 3, 4))
+    for stage in ("submit", "drive"):
+        assert ra.auto_ready_refusal(NOW, stage, ev, bypass={"snapshot"}) == "wait:snapshot_installing"
 
 
 @pytest.mark.parametrize("over, check", BYPASS_CASES)

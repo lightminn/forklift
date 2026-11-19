@@ -283,7 +283,8 @@ class RealLoop:
         if now_ns is not None and not self._lease_valid(int(now_ns)):
             return "lease_changed"
         with self.channels.lock:
-            closing = any(ev[0] == "disconnect" and ev[2] == lease.client_id
+            # a disconnect, or a new connection of the same client (it takes the lease back), waiting (r5 P2, r6 P2-1)
+            closing = any(ev[0] in ("disconnect", "connect") and ev[2] == lease.client_id
                           for ev in list(getattr(self.channels, "_conns", ())))
         if closing:
             return "lease_changed"
@@ -340,7 +341,7 @@ class RealLoop:
                 return "unknown_check", {}
             lease = self.link.a.lease
             lease_id = None if lease is None else lease.lease_id
-            refusal = self._bypass_refusal(lease_id)
+            refusal = self._bypass_refusal(lease_id, int(self.clock()))  # at the instant it is taken (r6 P3-1)
             if refusal is not None:
                 return refusal, {}
             self._bypass_pending.append((check, bool(msg["on"]), lease_id))  # applied at the next tick head (r3)
@@ -363,6 +364,9 @@ class RealLoop:
         permit = self.permit
         if getattr(permit, "_disarm_first_ns", None) is not None or self._console_disarm:
             return False
+        with self.channels.lock:  # a console DISARM in the channel, not yet through the arbiter (r6 P2-2)
+            if list(getattr(self.channels, "_disarms", ())):
+                return False
         if any(getattr(o, "kind", None) == "DISARM" for o in getattr(self.host, "_outbox", ())):
             return False
         partial = getattr(self.transport, "partial_frame", None)
