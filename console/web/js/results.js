@@ -94,6 +94,7 @@ export const REASONS = {
   "observation_discarded": "관찰 결과를 버렸습니다",
   "near_capture_": "근접 촬영에 실패했습니다",
   "pocket_check_refused": "포켓 확인에서 삽입을 거절했습니다",
+  "pocket_check_missing_at_insert": "포켓 확인 없이 삽입하지 않았습니다",
   "near_field_": "근접 추적에 실패했습니다",
   // docs/plans/2026-10-28-near-front-range.md R2: the front's range ran out before the roof took the tracking over
   "near_field_handoff_missed": "포크가 포켓에 들어가기 전에 상판 추적으로 넘기지 못해 멈췄습니다",
@@ -154,6 +155,9 @@ export const REASONS = {
   "prepare:loaded:no_final_straight": "배달 직선이 남지 않았습니다 — 목적지에서 곧게 더 물러난 뒤 다시 내십시오",
   "prepare:loaded:start_wait": "출발 준비(승강·첫 구간·도킹)가 60 초 안에 끝나지 않았습니다",
   "prepare:loaded:": "실린 팔레트의 운반을 계획하지 못했습니다",
+  // a known-pallet start (design 2026-11-19-known-pallet-start): the operator's map pose, S10 case A
+  "prepare:known:": "입력한 팔레트 위치로 시작하지 못했습니다",
+  "s10_lifted": "운반 높이 도달 · 현장 복구 필요",
   "prepare:": "첫 구간을 준비하지 못했습니다",
   // the recovery of a mission that ended with the forks in a pocket
   "recovery:clear_out:budget": "물러나기 거리(1.0 m)를 다 썼습니다 — 수동 복구가 필요합니다",

@@ -67,8 +67,13 @@ class ArbiterConfig:
     # runner reads the model's (dls08_measured fork_lift: 0.28 m); without one, the autonomous lift target 0.20 m.
     lift_limit_m: float = 0.20
     decel_mps2: float = 1.5  # the stopping model's (config/obstacle_layer.yaml), the slew's braking
+    # Design 2026-11-19-real-assembly 7: what AUTO does when the lease is lost -- "continue" (the simulation's user
+    # decision, design 2) or "stop" (the real truck, lead decision 2026-11-19: STOPPED, a rearm needed)
+    auto_lease_loss: str = "continue"
 
     def __post_init__(self):
+        if self.auto_lease_loss not in ("continue", "stop"):
+            raise ValueError("auto_lease_loss must be 'continue' or 'stop'")
         for name in ("command_max_age_s", "lease_timeout_s", "grace_s", "video_max_age_s", "camera_latency_bound_s",
                      "feedback_max_age_s", "not_stopped_s", "tick_s", "decel_mps2", "frame_window_s", "lift_limit_m"):
             value = getattr(self, name)
@@ -148,6 +153,11 @@ class Arbiter:
         self.pending: list[dict] = []  # mission requests waiting for this cycle's lifecycle verdict (B3)
         self.session_request: str | None = None  # "end" / "reset": the runner leaves its loop (console plan D7/D9)
         self.sim_reset_allowed = False  # a simulation back end resets its scene on request (welcome sim_reset)
+        # Design 2026-11-19-real-assembly 7 (the real executor sets them; None: the simulation's rearm as before):
+        # rearm_refusal(now) -> reason or None, judged before the rearm's ACK and mode change; on_rearmed(now,
+        # control_gen), called where a rearm really moves STOPPED -> PAUSED (a replayed ACK never calls it)
+        self.rearm_refusal = None
+        self.on_rearmed = None
         self.next_pick_allowed = False  # CT-2: the runner answers pick_request (welcome capabilities.next_pick)
         # the wall escape's approval handler ``(msg, now_mono) -> reason | None``, injected by the S6 bridge only;
         # None: escape_approve is unsupported (Isaac, every other back end -- standing-direction-rule design 4.2)
@@ -236,6 +246,8 @@ class Arbiter:
         if self.mode == "TELEOP":
             self.preempt_latch = reason
             self._set_mode("PAUSED", now_mono, reason)
+        elif self.mode == "AUTO" and self.config.auto_lease_loss == "stop":
+            self.stop(now_mono, reason)  # the real truck: STOPPED, one boundary (design 2026-11-19-real-assembly 7)
         else:
             self._boundary(now_mono, reason)
 
@@ -917,11 +929,17 @@ class Arbiter:
     def _on_rearm(self, client_id, request_id, msg, now_mono):
         if self.mode != "STOPPED":
             return self._reply("rearm", request_id, "invalid")
+        if self.rearm_refusal is not None:
+            why = self.rearm_refusal(now_mono)  # the real truck's conditions, before the ACK and the mode change
+            if why is not None:  # one reason on the screen, the real truck's condition in the detail
+                return self._reply("rearm", request_id, "real_rearm_refused", detail=str(why))
         waived = self.stand_waiver()
         refused = None if waived else self._needs_stand("rearm", request_id)
         if refused is not None:
             return refused
         self._set_mode("PAUSED", now_mono, "rearm")
+        if self.on_rearmed is not None:
+            self.on_rearmed(now_mono, self.control_gen)
         if waived:
             self.events.append({"t": now_mono, "event": "stand_unconfirmed", "reason": "rearm_lower_only"})
         return self._reply("rearm", request_id, control_gen=self.control_gen)

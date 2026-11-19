@@ -295,3 +295,161 @@ def test_the_limit_past_the_watchdog_end_ends_the_mission():
     core, _, _, _ = make(limit=(0.0, "layer_latency_exceeded"))
     with pytest.raises(RuntimeError, match="layer_latency_exceeded"):
         core.permission(10.0, REAR, 0.0, 0.3, True, None)
+
+
+def test_at_50_hz_a_blocked_path_stops_after_0_30_s_too():
+    # real autonomy plan PR 2: the window is a time; the real entry point's options carry dt = 1/50 -> 15 ticks
+    core, obstacle, _, _ = make("transport", path_check=SimpleNamespace(blocked="occupied"))
+    core.options.dt = 1 / 50
+    for _ in range(14):
+        out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert out.allowed == 0.5 and obstacle["path_blocked_ticks"] == 14
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "occupied")
+
+
+def known_start(frames, *, truth_speed=0.3, velocity=(0.3, 0.0)):
+    """A known start's approach (design 2026-11-19-known-pallet-start 2): no capture; ``frames`` answer
+    known_pocket_frame in turn; build_pocket_check installs a check answering ok."""
+    slam = {"tracker": SimpleNamespace(applied=((0.0, 0.0, 0.0), 0), mode="holding"),
+            "stop_now": truth_speed == 0.0, "docking": {}}  # the real loop's still span (design 2026-11-19-real-assembly 8)
+    core, obstacle, pocket, calls = make("approach", remaining=2.0, pocket_check=True, check=None,
+                                         truth_speed=truth_speed, velocity=velocity, slam=slam)
+    core.state["planning_target_source"] = "operator_input"
+    core.paths["approach"] = SimpleNamespace(poses=np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.25]]))
+    asked, built = [], []
+    core.hooks.known_pocket_frame = lambda: asked.append(True) or (frames.pop(0) if frames else None)
+
+    def build(axis_yaw, rear, base, stamp_s, rear_at_stamp):
+        built.append((axis_yaw, base, stamp_s, rear_at_stamp, pocket.get("capture")))
+        pocket["check"] = SimpleNamespace(limit=lambda *a: (0.9, "ok"), summary=lambda: {})
+
+    core.hooks.build_pocket_check = build
+    return core, pocket, asked, built
+
+
+def frame(stamp, **over):
+    return SimpleNamespace(**{"scene": "SCENE", "stamp_s": stamp, "rear": (1.0, 2.0, 0.1), "base": (1.2, 2.0, 0.3),
+                              "mission_gen": 0, "phase": "approach", "correction": (0.0, 0.0, 0.0), **over})
+
+
+def remaining(core, value):
+    core.trackers["approach"].remaining_to_goal_m = lambda: value
+
+
+def test_a_known_start_stands_for_its_first_depth_frame_before_the_d5_straight_then_runs_under_the_check():
+    core, pocket, asked, built = known_start([None, frame(9.0), frame(10.2)])
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.5, "ok") and not asked  # farther than the lead: nothing yet
+    remaining(core, 1.15)  # 0.15 m before the 1.0 m straight
+    out = core.permission(10.1, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why, out.acting) == (0.0, "pocket_first_frame", True) and not asked  # still rolling
+    assert out.obstacle_hold and out.requested_speed == 0.0
+    core.hooks.truth_speed = lambda: 0.0
+    core.hooks.truth_velocity = lambda: np.zeros(3)
+    core.slam["stop_now"] = True
+    out = core.permission(10.2, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:none")
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:stale") and not built  # 1.3 s old
+    out = core.permission(10.4, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame") and len(asked) == 3
+    assert built == [(0.25, (1.2, 2.0, 0.3), 10.2, (1.0, 2.0, 0.1), "SCENE")]
+    assert core.state["pocket_check"]["first_frame"] == {"source": "known_pocket_frame", "stamp_s": 10.2,
+                                                         "taken_s": 10.4}
+    out = core.permission(10.5, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.5, "ok") and len(asked) == 3  # built: the approach runs on
+    remaining(core, 0.9)
+    out = core.permission(10.6, REAR, 0.0, 0.4, True, None)
+    assert out.pocket_phase and (out.allowed, out.why) == (0.5, "ok")  # in the straight, under the check
+    remaining(core, 0.44)
+    out = core.permission(10.7, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_settle") and pocket["await_still_frame"]  # the standing frame
+
+
+def test_a_known_start_without_a_first_frame_ends_after_five_seconds_and_never_enters_the_straight():
+    core, pocket, asked, built = known_start([], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 0.95)  # braked into the straight: still held for the frame, not pocket_missing
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:none")
+    core.permission(14.9, REAR, 0.0, 0.4, True, None)
+    with pytest.raises(RuntimeError, match="pocket_stop in approach: pocket_first_frame"):
+        core.permission(15.0, REAR, 0.0, 0.4, True, None)
+    assert not built
+
+
+def test_a_recognised_start_keeps_pocket_missing():
+    core, pocket, asked, built = known_start([frame(10.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    core.state["planning_target_source"] = "oracle"
+    remaining(core, 0.9)
+    out = core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_missing") and not asked
+
+
+def test_a_late_fresh_frame_after_the_wait_is_not_taken():
+    core, pocket, asked, built = known_start([None, frame(15.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    with pytest.raises(RuntimeError, match="pocket_first_frame"):
+        core.permission(15.0, REAR, 0.0, 0.4, True, None)  # fresh, but past the 5 s: ended before it is read
+    assert not built and len(asked) == 1
+
+
+def test_once_built_before_the_straight_the_depth_check_answers_where_the_grid_waives_the_pallet():
+    """Codex 4a P2: the check's region is waived in the grid from its build; the depth check answers from then."""
+    core, pocket, asked, built = known_start([frame(10.0)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.0, REAR, 0.0, 0.4, True, None)
+    assert built
+    pocket["check"].limit = lambda *a: (0.0, "pocket_obstacle")
+    out = core.permission(10.1, REAR, 0.0, 0.4, True, None)
+    assert out.pocket_phase and (out.allowed, out.why) == (0.0, "pocket_obstacle")
+
+
+@pytest.mark.parametrize("bad", [
+    {"stamp_s": 10.15},  # fresh, but taken while braking (before the still span began at 10.2)
+    {"mission_gen": 7},  # another mission's
+    {"phase": "observe"},
+    {"correction": (0.1, 0.0, 0.0)},  # under another correction
+])
+def test_a_first_frame_outside_the_still_span_or_of_another_mission_or_correction_is_not_taken(bad):
+    core, pocket, asked, built = known_start([None, frame(10.25, **bad)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.2, REAR, 0.0, 0.4, True, None)  # the span begins
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)
+    assert (out.allowed, out.why) == (0.0, "pocket_first_frame:stale") and not built
+
+
+def test_moving_again_ends_the_still_span():
+    core, pocket, asked, built = known_start([None, frame(10.25)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.2, REAR, 0.0, 0.4, True, None)
+    core.slam["stop_now"] = False  # a gap or a new drive
+    core.permission(10.25, REAR, 0.0, 0.4, True, None)
+    assert "first_frame_still_since" not in pocket
+    core.slam["stop_now"] = True
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)  # the span starts again at 10.3; the 10.25 frame is older
+    assert out.why == "pocket_first_frame:stale" and not built
+
+
+def test_a_still_span_broken_outside_the_lead_does_not_survive_into_it():
+    """Codex 4b P2: stop_now false while still farther than the lead must end the span too."""
+    core, pocket, asked, built = known_start([None, frame(10.25)], truth_speed=0.0, velocity=(0.0, 0.0))
+    remaining(core, 1.1)
+    core.permission(10.2, REAR, 0.0, 0.4, True, None)  # the span begins at 10.2 inside the lead
+    remaining(core, 2.0)
+    core.slam["stop_now"] = False
+    core.permission(10.22, REAR, 0.0, 0.4, True, None)  # moving, outside the lead
+    assert "first_frame_still_since" not in pocket
+    remaining(core, 1.1)
+    core.slam["stop_now"] = True
+    out = core.permission(10.3, REAR, 0.0, 0.4, True, None)  # a new span from 10.3: the 10.25 frame is older
+    assert out.why == "pocket_first_frame:stale" and not built
+
+
+def test_the_loops_still_span_start_is_used_when_given():
+    core, pocket, asked, built = known_start([frame(10.15)], truth_speed=0.0, velocity=(0.0, 0.0))
+    core.slam["still_since"] = 10.1  # the loop saw the stop begin at 10.1 on the frames' clock
+    remaining(core, 1.1)
+    core.permission(10.3, REAR, 0.0, 0.4, True, None)
+    assert built and built[0][2] == 10.15

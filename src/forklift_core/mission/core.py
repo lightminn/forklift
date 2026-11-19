@@ -288,6 +288,13 @@ def _refused_degenerate(result):
     return SimpleNamespace(**{**vars(result), **fields})
 
 
+def ticks_for(seconds: float, dt: float) -> int:
+    """A time window as a count of control ticks of length ``dt`` (sim-to-real plan 2026-11-18 PR 2): the core's
+    windows were tick counts at 120 Hz; Isaac (dt = 1/120) keeps every count it had (1 s -> 120, 0.30 s -> 36), the
+    real truck's 50 Hz loop gets the same times."""
+    return int(round(float(seconds) / float(dt)))
+
+
 class MissionCore:
     def __init__(self, ms: MissionState, *, state: dict, obstacle: dict | None, slam: dict | None, pocket: dict,
                  paths: dict, trackers: dict, geometry, settings: dict, pallet_geometry, hooks: SimpleNamespace,
@@ -343,6 +350,7 @@ class MissionCore:
         self.field_recovery: dict | None = None  # 4d-2b-2: the open field recovery (real truck)
         self._field_recovery_serial = 0
         self._relocalize_serial = 0
+        self.s10_stop = None  # design 2026-11-19-known-pallet-start 3: the S10 control stop asked, until it is read
         self._last_pose_hold = None  # 4d-2b-2: (pallet, hold by its release count) a carried pallet's last pose is in
         self._operator = {"serial": 0, "request": None, "answer": None, "motion_since": None,  # 4d-2b-1
                           "motion_key": None}
@@ -545,7 +553,9 @@ class MissionCore:
         # seen, and a later SLAM correction cannot slide the truck against the
         # pallet estimate (plan v3.5; S2 seed 0 on v3.4 hit a block that way).
         if ms.phase in ("approach", "insert", "lower") and slam["tracker"].mode == "tracking":
-            self.hold_slam(t, held_frame_pallet=True)  # the capture's estimate was made with this correction
+            # the capture's estimate was made with this correction; an operator's map pose was not (design
+            # 2026-11-19-known-pallet-start 1: it stays a map estimate at the end release)
+            self.hold_slam(t, held_frame_pallet=not self.operator_target())
             slam["holds"].append(
                 {"phase": ms.phase, "time_s": t, "event": "hold", "error": hooks.slam_error()}
             )
@@ -620,6 +630,10 @@ class MissionCore:
                     transition("bottom_deck_refused", t)
                     return SimpleNamespace(stop=True, rear=rear)
                 deck_["permitted"] = {"time_s": t, **at_}
+            # a known start inserts only under a check built from its first frame (design 2026-11-19 2; Codex 4a P2)
+            if (self.operator_target() and getattr(self.options, "pocket_check", False)
+                    and self.pocket.get("check") is None):
+                hooks.require(False, "pocket_check_missing_at_insert")  # no hook call on any other arrival
             transition("insert", t)
         elif ms.phase == "insert":
             state["insertion_error"] = {
@@ -665,6 +679,23 @@ class MissionCore:
             transition("home_settle", t)
         return SimpleNamespace(stop=False, rear=rear)
 
+    def _s10_end(self, t: float) -> None:
+        """S10 case A's end at the carry height (design 2026-11-19-known-pallet-start 3): the forks carry the pallet
+        (the lift -> extract row of the cargo table, without the transition's obstacle memory change), the end
+        recorded in the mission's ``s10_end``, a control stop signalled for this very tick (``take_s10_stop``: the
+        real loop stops before its final submit -- the end alone does not zero this tick's wheels), and the mission
+        ended once as recovery_required/s10_lifted; the field recovery and a relocalization follow."""
+        self.cargo.confirm_lifted()
+        self.state["s10_end"] = {"time_s": float(t), "lift_m": float(self.hooks.lift_position()),
+                                 "pallet_source": self.state.get("planning_target_source")}
+        self.s10_stop = float(t)
+        self.commands.terminate("recovery_required", t, "s10_lifted")
+
+    def take_s10_stop(self):
+        """The S10 control stop asked this tick (its time), cleared as it is read; None: none asked."""
+        stop, self.s10_stop = self.s10_stop, None
+        return stop
+
     def lift_and_timers(self, t: float, dt: float) -> bool:
         """The lift target's ramp and the timed transitions (lift, lower, settle, home settle). True ends the
         mission loop."""
@@ -684,6 +715,9 @@ class MissionCore:
                     settings["lift_rate_mps"] * dt,
                 )
             )
+        if (ms.phase == "lift" and getattr(self.options, "s10_stop_at_lift", False)
+                and self.commands.status != "running"):
+            return False  # S10 ended (or no mission runs): no new confirmation request (Codex 4a P3)
         if ms.phase == "lift" and self.commands.work_elapsed(ms.phase_started, t) > 4.5:
             if self._real_vehicle():
                 # 4d-2b-1: the lift at its target, then the operator says the pallet came up (no truth height)
@@ -692,6 +726,9 @@ class MissionCore:
                 hooks.require(verdict_ != "timeout", "Lift did not reach its position")
                 if verdict_ == "reject":
                     hooks.require(False, "Pallet was not lifted (operator)")
+                elif verdict_ == "confirm" and getattr(self.options, "s10_stop_at_lift", False):
+                    self._s10_end(t)  # design 2026-11-19-known-pallet-start 3: no extract, no delivery verdict
+                    return False
                 elif verdict_ == "confirm":
                     transition("extract", t)
             else:
@@ -1465,6 +1502,56 @@ class MissionCore:
         ) and not docking_straight
         return acting, docking_straight
 
+    KNOWN_FRAME_LEAD_M = 0.20  # the first-frame stand begins this far before the D5 straight (the brake's room)
+    KNOWN_FRAME_MAX_AGE_S = 0.5  # the first depth frame's age at most when it is taken
+    KNOWN_FRAME_WAIT_S = 5.0  # standing for it at most (work time), as a pocket stop
+
+    def _known_first_frame(self, t: float, rear, speed_):
+        """A known start's first pocket-check frame (design 2026-11-19-known-pallet-start 2): from KNOWN_FRAME_LEAD_M
+        before the approach's D5 straight until the check is built, the wheels held at 0; once standing, the frame
+        from ``known_pocket_frame`` (``scene`` -- what a capture carries for the check --, ``stamp_s``, ``rear``,
+        ``base``, ``mission_gen``, ``phase``, ``correction``) builds the check when it is at most
+        KNOWN_FRAME_MAX_AGE_S old and was acquired in the still span, and the next tick runs on. No frame
+        within KNOWN_FRAME_WAIT_S ends the mission. Returns (0.0, reason) while it holds, else None."""
+        ms, pocket, options, hooks = self.ms, self.pocket, self.options, self.hooks
+        if not (options.pocket_check and ms.phase == "approach" and pocket.get("check") is None
+                and self.operator_target()):
+            return None
+        if not self.slam["stop_now"]:
+            pocket.pop("first_frame_still_since", None)  # the still span ends wherever the truck is (Codex 4b P2)
+        if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
+            return None
+        since_ = pocket.setdefault("first_frame_since", float(t))
+        hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
+                      "pocket_stop in approach: pocket_first_frame")  # checked before a late frame is taken
+        if self.slam["stop_now"]:
+            # design 2026-11-19-real-assembly 8: the loop's still span (a fresh stop on new samples and no earlier
+            # drive still able to act; the encoder SafetySpeed's bound cannot reach 0.01 m/s on the real truck) --
+            # only a frame acquired inside it, for this mission, phase and applied correction, is taken
+            # the loop's own still-span start on the frames' clock when it gives one, else this tick's time
+            loop_still_ = self.slam.get("still_since")
+            still_ = (float(loop_still_) if loop_still_ is not None
+                      else pocket.setdefault("first_frame_still_since", float(t)))
+            frame_ = hooks.known_pocket_frame()
+            fresh_ = (frame_ is not None and 0.0 <= t - float(frame_.stamp_s) <= self.KNOWN_FRAME_MAX_AGE_S
+                      and float(frame_.stamp_s) >= still_ and frame_.mission_gen == self.commands.mission_gen
+                      and frame_.phase == ms.phase
+                      and tuple(float(v) for v in frame_.correction) == tuple(self._applied_now() or (0.0, 0.0, 0.0)))
+            if fresh_:
+                pocket["capture"] = frame_.scene
+                hooks.build_pocket_check(float(self.paths["approach"].poses[-1][2]), rear, frame_.base,
+                                         float(frame_.stamp_s), frame_.rear)
+                self.state.setdefault("pocket_check", {})["first_frame"] = {
+                    "source": "known_pocket_frame", "stamp_s": float(frame_.stamp_s), "taken_s": float(t)}
+                pocket.pop("first_frame_since", None)
+                pocket.pop("first_frame_still_since", None)
+                return 0.0, "pocket_first_frame"  # built: the next tick runs under the check
+            reason_ = "pocket_first_frame:none" if frame_ is None else "pocket_first_frame:stale"
+        else:
+            pocket.pop("first_frame_still_since", None)  # moving again or a gap: the span ends
+            reason_ = "pocket_first_frame"
+        return 0.0, reason_
+
     def permission(self, t: float, rear, kappa: float, requested_speed: float, loaded: bool, cusp_handed_) -> SimpleNamespace:
         """One tick of the obstacle permission while the truck follows a path (or a stall is handed over): the
         grid re-projected after a correction change, the permission's limit and its diagnostics dump, the
@@ -1567,12 +1654,22 @@ class MissionCore:
         low[ms.phase] = min(low.get(ms.phase, float("inf")), allowed)
         acting, docking_straight = self.permission_acting()
         pocket_phase = options.pocket_check and (ms.phase == "insert" or (ms.phase == "approach" and docking_straight))
+        if (options.pocket_check and ms.phase == "approach" and pocket.get("check") is not None
+                and self.operator_target()):
+            # a known start's check is built before the straight: from then on the depth check answers wherever its
+            # region is waived in the grid (Codex 4a P2) -- the recognised start builds it at the straight's start
+            pocket_phase = True
+        first_frame_ = self._known_first_frame(t, rear, speed_)
+        if first_frame_ is not None:
+            # design 2026-11-19-known-pallet-start 2: a known start has no capture -- the check's first depth frame is
+            # taken standing before the straight it applies to; the straight is not entered without it
+            acting, speed_hold_, (allowed, why) = True, True, first_frame_  # held whatever the obstacle switch
         gate_only = False
         if int(getattr(options, "restart_confirm_scans", 0) or 0) > 0 and acting and not pocket_phase:
             # docs/plans/2026-10-25-restart-confirmation.md: on the permission's own limit only (before the pocket
             # check and the D4 path-blocked stop); off, nothing is read
             allowed, why, gate_only = self._restart_gate(t, allowed, why)
-        if pocket_phase:
+        if pocket_phase and first_frame_ is None:
             # D5: the approach straight and the insertion run under the
             # permission too; inside the pallet region the depth check
             # answers (its region is waived in the grid only while set).
@@ -1665,7 +1762,7 @@ class MissionCore:
                 trace.pop("rear_stopped", None)
             # The N9 outcome: stopped and standing 1 s (Codex stage-1 P1-1, 2nd P2-4) ends the run.
             hooks.require(not ("stopped_s" in trace and t - trace["stopped_s"] >= 1.0), "sensor_silence_stopped")
-        if obstacle["path_blocked_ticks"] >= 36 and allowed > 0.0:
+        if obstacle["path_blocked_ticks"] >= ticks_for(self.PATH_BLOCKED_S, self._tick_dt()) and allowed > 0.0:
             allowed, why = 0.0, "occupied"
         self.last_permission = (float(allowed), why)  # for the safety state's reason (E8)
         if abs(requested_speed) > allowed + 1e-9:
@@ -2249,7 +2346,7 @@ class MissionCore:
             if (
                 "end_s" in back_e or tracking.status == "arrived"
                 or (standing_e and (tracking.status == "failed" or trackers[ms.phase].remaining_to_goal_m() <= 1e-6))
-                or back_e["stand_ticks"] >= 120
+                or back_e["stand_ticks"] >= ticks_for(1.0, dt)
             ):
                 tracking = replace(tracking, status="arrived", speed_mps=0.0)
             elif tracking.status == "failed":
@@ -2289,7 +2386,14 @@ class MissionCore:
     GOAL_CREEP_R1_REMAINING_M = 1e-6  # the "remaining 0" rules' own zero
     GOAL_CREEP_R1_NORMAL_M = 1e-5  # the pose at the progress point
     GOAL_CREEP_WINDOW_M = 8e-4  # commanded travel; team-spec counts with hysteresis read >= 0.599 of it (worst case)
-    GOAL_CREEP_WINDOW_TICKS = 120
+    def _tick_dt(self) -> float:
+        """The control tick for a window in a method not handed ``dt``: the options' (the runner always passes it;
+        the real entry point must). Options built by hand without one -- the unit tests' -- are Isaac's 120 Hz."""
+        dt = getattr(self.options, "dt", None)
+        return 1 / 120 if dt is None else float(dt)
+
+    PATH_BLOCKED_S = 0.30  # the permission's blocked path this long counts (36 ticks at 120 Hz)
+    GOAL_CREEP_WINDOW_S = 1.0  # at least this long of ticks with a nonzero command (120 ticks at 120 Hz)
     GOAL_CREEP_RATIO = 0.25
     # Plan 2026-11-17-goal-band-and-cusp-retry A: a watch that entered through the band only (the filter false) latches
     # only on a truck that hardly moved -- a slow convergence a curvature may still bend in is not taken
@@ -2299,7 +2403,7 @@ class MissionCore:
         """Plan 2026-10-24-goal-creep-stall G2, before the docking stop and stall rules read ``tracking``:
         "r1" -- 0 < remaining <= 1 um, the tracker's leg end filter true, the pose at the progress point, its output
         and the last applied wheel speed at the creep's level; "r2" -- 1 um < remaining, the filter true and, over the
-        last GOAL_CREEP_WINDOW_M of applied wheel travel (at least GOAL_CREEP_WINDOW_TICKS ticks, each with a nonzero
+        last GOAL_CREEP_WINDOW_M of applied wheel travel (at least GOAL_CREEP_WINDOW_S of ticks, each with a nonzero
         applied speed), odometry travel under GOAL_CREEP_RATIO of it: latched until the filter turns false or the
         tracker, leg or phase changes; None otherwise. Reads slam["applied_speed"] (the wheel speed the last physics
         step ran on) and slam["odom_speed"] (the odometry over that step); without the former (an older record) or
@@ -2345,12 +2449,13 @@ class MissionCore:
                 return None
         window = st["window"]
         window.append((abs(float(applied)) * dt, abs(float(slam.get("odom_speed", 0.0))) * dt))
-        while (len(window) > self.GOAL_CREEP_WINDOW_TICKS
+        window_ticks = ticks_for(self.GOAL_CREEP_WINDOW_S, dt)
+        while (len(window) > window_ticks
                and sum(a for a, _ in window) - window[0][0] >= self.GOAL_CREEP_WINDOW_M):
             window.pop(0)
         commanded, moved = sum(a for a, _ in window), sum(b for _, b in window)
         ratio = self.GOAL_CREEP_RATIO if reach else self.GOAL_CREEP_BAND_RATIO
-        if (len(window) >= self.GOAL_CREEP_WINDOW_TICKS and commanded >= self.GOAL_CREEP_WINDOW_M
+        if (len(window) >= window_ticks and commanded >= self.GOAL_CREEP_WINDOW_M
                 and moved < ratio * commanded):
             st["latched"] = True
             entry = {"phase": ms.phase, "time_s": float(t), "remaining_m": float(remaining),
@@ -2427,7 +2532,7 @@ class MissionCore:
             # than a stall replan (l8_measured seed 1 + N1: 37.5 mm lateral).
             tracking = replace(tracking, status="braking", speed_mps=0.0)
             ms.dock_stop_ticks = ms.dock_stop_ticks + 1 if slam["stop_now"] else 0
-            if ms.dock_stop_ticks >= 120:
+            if ms.dock_stop_ticks >= ticks_for(1.0, dt):
                 ms.dock_stop_ticks = 0
                 state.setdefault("docking_retries", []).append(
                     {"trigger": "a", "time_s": t, "counted": False, "round": d7_docking_.get("round", 1),
@@ -2490,9 +2595,9 @@ class MissionCore:
             )
         )
         if stalled and goal_heading_miss:
-            ms.slam_stall_ticks = max(ms.slam_stall_ticks, 119)
+            ms.slam_stall_ticks = max(ms.slam_stall_ticks, ticks_for(1.0, dt) - 1)
         ms.slam_stall_ticks = ms.slam_stall_ticks + 1 if stalled else 0
-        if ms.slam_stall_ticks >= 120 and d7_owned:
+        if ms.slam_stall_ticks >= ticks_for(1.0, dt) and d7_owned:
             # Plan D7c (c)/(d): after a docked straight or during a
             # re-approach, a retry instead of transport_recovery_after_docking.
             ms.slam_stall_ticks = 0
@@ -2504,7 +2609,7 @@ class MissionCore:
             slam["control"][-1][1:4] = rear.tolist()
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
-        elif ms.slam_stall_ticks >= 120 and len(state["stall_replans"]) < (
+        elif ms.slam_stall_ticks >= ticks_for(1.0, dt) and len(state["stall_replans"]) < (
                 getattr(options, "return_stall_budget", STALL_REPLANS) if ms.phase == "return_home" else STALL_REPLANS):
             # (--diag-return-stall-budget: the return's budget, a diagnostic; plan 2026-10-24-leg-end-budget-stands 3)
             # Stopped at the end of the path but outside the goal
@@ -2607,7 +2712,7 @@ class MissionCore:
             tracking = trackers[ms.phase].update(rear, signed_speed, dt)
             ms.last_tracking = tracking
         elif (
-            ms.slam_stall_ticks >= 120 and ms.slam_stall_ticks % 120 == 0
+            ms.slam_stall_ticks >= ticks_for(1.0, dt) and ms.slam_stall_ticks % ticks_for(1.0, dt) == 0
             and ms.phase == "return_home"
             and not (obstacle is not None and obstacle.get("backoff", {}).get("phase") == ms.phase)
             and trackers[ms.phase].remaining_to_goal_m() <= 1e-6
@@ -2841,7 +2946,7 @@ class MissionCore:
             and (
                 (tracking.status == "failed" and tracking.failure == "endpoint_heading"
                  and not tracking.off_path)
-                or ms.observe_stall_ticks >= 120
+                or ms.observe_stall_ticks >= ticks_for(1.0, dt)
             )
         ):
             # Plan D8 S4c-3 stage 2: no recovery runs held in the realignment (the
@@ -2874,7 +2979,7 @@ class MissionCore:
                     and tracking.failure == "endpoint_heading"
                     and not tracking.off_path
                 )
-                or ms.observe_stall_ticks >= 120
+                or ms.observe_stall_ticks >= ticks_for(1.0, dt)
             )
         )
         observe_miss = (
@@ -4105,14 +4210,13 @@ class MissionCore:
             max_cross_track_error_m=0.35,
         )
 
-    def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
-        """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
-        and (the first far observation under SLAM) the near leg to the near capture point."""
-        state, slam, hooks, options = self.state, self.slam, self.hooks, self.options
-        paths, trackers, geometry = self.paths, self.trackers, self.geometry
+    def _install_mission_plan(self, plans, planning_trace: list, planning_start: float) -> None:
+        """A mission plan's records, its followers and the paths shown and saved -- shared by the observation's
+        install and the known-pallet start (design 2026-11-19-known-pallet-start 1; moved as it was)."""
+        state, hooks, options = self.state, self.hooks, self.options
+        paths, trackers = self.paths, self.trackers
         mission_stages = options.mission_stages
         require, wall, path_record, record_json = hooks.require, hooks.wall, hooks.path_record, hooks.record_json
-        final_straight_prefix = hooks.final_straight_prefix
         apply_tracker_profile, record_tracker_configs = self.apply_tracker_profile, self.record_tracker_configs
         state.setdefault("planning_traces", []).append(
             planning_trace
@@ -4150,6 +4254,13 @@ class MissionCore:
                     for k, v in paths.items()
                 }
             ))
+
+    def _observe_install(self, plans, planning_trace: list, planning_start: float, attempt_number: int):
+        """After the mission plan of a valid observation: its records, the followers, the paths shown and saved,
+        and (the first far observation under SLAM) the near leg to the near capture point."""
+        state, slam, hooks, geometry = self.state, self.slam, self.hooks, self.geometry
+        require, final_straight_prefix, paths = hooks.require, hooks.final_straight_prefix, self.paths
+        self._install_mission_plan(plans, planning_trace, planning_start)
         near_leg = None
         if slam is not None and "near_capture" not in state:
             # Plan v3.6: see the pallet again where the final
@@ -6112,7 +6223,8 @@ class MissionCore:
         elif pocket.get("planning_pickup") is not None:
             site_ = pocket["planning_pickup"]
             tb.update_pose(pid, TargetPose(float(site_.x_m), float(site_.y_m), float(site_.yaw_rad)),
-                           basis="recognised", uncertainty_m=RECOGNISED_MARGIN_M)  # the observation placed it (D10)
+                           basis="operator_input" if self.operator_target() else "recognised",
+                           uncertainty_m=RECOGNISED_MARGIN_M)  # the observation (or the operator) placed it (D10)
 
     def safety_state(self, t: float | None) -> dict:
         """The mission's safety state for the arbiter (plan E8, M-a0.5 section 4), from what the core already holds
@@ -8556,7 +8668,8 @@ class MissionCore:
     # --- a live mission's preparation (docs/plans/2026-10-18-persistent-live-console.md D2) ------------------------
     PREPARE_ATTEMPTS = 2  # a preparation whose inputs changed is asked again once
 
-    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder") -> None:
+    def prepare_request(self, t: float, rear, inputs: dict, payload: dict, job: str = "observe_ladder", *,
+                        targets_revision: int | None = None) -> None:
         """Ask the worker for a submitted mission's first leg (``observe_ladder``) from where the truck stands -- or,
         a loaded submit (plan D5 6c), its whole delivery (``loaded_delivery``). ``inputs`` (the mission's scenario,
         waiting pose, candidates, bounds, prior zone) are fixed here and used as they are at the adoption; nothing of
@@ -8567,8 +8680,57 @@ class MissionCore:
             self.prepare_attempts = 0
         self.prepare_attempts += 1
         self._request("prepare", job, payload, t, rear, self._applied_now(),
-                      {"inputs": inputs, "targets_revision": self.targets.revision,
-                       "loaded": job == "loaded_delivery"})
+                      {"inputs": inputs,
+                       "targets_revision": self.targets.revision if targets_revision is None else targets_revision,
+                       "loaded": job == "loaded_delivery", "known": job == "plan_transport"})
+
+    def known_pallet_refusal(self) -> str | None:
+        """Why a known-pallet start may not be asked (design 2026-11-19-known-pallet-start 1): near tracking or the
+        bottom-deck check configured, no SLAM or SLAM not tracking (a hold included), no plan worker, or the obstacle
+        layer's known pallets on (an operator's pose is map-fixed; the layer keeps its rectangles in odometry -- the
+        real layer runs them off). None: it may."""
+        slam, obstacle = self.slam, self.obstacle
+        if self.near is not None:
+            return "near_tracking"
+        if self.bottom_deck_on():
+            return "bottom_deck_check"
+        if slam is None:
+            return "no_slam"
+        if slam["tracker"].mode != "tracking":
+            # holding too: an operator's map pose taken inside a hold would read as the hold's estimate (Codex 4a P2)
+            return "slam_not_tracking"
+        if self.jobs is None:
+            return "no_worker"
+        if obstacle is not None and obstacle["layer"].known_enabled:
+            return "known_pallets_on"
+        return None
+
+    def known_pallet_request(self, t: float, rear, inputs: dict, pickup, targets_revision: int | None = None) -> str | None:
+        """A submit whose pallet pose the operator entered in map coordinates (design 2026-11-19-known-pallet-start 1;
+        the S10 case A): the mission plan asked from where the truck stands, as an observation's would be (the worker's
+        ``plan_transport`` on the mission's inputs), through the preparation. ``pickup``: (x, y, yaw) in the map --
+        recorded as operator_input, never as recognition. Refused (the submit fails, the reason returned) under
+        ``known_pallet_refusal``; None when asked. ``targets_revision``: the submit's, fixed with the operator's pose
+        (design 2026-11-19-real-assembly 2) -- a registration changed since ends the preparation, asked or re-asked."""
+        hooks, options, cmds = self.hooks, self.options, self.commands
+        why = self.known_pallet_refusal()
+        if why is None and targets_revision is not None and self.targets.revision != targets_revision:
+            why = "targets_changed"
+        if why is not None:
+            if cmds.status in ("accepted", "preparing"):  # a preparation asked again refused too (Codex 4a P2)
+                cmds.terminate("failed", t, f"prepare:known:{why}")
+            return why
+        target = PlanningPose(float(pickup[0]), float(pickup[1]), float(pickup[2]))
+        inputs = {**inputs, "known_pickup": [target.x_m, target.y_m, target.yaw_rad]}
+        kwargs_ = dict(geometry=self.geometry, target_pickup=target,
+                       start_rear=PlanningPose(float(rear[0]), float(rear[1]), float(rear[2])),
+                       return_to=inputs["wait_pose"], pickup_bounds=inputs["pickup_bounds"],
+                       travel_config=options.travel_config, trace=[], **hooks.grid_kwargs("mission", target),
+                       **self._mission_backoff_kwargs(), **self.loaded_mission_kwargs(), **self._exit_prefix_kwargs())
+        self.prepare_request(t, rear, inputs, {"args": (hooks.grid_world(inputs["scenario"]), options.planner_config),
+                                               "kwargs": kwargs_}, job="plan_transport",
+                             targets_revision=targets_revision)
+        return None
 
     def _prepare_answer(self, p, why: str | None, ok: bool, value, t: float) -> None:
         """A preparation's answer: dropped and asked again once when what it rests on changed (not counted as a
@@ -8578,12 +8740,17 @@ class MissionCore:
         if why == "cargo":
             cmds.terminate("failed", t, "prepare:loaded:cargo_changed")
             return
+        if why == "targets" and p.ctx.get("known"):
+            cmds.terminate("failed", t, "prepare:known:targets_changed")  # a new pose is a new submit (design 4b 2)
+            return
         if why is not None:
             if why != "mission" and self.prepare_attempts >= self.PREPARE_ATTEMPTS:
                 cmds.terminate("failed", t, f"prepare:{why}")
             return  # the runner asks again on the next tick (preparing, nothing pending)
         if not ok:
             cmds.terminate("failed", t, f"prepare:error:{str(value).splitlines()[0] if value else ''}")
+        elif p.ctx.get("known") and not value["result"].success:
+            cmds.terminate("failed", t, f"prepare:known:{value['result'].status}")  # a planned failure is no plan
         elif loaded and not value["result"].success:
             for rec_ in value.get("return_backoffs", ()):  # R6: the refused attempts too
                 note_return_backoff(self.state, "mission_plan", rec_, False)
@@ -8598,7 +8765,10 @@ class MissionCore:
             except Exception as exc:  # noqa: BLE001 -- the preparation fails, the session goes on (P4)
                 cmds.terminate("failed", t, f"prepare:reference:{exc}")
                 return
-            if loaded:
+            if p.ctx.get("known"):
+                self.start_known_pallet_mission(t, value["result"], p.ctx["inputs"], ready,
+                                                trace=value.get("trace") or [], planning_start=p.wall)
+            elif loaded:
                 self.start_loaded_mission(t, value["result"], p.ctx["inputs"], ready)
                 recs_ = list(value.get("return_backoffs", ()))
                 for i_, rec_ in enumerate(recs_):  # R6, after the adoption's baseline reset
@@ -9600,6 +9770,49 @@ class MissionCore:
         self.commands.adopt()
         if getattr(options, "occupied_dumps", False):
             self._occupied_new_mission(t, getattr(plan, "transport", plan))  # a loaded start's plan holds its transport
+        if self.record_start_digest:
+            self.start_digest = start_digest(self)
+
+    def operator_target(self) -> bool:
+        """This mission's pallet pose is the operator's map-fixed entry (design 2026-11-19-known-pallet-start 1)."""
+        return self.state.get("planning_target_source") == "operator_input"
+
+    def start_known_pallet_mission(self, t: float, plan, inputs: dict, ready=None, *, trace=(),
+                                   planning_start: float | None = None) -> None:
+        """A known-pallet start's adoption (design 2026-11-19-known-pallet-start 1, the pair of ``start_mission``): the
+        baseline back, the mission's inputs into the options (no observation waypoints, no adoption zone), the
+        operator's pallet pose recorded as operator_input, the mission plan installed as an observation's would be
+        (``_install_mission_plan``, none of the observation's own after-steps), the runner's own start, then the
+        approach entered through ``transition`` -- its SLAM hold keeps the pallet a map estimate."""
+        ms, state, options, pocket, hooks = self.ms, self.state, self.options, self.pocket, self.hooks
+        for owner, kept in self.baseline.restore(self).items():
+            getattr(self, owner).update(kept)
+        options.scenario = inputs["scenario"]
+        options.return_to_pose = options.home_rear = inputs["wait_pose"]
+        options.observation_waypoints[:] = []
+        options.pickup_bounds, options.observe_bounds = inputs["pickup_bounds"], None
+        options.pickup_zone = inputs["pickup_zone"]
+        options.adoption_zone = None  # no recognition to check against a zone
+        ms.lift_command = float(hooks.lift_position())
+        x_, y_, yaw_ = (float(v) for v in inputs["known_pickup"])
+        pocket["planning_pickup"] = PlanningPose(x_, y_, yaw_)
+        if self.obstacle is not None:
+            # what grid_kwargs("mission", target) sets after an observation (the plans see this pallet); the same
+            # object as the planned pickup, as there
+            self.obstacle["pickup_estimate"] = pocket["planning_pickup"]
+        state["planning_target_source"] = "operator_input"
+        state["perception"] = {"perception_pickup_estimate_m": {"x_m": x_, "y_m": y_, "yaw_rad": yaw_},
+                               "source": "operator_input, not recognition"}
+        self.paths.clear()
+        getattr(self.trackers, "close", lambda: None)()  # the last mission's leg switches into the record first
+        self.trackers.clear()
+        self._install_mission_plan(plan, list(trace), hooks.wall() if planning_start is None else planning_start)
+        hooks.live_mission_start(t, inputs, plan, ready)
+        self.commands.adopt()
+        self.transition("approach", t)
+        state["transitions"][-1]["mission_id"] = self.commands.mission_id
+        if getattr(options, "occupied_dumps", False):
+            self._occupied_new_mission(t, getattr(plan, "approach", plan))
         if self.record_start_digest:
             self.start_digest = start_digest(self)
 
