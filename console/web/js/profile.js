@@ -249,6 +249,7 @@ export const REJECT = {
   commands_outstanding: "아직 처리되지 않은 명령이 남아 있습니다",
   lease_changed: "조종 권한이 바뀌어 우회 변경을 적용하지 않았습니다",
   no_open_recovery: "열린 현장 복구가 없습니다",
+  emergency_pending: "정지·DISARM 이 처리되는 중입니다 · 잠시 뒤 다시 보내세요",
   no_relocalization: "다시 확인할 위치가 없습니다(재위치가 열려 있지 않음)",
   no_start_pose: "시작 자세가 설정되지 않아 재위치를 받을 수 없습니다",
   slam_stale: "차는 서 있지만 SLAM 응답이 낡았습니다 · 새 응답을 기다리세요",

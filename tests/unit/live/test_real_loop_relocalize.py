@@ -591,7 +591,8 @@ def test_a_stop_or_disarm_queued_before_the_close_voids_the_attempt(kind):
     ask(r, "relocalize_confirm", generation=gen)
     _before_commit(r, lambda: r.say(kind))
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
-    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:emergency"
+    assert status(r)["state"] == "refused"  # held while waiting, voided once taken
+    assert status(r)["reason"] in ("relocalize_voided:emergency", "relocalize_voided:control")
     assert r.core.relocalize_generation() == gen
 
 
@@ -682,11 +683,13 @@ def test_a_stop_or_disarm_queued_between_the_batch_and_the_acceptance_voids_the_
         return orig(kind_, msg, now_ns)
 
     r.loop._attempt_request = first
-    r.say("relocalize_declare", generation=gen)
+    rid = r.say("relocalize_declare", generation=gen)
+    r.tick()
+    got, _ = replies(r)
     r.tick(3)
     assert not any(c[0] == "seed" for c in r.slam.calls)
-    assert status(r)["state"] == "refused" and status(r)["reason"] in (
-        "relocalize_voided:emergency", "relocalize_voided:control")
+    mine = [m for m in got if m.get("request_id") == rid]
+    assert mine and mine[0]["t"] == "reject" and mine[0]["reason"] == "emergency_pending"
 
 
 def test_a_viewers_connection_does_not_void_the_attempt():
@@ -720,3 +723,29 @@ def test_the_layer_watchdog_is_read_at_the_close():
     run_until(r, lambda rec: status(r)["state"] != "waiting" or rec.branch == "emergency", 400)
     r.tick_cost_ns = 0
     assert r.core.relocalize_generation() == gen  # the close's own instant saw the fault
+
+
+
+# --- impl round 4 ---------------------------------------------------------------------------------------------------
+def test_a_disarm_in_the_same_batch_refuses_the_attempt():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    rid = r.say("relocalize_declare", generation=gen)
+    r.say("disarm")  # the emergency batch takes it first; the request comes after it in the same tick
+    r.tick()
+    got, _ = replies(r)
+    r.tick(3)
+    mine = [m for m in got if m.get("request_id") == rid]
+    assert mine and mine[0]["t"] == "reject" and mine[0]["reason"] == "emergency_pending"
+    assert not any(c[0] == "seed" for c in r.slam.calls)
+
+
+def test_a_disarm_the_arbiter_refuses_holds_the_close_but_does_not_void_it():
+    r = rig()
+    gen = open_generation(r)
+    stand(r)
+    ask(r, "relocalize_confirm", generation=gen)
+    _before_commit(r, lambda: r.say("disarm", lease_id="old-lease"))  # refused by the arbiter (stale lease)
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
+    assert status(r)["state"] == "confirmed" and r.loop._disarms_taken == 0  # the DISARM was refused, not taken

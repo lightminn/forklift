@@ -541,6 +541,8 @@ class RealLoop:
             return "mission_active", {}
         if self.permit.state not in (ra.OFF, ra.LATCHED):
             return "armed", {}
+        if self._console_disarm or self._emergency_pending():
+            return "emergency_pending", {}  # impl round 4 P1: a DISARM taken in this batch, or a STOP/DISARM queued
         if self.stand_since_ns is None:
             return "not_still", {}
         if self.start_rear is None or self.rear_offset_m is None:
@@ -586,9 +588,10 @@ class RealLoop:
             return "relocalize_voided:bypass"
         if self.stand_since_ns != a["stand"]:
             return "relocalize_moved"
-        if self._disarms_taken != a["disarms"] or self._emergency_pending():
-            # impl rounds 2-3: a DISARM taken since, or a STOP or DISARM waiting in the channel (a STOP taken moves the
-            # control generation); a viewer's connection does not count
+        if self._disarms_taken != a["disarms"]:
+            # impl rounds 2-4: a DISARM taken since (a STOP taken moves the control generation); one still waiting in
+            # the channel holds the commit until the arbiter has judged it (_emergency_pending); a viewer's connection
+            # does not count
             return "relocalize_voided:emergency"
         return None
 
@@ -603,6 +606,8 @@ class RealLoop:
         a = self.attempt
         now_ns = int(self.clock())
         t_now = self._t(now_ns)
+        if self._emergency_pending():
+            return "wait"  # a STOP or DISARM waiting: no commit until it is judged (impl round 4 P2)
         why = self._attempt_void(now_ns, t_now)  # the layer's watchdog at the commit's own instant (impl round 3 P1-2)
         if why is None and self._bypass_refusal(a["lease_id"], now_ns) is not None:
             why = "relocalize_voided:lease"
@@ -627,6 +632,8 @@ class RealLoop:
         c = tuple(float(v) for v in compose(target, invert(odom)))
         with self.channels.lock:  # the check and the seed under one lock: no connection change slips between
             why = self._commit_void(t, closing=False)  # the layer was just cut: its result is judged at the close
+            if why == "wait":
+                return  # seeded on a later tick, once the waiting STOP/DISARM is judged
             if why is not None:
                 self._attempt_end(t, "refused", why)
                 return
@@ -761,6 +768,8 @@ class RealLoop:
         if failed is None:
             with self.channels.lock:
                 why = self._commit_void(t)
+                if why == "wait":
+                    return  # judged again next tick
                 if why is not None:
                     self._attempt_end(t, "refused", why)
                     return
