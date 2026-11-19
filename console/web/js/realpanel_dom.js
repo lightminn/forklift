@@ -26,13 +26,16 @@ export function bindRealPanel(m, rejectText, clientId) {
   // per button and per input; the click compares that one (else what was drawn) with now (r5 P2: a press begun
   // before a second STOP does not rearm after the redraw). A cancelled pointer drops its record (r5 P3).
   panel.press = {};
+  panel.lastPointer = {}; // button -> its latest pointer input (r7 P2-2)
   const panelEl = $("real-panel");
   const begin = (ev) => {
     const btn = ev.target.closest("button");
     if (!btn || !panelEl.contains(btn)) return;
     const key = btn.id || `check:${btn.dataset.check}`;
     // what was drawn, not the newest state (r6 P2-1: a press on a stale drawing can never pass)
-    (panel.press[key] ??= {})[inputOf(ev)] = panel.drawn ? { ...panel.drawn } : null;
+    const rec = panel.drawn ? { ...panel.drawn } : null;
+    (panel.press[key] ??= {})[inputOf(ev)] = rec;
+    if (inputOf(ev) !== "kbd") panel.lastPointer[key] = inputOf(ev); // a click without a pointer id (older Safari)
   };
   panelEl.addEventListener("pointerdown", begin, true);
   panelEl.addEventListener("keydown", (ev) => {
@@ -44,9 +47,18 @@ export function bindRealPanel(m, rejectText, clientId) {
     for (const rec of Object.values(panel.press)) delete rec[inputOf(ev)];
     for (const rec of Object.values(panel.pressKey)) delete rec[inputOf(ev)];
   }, true);
+  // a click's input: its pointer id; none (a MouseEvent click, older Safari) after a pointer press on this button: that
+  // press's input -- not the keyboard's, never the newest drawing (r7 P2-2)
+  const clickInput = (key, ev) => {
+    const input = inputOf(ev);
+    if (input === "kbd" && panel.lastPointer[key] && !(panel.press[key] && "kbd" in panel.press[key])) {
+      return panel.lastPointer[key];
+    }
+    return input;
+  };
   const pressCtx = (key, ev) => {
     const rec = panel.press[key];
-    const input = inputOf(ev);
+    const input = clickInput(key, ev);
     const ctx = rec && input in rec ? rec[input] : null;
     if (rec) delete rec[input];
     return ctx;
@@ -56,11 +68,14 @@ export function bindRealPanel(m, rejectText, clientId) {
     return same(ctx, ctxNow()) && same(panel.drawn, ctxNow()) && panel.mine;
   };
   const guard = (fn, key) => (ev) => {
+    const input = clickInput(key, ev);
     if (!clickOk(key, ev)) {
-      if (panel.pressKey && panel.pressKey[key]) delete panel.pressKey[key][inputOf(ev)]; // consumed too (r6 P3)
+      if (panel.pressKey && panel.pressKey[key]) delete panel.pressKey[key][input]; // consumed too (r6 P3)
+      delete panel.lastPointer[key];
       return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
     }
-    return fn(ev);
+    delete panel.lastPointer[key];
+    return fn(ev, input);
   };
   const send = (type, fields, okText) => m.session.request(type, fields).then((r) => {
     if (r && r.t === "reject") say(`거부 · ${rejectText(r.reason, r.detail)}`);
@@ -74,7 +89,7 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (!pallet || !pose) return say("팔레트와 자세(x, y, yaw)를 넣으세요");
     send("pallet_register", { pallet_id: pallet, pose }, "등록했습니다").then((r) => {
       if (r && r.t === "ack" && Number.isInteger(r.targets_revision)) {
-        panel.registered = { session_epoch: d.epoch, revision: r.targets_revision };
+        panel.registered = { session_epoch: d.epoch, revision: r.targets_revision, pallet, pose }; // what was sent
         m.session.request("targets_request", {}); // the list with the registered pose
       }
     });
@@ -87,6 +102,12 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다"); // from the toggle's send on (r2 P2-3)
     const rev = submitRevision(panel.registered, m.session.realStatus, m.session.targets);
     if (rev === null) return say("팔레트를 (다시) 등록하세요");
+    // the inputs still name what was registered (r7 P2-1: an edited pose after the registration is not sent under it)
+    const reg = panel.registered;
+    const pose = poseOf($("rp-x").value, $("rp-y").value, $("rp-yaw").value);
+    if ($("rp-pallet").value !== reg.pallet || !pose || pose.some((v, i) => Math.abs(v - reg.pose[i]) > 1e-9)) {
+      return say("등록한 뒤 팔레트나 자세를 바꿨습니다 · 다시 등록하세요");
+    }
     send("mission_submit", { pallet_id: $("rp-pallet").value, destination_id: $("rp-dest").value,
       targets_revision: rev }, "작업 지시를 보냈습니다").then((r) => {
       if (r && r.t === "reject" && r.reason === "stale_targets") {
@@ -108,18 +129,17 @@ export function bindRealPanel(m, rejectText, clientId) {
       press(id, "kbd");
     };
   }
-  const answer = (verdict, ev) => {
+  const answer = (verdict, ev, input) => {
     const id = verdict === "confirm" ? "rp-confirm" : "rp-reject";
     const records = panel.pressKey[id];
-    const input = inputOf(ev);
     // its own input's record; none at all (a click with no press seen): the request drawn now
     const key = input in records ? records[input] : (Object.keys(records).length ? null : panel.opKey);
     delete records[input];
     if (!answerStillOpen(key, m.session.realStatus)) return say("확인 요청이 바뀌었습니다 · 화면을 다시 보세요");
     send("operator_answer", { kind: key.kind, serial: key.serial, verdict }, verdict === "confirm" ? "확인했습니다" : "거부했습니다");
   };
-  $("rp-confirm").onclick = guard((ev) => answer("confirm", ev), "rp-confirm");
-  $("rp-reject").onclick = guard((ev) => answer("reject", ev), "rp-reject");
+  $("rp-confirm").onclick = guard((ev, input) => answer("confirm", ev, input), "rp-confirm");
+  $("rp-reject").onclick = guard((ev, input) => answer("reject", ev, input), "rp-reject");
   $("rp-recovery").onclick = guard(() => {
     const st = m.session.realStatus;
     const drawn = panel.recoveryId;
@@ -133,7 +153,10 @@ export function bindRealPanel(m, rejectText, clientId) {
   $("rp-bypass").onclick = (ev) => {
     const btn = ev.target.closest("button[data-check]");
     if (!btn || btn.disabled) return;
-    if (!clickOk(`check:${btn.dataset.check}`, ev)) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
+    const bkey = `check:${btn.dataset.check}`;
+    const ok = clickOk(bkey, ev);
+    delete panel.lastPointer[bkey];
+    if (!ok) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
     if (panel.toggle) return say("앞선 우회 변경이 적용되기를 기다립니다"); // one at a time (r2 P2-3)
     // tracked from the send: the submit and the start check are closed at once; the 2 s run from the ack
     const toggle = { check: btn.dataset.check, on: btn.dataset.bypassed !== "true", at: null,
@@ -143,7 +166,10 @@ export function bindRealPanel(m, rejectText, clientId) {
     m.session.request("check_bypass", { check: toggle.check, on: toggle.on }).then((r) => {
       // dropped, or another session or lease by now: its answer tells nothing (r5-r6 P3)
       if (panel.toggle !== toggle || toggle.epoch !== gens().session_epoch || toggle.lease !== gens().lease_id) {
-        if (panel.toggle === toggle) panel.toggle = null;
+        if (panel.toggle === toggle) {
+          panel.toggle = null;
+          say(""); // its note goes with it (r7 P3)
+        }
         return;
       }
       if (r && r.t === "ack") {
