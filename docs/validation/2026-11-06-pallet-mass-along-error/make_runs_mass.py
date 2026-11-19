@@ -12,6 +12,7 @@ assert hashlib.md5((TMPL_LINE + "\n").encode()).hexdigest() == "1ed7ab28b82787fc
 tmpl = json.loads(TMPL_LINE)
 KEEP = ("VENV_PY", "ONNX", "LEARNED_PY", "SCENE_DIR", "BASE_SCENE", "FORKLIFT_URDF")  # paths only, from the template
 base_env = {k: tmpl["env"][k] for k in KEEP if k in tmpl["env"]}
+base_env["BOTTOM_DECK"] = "off"  # the riib default since 2026-11-19 is auto (structure on line / random): these records ran without it
 base_env.update(EXTRA_ARGS="--deterministic --tyre-contact-log")  # video on: the launcher default (plan amendment 2)
 SNAPS = {"A": SNAP_A, "B": SNAP_B}
 

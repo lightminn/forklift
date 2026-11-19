@@ -2,8 +2,8 @@
 section 3-2): SIDE maps line / random to their `_side` copies, BOTTOM_DECK=auto turns `--bottom-deck-check structure`
 on only where it is defined (a side copy, the slam mode, no second near capture, no near tracking / pocket check /
 repeated captures / live), anything else off with the reason recorded; an explicit structure that cannot run is
-refused before Isaac. BOTTOM_DECK stays off by default until the Isaac check (the plan's merge order), so SIDE=auto keeps
-the originals."""
+refused before Isaac. BOTTOM_DECK=auto is the default since the Isaac check
+(docs/validation/2026-11-19-bottom-deck-structure-isaac.md, lead 2026-11-19)."""
 
 import json
 import os
@@ -50,13 +50,32 @@ def recorded(tmp_path):
     return (tmp_path / "out/riib_defaults.txt").read_text()
 
 
-def test_by_default_nothing_changes_no_side_copy_and_no_check(tmp_path):
+def test_by_default_line_and_random_run_structure_on_their_side_copy(tmp_path):
+    # the default since the Isaac check (docs/validation/2026-11-19-bottom-deck-structure-isaac.md, lead 2026-11-19)
     out = dry_run(tmp_path)
     assert out.returncode == 0, out.stderr
     args = args_of(out)
-    assert scene_of(args) == "line_2_m.json" and check_of(args) == "off"
-    assert "BOTTOM_DECK=off BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON=default_off" in recorded(tmp_path)
-    assert "SIDE=off" in recorded(tmp_path)
+    assert scene_of(args) == "line_2_m_side.json" and check_of(args) == "structure"
+    assert "BOTTOM_DECK=structure BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON=auto" in recorded(tmp_path)
+    assert "SIDE=on" in recorded(tmp_path)
+
+
+@pytest.mark.parametrize("scene, scene_file, reason", [("line_1", "line_1_m.json", "auto_off:no_side_copy_file"),
+                                                       ("aisle", "aisle_rack.json", "auto_off:no_side_copy_for_scene"),
+                                                       ("trailer", "trailer.json", "auto_off:no_side_copy_for_scene")])
+def test_by_default_the_other_scenes_and_older_folders_run_as_before(tmp_path, scene, scene_file, reason):
+    out = dry_run(tmp_path, scene=scene)
+    assert out.returncode == 0, out.stderr
+    args = args_of(out)
+    assert scene_of(args) == scene_file and check_of(args) == "off"
+    assert f"BOTTOM_DECK=off BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON={reason}" in recorded(tmp_path)
+
+
+def test_off_runs_every_scene_as_before(tmp_path):
+    out = dry_run(tmp_path, BOTTOM_DECK="off")
+    assert out.returncode == 0, out.stderr
+    assert scene_of(args_of(out)) == "line_2_m.json" and check_of(args_of(out)) == "off"
+    assert "BOTTOM_DECK=off BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON=explicit" in recorded(tmp_path)
 
 
 @pytest.mark.parametrize("scene, markers, expected", [("line_2", "on", "line_2_m_side.json"),
