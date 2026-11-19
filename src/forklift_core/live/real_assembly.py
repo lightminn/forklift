@@ -64,7 +64,7 @@ class RealHooks:
     executor's own start, ``record(name, obj)`` the run folder."""
 
     def __init__(self, *, lift_m, odom_base, ready, started, record, geometry, occupancy=None,
-                 pocket_frame=None, pocket_check=None, operator=None, tick=None) -> None:
+                 pocket_frame=None, pocket_check=None, operator=None, tick=None, layer=None) -> None:
         self._lift_m, self._odom_base, self._ready, self._started = lift_m, odom_base, ready, started
         self._record, self._occupancy, self._geometry = record, occupancy, geometry
         # PR 7 supplies the depth frame and the check (until then: no frame -- 4a's wait ends the mission); the
@@ -74,6 +74,9 @@ class RealHooks:
         # steering() -> (q,), kinematics, loaded(), cusp_holds / cusp_monitor objects, now_s(); None: not assembled
         self._tick = tick
         self._rear = None
+        # 5a (real safety wiring design 1.3): the real obstacle layer the D5 check's region is installed on as its
+        # exemption, as the Isaac hook does; None: as before (the check only)
+        self._layer = layer
 
     # --- the control tick (4c) -------------------------------------------------------------------------------------
     def _src(self, name):
@@ -188,7 +191,12 @@ class RealHooks:
     def build_pocket_check(self, axis_yaw, rear, base, stamp_s=None, rear_at_stamp=None):
         if self._pocket_check is None:
             raise RealRequireFailed("pocket_check_unavailable")  # PR 7: the D435i depth path
-        self._pocket_check(axis_yaw, rear, base, stamp_s, rear_at_stamp)
+        check = self._pocket_check(axis_yaw, rear, base, stamp_s, rear_at_stamp)
+        if self._layer is not None:
+            # the Isaac hook's rule: only a valid check gates, and its region is the layer's exemption
+            if check is None or not getattr(check, "valid", False):
+                raise RealRequireFailed(f"pocket_check_refused:{getattr(check, 'invalid_reason', 'no_check')}")
+            self._layer.exempt = check.region_control()
 
     def operator_check(self, request):
         return None if self._operator is None else self._operator(request)

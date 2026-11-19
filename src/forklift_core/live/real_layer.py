@@ -198,7 +198,7 @@ class RealLayer:
     def __init__(self, grid_config: GridConfig, permission_config: PermissionConfig, *, sensors: dict,
                  unloaded: Footprint, loaded: Footprint, body: Footprint, placer, budget_s: float,
                  overdue_end_s: float, scan_period_s: float, scan_max_age_s: float, worker=None,
-                 valid_fraction_min: float = 0.5, odom_now=None) -> None:
+                 valid_fraction_min: float = 0.5, odom_now=None, place_wait_s: float = 0.10) -> None:
         self.grid_config = grid_config
         self.grid = ObstacleGrid(grid_config)
         self.permission = DrivePermission(permission_config)
@@ -221,6 +221,9 @@ class RealLayer:
         self._request = None  # the newest refresh request (dict)
         self._installed = None  # {"key", "newest_scan_s", "scan_id", "first_used_s", "planning"}
         self._scan_id = 0
+        self._unplaced: list = []  # (scan id, scan, received at): waiting for a STATE measured after the last beam
+        self.place_wait_s = float(place_wait_s)  # how long a scan may wait for that (then dropped)
+        self._initial = ((0.0, 0.0, 0.0), 0)
         self._deadlines: dict = {}  # scan id -> (deadline_s, dropped)
         self._expected_s = None  # the next scan's expected deadline
         self._missed_expected = None  # a passed expected deadline: held until a result past it is installed
@@ -258,6 +261,13 @@ class RealLayer:
         self._submit(now_s)
         return None
 
+    def track(self, current_pose, path_ahead) -> None:
+        """Each control tick (the loop): the pose and the path still ahead the next scan-driven computation checks
+        from -- the Isaac runner refreshes with them at every scan; the key does not change."""
+        if self._request is not None:
+            self._request["current_pose"] = tuple(float(v) for v in current_pose)
+            self._request["path_ahead"] = None if path_ahead is None else np.asarray(path_ahead, dtype=float).copy()
+
     def _submit(self, now_s: float) -> None:
         r = self._request
         if r is None:
@@ -266,7 +276,7 @@ class RealLayer:
         job["now_s"] = max(float(now_s), r["now_s"])
         job["key"] = self._key(r["version"], r["loaded"])
         job["exempt"] = copy.deepcopy(self._exempt)
-        job["scan_id"] = self._scan_id
+        job["scan_id"] = getattr(self, "_placed_id", 0)  # the newest scan the copy holds
         job["newest_scan_s"] = max(self.last_scan_s.values(), default=None)
         job["grid"] = copy.deepcopy(self.grid)  # the worker owns its copy: the control thread never shares state
         job["planning_pallet"] = self.planning_pallet
@@ -281,26 +291,57 @@ class RealLayer:
 
     # --- scans -------------------------------------------------------------------------------------------------
     def add_scan(self, scan: RealScan, now_s: float, *, initial_correction=(0.0, 0.0, 0.0), initial_version: int = 0):
-        """One scan: checked, placed on the raw odometry, its deadlines registered and a refresh asked with the last
-        request's key (or an initial request when none was made yet). Returns why it was dropped, or None."""
+        """One scan received: checked, its deadlines registered (from its receipt), and queued for placement -- the
+        raw odometry must reach past its last beam, so it is placed at a later tick head (``place_pending``) or
+        dropped after ``place_wait_s``. Returns why it was dropped at once, or None."""
         self.counts["scans"] += 1
         self._scan_id += 1
         sid = self._scan_id
         self._deadlines[sid] = (float(scan.last_s) + self.budget_s, False)
         self._expected_s = float(scan.last_s) + self.scan_period_s + self.budget_s
+        self._initial = (tuple(float(v) for v in initial_correction), int(initial_version))
         valid = np.asarray(scan.valid, dtype=bool)
         why = None
         if scan.sensor not in self.sensors:
             why = "unknown_sensor"
         elif valid.size == 0 or float(np.mean(valid)) < self.valid_fraction_min:
             why = "too_few_valid_beams"
-        pose = None if why is not None else self.placer(float(scan.first_s), float(scan.last_s))
-        if why is None and pose is None:
-            why = "not_placed"
         if why is not None:
-            self.counts["scans_dropped"] += 1
-            self._deadlines[sid] = (self._deadlines[sid][0], True)
+            self._drop(sid)
             return why
+        self._unplaced.append((sid, scan, float(now_s)))
+        self.place_pending(now_s)
+        return None
+
+    def _drop(self, sid: int) -> None:
+        self.counts["scans_dropped"] += 1
+        self._deadlines[sid] = (self._deadlines[sid][0], True)
+
+    def place_pending(self, now_s: float) -> None:
+        """Place every waiting scan the odometry now reaches past (in order); drop one waiting too long."""
+        keep = []
+        placed = False
+        for sid, scan, received in self._unplaced:
+            pose = self.placer(float(scan.first_s), float(scan.last_s))
+            if pose is None:
+                if now_s - received > self.place_wait_s:
+                    self._drop(sid)
+                else:
+                    keep.append((sid, scan, received))
+                continue
+            self._place(sid, scan, pose)
+            placed = True
+        self._unplaced = keep
+        if placed:
+            if self._request is None:
+                correction, version = self._initial
+                self._request = {"now_s": float(now_s), "correction": correction, "version": version,
+                                 "current_pose": (0.0, 0.0, 0.0), "path_ahead": None, "loaded": False,
+                                 "direction": 0, "odom_pose": None}
+            self._submit(now_s)
+
+    def _place(self, sid: int, scan: RealScan, pose) -> None:
+        valid = np.asarray(scan.valid, dtype=bool)
         laser_in_rear, may_clear = self.sensors[scan.sensor]
         ranges = np.where(valid, np.asarray(scan.ranges_m, dtype=float), np.nan)
         self.grid.add_scan(ObstacleScan(
@@ -310,16 +351,13 @@ class RealLayer:
             (self.body.front_m, self.body.rear_m, self.body.half_width_m),
             None if scan.limit_m is None else np.asarray(scan.limit_m, dtype=float)))
         self.last_scan_s[scan.sensor] = float(scan.first_s)  # FREE age from the first beam (conservative)
-        if self._request is None:
-            self._request = {"now_s": float(now_s), "correction": tuple(float(v) for v in initial_correction),
-                             "version": int(initial_version), "current_pose": tuple(float(v) for v in pose),
-                             "path_ahead": None, "loaded": False, "direction": 0, "odom_pose": None}
-        self._submit(now_s)
-        return None
+        self._placed_id = sid
 
     # --- install (control thread, tick head) ---------------------------------------------------------------------
     def install_ready(self, now_s: float, odom_pose=None) -> int:
-        """Install the finished results whose key is the current one; others are counted and dropped."""
+        """Place the waiting scans, then install the finished results whose key is the current one; others are
+        counted and dropped."""
+        self.place_pending(now_s)
         installed = 0
         for job, result in self.worker.take():
             if job["key"] != self.current_key():

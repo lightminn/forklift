@@ -87,7 +87,11 @@ def test_the_first_scan_asks_for_the_first_snapshot_itself():
 
 def test_a_scan_not_placed_or_with_too_few_valid_beams_is_dropped():
     lay = layer(placer=lambda a, b: None)
-    assert lay.add_scan(wall(1.0), 1.0) == "not_placed"
+    assert lay.add_scan(wall(1.0), 1.0) is None  # waiting for the odometry to reach past its last beam
+    lay.install_ready(1.05)
+    assert lay.counts["scans_dropped"] == 0
+    lay.install_ready(1.2)  # waited over place_wait_s: dropped
+    assert lay.counts["scans_dropped"] == 1 and not lay.grid.scans
     lay = layer()
     valid = np.zeros(len(ANGLES), bool)
     valid[:100] = True
@@ -209,3 +213,14 @@ def test_the_install_counts_the_distance_driven_since_the_request():
     lay.worker.step()
     lay.install_ready(1.12, odom_pose=(0.03, 0.04, 0.0))
     assert math.isclose(lay.permission._driven_since_m, 0.05)  # noqa: SLF001
+
+
+def test_a_scan_waits_for_the_odometry_past_its_last_beam_then_is_placed():
+    """Design 1.1: the history must reach past the last beam -- the placement happens at a later tick head."""
+    reached = {"t": 0.0}
+    lay = layer(placer=lambda a, b: (0.0, 0.0, 0.0) if reached["t"] >= b else None)
+    lay.add_scan(wall(1.0), 1.1)
+    assert not lay.grid.scans
+    reached["t"] = 1.12
+    lay.install_ready(1.12)
+    assert len(lay.grid.scans) == 1 and lay.counts["scans_dropped"] == 0
