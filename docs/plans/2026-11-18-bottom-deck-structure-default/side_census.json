@@ -1,0 +1,578 @@
+[
+ {
+  "scene": "aisle",
+  "pickup": [
+   4.18,
+   -3.214,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_0"
+    ],
+    "sight_blockers": [
+     "riibotics:rack_pallet_0"
+    ]
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_2"
+    ],
+    "sight_blockers": [
+     "riibotics:rack_pallet_2"
+    ]
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "aisle_out",
+  "pickup": [
+   4.12,
+   -3.214,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_0"
+    ],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_2"
+    ],
+    "sight_blockers": [
+     "riibotics:rack_pallet_2"
+    ]
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "success",
+   "second": "invalid_goal",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "aisle_out_rack",
+  "pickup": [
+   4.07,
+   -3.974,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_0"
+    ],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_2"
+    ],
+    "sight_blockers": [
+     "riibotics:rack_upright"
+    ]
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "success",
+   "second": "invalid_goal",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "aisle_rack",
+  "pickup": [
+   4.13,
+   -3.974,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_0"
+    ],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:rack_pallet_2"
+    ],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "conveyor",
+  "pickup": [
+   2.072,
+   -3.473,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:conveyor"
+    ],
+    "sight_blockers": [
+     "riibotics:conveyor"
+    ]
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "success",
+   "second": "invalid_goal",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "line_1",
+  "pickup": [
+   0.836,
+   -0.06,
+   3.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "line_1_m",
+  "pickup": [
+   0.836,
+   -0.06,
+   3.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "line_2",
+  "pickup": [
+   1.808,
+   0.05,
+   -2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "invalid_goal",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "line_2_m",
+  "pickup": [
+   1.808,
+   0.05,
+   -2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "invalid_goal",
+   "return": "invalid_start"
+  }
+ },
+ {
+  "scene": "line_3",
+  "pickup": [
+   2.958,
+   0.04,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "line_3_m",
+  "pickup": [
+   2.958,
+   0.04,
+   2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_1",
+  "pickup": [
+   0.688,
+   1.198,
+   10.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_1_m",
+  "pickup": [
+   0.688,
+   1.198,
+   10.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    1,
+    -1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_2",
+  "pickup": [
+   0.954,
+   -1.462,
+   -6.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "success",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_2_m",
+  "pickup": [
+   0.954,
+   -1.462,
+   -6.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "success",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_3",
+  "pickup": [
+   1.965,
+   -0.074,
+   -8.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "success",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "random_3_m",
+  "pickup": [
+   1.965,
+   -0.074,
+   -8.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   },
+   "-1": {
+    "stand_free": true,
+    "stand_blockers": [],
+    "sight_blockers": []
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "success",
+   "second": "success",
+   "return": "success"
+  }
+ },
+ {
+  "scene": "trailer",
+  "pickup": [
+   2.46,
+   0.05,
+   -2.0
+  ],
+  "faces": {
+   "1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:trailer_wall"
+    ],
+    "sight_blockers": [
+     "riibotics:trailer_wall"
+    ]
+   },
+   "-1": {
+    "stand_free": false,
+    "stand_blockers": [
+     "riibotics:trailer_wall"
+    ],
+    "sight_blockers": [
+     "riibotics:trailer_wall"
+    ]
+   }
+  },
+  "plans": {
+   "far": "ok",
+   "order": [
+    -1,
+    1
+   ],
+   "first": "invalid_goal",
+   "second": "invalid_start",
+   "return": "invalid_start"
+  }
+ }
+]

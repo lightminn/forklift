@@ -1059,13 +1059,15 @@ def arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pallet-article",
-        choices=("nominal", "grounded"),
+        choices=("nominal", "grounded", "shelf_closed"),
         default="nominal",
         help="Evaluation only: grounded declares --pallet-urdf the grounded variant of --pallet-geometry (no bottom "
         "boards, blocks to the floor; tools/build_grounded_pallet.py) and checks it against those boxes. The mission "
         "still reads --pallet-geometry. Since the user decision of 2026-10-27 a pallet without a bottom deck is a pick "
         "target, so the article is a bottomless positive test article (it was declared a negative in plan 2026-10-19 "
-        "task 5; docs/plans/2026-10-27-bottomless-and-bundled-pallets.md).",
+        "task 5; docs/plans/2026-10-27-bottomless-and-bundled-pallets.md). shelf_closed declares it the closed-shelf negative "
+        "(tools/build_shelf_article.py: full-depth columns under a solid deck), the bottom-deck check's S- article "
+        "(docs/plans/2026-11-18-bottom-deck-structure-default.md 3-3).",
     )
     parser.add_argument(
         "--bottom-deck-check",
