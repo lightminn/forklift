@@ -2174,10 +2174,10 @@ def test_a_riib_runs_candidate_scene_files_are_among_the_inputs_missing_ones_inc
     (tmp_path / "runner.py").write_text("")
     run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(scenes), "SCENE": "line_2"})
     got = ib.preflight_inputs([run], tmp_path / "runner.py")
-    side = str(scenes / "line_2_m_side.json")  # the launcher's own path, joined as given
-    assert got[side] is None and got[str(scenes / "line_2_m.json")] is not None
+    side = ib.SCENE_KEY + str(scenes / "line_2_m_side.json")  # the launcher's own path, joined as given
+    assert got[side] is None and got[ib.SCENE_KEY + str(scenes / "line_2_m.json")] is not None
     for name in ("line_2", "line_2_side", "line_2_rack"):
-        assert str(scenes / f"{name}.json") in got
+        assert ib.SCENE_KEY + str(scenes / f"{name}.json") in got
     data = b'{"name": "a", "argv": ["true"]}\n'
     proof = tmp_path / "runs.jsonl.preflight.json"
     proof.write_text(json.dumps({"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": got,
@@ -2210,7 +2210,7 @@ def test_a_proof_without_the_scene_candidates_or_behind_a_changed_link_is_refuse
         return ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {})
 
     assert verify(got) == []
-    old = {p: d for p, d in got.items() if p not in ib.scene_candidates(run)}
+    old = {p: d for p, d in got.items() if not p.startswith(ib.SCENE_KEY)}
     assert any("does not cover the scene files" in p for p in verify(old))
     link.unlink()
     link.symlink_to(b)  # the folder behind the link now holds the side copy
@@ -2229,7 +2229,14 @@ def test_a_scene_dir_with_dotdot_behind_a_link_is_read_as_the_launcher_reads_it(
     run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/link/../scenes",
                                                                   "SCENE": "line_2"})
     got = ib.preflight_inputs([run], tmp_path / "runner.py")
-    assert got[f"{tmp_path}/link/../scenes/line_2_m_side.json"] is not None  # the file the launcher would open
+    assert got[f"{ib.SCENE_KEY}{tmp_path}/link/../scenes/line_2_m_side.json"] is not None  # the launcher's file
+    # .. after a folder that does not exist: realpath -m drops both, and so does the digest
+    (tmp_path / "scenes").mkdir()
+    (tmp_path / "scenes/line_2_m_side.json").write_text("{}")
+    run2 = ib.Run(name="b", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/missing/../scenes",
+                                                                   "SCENE": "line_2"})
+    got2 = ib.preflight_inputs([run2], tmp_path / "runner.py")
+    assert got2[f"{ib.SCENE_KEY}{tmp_path}/missing/../scenes/line_2_m_side.json"] is not None
 
 
 def test_a_scene_folder_that_depends_on_the_attempt_is_refused_by_the_check(tmp_path):
@@ -2238,3 +2245,14 @@ def test_a_scene_folder_that_depends_on_the_attempt_is_refused_by_the_check(tmp_
                                                                   "SCENE": "line_2"}, retry_move=[str(tmp_path / "o")])
     problems = ib.check_runs([run], tmp_path / "runner.py")
     assert any("may not depend on the attempt" in p for p in problems)
+
+
+def test_verify_refuses_a_scene_folder_that_depends_on_the_attempt_even_with_an_old_proof(tmp_path):
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": f"{tmp_path}/s{{attempt}}",
+                                                                  "SCENE": "line_2"})
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    (tmp_path / "runs.jsonl.preflight.json").write_text(json.dumps(
+        {"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": ib.preflight_inputs([run], tmp_path / "runner.py"),
+         "gpu_persistence": {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}}))
+    assert any("may not depend on the attempt" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [run], {}))

@@ -515,8 +515,24 @@ def preflight_inputs(runs, runner) -> dict:
             path = os.path.join(run.cwd or ".", rel)
             if os.path.isfile(path):
                 paths.add(os.path.realpath(path))
-        paths.update(scene_candidates(run))
-    return {p: _sha256_file(p) for p in sorted(paths)}
+    out = {p: _sha256_file(p) for p in sorted(paths)}
+    for run in runs:
+        out.update({SCENE_KEY + raw: scene_digest(raw) for raw in scene_candidates(run)})
+    return out
+
+
+SCENE_KEY = "scene:"  # a scene candidate's proof key: its launcher path, hashed through scene_digest
+
+
+def scene_digest(raw) -> str | None:
+    """A scene candidate's sha256 (None when absent) read as the riib launcher reads it: its folder resolved like
+    `realpath -m` (links followed, then "..", missing parts kept), at the check and again at every verify."""
+    folder, name = os.path.split(raw)
+    return _sha256_file(os.path.join(os.path.realpath(folder), name))
+
+
+def input_digest(key) -> str | None:
+    return scene_digest(key[len(SCENE_KEY):]) if key.startswith(SCENE_KEY) else _sha256_file(key)
 
 
 def scene_candidates(run) -> list[str]:
@@ -645,10 +661,14 @@ def verify_preflight(list_path, data: bytes, runs, environ, index=None, line=Non
             problems.append(f"{path}: its GPU persistence record is not all on and was not allowed")
     inputs = proof.get("inputs") or {}
     for p, digest in inputs.items():
-        if _sha256_file(p) != digest:
+        if input_digest(p) != digest:
             problems.append(f"{p} changed since the check")
-    # a proof made before the scene candidates were hashed (a missing key, unlike a file recorded as absent with None)
-    missing = sorted({p for run in runs for p in scene_candidates(run)} - set(inputs))
+    # a proof made before the scene candidates were hashed this way (a missing key, unlike a file recorded as absent
+    # with None), and per-attempt scene folders, which no proof covers (check_runs refuses them too)
+    for run in runs:
+        if any("{attempt}" in run.env.get(k, "") for k in ("SCENE_DIR", "SCENE")):
+            problems.append(f"{run.name}: SCENE_DIR / SCENE may not depend on the attempt")
+    missing = sorted({SCENE_KEY + p for run in runs for p in scene_candidates(run)} - set(inputs))
     if missing:
         problems.append(f"{path} does not cover the scene files {missing}: run isaac_bundle.py check again")
     for run in runs:
