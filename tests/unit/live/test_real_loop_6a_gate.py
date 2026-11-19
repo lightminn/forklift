@@ -285,7 +285,6 @@ def test_an_s10_stop_is_not_finished_after_the_authority_changed_within_its_tick
 # --- 6a-2a: the round trip's write instant -------------------------------------------------------------------------
 def test_the_delay_bound_takes_the_first_bytes_instant_when_the_transport_has_one():
     r = Rig(frames=True, operator=[(1, "confirm")], real_layer=True)
-    r.start()
     seen = []
     real = r.loop.delay_bound.written
     r.loop.delay_bound.written = lambda seq, ns: (seen.append((seq & 0xFFFF, ns)), real(seq, ns))[1]
@@ -295,5 +294,5 @@ def test_the_delay_bound_takes_the_first_bytes_instant_when_the_transport_has_on
             return 42  # every frame's first byte, as the TTY transport would report it
 
     r.transport.first_byte_ns = First()
-    r.tick(5)
+    r.start()  # the session's two DISARMs are written
     assert seen and all(ns == 42 for _, ns in seen)
