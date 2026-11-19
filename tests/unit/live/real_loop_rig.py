@@ -550,6 +550,7 @@ class Rig:
 
     # --- driving --------------------------------------------------------------------------------------------------
     echo = True  # the console answers every tick (it keeps the lease); False: a console gone quiet
+    extra_boxes: tuple = ()  # 5d: obstacles besides the pallet the fake LiDAR sees, (x, y, half length, half width)
     scan_on = True  # the fake LiDAR revolves (10 Hz) while the rig has a real layer
     _next_scan_ns = None
 
@@ -576,10 +577,14 @@ class Rig:
         hl, hw = 0.3, 0.2
         c, s_ = math.cos(pyaw), math.sin(pyaw)
         corners = [(px + c * u - s_ * v, py + s_ * u + c * v) for u, v in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
+        edges = list(zip(corners, corners[1:] + corners[:1]))
+        for bx0, by0, bhl, bhw in self.extra_boxes:  # 5d tests: axis-aligned obstacles (centre, half sizes)
+            bc = [(bx0 + bhl, by0 + bhw), (bx0 + bhl, by0 - bhw), (bx0 - bhl, by0 - bhw), (bx0 - bhl, by0 + bhw)]
+            edges += list(zip(bc, bc[1:] + bc[:1]))
         for k, a in enumerate(angles):
             dx, dy = math.cos(lyaw + a), math.sin(lyaw + a)
             best = math.inf
-            for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+            for (ax, ay), (bx, by) in edges:
                 ex, ey = bx - ax, by - ay
                 den = dx * ey - dy * ex
                 if abs(den) < 1e-12:

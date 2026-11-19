@@ -1554,27 +1554,28 @@ class MissionCore:
             pocket.pop("first_frame_still_since", None)  # the still span ends wherever the truck is (Codex 4b P2)
         if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
             return None
-        if self._real_vehicle() and getattr(self, "d5_bypassed", False):
-            # 5d (real safety wiring design 7.2): the operator's D5 bypass -- no depth frame: the bypass check, built
-            # by the hook without side effects, registered first, then the exemption (a failure in between leaves a
-            # registered check, so the collection clears the exemption)
-            axis_ = float(self.paths["approach"].poses[-1][2])
-            check_ = hooks.build_bypass_pocket_check(axis_, pocket["planning_pickup"])
-            pocket["check"] = check_
-            region_ = check_.region_control()
-            self.obstacle["layer"].exempt = region_
-            self.state.setdefault("pocket_check", {})["first_frame"] = {"source": "d5_bypass", "taken_s": float(t)}
-            self.state.setdefault("d5_bypass_check", []).append(
-                {"t": float(t), "region": [float(v) for v in region_], "axis_yaw": axis_,
-                 "pallet": [float(pocket["planning_pickup"].x_m), float(pocket["planning_pickup"].y_m),
-                            float(pocket["planning_pickup"].yaw_rad)]})
-            pocket.pop("first_frame_since", None)
-            pocket.pop("first_frame_still_since", None)
-            return 0.0, "pocket_first_frame"  # registered: the next tick runs under the bypass check
         since_ = pocket.setdefault("first_frame_since", float(t))
         hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
                       "pocket_stop in approach: pocket_first_frame")  # checked before a late frame is taken
         if self.slam["stop_now"]:
+            if self._real_vehicle() and getattr(self, "d5_bypassed", False):
+                # 5d (real safety wiring design 7.2): the operator's D5 bypass, once standing (impl round 1 P1: the
+                # first-frame stand is kept) -- no depth frame: the bypass check, built
+                # by the hook without side effects, registered first, then the exemption (a failure in between leaves a
+                # registered check, so the collection clears the exemption)
+                axis_ = float(self.paths["approach"].poses[-1][2])
+                check_ = hooks.build_bypass_pocket_check(axis_, pocket["planning_pickup"])
+                pocket["check"] = check_
+                region_ = check_.region_control()
+                self.obstacle["layer"].exempt = region_
+                self.state.setdefault("pocket_check", {})["first_frame"] = {"source": "d5_bypass", "taken_s": float(t)}
+                self.state.setdefault("d5_bypass_check", []).append(
+                    {"t": float(t), "region": [float(v) for v in region_], "axis_yaw": axis_,
+                     "pallet": [float(pocket["planning_pickup"].x_m), float(pocket["planning_pickup"].y_m),
+                                float(pocket["planning_pickup"].yaw_rad)]})
+                pocket.pop("first_frame_since", None)
+                pocket.pop("first_frame_still_since", None)
+                return 0.0, "pocket_first_frame"  # registered: the next tick runs under the bypass check
             # design 2026-11-19-real-assembly 8: the loop's still span (a fresh stop on new samples and no earlier
             # drive still able to act; the encoder SafetySpeed's bound cannot reach 0.01 m/s on the real truck) --
             # only a frame acquired inside it, for this mission, phase and applied correction, is taken

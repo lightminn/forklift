@@ -245,3 +245,115 @@ def test_the_bypass_cannot_change_during_a_mission():
     run_until(r, lambda rec: r.core.commands.status in ("preparing", "running"), 2000)
     reply, _ = ask(r, "check_bypass", check="d5_pocket", on=False)
     assert reply["t"] == "reject"
+
+
+# --- impl round 1 ---------------------------------------------------------------------------------------------------
+def test_the_bypass_check_is_installed_only_once_standing():
+    r = bypass_rig(real_layer=True)
+    stood = []
+    orig = r.core.hooks.build_bypass_pocket_check
+
+    def build(axis, pickup):
+        stood.append(bool(r.core.slam["stop_now"]))
+        return orig(axis, pickup)
+
+    r.core.hooks.build_bypass_pocket_check = build
+    submit(r)
+    run_until(r, lambda rec: stood, 9000)
+    assert stood == [True]
+
+
+def test_the_bypass_runs_through_the_s10_stop_on_the_real_layer():
+    r = bypass_rig(real_layer=True)
+    written = written_speeds(r)
+    submit(r)
+    run_until(r, lambda rec: r.core.operator_open() is not None or r.permit.state == ra.LATCHED, 12000)
+    op = r.core.operator_open()
+    assert op is not None, r.core.commands.end_reason
+    reply, _ = ask(r, "operator_answer", kind=op["kind"], serial=op["serial"], verdict="confirm")
+    assert reply["t"] == "ack"
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED and r.loop.session.results, 4000)
+    assert [e["reason"] for e in r.loop.session.results] == ["s10_lifted"]
+    moving = [abs(v) for _, v in written if v]
+    assert moving and max(moving) <= 0.06 + 1e-9
+    assert r.core.obstacle["layer"].exempt is None
+
+
+def test_an_obstacle_outside_the_region_blocks_the_bypassed_approach():
+    r = bypass_rig(real_layer=True)
+    written = written_speeds(r)
+    submit(r)
+    run_until(r, lambda rec: r.core.state.get("d5_bypass_check"), 9000)
+    x, y, yaw = r.loop.odom_pose
+    region = r.core.state["d5_bypass_check"][-1]["region"]
+    gap_x = (x + (region[0] - region[2] / 2)) / 2  # between the truck and the region's near edge
+    r.extra_boxes = ((gap_x, y, 0.05, 0.3),)
+    r.tick(30)  # new scans in
+    n = len([v for _, v in written if v and v > 0])
+    r.tick(60)
+    assert len([v for _, v in written if v and v > 0]) == n  # no forward DRIVE into the outside obstacle
+
+
+def test_a_layer_answer_below_the_possible_speed_holds_under_the_bypass():
+    from types import SimpleNamespace
+
+    from forklift_core.live.real_assembly import BypassPocketCheck
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    from test_core_truth_split import _Layer, permission_core
+
+    class Low(_Layer):
+        def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None):
+            self.calls.append((direction, cap_mps, evidence_s))
+            return (0.01, "ok") if direction > 0 else (0.5, "ok")  # 0 < allowed < the possible 0.05 forward
+
+    check = BypassPocketCheck((0.0, 0.0), 1.8, 0.8, 0.0)
+    c, _ = permission_core(SafetySpeed(0.05, 0.05, (1,)), phase="insert", pocket_check=check)
+    c.obstacle["layer"] = Low()
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert out.allowed == 0.0 and out.requested_speed == 0.0 and c.state["motion_hold"] == "residual_over_allowed"
+    assert all(ev == pytest.approx(1.0 + MissionCore.WRITE_MARGIN_S) for _, _, ev in c.obstacle["layer"].calls)
+
+
+def test_the_layer_gets_the_evidence_instant_and_keeps_its_deadlines_at_now():
+    r = Rig(frames=True, real_layer=True)
+    r.start()
+    r.tick(20)
+    lay = r.layer
+    seen = {}
+    orig_allowed, orig_watch = lay.permission.allowed_speed, lay.watchdog
+
+    def allowed(now_s, *a, **k):
+        seen["allowed"] = now_s
+        return orig_allowed(now_s, *a, **k)
+
+    def watch(now_s):
+        seen["watch"] = now_s
+        return orig_watch(now_s)
+
+    lay.permission.allowed_speed, lay.watchdog = allowed, watch
+    t = r.loop._t(r.now)
+    lay.limit(t, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.1,
+              evidence_s=t + 0.035)
+    assert seen == {"allowed": pytest.approx(t + 0.035), "watch": pytest.approx(t)}
+
+
+def test_a_continuation_past_its_decision_plus_w_is_link_stuck():
+    r = Rig(frames=True)
+    orig = r.loop._book
+
+    def book(now_ns, seq, speed, *a, **k):
+        if speed != 0.0 and k.get("steer") is not None and not getattr(r, "_st", False) and r.permit.state == ra.DRIVING:
+            r._st = True
+            r.transport.stall = True  # a moving DRIVE gets only its first bytes out
+        return orig(now_ns, seq, speed, *a, **k)
+
+    r.loop._book = book
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.transport.partial_frame is not None and getattr(r, "_st", False), 8000)
+    r.transport.stall = False
+    r.tick_cost_ns = 16 * 1_000_000  # the next tick (+20 ms) continues at +36 ms of the frame's decision
+    rec = r.tick()
+    r.tick_cost_ns = 0
+    assert "link_stuck" in (rec.reason or "") and r.transport.resyncs == 1
