@@ -269,6 +269,12 @@ def _other_openers(rdev: int, own_fd: int) -> tuple[list[int], list[int]]:
             continue
         try:
             owner = os.stat(f"/proc/{pid}").st_uid
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            unseen.append(int(pid))  # its owner unknown: recorded (impl round 2 P3)
+            continue
+        try:
             fds = os.listdir(f"/proc/{pid}/fd")
         except FileNotFoundError:
             continue

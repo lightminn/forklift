@@ -276,6 +276,7 @@ class RealLoop:
         self._arm_binding: tuple | None = None  # (lease id, control generation) the ARM was asked under (6a)
         self._kept: set = set()  # seqs of ARMs / arming zeros sent back to the queue once (re-judged on echo windows)
         self._cancel_arm: str | None = None  # an arming exchange to give up after this send (6a)
+        self._lost_seen = False  # the transport's device loss handled once (6a-2a)
         self._hold_acq: dict = {}
         self._wait_frames_tick = 0
         self._axis: dict | None = None
@@ -2283,6 +2284,19 @@ class RealLoop:
         if self._cancel_arm is not None:
             self.host.cancel_arm(now_ns, self._cancel_arm)  # the permit latches arm_failed / revoked on its tick
             self._cancel_arm = None
+        lost_ = getattr(self.transport, "lost", None)
+        if lost_ is not None and not self._lost_seen:
+            # 6a-2a impl round 2 P2-1: the frames finished before the loss are booked above; the loss itself is ①
+            # in this tick (the runner ends the run on it)
+            self._lost_seen = True
+            rec_ = getattr(self, "_rec", None)
+            if rec_ is not None:
+                rec_.branch, rec_.reason = "emergency", str(lost_.get("reason", "device_lost"))
+            self._in_transmit = True
+            try:
+                self._emergency(now_ns, str(lost_.get("reason", "device_lost")))
+            finally:
+                self._in_transmit = False
         rec_ = getattr(self, "_rec", None)
         if rec_ is not None and refused:
             gone_ = {int(q) & 0xFFFF for _, q in refused}

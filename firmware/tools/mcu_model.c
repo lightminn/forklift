@@ -63,6 +63,7 @@ typedef struct {
     long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
     FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
     bool was_state_silent;
+    bool tx_mid; /* the last flush stopped inside a frame (its delimiter not yet out) */
 } board;
 
 static board B;
@@ -158,6 +159,7 @@ static void flush_tx(void)
             }
             return; /* EAGAIN or a closed peer: keep the bytes, try next tick */
         }
+        B.tx_mid = B.tx[n - 1] != 0;
         memmove(B.tx, B.tx + n, B.tx_len - (size_t)n);
         B.tx_len -= (size_t)n;
     }
@@ -334,6 +336,8 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
         snprintf(verdict, sizeof verdict, "accepted"); /* always taken (it names its seq) */
     } else if (m->type == LINK_CLEAR_FAULTS) {
         snprintf(verdict, sizeof verdict, "handled");
+    } else if (m->type != LINK_ARM && m->type != LINK_DRIVE && m->type != LINK_COMMISSION) {
+        snprintf(verdict, sizeof verdict, "ignored"); /* a STATE or an unknown type: no branch handles it */
     } else if (after->reject_reason == 0) {
         snprintf(verdict, sizeof verdict, "accepted"); /* ARM / DRIVE / COMMISSION set it on every frame */
     } else {
@@ -442,10 +446,20 @@ int main(int argc, char **argv)
         }
         bool ss = state_silent();
         if (ss && !B.was_state_silent) {
-            B.tx_len = 0; /* 6a: the STATEs queued before the cut are dropped, not sent late in it */
+            /* 6a: the STATEs queued before the cut are dropped, not sent late in it -- except the rest of a frame
+               already partly out (impl round 2 P2-2: its head is in the host's decoder; dropping its delimiter would
+               spoil the first STATE after the cut), which still goes out */
+            size_t keep = 0;
+            if (B.tx_mid) {
+                while (keep < B.tx_len && B.tx[keep] != 0) {
+                    keep++;
+                }
+                keep = keep < B.tx_len ? keep + 1 : B.tx_len;
+            }
+            B.tx_len = keep;
         }
         B.was_state_silent = ss;
-        if (!silent() && !ss) {
+        if (!silent() && (!ss || B.tx_mid)) {
             flush_tx();
         }
     }

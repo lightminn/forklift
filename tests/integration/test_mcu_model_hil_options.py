@@ -124,7 +124,41 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
     assert got[3] == ("78", "DISARM", "accepted")
     assert len(rows) == 4
     for r in rows:
-        int(r[0]), int(r[4]), int(r[5])  # MCU time, prior mode, prior active expiry (-1: none)
+        int(r[0]), int(r[4])  # MCU time, prior mode
+        assert int(r[5]) == -1  # no active command while DISARMED (round 2 P3)
+
+
+def test_a_frame_no_branch_handles_is_logged_ignored(mcu_model, tmp_path):
+    from forklift_core.mcu_link.messages import McuState, Mode, RejectReason
+
+    log = tmp_path / "accept.log"
+    m = Model(mcu_model, "--accept-log", log)
+    try:
+        m.states(0.1)
+        st = McuState(1, 2, 0, 0, Mode.DISARMED, RejectReason.NONE, 0, 0, 0, 0.0, 0.0, 0.0, 0.0, (0,) * 4,
+                      (0,) * 4, (0,) * 4, 0, 0, StateFlag(0))
+        m.send(st, 55)
+        m.states(0.1)
+    finally:
+        m.close()
+    rows = [line.split() for line in log.read_text().splitlines()]
+    assert rows and rows[-1][1] == "55" and rows[-1][3] == "ignored"
+
+
+def test_a_state_cut_spoils_no_later_state(mcu_model):
+    """Round 2 P2-2 (a smoke check): the host reads nothing for a while, the cut starts, then everything is read --
+    every STATE after the cut decodes. A short write on a Linux pty needs its ~64 KB buffer full (about 7 s of STATEs),
+    so the partly-sent case itself is kept by the model's code (the rest of a frame already partly out still goes out),
+    not forced here."""
+    m = Model(mcu_model, "--state-silent-at-ms", 800, "--state-silent-ms", 300)
+    try:
+        time.sleep(0.9)  # nothing read: the pty's buffer fills before the cut
+        sts = m.states(0.8)
+        assert m.dec.errors == 0  # no frame spoiled by a dropped delimiter
+        after = [s for s in sts if s.mcu_time_us >= 1_100_000]
+        assert after and all(b.mcu_time_us > a.mcu_time_us for a, b in zip(after, after[1:]))
+    finally:
+        m.close()
 
 
 def test_the_accept_log_keeps_the_cores_read_budget(mcu_model, tmp_path):

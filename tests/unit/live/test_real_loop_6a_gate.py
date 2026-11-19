@@ -296,3 +296,18 @@ def test_the_delay_bound_takes_the_first_bytes_instant_when_the_transport_has_on
     r.transport.first_byte_ns = First()
     r.start()  # the session's two DISARMs are written
     assert seen and all(ns == 42 for _, ns in seen)
+
+
+def test_a_loss_inside_a_send_is_the_emergency_of_that_tick():
+    r = driving()
+    real = r.transport.transmit
+
+    def lose(host, now, gate):
+        out = real(host, now, gate)
+        r.transport.lost = {"first": "write_eio", "stream_tainted": False,
+                            "reason": "device_lost:first=write_eio:stream_tainted=0"}
+        return out
+
+    r.transport.transmit = lose
+    rec = r.tick()
+    assert rec.branch == "emergency" and rec.reason.startswith("device_lost")
