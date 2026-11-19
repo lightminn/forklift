@@ -789,7 +789,10 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
                     parts = line.split()
                     got.update(map_bundle=parts[1], map_id=parts[2] if len(parts) > 2 else None)
             info[r.name] = got
-        args = " ".join(lines[lines.index("RUNNER_ARGS") + 1:]).split()
+        printed = lines[lines.index("RUNNER_ARGS") + 1:]
+        # each printed line's leading --option (the launchers print one argument per line; a line holding "--opt
+        # value" still names --opt): a value with spaces or " --" inside is never read as an option (Codex round 12)
+        args = [line.split()[0] for line in printed if line.startswith("--") and line.split()]
         if any(a == "--scene-requirements" or a.startswith("--scene-requirements=") for a in args):
             # the proof hashes the snapshot's config/scene_requirements.yaml, not another file (Codex)
             problems.append(f"{r.name}: --scene-requirements names another requirements file, which the preflight "
@@ -799,14 +802,15 @@ def check_runs(runs, runner, timeout_s=120.0, info=None, environ=None) -> list[s
         if unknown:
             problems.append(f"{r.name}: {runner} does not define {unknown}")
         candidates = scene_candidates(r)
-        chosen = last_option_value(lines[lines.index("RUNNER_ARGS") + 1:], "--scene-file")
+        chosen = last_option_value(printed, "--scene-file")
         if candidates and chosen is not None:
             # the file the launch chose must be one the proof hashes: both read as scene_digest reads them (the folder
             # resolved, the name kept), the runner's value the last one given
             def as_read(path):
                 return os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path))
 
-            if as_read(chosen) not in {as_read(c) for c in candidates}:
+            # a relative value is the launch's own, from the run's working directory
+            if as_read(os.path.join(r.cwd or ".", chosen)) not in {as_read(c) for c in candidates}:
                 problems.append(f"{r.name}: the DRY_RUN chose {chosen}, not one of the scene files the proof covers")
     return problems
 

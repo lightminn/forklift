@@ -2294,3 +2294,21 @@ def test_the_chosen_scene_file_is_read_like_the_candidates_one_argument_per_line
                      env={"SCENE_DIR": str(scenes), "SCENE": "line_2"}, retry_move=[str(out)])
         problems = ib.check_runs([run], tmp_path / "runner.py")
         assert (problems == []) is ok, (n, problems)
+
+
+def test_a_relative_scene_file_is_the_runs_own_and_a_path_holding_dashes_is_no_option(tmp_path, monkeypatch):
+    # Codex round 12: the DRY_RUN runs in the run's cwd; a printed path with " --" inside is one argument
+    (tmp_path / "runner.py").write_text(RUNNER_SRC)
+    scenes = tmp_path / "run --stage/scenes"
+    scenes.mkdir(parents=True)
+    (scenes / "line_2_m.json").write_text("{}")
+    monkeypatch.chdir("/")
+    for n, (printed, ok) in enumerate((("echo --scene-file; echo 'run --stage/scenes/line_2_m.json'", True),
+                                       (f"echo --scene-file; echo '{scenes}/line_2_m.json'", True),
+                                       ("echo --scene-file; echo elsewhere.json", False))):
+        (tmp_path / "f.sh").write_text(f"# DRY_RUN RUNNER_ARGS\necho RUNNER_ARGS\n{printed}\necho ARGS_OK\n")
+        out = tmp_path / f"o{n}"
+        run = ib.Run(name="a", argv=["bash", str(tmp_path / "f.sh"), str(out)], cwd=str(tmp_path),
+                     env={"SCENE_DIR": "run --stage/scenes", "SCENE": "line_2"}, retry_move=[str(out)])
+        problems = ib.check_runs([run], tmp_path / "runner.py")
+        assert (problems == []) is ok, (n, problems)
