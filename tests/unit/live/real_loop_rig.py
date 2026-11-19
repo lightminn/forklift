@@ -105,6 +105,39 @@ class Layer:
         return None
 
 
+class FreshMcu(FakeMcu):
+    """The shared fake MCU, with the firmware's COMMAND_FRESH (a DRIVE's validity not yet run out while armed) and a
+    lift that follows a DRIVE's lift target at 0.05 m/s while armed (it holds where it is otherwise)."""
+
+    lift, lift_target, LIFT_RATE = 0.0, 0.0, 0.05
+
+    def receive(self, msg, seq):
+        from forklift_core.mcu_link.messages import Drive, Mode
+
+        super().receive(msg, seq)
+        if isinstance(msg, Drive) and self.mode == Mode.ARMED and msg.arm_gen == self.gen and self.zero_seen:
+            self.lift_target = float(msg.lift_m)
+
+    def advance(self, dt_us):
+        from forklift_core.mcu_link.messages import Mode
+
+        super().advance(dt_us)
+        if self.mode == Mode.ARMED:
+            step = self.LIFT_RATE * dt_us / 1e6
+            self.lift += max(-step, min(step, self.lift_target - self.lift))
+
+    def state(self):
+        from dataclasses import replace as _r
+
+        from forklift_core.mcu_link.messages import Mode, StateFlag
+
+        st = _r(super().state(), lift_m=float(self.lift))
+        if self.mode == Mode.ARMED and self.deadline_us is not None and self.t_us <= self.deadline_us \
+                and self.zero_seen:
+            st = _r(st, flags=st.flags | StateFlag.COMMAND_FRESH)
+        return st
+
+
 class FakeTransport:
     def __init__(self, mcu):
         self.mcu, self.dec, self.last_ns, self.sent = mcu, LinkDecoder(), None, []
@@ -138,12 +171,13 @@ class FakeTransport:
 
 
 class Rig:
-    def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None):
+    def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True):
+        self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
                                            outbox_max=16), client=Client.REAL)
         self.port = RealPlantPort(self.host, KIN, lift_motion_counts=True)
-        self.mcu = FakeMcu()
+        self.mcu = FreshMcu()
         self.transport = FakeTransport(self.mcu)
         self.odo = RealOdometry(VEH, max_gap_s=0.2)
         self.tracker = Tracker()
@@ -153,7 +187,16 @@ class Rig:
         loop_box = {}
 
         def speed():
-            return loop_box["loop"].speed
+            sp = loop_box["loop"].speed
+            if self.direction_evidence and sp.valid and len(sp.directions) > 1:
+                # the normal example's direction evidence (design 2.2 4: a fake one; the real encoder model's block is
+                # tested apart): the truck moves the way its confirmed command goes, forward when standing
+                c = loop_box["loop"].book.confirmed
+                d = -1 if (c is not None and c.speed_mps < 0) else 1
+                from forklift_core.safety.truth_access import SafetySpeed as _S
+
+                return _S(sp.signed_mps, sp.bound_mps, (d,), valid=True, age_s=sp.age_s)
+            return sp
 
         def steering():
             q = loop_box["loop"]._measured_steering()
@@ -219,7 +262,8 @@ class Rig:
                              host=self.host, link=self.link, channels=self.channels, transport=self.transport,
                              params=params, odometry=self.odo, kinematics=KIN, max_speed_mps=0.15,
                              start_ns=10_000 * MS, slam_source=SimpleNamespace(replies=lambda n: []),
-                             evidence=evidence, base_scenario=core.options.scenario, wait_pose=None)
+                             evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
+                             depth_source=SimpleNamespace(frames=self._depth_frames))
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
@@ -241,15 +285,29 @@ class Rig:
                                mission_gen=loop.core.commands.mission_gen, phase=loop.core.ms.phase,
                                correction=(0.0, 0.0, 0.0))
 
+    def _depth_frames(self, now_ns):
+        if self.frames is None:
+            return []
+        f = self._frame()
+        return [SimpleNamespace(stamp_s=f.stamp_s, depth=None, mission_gen=f.mission_gen, phase=f.phase,
+                                correction=f.correction)]
+
     def _operator(self, request):
         return self.answers.pop(0) if self.answers else None
 
     # --- driving --------------------------------------------------------------------------------------------------
+    echo = True  # the console answers every tick (it keeps the lease); False: a console gone quiet
+
     def tick(self, n=1):
         rec = None
         for _ in range(n):
             self.now += 20 * MS
             rec = self.loop.cycle(self.now)
+            ticks = [m for _, m in self.channels.take_out() if m.get("t") == "tick"]
+            if ticks and self.echo and self.lease is not None:
+                last = ticks[-1]
+                self.channels.message("c1", "op", {"t": "echo", "session_epoch": EPOCH, "lease_id": self.lease,
+                                                   "echo": {"state_seq": last["state_seq"], "token": last["token"]}})
             if self.core.commands.status == "preparing" and self.jobs.submitted and self.core.pending is not None \
                     and self.core.pending.job not in self.jobs.answers:
                 self.jobs.answers[self.core.pending.job] = (True, {"result": self.plan, "trace": []})

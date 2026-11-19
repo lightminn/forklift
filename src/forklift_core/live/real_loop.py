@@ -94,7 +94,8 @@ class RealSession:
 class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
-                 base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None) -> None:
+                 base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
+                 depth_source=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -112,11 +113,15 @@ class RealLoop:
         self.frozen = None
         self.adopted_for = None  # the mission id the ARM was asked for
         self.waiting = None  # the output wait's own target (steering, lift) while one lasts
+        self._s10_stopping = False
         self.last_start_ns: int | None = None
         self.slow_starts = 0
         self.serial = 0
         self.steering_command = None
         self.records: list = []
+        self.depth_source = depth_source  # frames(now_ns) -> [frame(stamp_s, depth, mission_gen, phase, correction)]
+        self.pose_history: deque = deque(maxlen=64)  # (t, rear, continuous) per tick, for a frame's own pose
+        self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
 
     # --- the head -------------------------------------------------------------------------------------------------
@@ -172,8 +177,8 @@ class RealLoop:
         except Exception as exc:  # noqa: BLE001 -- any failure before the output is the emergency branch
             rec.branch, rec.reason = "emergency", f"exception:{type(exc).__name__}:{exc}"
             self._emergency(now_ns, rec.reason)
-        self._collect(now_ns, t)
-        self._send(now_ns, rec)
+        self._send(now_ns, rec)  # S10's control stop goes out before the collection (design 4)
+        self._collect(now_ns, t, rec)
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
         self.record(rec)
@@ -184,6 +189,12 @@ class RealLoop:
         self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         host.tick(now_ns)
         permit.tick(now_ns)
+        if self._s10_stopping and permit.state == ra.LATCHED:
+            # the control stop confirmed and DISARMED seen (or the DISARM after a failure): the arbiter STOPPED with
+            # the permit, so only a rearm in STOPPED goes on (design 4 5)
+            self._s10_stopping = False
+            if self.link.a.mode != "STOPPED":
+                self.link.a.stop(now_ns / 1e9, permit.reason or "s10_stopped")
         self.book.settle(now_ns)
         q = self._measured_steering()
         self.book.publish(core.state, core.slam, now_ns, (0.0 if q is None else q,))
@@ -258,6 +269,8 @@ class RealLoop:
         core.slam_replies(t, replies, ms.phase in ("lift", "extract", "transport", "lower"))
         rear = np.asarray(core.hooks.slam_rear(t), dtype=float)
         core.hooks.set_rear(rear)
+        self.pose_history.append((t, tuple(float(v) for v in rear), self.odom_continuous))
+        self._feed_depth(now_ns, t)
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
             self.frozen = freeze_submit(core)
@@ -347,6 +360,55 @@ class RealLoop:
         self._assemble_and_arbitrate(now_ns, t, rear, requested_speed, curvature, dwell_hold, rec,
                                      obstacle_hold=obstacle_hold, cusp_hold=cusp_hold, safety_hold=safety_hold)
 
+    def _feed_depth(self, now_ns: int, t: float) -> None:
+        """The D5 depth feed (design 2.2 4): each new frame of this mission, phase and correction, younger than the
+        check's own age limit and covered by a continuous pose interval, goes to ``add_frame`` at its interpolated
+        pose; the still-frame wait is released only by a frame the check took as new, acquired after the wait began
+        and inside the still span."""
+        core, pocket = self.core, self.core.pocket
+        check = pocket.get("check")
+        if self.depth_source is None or check is None:
+            return
+        if pocket.get("await_still_frame"):
+            if self._wait_started_s is None:
+                self._wait_started_s = t
+        else:
+            self._wait_started_s = None
+        applied = tuple(float(v) for v in (core._applied_now() or (0.0, 0.0, 0.0)))  # noqa: SLF001
+        max_age = float(getattr(getattr(check, "config", None), "frame_max_age_s", 0.2))
+        lag = float(getattr(getattr(check, "config", None), "frame_lag_s", 0.0))
+        for frame in self.depth_source.frames(now_ns):
+            stamp = float(frame.stamp_s)
+            if (frame.mission_gen != core.commands.mission_gen or frame.phase != core.ms.phase
+                    or tuple(float(v) for v in frame.correction) != applied):
+                continue
+            if stamp > t + 1e-6 or stamp <= float(getattr(check, "last_new_s", -math.inf)) \
+                    or t - (stamp - lag) > max_age:
+                continue
+            rear_at = self._pose_at(stamp)
+            if rear_at is None:
+                continue  # no continuous pose interval covers it
+            lift = self._measured_lift()
+            out = check.add_frame(stamp, frame.depth, rear_at, speed_mps=abs(self.speed.signed_mps),
+                                  yaw_rate_rps=0.0, lift_m=0.0 if lift is None else lift)
+            pocket["frames_read"] = pocket.get("frames_read", 0) + 1
+            still_from = None if self.still_since_ns is None else self._t(self.still_since_ns)
+            if (pocket.get("await_still_frame") and (out or {}).get("new") and self._wait_started_s is not None
+                    and stamp >= self._wait_started_s and still_from is not None and stamp >= still_from
+                    and t - (stamp - lag) <= max_age):
+                pocket["await_still_frame"] = False
+                pocket["still_frame_s"] = stamp
+
+    def _pose_at(self, stamp: float):
+        h = [e for e in self.pose_history]
+        for (t0, p0, c0), (t1, p1, c1) in zip(h, h[1:]):
+            if t0 <= stamp <= t1 and c0 and c1:
+                a = 0.0 if t1 <= t0 else (stamp - t0) / (t1 - t0)
+                return tuple(p0[i] + a * (p1[i] - p0[i]) for i in range(3))
+        if h and abs(h[-1][0] - stamp) < 1e-9 and h[-1][2]:
+            return h[-1][1]
+        return None
+
     def _unsupported(self) -> str | None:
         core = self.core
         if getattr(core, "capture_live", None) is not None or getattr(core, "observation_live", None) is not None:
@@ -395,10 +457,11 @@ class RealLoop:
         self._candidate = (command_, command_.steering_command, out, sink)
 
     # --- collection, then the one output branch and the send ---------------------------------------------------------
-    def _collect(self, now_ns: int, t: float) -> None:
+    def _collect(self, now_ns: int, t: float, rec: TickRecord) -> None:
         if self.session.ended_unclaimed():
             release = self._release_allowed(now_ns)
             self.session.end_mission(t, lift_m=self._measured_lift(), release_allowed=release)
+            # S10's end leaves the authority through its own control stop (STOP_PENDING); any other end latches
             if self.permit.state in (ra.ARMING, ra.READY, ra.DRIVING):
                 self.permit.mission_ended(now_ns, self.core.commands.end_reason or "end")
             self.frozen, self.adopted_for, self.waiting = None, None, None
@@ -427,6 +490,7 @@ class RealLoop:
                 else:
                     self._book(now_ns, r.seq, 0.0, 0.0, (q,), lift, False, "stop")
                     permit.control_stop(now_ns, r.seq)
+                    self._s10_stopping = True
                     rec.seqs.append(r.seq)
         elif permit.state in (ra.READY, ra.DRIVING) and getattr(self, "_candidate", None) is not None:
             command_, steer, out, sink = self._candidate
