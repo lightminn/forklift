@@ -437,7 +437,13 @@ def test_installing_may_ignore_only_the_correction_generation():
     lay.add_scan(wall(1.0), 1.1)
     lay.worker.step()
     lay.install_ready(1.12)
-    ask(lay, 1.13, version=1)  # a new correction generation, not installed
+    ask(lay, 1.13, version=1)  # a new correction generation with the same values, not installed
     assert lay.installing() and not lay.installing(ignore_correction=True)
     lay.exempt = (2.0, 0.0, 0.4, 0.6, 0.0)  # another exemption too
     assert lay.installing(ignore_correction=True)
+    lay2 = layer()
+    lay2.add_scan(wall(1.0), 1.1)
+    lay2.worker.step()
+    lay2.install_ready(1.12)
+    lay2.refresh(1.13, (0.0, 0.25, 0.0), 1, current_pose=(0, 0, 0), path_ahead=None, loaded=False)
+    assert lay2.installing(ignore_correction=True)  # 5c-1 r3 P1: other correction values -- still waited for

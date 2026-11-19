@@ -421,7 +421,8 @@ class RealLayer:
                 perm.advance(float(odom_travel) - start)  # the path driven, not the straight line (P2-3)
             # first used at this tick (installed at the tick head, read by this tick's control)
             self._installed = {"key": job["key"], "newest_scan_s": job["newest_scan_s"], "scan_id": job["scan_id"],
-                               "first_used_s": float(now_s), "planning": result.get("planning")}
+                               "first_used_s": float(now_s), "planning": result.get("planning"),
+                               "correction": job["correction"]}
             # first use within B of the newest scan's last beam (design 9, Codex 5a impl P1-2) -- judged once per
             # scan: a re-projection of a scan first used in time is not late (round 2 P2-2)
             if job["scan_id"] > self._first_used_id:
@@ -458,7 +459,10 @@ class RealLayer:
         if cur is None:
             return True
         if ignore_correction:
-            return replace(self._installed["key"], correction_gen=0) != replace(cur, correction_gen=0)
+            # the generation's number only: the result was made with the same correction values (5c-1 r3 P1: an
+            # older correction's grid with the newer correction's pose would mix two frames)
+            same = self._installed.get("correction") == self._request["correction"]
+            return not same or replace(self._installed["key"], correction_gen=0) != replace(cur, correction_gen=0)
         return self._installed["key"] != cur
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
