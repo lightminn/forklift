@@ -476,6 +476,14 @@ class RealLayer:
         self._watch_cache = (now_s, reason)
         return reason
 
+    def source_lost(self, sensor: str) -> None:
+        """The scan source said it is disconnected (design 3: an explicit loss is the end at once, not the
+        watchdog's wait for a late scan -- Codex 5a impl round 3 P2-3); sticky until the loop latches on it."""
+        self._exceeded = "scan_source_lost"
+        self._watch_cache = None
+        self.counts["sources_lost"] = self.counts.get("sources_lost", 0) + 1
+        self.lost_sensor = str(sensor)
+
     def end_taken(self) -> None:
         """The loop latched on the watchdog's end: the deadlines start again from the next result (a rearm follows)."""
         self._exceeded = None

@@ -121,6 +121,10 @@ class RealSession:
         return entry
 
 
+# the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
+LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
+
+
 class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
@@ -143,6 +147,7 @@ class RealLoop:
         self._travel_ticked = 0.0  # the path length the layer was last told about
         self._break_open = False  # a same-boot odometry break has asked its relocalization (once per break)
         self._ever_continuous = False  # the start's own first reference is not a break of anything
+        self._odom_good = False  # the newest STATE did not break the odometry
         self._resession = False  # a reboot seen: the session check runs again once the permit is off or latched
         self.odom_continuous = False
         self.speed = SafetySpeed(0.0, 0.0, (1, -1), valid=False)
@@ -219,6 +224,9 @@ class RealLoop:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
+            self._odom_good = False
+        else:
+            self._odom_good = True
             self.still_since_ns = None
         self.book.on_state(state, int(rx_ns))
         self.permit.on_state(state, int(rx_ns))
@@ -464,6 +472,7 @@ class RealLoop:
             self._disconnects = host.disconnects
             self.samples.clear()
             self._odom_broken = True
+            self._odom_good = False
             self.still_since_ns = None
         self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
         stuck = self._cut_stuck_write(now_ns)
@@ -542,11 +551,21 @@ class RealLoop:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
 
+    def _before_arm(self) -> bool:
+        """A mission the permit does not collect yet: accepted or preparing, or adopted and running with the permit
+        still off before its ARM (``AutoPermit`` collects from ``adopted()`` on)."""
+        cmds = self.core.commands
+        if cmds.status in ("accepted", "preparing"):
+            return True
+        return (cmds.status == "running" and self.permit.state == ra.OFF and self.adopted_for != cmds.mission_id)
+
     def _odometry_head(self, now_ns: int, t: float) -> None:
         """The odometry's part of the head, whatever follows: the continuity, the layer's reset on a break, the path
         driven and the installs, and the relocalization lock of a reboot or a same-boot break."""
         core = self.core
-        self.odom_continuous = bool(self.samples) and not self._odom_broken
+        # continuous: no break this tick and a good STATE since the last one (an empty tick does not mend a break,
+        # Codex 5a impl round 3 P2-2)
+        self.odom_continuous = bool(self.samples) and not self._odom_broken and self._odom_good
         if self.real_layer is not None:
             if self._odom_broken:
                 self._reset_layer(now_ns)  # a same-boot break: the layer starts again (design 1.1, round 6 P1-3)
@@ -623,9 +642,10 @@ class RealLoop:
         self._feed_depth(now_ns, t)
         if self.real_layer is not None:
             self._layer_tick(t, rear)
-            if cmds.status in ("accepted", "preparing"):
-                # a fault before the adoption latches and ends the preparation whether or not a plan is out yet
-                # (design 1.2, round 3 P2-4; Codex 5a impl P2-2: waiting for the planning grid included)
+            if self._before_arm():
+                # a fault before the ARM latches and ends the mission whether or not a plan is out yet (design 1.2,
+                # round 3 P2-4; Codex 5a impl P2-2: waiting for the planning grid included; round 3 P1: the adopted
+                # mission waiting for its new grid before the ARM too)
                 why_ = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
                 if why_ is not None and ra.latches(why_):
                     rec.branch, rec.reason = "emergency", f"prepare:{why_}"
@@ -656,21 +676,21 @@ class RealLoop:
         # impl P1-12): past its end it is ①, a watchdog stop holds the wheels and the lift (the wait frame)
         layer_ = None if core.obstacle is None else core.obstacle.get("layer")
         layer_stop = layer_.watchdog(t) if layer_ is not None and hasattr(layer_, "watchdog") else None
-        if layer_stop in ("layer_latency_exceeded", "layer_worker_dead"):
+        if layer_stop in LAYER_ENDS:
             rec.branch, rec.reason = "emergency", layer_stop
             self._emergency(now_ns, layer_stop)
-            if cmds.status in ("accepted", "preparing"):
-                self._end_now(now_ns, layer_stop)  # a preparation the latch does not collect (design 3)
-            if layer_stop == "layer_latency_exceeded" and self.permit.state in (ra.LATCHED, ra.DISARMING) \
-                    and hasattr(layer_, "end_taken"):
+            if self._before_arm():
+                self._end_now(now_ns, layer_stop)  # a mission the latch does not collect yet (design 3, round 3 P2-1)
+            if layer_stop in ("layer_latency_exceeded", "scan_source_lost") and hasattr(layer_, "end_taken") \
+                    and self.permit.state in (ra.LATCHED, ra.DISARMING):
                 layer_.end_taken()  # latched on it: the next result's deadlines start afresh (a rearm follows)
             return
         if self.real_layer is not None and (not getattr(core.options, "obstacle_act", False)
                                             or layer_ is not self.real_layer):
             rec.branch, rec.reason = "emergency", "obstacle_layer_off"  # never released while running (design 3)
             self._emergency(now_ns, "obstacle_layer_off")
-            if cmds.status in ("accepted", "preparing"):
-                self._end_now(now_ns, "obstacle_layer_off")  # before the adoption too (Codex 5a impl round 2 P2-3)
+            if self._before_arm():
+                self._end_now(now_ns, "obstacle_layer_off")  # before the ARM too (Codex 5a impl round 2 P2-3)
             return
         if self.real_layer is not None and cmds.status in ("accepted", "preparing") and core.job_pending():
             # before the adoption (design 1.2, round 3 P2-3/P2-4): a planning answer from another correction
@@ -1147,7 +1167,7 @@ class RealLoop:
             if self.real_layer is not None:
                 # the layer's watchdog at the write too (Codex 5a impl P1-1): a deadline passed since the decision
                 lw = self.real_layer.watchdog(self._t(ns))
-                if lw in ("layer_latency_exceeded", "layer_worker_dead"):
+                if lw in LAYER_ENDS:
                     return f"send:{lw}", "alarm"
                 if lw is not None and why is None:
                     why = f"wait:{lw}"

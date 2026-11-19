@@ -293,3 +293,73 @@ def test_scans_keep_installing_at_0_12_mps_with_the_configured_delay_bound():
     assert abs((r.loop.odom_travel - travel) - 0.12 * 1.6) < 0.02
     assert r.layer.counts["scans_dropped"] == drops
     assert r.layer.counts["installs"] >= installs + 14
+
+
+def _adopted_waiting_rig():
+    """Adopted and running, the permit still off: the new path's grid not yet installed (the ARM waits)."""
+    r = rig()
+    r.tick(40)
+    r.submit()
+    hold = {"on": False}
+    step = r.layer.worker.step
+
+    def held_step():
+        if not hold["on"]:
+            step()
+
+    r.layer.worker.step = held_step
+    run_until(r, lambda rec: r.core.commands.status == "running" and r.core.commands.adopted_id is not None
+              and (hold.__setitem__("on", True) or True) and r.layer.installing())
+    assert r.permit.state == ra.OFF
+    return r, hold
+
+
+def test_slam_lost_between_the_adoption_and_the_arm_latches_and_ends_the_mission():
+    """Codex 5a impl round 3 P1: a fault while the adopted mission waits for its grid is the latch, not a wait the
+    ARM goes out after."""
+    r, hold = _adopted_waiting_rig()
+    r.tracker.mode = "lost"
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=10)
+    assert rec.reason.startswith("prepare:slam")
+    r.tracker.mode = "tracking"
+    hold["on"] = False
+    arms = r.mcu.arms
+    r.tick(20)
+    assert r.mcu.arms == arms and r.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert r.core.commands.status not in ("accepted", "preparing", "running")
+
+
+def test_a_dead_worker_between_the_adoption_and_the_arm_ends_the_mission():
+    """Codex 5a impl round 3 P2-1."""
+    r, hold = _adopted_waiting_rig()
+    r.layer.worker.alive = False
+    r.tick(3)
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert r.core.commands.status not in ("accepted", "preparing", "running")
+
+
+def test_an_empty_tick_does_not_mend_a_continuing_break():
+    """Codex 5a impl round 3 P2-2: one relocalization generation for one continuing break, an empty tick in it."""
+    r = rig()
+    r.tick(15)
+    r.mcu.faults = FaultFlag.ENCODER_GAP
+    r.tick(1)
+    gen = r.core.relocalize_generation()
+    orig = r.transport.receive
+    r.transport.receive = lambda host, now_ns, limit=None: None  # no STATE this tick
+    r.tick(1)
+    r.transport.receive = orig
+    assert not r.loop.odom_continuous
+    r.tick(2)
+    assert r.core.relocalize_generation() == gen
+    r.mcu.faults = FaultFlag(0)
+
+
+def test_an_explicit_source_loss_is_the_end_at_once():
+    """Codex 5a impl round 3 P2-3 / design 3: the source saying it is disconnected latches without the watchdog's
+    wait."""
+    r = _driving_rig()
+    r.layer.source_lost("lidar")
+    rec = r.tick()
+    assert (rec.branch, rec.reason) == ("emergency", "scan_source_lost")
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
