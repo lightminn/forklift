@@ -6738,22 +6738,25 @@ class MissionCore:
         if commanded != 0.0:
             c_ = 1 if commanded > 0 else -1
             motion[c_] = max(motion.get(c_, 0.0), abs(commanded))
-        # docs/design/2026-11-19-real-loop.md 2.5: the real loop's outputs that may still act, by direction
-        for d_, v_ in (self.state.get("outstanding_motion") or {}).items():
-            if float(v_) > 0.0:
-                motion[int(d_)] = max(motion.get(int(d_), 0.0), float(v_))
+        # docs/design/2026-11-19-real-loop.md 2.5: the real loop's outputs that may still act, by direction -- only the
+        # real loop records them; without the record (the teleop bridge's copy of this rule) everything is as before
+        state_ = getattr(self, "state", None) or {}
+        residual = {int(d_): float(v_) for d_, v_ in (state_.get("outstanding_motion") or {}).items()
+                    if float(v_) > 0.0}
+        for d_, v_ in residual.items():
+            motion[d_] = max(motion.get(d_, 0.0), v_)
         possible = set(motion) | ({direction} if direction is not None else set())
         if direction is not None:
-            # the asked direction at the larger of the request and what may still act that way (same direction too)
-            driving, cap = [direction], max(cap_mps, motion.get(direction, 0.0))
+            # the asked direction at the larger of the request and what the loop's outputs may still do that way
+            driving, cap = [direction], max(cap_mps, residual.get(direction, 0.0))
         else:
             driving = list(motion) or [speed.directions[0]]
             cap = max([cap_mps, *motion.values()])
         allowed, why = min((limit_fn(d_, cap) for d_ in driving), key=lambda r: r[0])
         hold = False
-        if direction is not None and motion.get(direction, 0.0) > allowed:
-            # what may still act the asked way is beyond what the layer allows that way (a slowing request does not
-            # slow an unconfirmed faster output): the wheels hold (Codex 4c impl P1-9)
+        if direction is not None and residual.get(direction, 0.0) > allowed:
+            # what the loop's outputs may still do the asked way is beyond what the layer allows that way (a slowing
+            # request does not slow an unconfirmed faster output): the wheels hold (Codex 4c impl P1-9)
             allowed, why, hold = 0.0, (why if why != "ok" else "residual_over_allowed"), True
         for d_, v_ in motion.items():
             if d_ == direction:
@@ -6761,7 +6764,7 @@ class MissionCore:
             a_, w_ = limit_fn(d_, v_)
             if a_ < v_:
                 allowed, why, hold = 0.0, (w_ if w_ != "ok" else "direction_unsure"), True
-        if hold:
+        if hold and isinstance(getattr(self, "state", None), dict):
             self.state["motion_hold"] = why  # the real loop's wait frame: wheels 0 and the old queue dropped (P1-4)
         return allowed, why, hold, driving, len(possible) > 1
 
