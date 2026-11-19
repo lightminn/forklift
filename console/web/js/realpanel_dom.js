@@ -31,10 +31,15 @@ export function bindRealPanel(m, rejectText, clientId) {
     const btn = ev.target.closest("button");
     if (!btn || !panelEl.contains(btn)) return;
     const key = btn.id || `check:${btn.dataset.check}`;
-    (panel.press[key] ??= {})[inputOf(ev)] = ctxNow();
+    // what was drawn, not the newest state (r6 P2-1: a press on a stale drawing can never pass)
+    (panel.press[key] ??= {})[inputOf(ev)] = panel.drawn ? { ...panel.drawn } : null;
   };
   panelEl.addEventListener("pointerdown", begin, true);
-  panelEl.addEventListener("keydown", (ev) => { if (ev.key === "Enter" && !ev.repeat) begin(ev); }, true);
+  panelEl.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Enter") return;
+    if (ev.repeat) { ev.preventDefault(); return; } // a held Enter clicks no panel button again (r6 P2-2)
+    begin(ev);
+  }, true);
   panelEl.addEventListener("pointercancel", (ev) => {
     for (const rec of Object.values(panel.press)) delete rec[inputOf(ev)];
     for (const rec of Object.values(panel.pressKey)) delete rec[inputOf(ev)];
@@ -51,7 +56,10 @@ export function bindRealPanel(m, rejectText, clientId) {
     return same(ctx, ctxNow()) && same(panel.drawn, ctxNow()) && panel.mine;
   };
   const guard = (fn, key) => (ev) => {
-    if (!clickOk(key, ev)) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
+    if (!clickOk(key, ev)) {
+      if (panel.pressKey && panel.pressKey[key]) delete panel.pressKey[key][inputOf(ev)]; // consumed too (r6 P3)
+      return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
+    }
     return fn(ev);
   };
   const send = (type, fields, okText) => m.session.request(type, fields).then((r) => {
@@ -133,7 +141,11 @@ export function bindRealPanel(m, rejectText, clientId) {
     panel.toggle = toggle;
     say("우회 변경을 보냈습니다");
     m.session.request("check_bypass", { check: toggle.check, on: toggle.on }).then((r) => {
-      if (panel.toggle !== toggle) return; // dropped (another session or lease): its answer tells nothing (r5 P3)
+      // dropped, or another session or lease by now: its answer tells nothing (r5-r6 P3)
+      if (panel.toggle !== toggle || toggle.epoch !== gens().session_epoch || toggle.lease !== gens().lease_id) {
+        if (panel.toggle === toggle) panel.toggle = null;
+        return;
+      }
       if (r && r.t === "ack") {
         toggle.at = performance.now();
         say("다음 틱에 적용합니다");
