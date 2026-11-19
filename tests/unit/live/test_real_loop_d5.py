@@ -442,3 +442,76 @@ def test_only_the_requested_direction_blocked_outside_the_region_holds_under_the
     back = layer.limit(1.0, current_pose=(0.0, 0.0, 0.0), curvature_inv_m=0.0, direction=-1, loaded=False,
                        cap_mps=0.02)
     assert back[0] >= 0.02  # the other way's possible motion is allowed: only the requested direction blocks
+
+
+# --- impl round 3 ---------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("kind", ["outstanding", "bound"])
+def test_a_standing_tick_with_no_request_calls_the_permission_under_a_pocket_check(kind):
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    check = DirCheck()
+    r = Rig(frames=True, check=check)
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "insert" and check.calls, 9000)
+    asked = []
+    orig_perm, orig_ctl, orig_cmd = r.core.permission, r.loop._control_and_output, r.core.command
+
+    def command(*a, **k):
+        out = orig_cmd(*a, **k)
+        out.requested_speed = 0.0  # the follower asks nothing this tick
+        return out
+
+    r.core.command = command
+
+    def perm(t, rear, kappa, requested_speed, loaded, cusp):
+        asked.append(requested_speed)
+        return orig_perm(t, rear, kappa, requested_speed, loaded, cusp)
+
+    def ctl(now_ns, t, rec):
+        if kind == "outstanding":
+            r.loop.speed = SafetySpeed(0.0, 0.0, (1,), valid=True)
+            r.core.state["outstanding_motion"] = {1: 0.03}  # an unconfirmed output only
+        else:
+            r.loop.speed = SafetySpeed(0.0, 0.02, (1, -1), valid=True)  # the encoder's bound only
+            r.core.state.pop("outstanding_motion", None)
+        return orig_ctl(now_ns, t, rec)
+
+    r.core.permission, r.loop._control_and_output = perm, ctl
+    r.tick()
+    assert asked == [0.0]
+
+
+def test_free_cells_expiring_between_t_and_t_plus_w_are_evidence_stale():
+    from dataclasses import replace
+
+    r = Rig(frames=True, real_layer=True)
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and r.core.ms.phase == "approach", 6000)
+    r.tick(10)
+    lay, t = r.layer, r.loop._t(r.now)
+    kw = dict(current_pose=tuple(r.loop.odom_pose), curvature_inv_m=0.0, direction=1, loaded=False, cap_mps=0.06)
+    first = lay.limit(t, **kw)
+    assert first[0] > 0.0  # scans fresh, evidence fresh
+    perm = lay.permission
+    oldest = min(perm.last_estop.oldest_free_s, perm.path_check.oldest_free_s)
+    # the FREE evidence's life set to expire 10 ms after t -- the scans stay valid
+    perm.config = replace(perm.config, evidence_max_age_s=(t - oldest) + 0.010)
+    assert lay.limit(t, **kw)[0] > 0.0
+    assert lay.limit(t, evidence_s=t + MissionCore.WRITE_MARGIN_S, **kw) == (0.0, "evidence_stale")
+
+
+def test_the_layers_zero_on_the_requested_direction_reaches_the_request_under_the_bypass():
+    """Only a rearward motion is possible and the request is forward: no hold -- the layer's forward 0 must reach the
+    request through the pocket branch's acting."""
+    from forklift_core.live.real_assembly import BypassPocketCheck
+    from forklift_core.safety.truth_access import SafetySpeed
+
+    from test_core_truth_split import permission_core
+
+    check = BypassPocketCheck((0.0, 0.0), 1.8, 0.8, 0.0)
+    c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=check, blocked=1)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.04, False, None)
+    assert out.acting and out.requested_speed == 0.0 and out.why == "occupied"
+    assert "motion_hold" not in c.state  # not a hold: the request itself is cut
