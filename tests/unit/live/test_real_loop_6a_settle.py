@@ -302,6 +302,35 @@ def test_a_collection_that_raised_once_is_done_at_the_next_collection():
     assert r.loop.session.results[-1]["reason"] == "s10_lifted"
 
 
+def test_an_arming_zero_first_judged_after_its_expiry_ends_the_exchange():
+    """Impl round 3 P3: the zero's first gate opens 98 ms after its queueing (the queue still hands it out, the gate's
+    5 ms lookahead finds it expired): the exchange ends at once, not at the 300 ms ARM timeout."""
+    r = ready_to_submit()
+    real = r.transport.transmit
+    seen = {}
+
+    def hold_zero(host, now, gate):
+        front = host._outbox[0] if host._outbox else None  # noqa: SLF001
+        if "q" not in seen and front is not None and front.kind == "DRIVE" and front.echo is not None:
+            seen["q"] = now  # queued at this tick's head
+        q = seen.get("q")
+        if q is not None and now - q < 80 * MS:
+            return []  # no send judges it for four ticks
+        if q is not None and now - q == 80 * MS:
+            r.tick_cost_ns = 16 * MS  # its first gate: the queue (tick start) still hands it out, ns = +101 ms
+        try:
+            return real(host, now, gate)
+        finally:
+            r.tick_cost_ns = 0
+
+    r.transport.transmit = hold_zero
+    r.submit()
+    run_until(r, lambda rec: "q" in seen, limit=400)
+    r.tick(4)
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED, limit=2)
+    assert not r.host.authorized
+
+
 def test_an_arming_zero_that_cannot_go_out_in_time_ends_the_exchange():
     r = ready_to_submit()
     r.submit()
@@ -320,3 +349,61 @@ def test_a_disarm_the_permit_decides_itself_is_recorded():
     r.transport.silent = True
     run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=50)
     assert len(r.loop.disarm_decisions) > n
+
+
+# --- Codex 6a-1 impl round 3 -------------------------------------------------------------------------------------
+def test_a_permit_disarm_is_recorded_at_its_decision_before_its_send():
+    from test_real_loop_6a_gate import driving
+
+    r = driving()
+    real = r.transport.transmit
+    entries = []
+
+    def slow(host, now, gate):
+        entries.append(r.now + r.tick_cost_ns)
+        r.tick_cost_ns += 7 * MS
+        return real(host, now, gate)
+
+    r.transport.transmit = slow
+    n = len(r.loop.disarm_decisions)
+    r.transport.silent = True
+    for _ in range(50):
+        entries.clear()
+        r.tick_cost_ns = 0
+        rec = r.tick()
+        if len(r.loop.disarm_decisions) > n:
+            break
+    at, why = r.loop.disarm_decisions[-1]
+    if why.startswith("permit:"):
+        assert at <= entries[0]
+
+
+def test_an_axis_judgement_on_a_sample_past_the_age_bound_is_marked_invalid():
+    from test_real_loop_6a_gate import driving, holding
+
+    r = holding(driving())
+    r.tick_cost_ns = 75 * MS
+    r.loop._axis_judge(r.host.state)  # noqa: SLF001
+    r.tick_cost_ns = 0
+    assert r.loop.axis_watch_times[-1][1] is False
+
+
+def test_a_collection_retried_after_a_late_step_keeps_the_first_clock_and_end_time():
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
+    taken = {}
+    real_take = r.core.commands.take_clock
+
+    def take():
+        c = real_take()
+        taken.setdefault("clock", c)
+        taken.setdefault("t", r.loop._t(r.now))  # noqa: SLF001
+        return c
+
+    r.core.commands.take_clock = take
+    failing_once(r.core, "end_reset")
+    run_until(r, lambda rec: bool(r.loop.session.results), limit=2000)
+    res = r.loop.session.results[-1]
+    assert res["clock"] is taken["clock"] and res["ended_s"] == taken["t"]

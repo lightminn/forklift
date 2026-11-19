@@ -100,6 +100,7 @@ class RealSession:
         # 6a (design 5): this tick's apply records once made (None: not yet), and whether link.begin was entered
         self.last_records: list | None = None
         self.began = False
+        self._end_partial: tuple | None = None  # (mission id, clock, end time) taken by a collection that then raised
 
     def tick_start(self, t: float, now_mono: float, feedback, context_kwargs: dict, collect=None) -> tuple:
         """``link.begin`` -> collect -> ``commands.apply`` -> collect (design 2.1 5): a mission the head ended (a latch
@@ -132,16 +133,23 @@ class RealSession:
             return None
         if lift_m is not None:
             core.ms.lift_command = float(lift_m)
-        core.abandon_jobs(t)
-        cmds.close_open(t)
-        if cmds.end_logged_for != mission_id:
-            cmds.note_end(t, cmds.end_reason)
-        clock = cmds.take_clock()
+        pend = self._end_partial if self._end_partial is not None and self._end_partial[0] == mission_id else None
+        if pend is None:
+            core.abandon_jobs(t)
+            cmds.close_open(t)
+            if cmds.end_logged_for != mission_id:
+                cmds.note_end(t, cmds.end_reason)
+            # the clock is taken once (it empties the pauses and waits): a later step that raises keeps it for the
+            # retry, with this collection's end time (6a impl round 3 P2-3)
+            self._end_partial = (mission_id, cmds.take_clock(), float(t))
+            pend = self._end_partial
+        _, clock, ended_s = pend
         core.end_reset(t, release_allowed=release_allowed)
         # marked collected only once every step ran (6a impl round 2 P2-2): a step that raised is tried again at the
         # next collection (before the next apply clears the final status), so the field recovery still opens
         self._ended_id = mission_id
-        entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": float(t),
+        self._end_partial = None
+        entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": ended_s,
                  "pallet_id": None if mission is None else mission.pallet_id,
                  "destination_id": None if mission is None else mission.destination_id, "clock": clock}
         self.results.append(entry)
@@ -270,6 +278,7 @@ class RealLoop:
         self._sample_delay: dict = {}
         self.axis_watch_times: deque = deque(maxlen=1024)
         self.disarm_decisions: deque = deque(maxlen=256)  # (clock ns, reason) of each emergency decision
+        self._permit_tx_ns: int | None = None  # the clock at the permit's first send in this head (its decision)
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
         # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
@@ -1076,7 +1085,18 @@ class RealLoop:
         a = self._axis
         if a is None or self._axis_trip is not None:
             return
-        self.axis_watch_times.append(int(self.clock()))
+        # (clock, valid): valid when the sample's acquisition is known to be within HOLD_SAMPLE_MAX_AGE_S (impl round 3
+        # P2-2) -- the HIL bound counts the gaps between valid judgements only
+        now_c = int(self.clock())
+        rx_b = self._sample_delay.get((int(state.boot_id), int(state.mcu_time_us)))
+        smp = self.samples[-1] if self.samples else None
+        if self.delay_bound is None:
+            b = 0.0
+        else:
+            b = None if rx_b is None else rx_b[1]
+        valid = smp is not None and b is not None and \
+            now_c - (int(smp.host_ns) - int(round(float(b) * 1e9))) <= int(HOLD_SAMPLE_MAX_AGE_S * 1e9)
+        self.axis_watch_times.append((now_c, bool(valid)))
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
         elif math.isfinite(state.steering_rad) and abs(float(state.steering_rad) - a["q0"]) > WAIT_STEER_MOVE_RAD:
@@ -1195,6 +1215,7 @@ class RealLoop:
         core.state.pop("motion_hold", None)  # a hold is this tick's only (round 3 P2-2)
         self._apply_bypass(now_ns)  # 5c-1: the session's bypass for every judgement of this tick
         before_ = permit.state  # 6a impl round 2 P2-4: a DISARM the permit decides itself is recorded too
+        self._permit_tx_ns = None
         try:
             self.transport.receive(host, now_ns, limit=MAX_STATES_PER_TICK)
         except Exception as exc:  # noqa: BLE001 -- RX failing: the permit still retries its DISARM and judges its deadline
@@ -1417,15 +1438,20 @@ class RealLoop:
             if a.mode != "STOPPED":
                 a.stop(now_ns / 1e9, r)
 
-        self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
-                         collect=lambda r: self._end_now(now_ns, r))
+        def transmit():
+            if self._permit_tx_ns is None:
+                self._permit_tx_ns = int(self.clock())  # 6a impl round 3 P2-1: the decision, before its own send
+            self._transmit(now_ns, escalate=False)
+
+        self.permit.bind(transmit=transmit, arbiter_stop=arbiter_stop, collect=lambda r: self._end_now(now_ns, r))
 
     def _note_permit_disarm(self, before: str) -> None:
         """A latch or a DISARM the permit decided on its own (``permit.tick`` / ``on_state``): its decision instant on
         the clock, as ``_emergency`` records its own (6a impl round 2 P2-4)."""
         now_state = self.permit.state
         if now_state in (ra.DISARMING, ra.LATCHED) and before not in (ra.DISARMING, ra.LATCHED):
-            self.disarm_decisions.append((int(self.clock()), f"permit:{self.permit.reason}"))
+            at = self._permit_tx_ns if self._permit_tx_ns is not None else int(self.clock())
+            self.disarm_decisions.append((at, f"permit:{self.permit.reason}"))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
         # 6a impl round 1 P2-4: the clock at the decision (the axis watch's last gap runs to here, not the tick start)
