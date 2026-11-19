@@ -210,11 +210,12 @@ class ImuConfig:
             raise ValueError("imu_config:norm_tol_frac")
         if not self.level_tol_deg < self.limit_deg:
             raise ValueError("imu_config:level_tol_deg")
-        try:
-            ref = tuple(float(v) for v in self.level_ref)
-        except (TypeError, ValueError):
-            ref = ()
-        if len(ref) != 3 or _unit(ref) is None:
+        # three finite numbers in a sequence: a mapping's keys or a string's characters are not a direction
+        # (5b round 7 P2-2)
+        raw = self.level_ref
+        ok = isinstance(raw, (list, tuple)) and len(raw) == 3 and all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in raw)
+        if not ok or _unit(tuple(float(v) for v in raw)) is None:
             raise ValueError("imu_config:level_ref")
 
 

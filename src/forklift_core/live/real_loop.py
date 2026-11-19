@@ -541,13 +541,15 @@ class RealLoop:
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
             elif permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
-                if permit.state != ra.ARMING:
-                    self.imu_watch.settled()  # the ARM answered: the tilt hold rules from here
+                # judged first: samples taken while the ARM was unanswered still meet the ARMING rule on the tick
+                # the permit turned READY (5b round 7 P2-1); then the tilt hold rules
                 trip_ = self.imu_watch.judge(now_ns)
                 if trip_ is not None:
                     rec.branch, rec.reason = "emergency", f"watch:{trip_}"  # design 4: a lost watch or a tilt is ①
                     self._emergency(now_ns, rec.reason)
                     return
+                if permit.state != ra.ARMING:
+                    self.imu_watch.settled()  # the ARM answered: the tilt hold rules from here
         if self._watch_trip is not None:
             trip, self._watch_trip = self._watch_trip, None
             rec.branch, rec.reason = "emergency", f"watch:{trip}"

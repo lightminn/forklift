@@ -209,7 +209,9 @@ def test_one_outlier_ages_out_of_the_window():
 
 
 def test_the_level_reference_must_be_a_direction():
-    with pytest.raises(ValueError, match="imu_config:level_ref"):
-        replace(CFG, level_ref=(0.0, 0.0, 0.0))
+    for bad in ((0.0, 0.0, 0.0), {0: 0.0, 1: 0.0, 2: 1.0}, "001", (0.0, 0.0, True), (0.0, 0.0, float("nan")),
+                (0.0, 1.0)):
+        with pytest.raises(ValueError, match="imu_config:level_ref"):
+            replace(CFG, level_ref=bad)
     with pytest.raises(ValueError, match="imu_config:level_tol_deg"):
         replace(CFG, level_tol_deg=9.0)

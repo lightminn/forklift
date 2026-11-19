@@ -279,3 +279,28 @@ def test_a_move_before_the_arm_is_answered_ends_it_before_any_drive():
     assert "watch_imu_moved" in rec.reason
     assert not [m for _, _, _, m in r.transport.sent[k:] if isinstance(m, Drive)
                 and (m.left_wheel_rad_s or m.right_wheel_rad_s)]
+
+
+def test_samples_of_the_arming_read_on_the_ready_tick_meet_the_arming_rule():
+    """5b round 7 P2-1: 3 deg samples taken while ARMING and read with the READY answer trip watch_imu_moved."""
+    r = rig()
+    r.mcu.arm_delay = 4
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, limit=400)
+    src = r.imu.samples
+    held = []
+
+    def hold(upto_ns, limit):
+        out = src(upto_ns, limit)
+        if r.permit.state == ra.ARMING:
+            held.extend((ns, tilted(3)) for ns, _ in out)  # taken now, delivered later
+            return []
+        out, held[:] = held + out, []
+        return out[:limit]
+
+    r.imu.samples = hold
+    k = len(r.transport.sent)
+    rec = run_until(r, lambda rec: rec.branch == "emergency" or rec.branch == "auto", limit=40)
+    assert rec.branch == "emergency" and "watch_imu_moved" in rec.reason, rec
+    assert not [m for _, _, _, m in r.transport.sent[k:] if isinstance(m, Drive)
+                and (m.left_wheel_rad_s or m.right_wheel_rad_s)]
