@@ -132,7 +132,8 @@ def test_disarm_clears_the_trip_and_the_baseline():
 
 @pytest.mark.parametrize("bad", [dict(limit_deg=0.0), dict(limit_deg=181.0), dict(limit_deg=90.0),
                                  dict(baseline_spread_deg=8.0), dict(gap_max_s=0.2), dict(hold_s=0.05),
-                                 dict(norm_tol_frac=1.0), dict(baseline_min=1), dict(baseline_min=True)])
+                                 dict(norm_tol_frac=1.0), dict(baseline_min=1), dict(baseline_min=True),
+                                 dict(max_age_s=10 ** 400)])
 def test_the_config_refuses_settings_it_cannot_judge_with(bad):
     with pytest.raises(ValueError, match="imu_config:"):
         replace(CFG, **bad)

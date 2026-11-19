@@ -193,7 +193,11 @@ class ImuConfig:
         for name in ("limit_deg", "hold_s", "max_age_s", "gap_max_s", "baseline_spread_deg", "baseline_wait_s",
                      "norm_tol_frac", "level_tol_deg", "window_s"):
             v = getattr(self, name)
-            if isinstance(v, bool) or not (isinstance(v, (int, float)) and math.isfinite(v) and v > 0):
+            try:
+                ok = not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v) and v > 0
+            except OverflowError:
+                ok = False  # an integer too large for a float (5b round 9 P3)
+            if not ok:
                 raise ValueError(f"imu_config:{name}")
         if isinstance(self.baseline_min, bool) or not (isinstance(self.baseline_min, int) and self.baseline_min >= 2):
             raise ValueError("imu_config:baseline_min")
