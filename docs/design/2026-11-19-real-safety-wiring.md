@@ -29,7 +29,7 @@
 | 5b | 4 | **수렴**(19판, Codex 9 회차) |
 | 5c-1 | 5 | **수렴**(29판, Codex 10 회차) — 머지는 11-20 보드 확인 뒤 |
 | 5c-1b | 5.1 | **수렴**(13판, Codex 13 회차) — 실차 콘솔 조작 화면, 5c-2 보다 먼저(총괄) |
-| 5c-2 | 6 | **미수렴 — 5c-2 에 들어갈 때 이 절만 검토** |
+| 5c-2 | 6 | **검토 중**(1판) — 재위치 배선, 가짜 SLAM 원천 계약. 5c 머지 뒤 main 에 맞춰 따로 PR(총괄) |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
 '가장 새 DRIVE 하나' 규칙(3 절)은 4c 의 빈틈이라 **단독 수정 PR**(`fix/real-loop-newest-drive`)로 먼저 머지한다(총괄): 미송신 옛 DRIVE 를 버린다. **반쯤 쓴 옛 DRIVE**(7 회차 P1)는 그 PR 에서 뺐다 — 반쪽을 버리는 재동기화가 실 TTY 에서는 구분자 `0x00` 으로 그 반쪽을 오히려 완성할 수 있고(그 PR 의 Codex 검토), 대기 프레임 경로도 같이 봐야 해서 **실 전송기 계약과 함께 6a** 에서 닫는다. 4c 운영 전송기는 DISARM 만 쓰므로 그동안 실차 경로는 없다. 실차 경계의 세부는 각 단계와 S10 선행 조건에서 닫는다 — 실 MCU AUTO 는 여전히 막혀 있다(총괄).
@@ -238,35 +238,38 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 
 **시험**: Node 로 `realpanel.js` — 등록 revision 의 세션 묶음·앞선 목록에서 재등록, 이 콘솔의 상태 판정, 제출 가능(래치·STOPPED·전환 대기), 전환 표시 확인, 답 열쇠, 우회 단추, 자세 변환, 우회 목록이 루프와 같음; `protocol.js` 반납 → 같은 연결 재획득. 화면 배선은 DOM 함수 단위(학교 규모).
 
-## 6. 재위치 배선
+## 6. 재위치 배선 (5c-2)
 
-> **미수렴**: 이 절은 해당 단계에 들어갈 때 그 절만 다시 검토받는다(총괄 2026-11-19). 7 회차까지의 지적은 반영돼 있으나 수렴 판정을 받지 않았다.
+> **검토 중**(5c-2, 1판). 예전 판(7 회차 지적 반영, 미수렴)을 5c-1 이 실제로 만든 요청 경로에 맞춰 줄였다: 보류 원장(`PENDING`·`settle_pending`) 대신 **즉시 답 + `real_status` 로 판정 결과**, 제출 때의 이중 보정 검사 대신 **준비 단계의 계획 요청 직전 한 곳**. 실 SLAM 링크는 PR 7 이고, 이 단계는 가짜 원천 계약으로 배선과 판정만 시험한다(총괄 2026-11-19).
 
-재위치 세대는 세 곳에서 열린다: 현장 복구 완료, hold 한도 초과(4c), MCU 재부팅(4c). 확인 경로는 하나다.
+재위치 세대는 이미 코어에서 열린다(바꾸지 않음): 현장 복구 완료(`field_recovery_done`), MCU 재부팅·같은 부팅의 오도메트리 끊김·hold 한도 초과(`require_relocalization`). 세대가 열려 있는 동안 제출은 코어의 `relocalize_required` 로 거절되고(`core_refusal`, 우회 불가 — 5 절 목록의 `core`), 텔레옵은 그대로 열려 있다. 세대를 닫는 길은 아래 3 의 확인 하나다(`core.relocalized(t, gen)`).
 
-1. **현장 복구 완료**(`recovery{recovery_id, action:"done"}`): 루프는 `core.field_recovery_done(t, recovery_id, disarmed=, outstanding=)` 를 부른다.
-   - `disarmed` = 허가의 **가장 새 DISARM 이 정확한 seq 로 답을 받음**(`AutoPermit.disarm_confirmed(now)`: 기다리는 DISARM 없음 + 신선한 DISARMED 가 그 seq 를 담음). `disarm_unconfirmed` 플래그는 시한 전까지 거짓이라 쓰지 않는다(적대 P1-6).
-   - `outstanding` = 포트가 `settled` 가 아님. 거절 사유는 콘솔 응답 사유가 된다.
-2. **옛 증거 폐기**(세대가 열릴 때마다, 2 회차 P2-6):
-   - 루프: 정지 표본·원시 오도메트리 이력·제어 자세 이력·D5 프레임.
-   - 층: **격자에 보관된 스캔 전체**(`ObstacleGrid` 를 새로 만듦), 대기·계산 중 작업, 설치 결과, 스캔 원천 큐의 옛 스캔. 세대가 열린 뒤 취득한 스캔만 받는다.
-   - 코어(실차 분기): SLAM hold 표식(`in_hold`, `_last_pose_hold`)과 미룬 해제. `require_relocalization`·`field_recovery_done` 의 실차 경로에서 지운다.
-   - SLAM: 원천에 `relocalize(gen)` 를 요청하고, 추적기를 새 세대로 되돌린다(`SlamPoseTracker.reset_for_relocalization(gen)` — 새 메서드, 실차만 부름: hold 와 `applied` 를 버리고 warming_up 으로, 새 세대의 첫 processed 응답이 `applied` 가 됨).
-   - **응답 거르기와 출처 보존**(3 회차 P2-5): 루프는 SLAM 원천의 응답을 `core.slam_replies()` 에 넘기기 **전에** 거른다 — 루프가 **받아들이는 원천 세대**(재위치 요청 때 올리고, 잠금이 풀려도 내리지 않음)와 **같지 않은** 세대이거나 입력 취득 시각이 그 세대 요청 전인 응답은 넘기지 않는다(셈; 4 회차 P2-5: 확인 뒤 늦게 온 옛 응답도 막힘). 확인 대기 세대와 받아들이는 원천 세대는 따로 둔다. 넘기는 `processed` 응답마다 `(세대, 보정, scan id, 입력 취득 시각)` 을 **지금 적용 보정의 출처**로 따로 보존한다. `skipped` 는 그 출처를 바꾸지 않는다(추적기의 `applied` scan id 는 `skipped` 로 바뀌지만 보정은 그대로다).
-3. **재위치 확인**(`relocalize_confirm{generation}`): 운용자가 차를 바닥 표시 시작 자세에 두고 보낸다. 콘솔 콜백은 요청을 **보류**만 하고(중재기 원장의 그 요청 키는 `PENDING`), 루프가 그 틱의 STATE·SLAM 응답·층 설치를 모두 반영한 뒤 판정해 답한다. 처리 직전에 세션·연결·lease·제어 세대를 다시 확인하고, 그 사이 STOP·DISARM·연결 상실·lease 해제가 있었으면 실행하지 않고 원래 원장 키에 거절을 확정한다(`settle_pending(key, verdict)` — 실차 설정 경로에만).
-   - **확인 시도**(6 회차 P1-4): 확인을 받으면 루프는 시도 번호를 붙여 원천에 **확인용 `processed`** 를 요청한다(`request_processed(gen, attempt, not_before=확인 수신 시각)`). 원천은 **그 시각 뒤에 첫 빔을 취득한 스캔**으로 키프레임 판정을 건너뛰고 계산하며, 응답에 시도 번호를 담는다. 큐에 있던 옛 스캔은 쓰지 않는다. 그 응답이 **기준 응답**이다.
-   - **하나의 규칙**(6 회차 P2-1): 정지 창의 기점은 기준 응답의 입력 취득 시각으로 **고정**한다(뒤의 `processed` 가 와도 기점은 바뀌지 않음). 최종 판정은 **판정 순간의 최신 적용 보정**으로 한다 — 그 보정으로 계산한 지금 후륜축 자세가 시작 허용오차 안이고, 그 보정 세대의 층 결과가 설치됐을 때. 기준 응답의 보정과 최신 보정이 같을 필요는 없다(정지한 차의 연속 `processed` 가 확인을 막지 않음).
-   - 조건 전부:
-     - 같은 세대, 요청이 세대가 열린 뒤에 옴;
-     - 그 시도의 기준 응답이 있고, 그 입력이 확인 수신 뒤 취득된 것;
-     - 기준 응답 입력 취득 뒤의 계측 구간 하한을 가진 정지 표본이 한 창을 채움;
-     - 최신 적용 보정의 출처가 받아들이는 원천 세대의 `processed` 이고, 그 입력 취득이 `SLAM_MAX_AGE_S` 안;
-     - 그 보정으로 계산한 지금 후륜축 자세가 등록 시작 자세 허용오차(위치 0.10 m, 각 5°, 잠정) 안;
-     - 그 보정 세대의 층 결과가 설치됨.
-   - 기준 응답과 정지 창을 기다리는 동안은 시한(잠정 3 s) 안에서 보류하고, 넘으면 거절을 확정한다.
-   하나라도 아니면 거절 사유를 답한다. 옛 세대·늦은 답은 아무것도 바꾸지 않는다. 확인 뒤에도 자동 재개는 없고, 다음 제출은 새 운용자 시작 확인이 필요하다.
-   - **제출 때 다시 본다**(3 회차 P1-4, 4 회차 P1-4): S10-A 의 제출은 알려진 시작에서만 하므로, 4c 의 제출 거부 조건에 `not_at_start` 를 더한다. 제출은 틱 머리(`commands.apply`)에서 받아들여지고 SLAM 응답은 제어 단계에서 적용되므로(4c 의 공통 순서, 바꾸지 않음), 판정은 **지금 적용 보정과, 원천에 도착했지만 아직 적용 안 된 가장 새 응답의 보정 둘 다로** 계산한 후륜축 자세가 모두 허용오차 안일 때만 통과다. 그리고 루프가 **첫 `known_request` 직전, 모든 재요청 직전, 채택(`job_hold`) 직전**에 그 순간의 제어 후륜축 자세로 같은 검사를 다시 하고, 밖이면 미션을 `not_at_start` 로 끝낸다(5 회차 P1-4: 제출 뒤 도착한 보정이 첫 계획을 다른 자리에서 만드는 경우).
-   - 비슷한 벽·선반 배치에서의 SLAM 오정합은 PR 5 가 막지 못한다. 운용자의 육안 확인이 그 몫이고(콘솔 문구), 정합 품질 지표는 PR 7 의 SLAM 링크가 낸다.
+1. **세대가 열림을 루프가 안다**: 매 틱 머리 처리와 콘솔 요청 처리 뒤 `core.relocalize_generation()` 이 루프가 본 값과 다르고 None 이 아니면 그 세대를 연다(`_open_relocalization(gen)`). 한 틱에 세대가 둘 올라도 마지막 것 하나만 연다.
+2. **옛 증거 폐기**(세대를 열 때 한 번):
+   - 루프: 진행 중 확인 시도와 그 결과, 정지 시작(`still_since_ns`), 운용자 시작 확인(`operator_start.void("relocalize")`). D5 프레임은 5d 에서 더한다.
+   - 층: `_reset_layer(now_ns)`(오도메트리 끊김과 같은 것: 새 격자, 설치·대기 결과 없음, 미배치 스캔과 오도메트리 이력 비움). 이력이 세대를 연 뒤부터 다시 쌓이므로 그 전에 첫 빔을 취득한 스캔은 배치되지 않는다(`place_scan` 이 첫 빔 전 이력을 요구).
+   - SLAM 원천: `slam_source.relocalize(gen)`. 루프의 **받아들이는 원천 세대**를 `gen` 으로, **세대 요청 시각** `t_gen` 을 지금 코어 시각으로 둔다(둘 다 올리기만 함).
+   - 추적기·코어(**미션이 끝난 뒤**: 미션 상태가 `idle` 이나 종료 상태가 될 때까지 미룸 — 그 사이 제출은 이미 거절된다): `tracker.reset_for_relocalization()`(새 메서드, 실차만 부름: hold 를 버리고 `warming_up` 으로, `applied`·`received` 는 남긴다 — 제어 자세 계산과 응답 시각 단조 검사가 끊기지 않게. 새 세대의 첫 `processed` 가 scan id 와 무관하게 `applied` 가 되고 `tracking` 으로 간다), `core.relocalization_reset(t)`(새 메서드: `in_hold`·`put_downs_in_hold`·`_last_pose_hold`·`end_release_due` 를 지우고 기록). 둘 다 같은 틱에, 같이.
+3. **응답 거르기와 출처**: 루프는 원천 응답을 `core.slam_replies()` 에 넘기기 전에 거른다 — 응답의 `generation`(없으면 0)이 받아들이는 원천 세대와 다르거나 `stamp_s < t_gen` 이면 넘기지 않고 센다(`relocalize_dropped`). 넘기는 `processed` 응답마다 `(세대, 시도, scan id, stamp_s)` 를 **지금 적용 보정의 출처**로 둔다. `skipped` 는 출처를 바꾸지 않는다(보정은 그대로이므로).
+4. **재위치 확인 요청** `relocalize_confirm{generation}`(5 절의 `REAL_LEASED` 에 더함, 필드 검사 `generation` 정수·불리언 아님): 운용자가 차를 바닥 표시 시작 자세에 세우고, 콘솔에 정지가 보인 뒤 보낸다. 루프는 **즉시** 답한다.
+   - 거절: 열린 세대 없음 `no_relocalization`; 다른 세대 `stale_relocalization`; 추적기 초기화가 아직 미뤄짐(미션 진행 중) `mission_active`; 허가가 OFF·LATCHED 아님 `armed`; 정지 아님 `not_still`; 시작 자세가 설정에 없음 `no_start_pose`.
+   - 받음: 새 시도 번호를 붙이고(앞 시도는 버림), 원천에 `request_processed(gen, attempt, not_before=지금 코어 시각)` 를 부른다. 답은 ack `{attempt}`. 판정 결과는 아래 5 가 `real_status.relocalize` 에 낸다.
+5. **판정**(시도가 기다리는 동안 매 틱, 층 설치 뒤): 아래가 모두 참이면 `core.relocalized(t, gen)` 를 부르고 `confirmed`. 시도를 받은 지 `RELOCALIZE_WAIT_S`(잠정 3 s)가 지나도록 다 참이 아니면 그때 처음으로 거짓인 조건을 사유로 `refused`.
+   - 세대가 그대로이고 시도가 지금 것;
+   - **기준 응답**: 그 시도 번호를 단 이 세대의 `processed` 응답이 넘어왔고 그 `stamp_s` 가 시도를 받은 시각 이후(`relocalize_no_reply`);
+   - 요청 때의 정지가 끊기지 않음 — `still_since_ns` 가 요청 때 값 그대로(`relocalize_moved`);
+   - 지금 적용 보정의 출처가 이 세대의 `processed` 이고 `stamp_s` 가 `SLAM_MAX_AGE_S` 안(`relocalize_stale`). 기준 응답 뒤 다른 `processed` 가 와도 된다(정지한 차의 연속 보정이 확인을 막지 않음);
+   - 지금 제어 후륜축 자세(`hooks.slam_rear(t)`, 그 보정으로 계산)가 설정의 `start_rear` 에서 위치 0.10 m·각 5°(잠정) 안(`not_at_start`) — **우회 가능**(`start_pose`, 아래 7);
+   - 층 결과가 지금 보정 세대로 설치됨: `real_layer.installing(ignore_correction=False)` 가 거짓(`relocalize_layer`).
+   확인 뒤에도 자동 재개는 없다. 다음 제출은 새 운용자 시작 확인이 필요하다(2 에서 무효).
+6. **제출 뒤 시작 자세 검사**: S10-A 는 알려진 시작에서만 제출하므로, 루프는 준비 단계에서 **`known_request` 를 부르기 직전마다** 그 순간의 제어 후륜축 자세를 5 와 같은 허용오차로 `start_rear` 와 비교하고, 밖이면 미션을 `not_at_start` 로 끝낸다. 준비 단계는 그 틱의 SLAM 응답을 적용한 뒤이고, 보정이 바뀌어 층 세대가 달라진 계획 답은 이미 버려져 다시 요청되므로(5a, `_planning_gen`) 채택되는 계획은 늘 검사를 통과한 자세에서 나온다. 무장 전 차는 서 있으므로 주행 중 검사는 없다. `start_rear` 가 설정에 없으면 검사하지 않는다(Isaac·텔레옵 기본 불변).
+7. **우회 원칙 적용**: `start_pose` 를 5 절 `BYPASSABLE` 에 더한다(Python·JS 고정 시험 둘 다). 우회 중에는 5 의 자세 조건과 6 의 검사를 건너뛴다 — 바닥 표시와 SLAM 지도가 몇 cm 어긋난 현장에서 운용자가 육안으로 확인하고 진행할 수 있게. 확인 전체를 건너뛰는 우회는 두지 않는다: 남은 조건(새 세대의 응답, 정지, 층 설치)은 운용자 판단을 거절하는 검사가 아니라 **자세가 존재하기 위한 조건**이고, 차를 들어 옮긴 뒤의 옛 자세로 계획하면 우회할 판단 자체가 없다.
+8. **상태**: `real_status.relocalize = {generation, attempt, state, reason, start_pose_m, start_pose_deg}` — `state ∈ {idle, waiting, confirmed, refused}`, 거리·각은 마지막 판정 때 `start_rear` 와의 차이(운용자가 우회를 판단할 근거). 기존 `relocalize_generation` 은 그대로 둔다.
+9. **콘솔**(5.1 패널에 한 칸): 세대가 열려 있으면 "재위치 확인" 단추(`relocalize_confirm{generation: real_status.relocalize_generation}`)와 `state`·`reason`·거리·각을 보인다. 단추는 5.1 의 눌림 기록·한 번 해석 규칙을 그대로 따른다. 비슷한 벽·선반 배치에서의 SLAM 오정합은 PR 5 가 막지 못한다 — 운용자의 육안 확인이 그 몫이고(패널 문구), 정합 품질 지표는 PR 7 의 SLAM 링크가 낸다.
+
+**가짜 SLAM 원천 계약**(PR 7 의 실 원천도 지켜야 함): `replies(now_ns)` 는 지금처럼 `(reply, meta, sent_mono, received_mono)` 를 내고, 실차 원천의 `reply` 는 `generation`·`attempt`(없으면 None) 를 단다. `stamp_s` 는 스캔 첫 빔 취득 시각을 코어 시각축으로 옮긴 값이다. `relocalize(gen)`: 큐의 옛 스캔을 버리고 그 뒤 응답에 `gen` 을 단다. `request_processed(gen, attempt, not_before)`: 첫 빔이 `not_before` 이후인 스캔 하나를 키프레임 판정 없이 계산해 `processed` 로, `attempt` 를 달아 낸다. 다른 세대의 요청은 무시한다.
+
+**시험**(5c-2, 가짜 트럭 + 가짜 원천): 현장 복구 완료 → 세대 열림 → 옛 증거 폐기(층 새 격자, 추적기 `warming_up`, 코어 hold 표식 없음) → 옛 세대·`t_gen` 전 응답이 넘어가지 않음 → 확인 요청 → 기준 응답 → `confirmed` → 제출 가능; 각 거절·`refused` 사유; 시도 중 움직임 `relocalize_moved`; 시도 중 새 세대가 열리면 그 시도는 버려짐; 미션 중 열린 세대(hold 한도)는 미션이 끝난 뒤에야 추적기를 되돌림; `start_pose` 우회로 0.15 m 어긋난 자세에서 확인되고 우회 표시, 새 세션에서 사라짐; 준비 단계 `not_at_start`; `start_rear` 가 없는 설정·Isaac 경로 불변(새 메서드를 부르지 않음, `SlamPoseTracker` 기본 동작 시험 그대로).
 
 ## 7. 정지 뒤 출발과 포켓 구간 — 두 방향 질의
 
