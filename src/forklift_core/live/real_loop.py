@@ -148,7 +148,8 @@ class RealLoop:
         self.steering_command = None
         self.records: list = []
         self.depth_source = depth_source  # frames(now_ns) -> [frame(stamp_s, depth, mission_gen, phase, correction)]
-        self.pose_history: deque = deque(maxlen=64)  # (t, rear, continuous) per tick, for a frame's own pose
+        # (t, rear, continuous, speed bound, lift) per tick: a depth frame's own pose and motion at its acquisition
+        self.pose_history: deque = deque(maxlen=64)
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
         self.operator_start = operator_start  # the operator's physical check, one submit only (4b design 2, 13)
@@ -376,7 +377,9 @@ class RealLoop:
         core.slam_replies(t, replies, ms.phase in ("lift", "extract", "transport", "lower"))
         rear = np.asarray(core.hooks.slam_rear(t), dtype=float)
         core.hooks.set_rear(rear)
-        self.pose_history.append((t, tuple(float(v) for v in rear), self.odom_continuous))
+        lift_ = self._measured_lift()
+        self.pose_history.append((t, tuple(float(v) for v in rear), self.odom_continuous,
+                                  max(abs(self.speed.signed_mps), self.speed.bound_mps), lift_))
         self._feed_depth(now_ns, t)
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
@@ -525,12 +528,13 @@ class RealLoop:
             if stamp > t + 1e-6 or stamp <= float(getattr(check, "last_new_s", -math.inf)) \
                     or t - (stamp - lag) > max_age:
                 continue
-            rear_at = self._pose_at(stamp)
-            if rear_at is None:
-                continue  # no continuous pose interval covers it
-            lift = self._measured_lift()
-            out = check.add_frame(stamp, frame.depth, rear_at, speed_mps=abs(self.speed.signed_mps),
-                                  yaw_rate_rps=0.0, lift_m=0.0 if lift is None else lift)
+            at_ = self._pose_at(stamp)
+            if at_ is None:
+                continue  # no continuous pose interval covers it (or no valid lift then)
+            rear_at, speed_at, yaw_rate_at, lift_at = at_
+            # the frame's own motion and lift at its acquisition, not this tick's (Codex 4c impl P1-15)
+            out = check.add_frame(stamp, frame.depth, rear_at, speed_mps=speed_at, yaw_rate_rps=yaw_rate_at,
+                                  lift_m=lift_at)
             pocket["frames_read"] = pocket.get("frames_read", 0) + 1
             still_from = None if self.still_since_ns is None else self._t(self.still_since_ns)
             if (pocket.get("await_still_frame") and (out or {}).get("new") and self._wait_started_s is not None
@@ -540,13 +544,27 @@ class RealLoop:
                 pocket["still_frame_s"] = stamp
 
     def _pose_at(self, stamp: float):
-        h = [e for e in self.pose_history]
-        for (t0, p0, c0), (t1, p1, c1) in zip(h, h[1:]):
+        """The pose interpolated at ``stamp`` over a continuous interval, with the motion bounding it: the larger
+        speed bound of its two ends, the interval's yaw rate (at least the bound of either neighbouring interval) and
+        the lift nearer in time -- None when no continuous interval covers it or the lift was not valid then."""
+        h = list(self.pose_history)
+
+        def rate(i):
+            if i < 0 or i + 1 >= len(h) or not (h[i][2] and h[i + 1][2]) or h[i + 1][0] <= h[i][0]:
+                return 0.0
+            d = h[i + 1][1][2] - h[i][1][2]
+            return abs(math.atan2(math.sin(d), math.cos(d))) / (h[i + 1][0] - h[i][0])
+
+        for i, ((t0, p0, c0, v0, l0), (t1, p1, c1, v1, l1)) in enumerate(zip(h, h[1:])):
             if t0 <= stamp <= t1 and c0 and c1:
                 a = 0.0 if t1 <= t0 else (stamp - t0) / (t1 - t0)
-                return tuple(p0[i] + a * (p1[i] - p0[i]) for i in range(3))
-        if h and abs(h[-1][0] - stamp) < 1e-9 and h[-1][2]:
-            return h[-1][1]
+                lift = l0 if a < 0.5 else l1
+                if lift is None:
+                    return None
+                return (tuple(p0[k] + a * (p1[k] - p0[k]) for k in range(3)), max(v0, v1),
+                        max(rate(i - 1), rate(i), rate(i + 1)), float(lift))
+        if h and abs(h[-1][0] - stamp) < 1e-9 and h[-1][2] and h[-1][4] is not None:
+            return h[-1][1], h[-1][3], rate(len(h) - 2), float(h[-1][4])
         return None
 
     def _unsupported(self) -> str | None:
