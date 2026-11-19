@@ -50,7 +50,9 @@ HOOKS: dict[str, tuple[HookClass, bool]] = {  # noqa: RUF012
     "beam_angles": (_C, False), "laser_mount": (_C, False), "fork_blades": (_C, False),
     "near_fork_geometry": (_C, False), "near_tracker_config": (_C, False), "near_tracker_create": (_C, False),
     "tracking_frame": (_C, False), "detect_pockets": (_C, False), "detect_pockets_expected": (_C, False),
-    "build_pocket_check": (_C, False), "known_pocket_frame": (_C, False), "perception_capture": (_C, False), "trace_ground": (_C, True),
+    "build_pocket_check": (_C, False), "known_pocket_frame": (_C, False),
+    "perception_capture": (_C, False), "trace_ground": (_C, True),
+    "build_bypass_pocket_check": (_C, True),  # 5d: the real truck's D5 bypass only (never in the simulation)
     "far_recognition": (_C, True), "far_recognition_cancel": (_C, True), "far_recognition_mission_end": (_C, True),
     "far_recognition_poll": (_C, False), "far_recognition_submit": (_C, True), "far_recognition_zone": (_C, True),
     # control: cusp and live

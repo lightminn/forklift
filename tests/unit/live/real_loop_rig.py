@@ -700,5 +700,23 @@ class _OkCheck:
     def summary(self):
         return {}
 
-    def add_frame(self, *a, **k):
+    def add_frame(self, stamp=None, *a, **k):
+        if stamp is not None:
+            self.last_new_s = float(stamp)  # 5d (7.3): the frame's acquisition, as the real check keeps it
         return {"new": True}
+
+
+class DirCheck(_OkCheck):
+    """5d (design 7.1): a pocket check answering per direction -- ``allow[d]`` (m/s, inf by default) -- recording every
+    query (time, direction, speed)."""
+
+    def __init__(self):
+        super().__init__()
+        self.allow = {1: math.inf, -1: math.inf}
+        self.reason = {1: "ok", -1: "ok"}
+        self.calls = []
+
+    def limit(self, now_s, rear, kappa, direction, speed, lift):
+        self.calls.append((float(now_s), int(direction), float(speed)))
+        a = self.allow[1 if direction >= 0 else -1]
+        return a, self.reason[1 if direction >= 0 else -1] if a < math.inf else "ok"

@@ -86,12 +86,15 @@ def test_an_unconfirmed_control_stop_disarms_after_its_limit():
     assert r.permit.reason in ("control_stop_unconfirmed", "control_stop_unauthorized", "authorization_revoked")
 
 
-def test_the_real_encoder_model_blocks_the_restart_after_the_first_frame_stand():
+def test_the_real_encoder_model_restarts_after_the_first_frame_stand_when_d5_answers_both_ways():
+    """5d (real safety wiring design 7.1): the encoder model still leaves both directions after the stand; the D5
+    check is asked both ways (here: both clear) -- the old direction_unsure stop is gone and the insert goes on."""
     r = Rig(frames=True, direction_evidence=False)
     r.start()
     r.submit()
-    run_until(r, lambda rec: r.permit.state == ra.LATCHED)
-    assert "direction_unsure" in str(r.core.commands.end_reason)
+    run_until(r, lambda rec: r.core.ms.phase in ("insert", "lift") or r.permit.state == ra.LATCHED, 6000)
+    assert r.core.ms.phase in ("insert", "lift"), r.core.commands.end_reason
+    assert "direction_unsure" not in str(r.core.commands.end_reason)
 
 
 def test_an_unsupported_state_latches_before_it_acts():

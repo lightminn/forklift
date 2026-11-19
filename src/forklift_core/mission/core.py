@@ -507,7 +507,8 @@ class MissionCore:
             # docs/plans/2026-10-28-exit-prefix-extract-rules.md D1: once per extract, armed at the first permission
             # tick of the transport (after the install's arm_docking split)
             self._exit_latch = {"state": "pending", "transition_s": float(t)}
-        if next_phase == "insert" and pocket["check"] is not None:
+        if next_phase == "insert" and pocket["check"] is not None and not (
+                self._real_vehicle() and getattr(pocket["check"], "bypass", False)):  # 5d: no depth to wait for
             # D5: one frame taken standing at the approach end before the forks
             # go in. From there the strip before the face is in view; driving in,
             # the frames erode by the speed and, close up, the strip leaves the
@@ -1553,6 +1554,23 @@ class MissionCore:
             pocket.pop("first_frame_still_since", None)  # the still span ends wherever the truck is (Codex 4b P2)
         if self.trackers["approach"].remaining_to_goal_m() > self.geometry.alignment_straight_m + self.KNOWN_FRAME_LEAD_M:
             return None
+        if self._real_vehicle() and getattr(self, "d5_bypassed", False):
+            # 5d (real safety wiring design 7.2): the operator's D5 bypass -- no depth frame: the bypass check, built
+            # by the hook without side effects, registered first, then the exemption (a failure in between leaves a
+            # registered check, so the collection clears the exemption)
+            axis_ = float(self.paths["approach"].poses[-1][2])
+            check_ = hooks.build_bypass_pocket_check(axis_, pocket["planning_pickup"])
+            pocket["check"] = check_
+            region_ = check_.region_control()
+            self.obstacle["layer"].exempt = region_
+            self.state.setdefault("pocket_check", {})["first_frame"] = {"source": "d5_bypass", "taken_s": float(t)}
+            self.state.setdefault("d5_bypass_check", []).append(
+                {"t": float(t), "region": [float(v) for v in region_], "axis_yaw": axis_,
+                 "pallet": [float(pocket["planning_pickup"].x_m), float(pocket["planning_pickup"].y_m),
+                            float(pocket["planning_pickup"].yaw_rad)]})
+            pocket.pop("first_frame_since", None)
+            pocket.pop("first_frame_still_since", None)
+            return 0.0, "pocket_first_frame"  # registered: the next tick runs under the bypass check
         since_ = pocket.setdefault("first_frame_since", float(t))
         hooks.require(self.commands.work_elapsed(since_, t) < self.KNOWN_FRAME_WAIT_S,
                       "pocket_stop in approach: pocket_first_frame")  # checked before a late frame is taken
@@ -1620,10 +1638,16 @@ class MissionCore:
             if self.exit_exempt_open():
                 self.exit_exempt_set_region(rear, kappa)
         self._note_release_standing(rear)  # the start-band release's anchor (a no-op with it off)
-        allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(lambda d_, cap_: obstacle["layer"].limit(
-            t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
-            direction=d_, loaded=loaded, cap_mps=cap_,
-        ), speed_, direction, max(abs(requested_speed), speed_.bound_mps))
+        # 5d (design 7.1 6): the real truck asks the layer's evidence at the latest write of this tick's DRIVE; the
+        # simulation's call is as recorded (no new argument)
+        ev_kw_ = {"evidence_s": float(t) + self.WRITE_MARGIN_S} if self._real_vehicle() else {}
+
+        def layer_fn_(d_, cap_):
+            return obstacle["layer"].limit(t, current_pose=tuple(float(v) for v in rear), curvature_inv_m=kappa,
+                                           direction=d_, loaded=loaded, cap_mps=cap_, **ev_kw_)
+
+        allowed, why, motion_hold_, directions_, unsure_ = self._direction_limits(
+            layer_fn_, speed_, direction, max(abs(requested_speed), speed_.bound_mps))
         if direction is None:
             direction = directions_[0]  # what the rest of the tick records (unsure: the first checked)
         # the layer latency budget (plan 2026-11-11): a watchdog stop over overdue_end_s in a row ends the mission; a
@@ -1706,17 +1730,16 @@ class MissionCore:
             # permission too; inside the pallet region the depth check
             # answers (its region is waived in the grid only while set).
             acting = True
+            real_ = self._real_vehicle()
+            # 5d (design 7.2): the real truck's D5 bypass check (read only on the real truck: a recorded Isaac check
+            # proxy answers no new attribute read)
+            bypass_ = real_ and pocket["check"] is not None and getattr(pocket["check"], "bypass", False)
             if pocket["check"] is None:
                 allowed, why = 0.0, "pocket_missing"
-            elif unsure_:
-                # 4d-1 (real truck only): the pocket check answers one direction and the layer waives the pocket
-                # region, so a residual motion the other way is not covered -- stop, a hold whatever the obstacle
-                # switch says (Codex 4d-1 3rd P1, 4th P1)
-                allowed, why, speed_hold_ = 0.0, "direction_unsure", True
             elif pocket.get("await_still_frame"):
                 allowed, why = 0.0, "pocket_settle"
             elif (
-                ms.phase == "approach" and not pocket.get("mid_still_done")
+                ms.phase == "approach" and not pocket.get("mid_still_done") and not bypass_
                 and trackers[ms.phase].remaining_to_goal_m() <= 0.45
             ):
                 # D5: one standing frame with the camera about 1.2 m from
@@ -1727,6 +1750,23 @@ class MissionCore:
                 pocket["mid_still_done"] = True
                 pocket["await_still_frame"] = True
                 allowed, why = 0.0, "pocket_settle"
+            elif real_:
+                # 5d (design 7.1): every possible direction, whatever their number (the old direction_unsure stop is
+                # replaced by the per-direction answers)
+                allowed, why, hold_ = self._pocket_query(t, rear, kappa, requested_speed, speed_,
+                                                         float(hooks.lift_position()), allowed, why, layer_fn_)
+                speed_hold_ = speed_hold_ or hold_
+                if ms.phase == "approach" and not pocket.get("mid_still_done") and not bypass_:
+                    cap = max(0.05, math.sqrt(2.0 * options.mid_still_decel_mps2
+                                              * max(0.0, trackers[ms.phase].remaining_to_goal_m() - 0.45)))
+                    if cap < allowed:
+                        allowed, why = cap, "pocket_settle_brake"  # the planned standing frame's brake (as below)
+                if why not in ("ok", "pocket_settle_brake") and pocket.get("last_reason") != why:
+                    pocket["last_reason"] = why  # a stop that ends the run leaves its evidence (as below)
+                    state.setdefault("pocket_check", {}).update(
+                        pocket["check"].summary(), frames_read=pocket.get("frames_read", 0), last_reason=why,
+                        last_reason_s=t, last_reason_rear=[float(v) for v in rear],
+                    )
             else:
                 lp, wp = pocket["check"].limit(
                     t, tuple(float(v) for v in rear), kappa, direction,
@@ -6746,21 +6786,7 @@ class MissionCore:
             d_ = direction if direction is not None else speed.directions[0]
             allowed, why = limit_fn(d_, cap_mps)
             return allowed, why, False, [d_], False
-        motion = {}
-        if speed.bound_mps > 0.0:
-            for d_ in speed.directions:
-                motion[d_] = speed.bound_mps
-        commanded = self._commanded_now()
-        if commanded != 0.0:
-            c_ = 1 if commanded > 0 else -1
-            motion[c_] = max(motion.get(c_, 0.0), abs(commanded))
-        # docs/design/2026-11-19-real-loop.md 2.5: the real loop's outputs that may still act, by direction -- only the
-        # real loop records them; without the record (the teleop bridge's copy of this rule) everything is as before
-        state_ = getattr(self, "state", None) or {}
-        residual = {int(d_): float(v_) for d_, v_ in (state_.get("outstanding_motion") or {}).items()
-                    if float(v_) > 0.0}
-        for d_, v_ in residual.items():
-            motion[d_] = max(motion.get(d_, 0.0), v_)
+        motion, residual = self._possible_motion(speed)
         possible = set(motion) | ({direction} if direction is not None else set())
         if direction is not None:
             # the asked direction at the larger of the request and what the loop's outputs may still do that way
@@ -6783,6 +6809,63 @@ class MissionCore:
         if hold and isinstance(getattr(self, "state", None), dict):
             self.state["motion_hold"] = why  # the real loop's wait frame: wheels 0 and the old queue dropped (P1-4)
         return allowed, why, hold, driving, len(possible) > 1
+
+    def _possible_motion(self, speed: SafetySpeed) -> tuple[dict, dict]:
+        """The real truck's motion it may have unasked, by direction (4d-1; shared by ``_direction_limits`` and the
+        real pocket query, real safety wiring design 7.1): every direction the measured speed may have at its bound,
+        the command still in effect at its magnitude, the loop's outputs that may still act -- the largest of them
+        per direction. Returns (motion, residual): ``residual`` the loop's outputs alone."""
+        motion = {}
+        if speed.bound_mps > 0.0:
+            for d_ in speed.directions:
+                motion[d_] = speed.bound_mps
+        commanded = self._commanded_now()
+        if commanded != 0.0:
+            c_ = 1 if commanded > 0 else -1
+            motion[c_] = max(motion.get(c_, 0.0), abs(commanded))
+        # docs/design/2026-11-19-real-loop.md 2.5: the real loop's outputs that may still act, by direction -- only the
+        # real loop records them; without the record (the teleop bridge's copy of this rule) everything is as before
+        state_ = getattr(self, "state", None) or {}
+        residual = {int(d_): float(v_) for d_, v_ in (state_.get("outstanding_motion") or {}).items()
+                    if float(v_) > 0.0}
+        for d_, v_ in residual.items():
+            motion[d_] = max(motion.get(d_, 0.0), v_)
+        return motion, residual
+
+    # the latest instant a DRIVE decided this tick may be written (the real loop's SLOW_TICK_S + EVIDENCE_READ_MAX_S;
+    # a test pins the sum): the real truck's permission asks the evidence there (real safety wiring design 7.1 6)
+    WRITE_MARGIN_S = 0.035
+
+    def _pocket_query(self, t: float, rear, kappa: float, requested_speed: float, speed_: SafetySpeed, lift: float,
+                      allowed: float, why: str, layer_fn):
+        """The real truck's pocket query (design 7.1 2-4): every possible direction asked at its own speed (the asked
+        one at the larger of the request and its possible speed), at the write margin; a possible motion a direction
+        does not allow holds (the asked one's layer asked again at its possible speed too). Returns (allowed, why,
+        hold)."""
+        check = self.pocket["check"]
+        t_q = float(t) + self.WRITE_MARGIN_S
+        motion, _ = self._possible_motion(speed_)
+        req = None if requested_speed == 0.0 else (1 if requested_speed > 0 else -1)
+        dirs = sorted(set(motion) | ({req} if req is not None else set()))
+        hold_why, req_lim = None, (math.inf, "ok")
+        for d_ in dirs:
+            poss = motion.get(d_, 0.0)
+            v_ = max(abs(requested_speed), poss) if d_ == req else poss
+            a_, w_ = check.limit(t_q, tuple(float(v) for v in rear), kappa, d_, v_, lift)
+            if d_ == req:
+                req_lim = (a_, w_)
+            if a_ < poss and hold_why is None:
+                hold_why = w_ if w_ != "ok" else ("residual_over_allowed" if d_ == req else "pocket_other_direction")
+        if hold_why is None and req is not None and motion.get(req, 0.0) > 0.0:
+            la_, lw_ = layer_fn(req, motion[req])  # outside the region: the asked direction's possible motion too
+            if la_ < motion[req]:
+                hold_why = lw_ if lw_ != "ok" else "residual_over_allowed"
+        if hold_why is not None:
+            self.state["motion_hold"] = hold_why
+            return 0.0, hold_why, True
+        if req_lim[0] < allowed:
+            allowed, why = req_lim
+        return allowed, why, False
 
     def _residual_speed(self, direction) -> float:
         """The real loop's output that may still act in ``direction`` (0 in the simulation: no such record)."""

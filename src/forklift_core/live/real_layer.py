@@ -469,17 +469,21 @@ class RealLayer:
         return self._installed["key"] != cur
 
     def limit(self, now_s: float, *, current_pose, curvature_inv_m: float, direction: int, loaded: bool,
-              cap_mps: float, ignore_correction: bool | None = None):
+              cap_mps: float, ignore_correction: bool | None = None, evidence_s: float | None = None):
+        """``evidence_s`` (5d, design 7.1 6): the instant the evidence must still hold at -- the scans' and the FREE
+        evidence's ages are judged there (the latest write of this tick's DRIVE); the installs and the watchdog's
+        deadlines, which change state, at ``now_s``. None: ``now_s`` (as before)."""
+        ev = float(now_s) if evidence_s is None else float(evidence_s)
         if self.installing(ignore_correction):
             return 0.0, "snapshot_installing"
         newest = self._installed["newest_scan_s"]
-        if not self.timing_bypassed and (newest is None or now_s - newest > self.scan_max_age_s):
+        if not self.timing_bypassed and (newest is None or ev - newest > self.scan_max_age_s):
             return 0.0, "scan_stale"
         watch_ = self.watchdog(now_s)
         if watch_ is not None:
             return 0.0, watch_
         footprint, own = self.footprints(loaded, direction)
-        return self.permission.allowed_speed(now_s, self.last_scan_s, current_pose=current_pose,
+        return self.permission.allowed_speed(ev, self.last_scan_s, current_pose=current_pose,
                                              curvature_inv_m=curvature_inv_m, direction=direction,
                                              footprint=footprint, own_footprint=own, speed_cap_mps=cap_mps)
 

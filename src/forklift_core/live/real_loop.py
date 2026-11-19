@@ -46,6 +46,7 @@ MAX_STATES_PER_TICK = 64
 EVIDENCE_READ_MAX_S = 0.005  # the first byte's evidence read must take no longer (its ages are judged at its start)
 ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R  # contract 3.3
 SAMPLES_KEPT = 128
+WRITE_MARGIN_S = SLOW_TICK_S + EVIDENCE_READ_MAX_S  # 5d (7.1 6): the latest write of a tick's DRIVE (core.WRITE_MARGIN_S)
 # 5c-2 (docs/design/2026-11-19-real-safety-wiring.md 6): relocalization
 RELOCALIZE_WAIT_S = 3.0  # an attempt's limit from its acceptance (provisional)
 START_TOL_M = 0.10  # the registered start's tolerance (provisional)
@@ -132,7 +133,8 @@ class RealSession:
 
 
 # real safety wiring design 5 (5c-1): the checks the operator may bypass for the session, and the names refused
-BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel", "start_pose")  # start_pose: 5c-2 (6, 7)
+BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel", "start_pose",  # start_pose: 5c-2 (6, 7)
+                                    "d5_pocket")  # 5d (7.2)
 NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale", "link_stuck", "layer_worker",
                   "obstacle_layer", "overspeed", "loop_slow", "worker", "baseline", "core",
                   "relocalize")  # relocalize: the declaration's session mark is no toggle (5c-2, 7b)
@@ -301,6 +303,7 @@ class RealLoop:
         if self.real_layer is not None:
             self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
             self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
+        self.core.d5_bypassed = "d5_pocket" in self._tick_bypass  # 5d (7.2): read by the core's first-frame stand
 
     def _apply_pending(self, now_ns: int) -> None:
         for check, on, lease_id in self._bypass_pending:
@@ -485,8 +488,8 @@ class RealLoop:
 
     def _speed_cap(self) -> float:
         """The rear-axle command cap: 0.06 m/s while slam is bypassed or the session carries a declaration (6, 7b)."""
-        if "slam" in self._tick_bypass or self._declared():
-            return min(self.max_speed_mps, self.declared_speed_mps)
+        if "slam" in self._tick_bypass or "d5_pocket" in self._tick_bypass or self._declared():
+            return min(self.max_speed_mps, self.declared_speed_mps)  # 5d: the D5 bypass keeps the insertion's low speed
         return self.max_speed_mps
 
     def _tracker(self):
@@ -1026,6 +1029,7 @@ class RealLoop:
         self._rec = rec
         self._lift_before = None
         self._written_now = []  # the seqs written whole in this tick, in order
+        self._stop_decided = False  # 5d (7.1 6): this tick decided a stop or a wait (no moving continuation then)
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -1280,6 +1284,7 @@ class RealLoop:
 
     def _emergency(self, now_ns: int, reason: str) -> None:
         self.waiting = None
+        self._stop_decided = True  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
             return  # latched already: its DISARM is retried every 100 ms, not renewed each tick (round 2 P2-2)
         # a mission the permit does not collect yet (before its ARM) ends with any latch, whatever the cause (5a,
@@ -1481,7 +1486,11 @@ class RealLoop:
         kappa = float(self.kin.held_curvature((self._measured_steering() or 0.0,)) or 0.0)
         obstacle_hold = False
         if (not paused_ and core.obstacle is not None and ms.phase in core.trackers and not plan_wait_
-                and (requested_speed != 0.0 or abs(self.speed.signed_mps) > 0.05)):
+                and (requested_speed != 0.0 or abs(self.speed.signed_mps) > 0.05 or (
+                    # 5d (design 7.1 5): under a pocket check (the bypass check too) a remaining output or a possible
+                    # motion is asked about even with no request
+                    core.pocket.get("check") is not None
+                    and (bool(core.state.get("outstanding_motion")) or self.speed.bound_mps > 0.0)))):
             perm_ = core.permission(t, rear, kappa, requested_speed, False, None)
             requested_speed, obstacle_hold = perm_.requested_speed, perm_.obstacle_hold
         elif (plan_wait_ or paused_) and core.obstacle is not None and not paused_:
@@ -1515,8 +1524,8 @@ class RealLoop:
         and inside the still span."""
         core, pocket = self.core, self.core.pocket
         check = pocket.get("check")
-        if self.depth_source is None or check is None:
-            return
+        if self.depth_source is None or check is None or getattr(check, "bypass", False):
+            return  # 5d (7.2): under the D5 bypass the depth source is not read at all
         if pocket.get("await_still_frame"):
             if self._wait_started_s is None:
                 self._wait_started_s = t
@@ -1740,6 +1749,7 @@ class RealLoop:
         return getattr(self, "_wait_reason", None)
 
     def _wait_frame(self, now_ns: int, rec: TickRecord | None) -> None:
+        self._stop_decided = True  # 5d (7.1 6)
         port = self.port
         if self._lift_before is not None:
             # the output holds: this tick's lift ramp step is undone, whichever stage chose the wait (round 7 P2-2)
@@ -1787,6 +1797,8 @@ class RealLoop:
         if speed != 0.0 and may.get(-1 if speed > 0 else 1, 0.0) > 0.0:
             drive = self.kin.command(0.0, float(drive.curvature_inv_m))  # the turn waits for the other way to settle
             speed = 0.0
+        if speed == 0.0:
+            self._stop_decided = True  # 5d (7.1 6): a zero DRIVE is this tick's stop
         lift = float(self.core.ms.lift_command)
         cmd = port.make_command(now_ns, now_ns + int(DRIVE_LIFE_S * 1e9), drive, steer, lift, "target")
         r = port.command(cmd, now_ns)
@@ -1905,6 +1917,9 @@ class RealLoop:
             if expires is not None and ns >= int(expires):
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             booked = next((f for f in self.book.frames if f.seq == seq), None)
+            moving_ = booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
+            if moving_ and self._stop_decided and frame is getattr(self.transport, "partial_frame", None):
+                return "stop_decided", "wait"  # 5d (7.1 6): this tick stops -- no older moving frame finished first
             if (booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
                     and self._moved_for != self.core.commands.mission_id and self._off_start(self._rear_now)):
                 return "not_at_start", "alarm"  # 5c-2 (6, 6): at the first byte and a continuation alike
@@ -1915,6 +1930,13 @@ class RealLoop:
                     return why, "wait"
                 if (ns - now_ns) / 1e9 > SLOW_TICK_S:
                     return "tick_slow", "wait"
+            if moving_:
+                # 5d (7.1 6): the write bound read last -- the earlier of the instant the authority and the readiness
+                # were judged at (ns) and the decision's own evidence instant (decision + W); a continuation refused
+                # here is link_stuck by the gate's rule
+                decided = int(booked.expires_ns) - int(DRIVE_LIFE_S * 1e9)
+                if int(self.clock()) > min(ns, decided + int(WRITE_MARGIN_S * 1e9)):
+                    return "write_late", "wait"
             return None, None
 
         def gate(frame, write) -> bool:
