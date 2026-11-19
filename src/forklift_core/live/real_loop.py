@@ -661,7 +661,8 @@ class RealLoop:
             self._emergency(now_ns, layer_stop)
             if cmds.status in ("accepted", "preparing"):
                 self._end_now(now_ns, layer_stop)  # a preparation the latch does not collect (design 3)
-            if layer_stop == "layer_latency_exceeded" and self.permit.state in (ra.LATCHED, ra.DISARMING):
+            if layer_stop == "layer_latency_exceeded" and self.permit.state in (ra.LATCHED, ra.DISARMING) \
+                    and hasattr(layer_, "end_taken"):
                 layer_.end_taken()  # latched on it: the next result's deadlines start afresh (a rearm follows)
             return
         if self.real_layer is not None and (not getattr(core.options, "obstacle_act", False)
