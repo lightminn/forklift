@@ -211,6 +211,15 @@ class RealPlantPort:
             out.append(w["expires_ns"])
         return out
 
+    def hold_frame(self, *, steering_rad: float, lift_m: float, now_ns: int, expires_ns: int) -> PortResult:
+        """An output wait's frame (docs/design/2026-11-19-real-loop.md 2.5 ③): wheels 0 at the wait's own steering
+        and lift target, on the same generation (the wait's entry made its new one with ``control_stop``); a queued
+        hold not yet written is replaced by this one (the newest only). Not the intent: a wait never extends a
+        decision. A lift target away from the measured lift counts as motion (``lift_motion_counts``)."""
+        self.host.drop_drives("hold_refresh")
+        return self._submit(RearDrive(0.0, 0.0, 0.0, 0.0, float(steering_rad), False), float(lift_m), "target",
+                            int(expires_ns), now_ns)
+
     def outstanding(self, now_ns: int) -> tuple:
         """The AUTO permit's evidence (real assembly design 7): ("unknown", None) before any STATE, ("pending", None)
         while a command that may still act is queued, being written or written and unsettled, else ("settled",

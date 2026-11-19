@@ -86,3 +86,18 @@ def test_a_partly_written_frame_counts_until_its_expiry():
     b.port.command(b.cmd(speed=0.3, kappa=0.0), b.now)
     f = b.host.next_frame(b.now)  # handed to the adapter: in flight, not finished
     assert f is not None and b.port.outstanding(b.now)[0] == "pending"
+
+
+def test_a_hold_frame_stays_on_the_generation_keeps_one_unsent_and_counts_a_lift_away_from_the_measure():
+    """docs/design/2026-11-19-real-loop.md 2.5 ③: the wait's own target, refreshed on the same generation."""
+    b = armed()
+    gen = b.port.control_gen
+    r1 = b.port.hold_frame(steering_rad=0.01, lift_m=0.0, now_ns=b.now, expires_ns=b.now + 100 * MS)
+    r2 = b.port.hold_frame(steering_rad=0.01, lift_m=0.0, now_ns=b.now, expires_ns=b.now + 120 * MS)
+    assert r1.kind == r2.kind == "queued" and b.port.control_gen == gen
+    msgs = b.drain()
+    assert len(msgs) == 1 and (msgs[0].left_wheel_rad_s, msgs[0].right_wheel_rad_s) == (0.0, 0.0)  # the newest only
+    assert b.written()[-1]["nonzero"] is False  # at the measured lift: no motion
+    b.port.hold_frame(steering_rad=0.01, lift_m=0.05, now_ns=b.now, expires_ns=b.now + 100 * MS)  # 5 cm away
+    b.drain()
+    assert b.written()[-1]["nonzero"] is True
