@@ -1,0 +1,52 @@
+"""docs/design/2026-11-19-real-safety-wiring.md 2: ObstacleGrid.snapshot(suppress=) -- the planning grid's split of a
+registered pallet's returns. Normal finite hits whose end point lies in a suppress rectangle do not mark; clearing,
+the bounds and the near sector are untouched; None (the default) is the snapshot as before, byte for byte."""
+
+import math
+
+import numpy as np
+
+from forklift_core.perception.obstacle_grid import FREE, OCCUPIED, ObstacleGrid
+
+from test_obstacle_grid import cell, config, scan, wall_ranges
+
+
+def grid_with(*scans):
+    g = ObstacleGrid(config())
+    for s in scans:
+        g.add_scan(s)
+    return g
+
+
+def test_none_is_the_snapshot_as_before_byte_for_byte():
+    g = grid_with(scan(0.0, wall_ranges()), scan(0.1, wall_ranges(2.5)))
+    a = g.snapshot(0.15, (0.0, 0.0, 0.0))
+    b = g.snapshot(0.15, (0.0, 0.0, 0.0), suppress=None)
+    assert np.array_equal(a.state, b.state)
+    assert np.array_equal(np.nan_to_num(a.free_stamp, nan=-1.0), np.nan_to_num(b.free_stamp, nan=-1.0))
+
+
+def test_returns_inside_the_rectangle_do_not_mark_and_the_rest_still_do():
+    g = grid_with(scan(0.0, wall_ranges()))
+    # the wall at x = 3 spans y in about +-2.5; suppress its middle metre (a pallet face there)
+    rect = (3.0, 0.0, 0.0, 0.15, 0.5)  # centre x, y, yaw, half length (along x), half width (along y)
+    snap = g.snapshot(0.05, (0.0, 0.0, 0.0), suppress=[rect])
+    assert cell(snap, 3.0, 0.0) != OCCUPIED and cell(snap, 2.9, 0.0) != OCCUPIED
+    assert cell(snap, 3.0, 1.5) == OCCUPIED  # the wall outside the rectangle
+    assert cell(snap, 1.5, 0.0) == FREE  # clearing up to the face is unchanged
+
+
+def test_older_scans_are_reclassified_too():
+    """A scan from before the mission (only marking by now) is split at the snapshot, not when it came in."""
+    g = grid_with(scan(0.0, wall_ranges()))
+    old = g.snapshot(1.0, (0.0, 0.0, 0.0))
+    assert cell(old, 3.0, 0.0) == OCCUPIED
+    snap = g.snapshot(1.0, (0.0, 0.0, 0.0), suppress=[(3.0, 0.0, 0.0, 0.15, 0.5)])
+    assert cell(snap, 3.0, 0.0) != OCCUPIED
+
+
+def test_a_rotated_rectangle_is_honoured():
+    g = grid_with(scan(0.0, wall_ranges()))
+    rect = (3.0, 0.0, math.pi / 2, 0.5, 0.15)  # the same area, its length along y
+    snap = g.snapshot(0.05, (0.0, 0.0, 0.0), suppress=[rect])
+    assert cell(snap, 3.0, 0.0) != OCCUPIED and cell(snap, 3.0, 1.5) == OCCUPIED
