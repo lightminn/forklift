@@ -13,3 +13,4 @@ speeds:                      # rear-axle m/s per phase, all within s10a.yaml max
   withdraw: 0.06
   return_home: 0.12
 mission_stages: [approach, insert, extract, transport, withdraw, return_home]
+imu: required                # the IMU watch (safety wiring design 4): required | none -- provisional required

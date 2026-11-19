@@ -26,7 +26,7 @@
 | 단계 | 절 | 상태 |
 |---|---|---|
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
-| 5b | 4 | **미수렴 — 5b 에 들어갈 때 이 절만 검토** |
+| 5b | 4 | **수렴**(19판, Codex 9 회차) |
 | 5c | 5, 6 | **미수렴 — 5c 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
@@ -112,18 +112,45 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
   - **신규 ARM 금지**: 대기 사유가 하나라도 있으면 ARM 프레임은 첫 바이트에서도 거부한다. 지금 첫 바이트 판정은 대기 사유를 정상 DRIVE 에만 적용하므로, ARM 에도 적용하고 그때는 허가를 래치한다(`arm_wait` — 재무장 필요, 보수적). ARMING 중 호스트의 확인용 0 DRIVE 는 바퀴 0 이라 그대로 둔다.
 - **정지 뒤 방향 판정**: 7 절.
 
-## 4. 감시
+## 4. 감시 (5b)
 
-> **미수렴**: 이 절은 해당 단계에 들어갈 때 그 절만 다시 검토받는다(총괄 2026-11-19). 7 회차까지의 지적은 반영돼 있으나 수렴 판정을 받지 않았다.
+> **5b 수렴**(19판, Codex 9 회차 새 P1/P2 없음): 이 절만 검토했다(총괄 2026-11-19). 5a 의 결정은 바꾸지 않는다.
 
-- 조립이 `config/real/safety_watch.yaml` 에서 `SafetyWatch` 를 만든다(STATE 마다, MCU 시각, 전류·바퀴). 파일이 없거나 깨지면 조립 거부.
-- **IMU 는 `SafetyWatch` 의 기울기 부분을 쓰지 않는다**(적대 P1-5: `accel_t_s=None` 을 지금 시각으로 보고, 같은 표본 재사용을 지속으로 셈). 새 `ImuWatch`(`src/forklift_core/safety/real_watch.py`):
-  - 입력은 원천이 낸 **서로 다른 표본** `(취득 시각, 가속 3 축)` 이다. 같은 시각 재전달·미래 시각·되감김·비유한 값·크기가 중력에서 크게 벗어난 값(잠정 ±30 %)은 유효 표본으로 세지 않는다.
-  - **기준**(2 회차 P2-4): **취득 시각이 지금 정지 구간 안**(4c `still_since` 이후)인 유효 표본의 평균. ARM 을 낼 때 그 값으로 고정하고 무장 동안 바꾸지 않는다. 그런 표본이 최소 개수(잠정 10) 미만이면 채택·ARM 이 거부된다(`imu_no_baseline`).
-  - **끊김**: 가장 새 유효 표본이 `max_age_s` 보다 오래되면(틱 머리와 첫 바이트 모두에서 호스트 시계로) `watch_imu_stale` → ①.
-  - **기울기**(2 회차 P2-4): 기준 대비 각도가 한도를 넘는 **서로 다른 유효 표본**이, 이웃 표본 사이 공백이 `gap_max_s`(잠정 0.05 s — D435i 가속 200 Hz 의 10 배) 이하로 이어진 시간이 `hold_s` 이상이면 `watch_tilt` → ①. 공백이 그보다 크면 지속은 처음부터 다시 센다. 한 표본은 지속이 아니다. `max_age_s` 는 끊김 판정에만 쓴다.
-  - `imu: required | none` 은 `config/real/autonomy.yaml` 의 설정값이다. 잠정 `required`, `none` 이면 `ImuWatch` 를 만들지 않고 조립 기록에 남긴다.
-- 기울기 임계값·진동 영향은 측정 전 잠정값이다(S10 선행 조건, 전제 8).
+**설정과 조립**(`src/forklift_core/live/real_assembly.py` 의 `build_watches(autonomy, watch_path, wheel_radius_m)` → `Watches(safety, imu, imu_policy)`; 바퀴 반경은 조립이 읽은 차량 설정의 좌우 값):
+- `config/real/safety_watch.yaml` 에서 `SafetyWatch` 를 만든다(`load_watch_config`, 4c 그대로). 파일이 없거나 깨지면 조립 거부(`watch_config:<이유>`).
+- IMU 값은 같은 파일의 **새 `imu:` 부분**에 둔다(`tilt:` 은 텔레옵 브리지의 `SafetyWatch` 몫으로 그대로): `limit_deg`(잠정 8), `hold_s`(0.3), `max_age_s`(0.1), `gap_max_s`(0.05), `baseline_min`(10), `baseline_spread_deg`(2.0), `baseline_wait_s`(0.5), `norm_tol_frac`(0.30), `level_ref`(자리표시 `[0, 0, 1]`, S7 측정), `level_tol_deg`(5), `provenance`. 판정이 가능한 범위만 받는다: `0 < limit_deg < 90`, `0 < baseline_spread_deg < limit_deg`, `gap_max_s ≤ max_age_s`, `hold_s > gap_max_s`, `0 < norm_tol_frac < 1`, `baseline_min ≥ 2`, `0 < level_tol_deg < limit_deg`, `level_ref` 가 유한한 수 세 개의 목록(매핑·문자열·불리언·부동소수로 못 바꾸는 큰 정수 아님, 영벡터 아님, 7–8 차); 아니면 조립 거부(`imu_config:<이름>`).
+- `config/real/autonomy.yaml` 의 `imu: required | none`(잠정 `required`). 키가 없거나 다른 값이면 조립 거부(`imu_policy`). `none` 이면 `ImuWatch` 를 만들지 않고 조립 기록에 `imu: none`.
+- 건식 조립(`tools/real_autonomy.py --dry-assemble`)과 실행 조립이 **같은** `build_watches` 를 부르고, 루프는 그 `Watches` 를 **통째로** 받는다 — `SafetyWatch` 만 따로 넘기는 인자는 없다(4 차 P2-1). `RealLoop(watches=, imu_source=)` 는 `imu_policy == "required"` 인데 `ImuWatch` 나 원천 중 하나라도 없으면 생성 거부(`imu_required`) — 두 주입 인자를 빠뜨려 무감시로 도는 길이 없다. `watches=None`(4c·5a 시험 rig)은 지금과 같음.
+- `SafetyWatch` 의 기울기 부분은 실차 자율에서 쓰지 않는다 — 루프는 `accel` 을 넘기지 않는다(적대 P1-5). 전류·바퀴는 4c 그대로.
+
+**IMU 원천 계약**(`imu_source.samples(upto_ns, limit)`; 취득 시각은 정수 호스트 ns — 정수가 아닌 표본은 루프가 그것만 버리고 정수는 정밀도 그대로 정렬·비교한다, 4–5 차 P2): 이미 받아 둔 표본 중 **취득 시각이 `upto_ns` 이하인 것만** 막히지 않고 즉시, 최대 `limit`(64) 개 `(취득 호스트 ns, 가속 3 축)` 를 **취득 시각 오름차순**으로 돌려준다 — `upto_ns` 보다 뒤의 표본은 원천에 남아 다음 조회에 나온다(3 차 P2-3: 조회 중 도착한 표본을 미래로 버리지 않음). 루프는 조회 **직전에** 시계를 읽어 `upto_ns` 로 쓰고 `add` 의 `now_ns` 도 같은 값이다(틱 시작 시각 아님). 루프도 넣기 전에 시각순으로 정렬한다(2 차 P2-3). 장치 읽기는 원천의 자기 스레드가 한다. 예외면 그 회는 표본 없음(끊김은 `judge` 가 잡음). 5b 의 가짜 원천과 PR 7 의 D435i 원천이 이 계약을 따른다(1 차 P1-3).
+
+**`ImuWatch`**(`src/forklift_core/safety/real_watch.py`, 호스트 단조 시계 ns):
+- `add(sample_ns, accel, now_ns) -> str | None`: 유효하면 None, 아니면 버린 이유(셈만). 버림: 비유한 값, `sample_ns` 가 지난 유효 표본 이하(재전달·되감김), `sample_ns > now_ns`(미래), `|‖a‖ − 9.81| > norm_tol_frac × 9.81`(비율, m/s² 아님). 유효 표본은 최근 2 s 만 둔다.
+- `baseline(still_since_ns) -> ((방향, last_ns), None) | (None, 이유)`: 취득 시각이 `still_since_ns` 이상인 유효 표본 중 **가장 최근의 공백 없는 연속 구간**(이웃 공백 ≤ `gap_max_s`; 앞선 공백은 구간이 늦게 시작했다는 뜻일 뿐)으로 — 정지 아님 `imu_not_still`; 그 구간이 `baseline_min` 미만 `imu_no_baseline`(기한 안이면 대기); 평균 벡터 크기가 단위의 0.9 미만이거나 최근 구간의 어느 표본이든 그 평균 방향에서 `baseline_spread_deg` 넘게 벗어나면 `imu_baseline_unsteady`(그 표본이 창 밖으로 나가면 풀림, 6 차 P2-2); 기준 방향이 수평 참조에서 벗어나면 `imu_not_level`(1 차 P1-2: 섞인 자세·반대 벡터의 평균).
+- **수평 참조**(6 차): 기준은 정지 구간의 이력이 아니라 **선 자리**로 확인한다 — 기준 방향이 설정의 `level_ref`(평평한 바닥에서 IMU 좌표의 중력 방향, D435i 장착이 기울어 있어 S7 측정 전에는 자리표시값)에서 `level_tol_deg`(잠정 5°, `limit_deg` 미만)를 넘으면 `imu_not_level`(ARM 전 거부). 정지 중 공백·정지 판정 상실 뒤 바뀐 자세도 선 자리로 잡힌다. 수평 참조 안의 작은 자세 변화는 `limit_deg` 판정의 여유로 남는다(측정 전 잠정, S10 선행 조건).
+- **ARM 응답 전 움직임**(6 차 P2-1): `arm()` 부터 허가가 READY 가 될 때까지(`settled()`) 기준에서 `baseline_spread_deg` 를 넘는 표본이 하나라도 오면 지속 없이 `watch_imu_moved` → ① — ARM 의 첫 바이트 판정 포함. 경계는 **표본의 취득 시각**으로 정한다(8 차 P2): 루프가 허가를 처음 READY 로 본 틱의 IMU 조회 시각을 `settled(경계)` 로 한 번 고정하고, 그 시각 이하에 취득한 표본은 틱 머리든 첫 바이트든 어느 조회로 오든 ARMING 규칙, 그 뒤 표본은 지속 규칙이다(READY 는 그보다 늦지 않으므로 보수적). READY 틱에도 판정을 먼저 한다(7 차 P2-1).
+- `baseline` 은 방향과 함께 **기준에 쓴 마지막 표본의 시각**을 돌려준다. `arm((direction, last_ns))`: **ARM 요청 전에** 기준을 고정한다(무장 동안 바꾸지 않음). 판정은 `last_ns` 에서 시작한다 — 그 뒤 받아들인 첫 표본과의 공백부터 잰다(2 차 P2-1: 고정 직전 취득·직후 수신 표본이 공백을 숨기지 않음). `disarm()`: 기준·판정 상태·고정된 사유를 버림.
+- `judge(now_ns) -> str | None`(고정된 기준이 있을 때만):
+  - `watch_imu_stale`: 가장 새 유효 표본이 `now_ns − max_age_s` 보다 오래됨.
+  - `watch_imu_gap`: 기준 고정 뒤 이웃 유효 표본 사이 공백이 `gap_max_s` 초과(1 차 P1-1: 드문드문 오는 표본으로는 지속을 판정할 수 없다 — 그 자체가 감시 상실).
+  - `watch_tilt`: 기준 대비 각도가 `limit_deg` 를 넘는 표본이 이어진 첫 표본부터 마지막 표본까지가 `hold_s` 이상. 한도 안 표본이 지속을 처음부터 다시 세게 한다. 한 표본은 지속이 아니다.
+  - 판정은 새로 받은 표본만 차례로 처리하는 **증분 상태**(직전 표본 시각, 지속 시작 시각)로 한다 — 표본 보관 창과 무관하게 `hold_s` 가 얼마든 지속을 끝까지 잰다(2 차 P1-1).
+  - 한 번 낸 사유는 `disarm()` 까지 고정.
+
+**루프 배선**:
+- 틱 머리(STATE 처리 뒤)와 첫 바이트 판정 안에서 원천 표본을 `add` 한다. 첫 바이트에서는 **기존 준비 판정과 IMU 표본 수집·`judge(ns)` 를 모두 같은 읽기 예산(`EVIDENCE_READ_MAX_S`) 안에서** 한 뒤 시계를 다시 읽어, 상한 `ns` 를 넘었으면 `evidence_slow` alarm 이다(4c 규칙; 2 차 P1-2).
+- **ARM 전**(채택 뒤 ARM 조건에서):
+  - 기존 `_pre_arm_refusal` 을 **먼저** 묻는다: `not_still` 이 아닌 거부(`outstanding`·`mcu_not_disarmed`·래치 사유)는 지금처럼 즉시 래치한다(3 차 P2-2). `not_still` 이거나 거부가 없으면 IMU 판정으로 간다 — `not_still` 또는 IMU 의 `imu_no_baseline`·`imu_not_still` 이고 그 미션의 **대기 기한** 전이면 **대기**: `adopted_for` 를 기록하지 않고 ARM 을 다음 틱으로 미룬다(5a 의 층 대기와 같음, 1 차 P2-1). 대기 기한은 미션마다 처음 대기에 들어간 틱에 한 번 `지금 + baseline_wait_s` 로 정하고 정지가 끊겼다 다시 잡혀도 늘리지 않는다(2 차 P2-2).
+  - 그 밖의 이유이거나 기한이 지났으면 `pre_arm:<이유>` 로 래치(5a: ARM 전 래치 = 미션 종료).
+  - 기준을 얻으면 `arm((방향, last_ns))` — `baseline` 이 돌려준 마지막 기준 표본 시각 — 뒤에 `permit.adopted()` 를 부른다(3 차 P2-1). 그것이 실패하면 `disarm()`.
+- **무장 중**(ARMING·READY·DRIVING·STOP_PENDING): 틱 머리의 `judge(now_ns)` 가 사유면 `watch:<사유>` 로 ①. 첫 바이트에서도 `judge(ns)` 가 사유면 `send:watch:<사유>` alarm.
+- 허가가 OFF·LATCHED 이면 `disarm()`.
+- IMU 원천의 실배선(D435i 가속, PR 7 의 시각 변환)은 이 단계에 없다. 5b 는 가짜 원천으로 판정과 배선만 시험한다.
+
+**고장 구분**(3 절의 셋): `watch_imu_stale`·`watch_imu_gap`·`watch_imu_moved`·`watch_tilt` 는 고장 → ①. `imu_baseline_unsteady`·`imu_not_level`·기한 지난 `imu_no_baseline`·`imu_not_still` 은 ARM 전 거부(래치·미션 종료). 기한 안의 기준 축적은 대기.
+
+- 임계값(기울기·진동 영향·공백·나이·기준 분산)은 측정 전 잠정값이다(S10 선행 조건, 전제 8).
 
 ## 5. 콘솔
 
@@ -228,5 +255,14 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 - Codex 적대 8 회차(8판, 5a 만): P1 없음, P2 3(채택과 오차표의 같은 v_scan, 도착하지 않은 스캔의 마감, D5 면제의 설치 주체), P3 1(마감 해소는 스캔 ID 로). 9판에 반영.
 - Codex 적대 9 회차(9판, 5a 만): P1 없음, P2 1(지난 예상 마감은 결과 설치까지 유지), P3 1(마감 초과 뒤 해소 시험). 10판에 반영.
 - Codex 5a 구현 검토 1–8 회차(같은 스레드, `fb356eef` … `27a3726a`): 1 회차 P1 4·P2 7, 2 회차 P1 3·P2 5, 3 회차 P1 1·P2 3, 4 회차 P1 1·P2 3, 5 회차 P1 1·P2 2, 6 회차 P2 2, 7 회차 P2 1, 8 회차 새 P1/P2 없음. 구현에서 정한 것: 첫 바이트가 층 watchdog·`obstacle_act`·층 동일성을 다시 읽음; 늦은 수신은 지난 예상 마감을 지우지 않고 첫 사용 지연은 마지막 빔 + B 로 스캔마다 한 번; watchdog 끝은 설치 전에 읽고 래치 때까지 고정; 같은 부팅 단절마다 재위치 세대 하나(빈 틱은 단절을 풀지 않음), 재부팅 뒤 세션 확인·지연 기준 재시작; 스캔 이동 판정은 엔코더 상한(가속 dt/2 + 양자화)으로 첫 빔 − dt 부터; 경로 검사는 작업자에서, 경로 길이로 차감; 계획 열쇠에 팔레트 자세; ARM 전(채택 뒤 포함) 어떤 래치든 미션 종료, ARMING 중 고장도 래치; 원천의 명시적 단절은 즉시 끝이고 다시 연결될 때까지 층 미준비; 거리 오차 모형은 YAML(`a2_spec`)을 따르고 계획 분리는 반사마다 자기 거리 오차만큼 키움(`suppress` 여섯째 원소, 기본 호출은 바이트 불변).
+- Codex 5b 9 회차(19판 + 구현): **새 P1/P2 없음**(수렴). P3 1(다른 IMU 숫자 설정의 큰 정수) 반영.
+- Codex 5b 8 회차(18판 + 구현): P1 없음, P2 1(READY 경계가 조회 순서로 갈림), P3 1(`level_ref` 큰 정수). 19판에 반영: 경계는 취득 시각(`settled(경계)`), 큰 정수 거부.
+- Codex 5b 7 회차(17판 + 구현): P1 없음, P2 2(READY 틱에 ARMING 표본을 무장 규칙으로 판정, `level_ref` 매핑을 키로 해석). 18판에 반영: 판정 뒤 `settled()`, `level_ref` 형식 검증.
+- Codex 5b 6 회차(16판 + 구현): P1 2(참조 확정 전 공백이 관측한 자세를 지움, 정지 판정 한 틱 상실이 자세 변화 표시를 지움), P2 2(ARM 첫 바이트에서 확인한 움직임을 지속 판정으로 넘김, 순간 이상치 하나가 재무장 뒤에도 래치), P3 1(정밀도 시험 경로). 17판: 정지 구간 이력 추적(`stand`)을 버리고 **수평 참조**(`level_ref`·`level_tol_deg`)로 선 자리를 확인 — 이력에서 나온 P1·P2-2 가 함께 없어짐; ARM 응답 전 움직임은 즉시 `watch_imu_moved`.
+- Codex 5b 5 회차(15판 + 구현): P1 1(정지가 2 s 넘게 이어지면 보관 창 밖 옛 자세를 잊음), P2 1(시각의 float 변환이 정밀도를 잃거나 넘침). 16판에 반영: 정지 구간의 참조·자세 변화 표시를 창과 따로, 시각은 정수만.
+- Codex 5b 4 회차(14판 + 구현): P1 1(정지 중 짧은 단절 뒤 바뀐 자세가 새 기준이 됨), P2 2(`required` 가 조립 결과째 전달되지 않음, 비유한 취득 시각이 래치), P3 1(시그니처 두 곳). 15판에 반영: 기준 일관성은 정지 구간 전체 표본, `RealLoop(watches=)` 만, 비유한 시각 표본만 버림.
+- Codex 5b 3 회차(13판): P1 없음, P2 3(ARM 호출부의 `now` — 기준 마지막 표본으로, IMU 대기가 기존 ARM 전 거부를 늦춤, 조회 중 도착한 표본을 미래로 버림). 14판에 반영: `arm((방향, last_ns))`, 기존 거부 먼저(`not_still` 만 대기 규칙), 원천 `upto_ns` 계약과 조회 직전 시계.
+- Codex 5b 2 회차(12판): P1 2(지속 시간이 표본 보관 창보다 길면 기울기 미검출, 첫 바이트 읽기 예산 밖의 IMU 판정), P2 3(기준 고정 직전 표본이 공백을 숨김, 기준 대기의 기한과 `adopted_for` 순서, 원천 반환 순서), P3 1(`build_watches` 의 바퀴 반경). 13판에 반영.
+- Codex 5b 1 회차(11판, 4 절만): P1 3(드문드문 오는 표본에서 기울기 무력화, 섞인·반대 자세의 기준, 원천이 막으면 DISARM 도 멈춤), P2 4(정지 첫 틱의 기준 부족 래치, 첫 바이트 뒤 도착 표본, `required` 강제 경로, 판정 불가 설정), P3 1(`norm_tol` 단위). 12판에 반영: `watch_imu_gap`, 기준 일관성 판정과 ARM 전 고정, 원천 비차단 계약, 기준 축적 대기, 첫 바이트 전 표본 갱신, 건식·실행 조립 공통 `build_watches`·`RealLoop` 생성 거부, `imu:` 설정 범위, `norm_tol_frac`.
 - 총괄 결정(2026-11-19): 계획 격자만 분리, 텔레옵 잠금(조건 a–c, 11-20 전 머지 못 하면 텔레옵만 연기), IMU required 잠정, 선행 조건 이관.
 - Codex 새 스레드 전제 검토(1판, 위를 보지 않음): 12 개. 정지 거리·빔 대표성·시계 오차·IMU 임계값·Jetson 부하는 범위 절의 S10 선행 조건으로, `+Inf`·빔 유효성(1.1), 결과 열쇠(1.2), 셀별 나이(1.2, 코드 확인), IMU 기준·표본(4), 재위치 입력 시각(6), 잠금 식별(8), 합치기 마감(1.2)은 본문에 반영.
