@@ -4,6 +4,8 @@ to the lifted check, the session's check bypass (an unlevel IMU bypassed to run 
 
 import math
 
+import pytest
+
 from forklift_core.live import real_autonomy as ra
 
 from real_loop_rig import EPOCH, PALLET, Rig
@@ -265,5 +267,58 @@ def test_a_lease_expiring_while_the_bypass_waits_for_the_lock_drops_it():
     lease.renewed_mono = (r.now + r.step_ns) / 1e9 - r.arbiter.config.lease_timeout_s + 0.001  # 1 ms past the head
     r.echo = False
     r.tick_cost_ns = 5 * 10**6  # the apply reads the clock 5 ms later
+    r.tick()
+    assert "imu" not in r.loop.bypass
+
+
+
+@pytest.mark.parametrize("kind_fields", [("operator_answer", {"kind": "lifted", "serial": 1, "verdict": "confirm"}),
+                                         ("pallet_register", {"pallet_id": "P-S10", "pose": [1.0, 0.0, 0.0]}),
+                                         ("operator_start", {"session_epoch": EPOCH}),
+                                         ("check_bypass", {"check": "imu", "on": True})])
+def test_no_real_request_changes_anything_after_the_lease_ran_out_during_the_tick(kind_fields):
+    """5c-1 r9 P2: every real request checks the lease on its own clock first."""
+    r = rig()
+    r.tick(3)
+    r.arbiter.lease.renewed_mono -= 100.0
+    kind, fields = kind_fields
+    before = (dict(r.core.targets.pallets), set(r.loop.bypass), list(r.loop._bypass_pending))  # noqa: SLF001
+    reason, _ = r.loop._real_request_(kind, fields)  # noqa: SLF001
+    assert reason == "no_lease"
+    assert (dict(r.core.targets.pallets), set(r.loop.bypass), list(r.loop._bypass_pending)) == before  # noqa: SLF001
+
+
+class _ClockLock:
+    """The channels' lock, the fake clock moving on while it is waited for (another thread holding it)."""
+
+    def __init__(self, inner, rig_, wait_ns):
+        self.inner, self.rig, self.wait_ns, self.armed = inner, rig_, wait_ns, False
+
+    def acquire(self, *a, **k):
+        if self.armed:
+            self.armed = False
+            self.rig.tick_cost_ns += self.wait_ns
+        return self.inner.acquire(*a, **k)
+
+    def release(self):
+        return self.inner.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def test_the_bypass_lease_is_judged_after_the_lock_is_taken():
+    """5c-1 r9 P3: the clock moves only while the lock is waited for -- a read before the lock would apply it."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    lease = r.arbiter.lease
+    lease.renewed_mono = (r.now + r.step_ns) / 1e9 - r.arbiter.config.lease_timeout_s + 0.001
+    r.echo = False
+    lock = _ClockLock(r.channels._lock, r, 5 * 10**6)  # noqa: SLF001
+    r.channels._lock = lock  # noqa: SLF001
+    lock.armed = True
     r.tick()
     assert "imu" not in r.loop.bypass

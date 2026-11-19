@@ -312,6 +312,9 @@ class RealLoop:
 
     def _real_request_(self, kind: str, msg: dict):
         core, permit = self.core, self.permit
+        now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
+        if not self._lease_valid(now_ns):
+            return "no_lease", {}  # the lease ran out during the tick: nothing changes (r7 P2-2, r9 P2)
         disarmed = permit.state in (ra.OFF, ra.LATCHED)
         if kind == "pallet_register":
             from forklift_core.live.real_assembly import register_pallet
@@ -351,15 +354,12 @@ class RealLoop:
                 return "unknown_check", {}
             lease = self.link.a.lease
             lease_id = None if lease is None else lease.lease_id
-            refusal = self._bypass_refusal(lease_id, int(self.clock()))  # at the instant it is taken (r6 P3-1)
+            refusal = self._bypass_refusal(lease_id, now_ns)  # at the instant it is taken (r6 P3-1)
             if refusal is not None:
                 return refusal, {}
             self._bypass_pending.append((check, bool(msg["on"]), lease_id))  # applied at the next tick head (r3)
             return None, {"applies": "next_tick"}
         if kind == "recovery":
-            now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
-            if not self._lease_valid(now_ns):
-                return "no_lease", {}  # the lease ran out during the tick (r7 P2-2)
             done = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
                                             disarmed=self._disarm_confirmed(now_ns),
                                             outstanding=self.port.outstanding(now_ns)[0] != "settled")
