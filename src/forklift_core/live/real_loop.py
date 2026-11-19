@@ -460,7 +460,8 @@ class RealLoop:
             "bypassed": sorted(self.bypass | ({"relocalize"} if self._declared() else set())),
             "mode": a.mode,
             "relocalize": dict(self.relocalize_status),  # 5c-2 (6, 8): the last attempt's, kept after the close
-            "standing": self.stand_since_ns is not None,  # the MCU sample stand (6, 3): not_still's own value  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
+            # the MCU sample stand (6, 3) with its link on the clock now: not_still's own value (impl round 6 P2-1)
+            "standing": self.stand_since_ns is not None and bool(self.host.health(int(self.clock())).fresh),  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
         }
 
     # --- 5c-2: relocalization (design 6) -------------------------------------------------------------------------

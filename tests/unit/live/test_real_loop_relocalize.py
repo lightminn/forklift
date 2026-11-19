@@ -619,21 +619,36 @@ def test_a_disarm_taken_voids_a_waiting_attempt():
 
 
 def test_freshness_is_judged_on_the_clock_at_the_close():
+    """The correction 0.48 s old at the tick's start, 0.51 s at the close (30 ms later, the MCU link still fresh)."""
     r = rig()
     gen = open_generation(r)
     stand(r)
+    r.slam.auto = False  # only the confirmation's reference reply comes
     ask(r, "relocalize_confirm", generation=gen)
-    r.slam.auto = False  # only the reference reply comes
+    orig = r.loop._commit_void
 
-    def later():
-        r.tick_cost_ns = 600 * 1_000_000  # the close runs 0.6 s after the tick began: the correction is too old
+    def late(t, closing=True):
+        prov = r.loop.provenance
+        if prov is None or t - prov[3] < 0.48:
+            return "wait"  # held until the correction is 0.48 s old at a tick's start
+        r.tick_cost_ns = 30 * 1_000_000
+        r.loop._commit_void = orig
+        return orig(t, closing)
 
-    _before_commit(r, later)
+    r.loop._commit_void = late
     run_until(r, lambda rec: status(r)["state"] != "waiting", 400)
     r.tick_cost_ns = 0
-    assert status(r)["state"] == "refused" and status(r)["reason"] in (
-        "relocalize_stale", "relocalize_voided:lease", "relocalize_voided:link")
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_stale"
     assert r.core.relocalize_generation() == gen
+
+
+def test_the_standing_shown_follows_the_link_on_the_clock_now():
+    r = rig()
+    stand(r)
+    assert r.loop.real_status(r.now)["standing"] is True
+    r.tick_cost_ns = 60 * 1_000_000  # the status is built 60 ms after the tick began: the last STATE too old
+    assert r.loop.real_status(r.now)["standing"] is False
+    r.tick_cost_ns = 0
 
 
 def test_a_layer_worker_dying_before_the_close_voids_the_attempt():
