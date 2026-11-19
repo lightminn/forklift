@@ -22,87 +22,81 @@ export function bindRealPanel(m, rejectText, clientId) {
   const ctxNow = () => ({ epoch: gens().session_epoch, lease: gens().lease_id, sig: statusSig(m.session.realStatus) });
   const same = (a, b) => Boolean(a && b && a.epoch === b.epoch && a.lease === b.lease && a.sig === b.sig);
   const inputOf = (ev) => (ev && Number.isInteger(ev.pointerId) && ev.pointerId >= 0 ? `p${ev.pointerId}` : "kbd");
-  // every panel button: the context (session, lease, the status a click depends on) taken when its press began,
-  // per button and per input; the click compares that one (else what was drawn) with now (r5 P2: a press begun
-  // before a second STOP does not rearm after the redraw). A cancelled pointer drops its record (r5 P3).
-  panel.press = {};
-  panel.lastPointer = {}; // button -> its latest pointer input (r7 P2-2)
+  // Every panel button: the context drawn when its press began, per button and per input (pointer id or keyboard).
+  // A click is resolved ONCE to its press (r10 P2-1) and passes only when that press's context, what is drawn and
+  // now all agree (r5 P2, r6 P2-1). A pointer click needs its own press record -- never the newest drawing. A click
+  // without a pointer id (older Safari) takes the single pointer press on that button; two, or none after a pointer
+  // press, is ambiguous: refused, and the button stays refused until a fresh press starts with no pointer down
+  // (r8-r10: the other pointer's click of the same moment is refused too).
+  panel.press = {}; // key -> {input: drawn context}
+  panel.pointerPressed = {}; // key -> a pointer pressed it since its last click
+  panel.blocked = {}; // key -> refused until a fresh press with no pointer down
+  panel.down = new Set(); // pointer inputs down now
   const panelEl = $("real-panel");
+  const keyOf = (btn) => btn.id || `check:${btn.dataset.check}`;
   const begin = (ev) => {
     const btn = ev.target.closest("button");
     if (!btn || !panelEl.contains(btn)) return;
-    const key = btn.id || `check:${btn.dataset.check}`;
-    // what was drawn, not the newest state (r6 P2-1: a press on a stale drawing can never pass)
-    const rec = panel.drawn ? { ...panel.drawn } : null;
-    (panel.press[key] ??= {})[inputOf(ev)] = rec;
-    if (inputOf(ev) !== "kbd") panel.lastPointer[key] = inputOf(ev); // a click without a pointer id (older Safari)
+    const key = keyOf(btn);
+    const input = inputOf(ev);
+    if (input !== "kbd") {
+      if (panel.blocked[key] && panel.down.size === 0) delete panel.blocked[key]; // a fresh press, nothing else down
+      panel.pointerPressed[key] = true;
+    }
+    (panel.press[key] ??= {})[input] = panel.drawn ? { ...panel.drawn } : null; // what was drawn (r6 P2-1)
   };
-  panelEl.addEventListener("pointerdown", begin, true);
+  document.addEventListener("pointerdown", (ev) => { begin(ev); panel.down.add(inputOf(ev)); }, true);
   panelEl.addEventListener("keydown", (ev) => {
     if (ev.key !== "Enter") return;
     if (ev.repeat) { ev.preventDefault(); return; } // a held Enter clicks no panel button again (r6 P2-2)
     begin(ev);
   }, true);
-  // a pointer released off a button: no click follows there -- its press on that button is over (r9 P2)
-  document.addEventListener("pointerup", (ev) => {
-    const input = inputOf(ev);
+  const forget = (input, keep) => {
     for (const [key, rec] of Object.entries(panel.press)) {
-      if (!(input in rec)) continue;
-      const btn = key.startsWith("check:") ? panelEl.querySelector(`button[data-check="${key.slice(6)}"]`) : $(key);
-      if (!btn || !btn.contains(ev.target)) {
+      if (input in rec && !(keep && keep(key))) {
         delete rec[input];
         if (panel.pressKey[key]) delete panel.pressKey[key][input];
-        if (panel.lastPointer[key] === input) delete panel.lastPointer[key];
       }
     }
-  }, true);
-  panelEl.addEventListener("pointercancel", (ev) => {
-    for (const rec of Object.values(panel.press)) delete rec[inputOf(ev)];
-    for (const rec of Object.values(panel.pressKey)) delete rec[inputOf(ev)];
-  }, true);
-  // a click's input: its pointer id; none (a MouseEvent click, older Safari) after a pointer press on this button: that
-  // press's input -- not the keyboard's, never the newest drawing (r7 P2-2)
-  const clickInput = (key, ev) => {
+  };
+  const btnOf = (key) => (key.startsWith("check:") ? panelEl.querySelector(`button[data-check="${key.slice(6)}"]`) : $(key));
+  // a pointer released off a button: no click follows there (r9 P2); a cancelled one: none anywhere (r5 P3)
+  document.addEventListener("pointerup", (ev) => {
     const input = inputOf(ev);
-    if (input !== "kbd") return input;
+    panel.down.delete(input);
+    forget(input, (key) => { const b = btnOf(key); return Boolean(b && b.contains(ev.target)); });
+  }, true);
+  document.addEventListener("pointercancel", (ev) => { panel.down.delete(inputOf(ev)); forget(inputOf(ev)); }, true);
+  // the click's press: {input, ctx} or {refused: true}
+  const resolve = (key, ev) => {
     const rec = panel.press[key] || {};
-    if ("kbd" in rec) return "kbd";
-    const pointers = Object.keys(rec).filter((k) => k !== "kbd");
-    if (pointers.length === 1) return pointers[0]; // the one pointer press this click can be
-    // two pointer presses, or a pointer press since cancelled: which one clicked is not known -- refused (r8 P2),
-    // and the button's records start over so the next tap is judged afresh (r9 P2)
-    if (pointers.length > 1 || panel.lastPointer[key]) {
-      for (const k of pointers) {
-        delete rec[k];
-        if (panel.pressKey[key]) delete panel.pressKey[key][k];
+    let input = inputOf(ev);
+    if (panel.blocked[key]) return { refused: true };
+    if (input === "kbd" && !("kbd" in rec)) {
+      const pointers = Object.keys(rec).filter((k) => k !== "kbd");
+      if (pointers.length === 1) input = pointers[0];
+      else if (pointers.length > 1 || panel.pointerPressed[key]) {
+        panel.blocked[key] = true; // ambiguous: this and any click of the same moment refused (r10 P2-2)
+        for (const k of pointers) forget(k);
+        return { refused: true };
       }
-      delete panel.lastPointer[key];
-      return null;
     }
-    return "kbd";
+    const has = input in rec;
+    const ctx = has ? rec[input] : null;
+    if (has) delete rec[input];
+    // a pointer click without its own press is refused; a keyboard-less synthetic click with no press at all: drawn
+    if (!has && (input !== "kbd" || panel.pointerPressed[key])) return { refused: true };
+    if (input !== "kbd") delete panel.pointerPressed[key];
+    return { input, ctx: has ? ctx : panel.drawn };
   };
-  const pressCtx = (key, ev) => {
-    const rec = panel.press[key];
-    const input = clickInput(key, ev);
-    if (input === null) return { ambiguous: true };
-    const ctx = rec && input in rec ? rec[input] : null;
-    if (rec) delete rec[input];
-    return ctx;
-  };
-  const clickOk = (key, ev) => {
-    const ctx = pressCtx(key, ev) ?? panel.drawn;
-    if (ctx && ctx.ambiguous) return false;
-    return same(ctx, ctxNow()) && same(panel.drawn, ctxNow()) && panel.mine;
-  };
+  const clickOk = (r) => !r.refused && same(r.ctx, ctxNow()) && same(panel.drawn, ctxNow()) && panel.mine;
   const guard = (fn, key) => (ev) => {
-    const input = clickInput(key, ev);
-    if (!clickOk(key, ev)) {
-      if (panel.pressKey && panel.pressKey[key]) delete panel.pressKey[key][input]; // consumed too (r6 P3)
-      delete panel.lastPointer[key];
+    const r = resolve(key, ev);
+    if (!clickOk(r)) {
+      if (r.input && panel.pressKey && panel.pressKey[key]) delete panel.pressKey[key][r.input]; // consumed (r6 P3)
       return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
     }
-    delete panel.lastPointer[key];
-    return fn(ev, input);
+    return fn(ev, r.input);
   };
   const send = (type, fields, okText) => m.session.request(type, fields).then((r) => {
     if (r && r.t === "reject") say(`거부 · ${rejectText(r.reason, r.detail)}`);
@@ -184,9 +178,7 @@ export function bindRealPanel(m, rejectText, clientId) {
   $("rp-bypass").onclick = (ev) => {
     const btn = ev.target.closest("button[data-check]");
     if (!btn || btn.disabled) return;
-    const bkey = `check:${btn.dataset.check}`;
-    const ok = clickOk(bkey, ev);
-    delete panel.lastPointer[bkey];
+    const ok = clickOk(resolve(`check:${btn.dataset.check}`, ev));
     if (!ok) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
     if (panel.toggle) return say("앞선 우회 변경이 적용되기를 기다립니다"); // one at a time (r2 P2-3)
     // tracked from the send: the submit and the start check are closed at once; the 2 s run from the ack
