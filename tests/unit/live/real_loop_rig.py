@@ -190,7 +190,7 @@ class FakeTransport:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None):
+                 initial_seq=None, watch=None):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -284,7 +284,8 @@ class Rig:
                              params=params, odometry=self.odo, kinematics=KIN, max_speed_mps=0.15,
                              start_ns=10_000 * MS, slam_source=SimpleNamespace(replies=lambda n: []),
                              evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
-                             depth_source=SimpleNamespace(frames=self._depth_frames))
+                             depth_source=SimpleNamespace(frames=self._depth_frames),
+                             watch=watch, clock=lambda: self.now + self.tick_cost_ns)
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
@@ -318,11 +319,13 @@ class Rig:
 
     # --- driving --------------------------------------------------------------------------------------------------
     echo = True  # the console answers every tick (it keeps the lease); False: a console gone quiet
+    tick_cost_ns = 0  # the tick's own computing time before its first write (the fake clock's)
+    step_ns = 20 * MS  # the start interval
 
     def tick(self, n=1):
         rec = None
         for _ in range(n):
-            self.now += 20 * MS
+            self.now += self.step_ns
             rec = self.loop.cycle(self.now)
             ticks = [m for _, m in self.channels.take_out() if m.get("t") == "tick"]
             if ticks and self.echo and self.lease is not None:

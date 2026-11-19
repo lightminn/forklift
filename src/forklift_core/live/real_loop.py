@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 import secrets
+import time
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -64,6 +65,7 @@ class TickRecord:
     seqs: list = field(default_factory=list)
     phase: str | None = None
     permit: str | None = None
+    elapsed_s: float | None = None  # the tick's own time before its first write
 
 
 class RealSession:
@@ -115,7 +117,7 @@ class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
-                 depth_source=None) -> None:
+                 depth_source=None, watch=None, clock=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -143,6 +145,11 @@ class RealLoop:
         self.pose_history: deque = deque(maxlen=64)  # (t, rear, continuous) per tick, for a frame's own pose
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
+        self.watch = watch  # the real safety watch (the teleop leg's SafetyWatch); None: off (design 3)
+        self._watch_rx: int | None = None
+        # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
+        # tests' fake clock passes the tick's instant
+        self.clock = clock or time.monotonic_ns
         self._console_disarm = False
         self._odom_broken = False  # a continuity break among this tick's STATEs
         self._rebooted = False  # a boot change seen (not the first boot)
@@ -263,8 +270,9 @@ class RealLoop:
             core.slam["still_since"] = None if self.still_since_ns is None else self._t(self.still_since_ns)
         # the watches (design 3): the start interval, the absolute wheel cap
         if interval is not None:
-            self.slow_starts = self.slow_starts + 1 if interval > SLOW_TICK_S + TICK_S else 0
-            if interval > LATE_TICK_S + TICK_S or self.slow_starts >= SLOW_STARTS:
+            # the start interval (design 3): three in a row over 30 ms, or one over 60 ms (Codex 4c impl P1-11)
+            self.slow_starts = self.slow_starts + 1 if interval > SLOW_TICK_S else 0
+            if interval > LATE_TICK_S or self.slow_starts >= SLOW_STARTS:
                 rec.branch, rec.reason = "emergency", "loop_slow"
                 self._emergency(now_ns, "loop_slow")
                 return
@@ -275,6 +283,12 @@ class RealLoop:
                 self._emergency(now_ns, "overspeed")
                 return
         s = host.state
+        if self.watch is not None:
+            trip = self._watch_step(now_ns, s)
+            if trip is not None:
+                rec.branch, rec.reason = "emergency", f"watch:{trip}"
+                self._emergency(now_ns, rec.reason)
+                return
         feedback = None if s is None or not self.samples else Feedback(
             stamp_mono=self.samples[-1].host_ns / 1e9, rear_axle_speed_mps=float(self.speed.signed_mps),
             lift_m=self._measured_lift(), steering_rad=abs(float(s.steering_rad)), odom_xy=self.odom_pose[:2])
@@ -298,6 +312,24 @@ class RealLoop:
             elif a.lease is None:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
+
+    def _watch_step(self, now_ns: int, st):
+        """The safety watch (design 3, the teleop leg's settings): judged on each newly received fresh STATE against
+        the wheels of the confirmed target (zero once none is confirmed); returns its trip or None."""
+        rx = self.host.state_rx_ns
+        new = st is not None and rx is not None and rx != self._watch_rx
+        self._watch_rx = rx
+        c = self.book.confirmed
+        if c is None or c.speed_mps == 0.0:
+            target = (0.0, 0.0)
+        else:
+            d = self.kin.command(float(c.speed_mps), float(c.curvature_inv_m))
+            target = tuple(float(w) for w in d.wheel_rates_rad_s)
+        res = self.watch.step(
+            now_ns / 1e9, armed=self.permit.armed, fresh=self.host.health(now_ns).fresh, new_state=new,
+            currents_a=None if st is None else st.current_a, wheel_targets_rad_s=target,
+            wheel_rates_rad_s=None if st is None else (st.wheel_rate_left_rad_s, st.wheel_rate_right_rad_s))
+        return res.trip
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         why = ra.auto_ready_refusal(now_ns, "submit", self.evidence)
@@ -353,6 +385,14 @@ class RealLoop:
                 core.require_relocalization(t, "hold_too_long")
         gate_ = core.release_gate(t, rear)
         rear = gate_.rear
+        # the layer latency watchdog on every tick, whatever the phase (as the Isaac loop with its budget on; Codex 4c
+        # impl P1-12): past its end it is ①, a watchdog stop holds the wheels and the lift (the wait frame)
+        layer_ = None if core.obstacle is None else core.obstacle.get("layer")
+        layer_stop = layer_.watchdog(t) if layer_ is not None and hasattr(layer_, "watchdog") else None
+        if layer_stop == "layer_latency_exceeded":
+            rec.branch, rec.reason = "emergency", "layer_latency_exceeded"
+            self._emergency(now_ns, "layer_latency_exceeded")
+            return
         # as the Isaac loop: paused, resuming or cancelling, or no mission yet (or over) -- a preparation is not
         paused_ = cmds.stopped or cmds.status in ("idle", *FINAL)
         plan_wait_ = core.jobs is not None and core.job_hold(t, rear, self.speed, paused_).hold
@@ -409,7 +449,8 @@ class RealLoop:
                 arrival_wait = getattr(arrival_, "wait", None)
         if core.jobs is not None and not plan_wait_ and core.job_pending():
             plan_wait_ = True
-        if not paused_ and (not plan_wait_ or core.lift_ramps_in_plan_wait()) and core.lift_and_timers(t, TICK_S):
+        if layer_stop is None and not paused_ and (not plan_wait_ or core.lift_ramps_in_plan_wait()) \
+                and core.lift_and_timers(t, TICK_S):
             pass  # S10-A never delivers: a delivery verdict is not built here
         if core.take_s10_stop() is not None:
             rec.branch = "s10"
@@ -434,7 +475,10 @@ class RealLoop:
             requested_speed = 0.0
         self._wait_reason = None
         if permit.state in (ra.READY, ra.DRIVING):
-            if arrival_wait is not None:
+            if layer_stop is not None:
+                requested_speed, curvature, dwell_hold = 0.0, 0.0, True
+                self._wait_reason = f"layer:{layer_stop}"
+            elif arrival_wait is not None:
                 requested_speed, curvature, dwell_hold = 0.0, 0.0, True
                 self._wait_reason = arrival_wait  # the wait frame: wheels 0 at once, the old queue dropped
             elif plan_wait_:
@@ -559,7 +603,9 @@ class RealLoop:
 
     def _send(self, now_ns: int, rec: TickRecord) -> None:
         permit, port = self.permit, self.port
-        elapsed = 0.0  # 4c: the fake clock gives every tick its own instant (the real loop measures it, design 3)
+        send_ns = int(self.clock())
+        elapsed = max(0.0, (send_ns - now_ns) / 1e9)  # the tick's own time before its first write (design 3)
+        rec.elapsed_s = elapsed
         if rec.branch == "emergency":
             pass  # the latch queued the DISARM
         elif rec.branch == "s10" and permit.state in (ra.READY, ra.DRIVING):
@@ -584,7 +630,11 @@ class RealLoop:
             command_, steer, out, sink = self._candidate
             wait = self._wait_reason_now(now_ns, out)
             if elapsed > LATE_TICK_S:
+                rec.branch, rec.reason = "emergency", "tick_late"
                 self._emergency(now_ns, "tick_late")
+            elif not self.host.health(send_ns).fresh:
+                rec.branch, rec.reason = "emergency", "measurement_stale"  # the measurement ran out during the tick
+                self._emergency(now_ns, "measurement_stale")
             elif wait is not None or elapsed > SLOW_TICK_S:
                 rec.branch, rec.reason = "wait", wait or "tick_slow"
                 self._wait_frame(now_ns, rec)
