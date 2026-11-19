@@ -41,3 +41,34 @@ def test_a_held_moving_drive_is_not_written_after_the_next_tick_decides_to_stop(
     assert not [seq for seq, _ in written if seq in queued]  # the older unsent frame never goes out
     assert not [m for _, m in written if m.left_wheel_rad_s or m.right_wheel_rad_s]
     assert not [f for f in r.loop.book.frames if f.seq in queued]  # and the record no longer counts it
+
+
+def test_a_half_written_moving_drive_is_not_finished_after_the_next_tick_decides_to_stop():
+    """Codex PR 5 design round 7 P1: the older frame's first bytes are out; the next tick decides to stop -- the half
+    frame is abandoned (a link reset, the DISARM first), never finished."""
+    from forklift_core.mcu_link.messages import Disarm
+
+    r = Rig(frames=True)
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and r.loop.book.confirmed is not None
+              and r.loop.book.confirmed.speed_mps != 0.0)
+    r.transport.stall = True
+    r.tick()
+    partial = r.transport.partial_frame
+    assert partial is not None and partial.kind == "DRIVE"
+    r.transport.stall = False
+    real_assemble = r.core.assemble_command
+
+    def zero(*a, **kw):
+        out = real_assemble(*a, **kw)
+        out.drive = r.loop.kin.command(0.0, float(out.drive.curvature_inv_m))
+        return out
+
+    r.core.assemble_command = zero
+    k = len(r.transport.sent)
+    r.tick()
+    sent = r.transport.sent[k:]
+    assert not [x for x in sent if x[2] == partial.seq]  # never finished
+    assert not [m for _, kind, _, m in sent if kind == "DRIVE" and (m.left_wheel_rad_s or m.right_wheel_rad_s)]
+    assert r.transport.resyncs == 1 and any(isinstance(m, Disarm) for _, _, _, m in sent)
