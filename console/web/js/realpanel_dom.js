@@ -43,6 +43,19 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (ev.repeat) { ev.preventDefault(); return; } // a held Enter clicks no panel button again (r6 P2-2)
     begin(ev);
   }, true);
+  // a pointer released off a button: no click follows there -- its press on that button is over (r9 P2)
+  document.addEventListener("pointerup", (ev) => {
+    const input = inputOf(ev);
+    for (const [key, rec] of Object.entries(panel.press)) {
+      if (!(input in rec)) continue;
+      const btn = key.startsWith("check:") ? panelEl.querySelector(`button[data-check="${key.slice(6)}"]`) : $(key);
+      if (!btn || !btn.contains(ev.target)) {
+        delete rec[input];
+        if (panel.pressKey[key]) delete panel.pressKey[key][input];
+        if (panel.lastPointer[key] === input) delete panel.lastPointer[key];
+      }
+    }
+  }, true);
   panelEl.addEventListener("pointercancel", (ev) => {
     for (const rec of Object.values(panel.press)) delete rec[inputOf(ev)];
     for (const rec of Object.values(panel.pressKey)) delete rec[inputOf(ev)];
@@ -56,8 +69,16 @@ export function bindRealPanel(m, rejectText, clientId) {
     if ("kbd" in rec) return "kbd";
     const pointers = Object.keys(rec).filter((k) => k !== "kbd");
     if (pointers.length === 1) return pointers[0]; // the one pointer press this click can be
-    // two pointer presses, or a pointer press since cancelled: which one clicked is not known -- refused (r8 P2)
-    if (pointers.length > 1 || panel.lastPointer[key]) return null;
+    // two pointer presses, or a pointer press since cancelled: which one clicked is not known -- refused (r8 P2),
+    // and the button's records start over so the next tap is judged afresh (r9 P2)
+    if (pointers.length > 1 || panel.lastPointer[key]) {
+      for (const k of pointers) {
+        delete rec[k];
+        if (panel.pressKey[key]) delete panel.pressKey[key][k];
+      }
+      delete panel.lastPointer[key];
+      return null;
+    }
     return "kbd";
   };
   const pressCtx = (key, ev) => {
