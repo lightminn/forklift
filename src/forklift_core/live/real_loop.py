@@ -200,7 +200,12 @@ class RealLoop:
         except Exception as exc:  # noqa: BLE001 -- any failure before the output is the emergency branch
             rec.branch, rec.reason = "emergency", f"exception:{type(exc).__name__}:{exc}"
             self._emergency(now_ns, rec.reason)
-        self._send(now_ns, rec)  # S10's control stop goes out before the collection (design 4)
+        try:
+            self._send(now_ns, rec)  # S10's control stop goes out before the collection (design 4)
+        except Exception as exc:  # noqa: BLE001 -- a failing final submit is ① too: DISARM queued and written
+            rec.branch, rec.reason = "emergency", f"exception:send:{type(exc).__name__}:{exc}"
+            self._emergency(now_ns, rec.reason)
+            self._transmit(now_ns)
         self._collect(now_ns, t, rec)
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
@@ -256,11 +261,13 @@ class RealLoop:
             rec.branch, rec.reason = "emergency", "console_disarm"
             self._emergency(now_ns, "console_disarm")
             return
-        if permit.armed or permit.state == ra.STOP_PENDING:
+        # while an authority lasts (arming to the S10 stop; a latched permit retries its own DISARM, design 4 7):
+        # STOPPED or the lease gone in any arbiter mode -- PAUSED after S10's end included -- is ①
+        if permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING, ra.DISARMING):
             if a.mode == "STOPPED":
                 rec.branch, rec.reason = "emergency", "stop"
                 self._emergency(now_ns, "stop")
-            elif a.lease is None and a.mode == "AUTO":
+            elif a.lease is None:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
 
@@ -444,6 +451,8 @@ class RealLoop:
 
     def _unsupported(self) -> str | None:
         core = self.core
+        if core.commands.status in ("paused", "resuming", "held", "recovering"):
+            return f"mission_{core.commands.status}"  # S10-A has no pause and resume: DISARM and collect
         if getattr(core, "capture_live", None) is not None or getattr(core, "observation_live", None) is not None:
             return "observation_capture"
         if core.scene_replan.active():
@@ -513,7 +522,11 @@ class RealLoop:
             pass  # the latch queued the DISARM
         elif rec.branch == "s10" and permit.state in (ra.READY, ra.DRIVING):
             lift, q = self._measured_lift(), self._measured_steering()
-            if lift is None or q is None:
+            why = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+            if why is not None and ra.latches(why):
+                rec.branch, rec.reason = "emergency", f"s10:{why}"
+                self._emergency(now_ns, rec.reason)
+            elif lift is None or q is None:
                 self._emergency(now_ns, "s10_measurement")
             else:
                 r = port.control_stop(steering_rad=q, lift_m=lift, now_ns=now_ns,
@@ -577,7 +590,9 @@ class RealLoop:
 
     def _auto_drive(self, now_ns: int, command_, steer, rec: TickRecord) -> None:
         port, permit = self.port, self.permit
-        self.waiting = None
+        if self.waiting is not None:
+            self.host.drop_drives("wait_end")  # the wait's unsent hold never follows the normal DRIVE out
+            self.waiting = None
         drive = command_.drive
         speed = float(drive.speed_mps)
         if abs(speed) > self.max_speed_mps:  # the rear-axle command cap (design 2.5 4)
@@ -612,19 +627,30 @@ class RealLoop:
         write happens inside it -- a motion frame under the channels' lock only when no emergency came in since this
         tick's batch, a DISARM always; written frames reported to the permit and the record."""
         motion = motion_allowed(self.transport)
+        a = self.link.a
+        refused = []
 
         def gate(frame, write) -> bool:
             if frame.kind == "DISARM":
                 write()
                 return True
-            if not motion:
-                return False  # the device block: nothing but a DISARM on an operating transport
-            return send_boundary(self.channels, self.serial, write)
+            # the device block (nothing but a DISARM on an operating transport); the authority at the first byte: an
+            # arbiter STOPPED or a lease already lost (a disconnect taken before this tick's batch passes the serial)
+            ok = motion and a.mode != "STOPPED" and a.lease is not None \
+                and send_boundary(self.channels, self.serial, write)
+            if not ok:
+                refused.append((frame.kind, frame.seq))
+            return ok
 
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
             self.permit.written(kind, seq, written_ns)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)
+        for kind, seq in refused:
+            if kind == "DRIVE":
+                self.book.discarded(seq)
+                self.permit.stop_discarded(now_ns, seq)
+                self.steering_command = None  # an unwritten candidate is never the next slew's start
 
 
 __all__ = ["RealLoop", "RealSession", "TickRecord", "motion_allowed", "real_host"]

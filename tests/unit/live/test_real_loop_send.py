@@ -130,3 +130,68 @@ def test_a_snapshot_wait_repeats_one_hold_frame_on_the_same_generation_then_auto
     r.loop.evidence = ev
     rec = run_until(r, lambda rec: rec.branch == "auto", limit=50)
     assert r.loop.waiting is None
+
+
+def test_s10s_stop_frame_held_before_its_first_byte_is_not_written_after_the_lease_is_lost():
+    """Codex impl P1-1: the stop frame queued, its first write held; the operator's connection drops after AUTO ->
+    PAUSED: the next tick is ① and that seq never goes out."""
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    real_transmit = r.transport.transmit
+    held = {}
+
+    def hold_s10(host, now, gate):
+        if r.loop.records and r.loop.records[-1].branch == "s10" or (r.permit.state == ra.STOP_PENDING and not held):
+            held["seq"] = r.permit._stop["seq"] if r.permit._stop else None  # noqa: SLF001
+            return []
+        return real_transmit(host, now, gate)
+
+    for _ in range(4000):
+        r.transport.transmit = hold_s10
+        rec = r.tick()
+        if rec.branch == "s10":
+            break
+    seq = r.permit._stop["seq"]  # noqa: SLF001
+    r.transport.transmit = real_transmit
+    r.channels.disconnect("c1", "op")
+    rec = r.tick()
+    assert rec.branch == "emergency"
+    assert not [x for x in r.transport.sent if x[2] == seq and x[1] == "DRIVE"]
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED) and r.permit.reason != "s10_stopped"
+
+
+def test_a_failing_final_submit_is_the_emergency_branch():
+    """Codex impl P1-5: an exception from the port's final submit DISARMs in the same tick."""
+    r = driving()
+    k = len(r.transport.sent)
+
+    def boom(*a, **kw):
+        raise OSError("port")
+
+    r.port.command = boom
+    rec = r.tick()
+    assert rec.branch == "emergency" and "send" in rec.reason
+    assert any(isinstance(m, Disarm) for _, _, _, m in r.transport.sent[k:]) and not moving_after(r, k)
+    assert r.permit.state == ra.LATCHED
+
+
+def test_an_operator_pause_in_s10_a_disarms_and_collects():
+    """Codex impl P1-13: S10-A has no pause and resume -- a pause latches and the mission is collected."""
+    r = driving()
+    r.say("mission_pause", mission_id=r.core.commands.mission_id)
+    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=20)
+    assert r.permit.reason == "unsupported:mission_paused"
+    r.tick(3)
+    assert len(r.loop.session.results) == 1
+
+
+def test_a_stop_awaiting_its_disarm_answer_does_not_renew_the_disarm_every_tick():
+    """Codex impl P2-1: after one STOP the latched permit keeps its DISARM's seq until the 100 ms retry."""
+    r = driving()
+    r.mcu.deaf = True
+    k = len(r.transport.sent)
+    r.say("stop")
+    r.tick(4)  # 80 ms
+    seqs = {seq for _, kind, seq, _ in r.transport.sent[k:] if kind == "DISARM"}
+    assert len(seqs) == 1

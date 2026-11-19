@@ -83,7 +83,7 @@ def test_an_unconfirmed_control_stop_disarms_after_its_limit():
     run_until(r, lambda rec: r.core.ms.phase == "lift")
     r.mcu.ack_frozen = True  # frames applied, never echoed
     run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED) and r.permit.reason is not None)
-    assert r.permit.reason in ("control_stop_unconfirmed", "authorization_revoked") or "s10" in str(r.permit.reason)
+    assert r.permit.reason in ("control_stop_unconfirmed", "control_stop_unauthorized", "authorization_revoked")
 
 
 def test_the_real_encoder_model_blocks_the_restart_after_the_first_frame_stand():

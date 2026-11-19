@@ -13,7 +13,8 @@ from forklift_core.plant.kinematics import RealKinematics
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
 from forklift_core.plant.port import RealPlantPort
 
-from test_teleop_bridge_cycle import MS, VEH, FakeMcu
+from real_loop_rig import FreshMcu
+from test_teleop_bridge_cycle import MS, VEH
 
 
 class Bench:
@@ -22,7 +23,7 @@ class Bench:
         self.host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
                                            outbox_max=16), client=Client.REAL)
         self.port = RealPlantPort(self.host, RealKinematics(VEH))
-        self.mcu = FakeMcu()
+        self.mcu = FreshMcu()  # COMMAND_FRESH while a DRIVE lasts (the S10 stop's confirmation reads it)
         self.dec = LinkDecoder()
         self.sent, self.order, self.written = [], [], []
         self.settled = ("settled", 0)
@@ -205,7 +206,7 @@ def test_a_stop_frame_never_written_is_not_confirmed_by_a_later_seq():
     b.host.drop_drives("test")  # the frame never goes out
     b.mcu.rx = (seq + 5) & 0xFFFF  # an echo naming a later seq
     b.cycle(6, transmit=False)
-    assert b.permit.reason == "control_stop_unconfirmed"
+    assert b.permit.reason in ("control_stop_unwritten", "control_stop_unauthorized")  # never confirmed: DISARM
 
 
 def test_an_unconfirmed_control_stop_disarms_after_its_limit():
@@ -215,7 +216,8 @@ def test_an_unconfirmed_control_stop_disarms_after_its_limit():
     seq = queue_stop_frame(b)
     b.permit.control_stop(b.now, seq)
     b.cycle(6)  # 120 ms
-    assert b.permit.reason == "control_stop_unconfirmed" and b.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert b.permit.reason in ("control_stop_unconfirmed", "control_stop_unauthorized")
+    assert b.permit.state in (ra.DISARMING, ra.LATCHED)
 
 
 def latched(b):
@@ -405,3 +407,24 @@ def test_an_answered_disarm_is_not_asked_again():
     b.cycle(30)
     assert sum(isinstance(m, Disarm) for m in b.sent[sent_before:]) == 1
     assert not b.permit.disarm_unconfirmed and not any(e.event == "disarm_retry" for e in b.permit.events)
+
+
+@pytest.mark.parametrize("inject", ["reject", "not_fresh"])
+def test_a_stop_named_by_its_seq_but_rejected_or_not_fresh_is_no_confirmation(inject):
+    """4c design 4 4 (Codex impl P1-2): the exact seq is not enough -- a reject reason DISARMs at once, a STATE
+    without COMMAND_FRESH never confirms."""
+    from forklift_core.mcu_link.messages import RejectReason
+
+    b = Bench()
+    b.armed_ready()
+    if inject == "reject":
+        b.mcu.reject = RejectReason(1)
+    else:
+        b.mcu.fresh_off = True
+    seq = queue_stop_frame(b)
+    b.permit.control_stop(b.now, seq)
+    b.transmit()
+    b.cycle(7)
+    assert not any(e.event == "control_stop_confirmed" for e in b.permit.events)
+    assert b.permit.state in (ra.DISARMING, ra.LATCHED)
+    assert b.permit.reason.startswith("control_stop_rejected" if inject == "reject" else "control_stop_un")

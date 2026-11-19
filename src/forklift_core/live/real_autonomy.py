@@ -12,11 +12,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from forklift_core.mcu_link.messages import FaultFlag, Mode
+from forklift_core.mcu_link.messages import FaultFlag, Mode, RejectReason, StateFlag
 
 OFF, ARMING, READY, DRIVING, STOP_PENDING, DISARMING, LATCHED = (
     "OFF", "ARMING", "READY", "DRIVING", "STOP_PENDING", "DISARMING", "LATCHED")
 STOP_ACK_S = 0.100  # the control stop's frame confirmed by a STATE naming its seq within this (design 7, provisional)
+STOP_QUEUE_S = 0.040  # and written within this of its queueing (4c design 4 4: the queue dwell)
 DISARM_RETRY_S = 0.100  # an unanswered DISARM asked again (4c design 4 7)
 DISARM_DEADLINE_S = 0.500  # then the arbiter STOPPED and the DISARM recorded unconfirmed (4c design 4 7)
 
@@ -166,20 +167,43 @@ class AutoPermit:
             if not host.authorized:
                 self.latch(now_ns, "authorization_revoked")
         elif self.state == STOP_PENDING:
-            stop = self._stop
-            if stop["written_ns"] is not None and s is not None and rx is not None and rx > stop["written_ns"] \
-                    and host.health(now_ns).fresh and host.authorized \
-                    and int(s.last_rx_seq) == stop["seq"] and (s.boot_id, s.arm_gen) == stop["boot_gen"] \
-                    and rx - stop["written_ns"] <= self.stop_ack_ns:
-                self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
-                self._disarm(now_ns, "s10_stopped")
-            elif not host.authorized or now_ns - (stop["written_ns"] or stop["since_ns"]) > self.stop_ack_ns:
-                self._disarm(now_ns, "control_stop_unconfirmed")
+            self._stop_pending(now_ns, s, rx)
         elif self.state == DISARMING:
             if self._disarmed_after_write(now_ns):
                 self.state = LATCHED
                 self._note(now_ns, "disarmed")
         self._disarm_retry(now_ns)
+
+    def _stop_pending(self, now_ns: int, s, rx) -> None:
+        """S10's control stop (4c design 4 3-4), judged conservatively: written within STOP_QUEUE_S of its queueing;
+        then a fresh STATE of the same boot and arm generation received after the write -- any reject reason there
+        DISARMs at once (seq or not); naming exactly the stop's seq with COMMAND_FRESH within STOP_ACK_S of the write
+        confirms it; past that, or the authority gone, DISARM."""
+        host, stop = self.host, self._stop
+        w = stop["written_ns"]
+        if not host.authorized:
+            self._disarm(now_ns, "control_stop_unauthorized")
+            return
+        if w is None:
+            if now_ns - stop["since_ns"] > int(STOP_QUEUE_S * 1e9):
+                self._disarm(now_ns, "control_stop_unwritten")
+            return
+        if s is not None and rx is not None and rx > w and host.health(now_ns).fresh \
+                and (s.boot_id, s.arm_gen) == stop["boot_gen"]:
+            if s.reject_reason != RejectReason.NONE:
+                self._disarm(now_ns, f"control_stop_rejected:{s.reject_reason.name.lower()}")
+                return
+            if int(s.last_rx_seq) == stop["seq"] and s.flags & StateFlag.COMMAND_FRESH and rx - w <= self.stop_ack_ns:
+                self._note(now_ns, "control_stop_confirmed", seq=stop["seq"])
+                self._disarm(now_ns, "s10_stopped")
+                return
+        if now_ns - w > self.stop_ack_ns:
+            self._disarm(now_ns, "control_stop_unconfirmed")
+
+    def stop_discarded(self, now_ns: int, seq: int) -> None:
+        """The sender dropped a frame before its first byte: S10's stop frame among them DISARMs at once."""
+        if self.state == STOP_PENDING and self._stop is not None and (int(seq) & 0xFFFF) == self._stop["seq"]:
+            self._disarm(now_ns, "control_stop_discarded")
 
     def _asked_disarm(self, now_ns: int) -> None:
         """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept."""

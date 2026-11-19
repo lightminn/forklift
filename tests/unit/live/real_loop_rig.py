@@ -109,6 +109,8 @@ class FreshMcu(FakeMcu):
     lift that follows a DRIVE's lift target at 0.05 m/s while armed (it holds where it is otherwise)."""
 
     lift, lift_target, LIFT_RATE = 0.0, 0.0, 0.05
+    reject = None  # a RejectReason every STATE carries (injection)
+    fresh_off = False  # COMMAND_FRESH never set (injection)
 
     def receive(self, msg, seq):
         from forklift_core.mcu_link.messages import Drive, Mode
@@ -132,8 +134,10 @@ class FreshMcu(FakeMcu):
 
         st = _r(super().state(), lift_m=float(self.lift))
         if self.mode == Mode.ARMED and self.deadline_us is not None and self.t_us <= self.deadline_us \
-                and self.zero_seen:
+                and self.zero_seen and not self.fresh_off:
             st = _r(st, flags=st.flags | StateFlag.COMMAND_FRESH)
+        if self.reject is not None:
+            st = _r(st, reject_reason=self.reject)
         return st
 
 
