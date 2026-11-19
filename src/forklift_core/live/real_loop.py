@@ -249,11 +249,8 @@ class RealLoop:
             self._bypass_pending.clear()
         # the check and the change under one channel lock: a connection event queued between them cannot slip past
         # (r7 P2-1; the channels' lock is re-entrant)
-        self.channels.lock.acquire()
-        try:
+        with self.channels.lock:
             self._apply_pending(int(self.clock()))  # the lease judged at the instant it applies (r8 P2)
-        finally:
-            self.channels.lock.release()
         self._bypass_pending.clear()
         self._tick_bypass = frozenset(self.bypass)
         if self.real_layer is not None:
