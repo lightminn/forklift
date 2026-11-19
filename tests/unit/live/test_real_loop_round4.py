@@ -102,7 +102,8 @@ def test_30_ms_spent_before_the_first_byte_sends_the_wait_frame():
     real = r.transport.transmit
 
     def slow(host, now, gate):
-        r.tick_cost_ns = 35 * MS
+        # past 30 ms (a wait) but before decision + W - A (34 ms, 6a: every DRIVE, the wait frame too, is held there)
+        r.tick_cost_ns = 33 * MS
         return real(host, now, gate)
 
     r.transport.transmit = slow

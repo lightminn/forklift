@@ -114,6 +114,7 @@ class Outgoing:
     expires_ns: int | None  # DRIVE/COMMISSION only: dropped, not written, once this has passed
     generation: int  # authorization generation it was made under (DRIVE/COMMISSION dropped when it changes)
     nonzero: bool = False  # DRIVE with a non-zero wheel target, COMMISSION with a non-zero duty
+    echo: tuple | None = None  # ARM and the arming zero: the (boot id, MCU time) of the STATE they echo (6a design 2)
 
 
 _MOTION = ("DRIVE", "COMMISSION")  # the commands that move an axis: one outbox rule for both
@@ -441,7 +442,8 @@ class McuLinkHost:
                              valid_after_echo_ms(now_ns + self.cfg.zero_valid_ms * 1_000_000, now_ns),
                              True, s.arm_gen, s.boot_id, s.mcu_time_us)
                 self._auth = _ZERO_PENDING
-                self._enqueue("DRIVE", zero, now_ns, expires_ns=now_ns + self.cfg.zero_valid_ms * 1_000_000)
+                self._enqueue("DRIVE", zero, now_ns, expires_ns=now_ns + self.cfg.zero_valid_ms * 1_000_000,
+                              echo=(s.boot_id, s.mcu_time_us))
                 events.append(HostEvent("zero_sent", {"arm_gen": s.arm_gen}))
             elif s.mode != Mode.ARMED and s.reject_reason not in (RejectReason.NONE, a["reject_at_request"]):
                 self._revoke(f"rejected: {s.reject_reason.name.lower()}", events)
@@ -518,8 +520,19 @@ class McuLinkHost:
         self._auth = _ARM_PENDING
         self._arm = {"boot": s.boot_id, "prev_gen": s.arm_gen, "gen": None, "reject_at_request": s.reject_reason,
                      "deadline_ns": now_ns + int(self.cfg.arm_timeout_s * 1e9)}
-        self._enqueue("ARM", Arm(s.boot_id, s.mcu_time_us), now_ns)
+        self._enqueue("ARM", Arm(s.boot_id, s.mcu_time_us), now_ns, echo=(s.boot_id, s.mcu_time_us))
         return None
+
+    def cancel_arm(self, now_ns: int, reason: str) -> list[HostEvent]:
+        """Give up an arming exchange whose ARM or zero can no longer be written in time (real HIL 6a design 2): the
+        authorization revoked (``arm_failed`` before the zero, ``authorization_revoked`` after) and the ARM and the
+        motion frames dropped; the caller's permit latches on it."""
+        events: list[HostEvent] = []
+        if self._auth in (_ARM_PENDING, _ZERO_PENDING):
+            self._revoke(f"arm_cancelled: {reason}", events)
+        for e in events:
+            self._log("event", now_ns, b"", {"event": e.kind, **e.detail})
+        return events
 
     def request_disarm(self, now_ns: int) -> None:
         """Always accepted, no STATE needed: drops queued ARM/DRIVE/CLEAR_FAULTS, then queues one DISARM
@@ -604,11 +617,12 @@ class McuLinkHost:
         return None, valid
 
     # ---------------------------------------------------------------- outbox
-    def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None, nonzero: bool = False) -> None:
+    def _enqueue(self, kind: str, msg, now_ns: int, *, expires_ns: int | None = None, nonzero: bool = False,
+                 echo: tuple | None = None) -> None:
         seq = self._seq
         self._seq = (self._seq + 1) & 0xFFFF
         self.last_queued_seq = seq
-        out = Outgoing(kind, seq, encode(msg, seq), expires_ns, self._auth_gen, nonzero)
+        out = Outgoing(kind, seq, encode(msg, seq), expires_ns, self._auth_gen, nonzero, echo)
         self._outbox.append(out)
         self._log("queued", now_ns, out.data, {"kind": kind, "seq": seq})
 

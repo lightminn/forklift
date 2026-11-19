@@ -207,6 +207,7 @@ class FakeTransport:
         self.mcu, self.dec, self.last_ns, self.sent = mcu, LinkDecoder(), None, []
         self.refuse_next = 0
         self.silent = False  # no STATE reaches the host (an RX cut; the MCU keeps running)
+        self.judged: dict = {}  # seq -> the judged clock value of its last successful write (6a design 6 ②)
 
     def receive(self, host, now_ns, limit=64):
         if self.silent:
@@ -236,7 +237,8 @@ class FakeTransport:
                 return out  # nothing more goes out, a DISARM included
             f = self._cur
 
-            def finish(f=f):
+            def finish(f=f, *, judged_ns=None):
+                self.judged[int(f.seq) & 0xFFFF] = judged_ns
                 self._cur, self.partial_since_ns = None, None
                 self._deliver(host, f, now_ns)
 
@@ -247,7 +249,8 @@ class FakeTransport:
             else:
                 self.resync(host, now_ns)  # refused half frame: abandoned, the link reopened
         while (f := host.next_frame(now_ns)) is not None:
-            def write(f=f):
+            def write(f=f, *, judged_ns=None):
+                self.judged[int(f.seq) & 0xFFFF] = judged_ns
                 if self.stall:
                     self._cur, self.partial_since_ns = f, now_ns  # its first bytes only
                     return
@@ -259,7 +262,8 @@ class FakeTransport:
                 out.append((f.kind, f.seq, now_ns))
             else:
                 host.unsent(f, now_ns)
-                host.drop_drives("send_gate")
+                if not getattr(gate, "keep", False):  # 6a: a kept ARM / arming zero leaves the queue as it is
+                    host.drop_drives("send_gate")
                 break
         return out
 

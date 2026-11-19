@@ -1051,6 +1051,10 @@ class Arbiter:
     def _mission_request(self, client_id, request_id, kind, command):
         if self.mission is None:
             return self._reply(kind, request_id, "unsupported")
+        if any(p["request_id"] == request_id and not p.get("settled") for p in self.pending):
+            # real HIL 6a design 5: resolve answers by request id, so a second unsettled request with the same id
+            # (another seq) would take the first one's result -- refused before it is queued
+            return self._reply(kind, request_id, "duplicate_request")
         self.pending.append({"client_id": client_id, "conn_id": self._handling_conn, "request_id": request_id,
                              "kind": kind, "command": command, "control_gen": self.control_gen, "queued": False,
                              "ledger_key": self._ledger_key})  # its result goes where it was admitted (D7)

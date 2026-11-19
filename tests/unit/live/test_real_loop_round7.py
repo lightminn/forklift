@@ -59,7 +59,7 @@ def test_a_wait_chosen_before_the_send_undoes_the_lift_ramp_too():
     r.submit()
     run_until(r, lambda rec: r.core.ms.phase == "lift")
     target = r.core.ms.lift_command
-    r.tick_cost_ns = 35 * MS  # the tick is past 30 ms already at the send
+    r.tick_cost_ns = 33 * MS  # past 30 ms at the send, before decision + W - A (6a: the wait frame's own bound)
     recs = [r.tick() for _ in range(15)]
     r.tick_cost_ns = 0
     assert all(x.branch == "wait" for x in recs)
