@@ -250,10 +250,11 @@ export function renderRealPanel(m, clientId) {
     panel.toggle = null;
   }
   const linkUp = !m.link || m.link.up !== false;
+  const fresh = linkUp && m.session.realStatusLease !== null && m.session.realStatusLease === gens.lease_id;
   const shown = st ? `허가 ${st.permit?.state ?? "—"} · 미션 ${st.mission?.status ?? "—"}` : "실차 상태 대기 중";
-  // disconnected: the values are the last received, said so (r12 P3); the buttons are closed by the lost lease
-  $("rp-status").textContent = linkUp ? shown : `연결 끊김 · 마지막 수신 값: ${shown}`;
-  el.classList.toggle("stale", !linkUp);
+  // disconnected, or reconnected with no status of this lease yet: the last received values, said so (r12-r13 P3)
+  $("rp-status").textContent = fresh ? shown : `${linkUp ? "새 상태 대기" : "연결 끊김"} · 마지막 수신 값: ${shown}`;
+  el.classList.toggle("stale", !fresh);
   const fill = (sel, items, idKey) => {
     const want = items.map((x) => x[idKey]).join("|");
     if (sel.dataset.items === want) return;
