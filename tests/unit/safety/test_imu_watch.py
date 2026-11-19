@@ -65,10 +65,13 @@ def test_the_baseline_needs_a_steady_gapless_stand():
         opposite.add(t * MS, G if k % 2 else (0.0, 0.0, -9.81), t * MS)
         t += 5
     assert opposite.baseline(1000 * MS) == (None, "imu_baseline_unsteady")
-    gapped = ImuWatch(CFG)
-    t = fed(gapped, 1000, 5)
-    fed(gapped, t + 60, 5)
-    assert gapped.baseline(1000 * MS) == (None, "imu_baseline_gap")
+    gapped = ImuWatch(CFG)  # the run after the gap counts alone (5 samples: not enough yet)
+    t = fed(gapped, 1000, 8)
+    t = fed(gapped, t + 60, 5)
+    assert gapped.baseline(1000 * MS) == (None, "imu_no_baseline")
+    fed(gapped, t, 5)
+    (d, last), why = gapped.baseline(1000 * MS)
+    assert why is None and last == (t + 20) * MS
 
 
 def test_stale_on_the_host_clock_and_held():

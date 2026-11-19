@@ -229,9 +229,33 @@ class FakeTransport:
         self.resyncs += 1
 
 
+class FakeImu:
+    """A 200 Hz accelerometer on the rig's clock (the source contract of safety wiring design 4: the samples taken
+    so far, non-blocking, ascending, at most ``limit``). ``accel`` is what it reads now; ``paused`` stops it."""
+
+    def __init__(self, clock, period_ns=5 * MS):
+        self.clock, self.period_ns = clock, int(period_ns)
+        self.accel = (0.0, 0.0, 9.81)
+        self.paused = False
+        self.next_ns = None
+        self.fail = False
+
+    def samples(self, upto_ns, limit):
+        if self.fail:
+            raise OSError("imu read")
+        if self.next_ns is None:
+            self.next_ns = int(upto_ns) - 20 * self.period_ns
+        out = []
+        while self.next_ns <= int(upto_ns) and len(out) < limit:
+            if not self.paused:
+                out.append((self.next_ns, self.accel))
+            self.next_ns += self.period_ns
+        return out
+
+
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None, real_layer=False):
+                 initial_seq=None, watch=None, real_layer=False, imu=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -386,13 +410,25 @@ class Rig:
                              watch=watch, clock=lambda: self.now + self.tick_cost_ns,
                              real_layer=self.layer, delay_bound=self.delay_bound if real_layer else None,
                              state_delay_s=0.05, pallet_size=(0.6, 0.4),
-                             kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m))
+                             kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m),
+                             **self._imu_args(imu))
         loop_box["loop"] = self.loop
         self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
                                                   bool(core.slam.get("stop_now")))
         self.core = core
         self.channels.connect("c1", "op", control=True)
         self.lease = None
+
+    def _imu_args(self, imu):
+        """5b: the real IMU watch from config/real/safety_watch.yaml's imu part and a fake 200 Hz source."""
+        if not imu:
+            self.imu = None
+            return {}
+        from forklift_core.safety.real_watch import ImuWatch, load_imu_config
+
+        self.imu = FakeImu(lambda: self.now)
+        return {"imu_watch": ImuWatch(load_imu_config(ROOT / "config/real/safety_watch.yaml")),
+                "imu_source": self.imu, "imu_policy": "required"}
 
     # --- sources --------------------------------------------------------------------------------------------------
     def _stop_since(self, now_ns):

@@ -261,6 +261,40 @@ class AssemblyRefused(RuntimeError):
         self.reasons = list(reasons)
 
 
+@dataclass(frozen=True)
+class Watches:
+    """The real autonomy's watches (safety wiring design 4): the current and wheel SafetyWatch, the IMU watch (None
+    with ``imu: none``) and the policy the loop enforces (``required``: no loop without the IMU watch and source)."""
+
+    safety: object
+    imu: object
+    imu_policy: str
+
+
+def build_watches(autonomy: dict, watch_path, wheel_radius_m) -> Watches:
+    """The one assembly of the watches for the dry and the live assembly (design 4): ``config/real/safety_watch.yaml``
+    (``SafetyWatch`` and its ``imu:`` part) and ``autonomy.yaml``'s ``imu: required | none``; any fault refuses."""
+    import yaml
+
+    from forklift_core.safety.real_watch import ImuWatch, SafetyWatch, load_imu_config, load_watch_config
+
+    try:
+        safety = SafetyWatch(load_watch_config(watch_path), wheel_radius_m=tuple(float(v) for v in wheel_radius_m))
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as err:
+        raise AssemblyRefused([f"watch_config:{type(err).__name__}:{err}"]) from err
+    policy = autonomy.get("imu") if isinstance(autonomy, dict) else None
+    if policy not in ("required", "none"):
+        raise AssemblyRefused([f"imu_policy:{policy!r}"])
+    imu = None
+    if policy == "required":
+        try:
+            imu = ImuWatch(load_imu_config(watch_path))
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, yaml.YAMLError) as err:
+            msg = str(err)
+            raise AssemblyRefused([msg if msg.startswith("imu_config:") else f"imu_config:{msg}"]) from err
+    return Watches(safety, imu, policy)
+
+
 def scenario_of(cfg: ra.S10AConfig) -> TransportScenario:
     x0, x1, y0, y1 = (float(v) for v in cfg.bounds)
     pickup = PalletSite(*(float(v) for v in cfg.check_pallet_pose))

@@ -271,16 +271,19 @@ class ImuWatch:
 
     def baseline(self, still_since_ns):
         """``((direction, last_ns), None)`` from the valid samples taken in the current stand -- ``last_ns`` the
-        newest one used --, or ``(None, reason)``: ``imu_not_still``, ``imu_no_baseline``, ``imu_baseline_gap``,
-        ``imu_baseline_unsteady``."""
+        newest one used; the stand's latest gapless run --, or ``(None, reason)``: ``imu_not_still``,
+        ``imu_no_baseline``, ``imu_baseline_unsteady``."""
         if still_since_ns is None:
             return None, "imu_not_still"
         c = self.cfg
         part = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
+        # the latest gapless run of the stand: an earlier gap only means the run started later
+        for k in range(len(part) - 1, 0, -1):
+            if part[k][0] - part[k - 1][0] > c.gap_max_s * 1e9:
+                part = part[k:]
+                break
         if len(part) < c.baseline_min:
             return None, "imu_no_baseline"
-        if any(b[0] - a[0] > c.gap_max_s * 1e9 for a, b in zip(part, part[1:])):
-            return None, "imu_baseline_gap"
         mean = tuple(sum(u[k] for _, u in part) / len(part) for k in range(3))
         size = math.sqrt(sum(x * x for x in mean))
         if size < 0.9:

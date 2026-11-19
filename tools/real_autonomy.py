@@ -60,7 +60,7 @@ def _sha(path: Path) -> str:
 
 
 def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_bundle: Path | None,
-                 out: Path | None):
+                 out: Path | None, watch_path: Path | None = None):
     import yaml
 
     from forklift_core.live import real_assembly as asm
@@ -103,6 +103,15 @@ def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_b
         record.update(assembled=False, refused=[f"vehicle_unreadable:{type(err).__name__}:{err}"])
         _write(record, out)
         return 2
+    # the watches as the live assembly builds them (safety wiring design 4: one build_watches for both)
+    watch_path = REPO / "config/real/safety_watch.yaml" if watch_path is None else watch_path
+    try:
+        watches = asm.build_watches(data, watch_path, vehicle.wheel_radius_m)
+    except asm.AssemblyRefused as err:
+        record.update(assembled=False, refused=err.reasons)
+        _write(record, out)
+        return 2
+    record["watch"] = {"path": str(watch_path), "sha256": _sha(watch_path), "imu": watches.imu_policy}
     low, high = kin.cfg.steering.curvature_range
     cap = min(-float(low), float(high))
     settings = {k: data[k] for k in ("lift_target_m", "lift_rate_mps", "drive_acceleration_mps2",
@@ -167,13 +176,14 @@ def main(argv=None) -> int:
     ap.add_argument("--s10a", type=Path, default=REPO / "config/real/s10a.yaml")
     ap.add_argument("--settings", type=Path, default=REPO / "config/real/autonomy.yaml")
     ap.add_argument("--vehicle", type=Path, default=REPO / "config/real/vehicle.yaml")
+    ap.add_argument("--watch", type=Path, default=REPO / "config/real/safety_watch.yaml")
     ap.add_argument("--map-bundle", type=Path, default=None,
                     help="the surveyed map bundle (verified by its manifest; its map id must be s10a.yaml's)")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
     if args.run or args.device is not None:
         return run_refused(args.device, args.out)
-    return dry_assemble(args.s10a, args.settings, args.vehicle, args.map_bundle, args.out)
+    return dry_assemble(args.s10a, args.settings, args.vehicle, args.map_bundle, args.out, args.watch)
 
 
 if __name__ == "__main__":

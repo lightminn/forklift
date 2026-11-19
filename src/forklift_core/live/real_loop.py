@@ -131,7 +131,8 @@ class RealLoop:
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
                  depth_source=None, watch=None, clock=None, operator_start=None, real_layer=None,
                  delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
-                 kappa_max_inv_m: float = 0.0, pallet_size=None) -> None:
+                 kappa_max_inv_m: float = 0.0, pallet_size=None, imu_watch=None, imu_source=None,
+                 imu_policy=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -181,6 +182,15 @@ class RealLoop:
         self._layer_asked = None  # the last (mission gen, path id, loaded) a refresh was asked for
         self._planning_gen = None  # the correction generation the planning request used (design 1.2, round 3 P2-3)
         self.watch = watch  # the real safety watch (the teleop leg's SafetyWatch); None: off (design 3)
+        # 5b (safety wiring design 4): the IMU watch and its non-blocking source, both or neither when required
+        if imu_policy not in (None, "required", "none"):
+            raise ValueError(f"imu_policy {imu_policy!r}")
+        if imu_policy == "required" and (imu_watch is None or imu_source is None):
+            raise ValueError("imu_required")
+        if (imu_watch is None) != (imu_source is None):
+            raise ValueError("imu_watch and imu_source go together")
+        self.imu_watch, self.imu_source, self.imu_policy = imu_watch, imu_source, imu_policy
+        self._imu_wait_until: dict = {}  # mission id -> the baseline's wait deadline (host ns), set once
         self._watch_rx: int | None = None
         # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
         # tests' fake clock passes the tick's instant
@@ -523,6 +533,16 @@ class RealLoop:
                 self._emergency(now_ns, "overspeed")
                 return
         s = host.state
+        if self.imu_watch is not None:
+            self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
+            if permit.state in (ra.OFF, ra.LATCHED):
+                self.imu_watch.disarm()
+            elif permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
+                trip_ = self.imu_watch.judge(now_ns)
+                if trip_ is not None:
+                    rec.branch, rec.reason = "emergency", f"watch:{trip_}"  # design 4: a lost watch or a tilt is ①
+                    self._emergency(now_ns, rec.reason)
+                    return
         if self._watch_trip is not None:
             trip, self._watch_trip = self._watch_trip, None
             rec.branch, rec.reason = "emergency", f"watch:{trip}"
@@ -551,6 +571,34 @@ class RealLoop:
             elif a.lease is None:
                 rec.branch, rec.reason = "emergency", "lease_lost"
                 self._emergency(now_ns, "lease_lost")
+
+    IMU_BATCH = 64  # the most samples taken from the source per read (its contract: non-blocking, ascending)
+
+    def _pull_imu(self, upto_ns: int | None = None) -> int:
+        """The source's samples taken up to ``upto_ns`` (the clock read just before, by default) into the IMU watch,
+        in acquisition order (design 4: later ones stay in the source for the next read); a failing source gives
+        none this time (the watch's stale and gap judgements take it). Returns the instant used."""
+        upto = int(self.clock()) if upto_ns is None else int(upto_ns)
+        try:
+            batch = list(self.imu_source.samples(upto, self.IMU_BATCH))[: self.IMU_BATCH]
+        except Exception:  # noqa: BLE001
+            return upto
+        for sample_ns, accel in sorted(batch, key=lambda b: int(b[0])):
+            self.imu_watch.add(int(sample_ns), accel, upto)
+        return upto
+
+    def _imu_arm_gate(self, now_ns: int, mission_id, *, not_still: bool = False):
+        """Before the ARM (design 4), after the existing refusals: ("ok", baseline), ("wait", reason) within the
+        mission's one deadline for the stand and the baseline to gather, or ("refuse", reason)."""
+        base, why = (None, "not_still") if not_still else self.imu_watch.baseline(self.still_since_ns)
+        if why is None:
+            return "ok", base
+        if why in ("not_still", "imu_no_baseline", "imu_not_still"):
+            until = self._imu_wait_until.setdefault(
+                mission_id, int(now_ns) + int(self.imu_watch.cfg.baseline_wait_s * 1e9))
+            if int(now_ns) < until:
+                return "wait", why
+        return "refuse", why
 
     def _before_arm(self) -> bool:
         """A mission the permit does not collect yet: accepted or preparing, or adopted and running with the permit
@@ -728,13 +776,23 @@ class RealLoop:
         if (cmds.status == "running" and cmds.adopted_id == cmds.mission_id and ms.phase == "approach"
                 and self.adopted_for != cmds.mission_id and permit.state == ra.OFF and not layer_wait
                 and not (ready_wait or "").startswith("wait:")):  # no ARM while a wait holds (Codex 4c impl P2-3)
-            self.adopted_for = cmds.mission_id
-            why = self._pre_arm_refusal(now_ns)
-            cmds.begin_wait(t)
-            if not permit.adopted(now_ns, pre_arm_refusal=why):
-                rec.branch, rec.reason = "emergency", f"arm:{permit.reason}"
-                self._emergency(now_ns, permit.reason or "arm")
-                return
+            why = self._pre_arm_refusal(now_ns)  # the existing refusals first (round 3 P2-2)
+            gate_imu = ("ok", None)
+            if self.imu_watch is not None and why in (None, "not_still"):
+                gate_imu = self._imu_arm_gate(now_ns, cmds.mission_id, not_still=why == "not_still")
+                if gate_imu[0] == "refuse":
+                    why = gate_imu[1]
+            if gate_imu[0] != "wait":  # a wait leaves adopted_for unset: the ARM is asked again next tick
+                self.adopted_for = cmds.mission_id
+                if self.imu_watch is not None and why is None:
+                    self.imu_watch.arm(gate_imu[1])  # frozen before the ARM is asked (design 4)
+                cmds.begin_wait(t)
+                if not permit.adopted(now_ns, pre_arm_refusal=why):
+                    if self.imu_watch is not None:
+                        self.imu_watch.disarm()
+                    rec.branch, rec.reason = "emergency", f"arm:{permit.reason}"
+                    self._emergency(now_ns, permit.reason or "arm")
+                    return
         bad = self._unsupported()
         if bad is not None:
             rec.branch, rec.reason = "emergency", f"unsupported:{bad}"
@@ -1174,8 +1232,15 @@ class RealLoop:
             ns0 = int(self.clock())
             ns = ns0 + int(EVIDENCE_READ_MAX_S * 1e9)
             why = ra.auto_ready_refusal(ns, "drive", self.evidence)
+            imu_trip = None
+            if self.imu_watch is not None:
+                # the IMU read and judged inside the same budget, at the write's latest instant (design 4)
+                self._pull_imu()  # the samples taken so far; their age judged at the write's latest instant
+                imu_trip = self.imu_watch.judge(ns)
             if int(self.clock()) > ns:
                 return "evidence_slow", "alarm"
+            if imu_trip is not None:
+                return f"send:watch:{imu_trip}", "alarm"
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
             if not self.host.health(ns).fresh:
