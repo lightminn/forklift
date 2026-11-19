@@ -46,6 +46,9 @@ out.open = [P.answerStillOpen(key, s7),
             P.answerStillOpen(key, st("LATCHED", "running", {operator_request: {kind: "lifted", serial: 8}})),
             P.answerStillOpen(key, {...s7, session_epoch: 4}),
             P.answerStillOpen(key, st("LATCHED", "running")), P.answerStillOpen(null, s7)];
+const sA = st("OFF", "idle", {lease: {holder: "me"}});
+out.sig = [P.statusSig(sA) === P.statusSig({...sA, control_gen: 99}),  // same content: same signature
+           P.statusSig(sA) === P.statusSig(st("OFF", "idle", {lease: {holder: "me"}, operator_request: {kind: "lifted", serial: 2}}))];
 out.pose = [P.poseOf("3", "0.5", "90"), P.poseOf("x", 0, 0), P.poseOf(1, 2, Infinity)];
 console.log(JSON.stringify(out));
 """
@@ -69,6 +72,7 @@ def test_the_panel_decisions(tmp_path):
     assert out["open"] == [True, False, False, False, False]
     assert out["pose"][0][:2] == [3, 0.5] and abs(out["pose"][0][2] - 1.5707963) < 1e-6
     assert out["pose"][1] is None and out["pose"][2] is None
+    assert out["sig"] == [True, False]
 
 
 def test_the_panels_bypass_list_is_the_vehicles():

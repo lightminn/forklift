@@ -88,3 +88,13 @@ export function poseOf(x, y, yawDeg) {
   if (!v.every(Number.isFinite)) return null;
   return [v[0], v[1], (v[2] * Math.PI) / 180];
 }
+
+// What a click depends on in a status: the session, the holder, the permit and mission, the open operator request,
+// the open recovery and the bypassed set (5c-1b r3 P2-1: a fresh status with the same content does not void a click).
+export function statusSig(status) {
+  if (!status) return null;
+  const req = status.operator_request;
+  return JSON.stringify([status.session_epoch, status.lease ? status.lease.holder : null, status.permit?.state,
+    status.mission?.status, status.mode, req ? [req.kind, req.serial] : null, status.field_recovery ?? null,
+    status.bypassed ?? [], status.targets_revision ?? null]);
+}

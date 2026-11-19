@@ -2,7 +2,7 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, panelShown, poseOf, statusIsMine, submitClosedWhy,
+import { answerKey, answerStillOpen, bypassButtons, panelShown, poseOf, statusIsMine, statusSig, submitClosedWhy,
   submitRevision, toggleShown } from "./realpanel.js";
 
 const $ = (id) => document.getElementById(id);
@@ -22,7 +22,7 @@ export function bindRealPanel(m, rejectText, clientId) {
   const drawnOk = () => {
     const d = panel.drawn;
     return Boolean(d && d.epoch === gens().session_epoch && d.lease === gens().lease_id
-      && d.status === m.session.realStatus && panel.mine);
+      && d.sig === statusSig(m.session.realStatus) && panel.mine);
   };
   const guard = (fn) => () => {
     if (!drawnOk()) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
@@ -62,18 +62,21 @@ export function bindRealPanel(m, rejectText, clientId) {
     });
   });
   // the operator answer: the key of the request on screen when the press began (r1 P2-1)
-  const press = () => { panel.pressKey = panel.opKey ? { ...panel.opKey } : null; };
+  // each button its own press record (r3 P2-2: a second pointer on the other button does not change it)
+  panel.pressKey = {};
+  const press = (id) => { panel.pressKey[id] = panel.opKey ? { ...panel.opKey } : null; };
   for (const id of ["rp-confirm", "rp-reject"]) {
-    $(id).onpointerdown = press;
+    $(id).onpointerdown = () => press(id);
     $(id).onkeydown = (ev) => {
       if (ev.key !== "Enter") return; // Space is the teleop deadman key (r2 P3): Enter only
       if (ev.repeat) { ev.preventDefault(); return; } // a held key does not take a newer request (r2 P2-1)
-      press();
+      press(id);
     };
   }
   const answer = (verdict) => {
-    const key = panel.pressKey ?? panel.opKey;
-    panel.pressKey = null;
+    const id = verdict === "confirm" ? "rp-confirm" : "rp-reject";
+    const key = id in panel.pressKey ? panel.pressKey[id] : panel.opKey;
+    delete panel.pressKey[id];
     if (!answerStillOpen(key, m.session.realStatus)) return say("확인 요청이 바뀌었습니다 · 화면을 다시 보세요");
     send("operator_answer", { kind: key.kind, serial: key.serial, verdict }, verdict === "confirm" ? "확인했습니다" : "거부했습니다");
   };
@@ -95,7 +98,8 @@ export function bindRealPanel(m, rejectText, clientId) {
     if (!drawnOk()) return say("세션·권한·상태가 바뀌었습니다 · 화면을 다시 보세요");
     if (panel.toggle) return say("앞선 우회 변경이 적용되기를 기다립니다"); // one at a time (r2 P2-3)
     // tracked from the send: the submit and the start check are closed at once; the 2 s run from the ack
-    const toggle = { check: btn.dataset.check, on: btn.dataset.bypassed !== "true", at: null };
+    const toggle = { check: btn.dataset.check, on: btn.dataset.bypassed !== "true", at: null,
+      epoch: gens().session_epoch, lease: gens().lease_id }; // bound to the session and lease (r3 P3)
     panel.toggle = toggle;
     send("check_bypass", { check: toggle.check, on: toggle.on }, "다음 틱에 적용합니다").then((r) => {
       if (panel.toggle !== toggle) return;
@@ -116,7 +120,7 @@ export function renderRealPanel(m, clientId) {
   // only a status received while this lease was held counts (r2 P2-2; protocol.js records it at receipt)
   const mine = statusIsMine(st, gens, clientId) && m.session.realStatusLease === gens.lease_id;
   panel.mine = mine;
-  panel.drawn = { epoch: gens.session_epoch, lease: gens.lease_id, status: st };
+  panel.drawn = { epoch: gens.session_epoch, lease: gens.lease_id, sig: statusSig(st) };
   if (panel.registered && panel.registered.session_epoch !== gens.session_epoch) panel.registered = null;
   // the target list once per session when none came with the welcome (r1 P2-5)
   if (!m.session.targets && panel.targetsAsked !== gens.session_epoch && gens.session_epoch !== null) {
@@ -131,7 +135,10 @@ export function renderRealPanel(m, clientId) {
     });
   }
   // a toggle shown, or not by its deadline (then told; r1 P2-3)
-  const t = panel.toggle;
+  let t = panel.toggle;
+  if (t && (t.epoch !== gens.session_epoch || t.lease !== gens.lease_id)) {
+    panel.toggle = t = null; // another session or lease: that toggle tells nothing of this one (r3 P3)
+  }
   if (t && t.at !== null && (toggleShown(t, st) || performance.now() - t.at > TOGGLE_WAIT_MS)) {
     panel.note = toggleShown(t, st) ? "우회 변경이 적용됐습니다" // (r2 P3)
       : "우회 변경이 적용되지 않았습니다 · 실차 상태의 우회 목록을 보세요";
