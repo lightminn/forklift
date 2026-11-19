@@ -418,8 +418,8 @@ class Rig:
                              operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
                              **self._watch_args(watch, imu))
         loop_box["loop"] = self.loop
-        self.arbiter.stop_evidence = lambda now: (self.host.health(int(now * 1e9)).fresh,
-                                                  bool(core.slam.get("stop_now")))
+        # 5c-2 (design 6, 2b): the arbiter's stop evidence is the physical stand (no SLAM term)
+        self.arbiter.stop_evidence = lambda now: self.loop.physical_stop(now)
         self.core = core
         # 5c-1: the real console's connection carries a request token (its real requests go through the ledger)
         self.token = 900_001 if real_requests else None
@@ -444,8 +444,7 @@ class Rig:
 
     # --- sources --------------------------------------------------------------------------------------------------
     def _stop_since(self, now_ns):
-        s = self.loop.still_since_ns
-        return None if s is None or self.host.state is None else (s, self.host.state.boot_id)
+        return self.loop.rearm_stand(now_ns)  # 5c-2 (design 6, 2b): the MCU sample stand and its boot
 
     def _frame(self):
         if self.frames is None:
