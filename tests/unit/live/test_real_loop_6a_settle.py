@@ -194,3 +194,72 @@ def test_a_kept_arm_without_its_echo_delay_bound_is_given_up():
     r.submit()
     run_until(r, lambda rec: r.permit.state == ra.LATCHED, limit=400)
     assert not [m for _, kind, _, m in r.transport.sent if kind == "ARM"]
+
+
+# --- Codex 6a-1 impl round 1 -------------------------------------------------------------------------------------
+def test_a_half_arming_zero_is_not_finished_next_tick():
+    r = ready_to_submit()
+    real = r.transport.transmit
+    seen = {}
+
+    def stall_zero(host, now, gate):
+        front = host._outbox[0] if host._outbox else None  # noqa: SLF001
+        if not seen and front is not None and front.kind == "DRIVE" and front.echo is not None:
+            seen["zero"] = front
+            r.transport.stall = True
+        elif seen and r.transport.stall:
+            r.transport.stall = False
+        return real(host, now, gate)
+
+    r.transport.transmit = stall_zero
+    r.submit()
+    run_until(r, lambda rec: "zero" in seen and not r.transport.stall, limit=400)
+    k = len(r.transport.sent)
+    r.tick()
+    sent = [(kind, seq) for _, kind, seq, _ in r.transport.sent[k - 1:]]
+    assert ("DRIVE", seen["zero"].seq) not in sent
+    run_until(r, lambda rec: r.permit.state in (ra.DISARMING, ra.LATCHED), limit=20)
+
+
+def test_a_failing_collection_after_s10s_stop_still_writes_the_disarm_in_its_tick():
+    r = Rig(frames=True, operator=[(1, "confirm")])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift", limit=4000)
+    failing_once(r.core, "abandon_jobs")  # raises at the mission's collection (its end after S10's stop)
+    for _ in range(2000):
+        k = len(r.transport.sent)
+        rec = r.tick()
+        if rec.reason and "exception:collect" in rec.reason:
+            assert [kind for _, kind, _, _ in r.transport.sent[k:] if kind == "DISARM"]
+            return
+    raise AssertionError("the collection never ran")
+
+
+def test_an_arm_sent_back_by_eagain_is_given_up_past_its_echo_window():
+    r = layer_rig()
+    r.transport.eagain = {"ARM"}
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.ARMING, limit=400)
+    t0 = r.now
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED, limit=100)
+    assert r.now - t0 < int(0.3e9)
+    assert not [m for _, kind, _, m in r.transport.sent if kind == "ARM"]
+
+
+def test_a_settled_request_is_not_answered_again_by_resolve():
+    r = ready_to_submit()
+    a = r.link.a
+    a._mission_request("c", "x1", "mission_cancel", object())  # noqa: SLF001
+    a._mission_request("c", "x2", "mission_cancel", object())  # noqa: SLF001
+    a._settle(a.pending[0], a._reply("mission_cancel", "x1", "stale_control"))  # noqa: SLF001
+    out = a.resolve(r.now / 1e9, [])
+    assert [m["request_id"] for m in out].count("x1") == 1
+
+
+def test_the_disarm_decision_instant_is_recorded_on_the_clock():
+    r = ready_to_submit()
+    r.tick_cost_ns = 6 * MS
+    r.loop._emergency(r.now, "injected")  # noqa: SLF001
+    r.tick_cost_ns = 0
+    assert r.loop.disarm_decisions[-1] == (r.now + 6 * MS, "injected")

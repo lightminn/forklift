@@ -642,6 +642,9 @@ class McuLinkHost:
             o = self._outbox.popleft()
             if o.kind in _MOTION and (o.expires_ns <= now_ns or o.generation != self._auth_gen):
                 self._log("dropped", now_ns, o.data, {"kind": o.kind, "seq": o.seq, "why": "expired or stale"})
+                if o.echo is not None and self._auth == _ZERO_PENDING and o.generation == self._auth_gen:
+                    # the arming zero ran out unsent (real HIL 6a impl round 1 P2-2): the exchange ends here
+                    self._revoke("zero_expired", [])
                 continue
             self._inflight = o
             return o

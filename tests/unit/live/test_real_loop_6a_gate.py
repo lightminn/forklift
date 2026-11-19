@@ -136,19 +136,32 @@ def test_a_half_hold_is_not_finished_in_a_later_tick():
 
 
 def test_a_stop_decided_tick_refuses_a_half_lift_only_drive():
-    r = driving()
-    r.transport.stall = True
-    r.tick()
-    partial = r.transport.partial_frame
-    assert partial is not None
-    booked = next(f for f in r.loop.book.frames if f.seq == (int(partial.seq) & 0xFFFF))
-    booked.speed_mps = 0.0  # as a lift-only normal DRIVE
+    """Impl round 1 P3: a real lift-only DRIVE (wheels 0, lift moving) half written, then an arrival wait decided in
+    the next tick with the evidence normal -- only the stop-decided rule refuses its continuation."""
+    r = Rig(frames=True, operator=[])
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "lift")
+    real = r.transport.transmit
+    seen = {}
+
+    def stall_lift(host, now, gate):
+        o = host._outbox[0] if host._outbox else None  # noqa: SLF001
+        b = None if o is None else next((f for f in r.loop.book.frames if f.seq == (int(o.seq) & 0xFFFF)), None)
+        if not seen and b is not None and b.kind == "drive" and b.speed_mps == 0.0:
+            seen["seq"] = o.seq
+            r.transport.stall = True
+        return real(host, now, gate)
+
+    r.transport.transmit = stall_lift
+    run_until(r, lambda rec: "seq" in seen, limit=200)
+    r.transport.transmit = real
     r.transport.stall = False
-    installing(r)
+    r.loop._wait_reason_now = lambda now_ns, out: "arrival_wait"  # noqa: SLF001
     k = len(r.transport.sent)
     r.tick()
     sent = [(kind, seq) for _, kind, seq, _ in r.transport.sent[k:]]
-    assert (partial.kind, partial.seq) not in sent
+    assert ("DRIVE", seen["seq"]) not in sent
 
 
 # --- the axis watch --------------------------------------------------------------------------------------------------

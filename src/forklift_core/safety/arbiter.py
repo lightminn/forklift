@@ -849,6 +849,8 @@ class Arbiter:
         by_id = {r.get("request_id"): r for r in records if r.get("request_id") is not None}
         took_auto = False
         for p in self.pending:
+            if p.get("settled"):
+                continue  # 6a impl round 1 P2-3: answered already (a begin that raised before it dropped them)
             rec = by_id.get(p["request_id"])
             if rec is None:
                 reply = self._reply(p["kind"], p["request_id"], "invalid")

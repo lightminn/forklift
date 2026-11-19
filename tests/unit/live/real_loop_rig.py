@@ -208,6 +208,7 @@ class FakeTransport:
         self.refuse_next = 0
         self.silent = False  # no STATE reaches the host (an RX cut; the MCU keeps running)
         self.judged: dict = {}  # seq -> the judged clock value of its last successful write (6a design 6 ②)
+        self.eagain: set = set()  # frame kinds whose first byte meets EAGAIN after the gate passed them
 
     def receive(self, host, now_ns, limit=64):
         if self.silent:
@@ -249,6 +250,11 @@ class FakeTransport:
             else:
                 self.resync(host, now_ns)  # refused half frame: abandoned, the link reopened
         while (f := host.next_frame(now_ns)) is not None:
+            if f.kind in self.eagain:
+                gate(f, lambda *, judged_ns=None: None)  # judged, then EAGAIN at its first byte (6a impl round 1)
+                host.unsent(f, now_ns)
+                break
+
             def write(f=f, *, judged_ns=None):
                 self.judged[int(f.seq) & 0xFFFF] = judged_ns
                 if self.stall:

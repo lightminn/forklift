@@ -267,6 +267,7 @@ class RealLoop:
         self._axis_trip: str | None = None
         self._sample_delay: dict = {}
         self.axis_watch_times: deque = deque(maxlen=1024)
+        self.disarm_decisions: deque = deque(maxlen=256)  # (clock ns, reason) of each emergency decision
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
         # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
@@ -1164,7 +1165,15 @@ class RealLoop:
                 rec.reason = f"{rec.reason};transmit:{type(exc2).__name__}"
         # the record: the frames written whole in this tick -- queued now or finished from an earlier tick (round 8 P3)
         rec.seqs = list(self._written_now)
-        self._collect(now_ns, t, rec)
+        try:
+            self._collect(now_ns, t, rec)
+        except Exception as exc:  # noqa: BLE001 -- 6a impl round 1 P1-2: a failing collection is ① too, DISARM written
+            rec.branch, rec.reason = "emergency", f"exception:collect:{type(exc).__name__}:{exc}"
+            self._emergency(now_ns, rec.reason)
+            try:
+                self._transmit(now_ns)
+            except Exception as exc2:  # noqa: BLE001 -- the DISARM stays queued; the permit retries it next tick
+                rec.reason = f"{rec.reason};transmit:{type(exc2).__name__}"
         rec.phase, rec.permit = core.ms.phase, permit.state
         self.records.append(rec)
         self.record(rec)
@@ -1407,6 +1416,8 @@ class RealLoop:
                          collect=lambda r: self._end_now(now_ns, r))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
+        # 6a impl round 1 P2-4: the clock at the decision (the axis watch's last gap runs to here, not the tick start)
+        self.disarm_decisions.append((int(self.clock()), reason))
         self.waiting = None
         self._stop_decided = True  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
@@ -2092,15 +2103,20 @@ class RealLoop:
                 bound = self._arm_binding  # 6a: the ARM's own binding, kept through the exchange
             if bound is not None and bound != (None if a.lease is None else a.lease.lease_id, a.control_gen):
                 return "authority_changed", "alarm"
-            if arming_ and seq in self._kept and self.delay_bound is not None:
-                # 6a (design 2, rounds 12-13, premise review): a kept ARM or zero carries its original echo -- judged
-                # again only within the MCU's echo window from that STATE's acquisition; no delay bound: given up
+            if arming_ and self.delay_bound is not None:
+                # 6a (design 2, rounds 12-13, premise review; impl round 1 P2-1): an ARM or zero carries its original
+                # echo -- written only within the MCU's echo window from that STATE's acquisition, whether it came
+                # back by a late judgement or a 0-byte EAGAIN; a retry without the echo's delay bound is given up
                 rx_b = self._sample_delay.get((int(echo_[0]), int(echo_[1]))) if echo_ is not None else None
+                retry_ = seq in self._kept
+                self._kept.add(seq)
                 if rx_b is None or rx_b[1] is None:
-                    return "arm_echo_unknown", "cancel"
+                    if retry_:
+                        return "arm_echo_unknown", "cancel"
+                    rx_b = None
                 window_ms = int(self.host.cfg.cap_ms) if frame.kind == "ARM" else min(
                     int(self.host.cfg.zero_valid_ms), int(self.host.cfg.cap_ms))
-                if ns > int(rx_b[0]) - int(round(rx_b[1] * 1e9)) + window_ms * 1_000_000 \
+                if rx_b is not None and ns > int(rx_b[0]) - int(round(rx_b[1] * 1e9)) + window_ms * 1_000_000 \
                         - int(WRITE_ALLOWANCE_S * 1e9):
                     return "arm_echo_expired", "cancel"
             # every alarm first: an old frame's expiry never hides one (round 7 P2-1)
@@ -2109,6 +2125,9 @@ class RealLoop:
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             booked = next((f for f in self.book.frames if f.seq == seq), None)
             continuing_ = frame is getattr(self.transport, "partial_frame", None)
+            if arming_ and frame.kind == "DRIVE" and continuing_ and expires is not None \
+                    and int(expires) - int(self.host.cfg.zero_valid_ms) * 1_000_000 < int(now_ns):
+                return "zero_carried", "drop"  # 6a impl round 1 P1-1: a half arming zero is not finished next tick
             if booked is not None and booked.kind == "drive" and self._stop_decided and continuing_:
                 # 5d (7.1 6), 6a premise review P1-1: this tick stops -- no older normal DRIVE (a lift- or steering-only
                 # one too) is finished first
@@ -2146,6 +2165,9 @@ class RealLoop:
             judged = int(self.clock())
             self._judged_ns = judged
             if judged > limit:
+                if frame.kind == "DRIVE" and booked is None and decided is not None \
+                        and judged > decided + int((WRITE_MARGIN_S - WRITE_ALLOWANCE_S) * 1e9):
+                    return "zero_late", "cancel"  # 6a impl round 1 P2-2: past its own bound, the exchange is given up
                 if frame.kind == "ARM" or (frame.kind == "DRIVE" and booked is None):
                     self._kept.add(seq)
                     return "write_late", "keep"  # 0 bytes out: back to the queue head, judged again (6a design 2)
