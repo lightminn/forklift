@@ -37,6 +37,8 @@ from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
+from forklift_core.live.executor_lock import DeviceBusy  # noqa: E402
+from forklift_core.live.executor_lock import probe as probe_device  # noqa: E402
 from forklift_core.live.synthetic import SyntheticRefused, bench_opener, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
@@ -360,6 +362,12 @@ class Bridge:
             t_dec = self.clock()
         events += self.dev.transmit(self.host, now_ns)
         for e in events:
+            if e.kind == "device_busy":
+                # one executor per device (real safety wiring design 8): shown with its holder, the opening retried
+                h = e.detail.get("holder") or {}
+                why = f"{e.detail.get('path')} is held by pid {h.get('pid', '?')} ({h.get('tool', '?')})"
+                self.channels.put(None, {"t": "event", "kind": "device_busy", "reason": why})
+                print(f"teleop_bridge: {why}", file=sys.stderr, flush=True)
             if e.kind == "estop_waived":
                 # V1.0 e-stop waiver (plan 3): shown, not hidden -- the console paints a kind with "stop" red
                 why = f"no e-stop input; waived by the board image ({e.detail.get('product')})"
@@ -527,6 +535,13 @@ def main(argv=None) -> int:
     except (SyntheticRefused, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    try:
+        probe_device(args.device)  # one executor per device: refused at start, naming the holder (design 8)
+    except DeviceBusy as busy:
+        print(f"teleop_bridge: {busy}", file=sys.stderr)
+        return 2
+    except OSError:
+        pass  # a device not there yet: the link retries its opening (and takes the lock then)
     if args.synthetic_permit and synthetic is None:
         print("--synthetic-permit is for the rehearsal's model MCU only: give a pty device with --bench", file=sys.stderr)
         return 2
@@ -598,9 +613,10 @@ def main(argv=None) -> int:
                 config_path=REPO / "config" / "real" / "obstacle_layer_real.yaml",
                 vehicle=load_real_vehicle(VEHICLE_YAML), v_max_mps=load_real_vehicle(VEHICLE_YAML).teleop_speed_limit_mps,
                 allow_synthetic=synthetic is not None)
-        link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns) if synthetic is None
+        link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns, exclusive=True)
+                if synthetic is None
                 else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"]),
-                                      clock=time.monotonic_ns))
+                                      clock=time.monotonic_ns, exclusive=True))
         bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
                         safety_watch=not args.no_safety_watch,
                         profile=profile, floor_permit=floor, scan_permit=scan_permit)

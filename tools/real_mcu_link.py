@@ -24,6 +24,7 @@ import termios
 import time
 from pathlib import Path
 
+from forklift_core.live.executor_lock import DeviceBusy, lock_fd
 from forklift_core.plant.mcu_host import HostConfig, HostEvent, McuLinkHost, Outgoing
 
 _LOST = {errno.EIO, errno.ENODEV, errno.ENXIO, errno.EBADF}
@@ -194,11 +195,16 @@ class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 
     def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw,
-                 clock=None, product_reader=usb_product_of_fd) -> None:
+                 clock=None, product_reader=usb_product_of_fd, exclusive: bool = False) -> None:
         """``clock``: the teleop bridge's D5 times (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.3b) -- the host is
         given the time a read returned (later than the bytes' arrival: validity shorter, gaps longer) and each frame's
         write time is taken before its write; None keeps the cycle time for both (every other tool)."""
         self.path, self.baud, self.retry_ns, self.opener = path, baud, int(retry_s * 1e9), opener
+        # One executor per device (docs/design/2026-11-19-real-safety-wiring.md 8): an exclusive flock on every fd this
+        # link opens, a reconnect included; held elsewhere, the opening is refused (a ``device_busy`` event naming the
+        # holder) and tried again later. Off by default: the tools that only listen are unchanged.
+        self.exclusive = bool(exclusive)
+        self.busy: DeviceBusy | None = None  # the last refusal (None once an opening succeeded)
         self.product_reader = product_reader  # the opened device's USB product string, read at each opening
         self.clock = clock
         self.link: TtyLink | None = None
@@ -214,10 +220,23 @@ class ReconnectingLink:
         events: list[HostEvent] = []
         if self.link is None and now_ns >= self._next_try:
             try:
-                self.link = TtyLink(self.opener(self.path, self.baud))
+                fd = self.opener(self.path, self.baud)
+                if self.exclusive:
+                    try:
+                        lock_fd(fd, self.path)
+                    except DeviceBusy as busy:
+                        os.close(fd)
+                        raise busy
+                self.busy = None
+                self.link = TtyLink(fd)
                 product = self.product_reader(self.link.fd)
                 events.append(HostEvent("connected", {"path": self.path, "product": product}))
                 events += host.link_identity(product)
+            except DeviceBusy as busy:
+                if self.busy is None or str(self.busy) != str(busy):
+                    events.append(HostEvent("device_busy", {"path": self.path, "holder": busy.holder}))
+                self.busy = busy
+                self._next_try = now_ns + self.retry_ns
             except OSError:
                 self._next_try = now_ns + self.retry_ns
         if self.link is not None:
