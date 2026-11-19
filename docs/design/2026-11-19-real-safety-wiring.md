@@ -26,7 +26,7 @@
 | 단계 | 절 | 상태 |
 |---|---|---|
 | 5a | 1, 2, 3 | **수렴 대상**(이 판). 실차 층·계획 격자 분리·출력 구분. 공유 `ObstacleGrid.snapshot(suppress=)`·코어 계획 경계 |
-| 5b | 4 | **검토 중**(18판) |
+| 5b | 4 | **검토 중**(19판) |
 | 5c | 5, 6 | **미수렴 — 5c 에 들어갈 때 이 절만 검토** |
 | 5d | 7 | **미수렴 — 5d 에 들어갈 때 이 절만 검토** |
 
@@ -114,11 +114,11 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 
 ## 4. 감시 (5b)
 
-> **5b 검토 중**(18판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19). 5a 의 결정은 바꾸지 않는다.
+> **5b 검토 중**(19판): 이 절만 Codex 검토로 수렴시킨다(총괄 2026-11-19). 5a 의 결정은 바꾸지 않는다.
 
 **설정과 조립**(`src/forklift_core/live/real_assembly.py` 의 `build_watches(autonomy, watch_path, wheel_radius_m)` → `Watches(safety, imu, imu_policy)`; 바퀴 반경은 조립이 읽은 차량 설정의 좌우 값):
 - `config/real/safety_watch.yaml` 에서 `SafetyWatch` 를 만든다(`load_watch_config`, 4c 그대로). 파일이 없거나 깨지면 조립 거부(`watch_config:<이유>`).
-- IMU 값은 같은 파일의 **새 `imu:` 부분**에 둔다(`tilt:` 은 텔레옵 브리지의 `SafetyWatch` 몫으로 그대로): `limit_deg`(잠정 8), `hold_s`(0.3), `max_age_s`(0.1), `gap_max_s`(0.05), `baseline_min`(10), `baseline_spread_deg`(2.0), `baseline_wait_s`(0.5), `norm_tol_frac`(0.30), `level_ref`(자리표시 `[0, 0, 1]`, S7 측정), `level_tol_deg`(5), `provenance`. 판정이 가능한 범위만 받는다: `0 < limit_deg < 90`, `0 < baseline_spread_deg < limit_deg`, `gap_max_s ≤ max_age_s`, `hold_s > gap_max_s`, `0 < norm_tol_frac < 1`, `baseline_min ≥ 2`, `0 < level_tol_deg < limit_deg`, `level_ref` 가 유한한 수 세 개의 목록(매핑·문자열·불리언 아님, 영벡터 아님, 7 차 P2-2); 아니면 조립 거부(`imu_config:<이름>`).
+- IMU 값은 같은 파일의 **새 `imu:` 부분**에 둔다(`tilt:` 은 텔레옵 브리지의 `SafetyWatch` 몫으로 그대로): `limit_deg`(잠정 8), `hold_s`(0.3), `max_age_s`(0.1), `gap_max_s`(0.05), `baseline_min`(10), `baseline_spread_deg`(2.0), `baseline_wait_s`(0.5), `norm_tol_frac`(0.30), `level_ref`(자리표시 `[0, 0, 1]`, S7 측정), `level_tol_deg`(5), `provenance`. 판정이 가능한 범위만 받는다: `0 < limit_deg < 90`, `0 < baseline_spread_deg < limit_deg`, `gap_max_s ≤ max_age_s`, `hold_s > gap_max_s`, `0 < norm_tol_frac < 1`, `baseline_min ≥ 2`, `0 < level_tol_deg < limit_deg`, `level_ref` 가 유한한 수 세 개의 목록(매핑·문자열·불리언·부동소수로 못 바꾸는 큰 정수 아님, 영벡터 아님, 7–8 차); 아니면 조립 거부(`imu_config:<이름>`).
 - `config/real/autonomy.yaml` 의 `imu: required | none`(잠정 `required`). 키가 없거나 다른 값이면 조립 거부(`imu_policy`). `none` 이면 `ImuWatch` 를 만들지 않고 조립 기록에 `imu: none`.
 - 건식 조립(`tools/real_autonomy.py --dry-assemble`)과 실행 조립이 **같은** `build_watches` 를 부르고, 루프는 그 `Watches` 를 **통째로** 받는다 — `SafetyWatch` 만 따로 넘기는 인자는 없다(4 차 P2-1). `RealLoop(watches=, imu_source=)` 는 `imu_policy == "required"` 인데 `ImuWatch` 나 원천 중 하나라도 없으면 생성 거부(`imu_required`) — 두 주입 인자를 빠뜨려 무감시로 도는 길이 없다. `watches=None`(4c·5a 시험 rig)은 지금과 같음.
 - `SafetyWatch` 의 기울기 부분은 실차 자율에서 쓰지 않는다 — 루프는 `accel` 을 넘기지 않는다(적대 P1-5). 전류·바퀴는 4c 그대로.
@@ -129,7 +129,7 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 - `add(sample_ns, accel, now_ns) -> str | None`: 유효하면 None, 아니면 버린 이유(셈만). 버림: 비유한 값, `sample_ns` 가 지난 유효 표본 이하(재전달·되감김), `sample_ns > now_ns`(미래), `|‖a‖ − 9.81| > norm_tol_frac × 9.81`(비율, m/s² 아님). 유효 표본은 최근 2 s 만 둔다.
 - `baseline(still_since_ns) -> ((방향, last_ns), None) | (None, 이유)`: 취득 시각이 `still_since_ns` 이상인 유효 표본 중 **가장 최근의 공백 없는 연속 구간**(이웃 공백 ≤ `gap_max_s`; 앞선 공백은 구간이 늦게 시작했다는 뜻일 뿐)으로 — 정지 아님 `imu_not_still`; 그 구간이 `baseline_min` 미만 `imu_no_baseline`(기한 안이면 대기); 평균 벡터 크기가 단위의 0.9 미만이거나 최근 구간의 어느 표본이든 그 평균 방향에서 `baseline_spread_deg` 넘게 벗어나면 `imu_baseline_unsteady`(그 표본이 창 밖으로 나가면 풀림, 6 차 P2-2); 기준 방향이 수평 참조에서 벗어나면 `imu_not_level`(1 차 P1-2: 섞인 자세·반대 벡터의 평균).
 - **수평 참조**(6 차): 기준은 정지 구간의 이력이 아니라 **선 자리**로 확인한다 — 기준 방향이 설정의 `level_ref`(평평한 바닥에서 IMU 좌표의 중력 방향, D435i 장착이 기울어 있어 S7 측정 전에는 자리표시값)에서 `level_tol_deg`(잠정 5°, `limit_deg` 미만)를 넘으면 `imu_not_level`(ARM 전 거부). 정지 중 공백·정지 판정 상실 뒤 바뀐 자세도 선 자리로 잡힌다. 수평 참조 안의 작은 자세 변화는 `limit_deg` 판정의 여유로 남는다(측정 전 잠정, S10 선행 조건).
-- **ARM 응답 전 움직임**(6 차 P2-1): `arm()` 부터 허가가 READY 가 될 때까지(`settled()`) 기준에서 `baseline_spread_deg` 를 넘는 표본이 하나라도 오면 지속 없이 `watch_imu_moved` → ① — ARM 의 첫 바이트 판정 포함. READY 로 바뀐 틱에도 그 틱의 판정을 먼저 하고 `settled()` 로 넘어간다 — ARMING 중 취득해 READY 응답과 함께 읽힌 표본도 이 규칙으로 본다(7 차 P2-1).
+- **ARM 응답 전 움직임**(6 차 P2-1): `arm()` 부터 허가가 READY 가 될 때까지(`settled()`) 기준에서 `baseline_spread_deg` 를 넘는 표본이 하나라도 오면 지속 없이 `watch_imu_moved` → ① — ARM 의 첫 바이트 판정 포함. 경계는 **표본의 취득 시각**으로 정한다(8 차 P2): 루프가 허가를 처음 READY 로 본 틱의 IMU 조회 시각을 `settled(경계)` 로 한 번 고정하고, 그 시각 이하에 취득한 표본은 틱 머리든 첫 바이트든 어느 조회로 오든 ARMING 규칙, 그 뒤 표본은 지속 규칙이다(READY 는 그보다 늦지 않으므로 보수적). READY 틱에도 판정을 먼저 한다(7 차 P2-1).
 - `baseline` 은 방향과 함께 **기준에 쓴 마지막 표본의 시각**을 돌려준다. `arm((direction, last_ns))`: **ARM 요청 전에** 기준을 고정한다(무장 동안 바꾸지 않음). 판정은 `last_ns` 에서 시작한다 — 그 뒤 받아들인 첫 표본과의 공백부터 잰다(2 차 P2-1: 고정 직전 취득·직후 수신 표본이 공백을 숨기지 않음). `disarm()`: 기준·판정 상태·고정된 사유를 버림.
 - `judge(now_ns) -> str | None`(고정된 기준이 있을 때만):
   - `watch_imu_stale`: 가장 새 유효 표본이 `now_ns − max_age_s` 보다 오래됨.
@@ -255,6 +255,7 @@ Isaac 층(`sim/isaac/obstacle_layer.py`)은 레이 캐스팅·합성 잡음·시
 - Codex 적대 8 회차(8판, 5a 만): P1 없음, P2 3(채택과 오차표의 같은 v_scan, 도착하지 않은 스캔의 마감, D5 면제의 설치 주체), P3 1(마감 해소는 스캔 ID 로). 9판에 반영.
 - Codex 적대 9 회차(9판, 5a 만): P1 없음, P2 1(지난 예상 마감은 결과 설치까지 유지), P3 1(마감 초과 뒤 해소 시험). 10판에 반영.
 - Codex 5a 구현 검토 1–8 회차(같은 스레드, `fb356eef` … `27a3726a`): 1 회차 P1 4·P2 7, 2 회차 P1 3·P2 5, 3 회차 P1 1·P2 3, 4 회차 P1 1·P2 3, 5 회차 P1 1·P2 2, 6 회차 P2 2, 7 회차 P2 1, 8 회차 새 P1/P2 없음. 구현에서 정한 것: 첫 바이트가 층 watchdog·`obstacle_act`·층 동일성을 다시 읽음; 늦은 수신은 지난 예상 마감을 지우지 않고 첫 사용 지연은 마지막 빔 + B 로 스캔마다 한 번; watchdog 끝은 설치 전에 읽고 래치 때까지 고정; 같은 부팅 단절마다 재위치 세대 하나(빈 틱은 단절을 풀지 않음), 재부팅 뒤 세션 확인·지연 기준 재시작; 스캔 이동 판정은 엔코더 상한(가속 dt/2 + 양자화)으로 첫 빔 − dt 부터; 경로 검사는 작업자에서, 경로 길이로 차감; 계획 열쇠에 팔레트 자세; ARM 전(채택 뒤 포함) 어떤 래치든 미션 종료, ARMING 중 고장도 래치; 원천의 명시적 단절은 즉시 끝이고 다시 연결될 때까지 층 미준비; 거리 오차 모형은 YAML(`a2_spec`)을 따르고 계획 분리는 반사마다 자기 거리 오차만큼 키움(`suppress` 여섯째 원소, 기본 호출은 바이트 불변).
+- Codex 5b 8 회차(18판 + 구현): P1 없음, P2 1(READY 경계가 조회 순서로 갈림), P3 1(`level_ref` 큰 정수). 19판에 반영: 경계는 취득 시각(`settled(경계)`), 큰 정수 거부.
 - Codex 5b 7 회차(17판 + 구현): P1 없음, P2 2(READY 틱에 ARMING 표본을 무장 규칙으로 판정, `level_ref` 매핑을 키로 해석). 18판에 반영: 판정 뒤 `settled()`, `level_ref` 형식 검증.
 - Codex 5b 6 회차(16판 + 구현): P1 2(참조 확정 전 공백이 관측한 자세를 지움, 정지 판정 한 틱 상실이 자세 변화 표시를 지움), P2 2(ARM 첫 바이트에서 확인한 움직임을 지속 판정으로 넘김, 순간 이상치 하나가 재무장 뒤에도 래치), P3 1(정밀도 시험 경로). 17판: 정지 구간 이력 추적(`stand`)을 버리고 **수평 참조**(`level_ref`·`level_tol_deg`)로 선 자리를 확인 — 이력에서 나온 P1·P2-2 가 함께 없어짐; ARM 응답 전 움직임은 즉시 `watch_imu_moved`.
 - Codex 5b 5 회차(15판 + 구현): P1 1(정지가 2 s 넘게 이어지면 보관 창 밖 옛 자세를 잊음), P2 1(시각의 float 변환이 정밀도를 잃거나 넘침). 16판에 반영: 정지 구간의 참조·자세 변화 표시를 창과 따로, 시각은 정수만.

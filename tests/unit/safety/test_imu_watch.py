@@ -34,7 +34,7 @@ def armed():
     b, why = w.baseline(1000 * MS)
     assert why is None
     w.arm(b)
-    w.settled()
+    w.settled((end - 5) * MS)  # READY seen at the last baseline sample
     return w, end
 
 
@@ -116,7 +116,7 @@ def test_the_baseline_is_frozen_before_the_arm():
     t = fed(w, 1000, 20, tilted(3))
     b, why = w.baseline(1000 * MS)
     w.arm(b)
-    w.settled()
+    w.settled((t - 5) * MS)
     t = fed(w, t, 80, tilted(3))
     assert w.judge(t * MS) is None
     t = fed(w, t, 80, tilted(12))  # 9 deg off the frozen baseline
@@ -153,7 +153,7 @@ def test_a_long_hold_is_measured_past_the_sample_window():
     w = ImuWatch(replace(CFG, hold_s=3.0, max_age_s=0.1))
     t = fed(w, 1000, 20)
     w.arm(w.baseline(1000 * MS)[0])
-    w.settled()
+    w.settled((t - 5) * MS)
     for _ in range(80):  # 4 s of 12 deg, judged every 50 ms
         t = fed(w, t, 10, tilted(12))
         if w.judge(t * MS) is not None:
@@ -192,8 +192,8 @@ def test_a_move_between_the_baseline_and_the_arms_answer_is_the_end_at_once():
     w = ImuWatch(CFG)
     t = fed(w, 1000, 20)
     w.arm(w.baseline(1000 * MS)[0])
-    w.settled()
-    t = fed(w, t, 1, tilted(3))
+    w.settled(t * MS)
+    t = fed(w, t + 5, 1, tilted(3))
     assert w.judge(t * MS) is None  # armed and answered: the tilt hold rules
 
 
@@ -210,8 +210,26 @@ def test_one_outlier_ages_out_of_the_window():
 
 def test_the_level_reference_must_be_a_direction():
     for bad in ((0.0, 0.0, 0.0), {0: 0.0, 1: 0.0, 2: 1.0}, "001", (0.0, 0.0, True), (0.0, 0.0, float("nan")),
-                (0.0, 1.0)):
+                (0.0, 1.0), (0, 0, 10 ** 400)):
         with pytest.raises(ValueError, match="imu_config:level_ref"):
             replace(CFG, level_ref=bad)
     with pytest.raises(ValueError, match="imu_config:level_tol_deg"):
         replace(CFG, level_tol_deg=9.0)
+
+
+def test_the_arming_rule_follows_the_acquisition_time_not_the_read():
+    """5b round 8 P2: samples taken before the READY boundary meet the ARMING rule even when a later read brings
+    them; samples taken after it meet the tilt hold."""
+    w = ImuWatch(CFG)
+    t = fed(w, 1000, 20)
+    w.arm(w.baseline(1000 * MS)[0])
+    w.settled((t + 20) * MS)  # READY seen at t + 20 ms, before these samples are read
+    for k in range(3):
+        w.add((t + 5 * k) * MS, tilted(3), (t + 30) * MS)  # taken before the boundary
+    assert w.judge((t + 30) * MS) == "watch_imu_moved"
+    w = ImuWatch(CFG)
+    t = fed(w, 1000, 20)
+    w.arm(w.baseline(1000 * MS)[0])
+    w.settled(t * MS)
+    t2 = fed(w, t + 5, 3, tilted(3))  # taken after it
+    assert w.judge(t2 * MS) is None

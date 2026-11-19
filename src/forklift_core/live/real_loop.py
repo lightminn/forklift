@@ -537,7 +537,7 @@ class RealLoop:
                 return
         s = host.state
         if self.imu_watch is not None:
-            self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
+            self._imu_read_ns = self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
             elif permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
@@ -549,7 +549,9 @@ class RealLoop:
                     self._emergency(now_ns, rec.reason)
                     return
                 if permit.state != ra.ARMING:
-                    self.imu_watch.settled()  # the ARM answered: the tilt hold rules from here
+                    # the ARM answered: samples taken up to this tick's read meet the ARMING rule (by their own time,
+                    # at the head or the first byte), later ones the tilt hold -- conservative: READY came no later
+                    self.imu_watch.settled(self._imu_read_ns)
         if self._watch_trip is not None:
             trip, self._watch_trip = self._watch_trip, None
             rec.branch, rec.reason = "emergency", f"watch:{trip}"

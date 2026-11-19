@@ -213,9 +213,13 @@ class ImuConfig:
         # three finite numbers in a sequence: a mapping's keys or a string's characters are not a direction
         # (5b round 7 P2-2)
         raw = self.level_ref
-        ok = isinstance(raw, (list, tuple)) and len(raw) == 3 and all(
-            isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in raw)
-        if not ok or _unit(tuple(float(v) for v in raw)) is None:
+        try:
+            ok = isinstance(raw, (list, tuple)) and len(raw) == 3 and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in raw)
+            ok = ok and _unit(tuple(float(v) for v in raw)) is not None
+        except (OverflowError, ValueError, TypeError):
+            ok = False  # an integer too large for a float is not a direction either (5b round 8 P3)
+        if not ok:
             raise ValueError("imu_config:level_ref")
 
 
@@ -251,7 +255,7 @@ class ImuWatch:
         self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
         self._baseline = None  # the unit gravity direction frozen before the ARM
         self._prev_ns = None  # the newest sample judged
-        self._arming = False
+        self._arm_until = None
         self._tilt_start = None  # the first sample of the current tilted run
         self._trip = None
 
@@ -322,15 +326,18 @@ class ImuWatch:
         self._baseline, self._trip = d, None
         self._prev_ns = int(last_ns)  # the newest sample judged (the baseline's last at first)
         self._tilt_start = None
-        self._arming = True  # until settled(): any sample off the baseline by its spread is the end at once
+        self._arm_until = None  # samples taken up to this instant meet the ARMING rule (None: all, still arming)
 
-    def settled(self) -> None:
-        """The ARM was answered (the permit READY): the tilt hold rules from here."""
-        self._arming = False
+    def settled(self, boundary_ns: int) -> None:
+        """The ARM was answered (the permit seen READY at ``boundary_ns``): samples taken up to then meet the ARMING
+        rule, later ones the tilt hold -- by acquisition time, whichever read brings them (5b round 8 P2). The first
+        call sets it; later calls change nothing."""
+        if self._arm_until is None:
+            self._arm_until = int(boundary_ns)
 
     def disarm(self) -> None:
         self._baseline = self._trip = self._prev_ns = self._tilt_start = None
-        self._arming = False
+        self._arm_until = None
 
     @property
     def armed(self) -> bool:
@@ -353,7 +360,8 @@ class ImuWatch:
                 self._trip = "watch_imu_gap"  # sparse samples cannot carry a hold: the watch is lost
                 return self._trip
             self._prev_ns = ns
-            if self._arming and _angle_deg(u, self._baseline) > c.baseline_spread_deg:
+            arming = self._arm_until is None or ns <= self._arm_until
+            if arming and _angle_deg(u, self._baseline) > c.baseline_spread_deg:
                 # the truck moved between the baseline and the ARM's answer -- the ARM's own first byte included
                 # (5b round 6 P2-1): the baseline no longer says where it stands
                 self._trip = "watch_imu_moved"
