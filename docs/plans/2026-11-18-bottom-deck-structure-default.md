@@ -100,7 +100,8 @@
      - `EXTRA_ARGS` 가 실제로 적용할 값에 `--near-tracking`·`--pocket-check`·`--live` 가 없고, `--repeat-captures` 가 0 보다 크지 않다.
        - 옵션 이름은 러너 파서처럼 푼다. 정확한 이름이 먼저이고, 아니면 러너 옵션 목록(`run_transport.py` 의 `add_argument` 이름)에서 하나뿐인 접두어다(`--bo`·`--near-r` 처럼 짧은 것도).
        - `EXTRA_ARGS` 는 한 번만 나눠(glob 없이) 그 배열을 출력·사전 검사·실행 모두에 쓴다. 그래야 런처가 읽은 단어와 러너가 받는 단어가 같다.
-       - `--repeat-captures` 의 0 판정은 정수로 읽은 값이다(`00`·`+0` 도 0).
+       - `--repeat-captures` 의 0 판정은 정수로 읽은 값이다(`00`·`+0`·`-0` 도 0).
+     - `EXTRA_ARGS` 에 `--record-boundary` 가 없다. `structure` 기록은 재생 도구가 거부하므로(`boundary_replay.UNREPLAYABLE_ON`), 경계 기록 실행은 `auto` 에서 원본·`off` 로 둔다.
        - `--repeat-captures` 는 마지막 값을 쓴다.
        - `--live` 는 정확히 그 단어일 때만이다(`--live-` 로 시작하는 다른 인자가 있다).
    - `SIDE=auto|on|off` 를 더한다. 기본 `auto` 는 `BOTTOM_DECK=auto` 가 검사를 켤 때만 `_side` 사본을 쓰고, 검사가 꺼지면 원본을 쓴다.
@@ -135,7 +136,7 @@
    - D-F′·콘솔 적용은 보류다.
    - 결과는 `docs/validation/` 에 적는다.
 
-머지 순서: (1)–(3) 코드와 시험을 한 PR 로 낸다. 이 PR 에서 런처 기본은 아직 `off` 로 둔다. Isaac (4) 결과로 합격하면 런처 기본을 켜는 작은 PR 과 결과 문서를 낸다. 불합격이면 기본을 켜지 않고 원인과 함께 총괄에 보고한다.
+머지 순서: (1)–(3) 코드와 시험을 한 PR 로 낸다. 이 PR 에서 런처 기본은 아직 `off` 로 둔다. Isaac (4) 결과로 합격하면 런처 기본을 켜는 작은 PR 과 결과 문서를 낸다. 그 전환 PR 은 운영 장면 폴더(ws1)를 `--side-room` 으로 다시 써서 사본을 둔다(원본 파일은 바이트 그대로). 그리고 그 폴더에서 기본 호출(`DRY_RUN=1`)이 line·random 에서 `structure` 를 고르는지 확인한다. README 의 생성 명령은 이 PR 에서 `--side-room` 을 넣었다. 불합격이면 기본을 켜지 않고 원인과 함께 총괄에 보고한다.
 
 ## 4. 시간 비용
 
@@ -207,6 +208,15 @@
 | P2 | 스캔과 러너 호출이 다른 단어 목록(glob), `--repeat-captures=00` | `EXTRA` 배열 하나, 정수 0 판정. 시험에 glob 단어 |
 | P2 | `--only line_2_m_side` 가 아무것도 안 쓰고 성공 | 최종 이름에 필터, 모르는 이름은 오류 |
 | P3 | 사본의 `source.side_room_m` 이 계획에 없음 | §2 |
+
+**4 차(같은 스레드, `c471d30b`).** 새 P1 없음.
+
+| 등급 | 지적 | 처리 |
+|---|---|---|
+| P2 | `auto` 가 경계 기록(`--record-boundary`) 실행에 `structure` 를 켜면 그 기록은 재생 도구가 거부한다 | `auto` 조건에 추가(`auto_off:extra_args:--record-boundary`) |
+| P2 | `--only` 오류 전에 세션 파일을 쓴다 | 이름 확인을 쓰기 전에, `--only` 는 장면 파일에만(도움말에 적음) |
+| P2 | `--repeat-captures=-0` 을 0 으로 안 읽는다 | `^[+-]?0+$` |
+| P2 | 전환 PR 에 운영 장면 사본 생성과 확인이 빠졌다 | 머지 순서 문단, README 생성 명령에 `--side-room` |
 
 ### ③ 다른 관점 독립 검토 — agy(Gemini 4 Hydrogen High), 2026-11-18
 

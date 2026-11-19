@@ -301,6 +301,7 @@ GCB_NEXT=0
 EXTRA_NEAR_TRACKING=0  # --near-tracking among EXTRA_ARGS's words (spaces, tabs or newlines around it)
 # EXTRA_ARGS options the bottom-deck check is not defined with (run_transport.py's refusals), as the runner applies them
 EXTRA_POCKET=0; EXTRA_LIVE=0; EXTRA_GAP=0
+EXTRA_BOUNDARY=0  # --record-boundary: auto keeps it off (a structure record is not replayable, boundary_replay)
 EXTRA_REPEAT=""  # the last --repeat-captures value (0 is the runner's off)
 RPC_NEXT=0
 # EXTRA_ARGS split once, unglobbed: the words this scan reads are the words the runner gets (printed, checked, run)
@@ -387,6 +388,7 @@ for w in ${EXTRA[@]+"${EXTRA[@]}"}; do
     --near-recapture-gap-m) EXTRA_GAP=1 ;;
     --live) EXTRA_LIVE=1 ;;
     --near-tracking) EXTRA_NEAR_TRACKING=1 ;;
+    --record-boundary) EXTRA_BOUNDARY=1 ;;
     --repeat-captures)
       if [[ "$w" == *=* ]]; then EXTRA_REPEAT=${w#*=}; else RPC_NEXT=1; continue; fi ;;
   esac
@@ -401,8 +403,8 @@ if [ "$MODE" != slam ]; then BD_BLOCK=mode_truth
 elif [ -n "$NEAR_RECAPTURE_GAP" ] || [ "$EXTRA_GAP" = 1 ]; then BD_BLOCK=near_recapture_gap
 elif [ "$EXTRA_NEAR_TRACKING" = 1 ]; then BD_BLOCK=extra_args:--near-tracking
 elif [ "$EXTRA_POCKET" = 1 ]; then BD_BLOCK=extra_args:--pocket-check
-elif [ -n "$EXTRA_REPEAT" ] && ! [[ "$EXTRA_REPEAT" =~ ^[+]?0+$ ]]; then
-  BD_BLOCK=extra_args:--repeat-captures  # any count but zero as the runner's int() reads it (00, +0 are zero)
+elif [ -n "$EXTRA_REPEAT" ] && ! [[ "$EXTRA_REPEAT" =~ ^[+-]?0+$ ]]; then
+  BD_BLOCK=extra_args:--repeat-captures  # any count but zero as the runner's int() reads it (00, +0, -0 are zero)
 elif [ "$EXTRA_LIVE" = 1 ]; then BD_BLOCK=extra_args:--live
 fi
 # the scenes the generator writes a side-room copy of (tools/riibotics_isaac_scenes.py --side-room)
@@ -418,6 +420,7 @@ case "$BOTTOM_DECK" in
     elif [ "$SIDE" = off ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:side_off
     elif [ ! -f "$SCENE_DIR/${NAME}_side.json" ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:no_side_copy_file
     elif [ -n "$BD_BLOCK" ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:$BD_BLOCK
+    elif [ "$EXTRA_BOUNDARY" = 1 ]; then BOTTOM_DECK=off; BOTTOM_DECK_REASON=auto_off:extra_args:--record-boundary
     else BOTTOM_DECK=structure; BOTTOM_DECK_REASON=auto; SIDE=on
     fi ;;
   *)

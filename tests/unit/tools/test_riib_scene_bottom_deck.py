@@ -100,6 +100,9 @@ def test_auto_turns_structure_on_for_a_side_copy_in_the_slam_mode(tmp_path):
     ({"EXTRA_ARGS": "--repeat-captures 1"}, "auto_off:extra_args:--repeat-captures", "line_2_m.json"),
     ({"EXTRA_ARGS": "--repeat-capt 1 --repeat-at-attempt 1"}, "auto_off:extra_args:--repeat-captures", "line_2_m.json"),
     ({"EXTRA_ARGS": "--live"}, "auto_off:extra_args:--live", "line_2_m.json"),
+    # a structure record is not replayable (tools/boundary_replay.py): a boundary-recording run stays off
+    ({"EXTRA_ARGS": "--record-boundary --record-boundary-format 2"}, "auto_off:extra_args:--record-boundary",
+     "line_2_m.json"),
     # an older scene folder without the side copy keeps the original
     ({"SCENE": "line_1"}, "auto_off:no_side_copy_file", "line_1_m.json"),
     # SIDE=on keeps the copy for a paired arm even where the check stays off
@@ -116,7 +119,8 @@ def test_auto_stays_off_on_the_original_scene_where_the_check_is_not_defined_and
     assert f"BOTTOM_DECK=off BOTTOM_DECK_FROM=launcher BOTTOM_DECK_REASON={reason}" in recorded(tmp_path)
 
 
-@pytest.mark.parametrize("zero", ["--repeat-captures=0", "--repeat-captures 00", "--repeat-capt=+0"])
+@pytest.mark.parametrize("zero", ["--repeat-captures=0", "--repeat-captures 00", "--repeat-capt=+0",
+                                  "--repeat-captures=-0"])
 def test_auto_takes_the_side_copy_itself_and_a_zero_repeat_count_does_not_block_it(tmp_path, zero):
     out = dry_run(tmp_path, BOTTOM_DECK="auto", EXTRA_ARGS=zero)
     assert out.returncode == 0, out.stderr

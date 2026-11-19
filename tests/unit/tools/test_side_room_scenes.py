@@ -113,3 +113,12 @@ def test_only_filters_the_written_names_side_copies_included(tmp_path, monkeypat
     monkeypatch.setattr(sys, "argv", ["riibotics_isaac_scenes.py", "--only", "line_2_m_side", "--output", str(out)])
     with pytest.raises(SystemExit):  # without --slot-markers --side-room nothing writes that name
         tool.main()
+
+
+def test_an_unknown_only_name_writes_nothing_not_even_the_session_files(tmp_path, monkeypatch):
+    out = tmp_path / "typo"
+    monkeypatch.setattr(sys, "argv", ["riibotics_isaac_scenes.py", "--session", "line", "--slot-markers",
+                                      "--only", "typo", "--output", str(out)])
+    with pytest.raises(SystemExit):
+        tool.main()
+    assert not out.exists() or not any(out.iterdir())

@@ -716,7 +716,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--plan", action="store_true", help="also plan every scene on the CPU")
-    parser.add_argument("--only", help="comma-separated scene names")
+    parser.add_argument("--only", help="comma-separated scene file names (side copies included; the --session files are written regardless)")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--kappa", type=float, default=None, help="the planner curvature limit (1/m; default 0.29)")
     parser.add_argument("--timeout-s", type=float, default=1200)
@@ -738,15 +738,6 @@ def main() -> None:
         global KAPPA
         KAPPA = float(args.kappa)
         os.environ["FORKLIFT_PLAN_KAPPA"] = repr(KAPPA)  # the spawned planners import it from here
-    args.output.mkdir(parents=True, exist_ok=True)
-    for kind in args.session:
-        path = args.output / f"{kind}_session.json"
-        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
-        print("session", path)
-        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
-            path = args.output / f"{kind}_m_session.json"
-            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
-            print("session", path)
     only = set(args.only.split(",")) if args.only else None
     paths = []
     built_scenes = scenes()
@@ -768,6 +759,16 @@ def main() -> None:
         unknown = sorted(only - {r["name"] for r in records})
         if unknown:
             parser.error(f"--only names no scene this run writes: {', '.join(unknown)}")
+    # checked before anything is written; --only filters the scene files, never the --session ones
+    args.output.mkdir(parents=True, exist_ok=True)
+    for kind in args.session:
+        path = args.output / f"{kind}_session.json"
+        path.write_text(json.dumps(session_record(kind), indent=1) + "\n")
+        print("session", path)
+        if args.slot_markers and kind in MARKED_KINDS:  # the marked copy beside it (<kind>_m_session.json)
+            path = args.output / f"{kind}_m_session.json"
+            path.write_text(json.dumps(session_record(kind, markers=True), indent=1) + "\n")
+            print("session", path)
     for record in records:
         if only and record["name"] not in only:
             continue
