@@ -35,6 +35,8 @@ PAYLOADS = {
     "operator_start": {},
     "operator_answer": {"kind": "lifted", "serial": 1, "verdict": "confirm"},
     "check_bypass": {"check": "imu", "on": True},
+    "relocalize_confirm": {"generation": 1},  # 5c-2 (design 6)
+    "relocalize_declare": {"generation": 1},
     "recovery": {"recovery_id": 1, "action": "done"},
 }
 
@@ -130,6 +132,9 @@ def test_on_without_a_callback_is_unsupported():
     ("check_bypass", {"check": 3, "on": True}),
     ("recovery", {"recovery_id": 1, "action": "withdraw_straight"}),
     ("recovery", {"recovery_id": "1", "action": "done"}),
+    ("relocalize_confirm", {"generation": True}),
+    ("relocalize_confirm", {"generation": "1"}),
+    ("relocalize_declare", {}),
 ])
 def test_on_a_malformed_request_is_invalid_and_never_reaches_the_loop(kind, bad):
     a, calls = real()
