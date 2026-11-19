@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, replace
+
+import numpy as np
 from types import SimpleNamespace
 
 from forklift_core.live import real_autonomy as ra
@@ -37,6 +39,16 @@ ADOPTION_HOOKS = frozenset({
 STAND_AND_END_HOOKS = frozenset({"known_pocket_frame", "build_pocket_check", "require", "operator_check",
                                  "lift_position"})
 
+# The control tick's hooks on S10-A's phases (docs/design/2026-11-19-real-loop.md 6; read every tick, by name or
+# called, in follow / docking_and_stall / cusp_and_observe_recovery / command / permission / assemble_command).
+TICK_HOOKS = frozenset({
+    "require", "rear", "set_rear", "slam_rear", "slam_odom_base", "cusp_holds", "cusp_monitor", "cusp_standing",
+    "cusp_heading_motion", "loaded", "signed_speed", "held_kappa", "grid_world", "grid_kwargs", "plan_transport_leg",
+    "plan_return_leg", "plan_observation_leg", "safety_speed", "steering_position", "dump_tracking", "path_stats",
+    "path_record", "wall", "lift_position", "save_npz", "known_pocket_frame", "build_pocket_check", "operator_check",
+    "echo", "record_json", "snapshot", "write_paths", "show_path", "add_path_display", "now_s",
+})
+
 # Optional hooks those paths try and the real truck leaves absent (the core falls back to its default).
 ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix"})
 
@@ -52,12 +64,89 @@ class RealHooks:
     executor's own start, ``record(name, obj)`` the run folder."""
 
     def __init__(self, *, lift_m, odom_base, ready, started, record, geometry, occupancy=None,
-                 pocket_frame=None, pocket_check=None, operator=None) -> None:
+                 pocket_frame=None, pocket_check=None, operator=None, tick=None) -> None:
         self._lift_m, self._odom_base, self._ready, self._started = lift_m, odom_base, ready, started
         self._record, self._occupancy, self._geometry = record, occupancy, geometry
         # PR 7 supplies the depth frame and the check (until then: no frame -- 4a's wait ends the mission); the
         # console supplies the operator's answers (PR 5)
         self._pocket_frame, self._pocket_check, self._operator = pocket_frame, pocket_check, operator
+        # the control tick's sources (docs/design/2026-11-19-real-loop.md): slam_rear(t), speed() -> SafetySpeed,
+        # steering() -> (q,), kinematics, loaded(), cusp_holds / cusp_monitor objects, now_s(); None: not assembled
+        self._tick = tick
+        self._rear = None
+
+    # --- the control tick (4c) -------------------------------------------------------------------------------------
+    def _src(self, name):
+        if self._tick is None or getattr(self._tick, name, None) is None:
+            raise RealRequireFailed(f"tick_source_missing:{name}")
+        return getattr(self._tick, name)
+
+    def rear(self):
+        return self._rear
+
+    def set_rear(self, rear):
+        self._rear = np.asarray(rear, dtype=float)
+
+    def slam_rear(self, t):
+        return np.asarray(self._src("slam_rear")(t), dtype=float)
+
+    def safety_speed(self):
+        return self._src("speed")()
+
+    def signed_speed(self):
+        return float(self._src("speed")().signed_mps)
+
+    def steering_position(self):
+        return tuple(self._src("steering")())
+
+    def held_kappa(self):
+        return float(self._src("kinematics").held_curvature(tuple(self._src("steering")())) or 0.0)
+
+    def loaded(self):
+        return bool(self._src("loaded")())
+
+    def cusp_holds(self):
+        return self._src("cusp_holds")
+
+    def cusp_monitor(self):
+        return self._src("cusp_monitor")
+
+    def cusp_standing(self):
+        return bool(self._src("standing")())
+
+    def cusp_heading_motion(self, signed_speed_now):
+        return {"control_speed_mps": float(signed_speed_now), "measured_speed_mps": self.signed_speed(),
+                "truth_rear": None, "steering_command_rad": None, "steering_actual_rad": list(self.steering_position())}
+
+    def plan_transport_leg(self, *a, **k):
+        from forklift_core.planning import pallet_mission as pm
+
+        return pm.plan_transport_leg(*a, **k)
+
+    def plan_return_leg(self, *a, **k):
+        from forklift_core.planning import pallet_mission as pm
+
+        return pm.plan_return_leg(*a, **k)
+
+    def plan_observation_leg(self, *a, **k):
+        from forklift_core.planning import pallet_mission as pm
+
+        return pm.plan_observation_leg(*a, **k)
+
+    def dump_tracking(self, reason, tracking):
+        self._record("tracking_dump", {"reason": reason})
+
+    def path_stats(self, path):
+        return {"length_m": float(getattr(path, "length_m", 0.0) or 0.0)}
+
+    def save_npz(self, name, **arrays):
+        self._record("npz", name)
+
+    def add_path_display(self, *a):
+        pass  # display only
+
+    def now_s(self):
+        return float(self._src("now_s")())
 
     def require(self, ok, reason):
         if not ok:
@@ -325,6 +414,6 @@ def assembly_record(core: MissionCore, cfg: ra.S10AConfig, curvatures: dict) -> 
             "steering_rate_rad_s": kin.steering_rate_rad_s, "s10a": {k: v for k, v in vars(cfg).items()}}
 
 
-__all__ = ["DOCKING_CLEAR_MARGIN_M", "docking_occupancy", "ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "FrozenSubmit", "OperatorStart", "STAND_AND_END_HOOKS",
+__all__ = ["TICK_HOOKS", "DOCKING_CLEAR_MARGIN_M", "docking_occupancy", "ADOPTION_HOOKS", "ADOPTION_OPTIONAL_ABSENT", "FrozenSubmit", "OperatorStart", "STAND_AND_END_HOOKS",
            "freeze_submit", "known_request", "AssemblyRefused", "RealHooks", "RealRequireFailed", "assemble", "assembly_record",
            "register_pallet", "s10_submit_refusal", "scenario_of"]
