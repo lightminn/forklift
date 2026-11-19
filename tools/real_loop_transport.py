@@ -41,6 +41,8 @@ _LOST = {errno.EIO, errno.ENXIO, errno.EBADF, errno.ENODEV}
 RESERVED_MODEL_ARGS = ("--link", "--link-fd", "--duration-ms", "--hil-plant", "--commission-build",
                        "--outputs-locked")
 HIL_FIRST_STATE_S = 2.0
+HIL_STARTUP_MAX_S = 5.0  # 6a-2b (design 10.3): the model's start to the session's start (first STATE, assembly, console)
+HIL_MODEL_EXTRA_S = HIL_STARTUP_MAX_S + 1.0 + 5.0  # + the closing DISARM's confirmation + margin: the model's own end
 
 
 class DeviceLost(Exception):
@@ -71,6 +73,8 @@ class LoopTtyTransport:
         self._boot: int | None = None
         self._boot_bad = False
         self.hil_plant = False
+        self.hil_boot: int | None = None  # the boot the HIL check holds for (6a-2b design 10.1)
+        self.inject = None  # a test hook: inject(fd, data, frame) -> int | None to replace one write (6a-2b 10.2)
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
         self.first_byte_ns: dict = {}  # seq -> clock just before its first os.write (D5's round trip)
         self.last_write_ns: dict = {}  # seq -> clock just before the os.write that sent its last byte
@@ -187,6 +191,10 @@ class LoopTtyTransport:
     def _os_write(self, data: bytes, path: str) -> int | None:
         """Bytes written, or None on EAGAIN; a lost device raises DeviceLost."""
         try:
+            if self.inject is not None:
+                n = self.inject(self.fd, bytes(data), self._cur)
+                if n is not None:
+                    return n if n > 0 else None
             return self._write(self.fd, data)
         except BlockingIOError:
             return None
@@ -242,6 +250,15 @@ class LoopTtyTransport:
         if not hil_bits_ok(s):
             self._boot_bad = True
         self.hil_plant = not self._boot_bad
+        self.hil_boot = self._boot if self.hil_plant else None
+
+    def peer_exited(self) -> None:
+        """The runner saw the model end (6a-2b design 10.3): the loss fixed now with the half frame / poison state as it
+        is at this moment, the first path ``model_poll``; does not raise."""
+        try:
+            self._lose("model_poll")
+        except DeviceLost:
+            pass
 
     def _lose(self, path: str) -> None:
         if self.lost is None:
@@ -334,8 +351,11 @@ class HilPty:
                 except BlockingIOError:
                     break
             args = [str(model), "--link-fd", str(master), "--hil-plant", "1",
-                    "--duration-ms", str(int(round(float(duration_s) * 1000)) + 5000), *map(str, extra_args)]
-            self.proc = subprocess.Popen(args, pass_fds=(master,))
+                    "--duration-ms", str(int(round((float(duration_s) + HIL_MODEL_EXTRA_S) * 1000))),
+                    *map(str, extra_args)]
+            # its own session (process group): a terminal Ctrl-C reaches the runner, which confirms the closing DISARM
+            # before it ends the model (6a-2b design 10.3)
+            self.proc = subprocess.Popen(args, pass_fds=(master,), start_new_session=True)
         except BaseException:
             os.close(master)
             os.close(slave)
@@ -363,5 +383,5 @@ class HilPty:
         return self.proc.returncode
 
 
-__all__ = ["DeviceLost", "HIL_FIRST_STATE_S", "HilPty", "HilRefused", "LoopTtyTransport", "POISON",
+__all__ = ["DeviceLost", "HIL_FIRST_STATE_S", "HIL_MODEL_EXTRA_S", "HIL_STARTUP_MAX_S", "HilPty", "HilRefused", "LoopTtyTransport", "POISON",
            "RESERVED_MODEL_ARGS", "hil_bits_ok"]

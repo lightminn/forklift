@@ -235,7 +235,7 @@ def test_the_runner_pty_locks_drains_and_owns_the_model(tmp_path):
             time.sleep(0.02)
         args = Path(str(exe) + ".args").read_text().split()
         assert args[:2] == ["--link-fd", args[1]] and "--hil-plant" in args
-        assert args[args.index("--duration-ms") + 1] == "8000"
+        assert args[args.index("--duration-ms") + 1] == "14000"  # 3 s + HIL_MODEL_EXTRA_S (11 s, 6a-2b)
         assert b"early" not in Path(str(exe) + ".seen").read_bytes()  # written before the lock: drained
     finally:
         rc = hp.close()
