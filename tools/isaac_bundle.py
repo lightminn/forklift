@@ -515,7 +515,21 @@ def preflight_inputs(runs, runner) -> dict:
             path = os.path.join(run.cwd or ".", rel)
             if os.path.isfile(path):
                 paths.add(os.path.realpath(path))
+        paths.update(scene_candidates(run))
     return {p: _sha256_file(p) for p in sorted(paths)}
+
+
+def scene_candidates(run) -> list[str]:
+    """Every scene file the riib launcher may open for a run naming SCENE_DIR and SCENE -- the plain, marker, rack and
+    side-room copies, missing ones too (hashed as None): BOTTOM_DECK=auto takes the side copy when its file exists
+    (docs/plans/2026-11-18-bottom-deck-structure-default.md), so a copy added or removed after the check changes the
+    launch and must void the proof."""
+    scene_dir, scene = run.env.get("SCENE_DIR"), run.env.get("SCENE")
+    if not scene_dir or not scene:
+        return []
+    base = scene.removesuffix("_side").removesuffix("_m").removesuffix("_rack")
+    names = {f"{base}{s}.json" for s in ("", "_m", "_rack", "_side", "_m_side")}
+    return [os.path.realpath(os.path.join(run.cwd or ".", scene_dir, n)) for n in sorted(names)]
 
 
 def gpu_persistence_modes(timeout_s=10.0) -> dict | None:

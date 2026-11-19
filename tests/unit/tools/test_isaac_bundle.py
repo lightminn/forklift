@@ -1,5 +1,6 @@
 """The Isaac bundle runner (docs/plans/2026-10-24-ws1-isaac-bundle.md): several runs in one Slurm job, by slots."""
 
+import hashlib
 import json
 import os
 import signal
@@ -2162,3 +2163,25 @@ def test_an_unreadable_boot_id_neither_issues_nor_verifies_a_proof(tmp_path, mon
     assert ib.main(args) == 1 and "boot id cannot be read" in capsys.readouterr().out
     assert not proof_path.exists()
     assert ib.main(args + ["--allow-no-persistence"]) == 1 and not proof_path.exists()  # allowed or not
+
+
+def test_a_riib_runs_candidate_scene_files_are_among_the_inputs_missing_ones_included(tmp_path):
+    # BOTTOM_DECK=auto picks the side-room copy when its file exists (docs/plans/2026-11-18-bottom-deck-structure-
+    # default.md, Codex round 6): a copy added or removed after the check changes the launch, so the proof covers it
+    scenes = tmp_path / "scenes"
+    scenes.mkdir()
+    (scenes / "line_2_m.json").write_text("{}")
+    (tmp_path / "runner.py").write_text("")
+    run = ib.Run(name="a", argv=["true"], cwd=str(tmp_path), env={"SCENE_DIR": str(scenes), "SCENE": "line_2"})
+    got = ib.preflight_inputs([run], tmp_path / "runner.py")
+    side = os.path.realpath(scenes / "line_2_m_side.json")
+    assert got[side] is None and got[os.path.realpath(scenes / "line_2_m.json")] is not None
+    for name in ("line_2", "line_2_side", "line_2_rack"):
+        assert os.path.realpath(scenes / f"{name}.json") in got
+    data = b'{"name": "a", "argv": ["true"]}\n'
+    proof = tmp_path / "runs.jsonl.preflight.json"
+    proof.write_text(json.dumps({"list_sha256": hashlib.sha256(data).hexdigest(), "inputs": got,
+                                 "gpu_persistence": {"allowed_without": True, "boot_id": ib.boot_id(), "modes": {}}}))
+    assert ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}) == []
+    (scenes / "line_2_m_side.json").write_text("{}")  # a copy added after the check
+    assert any("line_2_m_side.json changed" in p for p in ib.verify_preflight(tmp_path / "runs.jsonl", data, [], {}))
