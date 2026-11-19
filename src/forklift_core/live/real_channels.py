@@ -10,6 +10,7 @@ the gate and before the first byte is never overtaken by that byte.
 
 from __future__ import annotations
 
+import threading
 from collections import deque
 
 from forklift_core.live.link import Channels, Link
@@ -19,6 +20,8 @@ from forklift_core.safety.validate import problem
 class RealChannels(Channels):
     def __init__(self, capacity: int = 256, notify=None) -> None:
         super().__init__(capacity, notify)
+        # re-entrant: the send boundary's check runs under it and may read the channels (Codex 4c impl round 5 P1-2)
+        self._lock = threading.RLock()
         self.emergency_serial = 0
         self._disarms: deque = deque()
 

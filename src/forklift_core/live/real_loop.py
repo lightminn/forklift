@@ -37,6 +37,7 @@ SLOW_TICK_S = 0.030  # the tick's own elapsed time before its first write: over 
 LATE_TICK_S = 0.060  # over this (or the start interval), the emergency branch
 SLOW_STARTS = 3  # this many start intervals over SLOW_TICK_S in a row: the emergency branch
 MAX_STATES_PER_TICK = 64
+EVIDENCE_READ_MAX_S = 0.005  # the first byte's evidence read must take no longer (its ages are judged at its start)
 ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R  # contract 3.3
 SAMPLES_KEPT = 128
 
@@ -253,6 +254,7 @@ class RealLoop:
         interval = None if self.last_start_ns is None else (now_ns - self.last_start_ns) / 1e9
         self.last_start_ns = int(now_ns)
         rec = TickRecord(t, interval)
+        self._rec = rec
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -803,8 +805,9 @@ class RealLoop:
     def _auto_drive(self, now_ns: int, command_, steer, rec: TickRecord) -> None:
         port, permit = self.port, self.permit
         if self.waiting is not None:
-            self.host.drop_drives("wait_end")  # the wait's unsent hold never follows the normal DRIVE out
-            self.waiting = None
+            # the wait's unsent hold never follows the normal DRIVE out; the wait itself (its target) ends only when
+            # this DRIVE is written -- refused at its first byte, the wait goes on at the same target (round 5 P1-4)
+            self.host.drop_drives("wait_end")
         drive = command_.drive
         speed = float(drive.speed_mps)
         if abs(speed) > self.max_speed_mps:  # the rear-axle command cap (design 2.5 4)
@@ -877,18 +880,25 @@ class RealLoop:
             escalate_now(stuck)  # the DISARM queued (and the queue dropped) before anything else is sent
 
         def judge(frame) -> tuple:
-            """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop."""
-            ns = int(self.clock())
+            """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop. The readiness evidence is read
+            first (its ages at ``ns0``); everything timed is then read on the clock after it, and a read that took
+            more than EVIDENCE_READ_MAX_S refuses (round 5 P1-3)."""
+            if permit.state not in authority:
+                return f"permit_{permit.state.lower()}", "drop"  # a latch or a DISARM under way: no motion (P1-1)
             if a.mode == "STOPPED":
                 return "stopped", "alarm"
+            ns0 = int(self.clock())
+            why = ra.auto_ready_refusal(ns0, "drive", self.evidence)
+            ns = int(self.clock())
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
+            if ns - ns0 > int(EVIDENCE_READ_MAX_S * 1e9):
+                return "evidence_slow", "alarm"
             expires = getattr(frame, "expires_ns", None)
             if expires is not None and ns >= int(expires):
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             if not self.host.health(ns).fresh:
                 return "measurement_stale", "alarm"
-            why = ra.auto_ready_refusal(ns, "drive", self.evidence)
             if why is not None and ra.latches(why):
                 return f"send:{why}", "alarm"
             if not self._lease_valid(ns):
@@ -940,6 +950,9 @@ class RealLoop:
             permit.written(kind, seq, written_ns)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)
+                booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
+                if booked is not None and booked.kind == "drive":
+                    self.waiting = None  # a normal DRIVE out: the wait is over
                 steer = self._steer_of.get(int(seq) & 0xFFFF)
                 if steer is not None:
                     self.steering_command = steer.copy()  # the next slew starts from what was written (P2-5)
@@ -954,9 +967,14 @@ class RealLoop:
             escalate_now(alarm[0])
         elif waits and can_escalate and permit.state in (ra.READY, ra.DRIVING):
             # ③ in place of the normal candidate: the wait frame (a new generation drops the old queue), once
+            rec = getattr(self, "_rec", None)
+            if rec is not None:
+                rec.branch, rec.reason = "wait", waits[0]
+                gone = {int(q) & 0xFFFF for k_, q in refused}
+                rec.seqs = [q for q in rec.seqs if (int(q) & 0xFFFF) not in gone]
             self._in_transmit = True
             try:
-                self._wait_frame(now_ns, None)
+                self._wait_frame(now_ns, rec)
             finally:
                 self._in_transmit = False
             self._transmit(now_ns)  # a hold frame never turns into a wait again; its own failure is still ①

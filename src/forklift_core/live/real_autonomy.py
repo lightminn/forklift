@@ -227,7 +227,9 @@ class AutoPermit:
     def link_reset(self, now_ns: int) -> None:
         """The link was closed and reopened (a stuck write abandoned): an unanswered DISARM is asked again at once on
         the new link -- its episode's first ask, and so its deadline, kept."""
-        if self._disarm_first_ns is not None and not self._disarmed_after_write(now_ns):
+        if self._disarm_first_ns is not None and self._disarm_written_ns is None \
+                and not self._disarmed_after_write(now_ns):
+            # only a DISARM that never got out whole: one already written keeps its seq awaited (round 5 P2)
             self.host.request_disarm(now_ns)
             self._asked_disarm(now_ns)
             self._note(now_ns, "disarm_relink")
@@ -325,14 +327,15 @@ class AutoPermit:
         return self._disarmed_after_write_any() and self.host.health(now_ns).fresh
 
     def _disarm(self, now_ns: int, reason: str) -> None:
-        self.port.new_control_generation()
-        self.host.request_disarm(now_ns)
-        self._asked_disarm(now_ns)
-        self._try(self._transmit)
+        # the state first: a send this triggers sees no authority and no pending stop (round 5 P1-1, P2)
         self.reason = self.reason or reason
         self.state = DISARMING
         self._stop = None
+        self.port.new_control_generation()
+        self.host.request_disarm(now_ns)
+        self._asked_disarm(now_ns)
         self._note(now_ns, "disarm", reason)
+        self._try(self._transmit)
 
     # --- rearm --------------------------------------------------------------------------------------------------
     def rearm_refusal(self, now_ns: int) -> str | None:
