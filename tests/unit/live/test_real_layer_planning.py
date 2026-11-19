@@ -63,8 +63,9 @@ def _occupancy(rects, split: bool):
     lay = RealLayer(grid, perm, sensors={"lidar": ((0.0, 0.0, 0.0), True, {"measured": False})}, unloaded=body,
                     loaded=body, body=body, placer=lambda a, b: (0.0, 0.0, 0.0), budget_s=0.1, overdue_end_s=1.0,
                     scan_period_s=0.1, scan_max_age_s=0.35, worker=ManualWorker())
-    # the loop's rectangle (RealLoop._layer_tick): the registered pallet grown by the range bound
-    bound = grid.sensor_bound_m
+    # the loop's rectangle (RealLoop._layer_tick): the registered pallet grown by the range bound at its far side
+    reach = math.hypot(PAL[0], PAL[1]) + math.hypot(G.pallet_depth_m, G.pallet_width_m) / 2
+    bound = float(grid.sensor_bound_at(np.array([reach]))[0])
     lay.planning_pallet = ((*PAL, G.pallet_depth_m / 2 + bound, G.pallet_width_m / 2 + bound), KEY)
     ang, r = _raycast(rects)
     lay.add_scan(RealScan("lidar", 1.0, 1.1, ang, r, np.ones(len(ang), bool), np.zeros(len(ang), bool),

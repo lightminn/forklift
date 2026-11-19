@@ -392,3 +392,21 @@ def test_a_late_scan_within_the_end_keeps_the_layer_ok():
     lay.install_ready(1.12)
     assert lay.watchdog(1.46) == "layer_overdue" and lay.ok(1.46)
     assert lay.watchdog(2.5) == "layer_latency_exceeded" and not lay.ok(2.5)
+
+
+def test_the_configs_take_the_configured_range_model():
+    """Codex 5a impl round 5 P2-2: the real YAML's a2_spec range bound, not the constant."""
+    grid, _ = configs()
+    assert LAYER["range_noise"]["model"] == grid.range_bound_model == "a2_spec"
+    assert float(grid.sensor_bound_at(np.array([5.0]))[0]) > float(grid.sensor_bound_at(np.array([1.0]))[0])
+
+
+def test_an_older_waiting_scan_expires_after_a_newer_one_was_installed():
+    """Codex 5a impl round 5 P2-1: its deadline already held by the newer result -- dropped without an error."""
+    lay = layer(placer=lambda a, b: None if a < 1.05 else (0.0, 0.0, 0.0))
+    lay.add_scan(wall(1.0), 1.1)  # waits (not placeable)
+    lay.add_scan(wall(1.1), 1.2)  # placed
+    lay.worker.step()
+    lay.install_ready(1.21)
+    lay.install_ready(1.25)  # the first one's wait ran out
+    assert lay.counts["scans_dropped"] == 1 and lay.watchdog(1.25) is None

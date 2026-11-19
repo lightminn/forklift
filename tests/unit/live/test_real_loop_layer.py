@@ -413,3 +413,31 @@ def test_a_standing_truck_keeps_its_still_since():
     since = r.loop.still_since_ns
     r.tick(10)
     assert since is not None and r.loop.still_since_ns == since
+
+
+def test_the_layer_turned_off_between_the_decision_and_the_write_stops_the_frame():
+    """Codex 5a impl round 5 P1: obstacle_act and the layer's identity read at the first byte too."""
+    from forklift_core.mcu_link.messages import Drive
+
+    r = _driving_rig()
+    orig = r.transport.transmit
+
+    def transmit(host, now_ns, gate):
+        r.core.options.obstacle_act = False  # after the tick's control, before the first byte
+        return orig(host, now_ns, gate)
+
+    r.transport.transmit = transmit
+    k = len(r.transport.sent)
+    r.tick()
+    moving = [m for _, _, _, m in r.transport.sent[k:] if isinstance(m, Drive) and (m.left_wheel_rad_s or
+                                                                                     m.right_wheel_rad_s)]
+    assert not moving
+    assert r.permit.state in (ra.DISARMING, ra.LATCHED)
+
+
+def test_a_source_loss_before_the_arm_names_its_cause():
+    """Codex 5a impl round 5 P3: the mission's end carries scan_source_lost, not layer:missing."""
+    r, _hold = _adopted_waiting_rig()
+    r.layer.source_lost("lidar")
+    rec = r.tick()
+    assert rec.reason == "prepare:layer:scan_source_lost"

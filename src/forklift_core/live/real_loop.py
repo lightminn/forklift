@@ -304,7 +304,10 @@ class RealLoop:
         if self.frozen is not None:
             depth, width = self.pallet_size
             x, y, yaw = self.frozen.pose
-            bound = float(lay.grid_config.sensor_bound_m)
+            # the range bound the grid places the face's returns with, at the farthest the pallet is from here
+            # (the configured range model, Codex 5a impl round 5 P2-2)
+            reach = math.hypot(x - float(rear[0]), y - float(rear[1])) + math.hypot(depth, width) / 2
+            bound = float(lay.grid_config.sensor_bound_at(np.array([reach]))[0])
             rect = (x, y, yaw, depth / 2 + bound, width / 2 + bound)
             lay.planning_pallet = (rect, self._planning_key())
         else:
@@ -647,6 +650,9 @@ class RealLoop:
                 # round 3 P2-4; Codex 5a impl P2-2: waiting for the planning grid included; round 3 P1: the adopted
                 # mission waiting for its new grid before the ARM too)
                 why_ = ra.auto_ready_refusal(now_ns, "drive", self.evidence)
+                lw_ = self.real_layer.watchdog(t)
+                if lw_ in LAYER_ENDS:
+                    why_ = f"layer:{lw_}"  # the layer's own end names the cause, not "missing" (round 5 P3)
                 if why_ is not None and ra.latches(why_):
                     rec.branch, rec.reason = "emergency", f"prepare:{why_}"
                     self._emergency(now_ns, rec.reason)
@@ -1180,6 +1186,9 @@ class RealLoop:
                     why = f"wait:{lw}"
                 elif self.real_layer.installing() and why is None:
                     why = "wait:snapshot_installing"
+            if self.real_layer is not None and (not getattr(self.core.options, "obstacle_act", False)
+                                                or self.core.obstacle.get("layer") is not self.real_layer):
+                return "send:obstacle_layer_off", "alarm"  # design 3 at the write too (Codex 5a impl round 5 P1)
             if frame.kind == "ARM" and why is not None and not ra.latches(why):
                 return f"arm_wait:{why}", "alarm"  # no new ARM while a wait holds: latch, a rearm (design 3)
             if why is not None and ra.latches(why):

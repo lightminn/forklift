@@ -113,6 +113,8 @@ def real_layer_configs(layer: dict, *, error_table: AgeErrorTable, budget_s: flo
         free_use_age_s=use_age, sensor_bound_m=float(layer["noise_cut_m"]), free_r_cap_m=float(g["free_r_cap_m"]),
         free_rho_m=float(g["free_rho_m"]), close_gap_m=float(g.get("close_gap_m", 0.0)),
         free_min_width_m=float(g.get("free_min_width_m", 0.0)), taper_m=float(g.get("taper_m", 0.0)),
+        # the configured range error model (Codex 5a impl round 5 P2-2: a2_spec widens the far returns' bound)
+        range_bound_model=str((layer.get("range_noise") or {}).get("model", "const")),
     )
     permission = PermissionConfig(
         StoppingModel(round(float(p["latency_s"]) + float(scan_period_s) + float(budget_s), 9),
@@ -339,7 +341,8 @@ class RealLayer:
 
     def _drop(self, sid: int) -> None:
         self.counts["scans_dropped"] += 1
-        self._deadlines[sid] = (self._deadlines[sid][0], True)
+        if sid in self._deadlines:  # a newer installed result may have held its deadline already (round 5 P2-1)
+            self._deadlines[sid] = (self._deadlines[sid][0], True)
 
     def place_pending(self, now_s: float) -> None:
         """Place every waiting scan the odometry now reaches past (in order); drop one waiting too long."""
