@@ -247,6 +247,20 @@ class RealLoop:
             self._bypass_epoch = a.session_epoch
             self.bypass.clear()
             self._bypass_pending.clear()
+        # the check and the change under one channel lock: a connection event queued between them cannot slip past
+        # (r7 P2-1; the channels' lock is re-entrant)
+        self.channels.lock.acquire()
+        try:
+            self._apply_pending(now_ns)
+        finally:
+            self.channels.lock.release()
+        self._bypass_pending.clear()
+        self._tick_bypass = frozenset(self.bypass)
+        if self.real_layer is not None:
+            self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
+            self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
+
+    def _apply_pending(self, now_ns: int) -> None:
         for check, on, lease_id in self._bypass_pending:
             why = self._bypass_refusal(lease_id, now_ns)
             if why is not None:
@@ -262,11 +276,6 @@ class RealLoop:
                 self.operator_start.void("bypass_changed")  # a check given before is not carried across (r2 P2-2)
             self.bypass_events.append({"ns": int(now_ns), "event": "bypass_on" if on else "bypass_off", "check": check,
                                        "lease_id": lease_id})
-        self._bypass_pending.clear()
-        self._tick_bypass = frozenset(self.bypass)
-        if self.real_layer is not None:
-            self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
-            self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
 
     MISSION_ACTIVE = ("accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering")
 
@@ -284,7 +293,8 @@ class RealLoop:
             return "lease_changed"
         with self.channels.lock:
             # a disconnect, or a new connection of the same client (it takes the lease back), waiting (r5 P2, r6 P2-1)
-            closing = any(ev[0] in ("disconnect", "connect") and ev[2] == lease.client_id
+            current = self.link.a.conns.get(lease.client_id)  # only the holder's own connection closing counts (r7 P3)
+            closing = any(ev[2] == lease.client_id and (ev[0] == "connect" or ev[1] == current)
                           for ev in list(getattr(self.channels, "_conns", ())))
         if closing:
             return "lease_changed"
@@ -348,6 +358,8 @@ class RealLoop:
             return None, {"applies": "next_tick"}
         if kind == "recovery":
             now_ns = int(self.clock())  # the instant it is judged at, not the tick's start (r3 P2-2)
+            if not self._lease_valid(now_ns):
+                return "no_lease", {}  # the lease ran out during the tick (r7 P2-2)
             done = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
                                             disarmed=self._disarm_confirmed(now_ns),
                                             outstanding=self.port.outstanding(now_ns)[0] != "settled")

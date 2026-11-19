@@ -235,3 +235,21 @@ def test_a_console_disarm_still_in_the_channel_blocks_the_disarm_confirmation():
     r.channels.message("c1", "op", {"t": "disarm", "request_id": "dq1", "session_epoch": EPOCH,
                                     "control_gen": r.arbiter.control_gen, "lease_id": r.lease})
     assert not r.loop._disarm_confirmed(int(r.loop.clock()))  # noqa: SLF001
+
+
+def test_recovery_done_is_refused_when_the_lease_ran_out_during_the_tick():
+    """5c-1 r7 P2-2: the lease checked on the callback's own clock."""
+    r = rig()
+    r.tick(3)
+    r.arbiter.lease.renewed_mono -= 100.0
+    reason, _ = r.loop._real_request_("recovery", {"recovery_id": 1, "action": "done"})  # noqa: SLF001
+    assert reason == "no_lease"
+
+
+def test_an_old_connection_closing_does_not_drop_the_new_connections_bypass():
+    """5c-1 r7 P3: only the holder's current connection counts."""
+    r = rig()
+    r.channels.disconnect("c-old", "op")  # a stale connection id of the same client
+    r.say("check_bypass", check="slam", on=True)
+    r.tick(2)
+    assert "slam" in r.loop.bypass
