@@ -527,10 +527,18 @@ def test_a_positive_d5_answer_below_the_requested_directions_possible_speed_hold
 
     from test_core_truth_split import permission_core
 
-    check = SimpleNamespace(limit=lambda *a: (0.037, "ok") if a[3] > 0 else (math.inf, "ok"), summary=lambda: {})
+    asked = []
+
+    def limit(*a):
+        asked.append((a[3], a[4]))
+        # a short stop arc only: a fast question gets the slow answer (the real check's shape)
+        return (0.037, "ok") if a[3] > 0 and a[4] > 0.06 else (math.inf, "ok")
+
+    check = SimpleNamespace(limit=limit, summary=lambda: {})
     c, _ = permission_core(SafetySpeed(0.07, 0.07, (1,)), phase="insert", pocket_check=check)
     c.state["outstanding_motion"] = {1: 0.03}
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.05, False, None)
+    assert (1, pytest.approx(0.07)) in asked  # asked at max(request 0.05, possible 0.07)
     assert out.allowed == 0.0 and out.requested_speed == 0.0
     assert out.why == "residual_over_allowed" and c.state["motion_hold"] == "residual_over_allowed"
 
