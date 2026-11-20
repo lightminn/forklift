@@ -884,6 +884,7 @@ class RealLoop:
             sd_ = self._sample_delay.get((int(state.boot_id), int(state.mcu_time_us)))
             self._emit({"t": "state", "boot": int(state.boot_id), "mcu_us": int(state.mcu_time_us), "rx_ns": int(rx_ns),
                         "last_rx_seq": int(state.last_rx_seq), "mode": int(state.mode),
+                        "faults": int(state.fault_flags), "reject": int(state.reject_reason),
                         "delay_bound_s": None if sd_ is None else sd_[1], "rule": self.host.health(int(rx_ns)).gap_rule,
                         "max_age_s": float(self.host.cfg.state_max_age_s)})
         step = self.odometry.update(int(state.mcu_time_us), int(state.boot_id), int(state.wheel_count_left),
@@ -1114,6 +1115,9 @@ class RealLoop:
         frame written while the end waits cancels the end."""
         if self._axis is None:
             self._axis = {"h0": float(frame.lift_m), "q0": float(frame.steering[0]), "end_pending": False}
+            # 6a-2b (design 2 (가)): the span the HIL judge reads, from the frame's own sample
+            self._emit({"t": "axis_watch", "event": "start", "ns": int(self.clock()), "seq": int(frame.seq) & 0xFFFF,
+                        "h0": self._axis["h0"], "q0": self._axis["q0"]})
         else:
             self._axis["end_pending"] = False
 
@@ -1134,6 +1138,8 @@ class RealLoop:
             now_c - (int(smp.host_ns) - int(round(float(b) * 1e9))) <= int(HOLD_SAMPLE_MAX_AGE_S * 1e9) \
             and math.isfinite(state.lift_m) and math.isfinite(state.steering_rad)  # impl round 4 P2-2
         self.axis_watch_times.append((now_c, bool(valid)))
+        self._emit({"t": "axis_judge", "ns": now_c, "valid": bool(valid), "lift": float(state.lift_m),
+                    "steer": float(state.steering_rad)})
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
         elif math.isfinite(state.steering_rad) and abs(float(state.steering_rad) - a["q0"]) > WAIT_STEER_MOVE_RAD:
@@ -1148,6 +1154,7 @@ class RealLoop:
             return
         if state.mode == Mode.DISARMED:
             self._axis = None
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "disarmed"})
             return
         c = self.book.confirmed
         later_hold = any(f.kind in HOLDING_KINDS and f.written_ns is not None for f in self.book.frames)
@@ -1156,6 +1163,7 @@ class RealLoop:
             a["end_pending"] = False
         elif a["end_pending"]:
             self._axis = None
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "drive_confirmed"})
         else:
             a["end_pending"] = True
 

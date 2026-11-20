@@ -264,3 +264,21 @@ def test_a_written_log_ends_the_model_with_exit_0(mcu_model, tmp_path):
         assert m.proc.wait(timeout=5) == 0
     finally:
         m.close()
+
+
+def test_sigusr1_pushes_the_plants_axes_once(mcu_model, tmp_path):
+    """6a-2b (design 2 (가)): SIGUSR1 moves the plant's lift and steering by --axis-push-lift-m / -steer-rad once,
+    as an outside push; nothing else changes."""
+    log = tmp_path / "axis.log"
+    m = Model(mcu_model, "--axis-log", log, "--axis-push-lift-m", "0.006", "--axis-push-steer-rad", "0.025")
+    try:
+        m.states(0.2)
+        m.proc.send_signal(signal.SIGUSR1)
+        m.states(0.2)
+    finally:
+        m.close()
+    rows = [line.split() for line in log.read_text().splitlines()]
+    lift = [float(r[3]) for r in rows]
+    steer = [float(r[4]) for r in rows]
+    jumps = [i for i in range(1, len(lift)) if lift[i] - lift[i - 1] > 0.005]
+    assert len(jumps) == 1 and abs(steer[jumps[0]] - steer[jumps[0] - 1] - 0.025) < 0.002

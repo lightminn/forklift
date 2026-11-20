@@ -190,8 +190,9 @@ def slam_may_drive(slam: dict) -> bool:
     return slam["tracker"].may_drive() and (gyro is None or gyro.get("bias") is not None)
 
 
-# the real insert end's re-check over the arrival tolerance (6a-2b, provisional until the S10 field run): the settle
-# a standing truck may show after the follower's arrival latched
+# the real insert end's re-check: how far the standing truck may have settled back (short of the goal along the
+# insertion) beyond the arrival tolerance (6a-2b, provisional until the S10 field run); sideways and past the goal the
+# tolerance holds as it is
 REAL_INSERT_SETTLE_M = 0.002
 
 
@@ -722,11 +723,15 @@ class MissionCore:
         goal = np.asarray(tracker.path_arrays()[0][-1], dtype=float)
         cfg = tracker.config
         yaw_err = math.atan2(math.sin(float(rear[2] - goal[2])), math.cos(float(rear[2] - goal[2])))
-        # the arrival latches at the tracker's tolerance; the stand that follows may settle the truck a little (the
+        # the arrival latches at the tracker's tolerance; the stand that follows may settle the truck back a little (the
         # HIL model drew back 0.3 mm from an arrival 8.0 mm short and failed this re-check at the same 8 mm, 6a-2b):
-        # the re-check allows REAL_INSERT_SETTLE_M more -- a residual motion past it still ends the mission
-        if (math.hypot(float(rear[0] - goal[0]), float(rear[1] - goal[1]))
-                > cfg.position_tolerance_m + REAL_INSERT_SETTLE_M or abs(yaw_err) > cfg.yaw_tolerance_rad):
+        # only the shortfall along the insertion gets REAL_INSERT_SETTLE_M more -- sideways or past the goal, and any
+        # larger residual motion, still end the mission (Codex 6a-2b impl round 2 P2-1)
+        dx, dy = float(goal[0] - rear[0]), float(goal[1] - rear[1])
+        along = dx * math.cos(float(goal[2])) + dy * math.sin(float(goal[2]))  # > 0: short of the goal
+        across = -dx * math.sin(float(goal[2])) + dy * math.cos(float(goal[2]))
+        short_ = max(0.0, along - REAL_INSERT_SETTLE_M) if along > 0.0 else along
+        if math.hypot(short_, across) > cfg.position_tolerance_m or abs(yaw_err) > cfg.yaw_tolerance_rad:
             return "pose_out_of_range"
         check = pocket.get("check")
         if getattr(self.options, "pocket_check", False):

@@ -404,7 +404,7 @@ def test_the_plan_workers_liveness_follows_its_permanent_failure():
     from forklift_core.planning.plan_worker import PlanWorker
 
     w = PlanWorker.__new__(PlanWorker)
-    w._lock, w._dead = threading.Lock(), None  # noqa: SLF001
+    w._lock, w._dead, w._replacing = threading.Lock(), None, False  # noqa: SLF001
     w._thread = SimpleNamespace(is_alive=lambda: True)  # noqa: SLF001
     w._stopping = threading.Event()  # noqa: SLF001
     assert w.alive
@@ -506,3 +506,91 @@ def test_a_hil_run_casts_the_scene_obstacles_with_a_bundle_too(base_prep, tmp_pa
     prep = rr.prepare_run(rr.RunPaths(s10a=HIL_YAML, map_bundle=tmp_path), clock=lambda: START,
                           jobs_factory=InlineJobs)
     assert prep.obstacles == [(2.6, 1.4, 0.3, 0.2, 0.0)]
+
+
+# --- Codex impl round 2 ---------------------------------------------------------------------------------------------
+def test_a_plan_worker_replacing_a_dead_process_is_not_alive():
+    from forklift_core.planning.plan_worker import PlanWorker
+
+    w = PlanWorker.__new__(PlanWorker)
+    w._lock, w._dead, w._replacing = threading.Lock(), None, True  # noqa: SLF001
+    w._thread = SimpleNamespace(is_alive=lambda: True)  # noqa: SLF001
+    w._stopping = threading.Event()  # noqa: SLF001
+    assert not w.alive
+    w._replacing = False  # noqa: SLF001
+    assert w.alive
+
+
+def test_an_imu_batch_failing_while_iterated_with_source_fatal_ends_the_run(base_prep):
+    r = Run(base_prep)
+    r.start()
+
+    def gen(upto, limit):
+        yield (int(upto) - 1_000_000, (0.0, 0.0, 9.81))
+        raise rr.SourceFatal("imu link gone")
+
+    r.sources.imu.samples = gen
+    rec = r.tick()
+    assert r.loop.fatal_source is not None and "imu" in r.loop.fatal_source and rec.branch == "emergency"
+
+
+def test_a_depth_check_is_registered_with_its_region_only_for_a_frame_of_this_moment(base_prep):
+    """Round 2 P1-1 (design 10.5 P1-4): the assembly registers the depth source's check in the core before the hook
+    sets its region as the layer's exemption; a frame of another mission generation registers nothing."""
+    from forklift_core.live.real_assembly import RealRequireFailed
+
+    class Check:
+        valid, invalid_reason = True, None
+
+        def region_control(self):
+            return (2.6, 0.0, 1.8, 0.8, 0.0)
+
+    frame = {"f": None}
+    depth = SimpleNamespace(frames=lambda now: [], pocket_frame=lambda: frame["f"],
+                            pocket_check=lambda *a: Check())
+    r = Run(base_prep, depth=depth)
+    r.start()
+    core = r.loop.core
+    hooks = core.hooks
+    frame["f"] = SimpleNamespace(mission_gen=core.commands.mission_gen + 1, phase=core.ms.phase,
+                                 correction=(0.0, 0.0, 0.0))
+    with pytest.raises(RealRequireFailed):
+        hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert core.pocket["check"] is None and r.run.layer.exempt is None
+    frame["f"] = SimpleNamespace(mission_gen=core.commands.mission_gen, phase=core.ms.phase,
+                                 correction=(0.0, 0.0, 0.0))
+    hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    assert isinstance(core.pocket["check"], Check) and r.run.layer.exempt == (2.6, 0.0, 1.8, 0.8, 0.0)
+
+
+def test_a_writer_stuck_in_a_write_does_not_hold_the_close_past_its_deadline(tmp_path):
+    gate = threading.Event()
+
+    class Stuck:
+        def write(self, s):
+            gate.wait(10)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            pass
+
+    rec = rr.RunRecord(tmp_path / "r.jsonl", opener=lambda p, m: Stuck())
+    rec.put({"t": "x"})
+    import time as _t
+
+    t0 = _t.monotonic()
+    assert rec.close({"t": "end"}, timeout_s=0.2) is False
+    assert _t.monotonic() - t0 < 1.0
+    gate.set()
+
+
+def test_the_hold_records_the_mission_it_began_in(base_prep):
+    r = Run(base_prep)
+    r.start()
+    core = r.loop.core
+    core.commands.mission_id = "m7"
+    core.hold_slam(r.loop._t(r.now), held_frame_pallet=False)  # noqa: SLF001
+    assert core.hold_mission_id == "m7" and core.slam["tracker"].mode == "holding"
+    assert r.loop.evidence.slam(r.now).hold_mission_gen == "m7"

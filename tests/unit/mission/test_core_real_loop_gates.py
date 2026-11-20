@@ -173,11 +173,13 @@ def test_a_faster_unconfirmed_output_the_same_way_than_allowed_holds_the_wheels(
     assert core._residual_speed(1) == 0.0  # noqa: SLF001 -- the simulation has no such record
 
 
-@pytest.mark.parametrize("short_m, lifts", [(0.0095, True), (0.0105, False)])
-def test_the_insert_end_recheck_allows_a_small_settle_past_the_arrival_tolerance(short_m, lifts):
-    """6a-2b: the arrival latches within 8 mm; a stand that settles the truck up to 2 mm further still lifts, more
-    ends as pose_out_of_range (the HIL model drew back 0.3 mm from an arrival 8.0 mm short)."""
-    core, ms, state, log = insert_core(rear=(2.0 - short_m, 0.0, 0.0))
+@pytest.mark.parametrize("offset, lifts", [((-0.0095, 0.0), True), ((-0.0105, 0.0), False),
+                                           ((0.0, 0.0095), False), ((0.0095, 0.0), False)])
+def test_the_insert_end_recheck_allows_only_a_small_settle_back_along_the_insertion(offset, lifts):
+    """6a-2b (Codex impl round 2 P2-1): the arrival latches within 8 mm; a stand that settles the truck back along the
+    insertion up to 2 mm further still lifts -- 9.5 mm short lifts, 10.5 mm short ends; 9.5 mm sideways or 9.5 mm past
+    the goal end as pose_out_of_range (the HIL model drew back 0.3 mm from an arrival 8.0 mm short)."""
+    core, ms, state, log = insert_core(rear=(2.0 + offset[0], offset[1], 0.0))
     core.arrive(20.0, tracking())
     if lifts:
         assert ms.phase == "lift", core.commands.end_reason

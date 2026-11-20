@@ -75,11 +75,19 @@ typedef struct {
 
 static board B;
 static volatile sig_atomic_t stop_requested;
+static volatile sig_atomic_t push_requested; /* 6a-2b: SIGUSR1 -- push the plant's axes once (a test injection) */
+static double push_lift_m, push_steer_rad;   /* --axis-push-lift-m / --axis-push-steer-rad */
 
 static void on_term(int sig)
 {
     (void)sig;
     stop_requested = 1;
+}
+
+static void on_push(int sig)
+{
+    (void)sig;
+    push_requested = 1;
 }
 
 static uint64_t mono_ns(void)
@@ -437,6 +445,11 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
     signal(SIGPIPE, SIG_IGN);
+    push_lift_m = strtod(arg_str(argc, argv, "--axis-push-lift-m") ? arg_str(argc, argv, "--axis-push-lift-m") : "0",
+                         NULL);
+    push_steer_rad = strtod(arg_str(argc, argv, "--axis-push-steer-rad")
+                            ? arg_str(argc, argv, "--axis-push-steer-rad") : "0", NULL);
+    signal(SIGUSR1, on_push);
 
     static drive_config cfg;
     static fw_app app;
@@ -465,6 +478,13 @@ int main(int argc, char **argv)
             next = B.now_ns;
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
+        if (push_requested) {
+            /* 6a-2b (design 2 (가)): an external push of the plant's axes, as a hand or a load would -- the core sees
+               it only through its sensors, the next STATE */
+            push_requested = 0;
+            B.p.lift_m += push_lift_m;
+            B.p.steer_rad += push_steer_rad;
+        }
         fw_app_tick(&app);
         if (B.axis_log != NULL) {
             if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,

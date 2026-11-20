@@ -577,7 +577,10 @@ class SlamView:
     mode: str  # tracking | holding | warming_up | lost ...
     pose_reply_ns: int | None  # the newest reply that computed a new pose (a "skipped" reply does not count)
     hold_travel_m: float = 0.0
-    hold_mission_gen: int | None = None  # the mission generation whose transition began the hold
+    # the owner of the hold, compared with Evidence.mission_gen: the real run passes mission ids on both sides (the
+    # mission the hold began in, 6a-2b round 1-2; a pause moves the control generation within a mission), the rigs
+    # the generation -- any hashable value, the same kind on both sides
+    hold_mission_gen: object = None
 
 
 @dataclass(frozen=True)

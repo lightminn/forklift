@@ -114,7 +114,7 @@ def _write(record: dict, out: Path | None) -> None:
 
 
 # --- the HIL run (design 10.3) ---------------------------------------------------------------------------------------
-INJECTIONS = ("scan", "scan_lost", "slam", "tx", "tx_keep", "tx_partial", "tx_release")
+INJECTIONS = ("scan", "scan_lost", "slam", "tx", "tx_keep", "tx_partial", "tx_release", "axis_push")
 
 
 def parse_injections(items) -> list:
@@ -137,8 +137,9 @@ class Injector:
     first 4 bytes out, and the rest of that frame only meets EAGAIN until ``tx_release`` -- the poison and the DISARM
     after its abandonment pass."""
 
-    def __init__(self, items, run, record) -> None:
-        self.todo, self.run, self.record = list(items), run, record
+    def __init__(self, items, run, record, model_pid=None) -> None:
+        self.todo, self.run, self.record, self.model_pid = list(items), run, record, model_pid
+        self.push_armed, self.pushed = False, False  # axis_push: SIGUSR1 to the model at the next holding frame
         self.t0 = None  # the first moving DRIVE's write (host ns)
         self.tx_cut = self.tx_keep = False
         self.partial_armed = False
@@ -178,6 +179,13 @@ class Injector:
             return
         self.drives_written.add(int(seq) & 0xFFFF)
         booked = self._booked(seq)
+        if self.push_armed and not self.pushed and booked is not None and booked.kind in ("hold", "stop") \
+                and self.model_pid is not None:
+            # design 2 (가): the plant pushed while a position-holding frame holds it (the model's own options say how
+            # far); the watch sees it only through the next STATEs
+            os.kill(self.model_pid, signal.SIGUSR1)
+            self.pushed = True
+            self.record.put({"t": "inject_push", "ns": int(written_ns), "seq": int(seq) & 0xFFFF})
         if self.t0 is None and booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0:
             self.t0 = int(written_ns)
             self.record.put({"t": "inject_t0", "ns": self.t0, "seq": int(seq) & 0xFFFF})
@@ -200,6 +208,8 @@ class Injector:
                 self.partial_armed = True
             elif name == "tx_release":
                 self.released = True
+            elif name == "axis_push":
+                self.push_armed = True
             loop = self.run.loop
             self.record.put({"t": "inject", "name": name, "ms": ms, "ns": int(now_ns),
                              "last_scan_s": dict(self.run.layer.last_scan_s),
@@ -361,25 +371,26 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
         return EXIT_FAILED
     print(json.dumps({"console": f"http://{args.host}:{server.port}/", "port": server.port,
                       "session_epoch": prep.epoch}), flush=True)
-    # ⑧ the session (its first DISARM at once) ⑨ the run
-    now = time.monotonic_ns()
-    run.start_session(now)
-    record.put({"t": "session", "ns": now})
+    # ⑧ the session (its first DISARM at once) ⑨ the run -- from the session's first act on, every exit goes through
+    # the closing below (round 2 P3)
     inj = None
-    if injections:
-        inj = Injector(injections, run, record)
-        put = run.loop.events
-
-        def events(ev):
-            if ev.get("t") == "frame_written":
-                inj.note_written(ev.get("kind"), ev.get("seq"), ev.get("written_ns"))
-            put(ev)
-
-        run.loop.events = events
     try:
+        now = time.monotonic_ns()
+        run.start_session(now)
+        record.put({"t": "session", "ns": now})
+        if injections:
+            inj = Injector(injections, run, record, model_pid=held.pty.proc.pid)
+            put = run.loop.events
+
+            def events(ev):
+                if ev.get("t") == "frame_written":
+                    inj.note_written(ev.get("kind"), ev.get("seq"), ev.get("written_ns"))
+                put(ev)
+
+            run.loop.events = events
         reason = run.run(float(args.duration_s), stop=stop, model_exit=held.pty.poll, record=record,
                          before_tick=None if inj is None else inj.tick)
-    except Exception as err:  # noqa: BLE001 -- the closing below still runs while the link lives (round 1 P2)
+    except Exception as err:  # noqa: BLE001 -- the closing below still runs while the link lives (rounds 1-2)
         import traceback
 
         traceback.print_exc()
@@ -443,7 +454,7 @@ def main(argv=None) -> int:
                     help="one argument for the model (repeat; --hil-model-arg=--accept-log --hil-model-arg=PATH)")
     ap.add_argument("--hil-inject", action="append", default=None,
                     help="tests only: name:ms after the first moving DRIVE written "
-                         "(scan|scan_lost|slam|tx|tx_keep|tx_partial|tx_release)")
+                         "(scan|scan_lost|slam|tx|tx_keep|tx_partial|tx_release|axis_push)")
     ap.add_argument("--duration-s", type=float, default=None, help="--hil: required, 0 < s <= 3600")
     ap.add_argument("--device", default=None, help="refused: no real MCU AUTO before S10's preconditions")
     ap.add_argument("--s10a", "--config", dest="s10a", type=Path, default=None,

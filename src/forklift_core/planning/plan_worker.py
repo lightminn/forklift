@@ -248,6 +248,7 @@ class PlanWorker:
         self._restart = threading.Event()
         self._stopping = threading.Event()
         self._dead: str | None = None  # why there is no worker any more: every job from then on fails at once
+        self._replacing = False  # a died process's replacement not ready yet (not alive meanwhile; 6a-2b round 2)
         self._next = 0
         self.proc: subprocess.Popen | None = None
         self._send = self._recv = None
@@ -262,7 +263,8 @@ class PlanWorker:
         run's readiness evidence, 6a-2b impl round 1 P1-2)."""
         with self._lock:
             dead = self._dead
-        return dead is None and self._thread.is_alive() and not self._stopping.is_set()
+        return (dead is None and not self._replacing and self._thread.is_alive()
+                and not self._stopping.is_set())
 
     def submit(self, name: str, payload: dict) -> int:
         """Queue a job; its inputs are pickled now, so later changes to them do not reach the job."""
@@ -357,6 +359,8 @@ class PlanWorker:
                 self._blobs.pop(culprit, None)
                 self._done[culprit] = (False, died)
         self._stop_process()
+        if died is not None:
+            self._replacing = True  # a death: not alive until the replacement says ready (a discard's restart is)
         try:
             self._start_process()
         except WorkerFailure as exc:
@@ -366,6 +370,7 @@ class PlanWorker:
                     self._done.setdefault(job_id, (False, self._dead))
                 self._blobs.clear()
             raise
+        self._replacing = False
         self.restarts += 1
         for job_id in again:
             self._write(job_id)

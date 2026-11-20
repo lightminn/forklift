@@ -516,7 +516,7 @@ class _ImuGuard:
 
     def samples(self, upto_ns, limit):
         try:
-            return self._src.samples(upto_ns, limit)
+            return list(self._src.samples(upto_ns, limit))  # its iteration too (round 2 P1-2)
         except SourceFatal as exc:
             self._mark(f"imu:{exc}")
             raise
@@ -528,7 +528,7 @@ class _DepthGuard:
 
     def frames(self, now_ns):
         try:
-            return self._src.frames(now_ns)
+            return list(self._src.frames(now_ns))  # its iteration too (round 2 P1-2)
         except Exception as exc:
             self._mark(f"depth:{type(exc).__name__}:{exc}")
             raise
@@ -688,7 +688,8 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                               geometry=prep.geometry,
                               # the depth source's frame and check builder (PR 7; HIL has none: D5 only by the bypass)
                               pocket_frame=None if sources.depth is None else sources.depth.pocket_frame,
-                              pocket_check=None if sources.depth is None else sources.depth.pocket_check,
+                              pocket_check=None if sources.depth is None else (
+                                  lambda *a: _register_check(box, sources.depth, a)),
                               operator=lambda r: box["loop"].operator_check(r), tick=tick, layer=layer,
                               occupancy=lambda: box["loop"].planning_occupancy())
         core = asm.assemble(
@@ -789,6 +790,23 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
         raise
 
 
+def _register_check(box, depth, args):
+    """Design 10.5 P1-4: the depth source's check, registered in the core only when its frame was taken in this
+    mission generation, phase and correction (RealHooks then installs its region as the layer's exemption); a frame of
+    another moment registers nothing (the hook refuses the check)."""
+    loop = box["loop"]
+    core = loop.core
+    frame = depth.pocket_frame()
+    if frame is None or getattr(frame, "mission_gen", None) != core.commands.mission_gen \
+            or getattr(frame, "phase", None) != core.ms.phase \
+            or tuple(getattr(frame, "correction", ()) or ()) != tuple(float(v) for v in core.obstacle["applied"]):
+        return None
+    check = depth.pocket_check(*args)
+    if check is not None and getattr(check, "valid", False):
+        core.pocket["check"] = check  # registered before the exemption is set (round 2 P1-1)
+    return check
+
+
 def _emit(events, event: dict) -> None:
     if events is not None:
         try:
@@ -810,6 +828,7 @@ class RunRecord:
         self.failed: str | None = None
         self.rows = 0
         self.end_written = False  # the end row reached the file (the writer's own word, round 1 P2)
+        self.closed = False  # the writer closed the file (round 2 P2-8)
         self._f = None if self.path is None else opener(self.path, "w")
         self._thread = threading.Thread(target=self._run, name="real-run-record", daemon=True)
         self._thread.start()
@@ -827,6 +846,12 @@ class RunRecord:
         while True:
             row = self._q.get()
             if row is None:
+                if self._f is not None:  # the writer owns the file to its close (round 2 P2-8)
+                    try:
+                        self._f.close()
+                    except Exception as err:  # noqa: BLE001
+                        self.failed = self.failed or f"close:{type(err).__name__}:{err}"
+                self.closed = True
                 return
             if self.failed is not None:
                 continue
@@ -842,24 +867,19 @@ class RunRecord:
                 self.incomplete = self.incomplete or f"writer_failed:{self.failed}"
 
     def close(self, end: dict, timeout_s: float = 5.0) -> bool:
-        """The end row (carrying ``record_incomplete`` when it is known), then the writer's end: True when every row
-        reached the file and it closed."""
+        """The end row (carrying ``record_incomplete`` when it is known), then the writer's end, within one deadline:
+        True when every row reached the file and the writer closed it. A writer stuck in a write is not waited for
+        past ``timeout_s`` (it owns the file; the record is then incomplete)."""
+        deadline = time.monotonic() + timeout_s
         end = dict(end, record_incomplete=self.incomplete)
         try:
-            self._q.put(end, timeout=timeout_s)
-            self._q.put(None, timeout=timeout_s)
+            self._q.put(end, timeout=max(0.0, deadline - time.monotonic()))
+            self._q.put(None, timeout=max(0.0, deadline - time.monotonic()))
         except queue.Full:
             self.incomplete = self.incomplete or "queue_full_at_end"
-        self._thread.join(timeout_s)
-        ok = (not self._thread.is_alive() and self.failed is None and self.incomplete is None and self.end_written
-              and self._f is not None)  # no file: nothing kept, never complete
-        if self._f is not None:
-            try:
-                self._f.close()
-            except Exception as err:  # noqa: BLE001
-                self.failed = self.failed or f"close:{err}"
-                ok = False
-        return ok
+        self._thread.join(max(0.0, deadline - time.monotonic()))
+        return (not self._thread.is_alive() and self.closed and self.failed is None and self.incomplete is None
+                and self.end_written and self._f is not None)  # no file: nothing kept, never complete
 
 
 def _json_default(v):
@@ -940,7 +960,9 @@ class RealRun:
                 loop = self.loop
                 rear = getattr(loop, "_rear_now", None)
                 row.update(odom=[round(float(v), 5) for v in loop.odom_pose],
-                           rear=None if rear is None else [round(float(v), 5) for v in rear])
+                           rear=None if rear is None else [round(float(v), 5) for v in rear],
+                           # the layer watchdog's stored first overdue evaluation (core s; the scan judge's 1 s start)
+                           overdue_since=getattr(self.layer, "_overdue_since", None))
                 record.put(row)
                 self.permit_events(record)
             nxt += TICK_NS
