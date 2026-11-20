@@ -65,6 +65,7 @@ typedef struct {
     bool fault_fired;
     long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
     FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
+    bool log_failed;                          /* 6a-2b (design 10.8): a log write, flush or close failed -> exit 4 */
     bool was_state_silent;
     bool tx_mid; /* the last flush stopped inside a frame (its delimiter not yet out) */
     bool resync_after_cut; /* a frame was cut mid-way at a STATE cut: the poison goes first when it ends */
@@ -365,10 +366,12 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
     }
     /* + the boot id and this host's CLOCK_MONOTONIC ns (the runner's time.monotonic_ns clock) for the send-to-accept
        matching (6a-2b design 10.6) */
-    fprintf(B.accept_log, "%llu %u %s %s %u %lld %lu %llu\n", (unsigned long long)after->time_us, (unsigned)m->seq,
+    if (fprintf(B.accept_log, "%llu %u %s %s %u %lld %lu %llu\n", (unsigned long long)after->time_us, (unsigned)m->seq,
             kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us,
-            (unsigned long)after->boot_id, (unsigned long long)mono_ns());
-    fflush(B.accept_log);
+            (unsigned long)after->boot_id, (unsigned long long)mono_ns()) < 0
+        || fflush(B.accept_log) != 0) {
+        B.log_failed = true;
+    }
 }
 
 int main(int argc, char **argv)
@@ -464,9 +467,11 @@ int main(int argc, char **argv)
         step_plant((double)(B.now_ns - prev) / 1e9);
         fw_app_tick(&app);
         if (B.axis_log != NULL) {
-            fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
-                    (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
-                    B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]);
+            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
+                        (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
+                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]) < 0) {
+                B.log_failed = true;
+            }
         }
         bool ss = state_silent();
         if (ss && !B.was_state_silent) {
@@ -493,12 +498,18 @@ int main(int argc, char **argv)
             flush_tx();
         }
     }
-    if (B.accept_log != NULL) {
-        fclose(B.accept_log);
+    /* 6a-2b (design 10.8): exit 0 says every log row was written and both logs closed; any failure exits 4
+       (log_write_failed) so that a verdict never reads an incomplete log as complete */
+    if (B.accept_log != NULL && (fflush(B.accept_log) != 0 || fclose(B.accept_log) != 0)) {
+        B.log_failed = true;
     }
-    if (B.axis_log != NULL) {
-        fclose(B.axis_log);
+    if (B.axis_log != NULL && (fflush(B.axis_log) != 0 || fclose(B.axis_log) != 0)) {
+        B.log_failed = true;
     }
     close(B.fd);
+    if (B.log_failed) {
+        fprintf(stderr, "log_write_failed\n");
+        return 4;
+    }
     return 0;
 }

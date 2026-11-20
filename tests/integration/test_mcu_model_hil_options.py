@@ -238,3 +238,29 @@ def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
     for r in rows:
         assert len(r) == 7  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s
         int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6])
+
+
+@pytest.mark.parametrize("option", ["--accept-log", "--axis-log"])
+def test_a_log_that_cannot_be_written_ends_the_model_with_exit_4(mcu_model, option):
+    """6a-2b (design 10.8): exit 0 only when every log row was written and the log closed; /dev/full refuses them."""
+    m = Model(mcu_model, option, "/dev/full")
+    try:
+        m.states(0.1)
+        m.send(Disarm(), 5)  # a handled frame: one accept-log row
+        m.states(0.1)
+        m.proc.send_signal(signal.SIGTERM)
+        assert m.proc.wait(timeout=5) == 4
+    finally:
+        m.close()
+
+
+def test_a_written_log_ends_the_model_with_exit_0(mcu_model, tmp_path):
+    m = Model(mcu_model, "--accept-log", tmp_path / "a.log", "--axis-log", tmp_path / "x.log")
+    try:
+        m.states(0.1)
+        m.send(Disarm(), 5)
+        m.states(0.1)
+        m.proc.send_signal(signal.SIGTERM)
+        assert m.proc.wait(timeout=5) == 0
+    finally:
+        m.close()
