@@ -79,6 +79,7 @@ class LoopTtyTransport:
         self.first_byte_ns: dict = {}  # seq -> clock just before its first os.write (D5's round trip)
         self.last_write_ns: dict = {}  # seq -> clock just before the os.write that sent its last byte
         self.written_ns: dict = {}  # seq -> clock after that os.write returned (the book's and the permit's)
+        self.written_data: dict = {}  # seq -> the frame's bytes once written whole (the record's E: its echo, validity)
         self._host = None
         self.resyncs = 0
         self.read_done_ns: int | None = None
@@ -225,6 +226,9 @@ class LoopTtyTransport:
             self._cur, self._cur_at, self.partial_since_ns = f, n, int(self.clock())
             return "partial"
         self.written_ns[seq] = int(self.clock())
+        self.written_data[seq] = bytes(f.data)
+        if len(self.written_data) > 4096:
+            self.written_data.pop(next(iter(self.written_data)))
         return "done"
 
     def _write_rest(self, f, judged_ns) -> bool:
@@ -239,6 +243,9 @@ class LoopTtyTransport:
         if self._cur_at < len(f.data):
             return False
         self.written_ns[seq] = int(self.clock())
+        self.written_data[seq] = bytes(f.data)
+        if len(self.written_data) > 4096:
+            self.written_data.pop(next(iter(self.written_data)))
         return True
 
     # --- the HIL check and the loss ----------------------------------------------------------------------------------
