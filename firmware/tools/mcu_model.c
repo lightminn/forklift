@@ -478,20 +478,23 @@ int main(int argc, char **argv)
             next = B.now_ns;
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
+        bool pushed_now = false;
         if (push_requested) {
             /* 6a-2b (design 2 (가)): an external push of the plant's axes, as a hand or a load would -- the core sees
                it only through its sensors, the next STATE */
             push_requested = 0;
             B.p.lift_m += push_lift_m;
             B.p.steer_rad += push_steer_rad;
+            pushed_now = true; /* the axis log marks the tick it was applied in (round 5) */
         }
         fw_app_tick(&app);
         if (B.axis_log != NULL) {
             /* + this host's CLOCK_MONOTONIC ns of the tick (6a-2b round 4: compared with the runner's instants
                directly, no receipt-delay offset) */
-            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f %llu\n", (unsigned long long)app.d.time_us,
+            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f %llu %d\n", (unsigned long long)app.d.time_us,
                         (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
-                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1], (unsigned long long)B.now_ns) < 0) {
+                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1], (unsigned long long)B.now_ns,
+                        pushed_now ? 1 : 0) < 0) {
                 B.log_failed = true;
             }
         }

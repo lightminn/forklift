@@ -299,7 +299,9 @@ class RealLoop:
         # (clock ns, reason) of each stop the permit decides -- a latch or a DISARM, the loop's or its own -- taken at
         # the transition, before anything is queued or sent (6a impl rounds 1-4: the axis watch's last gap ends here)
         self.disarm_decisions: deque = deque(maxlen=256)
-        permit.on_stop = lambda reason: self.disarm_decisions.append((int(self.clock()), str(reason)))
+        permit.on_stop = self._on_stop_decided
+        self._cause = None  # 6a-2b (impl round 5): this tick's latest latching evidence (instant, reason)
+        self._tick_ns = None
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
         # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
@@ -342,6 +344,7 @@ class RealLoop:
         if why is not None and ra.latches(why):
             # 6a-2b (impl round 4): a latching reason with the instant its evidence was judged at
             self._emit({"t": "cause", "ns": int(now_ns), "why": why, "where": "ready"})
+            self._cause = (int(now_ns), why)
         return why
 
     def _bypassed(self, check: str) -> bool:
@@ -1218,6 +1221,7 @@ class RealLoop:
         self._wait_frames_tick = 0  # 6a: at most one wait frame per tick (design 2, round 10 P2-1)
         self.session.last_records, self.session.began = None, False  # 6a (design 5)
         self._tick_end_tried = False
+        self._cause, self._tick_ns = None, int(now_ns)
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -1519,8 +1523,20 @@ class RealLoop:
         self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
                          collect=lambda r: self._end_now(now_ns, r))
 
+    def _on_stop_decided(self, reason) -> None:
+        """The permit decided a stop (a latch or a DISARM): kept with the evidence instant and reason that led to it in
+        this tick -- the readiness's, the send's or the gate's own instant; else this tick's start (6a-2b round 5)."""
+        now_c = int(self.clock())
+        self.disarm_decisions.append((now_c, str(reason)))
+        cause = self._cause
+        self._emit({"t": "stop_decision", "ns": now_c, "reason": str(reason),
+                    "cause_ns": self._tick_ns if cause is None else cause[0],
+                    "cause_why": None if cause is None else str(cause[1])})
+
     def _emergency(self, now_ns: int, reason: str) -> None:
         self._emit({"t": "cause", "ns": int(now_ns), "why": str(reason), "where": "emergency"})
+        if self._cause is None:
+            self._cause = (int(now_ns), str(reason))
         self.waiting = None
         self._mark_stop()  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
@@ -2085,6 +2101,7 @@ class RealLoop:
             return "tick_late"
         if not self.host.health(send_ns).fresh:
             self._emit({"t": "cause", "ns": int(send_ns), "why": "measurement_stale", "where": "send"})
+            self._cause = (int(send_ns), "measurement_stale")
             return "measurement_stale"
         why = self._ready(send_ns, "drive")
         if why is not None and ra.latches(why):
@@ -2401,6 +2418,8 @@ class RealLoop:
                     # whatever else the check found (round 7 P2-1)
                     verdict = ("emergency_event", "alarm")
             ns0_, ns_ = getattr(self, "_gate_at", (None, None))
+            if not ok and verdict is not None and verdict[1] == "alarm":
+                self._cause = (int(ns_ if ns_ is not None else self.clock()), str(verdict[0]))  # round 5
             self._emit({"t": "gate", "seq": int(frame.seq) & 0xFFFF, "kind": frame.kind, "continuing": continuing,
                         "ns0": ns0_, "ns": ns_, "judged_ns": self._judged_ns,
                         "verdict": "pass" if ok else f"{verdict[0]}:{verdict[1]}"})  # 6a-2b (design 10.7)

@@ -236,8 +236,8 @@ def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
     t = [int(r[0]) for r in rows]
     assert t == sorted(t)
     for r in rows:
-        assert len(r) == 8  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s, host monotonic ns
-        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6]), int(r[7])
+        assert len(r) == 9  # MCU us, wall gap ns, mode, lift, steering, wheel L, R, host monotonic ns, pushed
+        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6]), int(r[7]), int(r[8])
 
 
 @pytest.mark.parametrize("option", ["--accept-log", "--axis-log"])
@@ -282,3 +282,4 @@ def test_sigusr1_pushes_the_plants_axes_once(mcu_model, tmp_path):
     steer = [float(r[4]) for r in rows]
     jumps = [i for i in range(1, len(lift)) if lift[i] - lift[i - 1] > 0.005]
     assert len(jumps) == 1 and abs(steer[jumps[0]] - steer[jumps[0] - 1] - 0.025) < 0.002
+    assert [i for i, r in enumerate(rows) if r[8] == "1"] == jumps  # the marked tick is the jump's
