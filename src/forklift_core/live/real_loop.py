@@ -1315,7 +1315,7 @@ class RealLoop:
         self.book.publish(core.state, core.slam, now_ns, (0.0 if q is None else q,))
         # 6a (design 2): a STATE read after the tick's start counts as received at it for this evaluation
         samples_ = [smp if smp.host_ns <= now_ns else Sample(int(now_ns), smp.state) for smp in self.samples]
-        reading = encoder_speed(samples_, now_ns, self.params, self.steering_ok, self.delay_s)
+        reading = encoder_speed(samples_, now_ns, self.params, self.steering_ok, self._speed_delay_s())
         self.speed = reading.speed
         still = self._still(now_ns)
         if not still and self.operator_start is not None:
@@ -1867,6 +1867,16 @@ class RealLoop:
         out = self.session.tick_end(now_ns / 1e9, self._cmd_records, safety,
                                     (float(command_.drive.speed_mps), float(command_.drive.curvature_inv_m)), None)
         self._candidate = (command_, command_.steering_command, out, sink)
+
+    def _speed_delay_s(self):
+        """The newest STATE's measurement-to-receipt delay the safety speed adds to its age (6a-2b impl round 1 P1-1):
+        its round-trip bound when the loop keeps them (None, unknown: no safety speed), else the fixed ``delay_s``."""
+        if self.delay_bound is None:
+            return self.delay_s
+        if not self.samples:
+            return None
+        st = self.samples[-1].state
+        return (self._sample_delay.get((int(st.boot_id), int(st.mcu_time_us))) or (None, None))[1]
 
     def _mark_stop(self) -> None:
         """This tick decided a stop or a wait (5d 7.1 6): no older moving frame is finished after it; the first such

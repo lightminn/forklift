@@ -165,9 +165,12 @@ class Injector:
             if booked is None or booked.kind != "drive" or float(booked.speed_mps) == 0.0 \
                     or last not in self.drives_written:
                 return None
-            self.partial_seq = seq
-            self.record.put({"t": "inject_partial", "seq": seq, "ns": time.monotonic_ns(), "after_accepted": last})
-            return os.write(fd, data[:4])
+            n = os.write(fd, data[:4])
+            if n > 0:  # a 0-byte or refused first write is no half frame (round 1 P2)
+                self.partial_seq = seq
+                self.record.put({"t": "inject_partial", "seq": seq, "bytes": int(n), "ns": time.monotonic_ns(),
+                                 "after_accepted": last})
+            return n
         return 0 if seq == self.partial_seq else None  # the rest of that frame only
 
     def note_written(self, kind, seq, written_ns) -> None:
@@ -200,6 +203,7 @@ class Injector:
             loop = self.run.loop
             self.record.put({"t": "inject", "name": name, "ms": ms, "ns": int(now_ns),
                              "last_scan_s": dict(self.run.layer.last_scan_s),
+                             "scan_delivered_s": getattr(src.scans, "last_delivered_s", None),
                              "slam_fresh_ns": getattr(loop, "_fresh_ns", None),
                              "state_age_s": src.host.health(int(now_ns)).state_age_s})
 
@@ -240,6 +244,8 @@ def run_hil(args) -> int:
         refused.append("hil_model_missing")
     if args.duration_s is None or not 0 < float(args.duration_s) <= 3600:
         refused.append("duration_s")
+    if args.out_dir is None:
+        refused.append("out_dir_required")  # a run keeps its record (round 1 P2)
     model_args = list(args.hil_model_arg or ())
     refused += [f"hil_model_arg_reserved:{a}" for a in model_args if str(a) in rlt.RESERVED_MODEL_ARGS]
     try:
@@ -273,10 +279,14 @@ def _run_hil(args, rlt, stop, model_args, injections) -> int:
     except rr.RunCancelled:
         _write({"run": False, "end": "signal_while_preparing"}, None)
         return EXIT_FAILED
-    out_dir = Path(args.out_dir) if args.out_dir else None
-    if out_dir is not None:
+    out_dir = Path(args.out_dir)
+    try:
         out_dir.mkdir(parents=True, exist_ok=True)
-    record = rr.RunRecord(None if out_dir is None else out_dir / "run.jsonl")
+        record = rr.RunRecord(out_dir / "run.jsonl")
+    except OSError as err:
+        prep.jobs.close()
+        _write({"run": False, "end": f"record_unopenable:{err}"}, None)
+        return rr.EXIT_RECORD
     held = SimpleNamespace(pty=None, server=None, run=None)
     end = {"t": "end", "reason": None}
     code = EXIT_FAILED
@@ -290,7 +300,11 @@ def _run_hil(args, rlt, stop, model_args, injections) -> int:
         code = EXIT_FAILED
     finally:
         ok = _cleanup(held, prep, record, end)
-    return rr.EXIT_RECORD if not ok else code
+    if not ok or end.get("model_exit") == 4:
+        return rr.EXIT_RECORD  # the host's record or the model's log is not complete (round 1 P2)
+    if code == rr.EXIT_OK and end.get("model_exit") != 0:
+        return EXIT_FAILED  # the model ended other than by the closing's own stop
+    return code
 
 
 def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, model_args, injections) -> int:
@@ -312,6 +326,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
     # ④ the host and the transport: the first STATE of a verified HIL board
     host = real_host(rr.RUN_HOST_CFG, client=Client.HIL)
     transport = rlt.LoopTtyTransport(held.pty.slave)
+    transport.on_event = record.put
     why = _first_state(host, transport, held.pty, stop, rlt)
     if why is not None:
         end["reason"] = why
@@ -361,12 +376,21 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
             put(ev)
 
         run.loop.events = events
-    reason = run.run(float(args.duration_s), stop=stop, model_exit=held.pty.poll, record=record,
-                     before_tick=None if inj is None else inj.tick)
+    try:
+        reason = run.run(float(args.duration_s), stop=stop, model_exit=held.pty.poll, record=record,
+                         before_tick=None if inj is None else inj.tick)
+    except Exception as err:  # noqa: BLE001 -- the closing below still runs while the link lives (round 1 P2)
+        import traceback
+
+        traceback.print_exc()
+        reason = f"exception:{type(err).__name__}:{err}"
     end["reason"] = reason
     if inj is not None:
         inj.tx_cut = False  # the cut send was the injection; the closing's DISARM goes out (tx_keep keeps it cut)
-    closing = run.close(record=record)
+    try:
+        closing = run.close(record=record)
+    except Exception as err:  # noqa: BLE001
+        closing = f"closing_exception:{type(err).__name__}:{err}"
     loop = run.loop
     end.update(closing=closing, closing_started_ns=loop.closing_started_ns, closing_confirmed_ns=loop.closing_confirmed_ns,
                closing_disarms=[list(d) for d in loop.closing_disarms],
@@ -418,7 +442,8 @@ def main(argv=None) -> int:
     ap.add_argument("--hil-model-arg", action="append", default=None,
                     help="one argument for the model (repeat; --hil-model-arg=--accept-log --hil-model-arg=PATH)")
     ap.add_argument("--hil-inject", action="append", default=None,
-                    help="tests only: name:ms after the session start (scan|scan_lost|slam|tx|tx_partial|tx_release)")
+                    help="tests only: name:ms after the first moving DRIVE written "
+                         "(scan|scan_lost|slam|tx|tx_keep|tx_partial|tx_release)")
     ap.add_argument("--duration-s", type=float, default=None, help="--hil: required, 0 < s <= 3600")
     ap.add_argument("--device", default=None, help="refused: no real MCU AUTO before S10's preconditions")
     ap.add_argument("--s10a", "--config", dest="s10a", type=Path, default=None,
@@ -429,10 +454,10 @@ def main(argv=None) -> int:
     ap.add_argument("--map-bundle", type=Path, default=None,
                     help="the surveyed map bundle (verified by its manifest; its map id must be s10a.yaml's)")
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--out-dir", type=Path, default=None, help="--run: the run record's folder (run.jsonl)")
+    ap.add_argument("--out-dir", type=Path, default=None, help="--run: the run record's folder (run.jsonl), required")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=0)
-    ap.add_argument("--web-root", default=None)
+    ap.add_argument("--web-root", default=str(REPO / "console/web"), help="the console's pages (as the teleop bridge)")
     args = ap.parse_args(argv)
     if args.run:
         if not args.hil:

@@ -190,6 +190,11 @@ def slam_may_drive(slam: dict) -> bool:
     return slam["tracker"].may_drive() and (gyro is None or gyro.get("bias") is not None)
 
 
+# the real insert end's re-check over the arrival tolerance (6a-2b, provisional until the S10 field run): the settle
+# a standing truck may show after the follower's arrival latched
+REAL_INSERT_SETTLE_M = 0.002
+
+
 @dataclass
 class RecoveryPath:
     """A recovery's retrace (plan D4): rear-axle poses, all reversing."""
@@ -717,8 +722,11 @@ class MissionCore:
         goal = np.asarray(tracker.path_arrays()[0][-1], dtype=float)
         cfg = tracker.config
         yaw_err = math.atan2(math.sin(float(rear[2] - goal[2])), math.cos(float(rear[2] - goal[2])))
-        if (math.hypot(float(rear[0] - goal[0]), float(rear[1] - goal[1])) > cfg.position_tolerance_m
-                or abs(yaw_err) > cfg.yaw_tolerance_rad):
+        # the arrival latches at the tracker's tolerance; the stand that follows may settle the truck a little (the
+        # HIL model drew back 0.3 mm from an arrival 8.0 mm short and failed this re-check at the same 8 mm, 6a-2b):
+        # the re-check allows REAL_INSERT_SETTLE_M more -- a residual motion past it still ends the mission
+        if (math.hypot(float(rear[0] - goal[0]), float(rear[1] - goal[1]))
+                > cfg.position_tolerance_m + REAL_INSERT_SETTLE_M or abs(yaw_err) > cfg.yaw_tolerance_rad):
             return "pose_out_of_range"
         check = pocket.get("check")
         if getattr(self.options, "pocket_check", False):
@@ -9780,6 +9788,9 @@ class MissionCore:
         slam, obstacle, pocket = self.slam, self.obstacle, self.pocket
         slam["tracker"].hold(odom_from_base=self.hooks.slam_odom_base())
         self.in_hold = True  # the core's own record (no port read in a tick): release_slam clears it
+        # the mission the hold began in (the real readiness's hold ownership, 4b "a hold must be this mission's"; 6a-2b
+        # impl round 1 P2) -- the mission, not its control generation, which a pause or a wait also moves
+        self.hold_mission_id = self.commands.mission_id
         self.hold_basis = {
             "pallet": (_HELD, _HELD) if held_frame_pallet else (
                 pocket.get("planning_pickup"), None if obstacle is None else obstacle.get("pickup_estimate")),

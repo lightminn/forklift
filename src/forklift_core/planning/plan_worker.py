@@ -256,6 +256,14 @@ class PlanWorker:
         self._thread.start()
 
     # --- the control thread's side: none of these waits on the worker ---------------------------------------------
+    @property
+    def alive(self) -> bool:
+        """The worker can still answer: no permanent failure recorded, its I/O thread running, not closed (the real
+        run's readiness evidence, 6a-2b impl round 1 P1-2)."""
+        with self._lock:
+            dead = self._dead
+        return dead is None and self._thread.is_alive() and not self._stopping.is_set()
+
     def submit(self, name: str, payload: dict) -> int:
         """Queue a job; its inputs are pickled now, so later changes to them do not reach the job."""
         with self._lock:

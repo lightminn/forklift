@@ -68,6 +68,7 @@ class SyntheticScan(_Gated):
         # () -> bool: acquisitions start only once it holds (the session check, design 10.5); None: always
         self.active = active
         self.stop_delivery = False
+        self.last_delivered_s: float | None = None
         self.events: list = []  # (kind, sensor) loss / recovery notices, in order
         self._next_ns: int | None = None
         self._queue: list = []
@@ -126,7 +127,11 @@ class SyntheticScan(_Gated):
             return []
         self._acquire(int(now_ns))
         out, self._queue = self._queue[-4:], []
-        return [] if self.stop_delivery else out
+        if self.stop_delivery:
+            return []
+        if out:
+            self.last_delivered_s = float(out[-1].last_s)  # the newest scan the layer received (its watchdog's F)
+        return out
 
     def scan_source_events(self, now_ns: int) -> list:
         out, self.events = self.events, []

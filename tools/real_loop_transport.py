@@ -75,6 +75,7 @@ class LoopTtyTransport:
         self.hil_plant = False
         self.hil_boot: int | None = None  # the boot the HIL check holds for (6a-2b design 10.1)
         self.inject = None  # a test hook: inject(fd, data, frame) -> int | None to replace one write (6a-2b 10.2)
+        self.on_event = None  # the run record's sink: a half write, its abandonment, the poison finished (10.8)
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
         self.first_byte_ns: dict = {}  # seq -> clock just before its first os.write (D5's round trip)
         self.last_write_ns: dict = {}  # seq -> clock just before the os.write that sent its last byte
@@ -184,6 +185,8 @@ class LoopTtyTransport:
         else. The receive side and the HIL check are left as they are (one continuous stream)."""
         if self._cur is not None:
             host.frame_abandoned(self._cur, self._cur_at, now_ns)
+            self._event({"t": "tx_abandoned", "seq": int(self._cur.seq) & 0xFFFF, "kind": self._cur.kind,
+                         "bytes": int(self._cur_at), "ns": int(self.clock())})
         self._cur, self._cur_at, self.partial_since_ns = None, 0, None
         self._poison_at = 0
         self.resyncs += 1
@@ -212,6 +215,7 @@ class LoopTtyTransport:
             self._poison_at += n
             if self._poison_at >= len(POISON):
                 self._poison_at = None
+                self._event({"t": "tx_poison_done", "ns": int(self.clock())})
         return True
 
     def _write_first(self, f, judged_ns) -> str:
@@ -224,6 +228,7 @@ class LoopTtyTransport:
         self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
         if n < len(f.data):
             self._cur, self._cur_at, self.partial_since_ns = f, n, int(self.clock())
+            self._event({"t": "tx_partial", "seq": seq, "kind": f.kind, "bytes": int(n), "ns": self.partial_since_ns})
             return "partial"
         self.written_ns[seq] = int(self.clock())
         self.written_data[seq] = bytes(f.data)
@@ -247,6 +252,13 @@ class LoopTtyTransport:
         if len(self.written_data) > 4096:
             self.written_data.pop(next(iter(self.written_data)))
         return True
+
+    def _event(self, ev: dict) -> None:
+        if self.on_event is not None:
+            try:
+                self.on_event(ev)
+            except Exception:  # noqa: BLE001 -- the record never holds a write
+                pass
 
     # --- the HIL check and the loss ----------------------------------------------------------------------------------
     def _check_hil(self, s: McuState) -> None:

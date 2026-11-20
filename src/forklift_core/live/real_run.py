@@ -43,7 +43,9 @@ REPO = Path(__file__).resolve().parents[3]
 # (the HIL rule, design 10.5), DRIVE cap 150 ms
 RUN_HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 TICK_NS = 20_000_000
-RUN_STATE_DELAY_S = RUN_HOST_CFG.state_max_age_s
+# the STATE delay a measurement interval may have and still place scans (design 10.10): its own value, not the host's
+# freshness (which ages a STATE from its receipt, not its measurement)
+RUN_STATE_DELAY_S = 0.05
 HALL_MARGIN_M = 1.0
 CLOSING_CONFIRM_S = 1.0  # the closing DISARM's confirmation (design 10.3)
 # each source's work per call (design 10.5): scans and SLAM replies beyond these are dropped oldest first (counted)
@@ -342,10 +344,11 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
+    if paths.hil:
+        obstacles = read_hil_scene(paths.s10a)  # the synthetic LiDAR casts them whatever map plans (round 1 P2)
     if paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:
-        obstacles = read_hil_scene(paths.s10a)
         if not cfg.map_id:
             raise AssemblyRefused(["map_id_unset"])
         map_id = cfg.map_id
@@ -443,7 +446,8 @@ def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0) -> Ru
                             active=lambda: "loop" in box and bool(box["loop"].permit.session_started))
     slam = ss.SyntheticSlam(transport, Client.HIL, scan, map_id=prep.map_id,
                             odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m))
-    imu = ss.SyntheticImu(transport, Client.HIL, seed=imu_seed)
+    # the IMU only where the watches take one (imu: none builds no IMU watch, and the loop refuses a source without it)
+    imu = ss.SyntheticImu(transport, Client.HIL, seed=imu_seed) if prep.watches.imu_policy == "required" else None
     sources = RunSources(client=Client.HIL, host=host, transport=transport, scans=scan, slam=slam, imu=imu)
     sources.on_assembled.append(lambda loop: box.__setitem__("loop", loop))
     return sources
@@ -493,7 +497,11 @@ class _SlamGuard:
         return self._call("request_processed", epoch, attempt, not_before)
 
     def replies(self, now_ns):
-        out = list(self._call("replies", now_ns))
+        try:
+            out = list(getattr(self._src, "replies")(now_ns))  # the iteration is the source's too (round 1 P3)
+        except Exception as exc:
+            self._mark(f"slam:replies:{type(exc).__name__}:{exc}")
+            raise
         if len(out) > SLAM_REPLIES_PER_CALL:
             self._counts["slam_dropped"] += len(out) - SLAM_REPLIES_PER_CALL
             out = out[-SLAM_REPLIES_PER_CALL:]
@@ -558,6 +566,11 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
         out.append("no_depth_no_bypass")
     if prep.jobs is None:
         out.append("plan_worker_missing")
+    elif not isinstance(getattr(type(prep.jobs), "alive", None), property) and not hasattr(prep.jobs, "alive"):
+        out.append("plan_worker_no_liveness")
+    if sources.depth is not None and (not callable(getattr(sources.depth, "pocket_frame", None))
+                                      or not callable(getattr(sources.depth, "pocket_check", None))):
+        out.append("depth_without_pocket_hooks")
     return out
 
 
@@ -651,10 +664,9 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     x0, x1, y0, y1 = (float(v) for v in cfg.bounds)
     hall = SimpleNamespace(x_min_m=x0 - HALL_MARGIN_M, x_max_m=x1 + HALL_MARGIN_M, y_min_m=y0 - HALL_MARGIN_M,
                            y_max_m=y1 + HALL_MARGIN_M)
-    # the STATE delay a measurement interval may have and still place scans: the host's freshness limit (one value --
-    # a STATE delayed more is stale anyway). The layer file's 0.03 s is the teleop bridge's measured bound; the 50 Hz
-    # loop reads once per 20 ms over a 10 ms STATE period, so its round-trip bound reaches 30-40 ms and 0.03 s would
-    # leave every other STATE out and no scan placed (6a-2b implementation, design 10.10)
+    # the STATE delay a measurement interval may have and still place scans (design 10.10): the layer file's 0.03 s is
+    # the teleop bridge's measured bound; the 50 Hz loop reads once per 20 ms over a 10 ms STATE period, so its
+    # round-trip bound reaches 30-40 ms and 0.03 s would leave every other STATE out and no scan placed
     scan_period_s, state_delay_s = float(b["scan_period_s"]), RUN_STATE_DELAY_S
     grid_cfg, perm_cfg = real_layer_configs(lc, error_table=table, budget_s=prep.budget_s,
                                             scan_period_s=scan_period_s, state_delay_s=state_delay_s,
@@ -663,112 +675,118 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     hull = prep.geometry.unloaded_footprint
     body = Footprint(prep.body_front_m, hull.rear_m, hull.half_width_m)
     worker = ThreadWorker() if layer_worker is None else layer_worker
-    layer = RealLayer(grid_cfg, perm_cfg, sensors=_layer_sensors(lc), unloaded=hull,
-                      loaded=prep.geometry.loaded_footprint, body=body,
-                      placer=lambda a, b_: box["loop"].place_scan(a, b_), budget_s=prep.budget_s,
-                      overdue_end_s=prep.overdue_end_s, scan_period_s=scan_period_s,
-                      scan_max_age_s=float(lc["permission"]["sensor_timeout_s"]), worker=worker,
-                      odom_now=lambda: box["loop"].odom_travel)
-    hooks = asm.RealHooks(lift_m=lambda: float("nan") if host.state is None else float(host.state.lift_m),
-                          odom_base=odom_base, ready=lambda t, inputs: None, started=lambda *a: None,
-                          record=lambda name, obj: _emit(events, {"t": "record", "name": str(name)}),
-                          geometry=prep.geometry, pocket_frame=None, pocket_check=None,
-                          operator=lambda r: box["loop"].operator_check(r), tick=tick, layer=layer,
-                          occupancy=lambda: box["loop"].planning_occupancy())
     try:
+        layer = RealLayer(grid_cfg, perm_cfg, sensors=_layer_sensors(lc), unloaded=hull,
+                          loaded=prep.geometry.loaded_footprint, body=body,
+                          placer=lambda a, b_: box["loop"].place_scan(a, b_), budget_s=prep.budget_s,
+                          overdue_end_s=prep.overdue_end_s, scan_period_s=scan_period_s,
+                          scan_max_age_s=float(lc["permission"]["sensor_timeout_s"]), worker=worker,
+                          odom_now=lambda: box["loop"].odom_travel)
+        hooks = asm.RealHooks(lift_m=lambda: float("nan") if host.state is None else float(host.state.lift_m),
+                              odom_base=odom_base, ready=lambda t, inputs: None, started=lambda *a: None,
+                              record=lambda name, obj: _emit(events, {"t": "record", "name": str(name)}),
+                              geometry=prep.geometry,
+                              # the depth source's frame and check builder (PR 7; HIL has none: D5 only by the bypass)
+                              pocket_frame=None if sources.depth is None else sources.depth.pocket_frame,
+                              pocket_check=None if sources.depth is None else sources.depth.pocket_check,
+                              operator=lambda r: box["loop"].operator_check(r), tick=tick, layer=layer,
+                              occupancy=lambda: box["loop"].planning_occupancy())
         core = asm.assemble(
             cfg=cfg, loaded_map_id=prep.map_id, geometry=prep.geometry, pallet_geometry=None, kinematics=kin,
             settings=prep.settings, planner_config=prep.planner, travel_config=prep.planner,
             speeds=prep.data["speeds"], mission_stages=prep.data["mission_stages"],
             curvatures={"preview": prep.cap}, layer=layer, applied=(0.0, 0.0, 0.0), slam_tracker=tracker,
-            jobs=prep.jobs, hooks=hooks,
-            extra_options=core_options(prep.settings, prep.rear_offset_m))
-    except AssemblyRefused:
-        getattr(worker, "close", lambda: None)()
+            jobs=prep.jobs, hooks=hooks, extra_options=core_options(prep.settings, prep.rear_offset_m))
+        core.obstacle.update(ticks={}, min_allowed={}, slowed={}, reasons={})
+        tokens = itertools.count(1)
+        token_prefix = secrets.token_hex(4)
+        arbiter = Arbiter(prep.epoch, ArbiterConfig(tick_s=0.02, auto_lease_loss="stop", external_stop=True,
+                                                    disarm_ignores_control_gen=True, real_requests=True),
+                          lambda: f"{token_prefix}-{next(tokens)}", mission=core.commands)
+        link = RealLink(arbiter, prep.channels, tick_period_s=0.05, state_period_s=0.1)
+        permit = ra.AutoPermit(host, port, outstanding=port.outstanding,
+                               stop_since=lambda n: box["loop"].rearm_stand(n))
+        arbiter.rearm_refusal, arbiter.on_rearmed = permit.arbiter_callbacks()  # seconds -> ns (10.1)
+        params = EncoderSpeedParams(radius_m=vehicle.wheel_radius_m, counts_per_rev=vehicle.counts_per_wheel_rev,
+                                    track_m=vehicle.track_m, kappa_max=prep.cap, axle_accel_mps2=0.5, max_age_s=0.1,
+                                    dt_min_s=0.02, dt_max_s=0.2)
+
+        def t_of(n):
+            return (int(n) - prep.start_ns) / 1e9
+
+        def snapshot_view(n):
+            key, applied_v = layer.installed_key(), int(core.obstacle["version"])
+            newest = layer.installed_newest_s()
+            applied_c = tuple(float(v) for v in core.obstacle["applied"])
+            wait_ = layer.watchdog(t_of(n))
+            # the correction the installed result was made with, compared with the one applied now (round 1 P2)
+            return ra.SnapshotView(None if key is None else layer.installed_correction(), applied_c,
+                                   None if newest is None else int(prep.start_ns + newest * 1e9),
+                                   layer.installing(), None if key is None else key.correction_gen, applied_v,
+                                   wait_ if wait_ == "layer_overdue" else None)
+
+        def worker_ok(n):
+            return bool(prep.jobs.alive) and worker.alive
+
+        def link_reason(n):
+            if not host.health(n).fresh:
+                return "stale"
+            why = host.build_refusal()
+            return None if why is None else f"build:{why}"
+
+        evidence = ra.Evidence(
+            worker_ok=worker_ok, baseline_ok=lambda n: core.baseline is not None,
+            layer_ok=lambda n: layer.ok(t_of(n)), link_reason=link_reason,
+            measurement=lambda n: measurement_view(host),
+            odometry_continuous=lambda n: box["loop"].odom_continuous,
+            # the loop replaces pose_reply_ns with its own epoch's freshness (an epoch-contract source, 5c-2 design 6, 4)
+            # the hold's owner is the mission it began in (core.hold_slam) against the running mission -- both mission
+            # ids in the generation fields (4b: "a hold must be this mission's"; a pause or a wait moves the control
+            # generation within one mission; round 1 P2)
+            slam=lambda n: ra.SlamView(tracker.mode, None, float(getattr(tracker, "hold_travel_m", 0.0)),
+                                       getattr(core, "hold_mission_id", None) if tracker.mode == "holding" else None),
+            snapshot=snapshot_view,
+            operator_start_ok=lambda n: box["loop"].operator_start.ok(
+                None if arbiter.lease is None else arbiter.lease.lease_id),
+            core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
+            mission_gen=lambda n: core.commands.mission_id)
+        scans = sources.scans
+        counts = sources.counts
+
+        def scan_feed(now_ns):
+            for kind, sensor in scans.scan_source_events(now_ns):
+                (layer.source_lost if kind == "lost" else layer.source_connected)(sensor)
+            got = list(scans.scans(now_ns))
+            if len(got) > SCANS_PER_CALL:
+                counts["scans_dropped"] += len(got) - SCANS_PER_CALL
+                got = got[-SCANS_PER_CALL:]
+            loop_ = box["loop"]
+            for scan in got:
+                layer.add_scan(scan, loop_._t(now_ns), initial_correction=tuple(core.obstacle["applied"]),  # noqa: SLF001
+                               initial_version=int(core.obstacle["version"]))
+
+        loop = RealLoop(core=core, session=RealSession(core, link), permit=permit, port=port, host=host, link=link,
+                        channels=prep.channels, transport=sources.transport, params=params, odometry=odo,
+                        kinematics=kin, max_speed_mps=float(cfg.max_speed_mps), start_ns=prep.start_ns,
+                        slam_source=_SlamGuard(sources.slam, mark, counts), evidence=evidence,
+                        # the plan's return leg ends at the S10-A wait pose (S10 stops at the lift; the planner plans the
+                        # whole mission, as the dry assembly's reference plan)
+                        base_scenario=core.options.scenario, wait_pose=Pose2D(*(float(v) for v in cfg.wait_pose)),
+                        depth_source=None if sources.depth is None else _DepthGuard(sources.depth, mark),
+                        clock=clock, real_layer=layer, delay_bound=DelayBound(), state_delay_s=state_delay_s,
+                        pallet_size=(float(cfg.pallet_depth_m), float(cfg.pallet_width_m)), kappa_max_inv_m=kappa,
+                        operator_start=asm.OperatorStart(prep.epoch), start_rear=tuple(cfg.start_rear),
+                        rear_offset_m=prep.rear_offset_m, watches=prep.watches,
+                        imu_source=None if sources.imu is None else _ImuGuard(sources.imu, mark),
+                        scan_feed=scan_feed, events=events)
+        box["loop"] = loop
+        arbiter.stop_evidence = lambda now: loop.physical_stop(now)
+        for fn in sources.on_assembled:
+            fn(loop)
+        return RealRun(prep, sources, loop, layer=layer, layer_worker=worker, clock=clock)
+    except BaseException:
+        getattr(worker, "close", lambda: None)()  # the layer thread never outlives a refused or failed assembly
         raise
-    core.obstacle.update(ticks={}, min_allowed={}, slowed={}, reasons={})
-    tokens = itertools.count(1)
-    token_prefix = secrets.token_hex(4)
-    arbiter = Arbiter(prep.epoch, ArbiterConfig(tick_s=0.02, auto_lease_loss="stop", external_stop=True,
-                                                disarm_ignores_control_gen=True, real_requests=True),
-                      lambda: f"{token_prefix}-{next(tokens)}", mission=core.commands)
-    link = RealLink(arbiter, prep.channels, tick_period_s=0.05, state_period_s=0.1)
-    permit = ra.AutoPermit(host, port, outstanding=port.outstanding,
-                           stop_since=lambda n: box["loop"].rearm_stand(n))
-    arbiter.rearm_refusal, arbiter.on_rearmed = permit.arbiter_callbacks()  # seconds -> ns (10.1)
-    params = EncoderSpeedParams(radius_m=vehicle.wheel_radius_m, counts_per_rev=vehicle.counts_per_wheel_rev,
-                                track_m=vehicle.track_m, kappa_max=prep.cap, axle_accel_mps2=0.5, max_age_s=0.1,
-                                dt_min_s=0.02, dt_max_s=0.2)
-
-    def t_of(n):
-        return (int(n) - prep.start_ns) / 1e9
-
-    def snapshot_view(n):
-        key, applied_v = layer.installed_key(), int(core.obstacle["version"])
-        newest = layer.installed_newest_s()
-        applied_c = tuple(float(v) for v in core.obstacle["applied"])
-        wait_ = layer.watchdog(t_of(n))
-        return ra.SnapshotView(None if key is None else applied_c, applied_c,
-                               None if newest is None else int(prep.start_ns + newest * 1e9),
-                               layer.installing(), None if key is None else key.correction_gen, applied_v,
-                               wait_ if wait_ == "layer_overdue" else None)
-
-    def worker_ok(n):
-        return bool(getattr(prep.jobs, "alive", True)) and worker.alive
-
-    def link_reason(n):
-        if not host.health(n).fresh:
-            return "stale"
-        why = host.build_refusal()
-        return None if why is None else f"build:{why}"
-
-    evidence = ra.Evidence(
-        worker_ok=worker_ok, baseline_ok=lambda n: core.baseline is not None,
-        layer_ok=lambda n: layer.ok(t_of(n)), link_reason=link_reason,
-        measurement=lambda n: measurement_view(host),
-        odometry_continuous=lambda n: box["loop"].odom_continuous,
-        # the loop replaces pose_reply_ns with its own epoch's freshness (an epoch-contract source, 5c-2 design 6, 4)
-        slam=lambda n: ra.SlamView(tracker.mode, None, float(getattr(tracker, "hold_travel_m", 0.0)),
-                                   core.commands.mission_gen),
-        snapshot=snapshot_view,
-        operator_start_ok=lambda n: box["loop"].operator_start.ok(
-            None if arbiter.lease is None else arbiter.lease.lease_id),
-        core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
-        mission_gen=lambda n: core.commands.mission_gen)
-    scans = sources.scans
-    counts = sources.counts
-
-    def scan_feed(now_ns):
-        for kind, sensor in scans.scan_source_events(now_ns):
-            (layer.source_lost if kind == "lost" else layer.source_connected)(sensor)
-        got = list(scans.scans(now_ns))
-        if len(got) > SCANS_PER_CALL:
-            counts["scans_dropped"] += len(got) - SCANS_PER_CALL
-            got = got[-SCANS_PER_CALL:]
-        loop_ = box["loop"]
-        for scan in got:
-            layer.add_scan(scan, loop_._t(now_ns), initial_correction=tuple(core.obstacle["applied"]),  # noqa: SLF001
-                           initial_version=int(core.obstacle["version"]))
-
-    loop = RealLoop(core=core, session=RealSession(core, link), permit=permit, port=port, host=host, link=link,
-                    channels=prep.channels, transport=sources.transport, params=params, odometry=odo,
-                    kinematics=kin, max_speed_mps=float(cfg.max_speed_mps), start_ns=prep.start_ns,
-                    slam_source=_SlamGuard(sources.slam, mark, counts), evidence=evidence,
-                    # the plan's return leg ends at the S10-A wait pose (S10 stops at the lift; the planner plans the
-                    # whole mission, as the dry assembly's reference plan)
-                    base_scenario=core.options.scenario, wait_pose=Pose2D(*(float(v) for v in cfg.wait_pose)),
-                    depth_source=None if sources.depth is None else _DepthGuard(sources.depth, mark),
-                    clock=clock, real_layer=layer, delay_bound=DelayBound(), state_delay_s=state_delay_s,
-                    pallet_size=(float(cfg.pallet_depth_m), float(cfg.pallet_width_m)), kappa_max_inv_m=kappa,
-                    operator_start=asm.OperatorStart(prep.epoch), start_rear=tuple(cfg.start_rear),
-                    rear_offset_m=prep.rear_offset_m, watches=prep.watches,
-                    imu_source=None if sources.imu is None else _ImuGuard(sources.imu, mark),
-                    scan_feed=scan_feed, events=events)
-    box["loop"] = loop
-    arbiter.stop_evidence = lambda now: loop.physical_stop(now)
-    for fn in sources.on_assembled:
-        fn(loop)
-    return RealRun(prep, sources, loop, layer=layer, layer_worker=worker, clock=clock)
 
 
 def _emit(events, event: dict) -> None:
@@ -785,11 +803,13 @@ class RunRecord:
     ``incomplete``); ``close(end)`` drains up to the end event and says whether every row was written."""
 
     def __init__(self, path: Path | None, *, maxsize: int = RECORD_QUEUE, opener=open) -> None:
+        """``path`` None keeps nothing (and is never complete); an unopenable file raises before the thread starts."""
         self.path = None if path is None else Path(path)
         self._q: queue.Queue = queue.Queue(maxsize=maxsize)
         self.incomplete: str | None = None
         self.failed: str | None = None
         self.rows = 0
+        self.end_written = False  # the end row reached the file (the writer's own word, round 1 P2)
         self._f = None if self.path is None else opener(self.path, "w")
         self._thread = threading.Thread(target=self._run, name="real-run-record", daemon=True)
         self._thread.start()
@@ -815,6 +835,8 @@ class RunRecord:
                     self._f.write(json.dumps(row, default=_json_default) + "\n")
                     self._f.flush()
                 self.rows += 1
+                if row.get("t") == "end":
+                    self.end_written = True
             except Exception as err:  # noqa: BLE001 -- told by ``failed`` and the exit code
                 self.failed = f"{type(err).__name__}:{err}"
                 self.incomplete = self.incomplete or f"writer_failed:{self.failed}"
@@ -829,7 +851,8 @@ class RunRecord:
         except queue.Full:
             self.incomplete = self.incomplete or "queue_full_at_end"
         self._thread.join(timeout_s)
-        ok = not self._thread.is_alive() and self.failed is None and self.incomplete is None
+        ok = (not self._thread.is_alive() and self.failed is None and self.incomplete is None and self.end_written
+              and self._f is not None)  # no file: nothing kept, never complete
         if self._f is not None:
             try:
                 self._f.close()
@@ -901,6 +924,7 @@ class RealRun:
         first = int(self.clock())
         deadline = first + int(float(duration_s) * 1e9)
         nxt = first
+        self._permit_seen = getattr(self, "_permit_seen", 0)
         while True:
             now = int(self.clock())
             why = self.stop_reason(now, deadline, stop, model_exit, record)
@@ -912,16 +936,31 @@ class RealRun:
             rec = self.loop.cycle(now)
             self.ticks += 1
             if record is not None:
-                record.put(tick_row(rec, now))
+                row = tick_row(rec, now)
+                loop = self.loop
+                rear = getattr(loop, "_rear_now", None)
+                row.update(odom=[round(float(v), 5) for v in loop.odom_pose],
+                           rear=None if rear is None else [round(float(v), 5) for v in rear])
+                record.put(row)
+                self.permit_events(record)
             nxt += TICK_NS
             after = int(self.clock())
             if after >= nxt:
                 nxt += ((after - nxt) // TICK_NS + 1) * TICK_NS  # missed boundaries skipped
-            if nxt > deadline:
-                nxt = max(nxt, deadline)
-            wait_s = (nxt - int(self.clock())) / 1e9
+            wait_s = (min(nxt, deadline) - int(self.clock())) / 1e9  # the last sleep ends at the deadline (round 1 P3)
             if wait_s > 0:
                 sleep(wait_s)
+
+    def permit_events(self, record) -> None:
+        """The permit's new events (a DISARM's reason, the S10 stop's confirmation with its seq) into the record."""
+        events = getattr(self.loop.permit, "events", None)
+        if events is None or record is None:
+            return
+        seen = getattr(self, "_permit_seen", 0)
+        for ev in list(events)[seen:]:
+            record.put({"t": "permit", "ns": int(ev.t_ns), "event": ev.event, "reason": ev.reason,
+                        "detail": dict(ev.detail or {})})
+        self._permit_seen = len(events)
 
     def close(self, *, record=None, sleep=None, confirm_s: float = CLOSING_CONFIRM_S) -> str:
         """The closing (10.3): DISARM only, ticks on until a closing DISARM is confirmed or ``confirm_s`` passed --
@@ -941,11 +980,15 @@ class RealRun:
             rec = loop.cycle(now)
             if record is not None:
                 record.put(tick_row(rec, now))
+                self.permit_events(record)
             nxt += TICK_NS
-            wait_s = (nxt - int(self.clock())) / 1e9
+            wait_s = (min(nxt, end) - int(self.clock())) / 1e9
             if wait_s > 0:
                 sleep(wait_s)
-        if loop.closing_confirmed_ns is not None:
+        # confirmed only within the second from the closing's start (a tick begun before the end that confirms after
+        # it is late; round 1 P2)
+        started = loop.closing_started_ns if loop.closing_started_ns is not None else now
+        if loop.closing_confirmed_ns is not None and loop.closing_confirmed_ns <= started + int(confirm_s * 1e9):
             return "confirmed"
         return "link_lost" if getattr(tr, "lost", None) is not None else "disarm_unconfirmed"
 

@@ -446,6 +446,10 @@ class RealLayer:
     def installed_key(self):
         return None if self._installed is None else self._installed["key"]
 
+    def installed_correction(self):
+        """The correction the installed result was computed with (None: nothing installed)."""
+        return None if self._installed is None else tuple(float(v) for v in self._installed["correction"])
+
     def installed_newest_s(self):
         """The installed result's newest scan (first beam), not the newest placed one (Codex 5a impl P2-7)."""
         return None if self._installed is None else self._installed["newest_scan_s"]

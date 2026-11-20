@@ -367,3 +367,142 @@ def test_slow_ticks_skip_one_boundary_each():
 def test_a_stop_during_the_sleep_ends_at_the_next_wake():
     starts, why = _sched([1] * 50, 1.0, stop_after=3)
     assert why == "signal" and len(starts) == 3
+
+
+# --- Codex impl round 1 ---------------------------------------------------------------------------------------------
+def test_the_safety_speed_takes_the_newest_states_delay_bound(base_prep):
+    """P1-1: the encoder speed's age adds the newest STATE's own round-trip bound; unknown -> no safety speed."""
+    from forklift_core.live.real_teleop import encoder_speed
+
+    r = Run(base_prep)
+    r.start()
+    st = r.loop.samples[-1].state
+    bound = r.loop._sample_delay[(int(st.boot_id), int(st.mcu_time_us))][1]  # noqa: SLF001
+    assert bound is not None and r.loop._speed_delay_s() == bound  # noqa: SLF001
+    r.loop._sample_delay.clear()  # noqa: SLF001
+    assert r.loop._speed_delay_s() is None  # noqa: SLF001
+    reading = encoder_speed(list(r.loop.samples), r.now, r.loop.params, r.loop.steering_ok, None)
+    assert not reading.speed.valid
+
+
+def test_a_dead_plan_worker_is_worker_dead_and_one_without_liveness_is_refused(base_prep):
+    """P1-2: the readiness reads the plan worker's own liveness; a jobs object without it is not assembled."""
+    r = Run(base_prep)
+    r.start()
+    assert r.loop.evidence.worker_ok(r.now)
+    r.prep.jobs.alive = False
+    assert not r.loop.evidence.worker_ok(r.now)
+    prep = dataclasses.replace(base_prep, channels=RealChannels(), jobs=SimpleNamespace(close=lambda: None))
+    host = real_host(rr.RUN_HOST_CFG, client=Client.HIL)
+    sources = rr.make_hil_sources(prep, host, HilFake(FreshMcu(flags=HIL_FLAGS)))
+    with pytest.raises(AssemblyRefused) as err:
+        rr.assemble_run(prep, sources, layer_worker=SyncWorker())
+    assert "plan_worker_no_liveness" in err.value.reasons
+
+
+def test_the_plan_workers_liveness_follows_its_permanent_failure():
+    from forklift_core.planning.plan_worker import PlanWorker
+
+    w = PlanWorker.__new__(PlanWorker)
+    w._lock, w._dead = threading.Lock(), None  # noqa: SLF001
+    w._thread = SimpleNamespace(is_alive=lambda: True)  # noqa: SLF001
+    w._stopping = threading.Event()  # noqa: SLF001
+    assert w.alive
+    w._dead = "plan worker restart failed"  # noqa: SLF001
+    assert not w.alive
+
+
+def test_the_snapshot_view_compares_the_installed_results_own_correction(base_prep):
+    """P2: the installed result's correction, not the applied one, is the view's installed correction."""
+    r = Run(base_prep)
+    r.start()
+    r.tick(10)
+    layer = r.run.layer
+    assert layer.installed_correction() is not None
+    layer._installed["correction"] = (0.5, 0.0, 0.0)  # noqa: SLF001 -- made with another correction
+    view = r.loop.evidence.snapshot(r.now)
+    assert view.installed_correction == (0.5, 0.0, 0.0) and view.applied_correction == (0.0, 0.0, 0.0)
+
+
+def test_a_hold_is_owned_by_the_generation_it_began_in(base_prep):
+    r = Run(base_prep)
+    r.start()
+    core = r.loop.core
+    core.hold_mission_id = "m1"
+    tracker = core.slam["tracker"]
+    tracker.mode = "holding"
+    core.commands.mission_gen += 3  # a pause within the mission: still its hold
+    core.commands.mission_id = "m1"
+    ev = r.loop.evidence
+    assert ev.slam(r.now).hold_mission_gen == "m1" == ev.mission_gen(r.now)
+    core.commands.mission_id = "m2"  # another mission: not its hold
+    assert ev.slam(r.now).hold_mission_gen != ev.mission_gen(r.now)
+    tracker.mode = "tracking"
+    assert ev.slam(r.now).hold_mission_gen is None
+
+
+def test_a_confirmation_after_the_closing_second_is_unconfirmed(base_prep):
+    """P2: a closing tick begun before the end whose confirmation lands after it is late."""
+    r = Run(base_prep)
+    r.start()
+
+    def sleep(s):
+        r.now += int(s * 1e9)
+
+    r.run.clock = lambda: r.now
+    real_cycle = r.loop.cycle
+
+    def late_cycle(now):
+        rec = real_cycle(now)
+        if r.loop.closing_confirmed_ns is not None:
+            r.loop.closing_confirmed_ns = r.loop.closing_started_ns + int(1e9) + 1
+        return rec
+
+    r.loop.cycle = late_cycle
+    assert r.run.close(sleep=sleep) == "disarm_unconfirmed"
+
+
+def test_a_record_without_a_file_or_without_its_end_row_is_not_complete(tmp_path):
+    rec = rr.RunRecord(None)
+    rec.put({"t": "x"})
+    assert rec.close({"t": "end"}) is False
+    rec = rr.RunRecord(tmp_path / "r.jsonl")
+    rec._thread.join(0)  # noqa: SLF001
+    rec.end_written = False
+    rec._q.put(None)  # noqa: SLF001 -- the writer stops before the end row
+    rec._thread.join(5)  # noqa: SLF001
+    assert rec.close({"t": "end"}, timeout_s=0.5) is False
+
+
+def test_no_imu_source_under_the_imu_none_policy(base_prep):
+    from forklift_core.live.real_assembly import Watches
+
+    prep = dataclasses.replace(base_prep, channels=RealChannels(), jobs=InlineJobs(),
+                               watches=Watches(base_prep.watches.safety, None, "none"))
+    host = real_host(rr.RUN_HOST_CFG, client=Client.HIL)
+    sources = rr.make_hil_sources(prep, host, HilFake(FreshMcu(flags=HIL_FLAGS)))
+    assert sources.imu is None
+    run = rr.assemble_run(prep, sources, layer_worker=SyncWorker())
+    assert run.loop.imu_source is None
+
+
+def test_a_slam_reply_iteration_failure_is_the_runs_fatal_source(base_prep):
+    """P3: the guard covers the source's iteration too, not only its call."""
+    r = Run(base_prep)
+    r.start()
+
+    def broken():
+        yield from ()
+        raise OSError("socket")
+
+    r.sources.slam.replies = lambda now: broken()
+    rec = r.tick()
+    assert r.loop.fatal_source is not None and "slam:replies" in r.loop.fatal_source and rec.branch == "emergency"
+
+
+def test_a_hil_run_casts_the_scene_obstacles_with_a_bundle_too(base_prep, tmp_path, monkeypatch):
+    """P2: the HIL scene's fixed obstacles are read whatever map the run plans on."""
+    monkeypatch.setattr(rr, "read_map", lambda bundle, cfg: (cfg.map_id, base_prep.occupancy))
+    prep = rr.prepare_run(rr.RunPaths(s10a=HIL_YAML, map_bundle=tmp_path), clock=lambda: START,
+                          jobs_factory=InlineJobs)
+    assert prep.obstacles == [(2.6, 1.4, 0.3, 0.2, 0.0)]
