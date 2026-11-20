@@ -264,8 +264,13 @@ class AutoPermit:
             self._asked_disarm(now_ns)
             self._note(now_ns, "disarm_relink")
 
-    def _asked_disarm(self, now_ns: int) -> None:
-        """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept."""
+    def _asked_disarm(self, now_ns: int, reason: str | None = None) -> None:
+        """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept. With a
+        stop's ``reason``: the seq of the DISARM that stop queued or reused is noted (6a-2b round 7: the record ties a
+        stop decision to its own DISARM)."""
+        if reason is not None:
+            seq_ = getattr(self.host, "pending_disarm_seq", lambda: None)()
+            self._note(now_ns, "disarm_asked", reason, seq=seq_)
         self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         if self._disarm_first_ns is None:
             self._disarm_first_ns = int(now_ns)
@@ -310,7 +315,7 @@ class AutoPermit:
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
         errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
-        self._asked_disarm(now_ns)
+        self._asked_disarm(now_ns, reason)
         errors.append(self._try(self._transmit))
         if first:
             errors.append(self._try(self._arbiter_stop, reason))
@@ -378,7 +383,7 @@ class AutoPermit:
         self._stop = None
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._asked_disarm(now_ns)
+        self._asked_disarm(now_ns, reason)
         self._note(now_ns, "disarm", reason)
         self._try(self._transmit)
 

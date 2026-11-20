@@ -253,12 +253,16 @@ def first_stop(rows, pattern, after_ns):
 
 
 def its_disarm(rows, decision, closing_ns):
-    """The DISARM that decision asked (round 6 P2-2): the permit's ask in that decision's tick, and the DISARM written
-    answering that very ask (``asked_ns``) -- before the closing, never the closing's own."""
-    asks = [p for p in events(rows, "permit") if p["event"] in ("disarm", "latched") and p["ns"] >= decision["tick_ns"]]
-    assert asks, f"no DISARM asked for the decision {decision}"
-    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e.get("asked_ns") == asks[0]["ns"]]
-    assert dis, f"no DISARM written for the ask {asks[0]}"
+    """The DISARM that decision asked (rounds 6-7): the permit's note of that stop's own ask (same reason, in or after
+    the deciding tick) names the seq it queued or reused; that seq's write, after the decision and before the
+    closing -- never another stop's DISARM of the same tick, nor the closing's own."""
+    asks = [p for p in events(rows, "permit") if p["event"] == "disarm_asked" and p["reason"] == decision["reason"]
+            and p["ns"] >= decision["tick_ns"]]
+    assert asks and asks[0]["detail"].get("seq") is not None, f"no DISARM asked for the decision {decision}"
+    seq = asks[0]["detail"]["seq"]
+    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["seq"] == seq
+           and e["written_ns"] >= decision["ns"]]
+    assert dis, f"the DISARM {seq} of {decision} was never written"
     assert dis[0]["written_ns"] < closing_ns, (dis[0], closing_ns)
     return dis[0]
 
@@ -383,10 +387,12 @@ def holding_spans_within_the_bound(rows, out, end):
         spans.append((cur, last_ns))
     for start, end_ns in spans:
         s_ns = start["ns"]
-        dec = [d for d in decisions if s_ns <= d <= end_ns]
-        until = dec[0] if dec else end_ns  # the watch's judgements up to the DISARM decision (round 3 P2-3)
-        # the span's own judgements by its seq: the last STATE that closed it included (round 6 P2-5)
-        valid = [j["ns"] for j in judges if j.get("span") == start["seq"] and j["ns"] <= until and j["valid"]]
+        own = [j for j in judges if j.get("span") == start["seq"]]  # by seq: the closing STATE's judgement too
+        last_own = max((j["ns"] for j in own), default=end_ns)
+        dec = [d for d in decisions if s_ns <= d <= max(end_ns, last_own)]
+        # the host's judgements up to the DISARM decision if one ended it, else all of the span's (round 7 P2-2)
+        until = dec[0] if dec else float("inf")
+        valid = [j["ns"] for j in own if j["ns"] <= until and j["valid"]]
         points = [s_ns, *valid]
         gap = max((b - a for a, b in zip(points, points[1:])), default=0)
         if dec:

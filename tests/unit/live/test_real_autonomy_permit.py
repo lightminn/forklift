@@ -194,7 +194,10 @@ def test_s10s_control_stop_is_confirmed_by_its_exact_seq_after_its_write_then_di
     b.transmit()
     b.cycle(1)
     assert b.permit.state == ra.DISARMING and isinstance(b.sent[-1], Disarm)
-    assert b.permit.events[-2].event == "control_stop_confirmed"
+    # (the stop's disarm_asked note -- 6a-2b round 7, the seq its DISARM took -- sits between them)
+    assert [e.event for e in b.permit.events if e.event != "disarm_asked"][-2] == "control_stop_confirmed"
+    asked = [e for e in b.permit.events if e.event == "disarm_asked"]
+    assert asked and asked[-1].reason == "s10_stopped" and asked[-1].detail["seq"] is not None
     b.cycle(2)
     assert b.permit.state == ra.LATCHED and b.permit.reason == "s10_stopped" and not b.permit.armed
 
