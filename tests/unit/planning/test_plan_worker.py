@@ -338,3 +338,18 @@ def test_a_failed_answer_has_an_arrival_too():
     done = pw._StampedDone()
     done.setdefault(3, (False, "dead"))
     assert 3 in done.arrived and done.pop(3) == (False, "dead") and 3 not in done.arrived
+
+
+def test_a_dead_process_is_not_alive_until_its_replacement_is_ready(worker):
+    """6a-2b (Codex impl rounds 2-3): from the broken pipe to the replacement's ready the worker says it is not alive
+    (the real run's readiness); a discard's restart does not need that."""
+    assert worker.alive
+    job = worker.submit("echo", {"sleep_s": 30.0})
+    time.sleep(0.3)
+    worker.proc.kill()
+    seen, end = [], time.monotonic() + 30
+    while time.monotonic() < end and not (False in seen and seen[-1]):
+        seen.append(worker.alive)
+        time.sleep(0.002)
+    assert False in seen and seen[-1] is True
+    wait_for(worker, job)

@@ -467,11 +467,33 @@ def test_a_record_without_a_file_or_without_its_end_row_is_not_complete(tmp_path
     rec.put({"t": "x"})
     assert rec.close({"t": "end"}) is False
     rec = rr.RunRecord(tmp_path / "r.jsonl")
-    rec._thread.join(0)  # noqa: SLF001
-    rec.end_written = False
-    rec._q.put(None)  # noqa: SLF001 -- the writer stops before the end row
+    rec._finish.set()  # noqa: SLF001 -- the writer stops on an empty queue before the end row comes
     rec._thread.join(5)  # noqa: SLF001
-    assert rec.close({"t": "end"}, timeout_s=0.5) is False
+    assert rec.close({"t": "end"}, timeout_s=0.5) is False and not rec.end_written
+
+
+def test_a_full_queue_at_the_end_still_lets_the_writer_finish_and_close(tmp_path):
+    """Round 3 P3: the end row is the last item; with no slot for it the close fails in time and the writer, once
+    released, ends on the finish flag and closes its file."""
+    gate, closed = threading.Event(), []
+
+    class Slow:
+        def write(self, s):
+            gate.wait(5)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    rec = rr.RunRecord(tmp_path / "r.jsonl", maxsize=1, opener=lambda p, m: Slow())
+    rec.put({"t": "a"})
+    rec.put({"t": "b"})  # the writer holds a, b fills the one slot
+    assert rec.close({"t": "end"}, timeout_s=0.2) is False
+    gate.set()
+    rec._thread.join(5)  # noqa: SLF001
+    assert not rec._thread.is_alive() and closed  # noqa: SLF001
 
 
 def test_no_imu_source_under_the_imu_none_policy(base_prep):
@@ -535,32 +557,45 @@ def test_an_imu_batch_failing_while_iterated_with_source_fatal_ends_the_run(base
 
 
 def test_a_depth_check_is_registered_with_its_region_only_for_a_frame_of_this_moment(base_prep):
-    """Round 2 P1-1 (design 10.5 P1-4): the assembly registers the depth source's check in the core before the hook
-    sets its region as the layer's exemption; a frame of another mission generation registers nothing."""
+    """Round 2 P1-1, round 3 P1 (design 10.5 P1-4): the check is built from the very frame the core judged (handed to
+    the builder), registered before the hook sets its region as the layer's exemption; a frame of another mission
+    generation, or a build for another frame than the judged one, registers nothing."""
     from forklift_core.live.real_assembly import RealRequireFailed
 
     class Check:
         valid, invalid_reason = True, None
+
+        def __init__(self, frame):
+            self.frame = frame
 
         def region_control(self):
             return (2.6, 0.0, 1.8, 0.8, 0.0)
 
     frame = {"f": None}
     depth = SimpleNamespace(frames=lambda now: [], pocket_frame=lambda: frame["f"],
-                            pocket_check=lambda *a: Check())
+                            pocket_check=lambda *a, frame: Check(frame))
     r = Run(base_prep, depth=depth)
     r.start()
     core = r.loop.core
     hooks = core.hooks
-    frame["f"] = SimpleNamespace(mission_gen=core.commands.mission_gen + 1, phase=core.ms.phase,
-                                 correction=(0.0, 0.0, 0.0))
+
+    def make(gen, stamp):
+        return SimpleNamespace(mission_gen=gen, phase=core.ms.phase, correction=(0.0, 0.0, 0.0), stamp_s=stamp)
+
+    frame["f"] = make(core.commands.mission_gen + 1, 9.95)
+    hooks.known_pocket_frame()
     with pytest.raises(RealRequireFailed):
-        hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+        hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 9.95)
     assert core.pocket["check"] is None and r.run.layer.exempt is None
-    frame["f"] = SimpleNamespace(mission_gen=core.commands.mission_gen, phase=core.ms.phase,
-                                 correction=(0.0, 0.0, 0.0))
-    hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-    assert isinstance(core.pocket["check"], Check) and r.run.layer.exempt == (2.6, 0.0, 1.8, 0.8, 0.0)
+    judged = make(core.commands.mission_gen, 9.95)
+    frame["f"] = judged
+    hooks.known_pocket_frame()  # the core judges this frame
+    frame["f"] = make(core.commands.mission_gen, 8.00)  # the source now holds another one
+    with pytest.raises(RealRequireFailed):
+        hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 8.00)  # not the judged frame
+    assert core.pocket["check"] is None
+    hooks.build_pocket_check(0.0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), 9.95)
+    assert core.pocket["check"].frame is judged and r.run.layer.exempt == (2.6, 0.0, 1.8, 0.8, 0.0)
 
 
 def test_a_writer_stuck_in_a_write_does_not_hold_the_close_past_its_deadline(tmp_path):

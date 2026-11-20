@@ -257,11 +257,11 @@ def end_of(rows):
 
 
 def tick_deadline(rows, f_ns):
-    """The DISARM's latest write for an expiry at ``f_ns``: within the first host tick that starts at or after it and
-    the next one (design 6: "F 뒤 실제 첫 호스트 틱 + 쓰기 한 틱") -- the start of the tick after those two."""
+    """The DISARM's latest write for an expiry at ``f_ns`` (design 6: "F 뒤 실제 첫 호스트 틱 + 쓰기 한 틱"): the first
+    host tick that starts at or after F, plus one tick -- the start of the tick after it (round 3 P2-1)."""
     ts = sorted(t["ns"] for t in events(rows, "tick") if t["ns"] >= f_ns)
-    assert len(ts) >= 2, "inconclusive: the run ended at the expiry"
-    return ts[2] if len(ts) > 2 else ts[1] + TICK_NS
+    assert ts, "inconclusive: the run ended at the expiry"
+    return ts[1] if len(ts) > 1 else ts[0] + TICK_NS
 
 
 def mcu_offset(rows):
@@ -309,7 +309,7 @@ def test_s10_a_runs_to_the_lift_through_the_command_line(mcu_model, tmp_path):
     conf = [s for s in events(rows, "state") if s["boot"] == boot and s["last_rx_seq"] == d["seq"]
             and s["mode"] == DISARMED and s["rx_ns"] > d["written_ns"]]
     assert conf and conf[0]["rx_ns"] < closing, (conf[:1], closing)
-    assert holding_spans_within_the_bound(rows, tmp_path, end) > 0
+    assert holding_spans_within_the_bound(rows, tmp_path, end)
 
 
 # design 2 (가): the worst displacement while a position-holding span is watched -- threshold + the axis's top speed
@@ -342,22 +342,47 @@ def holding_spans_within_the_bound(rows, out, end):
         spans.append((cur, last_ns))
     for start, end_ns in spans:
         s_ns = start["ns"]
-        valid = [j["ns"] for j in judges if s_ns <= j["ns"] <= end_ns and j["valid"]]
+        dec = [d for d in decisions if s_ns <= d <= end_ns]
+        until = dec[0] if dec else end_ns  # the watch's judgements up to the DISARM decision (round 3 P2-3)
+        valid = [j["ns"] for j in judges if s_ns <= j["ns"] <= until and j["valid"]]
         points = [s_ns, *valid]
         gap = max((b - a for a, b in zip(points, points[1:])), default=0)
-        dec = [d for d in decisions if s_ns <= d <= end_ns]
         if dec:
             gap = max(gap, dec[0] - points[-1])
-        delay = 0.070 + gap / 1e9 + 0.010 + 0.005
-        lift_bound = WAIT_LIFT_RISE_M + LIFT_TOP_MPS * (delay + STOP_GRACE_S)
-        steer_bound = WAIT_STEER_MOVE_RAD + STEER_TOP_RADPS * (delay + STOP_GRACE_S)
         lo, hi = (s_ns - offset) // 1000, (end_ns - offset) // 1000
         seg = [x for x in axis if lo <= x[0] <= hi]
         assert seg and seg[0][0] <= lo + 2_000 and seg[-1][0] >= hi - 2_000, \
             f"inconclusive: the model's samples do not cover the span {s_ns}..{end_ns}"
+        # the model's tick gap term: 5 ms, or the span's own largest gap when it ticked later (a late model tick
+        # integrates its whole interval on the last duty -- the bound takes that interval as delay; design 2's
+        # MODEL_TICK_GAP_MAX_S widened by what was observed instead of discarding the run)
+        tick_gap_s = max([MODEL_GAP_S] + [x[1] / 1e9 for x in seg]
+                         + [(b[0] - a[0]) / 1e6 for a, b in zip(seg, seg[1:])])
+        delay = 0.070 + gap / 1e9 + 0.010 + tick_gap_s
+        lift_bound = WAIT_LIFT_RISE_M + LIFT_TOP_MPS * (delay + STOP_GRACE_S)
+        steer_bound = WAIT_STEER_MOVE_RAD + STEER_TOP_RADPS * (delay + STOP_GRACE_S)
         assert max(x[3] - start["h0"] for x in seg) <= lift_bound, (start, lift_bound)
         assert max(abs(x[4] - start["q0"]) for x in seg) <= steer_bound, (start, steer_bound)
-    return len(spans)
+    return spans
+
+
+def push_seen(rows, out, spans, push, axis_name):
+    """The push landed in a watched span: the holding frame that triggered it opened or belongs to a span, the model's
+    own axis moved by the push right after it, and the host judged a valid STATE after it within the span."""
+    p = events(rows, "inject_push")[0]
+    # the push follows the holding frame's write; the watch's start is stamped just after that write
+    span = next(((st, e) for st, e in spans if st["ns"] - TICK_NS <= p["ns"] <= e), None)
+    assert span is not None, f"inconclusive: the push at {p['ns']} lies in no watched span"
+    offset = mcu_offset(rows)
+    axis = axis_rows(out / "axis.log")
+    at = (p["ns"] - offset) // 1000
+    col = 3 if axis_name == "lift" else 4
+    before = [x[col] for x in axis if at - 5_000 <= x[0] <= at]
+    after = [x[col] for x in axis if at < x[0] <= at + 50_000]
+    assert before and after and max(abs(v - before[-1]) for v in after) >= 0.8 * push, \
+        "inconclusive: the model's axis did not move by the push"
+    judged = [j for j in events(rows, "axis_judge") if p["ns"] <= j["ns"] <= span[1] and j["valid"]]
+    assert judged, "inconclusive: no valid watch judgement after the push"
 
 
 # --- the stop injections (6) -----------------------------------------------------------------------------------------
@@ -379,14 +404,20 @@ def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LA
     return run, run.rows(), code
 
 
-def _active_moving(rows, acc, before_ns):
-    """The DRIVE the model last took before ``before_ns`` (host ns), required a moving normal DRIVE (round 2 P2-5)."""
+def _active_moving(rows, acc, before_ns, axis):
+    """The command active in the model at ``before_ns`` (host ns): the last DRIVE it took, a moving normal DRIVE, no
+    DISARM taken since, and the model ARMED at that instant (rounds 2-3)."""
     taken = [r for r in acc if r["kind"] == "DRIVE" and r["verdict"] == "accepted" and r["mono_ns"] <= before_ns]
     assert taken, "inconclusive: no DRIVE taken before the injection"
     last = taken[-1]
     q = frame_purpose(rows).get(last["seq"])
     assert q is not None and q["purpose"] == "drive" and q["speed_mps"] != 0.0, \
         f"inconclusive: the active command at the injection was not a moving normal DRIVE ({q})"
+    assert not [r for r in acc if r["kind"] == "DISARM" and last["mono_ns"] <= r["mono_ns"] <= before_ns], \
+        "inconclusive: a DISARM was taken before the injection"
+    at_us = (before_ns - mcu_offset(rows)) // 1000
+    mode = [a[2] for a in axis if a[0] <= at_us]
+    assert mode and mode[-1] == ARMED, "inconclusive: the model was not ARMED at the injection"
     return last
 
 
@@ -398,7 +429,7 @@ def test_a_cut_send_stops_the_model_on_its_own_command_expiry(mcu_model, tmp_pat
     complete(rows, code)
     inj = events(rows, "inject")[0]
     acc = accept_rows(tmp_path / "accept.log")
-    last = _active_moving(rows, acc, inj["ns"])
+    last = _active_moving(rows, acc, inj["ns"], axis_rows(tmp_path / "axis.log"))
     assert not [r for r in acc if r["kind"] == "DRIVE" and r["mono_ns"] > inj["ns"] + 2_000_000]  # nothing after
     from forklift_core.mcu_link.messages import LinkDecoder
 
@@ -410,7 +441,8 @@ def test_a_cut_send_stops_the_model_on_its_own_command_expiry(mcu_model, tmp_pat
     after = [a for a in axis if a[0] > last["mcu_us"]]
     first_out = next(a for a in after if a[2] != ARMED)
     assert first_out[2] == STOPPING, first_out  # the expiry's own path: STOPPING first, never DISARMED at once
-    assert e_us - 1_000 <= first_out[0] <= e_us + MODEL_GAP_S * 1e6, (first_out, e_us)  # not earlier than E
+    # drive.c enters STOPPING at the first tick with time_us > the deadline: never before E (round 3 P2-4)
+    assert e_us <= first_out[0] <= e_us + MODEL_GAP_S * 1e6, (first_out, e_us)
     assert not [r for r in acc if r["kind"] == "DISARM" and last["mcu_us"] <= r["mcu_us"] <= first_out[0]]
     disarmed = next(a for a in after if a[2] == DISARMED)
     assert disarmed[0] <= first_out[0] + (STOP_GRACE_S + MODEL_GAP_S) * 1e6
@@ -447,12 +479,20 @@ def test_a_state_cut_makes_the_runner_write_a_disarm_the_model_takes_before_the_
     acc = accept_rows(tmp_path / "accept.log")
     offset = mcu_offset(rows)
     cut_ns = offset + cut_us * 1000
-    _active_moving(rows, acc, cut_ns)
+    _active_moving(rows, acc, cut_ns, axis_rows(tmp_path / "axis.log"))
     before = [s_ for s_ in events(rows, "state") if s_["mcu_us"] < cut_us]
     f_ns = before[-1]["rx_ns"] + 50_000_000
+    written = {(e["kind"], e["seq"]): e for e in events(rows, "frame_written")}
     for q in events(rows, "frame_queued"):
         if q["purpose"] == "drive":
             assert q["decided_ns"] < f_ns, (q, f_ns)
+            w = written.get(("DRIVE", q["seq"]))
+            if w is not None:  # its last gate judgement and its write within F too (round 3 P2-2)
+                assert w["judged_ns"] is not None and w["judged_ns"] <= f_ns - A_NS, (w, f_ns)
+                assert w["written_ns"] <= f_ns + 1_000_000, (w, f_ns)
+    normal = {q["seq"] for q in events(rows, "frame_queued") if q["purpose"] == "drive"}
+    late = [r for r in acc if r["kind"] == "DRIVE" and r["seq"] in normal and r["mono_ns"] > f_ns + 1_000_000]
+    assert not late, late[:1]  # the model took no normal DRIVE after F
     latch = [p for p in events(rows, "permit") if p["event"] in ("disarm", "latched") and p["ns"] >= cut_ns
              and p["reason"] != "signal"]
     assert latch and ("measurement_stale" in str(latch[0]["reason"])
@@ -478,7 +518,7 @@ def test_a_stopped_source_stops_motion_by_its_expiry(mcu_model, tmp_path, name):
     head = rows[0]
     inj = events(rows, "inject")[0]
     acc = accept_rows(tmp_path / "accept.log")
-    _active_moving(rows, acc, inj["ns"])
+    _active_moving(rows, acc, inj["ns"], axis_rows(tmp_path / "axis.log"))
     if name == "scan":
         assert inj["scan_delivered_s"] is not None
         f_ns = head["start_ns"] + int((inj["scan_delivered_s"] + 0.1 + 0.1) * 1e9)
@@ -501,14 +541,19 @@ def test_a_stopped_source_stops_motion_by_its_expiry(mcu_model, tmp_path, name):
     assert latch, events(rows, "permit")[-5:]
     reason = str(latch[0]["reason"])
     if name == "scan":
-        # the watchdog's end: its own latch, or -- the same instant at the gate's evidence time -- the readiness's
-        # layer:missing, which turns false exactly when the watchdog leaves layer_overdue at its end
-        assert reason.endswith("layer_latency_exceeded") or reason.endswith("layer:missing"), reason
         since = [t["overdue_since"] for t in events(rows, "tick") if t.get("overdue_since") is not None
                  and t["ns"] >= inj["ns"]]
         assert since, "no overdue evaluation stored"
         end_ns = head["start_ns"] + int((since[0] + 1.0) * 1e9)  # overdue_end from config/real/obstacle_layer.yaml
-        assert latch[0]["ns"] >= end_ns - TICK_NS, (latch[0], end_ns)
+        if reason.endswith("layer:missing"):
+            # the readiness's layer:missing is the watchdog's end only when the gate judged it at an evidence
+            # instant past that end (the watchdog then says layer_latency_exceeded; round 3 P2-1)
+            g = [x for x in events(rows, "gate") if x["ns"] is not None and "layer:missing" in str(x["verdict"])
+                 and x["ns0"] <= latch[0]["ns"] + TICK_NS]
+            assert g and g[0]["ns"] >= end_ns, (g[:1], end_ns)
+        else:
+            assert reason.endswith("layer_latency_exceeded"), reason
+            assert latch[0]["ns"] >= end_ns - TICK_NS, (latch[0], end_ns)
         deadline = tick_deadline(rows, end_ns)
     else:
         # the readiness's slam:stale, or the SLAM tracker's own stale correction in the control tick
@@ -536,8 +581,8 @@ def test_a_half_drive_is_abandoned_with_the_poison_then_a_disarm(mcu_model, tmp_
     acc = accept_rows(tmp_path / "accept.log")
     prev = parts[0]["after_accepted"]
     prev_w = [e for e in events(rows, "frame_written") if e["kind"] == "DRIVE" and e["seq"] == prev and e["written_ns"] <= at]
-    assert prev_w and accepted(acc, "DRIVE", prev, boot, prev_w[-1]["last_write_ns"], at) is not None, \
-        "inconclusive: the DRIVE before the half one was not taken"
+    prev_a = accepted(acc, "DRIVE", prev, boot, prev_w[-1]["last_write_ns"], at) if prev_w else None
+    assert prev_a is not None and prev_a["verdict"] == "accepted", "inconclusive: the DRIVE before the half one was not taken"
     release = [i for i in events(rows, "inject") if i["name"] == "tx_release"]
     q = frame_purpose(rows)[seq]
     assert release and release[0]["ns"] > q["decided_ns"] + W_NS, "inconclusive: released within its write bound"
@@ -583,7 +628,8 @@ def test_a_push_on_a_held_axis_alarms_over_the_threshold_only(mcu_model, tmp_pat
         assert dis
     else:
         assert not latches, latches[:1]
-    assert holding_spans_within_the_bound(rows, tmp_path, end) > 0
+    spans = holding_spans_within_the_bound(rows, tmp_path, end)
+    push_seen(rows, tmp_path, spans, push, axis)
 
 
 # --- the model's lifetime and a killed model (design 1, 10.3) ------------------------------------------------------

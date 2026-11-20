@@ -409,6 +409,7 @@ class PlanWorker:
                         raise EOFError("exited")
                 except (OSError, EOFError):
                     if not self._stopping.is_set():
+                        self._replacing = True  # not alive from the break on, before its reaping (round 3 P2-5)
                         code = self.proc.wait(timeout=10) if self.proc is not None else None
                         self._restart_process(died=f"plan worker exited with {code}")
         except Exception as exc:  # noqa: BLE001 -- whatever ended this thread, no job may wait for it any more

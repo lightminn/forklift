@@ -687,7 +687,8 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                               record=lambda name, obj: _emit(events, {"t": "record", "name": str(name)}),
                               geometry=prep.geometry,
                               # the depth source's frame and check builder (PR 7; HIL has none: D5 only by the bypass)
-                              pocket_frame=None if sources.depth is None else sources.depth.pocket_frame,
+                              pocket_frame=None if sources.depth is None else (
+                                  lambda: _frame_seen(box, sources.depth)),
                               pocket_check=None if sources.depth is None else (
                                   lambda *a: _register_check(box, sources.depth, a)),
                               operator=lambda r: box["loop"].operator_check(r), tick=tick, layer=layer,
@@ -790,18 +791,28 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
         raise
 
 
+def _frame_seen(box, depth):
+    """The depth source's frame handed to the core (``known_pocket_frame``), kept: the check is built from this very
+    frame -- the one the core has just judged fresh -- never a second read (round 3 P1)."""
+    frame = depth.pocket_frame()
+    box["frame"] = frame
+    return frame
+
+
 def _register_check(box, depth, args):
-    """Design 10.5 P1-4: the depth source's check, registered in the core only when its frame was taken in this
-    mission generation, phase and correction (RealHooks then installs its region as the layer's exemption); a frame of
-    another moment registers nothing (the hook refuses the check)."""
+    """Design 10.5 P1-4: the depth source's check built from the frame the core judged (its acquisition in the still
+    span, its mission generation, phase and correction), registered in the core before RealHooks installs its region
+    as the layer's exemption; a frame not of this moment, or another frame than the judged one, registers nothing."""
     loop = box["loop"]
     core = loop.core
-    frame = depth.pocket_frame()
-    if frame is None or getattr(frame, "mission_gen", None) != core.commands.mission_gen \
+    frame = box.get("frame")
+    stamp = args[3] if len(args) > 3 else None
+    if frame is None or stamp is None or float(getattr(frame, "stamp_s", float("nan"))) != float(stamp) \
+            or getattr(frame, "mission_gen", None) != core.commands.mission_gen \
             or getattr(frame, "phase", None) != core.ms.phase \
             or tuple(getattr(frame, "correction", ()) or ()) != tuple(float(v) for v in core.obstacle["applied"]):
         return None
-    check = depth.pocket_check(*args)
+    check = depth.pocket_check(*args, frame=frame)  # the judged frame itself (the depth contract's keyword)
     if check is not None and getattr(check, "valid", False):
         core.pocket["check"] = check  # registered before the exemption is set (round 2 P1-1)
     return check
@@ -829,6 +840,7 @@ class RunRecord:
         self.rows = 0
         self.end_written = False  # the end row reached the file (the writer's own word, round 1 P2)
         self.closed = False  # the writer closed the file (round 2 P2-8)
+        self._finish = threading.Event()  # close() was called: an empty queue ends the writer
         self._f = None if self.path is None else opener(self.path, "w")
         self._thread = threading.Thread(target=self._run, name="real-run-record", daemon=True)
         self._thread.start()
@@ -844,27 +856,34 @@ class RunRecord:
 
     def _run(self) -> None:
         while True:
-            row = self._q.get()
-            if row is None:
-                if self._f is not None:  # the writer owns the file to its close (round 2 P2-8)
-                    try:
-                        self._f.close()
-                    except Exception as err:  # noqa: BLE001
-                        self.failed = self.failed or f"close:{type(err).__name__}:{err}"
-                self.closed = True
-                return
-            if self.failed is not None:
-                continue
             try:
-                if self._f is not None:
-                    self._f.write(json.dumps(row, default=_json_default) + "\n")
-                    self._f.flush()
-                self.rows += 1
-                if row.get("t") == "end":
-                    self.end_written = True
-            except Exception as err:  # noqa: BLE001 -- told by ``failed`` and the exit code
-                self.failed = f"{type(err).__name__}:{err}"
-                self.incomplete = self.incomplete or f"writer_failed:{self.failed}"
+                row = self._q.get(timeout=0.05)
+            except queue.Empty:
+                if self._finish.is_set():
+                    break  # the end row never made it into the queue: stop anyway (round 3 P3)
+                continue
+            if self.failed is None:
+                self._write_row(row)
+            if row.get("t") == "end":
+                break  # the end row is the last item (no queue slot for a separate marker)
+        if self._f is not None:  # the writer owns the file to its close (round 2 P2-8)
+            try:
+                self._f.close()
+            except Exception as err:  # noqa: BLE001
+                self.failed = self.failed or f"close:{type(err).__name__}:{err}"
+        self.closed = True
+
+    def _write_row(self, row: dict) -> None:
+        try:
+            if self._f is not None:
+                self._f.write(json.dumps(row, default=_json_default) + "\n")
+                self._f.flush()
+            self.rows += 1
+            if row.get("t") == "end":
+                self.end_written = True
+        except Exception as err:  # noqa: BLE001 -- told by ``failed`` and the exit code
+            self.failed = f"{type(err).__name__}:{err}"
+            self.incomplete = self.incomplete or f"writer_failed:{self.failed}"
 
     def close(self, end: dict, timeout_s: float = 5.0) -> bool:
         """The end row (carrying ``record_incomplete`` when it is known), then the writer's end, within one deadline:
@@ -874,9 +893,9 @@ class RunRecord:
         end = dict(end, record_incomplete=self.incomplete)
         try:
             self._q.put(end, timeout=max(0.0, deadline - time.monotonic()))
-            self._q.put(None, timeout=max(0.0, deadline - time.monotonic()))
         except queue.Full:
             self.incomplete = self.incomplete or "queue_full_at_end"
+        self._finish.set()
         self._thread.join(max(0.0, deadline - time.monotonic()))
         return (not self._thread.is_alive() and self.closed and self.failed is None and self.incomplete is None
                 and self.end_written and self._f is not None)  # no file: nothing kept, never complete
