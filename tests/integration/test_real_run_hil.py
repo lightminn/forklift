@@ -247,14 +247,19 @@ def first_stop(rows, pattern, after_ns):
     decided = [d for d in events(rows, "stop_decision") if d["ns"] >= after_ns and d["reason"] != "signal"]
     assert decided, "no stop decision after the injection"
     d = decided[0]
-    assert re.search(pattern, str(d["reason"])), d
+    # the evidence it used must name this expiry (or, with none recorded, its own reason does; round 6 P2-1)
+    assert re.search(pattern, str(d["cause_why"] or d["reason"])), d
     return d
 
 
-def its_disarm(rows, decision):
-    """The DISARM that decision asked: the first DISARM written at or after it."""
-    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= decision["ns"]]
-    assert dis, f"no DISARM after the decision {decision}"
+def its_disarm(rows, decision, closing_ns):
+    """The DISARM that decision asked (round 6 P2-2): the permit's ask in that decision's tick, and the DISARM written
+    answering that very ask (``asked_ns``) -- before the closing, never the closing's own."""
+    asks = [p for p in events(rows, "permit") if p["event"] in ("disarm", "latched") and p["ns"] >= decision["tick_ns"]]
+    assert asks, f"no DISARM asked for the decision {decision}"
+    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e.get("asked_ns") == asks[0]["ns"]]
+    assert dis, f"no DISARM written for the ask {asks[0]}"
+    assert dis[0]["written_ns"] < closing_ns, (dis[0], closing_ns)
     return dis[0]
 
 
@@ -371,7 +376,7 @@ def holding_spans_within_the_bound(rows, out, end):
     for m in marks:
         if m["event"] == "start":
             cur = m
-        elif cur is not None:
+        elif cur is not None and m.get("span") == cur["seq"]:
             spans.append((cur, m["ns"]))
             cur = None
     if cur is not None:
@@ -380,7 +385,8 @@ def holding_spans_within_the_bound(rows, out, end):
         s_ns = start["ns"]
         dec = [d for d in decisions if s_ns <= d <= end_ns]
         until = dec[0] if dec else end_ns  # the watch's judgements up to the DISARM decision (round 3 P2-3)
-        valid = [j["ns"] for j in judges if s_ns <= j["ns"] <= until and j["valid"]]
+        # the span's own judgements by its seq: the last STATE that closed it included (round 6 P2-5)
+        valid = [j["ns"] for j in judges if j.get("span") == start["seq"] and j["ns"] <= until and j["valid"]]
         points = [s_ns, *valid]
         gap = max((b - a for a, b in zip(points, points[1:])), default=0)
         if dec:
@@ -424,7 +430,7 @@ def push_seen(rows, out, spans, push, axis_name):
     jump = axis[k][col] - axis[k - 1][col]
     assert abs(jump - push) <= 0.2 * abs(push), f"inconclusive: the model's axis moved {jump} for a push of {push}"
     jump_us = axis[k][0]
-    seen = [j for j in events(rows, "axis_judge") if span[0]["ns"] <= j["ns"] <= span[1] and j["valid"]
+    seen = [j for j in events(rows, "axis_judge") if j.get("span") == span[0]["seq"] and j["valid"]
             and j["mcu_us"] >= jump_us]
     assert seen, "inconclusive: the watch judged no STATE measured after the push"
     return span, jump_us
@@ -490,7 +496,10 @@ def _cut_send_once(mcu_model, tmp_path):
     after = [a for a in axis if a[0] > last["mcu_us"]]
     # the model's ticks around E to the stop's end first: a late tick makes the run observed_only (round 5 P2-3)
     k0 = max(k for k, a in enumerate(axis) if a[0] <= e_us)
-    window = axis[k0:k0 + 1] + [a for a in axis[k0 + 1:] if a[0] <= e_us + 600_000]
+    # through the first sample past E + 600 ms (the stop and the 200 ms hold lie within): a gap at its end counts too
+    k1 = next((k for k, a in enumerate(axis) if a[0] > e_us + 600_000), None)
+    assert k1 is not None, "inconclusive: the model's log ends before the stop's window does"
+    window = axis[k0:k1 + 1]
     if max([a[1] for a in window[1:]] + [(b[0] - a[0]) * 1000 for a, b in zip(window, window[1:])]) \
             > MODEL_GAP_S * 1e9:
         raise ObservedOnly("model_tick_gap around the command's expiry")
@@ -552,7 +561,7 @@ def test_a_state_cut_makes_the_runner_write_a_disarm_the_model_takes_before_the_
                       or "authorization_revoked" in str(latch[0]["reason"])), latch[:1]
     decision = first_stop(rows, "measurement_stale|authorization_revoked", cut_ns)
     assert decision["cause_ns"] >= f_ns, (decision, f_ns)  # judged on evidence past F, not early (rounds 4-5)
-    dis = its_disarm(rows, decision)
+    dis = its_disarm(rows, decision, end_of(rows)["closing_started_ns"])
     assert dis["written_ns"] <= tick_deadline(rows, f_ns), (dis, f_ns)
     boot = before[-1]["boot"]
     d = accepted(acc, "DISARM", dis["seq"], boot, dis["last_write_ns"])
@@ -607,7 +616,7 @@ def test_a_stopped_source_stops_motion_by_its_expiry(mcu_model, tmp_path, name):
         decision = first_stop(rows, r"slam:stale|correction [0-9.]+ s old", inj["ns"])
         expiry = f_ns
     assert decision["cause_ns"] >= expiry, (decision, expiry)  # the evidence that decided it had reached the expiry
-    dis = its_disarm(rows, decision)
+    dis = its_disarm(rows, decision, end_of(rows)["closing_started_ns"])
     assert dis["written_ns"] <= tick_deadline(rows, expiry), (dis, expiry)
     before = [s_ for s_ in events(rows, "state") if s_["rx_ns"] <= latch[0]["ns"]]
     assert before and latch[0]["ns"] - before[-1]["rx_ns"] <= 50_000_000  # STATEs fresh up to the latch
@@ -677,9 +686,15 @@ def _push_once(mcu_model, tmp_path, axis, push, alarm):
     spans = holding_spans_within_the_bound(rows, tmp_path, end)
     span, jump_us = push_seen(rows, tmp_path, spans, push, axis)
     start = span[0]
-    over = [j for j in events(rows, "axis_judge") if span[0]["ns"] <= j["ns"] <= span[1] and j["valid"]
-            and j["mcu_us"] >= jump_us and (j["lift"] - start["h0"] > WAIT_LIFT_RISE_M
-                                            or abs(j["steer"] - start["q0"]) > WAIT_STEER_MOVE_RAD)]
+    # over the threshold on the pushed axis itself (round 6 P2-4)
+    if axis == "lift":
+        def beyond(j):
+            return j["lift"] - start["h0"] > WAIT_LIFT_RISE_M
+    else:
+        def beyond(j):
+            return abs(j["steer"] - start["q0"]) > WAIT_STEER_MOVE_RAD
+    over = [j for j in events(rows, "axis_judge") if j.get("span") == start["seq"] and j["valid"]
+            and j["mcu_us"] >= jump_us and beyond(j)]
     stops = [d for d in events(rows, "stop_decision") if "wait_axis_moved" in str(d["reason"])]
     if alarm:
         # the first valid judgement over the threshold in the very span that saw the push, and the latch decided in
@@ -689,9 +704,8 @@ def _push_once(mcu_model, tmp_path, axis, push, alarm):
         tick0 = max(t for t in ticks if t <= over[0]["ns"])
         nxt = min((t for t in ticks if t > tick0), default=tick0 + TICK_NS)
         assert stops and f"wait_axis_moved:{axis}" in stops[0]["reason"], stops[:1]
-        assert tick0 <= stops[0]["ns"] < nxt, (stops[0], tick0, nxt)
-        dis = its_disarm(rows, stops[0])
-        assert dis["written_ns"] < end["closing_started_ns"], (dis, end["closing_started_ns"])
+        assert over[0]["ns"] <= stops[0]["ns"] < nxt, (over[0], stops[0], nxt)  # the judgement, then its decision
+        its_disarm(rows, stops[0], end["closing_started_ns"])
     else:
         assert not over and not stops and not latches, (over[:1], stops[:1])
 

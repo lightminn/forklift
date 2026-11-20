@@ -1121,7 +1121,8 @@ class RealLoop:
         """A position-holding frame written: the watch starts at its sample's lift and steering (design 2); a holding
         frame written while the end waits cancels the end."""
         if self._axis is None:
-            self._axis = {"h0": float(frame.lift_m), "q0": float(frame.steering[0]), "end_pending": False}
+            self._axis = {"h0": float(frame.lift_m), "q0": float(frame.steering[0]), "end_pending": False,
+                          "seq": int(frame.seq) & 0xFFFF}
             # 6a-2b (design 2 (가)): the span the HIL judge reads, from the frame's own sample
             self._emit({"t": "axis_watch", "event": "start", "ns": int(self.clock()), "seq": int(frame.seq) & 0xFFFF,
                         "h0": self._axis["h0"], "q0": self._axis["q0"]})
@@ -1146,7 +1147,7 @@ class RealLoop:
             and math.isfinite(state.lift_m) and math.isfinite(state.steering_rad)  # impl round 4 P2-2
         self.axis_watch_times.append((now_c, bool(valid)))
         self._emit({"t": "axis_judge", "ns": now_c, "valid": bool(valid), "lift": float(state.lift_m),
-                    "steer": float(state.steering_rad), "mcu_us": int(state.mcu_time_us)})
+                    "steer": float(state.steering_rad), "mcu_us": int(state.mcu_time_us), "span": a.get("seq")})
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
         elif math.isfinite(state.steering_rad) and abs(float(state.steering_rad) - a["q0"]) > WAIT_STEER_MOVE_RAD:
@@ -1161,7 +1162,7 @@ class RealLoop:
             return
         if state.mode == Mode.DISARMED:
             self._axis = None
-            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "disarmed"})
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "disarmed", "span": a.get("seq")})
             return
         c = self.book.confirmed
         later_hold = any(f.kind in HOLDING_KINDS and f.written_ns is not None for f in self.book.frames)
@@ -1170,7 +1171,8 @@ class RealLoop:
             a["end_pending"] = False
         elif a["end_pending"]:
             self._axis = None
-            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "drive_confirmed"})
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "drive_confirmed",
+                        "span": a.get("seq")})
         else:
             a["end_pending"] = True
 
@@ -1529,7 +1531,9 @@ class RealLoop:
         now_c = int(self.clock())
         self.disarm_decisions.append((now_c, str(reason)))
         cause = self._cause
-        self._emit({"t": "stop_decision", "ns": now_c, "reason": str(reason),
+        if cause is not None and str(cause[1]) not in str(reason):
+            cause = None  # an evidence read this tick that is not what this stop names (round 6 P2-1)
+        self._emit({"t": "stop_decision", "ns": now_c, "reason": str(reason), "tick_ns": self._tick_ns,
                     "cause_ns": self._tick_ns if cause is None else cause[0],
                     "cause_why": None if cause is None else str(cause[1])})
 
@@ -1927,6 +1931,7 @@ class RealLoop:
         if self.closing:
             return
         self.closing, self.closing_started_ns = True, int(self.clock())
+        self._cause, self._tick_ns = None, int(now_ns)  # the closing's own decision (round 6 P2-1)
         cancel = getattr(self.permit, "cancel_session", None)
         if cancel is not None:
             cancel()  # design 10.6: no second session DISARM while closing
@@ -2453,6 +2458,8 @@ class RealLoop:
             if self.closing and kind == "DISARM" and self.host.state is not None:
                 self.closing_disarms.append((self.host.state.boot_id, int(seq) & 0xFFFF, int(written_ns)))
             self._emit({"t": "frame_written", "kind": kind, "seq": int(seq) & 0xFFFF, "written_ns": int(written_ns),
+                        # a DISARM: the permit's ask it answers (round 6 P2-2)
+                        "asked_ns": getattr(permit, "_disarm_asked_ns", None) if kind == "DISARM" else None,
                         "judged_ns": getattr(self.transport, "judged", {}).get(int(seq) & 0xFFFF),
                         "first_byte_ns": getattr(self.transport, "first_byte_ns", {}).get(int(seq) & 0xFFFF),
                         "last_write_ns": getattr(self.transport, "last_write_ns", {}).get(int(seq) & 0xFFFF),

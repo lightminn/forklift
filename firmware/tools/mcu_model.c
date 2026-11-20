@@ -33,7 +33,9 @@
    cut mid-way at a STATE cut is dropped and the poison (0x01 x 96, 0x00) goes before the first STATE after it.
    --short-write-at-ms N (a test injection): from N the next write sends 10 bytes, then EAGAIN until a STATE cut.
    --axis-log PATH:
-   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
+   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R host-mono-ns pushed" (the plant's own
+   values, rad/s; host-mono-ns this host's CLOCK_MONOTONIC at the tick; pushed 1 on the tick a SIGUSR1 push of
+   --axis-push-lift-m / --axis-push-steer-rad was applied in, else 0). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
