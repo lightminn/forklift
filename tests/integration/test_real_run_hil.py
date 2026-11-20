@@ -443,7 +443,7 @@ def push_seen(rows, out, spans, push, axis_name):
 
 
 # --- the stop injections (6) -----------------------------------------------------------------------------------------
-def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LATCHED", wait_s=60):
+def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LATCHED", wait_s=60, settle_s=0.5):
     run = Runner(model, tmp_path, duration_s=90, model_args=model_args, inject=[f"{name}:{ms}", *extra])
     c = Console(run.port)
     try:
@@ -454,7 +454,7 @@ def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LA
         except AssertionError:
             if until == "LATCHED":
                 raise
-        time.sleep(0.5)
+        time.sleep(settle_s)  # the model keeps logging the stop's tail before the run ends
     finally:
         c.close()
         code = run.finish(signal.SIGTERM)
@@ -486,7 +486,8 @@ def _cut_send_once(mcu_model, tmp_path):
     command_timeout)), the model enters STOPPING in [E, E + g] with no DISARM taken before it, DISARMED within the
     grace, both wheels below 0.01 m/s by DISARMED + 3 tau + g and kept for a whole 200 ms."""
     tmp_path.mkdir()
-    run, rows, code = _injected(mcu_model, tmp_path, "tx")
+    # the judged window runs to E + 600 ms past the cut: the run lasts well past it (the full run once ended early)
+    run, rows, code = _injected(mcu_model, tmp_path, "tx", settle_s=1.5)
     complete(rows, code)
     inj = events(rows, "inject")[0]
     acc = accept_rows(tmp_path / "accept.log")
