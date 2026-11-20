@@ -58,11 +58,15 @@ class SyntheticScan(_Gated):
     (the SLAM side) separately; ``stop_delivery`` stops the layer's feed only (the injection ``scan``)."""
 
     def __init__(self, transport, client, start_ns: int, *, odom_pose, boxes, sensor: str = "lidar",
-                 mount=(0.0, 0.0, 0.0)) -> None:
+                 mount=(0.0, 0.0, 0.0), active=None) -> None:
         super().__init__(transport, client)
+        self.client = client
         self.start_ns, self.odom_pose, self.sensor = int(start_ns), odom_pose, sensor
-        self.mount = tuple(float(v) for v in mount)  # the sensor in the base frame (the layer's lidar mount)
-        self.boxes = [tuple(float(v) for v in b) for b in boxes]
+        self.mount = tuple(float(v) for v in mount)  # the sensor in the rear-axle frame (the layer's lidar mount)
+        # (x, y, half length, half width[, yaw]) in the odometry frame
+        self.boxes = [tuple(float(v) for v in b) + ((0.0,) if len(b) == 4 else ()) for b in boxes]
+        # () -> bool: acquisitions start only once it holds (the session check, design 10.5); None: always
+        self.active = active
         self.stop_delivery = False
         self.events: list = []  # (kind, sensor) loss / recovery notices, in order
         self._next_ns: int | None = None
@@ -77,8 +81,9 @@ class SyntheticScan(_Gated):
         angles = np.linspace(-math.pi, math.pi, BEAMS, endpoint=False)
         ranges = np.full(BEAMS, np.inf)
         edges = []
-        for bx, by, hl, hw in self.boxes:
-            c = [(bx + hl, by + hw), (bx + hl, by - hw), (bx - hl, by - hw), (bx - hl, by + hw)]
+        for bx, by, hl, hw, byaw in self.boxes:
+            cy, sy = math.cos(byaw), math.sin(byaw)
+            c = [(bx + cy * u - sy * v, by + sy * u + cy * v) for u, v in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
             edges += list(zip(c, c[1:] + c[:1]))
         for k, a in enumerate(angles):
             dx, dy = math.cos(yaw + a), math.sin(yaw + a)
@@ -103,10 +108,11 @@ class SyntheticScan(_Gated):
             return
         if now_ns < self._next_ns:
             return
-        # at most one revolution per call, timed at the call with the pose of that moment (design 10.5-10.6): missed
-        # periods are skipped, never filled with the present pose at past times
+        # at most one revolution per call, an instantaneous one at the call with the pose of that moment (design
+        # 10.5-10.7: the layer places a scan at its first beam's odometry pose, so first = last = the cast's instant);
+        # missed periods are skipped, never filled with the present pose at past times
         last_s = (int(now_ns) - self.start_ns) / 1e9
-        scan = self._cast(last_s - SCAN_PERIOD_NS / 1e9, last_s)
+        scan = self._cast(last_s, last_s)
         self._queue.append(scan)
         for sub in self.subscribers:
             sub(scan)
@@ -114,6 +120,9 @@ class SyntheticScan(_Gated):
 
     def scans(self, now_ns: int) -> list:
         if not self._open():
+            return []
+        if self.active is not None and not self.active():
+            self._drop()
             return []
         self._acquire(int(now_ns))
         out, self._queue = self._queue[-4:], []
@@ -132,6 +141,7 @@ class SyntheticSlam(_Gated):
 
     def __init__(self, transport, client, scan_source: SyntheticScan, *, map_id: str, odom_base) -> None:
         super().__init__(transport, client)
+        self.client = client
         self.map_id, self.odom_base = map_id, odom_base
         self.epoch, self.correction = 0, (0.0, 0.0, 0.0)
         self.stop_delivery = False
@@ -190,6 +200,7 @@ class SyntheticImu(_Gated):
 
     def __init__(self, transport, client, *, seed: int = 0) -> None:
         super().__init__(transport, client)
+        self.client = client
         self._next_ns: int | None = None
         self._rng = random.Random(seed)
 
