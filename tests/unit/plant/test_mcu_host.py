@@ -356,6 +356,21 @@ def test_disarm_requests_coalesce_within_the_outbox_bound():
     assert r.sent() == [Disarm()]
 
 
+def test_the_queued_disarm_seq_is_the_one_a_request_queued_or_reused_not_one_being_written():
+    """6a-2b (Codex impl round 8): a DISARM handed to the adapter is not reused -- the next request queues another, and
+    queued_disarm_seq names that one; a second request reuses it."""
+    r = Rig()
+    r.host.request_disarm(r.now)
+    first = r.host.queued_disarm_seq()
+    f = r.host.next_frame(r.now)  # being written now
+    assert f.kind == "DISARM" and (int(f.seq) & 0xFFFF) == first and r.host.queued_disarm_seq() is None
+    r.host.request_disarm(r.now)
+    second = r.host.queued_disarm_seq()
+    assert second is not None and second != first
+    r.host.request_disarm(r.now)
+    assert r.host.queued_disarm_seq() == second
+
+
 def test_a_frame_handed_back_unsent_is_still_subject_to_cancellation():
     """The adapter got EAGAIN before the first byte: the frame goes back and a DISARM still drops it."""
     r = Rig()

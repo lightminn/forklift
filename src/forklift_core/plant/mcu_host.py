@@ -546,10 +546,9 @@ class McuLinkHost:
         if not any(o.kind == "DISARM" for o in self._outbox):
             self._enqueue("DISARM", Disarm(), now_ns)
 
-    def pending_disarm_seq(self) -> int | None:
-        """The seq of the DISARM queued or being written (the one a DISARM request queued or reused), or None."""
-        if self._inflight is not None and self._inflight.kind == "DISARM":
-            return int(self._inflight.seq) & 0xFFFF
+    def queued_disarm_seq(self) -> int | None:
+        """The seq of the DISARM waiting in the queue -- right after ``request_disarm`` the one it queued or reused
+        (a DISARM being written is not reused: the request queues another; 6a-2b round 8), or None."""
         for o in self._outbox:
             if o.kind == "DISARM":
                 return int(o.seq) & 0xFFFF

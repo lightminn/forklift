@@ -269,7 +269,7 @@ class AutoPermit:
         stop's ``reason``: the seq of the DISARM that stop queued or reused is noted (6a-2b round 7: the record ties a
         stop decision to its own DISARM)."""
         if reason is not None:
-            seq_ = getattr(self.host, "pending_disarm_seq", lambda: None)()
+            seq_ = getattr(self.host, "queued_disarm_seq", lambda: None)()
             self._note(now_ns, "disarm_asked", reason, seq=seq_)
         self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         if self._disarm_first_ns is None:
