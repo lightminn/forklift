@@ -236,8 +236,8 @@ def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
     t = [int(r[0]) for r in rows]
     assert t == sorted(t)
     for r in rows:
-        assert len(r) == 7  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s
-        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6])
+        assert len(r) == 8  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s, host monotonic ns
+        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6]), int(r[7])
 
 
 @pytest.mark.parametrize("option", ["--accept-log", "--axis-log"])

@@ -487,9 +487,11 @@ int main(int argc, char **argv)
         }
         fw_app_tick(&app);
         if (B.axis_log != NULL) {
-            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
+            /* + this host's CLOCK_MONOTONIC ns of the tick (6a-2b round 4: compared with the runner's instants
+               directly, no receipt-delay offset) */
+            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f %llu\n", (unsigned long long)app.d.time_us,
                         (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
-                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]) < 0) {
+                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1], (unsigned long long)B.now_ns) < 0) {
                 B.log_failed = true;
             }
         }

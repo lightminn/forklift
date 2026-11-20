@@ -212,13 +212,47 @@ def accept_rows(path: Path):
 
 
 def axis_rows(path: Path):
-    """(MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s) per model tick."""
+    """(MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s, host monotonic ns) per model tick."""
     out = []
     for line in path.read_text().splitlines():
         p = line.split()
-        assert len(p) == 7, f"inconclusive: malformed axis-log row {line!r}"
-        out.append((int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]), float(p[5]), float(p[6])))
+        assert len(p) == 8, f"inconclusive: malformed axis-log row {line!r}"
+        out.append((int(p[0]), int(p[1]), int(p[2]), float(p[3]), float(p[4]), float(p[5]), float(p[6]), int(p[7])))
     return out
+
+
+class ObservedOnly(Exception):
+    """design 2: the model ticked later than MODEL_TICK_GAP_MAX_S inside a judged window -- the run is recorded, not
+    judged; the test runs again."""
+
+
+def again(fn, attempts=3):
+    """Run a whole HIL scenario again when its judgement was observed_only (at most ``attempts`` runs)."""
+    for k in range(attempts):
+        try:
+            return fn(k)
+        except ObservedOnly as err:
+            last = err
+    pytest.fail(f"observed_only on every run: {last}")
+
+
+def first_cause(rows, pattern, after_ns):
+    """The earliest instant a latching reason matching ``pattern`` was judged at, after ``after_ns``: the readiness's
+    or the send's own evidence instant, or the gate's; a tick-head emergency's or the permit's own latch instant only
+    when nothing finer exists (the tick's start is then its evidence instant)."""
+    fine = [c["ns"] for c in events(rows, "cause") if c["where"] in ("ready", "send") and c["ns"] >= after_ns
+            and re.search(pattern, str(c["why"]))]
+    fine += [g["ns"] for g in events(rows, "gate") if g["ns"] is not None and g["ns"] >= after_ns
+             and re.search(pattern, str(g["verdict"]))]
+    if fine:
+        return min(fine)
+    coarse = [c["ns"] for c in events(rows, "cause") if c["where"] == "emergency" and c["ns"] >= after_ns
+              and re.search(pattern, str(c["why"]))]
+    # the permit's own latch (e.g. the host's revoked authorization, judged by permit.tick at the tick's start)
+    coarse += [p["ns"] for p in events(rows, "permit") if p["event"] in ("latched", "disarm") and p["ns"] >= after_ns
+               and re.search(pattern, str(p["reason"]))]
+    assert coarse, f"no cause matching {pattern!r} recorded"
+    return min(coarse)
 
 
 def accepted(rows, kind, seq, boot, after_ns, before_ns=None):
@@ -260,13 +294,8 @@ def tick_deadline(rows, f_ns):
     """The DISARM's latest write for an expiry at ``f_ns`` (design 6: "F 뒤 실제 첫 호스트 틱 + 쓰기 한 틱"): the first
     host tick that starts at or after F, plus one tick -- the start of the tick after it (round 3 P2-1)."""
     ts = sorted(t["ns"] for t in events(rows, "tick") if t["ns"] >= f_ns)
-    assert ts, "inconclusive: the run ended at the expiry"
-    return ts[1] if len(ts) > 1 else ts[0] + TICK_NS
-
-
-def mcu_offset(rows):
-    """host ns - MCU ns (one boot), from the STATE receipts (the smallest: receipt jitter only adds)."""
-    return min(s["rx_ns"] - s["mcu_us"] * 1000 for s in events(rows, "state"))
+    assert len(ts) >= 2, "inconclusive: no tick after the first one past the expiry"
+    return ts[1]
 
 
 def frame_purpose(rows):
@@ -275,6 +304,11 @@ def frame_purpose(rows):
 
 # --- S10-A once (6, 10.4) --------------------------------------------------------------------------------------------
 def test_s10_a_runs_to_the_lift_through_the_command_line(mcu_model, tmp_path):
+    again(lambda k: _s10_a_once(mcu_model, tmp_path / f"run{k}"))
+
+
+def _s10_a_once(mcu_model, tmp_path):
+    tmp_path.mkdir()
     run = Runner(mcu_model, tmp_path, duration_s=120)
     c = Console(run.port)
     try:
@@ -329,7 +363,6 @@ def holding_spans_within_the_bound(rows, out, end):
     judges = events(rows, "axis_judge")
     decisions = [d[0] for d in end["disarm_decisions"]]
     last_ns = max(t["ns"] for t in events(rows, "tick"))
-    offset = mcu_offset(rows)
     axis = axis_rows(out / "axis.log")
     spans, cur = [], None
     for m in marks:
@@ -349,16 +382,17 @@ def holding_spans_within_the_bound(rows, out, end):
         gap = max((b - a for a, b in zip(points, points[1:])), default=0)
         if dec:
             gap = max(gap, dec[0] - points[-1])
-        lo, hi = (s_ns - offset) // 1000, (end_ns - offset) // 1000
-        seg = [x for x in axis if lo <= x[0] <= hi]
-        assert seg and seg[0][0] <= lo + 2_000 and seg[-1][0] >= hi - 2_000, \
+        seg = [x for x in axis if s_ns <= x[7] <= end_ns]
+        assert seg and seg[0][7] <= s_ns + 2_000_000 and seg[-1][7] >= end_ns - 2_000_000, \
             f"inconclusive: the model's samples do not cover the span {s_ns}..{end_ns}"
-        # the model's tick gap term: 5 ms, or the span's own largest gap when it ticked later (a late model tick
-        # integrates its whole interval on the last duty -- the bound takes that interval as delay; design 2's
-        # MODEL_TICK_GAP_MAX_S widened by what was observed instead of discarding the run)
-        tick_gap_s = max([MODEL_GAP_S] + [x[1] / 1e9 for x in seg]
-                         + [(b[0] - a[0]) / 1e6 for a, b in zip(seg, seg[1:])])
-        delay = 0.070 + gap / 1e9 + 0.010 + tick_gap_s
+        tick_gap_s = max([x[1] / 1e9 for x in seg] + [(b[0] - a[0]) / 1e6 for a, b in zip(seg, seg[1:])])
+        delay = 0.070 + gap / 1e9 + 0.010 + MODEL_GAP_S
+        if tick_gap_s > MODEL_GAP_S:
+            # design 2: not a pass -- the bound with the observed gap is recorded only (round 4 P2-1)
+            wide = 0.070 + gap / 1e9 + 0.010 + tick_gap_s
+            raise ObservedOnly(f"model_tick_gap {tick_gap_s * 1e3:.1f} ms in span {s_ns}: lift rise "
+                               f"{max(x[3] - start['h0'] for x in seg):.4f} m vs the widened bound "
+                               f"{WAIT_LIFT_RISE_M + LIFT_TOP_MPS * (wide + STOP_GRACE_S):.4f} m")
         lift_bound = WAIT_LIFT_RISE_M + LIFT_TOP_MPS * (delay + STOP_GRACE_S)
         steer_bound = WAIT_STEER_MOVE_RAD + STEER_TOP_RADPS * (delay + STOP_GRACE_S)
         assert max(x[3] - start["h0"] for x in seg) <= lift_bound, (start, lift_bound)
@@ -367,22 +401,23 @@ def holding_spans_within_the_bound(rows, out, end):
 
 
 def push_seen(rows, out, spans, push, axis_name):
-    """The push landed in a watched span: the holding frame that triggered it opened or belongs to a span, the model's
-    own axis moved by the push right after it, and the host judged a valid STATE after it within the span."""
+    """The push landed in a watched span and the watch saw it (round 4 P2-2): the holding frame that triggered it
+    opened that span (its seq) or was written inside it; the model's own axis jumped by the push, with its sign, at
+    one MCU tick; a valid judgement of that span read a STATE measured after that tick. Returns (span, jump tick)."""
     p = events(rows, "inject_push")[0]
-    # the push follows the holding frame's write; the watch's start is stamped just after that write
-    span = next(((st, e) for st, e in spans if st["ns"] - TICK_NS <= p["ns"] <= e), None)
-    assert span is not None, f"inconclusive: the push at {p['ns']} lies in no watched span"
-    offset = mcu_offset(rows)
+    span = next(((st, e) for st, e in spans if st["seq"] == p["seq"]), None) or next(
+        ((st, e) for st, e in spans if st["ns"] <= p["ns"] <= e), None)
+    assert span is not None, f"inconclusive: the push's holding frame {p['seq']} opened or lies in no watched span"
     axis = axis_rows(out / "axis.log")
-    at = (p["ns"] - offset) // 1000
     col = 3 if axis_name == "lift" else 4
-    before = [x[col] for x in axis if at - 5_000 <= x[0] <= at]
-    after = [x[col] for x in axis if at < x[0] <= at + 50_000]
-    assert before and after and max(abs(v - before[-1]) for v in after) >= 0.8 * push, \
-        "inconclusive: the model's axis did not move by the push"
-    judged = [j for j in events(rows, "axis_judge") if p["ns"] <= j["ns"] <= span[1] and j["valid"]]
-    assert judged, "inconclusive: no valid watch judgement after the push"
+    jumps = [(b[0], b[col] - a[col]) for a, b in zip(axis, axis[1:])
+             if b[7] >= p["ns"] and abs((b[col] - a[col]) - push) <= 0.2 * push]
+    assert jumps, "inconclusive: the model's axis never jumped by the push"
+    jump_us = jumps[0][0]
+    seen = [j for j in events(rows, "axis_judge") if span[0]["ns"] <= j["ns"] <= span[1] and j["valid"]
+            and j["mcu_us"] >= jump_us]
+    assert seen, "inconclusive: the watch judged no STATE measured after the push"
+    return span, jump_us
 
 
 # --- the stop injections (6) -----------------------------------------------------------------------------------------
@@ -415,16 +450,20 @@ def _active_moving(rows, acc, before_ns, axis):
         f"inconclusive: the active command at the injection was not a moving normal DRIVE ({q})"
     assert not [r for r in acc if r["kind"] == "DISARM" and last["mono_ns"] <= r["mono_ns"] <= before_ns], \
         "inconclusive: a DISARM was taken before the injection"
-    at_us = (before_ns - mcu_offset(rows)) // 1000
-    mode = [a[2] for a in axis if a[0] <= at_us]
+    mode = [a[2] for a in axis if a[7] <= before_ns]  # the model's own host-clock stamp (round 4 P2-3)
     assert mode and mode[-1] == ARMED, "inconclusive: the model was not ARMED at the injection"
     return last
 
 
 def test_a_cut_send_stops_the_model_on_its_own_command_expiry(mcu_model, tmp_path):
+    again(lambda k: _cut_send_once(mcu_model, tmp_path / f"run{k}"))
+
+
+def _cut_send_once(mcu_model, tmp_path):
     """The send alone cut while a moving normal DRIVE is active: with E its own expiry (echo + min(validity,
     command_timeout)), the model enters STOPPING in [E, E + g] with no DISARM taken before it, DISARMED within the
     grace, both wheels below 0.01 m/s by DISARMED + 3 tau + g and kept for a whole 200 ms."""
+    tmp_path.mkdir()
     run, rows, code = _injected(mcu_model, tmp_path, "tx")
     complete(rows, code)
     inj = events(rows, "inject")[0]
@@ -448,7 +487,7 @@ def test_a_cut_send_stops_the_model_on_its_own_command_expiry(mcu_model, tmp_pat
     assert disarmed[0] <= first_out[0] + (STOP_GRACE_S + MODEL_GAP_S) * 1e6
     window = [a for a in axis if e_us - 10_000 <= a[0] <= disarmed[0] + 400_000]
     if max(a[1] for a in window) > MODEL_GAP_S * 1e9:
-        pytest.fail("observed_only:model_tick_gap (the model ticked late in the judged window: run again)")
+        raise ObservedOnly("model_tick_gap in the judged window")
     from forklift_core.plant.real_vehicle import load_real_vehicle
 
     r_m = max(load_real_vehicle(REPO / "config/real/vehicle.yaml").wheel_radius_m)  # the effective rolling radius
@@ -477,9 +516,9 @@ def test_a_state_cut_makes_the_runner_write_a_disarm_the_model_takes_before_the_
     rows = run.rows()
     complete(rows, code)
     acc = accept_rows(tmp_path / "accept.log")
-    offset = mcu_offset(rows)
-    cut_ns = offset + cut_us * 1000
-    _active_moving(rows, acc, cut_ns, axis_rows(tmp_path / "axis.log"))
+    axis = axis_rows(tmp_path / "axis.log")
+    cut_ns = next(a[7] for a in axis if a[0] >= cut_us)  # the model's own host-clock stamp of the cut's tick
+    _active_moving(rows, acc, cut_ns, axis)
     before = [s_ for s_ in events(rows, "state") if s_["mcu_us"] < cut_us]
     f_ns = before[-1]["rx_ns"] + 50_000_000
     written = {(e["kind"], e["seq"]): e for e in events(rows, "frame_written")}
@@ -491,14 +530,16 @@ def test_a_state_cut_makes_the_runner_write_a_disarm_the_model_takes_before_the_
                 assert w["judged_ns"] is not None and w["judged_ns"] <= f_ns - A_NS, (w, f_ns)
                 assert w["written_ns"] <= f_ns + 1_000_000, (w, f_ns)
     normal = {q["seq"] for q in events(rows, "frame_queued") if q["purpose"] == "drive"}
-    late = [r for r in acc if r["kind"] == "DRIVE" and r["seq"] in normal and r["mono_ns"] > f_ns + 1_000_000]
+    late = [r for r in acc if r["kind"] == "DRIVE" and r["seq"] in normal and r["verdict"] == "accepted"
+            and r["mono_ns"] > f_ns + 1_000_000]
     assert not late, late[:1]  # the model took no normal DRIVE after F
     latch = [p for p in events(rows, "permit") if p["event"] in ("disarm", "latched") and p["ns"] >= cut_ns
              and p["reason"] != "signal"]
     assert latch and ("measurement_stale" in str(latch[0]["reason"])
                       or "authorization_revoked" in str(latch[0]["reason"])), latch[:1]
-    assert latch[0]["ns"] >= f_ns - TICK_NS, (latch[0], f_ns)
-    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= latch[0]["ns"]]
+    cause = first_cause(rows, "measurement_stale|authorization_revoked", cut_ns)
+    assert cause >= f_ns, (cause, f_ns)  # judged on evidence past F, not early (round 4 P2-4)
+    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= cause - TICK_NS]
     assert dis and dis[0]["written_ns"] <= tick_deadline(rows, f_ns), (dis[:1], f_ns)
     boot = before[-1]["boot"]
     d = accepted(acc, "DISARM", dis[0]["seq"], boot, dis[0]["last_write_ns"])
@@ -545,23 +586,20 @@ def test_a_stopped_source_stops_motion_by_its_expiry(mcu_model, tmp_path, name):
                  and t["ns"] >= inj["ns"]]
         assert since, "no overdue evaluation stored"
         end_ns = head["start_ns"] + int((since[0] + 1.0) * 1e9)  # overdue_end from config/real/obstacle_layer.yaml
-        if reason.endswith("layer:missing"):
-            # the readiness's layer:missing is the watchdog's end only when the gate judged it at an evidence
-            # instant past that end (the watchdog then says layer_latency_exceeded; round 3 P2-1)
-            g = [x for x in events(rows, "gate") if x["ns"] is not None and "layer:missing" in str(x["verdict"])
-                 and x["ns0"] <= latch[0]["ns"] + TICK_NS]
-            assert g and g[0]["ns"] >= end_ns, (g[:1], end_ns)
-        else:
-            assert reason.endswith("layer_latency_exceeded"), reason
-            assert latch[0]["ns"] >= end_ns - TICK_NS, (latch[0], end_ns)
-        deadline = tick_deadline(rows, end_ns)
+        # the watchdog's end, judged as its own latch or -- at the same evidence instant -- as the readiness's
+        # layer:missing; either way the instant it was judged at must have reached the end (rounds 3-4)
+        assert re.search(r"layer_latency_exceeded|layer:missing", reason), reason
+        cause = first_cause(rows, r"layer_latency_exceeded|layer:missing", inj["ns"])
+        assert cause >= end_ns, (cause, end_ns)
+        expiry = end_ns
     else:
         # the readiness's slam:stale, or the SLAM tracker's own stale correction in the control tick
         assert re.search(r"slam:stale|correction [0-9.]+ s old", reason), reason
-        assert latch[0]["ns"] >= f_ns - TICK_NS, (latch[0], f_ns)
-        deadline = tick_deadline(rows, f_ns)
-    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= latch[0]["ns"]]
-    assert dis and dis[0]["written_ns"] <= deadline, (dis[:1], deadline)
+        cause = first_cause(rows, r"slam:stale|correction [0-9.]+ s old", inj["ns"])
+        assert cause >= f_ns, (cause, f_ns)
+        expiry = f_ns
+    dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= cause - TICK_NS]
+    assert dis and dis[0]["written_ns"] <= tick_deadline(rows, expiry), (dis[:1], expiry)
     before = [s_ for s_ in events(rows, "state") if s_["rx_ns"] <= latch[0]["ns"]]
     assert before and latch[0]["ns"] - before[-1]["rx_ns"] <= 50_000_000  # STATEs fresh up to the latch
 
@@ -610,9 +648,14 @@ def test_a_closing_disarm_that_never_reaches_the_model_is_unconfirmed(mcu_model,
 @pytest.mark.parametrize("axis, push, alarm", [("lift", 0.006, True), ("lift", 0.004, False),
                                                ("steer", 0.025, True), ("steer", 0.015, False)])
 def test_a_push_on_a_held_axis_alarms_over_the_threshold_only(mcu_model, tmp_path, axis, push, alarm):
+    again(lambda k: _push_once(mcu_model, tmp_path / f"run{k}", axis, push, alarm))
+
+
+def _push_once(mcu_model, tmp_path, axis, push, alarm):
     """Design 2 (가) on the model: while a position-holding frame holds the truck the plant's lift or steering is
     pushed (SIGUSR1 to the model at the holding frame's write): over the threshold (5 mm, 0.02 rad) the watch latches
     wait_axis_moved:<axis> and DISARMs, under it nothing; every watched span stays within (가)'s bound."""
+    tmp_path.mkdir()
     arg = "--axis-push-lift-m" if axis == "lift" else "--axis-push-steer-rad"
     run, rows, code = _injected(mcu_model, tmp_path, "axis_push", ms=300, model_args=(arg, str(push)),
                                 until="LATCHED" if alarm else "__never__", wait_s=40 if alarm else 25)
@@ -621,15 +664,16 @@ def test_a_push_on_a_held_axis_alarms_over_the_threshold_only(mcu_model, tmp_pat
     assert pushes, "inconclusive: no holding frame after the injection's start"
     latches = [p for p in events(rows, "permit") if p["event"] in ("disarm", "latched")
                and "wait_axis_moved" in str(p["reason"])]
+    spans = holding_spans_within_the_bound(rows, tmp_path, end)
+    push_seen(rows, tmp_path, spans, push, axis)
     if alarm:
         assert latches and f"wait_axis_moved:{axis}" in str(latches[0]["reason"]), events(rows, "permit")[-4:]
         assert latches[0]["ns"] >= pushes[0]["ns"]
+        # that latch's own DISARM, written before the closing
         dis = [e for e in events(rows, "frame_written") if e["kind"] == "DISARM" and e["written_ns"] >= latches[0]["ns"]]
-        assert dis
+        assert dis and dis[0]["written_ns"] < end["closing_started_ns"], (dis[:1], end["closing_started_ns"])
     else:
         assert not latches, latches[:1]
-    spans = holding_spans_within_the_bound(rows, tmp_path, end)
-    push_seen(rows, tmp_path, spans, push, axis)
 
 
 # --- the model's lifetime and a killed model (design 1, 10.3) ------------------------------------------------------

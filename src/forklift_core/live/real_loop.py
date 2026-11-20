@@ -338,7 +338,11 @@ class RealLoop:
 
     # --- 5c-1: the real console requests, the bypass, real_status (design 5) --------------------------------------
     def _ready(self, now_ns: int, stage: str):
-        return ra.auto_ready_refusal(now_ns, stage, self.evidence, bypass=self._tick_bypass)
+        why = ra.auto_ready_refusal(now_ns, stage, self.evidence, bypass=self._tick_bypass)
+        if why is not None and ra.latches(why):
+            # 6a-2b (impl round 4): a latching reason with the instant its evidence was judged at
+            self._emit({"t": "cause", "ns": int(now_ns), "why": why, "where": "ready"})
+        return why
 
     def _bypassed(self, check: str) -> bool:
         return check in self._tick_bypass
@@ -1139,7 +1143,7 @@ class RealLoop:
             and math.isfinite(state.lift_m) and math.isfinite(state.steering_rad)  # impl round 4 P2-2
         self.axis_watch_times.append((now_c, bool(valid)))
         self._emit({"t": "axis_judge", "ns": now_c, "valid": bool(valid), "lift": float(state.lift_m),
-                    "steer": float(state.steering_rad)})
+                    "steer": float(state.steering_rad), "mcu_us": int(state.mcu_time_us)})
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
         elif math.isfinite(state.steering_rad) and abs(float(state.steering_rad) - a["q0"]) > WAIT_STEER_MOVE_RAD:
@@ -1516,6 +1520,7 @@ class RealLoop:
                          collect=lambda r: self._end_now(now_ns, r))
 
     def _emergency(self, now_ns: int, reason: str) -> None:
+        self._emit({"t": "cause", "ns": int(now_ns), "why": str(reason), "where": "emergency"})
         self.waiting = None
         self._mark_stop()  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
@@ -2079,6 +2084,7 @@ class RealLoop:
         if elapsed > LATE_TICK_S:
             return "tick_late"
         if not self.host.health(send_ns).fresh:
+            self._emit({"t": "cause", "ns": int(send_ns), "why": "measurement_stale", "where": "send"})
             return "measurement_stale"
         why = self._ready(send_ns, "drive")
         if why is not None and ra.latches(why):

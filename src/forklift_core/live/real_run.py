@@ -892,10 +892,10 @@ class RunRecord:
         deadline = time.monotonic() + timeout_s
         end = dict(end, record_incomplete=self.incomplete)
         try:
-            self._q.put(end, timeout=max(0.0, deadline - time.monotonic()))
+            self._q.put(end, timeout=max(0.0, deadline - time.monotonic()))  # read, it ends the writer itself
         except queue.Full:
             self.incomplete = self.incomplete or "queue_full_at_end"
-        self._finish.set()
+            self._finish.set()  # no end row: the writer stops on an empty queue (round 4 P2-6)
         self._thread.join(max(0.0, deadline - time.monotonic()))
         return (not self._thread.is_alive() and self.closed and self.failed is None and self.incomplete is None
                 and self.end_written and self._f is not None)  # no file: nothing kept, never complete

@@ -6,6 +6,7 @@ transport plan and its objects both ways, a job's failure as text, the control t
 job, a discard that restarts the worker), a dead worker fails the job it had, and close ends it."""
 
 import os
+import threading
 import time
 from types import SimpleNamespace
 
@@ -341,15 +342,28 @@ def test_a_failed_answer_has_an_arrival_too():
 
 
 def test_a_dead_process_is_not_alive_until_its_replacement_is_ready(worker):
-    """6a-2b (Codex impl rounds 2-3): from the broken pipe to the replacement's ready the worker says it is not alive
-    (the real run's readiness); a discard's restart does not need that."""
+    """6a-2b (Codex impl rounds 2-4): from the broken pipe on -- already while the dead child is being reaped -- to the
+    replacement's ready the worker says it is not alive (the real run's readiness)."""
     assert worker.alive
     job = worker.submit("echo", {"sleep_s": 30.0})
     time.sleep(0.3)
-    worker.proc.kill()
+    proc = worker.proc
+    entered, release = threading.Event(), threading.Event()
+    real_wait = proc.wait
+
+    def held_wait(timeout=None):
+        entered.set()
+        release.wait(10)
+        return real_wait(timeout)
+
+    proc.wait = held_wait
+    proc.kill()
+    assert entered.wait(10)
+    assert not worker.alive  # inside the reaping, before any replacement started
+    release.set()
     seen, end = [], time.monotonic() + 30
-    while time.monotonic() < end and not (False in seen and seen[-1]):
+    while time.monotonic() < end and not (seen and seen[-1]):
         seen.append(worker.alive)
         time.sleep(0.002)
-    assert False in seen and seen[-1] is True
+    assert seen and seen[-1] is True
     wait_for(worker, job)
