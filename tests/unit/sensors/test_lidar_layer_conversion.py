@@ -267,3 +267,21 @@ def test_a_stray_candidate_expires_and_never_blocks_a_real_restart():
     feed.new_generation("receive_gap")
     verdicts = [feed.judge(fr(k, off=off2), 0)[1] for k in range(1, 2 + sf.ESTABLISH_COUNT)]
     assert verdicts[-1] is None
+
+
+@pytest.mark.parametrize("expire", ["current_frame", "receive_gap"])
+def test_each_candidate_expiry_path_alone(expire):
+    """Codex 7a-1 round 7 P3: each way a stray candidate ends, on its own."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, start=30_000)
+    n = 30_000 + sf.ESTABLISH_COUNT
+    off2 = 1_700_000_001_000 * MS
+    assert feed.judge(fr(30_005, off=off2), 0)[1] == "clock_jump"
+    assert feed._cand is not None  # noqa: SLF001
+    if expire == "current_frame":
+        assert feed.judge(fr(n), 0)[1] is None
+    else:
+        feed.new_generation("receive_gap")
+    assert feed._cand is None  # noqa: SLF001
