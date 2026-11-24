@@ -1,0 +1,1 @@
+    ATTRS{product}=="forklift-mcu normal locked diag-spi-ssi-3"

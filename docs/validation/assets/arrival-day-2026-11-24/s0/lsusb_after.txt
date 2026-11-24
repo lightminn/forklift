@@ -1,0 +1,1 @@
+Bus 003 Device 007: ID 0483:5740 STMicroelectronics Virtual COM Port

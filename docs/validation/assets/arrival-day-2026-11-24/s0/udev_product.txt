@@ -1,0 +1,4 @@
+    ATTRS{idProduct}=="5740"
+    ATTRS{idVendor}=="0483"
+    ATTRS{product}=="forklift-mcu normal locked de49e746db98"
+    ATTRS{serial}=="004800413233511430313337"
