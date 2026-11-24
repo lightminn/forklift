@@ -9,12 +9,13 @@ own fields -- and says "ambiguous" instead of guessing.
 An acceptance is a **transition**: a sample ``s`` whose ``last_rx_seq`` differs from the previous sample ``p`` read on
 the same connection from the same boot (a first sample has no ``p`` and proves nothing). The frame accepted between
 them is a write ``w`` with
-- the same seq and connection, its last byte written no later than ``s`` was read, and no earlier than
-  ``TRANSIT_NS`` before ``p`` was read (a frame is taken within milliseconds of arriving: one written long before
-  ``p`` was read would already show in ``p``);
+- the same seq and connection, its last byte written no later than ``s`` was read and no earlier than ``WRAP_GUARD_NS``
+  before ``p`` was read. The guard only keeps a write of the same seq from the previous 16-bit wrap out (at most 100
+  frames a second, a seq comes back after 655 s); it is wide so that a STATE the host read late from its buffer still
+  matches (Codex PR-2a re-review P2-2);
 - for a command that carries them (ARM, COMMISSION, DRIVE): the same boot, its echo not later than ``s``'s MCU time,
   and its validity window (echo .. echo + valid) not over before ``p``'s MCU time; a COMMISSION or DRIVE also names
-  the arm generation ``s`` reports.
+  the arm generation ``s`` reports; a DISARM (no echo) only counts when ``p`` and ``s`` report the same generation.
 One such write is the match; none is no acceptance of ours; more than one (only after a gap in the samples longer
 than a seq wrap) is ambiguous.
 """
@@ -24,7 +25,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-TRANSIT_NS = 1_000_000_000  # how long before the previous read a frame may have been written and still be in flight
+WRAP_GUARD_NS = 300_000_000_000  # under half of a seq wrap at 100 frames/s (655 s)
 
 
 @dataclass(frozen=True)
@@ -71,10 +72,10 @@ def _index(writes: list[Write]) -> dict[tuple[int, int], list[Write]]:
 
 
 def _fits(w: Write, p: Seen, s: Seen) -> bool:
-    if not (p.host_ns - TRANSIT_NS <= w.done_ns <= s.host_ns):
+    if not (p.host_ns - WRAP_GUARD_NS <= w.done_ns <= s.host_ns):
         return False
     if w.echo_mcu_time_us is None:
-        return True
+        return p.arm_gen == s.arm_gen  # a DISARM within one generation (Codex PR-2a re-review P2-3)
     if w.boot_id != s.boot_id or w.echo_mcu_time_us > s.mcu_time_us:
         return False
     if w.valid_ms is not None and w.echo_mcu_time_us + w.valid_ms * 1000 < p.mcu_time_us:
@@ -120,12 +121,23 @@ def write_row(w: Write) -> dict:
     return {name: getattr(w, name) for name in _WRITE_FIELDS}
 
 
+def runs_of(rows: list[dict]) -> list[list[dict]]:
+    """A bring-up JSONL file appends one run after another, each from its header; connection numbers and write orders
+    start again in every run, so a match is redone on one run's rows only."""
+    runs: list[list[dict]] = []
+    for r in rows:
+        if r.get("t") == "header" or not runs:
+            runs.append([])
+        runs[-1].append(r)
+    return runs
+
+
 def writes_from_rows(rows: list[dict]) -> list[Write]:
-    """The write log of a JSONL record, for offline matching."""
+    """The write log of one run's JSONL rows (see ``runs_of``), for offline matching."""
     return [Write(**{k: r.get(k) for k in _WRITE_FIELDS}) for r in rows if r.get("t") == "written" and "order" in r]
 
 
 def seen_from_rows(rows: list[dict]) -> list[Seen]:
-    """The STATE rows of a JSONL record (read time, connection and the fields matching needs)."""
+    """The STATE rows of one run's JSONL rows (read time, connection and the fields matching needs)."""
     return [Seen(r["host_ns"], r["conn"], r["boot_id"], r["mcu_time_us"], r["last_rx_seq"], r.get("arm_gen", 0))
             for r in rows if r.get("t") == "state" and "conn" in r]

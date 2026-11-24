@@ -2,10 +2,11 @@
 transitions of last_rx_seq, matched to writes of the same connection, boot, generation and time window."""
 
 from forklift_core.plant.write_log import (
-    TRANSIT_NS,
+    WRAP_GUARD_NS,
     Seen,
     Write,
     accepted,
+    runs_of,
     seen_from_rows,
     write_row,
     writes_from_rows,
@@ -55,8 +56,29 @@ def test_a_reboot_between_samples_is_no_transition():
 def test_the_write_must_fall_in_the_transitions_window():
     late = [w(0, 6, 300 * MS)]  # finished after the STATE was read
     assert accepted([s(150 * MS, 5), s(250 * MS, 6)], late, nonzero).index is None
-    early = [w(0, 6, 100 * MS - TRANSIT_NS - 1)]  # long before the previous read: it would already show
-    assert accepted([s(100 * MS, 5), s(250 * MS, 6)], early, nonzero).index is None
+    old = [w(0, 6, 400_000 * MS - WRAP_GUARD_NS - 1, valid=None)]  # a previous wrap's write of the same seq
+    assert accepted([s(400_000 * MS, 5), s(400_100 * MS, 6)], old, nonzero).index is None
+
+
+def test_states_read_late_from_the_buffer_still_match():
+    """Codex PR-2a re-review P2-2: the transition's STATEs (MCU 100 and 120 ms) are read together at host 1250 ms."""
+    writes = [w(0, 6, 110 * MS, echo=105_000), w(1, 7, 111 * MS, kind="DISARM")]
+    late = [Seen(1250 * MS, 1, BOOT, 100_000, 5, 1), Seen(1250 * MS, 1, BOOT, 120_000, 6, 1)]
+    assert accepted(late, writes, nonzero).index == 1
+    late2 = [Seen(1250 * MS, 1, BOOT, 100_000, 6, 1), Seen(1250 * MS, 1, BOOT, 120_000, 7, 1)]
+    assert accepted(late2, writes, lambda x: x.kind == "DISARM").index == 1
+
+
+def test_a_disarm_counts_only_within_one_arm_generation():
+    """Codex PR-2a re-review P2-3."""
+    writes = [w(0, 9, 100 * MS, kind="DISARM")]
+    assert accepted([s(90 * MS, 8, gen=3), s(150 * MS, 9, gen=4)], writes, lambda x: x.kind == "DISARM").index is None
+    assert accepted([s(90 * MS, 8, gen=4), s(150 * MS, 9, gen=4)], writes, lambda x: x.kind == "DISARM").index == 1
+
+
+def test_runs_are_split_at_their_headers():
+    rows = [{"t": "header", "n": 1}, {"t": "state"}, {"t": "header", "n": 2}, {"t": "written"}]
+    assert [[r["t"] for r in run] for run in runs_of(rows)] == [["header", "state"], ["header", "written"]]
 
 
 def test_an_expired_or_wrong_generation_command_is_not_the_one():

@@ -217,8 +217,9 @@ class Bench:
 
     def seen(self, start: int = 0) -> list[Seen]:
         """The samples from ``start`` as the matcher reads them (an index into this list is ``start`` less)."""
+        conns = self.sample_conn + [self.conn] * (len(self.samples) - len(self.sample_conn))  # samples put by hand
         return [Seen(s.host_ns, c, s.state.boot_id, s.state.mcu_time_us, s.state.last_rx_seq, s.state.arm_gen)
-                for s, c in zip(self.samples[start:], self.sample_conn[start:], strict=True)]
+                for s, c in zip(self.samples[start:], conns[start:], strict=True)]
 
     def emit(self, row: dict) -> None:
         try:
@@ -376,7 +377,14 @@ class Session:
             m = accepted(b.seen(k), b.writes[o0:], lambda w: w.kind == "DISARM")
             return m.index is not None and b.samples[k + m.index].state.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
 
-        ok = b.run_until(done, CLEANUP_S)
+        ok = b.run_until(done, CLEANUP_S / 2)
+        if not ok:
+            # A DISARM written before any STATE of a new connection was read has no earlier sample to show a
+            # transition from: once one is in, a second DISARM (a new seq) can be confirmed (Codex PR-2a re-review
+            # P2-4). The first stop request has gone out either way.
+            o0 = len(b.writes)
+            b.host.request_disarm(time.monotonic_ns())
+            ok = b.run_until(done, CLEANUP_S / 2)
         b.emit({"t": "cleanup", "confirmed": bool(ok)})
         self.cleanup_confirmed = bool(ok)
         return ok

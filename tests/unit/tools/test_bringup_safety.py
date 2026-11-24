@@ -61,6 +61,15 @@ class _Link:
         return []
 
 
+def _wrote_disarm(b, seq):
+    """A DISARM written through the bench's own write callback (the write log the cleanup matches with, PR-2a)."""
+    import time as _t
+
+    from forklift_core.mcu_link.messages import Disarm, encode
+
+    b._log("written", _t.monotonic_ns(), encode(Disarm(), seq), {"kind": "DISARM", "seq": seq})
+
+
 def _bench(states, on_cycle=None, **kw):
     import io
 
@@ -137,11 +146,9 @@ def test_a_state_not_naming_the_disarm_never_confirms_the_cleanup():
 
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
-    written = {}
-
     def cycle():
         if 5 not in b.written:
-            b.written[5] = ("DISARM", _t.monotonic_ns(), None)  # the DISARM went out as seq 5
+            _wrote_disarm(b, 5)  # the DISARM went out as seq 5
         b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=77)))
 
     b.link.on_cycle = cycle
@@ -178,7 +185,7 @@ def test_a_state_naming_the_disarm_after_its_write_confirms_the_cleanup():
 
     def cycle():
         if 5 not in b.written:
-            b.written[5] = ("DISARM", _t.monotonic_ns(), None)
+            _wrote_disarm(b, 5)
         else:
             b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5)))
 
