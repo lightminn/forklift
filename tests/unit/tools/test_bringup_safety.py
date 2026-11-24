@@ -478,3 +478,57 @@ def test_the_old_connections_disarm_does_not_confirm_on_the_new_one():
 
     b.link.on_cycle = cycle
     assert s.cleanup() is False
+
+
+def test_a_buffered_stop_before_a_newer_armed_state_does_not_confirm():
+    """Codex PR-2a re-review 5 P2-2: both STATEs are read after the DISARM's write; the newest is ARMED."""
+    import dataclasses
+    import time as _t
+
+    from forklift_core.plant.bringup import Sample
+
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+    steps = {"n": 0}
+
+    def cycle():
+        steps["n"] += 1
+        if steps["n"] == 1:
+            _wrote_disarm(b, 1)
+        else:
+            now = _t.monotonic_ns()
+            b.samples.append(Sample(now, dataclasses.replace(state(), last_rx_seq=1, mode=Mode.DISARMED)))
+            b.samples.append(Sample(now, dataclasses.replace(state(), last_rx_seq=0, mode=Mode.ARMED)))
+            b.sample_conn += [b.conn, b.conn]
+
+    b.link.on_cycle = cycle
+    assert s.cleanup() is False
+
+
+def test_an_unconfirmed_stop_is_retried_before_the_operator_is_asked(monkeypatch):
+    """Codex PR-2a re-review 5 P2-1: the second cleanup comes before the direction prompt, not after it."""
+    import argparse
+
+    order = []
+    b = _bench([state()], commission=True)
+
+    def fake_run(bench, session, duty, seconds, profile=None):
+        session.arm_requested, session.cleanup_confirmed = True, False
+        return {"result": "ok", "metrics": {"duty_e4": 1000, "measured_sign": "pos", "duty_sign_in_build": 1}}
+
+    def fake_cleanup(self):
+        order.append("cleanup")
+        self.cleanup_confirmed = True
+        return True
+
+    def fake_observed(args):
+        order.append("observed")
+        return "pos"
+
+    monkeypatch.setattr(bringup, "run_commission", fake_run)
+    monkeypatch.setattr(bringup.CommissionSession, "cleanup", fake_cleanup)
+    monkeypatch.setattr(bringup, "_observed", fake_observed)
+    a = argparse.Namespace(cmd="commission", axis="L", duty=0.1, seconds=0.6, window=None, observed=None, yes=True,
+                           power_switch_in_hand=True)
+    bringup.execute(a, b)
+    assert order == ["cleanup", "observed"]

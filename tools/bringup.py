@@ -380,15 +380,18 @@ class Session:
             # STATE of a new connection is confirmed too (Codex PR-2a re-reviews 2-4). A lost DISARM is re-sent by
             # the run's final cleanup; the MCU's command expiry stops it meanwhile.
             mine = [w for w in b.writes[o0:] if w.kind == "DISARM"]
-            if not mine:
+            if not mine or not b.samples:
                 return False
+            stopped = (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
             k = max(len(b.samples) - 60, 0)  # the recent tail only: this runs every cycle of the wait
-            for x, smp in zip(b.seen(k), b.samples[k:], strict=True):
-                if smp.state.mode not in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP):
-                    continue
-                if any(w.conn == x.conn and w.seq == x.last_rx_seq and w.done_ns <= x.host_ns for w in mine):
-                    return True
-            return False
+            tail = list(zip(b.seen(k), b.samples[k:], strict=True))
+            newest, newest_smp = tail[-1]
+            # the newest STATE itself must be a stop: a stopped sample buffered before a newer ARMED one does not
+            # confirm (Codex PR-2a re-review 5 P2-2)
+            if newest_smp.state.mode not in stopped:
+                return False
+            return any(w.conn == x.conn == newest.conn and w.seq == x.last_rx_seq and w.done_ns <= x.host_ns
+                       and smp.state.mode in stopped for x, smp in tail for w in mine)
 
         ok = b.run_until(done, CLEANUP_S)
         b.emit({"t": "cleanup", "confirmed": bool(ok)})
@@ -1371,6 +1374,10 @@ def execute(args, bench: Bench) -> dict:
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
+                if session.arm_requested and session.cleanup_confirmed is not True:
+                    # the stop again before the operator is asked anything: a DISARM lost on a disconnect is re-sent
+                    # now, not after the direction prompt (Codex PR-2a re-review 5 P2-1)
+                    session.cleanup()
                 result.update(conditions, board_product=session.preflight_product)
                 result["observed"] = _observed(args)
                 m = result["metrics"]
