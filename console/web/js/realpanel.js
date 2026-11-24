@@ -47,6 +47,8 @@ export function closedWhy(status, hasLease) {
 export function submitClosedWhy(status, hasLease, pendingToggle) {
   const why = closedWhy(status, hasLease);
   if (why) return why;
+  // 6a: a mission collection failed on the vehicle -- no new mission until the executor restarts
+  if (status.restart_required) return "임무 정리에 실패했습니다 · 실행기를 다시 시작하세요";
   if (status.permit?.state === "LATCHED" || status.mode === "STOPPED") return "재무장이 필요합니다";
   if (pendingToggle) return "우회 변경이 적용되기를 기다립니다";
   return null;

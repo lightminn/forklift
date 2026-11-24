@@ -27,7 +27,8 @@ out.why = [P.closedWhy(st("OFF", "idle"), true), P.closedWhy(st("DRIVING", "runn
            P.closedWhy(st("LATCHED", "running"), true), P.closedWhy(st("OFF", "idle"), false), P.closedWhy(null, true)];
 out.submitWhy = [P.submitClosedWhy(st("OFF", "idle"), true, false), P.submitClosedWhy(st("LATCHED", "idle"), true, false),
                  P.submitClosedWhy(st("OFF", "idle", {mode: "STOPPED"}), true, false),
-                 P.submitClosedWhy(st("OFF", "idle"), true, true)];
+                 P.submitClosedWhy(st("OFF", "idle"), true, true),
+                 P.submitClosedWhy(st("OFF", "idle", {restart_required: "RuntimeError:x"}), true, false)];
 const gens = {session_epoch: 3, lease_id: "L1"};
 out.mine = [P.statusIsMine(st("OFF", "idle", {lease: {holder: "me"}}), gens, "me"),
             P.statusIsMine(st("OFF", "idle", {lease: {holder: "other"}}), gens, "me"),
@@ -81,6 +82,7 @@ def test_the_panel_decisions(tmp_path):
     assert out["shown"] == [True, False, False]
     assert out["rev"] == [5, None, None, None, None]  # a newer list (either message) or another session: again
     assert out["submitWhy"][0] is None and all(isinstance(w, str) for w in out["submitWhy"][1:])
+    assert "다시 시작" in out["submitWhy"][4]  # 6a: a failed mission collection asks for a restart
     assert out["mine"] == [True, False, False, False]
     assert out["shownToggle"] == [True, False, True]
     assert out["why"][0] is None and all(isinstance(w, str) for w in out["why"][1:])
@@ -107,4 +109,4 @@ def test_the_panels_bypass_list_is_the_vehicles():
 
     text = (ROOT / "console/web/js/realpanel.js").read_text()
     js = re.search(r"export const BYPASSABLE = \[(.*?)\];", text, re.S).group(1)
-    assert set(re.findall(r'"([a-z_]+)"', js)) == set(BYPASSABLE)
+    assert set(re.findall(r'"([a-z0-9_]+)"', js)) == set(BYPASSABLE)  # d5_pocket has a digit

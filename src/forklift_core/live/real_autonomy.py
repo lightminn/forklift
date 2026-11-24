@@ -305,6 +305,7 @@ class AutoPermit:
         first = self.state != LATCHED
         if first:
             self.reason = reason
+            self._stop_decided(reason)
         self.state = LATCHED
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
@@ -358,8 +359,20 @@ class AutoPermit:
         is not the answer)."""
         return self._disarmed_after_write_any() and self.host.health(now_ns).fresh
 
+    def _stop_decided(self, reason: str) -> None:
+        """Real HIL 6a (impl round 4 P2-1): the instant a stop is decided, before anything is queued or sent -- the
+        loop's ``on_stop`` (its clock) records it."""
+        hook = getattr(self, "on_stop", None)
+        if hook is not None:
+            try:
+                hook(reason)
+            except Exception:  # noqa: BLE001 -- a record never holds the stop
+                pass
+
     def _disarm(self, now_ns: int, reason: str) -> None:
         # the state first: a send this triggers sees no authority and no pending stop (round 5 P1-1, P2)
+        if self.state not in (DISARMING, LATCHED):
+            self._stop_decided(reason)
         self.reason = self.reason or reason
         self.state = DISARMING
         self._stop = None

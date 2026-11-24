@@ -96,6 +96,15 @@ class Context:
     repick_blockers: object = None
 
 
+@dataclass
+class ApplyProgress:
+    """An ``apply`` under way (real HIL 6a design 5): the records made so far and the commands not yet recorded (the one
+    being handled first), readable when the apply raises."""
+
+    records: list
+    pending: list
+
+
 class MissionCommands:
     def __init__(self, targets=None) -> None:
         self.targets = targets  # M-a4: a submit must name the current targets list (TargetsBook.check_submit)
@@ -106,6 +115,7 @@ class MissionCommands:
         self.mission_gen = 0
         self._issued = 0
         self._queue: list = []
+        self.applying: ApplyProgress | None = None  # an apply under way (6a): what an exception left
         self.log: list[dict] = []  # every command with its tick, outcome and reason
         self._detail: str | None = None  # a refusal's detail, set by the handler for its record (blocked: the blockers)
         self.pauses: list[list] = []  # [start, end-or-None] of every pause (the work clock's stops)
@@ -138,6 +148,7 @@ class MissionCommands:
         commands = sorted(self._queue, key=lambda c: PRIORITY[c.kind])  # sorted() is stable: same rank keeps order
         self._queue = []
         records = []
+        self.applying = ApplyProgress(records, list(commands))
         if context.stop_kind != "none" and self.status == "preparing":
             # Persistent console plan D2: a stop ends a preparation (nothing has moved; the operator submits again).
             self.terminate("failed", t, "prepare:stopped" if context.stop_kind == "preempt" else "prepare:paused")
@@ -164,7 +175,33 @@ class MissionCommands:
                 record["request_id"] = command.request_id
             records.append(record)
             self.log.append(record)
+            self.applying.pending.pop(0)  # recorded: no longer pending (6a design 5)
+        self.applying = None
         return records
+
+    def abandon(self, t: float) -> list[dict]:
+        """A tick failed before its records reached the console (real HIL 6a design 5): the records an apply under
+        way made, then a refusal ``tick_failed`` for each command it did not record and each still queued (a submit the
+        link put in before the apply); the queue and the progress go. When an apply raised and the mission it may have
+        changed is still active, it ends ``failed`` -- unless something ended it already."""
+        out: list[dict] = []
+        raised = self.applying is not None
+        left: list = []
+        if raised:
+            out.extend(self.applying.records)
+            left.extend(self.applying.pending)
+        left.extend(self._queue)
+        self._queue, self.applying = [], None
+        for command in left:
+            record = {"t": t, "command": command.kind, "accepted": False, "reason": "tick_failed",
+                      "mission_id": self.mission_id, "status": self.status}
+            if getattr(command, "request_id", None) is not None:
+                record["request_id"] = command.request_id
+            out.append(record)
+            self.log.append(record)
+        if raised and self.status in ACTIVE:
+            self.terminate("failed", t, "tick_failed")
+        return out
 
     def _submit(self, t, command: Submit, context: Context):
         if self.status in ACTIVE or self.status in FINAL:  # FINAL: ended in this apply, its end collected first
