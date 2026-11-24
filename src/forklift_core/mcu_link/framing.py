@@ -107,3 +107,9 @@ class FrameDecoder:
             except FrameError:
                 self.errors += 1
         return bodies
+
+    def discard(self) -> None:
+        """Forget a frame begun on a connection that is gone: its tail must not join the next connection's bytes
+        into one frame (design 2026-11-25-bench-commission-limits 1.2, PR-2a)."""
+        self._buffer.clear()
+        self._overflow = False

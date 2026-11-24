@@ -490,6 +490,7 @@ class McuLinkHost:
         self._revoke("disconnected", events)
         self._drop(lambda o: True, "disconnected")
         self._state, self._state_rx_ns, self._stale_reported = None, None, False
+        self._decoder.discard_partial()  # the next connection's bytes do not complete this one's half frame
         self._state_delay_s = None
         self._state_delay_terms = None
         if self._freshness is not None:

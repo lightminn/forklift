@@ -44,10 +44,11 @@ class Model:
 def model(mcu_model):  # noqa: F811
     made = []
 
-    def make(*extra, commission=True, allow_locked=False):
+    def make(*extra, commission=True, allow_locked=False, initial_seq=None):
         m = Model(mcu_model, *extra, commission=commission)
         made.append(m)
-        return bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=allow_locked, commission=True)
+        return bringup.Bench(PtyLink(m.master), io.StringIO(), allow_locked=allow_locked, commission=True,
+                             initial_seq=initial_seq)
     yield make
     for m in made:
         m.close()
@@ -569,7 +570,7 @@ def test_only_the_named_kind_is_left_out(model, monkeypatch):
     (LR1, {"duty": 0.5, "synthetic": False}, None, "vcc"),
     (LR1, {}, "yes", "did not retype"),                                         # --yes-style answer is not enough
     (LR1, {"duty": 1.01}, None, "at most"),
-    (LR1, {"seconds": 601.0}, None, "at most 600"),
+    (LR1, {"seconds": 2147.0}, None, "at most 2146.98"),
 ])
 def test_a_large_run_is_refused_before_any_arm(model, monkeypatch, product, kw, answer, why):
     b = model()
@@ -693,3 +694,81 @@ def test_the_link_hands_the_host_the_read_time_not_the_cycle_start():
     finally:
         os.close(master)
         os.close(slave)
+
+
+# --- design 2026-11-25-bench-commission-limits PR-2a: the record contract and matching across the seq wrap ---
+
+def test_a_run_across_the_seq_wrap_is_matched_by_the_write_log(model):
+    """The host's seq starts at 0xFFF0 and wraps during the run: the driven span is still found and measured."""
+    b = model(initial_seq=0xFFF0)
+    res = bringup.execute(args(observed="pos"), b)
+    assert res["result"] == "ok", res
+    m = res["metrics"]
+    assert m["valid"] and 400 <= m["driven_ms_min"] <= m["driven_ms_max"] <= 800
+    seqs = [w.seq for w in b.writes]
+    assert max(seqs) >= 0xFFF0 and min(seqs) < 0x0100  # it did wrap
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    written = [r for r in rows if r["t"] == "written"]
+    assert [r["order"] for r in written] == list(range(len(written)))
+    assert all("done_ns" in r and "conn" in r for r in written)
+    com = [r for r in written if r["kind"] == "COMMISSION"]
+    assert com and all(r["axis"] == 0 and r["echo_mcu_time_us"] is not None and r["valid_ms"] for r in com)
+    assert all("conn" in r for r in rows if r["t"] == "state")
+    # the rows alone redo the driven span's first acceptance (the record contract)
+    from forklift_core.plant.write_log import accepted, seen_from_rows, writes_from_rows
+    redone = accepted(seen_from_rows(rows), writes_from_rows(rows),
+                      lambda x: x.kind == "COMMISSION" and x.phase == "on" and x.duty_e4 != 0)
+    assert redone.index is not None and redone.ambiguous_at is None
+    assert {r["phase"] for r in written} >= {"arm", "pre_zero", "on", "post_zero", "cleanup"}
+
+
+def test_an_ambiguous_seq_leaves_the_run_unjudgeable(model, monkeypatch):
+    """Two writes named by one seq and no STATE between them naming another: no figure is taken."""
+    b = model()
+    real = bringup.accepted
+
+    def ambiguous(samples, writes, pred, start=0):
+        m = real(samples, writes, pred, start)
+        from forklift_core.plant.write_log import Match
+        return m if m.index is None else Match(None, None, ambiguous_at=m.index)
+
+    monkeypatch.setattr(bringup, "accepted", ambiguous)
+    res = bringup.execute(args(observed="pos"), b)
+    assert res["result"] == "unjudgeable" and res["metrics"]["reason"] == "seq_ambiguous", res
+    assert res["verdict"] is None and not res["metrics"]["valid"]  # no sign verdict from it (Codex PR-2a P2-3)
+
+
+def test_a_frame_cut_by_a_reconnect_is_not_completed_by_the_new_connection():
+    """Codex PR-2a P3: half a STATE on the old fd, a disconnect, then the other half on the new fd -- neither the host
+    nor the record takes it; the next whole STATE is taken and carries the new connection."""
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, StateFlag, encode
+
+    def st(t_us):
+        return encode(McuState(t_us, 0xB007, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
+                               0.0, 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY), 1)
+
+    b = bringup.Bench(None, io.StringIO(), commission=True)
+    b.host.link_identity(None)
+    whole = st(1_000)
+    b.host.on_bytes(whole[: len(whole) // 2], 1)
+    b.host.disconnected(2)
+    b.host.link_identity(None)
+    b.host.on_bytes(whole[len(whole) // 2:], 3)
+    assert b.samples == [] and b.host.state is None
+    b.host.on_bytes(st(2_000), 4)
+    assert len(b.samples) == 1 and b.sample_conn == [2] and b.host.state.mcu_time_us == 2_000
+
+
+def test_the_bench_numbers_each_opening_and_drops_a_half_frame():
+    """A USB-only reconnect: the record's decoder drops the old connection's half frame and every row after it carries
+    the new connection number."""
+    out = io.StringIO()
+    b = bringup.Bench(None, out, commission=True)
+    assert b.conn == 0
+    b.host.link_identity("p")
+    assert b.conn == 1
+    b.host.disconnected(1)
+    b.host.link_identity("p")
+    assert b.conn == 2
+    rows = [json.loads(x) for x in out.getvalue().splitlines()]
+    assert [r["conn"] for r in rows if r["t"] == "connection"] == [1, 2]
