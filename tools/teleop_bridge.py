@@ -206,6 +206,7 @@ class Bridge:
         self._markers = 0
         self._profile_ended = None  # the last trial whose profile_end row was written
         self.overruns = 0
+        self.looped = False  # a control cycle was entered: only then does main's exit leave a DISARM (design 8.1)
         self._started_ns: int | None = None
         self._last_rx_ns: int | None = None
 
@@ -311,6 +312,7 @@ class Bridge:
     def cycle(self, now_ns: int) -> dict:
         """Design 5: receive only, decide, transmit only. With a clock (the CLI) the decision time is taken after the
         receive (D5 3.3b) and the stage times go in the record."""
+        self.looped = True
         t0 = now_ns
         events = self.dev.receive(self.host, now_ns)
         t_rx = now_ns
@@ -482,7 +484,6 @@ def run(bridge: Bridge, *, duration_s: float | None, clock=time.monotonic_ns, sl
         if now - slot > OVERRUN_TOLERANCE_NS:
             bridge.overruns += 1
         starts.append(now)
-        bridge.looped = True  # a control cycle ran: the exit leaves a DISARM (main's finally)
         bridge.cycle(now)
         slot = now + period  # from this cycle's actual start
         delay = (slot - clock()) / 1e9
