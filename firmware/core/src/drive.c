@@ -3,6 +3,15 @@
 #include <math.h>
 #include <string.h>
 
+/* DIAGNOSTIC IMAGE ONLY (branch diag/spi-raw-sdo, tag diag-spi-ssi-2; never merged): a board may
+   overwrite the four STATE driver_status bytes with raw SPI1 diagnostics. The default does
+   nothing, so the host model and the tests see the normal values. */
+__attribute__((weak)) void fw_diag_driver_status(uint8_t status[4]);
+__attribute__((weak)) void fw_diag_driver_status(uint8_t status[4])
+{
+    (void)status;
+}
+
 #define US_PER_MS 1000u
 #define TWO_PI_F 6.28318530717958647692f
 #define CM_AXIS_NONE 0xFFu
@@ -1049,6 +1058,7 @@ void drive_fill_state(const drive *d, link_state *s)
         s->duty_e4[ch] = sat16(d->out.duty[ch] * 10000.0f);
         s->driver_status[ch] = d->driver_status[ch];
     }
+    fw_diag_driver_status(s->driver_status); /* DIAGNOSTIC IMAGE ONLY (diag-spi-ssi-2) */
     uint8_t flags = 0;
     if (d->limited) {
         flags |= DRIVE_STATE_LIMITED;
