@@ -297,7 +297,12 @@ class ScanFeed:
         meta = {k: h[k] for k in ("frame_id", "scan_time", "time_increment", "range_min", "range_max",
                                   "sys_minus_mono_ns")}
         if _int(h.get("first_beam_mono_ns"), 0):
-            meta["first_beam_mono_ns"] = int(h["first_beam_mono_ns"])  # the SDK first-sample time (7a-2)
+            meta["first_beam_mono_ns"] = int(h["first_beam_mono_ns"])  # given as such
+        elif h.get("stamp_kind") == "sdk_first_sample":
+            # the patched node's topic (PR 7a-2): its stamp is the SDK's first sample, on the monotonic clock through
+            # the same established clock pair as every stamp here
+            meta["first_beam_mono_ns"] = int(stamp_mono)
+        meta["stamp_kind"] = h.get("stamp_kind") if isinstance(h.get("stamp_kind"), str) else None
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
         return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,

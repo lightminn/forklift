@@ -104,6 +104,14 @@
 - **배관**: `ros2_dev.sh scan-a2m12`(sllidar_node → `real_scan_adapter` → Unix 데이터그램)를 쓴다.
 - **취득 시각**: 고정 커밋 조사(2026-11-12 설계 1.1)에 따르면 노드의 `header.stamp` 는 `grabScanDataHq()` 호출 직전의 시각이다. 버퍼에 머문 스캔은 stamp 보다 더 일찍 취득됐을 수 있다. 그래서 stamp ± `scan_time` 은 취득 구간이 아니다(Codex P1-2).
   - 7a 는 그 설계가 남긴 결정을 내린다. 노드를 작게 고친 사본(커밋 고정)으로 SDK 의 `grabScanDataHqWithTimeStamp` 첫 표본 시각을 프레임에 싣는다. 그 값은 호스트 단조 시계 기준이다.
+  - **7a-2 구현**(2026-11-25): 고정 커밋 34300099 에 패치 하나(`deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `Dockerfile.scan` 이 `git apply`)를 댄다.
+    - 노드는 각 스캔을 원래 `scan` 토픽에 그대로 내고, 같은 스캔을 새 토픽 `scan_sdk`(런처가 `/sensors/lidar/scan_raw_sdk` 로 바꿈)에도 낸다. 이때 stamp 는 SDK 첫 표본 시각이다. 계산은 `now() − (단조 지금 − 첫 표본)` 이다. `scan_time` 은 연속한 첫 표본 사이의 실제 회전 주기(0.05–0.2 s 일 때만)이고, `time_increment` 는 그 주기에서 나온다.
+    - 첫 표본 시각이나 주기를 모르는 스캔은 `scan_sdk` 에 내지 않는다.
+    - **토픽이 stamp 의 뜻을 정한다.** 어댑터의 `--source raw|sdk` 가 구독 토픽과 머리의 `stamp_kind`(`call_start`·`sdk_first_sample`)를 함께 정한다. 그래서 둘이 엇갈릴 수 없다. 고치지 않은 노드는 `scan_sdk` 를 내지 않으므로, 잘못된 이미지에서는 '스캔 없음'이 된다. 원래 stamp 를 첫 표본 시각으로 믿는 일은 생기지 않는다.
+    - `ScanFeed` 는 `stamp_kind == sdk_first_sample` 이면 확정된 시계 짝으로 옮긴 stamp 를 `first_beam_mono_ns` 로 둔다.
+    - 런처는 `FORKLIFT_SCAN_SOURCE` 로 고른다. 기본 `raw` 는 텔레옵 다리의 지금 동작 그대로이고, 관측 실행·층은 `sdk` 를 쓴다.
+    - 저장소 쪽 버퍼 지연 주입 시험(`tests/unit/sensors/test_sdk_first_sample.py`): 버퍼에서 0·120·300 ms 기다린 스캔에서 원래 토픽은 '취득 시각 없음'이다. 고친 토픽은 기다린 시간이 나이에 그대로 든다.
+    - 실기 쪽(같은 지연을 실제 노드에서 주입, 오차 상한 `first_beam_err_s` 측정)은 벤치 시간표 1 이다.
   - 버퍼 지연 주입 시험(같은 설계 1.1 의 4)으로 늦은 스캔을 신선하다고 하지 않는지 검증한다. 그 전까지 스캔 시각은 진단값이다.
   - **첫 빔과 끝 빔의 범위를 나눈다**(Codex 2 회차 P2-6). 첫 빔은 `[Flo, Fhi]`, 끝 빔은 `[Elo, Ehi]` 다. 지금 층은 `last_s` 하나를 마감(`last_s + B`)과 '오도메트리 이력이 끝 빔 뒤까지 있는가' 두 곳에 쓴다. 보수적으로 마감은 `Elo + B`, 이력이 덮어야 할 끝은 `Ehi` 로 나눈다. 끝 범위를 증명할 수 없는 스캔은 진단 전용이다.
   - **층에 넣을 수 있는 스캔**(Codex 3 회차 P2-4, 4 회차 P2-1): 두 예산을 모두 지켜야 한다.
@@ -194,7 +202,7 @@
 
 | # | 항목 | 단계 | 손작업 | 기다림 | 비고 |
 |---|---|---|---|---|---|
-| 1 | A2M12 SDK 첫 표본 시각·버퍼 지연 주입, `latency_timer`, 사람이 평면에 찍히는 범위 | 7a-2 | 20 분 | 10 분 | 관측 실행 둘(정상·지연 주입)과 줄자 |
+| 1 | A2M12 SDK 첫 표본 시각·버퍼 지연 주입, `latency_timer`, 사람이 평면에 찍히는 범위 | 7a-2 | 20 분 | 10 분 | 패치 이미지(`scan_image_build.sbatch`)로 관측 실행 둘: 정상, 노드를 0.3 s 멈춰 지연 주입(`kill -STOP`/`-CONT`). 두 토픽 stamp 차이로 `first_beam_err_s` 를 정하고, 줄자 |
 | 2 | D435i 시각 도메인·전달 지연·가속 프로파일 | 7b | 15 분 | 10 분 | |
 | 2′ | D435i 장치 시각 되감기(32 비트) | 7b | 5 분 | **75 분** | 기다림만 김 — 밤새 또는 다른 일과 겹쳐 |
 | 3 | Jetson 25 ms 관문 예산·층 지연·`RUN_STATE_DELAY_S` | 7e 뒤 | 20 분 | 10 분 | 재생 실행을 Jetson 에서 |

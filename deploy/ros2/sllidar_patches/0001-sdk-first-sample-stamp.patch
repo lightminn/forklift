@@ -1,0 +1,88 @@
+forklift patch 0001 (PR 7a-2, docs/design/2026-11-25-real-sources-pr7.md 4): publish each scan also on 'scan_sdk',
+stamped at the SDK's first sample (grabScanDataHqWithTimeStamp, CLOCK_MONOTONIC) with the rotation period as scan_time.
+Against Slamtec/sllidar_ros2 34300099; applied with patch -p1 in deploy/ros2/Dockerfile.scan.
+
+--- a/src/sllidar_node.cpp	2026-11-25 08:38:25.944241166 +0900
++++ b/src/sllidar_node.cpp	2026-11-25 08:38:38.393767433 +0900
+@@ -39,6 +39,7 @@
+ #include "math.h"
+ 
+ #include <signal.h>
++#include <time.h>  // forklift patch 0001: clock_gettime(CLOCK_MONOTONIC)
+ 
+ #ifndef _countof
+ #define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
+@@ -60,10 +61,20 @@
+     {
+ 
+       scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::KeepLast(10)));
++      // forklift patch 0001 (PR 7a-2): the same scans stamped with the SDK's first-sample time, on a topic of their
++      // own -- the topic name says what the stamp means, so a reader of this topic never gets the call-start stamp
++      scan_sdk_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan_sdk", rclcpp::QoS(rclcpp::KeepLast(10)));
+       
+     }
+ 
+-  private:    
++  private:
++    // forklift patch 0001 (PR 7a-2)
++    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_sdk_pub;
++    rclcpp::Time sdk_stamp;
++    double sdk_period = 0.0;
++    bool sdk_stamp_ok = false;
++    sl_u64 last_first_sample_us = 0;
++
+     void init_param()
+     {
+         this->declare_parameter<std::string>("channel_type","serial");
+@@ -206,6 +217,23 @@
+                   float max_distance,
+                   std::string frame_id)
+     {
++        publish_one(pub, nodes, node_count, start, scan_time, inverted, angle_min, angle_max, max_distance, frame_id);
++        // forklift patch 0001: the same scan on scan_sdk, stamped at the SDK's first sample with the rotation period
++        // as scan_time -- only when both are known (a scan without them is not published there at all)
++        if (sdk_stamp_ok && sdk_period > 0.0) {
++            publish_one(scan_sdk_pub, nodes, node_count, sdk_stamp, sdk_period, inverted, angle_min, angle_max,
++                        max_distance, frame_id);
++        }
++    }
++
++    void publish_one(rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr& pub,
++                  sl_lidar_response_measurement_node_hq_t *nodes,
++                  size_t node_count, rclcpp::Time start,
++                  double scan_time, bool inverted,
++                  float angle_min, float angle_max,
++                  float max_distance,
++                  std::string frame_id)
++    {
+         static int scan_count = 0;
+         auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
+ 
+@@ -360,9 +388,26 @@
+             size_t   count = _countof(nodes);
+ 
+             start_scan_time = this->now();
+-            op_result = drv->grabScanDataHq(nodes, count);
++            sl_u64 first_sample_us = 0;  // forklift patch 0001: the SDK's first-sample time, CLOCK_MONOTONIC us
++            op_result = drv->grabScanDataHqWithTimeStamp(nodes, count, first_sample_us);
+             end_scan_time = this->now();
+             scan_duration = (end_scan_time - start_scan_time).seconds();
++            // forklift patch 0001: the first sample on the ROS clock (now - its monotonic age), and the true rotation
++            // period from consecutive first samples (the call's own duration is not the scan's)
++            {
++                struct timespec ts;
++                clock_gettime(CLOCK_MONOTONIC, &ts);
++                const int64_t mono_now_us = (int64_t)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
++                const int64_t age_us = mono_now_us - (int64_t)first_sample_us;
++                sdk_stamp_ok = first_sample_us != 0 && age_us >= 0 && age_us < 5000000LL;
++                sdk_stamp = this->now() - rclcpp::Duration::from_nanoseconds(age_us * 1000LL);
++                sdk_period = 0.0;
++                if (sdk_stamp_ok && last_first_sample_us != 0 && first_sample_us > last_first_sample_us) {
++                    const double p = (double)(first_sample_us - last_first_sample_us) / 1e6;
++                    if (p >= 0.05 && p <= 0.2) sdk_period = p;  // one rotation of 5-20 Hz; otherwise unknown (0)
++                }
++                if (sdk_stamp_ok) last_first_sample_us = first_sample_us;
++            }
+ 
+             if (op_result == SL_RESULT_OK) {
+                 op_result = drv->ascendScanData(nodes, count);

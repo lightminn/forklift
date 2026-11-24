@@ -25,8 +25,14 @@ MAGIC = b"SCN1"
 _LEN = struct.Struct("<I")
 
 
+SOURCES = {  # --source: the topic and what its stamp means (PR 7a-2: the topic decides, so the two never mismatch)
+    "raw": ("/sensors/lidar/scan_raw", "call_start"),  # upstream node: stamped before it fetches a scan
+    "sdk": ("/sensors/lidar/scan_raw_sdk", "sdk_first_sample"),  # forklift patch 0001: the SDK's first sample
+}
+
+
 def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, gen: int | None = None,
-               first_beam_mono_ns: int | None = None) -> bytes:
+               first_beam_mono_ns: int | None = None, stamp_kind: str | None = None) -> bytes:
     """A sensor_msgs/LaserScan (or anything with its fields) as one scan/1 frame. ``gen``: this adapter's start
     nonce (PR 7 design 3.2: the host opens a new generation when it changes); ``first_beam_mono_ns``: the SDK
     first-sample time on the host monotonic clock, when the driver gives it (7a-2)."""
@@ -51,6 +57,8 @@ def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, 
         head["gen"] = int(gen)
     if first_beam_mono_ns is not None:
         head["first_beam_mono_ns"] = int(first_beam_mono_ns)
+    if stamp_kind is not None:
+        head["stamp_kind"] = str(stamp_kind)
     raw = json.dumps(head).encode("utf-8")
     body = ranges.tobytes() + (inten.tobytes() if inten is not None else b"")
     return MAGIC + _LEN.pack(len(raw)) + raw + body
@@ -106,7 +114,9 @@ def main(argv=None) -> int:
     ap.add_argument("--socket", required=True, action="append",
                     help="a host's bound socket (forklift_core.sensors.scan_feed); give it twice for the layer and "
                          "the SLAM bridge (PR 7 design 4: the adapter is where one scan gets its identity)")
-    ap.add_argument("--topic", default="/sensors/lidar/scan_raw")
+    ap.add_argument("--source", choices=sorted(SOURCES), default="raw",
+                    help="raw: the upstream topic (call-start stamps); sdk: the patched node's scan_sdk topic, stamped "
+                         "at the SDK's first sample (PR 7a-2)")
     args, ros_args = ap.parse_known_args(argv)
 
     class Adapter(Node):
@@ -115,14 +125,16 @@ def main(argv=None) -> int:
             self.senders = [DatagramSender(p) for p in args.socket]
             self.gen = secrets.randbits(62) + 1  # this start's nonce: a restart is a new producer generation
             self.scan_id = 0
-            self.create_subscription(LaserScan, args.topic, self.on_scan, qos_profile_sensor_data)
+            self.topic, self.stamp_kind = SOURCES[args.source]
+            self.create_subscription(LaserScan, self.topic, self.on_scan, qos_profile_sensor_data)
             self.create_timer(5.0, self.report)
 
         def on_scan(self, msg) -> None:
             recv, pair = clock_pair()
             self.scan_id += 1
             # one frame, the same bytes to every receiver: each path keeps its own sent/dropped count
-            frame = make_frame(msg, scan_id=self.scan_id, recv_mono_ns=recv, sys_minus_mono_ns=pair, gen=self.gen)
+            frame = make_frame(msg, scan_id=self.scan_id, recv_mono_ns=recv, sys_minus_mono_ns=pair, gen=self.gen,
+                               stamp_kind=self.stamp_kind)
             for s in self.senders:
                 s.send(frame)
 
