@@ -1940,6 +1940,46 @@ static void s25_axis_change_inside_an_interval(void)
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
 }
 
+static void s25_each_axis_reads_its_own_time_limit(void)
+{
+    /* Different test limits per axis catch an index slip (Codex PR-1 P3): R 3 s, L 5 s, M 2 s. */
+    boot_with(mod_commission_open_lr);
+    cfg.commission_time_ms[DRIVE_CH_R] = 3000;
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 1, 0, 150, echo_now()));
+    int t;
+    for (t = 0; t < 4000 && d.mode == DRIVE_MODE_ARMED; t++) {
+        if (t % 50 == 0) {
+            link_msg m = commission_msg(seq++, 1, 1000, 150, echo_now());
+            tick_moving(0.0, 2.0, &m, 1);
+        } else {
+            tick_moving(0.0, 2.0, NULL, 0);
+        }
+    }
+    CHECK(t >= 2990 && t <= 3012); /* R's own 3 s, not L's 5 s */
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+
+    /* M: the build's 2 s, then the re-arm hold. */
+    boot_with(mod_commission_open_lr);
+    seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 2, 0, 150, echo_now()));
+    for (t = 0; t < 3000 && d.mode == DRIVE_MODE_ARMED; t++) {
+        if (t % 50 == 0) {
+            link_msg m = commission_msg(seq++, 2, 300, 150, echo_now());
+            tick_msgs(&m, 1);
+        } else {
+            tick();
+        }
+    }
+    CHECK(t >= 1990 && t <= 2012);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    send(simple(LINK_DISARM, seq++));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING); /* the hold outlives the DISARM */
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -1994,5 +2034,6 @@ int main(void)
     s25_time_limit_is_the_interval_axis();
     s25_disarm_alone_keeps_the_interval_axis();
     s25_axis_change_inside_an_interval();
+    s25_each_axis_reads_its_own_time_limit();
     return FW_TEST_RESULT();
 }

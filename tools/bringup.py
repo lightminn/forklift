@@ -489,6 +489,7 @@ class CommissionSession(Session):
         # design 2026-11-25 1.2: the run's own duty bound (0.15, or the large run's), the encoder bits the early
         # stop leaves out (--bypass), whether the board must carry lim=lr1, and a scenario (locked boards only)
         self.duty_max, self.ignore, self.large, self.scenario = duty_max, ignore, large, scenario
+        self.preflight_product: str | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -502,7 +503,13 @@ class CommissionSession(Session):
             # design 2026-11-25 1.3: on an open board the wheels' limit is the validator's ceiling -- the time-limit
             # scenarios run on a locked board or the model; the stop after a tool DISARM is PR-2's duty_disarm
             raise Refused("scenario: the time-limit scenarios run on a locked commissioning board or the model only")
-        if self.large and (why := bl.board_refusal(self.b.host.usb_product)) is not None:
+        # the product string the run is armed on (Codex PR-1 P2-2): checked here, kept with the run's conditions
+        self.preflight_product = self.b.host.usb_product
+        self.b.emit({"t": "armed_on", "product": self.preflight_product,
+                     "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
+                     "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
+                     "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
+        if self.large and (why := bl.board_refusal(self.preflight_product)) is not None:
             raise Refused(why)
         if self.axis >= 2:
             v = state.steering_rad if self.axis == 2 else state.lift_m
@@ -648,11 +655,13 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
             # design 2026-11-25 1.2: each piece ends at its absolute deadline from the profile's start, so the
             # loop's own overhead does not stretch the run (the diagnostic profile ran 31.45 s for 30 s)
             t0 = time.monotonic_ns()
-            last = len(profile.pieces) - 1
             profile_end = t0 + int(round(len(profile.pieces) * bl.PIECE_S * 1e9))
             for k, piece_e4 in enumerate(profile.pieces):
+                # no hand-over even on the last piece: it lasts its whole PIECE_S and the post-zero follows at once;
+                # the commands stay valid HANDOVER_S past the profile's end so that zero lands before they expire
+                # -- no command outlives profile_end + HANDOVER_S (Codex PR-1 P2-1)
                 session.hold_duty(piece_e4, 0.0, early_stop, end_ns=t0 + int(round((k + 1) * bl.PIECE_S * 1e9)),
-                                  handover=k == last, bound_ns=profile_end)
+                                  handover=False, bound_ns=profile_end + int(HANDOVER_S * 1e9))
                 if session.stop_reason is not None or session.aborted is not None:
                     break
         if session.stop_reason is None and session.aborted is None:
@@ -690,7 +699,9 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         # a profile is not a step: its sent and applied peaks instead of the step's steady-state figures
         applied = [s.state.duty_e4[axis] for s in b.samples[i_arm:end]]
         extra["profile"] = {"pieces": len(profile.pieces), "period_s": profile.period_s, "cycles": profile.cycles,
-                            "sent_max_e4": max((d for _q, d in session.sent), key=abs, default=0),
+                            # from the frames really written (a queued one dropped on expiry is not sent)
+                            "sent_max_e4": max((m.duty_e4 for k, _t, m in b.written.values()
+                                                if k == "COMMISSION" and m is not None), key=abs, default=0),
                             "applied_max_e4": max(applied, key=abs, default=0)}
     m_out = asdict(metrics)
     if profile is not None:
@@ -1149,7 +1160,8 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if args.duty == 0:
             raise Refused("duty must be nonzero")
     else:
-        if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
+        # a profile's effective peak (its pieces), not its nominal HI (Codex PR-1 P3)
+        if not 0 < abs(ask.duty) <= COMMISSION_DUTY_MAX:
             raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
         hold_max = AXIS_HOLD_MAX_S.get(axis, COMMISSION_HOLD_MAX_S)
         if not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
@@ -1242,7 +1254,7 @@ def execute(args, bench: Bench) -> dict:
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
-                result.update(conditions, board_product=bench.host.usb_product)
+                result.update(conditions, board_product=session.preflight_product)
                 result["observed"] = _observed(args)
                 m = result["metrics"]
                 result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],

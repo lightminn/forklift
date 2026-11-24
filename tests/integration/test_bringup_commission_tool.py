@@ -536,6 +536,10 @@ def test_acceptance_an_encoderless_wheel_runs_large_and_long_with_the_bypass(mod
     rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
     (cond,) = [r for r in rows if r["t"] == "run_conditions"]
     assert cond["large"] and cond["bypass"] == ["enc_stuck", "enc_polarity"]
+    # the product checked just before the ARM is the run's (Codex PR-1 P2-2)
+    (armed,) = [r for r in rows if r["t"] == "armed_on"]
+    assert armed["product"] == LR1 and armed["lim"] and armed["large"] and armed["duty_max"] == 1.0
+    assert armed["ignored_bits"] == ["ENCODER_STUCK_L", "ENCODER_POLARITY_L"] and res["board_product"] == LR1
 
 
 def test_without_the_bypass_the_stuck_bit_still_stops_it(model, monkeypatch):
@@ -598,6 +602,13 @@ def test_a_signed_triangle_runs_every_piece_with_its_sign(model, monkeypatch):
     assert p["pieces"] == 20 and p["sent_max_e4"] == -2750 and p["applied_max_e4"] < 0
     sent = [d for d in (m.duty_e4 for k, _t, m in b.written.values() if k == "COMMISSION" and m is not None)]
     assert min(sent) == -2750 and max(sent) == 0
+    # every piece lasts its whole 0.1 s, the last one included (Codex PR-1 P2-1): from the first nonzero write to
+    # the first zero after the last nonzero one is the profile's 2.0 s
+    writes = sorted((t, m.duty_e4) for k, t, m in b.written.values() if k == "COMMISSION" and m is not None)
+    first_on = next(t for t, d in writes if d != 0)
+    last_on = max(t for t, d in writes if d != 0)
+    zero_after = next(t for t, d in writes if d == 0 and t > last_on)
+    assert 1.97 <= (zero_after - first_on) / 1e9 <= 2.1
     assert res["metrics"]["rate_mean_rad_s"] is None  # a profile is not a step
     assert took < 2.0 + 0.3 + 0.5 + 3.0  # pre-zero, profile, post-zero, cleanup: no stretching per piece
 
@@ -626,3 +637,50 @@ def test_the_cli_gives_the_host_each_reads_own_time():
         bringup.main(["commission", "--device", "/dev/null", "--out", "/dev/null", "--axis", "L", "--duty", "0.1",
                       "--seconds", "0.5", "--power-switch-in-hand"])
     assert rl.call_args.kwargs["clock"] is time.monotonic_ns
+
+
+def test_a_small_profile_is_judged_on_its_pieces_not_its_nominal_hi(model, monkeypatch):
+    """Codex PR-1 P3: --duty 0.16 --profile-tri 0 0.16 0.4 1 peaks at 0.12 for 0.4 s -- a default run, no large rules."""
+    b = model()
+    res = bringup.execute(args(duty=0.16, seconds=None, profile_tri=[0.0, 0.16, 0.4, 1.0]), b)
+    assert res["result"] == "ok" and not res["large"] and res["profile"]["sent_max_e4"] == 1200, res
+
+
+def test_the_link_hands_the_host_the_read_time_not_the_cycle_start():
+    """Codex PR-1 P3: with the clock the host is given when the bytes were read (a late read shortens a COMMISSION's
+    validity instead of stretching its MCU deadline past the approved end)."""
+    from real_mcu_link import ReconnectingLink
+
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    os.set_blocking(master, False)
+    try:
+        seen = []
+
+        class Host:
+            def link_identity(self, product):
+                return []
+
+            def on_bytes(self, data, t):
+                seen.append(t)
+                return []
+
+            def tick(self, t):
+                return []
+
+        clock_t = iter([5_000_000, 6_000_000, 7_000_000])
+        def opener(_path, _baud):
+            fd = os.dup(slave)
+            os.set_blocking(fd, False)  # as open_raw opens it
+            return fd
+
+        link = ReconnectingLink("pty", opener=opener, clock=lambda: next(clock_t),
+                                product_reader=lambda fd: None)
+        link.tx_enabled = False
+        os.write(master, bytes([1, 2, 3]))
+        time.sleep(0.05)
+        link.service(Host(), 1_000_000)  # the cycle started at 1 ms; the read returned at the clock's 5 ms
+        assert seen == [5_000_000]
+    finally:
+        os.close(master)
+        os.close(slave)
