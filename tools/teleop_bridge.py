@@ -594,6 +594,7 @@ def main(argv=None) -> int:
     started = False
     out: dict = {}
     code = 0
+    looping = False  # the control loop started: only then does the exit leave a DISARM
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
         scan_permit = None
@@ -662,6 +663,7 @@ def main(argv=None) -> int:
                                            else "scan (7b, provisional: the memo's operating conditions)"
                                            if scan_permit is not None else "no_scan (bring-up 7 adds the scan)")}),
               flush=True)
+        looping = True
         try:
             run(bridge, duration_s=args.duration_s)
         except KeyboardInterrupt:
@@ -676,9 +678,14 @@ def main(argv=None) -> int:
     finally:
         if scan_sock is not None:
             scan_sock.close()
-        if bridge is not None:
+        if bridge is not None and looping:
             bridge.close(time.monotonic_ns())
             out["overruns"] = bridge.overruns
+        elif bridge is not None and getattr(bridge.dev, "link", None) is not None:
+            # opened but the bridge never ran (its console failed to start): nothing of ours to stop, so no DISARM --
+            # it would cut short a stop the previous run left -- and the fd is closed, releasing the lock (impl round 3)
+            bridge.dev.link.close()
+            bridge.dev.link = None
         if started:
             server.stop()
         if record is not None:

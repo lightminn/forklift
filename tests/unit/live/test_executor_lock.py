@@ -234,3 +234,37 @@ def test_a_refused_opening_sets_nothing_on_the_held_port(pty_path, monkeypatch):
         assert link2.link is not None and "tcsetattr" in calls  # configured once it holds the lock
     finally:
         link2.link.close()
+
+
+def test_a_bridge_whose_console_fails_sends_nothing_and_lets_the_device_go(monkeypatch):
+    """Codex executor-lock impl round 3: opened, but the console never started -- no DISARM (it would cut short a stop
+    the previous run left) and the lock is released."""
+    from pathlib import Path
+
+    tools = Path(__file__).resolve().parents[3] / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    import teleop_bridge
+
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    os.set_blocking(master, False)
+    path = os.ttyname(slave)
+    monkeypatch.setattr(teleop_bridge, "writer_marker", lambda device, bench: None)
+
+    def no_console(self):
+        raise RuntimeError("the console port is taken")
+
+    monkeypatch.setattr(teleop_bridge.LiveServer, "start", no_console)
+    try:
+        with pytest.raises(RuntimeError):
+            teleop_bridge.main(["--device", path])
+        try:
+            written = os.read(master, 65536)
+        except BlockingIOError:
+            written = b""
+        assert written == b""
+        probe(path)  # free again
+    finally:
+        os.close(slave)
+        os.close(master)
