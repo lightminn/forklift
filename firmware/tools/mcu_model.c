@@ -28,12 +28,14 @@
    --state-silent-at-ms N --state-silent-ms D: from N for D ms no STATE is written while frames are still read and
    handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken; STATEs queued before it are
    dropped, none goes out in it). --accept-log PATH: each frame the core handled (the core's own frame_handled hook,
-   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us"
+   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us boot-id host-mono-ns"
    (verdict "accepted", "rejected:<reason>", "handled" for CLEAR_FAULTS, "ignored"; expiry -1 when none). A frame
    cut mid-way at a STATE cut is dropped and the poison (0x01 x 96, 0x00) goes before the first STATE after it.
    --short-write-at-ms N (a test injection): from N the next write sends 10 bytes, then EAGAIN until a STATE cut.
    --axis-log PATH:
-   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
+   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R host-mono-ns pushed" (the plant's own
+   values, rad/s; host-mono-ns this host's CLOCK_MONOTONIC at the tick; pushed 1 on the tick a SIGUSR1 push of
+   --axis-push-lift-m / --axis-push-steer-rad was applied in, else 0). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -65,6 +67,7 @@ typedef struct {
     bool fault_fired;
     long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
     FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
+    bool log_failed;                          /* 6a-2b (design 10.8): a log write, flush or close failed -> exit 4 */
     bool was_state_silent;
     bool tx_mid; /* the last flush stopped inside a frame (its delimiter not yet out) */
     bool resync_after_cut; /* a frame was cut mid-way at a STATE cut: the poison goes first when it ends */
@@ -74,11 +77,19 @@ typedef struct {
 
 static board B;
 static volatile sig_atomic_t stop_requested;
+static volatile sig_atomic_t push_requested; /* 6a-2b: SIGUSR1 -- push the plant's axes once (a test injection) */
+static double push_lift_m, push_steer_rad;   /* --axis-push-lift-m / --axis-push-steer-rad */
 
 static void on_term(int sig)
 {
     (void)sig;
     stop_requested = 1;
+}
+
+static void on_push(int sig)
+{
+    (void)sig;
+    push_requested = 1;
 }
 
 static uint64_t mono_ns(void)
@@ -363,9 +374,14 @@ static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int6
     } else {
         snprintf(verdict, sizeof verdict, "rejected:%u", (unsigned)after->reject_reason);
     }
-    fprintf(B.accept_log, "%llu %u %s %s %u %lld\n", (unsigned long long)after->time_us, (unsigned)m->seq,
-            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us);
-    fflush(B.accept_log);
+    /* + the boot id and this host's CLOCK_MONOTONIC ns (the runner's time.monotonic_ns clock) for the send-to-accept
+       matching (6a-2b design 10.6) */
+    if (fprintf(B.accept_log, "%llu %u %s %s %u %lld %lu %llu\n", (unsigned long long)after->time_us, (unsigned)m->seq,
+            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us,
+            (unsigned long)after->boot_id, (unsigned long long)mono_ns()) < 0
+        || fflush(B.accept_log) != 0) {
+        B.log_failed = true;
+    }
 }
 
 int main(int argc, char **argv)
@@ -431,6 +447,11 @@ int main(int argc, char **argv)
     signal(SIGTERM, on_term);
     signal(SIGINT, on_term);
     signal(SIGPIPE, SIG_IGN);
+    push_lift_m = strtod(arg_str(argc, argv, "--axis-push-lift-m") ? arg_str(argc, argv, "--axis-push-lift-m") : "0",
+                         NULL);
+    push_steer_rad = strtod(arg_str(argc, argv, "--axis-push-steer-rad")
+                            ? arg_str(argc, argv, "--axis-push-steer-rad") : "0", NULL);
+    signal(SIGUSR1, on_push);
 
     static drive_config cfg;
     static fw_app app;
@@ -459,11 +480,25 @@ int main(int argc, char **argv)
             next = B.now_ns;
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
+        bool pushed_now = false;
+        if (push_requested) {
+            /* 6a-2b (design 2 (가)): an external push of the plant's axes, as a hand or a load would -- the core sees
+               it only through its sensors, the next STATE */
+            push_requested = 0;
+            B.p.lift_m += push_lift_m;
+            B.p.steer_rad += push_steer_rad;
+            pushed_now = true; /* the axis log marks the tick it was applied in (round 5) */
+        }
         fw_app_tick(&app);
         if (B.axis_log != NULL) {
-            fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
-                    (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
-                    B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]);
+            /* + this host's CLOCK_MONOTONIC ns of the tick (6a-2b round 4: compared with the runner's instants
+               directly, no receipt-delay offset) */
+            if (fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f %llu %d\n", (unsigned long long)app.d.time_us,
+                        (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
+                        B.p.wheel_rad_s[0], B.p.wheel_rad_s[1], (unsigned long long)B.now_ns,
+                        pushed_now ? 1 : 0) < 0) {
+                B.log_failed = true;
+            }
         }
         bool ss = state_silent();
         if (ss && !B.was_state_silent) {
@@ -490,12 +525,18 @@ int main(int argc, char **argv)
             flush_tx();
         }
     }
-    if (B.accept_log != NULL) {
-        fclose(B.accept_log);
+    /* 6a-2b (design 10.8): exit 0 says every log row was written and both logs closed; any failure exits 4
+       (log_write_failed) so that a verdict never reads an incomplete log as complete */
+    if (B.accept_log != NULL && (fflush(B.accept_log) != 0 || fclose(B.accept_log) != 0)) {
+        B.log_failed = true;
     }
-    if (B.axis_log != NULL) {
-        fclose(B.axis_log);
+    if (B.axis_log != NULL && (fflush(B.axis_log) != 0 || fclose(B.axis_log) != 0)) {
+        B.log_failed = true;
     }
     close(B.fd);
+    if (B.log_failed) {
+        fprintf(stderr, "log_write_failed\n");
+        return 4;
+    }
     return 0;
 }

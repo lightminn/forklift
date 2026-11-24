@@ -193,3 +193,19 @@ def test_each_connection_gets_its_own_token_and_a_request_right_after_the_welcom
     assert first[1]["t"] == "ack"  # the first client got the lease with its own token
     assert second[1]["t"] == "reject" and second[1]["reason"] in ("no_lease", "lease_reserved")
     assert s.welcome.get("request_token") is None  # the shared welcome is not changed
+
+
+def test_a_server_bound_after_its_caller_gave_up_closes_itself():
+    """6a-2b (design 10.7): the cancel flag set before the bind -- the late server closes its socket and says so."""
+    import socket
+
+    cancel = threading.Event()
+    cancel.set()
+    server = LiveServer(Channels(), MediaStore(), {"t": "welcome"}, cancel=cancel)
+    with pytest.raises(RuntimeError, match="cancelled"):
+        server.start(timeout_s=5.0)
+    assert server.stop()
+    port = server.port
+    assert port
+    with socket.socket() as s:
+        assert s.connect_ex(("127.0.0.1", port)) != 0  # nobody listens there

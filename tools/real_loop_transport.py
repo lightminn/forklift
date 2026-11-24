@@ -41,6 +41,8 @@ _LOST = {errno.EIO, errno.ENXIO, errno.EBADF, errno.ENODEV}
 RESERVED_MODEL_ARGS = ("--link", "--link-fd", "--duration-ms", "--hil-plant", "--commission-build",
                        "--outputs-locked")
 HIL_FIRST_STATE_S = 2.0
+HIL_STARTUP_MAX_S = 5.0  # 6a-2b (design 10.3): the model's start to the session's start (first STATE, assembly, console)
+HIL_MODEL_EXTRA_S = HIL_STARTUP_MAX_S + 1.0 + 5.0  # + the closing DISARM's confirmation + margin: the model's own end
 
 
 class DeviceLost(Exception):
@@ -71,10 +73,14 @@ class LoopTtyTransport:
         self._boot: int | None = None
         self._boot_bad = False
         self.hil_plant = False
+        self.hil_boot: int | None = None  # the boot the HIL check holds for (6a-2b design 10.1)
+        self.inject = None  # a test hook: inject(fd, data, frame) -> int | None to replace one write (6a-2b 10.2)
+        self.on_event = None  # the run record's sink: a half write, its abandonment, the poison finished (10.8)
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
         self.first_byte_ns: dict = {}  # seq -> clock just before its first os.write (D5's round trip)
         self.last_write_ns: dict = {}  # seq -> clock just before the os.write that sent its last byte
         self.written_ns: dict = {}  # seq -> clock after that os.write returned (the book's and the permit's)
+        self.written_data: dict = {}  # seq -> the frame's bytes once written whole (the record's E: its echo, validity)
         self._host = None
         self.resyncs = 0
         self.read_done_ns: int | None = None
@@ -179,14 +185,20 @@ class LoopTtyTransport:
         else. The receive side and the HIL check are left as they are (one continuous stream)."""
         if self._cur is not None:
             host.frame_abandoned(self._cur, self._cur_at, now_ns)
+            self._event({"t": "tx_abandoned", "seq": int(self._cur.seq) & 0xFFFF, "kind": self._cur.kind,
+                         "bytes": int(self._cur_at), "ns": int(self.clock())})
         self._cur, self._cur_at, self.partial_since_ns = None, 0, None
         self._poison_at = 0
         self.resyncs += 1
 
     # --- writing ---------------------------------------------------------------------------------------------------
-    def _os_write(self, data: bytes, path: str) -> int | None:
+    def _os_write(self, data: bytes, path: str, frame=None) -> int | None:
         """Bytes written, or None on EAGAIN; a lost device raises DeviceLost."""
         try:
+            if self.inject is not None:
+                n = self.inject(self.fd, bytes(data), frame if frame is not None else self._cur)
+                if n is not None:
+                    return n if n > 0 else None
             return self._write(self.fd, data)
         except BlockingIOError:
             return None
@@ -203,27 +215,32 @@ class LoopTtyTransport:
             self._poison_at += n
             if self._poison_at >= len(POISON):
                 self._poison_at = None
+                self._event({"t": "tx_poison_done", "ns": int(self.clock())})
         return True
 
     def _write_first(self, f, judged_ns) -> str:
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
         self.first_byte_ns[seq] = entry
-        n = self._os_write(f.data, "write_eio")
+        n = self._os_write(f.data, "write_eio", f)
         if not n:
             return "eagain"
         self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
         if n < len(f.data):
             self._cur, self._cur_at, self.partial_since_ns = f, n, int(self.clock())
+            self._event({"t": "tx_partial", "seq": seq, "kind": f.kind, "bytes": int(n), "ns": self.partial_since_ns})
             return "partial"
         self.written_ns[seq] = int(self.clock())
+        self.written_data[seq] = bytes(f.data)
+        if len(self.written_data) > 4096:
+            self.written_data.pop(next(iter(self.written_data)))
         return "done"
 
     def _write_rest(self, f, judged_ns) -> bool:
         """One os.write per gate pass (6a-2a impl round 1 P1-2): a short write leaves the rest for the next pass."""
         seq = int(f.seq) & 0xFFFF
         entry = int(self.clock())
-        n = self._os_write(f.data[self._cur_at:], "write_eio")
+        n = self._os_write(f.data[self._cur_at:], "write_eio", f)
         if not n:
             return False
         self.judged[seq], self.last_write_ns[seq] = judged_ns, entry
@@ -231,7 +248,17 @@ class LoopTtyTransport:
         if self._cur_at < len(f.data):
             return False
         self.written_ns[seq] = int(self.clock())
+        self.written_data[seq] = bytes(f.data)
+        if len(self.written_data) > 4096:
+            self.written_data.pop(next(iter(self.written_data)))
         return True
+
+    def _event(self, ev: dict) -> None:
+        if self.on_event is not None:
+            try:
+                self.on_event(ev)
+            except Exception:  # noqa: BLE001 -- the record never holds a write
+                pass
 
     # --- the HIL check and the loss ----------------------------------------------------------------------------------
     def _check_hil(self, s: McuState) -> None:
@@ -242,6 +269,15 @@ class LoopTtyTransport:
         if not hil_bits_ok(s):
             self._boot_bad = True
         self.hil_plant = not self._boot_bad
+        self.hil_boot = self._boot if self.hil_plant else None
+
+    def peer_exited(self) -> None:
+        """The runner saw the model end (6a-2b design 10.3): the loss fixed now with the half frame / poison state as it
+        is at this moment, the first path ``model_poll``; does not raise."""
+        try:
+            self._lose("model_poll")
+        except DeviceLost:
+            pass
 
     def _lose(self, path: str) -> None:
         if self.lost is None:
@@ -334,8 +370,11 @@ class HilPty:
                 except BlockingIOError:
                     break
             args = [str(model), "--link-fd", str(master), "--hil-plant", "1",
-                    "--duration-ms", str(int(round(float(duration_s) * 1000)) + 5000), *map(str, extra_args)]
-            self.proc = subprocess.Popen(args, pass_fds=(master,))
+                    "--duration-ms", str(int(round((float(duration_s) + HIL_MODEL_EXTRA_S) * 1000))),
+                    *map(str, extra_args)]
+            # its own session (process group): a terminal Ctrl-C reaches the runner, which confirms the closing DISARM
+            # before it ends the model (6a-2b design 10.3)
+            self.proc = subprocess.Popen(args, pass_fds=(master,), start_new_session=True)
         except BaseException:
             os.close(master)
             os.close(slave)
@@ -363,5 +402,5 @@ class HilPty:
         return self.proc.returncode
 
 
-__all__ = ["DeviceLost", "HIL_FIRST_STATE_S", "HilPty", "HilRefused", "LoopTtyTransport", "POISON",
+__all__ = ["DeviceLost", "HIL_FIRST_STATE_S", "HIL_MODEL_EXTRA_S", "HIL_STARTUP_MAX_S", "HilPty", "HilRefused", "LoopTtyTransport", "POISON",
            "RESERVED_MODEL_ARGS", "hil_bits_ok"]

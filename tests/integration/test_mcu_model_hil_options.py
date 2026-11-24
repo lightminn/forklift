@@ -110,6 +110,7 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
     m = Model(mcu_model, "--accept-log", log)
     try:
         m.states(0.2)
+        t_sent = time.monotonic_ns()
         m.send(Disarm(), 77)
         os.write(m.master, bytes([1]) * 96 + b"\x00")  # the poison: no frame
         m.send(ClearFaults(0x1234), 77)  # the same seq again, ignored while DISARMED
@@ -128,6 +129,7 @@ def test_accept_log_names_each_handled_frame_with_its_prior_mode(mcu_model, tmp_
     for r in rows:
         int(r[0]), int(r[4])  # MCU time, prior mode
         assert int(r[5]) == -1  # no active command while DISARMED (round 2 P3)
+        assert len(r) == 8 and int(r[6]) != 0 and int(r[7]) >= t_sent  # boot id, this host's monotonic ns (10.6)
 
 
 def test_a_frame_no_branch_handles_is_logged_ignored(mcu_model, tmp_path):
@@ -234,5 +236,50 @@ def test_axis_log_has_one_row_per_mcu_tick(mcu_model, tmp_path):
     t = [int(r[0]) for r in rows]
     assert t == sorted(t)
     for r in rows:
-        assert len(r) == 7  # MCU us, wall gap ns, mode, lift m, steering rad, wheel L, R rad/s
-        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6])
+        assert len(r) == 9  # MCU us, wall gap ns, mode, lift, steering, wheel L, R, host monotonic ns, pushed
+        int(r[1]), int(r[2]), float(r[3]), float(r[4]), float(r[5]), float(r[6]), int(r[7]), int(r[8])
+
+
+@pytest.mark.parametrize("option", ["--accept-log", "--axis-log"])
+def test_a_log_that_cannot_be_written_ends_the_model_with_exit_4(mcu_model, option):
+    """6a-2b (design 10.8): exit 0 only when every log row was written and the log closed; /dev/full refuses them."""
+    m = Model(mcu_model, option, "/dev/full")
+    try:
+        m.states(0.1)
+        m.send(Disarm(), 5)  # a handled frame: one accept-log row
+        m.states(0.1)
+        m.proc.send_signal(signal.SIGTERM)
+        assert m.proc.wait(timeout=5) == 4
+    finally:
+        m.close()
+
+
+def test_a_written_log_ends_the_model_with_exit_0(mcu_model, tmp_path):
+    m = Model(mcu_model, "--accept-log", tmp_path / "a.log", "--axis-log", tmp_path / "x.log")
+    try:
+        m.states(0.1)
+        m.send(Disarm(), 5)
+        m.states(0.1)
+        m.proc.send_signal(signal.SIGTERM)
+        assert m.proc.wait(timeout=5) == 0
+    finally:
+        m.close()
+
+
+def test_sigusr1_pushes_the_plants_axes_once(mcu_model, tmp_path):
+    """6a-2b (design 2 (가)): SIGUSR1 moves the plant's lift and steering by --axis-push-lift-m / -steer-rad once,
+    as an outside push; nothing else changes."""
+    log = tmp_path / "axis.log"
+    m = Model(mcu_model, "--axis-log", log, "--axis-push-lift-m", "0.006", "--axis-push-steer-rad", "0.025")
+    try:
+        m.states(0.2)
+        m.proc.send_signal(signal.SIGUSR1)
+        m.states(0.2)
+    finally:
+        m.close()
+    rows = [line.split() for line in log.read_text().splitlines()]
+    lift = [float(r[3]) for r in rows]
+    steer = [float(r[4]) for r in rows]
+    jumps = [i for i in range(1, len(lift)) if lift[i] - lift[i - 1] > 0.005]
+    assert len(jumps) == 1 and abs(steer[jumps[0]] - steer[jumps[0] - 1] - 0.025) < 0.002
+    assert [i for i, r in enumerate(rows) if r[8] == "1"] == jumps  # the marked tick is the jump's

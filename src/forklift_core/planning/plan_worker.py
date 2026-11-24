@@ -248,6 +248,7 @@ class PlanWorker:
         self._restart = threading.Event()
         self._stopping = threading.Event()
         self._dead: str | None = None  # why there is no worker any more: every job from then on fails at once
+        self._replacing = False  # a died process's replacement not ready yet (not alive meanwhile; 6a-2b round 2)
         self._next = 0
         self.proc: subprocess.Popen | None = None
         self._send = self._recv = None
@@ -256,6 +257,15 @@ class PlanWorker:
         self._thread.start()
 
     # --- the control thread's side: none of these waits on the worker ---------------------------------------------
+    @property
+    def alive(self) -> bool:
+        """The worker can still answer: no permanent failure recorded, its I/O thread running, not closed (the real
+        run's readiness evidence, 6a-2b impl round 1 P1-2)."""
+        with self._lock:
+            dead = self._dead
+        return (dead is None and not self._replacing and self._thread.is_alive()
+                and not self._stopping.is_set())
+
     def submit(self, name: str, payload: dict) -> int:
         """Queue a job; its inputs are pickled now, so later changes to them do not reach the job."""
         with self._lock:
@@ -349,6 +359,8 @@ class PlanWorker:
                 self._blobs.pop(culprit, None)
                 self._done[culprit] = (False, died)
         self._stop_process()
+        if died is not None:
+            self._replacing = True  # a death: not alive until the replacement says ready (a discard's restart is)
         try:
             self._start_process()
         except WorkerFailure as exc:
@@ -358,6 +370,7 @@ class PlanWorker:
                     self._done.setdefault(job_id, (False, self._dead))
                 self._blobs.clear()
             raise
+        self._replacing = False
         self.restarts += 1
         for job_id in again:
             self._write(job_id)
@@ -396,6 +409,7 @@ class PlanWorker:
                         raise EOFError("exited")
                 except (OSError, EOFError):
                     if not self._stopping.is_set():
+                        self._replacing = True  # not alive from the break on, before its reaping (round 3 P2-5)
                         code = self.proc.wait(timeout=10) if self.proc is not None else None
                         self._restart_process(died=f"plan worker exited with {code}")
         except Exception as exc:  # noqa: BLE001 -- whatever ended this thread, no job may wait for it any more

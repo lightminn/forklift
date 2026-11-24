@@ -62,11 +62,12 @@ START_TOL_RAD = math.radians(5.0)
 DECLARED_SPEED_MPS = 0.06  # the slam-bypass / declared-start cap (provisional, S10 speed approval)
 
 
-def real_host(cfg, *, initial_seq: int | None = None, **kw) -> McuLinkHost:
-    """The executor's host: the real client, its first seq random unless given (4c design: a new executor's frames are
-    never mistaken for an earlier one's by seq; the teleop bridge does the same)."""
+def real_host(cfg, *, initial_seq: int | None = None, client: Client = Client.REAL, **kw) -> McuLinkHost:
+    """The executor's host: the real client unless the run says HIL (6a-2b design 10.1: the HIL board's ARM is refused
+    to Client.REAL), its first seq random unless given (4c design: a new executor's frames are never mistaken for an
+    earlier one's by seq; the teleop bridge does the same)."""
     seq = secrets.randbelow(0x10000) if initial_seq is None else int(initial_seq)
-    return McuLinkHost(cfg, client=Client.REAL, initial_seq=seq, **kw)
+    return McuLinkHost(cfg, client=Client(client), initial_seq=seq, **kw)
 
 
 def motion_allowed(transport) -> bool:
@@ -89,6 +90,7 @@ class TickRecord:
     permit: str | None = None
     elapsed_s: float | None = None  # the tick's own time before its first write
     notes: list = field(default_factory=list)  # 6a: what the tick skipped (wait_frame_skipped:<why>)
+    stop_decided_ns: int | None = None  # 6a-2b (design 10.7): when the tick body first decided a stop or a wait
 
 
 class RealSession:
@@ -180,8 +182,18 @@ class RealLoop:
                  depth_source=None, watches=None, clock=None, operator_start=None, real_layer=None,
                  delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
                  kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None, start_rear=None,
-                 rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS) -> None:
+                 rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS,
+                 scan_feed=None, events=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
+        # 6a-2b (design 10): the run's scan feed after the tick's STATE (None: the rig feeds before cycle), a source's
+        # fatal error (set by the run's source guard or here; the run ends on it), the closing state (DISARM only,
+        # no source called) with the DISARMs written in it, an event sink for the run's record (never blocks)
+        self.scan_feed, self.events = scan_feed, events
+        self.fatal_source: str | None = None
+        self.closing = False
+        self.closing_started_ns: int | None = None
+        self.closing_disarms: list = []  # (boot, seq, written_ns) of each DISARM written whole while closing
+        self.closing_confirmed_ns: int | None = None
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
         self.start_ns, self.slam_source, self.evidence = int(start_ns), slam_source, evidence
@@ -241,6 +253,7 @@ class RealLoop:
             raise ValueError("imu_watch and imu_source go together")
         self.watch = safety  # the real safety watch (currents and wheels, design 3)
         self.imu_watch, self.imu_source, self.imu_policy = imu_watch, imu_source, imu_policy
+        self.imu_backlog = False  # the last IMU read reached its per-call cap (6a-2b design 10.7)
         self._imu_wait_until: dict = {}  # mission id -> the baseline's wait deadline (host ns), set once
         self._watch_rx: int | None = None
         # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
@@ -286,7 +299,9 @@ class RealLoop:
         # (clock ns, reason) of each stop the permit decides -- a latch or a DISARM, the loop's or its own -- taken at
         # the transition, before anything is queued or sent (6a impl rounds 1-4: the axis watch's last gap ends here)
         self.disarm_decisions: deque = deque(maxlen=256)
-        permit.on_stop = lambda reason: self.disarm_decisions.append((int(self.clock()), str(reason)))
+        permit.on_stop = self._on_stop_decided
+        self._cause = None  # 6a-2b (impl round 5): this tick's latest latching evidence (instant, reason)
+        self._tick_ns = None
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
         # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
@@ -325,7 +340,12 @@ class RealLoop:
 
     # --- 5c-1: the real console requests, the bypass, real_status (design 5) --------------------------------------
     def _ready(self, now_ns: int, stage: str):
-        return ra.auto_ready_refusal(now_ns, stage, self.evidence, bypass=self._tick_bypass)
+        why = ra.auto_ready_refusal(now_ns, stage, self.evidence, bypass=self._tick_bypass)
+        if why is not None and ra.latches(why):
+            # 6a-2b (impl round 4): a latching reason with the instant its evidence was judged at
+            self._emit({"t": "cause", "ns": int(now_ns), "why": why, "where": "ready"})
+            self._cause = (int(now_ns), why)
+        return why
 
     def _bypassed(self, check: str) -> bool:
         return check in self._tick_bypass
@@ -866,6 +886,14 @@ class RealLoop:
             if len(self._sample_delay) > 4 * SAMPLES_KEPT:
                 for key in list(self._sample_delay)[: len(self._sample_delay) - 2 * SAMPLES_KEPT]:
                     self._sample_delay.pop(key, None)
+        if self.events is not None:
+            # 6a-2b (design 10.3): what the gate judged this STATE by -- its receipt, its delay bound and the rule
+            sd_ = self._sample_delay.get((int(state.boot_id), int(state.mcu_time_us)))
+            self._emit({"t": "state", "boot": int(state.boot_id), "mcu_us": int(state.mcu_time_us), "rx_ns": int(rx_ns),
+                        "last_rx_seq": int(state.last_rx_seq), "mode": int(state.mode),
+                        "faults": int(state.fault_flags), "reject": int(state.reject_reason),
+                        "delay_bound_s": None if sd_ is None else sd_[1], "rule": self.host.health(int(rx_ns)).gap_rule,
+                        "max_age_s": float(self.host.cfg.state_max_age_s)})
         step = self.odometry.update(int(state.mcu_time_us), int(state.boot_id), int(state.wheel_count_left),
                                     int(state.wheel_count_right), float(state.steering_rad),
                                     encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
@@ -881,6 +909,13 @@ class RealLoop:
         else:
             self._odom_good = True
         self._axis_judge(state)  # 6a: the displacement first, on every STATE, before the book takes it
+        if self.closing and self.closing_confirmed_ns is None:
+            # 6a-2b (design 10.5): judged on each STATE -- a later one of the same read must not hide it
+            fresh = int(self.clock()) - int(rx_ns) <= int(self.host.cfg.state_max_age_s * 1e9)
+            seq_ = int(state.last_rx_seq) & 0xFFFF
+            if fresh and state.mode == Mode.DISARMED and any(
+                    b == state.boot_id and q == seq_ and int(rx_ns) > int(w) for b, q, w in self.closing_disarms):
+                self.closing_confirmed_ns = int(self.clock())
         self.book.on_state(state, int(rx_ns))
         self._axis_end(state, int(rx_ns))
         self.permit.on_state(state, int(rx_ns))
@@ -1086,7 +1121,11 @@ class RealLoop:
         """A position-holding frame written: the watch starts at its sample's lift and steering (design 2); a holding
         frame written while the end waits cancels the end."""
         if self._axis is None:
-            self._axis = {"h0": float(frame.lift_m), "q0": float(frame.steering[0]), "end_pending": False}
+            self._axis = {"h0": float(frame.lift_m), "q0": float(frame.steering[0]), "end_pending": False,
+                          "seq": int(frame.seq) & 0xFFFF}
+            # 6a-2b (design 2 (가)): the span the HIL judge reads, from the frame's own sample
+            self._emit({"t": "axis_watch", "event": "start", "ns": int(self.clock()), "seq": int(frame.seq) & 0xFFFF,
+                        "h0": self._axis["h0"], "q0": self._axis["q0"]})
         else:
             self._axis["end_pending"] = False
 
@@ -1107,6 +1146,8 @@ class RealLoop:
             now_c - (int(smp.host_ns) - int(round(float(b) * 1e9))) <= int(HOLD_SAMPLE_MAX_AGE_S * 1e9) \
             and math.isfinite(state.lift_m) and math.isfinite(state.steering_rad)  # impl round 4 P2-2
         self.axis_watch_times.append((now_c, bool(valid)))
+        self._emit({"t": "axis_judge", "ns": now_c, "valid": bool(valid), "lift": float(state.lift_m),
+                    "steer": float(state.steering_rad), "mcu_us": int(state.mcu_time_us), "span": a.get("seq")})
         if math.isfinite(state.lift_m) and float(state.lift_m) - a["h0"] > WAIT_LIFT_RISE_M:
             self._axis_trip = "lift"
         elif math.isfinite(state.steering_rad) and abs(float(state.steering_rad) - a["q0"]) > WAIT_STEER_MOVE_RAD:
@@ -1121,6 +1162,7 @@ class RealLoop:
             return
         if state.mode == Mode.DISARMED:
             self._axis = None
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "disarmed", "span": a.get("seq")})
             return
         c = self.book.confirmed
         later_hold = any(f.kind in HOLDING_KINDS and f.written_ns is not None for f in self.book.frames)
@@ -1129,6 +1171,8 @@ class RealLoop:
             a["end_pending"] = False
         elif a["end_pending"]:
             self._axis = None
+            self._emit({"t": "axis_watch", "event": "end", "ns": int(rx_ns), "why": "drive_confirmed",
+                        "span": a.get("seq")})
         else:
             a["end_pending"] = True
 
@@ -1165,6 +1209,8 @@ class RealLoop:
 
     # --- one tick -------------------------------------------------------------------------------------------------
     def cycle(self, now_ns: int) -> TickRecord:
+        if self.closing:
+            return self._closing_tick(now_ns)
         core, permit, host = self.core, self.permit, self.host
         t = self._t(now_ns)
         interval = None if self.last_start_ns is None else (now_ns - self.last_start_ns) / 1e9
@@ -1177,6 +1223,7 @@ class RealLoop:
         self._wait_frames_tick = 0  # 6a: at most one wait frame per tick (design 2, round 10 P2-1)
         self.session.last_records, self.session.began = None, False  # 6a (design 5)
         self._tick_end_tried = False
+        self._cause, self._tick_ns = None, int(now_ns)
         try:
             self._head(now_ns, t, interval, rec)
             if rec.branch != "emergency":
@@ -1197,6 +1244,9 @@ class RealLoop:
                 rec.reason = f"{rec.reason};transmit:{type(exc2).__name__}"
         # the record: the frames written whole in this tick -- queued now or finished from an earlier tick (round 8 P3)
         rec.seqs = list(self._written_now)
+        partial_ = getattr(self.transport, "partial_frame", None)
+        if partial_ is not None:
+            rec.notes.append(f"partial:{int(partial_.seq) & 0xFFFF}:{getattr(self.transport, 'partial_since_ns', None)}")
         try:
             self._collect(now_ns, t, rec)
         except Exception as exc:  # noqa: BLE001 -- 6a impl round 1 P1-2: a failing collection is ① too, DISARM written
@@ -1246,6 +1296,15 @@ class RealLoop:
             self.stand_since_ns = None
         self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): a reboot's or a break's generation
+        if self.scan_feed is not None and self.fatal_source is None:
+            try:
+                self.scan_feed(now_ns)  # 6a-2b (design 10.1): after the STATE, the reboot and the odometry
+            except Exception as exc:  # noqa: BLE001 -- a source's error ends the run (the run reads fatal_source)
+                self.fatal_source = self.fatal_source or f"scan:{type(exc).__name__}:{exc}"
+        if self.fatal_source is not None:
+            rec.branch, rec.reason = "emergency", f"source_fatal:{self.fatal_source}"
+            self._emergency(now_ns, rec.reason)
+            return
         stuck = self._cut_stuck_write(now_ns)
         if stuck:
             # the host's and the permit's ticks still run (its DISARM asked again on the new link, its deadline kept)
@@ -1274,7 +1333,7 @@ class RealLoop:
         self.book.publish(core.state, core.slam, now_ns, (0.0 if q is None else q,))
         # 6a (design 2): a STATE read after the tick's start counts as received at it for this evaluation
         samples_ = [smp if smp.host_ns <= now_ns else Sample(int(now_ns), smp.state) for smp in self.samples]
-        reading = encoder_speed(samples_, now_ns, self.params, self.steering_ok, self.delay_s)
+        reading = encoder_speed(samples_, now_ns, self.params, self.steering_ok, self._speed_delay_s())
         self.speed = reading.speed
         still = self._still(now_ns)
         if not still and self.operator_start is not None:
@@ -1299,6 +1358,10 @@ class RealLoop:
         s = host.state
         if self.imu_watch is not None and not self._bypassed("imu"):
             self._imu_read_ns = self._pull_imu()  # up to the clock read now, not the tick's start (round 3 P2-3)
+            if self.fatal_source is not None:
+                rec.branch, rec.reason = "emergency", f"source_fatal:{self.fatal_source}"  # 6a-2b: SourceFatal
+                self._emergency(now_ns, rec.reason)
+                return
             if permit.state in (ra.OFF, ra.LATCHED):
                 self.imu_watch.disarm()
             elif permit.state in (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING):
@@ -1335,6 +1398,13 @@ class RealLoop:
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
                                         "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
+        if self.fatal_source is not None:
+            # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed); the
+            # tick's requests are answered once (design 10.6)
+            rec.branch, rec.reason = "emergency", f"source_fatal:{self.fatal_source}"
+            self._emergency(now_ns, rec.reason)
+            self._settle_exception(now_ns, t, rec.reason)
+            return
         a = self.link.a
         if self._console_disarm:
             self._console_disarm = False
@@ -1358,10 +1428,13 @@ class RealLoop:
         in acquisition order (design 4: later ones stay in the source for the next read); a failing source gives
         none this time (the watch's stale and gap judgements take it). Returns the instant used."""
         upto = int(self.clock()) if upto_ns is None else int(upto_ns)
+        self.imu_backlog = False
         try:
             batch = list(self.imu_source.samples(upto, self.IMU_BATCH))[: self.IMU_BATCH]
         except Exception:  # noqa: BLE001
             return upto
+        # 6a-2b (design 10.7-10.8): a read that reached the per-call cap may have left samples up to ``upto`` behind
+        self.imu_backlog = len(batch) >= self.IMU_BATCH
         good = []
         for item in batch:
             try:
@@ -1452,9 +1525,24 @@ class RealLoop:
         self.permit.bind(transmit=lambda: self._transmit(now_ns, escalate=False), arbiter_stop=arbiter_stop,
                          collect=lambda r: self._end_now(now_ns, r))
 
+    def _on_stop_decided(self, reason) -> None:
+        """The permit decided a stop (a latch or a DISARM): kept with the evidence instant and reason that led to it in
+        this tick -- the readiness's, the send's or the gate's own instant; else this tick's start (6a-2b round 5)."""
+        now_c = int(self.clock())
+        self.disarm_decisions.append((now_c, str(reason)))
+        cause = self._cause
+        if cause is not None and str(cause[1]) not in str(reason):
+            cause = None  # an evidence read this tick that is not what this stop names (round 6 P2-1)
+        self._emit({"t": "stop_decision", "ns": now_c, "reason": str(reason), "tick_ns": self._tick_ns,
+                    "cause_ns": self._tick_ns if cause is None else cause[0],
+                    "cause_why": None if cause is None else str(cause[1])})
+
     def _emergency(self, now_ns: int, reason: str) -> None:
+        self._emit({"t": "cause", "ns": int(now_ns), "why": str(reason), "where": "emergency"})
+        if self._cause is None:
+            self._cause = (int(now_ns), str(reason))
         self.waiting = None
-        self._stop_decided = True  # 5d (7.1 6)
+        self._mark_stop()  # 5d (7.1 6)
         if self.permit.state == ra.LATCHED:
             return  # latched already: its DISARM is retried every 100 ms, not renewed each tick (round 2 P2-2)
         # a mission the permit does not collect yet (before its ARM) ends with any latch, whatever the cause (5a,
@@ -1813,6 +1901,87 @@ class RealLoop:
                                     (float(command_.drive.speed_mps), float(command_.drive.curvature_inv_m)), None)
         self._candidate = (command_, command_.steering_command, out, sink)
 
+    def _speed_delay_s(self):
+        """The newest STATE's measurement-to-receipt delay the safety speed adds to its age (6a-2b impl round 1 P1-1):
+        its round-trip bound when the loop keeps them (None, unknown: no safety speed), else the fixed ``delay_s``."""
+        if self.delay_bound is None:
+            return self.delay_s
+        if not self.samples:
+            return None
+        st = self.samples[-1].state
+        return (self._sample_delay.get((int(st.boot_id), int(st.mcu_time_us))) or (None, None))[1]
+
+    def _mark_stop(self) -> None:
+        """This tick decided a stop or a wait (5d 7.1 6): no older moving frame is finished after it; the first such
+        decision's clock is the tick record's (6a-2b design 10.7)."""
+        self._stop_decided = True
+        rec = getattr(self, "_rec", None)
+        if rec is not None and rec.stop_decided_ns is None:
+            rec.stop_decided_ns = int(self.clock())
+
+    # --- 6a-2b (design 10.3): the session's start and the closing ---------------------------------------------------
+    def start_session(self, now_ns: int) -> None:
+        """The permit's callbacks bound at this instant and its session check started (the two DISARM exchanges)."""
+        self._bind_permit(now_ns)
+        self.permit.start_session(now_ns)
+
+    def begin_closing(self, now_ns: int, reason: str = "run_end") -> None:
+        """The run ends: no new command (the arbiter STOPPED, a rearm refused by the run), the gate passes the DISARM
+        only, no source is called; the permit's latch asks a DISARM (a latched permit retries it)."""
+        if self.closing:
+            return
+        self.closing, self.closing_started_ns = True, int(self.clock())
+        self._cause, self._tick_ns = None, int(now_ns)  # the closing's own decision (round 6 P2-1)
+        cancel = getattr(self.permit, "cancel_session", None)
+        if cancel is not None:
+            cancel()  # design 10.6: no second session DISARM while closing
+        a = self.link.a
+        try:
+            if a.mode != "STOPPED":
+                a.stop(now_ns / 1e9, reason)
+        except Exception:  # noqa: BLE001 -- the DISARM below is what matters
+            pass
+        self._bind_permit(now_ns)
+        try:
+            self.permit.latch(now_ns, reason)
+        except Exception:  # noqa: BLE001 -- its DISARM is queued before anything that can fail
+            pass
+        try:
+            self._transmit(now_ns, escalate=False)
+        except Exception:  # noqa: BLE001 -- retried by the closing ticks
+            pass
+
+    def _closing_tick(self, now_ns: int) -> TickRecord:
+        """A closing tick: the STATEs, the permit (its DISARM retries) and the DISARM out -- nothing else."""
+        t = self._t(now_ns)
+        rec = TickRecord(t, None if self.last_start_ns is None else (now_ns - self.last_start_ns) / 1e9, "closing")
+        self.last_start_ns = int(now_ns)
+        self._rec = rec
+        self._written_now = []
+        try:
+            self.transport.receive(self.host, now_ns, limit=MAX_STATES_PER_TICK)
+        except Exception as exc:  # noqa: BLE001 -- a lost device is the transport's own record
+            rec.reason = f"receive:{type(exc).__name__}"
+        try:
+            self.host.tick(now_ns)
+            self._bind_permit(now_ns)
+            self.permit.tick(now_ns)
+            self._transmit(now_ns, escalate=False)
+        except Exception as exc:  # noqa: BLE001
+            rec.reason = f"{rec.reason or ''};closing:{type(exc).__name__}"
+        rec.seqs = list(self._written_now)
+        rec.permit = self.permit.state
+        self.records.append(rec)
+        self.record(rec)
+        return rec
+
+    def _emit(self, event: dict) -> None:
+        if self.events is not None:
+            try:
+                self.events(event)
+            except Exception:  # noqa: BLE001 -- the record never holds the tick (design 10.3)
+                pass
+
     def _settle_exception(self, now_ns: int, t: float, reason: str) -> None:
         """6a (design 5): after the emergency (DISARM first, and its own mission end), the tick's console requests are
         answered now rather than ``invalid`` next tick: this tick's apply records, or -- none made -- what an apply under
@@ -1869,7 +2038,7 @@ class RealLoop:
             rec.branch, rec.reason = "emergency", late
             self._emergency(now_ns, late)
         elif rec.branch == "s10" and permit.state in (ra.READY, ra.DRIVING):
-            self._stop_decided = True  # 6a: S10's stop is this tick's stop too
+            self._mark_stop()  # 6a: S10's stop is this tick's stop too
             sample, why = self._hold_sample()  # 6a (design 2): the same fresh-sample rule as a wait's frame
             if self._measured_lift() is None or self._measured_steering() is None or why == "no_measurement":
                 self._emergency(now_ns, "s10_measurement")
@@ -1936,6 +2105,8 @@ class RealLoop:
         if elapsed > LATE_TICK_S:
             return "tick_late"
         if not self.host.health(send_ns).fresh:
+            self._emit({"t": "cause", "ns": int(send_ns), "why": "measurement_stale", "where": "send"})
+            self._cause = (int(send_ns), "measurement_stale")
             return "measurement_stale"
         why = self._ready(send_ns, "drive")
         if why is not None and ra.latches(why):
@@ -1957,7 +2128,7 @@ class RealLoop:
         return getattr(self, "_wait_reason", None)
 
     def _wait_frame(self, now_ns: int, rec: TickRecord | None) -> None:
-        self._stop_decided = True  # 5d (7.1 6)
+        self._mark_stop()  # 5d (7.1 6)
         port = self.port
         if self._lift_before is not None:
             # the output holds: this tick's lift ramp step is undone, whichever stage chose the wait (round 7 P2-2)
@@ -2018,7 +2189,7 @@ class RealLoop:
             drive = self.kin.command(0.0, float(drive.curvature_inv_m))  # the turn waits for the other way to settle
             speed = 0.0
         if speed == 0.0:
-            self._stop_decided = True  # 5d (7.1 6): a zero DRIVE is this tick's stop
+            self._mark_stop()  # 5d (7.1 6): a zero DRIVE is this tick's stop
         lift = float(self.core.ms.lift_command)
         cmd = port.make_command(now_ns, now_ns + int(DRIVE_LIFE_S * 1e9), drive, steer, lift, "target")
         r = port.command(cmd, now_ns)
@@ -2048,6 +2219,10 @@ class RealLoop:
             self._binding.pop(old, None)
             self._steer_of.pop(old, None)
             self._hold_acq.pop(old, None)
+        self._emit({"t": "frame_queued", "seq": seq, "purpose": kind, "speed_mps": float(speed), "lift_m": float(lift),
+                    "decided_ns": int(now_ns), "expires_ns": int(now_ns + int(DRIVE_LIFE_S * 1e9)),
+                    "boot": None if s is None else s.boot_id, "arm_gen": None if s is None else s.arm_gen,
+                    "echo_mcu_time_us": None if s is None else int(s.mcu_time_us)})
         self.book.queued(Frame(int(seq) & 0xFFFF, None if s is None else s.boot_id, None if s is None else s.arm_gen,
                                now_ns + int(DRIVE_LIFE_S * 1e9), float(speed), float(kappa), tuple(steering),
                                float(lift), bool(movable), kind, queued_ns=int(now_ns)))
@@ -2083,13 +2258,16 @@ class RealLoop:
             alarm.append(stuck)
             permit.link_reset(now_ns)
             escalate_now(stuck)  # the DISARM queued (and the queue dropped) before anything else is sent
-        motion = motion_allowed(self.transport)  # 6a (design 1): after a resync that could change it
+        motion = motion_allowed(self.transport) and not self.closing  # 6a: after a resync; closing: DISARM only
 
         def judge(frame) -> tuple:
             """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop. The readiness evidence is read
             first (its ages at ``ns0``); everything timed is then read on the clock after it, and a read that took
             more than EVIDENCE_READ_MAX_S refuses (round 5 P1-3)."""
             self._judged_ns = None
+            self._gate_at = (None, None)
+            if self.fatal_source is not None:
+                return f"source_fatal:{self.fatal_source}", "alarm"  # 6a-2b (design 10.5): at every send
             if permit.state not in authority:
                 return f"permit_{permit.state.lower()}", "drop"  # a latch or a DISARM under way: no motion (P1-1)
             if a.mode == "STOPPED":
@@ -2098,16 +2276,23 @@ class RealLoop:
             # scan judged young at the read's start may be over its limit at the write, round 6 P1-1)
             ns0 = int(self.clock())
             ns = ns0 + int(EVIDENCE_READ_MAX_S * 1e9)
+            self._gate_at = (ns0, ns)  # 6a-2b (design 10.7): the gate event's instants
             why = self._ready(ns, "drive")
             imu_trip = None
             if self.imu_watch is not None and not self._bypassed("imu"):
                 # the IMU read and judged inside the same budget, at the write's latest instant (design 4)
                 self._pull_imu()  # the samples taken so far; their age judged at the write's latest instant
+                if self.fatal_source is not None:
+                    return f"source_fatal:{self.fatal_source}", "alarm"  # 6a-2b: SourceFatal at the gate's read
                 imu_trip = self.imu_watch.judge(ns)
             if int(self.clock()) > ns:
                 return "evidence_slow", "alarm"
             if imu_trip is not None:
                 return f"send:watch:{imu_trip}", "alarm"
+            if self.imu_backlog and self.imu_watch is not None and not self._bypassed("imu") and why is None:
+                # 6a-2b (design 10.8): only after SourceFatal, the watch's trips and every alarm before it -- the read
+                # stopped at its cap, so the newest samples were not judged: this frame waits
+                why = "wait:imu_backlog"
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
             if not self.host.health(ns).fresh:
@@ -2219,6 +2404,7 @@ class RealLoop:
                 write()
                 return True
             continuing = frame is getattr(self.transport, "partial_frame", None)
+            self._gate_at, self._judged_ns = (None, None), None
             if not motion or alarm:
                 verdict = ("device_block" if not motion else "after_alarm", "drop")
                 ok = False
@@ -2236,11 +2422,20 @@ class RealLoop:
                     # a STOP, DISARM or (re)connect since the batch (round 4 P2-3), also one taken during the check --
                     # whatever else the check found (round 7 P2-1)
                     verdict = ("emergency_event", "alarm")
+            ns0_, ns_ = getattr(self, "_gate_at", (None, None))
+            if not ok and verdict is not None and verdict[1] == "alarm":
+                self._cause = (int(ns_ if ns_ is not None else self.clock()), str(verdict[0]))  # round 5
+            self._emit({"t": "gate", "seq": int(frame.seq) & 0xFFFF, "kind": frame.kind, "continuing": continuing,
+                        "ns0": ns0_, "ns": ns_, "judged_ns": self._judged_ns,
+                        "verdict": "pass" if ok else f"{verdict[0]}:{verdict[1]}"})  # 6a-2b (design 10.7)
             if not ok:
                 refused.append((frame.kind, frame.seq))
                 why, cls = verdict
                 if continuing:
                     alarm.append("link_stuck")  # a half frame not finished: the transport abandons it (link reset)
+                    rec_c = getattr(self, "_rec", None)
+                    if rec_c is not None:
+                        rec_c.notes.append(f"continuation_refused:{why}")  # 6a-2b (design 10.3)
                 elif cls == "keep":
                     refused.pop()  # 6a: an ARM or the host's zero stays queued (0 bytes out), judged again
                     gate.keep = True  # the transport leaves the queue as it is (no drop of the zero)
@@ -2253,13 +2448,22 @@ class RealLoop:
                     waits.append(why)
             return ok
 
-        if self.real_layer is not None and permit.anchor_disarm(now_ns):
+        if self.real_layer is not None and not self.closing and permit.anchor_disarm(now_ns):
             pass  # an anchor DISARM queued (design 1.1): written with this send
         self._cancel_arm = None
         for kind, seq, written_ns in self.transport.transmit(self.host, now_ns, gate):
             if kind == "DRIVE":
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
+            if self.closing and kind == "DISARM" and self.host.state is not None:
+                self.closing_disarms.append((self.host.state.boot_id, int(seq) & 0xFFFF, int(written_ns)))
+            self._emit({"t": "frame_written", "kind": kind, "seq": int(seq) & 0xFFFF, "written_ns": int(written_ns),
+                        # a DISARM: the permit's ask it answers (round 6 P2-2)
+                        "asked_ns": getattr(permit, "_disarm_asked_ns", None) if kind == "DISARM" else None,
+                        "judged_ns": getattr(self.transport, "judged", {}).get(int(seq) & 0xFFFF),
+                        "first_byte_ns": getattr(self.transport, "first_byte_ns", {}).get(int(seq) & 0xFFFF),
+                        "last_write_ns": getattr(self.transport, "last_write_ns", {}).get(int(seq) & 0xFFFF),
+                        "data": (getattr(self.transport, "written_data", {}).get(int(seq) & 0xFFFF) or b"").hex()})
             if self.delay_bound is not None:
                 # the round trip's write is the first byte's (6a-2a impl round 1 P1-3): a write that returned late does
                 # not shrink the bound of a STATE measured after the bytes went out

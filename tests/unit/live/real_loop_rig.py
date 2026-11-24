@@ -460,8 +460,8 @@ class Rig:
         # the session check's random skip fixed at its least (1024) so the mission's frames cross the u16 wrap
         self.permit = ra.AutoPermit(self.host, self.port, outstanding=self.port.outstanding,
                                     stop_since=self._stop_since, rng=_FixedSkip())
-        self.arbiter.rearm_refusal = self.permit.rearm_refusal
-        self.arbiter.on_rearmed = self.permit.rearmed
+        # the arbiter's clock is seconds, the permit's ns (6a-2b design 10.1)
+        self.arbiter.rearm_refusal, self.arbiter.on_rearmed = self.permit.arbiter_callbacks()
         params = EncoderSpeedParams(radius_m=VEH.wheel_radius_m, counts_per_rev=VEH.counts_per_wheel_rev,
                                     track_m=VEH.track_m, kappa_max=CAP, axle_accel_mps2=0.5, max_age_s=0.1,
                                     dt_min_s=0.02, dt_max_s=0.2)

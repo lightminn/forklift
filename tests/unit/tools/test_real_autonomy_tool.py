@@ -115,8 +115,25 @@ def test_run_refuses_any_device_before_opening_anything(tmp_path, monkeypatch, c
     assert tool.main(["--run", "--device", "/dev/ttyACM0"]) == 2
     assert not any("ttyACM0" in p for p in opened)
     record = json.loads(capsys.readouterr().out)
-    assert record["refused"] == ["device_refused:4c"] and record["run"] is False
+    assert record["refused"] == ["device_refused:s10_preconditions"] and record["run"] is False
     assert tool.main(["--dry-assemble", "--device", "/dev/ttyACM0"]) == 2  # a device never rides along a dry assembly
     capsys.readouterr()
     assert tool.main(["--run"]) == 2
-    assert json.loads(capsys.readouterr().out)["refused"] == ["run_not_wired:4c"]
+    assert json.loads(capsys.readouterr().out)["refused"] == ["run_needs_hil"]
+
+
+def test_a_hil_run_refuses_a_device_and_reserved_model_arguments_before_opening_anything(capsys):
+    """6a-2b (design 10.3 ①): --device with --hil, a missing model or duration, a reserved model argument and a bad
+    injection are refused before any pty or model exists."""
+    assert tool.main(["--run", "--hil", "--device", "/dev/ttyACM0", "--hil-model", "/bin/false",
+                      "--duration-s", "5"]) == 2
+    assert "device_with_hil" in json.loads(capsys.readouterr().out)["refused"]
+    assert tool.main(["--run", "--hil", "--hil-model", "/bin/false", "--duration-s", "0"]) == 2
+    assert "duration_s" in json.loads(capsys.readouterr().out)["refused"]
+    assert tool.main(["--run", "--hil", "--hil-model", "/bin/false", "--duration-s", "5",
+                      "--hil-model-arg=--link-fd"]) == 2
+    assert "hil_model_arg_reserved:--link-fd" in json.loads(capsys.readouterr().out)["refused"]
+    assert tool.main(["--run", "--hil", "--hil-model", "/bin/false", "--duration-s", "5", "--hil-inject", "x:1"]) == 2
+    assert "hil_inject_invalid:x:1" in json.loads(capsys.readouterr().out)["refused"]
+    assert tool.main(["--run", "--hil", "--duration-s", "5"]) == 2
+    assert "hil_model_missing" in json.loads(capsys.readouterr().out)["refused"]

@@ -199,9 +199,12 @@ class LiveServer:
     ends the loop and joins the thread (agy A4, T6)."""
 
     def __init__(self, channels, store: MediaStore, welcome: dict, *, host: str = "127.0.0.1", port: int = 0,
-                 web_root: Path | None = None):
+                 web_root: Path | None = None, cancel: threading.Event | None = None):
         self.channels, self.store, self.welcome = channels, store, welcome
         self.host, self.port, self.web_root = host, port, web_root
+        # set by a caller that gave up waiting for ``start`` (6a-2b design 10.7): a server bound after that closes its
+        # socket at once instead of listening unowned
+        self.cancel = cancel
         self.loop: asyncio.AbstractEventLoop | None = None
         self.handle: LiveHandle | None = None
         self._thread: threading.Thread | None = None
@@ -234,6 +237,14 @@ class LiveServer:
         h.server = await serve(h.handler, self.host, self.port, process_request=h.process_request,
                                compression=None, close_timeout=1.0, max_size=64 * 1024)
         self.port = h.server.sockets[0].getsockname()[1]
+        if self.cancel is not None and self.cancel.is_set():
+            h.server.close()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(h.server.wait_closed(), 2.0)
+            h.close()
+            self._error = RuntimeError("cancelled before it was owned")
+            self._ready.set()
+            return
         h.tasks.append(asyncio.create_task(h._pump()))
         for kind, hz in CAPS_HZ.items():
             h.tasks.append(asyncio.create_task(wire.every(hz * 2, lambda k=kind: h._media_kind(k), "live media")))
@@ -276,9 +287,11 @@ class LiveServer:
     def stop(self, timeout_s: float = 5.0) -> bool:
         """True once the server thread has ended; False when it outlived ``timeout_s`` (the caller must not report
         the server ended)."""
+        stopping = getattr(self, "_stopping", None)  # absent when the server never listened (a cancelled start)
         if self.loop is not None and self._thread is not None and self._thread.is_alive():
-            self.loop.call_soon_threadsafe(self._stopping.set)
-            self._thread.join(timeout_s)
+            if stopping is not None:
+                self.loop.call_soon_threadsafe(stopping.set)
+            self._thread.join(timeout_s)  # a cancelled start's thread ends by itself
         return self._thread is None or not self._thread.is_alive()
 
 

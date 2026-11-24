@@ -1,0 +1,23 @@
+# HIL 값, 실측 아님 -- HIL values, not measurements (docs/design/2026-11-20-real-hil-6a.md 10.4-10.6).
+# The 6a-2b HIL run's synthetic scene in the layout of config/real/s10a.yaml: the run plans and the synthetic LiDAR
+# casts on these values only. Nothing here is a field measurement or a surveyed map; never copy it into s10a.yaml.
+map_id: hil-s10a-1        # the synthetic SLAM's map id (no bundle: the occupancy is built from hil.obstacles)
+start_rear: [0.0, 0.0, 0.0]        # fixed at 0: the odometry origin is the synthetic SLAM's identity correction (10.5)
+bounds: [-1.0, 6.0, -2.5, 2.5]     # as s10a.yaml
+pallet:
+  id: P-S10
+  kind: s10_pallet
+  depth_m: 0.6            # an assumed test pallet (HIL value)
+  width_m: 0.4
+destination:
+  id: D-S10
+  pose: [4.0, -1.5, -1.5708]       # for planning only: S10 stops at the lift
+wait_pose: [0.0, 0.0, 0.0]
+max_speed_mps: 0.15
+check_pallet_pose: [2.6, 0.0, 0.0]  # the registered pallet (the LiDAR casts it too); the docking hold (approach to
+                                    # the lift) covers about 1.34 m of rear-axle travel, under HOLD_MAX_M 1.5 m
+hil:
+  # fixed obstacles (x, y, half length, half width[, yaw]) in the map frame: in the planning occupancy and cast by the
+  # synthetic LiDAR; the target pallet is not here (it is the planner's pickup obstacle; 10.6)
+  obstacles:
+    - [2.6, 1.4, 0.3, 0.2]

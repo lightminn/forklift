@@ -264,8 +264,13 @@ class AutoPermit:
             self._asked_disarm(now_ns)
             self._note(now_ns, "disarm_relink")
 
-    def _asked_disarm(self, now_ns: int) -> None:
-        """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept."""
+    def _asked_disarm(self, now_ns: int, reason: str | None = None) -> None:
+        """A DISARM was just queued: its write and seq are awaited afresh; the episode's first ask is kept. With a
+        stop's ``reason``: the seq of the DISARM that stop queued or reused is noted (6a-2b round 7: the record ties a
+        stop decision to its own DISARM)."""
+        if reason is not None:
+            seq_ = getattr(self.host, "queued_disarm_seq", lambda: None)()
+            self._note(now_ns, "disarm_asked", reason, seq=seq_)
         self._disarm_asked_ns, self._disarm_written_ns, self._disarm_seq = int(now_ns), None, None
         if self._disarm_first_ns is None:
             self._disarm_first_ns = int(now_ns)
@@ -310,7 +315,7 @@ class AutoPermit:
         self._stop = None
         self._note(now_ns, "latched", reason, first=first)
         errors = [self._try(self.port.new_control_generation), self._try(self.host.request_disarm, now_ns)]
-        self._asked_disarm(now_ns)
+        self._asked_disarm(now_ns, reason)
         errors.append(self._try(self._transmit))
         if first:
             errors.append(self._try(self._arbiter_stop, reason))
@@ -378,7 +383,7 @@ class AutoPermit:
         self._stop = None
         self.port.new_control_generation()
         self.host.request_disarm(now_ns)
-        self._asked_disarm(now_ns)
+        self._asked_disarm(now_ns, reason)
         self._note(now_ns, "disarm", reason)
         self._try(self._transmit)
 
@@ -410,6 +415,17 @@ class AutoPermit:
         if stop[1] != s.boot_id or stop[0] < settled_ns:
             return "stop_before_settled"
         return None
+
+    def cancel_session(self) -> None:
+        """The run is closing (6a-2b design 10.6): a session check under way sends no second DISARM."""
+        self._session = None
+
+    def arbiter_callbacks(self):
+        """The arbiter's ``rearm_refusal`` and ``on_rearmed`` for this permit: the arbiter passes monotonic **seconds**,
+        the permit works in ns (6a-2b design 10.1: wired straight, a stale STATE's age came out hugely negative and
+        passed the freshness check)."""
+        return (lambda now_s: self.rearm_refusal(int(round(float(now_s) * 1e9))),
+                lambda now_s, control_gen: self.rearmed(int(round(float(now_s) * 1e9)), control_gen))
 
     def rearmed(self, now_ns: int, control_gen: int) -> None:
         """The arbiter's ``on_rearmed``: the latch goes with the arbiter's STOPPED -> PAUSED, nowhere else; the old
@@ -566,7 +582,10 @@ class SlamView:
     mode: str  # tracking | holding | warming_up | lost ...
     pose_reply_ns: int | None  # the newest reply that computed a new pose (a "skipped" reply does not count)
     hold_travel_m: float = 0.0
-    hold_mission_gen: int | None = None  # the mission generation whose transition began the hold
+    # the owner of the hold, compared with Evidence.mission_gen: the real run passes mission ids on both sides (the
+    # mission the hold began in, 6a-2b round 1-2; a pause moves the control generation within a mission), the rigs
+    # the generation -- any hashable value, the same kind on both sides
+    hold_mission_gen: object = None
 
 
 @dataclass(frozen=True)

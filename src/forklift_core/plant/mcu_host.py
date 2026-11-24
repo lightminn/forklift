@@ -546,6 +546,14 @@ class McuLinkHost:
         if not any(o.kind == "DISARM" for o in self._outbox):
             self._enqueue("DISARM", Disarm(), now_ns)
 
+    def queued_disarm_seq(self) -> int | None:
+        """The seq of the DISARM waiting in the queue -- right after ``request_disarm`` the one it queued or reused
+        (a DISARM being written is not reused: the request queues another; 6a-2b round 8), or None."""
+        for o in self._outbox:
+            if o.kind == "DISARM":
+                return int(o.seq) & 0xFFFF
+        return None
+
     def request_clear_faults(self, now_ns: int) -> Blocked | None:
         s = self._state
         if s is None or not self._fresh(now_ns):

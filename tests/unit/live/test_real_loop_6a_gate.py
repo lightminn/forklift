@@ -311,3 +311,102 @@ def test_a_loss_inside_a_send_is_the_emergency_of_that_tick():
     r.transport.transmit = lose
     rec = r.tick()
     assert rec.branch == "emergency" and rec.reason.startswith("device_lost")
+
+
+# --- 6a-2b (design 10.8): a continuation refused on evidence that expired after the tick body -----------------------
+def _half_moving_drive(r):
+    """A moving normal DRIVE written partly (its first bytes), the rig driving with the real SLAM evidence."""
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and r.loop.book.confirmed is not None
+              and r.loop.book.confirmed.speed_mps != 0.0, limit=6000)
+    r.transport.stall = True
+    r.tick()
+    partial = r.transport.partial_frame
+    assert partial is not None
+    r.transport.stall = False
+    return partial
+
+
+@pytest.mark.parametrize("expire", [True, False])
+def test_a_continuation_is_refused_when_the_slam_evidence_expired_after_the_body(expire):
+    """The next tick's body judges with fresh SLAM evidence; just before the half frame is continued the evidence's
+    newest processed reply is put past SLAM_MAX_AGE_S (as if the stream had stopped): the gate refuses it on the
+    input's expiry -- link_stuck, the half frame abandoned, never finished. The control: the same continuation with
+    the evidence left fresh is written whole."""
+    r = Rig(frames=True, reloc=True, real_layer=True)
+    partial = _half_moving_drive(r)
+    seq = int(partial.seq) & 0xFFFF
+
+    def age():
+        r.loop._fresh_ns = r.now - int((ra.SLAM_MAX_AGE_S + 0.05) * 1e9)  # noqa: SLF001
+
+    r.transport.before_continue = age if expire else None
+    k = len(r.transport.sent)
+    rec = r.tick()
+    r.transport.before_continue = None
+    written = [s for _, kind, s, _ in r.transport.sent[k:] if kind == "DRIVE"]
+    if expire:
+        assert seq not in [int(s) & 0xFFFF for s in written] and r.transport.resyncs == 1
+        notes = [n for n in rec.notes if n.startswith("continuation_refused:")]
+        assert notes and "slam:stale" in notes[0], rec.notes
+        # the body had decided no stop (the refusal is the evidence's, not stop_decided): only the gate saw the expiry,
+        # and the emergency that follows abandons the half frame
+        assert "stop_decided" not in notes[0] and "link_stuck" in (rec.reason or "")
+    else:
+        assert seq in [int(s) & 0xFFFF for s in written] and r.transport.resyncs == 0
+
+
+# --- 6a-2b (design 10.7-10.8): the IMU read's per-call cap at the gate ----------------------------------------------
+def _driving_with_imu():
+    r = Rig(frames=True, imu=True)
+    r.start()
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and r.loop.book.confirmed is not None
+              and r.loop.book.confirmed.speed_mps != 0.0, limit=6000)
+    return r
+
+
+def test_a_gate_read_that_reaches_the_cap_holds_the_drive():
+    """Samples pile up (128 behind): the tick head takes 64, the gate's read takes the next 64 -- the cap, so the
+    newest samples up to the write were not judged: the normal DRIVE waits (imu_backlog), nothing latches."""
+    r = _driving_with_imu()
+    nxt = r.now + 20 * MS
+    r.imu.next_ns = nxt - 127 * 5 * MS  # 128 samples up to the next tick's instant
+    k = len(r.transport.sent)
+    rec = r.tick()
+    assert r.permit.state == ra.DRIVING, (rec, r.permit.reason)
+    moving = [m for _, kind, _, m in r.transport.sent[k:]
+              if kind == "DRIVE" and (m.left_wheel_rad_s != 0.0 or m.right_wheel_rad_s != 0.0)]
+    assert not moving and rec.branch == "wait" and rec.reason == "wait:imu_backlog", rec
+
+
+def test_a_capped_read_with_a_watch_trip_latches_first():
+    """A capped gate read whose samples also show a gap over the watch's limit (gap_max_s 0.05): the trip comes before
+    the backlog -- latch and DISARM in that tick, not a wait. The source is quiet for two ticks (40 ms, under the stale
+    limit), then the gate's read brings 64 samples, the first 55 ms after the last one judged."""
+    r = _driving_with_imu()
+    last = r.imu.next_ns - 5 * MS  # the newest sample the watch has
+    calls = []
+
+    def samples(upto, limit):
+        calls.append(upto)
+        if len(calls) < 6:
+            return []  # two quiet ticks (head and gate reads, and the wait frame's) and this tick's head
+        first = last + 55 * MS
+        step = max(1, (int(upto) - first) // (limit - 1))
+        return [(first + i * step, (0.0, 0.0, 9.81)) for i in range(limit)]
+
+    r.imu.samples = samples
+    r.tick(2)
+    assert r.permit.state == ra.DRIVING, r.permit.reason
+    k = len(r.transport.sent)
+    rec = None
+    for _ in range(3):
+        rec = r.tick()
+        if r.permit.state != ra.DRIVING:
+            break
+    assert r.permit.state in (ra.LATCHED, ra.DISARMING), (rec, r.permit.reason, calls)
+    assert "gap" in str(r.permit.reason) or "gap" in str(rec.reason), (rec, r.permit.reason)
+    assert "imu_backlog" not in str(r.permit.reason) and "imu_backlog" not in str(rec.reason)
+    assert any(kind == "DISARM" for _, kind, _, _ in r.transport.sent[k:])
