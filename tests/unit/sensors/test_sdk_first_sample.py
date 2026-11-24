@@ -103,7 +103,8 @@ def test_a_nominal_rotation_needs_a_budget_that_covers_it():
 ])
 def test_the_adapter_takes_only_what_looks_like_a_scan_sdk_message(stamp, span, recv, ok):
     """Codex 7a-2 P2-3: a wrong topic or a remap gives no scan, never a call-start stamp taken for a first sample."""
-    assert (_adapter().sdk_fields(stamp, span, recv, OFF) is not None) is ok
+    ra = _adapter()
+    assert (ra.sdk_fields(stamp, span, recv, OFF, frame_id="laser" + ra.SDK_FORMAT) is not None) is ok
 
 
 def test_a_laserscan_without_the_format_name_is_never_a_scan_sdk_message():
@@ -119,7 +120,7 @@ def test_a_laserscan_without_the_format_name_is_never_a_scan_sdk_message():
 def test_the_last_sample_comes_back_exactly_through_float32():
     """Codex 7a-2 round 2 P3: 98 000 us survives the float32 scan_time."""
     ra = _adapter()
-    f = ra.sdk_fields(10**9, float(np.float32(0.098)), 10**9 + 200 * MS, OFF)
+    f = ra.sdk_fields(10**9, float(np.float32(0.098)), 10**9 + 200 * MS, OFF, frame_id="laser" + ra.SDK_FORMAT)
     assert f["last_beam_mono_ns"] - f["first_beam_mono_ns"] == 98_000_000
 
 

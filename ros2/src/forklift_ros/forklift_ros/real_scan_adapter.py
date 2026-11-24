@@ -36,8 +36,8 @@ SDK_MAX_SPAN_S = 0.5
 SDK_FORMAT = "@sdk_mono_v1"  # forklift patch 0001 appends this to the frame_id of every scan_sdk message
 
 
-def sdk_fields(stamp_ns: int, scan_time: float, recv_mono_ns: int, sys_minus_mono_ns: int,
-               frame_id: str = SDK_FORMAT) -> dict | None:
+def sdk_fields(stamp_ns: int, scan_time: float, recv_mono_ns: int, sys_minus_mono_ns: int, *,
+               frame_id: str) -> dict | None:
     """The frame fields of a scan_sdk message (forklift patch 0001): its stamp is the SDK's first sample on
     CLOCK_MONOTONIC as it is, its scan_time the same buffer's last - first sample. None when the message does not
     look like one -- an epoch stamp (the upstream topic remapped here), a time in the future or too old, a span that
