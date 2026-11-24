@@ -1,0 +1,330 @@
+"""docs/design/2026-11-19-real-safety-wiring.md 5 (stage 5c-1) on the fake truck: the real console requests through
+the arbiter (real_requests, request tokens) -- pallet registration, the operator's start check, the operator's answer
+to the lifted check, the session's check bypass (an unlevel IMU bypassed to run S10-A), real_status."""
+
+import math
+
+import pytest
+
+from forklift_core.live import real_autonomy as ra
+
+from real_loop_rig import EPOCH, PALLET, Rig
+
+
+def run_until(r, cond, limit=3000):
+    for _ in range(limit):
+        rec = r.tick()
+        if cond(rec):
+            return rec
+    raise AssertionError(f"not reached: {r.loop.records[-1]}")
+
+
+def replies(r):
+    out, r.console_out[:] = list(r.console_out), []
+    return [m for m in out if m.get("t") in ("ack", "reject")], [m for m in out if m.get("t") == "real_status"]
+
+
+def rig(**kw):
+    r = Rig(frames=True, real_requests=True, **kw)
+    r.start()
+    r.console_out.clear()
+    return r
+
+
+def ask(r, request_kind, /, **fields):
+    kind = request_kind
+    rid = r.say(kind, **fields)
+    r.tick()
+    got, statuses = replies(r)
+    mine = [m for m in got if m.get("request_id") == rid]
+    assert mine, (kind, got)
+    return mine[0], statuses
+
+
+def start_and_submit(r):
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    assert reply["t"] == "ack", reply
+    rev = reply["targets_revision"]
+    r.tick(30)  # stands
+    reply, _ = ask(r, "operator_start")
+    assert reply["t"] == "ack", reply
+    r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=rev)
+
+
+def test_s10_a_through_the_real_console_requests():
+    r = rig()
+    start_and_submit(r)
+    run_until(r, lambda rec: r.core.operator_open() is not None)
+    op = r.core.operator_open()
+    r.tick()
+    _, statuses = replies(r)
+    r.tick(5)
+    _, more = replies(r)
+    assert any(s["operator_request"] == op for s in statuses + more)
+    reply, _ = ask(r, "operator_answer", kind=op["kind"], serial=op["serial"], verdict="confirm")
+    assert reply["t"] == "ack", reply
+    again, _ = ask(r, "operator_answer", kind=op["kind"], serial=op["serial"], verdict="reject")
+    assert again["reason"] in ("already_answered", "no_operator_request", "stale_operator_request")
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED and r.loop.session.results)
+    assert [e["reason"] for e in r.loop.session.results] == ["s10_lifted"]
+
+
+def test_refusals_by_reason():
+    r = rig()
+    reply, _ = ask(r, "pallet_register", pallet_id="NOPE", pose=[1.0, 0.0, 0.0])
+    assert reply["reason"] == "unknown_pallet"
+    reply, _ = ask(r, "operator_answer", kind="lifted", serial=1, verdict="confirm")
+    assert reply["reason"] == "no_operator_request"
+    reply, _ = ask(r, "check_bypass", check="stop", on=True)
+    assert reply["reason"] == "not_bypassable"
+    reply, _ = ask(r, "check_bypass", check="nonsense", on=True)
+    assert reply["reason"] == "unknown_check"
+    reply, _ = ask(r, "recovery", recovery_id=1, action="done")
+    assert reply["reason"] == "no_open_recovery"
+    msg = {"t": "check_bypass", "request_id": "nt1", "session_epoch": EPOCH, "control_gen": r.arbiter.control_gen,
+           "lease_id": r.lease, "check": "imu", "on": True}
+    r.channels.message("c1", "op", msg)  # no request token
+    r.tick()
+    got, _ = replies(r)
+    assert [m["reason"] for m in got if m.get("request_id") == "nt1"] == ["token_required"]
+
+
+def test_a_bypassed_imu_lets_an_unlevel_truck_run_s10_and_real_status_shows_it():
+    r = rig(imu=True)
+    a = math.radians(12)
+    r.imu.accel = (9.81 * math.sin(a), 0.0, 9.81 * math.cos(a))  # parked on a slope: not level
+    reply, _ = ask(r, "check_bypass", check="imu", on=True)
+    assert reply["t"] == "ack" and reply["applies"] == "next_tick"
+    r.tick(3)
+    _, statuses = replies(r)
+    r.tick(5)
+    _, more = replies(r)
+    assert any(s["bypassed"] == ["imu"] for s in statuses + more)
+    start_and_submit(r)
+    run_until(r, lambda rec: r.mcu.arms > 0, limit=400)
+    assert not r.loop.imu_watch.armed  # bypassed: never armed, never judged
+    op = None
+    run_until(r, lambda rec: r.core.operator_open() is not None or (r.permit.state == ra.LATCHED))
+    op = r.core.operator_open()
+    if op is not None:
+        ask(r, "operator_answer", kind=op["kind"], serial=op["serial"], verdict="confirm")
+    run_until(r, lambda rec: r.permit.state == ra.LATCHED and r.loop.session.results)
+    assert [e["reason"] for e in r.loop.session.results] == ["s10_lifted"]
+
+
+def test_without_the_bypass_the_unlevel_truck_is_refused():
+    r = rig(imu=True)
+    a = math.radians(12)
+    r.imu.accel = (9.81 * math.sin(a), 0.0, 9.81 * math.cos(a))
+    start_and_submit(r)
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=400)
+    assert ("imu_not_level" in rec.reason or "imu_baseline_unsteady" in rec.reason) and r.mcu.arms == 0
+
+
+def test_a_bypass_toggle_is_refused_while_armed_and_cleared_with_the_session():
+    r = rig()
+    start_and_submit(r)
+    run_until(r, lambda rec: r.permit.state in (ra.READY, ra.DRIVING), limit=400)
+    reply, _ = ask(r, "check_bypass", check="slam", on=True)
+    assert reply["reason"] == "armed"
+    r2 = rig()
+    ask(r2, "check_bypass", check="slam", on=True)
+    r2.tick()
+    assert r2.loop.bypass == {"slam"}
+    r2.arbiter.session_epoch += 1  # a new session
+    r2.tick()
+    assert r2.loop.bypass == set()
+
+
+def test_the_disarm_is_not_confirmed_while_a_console_disarm_or_a_queued_disarm_waits():
+    """5c-1 r1 P2-4 / r2 P2-1: recovery's 'disarmed' needs no DISARM pending anywhere."""
+    r = rig()
+    r.tick(5)
+    loop = r.loop
+    ok = loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
+    loop._console_disarm = True  # noqa: SLF001 -- accepted this tick, not yet run
+    assert not loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
+    loop._console_disarm = False  # noqa: SLF001
+    r.host.request_disarm(r.now)  # an anchor-like DISARM queued, not written
+    assert not loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
+    assert isinstance(ok, bool)
+
+
+def test_an_operator_start_given_then_moved_is_void():
+    r = rig()
+    r.tick(30)
+    reply, _ = ask(r, "operator_start")
+    assert reply["t"] == "ack" and r.loop.operator_start.ok(r.lease)
+    r.mcu.counts[0] += 500  # the truck is pushed: not still
+    r.mcu.counts[1] += 500
+    r.tick(3)
+    assert not r.loop.operator_start.ok(r.lease)
+
+
+def test_a_bypass_toggle_waits_for_no_mission_and_the_same_lease():
+    """5c-1 r4: refused with a mission under way; a pending toggle is dropped when a submit or a lease change came
+    before its tick head."""
+    r = rig()
+    ask(r, "check_bypass", check="operator_start", on=True)
+    r.tick()
+    assert r.loop.bypass == {"operator_start"}
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    r.tick(30)
+    # the toggle off and a submit in the same batch: the submit is taken under the bypass, the toggle is dropped
+    r.say("check_bypass", check="operator_start", on=False)
+    r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
+    r.tick(2)
+    assert r.loop.bypass == {"operator_start"}
+    assert any(e["event"] == "bypass_dropped:mission_active" for e in r.loop.bypass_events)
+    reply2, _ = ask(r, "check_bypass", check="slam", on=True)
+    assert reply2["reason"] in ("mission_active", "armed")
+
+
+def test_a_disarm_answer_from_another_boot_is_not_confirmed():
+    """5c-1 r4 P2-2."""
+    r = rig()
+    r.tick(5)
+    loop = r.loop
+    r.permit.disarm_boot = (r.permit.disarm_boot or 0) + 1
+    assert not loop._disarm_confirmed(int(loop.clock()))  # noqa: SLF001
+
+
+def test_a_pending_bypass_is_dropped_when_the_lease_expires_or_its_connection_closes():
+    """5c-1 r5 P2: the arbiter's own expiry and a pending disconnect of the holder count before the tick head."""
+    r = rig()
+    ask(r, "check_bypass", check="imu", on=True)
+    lease = r.arbiter.lease
+    lease.renewed_mono -= 100.0  # expired by the arbiter's rule before the next tick head
+    r.echo = False
+    r.tick()
+    assert "imu" not in r.loop.bypass
+    assert any(e["event"] == "bypass_dropped:lease_changed" and e["on"] is True for e in r.loop.bypass_events)
+    r2 = rig()
+    r2.say("check_bypass", check="imu", on=True)
+    r2.tick()  # taken; applied at the next head
+    r2.channels.disconnect("c1", "op")  # the holder's connection closes before that head
+    r2.tick()
+    assert "imu" not in r2.loop.bypass
+
+
+def test_real_status_last_refusal_includes_the_arbiters_own():
+    """5c-1 r5 P3-2."""
+    r = rig()
+    ask(r, "check_bypass", check="stop", on=True)
+    assert r.loop.last_refusal == {"kind": "check_bypass", "reason": "not_bypassable"}
+    reply, _ = ask(r, "check_bypass", check="imu", on=True, control_gen=r.arbiter.control_gen - 1)
+    assert reply["reason"] == "stale_control"
+    assert r.loop.last_refusal == {"kind": "check_bypass", "reason": "stale_control"}
+
+
+
+def test_a_pending_bypass_is_dropped_when_the_same_client_reconnects():
+    """5c-1 r6 P2-1: a new connection of the lease holder (it takes the lease back) waiting before the tick head."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    r.channels.connect("c2", "op", control=True, token=r.token + 1)
+    r.tick()
+    assert "imu" not in r.loop.bypass
+
+
+def test_a_console_disarm_still_in_the_channel_blocks_the_disarm_confirmation():
+    """5c-1 r6 P2-2: a DISARM queued in the channel, not yet through the arbiter."""
+    r = rig()
+    r.tick(5)
+    r.channels.message("c1", "op", {"t": "disarm", "request_id": "dq1", "session_epoch": EPOCH,
+                                    "control_gen": r.arbiter.control_gen, "lease_id": r.lease})
+    assert not r.loop._disarm_confirmed(int(r.loop.clock()))  # noqa: SLF001
+
+
+def test_recovery_done_is_refused_when_the_lease_ran_out_during_the_tick():
+    """5c-1 r7 P2-2: the lease checked on the callback's own clock."""
+    r = rig()
+    r.tick(3)
+    r.arbiter.lease.renewed_mono -= 100.0
+    reason, _ = r.loop._real_request_("recovery", {"recovery_id": 1, "action": "done"})  # noqa: SLF001
+    assert reason == "no_lease"
+
+
+def test_an_old_connection_closing_does_not_drop_the_new_connections_bypass():
+    """5c-1 r7 P3: only the holder's current connection counts."""
+    r = rig()
+    r.say("check_bypass", check="slam", on=True)
+    r.tick()  # taken (acked); applied at the next head
+    r.channels.disconnect("c-old", "op")  # then a stale connection id of the same client closes (r8 P3: this order)
+    r.tick()
+    assert "slam" in r.loop.bypass
+
+
+def test_a_lease_expiring_while_the_bypass_waits_for_the_lock_drops_it():
+    """5c-1 r8 P2: applied on the clock read under the lock, not the tick's start."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    lease = r.arbiter.lease
+    lease.renewed_mono = (r.now + r.step_ns) / 1e9 - r.arbiter.config.lease_timeout_s + 0.001  # 1 ms past the head
+    r.echo = False
+    r.tick_cost_ns = 5 * 10**6  # the apply reads the clock 5 ms later
+    r.tick()
+    assert "imu" not in r.loop.bypass
+
+
+
+@pytest.mark.parametrize("kind_fields", [("operator_answer", {"kind": "lifted", "serial": 1, "verdict": "confirm"}),
+                                         ("pallet_register", {"pallet_id": "P-S10", "pose": [1.0, 0.0, 0.0]}),
+                                         ("operator_start", {"session_epoch": EPOCH}),
+                                         ("check_bypass", {"check": "imu", "on": True})])
+def test_no_real_request_changes_anything_after_the_lease_ran_out_during_the_tick(kind_fields):
+    """5c-1 r9 P2: every real request checks the lease on its own clock first."""
+    r = rig()
+    r.tick(3)
+    r.arbiter.lease.renewed_mono -= 100.0
+    kind, fields = kind_fields
+    def snap():
+        start = r.loop.operator_start
+        return (dict(r.core.targets.pallets), r.core.targets.revision, set(r.loop.bypass),
+                list(r.loop._bypass_pending), dict(r.loop.operator_answers),  # noqa: SLF001
+                (start._given, start.voided))  # noqa: SLF001
+
+    before = snap()
+    reason, _ = r.loop._real_request_(kind, fields)  # noqa: SLF001
+    assert reason == "no_lease"
+    assert snap() == before  # the answers and the start check too (r10 P3)
+
+
+class _ClockLock:
+    """The channels' lock, the fake clock moving on while it is waited for (another thread holding it)."""
+
+    def __init__(self, inner, rig_, wait_ns):
+        self.inner, self.rig, self.wait_ns, self.armed = inner, rig_, wait_ns, False
+
+    def acquire(self, *a, **k):
+        if self.armed:
+            self.armed = False
+            self.rig.tick_cost_ns += self.wait_ns
+        return self.inner.acquire(*a, **k)
+
+    def release(self):
+        return self.inner.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+def test_the_bypass_lease_is_judged_after_the_lock_is_taken():
+    """5c-1 r9 P3: the clock moves only while the lock is waited for -- a read before the lock would apply it."""
+    r = rig()
+    r.say("check_bypass", check="imu", on=True)
+    r.tick()
+    lease = r.arbiter.lease
+    lease.renewed_mono = (r.now + r.step_ns) / 1e9 - r.arbiter.config.lease_timeout_s + 0.001
+    r.echo = False
+    lock = _ClockLock(r.channels._lock, r, 5 * 10**6)  # noqa: SLF001
+    r.channels._lock = lock  # noqa: SLF001
+    lock.armed = True
+    r.tick()
+    assert "imu" not in r.loop.bypass

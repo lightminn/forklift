@@ -101,10 +101,18 @@ class SafetyWatch:
 
     def step(self, t_s: float, *, armed: bool, fresh: bool, new_state: bool, currents_a=None,
              wheel_targets_rad_s=None, wheel_rates_rad_s=None, accel=None, accel_t_s=None,
-             imu_expected: bool = False) -> WatchResult:
+             imu_expected: bool = False, skip=frozenset()) -> WatchResult:
         """One judgement. ``accel``: the newest acceleration sample (x, y, z in m/s^2) and ``accel_t_s`` its time on
-        the same clock as ``t_s`` (None: now); ``imu_expected``: an IMU owner promised samples."""
+        the same clock as ``t_s`` (None: now); ``imu_expected``: an IMU owner promised samples. ``skip``: checks the
+        operator bypassed (``watch_current`` / ``watch_wheel``; real safety wiring design 5) -- not judged at all, so
+        the other check's hold is untouched (empty by default: the teleop bridge unchanged)."""
         values: dict = {}
+        if "watch_current" in skip:
+            currents_a = None
+            self._clear("watch_current")
+        if "watch_wheel" in skip:
+            wheel_rates_rad_s = None
+            self._clear("watch_wheel")
         if currents_a is not None and not all(math.isfinite(float(x)) for x in currents_a):
             currents_a = None  # not judged
         if wheel_rates_rad_s is not None and not all(math.isfinite(float(x)) for x in wheel_rates_rad_s):

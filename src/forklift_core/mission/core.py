@@ -6578,6 +6578,12 @@ class MissionCore:
         op["answer"] = None
         self._operator_record(t, op["request"], "requested")
 
+    def operator_open(self) -> dict | None:
+        """The open operator check, read only (real safety wiring 5c-1: the console's answer is matched to it):
+        ``{"kind", "serial", "phase"}``, or None."""
+        req = self._operator["request"]
+        return None if req is None else {"kind": req["kind"], "serial": req["serial"], "phase": req["phase"]}
+
     def operator_request_again(self, t: float) -> bool:
         """The operator asks again (4d-2b-1): the open request gets a new serial and no answer -- a wrong reject is
         not fixed until the pose changes. False with nothing open."""

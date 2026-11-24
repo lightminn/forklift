@@ -28,6 +28,14 @@ FLOWS = {
     # B-P2c: the start relocalization's pick and retry refusals ((False, reason) returns, see ``returns``)
     (ARBITER, "why"): ("direct", None, [("src/forklift_core/localization/start_reloc.py",
                                          frozenset({"pick", "retry"}))]),
+    # 5c-1 (real safety wiring design 5): the real requests' answers from the loop, its bypass refusal and the core's
+    # field recovery verdict
+    (ARBITER, "reason"): ("call", "real_request", [("src/forklift_core/live/real_loop.py",
+                                                    frozenset({"_real_request_"}))]),
+    ("src/forklift_core/live/real_loop.py", "refusal"): (
+        "call", "_bypass_refusal", [("src/forklift_core/live/real_loop.py", frozenset({"_bypass_refusal"}))]),
+    ("src/forklift_core/live/real_loop.py", "done[1]"): (
+        "direct", None, [("src/forklift_core/mission/core.py", frozenset({"field_recovery_done"}))]),
     (MOCK, "verdict"): ("call", "admit", "ledger"),
     (MOCK, "reason"): [("call", "_valid", [(MOCK, frozenset({"_valid"}))]),
                        ("call", "_teleop_reason", [(MOCK, frozenset({"_teleop_reason"}))])],
@@ -121,6 +129,10 @@ def returns(rel, names, unknown, pending):
                         # an (ok, reason) answer (B-P2c's StartRelocalizer): only a refusal's reason is a refusal
                         if value.elts[0].value is False:
                             found |= strings(value.elts[1], rel, fn, unknown, pending)
+                        continue
+                    if isinstance(value, ast.Tuple) and len(value.elts) == 2 and isinstance(value.elts[1], ast.Dict):
+                        # a (reason or None, reply fields) answer (5c-1: the real loop's real requests)
+                        found |= strings(value.elts[0], rel, fn, unknown, pending)
                         continue
                     found |= strings(value, rel, fn, unknown, pending)
     return found

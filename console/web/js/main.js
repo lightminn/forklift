@@ -17,6 +17,7 @@ import { blockReason, nextAllowed, selectable, templatesFor } from "./wizard.js"
 import { ConfirmGate, ResultsBook, standbyText } from "./results.js";
 import { bayCheckKey, candidateAt, pickKey, placeActions, placeFromDrag, placeKey, previewKey, relocActions, relocOf } from "./reloc.js";
 import { createSendGapMeter, pageReport } from "./sendgap.js";
+import { bindRealPanel, renderRealPanel } from "./realpanel_dom.js";
 
 const TELEOP_MIN_INTERVAL_MS = 33; // ~30 Hz cap: a fast display must not flood ticks
 // R2-3 (b): a teleop is good for 0.30 s from the tick it echoes -- about 0.2 s from this page's send. Past that the MCU
@@ -1064,6 +1065,7 @@ setInterval(() => {
 }, 250);
 setInterval(() => {
   render(m);
+  renderRealPanel(m, clientId); // 5c-1b: the real truck's operator panel
   if (m.wz.open && m.session.state?.mode && ["AUTO", "TELEOP", "STOPPED"].includes(m.session.state.mode)) closeWizard();
   refreshWizard();
   const stale = staleness({
@@ -1074,6 +1076,7 @@ setInterval(() => {
   $("stale-banner").hidden = !m.stale;
   $("stale-banner").textContent = stale.text;
 }, 100);
+bindRealPanel(m, rejectText, clientId);
 connectControl();
 connectMedia();
 requestAnimationFrame(frame);

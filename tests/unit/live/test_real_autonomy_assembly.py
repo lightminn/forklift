@@ -150,3 +150,45 @@ def test_the_stages_are_s10as_and_every_one_needs_its_speed():
     assert "speed_missing:insert" in refusal(options(speeds={"approach": 0.1}))
     assert "mission_stages_not_s10a" in refusal(options(mission_stages=("insert",)))
     assert "mission_stages_not_s10a" in refusal(options(mission_stages=()))
+
+
+BYPASS_CASES = [
+    ({"measurement": lambda n: ra.MeasurementView(True, True, False, True)}, "measurement"),
+    ({"odometry_continuous": lambda n: False}, "odometry"),
+    ({"slam": lambda n: ra.SlamView("lost", None)}, "slam"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n - 10**9, False, 4, 4)},
+     "layer_timing"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 4, 4, "layer_overdue")},
+     "layer_timing"),
+    ({"operator_start_ok": lambda n: False}, "operator_start"),
+    ({"snapshot": lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.0, 0.0, 0.0), n, False, 3, 4)}, "snapshot"),
+]
+
+
+def test_the_snapshot_bypass_never_passes_other_correction_values():
+    """5c-1 r6 P2-3: only the generation's number is bypassed."""
+    ev = evidence(snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, False, 3, 4))
+    for stage in ("submit", "drive"):
+        assert ra.auto_ready_refusal(NOW, stage, ev, bypass={"snapshot"}) == "wait:snapshot_installing"
+
+
+@pytest.mark.parametrize("over, check", BYPASS_CASES)
+def test_a_bypassed_readiness_check_passes(over, check):
+    """Real safety wiring design 5 (5c-1): the operator's session bypass skips that category only."""
+    assert ra.auto_ready_refusal(NOW, "submit", evidence(**over)) is not None
+    assert ra.auto_ready_refusal(NOW, "submit", evidence(**over), bypass={check}) is None
+    others = set(ra.READY_BYPASSABLE) - {check}
+    assert ra.auto_ready_refusal(NOW, "submit", evidence(**over), bypass=others) is not None
+
+
+@pytest.mark.parametrize("over", [{"worker_ok": lambda n: False}, {"layer_ok": lambda n: False},
+                                  {"baseline_ok": lambda n: False}, {"link_reason": lambda n: "stale"},
+                                  {"core_refusal": lambda n: "relocalize_required"}])
+def test_the_rest_of_readiness_is_not_bypassable(over):
+    assert ra.auto_ready_refusal(NOW, "submit", evidence(**over), bypass=set(ra.READY_BYPASSABLE)) is not None
+
+
+def test_the_snapshot_bypass_keeps_an_install_still_waited_for():
+    """5c-1 r2 P2-3: another mission's or path's install (the view's installing) is still a wait."""
+    ev = evidence(snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, True, 3, 4))
+    assert ra.auto_ready_refusal(NOW, "drive", ev, bypass={"snapshot"}) == "wait:snapshot_installing"
