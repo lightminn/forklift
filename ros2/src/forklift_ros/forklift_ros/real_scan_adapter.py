@@ -31,8 +31,31 @@ SOURCES = {  # --source: the topic and what its stamp means (PR 7a-2: the topic 
 }
 
 
+SDK_MAX_AGE_NS = 5_000_000_000  # a first-sample time older than this at receipt is not one (a wrong topic, a remap)
+SDK_MAX_SPAN_S = 0.5
+
+
+def sdk_fields(stamp_ns: int, scan_time: float, recv_mono_ns: int, sys_minus_mono_ns: int) -> dict | None:
+    """The frame fields of a scan_sdk message (forklift patch 0001): its stamp is the SDK's first sample on
+    CLOCK_MONOTONIC as it is, its scan_time the same buffer's last - first sample. None when the message does not
+    look like one -- an epoch stamp (the upstream topic remapped here), a time in the future or too old, a span that
+    is not one rotation -- so a wrong topic gives no scan, never a call-start stamp taken for a first sample (Codex
+    7a-2 P2-3)."""
+    if not (0 < stamp_ns <= recv_mono_ns and recv_mono_ns - stamp_ns <= SDK_MAX_AGE_NS):
+        return None
+    if not (0.0 < scan_time <= SDK_MAX_SPAN_S):
+        return None
+    last = stamp_ns + int(round(scan_time * 1e9))
+    if last > recv_mono_ns:
+        return None
+    return {"first_beam_mono_ns": int(stamp_ns), "last_beam_mono_ns": int(last),
+            # the system-clock equivalent the host's checks read (stamp-to-receipt, the clock pair)
+            "ros_stamp_ns": int(stamp_ns + sys_minus_mono_ns)}
+
+
 def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, gen: int | None = None,
-               first_beam_mono_ns: int | None = None, stamp_kind: str | None = None) -> bytes:
+               first_beam_mono_ns: int | None = None, stamp_kind: str | None = None,
+               sdk: dict | None = None) -> bytes:
     """A sensor_msgs/LaserScan (or anything with its fields) as one scan/1 frame. ``gen``: this adapter's start
     nonce (PR 7 design 3.2: the host opens a new generation when it changes); ``first_beam_mono_ns``: the SDK
     first-sample time on the host monotonic clock, when the driver gives it (7a-2)."""
@@ -59,6 +82,8 @@ def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, 
         head["first_beam_mono_ns"] = int(first_beam_mono_ns)
     if stamp_kind is not None:
         head["stamp_kind"] = str(stamp_kind)
+    if sdk is not None:
+        head.update(sdk)
     raw = json.dumps(head).encode("utf-8")
     body = ranges.tobytes() + (inten.tobytes() if inten is not None else b"")
     return MAGIC + _LEN.pack(len(raw)) + raw + body
@@ -125,22 +150,30 @@ def main(argv=None) -> int:
             self.senders = [DatagramSender(p) for p in args.socket]
             self.gen = secrets.randbits(62) + 1  # this start's nonce: a restart is a new producer generation
             self.scan_id = 0
+            self.not_sdk = 0
             self.topic, self.stamp_kind = SOURCES[args.source]
             self.create_subscription(LaserScan, self.topic, self.on_scan, qos_profile_sensor_data)
             self.create_timer(5.0, self.report)
 
         def on_scan(self, msg) -> None:
             recv, pair = clock_pair()
+            sdk = None
+            if self.stamp_kind == "sdk_first_sample":
+                stamp_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec)
+                sdk = sdk_fields(stamp_ns, float(msg.scan_time), recv, pair)
+                if sdk is None:
+                    self.not_sdk += 1  # not a scan_sdk message: dropped, counted, never sent as one
+                    return
             self.scan_id += 1
             # one frame, the same bytes to every receiver: each path keeps its own sent/dropped count
             frame = make_frame(msg, scan_id=self.scan_id, recv_mono_ns=recv, sys_minus_mono_ns=pair, gen=self.gen,
-                               stamp_kind=self.stamp_kind)
+                               stamp_kind=self.stamp_kind, sdk=sdk)
             for s in self.senders:
                 s.send(frame)
 
         def report(self) -> None:
             parts = [f"{s.path}: sent {s.sent} dropped {s.dropped} last_error {s.last_error}" for s in self.senders]
-            self.get_logger().info(f"scans {self.scan_id} gen {self.gen} | " + " | ".join(parts))
+            self.get_logger().info(f"scans {self.scan_id} gen {self.gen} not_sdk {self.not_sdk} | " + " | ".join(parts))
 
     rclpy.init(args=ros_args)
     node = Adapter()

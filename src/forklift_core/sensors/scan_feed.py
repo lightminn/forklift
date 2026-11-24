@@ -296,12 +296,11 @@ class ScanFeed:
         r = np.where(valid, ranges, np.nan)
         meta = {k: h[k] for k in ("frame_id", "scan_time", "time_increment", "range_min", "range_max",
                                   "sys_minus_mono_ns")}
-        if _int(h.get("first_beam_mono_ns"), 0):
-            meta["first_beam_mono_ns"] = int(h["first_beam_mono_ns"])  # given as such
-        elif h.get("stamp_kind") == "sdk_first_sample":
-            # the patched node's topic (PR 7a-2): its stamp is the SDK's first sample, on the monotonic clock through
-            # the same established clock pair as every stamp here
-            meta["first_beam_mono_ns"] = int(stamp_mono)
+        # the SDK's first and last sample of the scan's own buffer, on the monotonic clock as the SDK gave them (the
+        # patched node's scan_sdk topic, PR 7a-2): carried only as a pair in order
+        f0, f1 = h.get("first_beam_mono_ns"), h.get("last_beam_mono_ns")
+        if _int(f0, 1) and _int(f1, 1) and f1 > f0:
+            meta["first_beam_mono_ns"], meta["last_beam_mono_ns"] = int(f0), int(f1)
         meta["stamp_kind"] = h.get("stamp_kind") if isinstance(h.get("stamp_kind"), str) else None
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)

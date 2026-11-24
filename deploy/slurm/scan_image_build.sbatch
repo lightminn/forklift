@@ -17,11 +17,15 @@ SERIES=$(cat "$ROOT"/deploy/ros2/sllidar_patches/*.patch | sha256sum | cut -c1-8
 TAG="forklift/ros2-scan:jazzy-p0001-$SERIES"
 docker build -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" > "$OUT/build.log" 2>&1
 docker image inspect -f '{{.Id}}' "$TAG" > "$OUT/image.txt"
+# each check its own exit status: a missing binary, topic or patched call fails the job (Codex 7a-2 P3)
 docker run --rm --entrypoint bash "$TAG" -c '
+  set -euo pipefail
   bin=$(find /opt/sllidar_ws/install -name sllidar_node -type f | head -1)
-  echo "binary $bin"
-  grep -c scan_sdk "$bin" | sed "s/^/scan_sdk_strings /"
-  grep -c grabScanDataHqWithTimeStamp /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp | sed "s/^/patched_calls /"
+  test -n "$bin" && test -x "$bin" && echo "binary $bin"
+  grep -q scan_sdk "$bin" && echo "binary has scan_sdk"
+  grep -q read_delay_ms "$bin" && echo "binary has read_delay_ms"
+  grep -q "grabScanDataHqWithTimeStamps" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp && echo "node calls the patched grab"
+  grep -q "_scan_last_timestamp_uS" /opt/sllidar_ws/src/sllidar_ros2/sdk/src/sl_lidar_driver.cpp && echo "sdk keeps the last sample"
 ' > "$OUT/check.txt" 2>&1
 echo "$TAG $(cat "$OUT/image.txt") $(date -Is)" | tee "$OUT/built.txt"
 cat "$OUT/check.txt"

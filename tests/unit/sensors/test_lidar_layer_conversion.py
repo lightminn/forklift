@@ -26,9 +26,12 @@ def cfg(err_s=0.002, period=0.1, mask=(), measured=True):
 
 
 def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12):
-    meta = {"time_increment": (0.09 / (n - 1)) if step is None else step}
+    step = (0.09 / (n - 1)) if step is None else step
+    meta = {"time_increment": step}
     if first is not None:
         meta["first_beam_mono_ns"] = first
+        if step > 0:  # the buffer's own last sample (forklift patch 0001), here (n - 1) steps on
+            meta["last_beam_mono_ns"] = first + int(round((n - 1) * step * 1e9))
     if synthetic:
         meta["synthetic"] = True
     r = np.full(n, 2.0) if ranges is None else np.asarray(ranges, dtype=float)
@@ -107,10 +110,13 @@ def test_a_clock_jump_then_re_establishment_opens_a_generation():
     assert accepted and all(s.feed_gen == 1 for s in accepted)
 
 
-def test_the_first_beam_time_is_carried():
+def test_the_first_and_last_sample_times_are_carried_only_as_a_pair():
     feed = sf.ScanFeed()
-    out = settled(feed, first_beam_mono_ns=123)
-    assert out[-1][0].meta["first_beam_mono_ns"] == 123
+    out = settled(feed, first_beam_mono_ns=123, last_beam_mono_ns=456)
+    assert out[-1][0].meta["first_beam_mono_ns"] == 123 and out[-1][0].meta["last_beam_mono_ns"] == 456
+    feed = sf.ScanFeed()
+    out = settled(feed, first_beam_mono_ns=123)  # no last: neither is carried
+    assert "first_beam_mono_ns" not in out[-1][0].meta
 
 
 def test_the_adapter_frame_carries_gen_and_first_beam():

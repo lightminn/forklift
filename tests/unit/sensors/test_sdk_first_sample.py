@@ -19,43 +19,82 @@ from test_scan_feed import MS, OFF, frame  # noqa: E402
 REPO = Path(__file__).resolve().parents[3]
 
 
-def measured_cfg(err_s=0.005):
+def measured_cfg(err_s=0.005, period=0.12):
     return lc.LidarConfig(mount=(0.1, 0.0, 0.3, 0.0), mount_measured=True, mask_rad=(), limit_m=5.7,
-                          scan_period_s=0.1, first_beam_err_s=err_s, timing_measured=True)
+                          scan_period_s=period, first_beam_err_s=err_s, timing_measured=True)
 
 
-def feed_settled(kind, n=8):
+def _adapter():
+    sys.path.insert(0, str(REPO / "ros2" / "src" / "forklift_ros" / "forklift_ros"))
+    import real_scan_adapter as ra
+
+    return ra
+
+
+def sdk_frame(k, *, first, span_s, recv, n=8):
+    """A scan_sdk frame as the adapter makes it from the patched node's message: stamp = first sample (monotonic),
+    scan_time = last - first sample of the same buffer."""
+    f = _adapter().sdk_fields(first, span_s, recv, OFF)
+    assert f is not None
+    return frame(k, n=n, recv=recv, stamp=f["ros_stamp_ns"], stamp_kind="sdk_first_sample",
+                 time_increment=span_s / (n - 1), first_beam_mono_ns=f["first_beam_mono_ns"],
+                 last_beam_mono_ns=f["last_beam_mono_ns"])
+
+
+def settled_sdk(span_s=0.098):
     feed = sf.ScanFeed()
     for k in range(sf.ESTABLISH_COUNT):
-        feed.judge(frame(k, n=n, stamp_kind=kind, time_increment=0.09 / (n - 1)), 0)
+        t = 10_000 * MS + k * 100 * MS
+        feed.judge(sdk_frame(k, first=t, span_s=span_s, recv=t + int(span_s * 1e9) + 10 * MS), 0)
     return feed
 
 
 @pytest.mark.parametrize("buffered_ms", [0, 120, 300])
 def test_a_buffered_scan_is_never_called_fresh(buffered_ms):
-    """The first sample at t0; the rotation ends 90 ms later; the scan then waited ``buffered_ms`` in the driver's
-    buffer and was received 10 ms after the fetch.
-    The upstream topic's stamp is the fetch (t0 + buffered): diagnostic only. The patched topic's stamp is t0: the
-    layer scan's first beam is t0 - err, so its age at receipt includes the wait."""
+    """The first sample at t0, the last 98 ms later (one rotation at the nominal 10 Hz); the scan then waited
+    ``buffered_ms`` in the SDK's buffer and was received 10 ms after the read. The upstream topic's call-start stamp
+    gives no acquisition time at all; the patched topic's first and last sample put the wait into the age."""
     k = sf.ESTABLISH_COUNT
     t0 = 20_000 * MS
-    fetch = t0 + 90 * MS + buffered_ms * MS
+    span = 0.098
+    fetch = t0 + int(span * 1e9) + buffered_ms * MS
     recv = fetch + 10 * MS
     cfg = measured_cfg()
-    # upstream (call start)
-    raw = feed_settled("call_start")
-    s_raw, why = raw.judge(frame(k, recv=recv, stamp=fetch + OFF, stamp_kind="call_start",
-                                 time_increment=0.09 / 7), 0)
+    raw = sf.ScanFeed()
+    for j in range(sf.ESTABLISH_COUNT):
+        raw.judge(frame(j, stamp_kind="call_start"), 0)
+    s_raw, why = raw.judge(frame(k, recv=recv, stamp=fetch + OFF, stamp_kind="call_start"), 0)
     assert why is None and lc.to_layer_scan(s_raw, cfg, 0) == (None, "no_acquisition_time")
-    # patched (first sample)
-    sdk = feed_settled("sdk_first_sample")
-    s_sdk, why = sdk.judge(frame(k, recv=recv, stamp=t0 + OFF, stamp_kind="sdk_first_sample",
-                                 time_increment=0.09 / 7), 0)
-    assert why is None and s_sdk.meta["first_beam_mono_ns"] == t0
+    sdk = settled_sdk()
+    s_sdk, why = sdk.judge(sdk_frame(k, first=t0, span_s=span, recv=recv), 0)
+    assert why is None
     out, lwhy = lc.to_layer_scan(s_sdk, cfg, 0)
     assert lwhy is None
-    age_at_receipt_s = recv / 1e9 - out.first_s
-    assert age_at_receipt_s >= (90 + buffered_ms + 10) / 1e3  # the wait is in the age, never hidden
+    assert recv / 1e9 - out.first_s >= (98 + buffered_ms + 10) / 1e3  # the wait is in the age, never hidden
+    assert out.last_s == pytest.approx((t0 + int(span * 1e9) + 5 * MS) / 1e9)  # the buffer's own last sample + err
+
+
+def test_a_nominal_rotation_needs_a_budget_that_covers_it():
+    """Codex 7a-2 P2-1: one 10 Hz rotation (98 ms) plus the error bound on both ends is wider than 100 ms -- the
+    acceptance bound (lidar.yaml timing.scan_period_s, the real run layer's first-beam budget) must cover it."""
+    t0 = 20_000 * MS
+    s, why = settled_sdk().judge(sdk_frame(sf.ESTABLISH_COUNT, first=t0, span_s=0.098, recv=t0 + 110 * MS), 0)
+    assert why is None
+    assert lc.to_layer_scan(s, measured_cfg(period=0.10), 0)[1] == "scan_too_long"
+    assert lc.to_layer_scan(s, measured_cfg(period=0.12), 0)[1] is None
+
+
+@pytest.mark.parametrize("stamp,span,recv,ok", [
+    (5 * 10**9, 0.098, 5 * 10**9 + 200 * MS, True),
+    (1_700_000_000 * 10**9, 0.098, 5 * 10**9, False),  # an epoch stamp: the upstream topic remapped here
+    (6 * 10**9, 0.098, 5 * 10**9, False),               # in the future
+    (1 * 10**9, 0.098, 7 * 10**9, False),               # older than 5 s
+    (5 * 10**9, 0.6, 6 * 10**9, False),                 # not one rotation
+    (5 * 10**9, 0.098, 5 * 10**9 + 50 * MS, False),     # the last sample after the receipt
+])
+def test_the_adapter_takes_only_what_looks_like_a_scan_sdk_message(stamp, span, recv, ok):
+    """Codex 7a-2 P2-3: a wrong topic or a remap gives no scan, never a call-start stamp taken for a first sample."""
+    assert (_adapter().sdk_fields(stamp, span, recv, OFF) is not None) is ok
 
 
 def test_the_adapter_source_decides_topic_and_stamp_kind():
@@ -76,8 +115,15 @@ def test_the_adapter_source_decides_topic_and_stamp_kind():
 def test_the_patch_is_applied_by_the_scan_image_and_launched_with_its_topic():
     patch = REPO / "deploy" / "ros2" / "sllidar_patches" / "0001-sdk-first-sample-stamp.patch"
     text = patch.read_text(encoding="utf-8")
-    assert "grabScanDataHqWithTimeStamp" in text and '"scan_sdk"' in text
+    assert "grabScanDataHqWithTimeStamps" in text and '"scan_sdk"' in text and "_scan_last_timestamp_uS" in text
+    assert "read_delay_ms" in text and "this->now() - rclcpp::Duration" not in text  # no ROS-clock round trip
     docker = (REPO / "deploy" / "ros2" / "Dockerfile.scan").read_text(encoding="utf-8")
     assert "0001-sdk-first-sample-stamp.patch" in docker and "34300099" in docker
     launcher = (REPO / "tools" / "ros2_dev.sh").read_text(encoding="utf-8")
-    assert "scan_sdk:=/sensors/lidar/scan_raw_sdk" in launcher and "--source ${FORKLIFT_SCAN_SOURCE:-raw}" in launcher
+    assert "scan_sdk:=/sensors/lidar/scan_raw_sdk" in launcher and 'FORKLIFT_SCAN_SOURCE must be raw or sdk' in launcher
+
+
+def test_the_teleop_bridge_drops_a_first_sample_stamped_scan():
+    """Codex 7a-2 P2-4: the bridge places a scan at (stamp - period) -- a call-start stamp only."""
+    src = (REPO / "tools" / "bridge_scan.py").read_text(encoding="utf-8")
+    assert 'scan.meta.get("stamp_kind") not in (None, "call_start")' in src and '_drop("stamp_kind")' in src

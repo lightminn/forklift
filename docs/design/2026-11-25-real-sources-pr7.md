@@ -104,14 +104,17 @@
 - **배관**: `ros2_dev.sh scan-a2m12`(sllidar_node → `real_scan_adapter` → Unix 데이터그램)를 쓴다.
 - **취득 시각**: 고정 커밋 조사(2026-11-12 설계 1.1)에 따르면 노드의 `header.stamp` 는 `grabScanDataHq()` 호출 직전의 시각이다. 버퍼에 머문 스캔은 stamp 보다 더 일찍 취득됐을 수 있다. 그래서 stamp ± `scan_time` 은 취득 구간이 아니다(Codex P1-2).
   - 7a 는 그 설계가 남긴 결정을 내린다. 노드를 작게 고친 사본(커밋 고정)으로 SDK 의 `grabScanDataHqWithTimeStamp` 첫 표본 시각을 프레임에 싣는다. 그 값은 호스트 단조 시계 기준이다.
-  - **7a-2 구현**(2026-11-25): 고정 커밋 34300099 에 패치 하나(`deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `Dockerfile.scan` 이 `git apply`)를 댄다.
-    - 노드는 각 스캔을 원래 `scan` 토픽에 그대로 내고, 같은 스캔을 새 토픽 `scan_sdk`(런처가 `/sensors/lidar/scan_raw_sdk` 로 바꿈)에도 낸다. 이때 stamp 는 SDK 첫 표본 시각이다. 계산은 `now() − (단조 지금 − 첫 표본)` 이다. `scan_time` 은 연속한 첫 표본 사이의 실제 회전 주기(0.05–0.2 s 일 때만)이고, `time_increment` 는 그 주기에서 나온다.
-    - 첫 표본 시각이나 주기를 모르는 스캔은 `scan_sdk` 에 내지 않는다.
-    - **토픽이 stamp 의 뜻을 정한다.** 어댑터의 `--source raw|sdk` 가 구독 토픽과 머리의 `stamp_kind`(`call_start`·`sdk_first_sample`)를 함께 정한다. 그래서 둘이 엇갈릴 수 없다. 고치지 않은 노드는 `scan_sdk` 를 내지 않으므로, 잘못된 이미지에서는 '스캔 없음'이 된다. 원래 stamp 를 첫 표본 시각으로 믿는 일은 생기지 않는다.
-    - `ScanFeed` 는 `stamp_kind == sdk_first_sample` 이면 확정된 시계 짝으로 옮긴 stamp 를 `first_beam_mono_ns` 로 둔다.
-    - 런처는 `FORKLIFT_SCAN_SOURCE` 로 고른다. 기본 `raw` 는 텔레옵 다리의 지금 동작 그대로이고, 관측 실행·층은 `sdk` 를 쓴다.
-    - 저장소 쪽 버퍼 지연 주입 시험(`tests/unit/sensors/test_sdk_first_sample.py`): 버퍼에서 0·120·300 ms 기다린 스캔에서 원래 토픽은 '취득 시각 없음'이다. 고친 토픽은 기다린 시간이 나이에 그대로 든다.
-    - 실기 쪽(같은 지연을 실제 노드에서 주입, 오차 상한 `first_beam_err_s` 측정)은 벤치 시간표 1 이다.
+  - **7a-2 구현**(2026-11-25, Codex 7a-2 1 회차 반영): 고정 커밋 34300099 에 패치 하나(`deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `Dockerfile.scan` 이 `git apply`)를 댄다.
+    - SDK 는 각 스캔 버퍼의 첫 표본 시각 옆에 **같은 버퍼의 마지막 표본 시각**을 둔다(`_scan_last_timestamp_uS`, `grabScanDataHqWithTimeStamps`). 끝 시각은 이전 회전의 길이에서 나오지 않는다(Codex P1-1).
+    - 노드는 각 스캔을 원래 `scan` 토픽에 그대로 내고, 같은 스캔을 `scan_sdk`(런처가 `/sensors/lidar/scan_raw_sdk` 로 바꿈)에도 낸다. 이 토픽의 stamp 는 첫 표본의 `CLOCK_MONOTONIC` 값 그대로다. `scan_time` 은 같은 버퍼의 마지막 − 첫 표본이다. ROS 시계를 거치지 않으므로 두 시계를 읽는 사이의 선점이나 `use_sim_time` 이 끼지 않는다(Codex P1-2).
+    - 두 시각이 없거나 순서가 틀리거나 0.5 s 를 넘는 스캔은 `scan_sdk` 에 내지 않는다.
+    - 벤치용 `read_delay_ms` 파라미터(기본 0)는 읽는 쪽만 늦춘다. SDK 디코더는 계속 돈다.
+    - **토픽이 stamp 의 뜻을 정하고, 어댑터가 그것을 확인한다.** `--source raw|sdk` 가 구독 토픽과 머리의 `stamp_kind` 를 함께 정한다. sdk 쪽은 메시지가 실제로 단조 시각 stamp 인지 본다(수신 이하, 5 s 안, 한 회전 길이, 마지막 표본이 수신 이하). 아니면 버리고 센다(`not_sdk`). 그래서 재매핑이나 잘못된 토픽은 '스캔 없음'이 되고, 호출 시작 stamp 를 첫 표본으로 믿는 일은 없다(Codex P2-3). 런처는 `FORKLIFT_SCAN_SOURCE` 를 `raw|sdk` 로만 받는다.
+    - 프레임은 `first_beam_mono_ns`·`last_beam_mono_ns` 를 싣는다. `ScanFeed` 는 둘이 순서대로 다 있을 때만 넘긴다. 변환은 끝을 `last_beam_mono_ns` 에서 읽고, 회전 주기나 빔 간격에서 만들지 않는다.
+    - 텔레옵 다리는 `call_start` 가 아닌 stamp 의 스캔을 버린다. 다리의 배치는 `stamp − 주기` 라서, 첫 표본 stamp 로는 한 회전 이르게 놓기 때문이다(Codex P2-4).
+    - 받아들이는 폭 `lidar.yaml timing.scan_period_s` 는 0.12 s(잠정)다. 10 Hz 한 회전(약 98 ms)에 양 끝 오차를 더해도 들어가야 한다. 0.10 이면 명목 회전이 늘 `scan_too_long` 이다(Codex P2-1, 시험으로 고정). 실 실행의 층은 첫 빔 예산을 이 값에서 읽는다(배선은 7r).
+    - 저장소 쪽 버퍼 지연 주입 시험(`tests/unit/sensors/test_sdk_first_sample.py`): 패치의 실제 발행식대로 만든 프레임을 쓴다. SDK 버퍼에서 0·120·300 ms 기다린 스캔에서 원래 토픽은 '취득 시각 없음'이다. 고친 토픽은 기다린 시간이 나이에 그대로 든다.
+    - 실기 쪽은 벤치 시간표 1 이다.
   - 버퍼 지연 주입 시험(같은 설계 1.1 의 4)으로 늦은 스캔을 신선하다고 하지 않는지 검증한다. 그 전까지 스캔 시각은 진단값이다.
   - **첫 빔과 끝 빔의 범위를 나눈다**(Codex 2 회차 P2-6). 첫 빔은 `[Flo, Fhi]`, 끝 빔은 `[Elo, Ehi]` 다. 지금 층은 `last_s` 하나를 마감(`last_s + B`)과 '오도메트리 이력이 끝 빔 뒤까지 있는가' 두 곳에 쓴다. 보수적으로 마감은 `Elo + B`, 이력이 덮어야 할 끝은 `Ehi` 로 나눈다. 끝 범위를 증명할 수 없는 스캔은 진단 전용이다.
   - **층에 넣을 수 있는 스캔**(Codex 3 회차 P2-4, 4 회차 P2-1): 두 예산을 모두 지켜야 한다.
@@ -202,7 +205,7 @@
 
 | # | 항목 | 단계 | 손작업 | 기다림 | 비고 |
 |---|---|---|---|---|---|
-| 1 | A2M12 SDK 첫 표본 시각·버퍼 지연 주입, `latency_timer`, 사람이 평면에 찍히는 범위 | 7a-2 | 20 분 | 10 분 | 패치 이미지(`scan_image_build.sbatch`)로 관측 실행 둘: 정상, 노드를 0.3 s 멈춰 지연 주입(`kill -STOP`/`-CONT`). 두 토픽 stamp 차이로 `first_beam_err_s` 를 정하고, 줄자 |
+| 1 | A2M12 SDK 표본 시각·버퍼 지연 주입·오차 상한, `latency_timer`, 사람이 평면에 찍히는 범위 | 7a-2 | 25 분 | 10 분 | 패치 이미지(`scan_image_build.sbatch`)로 관측 실행 둘: 정상, `read_delay_ms:=300`(읽는 쪽만 늦춤, 디코더는 돎 — 노드 전체를 멈추지 않는다, Codex P2-2). 오차 상한은 SDK 추정과 독립인 물리 상한으로 정한다: 취득은 그 바이트의 도착보다 앞설 수밖에 없고, 앞서는 양은 캡슐 하나의 표본 시간 + 직렬 전송 시간 + USB-UART `latency_timer` 이하다. 셋을 장치·설정에서 읽어 `first_beam_err_s` 로 적는다. 한쪽 검사로 SDK 첫 표본 ≤ 그 바이트 도착을 기록에서 본다. 줄자 |
 | 2 | D435i 시각 도메인·전달 지연·가속 프로파일 | 7b | 15 분 | 10 분 | |
 | 2′ | D435i 장치 시각 되감기(32 비트) | 7b | 5 분 | **75 분** | 기다림만 김 — 밤새 또는 다른 일과 겹쳐 |
 | 3 | Jetson 25 ms 관문 예산·층 지연·`RUN_STATE_DELAY_S` | 7e 뒤 | 20 분 | 10 분 | 재생 실행을 Jetson 에서 |
@@ -214,7 +217,7 @@
 | 8 | 실촬영 근접 인식·D5 깊이 검사 | 7e | 30 분 | 15 분 | |
 | 9 | 승강·적재별 자기 가림 | S10 전 | 15 분 | 0 | 빈 포크·적재 × 승강 3 높이 |
 
-손작업 합 약 3 시간 35 분(항목 1–9, 단계마다 나눠 함). 기다림만 긴 것은 2′(75 분)와 3′(30 분)이다.
+손작업 합 약 3 시간 40 분(항목 1–9, 단계마다 나눠 함). 기다림만 긴 것은 2′(75 분)와 3′(30 분)이다.
 
 ## 10. 자체 검토
 

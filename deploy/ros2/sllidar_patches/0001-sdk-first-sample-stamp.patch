@@ -1,23 +1,121 @@
-forklift patch 0001 (PR 7a-2, docs/design/2026-11-25-real-sources-pr7.md 4): publish each scan also on 'scan_sdk',
-stamped at the SDK's first sample (grabScanDataHqWithTimeStamp, CLOCK_MONOTONIC) with the rotation period as scan_time.
-Against Slamtec/sllidar_ros2 34300099; applied with patch -p1 in deploy/ros2/Dockerfile.scan.
+forklift patch 0001 (PR 7a-2, docs/design/2026-11-25-real-sources-pr7.md 4): the SDK keeps each scan buffer's last sample
+time beside its first (grabScanDataHqWithTimeStamps), and the node publishes each scan also on 'scan_sdk', stamped with
+the first sample (CLOCK_MONOTONIC as it is, no ROS clock) and scan_time = last - first sample of the same buffer;
+'read_delay_ms' (bench only) delays the reader with the decoder running. Against Slamtec/sllidar_ros2 34300099;
+applied with git apply in deploy/ros2/Dockerfile.scan.
 
---- a/src/sllidar_node.cpp	2026-11-25 08:38:25.944241166 +0900
-+++ b/src/sllidar_node.cpp	2026-11-25 08:38:38.393767433 +0900
-@@ -39,6 +39,7 @@
- #include "math.h"
+diff --color -ruN a2/sdk/include/sl_lidar_driver.h b2/sdk/include/sl_lidar_driver.h
+--- a/sdk/include/sl_lidar_driver.h	2026-11-25 08:46:35.241065587 +0900
++++ b/sdk/include/sl_lidar_driver.h	2026-11-25 08:46:35.253797244 +0900
+@@ -466,6 +466,14 @@
+         /// \The caller application can set the timeout value to Zero(0) to make this interface always returns immediately to achieve non-block operation.
+         virtual sl_result grabScanDataHqWithTimeStamp(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count, sl_u64 & timestamp_uS, sl_u32 timeout = DEFAULT_TIMEOUT) = 0;
  
- #include <signal.h>
-+#include <time.h>  // forklift patch 0001: clock_gettime(CLOCK_MONOTONIC)
++        /// forklift patch 0001: as above, with the first and the last sample time (CLOCK_MONOTONIC us) of the very
++        /// buffer the scan was copied from. Not supported unless a driver overrides it.
++        virtual sl_result grabScanDataHqWithTimeStamps(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count, sl_u64 & first_uS, sl_u64 & last_uS, sl_u32 timeout = DEFAULT_TIMEOUT)
++        {
++            (void)nodebuffer; (void)count; (void)first_uS; (void)last_uS; (void)timeout;
++            return SL_RESULT_OPERATION_NOT_SUPPORT;
++        }
++
  
- #ifndef _countof
- #define _countof(_Array) (int)(sizeof(_Array) / sizeof(_Array[0]))
-@@ -60,10 +61,20 @@
+         /// Ascending the scan data according to the angle value in the scan.
+         ///
+diff --color -ruN a2/sdk/src/sl_lidar_driver.cpp b2/sdk/src/sl_lidar_driver.cpp
+--- a/sdk/src/sl_lidar_driver.cpp	2026-11-25 08:46:35.240250285 +0900
++++ b/sdk/src/sl_lidar_driver.cpp	2026-11-25 08:46:35.253739889 +0900
+@@ -247,6 +247,7 @@
+             _scanbuffer[1].reserve(_scan_node_buffer_size);
+ 
+             memset(_scan_begin_timestamp_uS, 0, sizeof(_scan_begin_timestamp_uS));
++            memset(_scan_last_timestamp_uS, 0, sizeof(_scan_last_timestamp_uS));  // forklift patch 0001
+         }
+ 
+         size_t getMaxCacheCount() const {
+@@ -262,6 +263,7 @@
+             _scanbuffer[1].clear();
+             _data_waiter.set(false);
+             memset(_scan_begin_timestamp_uS, 0, sizeof(_scan_begin_timestamp_uS));
++            memset(_scan_last_timestamp_uS, 0, sizeof(_scan_last_timestamp_uS));  // forklift patch 0001
+         }
+ 
+         bool checkNewScanSignalAndReset()
+@@ -306,6 +308,8 @@
+             else {
+                 operationalBuf->push_back(*hqNode);
+             }
++            // forklift patch 0001: the newest sample's time of this buffer -- once the buffer is finished, its last
++            _scan_last_timestamp_uS[operationBufID] = currentSampleTsUs;
+ 
+         }
+ 
+@@ -314,7 +318,8 @@
+             _getOperationalBuffer_locked().clear();
+         }
+ 
+-        std::vector<T>* waitAndLockAvailableScan(_u32 timeout, _u64 * out_timestamp_uS = nullptr)
++        std::vector<T>* waitAndLockAvailableScan(_u32 timeout, _u64 * out_timestamp_uS = nullptr,
++                                                 _u64 * out_last_uS = nullptr)
+         {
+             if (_data_waiter.wait(timeout) == rp::hal::Event::EVENT_OK)
+             {
+@@ -324,6 +329,9 @@
+                 if (out_timestamp_uS) {
+                     *out_timestamp_uS = _scan_begin_timestamp_uS[_scan_node_available_id];
+                 }
++                if (out_last_uS) {  // forklift patch 0001: the same buffer's last sample
++                    *out_last_uS = _scan_last_timestamp_uS[_scan_node_available_id];
++                }
+                 return &_scanbuffer[_scan_node_available_id];
+             }
+             else {
+@@ -363,6 +371,7 @@
+         
+ 
+         _u64   _scan_begin_timestamp_uS[2];
++        _u64   _scan_last_timestamp_uS[2];  // forklift patch 0001
+         size_t _scan_node_buffer_size;
+         int    _scan_node_available_id;
+         std::atomic<bool>   _new_scan_ready;
+@@ -791,6 +800,27 @@
+             if (!availBuffer) return SL_RESULT_OPERATION_TIMEOUT;
+ 
+             count = std::min<size_t>(count, availBuffer->size());
++
++            std::copy(availBuffer->begin(), availBuffer->begin() + count, nodebuffer);
++
++            _scanHolder.unlockScan(availBuffer);
++
++            return RESULT_OK;
++        }
++
++        // forklift patch 0001: one scan with its first and last sample times, both from the buffer it was copied from
++        sl_result grabScanDataHqWithTimeStamps(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count,
++                                               sl_u64& first_uS, sl_u64& last_uS, sl_u32 timeout = DEFAULT_TIMEOUT)
++        {
++            rp::hal::AutoLocker l(_op_locker);
++
++            if (!nodebuffer)
++                return SL_RESULT_INVALID_DATA;
++
++            auto availBuffer = _scanHolder.waitAndLockAvailableScan(timeout, &first_uS, &last_uS);
++            if (!availBuffer) return SL_RESULT_OPERATION_TIMEOUT;
++
++            count = std::min<size_t>(count, availBuffer->size());
+ 
+             std::copy(availBuffer->begin(), availBuffer->begin() + count, nodebuffer);
+ 
+diff --color -ruN a2/src/sllidar_node.cpp b2/src/sllidar_node.cpp
+--- a/src/sllidar_node.cpp	2026-11-25 08:46:35.238419790 +0900
++++ b/src/sllidar_node.cpp	2026-11-25 08:46:35.254021784 +0900
+@@ -60,13 +60,26 @@
      {
  
        scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::KeepLast(10)));
-+      // forklift patch 0001 (PR 7a-2): the same scans stamped with the SDK's first-sample time, on a topic of their
-+      // own -- the topic name says what the stamp means, so a reader of this topic never gets the call-start stamp
++      // forklift patch 0001 (PR 7a-2): the same scans on a topic of their own, stamped with the SDK's first-sample
++      // time as it is (CLOCK_MONOTONIC, no ROS clock involved) and with scan_time = last - first sample of the same
++      // SDK buffer. The topic name says what the stamp means.
 +      scan_sdk_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan_sdk", rclcpp::QoS(rclcpp::KeepLast(10)));
        
      }
@@ -27,22 +125,26 @@ Against Slamtec/sllidar_ros2 34300099; applied with patch -p1 in deploy/ros2/Doc
 +    // forklift patch 0001 (PR 7a-2)
 +    rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr scan_sdk_pub;
 +    rclcpp::Time sdk_stamp;
-+    double sdk_period = 0.0;
-+    bool sdk_stamp_ok = false;
-+    sl_u64 last_first_sample_us = 0;
++    double sdk_span = 0.0;
++    bool sdk_ok = false;
 +
      void init_param()
      {
          this->declare_parameter<std::string>("channel_type","serial");
-@@ -206,6 +217,23 @@
++        // forklift patch 0001: bench only -- wait this long before each read, the SDK's decoder still running, so a
++        // finished scan waits in its buffer (the buffer-delay injection; 0 = never)
++        this->declare_parameter<int>("read_delay_ms", 0);
+         this->declare_parameter<std::string>("tcp_ip", "192.168.0.7");
+         this->declare_parameter<int>("tcp_port", 20108);
+         this->declare_parameter<std::string>("udp_ip","192.168.11.2");
+@@ -206,6 +219,22 @@
                    float max_distance,
                    std::string frame_id)
      {
 +        publish_one(pub, nodes, node_count, start, scan_time, inverted, angle_min, angle_max, max_distance, frame_id);
-+        // forklift patch 0001: the same scan on scan_sdk, stamped at the SDK's first sample with the rotation period
-+        // as scan_time -- only when both are known (a scan without them is not published there at all)
-+        if (sdk_stamp_ok && sdk_period > 0.0) {
-+            publish_one(scan_sdk_pub, nodes, node_count, sdk_stamp, sdk_period, inverted, angle_min, angle_max,
++        // forklift patch 0001: the same scan on scan_sdk (stamp = first sample, scan_time = last - first sample)
++        if (sdk_ok) {
++            publish_one(scan_sdk_pub, nodes, node_count, sdk_stamp, sdk_span, inverted, angle_min, angle_max,
 +                        max_distance, frame_id);
 +        }
 +    }
@@ -58,31 +160,27 @@ Against Slamtec/sllidar_ros2 34300099; applied with patch -p1 in deploy/ros2/Doc
          static int scan_count = 0;
          auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
  
-@@ -360,9 +388,26 @@
+@@ -359,10 +388,22 @@
+             sl_lidar_response_measurement_node_hq_t nodes[8192];
              size_t   count = _countof(nodes);
  
++            {
++                // forklift patch 0001: the bench's buffer-delay injection (the reader only)
++                const int64_t read_delay_ms = this->get_parameter("read_delay_ms").as_int();
++                if (read_delay_ms > 0) rclcpp::sleep_for(std::chrono::milliseconds(read_delay_ms));
++            }
              start_scan_time = this->now();
 -            op_result = drv->grabScanDataHq(nodes, count);
-+            sl_u64 first_sample_us = 0;  // forklift patch 0001: the SDK's first-sample time, CLOCK_MONOTONIC us
-+            op_result = drv->grabScanDataHqWithTimeStamp(nodes, count, first_sample_us);
++            sl_u64 first_sample_us = 0, last_sample_us = 0;  // forklift patch 0001
++            op_result = drv->grabScanDataHqWithTimeStamps(nodes, count, first_sample_us, last_sample_us);
              end_scan_time = this->now();
              scan_duration = (end_scan_time - start_scan_time).seconds();
-+            // forklift patch 0001: the first sample on the ROS clock (now - its monotonic age), and the true rotation
-+            // period from consecutive first samples (the call's own duration is not the scan's)
-+            {
-+                struct timespec ts;
-+                clock_gettime(CLOCK_MONOTONIC, &ts);
-+                const int64_t mono_now_us = (int64_t)ts.tv_sec * 1000000LL + ts.tv_nsec / 1000;
-+                const int64_t age_us = mono_now_us - (int64_t)first_sample_us;
-+                sdk_stamp_ok = first_sample_us != 0 && age_us >= 0 && age_us < 5000000LL;
-+                sdk_stamp = this->now() - rclcpp::Duration::from_nanoseconds(age_us * 1000LL);
-+                sdk_period = 0.0;
-+                if (sdk_stamp_ok && last_first_sample_us != 0 && first_sample_us > last_first_sample_us) {
-+                    const double p = (double)(first_sample_us - last_first_sample_us) / 1e6;
-+                    if (p >= 0.05 && p <= 0.2) sdk_period = p;  // one rotation of 5-20 Hz; otherwise unknown (0)
-+                }
-+                if (sdk_stamp_ok) last_first_sample_us = first_sample_us;
-+            }
++            // forklift patch 0001: published on scan_sdk only when both times are there and in order, and the scan
++            // lasted at most half a second (else not a scan of one rotation)
++            sdk_ok = op_result == SL_RESULT_OK && first_sample_us != 0 && last_sample_us > first_sample_us
++                     && last_sample_us - first_sample_us <= 500000ULL;
++            sdk_stamp = rclcpp::Time((int64_t)first_sample_us * 1000LL, RCL_STEADY_TIME);
++            sdk_span = sdk_ok ? (double)(last_sample_us - first_sample_us) / 1e6 : 0.0;
  
              if (op_result == SL_RESULT_OK) {
                  op_result = drv->ascendScanData(nodes, count);

@@ -202,6 +202,11 @@ class ScanPermit:
             if pose is None:
                 self._drop("after_states")
                 continue
+            if scan.meta.get("stamp_kind") not in (None, "call_start"):
+                # the bridge places a scan at (stamp - period): the upstream call-start stamp only -- a first-sample
+                # stamp would put it a rotation early (Codex 7a-2 P2-4); run the adapter with --source raw
+                self._drop("stamp_kind")
+                continue
             angles = np.asarray(scan.angles, dtype=float)
             ranges = np.asarray(scan.ranges, dtype=float)
             if angles.shape != ranges.shape or angles.ndim != 1 or not np.isfinite(angles).all():
