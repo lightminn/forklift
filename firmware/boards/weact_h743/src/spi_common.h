@@ -16,6 +16,11 @@ _Static_assert(SPI_CFG1_MBR_POS == SPI_CFG1_MBR_Pos &&
                    SPI_CFG1_CRCSIZE_POS == SPI_CFG1_CRCSIZE_Pos &&
                    SPI_CFG1_DSIZE_POS == SPI_CFG1_DSIZE_Pos,
                "SPI_CFG1 field positions");
+_Static_assert(SPI_CR1_SSI_POS == SPI_CR1_SSI_Pos && SPI_CFG2_MASTER_POS == SPI_CFG2_MASTER_Pos &&
+                   SPI_CFG2_CPHA_POS == SPI_CFG2_CPHA_Pos && SPI_CFG2_CPOL_POS == SPI_CFG2_CPOL_Pos &&
+                   SPI_CFG2_SSM_POS == SPI_CFG2_SSM_Pos &&
+                   SPI_CFG2_AFCNTR_POS == SPI_CFG2_AFCNTR_Pos,
+               "SPI_CR1/SPI_CFG2 bit positions");
 
 /* The data registers take one 16-bit frame per access; address them as 16-bit MMIO. */
 static inline volatile uint16_t *spi_reg16(SPI_TypeDef *spi, size_t offset)
@@ -27,15 +32,29 @@ static inline volatile uint16_t *spi_reg16(SPI_TypeDef *spi, size_t offset)
 #define SPI_MBR_DIV16 3u
 #define SPI_MBR_DIV32 4u
 
+/* Applies spi_setup_writes() in its order (SSI before MASTER: see spi_cfg.h). */
 static inline void spi_setup(SPI_TypeDef *spi, uint32_t mbr, uint32_t cpol, uint32_t cpha)
 {
-    spi->CR1 = 0;
-    spi->CFG1 = spi_cfg1_value(mbr); /* 16-bit frames, CRC off, CRCSIZE at reset */
-    /* Master, software NSS held high internally, outputs kept driven while disabled (AFCNTR). */
-    spi->CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_AFCNTR | (cpol ? SPI_CFG2_CPOL : 0u) |
-                (cpha ? SPI_CFG2_CPHA : 0u);
-    spi->CR1 = SPI_CR1_SSI;
-    spi->CR2 = 1u; /* TSIZE = 1 */
+    spi_setup_write w[SPI_SETUP_WRITES];
+    spi_setup_writes(mbr, cpol, cpha, w);
+    for (unsigned i = 0; i < SPI_SETUP_WRITES; i++) {
+        switch (w[i].reg) {
+        case SPI_SETUP_CR1:
+            spi->CR1 = w[i].value;
+            break;
+        case SPI_SETUP_CFG1:
+            spi->CFG1 = w[i].value;
+            break;
+        case SPI_SETUP_CFG2:
+            spi->CFG2 = w[i].value;
+            break;
+        case SPI_SETUP_CR2:
+            spi->CR2 = w[i].value;
+            break;
+        default:
+            break;
+        }
+    }
 }
 
 static inline void spi_start(SPI_TypeDef *spi, uint16_t tx)

@@ -1,0 +1,5 @@
+PASS  load: the record covers the run: 300 s of 300 s
+PASS  load: clean footer: {'t': 'footer', 'dropped': 0, 'write_errors': 0}
+info  load: 14666 cycles, gap p50 20.1 p99 23.8 max 39.5 ms, >40 ms 0, >80 ms 0, >124 ms 0, gc max 0.3 ms
+PASS  load: no cycle gap of 80 ms or more: 0
+ALL PASS
