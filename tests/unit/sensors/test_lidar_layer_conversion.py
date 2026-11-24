@@ -223,3 +223,31 @@ def test_a_candidate_on_the_same_clock_switches_at_once():
     settled(feed, gen=11)
     s, why = feed.judge(fr(1, gen=22), 0)
     assert why is None and s.feed_gen == 1
+
+
+def test_a_nonce_less_restart_on_a_jumped_clock_is_a_candidate_too():
+    """Codex 7a-1 round 5 P2-1: a low id with another clock pair is refused without sending the current stream back
+    to establishing; a real restart establishes in its own window and opens one generation."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, start=100)
+    n = 100 + sf.ESTABLISH_COUNT
+    off2 = 1_700_000_001_000 * MS
+    assert feed.judge(fr(1, off=off2), 0)[1] == "clock_jump"
+    assert feed.judge(fr(n, ), 0)[1] is None and feed.generation == 0  # the current stream untouched
+    verdicts = [feed.judge(fr(k, off=off2), 0)[1] for k in range(2, 3 + sf.ESTABLISH_COUNT)]
+    assert verdicts[-1] is None and feed.generation == 1
+
+
+def test_a_candidates_duplicates_never_establish_it():
+    """Codex 7a-1 round 5 P2-2."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    off2 = 1_700_000_001_000 * MS
+    first = feed.judge(fr(1, gen=22, off=off2), 0)[1]
+    dups = [feed.judge(fr(1, gen=22, off=off2), 0)[1] for _ in range(12)]
+    assert first == "clock_jump" and set(dups) == {"stale_id"}
+    assert feed.judge(fr(sf.ESTABLISH_COUNT, gen=11), 0)[1] is None and feed.generation == 0
