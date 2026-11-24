@@ -500,6 +500,7 @@ def test_an_out_of_order_stop_the_host_refused_does_not_confirm():
     """Codex PR-2a re-review 6 P2-2: an older-MCU-time DISARMED after an ARMED is refused by the host; it is not the
     newest valid STATE."""
     import dataclasses
+    import time as _t
 
     from forklift_core.mcu_link.messages import encode
 
@@ -513,8 +514,8 @@ def test_an_out_of_order_stop_the_host_refused_does_not_confirm():
             _wrote_disarm(b, 1)
         elif steps["n"] == 2:
             _feed(b, last_rx_seq=0, mode=Mode.ARMED)
-            t = b.host.state.mcu_time_us - 5_000  # older than the ARMED one
-            b.host.on_bytes(encode(dataclasses.replace(state(), mcu_time_us=t, last_rx_seq=1), 1), 0)
+            t = b.host.state.mcu_time_us - 5_000  # older MCU time than the ARMED one, received after the write
+            b.host.on_bytes(encode(dataclasses.replace(state(), mcu_time_us=t, last_rx_seq=1), 1), _t.monotonic_ns())
 
     b.link.on_cycle = cycle
     assert s.cleanup() is False
@@ -575,8 +576,9 @@ def test_no_direction_prompt_while_the_stop_is_unconfirmed(monkeypatch):
     assert res["observed"] == "unknown"
 
 
-def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch):
-    """Codex PR-2a re-review 6 P3."""
+@pytest.mark.parametrize("exc_type", [OSError, KeyboardInterrupt])
+def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch, exc_type):
+    """Codex PR-2a re-reviews 6-7 P3: an I/O error or a Ctrl-C in the early cleanup."""
     import argparse
 
     b = _bench([state()], commission=True)
@@ -585,8 +587,14 @@ def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch):
         session.arm_requested, session.cleanup_confirmed = True, False
         return {"result": "ok", "metrics": {"duty_e4": 1000, "measured_sign": "pos", "duty_sign_in_build": 1}}
 
+    calls = {"n": 0}
+
     def broken_cleanup(self):
-        raise OSError(5, "Input/output error")
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise exc_type("x")
+        self.cleanup_confirmed = False
+        return False
 
     monkeypatch.setattr(bringup, "run_commission", fake_run)
     monkeypatch.setattr(bringup.CommissionSession, "cleanup", broken_cleanup)
@@ -594,3 +602,4 @@ def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch):
                            power_switch_in_hand=True)
     res = bringup.execute(a, b)
     assert res["metrics"]["measured_sign"] == "pos" and "cleanup_error" in res and res["observed"] == "unknown"
+    assert res["result"] == "aborted" and calls["n"] == 2  # and the final cleanup still ran

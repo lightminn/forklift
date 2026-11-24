@@ -1376,9 +1376,12 @@ def execute(args, bench: Bench) -> dict:
                     # the result already measured
                     try:
                         session.cleanup()
-                    except Exception as exc:  # noqa: BLE001 -- the measured result stays; the final cleanup retries
+                    except BaseException as exc:  # noqa: BLE001 -- Ctrl-C too: the measured result stays, the final
+                        # cleanup in execute()'s finally retries (Codex PR-2a re-review 7 P3)
                         session.cleanup_confirmed = False
+                        session.aborted = session.aborted or "exception"
                         result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+                        result["result"] = "aborted"
                 # still no confirmed stop: nobody is asked to look at a wheel that may not have stopped
                 result["observed"] = _observed(args) if session.cleanup_confirmed else "unknown"
                 m = result["metrics"]
