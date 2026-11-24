@@ -899,16 +899,25 @@ def run_duty_disarm(bench: Bench, session: CommissionSession, duty: float, secon
     if session.aborted is None and held:
         # the last refresh must really be out before the DISARM (request_disarm drops what is still queued), and
         # there must be room left under the approved end for the DISARM itself (design 1.3)
-        written = b.run_until(lambda: last_seq is None or any(w.seq == last_seq and w.kind == "COMMISSION"
-                                                              for w in b.writes[-8:]),
-                              max((end_ns - time.monotonic_ns()) / 1e9, 0.0))
-        # the STATEs read during that wait get the same early stop and authorization check (Codex PR-2b re-review P2)
-        stop = next((r for smp in b.samples[scanned:] if (r := session.early_stop(smp.state, at_start)) is not None),
-                    None)
-        if stop is not None:
-            session.stop_reason = stop
-        elif (why := session._abort_reason()) is not None:  # noqa: SLF001
-            session.aborted = why
+        def refresh_out() -> bool:
+            return last_seq is None or any(w.seq == last_seq and w.kind == "COMMISSION" for w in b.writes[-8:])
+
+        def wait_over() -> bool:
+            # the STATEs read during the wait get the same early stop and authorization check, and end it at once
+            # (Codex PR-2b re-reviews 2-3): a frame dropped on a disconnect is never written, so the wait would
+            # otherwise last to the approved end; it is bounded by that frame's own validity (end_ns) anyway
+            nonlocal scanned
+            stop = next((r for smp in b.samples[scanned:]
+                         if (r := session.early_stop(smp.state, at_start)) is not None), None)
+            scanned = len(b.samples)
+            if stop is not None:
+                session.stop_reason = stop
+            elif (why := session._abort_reason()) is not None:  # noqa: SLF001
+                session.aborted = why
+            return session.stop_reason is not None or session.aborted is not None or refresh_out()
+
+        b.run_until(wait_over, max((end_ns - time.monotonic_ns()) / 1e9, 0.0))
+        written = refresh_out()
         left = (end_ns - time.monotonic_ns()) / 1e9
         # the latest STATE and the drive authorization looked at again right before the test DISARM: never into a
         # STOPPING (an expiry's electric brake the cleanup waits out) nor after the authorization went (Codex PR-2b
@@ -1108,6 +1117,17 @@ def _real_outputs(states: list[dict]) -> bool:
     return bool(states) and not any({"OUTPUTS_LOCKED", "HIL_PLANT"} & set(r.get("flags", ())) for r in states)
 
 
+def _tool_run_official(kind: str, res: dict | None, states: list[dict]) -> bool:
+    """A run the tool itself issued an event in may give an official pass only when it ended ``ok`` with its stop
+    confirmed, ``tx_cut`` met its worst case, and its STATEs show real outputs (Codex PR-2b re-reviews 2-3). The tool's
+    own result and ``analyze`` both ask this."""
+    if res is None or res.get("result") != "ok" or res.get("cleanup_confirmed") is not True:
+        return False
+    if kind == "tx_cut" and (res.get("worst_case") or {}).get("met") is not True:
+        return False
+    return _real_outputs(states)
+
+
 def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = False, allow_bypassed: bool = False,
             allow_synthetic: bool = False) -> dict:
     """A recorded run around one event: the software timeline from the event's host time -- the last STATE before a
@@ -1160,6 +1180,9 @@ def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = Fal
         return {"result": "refused", "why": "a commissioning run is on the stand: --floor does not apply"}
     if header.get("cmd") == "scenario" and "floor" in header and bool(header["floor"]) != floor:
         return {"result": "refused", "why": f"the run was recorded with floor={bool(header['floor'])}"}
+    states = [r for r in run if r.get("t") == "state"]
+    if floor and any("COMMISSION_BUILD" in r.get("flags", ()) for r in states):
+        return {"result": "refused", "why": "a commissioning build is on the stand: --floor does not apply"}
     jmarks = judgement.run_marks(run)
     try:
         judgement.check(jmarks, allow=allow_bypassed)
@@ -1170,23 +1193,22 @@ def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = Fal
         return {"result": "refused", "why": "a synthetic (rehearsal) run: not for measurement (give --allow-synthetic "
                                             "to read it; its pass fields stay empty)"}
     smarks = dict(OUTPUT_MARKS) if synthetic else {}
-    states = [r for r in run if r.get("t") == "state"]
     run_result = None
     if kind_runs:
         m_ns, validity = _tool_event(run, kind, header, synthetic)
         res = next((r for r in reversed(run) if r.get("t") == "result"), None)
         run_result = None if res is None else {"result": res.get("result"),
-                                               "cleanup_confirmed": res.get("cleanup_confirmed")}
+                                               "cleanup_confirmed": res.get("cleanup_confirmed"),
+                                               "worst_case_met": (res.get("worst_case") or {}).get("met")}
         if m_ns is None:
             return {**smarks, **jmarks, "result": "no_event", "kind": kind,
                     "why": "the run shows no event the tool issued", "run_result": run_result,
                     **({} if validity is None else {"validity": validity})}
         # the run's own end: an aborted run or an unconfirmed stop gives no pass, whatever its STATEs show before the
         # event (Codex PR-2b re-review P1)
-        if run_result is None or run_result["result"] != "ok" or run_result["cleanup_confirmed"] is not True:
+        # locked outputs, a HIL plant or no STATE: nothing physical to judge (re-review P2)
+        if not _tool_run_official(kind, res, states):
             official = False
-        if not _real_outputs(states):
-            official = False  # locked outputs, a HIL plant or no STATE: nothing physical to judge (re-review P2)
     if not judgement.eligible(jmarks) or synthetic or kind in LIMIT_SCENARIOS:
         official = False
     if validity is not None and not (validity["valid"] and validity["physical"]):
@@ -1486,6 +1508,8 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
             raise Refused("duty_disarm: give a nonzero --duty and --seconds (the approved output time, ramp included)")
         if not (math.isfinite(args.duty) and math.isfinite(args.seconds)):
             raise Refused("duty_disarm: --duty and --seconds must be finite numbers")
+        if abs(args.duty) > bl.WHEEL_DUTY_MAX_OPEN:
+            raise Refused(f"duty_disarm: |duty| must be at most {bl.WHEEL_DUTY_MAX_OPEN:g}")
         if abs(int(round(args.duty * 10000))) < dd.MIN_DUTY_E4:
             # a target within one e4 of zero would take a zero output for the hold (Codex PR-2b P1-1)
             raise Refused(f"duty_disarm: |duty| must be at least {dd.MIN_DUTY_E4 / 1e4:g}")
@@ -1711,6 +1735,9 @@ def execute(args, bench: Bench) -> dict:
             result["external"] = verdict(args.kind, {
                 "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
                 "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)
+            if not _tool_run_official(args.kind, result, [state_row(smp) for smp in bench.samples]):
+                # the same qualification analyze asks of the record (Codex PR-2b re-review 3 P2)
+                result["external"] = judgement.empty_pass_fields(result["external"])
     except Refused as exc:
         result = {"result": "refused", "why": str(exc)}
     except BaseException as exc:  # Ctrl-C and anything else: an aborted run (Codex impl review P1-1)

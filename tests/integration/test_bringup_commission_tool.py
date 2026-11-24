@@ -422,6 +422,16 @@ def test_a_plain_scenario_needs_real_outputs_in_its_states():
         out = bringup.analyze(rows(flags), -1, "disarm", ext)
         assert out["result"] == "ok" and out["external"]["output_response_ms"]["pass"] is None, flags
     assert bringup.analyze(rows(StateFlag(0)), -1, "disarm", ext)["external"]["output_response_ms"]["pass"] is True
+    # tx_cut: its worst case met, or no pass (re-review 3 P2)
+    for met in (False, True):
+        rs = rows(StateFlag(0))
+        rs[0]["kind"] = "tx_cut"
+        rs[-1]["worst_case"] = {"met": met}
+        assert bringup.analyze(rs, -1, "tx_cut", ext)["official"] is met
+    # --floor never reads a commissioning build's STATEs (re-review 3 P3)
+    rs = rows(StateFlag.COMMISSION_BUILD)
+    rs[0]["floor"] = True
+    assert bringup.analyze(rs, -1, "disarm", ext, floor=True)["result"] == "refused"
 
 
 def test_analyze_takes_the_rehearsal_check_per_run(tmp_path, capsys):
