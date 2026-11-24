@@ -228,6 +228,7 @@ class ReconnectingLink:
         self.busy: DeviceBusy | None = None  # the last refusal (None once an opening succeeded)
         self.ever_connected = False
         self.refused: DeviceBusy | None = None
+        self._pending: list[HostEvent] = []  # an early opening's events (open_first), handed out by the next service
         self.product_reader = product_reader  # the opened device's USB product string, read at each opening
         self.clock = clock
         self.link: TtyLink | None = None
@@ -239,10 +240,14 @@ class ReconnectingLink:
         # is given (teleop record design 3) -- it never feeds a control decision
         self.last_read_ns: int | None = None
 
-    def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+    def open_first(self, host: McuLinkHost, now_ns: int) -> None:
+        """Try the first opening now, before a tool starts anything else (the teleop bridge: before its console), so a
+        device held by another executor is refused first (design 8.1). Its events come out of the next ``service``."""
+        if self.link is None and self.refused is None:
+            self._pending += self._open(host, now_ns)
+
+    def _open(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
         events: list[HostEvent] = []
-        if self.refused is not None:
-            return host.tick(now_ns)
         if self.link is None and now_ns >= self._next_try:
             try:
                 if self.exclusive:  # locked on the opened fd before the port is configured (real safety design 8)
@@ -265,6 +270,13 @@ class ReconnectingLink:
                 self._next_try = now_ns + self.retry_ns
             except OSError:
                 self._next_try = now_ns + self.retry_ns
+        return events
+
+    def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+        events, self._pending = self._pending, []
+        if self.refused is not None:
+            return events + host.tick(now_ns)
+        events += self._open(host, now_ns)
         if self.link is not None:
             try:
                 data = self.link.read_available()

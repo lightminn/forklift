@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 import tty
 from pathlib import Path
 from types import SimpleNamespace
@@ -145,7 +146,8 @@ def test_judge_fails_when_states_are_missing():
     assert res["result"] == "not_met" and not res["checks"]["no_state_gap"], res
 
 
-def test_a_link_loss_after_the_arm_stops_the_probes_and_invalidates(mcu_model, monkeypatch):
+@pytest.mark.parametrize("loss", ["disconnected", "count_only"])
+def test_a_link_loss_after_the_arm_stops_the_probes_and_invalidates(mcu_model, monkeypatch, loss):
     """Real safety wiring design 8.1 (Codex executor-lock impl P2): the probed ARM and CLEAR_FAULTS are for the board
     the run armed -- a loss seen any time after the ARM sends none of them and the result is invalid."""
     b, proc, fds = _bench(mcu_model, "--commission-build", "1", "--outputs-locked", "1",
@@ -154,7 +156,11 @@ def test_a_link_loss_after_the_arm_stops_the_probes_and_invalidates(mcu_model, m
 
     def hold_then_lose(self, *a, **kw):
         out = real_hold(self, *a, **kw)
-        b.host.disconnects += 1  # the host's count, as a loss right after the pre-zero hold leaves it
+        if loss == "disconnected":
+            b.host.disconnected(time.monotonic_ns())  # a real loss: authorization revoked, the count bumped
+        else:
+            b.host.disconnects += 1  # only the count (the authorization kept): the probe loop's own check
+
         return out
 
     monkeypatch.setattr(bringup.CommissionSession, "hold_duty", hold_then_lose)
@@ -163,4 +169,4 @@ def test_a_link_loss_after_the_arm_stops_the_probes_and_invalidates(mcu_model, m
     finally:
         _close(proc, fds)
     assert res["result"] == "invalid" and res["why"] == "link_reconnected", res
-    assert res["arms_written"] == 0 and not res["clear_faults_written"]
+    assert res.get("arms_written", 0) == 0 and not res.get("clear_faults_written")

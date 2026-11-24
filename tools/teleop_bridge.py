@@ -630,6 +630,16 @@ def main(argv=None) -> int:
                 print(f"the configuration changed while starting ({', '.join(changed)}): start again", file=sys.stderr)
                 record.put_row({"t": "refused", "why": "config_changed", "what": changed})
                 return 2
+        try:
+            # the first opening before anything else starts: a device held by another executor is refused first,
+            # whatever else fails later (design 8.1, Codex executor-lock impl round 2 P2)
+            link.open_first(bridge.host, time.monotonic_ns())
+        except DeviceBusy as busy:
+            print(f"teleop_bridge: {busy}", file=sys.stderr, flush=True)
+            if record is not None:
+                record.put_row({"t": "refused", "why": "device_busy", "holder": busy.holder})
+            code = 2
+            return code
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)

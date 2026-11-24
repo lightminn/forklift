@@ -149,7 +149,8 @@ def test_h743_link_check_refuses_a_held_device_and_leaves_the_record_alone(held_
 
 def test_the_jetson_wrapper_gives_each_run_its_own_record():
     src = (TOOLS / "hwday" / "jetson_h743.sh").read_text(encoding="utf-8")
-    assert "--out $remote" in src and "$$" in src
+    assert "--out $remote" in src and "$$" in src and '"$HW_OUT/$run.jsonl"' in src
+    assert 'if [ "$rc" -eq 2 ]' in src  # refused: no copy (it would fail and turn 2 into 1), exit 2
 
 
 def test_the_link_monitor_refuses_a_held_device(held_pty, capsys):

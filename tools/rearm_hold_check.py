@@ -155,6 +155,8 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
         time.sleep(0.01)
     if limit_i is None:
         session.cleanup()
+        if link_changed():  # a loss before the limit revokes the authorization: the run is invalid, not not_met
+            return {"result": "invalid", "why": "link_reconnected", "aborted": session.aborted}
         return {"result": "not_met", "why": session.aborted or "limit_not_reached"}
     # inside the hold: DISARM a third in, then ARM every ARM_PERIOD_S and one CLEAR_FAULTS two thirds in (once a
     # refusal follows the taken DISARM), until an ARM is taken

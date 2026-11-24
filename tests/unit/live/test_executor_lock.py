@@ -197,6 +197,11 @@ def test_the_teleop_bridge_refuses_to_start_on_a_held_device_naming_the_holder(p
     import teleop_bridge
 
     monkeypatch.setattr(teleop_bridge, "writer_marker", lambda device, bench: None)  # past the bench check
+
+    def no_console(self):
+        raise RuntimeError("the console port is taken too")  # Codex impl round 2: the device is refused first
+
+    monkeypatch.setattr(teleop_bridge.LiveServer, "start", no_console)
     other = open_dev(pty_path)
     lock_fd(other, pty_path)
     try:
