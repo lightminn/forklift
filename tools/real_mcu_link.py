@@ -201,11 +201,16 @@ class TtyLink:
             self._off += n
             if self._off == len(self._cur.data):
                 host.frame_written(self._cur, self._cur_t)
+                self._done(self._cur)
                 self._cur = None
 
     def _allowed(self, out: Outgoing) -> bool:
         """Whether a frame taken from the host may be written on this link (every frame, here)."""
         return True
+
+    def _done(self, out: Outgoing) -> None:
+        """Called right after the frame's last byte was written (the host's ``written`` carries its first-byte
+        time; an acknowledgement must come after this one -- Codex 7a-1 round 2 P2-1)."""
 
     def abandon(self, host: McuLinkHost, now_ns: int) -> None:
         if self._cur is not None:
@@ -225,15 +230,20 @@ class ObserveTtyLink(TtyLink):
     before the opening's poison, which therefore goes out only ahead of the first allowed DISARM. All that can reach
     the device on one fd is the poison followed by canonical DISARMs, whatever any code queued on the host."""
 
-    def __init__(self, fd: int) -> None:
+    def __init__(self, fd: int, on_done=None) -> None:
         super().__init__(fd)
         self.refused = 0
+        self.on_done = on_done  # (seq, last-byte ns): the observe run's acknowledgement needs the completion
 
     def _allowed(self, out: Outgoing) -> bool:
         if out.kind == "DISARM" and bytes(out.data) == encode(Disarm(), out.seq):
             return True
         self.refused += 1
         return False
+
+    def _done(self, out: Outgoing) -> None:
+        if self.on_done is not None:
+            self.on_done(int(out.seq) & 0xFFFF, time.monotonic_ns())
 
 
 class ReconnectingLink:

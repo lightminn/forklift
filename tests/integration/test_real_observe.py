@@ -194,11 +194,70 @@ def test_an_acknowledgement_needs_a_step_to_the_seq_after_it_was_written():
 
     obs._on_state(st(1, 77), 100)  # noqa: SLF001 -- the board already names 77
     obs._log("written", 200, b"", {"kind": "DISARM", "seq": 77})  # noqa: SLF001
+    obs._done(77, 210)  # noqa: SLF001 -- its last byte
     obs._on_state(st(2, 77), 300)  # noqa: SLF001 -- still 77: no step
     obs.host = SimpleNamespace(state=st(2, 77))  # acknowledged() reads only the host's latest STATE
     assert not obs.acknowledged(77)
     obs._on_state(st(3, 78), 400)  # noqa: SLF001
     obs._log("written", 500, b"", {"kind": "DISARM", "seq": 79})  # noqa: SLF001
-    obs._on_state(st(4, 79), 600)  # noqa: SLF001 -- a step to 79 after its write
+    obs._on_state(st(4, 79), 505)  # noqa: SLF001 -- a step to 79 after its first byte but before its last
+    obs._done(79, 510)  # noqa: SLF001
     obs.host = SimpleNamespace(state=st(4, 79))
-    assert obs.acknowledged(79)
+    assert not obs.acknowledged(79)  # Codex 7a-1 round 2 P2-1: not before the last byte
+    obs._on_state(st(5, 80), 550)  # noqa: SLF001
+    obs._log("written", 560, b"", {"kind": "DISARM", "seq": 81})  # noqa: SLF001
+    obs._done(81, 570)  # noqa: SLF001
+    obs._on_state(st(6, 81), 600)  # noqa: SLF001 -- a step to 81 after its last byte
+    obs.host = SimpleNamespace(state=st(6, 81))
+    assert obs.acknowledged(81)
+
+
+class _QuietLink:
+    """A link that is connected and receives nothing (only the observer's own bookkeeping runs)."""
+
+    link = object()
+    ever_connected = True
+
+    def service(self, host, now_ns):
+        return []
+
+
+def test_an_unanswered_session_stage_starts_the_pair_again():
+    """Codex 7a-1 round 2 P2-2: a stage not answered within SESSION_STAGE_S restarts with fresh seqs."""
+    obs = ro.Observer(_QuietLink(), ro.Record(io.StringIO()), lidar=lidar_cfg.load_lidar_config())
+    t0 = 10**12
+    obs._disarms(t0)  # noqa: SLF001
+    obs._disarms(t0 + int(0.6e9))  # noqa: SLF001
+    rows = [json.loads(x) for x in obs.rec.f.getvalue().splitlines()]
+    assert [r["stage"] for r in rows if r["t"] == "session_retry"] == ["first"]
+    assert obs.counts["sessions"] == 2
+
+
+def test_a_scan_gap_is_recorded_on_the_tick_it_happens():
+    """Codex 7a-1 round 2 P2-4: no scan for longer than the timeout is seen without waiting for the next scan."""
+    class _NoScans:
+        def recv(self, n):
+            raise BlockingIOError
+
+    clock = {"t": 10**12}
+    obs = ro.Observer(_QuietLink(), ro.Record(io.StringIO()), scan_sock=_NoScans(),
+                      lidar=lidar_cfg.load_lidar_config(), clock=lambda: clock["t"])
+    obs._last_scan_ns = clock["t"]  # noqa: SLF001 -- a scan just now
+    clock["t"] += int(0.5e9)
+    obs.cycle(refresh=False)
+    obs.cycle(refresh=False)
+    rows = [json.loads(x) for x in obs.rec.f.getvalue().splitlines()]
+    gaps = [r for r in rows if r["t"] == "scan_event" and r["kind"] == "receive_gap"]
+    assert len(gaps) == 1 and obs.feed.generation == 1
+
+
+def test_a_complete_record_has_its_ok_marker_and_a_changed_one_does_not(model, tmp_path, monkeypatch, capsys):
+    """Codex 7a-1 round 2 P2-5: a replay takes a record only with a .ok naming its sha256."""
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+    monkeypatch.setattr(ro, "open_raw", lambda p, baud=None, **kw: os.dup(model))
+    out = tmp_path / "obs.jsonl"
+    assert ro.main(["--device", "/dev/model", "--out", str(out), "--seconds", "1.0"]) == 0
+    assert (tmp_path / "obs.jsonl.ok").exists() and ro.record_complete(out)
+    with open(out, "a", encoding="utf-8") as f:
+        f.write('{"t": "state"}\n')
+    assert not ro.record_complete(out)

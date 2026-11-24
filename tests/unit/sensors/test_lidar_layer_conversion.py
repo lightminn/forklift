@@ -172,3 +172,21 @@ def test_generation_rules():
     assert feed.judge(fr(n + 1, gen=11), 0)[1] == "old_producer"        # A -> B -> late A
     feed.new_generation("receive_gap")
     assert feed.generation == 2 and feed.generation_why == ["producer", "receive_gap"]
+
+
+def test_a_refused_frame_never_retires_the_producer_still_sending():
+    """Codex 7a-1 round 2 P2-3: a malformed nonce is bad_meta, and a new producer's frame refused on its clock does
+    not end the current producer."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    n = sf.ESTABLISH_COUNT
+    assert feed.judge(fr(n, gen="x"), 0)[1] == "bad_meta"
+    assert feed.judge(fr(n, gen=11), 0)[1] is None
+    # a new producer whose first frame is refused (stamped long after its receipt)
+    from test_scan_feed import OFF
+
+    late = fr(1, gen=22, stamp=10_000 * MS + 100 * MS + OFF + 10**9)  # stamped a second after its receipt
+    assert feed.judge(late, 0)[1] == "negative_latency"
+    assert feed.judge(fr(n + 1, gen=11), 0)[1] is None and feed.generation == 0

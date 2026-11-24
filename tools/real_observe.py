@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import random
@@ -58,8 +59,47 @@ DISARM_EVERY_S = 1.0  # the OFF path's refresh (real_autonomy.ANCHOR_DISARM_S)
 END_CONFIRM_S = 1.0
 SCANS_READ_PER_CYCLE = 8  # the read cost per cycle (design 3.3): 10 Hz scans, 50 Hz cycles -- ample, never drained
 MAX_SECONDS = 3600.0
+SESSION_STAGE_S = 0.5  # each stage of the session pair is answered within this, or the pair starts again
 SCAN_GAP_NS = 350_000_000  # a scan receive gap past the layer's sensor timeout (obstacle_layer_real 0.35 s)
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
+
+
+def _sync(f) -> bool:
+    try:
+        f.flush()
+        os.fsync(f.fileno())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def write_ok_marker(path: Path) -> None:
+    """``<record>.ok``: the record's sha256, made only after the record's last row was synced (the completeness
+    proof a replay checks)."""
+    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    tmp = Path(str(path) + ".ok.tmp")
+    tmp.write_text(digest + "\n", encoding="ascii")
+    with open(tmp, "rb") as f:
+        os.fsync(f.fileno())
+    os.replace(tmp, Path(str(path) + ".ok"))
+
+
+def record_complete(path: Path) -> bool:
+    """A record a replay may take: its .ok names its current sha256 and its last row is a complete end."""
+    p = Path(path)
+    try:
+        want = Path(str(p) + ".ok").read_text(encoding="ascii").strip()
+        data = p.read_bytes()
+    except OSError:
+        return False
+    if hashlib.sha256(data).hexdigest() != want:
+        return False
+    last = data.rstrip(b"\n").rsplit(b"\n", 1)[-1]
+    try:
+        end = json.loads(last)
+    except ValueError:
+        return False
+    return end.get("t") == "end" and end.get("complete") is True
 
 
 class Record:
@@ -95,13 +135,17 @@ class Observer:
         self.feed = ScanFeed() if scan_sock is not None else None
         self.counts = {"states": 0, "written": 0, "refused": 0, "scans": 0, "scans_layer_ok": 0, "read_capped": 0,
                        "scan_gaps": 0, "scan_socket_errors": 0, "sessions": 0}
-        self._writes: dict[tuple[int, int], int] = {}  # (conn, seq) -> written ns (DISARMs)
+        self._writes: dict[tuple[int, int], int] = {}  # (conn, seq) -> first-byte ns (DISARMs)
+        self._done_ns: dict[tuple[int, int], int] = {}  # (conn, seq) -> last-byte ns: an acknowledgement is after it
+        if openings is not None:
+            openings.on_done = self._done
         self._acks: dict[tuple[int, int, int], int] = {}  # (conn, boot, seq) -> receipt of the STATE stepping to it
         self._prev: tuple[int, int, int] | None = None  # the previous accepted STATE: (conn, boot, last_rx_seq)
         self._session: dict | None = None  # the pair in progress: {"stage", "seq", "first"}
         self.session_ready = False
         self._next_refresh_ns: int | None = None
         self._last_scan_ns: int | None = None
+        self._scan_gap_open = False
 
     # --- host taps -------------------------------------------------------------------------------------------
     def _conn(self) -> int:
@@ -130,11 +174,15 @@ class Observer:
                 self._writes[(self._conn(), seq)] = int(now_ns)
                 self.delay.written(seq, int(now_ns))
 
+    def _done(self, seq: int, ns: int) -> None:
+        self._done_ns[(self._conn(), seq & 0xFFFF)] = int(ns)
+
     def acknowledged(self, seq: int) -> bool:
-        """A STATE on the current connection and boot stepped to ``seq`` after ``seq`` was written on it."""
+        """A STATE on the current connection and boot stepped to ``seq`` after ``seq``'s last byte was written on it
+        (Codex 7a-1 round 2 P2-1: not after its first byte)."""
         conn = self._conn()
         st = self.host.state
-        w = self._writes.get((conn, seq & 0xFFFF))
+        w = self._done_ns.get((conn, seq & 0xFFFF))
         if st is None or w is None:
             return False
         rx = self._acks.get((conn, int(st.boot_id), seq & 0xFFFF))
@@ -149,24 +197,33 @@ class Observer:
     def _disarms(self, now: int) -> None:
         if self.link.link is None:
             return
-        if not self.session_ready and self._session is None:
+        sess = self._session
+        if sess is not None and now >= sess["deadline"]:
+            # a stage not answered in time (a STATE that already named the seq, a lost answer): the pair starts
+            # again with fresh seqs (Codex 7a-1 round 2 P2-2)
+            self.rec.put({"t": "session_retry", "stage": sess["stage"], "host_ns": int(now), "conn": self._conn()})
+            self.delay.restart_check()
+            self._session = sess = None
+        if not self.session_ready and sess is None:
             self.host.request_disarm(now)
-            self._session = {"stage": "first", "seq": self.host.queued_disarm_seq()}
+            self._session = {"stage": "first", "seq": self.host.queued_disarm_seq(),
+                             "deadline": now + int(SESSION_STAGE_S * 1e9)}
             self.counts["sessions"] += 1
-        elif self._session is not None and self._session["seq"] is not None \
-                and self.acknowledged(self._session["seq"]):
-            if self._session["stage"] == "first":
-                first = self._session["seq"]
-                self.host.skip_seq(self.rng.randint(1024, 64512))
-                self.host.request_disarm(now)
-                second = self.host.queued_disarm_seq()
-                self.delay.expect_step(first, second)
-                self._session = {"stage": "second", "seq": second, "first": first}
-            else:
-                self._session, self.session_ready = None, True
-                self.rec.put({"t": "session_ready", "host_ns": int(now), "conn": self._conn(),
-                              "verified": self.delay.verified})
-                self._next_refresh_ns = now + int(DISARM_EVERY_S * 1e9)
+        elif sess is not None and sess["stage"] == "first" and sess["seq"] is not None \
+                and self.acknowledged(sess["seq"]):
+            first = sess["seq"]
+            # a step of 1024-64512 between the two seqs: queuing the first already moved the next seq by one
+            self.host.skip_seq(self.rng.randint(1024, 64512) - 1)
+            self.host.request_disarm(now)
+            second = self.host.queued_disarm_seq()
+            self.delay.expect_step(first, second)
+            self._session = {"stage": "second", "seq": second, "first": first,
+                             "deadline": now + int(SESSION_STAGE_S * 1e9)}
+        elif sess is not None and sess["stage"] == "second" and self.delay.verified:
+            # done when the delay bound's own session check passed (a STATE stepping from first to second)
+            self._session, self.session_ready = None, True
+            self.rec.put({"t": "session_ready", "host_ns": int(now), "conn": self._conn(), "verified": True})
+            self._next_refresh_ns = now + int(DISARM_EVERY_S * 1e9)
         elif self.session_ready and self._next_refresh_ns is not None and now >= self._next_refresh_ns:
             self.host.request_disarm(now)
             self._next_refresh_ns = now + int(DISARM_EVERY_S * 1e9)
@@ -183,6 +240,15 @@ class Observer:
             self._disarms(now)
         if self.feed is not None:
             self._scans(now)
+            if (self._last_scan_ns is not None and not self._scan_gap_open
+                    and now - self._last_scan_ns > SCAN_GAP_NS):
+                # no scan for longer than the sensor timeout, seen on the tick it happens -- not only when one comes
+                # back (Codex 7a-1 round 2 P2-4): a new generation, once per gap
+                self._scan_gap_open = True
+                self.counts["scan_gaps"] += 1
+                self.feed.new_generation("receive_gap")
+                self.rec.put({"t": "scan_event", "kind": "receive_gap", "since_ns": int(self._last_scan_ns),
+                              "host_ns": int(now), "feed_gen": self.feed.generation})
 
     def _scans(self, now: int) -> None:
         for _k in range(SCANS_READ_PER_CYCLE):
@@ -199,12 +265,10 @@ class Observer:
             if not data:
                 break
             recv = self.clock()
-            if self._last_scan_ns is not None and recv - self._last_scan_ns > SCAN_GAP_NS:
-                # a receive gap past the sensor timeout: the stream before it says nothing about after (design 3.2)
-                self.counts["scan_gaps"] += 1
-                self.feed.new_generation("receive_gap")
-                self.rec.put({"t": "scan_event", "kind": "receive_gap", "gap_s": (recv - self._last_scan_ns) / 1e9,
-                              "host_ns": int(recv), "feed_gen": self.feed.generation})
+            if self._scan_gap_open:
+                self._scan_gap_open = False
+                self.rec.put({"t": "scan_event", "kind": "receive_resumed", "host_ns": int(recv),
+                              "gap_s": (recv - self._last_scan_ns) / 1e9, "feed_gen": self.feed.generation})
             self._last_scan_ns = recv
             scan, why = self.feed.judge(data, recv)
             self.counts["scans"] += 1
@@ -247,10 +311,11 @@ class Openings:
 
     def __init__(self) -> None:
         self.count = 0
+        self.on_done = None  # the observer's completion tap, set when it is made
 
     def __call__(self, fd: int) -> ObserveTtyLink:
         self.count += 1
-        return ObserveTtyLink(fd)
+        return ObserveTtyLink(fd, on_done=lambda seq, ns: self.on_done and self.on_done(seq, ns))
 
 
 def main(argv=None) -> int:
@@ -311,36 +376,33 @@ def main(argv=None) -> int:
                 stopped = obs.finish()
             except Exception as exc:  # noqa: BLE001 -- the end row is still written
                 rec.put({"t": "finish_error", "error": f"{type(exc).__name__}: {exc}"})
-            # every row before the end row is on disk before the end row says so (Codex 7a-1 P2-5): a sync that
-            # fails makes the end row say incomplete; the end row's own sync failing leaves no end row a reader
-            # trusts -- either way the file never claims more than was kept
-            try:
-                f.flush()
-                os.fsync(f.fileno())
-                synced = True
-            except OSError:
-                synced = False
-            complete = rec.errors == 0 and synced
+            # every row before the end row is on disk before the end row says so; the end row's own write and sync
+            # count too, and only then the sidecar <out>.ok (the record's sha256) is made -- a replay takes the
+            # record only with a matching .ok, so a file that claims more than was kept is never read as complete
+            # (Codex 7a-1 P2-5, round 2 P2-5)
+            synced = _sync(f)
             if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
-            rec.put({"t": "end", "result": result, "stopped_confirmed": stopped, "complete": complete,
-                     "record_errors": rec.errors, "counts": obs.counts,
+            errors_before = rec.errors
+            rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
+                     "complete": errors_before == 0 and synced, "record_errors": errors_before, "counts": obs.counts,
                      "feed": None if obs.feed is None else {"accepted": obs.feed.accepted,
                                                             "refused": dict(obs.feed.refused),
                                                             "id_gaps": obs.feed.id_gaps,
                                                             "generation": obs.feed.generation,
                                                             "generation_why": obs.feed.generation_why},
                      "end_mono_ns": time.monotonic_ns()})
-            try:
-                f.flush()
-                os.fsync(f.fileno())
-            except OSError:
-                complete = False
+            complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f)
             if link.link is not None:
                 link.link.close()
                 link.link = None
             if scan_sock is not None:
                 scan_sock.close()
+    if complete:
+        try:
+            write_ok_marker(args.out)
+        except OSError:
+            complete = False
     out = {**(OUTPUT_MARKS if synthetic else {}), "result": result, "stopped_confirmed": stopped,
            "complete": complete, "record": str(args.out), "counts": obs.counts}
     print(json.dumps(out))

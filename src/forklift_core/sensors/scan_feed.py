@@ -206,25 +206,45 @@ class ScanFeed:
         if not _meta_ok(h):
             return None, "bad_meta"  # judged before any generation rule: a broken frame changes nothing
         sid = int(h["scan_id"])
-        gen = h.get("gen") if _int(h.get("gen"), 0) else None
-        # PR 7 design 3.2 (Codex 7a-1 P2-4): one producer at a time, its ids only increasing
-        if self._last_id is not None:
+        if "gen" in h and not _int(h["gen"], 1):
+            return None, "bad_meta"  # a nonce given but malformed is not "no nonce" (Codex 7a-1 round 2 P2-3)
+        gen = h.get("gen")
+        # PR 7 design 3.2 (Codex 7a-1 P2-4): one producer at a time, its ids only increasing. A switch to a new
+        # producer (or a nonce-less restart) takes effect only when that frame is accepted: a refused frame never
+        # retires the producer that is still sending (round 2 P2-3)
+        switch = None
+        if self._last_id is None:
+            self._producer = gen  # the stream's first frame names its producer
+        else:
             if gen != self._producer:
                 if gen in self._ended:
                     return None, "old_producer"  # a late frame of a producer already replaced
-                self._ended.add(self._producer)
-                self.new_generation("producer")
-                self._last_id = None
+                switch = "producer"
             elif sid <= self._last_id:
                 if gen is not None or sid == self._last_id:
                     return None, "stale_id"  # a duplicate, or an id a producer with a nonce never goes back to
-                self.new_generation("id_back")  # a restart of an adapter that sends no nonce
-                self._last_id = None
+                switch = "id_back"  # a restart of an adapter that sends no nonce
+        scan, why = self._judge_clock(h, ranges, inten, gen)
+        if why is not None:
+            if switch is None:
+                self._advance(sid)  # the current producer's frame, refused on its clock: still counts for gaps
+            return None, why
+        if switch == "producer":
+            self._ended.add(self._producer)
+        if switch is not None:
+            self.new_generation(switch)
+            self._last_id = None
+            scan = _replace_gen(scan, self.generation)
         self._producer = gen
-        # every frame passing the meta check, accepted or not, for the gap count (Codex 7a P2-3)
+        self._advance(sid)
+        return scan, None
+
+    def _advance(self, sid: int) -> None:
         if self._last_id is not None and sid > self._last_id + 1:
             self.id_gaps += sid - self._last_id - 1
-        self._last_id = sid
+        self._last_id = sid if self._last_id is None else max(self._last_id, sid)
+
+    def _judge_clock(self, h: dict, ranges, inten, gen) -> tuple[RealScan | None, str | None]:
         pair = int(h["sys_minus_mono_ns"])
         stamp_mono = int(h["ros_stamp_ns"]) - pair
         latency = int(h["recv_mono_ns"]) - stamp_mono
@@ -254,7 +274,7 @@ class ScanFeed:
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
         return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,
-                        producer_gen=self._producer, feed_gen=self.generation), None
+                        producer_gen=gen, feed_gen=self.generation), None
 
     # ------------------------------------------------------------------ the socket
     def poll(self) -> list[RealScan]:
@@ -273,6 +293,12 @@ class ScanFeed:
             if scan is not None:
                 out.append(scan)
         return out
+
+
+def _replace_gen(scan: RealScan, feed_gen: int) -> RealScan:
+    from dataclasses import replace
+
+    return replace(scan, feed_gen=feed_gen)
 
 
 def bind_socket(path: str | Path, *, rcvbuf: int = 1 << 20) -> socket.socket:
