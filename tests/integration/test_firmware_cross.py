@@ -123,6 +123,7 @@ def test_build_identity_in_elf(any_build):
     m = re.search(rb"forklift-mcu (\S+) locked \S+ link=(usb|uart7) cc=[^\x00]*"
                   rb"Arm GNU Toolchain 13\.3\.Rel1", data)
     assert m, "build identity string missing"
+    assert b"lim=" not in data  # only the open commissioning image raises its limits
     assert m.group(1).decode() == BUILDS[name][2]
     assert m.group(2).decode() == BUILDS[name][1]
 
@@ -351,7 +352,8 @@ def test_output_build_carries_the_record_and_tim1(open_build, record_repo):
                           check=True).stdout
     sha8 = hashlib.sha256(blob).hexdigest()[:8]
     data = (d / "fw.elf").read_bytes()
-    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=" + sha8.encode() + rb" link=usb", data)
+    # design 2026-11-25-bench-commission-limits 1.1: the open commissioning image ends its identity with lim=lr1
+    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=" + sha8.encode() + rb" lim=lr1 link=usb", data)
     map_text = (d / "fw.map").read_text()
     assert "motor_out_tim1" in map_text and "motor_out_locked" not in map_text
     syms = _symbols(d / "fw.elf")
@@ -537,7 +539,7 @@ def test_normal_build_opens_only_with_the_waiver_record(record_repo, tmp_path):
 
 def test_the_commissioning_open_build_carries_no_waiver(open_build):
     data = (open_build / "boards" / "weact_h743" / "fw.elf").read_bytes()
-    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=[0-9a-f]{8} link=usb", data)
+    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=[0-9a-f]{8} lim=lr1 link=usb", data)
     assert b"waiver=" not in data
 
 

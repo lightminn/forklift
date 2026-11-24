@@ -73,10 +73,13 @@ bool drive_config_valid(const drive_config *c)
         (c->estop_wired || c->outputs_locked || c->commission_build || c->hil_plant)) {
         return false;
     }
-    if (c->commission_build &&
-        (!finite_pos(c->commission_duty_max) || c->commission_duty_max > 1.0f ||
-         c->commission_time_ms == 0 || c->commission_time_ms > max_ms)) {
-        return false;
+    if (c->commission_build) {
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            if (c->commission_duty_max_e4[ch] == 0 || c->commission_duty_max_e4[ch] > 10000u ||
+                c->commission_time_ms[ch] == 0 || c->commission_time_ms[ch] > max_ms) {
+                return false;
+            }
+        }
     }
     /* v2: slew and encoder fault detection. */
     if (!finite_pos(c->wheel_duty_slew_per_s) || c->enc_gap_max_us < 2u * c->period_us ||
@@ -300,6 +303,7 @@ bool drive_init(drive *d, const drive_config *c, const drive_inputs *first, uint
     d->reset_cause = reset_cause;
     d->first_cycle = true;
     d->cm_axis = CM_AXIS_NONE;
+    d->cm_on_axis = CM_AXIS_NONE;
     d->last_now32 = first->now_us;
     d->mode = DRIVE_MODE_BOOT;
     for (int i = 0; i < 2; i++) {
@@ -549,8 +553,11 @@ static void refresh_flags(drive *d)
 
 static bool commission_over_limit(const drive *d)
 {
-    return d->cfg->commission_build && d->cm_on &&
-           d->time_us - d->cm_on_since_us > (uint64_t)d->cfg->commission_time_ms * US_PER_MS;
+    /* The interval's own axis, fixed at its first non-zero output: a DISARM resets cm_axis while
+       cm_on still holds until a zero-output cycle (design 2026-11-25 1.1, Codex S P1-1). */
+    return d->cfg->commission_build && d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT &&
+           d->time_us - d->cm_on_since_us >
+               (uint64_t)d->cfg->commission_time_ms[d->cm_on_axis] * US_PER_MS;
 }
 
 /* After the commissioning time limit: the limit bit, and no ARM before stop_grace_ms of zero
@@ -770,16 +777,24 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
     if (!d->cfg->commission_build) {
         return DRIVE_REJECT_WRONG_BUILD;
     }
+    if (c->axis >= DRIVE_CH_COUNT || c->valid_after_echo_ms == 0) {
+        return DRIVE_REJECT_BAD_VALUE;
+    }
+    /* Integer e4 against the picked axis's limit: a float x 10000 comparison misreads the edge. */
     int32_t duty = c->duty_e4;
-    float limit_e4 = d->cfg->commission_duty_max * 10000.0f;
-    if (c->axis >= DRIVE_CH_COUNT || (float)(duty < 0 ? -duty : duty) > limit_e4 ||
-        c->valid_after_echo_ms == 0) {
+    uint32_t duty_abs = (uint32_t)(duty < 0 ? -duty : duty);
+    if (duty_abs > d->cfg->commission_duty_max_e4[c->axis]) {
         return DRIVE_REJECT_BAD_VALUE;
     }
     uint8_t why =
         command_check(d, m->seq, c->boot_id, c->arm_gen, c->echo_mcu_time_us, window_ms, duty != 0);
     if (why != DRIVE_REJECT_NONE) {
         return why;
+    }
+    /* One axis per output interval (design 2026-11-25 1.1): another axis waits for a cycle whose
+       applied outputs are all zero, so an interval's time limit is one axis's. */
+    if (d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && c->axis != d->cm_on_axis) {
+        return DRIVE_REJECT_STOPPING;
     }
     if ((c->axis == DRIVE_CH_M && !axis_ok(&d->steer)) ||
         (c->axis == DRIVE_CH_H && !axis_ok(&d->lift))) {
@@ -934,6 +949,7 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
         }
         d->wheel_duty[0] = d->wheel_duty[1] = 0.0f;
         d->cm_on = false;
+        d->cm_on_axis = CM_AXIS_NONE;
         return;
     }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
@@ -960,8 +976,10 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
     }
     if (!any) {
         d->cm_on = false;
+        d->cm_on_axis = CM_AXIS_NONE;
     } else if (!d->cm_on) {
         d->cm_on = true;
+        d->cm_on_axis = d->cm_axis;
         d->cm_on_since_us = d->time_us;
     }
 }
@@ -1002,6 +1020,7 @@ void drive_finish(drive *d, drive_outputs *out)
         }
         d->wheel_duty[0] = d->wheel_duty[1] = 0.0f;
         d->cm_on = false;
+        d->cm_on_axis = CM_AXIS_NONE;
     }
     d->out = o;
     *out = o;

@@ -176,7 +176,10 @@ def test_a_new_polarity_bit_of_the_driven_wheel_stops_its_duty_while_still_armed
     assert any(s.state.mode == Mode.ARMED and s.state.duty_e4[0] == 0 for s in b.samples[first_bit:])
 
 
-@pytest.mark.parametrize("kw,why", [({"duty": 0.2}, "duty"), ({"duty": 0.0}, "duty"), ({"seconds": 1.6}, "seconds"),
+# design 2026-11-25 1.2: past 0.15 or 1.5 s a wheel run is "large" and first needs --wheels-lifted
+@pytest.mark.parametrize("kw,why", [({"duty": 0.2}, "wheels lifted"), ({"duty": 0.0}, "duty"),
+                                    ({"seconds": 1.6}, "wheels lifted"),
+                                    ({"axis": "M", "duty": 0.2, "seconds": 0.1, "window": (-1.0, 1.0)}, "duty"),
                                     ({"seconds": 0.05}, "seconds"), ({"window": (0.0, 1.0)}, "window"),
                                     ({"axis": "M", "seconds": 0.3, "window": (-1.0, 1.0)}, "seconds"),
                                     ({"power_switch_in_hand": False}, "power switch")])
@@ -265,7 +268,7 @@ def _order(b):
 def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
     """The model's limit is 300 ms and its stop_grace 100 ms: the DISARM goes out in the limit's STOPPING (at once,
     or 50 ms in), its seq is accepted from STOPPING and the MCU is DISARMED with the limit bit kept."""
-    b = model("--commission-time-ms", "300")
+    b = model("--commission-time-ms", "300", "--outputs-locked", "1", allow_locked=True)
     res = bringup.execute(sargs(scenario=kind, stop_time_ms="180", output_response_ms="unavailable"), b)
     assert res["result"] == "ok", res
     assert res["limit_reached"] and res["disarm_accepted"] and res["disarm_during_stopping"] is True
@@ -292,23 +295,23 @@ def test_a_disarm_in_the_limit_stopping_is_accepted_at_once(model, kind):
 
 def test_a_hold_disarm_after_the_stopping_ended_is_not_met(model):
     """The operator's stop_grace is wrong (the build's is 100 ms): a 150 ms delay lands after the natural end."""
-    b = model("--commission-time-ms", "300")
+    b = model("--commission-time-ms", "300", "--outputs-locked", "1", allow_locked=True)
     res = bringup.execute(sargs(scenario="hold_disarm", disarm_delay_ms=150.0, stop_grace_ms=400.0), b)
     assert res["result"] == "not_met" and res["hold_ended_before_disarm"], res
     assert res["disarm_during_stopping"] is False and res["cleanup_confirmed"]
 
 
-def test_a_new_polarity_bit_stops_the_scenario_before_the_limit(model):
-    """Codex scenario review P2-3: only the 1.5 s bound is lifted, not the encoder stop."""
-    b = model("--commission-time-ms", "1800", "--encoder-sign-flip", "0", "--encoder-test-thresholds", "1")
+def test_the_time_limit_scenarios_are_refused_on_an_open_board(model):
+    """Design 2026-11-25 1.3: an open commissioning board's wheel limit is the validator's ceiling, so the scenarios
+    that drive to it run on a locked board or the model only -- refused before the ARM."""
+    b = model("--commission-time-ms", "300")
     res = bringup.execute(sargs(), b)
-    assert res["result"] == "aborted" and res["aborted"] == "encoder_bit_before_limit", res
-    assert not res["limit_reached"] and res["cleanup_confirmed"]
-    assert "DISARM" in kinds_written(b)
+    assert res["result"] == "refused" and "locked commissioning board" in res["why"], res
+    assert "ARM" not in kinds_written(b)
 
 
 def test_a_limit_that_never_comes_is_an_abort(model):
-    b = model()  # the model's limit is 2000 ms; the tool gives up at 1.6 + 0.3 s
+    b = model("--outputs-locked", "1", allow_locked=True)  # a locked model's limit is 2000 ms; gives up at 1.9 s
     res = bringup.execute(sargs(limit_s=1.6), b)
     assert res["result"] == "aborted" and res["aborted"] == "limit_not_reached", res
     assert res["cleanup_confirmed"]
@@ -357,7 +360,7 @@ def test_a_fault_or_reboot_first_seen_in_the_scenario_cleanup_is_an_abort(model,
 
     from forklift_core.plant.bringup import Sample
 
-    b = model("--commission-time-ms", "300")
+    b = model("--commission-time-ms", "300", "--outputs-locked", "1", allow_locked=True)
     real = bringup.CommissionSession.cleanup
 
     def cleanup_then_bad_state(self):
@@ -495,6 +498,198 @@ def test_the_marker_reader_never_blocks_on_a_partial_line():
         poll()
         marks = [json.loads(x) for x in out.getvalue().splitlines() if '"marker"' in x]
         assert [m["label"] for m in marks][-1] == "again"
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
+# --- design 2026-11-25-bench-commission-limits (PR-1): large wheel runs on the open commissioning image ---
+
+LR1 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1"
+
+
+def largs(**kw):
+    base = dict(duty=0.3, seconds=2.0, wheels_lifted=True, synthetic=True, observed="none")
+    return args(**{**base, **kw})
+
+
+def _typed(monkeypatch, answer=None):
+    """The operator's terminal line: the run's own phrase unless ``answer`` is given."""
+    def line(prompt):
+        return answer if answer is not None else prompt.split("Type exactly '")[1].rstrip("': ")
+    monkeypatch.setattr(bringup, "_tty_line", line)
+
+
+def test_acceptance_an_encoderless_wheel_runs_large_and_long_with_the_bypass(model, monkeypatch):
+    """Design 4 (the lead's acceptance condition): an encoder-less L wheel driven open-loop at 0.3 for 2 s on the
+    official open commissioning image, the tool's arguments only -- the stuck bit really comes on and the run goes on,
+    ending with its zero and the cleanup."""
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(largs(bypass="enc_stuck,enc_polarity"), b)
+    assert res["result"] == "ok" and res["stop"] == "time", res
+    assert "ENCODER_STUCK_L" in res["faults_seen"]  # the bit came on and was left out of the early stop
+    assert res["large"] and res["bypass"] == ["enc_stuck", "enc_polarity"] and res["cleanup_confirmed"]
+    assert max(abs(s.state.duty_e4[0]) for s in b.samples) == 3000
+    assert 1.8 <= res["metrics"]["driven_ms_min"] / 1000 <= 2.1
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    (cond,) = [r for r in rows if r["t"] == "run_conditions"]
+    assert cond["large"] and cond["bypass"] == ["enc_stuck", "enc_polarity"]
+    # the product checked just before the ARM is the run's (Codex PR-1 P2-2)
+    (armed,) = [r for r in rows if r["t"] == "pre_arm_checked"]
+    assert [r for r in rows if r["t"] == "armed"]  # and the ARM was taken
+    assert armed["product"] == LR1 and armed["lim"] and armed["large"] and armed["duty_max"] == 1.0
+    assert armed["ignored_bits"] == ["ENCODER_STUCK_L", "ENCODER_POLARITY_L"] and res["board_product"] == LR1
+
+
+def test_without_the_bypass_the_stuck_bit_still_stops_it(model, monkeypatch):
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(largs(), b)
+    assert res["stop"] == "encoder_bit" and res["cleanup_confirmed"], res
+
+
+def test_only_the_named_kind_is_left_out(model, monkeypatch):
+    """--bypass enc_polarity leaves the stuck stop in place."""
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(largs(bypass="enc_polarity"), b)
+    assert res["stop"] == "encoder_bit", res
+
+
+@pytest.mark.parametrize("product,kw,answer,why", [
+    (None, {}, None, "no USB product"),                                         # UART7 or a pty: nothing to read
+    ("forklift-mcu commission OPEN v0 rec=00000000", {}, None, "lim=lr1"),      # today's image
+    ("forklift-mcu commission OPEN v0 rec=00000000 lim=lr1x", {}, None, "lim=lr1"),  # a cut or other token
+    ("FT232R USB UART", {}, None, "lim=lr1"),                                   # a USB-UART adapter's own string
+    (LR1, {"wheels_lifted": False}, None, "wheels lifted"),
+    (LR1, {"duty": 0.5, "synthetic": False}, None, "vcc"),
+    (LR1, {}, "yes", "did not retype"),                                         # --yes-style answer is not enough
+    (LR1, {"duty": 1.01}, None, "at most"),
+    (LR1, {"seconds": 601.0}, None, "at most 600"),
+])
+def test_a_large_run_is_refused_before_any_arm(model, monkeypatch, product, kw, answer, why):
+    b = model()
+    b.host.usb_product = product
+    _typed(monkeypatch, answer)
+    res = bringup.execute(largs(**kw), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert "ARM" not in kinds_written(b)
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    assert not [r for r in rows if r["t"] in ("pre_arm_checked", "armed")]  # a refused board has neither row
+
+
+def test_the_large_confirmation_needs_a_terminal(model, monkeypatch):
+    b = model()
+    b.host.usb_product = LR1
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    res = bringup.execute(largs(), b)
+    assert res["result"] == "refused" and "not a TTY" in res["why"]
+    assert kinds_written(b) == []
+
+
+def test_a_signed_triangle_runs_every_piece_with_its_sign(model, monkeypatch):
+    """The diagnostic branch drove a negative request positive; the profile keeps --duty's sign on every piece and
+    ends on its absolute deadlines."""
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    t0 = time.monotonic()
+    res = bringup.execute(largs(duty=-0.3, seconds=None, profile_tri=[0.05, 0.3, 1.0, 2.0], bypass="enc_stuck"), b)
+    took = time.monotonic() - t0
+    assert res["result"] == "ok" and res["stop"] == "time", (res.get("aborted"), res.get("faults_seen"), res)
+    p = res["profile"]
+    assert p["pieces"] == 20 and p["sent_max_e4"] == -2750 and p["applied_max_e4"] < 0
+    sent = [d for d in (m.duty_e4 for k, _t, m in b.written.values() if k == "COMMISSION" and m is not None)]
+    assert min(sent) == -2750 and max(sent) == 0
+    # every piece lasts its whole 0.1 s, the last one included (Codex PR-1 P2-1): from the first nonzero write to
+    # the first zero after the last nonzero one is the profile's 2.0 s
+    writes = sorted((t, m.duty_e4) for k, t, m in b.written.values() if k == "COMMISSION" and m is not None)
+    first_on = next(t for t, d in writes if d != 0)
+    last_on = max(t for t, d in writes if d != 0)
+    zero_after = next(t for t, d in writes if d == 0 and t > last_on)
+    assert 1.97 <= (zero_after - first_on) / 1e9 <= 2.1
+    assert res["metrics"]["rate_mean_rad_s"] is None  # a profile is not a step
+    assert took < 2.0 + 0.3 + 0.5 + 3.0  # pre-zero, profile, post-zero, cleanup: no stretching per piece
+
+
+@pytest.mark.parametrize("kw,why", [
+    ({"profile_tri": [0.2, 0.8, 1.0, 1.0], "duty": 0.8}, "wheel slew"),   # the first piece 0.26 in 0.1 s
+    ({"profile_tri": [0.05, 0.3, 1.05, 1.0]}, "whole number"),
+    ({"profile_tri": [0.05, 0.3, 1.0, float("nan")]}, "finite"),
+    ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "duty": 0.2}, "equal HI"),
+    ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "seconds": 2.0}, "no --seconds"),
+    ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "axis": "M", "window": (-1.0, 1.0)}, "wheel"),
+    # 1.5 s of pieces + hand-over + validity is past 1.5 s: large, so it needs the large rules (Codex re-review P2-1)
+    ({"profile_tri": [0.05, 0.10, 0.5, 3.0], "duty": 0.10, "wheels_lifted": False}, "wheels lifted"),
+])
+def test_bad_profiles_are_refused_before_any_arm(model, monkeypatch, kw, why):
+    b = model()
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(largs(**{"seconds": None, **kw}), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert kinds_written(b) == []
+
+
+def test_the_cli_gives_the_host_each_reads_own_time():
+    """Codex S 7th P2: the commissioning CLI builds its link with the read-time clock, so a COMMISSION's validity is
+    counted from when its STATE was read, not from the cycle's start."""
+    import unittest.mock as um
+    with um.patch.object(bringup, "ReconnectingLink") as rl, um.patch.object(bringup, "execute", return_value={}):
+        bringup.main(["commission", "--device", "/dev/null", "--out", "/dev/null", "--axis", "L", "--duty", "0.1",
+                      "--seconds", "0.5", "--power-switch-in-hand"])
+    assert rl.call_args.kwargs["clock"] is time.monotonic_ns
+
+
+def test_a_small_profile_is_judged_on_its_pieces_not_its_nominal_hi(model, monkeypatch):
+    """Codex PR-1 P3: --duty 0.16 --profile-tri 0 0.16 0.4 1 peaks at 0.12 for 0.4 s -- a default run, no large rules."""
+    b = model()
+    res = bringup.execute(args(duty=0.16, seconds=None, profile_tri=[0.0, 0.16, 0.4, 1.0]), b)
+    assert res["result"] == "ok" and not res["large"] and res["profile"]["sent_max_e4"] == 1200, res
+
+
+def test_the_link_hands_the_host_the_read_time_not_the_cycle_start():
+    """Codex PR-1 P3: with the clock the host is given when the bytes were read (a late read shortens a COMMISSION's
+    validity instead of stretching its MCU deadline past the approved end)."""
+    from real_mcu_link import ReconnectingLink
+
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    os.set_blocking(master, False)
+    try:
+        seen = []
+
+        class Host:
+            def link_identity(self, product):
+                return []
+
+            def on_bytes(self, data, t):
+                seen.append(t)
+                return []
+
+            def tick(self, t):
+                return []
+
+        clock_t = iter([5_000_000, 6_000_000, 7_000_000])
+        def opener(_path, _baud):
+            fd = os.dup(slave)
+            os.set_blocking(fd, False)  # as open_raw opens it
+            return fd
+
+        link = ReconnectingLink("pty", opener=opener, clock=lambda: next(clock_t),
+                                product_reader=lambda fd: None)
+        link.tx_enabled = False
+        os.write(master, bytes([1, 2, 3]))
+        time.sleep(0.05)
+        try:
+            link.service(Host(), 1_000_000)  # the cycle started at 1 ms; the read returned at the clock's 5 ms
+            assert seen == [5_000_000]
+        finally:
+            link.link.close()  # the dup the opener gave
     finally:
         os.close(master)
         os.close(slave)

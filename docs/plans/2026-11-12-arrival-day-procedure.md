@@ -272,7 +272,14 @@ USB 멈춤을 본 날짜·조건은 기록한다. 조건부 감시 리셋을 다
 - IPROPI 보호 회로가 실장됐거나 최종 회로를 확인했다(계획 5절 선행 조건).
 - 사용자가 보호 확인 기록을 쓰고 커밋했다.
   - 표지 줄: `IPROPI protection record: confirmed-by=…; date=YYYY-MM-DD; evidence=…`
-- `fw-open` 이 구성·빌드되고, 3.1 로 구운 보드의 제품 문자열이 `forklift-mcu commission OPEN <git> rec=<해시>` 이다.
+- `fw-open` 이 구성·빌드되고, 3.1 로 구운 보드의 제품 문자열이 `forklift-mcu commission OPEN <git> rec=<해시> lim=lr1` 이다(2026-11-25 부터 열린 시운전 이미지는 `lim=lr1` 로 끝난다).
+- **Jetson 이 실제로 실행할 도구의 커밋**을 확인했다. 열린 시운전 이미지는 L·R 을 1.0·검증기 천장까지 받으므로, 큰 값의 확인(TTY 재입력·`--vcc-watched`)은 도구에만 있다. 11-24 처럼 진단 도구가 남아 있으면 그 확인이 빠진다.
+  - 확인하고 실행하는 곳이 같아야 한다. 확인한 체크아웃으로 **먼저 이동한 뒤**, 그 자리에서 확인하고 그 자리의 `tools/bringup.py` 로 실행한다. `git -C` 는 현재 디렉터리를 바꾸지 않아서, 진단 체크아웃에 머문 채 main 을 확인하는 일이 생긴다.
+    ```bash
+    cd ~/forklift && git log -1 --format=%h && git status --short | head
+    python -c "import forklift_core.plant.bench_limits as b; print(b.__file__)"   # ~/forklift/src/... 이어야 함
+    ```
+  - 그 커밋이 이 PR 이후의 main 이어야 하고, 불러오는 `forklift_core` 가 같은 체크아웃이어야 한다. 아래 명령은 모두 이 `~/forklift` 에서 실행한다.
 - 보호 확인 기록의 근거에는 저항 부하 등으로 작은 전류를 흘려 IPROPI 전압을 미리 잰 값을 넣기를 권한다(agy).
 - **전원 바꿈**: 6.1 의 0.3–0.5 A 한계로는 모터 기동 전류에서 전압이 주저앉아 가짜 리셋·UVLO 가 난다(agy). 계획 S1 에서 확인한 배터리 경로로 바꾸거나, 벤치 전원을 계속 쓰면 올린 한계값과 이유를 기록한다.
 - **배선 대조**: 각 축(L·R·M·H)의 모터·엔코더·KTH 커넥터가 그 축에 맞는지 도통으로 확인한다. 처음 구동은 도구가 허용하는 가장 짧은 시간(`--seconds 0.1`)으로 어느 축이 움직이는지부터 본다(agy).
@@ -289,15 +296,17 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run_M.jso
 ```
 
 - **명령 제약**
-  - 듀티는 0 이 아니고 ±0.15 이하다. 도구가 그 밖의 값은 보내지 않고 거부하며(`refused`), 펌웨어도 0.15 를 넘으면 거부하고 이전 명령을 유지한다.
-  - 시간은 0.1–1.5 s.
+  - 기본은 듀티 0 이 아닌 ±0.15 이하, 시간 0.1–1.5 s 다. 도구가 그 밖의 값은 보내지 않고 거부한다(`refused`). M·H 는 펌웨어도 0.15 를 넘으면 거부하고 이전 명령을 유지한다.
+  - **L·R 의 큰 값**(0.15 초과 또는 1.5 s 초과, 설계 `docs/design/2026-11-25-bench-commission-limits.md` 1.2): `lim=lr1` 이 붙은 열린 시운전 이미지여야 한다. `--wheels-lifted`(바퀴를 띄우고 차체를 고정, 회전체 주변 배선 정리)가 필요하다. 터미널에서 문구를 다시 입력해야 한다(`--yes` 로 건너뛸 수 없음). 0.3 초과는 0.3 → 0.5 → 0.7 → 1.0 으로 단계를 올리고 `--vcc-watched` 를 준다(VCC 감시). 한 실행은 600 s 까지다(PR-1 임시 상한). 펌웨어는 L·R 을 1.0·검증기 천장까지 받으므로 크기는 도구 인자가 정한다.
+  - 엔코더가 없는 바퀴는 `--bypass enc_stuck,enc_polarity` 로 도구의 엔코더 조기 정지를 끈다. 비트는 기록에 남는다.
+  - 삼각파는 `--profile-tri LO HI PERIOD CYCLES` 이고 \|`--duty`\| = HI 다. 부호는 모든 조각에 붙는다.
   - `--observed` 는 주지 않는다: 실행 뒤 도구가 물으면 **실제로 본 방향**을 답한다(pos = 차체 앞·왼쪽·위). 미리 적어 두면 모터와 센서 극성이 함께 뒤집힌 경우를 놓친다(Codex).
 - **합격**
   - 판정: `verdict.duty_sign_ok`·`verdict.sensor_sign_ok` 가 참이고, `metrics.valid` 가 참이다.
   - 극성: 틀리면 `verdict.suggested_duty_sign` 을 보드 설정의 `duty_sign` 에 넣는다.
   - 전류: `metrics.current_peak_ma`·`current_mean_ma` 가 벤치 전류계와 맞는다.
   - 범위 끝: 조향·승강은 기구 한계 전에 잰다.
-- **무부하 최대 바퀴 속도**: 바퀴마다 허용 최대 듀티(0.15)에서 `metrics.rate_mean_rad_s` 를 기록한다(시운전 듀티 상한 안의 값 — 그 이상은 정상 빌드 결정 뒤).
+- **무부하 최대 바퀴 속도**: 엔코더가 있는 바퀴마다, 큰 값 규칙(위 명령 제약)으로 듀티를 단계적으로 올리며(0.3 → 0.5 → 0.7 → 1.0, `--vcc-watched`) `metrics.rate_mean_rad_s` 를 기록한다. 기본 0.15 값도 함께 남긴다.
 - **전원 강하·회생 과전압(오실로스코프)**: 기동·역전·멈춤 때 VCC 가 LM74801 UVLO(10.41 V)·19 V 쪽 UVLO 에 걸리지 않아야 하고, 급감속·역전 때 VCC 상승이 레일 부품 정격 안이어야 한다. 오실로스코프가 없으면 이 항목은 **미완료**로 남는다 — S3 합격으로 치지 않는다.
 - **멈춤**: 의도와 다른 방향, 과전류, 기구 한계 접촉, Jetson·MCU 리셋, `faults_seen` 에 예상 밖 결함.
 

@@ -90,8 +90,20 @@ static drive_config make(void)
 #else
     c.estop_waived = false;
 #endif
-    c.commission_duty_max = 0.15f;  /* plan 3.4 */
-    c.commission_time_ms = 2000;    /* plan 3.4 */
+    /* Commissioning limits per axis (plan 3.4; design 2026-11-25-bench-commission-limits 1.1).
+       Every build starts at 0.15 / 2 s. Only the open commissioning build (on the stand, behind
+       the protection record gate) raises the wheels to duty 1.0 and the validator's ms
+       ceiling, so the bring-up tool's arguments set how hard and how long; steering and lift
+       stay at 0.15 / 2 s. The locked commissioning build keeps 2 s on the wheels for
+       rearm_hold_check. */
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        c.commission_duty_max_e4[ch] = 1500;
+        c.commission_time_ms[ch] = 2000;
+    }
+#if defined(FW_BUILD_commission) && defined(FW_MOTOR_OUTPUT_OPEN)
+    c.commission_duty_max_e4[DRIVE_CH_L] = c.commission_duty_max_e4[DRIVE_CH_R] = 10000;
+    c.commission_time_ms[DRIVE_CH_L] = c.commission_time_ms[DRIVE_CH_R] = 0x7FFFFFFFu / 1000u;
+#endif
     c.wheel_duty_slew_per_s = 2.0f; /* S1/S3 실측 대기 */
     /* Encoder fault detection (plan 3.3), all S3/S4 실측 대기. The gap limit keeps the largest
        real step unambiguous: 0.02 s x 15 rad/s x 327680 / 2pi = 15645 <= 16383. */

@@ -17,8 +17,12 @@
 #else
 #define FW_WAIVER_TAG ""
 #endif
+/* Design 2026-11-25-bench-commission-limits 1.1: the open commissioning image's limit generation
+   (" lim=lr1": wheels up to duty 1.0 and the validator time ceiling); empty otherwise. The
+   bring-up tool refuses large values on a board without it. */
+#define FW_LIMITS_TAG "@FW_LIMITS_TAG@"
 #define FW_TOOLCHAIN "@FW_TOOLCHAIN_VERSION@"
 /* Board design 3.7: the USB product string and the head of the ELF identity. */
-#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG FW_WAIVER_TAG
+#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG FW_WAIVER_TAG FW_LIMITS_TAG
 
 #endif

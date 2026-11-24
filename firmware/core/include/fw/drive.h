@@ -110,8 +110,11 @@ typedef struct {
     /* V1.0 e-stop waiver (plan 2026-11-18): an open normal build without a pin may arm, behind a
        committed user record checked at build time. STATE still reports estop_unwired. */
     bool estop_waived;
-    float commission_duty_max;   /* COMMISSION |duty| limit, (0, 1]; commission builds only */
-    uint32_t commission_time_ms; /* continuous non-zero COMMISSION duty limit */
+    /* Per axis (L, R, M, H), commission builds only (design 2026-11-25-bench-commission-limits
+       1.1): the |duty_e4| a COMMISSION may ask for, (0, 10000], and the continuous non-zero
+       output time of an interval on that axis, (0, validator ms ceiling]. */
+    uint16_t commission_duty_max_e4[DRIVE_CH_COUNT];
+    uint32_t commission_time_ms[DRIVE_CH_COUNT];
     float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */
     /* Encoder fault detection (plan 3.3); board values wait for S3/S4 measurements. */
     uint32_t enc_gap_max_us;          /* longest gap between two wheel reads */
@@ -179,6 +182,8 @@ typedef struct drive {
     uint8_t cm_axis;
     float cm_duty; /* control coordinates */
     bool cm_on;
+    uint8_t cm_on_axis; /* the axis of the open output interval, fixed at its first non-zero
+                           output and released with cm_on (never the last command's cm_axis) */
     uint64_t cm_on_since_us;
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

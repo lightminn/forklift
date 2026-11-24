@@ -20,6 +20,10 @@ usage:
                       (--marker counts from 0: 0 = the first marker, -1 = the last, the default)
   bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --seconds S [--window LO HI]
                       [--observed pos|neg|none] --power-switch-in-hand [--allow-locked] [--yes] [--markers]
+                      [--bypass enc_stuck,enc_polarity] [--wheels-lifted] [--vcc-watched]
+                      [--profile-tri LO HI PERIOD CYCLES]
+                      (L/R past duty 0.15 or 1.5 s: an open commissioning image with lim=lr1, --wheels-lifted and
+                      the phrase retyped on a terminal; design 2026-11-25-bench-commission-limits 1.2)
   bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
                       [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
   bringup.py kth      --record run.jsonl --configured-m V --configured-h V --image ID
@@ -33,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -51,6 +56,7 @@ from forklift_core.mcu_link.messages import (
     ResetCause,  # noqa: F401 -- re-exported for the tool's tests
     StateFlag,
 )
+from forklift_core.plant import bench_limits as bl
 from forklift_core.plant.bringup import (
     Sample,
     count_settle,
@@ -255,6 +261,9 @@ class Session:
             raise Refused(f"arm blocked: {blocked.reason}")
         if not b.run_until(lambda: b.host.ready, 2.0):  # arm_pending -> zero_pending -> ready, no retry
             raise Refused("not ready after ARM")
+        # the ARM was taken (zero seen): told apart from the pre-ARM check row (Codex PR-1 re-review 3 P2)
+        st = b.host.state  # the STATE the host judged ready on, not a later-decoded older one (Codex re-review 4 P3)
+        b.emit({"t": "armed", "host_ns": time.monotonic_ns(), "boot_id": st.boot_id, "arm_gen": st.arm_gen})
 
     def preflight(self, state: McuState) -> None:
         check_build(state, allow_locked=self.b.allow_locked)
@@ -469,15 +478,22 @@ def run_scenario(bench: Bench, session: Session, kind: str, rate: float) -> dict
 _AXIS_ENCODER_BITS = {0: FaultFlag.ENCODER_STUCK_L | FaultFlag.ENCODER_POLARITY_L,
                       1: FaultFlag.ENCODER_STUCK_R | FaultFlag.ENCODER_POLARITY_R}
 PRE_ZERO_S = 0.3
+_NO_BITS = FaultFlag(0)
 POST_ZERO_S = 0.5
 
 
 class CommissionSession(Session):
     """Design ② 3: a commissioning build only, the picked axis's open-loop duty, early stops, the tool ① cleanup."""
 
-    def __init__(self, bench: Bench, axis: int, window: tuple[float, float] | None) -> None:
+    def __init__(self, bench: Bench, axis: int, window: tuple[float, float] | None, *,
+                 duty_max: float = COMMISSION_DUTY_MAX, ignore: FaultFlag = _NO_BITS, large: bool = False,
+                 scenario: str | None = None) -> None:
         super().__init__(bench, 0.0)
         self.axis, self.window = axis, window
+        # design 2026-11-25 1.2: the run's own duty bound (0.15, or the large run's), the encoder bits the early
+        # stop leaves out (--bypass), whether the board must carry lim=lr1, and a scenario (locked boards only)
+        self.duty_max, self.ignore, self.large, self.scenario = duty_max, ignore, large, scenario
+        self.preflight_product: str | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -487,18 +503,32 @@ class CommissionSession(Session):
             raise Refused("not a commissioning build (STATE.flags.commission_build off): nothing is sent")
         if state.flags & StateFlag.OUTPUTS_LOCKED and not self.b.allow_locked:
             raise Refused("outputs_locked: nothing would turn (--allow-locked for a model)")
+        if self.scenario is not None and not state.flags & StateFlag.OUTPUTS_LOCKED:
+            # design 2026-11-25 1.3: on an open board the wheels' limit is the validator's ceiling -- the time-limit
+            # scenarios run on a locked board or the model; the stop after a tool DISARM is PR-2's duty_disarm
+            raise Refused("scenario: the time-limit scenarios run on a locked commissioning board or the model only")
+        # the product string the run is armed on (Codex PR-1 P2-2): checked here, kept with the run's conditions
+        self.preflight_product = self.b.host.usb_product
+        if self.large and (why := bl.board_refusal(self.preflight_product)) is not None:
+            raise Refused(why)
         if self.axis >= 2:
             v = state.steering_rad if self.axis == 2 else state.lift_m
             lo, hi = self.window
             if not (v == v and lo < v < hi):
                 raise Refused(f"window: the axis value {v} is not inside ({lo}, {hi})")
+        # every pre-ARM check passed: the board and conditions the ARM is about to be asked on (a refused board has no
+        # row; whether the ARM was then taken is the "armed" row)
+        self.b.emit({"t": "pre_arm_checked", "product": self.preflight_product,
+                     "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
+                     "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
+                     "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
         raise Refused("the commissioning tool sends no DRIVE")
 
     def send_duty(self, duty_e4: int, end_ns: int | None = None) -> int | None:
-        if abs(duty_e4) > COMMISSION_DUTY_MAX * 10000:
-            raise Refused(f"duty {duty_e4 / 1e4} over the tool limit {COMMISSION_DUTY_MAX}")
+        if abs(duty_e4) > round(self.duty_max * 10000):
+            raise Refused(f"duty {duty_e4 / 1e4} over the run's limit {self.duty_max}")
         now = time.monotonic_ns()
         expires = min(self.test_end_ns, now + self.b.host.cfg.cap_ms * 1_000_000)
         if end_ns is not None:
@@ -511,13 +541,17 @@ class CommissionSession(Session):
         self.sent.append((seq, int(duty_e4)))
         return seq
 
-    def hold_duty(self, duty_e4: int, seconds: float, stop=None) -> int | None:
+    def hold_duty(self, duty_e4: int, seconds: float, stop=None, *, end_ns: int | None = None,
+                  handover: bool = True, bound_ns: int | None = None) -> int | None:
         """``hold`` for one axis's duty: the same bound and hand-over; ``stop()`` naming a reason ends a nonzero
-        hold at once (the caller then holds 0)."""
-        end_ns = time.monotonic_ns() + int(seconds * 1e9)
+        hold at once (the caller then holds 0). ``end_ns``: an absolute end (a profile's piece, design 2026-11-25
+        1.2) instead of now + seconds; ``handover=False``: the next piece follows at once, so no gap is left;
+        ``bound_ns``: how long the commands may stay valid (a profile's own end: a piece's last command must outlast
+        the step to the next piece, still within the cap)."""
+        end_ns = time.monotonic_ns() + int(seconds * 1e9) if end_ns is None else end_ns
         nonzero = duty_e4 != 0
-        bound = end_ns if nonzero else None
-        stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero else end_ns
+        bound = (end_ns if bound_ns is None else bound_ns) if nonzero else None
+        stop_ns = end_ns - int(HANDOVER_S * 1e9) if nonzero and handover else end_ns
         first = None
         if stop is not None:
             # the latest samples are judged before the first nonzero command goes out (Codex re-review P2-4)
@@ -568,7 +602,8 @@ class CommissionSession(Session):
         """Why a nonzero hold ends now (design ② 3): a stuck/polarity bit of the driven wheel newly on (latched
         while ARMED in a commissioning build), or the steering/lift value out of the window."""
         if self.axis < 2:
-            return "encoder_bit" if (state.fault_flags & _AXIS_ENCODER_BITS[self.axis]) & ~at_start else None
+            watched = _AXIS_ENCODER_BITS[self.axis] & ~self.ignore  # --bypass leaves the named kinds out
+            return "encoder_bit" if (state.fault_flags & watched) & ~at_start else None
         v = state.steering_rad if self.axis == 2 else state.lift_m
         lo, hi = self.window
         return None if v == v and lo <= v <= hi else "window"
@@ -597,9 +632,12 @@ def session_abort_reason(samples: list, i_arm: int) -> str | None:
     return None
 
 
-def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float) -> dict:
+def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float,
+                   profile: bl.Profile | None = None) -> dict:
     b, axis = bench, session.axis
     duty_e4 = int(round(duty * 10000))
+    if profile is not None:
+        seconds = profile.duration_s
     session.arm(PRE_ZERO_S + seconds + POST_ZERO_S + 1.0)
     i_arm = len(b.samples)
     at_start = b.state.fault_flags & _AXIS_ENCODER_BITS.get(axis, FaultFlag(0))
@@ -617,7 +655,21 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     session.hold_duty(0, PRE_ZERO_S)
     n_zero = len(session.sent)
     if session.aborted is None:
-        session.hold_duty(duty_e4, seconds, early_stop)
+        if profile is None:
+            session.hold_duty(duty_e4, seconds, early_stop)
+        else:
+            # design 2026-11-25 1.2: each piece ends at its absolute deadline from the profile's start, so the
+            # loop's own overhead does not stretch the run (the diagnostic profile ran 31.45 s for 30 s)
+            t0 = time.monotonic_ns()
+            profile_end = t0 + int(round(len(profile.pieces) * bl.PIECE_S * 1e9))
+            for k, piece_e4 in enumerate(profile.pieces):
+                # no hand-over even on the last piece: it lasts its whole PIECE_S and the post-zero follows at once;
+                # the commands stay valid HANDOVER_S past the profile's end so that zero lands before they expire
+                # -- no command outlives profile_end + HANDOVER_S (Codex PR-1 P2-1)
+                session.hold_duty(piece_e4, 0.0, early_stop, end_ns=t0 + int(round((k + 1) * bl.PIECE_S * 1e9)),
+                                  handover=False, bound_ns=profile_end + int(HANDOVER_S * 1e9))
+                if session.stop_reason is not None or session.aborted is not None:
+                    break
         if session.stop_reason is None and session.aborted is None:
             session.stop_reason = "time"
     n_on = len(session.sent)
@@ -648,7 +700,19 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     for smp in b.samples[i_arm:]:
         faults |= smp.state.fault_flags
     result = "no_acceptance" if on_index is None else ("ok" if metrics.valid else "invalid_measurement")
-    return _final({"result": result, "metrics": asdict(metrics), "stop": session.stop_reason,
+    extra = {}
+    if profile is not None:
+        # a profile is not a step: its sent and applied peaks instead of the step's steady-state figures
+        applied = [s.state.duty_e4[axis] for s in b.samples[i_arm:end]]
+        extra["profile"] = {"pieces": len(profile.pieces), "period_s": profile.period_s, "cycles": profile.cycles,
+                            # from the frames really written (a queued one dropped on expiry is not sent)
+                            "sent_max_e4": max((m.duty_e4 for k, _t, m in b.written.values()
+                                                if k == "COMMISSION" and m is not None), key=abs, default=0),
+                            "applied_max_e4": max(applied, key=abs, default=0)}
+    m_out = asdict(metrics)
+    if profile is not None:
+        m_out.update(rate_mean_rad_s=None, rate_peak_rad_s=None, current_mean_ma=None)
+    return _final({"result": result, "metrics": m_out, "stop": session.stop_reason, **extra,
                    "faults_seen": [f.name for f in FaultFlag if f in faults],
                    "stopping_waited_ms": session.stopping_waited_ms,
                    "build_flags": [f.name for f in StateFlag if f in b.state.flags],
@@ -932,6 +996,13 @@ def main(argv=None) -> int:
     cm.add_argument("--power-switch-in-hand", action="store_true")
     cm.add_argument("--markers", action="store_true",
                     help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
+    cm.add_argument("--bypass", help="enc_stuck,enc_polarity: the wheel's encoder early stop leaves these out "
+                                     "(the bits stay in the record; design 2026-11-25 1.2)")
+    cm.add_argument("--wheels-lifted", action="store_true",
+                    help="a large run: the wheels off the floor, the truck fixed, the wires clear of turning parts")
+    cm.add_argument("--vcc-watched", action="store_true", help="a large run above duty 0.3: VCC is being watched")
+    cm.add_argument("--profile-tri", type=float, nargs=4, metavar=("LO", "HI", "PERIOD", "CYCLES"),
+                    help="a triangle LO -> HI -> LO per PERIOD seconds, CYCLES times; |--duty| = HI, its sign")
     kt = sub.add_parser("kth", help="S2: the KTH CRC variant from a record's v3 counters (mcu-link/3 contract 3.3)")
     kt.add_argument("--record", required=True)
     kt.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
@@ -993,7 +1064,11 @@ def main(argv=None) -> int:
     except (SyntheticRefused, OSError, ValueError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
-    link = ReconnectingLink(args.device, baud=args.baud,
+    args.synthetic = synthetic is not None
+    # design 2026-11-25 1.2 (Codex S 7th P2): the host is given each read's return time, not the loop's start, so a
+    # COMMISSION's validity is counted from when its STATE was really read -- a late read no longer stretches the
+    # MCU deadline past the approved end
+    link = ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns,
                             opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]))
     markers = None
     if getattr(args, "markers", False):
@@ -1008,6 +1083,14 @@ def main(argv=None) -> int:
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
                               "device": args.device, "device_id": device_identity(args.device),
                               "synthetic": synthetic, "start_wall": time.time(),
+                              # design 2026-11-25 1.2: the run's asked bypass and large-run arguments in its header
+                              **({"bypass": getattr(args, "bypass", None),
+                                  "wheels_lifted": getattr(args, "wheels_lifted", False),
+                                  "vcc_watched": getattr(args, "vcc_watched", False),
+                                  "profile_tri": getattr(args, "profile_tri", None),
+                                  "duty": args.duty, "seconds": args.seconds, "axis": args.axis,
+                                  "large": _header_large(args)}
+                                 if args.cmd == "commission" else {}),
                               "start_mono_ns": time.monotonic_ns(),
                               **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
@@ -1027,12 +1110,44 @@ def main(argv=None) -> int:
     return 0
 
 
-def _check_commission_args(args) -> None:
-    """Design ② 2 and 10: the tool's own limits, before anything is sent."""
-    if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
-        raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
+def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[str, ...]]:
+    """Design ② 2 and 10 and 2026-11-25 1.2: the tool's own limits, before anything is sent. Returns what the run
+    asks, its profile and its bypass names."""
+    axis = AXES[args.axis]
+    try:
+        names = bl.parse_bypass(getattr(args, "bypass", None))
+    except bl.LimitRefused as exc:
+        raise Refused(str(exc)) from None
+    if names and axis >= 2:
+        raise Refused("bypass: the encoder early stop is a wheel's (L or R)")
+    profile = None
+    tri = getattr(args, "profile_tri", None)
+    if tri is not None:
+        lo, hi, period, cycles = tri
+        if not all(math.isfinite(v) for v in tri):
+            raise Refused("profile: LO, HI, PERIOD and CYCLES must be finite numbers")
+        if axis >= 2 or getattr(args, "scenario", None) is not None:
+            raise Refused("profile: a wheel's plain run only")
+        if args.seconds is not None:
+            raise Refused("profile: its length is PERIOD x CYCLES -- give no --seconds")
+        if int(cycles) != cycles:
+            raise Refused("profile: CYCLES is a whole number")
+        if abs(abs(args.duty) - hi) > 1e-9:
+            raise Refused("profile: |--duty| must equal HI (its sign is every piece's)")
+        try:
+            profile = bl.triangle(lo, hi, period, int(cycles), 1 if args.duty > 0 else -1)
+        except bl.LimitRefused as exc:
+            raise Refused(str(exc)) from None
+        if (why := bl.slope_problem(profile.pieces)) is not None:
+            raise Refused(why)
+    if not args.power_switch_in_hand:
+        # the commissioning build arms without an e-stop pin: a person holds the main power switch (firmware design
+        # 2.1, Q3); --yes does not stand in for it (Codex design P2-5)
+        raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
     if getattr(args, "scenario", None) is not None:
-        if AXES[args.axis] >= 2:
+        if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
+            raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
+        if axis >= 2:
             raise Refused("scenario: a wheel only (steering and lift would run into their mechanical limits)")
         if not COMMISSION_HOLD_MAX_S < args.limit_s <= LIMIT_MAX_S:
             raise Refused(f"limit-s: the build's time limit, in ({COMMISSION_HOLD_MAX_S}, {LIMIT_MAX_S}]")
@@ -1044,23 +1159,63 @@ def _check_commission_args(args) -> None:
             raise Refused("disarm-delay-ms: the delay must be in [0, stop_grace_ms)")
         if args.window is not None:
             raise Refused("window: a wheel takes no window")
-        if not args.power_switch_in_hand:
-            raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
-        return
-    if args.seconds is None:
+        return bl.RunAsk(axis, args.duty, args.limit_s, args.scenario), None, names
+    # a profile's longest non-zero output: its pieces, then up to HANDOVER_S of command validity past its end until the
+    # zero lands, and the command's own validity if that zero is lost (Codex PR-1 re-review P2-1)
+    seconds = (profile.duration_s + HANDOVER_S + bl.PROFILE_VALIDITY_S) if profile is not None else args.seconds
+    if seconds is None:
         raise Refused("seconds: required without --scenario")
-    hold_max = AXIS_HOLD_MAX_S.get(AXES[args.axis], COMMISSION_HOLD_MAX_S)
-    if not COMMISSION_HOLD_MIN_S <= args.seconds <= hold_max:
-        raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
-    if not args.power_switch_in_hand:
-        # the commissioning build arms without an e-stop pin: a person holds the main power switch (firmware design
-        # 2.1, Q3); --yes does not stand in for it (Codex design P2-5)
-        raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
-    if AXES[args.axis] >= 2:
+    peak = (profile.max_abs_e4 / 10000.0 if profile is not None else abs(args.duty)) * (1 if args.duty > 0 else -1)
+    ask = bl.RunAsk(axis, peak, seconds)
+    if bl.is_large(ask):
+        why = bl.large_refusal(ask, wheels_lifted=getattr(args, "wheels_lifted", False),
+                               vcc_watched=getattr(args, "vcc_watched", False),
+                               synthetic=getattr(args, "synthetic", False))
+        if why is not None:
+            raise Refused(why)
+        if not COMMISSION_HOLD_MIN_S <= seconds:
+            raise Refused(f"seconds must be at least {COMMISSION_HOLD_MIN_S}")
+        if args.duty == 0:
+            raise Refused("duty must be nonzero")
+    else:
+        # a profile's effective peak (its pieces), not its nominal HI (Codex PR-1 P3)
+        if not 0 < abs(ask.duty) <= COMMISSION_DUTY_MAX:
+            raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
+        hold_max = AXIS_HOLD_MAX_S.get(axis, COMMISSION_HOLD_MAX_S)
+        if not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
+            raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
+    if axis >= 2:
         if args.window is None or not args.window[0] < args.window[1]:
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
     elif args.window is not None:
         raise Refused("window: a wheel takes no window")
+    return ask, profile, names
+
+
+def _header_large(args) -> bool | None:
+    """The run's large-run verdict for its record header, before anything is connected (None: its arguments are
+    refused anyway; the board's product and lim come in the pre_arm_checked row once the link is open)."""
+    try:
+        ask, _profile, _names = _check_commission_args(args)
+    except Refused:
+        return None
+    return bl.is_large(ask)
+
+
+def _tty_line(prompt: str) -> str:
+    """One line typed on a real terminal (design 2026-11-25 1.2: no pipe stands in for the operator)."""
+    if not sys.stdin.isatty():
+        raise Refused("large run: the confirmation is typed on a terminal (stdin is not a TTY)")
+    print(prompt, end="", flush=True)
+    return sys.stdin.readline().strip()
+
+
+def _confirm_large(ask: bl.RunAsk) -> None:
+    """Before and whatever --yes: the operator retypes what the large run will do."""
+    phrase = bl.confirmation_phrase(ask)
+    answer = _tty_line(f"LARGE RUN on axis {'LRMH'[ask.axis]}: {phrase}. Type exactly '{phrase}': ")
+    if answer != phrase:
+        raise Refused("large run: the operator did not retype the run")
 
 
 def _observed(args) -> str:
@@ -1090,15 +1245,27 @@ def execute(args, bench: Bench) -> dict:
             except ValueError as exc:
                 raise Refused(str(exc)) from None
         if args.cmd == "commission":
-            _check_commission_args(args)
+            ask, profile, names = _check_commission_args(args)
+            session.large = bl.is_large(ask)
+            session.duty_max = bl.WHEEL_DUTY_MAX_OPEN if session.large else COMMISSION_DUTY_MAX
+            session.ignore = bl.ignored_bits(names, AXES[args.axis])
+            session.scenario = getattr(args, "scenario", None)
+            conditions = {"bypass": list(names), "large": session.large,
+                          "asked": {"duty": ask.duty, "seconds": ask.seconds},
+                          "profile_tri": None if profile is None else list(args.profile_tri)}
+            bench.emit({"t": "run_conditions", **conditions})
+            if session.large:
+                _confirm_large(ask)  # before --yes is looked at (design 2026-11-25 1.2)
             if getattr(args, "scenario", None) is not None:
                 what = (f"commission scenario {args.scenario}: will ARM and drive wheel {args.axis} at duty {args.duty} "
                         f"up to the build's time limit ({args.limit_s} s, giving up at {args.limit_s + LIMIT_SLACK_S} s),"
                         f" then DISARM {'at once' if args.scenario == 'limit_disarm' else f'{args.disarm_delay_ms} ms in'}"
                         f" (build stop_grace_ms {args.stop_grace_ms}).")
             else:
-                what = (f"commission: will ARM and drive axis {args.axis} at duty {args.duty} for at most "
-                        f"{args.seconds} s (window {args.window}).")
+                what = (f"commission: will ARM and drive axis {args.axis} at duty {ask.duty} for at most "
+                        f"{ask.seconds} s (window {args.window}"
+                        f"{'' if profile is None else f', triangle {list(args.profile_tri)}'}"
+                        f"{'' if not names else f', encoder early stop off for {list(names)}'}).")
             _confirm(args, what + " Outputs on only after the IPROPI protection is confirmed (user decision); "
                                   "the window inside the mechanical limits.")
             if getattr(args, "markers", False):
@@ -1114,7 +1281,8 @@ def execute(args, bench: Bench) -> dict:
                     "stop_distance_mm": args.stop_distance_mm})
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
             else:
-                result = run_commission(bench, session, args.duty, args.seconds)
+                result = run_commission(bench, session, args.duty, args.seconds, profile)
+                result.update(conditions, board_product=session.preflight_product)
                 result["observed"] = _observed(args)
                 m = result["metrics"]
                 result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
