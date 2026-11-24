@@ -32,7 +32,8 @@ LEASED = ("rearm", "mode_request", "arm", "disarm", "mission_submit", "mission_p
 RELIABLE = LEASED + ("stop", "lease_request", "lease_release", "targets_request", "pick_request")
 # docs/design/2026-11-19-real-safety-wiring.md 5 (5c-1): the real truck's console requests, leased and reliable only
 # with ArbiterConfig.real_requests (off: not reliable -- no answer, as before), answered by ``real_request``
-REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass")
+REAL_LEASED = ("pallet_register", "operator_start", "operator_answer", "check_bypass",
+               "relocalize_confirm", "relocalize_declare")  # the last two: 5c-2 (real safety wiring design 6)
 # B-P2c (start relocalization plan 1.2 step 4): while the start is unknown nothing may move the truck or replace the
 # session's scene; mode_request is refused for AUTO and TELEOP (its other targets do not move the truck)
 RELOC_REFUSED = ("arm", "mission_submit", "mission_resume", "recovery", "sim_reset")
@@ -388,6 +389,12 @@ class Arbiter:
 
     def _on_check_bypass(self, client_id, request_id, msg, now_mono):
         return self._real("check_bypass", request_id, msg, now_mono)
+
+    def _on_relocalize_confirm(self, client_id, request_id, msg, now_mono):
+        return self._real("relocalize_confirm", request_id, msg, now_mono)  # 5c-2 (design 6, 5)
+
+    def _on_relocalize_declare(self, client_id, request_id, msg, now_mono):
+        return self._real("relocalize_declare", request_id, msg, now_mono)
 
     def _reply(self, kind: str, request_id, reason: str | None = None, **fields) -> dict:
         if (reason is not None and self.config.real_requests and self.real_rejected is not None
@@ -1159,4 +1166,6 @@ def _real_payload_ok(kind: str, msg: dict) -> bool:
         return isinstance(msg.get("check"), str) and isinstance(msg.get("on"), bool)
     if kind == "recovery":
         return is_int(msg.get("recovery_id")) and msg.get("action") == "done"
+    if kind in ("relocalize_confirm", "relocalize_declare"):
+        return is_int(msg.get("generation"))  # 5c-2 (design 6, 5)
     return False

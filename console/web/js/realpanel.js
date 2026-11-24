@@ -6,7 +6,7 @@ import { CHECK_LABELS } from "./realstatus.js";
 
 // the checks the operator may bypass (the vehicle's BYPASSABLE, real_loop.py)
 export const BYPASSABLE = ["measurement", "odometry", "slam", "layer_timing", "operator_start", "snapshot", "imu",
-  "watch_current", "watch_wheel"];
+  "watch_current", "watch_wheel", "start_pose"];
 const ACTIVE = ["accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering"];
 const OFF = ["OFF", "LATCHED"];
 
@@ -98,5 +98,40 @@ export function statusSig(status) {
   return JSON.stringify([status.session_epoch, status.control_gen ?? null, status.lease ? status.lease.holder : null,
     status.permit?.state,
     status.mission?.status, status.mode, req ? [req.kind, req.serial] : null, status.field_recovery ?? null,
-    status.bypassed ?? [], status.targets_revision ?? null]);
+    status.bypassed ?? [], status.targets_revision ?? null,
+    status.relocalize_generation ?? null]);  // 5c-2: a press is bound to the generation drawn (design 6, 9)
+}
+
+// 5c-2 (design 6, 8-9): the relocalization row. Shown while a generation is open or a last attempt is to be told.
+export function relocalizeView(status) {
+  const gen = status && Number.isInteger(status.relocalize_generation) ? status.relocalize_generation : null;
+  const r = (status && status.relocalize) || {};
+  return {
+    open: gen !== null, generation: gen, standing: Boolean(status && status.standing),
+    state: r.state ?? "idle", reason: r.reason ?? null, attempt: r.attempt ?? null, kind: r.kind ?? null,
+    lastGeneration: r.generation ?? null,
+    // the last attempt's gap belongs to its own generation: not shown under a newer one (impl round 1 P2-4)
+    gap: Number.isFinite(r.start_pose_m) && (gen === null || r.generation === gen)
+      ? `${(r.start_pose_m * 100).toFixed(1)} cm · ${r.start_pose_deg.toFixed(1)}°` : "",
+  };
+}
+
+// Why a relocalization button may not be pressed now (null: may): the lease, disarmed, no mission, standing.
+export function relocalizeClosedWhy(status, hasLease) {
+  const why = closedWhy(status, hasLease);
+  if (why) return why;
+  if (!Number.isInteger(status.relocalize_generation)) return "다시 확인할 위치가 없습니다";
+  if (!status.standing) return "차가 서 있지 않습니다(정지를 기다립니다)";
+  return null;
+}
+
+// The attempt an ack named (generation, attempt) as real_status tells it: its state, or null while not told yet.
+export function relocalizeResult(ack, status) {
+  const r = status && status.relocalize;
+  // the session too: a reconnect's new session may reuse the generation and attempt numbers (impl round 1 P2-4)
+  if (!ack || !r || ack.session_epoch !== status.session_epoch || r.generation !== ack.generation
+    || r.attempt !== ack.attempt) return null;
+  const gen = Number.isInteger(status.relocalize_generation) ? status.relocalize_generation : null;
+  if (gen !== null && gen !== ack.generation) return null; // an older generation's verdict under a newer one
+  return { state: r.state, reason: r.reason ?? null };
 }

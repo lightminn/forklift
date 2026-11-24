@@ -10,12 +10,14 @@ output branch (emergency DISARM -> S10 control stop -> an output wait -> the nor
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import numbers
 import secrets
 import time
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -24,6 +26,8 @@ from forklift_core.live.output_book import Frame, OutputBook
 from forklift_core.live.real_assembly import freeze_submit, known_request
 from forklift_core.live.real_channels import send_boundary
 from forklift_core.live.real_teleop import counts_still, encoder_speed, real_auto_refusal
+from forklift_core.localization.slam_pose import SlamPoseTracker, compose, invert
+from forklift_core.localization.start_reloc import base_from_rear, rear_from_base
 from forklift_core.mcu_link.build_policy import Client
 from forklift_core.mcu_link.messages import FaultFlag, Mode
 from forklift_core.mission.commands import FINAL
@@ -42,6 +46,11 @@ MAX_STATES_PER_TICK = 64
 EVIDENCE_READ_MAX_S = 0.005  # the first byte's evidence read must take no longer (its ages are judged at its start)
 ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R  # contract 3.3
 SAMPLES_KEPT = 128
+# 5c-2 (docs/design/2026-11-19-real-safety-wiring.md 6): relocalization
+RELOCALIZE_WAIT_S = 3.0  # an attempt's limit from its acceptance (provisional)
+START_TOL_M = 0.10  # the registered start's tolerance (provisional)
+START_TOL_RAD = math.radians(5.0)
+DECLARED_SPEED_MPS = 0.06  # the slam-bypass / declared-start cap (provisional, S10 speed approval)
 
 
 def real_host(cfg, *, initial_seq: int | None = None, **kw) -> McuLinkHost:
@@ -123,9 +132,10 @@ class RealSession:
 
 
 # real safety wiring design 5 (5c-1): the checks the operator may bypass for the session, and the names refused
-BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel")
+BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel", "start_pose")  # start_pose: 5c-2 (6, 7)
 NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale", "link_stuck", "layer_worker",
-                  "obstacle_layer", "overspeed", "loop_slow", "worker", "baseline", "core")
+                  "obstacle_layer", "overspeed", "loop_slow", "worker", "baseline", "core",
+                  "relocalize")  # relocalize: the declaration's session mark is no toggle (5c-2, 7b)
 
 # the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
 LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
@@ -137,7 +147,8 @@ class RealLoop:
                  base_scenario, wait_pose, delay_s: float = 0.0, steering_ok=None, record=None,
                  depth_source=None, watches=None, clock=None, operator_start=None, real_layer=None,
                  delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
-                 kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None) -> None:
+                 kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None, start_rear=None,
+                 rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         self.link, self.channels, self.transport, self.params = link, channels, transport, params
         self.odometry, self.kin, self.max_speed_mps = odometry, kinematics, float(max_speed_mps)
@@ -228,6 +239,39 @@ class RealLoop:
         self._binding: dict = {}  # seq -> (lease id, arbiter control generation) a loop frame was decided under
         self._steer_of: dict = {}  # seq -> the steering command a loop frame carries (the next slew's start once written)
         link.a.on_disarm = self._on_console_disarm  # AUTO has no arbiter `armed` to drop: the loop's ① (design 2.1 4)
+        # 5c-2 (design 6): relocalization. The registered start (rear axle, map) and the rear-axle offset (base_link ->
+        # rear) come from the S10-A config and the chassis model; None only in rigs built without them
+        self.start_rear = None if start_rear is None else tuple(float(v) for v in start_rear)
+        self.rear_offset_m = None if rear_offset_m is None else float(rear_offset_m)
+        self.declared_speed_mps = float(declared_speed_mps)
+        tracker_ = (core.slam or {}).get("tracker") if core.slam is not None else None
+        if isinstance(tracker_, SlamPoseTracker) and abs(float(tracker_.max_age_s) - ra.SLAM_MAX_AGE_S) > 1e-12:
+            raise ValueError("tracker_max_age")  # the freshness evidence and the tracker's age limit are one value (2b)
+        # a source with the epoch contract (relocalize / seed / request_processed): the loop filters its replies and
+        # builds the SLAM freshness evidence itself (design 6, 4); the older rigs' sources keep their behaviour
+        self._epoch_mode = callable(getattr(slam_source, "relocalize", None))
+        self.epoch, self.t_epoch = 0, -math.inf
+        self._last_stamp = None  # the newest reply stamp passed to the core (the tracker's time order)
+        self._last_scan = None  # the newest scan id passed in this epoch
+        self.provenance = None  # (epoch, attempt, scan id, stamp) of the reply the applied correction came from
+        self._fresh_ns = None  # the newest real processed reply of this epoch (first beam, host ns)
+        self.reloc_dropped: Counter = Counter()
+        self.reloc_gen = None  # the relocalization generation the loop opened
+        self._reloc_reset_due = False  # the tracker's and the core's reset, after the mission is over
+        self.attempt: dict | None = None
+        self._attempt_serial = 0
+        self.relocalize_status = {"generation": None, "attempt": None, "kind": None, "state": "idle", "reason": None,
+                                  "start_pose_m": None, "start_pose_deg": None}
+        self.declared_epoch = None  # the session epoch carrying a declaration's mark (7b)
+        self.stand_since_ns: int | None = None  # the MCU sample stand, no SLAM term (design 6, 3)
+        self._moved_for = None  # the mission whose first moving DRIVE has been written whole (design 6, 6)
+        self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
+        self.reloc_events: list = []
+        self._disarms_taken = 0
+        if self._epoch_mode:
+            src_ = evidence.slam
+            self.evidence = dataclasses.replace(evidence, slam=lambda n: dataclasses.replace(
+                src_(n), pose_reply_ns=self._fresh_ns))
 
     # --- 5c-1: the real console requests, the bypass, real_status (design 5) --------------------------------------
     def _ready(self, now_ns: int, stage: str):
@@ -247,6 +291,7 @@ class RealLoop:
             self._bypass_epoch = a.session_epoch
             self.bypass.clear()
             self._bypass_pending.clear()
+            self.declared_epoch = None  # 5c-2 (7b): the declaration's mark is the session's
         # the check and the change under one channel lock: a connection event queued between them cannot slip past
         # (r7 P2-1; the channels' lock is re-entrant)
         with self.channels.lock:
@@ -323,10 +368,13 @@ class RealLoop:
                 return "unknown_pallet", {}
             return None, {"targets_revision": register_pallet(core, msg["pallet_id"], msg["pose"])}
         if kind == "operator_start":
+            if core.relocalize_generation() is not None:
+                return "relocalize_required", {}  # 5c-2 (6, 2): no start check while the place is not known
             if not disarmed:
                 return "armed", {}
             if self.still_since_ns is None:
-                return "not_still", {}
+                # standing on the MCU samples but no fresh SLAM: say so (5c-2, 6, 3)
+                return ("slam_stale" if self.stand_since_ns is not None else "not_still"), {}
             lease = self.link.a.lease
             if self.operator_start is None or lease is None:
                 return "unsupported", {}
@@ -356,6 +404,8 @@ class RealLoop:
                 return refusal, {}
             self._bypass_pending.append((check, bool(msg["on"]), lease_id))  # applied at the next tick head (r3)
             return None, {"applies": "next_tick"}
+        if kind in ("relocalize_confirm", "relocalize_declare"):
+            return self._attempt_request(kind, msg, now_ns)
         if kind == "recovery":
             done = core.field_recovery_done(self._t(now_ns), int(msg["recovery_id"]),
                                             disarmed=self._disarm_confirmed(now_ns),
@@ -407,11 +457,339 @@ class RealLoop:
             "operator_start": None if start is None else start.ok(None if a.lease is None else a.lease.lease_id),
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
-            "bypassed": sorted(self.bypass),
-            "mode": a.mode,  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
+            "bypassed": sorted(self.bypass | ({"relocalize"} if self._declared() else set())),
+            "mode": a.mode,
+            "relocalize": dict(self.relocalize_status),  # 5c-2 (6, 8): the last attempt's, kept after the close
+            # the MCU sample stand (6, 3) with its link on the clock now: not_still's own value (impl round 6 P2-1)
+            "standing": self.stand_since_ns is not None and bool(self.host.health(int(self.clock())).fresh),  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
         }
 
+    # --- 5c-2: relocalization (design 6) -------------------------------------------------------------------------
+    @property
+    def outputs_closed(self) -> bool:
+        """The permit off or latched and no mission under way (design 6, 2b): the real pose hooks read without the
+        age comparison then (their contract, PR 7; the rigs' fake hooks honour it)."""
+        return self.permit.state in (ra.OFF, ra.LATCHED) and self.core.commands.status not in self.MISSION_ACTIVE
+
+    def physical_stop(self, now_s: float) -> tuple:
+        """The arbiter's stop evidence (design 6, 2b): the link fresh and the MCU sample stand -- no SLAM term."""
+        return bool(self.host.health(int(now_s * 1e9)).fresh), self.stand_since_ns is not None
+
+    def rearm_stand(self, now_ns: int):
+        """The rearm's stand (design 6, 2b): (since, boot) of the MCU sample stand, or None."""
+        s = self.host.state
+        return None if self.stand_since_ns is None or s is None else (self.stand_since_ns, s.boot_id)
+
+    def _declared(self) -> bool:
+        return self.declared_epoch is not None and self.declared_epoch == self.link.a.session_epoch
+
+    def _speed_cap(self) -> float:
+        """The rear-axle command cap: 0.06 m/s while slam is bypassed or the session carries a declaration (6, 7b)."""
+        if "slam" in self._tick_bypass or self._declared():
+            return min(self.max_speed_mps, self.declared_speed_mps)
+        return self.max_speed_mps
+
+    def _tracker(self):
+        return None if self.core.slam is None else self.core.slam.get("tracker")
+
+    def _new_epoch(self, t: float) -> None:
+        self.epoch += 1
+        self.t_epoch = float(t)
+        self._last_scan = None
+        self._fresh_ns = None  # the freshness evidence is the new epoch's own (6, 4; round 6 P1)
+
+    def _sync_relocalization(self, now_ns: int, t: float) -> None:
+        """Design 6, 1: open the core's newest generation once; the tracker's and the core's reset once no mission is
+        under way."""
+        gen = self.core.relocalize_generation()
+        if gen is not None and gen != self.reloc_gen:
+            self._open_relocalization(now_ns, t, gen)
+        if self._reloc_reset_due and self.core.commands.status not in self.MISSION_ACTIVE:
+            self._reloc_reset_due = False
+            tr = self._tracker()
+            if tr is not None and hasattr(tr, "reset_for_relocalization"):
+                tr.reset_for_relocalization()
+            self.core.relocalization_reset(t)
+            self.reloc_events.append({"t": float(t), "event": "reset", "generation": self.reloc_gen})
+
+    def _open_relocalization(self, now_ns: int, t: float, gen: int) -> None:
+        self.reloc_gen = gen
+        if self.attempt is not None:
+            self._attempt_end(t, "refused", "relocalize_superseded")
+        self.still_since_ns = None
+        self.stand_since_ns = None
+        if self.operator_start is not None:
+            self.operator_start.void("relocalize")
+        self.provenance = None
+        if self.real_layer is not None:
+            self._reset_layer(now_ns)
+        if self._epoch_mode:
+            self._new_epoch(t)
+            self.slam_source.relocalize(self.epoch)
+        self._reloc_reset_due = True
+        self.reloc_events.append({"t": float(t), "event": "opened", "generation": gen, "epoch": self.epoch})
+
+    def _attempt_request(self, kind: str, msg: dict, now_ns: int):
+        """relocalize_confirm / relocalize_declare (design 6, 5): answered at once; the verdict on real_status."""
+        t = self._t(now_ns)
+        self._sync_relocalization(now_ns, t)
+        gen = self.core.relocalize_generation()
+        if gen is None:
+            return "no_relocalization", {}
+        if int(msg["generation"]) != gen:
+            return "stale_relocalization", {}
+        if self._reloc_reset_due or self.reloc_gen != gen:
+            return "mission_active", {}
+        if self.permit.state not in (ra.OFF, ra.LATCHED):
+            return "armed", {}
+        if self._console_disarm or self._emergency_pending():
+            return "emergency_pending", {}  # impl round 4 P1: a DISARM taken in this batch, or a STOP/DISARM queued
+        if self.stand_since_ns is None or not self.host.health(now_ns).fresh:
+            return "not_still", {}  # the stand and its link on the clock now (impl round 5 P1)
+        if self.start_rear is None or self.rear_offset_m is None:
+            return "no_start_pose", {}
+        if self.attempt is not None:
+            self._attempt_end(t, "refused", "relocalize_superseded")
+        self._attempt_serial += 1
+        lease = self.link.a.lease
+        self.attempt = {"kind": "confirm" if kind == "relocalize_confirm" else "declare", "generation": gen,
+                        "attempt": self._attempt_serial, "lease_id": None if lease is None else lease.lease_id,
+                        "control_gen": self.link.a.control_gen, "bypass": frozenset(self.bypass),
+                        "stand": self.stand_since_ns, "t": t, "reference": False, "seeded": False,
+                        # a DISARM taken after this voids it (impl round 3: the taken ones counted, not the queue)
+                        "disarms": self._disarms_taken}
+        if self.real_layer is not None:
+            self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
+        if self.attempt["kind"] == "confirm" and self._epoch_mode:
+            self.slam_source.request_processed(self.epoch, self._attempt_serial, not_before=t)
+        self.relocalize_status = {"generation": gen, "attempt": self._attempt_serial, "kind": self.attempt["kind"],
+                                  "state": "waiting", "reason": None, "start_pose_m": None, "start_pose_deg": None}
+        return None, {"generation": gen, "attempt": self._attempt_serial}
+
+    def _attempt_end(self, t: float, state: str, reason) -> None:
+        a = self.attempt
+        self.attempt = None
+        if a is None:
+            return
+        self.relocalize_status.update(state=state, reason=reason)
+        self.reloc_events.append({"t": float(t), "event": state, "reason": reason, "attempt": a["attempt"],
+                                  "kind": a["kind"]})
+
+    def _attempt_void(self, now_ns: int, t: float):
+        a, arb = self.attempt, self.link.a
+        if self.real_layer is not None and self.real_layer.watchdog(t) in LAYER_ENDS:
+            return "relocalize_voided:layer"  # the fault before any unlock (round 3 P2-2)
+        if arb.lease is None or arb.lease.lease_id != a["lease_id"] or not self._lease_valid(now_ns):
+            return "relocalize_voided:lease"
+        if arb.control_gen != a["control_gen"]:
+            return "relocalize_voided:control"
+        if self.permit.state not in (ra.OFF, ra.LATCHED):
+            return "relocalize_voided:armed"
+        if frozenset(self.bypass) != a["bypass"]:
+            return "relocalize_voided:bypass"
+        if self.stand_since_ns != a["stand"]:
+            return "relocalize_moved"
+        if self._disarms_taken != a["disarms"]:
+            # impl rounds 2-4: a DISARM taken since (a STOP taken moves the control generation); one still waiting in
+            # the channel holds the commit until the arbiter has judged it (_emergency_pending); a viewer's connection
+            # does not count
+            return "relocalize_voided:emergency"
+        return None
+
+    def _emergency_pending(self) -> bool:
+        with self.channels.lock:
+            return bool(getattr(self.channels, "_stops", None)) or bool(getattr(self.channels, "_disarms", None))
+
+    def _commit_void(self, t: float, closing: bool = True):
+        """Just before a commit (the source's seed, the generation's close): the attempt's own voids and then the
+        lease judged on the clock now with the channel's pending connection changes (impl round 1 P1-1: a lease
+        expired or a disconnect queued since the tick began)."""
+        a = self.attempt
+        now_ns = int(self.clock())
+        t_now = self._t(now_ns)
+        if self._emergency_pending():
+            return "wait"  # a STOP or DISARM waiting: no commit until it is judged (impl round 4 P2)
+        why = self._attempt_void(now_ns, t_now)  # the layer's watchdog at the commit's own instant (impl round 3 P1-2)
+        if why is None and not self.host.health(now_ns).fresh:
+            why = "relocalize_voided:link"  # the stand's own evidence on the clock now (impl round 5 P1)
+        if why is None and self._bypass_refusal(a["lease_id"], now_ns) is not None:
+            why = "relocalize_voided:lease"
+        # impl round 2 P1-2/P1-3: the limit, the freshness and the layer on the clock now, not the tick's start
+        lay = self.real_layer
+        if why is None and closing and lay is not None and (not lay.worker.alive or not lay.ok(t_now)):
+            why = "relocalize_voided:layer"
+        if why is None and t_now - a["t"] > RELOCALIZE_WAIT_S:
+            why = "relocalize_timeout"
+        prov = self.provenance
+        if why is None and closing and a["kind"] == "confirm" and not self._bypassed("slam") and (
+                prov is None or t_now - prov[3] > ra.SLAM_MAX_AGE_S):
+            why = "relocalize_stale"
+        return why
+
+    def _declare_apply(self, now_ns: int, t: float, loaded: bool) -> None:
+        """The declaration's pose (design 6, 5 / 7b), on its first judgement, before the source's replies: the source
+        seeded at the start's base_link pose, a synthetic processed reply alone through the core."""
+        a = self.attempt
+        target = base_from_rear(self.start_rear, self.rear_offset_m)
+        odom = tuple(float(v) for v in self.core.hooks.slam_odom_base())
+        c = tuple(float(v) for v in compose(target, invert(odom)))
+        with self.channels.lock:  # the check and the seed under one lock: no connection change slips between
+            why = self._commit_void(t, closing=False)  # the layer was just cut: its result is judged at the close
+            if why == "wait":
+                return  # seeded on a later tick, once the waiting STOP/DISARM is judged
+            if why is not None:
+                self._attempt_end(t, "refused", why)
+                return
+            self._new_epoch(t)
+            self.slam_source.seed(self.epoch, target, t)
+            # the mark, the cap and the record from the seed on, before anything else can fail (impl rounds 1-2)
+            self.declared_epoch = self.link.a.session_epoch
+            self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
+                                      "attempt": a["attempt"], "odom_from_base": list(odom),
+                                      "start_rear": list(self.start_rear), "base_target": list(target)})
+        reply = SimpleNamespace(scan_id=-1, stamp_s=float(t), status="processed", map_from_odom=c, slam_wall_s=None,
+                                epoch=self.epoch, attempt=None)
+        tr = self._tracker()
+        before = None if tr is None else tr.applied
+        self.core.slam_replies(t, [(reply, {"source": "operator_declared"}, None, None)], loaded)
+        self._last_stamp = float(t) if self._last_stamp is None else max(self._last_stamp, float(t))
+        if tr is not None and tr.applied is not before:
+            self.provenance = (self.epoch, None, "operator_declared", float(t))
+        a["seeded"] = True
+
+    def _filter_replies(self, t: float, raw) -> list:
+        """Design 6, 4: the replies the core may take (the epoch mode only)."""
+        tr = self._tracker()
+        out = []
+        has_received = tr is not None and tr.received is not None
+        for item in raw:
+            reply = item[0]
+            ep = getattr(reply, "epoch", None)
+            ep = 0 if ep is None else int(ep)
+            stamp, sid = float(reply.stamp_s), int(reply.scan_id)
+            why = None
+            if ep != self.epoch:
+                why = "epoch"
+            elif stamp < self.t_epoch:
+                why = "before_epoch"
+            elif stamp > t + 1e-9:
+                why = "future"
+            elif self._last_stamp is not None and stamp < self._last_stamp:
+                why = "out_of_order"
+            elif self._last_scan is not None and sid <= self._last_scan:
+                why = "repeated"
+            elif reply.status == "skipped" and not has_received:
+                why = "skipped_first"  # a processed earlier in this batch counts (impl round 1 P2-2)
+            if why is not None:
+                self.reloc_dropped[why] += 1
+                continue
+            self._last_stamp, self._last_scan = stamp, sid
+            out.append(item)
+            if reply.status == "processed":
+                has_received = True
+                ns = self.start_ns + int(round(stamp * 1e9))
+                self._fresh_ns = ns if self._fresh_ns is None else max(self._fresh_ns, ns)
+                a = self.attempt
+                if (a is not None and a["kind"] == "confirm" and getattr(reply, "attempt", None) == a["attempt"]
+                        and stamp >= a["t"]):
+                    a["reference"] = True
+        return out
+
+    def _slam_step(self, now_ns: int, t: float, loaded: bool) -> None:
+        """This tick's SLAM replies into the core (the epoch mode: the declaration first, then the filtered replies,
+        the applied correction's provenance kept)."""
+        raw = self.slam_source.replies(now_ns)
+        if not self._epoch_mode:
+            self.core.slam_replies(t, raw, loaded)
+            return
+        if self.attempt is not None and self.attempt["kind"] == "declare" and not self.attempt["seeded"]:
+            self._declare_apply(now_ns, t, loaded)
+        passed = self._filter_replies(t, raw)
+        tr = self._tracker()
+        self.core.slam_replies(t, passed, loaded)
+        # the applied correction's source (impl round 1 P2-2): outside a hold every processed becomes applied, so the
+        # batch's last processed is it -- a later skipped only refreshes the stamp; under a hold nothing was applied
+        last = next((it[0] for it in reversed(passed) if it[0].status == "processed"), None)
+        if last is not None and tr is not None and getattr(tr, "mode", None) != "holding":
+            self.provenance = (self.epoch, getattr(last, "attempt", None), int(last.scan_id), float(last.stamp_s))
+
+    def _start_gap(self, rear):
+        """(distance m, |yaw| rad) of a rear-axle pose from the registered start."""
+        sx, sy, syaw = self.start_rear
+        return (math.hypot(float(rear[0]) - sx, float(rear[1]) - sy),
+                abs(math.atan2(math.sin(float(rear[2]) - syaw), math.cos(float(rear[2]) - syaw))))
+
+    def _off_start(self, rear) -> bool:
+        if self.start_rear is None or self._bypassed("start_pose") or rear is None:
+            return False
+        d, yaw = self._start_gap(rear)
+        return d > START_TOL_M or yaw > START_TOL_RAD
+
+    def _attempt_judge(self, now_ns: int, t: float) -> None:
+        """Design 6, 5: an attempt's verdict after this tick's replies and installs."""
+        a = self.attempt
+        if a is None:
+            return
+        why = self._attempt_void(now_ns, t)
+        if why is not None:
+            self._attempt_end(t, "refused", why)
+            return
+        if self.core.relocalize_generation() != a["generation"]:
+            self._attempt_end(t, "refused", "relocalize_superseded")
+            return
+        failed = None
+        prov = self.provenance
+        if a["kind"] == "confirm":
+            if not a["reference"]:
+                failed = "relocalize_no_reply"
+            elif prov is None or prov[0] != self.epoch or (
+                    not self._bypassed("slam") and t - prov[3] > ra.SLAM_MAX_AGE_S):
+                failed = "relocalize_stale"
+        elif prov is None or prov[0] != self.epoch:
+            failed = "relocalize_no_reply"
+        tr = self._tracker()
+        rear = None
+        if failed is None:
+            if tr is None or tr.applied is None:
+                failed = "not_at_start"
+            else:
+                odom = tuple(float(v) for v in self.core.hooks.slam_odom_base())
+                rear = rear_from_base(compose(tuple(tr.applied[0]), odom), self.rear_offset_m)
+                d, yaw = self._start_gap(rear)
+                self.relocalize_status.update(start_pose_m=float(d), start_pose_deg=float(math.degrees(yaw)))
+                if self._off_start(rear):
+                    failed = "not_at_start"
+        if failed is None:
+            lay = self.real_layer  # no layer: no generation closes (impl round 1 P2-3)
+            newest = None if lay is None else lay.installed_newest_s()
+            if lay is None or not lay.ok(t) or lay.installing(ignore_correction=False) or newest is None \
+                    or newest < a["t"]:
+                failed = "relocalize_layer"
+        if t - a["t"] > RELOCALIZE_WAIT_S:
+            self._attempt_end(t, "refused", failed or "relocalize_timeout")  # the limit first (impl round 1 P2-1)
+            return
+        if failed is None:
+            with self.channels.lock:
+                why = self._commit_void(t)
+                if why == "wait":
+                    return  # judged again next tick
+                if why is not None:
+                    self._attempt_end(t, "refused", why)
+                    return
+                self._close_generation(t, a)
+            return
+
+    def _close_generation(self, t: float, a: dict) -> None:
+        tr = self._tracker()
+        self.core.relocalized(t, a["generation"])
+        if tr is not None and getattr(tr, "_relocalizing", False):
+            tr.relocalization_done()
+        if self.operator_start is not None:
+            self.operator_start.void("relocalized")
+        self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
+
     def _on_console_disarm(self, now_mono: float) -> None:
+        self._disarms_taken += 1  # 5c-2: a waiting relocalization attempt is void after any DISARM taken
         self._console_disarm = True  # taken inside the console cycle; the emergency branch runs right after it
 
     # --- the head -------------------------------------------------------------------------------------------------
@@ -438,6 +816,7 @@ class RealLoop:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
             self._odom_good = False
             self.still_since_ns = None
+            self.stand_since_ns = None
         else:
             self._odom_good = True
         self.book.on_state(state, int(rx_ns))
@@ -553,6 +932,7 @@ class RealLoop:
         lay._installed = None  # noqa: SLF001 -- the layer's own reset
         lay._unplaced.clear()  # noqa: SLF001 -- placed on the old odometry or not at all
         lay.exempt_serial += 1
+        lay._placed_id = 0  # noqa: SLF001 -- 5c-2 (6, 2): an empty job after the reset carries no old scan id
         lay.last_scan_s.clear()
         lay.last_beam_s.clear()
         self.odom_history.clear()
@@ -619,6 +999,11 @@ class RealLoop:
             steady = bool(lifts) and all(math.isfinite(v) for v in lifts) \
                 and max(lifts) - min(lifts) <= self.port.lift_still_m
             standing = steady and counts_still(after, self.params)
+        stand = standing and self.odom_continuous  # 5c-2 (6, 3): the MCU sample stand, no SLAM term
+        if not stand:
+            self.stand_since_ns = None
+        elif self.stand_since_ns is None:
+            self.stand_since_ns = int(now_ns)
         sl = self.evidence.slam(now_ns)
         fresh_slam = sl.pose_reply_ns is not None and now_ns - sl.pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
         still = standing and self.odom_continuous and fresh_slam
@@ -696,7 +1081,9 @@ class RealLoop:
             self._odom_broken = True
             self._odom_good = False
             self.still_since_ns = None
+            self.stand_since_ns = None
         self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
+        self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): a reboot's or a break's generation
         stuck = self._cut_stuck_write(now_ns)
         if stuck:
             # the host's and the permit's ticks still run (its DISARM asked again on the new link, its deadline kept)
@@ -775,6 +1162,7 @@ class RealLoop:
         self._stop_kind, self._cmd_records = self.session.tick_start(
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
                                         "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
+        self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
         a = self.link.a
         if self._console_disarm:
             self._console_disarm = False
@@ -916,10 +1304,17 @@ class RealLoop:
     # --- control and output ---------------------------------------------------------------------------------------
     def _control_and_output(self, now_ns: int, t: float, rec: TickRecord) -> None:
         core, permit, cmds, ms = self.core, self.permit, self.core.commands, self.core.ms
-        replies = self.slam_source.replies(now_ns)
-        core.slam_replies(t, replies, ms.phase in ("lift", "extract", "transport", "lower"))
+        self._slam_step(now_ns, t, ms.phase in ("lift", "extract", "transport", "lower"))
         rear = np.asarray(core.hooks.slam_rear(t), dtype=float)
         core.hooks.set_rear(rear)
+        self._rear_now = tuple(float(v) for v in rear)
+        if self.outputs_closed and core.slam is not None:
+            # 5c-2 (6, 2b; round 9 P2-2, round 10 P2-4): the hold's travel over its limit while the outputs are
+            # closed opens a generation, whether or not a release is deferred (the read raised nothing)
+            sl_ = self.evidence.slam(now_ns)
+            if sl_.mode == "holding" and sl_.hold_travel_m > ra.HOLD_MAX_M and core.relocalize_generation() is None:
+                core.require_relocalization(t, "hold_too_long")
+            self._sync_relocalization(now_ns, t)
         lift_ = self._measured_lift()
         applied_ = tuple(float(v) for v in (core._applied_now() or (0.0, 0.0, 0.0)))  # noqa: SLF001
         self.pose_history.append((t, tuple(float(v) for v in rear), self.odom_continuous,
@@ -940,6 +1335,10 @@ class RealLoop:
                     self._emergency(now_ns, rec.reason)
                     self._end_now(now_ns, rec.reason)
                     return
+        self._attempt_judge(now_ns, t)  # 5c-2 (6, 5): after this tick's replies and installs
+        if self._before_arm() and self._off_start(rear):
+            cmds.terminate("cancelled", t, "not_at_start")  # 5c-2 (6, 6): the start held until the first move
+            return
         # the preparation (design 2.2 5)
         if cmds.status == "accepted" and self.frozen is None:
             if self.operator_start is not None and not self._bypassed("operator_start"):
@@ -958,6 +1357,7 @@ class RealLoop:
                 # a deferred release re-checks the hold's travel each tick, not only at the collection (Codex 4c impl
                 # P1-10): too long a hold is not released -- a relocalization instead
                 core.require_relocalization(t, "hold_too_long")
+                self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1)
         gate_ = core.release_gate(t, rear)
         rear = gate_.rear
         # the layer latency watchdog on every tick, whatever the phase (as the Isaac loop with its budget on; Codex 4c
@@ -1379,8 +1779,9 @@ class RealLoop:
             self.book.discarded(f.seq)  # never written, now never will be: it cannot act (a half-written one may)
         drive = command_.drive
         speed = float(drive.speed_mps)
-        if abs(speed) > self.max_speed_mps:  # the rear-axle command cap (design 2.5 4)
-            drive = self.kin.command(math.copysign(self.max_speed_mps, speed), float(drive.curvature_inv_m))
+        cap_ = self._speed_cap()  # 5c-2 (6, 7b): 0.06 m/s while slam is bypassed or a start was declared
+        if abs(speed) > cap_:  # the rear-axle command cap (design 2.5 4)
+            drive = self.kin.command(math.copysign(cap_, speed), float(drive.curvature_inv_m))
             speed = float(drive.speed_mps)
         may = self.book.may_act(now_ns)
         if speed != 0.0 and may.get(-1 if speed > 0 else 1, 0.0) > 0.0:
@@ -1504,6 +1905,9 @@ class RealLoop:
             if expires is not None and ns >= int(expires):
                 return "expired", "drop"  # an old frame left in the queue: dropped, no alarm by itself
             booked = next((f for f in self.book.frames if f.seq == seq), None)
+            if (booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
+                    and self._moved_for != self.core.commands.mission_id and self._off_start(self._rear_now)):
+                return "not_at_start", "alarm"  # 5c-2 (6, 6): at the first byte and a continuation alike
             if booked is not None and booked.kind == "drive":
                 # a normal DRIVE (moving or a small lift step alike, round 6 P1-3): a wait reason that came up since the
                 # decision, or 30 ms spent (round 4 P1-4)
@@ -1558,6 +1962,9 @@ class RealLoop:
                     self.delay_bound.expect_step(*pair)
             if kind == "DRIVE":
                 self.book.written(seq, written_ns)
+                fb_ = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
+                if fb_ is not None and fb_.kind == "drive" and float(fb_.speed_mps) != 0.0:
+                    self._moved_for = self.core.commands.mission_id  # 5c-2 (6, 6): the start check ends
                 booked = next((f for f in self.book.frames if f.seq == (int(seq) & 0xFFFF)), None)
                 if booked is not None and booked.kind == "drive":
                     self.waiting = None  # a normal DRIVE out: the wait is over

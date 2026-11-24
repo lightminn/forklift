@@ -248,13 +248,31 @@ class SlamPoseTracker:
         self.version += 1
         if self.mode == "warming_up":
             self.applied = self.received
-            if scan_id >= getattr(self, "bootstrap_scan_id", 4):  # a tracker restored from an older record has none
+            if getattr(self, "_relocalizing", False):
+                pass  # real safety wiring design 6: applied, warming_up until relocalization_done()
+            elif scan_id >= getattr(self, "bootstrap_scan_id", 4):  # a tracker restored from an older record has none
                 self.mode = "tracking"
         elif self.mode == "tracking":
             self.applied = self.received
 
     def may_drive(self) -> bool:
         return self.mode != "warming_up"
+
+    def reset_for_relocalization(self) -> None:
+        """The real truck's relocalization generation opened (real safety wiring design 6, 2): the hold goes, the mode
+        is warming_up until ``relocalization_done``; ``applied`` and ``received`` stay (the control pose and the
+        replies' time order keep going). Every processed reply meanwhile becomes ``applied`` whatever its scan id."""
+        self.mode = "warming_up"
+        self._hold_start = self._hold_last = self._stand = None
+        self.hold_travel_m = 0.0
+        self._relocalizing = True
+
+    def relocalization_done(self) -> None:
+        """The generation closed (a confirmation or the operator's declaration): tracking again, the age read as usual."""
+        if not getattr(self, "_relocalizing", False) or self.applied is None:
+            raise ValueError("no relocalization to end")
+        self._relocalizing = False
+        self.mode = "tracking"
 
     def hold(self, *, odom_from_base) -> None:
         if self.mode != "tracking":
@@ -280,7 +298,8 @@ class SlamPoseTracker:
             abs(wrap(after[2] - before[2])),
         )
 
-    def map_from_base(self, now_s, odom_from_base, *, standing: bool = False) -> tuple[float, float, float]:
+    def map_from_base(self, now_s, odom_from_base, *, standing: bool = False,
+                      closed: bool = False) -> tuple[float, float, float]:
         """``standing``: the applied wheel speed has been zero for a while (the live runner's choice). While
         holding, a stand counts its net displacement, not the sum of its steps: at rest the sum grows with the
         odometry noise linearly (U30: the 15 m limit filled after 1,228 s STOPPED), the net only as a random walk,
@@ -288,8 +307,11 @@ class SlamPoseTracker:
         console plan D15)."""
         now = _finite_scalar(now_s, "now_s")
         if self.applied is None:
+            if closed:
+                # real safety wiring design 6, 2b: the outputs are closed -- the odometry stands for the map pose
+                return tuple(float(v) for v in odom_from_base)
             raise LocalizationStale("no SLAM correction yet")
-        if self.mode != "warming_up":
+        if self.mode != "warming_up" and not closed:
             age = now - self.received[1]
             if age > self.max_age_s + 1e-12:
                 raise LocalizationStale(f"last processed correction {age:.3f} s old")
@@ -312,7 +334,7 @@ class SlamPoseTracker:
                     np.hypot(odom_from_base[0] - anchor[0], odom_from_base[1] - anchor[1])
                 )
             self._hold_last = (float(odom_from_base[0]), float(odom_from_base[1]))
-            if self.hold_travel_m > self.hold_limit_m:
+            if self.hold_travel_m > self.hold_limit_m and not closed:  # closed: the loop's hold_too_long check
                 raise LocalizationStale(
                     f"dead reckoning {self.hold_travel_m:.2f} m while holding"
                 )

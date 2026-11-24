@@ -13,6 +13,13 @@ export const CHECK_LABELS = {
   watch_current: "전류 감시",
   watch_wheel: "바퀴 감시",
   d5_pocket: "포켓 확인",
+  start_pose: "시작 자세",
+};
+
+// The banner's own words where they say more than the button (5c-2, design 6 7b and the slam bypass decision).
+const BANNER_LABELS = {
+  slam: "slam — 오도메트리 주행",
+  relocalize: "relocalize(운용자 선언)",
 };
 
 // The session's view after a real_status: {accepted, controlGen, leaseHeld}. A status of another session is not
@@ -27,5 +34,5 @@ export function applyRealStatus(msg, epoch, clientId) {
 export function bypassBanner(status) {
   const list = status && Array.isArray(status.bypassed) ? status.bypassed : [];
   if (list.length === 0) return "";
-  return `우회 중: ${list.map((c) => CHECK_LABELS[c] ?? c).join(", ")}`;
+  return `우회 중: ${list.map((c) => BANNER_LABELS[c] ?? CHECK_LABELS[c] ?? c).join(", ")}`;
 }

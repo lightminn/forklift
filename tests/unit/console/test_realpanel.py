@@ -51,6 +51,23 @@ out.sig = [P.statusSig({...sA, control_gen: 4}) === P.statusSig({...sA, control_
            P.statusSig({...sA, control_gen: 4}) === P.statusSig({...sA, control_gen: 5}),  // a second STOP: another
            P.statusSig(sA) === P.statusSig(st("OFF", "idle", {lease: {holder: "me"}, operator_request: {kind: "lifted", serial: 2}}))];
 out.pose = [P.poseOf("3", "0.5", "90"), P.poseOf("x", 0, 0), P.poseOf(1, 2, Infinity)];
+// 5c-2 (design 6, 8-9)
+const rs = st("OFF", "idle", {relocalize_generation: 2, standing: true,
+  relocalize: {generation: 2, attempt: 3, kind: "confirm", state: "refused", reason: "not_at_start",
+               start_pose_m: 0.153, start_pose_deg: 1.2}});
+out.rview = P.relocalizeView(rs);
+out.rwhy = [P.relocalizeClosedWhy(rs, true), P.relocalizeClosedWhy({...rs, standing: false}, true),
+            P.relocalizeClosedWhy({...rs, relocalize_generation: null}, true),
+            P.relocalizeClosedWhy(st("READY", "running", {relocalize_generation: 2, standing: true}), true),
+            P.relocalizeClosedWhy(rs, false)];
+const ack = {session_epoch: 3, generation: 2, attempt: 3};
+out.rresult = [P.relocalizeResult(ack, rs), P.relocalizeResult({...ack, attempt: 2}, rs),
+               P.relocalizeResult(ack,
+                 {...rs, relocalize_generation: null, relocalize: {...rs.relocalize, state: "confirmed", reason: null}}),
+               P.relocalizeResult({...ack, session_epoch: 2}, rs),  // another session's ack
+               P.relocalizeResult(ack, {...rs, relocalize_generation: 3})];  // a newer generation open
+out.rgapNew = P.relocalizeView({...rs, relocalize_generation: 3}).gap;
+out.rsig = P.statusSig(rs) === P.statusSig({...rs, relocalize_generation: 3});
 console.log(JSON.stringify(out));
 """
 
@@ -68,12 +85,18 @@ def test_the_panel_decisions(tmp_path):
     assert out["shownToggle"] == [True, False, True]
     assert out["why"][0] is None and all(isinstance(w, str) for w in out["why"][1:])
     assert ["imu", True, True] in out["buttons"] and ["slam", False, True] in out["buttons"]
-    assert len(out["buttons"]) == 9 and out["closed"] is True
+    assert len(out["buttons"]) == 10 and out["closed"] is True  # start_pose: 5c-2
     assert out["key"] == {"session_epoch": 3, "kind": "lifted", "serial": 7}
     assert out["open"] == [True, False, False, False, False]
     assert out["pose"][0][:2] == [3, 0.5] and abs(out["pose"][0][2] - 1.5707963) < 1e-6
     assert out["pose"][1] is None and out["pose"][2] is None
     assert out["sig"] == [True, False, False]
+    assert out["rview"]["open"] and out["rview"]["generation"] == 2 and out["rview"]["gap"] == "15.3 cm · 1.2°"
+    assert out["rwhy"][0] is None and all(isinstance(w, str) for w in out["rwhy"][1:])
+    assert out["rresult"] == [{"state": "refused", "reason": "not_at_start"}, None,
+                              {"state": "confirmed", "reason": None}, None, None]  # told after the close only
+    assert out["rgapNew"] == ""  # generation 2's gap not under generation 3
+    assert out["rsig"] is False  # a press drawn for generation 2 is not taken for 3
 
 
 def test_the_panels_bypass_list_is_the_vehicles():

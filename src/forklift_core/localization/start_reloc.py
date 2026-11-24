@@ -52,6 +52,13 @@ def rear_from_base(base, offset_m: float = REAR_AXLE_OFFSET_M) -> tuple:
     return (x - offset_m * math.cos(yaw), y - offset_m * math.sin(yaw), yaw)
 
 
+def base_from_rear(rear, offset_m: float = REAR_AXLE_OFFSET_M) -> tuple:
+    """``rear_from_base``'s inverse (real safety wiring design 6: the operator's declared start is a rear-axle pose, the
+    SLAM correction and the source's seed are base_link)."""
+    x, y, yaw = rear
+    return (x + offset_m * math.cos(yaw), y + offset_m * math.sin(yaw), yaw)
+
+
 @dataclass(frozen=True)
 class RelocConfig:
     e_min: float

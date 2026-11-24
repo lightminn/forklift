@@ -47,6 +47,7 @@ out.push({asked: Boolean(asked), lease: s.generations.lease_id, hasLease: s.hasL
 out.push({statusLease: s.realStatusLease}); // the last status came while no lease was held
 s.onMessage({t: "real_status", session_epoch: 3, control_gen: 9, lease: {holder: "me"}, bypassed: []});
 out.push({statusLease: s.realStatusLease});
+out.push(bypassBanner({bypassed: ["slam", "relocalize", "start_pose"]}));  // 5c-2
 console.log(JSON.stringify(out));
 """
 
@@ -63,6 +64,7 @@ def test_real_status_and_the_bypass_banner(tmp_path):
     assert out[2]["leaseHeld"] is False
     assert out[3] == "" and out[5] == ""
     assert out[4] == "우회 중: IMU, 층 시각, zzz"
+    assert out[-1] == "우회 중: slam — 오도메트리 주행, relocalize(운용자 선언), 시작 자세"  # 5c-2 (design 6)
     assert out[6] == {"gen": 7, "lease": "L1", "bypassed": ["imu"]}
     assert out[7] == {"releaseLease": "L1"}  # the release named the lease it gives back
     assert out[8] == {"gen": 8, "lease": None}
