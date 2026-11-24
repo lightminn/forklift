@@ -70,6 +70,22 @@ def _wrote_disarm(b, seq):
     b._log("written", _t.monotonic_ns(), encode(Disarm(), seq), {"kind": "DISARM", "seq": seq})
 
 
+_MCU_T = {"t": 1000}
+
+
+def _feed(b, **changes):
+    """A STATE through the host's receive path (the host takes it as the latest valid one and the bench records it),
+    its MCU time after every earlier one's."""
+    import dataclasses
+    import time as _t
+
+    from forklift_core.mcu_link.messages import encode
+
+    _MCU_T["t"] += 10_000
+    st = dataclasses.replace(state(), mcu_time_us=_MCU_T["t"], **changes)
+    b.host.on_bytes(encode(st, 1), _t.monotonic_ns())
+
+
 def _bench(states, on_cycle=None, **kw):
     import io
 
@@ -140,17 +156,13 @@ def test_analyze_reads_the_timeline_from_a_marker(tmp_path):
 
 def test_a_state_not_naming_the_disarm_never_confirms_the_cleanup():
     """Codex re-review P2-2: a late STATE received after the DISARM write still reports an older seq."""
-    import dataclasses
-    import time as _t
-
-    from forklift_core.plant.bringup import Sample
-
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
+
     def cycle():
         if 5 not in b.written:
             _wrote_disarm(b, 5)  # the DISARM went out as seq 5
-        b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=77)))
+        _feed(b, last_rx_seq=77)
 
     b.link.on_cycle = cycle
     assert s.cleanup() is False
@@ -176,11 +188,6 @@ def test_a_negative_rate_is_refused():
 
 
 def test_a_state_naming_the_disarm_after_its_write_confirms_the_cleanup():
-    import dataclasses
-    import time as _t
-
-    from forklift_core.plant.bringup import Sample
-
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
 
@@ -188,7 +195,7 @@ def test_a_state_naming_the_disarm_after_its_write_confirms_the_cleanup():
         if 5 not in b.written:
             _wrote_disarm(b, 5)
         else:
-            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5)))
+            _feed(b, last_rx_seq=5)
 
     b.link.on_cycle = cycle
     assert s.cleanup() is True
@@ -420,10 +427,7 @@ def test_a_synthetic_record_makes_the_kth_result_synthetic_too(tmp_path, capsys)
 
 def _cleanup_after_reconnect(mode_after_write):
     """A DISARM written on a fresh connection before any of its STATEs; the first STATE after it names it."""
-    import dataclasses
     import time as _t
-
-    from forklift_core.plant.bringup import Sample
 
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
@@ -436,16 +440,14 @@ def _cleanup_after_reconnect(mode_after_write):
             b.host.link_identity(None)  # connection 1, no STATE yet
             _wrote_disarm(b, 5)
         else:
-            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5,
-                                                                            mode=mode_after_write)))
-            b.sample_conn.append(b.conn)
+            _feed(b, last_rx_seq=5, mode=mode_after_write)
 
     b.link.on_cycle = cycle
     return b, s
 
 
 def test_a_disarm_before_the_first_state_of_a_new_connection_is_confirmed():
-    """Codex PR-2a re-reviews 2-4: a stop confirmation needs no earlier sample -- the STATE read after the write
+    """Codex PR-2a re-reviews 2-4: a stop confirmation needs no earlier sample -- the STATE received after the write
     names the DISARM and reports a stopped mode."""
     b, s = _cleanup_after_reconnect(Mode.DISARMED)
     assert s.cleanup() is True
@@ -457,10 +459,7 @@ def test_a_stopping_naming_the_disarm_is_not_a_confirmed_stop():
 
 
 def test_the_old_connections_disarm_does_not_confirm_on_the_new_one():
-    import dataclasses
     import time as _t
-
-    from forklift_core.plant.bringup import Sample
 
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
@@ -473,20 +472,14 @@ def test_the_old_connections_disarm_does_not_confirm_on_the_new_one():
             b.host.disconnected(_t.monotonic_ns())
             b.host.link_identity(None)  # connection 1
         else:
-            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5)))
-            b.sample_conn.append(b.conn)
+            _feed(b, last_rx_seq=5)
 
     b.link.on_cycle = cycle
     assert s.cleanup() is False
 
 
 def test_a_buffered_stop_before_a_newer_armed_state_does_not_confirm():
-    """Codex PR-2a re-review 5 P2-2: both STATEs are read after the DISARM's write; the newest is ARMED."""
-    import dataclasses
-    import time as _t
-
-    from forklift_core.plant.bringup import Sample
-
+    """Codex PR-2a re-review 5 P2-2: both STATEs are received after the DISARM's write; the newer is ARMED."""
     b = _bench([state()])
     s = bringup.Session(b, 1.0)
     steps = {"n": 0}
@@ -496,10 +489,32 @@ def test_a_buffered_stop_before_a_newer_armed_state_does_not_confirm():
         if steps["n"] == 1:
             _wrote_disarm(b, 1)
         else:
-            now = _t.monotonic_ns()
-            b.samples.append(Sample(now, dataclasses.replace(state(), last_rx_seq=1, mode=Mode.DISARMED)))
-            b.samples.append(Sample(now, dataclasses.replace(state(), last_rx_seq=0, mode=Mode.ARMED)))
-            b.sample_conn += [b.conn, b.conn]
+            _feed(b, last_rx_seq=1, mode=Mode.DISARMED)
+            _feed(b, last_rx_seq=0, mode=Mode.ARMED)
+
+    b.link.on_cycle = cycle
+    assert s.cleanup() is False
+
+
+def test_an_out_of_order_stop_the_host_refused_does_not_confirm():
+    """Codex PR-2a re-review 6 P2-2: an older-MCU-time DISARMED after an ARMED is refused by the host; it is not the
+    newest valid STATE."""
+    import dataclasses
+
+    from forklift_core.mcu_link.messages import encode
+
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+    steps = {"n": 0}
+
+    def cycle():
+        steps["n"] += 1
+        if steps["n"] == 1:
+            _wrote_disarm(b, 1)
+        elif steps["n"] == 2:
+            _feed(b, last_rx_seq=0, mode=Mode.ARMED)
+            t = b.host.state.mcu_time_us - 5_000  # older than the ARMED one
+            b.host.on_bytes(encode(dataclasses.replace(state(), mcu_time_us=t, last_rx_seq=1), 1), 0)
 
     b.link.on_cycle = cycle
     assert s.cleanup() is False
@@ -532,3 +547,50 @@ def test_an_unconfirmed_stop_is_retried_before_the_operator_is_asked(monkeypatch
                            power_switch_in_hand=True)
     bringup.execute(a, b)
     assert order == ["cleanup", "observed"]
+
+
+def test_no_direction_prompt_while_the_stop_is_unconfirmed(monkeypatch):
+    """Codex PR-2a re-review 6 P2-1: both cleanups failed -- nobody is asked to look; observed is 'unknown'."""
+    import argparse
+
+    b = _bench([state()], commission=True)
+
+    def fake_run(bench, session, duty, seconds, profile=None):
+        session.arm_requested, session.cleanup_confirmed = True, False
+        return {"result": "ok", "metrics": {"duty_e4": 1000, "measured_sign": "pos", "duty_sign_in_build": 1}}
+
+    def failing_cleanup(self):
+        self.cleanup_confirmed = False
+        return False
+
+    def no_prompt(args):
+        raise AssertionError("asked the operator while the stop was unconfirmed")
+
+    monkeypatch.setattr(bringup, "run_commission", fake_run)
+    monkeypatch.setattr(bringup.CommissionSession, "cleanup", failing_cleanup)
+    monkeypatch.setattr(bringup, "_observed", no_prompt)
+    a = argparse.Namespace(cmd="commission", axis="L", duty=0.1, seconds=0.6, window=None, observed=None, yes=True,
+                           power_switch_in_hand=True)
+    res = bringup.execute(a, b)
+    assert res["observed"] == "unknown"
+
+
+def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch):
+    """Codex PR-2a re-review 6 P3."""
+    import argparse
+
+    b = _bench([state()], commission=True)
+
+    def fake_run(bench, session, duty, seconds, profile=None):
+        session.arm_requested, session.cleanup_confirmed = True, False
+        return {"result": "ok", "metrics": {"duty_e4": 1000, "measured_sign": "pos", "duty_sign_in_build": 1}}
+
+    def broken_cleanup(self):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(bringup, "run_commission", fake_run)
+    monkeypatch.setattr(bringup.CommissionSession, "cleanup", broken_cleanup)
+    a = argparse.Namespace(cmd="commission", axis="L", duty=0.1, seconds=0.6, window=None, observed=None, yes=True,
+                           power_switch_in_hand=True)
+    res = bringup.execute(a, b)
+    assert res["metrics"]["measured_sign"] == "pos" and "cleanup_error" in res and res["observed"] == "unknown"

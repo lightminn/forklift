@@ -379,19 +379,14 @@ class Session:
             # from an earlier wrap cannot make a moving MCU look stopped -- and a DISARM written before the first
             # STATE of a new connection is confirmed too (Codex PR-2a re-reviews 2-4). A lost DISARM is re-sent by
             # the run's final cleanup; the MCU's command expiry stops it meanwhile.
-            mine = [w for w in b.writes[o0:] if w.kind == "DISARM"]
-            if not mine or not b.samples:
+            # The STATE the host itself took as the latest valid one (never a sample it refused as out of order, nor a
+            # stopped one buffered before a newer ARMED one -- Codex PR-2a re-reviews 5-6): received after the
+            # DISARM's last byte on the connection it went out on, naming its seq, in a stopped mode.
+            st, rx = b.host.state, b.host.state_rx_ns
+            if st is None or rx is None or st.mode not in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP):
                 return False
-            stopped = (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
-            k = max(len(b.samples) - 60, 0)  # the recent tail only: this runs every cycle of the wait
-            tail = list(zip(b.seen(k), b.samples[k:], strict=True))
-            newest, newest_smp = tail[-1]
-            # the newest STATE itself must be a stop: a stopped sample buffered before a newer ARMED one does not
-            # confirm (Codex PR-2a re-review 5 P2-2)
-            if newest_smp.state.mode not in stopped:
-                return False
-            return any(w.conn == x.conn == newest.conn and w.seq == x.last_rx_seq and w.done_ns <= x.host_ns
-                       and smp.state.mode in stopped for x, smp in tail for w in mine)
+            return any(w.kind == "DISARM" and w.conn == b.conn and w.seq == st.last_rx_seq and w.done_ns <= rx
+                       for w in b.writes[o0:])
 
         ok = b.run_until(done, CLEANUP_S)
         b.emit({"t": "cleanup", "confirmed": bool(ok)})
@@ -1374,12 +1369,18 @@ def execute(args, bench: Bench) -> dict:
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
+                result.update(conditions, board_product=session.preflight_product)
                 if session.arm_requested and session.cleanup_confirmed is not True:
                     # the stop again before the operator is asked anything: a DISARM lost on a disconnect is re-sent
-                    # now, not after the direction prompt (Codex PR-2a re-review 5 P2-1)
-                    session.cleanup()
-                result.update(conditions, board_product=session.preflight_product)
-                result["observed"] = _observed(args)
+                    # now, not after the direction prompt (Codex PR-2a re-reviews 5-6); a failure here is kept with
+                    # the result already measured
+                    try:
+                        session.cleanup()
+                    except Exception as exc:  # noqa: BLE001 -- the measured result stays; the final cleanup retries
+                        session.cleanup_confirmed = False
+                        result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+                # still no confirmed stop: nobody is asked to look at a wheel that may not have stopped
+                result["observed"] = _observed(args) if session.cleanup_confirmed else "unknown"
                 m = result["metrics"]
                 # an unjudgeable run (its acceptances could not be told apart) gives no sign verdict (Codex PR-2a P2-3)
                 result["verdict"] = None if result["result"] == "unjudgeable" else sign_verdict(
