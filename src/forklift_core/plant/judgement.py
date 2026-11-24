@@ -17,6 +17,15 @@ from __future__ import annotations
 from forklift_core.plant.write_log import runs_of
 
 
+DIAG_TOKEN_PREFIX = "diag-"  # a diagnostic image's version token (diag-commission-unlimited-1, 2026-11-24)
+
+
+def diagnostic_image(product: str | None) -> bool:
+    """A USB product string naming a diagnostic image (its version token starts with ``diag-``): built off main with
+    protections changed, so nothing armed on it is evidence for a gate (Codex PR-2b P2-5)."""
+    return bool(product) and any(t.startswith(DIAG_TOKEN_PREFIX) for t in str(product).split())
+
+
 class NotForGate(ValueError):
     """An ineligible record given to a judgement entry point without --allow-bypassed."""
 
@@ -25,6 +34,10 @@ def run_marks(run: list[dict]) -> dict:
     """The judgement marks of one run's rows (from its header on)."""
     header = next((r for r in run if r.get("t") == "header"), {})
     marks: dict = {}
+    diag = next((r["product"] for r in run if r.get("product") and diagnostic_image(r["product"])), None)
+    if diag is not None:
+        # the product the link read (a connection or pre-ARM row): whatever the header says
+        marks["not_for_gate"], marks["diagnostic_image"] = True, diag
     if header.get("cmd") != "commission":
         return marks
     if "large" not in header:
@@ -59,7 +72,8 @@ def eligible(marks: dict) -> bool:
 def check(marks: dict, *, allow: bool) -> dict:
     """The marks an output carries; NotForGate if the record is ineligible and not allowed."""
     if not eligible(marks) and not allow:
-        why = "a protection was bypassed" if marks.get("not_for_gate") else "its run conditions are unknown"
+        why = ("a diagnostic image" if marks.get("diagnostic_image") else
+               "a protection was bypassed" if marks.get("not_for_gate") else "its run conditions are unknown")
         raise NotForGate(f"not for a gate: {why} (give --allow-bypassed to read it; its pass fields stay empty)")
     return dict(marks)
 

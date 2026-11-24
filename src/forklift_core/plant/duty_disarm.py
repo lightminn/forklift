@@ -24,6 +24,8 @@ from forklift_core.plant.write_log import Seen, Write, accepted
 
 HOLD_US = 500_000
 DUTY_TOL_E4 = 1
+MIN_DUTY_E4 = 100  # a target the wheel can be seen at: under it the tolerance would take a zero output for it
+GAP_MAX_NS = 50_000_000  # between consecutive STATEs from the reach to the acceptance (5 STATE periods)
 STATE_PERIOD_S = 0.010
 SEND_MARGIN_S = 0.020
 WHEEL_SLEW_PER_S = 2.0  # board_config.c (pinned by the bench-limits test)
@@ -41,7 +43,8 @@ def _seen(r: dict) -> Seen:
 
 
 def _at_target(r: dict, axis: int, duty_e4: int) -> bool:
-    return r["mode"] == "ARMED" and abs(int(r["duty_e4"][axis]) - duty_e4) <= DUTY_TOL_E4
+    applied = int(r["duty_e4"][axis])
+    return r["mode"] == "ARMED" and applied != 0 and abs(applied - duty_e4) <= DUTY_TOL_E4
 
 
 def _bad(r: dict) -> set:
@@ -71,12 +74,21 @@ def physical(states: list[dict]) -> bool:
                                for f in flags)
 
 
-def validity(states: list[dict], writes: list[Write], *, axis: int, duty_e4: int) -> dict:
-    """The four conditions above; ``{"valid": bool, "reason": str | None, ...}`` with the indices it used."""
+def validity(states: list[dict], writes: list[Write], *, axis: int, duty_e4: int, synthetic: bool = False) -> dict:
+    """The four conditions above; ``{"valid": bool, "reason": str | None, ...}`` with the indices it used.
+    ``synthetic``: a model run (a pty) -- never physical whatever its build bits say (Codex PR-2b P1-3)."""
     out = {"valid": False, "reason": None, "reach_index": None, "hold_index": None, "acceptance_index": None,
-           "disarm_seq": None, "disarm_done_ns": None, "physical": physical(states)}
+           "disarm_seq": None, "disarm_done_ns": None, "physical": physical(states) and not synthetic}
+    if abs(duty_e4) < MIN_DUTY_E4:
+        out["reason"] = "target_too_small"
+        return out
     seen = [_seen(r) for r in states]
-    reach, hold = reach_and_hold(states, axis, duty_e4)
+    # the reach is counted only from the first nonzero COMMISSION of the drive accepted (Codex PR-2b P1-1)
+    m_on = accepted(seen, writes, lambda w: w.kind == "COMMISSION" and w.phase == "on" and w.duty_e4 == duty_e4)
+    if m_on.index is None:
+        out["reason"] = "seq_ambiguous" if m_on.ambiguous_at is not None else "drive_not_accepted"
+        return out
+    reach, hold = reach_and_hold(states, axis, duty_e4, m_on.index)
     out["reach_index"], out["hold_index"] = reach, hold
     if hold is None:
         ever = any(_at_target(r, axis, duty_e4) for r in states)
@@ -94,6 +106,25 @@ def validity(states: list[dict], writes: list[Write], *, axis: int, duty_e4: int
     prev = next((j for j in range(i_acc - 1, -1, -1) if seen[j].conn == seen[i_acc].conn), None)
     if prev is None or not _at_target(states[prev], axis, duty_e4):
         out["reason"] = "not_at_target_before_disarm"
+        return out
+    # continuity from the reach to the acceptance (Codex PR-2b P2-1): one connection, no gap, at the target all along
+    if any(seen[j].conn != seen[reach].conn for j in range(reach, i_acc + 1)):
+        out["reason"] = "connection_changed"
+        return out
+    if any(seen[j + 1].host_ns - seen[j].host_ns > GAP_MAX_NS for j in range(reach, i_acc)):
+        out["reason"] = "state_gap"
+        return out
+    if not all(_at_target(states[j], axis, duty_e4) for j in range(reach, i_acc)):
+        out["reason"] = "left_the_target_before_disarm"
+        return out
+    w_dis = m.write
+    if w_dis.done_ns < states[hold]["host_ns"]:
+        out["reason"] = "disarm_before_the_hold_was_seen"
+        return out
+    first_on = next((w for w in writes if w.kind == "COMMISSION" and w.phase == "on"), None)
+    if first_on is None or any(w.kind == "COMMISSION" and w.duty_e4 != duty_e4
+                               for w in writes if first_on.order <= w.order < w_dis.order):
+        out["reason"] = "another_command_before_disarm"
         return out
     span = states[reach:i_acc + 1]
     if any(r["boot_id"] != states[reach]["boot_id"] for r in span):

@@ -57,23 +57,31 @@ def disarm_write(seq, done_ms):
                  phase="test_disarm")
 
 
-def run(target=3000, *, at_target_until=900, accept_ms=905, mode_after="DISARMED", faults_at=None, flags=OPEN):
-    """The wheel ramps, reaches the target at 100 ms, holds; the DISARM (seq 50) is written at 902 ms."""
+def on_write(duty, *, seq=40, done_ms=5, order=1):
+    return Write(order=order, conn=1, kind="COMMISSION", seq=seq, start_ns=done_ms * MS - 10, done_ns=done_ms * MS,
+                 boot_id=7, echo_mcu_time_us=0, valid_ms=None, arm_gen=1, axis=0, duty_e4=duty, phase="on")
+
+
+def run(target=3000, *, asked=None, at_target_until=900, accept_ms=905, mode_after="DISARMED", faults_at=None,
+        flags=OPEN):
+    """The drive (seq 40) is accepted at 10 ms; the wheel ramps, reaches the target at 100 ms and holds; the DISARM
+    (seq 50) is written at 902 ms."""
     rows = []
     for t in range(0, 1000, 10):
         duty = min(target, t * 30) if t <= at_target_until else 0
         if t >= accept_ms:
             rows.append(st(t, 0, seq=50, mode=mode_after, flags=flags))
         else:
-            rows.append(st(t, duty, seq=40 + (t // 100), faults=("COMMAND_TIMEOUT",) if faults_at == t else (),
-                           flags=flags))
-    return rows, [disarm_write(50, 902)]
+            rows.append(st(t, duty, seq=39 if t == 0 else 40 + (t // 100),
+                           faults=("COMMAND_TIMEOUT",) if faults_at == t else (), flags=flags))
+    return rows, [on_write(target if asked is None else asked), disarm_write(50, 902)]
 
 
 def test_a_valid_duty_disarm():
     rows, writes = run()
     v = dd.validity(rows, writes, axis=0, duty_e4=3000)
     assert v["valid"] and v["physical"] and v["disarm_seq"] == 50 and v["disarm_done_ns"] == 902 * MS
+    assert v["reach_index"] == 10
 
 
 @pytest.mark.parametrize("kw,asked,reason", [
@@ -84,9 +92,45 @@ def test_a_valid_duty_disarm():
     ({"accept_ms": 2000}, 3000, "disarm_not_accepted"),
 ])
 def test_invalid_duty_disarms(kw, asked, reason):
-    rows, writes = run(**kw)
+    rows, writes = run(asked=asked, **kw)
     v = dd.validity(rows, writes, axis=0, duty_e4=asked)
     assert not v["valid"] and v["reason"] == reason
+
+
+def test_a_target_that_quantizes_to_nothing_or_a_zero_output_never_passes():
+    """Codex PR-2b P1-1: a duty under one e4 step, or a hold counted from zero outputs, is not a stop test."""
+    rows, writes = run(target=0)
+    assert dd.validity(rows, writes, axis=0, duty_e4=0)["reason"] == "target_too_small"
+    rows, writes = run(target=50)
+    assert dd.validity(rows, writes, axis=0, duty_e4=50)["reason"] == "target_too_small"
+
+
+def test_the_hold_counts_only_after_the_drive_was_accepted():
+    rows, writes = run()
+    writes[0] = on_write(3000, seq=45)  # the drive accepted at 500 ms: 400 ms of hold left before the DISARM
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "hold_not_seen"
+    rows, writes = run()
+    assert dd.validity(rows, writes[1:], axis=0, duty_e4=3000)["reason"] == "drive_not_accepted"
+
+
+def test_continuity_from_the_reach_to_the_acceptance():
+    """Codex PR-2b P2-1."""
+    rows, writes = run()
+    del rows[40:45]  # 60 ms without a STATE inside the hold
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "state_gap"
+    rows, writes = run()
+    rows[60]["conn"] = 2
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "connection_changed"
+    rows, writes = run()
+    rows[70]["duty_e4"][0] = 2000  # one sample off the target after the hold was seen
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "left_the_target_before_disarm"
+    rows, writes = run()
+    other = Write(order=50, conn=1, kind="COMMISSION", seq=48, start_ns=0, done_ns=795 * MS, boot_id=7,
+                  echo_mcu_time_us=0, valid_ms=None, arm_gen=1, axis=0, duty_e4=0, phase="on")
+    assert dd.validity(rows, writes + [other], axis=0, duty_e4=3000)["reason"] == "another_command_before_disarm"
+    rows, writes = run()
+    writes[1] = disarm_write(50, 550)  # written before the hold had been seen (its acceptance is still at 905)
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "disarm_before_the_hold_was_seen"
 
 
 def test_a_locked_or_model_board_is_not_physical():
@@ -95,6 +139,8 @@ def test_a_locked_or_model_board_is_not_physical():
     assert v["valid"] and not v["physical"]
     rows, writes = run(flags=["DRIVERS_READY"])  # a normal build
     assert not dd.validity(rows, writes, axis=0, duty_e4=3000)["physical"]
+    rows, writes = run()
+    assert not dd.validity(rows, writes, axis=0, duty_e4=3000, synthetic=True)["physical"]  # the pty model
 
 
 def test_min_seconds():

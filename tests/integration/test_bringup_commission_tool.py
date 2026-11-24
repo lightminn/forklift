@@ -347,11 +347,14 @@ def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp
     monkeypatch.setitem(bringup.WHEEL_STOP_MS, "disarm", 400.0)  # whatever the DISARM row holds, they follow
     rec = tmp_path / "run.jsonl"
     rows = [{"t": "header", "cmd": "commission", "scenario": "hold_disarm", "large": False, "bypass": None},
-            {"t": "marker", "host_ns": 0, "label": "x"}]
+            {"t": "marker", "host_ns": 0, "label": "x"}, {"t": "result", "event_host_ns": 5}]
     rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"})
+    assert out["event_host_ns"] == 5 and out["marker"] is None  # the tool's own event, not the Enter (P2-3)
     assert out["external"]["stop_time_ms"]["reference"] == "stand"  # the commissioning scenarios run lifted
     assert out["external"]["stop_time_ms"]["limit"] == 400.0 and out["external"]["stop_time_ms"]["over_limit"]
+    # a time-limit scenario runs on a locked board or the model: no physical pass (Codex PR-2b P1-3)
+    assert out["external"]["stop_time_ms"]["pass"] is None and not out["official"]
     # design 2026-11-25 1.3 (PR-2b): a commissioning run is never read with --floor, nor as another kind
     assert bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"}, floor=True)["result"] == "refused"
     assert "not 'disarm'" in bringup.analyze(rec, -1, "disarm", {"stop_time_ms": "180"})["why"]
@@ -380,6 +383,31 @@ def test_the_cli_refuses_a_bypassed_record_unless_allowed(tmp_path, capsys):
                          "--allow-bypassed"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["not_for_gate"] and out["external"]["output_response_ms"]["pass"] is None
+
+
+def test_analyze_judges_the_run_it_reads_not_the_whole_file(tmp_path, capsys):
+    """Codex PR-2b P2-4: a bypassed commissioning run, then a plain record with a marker appended to the same file."""
+    rec = tmp_path / "run.jsonl"
+    rows = [{"t": "header", "cmd": "commission", "scenario": None, "large": True, "bypass": "enc_stuck"},
+            {"t": "header", "cmd": "record"}, {"t": "marker", "host_ns": 0, "label": "x"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--output-response-ms", "50"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "not_for_gate" not in out and out["external"]["output_response_ms"]["pass"] is True
+
+
+def test_a_diagnostic_image_is_not_for_a_gate(tmp_path, capsys):
+    """Codex PR-2b P2-5: the 2026-11-24 image named in the record, whatever the header says."""
+    rec = tmp_path / "run.jsonl"
+    rows = [{"t": "header", "cmd": "record"},
+            {"t": "connected", "product": "forklift-mcu commission OPEN diag-commission-unlimited-1 rec=1f4207f4"},
+            {"t": "marker", "host_ns": 0, "label": "x"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--output-response-ms", "50"]) == 2
+    assert "diagnostic image" in json.loads(capsys.readouterr().out)["why"]
+    res = {"external": {"output_response_ms": {"pass": True}}}
+    bringup._mark_commission_result(res, (), False, "forklift-mcu commission OPEN diag-commission-unlimited-1 rec=1")
+    assert res["not_for_gate"] and res["external"]["output_response_ms"]["pass"] is None
 
 
 @pytest.mark.parametrize("what", ["fault", "boot"])
@@ -812,16 +840,39 @@ def dargs(**kw):
     return argparse.Namespace(**{**base, **kw})
 
 
+def _with_header(b, **kw):
+    hdr = {"t": "header", "cmd": "commission", "scenario": "duty_disarm", "duty": 0.3, "axis": "L", "large": False,
+           "bypass": None, "synthetic": None, **kw}
+    return [hdr] + [json.loads(x) for x in b.out.getvalue().splitlines()]
+
+
 def test_duty_disarm_on_an_open_board_holds_then_disarms_and_judges_the_response(model, monkeypatch):
+    """The model reports an open commissioning build; read as a real board (not synthetic) the response is judged,
+    and analyze judges the same from the record (its event the test DISARM's write, Codex PR-2b P2-3)."""
     b = model()
     b.host.usb_product = LR1
     _typed(monkeypatch)
-    res = bringup.execute(dargs(), b)
+    res = bringup.execute(dargs(synthetic=False), b)
     assert res["result"] == "ok", res
     v = res["validity"]
     assert v["valid"] and v["physical"] and res["disarm_seq"] is not None
     assert res["external"]["output_response_ms"]["pass"] is True  # judged: valid, open board
     assert res["external"]["stop_time_ms"]["pass"] is None  # on the stand: reference only
+    out = bringup.analyze(_with_header(b), -1, "duty_disarm", {"output_response_ms": "50"})
+    assert out["result"] == "ok" and out["validity"]["valid"] and out["event_host_ns"] == v["disarm_done_ns"]
+    assert out["external"]["output_response_ms"]["pass"] is True and out["software"]["mode_change_ms"] is not None
+    # the same record from a rehearsal: never a physical pass (Codex PR-2b P1-3)
+    out = bringup.analyze(_with_header(b, synthetic={"bench": "x"}), -1, "duty_disarm", {"output_response_ms": "50"})
+    assert not out["validity"]["physical"] and out["external"]["output_response_ms"]["pass"] is None
+
+
+def test_duty_disarm_on_the_model_judges_nothing_physical(model, monkeypatch):
+    b = model()
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(dargs(), b)  # synthetic: the pty model
+    assert res["result"] == "ok" and res["validity"]["valid"] and not res["physical"], res
+    assert res["external"]["output_response_ms"]["pass"] is None
     phases = [w.phase for w in b.writes]
     assert "test_disarm" in phases and "post_zero" not in phases  # no zero hold between the drive and the DISARM
     i = phases.index("test_disarm")
@@ -833,6 +884,26 @@ def test_duty_disarm_on_a_locked_board_proves_the_sequence_but_judges_nothing_ph
     res = bringup.execute(dargs(duty=0.15, seconds=0.8), b)
     assert res["result"] == "ok" and res["validity"]["valid"] and not res["physical"], res
     assert res["external"]["output_response_ms"]["pass"] is None
+
+
+def test_duty_disarm_stops_on_the_encoder_bit_unless_bypassed(model, monkeypatch):
+    """Codex PR-2b P1-2: the stuck/polarity early stop of a plain run applies."""
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(dargs(), b)
+    assert res["result"] == "not_met" and res["why"] == "early_stop_encoder_bit" and res["cleanup_confirmed"], res
+    assert res["external"]["output_response_ms"]["pass"] is None
+    assert not any(w.phase == "test_disarm" for w in b.writes)
+
+
+@pytest.mark.parametrize("duty", [0.00004, 0.0001, 0.005])
+def test_duty_disarm_refuses_a_duty_that_shows_no_output(model, duty):
+    """Codex PR-2b P1-1: a target that quantizes to zero (or within the tolerance of it) is refused before the ARM."""
+    b = model()
+    res = bringup.execute(dargs(duty=duty), b)
+    assert res["result"] == "refused" and "at least" in res["why"]
+    assert kinds_written(b) == []
 
 
 def test_duty_disarm_needs_time_for_the_hold(model):

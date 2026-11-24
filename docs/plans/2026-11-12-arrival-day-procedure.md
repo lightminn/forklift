@@ -337,9 +337,9 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 ```
 
 - `result == "ok"` 이고 `validity.valid`·`validity.physical` 이 참이어야 시험이 성립한다. 성립하면 목표 도달, 0.5 s 유지, 시험용 DISARM 의 수락이 같은 무장 세대에서 입증된 것이다. 그것만으로 합격이 아니다.
-- `limit_disarm`·`hold_disarm`(MCU 시간 상한에 닿은 뒤 DISARM)은 이제 **잠긴 시운전 보드나 모형**에서만 돈다(열린 보드에서는 도구가 ARM 전에 거부). 상한 경로 자체의 확인이다.
+- `limit_disarm`·`hold_disarm`(MCU 시간 상한에 닿은 뒤 DISARM)은 이제 **잠긴 시운전 보드나 모형**에서만 돈다(열린 보드에서는 도구가 ARM 전에 거부). 상한 경로 자체의 확인이고, 물리 합격 칸은 비어 있다(`pass: null`). 이때만 `--stop-grace-ms` 에 빌드 값(300)을 정확히 넣는다.
 - **출력 반응은 받침대에서도 판정한다**: `external.output_response_ms.pass == true`(DISARM 문턱 100 ms). 정지 시간·거리만 받침대에서 참고값(`reference: "stand"`, `over_limit`)이다(Codex).
-- `--stop-grace-ms` 는 빌드 값(300)을 정확히 넣는다.
+- 나중에 기록으로 다시 볼 때: `python tools/bringup.py analyze --record $D/run.jsonl --kind duty_disarm`. 사건 시각은 기록의 시험용 DISARM 쓰기 완료이고 Enter 표시는 쓰지 않는다(`--marker` 는 그 종류의 실행 순번).
 
 **IWDG 리셋**(총괄 결정 (A), 모터 출력 설계 4.1):
 - **① 주기 정지 → 리셋**(`fw-stall` 로 바꾸고 3.1, 출력 잠금):
