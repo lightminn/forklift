@@ -29,12 +29,16 @@ static inline volatile uint16_t *spi_reg16(SPI_TypeDef *spi, size_t offset)
 
 static inline void spi_setup(SPI_TypeDef *spi, uint32_t mbr, uint32_t cpol, uint32_t cpha)
 {
-    spi->CR1 = 0;
+    /* Internal NSS high (SSI) BEFORE MASTER and SSM are set: a master with SSM = 1 and SSI = 0
+       sees its NSS low and can raise a mode fault (MODF), on which the hardware clears MASTER and
+       no clock comes out (RM0433 SPI mode fault; ST's HAL sets SSI first). The old order -- CR1 = 0,
+       then CFG2 = MASTER | SSM, then SSI -- matched SPI1 and SPI2 both silent on the first real
+       board (2026-11-24: no DRV8244 answer, kth_frames stuck at 0). */
+    spi->CR1 = SPI_CR1_SSI;
     spi->CFG1 = spi_cfg1_value(mbr); /* 16-bit frames, CRC off, CRCSIZE at reset */
     /* Master, software NSS held high internally, outputs kept driven while disabled (AFCNTR). */
     spi->CFG2 = SPI_CFG2_MASTER | SPI_CFG2_SSM | SPI_CFG2_AFCNTR | (cpol ? SPI_CFG2_CPOL : 0u) |
                 (cpha ? SPI_CFG2_CPHA : 0u);
-    spi->CR1 = SPI_CR1_SSI;
     spi->CR2 = 1u; /* TSIZE = 1 */
 }
 
