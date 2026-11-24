@@ -217,9 +217,11 @@ class Bench:
 
     def seen(self, start: int = 0) -> list[Seen]:
         """The samples from ``start`` as the matcher reads them (an index into this list is ``start`` less)."""
-        conns = self.sample_conn + [self.conn] * (len(self.samples) - len(self.sample_conn))  # samples put by hand
+        samples = self.samples[start:]
+        conns = self.sample_conn[start:]
+        conns += [self.conn] * (len(samples) - len(conns))  # samples put by hand have no recorded connection
         return [Seen(s.host_ns, c, s.state.boot_id, s.state.mcu_time_us, s.state.last_rx_seq, s.state.arm_gen)
-                for s, c in zip(self.samples[start:], conns[start:], strict=True)]
+                for s, c in zip(samples, conns, strict=True)]
 
     def emit(self, row: dict) -> None:
         try:
@@ -377,15 +379,32 @@ class Session:
             m = accepted(b.seen(k), b.writes[o0:], lambda w: w.kind == "DISARM")
             return m.index is not None and b.samples[k + m.index].state.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
 
-        ok = b.run_until(done, CLEANUP_S / 2)
-        if not ok:
-            # A DISARM written before any STATE of a new connection was read has no earlier sample to show a
-            # transition from: once one is in, a second DISARM (a new seq) can be confirmed (Codex PR-2a re-review
-            # P2-4). The first stop request has gone out either way.
-            o0 = len(b.writes)
-            b.host.request_disarm(time.monotonic_ns())
-            ok = b.run_until(done, CLEANUP_S / 2)
-        b.emit({"t": "cleanup", "confirmed": bool(ok)})
+        retried = []
+
+        def maybe_retry() -> None:
+            # A DISARM written on a connection before any of its STATEs was read has no earlier sample to show a
+            # transition from. Once a STATE of that connection is in (read after the write) and the MCU is not in a
+            # STOPPING (a DISARM would end its brake), a second DISARM can be confirmed by its own transition. Both
+            # stay candidates, and the first stop request has gone out either way (Codex PR-2a re-reviews 2-3).
+            if retried:
+                return
+            first = next((w for w in b.writes[o0:] if w.kind == "DISARM"), None)
+            if first is None:
+                return
+            if first.conn != b.conn:
+                return  # written on a connection that is gone: the new one's own cleanup is not ours to redo
+            # from the newest sample back to the write: was there a sample of its connection before it (then a
+            # transition can show), and is there one after it now (the baseline)?
+            seen_tail = b.seen(max(len(b.samples) - 200, 0))
+            after = [x for x in seen_tail if x.conn == first.conn and x.host_ns >= first.done_ns]
+            before = any(x.conn == first.conn and x.host_ns < first.done_ns for x in seen_tail)
+            if before or not after or b.samples[-1].state.mode == Mode.STOPPING:
+                return
+            retried.append(time.monotonic_ns())
+            b.host.request_disarm(retried[0])
+
+        ok = b.run_until(done, CLEANUP_S, every=maybe_retry)
+        b.emit({"t": "cleanup", "confirmed": bool(ok), "retried": bool(retried)})
         self.cleanup_confirmed = bool(ok)
         return ok
 

@@ -78,6 +78,7 @@ def _bench(states, on_cycle=None, **kw):
     b = bringup.Bench(_Link(on_cycle), io.StringIO(), **kw)
     for i, st in enumerate(states):
         b.samples.append(Sample(i * 10**7, st))
+        b.sample_conn.append(b.conn)  # read on the bench's first connection
     return b
 
 
@@ -415,3 +416,66 @@ def test_a_synthetic_record_makes_the_kth_result_synthetic_too(tmp_path, capsys)
     assert out["axes"]["M"]["verdict"] == "synthetic" and out["axes"]["M"]["computed"] == "configured_ok"
     assert out["axes"]["H"]["verdict"] == "synthetic" and out["axes"]["H"]["computed"] == "undecided"
 
+
+
+def _cleanup_after_reconnect(mode_after_write):
+    """A DISARM written on a fresh connection before any of its STATEs: the first STATE after it names it (no
+    transition), then -- unless the MCU is in a STOPPING -- a second DISARM goes out and its transition confirms."""
+    import dataclasses
+    import time as _t
+
+    from forklift_core.plant.bringup import Sample
+
+    b = _bench([state()])
+    s = bringup.Session(b, 1.0)
+    steps = {"n": 0}
+
+    def cycle():
+        steps["n"] += 1
+        n = steps["n"]
+        if n == 1:
+            b.host.disconnected(_t.monotonic_ns())
+            b.host.link_identity(None)  # connection 1, no STATE yet
+            _wrote_disarm(b, 5)
+        elif n == 2:
+            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=5,
+                                                                            mode=mode_after_write)))
+            b.sample_conn.append(b.conn)
+        elif b.host.disarm_requests > 1 and 6 not in b.written:
+            _wrote_disarm(b, 6)
+        elif 6 in b.written:
+            b.samples.append(Sample(_t.monotonic_ns(), dataclasses.replace(state(), last_rx_seq=6)))
+            b.sample_conn.append(b.conn)
+
+    b.link.on_cycle = cycle
+    return b, s
+
+
+def test_a_disarm_before_the_first_state_of_a_new_connection_is_confirmed_by_a_second_one(monkeypatch):
+    """Codex PR-2a re-reviews 2-3 P2: the retry waits for a STATE of the connection after the write."""
+    b, s = _cleanup_after_reconnect(Mode.DISARMED)
+    calls = {"n": 0}
+    real = b.host.request_disarm
+
+    def counted(now_ns):
+        calls["n"] += 1
+        return real(now_ns)
+
+    monkeypatch.setattr(b.host, "request_disarm", counted)
+    monkeypatch.setattr(type(b.host), "disarm_requests", property(lambda self: calls["n"]), raising=False)
+    assert s.cleanup() is True and calls["n"] == 2
+
+
+def test_no_second_disarm_into_a_stopping(monkeypatch):
+    """Codex PR-2a re-review 3 P2-3: a STOPPING after the write ends on a DISARM -- the retry does not cut it."""
+    b, s = _cleanup_after_reconnect(Mode.STOPPING)
+    calls = {"n": 0}
+    real = b.host.request_disarm
+
+    def counted(now_ns):
+        calls["n"] += 1
+        return real(now_ns)
+
+    monkeypatch.setattr(b.host, "request_disarm", counted)
+    monkeypatch.setattr(type(b.host), "disarm_requests", property(lambda self: calls["n"]), raising=False)
+    assert s.cleanup() is False and calls["n"] == 1

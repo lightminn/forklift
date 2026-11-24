@@ -12,7 +12,8 @@ them is a write ``w`` with
 - the same seq and connection, its last byte written no later than ``s`` was read and no earlier than ``WRAP_GUARD_NS``
   before ``p`` was read. The guard only keeps a write of the same seq from the previous 16-bit wrap out (at most 100
   frames a second, a seq comes back after 655 s); it is wide so that a STATE the host read late from its buffer still
-  matches (Codex PR-2a re-review P2-2);
+  matches (Codex PR-2a re-review P2-2). It also bounds that lateness: a transition read more than 300 s after its
+  write no longer matches (a record whose reads lag that much is not judged);
 - for a command that carries them (ARM, COMMISSION, DRIVE): the same boot, its echo not later than ``s``'s MCU time,
   and its validity window (echo .. echo + valid) not over before ``p``'s MCU time; a COMMISSION or DRIVE also names
   the arm generation ``s`` reports; a DISARM (no echo) only counts when ``p`` and ``s`` report the same generation.
