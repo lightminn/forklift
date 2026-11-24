@@ -138,7 +138,7 @@ class _Layer:
         self.permission = SimpleNamespace(path_check=None,
                                           config=SimpleNamespace(stopping=SimpleNamespace(decel_mps2=2.0)))
 
-    def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps):
+    def limit(self, t, *, current_pose, curvature_inv_m, direction, loaded, cap_mps, evidence_s=None):
         self.calls.append(direction)
         return (0.0, "occupied") if direction == self.blocked_direction else (min(cap_mps, 0.5), "ok")
 
@@ -179,12 +179,21 @@ def test_a_forward_request_does_not_hide_an_unsure_rearward_motion():
     assert out.allowed == 0.0 and out.why == "occupied" and out.requested_speed == 0.0
 
 
-def test_the_pocket_check_does_not_answer_an_unsure_direction():
+def test_the_pocket_check_answers_both_directions_when_unsure():
+    """5d (real safety wiring design 7.1): an unsure standstill asks the check both ways at their possible speeds
+    (the old direction_unsure stop is replaced); a direction it does not cover holds."""
     asked = []
-    check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"))
+    check = SimpleNamespace(limit=lambda *a: asked.append((a[3], a[4])) or (0.5, "ok"), summary=lambda: {})
     c, _ = permission_core(SafetySpeed(0.0, 0.05, (1, -1)), phase="insert", pocket_check=check)
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
-    assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
+    assert out.why != "direction_unsure" and not out.obstacle_hold
+    assert sorted(asked) == [(-1, 0.05), (1, 0.05)]
+    short = SimpleNamespace(limit=lambda *a: (0.01, "ok") if a[3] < 0 else (0.5, "ok"), summary=lambda: {})
+    c, _ = permission_core(SafetySpeed(0.0, 0.05, (1, -1)), phase="insert", pocket_check=short)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.0, False, None)
+    # asked nothing, so the hold reaches the wheels as the loop's wait frame (motion_hold), not a capped request
+    assert out.allowed == 0.0 and out.why == "pocket_other_direction"
+    assert c.state["motion_hold"] == "pocket_other_direction" and c.obstacle["permission_cap"] == (1.0, 0.0)
 
 
 def test_a_standstill_asked_forward_lets_the_pocket_check_answer():
@@ -207,11 +216,19 @@ def test_a_failed_braking_check_holds_the_wheels_where_the_permission_does_not_a
 
 @pytest.mark.parametrize("act", [True, False])
 def test_the_pocket_phase_stops_on_a_residual_motion_the_other_way(act):
+    """5d (design 7.1): the residual motion the other way is asked at its own speed -- covered, the request goes on;
+    not covered, the wheels hold."""
     asked = []
     check = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or (0.5, "ok"), summary=lambda: {})
     c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=check, act=act)
     out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
-    assert out.allowed == 0.0 and out.why == "direction_unsure" and asked == []
+    assert sorted(asked) == [-1, 1] and not out.obstacle_hold and out.requested_speed > 0.0
+    asked.clear()
+    short = SimpleNamespace(limit=lambda *a: asked.append(a[3]) or ((0.01, "ok") if a[3] < 0 else (0.5, "ok")),
+                            summary=lambda: {})
+    c, _ = permission_core(SafetySpeed(-0.02, 0.02, (-1,)), phase="insert", pocket_check=short, act=act)
+    out = c.permission(1.0, (0.0, 0.0, 0.0), 0.0, 0.4, False, None)
+    assert out.allowed == 0.0 and out.why == "pocket_other_direction"
     assert out.requested_speed == 0.0 and out.obstacle_hold
     assert c.obstacle["permission_cap"] == (1.0, 0.0)
 
@@ -237,7 +254,7 @@ def test_a_zero_request_with_the_slew_still_forward_checks_forward(phase, blocke
                              False, False)
     assert c.state["command_speed"] == 0.0 and res.drive.speed_mps == 0.0
     if phase == "insert":
-        assert out.why == "direction_unsure" and asked == []
+        assert out.why == "occupied" and 1 in asked  # 5d: the slew's forward asked at its speed and refused
     else:
         assert layer.calls == [-1, 1, -1, 1] and out.why == "occupied"
 

@@ -308,7 +308,8 @@ class FakeImu:
 
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
-                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False):
+                 initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False,
+                 check_builder=True):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -410,7 +411,8 @@ class Rig:
         hooks = asm.RealHooks(lift_m=lambda: self.mcu.state().lift_m,
                               odom_base=self.odom_base if reloc else (lambda: (0.0, 0.0, 0.0)),
                               ready=lambda t, inputs: None, started=lambda *a: None, record=lambda *a: None,
-                              geometry=geometry, pocket_frame=self._frame, pocket_check=build_check,
+                              geometry=geometry, pocket_frame=self._frame,
+                              pocket_check=build_check if check_builder else None,  # 5d: no builder (PR 7)
                               operator=((lambda r: loop_box["loop"].operator_check(r)) if real_requests
                                         else self._operator), tick=tick, layer=self.layer,
                               occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None)
@@ -550,6 +552,7 @@ class Rig:
 
     # --- driving --------------------------------------------------------------------------------------------------
     echo = True  # the console answers every tick (it keeps the lease); False: a console gone quiet
+    extra_boxes: tuple = ()  # 5d: obstacles besides the pallet the fake LiDAR sees, (x, y, half length, half width)
     scan_on = True  # the fake LiDAR revolves (10 Hz) while the rig has a real layer
     _next_scan_ns = None
 
@@ -576,10 +579,14 @@ class Rig:
         hl, hw = 0.3, 0.2
         c, s_ = math.cos(pyaw), math.sin(pyaw)
         corners = [(px + c * u - s_ * v, py + s_ * u + c * v) for u, v in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))]
+        edges = list(zip(corners, corners[1:] + corners[:1]))
+        for bx0, by0, bhl, bhw in self.extra_boxes:  # 5d tests: axis-aligned obstacles (centre, half sizes)
+            bc = [(bx0 + bhl, by0 + bhw), (bx0 + bhl, by0 - bhw), (bx0 - bhl, by0 - bhw), (bx0 - bhl, by0 + bhw)]
+            edges += list(zip(bc, bc[1:] + bc[:1]))
         for k, a in enumerate(angles):
             dx, dy = math.cos(lyaw + a), math.sin(lyaw + a)
             best = math.inf
-            for (ax, ay), (bx, by) in zip(corners, corners[1:] + corners[:1]):
+            for (ax, ay), (bx, by) in edges:
                 ex, ey = bx - ax, by - ay
                 den = dx * ey - dy * ex
                 if abs(den) < 1e-12:
@@ -700,5 +707,23 @@ class _OkCheck:
     def summary(self):
         return {}
 
-    def add_frame(self, *a, **k):
+    def add_frame(self, stamp=None, *a, **k):
+        if stamp is not None:
+            self.last_new_s = float(stamp)  # 5d (7.3): the frame's acquisition, as the real check keeps it
         return {"new": True}
+
+
+class DirCheck(_OkCheck):
+    """5d (design 7.1): a pocket check answering per direction -- ``allow[d]`` (m/s, inf by default) -- recording every
+    query (time, direction, speed)."""
+
+    def __init__(self):
+        super().__init__()
+        self.allow = {1: math.inf, -1: math.inf}
+        self.reason = {1: "ok", -1: "ok"}
+        self.calls = []
+
+    def limit(self, now_s, rear, kappa, direction, speed, lift):
+        self.calls.append((float(now_s), int(direction), float(speed)))
+        a = self.allow[1 if direction >= 0 else -1]
+        return a, self.reason[1 if direction >= 0 else -1] if a < math.inf else "ok"

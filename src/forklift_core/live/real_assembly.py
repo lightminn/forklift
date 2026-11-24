@@ -10,6 +10,7 @@ No device is opened here.
 from __future__ import annotations
 
 import json
+import math
 import time
 from dataclasses import dataclass, replace
 
@@ -37,7 +38,7 @@ ADOPTION_HOOKS = frozenset({
 # The first-frame stand and the S10 end at the lift read these (design 4); the follow / command / permission tick's
 # table is 4c's, with its loop.
 STAND_AND_END_HOOKS = frozenset({"known_pocket_frame", "build_pocket_check", "require", "operator_check",
-                                 "lift_position"})
+                                 "lift_position", "build_bypass_pocket_check"})
 
 # The control tick's hooks on S10-A's phases (docs/design/2026-11-19-real-loop.md 6; read every tick, by name or
 # called, in follow / docking_and_stall / cusp_and_observe_recovery / command / permission / assemble_command).
@@ -47,7 +48,42 @@ TICK_HOOKS = frozenset({
     "plan_return_leg", "plan_observation_leg", "safety_speed", "steering_position", "dump_tracking", "path_stats",
     "path_record", "wall", "lift_position", "save_npz", "known_pocket_frame", "build_pocket_check", "operator_check",
     "echo", "record_json", "snapshot", "write_paths", "show_path", "add_path_display", "now_s",
+    "build_bypass_pocket_check",
 })
+
+# the pocket check's exemption bands (sim/isaac/pocket_check.py PocketConfig band_along_m / band_across_m): the D5
+# bypass check's region is the pallet with the same bands (real safety wiring design 7.2)
+BYPASS_BAND_ALONG_M = 0.60
+BYPASS_BAND_ACROSS_M = 0.20
+
+
+@dataclass
+class BypassPocketCheck:
+    """The operator's D5 bypass (real safety wiring design 7.2): in the pocket check's place, its region from the
+    submitted pallet pose and the check's bands, its answer always clear -- nothing inside the region is seen; the
+    output cap and the layer outside the region are what remain."""
+
+    centre: tuple
+    length_m: float
+    width_m: float
+    axis_yaw: float
+    valid: bool = True
+    bypass: bool = True
+    invalid_reason: str | None = None
+    last_new_s: float = -math.inf
+
+    def region_control(self):
+        return (float(self.centre[0]), float(self.centre[1]), float(self.length_m), float(self.width_m),
+                float(self.axis_yaw))
+
+    def limit(self, *a, **k):
+        return math.inf, "ok"
+
+    def add_frame(self, *a, **k):
+        return {"new": False}
+
+    def summary(self):
+        return {"bypass": True, "region": list(self.region_control())}
 
 # Optional hooks those paths try and the real truck leaves absent (the core falls back to its default).
 ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix", "far_recognition_mission_end"})
@@ -197,6 +233,14 @@ class RealHooks:
             if check is None or not getattr(check, "valid", False):
                 raise RealRequireFailed(f"pocket_check_refused:{getattr(check, 'invalid_reason', 'no_check')}")
             self._layer.exempt = check.region_control()
+
+    def build_bypass_pocket_check(self, axis_yaw, pickup):
+        """5d (design 7.2): the bypass check for the submitted pickup -- built only, no side effect (the core
+        registers it, then sets the exemption)."""
+        g = self._geometry
+        return BypassPocketCheck((float(pickup.x_m), float(pickup.y_m)),
+                                 float(g.pallet_depth_m) + 2 * BYPASS_BAND_ALONG_M,
+                                 float(g.pallet_width_m) + 2 * BYPASS_BAND_ACROSS_M, float(axis_yaw))
 
     def operator_check(self, request):
         return None if self._operator is None else self._operator(request)
