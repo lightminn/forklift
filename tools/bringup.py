@@ -597,7 +597,21 @@ def session_abort_reason(samples: list, i_arm: int) -> str | None:
     return None
 
 
-def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float) -> dict:
+def tri_profile(lo: float, hi: float, period_s: float, cycles: int, step_s: float = 0.1) -> list[tuple[int, float]]:
+    """DIAGNOSTIC BRANCH ONLY (diag/commission-long): a triangle wave lo -> hi -> lo per period, as (duty_e4, step_s)
+    pieces; each piece is one hold_duty, so the COMMISSION stream never stops between pieces."""
+    n = int(round(period_s / step_s))
+    out = []
+    for _c in range(cycles):
+        for k in range(n):
+            phase = (k + 0.5) / n
+            frac = 2 * phase if phase < 0.5 else 2 * (1 - phase)
+            out.append((int(round((lo + (hi - lo) * frac) * 10000)), step_s))
+    return out
+
+
+def run_commission(bench: Bench, session: CommissionSession, duty: float, seconds: float,
+                   profile: list[tuple[int, float]] | None = None) -> dict:
     b, axis = bench, session.axis
     duty_e4 = int(round(duty * 10000))
     session.arm(PRE_ZERO_S + seconds + POST_ZERO_S + 1.0)
@@ -617,7 +631,14 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     session.hold_duty(0, PRE_ZERO_S)
     n_zero = len(session.sent)
     if session.aborted is None:
-        session.hold_duty(duty_e4, seconds, early_stop)
+        if profile is None:
+            session.hold_duty(duty_e4, seconds, early_stop)
+        else:  # diag: one piece after another, stopping at the first early stop or abort
+            for piece_e4, piece_s in profile:
+                # hold_duty stops sending HANDOVER_S before its end: add it back so each piece lasts piece_s
+                session.hold_duty(piece_e4, piece_s + HANDOVER_S, early_stop)
+                if session.stop_reason is not None or session.aborted is not None:
+                    break
         if session.stop_reason is None and session.aborted is None:
             session.stop_reason = "time"
     n_on = len(session.sent)
@@ -929,6 +950,9 @@ def main(argv=None) -> int:
     cm.add_argument("--stop-grace-ms", type=float)
     cm.add_argument("--window", type=float, nargs=2, metavar=("LO", "HI"))
     cm.add_argument("--observed", choices=("pos", "neg", "none"))
+    cm.add_argument("--profile-tri", type=float, nargs=4, metavar=("LO", "HI", "PERIOD_S", "CYCLES"),
+                    help="DIAGNOSTIC BRANCH ONLY: drive a triangle wave LO->HI->LO; --duty must equal HI and "
+                         "--seconds PERIOD_S*CYCLES")
     cm.add_argument("--power-switch-in-hand", action="store_true")
     cm.add_argument("--markers", action="store_true",
                     help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
@@ -1049,6 +1073,12 @@ def _check_commission_args(args) -> None:
         return
     if args.seconds is None:
         raise Refused("seconds: required without --scenario")
+    if getattr(args, "profile_tri", None) is not None:
+        lo, hi, period, cycles = args.profile_tri
+        if not (0 < lo < hi <= COMMISSION_DUTY_MAX and abs(args.duty) == hi and period >= 1.0
+                and cycles == int(cycles) and cycles >= 1 and abs(args.seconds - period * cycles) < 1e-6):
+            raise Refused("profile-tri: 0 < LO < HI <= duty max, --duty HI, PERIOD >= 1 s, integer CYCLES, "
+                          "--seconds PERIOD*CYCLES")
     hold_max = AXIS_HOLD_MAX_S.get(AXES[args.axis], COMMISSION_HOLD_MAX_S)
     if not COMMISSION_HOLD_MIN_S <= args.seconds <= hold_max:
         raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
@@ -1114,7 +1144,13 @@ def execute(args, bench: Bench) -> dict:
                     "stop_distance_mm": args.stop_distance_mm})
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
             else:
-                result = run_commission(bench, session, args.duty, args.seconds)
+                prof = None
+                if getattr(args, "profile_tri", None) is not None:
+                    lo, hi, period, cycles = args.profile_tri
+                    prof = tri_profile(lo, hi, period, int(cycles))
+                result = run_commission(bench, session, args.duty, args.seconds, prof)
+                if prof is not None:
+                    result["profile_tri"] = list(args.profile_tri)
                 result["observed"] = _observed(args)
                 m = result["metrics"]
                 result["verdict"] = sign_verdict(m["duty_e4"], m["measured_sign"], result["observed"],
