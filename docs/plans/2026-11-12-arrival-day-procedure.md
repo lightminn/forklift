@@ -326,16 +326,18 @@ python tools/bringup.py step --device /dev/forklift-mcu --out $D/run.jsonl --whe
 
 ### 9.1 지금 할 수 있는 것
 
-**시운전 상한 중 DISARM**(받침대, `fw-open`):
+**고른 듀티에서 DISARM**(받침대, `fw-open`, 2026-11-25 부터 — 설계 `docs/design/2026-11-25-bench-commission-limits.md` 1.3):
+- 열린 시운전 이미지의 L·R 시간 상한은 검증기 천장(약 35.8 분)이다. 그래서 '상한에서 멈춘 뒤 정지 거리' 대신 `duty_disarm` 을 쓴다. 고른 듀티에서 0.5 s 유지가 STATE 에 보이면 도구가 DISARM 하고 그 뒤의 정지를 본다.
+- 큰 값 규칙(7 절)을 그대로 따른다.
 
 ```bash
-python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl --axis L --duty 0.15 \
-  --scenario limit_disarm --limit-s 2.0 --stop-grace-ms 300 --power-switch-in-hand \
+python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl --axis L --duty 0.3 --seconds 1.5 \
+  --scenario duty_disarm --wheels-lifted --power-switch-in-hand \
   --output-response-ms <X|unavailable> --stop-time-ms <X|unavailable> --stop-distance-mm <X|unavailable>
-# hold_disarm 은 --scenario hold_disarm [--disarm-delay-ms 50]
 ```
 
-- `result == "ok"` 는 DISARM 이 상한의 STOPPING 안에서 받아들여졌음이 입증됐다는 뜻이다. 그것만으로 합격이 아니다.
+- `result == "ok"` 이고 `validity.valid`·`validity.physical` 이 참이어야 시험이 성립한다. 성립하면 목표 도달, 0.5 s 유지, 시험용 DISARM 의 수락이 같은 무장 세대에서 입증된 것이다. 그것만으로 합격이 아니다.
+- `limit_disarm`·`hold_disarm`(MCU 시간 상한에 닿은 뒤 DISARM)은 이제 **잠긴 시운전 보드나 모형**에서만 돈다(열린 보드에서는 도구가 ARM 전에 거부). 상한 경로 자체의 확인이다.
 - **출력 반응은 받침대에서도 판정한다**: `external.output_response_ms.pass == true`(DISARM 문턱 100 ms). 정지 시간·거리만 받침대에서 참고값(`reference: "stand"`, `over_limit`)이다(Codex).
 - `--stop-grace-ms` 는 빌드 값(300)을 정확히 넣는다.
 
@@ -383,7 +385,7 @@ python tools/bringup.py commission --device /dev/forklift-mcu --out $D/run.jsonl
 - 면제 이미지도 STATE bit7(`estop_unwired`)은 켜진 채다. 호스트는 열린 tty 의 USB 제품 문자열에 `waiver=` 토큰이 있을 때만 이것을 경고로 본다(콘솔 몫). bit6(`outputs_locked`)은 꺼져 있어야 한다.
 
 합격은 `external.<항목>.pass == true` 로만 한다.
-- `output_response_ms` 문턱(100 ms)은 `disarm`·`iwdg` 에만 있다(`limit_disarm`·`hold_disarm` 은 `disarm` 의 문턱을 따른다 — 9.1): 받침대에서도 판정한다. `tx_cut`·`expiry` 에는 출력 반응 문턱이 없다.
+- `output_response_ms` 문턱(100 ms)은 `disarm`·`iwdg` 에만 있다(`duty_disarm`·`limit_disarm`·`hold_disarm` 은 `disarm` 의 문턱을 따른다 — 9.1): 받침대에서도 판정한다. `analyze` 는 기록의 실행 종류가 `--kind` 와 다르면 거부하고, 시운전 기록에 `--floor` 를 주면 거부한다. `tx_cut`·`expiry` 에는 출력 반응 문턱이 없다.
 - `stop_time_ms` 500 ms·`stop_distance_mm` 100 mm(잠정, `tx_cut`·`expiry`·`disarm`): 바닥에서만 판정한다.
 - `tx_cut` 은 `worst_case.met == true` 여야 한다.
 - Jetson 강제 재부팅(브라운아웃 → MCU 만료 정지)도 여기서 한다 — 그 전까지 **미완료**. 비상정지 입력 경로는 V1.0 에 없으므로 시험하지 않는다(11절).

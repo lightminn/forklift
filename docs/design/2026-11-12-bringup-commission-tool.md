@@ -6,7 +6,7 @@ bring-up 묶음의 PR ② 다(총괄 순서 2026-11-11: 계약 PR #452 → 도�
 > - 열린 시운전 이미지(`lim=lr1`)에서는 L·R 의 큰 듀티·긴 시간을 도구 인자로 정한다. 이때 `--wheels-lifted`·TTY 재입력·0.3 초과 `--vcc-watched` 가 필요하다.
 > - `--bypass enc_stuck,enc_polarity` 가 엔코더 조기 정지를 끈다.
 > - `--profile-tri` 로 삼각파를 낸다.
-> - 10 절의 `limit_disarm`·`hold_disarm` 은 잠긴 보드·모형에서만 돈다(열린 보드는 거부). 열린 보드의 정지 시험(`duty_disarm`)은 PR-2 에서 다룬다.
+> - 10 절의 `limit_disarm`·`hold_disarm` 은 잠긴 보드·모형에서만 돈다(열린 보드는 거부). 열린 보드의 정지 시험은 `duty_disarm`(PR-2b): 고른 듀티에서 0.5 s 유지가 STATE 에 보이면 도구가 DISARM 하고, 성립 조건(같은 세대의 도달·유지·DISARM 수락)과 열린 보드일 때만 물리 판정한다.
 > - 아래 본문의 '0.15·1.5 s' 는 기본값이다.
 
 플래시는 USB-C DFU 로만 한다(사용자 결정, SWD 디버거 없음). 이 도구와 절차는 SWD 를 전제하지 않는다. 시운전 빌드와 정상 빌드를 바꿔 올리는 일은 펌웨어 쪽 절차(DFU)이고, 도구는 올라간 빌드를 `STATE.flags` 로만 판단한다.

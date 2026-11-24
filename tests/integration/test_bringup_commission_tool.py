@@ -346,12 +346,40 @@ def test_the_scenario_cli_parses():
 def test_analyze_takes_the_commissioning_kinds_against_the_disarm_thresholds(tmp_path, monkeypatch):
     monkeypatch.setitem(bringup.WHEEL_STOP_MS, "disarm", 400.0)  # whatever the DISARM row holds, they follow
     rec = tmp_path / "run.jsonl"
-    rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
+    rows = [{"t": "header", "cmd": "commission", "scenario": "hold_disarm", "large": False, "bypass": None},
+            {"t": "marker", "host_ns": 0, "label": "x"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"})
     assert out["external"]["stop_time_ms"]["reference"] == "stand"  # the commissioning scenarios run lifted
     assert out["external"]["stop_time_ms"]["limit"] == 400.0 and out["external"]["stop_time_ms"]["over_limit"]
-    out = bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"}, floor=True)
-    assert out["external"]["stop_time_ms"] == {"value": 450.0, "limit": 400.0, "pass": False}
+    # design 2026-11-25 1.3 (PR-2b): a commissioning run is never read with --floor, nor as another kind
+    assert bringup.analyze(rec, -1, "hold_disarm", {"stop_time_ms": "450"}, floor=True)["result"] == "refused"
+    assert "not 'disarm'" in bringup.analyze(rec, -1, "disarm", {"stop_time_ms": "180"})["why"]
+
+
+def test_an_old_record_without_its_kind_gets_no_official_pass(tmp_path):
+    """A marker in a record that does not name its run kind (before PR-2b): read, its passes left empty."""
+    rec = tmp_path / "run.jsonl"
+    rec.write_text(json.dumps({"t": "marker", "host_ns": 0, "label": "x"}) + "\n", encoding="utf-8")
+    out = bringup.analyze(rec, -1, "disarm", {"output_response_ms": "50", "stop_time_ms": "180"}, floor=True)
+    assert out["result"] == "ok" and out["run_kind"] is None
+    assert out["external"]["output_response_ms"]["pass"] is None and out["external"]["stop_time_ms"]["pass"] is None
+    # an operator-marked event keeps the existing path
+    out = bringup.analyze(rec, -1, "iwdg", {"output_response_ms": "50"})
+    assert out["external"]["output_response_ms"]["pass"] is True
+
+
+def test_the_cli_refuses_a_bypassed_record_unless_allowed(tmp_path, capsys):
+    rec = tmp_path / "run.jsonl"
+    rows = [{"t": "header", "cmd": "commission", "scenario": None, "large": True, "bypass": "enc_stuck"},
+            {"t": "marker", "host_ns": 0, "label": "x"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--output-response-ms", "50"]) == 2
+    assert "not for a gate" in json.loads(capsys.readouterr().out)["why"]
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--output-response-ms", "50",
+                         "--allow-bypassed"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["not_for_gate"] and out["external"]["output_response_ms"]["pass"] is None
 
 
 @pytest.mark.parametrize("what", ["fault", "boot"])
@@ -772,3 +800,70 @@ def test_the_bench_numbers_each_opening_and_drops_a_half_frame():
     assert b.conn == 2
     rows = [json.loads(x) for x in out.getvalue().splitlines()]
     assert [r["conn"] for r in rows if r["t"] == "connection"] == [1, 2]
+
+
+# --- design 2026-11-25-bench-commission-limits PR-2b: duty_disarm ---
+
+def dargs(**kw):
+    base = dict(cmd="commission", axis="L", duty=0.3, seconds=1.5, window=None, observed=None, yes=True,
+                power_switch_in_hand=True, scenario="duty_disarm", wheels_lifted=True, synthetic=True,
+                output_response_ms="50", stop_time_ms="200", stop_distance_mm=None, limit_s=2.0, disarm_delay_ms=50.0,
+                stop_grace_ms=None)
+    return argparse.Namespace(**{**base, **kw})
+
+
+def test_duty_disarm_on_an_open_board_holds_then_disarms_and_judges_the_response(model, monkeypatch):
+    b = model()
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(dargs(), b)
+    assert res["result"] == "ok", res
+    v = res["validity"]
+    assert v["valid"] and v["physical"] and res["disarm_seq"] is not None
+    assert res["external"]["output_response_ms"]["pass"] is True  # judged: valid, open board
+    assert res["external"]["stop_time_ms"]["pass"] is None  # on the stand: reference only
+    phases = [w.phase for w in b.writes]
+    assert "test_disarm" in phases and "post_zero" not in phases  # no zero hold between the drive and the DISARM
+    i = phases.index("test_disarm")
+    assert b.writes[i - 1].kind == "COMMISSION" and b.writes[i - 1].duty_e4 == 3000  # the DISARM cuts the duty
+
+
+def test_duty_disarm_on_a_locked_board_proves_the_sequence_but_judges_nothing_physical(model, monkeypatch):
+    b = model("--outputs-locked", "1", allow_locked=True)  # a locked build keeps the wheels at 0.15
+    res = bringup.execute(dargs(duty=0.15, seconds=0.8), b)
+    assert res["result"] == "ok" and res["validity"]["valid"] and not res["physical"], res
+    assert res["external"]["output_response_ms"]["pass"] is None
+
+
+def test_duty_disarm_needs_time_for_the_hold(model):
+    b = model()
+    res = bringup.execute(dargs(duty=0.1, seconds=0.6), b)  # 0.05 + 0.02 + 0.5 + 0.02 + 0.02 = 0.61 s needed
+    assert res["result"] == "refused" and "at least" in res["why"]
+    assert kinds_written(b) == []
+
+
+def test_a_bypassed_commissioning_result_is_not_for_a_gate(model, monkeypatch):
+    b = model("--encoder-frozen", "0", "--encoder-test-thresholds", "1")
+    b.host.usb_product = LR1
+    _typed(monkeypatch)
+    res = bringup.execute(largs(bypass="enc_stuck,enc_polarity"), b)
+    assert res["not_for_gate"] and res["bypassed"] == ["enc_stuck", "enc_polarity"] and res["high_limit"]
+    assert res["verdict"]["duty_sign_ok"] is None and res["metrics"]["valid"] is None
+
+
+def test_kth_and_first_boot_refuse_a_bypassed_record(tmp_path, capsys):
+    """Design 2026-11-25 1.2 (PR-2b): the S2 judgement entry points too."""
+    sys.path.insert(0, str(REPO / "tools"))
+    import h743_first_boot
+
+    rec = tmp_path / "run.jsonl"
+    rec.write_text(json.dumps({"t": "header", "cmd": "commission", "large": False, "bypass": "enc_stuck"}) + "\n",
+                   encoding="utf-8")
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--configured-h", "g704_bytes",
+                         "--image", "x"]) == 2
+    assert "not for a gate" in json.loads(capsys.readouterr().out)["why"]
+    assert h743_first_boot.main(["--record", str(rec)]) == 2
+    assert "not for a gate" in json.loads(capsys.readouterr().out)["why"]
+    old = tmp_path / "old.jsonl"  # a commissioning record from before the bench limits: conditions unknown
+    old.write_text(json.dumps({"t": "header", "cmd": "commission"}) + "\n", encoding="utf-8")
+    assert h743_first_boot.main(["--record", str(old)]) == 2

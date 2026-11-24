@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark
+from forklift_core.plant import judgement
 from forklift_core.plant.first_boot import WINDOW_S, first_boot_check
 from forklift_core.plant.record_rows import sample_from_row
 
@@ -39,6 +40,8 @@ def main(argv=None) -> int:
     ap.add_argument("--lift-absent", action="store_true",
                     help="no lift KTH7801 is fitted yet (lift method undecided, plan 3.5): the lift axis is not judged")
     ap.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (never a pass)")
+    ap.add_argument("--allow-bypassed", action="store_true",
+                    help="read a record with a bypassed protection or unknown run conditions (never a pass)")
     args = ap.parse_args(argv)
     try:
         rows = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
@@ -47,7 +50,9 @@ def main(argv=None) -> int:
         return 2
     try:
         marks = refuse_or_mark(rows, allow=args.allow_synthetic)
-    except SyntheticRefused as exc:
+        # design 2026-11-25-bench-commission-limits 1.2 (PR-2b): a bypassed or unknown-condition run is no gate
+        jmarks = judgement.check(judgement.record_marks(rows), allow=args.allow_bypassed)
+    except (SyntheticRefused, judgement.NotForGate) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
     if sum(1 for r in rows if r.get("t") == "header") > 1:  # bringup.py appends: one run per file (Codex P2-3)
@@ -66,7 +71,9 @@ def main(argv=None) -> int:
         return 1
     res = first_boot_check(samples, window_s=args.window_s, lift_absent=args.lift_absent,
                            synthetic_input=bool(marks))
-    print(json.dumps({**marks, **res}))
+    if not judgement.eligible(jmarks):
+        res = {**res, "computed_result": res["result"], "result": "not_for_gate"}  # S2 reads result and exit 0
+    print(json.dumps({**marks, **jmarks, **res}))
     return 0 if res["result"] == "pass" else 1
 
 
