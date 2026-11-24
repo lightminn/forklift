@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from forklift_core.live.executor_lock import DeviceBusy, lock_fd
+from forklift_core.mcu_link.messages import Disarm, encode
 from forklift_core.plant.mcu_host import HostConfig, HostEvent, McuLinkHost, Outgoing
 
 _LOST = {errno.EIO, errno.ENODEV, errno.ENXIO, errno.EBADF}
@@ -158,6 +159,11 @@ class TtyLink:
                 self._cur, self._off = host.next_frame(now_ns), 0
                 if self._cur is None:
                     return
+                if not self._allowed(self._cur):
+                    # refused before its first byte -- and before the opening's poison (ObserveTtyLink)
+                    host.frame_refused(self._cur, now_ns, "not_allowed_on_this_link")
+                    self._cur = None
+                    continue
             if self._poison_at is not None:
                 # the opening's poison, right before its first frame; until it is all out the frame is handed back
                 # untouched, so a DISARM, a revoke or its expiry can still drop it before the next attempt
@@ -195,7 +201,16 @@ class TtyLink:
             self._off += n
             if self._off == len(self._cur.data):
                 host.frame_written(self._cur, self._cur_t)
+                self._done(self._cur)
                 self._cur = None
+
+    def _allowed(self, out: Outgoing) -> bool:
+        """Whether a frame taken from the host may be written on this link (every frame, here)."""
+        return True
+
+    def _done(self, out: Outgoing) -> None:
+        """Called right after the frame's last byte was written (the host's ``written`` carries its first-byte
+        time; an acknowledgement must come after this one -- Codex 7a-1 round 2 P2-1)."""
 
     def abandon(self, host: McuLinkHost, now_ns: int) -> None:
         if self._cur is not None:
@@ -209,11 +224,34 @@ class TtyLink:
             pass
 
 
+class ObserveTtyLink(TtyLink):
+    """The observe run's link (PR 7 design 1.1): a DISARM-only write boundary. A frame is written only if its kind
+    is DISARM and its bytes are that seq's canonical encoding; anything else is refused before its first byte -- and
+    before the opening's poison, which therefore goes out only ahead of the first allowed DISARM. All that can reach
+    the device on one fd is the poison followed by canonical DISARMs, whatever any code queued on the host."""
+
+    def __init__(self, fd: int, on_done=None) -> None:
+        super().__init__(fd)
+        self.refused = 0
+        self.on_done = on_done  # (seq, last-byte ns): the observe run's acknowledgement needs the completion
+
+    def _allowed(self, out: Outgoing) -> bool:
+        if out.kind == "DISARM" and bytes(out.data) == encode(Disarm(), out.seq):
+            return True
+        self.refused += 1
+        return False
+
+    def _done(self, out: Outgoing) -> None:
+        if self.on_done is not None:
+            self.on_done(int(out.seq) & 0xFFFF, time.monotonic_ns())
+
+
 class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 
     def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw,
-                 clock=None, product_reader=usb_product_of_fd, exclusive: bool = False) -> None:
+                 clock=None, product_reader=usb_product_of_fd, exclusive: bool = False,
+                 link_factory=None) -> None:
         """``clock``: the teleop bridge's D5 times (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.3b) -- the host is
         given the time a read returned (later than the bytes' arrival: validity shorter, gaps longer) and each frame's
         write time is taken before its write; None keeps the cycle time for both (every other tool)."""
@@ -229,6 +267,9 @@ class ReconnectingLink:
         self.ever_connected = False
         self.refused: DeviceBusy | None = None
         self._pending: list[HostEvent] = []  # an early opening's events (open_first), handed out by the next service
+        # the link class every opening -- the first and each reopening -- is wrapped in (the observe run's
+        # ObserveTtyLink, PR 7 design 1.1); TtyLink otherwise
+        self.link_factory = TtyLink if link_factory is None else link_factory
         self.product_reader = product_reader  # the opened device's USB product string, read at each opening
         self.clock = clock
         self.link: TtyLink | None = None
@@ -256,7 +297,7 @@ class ReconnectingLink:
                     fd = self.opener(self.path, self.baud)
                 self.busy = None
                 self.ever_connected = True
-                self.link = TtyLink(fd)
+                self.link = self.link_factory(fd)
                 product = self.product_reader(self.link.fd)
                 events.append(HostEvent("connected", {"path": self.path, "product": product}))
                 events += host.link_identity(product)

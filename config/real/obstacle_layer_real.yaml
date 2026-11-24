@@ -46,5 +46,4 @@ bridge:
   state_delay_s: 0.03       # STATE measurement-time uncertainty (DelayBound measured <= 28 ms)
   max_stamp_to_recv_s: 0.15
   hall_half_m: 20.0         # the grid's area around the start pose (odometry frame)
-  max_tilt_deg: 1.0         # provisional until the mount is measured (S7)
-  band_half_m: 0.10         # the height band the plane speaks for: mount height +- this
+  # the height band (max_tilt_deg, band_half_m) moved to config/real/lidar.yaml, its one source (PR 7 design 4)

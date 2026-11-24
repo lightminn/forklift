@@ -26,6 +26,7 @@ from forklift_core.perception.obstacle_grid import AgeErrorTable, ObstacleScan
 from forklift_core.planning.geometry import Footprint
 from forklift_core.plant.real_vehicle import RealOdometry
 from forklift_core.safety.teleop_drive import BundlePermit
+from forklift_core.sensors.lidar_cfg import load_lidar_config, self_hit_mask
 
 REPO = Path(__file__).resolve().parents[1]
 SENSOR = "lidar"
@@ -120,8 +121,9 @@ class ScanPermit:
         self.cfg = cfg
         self.period_nominal = period
         self.max_lag_ns = int(float(b["max_stamp_to_recv_s"]) * 1e9)
-        tilt = math.radians(float(b["max_tilt_deg"]))
-        self.limit_m = float(b["band_half_m"]) / math.sin(tilt) if tilt > 0 else math.inf
+        # the height band's one source is config/real/lidar.yaml, read as the observe run's conversion reads it
+        # (PR 7 design 4, Codex 7a-1 P3)
+        self.limit_m = load_lidar_config().limit_m
         self.odo = RealOdometry(vehicle, max_gap_s=MAX_GAP_S)
         self.pose = (0.0, 0.0, 0.0)
         self.hist: deque = deque()
@@ -205,10 +207,7 @@ class ScanPermit:
             if angles.shape != ranges.shape or angles.ndim != 1 or not np.isfinite(angles).all():
                 self._drop("bad_scan")
                 continue
-            self_hit = np.zeros(len(angles), dtype=bool)
-            wrapped = np.arctan2(np.sin(angles), np.cos(angles))
-            for a, b in self.mask:
-                self_hit |= (wrapped >= a) & (wrapped <= b)
+            self_hit = self_hit_mask(angles, self.mask)
             own = self.layer.footprints(False)[1]
             mx, my, _mz, myaw = self.mount
             self.layer.grid.add_scan(ObstacleScan(

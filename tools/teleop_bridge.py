@@ -22,6 +22,7 @@ import argparse
 import gc
 import hashlib
 import itertools
+import math
 import json
 import os
 import secrets
@@ -517,10 +518,21 @@ def main(argv=None) -> int:
     ap.add_argument("--lidar-mount", help="7b: x,y,z,yaw_deg of the LiDAR in the rear-axle frame (measured, S7)")
     ap.add_argument("--lidar-mask", help="7b: a:b,c:d degree intervals (sensor frame) the truck's body hides")
     args = ap.parse_args(argv)
-    if (args.scan_socket is None) != (args.lidar_mount is None):
-        print("--scan-socket and --lidar-mount go together (the mount has no default: S7 measures it)",
-              file=sys.stderr)
+    if args.scan_socket is None and args.lidar_mount is not None:
+        print("--lidar-mount needs --scan-socket", file=sys.stderr)
         return 2
+    file_mount = None
+    if args.scan_socket is not None and args.lidar_mount is None:
+        # PR 7 design 4: the mount and mask's one source is config/real/lidar.yaml -- used only once S7 has
+        # measured it (measured: true); until then the mount is given here, as before
+        from forklift_core.sensors.lidar_cfg import load_lidar_config
+
+        lid = load_lidar_config()
+        if not lid.mount_measured:
+            print("--scan-socket needs --lidar-mount until config/real/lidar.yaml's mount is measured (S7)",
+                  file=sys.stderr)
+            return 2
+        file_mount = lid
     if args.scan_socket is not None and args.synthetic_permit:
         print("--scan-socket is not combined with --synthetic-permit", file=sys.stderr)
         return 2
@@ -529,7 +541,12 @@ def main(argv=None) -> int:
         import bridge_scan
 
         try:
-            scan_args = (bridge_scan.parse_mount(args.lidar_mount), bridge_scan.parse_mask(args.lidar_mask))
+            if file_mount is not None:
+                mask = bridge_scan.parse_mask(args.lidar_mask) if args.lidar_mask else [
+                    (math.degrees(a), math.degrees(b)) for a, b in file_mount.mask_rad]
+                scan_args = (file_mount.mount, mask)
+            else:
+                scan_args = (bridge_scan.parse_mount(args.lidar_mount), bridge_scan.parse_mask(args.lidar_mask))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2

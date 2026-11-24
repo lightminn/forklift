@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import errno
 import json
+import secrets
 import socket
 import struct
 import time
@@ -24,8 +25,11 @@ MAGIC = b"SCN1"
 _LEN = struct.Struct("<I")
 
 
-def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int) -> bytes:
-    """A sensor_msgs/LaserScan (or anything with its fields) as one scan/1 frame."""
+def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, gen: int | None = None,
+               first_beam_mono_ns: int | None = None) -> bytes:
+    """A sensor_msgs/LaserScan (or anything with its fields) as one scan/1 frame. ``gen``: this adapter's start
+    nonce (PR 7 design 3.2: the host opens a new generation when it changes); ``first_beam_mono_ns``: the SDK
+    first-sample time on the host monotonic clock, when the driver gives it (7a-2)."""
     ranges = np.asarray(msg.ranges, dtype="<f4")
     inten = np.asarray(msg.intensities, dtype="<f4") if len(msg.intensities) == len(ranges) and len(ranges) else None
     head = {
@@ -43,6 +47,10 @@ def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int) 
         "n": int(len(ranges)),
         "has_intensities": inten is not None,
     }
+    if gen is not None:
+        head["gen"] = int(gen)
+    if first_beam_mono_ns is not None:
+        head["first_beam_mono_ns"] = int(first_beam_mono_ns)
     raw = json.dumps(head).encode("utf-8")
     body = ranges.tobytes() + (inten.tobytes() if inten is not None else b"")
     return MAGIC + _LEN.pack(len(raw)) + raw + body
@@ -95,14 +103,17 @@ def main(argv=None) -> int:
     from sensor_msgs.msg import LaserScan
 
     ap = argparse.ArgumentParser(description="raw LaserScan -> scan/1 over a Unix datagram socket")
-    ap.add_argument("--socket", required=True, help="the host's bound socket (forklift_core.sensors.scan_feed)")
+    ap.add_argument("--socket", required=True, action="append",
+                    help="a host's bound socket (forklift_core.sensors.scan_feed); give it twice for the layer and "
+                         "the SLAM bridge (PR 7 design 4: the adapter is where one scan gets its identity)")
     ap.add_argument("--topic", default="/sensors/lidar/scan_raw")
     args, ros_args = ap.parse_known_args(argv)
 
     class Adapter(Node):
         def __init__(self) -> None:
             super().__init__("real_scan_adapter")
-            self.sender = DatagramSender(args.socket)
+            self.senders = [DatagramSender(p) for p in args.socket]
+            self.gen = secrets.randbits(62) + 1  # this start's nonce: a restart is a new producer generation
             self.scan_id = 0
             self.create_subscription(LaserScan, args.topic, self.on_scan, qos_profile_sensor_data)
             self.create_timer(5.0, self.report)
@@ -110,11 +121,14 @@ def main(argv=None) -> int:
         def on_scan(self, msg) -> None:
             recv, pair = clock_pair()
             self.scan_id += 1
-            self.sender.send(make_frame(msg, scan_id=self.scan_id, recv_mono_ns=recv, sys_minus_mono_ns=pair))
+            # one frame, the same bytes to every receiver: each path keeps its own sent/dropped count
+            frame = make_frame(msg, scan_id=self.scan_id, recv_mono_ns=recv, sys_minus_mono_ns=pair, gen=self.gen)
+            for s in self.senders:
+                s.send(frame)
 
         def report(self) -> None:
-            s = self.sender
-            self.get_logger().info(f"scans {self.scan_id} sent {s.sent} dropped {s.dropped} last_error {s.last_error}")
+            parts = [f"{s.path}: sent {s.sent} dropped {s.dropped} last_error {s.last_error}" for s in self.senders]
+            self.get_logger().info(f"scans {self.scan_id} gen {self.gen} | " + " | ".join(parts))
 
     rclpy.init(args=ros_args)
     node = Adapter()
@@ -123,7 +137,8 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
-        node.sender.close()
+        for s in node.senders:
+            s.close()
         node.destroy_node()
         rclpy.try_shutdown()
     return 0

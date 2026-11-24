@@ -375,10 +375,11 @@ def test_the_scan_permit_holds_the_truck_before_a_box(run):
 
 def test_the_cli_refuses_half_a_scan_setup(tmp_path, capsys):
     flags = [f"--{n.replace('_', '-')}" for n in ALL]
+    # PR 7 design 4: the mount's one source is config/real/lidar.yaml once measured; unmeasured, it is given here
     assert tb.main(["--device", "pty", "--scan-socket", str(tmp_path / "s.sock"), *flags]) == 2
-    assert "go together" in capsys.readouterr().err
+    assert "lidar.yaml" in capsys.readouterr().err
     assert tb.main(["--device", "pty", "--lidar-mount", "0.9,0,1.05,0", *flags]) == 2
-    assert "go together" in capsys.readouterr().err
+    assert "needs --scan-socket" in capsys.readouterr().err
     assert tb.main(["--device", "pty", "--scan-socket", str(tmp_path / "s.sock"), "--lidar-mount", "0.9,0,1.05",
                     *flags]) == 2
     assert "four finite" in capsys.readouterr().err
