@@ -350,6 +350,21 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
 - `ReconnectingLink(exclusive=False)` 가 기본이라 듣기만 하는 도구는 그대로다. 텔레옵 다리는 `exclusive=True` 와 시작 때 확인. 자율 실행기는 6a 의 장치 배선 때 같은 인자를 쓴다.
 - 남는 한계: 잠긴 장치를 두 번째로 **여는** 것 자체는 막지 않는다(열고 잠금 실패 뒤 닫음). USB CDC 에서 그 열기는 이미 켜진 DTR 를 다시 켤 뿐이고, 마지막 닫기가 아니라 줄을 끊지 않는다.
 
+### 8.1 재개 (2026-11-25, 시운전 한계 사슬 #614·#615·#616 뒤)
+
+옛 브랜치의 두 커밋(f5468245·9425a641)은 main 11311327 위에 충돌 없이 올라간다. 그 위에 범위만 넓힌다.
+
+- **잠그는 곳 = MCU 장치를 여는 모든 도구.** 명령을 보내는 도구만이 아니다. 같은 tty 를 두 프로세스가 열면 받는 바이트를 나눠 읽는다(도착일 절차 11 절). 그래서 듣기만 하는 도구도 실행기 옆에서 STATE 를 빼앗는다. 대상은 다음과 같다.
+  - `bringup.py`: 장치를 여는 모든 하위 명령(`record`·`cpr`·`step`·`scenario`·`commission`). `kth`·`clock`·`analyze` 는 기록만 읽으므로 대상이 아니다.
+  - `rearm_hold_check.py`, `h743_link_check.py`, `teleop_bridge.py`.
+  - `real_mcu_link.py` 의 듣기 CLI.
+  - `real_autonomy.py --run` 은 지금 실 장치를 열기 전에 거부한다. `--hil` 은 제 pty 를 쓴다. 그래서 둘 다 대상이 아니다. PR 7 이 실 장치를 열 때 같은 인자를 쓴다.
+- **방식**: 기존 그대로 한다. `ReconnectingLink(exclusive=True)` 가 매 열기(재연결 포함)마다 연 fd 에 `flock` 을 걸고, `open_raw(before_config=)` 로 termios·DTR 설정 전에 건다. 직접 `open_raw` 를 부르는 `h743_link_check` 는 같은 `before_config` 로 잠근다.
+- **시작 거부**: 각 도구는 장치를 열기 전에 `probe` 로 한 번 확인한다. 잡혀 있으면 아무것도 쓰지 않고 거부한다. JSON 을 내는 도구는 `{"result": "refused", "why": "<경로> is held by another executor: pid N (도구)"}` 와 종료 2 를 낸다. 시작 확인은 안내일 뿐이고, 단일 점유를 보장하는 것은 여는 fd 의 잠금이다. 확인과 열기 사이에 다른 실행기가 잡으면 첫 열기가 `device_busy` 가 되어 연결되지 않는다. 이후는 연결 끊김과 같다(STATE 없음 → 기존 거부·중단 경로).
+- **고정 시험**: `tools/*.py` 를 AST 로 훑는다. `ReconnectingLink(` 호출에 `exclusive=True` 가 없거나 `open_raw(` 호출에 `before_config=` 가 없으면 실패한다. 예외는 이름을 적은 허용 목록뿐이다(시험이 쓰는 pty 등). 새 도구가 잠금을 빠뜨리면 pytest 가 잡는다.
+- `ReconnectingLink` 의 기본값 `exclusive=False` 는 그대로 둔다. 시험·rig 가 같은 pty 를 여러 번 여는 경우가 있어서다. 기본값 대신 고정 시험으로 강제한다.
+- 시험(8 절에 더해): 도구별로 잡힌 장치에서 아무것도 쓰지 않고 거부하는지(모형 pty 에 `flock` 을 미리 걸고 실행), 재연결이 잡힌 장치를 만나면 `device_busy` 인지, 고정 시험.
+
 ## 9. 시험
 
 - 층: 속성 표(S10-A 전 구간, `snapshot` 포함), 원시 오도메트리로 놓인 스캔(보정 이중 적용 없음), 무효 빔·유효 비율 미달 스캔, 스캔이 시작하는 첫 스냅숏, 요청 열쇠 불일치 결과 버림(면제 해제·경로·기어 구간·미션), 합치기에서 마감 유지, 이동 거리 `advance`, 작업자 죽음 ①, 면제 해제 → 대기(래치 아님), SLAM 무효 뒤 입력만 복구 → 재개 없음, 계획 요청은 세대가 맞을 때만.
