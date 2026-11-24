@@ -373,38 +373,25 @@ class Session:
         b.host.request_disarm(t0)
 
         def done() -> bool:
-            # the MCU's own word that it took this DISARM: a transition to its seq on the connection it was written on,
-            # read after its last byte went out, in a stopped mode (PR-2a: not the write's start time, not a seq alone)
+            # The MCU's own word that it took this DISARM and is stopped: a STATE read on the connection the DISARM
+            # was written on, after its last byte went out, naming its seq, in a stopped mode. Not a transition (as
+            # the measured span uses): this confirms a stop, and the mode is read from the STATE itself, so a seq
+            # from an earlier wrap cannot make a moving MCU look stopped -- and a DISARM written before the first
+            # STATE of a new connection is confirmed too (Codex PR-2a re-reviews 2-4). A lost DISARM is re-sent by
+            # the run's final cleanup; the MCU's command expiry stops it meanwhile.
+            mine = [w for w in b.writes[o0:] if w.kind == "DISARM"]
+            if not mine:
+                return False
             k = max(len(b.samples) - 60, 0)  # the recent tail only: this runs every cycle of the wait
-            m = accepted(b.seen(k), b.writes[o0:], lambda w: w.kind == "DISARM")
-            return m.index is not None and b.samples[k + m.index].state.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP)
+            for x, smp in zip(b.seen(k), b.samples[k:], strict=True):
+                if smp.state.mode not in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP):
+                    continue
+                if any(w.conn == x.conn and w.seq == x.last_rx_seq and w.done_ns <= x.host_ns for w in mine):
+                    return True
+            return False
 
-        retried = []
-
-        def maybe_retry() -> None:
-            # A DISARM written on a connection before any of its STATEs was read has no earlier sample to show a
-            # transition from. Once a STATE of that connection is in (read after the write) and the MCU is not in a
-            # STOPPING (a DISARM would end its brake), a second DISARM can be confirmed by its own transition. Both
-            # stay candidates, and the first stop request has gone out either way (Codex PR-2a re-reviews 2-3).
-            if retried:
-                return
-            first = next((w for w in b.writes[o0:] if w.kind == "DISARM"), None)
-            if first is None:
-                return
-            if first.conn != b.conn:
-                return  # written on a connection that is gone: the new one's own cleanup is not ours to redo
-            # from the newest sample back to the write: was there a sample of its connection before it (then a
-            # transition can show), and is there one after it now (the baseline)?
-            seen_tail = b.seen(max(len(b.samples) - 200, 0))
-            after = [x for x in seen_tail if x.conn == first.conn and x.host_ns >= first.done_ns]
-            before = any(x.conn == first.conn and x.host_ns < first.done_ns for x in seen_tail)
-            if before or not after or b.samples[-1].state.mode == Mode.STOPPING:
-                return
-            retried.append(time.monotonic_ns())
-            b.host.request_disarm(retried[0])
-
-        ok = b.run_until(done, CLEANUP_S, every=maybe_retry)
-        b.emit({"t": "cleanup", "confirmed": bool(ok), "retried": bool(retried)})
+        ok = b.run_until(done, CLEANUP_S)
+        b.emit({"t": "cleanup", "confirmed": bool(ok)})
         self.cleanup_confirmed = bool(ok)
         return ok
 
