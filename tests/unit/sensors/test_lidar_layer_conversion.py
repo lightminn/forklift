@@ -190,3 +190,14 @@ def test_a_refused_frame_never_retires_the_producer_still_sending():
     late = fr(1, gen=22, stamp=10_000 * MS + 100 * MS + OFF + 10**9)  # stamped a second after its receipt
     assert feed.judge(late, 0)[1] == "negative_latency"
     assert feed.judge(fr(n + 1, gen=11), 0)[1] is None and feed.generation == 0
+
+
+def test_a_refused_candidate_producer_leaves_the_clock_as_it_was():
+    """Codex 7a-1 round 3 P2-2: B's frame refused on a clock jump does not send A back to establishing."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    n = sf.ESTABLISH_COUNT
+    assert feed.judge(fr(n, gen=22, off=1_700_000_001_000 * MS), 0)[1] == "clock_jump"
+    assert feed.judge(fr(n + 1, gen=11), 0)[1] is None and feed.generation == 0

@@ -28,6 +28,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -73,15 +74,47 @@ def _sync(f) -> bool:
         return False
 
 
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):  # streamed: an hour's record is gigabytes (round 3 P3)
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def write_ok_marker(path: Path) -> None:
     """``<record>.ok``: the record's sha256, made only after the record's last row was synced (the completeness
-    proof a replay checks)."""
-    digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    tmp = Path(str(path) + ".ok.tmp")
-    tmp.write_text(digest + "\n", encoding="ascii")
-    with open(tmp, "rb") as f:
-        os.fsync(f.fileno())
-    os.replace(tmp, Path(str(path) + ".ok"))
+    proof a replay checks). Written to a fresh file of its own (``mkstemp``, never an existing path or a link's
+    target), synced, then renamed over the marker (Codex 7a-1 round 3 P2-3)."""
+    path = Path(path)
+    digest = _sha256(path)
+    fd, tmp = tempfile.mkstemp(prefix=path.name + ".ok.", dir=path.parent)
+    try:
+        os.write(fd, (digest + "\n").encode("ascii"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        os.replace(tmp, Path(str(path) + ".ok"))
+    except OSError:
+        os.unlink(tmp)
+        raise
+
+
+def _last_line(path: Path, block: int = 1 << 16) -> bytes:
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        pos, buf = end, b""
+        while pos > 0:
+            step = min(block, pos)
+            pos -= step
+            f.seek(pos)
+            buf = f.read(step) + buf
+            body = buf.rstrip(b"\n")
+            if b"\n" in body or pos == 0:
+                return body.rsplit(b"\n", 1)[-1]
+    return b""
 
 
 def record_complete(path: Path) -> bool:
@@ -89,12 +122,11 @@ def record_complete(path: Path) -> bool:
     p = Path(path)
     try:
         want = Path(str(p) + ".ok").read_text(encoding="ascii").strip()
-        data = p.read_bytes()
+        if _sha256(p) != want:
+            return False
+        last = _last_line(p)
     except OSError:
         return False
-    if hashlib.sha256(data).hexdigest() != want:
-        return False
-    last = data.rstrip(b"\n").rsplit(b"\n", 1)[-1]
     try:
         end = json.loads(last)
     except ValueError:
@@ -241,14 +273,17 @@ class Observer:
         if self.feed is not None:
             self._scans(now)
             if (self._last_scan_ns is not None and not self._scan_gap_open
-                    and now - self._last_scan_ns > SCAN_GAP_NS):
+                    and self.clock() - self._last_scan_ns > SCAN_GAP_NS):
                 # no scan for longer than the sensor timeout, seen on the tick it happens -- not only when one comes
                 # back (Codex 7a-1 round 2 P2-4): a new generation, once per gap
-                self._scan_gap_open = True
-                self.counts["scan_gaps"] += 1
-                self.feed.new_generation("receive_gap")
-                self.rec.put({"t": "scan_event", "kind": "receive_gap", "since_ns": int(self._last_scan_ns),
-                              "host_ns": int(now), "feed_gen": self.feed.generation})
+                self._open_gap(self.clock())
+
+    def _open_gap(self, now: int) -> None:
+        self._scan_gap_open = True
+        self.counts["scan_gaps"] += 1
+        self.feed.new_generation("receive_gap")
+        self.rec.put({"t": "scan_event", "kind": "receive_gap", "since_ns": int(self._last_scan_ns),
+                      "host_ns": int(now), "feed_gen": self.feed.generation})
 
     def _scans(self, now: int) -> None:
         for _k in range(SCANS_READ_PER_CYCLE):
@@ -265,6 +300,11 @@ class Observer:
             if not data:
                 break
             recv = self.clock()
+            if (not self._scan_gap_open and self._last_scan_ns is not None
+                    and recv - self._last_scan_ns > SCAN_GAP_NS):
+                # the gap ended on this very read (no quiet tick saw it): opened here, before the receipt is taken
+                # as the newest (Codex 7a-1 round 3 P2-1)
+                self._open_gap(recv)
             if self._scan_gap_open:
                 self._scan_gap_open = False
                 self.rec.put({"t": "scan_event", "kind": "receive_resumed", "host_ns": int(recv),

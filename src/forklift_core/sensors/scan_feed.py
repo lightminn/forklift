@@ -224,8 +224,13 @@ class ScanFeed:
                 if gen is not None or sid == self._last_id:
                     return None, "stale_id"  # a duplicate, or an id a producer with a nonce never goes back to
                 switch = "id_back"  # a restart of an adapter that sends no nonce
+        # a candidate producer's frame is judged on a copy of the clock state: refused, it leaves the current
+        # producer's clock pair exactly as it was (Codex 7a-1 round 3 P2-2)
+        saved = (self.establishing, list(self._window), self._last_pair, self._rejoined) if switch else None
         scan, why = self._judge_clock(h, ranges, inten, gen)
         if why is not None:
+            if saved is not None:
+                self.establishing, self._window, self._last_pair, self._rejoined = saved
             if switch is None:
                 self._advance(sid)  # the current producer's frame, refused on its clock: still counts for gaps
             return None, why

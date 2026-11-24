@@ -261,3 +261,50 @@ def test_a_complete_record_has_its_ok_marker_and_a_changed_one_does_not(model, t
     with open(out, "a", encoding="utf-8") as f:
         f.write('{"t": "state"}\n')
     assert not ro.record_complete(out)
+
+
+def test_a_gap_that_ends_on_the_read_itself_still_opens_a_generation():
+    """Codex 7a-1 round 3 P2-1: no quiet tick saw the gap; the returning scan's read opens it before its receipt
+    counts as the newest."""
+    class _OneFrame:
+        def __init__(self):
+            self.sent = False
+
+        def recv(self, n):
+            if self.sent:
+                raise BlockingIOError
+            self.sent = True
+            return b"not a frame"
+
+    clock = {"t": 10**12}
+    obs = ro.Observer(_QuietLink(), ro.Record(io.StringIO()), scan_sock=_OneFrame(),
+                      lidar=lidar_cfg.load_lidar_config(), clock=lambda: clock["t"])
+    obs._last_scan_ns = clock["t"]  # noqa: SLF001
+    clock["t"] += int(0.36e9)
+    obs.cycle(refresh=False)
+    rows = [json.loads(x) for x in obs.rec.f.getvalue().splitlines()]
+    kinds = [r["kind"] for r in rows if r["t"] == "scan_event"]
+    assert kinds == ["receive_gap", "receive_resumed"] and obs.feed.generation == 1
+
+
+def test_the_ok_marker_never_writes_through_an_existing_tmp_path(tmp_path):
+    """Codex 7a-1 round 3 P2-3: a fresh file of its own, never an existing path or a link's target."""
+    rec = tmp_path / "obs.jsonl"
+    rec.write_text('{"t": "end", "complete": true}\n')
+    victim = tmp_path / "victim"
+    victim.write_text("keep\n")
+    (tmp_path / "obs.jsonl.ok.tmp").symlink_to(victim)
+    ro.write_ok_marker(rec)
+    assert victim.read_text() == "keep\n" and ro.record_complete(rec)
+
+
+def test_the_last_line_reader_streams():
+    import tempfile as tf
+
+    with tf.NamedTemporaryFile("wb", delete=False) as f:
+        f.write(b'{"t": "x"}\n' * 20000 + b'{"t": "end", "complete": true}\n')
+        name = f.name
+    try:
+        assert ro._last_line(Path(name)) == b'{"t": "end", "complete": true}'  # noqa: SLF001
+    finally:
+        os.unlink(name)
