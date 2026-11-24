@@ -260,6 +260,9 @@ class Session:
             raise Refused(f"arm blocked: {blocked.reason}")
         if not b.run_until(lambda: b.host.ready, 2.0):  # arm_pending -> zero_pending -> ready, no retry
             raise Refused("not ready after ARM")
+        # the ARM was taken (zero seen): told apart from the pre-ARM check row (Codex PR-1 re-review 3 P2)
+        b.emit({"t": "armed", "host_ns": time.monotonic_ns(), "boot_id": b.state.boot_id,
+                "arm_gen": b.state.arm_gen})
 
     def preflight(self, state: McuState) -> None:
         check_build(state, allow_locked=self.b.allow_locked)
@@ -512,8 +515,9 @@ class CommissionSession(Session):
             lo, hi = self.window
             if not (v == v and lo < v < hi):
                 raise Refused(f"window: the axis value {v} is not inside ({lo}, {hi})")
-        # every pre-ARM check passed: the board and conditions this ARM goes out on (a refused board has no row)
-        self.b.emit({"t": "armed_on", "product": self.preflight_product,
+        # every pre-ARM check passed: the board and conditions the ARM is about to be asked on (a refused board has no
+        # row; whether the ARM was then taken is the "armed" row)
+        self.b.emit({"t": "pre_arm_checked", "product": self.preflight_product,
                      "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
                      "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
                      "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
@@ -1083,7 +1087,8 @@ def main(argv=None) -> int:
                                   "wheels_lifted": getattr(args, "wheels_lifted", False),
                                   "vcc_watched": getattr(args, "vcc_watched", False),
                                   "profile_tri": getattr(args, "profile_tri", None),
-                                  "duty": args.duty, "seconds": args.seconds, "axis": args.axis}
+                                  "duty": args.duty, "seconds": args.seconds, "axis": args.axis,
+                                  "large": _header_large(args)}
                                  if args.cmd == "commission" else {}),
                               "start_mono_ns": time.monotonic_ns(),
                               **({} if markers is None else {"markers": markers})}) + "\n")
@@ -1182,6 +1187,16 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
     elif args.window is not None:
         raise Refused("window: a wheel takes no window")
     return ask, profile, names
+
+
+def _header_large(args) -> bool | None:
+    """The run's large-run verdict for its record header, before anything is connected (None: its arguments are
+    refused anyway; the board's product and lim come in the pre_arm_checked row once the link is open)."""
+    try:
+        ask, _profile, _names = _check_commission_args(args)
+    except Refused:
+        return None
+    return bl.is_large(ask)
 
 
 def _tty_line(prompt: str) -> str:

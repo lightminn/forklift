@@ -537,7 +537,8 @@ def test_acceptance_an_encoderless_wheel_runs_large_and_long_with_the_bypass(mod
     (cond,) = [r for r in rows if r["t"] == "run_conditions"]
     assert cond["large"] and cond["bypass"] == ["enc_stuck", "enc_polarity"]
     # the product checked just before the ARM is the run's (Codex PR-1 P2-2)
-    (armed,) = [r for r in rows if r["t"] == "armed_on"]
+    (armed,) = [r for r in rows if r["t"] == "pre_arm_checked"]
+    assert [r for r in rows if r["t"] == "armed"]  # and the ARM was taken
     assert armed["product"] == LR1 and armed["lim"] and armed["large"] and armed["duty_max"] == 1.0
     assert armed["ignored_bits"] == ["ENCODER_STUCK_L", "ENCODER_POLARITY_L"] and res["board_product"] == LR1
 
@@ -578,7 +579,7 @@ def test_a_large_run_is_refused_before_any_arm(model, monkeypatch, product, kw, 
     assert res["result"] == "refused" and why in res["why"], res
     assert "ARM" not in kinds_written(b)
     rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
-    assert not [r for r in rows if r["t"] == "armed_on"]  # a refused board has no armed_on row
+    assert not [r for r in rows if r["t"] in ("pre_arm_checked", "armed")]  # a refused board has neither row
 
 
 def test_the_large_confirmation_needs_a_terminal(model, monkeypatch):
@@ -683,9 +684,11 @@ def test_the_link_hands_the_host_the_read_time_not_the_cycle_start():
         link.tx_enabled = False
         os.write(master, bytes([1, 2, 3]))
         time.sleep(0.05)
-        link.service(Host(), 1_000_000)  # the cycle started at 1 ms; the read returned at the clock's 5 ms
-        assert seen == [5_000_000]
-        link.link.close()  # the dup the opener gave
+        try:
+            link.service(Host(), 1_000_000)  # the cycle started at 1 ms; the read returned at the clock's 5 ms
+            assert seen == [5_000_000]
+        finally:
+            link.link.close()  # the dup the opener gave
     finally:
         os.close(master)
         os.close(slave)
