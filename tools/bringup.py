@@ -43,8 +43,15 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-from forklift_core.live.synthetic import (OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, refuse_or_mark,
-                                          writer_marker)
+from forklift_core.live.synthetic import (
+    OUTPUT_MARKS,
+    SyntheticRefused,
+    bench_opener,
+    device_identity,
+    is_synthetic,
+    refuse_or_mark,
+    writer_marker,
+)
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive,
@@ -57,6 +64,8 @@ from forklift_core.mcu_link.messages import (
     StateFlag,
 )
 from forklift_core.plant import bench_limits as bl
+from forklift_core.plant import duty_disarm as dd
+from forklift_core.plant import judgement
 from forklift_core.plant.bringup import (
     Sample,
     count_settle,
@@ -79,11 +88,18 @@ from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
 from forklift_core.plant.kth_check import kth_check
 from forklift_core.plant.markers import marker_input_state, marker_reader
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
-from forklift_core.plant.write_log import Seen, Write, accepted, write_row
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here by name
     sample_from_row,
     state_row,
+)
+from forklift_core.plant.write_log import (
+    Seen,
+    Write,
+    accepted,
+    runs_of,
+    write_row,
+    writes_from_rows,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -106,7 +122,7 @@ STAND_NOTE = ("over the threshold on the stand: report the cause (coast, safe_br
               "relaxed; the pass is the floor S5 measurement's")
 # ② the DISARMs in a commissioning time limit's STOPPING take the general DISARM's thresholds, provisionally until
 # the S5 measurements (lead decision 2026-11-12; plan 3.4) -- whatever the DISARM rows hold, these follow
-THRESHOLD_KIND = {"limit_disarm": "disarm", "hold_disarm": "disarm"}
+THRESHOLD_KIND = {"limit_disarm": "disarm", "hold_disarm": "disarm", "duty_disarm": "disarm"}
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 # ② the commissioning host: a shorter validity bounds how long a COMMISSION runs on after the window stop
 COMMISSION_HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=COMMISSION_CAP_MS, arm_timeout_s=0.3,
@@ -564,13 +580,14 @@ class CommissionSession(Session):
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
+        self.last_expires_ns: int | None = None
 
     def preflight(self, state: McuState) -> None:
         if not commission_allowed(state.flags):
             raise Refused("not a commissioning build (STATE.flags.commission_build off): nothing is sent")
         if state.flags & StateFlag.OUTPUTS_LOCKED and not self.b.allow_locked:
             raise Refused("outputs_locked: nothing would turn (--allow-locked for a model)")
-        if self.scenario is not None and not state.flags & StateFlag.OUTPUTS_LOCKED:
+        if self.scenario in LIMIT_SCENARIOS and not state.flags & StateFlag.OUTPUTS_LOCKED:
             # design 2026-11-25 1.3: on an open board the wheels' limit is the validator's ceiling -- the time-limit
             # scenarios run on a locked board or the model; the stop after a tool DISARM is PR-2's duty_disarm
             raise Refused("scenario: the time-limit scenarios run on a locked commissioning board or the model only")
@@ -606,6 +623,7 @@ class CommissionSession(Session):
             return None
         seq = self.b.last_queued["seq"]
         self.sent.append((seq, int(duty_e4)))
+        self.last_expires_ns = expires  # when the host drops this frame if it is still unwritten
         return seq
 
     def hold_duty(self, duty_e4: int, seconds: float, stop=None, *, end_ns: int | None = None,
@@ -807,7 +825,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                   session)
 
 
-COMMISSION_SCENARIOS = ("limit_disarm", "hold_disarm")
+LIMIT_SCENARIOS = ("limit_disarm", "hold_disarm")  # drive to the MCU's own time limit: locked boards and the model
+COMMISSION_SCENARIOS = LIMIT_SCENARIOS + ("duty_disarm",)
 LIMIT_MAX_S = 3.0  # the scenario drives a wheel up to the build's time limit (proposed 2 s), never past this
 LIMIT_SLACK_S = 0.3  # how long past --limit-s the scenario waits for the MCU's limit before giving up
 
@@ -835,6 +854,104 @@ def disarm_acceptance(samples: list, limit_i: int, seq: int, grace_ms: float) ->
     elif prev.mode == Mode.STOPPING and samples[acc].state.mcu_time_us < bound:
         out["disarm_during_stopping"] = True
     return out
+
+
+def run_duty_disarm(bench: Bench, session: CommissionSession, duty: float, seconds: float, *,
+                    synthetic: bool = False) -> dict:
+    """Design 2026-11-25 1.3 (PR-2b): drive one wheel at ``duty`` until the STATEs show it held at that duty for
+    0.5 s, then the tool's DISARM; the stop after it is the S5 item on the open image (its wheel time limit is the
+    validator's ceiling). The test counts only as ``duty_disarm.validity`` says, from the record itself."""
+    b, axis = bench, session.axis
+    duty_e4 = int(round(duty * 10000))
+    session.arm(PRE_ZERO_S + seconds + 2.0)
+    i_arm = len(b.samples)
+    out = {"kind": "duty_disarm", "event_host_ns": None, "disarm_seq": None}
+    b.phase = "pre_zero"
+    session.hold_duty(0, PRE_ZERO_S)
+    if session.aborted is not None:
+        session.cleanup()
+        return _final({**out, "result": "aborted"}, session)
+    b.phase = "on"
+    end_ns = time.monotonic_ns() + int(seconds * 1e9)  # the approved nonzero output ends here, ramp included
+    held = False
+    last_seq, last_expires = None, end_ns
+    # the encoder stuck/polarity early stop as in a plain run, --bypass leaving the named kinds out (Codex PR-2b P1-2):
+    # the commissioning firmware latches those bits and stays ARMED, so the tool is what stops the drive
+    at_start = b.state.fault_flags & _AXIS_ENCODER_BITS[axis]
+    scanned = len(b.samples)
+    while time.monotonic_ns() < end_ns:
+        seq = session.send_duty(duty_e4, end_ns)
+        if seq is not None:
+            last_seq, last_expires = seq, session.last_expires_ns
+        b.cycle()
+        why = session._abort_reason()  # noqa: SLF001
+        if why is not None:
+            session.aborted = why
+            break
+        stop = next((r for smp in b.samples[scanned:] if (r := session.early_stop(smp.state, at_start)) is not None),
+                    None)
+        scanned = len(b.samples)
+        if stop is not None:
+            session.stop_reason = stop
+            break
+        rows = [{**state_row(s), "conn": c} for s, c in zip(b.samples[i_arm:], b.sample_conn[i_arm:], strict=True)]
+        if dd.reach_and_hold(rows, axis, duty_e4)[1] is not None:
+            held = True
+            break
+        time.sleep(0.01)
+    if session.aborted is None and held:
+        # the last refresh must really be out before the DISARM (request_disarm drops what is still queued), and
+        # there must be room left under the approved end for the DISARM itself (design 1.3)
+        def refresh_out() -> bool:
+            return last_seq is None or any(w.seq == last_seq and w.kind == "COMMISSION" for w in b.writes[-8:])
+
+        def wait_over() -> bool:
+            # the STATEs read during the wait get the same early stop and authorization check, and end it at once
+            # (Codex PR-2b re-reviews 2-3): a frame dropped on a disconnect is never written, so the wait would
+            # otherwise last to the approved end; it is bounded by that frame's own validity (end_ns) anyway
+            nonlocal scanned
+            stop = next((r for smp in b.samples[scanned:]
+                         if (r := session.early_stop(smp.state, at_start)) is not None), None)
+            scanned = len(b.samples)
+            if stop is not None:
+                session.stop_reason = stop
+            elif (why := session._abort_reason()) is not None:  # noqa: SLF001
+                session.aborted = why
+            return session.stop_reason is not None or session.aborted is not None or refresh_out()
+
+        # bounded by the last refresh's own expiry: the host drops an unwritten frame then without revoking anything
+        # (Codex PR-2b re-review 4 P2); the room under the approved end is checked separately below
+        b.run_until(wait_over, max((min(last_expires, end_ns) - time.monotonic_ns()) / 1e9, 0.0))
+        written = refresh_out()
+        left = (end_ns - time.monotonic_ns()) / 1e9
+        # the latest STATE and the drive authorization looked at again right before the test DISARM: never into a
+        # STOPPING (an expiry's electric brake the cleanup waits out) nor after the authorization went (Codex PR-2b
+        # P2-2)
+        not_armed = b.state.mode != Mode.ARMED or not b.host.ready
+        if session.stop_reason is not None or session.aborted is not None:
+            pass  # cleaned up below without the test DISARM
+        elif not written or left < dd.SEND_MARGIN_S or not_armed:
+            out["why_not_sent"] = ("last_refresh_not_written" if not written else
+                                   "not_armed_before_the_disarm" if not_armed else "no_room_before_the_approved_end")
+        else:
+            b.phase = "test_disarm"
+            session.events_started = True
+            b.host.request_disarm(time.monotonic_ns())
+            b.run_until(lambda: any(w.kind == "DISARM" and w.phase == "test_disarm" for w in b.writes), 0.5)
+            b.run_until(lambda: False, 0.6)  # keep observing the counts after the DISARM
+    rows = [{**state_row(s), "conn": c} for s, c in zip(b.samples[i_arm:], b.sample_conn[i_arm:], strict=True)]
+    v = dd.validity(rows, b.writes, axis=axis, duty_e4=duty_e4, synthetic=synthetic)
+    out.update(validity=v, event_host_ns=v["disarm_done_ns"], disarm_seq=v["disarm_seq"], physical=v["physical"])
+    session.cleanup()
+    if session.aborted is not None:
+        return _final({**out, "result": "aborted"}, session)
+    if session.stop_reason is not None:
+        return _final({**out, "result": "not_met", "why": f"early_stop_{session.stop_reason}"}, session)
+    if not held:
+        return _final({**out, "result": "not_met", "why": "hold_not_seen_before_the_approved_end"}, session)
+    if v["reason"] == "seq_ambiguous":
+        return _final({**out, "result": "unjudgeable"}, session)
+    return _final({**out, "result": "ok" if v["valid"] else "not_met"}, session)
 
 
 def run_commission_scenario(bench: Bench, session: CommissionSession, kind: str, duty: float, limit_s: float,
@@ -969,18 +1086,139 @@ def verdict(kind: str, external: dict, *, floor: bool = False) -> dict:
     return out
 
 
-def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool = False) -> dict:
-    """A recorded run around one operator marker (IWDG, e-stop, main power): the software timeline from the marker's
-    host time -- the last STATE before a gap or the record's end, the first mode change, the first all-zero duty,
-    a new boot and its reset cause, the count settle -- and the external verdict."""
-    rows = [json.loads(x) for x in record.read_text(encoding="utf-8").splitlines() if x.strip()]
-    markers = [r for r in rows if r.get("t") == "marker"]
-    if not markers:
-        return {"result": "no_marker"}
-    if not -len(markers) <= marker < len(markers):
-        return {"result": "no_marker", "markers": len(markers), "asked": marker}
-    m_ns = int(markers[marker]["host_ns"])
-    samples = [sample_from_row(r) for r in rows if r.get("t") == "state"]
+TOOL_KINDS = ("tx_cut", "disarm", "expiry") + COMMISSION_SCENARIOS  # events the tool itself issued in a run
+OPERATOR_KINDS = ("iwdg", "power")  # events an operator marked (Enter) during a record or commission run
+
+
+def _run_kind(header: dict) -> str | None:
+    if header.get("cmd") == "scenario":
+        return header.get("kind")
+    if header.get("cmd") == "commission":
+        return header.get("scenario")
+    return None
+
+
+def _header(run: list[dict]) -> dict:
+    return next((r for r in run if r.get("t") == "header"), {})
+
+
+def _tool_event(run: list[dict], kind: str, header: dict, synthetic: bool) -> tuple[int | None, dict | None]:
+    """The host time of the event the tool itself issued in ``run`` (design 2026-11-25 1.3, Codex PR-2b P2-3): for
+    ``duty_disarm`` the test DISARM's write completion, judged again from the run's STATEs and writes; for the other
+    tool kinds the ``event_host_ns`` of the run's own result row."""
+    if kind == "duty_disarm":
+        states = [r for r in run if r.get("t") == "state"]
+        duty_e4 = int(round(float(header.get("duty") or 0) * 10000))
+        v = dd.validity(states, writes_from_rows(run), axis=AXES.get(header.get("axis"), 0), duty_e4=duty_e4,
+                        synthetic=synthetic)
+        return v["disarm_done_ns"], v
+    res = next((r for r in reversed(run) if r.get("t") == "result"), {})
+    ev = res.get("event_host_ns")
+    return (None if ev is None else int(ev)), None
+
+
+def _real_outputs(states: list[dict]) -> bool:
+    """The run's STATEs show outputs that drive a motor: some STATE at all, none locked, no HIL plant."""
+    return bool(states) and not any({"OUTPUTS_LOCKED", "HIL_PLANT"} & set(r.get("flags", ())) for r in states)
+
+
+def _tool_run_official(kind: str, res: dict | None, states: list[dict]) -> bool:
+    """A run the tool itself issued an event in may give an official pass only when it ended ``ok`` with its stop
+    confirmed, ``tx_cut`` met its worst case, and its STATEs show real outputs (Codex PR-2b re-reviews 2-3). The tool's
+    own result and ``analyze`` both ask this."""
+    if res is None or res.get("result") != "ok" or res.get("cleanup_confirmed") is not True:
+        return False
+    if kind == "tx_cut" and (res.get("worst_case") or {}).get("met") is not True:
+        return False
+    return _real_outputs(states)
+
+
+def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = False, allow_bypassed: bool = False,
+            allow_synthetic: bool = False) -> dict:
+    """A recorded run around one event: the software timeline from the event's host time -- the last STATE before a
+    gap or the record's end, the first mode change, the first all-zero duty, a new boot and its reset cause, the
+    count settle -- and the external verdict.
+
+    ``record``: a path, or the rows already read (the CLI reads once). Design 2026-11-25 1.3 (PR-2b):
+
+    - an event the tool issued (``TOOL_KINDS``) is found in the record itself, in the runs of that kind (``marker``
+      counts those runs: -1 the last); an older record that names no run kind falls back to its Enter markers and
+      gets no official pass;
+    - an operator's event (``OPERATOR_KINDS``) is its Enter marker (``marker`` counts markers);
+    - the selected run is checked before its event is looked for: its kind, where it ran, its own marks (a bypassed,
+      unknown-condition or diagnostic-image run is refused unless ``allow_bypassed``) and whether it is a rehearsal
+      (refused unless ``allow_synthetic``) -- not another run appended to the same file (Codex PR-2b P2-4);
+    - an official pass needs, for a tool event, the run's own result row ``ok`` with its stop confirmed, and STATEs
+      showing real outputs; never from a rehearsal, from the time-limit scenarios (locked boards and the model
+      only) or from a ``duty_disarm`` the record does not show valid on an open board (Codex PR-2b P1-3)."""
+    rows = record if isinstance(record, list) else [
+        json.loads(x) for x in Path(record).read_text(encoding="utf-8").splitlines() if x.strip()]
+    runs = runs_of(rows)
+    official = True
+    validity = None
+    m_ns, label = None, None
+    kind_runs = [run for run in runs if _run_kind(_header(run)) == kind] if kind in TOOL_KINDS else []
+    if kind_runs:
+        if not -len(kind_runs) <= marker < len(kind_runs):
+            return {"result": "no_event", "runs": len(kind_runs), "asked": marker}
+        run = kind_runs[marker]
+        header = _header(run)
+    else:
+        markers = [(run, r) for run in runs for r in run if r.get("t") == "marker"]
+        named = sorted({k for run in runs if (k := _run_kind(_header(run))) is not None})
+        if kind in TOOL_KINDS and named and not any(_run_kind(_header(run)) is None for run, _ in markers):
+            # a record whose runs name other kinds: a kind mismatch, not a missing marker (Codex PR-2b re-review P2)
+            return {"result": "refused", "why": f"the record's runs are {named}, not {kind!r}"}
+        if not markers:
+            return {"result": "no_marker"}
+        if not -len(markers) <= marker < len(markers):
+            return {"result": "no_marker", "markers": len(markers), "asked": marker}
+        run, mrow = markers[marker]
+        header = _header(run)
+        if kind in TOOL_KINDS:
+            if _run_kind(header) is not None:
+                return {"result": "refused", "why": f"the marker's run is {_run_kind(header)!r}, not {kind!r}"}
+            official = False  # an older record that does not name its kind: read, but no official pass
+        m_ns, label = int(mrow["host_ns"]), mrow.get("label")
+    run_kind = _run_kind(header)
+    if header.get("cmd") == "commission" and floor:
+        return {"result": "refused", "why": "a commissioning run is on the stand: --floor does not apply"}
+    if header.get("cmd") == "scenario" and "floor" in header and bool(header["floor"]) != floor:
+        return {"result": "refused", "why": f"the run was recorded with floor={bool(header['floor'])}"}
+    states = [r for r in run if r.get("t") == "state"]
+    if floor and any("COMMISSION_BUILD" in r.get("flags", ()) for r in states):
+        return {"result": "refused", "why": "a commissioning build is on the stand: --floor does not apply"}
+    jmarks = judgement.run_marks(run)
+    try:
+        judgement.check(jmarks, allow=allow_bypassed)
+    except judgement.NotForGate as exc:
+        return {"result": "refused", "why": str(exc)}
+    synthetic = is_synthetic(header)
+    if synthetic and not allow_synthetic:
+        return {"result": "refused", "why": "a synthetic (rehearsal) run: not for measurement (give --allow-synthetic "
+                                            "to read it; its pass fields stay empty)"}
+    smarks = dict(OUTPUT_MARKS) if synthetic else {}
+    run_result = None
+    if kind_runs:
+        m_ns, validity = _tool_event(run, kind, header, synthetic)
+        res = next((r for r in reversed(run) if r.get("t") == "result"), None)
+        run_result = None if res is None else {"result": res.get("result"),
+                                               "cleanup_confirmed": res.get("cleanup_confirmed"),
+                                               "worst_case_met": (res.get("worst_case") or {}).get("met")}
+        if m_ns is None:
+            return {**smarks, **jmarks, "result": "no_event", "kind": kind,
+                    "why": "the run shows no event the tool issued", "run_result": run_result,
+                    **({} if validity is None else {"validity": validity})}
+        # the run's own end: an aborted run or an unconfirmed stop gives no pass, whatever its STATEs show before the
+        # event (Codex PR-2b re-review P1)
+        # locked outputs, a HIL plant or no STATE: nothing physical to judge (re-review P2)
+        if not _tool_run_official(kind, res, states):
+            official = False
+    if not judgement.eligible(jmarks) or synthetic or kind in LIMIT_SCENARIOS:
+        official = False
+    if validity is not None and not (validity["valid"] and validity["physical"]):
+        official = False
+    samples = [sample_from_row(r) for r in run if r.get("t") == "state"]
     after = [s for s in samples if s.host_ns >= m_ns]
     before = [s for s in samples if s.host_ns < m_ns]
     ref = before[-1] if before else (after[0] if after else None)  # the state as the event began
@@ -990,8 +1228,14 @@ def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool
     gaps = [(a.host_ns, b.host_ns) for a, b in zip(after, after[1:]) if b.host_ns - a.host_ns > STATE_GAP_S * 1e9]
     i0 = samples.index(after[0]) if after else len(samples)
     settle = count_settle(samples, i0) if after else None
-    return {"result": "ok", "marker": markers[marker].get("label"), "kind": kind,
-            "software": {"mode_change_ms": rel(first_mode),
+    ext = verdict(kind, external, floor=floor)
+    out = {**smarks, **jmarks, "result": "ok", "marker": label, "event_host_ns": m_ns, "kind": kind,
+           "run_kind": run_kind, "official": official, "run_result": run_result}
+    if validity is not None:
+        out["validity"] = validity
+    if not official:
+        ext = judgement.empty_pass_fields(ext)
+    out.update(software={"mode_change_ms": rel(first_mode),
                          "duty_zero_ms": rel(next((s for s in after if not any(s.state.duty_e4)), None)),
                          "new_boot_ms": rel(new_boot),
                          "new_boot_reset_cause": None if new_boot is None else new_boot.state.reset_cause.name,
@@ -999,8 +1243,8 @@ def analyze(record: Path, marker: int, kind: str, external: dict, *, floor: bool
                          "last_state_ms": rel(after[-1]) if after else None,
                          "count_settle_ms": None if settle is None or settle.host_ns is None
                          else (settle.host_ns - m_ns) / 1e6},
-            "external": verdict(kind, external, floor=floor),
-            "note": "software evidence only: the S5 verdict takes the external measurements"}
+               external=ext, note="software evidence only: the S5 verdict takes the external measurements")
+    return out
 
 
 def floor_refusal(flags, *, allow_locked: bool, estop_waived: bool) -> str | None:
@@ -1104,21 +1348,34 @@ def main(argv=None) -> int:
     an.add_argument("--record", required=True)
     an.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
     an.add_argument("--marker", type=int, default=-1,
-                    help="which marker, counted from 0: 0 = the first, 1 = the second, -1 = the last (default)")
-    an.add_argument("--floor", action="store_true", help="the marker's run was on the floor (else the stand)")
+                    help="which event, counted from 0: 0 = the first, 1 = the second, -1 = the last (default); for "
+                         "iwdg/power the operator's Enter markers, for an event the tool issued the runs of that kind "
+                         "in the record")
+    an.add_argument("--floor", action="store_true", help="the run was on the floor (else the stand)")
     an.add_argument("--kind", choices=("tx_cut", "disarm", "expiry", "iwdg", "power") + COMMISSION_SCENARIOS,
                     required=True)
     for p in (sc, an, cm):
         for name in ("output-response-ms", "stop-time-ms", "stop-distance-mm"):
             p.add_argument("--" + name)
+    for p in (kt, ck, an):
+        p.add_argument("--allow-bypassed", action="store_true",
+                       help="read a record with a bypassed protection or unknown run conditions (its pass fields stay "
+                            "empty, design 2026-11-25 1.2)")
     args = ap.parse_args(argv)
     if args.cmd in ("kth", "clock", "analyze"):
+        # one read of the file for every check and the judgement (Codex S 2nd P2: no second read that a new run
+        # appended in between could change)
         rows_ = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
         try:
-            marks = refuse_or_mark(rows_, allow=args.allow_synthetic)
-        except SyntheticRefused as exc:
+            # analyze judges the run it selects (its own marks and rehearsal check, Codex PR-2b P2-4 and re-review);
+            # kth and clock read the whole file
+            marks = {} if args.cmd == "analyze" else refuse_or_mark(rows_, allow=args.allow_synthetic)
+            jmarks = {} if args.cmd == "analyze" else judgement.check(judgement.record_marks(rows_),
+                                                                         allow=args.allow_bypassed)
+        except (SyntheticRefused, judgement.NotForGate) as exc:
             print(json.dumps({"result": "refused", "why": str(exc)}))
             return 2
+        marks = {**marks, **jmarks}
     if args.cmd == "kth":
         rows = rows_
         states = [r for r in rows if r.get("t") == "state"]
@@ -1126,10 +1383,19 @@ def main(argv=None) -> int:
         if bad is not None:  # never the dataclass defaults (Codex v3 impl P2-2: a missing error count read as zeros)
             print(json.dumps({**marks, "result": "invalid", "why": bad,
                               "configured": {"M": args.configured_m, "H": args.configured_h}, "image": args.image}))
-            return 0
+            return 0 if judgement.eligible(jmarks) else 1  # an ineligible record never exits as judged (Codex P3)
         samples = [sample_from_row(r) for r in states]
-        print(json.dumps({**marks, **kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h},
-                                               image=args.image, synthetic_input=bool(marks))}))
+        # synthetic_input is the synthetic marks' only (a large run's high_limit does not make a record synthetic)
+        out = kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h}, image=args.image,
+                        synthetic_input=bool(marks.get("synthetic_inputs")))
+        if not judgement.eligible(jmarks):
+            # read with --allow-bypassed: the counts stay, no verdict is official (S2 reads configured_ok and the CRC
+            # change reads other_variant from these fields)
+            for entry in out.get("axes", {}).values():
+                entry["computed"], entry["verdict"] = entry["verdict"], None
+            print(json.dumps({**marks, **out}))
+            return 1
+        print(json.dumps({**marks, **out}))
         return 0
     if args.cmd == "clock":
         fits = clock_fits_from_rows(rows_)
@@ -1142,10 +1408,13 @@ def main(argv=None) -> int:
         except ValueError as exc:
             print(json.dumps({"result": "refused", "why": str(exc)}))
             return 2
-        print(json.dumps({**marks, **analyze(Path(args.record), args.marker, args.kind, {
+        out = analyze(rows_, args.marker, args.kind, {
             "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
-            "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)}, default=str))
-        return 0
+            "stop_distance_mm": args.stop_distance_mm}, floor=args.floor, allow_bypassed=args.allow_bypassed,
+            allow_synthetic=args.allow_synthetic)
+        print(json.dumps(out, default=str))
+        # refused 2; nothing to judge (no event, no marker) 1; read 0
+        return {"refused": 2, "no_event": 1, "no_marker": 1}.get(out.get("result"), 0)
     try:
         synthetic = writer_marker(args.device, args.bench)
     except (SyntheticRefused, OSError, ValueError) as exc:
@@ -1169,6 +1438,8 @@ def main(argv=None) -> int:
         # every run's header (rehearsal design 2.3): the device, and the synthetic marker of a model-MCU run
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
                               "device": args.device, "device_id": device_identity(args.device),
+                              # the run's kind, which analyze matches a tool-issued event against (design 1.3)
+                              **({"kind": args.kind, "floor": args.floor} if args.cmd == "scenario" else {}),
                               "synthetic": synthetic, "start_wall": time.time(),
                               # design 2026-11-25 1.2: the run's asked bypass and large-run arguments in its header
                               **({"bypass": getattr(args, "bypass", None),
@@ -1176,7 +1447,7 @@ def main(argv=None) -> int:
                                   "vcc_watched": getattr(args, "vcc_watched", False),
                                   "profile_tri": getattr(args, "profile_tri", None),
                                   "duty": args.duty, "seconds": args.seconds, "axis": args.axis,
-                                  "large": _header_large(args)}
+                                  "large": _header_large(args), "scenario": getattr(args, "scenario", None)}
                                  if args.cmd == "commission" else {}),
                               "start_mono_ns": time.monotonic_ns(),
                               **({} if markers is None else {"markers": markers})}) + "\n")
@@ -1231,6 +1502,36 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         # the commissioning build arms without an e-stop pin: a person holds the main power switch (firmware design
         # 2.1, Q3); --yes does not stand in for it (Codex design P2-5)
         raise Refused("power switch: confirm a person holds the main power switch (--power-switch-in-hand)")
+    if getattr(args, "scenario", None) == "duty_disarm":
+        # design 2026-11-25 1.3: a wheel driven for --seconds (ramp included) and DISARMed by the tool; the large-run
+        # rules apply as to a plain run of that duty and length
+        if axis >= 2:
+            raise Refused("scenario: a wheel only (steering and lift would run into their mechanical limits)")
+        if args.window is not None:
+            raise Refused("window: a wheel takes no window")
+        if args.seconds is None or args.duty == 0:
+            raise Refused("duty_disarm: give a nonzero --duty and --seconds (the approved output time, ramp included)")
+        if not (math.isfinite(args.duty) and math.isfinite(args.seconds)):
+            raise Refused("duty_disarm: --duty and --seconds must be finite numbers")
+        if abs(args.duty) > bl.WHEEL_DUTY_MAX_OPEN:
+            raise Refused(f"duty_disarm: |duty| must be at most {bl.WHEEL_DUTY_MAX_OPEN:g}")
+        if abs(int(round(args.duty * 10000))) < dd.MIN_DUTY_E4:
+            # a target within one e4 of zero would take a zero output for the hold (Codex PR-2b P1-1)
+            raise Refused(f"duty_disarm: |duty| must be at least {dd.MIN_DUTY_E4 / 1e4:g}")
+        need = dd.min_seconds(args.duty)
+        if args.seconds < need:
+            raise Refused(f"seconds: duty_disarm needs at least {need:.3f} s at duty {abs(args.duty):g} to show the "
+                          "0.5 s hold in STATEs before its DISARM")
+        ask = bl.RunAsk(axis, args.duty, args.seconds)
+        if bl.is_large(ask):
+            why = bl.large_refusal(ask, wheels_lifted=getattr(args, "wheels_lifted", False),
+                                   vcc_watched=getattr(args, "vcc_watched", False),
+                                   synthetic=getattr(args, "synthetic", False))
+            if why is not None:
+                raise Refused(why)
+        elif abs(args.duty) > COMMISSION_DUTY_MAX:
+            raise Refused(f"duty must be within +-{COMMISSION_DUTY_MAX}")
+        return ask, None, names
     if getattr(args, "scenario", None) is not None:
         if not 0 < abs(args.duty) <= COMMISSION_DUTY_MAX:
             raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
@@ -1279,6 +1580,28 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
     return ask, profile, names
 
 
+def _mark_commission_result(result: dict, names: tuple, large: bool, product: str | None = None) -> None:
+    """Design 2026-11-25 1.2 (PR-2b): a commissioning result with a bypassed protection, or armed on a known
+    diagnostic image (Codex PR-2b P2-5), is not evidence for a gate -- marked, its official pass fields (the S3 sign
+    verdict, metrics.valid, external passes) left empty; a large run is marked but judged."""
+    if large:
+        result["high_limit"] = True
+    diag = judgement.diagnostic_image(product)
+    if not names and not diag:
+        return
+    result["not_for_gate"] = True
+    if names:
+        result["bypassed"] = list(names)
+    if diag:
+        result["diagnostic_image"] = product
+    if isinstance(result.get("verdict"), dict):
+        result["verdict"] = {**result["verdict"], "duty_sign_ok": None, "sensor_sign_ok": None}
+    if isinstance(result.get("metrics"), dict):
+        result["metrics"] = {**result["metrics"], "valid": None}
+    if isinstance(result.get("external"), dict):
+        result["external"] = judgement.empty_pass_fields(result["external"])
+
+
 def _header_large(args) -> bool | None:
     """The run's large-run verdict for its record header, before anything is connected (None: its arguments are
     refused anyway; the board's product and lim come in the pre_arm_checked row once the link is open)."""
@@ -1325,6 +1648,8 @@ def execute(args, bench: Bench) -> dict:
         session = Session(bench, _cap(), floor=getattr(args, "floor", False),
                           power_switch_reachable=getattr(args, "power_switch_reachable", False))
     result: dict = {"result": "aborted", "why": "not run"}
+    names: tuple = ()
+    conditions: dict | None = None
     try:
         for name in ("output_response_ms", "stop_time_ms", "stop_distance_mm"):
             try:
@@ -1343,7 +1668,10 @@ def execute(args, bench: Bench) -> dict:
             bench.emit({"t": "run_conditions", **conditions})
             if session.large:
                 _confirm_large(ask)  # before --yes is looked at (design 2026-11-25 1.2)
-            if getattr(args, "scenario", None) is not None:
+            if getattr(args, "scenario", None) == "duty_disarm":
+                what = (f"commission scenario duty_disarm: will ARM and drive wheel {args.axis} at duty {args.duty}, at "
+                        f"most {args.seconds} s, until it has held that duty 0.5 s, then DISARM and watch it stop.")
+            elif getattr(args, "scenario", None) is not None:
                 what = (f"commission scenario {args.scenario}: will ARM and drive wheel {args.axis} at duty {args.duty} "
                         f"up to the build's time limit ({args.limit_s} s, giving up at {args.limit_s + LIMIT_SLACK_S} s),"
                         f" then DISARM {'at once' if args.scenario == 'limit_disarm' else f'{args.disarm_delay_ms} ms in'}"
@@ -1360,13 +1688,29 @@ def execute(args, bench: Bench) -> dict:
                 bench.poll = _marker_reader(bench)
                 print("markers: press Enter (optionally a label first) at each event -- the main power cut, an NRST "
                       "reset -- while the wheel turns", file=sys.stderr, flush=True)
-            if getattr(args, "scenario", None) is not None:
-                result = run_commission_scenario(bench, session, args.scenario, args.duty, args.limit_s,
-                                                 args.disarm_delay_ms, args.stop_grace_ms)
-                result["external"] = verdict(args.scenario, {
+            if getattr(args, "scenario", None) == "duty_disarm":
+                result = run_duty_disarm(bench, session, args.duty, args.seconds,
+                                         synthetic=getattr(args, "synthetic", False))
+                ext = verdict("duty_disarm", {
                     "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
                     "stop_distance_mm": args.stop_distance_mm})
-                result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
+                v = result.get("validity") or {}
+                if not (v.get("valid") and v.get("physical")) or result.get("result") != "ok":
+                    # no physical pass from an invalid test, a board that drives no motor (locked, the model), or a
+                    # run that was aborted or whose stop was not confirmed (Codex PR-2b P1-3, P2-2)
+                    ext = judgement.empty_pass_fields(ext)
+                result["external"] = ext
+                result.update(conditions, cmd="commission", axis=args.axis, power_switch_in_hand=True,
+                              board_product=session.preflight_product)
+            elif getattr(args, "scenario", None) is not None:
+                result = run_commission_scenario(bench, session, args.scenario, args.duty, args.limit_s,
+                                                 args.disarm_delay_ms, args.stop_grace_ms)
+                # locked boards and the model only: the sequence is shown, no physical pass (Codex PR-2b P1-3)
+                result["external"] = judgement.empty_pass_fields(verdict(args.scenario, {
+                    "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
+                    "stop_distance_mm": args.stop_distance_mm}))
+                result.update(conditions, cmd="commission", axis=args.axis, power_switch_in_hand=True,
+                              board_product=session.preflight_product)
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
                 result.update(conditions, board_product=session.preflight_product)
@@ -1396,6 +1740,11 @@ def execute(args, bench: Bench) -> dict:
             result["external"] = verdict(args.kind, {
                 "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
                 "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)
+            if getattr(args, "synthetic", False) or not _tool_run_official(
+                    args.kind, result, [state_row(smp) for smp in bench.samples]):
+                # the same qualification analyze asks of the record, a rehearsal never physical (Codex PR-2b
+                # re-reviews 3-4)
+                result["external"] = judgement.empty_pass_fields(result["external"])
     except Refused as exc:
         result = {"result": "refused", "why": str(exc)}
     except BaseException as exc:  # Ctrl-C and anything else: an aborted run (Codex impl review P1-1)
@@ -1411,6 +1760,12 @@ def execute(args, bench: Bench) -> dict:
                 result["cleanup_error"] = f"{type(exc).__name__}: {exc}"
                 result["result"] = "aborted" if result.get("result") == "ok" else result.get("result", "aborted")
             result["cleanup_confirmed"] = session.cleanup_confirmed
+    if args.cmd == "commission" and conditions is not None:
+        # the run's conditions and marks on every result once its arguments were taken, an exception's or an
+        # abort's too (Codex PR-2b P3)
+        for k, v in conditions.items():
+            result.setdefault(k, v)
+        _mark_commission_result(result, names, session.large, session.preflight_product)
     result["record_errors"] = bench.record_errors
     bench.emit({"t": "result", **result})
     return result
