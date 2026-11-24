@@ -1011,3 +1011,42 @@ def test_kth_and_first_boot_refuse_a_bypassed_record(tmp_path, capsys):
     old = tmp_path / "old.jsonl"  # a commissioning record from before the bench limits: conditions unknown
     old.write_text(json.dumps({"t": "header", "cmd": "commission"}) + "\n", encoding="utf-8")
     assert h743_first_boot.main(["--record", str(old)]) == 2
+
+
+# --- real safety wiring design 8.1: the executor lock's run rules ---
+
+def test_a_reconnect_before_the_arm_ends_the_run(model):
+    """Codex executor-lock design rounds 3 and 5: the operator confirmed the first connection; a loss seen before the
+    ARM (the host's count, before any reopening) refuses the run with no ARM."""
+    b = model()
+    b.host.disconnects = 1
+    res = bringup.execute(args(), b)
+    assert res["result"] == "refused" and "reconnected" in res["why"], res
+    assert "ARM" not in kinds_written(b)
+
+
+@pytest.mark.parametrize("opener,taken", [("poison", False), ("delimiter", True)])
+def test_a_half_frame_left_by_an_earlier_executor_never_acts(mcu_model, opener, taken):  # noqa: F811
+    """Design 8.1: an earlier executor wrote a DISARM's body and died before its final delimiter. The next opening's
+    poison drops it; a lone delimiter (the rule before) would complete it and the MCU would take it."""
+    from forklift_core.mcu_link.messages import Disarm, encode
+
+    import real_mcu_link
+
+    m = Model(mcu_model, commission=True)
+    try:
+        b = bringup.Bench(PtyLink(m.master), io.StringIO(), commission=True)
+        assert b.run_until(lambda: len(b.samples) >= 3, 3.0)
+        old = encode(Disarm(), 0x7A7A)
+        os.write(m.master, old[:-1])  # all but the final delimiter
+        if opener == "delimiter":
+            os.write(m.master, real_mcu_link.DELIMITER)
+        else:
+            b.host.request_disarm(time.monotonic_ns())  # the next executor's first frame: the poison goes first
+        n0 = len(b.samples)
+        b.run_until(lambda: len(b.samples) >= n0 + 20, 3.0)
+        took = any(s.state.last_rx_seq == 0x7A7A for s in b.samples[n0:])
+        assert took is taken
+        assert 0x7A7A not in b.written
+    finally:
+        m.close()

@@ -35,6 +35,7 @@ import sys
 import time
 from pathlib import Path
 
+from forklift_core.live.executor_lock import DeviceBusy
 from forklift_core.live.synthetic import OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, writer_marker
 from forklift_core.mcu_link.messages import Arm, ClearFaults, FaultFlag, Mode, RejectReason, StateFlag
 
@@ -130,6 +131,13 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
     if not b.state.flags & StateFlag.OUTPUTS_LOCKED:
         return {"result": "refused", "why": "outputs not locked: this check runs on a locked build only"}
     session.arm(bringup.PRE_ZERO_S + limit_s + bringup.LIMIT_SLACK_S + 2.0)
+    # the connection the run was armed on (real safety wiring design 8.1), fixed as the ARM is asked: a loss is seen
+    # at once (the host's count), before the next opening could send what was queued meanwhile
+    conn0, lost0 = b.conn, b.host.disconnects
+
+    def link_changed() -> bool:
+        return b.conn != conn0 or b.host.disconnects != lost0
+
     session.hold_duty(0, bringup.PRE_ZERO_S)
     duty_e4 = int(round(duty * 10000))
     limit_i, scanned = None, len(b.samples)
@@ -147,6 +155,8 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
         time.sleep(0.01)
     if limit_i is None:
         session.cleanup()
+        if link_changed():  # a loss before the limit revokes the authorization: the run is invalid, not not_met
+            return {"result": "invalid", "why": "link_reconnected", "aborted": session.aborted}
         return {"result": "not_met", "why": session.aborted or "limit_not_reached"}
     # inside the hold: DISARM a third in, then ARM every ARM_PERIOD_S and one CLEAR_FAULTS two thirds in (once a
     # refusal follows the taken DISARM), until an ARM is taken
@@ -158,7 +168,12 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
     disarm_seq = min((q for q, (k, t, _m) in b.written.items() if k == "DISARM" and t >= t0), default=None)
     clear_seq, arm_seqs = None, []
     end = time.monotonic() + grace_ms / 1000 + 1.0
-    while time.monotonic() < end and b.state.mode != Mode.ARMED:
+    reconnected = link_changed()
+    while not reconnected and time.monotonic() < end and b.state.mode != Mode.ARMED:
+        if link_changed():
+            # the probed ARM and CLEAR_FAULTS are for the board the run armed: none more after a reconnect
+            reconnected = True
+            break
         st = b.state
         if clear_seq is None and time.monotonic_ns() >= seen_ns + grace_ms * 2e6 / 3 and \
                 st.reject_reason == RejectReason.STOPPING and any(
@@ -172,12 +187,17 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
     arm_ns = sorted(t for t in (_written_ns(b, q) for q in arm_seqs) if t is not None)
     verdict = judge(b.samples, limit_i, grace_ms, disarm_seq, _written_ns(b, clear_seq), arm_ns)
     verdict.update(arms_written=len(arm_ns), clear_faults_written=_written_ns(b, clear_seq) is not None)
-    t1 = time.monotonic_ns()
-    b.host.request_disarm(t1)  # the MCU may be ARMED by the check's last ARM
-    b.run_until(lambda: b.state.mode == Mode.DISARMED and any(
-        k == "DISARM" and t >= t1 for k, t, _m in b.written.values()), 1.0)
-    verdict["left_disarmed"] = b.state.mode == Mode.DISARMED
-    if not verdict["left_disarmed"]:
+    if reconnected or link_changed():
+        verdict.update(result="invalid", why="link_reconnected")
+    # the MCU may be ARMED by the check's last ARM: the session's cleanup, confirmed only by a STATE on the DISARM's
+    # connection naming its seq after it was written (never the cached last sample, Codex design round 5 P2)
+    # the probed ARM and CLEAR_FAULTS still queued (a full device) never go out ahead of the stop (impl P2)
+    for o in [o for o in b.host._outbox if o.kind in ("ARM", "CLEAR_FAULTS")]:  # noqa: SLF001
+        b.host._outbox.remove(o)  # noqa: SLF001
+    session.cleanup()
+    # confirmed and DISARMED: a confirmed stop in FAULT or ESTOP is not the check's end state (impl P2)
+    verdict["left_disarmed"] = bool(session.cleanup_confirmed) and b.host.state.mode == Mode.DISARMED
+    if not verdict["left_disarmed"] and verdict["result"] != "invalid":
         verdict["result"] = "not_met"
     return verdict
 
@@ -212,12 +232,17 @@ def main(argv: list[str] | None = None) -> int:
                               "start_mono_ns": time.monotonic_ns()}) + "\n")
         out.flush()
         opener = open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"])
-        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud, opener=opener), out, allow_locked=True,
-                          commission=True)
+        # one executor per MCU device (real safety wiring design 8.1)
+        b = bringup.Bench(ReconnectingLink(args.device, baud=args.baud, opener=opener, exclusive=True), out,
+                          allow_locked=True, commission=True)
         try:
             result = run(b, AXES[args.axis], args.duty, args.limit_s, args.stop_grace_ms)
         except bringup.Refused as exc:
             result = {"result": "refused", "why": str(exc)}
+        except DeviceBusy as busy:  # held at the first opening: nothing written
+            print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), "result": "refused", "why": str(busy),
+                              "holder": busy.holder}, default=str))
+            return 2
     print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
                      default=str))
     return 0 if result["result"] == "ok" else 1

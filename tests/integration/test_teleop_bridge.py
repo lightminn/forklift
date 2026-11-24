@@ -61,6 +61,9 @@ class PtyDevice:
             orig(what, now_ns, data, info)
         host._log = log
 
+    def open_first(self, host, now_ns):
+        """ReconnectingLink's early first opening (design 8.1): the pty is already open."""
+
     def receive(self, host, now_ns):
         events = []
         data = self.tty.read_available()

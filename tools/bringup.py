@@ -43,6 +43,7 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
+from forklift_core.live.executor_lock import DeviceBusy
 from forklift_core.live.synthetic import (
     OUTPUT_MARKS,
     SyntheticRefused,
@@ -313,6 +314,10 @@ class Session:
         b = self.b
         if not b.run_until(lambda: b.state is not None and b.state.mode == Mode.DISARMED, 3.0):
             raise Refused("no DISARMED STATE")
+        if b.conn > 1 or b.host.disconnects:
+            # the operator confirmed this run on its first connection; a reconnect before the ARM ends it (real safety
+            # wiring design 8.1, Codex design round 3 P1) -- no ARM on a link that came back
+            raise Refused("the link reconnected before the ARM: run it again to confirm")
         self.preflight(b.state)
         if self.floor:
             # design 3: a floor run needs real outputs, a wired e-stop and the main switch in reach
@@ -1424,7 +1429,8 @@ def main(argv=None) -> int:
     # design 2026-11-25 1.2 (Codex S 7th P2): the host is given each read's return time, not the loop's start, so a
     # COMMISSION's validity is counted from when its STATE was really read -- a late read no longer stretches the
     # MCU deadline past the approved end
-    link = ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns,
+    # one executor per MCU device, listeners included (real safety wiring design 8.1)
+    link = ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns, exclusive=True,
                             opener=open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"]))
     markers = None
     if getattr(args, "markers", False):
@@ -1453,15 +1459,22 @@ def main(argv=None) -> int:
                               **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
-        if args.cmd in ("record", "cpr"):
-            bench.run_until(lambda: False, args.seconds,
-                            every=_marker_reader(bench) if args.cmd == "record" and args.markers else None)
-            if args.cmd == "cpr":
-                res = wheel_cpr(bench.samples, (args.turns_left, args.turns_right), (args.dir_left, args.dir_right),
-                                motor_counts_confirmed=args.motor_counts_confirmed)
-                print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **asdict(res)}))
-            return 0
-        result = execute(args, bench)
+        try:
+            if args.cmd in ("record", "cpr"):
+                bench.run_until(lambda: False, args.seconds,
+                                every=_marker_reader(bench) if args.cmd == "record" and args.markers else None)
+                if args.cmd == "cpr":
+                    res = wheel_cpr(bench.samples, (args.turns_left, args.turns_right),
+                                    (args.dir_left, args.dir_right), motor_counts_confirmed=args.motor_counts_confirmed)
+                    print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **asdict(res)}))
+                return 0
+            result = execute(args, bench)
+        except DeviceBusy as busy:
+            # one executor per MCU device (real safety wiring design 8.1): held at the first opening, nothing written
+            refused = {"result": "refused", "why": str(busy), "holder": busy.holder}
+            bench.emit({"t": "result", **refused})
+            print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **refused}, default=str))
+            return 2
         # a rehearsal run's result says so wherever it is copied (Codex impl review P2)
         print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result} if isinstance(result, dict) else result,
                          default=str))
@@ -1747,6 +1760,8 @@ def execute(args, bench: Bench) -> dict:
                 result["external"] = judgement.empty_pass_fields(result["external"])
     except Refused as exc:
         result = {"result": "refused", "why": str(exc)}
+    except DeviceBusy:
+        raise  # held at the first opening: nothing was written, the caller refuses (design 8.1), never an abort
     except BaseException as exc:  # Ctrl-C and anything else: an aborted run (Codex impl review P1-1)
         result = {"result": "aborted", "why": f"{type(exc).__name__}: {exc}"}
         session.aborted = session.aborted or "exception"

@@ -24,6 +24,7 @@ import termios
 import time
 from pathlib import Path
 
+from forklift_core.live.executor_lock import DeviceBusy, lock_fd
 from forklift_core.plant.mcu_host import HostConfig, HostEvent, McuLinkHost, Outgoing
 
 _LOST = {errno.EIO, errno.ENODEV, errno.ENXIO, errno.EBADF}
@@ -35,12 +36,20 @@ class LinkLost(Exception):
     pass
 
 
-def open_raw(path: str, baud: int | None = None) -> int:
+def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
     """Open the link raw. The USB CDC firmware drops every STATE while the host's DTR is low (firmware board design
     5): Linux cdc_acm raises DTR on open, and nothing here lowers it -- no zero speed (it hangs the line up) and no
     clearing of the modem bits; DTR (and RTS) are asked high once more in case a previous user left them low. A
     device without modem bits (a pty, a UART adapter that refuses) is fine as it is."""
     fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    if before_config is not None:
+        # run on the opened fd before anything is set on the port (the executor lock: a refused opening changes
+        # nothing on a device another executor holds); if it raises, the fd is closed and the error passes on
+        try:
+            before_config(fd)
+        except BaseException:
+            os.close(fd)
+            raise
     try:
         attrs = termios.tcgetattr(fd)
         attrs[0] = attrs[1] = attrs[3] = 0  # iflag, oflag, lflag: raw
@@ -95,19 +104,24 @@ def usb_product_of_fd(fd: int) -> str | None:
 
 
 DELIMITER = b"\x00"
+# 6a's poison (docs/design/2026-11-20-real-hil-6a.md 3, real_loop_transport.POISON): more nonzero bytes than either
+# decoder's ENCODED_MAX (91) before the delimiter, so whatever half frame the MCU holds is dropped as too long -- a
+# half frame missing only its final delimiter would otherwise be completed by a lone 0x00 and act late
+POISON = bytes([0x01]) * 96 + DELIMITER
 
 
 class TtyLink:
-    """One open endpoint and the frame being written. Every opening first writes one COBS delimiter: the MCU's
-    receive buffer may hold half a frame from the last connection, and the delimiter closes it as one broken frame
-    so the first fresh frame is read whole (firmware board design 5; an empty frame is no error on either side)."""
+    """One open endpoint and the frame being written. On every opening the poison goes out right before the first
+    frame (real safety wiring design 8.1): the MCU's receive buffer may hold half a frame from the last connection,
+    another executor's included, and the poison drops it instead of completing it. An opening that never sends a
+    frame (a listener) writes nothing at all, so the MCU counts no receive error for it."""
 
     def __init__(self, fd: int) -> None:
         self.fd = fd
         self._cur: Outgoing | None = None
         self._off = 0
         self._cur_t = 0  # the current frame's write time (taken before its first byte)
-        self._resync = True  # the delimiter is still to go out on this opening
+        self._poison_at: int | None = 0  # the poison's next byte on this opening (None: out)
 
     def read_available(self) -> bytes:
         """Whatever is waiting. An empty read is "nothing yet" on a raw tty (VMIN=0), not end of file;
@@ -139,23 +153,28 @@ class TtyLink:
     def pump_writes(self, host: McuLinkHost, now_ns: int, clock=None) -> None:
         """``clock``: the D5 write time (design 3.3b) -- each frame's time is taken just before its first byte is
         written (earlier than the send: a round trip from it is never under-estimated); None: ``now_ns``."""
-        if self._resync:
-            # before any frame is taken from the host: a frame held back by a full device stays the host's to drop
-            try:
-                if os.write(self.fd, DELIMITER) != 1:
-                    return
-            except (BlockingIOError, InterruptedError):
-                return
-            except OSError as exc:
-                if exc.errno in _LOST:
-                    raise LinkLost(str(exc)) from exc
-                raise
-            self._resync = False
         while True:
             if self._cur is None:
                 self._cur, self._off = host.next_frame(now_ns), 0
                 if self._cur is None:
                     return
+            if self._poison_at is not None:
+                # the opening's poison, right before its first frame; until it is all out the frame is handed back
+                # untouched, so a DISARM, a revoke or its expiry can still drop it before the next attempt
+                try:
+                    n = os.write(self.fd, POISON[self._poison_at:])
+                except (BlockingIOError, InterruptedError):
+                    n = 0
+                except OSError as exc:
+                    if exc.errno in _LOST:
+                        raise LinkLost(str(exc)) from exc
+                    raise
+                self._poison_at += n
+                if self._poison_at < len(POISON):
+                    host.unsent(self._cur, now_ns)
+                    self._cur = None
+                    return
+                self._poison_at = None
             if self._off == 0:
                 self._cur_t = now_ns if clock is None else clock()
             try:
@@ -194,11 +213,22 @@ class ReconnectingLink:
     """A device path reopened after loss; ``service`` is called every control cycle."""
 
     def __init__(self, path: str, *, baud: int | None = None, retry_s: float = 0.5, opener=open_raw,
-                 clock=None, product_reader=usb_product_of_fd) -> None:
+                 clock=None, product_reader=usb_product_of_fd, exclusive: bool = False) -> None:
         """``clock``: the teleop bridge's D5 times (docs/design/2026-11-15-d5-link-gap-mcu-time.md 3.3b) -- the host is
         given the time a read returned (later than the bytes' arrival: validity shorter, gaps longer) and each frame's
         write time is taken before its write; None keeps the cycle time for both (every other tool)."""
         self.path, self.baud, self.retry_ns, self.opener = path, baud, int(retry_s * 1e9), opener
+        # One executor per device (docs/design/2026-11-19-real-safety-wiring.md 8): an exclusive flock on every fd this
+        # link opens, a reconnect included; held elsewhere, the opening is refused (a ``device_busy`` event naming the
+        # holder) and tried again later. Off by default (tests and rigs open one pty more than once); every tool that
+        # opens the MCU device passes True (design 8.1, pinned by tests/unit/tools/test_executor_lock_tools.py).
+        # Held at the very first opening, the link ends refused (design 8.1): the DeviceBusy is raised once and the
+        # link never opens nor writes again -- a tool's cleanup cannot reopen it after the holder lets go.
+        self.exclusive = bool(exclusive)
+        self.busy: DeviceBusy | None = None  # the last refusal (None once an opening succeeded)
+        self.ever_connected = False
+        self.refused: DeviceBusy | None = None
+        self._pending: list[HostEvent] = []  # an early opening's events (open_first), handed out by the next service
         self.product_reader = product_reader  # the opened device's USB product string, read at each opening
         self.clock = clock
         self.link: TtyLink | None = None
@@ -210,16 +240,43 @@ class ReconnectingLink:
         # is given (teleop record design 3) -- it never feeds a control decision
         self.last_read_ns: int | None = None
 
-    def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+    def open_first(self, host: McuLinkHost, now_ns: int) -> None:
+        """Try the first opening now, before a tool starts anything else (the teleop bridge: before its console), so a
+        device held by another executor is refused first (design 8.1). Its events come out of the next ``service``."""
+        if self.link is None and self.refused is None:
+            self._pending += self._open(host, now_ns)
+
+    def _open(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
         events: list[HostEvent] = []
         if self.link is None and now_ns >= self._next_try:
             try:
-                self.link = TtyLink(self.opener(self.path, self.baud))
+                if self.exclusive:  # locked on the opened fd before the port is configured (real safety design 8)
+                    fd = self.opener(self.path, self.baud, before_config=lambda fd_: lock_fd(fd_, self.path))
+                else:
+                    fd = self.opener(self.path, self.baud)
+                self.busy = None
+                self.ever_connected = True
+                self.link = TtyLink(fd)
                 product = self.product_reader(self.link.fd)
                 events.append(HostEvent("connected", {"path": self.path, "product": product}))
                 events += host.link_identity(product)
+            except DeviceBusy as busy:
+                if not self.ever_connected:
+                    self.refused = busy
+                    raise
+                if self.busy is None or str(self.busy) != str(busy):
+                    events.append(HostEvent("device_busy", {"path": self.path, "holder": busy.holder}))
+                self.busy = busy
+                self._next_try = now_ns + self.retry_ns
             except OSError:
                 self._next_try = now_ns + self.retry_ns
+        return events
+
+    def service(self, host: McuLinkHost, now_ns: int) -> list[HostEvent]:
+        events, self._pending = self._pending, []
+        if self.refused is not None:
+            return events + host.tick(now_ns)
+        events += self._open(host, now_ns)
         if self.link is not None:
             try:
                 data = self.link.read_available()
@@ -286,10 +343,16 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     host = McuLinkHost(HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100,
                                   outbox_max=16))
-    link = ReconnectingLink(args.device, baud=args.baud)
+    # a listener takes the lock too: two readers of one tty split its bytes (real safety wiring design 8.1)
+    link = ReconnectingLink(args.device, baud=args.baud, exclusive=True)
     end = time.monotonic_ns() + int(args.seconds * 1e9)
     while (now := time.monotonic_ns()) < end:
-        for e in link.service(host, now):
+        try:
+            events = link.service(host, now)
+        except DeviceBusy as busy:
+            print(f"refused: {busy}", file=sys.stderr, flush=True)
+            return 2
+        for e in events:
             print(f"{now / 1e9:.3f} {e.kind} {e.detail}", flush=True)
         time.sleep(0.005)
     h = host.health(time.monotonic_ns())

@@ -37,6 +37,7 @@ from console.live.server import LiveServer, MediaStore  # noqa: E402
 from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
+from forklift_core.live.executor_lock import DeviceBusy  # noqa: E402
 from forklift_core.live.synthetic import SyntheticRefused, bench_opener, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
@@ -205,6 +206,7 @@ class Bridge:
         self._markers = 0
         self._profile_ended = None  # the last trial whose profile_end row was written
         self.overruns = 0
+        self.looped = False  # a control cycle was entered: only then does main's exit leave a DISARM (design 8.1)
         self._started_ns: int | None = None
         self._last_rx_ns: int | None = None
 
@@ -310,6 +312,7 @@ class Bridge:
     def cycle(self, now_ns: int) -> dict:
         """Design 5: receive only, decide, transmit only. With a clock (the CLI) the decision time is taken after the
         receive (D5 3.3b) and the stage times go in the record."""
+        self.looped = True
         t0 = now_ns
         events = self.dev.receive(self.host, now_ns)
         t_rx = now_ns
@@ -360,6 +363,12 @@ class Bridge:
             t_dec = self.clock()
         events += self.dev.transmit(self.host, now_ns)
         for e in events:
+            if e.kind == "device_busy":
+                # one executor per device (real safety wiring design 8): shown with its holder, the opening retried
+                h = e.detail.get("holder") or {}
+                why = f"{e.detail.get('path')} is held by pid {h.get('pid', '?')} ({h.get('tool', '?')})"
+                self.channels.put(None, {"t": "event", "kind": "device_busy", "reason": why})
+                print(f"teleop_bridge: {why}", file=sys.stderr, flush=True)
             if e.kind == "estop_waived":
                 # V1.0 e-stop waiver (plan 3): shown, not hidden -- the console paints a kind with "stop" red
                 why = f"no e-stop input; waived by the board image ({e.detail.get('product')})"
@@ -413,6 +422,8 @@ class Bridge:
         """Leave the MCU disarmed: a DISARM written, a few cycles to let it out."""
         if self._gc_cb in gc.callbacks:
             gc.callbacks.remove(self._gc_cb)
+        if getattr(self.dev, "ever_connected", True) is False:
+            return  # never opened (or refused at its first opening): nothing to disarm, and no opening now (8.1)
         self.host.request_disarm(now_ns)
         for _ in range(5):
             now_ns = time.monotonic_ns()
@@ -584,6 +595,7 @@ def main(argv=None) -> int:
     bridge = server = scan_sock = None
     started = False
     out: dict = {}
+    code = 0
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
         scan_permit = None
@@ -598,9 +610,10 @@ def main(argv=None) -> int:
                 config_path=REPO / "config" / "real" / "obstacle_layer_real.yaml",
                 vehicle=load_real_vehicle(VEHICLE_YAML), v_max_mps=load_real_vehicle(VEHICLE_YAML).teleop_speed_limit_mps,
                 allow_synthetic=synthetic is not None)
-        link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns) if synthetic is None
+        link = (ReconnectingLink(args.device, baud=args.baud, clock=time.monotonic_ns, exclusive=True)
+                if synthetic is None
                 else ReconnectingLink(args.device, baud=args.baud, opener=bench_opener(open_raw, synthetic["bench"]),
-                                      clock=time.monotonic_ns))
+                                      clock=time.monotonic_ns, exclusive=True))
         bridge = Bridge(link, confirmed=confirmed, record=record, clock=time.monotonic_ns,
                         safety_watch=not args.no_safety_watch,
                         profile=profile, floor_permit=floor, scan_permit=scan_permit)
@@ -619,6 +632,16 @@ def main(argv=None) -> int:
                 print(f"the configuration changed while starting ({', '.join(changed)}): start again", file=sys.stderr)
                 record.put_row({"t": "refused", "why": "config_changed", "what": changed})
                 return 2
+        try:
+            # the first opening before anything else starts: a device held by another executor is refused first,
+            # whatever else fails later (design 8.1, Codex executor-lock impl round 2 P2)
+            link.open_first(bridge.host, time.monotonic_ns())
+        except DeviceBusy as busy:
+            print(f"teleop_bridge: {busy}", file=sys.stderr, flush=True)
+            if record is not None:
+                record.put_row({"t": "refused", "why": "device_busy", "holder": busy.holder})
+            code = 2
+            return code
         if bridge.profile is not None:
             def on_enter(_label, host_ns):
                 why = bridge.profile_start(host_ns)
@@ -645,12 +668,28 @@ def main(argv=None) -> int:
             run(bridge, duration_s=args.duration_s)
         except KeyboardInterrupt:
             pass
+        except DeviceBusy as busy:
+            # one executor per device (real safety wiring design 8.1): held at the first opening, the link ends
+            # refused -- nothing was written, and the close below cannot reopen it
+            print(f"teleop_bridge: {busy}", file=sys.stderr, flush=True)
+            if record is not None:
+                record.put_row({"t": "refused", "why": "device_busy", "holder": busy.holder})
+            code = 2
     finally:
         if scan_sock is not None:
             scan_sock.close()
-        if bridge is not None:
+        if bridge is not None and getattr(bridge, "looped", False):
             bridge.close(time.monotonic_ns())
             out["overruns"] = bridge.overruns
+        elif bridge is not None:
+            # no control cycle ran (the console failed to start, or --duration-s 0): nothing of ours to stop, so no
+            # DISARM -- it would cut short a stop the previous run left -- and the fd is closed, releasing the lock
+            # (Codex executor-lock impl rounds 3-4)
+            if bridge._gc_cb in gc.callbacks:
+                gc.callbacks.remove(bridge._gc_cb)
+            if getattr(bridge.dev, "link", None) is not None:
+                bridge.dev.link.close()
+                bridge.dev.link = None
         if started:
             server.stop()
         if record is not None:
@@ -658,7 +697,7 @@ def main(argv=None) -> int:
                                           "markers": 0 if bridge is None else bridge._markers,
                                           "end_mono_ns": time.monotonic_ns()})
         print(json.dumps(out), flush=True)
-    return 0
+    return code
 
 
 if __name__ == "__main__":
