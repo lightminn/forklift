@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -261,8 +262,8 @@ class Session:
         if not b.run_until(lambda: b.host.ready, 2.0):  # arm_pending -> zero_pending -> ready, no retry
             raise Refused("not ready after ARM")
         # the ARM was taken (zero seen): told apart from the pre-ARM check row (Codex PR-1 re-review 3 P2)
-        b.emit({"t": "armed", "host_ns": time.monotonic_ns(), "boot_id": b.state.boot_id,
-                "arm_gen": b.state.arm_gen})
+        st = b.host.state  # the STATE the host judged ready on, not a later-decoded older one (Codex re-review 4 P3)
+        b.emit({"t": "armed", "host_ns": time.monotonic_ns(), "boot_id": st.boot_id, "arm_gen": st.arm_gen})
 
     def preflight(self, state: McuState) -> None:
         check_build(state, allow_locked=self.b.allow_locked)
@@ -1123,6 +1124,8 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
     tri = getattr(args, "profile_tri", None)
     if tri is not None:
         lo, hi, period, cycles = tri
+        if not all(math.isfinite(v) for v in tri):
+            raise Refused("profile: LO, HI, PERIOD and CYCLES must be finite numbers")
         if axis >= 2 or getattr(args, "scenario", None) is not None:
             raise Refused("profile: a wheel's plain run only")
         if args.seconds is not None:

@@ -619,6 +619,7 @@ def test_a_signed_triangle_runs_every_piece_with_its_sign(model, monkeypatch):
 @pytest.mark.parametrize("kw,why", [
     ({"profile_tri": [0.2, 0.8, 1.0, 1.0], "duty": 0.8}, "wheel slew"),   # the first piece 0.26 in 0.1 s
     ({"profile_tri": [0.05, 0.3, 1.05, 1.0]}, "whole number"),
+    ({"profile_tri": [0.05, 0.3, 1.0, float("nan")]}, "finite"),
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "duty": 0.2}, "equal HI"),
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "seconds": 2.0}, "no --seconds"),
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "axis": "M", "window": (-1.0, 1.0)}, "wheel"),
