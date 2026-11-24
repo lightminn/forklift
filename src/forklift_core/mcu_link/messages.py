@@ -430,6 +430,10 @@ class LinkDecoder:
     def errors(self) -> int:
         return self._frames.errors + self._message_errors
 
+    def discard_partial(self) -> None:
+        """A new connection starts clean: a half frame of the old one is dropped, the error counts kept."""
+        self._frames.discard()
+
     def feed(self, data: bytes, received_ns: int) -> list[Received]:
         received = []
         for body in self._frames.feed(data):

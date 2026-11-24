@@ -40,7 +40,7 @@ import json
 import math
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 from forklift_core.live.synthetic import (OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, refuse_or_mark,
@@ -79,6 +79,7 @@ from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
 from forklift_core.plant.kth_check import kth_check
 from forklift_core.plant.markers import marker_input_state, marker_reader
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
+from forklift_core.plant.write_log import Seen, Write, accepted
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here by name
     sample_from_row,
@@ -117,6 +118,24 @@ class Refused(Exception):
     """A drive command's safety condition (design 3) refused the run before anything moved."""
 
 
+class _BenchHost(McuLinkHost):
+    """The bring-up host with its link's openings and losses told to the record (design 2026-11-25 1.2, PR-2a): each
+    opening is a new connection number, and the record's own decoder drops a half frame of the old one."""
+
+    on_open = None
+    on_lost = None
+
+    def link_identity(self, product):
+        if self.on_open is not None:
+            self.on_open()
+        return super().link_identity(product)
+
+    def disconnected(self, now_ns):
+        if self.on_lost is not None:
+            self.on_lost()
+        return super().disconnected(now_ns)
+
+
 @dataclass
 class Bench:
     """The link, the host core and the record. Every STATE is kept in memory first (a tap on the received bytes) and
@@ -134,11 +153,25 @@ class Bench:
     boots: list = field(default_factory=list)
     record_errors: int = 0
     poll: object = None  # called every cycle (``--markers``: Enter marks an operator event in the record)
+    initial_seq: int | None = None  # the host's first seq (tests start it near the 16-bit wrap)
+    # design 2026-11-25 1.2 (PR-2a): every write kept in order with its connection and completion time, and the
+    # connection each STATE was read on -- the record matches acceptances with these, never with a seq alone
+    conn: int = 0
+    writes: list = field(default_factory=list)
+    sample_conn: list = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self._tap = LinkDecoder()
-        self.host = McuLinkHost(COMMISSION_HOST_CFG if self.commission else HOST_CFG, log=self._log, client=Client.BRINGUP, allow_locked=self.allow_locked,
-                                commission=self.commission)
+        kw = {} if self.initial_seq is None else {"initial_seq": self.initial_seq}
+        self.host = _BenchHost(COMMISSION_HOST_CFG if self.commission else HOST_CFG, log=self._log,
+                               client=Client.BRINGUP, allow_locked=self.allow_locked, commission=self.commission, **kw)
+        self.host.on_open = self._opened
+        self.host.on_lost = self._tap.discard_partial
+
+    def _opened(self) -> None:
+        self.conn += 1
+        self._tap.discard_partial()
+        self.emit({"t": "connection", "conn": self.conn, "host_ns": time.monotonic_ns()})
 
     def _log(self, what, now_ns, data, info) -> None:
         try:
@@ -149,24 +182,40 @@ class Bench:
             elif what == "queued" and info:
                 self.last_queued = dict(info)
             elif what == "written" and info:
+                done = time.monotonic_ns()
                 msg = None
                 for r in LinkDecoder().feed(bytes(data), now_ns):
                     msg = r.message
                 self.written[info["seq"]] = (info["kind"], now_ns, msg)
-                self.emit({"t": "written", "host_ns": now_ns, **info})
+                w = Write(order=len(self.writes), conn=self.conn, kind=info["kind"], seq=info["seq"], start_ns=now_ns,
+                          done_ns=done, boot_id=getattr(msg, "boot_id", None),
+                          echo_mcu_time_us=getattr(msg, "echo_mcu_time_us", None), axis=getattr(msg, "axis", None),
+                          duty_e4=getattr(msg, "duty_e4", None))
+                self.writes.append(w)
+                # the record contract (PR-2a): order, connection, start and completion, and the command's fields
+                self.emit({"t": "written", "host_ns": now_ns, **info, "order": w.order, "conn": w.conn,
+                           "done_ns": done, "boot_id": w.boot_id, "echo_mcu_time_us": w.echo_mcu_time_us,
+                           "axis": w.axis, "duty_e4": w.duty_e4,
+                           "valid_after_echo_ms": getattr(msg, "valid_after_echo_ms", None),
+                           "arm_gen": getattr(msg, "arm_gen", None)})
         except Exception:  # noqa: BLE001 -- the host's receive and send must go on whatever the record does
             self.record_errors += 1
 
     def _sample(self, s: Sample) -> None:
         st = s.state
         self.samples.append(s)  # in memory first
+        self.sample_conn.append(self.conn)
         if not self.boots or self.boots[-1] != st.boot_id:
             if self.boots:
                 # contract 3.3: a new boot mid-session may be a motor-start brown-out even with reset_cause power
                 self.emit({"t": "warning", "what": "boot_changed", "host_ns": s.host_ns, "boot_id": st.boot_id,
                            "reset_cause": st.reset_cause.name})
             self.boots.append(st.boot_id)
-        self.emit(state_row(s))
+        self.emit({**state_row(s), "conn": self.conn})
+
+    def seen(self) -> list[Seen]:
+        return [Seen(s.host_ns, c, s.state.boot_id, s.state.mcu_time_us, s.state.last_rx_seq)
+                for s, c in zip(self.samples, self.sample_conn, strict=True)]
 
     def emit(self, row: dict) -> None:
         try:
@@ -652,8 +701,9 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
         seen["i"] = len(b.samples)
         return None
 
+    o_arm = len(b.writes)  # write orders from here on are this run's (the ARM included)
     session.hold_duty(0, PRE_ZERO_S)
-    n_zero = len(session.sent)
+    o_on = len(b.writes)
     if session.aborted is None:
         if profile is None:
             session.hold_duty(duty_e4, seconds, early_stop)
@@ -672,22 +722,32 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
                     break
         if session.stop_reason is None and session.aborted is None:
             session.stop_reason = "time"
-    n_on = len(session.sent)
+    o_post = len(b.writes)
     if session.aborted is None:
         session.hold_duty(0, POST_ZERO_S)
     session.cleanup()
-    on_seqs = {q for q, d in session.sent[n_zero:n_on] if d != 0}
-    off_seqs = {q for q, _d in session.sent[n_on:]}
-    on_index = next((i for i in range(i_arm, len(b.samples)) if b.samples[i].state.last_rx_seq in on_seqs), None)
-    # the driven span ends at the first sample accepting a later zero, or at the MCU's own stop (it left ARMED:
+    # Acceptances are matched with the write log (order, connection, completion, echo), never with a seq alone: a
+    # long run wraps the 16-bit seq and a USB-only reconnect brings the same boot back on a new fd (design 2026-11-25
+    # 1.2, PR-2a). An ambiguous sample leaves the run unjudgeable instead of picking a frame.
+    seen = b.seen()
+    m_on = accepted(seen, b.writes, lambda w: w.kind == "COMMISSION" and w.order >= o_on and w.duty_e4 != 0, i_arm)
+    on_index = m_on.index
+    ambiguous = m_on.ambiguous_at
+    # the driven span ends at the first sample accepting a later command, or at the MCU's own stop (it left ARMED:
     # time limit, expiry, fault) -- never at the record's end (Codex re-review P2-3)
-    off_index = None if on_index is None else next(
-        (i for i in range(on_index, len(b.samples))
-         if b.samples[i].state.last_rx_seq in off_seqs or b.samples[i].state.mode != Mode.ARMED), None)
+    off_index = None
+    if on_index is not None:
+        m_off = accepted(seen, b.writes, lambda w: w.kind == "COMMISSION" and w.order >= o_post, on_index)
+        left = next((i for i in range(on_index, len(b.samples)) if b.samples[i].state.mode != Mode.ARMED), None)
+        cands = [i for i in (m_off.index, left) if i is not None]
+        off_index = min(cands) if cands else None
+        if m_off.ambiguous_at is not None and (off_index is None or m_off.ambiguous_at < off_index):
+            ambiguous = m_off.ambiguous_at
     # the motion window ends with the post-zero hold, before the cleanup's DISARM
     end = len(b.samples)
-    disarm_seqs = {q for q, (k, _t, _m) in b.written.items() if k == "DISARM"}
-    end = next((i for i in range(i_arm, end) if b.samples[i].state.last_rx_seq in disarm_seqs), end)
+    m_end = accepted(seen, b.writes, lambda w: w.kind == "DISARM" and w.order >= o_arm, i_arm)
+    if m_end.index is not None:
+        end = m_end.index
     if off_index is not None and off_index >= end:
         end = off_index + 1  # the sample that closes the driven span stays, even when it confirms the DISARM
     metrics = commission_metrics(b.samples[:end], axis=axis, duty_e4=duty_e4, on_index=on_index,
@@ -700,6 +760,10 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     for smp in b.samples[i_arm:]:
         faults |= smp.state.fault_flags
     result = "no_acceptance" if on_index is None else ("ok" if metrics.valid else "invalid_measurement")
+    if ambiguous is not None:
+        # the seq of a sample on the driven span names more than one write: no figure is taken from it
+        result = "unjudgeable"
+        metrics = replace(metrics, valid=False, reason="seq_ambiguous")
     extra = {}
     if profile is not None:
         # a profile is not a step: its sent and applied peaks instead of the step's steady-state figures

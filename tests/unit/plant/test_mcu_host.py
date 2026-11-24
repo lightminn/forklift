@@ -452,3 +452,15 @@ def test_a_build_bit_appearing_while_armed_revokes_and_disarms():
     assert any(e.kind in ("authorization_revoked", "arm_failed") and "build_refused" in str(e.detail) for e in events)
     out = h.next_frame(1_100_001)
     assert out is not None and isinstance(next(iter(LinkDecoder().feed(out.data, 0))).message, Disarm)
+
+
+def test_a_disconnect_drops_the_half_frame_of_the_old_connection():
+    """PR-2a: bytes of a STATE cut by a disconnect must not complete with the new connection's first bytes."""
+    r = Rig()
+    whole = state(2_000_000)
+    r.host.on_bytes(whole[: len(whole) // 2], r.now)
+    r.host.disconnected(r.now)
+    r.host.on_bytes(whole[len(whole) // 2:], r.now + MS)
+    assert r.host.state is None  # the tail did not make a STATE
+    r.host.on_bytes(state(2_010_000), r.now + 2 * MS)
+    assert r.host.state is not None and r.host.state.mcu_time_us == 2_010_000

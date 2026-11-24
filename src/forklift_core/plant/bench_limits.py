@@ -18,9 +18,6 @@ OPEN_COMMISSION_PREFIX = "forklift-mcu commission OPEN "
 # the source): duty 1.0, 0x7FFFFFFF us / 1000 ms.
 WHEEL_DUTY_MAX_OPEN = 1.0
 WHEEL_TIME_MAX_S_OPEN = (0x7FFFFFFF // 1000) / 1000.0
-# PR-1 interim: one run's longest non-zero output, until PR-2 matches acceptances across the 16-bit seq's wrap
-# (about 655 s at 100 Hz).
-PR1_SECONDS_MAX = 600.0
 TIME_MARGIN_S = 0.5  # the tool's hold stays this far under the board's time limit
 VCC_WATCH_ABOVE = 0.3  # |duty| above this needs --vcc-watched on every real run (R5: VCC = VM on V1.0)
 WHEEL_SLEW_PER_S = 2.0  # board_config.c wheel_duty_slew_per_s (pinned by the unit test)
@@ -122,9 +119,11 @@ def large_refusal(ask: RunAsk, *, wheels_lifted: bool, vcc_watched: bool, synthe
         return None
     if abs(ask.duty) > WHEEL_DUTY_MAX_OPEN + 1e-12:
         return f"duty: at most {WHEEL_DUTY_MAX_OPEN}"
-    top = min(PR1_SECONDS_MAX, WHEEL_TIME_MAX_S_OPEN - TIME_MARGIN_S)
+    # the open board's own wheel limit, less the tool's margin (PR-2a matches acceptances across the seq's wrap, so
+    # PR-1's 600 s interim bound is gone)
+    top = WHEEL_TIME_MAX_S_OPEN - TIME_MARGIN_S
     if ask.seconds > top:
-        return f"seconds: at most {top} s in one run (PR-1 interim bound under the seq wrap)"
+        return f"seconds: at most {top:g} s in one run (the board's wheel time limit less {TIME_MARGIN_S} s)"
     if not wheels_lifted:
         return ("wheels lifted: a large run needs --wheels-lifted (wheels off the floor, the truck fixed against the "
                 "fast wheel's vibration and reaction, the wires clear of the turning parts)")

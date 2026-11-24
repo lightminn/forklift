@@ -72,8 +72,9 @@ def test_large_refusals():
     assert bl.large_refusal(bl.RunAsk(0, 0.31, 1.0), **{**ok, "vcc_watched": True}) is None
     assert bl.large_refusal(bl.RunAsk(0, 0.31, 1.0), **{**ok, "synthetic": True}) is None
     assert "at most 1.0" in bl.large_refusal(bl.RunAsk(0, 1.01, 1.0), **ok)
-    assert bl.large_refusal(bl.RunAsk(0, 0.3, 600.0), **ok) is None
-    assert "at most 600" in bl.large_refusal(bl.RunAsk(0, 0.3, 600.01), **ok)
+    assert bl.large_refusal(bl.RunAsk(0, 0.3, 600.01), **ok) is None  # PR-2a: no 600 s interim bound
+    assert bl.large_refusal(bl.RunAsk(0, 0.3, 2146.983), **ok) is None
+    assert "at most 2146.98" in bl.large_refusal(bl.RunAsk(0, 0.3, 2146.984), **ok)
     assert bl.large_refusal(bl.RunAsk(0, 0.1, 1.0), **{**ok, "wheels_lifted": False}) is None  # not large
 
 

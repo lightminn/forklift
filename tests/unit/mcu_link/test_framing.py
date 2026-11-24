@@ -72,3 +72,15 @@ def test_decoder_drops_oversize_frames():
     wire = cobs_encode(body + crc.to_bytes(2, "little")) + b"\x00"
     decoder = FrameDecoder()
     assert decoder.feed(wire + ARM_1234) and decoder.errors == 1
+
+
+def test_discard_drops_a_half_frame_and_keeps_the_error_count():
+    """PR-2a (design 2026-11-25 1.2): a frame begun on a connection that is gone never joins the next one's bytes."""
+    d = FrameDecoder()
+    d.feed(b"\x00\x12")  # a broken frame counted ...
+    d.feed(b"\x00")
+    errors = d.errors
+    d.feed(ARM_1234[:-6])  # ... then half of a good one
+    d.discard()
+    assert d.feed(ARM_1234[-6:]) == [] and d.errors == errors + 1  # the tail alone is a broken frame, not the ARM
+    assert len(d.feed(ARM_1234)) == 1  # the next whole frame is read whole
