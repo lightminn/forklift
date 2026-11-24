@@ -1,0 +1,2 @@
+record: artifacts/20261124T073435Z_s0_link/link.jsonl
+PASS v3 30.0s states=3000 seq_gaps=0 frame_errors=0 mcu_period=10.0/10.0ms host_gap_max=11.676ms rtt_p50/max=8.67/9.14ms disarm_lost=0/30 resets=0

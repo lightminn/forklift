@@ -1,0 +1,1 @@
+branch fix/spi-ssi-before-master commit 72eee346 tag diag-spi-ssi-1 (main de49e746 + spi_setup SSI order)

@@ -1,0 +1,1 @@
+    ATTRS{product}=="forklift-mcu commission locked 24a0475fe8e9"
