@@ -11,6 +11,12 @@ OUT="$H/$(date +%F)_link.jsonl"
 if [ -e "$OUT" ]; then
   OUT="$H/$(date +%F_%H%M%S)_link.jsonl"
 fi
+# the staged copy must take the executor lock and send the poison (real safety wiring design 8.1): a copy staged
+# before that change would open the board beside another executor -- stage again from main
+if ! grep -q "before_config=" "$H/code/tools/h743_link_check.py" || ! grep -q "POISON" "$H/code/tools/h743_link_check.py"; then
+  echo "STOP: the staged code predates the executor lock. Run tools/h743_check/stage.sh again from main."
+  exit 1
+fi
 if [ ! -e "$DEV" ]; then
   echo "STOP: $DEV is not there. Run 2_enumerate.sh first."
   exit 1

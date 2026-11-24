@@ -11,7 +11,7 @@ import tty
 
 import pytest
 
-from forklift_core.live.executor_lock import DeviceBusy, holder, lock_fd, probe
+from forklift_core.live.executor_lock import DeviceBusy, holder, lock_fd
 
 pytestmark = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="flock and /proc/locks are Linux's")
 
@@ -28,6 +28,23 @@ def pty_path():
 
 def open_dev(path):
     return os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+
+
+def probe(path):
+    """Whether the device is free now (test only: open, lock, close)."""
+    fd = open_dev(path)
+    try:
+        lock_fd(fd, path)
+    finally:
+        os.close(fd)
+
+
+def holder_of(path):
+    fd = open_dev(path)
+    try:
+        return holder(fd)
+    finally:
+        os.close(fd)
 
 
 def test_a_second_opening_of_a_locked_device_is_refused_with_its_holder(pty_path):
@@ -77,7 +94,7 @@ def test_a_holder_killed_hard_leaves_nothing_behind_and_the_next_opening_works(p
         child.send_signal(signal.SIGKILL)
         child.wait(timeout=5)
         deadline = time.monotonic() + 5
-        while holder(pty_path) is not None and time.monotonic() < deadline:
+        while holder_of(pty_path) is not None and time.monotonic() < deadline:
             time.sleep(0.01)
         probe(pty_path)  # the kernel dropped it: free again
         fd = open_dev(pty_path)
@@ -92,14 +109,8 @@ def test_a_holder_killed_hard_leaves_nothing_behind_and_the_next_opening_works(p
         child.stdout.close()
 
 
-def test_probe_releases_what_it_took(pty_path):
-    probe(pty_path)
-    probe(pty_path)  # a probe never keeps the lock
-    assert holder(pty_path) is None
-
-
 def test_no_holder_on_a_free_device(pty_path):
-    assert holder(pty_path) is None
+    assert holder_of(pty_path) is None
 
 
 def _link_module():
@@ -120,28 +131,47 @@ def _host():
                                   outbox_max=16))
 
 
-def test_an_exclusive_link_refuses_a_held_device_names_the_holder_and_opens_once_it_is_free(pty_path):
+def test_held_at_the_first_opening_the_link_ends_refused(pty_path):
+    """Design 8.1: raised once, then never opened nor written again -- even after the holder lets go."""
     rml = _link_module()
     other = open_dev(pty_path)
     lock_fd(other, pty_path)
     link = rml.ReconnectingLink(pty_path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
     host = _host()
+    with pytest.raises(DeviceBusy) as err:
+        link.receive(host, 1)
+    assert err.value.holder["pid"] == os.getpid() and link.refused is not None
+    os.close(other)  # the holder goes
+    host.request_disarm(2)
+    assert link.receive(host, 3) == [] and link.transmit(host, 4) == [] and link.service(host, 5) == []
+    assert link.link is None
+    probe(pty_path)  # nothing of the refused link holds it
+
+
+def test_a_reconnect_to_a_held_device_is_shown_and_retried(pty_path):
+    """After a connection, a held device at a reopening is a device_busy event and a retry (design 8.1)."""
+    rml = _link_module()
+    link = rml.ReconnectingLink(pty_path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
+    host = _host()
+    link.receive(host, 1)
+    assert link.link is not None and link.ever_connected
+    with pytest.raises(DeviceBusy):  # the link's own fd holds it
+        probe(pty_path)
+    link.link.close()
+    link.link = None  # as after a lost device
+    other = open_dev(pty_path)
+    lock_fd(other, pty_path)
     try:
-        events = link.receive(host, 1)
-        busy = [e for e in events if e.kind == "device_busy"]
+        busy = [e for e in link.receive(host, 2) if e.kind == "device_busy"]
         assert link.link is None and busy and busy[0].detail["holder"]["pid"] == os.getpid()
-        assert not [e for e in link.receive(host, 2) if e.kind == "device_busy"]  # shown once, not every retry
-        os.close(other)  # the holder goes
-        other = None
-        events = link.receive(host, 3)
-        assert link.link is not None and any(e.kind == "connected" for e in events)
-        with pytest.raises(DeviceBusy):  # and now the link's own fd holds it
-            probe(pty_path)
+        assert not [e for e in link.receive(host, 3) if e.kind == "device_busy"]  # shown once, not every retry
     finally:
-        if other is not None:
-            os.close(other)
-        if link.link is not None:
-            link.link.close()
+        os.close(other)
+    events = link.receive(host, 4)
+    try:
+        assert link.link is not None and any(e.kind == "connected" for e in events)
+    finally:
+        link.link.close()
 
 
 def test_a_link_without_exclusive_is_as_before(pty_path):
@@ -188,12 +218,14 @@ def test_a_refused_opening_sets_nothing_on_the_held_port(pty_path, monkeypatch):
     lock_fd(other, pty_path)
     link = rml.ReconnectingLink(pty_path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
     try:
-        link.receive(_host(), 1)
+        with pytest.raises(DeviceBusy):
+            link.receive(_host(), 1)
         assert link.link is None and calls == []
     finally:
         os.close(other)
-    link.receive(_host(), 2)
+    link2 = rml.ReconnectingLink(pty_path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
+    link2.receive(_host(), 2)
     try:
-        assert link.link is not None and "tcsetattr" in calls  # configured once it holds the lock
+        assert link2.link is not None and "tcsetattr" in calls  # configured once it holds the lock
     finally:
-        link.link.close()
+        link2.link.close()

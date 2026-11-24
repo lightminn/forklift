@@ -15,7 +15,9 @@
 
 The rule is a host-side premise of the firmware's link design (`docs/design/2026-11-12-weact-h743-board-firmware.md`
 section 5). The other two live in `tools/real_mcu_link.py`: DTR is never lowered after the open, and every opening
-writes one `0x00` delimiter before its first frame.
+writes the poison `0x01 x 96 + 0x00` right before its first frame (a listener that sends no frame writes nothing;
+`docs/design/2026-11-19-real-safety-wiring.md` 8.1). Every tool that opens the device also takes an exclusive `flock`
+on it: one executor per board.
 
 ## Install (laptop and Jetson; needs sudo — run it yourself)
 

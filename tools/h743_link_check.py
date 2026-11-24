@@ -22,8 +22,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from real_mcu_link import _LOST, LinkLost, TtyLink, open_raw  # noqa: E402
+from real_mcu_link import _LOST, POISON, LinkLost, TtyLink, open_raw  # noqa: E402
 
+from forklift_core.live.executor_lock import DeviceBusy, lock_fd  # noqa: E402
 from forklift_core.mcu_link.messages import VERSION, Disarm, LinkDecoder, McuState, encode  # noqa: E402
 
 STATE_PERIOD_MS = 10.0  # the firmware's state_period_ms (board design 5)
@@ -34,8 +35,8 @@ MCU_PERIOD_MEAN_TOL_MS = 0.05
 HOST_GAP_MAX_MS = 100.0  # the executor treats an older STATE as stale (HostConfig.state_max_age_s = 0.1)
 RTT_MAX_MS = 50.0  # one 10 ms STATE period plus USB both ways, with margin; the DRIVE validity cap is 150 ms
 RTT_TIMEOUT_S = 1.0  # a DISARM not seen in a STATE within this counts as lost
-RX_BASELINE_S = 0.2  # MCU rx_errors are counted from the first STATE this long after the opening delimiter: that
-# delimiter may close a half frame left from an earlier connection, which the MCU rightly counts once
+RX_BASELINE_S = 0.2  # MCU rx_errors are counted from the first STATE this long after the opening poison was all
+# written: the poison drops a half frame left from an earlier connection, which the MCU rightly counts once
 
 
 def _pct(xs: list[float], q: float) -> float | None:
@@ -139,7 +140,8 @@ def run(device: str, out: Path, seconds: float, disarm_every_s: float, baud: int
     """``fd``: an already open endpoint instead of ``device`` (tests: a pty master)."""
     out.parent.mkdir(parents=True, exist_ok=True)
     if fd is None:
-        fd = open_raw(device, baud)
+        # one executor per MCU device (real safety wiring design 8.1): locked on the opened fd before the port is set
+        fd = open_raw(device, baud, before_config=lambda fd_: lock_fd(fd_, device))
     link = TtyLink(fd)
     dec = LinkDecoder()
     states: list[dict] = []
@@ -155,7 +157,8 @@ def run(device: str, out: Path, seconds: float, disarm_every_s: float, baud: int
         f.write(json.dumps({"t": "start", "device": device, "seconds": seconds, "host_ns": time.monotonic_ns(),
                             "utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n")
         try:
-            _write_all(fd, b"\x00", time.monotonic() + 1.0)  # close any half frame the MCU holds (board design 5)
+            # drop any half frame the MCU holds -- another executor's too -- instead of completing it (design 8.1)
+            _write_all(fd, POISON, time.monotonic() + 1.0)
             rx_base_ns = time.monotonic_ns() + int(RX_BASELINE_S * 1e9)
             while time.monotonic() - t0 < seconds:
                 now = time.monotonic()
@@ -220,7 +223,16 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
     if a.seconds <= 0 or a.disarm_every_s <= 0:
         p.error("--seconds and --disarm-every-s must be positive")
-    s = run(a.device, a.out, a.seconds, a.disarm_every_s, a.baud)
+    try:
+        s = run(a.device, a.out, a.seconds, a.disarm_every_s, a.baud)
+    except DeviceBusy as busy:
+        # held by another executor: nothing written to the device; the record says so, so a wrapper that fetches it
+        # never takes an earlier run's record for this one
+        a.out.parent.mkdir(parents=True, exist_ok=True)
+        a.out.write_text(json.dumps({"t": "refused", "why": str(busy), "holder": busy.holder}) + "\n", encoding="utf-8")
+        print(f"record: {a.out}")
+        print(f"REFUSED {busy}")
+        return 2
     print(f"record: {a.out}")
     print(one_line(s))  # the last line: the verdict to paste
     return 0 if s["result"] == "PASS" else 1

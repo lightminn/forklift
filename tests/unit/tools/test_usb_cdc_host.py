@@ -62,24 +62,27 @@ def _drain(fd):
         out += chunk
 
 
-def test_a_delimiter_goes_before_the_first_frame_of_an_opening():
+def test_the_poison_goes_right_before_the_first_frame_of_an_opening():
+    """Real safety wiring design 8.1: 6a's poison drops whatever half frame the MCU holds; a listener writes nothing."""
     master, slave = _pty()
     try:
         link = rml.TtyLink(master)
         host = McuLinkHost(CFG)
+        link.pump_writes(host, 1)
+        assert _drain(slave) == b""  # nothing to send: not a byte, so the MCU counts no receive error
         host.request_disarm(1)
         link.pump_writes(host, 2)
         out = _drain(slave)
-        assert out[0] == 0x00 and len(out) > 1  # the delimiter, then the DISARM frame
+        assert out.startswith(rml.POISON) and len(out) > len(rml.POISON)  # the poison, then the DISARM frame
         host.request_disarm(3)
         link.pump_writes(host, 4)
-        assert _drain(slave)[0] != 0x00  # no second delimiter in this opening (a COBS frame never starts with 0)
+        assert not _drain(slave).startswith(b"\x01" * 8)  # no second poison in this opening
     finally:
         os.close(master)
         os.close(slave)
 
 
-def test_every_reopening_starts_with_a_delimiter():
+def test_every_reopening_starts_with_the_poison():
     master, slave = _pty()
     try:
         opened = []
@@ -96,7 +99,7 @@ def test_every_reopening_starts_with_a_delimiter():
             host.request_disarm(20 + k)
             link.transmit(host, 30 + k)
             out = _drain(slave)
-            assert out[0] == 0x00 and len(out) > 1
+            assert out.startswith(rml.POISON) and len(out) > len(rml.POISON)
             link.link.close()
             link.link = None  # as after a lost device
     finally:
@@ -104,8 +107,8 @@ def test_every_reopening_starts_with_a_delimiter():
         os.close(slave)
 
 
-def test_a_delimiter_that_cannot_be_written_yet_holds_the_frame_back():
-    """EAGAIN on the delimiter: the frame is not handed to the adapter, so a DISARM or an expiry can still drop it."""
+def test_a_poison_that_cannot_be_written_yet_holds_the_frame_back():
+    """EAGAIN on the poison: the frame goes back to the host untouched, so a DISARM or an expiry can still drop it."""
     link = rml.TtyLink(123)
     host = McuLinkHost(CFG)
     host.request_disarm(1)
@@ -121,7 +124,35 @@ def test_a_delimiter_that_cannot_be_written_yet_holds_the_frame_back():
         link.pump_writes(host, 2)
     finally:
         rml.os.write = orig
-    assert writes == [b"\x00"] and link._cur is None and [o.kind for o in host._outbox] == ["DISARM"]
+    assert writes == [rml.POISON] and link._cur is None and [o.kind for o in host._outbox] == ["DISARM"]
+
+
+def test_a_poison_written_in_pieces_resumes_where_it_stopped():
+    link = rml.TtyLink(123)
+    host = McuLinkHost(CFG)
+    host.request_disarm(1)
+    writes = []
+
+    def five(fd, data):
+        writes.append(bytes(data[:5]))
+        return len(writes[-1])
+
+    orig = rml.os.write
+    rml.os.write = five
+    try:
+        for k in range(40):
+            link.pump_writes(host, 2 + k)
+    finally:
+        rml.os.write = orig
+    out = b"".join(writes)
+    assert out.startswith(rml.POISON) and len(out) > len(rml.POISON) and out.count(rml.POISON) == 1
+
+
+def test_the_poison_is_6as():
+    sys.path.insert(0, str(REPO / "tools"))
+    import real_loop_transport
+
+    assert rml.POISON == real_loop_transport.POISON
 
 
 # --- the udev rule (deploy/udev) -----------------------------------------------------------------------------------

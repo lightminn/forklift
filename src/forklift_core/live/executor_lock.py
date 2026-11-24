@@ -4,7 +4,8 @@ The lock is an exclusive ``flock`` on the very file descriptor a link opens, tak
 included), so it always covers the device that fd reaches: an alias (``/dev/serial/by-id/...``) resolves to the same
 device inode and meets the same lock, and a reconnect that lands on another device node is locked afresh. No lock
 directory and no lock file: the kernel drops the lock when its holder's fd closes or its process dies, and nothing is
-left behind to block the next executor. A refusal names the holder (pid and command line) read from ``/proc/locks``.
+left behind to block the next executor. A refusal names the holder (pid and command line) read from ``/proc/locks``. There is no separate start-up probe: its
+own open and close would touch DTR on USB CDC (design 8.1); a tool's first opening is its start-up check.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 import fcntl
 import os
 
-__all__ = ["DeviceBusy", "holder", "lock_fd", "probe"]
+__all__ = ["DeviceBusy", "holder", "lock_fd"]
 
 
 class DeviceBusy(OSError):
@@ -34,10 +35,12 @@ def _tool(pid: int) -> str:
     return " ".join(os.path.basename(a) for a in argv[:2]) or "?"
 
 
-def holder(path: str) -> dict | None:
-    """The process holding an exclusive flock on ``path``'s inode, from ``/proc/locks`` (None: none, or unreadable)."""
+def holder(fd: int) -> dict | None:
+    """The process holding an exclusive flock on the inode the opened ``fd`` reaches, from ``/proc/locks`` (None: none,
+    or unreadable). From the fd, not the path: an alias retargeted since the opening never names another node's holder
+    (design 8.1)."""
     try:
-        st = os.stat(path)
+        st = os.fstat(fd)
         with open("/proc/locks") as f:
             lines = f.read().splitlines()
     except OSError:
@@ -60,13 +63,4 @@ def lock_fd(fd: int, path: str) -> None:
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
-        raise DeviceBusy(path, holder(path)) from None
-
-
-def probe(path: str) -> None:
-    """Whether the device is free now (a start-up check): open, lock, release, close. ``DeviceBusy`` if held."""
-    fd = os.open(path, os.O_RDONLY | os.O_NOCTTY | os.O_NONBLOCK)
-    try:
-        lock_fd(fd, path)
-    finally:
-        os.close(fd)  # closing the fd drops the lock
+        raise DeviceBusy(path, holder(fd)) from None

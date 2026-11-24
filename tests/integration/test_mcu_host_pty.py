@@ -334,13 +334,17 @@ def test_a_drop_while_a_frame_is_half_written_finishes_it_on_the_wire(monkeypatc
     port.command(port.make_command(now, now + 200_000_000, d, np.asarray(d.steering_rad), 0.0, "keep"), now + 3)
     first = host.next_frame(now + 4)
     host.unsent(first, now + 4)
-    calls = {"n": 0}
+    calls = {"n": 0, "bytes": 0}
 
     def three_then_drop(fd, data):
-        calls["n"] += 1
-        if calls["n"] == 2:
-            port.new_control_generation()  # mid-frame: drops the second DRIVE, not the one on the wire
-        return real_write(fd, bytes(data[:3]))
+        # the opening's poison goes first (real safety wiring design 8.1): count from the first DRIVE's bytes
+        if calls["bytes"] >= len(real_mcu_link.POISON):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                port.new_control_generation()  # mid-frame: drops the second DRIVE, not the one on the wire
+        n = real_write(fd, bytes(data[:3]))
+        calls["bytes"] += n
+        return n
 
     monkeypatch.setattr(real_mcu_link.os, "write", three_then_drop)
     for _ in range(40):

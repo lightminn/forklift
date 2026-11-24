@@ -38,7 +38,6 @@ from forklift_core.live import drive_profile as dprof  # noqa: E402
 from forklift_core.live import model_peer  # noqa: E402
 from forklift_core.live import real_teleop as rt  # noqa: E402
 from forklift_core.live.executor_lock import DeviceBusy  # noqa: E402
-from forklift_core.live.executor_lock import probe as probe_device  # noqa: E402
 from forklift_core.live.synthetic import SyntheticRefused, bench_opener, device_identity, writer_marker  # noqa: E402
 from forklift_core.live.link import Channels, Link  # noqa: E402
 from forklift_core.mcu_link.build_policy import Client  # noqa: E402
@@ -535,13 +534,6 @@ def main(argv=None) -> int:
     except (SyntheticRefused, OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    try:
-        probe_device(args.device)  # one executor per device: refused at start, naming the holder (design 8)
-    except DeviceBusy as busy:
-        print(f"teleop_bridge: {busy}", file=sys.stderr)
-        return 2
-    except OSError:
-        pass  # a device not there yet: the link retries its opening (and takes the lock then)
     if args.synthetic_permit and synthetic is None:
         print("--synthetic-permit is for the rehearsal's model MCU only: give a pty device with --bench", file=sys.stderr)
         return 2
@@ -599,6 +591,7 @@ def main(argv=None) -> int:
     bridge = server = scan_sock = None
     started = False
     out: dict = {}
+    code = 0
     try:
         floor = SyntheticPermit(args.device, synthetic["bench"]) if args.synthetic_permit else no_scan
         scan_permit = None
@@ -661,6 +654,13 @@ def main(argv=None) -> int:
             run(bridge, duration_s=args.duration_s)
         except KeyboardInterrupt:
             pass
+        except DeviceBusy as busy:
+            # one executor per device (real safety wiring design 8.1): held at the first opening, the link ends
+            # refused -- nothing was written, and the close below cannot reopen it
+            print(f"teleop_bridge: {busy}", file=sys.stderr, flush=True)
+            if record is not None:
+                record.put_row({"t": "refused", "why": "device_busy", "holder": busy.holder})
+            code = 2
     finally:
         if scan_sock is not None:
             scan_sock.close()
@@ -674,7 +674,7 @@ def main(argv=None) -> int:
                                           "markers": 0 if bridge is None else bridge._markers,
                                           "end_mono_ns": time.monotonic_ns()})
         print(json.dumps(out), flush=True)
-    return 0
+    return code
 
 
 if __name__ == "__main__":
