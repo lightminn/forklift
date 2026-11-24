@@ -580,6 +580,7 @@ class CommissionSession(Session):
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
+        self.last_expires_ns: int | None = None
 
     def preflight(self, state: McuState) -> None:
         if not commission_allowed(state.flags):
@@ -622,6 +623,7 @@ class CommissionSession(Session):
             return None
         seq = self.b.last_queued["seq"]
         self.sent.append((seq, int(duty_e4)))
+        self.last_expires_ns = expires  # when the host drops this frame if it is still unwritten
         return seq
 
     def hold_duty(self, duty_e4: int, seconds: float, stop=None, *, end_ns: int | None = None,
@@ -872,14 +874,15 @@ def run_duty_disarm(bench: Bench, session: CommissionSession, duty: float, secon
     b.phase = "on"
     end_ns = time.monotonic_ns() + int(seconds * 1e9)  # the approved nonzero output ends here, ramp included
     held = False
-    last_seq = None
+    last_seq, last_expires = None, end_ns
     # the encoder stuck/polarity early stop as in a plain run, --bypass leaving the named kinds out (Codex PR-2b P1-2):
     # the commissioning firmware latches those bits and stays ARMED, so the tool is what stops the drive
     at_start = b.state.fault_flags & _AXIS_ENCODER_BITS[axis]
     scanned = len(b.samples)
     while time.monotonic_ns() < end_ns:
         seq = session.send_duty(duty_e4, end_ns)
-        last_seq = seq if seq is not None else last_seq
+        if seq is not None:
+            last_seq, last_expires = seq, session.last_expires_ns
         b.cycle()
         why = session._abort_reason()  # noqa: SLF001
         if why is not None:
@@ -916,7 +919,9 @@ def run_duty_disarm(bench: Bench, session: CommissionSession, duty: float, secon
                 session.aborted = why
             return session.stop_reason is not None or session.aborted is not None or refresh_out()
 
-        b.run_until(wait_over, max((end_ns - time.monotonic_ns()) / 1e9, 0.0))
+        # bounded by the last refresh's own expiry: the host drops an unwritten frame then without revoking anything
+        # (Codex PR-2b re-review 4 P2); the room under the approved end is checked separately below
+        b.run_until(wait_over, max((min(last_expires, end_ns) - time.monotonic_ns()) / 1e9, 0.0))
         written = refresh_out()
         left = (end_ns - time.monotonic_ns()) / 1e9
         # the latest STATE and the drive authorization looked at again right before the test DISARM: never into a
@@ -1735,8 +1740,10 @@ def execute(args, bench: Bench) -> dict:
             result["external"] = verdict(args.kind, {
                 "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
                 "stop_distance_mm": args.stop_distance_mm}, floor=args.floor)
-            if not _tool_run_official(args.kind, result, [state_row(smp) for smp in bench.samples]):
-                # the same qualification analyze asks of the record (Codex PR-2b re-review 3 P2)
+            if getattr(args, "synthetic", False) or not _tool_run_official(
+                    args.kind, result, [state_row(smp) for smp in bench.samples]):
+                # the same qualification analyze asks of the record, a rehearsal never physical (Codex PR-2b
+                # re-reviews 3-4)
                 result["external"] = judgement.empty_pass_fields(result["external"])
     except Refused as exc:
         result = {"result": "refused", "why": str(exc)}
