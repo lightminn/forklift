@@ -274,8 +274,12 @@ USB 멈춤을 본 날짜·조건은 기록한다. 조건부 감시 리셋을 다
   - 표지 줄: `IPROPI protection record: confirmed-by=…; date=YYYY-MM-DD; evidence=…`
 - `fw-open` 이 구성·빌드되고, 3.1 로 구운 보드의 제품 문자열이 `forklift-mcu commission OPEN <git> rec=<해시> lim=lr1` 이다(2026-11-25 부터 열린 시운전 이미지는 `lim=lr1` 로 끝난다).
 - **Jetson 이 실제로 실행할 도구의 커밋**을 확인했다. 열린 시운전 이미지는 L·R 을 1.0·검증기 천장까지 받으므로, 큰 값의 확인(TTY 재입력·`--vcc-watched`)은 도구에만 있다. 11-24 처럼 진단 도구가 남아 있으면 그 확인이 빠진다.
-  - 확인 명령: Jetson 에서 `git -C ~/forklift log -1 --format=%h`, `python -c "import forklift_core.plant.bench_limits as b; print(b.__file__)"`.
-  - 그 커밋이 이 PR 이후의 main 이어야 하고, 불러오는 `forklift_core` 가 같은 체크아웃이어야 한다.
+  - 확인하고 실행하는 곳이 같아야 한다. 확인한 체크아웃으로 **먼저 이동한 뒤**, 그 자리에서 확인하고 그 자리의 `tools/bringup.py` 로 실행한다. `git -C` 는 현재 디렉터리를 바꾸지 않아서, 진단 체크아웃에 머문 채 main 을 확인하는 일이 생긴다.
+    ```bash
+    cd ~/forklift && git log -1 --format=%h && git status --short | head
+    python -c "import forklift_core.plant.bench_limits as b; print(b.__file__)"   # ~/forklift/src/... 이어야 함
+    ```
+  - 그 커밋이 이 PR 이후의 main 이어야 하고, 불러오는 `forklift_core` 가 같은 체크아웃이어야 한다. 아래 명령은 모두 이 `~/forklift` 에서 실행한다.
 - 보호 확인 기록의 근거에는 저항 부하 등으로 작은 전류를 흘려 IPROPI 전압을 미리 잰 값을 넣기를 권한다(agy).
 - **전원 바꿈**: 6.1 의 0.3–0.5 A 한계로는 모터 기동 전류에서 전압이 주저앉아 가짜 리셋·UVLO 가 난다(agy). 계획 S1 에서 확인한 배터리 경로로 바꾸거나, 벤치 전원을 계속 쓰면 올린 한계값과 이유를 기록한다.
 - **배선 대조**: 각 축(L·R·M·H)의 모터·엔코더·KTH 커넥터가 그 축에 맞는지 도통으로 확인한다. 처음 구동은 도구가 허용하는 가장 짧은 시간(`--seconds 0.1`)으로 어느 축이 움직이는지부터 본다(agy).

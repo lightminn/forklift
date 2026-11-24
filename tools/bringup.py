@@ -505,10 +505,6 @@ class CommissionSession(Session):
             raise Refused("scenario: the time-limit scenarios run on a locked commissioning board or the model only")
         # the product string the run is armed on (Codex PR-1 P2-2): checked here, kept with the run's conditions
         self.preflight_product = self.b.host.usb_product
-        self.b.emit({"t": "armed_on", "product": self.preflight_product,
-                     "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
-                     "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
-                     "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
         if self.large and (why := bl.board_refusal(self.preflight_product)) is not None:
             raise Refused(why)
         if self.axis >= 2:
@@ -516,6 +512,11 @@ class CommissionSession(Session):
             lo, hi = self.window
             if not (v == v and lo < v < hi):
                 raise Refused(f"window: the axis value {v} is not inside ({lo}, {hi})")
+        # every pre-ARM check passed: the board and conditions this ARM goes out on (a refused board has no row)
+        self.b.emit({"t": "armed_on", "product": self.preflight_product,
+                     "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
+                     "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
+                     "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
         raise Refused("the commissioning tool sends no DRIVE")
@@ -1077,6 +1078,13 @@ def main(argv=None) -> int:
         out.write(json.dumps({"t": "header", "schema": "bringup_record/1", "tool": "bringup.py", "cmd": args.cmd,
                               "device": args.device, "device_id": device_identity(args.device),
                               "synthetic": synthetic, "start_wall": time.time(),
+                              # design 2026-11-25 1.2: the run's asked bypass and large-run arguments in its header
+                              **({"bypass": getattr(args, "bypass", None),
+                                  "wheels_lifted": getattr(args, "wheels_lifted", False),
+                                  "vcc_watched": getattr(args, "vcc_watched", False),
+                                  "profile_tri": getattr(args, "profile_tri", None),
+                                  "duty": args.duty, "seconds": args.seconds, "axis": args.axis}
+                                 if args.cmd == "commission" else {}),
                               "start_mono_ns": time.monotonic_ns(),
                               **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
@@ -1144,7 +1152,9 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if args.window is not None:
             raise Refused("window: a wheel takes no window")
         return bl.RunAsk(axis, args.duty, args.limit_s, args.scenario), None, names
-    seconds = profile.duration_s if profile is not None else args.seconds
+    # a profile's longest non-zero output: its pieces, then up to HANDOVER_S of command validity past its end until the
+    # zero lands, and the command's own validity if that zero is lost (Codex PR-1 re-review P2-1)
+    seconds = (profile.duration_s + HANDOVER_S + bl.PROFILE_VALIDITY_S) if profile is not None else args.seconds
     if seconds is None:
         raise Refused("seconds: required without --scenario")
     peak = (profile.max_abs_e4 / 10000.0 if profile is not None else abs(args.duty)) * (1 if args.duty > 0 else -1)

@@ -1960,24 +1960,26 @@ static void s25_each_axis_reads_its_own_time_limit(void)
     CHECK(t >= 2990 && t <= 3012); /* R's own 3 s, not L's 5 s */
     CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
 
-    /* M: the build's 2 s, then the re-arm hold. */
-    boot_with(mod_commission_open_lr);
-    seq = 1;
-    send(arm_msg(seq++, d.boot_id, echo_now()));
-    send(commission_msg(seq++, 2, 0, 150, echo_now()));
-    for (t = 0; t < 3000 && d.mode == DRIVE_MODE_ARMED; t++) {
-        if (t % 50 == 0) {
-            link_msg m = commission_msg(seq++, 2, 300, 150, echo_now());
-            tick_msgs(&m, 1);
-        } else {
-            tick();
+    /* M and H: the build's 2 s, then the re-arm hold. */
+    for (uint8_t axis = DRIVE_CH_M; axis <= DRIVE_CH_H; axis++) {
+        boot_with(mod_commission_open_lr);
+        seq = 1;
+        send(arm_msg(seq++, d.boot_id, echo_now()));
+        send(commission_msg(seq++, axis, 0, 150, echo_now()));
+        for (t = 0; t < 3000 && d.mode == DRIVE_MODE_ARMED; t++) {
+            if (t % 50 == 0) {
+                link_msg m = commission_msg(seq++, axis, 300, 150, echo_now());
+                tick_msgs(&m, 1);
+            } else {
+                tick();
+            }
         }
+        CHECK(t >= 1990 && t <= 2012);
+        CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+        send(simple(LINK_DISARM, seq++));
+        send(arm_msg(seq++, d.boot_id, echo_now()));
+        CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING); /* the hold outlives the DISARM */
     }
-    CHECK(t >= 1990 && t <= 2012);
-    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
-    send(simple(LINK_DISARM, seq++));
-    send(arm_msg(seq++, d.boot_id, echo_now()));
-    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING); /* the hold outlives the DISARM */
 }
 
 int main(void)

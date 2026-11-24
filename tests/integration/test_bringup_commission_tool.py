@@ -577,6 +577,8 @@ def test_a_large_run_is_refused_before_any_arm(model, monkeypatch, product, kw, 
     res = bringup.execute(largs(**kw), b)
     assert res["result"] == "refused" and why in res["why"], res
     assert "ARM" not in kinds_written(b)
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    assert not [r for r in rows if r["t"] == "armed_on"]  # a refused board has no armed_on row
 
 
 def test_the_large_confirmation_needs_a_terminal(model, monkeypatch):
@@ -619,6 +621,8 @@ def test_a_signed_triangle_runs_every_piece_with_its_sign(model, monkeypatch):
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "duty": 0.2}, "equal HI"),
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "seconds": 2.0}, "no --seconds"),
     ({"profile_tri": [0.05, 0.3, 1.0, 1.0], "axis": "M", "window": (-1.0, 1.0)}, "wheel"),
+    # 1.5 s of pieces + hand-over + validity is past 1.5 s: large, so it needs the large rules (Codex re-review P2-1)
+    ({"profile_tri": [0.05, 0.10, 0.5, 3.0], "duty": 0.10, "wheels_lifted": False}, "wheels lifted"),
 ])
 def test_bad_profiles_are_refused_before_any_arm(model, monkeypatch, kw, why):
     b = model()
@@ -681,6 +685,7 @@ def test_the_link_hands_the_host_the_read_time_not_the_cycle_start():
         time.sleep(0.05)
         link.service(Host(), 1_000_000)  # the cycle started at 1 ms; the read returned at the clock's 5 ms
         assert seen == [5_000_000]
+        link.link.close()  # the dup the opener gave
     finally:
         os.close(master)
         os.close(slave)
