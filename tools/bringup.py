@@ -43,8 +43,15 @@ import time
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
-from forklift_core.live.synthetic import (OUTPUT_MARKS, SyntheticRefused, bench_opener, device_identity, refuse_or_mark,
-                                          writer_marker)
+from forklift_core.live.synthetic import (
+    OUTPUT_MARKS,
+    SyntheticRefused,
+    bench_opener,
+    device_identity,
+    is_synthetic,
+    refuse_or_mark,
+    writer_marker,
+)
 from forklift_core.mcu_link.build_policy import Client, commission_allowed
 from forklift_core.mcu_link.messages import (
     Drive,
@@ -81,11 +88,18 @@ from forklift_core.plant.kth_check import VARIANTS as KTH_VARIANTS
 from forklift_core.plant.kth_check import kth_check
 from forklift_core.plant.markers import marker_input_state, marker_reader
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost
-from forklift_core.plant.write_log import Seen, Write, accepted, runs_of, write_row, writes_from_rows
 from forklift_core.plant.real_vehicle import RearDrive, load_real_vehicle
 from forklift_core.plant.record_rows import (  # noqa: F401 -- moved; kept here by name
     sample_from_row,
     state_row,
+)
+from forklift_core.plant.write_log import (
+    Seen,
+    Write,
+    accepted,
+    runs_of,
+    write_row,
+    writes_from_rows,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -888,12 +902,21 @@ def run_duty_disarm(bench: Bench, session: CommissionSession, duty: float, secon
         written = b.run_until(lambda: last_seq is None or any(w.seq == last_seq and w.kind == "COMMISSION"
                                                               for w in b.writes[-8:]),
                               max((end_ns - time.monotonic_ns()) / 1e9, 0.0))
+        # the STATEs read during that wait get the same early stop and authorization check (Codex PR-2b re-review P2)
+        stop = next((r for smp in b.samples[scanned:] if (r := session.early_stop(smp.state, at_start)) is not None),
+                    None)
+        if stop is not None:
+            session.stop_reason = stop
+        elif (why := session._abort_reason()) is not None:  # noqa: SLF001
+            session.aborted = why
         left = (end_ns - time.monotonic_ns()) / 1e9
         # the latest STATE and the drive authorization looked at again right before the test DISARM: never into a
         # STOPPING (an expiry's electric brake the cleanup waits out) nor after the authorization went (Codex PR-2b
         # P2-2)
         not_armed = b.state.mode != Mode.ARMED or not b.host.ready
-        if not written or left < dd.SEND_MARGIN_S or not_armed:
+        if session.stop_reason is not None or session.aborted is not None:
+            pass  # cleaned up below without the test DISARM
+        elif not written or left < dd.SEND_MARGIN_S or not_armed:
             out["why_not_sent"] = ("last_refresh_not_written" if not written else
                                    "not_armed_before_the_disarm" if not_armed else "no_room_before_the_approved_end")
         else:
@@ -1080,8 +1103,13 @@ def _tool_event(run: list[dict], kind: str, header: dict, synthetic: bool) -> tu
     return (None if ev is None else int(ev)), None
 
 
-def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = False, allow_bypassed: bool = True,
-            synthetic: bool = False) -> dict:
+def _real_outputs(states: list[dict]) -> bool:
+    """The run's STATEs show outputs that drive a motor: some STATE at all, none locked, no HIL plant."""
+    return bool(states) and not any({"OUTPUTS_LOCKED", "HIL_PLANT"} & set(r.get("flags", ())) for r in states)
+
+
+def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = False, allow_bypassed: bool = False,
+            allow_synthetic: bool = False) -> dict:
     """A recorded run around one event: the software timeline from the event's host time -- the last STATE before a
     gap or the record's end, the first mode change, the first all-zero duty, a new boot and its reset cause, the
     count settle -- and the external verdict.
@@ -1092,38 +1120,36 @@ def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = Fal
       counts those runs: -1 the last); an older record that names no run kind falls back to its Enter markers and
       gets no official pass;
     - an operator's event (``OPERATOR_KINDS``) is its Enter marker (``marker`` counts markers);
-    - the selected run's own marks decide (a bypassed or unknown-condition run is refused unless
-      ``allow_bypassed``, and then has no pass) -- not another run appended to the same file (Codex PR-2b P2-4);
-    - a commissioning run is never read with ``--floor``, and a scenario run whose header says where it ran is read
-      only that way;
-    - no physical pass from a rehearsal (``synthetic``), from the time-limit scenarios (locked boards and the model
+    - the selected run is checked before its event is looked for: its kind, where it ran, its own marks (a bypassed,
+      unknown-condition or diagnostic-image run is refused unless ``allow_bypassed``) and whether it is a rehearsal
+      (refused unless ``allow_synthetic``) -- not another run appended to the same file (Codex PR-2b P2-4);
+    - an official pass needs, for a tool event, the run's own result row ``ok`` with its stop confirmed, and STATEs
+      showing real outputs; never from a rehearsal, from the time-limit scenarios (locked boards and the model
       only) or from a ``duty_disarm`` the record does not show valid on an open board (Codex PR-2b P1-3)."""
     rows = record if isinstance(record, list) else [
         json.loads(x) for x in Path(record).read_text(encoding="utf-8").splitlines() if x.strip()]
     runs = runs_of(rows)
     official = True
     validity = None
+    m_ns, label = None, None
     kind_runs = [run for run in runs if _run_kind(_header(run)) == kind] if kind in TOOL_KINDS else []
     if kind_runs:
         if not -len(kind_runs) <= marker < len(kind_runs):
             return {"result": "no_event", "runs": len(kind_runs), "asked": marker}
         run = kind_runs[marker]
         header = _header(run)
-        synthetic = synthetic or header.get("synthetic") is not None
-        m_ns, validity = _tool_event(run, kind, header, synthetic)
-        label = None
-        if m_ns is None:
-            return {"result": "no_event", "kind": kind, "why": "the run shows no event the tool issued",
-                    **({} if validity is None else {"validity": validity})}
     else:
         markers = [(run, r) for run in runs for r in run if r.get("t") == "marker"]
+        named = sorted({k for run in runs if (k := _run_kind(_header(run))) is not None})
+        if kind in TOOL_KINDS and named and not any(_run_kind(_header(run)) is None for run, _ in markers):
+            # a record whose runs name other kinds: a kind mismatch, not a missing marker (Codex PR-2b re-review P2)
+            return {"result": "refused", "why": f"the record's runs are {named}, not {kind!r}"}
         if not markers:
             return {"result": "no_marker"}
         if not -len(markers) <= marker < len(markers):
             return {"result": "no_marker", "markers": len(markers), "asked": marker}
         run, mrow = markers[marker]
         header = _header(run)
-        synthetic = synthetic or header.get("synthetic") is not None
         if kind in TOOL_KINDS:
             if _run_kind(header) is not None:
                 return {"result": "refused", "why": f"the marker's run is {_run_kind(header)!r}, not {kind!r}"}
@@ -1139,6 +1165,28 @@ def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = Fal
         judgement.check(jmarks, allow=allow_bypassed)
     except judgement.NotForGate as exc:
         return {"result": "refused", "why": str(exc)}
+    synthetic = is_synthetic(header)
+    if synthetic and not allow_synthetic:
+        return {"result": "refused", "why": "a synthetic (rehearsal) run: not for measurement (give --allow-synthetic "
+                                            "to read it; its pass fields stay empty)"}
+    smarks = dict(OUTPUT_MARKS) if synthetic else {}
+    states = [r for r in run if r.get("t") == "state"]
+    run_result = None
+    if kind_runs:
+        m_ns, validity = _tool_event(run, kind, header, synthetic)
+        res = next((r for r in reversed(run) if r.get("t") == "result"), None)
+        run_result = None if res is None else {"result": res.get("result"),
+                                               "cleanup_confirmed": res.get("cleanup_confirmed")}
+        if m_ns is None:
+            return {**smarks, **jmarks, "result": "no_event", "kind": kind,
+                    "why": "the run shows no event the tool issued", "run_result": run_result,
+                    **({} if validity is None else {"validity": validity})}
+        # the run's own end: an aborted run or an unconfirmed stop gives no pass, whatever its STATEs show before the
+        # event (Codex PR-2b re-review P1)
+        if run_result is None or run_result["result"] != "ok" or run_result["cleanup_confirmed"] is not True:
+            official = False
+        if not _real_outputs(states):
+            official = False  # locked outputs, a HIL plant or no STATE: nothing physical to judge (re-review P2)
     if not judgement.eligible(jmarks) or synthetic or kind in LIMIT_SCENARIOS:
         official = False
     if validity is not None and not (validity["valid"] and validity["physical"]):
@@ -1154,8 +1202,8 @@ def analyze(record, marker: int, kind: str, external: dict, *, floor: bool = Fal
     i0 = samples.index(after[0]) if after else len(samples)
     settle = count_settle(samples, i0) if after else None
     ext = verdict(kind, external, floor=floor)
-    out = {**jmarks, "result": "ok", "marker": label, "event_host_ns": m_ns, "kind": kind, "run_kind": run_kind,
-           "official": official}
+    out = {**smarks, **jmarks, "result": "ok", "marker": label, "event_host_ns": m_ns, "kind": kind,
+           "run_kind": run_kind, "official": official, "run_result": run_result}
     if validity is not None:
         out["validity"] = validity
     if not official:
@@ -1292,8 +1340,9 @@ def main(argv=None) -> int:
         # appended in between could change)
         rows_ = [json.loads(x) for x in Path(args.record).read_text(encoding="utf-8").splitlines() if x.strip()]
         try:
-            marks = refuse_or_mark(rows_, allow=args.allow_synthetic)
-            # analyze judges the run it selects (its own marks, Codex PR-2b P2-4); kth and clock read the whole file
+            # analyze judges the run it selects (its own marks and rehearsal check, Codex PR-2b P2-4 and re-review);
+            # kth and clock read the whole file
+            marks = {} if args.cmd == "analyze" else refuse_or_mark(rows_, allow=args.allow_synthetic)
             jmarks = {} if args.cmd == "analyze" else judgement.check(judgement.record_marks(rows_),
                                                                          allow=args.allow_bypassed)
         except (SyntheticRefused, judgement.NotForGate) as exc:
@@ -1335,9 +1384,10 @@ def main(argv=None) -> int:
         out = analyze(rows_, args.marker, args.kind, {
             "output_response_ms": args.output_response_ms, "stop_time_ms": args.stop_time_ms,
             "stop_distance_mm": args.stop_distance_mm}, floor=args.floor, allow_bypassed=args.allow_bypassed,
-            synthetic=bool(marks))
-        print(json.dumps({**marks, **out}, default=str))
-        return 2 if out.get("result") == "refused" else 0
+            allow_synthetic=args.allow_synthetic)
+        print(json.dumps(out, default=str))
+        # refused 2; nothing to judge (no event, no marker) 1; read 0
+        return {"refused": 2, "no_event": 1, "no_marker": 1}.get(out.get("result"), 0)
     try:
         synthetic = writer_marker(args.device, args.bench)
     except (SyntheticRefused, OSError, ValueError) as exc:
@@ -1434,6 +1484,8 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
             raise Refused("window: a wheel takes no window")
         if args.seconds is None or args.duty == 0:
             raise Refused("duty_disarm: give a nonzero --duty and --seconds (the approved output time, ramp included)")
+        if not (math.isfinite(args.duty) and math.isfinite(args.seconds)):
+            raise Refused("duty_disarm: --duty and --seconds must be finite numbers")
         if abs(int(round(args.duty * 10000))) < dd.MIN_DUTY_E4:
             # a target within one e4 of zero would take a zero output for the hold (Codex PR-2b P1-1)
             raise Refused(f"duty_disarm: |duty| must be at least {dd.MIN_DUTY_E4 / 1e4:g}")

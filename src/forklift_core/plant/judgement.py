@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from forklift_core.plant.write_log import runs_of
 
-
 DIAG_TOKEN_PREFIX = "diag-"  # a diagnostic image's version token (diag-commission-unlimited-1, 2026-11-24)
 
 

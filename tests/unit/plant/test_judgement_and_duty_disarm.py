@@ -119,6 +119,10 @@ def test_continuity_from_the_reach_to_the_acceptance():
     del rows[40:45]  # 60 ms without a STATE inside the hold
     assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "state_gap"
     rows, writes = run()
+    for r in rows[41:]:
+        r["mcu_time_us"] += 60_000  # read on time on the host, but the MCU's own clock skipped 70 ms
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "state_gap"
+    rows, writes = run()
     rows[60]["conn"] = 2
     assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "connection_changed"
     rows, writes = run()
@@ -131,6 +135,11 @@ def test_continuity_from_the_reach_to_the_acceptance():
     rows, writes = run()
     writes[1] = disarm_write(50, 550)  # written before the hold had been seen (its acceptance is still at 905)
     assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "disarm_before_the_hold_was_seen"
+
+
+def test_the_acceptance_state_shows_the_stop():
+    rows, writes = run(mode_after="ARMED")  # the DISARM's seq reported, still ARMED
+    assert dd.validity(rows, writes, axis=0, duty_e4=3000)["reason"] == "not_stopped_at_acceptance"
 
 
 def test_a_locked_or_model_board_is_not_physical():

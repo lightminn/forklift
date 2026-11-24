@@ -24,8 +24,11 @@ from forklift_core.plant.write_log import Seen, Write, accepted
 
 HOLD_US = 500_000
 DUTY_TOL_E4 = 1
-MIN_DUTY_E4 = 100  # a target the wheel can be seen at: under it the tolerance would take a zero output for it
-GAP_MAX_NS = 50_000_000  # between consecutive STATEs from the reach to the acceptance (5 STATE periods)
+# A provisional bench floor, not a measured visibility bound: 2 e4 would already keep a zero output out of the +-1
+# tolerance (and _at_target excludes zero outright); 0.01 is kept so the test drives something a person can see.
+MIN_DUTY_E4 = 100
+GAP_MAX_NS = 50_000_000  # between consecutive STATEs from the reach to the acceptance (5 STATE periods), host reads
+GAP_MAX_US = 50_000  # and the MCU's own times of the same STATEs (a buffered burst reads close but was not)
 STATE_PERIOD_S = 0.010
 SEND_MARGIN_S = 0.020
 WHEEL_SLEW_PER_S = 2.0  # board_config.c (pinned by the bench-limits test)
@@ -111,8 +114,15 @@ def validity(states: list[dict], writes: list[Write], *, axis: int, duty_e4: int
     if any(seen[j].conn != seen[reach].conn for j in range(reach, i_acc + 1)):
         out["reason"] = "connection_changed"
         return out
-    if any(seen[j + 1].host_ns - seen[j].host_ns > GAP_MAX_NS for j in range(reach, i_acc)):
+    if any(seen[j + 1].host_ns - seen[j].host_ns > GAP_MAX_NS or seen[j + 1].mcu_time_us - seen[j].mcu_time_us > GAP_MAX_US
+           for j in range(reach, i_acc)):
         out["reason"] = "state_gap"
+        return out
+    # the STATE reporting the DISARM's seq shows the stop itself: DISARMED with the driven wheel's output at zero
+    # (a DISARM taken while ARMED drops to DISARMED in the same step, drive.c) (Codex PR-2b re-review P2)
+    acc = states[i_acc]
+    if acc["mode"] != "DISARMED" or int(acc["duty_e4"][axis]) != 0:
+        out["reason"] = "not_stopped_at_acceptance"
         return out
     if not all(_at_target(states[j], axis, duty_e4) for j in range(reach, i_acc)):
         out["reason"] = "left_the_target_before_disarm"

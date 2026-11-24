@@ -396,6 +396,46 @@ def test_analyze_judges_the_run_it_reads_not_the_whole_file(tmp_path, capsys):
     assert "not_for_gate" not in out and out["external"]["output_response_ms"]["pass"] is True
 
 
+def test_a_plain_scenario_needs_real_outputs_in_its_states():
+    """Codex PR-2b re-review P2: a tool event's physical pass reads the run's own STATEs."""
+    from forklift_core.mcu_link.messages import (
+        FaultFlag,
+        McuState,
+        RejectReason,
+        StateFlag,
+    )
+    from forklift_core.plant.bringup import Sample
+
+    def rows(flags):
+        out = [{"t": "header", "cmd": "scenario", "kind": "disarm", "floor": False}]
+        if flags is not None:
+            st = McuState(mcu_time_us=1, boot_id=1, arm_gen=0, last_rx_seq=0, mode=Mode.ARMED,
+                          reject_reason=RejectReason.NONE, fault_flags=FaultFlag(0), wheel_count_left=0,
+                          wheel_count_right=0, wheel_rate_left_rad_s=0.0, wheel_rate_right_rad_s=0.0,
+                          steering_rad=0.25, lift_m=0.0, current_ma=(0, 0, 0, 0), duty_e4=(0, 0, 0, 0),
+                          driver_status=(0, 0, 0, 0), rx_errors=0, cycle_overruns=0, flags=flags)
+            out.append(bringup.state_row(Sample(10, st)))
+        return out + [{"t": "result", "result": "ok", "cleanup_confirmed": True, "event_host_ns": 5}]
+
+    ext = {"output_response_ms": "50"}
+    for flags in (None, StateFlag.OUTPUTS_LOCKED, StateFlag.HIL_PLANT):
+        out = bringup.analyze(rows(flags), -1, "disarm", ext)
+        assert out["result"] == "ok" and out["external"]["output_response_ms"]["pass"] is None, flags
+    assert bringup.analyze(rows(StateFlag(0)), -1, "disarm", ext)["external"]["output_response_ms"]["pass"] is True
+
+
+def test_analyze_takes_the_rehearsal_check_per_run(tmp_path, capsys):
+    """Codex PR-2b re-review P2: a pty run, then a real record appended: the real run is read as such."""
+    rec = tmp_path / "run.jsonl"
+    rows = [{"t": "header", "cmd": "record", "device": "/dev/pts/3"},
+            {"t": "header", "cmd": "record", "device": "/dev/ttyACM0"}, {"t": "marker", "host_ns": 0, "label": "x"}]
+    rec.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--output-response-ms", "50"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "not_for_judgement" not in out and out["external"]["output_response_ms"]["pass"] is True
+    assert bringup.main(["analyze", "--record", str(rec), "--kind", "iwdg", "--marker", "0"]) == 0  # one marker
+
+
 def test_a_diagnostic_image_is_not_for_a_gate(tmp_path, capsys):
     """Codex PR-2b P2-5: the 2026-11-24 image named in the record, whatever the header says."""
     rec = tmp_path / "run.jsonl"
@@ -797,7 +837,13 @@ def test_an_ambiguous_seq_leaves_the_run_unjudgeable(model, monkeypatch):
 def test_a_frame_cut_by_a_reconnect_is_not_completed_by_the_new_connection():
     """Codex PR-2a P3: half a STATE on the old fd, a disconnect, then the other half on the new fd -- neither the host
     nor the record takes it; the next whole STATE is taken and carries the new connection."""
-    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, StateFlag, encode
+    from forklift_core.mcu_link.messages import (
+        FaultFlag,
+        McuState,
+        RejectReason,
+        StateFlag,
+        encode,
+    )
 
     def st(t_us):
         return encode(McuState(t_us, 0xB007, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
@@ -861,9 +907,26 @@ def test_duty_disarm_on_an_open_board_holds_then_disarms_and_judges_the_response
     out = bringup.analyze(_with_header(b), -1, "duty_disarm", {"output_response_ms": "50"})
     assert out["result"] == "ok" and out["validity"]["valid"] and out["event_host_ns"] == v["disarm_done_ns"]
     assert out["external"]["output_response_ms"]["pass"] is True and out["software"]["mode_change_ms"] is not None
-    # the same record from a rehearsal: never a physical pass (Codex PR-2b P1-3)
-    out = bringup.analyze(_with_header(b, synthetic={"bench": "x"}), -1, "duty_disarm", {"output_response_ms": "50"})
+    # the same record from a rehearsal: refused unless asked, then never a physical pass (Codex PR-2b P1-3)
+    syn = _with_header(b, synthetic={"bench": "x"})
+    assert bringup.analyze(syn, -1, "duty_disarm", {"output_response_ms": "50"})["result"] == "refused"
+    out = bringup.analyze(syn, -1, "duty_disarm", {"output_response_ms": "50"}, allow_synthetic=True)
     assert not out["validity"]["physical"] and out["external"]["output_response_ms"]["pass"] is None
+    # the run's own end decides too: an aborted run or an unconfirmed stop (Codex PR-2b re-review P1)
+    for end in ({"result": "aborted"}, {"cleanup_confirmed": False}, None):
+        rows = _with_header(b)
+        res_row = next(r for r in rows if r["t"] == "result")
+        if end is None:
+            rows.remove(res_row)
+        else:
+            res_row.update(end)
+        out = bringup.analyze(rows, -1, "duty_disarm", {"output_response_ms": "50"})
+        assert out["validity"]["valid"] and not out["official"], end
+        assert out["external"]["output_response_ms"]["pass"] is None
+    # read as another tool kind: refused, not a missing marker (re-review P2)
+    assert bringup.analyze(_with_header(b), -1, "disarm", {})["result"] == "refused"
+    # a bypassed run is refused before its event is looked for
+    assert bringup.analyze(_with_header(b, bypass="enc_stuck"), -1, "duty_disarm", {})["result"] == "refused"
 
 
 def test_duty_disarm_on_the_model_judges_nothing_physical(model, monkeypatch):
