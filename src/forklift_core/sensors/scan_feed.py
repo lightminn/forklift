@@ -147,12 +147,20 @@ class ScanFeed:
         self._window: list[int] = []  # establishing: the latest pairs (at most ESTABLISH_COUNT)
         self.establishing = True
         self._last_id: int | None = None
-        self._producer: int | None = None  # the last frame's producer generation
+        self._producer: int | None = None  # the current producer generation (its start nonce)
+        self._ended: set = set()  # producers a newer one replaced: their late frames are refused
         self.generation = 0  # this feed's generation (PR 7 design 3.2)
+        self.generation_why: list = []  # why each generation opened, in order
         self._rejoined = False  # established again after a clock jump: the next accepted scan opens a generation
         self.id_gaps = 0  # scan_ids missing between received frames: the adapter's (or the socket's) losses
         self.synthetic_frames = 0  # frames whose head says "synthetic": true (a rehearsal sender; arrival-day D6)
         self._frame_synthetic = False
+
+    def new_generation(self, why: str) -> None:
+        """Open a new generation (a producer change, ids going back, the clock pair established again, or the
+        caller's receive gap or socket error): a consumer drops what came from another (PR 7 design 3.2)."""
+        self.generation += 1
+        self.generation_why.append(why)
 
     # ------------------------------------------------------------------ the clock pair
     def _establish(self, pair: int) -> bool:
@@ -195,22 +203,28 @@ class ScanFeed:
         if h.get("synthetic") is True:
             self._frame_synthetic = True
             self.synthetic_frames += 1
-        sid = h.get("scan_id")
-        gen = h.get("gen") if _int(h.get("gen"), 0) else None
-        if _int(sid, 0):
-            # a new producer (its start nonce changed) or a scan_id going back (a restart of an adapter that sends
-            # no nonce) opens a new generation: the old ids say nothing about the new stream (PR 7 design 3.2)
-            if (gen != self._producer and self._last_id is not None) or (
-                    self._last_id is not None and sid <= self._last_id and gen == self._producer):
-                self.generation += 1
-                self._last_id = None
-            self._producer = gen
-            # every received frame, accepted or not, for the gap count (Codex 7a P2-3)
-            if self._last_id is not None and sid > self._last_id + 1:
-                self.id_gaps += sid - self._last_id - 1
-            self._last_id = sid if self._last_id is None else max(self._last_id, sid)
         if not _meta_ok(h):
-            return None, "bad_meta"
+            return None, "bad_meta"  # judged before any generation rule: a broken frame changes nothing
+        sid = int(h["scan_id"])
+        gen = h.get("gen") if _int(h.get("gen"), 0) else None
+        # PR 7 design 3.2 (Codex 7a-1 P2-4): one producer at a time, its ids only increasing
+        if self._last_id is not None:
+            if gen != self._producer:
+                if gen in self._ended:
+                    return None, "old_producer"  # a late frame of a producer already replaced
+                self._ended.add(self._producer)
+                self.new_generation("producer")
+                self._last_id = None
+            elif sid <= self._last_id:
+                if gen is not None or sid == self._last_id:
+                    return None, "stale_id"  # a duplicate, or an id a producer with a nonce never goes back to
+                self.new_generation("id_back")  # a restart of an adapter that sends no nonce
+                self._last_id = None
+        self._producer = gen
+        # every frame passing the meta check, accepted or not, for the gap count (Codex 7a P2-3)
+        if self._last_id is not None and sid > self._last_id + 1:
+            self.id_gaps += sid - self._last_id - 1
+        self._last_id = sid
         pair = int(h["sys_minus_mono_ns"])
         stamp_mono = int(h["ros_stamp_ns"]) - pair
         latency = int(h["recv_mono_ns"]) - stamp_mono
@@ -226,7 +240,7 @@ class ScanFeed:
             return None, "negative_latency"
         self._last_pair = pair
         if self._rejoined:  # the clock pair was established again: a new generation (PR 7 design 3.2)
-            self.generation += 1
+            self.new_generation("clock")
             self._rejoined = False
         n = int(h["n"])
         angles = float(h["angle_min"]) + float(h["angle_increment"]) * np.arange(n)
@@ -240,7 +254,7 @@ class ScanFeed:
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
         return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,
-                        producer_gen=gen, feed_gen=self.generation), None
+                        producer_gen=self._producer, feed_gen=self.generation), None
 
     # ------------------------------------------------------------------ the socket
     def poll(self) -> list[RealScan]:

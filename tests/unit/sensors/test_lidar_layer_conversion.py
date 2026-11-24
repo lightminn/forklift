@@ -20,19 +20,19 @@ from test_scan_feed import MS, frame, settled  # noqa: E402
 REPO = Path(__file__).resolve().parents[3]
 
 
-def cfg(err_s=0.002, period=0.1, mask=()):
+def cfg(err_s=0.002, period=0.1, mask=(), measured=True):
     return lc.LidarConfig(mount=(0.1, 0.0, 0.3, 0.0), mount_measured=False, mask_rad=tuple(mask), limit_m=5.7,
-                          scan_period_s=period, first_beam_err_s=err_s, timing_measured=False)
+                          scan_period_s=period, first_beam_err_s=err_s, timing_measured=measured)
 
 
-def scan(n=8, first=None, step=None, ranges=None, synthetic=False):
+def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12):
     meta = {"time_increment": (0.09 / (n - 1)) if step is None else step}
     if first is not None:
         meta["first_beam_mono_ns"] = first
     if synthetic:
         meta["synthetic"] = True
     r = np.full(n, 2.0) if ranges is None else np.asarray(ranges, dtype=float)
-    return sf.RealScan(1, 0, 0, 0, np.linspace(-math.pi, math.pi, n, endpoint=False), r, None, meta)
+    return sf.RealScan(1, 0, recv, 0, np.linspace(-math.pi, math.pi, n, endpoint=False), r, None, meta)
 
 
 def test_the_shipped_config_keeps_every_scan_diagnostic():
@@ -148,3 +148,27 @@ def test_the_layer_deadline_counts_from_deadline_last_s():
         except Exception:  # noqa: BLE001 -- the rest of add_scan needs a full layer; the deadline is set first
             pass
         assert layer._deadlines[1][0] == pytest.approx(expect + 0.1)  # noqa: SLF001
+
+
+def test_an_unmeasured_bound_or_a_time_after_receipt_keeps_the_scan_diagnostic():
+    """Codex 7a-1 P2-3."""
+    assert lc.to_layer_scan(scan(first=10**9), cfg(measured=False), 0)[1] == "no_time_bound"
+    # received at 2 s, its first beam said to be at 9 s
+    assert lc.to_layer_scan(scan(first=9 * 10**9, recv=2 * 10**9), cfg(), 0)[1] == "after_receipt"
+
+
+def test_generation_rules():
+    """Codex 7a-1 P2-4: a broken frame changes nothing, a duplicate and a late frame of a replaced producer are
+    refused, an adapter without a nonce restarting opens a generation."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    n = sf.ESTABLISH_COUNT
+    assert feed.judge(fr(n - 1, gen=11), 0)[1] == "stale_id"            # a duplicate
+    assert feed.judge(fr(n, gen=11, angle_increment=-1.0), 0)[1] == "bad_meta"
+    assert feed.generation == 0                                          # neither opened a generation
+    assert feed.judge(fr(n, gen=22), 0)[1] is None and feed.generation == 1
+    assert feed.judge(fr(n + 1, gen=11), 0)[1] == "old_producer"        # A -> B -> late A
+    feed.new_generation("receive_gap")
+    assert feed.generation == 2 and feed.generation_why == ["producer", "receive_gap"]

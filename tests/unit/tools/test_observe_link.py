@@ -193,3 +193,41 @@ def test_the_observe_tool_wires_the_observe_link_on_every_opening():
     finally:
         os.close(r)
         os.close(w)
+
+
+def test_a_link_lost_mid_disarm_leaves_a_prefix_and_the_new_fd_starts_with_its_poison(monkeypatch):
+    """Codex 7a-1 P3: the loss happens in ``service()`` itself, with a refused ARM queued first; the lost fd shows a
+    prefix of what it was allowed, the new fd the poison and whole DISARMs."""
+    import errno
+
+    master, slave = _pty()
+    real_write = os.write
+    state = {"fail": True, "n": 0}
+
+    def write(fd, data):
+        state["n"] += 1
+        if state["fail"] and state["n"] == 2:
+            state["fail"] = False
+            raise OSError(errno.EIO, "gone")
+        return real_write(fd, bytes(data[:40]))
+
+    try:
+        link = rml.ReconnectingLink("/dev/fake", opener=lambda p, b, **kw: os.dup(master),
+                                    link_factory=rml.ObserveTtyLink, product_reader=lambda fd: None, retry_s=0.0)
+        host = McuLinkHost(CFG)
+        monkeypatch.setattr(rml.os, "write", write)
+        link.service(host, 1)  # opens
+        seqs = _queue(host, ["ARM", "DISARM"])
+        link.service(host, 2)  # 40 bytes of the poison (a partial write: the rest next time)
+        link.service(host, 3)  # the rest fails with EIO: lost
+        assert link.link is None
+        first_fd = _drain(slave)
+        assert first_fd == rml.POISON[:40]
+        seqs2 = _queue(host, ["ARM", "DISARM"])
+        for k in range(10):
+            link.service(host, 4 + k)  # reopens, refuses the ARM, writes the poison and the DISARM
+        assert _drain(slave) == rml.POISON + encode(Disarm(), seqs2[1])
+        assert seqs  # the first DISARM went with the lost fd (the host dropped it on the disconnect)
+    finally:
+        os.close(master)
+        os.close(slave)

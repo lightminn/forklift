@@ -155,3 +155,50 @@ def test_scans_are_recorded_and_stay_diagnostic_without_the_first_sample_time(mo
     finally:
         sender.close()
         sock.close()
+
+
+def test_the_session_pair_verifies_the_delay_bound(model):
+    """Codex 7a-1 P2-2: the second DISARM goes a random 1024-64512 seq step after the first is acknowledged, so the
+    STATE delay bound is built (DelayBound verified, STATE rows carry a bound)."""
+    obs, rec = _observer(model)
+    _run(obs, 1.0)
+    rows = _rows(rec)
+    ready = [r for r in rows if r["t"] == "session_ready"]
+    assert ready and ready[0]["verified"] is True
+    seqs = [r["seq"] for r in rows if r["t"] == "written"]
+    assert 1024 <= (seqs[1] - seqs[0]) % 65536 <= 64512
+    assert any(r.get("delay_bound_s") is not None for r in rows if r["t"] == "state")
+
+
+def test_an_acknowledgement_needs_a_step_to_the_seq_after_it_was_written():
+    """Codex 7a-1 P2-1: a STATE already naming the seq before it was written (an earlier session's, or the initial
+    value) is not its acknowledgement."""
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, StateFlag
+
+    class _Link:
+        link = None
+        ever_connected = True
+
+    openings = ro.Openings()
+    openings.count = 1
+    obs = ro.Observer(_Link(), ro.Record(io.StringIO()), openings=openings, lidar=lidar_cfg.load_lidar_config())
+
+    def st(t, seq):
+        return McuState(mcu_time_us=t, boot_id=3, arm_gen=0, last_rx_seq=seq, mode=Mode.DISARMED,
+                        reject_reason=RejectReason.NONE, fault_flags=FaultFlag(0), wheel_count_left=0,
+                        wheel_count_right=0, wheel_rate_left_rad_s=0.0, wheel_rate_right_rad_s=0.0, steering_rad=0.0,
+                        lift_m=0.0, current_ma=(0, 0, 0, 0), duty_e4=(0, 0, 0, 0), driver_status=(0, 0, 0, 0),
+                        rx_errors=0, cycle_overruns=0, flags=StateFlag(0))
+
+    from types import SimpleNamespace
+
+    obs._on_state(st(1, 77), 100)  # noqa: SLF001 -- the board already names 77
+    obs._log("written", 200, b"", {"kind": "DISARM", "seq": 77})  # noqa: SLF001
+    obs._on_state(st(2, 77), 300)  # noqa: SLF001 -- still 77: no step
+    obs.host = SimpleNamespace(state=st(2, 77))  # acknowledged() reads only the host's latest STATE
+    assert not obs.acknowledged(77)
+    obs._on_state(st(3, 78), 400)  # noqa: SLF001
+    obs._log("written", 500, b"", {"kind": "DISARM", "seq": 79})  # noqa: SLF001
+    obs._on_state(st(4, 79), 600)  # noqa: SLF001 -- a step to 79 after its write
+    obs.host = SimpleNamespace(state=st(4, 79))
+    assert obs.acknowledged(79)

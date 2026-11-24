@@ -98,15 +98,17 @@ def load_lidar_config(path: str | Path = LIDAR_YAML) -> LidarConfig:
 
 
 def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar"):
-    """``(real_layer.RealScan, None)`` or ``(None, why)`` -- why one of ``no_acquisition_time``, ``no_time_bound``,
-    ``no_beam_timing``, ``scan_too_long``. Core seconds are ``(ns - start_ns) / 1e9``."""
+    """``(real_layer.RealScan, None)`` or ``(None, why)`` -- why one of ``no_acquisition_time``, ``no_time_bound``
+    (no error bound, or one not measured), ``no_beam_timing``, ``scan_too_long``, ``after_receipt`` (the last beam's
+    earliest time after the adapter received the scan: impossible, the time is wrong). Core seconds are
+    ``(ns - start_ns) / 1e9``."""
     from forklift_core.live.real_layer import RealScan as LayerScan
 
     first = scan.meta.get("first_beam_mono_ns")
     if not isinstance(first, int) or isinstance(first, bool):
         return None, "no_acquisition_time"
-    if cfg.first_beam_err_s is None:
-        return None, "no_time_bound"
+    if cfg.first_beam_err_s is None or not cfg.timing_measured:
+        return None, "no_time_bound"  # an unmeasured bound keeps the scan diagnostic (Codex 7a-1 P2-3)
     n = len(scan.ranges)
     step = float(scan.meta.get("time_increment") or 0.0)
     if n < 2 or not (math.isfinite(step) and step > 0):
@@ -116,6 +118,8 @@ def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar
     flo, elo, ehi = first - err_ns, end - err_ns, end + err_ns
     if (ehi - flo) > cfg.scan_period_s * 1e9:
         return None, "scan_too_long"
+    if elo > int(scan.recv_mono_ns):
+        return None, "after_receipt"
     ranges = np.asarray(scan.ranges, dtype=float)
     valid = np.isfinite(ranges)
     out = LayerScan(sensor=sensor, first_s=(flo - start_ns) / 1e9, last_s=(ehi - start_ns) / 1e9,

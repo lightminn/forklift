@@ -26,7 +26,7 @@ from forklift_core.perception.obstacle_grid import AgeErrorTable, ObstacleScan
 from forklift_core.planning.geometry import Footprint
 from forklift_core.plant.real_vehicle import RealOdometry
 from forklift_core.safety.teleop_drive import BundlePermit
-from forklift_core.sensors.lidar_cfg import band_limit_m, self_hit_mask
+from forklift_core.sensors.lidar_cfg import load_lidar_config, self_hit_mask
 
 REPO = Path(__file__).resolve().parents[1]
 SENSOR = "lidar"
@@ -121,8 +121,9 @@ class ScanPermit:
         self.cfg = cfg
         self.period_nominal = period
         self.max_lag_ns = int(float(b["max_stamp_to_recv_s"]) * 1e9)
-        # the one rule the observe run's conversion uses too (forklift_core.sensors.lidar_cfg, PR 7 design 4)
-        self.limit_m = band_limit_m(float(b["max_tilt_deg"]), float(b["band_half_m"]))
+        # the height band's one source is config/real/lidar.yaml, read as the observe run's conversion reads it
+        # (PR 7 design 4, Codex 7a-1 P3)
+        self.limit_m = load_lidar_config().limit_m
         self.odo = RealOdometry(vehicle, max_gap_s=MAX_GAP_S)
         self.pose = (0.0, 0.0, 0.0)
         self.hist: deque = deque()
