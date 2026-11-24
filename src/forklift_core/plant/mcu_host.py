@@ -678,6 +678,13 @@ class McuLinkHost:
         self._sent(out, now_ns)
         self._log("written", now_ns, out.data, {"kind": out.kind, "seq": out.seq})
 
+    def frame_refused(self, out: Outgoing, now_ns: int, why: str) -> None:
+        """The adapter refused ``out`` before its first byte (the observe run's DISARM-only boundary, PR 7 design
+        1.1): never written, never counted as delivered -- dropped and logged."""
+        if self._inflight is out:
+            self._inflight = None
+        self._log("refused", now_ns, out.data, {"kind": out.kind, "seq": out.seq, "why": why})
+
     def frame_abandoned(self, out: Outgoing, written: int, now_ns: int) -> None:
         """A frame the adapter had started (``written`` bytes out) but could not finish (device lost): counted
         as possibly delivered."""

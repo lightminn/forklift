@@ -65,6 +65,11 @@ class RealScan:
     valid: np.ndarray
     self_hit: np.ndarray
     limit_m: np.ndarray | None = None
+    # PR 7 design 4 (7a-1): the last beam's earliest possible time when it is known only as a range -- the layer's
+    # deadline counts from it (``+ B``), while ``last_s`` (the range's latest) is what the odometry must reach.
+    # None: ``last_s`` for both (synthetic and HIL scans, one instant).
+    deadline_last_s: float | None = None
+    origin: str | None = None  # "real", "replayed" or "synthetic" (PR 7 design 4: never mixed up); None: not said
 
 
 def exempt_region(snapshot, region):
@@ -334,8 +339,9 @@ class RealLayer:
             self._missed_expected = (float(now_s), self._expected_s, self._scan_id)
         self._scan_id += 1
         sid = self._scan_id
-        self._deadlines[sid] = (float(scan.last_s) + self.budget_s, False)
-        self._expected_s = float(scan.last_s) + self.scan_period_s + self.budget_s
+        last_lo = float(scan.last_s if scan.deadline_last_s is None else scan.deadline_last_s)
+        self._deadlines[sid] = (last_lo + self.budget_s, False)
+        self._expected_s = last_lo + self.scan_period_s + self.budget_s
         self._initial = (tuple(float(v) for v in initial_correction), int(initial_version))
         valid = _beam_valid(scan)
         why = None
@@ -394,7 +400,7 @@ class RealLayer:
             (self.body.front_m, self.body.rear_m, self.body.half_width_m),
             None if scan.limit_m is None else np.asarray(scan.limit_m, dtype=float)))
         self.last_scan_s[scan.sensor] = float(scan.first_s)  # FREE age from the first beam (conservative)
-        self.last_beam_s[scan.sensor] = float(scan.last_s)
+        self.last_beam_s[scan.sensor] = float(scan.last_s if scan.deadline_last_s is None else scan.deadline_last_s)
         self._placed_id = sid
         self.grid.prune(float(scan.first_s))  # the original keeps what a snapshot may still use (Codex 5a impl P2-5)
 

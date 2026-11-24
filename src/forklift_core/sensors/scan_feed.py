@@ -48,7 +48,12 @@ class RealScan:
     angles: np.ndarray  # radians, zero ahead, positive to the left (ROS), one per beam of this scan
     ranges: np.ndarray  # metres; NaN where the driver gave no valid range (unknown)
     intensities: np.ndarray | None
-    meta: dict  # frame_id, scan_time, time_increment, range_min, range_max, sys_minus_mono_ns
+    meta: dict  # frame_id, scan_time, time_increment, range_min, range_max, sys_minus_mono_ns (+ PR 7: see judge)
+    # PR 7 design 3.2 (7a-1): the producer's generation (the adapter's start nonce, None from an older adapter) and
+    # this feed's own generation -- raised when the producer changes, its scan_id goes back, or the clock pair is
+    # established again after a jump; a consumer drops what came from another generation
+    producer_gen: int | None = None
+    feed_gen: int = 0
 
 
 def encode_frame(head: dict, ranges, intensities=None) -> bytes:
@@ -142,6 +147,9 @@ class ScanFeed:
         self._window: list[int] = []  # establishing: the latest pairs (at most ESTABLISH_COUNT)
         self.establishing = True
         self._last_id: int | None = None
+        self._producer: int | None = None  # the last frame's producer generation
+        self.generation = 0  # this feed's generation (PR 7 design 3.2)
+        self._rejoined = False  # established again after a clock jump: the next accepted scan opens a generation
         self.id_gaps = 0  # scan_ids missing between received frames: the adapter's (or the socket's) losses
         self.synthetic_frames = 0  # frames whose head says "synthetic": true (a rehearsal sender; arrival-day D6)
         self._frame_synthetic = False
@@ -188,7 +196,16 @@ class ScanFeed:
             self._frame_synthetic = True
             self.synthetic_frames += 1
         sid = h.get("scan_id")
-        if _int(sid, 0):  # every received frame, accepted or not, for the gap count (Codex 7a P2-3)
+        gen = h.get("gen") if _int(h.get("gen"), 0) else None
+        if _int(sid, 0):
+            # a new producer (its start nonce changed) or a scan_id going back (a restart of an adapter that sends
+            # no nonce) opens a new generation: the old ids say nothing about the new stream (PR 7 design 3.2)
+            if (gen != self._producer and self._last_id is not None) or (
+                    self._last_id is not None and sid <= self._last_id and gen == self._producer):
+                self.generation += 1
+                self._last_id = None
+            self._producer = gen
+            # every received frame, accepted or not, for the gap count (Codex 7a P2-3)
             if self._last_id is not None and sid > self._last_id + 1:
                 self.id_gaps += sid - self._last_id - 1
             self._last_id = sid if self._last_id is None else max(self._last_id, sid)
@@ -203,10 +220,14 @@ class ScanFeed:
                 return None, "establishing"
         elif abs(pair - self._last_pair) > JUMP_NS:
             self.establishing, self._window = True, []
+            self._rejoined = True
             return None, "clock_jump"
         if latency < NEGATIVE_LATENCY_NS:
             return None, "negative_latency"
         self._last_pair = pair
+        if self._rejoined:  # the clock pair was established again: a new generation (PR 7 design 3.2)
+            self.generation += 1
+            self._rejoined = False
         n = int(h["n"])
         angles = float(h["angle_min"]) + float(h["angle_increment"]) * np.arange(n)
         with np.errstate(invalid="ignore"):
@@ -214,7 +235,12 @@ class ScanFeed:
         r = np.where(valid, ranges, np.nan)
         meta = {k: h[k] for k in ("frame_id", "scan_time", "time_increment", "range_min", "range_max",
                                   "sys_minus_mono_ns")}
-        return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta), None
+        if _int(h.get("first_beam_mono_ns"), 0):
+            meta["first_beam_mono_ns"] = int(h["first_beam_mono_ns"])  # the SDK first-sample time (7a-2)
+        if self._frame_synthetic:
+            meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
+        return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,
+                        producer_gen=gen, feed_gen=self.generation), None
 
     # ------------------------------------------------------------------ the socket
     def poll(self) -> list[RealScan]:
