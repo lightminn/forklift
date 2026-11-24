@@ -9,9 +9,11 @@ secs="${1:-600}"
 jsync
 jssh 'ls -l /dev/forklift-mcu* 2>&1; id -nG | tr " " "\n" | grep -x dialout || echo "the account is NOT in dialout (the udev rule gives 0660)"'
 rc=0
-jssh "cd ~/forklift && mkdir -p data/jetson_check/2026-11-17 && .venv/bin/python tools/h743_link_check.py --device /dev/forklift-mcu --seconds $secs --out data/jetson_check/2026-11-17/h743_link.jsonl" > "$HW_OUT/h743_link.txt" 2>&1 || rc=$?
+# one remote record per run: a run refused by another executor never touches the holder's record (design 8.1)
+remote="data/jetson_check/2026-11-17/h743_link_$(date -u +%Y%m%dT%H%M%SZ)_$$.jsonl"
+jssh "cd ~/forklift && mkdir -p data/jetson_check/2026-11-17 && .venv/bin/python tools/h743_link_check.py --device /dev/forklift-mcu --seconds $secs --out $remote" > "$HW_OUT/h743_link.txt" 2>&1 || rc=$?
 rm -f "$HW_OUT/h743_link.jsonl"
-if ! jssh 'cat ~/forklift/data/jetson_check/2026-11-17/h743_link.jsonl' > "$HW_OUT/h743_link.jsonl"; then
+if ! jssh "cat ~/forklift/$remote" > "$HW_OUT/h743_link.jsonl"; then
   echo "FAIL  copying the record back failed" >&2; rc=1
 fi
 tail -3 "$HW_OUT/h743_link.txt"

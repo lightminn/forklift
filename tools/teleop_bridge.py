@@ -420,6 +420,8 @@ class Bridge:
         """Leave the MCU disarmed: a DISARM written, a few cycles to let it out."""
         if self._gc_cb in gc.callbacks:
             gc.callbacks.remove(self._gc_cb)
+        if getattr(self.dev, "ever_connected", True) is False:
+            return  # never opened (or refused at its first opening): nothing to disarm, and no opening now (8.1)
         self.host.request_disarm(now_ns)
         for _ in range(5):
             now_ns = time.monotonic_ns()

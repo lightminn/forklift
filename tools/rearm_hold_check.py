@@ -131,6 +131,13 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
     if not b.state.flags & StateFlag.OUTPUTS_LOCKED:
         return {"result": "refused", "why": "outputs not locked: this check runs on a locked build only"}
     session.arm(bringup.PRE_ZERO_S + limit_s + bringup.LIMIT_SLACK_S + 2.0)
+    # the connection the run was armed on (real safety wiring design 8.1), fixed as the ARM is asked: a loss is seen
+    # at once (the host's count), before the next opening could send what was queued meanwhile
+    conn0, lost0 = b.conn, b.host.disconnects
+
+    def link_changed() -> bool:
+        return b.conn != conn0 or b.host.disconnects != lost0
+
     session.hold_duty(0, bringup.PRE_ZERO_S)
     duty_e4 = int(round(duty * 10000))
     limit_i, scanned = None, len(b.samples)
@@ -159,15 +166,8 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
     disarm_seq = min((q for q, (k, t, _m) in b.written.items() if k == "DISARM" and t >= t0), default=None)
     clear_seq, arm_seqs = None, []
     end = time.monotonic() + grace_ms / 1000 + 1.0
-    # the connection the run was armed on (real safety wiring design 8.1): a loss is seen at once (the host's count),
-    # before the next opening could send what was queued meanwhile (Codex design round 5 P2)
-    conn0, lost0 = b.conn, b.host.disconnects
-    reconnected = False
-
-    def link_changed() -> bool:
-        return b.conn != conn0 or b.host.disconnects != lost0
-
-    while time.monotonic() < end and b.state.mode != Mode.ARMED:
+    reconnected = link_changed()
+    while not reconnected and time.monotonic() < end and b.state.mode != Mode.ARMED:
         if link_changed():
             # the probed ARM and CLEAR_FAULTS are for the board the run armed: none more after a reconnect
             reconnected = True
@@ -189,8 +189,12 @@ def run(b, axis: int, duty: float, limit_s: float, grace_ms: float) -> dict:
         verdict.update(result="invalid", why="link_reconnected")
     # the MCU may be ARMED by the check's last ARM: the session's cleanup, confirmed only by a STATE on the DISARM's
     # connection naming its seq after it was written (never the cached last sample, Codex design round 5 P2)
+    # the probed ARM and CLEAR_FAULTS still queued (a full device) never go out ahead of the stop (impl P2)
+    for o in [o for o in b.host._outbox if o.kind in ("ARM", "CLEAR_FAULTS")]:  # noqa: SLF001
+        b.host._outbox.remove(o)  # noqa: SLF001
     session.cleanup()
-    verdict["left_disarmed"] = bool(session.cleanup_confirmed)
+    # confirmed and DISARMED: a confirmed stop in FAULT or ESTOP is not the check's end state (impl P2)
+    verdict["left_disarmed"] = bool(session.cleanup_confirmed) and b.host.state.mode == Mode.DISARMED
     if not verdict["left_disarmed"] and verdict["result"] != "invalid":
         verdict["result"] = "not_met"
     return verdict

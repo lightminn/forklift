@@ -143,3 +143,24 @@ def test_judge_fails_when_states_are_missing():
     arm_ns = [t * 1000 for t in range(1_035_000, 1_280_000, 10_000)]
     res = check.judge(samples, 2, GRACE_MS, 10, 1_060_000_000, arm_ns)
     assert res["result"] == "not_met" and not res["checks"]["no_state_gap"], res
+
+
+def test_a_link_loss_after_the_arm_stops_the_probes_and_invalidates(mcu_model, monkeypatch):
+    """Real safety wiring design 8.1 (Codex executor-lock impl P2): the probed ARM and CLEAR_FAULTS are for the board
+    the run armed -- a loss seen any time after the ARM sends none of them and the result is invalid."""
+    b, proc, fds = _bench(mcu_model, "--commission-build", "1", "--outputs-locked", "1",
+                          "--commission-time-ms", "1000", "--stop-grace-ms", str(GRACE_MS))
+    real_hold = bringup.CommissionSession.hold_duty
+
+    def hold_then_lose(self, *a, **kw):
+        out = real_hold(self, *a, **kw)
+        b.host.disconnects += 1  # the host's count, as a loss right after the pre-zero hold leaves it
+        return out
+
+    monkeypatch.setattr(bringup.CommissionSession, "hold_duty", hold_then_lose)
+    try:
+        res = check.run(b, 0, 0.05, 1.0, GRACE_MS)
+    finally:
+        _close(proc, fds)
+    assert res["result"] == "invalid" and res["why"] == "link_reconnected", res
+    assert res["arms_written"] == 0 and not res["clear_faults_written"]

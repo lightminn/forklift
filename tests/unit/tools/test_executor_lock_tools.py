@@ -133,16 +133,23 @@ def test_rearm_hold_check_refuses_a_held_device(held_pty, tmp_path, monkeypatch,
     assert _written(master) == b""
 
 
-def test_h743_link_check_refuses_a_held_device_and_leaves_a_refused_record(held_pty, tmp_path, capsys):
+def test_h743_link_check_refuses_a_held_device_and_leaves_the_record_alone(held_pty, tmp_path, capsys):
+    """Codex executor-lock impl P2: --out may be the holder's own record -- a refused run never touches it (the
+    Jetson wrapper gives each run its own path)."""
     import h743_link_check
 
     path, master = held_pty
     out = tmp_path / "link.jsonl"
-    out.write_text('{"t": "state", "from": "an earlier run"}\n')  # a stale record a wrapper could fetch
+    out.write_text('{"t": "state", "from": "the holder"}\n')
     code = h743_link_check.main(["--device", path, "--out", str(out), "--seconds", "1"])
     assert code == 2 and "REFUSED" in capsys.readouterr().out
-    assert json.loads(out.read_text().splitlines()[0])["t"] == "refused"
+    assert out.read_text() == '{"t": "state", "from": "the holder"}\n'
     assert _written(master) == b""
+
+
+def test_the_jetson_wrapper_gives_each_run_its_own_record():
+    src = (TOOLS / "hwday" / "jetson_h743.sh").read_text(encoding="utf-8")
+    assert "--out $remote" in src and "$$" in src
 
 
 def test_the_link_monitor_refuses_a_held_device(held_pty, capsys):
@@ -152,3 +159,22 @@ def test_the_link_monitor_refuses_a_held_device(held_pty, capsys):
     assert real_mcu_link.main(["--device", path, "--seconds", "0.3"]) == 2
     assert "held by another executor" in capsys.readouterr().err
     assert _written(master) == b""
+
+
+def test_a_bridge_that_never_connected_opens_nothing_on_close(held_pty):
+    """Codex executor-lock impl P2: the teleop bridge's close on a link refused (or never opened) writes nothing."""
+    import teleop_bridge
+    from real_mcu_link import ReconnectingLink
+
+    path, master = held_pty
+    link = ReconnectingLink(path, retry_s=0.0, exclusive=True, product_reader=lambda fd: None)
+    bridge = teleop_bridge.Bridge.__new__(teleop_bridge.Bridge)  # only close() is exercised
+    bridge.dev, bridge._gc_cb = link, None
+
+    class _Host:
+        def request_disarm(self, now):
+            raise AssertionError("no DISARM asked for a link that never connected")
+
+    bridge.host = _Host()
+    bridge.close(1)
+    assert link.link is None and _written(master) == b""

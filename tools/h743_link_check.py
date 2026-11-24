@@ -226,11 +226,8 @@ def main(argv=None) -> int:
     try:
         s = run(a.device, a.out, a.seconds, a.disarm_every_s, a.baud)
     except DeviceBusy as busy:
-        # held by another executor: nothing written to the device; the record says so, so a wrapper that fetches it
-        # never takes an earlier run's record for this one
-        a.out.parent.mkdir(parents=True, exist_ok=True)
-        a.out.write_text(json.dumps({"t": "refused", "why": str(busy), "holder": busy.holder}) + "\n", encoding="utf-8")
-        print(f"record: {a.out}")
+        # held by another executor: nothing written to the device, and --out is left alone -- it may be the holder's
+        # own record (Codex executor-lock impl P2); the wrapper gives every run its own path
         print(f"REFUSED {busy}")
         return 2
     print(f"record: {a.out}")
