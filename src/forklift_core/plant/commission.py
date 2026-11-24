@@ -11,8 +11,8 @@ from forklift_core.mcu_link.messages import FaultFlag, McuState, wheel_count_del
 from forklift_core.plant.bringup import _CUT, _ENCODER_ANY, Sample
 
 AXES = {"L": 0, "R": 1, "M": 2, "H": 3}
-COMMISSION_DUTY_MAX = 0.5  # DIAGNOSTIC BRANCH ONLY (diag-commission-long-1; normal 0.15). the tool's own bound: the plan's proposed build limit (the build may be lower)
-COMMISSION_HOLD_MAX_S = 10.0  # DIAGNOSTIC BRANCH ONLY (normal 1.5, under the 11 s diag build limit). under the proposed 2 s build time limit, so a sound tool never meets it
+COMMISSION_DUTY_MAX = 1.0  # DIAGNOSTIC BRANCH ONLY (diag-commission-unlimited-1; normal 0.15). the tool's own bound: the plan's proposed build limit (the build may be lower)
+COMMISSION_HOLD_MAX_S = 2147.0  # DIAGNOSTIC BRANCH ONLY (normal 1.5, under the 2147.483 s diag build limit). under the proposed 2 s build time limit, so a sound tool never meets it
 COMMISSION_HOLD_MIN_S = 0.1  # above the 50 ms hand-over, so a run sends its nonzero duty (Codex design P3)
 # steering and lift: short runs only -- a nonzero command never outlives its hold, so this bounds the travel of
 # one run even with the window unseen or the link lost (Codex design P1-2)

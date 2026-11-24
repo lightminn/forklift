@@ -90,8 +90,8 @@ static drive_config make(void)
 #else
     c.estop_waived = false;
 #endif
-    c.commission_duty_max = 0.5f;   /* DIAGNOSTIC IMAGE ONLY (diag-commission-long-1): plan 3.4 is 0.15 */
-    c.commission_time_ms = 11000;   /* DIAGNOSTIC IMAGE ONLY: 10 s hold + margin; plan 3.4 is 2000 */
+    c.commission_duty_max = 1.0f;   /* DIAGNOSTIC IMAGE ONLY (diag-commission-unlimited-1): the validator ceiling; plan 3.4 is 0.15 */
+    c.commission_time_ms = 2147483; /* DIAGNOSTIC IMAGE ONLY: drive_config_valid ceiling (0x7FFFFFFF us / 1000); plan 3.4 is 2000 */
     c.wheel_duty_slew_per_s = 2.0f; /* S1/S3 실측 대기 */
     /* Encoder fault detection (plan 3.3), all S3/S4 실측 대기. The gap limit keeps the largest
        real step unambiguous: 0.02 s x 15 rad/s x 327680 / 2pi = 15645 <= 16383. */
