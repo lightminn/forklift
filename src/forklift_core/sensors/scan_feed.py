@@ -162,6 +162,7 @@ class ScanFeed:
         caller's receive gap or socket error): a consumer drops what came from another (PR 7 design 3.2)."""
         self.generation += 1
         self.generation_why.append(why)
+        self._cand = None  # a candidate never outlives a generation boundary (Codex 7a-1 round 6 P2)
 
     # ------------------------------------------------------------------ the clock pair
     def _establish(self, pair: int) -> bool:
@@ -253,6 +254,8 @@ class ScanFeed:
             if switch is None:
                 self._advance(sid)  # the current producer's frame, refused on its clock: still counts for gaps
             return None, why
+        if switch is None:
+            self._cand = None  # the current producer is still sending: an earlier candidate was a stray frame
         if switch == "producer":
             self._ended.add(self._producer)
         if switch is not None:

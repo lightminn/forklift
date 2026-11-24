@@ -251,3 +251,19 @@ def test_a_candidates_duplicates_never_establish_it():
     dups = [feed.judge(fr(1, gen=22, off=off2), 0)[1] for _ in range(12)]
     assert first == "clock_jump" and set(dups) == {"stale_id"}
     assert feed.judge(fr(sf.ESTABLISH_COUNT, gen=11), 0)[1] is None and feed.generation == 0
+
+
+def test_a_stray_candidate_expires_and_never_blocks_a_real_restart():
+    """Codex 7a-1 round 6 P2: a delayed low id refused on its clock, then the current stream goes on and a gap
+    opens -- a real restart later is not held by the stray candidate's id."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, start=30_000)
+    n = 30_000 + sf.ESTABLISH_COUNT
+    off2 = 1_700_000_001_000 * MS
+    assert feed.judge(fr(30_005, off=off2), 0)[1] == "clock_jump"  # an id_back candidate, refused on its clock
+    assert feed.judge(fr(n, ), 0)[1] is None                       # the current stream goes on: candidate gone
+    feed.new_generation("receive_gap")
+    verdicts = [feed.judge(fr(k, off=off2), 0)[1] for k in range(1, 2 + sf.ESTABLISH_COUNT)]
+    assert verdicts[-1] is None
