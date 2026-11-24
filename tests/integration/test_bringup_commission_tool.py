@@ -712,8 +712,14 @@ def test_a_run_across_the_seq_wrap_is_matched_by_the_write_log(model):
     assert [r["order"] for r in written] == list(range(len(written)))
     assert all("done_ns" in r and "conn" in r for r in written)
     com = [r for r in written if r["kind"] == "COMMISSION"]
-    assert com and all(r["axis"] == 0 and r["echo_mcu_time_us"] is not None and r["valid_after_echo_ms"] for r in com)
+    assert com and all(r["axis"] == 0 and r["echo_mcu_time_us"] is not None and r["valid_ms"] for r in com)
     assert all("conn" in r for r in rows if r["t"] == "state")
+    # the rows alone redo the driven span's first acceptance (the record contract)
+    from forklift_core.plant.write_log import accepted, seen_from_rows, writes_from_rows
+    redone = accepted(seen_from_rows(rows), writes_from_rows(rows),
+                      lambda x: x.kind == "COMMISSION" and x.phase == "on" and x.duty_e4 != 0)
+    assert redone.index is not None and redone.ambiguous_at is None
+    assert {r["phase"] for r in written} >= {"arm", "pre_zero", "on", "post_zero", "cleanup"}
 
 
 def test_an_ambiguous_seq_leaves_the_run_unjudgeable(model, monkeypatch):
@@ -729,6 +735,28 @@ def test_an_ambiguous_seq_leaves_the_run_unjudgeable(model, monkeypatch):
     monkeypatch.setattr(bringup, "accepted", ambiguous)
     res = bringup.execute(args(observed="pos"), b)
     assert res["result"] == "unjudgeable" and res["metrics"]["reason"] == "seq_ambiguous", res
+    assert res["verdict"] is None and not res["metrics"]["valid"]  # no sign verdict from it (Codex PR-2a P2-3)
+
+
+def test_a_frame_cut_by_a_reconnect_is_not_completed_by_the_new_connection():
+    """Codex PR-2a P3: half a STATE on the old fd, a disconnect, then the other half on the new fd -- neither the host
+    nor the record takes it; the next whole STATE is taken and carries the new connection."""
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, StateFlag, encode
+
+    def st(t_us):
+        return encode(McuState(t_us, 0xB007, 0, 0, Mode.DISARMED, RejectReason.NONE, FaultFlag(0), 0, 0, 0.0, 0.0,
+                               0.0, 0.0, (0, 0, 0, 0), (0, 0, 0, 0), (0xC0,) * 4, 0, 0, StateFlag.DRIVERS_READY), 1)
+
+    b = bringup.Bench(None, io.StringIO(), commission=True)
+    b.host.link_identity(None)
+    whole = st(1_000)
+    b.host.on_bytes(whole[: len(whole) // 2], 1)
+    b.host.disconnected(2)
+    b.host.link_identity(None)
+    b.host.on_bytes(whole[len(whole) // 2:], 3)
+    assert b.samples == [] and b.host.state is None
+    b.host.on_bytes(st(2_000), 4)
+    assert len(b.samples) == 1 and b.sample_conn == [2] and b.host.state.mcu_time_us == 2_000
 
 
 def test_the_bench_numbers_each_opening_and_drops_a_half_frame():

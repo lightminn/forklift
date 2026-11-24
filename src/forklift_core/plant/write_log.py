@@ -3,21 +3,28 @@
 ``STATE.last_rx_seq`` names the last frame the MCU accepted, as a 16-bit sequence number. At 100 Hz the host's seq
 wraps in about 655 s, so a long run writes the same seq more than once; and a USB-only reconnect brings STATEs of the
 same boot on a new file descriptor. A seq alone cannot say which write a STATE means. This module matches with what
-the record keeps for every write -- its order, its connection, when its write finished and the command's own fields --
-and says "ambiguous" instead of guessing.
+the record keeps for every write -- its order, its connection, when its write finished, its phase and the command's
+own fields -- and says "ambiguous" instead of guessing.
 
-Rules for a candidate write ``w`` of a STATE sample ``s`` (``s`` read at ``host_ns`` on connection ``conn``):
-- the same seq, the same connection, and the write finished before the STATE was read;
-- a command carrying an echo (ARM, COMMISSION, DRIVE) was echoed at or before the STATE's MCU time, from the same boot;
-- the latest such write is the candidate; an older write with the same seq is ruled out only if some STATE on that
-  connection, read after the older write finished and before ``s``, already named another seq (the MCU accepted
-  something else after it, so the older one cannot be the last accepted again). Otherwise the match is ambiguous.
+An acceptance is a **transition**: a sample ``s`` whose ``last_rx_seq`` differs from the previous sample ``p`` read on
+the same connection from the same boot (a first sample has no ``p`` and proves nothing). The frame accepted between
+them is a write ``w`` with
+- the same seq and connection, its last byte written no later than ``s`` was read, and no earlier than
+  ``TRANSIT_NS`` before ``p`` was read (a frame is taken within milliseconds of arriving: one written long before
+  ``p`` was read would already show in ``p``);
+- for a command that carries them (ARM, COMMISSION, DRIVE): the same boot, its echo not later than ``s``'s MCU time,
+  and its validity window (echo .. echo + valid) not over before ``p``'s MCU time; a COMMISSION or DRIVE also names
+  the arm generation ``s`` reports.
+One such write is the match; none is no acceptance of ours; more than one (only after a gap in the samples longer
+than a seq wrap) is ambiguous.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+
+TRANSIT_NS = 1_000_000_000  # how long before the previous read a frame may have been written and still be in flight
 
 
 @dataclass(frozen=True)
@@ -30,8 +37,11 @@ class Write:
     done_ns: int  # when its last byte was written
     boot_id: int | None = None  # the command's boot_id field (None: DISARM)
     echo_mcu_time_us: int | None = None
+    valid_ms: int | None = None  # valid_after_echo_ms (COMMISSION, DRIVE); None: not bounded here
+    arm_gen: int | None = None  # COMMISSION, DRIVE
     axis: int | None = None  # COMMISSION
     duty_e4: int | None = None  # COMMISSION
+    phase: str | None = None  # the tool's step it was queued in (pre_zero, on, post_zero, cleanup, ...)
 
 
 @dataclass(frozen=True)
@@ -43,13 +53,14 @@ class Seen:
     boot_id: int
     mcu_time_us: int
     last_rx_seq: int
+    arm_gen: int = 0
 
 
 @dataclass(frozen=True)
 class Match:
     index: int | None  # the first sample at or after ``start`` that accepted a write the predicate selects
     write: Write | None
-    ambiguous_at: int | None = None  # a sample whose seq could not be told apart (the match is then unjudgeable)
+    ambiguous_at: int | None = None  # a sample whose acceptance could not be told apart (then unjudgeable)
 
 
 def _index(writes: list[Write]) -> dict[tuple[int, int], list[Write]]:
@@ -59,42 +70,62 @@ def _index(writes: list[Write]) -> dict[tuple[int, int], list[Write]]:
     return by
 
 
-def _superseded(samples: list[Seen], i: int, older: Write) -> bool:
-    """Some STATE on the connection, read after ``older`` finished and before sample ``i``, named another seq."""
-    s = samples[i]
-    for j in range(i - 1, -1, -1):
-        o = samples[j]
-        if o.host_ns < older.done_ns:
-            break  # samples are in read order: nothing earlier can be after the write
-        if o.conn == s.conn and o.last_rx_seq != s.last_rx_seq:
-            return True
-    return False
+def _fits(w: Write, p: Seen, s: Seen) -> bool:
+    if not (p.host_ns - TRANSIT_NS <= w.done_ns <= s.host_ns):
+        return False
+    if w.echo_mcu_time_us is None:
+        return True
+    if w.boot_id != s.boot_id or w.echo_mcu_time_us > s.mcu_time_us:
+        return False
+    if w.valid_ms is not None and w.echo_mcu_time_us + w.valid_ms * 1000 < p.mcu_time_us:
+        return False  # its validity was over before the previous STATE: it cannot have been taken after it
+    return w.arm_gen is None or w.arm_gen == s.arm_gen
 
 
-def _candidates(samples: list[Seen], i: int, by: dict) -> tuple[Write | None, list[Write]]:
-    """The latest matching write for sample ``i`` and the older ones it cannot be told apart from."""
-    s = samples[i]
-    same = [w for w in by.get((s.conn, s.last_rx_seq), ()) if w.done_ns <= s.host_ns
-            and (w.echo_mcu_time_us is None or (w.boot_id == s.boot_id and w.echo_mcu_time_us <= s.mcu_time_us))]
-    if not same:
-        return None, []
-    latest = same[-1]  # the index keeps write order
-    unresolved = [older for older in same[:-1] if not _superseded(samples, i, older)]
-    return latest, unresolved
+def transitions(samples: list[Seen]):
+    """(index, previous sample) of every sample whose accepted seq changed since the previous one read on its
+    connection from the same boot."""
+    last: dict[int, Seen] = {}
+    for i, s in enumerate(samples):
+        p = last.get(s.conn)
+        last[s.conn] = s
+        if p is not None and p.boot_id == s.boot_id and p.last_rx_seq != s.last_rx_seq:
+            yield i, p
 
 
 def accepted(samples: list[Seen], writes: list[Write], pred: Callable[[Write], bool], start: int = 0) -> Match:
-    """The first sample from ``start`` whose accepted frame is a write ``pred`` selects. A sample whose seq could
-    name either a selected write or another one stops the search: the caller reports the run as unjudgeable rather
-    than pick a frame. ``samples`` are in read order."""
+    """The first transition at or after ``start`` whose accepted frame is a write ``pred`` selects. A transition whose
+    frame could be either a selected write or another one stops the search: the caller reports the run as unjudgeable
+    rather than pick a frame. ``samples`` are in read order."""
     by = _index(writes)
-    for i in range(start, len(samples)):
-        latest, unresolved = _candidates(samples, i, by)
-        if latest is None:
+    for i, p in transitions(samples):
+        if i < start:
             continue
-        if not any(pred(w) for w in [latest, *unresolved]):
+        s = samples[i]
+        cands = [w for w in by.get((s.conn, s.last_rx_seq), ()) if _fits(w, p, s)]
+        if not any(pred(w) for w in cands):
             continue
-        if unresolved:
+        if len(cands) > 1:
             return Match(None, None, ambiguous_at=i)
-        return Match(i, latest)
+        return Match(i, cands[0])
     return Match(None, None)
+
+
+_WRITE_FIELDS = ("order", "conn", "kind", "seq", "start_ns", "done_ns", "boot_id", "echo_mcu_time_us", "valid_ms",
+                 "arm_gen", "axis", "duty_e4", "phase")
+
+
+def write_row(w: Write) -> dict:
+    """A write's record fields (the bring-up JSONL "written" row carries them; ``start_ns`` is also its host_ns)."""
+    return {name: getattr(w, name) for name in _WRITE_FIELDS}
+
+
+def writes_from_rows(rows: list[dict]) -> list[Write]:
+    """The write log of a JSONL record, for offline matching."""
+    return [Write(**{k: r.get(k) for k in _WRITE_FIELDS}) for r in rows if r.get("t") == "written" and "order" in r]
+
+
+def seen_from_rows(rows: list[dict]) -> list[Seen]:
+    """The STATE rows of a JSONL record (read time, connection and the fields matching needs)."""
+    return [Seen(r["host_ns"], r["conn"], r["boot_id"], r["mcu_time_us"], r["last_rx_seq"], r.get("arm_gen", 0))
+            for r in rows if r.get("t") == "state" and "conn" in r]
