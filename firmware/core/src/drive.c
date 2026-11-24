@@ -124,8 +124,15 @@ static void queue_frame(drive *d, uint8_t ch, uint16_t frame)
     d->spi_since_us = d->time_us;
 }
 
+/* DIAGNOSTIC IMAGE ONLY (branch diag/spi-all-channels, tag diag-spi-ssi-3; never merged): a
+   channel whose init fails no longer restarts the whole sequence at L -- the init moves on to the
+   next channel so all four are addressed every round, and the round fails at its end if any
+   channel failed. driver_status[ch] carries the raw high byte of that channel's last answer. */
+static uint8_t s_diag_init_failed; /* bit per channel, this round */
+
 static void start_driver_init(drive *d, bool after_clear)
 {
+    s_diag_init_failed = 0;
     d->drivers_ready = false;
     d->init_after_clear = after_clear;
     d->retry_waiting = false;
@@ -168,6 +175,13 @@ static void step_driver_init(drive *d, const drive_inputs *in)
             return;
         }
         if (d->ini.failed) {
+            s_diag_init_failed |= (uint8_t)(1u << d->init_ch);
+            if (d->init_ch + 1 < DRIVE_CH_COUNT) { /* diag: go on with the next channel */
+                d->init_ch++;
+                d->init_sdo = 0;
+                drv8244_init_start(&d->ini, (uint32_t)d->time_us, 0);
+                continue;
+            }
             driver_init_failed(d);
             return;
         }
@@ -181,6 +195,10 @@ static void step_driver_init(drive *d, const drive_inputs *in)
             continue;
         }
         break;
+    }
+    if (s_diag_init_failed) { /* diag: a channel failed earlier in this round */
+        driver_init_failed(d);
+        return;
     }
     /* All four configured; CLR_FLT must have released every nFAULT. */
     uint32_t stuck = 0;
@@ -261,7 +279,7 @@ void drive_spi_result(drive *d, uint8_t ch, uint16_t sdo, uint32_t tag)
     }
     d->spi_inflight = false;
     bool valid = drv8244_response_valid(sdo);
-    d->driver_status[ch] = valid ? drv8244_status_byte(sdo) : 0;
+    d->driver_status[ch] = (uint8_t)(sdo >> 8); /* diag: raw high byte, valid or not */
     if (!d->drivers_ready) {
         d->init_sdo = sdo;
     } else if (!valid) {
