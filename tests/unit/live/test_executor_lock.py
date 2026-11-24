@@ -268,3 +268,33 @@ def test_a_bridge_whose_console_fails_sends_nothing_and_lets_the_device_go(monke
     finally:
         os.close(slave)
         os.close(master)
+
+
+def test_a_bridge_run_for_no_cycle_sends_no_disarm(monkeypatch):
+    """Codex executor-lock impl round 4: --duration-s 0 runs no control cycle, so the exit sends nothing."""
+    from pathlib import Path
+
+    tools = Path(__file__).resolve().parents[3] / "tools"
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    import teleop_bridge
+
+    master, slave = os.openpty()
+    tty.setraw(slave)
+    os.set_blocking(master, False)
+    path = os.ttyname(slave)
+    monkeypatch.setattr(teleop_bridge, "writer_marker", lambda device, bench: None)
+    monkeypatch.setattr(teleop_bridge.LiveServer, "start", lambda self: None)
+    monkeypatch.setattr(teleop_bridge.LiveServer, "stop", lambda self: None)
+    monkeypatch.setattr(teleop_bridge.LiveServer, "port", 0, raising=False)
+    try:
+        assert teleop_bridge.main(["--device", path, "--duration-s", "0", "--port", "0"]) == 0
+        try:
+            written = os.read(master, 65536)
+        except BlockingIOError:
+            written = b""
+        assert written == b""
+        probe(path)
+    finally:
+        os.close(slave)
+        os.close(master)
