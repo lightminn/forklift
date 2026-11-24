@@ -201,3 +201,25 @@ def test_a_refused_candidate_producer_leaves_the_clock_as_it_was():
     n = sf.ESTABLISH_COUNT
     assert feed.judge(fr(n, gen=22, off=1_700_000_001_000 * MS), 0)[1] == "clock_jump"
     assert feed.judge(fr(n + 1, gen=11), 0)[1] is None and feed.generation == 0
+
+
+def test_a_new_producer_on_a_jumped_clock_establishes_its_own_and_switches():
+    """Codex 7a-1 round 4 P2-1: A stops; B arrives with a clock pair a second off -- B's own window establishes it
+    and B takes over, A's clock untouched meanwhile."""
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    off2 = 1_700_000_001_000 * MS
+    verdicts = [feed.judge(fr(k, gen=22, off=off2), 0)[1] for k in range(1, 2 + sf.ESTABLISH_COUNT)]
+    assert verdicts[-1] is None and feed.generation == 1  # B established in its own window and took over
+    assert feed.judge(fr(50, gen=11), 0)[1] == "old_producer"
+
+
+def test_a_candidate_on_the_same_clock_switches_at_once():
+    from test_scan_feed import frame as fr
+
+    feed = sf.ScanFeed()
+    settled(feed, gen=11)
+    s, why = feed.judge(fr(1, gen=22), 0)
+    assert why is None and s.feed_gen == 1

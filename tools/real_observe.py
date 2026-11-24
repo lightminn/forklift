@@ -89,15 +89,24 @@ def write_ok_marker(path: Path) -> None:
     path = Path(path)
     digest = _sha256(path)
     fd, tmp = tempfile.mkstemp(prefix=path.name + ".ok.", dir=path.parent)
+    data = (digest + "\n").encode("ascii")
     try:
-        os.write(fd, (digest + "\n").encode("ascii"))
-        os.fsync(fd)
-    finally:
-        os.close(fd)
-    try:
+        try:
+            off = 0
+            while off < len(data):  # every byte out before it is published (Codex 7a-1 round 4 P2-2)
+                n = os.write(fd, data[off:])
+                if n <= 0:
+                    raise OSError("short write of the .ok marker")
+                off += n
+            os.fsync(fd)
+        finally:
+            os.close(fd)
         os.replace(tmp, Path(str(path) + ".ok"))
-    except OSError:
-        os.unlink(tmp)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
         raise
 
 

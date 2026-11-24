@@ -308,3 +308,15 @@ def test_the_last_line_reader_streams():
         assert ro._last_line(Path(name)) == b'{"t": "end", "complete": true}'  # noqa: SLF001
     finally:
         os.unlink(name)
+
+
+def test_a_short_ok_write_never_publishes_a_marker(tmp_path, monkeypatch):
+    """Codex 7a-1 round 4 P2-2."""
+    rec = tmp_path / "obs.jsonl"
+    rec.write_text('{"t": "end", "complete": true}\n')
+    real_write = os.write
+    monkeypatch.setattr(ro.os, "write", lambda fd, data: real_write(fd, data[:9]) if len(data) > 9 else 0)
+    with pytest.raises(OSError):
+        ro.write_ok_marker(rec)
+    assert not (tmp_path / "obs.jsonl.ok").exists()
+    assert [p.name for p in tmp_path.iterdir()] == ["obs.jsonl"]  # no temporary left behind

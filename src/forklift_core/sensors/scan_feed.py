@@ -149,6 +149,7 @@ class ScanFeed:
         self._last_id: int | None = None
         self._producer: int | None = None  # the current producer generation (its start nonce)
         self._ended: set = set()  # producers a newer one replaced: their late frames are refused
+        self._cand_clock: dict = {}  # a candidate producer's own clock state (gen -> establishing, window, pair, rejoined)
         self.generation = 0  # this feed's generation (PR 7 design 3.2)
         self.generation_why: list = []  # why each generation opened, in order
         self._rejoined = False  # established again after a clock jump: the next accepted scan opens a generation
@@ -224,13 +225,25 @@ class ScanFeed:
                 if gen is not None or sid == self._last_id:
                     return None, "stale_id"  # a duplicate, or an id a producer with a nonce never goes back to
                 switch = "id_back"  # a restart of an adapter that sends no nonce
-        # a candidate producer's frame is judged on a copy of the clock state: refused, it leaves the current
-        # producer's clock pair exactly as it was (Codex 7a-1 round 3 P2-2)
-        saved = (self.establishing, list(self._window), self._last_pair, self._rejoined) if switch else None
+        # a candidate producer's frames are judged on a clock state of their own (Codex 7a-1 rounds 3-4): it starts
+        # as a copy of the current producer's and lives across the candidate's frames, so a candidate on the same
+        # clock pair switches at once, one whose pair jumped establishes it in its own window, and the current
+        # producer's clock is never touched by a candidate's refusal
+        saved = None
+        if switch == "producer":
+            saved = (self.establishing, list(self._window), self._last_pair, self._rejoined)
+            cand = self._cand_clock.get(gen, saved)
+            # the switch itself opens the generation: the candidate's own re-establishment adds none
+            self.establishing, self._window, self._last_pair, self._rejoined = cand[0], list(cand[1]), cand[2], False
         scan, why = self._judge_clock(h, ranges, inten, gen)
-        if why is not None:
-            if saved is not None:
+        if saved is not None:
+            cand_after = (self.establishing, list(self._window), self._last_pair, self._rejoined)
+            if why is not None:
+                self._cand_clock = {gen: cand_after}  # one candidate at a time: the newest
                 self.establishing, self._window, self._last_pair, self._rejoined = saved
+            else:
+                self._cand_clock = {}  # the candidate's clock becomes the current one
+        if why is not None:
             if switch is None:
                 self._advance(sid)  # the current producer's frame, refused on its clock: still counts for gaps
             return None, why
