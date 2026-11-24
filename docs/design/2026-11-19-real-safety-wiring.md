@@ -359,11 +359,22 @@ STOP·DISARM·센서 무효(스캔·IMU·SLAM) 뒤 금지 명령 0 건과 lease 
   - `rearm_hold_check.py`, `h743_link_check.py`, `teleop_bridge.py`.
   - `real_mcu_link.py` 의 듣기 CLI.
   - `real_autonomy.py --run` 은 지금 실 장치를 열기 전에 거부한다. `--hil` 은 제 pty 를 쓴다. 그래서 둘 다 대상이 아니다. PR 7 이 실 장치를 열 때 같은 인자를 쓴다.
-- **방식**: 기존 그대로 한다. `ReconnectingLink(exclusive=True)` 가 매 열기(재연결 포함)마다 연 fd 에 `flock` 을 걸고, `open_raw(before_config=)` 로 termios·DTR 설정 전에 건다. 직접 `open_raw` 를 부르는 `h743_link_check` 는 같은 `before_config` 로 잠근다.
-- **시작 거부**: 각 도구는 장치를 열기 전에 `probe` 로 한 번 확인한다. 잡혀 있으면 아무것도 쓰지 않고 거부한다. JSON 을 내는 도구는 `{"result": "refused", "why": "<경로> is held by another executor: pid N (도구)"}` 와 종료 2 를 낸다. 시작 확인은 안내일 뿐이고, 단일 점유를 보장하는 것은 여는 fd 의 잠금이다. 확인과 열기 사이에 다른 실행기가 잡으면 첫 열기가 `device_busy` 가 되어 연결되지 않는다. 이후는 연결 끊김과 같다(STATE 없음 → 기존 거부·중단 경로).
-- **고정 시험**: `tools/*.py` 를 AST 로 훑는다. `ReconnectingLink(` 호출에 `exclusive=True` 가 없거나 `open_raw(` 호출에 `before_config=` 가 없으면 실패한다. 예외는 이름을 적은 허용 목록뿐이다(시험이 쓰는 pty 등). 새 도구가 잠금을 빠뜨리면 pytest 가 잡는다.
-- `ReconnectingLink` 의 기본값 `exclusive=False` 는 그대로 둔다. 시험·rig 가 같은 pty 를 여러 번 여는 경우가 있어서다. 기본값 대신 고정 시험으로 강제한다.
-- 시험(8 절에 더해): 도구별로 잡힌 장치에서 아무것도 쓰지 않고 거부하는지(모형 pty 에 `flock` 을 미리 걸고 실행), 재연결이 잡힌 장치를 만나면 `device_busy` 인지, 고정 시험.
+- **방식**: 기존 그대로 한다. `ReconnectingLink(exclusive=True)` 가 매 열기(재연결 포함)마다 연 fd 에 `flock` 을 걸고, `open_raw(before_config=)` 로 termios·DTR 설정 전에 건다. 직접 `open_raw` 를 부르는 `h743_link_check` 는 같은 `before_config` 로 잠근다. 보유자 표시는 연 fd 의 `fstat` 으로 `/proc/locks` 를 찾는다. 별칭이 바뀌어도 다른 노드의 pid 를 보이지 않는다. 보유자를 못 찾아도 거부는 그대로다.
+- **시작 거부 = 첫 열기**(설계 1 회차 P1-2·P2): 시작 때 따로 여는 `probe` 는 없앤다. USB CDC 에서 probe 의 열기·닫기가 DTR 를 건드려 펌웨어가 STATE 를 버리거나 송신 링을 비우기 때문이다. 대신 `exclusive=True` 링크가 **한 번도 연결되지 않은 상태에서** `DeviceBusy` 를 만나면 재시도하지 않는다. 그 예외를 호출자에게 올리고, 각 도구는 아무것도 쓰지 않은 채 거부하고 종료 2 로 끝난다. JSON 을 내는 도구는 `{"result": "refused", "why": "<경로> is held by another executor: pid N (도구)"}` 를 낸다. 연결된 적이 있는 링크의 재연결에서 만난 잡힘은 지금처럼 `device_busy` 사건과 재시도다. 끊김이 이미 호스트 권한을 거뒀으므로 진행 중인 실행은 끊김 경로로 끝난다. 텔레옵 다리의 시작 probe 도 이 규칙으로 바꾼다.
+- **인계 뒤 조용한 구간**(설계 1 회차 P1-3): 앞 실행기가 마지막 구분자를 못 쓰고 죽으면 MCU 수신 버퍼에 반쪽 프레임이 남는다. 새 실행기의 첫 구분자 `0x00` 이 그것을 완성할 수 있다(6a 의 pty 재현과 같은 일). 그래서 `exclusive=True` 링크는 잠금을 잡은 뒤 **`HANDOVER_QUIET_S = 0.25` 초 동안 한 바이트도 쓰지 않는다**. 그동안 읽은 바이트는 버린다(`TCIFLUSH`). 그다음 연결을 알린다.
+  - 근거: 펌웨어의 모든 명령은 유효기간이 `command_timeout_ms` 이하다(보드 150 ms, 모형 200 ms, `drive.c` `window_for`). ARM 도 echo 가 그 창 안이어야 받는다(`echo_fresh`). 앞 실행기의 echo 는 그가 죽기 전 STATE 의 MCU 시각이고, 잠금은 그가 죽은 뒤에야 풀린다. 그러니 잠금 뒤 0.25 s 가 지나서 완성된 옛 DRIVE·COMMISSION·ARM 은 만료로 거부된다.
+  - 남는 것: 유효기간 없는 DISARM(멈추는 쪽)과 CLEAR_FAULTS(FAULT·ESTOP 에서만, 부팅 일치 필요, 움직이지 않고 다시 ARM 이 필요)뿐이다.
+  - 재연결에도 같다. 처음 연결이면 도구의 대기 시간에 0.25 s 가 더해질 뿐이다.
+- **스테이징 사본**(설계 1 회차 P1-1): 보드 점검 절차는 `data/h743_check/code/`(`tools/h743_check/stage.sh` 가 만든 사본)를 실행한다. 그래서 이 PR 머지 뒤 다음 벤치 준비에서 **main 으로 다시 스테이징**한다. 그 사본은 잠금이 없는 옛 코드이기 때문이다. 도착일 절차의 벤치 준비 줄에 넣는다. 또 `stage.sh` 가 만든 사본에는 `executor_lock.py` 가 있고, `3_link_check.sh` 는 사본에 그 파일이 없으면 멈춘다. 이 검사는 다시 스테이징한 런처부터 적용된다.
+- **고정 시험은 보조**(설계 1 회차 P2): `tools/*.py` 를 AST 로 훑는다. `ReconnectingLink(` 호출에 `exclusive=True` 가, `open_raw(` 호출에 `before_config=` 가 있어야 한다. 이름을 적은 허용 목록만 예외다. 보장은 아래 도구별 시험이 한다. 범위 밖은 이 설계에 적는다. C 모형(`mcu_model --link`)과 LiDAR 런처(`scan-a2m12`)는 MCU 경로를 받는 운영 경로가 아니다. `h743_link_check.run(fd=)` 는 시험 전용이다.
+- **flock 의 보장 단위**(설계 1 회차 P2): 같은 장치 노드 inode 와 협조하는 호출자다. 같은 노드를 가리키는 별칭(`/dev/forklift-mcu`, by-id)은 같은 잠금이다. USB 재열거로 새 노드가 생기면 옛 fd 는 끊긴 장치에 남는다. 잠금 둘이 곧 살아 있는 tty 의 리더 둘은 아니다. 보드 하나에 실행기 하나는 udev 별칭이 한 보드를 가리킨다는 운용 전제 위에 선다. 보드 정체 확인은 기존의 제품 문자열·UID 확인이 맡는다.
+- `ReconnectingLink` 의 기본값 `exclusive=False` 는 그대로 둔다. 시험·rig 가 같은 pty 를 여러 번 여는 경우가 있어서다.
+- 시험(8 절에 더해):
+  - 도구별로, 모형 pty slave 에 다른 fd 로 `flock` 을 미리 건다. 그러면 첫 열기에서 아무것도 쓰지 않고 종료 2 로 끝나야 한다. 보유자가 곧 닫아도 재시도·송신이 없어야 한다.
+  - 연결된 뒤의 재연결이 잡힌 장치를 만나면 `device_busy` 와 재시도.
+  - 잠금 뒤 0.25 s 동안 쓰기 0 바이트, 그동안 읽은 바이트 버림.
+  - 고정 시험.
+  - Jetson·H743 의 DTR·재열거 시각은 실측하지 않았다. 벤치 확인 항목이다.
 
 ## 9. 시험
 
