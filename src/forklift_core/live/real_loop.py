@@ -73,8 +73,9 @@ def motion_allowed(transport) -> bool:
     """The device block (4c design 5): ARM and every DRIVE (the normal one, the host's zero after ARM, the wait frame,
     S10's stop frame) go out only on a transport that declares itself the internal fake MCU (``fake_mcu is True``);
     any other transport -- an operating serial link included -- passes the DISARM only. The real MCU's AUTO opens
-    with PR 5 and S10's preconditions."""
-    return getattr(transport, "fake_mcu", False) is True
+    with PR 5 and S10's preconditions. 6a (design 1): or a transport that verified an output-locked HIL board
+    (``hil_plant is True``, the loop TTY transport's own check of every STATE of the current boot)."""
+    return getattr(transport, "fake_mcu", False) is True or getattr(transport, "hil_plant", False) is True
 
 
 @dataclass
@@ -275,6 +276,7 @@ class RealLoop:
         self._arm_binding: tuple | None = None  # (lease id, control generation) the ARM was asked under (6a)
         self._kept: set = set()  # seqs of ARMs / arming zeros sent back to the queue once (re-judged on echo windows)
         self._cancel_arm: str | None = None  # an arming exchange to give up after this send (6a)
+        self._lost_seen = False  # the transport's device loss handled once (6a-2a)
         self._hold_acq: dict = {}
         self._wait_frames_tick = 0
         self._axis: dict | None = None
@@ -2060,7 +2062,6 @@ class RealLoop:
         (round 4 P1-1); a failure of the authority or the evidence is ① in this very tick, its DISARM written first
         (the latch drops the queue); a new wait reason, or 30 ms passed, turns a normal moving DRIVE into ③. The
         permit's own transmits (``escalate=False``) never come back to ①."""
-        motion = motion_allowed(self.transport)
         a, permit = self.link.a, self.permit
         refused, alarm, waits = [], [], []
         authority = (ra.ARMING, ra.READY, ra.DRIVING, ra.STOP_PENDING)
@@ -2082,6 +2083,7 @@ class RealLoop:
             alarm.append(stuck)
             permit.link_reset(now_ns)
             escalate_now(stuck)  # the DISARM queued (and the queue dropped) before anything else is sent
+        motion = motion_allowed(self.transport)  # 6a (design 1): after a resync that could change it
 
         def judge(frame) -> tuple:
             """(reason, class) for a non-DISARM frame now; class: alarm | wait | drop. The readiness evidence is read
@@ -2259,7 +2261,10 @@ class RealLoop:
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
             if self.delay_bound is not None:
-                self.delay_bound.written(seq, written_ns)
+                # the round trip's write is the first byte's (6a-2a impl round 1 P1-3): a write that returned late does
+                # not shrink the bound of a STATE measured after the bytes went out
+                first_ = getattr(self.transport, "first_byte_ns", {}).get(int(seq) & 0xFFFF, written_ns)
+                self.delay_bound.written(seq, first_)
                 pair = permit.session_pair()  # after the permit took the write: the second DISARM's seq is known
                 if pair is not None:
                     self.delay_bound.expect_step(*pair)
@@ -2279,6 +2284,19 @@ class RealLoop:
         if self._cancel_arm is not None:
             self.host.cancel_arm(now_ns, self._cancel_arm)  # the permit latches arm_failed / revoked on its tick
             self._cancel_arm = None
+        lost_ = getattr(self.transport, "lost", None)
+        if lost_ is not None and not self._lost_seen:
+            # 6a-2a impl round 2 P2-1: the frames finished before the loss are booked above; the loss itself is ①
+            # in this tick (the runner ends the run on it)
+            self._lost_seen = True
+            rec_ = getattr(self, "_rec", None)
+            if rec_ is not None:
+                rec_.branch, rec_.reason = "emergency", str(lost_.get("reason", "device_lost"))
+            self._in_transmit = True
+            try:
+                self._emergency(now_ns, str(lost_.get("reason", "device_lost")))
+            finally:
+                self._in_transmit = False
         rec_ = getattr(self, "_rec", None)
         if rec_ is not None and refused:
             gone_ = {int(q) & 0xFFFF for _, q in refused}

@@ -22,7 +22,18 @@
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
    within 100-300 ms, so a commissioning-limited duty can raise the bits. --stop-grace-ms: the
-   STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300). */
+   STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300).
+   Real HIL 6a (docs/design/2026-11-20-real-hil-6a.md 1, 6): --hil-plant 1 sets the hil_plant and outputs_locked
+   build bits together (the core refuses one without the other, and either with a commissioning build).
+   --state-silent-at-ms N --state-silent-ms D: from N for D ms no STATE is written while frames are still read and
+   handled (a host-side receive cut; unlike --silent-at-ms, a DISARM sent then is taken; STATEs queued before it are
+   dropped, none goes out in it). --accept-log PATH: each frame the core handled (the core's own frame_handled hook,
+   at the frame, with the core's own read budget) is a line "MCU-us seq kind verdict prior-mode prior-expiry-us"
+   (verdict "accepted", "rejected:<reason>", "handled" for CLEAR_FAULTS, "ignored"; expiry -1 when none). A frame
+   cut mid-way at a STATE cut is dropped and the poison (0x01 x 96, 0x00) goes before the first STATE after it.
+   --short-write-at-ms N (a test injection): from N the next write sends 10 bytes, then EAGAIN until a STATE cut.
+   --axis-log PATH:
+   each tick a line "MCU-us wall-gap-ns mode lift-m steer-rad wheel-L wheel-R" (the plant's own values, rad/s). */
 #define _DEFAULT_SOURCE /* cfmakeraw, clock_nanosleep */
 #include <errno.h>
 #include <fcntl.h>
@@ -52,6 +63,13 @@ typedef struct {
     long fault_at_ms, estop_at_ms, estop_release_ms, silent_at_ms;
     long hand_wheel, hand_revs, hand_at_ms, hand_duration_ms;
     bool fault_fired;
+    long state_silent_at_ms, state_silent_ms; /* 6a: STATE writes withheld in [at, at + ms) */
+    FILE *accept_log, *axis_log;              /* 6a: per frame / per tick records */
+    bool was_state_silent;
+    bool tx_mid; /* the last flush stopped inside a frame (its delimiter not yet out) */
+    bool resync_after_cut; /* a frame was cut mid-way at a STATE cut: the poison goes first when it ends */
+    long short_write_at_ms; /* test injection (see --short-write-at-ms) */
+    bool short_written;
 } board;
 
 static board B;
@@ -78,6 +96,13 @@ static long elapsed_ms(void)
 static bool silent(void)
 {
     return B.silent_at_ms >= 0 && elapsed_ms() >= B.silent_at_ms;
+}
+
+static bool state_silent(void)
+{
+    long t = elapsed_ms();
+    return B.state_silent_at_ms >= 0 && t >= B.state_silent_at_ms &&
+           t < B.state_silent_at_ms + B.state_silent_ms;
 }
 
 /* ---- HAL ---------------------------------------------------------------------------- */
@@ -119,7 +144,7 @@ static size_t hal_link_read(void *ctx, uint8_t *buf, size_t cap)
 static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
 {
     (void)ctx;
-    if (silent()) {
+    if (silent() || state_silent()) {
         return true; /* swallowed: the host sees silence */
     }
     if (B.tx_len + len > TX_CAP) {
@@ -133,13 +158,28 @@ static bool hal_link_write(void *ctx, const uint8_t *frame, size_t len)
 static void flush_tx(void)
 {
     while (B.tx_len > 0) {
-        ssize_t n = write(B.fd, B.tx, B.tx_len);
+        size_t want = B.tx_len;
+        if (B.short_write_at_ms >= 0 && elapsed_ms() >= B.short_write_at_ms) {
+            /* --short-write-at-ms (a test injection): 10 bytes once, then EAGAIN until a STATE cut starts */
+            if (B.short_written) {
+                return;
+            }
+            want = want < 10 ? want : 10;
+        }
+        ssize_t n = write(B.fd, B.tx, want);
         if (n < 0) {
             if (errno == EINTR) {
                 continue;
             }
             return; /* EAGAIN or a closed peer: keep the bytes, try next tick */
         }
+        if (n == 0) {
+            return; /* no progress: the buffer and tx_mid stay as they are */
+        }
+        if (B.short_write_at_ms >= 0 && elapsed_ms() >= B.short_write_at_ms) {
+            B.short_written = true; /* only once bytes really went out */
+        }
+        B.tx_mid = B.tx[n - 1] != 0;
         memmove(B.tx, B.tx + n, B.tx_len - (size_t)n);
         B.tx_len -= (size_t)n;
     }
@@ -162,9 +202,12 @@ static void hal_kick(void *ctx)
     (void)ctx;
 }
 
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after);
+
 static const fw_hal HAL = {
     &B,           hal_now, hal_read, hal_write, hal_link_read, hal_link_write, hal_spi_start,
-    hal_spi_take, hal_kick};
+    hal_spi_take, hal_kick, frame_handled};
 
 /* ---- plant: the shared model, plus the host-only hand turn ------------------------------ */
 static void step_plant(double dt)
@@ -286,6 +329,45 @@ static const char *arg_str(int argc, char **argv, const char *name)
     return NULL;
 }
 
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after);
+
+static const char *kind_name(uint8_t t)
+{
+    switch (t) {
+    case LINK_DRIVE: return "DRIVE";
+    case LINK_ARM: return "ARM";
+    case LINK_DISARM: return "DISARM";
+    case LINK_CLEAR_FAULTS: return "CLEAR_FAULTS";
+    case LINK_COMMISSION: return "COMMISSION";
+    default: return "OTHER";
+    }
+}
+
+static void frame_handled(void *ctx, const link_msg *m, uint8_t prior_mode, int64_t prior_expiry_us,
+                          const drive *after)
+{
+    (void)ctx;
+    if (B.accept_log == NULL) {
+        return;
+    }
+    char verdict[24];
+    if (m->type == LINK_DISARM) {
+        snprintf(verdict, sizeof verdict, "accepted"); /* always taken (it names its seq) */
+    } else if (m->type == LINK_CLEAR_FAULTS) {
+        snprintf(verdict, sizeof verdict, "handled");
+    } else if (m->type != LINK_ARM && m->type != LINK_DRIVE && m->type != LINK_COMMISSION) {
+        snprintf(verdict, sizeof verdict, "ignored"); /* a STATE or an unknown type: no branch handles it */
+    } else if (after->reject_reason == 0) {
+        snprintf(verdict, sizeof verdict, "accepted"); /* ARM / DRIVE / COMMISSION set it on every frame */
+    } else {
+        snprintf(verdict, sizeof verdict, "rejected:%u", (unsigned)after->reject_reason);
+    }
+    fprintf(B.accept_log, "%llu %u %s %s %u %lld\n", (unsigned long long)after->time_us, (unsigned)m->seq,
+            kind_name(m->type), verdict, (unsigned)prior_mode, (long long)prior_expiry_us);
+    fflush(B.accept_log);
+}
+
 int main(int argc, char **argv)
 {
     const char *link = arg_str(argc, argv, "--link");
@@ -329,6 +411,20 @@ int main(int argc, char **argv)
     long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
     long stop_grace_ms = arg_long(argc, argv, "--stop-grace-ms", 100);
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
+    bool hil_plant = arg_long(argc, argv, "--hil-plant", 0) != 0;
+    B.state_silent_at_ms = arg_long(argc, argv, "--state-silent-at-ms", -1);
+    B.short_write_at_ms = arg_long(argc, argv, "--short-write-at-ms", -1);
+    B.state_silent_ms = arg_long(argc, argv, "--state-silent-ms", 0);
+    const char *accept_path = arg_str(argc, argv, "--accept-log");
+    const char *axis_path = arg_str(argc, argv, "--axis-log");
+    if (accept_path != NULL && (B.accept_log = fopen(accept_path, "w")) == NULL) {
+        perror("accept log");
+        return 2;
+    }
+    if (axis_path != NULL && (B.axis_log = fopen(axis_path, "w")) == NULL) {
+        perror("axis log");
+        return 2;
+    }
     bool enc_test = arg_long(argc, argv, "--encoder-test-thresholds", 0) != 0;
     long duration_ms = arg_long(argc, argv, "--duration-ms", -1);
     uint32_t boot_id = (uint32_t)arg_long(argc, argv, "--boot-id", 0x0B00700L);
@@ -338,7 +434,8 @@ int main(int argc, char **argv)
 
     static drive_config cfg;
     static fw_app app;
-    cfg = make_config(commission, commission_time_ms, locked, enc_test, stop_grace_ms);
+    cfg = make_config(commission, commission_time_ms, locked || hil_plant, enc_test, stop_grace_ms);
+    cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.t0_ns = B.now_ns = mono_ns();
@@ -363,9 +460,41 @@ int main(int argc, char **argv)
         }
         step_plant((double)(B.now_ns - prev) / 1e9);
         fw_app_tick(&app);
-        if (!silent()) {
+        if (B.axis_log != NULL) {
+            fprintf(B.axis_log, "%llu %llu %u %.6f %.6f %.6f %.6f\n", (unsigned long long)app.d.time_us,
+                    (unsigned long long)(B.now_ns - prev), (unsigned)app.d.mode, B.p.lift_m, B.p.steer_rad,
+                    B.p.wheel_rad_s[0], B.p.wheel_rad_s[1]);
+        }
+        bool ss = state_silent();
+        if (ss && !B.was_state_silent) {
+            /* 6a: every STATE queued before the cut is dropped -- a frame already partly out too (impl round 3 P2: its
+               rest sent in the cut would refresh the host on a STATE measured before it); its head left in the host's
+               decoder is closed by the poison (design 3) before the first STATE after the cut */
+            B.resync_after_cut = B.tx_mid;
+            B.tx_len = 0;
+            B.tx_mid = false;
+            B.short_write_at_ms = -1; /* the injection ends with the cut */
+        }
+        if (!ss && B.was_state_silent && B.resync_after_cut) {
+            static const size_t POISON_LEN = 97u;
+            if (B.tx_len + POISON_LEN <= TX_CAP) {
+                memmove(B.tx + POISON_LEN, B.tx, B.tx_len);
+                memset(B.tx, 0x01, POISON_LEN - 1u);
+                B.tx[POISON_LEN - 1u] = 0x00;
+                B.tx_len += POISON_LEN;
+            }
+            B.resync_after_cut = false;
+        }
+        B.was_state_silent = ss;
+        if (!silent() && !ss) {
             flush_tx();
         }
+    }
+    if (B.accept_log != NULL) {
+        fclose(B.accept_log);
+    }
+    if (B.axis_log != NULL) {
+        fclose(B.axis_log);
     }
     close(B.fd);
     return 0;
