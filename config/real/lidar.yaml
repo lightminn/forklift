@@ -14,7 +14,8 @@ timing:
   # error bound at both ends -- the real run's layer takes its first-beam budget from here (wired with 7r). If the
   # bench's bound makes a rotation wider, this and the stop model's budget are raised together, documented
   scan_period_s: 0.12
-  # the SDK sample time's error bound: acquisition can only precede its bytes' arrival, by at most one capsule's
-  # sampling + its serial transfer + the USB-UART latency_timer (design 9 item 1); null until the bench measures it
+  # the SDK sample time's error bound: null until 7a-3 (required before S10) -- the SDK's decoder reads its clock
+  # after the receive queue, so the bound needs the receive thread's arrival times; until then every scan is
+  # diagnostic only
   first_beam_err_s: null
   measured: false

@@ -207,6 +207,10 @@ class ScanFeed:
             self.synthetic_frames += 1
         if not _meta_ok(h):
             return None, "bad_meta"  # judged before any generation rule: a broken frame changes nothing
+        if ("first_beam_mono_ns" in h or "last_beam_mono_ns" in h) and h.get("stamp_kind") != "sdk_first_sample":
+            # acquisition times on a frame that says its stamp is something else: a contradiction (Codex 7a-2 round
+            # 2 P2-3)
+            return None, "bad_meta"
         sid = int(h["scan_id"])
         if "gen" in h and not _int(h["gen"], 1):
             return None, "bad_meta"  # a nonce given but malformed is not "no nonce" (Codex 7a-1 round 2 P2-3)

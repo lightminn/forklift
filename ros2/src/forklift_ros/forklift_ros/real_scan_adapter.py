@@ -33,19 +33,25 @@ SOURCES = {  # --source: the topic and what its stamp means (PR 7a-2: the topic 
 
 SDK_MAX_AGE_NS = 5_000_000_000  # a first-sample time older than this at receipt is not one (a wrong topic, a remap)
 SDK_MAX_SPAN_S = 0.5
+SDK_FORMAT = "@sdk_mono_v1"  # forklift patch 0001 appends this to the frame_id of every scan_sdk message
 
 
-def sdk_fields(stamp_ns: int, scan_time: float, recv_mono_ns: int, sys_minus_mono_ns: int) -> dict | None:
+def sdk_fields(stamp_ns: int, scan_time: float, recv_mono_ns: int, sys_minus_mono_ns: int,
+               frame_id: str = SDK_FORMAT) -> dict | None:
     """The frame fields of a scan_sdk message (forklift patch 0001): its stamp is the SDK's first sample on
     CLOCK_MONOTONIC as it is, its scan_time the same buffer's last - first sample. None when the message does not
     look like one -- an epoch stamp (the upstream topic remapped here), a time in the future or too old, a span that
     is not one rotation -- so a wrong topic gives no scan, never a call-start stamp taken for a first sample (Codex
     7a-2 P2-3)."""
+    if not str(frame_id).endswith(SDK_FORMAT):
+        return None  # the format's own name is required: any other LaserScan is not a scan_sdk message (round 2 P2-3)
     if not (0 < stamp_ns <= recv_mono_ns and recv_mono_ns - stamp_ns <= SDK_MAX_AGE_NS):
         return None
     if not (0.0 < scan_time <= SDK_MAX_SPAN_S):
         return None
-    last = stamp_ns + int(round(scan_time * 1e9))
+    # the span is whole microseconds at the source; scan_time is a float32 on the wire -- round to the microsecond
+    # first, so the last sample comes back exactly (round 2 P3)
+    last = stamp_ns + int(round(scan_time * 1e6)) * 1000
     if last > recv_mono_ns:
         return None
     return {"first_beam_mono_ns": int(stamp_ns), "last_beam_mono_ns": int(last),
@@ -84,6 +90,7 @@ def make_frame(msg, *, scan_id: int, recv_mono_ns: int, sys_minus_mono_ns: int, 
         head["stamp_kind"] = str(stamp_kind)
     if sdk is not None:
         head.update(sdk)
+        head["frame_id"] = head["frame_id"].removesuffix(SDK_FORMAT)  # the sensor frame, as on the upstream topic
     raw = json.dumps(head).encode("utf-8")
     body = ranges.tobytes() + (inten.tobytes() if inten is not None else b"")
     return MAGIC + _LEN.pack(len(raw)) + raw + body
@@ -160,7 +167,7 @@ def main(argv=None) -> int:
             sdk = None
             if self.stamp_kind == "sdk_first_sample":
                 stamp_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec)
-                sdk = sdk_fields(stamp_ns, float(msg.scan_time), recv, pair)
+                sdk = sdk_fields(stamp_ns, float(msg.scan_time), recv, pair, frame_id=str(msg.header.frame_id))
                 if sdk is None:
                     self.not_sdk += 1  # not a scan_sdk message: dropped, counted, never sent as one
                     return

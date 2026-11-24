@@ -20,12 +20,21 @@ docker image inspect -f '{{.Id}}' "$TAG" > "$OUT/image.txt"
 # each check its own exit status: a missing binary, topic or patched call fails the job (Codex 7a-2 P3)
 docker run --rm --entrypoint bash "$TAG" -c '
   set -euo pipefail
+  # every check its own command (set -e does not stop on the left of &&): any one failing ends the job
   bin=$(find /opt/sllidar_ws/install -name sllidar_node -type f | head -1)
-  test -n "$bin" && test -x "$bin" && echo "binary $bin"
-  grep -q scan_sdk "$bin" && echo "binary has scan_sdk"
-  grep -q read_delay_ms "$bin" && echo "binary has read_delay_ms"
-  grep -q "grabScanDataHqWithTimeStamps" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp && echo "node calls the patched grab"
-  grep -q "_scan_last_timestamp_uS" /opt/sllidar_ws/src/sllidar_ros2/sdk/src/sl_lidar_driver.cpp && echo "sdk keeps the last sample"
+  test -n "$bin"
+  test -x "$bin"
+  echo "binary $bin"
+  grep -q scan_sdk "$bin"
+  echo "binary has scan_sdk"
+  grep -q publish_delay_ms "$bin"
+  echo "binary has publish_delay_ms"
+  grep -q "@sdk_mono_v1" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp
+  echo "node names the format"
+  grep -q "grabScanDataHqWithTimeStamps" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp
+  echo "node calls the patched grab"
+  grep -q "_scan_last_timestamp_uS" /opt/sllidar_ws/src/sllidar_ros2/sdk/src/sl_lidar_driver.cpp
+  echo "sdk keeps the last sample"
 ' > "$OUT/check.txt" 2>&1
 echo "$TAG $(cat "$OUT/image.txt") $(date -Is)" | tee "$OUT/built.txt"
 cat "$OUT/check.txt"

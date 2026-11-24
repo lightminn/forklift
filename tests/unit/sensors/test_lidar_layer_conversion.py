@@ -112,10 +112,10 @@ def test_a_clock_jump_then_re_establishment_opens_a_generation():
 
 def test_the_first_and_last_sample_times_are_carried_only_as_a_pair():
     feed = sf.ScanFeed()
-    out = settled(feed, first_beam_mono_ns=123, last_beam_mono_ns=456)
+    out = settled(feed, first_beam_mono_ns=123, last_beam_mono_ns=456, stamp_kind="sdk_first_sample")
     assert out[-1][0].meta["first_beam_mono_ns"] == 123 and out[-1][0].meta["last_beam_mono_ns"] == 456
     feed = sf.ScanFeed()
-    out = settled(feed, first_beam_mono_ns=123)  # no last: neither is carried
+    out = settled(feed, first_beam_mono_ns=123, stamp_kind="sdk_first_sample")  # no last: neither is carried
     assert "first_beam_mono_ns" not in out[-1][0].meta
 
 

@@ -1,8 +1,8 @@
 forklift patch 0001 (PR 7a-2, docs/design/2026-11-25-real-sources-pr7.md 4): the SDK keeps each scan buffer's last sample
 time beside its first (grabScanDataHqWithTimeStamps), and the node publishes each scan also on 'scan_sdk', stamped with
-the first sample (CLOCK_MONOTONIC as it is, no ROS clock) and scan_time = last - first sample of the same buffer;
-'read_delay_ms' (bench only) delays the reader with the decoder running. Against Slamtec/sllidar_ros2 34300099;
-applied with git apply in deploy/ros2/Dockerfile.scan.
+the first sample (CLOCK_MONOTONIC as it is, no ROS clock), scan_time = last - first sample of the same buffer and the
+frame_id suffixed '@sdk_mono_v1' (the format's name); 'publish_delay_ms' (bench only) holds a read scan before it is
+published. Against Slamtec/sllidar_ros2 34300099; applied with git apply in deploy/ros2/Dockerfile.scan.
 
 diff --color -ruN a2/sdk/include/sl_lidar_driver.h b2/sdk/include/sl_lidar_driver.h
 --- a/sdk/include/sl_lidar_driver.h	2026-11-25 08:46:35.241065587 +0900
@@ -108,8 +108,8 @@ diff --color -ruN a2/sdk/src/sl_lidar_driver.cpp b2/sdk/src/sl_lidar_driver.cpp
  
 diff --color -ruN a2/src/sllidar_node.cpp b2/src/sllidar_node.cpp
 --- a/src/sllidar_node.cpp	2026-11-25 08:46:35.238419790 +0900
-+++ b/src/sllidar_node.cpp	2026-11-25 08:46:35.254021784 +0900
-@@ -60,13 +60,26 @@
++++ b/src/sllidar_node.cpp	2026-11-25 08:52:50.121085948 +0900
+@@ -60,13 +60,27 @@
      {
  
        scan_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan", rclcpp::QoS(rclcpp::KeepLast(10)));
@@ -131,21 +131,24 @@ diff --color -ruN a2/src/sllidar_node.cpp b2/src/sllidar_node.cpp
      void init_param()
      {
          this->declare_parameter<std::string>("channel_type","serial");
-+        // forklift patch 0001: bench only -- wait this long before each read, the SDK's decoder still running, so a
-+        // finished scan waits in its buffer (the buffer-delay injection; 0 = never)
-+        this->declare_parameter<int>("read_delay_ms", 0);
++        // forklift patch 0001: bench only -- hold each scan this long after it was read, before it is published: its
++        // first and last sample times are already fixed, so the very same scan arrives that much older (the delay
++        // injection; 0 = never)
++        this->declare_parameter<int>("publish_delay_ms", 0);
          this->declare_parameter<std::string>("tcp_ip", "192.168.0.7");
          this->declare_parameter<int>("tcp_port", 20108);
          this->declare_parameter<std::string>("udp_ip","192.168.11.2");
-@@ -206,6 +219,22 @@
+@@ -206,6 +220,24 @@
                    float max_distance,
                    std::string frame_id)
      {
 +        publish_one(pub, nodes, node_count, start, scan_time, inverted, angle_min, angle_max, max_distance, frame_id);
-+        // forklift patch 0001: the same scan on scan_sdk (stamp = first sample, scan_time = last - first sample)
++        // forklift patch 0001: the same scan on scan_sdk (stamp = first sample, scan_time = last - first sample);
++        // its frame_id carries the format's own name, which the adapter requires -- a LaserScan from anywhere else
++        // (a remap, another node) never passes for one
 +        if (sdk_ok) {
 +            publish_one(scan_sdk_pub, nodes, node_count, sdk_stamp, sdk_span, inverted, angle_min, angle_max,
-+                        max_distance, frame_id);
++                        max_distance, frame_id + "@sdk_mono_v1");
 +        }
 +    }
 +
@@ -160,15 +163,9 @@ diff --color -ruN a2/src/sllidar_node.cpp b2/src/sllidar_node.cpp
          static int scan_count = 0;
          auto scan_msg = std::make_shared<sensor_msgs::msg::LaserScan>();
  
-@@ -359,10 +388,22 @@
-             sl_lidar_response_measurement_node_hq_t nodes[8192];
+@@ -360,9 +392,21 @@
              size_t   count = _countof(nodes);
  
-+            {
-+                // forklift patch 0001: the bench's buffer-delay injection (the reader only)
-+                const int64_t read_delay_ms = this->get_parameter("read_delay_ms").as_int();
-+                if (read_delay_ms > 0) rclcpp::sleep_for(std::chrono::milliseconds(read_delay_ms));
-+            }
              start_scan_time = this->now();
 -            op_result = drv->grabScanDataHq(nodes, count);
 +            sl_u64 first_sample_us = 0, last_sample_us = 0;  // forklift patch 0001
@@ -181,6 +178,11 @@ diff --color -ruN a2/src/sllidar_node.cpp b2/src/sllidar_node.cpp
 +                     && last_sample_us - first_sample_us <= 500000ULL;
 +            sdk_stamp = rclcpp::Time((int64_t)first_sample_us * 1000LL, RCL_STEADY_TIME);
 +            sdk_span = sdk_ok ? (double)(last_sample_us - first_sample_us) / 1e6 : 0.0;
++            {
++                // forklift patch 0001: the bench's delay injection, on the scan already read
++                const int64_t publish_delay_ms = this->get_parameter("publish_delay_ms").as_int();
++                if (publish_delay_ms > 0) rclcpp::sleep_for(std::chrono::milliseconds(publish_delay_ms));
++            }
  
              if (op_result == SL_RESULT_OK) {
                  op_result = drv->ascendScanData(nodes, count);

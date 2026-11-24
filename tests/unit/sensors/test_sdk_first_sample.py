@@ -32,13 +32,21 @@ def _adapter():
 
 
 def sdk_frame(k, *, first, span_s, recv, n=8):
-    """A scan_sdk frame as the adapter makes it from the patched node's message: stamp = first sample (monotonic),
-    scan_time = last - first sample of the same buffer."""
-    f = _adapter().sdk_fields(first, span_s, recv, OFF)
+    """A scan_sdk frame exactly as the adapter makes it from the patched node's message: stamp = first sample
+    (monotonic), scan_time = last - first sample as a float32, frame_id with the format's name."""
+    from types import SimpleNamespace
+
+    ra = _adapter()
+    span32 = float(np.float32(span_s))
+    msg = SimpleNamespace(ranges=list(np.full(n, 2.0)), intensities=[], angle_min=-3.14, angle_increment=6.28 / n,
+                          time_increment=float(np.float32(span_s / (n - 1))), scan_time=span32, range_min=0.05,
+                          range_max=12.0,
+                          header=SimpleNamespace(stamp=SimpleNamespace(sec=first // 10**9, nanosec=first % 10**9),
+                                                 frame_id="laser" + ra.SDK_FORMAT))
+    f = ra.sdk_fields(first, msg.scan_time, recv, OFF, frame_id=msg.header.frame_id)
     assert f is not None
-    return frame(k, n=n, recv=recv, stamp=f["ros_stamp_ns"], stamp_kind="sdk_first_sample",
-                 time_increment=span_s / (n - 1), first_beam_mono_ns=f["first_beam_mono_ns"],
-                 last_beam_mono_ns=f["last_beam_mono_ns"])
+    return ra.make_frame(msg, scan_id=k, recv_mono_ns=recv, sys_minus_mono_ns=OFF, gen=7,
+                         stamp_kind="sdk_first_sample", sdk=f)
 
 
 def settled_sdk(span_s=0.098):
@@ -86,6 +94,7 @@ def test_a_nominal_rotation_needs_a_budget_that_covers_it():
 
 @pytest.mark.parametrize("stamp,span,recv,ok", [
     (5 * 10**9, 0.098, 5 * 10**9 + 200 * MS, True),
+    (5 * 10**9, 0.002, 5 * 10**9 + 10 * MS, True),     # (the frame_id case below is what refuses a remap)
     (1_700_000_000 * 10**9, 0.098, 5 * 10**9, False),  # an epoch stamp: the upstream topic remapped here
     (6 * 10**9, 0.098, 5 * 10**9, False),               # in the future
     (1 * 10**9, 0.098, 7 * 10**9, False),               # older than 5 s
@@ -95,6 +104,28 @@ def test_a_nominal_rotation_needs_a_budget_that_covers_it():
 def test_the_adapter_takes_only_what_looks_like_a_scan_sdk_message(stamp, span, recv, ok):
     """Codex 7a-2 P2-3: a wrong topic or a remap gives no scan, never a call-start stamp taken for a first sample."""
     assert (_adapter().sdk_fields(stamp, span, recv, OFF) is not None) is ok
+
+
+def test_a_laserscan_without_the_format_name_is_never_a_scan_sdk_message():
+    """Codex 7a-2 round 2 P2-3: a call-start scan whose times happen to fit (20.000 s, 2 ms, received 20.010 s) is
+    refused by its frame_id; and the host refuses acquisition times on a call_start frame."""
+    ra = _adapter()
+    assert ra.sdk_fields(20 * 10**9, 0.002, 20 * 10**9 + 10 * MS, OFF, frame_id="laser") is None
+    assert ra.sdk_fields(20 * 10**9, 0.002, 20 * 10**9 + 10 * MS, OFF, frame_id="laser" + ra.SDK_FORMAT) is not None
+    feed = sf.ScanFeed()
+    assert feed.judge(frame(0, stamp_kind="call_start", first_beam_mono_ns=1, last_beam_mono_ns=2), 0)[1] == "bad_meta"
+
+
+def test_the_last_sample_comes_back_exactly_through_float32():
+    """Codex 7a-2 round 2 P3: 98 000 us survives the float32 scan_time."""
+    ra = _adapter()
+    f = ra.sdk_fields(10**9, float(np.float32(0.098)), 10**9 + 200 * MS, OFF)
+    assert f["last_beam_mono_ns"] - f["first_beam_mono_ns"] == 98_000_000
+
+
+def test_the_frame_id_is_the_sensor_frame_again():
+    h, _r, _i = sf.decode_frame(sdk_frame(1, first=10**9, span_s=0.098, recv=10**9 + 200 * MS))
+    assert h["frame_id"] == "laser"
 
 
 def test_the_adapter_source_decides_topic_and_stamp_kind():
@@ -116,7 +147,8 @@ def test_the_patch_is_applied_by_the_scan_image_and_launched_with_its_topic():
     patch = REPO / "deploy" / "ros2" / "sllidar_patches" / "0001-sdk-first-sample-stamp.patch"
     text = patch.read_text(encoding="utf-8")
     assert "grabScanDataHqWithTimeStamps" in text and '"scan_sdk"' in text and "_scan_last_timestamp_uS" in text
-    assert "read_delay_ms" in text and "this->now() - rclcpp::Duration" not in text  # no ROS-clock round trip
+    assert "publish_delay_ms" in text and "@sdk_mono_v1" in text
+    assert "this->now() - rclcpp::Duration" not in text  # no ROS-clock round trip
     docker = (REPO / "deploy" / "ros2" / "Dockerfile.scan").read_text(encoding="utf-8")
     assert "0001-sdk-first-sample-stamp.patch" in docker and "34300099" in docker
     launcher = (REPO / "tools" / "ros2_dev.sh").read_text(encoding="utf-8")
