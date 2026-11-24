@@ -30,6 +30,7 @@ void plant_init(plant *p, const drive_config *c)
     p->steer_rad = start_in(&c->steer);
     p->lift_m = start_in(&c->lift);
     p->enc_flip = -1;
+    p->enc_frozen = -1;
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         p->nfault_low[ch] = true;
     }
@@ -67,6 +68,9 @@ void plant_inputs(const plant *p, drive_inputs *in)
 {
     for (int i = 0; i < 2; i++) {
         double c = p->enc_flip == i ? -p->wheel_counts[i] : p->wheel_counts[i];
+        if (p->enc_frozen == i) {
+            c = 0.0; /* no encoder on this wheel: the counts stay put while it turns */
+        }
         in->wheel_hw[i] = (uint16_t)(int64_t)llround(c);
     }
     in->abs_frame[0] = plant_kth_frame(p->steer_rad, &p->steer_axis);

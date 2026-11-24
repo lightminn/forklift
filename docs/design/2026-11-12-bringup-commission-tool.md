@@ -2,6 +2,13 @@
 
 bring-up 묶음의 PR ② 다(총괄 순서 2026-11-11: 계약 PR #452 → 도구 ① #453 → 이 PR). 대상은 계획 `docs/plans/2026-11-11-sim-to-real-bringup.md` 5절 **S3 축별 개루프**다. 계약은 mcu-link/2 의 3.4 `COMMISSION`(`docs/interfaces/2026-10-22-mcu-link-contract.md`)이다. 도구 ①(`docs/design/2026-11-12-bringup-host-tools.md`)의 원칙(실행기가 아님, 소프트웨어 근거, 모든 `STATE` 보존, 시각 분리, 정리 절차)을 그대로 따른다. 2판은 Codex 설계 상의(P1 2·P2 5·P3 1)를 반영했다(9절).
 
+> **2026-11-25 갱신**: 벤치 시운전 한계 설계 `docs/design/2026-11-25-bench-commission-limits.md` 가 이 문서를 고친다.
+> - 열린 시운전 이미지(`lim=lr1`)에서는 L·R 의 큰 듀티·긴 시간을 도구 인자로 정한다. 이때 `--wheels-lifted`·TTY 재입력·0.3 초과 `--vcc-watched` 가 필요하다.
+> - `--bypass enc_stuck,enc_polarity` 가 엔코더 조기 정지를 끈다.
+> - `--profile-tri` 로 삼각파를 낸다.
+> - 10 절의 `limit_disarm`·`hold_disarm` 은 잠긴 보드·모형에서만 돈다(열린 보드는 거부). 열린 보드의 정지 시험(`duty_disarm`)은 PR-2 에서 다룬다.
+> - 아래 본문의 '0.15·1.5 s' 는 기본값이다.
+
 플래시는 USB-C DFU 로만 한다(사용자 결정, SWD 디버거 없음). 이 도구와 절차는 SWD 를 전제하지 않는다. 시운전 빌드와 정상 빌드를 바꿔 올리는 일은 펌웨어 쪽 절차(DFU)이고, 도구는 올라간 빌드를 `STATE.flags` 로만 판단한다.
 
 ## 1. S3 가 요구하는 것과 도구가 내는 것

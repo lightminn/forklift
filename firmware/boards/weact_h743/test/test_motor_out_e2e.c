@@ -152,6 +152,12 @@ static void mod_drive(drive_config *c)
 static void mod_commission(drive_config *c)
 {
     c->commission_build = true;
+    /* This E2E compiles the normal board build and flips the bit at run time: set the low
+       commissioning limits it tests explicitly (design 2026-11-25 5, Codex S P3). */
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        c->commission_duty_max_e4[ch] = 1500;
+        c->commission_time_ms[ch] = 2000;
+    }
 }
 
 static link_msg arm(void)
@@ -282,7 +288,7 @@ static void commission_limits(void)
     tick();
     c = regmodel_channel(DRIVE_CH_L);
     CHECK(c.state == RM_FWD && fabs(c.duty - 0.10) < 1e-6);
-    for (int i = 0; i < (int)cfg.commission_time_ms + 50 && A.d.mode == DRIVE_MODE_ARMED; i++) {
+    for (int i = 0; i < (int)cfg.commission_time_ms[DRIVE_CH_L] + 50 && A.d.mode == DRIVE_MODE_ARMED; i++) {
         send(commission(1000));
     }
     CHECK(A.d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);

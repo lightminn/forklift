@@ -1,5 +1,6 @@
 /* The configuration the board actually runs (needs the vehicle header, so built only with
    FW_PYTHON). */
+#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -55,6 +56,23 @@ int main(void)
     CHECK((flags & DRIVE_STATE_OUTPUTS_LOCKED) != 0u);
 #endif
     printf("STATE flags 0x%02x\n", flags);
+    /* Commissioning limits (design 2026-11-25-bench-commission-limits 1.1): only the open
+       commissioning build raises the wheels; steering and lift stay at 0.15 / 2 s. */
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        bool wheel = ch == DRIVE_CH_L || ch == DRIVE_CH_R;
+#if defined(FW_BUILD_commission) && defined(FW_MOTOR_OUTPUT_OPEN)
+        CHECK_EQ_U(c->commission_duty_max_e4[ch], wheel ? 10000u : 1500u);
+        CHECK_EQ_U(c->commission_time_ms[ch], wheel ? 0x7FFFFFFFu / 1000u : 2000u);
+#else
+        (void)wheel;
+        CHECK_EQ_U(c->commission_duty_max_e4[ch], 1500u);
+        CHECK_EQ_U(c->commission_time_ms[ch], 2000u);
+#endif
+    }
+    printf("commission limits e4 %u %u %u %u ms %lu %lu %lu %lu\n", c->commission_duty_max_e4[0],
+           c->commission_duty_max_e4[1], c->commission_duty_max_e4[2], c->commission_duty_max_e4[3],
+           (unsigned long)c->commission_time_ms[0], (unsigned long)c->commission_time_ms[1],
+           (unsigned long)c->commission_time_ms[2], (unsigned long)c->commission_time_ms[3]);
     CHECK(kth_raw_zero_outside_range(&c->steer));
     CHECK(kth_raw_zero_outside_range(&c->lift));
     /* Raw zero inside the steering range is refused by the board rules (not by the core). */

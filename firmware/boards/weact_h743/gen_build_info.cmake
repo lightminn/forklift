@@ -18,4 +18,17 @@ if(FW_ESTOP_WAIVED)
             "and would cut the waiver= token. Shorten the git description (tag name).")
     endif()
 endif()
+# The open commissioning build carries its limit generation as the last token (" lim=lr1"); the
+# bring-up tool reads it whole, so it must not be cut either (design 2026-11-25 1.1).
+if(FW_BUILD STREQUAL "commission" AND NOT FW_OUTPUTS_LOCKED)
+    set(FW_LIMITS_TAG " lim=lr1")
+    set(ID "forklift-mcu ${FW_BUILD} ${FW_OUTPUTS_WORD} ${FW_GIT_DESCRIBE} rec=00000000${FW_LIMITS_TAG}")
+    string(LENGTH "${ID}" ID_LEN)
+    if(ID_LEN GREATER 126)
+        message(FATAL_ERROR "build identity is ${ID_LEN} characters; the USB product string keeps 126 "
+            "and would cut the lim= token. Shorten the git description (tag name).")
+    endif()
+else()
+    set(FW_LIMITS_TAG "")
+endif()
 configure_file(${IN} ${OUT} @ONLY)

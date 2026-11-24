@@ -21,6 +21,7 @@ typedef struct {
     double wheel_rad_s[2], wheel_counts[2];
     double steer_rad, lift_m;
     int enc_flip; /* wheel whose counts run against its motion, -1 none */
+    int enc_frozen; /* wheel whose counts never move (no encoder fitted), -1 none */
     uint8_t regs[DRIVE_CH_COUNT][PLANT_DRV_REGS];
     bool nfault_low[DRIVE_CH_COUNT];
     bool spi_done;

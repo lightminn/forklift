@@ -8,7 +8,8 @@
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
    --hand-turn-duration-ms D]
                     [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
-                    [--encoder-sign-flip 0|1] [--encoder-test-thresholds 1] [--stop-grace-ms N]
+                    [--encoder-sign-flip 0|1] [--encoder-frozen 0|1] [--encoder-test-thresholds 1]
+                    [--stop-grace-ms N]
    --link-fd N: an inherited open fd instead of a path (the rehearsal bench passes the pty master).
    --fault-at-ms: nFAULT L goes low then and stays low until the core sends CLR_FLT.
    --silent-at-ms: from then the model neither reads nor writes the link (host silence detection
@@ -20,7 +21,8 @@
    limit 2000 ms, the plan's proposals, or --commission-time-ms). --outputs-locked 1: the
    outputs_locked build bit (the model's plant still follows the outputs the core computes).
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
-   commissioning tool's tests). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
+   commissioning tool's tests). --encoder-frozen W: wheel W's counts never move (a wheel with no encoder
+   fitted, design 2026-11-25-bench-commission-limits 4). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
    within 100-300 ms, so a commissioning-limited duty can raise the bits. --stop-grace-ms: the
    STOPPING length and so the commissioning re-arm hold (default 100; the board's is 300).
    Real HIL 6a (docs/design/2026-11-20-real-hil-6a.md 1, 6): --hil-plant 1 sets the hil_plant and outputs_locked
@@ -305,8 +307,19 @@ static drive_config make_config(bool commission, long commission_time_ms, bool l
     c.enc_polarity_persist_ms = 2000;
     c.commission_build = commission;
     if (commission) {
-        c.commission_duty_max = 0.15f;
-        c.commission_time_ms = (uint32_t)commission_time_ms;
+        /* As the board (design 2026-11-25-bench-commission-limits 1.1): 0.15 / 2 s on every axis;
+           an open commissioning model raises the wheels to duty 1.0, and their time limit is
+           --commission-time-ms (default: the open board's ceiling, a locked model's 2 s). */
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            c.commission_duty_max_e4[ch] = 1500;
+            c.commission_time_ms[ch] = 2000;
+        }
+        if (!locked) {
+            c.commission_duty_max_e4[DRIVE_CH_L] = c.commission_duty_max_e4[DRIVE_CH_R] = 10000;
+        }
+        c.commission_time_ms[DRIVE_CH_L] = c.commission_time_ms[DRIVE_CH_R] =
+            (uint32_t)(commission_time_ms >= 0 ? commission_time_ms
+                                               : (locked ? 2000L : 0x7FFFFFFFL / 1000L));
     }
     c.outputs_locked = locked;
     if (enc_test) {
@@ -423,8 +436,9 @@ int main(int argc, char **argv)
     B.hand_at_ms = arg_long(argc, argv, "--hand-turn-ms", 0);
     B.hand_duration_ms = arg_long(argc, argv, "--hand-turn-duration-ms", 0);
     long enc_flip = arg_long(argc, argv, "--encoder-sign-flip", -1);
+    long enc_frozen = arg_long(argc, argv, "--encoder-frozen", -1);
     bool commission = arg_long(argc, argv, "--commission-build", 0) != 0;
-    long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", 2000);
+    long commission_time_ms = arg_long(argc, argv, "--commission-time-ms", -1); /* -1: build default */
     long stop_grace_ms = arg_long(argc, argv, "--stop-grace-ms", 100);
     bool locked = arg_long(argc, argv, "--outputs-locked", 0) != 0;
     bool hil_plant = arg_long(argc, argv, "--hil-plant", 0) != 0;
@@ -459,6 +473,7 @@ int main(int argc, char **argv)
     cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
+    B.p.enc_frozen = (int)enc_frozen;
     B.t0_ns = B.now_ns = mono_ns();
     if (!fw_app_init(&app, &HAL, &cfg, 10, boot_id, DRIVE_RESET_POWER)) {
         fprintf(stderr, "fw_app_init refused the configuration\n");

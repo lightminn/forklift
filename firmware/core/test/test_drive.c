@@ -73,6 +73,15 @@ static drive_config make_config(void)
     return c;
 }
 
+/* Every axis's commissioning limits (design 2026-11-25-bench-commission-limits 1.1). */
+static void set_cm_limits(drive_config *c, uint16_t duty_e4, uint32_t time_ms)
+{
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        c->commission_duty_max_e4[ch] = duty_e4;
+        c->commission_time_ms[ch] = time_ms;
+    }
+}
+
 /* ---- fake world --------------------------------------------------------------------- */
 static drive_config cfg;
 static drive d;
@@ -666,8 +675,7 @@ static void config_validation(void)
     CHECK(!drive_config_valid(&c));
     c.outputs_locked = false;
     c.commission_build = true;
-    c.commission_duty_max = 0.15f;
-    c.commission_time_ms = 2000;
+    set_cm_limits(&c, 1500, 2000);
     CHECK(!drive_config_valid(&c));
     c = make_config();
     c.ipropi_ohm = NAN;
@@ -1014,8 +1022,7 @@ static void mod_commission(drive_config *c)
 {
     c->estop_wired = false;
     c->commission_build = true;
-    c->commission_duty_max = 0.15f;
-    c->commission_time_ms = 2000;
+    set_cm_limits(c, 1500, 2000);
     c->enc_stuck_duty = 0.05f;
     c->enc_polarity_duty = 0.05f;
 }
@@ -1083,17 +1090,26 @@ static void v2_config_and_init(void)
     c.outputs_locked = true;
     CHECK(drive_config_valid(&c));
     c.commission_build = true; /* and is not a commission build */
-    c.commission_duty_max = 0.15f;
-    c.commission_time_ms = 2000;
+    set_cm_limits(&c, 1500, 2000);
     CHECK(!drive_config_valid(&c));
     c = make_config();
     c.commission_build = true;
-    c.commission_duty_max = 0.0f;
-    c.commission_time_ms = 2000;
+    set_cm_limits(&c, 1500, 2000);
+    CHECK(drive_config_valid(&c));
+    c.commission_duty_max_e4[DRIVE_CH_H] = 0; /* every axis is checked */
     CHECK(!drive_config_valid(&c));
-    c.commission_duty_max = 1.5f;
+    c.commission_duty_max_e4[DRIVE_CH_H] = 10001;
     CHECK(!drive_config_valid(&c));
-    c.commission_duty_max = 0.15f;
+    c.commission_duty_max_e4[DRIVE_CH_H] = 10000;
+    CHECK(drive_config_valid(&c));
+    c.commission_time_ms[DRIVE_CH_R] = 0;
+    CHECK(!drive_config_valid(&c));
+    c.commission_time_ms[DRIVE_CH_R] = 0x7FFFFFFFu / 1000u; /* the validator's ms ceiling */
+    CHECK(drive_config_valid(&c));
+    c.commission_time_ms[DRIVE_CH_R] = 0x7FFFFFFFu / 1000u + 1u;
+    CHECK(!drive_config_valid(&c));
+    c = make_config(); /* a normal build ignores the zero limits it never uses */
+    set_cm_limits(&c, 0, 0);
     CHECK(drive_config_valid(&c));
     /* gap x physical maximum must not fold in 16 bits: 0.5 s x 50 rad/s x 4096 / 2pi = 16297. */
     c = make_config();
@@ -1165,8 +1181,14 @@ static void v2_commission_checks_and_outputs(void)
     CHECK(out.drvoff[DRIVE_CH_R] && out.drvoff[DRIVE_CH_M] && out.drvoff[DRIVE_CH_H]);
     CHECK_NEAR(out.duty[DRIVE_CH_R], 0.0, 0.0);
 
-    /* Switching axis: L goes to its safe output in that cycle. */
+    /* Switching axis inside an output interval is refused (design 2026-11-25 1.1); after a
+       zero-output cycle it is taken and L goes to its safe output. */
     send(commission_msg(10, 2, -500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_NEAR(out.duty[DRIVE_CH_L], 0.1, 1e-6);
+    send(commission_msg(11, 0, 0, 150, echo_now()));
+    CHECK(!d.cm_on);
+    send(commission_msg(12, 2, -500, 150, echo_now()));
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
     CHECK(out.drvoff[DRIVE_CH_L]);
     CHECK_NEAR(d.wheel_duty[0], 0.0, 0.0);
@@ -1588,7 +1610,9 @@ static void v2r2_commission_stopping_brakes_every_axis(void)
     send(arm_msg(1, d.boot_id, echo_now()));
     send(commission_msg(2, 0, 0, 150, echo_now()));
     send(commission_msg(3, 0, 1000, 150, echo_now()));
-    send(commission_msg(4, 2, 500, 150, echo_now())); /* L driven, then M */
+    send(commission_msg(4, 0, 0, 150, echo_now()));   /* L driven, a zero cycle, then M */
+    send(commission_msg(5, 2, 500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
     CHECK(out.drvoff[DRIVE_CH_L]);                    /* unpicked in ARMED: its safe output */
     ticks(200);
     CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
@@ -1639,7 +1663,7 @@ static void v2r4_limit_and_expiry_in_the_same_cycle(void)
     send(commission_msg(seq++, 0, 0, 150, echo_now()));
     send(commission_msg(seq++, 0, 1000, 150, echo_now()));
     CHECK(d.cm_on);
-    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms[0] * 1000u;
     while (d.time_us + 150000u < limit_at) { /* keep it fresh until 150 ms before */
         if ((d.time_us / 1000u) % 50u == 0) {
             send(commission_msg(seq++, 0, 1000, 150, echo_now()));
@@ -1684,7 +1708,7 @@ static bool limit_with_fault_resumes_early(int kind)
     send(arm_msg(seq++, d.boot_id, echo_now()));
     send(commission_msg(seq++, 0, 0, 150, echo_now()));
     send(commission_msg(seq++, 0, 1000, 150, echo_now()));
-    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms[0] * 1000u;
     while (d.time_us + 2000u < limit_at) {
         if ((d.time_us / 1000u) % 50u == 0) {
             send(commission_msg(seq++, 0, 1000, 150, echo_now()));
@@ -1742,7 +1766,7 @@ static void limit_then_disarm(bool brake, bool same_cycle)
     send(arm_msg(seq++, d.boot_id, echo_now()));
     send(commission_msg(seq++, 0, 0, 150, echo_now()));
     send(commission_msg(seq++, 0, 1000, 150, echo_now()));
-    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms * 1000u;
+    uint64_t limit_at = d.cm_on_since_us + (uint64_t)cfg.commission_time_ms[0] * 1000u;
     while (d.time_us < limit_at) { /* the limit fires in the cycle after limit_at */
         if ((d.time_us / 1000u) % 50u == 0) {
             send(commission_msg(seq++, 0, 1000, 150, echo_now()));
@@ -1785,6 +1809,135 @@ static void v2r6_disarm_in_the_limit_stop(void)
     limit_then_disarm(false, false);
     limit_then_disarm(true, true);
     limit_then_disarm(true, false);
+}
+
+
+/* ---- bench commissioning limits (design 2026-11-25-bench-commission-limits 1.1) ----------- */
+static void mod_commission_open_lr(drive_config *c)
+{
+    mod_commission(c);
+    c->commission_duty_max_e4[DRIVE_CH_L] = c->commission_duty_max_e4[DRIVE_CH_R] = 10000;
+    c->commission_time_ms[DRIVE_CH_L] = c->commission_time_ms[DRIVE_CH_R] = 5000;
+}
+
+static void s25_duty_limits_per_axis_in_integers(void)
+{
+    boot_with(mod_commission_open_lr);
+    in.abs_fresh[1] = false;
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 10000, 150, echo_now())); /* L: up to 1.0 */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(commission_msg(seq++, 0, -10000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(commission_msg(seq++, 0, 10001, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(seq++, 0, (int16_t)-32768, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    tick();
+    CHECK(!d.cm_on);
+    send(commission_msg(seq++, 2, 1501, 150, echo_now())); /* M stays at 0.15 */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(commission_msg(seq++, 2, 1500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+
+    /* The edge in integers: a limit of 7 takes 7 and refuses 8 (binary32 7 / 10000 x 10000 is
+       6.9999995, which a float comparison would refuse). */
+    boot_with(mod_commission);
+    cfg.commission_duty_max_e4[DRIVE_CH_R] = 7;
+    seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 1, 0, 150, echo_now()));
+    send(commission_msg(seq++, 1, 7, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    send(commission_msg(seq++, 1, 8, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
+static void s25_time_limit_is_the_interval_axis(void)
+{
+    boot_with(mod_commission_open_lr); /* L 5 s, M/H 2 s */
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    CHECK(commission_run(3000, 1000, false, &seq) < 0); /* past M's 2 s, still on */
+    CHECK(!(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT));
+    int stopped = commission_run(3000, 1000, false, &seq);
+    CHECK(stopped >= 1990 && stopped <= 2010); /* L's own 5 s */
+    CHECK(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+}
+
+static void s25_disarm_alone_keeps_the_interval_axis(void)
+{
+    /* A DISARM resets cm_axis while cm_on still holds until the zero cycle: the limit check in
+       that cycle reads the interval's own axis (Codex S P1-1). */
+    boot_with(mod_commission_open_lr);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 3000, 150, echo_now()));
+    CHECK(d.cm_on);
+    CHECK_EQ_U(d.cm_on_axis, DRIVE_CH_L);
+    link_msg m = simple(LINK_DISARM, seq++);
+    tick_msgs(&m, 1);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    CHECK(!d.cm_on);
+    CHECK_EQ_U(d.cm_on_axis, 0xFFu);
+    CHECK(!(d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT));
+}
+
+static void s25_axis_change_inside_an_interval(void)
+{
+    boot_with(mod_commission_open_lr);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 2000, 150, echo_now()));
+    uint16_t last = d.last_rx_seq;
+    uint64_t deadline = d.deadline_us;
+    /* Same cycle DISARM -> ARM -> L(0) -> M(500): L continues the interval, M is refused. */
+    link_msg b[4];
+    b[0] = simple(LINK_DISARM, seq++);
+    b[1] = arm_msg(seq++, d.boot_id, echo_now());
+    b[2] = commission_msg(seq++, 0, 0, 150, echo_now());
+    b[2].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+    b[3] = commission_msg(seq++, 2, 500, 150, echo_now());
+    b[3].u.commission.arm_gen = (uint16_t)(d.arm_gen + 1u);
+    tick_msgs(b, 4);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(d.last_rx_seq, (uint16_t)(seq - 2u)); /* the L(0) stays the last taken */
+    CHECK_EQ_U(d.cm_axis, DRIVE_CH_L);
+    (void)last;
+    (void)deadline;
+
+    /* A refusal leaves the current command, its deadline and the last accepted seq alone. */
+    boot_with(mod_commission_open_lr);
+    seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, 0, 0, 150, echo_now()));
+    send(commission_msg(seq++, 0, 2000, 150, echo_now()));
+    last = d.last_rx_seq;
+    deadline = d.deadline_us;
+    float duty = d.cm_duty;
+    send(commission_msg(seq++, 1, 2000, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(d.last_rx_seq, last);
+    CHECK(d.deadline_us == deadline);
+    CHECK_NEAR(d.cm_duty, duty, 0.0);
+    CHECK_EQ_U(d.cm_axis, DRIVE_CH_L);
+
+    /* Reject order: the common checks first (a stale seq is 6), then the axis (11), then the
+       picked axis's sensor (13). */
+    in.abs_fresh[1] = false;
+    ticks(5);
+    send(commission_msg(seq++, 0, 2000, 150, echo_now())); /* keep L going */
+    link_msg stale = commission_msg((uint16_t)(seq - 3u), 3, 500, 150, echo_now());
+    send(stale);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STALE_SEQ);
+    send(commission_msg(seq++, 3, 500, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_STOPPING);
 }
 
 int main(void)
@@ -1837,5 +1990,9 @@ int main(void)
     v2r4_limit_and_expiry_in_the_same_cycle();
     v2r5_limit_hold_survives_a_fault_in_the_same_cycle();
     v2r6_disarm_in_the_limit_stop();
+    s25_duty_limits_per_axis_in_integers();
+    s25_time_limit_is_the_interval_axis();
+    s25_disarm_alone_keeps_the_interval_axis();
+    s25_axis_change_inside_an_interval();
     return FW_TEST_RESULT();
 }
