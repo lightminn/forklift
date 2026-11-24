@@ -95,6 +95,77 @@ static void spi_cfg1(void)
     CHECK_EQ_U(v & (1u << 22), 0u);    /* CRCEN off */
 }
 
+/* RM0433 SPI mode fault, as far as this board's setup meets it: with SSM = 1 the internal NSS is
+   SSI, and a master whose NSS reads low can take a mode fault -- MODF is set and the hardware
+   clears MASTER (SPE stays blocked until MODFC). A model of just that rule, fed with the setup's
+   register writes in order. */
+typedef struct {
+    uint32_t cr1, cfg1, cfg2, cr2;
+    int modf;
+} spi_model;
+
+static void spi_model_apply(spi_model *m, const spi_setup_write *w, unsigned n)
+{
+    memset(m, 0, sizeof *m); /* reset values: SSI = 0, MASTER = 0 */
+    for (unsigned i = 0; i < n; i++) {
+        switch (w[i].reg) {
+        case SPI_SETUP_CR1:
+            m->cr1 = w[i].value;
+            break;
+        case SPI_SETUP_CFG1:
+            m->cfg1 = w[i].value;
+            break;
+        case SPI_SETUP_CFG2:
+            m->cfg2 = w[i].value;
+            if ((m->cfg2 & SPI_CFG2_MASTER_BIT) && (m->cfg2 & SPI_CFG2_SSM_BIT) &&
+                !(m->cr1 & SPI_CR1_SSI_BIT)) {
+                m->modf = 1;
+                m->cfg2 &= ~SPI_CFG2_MASTER_BIT;
+            }
+            break;
+        case SPI_SETUP_CR2:
+            m->cr2 = w[i].value;
+            break;
+        default:
+            CHECK(0); /* no other register is written */
+        }
+    }
+}
+
+static void spi_setup_order(void)
+{
+    /* The order the first board ran (2026-11-24: neither SPI ever completed a transfer) faults in
+       the model. */
+    const spi_setup_write old_order[4] = {
+        {SPI_SETUP_CR1, 0u},
+        {SPI_SETUP_CFG1, spi_cfg1_value(3u)},
+        {SPI_SETUP_CFG2, SPI_CFG2_MASTER_BIT | SPI_CFG2_SSM_BIT | SPI_CFG2_AFCNTR_BIT},
+        {SPI_SETUP_CR1, SPI_CR1_SSI_BIT},
+    };
+    spi_model m;
+    spi_model_apply(&m, old_order, 4);
+    CHECK(m.modf);
+    CHECK_EQ_U(m.cfg2 & SPI_CFG2_MASTER_BIT, 0u);
+
+    /* The board's sequence, for both links (SPI1 mode 1 /16, SPI2 mode 3 /32). */
+    const uint32_t mode[2][3] = {{3u, 0u, 1u}, {4u, 1u, 1u}};
+    for (int k = 0; k < 2; k++) {
+        spi_setup_write w[SPI_SETUP_WRITES];
+        spi_setup_writes(mode[k][0], mode[k][1], mode[k][2], w);
+        spi_model_apply(&m, w, SPI_SETUP_WRITES);
+        CHECK(!m.modf);
+        CHECK(m.cfg2 & SPI_CFG2_MASTER_BIT);
+        CHECK(m.cfg2 & SPI_CFG2_SSM_BIT);
+        CHECK(m.cfg2 & SPI_CFG2_AFCNTR_BIT);
+        CHECK_EQ_U(!!(m.cfg2 & SPI_CFG2_CPOL_BIT), mode[k][1]);
+        CHECK_EQ_U(!!(m.cfg2 & SPI_CFG2_CPHA_BIT), mode[k][2]);
+        CHECK_EQ_U(m.cr1, SPI_CR1_SSI_BIT); /* SSI kept, SPE still off */
+        CHECK_EQ_U(m.cfg1, spi_cfg1_value(mode[k][0]));
+        CHECK_EQ_U(m.cr2, 1u); /* TSIZE = 1 */
+        CHECK_EQ_U(w[0].reg, SPI_SETUP_CR1); /* SSI is the first write */
+    }
+}
+
 static void adc_values(void)
 {
     CHECK_EQ_I(adc_boost_bits(REV_ID_Y), 1); /* 32 MHz analog clock: BOOST on */
@@ -147,6 +218,7 @@ int main(void)
     adc_values();
     lptim_reads();
     spi_cfg1();
+    spi_setup_order();
     sensor_slot();
     mailbox_rules();
     mailbox_interleaving();
