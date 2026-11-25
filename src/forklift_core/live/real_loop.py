@@ -302,8 +302,9 @@ class RealLoop:
         # PR 7 design 6.1, 2 (7c-1b-2a): raised at every odometry break, reboot and device loss, never lowered -- the
         # real SLAM source compares it with a seed's own, since a break clears the history it would otherwise read
         self.odom_gen = 0
-        # (rear-axle odometry pose) -> None, called on every STATE's odometry step: the real SLAM source watches a
-        # seed's stillness on every pose, not only those a poll still finds in the history (Codex 7c-1b-2a round 3 P1)
+        # (odometry history entry) -> None, called with every entry as it is made: the real SLAM source judges a
+        # seed's stillness, continuity and inclusion on every one, not only those a poll still finds in the history
+        # (Codex 7c-1b-2a rounds 3-4)
         self.odom_listeners: list = []
         # 5c-1 (design 5): the session's bypass set (applied at a tick head; this tick's copy judges), the operator's
         # answers by serial (the first only), the last refusal told on real_status
@@ -1039,8 +1040,6 @@ class RealLoop:
                                     encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
         before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
-        for listener in self.odom_listeners:
-            listener(self.odom_pose)
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
@@ -1102,7 +1101,10 @@ class RealLoop:
                     speed_ok = False
                 if (abs(v[1] - v[0]) + e[0] + e[1]) / p.track_m > self.v_scan_mps * max(self.kappa_max, 1e-9) + 1e-9:
                     yaw_ok = False
-        self.odom_history.append((lo, hi, pose, not step.continuity_broken, included, speed_ok, yaw_ok))
+        entry = (lo, hi, pose, not step.continuity_broken, included, speed_ok, yaw_ok)
+        self.odom_history.append(entry)
+        for listener in self.odom_listeners:
+            listener(entry)
 
     def _layer_context(self):
         core = self.core

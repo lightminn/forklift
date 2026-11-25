@@ -815,8 +815,9 @@ def test_a_move_seen_only_on_a_pose_that_left_the_history_still_cancels():
     seed_to_ready(r)
     from forklift_core.localization.start_reloc import rear_from_base
 
-    r.src.odom_step(rear_from_base((0.02, 0.0, 0.0), 0.5))  # pushed 2 cm and back between two polls
-    r.src.odom_step(rear_from_base((0.0, 0.0, 0.0), 0.5))
+    t = r.s(r.now)
+    r.src.odom_step((t, t, rear_from_base((0.02, 0.0, 0.0), 0.5), True, True, True, True))  # 2 cm and back
+    r.src.odom_step((t, t, rear_from_base((0.0, 0.0, 0.0), 0.5), True, True, True, True))
     r.history.clear()
     r.hist_to(r.now)
     r.step()
@@ -867,3 +868,47 @@ def test_a_fresher_scan_waiting_for_its_odometry_is_not_pushed_out_by_an_older_o
     r.step()
     [sent] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
     assert sent.stamp_ns == fresh.stamp_ns
+
+
+# --- Codex 7c-1b-2a round 4 ----------------------------------------------------------------------------------------
+def test_an_excluded_state_that_left_the_history_still_cancels():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    t = r.s(r.now)
+    r.src.odom_step((t - 0.05, t, r.history[-1][2], True, False, True, True))  # over the STATE delay bound
+    r.history.clear()
+    r.hist_to(r.now)
+    r.step()
+    assert any(isinstance(f, rl.Cancel) and f.reason == "odom_break" for f in r.bridge.frames())
+
+
+def test_an_offer_never_lifts_an_expired_write_bound_or_seed_deadline():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.src.link.sock = Chunky(r.src.link.sock, [None] * 10)
+    r.src.offer(r.scan(lag_ms=10))
+    r.now += int(1.001e9)
+    r.boot_id = 2
+    with pytest.raises(rss.SlamSourceFatal, match="not written whole"):
+        r.src.offer(r.scan(lag_ms=5))
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.now = r.src.target["deadline_ns"] + MS
+    r.hist_to(r.now)
+    with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+        r.src.offer(r.scan(lag_ms=10))
+
+
+def test_a_scan_taken_back_is_not_recorded_as_sent():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.src.link.sock = Chunky(r.src.link.sock, [None])
+    r.src.offer(r.scan(lag_ms=10))
+    r.boot_id = 2
+    r.step()
+    key = [e for e in r.src.events if e.get("t") == "slam_drop" and e["why"] == "slam_cancel_cut"][0]["key"]
+    assert not any(e.get("t") == "scan_sent" and e["key"] == key for e in r.src.events)

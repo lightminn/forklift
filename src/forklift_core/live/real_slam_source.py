@@ -19,9 +19,9 @@ The link (6.1, 2):
   state (``ready`` / ``not_localized``) or ``void``;
 - a seed's inputs are judged until its end state -- each poll and each offer (before any write retry), before each
   scan to its instance and before its end state is taken: a boot change, a raised odometry continuity generation (the
-  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, a move past the limit seen on
-  any odometry pose since the acceptance (``odom_step``, the loop's ``odom_listeners``: kept even after the pose left
-  the history), or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
+  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, or a move past the limit, seen on
+  any odometry history entry made since the acceptance (``odom_step``, the loop's ``odom_listeners``: kept even after
+  the entry left the history), or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
   snapshot cancels it. A seed the bridge has not seen a byte of is cancelled here (``void`` at once); otherwise new
   scans stop, the frame being written is finished and ``cancel`` is written once. A ``ready`` / ``not_localized`` /
   ``reply`` of a cancelled or voided seed, or of a stopped instance, is dropped and counted;
@@ -129,6 +129,8 @@ class RealSlamLink:
     def retract(self, kind: str) -> bool:
         """Take back the frame being written if it is ``kind`` and not one byte of it went."""
         if self._out and self.out_kind == kind and self._sent == 0:
+            if self.overdue(int(self.clock())):
+                raise SlamSourceFatal(f"link: a {kind} frame not written whole within {WRITE_WAIT_S} s")
             self._out, self.out_kind, self._done, self.started_ns = b"", None, None, None
             return True
         return False
@@ -219,7 +221,7 @@ class RealSlamSource:
         return {"id": int(ident), "kind": kind, "epoch": epoch, "accepted_ns": accepted_ns,
                 "deadline_ns": None if accepted_ns is None else accepted_ns + int(SEED_WAIT_S * 1e9),
                 "pose": tuple(float(v) for v in pose), "snapshot": snapshot, "boot": boot, "odom_gen": odom_gen,
-                "state": "queued", "cancel": None, "start_scans": 0, "moved": False}
+                "state": "queued", "cancel": None, "start_scans": 0, "moved": False, "broken": False}
 
     # --- helpers -----------------------------------------------------------------------------------------------------
     def _s(self, ns: int) -> float:
@@ -283,13 +285,19 @@ class RealSlamSource:
         self._pump(now)
         return sid
 
-    def odom_step(self, rear_pose) -> None:
-        """The loop's every odometry pose (its ``odom_listeners``): a seed's move past the stillness limit is kept until
-        its end state, whether or not a poll still finds that pose in the history (round 3 P1). Never raises."""
+    def odom_step(self, entry) -> None:
+        """The loop's every odometry history entry as it is made (its ``odom_listeners``): for a seed in progress, an
+        entry since its acceptance that breaks continuity or is not included, or a pose past the stillness limit, is
+        kept until its end state, whether or not a poll still finds the entry in the history (rounds 3-4). Never
+        raises."""
         t = self.target
-        if t is None or t["kind"] != "seed" or t["snapshot"] is None or not self._seeding() or t["moved"]:
+        if t is None or t["kind"] != "seed" or t["snapshot"] is None or not self._seeding():
             return
-        if self._past_still(base_from_rear(rear_pose, self.rear_offset_m), t["snapshot"]):
+        if float(entry[1]) < self._s(t["accepted_ns"]):
+            return
+        if not (entry[3] and entry[4]):
+            t["broken"] = True
+        if self._past_still(base_from_rear(entry[2], self.rear_offset_m), t["snapshot"]):
             t["moved"] = True
 
     @staticmethod
@@ -306,6 +314,7 @@ class RealSlamSource:
     # --- the scan path -----------------------------------------------------------------------------------------------
     def offer(self, s: srs.SlamScanIn) -> None:
         now = int(self.clock())
+        self._deadlines(now)  # an expired deadline is never lifted by what an offer does (round 4 P2-2)
         self._watch_seed(now)  # before any write retry: a seed not one byte of which went is taken back (round 2 P2-1)
         gen = tuple(s.gen)
         if self._gen is not None and gen != self._gen:
@@ -417,12 +426,13 @@ class RealSlamSource:
         if t["state"] == "scans":
             t["start_scans"] += 1
 
-        def sent(f=f):
+        def sent(f=f, w=w, ident=t["id"], phase=t["state"]):
             f["sent_ns"] = int(self.clock())
+            # recorded at its last byte: what the bridge received (round 4 P3)
+            self._event(t="scan_sent", key=w["key"], scan_id=w["scan"].scan_id, stamp_ns=w["stamp_ns"],
+                        flo_ns=w["flo_ns"], fhi_ns=w["fhi_ns"], measured=w["measured"],
+                        odom_from_base=list(w["odom_from_base"]), target=ident, phase=phase)
 
-        self._event(t="scan_sent", key=w["key"], scan_id=w["scan"].scan_id, stamp_ns=w["stamp_ns"],
-                    flo_ns=w["flo_ns"], fhi_ns=w["fhi_ns"], measured=w["measured"],
-                    odom_from_base=list(w["odom_from_base"]), target=t["id"], phase=t["state"])
         link.write(rl.encode_scan(w["scan"], w["stamp_ns"]), "scan", sent)
 
     # --- receiving ---------------------------------------------------------------------------------------------------
@@ -581,6 +591,8 @@ class RealSlamSource:
             return "boot_changed"
         if self.odom_gen() != t["odom_gen"]:
             return "odom_break"  # any break since the acceptance, seen or not by a poll (round 2 P1)
+        if t["broken"]:
+            return "odom_break"
         if t["moved"]:
             return "seed_moved"
         since = self._s(t["accepted_ns"])
