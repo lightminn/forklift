@@ -50,7 +50,7 @@ def _laser_xy():
     return (bx, by)
 
 
-def _slam(tmp_path, lid, start_ns):
+def _slam(tmp_path, lid, start_ns, put=None):
     bridge = FakeBridge(tmp_path / "slam.sock")
     bridge.start()
     vehicle = load_real_vehicle(VEHICLE)
@@ -64,7 +64,7 @@ def _slam(tmp_path, lid, start_ns):
     src = RealSlamSource(RealSlamLink(sock), map_id="m" * 64, start_ns=start_ns, start_pose=(0.0, 0.0, 0.0),
                          odom_history=None, odom_base=None, odom_gen=None, boot=None, rear_offset_m=rear)
     rows = []
-    slam = ObserveSlam(src, rows.append, odometry=RealOdometry(vehicle, max_gap_s=0.2), params=params,
+    slam = ObserveSlam(src, rows.append if put is None else put, odometry=RealOdometry(vehicle, max_gap_s=0.2), params=params,
                        rear_offset_m=rear, start_ns=start_ns, grid=_grid(), base_laser=base_from_laser(lid.mount, rear),
                        lidar=lid, state_delay_s=RUN_STATE_DELAY_S, v_scan_mps=0.225, kappa_max=kappa)
     return bridge, sock, slam, rows
@@ -102,7 +102,7 @@ def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
 
     rec = ro.Record(io.StringIO())
     start_ns = time.monotonic_ns()
-    bridge, sock, slam, slam_rows = _slam(tmp_path, lid, start_ns)
+    bridge, sock, slam, _unused = _slam(tmp_path, lid, start_ns, put=rec.put)  # its rows in the observe record
     obs = ro.Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lid, slam=slam)
     try:
         link.open_first(obs.host, time.monotonic_ns())
@@ -142,7 +142,8 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
     assert not lid.timing_measured  # before 7a-3: diagnostic
     assert bridge.error is None and slam.fatal is None, (bridge.error, slam.fatal)
     kinds = [g[1] for g in bridge.got]
-    assert kinds[0] == "Hello" and kinds.count("RealScan") > 7
+    assert kinds[0] == "Hello" and kinds.count("RealScan") > 7, (kinds[:3], dict(slam.src.counts), dict(slam.counts),
+                                                                [r for r in rows if r["t"] == "slam_scan"][:2])
     assert ("ready", 1) in [(kk, i) for _, kk, i in bridge.sent]
     ev = [r for r in rows if r["t"] == "slam_event"]
     sent = [e for e in ev if e["event"] == "scan_sent"]
