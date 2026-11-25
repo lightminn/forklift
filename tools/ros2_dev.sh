@@ -33,7 +33,17 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
         exit 2
     fi
     mkdir -p "${sock_dir}"
-    image="${FORKLIFT_ROS2_SCAN_IMAGE:-forklift/ros2-scan:jazzy}"  # deploy/ros2/Dockerfile.scan
+    # the image config/real/lidar.yaml scan_image names for this machine (7a-3 plan 5: the one place it is written)
+    case "$(uname -m)" in
+        x86_64) arch=amd64 ;;
+        aarch64 | arm64) arch=arm64 ;;
+        *) echo "no scan image for $(uname -m)" >&2; exit 2 ;;
+    esac
+    if [[ -n "${FORKLIFT_ROS2_SCAN_IMAGE:-}" ]]; then
+        image="${FORKLIFT_ROS2_SCAN_IMAGE}"
+    elif ! image="$(python3 "${repo_root}/tools/scan_image.py" configured --arch "${arch}")"; then
+        exit 2
+    fi
     if [[ -n "${FORKLIFT_ROS2_SCAN_IMAGE:-}" ]]; then
         echo "scan image overridden by FORKLIFT_ROS2_SCAN_IMAGE: ${image}" >&2
     fi

@@ -2,8 +2,9 @@
 # 11-19 (the day before the main board arrives): bring the truck's Jetson to the current main and record its state.
 #   HW_DAY=2026-11-19 bash tools/hwday/jetson_prep.sh       (about 15 min the first time: the scan image load is the long part)
 # Needs the Jetson on and on the zetin Wi-Fi (jetson.local); JETSON_SSH_PASS / JETSON_SUDO_PASS from the session.
-# Parts: the repo (this checkout's tracked files) and the venv; the arm64 scan image loaded into docker if missing
-# (data/hwday/ros2-scan-jazzy-arm64.tar.zst, for the A2M12 day); the power state as the Jetson booted --
+# Parts: the repo (this checkout's tracked files) and the venv; the arm64 scan image config/real/lidar.yaml scan_image
+# names, loaded into docker if missing (data/hwday/<its tag>.tar.zst, built by tools/scan_image_build_arm64.sh -- no
+# older image in its place); the power state as the Jetson booted --
 # nvpmodel and jetson_clocks --show, to see whether jetson_clocks has to be run again after a reboot (not known since
 # 11-17). Changes no power setting itself (jetson_power.sh does). Exits non-zero if a part failed; later parts still run.
 source "$(dirname -- "${BASH_SOURCE[0]}")/jetson_lib.sh"
@@ -16,9 +17,8 @@ run "venv .[real,console] up to date (needs internet)" \
   jssh 'cd ~/forklift && .venv/bin/python -m pip install -q -e ".[real,console]" && .venv/bin/python -c "import forklift_core"'
 run "D435i: pyrealsense2 from the source build still imports" \
   jssh 'cd ~/forklift && .venv/bin/python -c "import pyrealsense2; print(pyrealsense2.__file__)"'
-img="forklift/ros2-scan:jazzy-arm64"
-tarball="$HW_REPO/data/hwday/ros2-scan-jazzy-arm64.tar.zst"
-[[ -e "$tarball" ]] || tarball="/home/light/school/2-2/embedded-design/forklift/data/hwday/ros2-scan-jazzy-arm64.tar.zst"
+img="$(python3 "$HW_REPO/tools/scan_image.py" configured --arch arm64)" || img="(lidar.yaml scan_image unreadable)"
+tarball="$HW_REPO/data/hwday/$(python3 "$HW_REPO/tools/scan_image.py" tarball --arch arm64 2>/dev/null)"
 load_image() {
   jssh "docker image inspect $img >/dev/null 2>&1" && { echo "already loaded"; return 0; }
   [[ -e "$tarball" ]] || { echo "no $tarball on this laptop"; return 1; }

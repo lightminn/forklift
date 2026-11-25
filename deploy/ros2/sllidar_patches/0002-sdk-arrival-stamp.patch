@@ -1,0 +1,1047 @@
+forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 2): the SDK's sample times from the receive
+thread's byte arrival. Applied after 0001 (deploy/ros2/Dockerfile.scan), against Slamtec/sllidar_ros2 34300099.
+
+- The receive thread stamps each read as read() returns (getus, CLOCK_MONOTONIC) and numbers it; the decoder hands
+  the codec the bytes with that arrival (IAsyncProtocolCodec::onDecodeDataAt), the codec holds it while it decodes
+  them, and the driver gives the unpacker the arrival of the read that completed each sample message
+  (forklift::deliverDecoded). The unpacker's clock read returns it -- not the decode time, which waited in the
+  receive queue. A clock read without one marks the start (arrivalMissing); grabScanDataHqWithArrival reports it.
+- Every mode stamps a capsule's samples with its own capsule's arrival: Dense and UltraDense took the next capsule's
+  time; their capsule and time now change together (the angle-jump discard included) and a reset drops both.
+- UltraDense's sample delay used (31 - sampleIdx) for 64 samples a capsule and wrapped to ~2^32 us for the second
+  half (an upstream bug); it is (63 - sampleIdx), as UltraBoost's formula is written. The other delays are unchanged.
+- The node publishes scan_sdk only in the v2 format: frame_id '<frame>@sdk_mono_v2#<run>.<start>' (run: the
+  launcher's forklift_run_id, 8-32 lowercase hex; start: a new random id at every scan start), only for a scan whose
+  sample times all came from arrivals; each start's mode goes on 'scan_sdk_info' (std_msgs/String JSON: format,
+  run, start, ans_type, sample_period_us, baudrate; reliable, transient_local). No run id, no scan_sdk.
+- FORKLIFT_SDK_RX_LOG=<file> (bench only): each read (R rx_seq rx_us bytes decode_us) and each sample message
+  (C rx_seq capsule_seq ans_type), queued and written by a thread of its own; lines that find the queue full are
+  counted (D <n>).
+- test/forklift_arrival_test.cpp (ctest, BUILD_TESTING): the real transceiver, codec, delivery and handlers on a
+  fake channel, reads 80 ms apart, the decoder held 500 ms.
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index aa094b1..788c019 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -35,6 +35,7 @@ find_package(ament_cmake REQUIRED)
+ find_package(rclcpp REQUIRED)
+ find_package(sensor_msgs REQUIRED)
+ find_package(std_srvs REQUIRED)
++find_package(std_msgs REQUIRED)  # forklift patch 0002
+ 
+ ################################################################################
+ # Build
+@@ -51,8 +52,18 @@ ament_target_dependencies(sllidar_node
+   rclcpp
+   std_srvs
+   sensor_msgs
++  std_msgs
+ )
+ 
++# forklift patch 0002: the SDK's arrival-stamp test (the real transceiver, codec, delivery and unpacker); run with
++# ctest in the image build (deploy/ros2/Dockerfile.scan)
++if(BUILD_TESTING)
++  enable_testing()
++  add_executable(forklift_arrival_test test/forklift_arrival_test.cpp ${SLLIDAR_SDK_SRC})
++  target_link_libraries(forklift_arrival_test pthread)
++  add_test(NAME forklift_arrival_test COMMAND forklift_arrival_test)
++endif()
++
+ add_executable(sllidar_client src/sllidar_client.cpp)
+ ament_target_dependencies(sllidar_client
+   rclcpp
+diff --git a/package.xml b/package.xml
+index c90ef4d..116a612 100644
+--- a/package.xml
++++ b/package.xml
+@@ -12,6 +12,7 @@
+   <depend>rclcpp</depend>
+   <depend>std_srvs</depend>
+   <depend>sensor_msgs</depend>
++  <depend>std_msgs</depend>  <!-- forklift patch 0002 -->
+   <export>
+     <build_type>ament_cmake</build_type>
+   </export>
+diff --git a/sdk/include/sl_lidar_driver.h b/sdk/include/sl_lidar_driver.h
+index 60d00c2..bbccbbe 100644
+--- a/sdk/include/sl_lidar_driver.h
++++ b/sdk/include/sl_lidar_driver.h
+@@ -474,6 +474,15 @@ namespace sl {
+             return SL_RESULT_OPERATION_NOT_SUPPORT;
+         }
+ 
++        /// forklift patch 0002: as grabScanDataHqWithTimeStamps, and whether every sample time of this start came from
++        /// the receive thread's byte arrival (arrival_ok false: some sample fell back to the decoder's clock).
++        virtual sl_result grabScanDataHqWithArrival(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count, sl_u64 & first_uS, sl_u64 & last_uS, bool & arrival_ok, sl_u32 timeout = DEFAULT_TIMEOUT)
++        {
++            (void)nodebuffer; (void)count; (void)first_uS; (void)last_uS; (void)timeout;
++            arrival_ok = false;
++            return SL_RESULT_OPERATION_NOT_SUPPORT;
++        }
++
+ 
+         /// Ascending the scan data according to the angle value in the scan.
+         ///
+diff --git a/sdk/src/dataunpacker/dataunpacker.cpp b/sdk/src/dataunpacker/dataunpacker.cpp
+index 74680c0..46e3942 100644
+--- a/sdk/src/dataunpacker/dataunpacker.cpp
++++ b/sdk/src/dataunpacker/dataunpacker.cpp
+@@ -42,6 +42,7 @@
+ 
+ 
+ #include <map>
++#include <atomic>  // forklift patch 0002
+ 
+ 
+ #define REGISTER_HANDLER(_c_) {     \
+@@ -157,9 +158,22 @@ public:
+ 	virtual void enable()
+ 	{
+ 		_enabled = true;
++		_arrival_missing = false;  // forklift patch 0002: a new start
+ 		reset();
+ 	}
+ 
++	// forklift patch 0002
++	virtual void setArrival(bool valid, _u64 rx_us)
++	{
++		_arrival_valid = valid;
++		_arrival_us = rx_us;
++	}
++
++	virtual bool arrivalMissing() const
++	{
++		return _arrival_missing.load();
++	}
++
+ 	virtual void disable()
+ 	{
+ 		_enabled = false;
+@@ -175,6 +189,10 @@ public:
+ 	}
+ 
+ 	virtual _u64 getCurrentTimestamp_uS() {
++		// forklift patch 0002: the arrival of the read that completed this data; the clock only when none was given,
++		// and then this start's scans are marked
++		if (_arrival_valid) return _arrival_us;
++		_arrival_missing = true;
+ 		return getus();
+ 	}
+ 
+@@ -216,6 +234,11 @@ protected:
+ 
+ protected:
+ 	bool _enabled;
++	// forklift patch 0002: the arrival given for the data being unpacked (decoder thread), and whether a sample time
++	// fell back to the clock since enable() (read by the scan's consumer on another thread)
++	bool _arrival_valid = false;
++	_u64 _arrival_us = 0;
++	std::atomic<bool> _arrival_missing{false};
+ 	std::map<_u8, IDataUnpackerHandler*> _handlerMap;
+ 
+ 	_u8 _lastActiveAnsType;
+diff --git a/sdk/src/dataunpacker/dataunpacker.h b/sdk/src/dataunpacker/dataunpacker.h
+index 2cdf6ca..58543fd 100644
+--- a/sdk/src/dataunpacker/dataunpacker.h
++++ b/sdk/src/dataunpacker/dataunpacker.h
+@@ -82,6 +82,11 @@ public:
+ 
+ 	virtual bool onSampleData(_u8 ansType, const void* buffer, size_t size) = 0;
+ 	virtual void reset() = 0;
++	// forklift patch 0002: the arrival (getus) of the read that completed the data now given to onSampleData; the
++	// handlers' clock reads return it. arrivalMissing: some sample time since enable() fell back to the clock
++	// (no arrival given) -- the scans of this start then carry no arrival-stamped times
++	virtual void setArrival(bool valid, _u64 rx_us) = 0;
++	virtual bool arrivalMissing() const = 0;
+ 	virtual void clearCache() = 0;
+ 
+ protected:
+diff --git a/sdk/src/dataunpacker/unpacker/handler_capsules.cpp b/sdk/src/dataunpacker/unpacker/handler_capsules.cpp
+index ab3110d..7f41128 100644
+--- a/sdk/src/dataunpacker/unpacker/handler_capsules.cpp
++++ b/sdk/src/dataunpacker/unpacker/handler_capsules.cpp
+@@ -731,6 +731,7 @@ void UnpackerHandler_DenseCapsuleNode::reset()
+ {
+     _cached_scan_node_buf_pos = 0;
+     _cached_last_data_timestamp_us = 0;
++    _is_previous_capsuledataRdy = false;  // forklift patch 0002: no previous capsule (or its time) across a reset
+ }
+ 
+ void UnpackerHandler_DenseCapsuleNode::_onScanNodeDenseCapsuleData(rplidar_response_dense_capsule_measurement_nodes_t& dense_capsule, LIDARSampleDataUnpackerInner* engine)
+@@ -750,6 +751,7 @@ void UnpackerHandler_DenseCapsuleNode::_onScanNodeDenseCapsuleData(rplidar_respo
+         int maxDiffAngleThreshold_q8 = (360/* 360 degree */ * 100 /*100Hz*/ * _countof(dense_capsule.cabins) /*40 points per capsule*/ / (1000000 / _cachedTimingDesc.sample_duration_uS)) << 8;
+         if (diffAngle_q8 > maxDiffAngleThreshold_q8) {//discard
+             _cached_previous_dense_capsuledata = dense_capsule;
++            _cached_last_data_timestamp_us = currentTs;  // forklift patch 0002: the capsule and its time together
+             return;
+         }
+ 
+@@ -778,7 +780,8 @@ void UnpackerHandler_DenseCapsuleNode::_onScanNodeDenseCapsuleData(rplidar_respo
+             hqNode.quality = dist_q2 ? (0x2F << RPLIDAR_RESP_MEASUREMENT_QUALITY_SHIFT) : 0;
+             hqNode.angle_z_q14 = (angle_q6 << 8) / 90;
+             hqNode.dist_mm_q2 = dist_q2;
+-            engine->publishHQNode(currentTs - _getSampleDelayOffsetInDenseMode(_cachedTimingDesc, pos), &hqNode);
++            // forklift patch 0002: the previous capsule's own time (the read that completed it), not this one's
++            engine->publishHQNode(_cached_last_data_timestamp_us - _getSampleDelayOffsetInDenseMode(_cachedTimingDesc, pos), &hqNode);
+             
+             lastNodeSyncBit = syncBit;
+ 
+@@ -787,6 +790,7 @@ void UnpackerHandler_DenseCapsuleNode::_onScanNodeDenseCapsuleData(rplidar_respo
+ 
+     _cached_previous_dense_capsuledata = dense_capsule;
+     _is_previous_capsuledataRdy = true;
++    _cached_last_data_timestamp_us = currentTs;  // forklift patch 0002
+ 
+ }
+ 
+@@ -810,7 +814,9 @@ static _u64 _getSampleDelayOffsetInUltraDenseMode(const SlamtecLidarTimingDesc&
+     // center of the sample duration
+     const _u64 sampleDelay = (timing.sample_duration_uS >> 1);
+     const _u64 sampleFilterDelay = timing.sample_duration_uS;
+-    const _u64 groupingDelay = (31 - sampleIdx) * timing.sample_duration_uS;
++    // forklift patch 0002: an ultra dense capsule holds 32 cabins of two samples (sampleIdx 0..63); upstream's
++    // (31 - sampleIdx) wrapped through unsigned arithmetic to ~2^32 us for the second half
++    const _u64 groupingDelay = ((32 * 2 - 1) - sampleIdx) * timing.sample_duration_uS;
+ 
+ 
+     return sampleFilterDelay + sampleDelay + tranmissionDelay + timing.linkage_delay_uS + groupingDelay;
+@@ -944,6 +950,7 @@ void UnpackerHandler_UltraDenseCapsuleNode::reset()
+ {
+     _cached_scan_node_buf_pos = 0;
+     _cached_last_data_timestamp_us = 0;
++    _is_previous_capsuledataRdy = false;  // forklift patch 0002
+     _last_node_sync_bit = 0;
+     _last_dist_q2 = 0;
+ }
+@@ -968,6 +975,7 @@ void UnpackerHandler_UltraDenseCapsuleNode::_onScanNodeUltraDenseCapsuleData(rpl
+         int maxDiffAngleThreshold_q8 = (360/* 360 degree */ * 100 /*100Hz*/ * _countof(ultra_dense_capsule->cabins) /*64 points per capsule*/ / (1000000 / _cachedTimingDesc.sample_duration_uS)) << 8;
+         if (diffAngle_q8 > maxDiffAngleThreshold_q8) {//discard
+             _cached_previous_ultra_dense_capsuledata = *ultra_dense_capsule;
++            _cached_last_data_timestamp_us = currentTimestamp;  // forklift patch 0002
+             return;
+         }
+ #define DISTANCE_THRESHOLD_TO_SCALE_1 2046  // (2^10 - 1)*2 mm
+@@ -1034,7 +1042,8 @@ void UnpackerHandler_UltraDenseCapsuleNode::_onScanNodeUltraDenseCapsuleData(rpl
+             hqNode.quality = quality;
+             hqNode.angle_z_q14 = (angle_q6 << 8) / 90;
+             hqNode.dist_mm_q2 = dist_q2;
+-            engine->publishHQNode(currentTimestamp - _getSampleDelayOffsetInUltraDenseMode(_cachedTimingDesc, pos), &hqNode);
++            // forklift patch 0002: the previous capsule's own time
++            engine->publishHQNode(_cached_last_data_timestamp_us - _getSampleDelayOffsetInUltraDenseMode(_cachedTimingDesc, pos), &hqNode);
+             
+             _last_node_sync_bit = syncBit;
+ 
+@@ -1043,6 +1052,7 @@ void UnpackerHandler_UltraDenseCapsuleNode::_onScanNodeUltraDenseCapsuleData(rpl
+ 
+     _cached_previous_ultra_dense_capsuledata = *ultra_dense_capsule;
+     _is_previous_capsuledataRdy = true;
++    _cached_last_data_timestamp_us = currentTimestamp;  // forklift patch 0002
+ 
+ }
+ 
+diff --git a/sdk/src/forklift_arrival.h b/sdk/src/forklift_arrival.h
+new file mode 100644
+index 0000000..6279880
+--- /dev/null
++++ b/sdk/src/forklift_arrival.h
+@@ -0,0 +1,133 @@
++/*
++ * forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 2): sample times from the receive
++ * thread's byte arrival.
++ *
++ * - RxLog: the bench's receive record, only when FORKLIFT_SDK_RX_LOG names a file. Lines are queued (at most
++ *   RxLog::CAPACITY waiting) and written by a thread of its own every 200 ms, so neither the receive nor the decoder
++ *   thread ever waits on the file; a line that finds the queue full is counted, and the count is written ("D <n>")
++ *   with every flush and at the end.
++ *     R <rx_seq> <rx_us> <bytes> <decode_us>   one read: its number, arrival, size, and when the decoder took it
++ *     C <rx_seq> <capsule_seq> <ans_type>       one sample message completed by that read
++ * - deliverDecoded: the driver's (and the SDK test's) one way to hand a decoded message to the unpacker with the
++ *   arrival of the read that completed it.
++ */
++#pragma once
++
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <cstdio>
++#include <cstdlib>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++namespace sl { namespace internal { namespace forklift {
++
++class RxLog {
++public:
++    static const size_t CAPACITY = 1u << 16;
++
++    static RxLog& instance()
++    {
++        static RxLog log;
++        return log;
++    }
++
++    bool enabled() const { return _file != nullptr; }
++
++    void line(const char* fmt, unsigned long long a, unsigned long long b, unsigned long long c,
++              unsigned long long d = 0, bool four = false)
++    {
++        if (!_file) return;
++        char buf[128];
++        if (four) std::snprintf(buf, sizeof(buf), fmt, a, b, c, d);
++        else std::snprintf(buf, sizeof(buf), fmt, a, b, c);
++        std::lock_guard<std::mutex> l(_lock);
++        if (_pending.size() >= CAPACITY) {
++            ++_dropped;
++            return;
++        }
++        _pending.emplace_back(buf);
++    }
++
++    ~RxLog()
++    {
++        if (!_file) return;
++        {
++            std::lock_guard<std::mutex> l(_lock);
++            _stop = true;
++        }
++        _wake.notify_all();
++        if (_writer.joinable()) _writer.join();
++        _flush();
++        std::fclose(_file);
++    }
++
++private:
++    RxLog()
++    {
++        const char* path = std::getenv("FORKLIFT_SDK_RX_LOG");
++        if (path && *path) {
++            _file = std::fopen(path, "w");
++            if (_file) _writer = std::thread([this] { _run(); });
++        }
++    }
++
++    void _run()
++    {
++        std::unique_lock<std::mutex> l(_lock);
++        while (!_stop) {
++            _wake.wait_for(l, std::chrono::milliseconds(200));
++            l.unlock();
++            _flush();
++            l.lock();
++        }
++    }
++
++    void _flush()
++    {
++        std::vector<std::string> out;
++        unsigned long long dropped;
++        {
++            std::lock_guard<std::mutex> l(_lock);
++            out.swap(_pending);
++            dropped = _dropped;
++        }
++        for (const auto& s : out) {
++            std::fputs(s.c_str(), _file);
++            std::fputc('\n', _file);
++        }
++        std::fprintf(_file, "D %llu\n", dropped);
++        std::fflush(_file);
++    }
++
++    std::FILE* _file = nullptr;
++    std::mutex _lock;
++    std::condition_variable _wake;
++    std::vector<std::string> _pending;
++    unsigned long long _dropped = 0;
++    bool _stop = false;
++    std::thread _writer;
++};
++
++// The decoded message to the unpacker, with the arrival of the read that completed it (the codec holds it while it
++// decodes that read). True when the unpacker took it as sample data.
++template <class Codec, class Unpacker, class Message>
++bool deliverDecoded(Codec& codec, Unpacker& unpacker, const Message& msg, unsigned long long& capsule_seq)
++{
++    unsigned long long rx_us = 0, rx_seq = 0;
++    const bool arrival = codec.currentArrival(rx_us, rx_seq);
++    unpacker.setArrival(arrival, rx_us);
++    Message copy(msg);
++    const bool taken = unpacker.onSampleData(copy.cmd, copy.getDataBuf(), copy.getPayloadSize());
++    unpacker.setArrival(false, 0);
++    if (taken) {
++        ++capsule_seq;
++        RxLog::instance().line("C %llu %llu %llu", rx_seq, capsule_seq, (unsigned long long)copy.cmd);
++    }
++    return taken;
++}
++
++}}}  // namespace sl::internal::forklift
+diff --git a/sdk/src/sl_async_transceiver.cpp b/sdk/src/sl_async_transceiver.cpp
+index c8033a5..437796a 100644
+--- a/sdk/src/sl_async_transceiver.cpp
++++ b/sdk/src/sl_async_transceiver.cpp
+@@ -42,6 +42,7 @@
+ #include "hal/event.h"
+ 
+ #include "sl_async_transceiver.h"
++#include "forklift_arrival.h"  // forklift patch 0002
+ 
+ 
+ 
+@@ -333,6 +334,9 @@ sl_result AsyncTransceiver::_proc_rxThread()
+         decodeBuffer->data = new _u8[hintedSize];
+ 
+         decodeBuffer->size = _bindedChannel->read(decodeBuffer->data, hintedSize);
++        // forklift patch 0002: the bytes' arrival, taken as read() returns -- before any queue or decoder wait
++        decodeBuffer->rx_us = getus();
++        decodeBuffer->rx_seq = ++_rxSeq;
+ #ifdef _DEBUG_DUMP_PACKET
+         printf("Revc: %d\n", decodeBuffer->size);
+ #endif
+@@ -398,7 +402,11 @@ sl_result AsyncTransceiver::_proc_decoderThread()
+         _rxLocker.unlock();
+ 
+         //cout<<"decoding "<< bufferToDecode->size <<" bytes of data"<<endl;
+-        _codec.onDecodeData(bufferToDecode->data, bufferToDecode->size);
++        // forklift patch 0002: decoded with the read's arrival (and recorded for the bench when asked)
++        forklift::RxLog::instance().line("R %llu %llu %llu %llu", bufferToDecode->rx_seq, bufferToDecode->rx_us,
++                                         bufferToDecode->size, getus(), true);
++        _codec.onDecodeDataAt(bufferToDecode->data, bufferToDecode->size, bufferToDecode->rx_us,
++                              bufferToDecode->rx_seq);
+ 
+ 
+         delete bufferToDecode;
+diff --git a/sdk/src/sl_async_transceiver.h b/sdk/src/sl_async_transceiver.h
+index 75774e8..db4475e 100644
+--- a/sdk/src/sl_async_transceiver.h
++++ b/sdk/src/sl_async_transceiver.h
+@@ -91,6 +91,13 @@ public:
+ 
+ 	virtual void   onDecodeReset() {}
+ 	virtual void   onDecodeData(const void* buffer, size_t size) = 0;
++	// forklift patch 0002: the same, with the receive thread's arrival time (getus) and number of the read the bytes
++	// came in; a codec that does not keep them decodes as before
++	virtual void   onDecodeDataAt(const void* buffer, size_t size, _u64 rx_us, _u64 rx_seq)
++	{
++		(void)rx_us; (void)rx_seq;
++		onDecodeData(buffer, size);
++	}
+ 
+ 
+ 	virtual size_t estimateLength(message_autoptr_t& message) = 0;
+@@ -149,9 +156,11 @@ protected:
+ 	struct Buffer {
+ 		size_t size;
+ 		_u8* data;
++		_u64 rx_us;   // forklift patch 0002: when read() returned these bytes (getus)
++		_u64 rx_seq;  // forklift patch 0002: the read's number
+ 
+ 
+-		Buffer() : size(0), data(NULL){}
++		Buffer() : size(0), data(NULL), rx_us(0), rx_seq(0){}
+ 
+ 		~Buffer() {
+ 			if (data) {
+@@ -161,6 +170,7 @@ protected:
+ 		}
+ 	};
+ 	std::list< Buffer * > _rxQueue;
++	_u64 _rxSeq = 0;  // forklift patch 0002: reads so far (the receive thread's only)
+ };
+ 
+ 
+diff --git a/sdk/src/sl_lidar_driver.cpp b/sdk/src/sl_lidar_driver.cpp
+index 8d1bf85..d0b8b97 100644
+--- a/sdk/src/sl_lidar_driver.cpp
++++ b/sdk/src/sl_lidar_driver.cpp
+@@ -50,6 +50,7 @@
+ #include "dataunpacker/dataunpacker.h"
+ #include "sl_async_transceiver.h"
+ #include "sl_lidarprotocol_codec.h"
++#include "forklift_arrival.h"  // forklift patch 0002
+ 
+ 
+ 
+@@ -808,6 +809,18 @@ namespace sl {
+             return RESULT_OK;
+         }
+ 
++        // forklift patch 0002: as below, and whether this start's sample times all came from byte arrivals (read after
++        // the copy: a fallback while this scan filled is seen)
++        sl_result grabScanDataHqWithArrival(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count,
++                                            sl_u64& first_uS, sl_u64& last_uS, bool& arrival_ok,
++                                            sl_u32 timeout = DEFAULT_TIMEOUT)
++        {
++            arrival_ok = false;
++            sl_result ans = grabScanDataHqWithTimeStamps(nodebuffer, count, first_uS, last_uS, timeout);
++            if (ans == RESULT_OK) arrival_ok = !_dataunpacker->arrivalMissing();
++            return ans;
++        }
++
+         // forklift patch 0001: one scan with its first and last sample times, both from the buffer it was copied from
+         sl_result grabScanDataHqWithTimeStamps(sl_lidar_response_measurement_node_hq_t* nodebuffer, size_t& count,
+                                                sl_u64& first_uS, sl_u64& last_uS, sl_u32 timeout = DEFAULT_TIMEOUT)
+@@ -1684,12 +1697,12 @@ namespace sl {
+ 
+         virtual void onProtocolMessageDecoded(const internal::ProtocolMessage& msg)
+         {
+-            internal::message_autoptr_t message = std::make_shared<internal::ProtocolMessage>(msg);
+-
+-            if (_dataunpacker->onSampleData(message->cmd, message->getDataBuf(), message->getPayloadSize()))
++            // forklift patch 0002: sample data goes to the unpacker with the arrival of the read that completed it
++            if (internal::forklift::deliverDecoded(*_protocolHandler, *_dataunpacker, msg, _forklift_capsule_seq))
+             {
+                 return;
+             }
++            internal::message_autoptr_t message = std::make_shared<internal::ProtocolMessage>(msg);
+ 
+             if (message->cmd == _waiting_packet_type) {
+                 _data_locker.lock();
+@@ -1705,6 +1718,7 @@ namespace sl {
+         std::shared_ptr<internal::RPLidarProtocolCodec> _protocolHandler;
+         std::shared_ptr<internal::AsyncTransceiver> _transeiver;
+         std::shared_ptr<internal::LIDARSampleDataUnpacker> _dataunpacker;
++        unsigned long long _forklift_capsule_seq = 0;  // forklift patch 0002: sample messages so far (receive record)
+ 
+         bool _isConnected;
+ 
+diff --git a/sdk/src/sl_lidarprotocol_codec.cpp b/sdk/src/sl_lidarprotocol_codec.cpp
+index a629000..4b40535 100644
+--- a/sdk/src/sl_lidarprotocol_codec.cpp
++++ b/sdk/src/sl_lidarprotocol_codec.cpp
+@@ -139,6 +139,24 @@ void   RPLidarProtocolCodec::onDecodeReset() {
+ }
+ 
+ 
++// forklift patch 0002
++void RPLidarProtocolCodec::onDecodeDataAt(const void* buffer, size_t size, _u64 rx_us, _u64 rx_seq)
++{
++    _arrival_valid = true;
++    _arrival_us = rx_us;
++    _arrival_seq = rx_seq;
++    onDecodeData(buffer, size);
++    _arrival_valid = false;
++}
++
++bool RPLidarProtocolCodec::currentArrival(unsigned long long& rx_us, unsigned long long& rx_seq) const
++{
++    if (!_arrival_valid) return false;
++    rx_us = _arrival_us;
++    rx_seq = _arrival_seq;
++    return true;
++}
++
+ void RPLidarProtocolCodec::onDecodeData(const void* buffer, size_t size)
+ {
+     rp::hal::AutoLocker autolock(_op_locker);
+diff --git a/sdk/src/sl_lidarprotocol_codec.h b/sdk/src/sl_lidarprotocol_codec.h
+index 1cc62f7..95f2e9b 100644
+--- a/sdk/src/sl_lidarprotocol_codec.h
++++ b/sdk/src/sl_lidarprotocol_codec.h
+@@ -69,12 +69,20 @@ public:
+ 
+     virtual void   onDecodeReset();
+     virtual void   onDecodeData(const void* buffer, size_t size);
++    // forklift patch 0002: decode keeping the read's arrival, so a listener called from the decode learns the arrival
++    // of the read that completed its message (currentArrival); outside such a decode there is none
++    virtual void   onDecodeDataAt(const void* buffer, size_t size, _u64 rx_us, _u64 rx_seq);
++    bool currentArrival(unsigned long long& rx_us, unsigned long long& rx_seq) const;
+     
+     void setMessageListener(IProtocolMessageListener* l);
+ 
+ protected:
+ 
+     IProtocolMessageListener* _listener;
++    // forklift patch 0002: the read being decoded (the decoder thread's only: set, read and cleared on it)
++    bool _arrival_valid = false;
++    _u64 _arrival_us = 0;
++    _u64 _arrival_seq = 0;
+     ProtocolMessage          _decodingMessage;
+     rp::hal::Locker          _op_locker;
+                             
+diff --git a/src/sllidar_node.cpp b/src/sllidar_node.cpp
+index c5def68..3f540e5 100644
+--- a/src/sllidar_node.cpp
++++ b/src/sllidar_node.cpp
+@@ -35,6 +35,10 @@
+ #include <rclcpp/rclcpp.hpp>
+ #include <sensor_msgs/msg/laser_scan.hpp>
+ #include <std_srvs/srv/empty.hpp>
++#include <std_msgs/msg/string.hpp>  // forklift patch 0002
++#include <cstdio>
++#include <random>
++#include <regex>
+ #include "sl_lidar.h"
+ #include "math.h"
+ 
+@@ -64,6 +68,9 @@ class SLlidarNode : public rclcpp::Node
+       // time as it is (CLOCK_MONOTONIC, no ROS clock involved) and with scan_time = last - first sample of the same
+       // SDK buffer. The topic name says what the stamp means.
+       scan_sdk_pub = this->create_publisher<sensor_msgs::msg::LaserScan>("scan_sdk", rclcpp::QoS(rclcpp::KeepLast(10)));
++      // forklift patch 0002: what this start runs (JSON), latched -- one message per scan start
++      scan_sdk_info_pub = this->create_publisher<std_msgs::msg::String>(
++          "scan_sdk_info", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+       
+     }
+ 
+@@ -73,6 +80,42 @@ class SLlidarNode : public rclcpp::Node
+     rclcpp::Time sdk_stamp;
+     double sdk_span = 0.0;
+     bool sdk_ok = false;
++    // forklift patch 0002: the launcher's run id (forklift_run_id) and this scan start's own id; no v2 scan without both
++    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr scan_sdk_info_pub;
++    std::string run_id;
++    std::string start_id;
++    unsigned long long sdk_not_arrival = 0;  // scans kept off scan_sdk for a sample time from the clock
++
++    static std::string random_hex16()
++    {
++        std::random_device rd;
++        unsigned long long v = ((unsigned long long)rd() << 32) ^ (unsigned long long)rd();
++        char buf[17];
++        std::snprintf(buf, sizeof(buf), "%016llx", v);
++        return std::string(buf);
++    }
++
++    // a new scan start (the first and every start_motor): a new start id, its mode on scan_sdk_info; until then and
++    // after a start that failed, no v2 scan
++    void new_start(bool ok, const LidarScanMode& mode)
++    {
++        start_id.clear();
++        if (!ok || run_id.empty()) {
++            if (run_id.empty()) RCLCPP_WARN(this->get_logger(), "forklift: no valid forklift_run_id: no scan_sdk");
++            return;
++        }
++        start_id = random_hex16();
++        char buf[256];
++        std::snprintf(buf, sizeof(buf),
++                      "{\"format\": \"sdk_mono_v2\", \"run\": \"%s\", \"start\": \"%s\", \"ans_type\": %u, "
++                      "\"sample_period_us\": %.9g, \"baudrate\": %d}",
++                      run_id.c_str(), start_id.c_str(), (unsigned)mode.ans_type, (double)mode.us_per_sample,
++                      serial_baudrate);
++        std_msgs::msg::String info;
++        info.data = buf;
++        scan_sdk_info_pub->publish(info);
++        RCLCPP_INFO(this->get_logger(), "forklift: scan_sdk_info %s", buf);
++    }
+ 
+     void init_param()
+     {
+@@ -81,6 +124,12 @@ class SLlidarNode : public rclcpp::Node
+         // first and last sample times are already fixed, so the very same scan arrives that much older (the delay
+         // injection; 0 = never)
+         this->declare_parameter<int>("publish_delay_ms", 0);
++        // forklift patch 0002: the launcher's run id (8-32 lowercase hex), carried in every v2 scan's frame_id
++        this->declare_parameter<std::string>("forklift_run_id", "");
++        {
++            const std::string rid = this->get_parameter("forklift_run_id").as_string();
++            if (std::regex_match(rid, std::regex("^[0-9a-f]{8,32}$"))) run_id = rid;
++        }
+         this->declare_parameter<std::string>("tcp_ip", "192.168.0.7");
+         this->declare_parameter<int>("tcp_port", 20108);
+         this->declare_parameter<std::string>("udp_ip","192.168.11.2");
+@@ -195,10 +244,12 @@ class SLlidarNode : public rclcpp::Node
+                 return false;
+             }
+         
+-            ans=drv->startScan(0,1);
++            LidarScanMode restart_mode;  // forklift patch 0002: what this start runs
++            ans=drv->startScan(0,1,0,&restart_mode);
+             if (SL_IS_FAIL(ans)) {
+                 RCLCPP_WARN(this->get_logger(), "Failed to start scan: %08x", ans);
+             }
++            new_start(SL_IS_OK(ans), restart_mode);
+         } else {
+             RCLCPP_INFO(this->get_logger(),"lost connection");
+             return false;
+@@ -225,8 +276,9 @@ class SLlidarNode : public rclcpp::Node
+         // its frame_id carries the format's own name, which the adapter requires -- a LaserScan from anywhere else
+         // (a remap, another node) never passes for one
+         if (sdk_ok) {
++            // forklift patch 0002: the v2 format, with the run and this start (the adapter takes nothing else)
+             publish_one(scan_sdk_pub, nodes, node_count, sdk_stamp, sdk_span, inverted, angle_min, angle_max,
+-                        max_distance, frame_id + "@sdk_mono_v1");
++                        max_distance, frame_id + "@sdk_mono_v2#" + run_id + "." + start_id);
+         }
+     }
+ 
+@@ -368,6 +420,7 @@ public:
+             }
+         }
+ 
++        new_start(SL_IS_OK(op_result), current_scan_mode);  // forklift patch 0002
+         if(SL_IS_OK(op_result))
+         {
+             //default frequent is 10 hz (by motor pwm value),  current_scan_mode.us_per_sample is the number of scan point per us
+@@ -393,13 +446,19 @@ public:
+ 
+             start_scan_time = this->now();
+             sl_u64 first_sample_us = 0, last_sample_us = 0;  // forklift patch 0001
+-            op_result = drv->grabScanDataHqWithTimeStamps(nodes, count, first_sample_us, last_sample_us);
++            bool arrival_ok = false;  // forklift patch 0002
++            op_result = drv->grabScanDataHqWithArrival(nodes, count, first_sample_us, last_sample_us, arrival_ok);
+             end_scan_time = this->now();
+             scan_duration = (end_scan_time - start_scan_time).seconds();
+             // forklift patch 0001: published on scan_sdk only when both times are there and in order, and the scan
+             // lasted at most half a second (else not a scan of one rotation)
+             sdk_ok = op_result == SL_RESULT_OK && first_sample_us != 0 && last_sample_us > first_sample_us
+                      && last_sample_us - first_sample_us <= 500000ULL;
++            // forklift patch 0002: only a scan whose sample times all came from byte arrivals, of a live start
++            if (sdk_ok && (!arrival_ok || start_id.empty())) {
++                sdk_ok = false;
++                if (!arrival_ok) ++sdk_not_arrival;
++            }
+             sdk_stamp = rclcpp::Time((int64_t)first_sample_us * 1000LL, RCL_STEADY_TIME);
+             sdk_span = sdk_ok ? (double)(last_sample_us - first_sample_us) / 1e6 : 0.0;
+             {
+diff --git a/test/forklift_arrival_test.cpp b/test/forklift_arrival_test.cpp
+new file mode 100644
+index 0000000..d280706
+--- /dev/null
++++ b/test/forklift_arrival_test.cpp
+@@ -0,0 +1,342 @@
++// forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 6): the SDK's sample times come from
++// the receive thread's byte arrival. The real AsyncTransceiver, RPLidarProtocolCodec, the driver's delivery
++// (forklift::deliverDecoded) and the unpacker's Dense / UltraDense handlers, fed by a fake channel that releases
++// known bytes at known times (reads 80 ms apart) while the decoder is held 500 ms.
++//
++// What this proves: each sample's time is the arrival of the read that completed its own capsule (minus the mode's
++// sample delay), across a capsule split over two reads, several capsules in one read, an angle jump and a reset; the
++// path without an arrival marks the start. It does not prove the absolute error of the arrival itself (the bench).
++#include "sdkcommon.h"
++#include "hal/abs_rxtx.h"
++#include "hal/thread.h"
++#include "hal/types.h"
++#include "hal/assert.h"
++#include "hal/locker.h"
++#include "hal/socket.h"
++#include "hal/event.h"
++#include "hal/waiter.h"
++#include "hal/byteorder.h"
++#include "sl_lidar_driver.h"
++#include "dataunpacker/dataunpacker.h"
++#include "sl_async_transceiver.h"
++#include "sl_lidarprotocol_codec.h"
++#include "forklift_arrival.h"
++
++#include <chrono>
++#include <cstdio>
++#include <cstring>
++#include <map>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++using namespace sl;
++using namespace sl::internal;
++
++static int g_failed = 0;
++#define CHECK(cond, ...)                                                    \
++    do {                                                                    \
++        if (!(cond)) {                                                      \
++            ++g_failed;                                                     \
++            std::printf("FAIL %s:%d %s -- ", __FILE__, __LINE__, #cond);    \
++            std::printf(__VA_ARGS__);                                       \
++            std::printf("\n");                                              \
++        }                                                                   \
++    } while (0)
++
++static const _u64 MS = 1000;
++static const _u64 READ_GAP_US = 80 * MS;  // reads this far apart: one read's time is never taken for another's
++static const _u64 HOLD_US = 500 * MS;     // the decoder held this long before its first decode
++
++// --- the fake channel: chunks released at their times, each read's return time kept --------------------------------
++class FakeChannel : public IChannel {
++public:
++    struct Chunk { std::vector<_u8> bytes; _u64 at_us; _u64 read_us = 0; };
++    std::vector<Chunk> chunks;
++    size_t next = 0;
++    std::mutex lock;
++
++    bool open() override { return true; }
++    void close() override {}
++    void flush() override {}
++    bool waitForData(size_t, sl_u32, size_t*) override { return false; }
++    sl_result waitForDataExt(size_t& hint, sl_u32 timeoutInMs) override
++    {
++        hint = 0;
++        _u64 at;
++        {
++            std::lock_guard<std::mutex> l(lock);
++            if (next >= chunks.size()) {
++                std::this_thread::sleep_for(std::chrono::milliseconds(std::min<sl_u32>(timeoutInMs, 10)));
++                return SL_RESULT_OPERATION_TIMEOUT;
++            }
++            at = chunks[next].at_us;
++        }
++        _u64 now = getus();
++        if (now < at) std::this_thread::sleep_for(std::chrono::microseconds(at - now));
++        std::lock_guard<std::mutex> l(lock);
++        hint = chunks[next].bytes.size();
++        return SL_RESULT_OK;
++    }
++    int write(const void*, size_t size) override { return (int)size; }
++    int read(void* buffer, size_t size) override
++    {
++        std::lock_guard<std::mutex> l(lock);
++        Chunk& c = chunks[next++];
++        size_t n = std::min(size, c.bytes.size());
++        std::memcpy(buffer, c.bytes.data(), n);
++        c.read_us = getus();  // the read returns now: the receive thread stamps right after
++        return (int)n;
++    }
++    void clearReadCache() override {}
++    int getChannelType() override { return CHANNEL_TYPE_SERIALPORT; }
++};
++
++// --- the codec under test, its first decode held ----------------------------------------------------------------------
++class HeldCodec : public RPLidarProtocolCodec {
++public:
++    bool hold = true;
++    bool with_arrival = true;  // false: decode as the unpatched path does (the clock at decode time)
++    void onDecodeDataAt(const void* buffer, size_t size, _u64 rx_us, _u64 rx_seq) override
++    {
++        if (hold) {
++            hold = false;
++            std::this_thread::sleep_for(std::chrono::microseconds(HOLD_US));
++        }
++        if (with_arrival) RPLidarProtocolCodec::onDecodeDataAt(buffer, size, rx_us, rx_seq);
++        else onDecodeData(buffer, size);
++    }
++};
++
++// --- the driver's role: decoded messages to the unpacker, samples recorded ------------------------------------------
++struct Sample { _u64 ts; int tag; };
++
++class Sink : public IProtocolMessageListener, public LIDARSampleDataListener {
++public:
++    HeldCodec& codec;
++    LIDARSampleDataUnpacker* unpacker;
++    std::mutex lock;
++    std::vector<Sample> samples;
++    unsigned long long capsules = 0;
++    int ultra = 0;
++
++    Sink(HeldCodec& c, bool ultra_dense) : codec(c), ultra(ultra_dense)
++    {
++        unpacker = LIDARSampleDataUnpacker::CreateInstance(*this);
++        SlamtecLidarTimingDesc t;
++        t.sample_duration_uS = 31;
++        t.native_baudrate = 256000;
++        t.linkage_delay_uS = 0;
++        t.native_interface_type = LIDARInterfaceType::LIDAR_INTERFACE_UART;
++        t.native_timestamp_support = false;
++        unpacker->updateUnpackerContext(LIDARSampleDataUnpacker::UNPACKER_CONTEXT_TYPE_LIDAR_TIMING, &t, sizeof(t));
++        unpacker->enable();
++    }
++    ~Sink() { LIDARSampleDataUnpacker::ReleaseInstance(unpacker); }
++
++    void onProtocolMessageDecoded(const ProtocolMessage& msg) override
++    {
++        forklift::deliverDecoded(codec, *unpacker, msg, capsules);
++    }
++    void onHQNodeScanResetReq() override {}
++    void onHQNodeDecoded(_u64 ts, const rplidar_response_measurement_node_hq_t* node) override
++    {
++        std::lock_guard<std::mutex> l(lock);
++        // the capsule's tag, from its distance (see capsule())
++        int tag = ultra ? (int)(node->dist_mm_q2 / 8) : (int)(node->dist_mm_q2 >> 2);
++        samples.push_back({ts, tag});
++    }
++};
++
++// --- bytes -------------------------------------------------------------------------------------------------------------
++static std::vector<_u8> descriptor(bool ultra)
++{
++    _u32 len = ultra ? sizeof(rplidar_response_ultra_dense_capsule_measurement_nodes_t)
++                     : sizeof(rplidar_response_dense_capsule_measurement_nodes_t);
++    _u32 word = len | ((_u32)RPLIDAR_ANS_PKTFLAG_LOOP << RPLIDAR_ANS_HEADER_SUBTYPE_SHIFT);
++    _u8 type = ultra ? RPLIDAR_ANS_TYPE_MEASUREMENT_ULTRA_DENSE_CAPSULED : RPLIDAR_ANS_TYPE_MEASUREMENT_DENSE_CAPSULED;
++    return {RPLIDAR_ANS_SYNC_BYTE1, RPLIDAR_ANS_SYNC_BYTE2, (_u8)(word & 0xFF), (_u8)((word >> 8) & 0xFF),
++            (_u8)((word >> 16) & 0xFF), (_u8)(word >> 24), type};
++}
++
++// one capsule starting at angle_deg whose every sample carries the distance tag (Dense: the distance; UltraDense:
++// scale 0, so dist_q2 = tag * 8)
++static std::vector<_u8> capsule(bool ultra, int angle_deg, int tag)
++{
++    std::vector<_u8> b;
++    if (ultra) {
++        rplidar_response_ultra_dense_capsule_measurement_nodes_t c;
++        std::memset(&c, 0, sizeof(c));
++        c.start_angle_sync_q6 = (_u16)(angle_deg * 64);
++        for (auto& cab : c.cabins) {
++            cab.qualityl_distance_scale[0] = (_u16)(tag << 2);
++            cab.qualityl_distance_scale[1] = (_u16)(tag << 2);
++            cab.qualityh_array = 0;
++        }
++        b.assign(reinterpret_cast<_u8*>(&c), reinterpret_cast<_u8*>(&c) + sizeof(c));
++    } else {
++        rplidar_response_dense_capsule_measurement_nodes_t c;
++        std::memset(&c, 0, sizeof(c));
++        c.start_angle_sync_q6 = (_u16)(angle_deg * 64);
++        for (auto& cab : c.cabins) cab.distance = (_u16)tag;
++        b.assign(reinterpret_cast<_u8*>(&c), reinterpret_cast<_u8*>(&c) + sizeof(c));
++    }
++    _u8 cs = 0;
++    for (size_t i = 2; i < b.size(); ++i) cs ^= b[i];
++    b[0] = (_u8)((RPLIDAR_RESP_MEASUREMENT_EXP_SYNC_1 << 4) | (cs & 0xF));
++    b[1] = (_u8)((RPLIDAR_RESP_MEASUREMENT_EXP_SYNC_2 << 4) | (cs >> 4));
++    return b;
++}
++
++static std::vector<_u8> cat(std::initializer_list<std::vector<_u8>> parts)
++{
++    std::vector<_u8> out;
++    for (const auto& p : parts) out.insert(out.end(), p.begin(), p.end());
++    return out;
++}
++
++static std::vector<_u8> slice(const std::vector<_u8>& v, size_t a, size_t b) { return {v.begin() + a, v.begin() + b}; }
++
++// --- one run -----------------------------------------------------------------------------------------------------------
++struct Run {
++    FakeChannel ch;
++    HeldCodec codec;
++    std::unique_ptr<Sink> sink;
++    std::unique_ptr<AsyncTransceiver> rx;
++    _u64 t0;
++
++    Run(bool ultra, std::vector<std::vector<_u8>> reads, bool hold = true, bool with_arrival = true)
++    {
++        codec.hold = hold;
++        codec.with_arrival = with_arrival;
++        sink.reset(new Sink(codec, ultra));
++        codec.setMessageListener(sink.get());
++        t0 = getus() + 50 * MS;
++        for (size_t k = 0; k < reads.size(); ++k) ch.chunks.push_back({reads[k], t0 + k * READ_GAP_US});
++        rx.reset(new AsyncTransceiver(codec));
++    }
++    void go(_u64 extra_us = 0)
++    {
++        rx->openChannelAndBind(&ch);
++        _u64 end = t0 + ch.chunks.size() * READ_GAP_US + (codec.hold ? HOLD_US : 0) + 200 * MS + extra_us;
++        while (getus() < end) std::this_thread::sleep_for(std::chrono::milliseconds(5));
++    }
++    void stop()
++    {
++        rx->unbindAndClose();
++        codec.setMessageListener(nullptr);
++    }
++    _u64 read_us(size_t k) { return ch.chunks[k].read_us; }
++    // every sample of capsule `tag`: within [read - 30 ms, read + 10 ms] of read k (the mode's sample delay is a few ms)
++    void expect(int tag, size_t k, const char* what)
++    {
++        std::lock_guard<std::mutex> l(sink->lock);
++        int n = 0;
++        for (const auto& s : sink->samples) {
++            if (s.tag != tag) continue;
++            ++n;
++            long long d = (long long)s.ts - (long long)read_us(k);
++            CHECK(d >= -30000 && d <= 10000, "%s: capsule %d sample %lld us from read %zu", what, tag, d, k);
++        }
++        CHECK(n > 0, "%s: no sample of capsule %d", what, tag);
++    }
++    int count(int tag)
++    {
++        std::lock_guard<std::mutex> l(sink->lock);
++        int n = 0;
++        for (const auto& s : sink->samples) n += s.tag == tag;
++        return n;
++    }
++};
++
++// A capsule split over two reads, three capsules completed by one read, Dense's previous capsule.
++static void test_own_capsule_arrival(bool ultra)
++{
++    const char* what = ultra ? "ultra_dense own capsule" : "dense own capsule";
++    auto c1 = capsule(ultra, 9, 110), c2 = capsule(ultra, 18, 120), c3 = capsule(ultra, 27, 130);
++    auto c4 = capsule(ultra, 36, 140), c5 = capsule(ultra, 45, 150);
++    Run r(ultra, {descriptor(ultra), slice(c1, 0, 50), cat({slice(c1, 50, c1.size()), c2, slice(c3, 0, 10)}),
++                  cat({slice(c3, 10, c3.size()), c4}), c5});
++    r.go();
++    r.stop();
++    r.expect(110, 2, what);  // completed by read 2 (its second part)
++    r.expect(120, 2, what);  // completed by read 2 too
++    r.expect(130, 3, what);
++    r.expect(140, 3, what);  // published when c5 came (read 4): unpatched Dense would take read 4's time
++    CHECK(!r.sink->unpacker->arrivalMissing(), "%s: an arrival missing", what);
++    // the decoder ran after HOLD_US: the arrival, not the decode, is what the samples carry
++    CHECK(r.read_us(4) + 100 * MS < r.t0 + HOLD_US, "%s: the reads did not all come before the decode", what);
++}
++
++// The unpatched path (no arrival): the same stream is stamped at decode time -- the delay patch 0002 removes, and the
++// start marked (arrival_ok false in the node).
++static void test_without_arrival_is_late_and_marked()
++{
++    auto c1 = capsule(false, 9, 110), c2 = capsule(false, 18, 120);
++    Run r(false, {descriptor(false), c1, c2}, true, false);
++    r.go();
++    r.stop();
++    std::lock_guard<std::mutex> l(r.sink->lock);
++    CHECK(!r.sink->samples.empty(), "control: no sample");
++    for (const auto& s : r.sink->samples) {
++        long long late = (long long)s.ts - (long long)r.read_us(2);
++        CHECK(late > (long long)(HOLD_US - 250 * MS), "control: sample only %lld us after its read", late);
++    }
++    CHECK(r.sink->unpacker->arrivalMissing(), "control: arrival not marked missing");
++    if (!r.sink->samples.empty())
++        std::printf("control (decode-time clock, as patch 0001 alone): %lld ms after the read\n",
++                    ((long long)r.sink->samples[0].ts - (long long)r.read_us(2)) / 1000);
++}
++
++// An angle jump discards the previous capsule and keeps the jumping one -- with its own time.
++static void test_angle_jump_keeps_its_own_time(bool ultra)
++{
++    const char* what = ultra ? "ultra_dense angle jump" : "dense angle jump";
++    auto c1 = capsule(ultra, 9, 110), c2 = capsule(ultra, 18, 120), c3 = capsule(ultra, 230, 130);
++    auto c4 = capsule(ultra, 239, 140), c5 = capsule(ultra, 248, 150);
++    Run r(ultra, {descriptor(ultra), c1, c2, c3, c4, c5}, false);
++    r.go();
++    r.stop();
++    r.expect(110, 1, what);
++    CHECK(r.count(120) == 0, "%s: the capsule before the jump was published", what);
++    r.expect(130, 3, what);  // the jumping capsule, published when c4 came: its own read, never read 4's
++    r.expect(140, 4, what);
++}
++
++// A reset drops the previous capsule and its time: nothing of it is published after.
++static void test_reset_drops_the_previous_capsule(bool ultra)
++{
++    const char* what = ultra ? "ultra_dense reset" : "dense reset";
++    auto c1 = capsule(ultra, 9, 110), c2 = capsule(ultra, 18, 120);
++    auto c3 = capsule(ultra, 90, 130), c4 = capsule(ultra, 99, 140);
++    Run r(ultra, {descriptor(ultra), c1, c2, c3, c4}, false);
++    // the reset halfway between reads 2 and 3, the decoder idle (as a scan restart between capsules)
++    r.rx->openChannelAndBind(&r.ch);
++    _u64 at = r.t0 + 2 * READ_GAP_US + READ_GAP_US / 2;
++    while (getus() < at) std::this_thread::sleep_for(std::chrono::milliseconds(2));
++    r.sink->unpacker->reset();
++    _u64 end = r.t0 + r.ch.chunks.size() * READ_GAP_US + 200 * MS;
++    while (getus() < end) std::this_thread::sleep_for(std::chrono::milliseconds(5));
++    r.stop();
++    r.expect(110, 1, what);
++    CHECK(r.count(120) == 0, "%s: the capsule before the reset was published after it", what);
++    r.expect(130, 3, what);
++}
++
++int main()
++{
++    test_own_capsule_arrival(false);
++    test_own_capsule_arrival(true);
++    test_without_arrival_is_late_and_marked();
++    test_angle_jump_keeps_its_own_time(false);
++    test_angle_jump_keeps_its_own_time(true);
++    test_reset_drops_the_previous_capsule(false);
++    test_reset_drops_the_previous_capsule(true);
++    if (g_failed) {
++        std::printf("%d check(s) failed\n", g_failed);
++        return 1;
++    }
++    std::printf("forklift_arrival_test: all checks passed\n");
++    return 0;
++}
