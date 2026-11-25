@@ -111,6 +111,7 @@ class RealSlamBridge(Node):
         self.events: list = []
         self.bring_ups: dict = {}  # k -> (thread, cancel event, {"cli": Popen | None})
         self.map_drops: set = set()
+        self.unreaped: list = []  # lifecycle CLIs not reaped at their instance's stop: tried again at the end
         self.stopping = threading.Event()
         # /clock from its own thread, not a ROS timer: a ROS timer runs on the node's (possibly simulated) clock and on
         # the executor that the core's lock can hold up (Codex 7c-1a round 1 P2-3)
@@ -151,8 +152,9 @@ class RealSlamBridge(Node):
                 cli.kill()
                 try:
                     cli.wait(timeout=1.0)
-                except subprocess.TimeoutExpired:  # recorded; the instance's own stop goes on (round 3 P2-2)
+                except subprocess.TimeoutExpired:  # recorded and kept; the instance's own stop goes on (round 3 P2-2)
                     self.events.append({"event": "cli_not_reaped", "k": k, "pid": cli.pid})
+                    self.unreaped.append(cli)
             thread.join(timeout=1.0)
             if thread.is_alive():
                 self.events.append({"event": "bring_up_still_running", "k": k})  # it can start nothing more
@@ -337,6 +339,12 @@ class RealSlamBridge(Node):
                 for k in list(self.bring_ups):
                     self.stop_instance(k)
                 self.instances.stop_all()
+                for cli in self.unreaped:  # round 4 P3
+                    try:
+                        cli.kill()
+                        cli.wait(timeout=2.0)
+                    except (OSError, subprocess.TimeoutExpired):
+                        self.events.append({"event": "cli_left", "pid": cli.pid})
             self.stopping.set()
             conn.close()
             (self.out / "events.json").write_text(json.dumps({"events": self.events, "counts": self.core.counts,
