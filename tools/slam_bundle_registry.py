@@ -266,6 +266,7 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
     raw = report.get("raw") or []
     base = Path(report_dir).resolve()
     seen: dict = {}
+    listed_sha: dict = {}
     for r in raw:
         rel = Path(os.path.normpath(str(r.get("path", ""))))
         f = (base / rel).resolve()
@@ -281,6 +282,7 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
         if kind is None or kind != r.get("kind"):
             raise ValueError(f"the survey record {rel} is a {kind} record by its content, not {r.get('kind')!r}")
         seen[(kind, str(rel))] = f
+        listed_sha[f] = r.get("sha256")
     observe = [f for (k, _), f in seen.items() if k == "observe"]
     teleop = [f for (k, _), f in seen.items() if k == "teleop"]
     oks = [f for (k, _), f in seen.items() if k == "ok"]
@@ -302,18 +304,22 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
     for f in teleop:
         if ((_header(f).get("config") or {}).get("vehicle") or {}).get("calibration_id") != calibration_id:
             raise ValueError(f"the teleop record {f.name} names another vehicle calibration")
+        data = f.read_bytes()  # one read for its hash and its rows (Codex 7c-2a round 5 P3)
+        if hashlib.sha256(data).hexdigest() != listed_sha[f]:
+            raise ValueError(f"the teleop record {f.name} differs from the report's hash")
         last = None
-        with open(f, encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    row = json.loads(line)
-                except ValueError:
-                    raise ValueError(f"the teleop record {f.name} has a row that does not parse (cut short?)") from None
-                if isinstance(row, dict) and row.get("t") == "refused":
-                    raise ValueError(f"the teleop record {f.name} was refused (no survey drive in it)")
-                last = row
+        for line in data.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                raise ValueError(f"the teleop record {f.name} has a row that does not parse (cut short?)") from None
+            if not isinstance(row, dict):
+                raise ValueError(f"the teleop record {f.name} has a row that is not an object")
+            if row.get("t") == "refused":
+                raise ValueError(f"the teleop record {f.name} was refused (no survey drive in it)")
+            last = row
         # complete as the teleop analysis reads it (m_entry): a clean footer last, nothing dropped or failed to write
         # (Codex 7c-2a round 4)
         if not (isinstance(last, dict) and last.get("t") == "footer" and last.get("dropped") == 0

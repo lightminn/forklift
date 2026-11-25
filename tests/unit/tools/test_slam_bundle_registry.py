@@ -385,6 +385,8 @@ def test_the_report_must_bind_one_survey_on_disk(tmp_path, change, why):
     # Codex 7c-2a round 4: a teleop record is complete only with a clean footer last
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + "\n"), "clean footer"),
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + '\n{"t": "state", "x": 1'), "does not parse"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + "\nnull\n" + CLEAN_FOOTER),
+     "not an object"),
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"]))
                         + '\n{"t": "footer", "dropped": 2, "write_errors": 0}\n'), "clean footer"),
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"]))
