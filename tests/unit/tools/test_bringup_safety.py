@@ -733,3 +733,107 @@ def test_clear_faults_takes_only_this_runs_echo():
     assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500) == 4
     assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500, after=4) is None
     assert bringup._echo_index(b, "CLEAR_FAULTS", 2, 2, 7, 500) is None  # never written
+
+
+class _ClearBoard:
+    """A scripted board for clear-faults: per tick it takes the frames written, then reports STATEs. ``relatch``:
+    after the clear's ready STATE, a FAULT comes in the same read; ``reboot_with_disarm_echo``: the DISARM's echo and
+    a new boot's FAULT arrive in one read; ``late``: a STATE of an earlier run carrying ``late`` arrives first."""
+
+    def __init__(self, *, relatch=False, reboot_with_disarm_echo=False, late=None, initial_seq=0x1234, refuse=False):
+        import dataclasses
+
+        from forklift_core.mcu_link.messages import Mode
+        from forklift_core.plant.mcu_host import Blocked
+
+        self.dc, self.Mode, self.Blocked = dataclasses, Mode, Blocked
+        self.relatch, self.reboot, self.refuse = relatch, reboot_with_disarm_echo, refuse
+        self.mode, self.rx, self.boot, self.t, self.ready_ = Mode.FAULT, 0, 7, 1000, False
+        self.samples, self.sample_conn, self.writes, self.queue, self.conn = [], [], [], [], 1
+        self.seq, self.last_queued_seq, self.now = initial_seq, None, 0
+        self.pending_late = late
+        self.host = self
+
+    # host
+    def request_disarm(self, now):
+        self.queue = [q for q in self.queue if q[0] == "DISARM"] or [("DISARM", self._next())]
+
+    def queued_disarm_seq(self):
+        return next(s for k, s in self.queue if k == "DISARM")
+
+    def request_clear_faults(self, now):
+        if self.state.mode not in (self.Mode.FAULT, self.Mode.ESTOP):
+            return self.Blocked("not_latched")
+        self.queue.append(("CLEAR_FAULTS", self._next()))
+        return None
+
+    def _next(self):
+        s, self.seq = self.seq, (self.seq + 1) & 0xFFFF
+        self.last_queued_seq = s
+        return s
+
+    # bench
+    @property
+    def state(self):
+        return self.samples[-1].state if self.samples else None
+
+    def _report(self, **kw):
+        from forklift_core.mcu_link.messages import StateFlag
+        from forklift_core.plant.bringup import Sample
+
+        self.t += 10_000
+        self.now += 10
+        flags = StateFlag.DRIVERS_READY if self.ready_ else StateFlag(0)
+        st = self.dc.replace(state(), mode=self.mode, last_rx_seq=self.rx, boot_id=self.boot, mcu_time_us=self.t,
+                             flags=flags, **kw)
+        self.samples.append(Sample(self.now, st))
+        self.sample_conn.append(self.conn)
+
+    def run_until(self, pred, timeout_s, **_):
+        from forklift_core.plant.write_log import Write
+
+        for _ in range(int(timeout_s * 100) + 1):
+            self.now += 1
+            for kind, seq in self.queue:
+                self.writes.append(Write(order=len(self.writes), conn=self.conn, kind=kind, seq=seq,
+                                         start_ns=self.now, done_ns=self.now, boot_id=None, echo_mcu_time_us=None,
+                                         valid_ms=None, arm_gen=None, axis=None, duty_e4=None, phase=None))
+                if kind == "DISARM":
+                    self.rx = seq
+                    if self.reboot:
+                        self._report()  # the echo, then the new boot in the same read
+                        self.boot, self.rx, self.mode = 8, 0, self.Mode.FAULT
+                elif kind == "CLEAR_FAULTS" and not self.refuse and self.mode in (self.Mode.FAULT, self.Mode.ESTOP):
+                    self.rx, self.mode, self.ready_ = seq, self.Mode.DISARMED, True
+                    if self.relatch:
+                        self._report()
+                        self.mode, self.ready_ = self.Mode.FAULT, False
+            self.queue = []
+            if self.pending_late is not None:
+                rx, self.rx = self.rx, self.pending_late
+                self._report()
+                self.rx, self.pending_late = rx, None
+            self._report()
+            if pred():
+                return True
+        return False
+
+
+@pytest.mark.parametrize("kw, expected, clears_sent", [
+    ({}, "cleared", 1),
+    ({"relatch": True}, "not_ready", 1),               # ready then FAULT in one read: the newest STATE decides
+    ({"reboot_with_disarm_echo": True}, "rebooted", 0),  # nothing is sent to the new boot
+    ({"refuse": True}, "not_accepted", 1),
+    ({"initial_seq": 0}, "seq_collision", 0),           # 0 is what any boot shows
+    ({"late": 0x1235}, "seq_collision", 0),             # an earlier run's STATE showed the CLEAR's number
+])
+def test_clear_faults_decides_on_this_runs_frames_and_the_newest_state(monkeypatch, kw, expected, clears_sent):
+    """Codex PR-A round 2: STATE repeats the last accepted seq, so an echo counts only for a number no STATE of this
+    session has shown; a reboot read with the DISARM's echo sends no CLEAR; a re-latch read with the ready STATE is not
+    cleared."""
+    monkeypatch.setattr(bringup, "CLEAR_DRAIN_S", 0.02)
+    b = _ClearBoard(**kw)
+    res = bringup.clear_faults(b)
+    assert res["result"] == expected, res
+    assert sum(1 for w in b.writes if w.kind == "CLEAR_FAULTS") == clears_sent
+    assert all(w.kind in ("DISARM", "CLEAR_FAULTS") for w in b.writes)

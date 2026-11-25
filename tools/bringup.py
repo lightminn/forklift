@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 import time
 from dataclasses import asdict, dataclass, field, replace
@@ -297,11 +298,17 @@ def _echo_index(bench: Bench, kind: str, seq: int, conn: int, boot: int, floor_u
 
 
 def clear_faults(bench: Bench) -> dict:
-    """One CLEAR_FAULTS, only in FAULT or ESTOP (partial-parts plan 2026-11-25), after an echoed DISARM. Cleared means
-    the firmware took it -- on this connection and boot, a STATE read after its write shows its seq, after one that
-    showed the DISARM's -- and a later STATE of the same connection and boot is DISARMED with DRIVERS_READY. Nothing
-    is armed after it. A refusal (sensor invalid, e-stop, boot) leaves the seq unechoed and is reported with the reject
-    reason; a reconnect or a reboot on the way ends it unconfirmed."""
+    """One CLEAR_FAULTS, only in FAULT or ESTOP (partial-parts plan 2026-11-25), after an echoed DISARM. Nothing is
+    armed after it.
+
+    STATE repeats the last accepted seq, and a bring-up process numbers its frames from its own start, so a STATE made
+    before this run's frame arrived (a boot's 0, an earlier run's seqs in flight) could carry the same number (Codex
+    PR-A rounds 1-2). The bench is therefore started at a random seq (``main``), and a frame whose seq any STATE of this
+    session has already shown is not used: an echo of a never-seen seq can only be this frame's. The echo must also be
+    a STATE of the start's connection and boot, read after the frame's last byte, and the CLEAR's after the DISARM's.
+    Cleared means the newest STATE of that connection and boot, after the CLEAR's echo, is DISARMED with
+    DRIVERS_READY. A refusal (sensor invalid, e-stop) leaves the seq unechoed and is reported with the reject reason; a
+    reconnect or a reboot on the way ends it unconfirmed and sends nothing more."""
     if not bench.run_until(lambda: bench.state is not None, 3.0):
         return {"result": "no_state"}
     bench.run_until(lambda: False, CLEAR_DRAIN_S)
@@ -311,24 +318,31 @@ def clear_faults(bench: Bench) -> dict:
     if st.mode not in (Mode.FAULT, Mode.ESTOP):
         return {"result": "refused", "why": "not_latched", "before": before}
 
+    def seen() -> set:
+        return {0} | {smp.state.last_rx_seq & 0xFFFF for smp in bench.samples}
+
     def broken() -> str | None:
         if bench.conn != conn:
             return "reconnected"
         return "rebooted" if bench.state.boot_id != boot else None
 
-    def wait(kind, seq, after=-1, timeout=CLEAR_ACCEPT_S):
+    def wait(kind, seq, after=-1):
         found: list = []
 
         def done():
+            if broken() is not None:
+                return True
             i = _echo_index(bench, kind, seq, conn, boot, floor_us, after)
             if i is not None:
                 found.append(i)
-            return bool(found) or broken() is not None
-        bench.run_until(done, timeout)
-        return found[0] if found else None
+            return bool(found)
+        bench.run_until(done, CLEAR_ACCEPT_S)
+        return found[0] if found and broken() is None else None
 
     bench.host.request_disarm(time.monotonic_ns())
     dseq = bench.host.queued_disarm_seq()
+    if dseq in seen():
+        return {"result": "seq_collision", "why": f"DISARM seq {dseq} already shown by a STATE", "before": before}
     di = wait("DISARM", dseq)
     if di is None:
         return {"result": broken() or "no_echo", "why": "the DISARM before the clear was not echoed", "before": before}
@@ -336,18 +350,21 @@ def clear_faults(bench: Bench) -> dict:
     if blocked is not None:
         return {"result": "refused", "why": blocked.reason, "before": before}
     seq = bench.host.last_queued_seq & 0xFFFF
+    if seq in seen():
+        bench.host.request_disarm(time.monotonic_ns())  # drops the queued, unwritten CLEAR_FAULTS
+        return {"result": "seq_collision", "why": f"CLEAR_FAULTS seq {seq} already shown by a STATE",
+                "before": before}
     ci = wait("CLEAR_FAULTS", seq, after=di)
     if ci is None:
         return {"result": broken() or "not_accepted", "seq": seq, "before": before, "after": _latch_view(bench.state)}
 
     def ready() -> bool:
-        if broken() is not None:
-            return True
-        return any(bench.sample_conn[j] == conn and bench.samples[j].state.boot_id == boot
-                   and bench.samples[j].state.mode == Mode.DISARMED
-                   and bench.samples[j].state.flags & StateFlag.DRIVERS_READY
-                   for j in range(ci + 1, len(bench.samples)))
-    bench.run_until(ready, CLEAR_READY_S)
+        # the newest STATE only: a re-latch read in the same batch as a ready STATE is not a clear (Codex round 2)
+        last = len(bench.samples) - 1
+        s_ = bench.samples[last].state
+        return (last > ci and bench.sample_conn[last] == conn and s_.boot_id == boot and s_.mode == Mode.DISARMED
+                and bool(s_.flags & StateFlag.DRIVERS_READY))
+    bench.run_until(lambda: broken() is not None or ready(), CLEAR_READY_S)
     why = broken()
     ok = why is None and ready()
     return {"result": "cleared" if ok else (why or "not_ready"), "seq": seq, "before": before,
@@ -1606,7 +1623,9 @@ def main(argv=None) -> int:
                               "parts_absent": list(_absent_of(args)),
                               **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
-        bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
+        # clear-faults numbers its frames from a random start, so no STATE of an earlier run can echo them
+        bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission",
+                      initial_seq=random.randrange(1, 0x10000) if args.cmd == "clear-faults" else None)
         try:
             if args.cmd in ("record", "cpr"):
                 bench.run_until(lambda: False, args.seconds,
