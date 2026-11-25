@@ -912,3 +912,35 @@ def test_a_scan_taken_back_is_not_recorded_as_sent():
     r.step()
     key = [e for e in r.src.events if e.get("t") == "slam_drop" and e["why"] == "slam_cancel_cut"][0]["key"]
     assert not any(e.get("t") == "scan_sent" and e["key"] == key for e in r.src.events)
+
+
+# --- Codex 7c-1b-2a round 5 ----------------------------------------------------------------------------------------
+def test_offers_alone_still_judge_the_void_and_reply_bounds():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.odom = (0.05, 0.0, 0.0)
+    r.step()  # the cancel goes; no void ever comes and no poll runs after
+    r.now += int(5.1e9)
+    r.hist_to(r.now)
+    with pytest.raises(rss.SlamSourceFatal, match="no void"):
+        r.src.offer(r.scan(lag_ms=10))
+
+
+def test_a_start_scan_never_goes_once_the_deadline_passes_during_the_offer():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.now = r.src.target["deadline_ns"] - MS
+    r.hist_to(r.now)
+    plain = r.src.odom_history
+
+    def slow_history():
+        r.now += 2 * MS  # the odometry lookup itself crosses the deadline
+        return plain()
+
+    r.src.odom_history = slow_history
+    scan = r.scan(lag_ms=40)  # its odometry in: it would go at once
+    with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+        r.src.offer(scan)
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())

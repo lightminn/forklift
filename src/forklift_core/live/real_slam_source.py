@@ -314,7 +314,7 @@ class RealSlamSource:
     # --- the scan path -----------------------------------------------------------------------------------------------
     def offer(self, s: srs.SlamScanIn) -> None:
         now = int(self.clock())
-        self._deadlines(now)  # an expired deadline is never lifted by what an offer does (round 4 P2-2)
+        self._all_deadlines(now)  # an expired deadline is never lifted by what an offer does (rounds 4-5)
         self._watch_seed(now)  # before any write retry: a seed not one byte of which went is taken back (round 2 P2-1)
         gen = tuple(s.gen)
         if self._gen is not None and gen != self._gen:
@@ -397,6 +397,7 @@ class RealSlamSource:
             else:
                 frame = rl.encode_seed(rl.Seed(t["id"], t["epoch"], t["pose"], t["snapshot"], int(t["boot"]),
                                                t["deadline_ns"]))
+            self._all_deadlines(int(self.clock()))  # right before its first byte (round 5 P2-2)
             t["state"] = "sent"
             link.write(frame, t["kind"])
             return
@@ -412,6 +413,7 @@ class RealSlamSource:
             why = self._input_broken(t)
             if why is not None:
                 return self._decide_cancel(t, why, now)
+        self._all_deadlines(int(self.clock()))  # right before its first byte: never a start scan past 20 s (P2-2)
         self._waiting = None
         attempt = None
         if t["state"] == "ready" and w["measured"] and w["epoch"] == self.epoch:
@@ -476,6 +478,12 @@ class RealSlamSource:
                 self._fatal(f"cancel of {t['id']} not sent within {CANCEL_SEND_S} s")
         elif self._seeding() and t["deadline_ns"] is not None and now > t["deadline_ns"]:
             self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
+
+    def _all_deadlines(self, now: int) -> None:
+        """Every deadline on the clock now: outside a poll (an offer, a write) nothing has been read since, so a bound
+        on the bridge's answer that has passed is past (round 5 P2-1)."""
+        self._deadlines(now)
+        self._receipt_deadlines(now)
 
     def _receipt_deadlines(self, received: int) -> None:
         """What is waited for from the bridge, on the clock after the read, before any frame is taken: a void, a reply
