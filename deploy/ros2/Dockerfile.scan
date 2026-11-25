@@ -8,8 +8,12 @@ FROM ${BASE_IMAGE}
 USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SLLIDAR_ROS2_COMMIT=34300099fadfc772965962dec837bf436706188f
+# forklift patch 0001 (PR 7a-2): the same scans on 'scan_sdk', stamped at the SDK's first sample (the acquisition
+# time the stamp of 'scan' is not); 'scan' itself is unchanged
+COPY sllidar_patches/ /opt/sllidar_patches/
 RUN git clone https://github.com/Slamtec/sllidar_ros2.git /opt/sllidar_ws/src/sllidar_ros2 \
     && git -C /opt/sllidar_ws/src/sllidar_ros2 checkout --detach "${SLLIDAR_ROS2_COMMIT}" \
+    && git -C /opt/sllidar_ws/src/sllidar_ros2 apply /opt/sllidar_patches/0001-sdk-first-sample-stamp.patch \
     && rm -rf /opt/sllidar_ws/src/sllidar_ros2/.git \
     && source /opt/ros/jazzy/setup.bash \
     && cd /opt/sllidar_ws \

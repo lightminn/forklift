@@ -207,6 +207,10 @@ class ScanFeed:
             self.synthetic_frames += 1
         if not _meta_ok(h):
             return None, "bad_meta"  # judged before any generation rule: a broken frame changes nothing
+        if ("first_beam_mono_ns" in h or "last_beam_mono_ns" in h) and h.get("stamp_kind") != "sdk_first_sample":
+            # acquisition times on a frame that says its stamp is something else: a contradiction (Codex 7a-2 round
+            # 2 P2-3)
+            return None, "bad_meta"
         sid = int(h["scan_id"])
         if "gen" in h and not _int(h["gen"], 1):
             return None, "bad_meta"  # a nonce given but malformed is not "no nonce" (Codex 7a-1 round 2 P2-3)
@@ -296,8 +300,12 @@ class ScanFeed:
         r = np.where(valid, ranges, np.nan)
         meta = {k: h[k] for k in ("frame_id", "scan_time", "time_increment", "range_min", "range_max",
                                   "sys_minus_mono_ns")}
-        if _int(h.get("first_beam_mono_ns"), 0):
-            meta["first_beam_mono_ns"] = int(h["first_beam_mono_ns"])  # the SDK first-sample time (7a-2)
+        # the SDK's first and last sample of the scan's own buffer, on the monotonic clock as the SDK gave them (the
+        # patched node's scan_sdk topic, PR 7a-2): carried only as a pair in order
+        f0, f1 = h.get("first_beam_mono_ns"), h.get("last_beam_mono_ns")
+        if _int(f0, 1) and _int(f1, 1) and f1 > f0:
+            meta["first_beam_mono_ns"], meta["last_beam_mono_ns"] = int(f0), int(f1)
+        meta["stamp_kind"] = h.get("stamp_kind") if isinstance(h.get("stamp_kind"), str) else None
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
         return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,

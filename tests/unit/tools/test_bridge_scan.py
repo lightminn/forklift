@@ -361,3 +361,18 @@ def test_a_slow_scan_period_closes_and_a_normal_one_reopens():
     assert w.ask() == (0.0, "scan_period")
     w.step(60)
     assert w.ask()[0] > 0.0
+
+
+def test_first_sample_stamped_scans_are_dropped_before_they_touch_the_period():
+    """Codex 7a-2 rounds 1-2: the bridge places scans at (stamp - period), call-start stamps only; scans stamped at the
+    SDK's first sample are dropped before the stamp history, so the period the permit checks stays as it was."""
+    w = World()
+    w.step(30)
+    period_before = w.permit.period_s()
+    for k in range(8):
+        s = scan(1000 + k, w.host + k * 60 * MS, np.full(16, 2.0))
+        s.meta["stamp_kind"] = "sdk_first_sample"
+        w.feed.queue.append(s)
+    w.permit.poll(w.host)
+    assert w.permit.dropped.get("stamp_kind") == 8
+    assert w.permit.period_s() == period_before

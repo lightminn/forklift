@@ -110,11 +110,12 @@ def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar
     if cfg.first_beam_err_s is None or not cfg.timing_measured:
         return None, "no_time_bound"  # an unmeasured bound keeps the scan diagnostic (Codex 7a-1 P2-3)
     n = len(scan.ranges)
-    step = float(scan.meta.get("time_increment") or 0.0)
-    if n < 2 or not (math.isfinite(step) and step > 0):
+    end = scan.meta.get("last_beam_mono_ns")
+    if not isinstance(end, int) or isinstance(end, bool) or end <= first or n < 2:
+        # the last sample of the scan's own buffer (forklift patch 0001): never derived from a period or a beam step
+        # (Codex 7a-2 P1-1: the previous rotation's length is not this scan's end)
         return None, "no_beam_timing"
     err_ns = int(round(cfg.first_beam_err_s * 1e9))
-    end = first + int(round((n - 1) * step * 1e9))
     flo, elo, ehi = first - err_ns, end - err_ns, end + err_ns
     if (ehi - flo) > cfg.scan_period_s * 1e9:
         return None, "scan_too_long"

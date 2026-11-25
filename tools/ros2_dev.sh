@@ -41,7 +41,16 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
     )
     driver="ros2 run sllidar_ros2 sllidar_node --ros-args -p serial_port:=${device} -p serial_baudrate:=256000"
     driver+=" -p frame_id:=laser -p angle_compensate:=true -p scan_mode:=Sensitivity -r scan:=/sensors/lidar/scan_raw"
+    driver+=" -r scan_sdk:=/sensors/lidar/scan_raw_sdk"  # forklift patch 0001 (PR 7a-2)
+    # FORKLIFT_SCAN_SOURCE=sdk: the adapter reads the patched node's first-sample-stamped topic (the observe run and
+    # the layer need it); raw (the default) keeps the teleop bridge's call-start stamps as they were
     adapter="python3 ros2/src/forklift_ros/forklift_ros/real_scan_adapter.py --socket /run/forklift-scan/scan.sock"
+    source="${FORKLIFT_SCAN_SOURCE:-raw}"
+    if [[ "${source}" != "raw" && "${source}" != "sdk" ]]; then
+        echo "FORKLIFT_SCAN_SOURCE must be raw or sdk, not '${source}'" >&2
+        exit 2
+    fi
+    adapter+=" --source ${source}"
     # the driver in the background of this shell (sourced here first), the adapter in front; on exit the whole
     # process group goes (ros2 run's node is its child)
     set -- bash -c "source /opt/sllidar_ws/install/setup.bash || exit 1; trap 'kill 0' EXIT; ${driver} & ${adapter}"

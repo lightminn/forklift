@@ -188,6 +188,12 @@ class ScanPermit:
         self.now_ns = int(now_ns)
         added = False
         for scan in self.feed.poll():
+            if scan.meta.get("stamp_kind") not in (None, "call_start"):
+                # first, before anything reads it into the stamp history: the bridge places a scan at (stamp -
+                # period), a call-start stamp only -- a first-sample stamp would put it a rotation early and shift
+                # the period the permit checks (Codex 7a-2 rounds 1-2); run the adapter with --source raw
+                self._drop("stamp_kind")
+                continue
             if scan.stamp_to_recv_ns > self.max_lag_ns:
                 self._drop("late")
                 continue

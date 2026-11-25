@@ -10,6 +10,12 @@ height_band:
   max_tilt_deg: 1.0        # same values as obstacle_layer_real.yaml bridge: (limit_m = band_half_m / sin(tilt))
   band_half_m: 0.10
 timing:
-  scan_period_s: 0.1       # nominal 10 Hz; a layer scan needs (last beam hi - first beam lo) <= this (design 4)
-  first_beam_err_s: null   # the SDK first-sample time's error bound; null until the 7a-2 bench injection measures it
+  # a layer scan needs (last beam hi - first beam lo) <= this (design 4): one rotation (~98 ms at 10 Hz) plus the
+  # error bound at both ends -- the real run's layer takes its first-beam budget from here (wired with 7r). If the
+  # bench's bound makes a rotation wider, this and the stop model's budget are raised together, documented
+  scan_period_s: 0.12
+  # the SDK sample time's error bound: null until 7a-3 (required before S10) -- the SDK's decoder reads its clock
+  # after the receive queue, so the bound needs the receive thread's arrival times; until then every scan is
+  # diagnostic only
+  first_beam_err_s: null
   measured: false
