@@ -253,6 +253,23 @@ def _bundle(root, name, data=b"data"):
     return folder, sm.map_id_of(hashes)
 
 
+OBS_HEADER = {"t": "header", "schema": "observe_record/1", "tool": "real_observe.py", "device": "/dev/forklift-mcu",
+              "synthetic": None}
+
+
+def _tel_header(cal, **kw):
+    return {"t": "header", "schema": "teleop_bridge_record/1", "tool": "teleop_bridge.py", "device": "/dev/forklift-mcu",
+            "synthetic": None, "config": {"vehicle": {"calibration_id": cal}}, **kw}
+
+
+def _rewrite(p, name, text):
+    """Rewrite a survey file and the report's hash for it."""
+    (p["survey"] / name).write_text(text)
+    raw = [{**r, "sha256": reg.sha256(p["survey"] / r["path"])} for r in p["body"]["raw"]]
+    p["body"] = {**p["body"], "raw": raw}
+    p["report"].write_text(json.dumps(p["body"]))
+
+
 def _site_setup(tmp_path):
     """A bundle root with one bundle and a survey folder (report, raw records, .ok), the S10-A file naming the
     bundle's map, the site record; returns the add-site argv and the parts."""
@@ -278,9 +295,10 @@ def _site_setup(tmp_path):
     record.write_text("hall, 2026-12-01, marks taped\n")
     survey = root / "survey_hall"
     survey.mkdir()
-    (survey / "observe.jsonl").write_text('{"t": "header"}\n{"t": "end", "complete": true}\n')
+    cal = load_real_vehicle(vehicle).calibration_id
+    (survey / "observe.jsonl").write_text(json.dumps(OBS_HEADER) + '\n{"t": "end", "complete": true}\n')
     (survey / "observe.jsonl.ok").write_text(reg.sha256(survey / "observe.jsonl") + "\n")
-    (survey / "teleop.jsonl").write_text('{"t": "header"}\n')
+    (survey / "teleop.jsonl").write_text(json.dumps(_tel_header(cal)) + '\n{"t": "state"}\n')
     raw = [{"kind": k, "path": n, "sha256": reg.sha256(survey / n)}
            for k, n in (("observe", "observe.jsonl"), ("ok", "observe.jsonl.ok"), ("teleop", "teleop.jsonl"))]
     report = survey / "site_report.json"
@@ -292,7 +310,7 @@ def _site_setup(tmp_path):
     argv = ["add-site", str(book), "--name", "hall_tsq", "--bundle", str(bundle), "--report", str(report),
             "--site-record", str(record), "--s10a", str(s10a_path), "--vehicle", str(vehicle), "--lidar", str(lidar)]
     return argv, {"book": book, "record": record, "report": report, "body": body, "survey": survey, "root": root,
-                  "bundle": bundle, "map_id": map_id, "start": start}
+                  "bundle": bundle, "map_id": map_id, "start": start, "cal": cal}
 
 
 def test_the_add_site_command_hashes_the_record_itself(tmp_path, capsys):
@@ -333,7 +351,7 @@ def test_a_left_over_manifest_does_not_carry_another_bundles_files_in(tmp_path):
     (lambda p: p["report"].write_text(json.dumps({**p["body"], "raw": [r for r in p["body"]["raw"]
                                                                        if r["kind"] != "teleop"]})), "teleop"),
     (lambda p: p["report"].write_text(json.dumps({**p["body"], "raw": [{**r, "kind": "video"} if r["kind"] == "teleop"
-                                                                       else r for r in p["body"]["raw"]]})), "unknown"),
+                                                                       else r for r in p["body"]["raw"]]})), "by its content"),
     (lambda p: p["report"].write_text(json.dumps({**p["body"], "vehicle_calibration_id": "0" * 16})), "calibration"),
     (lambda p: p["report"].write_text(json.dumps({**p["body"], "raw": [{"path": "../../s10a.yaml",
                                                                        "sha256": "0" * 64}]})), "not under"),
@@ -349,17 +367,50 @@ def test_the_report_must_bind_one_survey_on_disk(tmp_path, change, why):
         reg.main(argv)
 
 
+@pytest.mark.parametrize("change, why", [
+    # Codex 7c-2a round 3: the marker tagged as the teleop record
+    (lambda p: p["report"].write_text(json.dumps({**p["body"], "raw": [
+        {**r, "kind": "teleop"} if r["kind"] == "ok" else r for r in p["body"]["raw"] if r["kind"] != "teleop"]})),
+     "by its content"),
+    # the observation record listed again as the teleop record
+    (lambda p: p["report"].write_text(json.dumps({**p["body"], "raw": p["body"]["raw"] + [
+        {"kind": "teleop", "path": "./observe.jsonl", "sha256": reg.sha256(p["survey"] / "observe.jsonl")}]})),
+     "listed twice"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header("0" * 16)) + "\n"), "another vehicle calibration"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + '\n{"t": "refused", "why": "x"}\n'),
+     "was refused"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"], device="/dev/pts/7")) + "\n"),
+     "rehearsal"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"], synthetic={"bench": {}})) + "\n"),
+     "rehearsal"),
+])
+def test_each_record_is_what_its_file_says_and_real(tmp_path, change, why):
+    argv, p = _site_setup(tmp_path)
+    change(p)
+    with pytest.raises(ValueError, match=why):
+        reg.main(argv)
+
+
+def test_a_marker_must_be_a_listed_observation_records(tmp_path):
+    argv, p = _site_setup(tmp_path)
+    (p["survey"] / "other.jsonl.ok").write_text("0" * 64 + "\n")
+    p["body"]["raw"].append({"kind": "ok", "path": "other.jsonl.ok", "sha256": reg.sha256(p["survey"] / "other.jsonl.ok")})
+    p["report"].write_text(json.dumps(p["body"]))
+    with pytest.raises(ValueError, match="not a listed observation"):
+        reg.main(argv)
+
+
 def test_an_observation_record_is_complete_only_by_its_own_ok(tmp_path):
     """Codex 7c-2a round 2: an .ok of another run, or a record without its complete end, does not count."""
     argv, p = _site_setup(tmp_path)
     sv, body = p["survey"], p["body"]
-    (sv / "observe.jsonl").write_text('{"t": "header"}\n')  # no complete end, its .ok made for it
+    (sv / "observe.jsonl").write_text(json.dumps(OBS_HEADER) + "\n")  # no complete end, its .ok made for it
     (sv / "observe.jsonl.ok").write_text(reg.sha256(sv / "observe.jsonl") + "\n")
     raw = [{**r, "sha256": reg.sha256(sv / r["path"])} for r in body["raw"]]
     p["report"].write_text(json.dumps({**body, "raw": raw}))
     with pytest.raises(ValueError, match="not complete by its .ok"):
         reg.main(argv)
-    (sv / "observe.jsonl").write_text('{"t": "header"}\n{"t": "end", "complete": true}\n')
+    (sv / "observe.jsonl").write_text(json.dumps(OBS_HEADER) + '\n{"t": "end", "complete": true}\n')
     (sv / "observe.jsonl.ok").write_text("0" * 64 + "\n")  # another run's marker
     raw = [{**r, "sha256": reg.sha256(sv / r["path"])} for r in body["raw"]]
     p["report"].write_text(json.dumps({**body, "raw": raw}))

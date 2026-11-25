@@ -42,8 +42,9 @@ The site survey report (JSON, written by the survey, never by this tool)::
      "config_sha256": {"lidar": "<64 hex>", "chassis": "<64 hex>"},   # lidar.yaml, the chassis URDF
      "vehicle_calibration_id": "<16 hex>",                           # load_real_vehicle(...).calibration_id
      "raw": [{"kind": "observe" | "teleop" | "ok", "path": "<file>", "sha256": "<64 hex>"}, ...],
-            # the survey drive's records, paths relative to the report's folder: at least one observation record
-            # and one teleop record; each observation record with its .ok listed (real_observe.record_complete)
+            # the survey drive's records, paths relative to the report's folder, each once: at least one
+            # observation record and one teleop record; each observation record with its .ok listed
+            # (real_observe.record_complete); kinds are checked against the files' own headers
      "site_check": {"points": 5, "position_max_m": m, "yaw_max_rad": r,
                     "limits": {"position_m": m, "yaw_rad": r}}}
 """
@@ -223,42 +224,91 @@ def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_n
             "start_relocalizable": False, "start_reloc_evidence": None}
 
 
+OBSERVE_SCHEMA = "observe_record/1"  # tools/real_observe.py's record header
+TELEOP_SCHEMA = "teleop_bridge_record/1"  # tools/teleop_bridge.py's record header
+
+
+def _header(path: Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        try:
+            row = json.loads(f.readline())
+        except ValueError:
+            return {}
+    return row if isinstance(row, dict) and row.get("t") == "header" else {}
+
+
+def _kind_of(path: Path) -> str | None:
+    """A survey record's kind by its own content (never by the report's tag, Codex 7c-2a round 3)."""
+    if path.name.endswith(".ok"):
+        return "ok"
+    schema = _header(path).get("schema")
+    return {OBSERVE_SCHEMA: "observe", TELEOP_SCHEMA: "teleop"}.get(schema)
+
+
 def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, chassis_sha256: str,
                        calibration_id: str) -> None:
-    """The report binds one survey (design 6.1 item 5, Codex 7c-2a round 1): its raw records are files next to it
-    (relative paths under the report's folder) with the hashes it lists, among them at least one observation or teleop
-    record and at least one ``.ok``; its lidar and chassis settings hashes are those of the files this registration
-    reads. ValueError naming the first problem."""
+    """The report binds one real survey (design 6.1 item 5, Codex 7c-2a rounds 1-3). Its raw records are files under
+    the report's folder (relative paths, each listed once) with the hashes it lists. Each file's kind is read from the
+    file -- an observation record (``observe_record/1``), a teleop record (``teleop_bridge_record/1``) or an ``.ok``
+    -- and must be the kind the report gives. It needs at least one observation record and one teleop record; each
+    observation record is complete by its own listed ``.ok`` (``real_observe.record_complete``), and every ``.ok`` is
+    an observation record's. No record may be synthetic (a rehearsal's: ``synthetic.refuse_or_mark``). A teleop record
+    was not refused and names the vehicle calibration given here. The report's lidar and chassis hashes and its
+    vehicle calibration are those of the files this registration reads. ValueError naming the first problem."""
+    import os  # noqa: PLC0415
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from forklift_core.live.synthetic import SyntheticRefused, refuse_or_mark  # noqa: PLC0415
+    from real_observe import record_complete  # noqa: PLC0415
+
     raw = report.get("raw") or []
     base = Path(report_dir).resolve()
-    listed = {str(r.get("path", "")) for r in raw}
+    seen: dict = {}
     for r in raw:
-        rel = Path(str(r.get("path", "")))
+        rel = Path(os.path.normpath(str(r.get("path", ""))))
         f = (base / rel).resolve()
         if rel.is_absolute() or base not in f.parents:
             raise ValueError(f"the survey record {rel} is not under the report's folder")
+        if f in seen.values():
+            raise ValueError(f"the survey record {rel} is listed twice")
         if not f.is_file():
             raise ValueError(f"the survey record {rel} is not there")
         if sha256(f) != r.get("sha256"):
             raise ValueError(f"the survey record {rel} differs from the report's hash")
-    kinds = [r.get("kind") for r in raw]
-    if any(k not in ("observe", "teleop", "ok") for k in kinds):
-        raise ValueError(f"a survey record of unknown kind among {sorted(set(map(str, kinds)))}")
-    if "observe" not in kinds or "teleop" not in kinds:
+        kind = _kind_of(f)
+        if kind is None or kind != r.get("kind"):
+            raise ValueError(f"the survey record {rel} is a {kind} record by its content, not {r.get('kind')!r}")
+        seen[(kind, str(rel))] = f
+    observe = [f for (k, _), f in seen.items() if k == "observe"]
+    teleop = [f for (k, _), f in seen.items() if k == "teleop"]
+    oks = [f for (k, _), f in seen.items() if k == "ok"]
+    if not observe or not teleop:
         raise ValueError("the report needs the survey's observation and teleop records")
-    # each observation record is complete by its own .ok (the rule a replay reads, Codex 7c-2a round 2): the .ok
-    # names the record's current hash and its last row is a complete end -- a marker of another run does not count
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from real_observe import record_complete  # noqa: PLC0415
-
-    for r in raw:
-        if r.get("kind") != "observe":
-            continue
-        rel = str(r["path"])
-        if rel + ".ok" not in listed:
-            raise ValueError(f"the observation record {rel} has no .ok listed")
-        if not record_complete(base / rel):
-            raise ValueError(f"the observation record {rel} is not complete by its .ok")
+    for f in observe + teleop:
+        try:
+            refuse_or_mark([_header(f)], allow=False)
+        except SyntheticRefused as exc:
+            raise ValueError(f"the survey record {f.name} is a rehearsal's: {exc}") from exc
+    for f in observe:
+        if Path(str(f) + ".ok") not in oks:
+            raise ValueError(f"the observation record {f.name} has no .ok listed")
+        if not record_complete(f):
+            raise ValueError(f"the observation record {f.name} is not complete by its .ok")
+    for ok in oks:
+        if Path(str(ok)[: -len(".ok")]) not in observe:
+            raise ValueError(f"the marker {ok.name} is not a listed observation record's")
+    for f in teleop:
+        if ((_header(f).get("config") or {}).get("vehicle") or {}).get("calibration_id") != calibration_id:
+            raise ValueError(f"the teleop record {f.name} names another vehicle calibration")
+        with open(f, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and row.get("t") == "refused":
+                    raise ValueError(f"the teleop record {f.name} was refused (no survey drive in it)")
     cfg = report.get("config_sha256") or {}
     if cfg.get("lidar") != lidar_sha256:
         raise ValueError("the report's lidar settings hash is not the lidar settings given here")
@@ -321,8 +371,9 @@ def _survey_start(run: Path, nodes_csv: Path) -> list[float]:
 
 
 def _s10a_start(s10a: Path, vehicle: Path) -> dict:
-    """The S10-A settings' map id and taped start as base_link (its rear axle offset from the chassis model), with the
-    registered start's tolerance (the live loop's ``START_TOL_M``/``START_TOL_RAD``)."""
+    """The S10-A settings' map id and taped start (rear axle), the chassis model's rear axle offset, the registered
+    start's tolerance (the live loop's ``START_TOL_M``/``START_TOL_RAD``), the chassis URDF's hash and the vehicle's
+    calibration id."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
     from forklift_core.live.real_autonomy import load_s10a  # noqa: PLC0415
     from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD  # noqa: PLC0415
@@ -394,14 +445,16 @@ def main(argv=None) -> int:
         return 0
     if a.cmd == "add-site":
         a.report = a.report.resolve()  # one path for the sources and the row (Codex 7c-2a round 2 P3)
-        report = json.loads(a.report.read_text())
+        report_bytes = a.report.read_bytes()  # one read for the checks and the row's hash (round 3 P3)
+        report = json.loads(report_bytes)
         _verify_bundle(a.bundle, report.get("map_id"))
         start = _s10a_start(a.s10a, a.vehicle)
         check_site_sources(report, a.report.parent, lidar_sha256=sha256(a.lidar),
                            chassis_sha256=start.pop("chassis_sha256"), calibration_id=start.pop("calibration_id"))
         row = site_entry(json.loads((a.bundle / "manifest.json").read_text()), report, name=a.name,
                          folder=a.bundle.name, report_name=report_path(a.report, a.bundle),
-                         report_sha256=sha256(a.report), site_record_sha256=sha256(a.site_record), **start)
+                         report_sha256=hashlib.sha256(report_bytes).hexdigest(),
+                         site_record_sha256=sha256(a.site_record), **start)
         write(a.registry, put(read(a.registry, missing_ok=True), row))
         print(json.dumps(row))
         return 0
