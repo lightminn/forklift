@@ -140,13 +140,19 @@ def test_a_declaration_without_its_seed_row_is_unsourced():
     del plain_append
 
 
-def test_the_block_holds_through_stop_a_lease_release_and_a_new_lease():
-    """STOP, a lease's release and a new lease write no record and lift nothing (6.1, 7)."""
+def test_the_block_holds_through_stop_rearm_a_lease_release_and_a_new_lease():
+    """STOP, a rearm, a lease's release and a new lease write no record and lift nothing (6.1, 7)."""
     r = rig()
     _refused_declaration_then_confirmation(r)
     blk = dict(r.loop.f1_block)
     ask(r, "stop")
-    r.tick(5)
+    r.tick(3)
+    assert r.arbiter.mode == "STOPPED"
+    assert r.loop.f1_block == blk and r.loop._start_blocked() is True
+    stand(r, 5)
+    reply_, _ = ask(r, "rearm")
+    r.tick(3)
+    assert reply_["t"] == "ack" and r.arbiter.mode == "PAUSED", reply_
     assert r.loop.f1_block == blk and r.loop._start_blocked() is True
     ask(r, "lease_release")
     r.tick(5)
@@ -164,6 +170,7 @@ def test_an_accepted_session_end_keeps_the_records_for_the_end_record():
     _refused_declaration_then_confirmation(r)
     blk, seeds = dict(r.loop.f1_block), [dict(x) for x in r.loop.seed_log]
     reply_, _ = ask(r, "session_end")
+    assert reply_["t"] == "ack", reply_
     r.tick(3)
     assert r.loop.f1_block == blk and r.loop.seed_log == seeds
 
@@ -176,8 +183,13 @@ def test_teleop_and_the_field_recovery_report_stay_open_while_blocked():
     reply_, _ = ask(r, "mode_request", to="TELEOP")
     assert reply_.get("reason") != "operator_placed_start"
     assert "recovery" not in arb.START_GATE_REFUSED  # the gate's list: the report goes through
-    reply_, _ = ask(r, "recovery", recovery_id=1)  # the field recovery's report reaches the loop, F1 or not
-    assert reply_.get("reason") != "operator_placed_start"
+    # an open field recovery (as a mission ending with the forks not confirmed out leaves it, 4d-2b-2): its report is
+    # taken while F1 blocks, and opens a new relocalization generation (Codex 7c-2b round 2 P3)
+    r.core.field_recovery = {"id": 1, "since_s": 0.0, "mission_id": None, "pallet_id": None, "relation": "free"}
+    reply_, _ = ask(r, "recovery", recovery_id=1, action="done")
+    assert reply_["t"] == "ack", reply_
+    r.tick(2)
+    assert r.core.relocalize_generation() is not None and r.loop.f1_block is not None
 
 
 def test_the_f1_bypass_lifts_the_block_caps_and_turning_it_off_blocks_again():
