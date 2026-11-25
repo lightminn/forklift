@@ -177,12 +177,12 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
     """A generation opened by a 400 ms STATE silence. The bridge holds the scan in flight's reply across the first
     declaration's acceptance (released once the console shows the seed's mark): the stopped instance's reply comes
     after the seed -- dropped, never evidence.
-    Declaration 1: its seed held 3 s, the lease released while the bridge reports seeding -- the attempt ends, the
-    seed runs to ready and completes nothing. Declaration 2: a STOP while its seed runs -- refused; after the rearm a
+    Declaration 1: its seed held 1.5 s, the lease released while the bridge reports seeding -- the attempt ends, the
+    seed runs to ready (held by the bridge until the refusal is seen) and completes nothing. Declaration 2: a STOP while its seed runs -- refused; after the rearm a
     third declaration is refused seed_in_progress (the bridge holds that seed's end state until it is seen), the
     seed's ready then completes nothing. Declaration 3 completes on its own seed; the approach after it, with no
     bypass, writes every moving DRIVE within 0.06 m/s (above it without the declaration: the test before)."""
-    bridge = _bridge(tmp_path, seed_delay_s=3.0, hold_end=(3,))
+    bridge = _bridge(tmp_path, seed_delay_s=1.5, hold_end=(2, 3))
     run = _runner(mcu_model, tmp_path, bridge, 200, model_args=("--state-silent-at-ms", str(SILENT_AT_MS),
                                                                "--state-silent-ms", str(SILENT_MS)),
                   config=_far_config(tmp_path))
@@ -205,6 +205,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         c.lease = None
         s = c.wait(lambda s: s["relocalize"]["attempt"] == 1 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] == "relocalize_voided:lease", s["relocalize"]
+        bridge.release(2)  # its end state only after the lease's refusal is seen (Codex time-PR round 1 P2-2)
         _until(lambda: _sent(bridge, "ready", 2), 15, "seed 2 ready")
         time.sleep(0.5)
         assert c.status["relocalize_generation"] == gen and c.status["relocalize"]["state"] == "refused"
