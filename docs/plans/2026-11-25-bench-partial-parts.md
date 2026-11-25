@@ -27,7 +27,7 @@
 - 판정(`plant/judgement.py`): `parts_absent` 를 모든 명령의 실행 표식으로 읽는다. **steer·wheels 가 빠지면 `not_for_gate`**, lift 만 빠진 것은 지금처럼 판정 대상(승강 방식 미정, 계획 3.5 와 `--lift-absent` 선례).
 - `h743_first_boot.py`: 헤더의 `parts_absent` 를 읽고, `--lift-absent`·`--steer-absent` 는 헤더와 맞아야 한다(헤더가 부품을 적었는데 플래그가 다른 부품을 말하면 거부). 빠진 축의 센서 비트는 허용, 그 축 kth 항목은 생략.
 - `bringup.py kth --axis-absent M|H`: 빠진 축은 `--configured-*` 없이, 판정 `null`. 헤더의 steer = M, lift = H 와 맞아야 한다.
-- `bringup.py clear-faults --cause "<원인과 조치>"`: FAULT·ESTOP 일 때만. 이미 쌓인 STATE 를 먼저 읽어 내고, DISARM 을 보내 그 seq 가 되돌아온 것을 본 뒤 CLEAR_FAULTS 하나를 보낸다. 프레임 번호는 무작위로 시작하고 이 세션의 STATE 가 이미 보인 번호는 쓰지 않는다(STATE 는 마지막 수락 번호를 반복하므로). 수락은 같은 연결·같은 부팅에서 그 프레임을 다 쓴 뒤 읽은 STATE 의 `last_rx_seq` 로만 보고, 마지막으로 읽은 STATE 가 DISARMED + DRIVERS_READY 여야 `cleared` 다(재연결·재부팅이면 더 보내지 않고 확인 실패). 다시 무장하지 않는다. 결과 `cleared`·`not_accepted`(거절 사유 표시)·`not_ready`·`refused`(`not_latched`).
+- `bringup.py clear-faults --cause "<원인과 조치>"`: FAULT·ESTOP 일 때만. 이미 쌓인 STATE 를 먼저 읽어 내고, DISARM 을 보내 그 seq 가 되돌아온 것을 본 뒤 CLEAR_FAULTS 하나를 보낸다. 프레임 번호는 무작위로 시작하고 이 세션의 STATE 가 이미 보인 번호는 쓰지 않는다(STATE 는 마지막 수락 번호를 반복하므로). 수락은 같은 연결·같은 부팅에서 그 프레임을 다 쓴 뒤 읽은 STATE 의 `last_rx_seq` 로만 보고, 마지막으로 읽은 STATE 가 DISARMED + DRIVERS_READY 여야 `cleared` 다(재연결·재부팅이면 확인 실패. 그때 이미 큐에 든 CLEAR 는 옛 boot_id 를 실어 새 부팅이 거부한다). `cleared` 는 새 허락을 청할 수 있다는 뜻일 뿐이다 — 같은 부팅의 이전 실행이 같은 시작 번호(1/65,535)를 뽑고 그 STATE 가 아직 안 읽혔으면 오판할 수 있고, ARM 은 따로 막혀 있으며 FAULT·ESTOP 인 보드는 ARM 을 거부한다. 다시 무장하지 않는다. 결과 `cleared`·`not_accepted`(거절 사유 표시)·`not_ready`·`refused`(`not_latched`).
 - 우회·부품 부재 실행의 시운전 결과는 `suggested_duty_sign` 도 비운다(진단값이 설정으로 옮겨지지 않게).
 
 ### PR-B — 단일 축 시운전 이미지 `fw-single` (링크 변경 없음)

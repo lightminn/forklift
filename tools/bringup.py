@@ -304,11 +304,14 @@ def clear_faults(bench: Bench) -> dict:
     STATE repeats the last accepted seq, and a bring-up process numbers its frames from its own start, so a STATE made
     before this run's frame arrived (a boot's 0, an earlier run's seqs in flight) could carry the same number (Codex
     PR-A rounds 1-2). The bench is therefore started at a random seq (``main``), and a frame whose seq any STATE of this
-    session has already shown is not used: an echo of a never-seen seq can only be this frame's. The echo must also be
-    a STATE of the start's connection and boot, read after the frame's last byte, and the CLEAR's after the DISARM's.
-    Cleared means the newest STATE of that connection and boot, after the CLEAR's echo, is DISARMED with
-    DRIVERS_READY. A refusal (sensor invalid, e-stop) leaves the seq unechoed and is reported with the reject reason; a
-    reconnect or a reboot on the way ends it unconfirmed and sends nothing more."""
+    session has already shown is not used. The echo must also be a STATE of the start's connection and boot, read
+    after the frame's last byte, and the CLEAR's after the DISARM's. Residual (Codex PR-A round 3): an earlier run on
+    the same boot that drew the same start (1 in 65,535) with its STATEs still unread after the drain could supply both
+    echoes; "cleared" therefore only lets the operator ask for a new permission -- ARM is gated separately and a board
+    still in FAULT/ESTOP refuses it. Cleared means the newest STATE of that connection and boot, after the CLEAR's
+    echo, is DISARMED with DRIVERS_READY. A refusal (sensor invalid, e-stop) leaves the seq unechoed and is reported
+    with the reject reason; a reconnect or a reboot on the way ends it unconfirmed. A CLEAR already queued when a new
+    boot shows up may still be written; it carries the old boot_id and the new boot refuses it (boot mismatch)."""
     if not bench.run_until(lambda: bench.state is not None, 3.0):
         return {"result": "no_state"}
     bench.run_until(lambda: False, CLEAR_DRAIN_S)
