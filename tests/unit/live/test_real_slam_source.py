@@ -712,8 +712,34 @@ def test_an_old_generations_ready_never_opens_the_confirmation():
 def test_a_generation_change_before_any_start_scan_keeps_the_start_check():
     r = Rig()
     _start_scans(r, 0)
+    r.src.generation(r.gen)  # the earlier generation is known (a scan of it seen, none sent)
     r.gen = (1, 77)
     r.src.generation(r.gen)
+    for _ in range(7):
+        r.src.offer(r.scan())
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(1, "ready")
+    r.step()
+    assert r.src.can_confirm()
+
+
+def test_a_start_scan_not_one_byte_of_which_went_is_taken_back_on_a_generation_change():
+    """Codex 7a-3a round 1 P3-1: the first start scan's write stalled before any byte -- the bridge has seen no scan
+    of the earlier generation, so the start check goes on with the new one."""
+    r = Rig()
+    _start_scans(r, 0)
+    sock = r.src.link.sock
+    r.src.link.sock = Chunky(sock, [None])
+    r.src.offer(r.scan())
+    assert r.src.target["start_scans"] == 1 and r.src.link.busy
+    r.gen = (1, 77)
+    r.src.generation(r.gen)
+    assert r.src.target["start_scans"] == 0 and not r.src.link.busy
+    assert r.src.counts["slam_generation_cut"] == 1
+    r.src.link.sock = sock
+    r.step()  # the next scan is a later one (a scan's stamp never repeats the one taken back)
     for _ in range(7):
         r.src.offer(r.scan())
         [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
@@ -1151,3 +1177,21 @@ def test_a_late_read_records_only_the_reply_with_the_scans_own_stamp():
         r.step(1)
     rows = [e for e in r.src.events if e.get("t") == "reply" and e.get("why") == "past_reply_bound"]
     assert len(rows) == 1 and rows[0]["map_from_odom"] == [0.1, 0.0, 0.0]
+
+
+def test_a_feed_generation_told_before_the_replies_keeps_a_late_ready_from_confirming():
+    """Codex 7a-3a round 1 P2-1: the observe run's receive gap opens a feed generation with no scan; the bridge's late
+    ready of the start check (its seventh reply already in) arrives after -- told first, it never confirms."""
+    from forklift_core.live.observe_slam import ObserveSlam
+
+    r = Rig(mode="diagnostic")
+    obs = ObserveSlam.__new__(ObserveSlam)
+    obs.src, obs.fatal, obs._producer, obs._events = r.src, None, None, 0  # noqa: SLF001
+    obs.put = lambda row: None
+    _start_scans(r, 7)
+    obs.on_feed_generation(1)  # what the observe loop does at the gap, before slam.cycle reads the bridge
+    assert obs.fatal == "start_check_generation_changed"
+    r.bridge.state(1, "ready")
+    with pytest.raises(rss.SlamSourceFatal):
+        r.step()
+    assert not r.src.can_confirm()

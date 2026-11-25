@@ -13,7 +13,7 @@ PINNED = "34300099fadfc772965962dec837bf436706188f"  # Slamtec/sllidar_ros2 2024
 IMAGE_ID = "sha256:" + "c" * 64
 
 
-def run_launcher(tmp_path, *args, env=None, image=True):
+def run_launcher(tmp_path, *args, env=None, image=True, udev_serial=True):
     """The launcher with a fake docker that prints its arguments (and answers ``image inspect`` with an ID when the
     image is there) and a fake udevadm."""
     fake = tmp_path / "bin"
@@ -22,7 +22,8 @@ def run_launcher(tmp_path, *args, env=None, image=True):
     (fake / "docker").write_text('#!/bin/sh\nif [ "$1" = image ] && [ "$2" = inspect ]; then ' + inspect
                                  + '; fi\nprintf "%s\\n" "$@"\n')
     (fake / "docker").chmod(0o755)
-    (fake / "udevadm").write_text('#!/bin/sh\nprintf "ID_VENDOR_ID=10c4\\nID_MODEL_ID=ea60\\nID_SERIAL_SHORT=0001\\n"\n')
+    serial = "ID_SERIAL_SHORT=0001\\n" if udev_serial else ""
+    (fake / "udevadm").write_text('#!/bin/sh\nprintf "ID_VENDOR_ID=10c4\\nID_MODEL_ID=ea60\\n' + serial + '"\n')
     (fake / "udevadm").chmod(0o755)
     full = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", **(env or {})}
     return subprocess.run(["bash", str(REPO / "tools/ros2_dev.sh"), *args], env=full, capture_output=True, text=True)
@@ -54,7 +55,7 @@ def test_scan_a2m12_runs_the_scan_image(tmp_path):
     dev = tmp_path / "ttyUSB9"
     dev.write_text("")
     argv = run_launcher(tmp_path, "scan-a2m12", str(dev), str(tmp_path / "s")).stdout.splitlines()
-    assert argv[-4] == "forklift/ros2-scan:jazzy"  # image, then bash -c <command>
+    assert argv[-4] == IMAGE_ID  # the image inspected, by its ID (Codex 7a-3a round 1 P2-2), then bash -c <command>
 
 
 def test_the_image_pins_sllidar_ros2_by_commit():
@@ -94,14 +95,15 @@ def test_the_sdk_source_names_its_run_and_its_source_facts(tmp_path):
     assert f"id {IMAGE_ID}" in res.stderr and run in res.stderr  # the run and the image ID that ran, on record
 
 
-def test_each_run_gets_its_own_id(tmp_path):
+def test_each_run_gets_its_own_id_never_read_as_a_number(tmp_path):
+    """Codex 7a-3a round 1 P2-4: an all-digit id would reach the node as an integer parameter."""
     runs = set()
-    for k in range(2):
+    for k in range(12):
         d = tmp_path / str(k)
         d.mkdir()
         cmd = run_launcher(d, "scan-a2m12", str(_dev(d)), str(d / "s")).stdout.splitlines()[-1]
-        runs.add(re.search(r"forklift_run_id:=([0-9a-f]{16})", cmd).group(1))
-    assert len(runs) == 2
+        runs.add(re.search(r"forklift_run_id:=([0-9a-f]{16})\b", cmd).group(1))
+    assert len(runs) == 12 and all(r[0] in "abcdef" for r in runs)
 
 
 def test_the_raw_source_passes_no_source_facts(tmp_path):
@@ -134,6 +136,21 @@ def test_the_bench_delay_and_receive_record(tmp_path):
     d.mkdir()
     plain = run_launcher(d, "scan-a2m12", str(_dev(d)), str(d / "s"))
     assert "publish_delay_ms" not in plain.stdout and "forklift-sdk-log" not in plain.stdout
+
+
+def test_a_leading_zero_delay_is_read_as_decimal(tmp_path):
+    """Codex 7a-3a round 1 P3-3: 0100 is 100 ms in the check, the argument and the log, never octal."""
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                       env={"FORKLIFT_SDK_PUBLISH_DELAY_MS": "0999"})
+    assert res.returncode == 0 and "publish_delay_ms:=999 " in res.stdout.splitlines()[-1] + " "
+    assert "held 999 ms" in res.stderr
+
+
+def test_a_usb_adapter_without_a_serial_gives_no_usb_fact(tmp_path):
+    """Codex 7a-3a round 1 P2-3: adapters share vendor and product ids -- no serial, no identity."""
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                       env={"FORKLIFT_SCAN_SOURCE": "sdk"}, udev_serial=False)
+    assert res.returncode == 0 and "--usb-id" not in res.stdout and "usb unknown" in res.stderr
 
 
 def test_a_bad_bench_delay_is_refused(tmp_path):

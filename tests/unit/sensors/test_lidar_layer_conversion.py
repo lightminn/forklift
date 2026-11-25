@@ -37,7 +37,8 @@ def cfg(err_s=0.002, period=0.1, mask=(), measured=True, basis="measured", **kw)
                           timing_basis=basis if measured else None, applies_to=tuple(sorted(FACTS.items())), **kw)
 
 
-def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12, kind=lc.RX_STAMP, src="default"):
+def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12, kind=lc.RX_STAMP, src="default",
+         producer=7):
     step = (0.09 / (n - 1)) if step is None else step
     meta = {"time_increment": step, "stamp_kind": kind}
     if src is not None:
@@ -49,7 +50,8 @@ def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12, 
     if synthetic:
         meta["synthetic"] = True
     r = np.full(n, 2.0) if ranges is None else np.asarray(ranges, dtype=float)
-    return sf.RealScan(1, 0, recv, 0, np.linspace(-math.pi, math.pi, n, endpoint=False), r, None, meta)
+    return sf.RealScan(1, 0, recv, 0, np.linspace(-math.pi, math.pi, n, endpoint=False), r, None, meta,
+                       producer_gen=producer)
 
 
 def test_the_shipped_config_keeps_every_scan_diagnostic():
@@ -369,6 +371,9 @@ def test_an_engineering_bound_keeps_its_decision_and_document(tmp_path):
     ({"src": source(ans_type=133)}, "source_mismatch"),
     ({"src": source(sample_period_us=62.5)}, "source_mismatch"),
     ({"src": source(baudrate=115200)}, "source_mismatch"),
+    ({"src": {k: v for k, v in source().items() if k != "run"}}, "no_source_facts"),   # round 1 P3-2: no identity
+    ({"src": {k: v for k, v in source().items() if k != "start"}}, "no_source_facts"),
+    ({"producer": None}, "no_source_facts"),
     ({}, None),
 ])
 def test_the_bound_applies_to_a_frame_only_on_the_source_it_was_taken_on(kw, why):

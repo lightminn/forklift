@@ -2,7 +2,7 @@
 
 작성일: 2026-11-26 · 상태: **계획 6판 승인(총괄 2026-11-26), 상한 근거는 B 로 결정(9절); 7a-3a 구현 중** · 관련: [PR 7 설계](../design/2026-11-25-real-sources-pr7.md) 2절 표의 7a-3 행·4절(7a-2 구현), `deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `config/real/lidar.yaml`
 
-총괄 승인(2026-11-26): 7a-3 은 벤치 없이 되는 패치·패치 이미지·단위 시험까지 한다. 오차 상한 측정과 `first_beam_err_s`·`timing.measured` 기입은 벤치 항목으로 절차서에 넣는다. 이미지 태그를 한 곳에 모으는 안을 넣는다.
+총괄 승인(2026-11-26): 7a-3 은 벤치 없이 되는 패치·패치 이미지·단위 시험까지 한다. 오차 상한 측정과 `first_beam_err_s` 기입은 벤치 항목으로 절차서에 넣는다(기입 형식은 9절의 총괄 결정: `timing.basis: engineering`, `timing.measured` 키는 쓰지 않음). 이미지 태그를 한 곳에 모으는 안을 넣는다.
 
 ## 1. 지금 SDK 가 시각을 읽는 곳 (고정 커밋 34300099 에서 확인)
 

@@ -376,9 +376,17 @@ class RealSlamSource:
             if w is not None:
                 self._drop("slam_generation_cut", key=w["key"] if isinstance(w, dict) else w.key)
         self._waiting, self._odom_wait = None, None
-        if self._inflight is not None:
-            self._inflight["old_gen"] = True
         t = self.target
+        f = self._inflight
+        if f is not None and self.link.retract("scan"):
+            # not one byte of it went: never sent, and not one of a start check's seven (Codex 7a-3a round 1 P3-1)
+            self._inflight = None
+            if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
+                t["start_scans"] -= 1
+            self._drop("slam_generation_cut", key=f["key"])
+            self._reinstate(f["attempt"], now)  # a forced request it carried goes on, as with an old reply
+        elif f is not None:
+            f["old_gen"] = True
         if t is None or t["cancel"] is not None or not self._seeding():
             return  # after a check's end state: only what waits and the reply in flight (as before)
         if t["kind"] == "start":

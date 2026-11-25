@@ -337,6 +337,8 @@ class Observer:
         self.feed.new_generation("receive_gap")
         self.rec.put({"t": "scan_event", "kind": "receive_gap", "since_ns": int(self._last_scan_ns),
                       "host_ns": int(now), "feed_gen": self.feed.generation})
+        if self.slam is not None:
+            self.slam.on_feed_generation(self.feed.generation)  # before its replies are read (7a-3a)
 
     def _scans(self, now: int) -> None:
         for _k in range(SCANS_READ_PER_CYCLE):
@@ -349,6 +351,8 @@ class Observer:
                 self.feed.new_generation("socket_error")
                 self.rec.put({"t": "scan_event", "kind": "socket_error", "error": str(exc), "host_ns": int(now),
                               "feed_gen": self.feed.generation})
+                if self.slam is not None:
+                    self.slam.on_feed_generation(self.feed.generation)
                 return
             if not data:
                 break

@@ -174,15 +174,19 @@ def source_facts(meta: dict) -> dict | None:
 def frame_bound(scan, cfg: LidarConfig) -> tuple[float | None, str | None]:
     """``(first_beam_err_s, None)`` when ``cfg``'s bound holds for this frame, else ``(None, why)``: ``no_time_bound``
     (no usable bound in the config), ``not_arrival_stamped`` (not a patch-0002 frame), ``no_source_facts`` (the frame
-    does not say what ran), ``source_mismatch`` (it ran on something the bound was not taken on). The layer and the
+    does not say what ran, or not with its run, start and producer generation), ``source_mismatch`` (it ran on something the bound was not taken on). The layer and the
     SLAM path both ask this (plan 3, Codex P2-1)."""
     if not cfg.bound_usable:
         return None, "no_time_bound"
     if scan.meta.get("stamp_kind") != RX_STAMP:
         return None, "not_arrival_stamped"
     facts = source_facts(scan.meta)
+    src = scan.meta.get("source")
     if facts is None or any(facts.get(k) is None for k in APPLIES_KEYS):
         return None, "no_source_facts"
+    if not (isinstance(src.get("run"), str) and isinstance(src.get("start"), str)
+            and getattr(scan, "producer_gen", None) is not None):
+        return None, "no_source_facts"  # a bound needs the frame's whole identity: run, start, generation (round 1 P3-2)
     if any(facts[k] != v for k, v in cfg.applies_to):
         return None, "source_mismatch"
     return cfg.first_beam_err_s, None

@@ -43,6 +43,7 @@ class ObserveSlam:
         self.boot = None
         self._prev = None
         self._last = None  # (connection, boot) of the last STATE
+        self._producer = None  # the producer generation of the last feed scan
         self._events = 0
         self.fatal: str | None = None
         self.counts: Counter = Counter()
@@ -97,7 +98,15 @@ class ObserveSlam:
             return
         self._guard(lambda: self._on_scan(scan))
 
+    def on_feed_generation(self, feed_gen: int) -> None:
+        """The feed opened a generation of its own (a receive gap, a socket error): told to the source at once, before
+        the bridge's next frames are read -- a late ready of the earlier generation never confirms (Codex 7a-3a round
+        1 P2-1). The producer stays the last one seen; its next scan then carries the same generation."""
+        if self.fatal is None:
+            self._guard(lambda: self.src.generation((int(feed_gen), self._producer)))
+
     def _on_scan(self, scan) -> None:
+        self._producer = scan.producer_gen
         # the generation first, whatever the frame's verdict (7a-3 plan 3, Codex round 3 P2-3)
         self.src.generation((int(scan.feed_gen), scan.producer_gen))
         s, why = from_feed(scan, self.lidar)

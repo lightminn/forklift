@@ -147,8 +147,9 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
     # per frame (7a-3 plan 3): every frame diagnostic, with its reason
     assert slam.counts["frames_diagnostic"] > 7 and slam.counts["frames_measured"] == 0
     assert slam.counts["diagnostic_no_time_bound"] == slam.counts["frames_diagnostic"]
-    [head] = [r for r in rows if r["t"] == "slam_header"]
-    assert head["mode"] == "diagnostic" and head["timing"]["timing_basis"] is None
+    # the header names the bound's basis as configured, never whether a frame used it
+    assert ro._timing_header(lid) == {"first_beam_err_s": None, "timing_basis": None, "timing_decision": None,  # noqa: SLF001
+                                      "timing_doc": None, "applies_to": None}
     kinds = [g[1] for g in bridge.got]
     assert kinds[0] == "Hello" and kinds.count("RealScan") > 7, (kinds[:3], dict(slam.src.counts), dict(slam.counts),
                                                                 [r for r in rows if r["t"] == "slam_scan"][:2])
@@ -281,3 +282,26 @@ def test_an_input_break_cuts_what_waits_and_drops_the_reply_in_flight(tmp_path):
         bridge.closing()
         sock.close()
         bridge.stop()
+
+
+def test_the_observe_loop_tells_the_slam_path_of_a_feed_generation_at_once():
+    """Codex 7a-3a round 1 P2-1: a receive gap and a socket error open a feed generation with no scan; the SLAM path
+    hears of it then, not at the next accepted scan."""
+    from collections import Counter
+
+    from forklift_core.sensors.scan_feed import ScanFeed
+
+    told = []
+
+    class Sock:
+        def recv(self, n):
+            raise OSError("gone")
+
+    obs = ro.Observer.__new__(ro.Observer)
+    obs.feed, obs.counts, obs._last_scan_ns, obs._scan_gap_open = ScanFeed(), Counter(), 0, False  # noqa: SLF001
+    obs.rec = SimpleNamespace(put=lambda row: None)
+    obs.slam = SimpleNamespace(on_feed_generation=told.append)
+    obs.scan_sock = Sock()
+    obs._open_gap(10)  # noqa: SLF001
+    obs._scans(20)  # noqa: SLF001
+    assert told == [1, 2]

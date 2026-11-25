@@ -42,8 +42,12 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
         echo "no scan image '${image}' here (docker load it first)" >&2
         exit 2
     fi
-    # this run's id: the node stamps it into every v2 scan (patch 0002), the adapter drops any other run's
+    image_tag="${image}"
+    image="${image_id}"  # run what was inspected: a tag moved in between never runs under the recorded ID
+    # this run's id: the node stamps it into every v2 scan (patch 0002), the adapter drops any other run's. Its first
+    # digit is a-f, so the ROS parameter parser never reads it as a number (an all-digit id would be an integer)
     run_id="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+    run_id="$(printf '%x' $(( 10 + 0x${run_id:0:2} % 6 )))${run_id:1}"
     # the LiDAR's USB adapter as udev names it (vendor:product:serial; empty when udev cannot say) and this host
     usb_id=""
     if command -v udevadm >/dev/null 2>&1; then
@@ -51,12 +55,12 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
         vid="$(sed -n 's/^ID_VENDOR_ID=//p' <<<"${props}")"
         pid="$(sed -n 's/^ID_MODEL_ID=//p' <<<"${props}")"
         serial="$(sed -n 's/^ID_SERIAL_SHORT=//p' <<<"${props}")"
-        if [[ -n "${vid}" && -n "${pid}" ]]; then
-            usb_id="${vid}:${pid}:${serial:-none}"
+        if [[ -n "${vid}" && -n "${pid}" && -n "${serial}" ]]; then
+            usb_id="${vid}:${pid}:${serial}"  # no serial, no identity: adapters share vendor and product ids
         fi
     fi
     host_name="$(hostname)"
-    echo "scan run ${run_id}: image ${image} id ${image_id}, usb ${usb_id:-unknown}, host ${host_name}" >&2
+    echo "scan run ${run_id}: image ${image_tag} id ${image_id}, usb ${usb_id:-unknown}, host ${host_name}" >&2
     docker_args+=(
         --device "${device}:${device}"
         --group-add "$(stat -L -c %g "${device}")"  # the device's own group, through a by-id link
@@ -68,10 +72,11 @@ if [[ "${1:-}" == "scan-a2m12" ]]; then
     driver+=" -r scan_sdk_info:=/sensors/lidar/scan_sdk_info -p forklift_run_id:=${run_id}"  # patch 0002 (7a-3)
     # bench only (7a-2 timetable 1): hold each read scan this long before publishing it
     delay_ms="${FORKLIFT_SDK_PUBLISH_DELAY_MS:-0}"
-    if ! [[ "${delay_ms}" =~ ^[0-9]{1,4}$ ]] || (( delay_ms > 1000 )); then
+    if ! [[ "${delay_ms}" =~ ^[0-9]{1,4}$ ]] || (( 10#${delay_ms} > 1000 )); then
         echo "FORKLIFT_SDK_PUBLISH_DELAY_MS must be 0-1000, not '${delay_ms}'" >&2
         exit 2
     fi
+    delay_ms=$(( 10#${delay_ms} ))  # decimal, one value for the check, the argument and the log (0100 is 100)
     if (( delay_ms > 0 )); then
         driver+=" -p publish_delay_ms:=${delay_ms}"
         echo "bench: each scan held ${delay_ms} ms before it is published" >&2
