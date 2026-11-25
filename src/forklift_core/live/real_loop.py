@@ -927,15 +927,18 @@ class RealLoop:
         elif a.get("seed_states"):
             # 6.1, 2: the seed's end state (ready / not_localized) completes it; void refuses it at once
             end = self.slam_source.seed_state(a["seed_epoch"])
+            # the instant it was seen, on the clock now -- not the tick's start (Codex 7c-1b-1 round 2 P2): the 0.5 s
+            # to the commit and the void's limit judged from it
+            seen = self._t(int(self.clock()))
             kind, reason = (None, None) if end is None else end
             if kind == "void":
                 # the limit first (impl round 1 P2-1): a void seen past it is the declaration's timeout
-                self._attempt_end(t, "refused", "relocalize_timeout" if t > self._attempt_deadline(a)
+                self._attempt_end(t, "refused", "relocalize_timeout" if seen > self._attempt_deadline(a)
                                   else f"relocalize_voided:seed:{reason}")
                 return
             if kind in ("ready", "not_localized"):
                 if a["seed_end"] is None:
-                    a["seed_end"] = (kind, reason, float(t))
+                    a["seed_end"] = (kind, reason, float(seen))
                     self.reloc_events.append({"t": float(t), "event": "seed_end", "kind": kind, "reason": reason,
                                               "attempt": a["attempt"], "epoch": a["seed_epoch"],
                                               "seed_id": a.get("seed_id")})

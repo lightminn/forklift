@@ -242,6 +242,25 @@ def test_the_commit_follows_the_end_state_within_half_a_second():
     assert r.loop._t(r.now) - seen == pytest.approx(rl.DECLARE_COMMIT_S, abs=0.05)
 
 
+def test_the_end_state_is_timed_on_the_clock_when_it_is_seen():
+    """Codex 7c-1b-1 round 2 P2: the tick's own time before the source is read does not come off the 0.5 s commit."""
+    r = rig()
+    gen = open_generation(r)
+    src = seeding(r)
+    stand(r)
+    ask(r, "relocalize_declare", generation=gen)
+    r.tick(5)
+    src.end("not_localized", "NOT_LOCALIZED")
+    r.tick_cost_ns = 40 * 1_000_000  # 40 ms of the tick spent before the state is read
+    r.tick()
+    r.tick_cost_ns = 0
+    a = r.loop.attempt
+    if a is not None:
+        assert a["seed_end"][2] == pytest.approx(r.loop._t(r.now + 40 * 1_000_000))
+    run_until(r, lambda rec: status(r)["state"] != "waiting", 50)
+    assert status(r)["state"] == "declared"
+
+
 def test_a_void_seen_past_the_limit_is_the_timeout():
     r = rig()
     gen = open_generation(r)
