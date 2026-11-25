@@ -31,12 +31,15 @@ CURRENT_ZERO_MA = 50
 WHEEL_STILL_COUNTS = 2
 STATUS_TOP = 0xC0  # the DRV8244 SPI response's top bits are always 11 (SLVSG24C table 8-21)
 LIFT_BITS = FaultFlag.LIFT_SENSOR_INVALID | FaultFlag.LIFT_OUT_OF_RANGE
+STEER_BITS = FaultFlag.STEER_SENSOR_INVALID | FaultFlag.STEER_OUT_OF_RANGE
 
 
 def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_absent: bool = False,
-                     synthetic_input: bool = False) -> dict:
-    """``samples``: the record's STATEs in receipt order (bring-up record rows read back)."""
-    base = {"window_s": window_s, "lift_absent": lift_absent,
+                     steer_absent: bool = False, synthetic_input: bool = False) -> dict:
+    """``samples``: the record's STATEs in receipt order (bring-up record rows read back). ``lift_absent`` /
+    ``steer_absent``: that axis's KTH7801 is not fitted -- its sensor bits are allowed and it is not judged
+    (2026-11-25 partial-parts bench; the caller marks a steering-absent result not for a gate)."""
+    base = {"window_s": window_s, "lift_absent": lift_absent, "steer_absent": steer_absent,
             "thresholds": {"current_zero_ma": CURRENT_ZERO_MA, "wheel_still_counts": WHEEL_STILL_COUNTS}}
     if not samples:
         return {**base, "result": "invalid", "why": "no STATE in the record"}
@@ -44,6 +47,7 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
     # than the contract allows before the end makes the record unjudgeable (Codex first-boot review P2-1, -2, -4)
     first = samples[0].state
     win = [first]
+    fitted = [i for i, absent in enumerate((steer_absent, lift_absent)) if not absent]  # M, H counter indices
     end_us = first.mcu_time_us + window_s * 1e6
     for s in samples[1:]:
         st, prev = s.state, win[-1]
@@ -57,6 +61,8 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
         cap = KTH_RATE_PER_MS * (dt_us // 1000 + 1)
         rises = [kth_counter_delta(getattr(st, f)[i], getattr(prev, f)[i])
                  for f in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors") for i in range(2)]
+        # an absent axis's counters are not read (Codex PR-A P3): only the fitted axes' can make the record invalid
+        rises = [r if k % 2 in fitted else 0 for k, r in enumerate(rises)]
         if max(rises) > cap:
             return {**base, "result": "invalid", "why": "a KTH counter rose faster than once a millisecond (reset?)"}
         # per axis: errors and other-variant errors are counted among the fresh frames (contract 3.3, Codex P2)
@@ -83,7 +89,7 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
     checks["current"] = {"ok": max(peak) <= CURRENT_ZERO_MA and not sense_bad,
                          "peak_abs_ma": dict(zip("LRMH", peak)), "current_sense_invalid": sense_bad}
 
-    allowed = LIFT_BITS if lift_absent else FaultFlag(0)
+    allowed = (LIFT_BITS if lift_absent else FaultFlag(0)) | (STEER_BITS if steer_absent else FaultFlag(0))
     seen = FaultFlag(0)
     for st in win:
         seen |= st.fault_flags
@@ -91,7 +97,7 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
     checks["faults"] = {"ok": not unexpected, "unexpected": [f.name for f in FaultFlag if f in unexpected],
                         "seen": [f.name for f in FaultFlag if f in seen]}
 
-    axes = ("M",) if lift_absent else ("M", "H")
+    axes = tuple(ax for ax, absent in (("M", steer_absent), ("H", lift_absent)) if not absent)
     frames = {ax: sum(kth_counter_delta(b.kth_frames[i], a.kth_frames[i]) for a, b in zip(win, win[1:]))
               for i, ax in enumerate(("M", "H"))}
     nan = {"M": sum(1 for st in win if not math.isfinite(st.steering_rad)),

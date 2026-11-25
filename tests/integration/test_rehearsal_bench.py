@@ -114,3 +114,55 @@ def test_a_rehearsal_result_on_stdout_is_marked(bench, tmp_path, capsys):
     assert out["not_for_judgement"] is True and out["synthetic_inputs"] is True
     rows = [json.loads(x) for x in (tmp_path / "c.jsonl").read_text().splitlines()]
     assert rows[0]["device_id"]["major"] in range(136, 144)
+
+
+def test_absent_parts_go_into_the_header(bench, tmp_path, capsys):
+    """Partial-parts plan v4: the capture names the parts not fitted; first boot and kth read them from here."""
+    proc, path, record = bench
+    out = tmp_path / "run.jsonl"
+    assert bringup.main(["record", "--device", record["pts"], "--bench", str(path), "--out", str(out),
+                         "--seconds", "0.3", "--absent", "steer", "--absent", "lift", "--absent", "steer"]) == 0
+    capsys.readouterr()
+    headers = [json.loads(x) for x in out.read_text().splitlines() if json.loads(x)["t"] == "header"]
+    assert [h["parts_absent"] for h in headers] == [["lift", "steer"]]  # none absent: [] (the clear-faults test)
+
+
+def _bench_with(mcu_model, tmp_path, extra):  # noqa: F811
+    return rehearsal_bench.start("drive", tmp_path / "reh", mcu_model.parent, extra, 30000)
+
+
+@pytest.mark.parametrize("extra, expected, mode_after", [
+    ([], "refused", "DISARMED"),                                                   # nothing latched: not sent
+    (["--estop-at-ms", "100", "--estop-release-ms", "400"], "cleared", "DISARMED"),  # the cause gone: cleared
+    (["--fault-at-ms", "100"], "cleared", "DISARMED"),        # a driver nFAULT: the re-init's CLR_FLT clears it
+    (["--estop-at-ms", "100"], "not_accepted", "ESTOP"),      # the e-stop still pressed: refused, seq not echoed
+])
+def test_clear_faults_only_on_a_latch_and_never_arms(mcu_model, tmp_path, capsys, extra, expected,  # noqa: F811
+                                                     mode_after):
+    proc, path, record = _bench_with(mcu_model, tmp_path, extra)
+    try:
+        time.sleep(0.8)  # past the injected latch (and the e-stop's release)
+        out = tmp_path / "cf.jsonl"
+        code = bringup.main(["clear-faults", "--device", record["pts"], "--bench", str(path), "--out", str(out),
+                             "--cause", "test: injected latch"])
+        res = json.loads(capsys.readouterr().out)
+        assert res["result"] == expected, res
+        assert code == (0 if expected == "cleared" else 1)
+        rows = [json.loads(x) for x in out.read_text().splitlines()]
+        assert rows[0]["cause"] == "test: injected latch" and rows[0]["cmd"] == "clear-faults"
+        assert rows[0]["parts_absent"] == []
+        kinds = [r["kind"] for r in rows if r["t"] == "written"]
+        assert "ARM" not in kinds and kinds.count("CLEAR_FAULTS") == (0 if expected == "refused" else 1)
+        if expected != "refused":
+            assert kinds.index("DISARM") < kinds.index("CLEAR_FAULTS")
+        if expected == "refused":
+            assert res["why"] == "not_latched"
+        else:
+            assert res["before"]["mode"] in ("ESTOP", "FAULT") and res["after"]["mode"] == mode_after
+            if expected == "not_accepted":
+                assert res["after"]["reject_reason"] == "ESTOP_ACTIVE"
+            else:
+                assert res["after"]["drivers_ready"] and not res["after"]["fault_flags"]
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)

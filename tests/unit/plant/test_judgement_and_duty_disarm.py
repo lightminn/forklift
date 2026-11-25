@@ -155,3 +155,22 @@ def test_a_locked_or_model_board_is_not_physical():
 def test_min_seconds():
     assert dd.min_seconds(0.15) == pytest.approx(0.075 + 0.02 + 0.5 + 0.02 + 0.02)
     assert dd.min_seconds(-1.0) == pytest.approx(0.5 + 0.06 + 0.5)
+
+
+def test_absent_parts_are_marked_for_every_command():
+    """Partial-parts plan v4: the header's parts_absent is read for every command, before the commissioning-only
+    marks; a missing lift KTH alone stays gate-eligible (plan 3.5), steer or wheels do not."""
+    assert judgement.run_marks([{"t": "header", "cmd": "record", "parts_absent": []}]) == {}
+    assert judgement.run_marks([{"t": "header", "cmd": "record", "parts_absent": ["lift"]}]) == {
+        "parts_absent": ["lift"]}
+    m = judgement.run_marks([{"t": "header", "cmd": "record", "parts_absent": ["wheels", "lift"]}])
+    assert m == {"parts_absent": ["lift", "wheels"], "not_for_gate": True}
+    m = judgement.run_marks([hdr(large=False, bypass=None, parts_absent=["steer"])])
+    assert m == {"parts_absent": ["steer"], "not_for_gate": True}
+    rows = [{"t": "header", "cmd": "record", "parts_absent": ["lift"]},
+            {"t": "header", "cmd": "step", "parts_absent": ["steer"]}]
+    m = judgement.record_marks(rows)
+    assert m["parts_absent"] == ["lift", "steer"] and not judgement.eligible(m)
+    with pytest.raises(judgement.NotForGate, match="parts were absent"):
+        judgement.check(m, allow=False)
+    assert judgement.parts_absent({"parts_absent": "steer"}) == []  # not a list: not read as a declaration

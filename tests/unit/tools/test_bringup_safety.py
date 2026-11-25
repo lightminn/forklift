@@ -368,8 +368,9 @@ def test_the_kth_subcommand_reads_a_record(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["axes"]["M"]["verdict"] == "configured_ok" and out["axes"]["H"]["verdict"] == "undecided"
     assert out["configured"] == {"M": "g704_bytes", "H": "reflected_msb_first"} and out["image"] == "fw@1234abcd"
-    with pytest.raises(SystemExit):
-        bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"])
+    # a fitted axis without its variant: refused (partial-parts plan v4 made the variants per fitted axis)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"]) == 2
+    assert "--configured-h is required" in json.loads(capsys.readouterr().out)["why"]
 
 
 @pytest.mark.parametrize("drop, value", [("kth_crc_errors", None), ("kth_frames", [1]), ("kth_alt_crc_errors", [0, 70000]),
@@ -603,3 +604,236 @@ def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch, exc_type
     res = bringup.execute(a, b)
     assert res["metrics"]["measured_sign"] == "pos" and "cleanup_error" in res and res["observed"] == "unknown"
     assert res["result"] == "aborted" and calls["n"] == 2  # and the final cleanup still ran
+
+
+def _kth_record(tmp_path, header):
+    import dataclasses
+    import json
+
+    from forklift_core.plant.bringup import Sample
+
+    rec = tmp_path / "run.jsonl"
+    rows = [header] if header else []
+    for k in range(201):  # M moving and fitted; H's counters say nothing (no KTH)
+        st = dataclasses.replace(state(), mcu_time_us=1_000_000 + k * 10_000, kth_frames=(10 * k, 0),
+                                 kth_crc_errors=(0, 0), kth_alt_crc_errors=(9 * k, 0))
+        rows.append(bringup.state_row(Sample(k * 10_000_000, st)))
+    rec.write_text("\n".join(json.dumps(r, default=str) for r in rows))
+    return rec
+
+
+def test_kth_with_an_absent_axis(tmp_path, capsys):
+    """Partial-parts plan v4: one KTH on the bench. The header's parts name the absent axis (lift = H); the flag must
+    agree with a declaring header; an absent axis needs no variant and has a null verdict."""
+    import json
+
+    hdr = {"t": "header", "cmd": "record", "device": "/dev/forklift-mcu", "parts_absent": ["lift"]}
+    rec = _kth_record(tmp_path, hdr)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "fw@x"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["axes"]["M"]["verdict"] == "configured_ok" and out["axes"]["H"]["verdict"] is None
+    assert out["absent"] == ["H"] and out["parts_absent"] == ["lift"] and not out.get("not_for_gate")
+    assert out["configured"] == {"M": "g704_bytes"}
+    # the variant for an absent axis, or a flag the header does not declare: refused
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--configured-h",
+                         "g704_bytes", "--image", "x"]) == 2
+    assert "absent axis H" in json.loads(capsys.readouterr().out)["why"]
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+    assert "disagrees" in json.loads(capsys.readouterr().out)["why"]
+    # steering absent: no gate evidence -- refused, then read with --allow-bypassed (fitted verdict moved to computed)
+    rec = _kth_record(tmp_path, {**hdr, "parts_absent": ["steer"]})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--image", "x"]) == 2
+    assert "parts were absent" in json.loads(capsys.readouterr().out)["why"]
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--image", "x",
+                         "--allow-bypassed"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["axes"]["M"] == {"absent": True, "verdict": None, "why": "no KTH fitted on this axis"}
+    assert out["axes"]["H"]["verdict"] is None and out["axes"]["H"]["computed"] == "undecided"
+    # a record from before the field: the flag is taken; both axes absent is refused
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record", "device": "/dev/forklift-mcu"})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--axis-absent", "H",
+                         "--image", "x"]) == 0
+    assert json.loads(capsys.readouterr().out)["axes"]["H"]["verdict"] is None
+    assert bringup.main(["kth", "--record", str(rec), "--axis-absent", "H", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+
+
+def test_a_partial_or_bypassed_commission_result_proposes_no_duty_sign():
+    """Partial-parts plan v4: steer or wheels absent, like a bypass, empties the sign verdict and the proposal; lift
+    absent alone is marked and still judged."""
+    verdict = {"duty_sign_ok": True, "sensor_sign_ok": True, "suggested_duty_sign": -1, "note": None}
+    res = {"verdict": dict(verdict), "metrics": {"valid": True}}
+    bringup._mark_commission_result(res, (), False, None, ("wheels",))
+    assert res["not_for_gate"] and res["parts_absent"] == ["wheels"]
+    assert res["verdict"]["suggested_duty_sign"] is None and res["verdict"]["duty_sign_ok"] is None
+    assert res["metrics"]["valid"] is None
+    res = {"verdict": dict(verdict)}
+    bringup._mark_commission_result(res, ("enc_stuck",), False, None)
+    assert res["verdict"]["suggested_duty_sign"] is None
+    res = {"verdict": dict(verdict)}
+    bringup._mark_commission_result(res, (), False, None, ("lift",))
+    assert res == {"verdict": verdict, "parts_absent": ["lift"]}
+
+
+def test_kth_refuses_a_file_whose_runs_declare_different_parts_and_counts_an_old_records_flag(tmp_path, capsys):
+    """Codex PR-A P2-3, P2-4: kth reads every STATE of the file, so its runs must agree; a flag on a record from
+    before the field still makes a steering-absent reading no gate evidence."""
+    import json
+
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record", "parts_absent": ["lift"]})
+    text = rec.read_text()
+    rec.write_text(text + "\n" + json.dumps({"t": "header", "cmd": "record", "parts_absent": []}) + "\n" + text)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"]) == 2
+    assert "different absent parts" in json.loads(capsys.readouterr().out)["why"]
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record"})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+    assert "parts were absent" in json.loads(capsys.readouterr().out)["why"]
+
+
+def test_step_scenario_and_cpr_results_with_parts_absent_carry_no_pass():
+    """Codex PR-A P2-2: the measured values stay, the official pass fields go."""
+    res = {"result": "ok", "external": {"output_response_ms": {"value": 25.0, "limit": 100.0, "pass": True}}}
+    bringup._mark_absent_result(res, ("steer",))
+    assert res["not_for_gate"] and res["external"]["output_response_ms"]["pass"] is None
+    assert res["external"]["output_response_ms"]["value"] == 25.0
+    cpr = {"valid": True, "cpr": [4096, 4096]}
+    bringup._mark_absent_result(cpr, ("steer",))
+    assert cpr["valid"] is None and cpr["computed_valid"] is True and cpr["parts_absent"] == ["steer"]
+    lift = {"valid": True}
+    bringup._mark_absent_result(lift, ("lift",))
+    assert lift == {"valid": True, "parts_absent": ["lift"]}
+
+
+def test_clear_faults_takes_only_this_runs_echo():
+    """Codex PR-A P2-1: a STATE read before the frame's last byte, on another connection, of another boot or not newer
+    than the floor is never the frame's acceptance."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from forklift_core.plant.bringup import Sample
+    from forklift_core.plant.write_log import Write
+
+    def w(kind, seq, conn, done):
+        return Write(order=0, conn=conn, kind=kind, seq=seq, start_ns=done - 10, done_ns=done, boot_id=None,
+                     echo_mcu_time_us=None, valid_ms=None, arm_gen=None, axis=None, duty_e4=None, phase=None)
+
+    def smp(host_ns, seq, t_us, boot=7):
+        return Sample(host_ns, dataclasses.replace(state(), last_rx_seq=seq, mcu_time_us=t_us, boot_id=boot))
+
+    b = SimpleNamespace(writes=[w("CLEAR_FAULTS", 1, 2, 1000)], samples=[], sample_conn=[])
+    for host_ns, seq, t_us, conn, boot in [(900, 1, 600, 2, 7),     # read before the write ended
+                                            (1100, 1, 700, 1, 7),    # another connection
+                                            (1200, 1, 800, 2, 8),    # another boot
+                                            (1300, 1, 400, 2, 7),    # not newer than the floor (a buffered STATE)
+                                            (1400, 1, 900, 2, 7)]:   # this run's
+        b.samples.append(smp(host_ns, seq, t_us, boot))
+        b.sample_conn.append(conn)
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500) == 4
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500, after=4) is None
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 2, 2, 7, 500) is None  # never written
+
+
+class _ClearBoard:
+    """A scripted board for clear-faults: per tick it takes the frames written, then reports STATEs. ``relatch``:
+    after the clear's ready STATE, a FAULT comes in the same read; ``reboot_with_disarm_echo``: the DISARM's echo and
+    a new boot's FAULT arrive in one read; ``late``: a STATE of an earlier run carrying ``late`` arrives first."""
+
+    def __init__(self, *, relatch=False, reboot_with_disarm_echo=False, late=None, initial_seq=0x1234, refuse=False):
+        import dataclasses
+
+        from forklift_core.mcu_link.messages import Mode
+        from forklift_core.plant.mcu_host import Blocked
+
+        self.dc, self.Mode, self.Blocked = dataclasses, Mode, Blocked
+        self.relatch, self.reboot, self.refuse = relatch, reboot_with_disarm_echo, refuse
+        self.mode, self.rx, self.boot, self.t, self.ready_ = Mode.FAULT, 0, 7, 1000, False
+        self.samples, self.sample_conn, self.writes, self.queue, self.conn = [], [], [], [], 1
+        self.seq, self.last_queued_seq, self.now = initial_seq, None, 0
+        self.pending_late = late
+        self.host = self
+
+    # host
+    def request_disarm(self, now):
+        self.queue = [q for q in self.queue if q[0] == "DISARM"] or [("DISARM", self._next())]
+
+    def queued_disarm_seq(self):
+        return next(s for k, s in self.queue if k == "DISARM")
+
+    def request_clear_faults(self, now):
+        if self.state.mode not in (self.Mode.FAULT, self.Mode.ESTOP):
+            return self.Blocked("not_latched")
+        self.queue.append(("CLEAR_FAULTS", self._next()))
+        return None
+
+    def _next(self):
+        s, self.seq = self.seq, (self.seq + 1) & 0xFFFF
+        self.last_queued_seq = s
+        return s
+
+    # bench
+    @property
+    def state(self):
+        return self.samples[-1].state if self.samples else None
+
+    def _report(self, **kw):
+        from forklift_core.mcu_link.messages import StateFlag
+        from forklift_core.plant.bringup import Sample
+
+        self.t += 10_000
+        self.now += 10
+        flags = StateFlag.DRIVERS_READY if self.ready_ else StateFlag(0)
+        st = self.dc.replace(state(), mode=self.mode, last_rx_seq=self.rx, boot_id=self.boot, mcu_time_us=self.t,
+                             flags=flags, **kw)
+        self.samples.append(Sample(self.now, st))
+        self.sample_conn.append(self.conn)
+
+    def run_until(self, pred, timeout_s, **_):
+        from forklift_core.plant.write_log import Write
+
+        for _ in range(int(timeout_s * 100) + 1):
+            self.now += 1
+            for kind, seq in self.queue:
+                self.writes.append(Write(order=len(self.writes), conn=self.conn, kind=kind, seq=seq,
+                                         start_ns=self.now, done_ns=self.now, boot_id=None, echo_mcu_time_us=None,
+                                         valid_ms=None, arm_gen=None, axis=None, duty_e4=None, phase=None))
+                if kind == "DISARM":
+                    self.rx = seq
+                    if self.reboot:
+                        self._report()  # the echo, then the new boot in the same read
+                        self.boot, self.rx, self.mode = 8, 0, self.Mode.FAULT
+                elif kind == "CLEAR_FAULTS" and not self.refuse and self.mode in (self.Mode.FAULT, self.Mode.ESTOP):
+                    self.rx, self.mode, self.ready_ = seq, self.Mode.DISARMED, True
+                    if self.relatch:
+                        self._report()
+                        self.mode, self.ready_ = self.Mode.FAULT, False
+            self.queue = []
+            if self.pending_late is not None:
+                rx, self.rx = self.rx, self.pending_late
+                self._report()
+                self.rx, self.pending_late = rx, None
+            self._report()
+            if pred():
+                return True
+        return False
+
+
+@pytest.mark.parametrize("kw, expected, clears_sent", [
+    ({}, "cleared", 1),
+    ({"relatch": True}, "not_ready", 1),               # ready then FAULT in one read: the newest STATE decides
+    ({"reboot_with_disarm_echo": True}, "rebooted", 0),  # nothing is sent to the new boot
+    ({"refuse": True}, "not_accepted", 1),
+    ({"initial_seq": 0}, "seq_collision", 0),           # 0 is what any boot shows
+    ({"late": 0x1235}, "seq_collision", 0),             # an earlier run's STATE showed the CLEAR's number
+])
+def test_clear_faults_decides_on_this_runs_frames_and_the_newest_state(monkeypatch, kw, expected, clears_sent):
+    """Codex PR-A round 2: STATE repeats the last accepted seq, so an echo counts only for a number no STATE of this
+    session has shown; a reboot read with the DISARM's echo sends no CLEAR; a re-latch read with the ready STATE is not
+    cleared."""
+    monkeypatch.setattr(bringup, "CLEAR_DRAIN_S", 0.02)
+    b = _ClearBoard(**kw)
+    res = bringup.clear_faults(b)
+    assert res["result"] == expected, res
+    assert sum(1 for w in b.writes if w.kind == "CLEAR_FAULTS") == clears_sent
+    assert all(w.kind in ("DISARM", "CLEAR_FAULTS") for w in b.writes)

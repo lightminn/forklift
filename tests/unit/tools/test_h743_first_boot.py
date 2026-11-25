@@ -77,3 +77,26 @@ def test_a_record_without_v3_counters_is_invalid(tmp_path, capsys):
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
     code, out = run(capsys, "--record", str(path))
     assert code == 1 and out["result"] == "invalid"
+
+
+def test_absent_parts_come_from_the_header_and_a_disagreeing_flag_is_refused(tmp_path, capsys):
+    """Partial-parts plan v4: the capture's header names the absent parts; steering absent is no gate pass."""
+    nan_steer = dict(steering_rad=float("nan"), fault_flags=FaultFlag.STEER_SENSOR_INVALID)
+    hdr = {"t": "header", "device": "/dev/forklift-mcu", "cmd": "record", "parts_absent": ["steer"]}
+    path = write(tmp_path, hdr, **nan_steer)
+    code, out = run(capsys, "--record", str(path))
+    assert code == 2 and out["result"] == "refused" and "parts were absent" in out["why"]
+    code, out = run(capsys, "--record", str(path), "--allow-bypassed")
+    assert out["parts_absent"] == ["steer"] and out["not_for_gate"] and out["steer_absent"] is True
+    assert code == 1 and out["result"] == "not_for_gate" and out["computed_result"] == "pass"
+    code, out = run(capsys, "--record", str(path), "--allow-bypassed", "--lift-absent")
+    assert code == 2 and out["result"] == "refused" and "disagrees" in out["why"]
+    # lift alone stays gate-eligible, from the header without the flag
+    nan_lift = dict(lift_m=float("nan"), fault_flags=FaultFlag.LIFT_SENSOR_INVALID)
+    path = write(tmp_path, {**hdr, "parts_absent": ["lift"]}, **nan_lift)
+    code, out = run(capsys, "--record", str(path))
+    assert code == 0 and out["result"] == "pass" and out["lift_absent"] is True and not out.get("not_for_gate")
+    # a record from before the field: the flag alone is taken
+    path = write(tmp_path, {"t": "header", "device": "/dev/forklift-mcu"}, **nan_steer)
+    code, out = run(capsys, "--record", str(path), "--steer-absent", "--allow-bypassed")
+    assert out["parts_absent"] == ["steer"] and out["not_for_gate"] and out["computed_result"] == "pass"
