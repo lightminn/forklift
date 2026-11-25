@@ -412,6 +412,7 @@ def motion_with(gyro_rates, accel_rates):
 def test_the_options_are_set_and_read_back_on_the_sensor_that_streams():
     motion = motion_with([200, 400], [100, 200])
     src = tool.RealSenseSource(gyro_hz=400, accel_hz=200, global_time=False, rs=fake_rs(motion))
+    assert motion.opts == {}  # making it only finds the device (Codex PR 7b round 1 P2)
     got = []
     src.start(lambda *a: got.append(a))
     assert motion.events[:2] == [("open", [("stream.gyro", 400), ("stream.accel", 200)]), ("start",)]

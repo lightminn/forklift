@@ -28,7 +28,9 @@ STALL_S = 2.0  # no sample for this long after the start: the device is gone (de
 
 class RealSenseSource:
     """The first RealSense device's motion module, opened and started on the same sensor object whose options were
-    set (a pipeline started by serial would build a new device object and could miss them)."""
+    set (a pipeline started by serial would build a new device object and could miss them). Making it only finds
+    the device; the options are written in ``start`` (the observe run starts it after taking the executor lock --
+    Codex PR 7b round 1 P2)."""
 
     def __init__(self, *, gyro_hz: int, accel_hz: int, global_time: bool, rs=None) -> None:
         if rs is None:
@@ -48,9 +50,6 @@ class RealSenseSource:
         # correction off: axes are still aligned to the depth frame, but the built-in sensitivity and bias are not
         # applied (design 2)
         self.wanted = {"enable_motion_correction": 0, "global_time_enabled": 1 if global_time else 0}
-        for opt, value in self.wanted.items():
-            if self.motion.supports(getattr(rs.option, opt)):
-                self.motion.set_option(getattr(rs.option, opt), value)
         self.chosen = None
         self.fallback = None
         # None (not tried), "calling" (the call may have taken effect: interrupted inside it), "done", "failed"
@@ -134,6 +133,9 @@ class RealSenseSource:
             dom = str(f.get_frame_timestamp_domain()).rsplit(".", 1)[-1]
             on_sample(s, dev_us, f.get_timestamp(), dom, (d.x, d.y, d.z))
 
+        for opt, value in self.wanted.items():
+            if self.motion.supports(getattr(rs.option, opt)):
+                self.motion.set_option(getattr(rs.option, opt), value)
         self.chosen, self.fallback = self._profiles()
         self.open_state = "calling"
         try:

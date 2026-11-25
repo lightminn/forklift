@@ -509,10 +509,28 @@ class _SlamGuard:
 
 
 class _ImuGuard:
-    """The IMU behind the loop: a ``SourceFatal`` marks the run fatal; any other error is the 5b missing batch."""
+    """The IMU behind the loop: a ``SourceFatal`` marks the run fatal; any other error is the 5b missing batch. A
+    source with ``generation()`` (PR 7 design 5) keeps it behind the same guard."""
 
     def __init__(self, src, mark) -> None:
         self._src, self._mark = src, mark
+        if callable(getattr(src, "generation", None)):
+            self.generation = self._generation
+
+    @property
+    def last_read_capped(self) -> bool:
+        try:
+            return getattr(self._src, "last_read_capped", False) is True
+        except SourceFatal as exc:  # marked as any other read's; the frame waits (round 2 P2)
+            self._mark(f"imu:{exc}")
+            return True
+
+    def _generation(self):
+        try:
+            return self._src.generation()
+        except SourceFatal as exc:
+            self._mark(f"imu:{exc}")
+            raise
 
     def samples(self, upto_ns, limit):
         try:
