@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-import hashlib
+import dataclasses
 import json
 import os
 import random
@@ -44,6 +44,10 @@ sys.path.insert(0, str(REPO / "tools"))
 from real_mcu_link import _BAUDS, ObserveTtyLink, ReconnectingLink, open_raw  # noqa: E402
 
 from forklift_core.live.executor_lock import DeviceBusy  # noqa: E402
+# the record's schema and completeness proof, shared with the replay run (7r)
+from forklift_core.live.observe_record import SCHEMA, record_complete  # noqa: E402,F401
+from forklift_core.live.observe_record import file_sha256 as _sha256  # noqa: E402
+from forklift_core.live.observe_record import last_line as _last_line  # noqa: E402,F401
 from forklift_core.live.synthetic import (  # noqa: E402
     OUTPUT_MARKS,
     SyntheticRefused,
@@ -62,7 +66,6 @@ from forklift_core.sensors.imu_source import IMU_YAML, ImuSource, fits_watch, lo
 from forklift_core.sensors.lidar_cfg import LIDAR_YAML, load_lidar_config, to_layer_scan  # noqa: E402
 from forklift_core.sensors.scan_feed import RECV_BYTES, ScanFeed, bind_socket  # noqa: E402
 
-SCHEMA = "observe_record/1"
 CYCLE_S = 0.02  # 50 Hz, as the executor's loop
 DISARM_EVERY_S = 1.0  # the OFF path's refresh (real_autonomy.ANCHOR_DISARM_S)
 END_CONFIRM_S = 1.0
@@ -82,14 +85,6 @@ def _sync(f) -> bool:
         return True
     except (OSError, ValueError):
         return False
-
-
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):  # streamed: an hour's record is gigabytes (round 3 P3)
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def write_ok_marker(path: Path) -> None:
@@ -118,39 +113,6 @@ def write_ok_marker(path: Path) -> None:
         except OSError:
             pass
         raise
-
-
-def _last_line(path: Path, block: int = 1 << 16) -> bytes:
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        end = f.tell()
-        pos, buf = end, b""
-        while pos > 0:
-            step = min(block, pos)
-            pos -= step
-            f.seek(pos)
-            buf = f.read(step) + buf
-            body = buf.rstrip(b"\n")
-            if b"\n" in body or pos == 0:
-                return body.rsplit(b"\n", 1)[-1]
-    return b""
-
-
-def record_complete(path: Path) -> bool:
-    """A record a replay may take: its .ok names its current sha256 and its last row is a complete end."""
-    p = Path(path)
-    try:
-        want = Path(str(p) + ".ok").read_text(encoding="ascii").strip()
-        if _sha256(p) != want:
-            return False
-        last = _last_line(p)
-    except OSError:
-        return False
-    try:
-        end = json.loads(last)
-    except ValueError:
-        return False
-    return end.get("t") == "end" and end.get("complete") is True
 
 
 class Record:
@@ -609,6 +571,9 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                  "lidar": {"path": str(args.lidar_config), "mount_measured": lidar.mount_measured,
                            **_timing_header(lidar)},
                  "imu": None if imu_cfg is None else {
+                     # the whole source config and its file's hash: a replay judges the record's samples with the very
+                     # values they were judged with (PR 7 7r plan 2 -- the gap and restart limits decide verdicts too)
+                     "config": dataclasses.asdict(imu_cfg), "config_sha256": _sha256(args.imu_config),
                      "path": str(args.imu_config), "measured": imu_cfg.measured, "delay_bound_s": imu_cfg.delay_bound_s,
                      "interval_bound_s": imu_cfg.delay_bound_s if imu_cfg.delay_bound_s is not None
                      else imu_cfg.provisional_delay_bound_s, "operating": False}})

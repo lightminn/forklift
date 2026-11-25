@@ -192,10 +192,11 @@ def frame_bound(scan, cfg: LidarConfig) -> tuple[float | None, str | None]:
     return cfg.first_beam_err_s, None
 
 
-def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar"):
+def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar", origin: str | None = None):
     """``(real_layer.RealScan, None)`` or ``(None, why)`` -- why one of ``no_acquisition_time``, ``frame_bound``'s
     reasons, ``no_beam_timing``, ``scan_too_long``, ``after_receipt`` (the last beam's earliest time after the adapter
-    received the scan: impossible, the time is wrong). Core seconds are ``(ns - start_ns) / 1e9``."""
+    received the scan: impossible, the time is wrong). Core seconds are ``(ns - start_ns) / 1e9``. ``origin``: the layer
+    scan's origin when the caller knows it (a replay says ``replayed``, PR 7 7r); else from the frame's own mark."""
     from forklift_core.live.real_layer import RealScan as LayerScan
 
     first = scan.meta.get("first_beam_mono_ns")
@@ -222,5 +223,5 @@ def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar
                     angles_rad=np.asarray(scan.angles, dtype=float), ranges_m=np.where(valid, ranges, np.inf),
                     valid=valid, self_hit=self_hit_mask(scan.angles, cfg.mask_rad),
                     limit_m=np.full(n, cfg.limit_m), deadline_last_s=(elo - start_ns) / 1e9,
-                    origin="synthetic" if scan.meta.get("synthetic") else "real")
+                    origin=origin if origin is not None else ("synthetic" if scan.meta.get("synthetic") else "real"))
     return out, None
