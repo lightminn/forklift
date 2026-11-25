@@ -220,6 +220,9 @@ class RealSlamSource:
         self._last_stamp_ns: int | None = None
         self._scan_id = 0
         self._gen = None
+        # (bridge scan, reply record) -> None: every reply of a scan sent whole, before its verdict -- the observe
+        # run's match quality (PR 7 design 6.1, 8); never raises into the source (its errors are counted)
+        self.reply_hook = None
 
     @staticmethod
     def _target(ident, kind, pose, accepted_ns, epoch, snapshot=None, boot=None, odom_gen=None) -> dict:
@@ -531,6 +534,14 @@ class RealSlamSource:
         t = self.target
         rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
                "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"]}
+        if self.reply_hook is not None:
+            try:
+                extra = self.reply_hook(f["scan"], rec)
+                if extra:
+                    rec.update(extra)
+            except Exception as exc:  # noqa: BLE001 -- a diagnostic never ends the source
+                self.counts["reply_hook_errors"] += 1
+                rec["hook_error"] = f"{type(exc).__name__}: {exc}"
         why = None
         if f["old_gen"]:
             why = "old_generation"

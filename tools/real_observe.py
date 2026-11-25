@@ -13,11 +13,13 @@ recorded, with nothing that can move the truck.
   feed's verdict, its generations and whether it could go to the obstacle layer; without the SDK first-sample time
   (7a-2) none can, and every scan stays diagnostic), and -- with ``--imu`` (7b) -- every D435i accel sample (raw, with
   ``sensors/imu_source.ImuSource``'s verdict, generation and interval under the provisional delay bound until the
-  bound is measured) and every IMU generation change. The last row is ``end``: complete only if every row was
-  written.
+  bound is measured) and every IMU generation change, and -- with ``--slam`` (7c-1c) -- the real SLAM source on a
+  real-mode bridge (``forklift_core.live.observe_slam``: the scans sent, the SLAM path's drops, the replies with their
+  match quality, the bridge's states; diagnostic until the first-beam bound is measured, 7a-3). The last row is
+  ``end``: complete only if every row was written.
 
 usage: real_observe.py --device /dev/forklift-mcu --out run.jsonl --seconds 60 [--scan-socket /run/forklift-scan/scan.sock]
-       [--imu]
+       [--imu] [--slam /run/forklift-slam/bridge.sock --slam-bundle <survey bundle folder>]
 (the scan socket is the one ``tools/ros2_dev.sh scan-a2m12`` sends to; the teleop bridge binds the same path, and the
 executor lock keeps the two from running together)
 exit: 0 complete and stopped (and, with --scan-socket, at least one scan accepted; with --imu, at least one accel
@@ -170,7 +172,7 @@ class Observer:
     1024-64512 seq step after the first is acknowledged, so the STATE delay bound can be built -- ``DelayBound``), a
     DISARM each second, every STATE, write, refusal and event recorded, scans if a socket is given."""
 
-    def __init__(self, link, record: Record, *, openings=None, scan_sock=None, lidar=None, imu=None,
+    def __init__(self, link, record: Record, *, openings=None, scan_sock=None, lidar=None, imu=None, slam=None,
                  clock=time.monotonic_ns, rng=None) -> None:
         self.link, self.rec, self.clock = link, record, clock
         self.openings = openings
@@ -183,6 +185,7 @@ class Observer:
         self.scan_sock, self.lidar = scan_sock, lidar
         self.feed = ScanFeed() if scan_sock is not None else None
         self.imu = imu  # an ImuSource with record=True (7b), fed by the device's callback
+        self.slam = slam  # an ObserveSlam (7c-1c): fed every STATE and every accepted scan, polled each cycle
         self.counts = {"states": 0, "written": 0, "refused": 0, "scans": 0, "scans_layer_ok": 0, "read_capped": 0,
                        "scan_gaps": 0, "scan_socket_errors": 0, "sessions": 0, "imu_read_capped": 0}
         self._writes: dict[tuple[int, int], int] = {}  # (conn, seq) -> first-byte ns (DISARMs)
@@ -213,6 +216,8 @@ class Observer:
         self.delay.add(sample)
         d = self.delay.delay_s(sample)
         self.rec.put({**state_row(sample), "conn": conn, "delay_bound_s": d})
+        if self.slam is not None:
+            self.slam.on_state(state, int(received_ns), d, conn)
 
     def _log(self, what, now_ns, data, info) -> None:
         if what in ("written", "refused") and info:
@@ -297,6 +302,8 @@ class Observer:
                 self._open_gap(self.clock())
         if self.imu is not None:
             self._imu(self.clock())
+        if self.slam is not None:
+            self.slam.cycle(self.clock())
 
     def _imu(self, now: int) -> None:
         """The accel samples received so far, through the source's verdict, generation and interval, into the record;
@@ -364,6 +371,8 @@ class Observer:
                 if layer is not None:
                     self.counts["scans_layer_ok"] += 1
             self.rec.put(row)
+            if scan is not None and self.slam is not None:
+                self.slam.on_scan(scan)  # the same accepted scan as the layer's path (design 6.1, 1)
         else:
             self.counts["read_capped"] += 1  # more may be waiting: left for the next cycle (design 3.3)
 
@@ -445,6 +454,62 @@ def _realsense(cfg):
     return RealSenseSource(gyro_hz=cfg.gyro_hz, accel_hz=cfg.accel_hz, global_time=False)
 
 
+def _slam_parts(args, lidar) -> dict:
+    """What the SLAM path needs, read before anything is opened (a bad file refuses the run): the bundle's grid and
+    map id, the registered start (base_link), the vehicle's odometry and the laser in base_link."""
+    from forklift_core.live.real_autonomy import load_s10a
+    from forklift_core.live.real_run import RUN_STATE_DELAY_S, chassis_reference
+    from forklift_core.live.real_teleop import EncoderSpeedParams
+    from forklift_core.localization.slam_map import load_bundle
+    from forklift_core.localization.slam_real_scan import base_from_laser
+    from forklift_core.localization.start_reloc import base_from_rear
+    from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle
+
+    if args.slam_bundle is None:
+        raise ValueError("--slam needs --slam-bundle")
+    bundle = load_bundle(args.slam_bundle)
+    cfg = load_s10a(args.s10a)
+    vehicle = load_real_vehicle(args.vehicle)
+    _tip, rear_offset, _carriage = chassis_reference(chassis_model_path(args.vehicle).parent / "forklift.urdf")
+    kappa = max(abs(k) for k in vehicle.steering.curvatures_inv_m)
+    params = EncoderSpeedParams(radius_m=vehicle.wheel_radius_m, counts_per_rev=vehicle.counts_per_wheel_rev,
+                                track_m=vehicle.track_m, kappa_max=kappa, axle_accel_mps2=0.5, max_age_s=0.1,
+                                dt_min_s=0.02, dt_max_s=0.2)
+    return {"bundle": bundle, "vehicle": vehicle, "params": params, "rear_offset_m": rear_offset, "kappa": kappa,
+            "start_pose": base_from_rear(tuple(float(v) for v in cfg.start_rear), rear_offset),
+            "base_laser": base_from_laser(lidar.mount, rear_offset), "state_delay_s": RUN_STATE_DELAY_S,
+            "v_scan_mps": 1.5 * float(cfg.max_speed_mps)}
+
+
+def _slam_start(args, parts, rec, lidar):
+    """The source connected to the bridge (a refused connection refuses the run before the board is opened)."""
+    import socket
+
+    from forklift_core.live.observe_slam import ObserveSlam
+    from forklift_core.live.real_slam_source import RealSlamLink, RealSlamSource
+    from forklift_core.plant.real_vehicle import RealOdometry
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(5.0)
+        sock.connect(str(args.slam))
+        start_ns = time.monotonic_ns()
+        src = RealSlamSource(RealSlamLink(sock), map_id=parts["bundle"].map_id, start_ns=start_ns,
+                             start_pose=parts["start_pose"], odom_history=None, odom_base=None, odom_gen=None,
+                             boot=None, rear_offset_m=parts["rear_offset_m"], session_epoch=0)
+    except BaseException:
+        sock.close()
+        raise
+    rec.put({"t": "slam_header", "socket": str(args.slam), "bundle": str(args.slam_bundle),
+             "map_id": parts["bundle"].map_id, "start_pose": list(parts["start_pose"]),
+             "rear_offset_m": parts["rear_offset_m"], "base_laser": list(parts["base_laser"]), "start_ns": start_ns,
+             "diagnostic": not (lidar.timing_measured and lidar.mount_measured and lidar.first_beam_err_s is not None)})
+    return ObserveSlam(src, rec.put, odometry=RealOdometry(parts["vehicle"], max_gap_s=0.2), params=parts["params"],
+                       rear_offset_m=parts["rear_offset_m"], start_ns=start_ns, grid=parts["bundle"].grid,
+                       base_laser=parts["base_laser"], lidar=lidar, state_delay_s=parts["state_delay_s"],
+                       v_scan_mps=parts["v_scan_mps"], kappa_max=parts["kappa"])
+
+
 def main(argv=None, *, imu_factory=_realsense) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--device", required=True)
@@ -456,6 +521,12 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
     ap.add_argument("--bench", help="rehearsal only: the bench's bench.json on a pty device (the model MCU)")
     ap.add_argument("--imu", action="store_true", help="record the D435i accelerometer (PR 7 design 5, 7b)")
     ap.add_argument("--imu-config", type=Path, default=IMU_YAML)
+    ap.add_argument("--slam", help="the real-mode SLAM bridge's socket: record the real SLAM source (7c-1c)")
+    ap.add_argument("--slam-bundle", type=Path, help="with --slam: the survey bundle the bridge runs on")
+    ap.add_argument("--s10a", type=Path, default=REPO / "config" / "real" / "s10a.yaml",
+                    help="with --slam: the registered start (start_rear) and the speed the scan placement assumes")
+    ap.add_argument("--vehicle", type=Path, default=REPO / "config" / "real" / "vehicle.yaml",
+                    help="with --slam: the vehicle file (odometry) and its chassis model (rear axle offset)")
     args = ap.parse_args(argv)
     if not 0 < args.seconds <= MAX_SECONDS:
         print(json.dumps({"result": "refused", "why": f"--seconds must be in (0, {MAX_SECONDS:g}]"}))
@@ -465,6 +536,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         lidar = load_lidar_config(args.lidar_config)
         imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
         imu_gap_max_s = load_imu_config(SAFETY_YAML).gap_max_s if args.imu else None
+        slam_parts = _slam_parts(args, lidar) if args.slam else None
     except (SyntheticRefused, OSError, ValueError, KeyError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
@@ -498,7 +570,16 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                      "interval_bound_s": imu_cfg.delay_bound_s if imu_cfg.delay_bound_s is not None
                      else imu_cfg.provisional_delay_bound_s, "operating": False}})
         imu = None if imu_cfg is None else ImuSource(imu_cfg, operating=False, record=True)
-        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar, imu=imu)
+        slam = None
+        if slam_parts is not None:
+            try:
+                slam = _slam_start(args, slam_parts, rec, lidar)
+            except OSError as exc:
+                rec.put({"t": "end", "result": "refused", "why": f"slam_bridge: {exc}", "complete": False})
+                print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), "result": "refused",
+                                  "why": f"slam_bridge: {exc}"}))
+                return 2
+        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar, imu=imu, slam=slam)
         try:
             link.open_first(obs.host, time.monotonic_ns())
         except DeviceBusy as busy:
@@ -564,6 +645,10 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
             if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
                 result = "no_imu"
+            if slam is not None:
+                slam.flush()
+                if slam.fatal is not None and result == "ok":
+                    result = "slam_failed"
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
                      "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow
@@ -579,6 +664,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                                                       "generation_why": imu.generation_why,
                                                       "stopped": imu.stopped,  # round 5 P3: a restart is needed
                                                       "last_generation_ns": imu.last_generation_ns},
+                     "slam": None if slam is None else slam.summary(),
                      "end_mono_ns": time.monotonic_ns()})
             complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped \
                 and not imu_overflow and result != "refused"
@@ -587,6 +673,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 link.link = None
             if scan_sock is not None:
                 scan_sock.close()
+            if slam is not None:
+                slam.src.link.sock.close()
     if complete:
         try:
             write_ok_marker(args.out)
