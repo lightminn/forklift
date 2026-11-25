@@ -710,9 +710,13 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     port = RealPlantPort(host, kin, lift_motion_counts=True)
     odo = RealOdometry(vehicle, max_gap_s=0.2)
     tracker = SlamPoseTracker(max_age_s=ra.SLAM_MAX_AGE_S, hold_limit_m=ra.HOLD_MAX_M, bootstrap_scan_id=0)
-    # HIL only (refused otherwise): the start is the odometry origin and the synthetic SLAM's correction the identity
-    # (10.5), so tracking starts on it; PR 7 starts by relocalizing instead
-    tracker.receive(0, -1.0, "processed", (0.0, 0.0, 0.0))
+    # the real SLAM source (its epochs: ``relocalize``) starts by relocalizing (PR 7 design 6.1, 6, 7c-2c): no identity
+    # correction -- the session opens a generation the operator confirms (or declares) on the bridge's first instance
+    real_slam = callable(getattr(sources.slam, "relocalize", None))
+    if not real_slam:
+        # the synthetic SLAM only (HIL, refused otherwise): the start is the odometry origin and its correction the
+        # identity (10.5), so tracking starts on it
+        tracker.receive(0, -1.0, "processed", (0.0, 0.0, 0.0))
 
     def odom_base():
         return base_from_rear(box["loop"].odom_pose, prep.rear_offset_m)
@@ -867,6 +871,10 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                         scan_feed=scan_feed, events=events)
         box["loop"] = loop
         arbiter.stop_evidence = lambda now: loop.physical_stop(now)
+        if real_slam:
+            # 6.1, 6: the session's start generation, before the first tick -- nothing is submitted before the
+            # operator's confirmation (or a declaration) closes it
+            core.require_relocalization(0.0, "session_start")
         for fn in sources.on_assembled:
             fn(loop)
         return RealRun(prep, sources, loop, layer=layer, layer_worker=worker, clock=clock)

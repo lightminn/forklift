@@ -48,9 +48,29 @@ def _far_config(tmp_path):
     return out
 
 
+def _confirm_start(c, timeout=15.0):
+    """PR 7 design 6.1, 6 (7c-2c): the session starts by relocalizing -- the operator confirms the start generation on
+    the bridge's first instance (asked again while the instance is not ready or the evidence not yet fresh)."""
+    end = time.monotonic() + timeout
+    while True:
+        gen = c.status.get("relocalize_generation")
+        if gen is None:
+            return None
+        r = c.ask("relocalize_confirm", generation=gen)
+        if r["t"] == "ack":
+            s = c.wait(lambda s: (s.get("relocalize") or {}).get("state") not in ("waiting", None), 15)
+            if s["relocalize"]["state"] == "confirmed":
+                return s["relocalize"]
+        if time.monotonic() > end:
+            raise AssertionError(f"the start generation was not confirmed: {r} {c.status.get('relocalize')}")
+        time.sleep(0.3)
+
+
 def _operator_start(c, timeout=15.0):
     """The start check: the SLAM evidence of the current epoch may still be on its way (the session start's seven
-    scans, a seed's start check) -- asked again while the answer is slam_stale."""
+    scans, a seed's start check) -- asked again while the answer is slam_stale. The session's start generation is
+    confirmed first (7c-2c)."""
+    _confirm_start(c, timeout)
     end = time.monotonic() + timeout
     while True:
         r = c.ask("operator_start")
@@ -103,6 +123,35 @@ def test_s10_a_runs_to_the_lift_on_the_real_slam_source(mcu_model, tmp_path):
     assert kinds[0] == "Hello" and kinds.count("RealScan") > 7 and "Seed" not in kinds
     assert ("ready", 1) in [(k, i) for _, k, i in bridge.sent]
     assert "slam_late" not in end["slam_counts"] or end["slam_counts"]["slam_late"] < kinds.count("RealScan")
+
+
+def test_the_session_starts_by_relocalizing_and_nothing_is_submitted_before_the_confirmation(mcu_model, tmp_path):
+    """7c-2c (design 6.1, 6; Codex 7c-2b design P2): the real-source session opens its start generation; with the
+    bridge's first instance ready and its processed replies fresh, the start check and a submit are still refused
+    until the operator confirms; then they go through."""
+    bridge = _bridge(tmp_path)
+    run = _runner(mcu_model, tmp_path, bridge, 60)
+    c = Console(run.port)
+    try:
+        _lease(c)
+        s = c.wait(lambda s: s.get("relocalize_generation") is not None, 10)
+        assert s["relocalize_generation"] is not None
+        _until(lambda: _sent(bridge, "ready", 1), 15, "the first instance ready")
+        r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
+        assert r["t"] == "ack", r
+        time.sleep(0.8)
+        r = c.ask("operator_start")
+        assert r["t"] == "reject", r
+        r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+                  targets_revision=c.status["targets_revision"])
+        assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
+        conf = _confirm_start(c)
+        assert conf is not None and conf["state"] == "confirmed"
+        assert c.status["relocalize_generation"] is None
+        r = _operator_start(c)
+        assert r["t"] == "ack", r
+    finally:
+        _finish(run, c, bridge)
 
 
 def _sent(bridge, kind, ident):
