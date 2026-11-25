@@ -332,6 +332,7 @@
 - 실차 세션은 시작 때 재위치 세대를 연다(`core.require_relocalization(t, "session_start")`). HIL 의 항등 `processed`(`real_run.py` 655)는 실차 원천에 쓰지 않는다.
 - 브리지는 `hello` 의 시작 자세(바닥 표시 `start_rear` → `base_from_rear`, 등록 행의 `start_pose` 와 일치)를 첫 인스턴스의 `map_start_pose` 로 쓰고 시작 검사(기존 L4)를 거친다. 운용자가 '재위치 확인'을 누르면 5c-2 의 확인이 돈다. 시작 검사 실패(`not_localized`)나 확인 실패가 이어지면 선언(7b)으로 시작한다.
 - Isaac 의 전역 정합 시작(`StartRelocalizer`·`global_match`)은 7c 에 넣지 않는다. 실차 시작점은 바닥 표시 하나다.
+- 구현(7c-2c): 조립(`real_run`)은 실 SLAM 원천(`RealSlamSource` — 합성 SLAM 도 `relocalize` 를 가지므로 종류로 가린다)이면 추적기에 항등 `processed` 를 넣지 않고, 루프를 만든 직후 `core.require_relocalization(0.0, "session_start")` 로 시작 세대를 연다. 합성 SLAM(HIL)은 지금처럼 항등으로 시작한다. 시작 세대가 열린 동안 출발 확인·제출은 거부된다(`relocalize_required`). 운용자가 확인(또는 선언)으로 닫는다. `hello` 의 시작 자세는 지금처럼 S10-A `start_rear` 를 `base_from_rear` 로 바꾼 값이다. 등록 행의 `start_pose` 와의 일치는 등록(7c-2a)이 후륜축 기준 허용차로 이미 보장하고, 등록 행을 읽는 운영 REAL 조립은 7c 뒤에도 거부되므로 런타임에 다시 읽지 않는다. 시작 세대를 확인으로 닫으면 seed 가 없어 F1 은 걸리지 않는다(7c-2b).
   - 방위각을 잘못 놓고 시작하는 것은 운용자 육안 확인과 확인 판정의 거리·각 한도(`START_TOL_M` 0.10, 5°)가 막는다.
   - 비슷한 배치에서의 거짓 수렴은 벤치 7 의 오수렴 시험이 본다(agy 8).
 
@@ -346,7 +347,7 @@
   - 출처 누락(seed 기록 없이 운용자 자세가 들어온 경로)은 막는다.
   - STOP·lease 만료·재무장은 기록을 새로 만들지 않는다.
 - **배선**(실차 경로는 지금 셋 다 비어 있음 — 사실 대조):
-  - ① 아비터: 실차 루프가 위 조건에서 `arbiter.block_start(source)` 를 부른다.
+  - ① 아비터: 실차 루프가 위 조건에서 `arbiter.block_start(source)` 를 부른다. → **7c-2b 에서 바뀜**(총괄 동의): 실차 경로는 `block_start` 대신 루프의 시작 게이트에 F1 을 둔다(아래 '구현(7c-2b)').
   - ② 미션 명령: 실차 루프의 `Context` 에 `start_blocked` 를 넘긴다(지금은 넘기지 않아 기본 False). 값은 2 의 공통식 `F1 start_block ∨ (manual_only ∧ slam 우회 꺼짐)` 이다(12 회차 P3-2).
   - ③ AUTO 진입 단언: 아비터의 기존 단언(`arbiter.py` 871)이 같은 공통식을 읽게 한다(①의 요청 검사도 같은 식).
 - **수동 복구 보고는 막지 않는다**(1 회차 P2-6).

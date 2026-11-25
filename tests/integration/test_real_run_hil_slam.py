@@ -48,9 +48,29 @@ def _far_config(tmp_path):
     return out
 
 
+def _confirm_start(c, timeout=15.0):
+    """PR 7 design 6.1, 6 (7c-2c): the session starts by relocalizing -- the operator confirms the start generation on
+    the bridge's first instance (asked again while the instance is not ready or the evidence not yet fresh)."""
+    end = time.monotonic() + timeout
+    while True:
+        gen = c.status.get("relocalize_generation")
+        if gen is None:
+            return None
+        r = c.ask("relocalize_confirm", generation=gen)
+        if r["t"] == "ack":
+            s = c.wait(lambda s: (s.get("relocalize") or {}).get("state") not in ("waiting", None), 15)
+            if s["relocalize"]["state"] == "confirmed":
+                return s["relocalize"]
+        if time.monotonic() > end:
+            raise AssertionError(f"the start generation was not confirmed: {r} {c.status.get('relocalize')}")
+        time.sleep(0.3)
+
+
 def _operator_start(c, timeout=15.0):
     """The start check: the SLAM evidence of the current epoch may still be on its way (the session start's seven
-    scans, a seed's start check) -- asked again while the answer is slam_stale."""
+    scans, a seed's start check) -- asked again while the answer is slam_stale. The session's start generation is
+    confirmed first (7c-2c)."""
+    _confirm_start(c, timeout)
     end = time.monotonic() + timeout
     while True:
         r = c.ask("operator_start")
@@ -103,6 +123,42 @@ def test_s10_a_runs_to_the_lift_on_the_real_slam_source(mcu_model, tmp_path):
     assert kinds[0] == "Hello" and kinds.count("RealScan") > 7 and "Seed" not in kinds
     assert ("ready", 1) in [(k, i) for _, k, i in bridge.sent]
     assert "slam_late" not in end["slam_counts"] or end["slam_counts"]["slam_late"] < kinds.count("RealScan")
+
+
+def test_the_session_starts_by_relocalizing_and_nothing_is_submitted_before_the_confirmation(mcu_model, tmp_path):
+    """7c-2c (design 6.1, 6; Codex 7c-2b design P2): the real-source session opens its start generation; with the
+    bridge's first instance ready and its processed replies fresh, the start check and a submit are still refused
+    until the operator confirms; then they go through."""
+    bridge = _bridge(tmp_path)
+    run = _runner(mcu_model, tmp_path, bridge, 60)
+    c = Console(run.port)
+    try:
+        _lease(c)
+        s = c.wait(lambda s: s.get("relocalize_generation") is not None, 10)
+        assert s["relocalize_generation"] is not None
+        _until(lambda: _sent(bridge, "ready", 1), 15, "the first instance ready")
+        _until(lambda: bridge._ready_scans >= 3, 15, "processed replies of the ready instance")
+        r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
+        assert r["t"] == "ack", r
+        time.sleep(0.8)
+        # with the ready instance's processed replies coming, the start check is refused for the open generation
+        # (Codex 7c-2c rounds 1-2 P3); the confirmation below closes only on a processed reply the loop took after
+        # its request (its reference), so it shows the replies were taken
+        r = c.ask("operator_start")
+        assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
+        r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+                  targets_revision=c.status["targets_revision"])
+        assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
+        conf = _confirm_start(c)
+        assert conf is not None and conf["state"] == "confirmed"
+        assert c.status["relocalize_generation"] is None
+        r = _operator_start(c)
+        assert r["t"] == "ack", r
+        r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+                  targets_revision=r.get("targets_revision", c.status["targets_revision"]))
+        assert r["t"] == "ack", r  # the submit goes through once the start is confirmed
+    finally:
+        _finish(run, c, bridge)
 
 
 def _sent(bridge, kind, ident):
@@ -189,7 +245,12 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
     c = Console(run.port)
     try:
         _lease(c)
-        s = c.wait(lambda s: s.get("relocalize_generation") is not None and s.get("standing"), 40)
+        # the session's start generation confirmed first (7c-2c); the generation under test is the one the STATE
+        # silence opens after it (Codex 7c-2c round 1 P2)
+        start_gen = c.status["relocalize_generation"]
+        assert start_gen is not None
+        _confirm_start(c)
+        s = c.wait(lambda s: s.get("relocalize_generation") not in (None, start_gen) and s.get("standing"), 40)
         gen = s["relocalize_generation"]
         # 1: a reply of the session start's instance held across the seed's acceptance; the lease released while
         # the seed runs
@@ -197,13 +258,14 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         _until(lambda: bridge.held_replies, 5, "a reply held")
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
+        a1 = r["attempt"]  # the session's attempt numbers run on from the start's confirmation (Codex 7c-2c r2 P2)
         c.wait(lambda s: "relocalize" in s["bypassed"], 5)  # the seed accepted (the declaration's mark)
         bridge.release_replies()
         _until(lambda: _sent(bridge, "seeding", 2), 10, "seed 2 seeding")
         r = c.ask("lease_release")
         assert r["t"] == "ack", r
         c.lease = None
-        s = c.wait(lambda s: s["relocalize"]["attempt"] == 1 and s["relocalize"]["state"] == "refused", 10)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == a1 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] == "relocalize_voided:lease", s["relocalize"]
         bridge.release(2)  # its end state only after the lease's refusal is seen (Codex time-PR round 1 P2-2)
         _until(lambda: _sent(bridge, "ready", 2), 15, "seed 2 ready")
@@ -213,10 +275,11 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         # 2: a STOP while the seed runs; its end state held until the second declaration has been refused
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
+        a2 = r["attempt"]
         _until(lambda: _sent(bridge, "seeding", 3), 10, "seed 3 seeding")
         r = c.ask("stop")
         assert r["t"] == "ack", r
-        s = c.wait(lambda s: s["relocalize"]["attempt"] == 2 and s["relocalize"]["state"] == "refused", 10)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == a2 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] in ("relocalize_moved", "relocalize_voided:control"), s["relocalize"]
         c.wait(lambda s: s.get("standing"), 10)
         r = _rearm(c)
