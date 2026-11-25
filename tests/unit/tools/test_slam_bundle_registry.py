@@ -253,6 +253,7 @@ def _bundle(root, name, data=b"data"):
     return folder, sm.map_id_of(hashes)
 
 
+CLEAN_FOOTER = '{"t": "footer", "dropped": 0, "write_errors": 0}\n'
 OBS_HEADER = {"t": "header", "schema": "observe_record/1", "tool": "real_observe.py", "device": "/dev/forklift-mcu",
               "synthetic": None}
 
@@ -298,7 +299,7 @@ def _site_setup(tmp_path):
     cal = load_real_vehicle(vehicle).calibration_id
     (survey / "observe.jsonl").write_text(json.dumps(OBS_HEADER) + '\n{"t": "end", "complete": true}\n')
     (survey / "observe.jsonl.ok").write_text(reg.sha256(survey / "observe.jsonl") + "\n")
-    (survey / "teleop.jsonl").write_text(json.dumps(_tel_header(cal)) + '\n{"t": "state"}\n')
+    (survey / "teleop.jsonl").write_text(json.dumps(_tel_header(cal)) + '\n{"t": "state"}\n' + CLEAN_FOOTER)
     raw = [{"kind": k, "path": n, "sha256": reg.sha256(survey / n)}
            for k, n in (("observe", "observe.jsonl"), ("ok", "observe.jsonl.ok"), ("teleop", "teleop.jsonl"))]
     report = survey / "site_report.json"
@@ -381,6 +382,13 @@ def test_the_report_must_bind_one_survey_on_disk(tmp_path, change, why):
      "was refused"),
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"], device="/dev/pts/7")) + "\n"),
      "rehearsal"),
+    # Codex 7c-2a round 4: a teleop record is complete only with a clean footer last
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + "\n"), "clean footer"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"])) + '\n{"t": "state", "x": 1'), "does not parse"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"]))
+                        + '\n{"t": "footer", "dropped": 2, "write_errors": 0}\n'), "clean footer"),
+    (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"]))
+                        + '\n{"t": "footer", "dropped": 0, "write_errors": 1}\n'), "clean footer"),
     (lambda p: _rewrite(p, "teleop.jsonl", json.dumps(_tel_header(p["cal"], synthetic={"bench": {}})) + "\n"),
      "rehearsal"),
 ])

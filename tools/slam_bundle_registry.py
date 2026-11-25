@@ -253,7 +253,8 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
     -- and must be the kind the report gives. It needs at least one observation record and one teleop record; each
     observation record is complete by its own listed ``.ok`` (``real_observe.record_complete``), and every ``.ok`` is
     an observation record's. No record may be synthetic (a rehearsal's: ``synthetic.refuse_or_mark``). A teleop record
-    was not refused and names the vehicle calibration given here. The report's lidar and chassis hashes and its
+    names the vehicle calibration given here, every row parses, none is a refusal, and it ends with a clean footer
+    (``dropped`` and ``write_errors`` 0, as the teleop analysis reads it). The report's lidar and chassis hashes and its
     vehicle calibration are those of the files this registration reads. ValueError naming the first problem."""
     import os  # noqa: PLC0415
 
@@ -301,14 +302,23 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
     for f in teleop:
         if ((_header(f).get("config") or {}).get("vehicle") or {}).get("calibration_id") != calibration_id:
             raise ValueError(f"the teleop record {f.name} names another vehicle calibration")
+        last = None
         with open(f, encoding="utf-8") as fh:
             for line in fh:
+                if not line.strip():
+                    continue
                 try:
                     row = json.loads(line)
                 except ValueError:
-                    continue
+                    raise ValueError(f"the teleop record {f.name} has a row that does not parse (cut short?)") from None
                 if isinstance(row, dict) and row.get("t") == "refused":
                     raise ValueError(f"the teleop record {f.name} was refused (no survey drive in it)")
+                last = row
+        # complete as the teleop analysis reads it (m_entry): a clean footer last, nothing dropped or failed to write
+        # (Codex 7c-2a round 4)
+        if not (isinstance(last, dict) and last.get("t") == "footer" and last.get("dropped") == 0
+                and last.get("write_errors") == 0):
+            raise ValueError(f"the teleop record {f.name} has no clean footer as its last row")
     cfg = report.get("config_sha256") or {}
     if cfg.get("lidar") != lidar_sha256:
         raise ValueError("the report's lidar settings hash is not the lidar settings given here")
