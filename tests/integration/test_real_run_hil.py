@@ -4,11 +4,14 @@ console over its WebSocket. S10-A once to ``s10_lifted`` (the stop DRIVE and the
 and confirmed before the closing), the stop injections (send cut, STATE cut, scan, SLAM) judged from the record and
 the model's logs, a half DRIVE's general property, the closing DISARM never delivered, the model's lifetime and a
 killed model. The scope is S10-A's commands, STATEs, odometry and stop transitions: the synthetic scan and the
-identity SLAM come from the same pose, so nothing here is evidence of position accuracy or pocket contact."""
+identity SLAM come from the same pose, so nothing here is evidence of position accuracy or pocket contact.
+CPU: run this file and test_real_run_hil_slam.py with 4 CPUs or more (forklift-ws1-pytest does for a partial run
+naming them): on 2 the wall-clock rig's threads miss their deadlines (2026-11-26, ws1 job 21486)."""
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import os
@@ -294,6 +297,33 @@ def complete(rows, code, expect_code=0):
 
 def events(rows, t):
     return [r for r in rows if r.get("t") == t]
+
+
+def why(rows) -> str:
+    """The run's own account of a stall (lead 2026-11-26, the HIL SLAM flake): the permit's first latch and its reason,
+    and the last readiness causes in their order of change -- what a failing assertion is shown with."""
+    latched = next((p for p in events(rows, "permit") if p.get("event") == "latched"), None)
+    seq = []
+    for c in events(rows, "cause"):
+        if not seq or seq[-1] != c.get("why"):
+            seq.append(c.get("why"))
+    return (f"latched: {None if latched is None else latched.get('reason')}; "
+            f"last readiness causes: {seq[-5:]}")
+
+
+@contextlib.contextmanager
+def explained(run):
+    """A failing assertion inside re-raised with ``why`` of the run's record (read once the body's own cleanup has
+    ended the run). A CPU-starved HIL rig latches on layer_latency_exceeded or never confirms its start (2026-11-26
+    flake, ws1 job 21486): the message says which, instead of a bare 'not reached' or an empty drive list."""
+    try:
+        yield
+    except AssertionError as exc:
+        try:
+            told = why(run.rows())
+        except Exception as err:  # noqa: BLE001 -- the explanation never hides the failure
+            told = f"(record unreadable: {type(err).__name__}: {err})"
+        raise AssertionError(f"{exc}\n-- the run: {told}") from exc
 
 
 def end_of(rows):
