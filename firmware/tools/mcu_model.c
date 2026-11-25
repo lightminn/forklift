@@ -7,7 +7,8 @@
                     [--estop-release-ms N] [--silent-at-ms N]
                     [--hand-turn-wheel 0|1 --hand-turn-revs N --hand-turn-ms T
    --hand-turn-duration-ms D]
-                    [--commission-build 1 [--commission-time-ms N]] [--outputs-locked 1]
+                    [--commission-build 1 [--commission-time-ms N] [--commission-single 1]]
+                    [--outputs-locked 1]
                     [--encoder-sign-flip 0|1] [--encoder-frozen 0|1] [--encoder-test-thresholds 1]
                     [--stop-grace-ms N]
    --link-fd N: an inherited open fd instead of a path (the rehearsal bench passes the pty master).
@@ -20,6 +21,8 @@
    --commission-build 1: an FW_COMMISSION build (COMMISSION only; synthetic duty limit 0.15 and time
    limit 2000 ms, the plan's proposals, or --commission-time-ms). --outputs-locked 1: the
    outputs_locked build bit (the model's plant still follows the outputs the core computes).
+   --commission-single 1: the fw-single image (partial-parts plan 2026-11-25 PR-B): an open
+   commissioning model with one axis per arming; the product string ends " lim=lr1 sa1".
    --encoder-sign-flip W: wheel W's counts run against its motion (a wrong encoder sign for the
    commissioning tool's tests). --encoder-frozen W: wheel W's counts never move (a wheel with no encoder
    fitted, design 2026-11-25-bench-commission-limits 4). --encoder-test-thresholds 1: stuck/polarity judged from duty 0.05
@@ -471,6 +474,7 @@ int main(int argc, char **argv)
     static fw_app app;
     cfg = make_config(commission, commission_time_ms, locked || hil_plant, enc_test, stop_grace_ms);
     cfg.hil_plant = hil_plant; /* 6a: with outputs_locked; fw_app_init refuses it with a commissioning build */
+    cfg.commission_single_axis = arg_long(argc, argv, "--commission-single", 0) != 0; /* fw-single */
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.p.enc_frozen = (int)enc_frozen;

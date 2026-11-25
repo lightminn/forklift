@@ -6,6 +6,12 @@
 #define US_PER_MS 1000u
 #define TWO_PI_F 6.28318530717958647692f
 #define CM_AXIS_NONE 0xFFu
+/* Single-axis commissioning (fw-single) is compiled in only with FW_CORE_SINGLE_AXIS. */
+#if defined(FW_CORE_SINGLE_AXIS)
+#define SINGLE_AXIS(c) ((c)->commission_single_axis)
+#else
+#define SINGLE_AXIS(c) false
+#endif
 #define HALF_RANGE_MARGIN 16383.0f /* half of the 16-bit difference's half range */
 
 /* Bits cleared by a successful ARM rather than by CLEAR_FAULTS: the expiry and commissioning
@@ -71,6 +77,10 @@ bool drive_config_valid(const drive_config *c)
     /* The waiver only means something for an open normal build without a pin. */
     if (c->estop_waived &&
         (c->estop_wired || c->outputs_locked || c->commission_build || c->hil_plant)) {
+        return false;
+    }
+    /* Single-axis commissioning: an open commissioning build only (plan 2026-11-25 PR-B). */
+    if (SINGLE_AXIS(c) && (!c->commission_build || c->outputs_locked || c->hil_plant)) {
         return false;
     }
     if (c->commission_build) {
@@ -304,6 +314,9 @@ bool drive_init(drive *d, const drive_config *c, const drive_inputs *first, uint
     d->first_cycle = true;
     d->cm_axis = CM_AXIS_NONE;
     d->cm_on_axis = CM_AXIS_NONE;
+#if defined(FW_CORE_SINGLE_AXIS)
+    d->sa_last_axis = CM_AXIS_NONE;
+#endif
     d->last_now32 = first->now_us;
     d->mode = DRIVE_MODE_BOOT;
     for (int i = 0; i < 2; i++) {
@@ -430,6 +443,9 @@ static uint32_t driving_sensor_bits(const drive *d)
         return bits;
     }
     uint32_t keep = DRIVE_FAULT_CURRENT_SENSE_INVALID;
+    if (SINGLE_AXIS(d->cfg)) {
+        return bits & keep; /* M and H drive without their KTH: the bits stay in STATE only */
+    }
     if (d->cm_axis == DRIVE_CH_M) {
         keep |= DRIVE_FAULT_STEER_SENSOR_INVALID | DRIVE_FAULT_STEER_OUT_OF_RANGE;
     } else if (d->cm_axis == DRIVE_CH_H) {
@@ -796,6 +812,21 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
     if (d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT && c->axis != d->cm_on_axis) {
         return DRIVE_REJECT_STOPPING;
     }
+    if (SINGLE_AXIS(d->cfg)) {
+        /* The arming's axis is fixed by its first accepted COMMISSION until DISARM. Before that,
+           another axis than one whose DRVOFF the last applied tick left low waits for a tick with
+           all four high: the HAL writes the channels in order, so a DISARM-ARM-M(0) in one tick
+           while H brakes would drop M's DRVOFF before raising H's (plan v4 PR-B 1). */
+        if (d->cm_axis < DRIVE_CH_COUNT) {
+            return c->axis == d->cm_axis ? DRIVE_REJECT_NONE : DRIVE_REJECT_STOPPING;
+        }
+        for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            if (ch != c->axis && !d->out.drvoff[ch]) {
+                return DRIVE_REJECT_STOPPING;
+            }
+        }
+        return DRIVE_REJECT_NONE; /* M and H need no KTH here */
+    }
     if ((c->axis == DRIVE_CH_M && !axis_ok(&d->steer)) ||
         (c->axis == DRIVE_CH_H && !axis_ok(&d->lift))) {
         return DRIVE_REJECT_SENSOR_INVALID; /* the picked axis must be measurable */
@@ -815,6 +846,9 @@ static void handle_commission(drive *d, const link_msg *m)
         d->wheel_duty[d->cm_axis] = 0.0f; /* the old wheel restarts from 0 if picked again */
     }
     d->cm_axis = c->axis;
+#if defined(FW_CORE_SINGLE_AXIS)
+    d->sa_last_axis = c->axis;
+#endif
     d->cm_duty = (float)c->duty_e4 / 10000.0f;
     d->zero_seen = true;
     d->has_deadline = true;
@@ -946,6 +980,9 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
             bool own_fault = (d->fault_flags & DRIVE_FAULT_DRIVER(ch)) != 0;
             o->drvoff[ch] = !d->drivers_ready || own_fault;
+            if (SINGLE_AXIS(c) && ch != d->cm_axis) {
+                o->drvoff[ch] = true; /* the untested channels stay cut (plan v4 PR-B 2) */
+            }
         }
         d->wheel_duty[0] = d->wheel_duty[1] = 0.0f;
         d->cm_on = false;
@@ -954,7 +991,8 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
     }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         if (ch != d->cm_axis) {
-            o->drvoff[ch] = channel_safe_drvoff(d, ch);
+            /* single-axis: cut, the arming's own axis too until a COMMISSION fixes it */
+            o->drvoff[ch] = SINGLE_AXIS(c) || channel_safe_drvoff(d, ch);
             if (ch < 2) {
                 d->wheel_duty[ch] = 0.0f;
             }
@@ -1016,7 +1054,13 @@ void drive_finish(drive *d, drive_outputs *out)
         /* Safe output per channel: cut unless configured to brake; always cut before the
            drivers are ready and on the channel's own driver fault. */
         for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+            /* single-axis: only the axis that drove last keeps its safe output, the rest are cut */
+#if defined(FW_CORE_SINGLE_AXIS)
+            o.drvoff[ch] = channel_safe_drvoff(d, ch) ||
+                           (c->commission_single_axis && ch != d->sa_last_axis);
+#else
             o.drvoff[ch] = channel_safe_drvoff(d, ch);
+#endif
         }
         d->wheel_duty[0] = d->wheel_duty[1] = 0.0f;
         d->cm_on = false;

@@ -11,6 +11,11 @@ set(FW_ESTOP_WAIVER_RECORD "" CACHE STRING
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
 set(FW_TEST_IWDG_STALL 0 CACHE STRING "0, or N = 1..60: S5 test build that stops the tick N s after boot")
+set(FW_SINGLE_AXIS 0 CACHE STRING
+    "1 = fw-single: the open commissioning build with one axis per arming (partial-parts plan 2026-11-25)")
+if(FW_SINGLE_AXIS AND NOT (FW_BUILD STREQUAL "commission" AND FW_MOTOR_OUTPUT))
+    message(FATAL_ERROR "FW_SINGLE_AXIS=1 is only for FW_BUILD=commission with FW_MOTOR_OUTPUT=1 (fw-single).")
+endif()
 
 if(NOT FW_LINK MATCHES "^(usb|uart7)$")
     message(FATAL_ERROR "FW_LINK must be usb or uart7")
@@ -101,7 +106,7 @@ add_custom_target(build_info
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${BOARD_DIR} -DIN=${BOARD_DIR}/build_info.h.in
             -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD_KIND} -DFW_LINK=${FW_LINK}
             -DFW_OUTPUTS_WORD=${FW_OUTPUTS_WORD} -DFW_OUTPUTS_LOCKED=${FW_OUTPUTS_LOCKED}
-            -DFW_ESTOP_WAIVED=${FW_ESTOP_WAIVED}
+            -DFW_ESTOP_WAIVED=${FW_ESTOP_WAIVED} -DFW_SINGLE_AXIS=${FW_SINGLE_AXIS}
             "-DFW_TOOLCHAIN_VERSION=${FW_TOOLCHAIN_VERSION}"
             -P ${BOARD_DIR}/gen_build_info.cmake
     BYPRODUCTS ${BUILD_INFO_H}
@@ -113,6 +118,9 @@ file(GLOB FW_CORE_ARM_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/../.
 add_library(fw_core_arm STATIC ${FW_CORE_ARM_SOURCES})
 target_include_directories(fw_core_arm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../core/include)
 target_compile_options(fw_core_arm PRIVATE -O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su)
+if(FW_SINGLE_AXIS) # fw-single only: every other image keeps the core it had
+    target_compile_definitions(fw_core_arm PUBLIC FW_CORE_SINGLE_AXIS=1)
+endif()
 
 set(BOARD_SOURCES
     ${BOARD_DIR}/startup_stm32h743.S
@@ -194,6 +202,9 @@ endif()
 if(FW_ESTOP_WAIVED)
     add_dependencies(fw waiver_record)
     target_compile_definitions(fw PRIVATE FW_ESTOP_WAIVED=1)
+endif()
+if(FW_SINGLE_AXIS)
+    target_compile_definitions(fw PRIVATE FW_COMMISSION_SINGLE=1)
 endif()
 set_target_properties(fw PROPERTIES SUFFIX ".elf" OUTPUT_NAME ${FW_IMAGE})
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated

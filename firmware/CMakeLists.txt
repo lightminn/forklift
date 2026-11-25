@@ -19,6 +19,9 @@ file(GLOB FW_CORE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/core/src
 add_library(fw_core STATIC ${FW_CORE_SOURCES})
 target_include_directories(fw_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
 target_link_libraries(fw_core PUBLIC m)
+# The host core carries single-axis commissioning (fw-single) for its tests and the MCU model; the
+# board compiles it in only for FW_SINGLE_AXIS (partial-parts plan 2026-11-25 PR-B).
+target_compile_definitions(fw_core PUBLIC FW_CORE_SINGLE_AXIS=1)
 
 # The vehicle model shared by the host model endpoint and the MCU's HIL build (board design 9).
 add_library(fw_plant STATIC ${CMAKE_CURRENT_SOURCE_DIR}/plant/plant.c)
@@ -89,7 +92,7 @@ if(FW_PYTHON)
     add_test(NAME test_weact_h743_motor_out_e2e COMMAND test_weact_h743_motor_out_e2e)
 
     # One configuration test per build kind (board design 2.2, 9).
-    foreach(kind normal commission hil iwdg_stall commission_open normal_waived)
+    foreach(kind normal commission hil iwdg_stall commission_open normal_waived commission_single)
         set(t test_weact_h743_board_config_${kind})
         add_executable(${t}
             ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_board_config.c
@@ -101,6 +104,9 @@ if(FW_PYTHON)
             target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_TEST_IWDG_STALL_S=5)
         elseif(kind STREQUAL "commission_open") # behind the gate (motor output design 2)
             target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1)
+        elseif(kind STREQUAL "commission_single") # fw-single (partial-parts plan 2026-11-25)
+            target_compile_definitions(${t} PRIVATE FW_BUILD_commission=1 FW_MOTOR_OUTPUT_OPEN=1
+                                                    FW_COMMISSION_SINGLE=1)
         elseif(kind STREQUAL "normal_waived") # V1.0 e-stop waiver (plan 2026-11-18)
             target_compile_definitions(${t} PRIVATE FW_BUILD_normal=1 FW_MOTOR_OUTPUT_OPEN=1
                                                     FW_ESTOP_WAIVED=1)

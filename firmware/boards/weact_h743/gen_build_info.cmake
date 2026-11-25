@@ -20,8 +20,14 @@ if(FW_ESTOP_WAIVED)
 endif()
 # The open commissioning build carries its limit generation as the last token (" lim=lr1"); the
 # bring-up tool reads it whole, so it must not be cut either (design 2026-11-25 1.1).
+# fw-single (partial-parts plan 2026-11-25 PR-B) appends " sa1" after it: the tool tells the image
+# apart only by that exact suffix, so it must not be cut either.
 if(FW_BUILD STREQUAL "commission" AND NOT FW_OUTPUTS_LOCKED)
-    set(FW_LIMITS_TAG " lim=lr1")
+    if(FW_SINGLE_AXIS)
+        set(FW_LIMITS_TAG " lim=lr1 sa1")
+    else()
+        set(FW_LIMITS_TAG " lim=lr1")
+    endif()
     set(ID "forklift-mcu ${FW_BUILD} ${FW_OUTPUTS_WORD} ${FW_GIT_DESCRIBE} rec=00000000${FW_LIMITS_TAG}")
     string(LENGTH "${ID}" ID_LEN)
     if(ID_LEN GREATER 126)
