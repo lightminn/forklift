@@ -196,11 +196,12 @@ class RealSlamSource:
     registered start (the session's first instance)."""
 
     def __init__(self, link: RealSlamLink, *, map_id: str, start_ns: int, start_pose, odom_history, odom_base, odom_gen,
-                 boot, rear_offset_m: float, session_epoch: int = 0, clock=time.monotonic_ns, events=None) -> None:
+                 boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns, events=None) -> None:
         self.link, self.map_id, self.start_ns = link, str(map_id), int(start_ns)
         self.start_pose = tuple(float(v) for v in start_pose)
         self.odom_history, self.odom_base, self.odom_gen, self.boot = odom_history, odom_base, odom_gen, boot
-        self.rear_offset_m, self.session_epoch, self.clock = float(rear_offset_m), int(session_epoch), clock
+        # session_epoch: an int, or a callable read when the hello goes (the run's arbiter is made after the sources)
+        self.rear_offset_m, self.session_epoch, self.clock = float(rear_offset_m), session_epoch, clock
         self.events = events if events is not None else []  # the record (observe run, 6.1, 8)
         self.counts: Counter = Counter()
         self.epoch, self._prev_epoch = 0, 0
@@ -396,8 +397,8 @@ class RealSlamSource:
             if t["accepted_ns"] is None:
                 return  # the session's start goes at the first poll
             if t["kind"] == "start":
-                frame = rl.encode_hello(rl.Hello(self.session_epoch, self.map_id, t["id"], t["pose"],
-                                                 t["deadline_ns"]))
+                epoch = self.session_epoch() if callable(self.session_epoch) else self.session_epoch
+                frame = rl.encode_hello(rl.Hello(int(epoch), self.map_id, t["id"], t["pose"], t["deadline_ns"]))
             else:
                 frame = rl.encode_seed(rl.Seed(t["id"], t["epoch"], t["pose"], t["snapshot"], int(t["boot"]),
                                                t["deadline_ns"]))

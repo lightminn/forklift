@@ -430,12 +430,20 @@ class RunSources:
     depth: object = None
     counts: dict = field(default_factory=lambda: {"scans_dropped": 0, "slam_dropped": 0})
     on_assembled: list = field(default_factory=list)  # callbacks given the loop once it exists (late-bound poses)
+    # PR 7 design 6.1, 1 (7c-1b-2b): the SLAM path's branch -- called with every scan the feed handed the layer, after
+    # the batch cut (the scan the layer takes is the scan SLAM takes); None: the source takes its scans itself
+    slam_feed: object = None
+    closers: list = field(default_factory=list)  # called once when the run's workers close (sockets the sources hold)
 
 
-def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0) -> RunSources:
+def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0, slam_socket: str | None = None) -> RunSources:
     """The HIL run's synthetic sources (design 10.2) on a transport whose HIL check holds (else ``SyntheticRefused``):
     the LiDAR casts the scene's obstacles and the target pallet from the loop's odometry pose with the layer's mount,
-    once the session check has started; the SLAM keeps the epoch contract on those acquisitions; a still IMU."""
+    once the session check has started; the SLAM keeps the epoch contract on those acquisitions; a still IMU.
+
+    ``slam_socket`` (PR 7 7c-1b-2b): the real SLAM source on a real-mode bridge listening at that Unix socket instead
+    of the synthetic SLAM -- fed the scans the layer takes (``slam_feed``), the session's start at the registered
+    start pose, the loop's odometry history, continuity generation and every history entry (``odom_listeners``)."""
     from forklift_core.live import synthetic_sources as ss
     from forklift_core.localization.start_reloc import base_from_rear
 
@@ -444,12 +452,51 @@ def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0) -> Ru
     scan = ss.SyntheticScan(transport, Client.HIL, prep.start_ns, odom_pose=lambda: box["loop"].odom_pose,
                             boxes=boxes, mount=lidar_mount(prep),
                             active=lambda: "loop" in box and bool(box["loop"].permit.session_started))
-    slam = ss.SyntheticSlam(transport, Client.HIL, scan, map_id=prep.map_id,
-                            odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m))
     # the IMU only where the watches take one (imu: none builds no IMU watch, and the loop refuses a source without it)
     imu = ss.SyntheticImu(transport, Client.HIL, seed=imu_seed) if prep.watches.imu_policy == "required" else None
-    sources = RunSources(client=Client.HIL, host=host, transport=transport, scans=scan, slam=slam, imu=imu)
+    if slam_socket is None:
+        slam = ss.SyntheticSlam(transport, Client.HIL, scan, map_id=prep.map_id,
+                                odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m))
+        sources = RunSources(client=Client.HIL, host=host, transport=transport, scans=scan, slam=slam, imu=imu)
+    else:
+        sources = _real_slam_sources(prep, host, transport, scan, imu, box, slam_socket)
     sources.on_assembled.append(lambda loop: box.__setitem__("loop", loop))
+    return sources
+
+
+def _real_slam_sources(prep: RunPrep, host, transport, scan, imu, box: dict, path: str) -> RunSources:
+    """The real SLAM source on the bridge at ``path`` (7c-1b-2b): connected here (a refused connection refuses the
+    assembly), its scans the layer's own (the synthetic cast is exact: its first beam is the interval)."""
+    import socket as socket_
+
+    from forklift_core.live.real_slam_source import RealSlamLink, RealSlamSource
+    from forklift_core.localization.slam_real_scan import from_layer
+    from forklift_core.localization.start_reloc import base_from_rear
+
+    sock = socket_.socket(socket_.AF_UNIX, socket_.SOCK_STREAM)
+    try:
+        sock.settimeout(5.0)
+        sock.connect(str(path))
+    except OSError as err:
+        sock.close()
+        raise AssemblyRefused([f"slam_bridge:{err}"]) from err
+
+    def boot():
+        st = host.state
+        return None if st is None else int(st.boot_id)
+
+    slam = RealSlamSource(
+        RealSlamLink(sock), map_id=prep.map_id, start_ns=prep.start_ns,
+        start_pose=base_from_rear(tuple(float(v) for v in prep.cfg.start_rear), prep.rear_offset_m),
+        odom_history=lambda: box["loop"].odom_history,
+        odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m),
+        odom_gen=lambda: box["loop"].odom_gen, boot=boot, rear_offset_m=prep.rear_offset_m,
+        session_epoch=lambda: prep.epoch)
+    slam.client = Client.HIL
+    sources = RunSources(client=Client.HIL, host=host, transport=transport, scans=scan, slam=slam, imu=imu,
+                         slam_feed=lambda layer_scan: slam.offer(from_layer(layer_scan, prep.start_ns)))
+    sources.on_assembled.append(lambda loop: loop.odom_listeners.append(slam.odom_step))
+    sources.closers.append(sock.close)
     return sources
 
 
@@ -789,6 +836,12 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
             for scan in got:
                 layer.add_scan(scan, loop_._t(now_ns), initial_correction=tuple(core.obstacle["applied"]),  # noqa: SLF001
                                initial_version=int(core.obstacle["version"]))
+                if sources.slam_feed is not None:
+                    try:
+                        sources.slam_feed(scan)  # the SLAM path's branch: the same scan (PR 7 design 6.1, 1)
+                    except Exception as exc:
+                        mark(f"slam:offer:{type(exc).__name__}:{exc}")
+                        raise
 
         loop = RealLoop(core=core, session=RealSession(core, link), permit=permit, port=port, host=host, link=link,
                         channels=prep.channels, transport=sources.transport, params=params, odometry=odo,
@@ -1059,6 +1112,11 @@ class RealRun:
     def close_workers(self, timeout_s: float = 2.0) -> list:
         """The layer worker and the plan worker closed (the plan worker last); what did not end in time."""
         late = []
+        for fn in self.sources.closers:
+            try:
+                fn()
+            except Exception as err:  # noqa: BLE001
+                late.append(f"source_closer:{err}")
         try:
             self.layer_worker.close()
             th = getattr(self.layer_worker, "_thread", None)

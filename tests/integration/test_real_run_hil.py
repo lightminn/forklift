@@ -51,13 +51,13 @@ class Runner:
     """The runner as a child (its own process group, so a test's SIGINT to the group reaches it and not pytest);
     the console address read from its first line."""
 
-    def __init__(self, model, out: Path, duration_s=60, model_args=(), inject=()):
+    def __init__(self, model, out: Path, duration_s=60, model_args=(), inject=(), extra_args=()):
         self.out = out
         args = [sys.executable, str(REPO / "tools/real_autonomy.py"), "--run", "--hil", "--hil-model", str(model),
                 "--duration-s", str(duration_s), "--config", str(HIL_YAML), "--out-dir", str(out),
                 "--hil-model-arg=--accept-log", f"--hil-model-arg={out / 'accept.log'}",
                 "--hil-model-arg=--axis-log", f"--hil-model-arg={out / 'axis.log'}"]
-        args += [f"--hil-model-arg={a}" for a in model_args] + [f"--hil-inject={i}" for i in inject]
+        args += [f"--hil-model-arg={a}" for a in model_args] + [f"--hil-inject={i}" for i in inject] + list(extra_args)
         self.proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                      env={**os.environ, "PYTHONPATH": str(REPO / "src")}, start_new_session=True)
         self.port = None

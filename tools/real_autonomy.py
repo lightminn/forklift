@@ -263,6 +263,8 @@ def run_hil(args) -> int:
     except ValueError as err:
         refused.append(str(err))
         injections = []
+    if args.hil_slam_bridge is not None and any(name == "slam" for name, _ in injections):
+        refused.append("hil_inject_slam_with_bridge")  # the real source has no stop switch: stop the bridge instead
     if refused:
         _write({"run": False, "refused": refused, "opened": []}, None)
         return 2
@@ -343,7 +345,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
         return EXIT_FAILED
     # ⑤ the sources ⑥ the assembly (the same host and transport)
     try:
-        sources = rr.make_hil_sources(prep, host, transport)
+        sources = rr.make_hil_sources(prep, host, transport, slam_socket=args.hil_slam_bridge)
         held.run = run = rr.assemble_run(prep, sources, events=record.put)
     except (AssemblyRefused, SyntheticRefused) as err:
         end["reason"] = f"refused:{getattr(err, 'reasons', err)}"
@@ -408,6 +410,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
                disarm_decisions=[list(d) for d in loop.disarm_decisions],
                axis_watch_times=[list(d) for d in loop.axis_watch_times], results=list(loop.session.results),
                permit=loop.permit.state, permit_reason=loop.permit.reason, counts=dict(sources.counts),
+               slam_counts=dict(getattr(sources.slam, "counts", {}) or {}),
                ticks=run.ticks, records_kept=len(loop.records))
     return rr.EXIT_OK if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
 
@@ -455,6 +458,9 @@ def main(argv=None) -> int:
     ap.add_argument("--hil-inject", action="append", default=None,
                     help="tests only: name:ms after the first moving DRIVE written "
                          "(scan|scan_lost|slam|tx|tx_keep|tx_partial|tx_release|axis_push)")
+    ap.add_argument("--hil-slam-bridge", default=None,
+                    help="--hil: the real SLAM source on a real-mode bridge's Unix socket (PR 7 7c-1b-2b) instead of "
+                         "the synthetic SLAM")
     ap.add_argument("--duration-s", type=float, default=None, help="--hil: required, 0 < s <= 3600")
     ap.add_argument("--device", default=None, help="refused: no real MCU AUTO before S10's preconditions")
     ap.add_argument("--s10a", "--config", dest="s10a", type=Path, default=None,
