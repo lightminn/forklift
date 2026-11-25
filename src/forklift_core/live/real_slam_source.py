@@ -19,7 +19,7 @@ The link (6.1, 2):
   state (``ready`` / ``not_localized``) or ``void``;
 - a seed's inputs are judged until its end state -- each poll and each offer (before any write retry), before each
   scan to its instance and before its end state is taken: a boot change, a raised odometry continuity generation (the
-  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, or a move past the limit, seen on
+  loop's ``odom_gen``), an entry since the acceptance not continuous, or a move past the limit, seen on
   any odometry history entry made since the acceptance (``odom_step``, the loop's ``odom_listeners``: kept even after
   the entry left the history), or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
   snapshot cancels it. A seed the bridge has not seen a byte of is cancelled here (``void`` at once); otherwise new
@@ -196,11 +196,12 @@ class RealSlamSource:
     registered start (the session's first instance)."""
 
     def __init__(self, link: RealSlamLink, *, map_id: str, start_ns: int, start_pose, odom_history, odom_base, odom_gen,
-                 boot, rear_offset_m: float, session_epoch: int = 0, clock=time.monotonic_ns, events=None) -> None:
+                 boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns, events=None) -> None:
         self.link, self.map_id, self.start_ns = link, str(map_id), int(start_ns)
         self.start_pose = tuple(float(v) for v in start_pose)
         self.odom_history, self.odom_base, self.odom_gen, self.boot = odom_history, odom_base, odom_gen, boot
-        self.rear_offset_m, self.session_epoch, self.clock = float(rear_offset_m), int(session_epoch), clock
+        # session_epoch: an int, or a callable read when the hello goes (the run's arbiter is made after the sources)
+        self.rear_offset_m, self.session_epoch, self.clock = float(rear_offset_m), session_epoch, clock
         self.events = events if events is not None else []  # the record (observe run, 6.1, 8)
         self.counts: Counter = Counter()
         self.epoch, self._prev_epoch = 0, 0
@@ -291,15 +292,17 @@ class RealSlamSource:
 
     def odom_step(self, entry) -> None:
         """The loop's every odometry history entry as it is made (its ``odom_listeners``): for a seed in progress, an
-        entry since its acceptance that breaks continuity or is not included, or a pose past the stillness limit, is
-        kept until its end state, whether or not a poll still finds the entry in the history (rounds 3-4). Never
-        raises."""
+        entry since its acceptance that breaks continuity, or a pose past the stillness limit, is kept until its end
+        state, whether or not a poll still finds the entry in the history (rounds 3-4). An entry left out of scan
+        placement for its STATE's delay bound (``included`` False) is still a continuous odometry pose: the seed's
+        inputs are the snapshot, the boot and the continuity (design 6.1, 2), not the placement's time precision --
+        normal HIL running has such STATEs (7c-1b-2b pty run). Never raises."""
         t = self.target
         if t is None or t["kind"] != "seed" or t["snapshot"] is None or not self._seeding():
             return
         if float(entry[1]) < self._s(t["accepted_ns"]):
             return
-        if not (entry[3] and entry[4]):
+        if not entry[3]:
             t["broken"] = True
         if self._past_still(base_from_rear(entry[2], self.rear_offset_m), t["snapshot"]):
             t["moved"] = True
@@ -396,8 +399,8 @@ class RealSlamSource:
             if t["accepted_ns"] is None:
                 return  # the session's start goes at the first poll
             if t["kind"] == "start":
-                frame = rl.encode_hello(rl.Hello(self.session_epoch, self.map_id, t["id"], t["pose"],
-                                                 t["deadline_ns"]))
+                epoch = self.session_epoch() if callable(self.session_epoch) else self.session_epoch
+                frame = rl.encode_hello(rl.Hello(int(epoch), self.map_id, t["id"], t["pose"], t["deadline_ns"]))
             else:
                 frame = rl.encode_seed(rl.Seed(t["id"], t["epoch"], t["pose"], t["snapshot"], int(t["boot"]),
                                                t["deadline_ns"]))
@@ -615,7 +618,7 @@ class RealSlamSource:
         for e in self.odom_history():
             if e[1] < since:
                 continue
-            if not (e[3] and e[4]):
+            if not e[3]:
                 return "odom_break"
             poses.append(base_from_rear(e[2], self.rear_offset_m))
         poses.append(tuple(float(v) for v in self.odom_base()))
