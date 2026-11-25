@@ -62,10 +62,12 @@ def _sign(delta: float, axis: int) -> str:
 
 
 def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_index: int | None,
-                       off_index: int | None) -> CommissionMetrics:
+                       off_index: int | None, sensorless: bool = False) -> CommissionMetrics:
     """``on_index``: the first sample accepting the nonzero COMMISSION; ``off_index``: the first accepting the zero
     after it (or the end of driving). The motion runs from the last sample before acceptance to the last sample
-    (the coast included); currents, duties and rates over the driven samples only."""
+    (the coast included); currents, duties and rates over the driven samples only. ``sensorless``: a fw-single
+    steering/lift run with no KTH (partial-parts plan 2026-11-25 PR-B) -- the output accepted and the stop seen are
+    the measurement; no position is read, whatever the STATE carries (``measured_sign`` "unmeasured")."""
     empty = dict(driven_ms_min=None, driven_ms_max=None, applied_max_e4=0, duty_sign_in_build=None, current_peak_ma=0, current_mean_ma=None,
                  others_peak_ma=0, measured_delta=None, measured_sign="invalid", rate_mean_rad_s=None,
                  rate_peak_rad_s=None, value=None, encoder_bits_at_start=[], encoder_bits_new=[])
@@ -117,6 +119,8 @@ def commission_metrics(samples: list[Sample], *, axis: int, duty_e4: int, on_ind
                  if math.isfinite(r := (s.state.wheel_rate_left_rad_s if axis == 0 else s.state.wheel_rate_right_rad_s))]
         if rates:
             rate_mean, rate_peak = sum(rates) / len(rates), max(rates, key=abs)
+    elif sensorless:
+        return CommissionMetrics(True, None, axis, duty_e4, **{**empty, **base, "measured_sign": "unmeasured"})
     else:
         vals = [_value(s.state, axis) for s in span]
         if not all(math.isfinite(v) for v in vals):

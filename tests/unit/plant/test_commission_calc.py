@@ -149,3 +149,16 @@ def test_an_end_sample_cut_off_the_record_is_an_unknown_end():
     s = wheel_run()
     m = commission_metrics(s, axis=0, duty_e4=1000, on_index=2, off_index=len(s))
     assert not m.valid and m.reason == "end_unknown"
+
+
+def test_a_sensorless_run_reads_no_position_whatever_the_state_carries():
+    """Codex PR-B P2-2: a fw-single steering run with no KTH -- a NaN value is not invalid, a finite one is not read;
+    the output accepted and the stop are the measurement."""
+    nan = [st(0, steer=float("nan")), st(10, steer=float("nan"), duty=(0, 0, 800, 0), cur=(0, 0, 200, 0)),
+           st(20, steer=float("nan"))]
+    m = commission_metrics(nan, axis=2, duty_e4=800, on_index=1, off_index=2, sensorless=True)
+    assert m.valid and m.measured_sign == "unmeasured" and m.value is None and m.measured_delta is None
+    assert m.applied_max_e4 == 800 and m.current_peak_ma == 200
+    finite = [st(0, steer=0.1), st(10, steer=0.12, duty=(0, 0, 800, 0)), st(20, steer=0.14)]
+    m = commission_metrics(finite, axis=2, duty_e4=800, on_index=1, off_index=2, sensorless=True)
+    assert m.valid and m.value is None and m.measured_delta is None

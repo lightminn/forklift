@@ -1,6 +1,6 @@
 # 부품이 덜 온 벤치 — 모터 1개·KTH 1개로 시운전하기
 
-작성일: 2026-11-25 · 상태: **계획 v4 승인(총괄 2026-11-25), PR-A 구현** · 관련: [벤치 시운전 한계 설계](../design/2026-11-25-bench-commission-limits.md), [도착일 절차서](2026-11-12-arrival-day-procedure.md), `tools/bringup.py`, `tools/h743_first_boot.py`
+작성일: 2026-11-25 · 상태: **계획 v4 승인(총괄 2026-11-25), PR-A·PR-B 구현** · 관련: [벤치 시운전 한계 설계](../design/2026-11-25-bench-commission-limits.md), [도착일 절차서](2026-11-12-arrival-day-procedure.md), `tools/bringup.py`, `tools/h743_first_boot.py`
 
 ## 0. 요청과 원칙
 
@@ -31,7 +31,10 @@
 - 우회·부품 부재 실행의 시운전 결과는 `suggested_duty_sign` 도 비운다(진단값이 설정으로 옮겨지지 않게).
 
 ### PR-B — 단일 축 시운전 이미지 `fw-single` (링크 변경 없음)
-열린 시운전 빌드 + `drive_config` 옵션(기본 끔), product 끝 표식 `lim=lr1 sa1`. 첫 0 COMMISSION 의 축을 DISARM 까지 고정하고 다른 축은 11 `stopping` 으로 거부, 나머지 세 채널 DRVOFF 는 모든 모드에서 high, M·H 는 KTH 없이(센서 비트는 표시만). 도구는 M·H 에 `--motor-detached` 와 `--window` 또는 `--sensorless` 를 요구하고 둘 다 `not_for_gate`. 상세는 PR-B 에서 이 절을 채운다.
+열린 시운전 빌드 + 빌드 옵션 `-DFW_SINGLE_AXIS=1`(시운전·`FW_MOTOR_OUTPUT=1` 에서만 구성된다), product 끝 표식 정확히 ` lim=lr1 sa1`. 펌웨어 규칙은 [링크 계약](../interfaces/2026-10-22-mcu-link-contract.md) 3.4 의 `fw-single` 항목이 정본이다.
+- 펌웨어: 첫 0 COMMISSION 의 축을 DISARM 까지 고정, 다른 축은 11 `stopping`. 축이 정해지기 전에도 마지막 적용 주기에 DRVOFF 가 low 였던 채널과 다른 축은 네 DRVOFF 가 모두 high 인 주기가 지난 뒤에만. 나머지 세 채널 DRVOFF 는 모든 모드(STOPPING 포함)에서 high. M·H 는 KTH 없이(센서 비트는 STATE 표시만). 단일 축 코드는 `FW_CORE_SINGLE_AXIS` 로만 컴파일되어, 기존 세 이미지(normal·commission 잠금·commission 열림)는 바이트가 그대로다(git 설명 문자열만 다름).
+- 도구: `bringup.py commission --single-axis`. ARM 직전 같은 연결의 product 를 읽어 끝 표식이 정확히 맞아야 하고, 표식이 맞는데 `--single-axis` 가 없어도 거부한다(UART7 은 product 가 없어 거부). 확인된 경로에서만 무장 0 명령을 그 실행의 축으로 보낸다.
+- M·H 는 `--motor-detached`(터미널에서 다시 입력, 기록) + `--window LO HI`(KTH 를 달고 손으로 확인했을 때) 또는 `--sensorless` 중 하나. 둘 다 `m_sensor_checks_off`(무센서면 `sensorless` 도) 우회로 헤더에 ARM 전에 남고 `not_for_gate` 다. 모터를 뗀 M·H 만 유지 시간을 1.5 s(펌웨어 2 s 에서 0.5 s 여유)까지 쓴다. 무센서 결과는 `position: none` 으로 출력 수락·정지 확인만 보인다.
 
 ### PR-C — 보류
 채널별 nFAULT 분리. DRV8244 리셋값이 EN_OLA=0 이고 초기화는 CONFIG3/4 만 쓰므로 지금 근거가 없다. 벤치에서 결함이 나면 F2(초기화 실패)·F1(nFAULT)·F3(SPI 응답·시간 초과)부터 가른다.
@@ -42,6 +45,12 @@
 
 **제한(총괄 잠정 승인 2026-11-25): 조향·승강 모터를 기구에 물린 채(결합)로는 KTH 없이 돌리지 않는다.** 센서 없는 M·H 는 모터를 기구에서 떼어 낸 경우에만 한다 — 결합 상태에는 끝단 보호가 없다(KTH 창이 유일한 끝단 정지이고, 센서를 끄면 끝단을 넘어도 멈추지 않는다). 결합된 M·H 는 열린 이미지에서 KTH 와 `--window` 로, 지금처럼 0.2 s 로 한다.
 
+0. **굽기 순서**(도착일 절차서 2절 `build_fw`, 3.1 이미지 바꾸기). 모두 main 에서 빌드한다.
+   1. `fw-single`: 한 채널씩 돌리는 바퀴, 떼어 낸 조향·승강 모터. 이 벤치의 기본 이미지다.
+   2. `fw-open`: 기구에 물린 조향·승강을 KTH 와 `--window` 로 0.2 s 돌릴 때만 바꿔 굽는다.
+   3. 벤치를 마치면 다음에 쓸 이미지로 다시 굽는다. 보드에 남은 이미지는 기록에 적는다.
+   - 굽기 전 `strings …/fw.elf | grep '^forklift-mcu'` 로 정체를 확인한다. `fw-single` 은 끝이 `lim=lr1 sa1`, `fw-open` 은 끝이 `lim=lr1`.
+   - 보드 점검 사본(`data/h743_check/`)은 이 머지 뒤 main 에서 `tools/h743_check/stage.sh` 로 다시 스테이징한다(코드 사본이 새 도구를 갖게).
 1. **전원 넣기 전**
    - 구운 이미지(product 문자열)와 `bringup.py`·`forklift_core` 커밋을 적는다.
    - 모터 하나·KTH 하나 배선은 전원을 끈 채로. 받침대 고정, 포크는 비우고 받친다. 전원 공급기 전류 제한값을 적는다. 주 전원 스위치를 사람이 손에 든다.
@@ -67,6 +76,16 @@
    - `cleared` 가 아니면 멈추고 올린다(`not_accepted` 의 `reject_reason` 이 이유: `SENSOR_INVALID` 는 시운전 빌드의 ADC, `ESTOP_ACTIVE` 등).
    - 다시 무장하기 전에 새로 허락을 받는다.
 5. 엔코더·센서 없는 관측은 진단으로만 기록한다(방향·위치 판정 아님).
+6. **fw-single(PR-B)로 한 채널씩**: 굽기 전 `strings fw.elf | grep '^forklift-mcu'` 끝이 `lim=lr1 sa1` 인지 본다. 이 이미지는 이 저장소의 같은 커밋 도구로만 쓴다(옛 도구는 L 만 돌린다).
+   ```bash
+   # 바퀴(R 에 모터 하나, 엔코더 없음): 다른 세 채널은 펌웨어가 끊어 둔다
+   python tools/bringup.py commission --device /dev/forklift-mcu --out $RUN/r.jsonl --single-axis --axis R --duty 0.08 --seconds 0.5 --power-switch-in-hand <부재>
+   # 조향 모터를 떼어 낸 채로, KTH 없이
+   python tools/bringup.py commission --device /dev/forklift-mcu --out $RUN/m.jsonl --single-axis --axis M --duty 0.1 --seconds 0.5 --motor-detached --sensorless --power-switch-in-hand <부재>
+   ```
+   - 처음 0 명령 뒤와 만료 직후 STOPPING 동안 다른 세 채널의 DRVOFF 핀이 high 인지 확인한다(측정기로).
+   - 떼어 낸 모터는 차체 받침대와 따로 고정하고 축 둘레에 아무것도 두지 않는다. KTH 가 모터와 함께 움직이는지 기록한다(기구에 남은 KTH 는 손으로 센서 경로만 보여 주고, 떼어 낸 모터의 움직임은 못 본다).
+   - 모터를 기구에 물린 조향·승강은 fw-single 에서 돌리지 않는다(위 제한). 열린 이미지에서 KTH 와 `--window` 로 0.2 s 까지다.
 
 ## 부록 — 부품이 빠진 구성에서 걸리는 검사 전수 조사
 

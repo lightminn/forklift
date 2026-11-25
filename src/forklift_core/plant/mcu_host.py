@@ -159,6 +159,9 @@ class McuLinkHost:
         # the e-stop waiver (docs/plans/2026-11-18-v1-estop-waiver.md 3): the opened tty's USB product string, read by
         # the adapter at each opening and forgotten on a disconnect; only it makes bit 7 a warning
         self.usb_product: str | None = None
+        # the axis of a commissioning arming's zero COMMISSION: L, except on the bring-up tool's verified fw-single
+        # path, which fixes the run's axis with it (partial-parts plan 2026-11-25 PR-B)
+        self.commission_zero_axis = 0
         self.estop_waived = False
         self._outbox: deque[Outgoing] = deque()
         self._auth = _NONE
@@ -427,7 +430,8 @@ class McuLinkHost:
                 # the zero command of a commissioning build is a zero COMMISSION; axis 0 needs no steering or lift
                 # sensor, so arming does not depend on them (design 3)
                 a["gen"] = s.arm_gen
-                zero = Commission(0, 0, valid_after_echo_ms(now_ns + self.cfg.zero_valid_ms * 1_000_000, now_ns),
+                zero = Commission(int(self.commission_zero_axis), 0,
+                                  valid_after_echo_ms(now_ns + self.cfg.zero_valid_ms * 1_000_000, now_ns),
                                   s.arm_gen, s.boot_id, s.mcu_time_us)
                 self._auth = _ZERO_PENDING
                 self._enqueue("COMMISSION", zero, now_ns, expires_ns=now_ns + self.cfg.zero_valid_ms * 1_000_000)

@@ -115,6 +115,16 @@ typedef struct {
        output time of an interval on that axis, (0, validator ms ceiling]. */
     uint16_t commission_duty_max_e4[DRIVE_CH_COUNT];
     uint32_t commission_time_ms[DRIVE_CH_COUNT];
+    /* Single-axis commissioning (partial-parts plan 2026-11-25 PR-B, image fw-single): open
+       commissioning builds only. The first accepted COMMISSION of an arming fixes its axis until
+       DISARM; every other channel's DRVOFF stays high in every mode; the axis that drove last keeps
+       its safe output after DISARM, and another axis may be picked only after an applied tick with
+       all four DRVOFF high; M and H drive without their KTH (their bits are STATE only). Compiled
+       only with FW_CORE_SINGLE_AXIS (the fw-single image and the host tests), so the other images
+       keep their bytes. */
+#if defined(FW_CORE_SINGLE_AXIS)
+    bool commission_single_axis;
+#endif
     float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */
     /* Encoder fault detection (plan 3.3); board values wait for S3/S4 measurements. */
     uint32_t enc_gap_max_us;          /* longest gap between two wheel reads */
@@ -185,6 +195,9 @@ typedef struct drive {
     uint8_t cm_on_axis; /* the axis of the open output interval, fixed at its first non-zero
                            output and released with cm_on (never the last command's cm_axis) */
     uint64_t cm_on_since_us;
+#if defined(FW_CORE_SINGLE_AXIS)
+    uint8_t sa_last_axis; /* single-axis build: the axis an arming last fixed (kept across DISARM) */
+#endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */
     bool first_cycle; /* no gap judgement before the first drive_begin */

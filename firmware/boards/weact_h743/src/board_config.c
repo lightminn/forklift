@@ -104,6 +104,13 @@ static drive_config make(void)
     c.commission_duty_max_e4[DRIVE_CH_L] = c.commission_duty_max_e4[DRIVE_CH_R] = 10000;
     c.commission_time_ms[DRIVE_CH_L] = c.commission_time_ms[DRIVE_CH_R] = 0x7FFFFFFFu / 1000u;
 #endif
+    /* fw-single (partial-parts plan 2026-11-25 PR-B): one axis per arming, the rest cut; M and H
+       keep 0.15 / 2 s and drive without their KTH. The build refuses it on any other kind. */
+#if defined(FW_COMMISSION_SINGLE)
+    c.commission_single_axis = true;
+#elif defined(FW_CORE_SINGLE_AXIS)
+    c.commission_single_axis = false;
+#endif
     c.wheel_duty_slew_per_s = 2.0f; /* S1/S3 실측 대기 */
     /* Encoder fault detection (plan 3.3), all S3/S4 실측 대기. The gap limit keeps the largest
        real step unambiguous: 0.02 s x 15 rad/s x 327680 / 2pi = 15645 <= 16383. */

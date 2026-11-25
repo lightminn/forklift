@@ -21,7 +21,7 @@ typedef struct {
     drive_outputs out;
     uint8_t rx[1024];
     size_t rx_n, rx_off;
-    bool estop, nfault_l;
+    bool estop, nfault_l, no_kth;
 } world;
 
 static world W;
@@ -42,6 +42,9 @@ static void hal_read(void *c, drive_inputs *in)
     in->estop_active = W.estop;
     if (W.nfault_l) {
         in->nfault_low[DRIVE_CH_L] = true;
+    }
+    if (W.no_kth) { /* no KTH fitted: the SPI reads all zeros, CRC fails (2026-11-24 record) */
+        in->abs_frame[0] = in->abs_frame[1] = 0xFFFFu;
     }
 }
 
@@ -298,6 +301,181 @@ static void commission_limits(void)
     CHECK_EQ_U(regmodel_violations(), 0);
 }
 
+/* ---- single-axis commissioning (partial-parts plan 2026-11-25 PR-B, fw-single) ---------- */
+
+static void mod_single(drive_config *c)
+{
+    mod_commission(c);
+    c->commission_single_axis = true;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        c->safe_brake[ch] = true; /* the brake path is the one that keeps a DRVOFF low */
+    }
+}
+
+static link_msg cm(int axis, int16_t duty_e4)
+{
+    link_msg m = commission(duty_e4);
+    m.u.commission.axis = (uint8_t)axis;
+    return m;
+}
+
+/* Several frames read in one tick (a DISARM-ARM-COMMISSION burst). */
+static void send_burst(link_msg *ms, int n)
+{
+    W.rx_n = W.rx_off = 0;
+    for (int i = 0; i < n; i++) {
+        ms[i].seq = ++seq;
+        size_t k = link_encode(&ms[i], W.rx + W.rx_n, sizeof W.rx - W.rx_n);
+        CHECK(k > 0);
+        W.rx_n += k;
+    }
+    tick();
+}
+
+static bool cut(int ch)
+{
+    return regmodel_channel(ch).state == RM_STANDBY;
+}
+
+static void only_cut_except(int keep)
+{
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        if (ch != keep) {
+            CHECK(cut(ch));
+        }
+    }
+}
+
+static void single_axis_fixes_the_axis_and_keeps_the_rest_cut(void)
+{
+    boot(mod_single);
+    only_cut_except(-1); /* no axis yet: all four cut, though every channel would brake */
+    send(arm());
+    only_cut_except(-1);
+    send(cm(DRIVE_CH_H, 0)); /* the first zero COMMISSION fixes H */
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(regmodel_channel(DRIVE_CH_H).state, RM_BRAKE);
+    only_cut_except(DRIVE_CH_H);
+    send(cm(DRIVE_CH_M, 0)); /* another axis, zero or not: refused 11, H kept */
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(A.d.cm_axis, DRIVE_CH_H);
+    send(cm(DRIVE_CH_H, 1000));
+    tick();
+    CHECK(driving(DRIVE_CH_H));
+    send(cm(DRIVE_CH_L, 1000));
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_STOPPING);
+    tick();
+    CHECK(driving(DRIVE_CH_H));
+    only_cut_except(DRIVE_CH_H);
+    send(simple(LINK_DISARM)); /* H keeps its safe output, the others stay cut */
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_DISARMED);
+    CHECK_EQ_U(regmodel_channel(DRIVE_CH_H).state, RM_BRAKE);
+    only_cut_except(DRIVE_CH_H);
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
+/* H brakes; DISARM, ARM and M(0) in one tick: M is refused 11 until a tick has applied all four
+   DRVOFF high, and in the pin log H's DRVOFF goes high before M's goes low. */
+static void another_axis_waits_for_an_all_high_tick(void)
+{
+    boot(mod_single);
+    send(arm());
+    send(cm(DRIVE_CH_H, 0));
+    CHECK_EQ_U(regmodel_channel(DRIVE_CH_H).state, RM_BRAKE);
+    regmodel_log_clear();
+    link_msg burst[3] = {simple(LINK_DISARM), arm(), cm(DRIVE_CH_M, 0)};
+    burst[2].u.commission.arm_gen = (uint16_t)(A.d.arm_gen + 1u); /* the new arming's */
+    send_burst(burst, 3);
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_ARMED);
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_STOPPING);
+    CHECK_EQ_U(A.d.cm_axis, 0xFFu); /* none yet */
+    only_cut_except(-1); /* the tick applied all four high */
+    send(cm(DRIVE_CH_M, 0));
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(regmodel_channel(DRIVE_CH_M).state, RM_BRAKE);
+    only_cut_except(DRIVE_CH_M);
+    const rm_event *log;
+    int n = regmodel_log(&log), h_high = -1, m_low = -1;
+    for (int i = 0; i < n; i++) {
+        if (log[i].kind == RM_EV_DRVOFF_HIGH && log[i].ch == DRIVE_CH_H && h_high < 0) {
+            h_high = i;
+        }
+        if (log[i].kind == RM_EV_DRVOFF_LOW && log[i].ch == DRIVE_CH_M && m_low < 0) {
+            m_low = i;
+        }
+    }
+    CHECK(h_high >= 0 && m_low > h_high);
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
+/* The same axis re-armed needs no all-high tick (it is the one braking). */
+static void the_same_axis_rearms_at_once(void)
+{
+    boot(mod_single);
+    send(arm());
+    send(cm(DRIVE_CH_H, 0));
+    link_msg burst[3] = {simple(LINK_DISARM), arm(), cm(DRIVE_CH_H, 0)};
+    burst[2].u.commission.arm_gen = (uint16_t)(A.d.arm_gen + 1u);
+    send_burst(burst, 3);
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(A.d.cm_axis, DRIVE_CH_H);
+    only_cut_except(DRIVE_CH_H);
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
+/* An expiry's STOPPING brakes the fixed axis only; the time cap still holds on M; M drives with
+   no KTH fitted (its bits in STATE, no FAULT). */
+static void single_axis_stopping_time_cap_and_no_kth(void)
+{
+    boot(mod_single);
+    W.no_kth = true;
+    ticks(20);
+    CHECK(A.d.fault_flags & DRIVE_FAULT_STEER_SENSOR_INVALID);
+    send(arm());
+    send(cm(DRIVE_CH_M, 0));
+    CHECK_EQ_U(A.d.reject_reason, DRIVE_REJECT_NONE);
+    send(cm(DRIVE_CH_M, 1000));
+    tick();
+    CHECK(driving(DRIVE_CH_M));
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_ARMED);
+    ticks(160); /* no more commands: expiry, STOPPING */
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_STOPPING);
+    CHECK_EQ_U(regmodel_channel(DRIVE_CH_M).state, RM_BRAKE);
+    only_cut_except(DRIVE_CH_M);
+    ticks((int)cfg.stop_grace_ms + 20);
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_DISARMED);
+    only_cut_except(DRIVE_CH_M);
+    /* the 2 s cap on M */
+    send(arm());
+    send(cm(DRIVE_CH_M, 0));
+    for (int i = 0; i < (int)cfg.commission_time_ms[DRIVE_CH_M] + 50 && A.d.mode == DRIVE_MODE_ARMED; i++) {
+        send(cm(DRIVE_CH_M, 1000));
+    }
+    CHECK(A.d.fault_flags & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    only_cut_except(DRIVE_CH_M);
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
+/* A driver fault on the fixed axis latches the board; the others stay cut, the axis cuts. */
+static void single_axis_fault_cuts(void)
+{
+    boot(mod_single);
+    send(arm());
+    send(cm(DRIVE_CH_L, 0));
+    for (int i = 0; i < 60; i++) {
+        send(cm(DRIVE_CH_L, 1000));
+    }
+    CHECK(driving(DRIVE_CH_L));
+    W.nfault_l = true;
+    send(cm(DRIVE_CH_L, 1000));
+    tick();
+    CHECK_EQ_U(A.d.mode, DRIVE_MODE_FAULT);
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        CHECK(cut(ch));
+    }
+    CHECK_EQ_U(regmodel_violations(), 0);
+}
+
 int main(void)
 {
     expiry_stops();
@@ -305,5 +483,10 @@ int main(void)
     nfault_cuts_the_channel();
     estop_cuts_everything();
     commission_limits();
+    single_axis_fixes_the_axis_and_keeps_the_rest_cut();
+    another_axis_waits_for_an_all_high_tick();
+    the_same_axis_rearms_at_once();
+    single_axis_stopping_time_cap_and_no_kth();
+    single_axis_fault_cuts();
     return FW_TEST_RESULT();
 }

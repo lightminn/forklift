@@ -43,7 +43,7 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
 
 - **빌드**: `commission_build`(bit4)가 아니면 아무것도 보내지 않는다(계약 3.3 마지막 줄, `build_policy.commission_allowed`). `outputs_locked`(bit6)면 실기에서는 출력이 없으므로 중단한다. 모형 시험만 `--allow-locked`. 계획 S3 선행 조건(사용자 결정: IPROPI 보호 확인 뒤 `FW_MOTOR_OUTPUT` 을 켠 빌드)은 운용자 확인 문구에 넣는다. `estop_unwired` 는 시운전 빌드에서 `ARM` 을 막지 않으므로(계약 3.3 거부 이유 15) 결과에 표시만 한다.
 - **받침대 전용**: 바닥 시험 경로(`--floor`)는 없다. 운용자 확인 문구는 "바퀴를 띄웠는가, 조향·승강은 창이 기구 한계 안쪽인가"다.
-- **무장**: 도구 ① 과 같다(운용자 요청 → `ready` 까지, 자동 재시도 없음). 다만 무장 직후의 0 명령은 `DRIVE` 가 아니라 **0 듀티 `COMMISSION`** 이다(시운전 빌드는 `DRIVE` 를 `wrong_build` 로 거부한다). **이 무장용 0 명령만** L(axis 0)로 보낸다. 조향·승강 측정이 무효여도 무장까지는 가게 하고, 그 축의 명령이 `sensor_invalid` 로 거부되는 것을 기록하기 위해서다.
+- **무장**: 도구 ① 과 같다(운용자 요청 → `ready` 까지, 자동 재시도 없음). 다만 무장 직후의 0 명령은 `DRIVE` 가 아니라 **0 듀티 `COMMISSION`** 이다(시운전 빌드는 `DRIVE` 를 `wrong_build` 로 거부한다). **이 무장용 0 명령만** L(axis 0)로 보낸다. 조향·승강 측정이 무효여도 무장까지는 가게 하고, 그 축의 명령이 `sensor_invalid` 로 거부되는 것을 기록하기 위해서다. 예외(2026-11-25, `docs/plans/2026-11-25-bench-partial-parts.md` PR-B): 정체 문자열 끝이 ` lim=lr1 sa1` 인 `fw-single` 을 `--single-axis` 로 확인한 실행은 무장용 0 명령을 그 실행의 축으로 보낸다 — 그 이미지에서는 첫 0 명령이 무장의 축을 정하기 때문이다.
 - **순서**: 고른 축 0 듀티 0.3 s → 비영 `--seconds`(창·엔코더 비트·중단이면 일찍 0 으로) → 고른 축 0 듀티 0.5 s → 정리. 무장 뒤의 0 명령은 모두 **고른 축**으로 보낸다(Codex P2-3). 다른 축으로 0 을 보내면 고른 축이 그 채널의 정지 상태(`safe_brake=false` 면 코스트)로 바뀌고, 조향·승강은 센서 결함 검사 대상에서도 빠진다. 그래서 뒤쪽 0.5 s 는 고른 축이 0 듀티로 전기 제동되는 동안의 관찰이다. 비영 구간의 만료 상한·`HANDOVER_S`·고정 종료 시각 규칙은 도구 ① 3절과 같다.
 - **일찍 0 으로 바꾸는 경우**(모두 기록):
   - 비영 구동 직전에 무장 뒤 받은 표본 전체를 먼저 본다. 그 뒤로도 매 주기 새 표본 전체를 본다(한 번에 받은 표본 묶음 안의 창 이탈·복귀를 놓치지 않는다, 재검토 P2-4).
@@ -83,7 +83,7 @@ bringup.py commission --device D --out run.jsonl --axis L|R|M|H --duty X --secon
 
 - 생성자에 `commission: bool = False` 를 더한다. `client` 가 `BRINGUP` 일 때만 허용(그 밖은 `ValueError`).
 - `commission=True` 의 `build_refusal`: `commission_build` 가 아니면 `not_commission_build`, `outputs_locked` 면 `allow_locked` 일 때만 허용. 기존 `BRINGUP` 의 "시운전 빌드에 `DRIVE` 금지" 는 `commission=False` 에서 그대로다. 그래서 같은 호스트가 두 빌드에 두 종류 명령을 섞어 보낼 수 없다(양방향).
-- 무장 뒤 0 명령: `commission=True` 면 0 듀티 `COMMISSION`(axis 0, 유효시간 `zero_valid_ms`).
+- 무장 뒤 0 명령: `commission=True` 면 0 듀티 `COMMISSION`(axis 0, 유효시간 `zero_valid_ms`). axis 는 호스트의 `commission_zero_axis`(기본 0)이고, 도구는 `fw-single` 을 확인한 경로에서만 그 실행의 축으로 바꾼다.
 - 새 `commission(axis, duty_e4, expires_ns, now_ns) -> Blocked | None`: `drive()` 와 같은 검사(신선도·`ready`·빌드·만료·유효시간 상한·outbox)를 거쳐 `Commission` 을 넣는다. 유효시간 상한은 호스트 설정의 `cap_ms` 이고, 시운전 도구는 60 ms 설정을 쓴다. `commission=False` 면 `Blocked("not_commission_host")`. 거꾸로 `commission=True` 의 `drive()` 는 `Blocked("commission_host")`.
 - outbox 규칙은 `COMMISSION` 을 `DRIVE` 와 같이 다룬다: 만료·권한 세대가 지난 것은 쓰지 않고 버림, `drop_drives` 가 함께 버림, `DISARM` 요청이 버림, 쓴 기록(`_written`)에 남김.
 - 실행기 경로(`commission=False`, `client` REAL·HIL)는 바뀌지 않는다. 기존 시험이 그대로 통과해야 한다.

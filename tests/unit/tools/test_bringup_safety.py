@@ -837,3 +837,10 @@ def test_clear_faults_decides_on_this_runs_frames_and_the_newest_state(monkeypat
     assert res["result"] == expected, res
     assert sum(1 for w in b.writes if w.kind == "CLEAR_FAULTS") == clears_sent
     assert all(w.kind in ("DISARM", "CLEAR_FAULTS") for w in b.writes)
+
+
+def test_a_real_device_needs_the_product_string_whatever_the_baud():
+    """Codex PR-B round 2: --baud is set on USB CDC too, so it never excuses an unreadable product on an open
+    commissioning board; only the rehearsal bench's model (synthetic) has none by nature."""
+    assert bringup._product_required(None) is True
+    assert bringup._product_required({"bench": {"pts": "/dev/pts/3"}}) is False

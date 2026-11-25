@@ -13,6 +13,14 @@ from forklift_core.plant.commission import COMMISSION_DUTY_MAX, COMMISSION_HOLD_
 # The open commissioning image's limit generation (firmware build identity, gen_build_info.cmake): its wheels take
 # duty 1.0 and the validator's time ceiling. A board without the whole token is refused large values.
 LIMITS_TOKEN = "lim=lr1"
+# fw-single (partial-parts plan 2026-11-25 PR-B): the open commissioning image with one axis per arming ends its USB
+# product string with exactly these two tokens; the tool tells it apart by nothing else.
+SINGLE_AXIS_SUFFIX = ("lim=lr1", "sa1")
+# Tool-derived bypass names of a fw-single steering/lift run (never typed with --bypass): the firmware's M/H sensor
+# checks are off on that image, and a sensorless run has no window either. Both make the run no gate evidence.
+SINGLE_BYPASS_NAMES = ("m_sensor_checks_off", "sensorless")
+# A detached motor's M/H hold on fw-single may use the firmware's 2 s, kept TIME_MARGIN_S under it like the wheels.
+SINGLE_DETACHED_HOLD_MAX_S = 1.5
 OPEN_COMMISSION_PREFIX = "forklift-mcu commission OPEN "
 # The open commissioning build's wheel limits (board_config.c; tests/unit/plant/test_bench_limits.py pins them to
 # the source): duty 1.0, 0x7FFFFFFF us / 1000 ms.
@@ -48,7 +56,7 @@ def ignored_bits(names: tuple[str, ...], axis: int) -> FaultFlag:
     """The encoder bits the early stop leaves out for this wheel (none for steering and lift)."""
     out = FaultFlag(0)
     for n in names:
-        out |= BYPASS_BITS[n].get(axis, FaultFlag(0))
+        out |= BYPASS_BITS.get(n, {}).get(axis, FaultFlag(0))  # the fw-single names leave no encoder bit out
     return out
 
 
@@ -130,6 +138,12 @@ def large_refusal(ask: RunAsk, *, wheels_lifted: bool, vcc_watched: bool, synthe
     if abs(ask.duty) > VCC_WATCH_ABOVE + 1e-12 and not vcc_watched and not synthetic:
         return f"vcc: above duty {VCC_WATCH_ABOVE} watch VCC (--vcc-watched); step 0.3 -> 0.5 -> 0.7 -> 1.0"
     return None
+
+
+def single_axis_image(product: str | None) -> bool:
+    """Whether a USB product string is fw-single's: the open commissioning prefix and the exact suffix."""
+    return (product is not None and product.startswith(OPEN_COMMISSION_PREFIX)
+            and tuple(product.split()[-len(SINGLE_AXIS_SUFFIX):]) == SINGLE_AXIS_SUFFIX)
 
 
 def board_refusal(product: str | None) -> str | None:

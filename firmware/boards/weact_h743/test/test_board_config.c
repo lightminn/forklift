@@ -46,6 +46,18 @@ int main(void)
     CHECK(!c->hil_plant && !c->commission_build);
 #endif
     CHECK(!c->estop_wired); /* no e-stop net on schematic V1.0 */
+#if defined(FW_COMMISSION_SINGLE)
+    CHECK(c->commission_single_axis); /* fw-single (partial-parts plan 2026-11-25) */
+#if !defined(FW_CORE_SINGLE_AXIS)
+#error "FW_COMMISSION_SINGLE needs the core's FW_CORE_SINGLE_AXIS"
+#endif
+#else
+    CHECK(!c->commission_single_axis);
+#endif
+    /* The core refuses single-axis on anything but an open commissioning build. */
+    drive_config sa = *c;
+    sa.commission_single_axis = true;
+    CHECK(drive_config_valid(&sa) == (sa.commission_build && !sa.outputs_locked && !sa.hil_plant));
     /* Every locked build reports outputs_locked (bit6), the IWDG stall test build included (lead
        condition 2026-11-12): the real executor then refuses teleop and autonomy. The output
        build clears it and is refused as a commissioning build instead. */
@@ -87,6 +99,7 @@ int main(void)
     open.commission_build = false;
     open.hil_plant = false;
     open.estop_waived = false;
+    open.commission_single_axis = false; /* a normal build: single-axis is not for it */
     CHECK(!board_config_valid(&open));
     open.estop_waived = true;
     CHECK(board_config_valid(&open));
