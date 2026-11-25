@@ -944,3 +944,46 @@ def test_a_start_scan_never_goes_once_the_deadline_passes_during_the_offer():
     with pytest.raises(rss.SlamSourceFatal, match="no end state"):
         r.src.offer(scan)
     assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+
+
+# --- Codex 7c-1b-2a round 6 ----------------------------------------------------------------------------------------
+def test_a_start_scan_never_goes_once_the_deadline_passes_while_it_is_encoded_or_retried():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.now = r.src.target["deadline_ns"] - MS
+    r.hist_to(r.now)
+    plain = rl.encode_scan
+
+    def slow_encode(*a):
+        r.now += 2 * MS
+        return plain(*a)
+
+    rss.rl.encode_scan = slow_encode
+    try:
+        with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+            r.src.offer(r.scan(lag_ms=40))
+    finally:
+        rss.rl.encode_scan = plain
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.src.link.sock = Chunky(r.src.link.sock, [None])
+    r.now = r.src.target["deadline_ns"] - 5 * MS
+    r.hist_to(r.now)
+    r.src.offer(r.scan(lag_ms=40))  # its first write: EAGAIN, no byte out
+    r.now += 10 * MS
+    with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+        r.src.link.flush()  # a retry past the deadline: the gate refuses the first byte
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+
+
+def test_offers_alone_judge_the_reply_bound():
+    r = Rig()
+    r.started()
+    r.src.offer(r.scan(lag_ms=10))  # to the localized instance; no reply comes and no poll runs
+    r.now += int(1.1e9)
+    r.hist_to(r.now)
+    with pytest.raises(rss.SlamSourceFatal, match="no reply"):
+        r.src.offer(r.scan(lag_ms=10))

@@ -89,6 +89,7 @@ class RealSlamLink:
         self._sent = 0
         self.out_kind: str | None = None
         self._done = None
+        self._gate = None
         self.started_ns: int | None = None
         self._buffer = b""
         self.closed = False
@@ -97,10 +98,11 @@ class RealSlamLink:
     def busy(self) -> bool:
         return bool(self._out)
 
-    def write(self, frame: bytes, kind: str, done=None) -> bool:
+    def write(self, frame: bytes, kind: str, done=None, gate=None) -> bool:
+        """``gate()`` runs right before the frame's first byte goes (each try while none has gone) and may raise."""
         if self._out:
             raise SlamSourceFatal("link: a frame written over another")
-        self._out, self._sent, self.out_kind, self._done = frame, 0, kind, done
+        self._out, self._sent, self.out_kind, self._done, self._gate = frame, 0, kind, done, gate
         self.started_ns = int(self.clock())
         return self.flush()
 
@@ -110,6 +112,8 @@ class RealSlamLink:
         if self._out and self.overdue(int(self.clock())):
             raise SlamSourceFatal(f"link: a {self.out_kind} frame not written whole within {WRITE_WAIT_S} s")
         while self._out:
+            if self._sent == 0 and self._gate is not None:
+                self._gate()  # the frame's deadlines on the clock right before its first byte (round 6 P2)
             try:
                 n = self.sock.send(self._out)
             except (BlockingIOError, InterruptedError):
@@ -120,7 +124,7 @@ class RealSlamLink:
             self._sent += n
         if self.started_ns is not None and self.overdue(int(self.clock())):
             raise SlamSourceFatal(f"link: a {self.out_kind} frame not written whole within {WRITE_WAIT_S} s")
-        done, self._done = self._done, None
+        done, self._done, self._gate = self._done, None, None
         self.out_kind, self.started_ns = None, None
         if done is not None:
             done()
@@ -131,7 +135,7 @@ class RealSlamLink:
         if self._out and self.out_kind == kind and self._sent == 0:
             if self.overdue(int(self.clock())):
                 raise SlamSourceFatal(f"link: a {kind} frame not written whole within {WRITE_WAIT_S} s")
-            self._out, self.out_kind, self._done, self.started_ns = b"", None, None, None
+            self._out, self.out_kind, self._done, self._gate, self.started_ns = b"", None, None, None, None
             return True
         return False
 
@@ -384,7 +388,7 @@ class RealSlamSource:
                         self._fatal(f"cancel of {ident} not sent within {CANCEL_SEND_S} s")
                     self._event(t="cancel_sent", id=ident)
 
-                link.write(rl.encode_cancel(rl.Cancel(t["id"], c["reason"])), "cancel", sent)
+                link.write(rl.encode_cancel(rl.Cancel(t["id"], c["reason"])), "cancel", sent, self._gate_now)
             return
         if self._inflight is not None:
             return
@@ -399,7 +403,7 @@ class RealSlamSource:
                                                t["deadline_ns"]))
             self._all_deadlines(int(self.clock()))  # right before its first byte (round 5 P2-2)
             t["state"] = "sent"
-            link.write(frame, t["kind"])
+            link.write(frame, t["kind"], gate=self._gate_now)
             return
         if t is None or t["state"] not in ("scans", "ready") or self._waiting is None:
             return
@@ -435,7 +439,7 @@ class RealSlamSource:
                         flo_ns=w["flo_ns"], fhi_ns=w["fhi_ns"], measured=w["measured"],
                         odom_from_base=list(w["odom_from_base"]), target=ident, phase=phase)
 
-        link.write(rl.encode_scan(w["scan"], w["stamp_ns"]), "scan", sent)
+        link.write(rl.encode_scan(w["scan"], w["stamp_ns"]), "scan", sent, self._gate_now)
 
     # --- receiving ---------------------------------------------------------------------------------------------------
     def replies(self, now_ns: int) -> list:
@@ -478,6 +482,9 @@ class RealSlamSource:
                 self._fatal(f"cancel of {t['id']} not sent within {CANCEL_SEND_S} s")
         elif self._seeding() and t["deadline_ns"] is not None and now > t["deadline_ns"]:
             self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
+
+    def _gate_now(self) -> None:
+        self._all_deadlines(int(self.clock()))
 
     def _all_deadlines(self, now: int) -> None:
         """Every deadline on the clock now: outside a poll (an offer, a write) nothing has been read since, so a bound
