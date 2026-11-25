@@ -26,7 +26,7 @@
   - codec 은 고정 길이로 블록을 자르므로 바이트 하나가 빠지면 이후 capsule 이 블록 안에서 끝난다. 그래서 "블록을 완성한 읽기"가 아니라 메시지마다 바이트가 든 읽기 구간(`ArrivalSegment`)을 함께 넘기고, 해석기는 구간별로 그 읽기의 도착 시각을 맡긴다. 단위의 마지막 바이트가 든 읽기의 시각이 그 단위의 기준이 되어 재동기화 뒤에도 정확하다. 도착 시각이 없는 바이트가 든 메시지의 표본은 exact 가 아니고, 그런 표본이 든 스캔(버퍼 단위)은 `scan_sdk` 에 나가지 않는다.
   - codec 은 잠금 안에서 메시지를 복사해 넘기고, 해석기의 해석과 enable·disable·reset 은 잠금 하나를 쓴다(스캔 재시작 경합). 노드는 시작 뒤 150 ms 안의 표본이 든 스캔을 내지 않는다.
   - 업스트림 버그 둘을 고쳤다: UltraDense 표본 지연의 `(31 - sampleIdx)`(표본 64 개라 뒤 절반이 unsigned 로 감김 → `63 - sampleIdx`), transceiver 종료 때 큐의 `new Buffer` 를 `delete[]` 로 지움.
-  - 수신 기록 줄: `R rx_seq rx_us bytes decode_us`, `C rx_seq unit_seq ans_type exact`, `D <넘친 줄>`, 마지막 `E <넘친 줄>`.
+  - 수신 기록 줄: `R rx_seq rx_us bytes decode_us`, `C rx_seq unit_seq ans_type exact`, `D <넘친 줄>`, 마지막 `E <넘친 줄> <종료 때 버린 읽기>`.
   - 기준 이미지: `deploy/ros2/scan_image_base.txt` 의 아키텍처별 참조와 이미지 ID 가 태그 입력에 들어가고, 빌드는 그 ID 로 만든 태그 위에서 한다.
 
 ## 3. 호스트 쪽 — 한 판정을 모든 소비자가

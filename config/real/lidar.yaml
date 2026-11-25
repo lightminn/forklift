@@ -31,5 +31,5 @@ timing:
 # patches and deploy/ros2/Dockerfile.scan; the build entry points stop when it differs, tools/ros2_dev.sh and the
 # hwday scripts run it. A timing bound names the image ID that ran (timing.applies_to.image_id), never this tag.
 scan_image:
-  amd64: forklift/ros2-scan:jazzy-s2fb1255d
-  arm64: forklift/ros2-scan:jazzy-s4a3eed9e-arm64
+  amd64: forklift/ros2-scan:jazzy-seb850403
+  arm64: forklift/ros2-scan:jazzy-sccf9d154-arm64

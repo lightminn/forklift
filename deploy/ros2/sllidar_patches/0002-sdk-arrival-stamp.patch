@@ -27,7 +27,8 @@ thread's byte arrival. Applied after 0001 (deploy/ros2/Dockerfile.scan), against
   and warned (throttled). The driver is deleted with the node: its threads end before exit.
 - FORKLIFT_SDK_RX_LOG=<file> (bench only): each read (R rx_seq rx_us bytes decode_us), each unit that passed its
   checksum (C rx_seq unit_seq ans_type exact), queued and written by a thread of its own; lines that find the queue
-  full are counted (D <n>), and 'E <n>' closes a complete record.
+  full are counted (D <n>), and 'E <dropped> <discarded>' closes a complete record (discarded: reads still queued at
+  close, never decoded).
 - test/forklift_arrival_test.cpp (ctest, BUILD_TESTING; AddressSanitizer on x86_64): the real transceiver, codec,
   delivery and handlers on a fake channel, reads 80 ms apart, the decoder held 500 ms; a lost byte, a restart during a
   held callback, a reset while the listener holds its message, reads still queued at close.
@@ -511,10 +512,10 @@ index 008f544..5546d3d 100644
  
 diff --git a/sdk/src/forklift_arrival.h b/sdk/src/forklift_arrival.h
 new file mode 100644
-index 0000000..012692b
+index 0000000..057d9e8
 --- /dev/null
 +++ b/sdk/src/forklift_arrival.h
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,145 @@
 +/*
 + * forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 2): sample times from the receive
 + * thread's byte arrival.
@@ -527,7 +528,8 @@ index 0000000..012692b
 + *     C <rx_seq> <unit_seq> <ans_type> <exact>        one sample unit (capsule, node) that passed its checksum, the
 + *                                                     read whose arrival it took, and whether that is exact (its
 + *                                                     last byte ended the block that read completed)
-+ *     E <dropped>                                     the record closed (written last: a record without it was cut)
++ *     E <dropped> <discarded>                         the record closed (written last: a record without it was cut);
++ *                                                     discarded = reads still queued at close, never decoded (no R)
 + * - deliverDecoded: the driver's (and the SDK test's) one way to hand a decoded message to the unpacker with the
 + *   arrival of the read that completed it.
 + */
@@ -557,6 +559,11 @@ index 0000000..012692b
 +
 +    bool enabled() const { return _file != nullptr; }
 +
++    // reads still queued when a transceiver closed: never decoded, so never in an R line (counted with or without a
++    // record, so the test can see it)
++    void discarded(unsigned long long n) { _discarded += n; }
++    unsigned long long discarded() const { return _discarded.load(); }
++
 +    void line(const char* fmt, unsigned long long a, unsigned long long b, unsigned long long c,
 +              unsigned long long d = 0, bool four = false)
 +    {
@@ -582,7 +589,7 @@ index 0000000..012692b
 +        _wake.notify_all();
 +        if (_writer.joinable()) _writer.join();
 +        _flush();
-+        std::fprintf(_file, "E %llu\n", _dropped);
++        std::fprintf(_file, "E %llu %llu\n", _dropped, _discarded.load());
 +        std::fclose(_file);
 +    }
 +
@@ -629,6 +636,7 @@ index 0000000..012692b
 +    std::condition_variable _wake;
 +    std::vector<std::string> _pending;
 +    unsigned long long _dropped = 0;
++    std::atomic<unsigned long long> _discarded{0};
 +    bool _stop = false;
 +    std::thread _writer;
 +};
@@ -654,7 +662,7 @@ index 0000000..012692b
 +
 +}}}  // namespace sl::internal::forklift
 diff --git a/sdk/src/sl_async_transceiver.cpp b/sdk/src/sl_async_transceiver.cpp
-index c8033a5..3b4d4d0 100644
+index c8033a5..08f8a08 100644
 --- a/sdk/src/sl_async_transceiver.cpp
 +++ b/sdk/src/sl_async_transceiver.cpp
 @@ -42,6 +42,7 @@
@@ -665,8 +673,11 @@ index c8033a5..3b4d4d0 100644
  
  
  
-@@ -252,7 +253,7 @@ void AsyncTransceiver::unbindAndClose()
+@@ -250,9 +251,10 @@ void AsyncTransceiver::unbindAndClose()
+     _bindedChannel = NULL;
  
+ 
++    forklift::RxLog::instance().discarded(_rxQueue.size());  // forklift patch 0002: reads never decoded
      for (std::list< Buffer* >::iterator itr = _rxQueue.begin(); itr != _rxQueue.end(); ++itr)
      {
 -        delete [] *itr;
@@ -674,7 +685,7 @@ index c8033a5..3b4d4d0 100644
      }
      _rxQueue.clear();
  
-@@ -333,6 +334,9 @@ sl_result AsyncTransceiver::_proc_rxThread()
+@@ -333,6 +335,9 @@ sl_result AsyncTransceiver::_proc_rxThread()
          decodeBuffer->data = new _u8[hintedSize];
  
          decodeBuffer->size = _bindedChannel->read(decodeBuffer->data, hintedSize);
@@ -684,7 +695,7 @@ index c8033a5..3b4d4d0 100644
  #ifdef _DEBUG_DUMP_PACKET
          printf("Revc: %d\n", decodeBuffer->size);
  #endif
-@@ -398,7 +402,11 @@ sl_result AsyncTransceiver::_proc_decoderThread()
+@@ -398,7 +403,11 @@ sl_result AsyncTransceiver::_proc_decoderThread()
          _rxLocker.unlock();
  
          //cout<<"decoding "<< bufferToDecode->size <<" bytes of data"<<endl;
@@ -1174,10 +1185,10 @@ index c5def68..d416191 100644
  void ExitHandler(int sig)
 diff --git a/test/forklift_arrival_test.cpp b/test/forklift_arrival_test.cpp
 new file mode 100644
-index 0000000..5ea0ebb
+index 0000000..2ff8d5a
 --- /dev/null
 +++ b/test/forklift_arrival_test.cpp
-@@ -0,0 +1,455 @@
+@@ -0,0 +1,457 @@
 +// forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 6): the SDK's sample times come from
 +// the receive thread's byte arrival. The real AsyncTransceiver, RPLidarProtocolCodec, the driver's delivery
 +// (forklift::deliverDecoded) and the unpacker's Dense / UltraDense handlers, fed by a fake channel that releases
@@ -1578,8 +1589,10 @@ index 0000000..5ea0ebb
 +    r.rx->openChannelAndBind(&r.ch);
 +    _u64 at = r.t0 + 4 * READ_GAP_US + 30 * MS;
 +    while (getus() < at) std::this_thread::sleep_for(std::chrono::milliseconds(2));
++    const unsigned long long before = forklift::RxLog::instance().discarded();
 +    r.stop();  // closes during the hold
-+    CHECK(true, "close with queued reads");
++    // the reads never decoded are counted for the receive record's last line (E <dropped> <discarded>, round 3 P2)
++    CHECK(forklift::RxLog::instance().discarded() > before, "close: queued reads not counted as discarded");
 +}
 +
 +// A scan restart (disable / enable on the control thread) while a decode is inside a sample callback: disable waits
