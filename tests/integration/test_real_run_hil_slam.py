@@ -27,9 +27,25 @@ def _bridge(tmp_path, **kw):
     return b
 
 
-def _runner(model, tmp_path, bridge, duration_s, model_args=()):
-    return Runner(model, tmp_path, duration_s=duration_s, model_args=model_args,
-                  extra_args=[f"--hil-slam-bridge={bridge.path}"])
+def _runner(model, tmp_path, bridge, duration_s, model_args=(), config=None):
+    extra = [f"--hil-slam-bridge={bridge.path}"] + ([f"--config={config}"] if config is not None else [])
+    return Runner(model, tmp_path, duration_s=duration_s, model_args=model_args, extra_args=extra)
+
+
+FAR_PALLET = [3.6, 0.0, 0.0]
+
+
+def _far_config(tmp_path):
+    """The HIL file with the pallet 1 m further (Codex 7c-1b-2b round 2): the approach then has about 1.9 m of
+    straight run before the depth-frame wait at 1.0 m, where the d5_pocket bypass is not needed -- so a mission moves
+    with no bypass and the declaration's cap can be told from the bypass's."""
+    from test_real_run_hil import HIL_YAML
+
+    text = HIL_YAML.read_text()
+    assert "check_pallet_pose: [2.6, 0.0, 0.0]" in text
+    out = tmp_path / "s10a_hil_far.yaml"
+    out.write_text(text.replace("check_pallet_pose: [2.6, 0.0, 0.0]", f"check_pallet_pose: {FAR_PALLET}"))
+    return out
 
 
 def _operator_start(c, timeout=15.0):
@@ -78,9 +94,7 @@ def test_s10_a_runs_to_the_lift_on_the_real_slam_source(mcu_model, tmp_path):
         _lease(c)
         _mission(c)
     finally:
-        c.close()
-        code = run.finish(signal.SIGTERM)
-        bridge.stop()
+        code = _finish(run, c, bridge)
     rows = run.rows()
     end = complete(rows, code)
     assert [e["reason"] for e in end["results"]] == ["s10_lifted"], end
@@ -111,15 +125,8 @@ def _written_moving(rows):
 
 
 def _approach(c, seconds):
-    """A mission driven for ``seconds`` (the approach's moving DRIVEs are judged, not the lift). The HIL run has no
-    depth source, so a mission moves only with the d5_pocket bypass (RunSources.depth None: "D5 only by the d5_pocket
-    bypass"), whose own cap is also 0.06 m/s:
-    this run cannot tell the declaration's cap from the bypass's -- the loop-rig tests do (test_real_loop_relocalize's
-    cap tests); here the declared session's writes are checked within the cap with the declaration's mark shown."""
-    r = c.ask("check_bypass", check="d5_pocket", on=True)
-    assert r["t"] == "ack", r
-    c.wait(lambda s: "d5_pocket" in s["bypassed"], 5)
-    r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
+    """A mission with no bypass on the far pallet, driven for ``seconds``: the approach's straight run is judged."""
+    r = c.ask("pallet_register", pallet_id="P-S10", pose=FAR_PALLET)
     assert r["t"] == "ack", r
     time.sleep(0.8)
     r = _operator_start(c)
@@ -130,17 +137,43 @@ def _approach(c, seconds):
     time.sleep(seconds)
 
 
-def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epoch_replies(mcu_model, tmp_path):
+def _finish(run, c, bridge):
+    c.close()
+    bridge.closing()
+    code = run.finish(signal.SIGTERM)
+    bridge.stop()
+    return code
+
+
+def test_an_undeclared_approach_on_the_real_source_drives_past_the_declared_cap(mcu_model, tmp_path):
+    """The comparison for the declared run below: no declaration and no bypass -- the approach goes above 0.06."""
+    bridge = _bridge(tmp_path)
+    run = _runner(mcu_model, tmp_path, bridge, 90, config=_far_config(tmp_path))
+    c = Console(run.port)
+    try:
+        _lease(c)
+        _approach(c, 12.0)
+    finally:
+        code = _finish(run, c, bridge)
+    rows = run.rows()
+    end = complete(rows, code)
+    assert end["reason"] == "signal" and end["closing"] == "confirmed" and bridge.error is None, end.get("reason")
+    moving = _written_moving(rows)
+    assert moving and max(abs(v) for v in moving) > 0.06 + 1e-9, moving[:5]
+
+
+def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_model, tmp_path):
     """A generation opened by a 400 ms STATE silence; the bridge holds every reply 0.09 s, so a seed accepted with a
-    scan in flight gets that old instance's reply after it -- dropped, never evidence (three seeds: at least one).
-    Declaration 1: its seed held 3 s, the lease
-    released while the bridge reports seeding -- the attempt ends, the seed runs to ready and completes nothing.
-    Declaration 2: a STOP while its seed runs -- refused; after the rearm a third declaration is refused
-    seed_in_progress until the seed's ready, which completes nothing. Declaration 3 completes on its own seed (the
-    session marked declared); the approach after it writes every moving DRIVE within 0.06 m/s."""
-    bridge = _bridge(tmp_path, seed_delay_s=3.0, reply_delay_s=0.09)
+    scan in flight gets the stopped instance's reply after it -- dropped, never evidence (three seeds: at least one).
+    Declaration 1: its seed held 3 s, the lease released while the bridge reports seeding -- the attempt ends, the
+    seed runs to ready and completes nothing. Declaration 2: a STOP while its seed runs -- refused; after the rearm a
+    third declaration is refused seed_in_progress (the bridge holds that seed's end state until it is seen), the
+    seed's ready then completes nothing. Declaration 3 completes on its own seed; the approach after it, with no
+    bypass, writes every moving DRIVE within 0.06 m/s (above it without the declaration: the test before)."""
+    bridge = _bridge(tmp_path, seed_delay_s=3.0, reply_delay_s=0.09, hold_end=(3,))
     run = _runner(mcu_model, tmp_path, bridge, 200, model_args=("--state-silent-at-ms", str(SILENT_AT_MS),
-                                                               "--state-silent-ms", str(SILENT_MS)))
+                                                               "--state-silent-ms", str(SILENT_MS)),
+                  config=_far_config(tmp_path))
     c = Console(run.port)
     try:
         _lease(c)
@@ -159,7 +192,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epo
         time.sleep(0.5)
         assert c.status["relocalize_generation"] == gen and c.status["relocalize"]["state"] == "refused"
         _lease(c)
-        # 2: a STOP while the seed runs
+        # 2: a STOP while the seed runs; its end state held until the second declaration has been refused
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
         _until(lambda: _sent(bridge, "seeding", 3), 10, "seed 3 seeding")
@@ -171,9 +204,9 @@ def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epo
         r = c.ask("rearm")
         assert r["t"] == "ack", r
         c.wait(lambda s: s.get("mode") == "PAUSED" and s.get("standing"), 10)
-        if not _sent(bridge, "ready", 3):
-            r = c.ask("relocalize_declare", generation=gen)
-            assert r["t"] == "reject" and r["reason"] == "seed_in_progress", r  # one seed at a time
+        r = c.ask("relocalize_declare", generation=gen)
+        assert r["t"] == "reject" and r["reason"] == "seed_in_progress", r  # one seed at a time
+        bridge.release(3)
         _until(lambda: _sent(bridge, "ready", 3), 15, "seed 3 ready")
         time.sleep(0.5)
         assert c.status["relocalize_generation"] == gen and c.status["relocalize"]["state"] == "refused"
@@ -183,19 +216,18 @@ def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epo
         s = c.wait(lambda s: s["relocalize"]["attempt"] == r["attempt"] and s["relocalize"]["state"] != "waiting", 30)
         assert s["relocalize"]["state"] == "declared", s["relocalize"]
         assert s["relocalize_generation"] is None and "relocalize" in s["bypassed"] and s["manual_only"] is None
-        assert "slam" not in s["bypassed"]
-        _approach(c, 15.0)
+        assert "d5_pocket" not in s["bypassed"] and "slam" not in s["bypassed"]
+        _approach(c, 12.0)
     finally:
-        c.close()
-        code = run.finish(signal.SIGTERM)
-        bridge.stop()
+        code = _finish(run, c, bridge)
     rows = run.rows()
-    end = complete(rows, code, expect_code=code)
+    end = complete(rows, code)
+    assert end["reason"] == "signal" and end["closing"] == "confirmed", end.get("reason")
     assert bridge.error is None
     seeds = [g for g in bridge.got if g[1] == "Seed"]
     assert [g[2] for g in seeds] == [2, 3, 4] and not any(g[1] == "Cancel" for g in bridge.got)
     moving = _written_moving(rows)
-    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # within the cap (see _approach)
+    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # the declaration's own cap (no bypass)
     assert end["slam_counts"].get("slam_old_instance_reply", 0) >= 1, end["slam_counts"]  # old replies dropped
     assert end["slam_counts"].get("slam_end_after_cancel", 0) == 0, end["slam_counts"]
 
@@ -212,6 +244,7 @@ def test_a_bridge_fault_ends_the_run_as_a_source_fault(mcu_model, tmp_path):
         time.sleep(1.0)
     finally:
         c.close()
+        bridge.closing()
         code = run.finish(signal.SIGTERM, timeout=60)
         bridge.stop()
     rows = run.rows()

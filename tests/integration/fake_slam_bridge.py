@@ -4,6 +4,8 @@ thread of the test -- ``hello`` / ``seed`` answered ``seeding`` then ``ready_for
 instance's first scan's odometry, the seventh start scan followed by the end state (``seed_end`` for seeds),
 ``cancel`` answered ``void``. ``fault_after`` scans of a localized instance: a ``fault`` state instead of a reply.
 ``reply_delay_s``: each reply held that long (the next scan waits for it, as the bridge's one scan in flight).
+``hold_end``: ids whose end state waits for ``release(id)``. ``closing()``: the test is ending the run -- a broken
+connection after it ends the thread quietly; before it, it is the bridge's error.
 Not slam_toolbox: nothing here is evidence of matching or of the bridge's timing."""
 
 from __future__ import annotations
@@ -20,10 +22,13 @@ from forklift_core.localization.slam_pose import compose, invert
 
 
 class FakeBridge(threading.Thread):
-    def __init__(self, path, *, seed_delay_s=0.0, seed_end="ready", fault_after=None, reply_delay_s=0.0):
+    def __init__(self, path, *, seed_delay_s=0.0, seed_end="ready", fault_after=None, reply_delay_s=0.0,
+                 hold_end=()):
         super().__init__(daemon=True)
         self.path, self.seed_delay_s, self.seed_end, self.fault_after = str(path), seed_delay_s, seed_end, fault_after
         self.reply_delay_s = float(reply_delay_s)
+        self._held = {int(i): threading.Event() for i in hold_end}
+        self._closing = threading.Event()
         self.got: list = []  # (monotonic s, frame type name, id or scan id)
         self.sent: list = []  # (monotonic s, kind, id)
         self.error = None
@@ -38,6 +43,12 @@ class FakeBridge(threading.Thread):
         self._timers: list = []  # (due monotonic s, fn)
         self._cur = None
         self._ready_scans = 0
+
+    def release(self, ident):
+        self._held[int(ident)].set()
+
+    def closing(self):
+        self._closing.set()
 
     def stop(self):
         self._halt.set()
@@ -74,11 +85,10 @@ class FakeBridge(threading.Thread):
                 r, _, _ = select.select([self._conn], [], [], 0.005)
                 if not r:
                     continue
-                try:
-                    chunk = self._conn.recv(1 << 16)
-                except ConnectionResetError:
-                    return  # the executor ended (its process closed the socket): the session's end, not an error
+                chunk = self._conn.recv(1 << 16)
                 if not chunk:
+                    if not self._closing.is_set():
+                        self.error = "the executor closed the connection while the run went on"
                     return
                 self._buf += chunk
                 while len(self._buf) >= 4:
@@ -87,8 +97,19 @@ class FakeBridge(threading.Thread):
                         break
                     body, self._buf = self._buf[4:4 + n], self._buf[4 + n:]
                     self._on(rl.decode(body))
+        except (BrokenPipeError, ConnectionResetError) as exc:
+            if not self._closing.is_set():
+                self.error = repr(exc)  # broken while the run went on
         except Exception as exc:  # noqa: BLE001 -- the test reads it
             self.error = repr(exc)
+
+    def _end(self, c):
+        held = self._held.get(c["id"])
+        if held is not None and not held.is_set():
+            self._timers.append((time.monotonic() + 0.01, lambda c=c: self._end(c) if self._cur is c else None))
+            return
+        self._state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
+        c["localized"] = c["end"] == "ready"
 
     def _on(self, f):
         now = time.monotonic()
@@ -124,8 +145,7 @@ class FakeBridge(threading.Thread):
                     return  # the instance went (a seed or a cancel) while the reply was held
                 self._send(frame)
                 if last:
-                    self._state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
-                    c["localized"] = c["end"] == "ready"
+                    self._end(c)
 
             if self.reply_delay_s > 0:
                 self._timers.append((now + self.reply_delay_s, answer))

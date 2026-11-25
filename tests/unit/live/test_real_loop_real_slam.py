@@ -29,6 +29,13 @@ class AutoBridge(Bridge):
     def __init__(self, sock, end="ready"):
         super().__init__(sock)
         self.end, self.cur = end, None
+        self.hold, self.held = False, []  # hold: the next replies are kept until release()
+
+    def release(self):
+        self.hold = False
+        for s in self.held:
+            self.reply(s, corr=self.cur["corr"])
+        self.held = []
 
     def pump(self):
         for f in self.frames():
@@ -43,6 +50,9 @@ class AutoBridge(Bridge):
                 if c["corr"] is None:
                     c["corr"] = tuple(compose(c["pose"], invert(f.scan.odom_from_base)))
                 c["n"] += 1
+                if self.hold:
+                    self.held.append(f)
+                    continue
                 self.reply(f, corr=c["corr"])
                 if c["n"] == 7 and c["end"] != "never":
                     self.state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
@@ -150,3 +160,25 @@ def test_a_break_in_a_tick_that_never_polls_the_source_still_cancels_the_seed():
     r.tick(5)
     assert any(isinstance(f, rl.Cancel) and f.reason == "odom_break" for f in bridge.got)
     assert not src.can_confirm()
+
+
+
+def test_a_reply_of_the_same_instance_from_before_a_new_epoch_is_dropped_by_the_loop():
+    """Codex 7c-1b-2b round 2 P2-3: a relocalization keeps the instance; the reply of a scan acquired before the new
+    epoch, released after it within the 0.25 s limit, passes the source with its old epoch and the loop's epoch
+    filter drops it -- never the applied correction's provenance."""
+    r = rig()
+    src, bridge, marks = real(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    r.tick(10)
+    bridge.hold = True
+    run_until(r, lambda rec: bridge.held, 20)
+    before = r.loop.reloc_dropped["epoch"]
+    gen = open_generation(r)
+    assert r.loop.reloc_gen == gen
+    bridge.release()
+    r.tick(2)
+    assert r.loop.reloc_dropped["epoch"] > before
+    prov = r.loop.provenance
+    assert prov is None or prov[0] == r.loop.epoch
+    assert not marks
