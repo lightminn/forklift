@@ -133,7 +133,7 @@ class RealSession:
         cmds = self.core.commands
         return cmds.status in FINAL and cmds.mission_id is not None and cmds.mission_id != self._ended_id
 
-    def end_mission(self, t: float, *, lift_m: float | None, release_allowed) -> dict | None:
+    def end_mission(self, t: float, *, lift_m: float | None, release_allowed, bypassed=None) -> dict | None:
         """Collect the mission the commands ended, once: the lift held at its measured place, the jobs dropped, the
         open stops closed, the clock taken, the end reset (the loop's release decision passed), the result kept."""
         core, cmds = self.core, self.core.commands
@@ -158,11 +158,13 @@ class RealSession:
             self.results.append({"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason,
                                  "ended_s": float(t), "pallet_id": None if mission is None else mission.pallet_id,
                                  "destination_id": None if mission is None else mission.destination_id,
-                                 "clock": clock, "collect_failed": self.collect_failed})
+                                 "clock": clock, "collect_failed": self.collect_failed,
+                                 **({} if bypassed is None else {"bypassed": list(bypassed)})})
             raise
         entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": float(t),
                  "pallet_id": None if mission is None else mission.pallet_id,
-                 "destination_id": None if mission is None else mission.destination_id, "clock": clock}
+                 "destination_id": None if mission is None else mission.destination_id, "clock": clock,
+                 **({} if bypassed is None else {"bypassed": list(bypassed)})}
         self.results.append(entry)
         return entry
 
@@ -688,7 +690,7 @@ class RealLoop:
                         # a DISARM taken after this voids it (impl round 3: the taken ones counted, not the queue)
                         "disarms": self._disarms_taken,
                         # 6.1, 2: the declaration completes on its seed's end state (a source that reports them)
-                        "seed_states": self._seed_states(), "seed_epoch": None, "seed_end": None}
+                        "seed_states": self._seed_states(), "seed_epoch": None, "seed_id": None, "seed_end": None}
         if self.real_layer is not None:
             self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
         if self.attempt["kind"] == "confirm" and self._epoch_mode:
@@ -707,11 +709,15 @@ class RealLoop:
     def _seed_states(self) -> bool:
         return self._epoch_mode and callable(getattr(self.slam_source, "seed_state", None))
 
-    def _attempt_limit_s(self, a: dict) -> float:
-        """6.1, 2: a declaration on a source with seed end states has its own limit, apart from the confirmation's."""
+    def _attempt_deadline(self, a: dict) -> float:
+        """6.1, 2: an attempt's last instant (core s). A confirmation, and a declaration on a source without seed end
+        states, has 3 s from its acceptance; a declaration on one with them has the 20 s seed limit plus 0.5 s from
+        its acceptance, and once its end state is seen the commit within 0.5 s of it (Codex 7c-1b-1 round 1 P3)."""
         if a["kind"] == "declare" and a.get("seed_states"):
-            return SEED_WAIT_S + DECLARE_COMMIT_S
-        return RELOCALIZE_WAIT_S
+            limit = a["t"] + SEED_WAIT_S + DECLARE_COMMIT_S
+            end = a.get("seed_end")
+            return limit if end is None else min(limit, end[2] + DECLARE_COMMIT_S)
+        return a["t"] + RELOCALIZE_WAIT_S
 
     def _latch_blocks(self) -> bool:
         return self.manual_only is not None and "slam" not in self._tick_bypass
@@ -778,7 +784,7 @@ class RealLoop:
         lay = self.real_layer
         if why is None and closing and lay is not None and (not lay.worker.alive or not lay.ok(t_now)):
             why = "relocalize_voided:layer"
-        if why is None and t_now - a["t"] > self._attempt_limit_s(a):
+        if why is None and t_now > self._attempt_deadline(a):
             why = "relocalize_timeout"
         prov = self.provenance
         if why is None and closing and a["kind"] == "confirm" and not self._bypassed("slam") and (
@@ -801,8 +807,9 @@ class RealLoop:
                 self._attempt_end(t, "refused", why)
                 return
             self._new_epoch(t)
-            self.slam_source.seed(self.epoch, target, t)
-            a["seed_epoch"] = self.epoch
+            seed_id = self.slam_source.seed(self.epoch, target, t)
+            # issued: never a second seed for this attempt (Codex 7c-1b-1 round 1 P2-3)
+            a["seed_epoch"], a["seed_id"] = self.epoch, seed_id
             # the mark, the cap and the record from the seed on, before anything else can fail (impl rounds 1-2)
             self.declared_epoch = self.link.a.session_epoch
             self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
@@ -812,7 +819,11 @@ class RealLoop:
                                 epoch=self.epoch, attempt=None)
         tr = self._tracker()
         before = None if tr is None else tr.applied
-        self.core.slam_replies(t, [(reply, {"source": "operator_declared"}, None, None)], loaded)
+        try:
+            self.core.slam_replies(t, [(reply, {"source": "operator_declared"}, None, None)], loaded)
+        except Exception:
+            self._attempt_end(t, "refused", "relocalize_declare_failed")  # seeded once, never retried (round 1 P2-3)
+            raise
         self._last_stamp = float(t) if self._last_stamp is None else max(self._last_stamp, float(t))
         if tr is not None and tr.applied is not before:
             self.provenance = (self.epoch, None, "operator_declared", float(t))
@@ -849,8 +860,10 @@ class RealLoop:
             out.append(item)
             if reply.status == "processed":
                 has_received = True
-                ns = self.start_ns + int(round(lo * 1e9))  # the age from the first beam's earliest instant
-                self._fresh_ns = ns if self._fresh_ns is None else max(self._fresh_ns, ns)
+                # the age from this reply's first beam's earliest instant, this reply's own (Codex 7c-1b-1 round 1 P1:
+                # a later reply's Flo may be earlier than an older one's; the evidence is the newest reply, as the
+                # provenance is, never a max over replies)
+                self._fresh_ns = self.start_ns + int(round(lo * 1e9))
                 a = self.attempt
                 if (a is not None and a["kind"] == "confirm" and getattr(reply, "attempt", None) == a["attempt"]
                         and lo >= a["t"]):
@@ -864,7 +877,7 @@ class RealLoop:
         if not self._epoch_mode:
             self.core.slam_replies(t, raw, loaded)
             return
-        if self.attempt is not None and self.attempt["kind"] == "declare" and not self.attempt["seeded"]:
+        if self.attempt is not None and self.attempt["kind"] == "declare" and self.attempt["seed_epoch"] is None:
             self._declare_apply(now_ns, t, loaded)
         passed = self._filter_replies(t, raw)
         tr = self._tracker()
@@ -909,18 +922,23 @@ class RealLoop:
                 failed = "relocalize_stale"
         elif prov is None or prov[0] != self.epoch:
             failed = "relocalize_no_reply"
+        elif a.get("seed_states") and a["seed_epoch"] is None:
+            failed = "relocalize_seeding"  # not issued yet (a STOP/DISARM waiting): nothing to ask (round 1 P2-2)
         elif a.get("seed_states"):
             # 6.1, 2: the seed's end state (ready / not_localized) completes it; void refuses it at once
             end = self.slam_source.seed_state(a["seed_epoch"])
             kind, reason = (None, None) if end is None else end
             if kind == "void":
-                self._attempt_end(t, "refused", f"relocalize_voided:seed:{reason}")
+                # the limit first (impl round 1 P2-1): a void seen past it is the declaration's timeout
+                self._attempt_end(t, "refused", "relocalize_timeout" if t > self._attempt_deadline(a)
+                                  else f"relocalize_voided:seed:{reason}")
                 return
             if kind in ("ready", "not_localized"):
                 if a["seed_end"] is None:
                     a["seed_end"] = (kind, reason, float(t))
                     self.reloc_events.append({"t": float(t), "event": "seed_end", "kind": kind, "reason": reason,
-                                              "attempt": a["attempt"], "epoch": a["seed_epoch"]})
+                                              "attempt": a["attempt"], "epoch": a["seed_epoch"],
+                                              "seed_id": a.get("seed_id")})
             else:
                 failed = "relocalize_seeding"
         tr = self._tracker()
@@ -941,7 +959,7 @@ class RealLoop:
             if lay is None or not lay.ok(t) or lay.installing(ignore_correction=False) or newest is None \
                     or newest < a["t"]:
                 failed = "relocalize_layer"
-        if t - a["t"] > self._attempt_limit_s(a):
+        if t > self._attempt_deadline(a):
             # the limit first (impl round 1 P2-1); a seed still running is the declaration's own timeout
             self._attempt_end(t, "refused", "relocalize_timeout" if failed in (None, "relocalize_seeding") else failed)
             return
@@ -968,7 +986,7 @@ class RealLoop:
             # 6.1, 2: the session is manual-only from here to its end (lifted for a start only by the slam bypass)
             self.manual_only = {"reason": "not_localized", "session_epoch": self.link.a.session_epoch,
                                 "generation": a["generation"], "attempt": a["attempt"], "epoch": a["seed_epoch"],
-                                "since": float(t)}
+                                "seed_id": a.get("seed_id"), "since": float(t)}
             self.reloc_events.append({"t": float(t), "event": "manual_only", **self.manual_only})
         self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
 
@@ -2145,12 +2163,11 @@ class RealLoop:
     def _collect(self, now_ns: int, t: float, rec: TickRecord) -> None:
         if self.session.ended_unclaimed():
             release = self._release_allowed(now_ns)
-            entry = self.session.end_mission(t, lift_m=self._measured_lift(), release_allowed=release)
-            if entry is not None:
-                # PR 7 design 6.1, 2: the bypasses applied during this mission -- an aggregate of F1 / SLAM evidence
-                # leaves out the runs that had any (a session's end state cannot tell one turned off mid-session)
-                entry["bypassed"] = sorted(self._mission_bypass | self._shown_bypass())
-            self._mission_bypass = set()
+            # PR 7 design 6.1, 2: the bypasses applied during this mission, in its result whether the collection
+            # holds or fails (Codex 7c-1b-1 round 1 P2-4) -- an aggregate of F1 / SLAM evidence leaves out the runs
+            # that had any (a session's end state cannot tell one turned off mid-session)
+            used, self._mission_bypass = sorted(self._mission_bypass | self._shown_bypass()), set()
+            self.session.end_mission(t, lift_m=self._measured_lift(), release_allowed=release, bypassed=used)
             # S10's end leaves the authority through its own control stop (STOP_PENDING); any other end latches
             if self.permit.state in (ra.ARMING, ra.READY, ra.DRIVING):
                 self.permit.mission_ended(now_ns, self.core.commands.end_reason or "end")
