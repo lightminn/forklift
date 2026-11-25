@@ -639,3 +639,32 @@ def test_generation_numbers_never_go_back_when_boundaries_merge():
     s.push(505 * MS, "a", 405_000, "hardware_clock", G)  # overflows: the head merges
     s.push(510 * MS, "a", 410_000, "hardware_clock", G)
     assert s.generation() >= first
+
+
+# --- Codex 7b round 6 ------------------------------------------------------------------------------------------------
+def test_a_loss_merged_into_a_later_overflow_keeps_its_reason():
+    """P2: queue_max 1 -- lost at 107 ms, then 120 and 135 ms push the queue over: the loss came first."""
+    s, clock = src(replace(MEASURED, queue_max=1), record=True)
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.samples(100 * MS, 64)
+    clock.ns = 107 * MS
+    s.lost("unplug")
+    s.push(120 * MS, "a", 20_000, "hardware_clock", G)
+    s.push(135 * MS, "a", 35_000, "hardware_clock", G)  # pushes 120 out: the hole merges with the loss
+    s.samples(200 * MS, 64)
+    assert s.stopped == "lost:unplug"
+    assert ("lost:unplug", 107 * MS) in [(r["why"], r["host_ns"]) for r in s.drain_rows() if r["t"] == "imu_gen"]
+
+
+def test_a_quiet_tick_gap_replays_in_its_place_before_a_later_row():
+    """P2: received at 100 ms, a generation() at 201 ms, then a receipt going back (95 ms): the gap row comes
+    first, in the record and in its replay."""
+    s, clock = src(record=True)
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.samples(100 * MS, 64)
+    clock.ns = 201 * MS
+    s.generation()
+    s.push(95 * MS, "a", 5_000, "hardware_clock", G)
+    s.samples(300 * MS, 64)
+    rows = s.drain_rows() + [{"t": "end", "imu": {"last_generation_ns": s.last_generation_ns}}]
+    assert replay(MEASURED, rows).drain_rows() == rows[:-1]

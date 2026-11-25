@@ -230,7 +230,9 @@ class ImuSource:
         if self._queue and self._queue[i][0] == "m":
             _k, h, why, until, n, final, at = self._queue[i]
             _k2, nh, nwhy, nuntil, nn, nfinal, nat = mark
-            if nfinal and not final:  # one reason, the final one first, with its own time
+            # one reason with its own time: a final one over a non-final one, else the one earlier in the queue (a
+            # mark added at the head comes before the one there -- round 6 P2)
+            if (nfinal and not final) or (nfinal == final and at_head):
                 why, at = nwhy, nat
             self._queue[i] = ("m", min(h, nh), why, max(until, nuntil), n + nn, final or nfinal, at)
             return
@@ -405,15 +407,21 @@ class ImuSource:
 
 def replay(cfg: ImuSourceConfig, rows, *, last_generation_ns: int | None = None) -> ImuSource:
     """A recording source fed with the raw fields of a record's ``imu`` rows (an observe record's or an
-    ``imu_record/1`` file's, whose ``s`` names the stream), each taken off the queue as it comes, then asked its
-    generation at ``last_generation_ns`` (default: the observe record's end row, ``imu.last_generation_ns``): its
+    ``imu_record/1`` file's, whose ``s`` names the stream), each taken off the queue as it comes, asked its
+    generation where the record shows a receive gap and at ``last_generation_ns`` (default: the observe record's
+    end row, ``imu.last_generation_ns``): its
     ``drain_rows()`` are the rows the record holds. A receive gap is decided from the receipts and that instant, so
     it replays, a gap after the last sample included (round 5 P2); not raw input, so not replayed: a loss and queue
     overflows."""
     clock = {"ns": 0}
     src = ImuSource(cfg, operating=False, record=True, now_ns=lambda: clock["ns"])
     for r in rows:
-        if r.get("t") == "imu":
+        if r.get("t") == "imu_gen" and r.get("why") == "receive_gap" and r.get("host_ns") is not None:
+            # asked where the record saw it (a quiet tick's call), in row order (round 6 P2); a gap the next
+            # sample's receipt opened is the same boundary, opened once
+            clock["ns"] = int(r["host_ns"]) + 1
+            src.generation()
+        elif r.get("t") == "imu":
             clock["ns"] = int(r["host_ns"])
             src.push(int(r["host_ns"]), r.get("s", "a"), r.get("dev_us"), r.get("dom"), (r["x"], r["y"], r["z"]),
                      ts_ms=r.get("ts_ms"))
