@@ -519,6 +519,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                     imu_error = _start_imu(imu_dev, imu, imu_cfg, imu_gap_max_s, rec)
                     if imu_error is not None:
                         break
+                    end = time.monotonic() + args.seconds  # --seconds of sensor observation, from its start
                 obs.cycle()
                 time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
             if imu_error is not None:
@@ -529,6 +530,11 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 result = "ok"
         except KeyboardInterrupt:
             result = "interrupted"
+        except DeviceBusy as busy:
+            # held at a retried first opening (the device was missing at open_first): refused as at the first one,
+            # nothing ever written to it (Codex 7b round 3 P2)
+            result = "refused"
+            rec.put({"t": "refused", "why": str(busy), "holder": busy.holder, "host_ns": time.monotonic_ns()})
         finally:
             try:
                 stopped = obs.finish()
@@ -552,14 +558,15 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             synced = _sync(f)
             if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
-            if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
-                result = "no_imu"
             imu_overflow = imu is not None and imu.counts["overflow"] > 0
             if imu_overflow and result == "ok":
-                result = "imu_overflow"  # raw samples lost before they were recorded (round 2 P2)
+                result = "imu_overflow"  # raw samples lost before they were recorded (round 2 P2; before no_imu)
+            if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
+                result = "no_imu"
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
-                     "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow,
+                     "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow
+                     and result != "refused",
                      "record_errors": errors_before,
                      "counts": obs.counts,
                      "feed": None if obs.feed is None else {"accepted": obs.feed.accepted,
@@ -571,7 +578,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                                                       "generation_why": imu.generation_why},
                      "end_mono_ns": time.monotonic_ns()})
             complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped \
-                and not imu_overflow
+                and not imu_overflow and result != "refused"
             if link.link is not None:
                 link.link.close()
                 link.link = None
@@ -585,6 +592,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
     out = {**(OUTPUT_MARKS if synthetic else {}), "result": result, "stopped_confirmed": stopped,
            "complete": complete, "record": str(args.out), "counts": obs.counts}
     print(json.dumps(out))
+    if result == "refused":
+        return 2  # never connected: nothing written to the device
     return 0 if (result == "ok" and stopped and complete) else 1
 
 

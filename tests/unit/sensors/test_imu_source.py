@@ -119,9 +119,11 @@ def test_a_wrap_is_a_forward_step_in_the_same_generation():
 def test_a_device_restart_opens_a_generation():
     s, _ = src()
     feed(s, 100, 5_000_000, 3)
-    feed(s, 115, 0, 2)  # the device time back 5 s: a restart
+    feed(s, 115, 0, 6)  # the device time back 5 s: a restart, a boundary at the previous receipt (110 ms)
     out = s.samples(200 * MS, 64)
-    assert [g for g, *_ in out] == [1, 1, 1, 2, 2] and s.generation_why == "device_restart"
+    # the new clock's samples count from lo >= 110 ms (round 3 P1-1): 115-125 ms may have been taken before it
+    assert [g for g, *_ in out] == [1, 1, 1, 2, 2, 2] and s.generation_why == "device_restart"
+    assert s.counts["before_boundary"] == 3
 
 
 def test_a_delay_over_the_bound_opens_a_generation_and_gives_nothing_more():
@@ -180,9 +182,10 @@ def test_a_queue_overflow_drops_the_oldest_and_opens_a_generation_after_the_hole
     s, _ = src(replace(MEASURED, queue_max=4))
     feed(s, 100, 0, 6)
     out = s.samples(400 * MS, 64)
-    # the hole at 100 ms: samples that may have been taken before it (lo < 100 ms) do not count (round 2 P1-2)
-    assert [hi // MS for _, _, hi, _ in out] == [120, 125] and s.counts["before_boundary"] == 2
-    assert s.counts["overflow"] == 2 and [g for g, *_ in out] == [2, 2]
+    # the hole covers 100-105 ms: samples that may have been taken before its end (lo < 105 ms) do not count
+    # (round 2 P1-2, round 3 P2)
+    assert [hi // MS for _, _, hi, _ in out] == [125] and s.counts["before_boundary"] == 3
+    assert s.counts["overflow"] == 2 and [g for g, *_ in out] == [2]
 
 
 def test_a_reported_loss_opens_a_generation_on_the_next_read():
@@ -233,8 +236,8 @@ def _stream():
     s.push(121 * MS, "a", 5_000, "hardware_clock", G)  # dup of the last
     s.push(122 * MS, "a", 1_000, "hardware_clock", G)  # 4 ms back: late
     s.push(123 * MS, "a", None, "hardware_clock", G)
-    feed(s, 125, WRAP_US - 100_000, 3)  # 105 ms back: a restart
-    feed(s, 162, WRAP_US - 85_000, 2)  # device 5 ms on, host 27 ms: the bound broken
+    feed(s, 125, WRAP_US - 100_000, 6)  # 105 ms back: a restart (boundary at 123 ms, the previous receipt)
+    feed(s, 177, WRAP_US - 70_000, 2)  # device 5 ms on, host 27 ms: the bound broken
     s.samples(1_000 * MS, 64)
     return s.drain_rows()
 
@@ -242,8 +245,8 @@ def _stream():
 def test_every_accel_sample_is_a_row_with_its_verdict_and_interval():
     rows = _stream()
     imu = [r for r in rows if r["t"] == "imu"]
-    assert [r["verdict"] for r in imu] == ["ok"] * 4 + ["dup", "late", "missing_dev"] + ["ok"] * 3 \
-        + ["bound_broken"] * 2
+    assert [r["verdict"] for r in imu] == ["ok"] * 4 + ["dup", "late", "missing_dev"] + ["before_boundary"] * 4 \
+        + ["ok"] * 2 + ["bound_broken"] * 2
     assert [r["why"] for r in rows if r["t"] == "imu_gen"] == ["device_restart", "clock_mismatch"]
     assert all((r["lo"], r["hi"]) == (r["host_ns"] - 20 * MS, r["host_ns"]) for r in imu if r["verdict"] == "ok")
 
@@ -470,3 +473,74 @@ def test_a_loss_reported_many_times_is_one_boundary_and_a_read_takes_at_most_lim
     feed(s, 140, 500_000, 3)
     s.samples(200 * MS, 2)
     assert s.last_read_capped and s.gen == 1
+
+
+# --- Codex 7b round 3 ------------------------------------------------------------------------------------------------
+def _gap_stream(s, clock, *, ask_midway):
+    feed(s, 100, 0, 1)
+    s.samples(100 * MS, 64)
+    if ask_midway:
+        clock.ns = 201 * MS
+        s.generation()
+    feed(s, 205, 105_000, 10)
+    return [hi // MS for _, _, hi, _ in s.samples(400 * MS, 64)]
+
+
+def test_a_receive_gap_has_the_same_boundary_whoever_sees_it():
+    """P1-1: last receipt 100 ms, the gap is one at 200 ms -- asked on a quiet tick at 201 ms or seen by the next
+    sample at 205 ms, the new generation counts from lo >= 200 ms."""
+    a = _gap_stream(*src(), ask_midway=True)
+    b = _gap_stream(*src(), ask_midway=False)
+    assert a == b == [220, 225, 230, 235, 240, 245, 250]
+
+
+def test_an_old_device_sample_after_a_loss_does_not_anchor_the_new_clock():
+    """P2: lost at 101 ms, an old-device sample at 105 ms (dev 32 ms), then the restarted device (dev 40 ms)."""
+    s, clock = src()
+    feed(s, 80, 12_000, 5)
+    s.samples(100 * MS, 64)
+    clock.ns = 101 * MS
+    s.lost("unplug")
+    s.push(105 * MS, "a", 32_000, "hardware_clock", G)
+    feed(s, 145, 40_000, 4)
+    out = s.samples(300 * MS, 64)
+    assert not s.bound_broken and [hi // MS for _, _, hi, _ in out] == [145, 150, 155, 160]
+
+
+def test_a_late_sample_after_a_fold_is_a_small_step_back():
+    """P2: folded ts_ms 4294964.796 -> 2.5 -> 4294964.796 (5 ms late) -> 7.5."""
+    s, _ = src()
+    for k, ts in enumerate((4294964.796, 2.5, 4294964.796, 7.5)):
+        s.push((100 + 5 * k) * MS, "a", None, "hardware_clock", G, ts_ms=ts)
+    out = s.samples(200 * MS, 64)
+    assert len(out) == 3 and s.counts["late"] == 1 and not s.bound_broken
+
+
+def test_the_bound_verdict_does_not_depend_on_the_hosts_uptime():
+    """P2: 5 ms of device time apart, 21 ms + 500 ns allowed -- 500 ns more is fine, 501 ns breaks, from 0 or 2**53."""
+    for base in (0, 1 << 53):
+        for extra, broken in ((21_000_500, False), (21_000_501, True)):
+            s, _ = src()
+            s.push(base + 100 * MS, "a", 0, "hardware_clock", G)
+            s.push(base + 105 * MS + extra, "a", 5_000, "hardware_clock", G)
+            s.samples(base + 500 * MS, 64)
+            assert s.bound_broken is broken, (base, extra)
+
+
+def test_boundaries_next_to_each_other_are_one_so_the_callback_work_stays_bounded():
+    """P2: queue_max 1, push and lost alternating 512 times -- at most one boundary next to the one sample."""
+    s, clock = src(replace(MEASURED, queue_max=1))
+    for k in range(512):
+        clock.ns = (100 + k) * MS
+        s.push((100 + k) * MS, "a", 1000 * k, "hardware_clock", G)
+        s.lost("unplug")
+    assert s._nm <= 2 and s._nq == 1  # noqa: SLF001
+
+
+def test_a_loss_reported_again_before_any_sample_is_the_same_loss():
+    """P3: lost(); generation() three times with no sample in between -- one new generation."""
+    s, _ = src()
+    for _ in range(3):
+        s.lost("unplug")
+        s.generation()
+    assert s.gen == 2 and s.counts["lost"] == 3

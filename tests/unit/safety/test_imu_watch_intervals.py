@@ -288,3 +288,15 @@ def test_a_plain_tuple_baseline_on_a_source_with_generations_is_refused():
     b, _ = w.baseline(1000 * MS)
     w.arm(tuple(b))
     assert w.judge(end * MS) == "watch_imu_gap"
+
+
+def test_a_baseline_from_another_watch_is_taken_as_a_plain_tuple():
+    """Codex 7b round 3 P2: watch A's baseline (serial 20) handed to watch B, whose first sample (serial 1) is
+    tilted -- B never skips its own samples on A's serial."""
+    a = ImuWatch(CFG)
+    fed_iv(a, 1000, 20)
+    b_base, _ = a.baseline(1000 * MS)
+    b = ImuWatch(CFG)
+    assert b.add(1100 * MS, tilted(8), 1100 * MS) is None
+    b.arm(b_base)
+    assert b.judge(1100 * MS) == "watch_imu_moved"

@@ -125,17 +125,18 @@ def _device_us(dev_us, ts_ms, dom):
     return None, None
 
 
-def _device_step(last: int, dev: int, src: str) -> int:
-    """The signed step in µs from ``last`` to ``dev``: a 32-bit counter's step (``metadata``) is taken modulo a turn;
-    a full ``ts_ms`` value steps as it is, unless both sit on either side of the 32-bit boundary (a counter that the
-    SDK passed on folded)."""
+def _device_step(last: int, dev: int, src: str, folded: bool) -> tuple[int, bool]:
+    """The signed step in µs from ``last`` to ``dev``, and whether the clock is now known to be folded at 32 bits. A
+    32-bit counter's step (``metadata``, or a ``ts_ms`` already seen folding) is taken modulo a turn; a full
+    ``ts_ms`` value steps as it is, unless both sit on either side of the 32-bit boundary -- the first fold, after
+    which a late sample from before it is a small step back, not most of a turn on (Codex 7b round 3 P2)."""
     m = (dev - last) % WRAP_US
-    if src == "metadata":
-        return m if m <= WRAP_US // 2 else m - WRAP_US
+    if src == "metadata" or folded:
+        return (m if m <= WRAP_US // 2 else m - WRAP_US), folded
     raw = dev - last
     if raw < 0 and WRAP_US // 2 <= last < WRAP_US and dev < WRAP_US // 2 and m <= WRAP_US // 2:
-        return m
-    return raw
+        return m, True
+    return raw, False
 
 
 class ImuSource:
@@ -147,14 +148,17 @@ class ImuSource:
         self.bound_ns = int(round(bound * 1e9))
         self._gap_ns = int(round(cfg.receive_gap_s * 1e9))
         self._lock = threading.Lock()
-        # in receipt order: ("s", host_ns, dev_us, ts_ms, dom, xyz) samples and ("m", host_ns, why) generation
-        # boundaries -- a loss or an overflow hole sits where it happened, so the samples before it keep the old
-        # generation and those after it get the new one (Codex 7b round 1 P1-2). The receipt time is read under the
-        # lock that queues it, so no boundary falls between a sample's time and its place (round 2 P1-2)
+        # in receipt order: ("s", host_ns, dev_us, ts_ms, dom, xyz) samples and ("m", host_ns, why, until_ns,
+        # reset_clock) generation boundaries -- a loss or an overflow hole sits where it happened, so the samples
+        # before it keep the old generation and those after it get the new one (Codex 7b round 1 P1-2); ``until_ns``
+        # is the latest instant it covers (the last sample an overflow dropped). Boundaries next to each other are
+        # one, so the queue never holds more boundaries than samples + 1 (round 3 P2: the callback's work under the
+        # lock stays bounded). The receipt time is read under the lock that queues it (round 2 P1-2)
         self._queue: deque = deque()
         self._nq = 0  # samples in the queue
         self._nm = 0  # boundaries in the queue
         self._last_rx: int | None = None  # newest accel receipt (callback side)
+        self._lost_open = False  # a loss reported and no sample received since: more reports are the same loss
         # loop side
         self._gen = 1
         self.generation_why: str | None = None
@@ -173,12 +177,17 @@ class ImuSource:
 
     def _clock_reset(self) -> None:
         """The device clock's continuity: kept across receive gaps and overflow holes (the same device clock -- a
-        delay built up behind a gap is still caught, round 2 P1-3), reset on a device restart or loss."""
-        self._clk_last: int | None = None  # the last accepted device time (as ``_device_us`` gives it)
+        delay built up behind a gap is still caught, round 2 P1-3), reset on a device restart, a loss or a change of
+        the device time's source."""
+        self._clk_last: int | None = None  # the last anchored device time (as ``_device_us`` gives it)
         self._clk_src: str | None = None
+        self._clk_folded = False
         self._clk_ext = 0  # its unwrapped µs since the reset
-        self._min_b: float | None = None  # min over accepted samples of (host - dev) - DRIFT * dev, ns
-        self._max_a: float | None = None  # max of (host - dev) + DRIFT * dev
+        # the delay envelope in integers (10 x ns, so 100 ppm of a device time in µs is the µs value itself; round 3
+        # P2: the same verdict whatever the host's uptime): min of 10 * off - ext_us and max of 10 * off + ext_us,
+        # off = host_ns - 1000 * ext_us
+        self._min_b: int | None = None
+        self._max_a: int | None = None
 
     # --- the SDK side: queue only ----------------------------------------------------------------------------------
     def on_sample(self, stream, dev_us, ts_ms, dom, xyz) -> None:
@@ -197,33 +206,50 @@ class ImuSource:
             self._queue.append(("s", host, dev_us, ts_ms, dom, tuple(xyz)))
             self._nq += 1
             self._last_rx = host
+            self._lost_open = False
+
+    def _add_mark(self, mark, *, at_head: bool) -> None:
+        """(under the lock) a boundary at the head or the tail, merged into a boundary already there."""
+        i = 0 if at_head else -1
+        if self._queue and self._queue[i][0] == "m":
+            _k, h, why, until, reset = self._queue[i]
+            nh, nwhy, nuntil, nreset = mark[1:]
+            whys = why.split("+")
+            self._queue[i] = ("m", min(h, nh), why if nwhy in whys else f"{why}+{nwhy}", max(until, nuntil),
+                              reset or nreset)
+            return
+        if at_head:
+            self._queue.appendleft(mark)
+        else:
+            self._queue.append(mark)
+        self._nm += 1
 
     def _drop_oldest(self) -> None:
-        """(under the lock) the oldest sample out; a boundary marks the hole, after any boundary before it."""
-        kept = []
-        while self._queue:
+        """(under the lock) the oldest sample out -- behind at most one boundary, as boundaries are merged -- and a
+        boundary at the hole covering up to the dropped sample's receipt (round 3 P2: a run of drops keeps its last
+        time)."""
+        head = None
+        if self._queue and self._queue[0][0] == "m":
+            head = self._queue.popleft()
+            self._nm -= 1
+        if self._queue and self._queue[0][0] == "s":
             e = self._queue.popleft()
-            if e[0] == "m":
-                kept.append(e)
-                continue
             self._nq -= 1
             self.counts["overflow"] += 1
-            if not (kept and kept[-1][2] == "overflow"):
-                kept.append(("m", e[1], "overflow"))
-                self._nm += 1
-            break
-        for e in reversed(kept):
-            self._queue.appendleft(e)
+            self._add_mark(("m", e[1], "overflow", e[1], False), at_head=True)
+        if head is not None:
+            self._add_mark(head, at_head=True)
 
     def lost(self, why: str) -> None:
-        """The device gone (from any thread): a boundary after the samples received so far (one, however often it
-        is reported before a sample follows -- round 2 P2)."""
+        """The device gone (from any thread): a boundary after the samples received so far. Reported again before
+        any sample is received, it is the same loss (counted, no new boundary -- round 2 P2, round 3 P3)."""
         with self._lock:
             self.counts["lost"] += 1
-            if self._queue and self._queue[-1][0] == "m":
+            if self._lost_open:
                 return
-            self._queue.append(("m", int(self._now()), "lost:" + str(why)))
-            self._nm += 1
+            self._lost_open = True
+            now = int(self._now())
+            self._add_mark(("m", now, "lost:" + str(why), now, True), at_head=False)
 
     # --- the loop side ---------------------------------------------------------------------------------------------
     def _new_generation(self, why: str, host_ns: int | None) -> None:
@@ -233,11 +259,18 @@ class ImuSource:
         if self._record:
             self._rows.append({"t": "imu_gen", "gen": self._gen, "why": why, "host_ns": host_ns})
 
-    def _boundary(self, host_ns: int, why: str) -> None:
+    def _boundary(self, host_ns: int, why: str, *, until_ns: int | None = None, reset: bool = False) -> None:
+        """A new generation whose samples must start at or after ``until_ns`` (``host_ns`` by default)."""
         self._new_generation(why, host_ns)
-        self._boundary_ns = host_ns if self._boundary_ns is None else max(self._boundary_ns, host_ns)
-        if why.startswith("lost:"):
+        t = host_ns if until_ns is None else until_ns
+        self._boundary_ns = t if self._boundary_ns is None else max(self._boundary_ns, t)
+        if reset:
             self._clock_reset()
+
+    def _gap_boundary_ns(self) -> int:
+        """The receive gap's boundary: where it became one, the last receipt + ``receive_gap_s`` -- the same instant
+        whether a quiet tick or the next sample sees it (round 3 P1-1)."""
+        return self._last_seen + self._gap_ns
 
     @property
     def gen(self) -> int:
@@ -256,11 +289,12 @@ class ImuSource:
                 marks.append(self._queue.popleft())
                 self._nm -= 1
             waiting, last_rx = self._nq, self._last_rx
-        for _k, host, why in marks:
-            self._boundary(host, why)
-        if waiting == 0 and last_rx is not None and not self._gap_open and now - last_rx > self._gap_ns:
+        for _k, host, why, until, reset in marks:
+            self._boundary(host, why, until_ns=until, reset=reset)
+        if waiting == 0 and self._last_seen is not None and last_rx == self._last_seen and not self._gap_open \
+                and now > self._gap_boundary_ns():
             self._gap_open = True
-            self._boundary(now, "receive_gap")
+            self._boundary(now, "receive_gap", until_ns=self._gap_boundary_ns())
         with self._lock:
             pending = self._nm
         return self._gen + pending
@@ -286,7 +320,7 @@ class ImuSource:
                     self._nm -= 1
             taken += 1
             if e[0] == "m":
-                self._boundary(e[1], e[2])
+                self._boundary(e[1], e[2], until_ns=e[3], reset=e[4])
                 continue
             item = self._take(*e[1:])
             if item is not None:
@@ -294,12 +328,13 @@ class ImuSource:
         return out
 
     def _take(self, host, dev_us, ts_ms, dom, xyz):
-        if self._last_seen is not None and not self._gap_open and host - self._last_seen > self._gap_ns:
-            self._new_generation("receive_gap", host)  # the sample itself opens it: no boundary before its lo
+        if self._last_seen is not None and not self._gap_open and host > self._gap_boundary_ns():
+            self._boundary(host, "receive_gap", until_ns=self._gap_boundary_ns())
         self._gap_open = False
+        prev_seen = self._last_seen
         self._last_seen = host if self._last_seen is None else max(self._last_seen, host)
         dev, dev_src = _device_us(dev_us, ts_ms, dom)
-        verdict = self._verdict(host, dev, dev_src)
+        verdict = self._verdict(host, dev, dev_src, prev_seen)
         item = None
         if verdict == "ok":
             self._last_taken = host
@@ -316,49 +351,51 @@ class ImuSource:
                                "lo": None if item is None else item[1], "hi": None if item is None else item[2]})
         return item
 
-    def _verdict(self, host, dev, src) -> str:
+    def _verdict(self, host, dev, src, prev_seen) -> str:
         if self._last_taken is not None and host <= self._last_taken:
             return "not_newer"  # a receipt going back is never given (round 1 P2), whatever the device time says
         if dev is None:
             return "missing_dev"
         if self.bound_broken:
             return "bound_broken"
+        # a new device clock (a restart, a new time source) is a boundary at the previous receipt: its samples
+        # count only from lo >= it (round 3 P1-1)
+        at = host if prev_seen is None else prev_seen
         if self._clk_last is not None and src != self._clk_src:
-            self._clock_reset()
-            self._new_generation("device_time_source", host)
+            self._boundary(host, "device_time_source", until_ns=at, reset=True)
+        folded = self._clk_folded
         if self._clk_last is not None:
-            step = _device_step(self._clk_last, dev, src)
+            step, folded = _device_step(self._clk_last, dev, src, self._clk_folded)
             if step == 0:
                 return "dup"
             if step < 0:
                 if -step <= self.cfg.restart_back_us:
                     return "late"
-                self._clock_reset()
-                self._new_generation("device_restart", host)
+                self._boundary(host, "device_restart", until_ns=at, reset=True)
+                folded = False
             else:
                 ext = self._clk_ext + step
         if self._clk_last is None:
             ext = 0
         # every sample of one device clock against one delay bound (round 2 P1-3): with t the device time and
-        # off = host - t, any two samples i, j must have |off_j - off_i| <= bound + 1 ms + DRIFT * |t_j - t_i| --
-        # kept as the running min of off - DRIFT * t and max of off + DRIFT * t
-        t = ext * 1000
-        off = host - t
-        b, a = off - DRIFT * t, off + DRIFT * t
-        tol = self.bound_ns + MISMATCH_SLACK_NS
-        if self._min_b is not None and (b - self._min_b > tol or self._max_a - a > tol):
+        # off = host - t, any two samples i, j must have |off_j - off_i| <= bound + 1 ms + 100 ppm * |t_j - t_i|
+        off10 = 10 * (host - 1000 * ext)
+        b, a = off10 - ext, off10 + ext
+        tol10 = 10 * (self.bound_ns + MISMATCH_SLACK_NS)
+        if self._min_b is not None and (b - self._min_b > tol10 or self._max_a - a > tol10):
             # the delays of this clock's samples spread wider than the bound allows: the bound is broken (or a
             # restart the step cannot see). Nothing is given from here on (design 3.1; round 1 P1-3)
             self._new_generation("clock_mismatch", host)
             self.bound_broken = True
             return "bound_broken"
-        self._clk_last, self._clk_src, self._clk_ext = dev, src, ext
-        self._min_b = b if self._min_b is None else min(self._min_b, b)
-        self._max_a = a if self._max_a is None else max(self._max_a, a)
         if self._boundary_ns is not None and host - self.bound_ns < self._boundary_ns:
             # may have been taken before the latest generation boundary (design 3.1: after a boundary is lo >= it,
-            # round 2 P1-2): not counted toward the new generation (its delay still counts for the clock)
+            # round 2 P1-2). Not counted, and not an anchor of the clock either: after a loss it may be the old
+            # device's (round 3 P2)
             return "before_boundary"
+        self._clk_last, self._clk_src, self._clk_ext, self._clk_folded = dev, src, ext, folded
+        self._min_b = b if self._min_b is None else min(self._min_b, b)
+        self._max_a = a if self._max_a is None else max(self._max_a, a)
         return "ok"
 
     def drain_rows(self) -> list:

@@ -244,3 +244,16 @@ def test_a_source_fatal_from_the_capped_flag_is_marked_and_holds_the_frame():
 
     assert rr._ImuGuard(Src(), marks.append).last_read_capped is True  # noqa: SLF001
     assert marks == ["imu:usb gone"]
+
+
+def test_the_arm_deadline_is_judged_on_the_clock_read_before_the_freeze():
+    """Codex 7b round 3 P1-2: the tick started 1 ms before the deadline, the clock now reads 1 ms after it."""
+    r = rig()
+    loop = r.loop
+    loop.imu_gen_unknown = True
+    assert loop._imu_arm_gate(r.now, "m1")[0] == "wait"  # noqa: SLF001
+    until = loop._imu_wait_until["m1"]  # noqa: SLF001
+    loop.imu_gen_unknown = False
+    loop.imu_watch.baseline = lambda since: ("base", None)
+    loop.clock = lambda: until + MS
+    assert loop._imu_arm_gate(until - MS, "m1") == ("refuse", "imu_wait_expired")  # noqa: SLF001

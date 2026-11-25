@@ -260,11 +260,12 @@ class ImuBaseline(tuple):
     """``(direction, last_ns)`` as ``baseline()`` hands it out, carrying the last sample's ``lo`` and serial and the
     watch's generation-change count, so ``arm`` resumes from that very sample -- even once the window has dropped
     it -- and refuses a baseline taken before any generation change since, even one whose generation number came
-    back (Codex 7b round 1 P1-6, round 2 P1-5)."""
+    back (Codex 7b round 1 P1-6, round 2 P1-5). It names the watch that made it: another watch takes it as a plain
+    tuple (round 3 P2)."""
 
-    def __new__(cls, direction, last_ns, *, lo, serial, epoch):
+    def __new__(cls, direction, last_ns, *, lo, serial, epoch, owner):
         self = super().__new__(cls, (direction, last_ns))
-        self.lo, self.serial, self.epoch = lo, serial, epoch
+        self.lo, self.serial, self.epoch, self.owner = lo, serial, epoch, owner
         return self
 
 
@@ -381,7 +382,7 @@ class ImuWatch:
         if _angle_deg(d, _unit(tuple(float(x) for x in c.level_ref))) > c.level_tol_deg:
             return None, "imu_not_level"
         last = part[-1]
-        return ImuBaseline(d, last[0], lo=last[2], serial=last[4], epoch=self._epoch), None
+        return ImuBaseline(d, last[0], lo=last[2], serial=last[4], epoch=self._epoch, owner=self), None
 
     def arm(self, baseline) -> None:
         """Freeze ``(direction, last_ns)`` from ``baseline()`` before the ARM is asked (kept while armed); the
@@ -396,7 +397,7 @@ class ImuWatch:
             raise ValueError("imu baseline direction")
         self._baseline, self._trip = d, None
         last = int(last_ns)
-        if isinstance(baseline, ImuBaseline):
+        if isinstance(baseline, ImuBaseline) and baseline.owner is self:
             self._prev = (baseline.serial, int(baseline.lo), last)
             if baseline.epoch != self._epoch:
                 self._trip = "watch_imu_gap"  # the generation changed after the baseline was taken

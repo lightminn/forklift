@@ -571,3 +571,46 @@ def test_an_imu_queue_overflow_leaves_the_record_incomplete(model, tmp_path, mon
     res = json.loads(capsys.readouterr().out)
     assert code == 1 and res["result"] == "imu_overflow" and res["complete"] is False, res
     assert not Path(str(out) + ".ok").exists()
+
+
+# --- Codex 7b round 3 ------------------------------------------------------------------------------------------------
+def test_a_device_held_at_a_retried_first_opening_is_refused(tmp_path, monkeypatch, capsys):
+    """P2: the first opening finds no device, the retry finds it held: refused, exit 2, the record incomplete."""
+    import errno
+
+    from forklift_core.live.executor_lock import DeviceBusy
+
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+    calls = []
+
+    def opener(p, baud=None, **kw):
+        calls.append(p)
+        if len(calls) == 1:
+            raise FileNotFoundError(errno.ENOENT, "no such device", p)
+        raise DeviceBusy(p, {"pid": 4242, "tool": "teleop_bridge"})
+
+    monkeypatch.setattr(ro, "open_raw", opener)
+    monkeypatch.setattr(ro.ReconnectingLink, "__init__", _fast_retry(ro.ReconnectingLink.__init__))
+    out = tmp_path / "obs.jsonl"
+    code = ro.main(["--device", "/dev/later", "--out", str(out), "--seconds", "0.5"])
+    res = json.loads(capsys.readouterr().out)
+    assert code == 2 and res["result"] == "refused" and res["complete"] is False, res
+    end = json.loads(out.read_text().splitlines()[-1])
+    assert end["t"] == "end" and end["complete"] is False
+
+
+def _fast_retry(init):
+    def wrapped(self, *a, **kw):
+        kw["retry_s"] = 0.05
+        init(self, *a, **kw)
+    return wrapped
+
+
+def test_an_overflow_with_nothing_accepted_is_reported_as_the_overflow(model, tmp_path, monkeypatch, capsys):
+    """P2: a quiet device sending a burst on stop: the overflow, not no_imu."""
+    cfg = tmp_path / "imu.yaml"
+    cfg.write_text((REPO / "config/real/imu.yaml").read_text().replace("queue_max: 400", "queue_max: 10"))
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(silent=True, burst_on_stop=50),
+                         extra=("--imu-config", str(cfg)))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_overflow", res

@@ -1501,7 +1501,8 @@ class RealLoop:
             base, why = (None, "not_still") if not_still else self.imu_watch.baseline(self.still_since_ns)
         if why is None:
             until = self._imu_wait_until.get(mission_id)
-            if until is not None and int(now_ns) >= until:
+            # judged on the clock read now, just before the baseline is frozen -- not the tick's start (round 3 P1-2)
+            if until is not None and max(int(now_ns), int(self.clock())) >= until:
                 return "refuse", "imu_wait_expired"  # ready only after the mission's one deadline (round 2 P2)
             return "ok", base
         if why in ("not_still", "imu_no_baseline", "imu_not_still", "imu_backlog", "imu_generation"):
