@@ -10,13 +10,22 @@ REPO = Path(__file__).resolve().parents[3]
 PINNED = "34300099fadfc772965962dec837bf436706188f"  # Slamtec/sllidar_ros2 2024-06-17 (design 1.1)
 
 
-def run_launcher(tmp_path, *args):
+IMAGE_ID = "sha256:" + "c" * 64
+
+
+def run_launcher(tmp_path, *args, env=None, image=True):
+    """The launcher with a fake docker that prints its arguments (and answers ``image inspect`` with an ID when the
+    image is there) and a fake udevadm."""
     fake = tmp_path / "bin"
-    fake.mkdir()
-    (fake / "docker").write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    fake.mkdir(exist_ok=True)
+    inspect = f'echo {IMAGE_ID}; exit 0' if image else 'exit 1'
+    (fake / "docker").write_text('#!/bin/sh\nif [ "$1" = image ] && [ "$2" = inspect ]; then ' + inspect
+                                 + '; fi\nprintf "%s\\n" "$@"\n')
     (fake / "docker").chmod(0o755)
-    env = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}"}
-    return subprocess.run(["bash", str(REPO / "tools/ros2_dev.sh"), *args], env=env, capture_output=True, text=True)
+    (fake / "udevadm").write_text('#!/bin/sh\nprintf "ID_VENDOR_ID=10c4\\nID_MODEL_ID=ea60\\nID_SERIAL_SHORT=0001\\n"\n')
+    (fake / "udevadm").chmod(0o755)
+    full = {**os.environ, "PATH": f"{fake}:{os.environ['PATH']}", **(env or {})}
+    return subprocess.run(["bash", str(REPO / "tools/ros2_dev.sh"), *args], env=full, capture_output=True, text=True)
 
 
 def test_scan_a2m12_passes_the_device_and_the_socket_folder_only(tmp_path):
@@ -64,3 +73,71 @@ def test_a_device_given_by_link_passes_the_real_devices_group(tmp_path):
     argv = run_launcher(tmp_path, "scan-a2m12", str(link), str(tmp_path / "s")).stdout.splitlines()
     assert argv[argv.index("--group-add") + 1] == str(os.stat(link).st_gid)  # followed
     assert "stat -L" in (REPO / "tools/ros2_dev.sh").read_text()
+
+
+# --- 7a-3a: the run id, the source facts and the bench arguments ---
+
+def _dev(tmp_path):
+    dev = tmp_path / "ttyUSB9"
+    dev.write_text("")
+    return dev
+
+
+def test_the_sdk_source_names_its_run_and_its_source_facts(tmp_path):
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                       env={"FORKLIFT_SCAN_SOURCE": "sdk"})
+    assert res.returncode == 0, res.stderr
+    cmd = res.stdout.splitlines()[-1]
+    run = re.search(r"forklift_run_id:=([0-9a-f]{16})\b", cmd).group(1)
+    assert f"--run-id {run}" in cmd and f"--image-id {IMAGE_ID}" in cmd and "--usb-id 10c4:ea60:0001" in cmd
+    assert "--host " in cmd and "scan_sdk_info:=/sensors/lidar/scan_sdk_info" in cmd
+    assert f"id {IMAGE_ID}" in res.stderr and run in res.stderr  # the run and the image ID that ran, on record
+
+
+def test_each_run_gets_its_own_id(tmp_path):
+    runs = set()
+    for k in range(2):
+        d = tmp_path / str(k)
+        d.mkdir()
+        cmd = run_launcher(d, "scan-a2m12", str(_dev(d)), str(d / "s")).stdout.splitlines()[-1]
+        runs.add(re.search(r"forklift_run_id:=([0-9a-f]{16})", cmd).group(1))
+    assert len(runs) == 2
+
+
+def test_the_raw_source_passes_no_source_facts(tmp_path):
+    cmd = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s")).stdout.splitlines()[-1]
+    assert "--source raw" in cmd and "--run-id" not in cmd and "--image-id" not in cmd
+
+
+def test_no_image_refuses_the_start(tmp_path):
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"), image=False)
+    assert res.returncode == 2 and "no scan image" in res.stderr
+
+
+def test_an_image_override_is_said(tmp_path):
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                       env={"FORKLIFT_ROS2_SCAN_IMAGE": "forklift/ros2-scan:other"})
+    assert "overridden by FORKLIFT_ROS2_SCAN_IMAGE" in res.stderr and IMAGE_ID in res.stderr
+
+
+def test_the_bench_delay_and_receive_record(tmp_path):
+    log = tmp_path / "rx"
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                       env={"FORKLIFT_SDK_PUBLISH_DELAY_MS": "300", "FORKLIFT_SDK_RX_LOG_DIR": str(log)})
+    assert res.returncode == 0, res.stderr
+    argv = res.stdout.splitlines()
+    assert "publish_delay_ms:=300" in argv[-1] and log.is_dir()
+    k = argv.index(f"type=bind,src={log},dst=/run/forklift-sdk-log")
+    assert argv[k + 1] == "--env"
+    assert re.fullmatch(r"FORKLIFT_SDK_RX_LOG=/run/forklift-sdk-log/sdk_rx_[0-9a-f]{16}\.log", argv[k + 2])
+    d = tmp_path / "plain"
+    d.mkdir()
+    plain = run_launcher(d, "scan-a2m12", str(_dev(d)), str(d / "s"))
+    assert "publish_delay_ms" not in plain.stdout and "forklift-sdk-log" not in plain.stdout
+
+
+def test_a_bad_bench_delay_is_refused(tmp_path):
+    for bad in ("-1", "abc", "5000"):
+        res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
+                           env={"FORKLIFT_SDK_PUBLISH_DELAY_MS": bad})
+        assert res.returncode == 2 and "FORKLIFT_SDK_PUBLISH_DELAY_MS" in res.stderr

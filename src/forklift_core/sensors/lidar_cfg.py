@@ -3,8 +3,15 @@
 
 ``to_layer_scan`` turns a ``scan_feed.RealScan`` into the obstacle layer's ``real_layer.RealScan`` only when the
 scan's acquisition can be bounded: the SDK's first-sample time (on the host monotonic clock, carried by the adapter
-as ``first_beam_mono_ns``) with a measured error bound. Without both the scan stays diagnostic -- the driver stamp is
-taken before a buffered scan is fetched and is not an acquisition time (2026-11-12 design 1.1). With them:
+as ``first_beam_mono_ns``) with an error bound ``frame_bound`` allows for this very frame. Without both the scan stays
+diagnostic -- the driver stamp is taken before a buffered scan is fetched and is not an acquisition time (2026-11-12
+design 1.1).
+
+``frame_bound`` (7a-3, plan 2026-11-26 3 and 9) is the one judgement the layer and the SLAM path share: the bound
+applies to a frame only when the frame is stamped at the SDK's byte arrival (``sdk_first_sample_rx``, patch 0002),
+``lidar.yaml``'s ``timing.basis`` is ``measured`` or ``engineering`` with its decision id and basis document (never
+called measured: the lead's 2026-11-26 decision), and the facts of the source that actually ran -- carried by the
+adapter in the frame itself -- equal ``timing.applies_to``. With the bound:
 
 - first beam ``[Flo, Fhi]`` and last beam ``[Elo, Ehi]`` (the beam spacing ``time_increment``);
 - the layer gets ``first_s = Flo`` (pose and FREE age, conservative), ``last_s = Ehi`` (the odometry history must
@@ -24,9 +31,16 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-__all__ = ["LidarConfig", "load_lidar_config", "self_hit_mask", "band_limit_m", "to_layer_scan", "LIDAR_YAML"]
+__all__ = ["APPLIES_KEYS", "BASES", "LidarConfig", "LIDAR_YAML", "RX_STAMP", "band_limit_m", "frame_bound",
+           "load_lidar_config", "self_hit_mask", "source_facts", "to_layer_scan"]
 
 LIDAR_YAML = Path(__file__).resolve().parents[3] / "config" / "real" / "lidar.yaml"
+
+RX_STAMP = "sdk_first_sample_rx"  # patch 0002: the SDK's sample times from the receive thread's byte arrival
+BASES = ("measured", "engineering")  # timing.basis: what the bound rests on (null: no bound)
+# the source facts a bound is tied to (plan 3): the image that ran (its ID, not its tag), the USB adapter (udev
+# vendor:product:serial), the host, and what the SDK chose (scan_sdk_info: answer type, sample period, baud rate)
+APPLIES_KEYS = ("image_id", "usb", "host", "ans_type", "sample_period_us", "baudrate")
 
 
 @dataclass(frozen=True)
@@ -36,8 +50,21 @@ class LidarConfig:
     mask_rad: tuple[tuple[float, float], ...]  # sensor-frame intervals the truck's body hides
     limit_m: float  # per-beam height-band range limit (band_half_m / sin(max_tilt))
     scan_period_s: float
-    first_beam_err_s: float | None  # None: not measured yet -> every scan diagnostic
-    timing_measured: bool
+    first_beam_err_s: float | None  # None: no bound yet -> every scan diagnostic
+    timing_basis: str | None = None  # None, "measured" or "engineering" (never written as measured: lead 2026-11-26)
+    timing_decision: str | None = None  # engineering: the lead's exception decision id
+    timing_doc: str | None = None  # engineering: the document that states the assumptions
+    applies_to: tuple = ()  # ((key, value), ...) sorted: the source facts the bound was taken on
+
+    @property
+    def bound_usable(self) -> bool:
+        """The bound exists and rests on a measurement, or on an engineering estimate with its decision id and basis
+        document; and it names the source it holds for."""
+        if self.first_beam_err_s is None or self.timing_basis not in BASES:
+            return False
+        if self.timing_basis == "engineering" and not (self.timing_decision and self.timing_doc):
+            return False
+        return {k for k, _ in self.applies_to} == set(APPLIES_KEYS)
 
 
 def band_limit_m(max_tilt_deg: float, band_half_m: float) -> float:
@@ -62,6 +89,42 @@ def _finite(v, name):
     if not math.isfinite(f):
         raise ValueError(f"lidar config: {name} must be finite")
     return f
+
+
+def _fact_ok(key: str, v) -> bool:
+    if key in ("ans_type", "baudrate"):
+        return isinstance(v, int) and not isinstance(v, bool) and v > 0
+    if key == "sample_period_us":
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v)) and v > 0
+    return isinstance(v, str) and bool(v)
+
+
+def _timing_basis(t: dict, err) -> dict:
+    """``timing.basis`` and what it needs (lead 2026-11-26): no bound without a basis, no basis without a bound; an
+    engineering basis names its decision and its document; every basis names the source facts it holds for. The old
+    ``timing.measured`` is refused, never read as a basis."""
+    if "measured" in t:
+        raise ValueError("lidar config: timing.measured is replaced by timing.basis (measured | engineering)")
+    basis = t.get("basis")
+    if basis is None:
+        if err is not None:
+            raise ValueError("lidar config: timing.first_beam_err_s needs timing.basis")
+        return {"timing_basis": None}
+    if basis not in BASES:
+        raise ValueError(f"lidar config: timing.basis must be one of {BASES} or null")
+    if err is None:
+        raise ValueError("lidar config: timing.basis needs timing.first_beam_err_s")
+    decision, doc = t.get("decision_id"), t.get("basis_doc")
+    if basis == "engineering" and not (isinstance(decision, str) and decision and isinstance(doc, str) and doc):
+        raise ValueError("lidar config: an engineering basis needs timing.decision_id and timing.basis_doc")
+    applies = t.get("applies_to")
+    if not isinstance(applies, dict) or set(applies) != set(APPLIES_KEYS):
+        raise ValueError(f"lidar config: timing.applies_to must give exactly {APPLIES_KEYS}")
+    for k, v in applies.items():
+        if not _fact_ok(k, v):
+            raise ValueError(f"lidar config: timing.applies_to.{k} is malformed")
+    return {"timing_basis": basis, "timing_decision": decision if isinstance(decision, str) else None,
+            "timing_doc": doc if isinstance(doc, str) else None, "applies_to": tuple(sorted(applies.items()))}
 
 
 def load_lidar_config(path: str | Path = LIDAR_YAML) -> LidarConfig:
@@ -93,29 +156,57 @@ def load_lidar_config(path: str | Path = LIDAR_YAML) -> LidarConfig:
         limit_m=band_limit_m(_finite(band["max_tilt_deg"], "max_tilt_deg"), _finite(band["band_half_m"], "band_half_m")),
         scan_period_s=period,
         first_beam_err_s=err,
-        timing_measured=bool(t.get("measured", False)),
+        **_timing_basis(t, err),
     )
 
 
+def source_facts(meta: dict) -> dict | None:
+    """The facts of the source a frame came from, flat (the adapter's ``source`` head: launcher facts and, when the
+    node's scan_sdk_info for this very start was received, its ``sdk_info``); None without the SDK's part."""
+    src = meta.get("source")
+    if not isinstance(src, dict) or not isinstance(src.get("sdk_info"), dict):
+        return None
+    facts = {k: src.get(k) for k in ("image_id", "usb", "host")}
+    facts.update({k: src["sdk_info"].get(k) for k in ("ans_type", "sample_period_us", "baudrate")})
+    return facts
+
+
+def frame_bound(scan, cfg: LidarConfig) -> tuple[float | None, str | None]:
+    """``(first_beam_err_s, None)`` when ``cfg``'s bound holds for this frame, else ``(None, why)``: ``no_time_bound``
+    (no usable bound in the config), ``not_arrival_stamped`` (not a patch-0002 frame), ``no_source_facts`` (the frame
+    does not say what ran), ``source_mismatch`` (it ran on something the bound was not taken on). The layer and the
+    SLAM path both ask this (plan 3, Codex P2-1)."""
+    if not cfg.bound_usable:
+        return None, "no_time_bound"
+    if scan.meta.get("stamp_kind") != RX_STAMP:
+        return None, "not_arrival_stamped"
+    facts = source_facts(scan.meta)
+    if facts is None or any(facts.get(k) is None for k in APPLIES_KEYS):
+        return None, "no_source_facts"
+    if any(facts[k] != v for k, v in cfg.applies_to):
+        return None, "source_mismatch"
+    return cfg.first_beam_err_s, None
+
+
 def to_layer_scan(scan, cfg: LidarConfig, start_ns: int, *, sensor: str = "lidar"):
-    """``(real_layer.RealScan, None)`` or ``(None, why)`` -- why one of ``no_acquisition_time``, ``no_time_bound``
-    (no error bound, or one not measured), ``no_beam_timing``, ``scan_too_long``, ``after_receipt`` (the last beam's
-    earliest time after the adapter received the scan: impossible, the time is wrong). Core seconds are
-    ``(ns - start_ns) / 1e9``."""
+    """``(real_layer.RealScan, None)`` or ``(None, why)`` -- why one of ``no_acquisition_time``, ``frame_bound``'s
+    reasons, ``no_beam_timing``, ``scan_too_long``, ``after_receipt`` (the last beam's earliest time after the adapter
+    received the scan: impossible, the time is wrong). Core seconds are ``(ns - start_ns) / 1e9``."""
     from forklift_core.live.real_layer import RealScan as LayerScan
 
     first = scan.meta.get("first_beam_mono_ns")
     if not isinstance(first, int) or isinstance(first, bool):
         return None, "no_acquisition_time"
-    if cfg.first_beam_err_s is None or not cfg.timing_measured:
-        return None, "no_time_bound"  # an unmeasured bound keeps the scan diagnostic (Codex 7a-1 P2-3)
+    bound, why = frame_bound(scan, cfg)
+    if why is not None:
+        return None, why  # no bound for this frame keeps it diagnostic (Codex 7a-1 P2-3, 7a-3 plan 3)
     n = len(scan.ranges)
     end = scan.meta.get("last_beam_mono_ns")
     if not isinstance(end, int) or isinstance(end, bool) or end <= first or n < 2:
         # the last sample of the scan's own buffer (forklift patch 0001): never derived from a period or a beam step
         # (Codex 7a-2 P1-1: the previous rotation's length is not this scan's end)
         return None, "no_beam_timing"
-    err_ns = int(round(cfg.first_beam_err_s * 1e9))
+    err_ns = int(round(bound * 1e9))
     flo, elo, ehi = first - err_ns, end - err_ns, end + err_ns
     if (ehi - flo) > cfg.scan_period_s * 1e9:
         return None, "scan_too_long"

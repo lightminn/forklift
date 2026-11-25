@@ -66,7 +66,7 @@ def real(r, end="ready"):
     bridge = AutoBridge(b, end)
     loop = r.loop
     src = RealSlamSource(
-        RealSlamLink(a), map_id="m" * 64, start_ns=loop.start_ns,
+        RealSlamLink(a), mode="operating", map_id="m" * 64, start_ns=loop.start_ns,
         start_pose=base_from_rear(tuple(loop.start_rear), REAR_OFFSET_M),
         odom_history=lambda: loop.odom_history, odom_base=r.odom_base, odom_gen=lambda: loop.odom_gen,
         boot=lambda: loop.host.state.boot_id, rear_offset_m=REAR_OFFSET_M, clock=lambda: r.now)

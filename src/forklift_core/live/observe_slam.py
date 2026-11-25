@@ -12,6 +12,8 @@ it is sent and its reply recorded, never treated as evidence. Recorded through `
 - on each reply, the match quality: the fraction of its measured endpoints on the survey's walls (L4's own
   ``slam_map.endpoint_fraction``), a diagnostic value nothing stops on (agy 7);
 - ``slam_scan``: a feed scan the SLAM path could not take (``from_feed``'s reason);
+- per frame, whether it had a first-beam interval (``lidar_cfg.frame_bound``, 7a-3): the summary's
+  ``frames_measured`` / ``frames_diagnostic`` and ``diagnostic_<why>`` counts -- the header names the mode only;
 - ``slam_fatal``: the source's end (the run goes on recording the board; its result says so).
 """
 
@@ -96,7 +98,13 @@ class ObserveSlam:
         self._guard(lambda: self._on_scan(scan))
 
     def _on_scan(self, scan) -> None:
+        # the generation first, whatever the frame's verdict (7a-3 plan 3, Codex round 3 P2-3)
+        self.src.generation((int(scan.feed_gen), scan.producer_gen))
         s, why = from_feed(scan, self.lidar)
+        if s is not None:
+            self.counts["frames_measured" if s.measured else "frames_diagnostic"] += 1
+            if not s.measured:
+                self.counts[f"diagnostic_{s.diagnostic_why}"] += 1
         if s is None:
             self.counts[f"scan_{why}"] += 1
             self.put({"t": "slam_scan", "scan_id": int(scan.scan_id), "feed_gen": int(scan.feed_gen), "why": why})

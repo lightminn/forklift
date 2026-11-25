@@ -33,6 +33,11 @@ ESTABLISH_TOL_NS = 1_000_000  # ... each within 1 ms of their median (two clocks
 JUMP_NS = 50_000_000  # a step past this from the last accepted pair is a system clock adjustment
 NEGATIVE_LATENCY_NS = -5_000_000  # stamped this much after its receipt: refused
 RECV_BYTES = 1 << 16
+# the stamp kinds whose frames carry the SDK's first and last sample (patch 0001: decode time; patch 0002: the
+# receive thread's byte arrival -- 7a-3)
+SDK_STAMPS = ("sdk_first_sample", "sdk_first_sample_rx")
+_SOURCE_STR = ("run", "start", "image_id", "usb", "host")
+_SDK_INFO = ("ans_type", "sample_period_us", "baudrate")
 
 
 class FrameError(ValueError):
@@ -131,6 +136,21 @@ def _meta_ok(h: dict) -> bool:
     return isinstance(h.get("frame_id"), str)
 
 
+def _source_ok(src) -> bool:
+    """The adapter's ``source`` head (7a-3): strings for its identities and launcher facts, and the node's
+    ``sdk_info`` numbers when present. Only its shape is checked here; ``lidar_cfg.frame_bound`` compares it."""
+    if not isinstance(src, dict) or not set(src) <= set(_SOURCE_STR) | {"sdk_info"}:
+        return False
+    if not all(isinstance(src[k], str) and src[k] for k in src if k != "sdk_info"):
+        return False
+    info = src.get("sdk_info")
+    if info is None:
+        return "sdk_info" not in src
+    return (isinstance(info, dict) and set(info) == set(_SDK_INFO)
+            and _int(info["ans_type"], 1) and _int(info["baudrate"], 1) and _num(info["sample_period_us"])
+            and info["sample_period_us"] > 0)
+
+
 class ScanFeed:
     """``judge`` one frame -> (RealScan or None, why refused or None); ``poll`` a non-blocking socket for every frame
     waiting. ``refused`` counts every reason; ``record`` (a text file) keeps each received frame before its verdict
@@ -207,10 +227,12 @@ class ScanFeed:
             self.synthetic_frames += 1
         if not _meta_ok(h):
             return None, "bad_meta"  # judged before any generation rule: a broken frame changes nothing
-        if ("first_beam_mono_ns" in h or "last_beam_mono_ns" in h) and h.get("stamp_kind") != "sdk_first_sample":
+        if ("first_beam_mono_ns" in h or "last_beam_mono_ns" in h) and h.get("stamp_kind") not in SDK_STAMPS:
             # acquisition times on a frame that says its stamp is something else: a contradiction (Codex 7a-2 round
             # 2 P2-3)
             return None, "bad_meta"
+        if "source" in h and (h.get("stamp_kind") != "sdk_first_sample_rx" or not _source_ok(h["source"])):
+            return None, "bad_meta"  # source facts belong to a v2 frame only, and only well formed (7a-3)
         sid = int(h["scan_id"])
         if "gen" in h and not _int(h["gen"], 1):
             return None, "bad_meta"  # a nonce given but malformed is not "no nonce" (Codex 7a-1 round 2 P2-3)
@@ -306,6 +328,11 @@ class ScanFeed:
         if _int(f0, 1) and _int(f1, 1) and f1 > f0:
             meta["first_beam_mono_ns"], meta["last_beam_mono_ns"] = int(f0), int(f1)
         meta["stamp_kind"] = h.get("stamp_kind") if isinstance(h.get("stamp_kind"), str) else None
+        if "source" in h:
+            src = dict(h["source"])
+            if "sdk_info" in src:
+                src["sdk_info"] = dict(src["sdk_info"])
+            meta["source"] = src  # what ran, per frame: lidar_cfg.frame_bound compares it with timing.applies_to
         if self._frame_synthetic:
             meta["synthetic"] = True  # the frame's own mark, carried to the layer scan's origin (design 4)
         return RealScan(int(h["scan_id"]), stamp_mono, int(h["recv_mono_ns"]), latency, angles, r, inten, meta,
@@ -374,5 +401,5 @@ def replay(path: str | Path) -> dict:
     return {"recorded": recorded, "verdicts": verdicts, "feed": feed}
 
 
-__all__ = ["ESTABLISH_COUNT", "bind_socket", "FrameError", "MAX_BEAMS", "RealScan", "ScanFeed", "decode_frame", "encode_frame",
+__all__ = ["ESTABLISH_COUNT", "SDK_STAMPS", "bind_socket", "FrameError", "MAX_BEAMS", "RealScan", "ScanFeed", "decode_frame", "encode_frame",
            "replay"]

@@ -493,8 +493,10 @@ def _real_slam_on(sock, prep, host, transport, scan, imu, box, boot) -> RunSourc
     from forklift_core.localization.slam_real_scan import from_layer
     from forklift_core.localization.start_reloc import base_from_rear
 
+    # operating, named here (7a-3 plan 3, Codex round 3 P2-1): the HIL's synthetic cast is exact -- its first beam
+    # is its interval -- so its scans start the session and carry evidence as before
     slam = RealSlamSource(
-        RealSlamLink(sock), map_id=prep.map_id, start_ns=prep.start_ns,
+        RealSlamLink(sock), mode="operating", map_id=prep.map_id, start_ns=prep.start_ns,
         start_pose=base_from_rear(tuple(float(v) for v in prep.cfg.start_rear), prep.rear_offset_m),
         odom_history=lambda: box["loop"].odom_history,
         odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m),

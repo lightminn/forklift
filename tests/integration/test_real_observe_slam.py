@@ -61,7 +61,7 @@ def _slam(tmp_path, lid, start_ns, put=None):
                                 dt_min_s=0.02, dt_max_s=0.2)
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     sock.connect(bridge.path)
-    src = RealSlamSource(RealSlamLink(sock), map_id="m" * 64, start_ns=start_ns, start_pose=(0.0, 0.0, 0.0),
+    src = RealSlamSource(RealSlamLink(sock), mode="diagnostic", map_id="m" * 64, start_ns=start_ns, start_pose=(0.0, 0.0, 0.0),
                          odom_history=None, odom_base=None, odom_gen=None, boot=None, rear_offset_m=rear)
     rows = []
     slam = ObserveSlam(src, rows.append if put is None else put, odometry=RealOdometry(vehicle, max_gap_s=0.2), params=params,
@@ -142,8 +142,13 @@ def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
 def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path):
     rows, bridge, slam, stopped, lid, _n = _observe(model, tmp_path, 6.0)
     assert stopped
-    assert not lid.timing_measured  # before 7a-3: diagnostic
+    assert lid.timing_basis is None  # no bound yet: diagnostic
     assert bridge.error is None and slam.fatal is None, (bridge.error, slam.fatal)
+    # per frame (7a-3 plan 3): every frame diagnostic, with its reason
+    assert slam.counts["frames_diagnostic"] > 7 and slam.counts["frames_measured"] == 0
+    assert slam.counts["diagnostic_no_time_bound"] == slam.counts["frames_diagnostic"]
+    [head] = [r for r in rows if r["t"] == "slam_header"]
+    assert head["mode"] == "diagnostic" and head["timing"]["timing_basis"] is None
     kinds = [g[1] for g in bridge.got]
     assert kinds[0] == "Hello" and kinds.count("RealScan") > 7, (kinds[:3], dict(slam.src.counts), dict(slam.counts),
                                                                 [r for r in rows if r["t"] == "slam_scan"][:2])

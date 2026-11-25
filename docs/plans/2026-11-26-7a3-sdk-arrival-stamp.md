@@ -1,6 +1,6 @@
 # 7a-3 — SDK 표본 시각을 바이트 도착 시각에서 (S10 전 필수)
 
-작성일: 2026-11-26 · 상태: **계획 6판, Codex 6 회 수렴(새 P1/P2 없음); 상한 기입 근거는 총괄 결정 대기(9절)** · 관련: [PR 7 설계](../design/2026-11-25-real-sources-pr7.md) 2절 표의 7a-3 행·4절(7a-2 구현), `deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `config/real/lidar.yaml`
+작성일: 2026-11-26 · 상태: **계획 6판 승인(총괄 2026-11-26), 상한 근거는 B 로 결정(9절); 7a-3a 구현 중** · 관련: [PR 7 설계](../design/2026-11-25-real-sources-pr7.md) 2절 표의 7a-3 행·4절(7a-2 구현), `deploy/ros2/sllidar_patches/0001-sdk-first-sample-stamp.patch`, `config/real/lidar.yaml`
 
 총괄 승인(2026-11-26): 7a-3 은 벤치 없이 되는 패치·패치 이미지·단위 시험까지 한다. 오차 상한 측정과 `first_beam_err_s`·`timing.measured` 기입은 벤치 항목으로 절차서에 넣는다. 이미지 태그를 한 곳에 모으는 안을 넣는다.
 
@@ -19,19 +19,20 @@
 - **capsule 기준을 자기 capsule 로**(Codex 계획 1 회차 P1): Express·UltraBoost 는 이전 capsule 의 표본을 이전 capsule 의 캐시된 시각으로 찍는데(`handler_capsules.cpp` 256), Dense·UltraDense 는 **다음 capsule 을 완성한 읽기의 시각**으로 이전 capsule 의 표본을 찍는다(739, 1033). 0002 에서 Dense·UltraDense 도 이전 capsule 을 완성한 읽기의 도착 시각을 캐시해 그것으로 찍는다. 그래서 모든 모드에서 표본의 기준은 "그 표본이 든 capsule 의 마지막 바이트가 든 읽기의 도착 시각"이다. 모드별 표본 지연(`_getSampleDelayOffset…`)을 빼는 식은 그대로다.
 - **Dense·UltraDense 캐시의 교체와 폐기**(Codex 2 회차 P2-4): capsule 데이터와 그 도착 시각·읽기 순번·유효 여부를 한 묶음으로 바꾼다. 각도 점프로 바로 반환하는 분기에서도 함께 바꾸고, `reset()` 에서는 묶음 전체와 준비 비트를 내린다. 그래서 새 데이터에 옛 capsule 의 시각이 붙지 않는다.
 - **실제 모드 정보 발행**(P2-2, 3 회차 P2-2·3): 런처가 실행마다 **실행 식별자**(무작위)를 발급해 노드(파라미터 `forklift_run_id`)와 어댑터(인자)에 같은 값을 넘긴다(4 회차 P2-1: 같은 토픽의 다른 v2 노드를 걸러냄). 노드는 스캔을 시작할 때마다(처음과 `start_motor` 서비스의 `startScan` 재시작 모두) 새 **원천 식별자**(시작마다 바뀌는 무작위 값)를 정하고, SDK 가 실제로 고른 응답 타입·표본 주기·보드레이트를 실행·원천 식별자와 함께 `scan_sdk_info`(latched)로 낸다. 재시작하면 옛 원천 식별자는 무효다. 각 `scan_sdk` 메시지의 `frame_id` 에도 두 식별자를 붙인다(`<frame>@sdk_mono_v2#<run>.<start>`). 재시작으로 모드가 바뀌는 경우를 시험에 넣는다.
+  - **3a 에서 정한 형식**(3b 의 노드가 맞춘다): `scan_sdk_info` 는 `std_msgs/String`(JSON) — `{"format": "sdk_mono_v2", "run", "start", "ans_type", "sample_period_us", "baudrate"}`, 토픽 `/sensors/lidar/scan_sdk_info`(재매핑), QoS reliable·transient_local·depth 1. 실행·원천 식별자는 소문자 16진 8–32 자. 노드 파라미터 `forklift_run_id` 는 런처가 넘긴다(v1 노드는 선언하지 않아 무시). 어댑터는 v2 프레임에 `source: {run, start, image_id, usb, host[, sdk_info]}` 를 싣고, `sdk_info` 는 그 시작의 정보를 받았을 때만 싣는다.
 - **진단 기록**(벤치용, 기본 끔): 환경변수 `FORKLIFT_SDK_RX_LOG=<경로>` 가 있을 때만 줄 단위로 쓴다. 읽기마다 `(rx_seq, rx_us, bytes)`, capsule 완성마다 `(rx_seq, capsule 순번, 응답 타입)` 을 고리 버퍼로 모아 쓰고, 넘친 줄 수를 센다.
 - 노드는 형식 이름만 `@sdk_mono_v2` 로 올리고 위 `arrival_ok` 를 지킨다. 0001 의 첫·끝 표본·`publish_delay_ms` 는 그대로다.
 
 ## 3. 호스트 쪽 — 한 판정을 모든 소비자가
 
 - 어댑터(`real_scan_adapter.py`)는 v1·v2 를 받고 `stamp_kind` 를 `sdk_first_sample`(v1)·`sdk_first_sample_rx`(v2)로 싣는다. `ScanFeed` 는 두 이름을 받는다.
-- **프레임별 판정 하나**: `forklift_core.sensors.lidar_cfg` 에 "이 프레임에 측정된 상한을 쓸 수 있는가" 함수를 두고 층(`to_layer_scan`)과 SLAM(`slam_real_scan.from_feed`)이 **둘 다** 이것을 쓴다(Codex P2-1). 조건: 프레임 `stamp_kind` 가 v2, `lidar.yaml timing.measured: true`, 그리고 **원천 세대의 실측 사실**이 측정 기록의 적용 조건(`timing.applies_to`)과 같음. 하나라도 아니거나 값이 없으면 그 프레임은 진단 전용이다.
+- **프레임별 판정 하나**: `forklift_core.sensors.lidar_cfg.frame_bound` 가 "이 프레임에 상한을 쓸 수 있는가"를 정하고 층(`to_layer_scan`)과 SLAM(`slam_real_scan.from_feed`)이 **둘 다** 이것을 쓴다(Codex P2-1). 조건: `lidar.yaml` 의 `timing.basis` 가 `measured` 이거나, `engineering` 이면서 `decision_id`·`basis_doc` 가 있음(총괄 결정: 공학 추정을 measured 로 쓰지 않는다); 프레임 `stamp_kind` 가 v2(`sdk_first_sample_rx`); **원천 세대의 실측 사실**이 적용 조건(`timing.applies_to`: image_id, usb, host, ans_type, sample_period_us, baudrate)과 같음. 하나라도 아니거나 값이 없으면 그 프레임은 진단 전용이고 그 사유(`no_time_bound`·`not_arrival_stamped`·`no_source_facts`·`source_mismatch`)가 남는다. 옛 `timing.measured` 키는 읽지 않고 거부한다.
 - **적용 조건은 실제로 돈 원천에 묶는다**(Codex 2 회차 P2-2): 런처가 실행한 이미지 ID(`docker inspect`), 노드의 `scan_sdk_info`(응답 타입·표본 주기·보드레이트), USB 어댑터 식별(udev 의 vendor·product·serial), 호스트 이름을 원천 사실로 모은다. 판정은 이 값들을 `applies_to` 와 비교한다(태그 이름이 아니라 이미지 ID).
 - **프레임마다 원천을 싣는다**(3 회차 P2-3): 어댑터는 실행 식별자가 자기 것이 아닌 스캔을 버리고 센다. 같은 실행 안에서 스캔의 원천 식별자와 같은 식별자의 `scan_sdk_info` 를 받았을 때만 그 정보를 그 프레임의 `scan/1` 머리에 싣는다(정보가 없거나 식별자가 다르면 정보 없음 → 진단). 그래서 데이터그램 수신자가 늦게 붙거나 첫 프레임을 놓쳐도 프레임 하나로 판정한다.
 - **폐기한 원천에는 새 세대가 없다**(4 회차 P2-2): 원천 식별자가 바뀌면 어댑터의 생산자 세대가 오르고 옛 식별자는 폐기 목록에 들어간다. 폐기한 식별자의 스캔은 늦게 와도 버리고 센다(새 세대를 내주지 않음). 시험: `A → B → 늦은 A`.
 - **세대 변경은 자격 판정보다 먼저**(3 회차 P2-3): `ScanFeed` 가 새 세대를 받으면, 그 프레임이 자격 미달이어도 SLAM 원천에 세대 변경을 먼저 알려 대기 스캔과 전송 중 응답을 무효화한 뒤 자격을 판정한다.
 - **운영 SLAM 입력은 자격 있는 프레임만**(Codex 2 회차 P2-3): `RealSlamSource` 는 생성 때 `diagnostic` 또는 `operating` 이다. `operating` 은 판정을 통과한 프레임만 브리지에 보내고 시작 검사 계수에도 그것만 센다. `diagnostic` 은 자격 있는 프레임을 받아도 증거 응답을 내지 않는다(기록만). 진단 세션에서 운영으로 바꾸려면 새 세션(새 인스턴스)으로 시작한다.
-- **세대가 바뀌면 진행 중인 시작·재위치 검사도 무효**(4 회차 P2-3, 7c-1 부터 있던 틈): 지금 `RealSlamSource` 는 세대 변경 때 대기 스캔과 전송 중 응답은 버리지만, 옛 인스턴스의 별도 상태 메시지(`ready` 등)는 받아 `can_confirm()` 이 참이 될 수 있다(Codex 가 재현). 세대가 바뀌면 진행 중인 시작 검사와 seed 의 끝 상태 대기를 무효로 하고, 새 세대 스캔으로 시작한 검사의 끝 상태만 확인을 연다. 시험: 시작 스캔 7 개 → 세대 변경 → 옛 `processed`·`ready` 수신 → `can_confirm()` 거짓.
+- **세대가 바뀌면 진행 중인 시작·재위치 검사도 무효**(4 회차 P2-3, 7c-1 부터 있던 틈): 지금 `RealSlamSource` 는 세대 변경 때 대기 스캔과 전송 중 응답은 버리지만, 옛 인스턴스의 별도 상태 메시지(`ready` 등)는 받아 `can_confirm()` 이 참이 될 수 있다(Codex 가 재현). 세대가 바뀌면 진행 중인 시작 검사와 seed 의 끝 상태 대기를 무효로 하고, 새 세대 스캔으로 시작한 검사의 끝 상태만 확인을 연다. (3a 구현: 최초 시작 검사에 옛 세대 스캔이 하나도 들어가지 않았으면 그 검사는 새 세대 스캔으로 이어 간다 — 무효로 할 옛 증거가 없다.) 시험: 시작 스캔 7 개 → 세대 변경 → 옛 `processed`·`ready` 수신 → `can_confirm()` 거짓.
   - **브리지 세션 정리**(5 회차 P2): 브리지 프로토콜은 `Cancel` 을 seed 에만 받고 같은 연결의 새 `Hello` 도 고장으로 본다(연결은 하나뿐). 그래서 **최초 시작 검사(`Hello` 로 연 것) 중에** 세대가 바뀌면 원천은 그 SLAM 세션을 끝낸다(원천 고장으로 끝내고 기록에 사유 `start_check_generation_changed`). 운영 실행기는 지금의 원천 고장 경로대로 멈추고, 운용자는 새 브리지 세션(런처가 컨테이너를 새로 띄움)에서 다시 시작한다. 관측 실행(`real_observe --slam`)은 지금처럼 SLAM 경로만 끝내고 보드 관측과 종료 `DISARM` 은 이어 간다. 진행 중인 **seed** 중이면 기존 `Cancel → void` 를 쓴다. 시작 검사가 끝난(`ready`) 뒤의 세대 변경은 지금처럼 대기 스캔·응답만 무효로 한다.
   - 회귀 시험: 옛 `ready` 가 확인을 열지 않음, 최초 시작 검사 중 세대 변경은 세션 끝, seed 중 세대 변경은 `Cancel → void` 뒤 새 세대 스캔으로 끝 상태가 나와야 확인이 다시 열림.
 - **HIL 은 지금 경로를 명시적으로 고른다**(3 회차 P2-1): 상한이 기입되기 전에 `diagnostic` 인 것은 **실 LiDAR 입력** 세션뿐이다. HIL 조립(취득 시각이 정확한 합성 스캔을 `measured=True` 로 넘김)은 `operating` 을 명시해 지금처럼 시작 확인과 임무를 한다. 3a 의 회귀는 기존 HIL 시작 확인·승강 통합 시험이다.
@@ -71,9 +72,18 @@ Codex 1 회차 P1: `latency_timer`·덩어리 크기·회전 간격 흔들림만
   - **7a-3a 호스트**: 어댑터 v1·v2 수용과 `stamp_kind`·실행 식별자 검사·폐기 목록, `ScanFeed` 두 이름과 세대 변경 우선, 프레임별 판정(층·SLAM)과 원천 사실 필드, `RealSlamSource` 의 `diagnostic`/`operating` 과 세대 변경 때 시작 검사 무효화, HIL 조립 호출부(`real_run.py` 491 부근)의 `operating` 명시, 관측 헤더 계수, 텔레옵 시험, `ros2_dev.sh` 벤치 인자(`sdk`·실행 식별자·진단 기록 마운트·`publish_delay_ms`·이미지 ID 출력). 이미지는 아직 v1 이라 실 LiDAR 동작은 지금과 같다.
   - **7a-3b 이미지**: 패치 0002(도착 시각·Dense 기준·캐시 폐기·`scan_sdk_info`·진단 기록)·`Dockerfile.scan`·빌드 검사·SDK 시험·태그 한 곳(`lidar.yaml scan_image`, 빌드 진입점, hwday, 예시 문서)과 기본 태그 전환, 절차서 벤치 항목. 머지 상태마다 `sdk`·`raw` 를 확인한다.
 - Isaac 경로(러너 `run_transport`·미션 코어·Isaac 장애물층)는 바꾸지 않는다. 재생 게이트는 그 경로만 재생하므로 생략으로 본다(Codex 동의). 실차 루프 쪽 변경(`RealSlamSource`·HIL 조립)은 HIL 통합 시험과 전체 pytest 로 확인한다. PR 에는 생략 근거와 함께 이미지 시험, `scan/1` v1·v2 소비 경로 시험, 텔레옵 `raw` 회귀를 적는다.
-- 상한 값은 기입하지 않는다(`first_beam_err_s: null`, `measured: false` 유지).
+- 상한 값은 기입하지 않는다(`first_beam_err_s: null`, `basis: null` 유지).
 
-## 9. 총괄 결정 대기 — 상한을 기입할 근거
+## 9. 상한을 기입할 근거 — 총괄 결정(2026-11-26): B
+
+**결정.** B 로 하되 측정값으로 보이지 않게 한다.
+- 기록 이름: `timing.measured: true` 로 쓰지 않는다. `timing.basis: engineering` 과 근거 문서 경로(`basis_doc`)·결정 id(`decision_id`)를 함께 적고, 판정 코드는 basis 가 measured 이거나 engineering+결정 id(+근거 문서)가 있을 때만 상한을 쓴다. 이 구분은 3a 의 프레임별 판정에 들어갔다(값은 null).
+- 기입 조건: (가)·(나) 진단과 SDK 지연 모델·`latency_timer`·전송 시간으로 보수적 값을 내고, 가정을 하나씩 적고, 그 값이 한쪽 11 ms 예산 안일 때만 기입한다.
+- 재측정 조건: 운영 부하(Jetson·SLAM·층 동시)에서 다시 잰다. 진단 값이 상한의 절반을 넘으면 바로 무효로 돌리고 총괄에 올린다.
+- 예산을 넘으면 A(독립 기준)나 C(S10 범위 조정)를 그때 다시 본다. 지금은 A 를 준비하지 않는다.
+- 기입은 벤치 뒤 총괄 예외 결정으로 하고 기록 문서에 남긴다. 사용자에게는 측정이 아니라 공학 추정이라는 점을 알린다(총괄).
+
+결정 전에 올린 선택지:
 
 7a-3 의 코드(3a·3b)는 상한 없이도 진행된다. 다만 S10 은 실 스캔이 층·SLAM 증거가 되어야 하므로 상한 기입이 필요하고, Codex 는 학교 수준 벤치의 (가)·(나)로는 절대 상한의 근거가 안 된다고 본다. 선택지:
 - **A. 독립 기준을 만든다**: 예) 호스트가 시각을 아는 순간에 LiDAR 평면을 가로지르는 물체(MCU 가 STATE 에 시각을 싣는 포크 승강이나 모터로 도는 표지)를 두고, 그 물체가 스캔에 처음 나타난 빔의 시각과 비교. 빔 순서·시각을 보존한 원자료가 필요하다. 준비가 크다.

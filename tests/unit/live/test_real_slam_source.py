@@ -63,7 +63,7 @@ class Bridge:
 
 
 class Rig:
-    def __init__(self):
+    def __init__(self, mode="operating"):
         a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         _OPEN.extend((a, b))
         self.bridge = Bridge(b)
@@ -74,7 +74,7 @@ class Rig:
         self.odom_gen = 0
         self.gen = (0, None)
         self.src = rss.RealSlamSource(
-            rss.RealSlamLink(a, clock=lambda: self.now), map_id=MAP, start_ns=START_NS, start_pose=(1.0, 2.0, 0.3),
+            rss.RealSlamLink(a, clock=lambda: self.now), mode=mode, map_id=MAP, start_ns=START_NS, start_pose=(1.0, 2.0, 0.3),
             odom_history=lambda: self.history, odom_base=lambda: self.odom, odom_gen=lambda: self.odom_gen,
             boot=lambda: self.boot_id, rear_offset_m=0.5, clock=lambda: self.now)
         self.hist_to(self.now)
@@ -156,11 +156,39 @@ def test_a_localized_reply_carries_the_three_times_and_the_epoch():
     assert reply.epoch == 0 and reply.attempt is None and meta == {"source": "real_slam"}
 
 
-def test_a_diagnostic_scan_is_sent_and_never_handed_over():
-    r = Rig()
+def test_a_diagnostic_session_sends_every_scan_and_hands_none_over():
+    """7a-3 plan 3: a diagnostic session's replies are recorded, never evidence -- even of a scan with an interval."""
+    r = Rig(mode="diagnostic")
     r.started()
-    out, _ = r.one(measured=False)
-    assert out == [] and any(e.get("why") == "diagnostic" for e in r.src.events)
+    for measured in (False, True):
+        out, _ = r.one(measured=measured)
+        assert out == []
+    assert [e["why"] for e in r.src.events if e.get("t") == "reply" and e.get("phase") == "ready"] == \
+        ["diagnostic", "diagnostic"]
+
+
+def test_an_operating_session_sends_only_scans_with_an_interval():
+    """7a-3 plan 3 (Codex round 2 P2-3): a scan without a first-beam interval never reaches an operating bridge --
+    not in the start check either."""
+    r = Rig()
+    r.step()
+    [hello] = r.bridge.frames()
+    r.bridge.state(1, "seeding")
+    r.bridge.state(1, "ready_for_scans")
+    r.step()
+    r.src.offer(r.scan(measured=False))
+    r.step()
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+    assert r.src.counts["slam_not_qualified"] == 1 and r.src.target["start_scans"] == 0
+
+
+def test_a_mode_is_always_named():
+    with pytest.raises(TypeError):
+        rss.RealSlamSource(None, map_id=MAP, start_ns=0, start_pose=(0, 0, 0), odom_history=None, odom_base=None,
+                           odom_gen=None, boot=None, rear_offset_m=0.5)
+    with pytest.raises(ValueError):
+        rss.RealSlamSource(None, mode="evidence", map_id=MAP, start_ns=0, start_pose=(0, 0, 0), odom_history=None,
+                           odom_base=None, odom_gen=None, boot=None, rear_offset_m=0.5)
 
 
 def test_the_odometry_is_tried_once_more_a_tick_later_then_dropped():
@@ -652,6 +680,91 @@ def test_a_scan_stuck_in_the_socket_is_a_fault_after_a_second():
             r.step()
 
 
+def _start_scans(r, k, ident=1):
+    """hello -> seeding -> ready_for_scans -> k start scans, each replied."""
+    r.step()
+    r.bridge.frames()
+    r.bridge.state(ident, "seeding")
+    r.bridge.state(ident, "ready_for_scans")
+    r.step()
+    for _ in range(k):
+        r.src.offer(r.scan())
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+
+
+def test_an_old_generations_ready_never_opens_the_confirmation():
+    """7a-3 plan 3 (Codex plan round 4 P2-3, a gap since 7c-1): seven start scans, then a generation change, then the
+    earlier generation's ready -- the start check is void: the session ends (no second hello on the connection,
+    round 5) and nothing confirms."""
+    r = Rig()
+    _start_scans(r, 7)
+    r.gen = (1, 77)
+    with pytest.raises(rss.SlamSourceFatal, match="start_check_generation_changed"):
+        r.src.generation(r.gen)  # told before the scan is judged, whatever its verdict
+    r.bridge.state(1, "ready")
+    with pytest.raises(rss.SlamSourceFatal):
+        r.step()
+    assert not r.src.can_confirm()
+
+
+def test_a_generation_change_before_any_start_scan_keeps_the_start_check():
+    r = Rig()
+    _start_scans(r, 0)
+    r.gen = (1, 77)
+    r.src.generation(r.gen)
+    for _ in range(7):
+        r.src.offer(r.scan())
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(1, "ready")
+    r.step()
+    assert r.src.can_confirm()
+
+
+def test_an_unqualified_scan_still_changes_the_generation():
+    """Codex plan round 3 P2-3: the generation is told before the qualification -- an operating session's start
+    check with old-generation scans ends even when the new generation's first scan has no interval."""
+    r = Rig()
+    _start_scans(r, 3)
+    r.gen = (1, 77)
+    with pytest.raises(rss.SlamSourceFatal, match="start_check_generation_changed"):
+        r.src.offer(r.scan(measured=False))
+
+
+def test_a_generation_change_cancels_a_seed_and_only_its_successor_confirms():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(3):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.gen = (1, 77)
+    r.src.generation(r.gen)
+    r.step()
+    [c] = [f for f in r.bridge.frames() if isinstance(f, rl.Cancel)]
+    assert c.seed_id == sid and c.reason == "generation_changed"
+    r.bridge.state(sid, "ready")  # the old seed's end state, sent before the bridge read the cancel
+    r.step()
+    assert not r.src.can_confirm() and r.src.counts["slam_end_after_cancel"] == 1
+    r.bridge.state(sid, "void", "generation_changed")
+    r.step()
+    assert r.src.seed_state(1) == ("void", "generation_changed") and not r.src.can_confirm()
+    sid2 = seed_to_ready(r, epoch=2)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(sid2, "ready")
+    r.step()
+    assert r.src.seed_state(2) == ("ready", None) and r.src.can_confirm()
+
+
 def test_an_earlier_generations_reply_frees_the_slot_and_its_request_goes_on():
     r = Rig()
     r.started()
@@ -680,13 +793,22 @@ def test_a_non_finite_correction_or_a_float_id_is_a_fault():
             r.step(1)
 
 
-def test_a_diagnostic_scan_does_not_take_a_forced_request():
+def test_a_scan_without_an_interval_does_not_take_a_forced_request():
     r = Rig()
     r.started()
     r.src.request_processed(0, 6, r.s(r.now) - 1.0)
-    r.one(measured=False)
+    r.src.offer(r.scan(measured=False))  # not sent at all
+    r.step(1)
     out, _ = r.one()
     assert out[0][0].attempt == 6
+
+
+def test_a_diagnostic_session_takes_no_forced_request():
+    r = Rig(mode="diagnostic")
+    r.started()
+    r.src.request_processed(0, 6, r.s(r.now) - 1.0)
+    r.one()
+    assert [q[1] for q in r.src._requests] == [6]  # noqa: SLF001 -- still waiting for evidence
 
 
 def test_an_oversized_frame_is_a_fault():

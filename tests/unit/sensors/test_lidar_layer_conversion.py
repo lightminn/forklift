@@ -20,14 +20,28 @@ from test_scan_feed import MS, frame, settled  # noqa: E402
 REPO = Path(__file__).resolve().parents[3]
 
 
-def cfg(err_s=0.002, period=0.1, mask=(), measured=True):
+FACTS = {"image_id": "sha256:" + "a" * 64, "usb": "10c4:ea60:0001", "host": "jetson", "ans_type": 132,
+         "sample_period_us": 31.25, "baudrate": 256000}  # what a bound is taken on (lidar.yaml timing.applies_to)
+
+
+def source(**over):
+    """A v2 frame's source head as the adapter makes it (7a-3): the launcher's facts and the node's sdk_info."""
+    f = {**FACTS, **over}
+    return {"run": "0123456789abcdef", "start": "fedcba9876543210", "image_id": f["image_id"], "usb": f["usb"],
+            "host": f["host"], "sdk_info": {k: f[k] for k in ("ans_type", "sample_period_us", "baudrate")}}
+
+
+def cfg(err_s=0.002, period=0.1, mask=(), measured=True, basis="measured", **kw):
     return lc.LidarConfig(mount=(0.1, 0.0, 0.3, 0.0), mount_measured=False, mask_rad=tuple(mask), limit_m=5.7,
-                          scan_period_s=period, first_beam_err_s=err_s, timing_measured=measured)
+                          scan_period_s=period, first_beam_err_s=err_s if measured else None,
+                          timing_basis=basis if measured else None, applies_to=tuple(sorted(FACTS.items())), **kw)
 
 
-def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12):
+def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12, kind=lc.RX_STAMP, src="default"):
     step = (0.09 / (n - 1)) if step is None else step
-    meta = {"time_increment": step}
+    meta = {"time_increment": step, "stamp_kind": kind}
+    if src is not None:
+        meta["source"] = source() if src == "default" else src
     if first is not None:
         meta["first_beam_mono_ns"] = first
         if step > 0:  # the buffer's own last sample (forklift patch 0001), here (n - 1) steps on
@@ -40,7 +54,7 @@ def scan(n=8, first=None, step=None, ranges=None, synthetic=False, recv=10**12):
 
 def test_the_shipped_config_keeps_every_scan_diagnostic():
     c = lc.load_lidar_config(REPO / "config" / "real" / "lidar.yaml")
-    assert c.first_beam_err_s is None and not c.mount_measured and not c.timing_measured
+    assert c.first_beam_err_s is None and not c.mount_measured and c.timing_basis is None and not c.bound_usable
     assert c.limit_m == pytest.approx(0.10 / math.sin(math.radians(1.0)))
     assert lc.to_layer_scan(scan(first=5 * 10**9), c, 0) == (None, "no_time_bound")
 
@@ -291,3 +305,74 @@ def test_each_candidate_expiry_path_alone(expire):
     else:
         feed.new_generation("receive_gap")
     assert feed._cand is None  # noqa: SLF001
+
+
+# --- the bound's basis and the per-frame judgement (7a-3, lead decision 2026-11-26) ---
+
+def _write_cfg(tmp_path, **timing):
+    import yaml
+
+    raw = yaml.safe_load((REPO / "config" / "real" / "lidar.yaml").read_text(encoding="utf-8"))
+    raw["timing"].update(timing)
+    raw["timing"] = {k: v for k, v in raw["timing"].items() if v != "DROP"}
+    p = tmp_path / "lidar.yaml"
+    p.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    return p
+
+
+@pytest.mark.parametrize("timing,ok", [
+    ({}, True),                                                              # shipped: no bound, no basis
+    ({"first_beam_err_s": 0.004}, False),                                    # a bound without its basis
+    ({"basis": "measured"}, False),                                          # a basis without a bound
+    ({"basis": "guess", "first_beam_err_s": 0.004, "applies_to": FACTS}, False),
+    ({"basis": "measured", "first_beam_err_s": 0.004}, False),               # no applies_to
+    ({"basis": "measured", "first_beam_err_s": 0.004, "applies_to": {**FACTS, "baudrate": "fast"}}, False),
+    ({"basis": "measured", "first_beam_err_s": 0.004,
+      "applies_to": {k: v for k, v in FACTS.items() if k != "host"}}, False),
+    ({"basis": "measured", "first_beam_err_s": 0.004, "applies_to": FACTS}, True),
+    ({"basis": "engineering", "first_beam_err_s": 0.004, "applies_to": FACTS}, False),  # no decision, no document
+    ({"basis": "engineering", "first_beam_err_s": 0.004, "applies_to": FACTS, "decision_id": "lead-2026-12-01"},
+     False),
+    ({"basis": "engineering", "first_beam_err_s": 0.004, "applies_to": FACTS, "decision_id": "lead-2026-12-01",
+      "basis_doc": "docs/validation/x.md"}, True),
+    ({"measured": True}, False),                                             # the old key is refused, never a basis
+])
+def test_the_bound_needs_its_basis(tmp_path, timing, ok):
+    p = _write_cfg(tmp_path, **timing)
+    if ok:
+        c = lc.load_lidar_config(p)
+        assert c.bound_usable is (c.first_beam_err_s is not None)
+    else:
+        with pytest.raises(ValueError):
+            lc.load_lidar_config(p)
+
+
+def test_an_engineering_bound_keeps_its_decision_and_document(tmp_path):
+    c = lc.load_lidar_config(_write_cfg(tmp_path, basis="engineering", first_beam_err_s=0.004, applies_to=FACTS,
+                                        decision_id="lead-2026-12-01", basis_doc="docs/validation/x.md"))
+    assert (c.timing_basis, c.timing_decision, c.timing_doc) == ("engineering", "lead-2026-12-01",
+                                                                 "docs/validation/x.md")
+    assert lc.frame_bound(scan(first=10**9), c) == (0.004, None)
+    # made by hand without the decision: not usable, whatever the bound says
+    assert lc.frame_bound(scan(first=10**9), replace(c, timing_decision=None)) == (None, "no_time_bound")
+
+
+@pytest.mark.parametrize("kw,why", [
+    ({"kind": "sdk_first_sample"}, "not_arrival_stamped"),       # v1: the decode-time stamp
+    ({"kind": None}, "not_arrival_stamped"),
+    ({"src": None}, "no_source_facts"),
+    ({"src": {k: v for k, v in source().items() if k != "sdk_info"}}, "no_source_facts"),  # info of the start missing
+    ({"src": {k: v for k, v in source().items() if k != "usb"}}, "no_source_facts"),
+    ({"src": source(image_id="sha256:" + "b" * 64)}, "source_mismatch"),
+    ({"src": source(usb="0403:6001:XYZ")}, "source_mismatch"),
+    ({"src": source(host="laptop")}, "source_mismatch"),
+    ({"src": source(ans_type=133)}, "source_mismatch"),
+    ({"src": source(sample_period_us=62.5)}, "source_mismatch"),
+    ({"src": source(baudrate=115200)}, "source_mismatch"),
+    ({}, None),
+])
+def test_the_bound_applies_to_a_frame_only_on_the_source_it_was_taken_on(kw, why):
+    """7a-3 plan 3 (Codex round 2 P2-2, round 3 P2-3): one frame's own facts decide, for the layer as for SLAM."""
+    s = scan(first=10**9, **kw)
+    assert lc.frame_bound(s, cfg()) == ((None, why) if why else (0.002, None))
+    assert lc.to_layer_scan(s, cfg(), 0)[1] == why
