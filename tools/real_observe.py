@@ -576,7 +576,9 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                                                             "generation": obs.feed.generation,
                                                             "generation_why": obs.feed.generation_why},
                      "imu": None if imu is None else {"counts": dict(imu.counts), "generation": imu.gen,
-                                                      "generation_why": imu.generation_why},
+                                                      "generation_why": imu.generation_why,
+                                                      "stopped": imu.stopped,  # round 5 P3: a restart is needed
+                                                      "last_generation_ns": imu.last_generation_ns},
                      "end_mono_ns": time.monotonic_ns()})
             complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped \
                 and not imu_overflow and result != "refused"
@@ -592,6 +594,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             complete = False
     out = {**(OUTPUT_MARKS if synthetic else {}), "result": result, "stopped_confirmed": stopped,
            "complete": complete, "record": str(args.out), "counts": obs.counts}
+    if imu is not None:
+        out["imu_stopped"] = imu.stopped  # the source stopped (a new device clock, an overflow, a broken bound)
     print(json.dumps(out))
     if result == "refused":
         return 2  # never connected: nothing written to the device

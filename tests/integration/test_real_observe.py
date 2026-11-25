@@ -630,3 +630,17 @@ def test_an_imu_overflow_is_reported_before_a_quiet_scan_socket(model, tmp_path,
                          extra=("--imu-config", str(cfg), "--scan-socket", str(sock_path)))
     res = json.loads(capsys.readouterr().out)
     assert code == 1 and res["result"] == "imu_overflow", res
+
+
+def test_the_record_replays_to_its_own_imu_rows_and_names_a_stopped_source(model, tmp_path, monkeypatch, capsys):
+    """Codex 7b round 5: the observe record's imu rows come back from replay (its last generation call included),
+    and the end row and the summary name why the source stopped."""
+    from forklift_core.sensors.imu_source import load_imu_source_config, replay
+
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice())
+    res = json.loads(capsys.readouterr().out)
+    assert code == 0 and "imu_stopped" in res, res
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    again = replay(load_imu_source_config(), rows).drain_rows()
+    assert again == [r for r in rows if r["t"] in ("imu", "imu_gen")]
+    assert "stopped" in rows[-1]["imu"] and rows[-1]["imu"]["last_generation_ns"] is not None

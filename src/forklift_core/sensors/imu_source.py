@@ -12,14 +12,15 @@ interval added (design 5):
   used for continuity only. Until the bound is measured the source is diagnostic: ``operating=True`` is refused and
   the observe run records intervals under the provisional bound;
 - a new generation on no accel sample for ``receive_gap_s`` (decided from one receipt history on the callback's
-  side, seen by ``generation()`` with no sample as a restart must be) or a queue overflow -- the same device clock
-  goes on. A receive gap, an overflow hole and a loss stay in the queue where they happened, so the samples before
-  them keep the old generation, and ``generation()`` counts every boundary already queued. After a boundary only
-  samples with ``lo`` not before it count (design 3.1). A wrap of the 32-bit device time is a forward step;
+  side, seen by ``generation()`` with no sample as a restart must be) -- the same device clock goes on. A receive
+  gap, an overflow hole and a loss stay in the queue where they happened, so the samples before them keep the old
+  generation, and ``generation()`` counts every boundary already queued. After a receive gap only samples with
+  ``lo`` not before it count (design 3.1). A wrap of the 32-bit device time is a forward step;
 - a new device clock -- ``lost()`` (the device gone), the device time going back more than ``restart_back_us`` (a
-  restart), its source changing -- or any two samples of the clock whose delays (receipt minus device time) differ
-  by more than the bound + 1 ms + 100 ppm of their device time apart (the bound broken): a new generation, and the
-  source stops (``stopped``; nothing is given from then on, the rest recorded). 7b never reopens the device;
+  restart), its source changing --, a queue overflow (the dropped frames' duplicate and clock evidence is gone), or
+  any two samples of the clock whose delays (receipt minus device time) differ by more than the bound + 1 ms + 100
+  ppm of their device time apart (the bound broken): a new generation, and the source stops (``stopped``; nothing is
+  given from then on, the rest recorded). 7b never reopens the device;
 - dropped and counted: gyro samples (the watch reads accel), a receipt not after the last one taken
   (``not_newer``), samples with no device time, the same device time again (``dup``), a small step back
   (``late``), a sample that may predate the latest boundary (``before_boundary``). The device time is the frame
@@ -151,10 +152,11 @@ class ImuSource:
         self._gap_ns = int(round(cfg.receive_gap_s * 1e9))
         self._lock = threading.Lock()
         # in receipt order: ("s", host_ns, dev_us, ts_ms, dom, xyz) samples and ("m", host_ns, why, until_ns, n,
-        # final) generation boundaries -- a receive gap, an overflow hole or a loss sits where it happened, so the
-        # samples before it keep the old generation (Codex 7b round 1 P1-2). ``until_ns``: the latest instant it
+        # final, at_ns) generation boundaries -- a receive gap, an overflow hole or a loss sits where it happened, so
+        # the samples before it keep the old generation (Codex 7b round 1 P1-2). ``until_ns``: the latest instant it
         # covers; ``n``: the generations it stands for (merged boundaries keep their count, round 4 P3); ``final``:
-        # the source stops there (a loss). Adjacent boundaries are merged, so the queue never holds more boundaries
+        # the source stops there (a loss, or an overflow -- the dropped frames' duplicate and clock evidence is gone,
+        # round 5 P1); ``at_ns``: when ``why`` itself happened (the record's time, round 5 P3). Adjacent boundaries are merged, so the queue never holds more boundaries
         # than samples + 1 and every field stays one value (round 3-4 P2: the callback's work under the lock is
         # bounded). Receipt times and receive gaps are decided here, on the callback's side, from one monotonic
         # receipt history (round 2 P1-2, round 4 P2)
@@ -172,6 +174,7 @@ class ImuSource:
         # clock -- a loss, a restart, a new time source (round 4 P1-1: 7b never reopens the device, so whatever
         # arrives after is of unknown provenance). Recorded; the run must be started again
         self.stopped: str | None = None
+        self.last_generation_ns: int | None = None  # the instant of the last generation() call
         self.last_read_capped = False  # the last read stopped at its budget with more due (round 1 P2)
         self._clk_last: int | None = None  # the last device time of this clock (as ``_device_us`` gives it)
         self._clk_src: str | None = None
@@ -218,17 +221,18 @@ class ImuSource:
         if self._last_rx is not None and self._gap_marked != self._last_rx and now > self._last_rx + self._gap_ns:
             self._gap_marked = self._last_rx
             at = self._last_rx + self._gap_ns
-            self._add_mark(("m", at, "receive_gap", at, 1, False), at_head=False)
+            self._add_mark(("m", at, "receive_gap", at, 1, False, at), at_head=False)
 
     def _add_mark(self, mark, *, at_head: bool) -> None:
         """(under the lock) a boundary at the head or the tail, merged into a boundary already there."""
         self._npend += mark[4]
         i = 0 if at_head else -1
         if self._queue and self._queue[i][0] == "m":
-            _k, h, why, until, n, final = self._queue[i]
-            _k2, nh, nwhy, nuntil, nn, nfinal = mark
-            keep = nwhy if (nfinal and not final) else why  # one reason, the final one first
-            self._queue[i] = ("m", min(h, nh), keep, max(until, nuntil), n + nn, final or nfinal)
+            _k, h, why, until, n, final, at = self._queue[i]
+            _k2, nh, nwhy, nuntil, nn, nfinal, nat = mark
+            if nfinal and not final:  # one reason, the final one first, with its own time
+                why, at = nwhy, nat
+            self._queue[i] = ("m", min(h, nh), why, max(until, nuntil), n + nn, final or nfinal, at)
             return
         if at_head:
             self._queue.appendleft(mark)
@@ -246,7 +250,7 @@ class ImuSource:
             e = self._queue.popleft()
             self._nq -= 1
             self.counts["overflow"] += 1
-            self._add_mark(("m", e[1], "overflow", e[1], 1, False), at_head=True)
+            self._add_mark(("m", e[1], "overflow", e[1], 1, True, e[1]), at_head=True)
         if head is not None:
             self._add_mark(head, at_head=True)
 
@@ -259,7 +263,7 @@ class ImuSource:
                 return
             self._lost_open = True
             now = int(self._now())
-            self._add_mark(("m", now, "lost:" + str(why), now, 1, True), at_head=False)
+            self._add_mark(("m", now, "lost:" + str(why), now, 1, True, now), at_head=False)
 
     # --- the loop side ---------------------------------------------------------------------------------------------
     def _new_generation(self, why: str, host_ns: int | None, n: int = 1) -> None:
@@ -275,8 +279,8 @@ class ImuSource:
             self._new_generation(why, host_ns)
 
     def _apply_mark(self, mark) -> None:
-        _k, host, why, until, n, final = mark
-        self._new_generation(why, host, n)
+        _k, _host, why, until, n, final, at = mark
+        self._new_generation(why, at, n)
         self._boundary_ns = until if self._boundary_ns is None else max(self._boundary_ns, until)
         if final and self.stopped is None:
             self.stopped = why
@@ -292,6 +296,7 @@ class ImuSource:
         queued first; boundaries at the head of the queue are applied (at most ``MARKS_PER_CALL``) -- each with no
         new sample (design 5, Codex round 5 P2)."""
         now = int(self._now())
+        self.last_generation_ns = now  # a record keeps it: a gap seen with no sample after it replays (round 5 P2)
         marks = []
         with self._lock:
             self._mark_gap(now)
@@ -398,15 +403,24 @@ class ImuSource:
         return rows
 
 
-def replay(cfg: ImuSourceConfig, rows) -> ImuSource:
+def replay(cfg: ImuSourceConfig, rows, *, last_generation_ns: int | None = None) -> ImuSource:
     """A recording source fed with the raw fields of a record's ``imu`` rows (an observe record's or an
-    ``imu_record/1`` file's, whose ``s`` names the stream), each taken off the queue as it comes: its
-    ``drain_rows()`` are the rows the record would hold. A receive gap is decided from the receipts, so it replays;
-    not raw input, so not replayed: a loss and queue overflows."""
-    src = ImuSource(cfg, operating=False, record=True)
+    ``imu_record/1`` file's, whose ``s`` names the stream), each taken off the queue as it comes, then asked its
+    generation at ``last_generation_ns`` (default: the observe record's end row, ``imu.last_generation_ns``): its
+    ``drain_rows()`` are the rows the record holds. A receive gap is decided from the receipts and that instant, so
+    it replays, a gap after the last sample included (round 5 P2); not raw input, so not replayed: a loss and queue
+    overflows."""
+    clock = {"ns": 0}
+    src = ImuSource(cfg, operating=False, record=True, now_ns=lambda: clock["ns"])
     for r in rows:
         if r.get("t") == "imu":
+            clock["ns"] = int(r["host_ns"])
             src.push(int(r["host_ns"]), r.get("s", "a"), r.get("dev_us"), r.get("dom"), (r["x"], r["y"], r["z"]),
                      ts_ms=r.get("ts_ms"))
             src.samples(int(r["host_ns"]), 1 << 30)
+        elif r.get("t") == "end" and last_generation_ns is None:
+            last_generation_ns = ((r.get("imu") or {}).get("last_generation_ns"))
+    if last_generation_ns is not None:
+        clock["ns"] = int(last_generation_ns)
+        src.generation()
     return src

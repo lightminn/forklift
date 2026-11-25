@@ -179,15 +179,44 @@ def test_a_receive_gap_seen_only_when_the_next_sample_is_read_opens_a_generation
     assert [g for g, *_ in s.samples(400 * MS, 64)] == [1, 1, 2, 2]
 
 
-def test_a_queue_overflow_drops_the_oldest_and_opens_a_generation_after_the_hole():
+def test_a_queue_overflow_stops_the_source_after_the_samples_before_the_hole():
+    """Codex 7b round 5 P1: a dropped frame's duplicate and clock evidence is gone with it (its re-sent copy could
+    pass as new) -- an overflow is a new generation and the source stops."""
     s, _ = src(replace(MEASURED, queue_max=4))
     feed(s, 100, 0, 6)
     out = s.samples(400 * MS, 64)
-    # the hole covers 100-105 ms: samples that may have been taken before its end (lo < 105 ms) do not count
-    # (round 2 P1-2, round 3 P2)
-    assert [hi // MS for _, _, hi, _ in out] == [125] and s.counts["before_boundary"] == 3
-    # two holes merged into one boundary still stand for two generations (round 4 P3)
-    assert s.counts["overflow"] == 2 and [g for g, *_ in out] == [3]
+    assert out == [] and s.stopped == "overflow" and s.counts["overflow"] == 2 and s.counts["stopped"] == 4
+    s, _ = src(replace(MEASURED, queue_max=1))
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.samples(100 * MS, 64)
+    s.push(105 * MS, "a", 15_000, "hardware_clock", G)
+    s.push(135 * MS, "a", 15_000, "hardware_clock", G)  # the first copy pushed out: its re-send
+    assert s.samples(200 * MS, 64) == [] and s.stopped == "overflow"
+
+
+def test_a_merged_boundary_records_the_loss_at_its_own_time():
+    """Round 5 P3: the 100 ms sample pushed out, then lost at 107 ms -- one boundary, recorded at 107 ms."""
+    s, clock = src(replace(MEASURED, queue_max=1), record=True)
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.push(105 * MS, "a", 5_000, "hardware_clock", G)
+    clock.ns = 107 * MS
+    s.lost("unplug")
+    s.samples(200 * MS, 64)
+    s.generation()
+    gens = [(r["why"], r["host_ns"]) for r in s.drain_rows() if r["t"] == "imu_gen"]
+    assert gens[0] in (("overflow", 100 * MS),) and ("lost:unplug", 107 * MS) in gens
+
+
+def test_a_gap_after_the_last_sample_replays_from_the_last_generation_call():
+    """Round 5 P2: last receipt 100 ms, a generation() call at 201 ms, no sample after: the record's gap replays."""
+    s, clock = src(record=True)
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.samples(100 * MS, 64)
+    clock.ns = 201 * MS
+    assert s.generation() == 2
+    rows = s.drain_rows() + [{"t": "end", "imu": {"last_generation_ns": s.last_generation_ns}}]
+    again = replay(MEASURED, rows)
+    assert again.gen == 2 and [r for r in again.drain_rows()] == rows[:-1]
 
 
 def test_a_reported_loss_opens_a_generation_on_the_next_read():
