@@ -663,7 +663,7 @@ def test_the_record_replays_to_its_own_imu_rows_and_names_a_stopped_source(model
 
 def _replay_reads(rows):
     """PR 7 7r plan 5: every row kind the replay reads carries the keys it reads -- here in the observe tool's real
-    output, and in the tests' synthetic writer (tests/unit/live/test_replay.py checks the writer the same way)."""
+    output, and in the tests' synthetic writer (tests/unit/live/test_replay_sources.py checks the writer the same way)."""
     from forklift_core.live.replay_record import READS
 
     seen = set()
