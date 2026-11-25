@@ -1,0 +1,56 @@
+"""PR 7c-1a: slam_toolbox instances as direct children -- stopping empties the whole process group (a child that ignores
+SIGTERM is killed), reaps the child, waits for the graph and drains, and says when any of that did not happen."""
+
+import sys
+import textwrap
+import time
+
+from forklift_core.localization.slam_instance import SlamInstances, group_members
+
+FAKE = textwrap.dedent("""
+    import os, signal, sys, time
+    if sys.argv[1] == "stubborn":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if os.fork() == 0:  # a child in the same group, as a node's helper would be
+        if sys.argv[1] == "stubborn":
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        time.sleep(60)
+        os._exit(0)
+    time.sleep(60)
+""")
+
+
+def instances(tmp_path, mode, **kw):
+    script = tmp_path / "fake_node.py"
+    script.write_text(FAKE)
+    return SlamInstances(lambda k, pose: [sys.executable, str(script), mode], log_dir=tmp_path, term_s=1.0,
+                         kill_s=2.0, graph_s=1.0, **kw)
+
+
+def test_a_stop_empties_the_group_and_reaps(tmp_path):
+    drained = []
+    s = instances(tmp_path, "plain", drain=drained.append)
+    proc = s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.3)
+    assert len(group_members(proc.pid)) == 2
+    assert s.stop(1) and group_members(proc.pid) == [] and drained == [1]
+    assert s.records[-1]["sigkill"] is False
+
+
+def test_a_member_ignoring_sigterm_is_killed(tmp_path):
+    s = instances(tmp_path, "stubborn")
+    proc = s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.3)
+    assert s.stop(1) and s.records[-1]["sigkill"] is True and group_members(proc.pid) == []
+
+
+def test_a_node_that_stays_in_the_graph_is_no_stop(tmp_path):
+    drained = []
+    s = instances(tmp_path, "plain", graph_has=lambda k: True, drain=drained.append)
+    s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.2)
+    assert not s.stop(1) and s.records[-1]["graph_gone"] is False and drained == []
+
+
+def test_stopping_an_unknown_instance_is_a_no_op(tmp_path):
+    assert instances(tmp_path, "plain").stop(9)
