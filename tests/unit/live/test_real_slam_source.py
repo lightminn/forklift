@@ -739,7 +739,7 @@ def test_a_start_scan_not_one_byte_of_which_went_is_taken_back_on_a_generation_c
     assert r.src.target["start_scans"] == 0 and not r.src.link.busy
     assert r.src.counts["slam_generation_cut"] == 1
     r.src.link.sock = sock
-    r.step()  # the next scan is a later one (a scan's stamp never repeats the one taken back)
+    # the scan taken back is no stamp sent: the new generation's scan at the same instant goes (round 2 P3)
     for _ in range(7):
         r.src.offer(r.scan())
         [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]

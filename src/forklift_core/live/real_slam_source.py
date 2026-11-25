@@ -347,6 +347,7 @@ class RealSlamSource:
         if f is not None and self.link.retract("scan"):
             # not one byte of it went: never sent at all (7c-1c round 2 P2-1), and not one of a start check's seven
             self._inflight = None
+            self._last_stamp_ns = f["prev_stamp_ns"]
             t = self.target
             if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
                 t["start_scans"] -= 1
@@ -379,8 +380,10 @@ class RealSlamSource:
         t = self.target
         f = self._inflight
         if f is not None and self.link.retract("scan"):
-            # not one byte of it went: never sent, and not one of a start check's seven (Codex 7a-3a round 1 P3-1)
+            # not one byte of it went: never sent, and not one of a start check's seven (Codex 7a-3a round 1 P3-1);
+            # nor the newest stamp sent (round 2 P3)
             self._inflight = None
+            self._last_stamp_ns = f["prev_stamp_ns"]
             if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
                 t["start_scans"] -= 1
             self._drop("slam_generation_cut", key=f["key"])
@@ -502,8 +505,9 @@ class RealSlamSource:
                     self._requests.remove(req)
                     attempt = req
                     break
+        f = {**w, "target": t["id"], "phase": t["state"], "attempt": attempt, "sent_ns": None, "old_gen": False,
+             "prev_stamp_ns": self._last_stamp_ns}  # restored if not one byte of it goes (round 2 P3)
         self._last_stamp_ns = w["stamp_ns"]
-        f = {**w, "target": t["id"], "phase": t["state"], "attempt": attempt, "sent_ns": None, "old_gen": False}
         self._inflight = f
         if t["state"] == "scans":
             t["start_scans"] += 1
@@ -752,6 +756,7 @@ class RealSlamSource:
         f = self._inflight
         if f is not None and f["target"] == t["id"] and self.link.retract("scan"):
             self._inflight = None  # not one byte of it went: the cancel goes first (round 3 P2-3)
+            self._last_stamp_ns = f["prev_stamp_ns"]
             self._drop("slam_cancel_cut", key=f["key"])
         t["cancel"] = {"reason": why, "decided_ns": int(now), "writing": False, "sent_ns": None}
         for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
