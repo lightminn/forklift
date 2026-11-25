@@ -5,14 +5,17 @@
 # The tag is config/real/lidar.yaml scan_image.arm64; it is computed from the inputs (tools/scan_image.py) and the
 # build stops before it starts when lidar.yaml names another. The image build runs the SDK's arrival test under qemu
 # and fails with it. Records in OUT: build.log, image.txt (ID), arch.txt, ctest.txt, built.txt; the tarball goes to
-# data/hwday/<tag>.tar.zst. FORKLIFT_ARM64_BASE overrides the base (default the 2026-11-16 one).
+# data/hwday/<tag>.tar.zst. The base is the arm64 one deploy/ros2/scan_image_base.txt records (part of the tag's
+# inputs); the build stops unless its reference has that ID here.
 # Minutes of laptop load: tell the lead before running it.
 set -euo pipefail
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$repo_root"
 tag="$(python3 tools/scan_image.py check --arch arm64)"
 tarball="data/hwday/$(python3 tools/scan_image.py tarball --arch arm64)"
-base="${FORKLIFT_ARM64_BASE:-forklift/ros2-dev:jazzy-arm64-738215dc}"
+read -r base base_id < <(python3 tools/scan_image.py base --arch arm64)
+have="$(docker image inspect -f '{{.Id}}' "$base")"
+[[ "$have" == "$base_id" ]] || { echo "base $base is $have here, not $base_id" >&2; exit 1; }
 out="${1:-data/hwday/scan_image_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$out" data/hwday
 echo "building $tag over $base (records in $out)" >&2

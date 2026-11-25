@@ -41,38 +41,50 @@ def test_the_reader_reads_what_yaml_reads():
 
 
 def test_the_tag_is_written_only_in_lidar_yaml():
-    """The lead's check for 7a-3b: no tracked file but lidar.yaml carries a scan image tag (a document's record of
-    an earlier build excepted)."""
-    files = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True).stdout.split()
+    """The lead's check for 7a-3b: no tracked file but lidar.yaml carries a scan image tag. git ls-files in a
+    checkout, the tree itself in the ws1 pytest copy (no .git -- Codex 7a-3b round 1 P2-4): the same listing as
+    test_no_session_tmp_paths."""
+    sys.path.insert(0, str(REPO / "tests" / "unit"))
+    from test_no_session_tmp_paths import text_of, tracked_files
+
     pat = re.compile(r"forklift/ros2-scan:jazzy-s[0-9a-f]{8}")
     hits = []
-    for f in files:
-        p = REPO / f
-        if not p.is_file() or p.suffix in (".png", ".jpg", ".zst", ".gz", ".pdf", ".mp4", ".npz"):
-            continue
-        try:
-            text = p.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        if pat.search(text):
+    for f in tracked_files():
+        text = text_of(REPO / f)
+        if text is not None and pat.search(text):
             hits.append(f)
     assert hits == ["config/real/lidar.yaml"]
 
 
-def test_every_input_byte_moves_the_tag(tmp_path):
+def test_every_input_byte_and_the_base_move_the_tag(tmp_path):
     root = tmp_path / "r"
-    for p in si.inputs():
+    for p in [*si.inputs(), si.BASES]:
         dst = root / p.relative_to(REPO)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_bytes(p.read_bytes())
-    base = si.tag("amd64", root)
-    assert base == si.tag("amd64")
+    tags = {a: si.tag(a, root) for a in si.ARCHES}
+    assert tags == {a: si.tag(a) for a in si.ARCHES}
     for p in si.inputs(root):
         saved = p.read_bytes()
         p.write_bytes(saved + b" ")
-        assert si.tag("amd64", root) != base, p.name
+        assert si.tag("amd64", root) != tags["amd64"], p.name
         p.write_bytes(saved)
-    assert si.tag("arm64", root) == base + "-arm64"
+    # another base (Codex 7a-3b round 1 P2-5): another tag, for that architecture only
+    bases = root / "deploy" / "ros2" / "scan_image_base.txt"
+    text = bases.read_text(encoding="utf-8")
+    amd_id = si.base("amd64")[1]
+    bases.write_text(text.replace(amd_id, "sha256:" + "0" * 64), encoding="utf-8")
+    assert si.tag("amd64", root) != tags["amd64"] and si.tag("arm64", root) == tags["arm64"]
+    assert tags["arm64"].endswith("-arm64") and tags["arm64"][:-6] != tags["amd64"]
+
+
+@pytest.mark.parametrize("bad", ["amd64 forklift/ros2-dev:jazzy sha256:abc", "amd64 x sha256:" + "a" * 64 + " extra"])
+def test_a_malformed_base_line_is_refused(tmp_path, bad):
+    d = tmp_path / "deploy" / "ros2"
+    d.mkdir(parents=True)
+    (d / "scan_image_base.txt").write_text(bad + "\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        si.base("amd64", tmp_path)
 
 
 def test_check_stops_when_lidar_yaml_differs(tmp_path, monkeypatch, capsys):
@@ -92,8 +104,11 @@ def test_the_tarball_is_named_from_the_tag():
 def test_the_build_entry_points_and_launchers_read_the_tag_from_lidar_yaml():
     sbatch = (REPO / "deploy/slurm/scan_image_build.sbatch").read_text(encoding="utf-8")
     assert "tools/scan_image.py\" check --arch amd64" in sbatch and "all checks passed" in sbatch
+    assert 'scan_image.py" base --arch amd64' in sbatch and '"$HAVE" == "$BASE_ID"' in sbatch
+    assert '--build-arg "BASE_IMAGE=$BASE"' in sbatch
     arm = (REPO / "tools/scan_image_build_arm64.sh").read_text(encoding="utf-8")
     assert "tools/scan_image.py check --arch arm64" in arm and "--platform linux/arm64" in arm
+    assert "scan_image.py base --arch arm64" in arm and "FORKLIFT_ARM64_BASE" not in arm
     launcher = (REPO / "tools/ros2_dev.sh").read_text(encoding="utf-8")
     assert "tools/scan_image.py\" configured --arch" in launcher
     for f in ("tools/hwday/jetson_prep.sh", "tools/hwday/jetson_a2m12.sh"):
@@ -155,5 +170,7 @@ def test_the_info_topic_is_latched_on_both_sides():
 def test_the_node_publishes_scan_sdk_only_with_arrival_times_and_a_live_start():
     text = PATCH2.read_text(encoding="utf-8")
     assert "grabScanDataHqWithArrival(nodes, count, first_sample_us, last_sample_us, arrival_ok)" in text
-    assert "if (sdk_ok && (!arrival_ok || start_id.empty()))" in text
+    assert "if (sdk_ok && (!arrival_ok || start_id.empty() || first_sample_us < start_after_us))" in text
+    assert "start_after_us = mono_us() + 150000ULL;" in text  # a restart's first rotation stays off (round 1 P2-2)
+    assert "delete drv;" in text and "~SLlidarNode() override" in text  # threads end before exit (round 1 P2-3)
     assert "-                        max_distance, frame_id + \"@sdk_mono_v1\");" in text  # v1 no longer published

@@ -5,8 +5,9 @@
 #SBATCH --mem=4G
 #SBATCH --time=00:40:00
 # Build the A2M12 driver image (forklift patches 0001 + 0002, PR 7a-2 / 7a-3) for amd64: deploy/ros2/Dockerfile.scan
-# over forklift/ros2-dev:jazzy, tagged config/real/lidar.yaml scan_image.amd64 -- the job computes the tag from the
-# inputs (tools/scan_image.py) and stops before building when lidar.yaml names another. The image build runs the
+# over the amd64 base deploy/ros2/scan_image_base.txt records (its ID checked first), tagged config/real/lidar.yaml
+# scan_image.amd64 -- the job computes the tag from the inputs (tools/scan_image.py) and stops before building when
+# lidar.yaml names another. The image build runs the
 # SDK's arrival test (ctest) and fails with it. Records in OUT: build.log, image.txt (ID), arch.txt, check.txt (the v2
 # contract in the binary and the sources, then the ctest output), built.txt. Docker builds run outside the job's
 # cgroup.
@@ -16,7 +17,12 @@ OUT=$(realpath -m "$1")
 ROOT=$(pwd)
 mkdir -p "$OUT"
 TAG=$(python3 "$ROOT/tools/scan_image.py" check --arch amd64)  # exits non-zero when lidar.yaml differs
-docker build -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" > "$OUT/build.log" 2>&1
+read -r BASE BASE_ID < <(python3 "$ROOT/tools/scan_image.py" base --arch amd64)
+# the base recorded in the tag's inputs, or no build (deploy/ros2/scan_image_base.txt)
+HAVE=$(docker image inspect -f '{{.Id}}' "$BASE")
+[[ "$HAVE" == "$BASE_ID" ]] || { echo "base $BASE is $HAVE here, not $BASE_ID" | tee "$OUT/built.txt"; exit 1; }
+docker build --build-arg "BASE_IMAGE=$BASE" -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" \
+    > "$OUT/build.log" 2>&1
 docker image inspect -f '{{.Id}}' "$TAG" > "$OUT/image.txt"
 docker image inspect -f '{{.Architecture}}' "$TAG" > "$OUT/arch.txt"
 # each check its own exit status: a missing binary, topic, parameter or patched call fails the job (Codex 7a-2 P3)

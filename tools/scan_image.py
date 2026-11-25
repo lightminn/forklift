@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""The A2M12 scan image's tag, from its inputs (7a-3 plan 5): the forklift patches to sllidar_ros2 and
-deploy/ros2/Dockerfile.scan (the pinned SDK commit, the build and the SDK test). ``config/real/lidar.yaml``
+"""The A2M12 scan image's tag, from its inputs (7a-3 plan 5): the forklift patches to sllidar_ros2,
+deploy/ros2/Dockerfile.scan (the pinned SDK commit, the build and the SDK test) and the architecture's base image
+(deploy/ros2/scan_image_base.txt: its reference and ID -- Codex 7a-3b round 1 P2-5). ``config/real/lidar.yaml``
 ``scan_image`` is the one place the tag is written; the build entry points compute it here and stop when the two
 differ, and the launchers read it from there.
 
@@ -8,6 +9,7 @@ differ, and the launchers read it from there.
     python3 tools/scan_image.py configured --arch ...      the tag lidar.yaml names
     python3 tools/scan_image.py check --arch ...           exit 1 (and say both) when they differ
     python3 tools/scan_image.py tarball --arch ...         the tarball name a built image is saved under
+    python3 tools/scan_image.py base --arch ...            "<reference> <image ID>" of the base it is built over
 
 A timing bound is tied to the image ID that ran (lidar.yaml timing.applies_to.image_id), never to this tag: the tag
 names the inputs, not the base image's bytes. Standard library only (ws1 compute nodes, the Jetson's system python).
@@ -25,6 +27,8 @@ REPO = Path(__file__).resolve().parents[1]
 PATCHES = REPO / "deploy" / "ros2" / "sllidar_patches"
 DOCKERFILE = REPO / "deploy" / "ros2" / "Dockerfile.scan"
 LIDAR_YAML = REPO / "config" / "real" / "lidar.yaml"
+BASES = REPO / "deploy" / "ros2" / "scan_image_base.txt"
+_BASE = re.compile(r"^(amd64|arm64) (\S+) (sha256:[0-9a-f]{64})$")
 REPOSITORY = "forklift/ros2-scan"
 ARCHES = ("amd64", "arm64")
 _TAG = re.compile(r"^forklift/ros2-scan:jazzy-s[0-9a-f]{8}(-arm64)?$")
@@ -36,17 +40,36 @@ def inputs(root: Path = REPO) -> list[Path]:
     return [*patches, root / "deploy" / "ros2" / "Dockerfile.scan"]
 
 
-def digest(root: Path = REPO) -> str:
+def base(arch: str, root: Path = REPO) -> tuple[str, str]:
+    """(reference, image ID) of the base the image of ``arch`` is built over."""
+    if arch not in ARCHES:
+        raise ValueError(f"arch must be one of {ARCHES}")
+    found = {}
+    for line in (root / "deploy" / "ros2" / "scan_image_base.txt").read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        m = _BASE.match(line.strip())
+        if not m or m.group(1) in found:
+            raise ValueError(f"scan_image_base.txt: bad or repeated line {line!r}")
+        found[m.group(1)] = (m.group(2), m.group(3))
+    if arch not in found:
+        raise ValueError(f"scan_image_base.txt: no {arch} base")
+    return found[arch]
+
+
+def digest(arch: str, root: Path = REPO) -> str:
     h = hashlib.sha256()
     for p in inputs(root):
         h.update(p.name.encode("utf-8") + b"\0" + p.read_bytes() + b"\0")
+    ref, ident = base(arch, root)
+    h.update(f"base {arch} {ref} {ident}".encode("utf-8"))
     return h.hexdigest()
 
 
 def tag(arch: str, root: Path = REPO) -> str:
     if arch not in ARCHES:
         raise ValueError(f"arch must be one of {ARCHES}")
-    return f"{REPOSITORY}:jazzy-s{digest(root)[:8]}" + ("-arm64" if arch == "arm64" else "")
+    return f"{REPOSITORY}:jazzy-s{digest(arch, root)[:8]}" + ("-arm64" if arch == "arm64" else "")
 
 
 def configured(arch: str, path: Path = LIDAR_YAML) -> str:
@@ -79,7 +102,7 @@ def tarball(arch: str, path: Path = LIDAR_YAML) -> str:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("what", choices=("tag", "configured", "check", "tarball"))
+    ap.add_argument("what", choices=("tag", "configured", "check", "tarball", "base"))
     ap.add_argument("--arch", required=True, choices=ARCHES)
     a = ap.parse_args(argv)
     try:
@@ -89,6 +112,8 @@ def main(argv=None) -> int:
             print(configured(a.arch))
         elif a.what == "tarball":
             print(tarball(a.arch))
+        elif a.what == "base":
+            print(*base(a.arch))
         else:
             want, have = tag(a.arch), configured(a.arch)
             if want != have:
