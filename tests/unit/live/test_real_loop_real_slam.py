@@ -173,12 +173,18 @@ def test_a_reply_of_the_same_instance_from_before_a_new_epoch_is_dropped_by_the_
     r.tick(10)
     bridge.hold = True
     run_until(r, lambda rec: bridge.held, 20)
+    held_id = bridge.held[0].scan.scan_id
+    passed = []
+    plain = r.core.slam_replies
+    r.core.slam_replies = lambda t, replies, loaded: passed.extend(it[0].scan_id for it in replies) or plain(
+        t, replies, loaded)
     before = r.loop.reloc_dropped["epoch"]
     gen = open_generation(r)
     assert r.loop.reloc_gen == gen
     bridge.release()
     r.tick(2)
     assert r.loop.reloc_dropped["epoch"] > before
+    assert held_id not in passed  # never handed to the core (Codex 7c-1b-2b round 3 P3)
     prov = r.loop.provenance
     assert prov is None or prov[0] == r.loop.epoch
     assert not marks

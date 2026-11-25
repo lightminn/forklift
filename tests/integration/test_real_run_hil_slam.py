@@ -174,14 +174,15 @@ def test_an_undeclared_approach_on_the_real_source_drives_past_the_declared_cap(
 
 
 def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_model, tmp_path):
-    """A generation opened by a 400 ms STATE silence; the bridge holds every reply 0.09 s, so a seed accepted with a
-    scan in flight gets the stopped instance's reply after it -- dropped, never evidence (three seeds: at least one).
+    """A generation opened by a 400 ms STATE silence. The bridge holds the scan in flight's reply across the first
+    declaration's acceptance (released once the console shows the seed's mark): the stopped instance's reply comes
+    after the seed -- dropped, never evidence.
     Declaration 1: its seed held 3 s, the lease released while the bridge reports seeding -- the attempt ends, the
     seed runs to ready and completes nothing. Declaration 2: a STOP while its seed runs -- refused; after the rearm a
     third declaration is refused seed_in_progress (the bridge holds that seed's end state until it is seen), the
     seed's ready then completes nothing. Declaration 3 completes on its own seed; the approach after it, with no
     bypass, writes every moving DRIVE within 0.06 m/s (above it without the declaration: the test before)."""
-    bridge = _bridge(tmp_path, seed_delay_s=3.0, reply_delay_s=0.09, hold_end=(3,))
+    bridge = _bridge(tmp_path, seed_delay_s=3.0, hold_end=(3,))
     run = _runner(mcu_model, tmp_path, bridge, 200, model_args=("--state-silent-at-ms", str(SILENT_AT_MS),
                                                                "--state-silent-ms", str(SILENT_MS)),
                   config=_far_config(tmp_path))
@@ -190,9 +191,14 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         _lease(c)
         s = c.wait(lambda s: s.get("relocalize_generation") is not None and s.get("standing"), 40)
         gen = s["relocalize_generation"]
-        # 1: the lease released while the seed runs
+        # 1: a reply of the session start's instance held across the seed's acceptance; the lease released while
+        # the seed runs
+        bridge.hold_replies()
+        _until(lambda: bridge.held_replies, 5, "a reply held")
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
+        c.wait(lambda s: "relocalize" in s["bypassed"], 5)  # the seed accepted (the declaration's mark)
+        bridge.release_replies()
         _until(lambda: _sent(bridge, "seeding", 2), 10, "seed 2 seeding")
         r = c.ask("lease_release")
         assert r["t"] == "ack", r

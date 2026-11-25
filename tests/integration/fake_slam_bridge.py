@@ -4,7 +4,8 @@ thread of the test -- ``hello`` / ``seed`` answered ``seeding`` then ``ready_for
 instance's first scan's odometry, the seventh start scan followed by the end state (``seed_end`` for seeds),
 ``cancel`` answered ``void``. ``fault_after`` scans of a localized instance: a ``fault`` state instead of a reply.
 ``reply_delay_s``: each reply held that long (the next scan waits for it, as the bridge's one scan in flight).
-``hold_end``: ids whose end state waits for ``release(id)``. ``closing()``: the test is ending the run -- a broken
+``hold_end``: ids whose end state waits for ``release(id)``. ``hold_replies()`` / ``release_replies()``: scan
+replies kept from now until released. ``closing()``: the test is ending the run -- a broken
 connection after it ends the thread quietly; before it, it is the bridge's error.
 Not slam_toolbox: nothing here is evidence of matching or of the bridge's timing."""
 
@@ -28,6 +29,8 @@ class FakeBridge(threading.Thread):
         self.path, self.seed_delay_s, self.seed_end, self.fault_after = str(path), seed_delay_s, seed_end, fault_after
         self.reply_delay_s = float(reply_delay_s)
         self._held = {int(i): threading.Event() for i in hold_end}
+        self._holding = threading.Event()
+        self.held_replies: list = []
         self._closing = threading.Event()
         self.got: list = []  # (monotonic s, frame type name, id or scan id)
         self.sent: list = []  # (monotonic s, kind, id)
@@ -43,6 +46,18 @@ class FakeBridge(threading.Thread):
         self._timers: list = []  # (due monotonic s, fn)
         self._cur = None
         self._ready_scans = 0
+
+    def hold_replies(self):
+        self._holding.set()
+
+    def release_replies(self):
+        self._timers.append((time.monotonic(), self._release_replies))
+
+    def _release_replies(self):
+        self._holding.clear()
+        held, self.held_replies = self.held_replies, []
+        for fn in held:
+            fn()
 
     def release(self, ident):
         self._held[int(ident)].set()
@@ -141,6 +156,9 @@ class FakeBridge(threading.Thread):
             last = c["n"] == 7
 
             def answer(frame=frame, c=c, last=last):
+                if self._holding.is_set():
+                    self.held_replies.append(lambda: answer(frame, c, last))
+                    return
                 if self._cur is not c:
                     return  # the instance went (a seed or a cancel) while the reply was held
                 self._send(frame)
