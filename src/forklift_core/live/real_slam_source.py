@@ -317,6 +317,17 @@ class RealSlamSource:
         dyaw = abs(math.atan2(math.sin(yaw - syaw), math.cos(yaw - syaw)))
         return math.hypot(x - sx, y - sy) > SEED_STILL_M or dyaw > SEED_STILL_RAD
 
+    def input_break(self, why: str) -> None:
+        """The odometry this source places scans on broke (the observe run's reconnect, boot change or continuity
+        break -- the loop opens a relocalization instead): what waits is cut, the scan in flight's reply only frees the
+        slot, as for a new producer generation (7c-1c, Codex round 1 P2-1)."""
+        for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
+            if w is not None:
+                self._drop("slam_input_break", key=w["key"] if isinstance(w, dict) else w.key, why_break=why)
+        self._waiting, self._odom_wait = None, None
+        if self._inflight is not None:
+            self._inflight["old_gen"] = True
+
     def request_processed(self, epoch, attempt, not_before) -> None:
         if int(epoch) >= self.epoch:
             self._requests.append([int(epoch), attempt, float(not_before), int(self.clock()) + int(REQUEST_S * 1e9)])
@@ -526,14 +537,16 @@ class RealSlamSource:
                 self._discarded.discard(key)
                 return
             self._fatal(f"protocol: reply for scan {r.scan_id}, not the scan in flight")
+        rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
+               "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"],
+               "epoch": f["epoch"], "attempt": None if f["attempt"] is None else f["attempt"][1]}
         if r.status == "failed":
+            self._event(**rec, passed=False, why="failed")
             self._fatal(f"bridge failed scan {r.scan_id}: {r.reason}")
         if r.status != "processed" and f["phase"] == "ready":
             self._fatal(f"protocol: a {r.status} reply from a localized instance")  # every scan gets a /pose (P2-6)
         self._inflight = None
         t = self.target
-        rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
-               "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"]}
         if self.reply_hook is not None:
             try:
                 extra = self.reply_hook(f["scan"], rec)
@@ -565,7 +578,7 @@ class RealSlamSource:
                                 map_from_odom=tuple(float(v) for v in r.map_from_odom), slam_wall_s=None,
                                 epoch=f["epoch"], attempt=None if f["attempt"] is None else f["attempt"][1],
                                 evidence_lo_s=self._s(f["flo_ns"]), evidence_hi_s=self._s(f["fhi_ns"]))
-        self._event(**rec, passed=True, epoch=f["epoch"], attempt=reply.attempt)
+        self._event(**rec, passed=True)
         self._out.append((reply, {"source": "real_slam"}, f["sent_ns"] / 1e9, received / 1e9))
 
     def _on_state(self, st, received: int) -> None:

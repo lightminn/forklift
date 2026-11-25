@@ -35,6 +35,7 @@ class ObserveSlam:
         self.base_laser = tuple(float(v) for v in base_laser)  # x, y, z, yaw of the laser in base_link
         self.state_delay_s, self.v_scan_mps, self.kappa_max = float(state_delay_s), float(v_scan_mps), float(kappa_max)
         self.history: deque = deque(maxlen=256)  # the loop's odometry history length
+        self.walls = slam_map.dilated(grid.occupied(), 1)  # once, before the board is served (round 1 P2-5)
         self.gen = 0  # raised at every break, boot change and new connection (the loop's odom_gen)
         self.pose = (0.0, 0.0, 0.0)
         self.boot = None
@@ -51,35 +52,50 @@ class ObserveSlam:
 
     # --- the odometry, from the observe run's STATEs ------------------------------------------------------------------
     def on_state(self, state, rx_ns: int, delay_b, conn: int) -> None:
+        if self.fatal is not None:
+            return
+        self._guard(lambda: self._on_state(state, rx_ns, delay_b, conn))
+
+    def _on_state(self, state, rx_ns: int, delay_b, conn: int) -> None:
         key = (int(conn), int(state.boot_id))
         if self._last is not None and key != self._last:
-            self.gen += 1  # another connection or boot: the history before it is no evidence of this one
+            # another connection or boot: the history before it is no evidence of this one, and nothing placed on it
+            # goes (round 1 P2-1)
+            self._break("new_connection" if key[0] != self._last[0] else "boot_changed")
         self._last = key
         self.boot = int(state.boot_id)
         step = odometry_step(self.odometry, state)
         self.pose = tuple(float(v) for v in step.pose)
         if step.continuity_broken:
-            self.gen += 1
+            self._break("odometry_break")
         entry, self._prev = odom_entry(state, step, hi_s=(int(rx_ns) - self.start_ns) / 1e9, delay_b=delay_b,
                                        state_delay_s=self.state_delay_s, prev=self._prev,
                                        has_history=bool(self.history), params=self.params,
                                        v_scan_mps=self.v_scan_mps, kappa_max=self.kappa_max)
         self.history.append(entry)
-        if self.fatal is None:
-            self.src.odom_step(entry)
+        self.src.odom_step(entry)
+
+    def _break(self, why: str) -> None:
+        self.gen += 1
+        self.history.clear()
+        self.counts[f"break_{why}"] += 1
+        self.src.input_break(why)
 
     # --- the scans and the replies ------------------------------------------------------------------------------------
     def on_scan(self, scan) -> None:
         """A scan the feed accepted (its identity and generations): offered to the source, or recorded why not."""
         if self.fatal is not None:
             return
+        self._guard(lambda: self._on_scan(scan))
+
+    def _on_scan(self, scan) -> None:
         s, why = from_feed(scan, self.lidar)
         if s is None:
             self.counts[f"scan_{why}"] += 1
             self.put({"t": "slam_scan", "scan_id": int(scan.scan_id), "feed_gen": int(scan.feed_gen), "why": why})
             return
         self.counts["offered"] += 1
-        self._guard(lambda: self.src.offer(s))
+        self.src.offer(s)
 
     def cycle(self, now_ns: int) -> None:
         if self.fatal is None:
@@ -93,10 +109,12 @@ class ObserveSlam:
         self._events = len(ev)
 
     def _guard(self, fn) -> None:
+        """Any error of the SLAM path ends that path only: recorded, the board's observation and its end DISARM go on
+        (round 1 P2-2)."""
         try:
             fn()
-        except SlamSourceFatal as exc:
-            self.fatal = str(exc)
+        except Exception as exc:  # noqa: BLE001 -- SlamSourceFatal or anything the bridge's data raised
+            self.fatal = str(exc) if isinstance(exc, SlamSourceFatal) else f"{type(exc).__name__}: {exc}"
             self.flush()
             self.put({"t": "slam_fatal", "why": self.fatal})
 
@@ -105,12 +123,16 @@ class ObserveSlam:
         x, y, _z, yaw = self.base_laser
         laser = compose(compose(tuple(rec["map_from_odom"]), tuple(scan.odom_from_base)), (x, y, yaw))
         f = slam_map.endpoint_fraction(self.grid, laser, scan.ranges_m, scan.angle_min_rad, scan.angle_increment_rad,
-                                       scan.range_min_m, scan.range_max_m)
+                                       scan.range_min_m, scan.range_max_m, walls=self.walls)
         return {"endpoint_fraction": None if f != f else float(f)}
+
+    def replies(self) -> int:
+        return sum(1 for e in self.src.events if e.get("t") == "reply")
 
     def summary(self) -> dict:
         t = self.src.target
-        return {"fatal": self.fatal, "counts": dict(self.counts), "source_counts": dict(self.src.counts),
+        return {"fatal": self.fatal, "replies": self.replies(), "counts": dict(self.counts),
+                "source_counts": dict(self.src.counts),
                 "state": None if t is None else {"id": t["id"], "kind": t["kind"], "state": t["state"]},
                 "odom_gen": self.gen}
 

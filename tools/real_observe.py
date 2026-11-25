@@ -465,8 +465,12 @@ def _slam_parts(args, lidar) -> dict:
     from forklift_core.localization.start_reloc import base_from_rear
     from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle
 
+    import math
+
     if args.slam_bundle is None:
         raise ValueError("--slam needs --slam-bundle")
+    if not args.scan_socket:
+        raise ValueError("--slam needs --scan-socket (its scans are the feed's)")
     bundle = load_bundle(args.slam_bundle)
     cfg = load_s10a(args.s10a)
     vehicle = load_real_vehicle(args.vehicle)
@@ -475,6 +479,9 @@ def _slam_parts(args, lidar) -> dict:
     params = EncoderSpeedParams(radius_m=vehicle.wheel_radius_m, counts_per_rev=vehicle.counts_per_wheel_rev,
                                 track_m=vehicle.track_m, kappa_max=kappa, axle_accel_mps2=0.5, max_age_s=0.1,
                                 dt_min_s=0.02, dt_max_s=0.2)
+    start = tuple(float(v) for v in cfg.start_rear)
+    if len(start) != 3 or not all(math.isfinite(v) for v in start) or not math.isfinite(float(cfg.max_speed_mps)):
+        raise ValueError("s10a: start_rear and max_speed_mps must be finite")
     return {"bundle": bundle, "vehicle": vehicle, "params": params, "rear_offset_m": rear_offset, "kappa": kappa,
             "start_pose": base_from_rear(tuple(float(v) for v in cfg.start_rear), rear_offset),
             "base_laser": base_from_laser(lidar.mount, rear_offset), "state_delay_s": RUN_STATE_DELAY_S,
@@ -537,7 +544,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
         imu_gap_max_s = load_imu_config(SAFETY_YAML).gap_max_s if args.imu else None
         slam_parts = _slam_parts(args, lidar) if args.slam else None
-    except (SyntheticRefused, OSError, ValueError, KeyError) as exc:
+    except (SyntheticRefused, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
     if args.out.exists():
@@ -583,7 +590,11 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         try:
             link.open_first(obs.host, time.monotonic_ns())
         except DeviceBusy as busy:
-            rec.put({"t": "end", "result": "refused", "why": str(busy), "holder": busy.holder, "complete": False})
+            if slam is not None:  # the bridge was connected first: closed here, its state in the end row (P3-1)
+                slam.flush()
+                slam.src.link.sock.close()
+            rec.put({"t": "end", "result": "refused", "why": str(busy), "holder": busy.holder, "complete": False,
+                     "slam": None if slam is None else slam.summary()})
             print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), "result": "refused", "why": str(busy)}))
             return 2
         result = "aborted"
@@ -649,6 +660,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 slam.flush()
                 if slam.fatal is not None and result == "ok":
                     result = "slam_failed"
+                elif slam.replies() == 0 and result == "ok":
+                    result = "no_slam_replies"  # a bridge that answered nothing is no observed source (P2-3)
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
                      "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow

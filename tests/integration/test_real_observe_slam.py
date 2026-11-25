@@ -72,9 +72,10 @@ def _scan_msg(ra, recv, pair, n=16):
                                                   frame_id="laser"))
 
 
-def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path):
+def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
+    """The observe run with --slam for ``seconds`` (the bridge stopped at ``lose_bridge_at`` s): its rows, the bridge,
+    the SLAM path and whether the end DISARM was confirmed."""
     lid = lidar_cfg.load_lidar_config()
-    assert not lid.timing_measured  # before 7a-3: diagnostic
     ra, scan_sock, sender = _sender(tmp_path)
     openings = ro.Openings()
     from real_mcu_link import ReconnectingLink
@@ -90,10 +91,16 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
     obs = ro.Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lid, slam=slam)
     try:
         link.open_first(obs.host, time.monotonic_ns())
-        end = time.monotonic() + 6.0
+        t0 = time.monotonic()
+        end = t0 + seconds
         k = 0
         next_scan = time.monotonic()
+        lost = False
         while time.monotonic() < end:
+            if lose_bridge_at is not None and not lost and time.monotonic() - t0 > lose_bridge_at:
+                lost = True
+                bridge.closing()
+                bridge.stop()
             if time.monotonic() >= next_scan:
                 k += 1
                 recv, pair = ra.clock_pair()
@@ -102,14 +109,20 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
                 next_scan += 0.1
             obs.cycle()
             time.sleep(0.01)
-        assert obs.finish()
+        stopped = obs.finish()
     finally:
         bridge.closing()
         sender.close()
         scan_sock.close()
         sock.close()
         bridge.stop()
-    rows = _rows(rec)
+    return _rows(rec), bridge, slam, stopped, lid
+
+
+def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path):
+    rows, bridge, slam, stopped, lid = _observe(model, tmp_path, 6.0)
+    assert stopped
+    assert not lid.timing_measured  # before 7a-3: diagnostic
     assert bridge.error is None and slam.fatal is None, (bridge.error, slam.fatal)
     kinds = [g[1] for g in bridge.got]
     assert kinds[0] == "Hello" and kinds.count("RealScan") > 7
@@ -121,8 +134,20 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
     assert all("odom_from_base" in e for e in sent)
     assert replies and all(not e["passed"] for e in replies)
     assert {e["why"] for e in replies} <= {"start_check", "diagnostic"} and "diagnostic" in {e["why"] for e in replies}
-    fr = [e["endpoint_fraction"] for e in replies if e.get("endpoint_fraction") is not None]
-    assert fr and all(0.0 <= f <= 1.0 for f in fr)
+    assert all("epoch" in e and "attempt" in e for e in replies)  # on every reply row (round 1 P2-4)
+    # each reply's match quality: the still truck's laser at the start pose through the bridge's correction -- the
+    # same fraction computed here independently (a non-zero mount offset: lidar.yaml's rear-axle mount and the
+    # chassis model's rear axle offset)
+    from forklift_core.localization import slam_map
+    from forklift_core.localization.slam_pose import compose
+
+    bx, by, _bz, byaw = slam.base_laser
+    assert abs(bx) > 0.0  # the mount is not at base_link: the transform is exercised
+    n = 16
+    expect = slam_map.endpoint_fraction(_grid(), compose((0.0, 0.0, 0.0), (bx, by, byaw)), np.full(n, 2.0),
+                                        -np.pi, 2 * np.pi / n, 0.1, 10.0)
+    fr = [e["endpoint_fraction"] for e in replies]
+    assert fr and all(f is not None and abs(f - expect) < 1e-6 for f in fr), (fr[:3], expect)
     assert any(e["event"] == "state" and e["kind"] == "ready" and e["id"] == 1 for e in ev)
     assert slam.gen == 0 and len(slam.history) > 100  # the odometry history from the observe run's STATEs
     written = [r for r in rows if r["t"] == "written"]
@@ -144,12 +169,21 @@ def test_a_scan_without_the_sdk_first_sample_is_recorded_not_sent(tmp_path):
         bridge.stop()
 
 
-def test_the_cli_refuses_slam_without_a_bundle_and_with_no_bridge(tmp_path, capsys):
-    code = ro.main(["--device", "/dev/null-forklift", "--out", str(tmp_path / "a.jsonl"), "--seconds", "1",
-                    "--slam", str(tmp_path / "none.sock")])
-    out = capsys.readouterr().out
-    assert code == 2 and "--slam needs --slam-bundle" in out
-    assert not (tmp_path / "a.jsonl").exists()
+def test_the_cli_refuses_slam_without_a_bundle_or_a_scan_socket(tmp_path, capsys):
+    base = ["--device", "/dev/null-forklift", "--seconds", "1", "--slam", str(tmp_path / "none.sock")]
+    code = ro.main(base + ["--out", str(tmp_path / "a.jsonl")])
+    assert code == 2 and "--slam needs --slam-bundle" in capsys.readouterr().out
+    code = ro.main(base + ["--out", str(tmp_path / "b.jsonl"), "--slam-bundle", str(tmp_path)])
+    assert code == 2 and "--slam needs --scan-socket" in capsys.readouterr().out
+    assert not (tmp_path / "a.jsonl").exists() and not (tmp_path / "b.jsonl").exists()
+
+
+def test_a_bridge_that_refuses_the_connection_refuses_the_start(tmp_path):
+    parts = {"bundle": SimpleNamespace(map_id="m" * 64, grid=_grid()), "start_pose": (0.0, 0.0, 0.0),
+             "rear_offset_m": 0.3}
+    args = SimpleNamespace(slam=str(tmp_path / "none.sock"), slam_bundle=tmp_path)
+    with pytest.raises(OSError):
+        ro._slam_start(args, parts, None, lidar_cfg.load_lidar_config())
 
 
 @pytest.mark.parametrize("why", ["eof"])
@@ -170,3 +204,28 @@ def test_a_bridge_ending_records_the_fault_and_the_run_goes_on(tmp_path, why):
         slam.cycle(time.monotonic_ns())  # no more calls into the source after its end
     finally:
         sock.close()
+
+
+
+def test_a_bridge_lost_mid_run_ends_the_slam_path_and_the_board_still_stops(model, tmp_path):
+    """Round 1 P3-2: the observe run goes on recording the board, its DISARM refresh and its end DISARM confirmed."""
+    rows, bridge, slam, stopped, _lid = _observe(model, tmp_path, 5.0, lose_bridge_at=2.5)
+    assert stopped and slam.fatal is not None and any(r["t"] == "slam_fatal" for r in rows)
+    fatal_at = next(i for i, r in enumerate(rows) if r["t"] == "slam_fatal")
+    later = [r for r in rows[fatal_at:] if r["t"] == "written" and r["kind"] == "DISARM"]
+    assert later  # the 1 s refresh and the end DISARM after the SLAM path ended
+
+
+def test_an_input_break_cuts_what_waits_and_drops_the_reply_in_flight(tmp_path):
+    lid = lidar_cfg.load_lidar_config()
+    bridge, sock, slam, rows = _slam(tmp_path, lid, time.monotonic_ns())
+    try:
+        slam.src._waiting = {"key": ("w",), "stamp_ns": 1}  # noqa: SLF001 -- a scan waiting
+        slam.src._inflight = {"old_gen": False}  # noqa: SLF001
+        slam._break("new_connection")  # noqa: SLF001
+        assert slam.src._waiting is None and slam.src._inflight["old_gen"] is True  # noqa: SLF001
+        assert slam.gen == 1 and not slam.history and slam.src.counts["slam_input_break"] == 1
+    finally:
+        bridge.closing()
+        sock.close()
+        bridge.stop()
