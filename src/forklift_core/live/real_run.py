@@ -469,10 +469,6 @@ def _real_slam_sources(prep: RunPrep, host, transport, scan, imu, box: dict, pat
     assembly), its scans the layer's own (the synthetic cast is exact: its first beam is the interval)."""
     import socket as socket_
 
-    from forklift_core.live.real_slam_source import RealSlamLink, RealSlamSource
-    from forklift_core.localization.slam_real_scan import from_layer
-    from forklift_core.localization.start_reloc import base_from_rear
-
     sock = socket_.socket(socket_.AF_UNIX, socket_.SOCK_STREAM)
     try:
         sock.settimeout(5.0)
@@ -484,6 +480,18 @@ def _real_slam_sources(prep: RunPrep, host, transport, scan, imu, box: dict, pat
     def boot():
         st = host.state
         return None if st is None else int(st.boot_id)
+
+    try:
+        return _real_slam_on(sock, prep, host, transport, scan, imu, box, boot)
+    except BaseException:
+        sock.close()  # never left to the collector (Codex 7c-1b-2b round 1 P2-2)
+        raise
+
+
+def _real_slam_on(sock, prep, host, transport, scan, imu, box, boot) -> RunSources:
+    from forklift_core.live.real_slam_source import RealSlamLink, RealSlamSource
+    from forklift_core.localization.slam_real_scan import from_layer
+    from forklift_core.localization.start_reloc import base_from_rear
 
     slam = RealSlamSource(
         RealSlamLink(sock), map_id=prep.map_id, start_ns=prep.start_ns,

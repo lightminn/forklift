@@ -3,6 +3,7 @@ thread of the test -- ``hello`` / ``seed`` answered ``seeding`` then ``ready_for
 ``seed_delay_s``), every scan answered ``processed`` at once with the correction its start pose implies on the
 instance's first scan's odometry, the seventh start scan followed by the end state (``seed_end`` for seeds),
 ``cancel`` answered ``void``. ``fault_after`` scans of a localized instance: a ``fault`` state instead of a reply.
+``reply_delay_s``: each reply held that long (the next scan waits for it, as the bridge's one scan in flight).
 Not slam_toolbox: nothing here is evidence of matching or of the bridge's timing."""
 
 from __future__ import annotations
@@ -19,9 +20,10 @@ from forklift_core.localization.slam_pose import compose, invert
 
 
 class FakeBridge(threading.Thread):
-    def __init__(self, path, *, seed_delay_s=0.0, seed_end="ready", fault_after=None):
+    def __init__(self, path, *, seed_delay_s=0.0, seed_end="ready", fault_after=None, reply_delay_s=0.0):
         super().__init__(daemon=True)
         self.path, self.seed_delay_s, self.seed_end, self.fault_after = str(path), seed_delay_s, seed_end, fault_after
+        self.reply_delay_s = float(reply_delay_s)
         self.got: list = []  # (monotonic s, frame type name, id or scan id)
         self.sent: list = []  # (monotonic s, kind, id)
         self.error = None
@@ -111,7 +113,18 @@ class FakeBridge(threading.Thread):
                 c["corr"] = tuple(compose(c["pose"], invert(f.scan.odom_from_base)))
             c["n"] += 1
             s = f.scan
-            self._send(slam_link.encode_reply(slam_link.Reply(s.scan_id, s.stamp_s, "processed", c["corr"], 1, 0.0)))
-            if c["n"] == 7:
-                self._state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
-                c["localized"] = c["end"] == "ready"
+            frame = slam_link.encode_reply(slam_link.Reply(s.scan_id, s.stamp_s, "processed", c["corr"], 1, 0.0))
+            last = c["n"] == 7
+
+            def answer(frame=frame, c=c, last=last):
+                if self._cur is not c:
+                    return  # the instance went (a seed or a cancel) while the reply was held
+                self._send(frame)
+                if last:
+                    self._state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
+                    c["localized"] = c["end"] == "ready"
+
+            if self.reply_delay_s > 0:
+                self._timers.append((now + self.reply_delay_s, answer))
+            else:
+                answer()

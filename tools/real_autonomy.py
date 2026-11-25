@@ -299,7 +299,7 @@ def _run_hil(args, rlt, stop, model_args, injections) -> int:
         prep.jobs.close()
         _write({"run": False, "end": f"record_unopenable:{err}"}, None)
         return rr.EXIT_RECORD
-    held = SimpleNamespace(pty=None, server=None, run=None)
+    held = SimpleNamespace(pty=None, server=None, run=None, sources=None)
     end = {"t": "end", "reason": None}
     code = EXIT_FAILED
     try:
@@ -345,7 +345,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
         return EXIT_FAILED
     # ⑤ the sources ⑥ the assembly (the same host and transport)
     try:
-        sources = rr.make_hil_sources(prep, host, transport, slam_socket=args.hil_slam_bridge)
+        held.sources = sources = rr.make_hil_sources(prep, host, transport, slam_socket=args.hil_slam_bridge)
         held.run = run = rr.assemble_run(prep, sources, events=record.put)
     except (AssemblyRefused, SyntheticRefused) as err:
         end["reason"] = f"refused:{getattr(err, 'reasons', err)}"
@@ -411,6 +411,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
                axis_watch_times=[list(d) for d in loop.axis_watch_times], results=list(loop.session.results),
                permit=loop.permit.state, permit_reason=loop.permit.reason, counts=dict(sources.counts),
                slam_counts=dict(getattr(sources.slam, "counts", {}) or {}),
+               reloc_dropped=dict(loop.reloc_dropped),
                ticks=run.ticks, records_kept=len(loop.records))
     return rr.EXIT_OK if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
 
@@ -430,8 +431,15 @@ def _cleanup(held, prep, record, end) -> bool:
             try:
                 if held.run is not None:
                     late = held.run.close_workers()
-                elif prep.jobs is not None:
-                    prep.jobs.close()
+                else:
+                    # no run assembled: what the sources hold (the SLAM bridge's socket) closed here (7c-1b-2b)
+                    for fn in (() if held.sources is None else held.sources.closers):
+                        try:
+                            fn()
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if prep.jobs is not None:
+                        prep.jobs.close()
             finally:
                 tr = None if held.run is None else held.run.sources.transport
                 lost = None if tr is None else tr.lost

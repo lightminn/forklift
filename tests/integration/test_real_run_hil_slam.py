@@ -91,8 +91,66 @@ def test_s10_a_runs_to_the_lift_on_the_real_slam_source(mcu_model, tmp_path):
     assert "slam_late" not in end["slam_counts"] or end["slam_counts"]["slam_late"] < kinds.count("RealScan")
 
 
-def test_a_declaration_on_the_real_source_waits_its_seed_survives_a_stop_and_caps_the_run(mcu_model, tmp_path):
-    bridge = _bridge(tmp_path, seed_delay_s=3.0)
+def _sent(bridge, kind, ident):
+    return any(k == kind and i == ident for _, k, i in bridge.sent)
+
+
+def _until(cond, timeout, what):
+    end = time.monotonic() + timeout
+    while not cond():
+        if time.monotonic() > end:
+            raise AssertionError(f"not reached: {what}")
+        time.sleep(0.05)
+
+
+def _written_moving(rows):
+    """The moving DRIVEs written whole (their queued speed by seq)."""
+    speed = {q["seq"]: q["speed_mps"] for q in events(rows, "frame_queued") if q["purpose"] == "drive"}
+    return [speed[w["seq"]] for w in events(rows, "frame_written")
+            if w["kind"] == "DRIVE" and speed.get(w["seq"]) not in (None, 0.0)]
+
+
+def _approach(c, seconds):
+    """A mission with no bypass (no d5_pocket: its own 0.06 cap stays off) driven for ``seconds``: the approach's
+    moving DRIVEs are what is judged, not the lift."""
+    r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
+    assert r["t"] == "ack", r
+    time.sleep(0.8)
+    r = _operator_start(c)
+    assert r["t"] == "ack", r
+    r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+              targets_revision=r.get("targets_revision", c.status["targets_revision"]))
+    assert r["t"] == "ack", r
+    time.sleep(seconds)
+
+
+def test_an_undeclared_approach_on_the_real_source_drives_past_the_declared_cap(mcu_model, tmp_path):
+    """The comparison for the declared run below: with no declaration and no bypass the approach goes above 0.06."""
+    bridge = _bridge(tmp_path)
+    run = _runner(mcu_model, tmp_path, bridge, 90)
+    c = Console(run.port)
+    try:
+        _lease(c)
+        _approach(c, 15.0)
+    finally:
+        c.close()
+        code = run.finish(signal.SIGTERM)
+        bridge.stop()
+    rows = run.rows()
+    complete(rows, code, expect_code=code)
+    moving = _written_moving(rows)
+    assert moving and max(abs(v) for v in moving) > 0.06 + 1e-9, moving[:5]
+
+
+def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epoch_replies(mcu_model, tmp_path):
+    """A generation opened by a 400 ms STATE silence; the bridge holds every reply 0.09 s, so a seed accepted with a
+    scan in flight gets that old instance's reply after it -- dropped, never evidence (three seeds: at least one).
+    Declaration 1: its seed held 3 s, the lease
+    released while the bridge reports seeding -- the attempt ends, the seed runs to ready and completes nothing.
+    Declaration 2: a STOP while its seed runs -- refused; after the rearm a third declaration is refused
+    seed_in_progress until the seed's ready, which completes nothing. Declaration 3 completes on its own seed. The
+    approach after it, with no bypass, writes every moving DRIVE within 0.06 m/s."""
+    bridge = _bridge(tmp_path, seed_delay_s=3.0, reply_delay_s=0.09)
     run = _runner(mcu_model, tmp_path, bridge, 200, model_args=("--state-silent-at-ms", str(SILENT_AT_MS),
                                                                "--state-silent-ms", str(SILENT_MS)))
     c = Console(run.port)
@@ -100,46 +158,57 @@ def test_a_declaration_on_the_real_source_waits_its_seed_survives_a_stop_and_cap
         _lease(c)
         s = c.wait(lambda s: s.get("relocalize_generation") is not None and s.get("standing"), 40)
         gen = s["relocalize_generation"]
-        # the first declaration: its seed held 3 s by the bridge; a STOP ends the attempt, the seed runs on
+        # 1: the lease released while the seed runs
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
-        time.sleep(1.0)
+        _until(lambda: _sent(bridge, "seeding", 2), 10, "seed 2 seeding")
+        r = c.ask("lease_release")
+        assert r["t"] == "ack", r
+        c.lease = None
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == 1 and s["relocalize"]["state"] == "refused", 10)
+        assert s["relocalize"]["reason"] == "relocalize_voided:lease", s["relocalize"]
+        _until(lambda: _sent(bridge, "ready", 2), 15, "seed 2 ready")
+        time.sleep(0.5)
+        assert c.status["relocalize_generation"] == gen and c.status["relocalize"]["state"] == "refused"
+        _lease(c)
+        # 2: a STOP while the seed runs
+        r = c.ask("relocalize_declare", generation=gen)
+        assert r["t"] == "ack", r
+        _until(lambda: _sent(bridge, "seeding", 3), 10, "seed 3 seeding")
         r = c.ask("stop")
         assert r["t"] == "ack", r
-        s = c.wait(lambda s: s["relocalize"]["state"] == "refused", 10)
-        # the STOP ends the attempt (its control generation, or the stand it broke)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == 2 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] in ("relocalize_moved", "relocalize_voided:control"), s["relocalize"]
         c.wait(lambda s: s.get("standing"), 10)
         r = c.ask("rearm")
         assert r["t"] == "ack", r
         c.wait(lambda s: s.get("mode") == "PAUSED" and s.get("standing"), 10)
-        r = c.ask("relocalize_declare", generation=gen)
-        assert r["t"] == "reject" and r["reason"] == "seed_in_progress", r  # one seed at a time
-        # the first seed's end state completes nothing: the generation stays open
-        end_wait = time.monotonic() + 15
-        while not any(k == "ready" and i == 2 for _, k, i in bridge.sent) and time.monotonic() < end_wait:
-            time.sleep(0.1)
+        if not _sent(bridge, "ready", 3):
+            r = c.ask("relocalize_declare", generation=gen)
+            assert r["t"] == "reject" and r["reason"] == "seed_in_progress", r  # one seed at a time
+        _until(lambda: _sent(bridge, "ready", 3), 15, "seed 3 ready")
         time.sleep(0.5)
         assert c.status["relocalize_generation"] == gen and c.status["relocalize"]["state"] == "refused"
-        # the second declaration completes on its own seed's ready
+        # 3: completes on its own seed
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
         s = c.wait(lambda s: s["relocalize"]["attempt"] == r["attempt"] and s["relocalize"]["state"] != "waiting", 30)
         assert s["relocalize"]["state"] == "declared", s["relocalize"]
         assert s["relocalize_generation"] is None and "relocalize" in s["bypassed"] and s["manual_only"] is None
-        _mission(c)
+        assert "d5_pocket" not in s["bypassed"] and "slam" not in s["bypassed"]
+        _approach(c, 15.0)
     finally:
         c.close()
         code = run.finish(signal.SIGTERM)
         bridge.stop()
     rows = run.rows()
-    end = complete(rows, code)
-    assert [e["reason"] for e in end["results"]] == ["s10_lifted"], end
+    end = complete(rows, code, expect_code=code)
     assert bridge.error is None
     seeds = [g for g in bridge.got if g[1] == "Seed"]
-    assert len(seeds) == 2 and not any(g[1] == "Cancel" for g in bridge.got)
-    moving = [q["speed_mps"] for q in events(rows, "frame_queued") if q["purpose"] == "drive" and q["speed_mps"]]
-    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # the declared session's cap
+    assert [g[2] for g in seeds] == [2, 3, 4] and not any(g[1] == "Cancel" for g in bridge.got)
+    moving = _written_moving(rows)
+    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # the declared session's own cap
+    assert end["slam_counts"].get("slam_old_instance_reply", 0) >= 1, end["slam_counts"]  # old replies dropped
     assert end["slam_counts"].get("slam_end_after_cancel", 0) == 0, end["slam_counts"]
 
 
