@@ -1057,7 +1057,7 @@ def test_a_half_frame_left_by_an_earlier_executor_never_acts(mcu_model, opener, 
 SA1 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 sa1"
 
 
-def sargs(**kw):
+def single_args(**kw):
     base = dict(axis="M", duty=0.1, seconds=0.5, single_axis=True, motor_detached=True, sensorless=True,
                 observed="none")
     return args(**{**base, **kw})
@@ -1082,7 +1082,7 @@ def test_fw_single_runs_a_detached_sensorless_steering_motor(model, monkeypatch)
     b = model("--commission-single", "1")
     b.host.usb_product = SA1
     _retyped(monkeypatch)
-    res = bringup.execute(sargs(), b)
+    res = bringup.execute(single_args(), b)
     assert res["result"] == "ok" and res["cleanup_confirmed"], res
     assert _first_commission_axis(b) == 2
     assert max(abs(s.state.duty_e4[2]) for s in b.samples) == 1000
@@ -1122,7 +1122,7 @@ def test_fw_single_refusals_come_before_any_arm(model, monkeypatch, product, kw,
     b = model("--commission-single", "1")
     b.host.usb_product = product
     _retyped(monkeypatch, answer)
-    res = bringup.execute(sargs(**kw), b)
+    res = bringup.execute(single_args(**kw), b)
     assert res["result"] == "refused" and why in res["why"], res
     assert "ARM" not in kinds_written(b)
 
@@ -1131,7 +1131,7 @@ def test_detached_sensorless_flags_need_the_single_axis_request(model, monkeypat
     b = model()
     b.host.usb_product = LR1
     _retyped(monkeypatch)
-    res = bringup.execute(sargs(single_axis=False), b)
+    res = bringup.execute(single_args(single_axis=False), b)
     assert res["result"] == "refused" and "only with --single-axis" in res["why"]
     assert kinds_written(b) == []
 
@@ -1164,7 +1164,7 @@ def test_a_fw_single_sensorless_result_carries_no_position(model, monkeypatch):
     b = model("--commission-single", "1")
     b.host.usb_product = SA1
     _retyped(monkeypatch)
-    res = bringup.execute(sargs(), b)
+    res = bringup.execute(single_args(), b)
     assert res["result"] == "ok", res
     assert res["metrics"]["value"] is None and res["metrics"]["measured_sign"] == "unmeasured"
     assert res["verdict"]["note"] == "sensorless" and res["verdict"]["suggested_duty_sign"] is None
