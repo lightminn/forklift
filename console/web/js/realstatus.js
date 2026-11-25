@@ -14,12 +14,14 @@ export const CHECK_LABELS = {
   watch_wheel: "바퀴 감시",
   d5_pocket: "포켓 확인",
   start_pose: "시작 자세",
+  f1: "F1 출발 차단",
 };
 
 // The banner's own words where they say more than the button (5c-2, design 6 7b and the slam bypass decision).
 const BANNER_LABELS = {
   slam: "slam — 오도메트리 주행",
   relocalize: "relocalize(운용자 선언)",
+  f1: "f1",  // lead #623 decision 2: the banner reads "우회 중: f1"
 };
 
 // The session's view after a real_status: {accepted, controlGen, leaseHeld}. A status of another session is not

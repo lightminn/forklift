@@ -158,19 +158,34 @@ class RealSession:
                                  "ended_s": float(t), "pallet_id": None if mission is None else mission.pallet_id,
                                  "destination_id": None if mission is None else mission.destination_id,
                                  "clock": clock, "collect_failed": self.collect_failed,
-                                 **({} if bypassed is None else {"bypassed": list(bypassed)})})
+                                 **({} if bypassed is None else {"bypassed": list(bypassed)}),
+                                 **_excluded(bypassed)})
             raise
         entry = {"mission_id": mission_id, "outcome": cmds.status, "reason": cmds.end_reason, "ended_s": float(t),
                  "pallet_id": None if mission is None else mission.pallet_id,
                  "destination_id": None if mission is None else mission.destination_id, "clock": clock,
-                 **({} if bypassed is None else {"bypassed": list(bypassed)})}
+                 **({} if bypassed is None else {"bypassed": list(bypassed)}), **_excluded(bypassed)}
         self.results.append(entry)
         return entry
 
 
+def _excluded(bypassed) -> dict:
+    """A mission run with the F1 start block bypassed counts in neither the F1 nor the validation figures (lead #623
+    decision 2, 7c-2b): marked on its result entry, and the runner's counts leave it out."""
+    return {"excluded_counts": ["f1", "validation"]} if bypassed is not None and "f1" in bypassed else {}
+
+
+def mission_counts(results) -> dict:
+    """The session's missions for the F1 and validation figures: all, those counted, those left out (f1 bypassed)."""
+    rows = list(results)
+    out = [r for r in rows if "f1" in (r.get("excluded_counts") or [])]
+    return {"all": len(rows), "counted": len(rows) - len(out), "excluded_f1": len(out)}
+
+
 # real safety wiring design 5 (5c-1): the checks the operator may bypass for the session, and the names refused
 BYPASSABLE = ra.READY_BYPASSABLE + ("imu", "watch_current", "watch_wheel", "start_pose",  # start_pose: 5c-2 (6, 7)
-                                    "d5_pocket")  # 5d (7.2)
+                                    "d5_pocket",  # 5d (7.2)
+                                    "f1")  # PR 7 design 6.1, 7 (7c-2b, lead #623 decision 2): the F1 start block
 NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale", "link_stuck", "layer_worker",
                   "obstacle_layer", "overspeed", "loop_slow", "worker", "baseline", "core",
                   "relocalize",  # relocalize: the declaration's session mark is no toggle (5c-2, 7b)
@@ -380,6 +395,10 @@ class RealLoop:
         # PR 7 design 6.1, 2: the session's manual-only latch (a declaration completed on a `not_localized` seed) --
         # kept to the session's end; the three start boundaries read it with the slam bypass each judgement
         self.manual_only: dict | None = None
+        # PR 7 design 6.1, 7 (7c-2b): every seed of the session (loop-made, never the console's or a reply's) and the
+        # F1 start block judged when a generation closes -- one-way to the session's end
+        self.seed_log: list = []
+        self.f1_block: dict | None = None
         self._mission_bypass: set = set()
         if hasattr(link.a, "start_gate"):
             link.a.start_gate = self._start_gate
@@ -416,6 +435,9 @@ class RealLoop:
             self.bypass.clear()
             self._bypass_pending.clear()
             self.declared_epoch = None  # 5c-2 (7b): the declaration's mark is the session's
+            # 6.1, 7: a new session is a new bridge with no seed -- its records and block start empty
+            self.seed_log = []
+            self.f1_block = None
         # the check and the change under one channel lock: a connection event queued between them cannot slip past
         # (r7 P2-1; the channels' lock is re-entrant)
         with self.channels.lock:
@@ -592,6 +614,9 @@ class RealLoop:
             # notice reads these, not the SLAM state, so a later ready seed does not clear it
             "manual_only": None if self.manual_only is None else dict(self.manual_only),
             "manual_only_blocking": self._latch_blocks(),
+            # 6.1, 7 (7c-2b): the F1 block itself and whether it blocks now (the f1 bypass off)
+            "f1_block": None if self.f1_block is None else dict(self.f1_block),
+            "f1_blocking": self._f1_blocks(),
             # the MCU sample stand (6, 3) with its link on the clock now: not_still's own value (impl round 6 P2-1)
             "standing": self.stand_since_ns is not None and bool(self.host.health(int(self.clock())).fresh),  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
         }
@@ -616,8 +641,10 @@ class RealLoop:
         return self.declared_epoch is not None and self.declared_epoch == self.link.a.session_epoch
 
     def _speed_cap(self) -> float:
-        """The rear-axle command cap: 0.06 m/s while slam is bypassed or the session carries a declaration (6, 7b)."""
-        if "slam" in self._tick_bypass or "d5_pocket" in self._tick_bypass or self._declared():
+        """The rear-axle command cap: 0.06 m/s while slam, d5_pocket or f1 is bypassed or the session carries a
+        declaration (6, 7b; f1: 7c-2b, lead #623 decision 2)."""
+        if ("slam" in self._tick_bypass or "d5_pocket" in self._tick_bypass or "f1" in self._tick_bypass
+                or self._declared()):
             return min(self.max_speed_mps, self.declared_speed_mps)  # 5d: the D5 bypass keeps the insertion's low speed
         return self.max_speed_mps
 
@@ -728,15 +755,25 @@ class RealLoop:
     def _latch_blocks(self) -> bool:
         return self.manual_only is not None and "slam" not in self._tick_bypass
 
+    def _f1_blocks(self) -> bool:
+        return self.f1_block is not None and "f1" not in self._tick_bypass
+
     def _start_gate(self):
-        """The arbiter's start gate (6.1, 2): the latch while the slam bypass is off, read at each judgement."""
+        """The arbiter's start gate (6.1, 2 and 7), read at each judgement by the request check, the AUTO entry and
+        (through ``_start_blocked``) the Context: ``(F1 block ∧ f1 off) ∨ (manual_only ∧ slam off)``. On the real path
+        F1 lives here, not in the arbiter's one-way ``start_block``: the gate's refusals leave the field recovery's
+        report open, and an f1 bypass toggled in the session is read at once (7c-2b)."""
+        if self._f1_blocks():
+            return {"reason": "operator_placed_start", "source": "f1", **self.f1_block}
         if not self._latch_blocks():
             return None
         return {"reason": "operator_placed_start", "source": "manual_only", **self.manual_only}
 
     def _start_blocked(self) -> bool:
-        """6.1, 2 / 7: the one expression the three boundaries read -- F1's one-way block or the latch unbypassed."""
-        return getattr(self.link.a, "start_block", None) is not None or self._latch_blocks()
+        """6.1, 2 / 7: the one expression the three boundaries read -- the arbiter's own one-way block (never set on the
+        real path), F1 with the f1 bypass off, or the latch with the slam bypass off."""
+        return (getattr(self.link.a, "start_block", None) is not None or self._f1_blocks()
+                or self._latch_blocks())
 
     def _attempt_end(self, t: float, state: str, reason) -> None:
         a = self.attempt
@@ -816,6 +853,11 @@ class RealLoop:
             seed_id = self.slam_source.seed(self.epoch, target, t)
             # issued: never a second seed for this attempt (Codex 7c-1b-1 round 1 P2-3)
             a["seed_epoch"], a["seed_id"] = self.epoch, seed_id
+            # 6.1, 7: the seed recorded as the source took it (a seed cancelled before its frame went out is still
+            # the session's last seed)
+            self.seed_log.append({"session_epoch": self.link.a.session_epoch, "generation": a["generation"],
+                                  "attempt": a["attempt"], "epoch": self.epoch, "seed_id": seed_id, "declared": False,
+                                  "t": float(t)})
             # the mark, the cap and the record from the seed on, before anything else can fail (impl rounds 1-2)
             self.declared_epoch = self.link.a.session_epoch
             self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
@@ -986,6 +1028,7 @@ class RealLoop:
     def _close_generation(self, t: float, a: dict) -> None:
         tr = self._tracker()
         self.core.relocalized(t, a["generation"])
+        self._f1_judge(t, a)  # at the close, before the next batch's link.begin() and Context (6.1, 7)
         if tr is not None and getattr(tr, "_relocalizing", False):
             tr.relocalization_done()
         if self.operator_start is not None:
@@ -998,6 +1041,33 @@ class RealLoop:
                                 "seed_id": a.get("seed_id"), "since": float(t)}
             self.reloc_events.append({"t": float(t), "event": "manual_only", **self.manual_only})
         self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
+
+    def _f1_judge(self, t: float, a: dict) -> None:
+        """6.1, 7: once a generation closes. A declaration closing marks its own seed row (the whole key must match --
+        a declaration without one is unsourced); then the session's last seed must be a completed declaration, else
+        the F1 start block holds to the session's end. Never judged right after a seed (it would block a declaration
+        still finishing)."""
+        session = self.link.a.session_epoch
+        if a["kind"] == "declare":
+            key = (session, a["generation"], a["attempt"], a.get("seed_epoch"))
+            rows = [r for r in self.seed_log
+                    if (r["session_epoch"], r["generation"], r["attempt"], r["epoch"]) == key]
+            if len(rows) == 1:
+                rows[0]["declared"] = True
+            elif self.f1_block is None:
+                self._f1_set(t, "declare_unsourced", a, None)
+                return
+        seeds = [r for r in self.seed_log if r["session_epoch"] == session]
+        if seeds and not seeds[-1]["declared"] and self.f1_block is None:
+            self._f1_set(t, "seed_not_declared", a, seeds[-1])
+
+    def _f1_set(self, t: float, source: str, a: dict, seed) -> None:
+        self.f1_block = {"source_kind": source, "session_epoch": self.link.a.session_epoch,
+                         "closed_generation": a["generation"], "closed_kind": a["kind"],
+                         "seed": None if seed is None else {k: seed[k] for k in ("generation", "attempt", "epoch",
+                                                                                 "seed_id")},
+                         "since": float(t)}
+        self.reloc_events.append({"t": float(t), "event": "f1_block", **self.f1_block})
 
     def _on_console_disarm(self, now_mono: float) -> None:
         self._disarms_taken += 1  # 5c-2: a waiting relocalization attempt is void after any DISARM taken
@@ -2459,6 +2529,12 @@ class RealLoop:
                 return "send:obstacle_layer_off", "alarm"  # design 3 at the write too (Codex 5a impl round 5 P1)
             if frame.kind == "ARM" and why is not None and not ra.latches(why):
                 return f"arm_wait:{why}", "alarm"  # no new ARM while a wait holds: latch, a rearm (design 3)
+            if frame.kind == "ARM":
+                # lead #623 decision 1 (7c-2b, Codex design check P1): a start needs this round's real processed
+                # fresh at the ARM's write itself, whatever is bypassed (slam, f1, operator_start)
+                sl_ = self.evidence.slam(ns)
+                if sl_.pose_reply_ns is None or ns - sl_.pose_reply_ns > ra.SLAM_MAX_AGE_S * 1e9:
+                    return "arm_slam_stale", "alarm"
             if why is not None and ra.latches(why):
                 return f"send:{why}", "alarm"
             if not self._lease_valid(ns):
