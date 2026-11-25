@@ -676,9 +676,8 @@ class RealLoop:
             return "no_start_pose", {}
         # PR 7 design 6.1, 2: the source's own acceptance, asked before anything changes (no attempt ended, no layer
         # cut): a confirmation needs a `ready` source, a declaration no seed in progress
-        why = self._source_acceptance(kind)
-        if why is not None:
-            return why, {}
+        if not self._source_accepts(kind):
+            return ("slam_not_ready" if kind == "relocalize_confirm" else "seed_in_progress"), {}
         if self.attempt is not None:
             self._attempt_end(t, "refused", "relocalize_superseded")
         self._attempt_serial += 1
@@ -699,12 +698,13 @@ class RealLoop:
                                   "state": "waiting", "reason": None, "start_pose_m": None, "start_pose_deg": None}
         return None, {"generation": gen, "attempt": self._attempt_serial}
 
-    def _source_acceptance(self, kind: str):
-        """The source's side-effect-free acceptance (``can_confirm`` / ``can_seed``), when it has one."""
+    def _source_accepts(self, kind: str) -> bool:
+        """The source's side-effect-free acceptance (``can_confirm()`` -> bool: ready; ``can_seed()`` -> bool: no seed
+        in progress), when it has one; the refusal codes are the loop's own (the console's texts)."""
         if not self._epoch_mode:
-            return None
+            return True
         ask = getattr(self.slam_source, "can_confirm" if kind == "relocalize_confirm" else "can_seed", None)
-        return None if ask is None else ask()
+        return True if ask is None else ask() is True
 
     def _seed_states(self) -> bool:
         return self._epoch_mode and callable(getattr(self.slam_source, "seed_state", None))

@@ -35,8 +35,8 @@ def seeding(r, *, ready=True):
     src.seed = seed
     src.end = end
     src.seed_state = lambda epoch: src.seed_states.get(int(epoch))
-    src.can_confirm = lambda: None if src.session == "ready" else "slam_not_ready"
-    src.can_seed = lambda: "seed_in_progress" if src.session == "seeding" else None
+    src.can_confirm = lambda: src.session == "ready"
+    src.can_seed = lambda: src.session != "seeding"
     return src
 
 
@@ -454,16 +454,16 @@ def test_the_run_guard_passes_the_acceptance_and_seed_states_through():
             return []
 
         def can_confirm(self):
-            return "slam_not_ready"
+            return False
 
         def can_seed(self):
-            return None
+            return True
 
         def seed_state(self, epoch):
             raise RuntimeError("link down")
 
     g = _SlamGuard(Src(), marks.append, Counter())
-    assert g.can_confirm() == "slam_not_ready" and g.can_seed() is None
+    assert g.can_confirm() is False and g.can_seed() is True
     with pytest.raises(RuntimeError):
         g.seed_state(3)
     assert marks and marks[-1].startswith("slam:seed_state:RuntimeError")
