@@ -45,6 +45,9 @@ POSE_ENDED_REFUSED = POSE_REFUSED + ("rearm", "arm", "mode_request")
 # of what drives the truck by the map, and AUTO; teleop, arming, STOP, the session's end and a scene reset stay open
 START_REFUSED = ("mission_submit", "mission_resume", "pick_request", "recovery")
 START_BLOCK_REASON = "operator_placed_start"
+# PR 7 design 6.1, 2 / 7: the real path's start gate (the manual-only latch, read each judgement) refuses these -- the
+# field recovery report is left open so a locked session can still report a manual recovery
+START_GATE_REFUSED = tuple(k for k in START_REFUSED if k != "recovery")
 # the mission states AUTO stays in (B5); recovering: the truck backs out of a pocket on its own (persistent console D4)
 AUTO_STATUSES = ("accepted", "preparing", "running", "resuming", "cancelling", "recovering")
 
@@ -186,6 +189,8 @@ class Arbiter:
         self._pose_end: str | None = None  # end_pose's reason: a latch the next view cannot lift
         # the vehicle-side F1 block ({reason, source, since_mono}); None: no block. Set once, never cleared in the epoch
         self.start_block: dict | None = None
+        # () -> dict | None: a start gate read at each judgement (the real loop's manual-only latch, PR 7 design 6.1, 2)
+        self.start_gate = None
         self.stops = 0  # every STOP taken (B-P2c: the relocalization drops the attempt a new one interrupts)
         self.provisional_auto = False
         self._context_gen = 0
@@ -436,6 +441,9 @@ class Arbiter:
         if self.start_block is not None and (kind in START_REFUSED
                                              or (kind == "mode_request" and msg.get("to") == "AUTO")):
             return self._reply(kind, request_id, "operator_placed_start")
+        if self._gate() is not None and (kind in START_GATE_REFUSED
+                                         or (kind == "mode_request" and msg.get("to") == "AUTO")):
+            return self._reply(kind, request_id, "operator_placed_start")
         pose = (self._pose_view() or {}).get("status")
         if pose is not None and pose.startswith("ended:") and kind in POSE_ENDED_REFUSED:
             return self._reply(kind, request_id, "pose_ended")
@@ -525,6 +533,9 @@ class Arbiter:
         if self.config.real_requests:
             return self._real("recovery", request_id, msg, now_mono)  # 5c-1: the field recovery's "done"
         return self._reply("recovery", request_id, "unsupported")  # plan section 1: not this slice
+
+    def _gate(self):
+        return None if self.start_gate is None else self.start_gate()
 
     def block_start(self, source, now_mono: float) -> None:
         """The vehicle-side F1 block (docs/plans/2026-11-08-f1-vehicle-block.md 2.2), set by the live runtime as it takes
@@ -870,6 +881,9 @@ class Arbiter:
             # (the gate) is not undone by the submit it overtook (Codex M-c round 2 P1).
             if self.start_block is not None:  # unreachable past the two refusals; a new path ends the session here
                 raise RuntimeError(f"AUTO entry with an operator_placed start: {self.start_block}")
+            gate = self._gate()
+            if gate is not None:  # the same expression as the request check and the Context (6.1, 2)
+                raise RuntimeError(f"AUTO entry with the start gate closed: {gate}")
             self._set_mode("AUTO", now_mono, "mission")
         elif self.mode == "AUTO" and status not in AUTO_STATUSES:
             last = self.mission.log[-1] if self.mission is not None and self.mission.log else {}

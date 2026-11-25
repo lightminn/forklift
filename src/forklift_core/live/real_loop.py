@@ -57,6 +57,10 @@ WAIT_STEER_MOVE_RAD = 0.02
 HOLDING_KINDS = ("hold", "stop")  # the book's position-holding frames (a wait's control stop and holds, S10's stop)
 # 5c-2 (docs/design/2026-11-19-real-safety-wiring.md 6): relocalization
 RELOCALIZE_WAIT_S = 3.0  # an attempt's limit from its acceptance (provisional)
+# PR 7 design 6.1, 2: a declaration on a source with seed end states waits for its seed's end state (the executor's 20 s
+# seed limit) and commits within 0.5 s after it -- one limit from the acceptance (provisional)
+SEED_WAIT_S = 20.0
+DECLARE_COMMIT_S = 0.5
 START_TOL_M = 0.10  # the registered start's tolerance (provisional)
 START_TOL_RAD = math.radians(5.0)
 DECLARED_SPEED_MPS = 0.06  # the slam-bypass / declared-start cap (provisional, S10 speed approval)
@@ -173,6 +177,14 @@ NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale
 
 # the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
 LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
+
+
+def _evidence(reply) -> tuple:
+    """PR 7 design 6.1, 0: a reply's first-beam evidence interval [Flo, Fhi] (core seconds); a source without one (the
+    synthetic and Isaac ones) has Flo = Fhi = its order stamp."""
+    stamp = float(reply.stamp_s)
+    lo, hi = getattr(reply, "evidence_lo_s", None), getattr(reply, "evidence_hi_s", None)
+    return (stamp if lo is None else float(lo)), (stamp if hi is None else float(hi))
 
 
 def _imu_int(v):
@@ -357,6 +369,12 @@ class RealLoop:
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
+        # PR 7 design 6.1, 2: the session's manual-only latch (a declaration completed on a `not_localized` seed) --
+        # kept to the session's end; the three start boundaries read it with the slam bypass each judgement
+        self.manual_only: dict | None = None
+        self._mission_bypass: set = set()
+        if hasattr(link.a, "start_gate"):
+            link.a.start_gate = self._start_gate
         if self._epoch_mode:
             src_ = evidence.slam
             self.evidence = dataclasses.replace(evidence, slam=lambda n: dataclasses.replace(
@@ -370,6 +388,10 @@ class RealLoop:
             self._emit({"t": "cause", "ns": int(now_ns), "why": why, "where": "ready"})
             self._cause = (int(now_ns), why)
         return why
+
+    def _shown_bypass(self, bypass=None) -> set:
+        """The bypass set as told and recorded: the session's (this tick's by default) with the declaration's mark."""
+        return set(self._tick_bypass if bypass is None else bypass) | ({"relocalize"} if self._declared() else set())
 
     def _bypassed(self, check: str) -> bool:
         return check in self._tick_bypass
@@ -392,6 +414,8 @@ class RealLoop:
             self._apply_pending(int(self.clock()))  # the lease judged at the instant it applies (r8 P2)
         self._bypass_pending.clear()
         self._tick_bypass = frozenset(self.bypass)
+        if self.core.commands.status in self.MISSION_ACTIVE:
+            self._mission_bypass |= self._shown_bypass()  # 6.1, 2: every bypass applied while the mission lasted
         if self.real_layer is not None:
             self.real_layer.timing_bypassed = "layer_timing" in self._tick_bypass
             self.real_layer.correction_bypassed = "snapshot" in self._tick_bypass
@@ -553,9 +577,13 @@ class RealLoop:
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
-            "bypassed": sorted(self.bypass | ({"relocalize"} if self._declared() else set())),
+            "bypassed": sorted(self._shown_bypass(self.bypass)),
             "mode": a.mode,
             "relocalize": dict(self.relocalize_status),  # 5c-2 (6, 8): the last attempt's, kept after the close
+            # PR 7 design 6.1, 2: the latch itself and whether it blocks now (the slam bypass off) -- the console's
+            # notice reads these, not the SLAM state, so a later ready seed does not clear it
+            "manual_only": None if self.manual_only is None else dict(self.manual_only),
+            "manual_only_blocking": self._latch_blocks(),
             # the MCU sample stand (6, 3) with its link on the clock now: not_still's own value (impl round 6 P2-1)
             "standing": self.stand_since_ns is not None and bool(self.host.health(int(self.clock())).fresh),  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
         }
@@ -644,6 +672,11 @@ class RealLoop:
             return "not_still", {}  # the stand and its link on the clock now (impl round 5 P1)
         if self.start_rear is None or self.rear_offset_m is None:
             return "no_start_pose", {}
+        # PR 7 design 6.1, 2: the source's own acceptance, asked before anything changes (no attempt ended, no layer
+        # cut): a confirmation needs a `ready` source, a declaration no seed in progress
+        why = self._source_acceptance(kind)
+        if why is not None:
+            return why, {}
         if self.attempt is not None:
             self._attempt_end(t, "refused", "relocalize_superseded")
         self._attempt_serial += 1
@@ -653,7 +686,9 @@ class RealLoop:
                         "control_gen": self.link.a.control_gen, "bypass": frozenset(self.bypass),
                         "stand": self.stand_since_ns, "t": t, "reference": False, "seeded": False,
                         # a DISARM taken after this voids it (impl round 3: the taken ones counted, not the queue)
-                        "disarms": self._disarms_taken}
+                        "disarms": self._disarms_taken,
+                        # 6.1, 2: the declaration completes on its seed's end state (a source that reports them)
+                        "seed_states": self._seed_states(), "seed_epoch": None, "seed_end": None}
         if self.real_layer is not None:
             self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
         if self.attempt["kind"] == "confirm" and self._epoch_mode:
@@ -661,6 +696,35 @@ class RealLoop:
         self.relocalize_status = {"generation": gen, "attempt": self._attempt_serial, "kind": self.attempt["kind"],
                                   "state": "waiting", "reason": None, "start_pose_m": None, "start_pose_deg": None}
         return None, {"generation": gen, "attempt": self._attempt_serial}
+
+    def _source_acceptance(self, kind: str):
+        """The source's side-effect-free acceptance (``can_confirm`` / ``can_seed``), when it has one."""
+        if not self._epoch_mode:
+            return None
+        ask = getattr(self.slam_source, "can_confirm" if kind == "relocalize_confirm" else "can_seed", None)
+        return None if ask is None else ask()
+
+    def _seed_states(self) -> bool:
+        return self._epoch_mode and callable(getattr(self.slam_source, "seed_state", None))
+
+    def _attempt_limit_s(self, a: dict) -> float:
+        """6.1, 2: a declaration on a source with seed end states has its own limit, apart from the confirmation's."""
+        if a["kind"] == "declare" and a.get("seed_states"):
+            return SEED_WAIT_S + DECLARE_COMMIT_S
+        return RELOCALIZE_WAIT_S
+
+    def _latch_blocks(self) -> bool:
+        return self.manual_only is not None and "slam" not in self._tick_bypass
+
+    def _start_gate(self):
+        """The arbiter's start gate (6.1, 2): the latch while the slam bypass is off, read at each judgement."""
+        if not self._latch_blocks():
+            return None
+        return {"reason": "operator_placed_start", "source": "manual_only", **self.manual_only}
+
+    def _start_blocked(self) -> bool:
+        """6.1, 2 / 7: the one expression the three boundaries read -- F1's one-way block or the latch unbypassed."""
+        return getattr(self.link.a, "start_block", None) is not None or self._latch_blocks()
 
     def _attempt_end(self, t: float, state: str, reason) -> None:
         a = self.attempt
@@ -714,7 +778,7 @@ class RealLoop:
         lay = self.real_layer
         if why is None and closing and lay is not None and (not lay.worker.alive or not lay.ok(t_now)):
             why = "relocalize_voided:layer"
-        if why is None and t_now - a["t"] > RELOCALIZE_WAIT_S:
+        if why is None and t_now - a["t"] > self._attempt_limit_s(a):
             why = "relocalize_timeout"
         prov = self.provenance
         if why is None and closing and a["kind"] == "confirm" and not self._bypassed("slam") and (
@@ -738,6 +802,7 @@ class RealLoop:
                 return
             self._new_epoch(t)
             self.slam_source.seed(self.epoch, target, t)
+            a["seed_epoch"] = self.epoch
             # the mark, the cap and the record from the seed on, before anything else can fail (impl rounds 1-2)
             self.declared_epoch = self.link.a.session_epoch
             self.reloc_events.append({"t": float(t), "event": "relocalize_seeded", "generation": a["generation"],
@@ -763,12 +828,13 @@ class RealLoop:
             ep = getattr(reply, "epoch", None)
             ep = 0 if ep is None else int(ep)
             stamp, sid = float(reply.stamp_s), int(reply.scan_id)
+            lo, hi = _evidence(reply)
             why = None
             if ep != self.epoch:
                 why = "epoch"
-            elif stamp < self.t_epoch:
+            elif lo < self.t_epoch:
                 why = "before_epoch"
-            elif stamp > t + 1e-9:
+            elif hi > t + 1e-9:
                 why = "future"
             elif self._last_stamp is not None and stamp < self._last_stamp:
                 why = "out_of_order"
@@ -783,11 +849,11 @@ class RealLoop:
             out.append(item)
             if reply.status == "processed":
                 has_received = True
-                ns = self.start_ns + int(round(stamp * 1e9))
+                ns = self.start_ns + int(round(lo * 1e9))  # the age from the first beam's earliest instant
                 self._fresh_ns = ns if self._fresh_ns is None else max(self._fresh_ns, ns)
                 a = self.attempt
                 if (a is not None and a["kind"] == "confirm" and getattr(reply, "attempt", None) == a["attempt"]
-                        and stamp >= a["t"]):
+                        and lo >= a["t"]):
                     a["reference"] = True
         return out
 
@@ -807,7 +873,7 @@ class RealLoop:
         # batch's last processed is it -- a later skipped only refreshes the stamp; under a hold nothing was applied
         last = next((it[0] for it in reversed(passed) if it[0].status == "processed"), None)
         if last is not None and tr is not None and getattr(tr, "mode", None) != "holding":
-            self.provenance = (self.epoch, getattr(last, "attempt", None), int(last.scan_id), float(last.stamp_s))
+            self.provenance = (self.epoch, getattr(last, "attempt", None), int(last.scan_id), _evidence(last)[0])
 
     def _start_gap(self, rear):
         """(distance m, |yaw| rad) of a rear-axle pose from the registered start."""
@@ -843,6 +909,20 @@ class RealLoop:
                 failed = "relocalize_stale"
         elif prov is None or prov[0] != self.epoch:
             failed = "relocalize_no_reply"
+        elif a.get("seed_states"):
+            # 6.1, 2: the seed's end state (ready / not_localized) completes it; void refuses it at once
+            end = self.slam_source.seed_state(a["seed_epoch"])
+            kind, reason = (None, None) if end is None else end
+            if kind == "void":
+                self._attempt_end(t, "refused", f"relocalize_voided:seed:{reason}")
+                return
+            if kind in ("ready", "not_localized"):
+                if a["seed_end"] is None:
+                    a["seed_end"] = (kind, reason, float(t))
+                    self.reloc_events.append({"t": float(t), "event": "seed_end", "kind": kind, "reason": reason,
+                                              "attempt": a["attempt"], "epoch": a["seed_epoch"]})
+            else:
+                failed = "relocalize_seeding"
         tr = self._tracker()
         rear = None
         if failed is None:
@@ -861,8 +941,9 @@ class RealLoop:
             if lay is None or not lay.ok(t) or lay.installing(ignore_correction=False) or newest is None \
                     or newest < a["t"]:
                 failed = "relocalize_layer"
-        if t - a["t"] > RELOCALIZE_WAIT_S:
-            self._attempt_end(t, "refused", failed or "relocalize_timeout")  # the limit first (impl round 1 P2-1)
+        if t - a["t"] > self._attempt_limit_s(a):
+            # the limit first (impl round 1 P2-1); a seed still running is the declaration's own timeout
+            self._attempt_end(t, "refused", "relocalize_timeout" if failed in (None, "relocalize_seeding") else failed)
             return
         if failed is None:
             with self.channels.lock:
@@ -882,6 +963,13 @@ class RealLoop:
             tr.relocalization_done()
         if self.operator_start is not None:
             self.operator_start.void("relocalized")
+        end = a.get("seed_end")
+        if end is not None and end[0] == "not_localized" and self.manual_only is None:
+            # 6.1, 2: the session is manual-only from here to its end (lifted for a start only by the slam bypass)
+            self.manual_only = {"reason": "not_localized", "session_epoch": self.link.a.session_epoch,
+                                "generation": a["generation"], "attempt": a["attempt"], "epoch": a["seed_epoch"],
+                                "since": float(t)}
+            self.reloc_events.append({"t": float(t), "event": "manual_only", **self.manual_only})
         self._attempt_end(t, "confirmed" if a["kind"] == "confirm" else "declared", None)
 
     def _on_console_disarm(self, now_mono: float) -> None:
@@ -1420,7 +1508,7 @@ class RealLoop:
         self.serial = self.link.emergency(now_ns / 1e9)  # the emergency batch first (its serial: the send's reference)
         self._stop_kind, self._cmd_records = self.session.tick_start(
             t, now_ns / 1e9, feedback, {"submit_refusal": refusal, "clear_for_submit": True,
-                                        "localization_ok": True}, collect=lambda: self._collect(now_ns, t, rec))
+                                        "localization_ok": True, "start_blocked": self._start_blocked()}, collect=lambda: self._collect(now_ns, t, rec))
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): after the batch's requests and the end's collection
         if self.fatal_source is not None:
             # 6a-2b (design 10.5): a source call made by the console's requests (relocalize, request_processed); the
@@ -2057,7 +2145,12 @@ class RealLoop:
     def _collect(self, now_ns: int, t: float, rec: TickRecord) -> None:
         if self.session.ended_unclaimed():
             release = self._release_allowed(now_ns)
-            self.session.end_mission(t, lift_m=self._measured_lift(), release_allowed=release)
+            entry = self.session.end_mission(t, lift_m=self._measured_lift(), release_allowed=release)
+            if entry is not None:
+                # PR 7 design 6.1, 2: the bypasses applied during this mission -- an aggregate of F1 / SLAM evidence
+                # leaves out the runs that had any (a session's end state cannot tell one turned off mid-session)
+                entry["bypassed"] = sorted(self._mission_bypass | self._shown_bypass())
+            self._mission_bypass = set()
             # S10's end leaves the authority through its own control stop (STOP_PENDING); any other end latches
             if self.permit.state in (ra.ARMING, ra.READY, ra.DRIVING):
                 self.permit.mission_ended(now_ns, self.core.commands.end_reason or "end")

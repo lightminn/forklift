@@ -69,6 +69,11 @@ out.rresult = [P.relocalizeResult(ack, rs), P.relocalizeResult({...ack, attempt:
                P.relocalizeResult(ack, {...rs, relocalize_generation: 3})];  // a newer generation open
 out.rgapNew = P.relocalizeView({...rs, relocalize_generation: 3}).gap;
 out.rsig = P.statusSig(rs) === P.statusSig({...rs, relocalize_generation: 3});
+// PR 7 design 6.1, 2: the manual-only notice reads the latch and the bypass, not the SLAM state
+const latch = {reason: "not_localized", session_epoch: 3};
+out.manual = [P.manualOnlyNotice(st("OFF", "idle")), P.manualOnlyNotice(st("OFF", "idle", {manual_only: latch,
+              manual_only_blocking: true})), P.manualOnlyNotice(st("OFF", "idle", {manual_only: latch,
+              manual_only_blocking: false, bypassed: ["slam"]})), P.manualOnlyNotice(null)];
 console.log(JSON.stringify(out));
 """
 
@@ -94,6 +99,9 @@ def test_the_panel_decisions(tmp_path):
     assert out["pose"][1] is None and out["pose"][2] is None
     assert out["sig"] == [True, False, False]
     assert out["rview"]["open"] and out["rview"]["generation"] == 2 and out["rview"]["gap"] == "15.3 cm · 1.2°"
+    assert out["manual"][0] == "" and out["manual"][3] == ""
+    assert out["manual"][1].startswith("위치 추정 실패 — 자율은 세션을 다시 시작해야 함")
+    assert out["manual"][2] == "우회 중: slam(not_localized)"
     assert out["rwhy"][0] is None and all(isinstance(w, str) for w in out["rwhy"][1:])
     assert out["rresult"] == [{"state": "refused", "reason": "not_at_start"}, None,
                               {"state": "confirmed", "reason": None}, None, None]  # told after the close only
