@@ -141,10 +141,11 @@ def test_the_session_starts_by_relocalizing_and_nothing_is_submitted_before_the_
         r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
         assert r["t"] == "ack", r
         time.sleep(0.8)
-        # with the ready instance's processed replies coming, the start check is refused for the open generation --
-        # not for stale SLAM (Codex 7c-2c round 1 P3)
+        # with the ready instance's processed replies coming, the start check is refused for the open generation
+        # (Codex 7c-2c rounds 1-2 P3); the confirmation below closes only on a processed reply the loop took after
+        # its request (its reference), so it shows the replies were taken
         r = c.ask("operator_start")
-        assert r["t"] == "reject" and r["reason"] != "slam_stale", r
+        assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
         r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
                   targets_revision=c.status["targets_revision"])
         assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
@@ -257,13 +258,14 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         _until(lambda: bridge.held_replies, 5, "a reply held")
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
+        a1 = r["attempt"]  # the session's attempt numbers run on from the start's confirmation (Codex 7c-2c r2 P2)
         c.wait(lambda s: "relocalize" in s["bypassed"], 5)  # the seed accepted (the declaration's mark)
         bridge.release_replies()
         _until(lambda: _sent(bridge, "seeding", 2), 10, "seed 2 seeding")
         r = c.ask("lease_release")
         assert r["t"] == "ack", r
         c.lease = None
-        s = c.wait(lambda s: s["relocalize"]["attempt"] == 1 and s["relocalize"]["state"] == "refused", 10)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == a1 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] == "relocalize_voided:lease", s["relocalize"]
         bridge.release(2)  # its end state only after the lease's refusal is seen (Codex time-PR round 1 P2-2)
         _until(lambda: _sent(bridge, "ready", 2), 15, "seed 2 ready")
@@ -273,10 +275,11 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         # 2: a STOP while the seed runs; its end state held until the second declaration has been refused
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
+        a2 = r["attempt"]
         _until(lambda: _sent(bridge, "seeding", 3), 10, "seed 3 seeding")
         r = c.ask("stop")
         assert r["t"] == "ack", r
-        s = c.wait(lambda s: s["relocalize"]["attempt"] == 2 and s["relocalize"]["state"] == "refused", 10)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == a2 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] in ("relocalize_moved", "relocalize_voided:control"), s["relocalize"]
         c.wait(lambda s: s.get("standing"), 10)
         r = _rearm(c)
