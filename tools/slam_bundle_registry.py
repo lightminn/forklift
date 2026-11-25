@@ -24,10 +24,13 @@ registration command reads itself. One site survey report binds the row together
 record's hash, the bundle's ``map_id``, the sensor and odometry settings' hashes, the survey run's raw records, the start
 pose in the map and the five-mark site check (observed figures against limits fixed beforehand). The registered start
 must agree with the S10-A taped start (``start_rear`` taken to base_link) within the start tolerance, and the S10-A
-settings must name the same map. A new site row is not relocalizable at its start.
+settings must name the same map. The command also checks the bundle's files against its manifest (``load_bundle``),
+the raw records against their listed hashes, and the lidar and chassis hashes against the files it reads; the
+report lives under the bundle root and the row keeps its path relative to that root. A new site row is not
+relocalizable at its start.
 
     python tools/slam_bundle_registry.py add-site REGISTRY --name NAME --bundle DIR --report SITE_REPORT
-        --site-record SITE_RECORD --s10a S10A_YAML --vehicle VEHICLE_YAML
+        --site-record SITE_RECORD --s10a S10A_YAML --vehicle VEHICLE_YAML --lidar LIDAR_YAML
     python tools/slam_bundle_registry.py lookup-site REGISTRY --site-record SITE_RECORD --encoder-model MODEL
         (prints as lookup)
 
@@ -36,7 +39,8 @@ The site survey report (JSON, written by the survey, never by this tool)::
     {"kind": "site_survey/1", "ok": true, "site": "<name>", "site_record_sha256": "<64 hex>",
      "map_id": "<the bundle's>", "encoder_model": "<model>", "start_pose": [x, y, yaw],   # map <- base_link
      "config_sha256": {"lidar": "<64 hex>", "chassis": "<64 hex>"},
-     "raw": [{"path": "<record>", "sha256": "<64 hex>"}, ...],   # the survey drive's records and .ok files
+     "raw": [{"path": "<record>", "sha256": "<64 hex>"}, ...],   # the survey drive's records and their .ok files,
+                                                                    # paths relative to the report's folder
      "site_check": {"points": 5, "position_max_m": m, "yaw_max_rad": r,
                     "limits": {"position_m": m, "yaw_rad": r}}}
 """
@@ -56,6 +60,8 @@ import yaml
 SCENE_INPUT = "scene_file"
 SITE_REPORT_KIND = "site_survey/1"
 SITE_CHECK_POINTS = 5  # the five floor marks (design 6.1 item 5)
+# The registered start against the S10-A taped start, compared at the rear axle as the live loop compares its start
+# (real_loop._off_start): the loop's START_TOL_M / START_TOL_RAD, provisional until bench 7 (Codex 7c-2a round 1).
 NONE = 3  # lookup: no row (an error exits 1, so the launcher can tell the two apart)
 
 
@@ -154,9 +160,12 @@ def _finite(v) -> bool:
 
 
 def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_name: str, report_sha256: str,
-               site_record_sha256: str, s10a_map_id, s10a_start_base, tol_m: float, tol_rad: float) -> dict:
+               site_record_sha256: str, s10a_map_id, s10a_start_rear, rear_offset_m: float, tol_m: float,
+               tol_rad: float) -> dict:
     """The registry row of a real site survey (ValueError naming the first problem). ``site_record_sha256`` is the
-    hash of the site record file itself; ``s10a_start_base`` the S10-A taped start as base_link."""
+    hash of the site record file itself; ``s10a_start_rear`` the S10-A taped start (rear axle), compared with the
+    report's base_link start taken to the rear axle by ``rear_offset_m``. The report's files are checked apart
+    (``check_site_sources``)."""
     if report.get("kind") != SITE_REPORT_KIND:
         raise ValueError(f"{name}: the report is not a {SITE_REPORT_KIND} report (kind {report.get('kind')!r})")
     if report.get("ok") is not True:
@@ -172,7 +181,7 @@ def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_n
                          f"{manifest['map_id'][:12]}")
     model = report.get("encoder_model")
     bundle_model = ((manifest.get("run") or {}).get("arguments") or {}).get("encoder_model")
-    if not model or (bundle_model is not None and bundle_model != model):
+    if not (isinstance(model, str) and model.strip()) or (bundle_model is not None and bundle_model != model):
         raise ValueError(f"{name}: the report's encoder model {model!r} is not the bundle's {bundle_model!r}")
     cfg = report.get("config_sha256") or {}
     if not (_hex64(cfg.get("lidar")) and _hex64(cfg.get("chassis"))):
@@ -183,12 +192,14 @@ def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_n
     start = report.get("start_pose")
     if not (isinstance(start, list) and len(start) == 3 and all(_finite(v) for v in start)):
         raise ValueError(f"{name}: the report's start_pose is not three finite numbers")
-    tape = [float(v) for v in s10a_start_base]
-    d = math.hypot(float(start[0]) - tape[0], float(start[1]) - tape[1])
-    dyaw = abs(math.remainder(float(start[2]) - tape[2], math.tau))
+    tape = [float(v) for v in s10a_start_rear]
+    x, y, yaw = (float(v) for v in start)
+    rear = (x - rear_offset_m * math.cos(yaw), y - rear_offset_m * math.sin(yaw), yaw)  # start_reloc.rear_from_base
+    d = math.hypot(rear[0] - tape[0], rear[1] - tape[1])
+    dyaw = abs(math.remainder(rear[2] - tape[2], math.tau))
     if d > tol_m or dyaw > tol_rad:
         raise ValueError(f"{name}: the surveyed start is {d:.3f} m / {math.degrees(dyaw):.1f} deg from the S10-A "
-                         f"taped start (tolerance {tol_m} m / {math.degrees(tol_rad):.1f} deg)")
+                         f"taped start at the rear axle (tolerance {tol_m} m / {math.degrees(tol_rad):.1f} deg)")
     chk = report.get("site_check") or {}
     lim = chk.get("limits") or {}
     if not (isinstance(chk.get("points"), int) and chk["points"] >= SITE_CHECK_POINTS):
@@ -209,9 +220,45 @@ def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_n
             "start_relocalizable": False, "start_reloc_evidence": None}
 
 
+def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, chassis_sha256: str) -> None:
+    """The report binds one survey (design 6.1 item 5, Codex 7c-2a round 1): its raw records are files next to it
+    (relative paths under the report's folder) with the hashes it lists, among them at least one observation or teleop
+    record and at least one ``.ok``; its lidar and chassis settings hashes are those of the files this registration
+    reads. ValueError naming the first problem."""
+    raw = report.get("raw") or []
+    base = Path(report_dir).resolve()
+    for r in raw:
+        rel = Path(str(r.get("path", "")))
+        f = (base / rel).resolve()
+        if rel.is_absolute() or base not in f.parents:
+            raise ValueError(f"the survey record {rel} is not under the report's folder")
+        if not f.is_file():
+            raise ValueError(f"the survey record {rel} is not there")
+        if sha256(f) != r.get("sha256"):
+            raise ValueError(f"the survey record {rel} differs from the report's hash")
+    names = [str(r.get("path", "")) for r in raw]
+    if not any(n.endswith(".ok") for n in names) or all(n.endswith(".ok") for n in names):
+        raise ValueError("the report needs the survey's records and their .ok files")
+    cfg = report.get("config_sha256") or {}
+    if cfg.get("lidar") != lidar_sha256:
+        raise ValueError("the report's lidar settings hash is not the lidar settings given here")
+    if cfg.get("chassis") != chassis_sha256:
+        raise ValueError("the report's chassis hash is not the chassis model this registration reads")
+
+
+def report_path(report: Path, bundle: Path) -> str:
+    """The report's path relative to the bundle root (the bundle folder's parent, the launcher's SLAM_BUNDLE_ROOT): no
+    host path in the repository, and the row finds its report again (Codex 7c-2a round 1 P3)."""
+    root, f = Path(bundle).resolve().parent, Path(report).resolve()
+    if root not in f.parents:
+        raise ValueError(f"the report {report} is not under the bundle root {root}")
+    return str(f.relative_to(root))
+
+
 def lookup(book: dict, scene_sha256: str, encoder_model: str) -> dict | None:
-    """An Isaac scene row (site rows have no scene file and are never found here)."""
-    rows = [r for r in book.get("bundles") or [] if not is_site(r) and r.get("scene_sha256") == scene_sha256
+    """An Isaac scene row (site rows have no scene file and are never found here; a scene row without its
+    ``scene_sha256`` is an error, as before -- never read as no row, Codex 7c-2a round 1)."""
+    rows = [r for r in book.get("bundles") or [] if not is_site(r) and r["scene_sha256"] == scene_sha256
             and r["encoder_model"] == encoder_model]
     if len(rows) > 1:
         raise ValueError(f"two registry rows for scene {scene_sha256[:12]} and {encoder_model}")
@@ -257,16 +304,27 @@ def _s10a_start(s10a: Path, vehicle: Path) -> dict:
     from forklift_core.live.real_autonomy import load_s10a  # noqa: PLC0415
     from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD  # noqa: PLC0415
     from forklift_core.live.real_run import chassis_reference  # noqa: PLC0415
-    from forklift_core.localization.start_reloc import base_from_rear  # noqa: PLC0415
     from forklift_core.plant.real_vehicle import chassis_model_path  # noqa: PLC0415
 
     cfg = load_s10a(s10a)
-    _tip, rear_offset, _carriage = chassis_reference(chassis_model_path(vehicle).parent / "forklift.urdf")
+    urdf = chassis_model_path(vehicle).parent / "forklift.urdf"
+    _tip, rear_offset, _carriage = chassis_reference(urdf)
     rear = tuple(float(v) for v in cfg.start_rear)
     if len(rear) != 3 or not all(math.isfinite(v) for v in rear):
         raise ValueError(f"{s10a}: start_rear is not three finite numbers")
-    return {"s10a_map_id": cfg.map_id, "s10a_start_base": base_from_rear(rear, rear_offset),
-            "tol_m": START_TOL_M, "tol_rad": START_TOL_RAD}
+    return {"s10a_map_id": cfg.map_id, "s10a_start_rear": rear, "rear_offset_m": float(rear_offset),
+            "tol_m": START_TOL_M, "tol_rad": START_TOL_RAD, "chassis_sha256": sha256(urdf)}
+
+
+def _verify_bundle(folder: Path, map_id) -> None:
+    """The bundle's files are its manifest's and its map is the report's (slam_map.load_bundle, Codex 7c-2a round 1:
+    a manifest left over from another bundle must not carry other files in)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from forklift_core.localization.slam_map import load_bundle  # noqa: PLC0415
+
+    if not map_id:
+        raise ValueError("the report names no map_id")
+    load_bundle(folder, expected_map_id=map_id)
 
 
 def main(argv=None) -> int:
@@ -292,6 +350,7 @@ def main(argv=None) -> int:
     site.add_argument("--site-record", type=Path, required=True, help="the site record itself (hashed here)")
     site.add_argument("--s10a", type=Path, required=True, help="the S10-A settings (its start_rear and map_id)")
     site.add_argument("--vehicle", type=Path, required=True, help="config/real/vehicle.yaml (the rear axle offset)")
+    site.add_argument("--lidar", type=Path, required=True, help="config/real/lidar.yaml (its hash is the report's)")
     lsite = sub.add_parser("lookup-site")
     lsite.add_argument("registry", type=Path)
     lsite.add_argument("--site-record", type=Path, required=True)
@@ -310,9 +369,14 @@ def main(argv=None) -> int:
         print(json.dumps(row))
         return 0
     if a.cmd == "add-site":
-        row = site_entry(json.loads((a.bundle / "manifest.json").read_text()), json.loads(a.report.read_text()),
-                         name=a.name, folder=a.bundle.name, report_name=a.report.name, report_sha256=sha256(a.report),
-                         site_record_sha256=sha256(a.site_record), **_s10a_start(a.s10a, a.vehicle))
+        report = json.loads(a.report.read_text())
+        _verify_bundle(a.bundle, report.get("map_id"))
+        start = _s10a_start(a.s10a, a.vehicle)
+        check_site_sources(report, a.report.parent, lidar_sha256=sha256(a.lidar),
+                           chassis_sha256=start.pop("chassis_sha256"))
+        row = site_entry(json.loads((a.bundle / "manifest.json").read_text()), report, name=a.name,
+                         folder=a.bundle.name, report_name=report_path(a.report, a.bundle),
+                         report_sha256=sha256(a.report), site_record_sha256=sha256(a.site_record), **start)
         write(a.registry, put(read(a.registry, missing_ok=True), row))
         print(json.dumps(row))
         return 0
