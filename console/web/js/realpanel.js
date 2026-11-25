@@ -118,6 +118,16 @@ export function relocalizeView(status) {
   };
 }
 
+// PR 7 design 6.1, 2: the session's manual-only latch (a declaration ended on a failed match). Read from the latch and
+// the slam bypass, never from the SLAM state now: a later ready seed (after an MCU reboot) does not clear it.
+export function manualOnlyNotice(status) {
+  if (!status || !status.manual_only) return "";
+  if (status.manual_only_blocking) {
+    return "위치 추정 실패 — 자율은 세션을 다시 시작해야 함(실제 SLAM 응답 없이는 slam 우회로도 출발 불가)";
+  }
+  return "우회 중: slam(not_localized)";
+}
+
 // Why a relocalization button may not be pressed now (null: may): the lease, disarmed, no mission, standing.
 export function relocalizeClosedWhy(status, hasLease) {
   const why = closedWhy(status, hasLease);

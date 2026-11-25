@@ -2,7 +2,7 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, panelShown, poseOf, relocalizeClosedWhy, relocalizeResult,
+import { answerKey, answerStillOpen, bypassButtons, manualOnlyNotice, panelShown, poseOf, relocalizeClosedWhy, relocalizeResult,
   relocalizeView, statusIsMine, statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
 
 const $ = (id) => document.getElementById(id);
@@ -302,6 +302,9 @@ export function renderRealPanel(m, clientId) {
     ? ` · ${STATE[told.state] ?? told.state}${told.reason ? ` (${told.reason})` : ""}` : "") + (rv.gap ? ` · 시작과 ${rv.gap}` : "")
     : (told ? `재위치 ${STATE[told.state] ?? told.state}` : "");
   $("rp-standing").textContent = rv.standing ? "정지 ✓" : "정지 아님";
+  const manual = manualOnlyNotice(st);
+  $("rp-manual-only").hidden = manual === "";
+  $("rp-manual-only").textContent = manual;
   const rwhy = mine ? relocalizeClosedWhy(st, true) : "이 콘솔의 실차 상태가 아닙니다(권한·세션)";
   for (const id of ["rp-reloc-confirm", "rp-reloc-declare"]) {
     $(id).disabled = rwhy !== null;

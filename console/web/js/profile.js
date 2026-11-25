@@ -255,6 +255,8 @@ export const REJECT = {
   tick_failed: "차 쪽 처리 중 오류로 이 요청을 받지 않았습니다 · 정지 상태를 확인하고 다시 보내세요",
   no_relocalization: "다시 확인할 위치가 없습니다(재위치가 열려 있지 않음)",
   no_start_pose: "시작 자세가 설정되지 않아 재위치를 받을 수 없습니다",
+  slam_not_ready: "SLAM 이 아직 위치를 잡지 못해 재위치 확인을 받을 수 없습니다",
+  seed_in_progress: "앞선 시작 자세 선언을 SLAM 이 처리하는 중입니다 · 끝난 뒤 다시 누르세요",
   slam_stale: "차는 서 있지만 SLAM 응답이 낡았습니다 · 새 응답을 기다리세요",
   stale_relocalization: "그 재위치 세대는 지금 것이 아닙니다 · 화면을 다시 보세요",
   no_operator_request: "지금 열린 확인 요청이 없습니다",

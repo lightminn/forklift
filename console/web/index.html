@@ -39,6 +39,7 @@
       <div class="rp-row"><select id="rp-pallet" aria-label="팔레트"></select><input id="rp-x" type="number" step="0.01" placeholder="x m" aria-label="x m"><input id="rp-y" type="number" step="0.01" placeholder="y m" aria-label="y m"><input id="rp-yaw" type="number" step="1" placeholder="yaw °" aria-label="yaw 도"><button class="btn" id="rp-register" type="button">등록</button></div>
       <div class="rp-row"><button class="btn" id="rp-start" type="button">시작 확인</button><span class="hint" id="rp-start-state"></span><select id="rp-dest" aria-label="목적지"></select><button class="btn" id="rp-submit" type="button">작업 지시</button></div>
       <div class="rp-row"><span id="rp-op">열린 확인 요청 없음</span><button class="btn" id="rp-confirm" type="button">확인</button><button class="btn" id="rp-reject" type="button">거부</button><button class="btn" id="rp-recovery" type="button" hidden></button><button class="btn" id="rp-rearm" type="button" hidden>재무장</button></div>
+      <div class="rp-row hint" id="rp-manual-only" hidden></div>
       <div class="rp-row" id="rp-reloc" hidden><span id="rp-reloc-state"></span><span class="hint" id="rp-standing"></span><button class="btn" id="rp-reloc-confirm" type="button">재위치 확인</button><button class="btn warn" id="rp-reloc-declare" type="button" title="차가 바닥 표시 시작 자세에 서 있을 때만">우회: 시작 자세로 선언</button><span class="hint">선언은 차가 바닥 표시 시작 자세에 서 있을 때만</span></div>
       <div class="rp-row" id="rp-bypass" aria-label="검사 우회"></div>
       <div class="hint" id="rp-msg"></div>

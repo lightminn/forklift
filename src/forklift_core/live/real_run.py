@@ -479,6 +479,11 @@ class _SlamGuard:
     def __init__(self, src, mark, counts) -> None:
         self._src, self._mark, self._counts = src, mark, counts
         self.map_id = getattr(src, "map_id", None)
+        # PR 7 design 6.1, 2: the real source's acceptance checks and seed end states, behind the same guard (only
+        # when the source has them: the loop asks for them by presence)
+        for name in ("can_confirm", "can_seed", "seed_state"):
+            if callable(getattr(src, name, None)):
+                setattr(self, name, lambda *a, _n=name: self._call(_n, *a))
 
     def _call(self, name, *a):
         try:

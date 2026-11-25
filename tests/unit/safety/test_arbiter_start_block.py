@@ -151,3 +151,33 @@ def test_the_commands_refuse_a_resume():
     m.status = "paused"
     rec = _apply(m, 0.0, Context(start_blocked=True), Resume(request_id="r"))
     assert rec["accepted"] is False and rec["reason"] == "operator_placed_start" and m.status == "paused"
+
+
+# --- the real loop's start gate (PR 7 design 6.1, 2): read at each judgement, recovery left open -------------------
+def test_the_start_gate_refuses_the_starts_but_not_the_recovery_and_lifts_when_open():
+    from forklift_core.safety.arbiter import START_GATE_REFUSED
+
+    assert set(START_GATE_REFUSED) == set(START_REFUSED) - {"recovery"}
+    rig = _rig(block=False)
+    gate = {"on": True}
+    rig.a.start_gate = lambda: {"reason": "operator_placed_start", "source": "manual_only"} if gate["on"] else None
+    for kind, fields in REFUSED:
+        [reply] = rig.cycle(rig.msg(kind, **fields))
+        if kind == "recovery":
+            assert reply.get("reason") != "operator_placed_start"
+        else:
+            assert reply["t"] == "reject" and reply["reason"] == "operator_placed_start"
+    gate["on"] = False
+    msg = rig.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    rig.cycle(msg)
+    assert rig.reply(msg["request_id"])["t"] == "ack" and rig.a.mode == "AUTO"
+
+
+def test_auto_is_never_entered_with_the_start_gate_closed_past_the_refusals():
+    rig = _rig(block=False)
+    gate = {"on": False}
+    rig.a.start_gate = lambda: {"reason": "operator_placed_start", "source": "manual_only"} if gate["on"] else None
+    msg = rig.msg("mission_submit", pallet_id="P", destination_id="D", targets_revision=0)
+    with pytest.raises(RuntimeError, match="start gate"):
+        rig.cycle(msg, between=lambda: gate.update(on=True))
+    assert rig.a.mode != "AUTO"
