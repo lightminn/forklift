@@ -680,9 +680,11 @@ class CommissionSession(Session):
 
     def __init__(self, bench: Bench, axis: int, window: tuple[float, float] | None, *,
                  duty_max: float = COMMISSION_DUTY_MAX, ignore: FaultFlag = _NO_BITS, large: bool = False,
-                 scenario: str | None = None) -> None:
+                 scenario: str | None = None, single_axis: bool = False, sensorless: bool = False) -> None:
         super().__init__(bench, 0.0)
         self.axis, self.window = axis, window
+        # partial-parts plan 2026-11-25 PR-B: the fw-single request, and a steering/lift run with no window
+        self.single_axis, self.sensorless = single_axis, sensorless
         # design 2026-11-25 1.2: the run's own duty bound (0.15, or the large run's), the encoder bits the early
         # stop leaves out (--bypass), whether the board must carry lim=lr1, and a scenario (locked boards only)
         self.duty_max, self.ignore, self.large, self.scenario = duty_max, ignore, large, scenario
@@ -705,7 +707,20 @@ class CommissionSession(Session):
         self.preflight_product = self.b.host.usb_product
         if self.large and (why := bl.board_refusal(self.preflight_product)) is not None:
             raise Refused(why)
-        if self.axis >= 2:
+        # fw-single is told apart by its product string's exact suffix only, read on this connection just now: a
+        # request on another image, or a run on fw-single without the request, is refused before the ARM (UART7 has
+        # no product string, so no fw-single run there)
+        single_image = bl.single_axis_image(self.preflight_product)
+        if self.single_axis and not single_image:
+            raise Refused(f"single-axis: {self.preflight_product!r} is not a fw-single image (no product ending "
+                          f"'{' '.join(bl.SINGLE_AXIS_SUFFIX)}')")
+        if single_image and not self.single_axis:
+            raise Refused("single-axis: the board is fw-single -- give --single-axis (an older tool would arm on L)")
+        if single_image and state.flags & StateFlag.OUTPUTS_LOCKED:
+            raise Refused("single-axis: a fw-single product with outputs_locked in STATE: the board disagrees")
+        # the arming's zero COMMISSION fixes this run's axis on fw-single; every other path keeps L(0)
+        self.b.host.commission_zero_axis = self.axis if single_image else 0
+        if self.axis >= 2 and not self.sensorless:
             v = state.steering_rad if self.axis == 2 else state.lift_m
             lo, hi = self.window
             if not (v == v and lo < v < hi):
@@ -715,6 +730,7 @@ class CommissionSession(Session):
         self.b.emit({"t": "pre_arm_checked", "product": self.preflight_product,
                      "lim": self.preflight_product is not None and bl.LIMITS_TOKEN in self.preflight_product.split(),
                      "axis": "LRMH"[self.axis], "large": self.large, "duty_max": self.duty_max,
+                     "single_axis": single_image, "sensorless": self.sensorless,
                      "ignored_bits": [f.name for f in FaultFlag if f in self.ignore], "scenario": self.scenario})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
@@ -799,6 +815,8 @@ class CommissionSession(Session):
         if self.axis < 2:
             watched = _AXIS_ENCODER_BITS[self.axis] & ~self.ignore  # --bypass leaves the named kinds out
             return "encoder_bit" if (state.fault_flags & watched) & ~at_start else None
+        if self.sensorless:
+            return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
         v = state.steering_rad if self.axis == 2 else state.lift_m
         lo, hi = self.window
         return None if v == v and lo <= v <= hi else "window"
@@ -1478,6 +1496,14 @@ def main(argv=None) -> int:
                     help="Enter marks an operator event (main power cut, NRST) while the wheel turns, in this record")
     cm.add_argument("--bypass", help="enc_stuck,enc_polarity: the wheel's encoder early stop leaves these out "
                                      "(the bits stay in the record; design 2026-11-25 1.2)")
+    cm.add_argument("--single-axis", action="store_true",
+                    help="the board is fw-single (product ends 'lim=lr1 sa1', checked before ARM): this run's axis is "
+                         "fixed for the arming and the other channels stay cut (partial-parts plan 2026-11-25)")
+    cm.add_argument("--motor-detached", action="store_true",
+                    help="fw-single steering/lift: the motor is off the mechanism (retyped on a terminal, recorded); "
+                         "required there, since no end stop protects a coupled axis without its sensor checks")
+    cm.add_argument("--sensorless", action="store_true",
+                    help="fw-single steering/lift with no KTH window (instead of --window): output and stop only")
     cm.add_argument("--wheels-lifted", action="store_true",
                     help="a large run: the wheels off the floor, the truck fixed, the wires clear of turning parts")
     cm.add_argument("--vcc-watched", action="store_true", help="a large run above duty 0.3: VCC is being watched")
@@ -1613,7 +1639,10 @@ def main(argv=None) -> int:
                               **({"cause": args.cause} if args.cmd == "clear-faults" else {}),
                               "synthetic": synthetic, "start_wall": time.time(),
                               # design 2026-11-25 1.2: the run's asked bypass and large-run arguments in its header
-                              **({"bypass": getattr(args, "bypass", None),
+                              **({"bypass": _header_bypass(args),
+                                  "single_axis": getattr(args, "single_axis", False),
+                                  "motor_detached": getattr(args, "motor_detached", False),
+                                  "sensorless": getattr(args, "sensorless", False),
                                   "wheels_lifted": getattr(args, "wheels_lifted", False),
                                   "vcc_watched": getattr(args, "vcc_watched", False),
                                   "profile_tri": getattr(args, "profile_tri", None),
@@ -1668,6 +1697,22 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         raise Refused(str(exc)) from None
     if names and axis >= 2:
         raise Refused("bypass: the encoder early stop is a wheel's (L or R)")
+    # fw-single (partial-parts plan 2026-11-25 PR-B): steering and lift only with the motor off the mechanism, with
+    # a hand-checked KTH window or none (--sensorless); both are bypasses of the firmware's sensor checks
+    single = getattr(args, "single_axis", False)
+    detached, sensorless = getattr(args, "motor_detached", False), getattr(args, "sensorless", False)
+    if (detached or sensorless) and not single:
+        raise Refused("motor-detached/sensorless: only with --single-axis (the fw-single image)")
+    if (detached or sensorless) and axis < 2:
+        raise Refused("motor-detached/sensorless: steering or lift only")
+    if single and axis >= 2:
+        if not detached:
+            raise Refused("single-axis: steering and lift run only with the motor off the mechanism "
+                          "(--motor-detached): with the sensor checks off nothing guards the end stops")
+        if sensorless == (getattr(args, "window", None) is not None):
+            raise Refused("single-axis: steering and lift need either --window LO HI (KTH fitted, checked by hand) "
+                          "or --sensorless")
+        names = names + bl.SINGLE_BYPASS_NAMES[: 2 if sensorless else 1]
     profile = None
     tri = getattr(args, "profile_tri", None)
     if tri is not None:
@@ -1760,12 +1805,14 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if not 0 < abs(ask.duty) <= COMMISSION_DUTY_MAX:
             raise Refused(f"duty must be nonzero and within +-{COMMISSION_DUTY_MAX}")
         hold_max = AXIS_HOLD_MAX_S.get(axis, COMMISSION_HOLD_MAX_S)
+        if single and detached and axis >= 2:
+            hold_max = bl.SINGLE_DETACHED_HOLD_MAX_S  # a detached motor: the firmware's 2 s, kept a margin under
         if not COMMISSION_HOLD_MIN_S <= seconds <= hold_max:
             raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {hold_max}] for axis {args.axis}")
-    if axis >= 2:
+    if axis >= 2 and not sensorless:
         if args.window is None or not args.window[0] < args.window[1]:
             raise Refused("window: steering and lift need --window LO HI with LO < HI")
-    elif args.window is not None:
+    elif axis < 2 and args.window is not None:
         raise Refused("window: a wheel takes no window")
     return ask, profile, names
 
@@ -1818,6 +1865,16 @@ def _mark_absent_result(result: dict, absent: tuple) -> None:
         result["computed_valid"], result["valid"] = result["valid"], None
 
 
+def _header_bypass(args) -> str | None:
+    """The run's bypass names for its header, the tool-derived fw-single ones included (partial-parts plan v4: in the
+    record before the ARM); the typed --bypass when the arguments are refused anyway."""
+    try:
+        _ask, _profile, names = _check_commission_args(args)
+    except Refused:
+        return getattr(args, "bypass", None)
+    return ",".join(names) or None
+
+
 def _header_large(args) -> bool | None:
     """The run's large-run verdict for its record header, before anything is connected (None: its arguments are
     refused anyway; the board's product and lim come in the pre_arm_checked row once the link is open)."""
@@ -1844,6 +1901,14 @@ def _confirm_large(ask: bl.RunAsk) -> None:
         raise Refused("large run: the operator did not retype the run")
 
 
+def _confirm_detached(axis: str) -> None:
+    """fw-single steering/lift: the operator retypes that the motor is off the mechanism."""
+    phrase = f"motor {axis} detached, clamped alone, nothing near the shaft"
+    answer = _tty_line(f"SENSOR CHECKS OFF on axis {axis}: {phrase}. Type exactly '{phrase}': ")
+    if answer != phrase:
+        raise Refused("motor-detached: the operator did not retype it")
+
+
 def _observed(args) -> str:
     if args.observed is not None:
         return args.observed
@@ -1859,7 +1924,9 @@ def execute(args, bench: Bench) -> dict:
     """A drive command (step, scenario or commission) on a bench, with the cleanup guaranteed once an ARM may have
     gone out."""
     if args.cmd == "commission":
-        session = CommissionSession(bench, AXES[args.axis], None if args.window is None else tuple(args.window))
+        session = CommissionSession(bench, AXES[args.axis], None if args.window is None else tuple(args.window),
+                                    single_axis=getattr(args, "single_axis", False),
+                                    sensorless=getattr(args, "sensorless", False))
     else:
         session = Session(bench, _cap(), floor=getattr(args, "floor", False),
                           power_switch_reachable=getattr(args, "power_switch_reachable", False))
@@ -1884,6 +1951,9 @@ def execute(args, bench: Bench) -> dict:
             bench.emit({"t": "run_conditions", **conditions})
             if session.large:
                 _confirm_large(ask)  # before --yes is looked at (design 2026-11-25 1.2)
+            if getattr(args, "motor_detached", False):
+                _confirm_detached(args.axis)  # retyped on a terminal, whatever --yes (partial-parts plan v4)
+                bench.emit({"t": "confirmed", "what": "motor_detached", "axis": args.axis})
             if getattr(args, "scenario", None) == "duty_disarm":
                 what = (f"commission scenario duty_disarm: will ARM and drive wheel {args.axis} at duty {args.duty}, at "
                         f"most {args.seconds} s, until it has held that duty 0.5 s, then DISARM and watch it stop.")
@@ -1896,7 +1966,8 @@ def execute(args, bench: Bench) -> dict:
                 what = (f"commission: will ARM and drive axis {args.axis} at duty {ask.duty} for at most "
                         f"{ask.seconds} s (window {args.window}"
                         f"{'' if profile is None else f', triangle {list(args.profile_tri)}'}"
-                        f"{'' if not names else f', encoder early stop off for {list(names)}'}).")
+                        f"{'' if not names else f', checks off: {list(names)}'}"
+                        f"{', single-axis image: the other channels stay cut' if getattr(args, 'single_axis', False) else ''}).")
             _confirm(args, what + " Outputs on only after the IPROPI protection is confirmed (user decision); "
                                   "the window inside the mechanical limits.")
             if getattr(args, "markers", False):
@@ -1930,6 +2001,10 @@ def execute(args, bench: Bench) -> dict:
             else:
                 result = run_commission(bench, session, args.duty, args.seconds, profile)
                 result.update(conditions, board_product=session.preflight_product)
+                if getattr(args, "sensorless", False):
+                    # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
+                    # (partial-parts plan v4)
+                    result["position"] = "none (sensorless: output accepted / stop confirmed only)"
                 if session.arm_requested and session.cleanup_confirmed is not True:
                     # the stop again before the operator is asked anything: a DISARM lost on a disconnect is re-sent
                     # now, not after the direction prompt (Codex PR-2a re-reviews 5-6); a failure here is kept with

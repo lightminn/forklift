@@ -93,3 +93,17 @@ def test_board_check(product, ok):
 
 def test_the_confirmation_phrase():
     assert bl.confirmation_phrase(bl.RunAsk(0, -0.3, 10.0)) == "duty 0.3, 10 s, wheels lifted and fixed"
+
+
+@pytest.mark.parametrize("product, single", [
+    ("forklift-mcu commission OPEN v1-2-gabc rec=1f4207f4 lim=lr1 sa1", True),
+    ("forklift-mcu commission OPEN v1-2-gabc rec=1f4207f4 lim=lr1", False),
+    ("forklift-mcu commission OPEN v1 rec=1f4207f4 lim=lr1 sa1x", False),
+    ("forklift-mcu commission OPEN v1 rec=1f4207f4 sa1 lim=lr1", False),
+    ("forklift-mcu commission locked v1 lim=lr1 sa1", False),
+    ("FT232R USB UART", False),
+    (None, False),
+])
+def test_fw_single_is_told_apart_by_the_exact_suffix(product, single):
+    """Partial-parts plan 2026-11-25 PR-B: the open commissioning prefix and exactly 'lim=lr1 sa1' at the end."""
+    assert bl.single_axis_image(product) is single

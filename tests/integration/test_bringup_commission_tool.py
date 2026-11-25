@@ -1050,3 +1050,100 @@ def test_a_half_frame_left_by_an_earlier_executor_never_acts(mcu_model, opener, 
         assert 0x7A7A not in b.written
     finally:
         m.close()
+
+
+# --- partial-parts plan 2026-11-25 PR-B: fw-single, one axis per arming ---
+
+SA1 = "forklift-mcu commission OPEN v0-test rec=00000000 lim=lr1 sa1"
+
+
+def sargs(**kw):
+    base = dict(axis="M", duty=0.1, seconds=0.5, single_axis=True, motor_detached=True, sensorless=True,
+                observed="none")
+    return args(**{**base, **kw})
+
+
+def _retyped(monkeypatch, answer=None):
+    def line(prompt):
+        return answer if answer is not None else prompt.split("Type exactly '")[1].rstrip("': ")
+    monkeypatch.setattr(bringup, "_tty_line", line)
+
+
+def _first_commission_axis(b):
+    """The axis of the first COMMISSION written after the ARM: the arming's zero."""
+    order = sorted(b.written.items(), key=lambda kv: kv[1][1])
+    arm_at = next(t for _s, (k, t, _m) in order if k == "ARM")
+    return next(m.axis for _s, (k, t, m) in order if k == "COMMISSION" and t >= arm_at)
+
+
+def test_fw_single_runs_a_detached_sensorless_steering_motor(model, monkeypatch):
+    """The arming's zero goes on M (not L), M is driven, the other channels never get a duty, and the run is marked:
+    the sensor checks off, no window, no position, no gate evidence."""
+    b = model("--commission-single", "1")
+    b.host.usb_product = SA1
+    _retyped(monkeypatch)
+    res = bringup.execute(sargs(), b)
+    assert res["result"] == "ok" and res["cleanup_confirmed"], res
+    assert _first_commission_axis(b) == 2
+    assert max(abs(s.state.duty_e4[2]) for s in b.samples) == 1000
+    assert all(s.state.duty_e4[ch] == 0 for s in b.samples for ch in (0, 1, 3))
+    assert res["not_for_gate"] and res["bypassed"] == ["m_sensor_checks_off", "sensorless"]
+    assert res["position"].startswith("none") and res["verdict"]["suggested_duty_sign"] is None
+    rows = [json.loads(x) for x in b.out.getvalue().splitlines()]
+    (pre,) = [r for r in rows if r["t"] == "pre_arm_checked"]
+    assert pre["single_axis"] and pre["sensorless"] and pre["product"] == SA1
+    assert [r for r in rows if r["t"] == "confirmed" and r["what"] == "motor_detached"]
+
+
+def test_fw_single_wheel_arms_on_its_own_axis(model, monkeypatch):
+    b = model("--commission-single", "1")
+    b.host.usb_product = SA1
+    res = bringup.execute(args(axis="R", duty=0.08, seconds=0.5, single_axis=True, observed="none"), b)
+    assert res["result"] == "ok", res
+    assert _first_commission_axis(b) == 1
+    assert all(s.state.duty_e4[ch] == 0 for s in b.samples for ch in (0, 2, 3))
+
+
+@pytest.mark.parametrize("product,kw,answer,why", [
+    (LR1, {}, None, "not a fw-single image"),                          # the request on the open image
+    (None, {}, None, "not a fw-single image"),                         # UART7: no product string
+    (SA1 + "x", {}, None, "not a fw-single image"),                    # not the exact suffix
+    (SA1, {"single_axis": False, "motor_detached": False, "sensorless": False, "window": (-1.0, 1.0),
+           "seconds": 0.2}, None,
+     "give --single-axis"),                                            # fw-single without the request
+    (SA1, {"motor_detached": False}, None, "--motor-detached"),        # a coupled axis with the checks off
+    (SA1, {"window": (-1.0, 1.0)}, None, "either --window"),           # both a window and sensorless
+    (SA1, {"sensorless": False}, None, "either --window"),             # neither
+    (SA1, {"seconds": 1.6}, None, "seconds must be in"),               # past the detached hold
+    (SA1, {}, "yes", "did not retype"),
+    (SA1, {"axis": "L"}, None, "steering or lift only"),               # detached/sensorless on a wheel
+])
+def test_fw_single_refusals_come_before_any_arm(model, monkeypatch, product, kw, answer, why):
+    b = model("--commission-single", "1")
+    b.host.usb_product = product
+    _retyped(monkeypatch, answer)
+    res = bringup.execute(sargs(**kw), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert "ARM" not in kinds_written(b)
+
+
+def test_detached_sensorless_flags_need_the_single_axis_request(model, monkeypatch):
+    b = model()
+    b.host.usb_product = LR1
+    _retyped(monkeypatch)
+    res = bringup.execute(sargs(single_axis=False), b)
+    assert res["result"] == "refused" and "only with --single-axis" in res["why"]
+    assert kinds_written(b) == []
+
+
+def test_fw_single_refuses_another_axis_after_the_zero(model):
+    """The firmware side on the model: after M's zero fixes the arming, an L COMMISSION is refused 11."""
+    b = model("--commission-single", "1")
+    b.host.usb_product = SA1
+    s = bringup.CommissionSession(b, 2, None, single_axis=True, sensorless=True)
+    s.arm(2.0)
+    assert b.host.commission_zero_axis == 2
+    b.host.commission(0, 0, time.monotonic_ns() + 100_000_000, time.monotonic_ns())
+    b.run_until(lambda: b.state.reject_reason.name == "STOPPING", 1.0)
+    assert b.state.reject_reason.name == "STOPPING" and b.state.duty_e4 == (0, 0, 0, 0)
+    s.cleanup()
