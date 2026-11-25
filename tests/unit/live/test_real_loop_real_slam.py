@@ -44,8 +44,10 @@ class AutoBridge(Bridge):
                     c["corr"] = tuple(compose(c["pose"], invert(f.scan.odom_from_base)))
                 c["n"] += 1
                 self.reply(f, corr=c["corr"])
-                if c["n"] == 7:
+                if c["n"] == 7 and c["end"] != "never":
                     self.state(c["id"], c["end"], None if c["end"] == "ready" else "NOT_LOCALIZED: test")
+            elif isinstance(f, rl.Cancel):
+                self.state(f.seed_id, "void", f.reason)
 
 
 def real(r, end="ready"):
@@ -56,7 +58,7 @@ def real(r, end="ready"):
     src = RealSlamSource(
         RealSlamLink(a), map_id="m" * 64, start_ns=loop.start_ns,
         start_pose=base_from_rear(tuple(loop.start_rear), REAR_OFFSET_M),
-        odom_history=lambda: loop.odom_history, odom_base=r.odom_base, odom_ok=lambda: loop.odom_continuous,
+        odom_history=lambda: loop.odom_history, odom_base=r.odom_base, odom_gen=lambda: loop.odom_gen,
         boot=lambda: loop.host.state.boot_id, rear_offset_m=REAR_OFFSET_M, clock=lambda: r.now)
     marks = []
     loop.slam_source = _SlamGuard(src, marks.append, Counter())
@@ -122,3 +124,28 @@ def test_a_not_localized_seed_latches_manual_only():
     reply, _ = ask(r, "mode_request", to="AUTO")
     assert reply["reason"] == "operator_placed_start"
     assert not marks
+
+
+
+def test_a_break_in_a_tick_that_never_polls_the_source_still_cancels_the_seed():
+    """Codex 7c-1b-2a round 2 P1: an encoder gap in a slow tick (no SLAM step that tick) -- the generation, not the
+    flag of the next tick, cancels the seed."""
+    from forklift_core.mcu_link.messages import FaultFlag
+
+    r = rig()
+    src, bridge, marks = real(r)
+    gen = open_generation(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    stand(r)
+    bridge.end = "never"  # the seed's start check never ends on its own
+    ask(r, "relocalize_declare", generation=gen)
+    run_until(r, lambda rec: any(isinstance(f, rl.Seed) for f in bridge.got), 50)
+    step = r.step_ns
+    r.step_ns = 80 * MS
+    r.mcu.faults = FaultFlag.ENCODER_GAP
+    r.tick()
+    r.mcu.faults = FaultFlag(0)
+    r.step_ns = step
+    r.tick(5)
+    assert any(isinstance(f, rl.Cancel) and f.reason == "odom_break" for f in bridge.got)
+    assert not src.can_confirm()

@@ -17,20 +17,21 @@ The link (6.1, 2):
   check's seven scans none goes before its end state;
 - a seed is accepted at once (``seed`` returns its id) and written when the slot empties; ``seeding`` until its end
   state (``ready`` / ``not_localized``) or ``void``;
-- a seed's inputs are judged until its end state -- each poll, before each scan to its instance and before its end
-  state is taken: a boot change, the loop's odometry continuity lost, an entry since the acceptance not continuous or
-  not included, or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
+- a seed's inputs are judged until its end state -- each poll and each offer (before any write retry), before each
+  scan to its instance and before its end state is taken: a boot change, a raised odometry continuity generation (the
+  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
   snapshot cancels it. A seed the bridge has not seen a byte of is cancelled here (``void`` at once); otherwise new
   scans stop, the frame being written is finished and ``cancel`` is written once. A ``ready`` / ``not_localized`` /
   ``reply`` of a cancelled or voided seed, or of a stopped instance, is dropped and counted;
-- the deadlines are the executor's, judged on the clock before the read (what is read arrived at or after it) and
-  before the frames are taken: a start or seed with no end state ``SEED_WAIT_S`` after its acceptance (an end state in
-  this read is the bridge's own, sent before that instant -- 7c-1a re-reads it before sending), a cancel decided
-  within the deadline not written within ``CANCEL_SEND_S``, no ``void`` within ``VOID_WAIT_S`` of the cancel's send,
-  no reply within ``REPLY_WAIT_S`` of a scan to a localized instance, or a frame not written whole within
-  ``WRITE_WAIT_S`` ends the run (``SlamSourceFatal``; the run's guard marks ``fatal_source``); so does a socket error,
-  EOF, a malformed or oversized frame, a ``fault``, a state for another id, a void with no cancel, a reply that is not
-  the scan in flight's or carries a non-finite correction.
+- the deadlines are the executor's, judged before the frames are taken: a start or seed with no end state delivered
+  ``SEED_WAIT_S`` after its acceptance (on the clock before the read; only a cancel decided within it lifts it), a
+  cancel not written whole within ``CANCEL_SEND_S`` of its decision, no ``void`` within ``VOID_WAIT_S`` of the
+  cancel's send or no reply within ``REPLY_WAIT_S`` of a scan to a localized instance (on the clock after the read), or
+  a frame not written whole within ``WRITE_WAIT_S`` of its first write (before every retry and at its last byte) ends
+  the run (``SlamSourceFatal``; the run's guard marks ``fatal_source``); so does a socket error,
+  EOF, a malformed or oversized frame, a ``fault``, a state for another id, a void with no cancel, an end state before
+  the seventh start reply, a ``skipped`` from a localized instance, a reply that is not the scan in flight's or carries
+  a non-finite correction.
 
 The replies (6.1, 0 and 4): only a localized instance's replies of measured scans reach the loop, each with the order
 stamp ``stamp_s`` (core seconds of the first-beam estimate), the evidence interval ``evidence_lo_s`` /
@@ -102,7 +103,10 @@ class RealSlamLink:
         return self.flush()
 
     def flush(self) -> bool:
-        """True once nothing is left to write; the frame's completion is called once, when its last byte goes."""
+        """True once nothing is left to write; the frame's completion is called once, when its last byte goes. A frame
+        past ``WRITE_WAIT_S`` from its first write is a fault before any retry and at its completion (round 2 P2-2)."""
+        if self._out and self.overdue(int(self.clock())):
+            raise SlamSourceFatal(f"link: a {self.out_kind} frame not written whole within {WRITE_WAIT_S} s")
         while self._out:
             try:
                 n = self.sock.send(self._out)
@@ -112,6 +116,8 @@ class RealSlamLink:
                 raise SlamSourceFatal(f"link: send: {exc}") from exc
             self._out = self._out[n:]
             self._sent += n
+        if self.started_ns is not None and self.overdue(int(self.clock())):
+            raise SlamSourceFatal(f"link: a {self.out_kind} frame not written whole within {WRITE_WAIT_S} s")
         done, self._done = self._done, None
         self.out_kind, self.started_ns = None, None
         if done is not None:
@@ -128,33 +134,45 @@ class RealSlamLink:
     def overdue(self, now_ns: int) -> bool:
         return self.started_ns is not None and now_ns - self.started_ns > WRITE_WAIT_S * 1e9
 
-    def read(self) -> list:
-        """The whole frames received (at most ``READ_FRAMES``), decoded; EOF is reported after them (``closed``)."""
-        got = 0
-        try:
-            while got < READ_BYTES:
-                chunk = self.sock.recv(65536)
-                if not chunk:
-                    self.closed = True
-                    break
-                self._buffer += chunk
-                got += len(chunk)
-        except (BlockingIOError, InterruptedError):
-            pass
-        except OSError as exc:
-            raise SlamSourceFatal(f"link: recv: {exc}") from exc
-        out = []
-        while len(self._buffer) >= 4 and len(out) < READ_FRAMES:
-            (length,) = struct.unpack(">I", self._buffer[:4])
+    def _parse(self, out: list) -> None:
+        """Take whole frames from the buffer (one slice at the end, not one per frame -- round 2 P2-8)."""
+        buf, pos = self._buffer, 0
+        while len(buf) - pos >= 4 and len(out) < READ_FRAMES:
+            (length,) = struct.unpack(">I", buf[pos:pos + 4])
             if length > MAX_FRAME:
                 raise SlamSourceFatal(f"link: a frame of {length} bytes")
-            if len(self._buffer) < 4 + length:
+            if len(buf) - pos < 4 + length:
                 break
-            body, self._buffer = self._buffer[4:4 + length], self._buffer[4 + length:]
+            body = bytes(buf[pos + 4:pos + 4 + length])
+            pos += 4 + length
             try:
                 out.append(rl.decode(body))
             except ValueError as exc:
                 raise SlamSourceFatal(f"link: a malformed frame: {exc}") from exc
+        if pos:
+            self._buffer = buf[pos:]
+
+    def read(self) -> list:
+        """The whole frames received (at most ``READ_FRAMES``, the buffered ones first), decoded; at most
+        ``READ_BYTES`` read per poll; EOF is reported after them (``closed``)."""
+        out: list = []
+        self._parse(out)
+        budget = READ_BYTES
+        try:
+            while budget > 0 and len(out) < READ_FRAMES:
+                chunk = self.sock.recv(min(65536, budget))
+                if not chunk:
+                    self.closed = True
+                    break
+                self._buffer += chunk
+                budget -= len(chunk)
+                self._parse(out)
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError as exc:
+            raise SlamSourceFatal(f"link: recv: {exc}") from exc
+        if len(self._buffer) > MAX_FRAME + READ_BYTES:
+            raise SlamSourceFatal(f"link: {len(self._buffer)} bytes behind")
         return out
 
 
@@ -165,15 +183,15 @@ def _finite_pose(v) -> bool:
 
 class RealSlamSource:
     """See the module text. ``odom_history()``: the loop's odometry history (core seconds); ``odom_base()``: the
-    odometry base_link pose now; ``odom_ok()``: the loop's odometry continuity now (its breaks clear the history, so
-    the history alone cannot show them); ``boot()``: the MCU boot now; ``start_pose``: map <- base_link of the
+    odometry base_link pose now; ``odom_gen()``: the loop's odometry continuity generation (raised at every break,
+    reboot and device loss; a break clears the history, so the history alone cannot show it); ``boot()``: the MCU boot now; ``start_pose``: map <- base_link of the
     registered start (the session's first instance)."""
 
-    def __init__(self, link: RealSlamLink, *, map_id: str, start_ns: int, start_pose, odom_history, odom_base, odom_ok,
+    def __init__(self, link: RealSlamLink, *, map_id: str, start_ns: int, start_pose, odom_history, odom_base, odom_gen,
                  boot, rear_offset_m: float, session_epoch: int = 0, clock=time.monotonic_ns, events=None) -> None:
         self.link, self.map_id, self.start_ns = link, str(map_id), int(start_ns)
         self.start_pose = tuple(float(v) for v in start_pose)
-        self.odom_history, self.odom_base, self.odom_ok, self.boot = odom_history, odom_base, odom_ok, boot
+        self.odom_history, self.odom_base, self.odom_gen, self.boot = odom_history, odom_base, odom_gen, boot
         self.rear_offset_m, self.session_epoch, self.clock = float(rear_offset_m), int(session_epoch), clock
         self.events = events if events is not None else []  # the record (observe run, 6.1, 8)
         self.counts: Counter = Counter()
@@ -195,11 +213,11 @@ class RealSlamSource:
         self._gen = None
 
     @staticmethod
-    def _target(ident, kind, pose, accepted_ns, epoch, snapshot=None, boot=None) -> dict:
+    def _target(ident, kind, pose, accepted_ns, epoch, snapshot=None, boot=None, odom_gen=None) -> dict:
         return {"id": int(ident), "kind": kind, "epoch": epoch, "accepted_ns": accepted_ns,
                 "deadline_ns": None if accepted_ns is None else accepted_ns + int(SEED_WAIT_S * 1e9),
-                "pose": tuple(float(v) for v in pose), "snapshot": snapshot, "boot": boot, "state": "queued",
-                "cancel": None, "start_scans": 0}
+                "pose": tuple(float(v) for v in pose), "snapshot": snapshot, "boot": boot, "odom_gen": odom_gen,
+                "state": "queued", "cancel": None, "start_scans": 0}
 
     # --- helpers -----------------------------------------------------------------------------------------------------
     def _s(self, ns: int) -> float:
@@ -257,7 +275,7 @@ class RealSlamSource:
         sid = self._next_id
         self._next_id += 1
         self.target = self._target(sid, "seed", base_pose, now, self.epoch,
-                                   tuple(float(v) for v in self.odom_base()), self.boot())
+                                   tuple(float(v) for v in self.odom_base()), self.boot(), self.odom_gen())
         self.seeds[self.epoch] = ("seeding", None)
         self._event(t="seed_accepted", id=sid, epoch=self.epoch, stamp_s=float(stamp_s))
         self._pump(now)
@@ -270,6 +288,7 @@ class RealSlamSource:
     # --- the scan path -----------------------------------------------------------------------------------------------
     def offer(self, s: srs.SlamScanIn) -> None:
         now = int(self.clock())
+        self._watch_seed(now)  # before any write retry: a seed not one byte of which went is taken back (round 2 P2-1)
         gen = tuple(s.gen)
         if self._gen is not None and gen != self._gen:
             # a new producer generation: what waits is cut, the scan in flight's reply only frees the slot
@@ -306,6 +325,8 @@ class RealSlamSource:
     def _prepare(self, s: srs.SlamScanIn, odom_from_base) -> None:
         if self._last_stamp_ns is not None and s.stamp_ns <= self._last_stamp_ns:
             return self._drop("slam_stamp_order", key=s.key)
+        if self._waiting is not None and s.stamp_ns <= self._waiting["stamp_ns"]:
+            return self._drop("slam_stamp_order", key=s.key)  # never a fresher waiting scan for an older (P2-7)
         self._scan_id += 1
         scan, why = srs.to_bridge_scan(s, self._scan_id, odom_from_base)
         if scan is None:
@@ -330,6 +351,8 @@ class RealSlamSource:
 
                 def sent(c=c, ident=t["id"]):
                     c["sent_ns"] = int(self.clock())
+                    if c["sent_ns"] - c["decided_ns"] > CANCEL_SEND_S * 1e9:  # its last byte late (round 2 P2-2)
+                        self._fatal(f"cancel of {ident} not sent within {CANCEL_SEND_S} s")
                     self._event(t="cancel_sent", id=ident)
 
                 link.write(rl.encode_cancel(rl.Cancel(t["id"], c["reason"])), "cancel", sent)
@@ -388,11 +411,13 @@ class RealSlamSource:
         if t is not None and t["kind"] == "start" and t["accepted_ns"] is None:
             now = int(self.clock())
             t["accepted_ns"], t["deadline_ns"] = now, now + int(SEED_WAIT_S * 1e9)
-        self.link.flush()
         looked = int(self.clock())  # before the read: what is read arrived at or after it
+        self._deadlines(looked)
+        self._watch_seed(looked)  # before the write retry (round 2 P2-1)
+        self.link.flush()
         frames = self.link.read()
         received = int(self.clock())
-        self._deadlines(looked, frames)
+        self._receipt_deadlines(received)
         for obj in frames:
             if isinstance(obj, slam_link.Reply):
                 self._on_reply(obj, received)
@@ -408,8 +433,10 @@ class RealSlamSource:
         out, self._out = self._out, []
         return out
 
-    def _deadlines(self, now: int, frames) -> None:
-        """The executor's deadlines on the clock before the read, before any frame is taken (round 1 P2-1)."""
+    def _deadlines(self, now: int) -> None:
+        """The executor's deadlines on the clock before the read, before any frame is taken: an end state delivered
+        past the start or seed's deadline is no end state (design 6.1, 2 -- 'from the acceptance to the end state's
+        delivery'; Codex 7c-1b-2a round 2 P2-3)."""
         if self.link.overdue(now):
             self._fatal(f"a {self.link.out_kind} frame not written whole within {WRITE_WAIT_S} s")
         t = self.target
@@ -417,16 +444,19 @@ class RealSlamSource:
             c = t["cancel"]
             if c["sent_ns"] is None and now - c["decided_ns"] > CANCEL_SEND_S * 1e9:
                 self._fatal(f"cancel of {t['id']} not sent within {CANCEL_SEND_S} s")
-            if c["sent_ns"] is not None and now - c["sent_ns"] > VOID_WAIT_S * 1e9:
-                self._fatal(f"no void for {t['id']} within {VOID_WAIT_S} s of its cancel")
         elif self._seeding() and t["deadline_ns"] is not None and now > t["deadline_ns"]:
-            ended = any(isinstance(o, rl.State) and int(o.id) == t["id"] and o.kind in ("ready", "not_localized")
-                        for o in frames)
-            if not ended:
-                self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
+            self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
+
+    def _receipt_deadlines(self, received: int) -> None:
+        """What is waited for from the bridge, on the clock after the read, before any frame is taken: a void or a
+        reply read past its bound is past it (round 2 P2-4)."""
+        t = self.target
+        if t is not None and t["cancel"] is not None and t["cancel"]["sent_ns"] is not None \
+                and received - t["cancel"]["sent_ns"] > VOID_WAIT_S * 1e9:
+            self._fatal(f"no void for {t['id']} within {VOID_WAIT_S} s of its cancel")
         f = self._inflight
         if (f is not None and f["sent_ns"] is not None and f["phase"] == "ready"
-                and now - f["sent_ns"] > REPLY_WAIT_S * 1e9):
+                and received - f["sent_ns"] > REPLY_WAIT_S * 1e9):
             self._fatal(f"scan {f['scan'].scan_id}: no reply within {REPLY_WAIT_S} s")
 
     def _on_reply(self, r, received: int) -> None:
@@ -444,6 +474,8 @@ class RealSlamSource:
             self._fatal(f"protocol: reply for scan {r.scan_id}, not the scan in flight")
         if r.status == "failed":
             self._fatal(f"bridge failed scan {r.scan_id}: {r.reason}")
+        if r.status != "processed" and f["phase"] == "ready":
+            self._fatal(f"protocol: a {r.status} reply from a localized instance")  # every scan gets a /pose (P2-6)
         self._inflight = None
         t = self.target
         rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
@@ -507,7 +539,9 @@ class RealSlamSource:
                 self._fatal(f"protocol: ready_for_scans in {t['state']}")
             t["state"] = "scans"
             return
-        if t["state"] != "scans" or t["start_scans"] != START_SCANS:
+        f = self._inflight
+        if t["state"] != "scans" or t["start_scans"] != START_SCANS or (f is not None and f["target"] == t["id"]):
+            # the bridge answers the seventh scan before its end state (round 2 P2-5)
             self._fatal(f"protocol: {st.kind} in {t['state']} after {t['start_scans']} start scans")
         if t["kind"] == "seed":
             why = self._input_broken(t)  # judged before the end state is taken (round 1 P1-1)
@@ -522,8 +556,8 @@ class RealSlamSource:
     def _input_broken(self, t) -> str | None:
         if self.boot() != t["boot"]:
             return "boot_changed"
-        if not self.odom_ok():
-            return "odom_break"  # the loop clears its history on a break: its continuity flag is the evidence
+        if self.odom_gen() != t["odom_gen"]:
+            return "odom_break"  # any break since the acceptance, seen or not by a poll (round 2 P1)
         since = self._s(t["accepted_ns"])
         sx, sy, syaw = t["snapshot"]
         poses = []
@@ -549,6 +583,9 @@ class RealSlamSource:
             self._decide_cancel(t, why, now)
 
     def _decide_cancel(self, t, why: str, now: int) -> None:
+        if t["deadline_ns"] is not None and now > t["deadline_ns"]:
+            # only a cancel decided within the deadline lifts it (round 2 P2-3)
+            self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
         self._event(t="cancel_decided", id=t["id"], reason=why, state=t["state"])
         if t["state"] == "queued" or (t["state"] == "sent" and self.link.retract("seed")):
             # the bridge has not seen a byte of it: cancelled here, the bridge never hears of it (round 1 P2-2)

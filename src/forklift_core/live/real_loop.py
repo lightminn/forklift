@@ -299,6 +299,9 @@ class RealLoop:
         self.clock = clock or time.monotonic_ns
         self._console_disarm = False
         self._odom_broken = False  # a continuity break among this tick's STATEs
+        # PR 7 design 6.1, 2 (7c-1b-2a): raised at every odometry break, reboot and device loss, never lowered -- the
+        # real SLAM source compares it with a seed's own, since a break clears the history it would otherwise read
+        self.odom_gen = 0
         # 5c-1 (design 5): the session's bypass set (applied at a tick head; this tick's copy judges), the operator's
         # answers by serial (the first only), the last refusal told on real_status
         self.bypass: set = set()
@@ -1007,6 +1010,7 @@ class RealLoop:
             # evidence of anything now
             self.samples.clear()
             self._rebooted = True
+            self.odom_gen += 1
             self._motion_mcu_until = None  # another clock; a rebooted MCU acts on no earlier frame
         self._last_seen = (state.boot_id, state.mcu_time_us)
         sample_ = Sample(int(rx_ns), state)
@@ -1036,6 +1040,7 @@ class RealLoop:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
+            self.odom_gen += 1
             self._odom_good = False
             self.still_since_ns = None
             self.stand_since_ns = None
@@ -1424,6 +1429,7 @@ class RealLoop:
                 self.operator_start.void("link_lost")  # 5c-1: a check given before a device loss does not count
             self.samples.clear()
             self._odom_broken = True
+            self.odom_gen += 1
             self._odom_good = False
             self.still_since_ns = None
             self.stand_since_ns = None
