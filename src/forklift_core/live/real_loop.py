@@ -278,6 +278,14 @@ class RealLoop:
         self.pose_history: deque = deque(maxlen=64)
         self._wait_started_s = None  # the current D5 still-frame wait's start (core seconds)
         host._on_state_cb = self._on_state  # noqa: SLF001 -- every STATE the host accepts, once
+        # PR 7 7r (plan 2-3): the replay run's anchor -- called once with the receipt of the first STATE whose delay
+        # bound is finite -- and the HIL check's round (raised at each loss and boot change the HIL transport shows;
+        # an attempt completes only on the round it began in, with the check held)
+        self.on_first_bounded_state = None
+        self.anchor_rx_ns: int | None = None
+        self._hil_client = getattr(host, "client", None) is Client.HIL
+        self.hil_check_round = 0
+        self._hil_seen = None
         self.operator_start = operator_start  # the operator's physical check, one submit only (4b design 2, 13)
         # 5a (docs/design/2026-11-19-real-safety-wiring.md 1-3): the real obstacle layer, the delay bound for the
         # STATEs' measurement intervals, the raw odometry history the layer places scans on
@@ -713,6 +721,9 @@ class RealLoop:
             return "no_start_pose", {}
         # PR 7 design 6.1, 2: the source's own acceptance, asked before anything changes (no attempt ended, no layer
         # cut): a confirmation needs a `ready` source, a declaration no seed in progress
+        hil = self._hil_watch()
+        if hil is not None and not hil[0]:
+            return "hil_check_lost", {}  # 7r plan 3: nothing completes while it is lost
         if not self._source_accepts(kind):
             return ("slam_not_ready" if kind == "relocalize_confirm" else "seed_in_progress"), {}
         if self.attempt is not None:
@@ -726,7 +737,8 @@ class RealLoop:
                         # a DISARM taken after this voids it (impl round 3: the taken ones counted, not the queue)
                         "disarms": self._disarms_taken,
                         # 6.1, 2: the declaration completes on its seed's end state (a source that reports them)
-                        "seed_states": self._seed_states(), "seed_epoch": None, "seed_id": None, "seed_end": None}
+                        "seed_states": self._seed_states(), "seed_epoch": None, "seed_id": None, "seed_end": None,
+                        "hil_round": None if hil is None else hil[1]}
         if self.real_layer is not None:
             self._reset_layer(now_ns)  # the scans from before the truck was carried are cut (6, 5; round 2 P1-1)
         if self.attempt["kind"] == "confirm" and self._epoch_mode:
@@ -788,10 +800,33 @@ class RealLoop:
         self.reloc_events.append({"t": float(t), "event": state, "reason": reason, "attempt": a["attempt"],
                                   "kind": a["kind"]})
 
+    def _hil_watch(self):
+        """PR 7 7r plan 3: ``(held, round)`` of the HIL check now -- the round raised at every loss and every boot
+        change the HIL transport shows -- or None off HIL (another client). Read at each tick's receive, when an
+        attempt starts and in its every void check, the last just before it completes."""
+        if not self._hil_client:
+            return None
+        tr = self.transport
+        held = getattr(tr, "hil_plant", False) is True
+        # the transport's loss count too: a loss and a new boot within one read leave only the new boot showing
+        seen = (held, getattr(tr, "hil_boot", None) if held else None, getattr(tr, "hil_losses", 0))
+        if self._hil_seen is not None and seen != self._hil_seen:
+            self.hil_check_round += 1
+            self._emit({"t": "hil_check", "held": held, "boot": seen[1], "round": self.hil_check_round,
+                        "ns": int(self.clock())})
+        self._hil_seen = seen
+        return held, self.hil_check_round
+
     def _attempt_void(self, now_ns: int, t: float):
         a, arb = self.attempt, self.link.a
         if self.real_layer is not None and self.real_layer.watchdog(t) in LAYER_ENDS:
             return "relocalize_voided:layer"  # the fault before any unlock (round 3 P2-2)
+        if a.get("hil_round") is not None:
+            # 7r plan 3 (Codex plan round 4 P1): a completion while the HIL check was lost, or across a boot change, is
+            # no evidence -- whatever the source (the synthetic HIL too)
+            hil = self._hil_watch()
+            if hil is None or not hil[0] or hil[1] != a["hil_round"]:
+                return "hil_check_lost"
         if arb.lease is None or arb.lease.lease_id != a["lease_id"] or not self._lease_valid(now_ns):
             return "relocalize_voided:lease"
         if arb.control_gen != a["control_gen"]:
@@ -1097,6 +1132,14 @@ class RealLoop:
             self.delay_bound.add(sample_)
             self._sample_delay[(int(state.boot_id), int(state.mcu_time_us))] = (int(rx_ns),
                                                                                 self.delay_bound.delay_s(sample_))
+            if self.on_first_bounded_state is not None and self.anchor_rx_ns is None:
+                d_ = self._sample_delay[(int(state.boot_id), int(state.mcu_time_us))][1]
+                if d_ is not None and math.isfinite(d_):
+                    self.anchor_rx_ns = int(rx_ns)
+                    try:
+                        self.on_first_bounded_state(int(rx_ns))
+                    except Exception as exc:  # noqa: BLE001 -- the run ends on it
+                        self.fatal_source = self.fatal_source or f"anchor:{type(exc).__name__}:{exc}"
             if len(self._sample_delay) > 4 * SAMPLES_KEPT:
                 for key in list(self._sample_delay)[: len(self._sample_delay) - 2 * SAMPLES_KEPT]:
                     self._sample_delay.pop(key, None)
@@ -1475,6 +1518,7 @@ class RealLoop:
             rec.branch, rec.reason = "emergency", f"receive:{type(exc).__name__}:{exc}"
             self._emergency(now_ns, rec.reason)
             return
+        self._hil_watch()  # 7r plan 3: the round follows every loss and boot change as the receive shows it
         if host.disconnects != self._disconnects:
             # a device loss (a same-boot reconnect included): the queue, the samples and the stand go with it
             self._disconnects = host.disconnects

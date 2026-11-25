@@ -188,3 +188,107 @@ def test_a_reply_of_the_same_instance_from_before_a_new_epoch_is_dropped_by_the_
     prov = r.loop.provenance
     assert prov is None or prov[0] == r.loop.epoch
     assert not marks
+
+
+# --- PR 7 7r plan 2-3: the HIL check's round and the anchor -------------------------------------------------------------
+def _hil(r, boot=1):
+    """The rig's loop as a HIL client on a transport whose check holds for ``boot``."""
+    r.loop._hil_client = True
+    r.loop.transport.hil_plant, r.loop.transport.hil_boot, r.loop.transport.hil_losses = True, boot, 0
+    r.tick()
+
+
+def _lose(r):
+    r.loop.transport.hil_plant, r.loop.transport.hil_boot = False, None
+    r.loop.transport.hil_losses += 1
+
+
+def test_a_confirmation_that_took_its_reply_ends_on_a_loss_before_it_completes():
+    """Codex 7r plan round 4 P1: the processed after the request already taken, the completion waiting -- the HIL
+    check lost in between: never confirmed, ended hil_check_lost (the check just before the completion)."""
+    r = rig()
+    src, bridge, marks = real(r)
+    _hil(r)
+    gen = open_generation(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    stand(r)
+    reply, _ = ask(r, "relocalize_confirm", generation=gen)
+    assert reply["t"] == "ack", reply
+    assert r.loop.attempt["hil_round"] == r.loop.hil_check_round
+    # the reference taken, the completion not yet: closed on the commit only once the layer has installed after it
+    lay = r.loop.real_layer
+    installed = lay.installed_newest_s
+    lay.installed_newest_s = lambda: None  # the install after the request held back
+    run_until(r, lambda rec: r.loop.attempt is not None and r.loop.attempt["reference"], 200)
+    assert status(r)["state"] == "waiting"
+    _lose(r)
+    lay.installed_newest_s = installed
+    r.tick(3)
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "hil_check_lost", status(r)
+    assert r.loop.core.relocalize_generation() == gen  # still open: nothing closed it
+
+
+def test_a_boot_change_during_a_declaration_ends_it_and_marks_no_seed_declared():
+    """7r plan 3: a declaration whose seed runs across a boot change completes nothing -- no declared, no F1 mark."""
+    r = rig()
+    src, bridge, marks = real(r)
+    _hil(r)
+    gen = open_generation(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    stand(r)
+    bridge.end = "never"
+    reply, _ = ask(r, "relocalize_declare", generation=gen)
+    assert reply["t"] == "ack", reply
+    run_until(r, lambda rec: any(isinstance(f, rl.Seed) for f in bridge.got), 50)
+    r.loop.transport.hil_boot = 2  # held, on another boot
+    r.tick()
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "hil_check_lost", status(r)
+    bridge.end = "ready"
+    r.tick(20)
+    assert status(r)["state"] == "refused"
+    assert not any(row.get("declared") for row in r.loop.seed_log)
+    assert r.loop.f1_block is None or not r.loop.f1_block.get("declared")
+
+
+def test_no_attempt_starts_while_the_check_is_lost_and_off_hil_there_is_no_round():
+    r = rig()
+    src, bridge, marks = real(r)
+    gen = open_generation(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    stand(r)
+    assert r.loop._hil_watch() is None  # the rig's host is not a HIL client: nothing changes there
+    _hil(r)
+    _lose(r)
+    stand(r)
+    reply, _ = ask(r, "relocalize_confirm", generation=gen)
+    assert reply["t"] == "reject" and reply["reason"] == "hil_check_lost", reply
+    assert r.loop.hil_check_round == 1
+
+
+def test_the_anchor_is_the_first_state_with_a_finite_delay_bound_and_is_called_once():
+    from real_loop_rig import Rig
+
+    got = []
+    r = Rig(frames=True, real_requests=True, reloc=True, real_layer=True)
+    r.loop.on_first_bounded_state = got.append
+    r.start()
+    r.tick(50)
+    assert len(got) == 1 and got[0] == r.loop.anchor_rx_ns
+    bounded = sorted(rx for rx, d in r.loop._sample_delay.values() if d is not None and math.isfinite(d))
+    unbounded = [rx for rx, d in r.loop._sample_delay.values() if d is None]
+    assert bounded[0] == got[0] and all(rx <= got[0] for rx in unbounded if rx < bounded[0])
+
+
+def test_a_loss_hidden_by_a_new_boot_in_the_same_read_still_ends_the_attempt():
+    """Codex 7r-2 round 1 P1: only the transport's loss count moved (and the boot): the round moves, the attempt ends."""
+    r = rig()
+    src, bridge, marks = real(r)
+    _hil(r)
+    gen = open_generation(r)
+    run_until(r, lambda rec: src.can_confirm(), 200)
+    stand(r)
+    reply, _ = ask(r, "relocalize_confirm", generation=gen)
+    assert reply["t"] == "ack", reply
+    r.loop.transport.hil_losses += 1  # lost and held again within one read, on the same boot as far as it shows
+    r.tick()
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "hil_check_lost", status(r)

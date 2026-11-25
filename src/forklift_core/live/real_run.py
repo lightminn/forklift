@@ -257,6 +257,12 @@ class RunPaths:
     budget: Path = REPO / "config/real/obstacle_layer.yaml"
     map_bundle: Path | None = None
     hil: bool = True
+    # PR 7 7r (replay_assembly): an observe record replayed behind the HIL run, the LiDAR config the layer and SLAM
+    # take, the IMU source config, and whether a synthetic record may be replayed (its output then not for judgement)
+    replay: Path | None = None
+    lidar_config: Path = REPO / "config/real/lidar.yaml"
+    imu_config: Path = REPO / "config/real/imu.yaml"
+    allow_synthetic: bool = False
 
 
 @dataclass
@@ -287,6 +293,7 @@ class RunPrep:
     check_plan: str
     kernels: dict = field(default_factory=dict)
     jobs: object = None
+    replay: object = None  # replay_assembly.ReplayPlan (7r), None for every other run
 
 
 class _Handover:
@@ -344,9 +351,21 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     watches = asm.build_watches(data, paths.watch, vehicle.wheel_radius_m)
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
-    if paths.hil:
+    replay = None
+    if paths.replay is not None:
+        # 7r plan 4: the record and its bundle stand for the HIL scene (no hil: part, no zero start); the configs and
+        # the record are checked before anything starts
+        from forklift_core.live import replay_assembly as rpa
+
+        if not paths.hil:
+            raise AssemblyRefused(["replay_needs_hil"])
+        replay = rpa.replay_inputs(paths, watches)
+        map_id, occupancy = read_map(rpa.replay_bundle(replay, paths), cfg)
+    elif paths.hil:
         obstacles = read_hil_scene(paths.s10a)  # the synthetic LiDAR casts them whatever map plans (round 1 P2)
-    if paths.map_bundle is not None:
+    if replay is not None:
+        pass  # the map read above, from the record's bundle (or --map-bundle)
+    elif paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:
         if not cfg.map_id:
@@ -358,7 +377,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     refused = ra.s10a_refusal(cfg, map_id)
     if cfg.check_pallet_pose is None:
         refused.append("check_pallet_pose_unset")
-    if paths.hil and any(abs(float(v)) > 1e-12 for v in cfg.start_rear):
+    if paths.hil and replay is None and any(abs(float(v)) > 1e-12 for v in cfg.start_rear):
         refused.append("hil_start_not_zero")  # the odometry origin is the synthetic SLAM's identity (10.5)
     if refused:
         raise AssemblyRefused(refused)
@@ -367,6 +386,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         geometry = mission_geometry(urdf, cfg.pallet_depth_m, cfg.pallet_width_m)
         axle_to_tip, rear_offset, carriage = chassis_reference(urdf)
         layer_cfg = yaml.safe_load(Path(paths.layer).read_text())
+        if replay is not None:
+            layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
         budget = yaml.safe_load(Path(paths.budget).read_text())
         budget_s = float(budget["latency_budget"]["seconds"])
         overdue_end_s = float(budget["overdue_end"]["seconds"])
@@ -374,6 +395,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         raise
     except Exception as err:  # noqa: BLE001 -- a malformed model or layer file is structural
         raise AssemblyRefused([f"config_unreadable:{type(err).__name__}:{err}"]) from err
+    if replay is not None:
+        cfg = rpa.replay_start(replay, cfg, map_id, rear_offset)  # the record's start for the loop, plan and hello
     # a wall-clock run (real-time plan D2-D3): the fastest obstacle and permission kernels, compiled before the loop
     from forklift_core import kernels
 
@@ -385,13 +408,16 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     hashes = {name: _sha(p) for name, p in (("s10a", paths.s10a), ("settings", paths.settings),
                                              ("vehicle", paths.vehicle), ("watch", paths.watch),
                                              ("layer", paths.layer), ("budget", paths.budget))}
+    if replay is not None:
+        hashes.update(replay_record=replay.record.sha256,
+                      **{f"{k}_config": v["sha256"] for k, v in replay.configs.items() if v is not None})
     epoch = secrets.randbelow(0x7FFFFFFE) + 1 if epoch is None else int(epoch)
     prep = RunPrep(paths=paths, cfg=cfg, data=data, vehicle=vehicle, kin=kin, settings=settings, planner=planner,
                    cap=cap, geometry=geometry, rear_offset_m=rear_offset, body_front_m=axle_to_tip - carriage,
                    map_id=map_id, occupancy=occupancy, obstacles=obstacles, watches=watches, layer_cfg=layer_cfg,
                    budget_s=budget_s, overdue_end_s=overdue_end_s, channels=RealChannels(), epoch=epoch,
                    welcome=run_welcome(epoch), start_ns=int(clock()), hashes=hashes, check_plan=plan.status,
-                   kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)})
+                   kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)}, replay=replay)
     if jobs_factory is None:
         from forklift_core.planning.plan_worker import PlanWorker
 
@@ -434,6 +460,7 @@ class RunSources:
     # the batch cut (the scan the layer takes is the scan SLAM takes); None: the source takes its scans itself
     slam_feed: object = None
     closers: list = field(default_factory=list)  # called once when the run's workers close (sockets the sources hold)
+    replay: object = None  # replay_assembly.ReplayControl (7r): the run's EOF, drain and read-failure step
 
 
 def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0, slam_socket: str | None = None) -> RunSources:
@@ -462,6 +489,17 @@ def make_hil_sources(prep: RunPrep, host, transport, *, imu_seed: int = 0, slam_
         sources = _real_slam_sources(prep, host, transport, scan, imu, box, slam_socket)
     sources.on_assembled.append(lambda loop: box.__setitem__("loop", loop))
     return sources
+
+
+def make_run_sources(prep: RunPrep, host, transport, *, slam_socket: str | None = None) -> RunSources:
+    """The HIL run's sources: the replay's (7r) when the run replays a record, else the synthetic ones."""
+    if prep.replay is not None:
+        from forklift_core.live.replay_assembly import make_replay_sources
+
+        if slam_socket is None:
+            raise AssemblyRefused(["replay_needs_slam_bridge"])
+        return make_replay_sources(prep, host, transport, slam_socket=slam_socket)
+    return make_hil_sources(prep, host, transport, slam_socket=slam_socket)
 
 
 def _real_slam_sources(prep: RunPrep, host, transport, scan, imu, box: dict, path: str) -> RunSources:
@@ -501,7 +539,10 @@ def _real_slam_on(sock, prep, host, transport, scan, imu, box, boot) -> RunSourc
         odom_history=lambda: box["loop"].odom_history,
         odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m),
         odom_gen=lambda: box["loop"].odom_gen, boot=boot, rear_offset_m=prep.rear_offset_m,
-        session_epoch=lambda: prep.epoch)
+        session_epoch=lambda: prep.epoch,
+        # 7r plan 3: the HIL transport's own check, judged at every entry point (a HIL run's source only)
+        hil_gate=lambda: (getattr(transport, "hil_plant", False) is True, getattr(transport, "hil_boot", None),
+                          getattr(transport, "hil_losses", 0)))
     slam.client = Client.HIL
     sources = RunSources(client=Client.HIL, host=host, transport=transport, scans=scan, slam=slam, imu=imu,
                          slam_feed=lambda layer_scan: slam.offer(from_layer(layer_scan, prep.start_ns)))
@@ -748,7 +789,7 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     kappa = max(abs(k) for k in vehicle.steering.curvatures_inv_m)
     # the layer's grid over the S10-A field and a metre round it (the odometry frame is the map frame at the HIL start,
     # 10.5); the teleop bridge's +-hall_half_m square (800 x 800 cells) is far larger than the field it drives in
-    x0, x1, y0, y1 = (float(v) for v in cfg.bounds)
+    x0, x1, y0, y1 = _odom_bounds(cfg)
     hall = SimpleNamespace(x_min_m=x0 - HALL_MARGIN_M, x_max_m=x1 + HALL_MARGIN_M, y_min_m=y0 - HALL_MARGIN_M,
                            y_max_m=y1 + HALL_MARGIN_M)
     # the STATE delay a measurement interval may have and still place scans (design 10.10): the layer file's 0.03 s is
@@ -859,6 +900,9 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                     except Exception as exc:
                         mark(f"slam:offer:{type(exc).__name__}:{exc}")
                         raise
+            fatal = getattr(scans, "fatal", None)
+            if fatal is not None:
+                mark(f"scan:{fatal}")  # 7r: the replay's socket_error / replay_mismatch ends the run (plan 3)
 
         loop = RealLoop(core=core, session=RealSession(core, link), permit=permit, port=port, host=host, link=link,
                         channels=prep.channels, transport=sources.transport, params=params, odometry=odo,
@@ -886,6 +930,22 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     except BaseException:
         getattr(worker, "close", lambda: None)()  # the layer thread never outlives a refused or failed assembly
         raise
+
+
+def _odom_bounds(cfg) -> tuple:
+    """The S10-A field (map frame) in the odometry frame, whose origin is the start's rear axle: the bounds themselves
+    at the HIL's zero start, else the box round the field's corners carried by the start's inverse (a replay starts
+    where its record did, 7r-2)."""
+    from forklift_core.localization.slam_pose import compose, invert
+
+    x0, x1, y0, y1 = (float(v) for v in cfg.bounds)
+    start = tuple(float(v) for v in cfg.start_rear)
+    if not any(start):
+        return x0, x1, y0, y1
+    inv = invert(start)
+    pts = [compose(inv, (x, y, 0.0))[:2] for x in (x0, x1) for y in (y0, y1)]
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return min(xs), max(xs), min(ys), max(ys)
 
 
 def _frame_seen(box, depth):
@@ -1045,10 +1105,14 @@ class RealRun:
                 if peer is not None:
                     peer()
                 return f"model_exit:{code}"
+        replay = getattr(self.sources, "replay", None)
+        why = None if replay is None or loop.fatal_source is not None else replay.step(now_ns)
         if loop.fatal_source is not None:
             return f"source_fatal:{loop.fatal_source}"
         if record is not None and record.failed is not None:
             return f"record_failed:{record.failed}"
+        if why is not None:
+            return why  # replay_eof: the normal closing (7r plan 2)
         if now_ns >= deadline_ns:
             return "deadline"
         return None
@@ -1071,6 +1135,9 @@ class RealRun:
                 before_tick(now)  # the tests' injections (tools/real_autonomy.py)
             rec = self.loop.cycle(now)
             self.ticks += 1
+            replay = getattr(self.sources, "replay", None)
+            if replay is not None:
+                replay.after_tick(now)  # 7r: the IMU the loop did not read in this tick, drained after it
             if record is not None:
                 row = tick_row(rec, now)
                 loop = self.loop
@@ -1168,6 +1235,7 @@ def header_row(prep: RunPrep, *, synthetic: bool, uninspected=(), model_args=(),
 
 __all__ = ["EXIT_OK", "EXIT_RECORD", "EXIT_REFUSED", "RUN_HOST_CFG", "RealRun", "RunCancelled", "RunPaths", "RunPrep",
            "RunRecord", "RunSources", "SourceFatal", "assemble_run", "assembly_refusal", "chassis_reference",
-           "check_plan", "core_options", "header_row", "lidar_mount", "make_hil_sources", "map_occupancy", "measurement_view", "mission_geometry",
+           "check_plan", "core_options", "header_row", "lidar_mount", "make_hil_sources", "make_run_sources",
+           "map_occupancy", "measurement_view", "mission_geometry",
            "motion_allowed", "pallet_box", "planning_settings", "prepare_run", "read_hil_scene", "read_map",
            "read_settings", "read_vehicle", "run_welcome", "scene_occupancy", "tick_row"]

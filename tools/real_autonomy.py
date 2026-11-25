@@ -266,6 +266,11 @@ def run_hil(args) -> int:
         injections = []
     if args.hil_slam_bridge is not None and any(name == "slam" for name, _ in injections):
         refused.append("hil_inject_slam_with_bridge")  # the real source has no stop switch: stop the bridge instead
+    if args.replay is not None:
+        # PR 7 7r plan 4: the replay's SLAM is the real source; its scans have no injection hooks
+        if args.hil_slam_bridge is None:
+            refused.append("replay_needs_slam_bridge")
+        refused += [f"replay_inject:{name}" for name, _ in injections if name in ("scan", "scan_lost")]
     if refused:
         _write({"run": False, "refused": refused, "opened": []}, None)
         return 2
@@ -283,7 +288,8 @@ def _run_hil(args, rlt, stop, model_args, injections) -> int:
     from forklift_core.live.real_assembly import AssemblyRefused
 
     paths = rr.RunPaths(s10a=args.s10a, settings=args.settings, vehicle=args.vehicle, watch=args.watch,
-                        map_bundle=args.map_bundle, hil=True)
+                        map_bundle=args.map_bundle, hil=True, replay=args.replay, lidar_config=args.lidar_config,
+                        imu_config=args.imu_config, allow_synthetic=bool(args.allow_synthetic))
     try:
         prep = rr.prepare_run(paths, stop=stop)
     except AssemblyRefused as err:
@@ -335,7 +341,9 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
     record.put(rr.header_row(prep, synthetic=True, uninspected=held.pty.uninspected, model_args=model_args,
                              extra={"model": str(args.hil_model), "model_sha256": _sha(Path(args.hil_model)),
                                     "model_pid": held.pty.proc.pid,
-                                    "duration_s": float(args.duration_s), "injections": injections}))
+                                    "duration_s": float(args.duration_s), "injections": injections,
+                                    # 7r plan 4: what was replayed and the output marks
+                                    **({} if prep.replay is None else prep.replay.head())}))
     # ④ the host and the transport: the first STATE of a verified HIL board
     host = real_host(rr.RUN_HOST_CFG, client=Client.HIL)
     transport = rlt.LoopTtyTransport(held.pty.slave)
@@ -346,7 +354,7 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
         return EXIT_FAILED
     # ⑤ the sources ⑥ the assembly (the same host and transport)
     try:
-        held.sources = sources = rr.make_hil_sources(prep, host, transport, slam_socket=args.hil_slam_bridge)
+        held.sources = sources = rr.make_run_sources(prep, host, transport, slam_socket=args.hil_slam_bridge)
         held.run = run = rr.assemble_run(prep, sources, events=record.put)
     except (AssemblyRefused, SyntheticRefused) as err:
         end["reason"] = f"refused:{getattr(err, 'reasons', err)}"
@@ -419,8 +427,13 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
                f1_block=None if getattr(loop, "f1_block", None) is None else dict(loop.f1_block),
                reloc_events=[dict(e) for e in getattr(loop, "reloc_events", [])],
                mission_counts=mission_counts(loop.session.results),
-               ticks=run.ticks, records_kept=len(loop.records))
-    return rr.EXIT_OK if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
+               ticks=run.ticks, records_kept=len(loop.records),
+               hil_check_round=getattr(loop, "hil_check_round", None))
+    if sources.replay is not None:
+        end["replay"] = sources.replay.summary()  # 7r plan 4: the replay's counts
+        end["replay"]["layer"] = dict(getattr(run.layer, "counts", {}) or {})  # scans taken, dropped, installs
+    ok_reasons = ("deadline", "signal", "replay_eof")
+    return rr.EXIT_OK if closing == "confirmed" and reason in ok_reasons else EXIT_FAILED
 
 
 def _cleanup(held, prep, record, end) -> bool:
@@ -476,6 +489,15 @@ def main(argv=None) -> int:
     ap.add_argument("--hil-slam-bridge", default=None,
                     help="--hil: the real SLAM source on a real-mode bridge's Unix socket (PR 7 7c-1b-2b) instead of "
                          "the synthetic SLAM")
+    ap.add_argument("--replay", type=Path, default=None,
+                    help="--run --hil --hil-slam-bridge: an observe record's LiDAR and IMU replayed behind the HIL run "
+                         "(PR 7 7r; refused unless --lidar-config / --imu-config carry measured bounds)")
+    ap.add_argument("--lidar-config", type=Path, default=REPO / "config/real/lidar.yaml",
+                    help="--replay: the LiDAR config the layer and SLAM both take")
+    ap.add_argument("--imu-config", type=Path, default=REPO / "config/real/imu.yaml",
+                    help="--replay: the IMU source config")
+    ap.add_argument("--allow-synthetic", action="store_true",
+                    help="--replay: a synthetic record may be replayed (the output is marked not_for_judgement)")
     ap.add_argument("--duration-s", type=float, default=None, help="--hil: required, 0 < s <= 3600")
     ap.add_argument("--device", default=None, help="refused: no real MCU AUTO before S10's preconditions")
     ap.add_argument("--s10a", "--config", dest="s10a", type=Path, default=None,
@@ -491,6 +513,9 @@ def main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=0)
     ap.add_argument("--web-root", default=str(REPO / "console/web"), help="the console's pages (as the teleop bridge)")
     args = ap.parse_args(argv)
+    if args.replay is not None and not (args.run and args.hil):
+        _write({"run": False, "refused": ["replay_needs_run_hil"], "opened": []}, args.out)
+        return 2
     if args.run:
         if not args.hil:
             return run_refused(args.device, args.out)
