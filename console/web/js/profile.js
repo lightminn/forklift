@@ -257,6 +257,8 @@ export const REJECT = {
   no_start_pose: "시작 자세가 설정되지 않아 재위치를 받을 수 없습니다",
   slam_not_ready: "SLAM 이 아직 위치를 잡지 못해 재위치 확인을 받을 수 없습니다",
   seed_in_progress: "앞선 시작 자세 선언을 SLAM 이 처리하는 중입니다 · 끝난 뒤 다시 누르세요",
+  // PR 7 7r-2: the HIL run's check of the board is lost (or the board restarted) -- nothing completes on it
+  hil_check_lost: "HIL 보드 확인이 끊겼습니다 · 보드가 다시 확인될 때까지 재위치를 받을 수 없습니다",
   slam_stale: "차는 서 있지만 SLAM 응답이 낡았습니다 · 새 응답을 기다리세요",
   stale_relocalization: "그 재위치 세대는 지금 것이 아닙니다 · 화면을 다시 보세요",
   no_operator_request: "지금 열린 확인 요청이 없습니다",
