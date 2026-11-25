@@ -119,8 +119,11 @@ def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
             if time.monotonic() >= next_scan:
                 k += 1
                 recv, pair = ra.clock_pair()
+                # the patched node's SDK first and last samples (7a-2): the pair, with the stamp kind it names
                 sender.send(ra.make_frame(_scan_msg(ra, recv, pair), scan_id=k, recv_mono_ns=recv,
-                                          sys_minus_mono_ns=pair, gen=5, first_beam_mono_ns=recv - 30_000_000))
+                                          sys_minus_mono_ns=pair, gen=5, first_beam_mono_ns=recv - 120_000_000,
+                                          stamp_kind="sdk_first_sample",
+                                          sdk={"last_beam_mono_ns": recv - 25_000_000}))
                 next_scan += 0.1
             obs.cycle()
             time.sleep(0.01)
