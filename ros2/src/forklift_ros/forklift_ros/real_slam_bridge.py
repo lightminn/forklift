@@ -108,7 +108,7 @@ class RealSlamBridge(Node):
                              "-r", f"__ns:=/slam_{k}"],
             log_dir=self.out, graph_has=self._in_graph, drain=self._drain)
         self.core = BridgeCore(self, self.bundle, self.laser)
-        self.create_timer(0.01, self._clock)
+        self.create_timer(0.01, self._publish_clock)
         self.events: list = []
 
     # --- the core's io -------------------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ class RealSlamBridge(Node):
             pub.publish(msg)
 
     # --- ROS side ----------------------------------------------------------------------------------------------------
-    def _clock(self) -> None:
+    def _publish_clock(self) -> None:  # not _clock: rclpy.Node keeps its ROSClock there
         self.clock_pub.publish(Clock(clock=stamp_of(time.monotonic_ns())))
 
     def _static_tf(self) -> None:
