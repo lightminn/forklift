@@ -239,65 +239,61 @@ class ReplayImu(_Anchored):
         self.src = ImuSource(imu_cfg, operating=True, now_ns=lambda: self._clock["ns"])
         self.counts = collections.Counter()
         self.last_read_capped = False
-        self.input_ns: int | None = None  # every row up to this instant is in (the clock never runs past it)
+        self.input_ns: int | None = None  # every row up to this instant is in (the gap check never looks past it)
+        self.prefix_done = False  # the prefix judged through, once (round 2 P2-1)
+        self._buf: collections.deque = collections.deque()  # judged output not yet handed to the loop
+        self._left = False
 
-    def _put(self, rows) -> None:
-        for ns, r in rows:
-            at = ns + self.delta
-            self._clock["ns"] = max(self._clock["ns"], at)
-            if r.get("t") == "imu":
-                self.src.push(at, r.get("s", "a"), r.get("dev_us"), r.get("dom"), (r["x"], r["y"], r["z"]),
-                              ts_ms=r.get("ts_ms"))
-            else:
-                self.src.lost(str(r.get("why"))[len("lost:"):], at_ns=at)
+    def _put_one(self, ns: int, r: dict, live: bool) -> None:
+        """One row in and judged at once (the source's queue never holds more than it: no overflow whatever its
+        queue_max -- round 2 P2-2); its output kept for the loop, or dropped before the anchor."""
+        at = ns + self.delta
+        self._clock["ns"] = max(self._clock["ns"], at)
+        if r.get("t") == "imu":
+            self.src.push(at, r.get("s", "a"), r.get("dev_us"), r.get("dom"), (r["x"], r["y"], r["z"]),
+                          ts_ms=r.get("ts_ms"))
+        else:
+            self.src.lost(str(r.get("why"))[len("lost:"):], at_ns=at)
+        out = self.src.samples(self._clock["ns"], 1 << 30)
+        if live:
+            self._buf.extend(out)
+        else:
+            self.counts["before_anchor"] += len(out)
 
-    def _step(self, upto_ns: int, budget: int):
-        """Rows due up to ``upto_ns`` put in (at most ``budget``, the prefix first) and the source read up to the
-        instant every row is in. Returns (output, whether rows are left due, the prefix still running)."""
+    def _step(self, upto_ns: int, budget: int) -> None:
+        """At most ``budget`` due rows in, the prefix first; ``input_ns`` moves only when every due row is in."""
         self.reader.check()
         t_read = self.reader.t_read
         if t_read == -math.inf:
             self.counts["read_late"] += 1  # nothing read yet: behind, not a gap
-            return [], True, True
+            self._left = True
+            return
         if t_read < upto_ns - self.delta:
             self.counts["read_late"] += 1
         rec_upto = min(upto_ns - self.delta, t_read)
         live_rec = self.live_from_ns - self.delta
-        # the prefix -- rows whose turn came before the anchor call: judged, output dropped. Done only once the reader
-        # has read past it and none of it is left queued (a queue empty for a moment is not the end -- round 1 P2-2)
-        rows = self.reader.take(min(rec_upto, live_rec - 1), budget)
-        budget -= len(rows)
-        self._put(rows)
-        if rows:
-            out = self.src.samples(self._clock["ns"], 1 << 30)
-            self.counts["before_anchor"] += len(out)
-        nxt = self.reader.peek_ns()
-        prefix_left = t_read < live_rec or (nxt is not None and nxt < live_rec) or self.src.pending() > 0
-        if prefix_left:
-            return [], True, True
         rows = self.reader.take(rec_upto, budget)
-        budget -= len(rows)
-        self._put(rows)
+        for ns, r in rows:
+            self._put_one(ns, r, live=ns >= live_rec)
         nxt = self.reader.peek_ns()
-        left = nxt is not None and nxt <= rec_upto
-        if not left:
-            # every row up to rec_upto is in: the source may be read and asked its gaps up to there, no further
+        if not self.prefix_done and t_read >= live_rec and (nxt is None or nxt >= live_rec):
+            self.prefix_done = True
+        self._left = nxt is not None and nxt <= rec_upto
+        if not self._left and self.prefix_done:
             self.input_ns = int(rec_upto + self.delta)
             self._clock["ns"] = max(self._clock["ns"], self.input_ns)
-        upto_in = self.input_ns if self.input_ns is not None else self._clock["ns"]
-        return upto_in, left, False
 
     def samples(self, upto_ns: int, limit: int) -> list:
         self.last_read_capped = False
         if self.delta is None:
             return []
-        upto_in, left, prefix = self._step(int(upto_ns), int(limit))
+        self._step(int(upto_ns), int(limit))
         held = self.gate.check(int(upto_ns))
-        if prefix:
+        if not self.prefix_done:
             self.last_read_capped = True
             return []
-        out = self.src.samples(upto_in, limit)
-        self.last_read_capped = bool(left or self.src.last_read_capped)
+        out = [self._buf.popleft() for _ in range(min(int(limit), len(self._buf)))]
+        self.last_read_capped = bool(self._left or self._buf)
         if not held:
             self.counts["hil_check_lost"] += len(out)
             return []
@@ -316,18 +312,16 @@ class ReplayImu(_Anchored):
         self.last_read_capped = False
         if self.delta is None:
             return
-        upto_in, left, prefix = self._step(int(now_ns), int(limit))
-        if prefix:
-            self.last_read_capped = True
-            return
-        out = self.src.samples(upto_in, 1 << 30)
-        self.counts["unread"] += len(out)
-        self.last_read_capped = bool(left)
-        if not left:
-            self.src.generation()
+        self._step(int(now_ns), int(limit))
+        self.counts["unread"] += len(self._buf)
+        self._buf.clear()
+        self.last_read_capped = bool(self._left or not self.prefix_done)
+        if not self.last_read_capped:
+            self.generation()
 
     def eof(self) -> bool:
-        return self.reader.done and self.src.pending() == 0 and not self.last_read_capped
+        return (self.reader.done and not self._buf and self.src.pending() == 0 and not self.last_read_capped
+                and self.prefix_done)
 
     def close(self) -> None:
         self.reader.close()

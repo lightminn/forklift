@@ -51,7 +51,7 @@ def test_a_good_record_loads_with_its_anchor_and_two_file_order_streams(good):
     assert rec.anchor_ns == info["anchor_ns"] and rec.synthetic and rec.imu_config_recorded
     assert len(rec.lidar) == info["scans"] and len(rec.imu) > 8000
     assert rec.counts["scans_operating"] == rec.counts["scans_accepted"] == info["scans"] - 9  # 9 establish the clock
-    offs = [o for _ns, o in rec.lidar]
+    offs = [o for _ns, o, _crc in rec.lidar]
     assert offs == sorted(offs)  # file order, never re-sorted by time
 
 
@@ -622,3 +622,75 @@ def test_a_moved_boundary_or_an_empty_config_is_refused(tmp_path, edit, reason):
     with pytest.raises(rr.ReplayRefused) as e:
         load(p)
     assert e.value.reason == reason
+
+
+
+# --- Codex 7r-1 round 2 ------------------------------------------------------------------------------------------
+
+def test_a_backlog_after_the_anchor_drains_and_a_last_loss_ends_the_stream(tmp_path):
+    """P2-1: more than a limit of rows due after a stall go through over the next calls; a loss as the last row is
+    applied and the end comes."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, imu_lost_at_s=44.0)
+    rec = load(p)
+    hil = 22_000_000 * MS
+    src, _ = imu_source(rec)
+    src.set_anchor(hil, hil)
+    loop_reads(src, hil, hil + 2 * 10**9)
+    got = loop_reads(src, hil + 4 * 10**9, hil + 5 * 10**9)  # 2 s stalled: 400 rows due, 64 a call
+    assert got and src.src.counts["overflow"] == 0
+    for now in range(hil + 5 * 10**9, hil + 50 * 10**9, 100 * MS):
+        src.drain(now)
+    assert src.src.stopped == "lost:usb_gone" and src.eof()
+
+
+def test_a_small_queue_never_overflows(good):
+    """P2-2: queue_max 16 -- each row is judged as it goes in."""
+    rec = load(good[0])
+    hil = 23_000_000 * MS
+    src, _ = imu_source(rec, cfg=mk.imu_config(queue_max=16))
+    src.set_anchor(hil, hil)
+    for now in range(hil, hil + 3 * 10**9, 20 * MS):
+        src.drain(now)
+    assert src.src.counts["overflow"] == 0 and src.src.stopped is None
+
+
+def test_a_loss_merged_with_a_gap_in_one_row_verifies(tmp_path):
+    """P2-3: the loss queued between samples() and the generation() that found the gap -- one row, two
+    generations."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, imu_lost_merged_at_s=20.0)
+    gens = [json.loads(x) for x in Path(p).read_text().splitlines() if '"imu_gen"' in x]
+    assert gens[0]["why"] == "lost:usb_gone" and gens[0]["gen"] == 3  # merged: 1 -> 3 in one row
+    rec = load(p)
+    assert rec.counts["imu_config_unrecorded"] == 0
+
+
+def test_a_line_changed_in_place_after_the_load_stops_the_reader(tmp_path):
+    """P3: the same inode, a line rewritten (same length) -- the reader refuses it."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p)
+    rec = load(p)
+    ns, off, _crc = rec.imu[1000]
+    with open(p, "r+b") as f:
+        f.seek(off)
+        line = f.readline()
+        changed = line.replace(b'"verdict": "ok"', b'"verdict": "OK"')
+        assert changed != line and len(changed) == len(line)
+        f.seek(off)
+        f.write(changed)
+    r = rr.StreamReader(rec.path, rec.imu, capacity=1 << 20)
+    r.wait_read(5.0)
+    with pytest.raises(RuntimeError, match="changed"):
+        r.check()
+
+
+def test_a_broken_first_line_of_a_changed_file_is_incomplete(tmp_path):
+    """P3: the hash first -- a file whose .ok no longer matches is incomplete, whatever its first line."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p)
+    data = Path(p).read_bytes()
+    Path(p).write_bytes(b"{not json\n" + data)
+    with pytest.raises(rr.ReplayRefused) as e:
+        load(p)
+    assert e.value.reason == "record_incomplete"

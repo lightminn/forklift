@@ -34,6 +34,7 @@ import json
 import math
 import os
 import threading
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -79,8 +80,8 @@ class ReplayRecord:
     end: dict
     anchor_ns: int  # the record's first state with a finite delay bound (host_ns)
     last_ns: int  # the latest row time of either stream
-    lidar: list  # [(record ns, file offset)] in file order: scan and scan_event rows
-    imu: list  # [(record ns, file offset)] in file order: imu rows and imu_gen losses
+    lidar: list  # [(record ns, file offset, crc32 of the line)] in file order: scan and scan_event rows
+    imu: list  # [(record ns, file offset, crc32 of the line)] in file order: imu rows and imu_gen losses
     synthetic: bool
     counts: collections.Counter = field(default_factory=collections.Counter)
     imu_config_recorded: bool = False
@@ -114,6 +115,8 @@ class _ImuVerifier:
         self.clock = {"ns": 0}
         self.src = ImuSource(cfg, operating=False, record=True, now_ns=lambda: self.clock["ns"])
         self.expected_gen: collections.deque = collections.deque()
+        self.gap_ns = int(round(cfg.receive_gap_s * 1e9))
+        self.last_rx: int | None = None
         self.mismatches = 0
         self.first_mismatch = None
 
@@ -144,15 +147,22 @@ class _ImuVerifier:
                 self.src.samples(self.clock["ns"], 1 << 30)
                 self.src.generation()
             elif why.startswith("lost:") and r.get("host_ns") is not None:
-                # the device thread queues it; the next read or generation applies it -- not merged here with a gap
-                # the same cycle finds after it (round 1 P2-8)
+                # the device thread queues it; the observe cycle's samples() applies it alone (one generation), or --
+                # when it came between samples() and a generation() that found a receive gap -- the two boundaries
+                # merged into this one row (two generations): the recorded step says which (round 1-2 P2-8, P2-3)
                 at = int(r["host_ns"])
                 self.clock["ns"] = max(self.clock["ns"], at)
                 self.src.lost(why[len("lost:"):], at_ns=at)
-                self.src.samples(at, 1 << 30)
+                step = int(r.get("gen") or 0) - self.src.gen
+                if step >= 2 and self.last_rx is not None:
+                    self.clock["ns"] = max(self.clock["ns"], self.last_rx + self.gap_ns + 1)
+                    self.src.generation()
+                else:
+                    self.src.samples(at, 1 << 30)
             self._compare()
         elif r.get("t") == "imu":
             host = int(r["host_ns"])
+            self.last_rx = host if self.last_rx is None else max(self.last_rx, host)
             self.clock["ns"] = host
             self.src.push(host, r.get("s", "a"), r.get("dev_us"), r.get("dom"), (r["x"], r["y"], r["z"]),
                           ts_ms=r.get("ts_ms"))
@@ -187,6 +197,7 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
     digest = hashlib.sha256()  # the bytes parsed are the bytes hashed (Codex 7r-1 round 1 P3: one read)
     last_t = None
     malformed_at = None
+    deferred: ReplayRefused | None = None
     header = slam_header = end = None
     anchor = None
     lidar, imu = [], []
@@ -203,6 +214,8 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
             digest.update(raw)
             line_at = offset
             offset += len(raw)
+            if deferred is not None or malformed_at is not None:
+                continue  # hashed to the end: a refusal found in the rows is reported after the hash (round 2 P3)
             try:
                 r = json.loads(raw)
             except ValueError:
@@ -212,59 +225,64 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                 continue
             t = r.get("t") if isinstance(r, dict) else None
             last_t = t
-            if header is None:
-                if t != "header" or r.get("schema") != SCHEMA:
-                    raise ReplayRefused("record_schema", f"first row is not an {SCHEMA} header")
-                header = r
-                cfg = _imu_cfg_from_header(header.get("imu"))
-                imu_ver = _ImuVerifier(cfg if cfg is not None else imu_cfg) if (cfg or imu_cfg) else None
-                counts["imu_config_recorded"] = int(cfg is not None)
-                continue
-            if t == "slam_header":
-                slam_header = r
-            elif t == "end":
-                end = r
-            elif t == "state":
-                if anchor is None and _finite(r.get("delay_bound_s")):
-                    anchor = int(r["host_ns"])
-            elif t == "scan_event":
-                ns = int(r["host_ns"])
-                lidar.append((ns, line_at))
-                kind = r.get("kind")
-                if kind in ("receive_gap", "socket_error"):
-                    feed.new_generation(kind)  # where the observe tool opened it (verification, plan 2)
-            elif t == "scan":
-                ns = int(r["host_recv_ns"])
-                lidar.append((ns, line_at))
-                last_ns = ns if last_ns is None else max(last_ns, ns)
-                data = base64.b64decode(r["frame"])
-                scan, why = feed.judge(data, ns)
-                if why != r.get("verdict"):
-                    raise ReplayRefused("replay_mismatch", f"scan at offset {line_at}: {why} != {r.get('verdict')}")
-                if scan is None:
+            try:
+                if header is None:
+                    if t != "header" or r.get("schema") != SCHEMA:
+                        raise ReplayRefused("record_schema", f"first row is not an {SCHEMA} header")
+                    header = r
+                    cfg = _imu_cfg_from_header(header.get("imu"))
+                    imu_ver = _ImuVerifier(cfg if cfg is not None else imu_cfg) if (cfg or imu_cfg) else None
+                    counts["imu_config_recorded"] = int(cfg is not None)
                     continue
-                counts["scans_accepted"] += 1
-                if scan.meta.get("synthetic"):
-                    synthetic_frame = True
-                fb, lb = scan.meta.get("first_beam_mono_ns"), scan.meta.get("last_beam_mono_ns")
-                if fb is not None and lb is not None and not (fb <= lb <= scan.recv_mono_ns <= ns):
-                    raise ReplayRefused("record_clock_order", f"scan at offset {line_at}")
-                layer, _lw = to_layer_scan(scan, lidar_cfg, 0)
-                s_in, _sw = from_feed(scan, lidar_cfg)
-                if layer is not None and s_in is not None and s_in.measured:
-                    operating.append((ns, (scan.feed_gen, scan.producer_gen)))
-            elif t in ("imu", "imu_gen"):
-                if t == "imu" or str(r.get("why") or "").startswith("lost:"):
+                if t == "slam_header":
+                    slam_header = r
+                elif t == "end":
+                    end = r
+                elif t == "state":
+                    if anchor is None and _finite(r.get("delay_bound_s")):
+                        anchor = int(r["host_ns"])
+                elif t == "scan_event":
                     ns = int(r["host_ns"])
-                    imu.append((ns, line_at))
+                    lidar.append((ns, line_at, zlib.crc32(raw)))
+                    kind = r.get("kind")
+                    if kind in ("receive_gap", "socket_error"):
+                        feed.new_generation(kind)  # where the observe tool opened it (verification, plan 2)
+                elif t == "scan":
+                    ns = int(r["host_recv_ns"])
+                    lidar.append((ns, line_at, zlib.crc32(raw)))
                     last_ns = ns if last_ns is None else max(last_ns, ns)
-                imu_rows += t == "imu"
-                if imu_ver is not None:
-                    imu_ver.row(r)
+                    data = base64.b64decode(r["frame"])
+                    scan, why = feed.judge(data, ns)
+                    if why != r.get("verdict"):
+                        raise ReplayRefused("replay_mismatch", f"scan at offset {line_at}: {why} != {r.get('verdict')}")
+                    if scan is None:
+                        continue
+                    counts["scans_accepted"] += 1
+                    if scan.meta.get("synthetic"):
+                        synthetic_frame = True
+                    fb, lb = scan.meta.get("first_beam_mono_ns"), scan.meta.get("last_beam_mono_ns")
+                    if fb is not None and lb is not None and not (fb <= lb <= scan.recv_mono_ns <= ns):
+                        raise ReplayRefused("record_clock_order", f"scan at offset {line_at}")
+                    layer, _lw = to_layer_scan(scan, lidar_cfg, 0)
+                    s_in, _sw = from_feed(scan, lidar_cfg)
+                    if layer is not None and s_in is not None and s_in.measured:
+                        operating.append((ns, (scan.feed_gen, scan.producer_gen)))
+                elif t in ("imu", "imu_gen"):
+                    if t == "imu" or str(r.get("why") or "").startswith("lost:"):
+                        ns = int(r["host_ns"])
+                        imu.append((ns, line_at, zlib.crc32(raw)))
+                        last_ns = ns if last_ns is None else max(last_ns, ns)
+                    imu_rows += t == "imu"
+                    if imu_ver is not None:
+                        imu_ver.row(r)
+            except ReplayRefused as exc:
+                deferred = exc
     if digest.hexdigest() != want_sha:
         raise ReplayRefused("record_incomplete", "the .ok marker names other bytes")
     if malformed_at is not None:
         raise ReplayRefused("record_malformed", f"offset {malformed_at}")
+    if deferred is not None:
+        raise deferred
     st2 = os.stat(p)
     pin = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
     if (st2.st_dev, st2.st_ino, st2.st_size, st2.st_mtime_ns) != pin:
@@ -340,9 +358,13 @@ class StreamReader:
                             if self._next >= len(self.entries):
                                 self._t_read = math.inf
                             return
-                        ns, off = self.entries[self._next]
+                        ns, off, crc = self.entries[self._next]
                     f.seek(off)
-                    row = json.loads(f.readline())
+                    line = f.readline()
+                    if zlib.crc32(line) != crc:
+                        # the bytes verified at load are the bytes replayed (round 2 P3: a change in place is caught)
+                        raise RuntimeError(f"the record changed at offset {off}")
+                    row = json.loads(line)
                     with self._cv:
                         self._q.append((ns, row))
                         self._next += 1

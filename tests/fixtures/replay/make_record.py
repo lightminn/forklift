@@ -68,7 +68,8 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
                  imu: bool = True, imu_config_in_header: bool = True, events=(), late_scans=(),
                  imu_rewind_at_s: float | None = None, imu_lost_at_s: float | None = None,
                  imu_cfg=None, synthetic: bool = True, result: str = "ok", start_after_s: float = 0.0,
-                 restart_at_s: float | None = None, scans_until_s: float | None = None) -> dict:
+                 restart_at_s: float | None = None, scans_until_s: float | None = None,
+                 imu_lost_merged_at_s: float | None = None) -> dict:
     """``events``: ``(at_s, kind)`` scan_event rows (``receive_gap``, ``receive_resumed``, ``socket_error``);
     ``late_scans``: scan indexes whose arrival is 300 ms after their last beam; ``restart_at_s``: the adapter's
     node starts a new scan (a new start id: a new producer generation) there."""
@@ -156,23 +157,34 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
         step = int(1e9 / imu_hz)
         dev = 1_000_000
         lost_ns = None if imu_lost_at_s is None else t0_ns + int(imu_lost_at_s * 1e9)
+        # merged: the samples stop there, and the loss is queued between samples() and the generation() that first
+        # finds the receive gap -- the two boundaries become one row (two generations)
+        merged_stop = None if imu_lost_merged_at_s is None else t0_ns + int(imu_lost_merged_at_s * 1e9)
+        merged_done = False
+        last_rx = None
         rewind_ns = None if imu_rewind_at_s is None else t0_ns + int(imu_rewind_at_s * 1e9)
         sample_ns = t0_ns
         cycle = 20 * MS
         order = 2
         for now in range(t0_ns + cycle, end_ns - int(0.2e9), cycle):
-            while sample_ns <= now and (lost_ns is None or sample_ns < lost_ns):
+            while sample_ns <= now and (lost_ns is None or sample_ns < lost_ns) and \
+                    (merged_stop is None or sample_ns < merged_stop):
                 if rewind_ns is not None and abs(sample_ns - rewind_ns) < step // 2:
                     dev -= 50_000  # the device clock goes back 50 ms: a restart
                 dev += step // 1000
                 clock["ns"] = sample_ns
                 src.push(sample_ns, "a", dev, "hardware_clock", (0.0, 0.0, 9.81))
+                last_rx = sample_ns
                 sample_ns += step
             if lost_ns is not None and now - cycle < lost_ns <= now:
                 clock["ns"] = lost_ns
                 src.lost("usb_gone", at_ns=lost_ns)
             clock["ns"] = now
             src.samples(now, 64)
+            if merged_stop is not None and not merged_done and last_rx is not None \
+                    and now > last_rx + int(cfg.receive_gap_s * 1e9):
+                merged_done = True
+                src.lost("usb_gone", at_ns=now - 1 * MS)
             if not src.last_read_capped:
                 src.generation()
             for r in src.drain_rows():
