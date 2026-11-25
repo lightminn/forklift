@@ -258,15 +258,37 @@ def test_a_generation_change_in_the_same_call_follows_the_scan_offered_before_it
     assert slam.calls[-1][1] != slam.calls[last_offer - 1][1] if last_offer > 0 else True
 
 
-def test_only_the_scans_the_layer_takes_go_to_slam(good):
+class SpyReader:
+    """The reader, with the rows each call took (the per-call budget, plan 4)."""
+
+    def __init__(self, inner):
+        self.inner, self.sizes = inner, []
+
+    def take(self, upto, limit=None):
+        out = self.inner.take(upto, limit)
+        self.sizes.append(len(out))
+        return out
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+
+def test_a_call_processes_a_bounded_number_of_rows_and_slam_gets_what_the_layer_gets(good):
+    """Codex 7r-1 round 1 P2-4: after a stall, each call takes at most LIDAR_ROWS_PER_CALL raw rows and gives at most
+    SCANS_PER_CALL scans -- and SLAM is offered exactly the scans the layer gets."""
     rec = load(good[0])
     hil = 5_000_000 * MS
     slam = Slam()
-    src, _ = scan_source(rec, start_ns=hil - 10**9, slam=slam)
+    tr = SimpleNamespace(hil_plant=True, hil_boot=1)
+    spy = SpyReader(reader(rec, rec.lidar))
+    src = rs.ReplayScan(tr, rec, mk.lidar_config(), hil - 10**9, slam=slam, reader=spy)
     src.set_anchor(hil, hil)
-    got = src.scans(hil + 3 * 10**9)  # 3 s of scans in one call: only the last SCANS_PER_CALL go
+    given = []
+    for k in range(40):  # one call 3 s late, then calls 20 ms apart catch up
+        given += src.scans(hil + 3 * 10**9 + k * 20 * MS)
     offers = [c for c in slam.calls if c[0] == "offer"]
-    assert len(got) == rs.SCANS_PER_CALL == len(offers) and src.counts["cut"] > 0
+    assert max(spy.sizes) <= rs.LIDAR_ROWS_PER_CALL and src.counts["backlog_calls"] > 0
+    assert len(given) == len(offers) > rs.SCANS_PER_CALL and src.counts["cut"] > 0
 
 
 def test_a_lost_hil_check_gives_nothing_and_a_boot_change_sets_a_boundary(good):
@@ -417,4 +439,186 @@ def test_the_synthetic_writer_carries_what_the_replay_reads(good):
         if want is not None:
             assert want <= set(r), (r["t"], want - set(r))
             seen.add(r["t"])
-    assert seen == set(rr.READS) - {"scan_event"}
+    assert seen >= set(rr.READS) - {"scan_event", "imu_gen"}  # those two only when the record has them
+
+
+# --- Codex 7r-1 round 1 ------------------------------------------------------------------------------------------
+
+def test_a_bypassed_imu_takes_a_long_prefix_without_overflow_and_ends(tmp_path):
+    """P2-1: drain() puts rows in a limit at a time -- 440 prefix rows do not overflow the source -- and the end is
+    reached once everything is taken, whatever the last samples() said."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, anchor_after_s=2.2)
+    rec = load(p)
+    hil = 15_000_000 * MS
+    src, _ = imu_source(rec)
+    src.set_anchor(hil, hil)
+    src.samples(hil, 64)
+    assert src.last_read_capped  # the prefix under way
+    for now in range(hil, hil + 4 * 10**9, 20 * MS):
+        src.drain(now)
+    assert src.src.counts["overflow"] == 0 and src.src.stopped is None
+    assert loop_reads(src, hil + 4 * 10**9, hil + 5 * 10**9)  # the bypass ends: samples again
+    for now in range(hil + 5 * 10**9, hil + 50 * 10**9, 100 * MS):
+        src.drain(now)
+    assert src.eof()
+
+
+class HeldReader:
+    """A reader that has read only its first ``n`` rows (the thread behind)."""
+
+    def __init__(self, inner, n):
+        self.inner, self.n, self.taken = inner, n, 0
+
+    def check(self):
+        self.inner.check()
+
+    @property
+    def t_read(self):
+        return self.inner.entries[self.n - 1][0]
+
+    @property
+    def done(self):
+        return False
+
+    def peek_ns(self):
+        nxt = self.inner.peek_ns()
+        return nxt if self.taken < self.n else None
+
+    def take(self, upto, limit=None):
+        room = self.n - self.taken
+        out = self.inner.take(upto, room if limit is None else min(room, limit))
+        self.taken += len(out)
+        return out
+
+    def close(self):
+        self.inner.close()
+
+
+def test_a_reader_behind_opens_no_receive_gap(good):
+    """P2-2: only the first rows read -- the source's clock stays at what is in; no generation change."""
+    rec = load(good[0])
+    hil = 16_000_000 * MS
+    held = HeldReader(reader(rec, rec.imu), 5)
+    src = rs.ReplayImu(SimpleNamespace(hil_plant=True, hil_boot=1), rec, mk.imu_config(), reader=held)
+    src.set_anchor(hil, hil)
+    gens = []
+    loop_reads(src, hil, hil + 2 * 10**9, 20, gens)
+    assert set(gens) <= {1} and src.src.counts["generations"] == 0
+
+
+def test_a_read_failure_surfaces_at_the_next_call(good, tmp_path):
+    """P2-3: the file under the path is not the one verified -- the reader fails and the source raises."""
+    rec = load(good[0])
+    bad = rr.StreamReader(rec.path, rec.imu, pin=(0, 0, 0, 0))
+    bad.wait_read(2.0)
+    src = rs.ReplayImu(SimpleNamespace(hil_plant=True, hil_boot=1), rec, mk.imu_config(), reader=bad)
+    src.set_anchor(18_000_000 * MS, 18_000_000 * MS)
+    with pytest.raises(RuntimeError, match="replay read"):
+        src.samples(18_000_000 * MS + 10**9, 64)
+
+
+def test_the_boot_boundary_is_the_new_boots_first_state_and_the_anchor_starts_at_the_later_instant(good):
+    """P2-5: a scan whose first beam is 100 us before the new boot's first STATE is not given; delivery starts at
+    the later of the anchor STATE and the anchor call."""
+    rec = load(good[0])
+    hil = 19_000_000 * MS
+    tr = SimpleNamespace(hil_plant=True, hil_boot=1, hil_boot_since_ns=None)
+    src, _ = scan_source(rec, start_ns=hil - 10**9, transport=tr)
+    src.set_anchor(hil + 50 * MS, hil)  # the anchor STATE read after the call: delivery from the STATE
+    assert src.live_from_ns == hil + 50 * MS
+    drive(src, hil, hil + 2 * 10**9)
+    tr.hil_boot, tr.hil_boot_since_ns = 2, hil + 2 * 10**9 - 300 * MS  # read earlier than this call
+    after = drive(src, hil + 2 * 10**9, hil + 3 * 10**9)
+    assert src.gate.boundary_ns == hil + 2 * 10**9 - 300 * MS
+    given = [s for _n, _e, sc in after for s in sc]
+    assert all(int(round(s.first_s * 1e9)) + src.start_ns >= src.gate.boundary_ns for s in given)
+
+
+def test_a_socket_error_stamped_before_the_scan_ahead_of_it_still_ends_the_source(tmp_path):
+    """P2-6: the observe tool stamps a socket error with its call's start -- earlier than the scan written before it.
+    Its turn follows that scan, so it is live and fatal."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p)
+
+    def edit(rows):
+        k = [i for i, r in enumerate(rows) if r.get("t") == "scan"][100]
+        rows.insert(k + 1, {"t": "scan_event", "kind": "socket_error", "host_ns": rows[k]["host_recv_ns"] - 5 * MS,
+                            "error": "x", "feed_gen": 1})
+        return rows
+
+    rewrite(p, edit)
+    rec = load(p)
+    hil = 20_000_000 * MS
+    src, _ = scan_source(rec, start_ns=hil - 10**9)
+    src.set_anchor(hil, hil)
+    drive(src, hil, hil + 20 * 10**9, 50)
+    assert src.fatal == "scan_socket_error"
+
+
+def test_no_slam_generation_is_told_while_the_hil_check_is_lost(good):
+    """P2-6: a lost check gives nothing and tells SLAM nothing; the current generation is told before the next
+    offer."""
+    rec = load(good[0])
+    hil = 21_000_000 * MS
+    slam = Slam()
+    tr = SimpleNamespace(hil_plant=True, hil_boot=1)
+    src, _ = scan_source(rec, start_ns=hil - 10**9, slam=slam, transport=tr)
+    src.set_anchor(hil, hil)
+    drive(src, hil, hil + 2 * 10**9)
+    tr.hil_plant = False
+    slam.calls.clear()
+    drive(src, hil + 2 * 10**9, hil + 3 * 10**9)
+    assert slam.calls == []
+    tr.hil_plant = True
+    drive(src, hil + 3 * 10**9, hil + 4 * 10**9)
+    assert slam.calls and slam.calls[0][0] in ("gen", "offer")
+
+
+def test_a_refused_synthetic_frame_still_marks_the_record(tmp_path):
+    """P2-7: the first frame marked synthetic is refused while the feed establishes its clock; the record is still
+    synthetic."""
+    import base64
+
+    from forklift_core.sensors import scan_feed as sf
+
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, synthetic=False)
+
+    def edit(rows):
+        k = [i for i, r in enumerate(rows) if r.get("t") == "scan"][0]
+        head, ranges, inten = sf.decode_frame(base64.b64decode(rows[k]["frame"]))
+        head["synthetic"] = True
+        rows[k] = {**rows[k], "frame": base64.b64encode(sf.encode_frame(head, ranges, inten)).decode()}
+        return rows
+
+    rewrite(p, edit)
+    with pytest.raises(rr.ReplayRefused) as e:
+        load(p, allow_synthetic=False)
+    assert e.value.reason == "record_synthetic"
+
+
+def test_a_loss_then_a_gap_in_the_observe_order_verifies(tmp_path):
+    """P2-8: the device lost 150 ms after its last sample -- the loss and the receive gap are two boundaries, as the
+    observe tool's samples-then-generation order makes them."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, imu_lost_at_s=20.0)
+    rec = load(p)
+    assert rec.counts["imu_config_unrecorded"] == 0
+    gens = [json.loads(x) for x in Path(p).read_text().splitlines() if '"imu_gen"' in x]
+    assert [g["why"] for g in gens][:1] == ["lost:usb_gone"]
+
+
+@pytest.mark.parametrize("edit,reason", [
+    (lambda rows: [{**r, "host_ns": r["host_ns"] + 10 * MS} if r.get("t") == "imu_gen" else r for r in rows],
+     "replay_mismatch"),
+    (lambda rows: [{**r, "imu": {**r["imu"], "config": {}}} if r.get("t") == "header" else r for r in rows],
+     "record_imu_config"),
+])
+def test_a_moved_boundary_or_an_empty_config_is_refused(tmp_path, edit, reason):
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, imu_lost_at_s=20.0)
+    rewrite(p, edit)
+    with pytest.raises(rr.ReplayRefused) as e:
+        load(p)
+    assert e.value.reason == reason

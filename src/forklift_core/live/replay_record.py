@@ -29,13 +29,15 @@ from __future__ import annotations
 
 import base64
 import collections
+import hashlib
 import json
 import math
+import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from forklift_core.live.observe_record import SCHEMA, file_sha256, record_complete
+from forklift_core.live.observe_record import SCHEMA
 from forklift_core.live.synthetic import is_synthetic
 
 # provisional (lead 2026-11-26, re-checked on the first bench 1' record): the real bridge starts in 8-12.5 s (design
@@ -82,6 +84,7 @@ class ReplayRecord:
     synthetic: bool
     counts: collections.Counter = field(default_factory=collections.Counter)
     imu_config_recorded: bool = False
+    stat: tuple = ()  # (device, inode, size, mtime_ns) of the bytes verified: the readers refuse another file
 
 
 def _finite(v) -> bool:
@@ -89,15 +92,17 @@ def _finite(v) -> bool:
 
 
 def _imu_cfg_from_header(imu_head):
+    """The source config the record names; None when it names none (a record from before 7r); a config that is there
+    but not a whole one is refused (Codex 7r-1 round 1 P2-8: an empty one is not "unrecorded")."""
     from forklift_core.sensors.imu_source import ImuSourceConfig
 
-    raw = (imu_head or {}).get("config")
-    if not isinstance(raw, dict):
+    if not isinstance(imu_head, dict) or "config" not in imu_head:
         return None
-    try:
-        return ImuSourceConfig(**raw)
-    except TypeError:
-        return None
+    raw = imu_head["config"]
+    names = {f.name for f in ImuSourceConfig.__dataclass_fields__.values()}
+    if not isinstance(raw, dict) or set(raw) != names:
+        raise ReplayRefused("record_imu_config", "the header's imu.config is not a whole source config")
+    return ImuSourceConfig(**raw)
 
 
 class _ImuVerifier:
@@ -125,7 +130,8 @@ class _ImuVerifier:
                 imu_row = None
             else:
                 want = self.expected_gen.popleft() if self.expected_gen else None
-                if want is None or (p.get("why"), p.get("gen")) != (want.get("why"), want.get("gen")):
+                key = ("why", "gen", "host_ns")  # the boundary's time too (round 1 P2-8)
+                if want is None or any(p.get(k) != want.get(k) for k in key):
                     self._bad(("imu_gen", p.get("why"), p.get("gen"), None if want is None else want.get("why")))
 
     def row(self, r: dict) -> None:
@@ -133,13 +139,17 @@ class _ImuVerifier:
             self.expected_gen.append(r)
             why = str(r.get("why") or "")
             if why == "receive_gap" and r.get("host_ns") is not None:
-                self.clock["ns"] = int(r["host_ns"]) + 1
+                # the observe tool's cycle: samples (applying what is queued, a loss included), then generation
+                self.clock["ns"] = max(self.clock["ns"], int(r["host_ns"]) + 1)
+                self.src.samples(self.clock["ns"], 1 << 30)
                 self.src.generation()
             elif why.startswith("lost:") and r.get("host_ns") is not None:
+                # the device thread queues it; the next read or generation applies it -- not merged here with a gap
+                # the same cycle finds after it (round 1 P2-8)
                 at = int(r["host_ns"])
                 self.clock["ns"] = max(self.clock["ns"], at)
                 self.src.lost(why[len("lost:"):], at_ns=at)
-                self.src.generation()
+                self.src.samples(at, 1 << 30)
             self._compare()
         elif r.get("t") == "imu":
             host = int(r["host_ns"])
@@ -151,7 +161,8 @@ class _ImuVerifier:
 
     def finish(self, last_generation_ns) -> None:
         if last_generation_ns is not None:
-            self.clock["ns"] = int(last_generation_ns)
+            self.clock["ns"] = max(self.clock["ns"], int(last_generation_ns))
+            self.src.samples(self.clock["ns"], 1 << 30)
             self.src.generation()
         self._compare()
         if self.expected_gen:
@@ -168,8 +179,14 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
     from forklift_core.sensors.lidar_cfg import to_layer_scan
 
     p = Path(path)
-    if not record_complete(p):
-        raise ReplayRefused("record_incomplete", str(p))
+    try:
+        want_sha = Path(str(p) + ".ok").read_text(encoding="ascii").strip()
+        st = os.stat(p)
+    except OSError as exc:
+        raise ReplayRefused("record_incomplete", f"{p}: no .ok marker") from exc
+    digest = hashlib.sha256()  # the bytes parsed are the bytes hashed (Codex 7r-1 round 1 P3: one read)
+    last_t = None
+    malformed_at = None
     header = slam_header = end = None
     anchor = None
     lidar, imu = [], []
@@ -183,13 +200,18 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
     with open(p, "rb") as f:
         offset = 0
         for raw in f:
+            digest.update(raw)
             line_at = offset
             offset += len(raw)
             try:
                 r = json.loads(raw)
-            except ValueError as exc:
-                raise ReplayRefused("record_malformed", f"offset {line_at}") from exc
+            except ValueError:
+                # hashed to the end first: a changed file is "incomplete", a sealed one that does not parse "malformed"
+                malformed_at = line_at if malformed_at is None else malformed_at
+                last_t = None
+                continue
             t = r.get("t") if isinstance(r, dict) else None
+            last_t = t
             if header is None:
                 if t != "header" or r.get("schema") != SCHEMA:
                     raise ReplayRefused("record_schema", f"first row is not an {SCHEMA} header")
@@ -239,8 +261,16 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                 imu_rows += t == "imu"
                 if imu_ver is not None:
                     imu_ver.row(r)
-    if header is None or end is None:
-        raise ReplayRefused("record_incomplete", "no header or end")
+    if digest.hexdigest() != want_sha:
+        raise ReplayRefused("record_incomplete", "the .ok marker names other bytes")
+    if malformed_at is not None:
+        raise ReplayRefused("record_malformed", f"offset {malformed_at}")
+    st2 = os.stat(p)
+    pin = (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    if (st2.st_dev, st2.st_ino, st2.st_size, st2.st_mtime_ns) != pin:
+        raise ReplayRefused("record_incomplete", "the record changed while it was read")
+    if header is None or end is None or last_t != "end" or end.get("complete") is not True:
+        raise ReplayRefused("record_incomplete", "the last row is not a complete end")
     if end.get("result") != "ok":
         raise ReplayRefused("record_result", str(end.get("result")))
     if slam_header is None:
@@ -251,7 +281,8 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
         raise ReplayRefused("record_no_scans")
     if imu_required and imu_rows == 0:
         raise ReplayRefused("record_no_imu")
-    synthetic = is_synthetic(header) or synthetic_frame
+    # a frame marked synthetic counts whether or not the feed accepted it (round 1 P2-7)
+    synthetic = is_synthetic(header) or synthetic_frame or feed.synthetic_frames > 0
     if synthetic and not allow_synthetic:
         raise ReplayRefused("record_synthetic", "give --allow-synthetic (the output is then not_for_judgement)")
     if last_ns is None or (last_ns - anchor) / 1e9 < float(min_s):
@@ -269,9 +300,9 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                             f"fewer than {START_SCANS} scans of one generation for the layer and the operating SLAM "
                             f"in [{BRIDGE_STARTUP_MAX_S}, {START_WINDOW_END_S}] s past the anchor")
     counts["scans_operating"] = len(operating)
-    return ReplayRecord(path=p, sha256=file_sha256(p), header=header, slam_header=slam_header, end=end,
+    return ReplayRecord(path=p, sha256=want_sha, header=header, slam_header=slam_header, end=end,
                         anchor_ns=anchor, last_ns=last_ns, lidar=lidar, imu=imu, synthetic=synthetic, counts=counts,
-                        imu_config_recorded=bool(counts["imu_config_recorded"]))
+                        imu_config_recorded=bool(counts["imu_config_recorded"]), stat=pin)
 
 
 class StreamReader:
@@ -280,8 +311,9 @@ class StreamReader:
     time is at most ``upto_ns`` (a row never goes before the ones ahead of it in the file); ``t_read`` is the latest
     record time queued so far (infinite once the file's last row is queued); ``done`` once every row is taken."""
 
-    def __init__(self, path, entries, *, capacity: int = 512, start: bool = True) -> None:
-        self.path, self.entries, self.capacity = Path(path), list(entries), int(capacity)
+    def __init__(self, path, entries, *, capacity: int = 512, start: bool = True, pin: tuple = ()) -> None:
+        self.path, self.entries, self.capacity = Path(path), entries, int(capacity)
+        self.pin = tuple(pin)  # the verified file's identity: another file under the path is an error
         self._q: collections.deque = collections.deque()
         self._cv = threading.Condition()
         self._next = 0  # the next entry to read
@@ -296,6 +328,10 @@ class StreamReader:
     def _run(self) -> None:
         try:
             with open(self.path, "rb") as f:
+                if self.pin:
+                    st = os.fstat(f.fileno())
+                    if (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns) != self.pin:
+                        raise RuntimeError("the record is not the file that was verified")
                 while True:
                     with self._cv:
                         while not self._stop and len(self._q) >= self.capacity:
@@ -315,7 +351,14 @@ class StreamReader:
                             self._t_read = math.inf
                         self._cv.notify_all()
         except BaseException as exc:  # noqa: BLE001 -- surfaced to the source, never lost on the thread
-            self.error = exc
+            with self._cv:
+                self.error = exc
+                self._cv.notify_all()
+
+    def check(self) -> None:
+        """A read failure surfaces here, before anything else is asked (round 1 P2-3: not mistaken for a slow read)."""
+        if self.error is not None:
+            raise RuntimeError(f"replay read: {self.error}") from self.error
 
     @property
     def t_read(self) -> float:
@@ -329,8 +372,7 @@ class StreamReader:
 
     def take(self, upto_ns, limit: int | None = None) -> list:
         """``[(record ns, row)]`` in file order whose turn has come (each row's time at most ``upto_ns``)."""
-        if self.error is not None:
-            raise RuntimeError(f"replay read: {self.error}") from self.error
+        self.check()
         out = []
         with self._cv:
             while self._q and self._q[0][0] <= upto_ns and (limit is None or len(out) < limit):
@@ -351,7 +393,7 @@ class StreamReader:
                 if left <= 0 or not self._thread.is_alive():
                     return False
                 self._cv.wait(min(left, 0.05))
-            return True
+            return self.error is None
 
     def peek_ns(self):
         """The record time of the next queued row, or None (none queued yet, or the stream is done)."""

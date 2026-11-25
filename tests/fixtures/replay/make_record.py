@@ -147,31 +147,42 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
             row["verdict"] = why
             row["feed_gen"] = feed.generation
         timed.append((ns, o, row))
-    # IMU: a recording source's own rows
+    # IMU: a recording source's own rows, in the observe tool's cycle order (every 20 ms: the samples received, a
+    # loss the device thread queued, then samples() and -- when not capped -- generation()); rows in drain order
     last_gen_ns = None
     if imu:
         clock = {"ns": 0}
         src = ImuSource(cfg, operating=False, record=True, now_ns=lambda: clock["ns"])
         step = int(1e9 / imu_hz)
         dev = 1_000_000
-        for i, ns in enumerate(range(t0_ns, end_ns - int(0.2e9), step)):
-            if imu_lost_at_s is not None and ns >= t0_ns + int(imu_lost_at_s * 1e9) and src.counts["lost"] == 0:
-                clock["ns"] = ns
-                src.lost("usb_gone", at_ns=ns)
+        lost_ns = None if imu_lost_at_s is None else t0_ns + int(imu_lost_at_s * 1e9)
+        rewind_ns = None if imu_rewind_at_s is None else t0_ns + int(imu_rewind_at_s * 1e9)
+        sample_ns = t0_ns
+        cycle = 20 * MS
+        order = 2
+        for now in range(t0_ns + cycle, end_ns - int(0.2e9), cycle):
+            while sample_ns <= now and (lost_ns is None or sample_ns < lost_ns):
+                if rewind_ns is not None and abs(sample_ns - rewind_ns) < step // 2:
+                    dev -= 50_000  # the device clock goes back 50 ms: a restart
+                dev += step // 1000
+                clock["ns"] = sample_ns
+                src.push(sample_ns, "a", dev, "hardware_clock", (0.0, 0.0, 9.81))
+                sample_ns += step
+            if lost_ns is not None and now - cycle < lost_ns <= now:
+                clock["ns"] = lost_ns
+                src.lost("usb_gone", at_ns=lost_ns)
+            clock["ns"] = now
+            src.samples(now, 64)
+            if not src.last_read_capped:
                 src.generation()
-            if imu_rewind_at_s is not None and abs(ns - (t0_ns + int(imu_rewind_at_s * 1e9))) < step // 2:
-                dev -= 50_000  # the device clock goes back 50 ms: a restart
-            dev += step // 1000
-            clock["ns"] = ns
-            src.push(ns, "a", dev, "hardware_clock", (0.0, 0.0, 9.81))
-            src.samples(ns, 1 << 30)
             for r in src.drain_rows():
-                timed.append((int(r["host_ns"]) if r.get("host_ns") is not None else ns, 2, r))
-        last_gen_ns = end_ns - int(0.1e9)
+                timed.append((now, order, r))
+        last_gen_ns = end_ns - int(0.2e9)
         clock["ns"] = last_gen_ns
+        src.samples(last_gen_ns, 1 << 30)
         src.generation()
         for r in src.drain_rows():
-            timed.append((last_gen_ns, 2, r))
+            timed.append((last_gen_ns, order, r))
     timed.sort(key=lambda x: (x[0], x[1]))
     rows += [r for _ns, _o, r in timed]
     rows.append({"t": "end", "result": result, "stopped_confirmed": True, "complete": True, "record_errors": 0,

@@ -27,7 +27,13 @@ the prefix is through (at most ``limit`` rows a call) and only past the boot bou
 while due rows are still to go in, so the loop does not ask ``generation()`` over samples not yet put in; and
 ``generation()`` uses the instant the last ``samples()`` put rows in up to, not the clock now (Codex plan rounds
 8-10). ``drain(now_ns)``: the run's end check when the loop does not read the IMU (no watch, or bypassed) -- rows put in
-and judged, their output dropped (a loss or a stop still holds afterwards, rounds 5-6)."""
+and judged, their output dropped (a loss or a stop still holds afterwards, rounds 5-6).
+
+Per call each source processes a bounded number of raw rows (LiDAR ``LIDAR_ROWS_PER_CALL``, IMU the call's
+``limit``); rows left due are a backlog (``last_read_capped`` for the IMU), never a gap. A read failure surfaces at the
+next call (``reader.check``). A row's turn is the later of its own time and the rows before it in the file (a
+``socket_error`` stamped with its call's start may follow a later scan). The boot boundary is the first STATE of the
+new boot as the transport read it (``hil_boot_since_ns``)."""
 
 from __future__ import annotations
 
@@ -39,11 +45,14 @@ from dataclasses import replace
 from forklift_core.live.replay_record import StreamReader
 
 SCANS_PER_CALL = 4  # real_run.SCANS_PER_CALL
+LIDAR_ROWS_PER_CALL = 8  # raw LiDAR rows (scans and events) processed per call at most: 10 Hz scans, 50 Hz calls
 IMU_LIMIT = 64  # the loop's IMU batch (real_loop.RealLoop.IMU_BATCH)
 
 
 class _HilGate:
-    """The HIL check of every call and the boot boundary (design 1.2, 8)."""
+    """The HIL check of every call and the boot boundary (design 1.2, 8): a boot change puts the boundary at the read
+    time of the new boot's first STATE (the transport's ``hil_boot_since_ns``; the call's instant only when the
+    transport does not say), the same instant for both sources (Codex 7r-1 round 1 P2-5)."""
 
     def __init__(self, transport) -> None:
         self.transport = transport
@@ -58,7 +67,8 @@ class _HilGate:
             return False
         if tr.hil_boot != self.boot:
             self.boot = tr.hil_boot
-            self.boundary_ns = int(now_ns)
+            since = getattr(tr, "hil_boot_since_ns", None)
+            self.boundary_ns = int(since) if isinstance(since, int) else int(now_ns)
             self.counts["boot_boundaries"] += 1
         return True
 
@@ -79,12 +89,13 @@ class _Anchored:
     def __init__(self, record) -> None:
         self.record = record
         self.delta: int | None = None
-        self.live_from_ns: int | None = None  # the anchor call's now: rows due before it give nothing
+        self.live_from_ns: int | None = None  # rows whose turn comes before it give nothing
 
     def set_anchor(self, hil_anchor_ns: int, now_ns: int) -> None:
+        """Δ from the run's anchor STATE; delivery starts at the later of that STATE and the call (round 1 P2-5)."""
         if self.delta is None:
             self.delta = int(hil_anchor_ns) - int(self.record.anchor_ns)
-            self.live_from_ns = int(now_ns)
+            self.live_from_ns = max(int(now_ns), int(hil_anchor_ns))
 
 
 class ReplayScan(_Anchored):
@@ -95,7 +106,7 @@ class ReplayScan(_Anchored):
         super().__init__(record)
         self.gate = _HilGate(transport)
         self.cfg, self.start_ns, self.slam, self.sensor = lidar_cfg, int(start_ns), slam, sensor
-        self.reader = reader if reader is not None else StreamReader(record.path, record.lidar)
+        self.reader = reader if reader is not None else StreamReader(record.path, record.lidar, pin=record.stat)
         self.feed = ScanFeed()
         self.counts = collections.Counter()
         self.fatal: str | None = None
@@ -104,6 +115,7 @@ class ReplayScan(_Anchored):
         self._advanced_at: int | None = None
         self._told_gen = None  # the (feed_gen, producer_gen) last told to SLAM
         self._producer = None
+        self._turn_ns: int | None = None  # the latest turn of the rows processed (file order)
 
     # --- the loop's calls ---------------------------------------------------------------------------------------------
     def scan_source_events(self, now_ns: int) -> list:
@@ -132,6 +144,7 @@ class ReplayScan(_Anchored):
         if self._advanced_at == now:
             return
         self._advanced_at = now
+        self.reader.check()
         if self.delta is None or self.fatal is not None:
             return
         held = self.gate.check(now)
@@ -139,18 +152,23 @@ class ReplayScan(_Anchored):
         if t_read < now - self.delta:
             self.counts["read_late"] += 1  # the reader behind the replay's now (plan 4): marked apart from gaps
         upto = min(now - self.delta, t_read)
-        rows = self.reader.take(upto)
-        if not rows:
-            return
-        items = []  # ("gen", tuple) | ("scan", feed scan, layer scan or None)
+        rows = self.reader.take(upto, LIDAR_ROWS_PER_CALL)
+        nxt = self.reader.peek_ns()
+        if nxt is not None and nxt <= upto:
+            self.counts["backlog_calls"] += 1
+        items = []  # ("gen", tuple) | ("scan", moved feed scan, layer scan or None); only what goes live
         for ns, r in rows:
+            turn = ns if self._turn_ns is None else max(ns, self._turn_ns)  # file order (round 1 P2-6)
+            self._turn_ns = turn
+            live = held and turn + self.delta >= self.live_from_ns
             t = r.get("t")
             if t == "scan_event":
                 kind = r.get("kind")
                 if kind in ("receive_gap", "socket_error"):
                     self.feed.new_generation(kind)
-                    items.append(("gen", (self.feed.generation, self._producer)))
-                if not held or ns + self.delta < self.live_from_ns:
+                    if live:
+                        items.append(("gen", (self.feed.generation, self._producer)))
+                if not live:
                     self.counts["events_dropped"] += 1
                     continue
                 if kind == "receive_gap":
@@ -170,20 +188,18 @@ class ReplayScan(_Anchored):
             if scan is None:
                 continue
             self._producer = scan.producer_gen
+            if not live:
+                # judged (the feed's state goes on), nothing given, SLAM not told (round 1 P2-6)
+                self.counts["hil_check_lost" if not held else "before_anchor"] += 1
+                continue
             items.append(("gen", (scan.feed_gen, scan.producer_gen)))
             moved = _moved_scan(scan, self.delta)
-            layer = None
-            if ns + self.delta < self.live_from_ns:
-                self.counts["before_anchor"] += 1
-            elif not held:
-                self.counts["hil_check_lost"] += 1
-            else:
-                layer, lwhy = self._layer(moved)
-                if layer is None:
-                    self.counts[f"layer_{lwhy}"] += 1
-                elif not self.gate.after_boundary(int(round(layer.first_s * 1e9)) + self.start_ns):
-                    self.counts["before_boot_boundary"] += 1
-                    layer = None
+            layer, lwhy = self._layer(moved)
+            if layer is None:
+                self.counts[f"layer_{lwhy}"] += 1
+            elif not self.gate.after_boundary(int(round(layer.first_s * 1e9)) + self.start_ns):
+                self.counts["before_boot_boundary"] += 1
+                layer = None
             items.append(("scan", moved, layer))
         layered = [i for i, it in enumerate(items) if it[0] == "scan" and it[2] is not None]
         kept = set(layered[-SCANS_PER_CALL:])
@@ -218,12 +234,12 @@ class ReplayImu(_Anchored):
 
         super().__init__(record)
         self.gate = _HilGate(transport)
-        self.reader = reader if reader is not None else StreamReader(record.path, record.imu)
+        self.reader = reader if reader is not None else StreamReader(record.path, record.imu, pin=record.stat)
         self._clock = {"ns": 0}
         self.src = ImuSource(imu_cfg, operating=True, now_ns=lambda: self._clock["ns"])
         self.counts = collections.Counter()
         self.last_read_capped = False
-        self.input_ns: int | None = None  # the instant the last samples() put rows in up to
+        self.input_ns: int | None = None  # every row up to this instant is in (the clock never runs past it)
 
     def _put(self, rows) -> None:
         for ns, r in rows:
@@ -235,44 +251,53 @@ class ReplayImu(_Anchored):
             else:
                 self.src.lost(str(r.get("why"))[len("lost:"):], at_ns=at)
 
-    def _judge_and_drop(self, upto: int, why: str) -> None:
-        self._clock["ns"] = max(self._clock["ns"], upto)
-        out = self.src.samples(upto, 1 << 30)
-        self.counts[why] += len(out)
-
-    def samples(self, upto_ns: int, limit: int) -> list:
-        upto_ns = int(upto_ns)
-        self.last_read_capped = False
-        if self.delta is None:
-            return []
+    def _step(self, upto_ns: int, budget: int):
+        """Rows due up to ``upto_ns`` put in (at most ``budget``, the prefix first) and the source read up to the
+        instant every row is in. Returns (output, whether rows are left due, the prefix still running)."""
+        self.reader.check()
         t_read = self.reader.t_read
         if t_read == -math.inf:
-            self.last_read_capped = True  # nothing read yet: behind, not a gap
-            self.counts["read_late"] += 1
-            return []
+            self.counts["read_late"] += 1  # nothing read yet: behind, not a gap
+            return [], True, True
         if t_read < upto_ns - self.delta:
             self.counts["read_late"] += 1
         rec_upto = min(upto_ns - self.delta, t_read)
-        held = self.gate.check(upto_ns)
-        # the prefix (rows due before the anchor call), at most ``limit`` rows a call: judged, output dropped
         live_rec = self.live_from_ns - self.delta
-        nxt = self.reader.peek_ns()
-        if nxt is not None and nxt < live_rec:
-            rows = self.reader.take(min(rec_upto, live_rec - 1), limit)
-            self._put(rows)
-            self._judge_and_drop(self.live_from_ns - 1, "before_anchor")
-            nxt = self.reader.peek_ns()
-            if (nxt is not None and nxt < live_rec) or self.src.pending():
-                self.last_read_capped = True
-                return []
-        rows = self.reader.take(rec_upto, limit)
+        # the prefix -- rows whose turn came before the anchor call: judged, output dropped. Done only once the reader
+        # has read past it and none of it is left queued (a queue empty for a moment is not the end -- round 1 P2-2)
+        rows = self.reader.take(min(rec_upto, live_rec - 1), budget)
+        budget -= len(rows)
         self._put(rows)
-        upto_in = int(min(upto_ns, rec_upto + self.delta)) if math.isfinite(rec_upto) else upto_ns
-        self.input_ns = upto_in
-        self._clock["ns"] = max(self._clock["ns"], upto_in)
-        out = self.src.samples(upto_in, limit)
+        if rows:
+            out = self.src.samples(self._clock["ns"], 1 << 30)
+            self.counts["before_anchor"] += len(out)
         nxt = self.reader.peek_ns()
-        self.last_read_capped = bool(self.src.last_read_capped or (nxt is not None and nxt <= rec_upto))
+        prefix_left = t_read < live_rec or (nxt is not None and nxt < live_rec) or self.src.pending() > 0
+        if prefix_left:
+            return [], True, True
+        rows = self.reader.take(rec_upto, budget)
+        budget -= len(rows)
+        self._put(rows)
+        nxt = self.reader.peek_ns()
+        left = nxt is not None and nxt <= rec_upto
+        if not left:
+            # every row up to rec_upto is in: the source may be read and asked its gaps up to there, no further
+            self.input_ns = int(rec_upto + self.delta)
+            self._clock["ns"] = max(self._clock["ns"], self.input_ns)
+        upto_in = self.input_ns if self.input_ns is not None else self._clock["ns"]
+        return upto_in, left, False
+
+    def samples(self, upto_ns: int, limit: int) -> list:
+        self.last_read_capped = False
+        if self.delta is None:
+            return []
+        upto_in, left, prefix = self._step(int(upto_ns), int(limit))
+        held = self.gate.check(int(upto_ns))
+        if prefix:
+            self.last_read_capped = True
+            return []
+        out = self.src.samples(upto_in, limit)
+        self.last_read_capped = bool(left or self.src.last_read_capped)
         if not held:
             self.counts["hil_check_lost"] += len(out)
             return []
@@ -285,14 +310,21 @@ class ReplayImu(_Anchored):
             self._clock["ns"] = max(self._clock["ns"], self.input_ns)
         return self.src.generation()
 
-    def drain(self, now_ns: int) -> None:
-        """The loop does not read the IMU: due rows put in and judged, output dropped (counted)."""
+    def drain(self, now_ns: int, limit: int = IMU_LIMIT) -> None:
+        """The loop does not read the IMU: at most ``limit`` due rows put in and judged a call, output dropped and
+        counted, ``last_read_capped`` kept current (round 1 P2-1)."""
+        self.last_read_capped = False
         if self.delta is None:
             return
-        rec_upto = min(int(now_ns) - self.delta, self.reader.t_read)
-        self._put(self.reader.take(rec_upto))
-        upto = int(min(now_ns, rec_upto + self.delta)) if math.isfinite(rec_upto) else int(now_ns)
-        self._judge_and_drop(upto, "unread")
+        upto_in, left, prefix = self._step(int(now_ns), int(limit))
+        if prefix:
+            self.last_read_capped = True
+            return
+        out = self.src.samples(upto_in, 1 << 30)
+        self.counts["unread"] += len(out)
+        self.last_read_capped = bool(left)
+        if not left:
+            self.src.generation()
 
     def eof(self) -> bool:
         return self.reader.done and self.src.pending() == 0 and not self.last_read_capped
@@ -301,4 +333,4 @@ class ReplayImu(_Anchored):
         self.reader.close()
 
 
-__all__ = ["IMU_LIMIT", "ReplayImu", "ReplayScan", "SCANS_PER_CALL"]
+__all__ = ["IMU_LIMIT", "LIDAR_ROWS_PER_CALL", "ReplayImu", "ReplayScan", "SCANS_PER_CALL"]

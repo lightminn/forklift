@@ -401,6 +401,15 @@ def test_the_imu_is_recorded_with_its_verdicts_generations_and_intervals(model, 
 
     assert ImuSourceConfig(**head["config"]) == load_imu_source_config(IMU_YAML) and len(head["config_sha256"]) == 64
     _replay_reads(rows)
+    # the replay's verification pass on the observe tool's own rows, in file order (Codex 7r-1 round 1 P3)
+    from forklift_core.live.replay_record import _ImuVerifier
+
+    ver = _ImuVerifier(ImuSourceConfig(**head["config"]))
+    for r in rows:
+        if r["t"] in ("imu", "imu_gen"):
+            ver.row(r)
+    ver.finish(rows[-1]["imu"]["last_generation_ns"])
+    assert ver.mismatches == 0, ver.first_mismatch
     assert [r for r in rows if r["t"] == "imu_profile"][0]["actual"]["accel_hz"] == 200
     imu = [r for r in rows if r["t"] == "imu"]
     ok = [r for r in imu if r["verdict"] == "ok"]
