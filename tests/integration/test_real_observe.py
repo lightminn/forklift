@@ -320,3 +320,98 @@ def test_a_short_ok_write_never_publishes_a_marker(tmp_path, monkeypatch):
         ro.write_ok_marker(rec)
     assert not (tmp_path / "obs.jsonl.ok").exists()
     assert [p.name for p in tmp_path.iterdir()] == ["obs.jsonl"]  # no temporary left behind
+
+
+# --- 7b: the D435i accelerometer (PR 7 design 5) -------------------------------------------------------------------
+class FakeImuDevice:
+    """The motion module's shape (``tools/imu_record.RealSenseSource``): ``start(on_sample)`` calls back from its own
+    thread -- gyro and accel, 200 Hz, a device time that follows the host clock -- until ``stop``."""
+
+    def __init__(self, *, fail_start=False, silent=False):
+        self.fail_start, self.silent = fail_start, silent
+        self.started = self.stopped = False
+        self._halt = None
+        self._thread = None
+
+    def start(self, on_sample):
+        import threading
+
+        self.started = True
+        if self.fail_start:
+            raise RuntimeError("motion module busy")
+        self._halt = threading.Event()
+
+        def run():
+            while not self._halt.is_set():
+                if not self.silent:
+                    dev = (time.monotonic_ns() // 1000) % (1 << 32)
+                    on_sample("g", dev, 0.0, "hardware_clock", (0.0, 0.0, 0.0))
+                    on_sample("a", dev, 0.0, "hardware_clock", (0.0, -9.81, 0.0))
+                time.sleep(0.005)
+
+        self._thread = threading.Thread(target=run, daemon=True)
+        self._thread.start()
+
+    def profile_info(self):
+        return {"actual": {"gyro_hz": 200, "accel_hz": 200}, "rate_fallback": None}
+
+    def stop(self):
+        if self._halt is not None:
+            self._halt.set()
+            self._thread.join()
+        self.stopped = True
+
+
+def _imu_cli(model, tmp_path, monkeypatch, device):
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+    monkeypatch.setattr(ro, "open_raw", lambda p, baud=None, **kw: os.dup(model))
+    out = tmp_path / "obs.jsonl"
+    code = ro.main(["--device", "/dev/model", "--out", str(out), "--seconds", "1.0", "--imu"],
+                   imu_factory=lambda cfg: device)
+    return code, out
+
+
+def test_the_imu_is_recorded_with_its_verdicts_generations_and_intervals(model, tmp_path, monkeypatch, capsys):
+    dev = FakeImuDevice()
+    code, out = _imu_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 0 and res["result"] == "ok" and res["complete"] and res["stopped_confirmed"], res
+    assert dev.started and dev.stopped
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    head = rows[0]["imu"]
+    assert head["measured"] is False and head["operating"] is False and head["interval_bound_s"] == 0.03
+    assert [r for r in rows if r["t"] == "imu_profile"][0]["actual"]["accel_hz"] == 200
+    imu = [r for r in rows if r["t"] == "imu"]
+    ok = [r for r in imu if r["verdict"] == "ok"]
+    assert len(ok) > 50
+    assert all((r["lo"], r["hi"]) == (r["host_ns"] - 30_000_000, r["host_ns"]) for r in ok)
+    end = rows[-1]["imu"]
+    assert end["counts"]["accepted"] == len(ok) and end["counts"]["gyro"] >= len(ok)
+    assert all(r["kind"] == "DISARM" for r in rows if r["t"] == "written")
+
+
+def test_no_imu_device_is_refused_before_anything_is_written(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+    out = tmp_path / "obs.jsonl"
+
+    def none(cfg):
+        raise RuntimeError("no RealSense device found")
+
+    assert ro.main(["--device", "/dev/null", "--out", str(out), "--seconds", "1", "--imu"], imu_factory=none) == 2
+    assert "imu" in json.loads(capsys.readouterr().out)["why"] and not out.exists()
+
+
+def test_an_imu_that_fails_to_start_still_ends_with_a_confirmed_disarm(model, tmp_path, monkeypatch, capsys):
+    dev = FakeImuDevice(fail_start=True)
+    code, out = _imu_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_start_failed" and res["stopped_confirmed"], res
+    assert dev.stopped  # a failed start is stopped too
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert [r["error"] for r in rows if r["t"] == "imu_error"] == ["motion module busy"]
+
+
+def test_an_imu_that_sends_nothing_is_no_observed_source(model, tmp_path, monkeypatch, capsys):
+    code, _ = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(silent=True))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "no_imu", res

@@ -11,13 +11,17 @@ recorded, with nothing that can move the truck.
 - Recorded (JSONL, one row per line): the header, every STATE the host accepted with its connection, every frame
   written or refused, the link's events, and -- with ``--scan-socket`` -- every scan frame received (raw, with the
   feed's verdict, its generations and whether it could go to the obstacle layer; without the SDK first-sample time
-  (7a-2) none can, and every scan stays diagnostic). The last row is ``end``: complete only if every row was written.
+  (7a-2) none can, and every scan stays diagnostic), and -- with ``--imu`` (7b) -- every D435i accel sample (raw, with
+  ``sensors/imu_source.ImuSource``'s verdict, generation and interval under the provisional delay bound until the
+  bound is measured) and every IMU generation change. The last row is ``end``: complete only if every row was
+  written.
 
 usage: real_observe.py --device /dev/forklift-mcu --out run.jsonl --seconds 60 [--scan-socket /run/forklift-scan/scan.sock]
+       [--imu]
 (the scan socket is the one ``tools/ros2_dev.sh scan-a2m12`` sends to; the teleop bridge binds the same path, and the
 executor lock keeps the two from running together)
-exit: 0 complete and stopped (and, with --scan-socket, at least one scan accepted), 1 otherwise, 2 refused (nothing
-written to the device)."""
+exit: 0 complete and stopped (and, with --scan-socket, at least one scan accepted; with --imu, at least one accel
+sample), 1 otherwise, 2 refused (nothing written to the device)."""
 
 from __future__ import annotations
 
@@ -51,6 +55,7 @@ from forklift_core.mcu_link.messages import Mode  # noqa: E402
 from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.record_rows import state_row  # noqa: E402
+from forklift_core.sensors.imu_source import IMU_YAML, ImuSource, load_imu_source_config  # noqa: E402
 from forklift_core.sensors.lidar_cfg import LIDAR_YAML, load_lidar_config, to_layer_scan  # noqa: E402
 from forklift_core.sensors.scan_feed import RECV_BYTES, ScanFeed, bind_socket  # noqa: E402
 
@@ -62,6 +67,7 @@ SCANS_READ_PER_CYCLE = 8  # the read cost per cycle (design 3.3): 10 Hz scans, 5
 MAX_SECONDS = 3600.0
 SESSION_STAGE_S = 0.5  # each stage of the session pair is answered within this, or the pair starts again
 SCAN_GAP_NS = 350_000_000  # a scan receive gap past the layer's sensor timeout (obstacle_layer_real 0.35 s)
+IMU_READ_PER_CYCLE = 64  # the loop's IMU_BATCH: 200 Hz accel, 50 Hz cycles -- four a cycle
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 
 
@@ -162,7 +168,7 @@ class Observer:
     1024-64512 seq step after the first is acknowledged, so the STATE delay bound can be built -- ``DelayBound``), a
     DISARM each second, every STATE, write, refusal and event recorded, scans if a socket is given."""
 
-    def __init__(self, link, record: Record, *, openings=None, scan_sock=None, lidar=None,
+    def __init__(self, link, record: Record, *, openings=None, scan_sock=None, lidar=None, imu=None,
                  clock=time.monotonic_ns, rng=None) -> None:
         self.link, self.rec, self.clock = link, record, clock
         self.openings = openings
@@ -174,8 +180,9 @@ class Observer:
         self.delay = DelayBound()
         self.scan_sock, self.lidar = scan_sock, lidar
         self.feed = ScanFeed() if scan_sock is not None else None
+        self.imu = imu  # an ImuSource with record=True (7b), fed by the device's callback
         self.counts = {"states": 0, "written": 0, "refused": 0, "scans": 0, "scans_layer_ok": 0, "read_capped": 0,
-                       "scan_gaps": 0, "scan_socket_errors": 0, "sessions": 0}
+                       "scan_gaps": 0, "scan_socket_errors": 0, "sessions": 0, "imu_read_capped": 0}
         self._writes: dict[tuple[int, int], int] = {}  # (conn, seq) -> first-byte ns (DISARMs)
         self._done_ns: dict[tuple[int, int], int] = {}  # (conn, seq) -> last-byte ns: an acknowledgement is after it
         if openings is not None:
@@ -286,6 +293,18 @@ class Observer:
                 # no scan for longer than the sensor timeout, seen on the tick it happens -- not only when one comes
                 # back (Codex 7a-1 round 2 P2-4): a new generation, once per gap
                 self._open_gap(self.clock())
+        if self.imu is not None:
+            self._imu(self.clock())
+
+    def _imu(self, now: int) -> None:
+        """The accel samples received so far, through the source's verdict, generation and interval, into the record;
+        then the source's generation (a receive gap with no sample opens one here, design 5)."""
+        if len(self.imu.samples(now, IMU_READ_PER_CYCLE)) >= IMU_READ_PER_CYCLE:
+            self.counts["imu_read_capped"] += 1
+        else:
+            self.imu.generation()  # as the loop: only after a read that did not stop at its cap
+        for row in self.imu.drain_rows():
+            self.rec.put(row)
 
     def _open_gap(self, now: int) -> None:
         self._scan_gap_open = True
@@ -335,13 +354,17 @@ class Observer:
     # --- the end ---------------------------------------------------------------------------------------------
     def finish(self) -> bool:
         """The end DISARM, bound to its own (connection, seq): confirmed by a STATE on that connection stepping to
-        that seq after it was written, in a stopped mode. A reconnection while waiting asks again on the new link."""
+        that seq after it was written, in a stopped mode. A reconnection while waiting asks again on the new link.
+        It is asked only once a STATE was seen on the connection: an acknowledgement is a step from an earlier STATE,
+        so a DISARM answered by the connection's very first STATE could never be confirmed (an end straight after
+        the opening, as a failed IMU start)."""
         if not getattr(self.link, "ever_connected", False):
             return False
         end = time.monotonic() + END_CONFIRM_S
         asked: tuple[int, int] | None = None
         while time.monotonic() < end:
-            if self.link.link is not None and (asked is None or asked[0] != self._conn()):
+            seen = self._prev is not None and self._prev[0] == self._conn()
+            if self.link.link is not None and seen and (asked is None or asked[0] != self._conn()):
                 self.host.request_disarm(self.clock())
                 seq = self.host.queued_disarm_seq()
                 asked = None if seq is None else (self._conn(), seq)
@@ -367,7 +390,13 @@ class Openings:
         return ObserveTtyLink(fd, on_done=lambda seq, ns: self.on_done and self.on_done(seq, ns))
 
 
-def main(argv=None) -> int:
+def _realsense(cfg):
+    from imu_record import RealSenseSource  # the motion module opened directly (2026-11-14 design 2)
+
+    return RealSenseSource(gyro_hz=cfg.gyro_hz, accel_hz=cfg.accel_hz, global_time=False)
+
+
+def main(argv=None, *, imu_factory=_realsense) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--device", required=True)
     ap.add_argument("--out", required=True, type=Path)
@@ -376,6 +405,8 @@ def main(argv=None) -> int:
     ap.add_argument("--lidar-config", type=Path, default=LIDAR_YAML)
     ap.add_argument("--baud", type=int, choices=sorted(_BAUDS))
     ap.add_argument("--bench", help="rehearsal only: the bench's bench.json on a pty device (the model MCU)")
+    ap.add_argument("--imu", action="store_true", help="record the D435i accelerometer (PR 7 design 5, 7b)")
+    ap.add_argument("--imu-config", type=Path, default=IMU_YAML)
     args = ap.parse_args(argv)
     if not 0 < args.seconds <= MAX_SECONDS:
         print(json.dumps({"result": "refused", "why": f"--seconds must be in (0, {MAX_SECONDS:g}]"}))
@@ -383,12 +414,20 @@ def main(argv=None) -> int:
     try:
         synthetic = writer_marker(args.device, args.bench)
         lidar = load_lidar_config(args.lidar_config)
+        imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
     except (SyntheticRefused, OSError, ValueError, KeyError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
     if args.out.exists():
         print(json.dumps({"result": "refused", "why": f"{args.out} exists: every observe run gets its own record"}))
         return 2
+    imu_dev = None
+    if imu_cfg is not None:
+        try:
+            imu_dev = imu_factory(imu_cfg)  # no device, no SDK: refused before anything is opened or written
+        except (RuntimeError, ImportError, OSError) as exc:
+            print(json.dumps({"result": "refused", "why": f"imu: {exc}"}))
+            return 2
     opener = open_raw if synthetic is None else bench_opener(open_raw, synthetic["bench"])
     openings = Openings()
     link = ReconnectingLink(args.device, baud=args.baud, opener=opener, clock=time.monotonic_ns, exclusive=True,
@@ -402,8 +441,13 @@ def main(argv=None) -> int:
                  "device_id": device_identity(args.device), "synthetic": synthetic, "start_wall": time.time(),
                  "start_mono_ns": time.monotonic_ns(), "seconds": args.seconds, "scan_socket": args.scan_socket,
                  "lidar": {"path": str(args.lidar_config), "mount_measured": lidar.mount_measured,
-                           "timing_measured": lidar.timing_measured, "first_beam_err_s": lidar.first_beam_err_s}})
-        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar)
+                           "timing_measured": lidar.timing_measured, "first_beam_err_s": lidar.first_beam_err_s},
+                 "imu": None if imu_cfg is None else {
+                     "path": str(args.imu_config), "measured": imu_cfg.measured, "delay_bound_s": imu_cfg.delay_bound_s,
+                     "interval_bound_s": imu_cfg.delay_bound_s if imu_cfg.delay_bound_s is not None
+                     else imu_cfg.provisional_delay_bound_s, "operating": False}})
+        imu = None if imu_cfg is None else ImuSource(imu_cfg, operating=False, record=True)
+        obs = Observer(link, rec, openings=openings, scan_sock=scan_sock, lidar=lidar, imu=imu)
         try:
             link.open_first(obs.host, time.monotonic_ns())
         except DeviceBusy as busy:
@@ -411,13 +455,28 @@ def main(argv=None) -> int:
             print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), "result": "refused", "why": str(busy)}))
             return 2
         result = "aborted"
+        imu_started = False
         try:
-            end = time.monotonic() + args.seconds
-            while time.monotonic() < end:
-                t0 = time.monotonic()
-                obs.cycle()
-                time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
-            result = "ok"
+            imu_error = None
+            if imu_dev is not None:
+                try:
+                    imu_dev.start(imu.on_sample)  # the callback only queues (design 5)
+                except RuntimeError as exc:  # recorded; the end DISARM is still confirmed
+                    imu_error = str(exc)
+                finally:
+                    imu_started = True  # a start interrupted inside the SDK is stopped too
+            if imu_error is not None:
+                result = "imu_start_failed"
+                rec.put({"t": "imu_error", "error": imu_error, "host_ns": time.monotonic_ns()})
+            else:
+                if imu_dev is not None:
+                    rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **imu_dev.profile_info()})
+                end = time.monotonic() + args.seconds
+                while time.monotonic() < end:
+                    t0 = time.monotonic()
+                    obs.cycle()
+                    time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
+                result = "ok"
         except KeyboardInterrupt:
             result = "interrupted"
         finally:
@@ -425,6 +484,14 @@ def main(argv=None) -> int:
                 stopped = obs.finish()
             except Exception as exc:  # noqa: BLE001 -- the end row is still written
                 rec.put({"t": "finish_error", "error": f"{type(exc).__name__}: {exc}"})
+            if imu_started:
+                try:
+                    imu_dev.stop()  # its callbacks have ended when it returns; the last samples are read below
+                except Exception as exc:  # noqa: BLE001
+                    rec.put({"t": "imu_error", "error": f"stop: {exc}", "host_ns": time.monotonic_ns()})
+                    if result == "ok":
+                        result = "imu_stop_failed"
+                obs._imu(time.monotonic_ns())  # noqa: SLF001
             # every row before the end row is on disk before the end row says so; the end row's own write and sync
             # count too, and only then the sidecar <out>.ok (the record's sha256) is made -- a replay takes the
             # record only with a matching .ok, so a file that claims more than was kept is never read as complete
@@ -432,6 +499,8 @@ def main(argv=None) -> int:
             synced = _sync(f)
             if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
+            if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
+                result = "no_imu"
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
                      "complete": errors_before == 0 and synced, "record_errors": errors_before, "counts": obs.counts,
@@ -440,6 +509,8 @@ def main(argv=None) -> int:
                                                             "id_gaps": obs.feed.id_gaps,
                                                             "generation": obs.feed.generation,
                                                             "generation_why": obs.feed.generation_why},
+                     "imu": None if imu is None else {"counts": dict(imu.counts), "generation": imu.gen,
+                                                      "generation_why": imu.generation_why},
                      "end_mono_ns": time.monotonic_ns()})
             complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f)
             if link.link is not None:

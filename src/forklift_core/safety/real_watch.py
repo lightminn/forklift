@@ -253,37 +253,60 @@ def load_imu_config(path) -> ImuConfig:
     return ImuConfig(**values)
 
 
+_NO_GENERATION = object()  # no sample or generation noted yet
+
+
 class ImuWatch:
     """The tilt and the IMU's loss while armed, on distinct valid samples (design 4; the SafetyWatch tilt part counted
     a re-handed sample as continuing and took a missing time as now). Every time is host monotonic ns; the caller
-    passes the clock."""
+    passes the clock.
+
+    A sample is an acquisition interval ``[lo, hi]`` with its producer's generation (PR 7 design 5, 7b), judged at
+    its worst: freshness from ``lo``, a gap as the next ``hi`` minus the previous ``lo``, the ARMING rule for any
+    sample whose ``lo`` is not after READY, a tilt hold at its longest possible length (the run's first ``lo`` to its
+    last ``hi``). A new generation is never joined to the old one: armed, it is a lost watch (``watch_imu_gap``) even
+    when the samples are 5 ms apart; not armed, the old samples are dropped and the baseline gathers again. ``add``
+    is a point sample (``lo == hi``) with no generation -- the 5b contract, unchanged."""
 
     def __init__(self, cfg: ImuConfig) -> None:
         if not isinstance(cfg, ImuConfig):
             raise TypeError("ImuConfig expected")
         cfg.__post_init__()
         self.cfg = cfg
-        self.samples: list = []  # (ns, unit vector) of valid samples, oldest first, within window_s
-        self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0}
+        # (hi, unit vector, lo, generation, serial) of valid samples, oldest first, within window_s of the newest hi
+        self.samples: list = []
+        self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0, "bad_interval": 0,
+                       "generation": 0}
+        self._gen = _NO_GENERATION  # the generation of the samples kept (none seen yet)
+        self._serial = 0
         self._baseline = None  # the unit gravity direction frozen before the ARM
-        self._prev_ns = None  # the newest sample judged
+        self._prev = None  # the newest sample judged: (serial or None, lo, hi)
         self._arm_until = None
-        self._tilt_start = None  # the first sample of the current tilted run
+        self._tilt_start = None  # the first ``lo`` of the current tilted run
         self._trip = None
 
     def add(self, sample_ns: int, accel, now_ns: int) -> str | None:
-        """One sample from the source: None when valid, else why it was not counted."""
+        """One point sample from the source: None when valid, else why it was not counted."""
+        return self.add_interval(None, sample_ns, sample_ns, accel, now_ns)
+
+    def add_interval(self, gen, lo_ns: int, hi_ns: int, accel, now_ns: int) -> str | None:
+        """One sample taken somewhere in ``[lo_ns, hi_ns]`` by producer generation ``gen``: None when valid, else why
+        it was not counted. A new generation is noted first (``note_generation``), whatever the sample's fate."""
+        self.note_generation(gen)
         why = None
         try:
             v = tuple(float(x) for x in accel)
         except (TypeError, ValueError):
             v = ()
+        lo, hi = int(lo_ns), int(hi_ns)
         n = 0.0
         if len(v) != 3 or not all(math.isfinite(x) for x in v):
             why = "not_finite"
-        elif self.samples and int(sample_ns) <= self.samples[-1][0]:
+        elif lo > hi:
+            why = "bad_interval"
+        elif self.samples and hi <= self.samples[-1][0]:
             why = "not_newer"
-        elif int(sample_ns) > int(now_ns):
+        elif hi > int(now_ns):
             why = "future"
         else:
             n = math.sqrt(sum(x * x for x in v))
@@ -293,34 +316,49 @@ class ImuWatch:
             self.counts[why] += 1
             return why
         self.counts["valid"] += 1
-        self.samples.append((int(sample_ns), tuple(x / n for x in v)))
-        cut = int(sample_ns) - int(self.cfg.window_s * 1e9)
+        self._serial += 1
+        self.samples.append((hi, tuple(x / n for x in v), lo, gen, self._serial))
+        cut = hi - int(self.cfg.window_s * 1e9)
         while len(self.samples) > 1 and self.samples[0][0] < cut:
             self.samples.pop(0)
         return None
 
+    def note_generation(self, gen) -> None:
+        """The source's current generation, with or without a new sample (design 5: a restart is seen even when no
+        sample follows it). A change drops every kept sample; armed, it is ``watch_imu_gap`` until the disarm."""
+        if self._gen is _NO_GENERATION:
+            self._gen = gen
+            return
+        if gen == self._gen:
+            return
+        self.counts["generation"] += 1
+        self._gen = gen
+        self.samples.clear()
+        if self._baseline is not None and self._trip is None:
+            self._trip = "watch_imu_gap"  # the old generation's baseline and hold do not carry over
+
     def baseline(self, still_since_ns):
-        """``((direction, last_ns), None)`` from the valid samples taken in the current stand -- ``last_ns`` the
-        newest one used; the stand's latest gapless run --, or ``(None, reason)``: ``imu_not_still``,
-        ``imu_no_baseline``, ``imu_baseline_unsteady``."""
+        """``((direction, last_ns), None)`` from the valid samples taken in the current stand (``lo`` not before it)
+        -- ``last_ns`` the ``hi`` of the newest one used; the stand's latest gapless run --, or ``(None, reason)``:
+        ``imu_not_still``, ``imu_no_baseline``, ``imu_baseline_unsteady``, ``imu_not_level``."""
         if still_since_ns is None:
             return None, "imu_not_still"
         c = self.cfg
-        stand = [(ns, u) for ns, u in self.samples if ns >= int(still_since_ns)]
+        stand = [s for s in self.samples if s[2] >= int(still_since_ns)]
         # the latest gapless run of the stand: an earlier gap only means the run started later
         part = stand
         for k in range(len(stand) - 1, 0, -1):
-            if stand[k][0] - stand[k - 1][0] > c.gap_max_s * 1e9:
+            if stand[k][0] - stand[k - 1][2] > c.gap_max_s * 1e9:
                 part = stand[k:]
                 break
         if len(part) < c.baseline_min:
             return None, "imu_no_baseline"
-        mean = tuple(sum(u[k] for _, u in part) / len(part) for k in range(3))
+        mean = tuple(sum(s[1][k] for s in part) / len(part) for k in range(3))
         size = math.sqrt(sum(x * x for x in mean))
         if size < 0.9:
             return None, "imu_baseline_unsteady"
         d = tuple(x / size for x in mean)
-        if any(_angle_deg(u, d) > c.baseline_spread_deg for _, u in part):
+        if any(_angle_deg(s[1], d) > c.baseline_spread_deg for s in part):
             return None, "imu_baseline_unsteady"
         # the stand is on the level floor (5b round 6: an absolute check instead of the stand's own history -- a
         # pose changed while standing, behind a gap or a lost stand, is caught by where it is, not by when)
@@ -330,25 +368,28 @@ class ImuWatch:
 
     def arm(self, baseline) -> None:
         """Freeze ``(direction, last_ns)`` from ``baseline()`` before the ARM is asked (kept while armed); the
-        judgement starts at ``last_ns``: the first sample after it is measured from it (13th draft, round 2 P2-1)."""
+        judgement starts at that sample: the first one after it is measured from its ``lo`` (13th draft, round 2
+        P2-1). A ``last_ns`` no kept sample ends at counts as a point sample there."""
         direction, last_ns = baseline
         d = _unit(tuple(float(x) for x in direction))
         if d is None:
             raise ValueError("imu baseline direction")
         self._baseline, self._trip = d, None
-        self._prev_ns = int(last_ns)  # the newest sample judged (the baseline's last at first)
+        last = int(last_ns)
+        kept = next((s for s in reversed(self.samples) if s[0] == last), None)
+        self._prev = (None, last, last) if kept is None else (kept[4], kept[2], kept[0])
         self._tilt_start = None
         self._arm_until = None  # samples taken up to this instant meet the ARMING rule (None: all, still arming)
 
     def settled(self, boundary_ns: int) -> None:
-        """The ARM was answered (the permit seen READY at ``boundary_ns``): samples taken up to then meet the ARMING
-        rule, later ones the tilt hold -- by acquisition time, whichever read brings them (5b round 8 P2). The first
-        call sets it; later calls change nothing."""
+        """The ARM was answered (the permit seen READY at ``boundary_ns``): samples that may be taken up to then meet
+        the ARMING rule, later ones the tilt hold -- by acquisition time, whichever read brings them (5b round 8 P2).
+        The first call sets it; later calls change nothing."""
         if self._arm_until is None:
             self._arm_until = int(boundary_ns)
 
     def disarm(self) -> None:
-        self._baseline = self._trip = self._prev_ns = self._tilt_start = None
+        self._baseline = self._trip = self._prev = self._tilt_start = None
         self._arm_until = None
 
     @property
@@ -358,34 +399,35 @@ class ImuWatch:
     def judge(self, now_ns: int) -> str | None:
         """With a frozen baseline: ``watch_imu_stale``, ``watch_imu_gap`` or ``watch_tilt`` (each kept until the
         disarm), else None. The samples received since the last call are taken in order into an incremental state
-        (the previous sample's time, the tilt hold's start): a hold of any length is measured, whatever the window
+        (the previous sample, the tilt hold's start): a hold of any length is measured, whatever the window
         (13th draft, round 2 P1-1)."""
         if self._baseline is None:
             return None
         if self._trip is not None:
             return self._trip
         c = self.cfg
-        for ns, u in self.samples:
-            if ns <= self._prev_ns:
+        for hi, u, lo, _gen, serial in self.samples:
+            p_serial, p_lo, p_hi = self._prev
+            if (serial <= p_serial) if p_serial is not None else (hi <= p_hi):
                 continue  # judged already (or the baseline's own)
-            if ns - self._prev_ns > c.gap_max_s * 1e9:
+            if hi - p_lo > c.gap_max_s * 1e9:
                 self._trip = "watch_imu_gap"  # sparse samples cannot carry a hold: the watch is lost
                 return self._trip
-            self._prev_ns = ns
-            arming = self._arm_until is None or ns <= self._arm_until
+            self._prev = (serial, lo, hi)
+            arming = self._arm_until is None or lo <= self._arm_until
             if arming and _angle_deg(u, self._baseline) > c.baseline_spread_deg:
                 # the truck moved between the baseline and the ARM's answer -- the ARM's own first byte included
                 # (5b round 6 P2-1): the baseline no longer says where it stands
                 self._trip = "watch_imu_moved"
                 return self._trip
             if _angle_deg(u, self._baseline) > c.limit_deg:
-                self._tilt_start = ns if self._tilt_start is None else self._tilt_start
-                if ns - self._tilt_start >= c.hold_s * 1e9:
+                self._tilt_start = lo if self._tilt_start is None else self._tilt_start
+                if hi - self._tilt_start >= c.hold_s * 1e9:
                     self._trip = "watch_tilt"
                     return self._trip
             else:
                 self._tilt_start = None
-        if int(now_ns) - self._prev_ns > c.max_age_s * 1e9:
+        if int(now_ns) - self._prev[1] > c.max_age_s * 1e9:
             self._trip = "watch_imu_stale"
         return self._trip
 

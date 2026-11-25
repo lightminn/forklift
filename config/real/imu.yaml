@@ -1,0 +1,24 @@
+# The real D435i accelerometer as the IMU watch's source (docs/design/2026-11-25-real-sources-pr7.md 5, 7b).
+# Read by sensors/imu_source.py and the observe run's --imu. Every timing value is provisional until bench item 2
+# measures the transport delay: measured: false keeps the source diagnostic (no operating source can be built).
+schema: imu_source/1
+stream:
+  # the motion module is opened directly (2026-11-14 design 2) with both streams; the watch reads accel only. Not
+  # every device offers 200 Hz accel: the profile actually opened is recorded
+  accel_hz: 200
+  gyro_hz: 200
+timing:
+  # a sample was taken in [host receipt - delay_bound_s, host receipt]: null until bench item 2 measures it. An
+  # armed watch needs delay_bound_s + one accel period <= safety_watch imu.gap_max_s (0.05 s): the next sample's end
+  # minus the previous one's start is its gap -- so at 200 Hz the bound must be at most 45 ms (checked on load)
+  delay_bound_s: null
+  measured: false
+  provisional_delay_bound_s: 0.03  # observe-run diagnostics only: the intervals recorded until the bound is measured
+generation:
+  # a new producer generation (never joined to the old one by the watch, design 5) on: a device time going back
+  # more than restart_back_us (a sensor restart), device and host steps differing by more than the delay bound (the
+  # bound broken, or a restart the unwrap cannot see), no accel sample received for receive_gap_s, a queue overflow,
+  # the device lost. A 32-bit device time wrap (~4,295 s) is a forward step: the interval comes from the host clock
+  restart_back_us: 20000   # 8 gyro periods, as sensors/imu_record.py
+  receive_gap_s: 0.1
+queue_max: 400             # 2 s at 200 Hz waiting for the loop: more drops the oldest and opens a generation

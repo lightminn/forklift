@@ -175,6 +175,27 @@ NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale
 LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
 
 
+def _imu_int(v):
+    return None if isinstance(v, bool) or not isinstance(v, numbers.Integral) else int(v)
+
+
+def _imu_item(item):
+    """``(gen, lo, hi, accel)`` from a source's sample -- ``(stamp, accel)`` is the point ``lo == hi`` with no
+    generation --, or ``hi`` None when its times are not integers or it has neither shape (PR 7 design 5)."""
+    try:
+        if len(item) == 2:
+            stamp, accel = item
+            t = _imu_int(stamp)
+            return None, t, t, accel
+        gen, lo, hi, accel = item
+    except (TypeError, ValueError):
+        return None, None, None, None
+    lo, hi = _imu_int(lo), _imu_int(hi)
+    if lo is None or hi is None or (gen is not None and _imu_int(gen) is None):
+        return None, None, None, None
+    return gen, lo, hi, accel
+
+
 class RealLoop:
     def __init__(self, *, core, session: RealSession, permit, port, host, link, channels, transport, params,
                  odometry, kinematics, max_speed_mps: float, start_ns: int, slam_source, evidence: ra.Evidence,
@@ -1426,7 +1447,12 @@ class RealLoop:
     def _pull_imu(self, upto_ns: int | None = None) -> int:
         """The source's samples taken up to ``upto_ns`` (the clock read just before, by default) into the IMU watch,
         in acquisition order (design 4: later ones stay in the source for the next read); a failing source gives
-        none this time (the watch's stale and gap judgements take it). Returns the instant used."""
+        none this time (the watch's stale and gap judgements take it). Returns the instant used.
+
+        A sample is ``(stamp, accel)`` (a point, no generation: the 5b contract) or ``(gen, lo, hi, accel)`` (PR 7
+        design 5: an acquisition interval and its producer generation). A source with ``generation()`` is asked for
+        its current generation after a read that did not stop at its cap, so a restart reaches the watch with no new
+        sample (design 5, Codex round 5 P2); after a capped read the older samples still waiting come first."""
         upto = int(self.clock()) if upto_ns is None else int(upto_ns)
         self.imu_backlog = False
         try:
@@ -1437,18 +1463,21 @@ class RealLoop:
         self.imu_backlog = len(batch) >= self.IMU_BATCH
         good = []
         for item in batch:
-            try:
-                stamp, accel = item
-            except (TypeError, ValueError):
-                stamp, accel = None, None
-            if isinstance(stamp, bool) or not isinstance(stamp, numbers.Integral):
+            gen, lo, hi, accel = _imu_item(item)
+            if hi is None:
                 # host ns are integers: anything else is that sample's fault only, kept at full precision otherwise
                 # (design 4; 5b rounds 4-5 P2)
                 self.imu_watch.counts["not_finite"] += 1
                 continue
-            good.append((int(stamp), accel))
-        for sample_ns, accel in sorted(good, key=lambda b: b[0]):
-            self.imu_watch.add(sample_ns, accel, upto)
+            good.append((gen, lo, hi, accel))
+        for gen, lo, hi, accel in sorted(good, key=lambda b: b[2]):
+            self.imu_watch.add_interval(gen, lo, hi, accel, upto)
+        current = getattr(self.imu_source, "generation", None)
+        if current is not None and not self.imu_backlog:
+            try:
+                self.imu_watch.note_generation(current())
+            except Exception:  # noqa: BLE001 -- unknown generation: the samples' own generations still count
+                pass
         return upto
 
     def _imu_arm_gate(self, now_ns: int, mission_id, *, not_still: bool = False):
