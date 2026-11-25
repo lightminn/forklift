@@ -337,6 +337,8 @@ class Observer:
         self.feed.new_generation("receive_gap")
         self.rec.put({"t": "scan_event", "kind": "receive_gap", "since_ns": int(self._last_scan_ns),
                       "host_ns": int(now), "feed_gen": self.feed.generation})
+        if self.slam is not None:
+            self.slam.on_feed_generation(self.feed.generation)  # before its replies are read (7a-3a)
 
     def _scans(self, now: int) -> None:
         for _k in range(SCANS_READ_PER_CYCLE):
@@ -349,6 +351,8 @@ class Observer:
                 self.feed.new_generation("socket_error")
                 self.rec.put({"t": "scan_event", "kind": "socket_error", "error": str(exc), "host_ns": int(now),
                               "feed_gen": self.feed.generation})
+                if self.slam is not None:
+                    self.slam.on_feed_generation(self.feed.generation)
                 return
             if not data:
                 break
@@ -468,6 +472,13 @@ def _xml_error():
     return ParseError
 
 
+def _timing_header(lidar) -> dict:
+    """The bound and what it rests on, as configured (7a-3): whether a frame used it is that frame's own verdict."""
+    return {"first_beam_err_s": lidar.first_beam_err_s, "timing_basis": lidar.timing_basis,
+            "timing_decision": lidar.timing_decision, "timing_doc": lidar.timing_doc,
+            "applies_to": dict(lidar.applies_to) or None}
+
+
 def _slam_parts(args, lidar) -> dict:
     """What the SLAM path needs, read before anything is opened (a bad file refuses the run): the bundle's grid and
     map id, the registered start (base_link), the vehicle's odometry and the laser in base_link."""
@@ -522,7 +533,8 @@ def _slam_start(args, parts, rec, lidar):
         sock.settimeout(5.0)
         sock.connect(str(args.slam))
         start_ns = time.monotonic_ns()
-        src = RealSlamSource(RealSlamLink(sock), map_id=parts["bundle"].map_id, start_ns=start_ns,
+        # diagnostic (7a-3 plan 3): the observe run records the SLAM path, it never hands a reply over as evidence
+        src = RealSlamSource(RealSlamLink(sock), mode="diagnostic", map_id=parts["bundle"].map_id, start_ns=start_ns,
                              start_pose=parts["start_pose"], odom_history=None, odom_base=None, odom_gen=None,
                              boot=None, rear_offset_m=parts["rear_offset_m"], session_epoch=0)
     except BaseException:
@@ -531,7 +543,9 @@ def _slam_start(args, parts, rec, lidar):
     rec.put({"t": "slam_header", "socket": str(args.slam), "bundle": str(args.slam_bundle),
              "map_id": parts["bundle"].map_id, "start_pose": list(parts["start_pose"]),
              "rear_offset_m": parts["rear_offset_m"], "base_laser": list(parts["base_laser"]), "start_ns": start_ns,
-             "diagnostic": not (lidar.timing_measured and lidar.mount_measured and lidar.first_beam_err_s is not None)})
+             # the mode only; which frames had an interval is per frame (the end's frames_measured /
+             # frames_diagnostic, 7a-3 plan 3, Codex P3)
+             "mode": "diagnostic", "timing": _timing_header(lidar)})
     return ObserveSlam(src, rec.put, odometry=RealOdometry(parts["vehicle"], max_gap_s=0.2), params=parts["params"],
                        rear_offset_m=parts["rear_offset_m"], start_ns=start_ns, grid=parts["bundle"].grid,
                        base_laser=parts["base_laser"], lidar=lidar, state_delay_s=parts["state_delay_s"],
@@ -593,7 +607,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                  "device_id": device_identity(args.device), "synthetic": synthetic, "start_wall": time.time(),
                  "start_mono_ns": time.monotonic_ns(), "seconds": args.seconds, "scan_socket": args.scan_socket,
                  "lidar": {"path": str(args.lidar_config), "mount_measured": lidar.mount_measured,
-                           "timing_measured": lidar.timing_measured, "first_beam_err_s": lidar.first_beam_err_s},
+                           **_timing_header(lidar)},
                  "imu": None if imu_cfg is None else {
                      "path": str(args.imu_config), "measured": imu_cfg.measured, "delay_bound_s": imu_cfg.delay_bound_s,
                      "interval_bound_s": imu_cfg.delay_bound_s if imu_cfg.delay_bound_s is not None

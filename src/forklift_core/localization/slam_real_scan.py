@@ -4,9 +4,10 @@
 - ``SlamScanIn``: an accepted scan as the SLAM path sees it: the first-beam estimate (host monotonic ns, the order
   time) and, when the timing is measured, the first-beam interval ``[Flo, Fhi]``; without a measured interval the scan
   is diagnostic (``measured`` False, ``Flo = Fhi`` = the estimate).
-- ``from_feed``: a ``scan_feed.RealScan`` with ``lidar.yaml``'s timing (the 7a rule of ``to_layer_scan``: the SDK's
-  first sample +- the measured bound; before 7a-3 there is no bound, so every real scan is diagnostic). ``from_layer``:
-  a layer scan (the HIL's synthetic LiDAR, whose cast instant is exact).
+- ``from_feed``: a ``scan_feed.RealScan`` with ``lidar.yaml``'s timing: the SDK's first sample +- the bound when
+  ``lidar_cfg.frame_bound`` allows it for this frame -- the layer's own judgement (7a-3 plan 3), and a measured mount;
+  until a bound is written every real scan is diagnostic. ``from_layer``: a layer scan (the HIL's synthetic LiDAR,
+  whose cast instant is exact).
 - ``pick_odom``: the odometry over the interval -- the whole of ``[Flo, Fhi]`` covered by a continuous, included
   history (an entry ending at or before ``Flo`` and one starting at or after ``Fhi``, every entry between continuous
   and included), the pose interpolated at the estimate between entry interval midpoints (the loop's ``place_scan``
@@ -44,25 +45,30 @@ class SlamScanIn:
     self_hit: np.ndarray  # beams the truck's own body hides
     range_min: float
     range_max: float
+    diagnostic_why: str | None = None  # why the scan has no interval (frame_bound's reason, or "mount_unmeasured")
 
 
 def from_feed(scan, cfg) -> tuple[SlamScanIn | None, str | None]:
     """A ``scan_feed.RealScan`` -> ``(SlamScanIn, None)`` or ``(None, why)``: ``no_acquisition_time`` without the SDK's
-    first sample; with no measured bound (``first_beam_err_s`` null or ``timing.measured`` false) or no measured mount
-    the scan is diagnostic (design 6.1, 0-1)."""
-    from forklift_core.sensors.lidar_cfg import self_hit_mask
+    first sample; without a bound ``lidar_cfg.frame_bound`` allows for this frame, or without a measured mount, the
+    scan is diagnostic (design 6.1, 0-1; 7a-3 plan 3), its reason in ``diagnostic_why``."""
+    from forklift_core.sensors.lidar_cfg import frame_bound, self_hit_mask
 
     first = scan.meta.get("first_beam_mono_ns")
     if not isinstance(first, int) or isinstance(first, bool):
         return None, "no_acquisition_time"
-    measured = cfg.first_beam_err_s is not None and cfg.timing_measured and cfg.mount_measured
-    err = int(round(cfg.first_beam_err_s * 1e9)) if measured else 0
+    bound, why = frame_bound(scan, cfg)
+    if why is None and not cfg.mount_measured:
+        why = "mount_unmeasured"
+    measured = why is None
+    err = int(round(bound * 1e9)) if measured else 0
     return SlamScanIn(
         key=(int(scan.feed_gen), scan.producer_gen, int(scan.scan_id)), gen=(int(scan.feed_gen), scan.producer_gen),
         stamp_ns=int(first), flo_ns=int(first) - err,
         fhi_ns=int(first) + err, measured=bool(measured), angles=np.asarray(scan.angles, dtype=float),
         ranges=np.asarray(scan.ranges, dtype=float), self_hit=self_hit_mask(scan.angles, cfg.mask_rad),
-        range_min=float(scan.meta.get("range_min", 0.0)), range_max=float(scan.meta.get("range_max", math.inf))), None
+        range_min=float(scan.meta.get("range_min", 0.0)), range_max=float(scan.meta.get("range_max", math.inf)),
+        diagnostic_why=why), None
 
 
 def from_layer(scan, start_ns: int, *, key=None, gen=("layer",), range_min: float = 0.0,

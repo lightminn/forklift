@@ -35,6 +35,18 @@ The link (6.1, 2):
   the seventh start reply, a ``skipped`` from a localized instance, a reply that is not the scan in flight's or carries
   a non-finite correction.
 
+The mode (7a-3 plan 3), chosen at construction: ``operating`` sends only scans with a first-beam interval (the
+per-frame judgement ``lidar_cfg.frame_bound``, or the HIL's exact cast) and counts only those in a start check;
+``diagnostic`` sends every scan and hands no reply over, even of a scan with an interval. A session changes mode only
+by starting again (a new instance).
+
+A producer generation change (``generation``, told for every feed scan before it is judged -- plan 3, Codex round 3
+P2-3) cuts what waits and makes the scan in flight's reply only free the slot; it also voids a check in progress
+(round 4 P2-3): during the session's first start check, once a scan of the earlier generation went into it, the
+session ends (``start_check_generation_changed``: the bridge takes no second hello on its one connection, round 5);
+a seed in progress is cancelled (``generation_changed``: cancel, void). Only a check begun on the new generation's
+scans can then open the confirmation.
+
 The replies (6.1, 0 and 4): only a localized instance's replies of measured scans reach the loop, each with the order
 stamp ``stamp_s`` (core seconds of the first-beam estimate), the evidence interval ``evidence_lo_s`` /
 ``evidence_hi_s``, the epoch it was acquired in (the current one only if its ``Flo`` is at or after the epoch's start
@@ -68,6 +80,7 @@ ODOM_RETRY_NS = 20_000_000  # one tick: a scan whose odometry is not in yet is t
 SEED_STILL_M = 0.01  # a seed's snapshot -> any odometry pose since beyond this is a move (provisional)
 SEED_STILL_RAD = math.radians(1.0)
 START_SCANS = 7  # a start check's scans (the bridge's STARTUP_SCANS)
+MODES = ("diagnostic", "operating")
 MAX_FRAME = 1 << 20  # the largest frame accepted from the bridge
 READ_BYTES = 1 << 18  # read per poll at most (the rest next poll)
 READ_FRAMES = 64  # frames taken per poll at most
@@ -193,10 +206,15 @@ class RealSlamSource:
     """See the module text. ``odom_history()``: the loop's odometry history (core seconds); ``odom_base()``: the
     odometry base_link pose now; ``odom_gen()``: the loop's odometry continuity generation (raised at every break,
     reboot and device loss; a break clears the history, so the history alone cannot show it); ``boot()``: the MCU boot now; ``start_pose``: map <- base_link of the
-    registered start (the session's first instance)."""
+    registered start (the session's first instance); ``mode``: ``diagnostic`` or ``operating`` (no default: each caller
+    names it, 7a-3 plan 3)."""
 
-    def __init__(self, link: RealSlamLink, *, map_id: str, start_ns: int, start_pose, odom_history, odom_base, odom_gen,
-                 boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns, events=None) -> None:
+    def __init__(self, link: RealSlamLink, *, mode: str, map_id: str, start_ns: int, start_pose, odom_history,
+                 odom_base, odom_gen, boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns,
+                 events=None) -> None:
+        if mode not in MODES:
+            raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
+        self.mode = mode
         self.link, self.map_id, self.start_ns = link, str(map_id), int(start_ns)
         self.start_pose = tuple(float(v) for v in start_pose)
         self.odom_history, self.odom_base, self.odom_gen, self.boot = odom_history, odom_base, odom_gen, boot
@@ -329,6 +347,7 @@ class RealSlamSource:
         if f is not None and self.link.retract("scan"):
             # not one byte of it went: never sent at all (7c-1c round 2 P2-1), and not one of a start check's seven
             self._inflight = None
+            self._last_stamp_ns = f["prev_stamp_ns"]
             t = self.target
             if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
                 t["start_scans"] -= 1
@@ -341,20 +360,55 @@ class RealSlamSource:
             self._requests.append([int(epoch), attempt, float(not_before), int(self.clock()) + int(REQUEST_S * 1e9)])
 
     # --- the scan path -----------------------------------------------------------------------------------------------
+    def generation(self, gen) -> None:
+        """A feed scan's producer generation, told before the scan is judged (an unqualified scan still changes it)."""
+        gen = tuple(gen)
+        if self._gen is not None and gen != self._gen:
+            self._gen = gen
+            self._generation_changed(gen)
+        self._gen = gen
+
+    def _generation_changed(self, gen: tuple) -> None:
+        now = int(self.clock())
+        self._event(t="generation_changed", gen=[None if g is None else int(g) if isinstance(g, int) else str(g)
+                                                 for g in gen])
+        # what waits is cut, the scan in flight's reply only frees the slot
+        for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
+            if w is not None:
+                self._drop("slam_generation_cut", key=w["key"] if isinstance(w, dict) else w.key)
+        self._waiting, self._odom_wait = None, None
+        t = self.target
+        f = self._inflight
+        if f is not None and self.link.retract("scan"):
+            # not one byte of it went: never sent, and not one of a start check's seven (Codex 7a-3a round 1 P3-1);
+            # nor the newest stamp sent (round 2 P3)
+            self._inflight = None
+            self._last_stamp_ns = f["prev_stamp_ns"]
+            if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
+                t["start_scans"] -= 1
+            self._drop("slam_generation_cut", key=f["key"])
+            self._reinstate(f["attempt"], now)  # a forced request it carried goes on, as with an old reply
+        elif f is not None:
+            f["old_gen"] = True
+        if t is None or t["cancel"] is not None or not self._seeding():
+            return  # after a check's end state: only what waits and the reply in flight (as before)
+        if t["kind"] == "start":
+            if t["start_scans"] > 0:
+                # the bridge's start check has scans of the earlier generation and no second hello on this connection
+                # (round 5): the session ends, never confirmed on them
+                t["state"] = "generation_changed"
+                self._fatal("start_check_generation_changed")
+            return  # no scan of the earlier generation went into it: its seven come from the new one
+        self._decide_cancel(t, "generation_changed", now)
+
     def offer(self, s: srs.SlamScanIn) -> None:
         now = int(self.clock())
         self._all_deadlines(now)  # an expired deadline is never lifted by what an offer does (rounds 4-5)
         self._watch_seed(now)  # before any write retry: a seed not one byte of which went is taken back (round 2 P2-1)
-        gen = tuple(s.gen)
-        if self._gen is not None and gen != self._gen:
-            # a new producer generation: what waits is cut, the scan in flight's reply only frees the slot
-            for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
-                if w is not None:
-                    self._drop("slam_generation_cut", key=w["key"] if isinstance(w, dict) else w.key)
-            self._waiting, self._odom_wait = None, None
-            if self._inflight is not None:
-                self._inflight["old_gen"] = True
-        self._gen = gen
+        self.generation(s.gen)
+        if self.mode == "operating" and not s.measured:
+            self.counts["slam_not_qualified"] += 1  # counted, no event: a pre-bound real feed sends 10 a second
+            return
         if self._odom_wait is not None and s.stamp_ns <= self._odom_wait["scan"].stamp_ns:
             return self._drop("slam_stamp_order", key=s.key)  # the fresher scan keeps its retry (round 3 P2-4)
         if self._odom_wait is not None:
@@ -445,14 +499,15 @@ class RealSlamSource:
         self._all_deadlines(int(self.clock()))  # right before its first byte: never a start scan past 20 s (P2-2)
         self._waiting = None
         attempt = None
-        if t["state"] == "ready" and w["measured"] and w["epoch"] == self.epoch:
+        if t["state"] == "ready" and w["measured"] and self.mode == "operating" and w["epoch"] == self.epoch:
             for req in list(self._requests):
                 if req[0] == self.epoch and self._s(w["flo_ns"]) >= req[2] and now <= req[3]:
                     self._requests.remove(req)
                     attempt = req
                     break
+        f = {**w, "target": t["id"], "phase": t["state"], "attempt": attempt, "sent_ns": None, "old_gen": False,
+             "prev_stamp_ns": self._last_stamp_ns}  # restored if not one byte of it goes (round 2 P3)
         self._last_stamp_ns = w["stamp_ns"]
-        f = {**w, "target": t["id"], "phase": t["state"], "attempt": attempt, "sent_ns": None, "old_gen": False}
         self._inflight = f
         if t["state"] == "scans":
             t["start_scans"] += 1
@@ -592,7 +647,7 @@ class RealSlamSource:
             why = "cancelled"
         elif f["phase"] != "ready":
             why = "start_check"
-        elif not f["measured"]:
+        elif not f["measured"] or self.mode == "diagnostic":
             why = "diagnostic"
         elif received - f["flo_ns"] > LATE_S * 1e9:
             why = "late"
@@ -701,6 +756,7 @@ class RealSlamSource:
         f = self._inflight
         if f is not None and f["target"] == t["id"] and self.link.retract("scan"):
             self._inflight = None  # not one byte of it went: the cancel goes first (round 3 P2-3)
+            self._last_stamp_ns = f["prev_stamp_ns"]
             self._drop("slam_cancel_cut", key=f["key"])
         t["cancel"] = {"reason": why, "decided_ns": int(now), "writing": False, "sent_ns": None}
         for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
@@ -710,4 +766,4 @@ class RealSlamSource:
         self._pump(now)
 
 
-__all__ = ["RealSlamLink", "RealSlamSource", "SlamSourceFatal"]
+__all__ = ["MODES", "RealSlamLink", "RealSlamSource", "SlamSourceFatal"]

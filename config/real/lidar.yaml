@@ -1,6 +1,7 @@
 # The real A2M12's one source for its mount, self mask and timing bounds (PR 7 design 4, 7a-1).
 # Read by the observe run's scan conversion and by the teleop bridge when --lidar-mount / --lidar-mask are not given.
-# Every value is provisional until measured (S7): measured: false keeps it out of operating use.
+# Every value is provisional until measured (S7): mount.measured: false and timing.basis: null keep it out of
+# operating use.
 mount:
   xyz: [0.0, 0.0, 0.0]     # rear-axle frame, metres -- placeholder
   yaw_deg: 0.0
@@ -14,8 +15,15 @@ timing:
   # error bound at both ends -- the real run's layer takes its first-beam budget from here (wired with 7r). If the
   # bench's bound makes a rotation wider, this and the stop model's budget are raised together, documented
   scan_period_s: 0.12
-  # the SDK sample time's error bound: null until 7a-3 (required before S10) -- the SDK's decoder reads its clock
-  # after the receive queue, so the bound needs the receive thread's arrival times; until then every scan is
-  # diagnostic only
+  # the SDK sample time's error bound (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md): null until the bench.
+  # It applies only to frames stamped at the receive thread's byte arrival (patch 0002) whose source facts equal
+  # applies_to (forklift_core.sensors.lidar_cfg.frame_bound); every other frame is diagnostic only.
   first_beam_err_s: null
-  measured: false
+  # what the bound rests on: null (no bound), measured, or engineering -- an engineering bound is the lead's
+  # exception decision with its assumptions written down (decision_id, basis_doc); it is never written as measured
+  basis: null
+  decision_id: null
+  basis_doc: null
+  # with a basis: exactly image_id (docker image ID), usb (udev vendor:product:serial), host, ans_type,
+  # sample_period_us, baudrate (the node's scan_sdk_info) -- the source the bound was taken on
+  applies_to: null

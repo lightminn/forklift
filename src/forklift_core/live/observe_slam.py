@@ -12,6 +12,8 @@ it is sent and its reply recorded, never treated as evidence. Recorded through `
 - on each reply, the match quality: the fraction of its measured endpoints on the survey's walls (L4's own
   ``slam_map.endpoint_fraction``), a diagnostic value nothing stops on (agy 7);
 - ``slam_scan``: a feed scan the SLAM path could not take (``from_feed``'s reason);
+- per frame, whether it had a first-beam interval (``lidar_cfg.frame_bound``, 7a-3): the summary's
+  ``frames_measured`` / ``frames_diagnostic`` and ``diagnostic_<why>`` counts -- the header names the mode only;
 - ``slam_fatal``: the source's end (the run goes on recording the board; its result says so).
 """
 
@@ -41,6 +43,7 @@ class ObserveSlam:
         self.boot = None
         self._prev = None
         self._last = None  # (connection, boot) of the last STATE
+        self._producer = None  # the producer generation of the last feed scan
         self._events = 0
         self.fatal: str | None = None
         self.counts: Counter = Counter()
@@ -95,8 +98,22 @@ class ObserveSlam:
             return
         self._guard(lambda: self._on_scan(scan))
 
+    def on_feed_generation(self, feed_gen: int) -> None:
+        """The feed opened a generation of its own (a receive gap, a socket error): told to the source at once, before
+        the bridge's next frames are read -- a late ready of the earlier generation never confirms (Codex 7a-3a round
+        1 P2-1). The producer stays the last one seen; its next scan then carries the same generation."""
+        if self.fatal is None:
+            self._guard(lambda: self.src.generation((int(feed_gen), self._producer)))
+
     def _on_scan(self, scan) -> None:
+        self._producer = scan.producer_gen
+        # the generation first, whatever the frame's verdict (7a-3 plan 3, Codex round 3 P2-3)
+        self.src.generation((int(scan.feed_gen), scan.producer_gen))
         s, why = from_feed(scan, self.lidar)
+        if s is not None:
+            self.counts["frames_measured" if s.measured else "frames_diagnostic"] += 1
+            if not s.measured:
+                self.counts[f"diagnostic_{s.diagnostic_why}"] += 1
         if s is None:
             self.counts[f"scan_{why}"] += 1
             self.put({"t": "slam_scan", "scan_id": int(scan.scan_id), "feed_gen": int(scan.feed_gen), "why": why})
