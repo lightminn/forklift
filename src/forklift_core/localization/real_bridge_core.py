@@ -30,7 +30,6 @@ Rules (design 6.1, 2):
 
 from __future__ import annotations
 
-
 from forklift_core.localization import slam_link, slam_map
 from forklift_core.localization import slam_real_link as rl
 from forklift_core.localization.slam_pose import compose, invert

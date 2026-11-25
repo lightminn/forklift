@@ -26,9 +26,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
+from slam_instance_premise import free_at, raycast  # noqa: E402
+
 from forklift_core.localization import slam_link, slam_map  # noqa: E402
 from forklift_core.localization import slam_real_link as rl  # noqa: E402
-from slam_instance_premise import free_at, raycast  # noqa: E402
 
 A = (-1.7529200315475464, 0.0, 0.0)  # random_m registry start
 

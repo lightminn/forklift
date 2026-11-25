@@ -45,8 +45,9 @@ from tf2_msgs.msg import TFMessage
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tools"))
-from forklift_core.localization import slam_map  # noqa: E402
 from slam_localization_params import localization_params  # noqa: E402
+
+from forklift_core.localization import slam_map  # noqa: E402
 
 MAPPING_PARAMS = ROOT / "ros2/src/forklift_bringup/config/slam_toolbox_isaac_online.yaml"
 BEAMS, RANGE_MAX = 360, 12.0
