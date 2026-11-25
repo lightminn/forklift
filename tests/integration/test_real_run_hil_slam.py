@@ -124,7 +124,7 @@ def test_a_declaration_on_the_real_source_waits_its_seed_survives_a_stop_and_cap
         # the second declaration completes on its own seed's ready
         r = c.ask("relocalize_declare", generation=gen)
         assert r["t"] == "ack", r
-        s = c.wait(lambda s: s["relocalize"]["state"] != "waiting", 30)
+        s = c.wait(lambda s: s["relocalize"]["attempt"] == r["attempt"] and s["relocalize"]["state"] != "waiting", 30)
         assert s["relocalize"]["state"] == "declared", s["relocalize"]
         assert s["relocalize_generation"] is None and "relocalize" in s["bypassed"] and s["manual_only"] is None
         _mission(c)
