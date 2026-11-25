@@ -153,3 +153,19 @@ def test_errors_past_frames_in_one_interval_is_invalid_even_when_the_sums_balanc
 def test_frames_faster_than_the_contract_allows_is_invalid():
     res = kth_check(run([(50, 50, 0, 0, 40, 40)] * 30), configured=CONF, image="x")  # 50 frames in 10 ms
     assert res["result"] == "invalid" and "rise" in res["why"]
+
+
+def test_an_absent_axis_needs_no_variant_and_gets_no_verdict():
+    """Partial-parts bench (2026-11-25): one KTH fitted; the other axis's counters are not read at all -- even a
+    contradiction on them leaves the fitted axis judged."""
+    steps = [(10, 0, 0, 5, 9, 7)] * 200  # H: errors without frames, which would be invalid if read
+    res = kth_check(run(steps), configured={"M": "g704_bytes"}, image="x", absent=("H",))
+    assert res["result"] == "ok" and res["absent"] == ["H"]
+    assert res["axes"]["M"]["verdict"] == "configured_ok"
+    assert res["axes"]["H"] == {"absent": True, "verdict": None, "why": "no KTH fitted on this axis"}
+    with pytest.raises(ValueError):  # a variant for the absent axis is not the fitted set
+        kth_check(run(steps), configured=CONF, image="x", absent=("H",))
+    with pytest.raises(ValueError):
+        kth_check(run(steps), configured={}, image="x", absent=("M", "H"))
+    with pytest.raises(ValueError):
+        kth_check(run(steps), configured={"M": "g704_bytes"}, image="x", absent=("L",))

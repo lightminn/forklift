@@ -368,8 +368,9 @@ def test_the_kth_subcommand_reads_a_record(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["axes"]["M"]["verdict"] == "configured_ok" and out["axes"]["H"]["verdict"] == "undecided"
     assert out["configured"] == {"M": "g704_bytes", "H": "reflected_msb_first"} and out["image"] == "fw@1234abcd"
-    with pytest.raises(SystemExit):
-        bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"])
+    # a fitted axis without its variant: refused (partial-parts plan v4 made the variants per fitted axis)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"]) == 2
+    assert "--configured-h is required" in json.loads(capsys.readouterr().out)["why"]
 
 
 @pytest.mark.parametrize("drop, value", [("kth_crc_errors", None), ("kth_frames", [1]), ("kth_alt_crc_errors", [0, 70000]),
@@ -603,3 +604,73 @@ def test_a_failing_early_cleanup_keeps_the_measured_result(monkeypatch, exc_type
     res = bringup.execute(a, b)
     assert res["metrics"]["measured_sign"] == "pos" and "cleanup_error" in res and res["observed"] == "unknown"
     assert res["result"] == "aborted" and calls["n"] == 2  # and the final cleanup still ran
+
+
+def _kth_record(tmp_path, header):
+    import dataclasses
+    import json
+
+    from forklift_core.plant.bringup import Sample
+
+    rec = tmp_path / "run.jsonl"
+    rows = [header] if header else []
+    for k in range(201):  # M moving and fitted; H's counters say nothing (no KTH)
+        st = dataclasses.replace(state(), mcu_time_us=1_000_000 + k * 10_000, kth_frames=(10 * k, 0),
+                                 kth_crc_errors=(0, 0), kth_alt_crc_errors=(9 * k, 0))
+        rows.append(bringup.state_row(Sample(k * 10_000_000, st)))
+    rec.write_text("\n".join(json.dumps(r, default=str) for r in rows))
+    return rec
+
+
+def test_kth_with_an_absent_axis(tmp_path, capsys):
+    """Partial-parts plan v4: one KTH on the bench. The header's parts name the absent axis (lift = H); the flag must
+    agree with a declaring header; an absent axis needs no variant and has a null verdict."""
+    import json
+
+    hdr = {"t": "header", "cmd": "record", "device": "/dev/forklift-mcu", "parts_absent": ["lift"]}
+    rec = _kth_record(tmp_path, hdr)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "fw@x"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["axes"]["M"]["verdict"] == "configured_ok" and out["axes"]["H"]["verdict"] is None
+    assert out["absent"] == ["H"] and out["parts_absent"] == ["lift"] and not out.get("not_for_gate")
+    assert out["configured"] == {"M": "g704_bytes"}
+    # the variant for an absent axis, or a flag the header does not declare: refused
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--configured-h",
+                         "g704_bytes", "--image", "x"]) == 2
+    assert "absent axis H" in json.loads(capsys.readouterr().out)["why"]
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+    assert "disagrees" in json.loads(capsys.readouterr().out)["why"]
+    # steering absent: no gate evidence -- refused, then read with --allow-bypassed (fitted verdict moved to computed)
+    rec = _kth_record(tmp_path, {**hdr, "parts_absent": ["steer"]})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--image", "x"]) == 2
+    assert "parts were absent" in json.loads(capsys.readouterr().out)["why"]
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--image", "x",
+                         "--allow-bypassed"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["axes"]["M"] == {"absent": True, "verdict": None, "why": "no KTH fitted on this axis"}
+    assert out["axes"]["H"]["verdict"] is None and out["axes"]["H"]["computed"] == "undecided"
+    # a record from before the field: the flag is taken; both axes absent is refused
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record", "device": "/dev/forklift-mcu"})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--axis-absent", "H",
+                         "--image", "x"]) == 0
+    assert json.loads(capsys.readouterr().out)["axes"]["H"]["verdict"] is None
+    assert bringup.main(["kth", "--record", str(rec), "--axis-absent", "H", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+
+
+def test_a_partial_or_bypassed_commission_result_proposes_no_duty_sign():
+    """Partial-parts plan v4: steer or wheels absent, like a bypass, empties the sign verdict and the proposal; lift
+    absent alone is marked and still judged."""
+    verdict = {"duty_sign_ok": True, "sensor_sign_ok": True, "suggested_duty_sign": -1, "note": None}
+    res = {"verdict": dict(verdict), "metrics": {"valid": True}}
+    bringup._mark_commission_result(res, (), False, None, ("wheels",))
+    assert res["not_for_gate"] and res["parts_absent"] == ["wheels"]
+    assert res["verdict"]["suggested_duty_sign"] is None and res["verdict"]["duty_sign_ok"] is None
+    assert res["metrics"]["valid"] is None
+    res = {"verdict": dict(verdict)}
+    bringup._mark_commission_result(res, ("enc_stuck",), False, None)
+    assert res["verdict"]["suggested_duty_sign"] is None
+    res = {"verdict": dict(verdict)}
+    bringup._mark_commission_result(res, (), False, None, ("lift",))
+    assert res == {"verdict": verdict, "parts_absent": ["lift"]}

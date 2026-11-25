@@ -26,7 +26,7 @@ usage:
                       the phrase retyped on a terminal; design 2026-11-25-bench-commission-limits 1.2)
   bringup.py commission --device D --out run.jsonl --axis L|R --duty X --scenario limit_disarm|hold_disarm
                       [--limit-s 2.0] [--disarm-delay-ms 50] --power-switch-in-hand [external ...]
-  bringup.py kth      --record run.jsonl --configured-m V --configured-h V --image ID
+  bringup.py kth      --record run.jsonl --configured-m V --configured-h V --image ID [--axis-absent M|H]
                       (S2: the KTH CRC variant from the v3 counters; record while moving each axis through its range)
   bringup.py clock    --record run.jsonl
                       (G7: MCU time -> host monotonic time per host boot and MCU boot, the delay envelope fit and its
@@ -267,6 +267,44 @@ class Bench:
     @property
     def state(self) -> McuState | None:
         return self.samples[-1].state if self.samples else None
+
+
+CLEAR_ACCEPT_S = 2.0  # the CLEAR_FAULTS's seq echoed in last_rx_seq (the firmware leaves it on a refusal)
+CLEAR_READY_S = 3.0  # then the driver re-initialisation: DISARMED with DRIVERS_READY
+
+
+def _latch_view(st: McuState) -> dict:
+    return {"mode": st.mode.name, "reject_reason": st.reject_reason.name,
+            "fault_flags": [f.name for f in FaultFlag if f in st.fault_flags],
+            "drivers_ready": bool(st.flags & StateFlag.DRIVERS_READY)}
+
+
+def clear_faults(bench: Bench) -> dict:
+    """One CLEAR_FAULTS, only in FAULT or ESTOP (partial-parts plan 2026-11-25), after an echoed DISARM. Cleared means
+    the firmware took it (``last_rx_seq`` moved from the DISARM's seq to its own) and came back DISARMED with
+    DRIVERS_READY; nothing is armed after it. A refusal (sensor invalid, e-stop, boot) leaves the seq unechoed and is
+    reported with the reject reason."""
+    if not bench.run_until(lambda: bench.state is not None, 3.0):
+        return {"result": "no_state"}
+    before = _latch_view(bench.state)
+    if bench.state.mode not in (Mode.FAULT, Mode.ESTOP):
+        return {"result": "refused", "why": "not_latched", "before": before}
+    # a DISARM first, echoed: the STATE's last_rx_seq is then this session's, so the CLEAR_FAULTS's own seq echoed
+    # is its acceptance -- never a boot's 0 or an older run's seq that happens to match (a refusal leaves it unechoed)
+    bench.host.request_disarm(time.monotonic_ns())
+    dseq = bench.host.queued_disarm_seq()
+    if not bench.run_until(lambda: bench.state.last_rx_seq == dseq, CLEAR_ACCEPT_S):
+        return {"result": "no_echo", "why": "the DISARM before the clear was not echoed", "before": before}
+    blocked = bench.host.request_clear_faults(time.monotonic_ns())
+    if blocked is not None:
+        return {"result": "refused", "why": blocked.reason, "before": before}
+    seq = bench.host.last_queued_seq
+    if not bench.run_until(lambda: bench.state.last_rx_seq == seq, CLEAR_ACCEPT_S):
+        return {"result": "not_accepted", "seq": seq, "before": before, "after": _latch_view(bench.state)}
+    ready = bench.run_until(lambda: bench.state.mode == Mode.DISARMED
+                            and bool(bench.state.flags & StateFlag.DRIVERS_READY), CLEAR_READY_S)
+    return {"result": "cleared" if ready else "not_ready", "seq": seq, "before": before,
+            "after": _latch_view(bench.state)}
 
 
 KTH_FIELDS = ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors")
@@ -1283,10 +1321,33 @@ def _marker_reader(bench: Bench, fd: int | None = None):
     return marker_reader(lambda label, now: bench.emit({"t": "marker", "host_ns": now, "label": label}), fd).poll
 
 
+_PART_AXIS = {"steer": "M", "lift": "H"}
+
+
+def _kth_absent(rows: list[dict], args) -> list[str]:
+    """kth's absent axes: the record headers' declared parts (steer = M, lift = H) with --axis-absent; a flag a
+    declaring header does not name is refused, and every fitted axis needs its configured variant."""
+    headers = [r for r in rows if r.get("t") == "header"]
+    declared = {_PART_AXIS[p] for p in judgement.record_marks(rows).get("parts_absent", []) if p in _PART_AXIS}
+    flags = set(args.axis_absent)
+    if any(isinstance(h.get("parts_absent"), list) for h in headers) and flags - declared:
+        raise ValueError(f"--axis-absent {sorted(flags - declared)[0]} disagrees with the record header's "
+                         f"parts_absent (axes {sorted(declared)})")
+    absent = sorted(declared | flags)
+    if len(absent) == 2:
+        raise ValueError("both KTH axes absent: nothing to check")
+    for ax, v in (("M", args.configured_m), ("H", args.configured_h)):
+        if ax in absent and v is not None:
+            raise ValueError(f"--configured-{ax.lower()} given for absent axis {ax}")
+        if ax not in absent and v is None:
+            raise ValueError(f"--configured-{ax.lower()} is required (axis {ax} is fitted)")
+    return absent
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
-    for name in ("record", "cpr", "step", "scenario"):
+    for name in ("record", "cpr", "step", "scenario", "clear-faults"):
         p = sub.add_parser(name)
         p.add_argument("--device", required=True)
         p.add_argument("--baud", type=int, choices=sorted(_BAUDS))
@@ -1320,6 +1381,15 @@ def main(argv=None) -> int:
     cm.add_argument("--allow-locked", action="store_true")
     cm.add_argument("--yes", action="store_true")
     cm.add_argument("--bench", help="as for record: the rehearsal bench's bench.json on a pty device")
+    cf = sub.choices["clear-faults"]
+    cf.help = "clear a FAULT/ESTOP latch once its cause is fixed (partial-parts plan 2026-11-25); never arms"
+    cf.add_argument("--cause", required=True,
+                    help="what latched and what was done about it (kept in the header), e.g. 'H KTH unplugged'")
+    for p in (*(sub.choices[n] for n in ("record", "cpr", "step", "scenario", "clear-faults")), cm):
+        p.add_argument("--absent", action="append", default=[], choices=judgement.PARTS,
+                       help="a part not fitted on this bench (repeatable): written into the run's header, which "
+                            "first boot and kth read; steer or wheels absent makes the run no gate evidence "
+                            "(partial-parts plan 2026-11-25)")
     cm.add_argument("--axis", choices=tuple(AXES), required=True)
     cm.add_argument("--duty", type=float, required=True)
     cm.add_argument("--seconds", type=float)
@@ -1343,8 +1413,12 @@ def main(argv=None) -> int:
     kt.add_argument("--record", required=True)
     kt.add_argument("--allow-synthetic", action="store_true", help="read a rehearsal record (output not_for_judgement)")
     for ax in ("m", "h"):
-        kt.add_argument(f"--configured-{ax}", required=True, choices=KTH_VARIANTS,
-                        help=f"the CRC variant axis {ax.upper()} is configured with in the image under test")
+        kt.add_argument(f"--configured-{ax}", choices=KTH_VARIANTS,
+                        help=f"the CRC variant axis {ax.upper()} is configured with in the image under test "
+                             f"(required unless the axis is absent)")
+    kt.add_argument("--axis-absent", action="append", default=[], choices=("M", "H"),
+                    help="no KTH fitted on this axis: its counters are not read, its verdict is null; a record header "
+                         "that declares its parts must name it (steer = M, lift = H)")
     kt.add_argument("--image", required=True, help="the firmware image under test (its identity string or hash)")
     ck = sub.add_parser("clock", help="G7: the MCU-to-host clock fit of a record (teleop record design 5)")
     ck.add_argument("--record", required=True)
@@ -1383,21 +1457,28 @@ def main(argv=None) -> int:
         marks = {**marks, **jmarks}
     if args.cmd == "kth":
         rows = rows_
+        try:
+            kabsent = _kth_absent(rows, args)
+        except ValueError as exc:
+            print(json.dumps({"result": "refused", "why": str(exc)}))
+            return 2
+        configured = {ax: v for ax, v in (("M", args.configured_m), ("H", args.configured_h)) if ax not in kabsent}
         states = [r for r in rows if r.get("t") == "state"]
         bad = next((why for r in states if (why := kth_row_problem(r)) is not None), None)
         if bad is not None:  # never the dataclass defaults (Codex v3 impl P2-2: a missing error count read as zeros)
-            print(json.dumps({**marks, "result": "invalid", "why": bad,
-                              "configured": {"M": args.configured_m, "H": args.configured_h}, "image": args.image}))
+            print(json.dumps({**marks, "result": "invalid", "why": bad, "configured": configured,
+                              "image": args.image, **({"absent": kabsent} if kabsent else {})}))
             return 0 if judgement.eligible(jmarks) else 1  # an ineligible record never exits as judged (Codex P3)
         samples = [sample_from_row(r) for r in states]
         # synthetic_input is the synthetic marks' only (a large run's high_limit does not make a record synthetic)
-        out = kth_check(samples, configured={"M": args.configured_m, "H": args.configured_h}, image=args.image,
-                        synthetic_input=bool(marks.get("synthetic_inputs")))
+        out = kth_check(samples, configured=configured, image=args.image,
+                        synthetic_input=bool(marks.get("synthetic_inputs")), absent=kabsent)
         if not judgement.eligible(jmarks):
             # read with --allow-bypassed: the counts stay, no verdict is official (S2 reads configured_ok and the CRC
             # change reads other_variant from these fields)
             for entry in out.get("axes", {}).values():
-                entry["computed"], entry["verdict"] = entry["verdict"], None
+                if not entry.get("absent"):
+                    entry["computed"], entry["verdict"] = entry["verdict"], None
             print(json.dumps({**marks, **out}))
             return 1
         print(json.dumps({**marks, **out}))
@@ -1446,6 +1527,7 @@ def main(argv=None) -> int:
                               "device": args.device, "device_id": device_identity(args.device),
                               # the run's kind, which analyze matches a tool-issued event against (design 1.3)
                               **({"kind": args.kind, "floor": args.floor} if args.cmd == "scenario" else {}),
+                              **({"cause": args.cause} if args.cmd == "clear-faults" else {}),
                               "synthetic": synthetic, "start_wall": time.time(),
                               # design 2026-11-25 1.2: the run's asked bypass and large-run arguments in its header
                               **({"bypass": getattr(args, "bypass", None),
@@ -1456,6 +1538,9 @@ def main(argv=None) -> int:
                                   "large": _header_large(args), "scenario": getattr(args, "scenario", None)}
                                  if args.cmd == "commission" else {}),
                               "start_mono_ns": time.monotonic_ns(),
+                              # partial-parts plan 2026-11-25: always written, so a reader can tell "none absent"
+                              # from a record made before the field
+                              "parts_absent": sorted(set(args.absent)),
                               **({} if markers is None else {"markers": markers})}) + "\n")
         out.flush()
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission")
@@ -1468,6 +1553,11 @@ def main(argv=None) -> int:
                                     (args.dir_left, args.dir_right), motor_counts_confirmed=args.motor_counts_confirmed)
                     print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **asdict(res)}))
                 return 0
+            if args.cmd == "clear-faults":
+                result = clear_faults(bench)
+                bench.emit({"t": "result", **result})
+                print(json.dumps({**(OUTPUT_MARKS if synthetic else {}), **result}, default=str))
+                return 0 if result["result"] == "cleared" else 1
             result = execute(args, bench)
         except DeviceBusy as busy:
             # one executor per MCU device (real safety wiring design 8.1): held at the first opening, nothing written
@@ -1593,14 +1683,19 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
     return ask, profile, names
 
 
-def _mark_commission_result(result: dict, names: tuple, large: bool, product: str | None = None) -> None:
+def _mark_commission_result(result: dict, names: tuple, large: bool, product: str | None = None,
+                            absent: tuple = ()) -> None:
     """Design 2026-11-25 1.2 (PR-2b): a commissioning result with a bypassed protection, or armed on a known
     diagnostic image (Codex PR-2b P2-5), is not evidence for a gate -- marked, its official pass fields (the S3 sign
     verdict, metrics.valid, external passes) left empty; a large run is marked but judged."""
     if large:
         result["high_limit"] = True
     diag = judgement.diagnostic_image(product)
-    if not names and not diag:
+    absent = tuple(sorted(set(absent)))
+    if absent:
+        result["parts_absent"] = list(absent)
+    gate_absent = any(p not in judgement.GATE_NEUTRAL_ABSENT for p in absent)
+    if not names and not diag and not gate_absent:
         return
     result["not_for_gate"] = True
     if names:
@@ -1608,7 +1703,9 @@ def _mark_commission_result(result: dict, names: tuple, large: bool, product: st
     if diag:
         result["diagnostic_image"] = product
     if isinstance(result.get("verdict"), dict):
-        result["verdict"] = {**result["verdict"], "duty_sign_ok": None, "sensor_sign_ok": None}
+        # no duty_sign proposal either (partial-parts plan v4): a bypassed or partial run never rewrites the build's
+        result["verdict"] = {**result["verdict"], "duty_sign_ok": None, "sensor_sign_ok": None,
+                             "suggested_duty_sign": None}
     if isinstance(result.get("metrics"), dict):
         result["metrics"] = {**result["metrics"], "valid": None}
     if isinstance(result.get("external"), dict):
@@ -1780,7 +1877,7 @@ def execute(args, bench: Bench) -> dict:
         # abort's too (Codex PR-2b P3)
         for k, v in conditions.items():
             result.setdefault(k, v)
-        _mark_commission_result(result, names, session.large, session.preflight_product)
+        _mark_commission_result(result, names, session.large, session.preflight_product, tuple(args.absent))
     result["record_errors"] = bench.record_errors
     bench.emit({"t": "result", **result})
     return result

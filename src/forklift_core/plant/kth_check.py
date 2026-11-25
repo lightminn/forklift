@@ -32,16 +32,24 @@ def _axis_ok(state, ax: str) -> bool:
     return math.isfinite(value) and not (state.fault_flags & _AXIS_BAD[ax])
 
 
-def kth_check(samples: Sequence, *, configured: dict, image: str, synthetic_input: bool = False) -> dict:
-    """``samples``: the record's STATEs in receipt order. ``configured``: each axis's variant in the image under
-    test; ``image``: that image's identity -- both carried into the result so the verdict names what it judged."""
-    if set(configured) != set(AXES) or any(v not in VARIANTS for v in configured.values()):
-        raise ValueError(f"configured: a variant for each of {AXES}, one of {VARIANTS}")
+def kth_check(samples: Sequence, *, configured: dict, image: str, synthetic_input: bool = False,
+              absent: Sequence[str] = ()) -> dict:
+    """``samples``: the record's STATEs in receipt order. ``configured``: each fitted axis's variant in the image under
+    test; ``image``: that image's identity -- both carried into the result so the verdict names what it judged.
+    ``absent``: axes with no KTH fitted (partial-parts bench, 2026-11-25): they need no variant, their counters are not
+    read and their verdict is None."""
+    absent = tuple(sorted(set(absent)))
+    if any(ax not in AXES for ax in absent) or len(absent) == len(AXES):
+        raise ValueError(f"absent: at most one of {AXES}")
+    fitted = tuple(ax for ax in AXES if ax not in absent)
+    if set(configured) != set(fitted) or any(v not in VARIANTS for v in configured.values()):
+        raise ValueError(f"configured: a variant for each of {fitted}, one of {VARIANTS}")
     if not isinstance(image, str) or not image.strip():
         raise ValueError("image: the firmware image under test")
     base = {"configured": dict(configured), "image": image, "gap_max_s": GAP_MAX_S,
             "thresholds": {"frames": MIN_FRAMES, "distinguishing": MIN_DISTINGUISHING},
-            "note": "alt counts show frames that tell the variants apart, not range coverage (S2 observes that)"}
+            "note": "alt counts show frames that tell the variants apart, not range coverage (S2 observes that)",
+            **({"absent": list(absent)} if absent else {})}
     if len(samples) < 2:
         return {**base, "result": "invalid", "why": "fewer than two STATEs"}
     # a HIL plant, or a record the reader already knows is synthetic (its header, arrival-day rehearsal D2: a
@@ -61,6 +69,8 @@ def kth_check(samples: Sequence, *, configured: dict, image: str, synthetic_inpu
         # a wrap the gap hid; errors past frames inside one interval is a contradiction the sums would balance away
         rise_max = math.ceil(dt * RATE_MAX_HZ) + 1  # one cycle of slack at either end
         for i, ax in enumerate(AXES):
+            if ax in absent:
+                continue
             df = kth_counter_delta(sb.kth_frames[i], sa.kth_frames[i])
             de = kth_counter_delta(sb.kth_crc_errors[i], sa.kth_crc_errors[i])
             da = kth_counter_delta(sb.kth_alt_crc_errors[i], sa.kth_alt_crc_errors[i])
@@ -73,13 +83,13 @@ def kth_check(samples: Sequence, *, configured: dict, image: str, synthetic_inpu
             sums[ax][0] += df
             sums[ax][1] += de
             sums[ax][2] += da
-    for ax in AXES:
+    for ax in fitted:
         frames, errors, alt = sums[ax]
         if errors > frames or alt > frames:
             return {**base, "result": "invalid", "why": f"axis {ax}: more errors than frames (restore failed)"}
     last = samples[-1].state
-    axes = {}
-    for ax in AXES:
+    axes = {ax: {"absent": True, "verdict": None, "why": "no KTH fitted on this axis"} for ax in absent}
+    for ax in fitted:
         frames, errors, alt = sums[ax]
         if frames < MIN_FRAMES:
             verdict, why = "undecided", f"fewer than {MIN_FRAMES} frames"

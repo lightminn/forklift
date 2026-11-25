@@ -126,3 +126,13 @@ def test_a_hil_or_synthetic_record_is_never_a_pass():
     hil = record(flags=StateFlag.DRIVERS_READY | StateFlag.HIL_PLANT)
     assert first_boot_check(hil)["result"] == "synthetic"
     assert first_boot_check(record(), synthetic_input=True)["result"] == "synthetic"
+
+
+def test_steer_absent_excuses_only_the_steering_axis():
+    """Partial-parts bench (2026-11-25): one KTH on the lift, none on the steering."""
+    nan_steer = record(steering_rad=float("nan"), fault_flags=FaultFlag.STEER_SENSOR_INVALID)
+    assert failed(first_boot_check(nan_steer)) == ["faults", "kth"]
+    res = first_boot_check(nan_steer, steer_absent=True)
+    assert res["result"] == "pass" and res["steer_absent"] is True and set(res["checks"]["kth"]["frames"]) >= {"H"}
+    nan_lift = record(lift_m=float("nan"), fault_flags=FaultFlag.LIFT_SENSOR_INVALID)
+    assert first_boot_check(nan_lift, steer_absent=True)["result"] == "fail"

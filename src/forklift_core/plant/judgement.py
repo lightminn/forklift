@@ -9,12 +9,20 @@ with the encoder fitted is such a run.
 fields may be filled. Judgement entry points refuse an ineligible record unless asked (``--allow-bypassed``), and
 with that they keep the marks and leave every official pass field empty -- a field procedure reads only ``pass``.
 
+A bench with parts missing (2026-11-25 partial-parts plan): ``bringup record --absent steer|lift|wheels`` writes
+``parts_absent`` into every run's header when it captures. A missing steering KTH or wheel encoders make the run no
+evidence for a gate (``not_for_gate``); a missing lift KTH alone does not -- the lift method is undecided (plan 3.5)
+and first boot already judges without it (``--lift-absent``).
+
 The teleop bridge's records (``m_entry``, the M summary) carry no commissioning run and are not read here.
 """
 
 from __future__ import annotations
 
 from forklift_core.plant.write_log import runs_of
+
+PARTS = ("steer", "lift", "wheels")
+GATE_NEUTRAL_ABSENT = ("lift",)  # absent parts that still leave a run evidence for a gate
 
 DIAG_TOKEN_PREFIX = "diag-"  # a diagnostic image's version token (diag-commission-unlimited-1, 2026-11-24)
 
@@ -37,6 +45,12 @@ def run_marks(run: list[dict]) -> dict:
     if diag is not None:
         # the product the link read (a connection or pre-ARM row): whatever the header says
         marks["not_for_gate"], marks["diagnostic_image"] = True, diag
+    absent = parts_absent(header)
+    if absent:
+        # read for every command, before the commissioning-only marks below (Codex partial-parts round 2 P2)
+        marks["parts_absent"] = absent
+        if any(p not in GATE_NEUTRAL_ABSENT for p in absent):
+            marks["not_for_gate"] = True
     if header.get("cmd") != "commission":
         return marks
     if "large" not in header:
@@ -52,12 +66,20 @@ def run_marks(run: list[dict]) -> dict:
     return marks
 
 
+def parts_absent(header: dict) -> list[str]:
+    """A run header's declared absent parts, sorted (unknown names are kept: a later tool may know them)."""
+    v = header.get("parts_absent")
+    if not isinstance(v, list):
+        return []
+    return sorted({str(x) for x in v})
+
+
 def record_marks(rows: list[dict]) -> dict:
     """Every run's marks of one JSONL file together (any ineligible run makes the file ineligible)."""
     out: dict = {}
     for run in runs_of(rows):
         for k, v in run_marks(run).items():
-            if k == "bypassed":
+            if k in ("bypassed", "parts_absent"):
                 out[k] = sorted(set(out.get(k, [])) | set(v))
             else:
                 out[k] = out.get(k, False) or v
@@ -72,6 +94,7 @@ def check(marks: dict, *, allow: bool) -> dict:
     """The marks an output carries; NotForGate if the record is ineligible and not allowed."""
     if not eligible(marks) and not allow:
         why = ("a diagnostic image" if marks.get("diagnostic_image") else
+               "parts were absent" if marks.get("parts_absent") and not marks.get("bypassed") else
                "a protection was bypassed" if marks.get("not_for_gate") else "its run conditions are unknown")
         raise NotForGate(f"not for a gate: {why} (give --allow-bypassed to read it; its pass fields stay empty)")
     return dict(marks)
