@@ -49,7 +49,7 @@ def test_the_layer_and_slam_place_the_laser_at_the_same_pose():
 def scan_in(ranges, *, mask=None, angles=None, measured=True):
     n = len(ranges)
     a = np.linspace(-math.pi, math.pi, n, endpoint=False) if angles is None else np.asarray(angles)
-    return srs.SlamScanIn(key=(0, None, 1), stamp_ns=5_000_000_000, flo_ns=4_999_000_000, fhi_ns=5_001_000_000,
+    return srs.SlamScanIn(key=(0, None, 1), gen=(0, None), stamp_ns=5_000_000_000, flo_ns=4_999_000_000, fhi_ns=5_001_000_000,
                           measured=measured, angles=a, ranges=np.asarray(ranges, float),
                           self_hit=np.zeros(n, bool) if mask is None else np.asarray(mask, bool), range_min=0.15,
                           range_max=12.0)
@@ -90,3 +90,11 @@ def test_from_feed_is_diagnostic_until_the_bound_and_the_mount_are_measured():
     assert not s.measured  # the mount unmeasured keeps it diagnostic
     s, _ = srs.from_feed(feed_scan(), cfg(0.002, True, True))
     assert s.measured and (s.flo_ns, s.fhi_ns) == (8_998_000_000, 9_002_000_000)
+
+
+def test_pick_odom_with_entries_sharing_their_bounds():
+    """Codex 7c-1b-2a round 1 P2-8: a point scan on STATEs read together (same interval)."""
+    h = [entry(0.00, 0.01, (0.0, 0.0, 0.0)), entry(0.02, 0.02, (0.1, 0.0, 0.0)), entry(0.02, 0.02, (0.2, 0.0, 0.0)),
+         entry(0.04, 0.05, (0.3, 0.0, 0.0))]
+    pose, why = srs.pick_odom(h, 0.02, 0.02, 0.02)
+    assert why is None and pose[0] in (0.1, 0.2)

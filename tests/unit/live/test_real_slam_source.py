@@ -16,6 +16,14 @@ from forklift_core.localization import slam_real_scan as srs
 MS = 1_000_000
 START_NS = 1_000 * MS
 MAP = "m" * 64
+_OPEN = []
+
+
+@pytest.fixture(autouse=True)
+def _close_sockets():
+    yield
+    while _OPEN:
+        _OPEN.pop().close()
 
 
 class Bridge:
@@ -57,26 +65,31 @@ class Bridge:
 class Rig:
     def __init__(self):
         a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        _OPEN.extend((a, b))
         self.bridge = Bridge(b)
         self.now = START_NS + 2_000 * MS
         self.history = []
         self.odom = (0.0, 0.0, 0.0)
         self.boot_id = 1
+        self.continuous = True
+        self.gen = (0, None)
         self.src = rss.RealSlamSource(
-            rss.RealSlamLink(a), map_id=MAP, start_ns=START_NS, start_pose=(1.0, 2.0, 0.3),
-            odom_history=lambda: self.history, odom_base=lambda: self.odom, boot=lambda: self.boot_id,
-            rear_offset_m=0.5, clock=lambda: self.now)
+            rss.RealSlamLink(a, clock=lambda: self.now), map_id=MAP, start_ns=START_NS, start_pose=(1.0, 2.0, 0.3),
+            odom_history=lambda: self.history, odom_base=lambda: self.odom, odom_ok=lambda: self.continuous,
+            boot=lambda: self.boot_id, rear_offset_m=0.5, clock=lambda: self.now)
         self.hist_to(self.now)
 
     def s(self, ns):
         return (ns - START_NS) / 1e9
 
     def hist_to(self, ns):
-        """STATE entries every 10 ms up to ns (core seconds), at the current odometry."""
+        """STATE entries every 10 ms up to ns (core seconds), at the current odometry (rear axle)."""
+        from forklift_core.localization.start_reloc import rear_from_base
+
         last = self.history[-1][1] if self.history else self.s(ns) - 0.5
         t = last + 0.01
         while t <= self.s(ns) + 1e-9:
-            self.history.append((t - 0.005, t, self.odom, True, True, True, True))
+            self.history.append((t - 0.005, t, rear_from_base(self.odom, 0.5), True, True, True, True))
             t += 0.01
 
     def step(self, ms=20):
@@ -87,7 +100,7 @@ class Rig:
     def scan(self, lag_ms=30, measured=True, width_ms=1):
         t = self.now - lag_ms * MS
         n = 8
-        return srs.SlamScanIn(key=(0, None, t), stamp_ns=t, flo_ns=t - width_ms * MS, fhi_ns=t + width_ms * MS,
+        return srs.SlamScanIn(key=(*self.gen, t), gen=self.gen, stamp_ns=t, flo_ns=t - width_ms * MS, fhi_ns=t + width_ms * MS,
                               measured=measured, angles=np.linspace(-math.pi, math.pi, n, endpoint=False),
                               ranges=np.full(n, 2.0), self_hit=np.zeros(n, bool), range_min=0.1, range_max=10.0)
 
@@ -312,9 +325,12 @@ def test_a_cancel_after_scan_five_with_its_pose_pending_lets_the_next_seed_run()
     assert c.reason == "boot_changed"
     r.bridge.state(sid, "void", "boot_changed")
     r.step()
-    r.bridge.reply(s)  # its late reply after the void: protocol (nothing in flight)
-    with pytest.raises(rss.SlamSourceFatal):
-        r.step()
+    r.bridge.reply(s)  # the scan five's late reply after the void: counted, nothing reopened (round 1 P2-4)
+    r.bridge.state(sid, "ready")
+    r.step()
+    assert r.src.counts["slam_discarded_reply"] == 1 and r.src.counts["slam_state_after_void"] == 1
+    assert r.src.seed_state(1) == ("void", "boot_changed")
+    seed_to_ready(r, epoch=2)
 
 
 def test_a_seed_not_yet_sent_is_cancelled_here_without_a_frame():
@@ -408,6 +424,27 @@ def test_no_reply_from_a_localized_instance_within_a_second_is_a_fault():
         r.step(1)
 
 
+def test_the_seventh_reply_and_the_end_state_in_one_read_and_in_two():
+    for split in (False, True):
+        r = Rig()
+        r.started()
+        sid = seed_to_ready(r)
+        for k in range(7):
+            r.src.offer(r.scan(lag_ms=10))
+            [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+            r.bridge.reply(s)
+            if k < 6:
+                r.step()
+        if split:
+            r.step()
+            r.src.offer(r.scan(lag_ms=10))  # between the seventh reply and the end state: no eighth scan (P1-3)
+            r.step()
+            assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+        r.bridge.state(sid, "ready")
+        r.step()
+        assert r.src.seed_state(1) == ("ready", None)
+
+
 def test_a_reply_and_a_state_in_one_poll():
     r = Rig()
     r.started()
@@ -417,7 +454,7 @@ def test_a_reply_and_a_state_in_one_poll():
     r.bridge.reply(s)  # the old scan's reply ...
     out = r.step(1)
     [seed] = [f for f in r.bridge.frames() if isinstance(f, rl.Seed)]
-    r.bridge.state(sid, "seeding")  # ... and the seed's states in the same read
+    r.bridge.state(sid, "seeding")  # ... the seed's two states together in one read
     r.bridge.state(sid, "ready_for_scans")
     r.step(1)
     assert out == [] and seed.seed_id == sid and r.src.target["state"] == "scans"
@@ -472,3 +509,209 @@ def test_a_relocalize_labels_only_scans_acquired_after_it():
     r.step(60)
     out, _ = r.one(lag_ms=10)
     assert out[0][0].epoch == 1
+
+
+# --- Codex 7c-1b-2a round 1 ----------------------------------------------------------------------------------------
+def test_a_broken_input_and_the_end_state_in_one_poll_the_cancel_wins():
+    """P1-1: the boot changed and ready arrived in the same poll -- the seed is cancelled, never ready."""
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.boot_id = 2
+    r.bridge.state(sid, "ready")
+    r.step()
+    assert r.src.seed_state(1) == ("seeding", None) and not r.src.can_confirm()
+    assert any(isinstance(f, rl.Cancel) and f.reason == "boot_changed" for f in r.bridge.frames())
+
+
+def test_a_same_boot_break_cancels_even_with_the_history_cleared():
+    """P1-2: the loop's continuity flag, not the (cleared) history."""
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.continuous = False
+    r.history.clear()
+    r.step()
+    assert any(isinstance(f, rl.Cancel) and f.reason == "odom_break" for f in r.bridge.frames())
+
+
+def test_a_move_and_back_within_one_batch_is_still_a_move():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.odom = (0.05, 0.0, 0.0)
+    r.hist_to(r.now + 10 * MS)
+    r.odom = (0.0, 0.0, 0.0)  # back where it was by the poll
+    r.step()
+    assert any(isinstance(f, rl.Cancel) and f.reason == "seed_moved" for f in r.bridge.frames())
+
+
+def test_an_end_state_read_after_the_deadline_is_the_bridges_and_a_late_void_or_reply_is_not():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(sid, "ready")
+    r.now += int(rss.SEED_WAIT_S * 1e9)
+    r.hist_to(r.now)
+    r.step(1)
+    assert r.src.seed_state(1) == ("ready", None)
+    r.src.offer(r.scan(lag_ms=10))
+    [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.now += int(1.5e9)
+    r.bridge.reply(s)
+    with pytest.raises(rss.SlamSourceFatal, match="no reply"):
+        r.step(1)
+
+
+def test_a_void_read_past_its_bound_is_a_fault():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    r.odom = (0.05, 0.0, 0.0)
+    r.step()
+    r.bridge.state(sid, "void", "seed_moved")
+    r.now += int(5.5e9)
+    with pytest.raises(rss.SlamSourceFatal, match="no void"):
+        r.step(1)
+
+
+def test_a_broken_input_first_seen_past_the_deadline_is_the_deadline():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.now += int(rss.SEED_WAIT_S * 1e9) + 1
+    r.boot_id = 2
+    with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+        r.step(1)
+
+
+class Chunky:
+    """A socket whose sends go ``limits`` bytes at a time (None: EAGAIN)."""
+
+    def __init__(self, sock, limits):
+        self.sock, self.limits = sock, list(limits)
+
+    def send(self, data):
+        lim = self.limits.pop(0) if self.limits else len(data)
+        if lim is None:
+            raise BlockingIOError
+        return self.sock.send(data[:lim])
+
+    def __getattr__(self, name):
+        return getattr(self.sock, name)
+
+
+def test_a_cancel_written_in_parts_goes_once():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    r.src.link.sock = Chunky(r.src.link.sock, [5, None])
+    r.odom = (0.05, 0.0, 0.0)
+    r.step()
+    r.step()
+    r.step()
+    cancels = [f for f in r.bridge.frames() if isinstance(f, rl.Cancel)]
+    assert len(cancels) == 1 and cancels[0].seed_id == sid
+
+
+def test_a_seed_not_one_byte_of_which_went_is_cancelled_here():
+    r = Rig()
+    r.started()
+    r.src.link.sock = Chunky(r.src.link.sock, [None, None])  # the seed's write and the next poll's flush
+    r.src.seed(1, (0.0, 0.0, 0.0), r.s(r.now))
+    r.boot_id = 2
+    r.step()
+    assert r.src.seed_state(1) == ("void", "boot_changed")
+    r.step()
+    assert not any(isinstance(f, (rl.Seed, rl.Cancel)) for f in r.bridge.frames())
+
+
+def test_a_scan_stuck_in_the_socket_is_a_fault_after_a_second():
+    r = Rig()
+    r.started()
+    r.src.link.sock = Chunky(r.src.link.sock, [None] * 1000)
+    r.src.offer(r.scan())
+    with pytest.raises(rss.SlamSourceFatal, match="not written whole"):
+        for _ in range(60):
+            r.step()
+
+
+def test_an_earlier_generations_reply_frees_the_slot_and_its_request_goes_on():
+    r = Rig()
+    r.started()
+    r.src.request_processed(0, 4, r.s(r.now) - 1.0)
+    r.src.offer(r.scan(lag_ms=30))
+    [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.gen = (1, 77)  # the adapter restarted
+    r.src.offer(r.scan(lag_ms=10))
+    r.bridge.reply(s)
+    assert r.step(1) == [] and r.src.counts["slam_old_generation_reply"] == 1
+    r.step(30)
+    out, _ = r.one(lag_ms=10)
+    assert out[0][0].attempt == 4
+
+
+def test_a_non_finite_correction_or_a_float_id_is_a_fault():
+    for corr, sid_f in (((0.0, float("nan"), 0.0), False), ((0.0, 0.0, 0.0), True)):
+        r = Rig()
+        r.started()
+        r.src.offer(r.scan())
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.sock.sendall(slam_link._frame({"type": "reply", "scan_id": s.scan.scan_id + (0.0 if sid_f else 0),  # noqa: SLF001
+                                                "stamp_s": s.scan.stamp_s, "status": "processed",
+                                                "map_from_odom": list(corr), "version": 1, "slam_wall_s": 0.0}))
+        with pytest.raises(rss.SlamSourceFatal, match="malformed"):
+            r.step(1)
+
+
+def test_a_diagnostic_scan_does_not_take_a_forced_request():
+    r = Rig()
+    r.started()
+    r.src.request_processed(0, 6, r.s(r.now) - 1.0)
+    r.one(measured=False)
+    out, _ = r.one()
+    assert out[0][0].attempt == 6
+
+
+def test_an_oversized_frame_is_a_fault():
+    r = Rig()
+    r.started()
+    r.bridge.sock.sendall((rss.MAX_FRAME + 1).to_bytes(4, "big"))
+    with pytest.raises(rss.SlamSourceFatal, match="bytes"):
+        r.step(1)
+
+
+def test_no_seed_before_the_sessions_start_ends():
+    r = Rig()
+    assert not r.src.can_seed()  # before the first poll too (round 1 P3)
+    with pytest.raises(rss.SlamSourceFatal):
+        r.src.seed(1, (0.0, 0.0, 0.0), 0.0)
+
+
+def test_the_seed_lower_bound_holds_while_its_instance_is_ready():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(sid, "ready")
+    r.step()
+    accepted = r.src.target["accepted_ns"]
+    wide = r.scan(lag_ms=5)
+    wide = srs.SlamScanIn(**{**wide.__dict__, "flo_ns": accepted - MS, "fhi_ns": wide.stamp_ns})
+    r.src.offer(wide)
+    r.step()
+    assert r.src.counts["slam_before_seed"] == 1

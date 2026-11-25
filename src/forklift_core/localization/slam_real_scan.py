@@ -34,6 +34,7 @@ ANGLE_TOL_RAD = 1e-4  # beam angles must be evenly spaced (slam_link's scan carr
 @dataclass(frozen=True)
 class SlamScanIn:
     key: tuple  # the scan's identity on its feed (feed_gen, producer_gen, scan_id) -- for the record
+    gen: tuple  # its producer generation (feed_gen, producer_gen): a reply of an earlier one is no evidence
     stamp_ns: int  # the first-beam estimate, host monotonic (the order time and the ROS stamp)
     flo_ns: int  # the first-beam interval; = stamp_ns when not measured
     fhi_ns: int
@@ -57,18 +58,20 @@ def from_feed(scan, cfg) -> tuple[SlamScanIn | None, str | None]:
     measured = cfg.first_beam_err_s is not None and cfg.timing_measured and cfg.mount_measured
     err = int(round(cfg.first_beam_err_s * 1e9)) if measured else 0
     return SlamScanIn(
-        key=(int(scan.feed_gen), scan.producer_gen, int(scan.scan_id)), stamp_ns=int(first), flo_ns=int(first) - err,
+        key=(int(scan.feed_gen), scan.producer_gen, int(scan.scan_id)), gen=(int(scan.feed_gen), scan.producer_gen),
+        stamp_ns=int(first), flo_ns=int(first) - err,
         fhi_ns=int(first) + err, measured=bool(measured), angles=np.asarray(scan.angles, dtype=float),
         ranges=np.asarray(scan.ranges, dtype=float), self_hit=self_hit_mask(scan.angles, cfg.mask_rad),
         range_min=float(scan.meta.get("range_min", 0.0)), range_max=float(scan.meta.get("range_max", math.inf))), None
 
 
-def from_layer(scan, start_ns: int, *, key=None, range_min: float = 0.0, range_max: float = 30.0) -> SlamScanIn:
+def from_layer(scan, start_ns: int, *, key=None, gen=("layer",), range_min: float = 0.0,
+               range_max: float = 30.0) -> SlamScanIn:
     """A layer ``real_layer.RealScan`` whose first beam is exact (the HIL's synthetic cast, ``first_s == last_s``): its
     first-beam instant is the estimate and the interval. A valid no-return (+inf) stays a no-return (NaN to SLAM)."""
     ns = int(start_ns) + int(round(float(scan.first_s) * 1e9))
     ranges = np.where(np.asarray(scan.valid, bool), np.asarray(scan.ranges_m, dtype=float), np.nan)
-    return SlamScanIn(key=key if key is not None else ("layer", ns), stamp_ns=ns, flo_ns=ns, fhi_ns=ns, measured=True,
+    return SlamScanIn(key=key if key is not None else ("layer", ns), gen=tuple(gen), stamp_ns=ns, flo_ns=ns, fhi_ns=ns, measured=True,
                       angles=np.asarray(scan.angles_rad, dtype=float), ranges=ranges,
                       self_hit=np.asarray(scan.self_hit, bool), range_min=float(range_min),
                       range_max=float(range_max))
@@ -81,12 +84,15 @@ def pick_odom(history, lo_s: float, hi_s: float, t_s: float):
     span not continuous or not included)."""
     h = list(history)
     before = [k for k, e in enumerate(h) if e[1] <= lo_s]
-    after = [k for k, e in enumerate(h) if e[0] >= hi_s]
+    if not before:
+        return (None, "no_cover") if any(e[0] >= hi_s for e in h) else (None, "not_yet")
+    k0 = before[-1]
+    # the end at or after the start (entries sharing their bounds -- a point scan on STATEs read together -- give
+    # the same index or a later one, never an empty span: Codex 7c-1b-2a round 1 P2-8)
+    after = [k for k in range(k0, len(h)) if h[k][0] >= hi_s]
     if not after:
         return None, "not_yet"
-    if not before:
-        return None, "no_cover"
-    k0, k1 = before[-1], after[0]
+    k1 = after[0]
     span = h[k0:k1 + 1]
     if not all(e[3] and e[4] for e in span):
         return None, "broken"

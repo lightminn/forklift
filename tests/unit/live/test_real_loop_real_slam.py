@@ -19,7 +19,7 @@ from forklift_core.localization.start_reloc import base_from_rear
 from real_loop_rig import MS, REAR_OFFSET_M
 from test_real_loop_console import ask, run_until
 from test_real_loop_relocalize import open_generation, rig, stand, status
-from test_real_slam_source import Bridge
+from test_real_slam_source import _OPEN, Bridge, _close_sockets  # noqa: F401 -- the fixture closes the pair
 
 
 class AutoBridge(Bridge):
@@ -50,13 +50,14 @@ class AutoBridge(Bridge):
 
 def real(r, end="ready"):
     a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    _OPEN.extend((a, b))
     bridge = AutoBridge(b, end)
     loop = r.loop
     src = RealSlamSource(
         RealSlamLink(a), map_id="m" * 64, start_ns=loop.start_ns,
         start_pose=base_from_rear(tuple(loop.start_rear), REAR_OFFSET_M),
-        odom_history=lambda: loop.odom_history, odom_base=r.odom_base, boot=lambda: loop.host.state.boot_id,
-        rear_offset_m=REAR_OFFSET_M, clock=lambda: r.now)
+        odom_history=lambda: loop.odom_history, odom_base=r.odom_base, odom_ok=lambda: loop.odom_continuous,
+        boot=lambda: loop.host.state.boot_id, rear_offset_m=REAR_OFFSET_M, clock=lambda: r.now)
     marks = []
     loop.slam_source = _SlamGuard(src, marks.append, Counter())
     plain = r.tick
@@ -65,7 +66,7 @@ def real(r, end="ready"):
         rec = None
         for _ in range(n):
             t = r.now - 40 * MS
-            src.offer(srs.SlamScanIn(key=("rig", t), stamp_ns=t, flo_ns=t - MS, fhi_ns=t + MS, measured=True,
+            src.offer(srs.SlamScanIn(key=("rig", t), gen=("rig",), stamp_ns=t, flo_ns=t - MS, fhi_ns=t + MS, measured=True,
                                      angles=np.linspace(-math.pi, math.pi, 16, endpoint=False),
                                      ranges=np.full(16, 3.0), self_hit=np.zeros(16, bool), range_min=0.1,
                                      range_max=10.0))
