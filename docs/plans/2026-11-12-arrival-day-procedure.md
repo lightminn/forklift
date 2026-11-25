@@ -178,8 +178,8 @@ ModemManager 무시와 USB autosuspend 끄기는 둘 다 이 규칙이 한다(D5
 
 ```bash
 D=artifacts/20261120T095000Z_s2_first_boot_01; mkdir -p $D
-python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --seconds 15
-python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/result.json   # 승강 KTH 를 달았으면 --lift-absent 를 뺀다
+python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --seconds 15 --absent lift   # 승강 KTH 를 달았으면 --absent lift 를 뺀다
+python tools/h743_first_boot.py --record $D/run.jsonl | tee $D/result.json   # 빠진 부품은 기록 헤더에서 읽는다(2026-11-25 부품 부재 계획)
 ```
 
 합격은 `result == "pass"` 이고, 처음 10 s 를 다음 여섯 항목으로 본다. 기록이 10 s 에 못 미치거나, 그 안에 재부팅·STATE 끊김(0.1 s 넘게)·MCU 시각 역행·계약보다 빠른 KTH 계수 증가가 있으면 `invalid` 다 — 새 파일로 다시 기록한다(한 파일에 여러 번 이어 쓴 기록도 `invalid`). 기준값은 첫 확인용 작업값이라 **실측 뒤 재검토**한다.
@@ -188,7 +188,7 @@ python tools/h743_first_boot.py --record $D/run.jsonl --lift-absent | tee $D/res
 |---|---|---|
 | `drivers` | 모든 STATE 에서 `drivers_ready`, DRV8244 네 개의 `driver_status` 가 상위 2비트 11·하위 결함 6비트 0 | 응답의 상위 비트는 언제나 11(SLVSG24C 표 8-21). VM 이 없으면 0x0000 이 온다 |
 | `current` | `current_sense_invalid` 없음, 네 채널 모두 \|`current_ma`\| ≤ 50 mA | 모터를 떼었으니 0 이어야 한다. 1 ADC 카운트 ≈ 0.24 mA(R_IPROPI 1 kΩ, A_IPROPI 4,750). 50 mA 는 약 200 카운트로, 영점 오프셋·잡음을 넉넉히 덮는 작업값이다 |
-| `faults` | 예상 밖 결함 비트 없음(`--lift-absent` 면 승강 축 두 비트는 허용) | 손대지 않은 부팅에는 결함이 없어야 한다 |
+| `faults` | 예상 밖 결함 비트 없음(헤더에 `lift` 가 빠졌으면 승강 축 두 비트는 허용) | 손대지 않은 부팅에는 결함이 없어야 한다 |
 | `kth` | 조향(승강을 달았으면 승강도)이 NaN 아님, 축마다 받은 프레임 수(`kth_frames`)가 오름 | mcu-link/3 3.3 |
 | `wheels_still` | 바퀴 카운트가 2 카운트 넘게 움직이지 않음 | 엔코더 떨림 허용량(작업값). 아무도 만지지 않는 동안이다 |
 | `link` | `rx_errors`·`cycle_overruns` 가 오르지 않고 `cycle_overrun` 비트 없음 | 링크·주기가 깨끗해야 한다 |

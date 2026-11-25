@@ -47,6 +47,7 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
     # than the contract allows before the end makes the record unjudgeable (Codex first-boot review P2-1, -2, -4)
     first = samples[0].state
     win = [first]
+    fitted = [i for i, absent in enumerate((steer_absent, lift_absent)) if not absent]  # M, H counter indices
     end_us = first.mcu_time_us + window_s * 1e6
     for s in samples[1:]:
         st, prev = s.state, win[-1]
@@ -60,6 +61,8 @@ def first_boot_check(samples: Sequence, *, window_s: float = WINDOW_S, lift_abse
         cap = KTH_RATE_PER_MS * (dt_us // 1000 + 1)
         rises = [kth_counter_delta(getattr(st, f)[i], getattr(prev, f)[i])
                  for f in ("kth_frames", "kth_crc_errors", "kth_alt_crc_errors") for i in range(2)]
+        # an absent axis's counters are not read (Codex PR-A P3): only the fitted axes' can make the record invalid
+        rises = [r if k % 2 in fitted else 0 for k, r in enumerate(rises)]
         if max(rises) > cap:
             return {**base, "result": "invalid", "why": "a KTH counter rose faster than once a millisecond (reset?)"}
         # per axis: errors and other-variant errors are counted among the fresh frames (contract 3.3, Codex P2)

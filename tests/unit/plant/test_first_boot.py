@@ -136,3 +136,13 @@ def test_steer_absent_excuses_only_the_steering_axis():
     assert res["result"] == "pass" and res["steer_absent"] is True and set(res["checks"]["kth"]["frames"]) >= {"H"}
     nan_lift = record(lift_m=float("nan"), fault_flags=FaultFlag.LIFT_SENSOR_INVALID)
     assert first_boot_check(nan_lift, steer_absent=True)["result"] == "fail"
+
+
+def test_an_absent_axis_counters_cannot_make_the_record_invalid():
+    """Codex PR-A P3: a contradiction on the absent axis's counters (errors with no frames) is not read."""
+    rec = record()
+    rec = [dataclasses.replace(s, state=dataclasses.replace(
+        s.state, kth_frames=(0, s.state.kth_frames[1]), kth_crc_errors=(k, 0), steering_rad=float("nan"),
+        fault_flags=FaultFlag.STEER_SENSOR_INVALID)) for k, s in enumerate(rec)]
+    assert first_boot_check(rec)["result"] == "invalid"
+    assert first_boot_check(rec, steer_absent=True)["result"] == "pass"

@@ -674,3 +674,62 @@ def test_a_partial_or_bypassed_commission_result_proposes_no_duty_sign():
     res = {"verdict": dict(verdict)}
     bringup._mark_commission_result(res, (), False, None, ("lift",))
     assert res == {"verdict": verdict, "parts_absent": ["lift"]}
+
+
+def test_kth_refuses_a_file_whose_runs_declare_different_parts_and_counts_an_old_records_flag(tmp_path, capsys):
+    """Codex PR-A P2-3, P2-4: kth reads every STATE of the file, so its runs must agree; a flag on a record from
+    before the field still makes a steering-absent reading no gate evidence."""
+    import json
+
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record", "parts_absent": ["lift"]})
+    text = rec.read_text()
+    rec.write_text(text + "\n" + json.dumps({"t": "header", "cmd": "record", "parts_absent": []}) + "\n" + text)
+    assert bringup.main(["kth", "--record", str(rec), "--configured-m", "g704_bytes", "--image", "x"]) == 2
+    assert "different absent parts" in json.loads(capsys.readouterr().out)["why"]
+    rec = _kth_record(tmp_path, {"t": "header", "cmd": "record"})
+    assert bringup.main(["kth", "--record", str(rec), "--configured-h", "g704_bytes", "--axis-absent", "M",
+                         "--image", "x"]) == 2
+    assert "parts were absent" in json.loads(capsys.readouterr().out)["why"]
+
+
+def test_step_scenario_and_cpr_results_with_parts_absent_carry_no_pass():
+    """Codex PR-A P2-2: the measured values stay, the official pass fields go."""
+    res = {"result": "ok", "external": {"output_response_ms": {"value": 25.0, "limit": 100.0, "pass": True}}}
+    bringup._mark_absent_result(res, ("steer",))
+    assert res["not_for_gate"] and res["external"]["output_response_ms"]["pass"] is None
+    assert res["external"]["output_response_ms"]["value"] == 25.0
+    cpr = {"valid": True, "cpr": [4096, 4096]}
+    bringup._mark_absent_result(cpr, ("steer",))
+    assert cpr["valid"] is None and cpr["computed_valid"] is True and cpr["parts_absent"] == ["steer"]
+    lift = {"valid": True}
+    bringup._mark_absent_result(lift, ("lift",))
+    assert lift == {"valid": True, "parts_absent": ["lift"]}
+
+
+def test_clear_faults_takes_only_this_runs_echo():
+    """Codex PR-A P2-1: a STATE read before the frame's last byte, on another connection, of another boot or not newer
+    than the floor is never the frame's acceptance."""
+    import dataclasses
+    from types import SimpleNamespace
+
+    from forklift_core.plant.bringup import Sample
+    from forklift_core.plant.write_log import Write
+
+    def w(kind, seq, conn, done):
+        return Write(order=0, conn=conn, kind=kind, seq=seq, start_ns=done - 10, done_ns=done, boot_id=None,
+                     echo_mcu_time_us=None, valid_ms=None, arm_gen=None, axis=None, duty_e4=None, phase=None)
+
+    def smp(host_ns, seq, t_us, boot=7):
+        return Sample(host_ns, dataclasses.replace(state(), last_rx_seq=seq, mcu_time_us=t_us, boot_id=boot))
+
+    b = SimpleNamespace(writes=[w("CLEAR_FAULTS", 1, 2, 1000)], samples=[], sample_conn=[])
+    for host_ns, seq, t_us, conn, boot in [(900, 1, 600, 2, 7),     # read before the write ended
+                                            (1100, 1, 700, 1, 7),    # another connection
+                                            (1200, 1, 800, 2, 8),    # another boot
+                                            (1300, 1, 400, 2, 7),    # not newer than the floor (a buffered STATE)
+                                            (1400, 1, 900, 2, 7)]:   # this run's
+        b.samples.append(smp(host_ns, seq, t_us, boot))
+        b.sample_conn.append(conn)
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500) == 4
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 1, 2, 7, 500, after=4) is None
+    assert bringup._echo_index(b, "CLEAR_FAULTS", 2, 2, 7, 500) is None  # never written
