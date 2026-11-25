@@ -57,6 +57,9 @@ build_fw stall -DFW_TEST_IWDG_STALL=5            # S5 ①: 부팅 5 s 뒤 주기
 # S3·S5(9.1 의 ②·시운전 상한 DISARM·주 전원 차단 모두): 출력 열린 시운전 빌드 — 사용자가 보호 확인 기록을 커밋한 뒤에만 구성된다
 build_fw open -DFW_BUILD=commission -DFW_MOTOR_OUTPUT=1 \
   -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md   # 사용자 기록 #552
+# 부품 부재 벤치(모터 한 채널·KTH 하나): 출력 열린 단일 축 시운전 빌드 fw-single — USB 링크 전용, 정체 끝이 lim=lr1 sa1
+build_fw single -DFW_BUILD=commission -DFW_MOTOR_OUTPUT=1 -DFW_SINGLE_AXIS=1 \
+  -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md   # docs/plans/2026-11-25-bench-partial-parts.md
 # S4·S5 정상 빌드 시나리오·S6: 출력 열린 정상 빌드(면제 이미지) — 면제 계획 4절 순서(S4 → 받침대 정지 확인 다섯 가지 → 바닥 0.05 m/s → 0.132 m/s)
 build_fw waived -DFW_BUILD=normal -DFW_MOTOR_OUTPUT=1 \
   -DFW_IPROPI_PROTECTION_RECORD=docs/validation/2026-11-16-ipropi-protection-record.md \
