@@ -178,6 +178,9 @@ class Bench:
     writes: list = field(default_factory=list)
     sample_conn: list = field(default_factory=list)
     phase: str | None = None  # the tool's current step, given to every frame it queues (kept in its write row)
+    # a real device (main sets it): an open commissioning board whose USB product string cannot be read is refused --
+    # it could be fw-single, which an L(0) arming zero would fix on L (Codex PR-B P2-1)
+    product_required: bool = False
     _queued_phase: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -710,6 +713,10 @@ class CommissionSession(Session):
         # fw-single is told apart by its product string's exact suffix only, read on this connection just now: a
         # request on another image, or a run on fw-single without the request, is refused before the ARM (UART7 has
         # no product string, so no fw-single run there)
+        if (self.b.product_required and self.preflight_product is None
+                and not state.flags & StateFlag.OUTPUTS_LOCKED):
+            raise Refused("board: the USB product string of this open commissioning board could not be read -- its "
+                          "image (fw-single or not) is unknown: nothing is armed")
         single_image = bl.single_axis_image(self.preflight_product)
         if self.single_axis and not single_image:
             raise Refused(f"single-axis: {self.preflight_product!r} is not a fw-single image (no product ending "
@@ -920,7 +927,7 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     if off_index is not None and off_index >= end:
         end = off_index + 1  # the sample that closes the driven span stays, even when it confirms the DISARM
     metrics = commission_metrics(b.samples[:end], axis=axis, duty_e4=duty_e4, on_index=on_index,
-                                 off_index=off_index)
+                                 off_index=off_index, sensorless=getattr(session, "sensorless", False))
     # the whole session, the cleanup included, apart from the dynamics' cut (Codex re-review P2-2)
     why = session_abort_reason(b.samples, i_arm)
     if why is not None:
@@ -1657,6 +1664,7 @@ def main(argv=None) -> int:
         out.flush()
         # clear-faults numbers its frames from a random start, so no STATE of an earlier run can echo them
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission",
+                      product_required=synthetic is None and args.baud is None,
                       initial_seq=random.randrange(1, 0x10000) if args.cmd == "clear-faults" else None)
         try:
             if args.cmd in ("record", "cpr"):
@@ -2023,6 +2031,10 @@ def execute(args, bench: Bench) -> dict:
                 # an unjudgeable run (its acceptances could not be told apart) gives no sign verdict (Codex PR-2a P2-3)
                 result["verdict"] = None if result["result"] == "unjudgeable" else sign_verdict(
                     m["duty_e4"], m["measured_sign"], result["observed"], duty_sign_in_build=m["duty_sign_in_build"])
+                if getattr(args, "sensorless", False) and result["verdict"] is not None:
+                    # no sensor: no sign of any kind (partial-parts plan v4)
+                    result["verdict"] = {"duty_sign_ok": None, "sensor_sign_ok": None, "suggested_duty_sign": None,
+                                         "note": "sensorless"}
                 result.update(cmd="commission", axis=args.axis, power_switch_in_hand=True)
         elif args.cmd == "step":
             result = run_step(bench, session, args.wheel, args.target)

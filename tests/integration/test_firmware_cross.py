@@ -719,3 +719,12 @@ def test_other_images_carry_no_single_axis_core(build_of, open_build):
         if cmds.is_file():
             assert "FW_CORE_SINGLE_AXIS" not in cmds.read_text()
         assert b" sa1" not in (d / "fw.elf").read_bytes()
+
+
+def test_single_axis_only_on_the_usb_link(record_repo, tmp_path):
+    """Codex PR-B P2-1: UART7 has no product string to tell fw-single apart by."""
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", *SINGLE, "-DFW_LINK=uart7",
+                        "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+    assert cfg.returncode != 0
+    assert "only for FW_LINK=usb" in _flat(cfg.stderr), cfg.stderr

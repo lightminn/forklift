@@ -16,6 +16,10 @@ set(FW_SINGLE_AXIS 0 CACHE STRING
 if(FW_SINGLE_AXIS AND NOT (FW_BUILD STREQUAL "commission" AND FW_MOTOR_OUTPUT))
     message(FATAL_ERROR "FW_SINGLE_AXIS=1 is only for FW_BUILD=commission with FW_MOTOR_OUTPUT=1 (fw-single).")
 endif()
+# The tool tells fw-single apart only by the USB product string; UART7 has none (Codex PR-B P2-1).
+if(FW_SINGLE_AXIS AND NOT FW_LINK STREQUAL "usb")
+    message(FATAL_ERROR "FW_SINGLE_AXIS=1 is only for FW_LINK=usb: the tool reads fw-single from the USB product string.")
+endif()
 
 if(NOT FW_LINK MATCHES "^(usb|uart7)$")
     message(FATAL_ERROR "FW_LINK must be usb or uart7")

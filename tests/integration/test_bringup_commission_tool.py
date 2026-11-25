@@ -1147,3 +1147,24 @@ def test_fw_single_refuses_another_axis_after_the_zero(model):
     b.run_until(lambda: b.state.reject_reason.name == "STOPPING", 1.0)
     assert b.state.reject_reason.name == "STOPPING" and b.state.duty_e4 == (0, 0, 0, 0)
     s.cleanup()
+
+
+def test_an_open_board_with_no_readable_product_is_refused_on_a_real_device(model, monkeypatch):
+    """Codex PR-B P2-1: on a real device an open commissioning board whose USB product string cannot be read may be
+    fw-single, which an L(0) arming zero would fix on L: nothing is armed (a pty model has no product by nature)."""
+    b = model()
+    b.product_required = True
+    b.host.usb_product = None
+    res = bringup.execute(args(axis="R", duty=0.08, seconds=0.5, observed="none"), b)
+    assert res["result"] == "refused" and "could not be read" in res["why"], res
+    assert "ARM" not in kinds_written(b)
+
+
+def test_a_fw_single_sensorless_result_carries_no_position(model, monkeypatch):
+    b = model("--commission-single", "1")
+    b.host.usb_product = SA1
+    _retyped(monkeypatch)
+    res = bringup.execute(sargs(), b)
+    assert res["result"] == "ok", res
+    assert res["metrics"]["value"] is None and res["metrics"]["measured_sign"] == "unmeasured"
+    assert res["verdict"]["note"] == "sensorless" and res["verdict"]["suggested_duty_sign"] is None
