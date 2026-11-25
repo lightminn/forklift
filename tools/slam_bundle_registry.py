@@ -23,7 +23,8 @@ Real-site rows (docs/design/2026-11-25-real-sources-pr7.md 6.1 item 5, PR 7c-2a)
 registration command reads itself. One site survey report binds the row together (``site_survey/1``, below): the site
 record's hash, the bundle's ``map_id``, the sensor and odometry settings' hashes, the survey run's raw records, the start
 pose in the map and the five-mark site check (observed figures against limits fixed beforehand). The registered start
-must agree with the S10-A taped start (``start_rear`` taken to base_link) within the start tolerance, and the S10-A
+must agree with the S10-A taped start within the start tolerance, compared at the rear axle as the live loop compares
+its start (the report's base_link start taken to the rear axle by the chassis's offset), and the S10-A
 settings must name the same map. The command also checks the bundle's files against its manifest (``load_bundle``),
 the raw records against their listed hashes, and the lidar and chassis hashes against the files it reads; the
 report lives under the bundle root and the row keeps its path relative to that root. A new site row is not
@@ -38,9 +39,11 @@ The site survey report (JSON, written by the survey, never by this tool)::
 
     {"kind": "site_survey/1", "ok": true, "site": "<name>", "site_record_sha256": "<64 hex>",
      "map_id": "<the bundle's>", "encoder_model": "<model>", "start_pose": [x, y, yaw],   # map <- base_link
-     "config_sha256": {"lidar": "<64 hex>", "chassis": "<64 hex>"},
-     "raw": [{"path": "<record>", "sha256": "<64 hex>"}, ...],   # the survey drive's records and their .ok files,
-                                                                    # paths relative to the report's folder
+     "config_sha256": {"lidar": "<64 hex>", "chassis": "<64 hex>"},   # lidar.yaml, the chassis URDF
+     "vehicle_calibration_id": "<16 hex>",                           # load_real_vehicle(...).calibration_id
+     "raw": [{"kind": "observe" | "teleop" | "ok", "path": "<file>", "sha256": "<64 hex>"}, ...],
+            # the survey drive's records, paths relative to the report's folder: at least one observation record
+            # and one teleop record; each observation record with its .ok listed (real_observe.record_complete)
      "site_check": {"points": 5, "position_max_m": m, "yaw_max_rad": r,
                     "limits": {"position_m": m, "yaw_rad": r}}}
 """
@@ -220,13 +223,15 @@ def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_n
             "start_relocalizable": False, "start_reloc_evidence": None}
 
 
-def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, chassis_sha256: str) -> None:
+def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, chassis_sha256: str,
+                       calibration_id: str) -> None:
     """The report binds one survey (design 6.1 item 5, Codex 7c-2a round 1): its raw records are files next to it
     (relative paths under the report's folder) with the hashes it lists, among them at least one observation or teleop
     record and at least one ``.ok``; its lidar and chassis settings hashes are those of the files this registration
     reads. ValueError naming the first problem."""
     raw = report.get("raw") or []
     base = Path(report_dir).resolve()
+    listed = {str(r.get("path", "")) for r in raw}
     for r in raw:
         rel = Path(str(r.get("path", "")))
         f = (base / rel).resolve()
@@ -236,14 +241,32 @@ def check_site_sources(report: dict, report_dir: Path, *, lidar_sha256: str, cha
             raise ValueError(f"the survey record {rel} is not there")
         if sha256(f) != r.get("sha256"):
             raise ValueError(f"the survey record {rel} differs from the report's hash")
-    names = [str(r.get("path", "")) for r in raw]
-    if not any(n.endswith(".ok") for n in names) or all(n.endswith(".ok") for n in names):
-        raise ValueError("the report needs the survey's records and their .ok files")
+    kinds = [r.get("kind") for r in raw]
+    if any(k not in ("observe", "teleop", "ok") for k in kinds):
+        raise ValueError(f"a survey record of unknown kind among {sorted(set(map(str, kinds)))}")
+    if "observe" not in kinds or "teleop" not in kinds:
+        raise ValueError("the report needs the survey's observation and teleop records")
+    # each observation record is complete by its own .ok (the rule a replay reads, Codex 7c-2a round 2): the .ok
+    # names the record's current hash and its last row is a complete end -- a marker of another run does not count
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from real_observe import record_complete  # noqa: PLC0415
+
+    for r in raw:
+        if r.get("kind") != "observe":
+            continue
+        rel = str(r["path"])
+        if rel + ".ok" not in listed:
+            raise ValueError(f"the observation record {rel} has no .ok listed")
+        if not record_complete(base / rel):
+            raise ValueError(f"the observation record {rel} is not complete by its .ok")
     cfg = report.get("config_sha256") or {}
     if cfg.get("lidar") != lidar_sha256:
         raise ValueError("the report's lidar settings hash is not the lidar settings given here")
     if cfg.get("chassis") != chassis_sha256:
         raise ValueError("the report's chassis hash is not the chassis model this registration reads")
+    if report.get("vehicle_calibration_id") != calibration_id:
+        # the odometry: the URDF alone does not carry the gears and counts (Codex 7c-2a round 2)
+        raise ValueError("the report's vehicle calibration is not the vehicle settings given here")
 
 
 def report_path(report: Path, bundle: Path) -> str:
@@ -304,7 +327,7 @@ def _s10a_start(s10a: Path, vehicle: Path) -> dict:
     from forklift_core.live.real_autonomy import load_s10a  # noqa: PLC0415
     from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD  # noqa: PLC0415
     from forklift_core.live.real_run import chassis_reference  # noqa: PLC0415
-    from forklift_core.plant.real_vehicle import chassis_model_path  # noqa: PLC0415
+    from forklift_core.plant.real_vehicle import chassis_model_path, load_real_vehicle  # noqa: PLC0415
 
     cfg = load_s10a(s10a)
     urdf = chassis_model_path(vehicle).parent / "forklift.urdf"
@@ -313,7 +336,8 @@ def _s10a_start(s10a: Path, vehicle: Path) -> dict:
     if len(rear) != 3 or not all(math.isfinite(v) for v in rear):
         raise ValueError(f"{s10a}: start_rear is not three finite numbers")
     return {"s10a_map_id": cfg.map_id, "s10a_start_rear": rear, "rear_offset_m": float(rear_offset),
-            "tol_m": START_TOL_M, "tol_rad": START_TOL_RAD, "chassis_sha256": sha256(urdf)}
+            "tol_m": START_TOL_M, "tol_rad": START_TOL_RAD, "chassis_sha256": sha256(urdf),
+            "calibration_id": load_real_vehicle(vehicle).calibration_id}
 
 
 def _verify_bundle(folder: Path, map_id) -> None:
@@ -369,11 +393,12 @@ def main(argv=None) -> int:
         print(json.dumps(row))
         return 0
     if a.cmd == "add-site":
+        a.report = a.report.resolve()  # one path for the sources and the row (Codex 7c-2a round 2 P3)
         report = json.loads(a.report.read_text())
         _verify_bundle(a.bundle, report.get("map_id"))
         start = _s10a_start(a.s10a, a.vehicle)
         check_site_sources(report, a.report.parent, lidar_sha256=sha256(a.lidar),
-                           chassis_sha256=start.pop("chassis_sha256"))
+                           chassis_sha256=start.pop("chassis_sha256"), calibration_id=start.pop("calibration_id"))
         row = site_entry(json.loads((a.bundle / "manifest.json").read_text()), report, name=a.name,
                          folder=a.bundle.name, report_name=report_path(a.report, a.bundle),
                          report_sha256=sha256(a.report), site_record_sha256=sha256(a.site_record), **start)

@@ -319,14 +319,14 @@
   - 센서·오도메트리 설정의 해시(`lidar.yaml`, 차체 모델, `encoder_model`)
   - 지도 좌표계에서의 시작 자세
 - **등록 명령**은 현장 기록 원본을 받아 직접 해시한다(2 회차 P3). 그 값이 보고서의 해시와 같아야 하고, 그것을 행의 `site_record_sha256` 에 넣는다. 보고서의 `map_id` 는 번들과 같아야 한다. 그래서 A 현장 기록에 B 번들을 붙일 수 없다.
-- `start_pose` 는 `map ← base_link` 다. S10-A 설정의 `start_rear` 를 `base_from_rear` 로 바꾼 값과 허용차 밖으로 다르면 등록을 거부한다.
+- `start_pose` 는 `map ← base_link` 다. 이것을 후륜축 자세로 바꿔(루프가 시작을 보는 기준점) S10-A 설정의 `start_rear` 와 허용차 밖으로 다르면 등록을 거부한다.
 - **조사 검사**(Isaac 의 `world.ok` 대신): 바닥 표시 5 곳에서 차를 세우고 위치 추정 결과를 기록한다. 기준은 지도와 무관하게 정한다.
   - 현장 좌표: 시작 표시를 원점, 시작 방향을 x 축으로 한다.
   - 각 표시는 'T' 모양이다. 차 옆면을 표시의 긴 선에 맞춰 세우면 위치와 방향이 정해진다. 줄자로 각 표시의 x·y 와 방향(가로·세로 대각 거리로 계산한 각)을 잰다.
   - 비교: 각 지점에서 '현장 좌표의 상대 위치·방향(시작 표시 기준)'과 '위치 추정 결과의 상대 위치·방향(시작점 기준)'의 차를 잰다. 관측 최댓값은 보고서의 `site_check.position_max_m`·`yaw_max_rad` 이고, 합격 한도는 미리 정한 `site_check.limits`(Isaac V2′ 와 같은 값에서 시작, 잠정)다. 관측값이 한도를 넘는 보고서는 등록에서 거부한다(3 회차 P3: 관측값과 한도를 같은 이름으로 두면 자기 자신과 비교하게 됨). 레지스트리 행의 `v2` 는 그 관측값이다(벤치 7).
   - Isaac 의 V2′ 는 전 노드를 참값과 비교했다. 실차는 이것이 **다섯 점 표본 검사로 바뀐다**는 점을 기록에 적는다.
 - 레지스트리 코드는 행 종류를 나눈다. 기존 `put`·`lookup` 이 `scene_sha256` 을 직접 읽는 경로는 Isaac 행에만 쓴다. 섞인 레지스트리에서 두 종류가 모두 맞게 동작하는지 시험한다. `site:` 행의 조회 키는 `(site_record_sha256, encoder_model)` 이다. `start_relocalizable` 은 처음에 거짓이다.
-- 구현(7c-2a): `tools/slam_bundle_registry.py add-site`·`lookup-site`. 같은 `bundles` 목록에 `scene_sha256` 대신 `site_record_sha256` 을 가진 행으로 들어간다(`is_site`). 조사 보고서 형식은 `site_survey/1`(도구 머리말). 시작 자세는 루프가 시작을 보는 것과 같은 후륜축에서 비교하고, 허용차는 실차 루프의 시작 허용차(`START_TOL_M` 0.10 m·`START_TOL_RAD` 5°, 벤치 7 전 잠정)다. S10-A 설정의 `map_id` 도 번들과 같아야 한다. 등록 명령은 번들 파일을 매니페스트와 대조하고(`load_bundle`), 보고서 폴더 아래의 원자료(기록과 `.ok`)를 나열된 해시와 대조하고, 라이다 설정·차체 모델의 해시를 읽은 파일과 대조한다. 보고서는 번들 뿌리(`SLAM_BUNDLE_ROOT`) 아래에 있어야 하고 행에는 그 뿌리 기준 상대 경로가 남는다. 행에는 관측값(`v2`)과 함께 그 한도(`site_check_limits`)를 남긴다.
+- 구현(7c-2a): `tools/slam_bundle_registry.py add-site`·`lookup-site`. 같은 `bundles` 목록에 `scene_sha256` 대신 `site_record_sha256` 을 가진 행으로 들어간다(`is_site`). 조사 보고서 형식은 `site_survey/1`(도구 머리말). 시작 자세는 루프가 시작을 보는 것과 같은 후륜축에서 비교하고, 허용차는 실차 루프의 시작 허용차(`START_TOL_M` 0.10 m·`START_TOL_RAD` 5°, 벤치 7 전 잠정)다. S10-A 설정의 `map_id` 도 번들과 같아야 한다. 등록 명령은 번들 파일을 매니페스트와 대조하고(`load_bundle`), 보고서 폴더 아래의 원자료(관측 기록·텔레옵 기록, 관측 기록마다 그 `.ok` — 재생이 읽는 완료 규칙 `record_complete`)를 나열된 해시와 대조하고, 라이다 설정·차체 모델의 해시와 차량 보정 식별자(`calibration_id`, 오도메트리)를 읽은 파일과 대조한다. 보고서는 번들 뿌리(`SLAM_BUNDLE_ROOT`) 아래에 있어야 하고 행에는 그 뿌리 기준 상대 경로가 남는다. 행에는 관측값(`v2`)과 함께 그 한도(`site_check_limits`)를 남긴다.
 
 **6. 재위치로 시작.**
 - 실차 세션은 시작 때 재위치 세대를 연다(`core.require_relocalization(t, "session_start")`). HIL 의 항등 `processed`(`real_run.py` 655)는 실차 원천에 쓰지 않는다.
