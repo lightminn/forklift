@@ -137,6 +137,17 @@ def _approach(c, seconds):
     time.sleep(seconds)
 
 
+def _rearm(c, timeout=5.0):
+    """The rearm after the STOP: the console's status may still carry the control generation from before the STOP
+    (stale_control) -- asked again with the next status."""
+    end = time.monotonic() + timeout
+    while True:
+        r = c.ask("rearm")
+        if r["t"] == "ack" or r.get("reason") != "stale_control" or time.monotonic() > end:
+            return r
+        time.sleep(0.2)
+
+
 def _finish(run, c, bridge):
     c.close()
     bridge.closing()
@@ -201,7 +212,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         s = c.wait(lambda s: s["relocalize"]["attempt"] == 2 and s["relocalize"]["state"] == "refused", 10)
         assert s["relocalize"]["reason"] in ("relocalize_moved", "relocalize_voided:control"), s["relocalize"]
         c.wait(lambda s: s.get("standing"), 10)
-        r = c.ask("rearm")
+        r = _rearm(c)
         assert r["t"] == "ack", r
         c.wait(lambda s: s.get("mode") == "PAUSED" and s.get("standing"), 10)
         r = c.ask("relocalize_declare", generation=gen)
