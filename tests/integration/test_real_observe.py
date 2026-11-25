@@ -152,6 +152,7 @@ def test_scans_are_recorded_and_stay_diagnostic_without_the_first_sample_time(mo
         accepted = [r for r in scans if r["verdict"] is None]
         assert accepted and all(r["layer"] == "no_acquisition_time" and r["producer_gen"] == 5 for r in accepted)
         assert obs.counts["scans_layer_ok"] == 0
+        _replay_reads(_rows(rec))
     finally:
         sender.close()
         sock.close()
@@ -395,6 +396,20 @@ def test_the_imu_is_recorded_with_its_verdicts_generations_and_intervals(model, 
     rows = [json.loads(x) for x in out.read_text().splitlines()]
     head = rows[0]["imu"]
     assert head["measured"] is False and head["operating"] is False and head["interval_bound_s"] == 0.03
+    # the whole source config and its file's hash (PR 7 7r: a replay judges the samples with the same values)
+    from forklift_core.sensors.imu_source import IMU_YAML, ImuSourceConfig, load_imu_source_config
+
+    assert ImuSourceConfig(**head["config"]) == load_imu_source_config(IMU_YAML) and len(head["config_sha256"]) == 64
+    _replay_reads(rows)
+    # the replay's verification pass on the observe tool's own rows, in file order (Codex 7r-1 round 1 P3)
+    from forklift_core.live.replay_record import _ImuVerifier
+
+    ver = _ImuVerifier(ImuSourceConfig(**head["config"]))
+    for r in rows:
+        if r["t"] in ("imu", "imu_gen"):
+            ver.row(r)
+    ver.finish(rows[-1]["imu"]["last_generation_ns"])
+    assert ver.mismatches == 0, ver.first_mismatch
     assert [r for r in rows if r["t"] == "imu_profile"][0]["actual"]["accel_hz"] == 200
     imu = [r for r in rows if r["t"] == "imu"]
     ok = [r for r in imu if r["verdict"] == "ok"]
@@ -644,3 +659,29 @@ def test_the_record_replays_to_its_own_imu_rows_and_names_a_stopped_source(model
     again = replay(load_imu_source_config(), rows).drain_rows()
     assert again == [r for r in rows if r["t"] in ("imu", "imu_gen")]
     assert "stopped" in rows[-1]["imu"] and rows[-1]["imu"]["last_generation_ns"] is not None
+
+
+def _replay_reads(rows):
+    """PR 7 7r plan 5: every row kind the replay reads carries the keys it reads -- here in the observe tool's real
+    output, and in the tests' synthetic writer (tests/unit/live/test_replay_sources.py checks the writer the same way)."""
+    from forklift_core.live.replay_record import READS
+
+    seen = set()
+    for r in rows:
+        want = READS.get(r.get("t"))
+        if want is not None:
+            assert want <= set(r), (r["t"], want - set(r))
+            seen.add(r["t"])
+    assert seen  # the run wrote rows the replay reads
+
+
+def test_the_slam_header_carries_what_the_replay_reads():
+    """The observe tool's slam_header (written only with a live bridge): its keys, read from the source."""
+    import inspect
+    import re
+
+    from forklift_core.live.replay_record import READS
+
+    src = inspect.getsource(ro._slam_start)
+    keys = set(re.findall(r'"([a-z_]+)":', src[src.index('"t": "slam_header"'):]))
+    assert READS["slam_header"] - {"t"} <= keys

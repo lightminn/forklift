@@ -74,6 +74,9 @@ class LoopTtyTransport:
         self._boot_bad = False
         self.hil_plant = False
         self.hil_boot: int | None = None  # the boot the HIL check holds for (6a-2b design 10.1)
+        # the read time of the first STATE of the current boot: a replay's boot boundary (PR 7 7r) -- nothing acquired
+        # before it is given after a boot change
+        self.hil_boot_since_ns: int | None = None
         self.inject = None  # a test hook: inject(fd, data, frame) -> int | None to replace one write (6a-2b 10.2)
         self.on_event = None  # the run record's sink: a half write, its abandonment, the poison finished (10.8)
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
@@ -266,6 +269,7 @@ class LoopTtyTransport:
             return  # the host refuses it too (state_invalid): neither opens the check nor resets a boot's record
         if s.boot_id != self._boot:
             self._boot, self._boot_bad = s.boot_id, False
+            self.hil_boot_since_ns = self.read_done_ns
         if not hil_bits_ok(s):
             self._boot_bad = True
         self.hil_plant = not self._boot_bad

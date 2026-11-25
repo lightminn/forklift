@@ -256,15 +256,16 @@ class ImuSource:
         if head is not None:
             self._add_mark(head, at_head=True)
 
-    def lost(self, why: str) -> None:
+    def lost(self, why: str, at_ns: int | None = None) -> None:
         """The device gone (from any thread): a final boundary after the samples received so far. Reported again
-        before any sample is received, it is the same loss (counted only -- round 2 P2, round 3 P3)."""
+        before any sample is received, it is the same loss (counted only -- round 2 P2, round 3 P3). ``at_ns``: when
+        it happened (a replay puts a recorded loss back at its own time -- PR 7 7r); None: now."""
         with self._lock:
             self.counts["lost"] += 1
             if self._lost_open:
                 return
             self._lost_open = True
-            now = int(self._now())
+            now = int(self._now()) if at_ns is None else int(at_ns)
             self._add_mark(("m", now, "lost:" + str(why), now, 1, True, now), at_head=False)
 
     # --- the loop side ---------------------------------------------------------------------------------------------
@@ -286,6 +287,12 @@ class ImuSource:
         self._boundary_ns = until if self._boundary_ns is None else max(self._boundary_ns, until)
         if final and self.stopped is None:
             self.stopped = why
+
+    def pending(self) -> int:
+        """Queue items (samples and boundaries) not yet taken by the loop side: a replay's end waits for none left
+        (PR 7 7r plan 2: the last loss may sit behind the read budget)."""
+        with self._lock:
+            return len(self._queue)
 
     @property
     def gen(self) -> int:
