@@ -87,3 +87,18 @@ def test_a_stop_fits_the_cancel_to_void_bound(tmp_path):
     time.sleep(0.2)
     t0 = time.monotonic()
     assert s.stop(1) and time.monotonic() - t0 < 4.0
+
+
+def test_a_group_left_after_the_leader_is_reaped_is_retried(tmp_path, monkeypatch):
+    """Codex 7c-1a round 2 P2-3: the leader reaped but a member still listed: the entry stays for stop_all."""
+    import forklift_core.localization.slam_instance as mod
+
+    s = instances(tmp_path, "plain")
+    s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.2)
+    real = mod.group_members
+    monkeypatch.setattr(mod, "group_members", lambda pgid: [999999])  # a member that does not leave in time
+    assert not s.stop(1) and 1 in s.procs and s.records[-1]["group_empty"] is False
+    monkeypatch.setattr(mod, "group_members", real)
+    s.stop_all()
+    assert 1 not in s.procs and s.records[-1]["ok"]

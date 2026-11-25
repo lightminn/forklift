@@ -72,6 +72,8 @@ class RealScan:
 
 
 def _pose(v, n: int = 3) -> tuple:
+    if not isinstance(v, (list, tuple)) or any(isinstance(x, bool) or not isinstance(x, (int, float)) for x in v):
+        raise ValueError("a pose must be a list of numbers")  # not a string's characters (Codex 7c-1a round 2 P3-1)
     out = tuple(float(x) for x in v)
     if len(out) != n or not all(np.isfinite(out)):
         raise ValueError("a pose of finite numbers expected")

@@ -87,9 +87,10 @@ class SlamInstances:
         try:
             proc.wait(timeout=self.kill_s)
             reaped = True
-            self.procs.pop(k, None)  # kept until reaped, so a later stop_all tries again
         except subprocess.TimeoutExpired:
             reaped = False
+        if reaped and empty:
+            self.procs.pop(k, None)  # kept until the whole group is gone and reaped: stop_all tries again
         gone = True
         deadline = time.monotonic() + self.graph_s
         while self.graph_has(k):

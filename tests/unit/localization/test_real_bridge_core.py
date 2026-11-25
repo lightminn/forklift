@@ -291,8 +291,10 @@ def test_a_stop_that_does_not_complete_and_a_failed_instance_are_faults():
     assert core.closed and "stopped" in io.frames[-1].reason
     io = IO()
     core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
-    core.on_frame(hello())
+    core.on_frame(hello(deadline_ms=2_000))
     core.on_instance_failed(1, "lifecycle configure failed")
+    io.ns = 2_001 * MS
+    core.tick()  # reported at the deadline (round 2 P2-2)
     assert core.closed and "lifecycle" in io.frames[-1].reason
 
 
@@ -348,3 +350,34 @@ def test_wants_map_until_adopted():
     assert core.wants_map(1)
     bootstrap(core, io, 1, A)
     assert not core.wants_map(1) and not core.wants_map(2)
+
+
+# --- Codex 7c-1a round 2 ----------------------------------------------------------------------------------------------
+def test_a_bring_up_failure_waits_for_a_cancel_until_the_deadline():
+    """P2-2: a lifecycle failure at 20.15 s of a seed whose cancel was decided at 19.9 s: the cancel still voids it."""
+    io, core = ready_core()
+    core.on_frame(rl.Seed(5, 2, B, (0.0, 0.0, 0.0), 1, io.ns + 20_000 * MS))
+    io.ns += 20_150 * MS
+    core.on_instance_failed(2, "lifecycle get timed out")
+    assert not core.closed
+    core.on_frame(rl.Cancel(5, "boot_changed"))
+    assert io.states()[-1] == (5, "void")
+
+
+def test_a_bring_up_failure_with_no_cancel_is_a_fault_at_the_deadline():
+    io = IO()
+    core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
+    core.on_frame(hello(deadline_ms=2_000))
+    core.on_instance_failed(1, "lifecycle configure failed")
+    core.tick()
+    assert not core.closed
+    io.ns = 2_001 * MS
+    core.tick()
+    assert core.closed and "lifecycle" in io.frames[-1].reason
+
+
+def test_a_string_pose_is_no_pose():
+    body = (b'{"type": "hello", "session_epoch": 1, "map_id": "m", "start_id": 1, "start_pose": "123", '
+            b'"deadline_ns": 1}\n')
+    with pytest.raises(ValueError):
+        rl.decode(body)

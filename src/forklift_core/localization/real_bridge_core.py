@@ -86,7 +86,8 @@ class BridgeCore:
         if self.session is None:
             return self.fault("protocol: a frame before hello")
         if isinstance(obj, rl.Seed):
-            if self.cur is not None and self.cur["phase"] in ("starting", "bootstrap", "awaiting_map", "expired"):
+            if self.cur is not None and self.cur["phase"] in ("starting", "bootstrap", "awaiting_map", "expired",
+                                                                "failed"):
                 # a start check still running or past its deadline with no end state: the executor ends it first
                 # (a cancel to void, or its own deadline fault)
                 return self.fault("protocol: a seed while another start has no end state")
@@ -152,8 +153,13 @@ class BridgeCore:
         self._state(self.cur["id"], "ready_for_scans")
 
     def on_instance_failed(self, k: int, why: str) -> None:
-        if not self.closed and k == self.k and self.cur is not None:
-            self.fault(f"instance {k}: {why}")
+        """A bring-up failure ends the start with ``fault`` -- but only at its deadline: a cancel the executor decided
+        in time may still arrive and void it (design 6.1, 2: the executor alone judges the deadline; Codex 7c-1a round
+        2 P2-2). Until then the start waits in ``failed``."""
+        if self.closed or k != self.k or self.cur is None:
+            return
+        self.cur["phase"] = "failed"
+        self.cur["failure"] = f"instance {k}: {why}"
 
     def on_pose(self, k: int, stamp_ns: int, pose) -> None:
         if self.closed:
@@ -203,6 +209,8 @@ class BridgeCore:
         cur = self.cur
         if cur is not None and cur["phase"] == "awaiting_map" and int(self.io.now_ns()) > cur["deadline_ns"]:
             cur["phase"] = "expired"
+        if cur is not None and cur["phase"] == "failed" and int(self.io.now_ns()) > cur["deadline_ns"]:
+            return self.fault(cur["failure"])
         aw = self.awaited
         if aw is None or aw["expect"]:
             return

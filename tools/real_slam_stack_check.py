@@ -67,7 +67,12 @@ class Client:
     def wait_state(self, ident: int, kinds, timeout: float) -> rl.State:
         deadline = time.monotonic() + timeout
         while True:
-            obj = self.recv(max(0.05, deadline - time.monotonic()))
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f"no {kinds} for {ident} within {timeout} s")
+            obj = self.recv(left)
+            if time.monotonic() > deadline:  # read again after the frame (Codex 7c-1a round 2 P3-2)
+                raise TimeoutError(f"no {kinds} for {ident} within {timeout} s")
             if isinstance(obj, rl.State) and obj.id == ident and obj.kind in kinds:
                 return obj
             if isinstance(obj, rl.State) and obj.kind == "fault":

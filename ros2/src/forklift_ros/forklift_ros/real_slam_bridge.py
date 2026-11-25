@@ -134,7 +134,7 @@ class RealSlamBridge(Node):
                                      lambda m, k=k: self._on_pose(k, m), 10),
             self.create_subscription(OccupancyGrid, f"/slam_{k}/map", lambda m, k=k: self._on_map(k, m), LATCHED))
         self.instances.start(k, start_pose)
-        cancel, box = threading.Event(), {"cli": None}
+        cancel, box = threading.Event(), {"cli": None, "lock": threading.Lock()}
         thread = threading.Thread(target=self._bring_up, args=(k, cancel, box), daemon=True)
         self.bring_ups[k] = (thread, cancel, box)
         thread.start()
@@ -144,12 +144,15 @@ class RealSlamBridge(Node):
         up = self.bring_ups.pop(k, None)
         if up is not None:
             thread, cancel, box = up
-            cancel.set()
-            cli = box.get("cli")
+            with box["lock"]:  # with _cli's registration under the same lock, no CLI starts after this
+                cancel.set()
+                cli = box.get("cli")
             if cli is not None and cli.poll() is None:
                 cli.kill()
                 cli.wait(timeout=1.0)
             thread.join(timeout=1.0)
+            if thread.is_alive():
+                self.events.append({"event": "bring_up_still_running", "k": k})  # it can start nothing more
         for sub in self.subs.pop(k, ()):
             if sub is not None:
                 self.destroy_subscription(sub)
@@ -208,10 +211,11 @@ class RealSlamBridge(Node):
 
     def _cli(self, args: list, cancel: threading.Event, box: dict, timeout: float) -> tuple[int | None, str]:
         """A ros2 CLI call the instance's stop can kill (None: cancelled or timed out)."""
-        if cancel.is_set():
-            return None, "cancelled"
-        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-        box["cli"] = proc
+        with box["lock"]:  # checked and registered together (Codex 7c-1a round 2 P2-1)
+            if cancel.is_set():
+                return None, "cancelled"
+            proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            box["cli"] = proc
         try:
             out, _ = proc.communicate(timeout=timeout)
             return proc.returncode, (out or "").strip()[-200:]
