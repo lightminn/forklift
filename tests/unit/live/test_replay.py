@@ -694,3 +694,24 @@ def test_a_broken_first_line_of_a_changed_file_is_incomplete(tmp_path):
     with pytest.raises(rr.ReplayRefused) as e:
         load(p)
     assert e.value.reason == "record_incomplete"
+
+
+
+@pytest.mark.parametrize("reseal,reason", [(True, "record_malformed"), (False, "record_incomplete")])
+def test_a_row_missing_a_key_is_malformed_after_the_hash(tmp_path, reseal, reason):
+    """Codex 7r-1 round 3 P3: a scan row without its frame."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p)
+    ok = Path(str(p) + ".ok").read_text()
+
+    def edit(rows):
+        k = [i for i, r in enumerate(rows) if r.get("t") == "scan"][5]
+        rows[k] = {x: v for x, v in rows[k].items() if x != "frame"}
+        return rows
+
+    rewrite(p, edit)
+    if not reseal:
+        Path(str(p) + ".ok").write_text(ok)
+    with pytest.raises(rr.ReplayRefused) as e:
+        load(p)
+    assert e.value.reason == reason

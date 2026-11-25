@@ -277,6 +277,9 @@ def load_replay_record(path, *, lidar_cfg, imu_cfg=None, imu_required: bool, all
                         imu_ver.row(r)
             except ReplayRefused as exc:
                 deferred = exc
+            except (KeyError, TypeError, ValueError, AttributeError):
+                # a row without a key it must have: malformed, reported after the hash (round 3 P3)
+                malformed_at = line_at if malformed_at is None else malformed_at
     if digest.hexdigest() != want_sha:
         raise ReplayRefused("record_incomplete", "the .ok marker names other bytes")
     if malformed_at is not None:
