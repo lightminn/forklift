@@ -120,8 +120,10 @@ def decode(body: bytes):
     line = body.partition(b"\n")[0]
     try:
         header = json.loads(line)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError(f"not a frame header: {exc}") from None
+    if not isinstance(header, dict):
+        raise ValueError("a frame header must be an object")
     kind = header.get("type")
     try:
         if kind == "hello":
@@ -143,6 +145,8 @@ def decode(body: bytes):
             return slam_link.decode_reply(body)
     except KeyError as exc:
         raise ValueError(f"{kind}: missing {exc}") from None
+    except (TypeError, AttributeError) as exc:
+        raise ValueError(f"{kind}: a field of the wrong kind ({exc})") from None
     raise ValueError(f"unknown frame type {kind!r}")
 
 

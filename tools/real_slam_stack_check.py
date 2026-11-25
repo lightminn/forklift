@@ -3,9 +3,9 @@
 ``forklift_ros.real_slam_bridge`` + slam_toolbox 2.8.5 through one session with frames, on a survey bundle, scans
 ray-cast from its grid at the truck's (still) pose.
 
-Scenarios, in one session: hello at A -> ready, three ordinary scans; seed B -> ready; a seed at a wrong pose with
-scans taken at B -> not_localized; seed B again -> ready; seed A cancelled during its start check -> void, then seed A
--> ready. Each start's states, replies, latencies and the reply corrections' distance from the expected pose go to
+Scenarios, in one session, each start with the operational 20 s deadline: hello at A -> ready, three ordinary scans;
+seed B -> ready; a seed at a wrong pose with scans taken at B -> not_localized; seed B again -> ready; seed A cancelled
+right after start scan 5 is sent (its /pose pending) -> void within 5 s; then seed A -> ready. Each start's states, replies, latencies and the reply corrections' distance from the expected pose go to
 OUT/stack_check.json; exit 0 when every scenario ends as expected.
 
     python3 tools/real_slam_stack_check.py SOCKET BUNDLE_DIR OUT_DIR
@@ -89,18 +89,28 @@ class Client:
                 raise RuntimeError(f"bridge fault: {obj.reason}")
 
 
-def start(cl: Client, grid, frame: bytes, ident: int, scan_pose, expect_pose, *, cancel_after=None) -> dict:
+def start(cl: Client, grid, frame: bytes, ident: int, scan_pose, expect_pose, *, cancel_at=None) -> dict:
+    """One start or seed (its frame carries the operational 20 s deadline). ``cancel_at``: send that start scan and
+    cancel at once, while its /pose is pending -- void must come within the executor's 5 s."""
     t0 = time.monotonic()
     cl.send(frame)
     cl.wait_state(ident, ("seeding",), 10)
-    cl.wait_state(ident, ("ready_for_scans",), 40)
+    cl.wait_state(ident, ("ready_for_scans",), 20)
     up = time.monotonic() - t0
     replies = []
     for i in range(1, 8):
-        if cancel_after is not None and i > cancel_after:
+        if cancel_at is not None and i == cancel_at:
+            cl.sid += 1
+            ns = max(time.monotonic_ns(), cl.last_ns + 1)
+            cl.last_ns = ns
+            s = slam_link.Scan(cl.sid, ns / 1e9, (0.0, 0.0, 0.0), raycast(grid, scan_pose).astype(np.float32),
+                               -math.pi, 2 * math.pi / 360, 0.1, 12.0)
+            cl.send(rl.encode_scan(s, ns))
+            tc = time.monotonic()
             cl.send(rl.encode_cancel(rl.Cancel(ident, "test")))
-            st = cl.wait_state(ident, ("void",), 20)
-            return {"end": st.kind, "bring_up_s": round(up, 2), "replies": replies}
+            st = cl.wait_state(ident, ("void",), 5.0)
+            return {"end": st.kind, "bring_up_s": round(up, 2), "void_s": round(time.monotonic() - tc, 3),
+                    "replies": replies}
         r, dt = cl.scan(grid, scan_pose)
         err = None
         if r.status == "processed":
@@ -122,20 +132,21 @@ def main(argv) -> int:
     b = next(p for p in ((A[0] + 0.3, A[1], 0.1), (A[0] + 0.4, A[1] + 0.2, 0.15)) if free_at(grid, p))
     wrong = (b[0] + 1.5, b[1] + 0.5, b[2] + 0.8)
     cl = Client(sock)
-    far = time.monotonic_ns() + 10**15
+    def deadline():
+        return time.monotonic_ns() + 20 * 10**9  # the operational seed/start deadline (design 6.1, 2)
     res: dict = {"a": A, "b": b, "wrong": wrong}
     bundle_id = slam_map.load_bundle(bundle_dir).map_id
     ok = True
     try:
-        res["hello_a"] = start(cl, grid, rl.encode_hello(rl.Hello(1, bundle_id, 1, A, far)), 1, A, A)
+        res["hello_a"] = start(cl, grid, rl.encode_hello(rl.Hello(1, bundle_id, 1, A, deadline())), 1, A, A)
         res["ready_scans"] = [{"status": r.status, "latency_s": round(dt, 3),
                                "error_m": round(math.hypot(r.map_from_odom[0] - A[0], r.map_from_odom[1] - A[1]), 4)}
                               for r, dt in (cl.scan(grid, A) for _ in range(3))]
-        seed = lambda i, pose: rl.encode_seed(rl.Seed(i, i, pose, (0.0, 0.0, 0.0), 1, far))  # noqa: E731
+        seed = lambda i, pose: rl.encode_seed(rl.Seed(i, i, pose, (0.0, 0.0, 0.0), 1, deadline()))  # noqa: E731
         res["seed_b"] = start(cl, grid, seed(2, b), 2, b, b)
         res["seed_wrong"] = start(cl, grid, seed(3, wrong), 3, b, wrong)
         res["seed_b_again"] = start(cl, grid, seed(4, b), 4, b, b)
-        res["seed_a_cancelled"] = start(cl, grid, seed(5, A), 5, A, A, cancel_after=3)
+        res["seed_a_cancelled"] = start(cl, grid, seed(5, A), 5, A, A, cancel_at=5)  # scan 5's /pose pending
         res["seed_a"] = start(cl, grid, seed(6, A), 6, A, A)
         want = {"hello_a": "ready", "seed_b": "ready", "seed_wrong": "not_localized", "seed_b_again": "ready",
                 "seed_a_cancelled": "void", "seed_a": "ready"}

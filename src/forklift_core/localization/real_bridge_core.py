@@ -86,8 +86,10 @@ class BridgeCore:
         if self.session is None:
             return self.fault("protocol: a frame before hello")
         if isinstance(obj, rl.Seed):
-            if self.cur is not None and self.cur["phase"] in ("starting", "bootstrap"):
-                return self.fault("protocol: a seed while another start is in progress")
+            if self.cur is not None and self.cur["phase"] in ("starting", "bootstrap", "awaiting_map", "expired"):
+                # a start check still running or past its deadline with no end state: the executor ends it first
+                # (a cancel to void, or its own deadline fault)
+                return self.fault("protocol: a seed while another start has no end state")
             if self.awaited is not None:
                 return self.fault("protocol: a seed with a scan in flight")
             if not self._stop():
@@ -180,33 +182,55 @@ class BridgeCore:
         if cur["phase"] == "bootstrap" and aw["index"] == STARTUP_SCANS:
             self._start_check()
 
+    def wants_map(self, k: int) -> bool:
+        """Instance ``k``'s map is still to be adopted (the node drops its map subscription once it is not)."""
+        return not self.closed and k == self.k and self.cur is not None and self.cur["map"] is None
+
     def on_map(self, k: int, grid: slam_map.Grid) -> None:
         if self.closed or k != self.k or self.cur is None:
             self.counts["late_maps"] += 1
             return
         if self.cur["first_processed"] and self.cur["map"] is None:
             self.cur["map"] = grid  # the first map after the first processed scan (L3)
+            if self.cur["phase"] == "awaiting_map":
+                self._start_check()
 
     def tick(self) -> None:
-        """A start scan that expects no /pose is answered skipped after WARMUP_S."""
+        """A start scan that expects no /pose is answered skipped after WARMUP_S; a start check still waiting for its
+        map past the deadline ends with no end state."""
+        if self.closed:
+            return
+        cur = self.cur
+        if cur is not None and cur["phase"] == "awaiting_map" and int(self.io.now_ns()) > cur["deadline_ns"]:
+            cur["phase"] = "expired"
         aw = self.awaited
-        if self.closed or aw is None or aw["expect"]:
+        if aw is None or aw["expect"]:
             return
         if int(self.io.now_ns()) - aw["sent_ns"] >= WARMUP_S * 1e9:
             self.awaited = None
             self._reply(aw["scan"], "skipped")
 
+    def _expired(self, cur) -> bool:
+        """Past the deadline: no end state (the executor judges it), the start check stays without one."""
+        if int(self.io.now_ns()) > cur["deadline_ns"]:
+            cur["phase"] = "expired"
+            return True
+        return False
+
     def _start_check(self) -> None:
         cur = self.cur
-        if int(self.io.now_ns()) > cur["deadline_ns"]:
-            cur["phase"] = "expired"  # no end state past the deadline: the executor judges it
+        if self._expired(cur):
             return
         if cur["map"] is None:
-            return self.fault(f"{slam_map.NOT_LOADED}: no /map after the first processed scan")
+            cur["phase"] = "awaiting_map"  # the map may come after the last /pose: wait for it within the deadline
+            return
         coverage = slam_map.map_coverage(self.bundle.grid, cur["map"])
+        localized = slam_map.localized(cur["fractions"], cur["poses"], cur["pose"])
+        if self._expired(cur):  # read again after the computation, right before an end state goes out
+            return
         if not coverage >= slam_map.MAP_LOADED_MIN:
             return self.fault(f"{slam_map.NOT_LOADED}: the /map shows {coverage:.3f} of the survey's occupied cells")
-        if not slam_map.localized(cur["fractions"], cur["poses"], cur["pose"]):
+        if not localized:
             cur["phase"] = "not_localized"
             return self._state(cur["id"], "not_localized",
                                f"{slam_map.NOT_LOCALIZED}: endpoint fractions "

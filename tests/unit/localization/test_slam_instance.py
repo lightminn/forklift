@@ -54,3 +54,36 @@ def test_a_node_that_stays_in_the_graph_is_no_stop(tmp_path):
 
 def test_stopping_an_unknown_instance_is_a_no_op(tmp_path):
     assert instances(tmp_path, "plain").stop(9)
+
+
+def test_a_child_not_reaped_stays_for_stop_all(tmp_path, monkeypatch):
+    """Codex 7c-1a round 1 P2-4: the Popen is kept until it is reaped."""
+    import subprocess
+
+    s = instances(tmp_path, "plain")
+    proc = s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.2)
+    real_wait = proc.wait
+    calls = []
+
+    def wait(timeout=None):
+        calls.append(timeout)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired("x", timeout)
+        return real_wait(timeout)
+
+    monkeypatch.setattr(proc, "wait", wait)
+    assert not s.stop(1) and 1 in s.procs
+    s.stop_all()
+    assert 1 not in s.procs and s.records[-1]["ok"]
+
+
+def test_a_stop_fits_the_cancel_to_void_bound(tmp_path):
+    """With the default bounds, a group ignoring SIGTERM is stopped well inside the executor's 5 s to void."""
+    script = tmp_path / "fake_node.py"
+    script.write_text(FAKE)
+    s = SlamInstances(lambda k, pose: [sys.executable, str(script), "stubborn"], log_dir=tmp_path)
+    s.start(1, (0.0, 0.0, 0.0))
+    time.sleep(0.2)
+    t0 = time.monotonic()
+    assert s.stop(1) and time.monotonic() - t0 < 4.0

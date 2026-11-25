@@ -107,7 +107,9 @@ def test_frames_round_trip():
     assert back.stamp_ns == 1_234_567_891 and back.scan.scan_id == 4 and np.array_equal(back.scan.ranges_m, s.ranges_m)
 
 
-@pytest.mark.parametrize("body", [b'{"type": "hello", "session_epoch": 1.5, "map_id": "m", "start_id": 1, '
+@pytest.mark.parametrize("body", [b'[]\n', b'{"type": "hello", "session_epoch": 1, "map_id": "m", "start_id": 1, '
+                                  b'"start_pose": null, "deadline_ns": 1}\n',
+                                  b'{"type": "hello", "session_epoch": 1.5, "map_id": "m", "start_id": 1, '
                                   b'"start_pose": [0, 0, 0], "deadline_ns": 1}\n',
                                   b'{"type": "seed", "seed_id": 1}\n', b'{"type": "nope"}\n', b'not json\n',
                                   b'{"type": "state", "id": 1, "kind": "maybe"}\n'])
@@ -141,12 +143,30 @@ def test_scans_off_the_walls_are_not_localized_and_no_fault():
     assert io.states()[-1] == (1, "not_localized") and not core.closed
 
 
-def test_no_map_or_a_thin_map_is_a_fault():
+def test_a_map_after_the_last_pose_is_waited_for_within_the_deadline():
+    """Codex 7c-1a round 1 P2-1: the 7th /pose before the /map -- the check waits for it."""
     io = IO()
     core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
     core.on_frame(hello())
     bootstrap(core, io, 1, A, with_map=False)
-    assert io.states()[-1][1] == "fault" and core.closed
+    assert io.states()[-1] == (1, "ready_for_scans") and not core.closed
+    io.ns += 50 * MS
+    core.on_map(1, GRID)
+    assert io.states()[-1] == (1, "ready")
+
+
+def test_no_map_by_the_deadline_is_no_end_state():
+    io = IO()
+    core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
+    core.on_frame(hello(deadline_ms=3_000))
+    bootstrap(core, io, 1, A, with_map=False)
+    io.ns = 3_001 * MS
+    core.tick()
+    core.on_map(1, GRID)
+    assert io.states()[-1] == (1, "ready_for_scans") and core.cur["phase"] == "expired"
+
+
+def test_a_thin_map_is_a_fault():
     io = IO()
     core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
     core.on_frame(hello())
@@ -274,3 +294,57 @@ def test_a_stop_that_does_not_complete_and_a_failed_instance_are_faults():
     core.on_frame(hello())
     core.on_instance_failed(1, "lifecycle configure failed")
     assert core.closed and "lifecycle" in io.frames[-1].reason
+
+
+# --- Codex 7c-1a round 1 ----------------------------------------------------------------------------------------------
+def test_the_deadline_is_read_again_after_the_map_check(monkeypatch):
+    """P2-2: the check starts 1 ms before the deadline and ends 1 ms after it -- no ready."""
+    import forklift_core.localization.real_bridge_core as core_mod
+
+    io = IO()
+    core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
+    core.on_frame(hello())
+    real = core_mod.slam_map.map_coverage
+
+    def slow(a, b):
+        io.ns = core.cur["deadline_ns"] + MS
+        return real(a, b)
+
+    monkeypatch.setattr(core_mod.slam_map, "map_coverage", slow)
+    bootstrap(core, io, 1, A)
+    assert io.states()[-1] == (1, "ready_for_scans") and core.cur["phase"] == "expired"
+
+
+def test_a_seed_after_an_expired_start_check_is_refused_but_its_cancel_voids_it():
+    io, core = ready_core()
+    core.on_frame(rl.Seed(5, 2, B, (0.0, 0.0, 0.0), 1, io.ns + 2_000 * MS))
+    core.on_instance_ready(2)
+    io.ns += 3_000 * MS
+    for i in range(1, 8):
+        io.ns += 50 * MS
+        core.on_frame(rl.RealScan(scan_at(200 + i, B, io.ns), io.ns))
+        if i in (1, 5, 6, 7):
+            core.on_pose(2, io.ns, B)
+            if i == 1:
+                core.on_map(2, GRID)
+        else:
+            io.ns += int(WARMUP_S * 1e9)
+            core.tick()
+    assert core.cur["phase"] == "expired"
+    core.on_frame(rl.Cancel(5, "deadline"))
+    assert io.states()[-1] == (5, "void")
+    io2, core2 = ready_core()
+    core2.on_frame(rl.Seed(5, 2, B, (0.0, 0.0, 0.0), 1, io2.ns - 1))  # already past
+    core2.on_instance_ready(2)
+    bootstrap(core2, io2, 2, B, sid0=300)
+    core2.on_frame(rl.Seed(6, 3, A, (0.0, 0.0, 0.0), 1, io2.ns + 20_000 * MS))
+    assert core2.closed
+
+
+def test_wants_map_until_adopted():
+    io = IO()
+    core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
+    core.on_frame(hello())
+    assert core.wants_map(1)
+    bootstrap(core, io, 1, A)
+    assert not core.wants_map(1) and not core.wants_map(2)

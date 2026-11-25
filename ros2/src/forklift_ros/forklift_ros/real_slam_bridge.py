@@ -108,8 +108,13 @@ class RealSlamBridge(Node):
                              "-r", f"__ns:=/slam_{k}"],
             log_dir=self.out, graph_has=self._in_graph, drain=self._drain)
         self.core = BridgeCore(self, self.bundle, self.laser)
-        self.create_timer(0.01, self._publish_clock)
         self.events: list = []
+        self.bring_ups: dict = {}  # k -> (thread, cancel event, {"cli": Popen | None})
+        self.map_drops: set = set()
+        self.stopping = threading.Event()
+        # /clock from its own thread, not a ROS timer: a ROS timer runs on the node's (possibly simulated) clock and on
+        # the executor that the core's lock can hold up (Codex 7c-1a round 1 P2-3)
+        threading.Thread(target=self._clock_loop, daemon=True).start()
 
     # --- the core's io -------------------------------------------------------------------------------------------
     def now_ns(self) -> int:
@@ -129,11 +134,25 @@ class RealSlamBridge(Node):
                                      lambda m, k=k: self._on_pose(k, m), 10),
             self.create_subscription(OccupancyGrid, f"/slam_{k}/map", lambda m, k=k: self._on_map(k, m), LATCHED))
         self.instances.start(k, start_pose)
-        threading.Thread(target=self._bring_up, args=(k,), daemon=True).start()
+        cancel, box = threading.Event(), {"cli": None}
+        thread = threading.Thread(target=self._bring_up, args=(k, cancel, box), daemon=True)
+        self.bring_ups[k] = (thread, cancel, box)
+        thread.start()
 
     def stop_instance(self, k: int) -> bool:
+        # the instance's bring-up first: no lifecycle call may follow its stop (Codex 7c-1a round 1 P2-5)
+        up = self.bring_ups.pop(k, None)
+        if up is not None:
+            thread, cancel, box = up
+            cancel.set()
+            cli = box.get("cli")
+            if cli is not None and cli.poll() is None:
+                cli.kill()
+                cli.wait(timeout=1.0)
+            thread.join(timeout=1.0)
         for sub in self.subs.pop(k, ()):
-            self.destroy_subscription(sub)
+            if sub is not None:
+                self.destroy_subscription(sub)
         pub = self.scan_pubs.pop(k, None)
         if pub is not None:
             self.destroy_publisher(pub)
@@ -162,8 +181,10 @@ class RealSlamBridge(Node):
             pub.publish(msg)
 
     # --- ROS side ----------------------------------------------------------------------------------------------------
-    def _publish_clock(self) -> None:  # not _clock: rclpy.Node keeps its ROSClock there
-        self.clock_pub.publish(Clock(clock=stamp_of(time.monotonic_ns())))
+    def _clock_loop(self) -> None:  # not _clock: rclpy.Node keeps its ROSClock there
+        while not self.stopping.is_set():
+            self.clock_pub.publish(Clock(clock=stamp_of(time.monotonic_ns())))
+            time.sleep(0.01)
 
     def _static_tf(self) -> None:
         x, y, z, yaw = self.laser
@@ -185,40 +206,62 @@ class RealSlamBridge(Node):
     def _drain(self, k: int) -> None:
         pass  # the instance's subscriptions were destroyed before the stop; callbacks already taken are ignored by k
 
-    def _lifecycle(self, k: int, transition: str) -> tuple[bool, str]:
+    def _cli(self, args: list, cancel: threading.Event, box: dict, timeout: float) -> tuple[int | None, str]:
+        """A ros2 CLI call the instance's stop can kill (None: cancelled or timed out)."""
+        if cancel.is_set():
+            return None, "cancelled"
+        proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        box["cli"] = proc
         try:
-            p = subprocess.run(["ros2", "lifecycle", "set", f"/slam_{k}/{NODE_NAME}", transition],
-                               capture_output=True, text=True, timeout=LIFECYCLE_S)
-            return p.returncode == 0 and "successful" in p.stdout, (p.stdout + p.stderr).strip()[-200:]
+            out, _ = proc.communicate(timeout=timeout)
+            return proc.returncode, (out or "").strip()[-200:]
         except subprocess.TimeoutExpired:
-            return False, "timeout"
+            proc.kill()
+            proc.communicate()
+            return None, "timeout"
+        finally:
+            box["cli"] = None
 
-    def _bring_up(self, k: int) -> None:
+    def _fail(self, k: int, cancel: threading.Event, why: str) -> None:
+        with self.lock:
+            if not cancel.is_set():
+                self.core.on_instance_failed(k, why)
+
+    def _bring_up(self, k: int, cancel: threading.Event, box: dict) -> None:
+        fq = f"/slam_{k}/{NODE_NAME}"
         deadline = time.monotonic() + LIFECYCLE_S
-        while time.monotonic() < deadline:
-            p = subprocess.run(["ros2", "lifecycle", "get", f"/slam_{k}/{NODE_NAME}"], capture_output=True, text=True,
-                               timeout=LIFECYCLE_S)
-            if p.returncode == 0:
+        while True:
+            code, text = self._cli(["ros2", "lifecycle", "get", fq], cancel, box, LIFECYCLE_S)
+            if cancel.is_set():
+                return
+            if code == 0:
                 break
+            if time.monotonic() > deadline:
+                return self._fail(k, cancel, f"lifecycle node never appeared: {text}")
             time.sleep(0.3)
         for transition in ("configure", "activate"):
-            ok, text = self._lifecycle(k, transition)
+            code, text = self._cli(["ros2", "lifecycle", "set", fq, transition], cancel, box, LIFECYCLE_S)
+            if cancel.is_set():
+                return
+            ok = code == 0 and "successful" in text
             self.events.append({"event": "lifecycle", "k": k, "transition": transition, "ok": ok, "text": text})
             if not ok:
-                with self.lock:
-                    self.core.on_instance_failed(k, f"lifecycle {transition} failed: {text}")
-                return
+                return self._fail(k, cancel, f"lifecycle {transition} failed: {text}")
         t0 = time.monotonic()
         while self.count_subscribers(f"/slam_{k}/scan") == 0:
-            if time.monotonic() - t0 > SUBSCRIBE_S:
-                with self.lock:
-                    self.core.on_instance_failed(k, "never subscribed to its scan topic")
+            if cancel.is_set():
                 return
+            if time.monotonic() - t0 > SUBSCRIBE_S:
+                return self._fail(k, cancel, "never subscribed to its scan topic")
             time.sleep(0.05)
         self._static_tf()
         time.sleep(0.5)  # the static transform into slam_toolbox's tf buffer
+        proc = self.instances.procs.get(k)
+        if proc is None or proc.poll() is not None:
+            return self._fail(k, cancel, "the instance exited during its bring-up")
         with self.lock:
-            self.core.on_instance_ready(k)
+            if not cancel.is_set():
+                self.core.on_instance_ready(k)
 
     def _on_pose(self, k: int, m) -> None:
         p = m.pose.pose
@@ -226,11 +269,19 @@ class RealSlamBridge(Node):
             self.core.on_pose(k, ns_of(m.header.stamp), (p.position.x, p.position.y, yaw_of(p.orientation)))
 
     def _on_map(self, k: int, m) -> None:
+        with self.lock:
+            if not self.core.wants_map(k):
+                return
         grid = slam_map.Grid(np.asarray(m.data, np.int8).reshape(m.info.height, m.info.width),
                              (m.info.origin.position.x, m.info.origin.position.y, yaw_of(m.info.origin.orientation)),
                              float(m.info.resolution))
         with self.lock:
             self.core.on_map(k, grid)
+            adopted = not self.core.wants_map(k)
+        if adopted:
+            # no later map is read: its subscription goes (round 1 P3-2), from the socket loop -- not from inside its
+            # own callback
+            self.map_drops.add(k)
 
     # --- the socket ----------------------------------------------------------------------------------------------------
     def serve(self) -> int:
@@ -262,15 +313,24 @@ class RealSlamBridge(Node):
                         with self.lock:
                             try:
                                 obj = rl.decode(body)
-                            except ValueError as exc:
-                                self.core.fault(f"protocol: {exc}")
+                            except Exception as exc:  # noqa: BLE001 -- any malformed frame ends with a fault state
+                                self.core.fault(f"protocol: {type(exc).__name__}: {exc}")
                                 break
                             self.core.on_frame(obj)
                 with self.lock:
                     self.core.tick()
+                    for k in list(self.map_drops):
+                        self.map_drops.discard(k)
+                        subs = self.subs.get(k)
+                        if subs is not None and subs[1] is not None:
+                            self.destroy_subscription(subs[1])
+                            self.subs[k] = (subs[0], None)
         finally:
             with self.lock:
+                for k in list(self.bring_ups):
+                    self.stop_instance(k)
                 self.instances.stop_all()
+            self.stopping.set()
             conn.close()
             (self.out / "events.json").write_text(json.dumps({"events": self.events, "counts": self.core.counts,
                                                               "instances": self.instances.records}, indent=1))

@@ -33,8 +33,10 @@ def group_members(pgid: int) -> list[int]:
 
 class SlamInstances:
     def __init__(self, argv_for, *, log_dir: Path, graph_has=lambda k: False, drain=lambda k: None,
-                 term_s: float = 5.0, kill_s: float = 5.0, graph_s: float = 10.0) -> None:
-        """``argv_for(k, start_pose)``: the command line of instance ``k`` (the node executable first)."""
+                 term_s: float = 1.0, kill_s: float = 1.0, graph_s: float = 2.0) -> None:
+        """``argv_for(k, start_pose)``: the command line of instance ``k`` (the node executable first). The bounds
+        keep a whole stop -- SIGTERM, SIGKILL, reap, graph -- under the executor's 5 s cancel-to-void bound (design
+        6.1, 2; Codex 7c-1a round 1 P2-4)."""
         self.argv_for, self.log_dir = argv_for, Path(log_dir)
         self.graph_has, self.drain = graph_has, drain
         self.term_s, self.kill_s, self.graph_s = term_s, kill_s, graph_s
@@ -62,7 +64,7 @@ class SlamInstances:
     def stop(self, k: int) -> bool:
         """Stop instance ``k``: True only when the whole group is gone, the child reaped, the node gone from the graph
         and the queues drained."""
-        proc = self.procs.pop(k, None)
+        proc = self.procs.get(k)
         rec = {"k": k, "sigkill": False}
         self.records.append(rec)
         if proc is None:
@@ -85,6 +87,7 @@ class SlamInstances:
         try:
             proc.wait(timeout=self.kill_s)
             reaped = True
+            self.procs.pop(k, None)  # kept until reaped, so a later stop_all tries again
         except subprocess.TimeoutExpired:
             reaped = False
         gone = True
