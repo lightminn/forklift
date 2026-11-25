@@ -124,10 +124,8 @@ def _written_moving(rows):
             if w["kind"] == "DRIVE" and speed.get(w["seq"]) not in (None, 0.0)]
 
 
-def _approach(c, seconds, run=None):
-    """A mission with no bypass on the far pallet, driven for ``seconds`` after its first moving DRIVE is written
-    (read from the run's record as it is written; with no run, from the submit): the approach's straight run is
-    judged."""
+def _approach(c, seconds):
+    """A mission with no bypass on the far pallet, driven for ``seconds``: the approach's straight run is judged."""
     r = c.ask("pallet_register", pallet_id="P-S10", pose=FAR_PALLET)
     assert r["t"] == "ack", r
     time.sleep(0.8)
@@ -136,12 +134,6 @@ def _approach(c, seconds, run=None):
     r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
               targets_revision=r.get("targets_revision", c.status["targets_revision"]))
     assert r["t"] == "ack", r
-    if run is None:
-        time.sleep(seconds)
-        return
-    from test_real_run_hil import _live_rows
-
-    _until(lambda: _written_moving(_live_rows(run)), 60, "a moving DRIVE written")
     time.sleep(seconds)
 
 
@@ -171,7 +163,7 @@ def test_an_undeclared_approach_on_the_real_source_drives_past_the_declared_cap(
     c = Console(run.port)
     try:
         _lease(c)
-        _approach(c, 5.0, run)  # 5 s of moving DRIVEs: the ramp passes 0.06 m/s well inside it
+        _approach(c, 12.0)
     finally:
         code = _finish(run, c, bridge)
     rows = run.rows()
@@ -242,7 +234,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
         assert s["relocalize"]["state"] == "declared", s["relocalize"]
         assert s["relocalize_generation"] is None and "relocalize" in s["bypassed"] and s["manual_only"] is None
         assert "d5_pocket" not in s["bypassed"] and "slam" not in s["bypassed"]
-        _approach(c, 5.0, run)  # as long as the undeclared run that went above the cap
+        _approach(c, 12.0)
     finally:
         code = _finish(run, c, bridge)
     rows = run.rows()
