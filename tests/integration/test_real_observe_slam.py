@@ -23,6 +23,7 @@ from forklift_core.sensors import lidar_cfg
 from forklift_core.sensors.scan_feed import bind_socket
 
 from fake_slam_bridge import FakeBridge
+from test_bringup_tool import mcu_model  # noqa: F401 -- the module-scoped model build the model fixture uses
 from test_real_observe import REPO, _rows, model, ro  # noqa: F401 -- the model fixture
 
 VEHICLE = REPO / "config" / "real" / "vehicle.yaml"
