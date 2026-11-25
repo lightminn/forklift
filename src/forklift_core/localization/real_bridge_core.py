@@ -52,6 +52,7 @@ class BridgeCore:
         self.correction = (0.0, 0.0, 0.0)  # the last processed reply's map <- odom
         self.closed = False
         self.counts = {"processed": 0, "skipped": 0, "stale_instance": 0, "late_maps": 0}
+        self.failures: list = []  # bring-up failures (no end state: see on_instance_failed)
 
     # --- outputs ---------------------------------------------------------------------------------------------------
     def _state(self, ident: int, kind: str, reason: str | None = None) -> None:
@@ -153,13 +154,15 @@ class BridgeCore:
         self._state(self.cur["id"], "ready_for_scans")
 
     def on_instance_failed(self, k: int, why: str) -> None:
-        """A bring-up failure ends the start with ``fault`` -- but only at its deadline: a cancel the executor decided
-        in time may still arrive and void it (design 6.1, 2: the executor alone judges the deadline; Codex 7c-1a round
-        2 P2-2). Until then the start waits in ``failed``."""
+        """A bring-up failure is no end state of its own: the start waits in ``failed`` (its reason kept in
+        ``failures``) for a cancel, which voids it, or for the executor's own deadline fault -- the bridge never ends a
+        start on a deadline, since a cancel decided in time may land after it (design 6.1, 2; Codex 7c-1a rounds 2-3
+        P2)."""
         if self.closed or k != self.k or self.cur is None:
             return
         self.cur["phase"] = "failed"
         self.cur["failure"] = f"instance {k}: {why}"
+        self.failures.append({"id": self.cur["id"], "k": k, "why": why})
 
     def on_pose(self, k: int, stamp_ns: int, pose) -> None:
         if self.closed:
@@ -209,8 +212,6 @@ class BridgeCore:
         cur = self.cur
         if cur is not None and cur["phase"] == "awaiting_map" and int(self.io.now_ns()) > cur["deadline_ns"]:
             cur["phase"] = "expired"
-        if cur is not None and cur["phase"] == "failed" and int(self.io.now_ns()) > cur["deadline_ns"]:
-            return self.fault(cur["failure"])
         aw = self.awaited
         if aw is None or aw["expect"]:
             return

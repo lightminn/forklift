@@ -149,7 +149,10 @@ class RealSlamBridge(Node):
                 cli = box.get("cli")
             if cli is not None and cli.poll() is None:
                 cli.kill()
-                cli.wait(timeout=1.0)
+                try:
+                    cli.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:  # recorded; the instance's own stop goes on (round 3 P2-2)
+                    self.events.append({"event": "cli_not_reaped", "k": k, "pid": cli.pid})
             thread.join(timeout=1.0)
             if thread.is_alive():
                 self.events.append({"event": "bring_up_still_running", "k": k})  # it can start nothing more
@@ -337,6 +340,7 @@ class RealSlamBridge(Node):
             self.stopping.set()
             conn.close()
             (self.out / "events.json").write_text(json.dumps({"events": self.events, "counts": self.core.counts,
+                                                              "failures": self.core.failures,
                                                               "instances": self.instances.records}, indent=1))
         return 0
 

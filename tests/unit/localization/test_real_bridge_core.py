@@ -293,9 +293,9 @@ def test_a_stop_that_does_not_complete_and_a_failed_instance_are_faults():
     core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
     core.on_frame(hello(deadline_ms=2_000))
     core.on_instance_failed(1, "lifecycle configure failed")
-    io.ns = 2_001 * MS
-    core.tick()  # reported at the deadline (round 2 P2-2)
-    assert core.closed and "lifecycle" in io.frames[-1].reason
+    io.ns = 3_000 * MS
+    core.tick()  # no end state of its own: the executor's deadline ends it (round 3 P2-1)
+    assert not core.closed and core.cur["phase"] == "failed" and "lifecycle" in core.failures[-1]["why"]
 
 
 # --- Codex 7c-1a round 1 ----------------------------------------------------------------------------------------------
@@ -364,16 +364,19 @@ def test_a_bring_up_failure_waits_for_a_cancel_until_the_deadline():
     assert io.states()[-1] == (5, "void")
 
 
-def test_a_bring_up_failure_with_no_cancel_is_a_fault_at_the_deadline():
-    io = IO()
-    core = BridgeCore(io, BUNDLE, (0.0, 0.0, 0.0, 0.0))
-    core.on_frame(hello(deadline_ms=2_000))
-    core.on_instance_failed(1, "lifecycle configure failed")
+def test_a_bring_up_failure_never_ends_the_start_on_its_own():
+    """Round 3 P2-1: failure at 20.15 s, a tick at 20.16 s, the cancel decided at 19.9 s lands at 20.4 s -- void."""
+    io, core = ready_core()
+    core.on_frame(rl.Seed(5, 2, B, (0.0, 0.0, 0.0), 1, io.ns + 20_000 * MS))
+    t0 = io.ns
+    io.ns = t0 + 20_150 * MS
+    core.on_instance_failed(2, "lifecycle get timed out")
+    io.ns = t0 + 20_160 * MS
     core.tick()
-    assert not core.closed
-    io.ns = 2_001 * MS
-    core.tick()
-    assert core.closed and "lifecycle" in io.frames[-1].reason
+    assert not core.closed and core.failures[-1]["why"] == "lifecycle get timed out"
+    io.ns = t0 + 20_400 * MS
+    core.on_frame(rl.Cancel(5, "boot_changed"))
+    assert io.states()[-1] == (5, "void")
 
 
 def test_a_string_pose_is_no_pose():

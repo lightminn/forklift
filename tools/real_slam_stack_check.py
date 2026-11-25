@@ -54,8 +54,13 @@ class Client:
         self.sock.sendall(frame)
 
     def recv(self, timeout: float):
-        self.sock.settimeout(timeout)
+        """One frame within ``timeout`` in all -- every socket read gets only what is left (round 3 P3)."""
+        end = time.monotonic() + timeout
         while len(self.buf) < 4 or len(self.buf) < 4 + struct.unpack(">I", self.buf[:4])[0]:
+            left = end - time.monotonic()
+            if left <= 0:
+                raise TimeoutError("timed out")
+            self.sock.settimeout(left)
             chunk = self.sock.recv(65536)
             if not chunk:
                 raise ConnectionError("bridge closed")
