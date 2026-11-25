@@ -519,7 +519,11 @@ class _ImuGuard:
 
     @property
     def last_read_capped(self) -> bool:
-        return getattr(self._src, "last_read_capped", False) is True
+        try:
+            return getattr(self._src, "last_read_capped", False) is True
+        except SourceFatal as exc:  # marked as any other read's; the frame waits (round 2 P2)
+            self._mark(f"imu:{exc}")
+            return True
 
     def _generation(self):
         try:

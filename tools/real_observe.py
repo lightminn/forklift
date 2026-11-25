@@ -392,7 +392,9 @@ class Observer:
                 return True
             if asked is not None and unseen and not reasked and st is not None and asked[0] == self._conn() \
                     and self.link.link is not None and st.last_rx_seq == asked[1] \
-                    and not self.acknowledged(asked[1]):
+                    and asked in self._done_ns and not self.acknowledged(asked[1]):
+                # only once its last byte is out: a DISARM still queued would be reused with the same seq (Codex
+                # 7b round 2 P2)
                 reasked = True
                 asked = self._ask_end(asked[0])
             time.sleep(CYCLE_S / 2)
@@ -415,6 +417,26 @@ class Openings:
     def __call__(self, fd: int) -> ObserveTtyLink:
         self.count += 1
         return ObserveTtyLink(fd, on_done=lambda seq, ns: self.on_done and self.on_done(seq, ns))
+
+
+def _start_imu(dev, imu, cfg, gap_max_s, rec) -> str | None:
+    """Start the device and record its profile with the watch fit; the failing stage (``start``/``profile``) is
+    recorded and returned (Codex 7b round 1 P2)."""
+    stage = "start"
+    try:
+        dev.start(imu.on_sample)  # the options are written here; the callback only queues (design 5)
+        stage = "profile"
+        prof = dev.profile_info()
+    except (RuntimeError, OSError) as exc:
+        rec.put({"t": "imu_error", "stage": stage, "error": f"{type(exc).__name__}: {exc}",
+                 "host_ns": time.monotonic_ns()})
+        return stage
+    hz = (prof.get("actual") or {}).get("accel_hz")
+    bound = imu.bound_ns / 1e9
+    rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **prof,
+             "fits_watch": {"gap_max_s": gap_max_s, "accel_hz": hz, "interval_bound_s": bound,
+                            "ok": fits_watch(cfg, gap_max_s, bound_s=bound, accel_hz=hz)}})
+    return None
 
 
 def _realsense(cfg):
@@ -487,35 +509,23 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         imu_started = False
         try:
             imu_error = None
-            if imu_dev is not None:
-                stage = "start"
-                try:
-                    try:
-                        imu_dev.start(imu.on_sample)  # the options are set here, after the executor lock; the
-                        # callback only queues (design 5)
-                    finally:
-                        imu_started = True  # a start interrupted inside the SDK is stopped too
-                    stage = "profile"
-                    prof = imu_dev.profile_info()
-                except (RuntimeError, OSError) as exc:  # recorded; the end DISARM is still confirmed (round 1 P2)
-                    imu_error = (stage, f"{type(exc).__name__}: {exc}")
-                else:
-                    hz = (prof.get("actual") or {}).get("accel_hz")
-                    rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **prof,
-                             "fits_watch": {"gap_max_s": imu_gap_max_s, "accel_hz": hz,
-                                            "interval_bound_s": imu.bound_ns / 1e9,
-                                            "ok": fits_watch(imu_cfg, imu_gap_max_s, bound_s=imu.bound_ns / 1e9,
-                                                             accel_hz=hz)}})
+            end = time.monotonic() + args.seconds
+            while time.monotonic() < end:
+                t0 = time.monotonic()
+                if imu_dev is not None and not imu_started and link.link is not None:
+                    # the D435i starts (its options written) only once the locked board link is actually open --
+                    # open_first may only have scheduled a retry (Codex 7b round 2 P2)
+                    imu_started = True  # set first: a start interrupted inside the SDK is stopped too
+                    imu_error = _start_imu(imu_dev, imu, imu_cfg, imu_gap_max_s, rec)
+                    if imu_error is not None:
+                        break
+                obs.cycle()
+                time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
             if imu_error is not None:
-                result = f"imu_{imu_error[0]}_failed"
-                rec.put({"t": "imu_error", "stage": imu_error[0], "error": imu_error[1],
-                         "host_ns": time.monotonic_ns()})
+                result = f"imu_{imu_error}_failed"
+            elif imu_dev is not None and not imu_started:
+                result = "imu_not_started"  # the board link never opened
             else:
-                end = time.monotonic() + args.seconds
-                while time.monotonic() < end:
-                    t0 = time.monotonic()
-                    obs.cycle()
-                    time.sleep(max(0.0, CYCLE_S - (time.monotonic() - t0)))
                 result = "ok"
         except KeyboardInterrupt:
             result = "interrupted"
@@ -544,9 +554,13 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 result = "no_scans"  # a scan socket nobody sent to is not an observed source
             if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
                 result = "no_imu"
+            imu_overflow = imu is not None and imu.counts["overflow"] > 0
+            if imu_overflow and result == "ok":
+                result = "imu_overflow"  # raw samples lost before they were recorded (round 2 P2)
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
-                     "complete": errors_before == 0 and synced and imu_stopped, "record_errors": errors_before,
+                     "complete": errors_before == 0 and synced and imu_stopped and not imu_overflow,
+                     "record_errors": errors_before,
                      "counts": obs.counts,
                      "feed": None if obs.feed is None else {"accepted": obs.feed.accepted,
                                                             "refused": dict(obs.feed.refused),
@@ -556,7 +570,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                      "imu": None if imu is None else {"counts": dict(imu.counts), "generation": imu.gen,
                                                       "generation_why": imu.generation_why},
                      "end_mono_ns": time.monotonic_ns()})
-            complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped
+            complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped \
+                and not imu_overflow
             if link.link is not None:
                 link.link.close()
                 link.link = None

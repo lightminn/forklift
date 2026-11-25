@@ -181,7 +181,9 @@ def _imu_int(v):
 
 def _imu_item(item):
     """``(gen, lo, hi, accel)`` from a source's sample -- ``(stamp, accel)`` is the point ``lo == hi`` with no
-    generation --, or ``hi`` None when its times are not integers or it has neither shape (PR 7 design 5)."""
+    generation --, or ``hi`` None when its times are not integers or it has neither shape (PR 7 design 5). A source
+    that has generations sends its point samples as ``(gen, t, t, accel)`` too: a 2-tuple among them reads as a
+    generation change (a lost watch while armed)."""
     try:
         if len(item) == 2:
             stamp, accel = item
@@ -1498,6 +1500,9 @@ class RealLoop:
         else:
             base, why = (None, "not_still") if not_still else self.imu_watch.baseline(self.still_since_ns)
         if why is None:
+            until = self._imu_wait_until.get(mission_id)
+            if until is not None and int(now_ns) >= until:
+                return "refuse", "imu_wait_expired"  # ready only after the mission's one deadline (round 2 P2)
             return "ok", base
         if why in ("not_still", "imu_no_baseline", "imu_not_still", "imu_backlog", "imu_generation"):
             until = self._imu_wait_until.setdefault(

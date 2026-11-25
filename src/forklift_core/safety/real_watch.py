@@ -257,13 +257,14 @@ _NO_GENERATION = object()  # no sample or generation noted yet
 
 
 class ImuBaseline(tuple):
-    """``(direction, last_ns)`` as ``baseline()`` hands it out, carrying the last sample's ``lo``, serial and
-    generation so ``arm`` resumes from that very sample -- even once the window has dropped it -- and refuses a
-    baseline of an older generation (Codex 7b round 1 P1-6)."""
+    """``(direction, last_ns)`` as ``baseline()`` hands it out, carrying the last sample's ``lo`` and serial and the
+    watch's generation-change count, so ``arm`` resumes from that very sample -- even once the window has dropped
+    it -- and refuses a baseline taken before any generation change since, even one whose generation number came
+    back (Codex 7b round 1 P1-6, round 2 P1-5)."""
 
-    def __new__(cls, direction, last_ns, *, lo, serial, gen):
+    def __new__(cls, direction, last_ns, *, lo, serial, epoch):
         self = super().__new__(cls, (direction, last_ns))
-        self.lo, self.serial, self.gen = lo, serial, gen
+        self.lo, self.serial, self.epoch = lo, serial, epoch
         return self
 
 
@@ -289,6 +290,7 @@ class ImuWatch:
         self.counts = {"valid": 0, "not_newer": 0, "future": 0, "not_finite": 0, "norm": 0, "bad_interval": 0,
                        "generation": 0}
         self._gen = _NO_GENERATION  # the generation of the samples kept (none seen yet)
+        self._epoch = 0  # generation changes so far
         self._serial = 0
         self._baseline = None  # the unit gravity direction frozen before the ARM
         self._prev = None  # the newest sample judged: (serial or None, lo, hi)
@@ -344,6 +346,7 @@ class ImuWatch:
         if gen == self._gen:
             return
         self.counts["generation"] += 1
+        self._epoch += 1
         self._gen = gen
         self.samples.clear()
         if self._baseline is not None and self._trip is None:
@@ -378,14 +381,15 @@ class ImuWatch:
         if _angle_deg(d, _unit(tuple(float(x) for x in c.level_ref))) > c.level_tol_deg:
             return None, "imu_not_level"
         last = part[-1]
-        return ImuBaseline(d, last[0], lo=last[2], serial=last[4], gen=last[3]), None
+        return ImuBaseline(d, last[0], lo=last[2], serial=last[4], epoch=self._epoch), None
 
     def arm(self, baseline) -> None:
         """Freeze ``(direction, last_ns)`` from ``baseline()`` before the ARM is asked (kept while armed); the
         judgement starts at that sample: the first one after it is measured from its ``lo`` (13th draft, round 2
-        P2-1). A baseline this watch handed out resumes from its own last sample; one of an older generation than
-        the samples now kept is a lost watch at once. Any other ``(direction, last_ns)``: the kept sample ending
-        there, else a point sample at ``last_ns``."""
+        P2-1). A baseline this watch handed out resumes from its own last sample; one taken before a generation
+        change since is a lost watch at once. Any other ``(direction, last_ns)`` -- no provenance -- only on a
+        source without generations: the kept sample ending there, else a point sample at ``last_ns``; on a source
+        with generations it is a lost watch (round 2 P1-5)."""
         direction, last_ns = baseline
         d = _unit(tuple(float(x) for x in direction))
         if d is None:
@@ -394,11 +398,13 @@ class ImuWatch:
         last = int(last_ns)
         if isinstance(baseline, ImuBaseline):
             self._prev = (baseline.serial, int(baseline.lo), last)
-            if self._gen is not _NO_GENERATION and baseline.gen != self._gen:
+            if baseline.epoch != self._epoch:
                 self._trip = "watch_imu_gap"  # the generation changed after the baseline was taken
         else:
             kept = next((s for s in reversed(self.samples) if s[0] == last), None)
             self._prev = (None, last, last) if kept is None else (kept[4], kept[2], kept[0])
+            if self._gen is not _NO_GENERATION and self._gen is not None:
+                self._trip = "watch_imu_gap"  # no provenance to check against the generations
         self._tilt_start, self._tilt_n = None, 0
         self._arm_until = None  # samples taken up to this instant meet the ARMING rule (None: all, still arming)
 

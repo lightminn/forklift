@@ -267,3 +267,24 @@ def test_one_wide_tilted_sample_alone_is_no_hold():
     t = fed_iv(w, 1005, 62)  # level, 1005 ... 1310
     assert w.add_interval(None, 1001 * MS, 1311 * MS, tilted(12), 1311 * MS) is None
     assert t == 1315 and w.judge(1311 * MS) is None  # the gap rule takes whatever follows it (its start is old)
+
+
+# --- Codex 7b round 2 ------------------------------------------------------------------------------------------------
+def test_a_baseline_from_before_a_generation_change_is_refused_even_when_the_number_comes_back():
+    """P1-5: generation 1 -> None -> 1 after the baseline: arming on it is a lost watch."""
+    w = ImuWatch(CFG)
+    end = fed_iv(w, 1000, 20, gen=1)
+    b, _ = w.baseline(1000 * MS)
+    w.note_generation(None)
+    w.note_generation(1)
+    w.arm(b)
+    assert w.judge(end * MS) == "watch_imu_gap"
+
+
+def test_a_plain_tuple_baseline_on_a_source_with_generations_is_refused():
+    """P1-5: no provenance -- (direction, last) is taken only from a source without generations."""
+    w = ImuWatch(CFG)
+    end = fed_iv(w, 1000, 20, gen=1)
+    b, _ = w.baseline(1000 * MS)
+    w.arm(tuple(b))
+    assert w.judge(end * MS) == "watch_imu_gap"

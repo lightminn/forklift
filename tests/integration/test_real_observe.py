@@ -333,6 +333,7 @@ class FakeImuDevice:
         self.accel_hz, self.fail_profile, self.fail_stop = accel_hz, fail_profile, fail_stop
         self.burst_on_stop = burst_on_stop
         self.on_sample = None
+        self.accel_sent = 0
         self.started = self.stopped = False
         self._halt = None
         self._thread = None
@@ -352,6 +353,7 @@ class FakeImuDevice:
                     dev = (time.monotonic_ns() // 1000) % (1 << 32)
                     on_sample("g", dev, 0.0, "hardware_clock", (0.0, 0.0, 0.0))
                     on_sample("a", dev, 0.0, "hardware_clock", (0.0, -9.81, 0.0))
+                    self.accel_sent += 1
                 time.sleep(0.005)
 
         self._thread = threading.Thread(target=run, daemon=True)
@@ -369,16 +371,17 @@ class FakeImuDevice:
         for _ in range(self.burst_on_stop):  # samples the SDK hands over while stopping
             time.sleep(0.0001)
             self.on_sample("a", (time.monotonic_ns() // 1000) % (1 << 32), 0.0, "hardware_clock", (0.0, -9.81, 0.0))
+            self.accel_sent += 1
         self.stopped = True
         if self.fail_stop:
             raise RuntimeError("stop timed out")
 
 
-def _imu_cli(model, tmp_path, monkeypatch, device):
+def _imu_cli(model, tmp_path, monkeypatch, device, *, extra=()):
     monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
     monkeypatch.setattr(ro, "open_raw", lambda p, baud=None, **kw: os.dup(model))
     out = tmp_path / "obs.jsonl"
-    code = ro.main(["--device", "/dev/model", "--out", str(out), "--seconds", "1.0", "--imu"],
+    code = ro.main(["--device", "/dev/model", "--out", str(out), "--seconds", "1.0", "--imu", *extra],
                    imu_factory=lambda cfg: device)
     return code, out
 
@@ -448,10 +451,13 @@ def test_the_profile_row_says_whether_the_opened_rate_fits_the_watch(model, tmp_
 
 
 def test_every_sample_handed_over_while_stopping_is_recorded(model, tmp_path, monkeypatch, capsys):
-    """P2: 150 samples during stop (more than one 64-sample read) all reach the record before its end row."""
-    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(burst_on_stop=150))
+    """P2: 150 samples during stop (more than one 64-sample read) all reach the record before its end row -- as
+    many rows as the device sent (round 2: counted on the producer side)."""
+    dev = FakeImuDevice(burst_on_stop=150)
+    code, out = _imu_cli(model, tmp_path, monkeypatch, dev)
     assert code == 0, capsys.readouterr().out
     rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert sum(1 for r in rows if r["t"] == "imu") == dev.accel_sent
     end = rows[-1]
     counts = end["imu"]["counts"]
     assert end["t"] == "end"
@@ -479,25 +485,27 @@ def _st(t, seq):
 
 
 class _ScriptedLink:
-    """Writes every queued DISARM at once (recorded as written, last byte done) and delivers STATEs from a script:
-    ``script(calls, last_written_seq) -> [seq, ...]`` named by the STATEs of this service call."""
+    """Writes every queued DISARM (recorded as written, last byte done) -- from service call ``write_from`` on, as a
+    port that answered EAGAIN before -- and delivers STATEs from a script: ``script(calls, last_written_seq,
+    queued_seq) -> [seq, ...]`` named by the STATEs of this service call."""
 
     ever_connected = True
 
-    def __init__(self, script):
+    def __init__(self, script, write_from=1):
         self.link, self.script, self.calls, self.obs, self.t = object(), script, 0, None, 0
         self.written = []
+        self.write_from = write_from
 
     def service(self, host, now_ns):
         self.calls += 1
-        for o in list(host._outbox):  # noqa: SLF001
+        for o in list(host._outbox) if self.calls >= self.write_from else []:  # noqa: SLF001
             if o.kind == "DISARM":
                 host._outbox.remove(o)  # noqa: SLF001
                 seq = int(o.seq) & 0xFFFF
                 self.written.append(seq)
                 self.obs._log("written", now_ns, b"", {"kind": "DISARM", "seq": seq})  # noqa: SLF001
                 self.obs._done(seq, now_ns)  # noqa: SLF001
-        for seq in self.script(self.calls, self.written[-1] if self.written else None):
+        for seq in self.script(self.calls, self.written[-1] if self.written else None, host.queued_disarm_seq()):
             self.t += 1
             st = _st(self.t, seq)
             host._state = st  # noqa: SLF001
@@ -505,8 +513,8 @@ class _ScriptedLink:
         return []
 
 
-def _finishing(script):
-    link = _ScriptedLink(script)
+def _finishing(script, write_from=1):
+    link = _ScriptedLink(script, write_from)
     openings = ro.Openings()
     openings.count = 1
     obs = ro.Observer(link, ro.Record(io.StringIO()), openings=openings, lidar=lidar_cfg.load_lidar_config())
@@ -517,12 +525,49 @@ def _finishing(script):
 def test_the_end_disarm_goes_out_at_once_and_two_late_states_confirm_it():
     """P1-4: the first two STATEs of the connection arrive together late in the confirm window -- the earlier seq,
     then the end DISARM's: confirmed, with one DISARM written."""
-    obs, link = _finishing(lambda k, w: [(w - 1) & 0xFFFF, w] if k == 60 else [])
+    obs, link = _finishing(lambda k, w, q: [(w - 1) & 0xFFFF, w] if k == 60 else [])
     assert obs.finish() and len(link.written) == 1
 
 
 def test_a_first_state_already_naming_the_end_disarm_gets_one_more():
     """P1-4: the connection's first STATE already names the end DISARM (no step can show it): asked once more with
     a new seq, whose step confirms it."""
-    obs, link = _finishing(lambda k, w: [w] if k >= 3 else [])
+    obs, link = _finishing(lambda k, w, q: [w] if k >= 3 else [])
     assert obs.finish() and len(link.written) == 2 and link.written[0] != link.written[1]
+
+
+# --- Codex 7b round 2 ------------------------------------------------------------------------------------------------
+def test_a_reask_waits_for_the_first_end_disarm_to_be_written():
+    """P2: the port answers EAGAIN at first and the first STATE already names the still queued seq -- the re-ask
+    comes only once that DISARM is out, with a new seq, and confirms."""
+    obs, link = _finishing(lambda k, w, q: [w if w is not None else q] if k >= 2 else [], write_from=4)
+    assert obs.finish() and len(link.written) == 2 and link.written[0] != link.written[1]
+
+
+def test_the_imu_waits_for_the_board_link_to_open(tmp_path, monkeypatch, capsys):
+    """P2: the board is not there (open_first only schedules a retry): the D435i is never started."""
+    import errno
+
+    monkeypatch.setattr(ro, "writer_marker", lambda device, bench: None)
+
+    def missing(p, baud=None, **kw):
+        raise FileNotFoundError(errno.ENOENT, "no such device", p)
+
+    monkeypatch.setattr(ro, "open_raw", missing)
+    dev = FakeImuDevice()
+    out = tmp_path / "obs.jsonl"
+    code = ro.main(["--device", "/dev/absent", "--out", str(out), "--seconds", "0.3", "--imu"],
+                   imu_factory=lambda cfg: dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and not dev.started, res
+
+
+def test_an_imu_queue_overflow_leaves_the_record_incomplete(model, tmp_path, monkeypatch, capsys):
+    """P2: raw samples lost before they were recorded -- result imu_overflow, no .ok."""
+    cfg = tmp_path / "imu.yaml"
+    cfg.write_text((REPO / "config/real/imu.yaml").read_text().replace("queue_max: 400", "queue_max: 10"))
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(burst_on_stop=50),
+                         extra=("--imu-config", str(cfg)))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_overflow" and res["complete"] is False, res
+    assert not Path(str(out) + ".ok").exists()

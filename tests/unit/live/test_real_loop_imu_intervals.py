@@ -214,3 +214,33 @@ def test_a_source_that_stops_a_read_at_its_own_cost_cap_is_a_capped_read():
     loop._pull_imu(5 * MS)  # noqa: SLF001
     assert loop.imu_backlog and loop.imu_watch.counts["generation"] == 0  # the generation waits for the rest
     assert rr._ImuGuard(loop.imu_source, print).last_read_capped is True  # noqa: SLF001
+
+
+# --- Codex 7b round 2 ------------------------------------------------------------------------------------------------
+def test_a_baseline_ready_only_after_the_missions_deadline_is_refused():
+    """P2: the wait began on an unknown generation; the first good read comes after the 0.5 s deadline."""
+    r = rig()
+    loop = r.loop
+    loop.imu_gen_unknown = True
+    assert loop._imu_arm_gate(r.now, "m1")[0] == "wait"  # noqa: SLF001
+    loop.imu_gen_unknown = False
+    late = r.now + int(loop.imu_watch.cfg.baseline_wait_s * 1e9) + 20 * MS
+    loop.still_since_ns = r.now - 10**9
+    loop.imu_watch.baseline = lambda since: ("base", None)
+    assert loop._imu_arm_gate(late, "m1") == ("refuse", "imu_wait_expired")  # noqa: SLF001
+    assert loop._imu_arm_gate(late, "m2") == ("ok", "base")  # noqa: SLF001 -- a mission that never waited
+
+
+def test_a_source_fatal_from_the_capped_flag_is_marked_and_holds_the_frame():
+    marks = []
+
+    class Src:
+        def samples(self, upto, limit):
+            return []
+
+        @property
+        def last_read_capped(self):
+            raise rr.SourceFatal("usb gone")
+
+    assert rr._ImuGuard(Src(), marks.append).last_read_capped is True  # noqa: SLF001
+    assert marks == ["imu:usb gone"]

@@ -18,9 +18,9 @@ timing:
 generation:
   # a new producer generation (never joined to the old one by the watch, design 5) on: a device time going back
   # more than restart_back_us (a sensor restart), no accel sample received for receive_gap_s, a queue overflow, the
-  # device lost, and device and host steps differing by more than the delay bound + 1 ms -- the bound broken: from
-  # then on no sample is given at all. A 32-bit device time wrap (~4,295 s) is a forward step: the interval comes
-  # from the host clock
+  # device lost, and any two samples of one device clock whose delays differ by more than the delay bound + 1 ms +
+  # 100 ppm of their device time apart -- the bound broken: from then on no sample is given at all. A 32-bit device
+  # time wrap (~4,295 s) is a forward step: the interval comes from the host clock
   restart_back_us: 20000   # 8 gyro periods, as sensors/imu_record.py
   receive_gap_s: 0.1
 queue_max: 400             # 2 s at 200 Hz waiting for the loop: more drops the oldest and opens a generation

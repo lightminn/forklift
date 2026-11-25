@@ -136,8 +136,9 @@ def test_a_delay_over_the_bound_opens_a_generation_and_gives_nothing_more():
     assert s.bound_broken and s.counts["bound_broken"] == 6
 
 
-def test_the_mismatch_threshold_is_the_bound_plus_1_ms():
-    for extra_ns, broken in ((0, False), (1, True)):
+def test_the_mismatch_threshold_is_the_bound_plus_1_ms_plus_100_ppm():
+    """5 ms of device time apart: 20 + 1 ms + 0.5 µs of drift allowed."""
+    for extra_ns, broken in ((0, False), (400, False), (1_000, True)):
         s, _ = src()
         s.push(100 * MS, "a", 0, "hardware_clock", G)
         s.push(105 * MS + 21 * MS + extra_ns, "a", 5_000, "hardware_clock", G)
@@ -179,8 +180,9 @@ def test_a_queue_overflow_drops_the_oldest_and_opens_a_generation_after_the_hole
     s, _ = src(replace(MEASURED, queue_max=4))
     feed(s, 100, 0, 6)
     out = s.samples(400 * MS, 64)
-    assert [hi // MS for _, _, hi, _ in out] == [110, 115, 120, 125]
-    assert s.counts["overflow"] == 2 and [g for g, *_ in out] == [2, 2, 2, 2]
+    # the hole at 100 ms: samples that may have been taken before it (lo < 100 ms) do not count (round 2 P1-2)
+    assert [hi // MS for _, _, hi, _ in out] == [120, 125] and s.counts["before_boundary"] == 2
+    assert s.counts["overflow"] == 2 and [g for g, *_ in out] == [2, 2]
 
 
 def test_a_reported_loss_opens_a_generation_on_the_next_read():
@@ -188,7 +190,7 @@ def test_a_reported_loss_opens_a_generation_on_the_next_read():
     feed(s, 100, 0, 2)
     s.samples(200 * MS, 64)
     s.lost("device_removed")
-    assert s.generation() == 2 and s.generation_why == "device_removed"
+    assert s.generation() == 2 and s.generation_why == "lost:device_removed"
 
 
 # --- with the watch ------------------------------------------------------------------------------------------------
@@ -280,7 +282,7 @@ def test_a_loss_is_a_boundary_after_the_samples_already_received():
     out = s.samples(200 * MS, 64)
     assert [g for g, *_ in out] == [1] * 10 and s.generation() == 2
     gens = [r for r in s.drain_rows() if r["t"] == "imu_gen"]
-    assert [(r["why"], r["host_ns"]) for r in gens] == [("unplug", 160 * MS)]
+    assert [(r["why"], r["host_ns"]) for r in gens] == [("lost:unplug", 160 * MS)]
 
 
 def test_a_loss_with_no_sample_waiting_reaches_generation_at_once():
@@ -317,7 +319,7 @@ def test_a_quiet_tick_with_old_samples_waiting_opens_no_receive_gap_twice():
 def test_a_read_takes_at_most_limit_raw_samples_whatever_their_verdict():
     """P2: 400 samples without a device time ahead of a good one: each read takes `limit` and says it was capped."""
     s, _ = src()
-    for k in range(400):
+    for k in range(399):  # under queue_max: no overflow boundary
         s.push((100 + k) * MS // 10, "a", None, "hardware_clock", G)
     s.push(200 * MS, "a", 5_000, "hardware_clock", G)
     assert s.samples(300 * MS, 1) == [] and s.last_read_capped
@@ -358,3 +360,113 @@ def test_the_jetson_record_of_2026_11_17_replays():
     assert s.counts["accepted"] == s.counts["dev_from_ts"] == 24060 and s.gen == 1
     assert s.counts["gyro"] == 48071
     assert replay(replace(CFG, provisional_delay_bound_s=0.01), rows).bound_broken
+
+
+def _ok_gaps(rows, limit_ns=50 * MS):
+    ok = [r for r in rows if r["t"] == "imu" and r["verdict"] == "ok"]
+    return sum(1 for x, y in zip(ok, ok[1:], strict=False) if y["hi"] - x["lo"] > limit_ns)
+
+
+def test_the_jetson_record_counts_its_watch_gaps_per_bound():
+    """Codex 7b round 2 P2: next hi - previous lo over 50 ms -- 7 times under 30 ms, none under 20 ms."""
+    import lzma
+
+    with lzma.open(JETSON, "rt") as f:
+        rows = [json.loads(line) for line in f]
+    assert _ok_gaps(replay(CFG, rows).drain_rows()) == 7
+    s20 = replay(replace(CFG, provisional_delay_bound_s=0.02), rows)
+    assert s20.counts["accepted"] == 24060 and _ok_gaps(s20.drain_rows()) == 0
+
+
+# --- Codex 7b round 2 ------------------------------------------------------------------------------------------------
+def test_a_loss_behind_a_waiting_sample_is_in_the_generation_at_once():
+    """P1-1: after a read, one old sample is received and then the device is lost: generation() says 2 now (the
+    send gate holds), and the old sample still comes as generation 1."""
+    s, clock = src()
+    feed(s, 100, 0, 2)
+    s.samples(105 * MS, 64)
+    s.push(105 * MS + 1, "a", 5_001, "hardware_clock", G)
+    clock.ns = 105 * MS + 2
+    s.lost("unplug")
+    assert s.generation() == 2
+    assert [g for g, *_ in s.samples(200 * MS, 64)] == [1] and s.gen == 2
+
+
+def test_a_sample_that_may_predate_a_boundary_is_not_counted_after_it():
+    """P1-2: lost at 101 ms; a sample received at 105 ms may have been taken at 85 ms -- before it."""
+    s, clock = src()
+    feed(s, 80, 0, 5)
+    s.samples(100 * MS, 64)
+    clock.ns = 101 * MS
+    s.lost("unplug")
+    s.push(105 * MS, "a", 0, "hardware_clock", G)  # a new device clock
+    s.push(121 * MS, "a", 16_000, "hardware_clock", G)
+    out = s.samples(200 * MS, 64)
+    assert [hi // MS for _, _, hi, _ in out] == [121] and s.counts["before_boundary"] == 1
+
+
+def test_the_callback_reads_its_time_under_the_queue_lock():
+    """P1-2: the receipt time is taken where the sample is queued -- a time read before a boundary is never placed
+    after it."""
+    s, clock = src()
+    seen = []
+
+    def now():
+        seen.append(s._lock.locked())  # noqa: SLF001
+        return 50 * MS
+
+    s._now = now  # noqa: SLF001
+    s.on_sample("a", 0, 0.0, "hardware_clock", G)
+    assert seen == [True]
+
+
+def test_a_delay_building_up_over_several_samples_breaks_the_bound():
+    """P1-3: each step 5 ms on the device, 15 ms on the host -- no neighbouring pair is over 21 ms, but the third
+    sample is 30 ms later than the first allows."""
+    s, _ = src()
+    for k in range(5):
+        s.push((1000 + 15 * k) * MS, "a", 5_000 * k, "hardware_clock", G)
+    out = s.samples(2000 * MS, 64)
+    assert len(out) == 3 and s.bound_broken  # 0, 10, 20 ms behind: the 30 ms one breaks it
+
+
+def test_a_delay_behind_a_receive_gap_is_still_caught():
+    """P1-3: the first sample after a 125 ms receipt gap is 5 ms on in device time: 120 ms of delay."""
+    s, _ = src()
+    s.push(1000 * MS, "a", 0, "hardware_clock", G)
+    s.push(1125 * MS, "a", 5_000, "hardware_clock", G)
+    s.samples(2000 * MS, 64)
+    assert s.bound_broken and s.counts["accepted"] == 1
+
+
+def test_a_device_clock_timestamp_jumping_a_whole_turn_is_no_step():
+    """P1-4: get_timestamp() 1000 ms -> 4295972.296 ms (a 32-bit turn on) in 5 ms of host time breaks the bound;
+    a turn back is a restart; a counter folded at 32 bits steps across."""
+    s, _ = src()
+    s.push(100 * MS, "a", None, "hardware_clock", G, ts_ms=1000.0)
+    s.push(105 * MS, "a", None, "hardware_clock", G, ts_ms=1000.0 + 4294967.296)
+    s.samples(200 * MS, 64)
+    assert s.bound_broken
+    s, _ = src()
+    s.push(100 * MS, "a", None, "hardware_clock", G, ts_ms=4294967.296 + 1000.0)
+    s.push(105 * MS, "a", None, "hardware_clock", G, ts_ms=1005.0)
+    s.samples(200 * MS, 64)
+    assert s.generation_why == "device_restart" and not s.bound_broken
+    s, _ = src()
+    s.push(100 * MS, "a", None, "hardware_clock", G, ts_ms=4294964.796)
+    s.push(105 * MS, "a", None, "hardware_clock", G, ts_ms=2.5)
+    assert len(s.samples(200 * MS, 64)) == 2 and s.gen == 1
+
+
+def test_a_loss_reported_many_times_is_one_boundary_and_a_read_takes_at_most_limit_items():
+    s, clock = src()
+    for _ in range(2048):
+        s.lost("unplug")
+    assert s.counts["lost"] == 2048 and s.generation() == 2
+    s, clock = src()
+    feed(s, 100, 0, 3)
+    clock.ns = 116 * MS
+    s.lost("unplug")
+    feed(s, 140, 500_000, 3)
+    s.samples(200 * MS, 2)
+    assert s.last_read_capped and s.gen == 1
