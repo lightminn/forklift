@@ -302,12 +302,17 @@ def events(rows, t):
 def why(rows) -> str:
     """The run's own account of a stall (lead 2026-11-26, the HIL SLAM flake): the permit's first latch and its reason,
     and the last readiness causes in their order of change -- what a failing assertion is shown with."""
-    latched = next((p for p in events(rows, "permit") if p.get("event") == "latched"), None)
+    # the test's own end (SIGTERM -> "signal") is no cause: a run blocked before its ARM shows no latch of its own
+    # (Codex review P3)
+    latched = next((p for p in events(rows, "permit") if p.get("event") == "latched" and p.get("reason") != "signal"),
+                   None)
     seq = []
     for c in events(rows, "cause"):
+        if c.get("where") != "ready":
+            continue  # the readiness causes only (emergency and send causes are other rows' story)
         if not seq or seq[-1] != c.get("why"):
             seq.append(c.get("why"))
-    return (f"latched: {None if latched is None else latched.get('reason')}; "
+    return (f"latched before the end: {None if latched is None else latched.get('reason')}; "
             f"last readiness causes: {seq[-5:]}")
 
 
