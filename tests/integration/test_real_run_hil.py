@@ -443,25 +443,17 @@ def push_seen(rows, out, spans, push, axis_name):
 
 
 # --- the stop injections (6) -----------------------------------------------------------------------------------------
-def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LATCHED", wait_s=60, settle_s=0.5,
-              done=None):
-    """``done(rows)``: an end read from the run's own record as it is written (it is flushed per row) -- the wait
-    ends when it holds, ``wait_s`` staying the bound."""
+def _injected(model, tmp_path, name, ms=2000, model_args=(), extra=(), until="LATCHED", wait_s=60, settle_s=0.5):
     run = Runner(model, tmp_path, duration_s=90, model_args=model_args, inject=[f"{name}:{ms}", *extra])
     c = Console(run.port)
     try:
         start_s10(c, answer=False)
         c.wait(lambda s: s["permit"]["state"] == "DRIVING", 90)  # moving: the injection counts from here
-        end = time.monotonic() + wait_s
-        while time.monotonic() < end:
-            if c.status is not None and c.status["permit"]["state"] == until:
-                break
-            if done is not None and done(_live_rows(run)):
-                break
-            time.sleep(0.05)
-        else:
+        try:
+            c.wait(lambda s: s["permit"]["state"] == until, wait_s)
+        except AssertionError:
             if until == "LATCHED":
-                raise AssertionError(f"not reached: {c.status}")
+                raise
         time.sleep(settle_s)  # the model keeps logging the stop's tail before the run ends
     finally:
         c.close()
@@ -685,29 +677,6 @@ def test_a_push_on_a_held_axis_alarms_over_the_threshold_only(mcu_model, tmp_pat
     again(lambda k: _push_once(mcu_model, tmp_path / f"run{k}", axis, push, alarm), tmp_path)
 
 
-def _live_rows(run):
-    """The record's complete rows so far (a row being written is left for the next read)."""
-    path = run.out / "run.jsonl"
-    if not path.exists():
-        return []
-    out = []
-    for line in path.read_text().splitlines():
-        try:
-            out.append(json.loads(line))
-        except ValueError:
-            break
-    return out
-
-
-def _pushed_span_over(rows):
-    """The push was made and the holding span it landed in has ended: the watch judges a push only inside its own
-    span (against that span's start), so a later wait judges nothing more about it -- the under-threshold run's end
-    (it used to wait 25 s whatever)."""
-    pushes = [r for r in rows if r.get("t") == "inject_push"]
-    return bool(pushes) and any(r.get("t") == "axis_watch" and r.get("event") == "end" and r["ns"] > pushes[0]["ns"]
-                                for r in rows)
-
-
 def _push_once(mcu_model, tmp_path, axis, push, alarm):
     """Design 2 (가) on the model: while a position-holding frame holds the truck the plant's lift or steering is
     pushed (SIGUSR1 to the model at the holding frame's write): over the threshold (5 mm, 0.02 rad) the watch latches
@@ -715,8 +684,7 @@ def _push_once(mcu_model, tmp_path, axis, push, alarm):
     tmp_path.mkdir()
     arg = "--axis-push-lift-m" if axis == "lift" else "--axis-push-steer-rad"
     run, rows, code = _injected(mcu_model, tmp_path, "axis_push", ms=300, model_args=(arg, str(push)),
-                                until="LATCHED" if alarm else "__never__", wait_s=40 if alarm else 25,
-                                done=None if alarm else _pushed_span_over)
+                                until="LATCHED" if alarm else "__never__", wait_s=40 if alarm else 25)
     end = complete(rows, code)
     pushes = events(rows, "inject_push")
     assert pushes, "inconclusive: no holding frame after the injection's start"
