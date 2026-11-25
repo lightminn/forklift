@@ -116,6 +116,21 @@ def test_no_image_refuses_the_start(tmp_path):
     assert res.returncode == 2 and "no scan image" in res.stderr
 
 
+def test_the_scan_image_is_the_one_lidar_yaml_names(tmp_path):
+    """7a-3b: the tag comes from config/real/lidar.yaml scan_image (this machine's architecture), inspected and run
+    by its ID."""
+    import platform
+    import sys
+
+    sys.path.insert(0, str(REPO / "tools"))
+    import scan_image
+
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}[platform.machine()]
+    res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"))
+    assert res.returncode == 0, res.stderr
+    assert f"image {scan_image.configured(arch)} id {IMAGE_ID}" in res.stderr
+
+
 def test_an_image_override_is_said(tmp_path):
     res = run_launcher(tmp_path, "scan-a2m12", str(_dev(tmp_path)), str(tmp_path / "s"),
                        env={"FORKLIFT_ROS2_SCAN_IMAGE": "forklift/ros2-scan:other"})

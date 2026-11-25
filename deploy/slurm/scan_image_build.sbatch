@@ -4,37 +4,60 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=4G
 #SBATCH --time=00:40:00
-# Build the A2M12 driver image with forklift patch 0001 (PR 7a-2, docs/design/2026-11-25-real-sources-pr7.md 4):
-# deploy/ros2/Dockerfile.scan over forklift/ros2-dev:jazzy, tagged forklift/ros2-scan:jazzy-p0001-<series> (<series>
-# the first 8 hex of the patch files' sha256), and check the build: the node binary carries the scan_sdk topic and the
-# SDK's first-sample call. Records in OUT: build.log, image.txt, check.txt. Docker builds run outside the job's cgroup.
+# Build the A2M12 driver image (forklift patches 0001 + 0002, PR 7a-2 / 7a-3) for amd64: deploy/ros2/Dockerfile.scan
+# over the amd64 base deploy/ros2/scan_image_base.txt records (its ID checked first), tagged config/real/lidar.yaml
+# scan_image.amd64 -- the job computes the tag from the inputs (tools/scan_image.py) and stops before building when
+# lidar.yaml names another. The image build runs the
+# SDK's arrival test (ctest) and fails with it. Records in OUT: build.log, image.txt (ID), arch.txt, check.txt (the v2
+# contract in the binary and the sources, then the ctest output), built.txt. Docker builds run outside the job's
+# cgroup.
 #   sbatch deploy/slurm/scan_image_build.sbatch OUT        (from the repository root -- a snapshot)
 set -euo pipefail
 OUT=$(realpath -m "$1")
 ROOT=$(pwd)
 mkdir -p "$OUT"
-SERIES=$(cat "$ROOT"/deploy/ros2/sllidar_patches/*.patch | sha256sum | cut -c1-8)
-TAG="forklift/ros2-scan:jazzy-p0001-$SERIES"
-docker build -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" > "$OUT/build.log" 2>&1
+TAG=$(python3 "$ROOT/tools/scan_image.py" check --arch amd64)  # exits non-zero when lidar.yaml differs
+read -r BASE BASE_ID < <(python3 "$ROOT/tools/scan_image.py" base --arch amd64)
+# the base recorded in the tag's inputs, or no build (deploy/ros2/scan_image_base.txt)
+HAVE=$(docker image inspect -f '{{.Id}}' "$BASE")
+[[ "$HAVE" == "$BASE_ID" ]] || { echo "base $BASE is $HAVE here, not $BASE_ID" | tee "$OUT/built.txt"; exit 1; }
+# built over a tag made from the ID itself: the reference cannot move between this check and the build (round 2 P3)
+PINNED="forklift/ros2-dev:scanbase-${BASE_ID:7:16}"
+docker tag "$BASE_ID" "$PINNED"
+docker build --build-arg "BASE_IMAGE=$PINNED" -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" \
+    > "$OUT/build.log" 2>&1
 docker image inspect -f '{{.Id}}' "$TAG" > "$OUT/image.txt"
-# each check its own exit status: a missing binary, topic or patched call fails the job (Codex 7a-2 P3)
+docker image inspect -f '{{.Architecture}}' "$TAG" > "$OUT/arch.txt"
+# each check its own exit status: a missing binary, topic, parameter or patched call fails the job (Codex 7a-2 P3)
 docker run --rm --entrypoint bash "$TAG" -c '
   set -euo pipefail
   # every check its own command (set -e does not stop on the left of &&): any one failing ends the job
-  bin=$(find /opt/sllidar_ws/install -name sllidar_node -type f | head -1)
+  ws=/opt/sllidar_ws
+  bin=$(find $ws/install -name sllidar_node -type f | head -1)
   test -n "$bin"
   test -x "$bin"
   echo "binary $bin"
-  grep -q scan_sdk "$bin"
-  echo "binary has scan_sdk"
+  grep -q scan_sdk_info "$bin"
+  echo "binary has scan_sdk_info"
+  grep -q forklift_run_id "$bin"
+  echo "binary has forklift_run_id"
   grep -q publish_delay_ms "$bin"
   echo "binary has publish_delay_ms"
-  grep -q "@sdk_mono_v1" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp
-  echo "node names the format"
-  grep -q "grabScanDataHqWithTimeStamps" /opt/sllidar_ws/src/sllidar_ros2/src/sllidar_node.cpp
-  echo "node calls the patched grab"
-  grep -q "_scan_last_timestamp_uS" /opt/sllidar_ws/src/sllidar_ros2/sdk/src/sl_lidar_driver.cpp
-  echo "sdk keeps the last sample"
+  grep -q FORKLIFT_SDK_RX_LOG "$bin"
+  echo "binary has the receive record"
+  grep -q "@sdk_mono_v2#" $ws/src/sllidar_ros2/src/sllidar_node.cpp
+  echo "node names the v2 format"
+  if grep -q "@sdk_mono_v1" $ws/src/sllidar_ros2/src/sllidar_node.cpp; then echo "node still names v1"; exit 1; fi
+  echo "node no longer names v1"
+  grep -q grabScanDataHqWithArrival $ws/src/sllidar_ros2/src/sllidar_node.cpp
+  echo "node calls the arrival grab"
+  grep -q onDecodeDataAt $ws/src/sllidar_ros2/sdk/src/sl_async_transceiver.cpp
+  echo "the decoder hands the arrival on"
+  grep -q "all checks passed" $ws/forklift_ctest.txt
+  grep -q "100% tests passed" $ws/forklift_ctest.txt
+  echo "sdk arrival test passed in the build"
+  echo "--- ctest"
+  cat $ws/forklift_ctest.txt
 ' > "$OUT/check.txt" 2>&1
-echo "$TAG $(cat "$OUT/image.txt") $(date -Is)" | tee "$OUT/built.txt"
+echo "$TAG $(cat "$OUT/image.txt") $(cat "$OUT/arch.txt") $(date -Is)" | tee "$OUT/built.txt"
 cat "$OUT/check.txt"

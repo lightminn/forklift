@@ -1,0 +1,6 @@
+# The base each scan image is built over (7a-3 plan 5, Codex 7a-3b round 1 P2-5): <arch> <reference> <image ID>.
+# Part of the tag's inputs (tools/scan_image.py), so another base never gets the same tag; the build entry points stop
+# unless the reference resolves to this ID on the build machine (amd64: ws1, deploy/slurm/scan_image_build.sbatch;
+# arm64: the laptop under qemu, tools/scan_image_build_arm64.sh). Read 2026-11-26 with docker image inspect.
+amd64 forklift/ros2-dev:jazzy sha256:e7c29c2a0c34900a12d99ce98d383534b3f100eb4e625872fb2ad749f9f52659
+arm64 forklift/ros2-dev:jazzy-arm64-738215dc sha256:4392568830814c7953743621feb6a2b46a09a3e536bd1d4b22a6c9f43f5cb1ec

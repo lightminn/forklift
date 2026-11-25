@@ -27,3 +27,9 @@ timing:
   # with a basis: exactly image_id (docker image ID), usb (udev vendor:product:serial), host, ans_type,
   # sample_period_us, baudrate (the node's scan_sdk_info) -- the source the bound was taken on
   applies_to: null
+# the A2M12 driver image (7a-3 plan 5): the one place its tag is written. tools/scan_image.py computes it from the
+# patches and deploy/ros2/Dockerfile.scan; the build entry points stop when it differs, tools/ros2_dev.sh and the
+# hwday scripts run it. A timing bound names the image ID that ran (timing.applies_to.image_id), never this tag.
+scan_image:
+  amd64: forklift/ros2-scan:jazzy-seb850403
+  arm64: forklift/ros2-scan:jazzy-sccf9d154-arm64

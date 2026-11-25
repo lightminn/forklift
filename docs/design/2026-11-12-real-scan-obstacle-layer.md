@@ -75,7 +75,7 @@ A2M12 (USB-UART) ─ sllidar_ros2(커밋 고정) ─ /sensors/lidar/scan_raw ─
 # 1. 장치 정보 (꽂은 뒤)
 ls -l /dev/serial/by-id/
 # 2. 드라이버+어댑터 (ROS 컨테이너), 다른 창에서 확인 도구
-docker build -t forklift/ros2-scan:jazzy -f deploy/ros2/Dockerfile.scan deploy/ros2   # 한 번(개발 이미지 위에 sllidar_ros2)
+sbatch deploy/slurm/scan_image_build.sbatch OUT   # 한 번(개발 이미지 위에 sllidar_ros2; 태그는 config/real/lidar.yaml scan_image, arm64 는 tools/scan_image_build_arm64.sh)
 python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 30 --record a2m12_first.scan.jsonl &
 tools/ros2_dev.sh scan-a2m12 /dev/ttyUSB0
 # 3. 각도 확인: 라이다 오른쪽 30 cm 에 상자를 두고
@@ -124,7 +124,7 @@ python tools/scan_check.py --socket /tmp/forklift-scan/scan.sock --seconds 5 --p
 |---|---|
 | `src/forklift_core/sensors/scan_feed.py` | `scan/1` 해석, `ScanFeed`, `RealScan` |
 | `ros2/src/forklift_ros/forklift_ros/real_scan_adapter.py` + 진입점 | 어댑터 노드(버림·계수) |
-| `deploy/ros2/Dockerfile.scan` | 개발 이미지 위에 sllidar_ros2 커밋 고정 빌드(`forklift/ros2-scan:jazzy`) |
+| `deploy/ros2/Dockerfile.scan` | 개발 이미지 위에 sllidar_ros2 커밋 고정 빌드(태그는 `config/real/lidar.yaml` `scan_image`, `tools/scan_image.py` 가 입력에서 계산) |
 | `tools/ros2_dev.sh` | `scan-a2m12 <장치>` 하위 명령(드라이버+어댑터) |
 | `tools/scan_check.py` | 1.4 |
 | `deploy/udev/99-forklift-lidar.rules` | 연결 뒤 VID/PID 로 채움(초안) |

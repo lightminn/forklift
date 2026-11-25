@@ -189,6 +189,7 @@ def test_the_patch_is_applied_by_the_scan_image_and_launched_with_its_topic():
     assert "this->now() - rclcpp::Duration" not in text  # no ROS-clock round trip
     docker = (REPO / "deploy" / "ros2" / "Dockerfile.scan").read_text(encoding="utf-8")
     assert "0001-sdk-first-sample-stamp.patch" in docker and "34300099" in docker
+    assert "0002-sdk-arrival-stamp.patch" in docker  # 7a-3: the v2 format replaces v1 in the image
     launcher = (REPO / "tools" / "ros2_dev.sh").read_text(encoding="utf-8")
     assert "scan_sdk:=/sensors/lidar/scan_raw_sdk" in launcher and 'FORKLIFT_SCAN_SOURCE must be raw or sdk' in launcher
 

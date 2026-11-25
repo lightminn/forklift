@@ -1,5 +1,6 @@
-# The real A2M12 driver on top of the dev image (bring-up 7a, docs/design/2026-11-12-real-scan-obstacle-layer.md 1.1):
-#   docker build -t forklift/ros2-scan:jazzy -f deploy/ros2/Dockerfile.scan deploy/ros2
+# The real A2M12 driver on top of the dev image (bring-up 7a, docs/design/2026-11-12-real-scan-obstacle-layer.md 1.1).
+# Built by deploy/slurm/scan_image_build.sbatch (amd64) and tools/scan_image_build_arm64.sh (arm64, qemu); its tag is
+# config/real/lidar.yaml scan_image, computed from this file and the patches by tools/scan_image.py (7a-3 plan 5).
 # An overlay, so the dev image is not rebuilt (its base is pinned by digest). sllidar_ros2 is pinned by commit; its
 # stamp is taken before it fetches a scan -- not the acquisition time -- and the design records what that means.
 ARG BASE_IMAGE=forklift/ros2-dev:jazzy
@@ -9,14 +10,19 @@ USER root
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SLLIDAR_ROS2_COMMIT=34300099fadfc772965962dec837bf436706188f
 # forklift patch 0001 (PR 7a-2): the same scans on 'scan_sdk', stamped at the SDK's first sample (the acquisition
-# time the stamp of 'scan' is not); 'scan' itself is unchanged
+# time the stamp of 'scan' is not); 'scan' itself is unchanged. Patch 0002 (7a-3): those sample times from the
+# receive thread's byte arrival, scan_sdk in the v2 format with scan_sdk_info. The SDK's arrival test runs before the
+# build tree goes (its output kept in the image): a failing test fails the build.
 COPY sllidar_patches/ /opt/sllidar_patches/
 RUN git clone https://github.com/Slamtec/sllidar_ros2.git /opt/sllidar_ws/src/sllidar_ros2 \
     && git -C /opt/sllidar_ws/src/sllidar_ros2 checkout --detach "${SLLIDAR_ROS2_COMMIT}" \
     && git -C /opt/sllidar_ws/src/sllidar_ros2 apply /opt/sllidar_patches/0001-sdk-first-sample-stamp.patch \
+    && git -C /opt/sllidar_ws/src/sllidar_ros2 apply /opt/sllidar_patches/0002-sdk-arrival-stamp.patch \
     && rm -rf /opt/sllidar_ws/src/sllidar_ros2/.git \
     && source /opt/ros/jazzy/setup.bash \
     && cd /opt/sllidar_ws \
-    && colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    && colcon build --merge-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+    && ctest --test-dir /opt/sllidar_ws/build/sllidar_ros2 -R forklift_arrival_test -V \
+        2>&1 | tee /opt/sllidar_ws/forklift_ctest.txt \
     && rm -rf /opt/sllidar_ws/build /opt/sllidar_ws/log
 USER forklift-dev

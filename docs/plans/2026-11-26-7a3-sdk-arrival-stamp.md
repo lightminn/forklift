@@ -22,6 +22,12 @@
   - **3a 에서 정한 형식**(3b 의 노드가 맞춘다): `scan_sdk_info` 는 `std_msgs/String`(JSON) — `{"format": "sdk_mono_v2", "run", "start", "ans_type", "sample_period_us", "baudrate"}`, 토픽 `/sensors/lidar/scan_sdk_info`(재매핑), QoS reliable·transient_local·depth 1. 실행·원천 식별자는 소문자 16진 8–32 자. 노드 파라미터 `forklift_run_id` 는 런처가 넘긴다(v1 노드는 선언하지 않아 무시). 어댑터는 v2 프레임에 `source: {run, start, image_id, usb, host[, sdk_info]}` 를 싣고, `sdk_info` 는 그 시작의 정보를 받았을 때만 싣는다.
 - **진단 기록**(벤치용, 기본 끔): 환경변수 `FORKLIFT_SDK_RX_LOG=<경로>` 가 있을 때만 줄 단위로 쓴다. 읽기마다 `(rx_seq, rx_us, bytes)`, capsule 완성마다 `(rx_seq, capsule 순번, 응답 타입)` 을 고리 버퍼로 모아 쓰고, 넘친 줄 수를 센다.
 - 노드는 형식 이름만 `@sdk_mono_v2` 로 올리고 위 `arrival_ok` 를 지킨다. 0001 의 첫·끝 표본·`publish_delay_ms` 는 그대로다.
+- **3b 구현에서 정한 것**(Codex 3b 리뷰 1–2 회차):
+  - codec 은 고정 길이로 블록을 자르므로 바이트 하나가 빠지면 이후 capsule 이 블록 안에서 끝난다. 그래서 "블록을 완성한 읽기"가 아니라 메시지마다 바이트가 든 읽기 구간(`ArrivalSegment`)을 함께 넘기고, 해석기는 구간별로 그 읽기의 도착 시각을 맡긴다. 단위의 마지막 바이트가 든 읽기의 시각이 그 단위의 기준이 되어 재동기화 뒤에도 정확하다. 도착 시각이 없는 바이트가 든 메시지의 표본은 exact 가 아니고, 그런 표본이 든 스캔(버퍼 단위)은 `scan_sdk` 에 나가지 않는다.
+  - codec 은 잠금 안에서 메시지를 복사해 넘기고, 해석기의 해석과 enable·disable·reset 은 잠금 하나를 쓴다(스캔 재시작 경합). 노드는 시작 뒤 150 ms 안의 표본이 든 스캔을 내지 않는다.
+  - 업스트림 버그 둘을 고쳤다: UltraDense 표본 지연의 `(31 - sampleIdx)`(표본 64 개라 뒤 절반이 unsigned 로 감김 → `63 - sampleIdx`), transceiver 종료 때 큐의 `new Buffer` 를 `delete[]` 로 지움.
+  - 수신 기록 줄: `R rx_seq rx_us bytes decode_us`, `C rx_seq unit_seq ans_type exact`, `D <넘친 줄>`, 마지막 `E <넘친 줄> <종료 때 버린 읽기>`.
+  - 기준 이미지: `deploy/ros2/scan_image_base.txt` 의 아키텍처별 참조와 이미지 ID 가 태그 입력에 들어가고, 빌드는 그 ID 로 만든 태그 위에서 한다.
 
 ## 3. 호스트 쪽 — 한 판정을 모든 소비자가
 
