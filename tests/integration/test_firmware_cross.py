@@ -664,3 +664,58 @@ def test_unknown_link_refused(tmp_path):
 def test_unknown_build_kind_refused(tmp_path):
     cfg = _configure(tmp_path / "bad", "-DFW_BUILD=fast")
     assert cfg.returncode != 0
+
+
+SINGLE = (*OPEN, "-DFW_SINGLE_AXIS=1")
+
+
+@pytest.fixture(scope="module")
+def single_build(record_repo, tmp_path_factory):
+    """fw-single (partial-parts plan 2026-11-25 PR-B): the open commissioning build, one axis per arming."""
+    repo, header = record_repo
+    build = tmp_path_factory.mktemp("single_build")
+    cfg = _configure_in(repo, header, build, *SINGLE, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "warning" not in (res.stdout + res.stderr).lower(), res.stdout + res.stderr
+    return build
+
+
+def test_single_axis_build_identity_size_and_stack(single_build, open_build):
+    """The tool tells fw-single apart only by the exact suffix " lim=lr1 sa1"; the open commissioning
+    image never carries sa1; the stack stays within half the main stack."""
+    d = single_build / "boards" / "weact_h743"
+    data = (d / "fw.elf").read_bytes()
+    assert re.search(rb"forklift-mcu commission OPEN \S+ rec=[0-9a-f]{8} lim=lr1 sa1 link=usb", data)
+    assert b" sa1" not in (open_build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+    sizes = _sections(d / "fw.elf")
+    assert sizes[".text"] + sizes.get(".data", 0) < FLASH_LIMIT
+    args = [sys.executable, str(REPO / "tools" / "fw_stack_check.py"), str(single_build),
+            "--limit", str(MAIN_STACK // 2), "--elf", str(d / "fw.elf"),
+            "--objdump", str(TOOLCHAIN / "bin" / "arm-none-eabi-objdump")]
+    for lv in ["board_main", "OTG_FS_IRQHandler", "TIM6_DAC_IRQHandler", "SPI1_IRQHandler,SPI2_IRQHandler",
+               "Default_Handler", "HardFault_Handler", "NMI_Handler"]:
+        args += ["--level", lv]
+    for rule in ["TIM6_DAC_IRQHandler=on_tick", "fw_app_*=hal_*", *TUSB_RULES]:
+        args += ["--indirect", rule]
+    res = subprocess.run(args, capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+@pytest.mark.parametrize("extra", [("-DFW_BUILD=commission",), ("-DFW_BUILD=normal",), ("-DFW_BUILD=hil",)])
+def test_single_axis_only_on_the_open_commissioning_build(record_repo, tmp_path, extra):
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", "-DFW_SINGLE_AXIS=1", *extra)
+    assert cfg.returncode != 0
+    assert "FW_SINGLE_AXIS=1 is only for" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_other_images_carry_no_single_axis_core(build_of, open_build):
+    """The other images keep their core: compiled without FW_CORE_SINGLE_AXIS (their bytes match the
+    commit before fw-single but for the git description; checked by hand for PR-B)."""
+    for d in (build_of("usb"), build_of("commission"), open_build / "boards" / "weact_h743"):
+        cmds = d.parent.parent / "compile_commands.json"
+        if cmds.is_file():
+            assert "FW_CORE_SINGLE_AXIS" not in cmds.read_text()
+        assert b" sa1" not in (d / "fw.elf").read_bytes()
