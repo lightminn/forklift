@@ -176,8 +176,11 @@ def start_instance(k: int, bundle, start, out: Path):
     path = out / f"params_{k}.yaml"
     path.write_text(yaml.safe_dump({"/**": {"ros__parameters": p}}))
     log = open(out / f"slam_{k}.log", "w")  # noqa: SIM115 -- kept for the process's life
-    proc = subprocess.Popen(["ros2", "run", "slam_toolbox", "localization_slam_toolbox_node", "--ros-args",
-                             "--params-file", str(path), "-r", f"__ns:=/slam_{k}"],
+    # the node executable itself, as the bridge's direct child (``ros2 run`` exits before the node it started, which is
+    # then reparented and left a zombie no one reaps -- job 21221)
+    prefix = subprocess.run(["ros2", "pkg", "prefix", "slam_toolbox"], capture_output=True, text=True).stdout.strip()
+    exe = Path(prefix) / "lib/slam_toolbox/localization_slam_toolbox_node"
+    proc = subprocess.Popen([str(exe), "--ros-args", "--params-file", str(path), "-r", f"__ns:=/slam_{k}"],
                             stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
     return proc
 
@@ -197,7 +200,8 @@ def stop_instance(proc, node: Driver, k: int, name: str) -> dict:
         proc.wait(timeout=5)
     # the whole group gone (ros2 run's leader exits before the node it started): wait for it, then SIGKILL the rest
     def members():
-        return subprocess.run(["pgrep", "-g", str(proc.pid)], capture_output=True, text=True).stdout.split()
+        ps = subprocess.run(["ps", "-eo", "pid=,pgid=,stat="], capture_output=True, text=True).stdout.split("\n")
+        return [f"{f[0]}:{f[2]}" for f in (ln.split() for ln in ps) if len(f) == 3 and f[1] == str(proc.pid)]
     out["group_after_leader"] = members()
     deadline = time.monotonic() + 5
     while members() and time.monotonic() < deadline:
