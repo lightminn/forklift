@@ -22,6 +22,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from forklift_core.live import real_autonomy as ra
+from forklift_core.live.odom_history import ENCODER_CUT, odom_entry, odometry_step
 from forklift_core.live.output_book import Frame, OutputBook
 from forklift_core.live.real_assembly import freeze_submit, known_request
 from forklift_core.live.real_channels import send_boundary
@@ -33,7 +34,6 @@ from forklift_core.mcu_link.messages import FaultFlag, Mode
 from forklift_core.mission.commands import FINAL
 from forklift_core.plant.bringup import Sample
 from forklift_core.plant.mcu_host import McuLinkHost
-from forklift_core.plant.real_vehicle import wheel_count_delta
 from forklift_core.safety.arbiter import Feedback
 from forklift_core.safety.truth_access import SafetySpeed
 
@@ -44,7 +44,6 @@ LATE_TICK_S = 0.060  # over this (or the start interval), the emergency branch
 SLOW_STARTS = 3  # this many start intervals over SLOW_TICK_S in a row: the emergency branch
 MAX_STATES_PER_TICK = 64
 EVIDENCE_READ_MAX_S = 0.005  # the first byte's evidence read must take no longer (its ages are judged at its start)
-ENCODER_CUT = FaultFlag.ENCODER_GAP | FaultFlag.ENCODER_JUMP_L | FaultFlag.ENCODER_JUMP_R  # contract 3.3
 SAMPLES_KEPT = 128
 WRITE_MARGIN_S = SLOW_TICK_S + EVIDENCE_READ_MAX_S  # 5d (7.1 6): the latest write of a tick's DRIVE (core.WRITE_MARGIN_S)
 # 6a (docs/design/2026-11-20-real-hil-6a.md 2): the last clock read is this much before the bound it is held to (the
@@ -1035,9 +1034,7 @@ class RealLoop:
                         "faults": int(state.fault_flags), "reject": int(state.reject_reason),
                         "delay_bound_s": None if sd_ is None else sd_[1], "rule": self.host.health(int(rx_ns)).gap_rule,
                         "max_age_s": float(self.host.cfg.state_max_age_s)})
-        step = self.odometry.update(int(state.mcu_time_us), int(state.boot_id), int(state.wheel_count_left),
-                                    int(state.wheel_count_right), float(state.steering_rad),
-                                    encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
+        step = odometry_step(self.odometry, state)
         before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
         if step.integrated:
@@ -1067,41 +1064,16 @@ class RealLoop:
             self._watch_trip = self._watch_state(state)
 
     def _odom_entry(self, state, rx_ns: int, step) -> None:
-        """5a (design 1.1): the STATE's measurement interval ``[receipt - delay bound, receipt]`` (core seconds) with
-        its raw odometry pose; excluded (``included`` False) without a bound or with one over ``state_delay_s``; the
-        motion bounds the scan placement checks against ``v_scan``: each wheel's speed over the interval from the
-        previous STATE (MCU time) plus its error width -- the acceleration over half the interval and a count at each
-        end (``EncoderSpeedParams.error``), so the largest speed inside the interval, not its mean (Codex 5a impl
-        P1-4); the yaw rate from the wheel difference with both widths."""
-        sample = Sample(rx_ns, state)
+        """5a (design 1.1): this STATE's history entry (``odom_history.odom_entry``, the observe run's too -- PR 7
+        design 6.1, 8): its measurement interval with the delay bound the head recorded for it, its raw odometry pose,
+        ``included`` and the motion bounds against ``v_scan``."""
         b = None
         if self.delay_bound is not None:
             b = (self._sample_delay.get((int(state.boot_id), int(state.mcu_time_us))) or (None, None))[1]  # _on_state
-        hi = self._t(rx_ns)
-        included = b is not None and b <= self.state_delay_s
-        lo = hi - (self.state_delay_s if b is None else b)
-        pose = tuple(float(v) for v in step.pose)
-        speed_ok = yaw_ok = True
-        mcu_s = int(state.mcu_time_us) / 1e6
-        counts = (int(state.wheel_count_left), int(state.wheel_count_right))
-        prev = getattr(self, "_odom_prev", None)
-        self._odom_prev = (int(state.boot_id), mcu_s, counts)
-        if self.odom_history and prev is not None and prev[0] == int(state.boot_id):
-            dt = mcu_s - prev[1]  # the MCU's own interval between the two measurements
-            if dt <= 0.0:
-                speed_ok = yaw_ok = False
-            else:
-                p = self.params
-                v, e = [], []
-                for w in (0, 1):
-                    dc = wheel_count_delta(counts[w], prev[2][w])
-                    v.append(2.0 * math.pi * p.radius_m[w] * dc / (p.counts_per_rev[w] * dt))
-                    e.append(p.error(w, dt, 0.0))
-                if max(abs((v[0] + v[1]) / 2.0) + max(e), 0.0) > self.v_scan_mps + 1e-9:
-                    speed_ok = False
-                if (abs(v[1] - v[0]) + e[0] + e[1]) / p.track_m > self.v_scan_mps * max(self.kappa_max, 1e-9) + 1e-9:
-                    yaw_ok = False
-        entry = (lo, hi, pose, not step.continuity_broken, included, speed_ok, yaw_ok)
+        entry, self._odom_prev = odom_entry(
+            state, step, hi_s=self._t(rx_ns), delay_b=b, state_delay_s=self.state_delay_s,
+            prev=getattr(self, "_odom_prev", None), has_history=bool(self.odom_history), params=self.params,
+            v_scan_mps=self.v_scan_mps, kappa_max=self.kappa_max)
         self.odom_history.append(entry)
         for listener in self.odom_listeners:
             listener(entry)

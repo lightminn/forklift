@@ -571,8 +571,12 @@ def test_an_end_state_delivered_past_the_deadline_and_a_late_reply_are_faults():
     [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
     r.now += int(1.5e9)
     r.bridge.reply(s)
+    seen = []
+    r.src.reply_hook = lambda scan, rec: seen.append(scan.scan_id) or {"q": 1}
     with pytest.raises(rss.SlamSourceFatal, match="no reply"):
         r.step(1)
+    rows = [e for e in r.src.events if e.get("t") == "reply" and e.get("why") == "past_reply_bound"]
+    assert rows and rows[0]["q"] == 1 and "epoch" in rows[0] and seen == [s.scan.scan_id]  # recorded before the fault
 
 
 def test_a_void_read_past_its_bound_is_a_fault():
@@ -990,3 +994,38 @@ def test_offers_alone_judge_the_reply_bound():
     r.hist_to(r.now)
     with pytest.raises(rss.SlamSourceFatal, match="no reply"):
         r.src.offer(r.scan(lag_ms=10))
+
+
+# --- 7c-1c (the observe run's input breaks) --------------------------------------------------------------------------
+def test_an_input_break_takes_back_a_start_scan_not_one_byte_of_which_went():
+    r = Rig()
+    r.step()
+    [hello] = r.bridge.frames()
+    r.bridge.state(1, "seeding")
+    r.bridge.state(1, "ready_for_scans")
+    r.step()
+    r.src.link.sock = Chunky(r.src.link.sock, [None, None])
+    r.src.offer(r.scan())
+    assert r.src.target["start_scans"] == 1 and r.src._inflight is not None  # noqa: SLF001
+    r.src.input_break("disconnected")
+    assert r.src._inflight is None and r.src.target["start_scans"] == 0  # noqa: SLF001
+    assert r.src.counts["slam_input_break"] == 1
+    r.step()
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+
+
+
+def test_a_late_read_records_only_the_reply_with_the_scans_own_stamp():
+    """7c-1c Codex round 4 P2: a reply of the same id but another stamp is not that scan's."""
+    r = Rig()
+    r.started()
+    r.src.offer(r.scan(lag_ms=10))
+    [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.now += int(1.5e9)
+    r.bridge.sock.sendall(slam_link.encode_reply(slam_link.Reply(s.scan.scan_id, s.scan.stamp_s + 1.0, "processed",
+                                                                 (9.0, 9.0, 0.0), 1, 0.0)))
+    r.bridge.reply(s, corr=(0.1, 0.0, 0.0))
+    with pytest.raises(rss.SlamSourceFatal, match="no reply"):
+        r.step(1)
+    rows = [e for e in r.src.events if e.get("t") == "reply" and e.get("why") == "past_reply_bound"]
+    assert len(rows) == 1 and rows[0]["map_from_odom"] == [0.1, 0.0, 0.0]

@@ -198,9 +198,11 @@ def dilated(mask: np.ndarray, cells: int = 1) -> np.ndarray:
 
 
 def endpoint_fraction(survey: Grid, laser_pose, ranges, angle_min_rad: float, angle_increment_rad: float,
-                      range_min_m: float, range_max_m: float, dilate_cells: int = 1) -> float:
+                      range_min_m: float, range_max_m: float, dilate_cells: int = 1, walls=None) -> float:
     """The fraction of the scan's measured endpoints (finite, within the range limits) on the survey's occupied cells
-    dilated by ``dilate_cells`` (NaN: no such endpoint). ``laser_pose``: the laser in the map, (x, y, yaw)."""
+    dilated by ``dilate_cells`` (NaN: no such endpoint). ``laser_pose``: the laser in the map, (x, y, yaw).
+    ``walls``: that dilated mask computed once by the caller (``dilated(survey.occupied(), dilate_cells)``) -- a run
+    that scores every reply does not redo it per reply."""
     r = np.asarray(ranges, float)
     angles = laser_pose[2] + angle_min_rad + angle_increment_rad * np.arange(len(r))
     measured = np.isfinite(r) & (r >= range_min_m) & (r <= range_max_m)
@@ -209,7 +211,8 @@ def endpoint_fraction(survey: Grid, laser_pose, ranges, angle_min_rad: float, an
     points = np.column_stack((laser_pose[0] + r[measured] * np.cos(angles[measured]),
                               laser_pose[1] + r[measured] * np.sin(angles[measured])))
     rows, cols, inside = survey.cells_of(points)
-    walls = dilated(survey.occupied(), dilate_cells)
+    if walls is None:
+        walls = dilated(survey.occupied(), dilate_cells)
     return float((inside & walls[rows, cols]).sum()) / len(points)
 
 
