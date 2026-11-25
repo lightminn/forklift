@@ -195,8 +195,23 @@ def stop_instance(proc, node: Driver, k: int, name: str) -> dict:
         out["sigkill"] = True
         os.killpg(proc.pid, signal.SIGKILL)
         proc.wait(timeout=5)
-    # the whole group gone (no child left behind by ros2 run)
-    left = subprocess.run(["pgrep", "-g", str(proc.pid)], capture_output=True, text=True).stdout.split()
+    # the whole group gone (ros2 run's leader exits before the node it started): wait for it, then SIGKILL the rest
+    def members():
+        return subprocess.run(["pgrep", "-g", str(proc.pid)], capture_output=True, text=True).stdout.split()
+    out["group_after_leader"] = members()
+    deadline = time.monotonic() + 5
+    while members() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if members():
+        out["group_sigkill"] = True
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 5
+        while members() and time.monotonic() < deadline:
+            time.sleep(0.1)
+    left = members()
     out["group_left"] = left
     gone = False
     deadline = time.monotonic() + 15
@@ -282,12 +297,13 @@ def main(argv) -> int:
     grid = bundle.grid
     a = (-1.7529200315475464, 0.0, 0.0)  # random_m registry start (map <- base_link)
     b = None
-    for dx, dy, dyaw in ((0.4, 0.2, 0.15), (0.3, -0.2, -0.1), (0.5, 0.0, 0.2), (-0.3, 0.2, 0.1)):
+    for dx, dy, dyaw in ((0.3, 0.0, 0.1), (0.4, 0.2, 0.15), (0.3, -0.2, -0.1), (-0.3, 0.0, 0.1)):
         cand = (a[0] + dx, a[1] + dy, a[2] + dyaw)
-        if free_at(grid, cand) and np.isfinite(raycast(grid, cand)).mean() > 0.5:
+        if free_at(grid, cand):
             b = cand
             break
-    result = {"bundle": str(bundle_dir), "map_id": map_id, "a": a, "b": b,
+    result_extra = {"finite_beams_a": float(np.isfinite(raycast(grid, a)).mean())}
+    result = {"bundle": str(bundle_dir), "map_id": map_id, "a": a, "b": b, **result_extra,
               "slam_toolbox": run_cli(["ros2", "pkg", "xml", "slam_toolbox", "--tag", "version"])[1]}
     rclpy.init()
     node = Driver()
@@ -321,11 +337,11 @@ def main(argv) -> int:
                                                       "map_coverage": result[k]["start_check"]["map_coverage"],
                                                       "lifecycle": result[k]["bring_up"].get("lifecycle_node")}
                                                   for k in ("instance_1", "instance_2") if k in result}}))
-        ex.shutdown()
-        node.destroy_node()
-        rclpy.shutdown()
-    return 0 if ok else 1
+        sys.stdout.flush()
+    # rclpy's teardown with the executor thread still spinning aborts the process (exit 139 seen in job 21220): the
+    # record is written, so leave without it
+    os._exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    main(sys.argv)
