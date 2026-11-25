@@ -19,7 +19,9 @@ The link (6.1, 2):
   state (``ready`` / ``not_localized``) or ``void``;
 - a seed's inputs are judged until its end state -- each poll and each offer (before any write retry), before each
   scan to its instance and before its end state is taken: a boot change, a raised odometry continuity generation (the
-  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
+  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, a move past the limit seen on
+  any odometry pose since the acceptance (``odom_step``, the loop's ``odom_listeners``: kept even after the pose left
+  the history), or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
   snapshot cancels it. A seed the bridge has not seen a byte of is cancelled here (``void`` at once); otherwise new
   scans stop, the frame being written is finished and ``cancel`` is written once. A ``ready`` / ``not_localized`` /
   ``reply`` of a cancelled or voided seed, or of a stopped instance, is dropped and counted;
@@ -217,7 +219,7 @@ class RealSlamSource:
         return {"id": int(ident), "kind": kind, "epoch": epoch, "accepted_ns": accepted_ns,
                 "deadline_ns": None if accepted_ns is None else accepted_ns + int(SEED_WAIT_S * 1e9),
                 "pose": tuple(float(v) for v in pose), "snapshot": snapshot, "boot": boot, "odom_gen": odom_gen,
-                "state": "queued", "cancel": None, "start_scans": 0}
+                "state": "queued", "cancel": None, "start_scans": 0, "moved": False}
 
     # --- helpers -----------------------------------------------------------------------------------------------------
     def _s(self, ns: int) -> float:
@@ -281,6 +283,22 @@ class RealSlamSource:
         self._pump(now)
         return sid
 
+    def odom_step(self, rear_pose) -> None:
+        """The loop's every odometry pose (its ``odom_listeners``): a seed's move past the stillness limit is kept until
+        its end state, whether or not a poll still finds that pose in the history (round 3 P1). Never raises."""
+        t = self.target
+        if t is None or t["kind"] != "seed" or t["snapshot"] is None or not self._seeding() or t["moved"]:
+            return
+        if self._past_still(base_from_rear(rear_pose, self.rear_offset_m), t["snapshot"]):
+            t["moved"] = True
+
+    @staticmethod
+    def _past_still(pose, snapshot) -> bool:
+        x, y, yaw = (float(v) for v in pose)
+        sx, sy, syaw = snapshot
+        dyaw = abs(math.atan2(math.sin(yaw - syaw), math.cos(yaw - syaw)))
+        return math.hypot(x - sx, y - sy) > SEED_STILL_M or dyaw > SEED_STILL_RAD
+
     def request_processed(self, epoch, attempt, not_before) -> None:
         if int(epoch) >= self.epoch:
             self._requests.append([int(epoch), attempt, float(not_before), int(self.clock()) + int(REQUEST_S * 1e9)])
@@ -299,6 +317,8 @@ class RealSlamSource:
             if self._inflight is not None:
                 self._inflight["old_gen"] = True
         self._gen = gen
+        if self._odom_wait is not None and s.stamp_ns <= self._odom_wait["scan"].stamp_ns:
+            return self._drop("slam_stamp_order", key=s.key)  # the fresher scan keeps its retry (round 3 P2-4)
         if self._odom_wait is not None:
             self._drop("slam_superseded", key=self._odom_wait["scan"].key)
         self._odom_wait = {"scan": s, "retry_ns": now + ODOM_RETRY_NS, "tried": False}
@@ -448,9 +468,12 @@ class RealSlamSource:
             self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
 
     def _receipt_deadlines(self, received: int) -> None:
-        """What is waited for from the bridge, on the clock after the read, before any frame is taken: a void or a
-        reply read past its bound is past it (round 2 P2-4)."""
+        """What is waited for from the bridge, on the clock after the read, before any frame is taken: a void, a reply
+        or a start / seed's end state read past its bound is past it (round 2 P2-4, round 3 P2-2)."""
         t = self.target
+        if t is not None and t["cancel"] is None and self._seeding() and t["deadline_ns"] is not None \
+                and received > t["deadline_ns"]:
+            self._fatal(f"{t['kind']} {t['id']}: no end state within {SEED_WAIT_S} s")
         if t is not None and t["cancel"] is not None and t["cancel"]["sent_ns"] is not None \
                 and received - t["cancel"]["sent_ns"] > VOID_WAIT_S * 1e9:
             self._fatal(f"no void for {t['id']} within {VOID_WAIT_S} s of its cancel")
@@ -558,8 +581,9 @@ class RealSlamSource:
             return "boot_changed"
         if self.odom_gen() != t["odom_gen"]:
             return "odom_break"  # any break since the acceptance, seen or not by a poll (round 2 P1)
+        if t["moved"]:
+            return "seed_moved"
         since = self._s(t["accepted_ns"])
-        sx, sy, syaw = t["snapshot"]
         poses = []
         for e in self.odom_history():
             if e[1] < since:
@@ -568,9 +592,8 @@ class RealSlamSource:
                 return "odom_break"
             poses.append(base_from_rear(e[2], self.rear_offset_m))
         poses.append(tuple(float(v) for v in self.odom_base()))
-        for x, y, yaw in poses:  # every pose since the acceptance, not the last only (round 1 P1-2)
-            dyaw = abs(math.atan2(math.sin(yaw - syaw), math.cos(yaw - syaw)))
-            if math.hypot(x - sx, y - sy) > SEED_STILL_M or dyaw > SEED_STILL_RAD:
+        for pose in poses:  # every pose since the acceptance still in the history, not the last only (round 1 P1-2)
+            if self._past_still(pose, t["snapshot"]):
                 return "seed_moved"
         return None
 
@@ -580,7 +603,7 @@ class RealSlamSource:
             return
         why = self._input_broken(t)
         if why is not None:
-            self._decide_cancel(t, why, now)
+            self._decide_cancel(t, why, int(self.clock()))  # the decision's own instant (round 3 P2-2)
 
     def _decide_cancel(self, t, why: str, now: int) -> None:
         if t["deadline_ns"] is not None and now > t["deadline_ns"]:
@@ -593,6 +616,10 @@ class RealSlamSource:
             self._ended.add(t["id"])
             self.target = None
             return
+        f = self._inflight
+        if f is not None and f["target"] == t["id"] and self.link.retract("scan"):
+            self._inflight = None  # not one byte of it went: the cancel goes first (round 3 P2-3)
+            self._drop("slam_cancel_cut", key=f["key"])
         t["cancel"] = {"reason": why, "decided_ns": int(now), "writing": False, "sent_ns": None}
         for w in (self._waiting, None if self._odom_wait is None else self._odom_wait["scan"]):
             if w is not None:

@@ -302,6 +302,9 @@ class RealLoop:
         # PR 7 design 6.1, 2 (7c-1b-2a): raised at every odometry break, reboot and device loss, never lowered -- the
         # real SLAM source compares it with a seed's own, since a break clears the history it would otherwise read
         self.odom_gen = 0
+        # (rear-axle odometry pose) -> None, called on every STATE's odometry step: the real SLAM source watches a
+        # seed's stillness on every pose, not only those a poll still finds in the history (Codex 7c-1b-2a round 3 P1)
+        self.odom_listeners: list = []
         # 5c-1 (design 5): the session's bypass set (applied at a tick head; this tick's copy judges), the operator's
         # answers by serial (the first only), the last refusal told on real_status
         self.bypass: set = set()
@@ -1036,6 +1039,8 @@ class RealLoop:
                                     encoder_cut=bool(int(state.fault_flags) & int(ENCODER_CUT)))
         before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
+        for listener in self.odom_listeners:
+            listener(self.odom_pose)
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:

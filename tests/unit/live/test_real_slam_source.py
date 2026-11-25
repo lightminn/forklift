@@ -806,3 +806,64 @@ def test_buffered_frames_come_before_new_reads_and_the_backlog_is_bounded():
     link._buffer = one * ((rss.MAX_FRAME + rss.READ_BYTES) // len(one) + 4 * rss.READ_FRAMES)  # past a poll
     with pytest.raises(rss.SlamSourceFatal, match="behind"):
         link.read()
+
+
+# --- Codex 7c-1b-2a round 3 ----------------------------------------------------------------------------------------
+def test_a_move_seen_only_on_a_pose_that_left_the_history_still_cancels():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    from forklift_core.localization.start_reloc import rear_from_base
+
+    r.src.odom_step(rear_from_base((0.02, 0.0, 0.0), 0.5))  # pushed 2 cm and back between two polls
+    r.src.odom_step(rear_from_base((0.0, 0.0, 0.0), 0.5))
+    r.history.clear()
+    r.hist_to(r.now)
+    r.step()
+    assert any(isinstance(f, rl.Cancel) and f.reason == "seed_moved" for f in r.bridge.frames())
+
+
+def test_an_end_state_read_across_the_deadline_within_one_poll_is_a_fault():
+    r = Rig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(sid, "ready")
+    r.now = r.src.target["deadline_ns"] - MS
+    plain = r.src.link.read
+
+    def slow_read():
+        r.now += 2 * MS  # the read itself crosses the deadline
+        return plain()
+
+    r.src.link.read = slow_read
+    with pytest.raises(rss.SlamSourceFatal, match="no end state"):
+        r.src.replies(r.now)
+
+
+def test_a_cancel_goes_before_a_seed_scan_not_one_byte_of_which_went():
+    r = Rig()
+    r.started()
+    seed_to_ready(r)
+    r.src.link.sock = Chunky(r.src.link.sock, [None])
+    r.src.offer(r.scan(lag_ms=10))
+    r.boot_id = 2
+    r.step()
+    got = [f for f in r.bridge.frames() if isinstance(f, (rl.RealScan, rl.Cancel))]
+    assert [type(f).__name__ for f in got] == ["Cancel"]
+
+
+def test_a_fresher_scan_waiting_for_its_odometry_is_not_pushed_out_by_an_older_one():
+    r = Rig()
+    r.started()
+    fresh = r.scan(lag_ms=-5)  # its odometry not in yet
+    r.src.offer(fresh)
+    r.src.offer(r.scan(lag_ms=30))
+    assert r.src.counts["slam_stamp_order"] == 1
+    r.step()
+    [sent] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    assert sent.stamp_ns == fresh.stamp_ns

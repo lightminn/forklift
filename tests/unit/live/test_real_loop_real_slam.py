@@ -62,6 +62,7 @@ def real(r, end="ready"):
         boot=lambda: loop.host.state.boot_id, rear_offset_m=REAR_OFFSET_M, clock=lambda: r.now)
     marks = []
     loop.slam_source = _SlamGuard(src, marks.append, Counter())
+    loop.odom_listeners.append(src.odom_step)
     plain = r.tick
 
     def tick(n=1):
