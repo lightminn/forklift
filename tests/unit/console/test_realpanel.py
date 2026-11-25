@@ -92,7 +92,7 @@ def test_the_panel_decisions(tmp_path):
     assert out["shownToggle"] == [True, False, True]
     assert out["why"][0] is None and all(isinstance(w, str) for w in out["why"][1:])
     assert ["imu", True, True] in out["buttons"] and ["slam", False, True] in out["buttons"]
-    assert len(out["buttons"]) == 11 and out["closed"] is True  # start_pose: 5c-2, d5_pocket: 5d
+    assert len(out["buttons"]) == 12 and out["closed"] is True  # start_pose: 5c-2, d5_pocket: 5d, f1: 7c-2b
     assert out["key"] == {"session_epoch": 3, "kind": "lifted", "serial": 7}
     assert out["open"] == [True, False, False, False, False]
     assert out["pose"][0][:2] == [3, 0.5] and abs(out["pose"][0][2] - 1.5707963) < 1e-6

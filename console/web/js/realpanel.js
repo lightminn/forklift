@@ -6,7 +6,7 @@ import { CHECK_LABELS } from "./realstatus.js";
 
 // the checks the operator may bypass (the vehicle's BYPASSABLE, real_loop.py)
 export const BYPASSABLE = ["measurement", "odometry", "slam", "layer_timing", "operator_start", "snapshot", "imu",
-  "watch_current", "watch_wheel", "start_pose", "d5_pocket"];
+  "watch_current", "watch_wheel", "start_pose", "d5_pocket", "f1"];
 const ACTIVE = ["accepted", "preparing", "running", "paused", "resuming", "held", "cancelling", "recovering"];
 const OFF = ["OFF", "LATCHED"];
 

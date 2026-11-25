@@ -354,6 +354,12 @@
   - F1 이 잠근 세션에서 포크를 손으로 빼고 DISARM 을 확인한 뒤 그 보고를 못 하면 세션이 갇힌다.
   - 그래서 실차 경로의 차단 목록은 `recovery` 를 뺀 것이다. 미션 제출·재개·집기 요청과 AUTO 를 막는다. 아비터에 차단 목록을 인자로 주고, Isaac 은 지금 목록 그대로다.
 - 해제는 세션 끝뿐이다. 텔레옵은 열려 있다(F1 원래 정책).
+- **구현(7c-2b, 총괄 #623 판단 ①·② 반영, Codex 설계 확인)**:
+  - 실차 경로의 F1 은 아비터의 한 방향 `start_block` 이 아니라 **루프의 시작 게이트**(`RealLoop._start_gate`, 아비터의 `start_gate`)에 둔다. 요청 검사·AUTO 진입 단언·`Context.start_blocked` 셋이 모두 이 게이트를 읽는다. 게이트의 거부 목록(`START_GATE_REFUSED`)은 `recovery` 를 빼므로 수동 복구 보고가 열려 있고, 세션 중 `f1` 우회를 그 자리에서 읽는다. Isaac 의 `block_start` 경로는 그대로다.
+  - 출발 게이트식은 세 경계 모두 `(F1 차단 ∧ f1 우회 꺼짐) ∨ (manual_only ∧ slam 우회 꺼짐)` 이다.
+  - 기록은 `seed_log`(seed 마다 `(session_epoch, generation, attempt, epoch, seed_id)`, 원천이 seed 를 받은 직후)다. 선언이 닫힐 때 키 전체가 맞는 행만 완료로 표시하고, 맞는 행이 없으면 `declare_unsourced` 로 막는다. 판정은 `_close_generation` 에서 `core.relocalized` 직후 한 번이다. 막힘은 `f1_block`(마지막 seed 의 식별자 포함)과 `reloc_events` 의 `f1_block` 행으로 남고, 실행 끝 기록에 `seed_log`·`f1_block`·`reloc_events` 가 들어간다.
+  - **`f1` 우회**(세션 토글, 다른 우회와 같은 방식): 우회 중 상한 0.06 m/s, 그 사이 돈 임무의 결과에 `bypassed` 와 `excluded_counts: [f1, validation]` 를 남기고, 끝 기록의 `mission_counts` 가 그 임무를 F1·검증 계수의 분자·분모에서 뺀다. 화면 띠는 "우회 중: f1" 이다.
+  - **우회하지 않는 것**(판단 ①): 이번 회차의 실제 `processed` 가 신선하지 않은 출발. ARM 프레임을 쓰는 그 순간(`judge` 의 `ns`)에 SLAM 응답 나이를 우회와 무관하게 다시 보고, `SLAM_MAX_AGE_S` 를 넘으면 `arm_slam_stale` 로 거부한다(틱 앞에서 0.497 s 였던 응답이 쓰기 때 0.5 s 를 넘는 경우 — Codex 설계 확인 P1).
 
 **8. 관측 실행 `--slam`**(벤치 4·7 의 기록)
 - 관측 실행에 실 SLAM 원천을 붙인다(7a-3 전에는 0 의 진단 모드). 관측 실행에는 루프가 없으므로 STATE 에서 오도메트리 이력을 만든다. **루프와 같은 함수**(`_odom_entry` 의 오도메트리 단계와 구간 규칙)를 공용으로 빼서 쓰고, 복사하지 않는다.

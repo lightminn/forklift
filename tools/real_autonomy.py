@@ -27,6 +27,7 @@ from types import SimpleNamespace
 REPO = Path(__file__).resolve().parents[1]
 
 from forklift_core.live.real_run import map_occupancy, mission_geometry  # noqa: E402,F401 -- re-exported (tests)
+from forklift_core.live.real_loop import mission_counts  # noqa: E402 -- the end record's F1/validation counts
 
 EXIT_FAILED = 1
 
@@ -412,6 +413,12 @@ def _hil_body(args, rlt, rr, AssemblyRefused, prep, record, held, end, stop, mod
                permit=loop.permit.state, permit_reason=loop.permit.reason, counts=dict(sources.counts),
                slam_counts=dict(getattr(sources.slam, "counts", {}) or {}),
                reloc_dropped=dict(loop.reloc_dropped),
+               # PR 7 design 6.1, 7 (7c-2b): the seeds, the F1 block and its events, and the missions counted for the
+               # F1 and validation figures (f1-bypassed ones left out)
+               seed_log=[dict(r) for r in getattr(loop, "seed_log", [])],
+               f1_block=None if getattr(loop, "f1_block", None) is None else dict(loop.f1_block),
+               reloc_events=[dict(e) for e in getattr(loop, "reloc_events", [])],
+               mission_counts=mission_counts(loop.session.results),
                ticks=run.ticks, records_kept=len(loop.records))
     return rr.EXIT_OK if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
 
