@@ -17,6 +17,28 @@ operator console relocalizes by default only on a row marked yes. A new row, and
     python tools/slam_bundle_registry.py mark REGISTRY --name NAME --relocalizable yes|no --evidence TEXT
     python tools/slam_bundle_registry.py lookup REGISTRY --scene-file FILE --encoder-model MODEL
         (prints "folder map_id x,y,yaw yes|no"; exit 3 when the registry has none, any other failure 1)
+
+Real-site rows (docs/design/2026-11-25-real-sources-pr7.md 6.1 item 5, PR 7c-2a) sit in the same list. They have no
+``scene_sha256``: they are found by ``(site_record_sha256, encoder_model)``, the hash of the site record the
+registration command reads itself. One site survey report binds the row together (``site_survey/1``, below): the site
+record's hash, the bundle's ``map_id``, the sensor and odometry settings' hashes, the survey run's raw records, the start
+pose in the map and the five-mark site check (observed figures against limits fixed beforehand). The registered start
+must agree with the S10-A taped start (``start_rear`` taken to base_link) within the start tolerance, and the S10-A
+settings must name the same map. A new site row is not relocalizable at its start.
+
+    python tools/slam_bundle_registry.py add-site REGISTRY --name NAME --bundle DIR --report SITE_REPORT
+        --site-record SITE_RECORD --s10a S10A_YAML --vehicle VEHICLE_YAML
+    python tools/slam_bundle_registry.py lookup-site REGISTRY --site-record SITE_RECORD --encoder-model MODEL
+        (prints as lookup)
+
+The site survey report (JSON, written by the survey, never by this tool)::
+
+    {"kind": "site_survey/1", "ok": true, "site": "<name>", "site_record_sha256": "<64 hex>",
+     "map_id": "<the bundle's>", "encoder_model": "<model>", "start_pose": [x, y, yaw],   # map <- base_link
+     "config_sha256": {"lidar": "<64 hex>", "chassis": "<64 hex>"},
+     "raw": [{"path": "<record>", "sha256": "<64 hex>"}, ...],   # the survey drive's records and .ok files
+     "site_check": {"points": 5, "position_max_m": m, "yaw_max_rad": r,
+                    "limits": {"position_m": m, "yaw_rad": r}}}
 """
 
 from __future__ import annotations
@@ -24,6 +46,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -31,6 +54,8 @@ import numpy as np
 import yaml
 
 SCENE_INPUT = "scene_file"
+SITE_REPORT_KIND = "site_survey/1"
+SITE_CHECK_POINTS = 5  # the five floor marks (design 6.1 item 5)
 NONE = 3  # lookup: no row (an error exits 1, so the launcher can tell the two apart)
 
 
@@ -95,15 +120,99 @@ def check_sources(report: dict, survey_run: Path, nodes_csv: Path) -> None:
         raise ValueError(f"the nodes {nodes_csv} are not the report's read-back ({report['readback']})")
 
 
+def is_site(row: dict) -> bool:
+    """A real-site row (no scene file: keyed by its site record)."""
+    return "site_record_sha256" in row
+
+
+def _key(row: dict) -> tuple:
+    return ("site", row["site_record_sha256"], row["encoder_model"]) if is_site(row) else (
+        "scene", row["scene_sha256"], row["encoder_model"])
+
+
 def put(book: dict, row: dict) -> dict:
-    """The registry with ``row`` in place of any row of the same scene and model."""
-    kept = [r for r in book.get("bundles") or []
-            if (r["scene_sha256"], r["encoder_model"]) != (row["scene_sha256"], row["encoder_model"])]
+    """The registry with ``row`` in place of any row of the same kind, key and model (scene rows by the scene file,
+    site rows by the site record)."""
+    kept = [r for r in book.get("bundles") or [] if _key(r) != _key(row)]
     return {**book, "bundles": kept + [row]}
 
 
+def lookup_site(book: dict, site_record_sha256: str, encoder_model: str) -> dict | None:
+    rows = [r for r in book.get("bundles") or [] if is_site(r) and r["site_record_sha256"] == site_record_sha256
+            and r["encoder_model"] == encoder_model]
+    if len(rows) > 1:
+        raise ValueError(f"two registry rows for site record {site_record_sha256[:12]} and {encoder_model}")
+    return rows[0] if rows else None
+
+
+def _hex64(v) -> bool:
+    return isinstance(v, str) and len(v) == 64 and all(c in "0123456789abcdef" for c in v)
+
+
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(float(v))
+
+
+def site_entry(manifest: dict, report: dict, *, name: str, folder: str, report_name: str, report_sha256: str,
+               site_record_sha256: str, s10a_map_id, s10a_start_base, tol_m: float, tol_rad: float) -> dict:
+    """The registry row of a real site survey (ValueError naming the first problem). ``site_record_sha256`` is the
+    hash of the site record file itself; ``s10a_start_base`` the S10-A taped start as base_link."""
+    if report.get("kind") != SITE_REPORT_KIND:
+        raise ValueError(f"{name}: the report is not a {SITE_REPORT_KIND} report (kind {report.get('kind')!r})")
+    if report.get("ok") is not True:
+        raise ValueError(f"{name}: the site survey was not accepted (report ok {report.get('ok')!r})")
+    if report.get("site_record_sha256") != site_record_sha256:
+        raise ValueError(f"{name}: the site record {site_record_sha256[:12]} is not the report's "
+                         f"{str(report.get('site_record_sha256'))[:12]}")
+    if not manifest.get("map_id") or report.get("map_id") != manifest["map_id"]:
+        raise ValueError(f"{name}: the report's map_id {str(report.get('map_id'))[:12]} is not the bundle's "
+                         f"{str(manifest.get('map_id'))[:12]}")
+    if s10a_map_id != manifest["map_id"]:
+        raise ValueError(f"{name}: the S10-A settings name map {str(s10a_map_id)[:12]}, not the bundle's "
+                         f"{manifest['map_id'][:12]}")
+    model = report.get("encoder_model")
+    bundle_model = ((manifest.get("run") or {}).get("arguments") or {}).get("encoder_model")
+    if not model or (bundle_model is not None and bundle_model != model):
+        raise ValueError(f"{name}: the report's encoder model {model!r} is not the bundle's {bundle_model!r}")
+    cfg = report.get("config_sha256") or {}
+    if not (_hex64(cfg.get("lidar")) and _hex64(cfg.get("chassis"))):
+        raise ValueError(f"{name}: the report has no lidar and chassis settings hashes")
+    raw = report.get("raw")
+    if not raw or not all(isinstance(r, dict) and r.get("path") and _hex64(r.get("sha256")) for r in raw):
+        raise ValueError(f"{name}: the report lists no survey records with their hashes")
+    start = report.get("start_pose")
+    if not (isinstance(start, list) and len(start) == 3 and all(_finite(v) for v in start)):
+        raise ValueError(f"{name}: the report's start_pose is not three finite numbers")
+    tape = [float(v) for v in s10a_start_base]
+    d = math.hypot(float(start[0]) - tape[0], float(start[1]) - tape[1])
+    dyaw = abs(math.remainder(float(start[2]) - tape[2], math.tau))
+    if d > tol_m or dyaw > tol_rad:
+        raise ValueError(f"{name}: the surveyed start is {d:.3f} m / {math.degrees(dyaw):.1f} deg from the S10-A "
+                         f"taped start (tolerance {tol_m} m / {math.degrees(tol_rad):.1f} deg)")
+    chk = report.get("site_check") or {}
+    lim = chk.get("limits") or {}
+    if not (isinstance(chk.get("points"), int) and chk["points"] >= SITE_CHECK_POINTS):
+        raise ValueError(f"{name}: the site check has {chk.get('points')!r} marks, not {SITE_CHECK_POINTS}")
+    if not all(_finite(v) and v > 0 for v in (lim.get("position_m"), lim.get("yaw_rad"))):
+        raise ValueError(f"{name}: the site check's limits are not set (position_m, yaw_rad)")
+    obs = (chk.get("position_max_m"), chk.get("yaw_max_rad"))
+    if not all(_finite(v) and v >= 0 for v in obs):
+        raise ValueError(f"{name}: the site check's observed figures are missing")
+    if obs[0] > lim["position_m"] or obs[1] > lim["yaw_rad"]:
+        raise ValueError(f"{name}: the site check observed {obs[0]:.3f} m / {obs[1]:.4f} rad, over its limits "
+                         f"{lim['position_m']} m / {lim['yaw_rad']} rad")
+    return {"name": name, "site": str(report.get("site") or name), "site_record_sha256": site_record_sha256,
+            "survey_report": {"path": report_name, "sha256": report_sha256}, "encoder_model": model,
+            "folder": folder, "map_id": manifest["map_id"], "start_pose": [float(v) for v in start],
+            "v2": {"position_max_m": float(obs[0]), "yaw_max_rad": float(obs[1])},
+            "site_check_limits": {"position_m": float(lim["position_m"]), "yaw_rad": float(lim["yaw_rad"])},
+            "start_relocalizable": False, "start_reloc_evidence": None}
+
+
 def lookup(book: dict, scene_sha256: str, encoder_model: str) -> dict | None:
-    rows = [r for r in book.get("bundles") or [] if r["scene_sha256"] == scene_sha256 and r["encoder_model"] == encoder_model]
+    """An Isaac scene row (site rows have no scene file and are never found here)."""
+    rows = [r for r in book.get("bundles") or [] if not is_site(r) and r.get("scene_sha256") == scene_sha256
+            and r["encoder_model"] == encoder_model]
     if len(rows) > 1:
         raise ValueError(f"two registry rows for scene {scene_sha256[:12]} and {encoder_model}")
     return rows[0] if rows else None
@@ -141,6 +250,25 @@ def _survey_start(run: Path, nodes_csv: Path) -> list[float]:
     return start_pose(np.asarray(log["base_pose_world"], float)[row])
 
 
+def _s10a_start(s10a: Path, vehicle: Path) -> dict:
+    """The S10-A settings' map id and taped start as base_link (its rear axle offset from the chassis model), with the
+    registered start's tolerance (the live loop's ``START_TOL_M``/``START_TOL_RAD``)."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from forklift_core.live.real_autonomy import load_s10a  # noqa: PLC0415
+    from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD  # noqa: PLC0415
+    from forklift_core.live.real_run import chassis_reference  # noqa: PLC0415
+    from forklift_core.localization.start_reloc import base_from_rear  # noqa: PLC0415
+    from forklift_core.plant.real_vehicle import chassis_model_path  # noqa: PLC0415
+
+    cfg = load_s10a(s10a)
+    _tip, rear_offset, _carriage = chassis_reference(chassis_model_path(vehicle).parent / "forklift.urdf")
+    rear = tuple(float(v) for v in cfg.start_rear)
+    if len(rear) != 3 or not all(math.isfinite(v) for v in rear):
+        raise ValueError(f"{s10a}: start_rear is not three finite numbers")
+    return {"s10a_map_id": cfg.map_id, "s10a_start_base": base_from_rear(rear, rear_offset),
+            "tol_m": START_TOL_M, "tol_rad": START_TOL_RAD}
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -156,6 +284,18 @@ def main(argv=None) -> int:
     mk.add_argument("--name", required=True)
     mk.add_argument("--relocalizable", choices=("yes", "no"), required=True)
     mk.add_argument("--evidence", default=None, help="the Isaac smoke that showed it: run and date")
+    site = sub.add_parser("add-site", help="register a real site survey's bundle (design 6.1 item 5)")
+    site.add_argument("registry", type=Path)
+    site.add_argument("--name", required=True)
+    site.add_argument("--bundle", type=Path, required=True)
+    site.add_argument("--report", type=Path, required=True, help="the site survey report (site_survey/1)")
+    site.add_argument("--site-record", type=Path, required=True, help="the site record itself (hashed here)")
+    site.add_argument("--s10a", type=Path, required=True, help="the S10-A settings (its start_rear and map_id)")
+    site.add_argument("--vehicle", type=Path, required=True, help="config/real/vehicle.yaml (the rear axle offset)")
+    lsite = sub.add_parser("lookup-site")
+    lsite.add_argument("registry", type=Path)
+    lsite.add_argument("--site-record", type=Path, required=True)
+    lsite.add_argument("--encoder-model", required=True)
     look = sub.add_parser("lookup")
     look.add_argument("registry", type=Path)
     look.add_argument("--scene-file", type=Path, required=True)
@@ -168,6 +308,20 @@ def main(argv=None) -> int:
         row = entry(manifest, report, folder=a.bundle.name, start=_survey_start(a.survey_run, a.nodes), name=a.name)
         write(a.registry, put(read(a.registry, missing_ok=True), row))
         print(json.dumps(row))
+        return 0
+    if a.cmd == "add-site":
+        row = site_entry(json.loads((a.bundle / "manifest.json").read_text()), json.loads(a.report.read_text()),
+                         name=a.name, folder=a.bundle.name, report_name=a.report.name, report_sha256=sha256(a.report),
+                         site_record_sha256=sha256(a.site_record), **_s10a_start(a.s10a, a.vehicle))
+        write(a.registry, put(read(a.registry, missing_ok=True), row))
+        print(json.dumps(row))
+        return 0
+    if a.cmd == "lookup-site":
+        row = lookup_site(read(a.registry), sha256(a.site_record), a.encoder_model)
+        if row is None:
+            return NONE
+        print(row["folder"], row["map_id"], ",".join(repr(float(v)) for v in row["start_pose"]),
+              "yes" if start_relocalizable(row) else "no")
         return 0
     if a.cmd == "mark":
         write(a.registry, mark(read(a.registry), a.name, a.relocalizable == "yes", a.evidence))

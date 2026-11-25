@@ -326,6 +326,7 @@
   - 비교: 각 지점에서 '현장 좌표의 상대 위치·방향(시작 표시 기준)'과 '위치 추정 결과의 상대 위치·방향(시작점 기준)'의 차를 잰다. 관측 최댓값은 보고서의 `site_check.position_max_m`·`yaw_max_rad` 이고, 합격 한도는 미리 정한 `site_check.limits`(Isaac V2′ 와 같은 값에서 시작, 잠정)다. 관측값이 한도를 넘는 보고서는 등록에서 거부한다(3 회차 P3: 관측값과 한도를 같은 이름으로 두면 자기 자신과 비교하게 됨). 레지스트리 행의 `v2` 는 그 관측값이다(벤치 7).
   - Isaac 의 V2′ 는 전 노드를 참값과 비교했다. 실차는 이것이 **다섯 점 표본 검사로 바뀐다**는 점을 기록에 적는다.
 - 레지스트리 코드는 행 종류를 나눈다. 기존 `put`·`lookup` 이 `scene_sha256` 을 직접 읽는 경로는 Isaac 행에만 쓴다. 섞인 레지스트리에서 두 종류가 모두 맞게 동작하는지 시험한다. `site:` 행의 조회 키는 `(site_record_sha256, encoder_model)` 이다. `start_relocalizable` 은 처음에 거짓이다.
+- 구현(7c-2a): `tools/slam_bundle_registry.py add-site`·`lookup-site`. 같은 `bundles` 목록에 `scene_sha256` 대신 `site_record_sha256` 을 가진 행으로 들어간다(`is_site`). 조사 보고서 형식은 `site_survey/1`(도구 머리말). 시작 자세 허용차는 실차 루프의 시작 허용차(`START_TOL_M` 0.10 m·`START_TOL_RAD` 5°)이고, S10-A 설정의 `map_id` 도 번들과 같아야 한다. 행에는 관측값(`v2`)과 함께 그 한도(`site_check_limits`)를 남긴다.
 
 **6. 재위치로 시작.**
 - 실차 세션은 시작 때 재위치 세대를 연다(`core.require_relocalization(t, "session_start")`). HIL 의 항등 `processed`(`real_run.py` 655)는 실차 원천에 쓰지 않는다.
