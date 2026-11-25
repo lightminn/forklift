@@ -137,11 +137,14 @@ def test_the_session_starts_by_relocalizing_and_nothing_is_submitted_before_the_
         s = c.wait(lambda s: s.get("relocalize_generation") is not None, 10)
         assert s["relocalize_generation"] is not None
         _until(lambda: _sent(bridge, "ready", 1), 15, "the first instance ready")
+        _until(lambda: bridge._ready_scans >= 3, 15, "processed replies of the ready instance")
         r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
         assert r["t"] == "ack", r
         time.sleep(0.8)
+        # with the ready instance's processed replies coming, the start check is refused for the open generation --
+        # not for stale SLAM (Codex 7c-2c round 1 P3)
         r = c.ask("operator_start")
-        assert r["t"] == "reject", r
+        assert r["t"] == "reject" and r["reason"] != "slam_stale", r
         r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
                   targets_revision=c.status["targets_revision"])
         assert r["t"] == "reject" and r["reason"] == "relocalize_required", r
@@ -150,6 +153,9 @@ def test_the_session_starts_by_relocalizing_and_nothing_is_submitted_before_the_
         assert c.status["relocalize_generation"] is None
         r = _operator_start(c)
         assert r["t"] == "ack", r
+        r = c.ask("mission_submit", pallet_id="P-S10", destination_id="D-S10",
+                  targets_revision=r.get("targets_revision", c.status["targets_revision"]))
+        assert r["t"] == "ack", r  # the submit goes through once the start is confirmed
     finally:
         _finish(run, c, bridge)
 
@@ -238,7 +244,12 @@ def test_declarations_on_the_real_source_through_a_lease_loss_and_a_stop(mcu_mod
     c = Console(run.port)
     try:
         _lease(c)
-        s = c.wait(lambda s: s.get("relocalize_generation") is not None and s.get("standing"), 40)
+        # the session's start generation confirmed first (7c-2c); the generation under test is the one the STATE
+        # silence opens after it (Codex 7c-2c round 1 P2)
+        start_gen = c.status["relocalize_generation"]
+        assert start_gen is not None
+        _confirm_start(c)
+        s = c.wait(lambda s: s.get("relocalize_generation") not in (None, start_gen) and s.get("standing"), 40)
         gen = s["relocalize_generation"]
         # 1: a reply of the session start's instance held across the seed's acceptance; the lease released while
         # the seed runs

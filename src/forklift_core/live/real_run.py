@@ -710,9 +710,12 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     port = RealPlantPort(host, kin, lift_motion_counts=True)
     odo = RealOdometry(vehicle, max_gap_s=0.2)
     tracker = SlamPoseTracker(max_age_s=ra.SLAM_MAX_AGE_S, hold_limit_m=ra.HOLD_MAX_M, bootstrap_scan_id=0)
-    # the real SLAM source (its epochs: ``relocalize``) starts by relocalizing (PR 7 design 6.1, 6, 7c-2c): no identity
+    # the real SLAM source starts by relocalizing (PR 7 design 6.1, 6, 7c-2c): no identity
     # correction -- the session opens a generation the operator confirms (or declares) on the bridge's first instance
-    real_slam = callable(getattr(sources.slam, "relocalize", None))
+    from forklift_core.live.real_slam_source import RealSlamSource
+
+    # by kind, not by the epoch contract: the synthetic SLAM has ``relocalize`` too (Codex 7c-2c round 1 P2)
+    real_slam = isinstance(sources.slam, RealSlamSource)
     if not real_slam:
         # the synthetic SLAM only (HIL, refused otherwise): the start is the odometry origin and its correction the
         # identity (10.5), so tracking starts on it
