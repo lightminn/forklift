@@ -1,0 +1,24 @@
+# TEST ONLY (PR 7 7r): a LiDAR config whose mount and timing bound are marked measured so a replay run can be
+# assembled in tests. Nothing here is a measurement; a run on it is marked not_for_judgement (outside config/real/).
+# Its applies_to is the synthetic record's source facts (tests/fixtures/replay/make_record.py FACTS).
+mount:
+  xyz: [0.1, 0.0, 0.3]
+  yaw_deg: 0.0
+  measured: true
+self_mask_deg: []
+height_band:
+  max_tilt_deg: 1.0
+  band_half_m: 0.10
+timing:
+  scan_period_s: 0.12
+  first_beam_err_s: 0.002
+  basis: measured
+  decision_id: null
+  basis_doc: null
+  applies_to:
+    image_id: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    usb: "10c4:ea60:0001"
+    host: jetson
+    ans_type: 132
+    sample_period_us: 31.25
+    baudrate: 256000

@@ -1,0 +1,14 @@
+# TEST ONLY (PR 7 7r): an IMU source config marked measured so a replay run can be assembled in tests. Nothing here
+# is a measurement; a run on it is marked not_for_judgement (outside config/real/).
+schema: imu_source/1
+stream:
+  accel_hz: 200
+  gyro_hz: 200
+timing:
+  delay_bound_s: 0.02
+  measured: true
+  provisional_delay_bound_s: 0.03
+generation:
+  restart_back_us: 20000
+  receive_gap_s: 0.1
+queue_max: 256

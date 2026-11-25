@@ -19,7 +19,11 @@ The SLAM branch is the source's own (``RunSources.slam_feed`` stays None): in fi
 generation change is told (``slam.generation``) before anything after it, and only a scan that goes to the layer is
 offered (``slam.offer(from_feed(...))``) -- the scan the layer takes is the scan SLAM takes (design 6.1, 1; Codex plan
 round 1 P1). ``scan_event`` rows reproduce the design 3.2 latch rules: ``receive_gap`` -> ``("lost", sensor)``,
-``receive_resumed`` -> ``("connected", sensor)``, ``socket_error`` -> ``fatal = "scan_socket_error"``.
+``receive_resumed`` -> ``("connected", sensor)``, ``socket_error`` -> ``fatal = "scan_socket_error"``. Such a row
+past the anchor but held back by a lost HIL check still changes the record's connection state: the first call that
+gives again tells the layer the state it is then in, once, and a ``socket_error`` passed that way ends the replay then
+(7r-2, Codex round 1 P2-3 -- a ``receive_resumed`` dropped while the check was lost would leave the layer
+disconnected). A row before the anchor only builds the feed's state (plan 2; Codex round 2 P2-1).
 
 ``ReplayImu`` (``samples``, ``generation``, ``last_read_capped``): every row into an operating ``ImuSource`` on an
 injected clock set to the row's moved time (a loss at its own time), the source's output given to the loop only after
@@ -116,6 +120,9 @@ class ReplayScan(_Anchored):
         self._told_gen = None  # the (feed_gen, producer_gen) last told to SLAM
         self._producer = None
         self._turn_ns: int | None = None  # the latest turn of the rows processed (file order)
+        self._conn_rec = "connected"  # the record's connection state as its rows go by
+        self._conn_told = "connected"  # the state last told to the layer
+        self._socket_error = False  # a socket_error passed while nothing went
 
     # --- the loop's calls ---------------------------------------------------------------------------------------------
     def scan_source_events(self, now_ns: int) -> list:
@@ -129,7 +136,9 @@ class ReplayScan(_Anchored):
         return out
 
     def eof(self) -> bool:
-        return self.reader.done and not self._ready and not self._events
+        # a connection state or a socket_error still to be told keeps it open (told once the check gives again)
+        return (self.reader.done and not self._ready and not self._events and not self._socket_error
+                and self._conn_rec == self._conn_told)
 
     def close(self) -> None:
         self.reader.close()
@@ -148,6 +157,14 @@ class ReplayScan(_Anchored):
         if self.delta is None or self.fatal is not None:
             return
         held = self.gate.check(now)
+        if held and now >= self.live_from_ns:
+            if self._socket_error:
+                self.fatal = "scan_socket_error"
+                return
+            if self._conn_rec != self._conn_told:
+                self._events.append(("lost" if self._conn_rec == "lost" else "connected", self.sensor))
+                self._conn_told = self._conn_rec
+                self.counts["connection_reconciled"] += 1
         t_read = self.reader.t_read
         if t_read < now - self.delta:
             self.counts["read_late"] += 1  # the reader behind the replay's now (plan 4): marked apart from gaps
@@ -168,13 +185,23 @@ class ReplayScan(_Anchored):
                     self.feed.new_generation(kind)
                     if live:
                         items.append(("gen", (self.feed.generation, self._producer)))
+                past_anchor = turn + self.delta >= self.live_from_ns
+                if past_anchor:  # the prefix builds the feed's state only (plan 2)
+                    if kind == "receive_gap":
+                        self._conn_rec = "lost"
+                    elif kind == "receive_resumed":
+                        self._conn_rec = "connected"
                 if not live:
                     self.counts["events_dropped"] += 1
+                    if kind == "socket_error" and past_anchor:
+                        self._socket_error = True
                     continue
                 if kind == "receive_gap":
                     self._events.append(("lost", self.sensor))
+                    self._conn_told = "lost"
                 elif kind == "receive_resumed":
                     self._events.append(("connected", self.sensor))
+                    self._conn_told = "connected"
                 elif kind == "socket_error":
                     self.fatal = "scan_socket_error"
                     break
@@ -239,6 +266,7 @@ class ReplayImu(_Anchored):
         self.src = ImuSource(imu_cfg, operating=True, now_ns=lambda: self._clock["ns"])
         self.counts = collections.Counter()
         self.last_read_capped = False
+        self.reads = 0  # samples() calls: the run drains the stream on ticks the loop did not read it (7r-2)
         self.input_ns: int | None = None  # every row up to this instant is in (the gap check never looks past it)
         self.prefix_done = False  # the prefix judged through, once (round 2 P2-1)
         self._buf: collections.deque = collections.deque()  # judged output not yet handed to the loop
@@ -260,9 +288,22 @@ class ReplayImu(_Anchored):
         else:
             self.counts["before_anchor"] += len(out)
 
+    def _reading(self, fn, *a):
+        """A reader call whose read failure is a ``SourceFatal`` (the IMU guard marks only those)."""
+        try:
+            return fn(*a)
+        except RuntimeError as exc:
+            if self.reader.error is None:
+                raise
+            from forklift_core.live.real_run import SourceFatal
+
+            raise SourceFatal(str(exc)) from exc
+
     def _step(self, upto_ns: int, budget: int) -> None:
-        """At most ``budget`` due rows in, the prefix first; ``input_ns`` moves only when every due row is in."""
-        self.reader.check()
+        """At most ``budget`` due rows in, the prefix first; ``input_ns`` moves only when every due row is in. A read
+        failure is the run's fatal source at once (``SourceFatal``: the IMU guard marks it -- any other error would be
+        taken as a missing batch, Codex 7r-2 round 2 P2-2)."""
+        self._reading(self.reader.check)
         t_read = self.reader.t_read
         if t_read == -math.inf:
             self.counts["read_late"] += 1  # nothing read yet: behind, not a gap
@@ -272,7 +313,7 @@ class ReplayImu(_Anchored):
             self.counts["read_late"] += 1
         rec_upto = min(upto_ns - self.delta, t_read)
         live_rec = self.live_from_ns - self.delta
-        rows = self.reader.take(rec_upto, budget)
+        rows = self._reading(self.reader.take, rec_upto, budget)  # take() checks the reader again
         for ns, r in rows:
             self._put_one(ns, r, live=ns >= live_rec)
         nxt = self.reader.peek_ns()
@@ -284,6 +325,7 @@ class ReplayImu(_Anchored):
             self._clock["ns"] = max(self._clock["ns"], self.input_ns)
 
     def samples(self, upto_ns: int, limit: int) -> list:
+        self.reads += 1
         self.last_read_capped = False
         if self.delta is None:
             return []

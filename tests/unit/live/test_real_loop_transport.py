@@ -172,12 +172,13 @@ def test_the_hil_check_needs_both_bits_on_every_state_of_the_boot():
     os.write(m, encode(state(), 1))
     t.receive(h, 0)
     assert t.hil_plant is True
+    assert t.hil_losses == 0
     os.write(m, encode(state(mcu_time_us=2000, flags=StateFlag.HIL_PLANT), 2))  # OUTPUTS_LOCKED missing
     t.receive(h, 0)
-    assert t.hil_plant is False
+    assert t.hil_plant is False and t.hil_losses == 1
     os.write(m, encode(state(mcu_time_us=3000), 3))  # same boot, bits back: still refused
     t.receive(h, 0)
-    assert t.hil_plant is False
+    assert t.hil_plant is False and t.hil_losses == 1  # one loss of the boot
     os.write(m, encode(state(boot_id=8, mcu_time_us=10), 4))  # a new boot starts over
     t.receive(h, 0)
     assert t.hil_plant is True
@@ -374,3 +375,18 @@ def test_closing_the_runner_pty_twice_never_closes_a_reused_number(tmp_path):
     finally:
         os.close(reused)
     assert n >= 0 and hp.slave == -1
+
+
+def test_a_loss_and_a_new_boot_in_one_read_are_counted():
+    """Codex 7r-2 round 1 P1: boot 7 good, boot 7 without the bits, boot 8 good -- in one read the check ends held on
+    boot 8 and only the loss count shows the loss in between."""
+    m, s = pair()
+    t = rlt.LoopTtyTransport(s)
+    h = Host()
+    os.write(m, encode(state(), 1))
+    t.receive(h, 0)
+    assert (t.hil_plant, t.hil_losses) == (True, 0)
+    os.write(m, encode(state(mcu_time_us=2000, flags=StateFlag.HIL_PLANT), 2)
+             + encode(state(boot_id=8, mcu_time_us=10), 3))
+    t.receive(h, 0)
+    assert (t.hil_plant, t.hil_boot, t.hil_losses) == (True, 8, 1)

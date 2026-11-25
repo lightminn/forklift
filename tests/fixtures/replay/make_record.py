@@ -17,6 +17,9 @@ from types import SimpleNamespace
 import numpy as np
 
 REPO = Path(__file__).resolve().parents[3]
+HERE = Path(__file__).resolve().parent
+LIDAR_YAML = HERE / "lidar_test.yaml"  # TEST ONLY configs (outside config/real/: a run on them is not for judgement)
+IMU_YAML = HERE / "imu_test.yaml"
 MS = 1_000_000
 OFF = 1_700_000_000_000 * MS  # system - monotonic on the recording host
 RUN = "a1b2c3d4e5f60718"
@@ -32,22 +35,18 @@ def _adapter():
 
 
 def lidar_config(*, mount_measured: bool = True, err_s: float = 0.002):
-    """TEST ONLY: a LiDAR config whose bound applies to this record's frames (basis measured, applies_to = FACTS)."""
-    from forklift_core.sensors.lidar_cfg import LidarConfig
+    """TEST ONLY: ``lidar_test.yaml`` -- a LiDAR config whose bound applies to this record's frames (basis measured,
+    applies_to = FACTS)."""
+    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
-    return LidarConfig(mount=(0.1, 0.0, 0.3, 0.0), mount_measured=mount_measured, mask_rad=(), limit_m=5.7,
-                       scan_period_s=0.12, first_beam_err_s=err_s, timing_basis="measured",
-                       applies_to=tuple(sorted(FACTS.items())))
+    return dataclasses.replace(load_lidar_config(LIDAR_YAML), mount_measured=mount_measured, first_beam_err_s=err_s)
 
 
 def imu_config(**over):
-    """TEST ONLY: a measured IMU source config."""
-    from forklift_core.sensors.imu_source import ImuSourceConfig
+    """TEST ONLY: ``imu_test.yaml`` -- a measured IMU source config."""
+    from forklift_core.sensors.imu_source import load_imu_source_config
 
-    base = dict(accel_hz=200, gyro_hz=200, delay_bound_s=0.02, measured=True, provisional_delay_bound_s=0.03,
-                restart_back_us=20_000, receive_gap_s=0.1, queue_max=256)
-    base.update(over)
-    return ImuSourceConfig(**base)
+    return dataclasses.replace(load_imu_source_config(IMU_YAML), **over)
 
 
 def _state(host_ns: int, k: int):
@@ -69,10 +68,11 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
                  imu_rewind_at_s: float | None = None, imu_lost_at_s: float | None = None,
                  imu_cfg=None, synthetic: bool = True, result: str = "ok", start_after_s: float = 0.0,
                  restart_at_s: float | None = None, scans_until_s: float | None = None,
-                 imu_lost_merged_at_s: float | None = None) -> dict:
+                 imu_lost_merged_at_s: float | None = None, slam: dict | None = None) -> dict:
     """``events``: ``(at_s, kind)`` scan_event rows (``receive_gap``, ``receive_resumed``, ``socket_error``);
     ``late_scans``: scan indexes whose arrival is 300 ms after their last beam; ``restart_at_s``: the adapter's
-    node starts a new scan (a new start id: a new producer generation) there."""
+    node starts a new scan (a new start id: a new producer generation) there; ``slam``: keys over the default
+    ``slam_header``."""
     from forklift_core.sensors import scan_feed as sf
     from forklift_core.sensors.imu_source import ImuSource
 
@@ -90,7 +90,7 @@ def write_record(path, *, seconds: float = 45.0, t0_ns: int = 50_000 * MS, ancho
                      "path": "tests", "measured": cfg.measured, "delay_bound_s": cfg.delay_bound_s}})
     rows.append({"t": "slam_header", "socket": "/tmp/x", "bundle": "tests/bundle", "map_id": "m" * 64,
                  "start_pose": [1.0, 2.0, 0.5], "rear_offset_m": 0.25, "base_laser": [0.35, 0.0, 0.3, 0.0],
-                 "start_ns": t0_ns, "mode": "diagnostic"})
+                 "start_ns": t0_ns, "mode": "diagnostic", **(slam or {})})
     timed = []  # (host ns, order, row)
     # states every 10 ms; the delay bound stands from anchor_after_s
     end_ns = t0_ns + int(seconds * 1e9)

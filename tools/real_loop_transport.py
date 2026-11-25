@@ -13,7 +13,8 @@ frame) on a raw, non-blocking tty fd it is given and never closes or reopens:
   write of each frame is kept (``judged``), with the first byte's and the last write's instants;
 - a receive reads at most 4096 bytes and gives the host the actual read time;
 - ``hil_plant`` is true only while every STATE of the current boot showed HIL_PLANT and OUTPUTS_LOCKED without
-  COMMISSION_BUILD (a boot change starts over);
+  COMMISSION_BUILD (a boot change starts over); ``hil_losses`` counts every loss of it -- a STATE without the bits on a
+  boot that had them, a lost device -- so a loss and a new boot in one read are still seen as a loss (PR 7 7r-2);
 - a lost device (EIO, ENXIO, EBADF, ENODEV) ends the run: ``lost`` keeps the first path that saw it and whether a half
   frame or an unfinished poison was left (``stream_tainted``), and the call raises ``DeviceLost``.
 
@@ -77,6 +78,7 @@ class LoopTtyTransport:
         # the read time of the first STATE of the current boot: a replay's boot boundary (PR 7 7r) -- nothing acquired
         # before it is given after a boot change
         self.hil_boot_since_ns: int | None = None
+        self.hil_losses = 0  # every loss of the check, even one a later STATE of the same read hides (7r-2)
         self.inject = None  # a test hook: inject(fd, data, frame) -> int | None to replace one write (6a-2b 10.2)
         self.on_event = None  # the run record's sink: a half write, its abandonment, the poison finished (10.8)
         self.judged: dict = {}  # seq -> judged clock value of the frame's last successful write
@@ -271,6 +273,8 @@ class LoopTtyTransport:
             self._boot, self._boot_bad = s.boot_id, False
             self.hil_boot_since_ns = self.read_done_ns
         if not hil_bits_ok(s):
+            if not self._boot_bad:
+                self.hil_losses += 1
             self._boot_bad = True
         self.hil_plant = not self._boot_bad
         self.hil_boot = self._boot if self.hil_plant else None
@@ -293,6 +297,8 @@ class LoopTtyTransport:
                     self._host.disconnected(int(self.clock()))  # the queue and the authorization go (once)
                 except Exception:  # noqa: BLE001 -- the loss is raised whatever the host does
                     pass
+        if self.hil_plant:
+            self.hil_losses += 1
         self.hil_plant = False
         raise DeviceLost(self.lost["reason"])
 

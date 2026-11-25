@@ -53,6 +53,17 @@ stamp ``stamp_s`` (core seconds of the first-beam estimate), the evidence interv
 at this source) and a forced request's attempt -- given only to a measured scan, and passed on to the next one when
 its reply is dropped. A reply received more than ``LATE_S`` after its ``Flo`` is dropped (``slam_late``). A
 diagnostic scan (no measured interval) is sent and its reply recorded, never handed over.
+
+The HIL check (7r plan 3; ``hil_gate``: () -> (held, boot, losses), the HIL transport's own check and its count of
+losses -- a loss and a new boot within one read leave only the new boot showing; None outside HIL): judged
+at the front of every entry point. A boot change breaks the input (``hil_boot_changed``), ends a start check that has
+scans of the earlier boot (``start_check_generation_changed``) and cancels a seed in progress (``boot_changed``). While
+the check is lost the connection side goes on (frames read, the slot freed by replies, a cancel written, a void
+taken) and nothing reaches the loop: replies are counted and dropped, offers and forced requests too, and
+``can_confirm`` / ``can_seed`` are false. The loss itself cancels a seed in progress (``hil_check_lost``, whose
+``seed_state`` is ``("void", "hil_check_lost")`` from that instant, before the bridge's void) and seals an instance
+already ready: it never confirms again -- only a new seed's instance can -- and a seed's ``ready`` reads
+``("void", "hil_check_lost")`` from then on.
 """
 
 from __future__ import annotations
@@ -211,7 +222,7 @@ class RealSlamSource:
 
     def __init__(self, link: RealSlamLink, *, mode: str, map_id: str, start_ns: int, start_pose, odom_history,
                  odom_base, odom_gen, boot, rear_offset_m: float, session_epoch=0, clock=time.monotonic_ns,
-                 events=None) -> None:
+                 events=None, hil_gate=None) -> None:
         if mode not in MODES:
             raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
         self.mode = mode
@@ -241,6 +252,13 @@ class RealSlamSource:
         # (bridge scan, reply record) -> None: every reply of a scan sent whole, before its verdict -- the observe
         # run's match quality (PR 7 design 6.1, 8); never raises into the source (its errors are counted)
         self.reply_hook = None
+        # the HIL check (7r plan 3): the boot it last held for, whether it is lost now, and the instances that were
+        # ready when it was lost (never confirmed again)
+        self.hil_gate = hil_gate
+        self._hil_boot = None
+        self._hil_losses = None
+        self._hil_lost = False
+        self._sealed: set = set()
 
     @staticmethod
     def _target(ident, kind, pose, accepted_ns, epoch, snapshot=None, boot=None, odom_gen=None) -> dict:
@@ -272,16 +290,87 @@ class RealSlamSource:
         if attempt is not None and now <= attempt[3] and attempt[0] == self.epoch:
             self._requests.insert(0, attempt)
 
+    # --- the HIL check -----------------------------------------------------------------------------------------------
+    def _hil(self) -> bool:
+        """The HIL check now (True outside HIL): a boot change and a loss are acted on once, when first seen."""
+        if self.hil_gate is None:
+            return True
+        held, boot, losses = self.hil_gate()
+        if self._hil_losses is None:
+            self._hil_losses = losses
+        if losses != self._hil_losses:
+            # a loss since the last look, even one a new boot in the same read hides: acted on as a loss first
+            self._hil_losses = losses
+            if not self._hil_lost:
+                self._hil_lost = True
+                self._hil_check_lost()
+        if held is True:
+            if self._hil_boot is not None and boot != self._hil_boot:
+                self._hil_boot = boot
+                self._hil_boot_changed(boot)
+            self._hil_boot = boot
+            if self._hil_lost:
+                self._hil_lost = False
+                self._event(t="hil_check_back", boot=None if boot is None else int(boot))
+            return True
+        if not self._hil_lost:
+            self._hil_lost = True
+            self._hil_check_lost()
+        return False
+
+    def _hil_check_lost(self) -> None:
+        now = int(self.clock())
+        self.counts["hil_check_lost"] += 1
+        self._event(t="hil_check_lost")
+        self.input_break("hil_check_lost")
+        self._requests = []
+        t = self.target
+        if t is None or t["cancel"] is not None:
+            return
+        if t["state"] == "ready":
+            self._sealed.add(t["id"])  # its evidence spans the loss: never confirmed again
+            if t["kind"] == "seed":
+                self.seeds[t["epoch"]] = ("void", "hil_check_lost")  # its ready is no end state any more
+            return
+        if not self._seeding():
+            return
+        if t["kind"] == "start":
+            if t["start_scans"] > 0:
+                t["state"] = "hil_check_lost"
+                self._fatal("start_check_hil_check_lost")  # no second hello on the connection
+            return
+        self.seeds[t["epoch"]] = ("void", "hil_check_lost")  # void from this instant, before the bridge's own
+        self._decide_cancel(t, "hil_check_lost", now)
+
+    def _hil_boot_changed(self, boot) -> None:
+        self.counts["hil_boot_changed"] += 1
+        self._event(t="hil_boot_changed", boot=None if boot is None else int(boot))
+        self.input_break("hil_boot_changed")
+        t = self.target
+        if t is None or t["cancel"] is not None or not self._seeding():
+            return
+        if t["kind"] == "start":
+            if t["start_scans"] > 0:
+                t["state"] = "generation_changed"
+                self._fatal("start_check_generation_changed")
+            return
+        self._decide_cancel(t, "boot_changed", int(self.clock()))
+
     # --- the loop's contract -----------------------------------------------------------------------------------------
     def can_confirm(self) -> bool:
+        if not self._hil():
+            return False
         t = self.target
-        return t is not None and t["state"] == "ready" and t["cancel"] is None
+        return t is not None and t["state"] == "ready" and t["cancel"] is None and t["id"] not in self._sealed
 
     def can_seed(self) -> bool:
+        if not self._hil():
+            return False
         t = self.target
         return not self._seeding() and not (t is not None and t["cancel"] is not None)
 
     def seed_state(self, epoch):
+        self._hil()
         return self.seeds.get(int(epoch))
 
     def relocalize(self, epoch) -> None:
@@ -298,6 +387,8 @@ class RealSlamSource:
     def seed(self, epoch, base_pose, stamp_s):
         """Accepted at once (6.1, 2): the new epoch, the odometry snapshot, the frame written once the slot is empty.
         Returns the seed id (the frame's)."""
+        if not self._hil():
+            self._fatal("seed while the HIL check is lost")  # the loop asks can_seed() first
         if not self.can_seed():
             self._fatal("seed while a start or seed has no end state")  # the loop asks can_seed() first
         now = int(self.clock())
@@ -356,12 +447,20 @@ class RealSlamSource:
             f["old_gen"] = True
 
     def request_processed(self, epoch, attempt, not_before) -> None:
+        if not self._hil():
+            self.counts["slam_hil_check_lost_request"] += 1
+            return
+        t = self.target
+        if t is not None and t["id"] in self._sealed:
+            self.counts["slam_sealed_request"] += 1  # an instance the check was lost on answers no confirmation
+            return
         if int(epoch) >= self.epoch:
             self._requests.append([int(epoch), attempt, float(not_before), int(self.clock()) + int(REQUEST_S * 1e9)])
 
     # --- the scan path -----------------------------------------------------------------------------------------------
     def generation(self, gen) -> None:
         """A feed scan's producer generation, told before the scan is judged (an unqualified scan still changes it)."""
+        self._hil()  # a boot change first; the generation is still taken while the check is lost
         gen = tuple(gen)
         if self._gen is not None and gen != self._gen:
             self._gen = gen
@@ -402,10 +501,14 @@ class RealSlamSource:
         self._decide_cancel(t, "generation_changed", now)
 
     def offer(self, s: srs.SlamScanIn) -> None:
+        held = self._hil()
         now = int(self.clock())
         self._all_deadlines(now)  # an expired deadline is never lifted by what an offer does (rounds 4-5)
         self._watch_seed(now)  # before any write retry: a seed not one byte of which went is taken back (round 2 P2-1)
         self.generation(s.gen)
+        if not held or not self._hil():
+            self.counts["slam_hil_check_lost"] += 1  # nothing goes while the check is lost
+            return
         if self.mode == "operating" and not s.measured:
             self.counts["slam_not_qualified"] += 1  # counted, no event: a pre-bound real feed sends 10 a second
             return
@@ -499,7 +602,8 @@ class RealSlamSource:
         self._all_deadlines(int(self.clock()))  # right before its first byte: never a start scan past 20 s (P2-2)
         self._waiting = None
         attempt = None
-        if t["state"] == "ready" and w["measured"] and self.mode == "operating" and w["epoch"] == self.epoch:
+        if t["state"] == "ready" and w["measured"] and self.mode == "operating" and w["epoch"] == self.epoch \
+                and t["id"] not in self._sealed:
             for req in list(self._requests):
                 if req[0] == self.epoch and self._s(w["flo_ns"]) >= req[2] and now <= req[3]:
                     self._requests.remove(req)
@@ -523,6 +627,7 @@ class RealSlamSource:
 
     # --- receiving ---------------------------------------------------------------------------------------------------
     def replies(self, now_ns: int) -> list:
+        held = self._hil()
         t = self.target
         if t is not None and t["kind"] == "start" and t["accepted_ns"] is None:
             now = int(self.clock())
@@ -547,6 +652,11 @@ class RealSlamSource:
         self._try_odom(looked)
         self._pump(looked)
         out, self._out = self._out, []
+        if not held and out:
+            # read while the check was lost: the slot is freed, the loop takes none (7r plan 3)
+            self.counts["slam_hil_check_lost_reply"] += len(out)
+            self._event(t="slam_drop", why="hil_check_lost_reply", n=len(out))
+            return []
         return out
 
     def _deadlines(self, now: int) -> None:

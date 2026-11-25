@@ -63,7 +63,7 @@ class Bridge:
 
 
 class Rig:
-    def __init__(self, mode="operating"):
+    def __init__(self, mode="operating", **kw):
         a, b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         _OPEN.extend((a, b))
         self.bridge = Bridge(b)
@@ -76,7 +76,7 @@ class Rig:
         self.src = rss.RealSlamSource(
             rss.RealSlamLink(a, clock=lambda: self.now), mode=mode, map_id=MAP, start_ns=START_NS, start_pose=(1.0, 2.0, 0.3),
             odom_history=lambda: self.history, odom_base=lambda: self.odom, odom_gen=lambda: self.odom_gen,
-            boot=lambda: self.boot_id, rear_offset_m=0.5, clock=lambda: self.now)
+            boot=lambda: self.boot_id, rear_offset_m=0.5, clock=lambda: self.now, **kw)
         self.hist_to(self.now)
 
     def s(self, ns):
@@ -1195,3 +1195,167 @@ def test_a_feed_generation_told_before_the_replies_keeps_a_late_ready_from_confi
     with pytest.raises(rss.SlamSourceFatal):
         r.step()
     assert not r.src.can_confirm()
+
+
+# --- the HIL check (PR 7 7r plan 3) -------------------------------------------------------------------------------------
+class HilRig(Rig):
+    """A rig whose source takes the HIL transport's check: ``hil = [held, boot]``."""
+
+    def __init__(self, **kw):
+        self.hil = [True, 1, 0]  # held, boot, the transport's loss count
+        super().__init__(hil_gate=lambda: tuple(self.hil), **kw)
+
+    def lose(self):
+        self.hil[0] = False
+        self.hil[2] += 1
+
+    def reboot(self, boot):
+        self.hil[:2] = [True, boot]
+        self.boot_id = boot
+
+
+def test_a_loss_voids_a_seed_at_once_and_its_late_ready_never_opens_the_confirmation():
+    r = HilRig()
+    r.started()
+    sid = seed_to_ready(r)
+    r.lose()
+    assert not r.src.can_confirm() and not r.src.can_seed()
+    assert r.src.seed_state(1) == ("void", "hil_check_lost")  # before the bridge's void
+    r.step()
+    [c] = [f for f in r.bridge.frames() if isinstance(f, rl.Cancel)]
+    assert c.seed_id == sid and c.reason == "hil_check_lost"  # written while the check is lost
+    r.bridge.state(sid, "ready")  # sent before the bridge read the cancel
+    r.step()
+    assert r.src.seed_state(1) == ("void", "hil_check_lost") and not r.src.can_confirm()
+    r.bridge.state(sid, "void", "hil_check_lost")
+    r.step()
+    assert r.src.seed_state(1) == ("void", "hil_check_lost") and r.src.target is None
+    r.reboot(2)  # the check comes back only with a new boot
+    assert r.src.can_seed() and not r.src.can_confirm()
+
+
+def test_a_ready_instance_is_sealed_by_a_loss_and_only_a_new_seed_confirms():
+    r = HilRig()
+    r.started()
+    r.lose()
+    assert not r.src.can_confirm()
+    r.src.offer(r.scan())
+    assert r.src.counts["slam_hil_check_lost"] == 1 and not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+    r.src.request_processed(0, 1, 0.0)
+    assert r.src.counts["slam_hil_check_lost_request"] == 1 and r.src._requests == []
+    r.reboot(2)
+    assert not r.src.can_confirm()  # the check is back, the instance it was lost on is not
+    assert r.src.counts["hil_boot_changed"] == 1
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        assert r.step() == []
+    r.bridge.state(sid, "ready")
+    r.step()
+    assert r.src.can_confirm()
+
+
+def test_a_reply_read_while_the_check_is_lost_frees_the_slot_and_reaches_nothing():
+    r = HilRig()
+    r.started()
+    r.src.offer(r.scan())
+    [inflight] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.lose()
+    r.bridge.reply(inflight)
+    assert r.step() == []
+    assert r.src._inflight is None  # the slot is free
+    # sent before the loss: the loss broke the input, so its reply only frees the slot
+    assert r.src.counts["slam_old_generation_reply"] == 1
+    r.reboot(2)
+    out, _ = r.one(lag_ms=10)  # the next scan goes
+    assert len(out) == 1
+
+
+def test_a_boot_change_cancels_a_seed_and_drops_the_earlier_boots_late_reply_and_ready():
+    r = HilRig()
+    r.started()
+    sid = seed_to_ready(r)
+    r.src.offer(r.scan(lag_ms=10))
+    [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.reboot(2)
+    assert not r.src.can_seed() and r.src.counts["hil_boot_changed"] == 1
+    r.bridge.reply(s)  # the earlier boot's scan: only frees the slot
+    assert r.step() == []
+    [c] = [f for f in r.bridge.frames() if isinstance(f, rl.Cancel)]
+    assert c.seed_id == sid and c.reason == "boot_changed"
+    r.bridge.state(sid, "ready")
+    r.step()
+    assert r.src.seed_state(1) == ("seeding", None) and not r.src.can_confirm()
+    r.bridge.state(sid, "void", "boot_changed")
+    r.step()
+    assert r.src.seed_state(1) == ("void", "boot_changed") and not r.src.can_confirm()
+
+
+def test_a_boot_change_during_a_start_check_with_scans_sent_ends_the_session():
+    r = HilRig()
+    _start_scans(r, 3)
+    r.reboot(2)
+    with pytest.raises(rss.SlamSourceFatal, match="start_check_generation_changed"):
+        r.src.can_confirm()
+
+
+def test_a_loss_during_a_start_check_with_scans_sent_ends_the_session_and_one_without_waits():
+    r = HilRig()
+    _start_scans(r, 2)
+    r.lose()
+    with pytest.raises(rss.SlamSourceFatal, match="start_check_hil_check_lost"):
+        r.step()
+    r2 = HilRig()
+    _start_scans(r2, 0)
+    r2.lose()
+    assert r2.step() == []
+    r2.reboot(2)
+    for _ in range(7):
+        r2.src.offer(r2.scan())
+        [s] = [f for f in r2.bridge.frames() if isinstance(f, rl.RealScan)]
+        r2.bridge.reply(s)
+        r2.step()
+    r2.bridge.state(1, "ready")
+    r2.step()
+    assert r2.src.can_confirm()
+
+
+def test_a_seed_while_the_check_is_lost_is_a_fault():
+    r = HilRig()
+    r.started()
+    r.lose()
+    with pytest.raises(rss.SlamSourceFatal, match="HIL check is lost"):
+        r.src.seed(1, (0.0, 0.0, 0.0), r.s(r.now))
+
+
+def test_a_loss_and_a_new_boot_within_one_read_still_seal_the_ready_instance():
+    """Codex 7r-2 round 1 P1: the transport shows only the new boot after the read -- its loss count tells."""
+    r = HilRig()
+    r.started()
+    r.hil[2] += 1  # lost and back on boot 2 between two looks
+    r.reboot(2)
+    assert not r.src.can_confirm() and r.src.counts["hil_check_lost"] == 1 and r.src.counts["hil_boot_changed"] == 1
+    r.src.request_processed(0, 1, 0.0)
+    out, _ = r.one(lag_ms=10)
+    assert all(getattr(o[0], "attempt", None) is None for o in out)  # no confirmation evidence from the old instance
+
+
+def test_a_completed_seeds_ready_reads_void_once_the_check_is_lost():
+    """Codex 7r-2 round 1 P3: seed_state never reports a ready across a loss."""
+    r = HilRig()
+    r.started()
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan(lag_ms=10))
+        [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(s)
+        r.step()
+    r.bridge.state(sid, "ready")
+    r.step()
+    assert r.src.seed_state(1) == ("ready", None)
+    r.lose()
+    assert r.src.seed_state(1) == ("void", "hil_check_lost") and not r.src.can_confirm()
+    r.reboot(2)
+    assert r.src.seed_state(1) == ("void", "hil_check_lost") and not r.src.can_confirm()

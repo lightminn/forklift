@@ -33,6 +33,8 @@ class FakeBridge(threading.Thread):
         self.held_replies: list = []
         self._closing = threading.Event()
         self.got: list = []  # (monotonic s, frame type name, id or scan id)
+        self.poses: dict = {}  # id -> the start pose its hello / seed carried
+        self.stamps: list = []  # (monotonic ns at receipt, the scan's stamp_ns as sent)
         self.sent: list = []  # (monotonic s, kind, id)
         self.error = None
         self._halt = threading.Event()
@@ -131,6 +133,7 @@ class FakeBridge(threading.Thread):
         if isinstance(f, (rl.Hello, rl.Seed)):
             ident = f.start_id if isinstance(f, rl.Hello) else f.seed_id
             self.got.append((now, type(f).__name__, ident))
+            self.poses[ident] = tuple(f.start_pose)
             self._cur = {"id": ident, "pose": f.start_pose, "n": 0, "corr": None,
                          "end": "ready" if isinstance(f, rl.Hello) else self.seed_end, "localized": False}
             self._state(ident, "seeding")
@@ -142,6 +145,7 @@ class FakeBridge(threading.Thread):
             self._state(f.seed_id, "void", f.reason)
         elif isinstance(f, rl.RealScan):
             self.got.append((now, "RealScan", f.scan.scan_id))
+            self.stamps.append((time.monotonic_ns(), int(f.stamp_ns)))
             c = self._cur
             if c["localized"]:
                 self._ready_scans += 1

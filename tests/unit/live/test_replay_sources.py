@@ -715,3 +715,88 @@ def test_a_row_missing_a_key_is_malformed_after_the_hash(tmp_path, reseal, reaso
     with pytest.raises(rr.ReplayRefused) as e:
         load(p)
     assert e.value.reason == reason
+
+
+def test_a_resume_dropped_while_the_check_was_lost_is_told_once_it_gives_again(tmp_path):
+    """Codex 7r-2 round 1 P2-3: a receive_gap given, its receive_resumed passed while the HIL check was lost -- the
+    layer is told connected on the first call that gives again (never left disconnected); a gap passed that way is told
+    lost; a socket_error passed that way ends the replay then, and the stream is not at its end before."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, events=((3.0, "receive_gap"), (5.0, "receive_resumed")))
+    rec = load(p)
+    hil = 8_000_000 * MS
+    tr = SimpleNamespace(hil_plant=True, hil_boot=1)
+    src, _ = scan_source(rec, start_ns=hil - 10**9, transport=tr)
+    src.set_anchor(hil, hil)
+    first = [e for _n, ev, _s in drive(src, hil, hil + 3 * 10**9) for e in ev]
+    assert first == [("lost", "lidar")]
+    tr.hil_plant = False
+    assert not [e for _n, ev, _s in drive(src, hil + 3 * 10**9, hil + 6 * 10**9) for e in ev]
+    tr.hil_plant, tr.hil_boot = True, 2
+    back = [e for _n, ev, _s in drive(src, hil + 6 * 10**9, hil + 7 * 10**9) for e in ev]
+    assert back == [("connected", "lidar")] and src.counts["connection_reconciled"] == 1
+
+    p2 = tmp_path / "obs2.jsonl"
+    mk.write_record(p2, events=((3.0, "socket_error"),))
+    rec2 = load(p2)
+    tr2 = SimpleNamespace(hil_plant=True, hil_boot=1)
+    src2, _ = scan_source(rec2, start_ns=hil - 10**9, transport=tr2)
+    src2.set_anchor(hil, hil)
+    drive(src2, hil, hil + 10**9)
+    tr2.hil_plant = False
+    drive(src2, hil + 10**9, hil + 50 * 10**9, 200)
+    assert src2.reader.done and not src2.eof() and src2.fatal is None  # still to be told
+    tr2.hil_plant, tr2.hil_boot = True, 2
+    drive(src2, hil + 50 * 10**9, hil + 51 * 10**9)
+    assert src2.fatal == "scan_socket_error"
+
+
+def test_a_gap_and_its_resume_before_the_anchor_tell_the_layer_nothing(tmp_path):
+    """Codex 7r-2 round 2 P2-1: the prefix only builds the feed's state -- a receive_gap before the anchor read in one
+    call and its receive_resumed in the next never reach the layer (no lost latch at the start); a socket_error before
+    the anchor is no fatal of the replay."""
+    p = tmp_path / "obs.jsonl"
+    mk.write_record(p, anchor_after_s=3.0, events=((1.0, "receive_gap"), (1.5, "receive_resumed")))
+    rec = load(p)
+    hil = 9_000_000 * MS
+    src, _ = scan_source(rec, start_ns=hil - 10**9)
+    src.set_anchor(hil, hil)
+    events = [e for _n, ev, _s in drive(src, hil, hil + 3 * 10**9) for e in ev]
+    assert events == [] and src.counts["connection_reconciled"] == 0
+    p2 = tmp_path / "obs2.jsonl"
+    mk.write_record(p2, anchor_after_s=3.0, events=((1.0, "socket_error"),))
+    rec2 = load(p2)
+    src2, _ = scan_source(rec2, start_ns=hil - 10**9)
+    src2.set_anchor(hil, hil)
+    drive(src2, hil, hil + 3 * 10**9)
+    assert src2.fatal is None
+
+
+def test_a_read_failure_of_the_imu_is_a_source_fatal_in_the_call_itself(good):
+    """Codex 7r-2 round 2 P2-2: the IMU guard marks only SourceFatal; a read failure must be one."""
+    from forklift_core.live.real_run import SourceFatal
+
+    rec = load(good[0])
+    src, _ = imu_source(rec)
+    src.set_anchor(rec.anchor_ns, rec.anchor_ns)
+    src.reader.error = OSError("gone")
+    with pytest.raises(SourceFatal, match="replay read"):
+        src.samples(rec.anchor_ns + 10**9, 64)
+
+
+def test_a_read_failure_found_by_take_is_a_source_fatal_too(good):
+    """Codex 7r-2 round 3 P2: the failure arriving between the call's first check and its take()."""
+    from forklift_core.live.real_run import SourceFatal
+
+    rec = load(good[0])
+    src, _ = imu_source(rec)
+    src.set_anchor(rec.anchor_ns, rec.anchor_ns)
+    take = src.reader.take
+
+    def failing_take(upto, limit=None):
+        src.reader.error = OSError("gone")
+        return take(upto, limit)
+
+    src.reader.take = failing_take
+    with pytest.raises(SourceFatal, match="replay read"):
+        src.samples(rec.anchor_ns + 10**9, 64)
