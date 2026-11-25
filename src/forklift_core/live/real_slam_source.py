@@ -531,8 +531,8 @@ class RealSlamSource:
         if (f is not None and f["sent_ns"] is not None and f["phase"] == "ready"
                 and received - f["sent_ns"] > REPLY_WAIT_S * 1e9):
             for r in frames:  # its reply read past the bound: recorded before the fault (7c-1c round 3 P2)
-                if isinstance(r, slam_link.Reply) and isinstance(r.scan_id, int) and not isinstance(r.scan_id, bool) \
-                        and int(r.scan_id) == f["scan"].scan_id and _finite_pose(r.map_from_odom):
+                if isinstance(r, slam_link.Reply) and self._reply_key_ok(r) \
+                        and (int(r.scan_id), float(r.stamp_s)) == (f["scan"].scan_id, float(f["scan"].stamp_s)):
                     self._event(**self._reply_record(r, f, received), passed=False, why="past_reply_bound")
                     break
             self._fatal(f"scan {f['scan'].scan_id}: no reply within {REPLY_WAIT_S} s")
@@ -552,10 +552,15 @@ class RealSlamSource:
                 rec["hook_error"] = f"{type(exc).__name__}: {exc}"
         return rec
 
+    @staticmethod
+    def _reply_key_ok(r) -> bool:
+        """An integer scan id, a finite stamp and three finite correction numbers -- one check for both paths that match
+        a reply to the scan in flight (round 1 P2-6; 7c-1c round 4 P2)."""
+        return (not isinstance(r.scan_id, bool) and isinstance(r.scan_id, int) and not isinstance(r.stamp_s, bool)
+                and isinstance(r.stamp_s, (int, float)) and math.isfinite(r.stamp_s) and _finite_pose(r.map_from_odom))
+
     def _on_reply(self, r, received: int) -> None:
-        if (isinstance(r.scan_id, bool) or not isinstance(r.scan_id, int) or isinstance(r.stamp_s, bool)
-                or not isinstance(r.stamp_s, (int, float)) or not math.isfinite(r.stamp_s)
-                or not _finite_pose(r.map_from_odom)):
+        if not self._reply_key_ok(r):
             self._fatal(f"protocol: a malformed reply {r.scan_id!r}")  # round 1 P2-6
         key = (int(r.scan_id), float(r.stamp_s))
         f = self._inflight

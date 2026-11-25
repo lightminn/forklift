@@ -1012,3 +1012,20 @@ def test_an_input_break_takes_back_a_start_scan_not_one_byte_of_which_went():
     assert r.src.counts["slam_input_break"] == 1
     r.step()
     assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
+
+
+
+def test_a_late_read_records_only_the_reply_with_the_scans_own_stamp():
+    """7c-1c Codex round 4 P2: a reply of the same id but another stamp is not that scan's."""
+    r = Rig()
+    r.started()
+    r.src.offer(r.scan(lag_ms=10))
+    [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+    r.now += int(1.5e9)
+    r.bridge.sock.sendall(slam_link.encode_reply(slam_link.Reply(s.scan.scan_id, s.scan.stamp_s + 1.0, "processed",
+                                                                 (9.0, 9.0, 0.0), 1, 0.0)))
+    r.bridge.reply(s, corr=(0.1, 0.0, 0.0))
+    with pytest.raises(rss.SlamSourceFatal, match="no reply"):
+        r.step(1)
+    rows = [e for e in r.src.events if e.get("t") == "reply" and e.get("why") == "past_reply_bound"]
+    assert len(rows) == 1 and rows[0]["map_from_odom"] == [0.1, 0.0, 0.0]
