@@ -1168,3 +1168,25 @@ def test_a_fw_single_sensorless_result_carries_no_position(model, monkeypatch):
     assert res["result"] == "ok", res
     assert res["metrics"]["value"] is None and res["metrics"]["measured_sign"] == "unmeasured"
     assert res["verdict"]["note"] == "sensorless" and res["verdict"]["suggested_duty_sign"] is None
+
+
+@pytest.mark.parametrize("baud", [[], ["--baud", "115200"]])
+def test_from_the_command_line_an_unreadable_product_is_refused_with_or_without_baud(mcu_model, tmp_path,  # noqa: F811
+                                                                                    monkeypatch, capsys, baud):
+    """Codex PR-B round 2: started from the CLI on a device taken as real (not the rehearsal bench), an open
+    commissioning board with no product string is refused before ARM -- --baud does not excuse it."""
+    m = Model(mcu_model, "--commission-single", "1")
+    try:
+        monkeypatch.setattr(bringup, "writer_marker", lambda device, bench: None)  # a real device
+        monkeypatch.setattr(bringup, "ReconnectingLink", lambda *a, **k: PtyLink(m.master))
+        out = tmp_path / "run.jsonl"
+        code = bringup.main(["commission", "--device", "/dev/forklift-mcu", *baud, "--out", str(out), "--axis", "R",
+                             "--duty", "0.08", "--seconds", "0.5", "--power-switch-in-hand", "--yes",
+                             "--observed", "none"])
+        res = json.loads(capsys.readouterr().out)
+        assert res["result"] == "refused" and "could not be read" in res["why"], res
+        rows = [json.loads(x) for x in out.read_text().splitlines()]
+        assert not [r for r in rows if r["t"] == "written" and r["kind"] == "ARM"]
+        assert code in (0, 2)
+    finally:
+        m.close()

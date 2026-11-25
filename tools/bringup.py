@@ -1664,7 +1664,7 @@ def main(argv=None) -> int:
         out.flush()
         # clear-faults numbers its frames from a random start, so no STATE of an earlier run can echo them
         bench = Bench(link, out, allow_locked=args.allow_locked, commission=args.cmd == "commission",
-                      product_required=synthetic is None and args.baud is None,
+                      product_required=_product_required(synthetic),
                       initial_seq=random.randrange(1, 0x10000) if args.cmd == "clear-faults" else None)
         try:
             if args.cmd in ("record", "cpr"):
@@ -1871,6 +1871,13 @@ def _mark_absent_result(result: dict, absent: tuple) -> None:
         result["external"] = judgement.empty_pass_fields(result["external"])
     if "valid" in result:
         result["computed_valid"], result["valid"] = result["valid"], None
+
+
+def _product_required(synthetic) -> bool:
+    """Every real device needs a readable product string on an open commissioning board, whatever --baud says: the
+    port speed is set on USB CDC too, so it is no evidence of UART7 (Codex PR-B round 2). Only the rehearsal bench's
+    model (a pty, no USB) has none by nature."""
+    return synthetic is None
 
 
 def _header_bypass(args) -> str | None:
