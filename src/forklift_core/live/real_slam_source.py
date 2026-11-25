@@ -19,7 +19,7 @@ The link (6.1, 2):
   state (``ready`` / ``not_localized``) or ``void``;
 - a seed's inputs are judged until its end state -- each poll and each offer (before any write retry), before each
   scan to its instance and before its end state is taken: a boot change, a raised odometry continuity generation (the
-  loop's ``odom_gen``), an entry since the acceptance not continuous or not included, or a move past the limit, seen on
+  loop's ``odom_gen``), an entry since the acceptance not continuous, or a move past the limit, seen on
   any odometry history entry made since the acceptance (``odom_step``, the loop's ``odom_listeners``: kept even after
   the entry left the history), or any odometry pose since the acceptance past ``SEED_STILL_M`` / ``SEED_STILL_RAD`` from the
   snapshot cancels it. A seed the bridge has not seen a byte of is cancelled here (``void`` at once); otherwise new
@@ -292,15 +292,17 @@ class RealSlamSource:
 
     def odom_step(self, entry) -> None:
         """The loop's every odometry history entry as it is made (its ``odom_listeners``): for a seed in progress, an
-        entry since its acceptance that breaks continuity or is not included, or a pose past the stillness limit, is
-        kept until its end state, whether or not a poll still finds the entry in the history (rounds 3-4). Never
-        raises."""
+        entry since its acceptance that breaks continuity, or a pose past the stillness limit, is kept until its end
+        state, whether or not a poll still finds the entry in the history (rounds 3-4). An entry left out of scan
+        placement for its STATE's delay bound (``included`` False) is still a continuous odometry pose: the seed's
+        inputs are the snapshot, the boot and the continuity (design 6.1, 2), not the placement's time precision --
+        normal HIL running has such STATEs (7c-1b-2b pty run). Never raises."""
         t = self.target
         if t is None or t["kind"] != "seed" or t["snapshot"] is None or not self._seeding():
             return
         if float(entry[1]) < self._s(t["accepted_ns"]):
             return
-        if not (entry[3] and entry[4]):
+        if not entry[3]:
             t["broken"] = True
         if self._past_still(base_from_rear(entry[2], self.rear_offset_m), t["snapshot"]):
             t["moved"] = True
@@ -616,7 +618,7 @@ class RealSlamSource:
         for e in self.odom_history():
             if e[1] < since:
                 continue
-            if not (e[3] and e[4]):
+            if not e[3]:
                 return "odom_break"
             poses.append(base_from_rear(e[2], self.rear_offset_m))
         poses.append(tuple(float(v) for v in self.odom_base()))

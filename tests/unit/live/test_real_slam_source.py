@@ -871,12 +871,15 @@ def test_a_fresher_scan_waiting_for_its_odometry_is_not_pushed_out_by_an_older_o
 
 
 # --- Codex 7c-1b-2a round 4 ----------------------------------------------------------------------------------------
-def test_an_excluded_state_that_left_the_history_still_cancels():
+def test_a_broken_entry_that_left_the_history_still_cancels_and_an_excluded_one_does_not():
     r = Rig()
     r.started()
     seed_to_ready(r)
     t = r.s(r.now)
-    r.src.odom_step((t - 0.05, t, r.history[-1][2], True, False, True, True))  # over the STATE delay bound
+    r.src.odom_step((t - 0.05, t, r.history[-1][2], True, False, True, True))  # over the STATE delay bound only
+    r.step()
+    assert not any(isinstance(f, rl.Cancel) for f in r.bridge.frames())  # still a continuous pose (7c-1b-2b)
+    r.src.odom_step((t, t + 0.01, r.history[-1][2], False, True, True, True))  # a continuity break
     r.history.clear()
     r.hist_to(r.now)
     r.step()
