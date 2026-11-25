@@ -571,8 +571,12 @@ def test_an_end_state_delivered_past_the_deadline_and_a_late_reply_are_faults():
     [s] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
     r.now += int(1.5e9)
     r.bridge.reply(s)
+    seen = []
+    r.src.reply_hook = lambda scan, rec: seen.append(scan.scan_id) or {"q": 1}
     with pytest.raises(rss.SlamSourceFatal, match="no reply"):
         r.step(1)
+    rows = [e for e in r.src.events if e.get("t") == "reply" and e.get("why") == "past_reply_bound"]
+    assert rows and rows[0]["q"] == 1 and "epoch" in rows[0] and seen == [s.scan.scan_id]  # recorded before the fault
 
 
 def test_a_void_read_past_its_bound_is_a_fault():

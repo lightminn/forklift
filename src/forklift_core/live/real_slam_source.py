@@ -478,7 +478,7 @@ class RealSlamSource:
         self.link.flush()
         frames = self.link.read()
         received = int(self.clock())
-        self._receipt_deadlines(received)
+        self._receipt_deadlines(received, frames)
         for obj in frames:
             if isinstance(obj, slam_link.Reply):
                 self._on_reply(obj, received)
@@ -517,7 +517,7 @@ class RealSlamSource:
         self._deadlines(now)
         self._receipt_deadlines(now)
 
-    def _receipt_deadlines(self, received: int) -> None:
+    def _receipt_deadlines(self, received: int, frames=()) -> None:
         """What is waited for from the bridge, on the clock after the read, before any frame is taken: a void, a reply
         or a start / seed's end state read past its bound is past it (round 2 P2-4, round 3 P2-2)."""
         t = self.target
@@ -530,7 +530,27 @@ class RealSlamSource:
         f = self._inflight
         if (f is not None and f["sent_ns"] is not None and f["phase"] == "ready"
                 and received - f["sent_ns"] > REPLY_WAIT_S * 1e9):
+            for r in frames:  # its reply read past the bound: recorded before the fault (7c-1c round 3 P2)
+                if isinstance(r, slam_link.Reply) and isinstance(r.scan_id, int) and not isinstance(r.scan_id, bool) \
+                        and int(r.scan_id) == f["scan"].scan_id and _finite_pose(r.map_from_odom):
+                    self._event(**self._reply_record(r, f, received), passed=False, why="past_reply_bound")
+                    break
             self._fatal(f"scan {f['scan'].scan_id}: no reply within {REPLY_WAIT_S} s")
+
+    def _reply_record(self, r, f, received: int) -> dict:
+        """The reply's record: its scan in flight's identity, epoch and attempt, and the reply hook's diagnostic."""
+        rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
+               "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"],
+               "epoch": f["epoch"], "attempt": None if f["attempt"] is None else f["attempt"][1]}
+        if self.reply_hook is not None:  # every reply of a scan sent whole, whatever its verdict (7c-1c round 2 P2-3)
+            try:
+                extra = self.reply_hook(f["scan"], rec)
+                if extra:
+                    rec.update(extra)
+            except Exception as exc:  # noqa: BLE001 -- a diagnostic never ends the source
+                self.counts["reply_hook_errors"] += 1
+                rec["hook_error"] = f"{type(exc).__name__}: {exc}"
+        return rec
 
     def _on_reply(self, r, received: int) -> None:
         if (isinstance(r.scan_id, bool) or not isinstance(r.scan_id, int) or isinstance(r.stamp_s, bool)
@@ -545,17 +565,7 @@ class RealSlamSource:
                 self._discarded.discard(key)
                 return
             self._fatal(f"protocol: reply for scan {r.scan_id}, not the scan in flight")
-        rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
-               "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"],
-               "epoch": f["epoch"], "attempt": None if f["attempt"] is None else f["attempt"][1]}
-        if self.reply_hook is not None:  # every reply of a scan sent whole, whatever its verdict (7c-1c round 2 P2-3)
-            try:
-                extra = self.reply_hook(f["scan"], rec)
-                if extra:
-                    rec.update(extra)
-            except Exception as exc:  # noqa: BLE001 -- a diagnostic never ends the source
-                self.counts["reply_hook_errors"] += 1
-                rec["hook_error"] = f"{type(exc).__name__}: {exc}"
+        rec = self._reply_record(r, f, received)
         if r.status == "failed":
             self._event(**rec, passed=False, why="failed")
             self._fatal(f"bridge failed scan {r.scan_id}: {r.reason}")
