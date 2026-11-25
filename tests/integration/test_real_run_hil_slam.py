@@ -107,7 +107,8 @@ def test_a_declaration_on_the_real_source_waits_its_seed_survives_a_stop_and_cap
         r = c.ask("stop")
         assert r["t"] == "ack", r
         s = c.wait(lambda s: s["relocalize"]["state"] == "refused", 10)
-        assert s["relocalize"]["reason"].startswith("relocalize_voided"), s["relocalize"]
+        # the STOP ends the attempt (its control generation, or the stand it broke)
+        assert s["relocalize"]["reason"] in ("relocalize_moved", "relocalize_voided:control"), s["relocalize"]
         c.wait(lambda s: s.get("standing"), 10)
         r = c.ask("rearm")
         assert r["t"] == "ack", r

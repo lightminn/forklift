@@ -25,7 +25,7 @@ class FakeBridge(threading.Thread):
         self.got: list = []  # (monotonic s, frame type name, id or scan id)
         self.sent: list = []  # (monotonic s, kind, id)
         self.error = None
-        self._stop = threading.Event()
+        self._halt = threading.Event()
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         if os.path.exists(self.path):
             os.unlink(self.path)
@@ -38,7 +38,7 @@ class FakeBridge(threading.Thread):
         self._ready_scans = 0
 
     def stop(self):
-        self._stop.set()
+        self._halt.set()
         self.join(5)
         for s in (self._conn, self._server):
             if s is not None:
@@ -56,14 +56,14 @@ class FakeBridge(threading.Thread):
     def run(self):
         try:
             self._server.settimeout(0.2)
-            while not self._stop.is_set() and self._conn is None:
+            while not self._halt.is_set() and self._conn is None:
                 try:
                     self._conn, _ = self._server.accept()
                 except socket.timeout:
                     continue
             if self._conn is None:
                 return
-            while not self._stop.is_set():
+            while not self._halt.is_set():
                 now = time.monotonic()
                 for due, fn in list(self._timers):
                     if due <= now:
