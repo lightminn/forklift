@@ -111,8 +111,14 @@ def _written_moving(rows):
 
 
 def _approach(c, seconds):
-    """A mission with no bypass (no d5_pocket: its own 0.06 cap stays off) driven for ``seconds``: the approach's
-    moving DRIVEs are what is judged, not the lift."""
+    """A mission driven for ``seconds`` (the approach's moving DRIVEs are judged, not the lift). The HIL run has no
+    depth source, so a mission moves only with the d5_pocket bypass (RunSources.depth None: "D5 only by the d5_pocket
+    bypass"), whose own cap is also 0.06 m/s:
+    this run cannot tell the declaration's cap from the bypass's -- the loop-rig tests do (test_real_loop_relocalize's
+    cap tests); here the declared session's writes are checked within the cap with the declaration's mark shown."""
+    r = c.ask("check_bypass", check="d5_pocket", on=True)
+    assert r["t"] == "ack", r
+    c.wait(lambda s: "d5_pocket" in s["bypassed"], 5)
     r = c.ask("pallet_register", pallet_id="P-S10", pose=[2.6, 0.0, 0.0])
     assert r["t"] == "ack", r
     time.sleep(0.8)
@@ -124,32 +130,14 @@ def _approach(c, seconds):
     time.sleep(seconds)
 
 
-def test_an_undeclared_approach_on_the_real_source_drives_past_the_declared_cap(mcu_model, tmp_path):
-    """The comparison for the declared run below: with no declaration and no bypass the approach goes above 0.06."""
-    bridge = _bridge(tmp_path)
-    run = _runner(mcu_model, tmp_path, bridge, 90)
-    c = Console(run.port)
-    try:
-        _lease(c)
-        _approach(c, 15.0)
-    finally:
-        c.close()
-        code = run.finish(signal.SIGTERM)
-        bridge.stop()
-    rows = run.rows()
-    complete(rows, code, expect_code=code)
-    moving = _written_moving(rows)
-    assert moving and max(abs(v) for v in moving) > 0.06 + 1e-9, moving[:5]
-
-
 def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epoch_replies(mcu_model, tmp_path):
     """A generation opened by a 400 ms STATE silence; the bridge holds every reply 0.09 s, so a seed accepted with a
     scan in flight gets that old instance's reply after it -- dropped, never evidence (three seeds: at least one).
     Declaration 1: its seed held 3 s, the lease
     released while the bridge reports seeding -- the attempt ends, the seed runs to ready and completes nothing.
     Declaration 2: a STOP while its seed runs -- refused; after the rearm a third declaration is refused
-    seed_in_progress until the seed's ready, which completes nothing. Declaration 3 completes on its own seed. The
-    approach after it, with no bypass, writes every moving DRIVE within 0.06 m/s."""
+    seed_in_progress until the seed's ready, which completes nothing. Declaration 3 completes on its own seed (the
+    session marked declared); the approach after it writes every moving DRIVE within 0.06 m/s."""
     bridge = _bridge(tmp_path, seed_delay_s=3.0, reply_delay_s=0.09)
     run = _runner(mcu_model, tmp_path, bridge, 200, model_args=("--state-silent-at-ms", str(SILENT_AT_MS),
                                                                "--state-silent-ms", str(SILENT_MS)))
@@ -195,7 +183,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epo
         s = c.wait(lambda s: s["relocalize"]["attempt"] == r["attempt"] and s["relocalize"]["state"] != "waiting", 30)
         assert s["relocalize"]["state"] == "declared", s["relocalize"]
         assert s["relocalize_generation"] is None and "relocalize" in s["bypassed"] and s["manual_only"] is None
-        assert "d5_pocket" not in s["bypassed"] and "slam" not in s["bypassed"]
+        assert "slam" not in s["bypassed"]
         _approach(c, 15.0)
     finally:
         c.close()
@@ -207,7 +195,7 @@ def test_declarations_on_the_real_source_through_a_lease_loss_a_stop_and_old_epo
     seeds = [g for g in bridge.got if g[1] == "Seed"]
     assert [g[2] for g in seeds] == [2, 3, 4] and not any(g[1] == "Cancel" for g in bridge.got)
     moving = _written_moving(rows)
-    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # the declared session's own cap
+    assert moving and max(abs(v) for v in moving) <= 0.06 + 1e-9  # within the cap (see _approach)
     assert end["slam_counts"].get("slam_old_instance_reply", 0) >= 1, end["slam_counts"]  # old replies dropped
     assert end["slam_counts"].get("slam_end_after_cancel", 0) == 0, end["slam_counts"]
 

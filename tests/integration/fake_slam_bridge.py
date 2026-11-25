@@ -74,7 +74,10 @@ class FakeBridge(threading.Thread):
                 r, _, _ = select.select([self._conn], [], [], 0.005)
                 if not r:
                     continue
-                chunk = self._conn.recv(1 << 16)
+                try:
+                    chunk = self._conn.recv(1 << 16)
+                except ConnectionResetError:
+                    return  # the executor ended (its process closed the socket): the session's end, not an error
                 if not chunk:
                     return
                 self._buf += chunk
