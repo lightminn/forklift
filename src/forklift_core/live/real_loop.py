@@ -399,6 +399,7 @@ class RealLoop:
         # F1 start block judged when a generation closes -- one-way to the session's end
         self.seed_log: list = []
         self.f1_block: dict | None = None
+        self._f1_epoch = link.a.session_epoch
         self._mission_bypass: set = set()
         if hasattr(link.a, "start_gate"):
             link.a.start_gate = self._start_gate
@@ -435,7 +436,10 @@ class RealLoop:
             self.bypass.clear()
             self._bypass_pending.clear()
             self.declared_epoch = None  # 5c-2 (7b): the declaration's mark is the session's
-            # 6.1, 7: a new session is a new bridge with no seed -- its records and block start empty
+        if a.session_epoch != self._f1_epoch:
+            # 6.1, 7: a new session is a new bridge with no seed -- its records and block start empty. Only a new
+            # session: an accepted session end keeps them for the end record (Codex 7c-2b round 1 P2)
+            self._f1_epoch = a.session_epoch
             self.seed_log = []
             self.f1_block = None
         # the check and the change under one channel lock: a connection event queued between them cannot slip past

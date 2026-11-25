@@ -36,19 +36,26 @@ def _confirm(r, gen):
 
 
 def _refused_declaration_then_confirmation(r, reason="reboot"):
-    """G1: a declaration seeded and then refused (its seed's end state came past the limit: relocalize_timeout);
-    the instance is localized later; G2 opened and closed by a confirmation (the design's G1/G2 example)."""
+    """G1: a declaration seeded and then refused by the lease's loss; its seed reaches ready within its limit (the
+    real source's contract -- a late end state would be the source's fault); a new lease; G2 opened and closed by a
+    confirmation (the design's G1/G2 example, Codex 7c-2b round 1 P3)."""
     src = seeding(r)
     g1 = open_generation(r)
-    _declare(r, src, g1, end=None)
-    run_until(r, lambda rec: status(r)["state"] != "waiting", 2000)
-    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_timeout"
+    stand(r)
+    reply_, _ = ask(r, "relocalize_declare", generation=g1)
+    assert reply_["t"] == "ack", reply_
+    r.tick(5)
+    ask(r, "lease_release")
+    r.tick(3)
+    assert status(r)["state"] == "refused" and status(r)["reason"] == "relocalize_voided:lease"
     assert r.loop.seed_log and r.loop.seed_log[-1]["declared"] is False
     assert r.loop.f1_block is None  # no judgement right after a seed or a refusal: only when a generation closes
     src.end("ready")
-    r.tick(20)
+    r.tick(10)
+    r.grant()
     g2 = open_generation(r, reason)
     _confirm(r, g2)
+    assert r.loop.fatal_source is None
     return src
 
 
@@ -99,8 +106,8 @@ def test_a_refused_declaration_then_a_confirmation_blocks_the_three_boundaries()
     assert seen and all(blocked for blocked, _ in seen)
 
 
-def test_the_auto_entry_assertion_reads_the_same_gate():
-    """The arbiter's AUTO entry raises on a closed gate (its own path past the two refusals)."""
+def test_the_gate_the_auto_entry_assertion_reads_is_f1s():
+    """The arbiter's AUTO entry assertion reads ``_gate()`` (arbiter.py, past the two refusals): it is F1's here."""
     r = rig()
     _refused_declaration_then_confirmation(r)
     gate = r.arbiter._gate()
@@ -133,18 +140,32 @@ def test_a_declaration_without_its_seed_row_is_unsourced():
     del plain_append
 
 
-def test_the_block_holds_through_stop_rearm_and_a_lease_change():
-    """STOP, a lease's end and a new lease write no record and lift nothing (6.1, 7)."""
+def test_the_block_holds_through_stop_a_lease_release_and_a_new_lease():
+    """STOP, a lease's release and a new lease write no record and lift nothing (6.1, 7)."""
     r = rig()
     _refused_declaration_then_confirmation(r)
     blk = dict(r.loop.f1_block)
     ask(r, "stop")
     r.tick(5)
     assert r.loop.f1_block == blk and r.loop._start_blocked() is True
-    r.arbiter.lease = None  # the lease gone (an expiry): the block is the session's, not the lease's
+    ask(r, "lease_release")
+    r.tick(5)
+    r.grant()
     r.tick(5)
     assert r.loop.f1_block == blk and r.loop._start_blocked() is True
-    assert len(r.loop.seed_log) == 1  # no new record from either
+    assert len(r.loop.seed_log) == 1  # no new record from any of them
+    reply_, _ = ask(r, "mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=0)
+    assert reply_["t"] == "reject" and reply_["reason"] == "operator_placed_start"
+
+
+def test_an_accepted_session_end_keeps_the_records_for_the_end_record():
+    """Codex 7c-2b round 1 P2: only a new session empties them."""
+    r = rig()
+    _refused_declaration_then_confirmation(r)
+    blk, seeds = dict(r.loop.f1_block), [dict(x) for x in r.loop.seed_log]
+    reply_, _ = ask(r, "session_end")
+    r.tick(3)
+    assert r.loop.f1_block == blk and r.loop.seed_log == seeds
 
 
 def test_teleop_and_the_field_recovery_report_stay_open_while_blocked():
@@ -155,6 +176,8 @@ def test_teleop_and_the_field_recovery_report_stay_open_while_blocked():
     reply_, _ = ask(r, "mode_request", to="TELEOP")
     assert reply_.get("reason") != "operator_placed_start"
     assert "recovery" not in arb.START_GATE_REFUSED  # the gate's list: the report goes through
+    reply_, _ = ask(r, "recovery", recovery_id=1)  # the field recovery's report reaches the loop, F1 or not
+    assert reply_.get("reason") != "operator_placed_start"
 
 
 def test_the_f1_bypass_lifts_the_block_caps_and_turning_it_off_blocks_again():
