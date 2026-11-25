@@ -5,13 +5,12 @@ new sample still reaches the watch), and the run's IMU guard keeps that call beh
 from types import SimpleNamespace
 
 import pytest
+from test_real_loop_imu import rig, run_until
+from test_teleop_bridge_cycle import MS
 
 from forklift_core.live import real_autonomy as ra
 from forklift_core.live import real_run as rr
 from forklift_core.safety.real_watch import ImuWatch
-
-from test_real_loop_imu import rig, run_until
-from test_teleop_bridge_cycle import MS
 
 G = (0.0, 0.0, 9.81)
 
@@ -119,3 +118,99 @@ def test_the_imu_guard_keeps_a_sources_generation_behind_it():
     with pytest.raises(rr.SourceFatal):
         guard.generation()
     assert marks == ["imu:usb gone"]
+
+
+# --- Codex 7b round 1 ------------------------------------------------------------------------------------------------
+def _driving_on(make_source):
+    """A drive on a source built from the rig's FakeImu (``make_source(samples) -> source``)."""
+    r = rig()
+    r.loop.imu_source = make_source(r.imu.samples)
+    fresh_watch(r.loop)
+    r.submit()
+    run_until(r, lambda rec: r.permit.state == ra.DRIVING and rec.branch == "auto")
+    return r
+
+
+def _moving(r, k):
+    return [m for _, kind, _, m in r.transport.sent[k:]
+            if kind == "DRIVE" and (m.left_wheel_rad_s != 0.0 or m.right_wheel_rad_s != 0.0)]
+
+
+def test_a_failing_sample_read_still_asks_the_generation():
+    """P1-1: the samples raise, the generation moved -- watch_imu_gap, no moving DRIVE after it."""
+    state = {"gen": 1, "fail": False}
+
+    def make(src):
+        def samples(upto, limit):
+            if state["fail"]:
+                raise OSError("read")
+            return [(state["gen"], ns, ns, a) for ns, a in src(upto, limit)]
+        return SimpleNamespace(samples=samples, generation=lambda: state["gen"])
+
+    r = _driving_on(make)
+    state["fail"], state["gen"] = True, 2
+    k = len(r.transport.sent)
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=2)
+    assert "watch_imu_gap" in rec.reason and not _moving(r, k)
+
+
+def test_a_generation_that_cannot_be_asked_holds_every_moving_drive():
+    """P1-1: the samples come, the generation call fails -- the frame waits (wait:imu_generation)."""
+    state = {"fail": False}
+
+    def gen():
+        if state["fail"]:
+            raise OSError("usb")
+        return 1
+
+    r = _driving_on(lambda src: SimpleNamespace(
+        samples=lambda upto, limit: [(1, ns, ns, a) for ns, a in src(upto, limit)], generation=gen))
+    state["fail"] = True
+    k = len(r.transport.sent)
+    recs = [r.tick() for _ in range(3)]
+    assert not _moving(r, k) and any(x.reason == "wait:imu_generation" for x in recs), recs
+    state["fail"] = False
+    run_until(r, lambda rec: rec.branch == "auto", limit=20)  # back once it can be asked
+
+
+def test_two_generations_in_one_batch_through_the_read_end_the_drive():
+    """design 5's first test through _pull_imu: one batch, 5 ms apart, only the producer restarted."""
+    state = {"split": False}
+
+    def make(src):
+        def samples(upto, limit):
+            out = src(upto, limit)
+            if not state["split"]:
+                return [(1, ns, ns, a) for ns, a in out]
+            half = len(out) // 2
+            return [(1 if i < half else 2, ns, ns, a) for i, (ns, a) in enumerate(out)]
+        return SimpleNamespace(samples=samples, generation=lambda: 2 if state["split"] else 1)
+
+    r = _driving_on(make)
+    state["split"] = True
+    k = len(r.transport.sent)
+    rec = run_until(r, lambda rec: rec.branch == "emergency", limit=2)
+    assert "watch_imu_gap" in rec.reason and not _moving(r, k)
+
+
+def test_no_baseline_is_frozen_while_samples_wait_or_the_generation_is_unknown():
+    """P2: the ARM gate waits on a capped read or an unknown generation, within the mission's one deadline."""
+    r = rig()
+    loop = r.loop
+    loop.imu_backlog = True
+    assert loop._imu_arm_gate(r.now, "m1") == ("wait", "imu_backlog")  # noqa: SLF001
+    loop.imu_backlog, loop.imu_gen_unknown = False, True
+    assert loop._imu_arm_gate(r.now, "m1") == ("wait", "imu_generation")  # noqa: SLF001
+    late = r.now + int(loop.imu_watch.cfg.baseline_wait_s * 1e9) + 1
+    assert loop._imu_arm_gate(late, "m1") == ("refuse", "imu_generation")  # noqa: SLF001
+
+
+def test_a_source_that_stops_a_read_at_its_own_cost_cap_is_a_capped_read():
+    r = rig()
+    loop = r.loop
+    fresh_watch(loop)
+    loop.imu_source = SimpleNamespace(samples=lambda upto, limit: [], last_read_capped=True,
+                                      generation=lambda: 9)
+    loop._pull_imu(5 * MS)  # noqa: SLF001
+    assert loop.imu_backlog and loop.imu_watch.counts["generation"] == 0  # the generation waits for the rest
+    assert rr._ImuGuard(loop.imu_source, print).last_read_capped is True  # noqa: SLF001

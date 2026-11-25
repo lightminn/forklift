@@ -55,7 +55,8 @@ from forklift_core.mcu_link.messages import Mode  # noqa: E402
 from forklift_core.plant.bringup import Sample  # noqa: E402
 from forklift_core.plant.mcu_host import HostConfig, McuLinkHost  # noqa: E402
 from forklift_core.plant.record_rows import state_row  # noqa: E402
-from forklift_core.sensors.imu_source import IMU_YAML, ImuSource, load_imu_source_config  # noqa: E402
+from forklift_core.safety.real_watch import load_imu_config  # noqa: E402
+from forklift_core.sensors.imu_source import IMU_YAML, ImuSource, fits_watch, load_imu_source_config  # noqa: E402
 from forklift_core.sensors.lidar_cfg import LIDAR_YAML, load_lidar_config, to_layer_scan  # noqa: E402
 from forklift_core.sensors.scan_feed import RECV_BYTES, ScanFeed, bind_socket  # noqa: E402
 
@@ -67,6 +68,7 @@ SCANS_READ_PER_CYCLE = 8  # the read cost per cycle (design 3.3): 10 Hz scans, 5
 MAX_SECONDS = 3600.0
 SESSION_STAGE_S = 0.5  # each stage of the session pair is answered within this, or the pair starts again
 SCAN_GAP_NS = 350_000_000  # a scan receive gap past the layer's sensor timeout (obstacle_layer_real 0.35 s)
+SAFETY_YAML = REPO / "config" / "real" / "safety_watch.yaml"  # the IMU watch's gap limit, for the profile's fit
 IMU_READ_PER_CYCLE = 64  # the loop's IMU_BATCH: 200 Hz accel, 50 Hz cycles -- four a cycle
 HOST_CFG = HostConfig(state_max_age_s=0.05, cap_ms=150, arm_timeout_s=0.3, zero_valid_ms=100, outbox_max=16)
 
@@ -299,12 +301,26 @@ class Observer:
     def _imu(self, now: int) -> None:
         """The accel samples received so far, through the source's verdict, generation and interval, into the record;
         then the source's generation (a receive gap with no sample opens one here, design 5)."""
-        if len(self.imu.samples(now, IMU_READ_PER_CYCLE)) >= IMU_READ_PER_CYCLE:
+        self.imu.samples(now, IMU_READ_PER_CYCLE)
+        if self.imu.last_read_capped:
             self.counts["imu_read_capped"] += 1
         else:
             self.imu.generation()  # as the loop: only after a read that did not stop at its cap
         for row in self.imu.drain_rows():
             self.rec.put(row)
+
+    def drain_imu(self) -> None:
+        """After the device stopped: every sample still queued into the record (round 1 P2: not just one read)."""
+        if self.imu is None:
+            return
+        now = self.clock()
+        while True:
+            self.imu.samples(now, IMU_READ_PER_CYCLE)
+            capped = self.imu.last_read_capped
+            for row in self.imu.drain_rows():
+                self.rec.put(row)
+            if not capped:
+                return
 
     def _open_gap(self, now: int) -> None:
         self._scan_gap_open = True
@@ -355,26 +371,37 @@ class Observer:
     def finish(self) -> bool:
         """The end DISARM, bound to its own (connection, seq): confirmed by a STATE on that connection stepping to
         that seq after it was written, in a stopped mode. A reconnection while waiting asks again on the new link.
-        It is asked only once a STATE was seen on the connection: an acknowledgement is a step from an earlier STATE,
-        so a DISARM answered by the connection's very first STATE could never be confirmed (an end straight after
-        the opening, as a failed IMU start)."""
+        An acknowledgement is a step from an earlier STATE: when the DISARM went out before any STATE was seen on
+        the connection and the first one seen already names it (an end straight after the opening, as a failed IMU
+        start), no step can show it -- it is asked once more with a new seq (Codex 7b round 1 P1-4)."""
         if not getattr(self.link, "ever_connected", False):
             return False
         end = time.monotonic() + END_CONFIRM_S
         asked: tuple[int, int] | None = None
+        unseen = reasked = False
         while time.monotonic() < end:
-            seen = self._prev is not None and self._prev[0] == self._conn()
-            if self.link.link is not None and seen and (asked is None or asked[0] != self._conn()):
-                self.host.request_disarm(self.clock())
-                seq = self.host.queued_disarm_seq()
-                asked = None if seq is None else (self._conn(), seq)
+            conn = self._conn()
+            if self.link.link is not None and (asked is None or asked[0] != conn):
+                unseen = not (self._prev is not None and self._prev[0] == conn)
+                reasked = False
+                asked = self._ask_end(conn)
             self.cycle(refresh=False)
             st = self.host.state
             if asked is not None and st is not None and asked[0] == self._conn() and self.acknowledged(asked[1]) \
                     and st.last_rx_seq == asked[1] and st.mode in (Mode.DISARMED, Mode.FAULT, Mode.ESTOP):
                 return True
+            if asked is not None and unseen and not reasked and st is not None and asked[0] == self._conn() \
+                    and self.link.link is not None and st.last_rx_seq == asked[1] \
+                    and not self.acknowledged(asked[1]):
+                reasked = True
+                asked = self._ask_end(asked[0])
             time.sleep(CYCLE_S / 2)
         return False
+
+    def _ask_end(self, conn: int):
+        self.host.request_disarm(self.clock())
+        seq = self.host.queued_disarm_seq()
+        return None if seq is None else (conn, seq)
 
 
 class Openings:
@@ -415,6 +442,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         synthetic = writer_marker(args.device, args.bench)
         lidar = load_lidar_config(args.lidar_config)
         imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
+        imu_gap_max_s = load_imu_config(SAFETY_YAML).gap_max_s if args.imu else None
     except (SyntheticRefused, OSError, ValueError, KeyError) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
@@ -424,7 +452,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
     imu_dev = None
     if imu_cfg is not None:
         try:
-            imu_dev = imu_factory(imu_cfg)  # no device, no SDK: refused before anything is opened or written
+            imu_dev = imu_factory(imu_cfg)  # finds the device only (no option written before the executor lock); no
+            # device, no SDK: refused before anything is opened or written
         except (RuntimeError, ImportError, OSError) as exc:
             print(json.dumps({"result": "refused", "why": f"imu: {exc}"}))
             return 2
@@ -459,18 +488,29 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         try:
             imu_error = None
             if imu_dev is not None:
+                stage = "start"
                 try:
-                    imu_dev.start(imu.on_sample)  # the callback only queues (design 5)
-                except RuntimeError as exc:  # recorded; the end DISARM is still confirmed
-                    imu_error = str(exc)
-                finally:
-                    imu_started = True  # a start interrupted inside the SDK is stopped too
+                    try:
+                        imu_dev.start(imu.on_sample)  # the options are set here, after the executor lock; the
+                        # callback only queues (design 5)
+                    finally:
+                        imu_started = True  # a start interrupted inside the SDK is stopped too
+                    stage = "profile"
+                    prof = imu_dev.profile_info()
+                except (RuntimeError, OSError) as exc:  # recorded; the end DISARM is still confirmed (round 1 P2)
+                    imu_error = (stage, f"{type(exc).__name__}: {exc}")
+                else:
+                    hz = (prof.get("actual") or {}).get("accel_hz")
+                    rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **prof,
+                             "fits_watch": {"gap_max_s": imu_gap_max_s, "accel_hz": hz,
+                                            "interval_bound_s": imu.bound_ns / 1e9,
+                                            "ok": fits_watch(imu_cfg, imu_gap_max_s, bound_s=imu.bound_ns / 1e9,
+                                                             accel_hz=hz)}})
             if imu_error is not None:
-                result = "imu_start_failed"
-                rec.put({"t": "imu_error", "error": imu_error, "host_ns": time.monotonic_ns()})
+                result = f"imu_{imu_error[0]}_failed"
+                rec.put({"t": "imu_error", "stage": imu_error[0], "error": imu_error[1],
+                         "host_ns": time.monotonic_ns()})
             else:
-                if imu_dev is not None:
-                    rec.put({"t": "imu_profile", "host_ns": time.monotonic_ns(), **imu_dev.profile_info()})
                 end = time.monotonic() + args.seconds
                 while time.monotonic() < end:
                     t0 = time.monotonic()
@@ -484,14 +524,17 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 stopped = obs.finish()
             except Exception as exc:  # noqa: BLE001 -- the end row is still written
                 rec.put({"t": "finish_error", "error": f"{type(exc).__name__}: {exc}"})
+            imu_stopped = True
             if imu_started:
                 try:
                     imu_dev.stop()  # its callbacks have ended when it returns; the last samples are read below
-                except Exception as exc:  # noqa: BLE001
-                    rec.put({"t": "imu_error", "error": f"stop: {exc}", "host_ns": time.monotonic_ns()})
+                except Exception as exc:  # noqa: BLE001 -- callbacks may still run: the record cannot be complete
+                    imu_stopped = False
+                    rec.put({"t": "imu_error", "stage": "stop", "error": f"{type(exc).__name__}: {exc}",
+                             "host_ns": time.monotonic_ns()})
                     if result == "ok":
                         result = "imu_stop_failed"
-                obs._imu(time.monotonic_ns())  # noqa: SLF001
+                obs.drain_imu()
             # every row before the end row is on disk before the end row says so; the end row's own write and sync
             # count too, and only then the sidecar <out>.ok (the record's sha256) is made -- a replay takes the
             # record only with a matching .ok, so a file that claims more than was kept is never read as complete
@@ -503,7 +546,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                 result = "no_imu"
             errors_before = rec.errors
             rec.put({"t": "end", "result": result, "stopped_confirmed": stopped,
-                     "complete": errors_before == 0 and synced, "record_errors": errors_before, "counts": obs.counts,
+                     "complete": errors_before == 0 and synced and imu_stopped, "record_errors": errors_before,
+                     "counts": obs.counts,
                      "feed": None if obs.feed is None else {"accepted": obs.feed.accepted,
                                                             "refused": dict(obs.feed.refused),
                                                             "id_gaps": obs.feed.id_gaps,
@@ -512,7 +556,7 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
                      "imu": None if imu is None else {"counts": dict(imu.counts), "generation": imu.gen,
                                                       "generation_why": imu.generation_why},
                      "end_mono_ns": time.monotonic_ns()})
-            complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f)
+            complete = errors_before == 0 and synced and rec.errors == 0 and _sync(f) and imu_stopped
             if link.link is not None:
                 link.link.close()
                 link.link = None

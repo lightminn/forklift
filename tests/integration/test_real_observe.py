@@ -327,8 +327,12 @@ class FakeImuDevice:
     """The motion module's shape (``tools/imu_record.RealSenseSource``): ``start(on_sample)`` calls back from its own
     thread -- gyro and accel, 200 Hz, a device time that follows the host clock -- until ``stop``."""
 
-    def __init__(self, *, fail_start=False, silent=False):
+    def __init__(self, *, fail_start=False, silent=False, accel_hz=200, fail_profile=False, fail_stop=False,
+                 burst_on_stop=0):
         self.fail_start, self.silent = fail_start, silent
+        self.accel_hz, self.fail_profile, self.fail_stop = accel_hz, fail_profile, fail_stop
+        self.burst_on_stop = burst_on_stop
+        self.on_sample = None
         self.started = self.stopped = False
         self._halt = None
         self._thread = None
@@ -337,6 +341,7 @@ class FakeImuDevice:
         import threading
 
         self.started = True
+        self.on_sample = on_sample
         if self.fail_start:
             raise RuntimeError("motion module busy")
         self._halt = threading.Event()
@@ -353,13 +358,20 @@ class FakeImuDevice:
         self._thread.start()
 
     def profile_info(self):
-        return {"actual": {"gyro_hz": 200, "accel_hz": 200}, "rate_fallback": None}
+        if self.fail_profile:
+            raise OSError("usb gone while reading options")
+        return {"actual": {"gyro_hz": 200, "accel_hz": self.accel_hz}, "rate_fallback": None}
 
     def stop(self):
         if self._halt is not None:
             self._halt.set()
             self._thread.join()
+        for _ in range(self.burst_on_stop):  # samples the SDK hands over while stopping
+            time.sleep(0.0001)
+            self.on_sample("a", (time.monotonic_ns() // 1000) % (1 << 32), 0.0, "hardware_clock", (0.0, -9.81, 0.0))
         self.stopped = True
+        if self.fail_stop:
+            raise RuntimeError("stop timed out")
 
 
 def _imu_cli(model, tmp_path, monkeypatch, device):
@@ -408,10 +420,109 @@ def test_an_imu_that_fails_to_start_still_ends_with_a_confirmed_disarm(model, tm
     assert code == 1 and res["result"] == "imu_start_failed" and res["stopped_confirmed"], res
     assert dev.stopped  # a failed start is stopped too
     rows = [json.loads(x) for x in out.read_text().splitlines()]
-    assert [r["error"] for r in rows if r["t"] == "imu_error"] == ["motion module busy"]
+    assert [(r["stage"], r["error"]) for r in rows if r["t"] == "imu_error"] == [
+        ("start", "RuntimeError: motion module busy")]
 
 
 def test_an_imu_that_sends_nothing_is_no_observed_source(model, tmp_path, monkeypatch, capsys):
     code, _ = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(silent=True))
     res = json.loads(capsys.readouterr().out)
     assert code == 1 and res["result"] == "no_imu", res
+
+
+# --- Codex 7b round 1 ------------------------------------------------------------------------------------------------
+def test_a_profile_read_failing_after_the_start_is_recorded_and_stopped(model, tmp_path, monkeypatch, capsys):
+    dev = FakeImuDevice(fail_profile=True)
+    code, out = _imu_cli(model, tmp_path, monkeypatch, dev)
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_profile_failed" and res["stopped_confirmed"], res
+    assert dev.stopped
+
+
+def test_the_profile_row_says_whether_the_opened_rate_fits_the_watch(model, tmp_path, monkeypatch, capsys):
+    """40 Hz opened: 25 ms period + 30 ms bound > the watch's 50 ms gap limit."""
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(accel_hz=40))
+    assert code == 0, capsys.readouterr().out
+    prof = [json.loads(x) for x in out.read_text().splitlines() if '"imu_profile"' in x][0]
+    assert prof["fits_watch"] == {"gap_max_s": 0.05, "accel_hz": 40, "interval_bound_s": 0.03, "ok": False}
+
+
+def test_every_sample_handed_over_while_stopping_is_recorded(model, tmp_path, monkeypatch, capsys):
+    """P2: 150 samples during stop (more than one 64-sample read) all reach the record before its end row."""
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(burst_on_stop=150))
+    assert code == 0, capsys.readouterr().out
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    end = rows[-1]
+    counts = end["imu"]["counts"]
+    assert end["t"] == "end"
+    assert counts["accepted"] == sum(1 for r in rows if r["t"] == "imu" and r["verdict"] == "ok")
+    dropped = sum(counts[k] for k in ("missing_dev", "dup", "late", "not_newer", "bound_broken"))
+    assert sum(1 for r in rows if r["t"] == "imu") == counts["accepted"] + dropped
+
+
+def test_a_failed_imu_stop_leaves_the_record_incomplete(model, tmp_path, monkeypatch, capsys):
+    """P2: callbacks may still run after a failed stop -- the record is not complete and gets no .ok."""
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(fail_stop=True))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_stop_failed" and res["complete"] is False, res
+    assert not Path(str(out) + ".ok").exists() and not ro.record_complete(out)
+
+
+def _st(t, seq):
+    from forklift_core.mcu_link.messages import FaultFlag, McuState, RejectReason, StateFlag
+
+    return McuState(mcu_time_us=t, boot_id=3, arm_gen=0, last_rx_seq=seq, mode=Mode.DISARMED,
+                    reject_reason=RejectReason.NONE, fault_flags=FaultFlag(0), wheel_count_left=0,
+                    wheel_count_right=0, wheel_rate_left_rad_s=0.0, wheel_rate_right_rad_s=0.0, steering_rad=0.0,
+                    lift_m=0.0, current_ma=(0, 0, 0, 0), duty_e4=(0, 0, 0, 0), driver_status=(0, 0, 0, 0),
+                    rx_errors=0, cycle_overruns=0, flags=StateFlag(0))
+
+
+class _ScriptedLink:
+    """Writes every queued DISARM at once (recorded as written, last byte done) and delivers STATEs from a script:
+    ``script(calls, last_written_seq) -> [seq, ...]`` named by the STATEs of this service call."""
+
+    ever_connected = True
+
+    def __init__(self, script):
+        self.link, self.script, self.calls, self.obs, self.t = object(), script, 0, None, 0
+        self.written = []
+
+    def service(self, host, now_ns):
+        self.calls += 1
+        for o in list(host._outbox):  # noqa: SLF001
+            if o.kind == "DISARM":
+                host._outbox.remove(o)  # noqa: SLF001
+                seq = int(o.seq) & 0xFFFF
+                self.written.append(seq)
+                self.obs._log("written", now_ns, b"", {"kind": "DISARM", "seq": seq})  # noqa: SLF001
+                self.obs._done(seq, now_ns)  # noqa: SLF001
+        for seq in self.script(self.calls, self.written[-1] if self.written else None):
+            self.t += 1
+            st = _st(self.t, seq)
+            host._state = st  # noqa: SLF001
+            self.obs._on_state(st, now_ns + self.t)  # noqa: SLF001
+        return []
+
+
+def _finishing(script):
+    link = _ScriptedLink(script)
+    openings = ro.Openings()
+    openings.count = 1
+    obs = ro.Observer(link, ro.Record(io.StringIO()), openings=openings, lidar=lidar_cfg.load_lidar_config())
+    link.obs = obs
+    return obs, link
+
+
+def test_the_end_disarm_goes_out_at_once_and_two_late_states_confirm_it():
+    """P1-4: the first two STATEs of the connection arrive together late in the confirm window -- the earlier seq,
+    then the end DISARM's: confirmed, with one DISARM written."""
+    obs, link = _finishing(lambda k, w: [(w - 1) & 0xFFFF, w] if k == 60 else [])
+    assert obs.finish() and len(link.written) == 1
+
+
+def test_a_first_state_already_naming_the_end_disarm_gets_one_more():
+    """P1-4: the connection's first STATE already names the end DISARM (no step can show it): asked once more with
+    a new seq, whose step confirms it."""
+    obs, link = _finishing(lambda k, w: [w] if k >= 3 else [])
+    assert obs.finish() and len(link.written) == 2 and link.written[0] != link.written[1]

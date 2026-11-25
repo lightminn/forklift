@@ -517,6 +517,10 @@ class _ImuGuard:
         if callable(getattr(src, "generation", None)):
             self.generation = self._generation
 
+    @property
+    def last_read_capped(self) -> bool:
+        return getattr(self._src, "last_read_capped", False) is True
+
     def _generation(self):
         try:
             return self._src.generation()

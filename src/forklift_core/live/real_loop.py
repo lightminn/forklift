@@ -275,6 +275,7 @@ class RealLoop:
         self.watch = safety  # the real safety watch (currents and wheels, design 3)
         self.imu_watch, self.imu_source, self.imu_policy = imu_watch, imu_source, imu_policy
         self.imu_backlog = False  # the last IMU read reached its per-call cap (6a-2b design 10.7)
+        self.imu_gen_unknown = False  # the last read could not ask the source's generation (PR 7 design 5)
         self._imu_wait_until: dict = {}  # mission id -> the baseline's wait deadline (host ns), set once
         self._watch_rx: int | None = None
         # the host monotonic clock the tick's own elapsed time is read on before the first write (design 3); the
@@ -1452,15 +1453,21 @@ class RealLoop:
         A sample is ``(stamp, accel)`` (a point, no generation: the 5b contract) or ``(gen, lo, hi, accel)`` (PR 7
         design 5: an acquisition interval and its producer generation). A source with ``generation()`` is asked for
         its current generation after a read that did not stop at its cap, so a restart reaches the watch with no new
-        sample (design 5, Codex round 5 P2); after a capped read the older samples still waiting come first."""
+        sample (design 5, Codex round 5 P2); after a capped read the older samples still waiting come first. The
+        generation is asked even when the samples could not be read; when it cannot be asked, ``imu_gen_unknown``
+        holds the ARM and every moving DRIVE until a read can (Codex 7b round 1 P1-1). A source that stops a read at
+        its own cost cap (``last_read_capped``, raw items counted) is a capped read too (round 1 P2)."""
         upto = int(self.clock()) if upto_ns is None else int(upto_ns)
         self.imu_backlog = False
+        self.imu_gen_unknown = False
         try:
             batch = list(self.imu_source.samples(upto, self.IMU_BATCH))[: self.IMU_BATCH]
         except Exception:  # noqa: BLE001
-            return upto
-        # 6a-2b (design 10.7-10.8): a read that reached the per-call cap may have left samples up to ``upto`` behind
-        self.imu_backlog = len(batch) >= self.IMU_BATCH
+            batch = []  # no samples this time (the watch's stale and gap judgements take it)
+        else:
+            # 6a-2b (design 10.7-10.8): a read that reached the per-call cap may have left samples up to ``upto``
+            self.imu_backlog = (len(batch) >= self.IMU_BATCH
+                                or getattr(self.imu_source, "last_read_capped", False) is True)
         good = []
         for item in batch:
             gen, lo, hi, accel = _imu_item(item)
@@ -1475,18 +1482,24 @@ class RealLoop:
         current = getattr(self.imu_source, "generation", None)
         if current is not None and not self.imu_backlog:
             try:
-                self.imu_watch.note_generation(current())
-            except Exception:  # noqa: BLE001 -- unknown generation: the samples' own generations still count
-                pass
+                gen = current()
+            except Exception:  # noqa: BLE001 -- a SourceFatal was marked by the guard
+                self.imu_gen_unknown = True
+            else:
+                self.imu_watch.note_generation(gen)
         return upto
 
     def _imu_arm_gate(self, now_ns: int, mission_id, *, not_still: bool = False):
         """Before the ARM (design 4), after the existing refusals: ("ok", baseline), ("wait", reason) within the
         mission's one deadline for the stand and the baseline to gather, or ("refuse", reason)."""
-        base, why = (None, "not_still") if not_still else self.imu_watch.baseline(self.still_since_ns)
+        if self.imu_backlog or self.imu_gen_unknown:
+            # samples still waiting or a generation not known: no baseline is frozen on them (Codex 7b round 1 P2)
+            base, why = None, "imu_backlog" if self.imu_backlog else "imu_generation"
+        else:
+            base, why = (None, "not_still") if not_still else self.imu_watch.baseline(self.still_since_ns)
         if why is None:
             return "ok", base
-        if why in ("not_still", "imu_no_baseline", "imu_not_still"):
+        if why in ("not_still", "imu_no_baseline", "imu_not_still", "imu_backlog", "imu_generation"):
             until = self._imu_wait_until.setdefault(
                 mission_id, int(now_ns) + int(self.imu_watch.cfg.baseline_wait_s * 1e9))
             if int(now_ns) < until:
@@ -2318,10 +2331,12 @@ class RealLoop:
                 return "evidence_slow", "alarm"
             if imu_trip is not None:
                 return f"send:watch:{imu_trip}", "alarm"
-            if self.imu_backlog and self.imu_watch is not None and not self._bypassed("imu") and why is None:
+            if (self.imu_backlog or self.imu_gen_unknown) and self.imu_watch is not None \
+                    and not self._bypassed("imu") and why is None:
                 # 6a-2b (design 10.8): only after SourceFatal, the watch's trips and every alarm before it -- the read
-                # stopped at its cap, so the newest samples were not judged: this frame waits
-                why = "wait:imu_backlog"
+                # stopped at its cap, so the newest samples were not judged, or the source's generation could not be
+                # asked (PR 7 design 5): this frame waits
+                why = "wait:imu_backlog" if self.imu_backlog else "wait:imu_generation"
             if (ns - now_ns) / 1e9 > LATE_TICK_S:
                 return "tick_late", "alarm"  # a late tick is ① whatever its frame (design 3)
             if not self.host.health(ns).fresh:

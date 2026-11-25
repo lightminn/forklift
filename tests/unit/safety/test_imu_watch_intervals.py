@@ -4,10 +4,11 @@ the next ``hi`` minus the previous ``lo``, the ARMING rule for any sample that m
 longest possible length); a new generation is never joined to the old one."""
 
 import math
+from dataclasses import replace
+
+from test_imu_watch import CFG, MS, G, armed, fed, tilted
 
 from forklift_core.safety.real_watch import ImuWatch
-
-from test_imu_watch import CFG, G, MS, armed, fed, tilted
 
 
 def fed_iv(watch, start_ms, n, *, width_ms=0, accel=G, step_ms=5, gen=None):
@@ -215,3 +216,54 @@ def test_the_arm_after_a_pruned_baseline_sample_measures_from_its_end():
     w.arm(((0.0, 0.0, 1.0), 1097 * MS))  # no kept sample ends there
     assert w.add((1097 + 49) * MS, G, (1097 + 49) * MS) is None
     assert w.judge((1097 + 49) * MS) is None
+
+
+# --- Codex 7b round 1 ------------------------------------------------------------------------------------------------
+def test_a_sample_that_may_predate_the_stand_in_the_middle_ends_the_run():
+    """P1-5: 11 samples from the stand's start, the middle one 6 deg and wide enough to start before it -- the runs
+    on either side are not joined around it (as points it is imu_baseline_unsteady)."""
+    w = ImuWatch(CFG)
+    for k in range(11):
+        t = 1000 + 5 * k
+        if t == 1025:
+            assert w.add_interval(None, 999 * MS, t * MS, tilted(6), t * MS) is None
+        else:
+            assert w.add_interval(None, t * MS, t * MS, G, t * MS) is None
+    assert w.baseline(1000 * MS) == (None, "imu_no_baseline")  # only the five after it
+
+
+def test_arming_on_a_baseline_from_an_older_generation_is_a_lost_watch():
+    """P1-6: a baseline kept across a generation change cannot be armed on."""
+    w = ImuWatch(CFG)
+    end = fed_iv(w, 1000, 20, gen=1)
+    b, _ = w.baseline(1000 * MS)
+    w.note_generation(2)
+    w.arm(b)
+    assert w.judge(end * MS) == "watch_imu_gap"
+
+
+def test_arming_resumes_from_the_baseline_sample_even_once_the_window_dropped_it():
+    """P1-6: the baseline's last sample [956, 1000] no longer kept: the next sample at 1007 is 51 ms from its start
+    (as a point at 1000 it would be 7 ms)."""
+    w = ImuWatch(CFG)
+    fed_iv(w, 820, 37, width_ms=44)  # 820 ... 1000, each 44 ms wide
+    b, why = w.baseline(700 * MS)
+    assert why is None and b[1] == 1000 * MS and b.lo == 956 * MS
+    w.samples.clear()  # as if the window had dropped them
+    w.arm(b)
+    w.settled(1000 * MS)
+    assert w.add_interval(None, 1007 * MS, 1007 * MS, G, 1007 * MS) is None
+    assert w.judge(1007 * MS) == "watch_imu_gap"
+
+
+def test_one_wide_tilted_sample_alone_is_no_hold():
+    """P2: READY at 1000 ms, level until 1310, then one tilted sample [1001, 1311] -- not a hold of two samples
+    (the age limit widened so only the hold is judged)."""
+    w = ImuWatch(replace(CFG, max_age_s=0.5))
+    fed_iv(w, 900, 21)  # 900 ... 1000
+    b, _ = w.baseline(900 * MS)
+    w.arm(b)
+    w.settled(1000 * MS)
+    t = fed_iv(w, 1005, 62)  # level, 1005 ... 1310
+    assert w.add_interval(None, 1001 * MS, 1311 * MS, tilted(12), 1311 * MS) is None
+    assert t == 1315 and w.judge(1311 * MS) is None  # the gap rule takes whatever follows it (its start is old)

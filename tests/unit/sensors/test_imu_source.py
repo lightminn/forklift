@@ -124,13 +124,25 @@ def test_a_device_restart_opens_a_generation():
     assert [g for g, *_ in out] == [1, 1, 1, 2, 2] and s.generation_why == "device_restart"
 
 
-def test_device_and_host_steps_apart_by_more_than_the_bound_open_a_generation():
+def test_a_delay_over_the_bound_opens_a_generation_and_gives_nothing_more():
+    """Codex 7b round 1 P1-3: device 5 ms on, host 27 ms -- 22 ms over 20 + 1. The interval [receipt - bound,
+    receipt] no longer holds: nothing from here on, the rest recorded as bound_broken."""
     s, _ = src()
     feed(s, 100, 0, 2)
-    s.push((105 + 5 + 22) * MS, "a", 10_000, "hardware_clock", G)  # device 5 ms on, host 27 ms: 22 > 20 + 1
-    s.push((105 + 5 + 22 + 5) * MS, "a", 15_000, "hardware_clock", G)
+    s.push((105 + 5 + 22) * MS, "a", 10_000, "hardware_clock", G)
+    feed(s, 137, 15_000, 5)
     out = s.samples(500 * MS, 64)
-    assert [g for g, *_ in out] == [1, 1, 2, 2] and s.generation_why == "clock_mismatch"
+    assert [g for g, *_ in out] == [1, 1] and s.generation_why == "clock_mismatch" and s.generation() == 2
+    assert s.bound_broken and s.counts["bound_broken"] == 6
+
+
+def test_the_mismatch_threshold_is_the_bound_plus_1_ms():
+    for extra_ns, broken in ((0, False), (1, True)):
+        s, _ = src()
+        s.push(100 * MS, "a", 0, "hardware_clock", G)
+        s.push(105 * MS + 21 * MS + extra_ns, "a", 5_000, "hardware_clock", G)
+        s.samples(500 * MS, 64)
+        assert s.bound_broken is broken, extra_ns
 
 
 def test_jitter_within_the_bound_is_no_generation():
@@ -219,8 +231,8 @@ def _stream():
     s.push(121 * MS, "a", 5_000, "hardware_clock", G)  # dup of the last
     s.push(122 * MS, "a", 1_000, "hardware_clock", G)  # 4 ms back: late
     s.push(123 * MS, "a", None, "hardware_clock", G)
-    feed(s, 125, 900_000, 3)  # 895 ms forward on the device, 10 ms on the host: clock mismatch
-    feed(s, 140, 0, 3)  # back 900 ms: a restart
+    feed(s, 125, WRAP_US - 100_000, 3)  # 105 ms back: a restart
+    feed(s, 162, WRAP_US - 85_000, 2)  # device 5 ms on, host 27 ms: the bound broken
     s.samples(1_000 * MS, 64)
     return s.drain_rows()
 
@@ -228,8 +240,9 @@ def _stream():
 def test_every_accel_sample_is_a_row_with_its_verdict_and_interval():
     rows = _stream()
     imu = [r for r in rows if r["t"] == "imu"]
-    assert [r["verdict"] for r in imu] == ["ok"] * 4 + ["dup", "late", "missing_dev"] + ["ok"] * 6
-    assert [r["why"] for r in rows if r["t"] == "imu_gen"] == ["clock_mismatch", "device_restart"]
+    assert [r["verdict"] for r in imu] == ["ok"] * 4 + ["dup", "late", "missing_dev"] + ["ok"] * 3 \
+        + ["bound_broken"] * 2
+    assert [r["why"] for r in rows if r["t"] == "imu_gen"] == ["device_restart", "clock_mismatch"]
     assert all((r["lo"], r["hi"]) == (r["host_ns"] - 20 * MS, r["host_ns"]) for r in imu if r["verdict"] == "ok")
 
 
@@ -240,7 +253,7 @@ def test_a_records_raw_fields_replay_to_the_same_rows(tmp_path):
     back = [json.loads(line) for line in path.read_text().splitlines()]
     again = replay(MEASURED, back).drain_rows()
     assert [r for r in again if r["t"] == "imu"] == [r for r in rows if r["t"] == "imu"]
-    assert [r["why"] for r in again if r["t"] == "imu_gen"] == ["clock_mismatch", "device_restart"]
+    assert [r["why"] for r in again if r["t"] == "imu_gen"] == ["device_restart", "clock_mismatch"]
 
 
 def test_an_imu_record_file_replays_its_accel_rows():
@@ -255,3 +268,93 @@ def test_an_imu_record_file_replays_its_accel_rows():
     s = replay(MEASURED, rows)
     out = [r for r in s.drain_rows() if r["t"] == "imu"]
     assert len(out) == 3 and all(r["verdict"] == "ok" for r in out) and s.counts["gyro"] == 6
+
+
+# --- Codex 7b round 1 ------------------------------------------------------------------------------------------------
+def test_a_loss_is_a_boundary_after_the_samples_already_received():
+    """P1-2: ten samples queued, then the device lost: they keep generation 1; the loss opens 2 with its time."""
+    s, clock = src(record=True)
+    feed(s, 100, 0, 10)
+    clock.ns = 160 * MS
+    s.lost("unplug")
+    out = s.samples(200 * MS, 64)
+    assert [g for g, *_ in out] == [1] * 10 and s.generation() == 2
+    gens = [r for r in s.drain_rows() if r["t"] == "imu_gen"]
+    assert [(r["why"], r["host_ns"]) for r in gens] == [("unplug", 160 * MS)]
+
+
+def test_a_loss_with_no_sample_waiting_reaches_generation_at_once():
+    s, clock = src()
+    feed(s, 100, 0, 2)
+    s.samples(200 * MS, 64)
+    clock.ns = 110 * MS
+    s.lost("unplug")
+    assert s.generation() == 2
+
+
+def test_an_overflow_hole_is_seen_even_when_no_sample_after_it_is_due_yet():
+    """P1-2: queue_max 1 -- the 104 ms sample pushed out by the 106 ms one; a read up to 105 ms sees the hole."""
+    s, clock = src(replace(MEASURED, queue_max=1))
+    s.push(104 * MS, "a", 0, "hardware_clock", G)
+    s.push(106 * MS, "a", 2_000, "hardware_clock", G)
+    assert s.samples(105 * MS, 64) == [] and s.generation_why == "overflow"
+    clock.ns = 105 * MS
+    assert s.generation() == 2
+
+
+def test_a_quiet_tick_with_old_samples_waiting_opens_no_receive_gap_twice():
+    s, clock = src()
+    feed(s, 100, 0, 1)
+    s.samples(100 * MS, 64)
+    s.push(300 * MS, "a", 200_000, "hardware_clock", G)
+    clock.ns = 250 * MS
+    assert s.generation() == 1  # a sample is waiting: its read decides
+    assert [g for g, *_ in s.samples(400 * MS, 64)] == [2]
+    clock.ns = 320 * MS
+    assert s.generation() == 2 and s.counts["generations"] == 1
+
+
+def test_a_read_takes_at_most_limit_raw_samples_whatever_their_verdict():
+    """P2: 400 samples without a device time ahead of a good one: each read takes `limit` and says it was capped."""
+    s, _ = src()
+    for k in range(400):
+        s.push((100 + k) * MS // 10, "a", None, "hardware_clock", G)
+    s.push(200 * MS, "a", 5_000, "hardware_clock", G)
+    assert s.samples(300 * MS, 1) == [] and s.last_read_capped
+    assert s.counts["missing_dev"] == 1
+    assert len(s.samples(300 * MS, 1000)) == 1 and not s.last_read_capped
+
+
+def test_a_receipt_going_back_is_never_given():
+    """P2: (100 ms, dev 0) then (99 ms, dev 30 ms) -- the second is not newer, whatever the device time."""
+    s, _ = src()
+    s.push(100 * MS, "a", 0, "hardware_clock", G)
+    s.push(99 * MS, "a", 30_000, "hardware_clock", G)
+    assert [hi for _, _, hi, _ in s.samples(200 * MS, 64)] == [100 * MS] and s.counts["not_newer"] == 1
+
+
+def test_without_metadata_the_device_clock_timestamp_is_the_device_time():
+    """The Jetson's RSUSB build gave no frame metadata: get_timestamp() in the device clock domain stands in."""
+    s, _ = src()
+    for k in range(3):
+        s.push((100 + 5 * k) * MS, "a", None, "hardware_clock", G, ts_ms=401491.329 + 5 * k)
+    s.push(116 * MS, "a", None, "system_time", G, ts_ms=1.0)  # not the device clock: no device time
+    assert len(s.samples(200 * MS, 64)) == 3
+    assert s.counts["dev_from_ts"] == 3 and s.counts["missing_dev"] == 1
+
+
+JETSON = Path(__file__).resolve().parents[3] / "docs/validation/assets/hw-day-2026-11-17/jetson" \
+    / "imu_2026-11-17_jetson.jsonl.xz"
+
+
+def test_the_jetson_record_of_2026_11_17_replays():
+    """The real imu_record/1 file (120 s, every dev_us null): every accel sample is taken on its device-clock
+    timestamp under the provisional 30 ms bound, one generation; under 10 ms the bound breaks at once."""
+    import lzma
+
+    with lzma.open(JETSON, "rt") as f:
+        rows = [json.loads(line) for line in f]
+    s = replay(CFG, rows)
+    assert s.counts["accepted"] == s.counts["dev_from_ts"] == 24060 and s.gen == 1
+    assert s.counts["gyro"] == 48071
+    assert replay(replace(CFG, provisional_delay_bound_s=0.01), rows).bound_broken
