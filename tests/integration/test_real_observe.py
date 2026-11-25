@@ -614,3 +614,19 @@ def test_an_overflow_with_nothing_accepted_is_reported_as_the_overflow(model, tm
                          extra=("--imu-config", str(cfg)))
     res = json.loads(capsys.readouterr().out)
     assert code == 1 and res["result"] == "imu_overflow", res
+
+
+def test_an_imu_overflow_is_reported_before_a_quiet_scan_socket(model, tmp_path, monkeypatch, capsys):
+    """Codex 7b round 4 P2: with a scan socket nobody sends to, the IMU's lost samples still name the result."""
+    from forklift_core.sensors.scan_feed import bind_socket
+
+    cfg = tmp_path / "imu.yaml"
+    cfg.write_text((REPO / "config/real/imu.yaml").read_text().replace("queue_max: 400", "queue_max: 10"))
+    sock_path = tmp_path / "scan.sock"
+    sock = bind_socket(sock_path)
+    sock.close()
+    os.unlink(sock_path)
+    code, out = _imu_cli(model, tmp_path, monkeypatch, FakeImuDevice(burst_on_stop=50),
+                         extra=("--imu-config", str(cfg), "--scan-socket", str(sock_path)))
+    res = json.loads(capsys.readouterr().out)
+    assert code == 1 and res["result"] == "imu_overflow", res

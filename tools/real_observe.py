@@ -556,11 +556,12 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
             # record only with a matching .ok, so a file that claims more than was kept is never read as complete
             # (Codex 7a-1 P2-5, round 2 P2-5)
             synced = _sync(f)
-            if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
-                result = "no_scans"  # a scan socket nobody sent to is not an observed source
             imu_overflow = imu is not None and imu.counts["overflow"] > 0
             if imu_overflow and result == "ok":
-                result = "imu_overflow"  # raw samples lost before they were recorded (round 2 P2; before no_imu)
+                # raw samples lost before they were recorded (round 2 P2): before no_imu and no_scans (round 4 P2)
+                result = "imu_overflow"
+            if obs.feed is not None and obs.feed.accepted == 0 and result == "ok":
+                result = "no_scans"  # a scan socket nobody sent to is not an observed source
             if imu is not None and imu.counts["accepted"] == 0 and result == "ok":
                 result = "no_imu"
             errors_before = rec.errors
