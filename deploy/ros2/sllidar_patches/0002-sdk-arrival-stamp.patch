@@ -2,35 +2,38 @@ forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 2): th
 thread's byte arrival. Applied after 0001 (deploy/ros2/Dockerfile.scan), against Slamtec/sllidar_ros2 34300099.
 
 - The receive thread stamps each read as read() returns (getus, CLOCK_MONOTONIC) and numbers it; the decoder hands
-  the codec the bytes with that arrival (IAsyncProtocolCodec::onDecodeDataAt), the codec holds it while it decodes
-  them, and the driver gives the unpacker the arrival of the read that completed each sample message
-  (forklift::deliverDecoded). The unpacker's clock read returns it -- not the decode time, which waited in the
-  receive queue.
-- A sample's time is exact only when its unit (capsule, node) ended at the last byte of the codec's block -- the
-  unpacker gives a block's last byte to the handler apart; a unit ending inside a block (a resync after a lost byte)
-  ended in an earlier read. Capsule handlers keep the exactness with the capsule they cache; the scan holder marks a
-  buffer holding any sample that is not exact (or has no arrival at all), and grabScanDataHqWithArrival reports it.
+  the codec the bytes with that arrival (IAsyncProtocolCodec::onDecodeDataAt). The codec records, for each message's
+  payload, which read each run of bytes came in (forklift::ArrivalSegment) and hands the listener its own copy of the
+  message with those segments (a reset on another thread never frees what the listener reads). The driver gives the
+  unpacker the message read by read (forklift::deliverDecoded); a handler's clock read returns the arrival of the read
+  its unit's (capsule's, node's) last byte came in -- wherever that unit ends in the codec's fixed-length block, so a
+  resync after a lost byte keeps exact times. Not the decode time, which waited in the receive queue.
+- A sample with no arrival (some byte of its message came without one) is not exact; capsule handlers keep the
+  exactness with the capsule they cache; the scan holder marks a buffer holding any sample that is not exact, and
+  grabScanDataHqWithArrival reports it per scan.
 - Every mode stamps a capsule's samples with its own capsule's arrival: Dense and UltraDense took the next capsule's
   time; their capsule, time and exactness now change together (the angle-jump discard included), a reset drops them,
   and enable() resets every handler.
 - The unpacker's decode and enable / disable / reset take one lock: a scan restart on the control thread waits for a
   decode in progress, so no capsule cached before it is published after it.
-- UltraDense's sample delay used (31 - sampleIdx) for 64 samples a capsule and wrapped to ~2^32 us for the second
-  half (an upstream bug); it is (63 - sampleIdx), as UltraBoost's formula is written. The other delays are unchanged.
+- Upstream bugs fixed on the way: UltraDense's sample delay used (31 - sampleIdx) for 64 samples a capsule and
+  wrapped to ~2^32 us for the second half -- it is (63 - sampleIdx), as UltraBoost's formula is written (the other
+  delays are unchanged); the transceiver freed queued reads (new Buffer) with delete[] at close.
 - The node publishes scan_sdk only in the v2 format: frame_id '<frame>@sdk_mono_v2#<run>.<start>' (run: the
   launcher's forklift_run_id, 8-32 lowercase hex; start: a new random id at every scan start), only for a scan whose
   sample times are all exact arrivals and whose first sample is at least 150 ms after its start (the SDK may hold the
   previous start's samples); each start's mode goes on 'scan_sdk_info' (std_msgs/String JSON: format, run, start,
-  ans_type, sample_period_us, baudrate; reliable, transient_local). No run id, no scan_sdk. Scans kept off for an
-  inexact time are counted and warned (throttled). The driver is deleted with the node: its threads end before exit.
+  ans_type, sample_period_us, baudrate; reliable, transient_local). No run id, no scan_sdk. Scans kept off are counted
+  and warned (throttled). The driver is deleted with the node: its threads end before exit.
 - FORKLIFT_SDK_RX_LOG=<file> (bench only): each read (R rx_seq rx_us bytes decode_us), each unit that passed its
   checksum (C rx_seq unit_seq ans_type exact), queued and written by a thread of its own; lines that find the queue
   full are counted (D <n>), and 'E <n>' closes a complete record.
-- test/forklift_arrival_test.cpp (ctest, BUILD_TESTING): the real transceiver, codec, delivery and handlers on a
-  fake channel, reads 80 ms apart, the decoder held 500 ms; a lost byte, a restart during a held callback.
+- test/forklift_arrival_test.cpp (ctest, BUILD_TESTING; AddressSanitizer on x86_64): the real transceiver, codec,
+  delivery and handlers on a fake channel, reads 80 ms apart, the decoder held 500 ms; a lost byte, a restart during a
+  held callback, a reset while the listener holds its message, reads still queued at close.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index aa094b1..788c019 100644
+index aa094b1..23b53a8 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -35,6 +35,7 @@ find_package(ament_cmake REQUIRED)
@@ -41,7 +44,7 @@ index aa094b1..788c019 100644
  
  ################################################################################
  # Build
-@@ -51,8 +52,18 @@ ament_target_dependencies(sllidar_node
+@@ -51,8 +52,24 @@ ament_target_dependencies(sllidar_node
    rclcpp
    std_srvs
    sensor_msgs
@@ -54,6 +57,12 @@ index aa094b1..788c019 100644
 +  enable_testing()
 +  add_executable(forklift_arrival_test test/forklift_arrival_test.cpp ${SLLIDAR_SDK_SRC})
 +  target_link_libraries(forklift_arrival_test pthread)
++  # AddressSanitizer on x86_64 (qemu's arm64 emulation does not run it): a use after free or a new / delete[]
++  # mismatch fails the test, not only a wrong time
++  if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
++    target_compile_options(forklift_arrival_test PRIVATE -fsanitize=address -fno-omit-frame-pointer)
++    target_link_options(forklift_arrival_test PRIVATE -fsanitize=address)
++  endif()
 +  add_test(NAME forklift_arrival_test COMMAND forklift_arrival_test)
 +endif()
 +
@@ -108,7 +117,7 @@ index 6b1b6dd..9dcb0cc 100644
  };
  
 diff --git a/sdk/src/dataunpacker/dataunpacker.cpp b/sdk/src/dataunpacker/dataunpacker.cpp
-index 74680c0..e6f2ef3 100644
+index 74680c0..754dae0 100644
 --- a/sdk/src/dataunpacker/dataunpacker.cpp
 +++ b/sdk/src/dataunpacker/dataunpacker.cpp
 @@ -42,6 +42,8 @@
@@ -138,28 +147,38 @@ index 74680c0..e6f2ef3 100644
  		if (!_enabled) return false;
  
  
-@@ -138,7 +144,19 @@ public:
+@@ -138,7 +144,29 @@ public:
  		}
  
  		if (_lastActiveHandler) {
 -			_lastActiveHandler->onData(this, reinterpret_cast<const _u8 *>(buffer), size);
-+			// forklift patch 0002: the block's last byte given apart -- only a unit completed by it was completed by
-+			// the read whose arrival is held (a unit ending inside the block, after a resync, is not: round 1 P2-1)
++			// forklift patch 0002: the bytes read by read, each share with its own read's arrival -- a unit (capsule,
++			// node) takes the arrival of the read its last byte came in, wherever it ends in the codec's block (a
++			// resync after a lost byte included: Codex 7a-3b rounds 1-2)
 +			const _u8* bytes = reinterpret_cast<const _u8 *>(buffer);
 +			_block_seq++;
-+			if (size > 1) {
-+				_at_block_end = false;
-+				_lastActiveHandler->onData(this, bytes, size - 1);
++			if (_segments == nullptr) {
++				_arrival_valid = false;
++				_segment_index = 0;
++				_lastActiveHandler->onData(this, bytes, size);
++			} else {
++				const auto& segs = *_segments;
++				for (size_t i = 0; i < segs.size(); ++i) {
++					const size_t a = segs[i].pos;
++					const size_t b = i + 1 < segs.size() ? segs[i + 1].pos : size;
++					if (a >= b || b > size) continue;
++					_arrival_valid = true;
++					_arrival_us = segs[i].rx_us;
++					_arrival_seq = segs[i].rx_seq;
++					_segment_index = i;
++					_lastActiveHandler->onData(this, bytes + a, b - a);
++				}
 +			}
-+			if (size > 0) {
-+				_at_block_end = true;
-+				_lastActiveHandler->onData(this, bytes + size - 1, 1);
-+			}
-+			_at_block_end = false;
++			_arrival_valid = false;
  			return true;
  		}
  		else {
-@@ -148,6 +166,7 @@ public:
+@@ -148,6 +176,7 @@ public:
  
  	virtual void reset()
  	{
@@ -167,7 +186,7 @@ index 74680c0..e6f2ef3 100644
  		clearCache();
  		_lastActiveHandler = nullptr;
  		_lastActiveAnsType = 0;
-@@ -156,12 +175,39 @@ public:
+@@ -156,12 +185,37 @@ public:
  
  	virtual void enable()
  	{
@@ -179,11 +198,9 @@ index 74680c0..e6f2ef3 100644
 +	}
 +
 +	// forklift patch 0002
-+	virtual void setArrival(bool valid, _u64 rx_us, _u64 rx_seq)
++	virtual void setArrivalSegments(const std::vector<forklift::ArrivalSegment>* segments)
 +	{
-+		_arrival_valid = valid;
-+		_arrival_us = rx_us;
-+		_arrival_seq = rx_seq;
++		_segments = segments;
 +	}
 +
 +	virtual bool publishingExact() const
@@ -207,7 +224,7 @@ index 74680c0..e6f2ef3 100644
  		_enabled = false;
  		reset();
  
-@@ -169,17 +215,32 @@ public:
+@@ -169,17 +223,32 @@ public:
  
  	virtual void clearCache()
  	{
@@ -218,10 +235,10 @@ index 74680c0..e6f2ef3 100644
  	}
  
  	virtual _u64 getCurrentTimestamp_uS() {
-+		// forklift patch 0002: the arrival of the read that completed this data, exact only when the unit ended at
-+		// the block's last byte; the clock only when no arrival was given (never exact)
-+		_last_exact = _arrival_valid && _at_block_end;
-+		const _u64 key = _block_seq * 2 + (_at_block_end ? 1 : 0);
++		// forklift patch 0002: the arrival of the read the unit's last byte came in (exact); the clock only when no
++		// arrival was given (never exact)
++		_last_exact = _arrival_valid;
++		const _u64 key = (_block_seq << 16) + _segment_index;
 +		if (key != _logged_key) {  // the receive record: one line per unit completed (not per sample of it)
 +			_logged_key = key;
 +			_unit_seq++;
@@ -240,7 +257,7 @@ index 74680c0..e6f2ef3 100644
  		_listener.onHQNodeDecoded(timestamp_uS, node);
  	}
  
-@@ -216,6 +277,19 @@ protected:
+@@ -216,6 +285,20 @@ protected:
  
  protected:
  	bool _enabled;
@@ -249,7 +266,8 @@ index 74680c0..e6f2ef3 100644
 +	bool _arrival_valid = false;
 +	_u64 _arrival_us = 0;
 +	_u64 _arrival_seq = 0;
-+	bool _at_block_end = false;
++	const std::vector<forklift::ArrivalSegment>* _segments = nullptr;  // the message being unpacked (decoder thread)
++	size_t _segment_index = 0;
 +	bool _last_exact = false;
 +	int _publish_exact = -1;  // -1: the last clock read decides
 +	bool _publishing_exact = false;
@@ -261,18 +279,26 @@ index 74680c0..e6f2ef3 100644
  
  	_u8 _lastActiveAnsType;
 diff --git a/sdk/src/dataunpacker/dataunpacker.h b/sdk/src/dataunpacker/dataunpacker.h
-index 2cdf6ca..fa4348b 100644
+index 2cdf6ca..5ccf77e 100644
 --- a/sdk/src/dataunpacker/dataunpacker.h
 +++ b/sdk/src/dataunpacker/dataunpacker.h
-@@ -82,6 +82,12 @@ public:
+@@ -38,6 +38,8 @@
+ 
+ 
+ #pragma once
++#include <vector>
++#include "../forklift_arrival.h"  // forklift patch 0002
+ 
+ #include "dataupacker_namespace.h"
+ 
+@@ -82,6 +84,11 @@ public:
  
  	virtual bool onSampleData(_u8 ansType, const void* buffer, size_t size) = 0;
  	virtual void reset() = 0;
-+	// forklift patch 0002: the arrival (getus) and number of the read that completed the data now given to
-+	// onSampleData; the handlers' clock reads return it. publishingExact: whether the sample being published (asked
-+	// from the listener's onHQNodeDecoded) has an exact arrival time -- its unit ended at the last byte of a block,
-+	// with an arrival given
-+	virtual void setArrival(bool valid, _u64 rx_us, _u64 rx_seq) = 0;
++	// forklift patch 0002: the reads the data now given to onSampleData came in (nullptr: no arrival); a handler's
++	// clock read returns the arrival of the read the unit's last byte came in. publishingExact: whether the sample
++	// being published (asked from the listener's onHQNodeDecoded) has such an arrival time
++	virtual void setArrivalSegments(const std::vector<forklift::ArrivalSegment>* segments) = 0;
 +	virtual bool publishingExact() const = 0;
  	virtual void clearCache() = 0;
  
@@ -485,10 +511,10 @@ index 008f544..5546d3d 100644
  
 diff --git a/sdk/src/forklift_arrival.h b/sdk/src/forklift_arrival.h
 new file mode 100644
-index 0000000..a5bf24e
+index 0000000..012692b
 --- /dev/null
 +++ b/sdk/src/forklift_arrival.h
-@@ -0,0 +1,132 @@
+@@ -0,0 +1,138 @@
 +/*
 + * forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 2): sample times from the receive
 + * thread's byte arrival.
@@ -607,22 +633,28 @@ index 0000000..a5bf24e
 +    std::thread _writer;
 +};
 +
-+// A decoded message's bytes to the unpacker, with the arrival of the read that completed it (the codec holds it
-+// while it decodes that read). True when the unpacker took them as sample data.
++// One read's share of a decoded message: from payload byte `pos` on, the bytes came in the read numbered rx_seq that
++// arrived at rx_us (until the next segment). A message's segments cover it from byte 0.
++struct ArrivalSegment {
++    size_t pos;
++    unsigned long long rx_us;
++    unsigned long long rx_seq;
++};
++
++// A decoded message's bytes to the unpacker, with the reads they came in (the codec's segments for the message it is
++// delivering). True when the unpacker took them as sample data.
 +template <class Codec, class Unpacker>
 +bool deliverDecoded(Codec& codec, Unpacker& unpacker, unsigned char cmd, const void* data, size_t size)
 +{
-+    unsigned long long rx_us = 0, rx_seq = 0;
-+    const bool arrival = codec.currentArrival(rx_us, rx_seq);
-+    unpacker.setArrival(arrival, rx_us, rx_seq);
++    unpacker.setArrivalSegments(codec.deliveredSegments());
 +    const bool taken = unpacker.onSampleData(cmd, data, size);
-+    unpacker.setArrival(false, 0, 0);
++    unpacker.setArrivalSegments(nullptr);
 +    return taken;
 +}
 +
 +}}}  // namespace sl::internal::forklift
 diff --git a/sdk/src/sl_async_transceiver.cpp b/sdk/src/sl_async_transceiver.cpp
-index c8033a5..437796a 100644
+index c8033a5..3b4d4d0 100644
 --- a/sdk/src/sl_async_transceiver.cpp
 +++ b/sdk/src/sl_async_transceiver.cpp
 @@ -42,6 +42,7 @@
@@ -632,6 +664,15 @@ index c8033a5..437796a 100644
 +#include "forklift_arrival.h"  // forklift patch 0002
  
  
+ 
+@@ -252,7 +253,7 @@ void AsyncTransceiver::unbindAndClose()
+ 
+     for (std::list< Buffer* >::iterator itr = _rxQueue.begin(); itr != _rxQueue.end(); ++itr)
+     {
+-        delete [] *itr;
++        delete *itr;  // forklift patch 0002: Buffer objects (new Buffer()), not arrays -- an upstream mismatch
+     }
+     _rxQueue.clear();
  
 @@ -333,6 +334,9 @@ sl_result AsyncTransceiver::_proc_rxThread()
          decodeBuffer->data = new _u8[hintedSize];
@@ -837,10 +878,18 @@ index 8d1bf85..ff8c94f 100644
  
          MotorCtrlSupport          _isSupportingMotorCtrl;
 diff --git a/sdk/src/sl_lidarprotocol_codec.cpp b/sdk/src/sl_lidarprotocol_codec.cpp
-index a629000..4b40535 100644
+index a629000..e3bb2e0 100644
 --- a/sdk/src/sl_lidarprotocol_codec.cpp
 +++ b/sdk/src/sl_lidarprotocol_codec.cpp
-@@ -139,6 +139,24 @@ void   RPLidarProtocolCodec::onDecodeReset() {
+@@ -133,12 +133,29 @@ void   RPLidarProtocolCodec::onDecodeReset() {
+     rp::hal::AutoLocker autolock(_op_locker);
+     // flush the pending data
+     _decodingMessage.cleanData();
++    _segments.clear();  // forklift patch 0002
++    _segments_missing = false;
+     // reset to initial state
+     _rx_pos = 0;
+     _working_states = STATUS_WAIT_SYNC1;
  }
  
  
@@ -854,44 +903,95 @@ index a629000..4b40535 100644
 +    _arrival_valid = false;
 +}
 +
-+bool RPLidarProtocolCodec::currentArrival(unsigned long long& rx_us, unsigned long long& rx_seq) const
++const std::vector<forklift::ArrivalSegment>* RPLidarProtocolCodec::deliveredSegments() const
 +{
-+    if (!_arrival_valid) return false;
-+    rx_us = _arrival_us;
-+    rx_seq = _arrival_seq;
-+    return true;
++    return _delivered_ok ? &_delivered : nullptr;
 +}
 +
  void RPLidarProtocolCodec::onDecodeData(const void* buffer, size_t size)
  {
      rp::hal::AutoLocker autolock(_op_locker);
+@@ -203,6 +220,16 @@ void RPLidarProtocolCodec::onDecodeData(const void* buffer, size_t size)
+             }
+             break;
+         case STATUS_RECV_PAYLOAD:
++            // forklift patch 0002: which read each payload byte came in (a new segment where the read changes)
++            if (_rx_pos == 0) {
++                _segments.clear();
++                _segments_missing = false;
++            }
++            if (!_arrival_valid) {
++                _segments_missing = true;
++            } else if (_segments.empty() || _segments.back().rx_seq != _arrival_seq) {
++                _segments.push_back({(size_t)_rx_pos, _arrival_us, _arrival_seq});
++            }
+             _decodingMessage.getDataBuf()[_rx_pos++] = currentByte;
+ 
+             if ((size_t)_rx_pos == _decodingMessage.getPayloadSize()) {
+@@ -216,13 +243,20 @@ void RPLidarProtocolCodec::onDecodeData(const void* buffer, size_t size)
+                 }
+ 
+                 IProtocolMessageListener* cachedLister = _listener;
++                // forklift patch 0002: the message and its segments copied while the lock is held -- a reset on
++                // another thread (exitLoopMode) after the unlock never frees what the listener reads (Codex 7a-3b
++                // round 2 P2-2)
++                ProtocolMessage owned(_decodingMessage);
++                _delivered = _segments;
++                _delivered_ok = !_segments_missing && !_segments.empty() && _segments.front().pos == 0;
+ 
+                 autolock.forceUnlock(); //unlock the oplock to prevent deadlock
+ 
+ 
+                 if (cachedLister) {
+-                    cachedLister->onProtocolMessageDecoded(_decodingMessage);
++                    cachedLister->onProtocolMessageDecoded(owned);
+                 }
++                _delivered_ok = false;
+ 
+                 _op_locker.lock(); // relock it
+             }
 diff --git a/sdk/src/sl_lidarprotocol_codec.h b/sdk/src/sl_lidarprotocol_codec.h
-index 1cc62f7..95f2e9b 100644
+index 1cc62f7..6c26aa2 100644
 --- a/sdk/src/sl_lidarprotocol_codec.h
 +++ b/sdk/src/sl_lidarprotocol_codec.h
-@@ -69,12 +69,20 @@ public:
+@@ -32,6 +32,8 @@
+ 
+ 
+ #pragma once
++#include <vector>
++#include "forklift_arrival.h"  // forklift patch 0002
+ 
+ #include "sl_async_transceiver.h"
+ 
+@@ -69,12 +71,26 @@ public:
  
      virtual void   onDecodeReset();
      virtual void   onDecodeData(const void* buffer, size_t size);
-+    // forklift patch 0002: decode keeping the read's arrival, so a listener called from the decode learns the arrival
-+    // of the read that completed its message (currentArrival); outside such a decode there is none
++    // forklift patch 0002: decode keeping the read's arrival: each message's payload carries the reads its bytes came
++    // in (segments); a listener called from the decode reads the message's own (deliveredSegments, decoder thread)
++    // -- nullptr when some byte came without an arrival
 +    virtual void   onDecodeDataAt(const void* buffer, size_t size, _u64 rx_us, _u64 rx_seq);
-+    bool currentArrival(unsigned long long& rx_us, unsigned long long& rx_seq) const;
++    const std::vector<forklift::ArrivalSegment>* deliveredSegments() const;
      
      void setMessageListener(IProtocolMessageListener* l);
  
  protected:
  
      IProtocolMessageListener* _listener;
-+    // forklift patch 0002: the read being decoded (the decoder thread's only: set, read and cleared on it)
++    // forklift patch 0002: the read being decoded, the message's segments so far (under _op_locker), and the segments
++    // of the message being delivered (the decoder thread's only)
 +    bool _arrival_valid = false;
 +    _u64 _arrival_us = 0;
 +    _u64 _arrival_seq = 0;
++    std::vector<forklift::ArrivalSegment> _segments;
++    bool _segments_missing = false;
++    std::vector<forklift::ArrivalSegment> _delivered;
++    bool _delivered_ok = false;
      ProtocolMessage          _decodingMessage;
      rp::hal::Locker          _op_locker;
                              
 diff --git a/src/sllidar_node.cpp b/src/sllidar_node.cpp
-index c5def68..6394d45 100644
+index c5def68..d416191 100644
 --- a/src/sllidar_node.cpp
 +++ b/src/sllidar_node.cpp
 @@ -35,6 +35,11 @@
@@ -1043,9 +1143,9 @@ index c5def68..6394d45 100644
 +                sdk_ok = false;
 +                if (!arrival_ok) ++sdk_not_arrival;
 +                else if (!start_id.empty()) ++sdk_before_start;
-+                if (!arrival_ok) {
++                if (!arrival_ok || !start_id.empty()) {
 +                    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-+                                         "forklift: %llu scans kept off scan_sdk (a sample time not exactly an arrival), "
++                                         "forklift: scans kept off scan_sdk: %llu with a sample time not an arrival, "
 +                                         "%llu from before their start", sdk_not_arrival, sdk_before_start);
 +                }
 +            }
@@ -1074,10 +1174,10 @@ index c5def68..6394d45 100644
  void ExitHandler(int sig)
 diff --git a/test/forklift_arrival_test.cpp b/test/forklift_arrival_test.cpp
 new file mode 100644
-index 0000000..f5a515c
+index 0000000..5ea0ebb
 --- /dev/null
 +++ b/test/forklift_arrival_test.cpp
-@@ -0,0 +1,414 @@
+@@ -0,0 +1,455 @@
 +// forklift patch 0002 (7a-3, docs/plans/2026-11-26-7a3-sdk-arrival-stamp.md 6): the SDK's sample times come from
 +// the receive thread's byte arrival. The real AsyncTransceiver, RPLidarProtocolCodec, the driver's delivery
 +// (forklift::deliverDecoded) and the unpacker's Dense / UltraDense handlers, fed by a fake channel that releases
@@ -1421,9 +1521,10 @@ index 0000000..f5a515c
 +    r.expect(130, 3, what);
 +}
 +
-+// A byte lost on the line: the handler resyncs and its capsules now end inside the codec's blocks -- completed by an
-+// earlier read than the one the block's callback runs on. Those samples are never called exact (round 1 P2-1).
-+static void test_a_resync_is_never_exact(bool ultra)
++// A byte lost on the line: the handler resyncs and its capsules now end inside the codec's fixed-length blocks, whose
++// callbacks run on the next read. Each capsule still takes the read its own last byte came in -- exact again after
++// the resync (Codex 7a-3b rounds 1-2: P2-1, P2-3).
++static void test_a_resync_takes_each_capsules_own_read(bool ultra)
 +{
 +    const char* what = ultra ? "ultra_dense resync" : "dense resync";
 +    auto c1 = capsule(ultra, 9, 110), c2 = capsule(ultra, 18, 120), c3 = capsule(ultra, 27, 130);
@@ -1432,15 +1533,53 @@ index 0000000..f5a515c
 +    Run r(ultra, {descriptor(ultra), c1, slice(c2, 0, c2.size() - 1), c3, c4, c5, c6, c7}, false);
 +    r.go();
 +    r.stop();
-+    std::lock_guard<std::mutex> l(r.sink->lock);
-+    int inexact = 0;
-+    for (const auto& s : r.sink->samples) {
-+        if (s.tag >= 140) {
-+            CHECK(!s.exact, "%s: capsule %d after the lost byte called exact", what, s.tag);
-+        }
-+        inexact += !s.exact;
++    r.expect(140, 4, what);  // c3 went with the lost byte (its first byte ended c2); c4 is the first after the resync
++    r.expect(150, 5, what);  // (c6 waits for a block that never fills: the stream ends one byte short)
++}
++
++// The codec hands the listener a message of its own: a reset on another thread (exitLoopMode, a scan restart) while
++// the listener runs never frees the bytes it reads (Codex 7a-3b round 2 P2-2; ASan shows the use after free).
++class SlowListener : public IProtocolMessageListener {
++public:
++    std::atomic<bool> inside{false};
++    std::vector<_u8> seen;
++    void onProtocolMessageDecoded(const ProtocolMessage& msg) override
++    {
++        if (!seen.empty()) return;
++        inside = true;
++        std::this_thread::sleep_for(std::chrono::milliseconds(200));
++        ProtocolMessage& m = const_cast<ProtocolMessage&>(msg);
++        seen.assign(m.getDataBuf(), m.getDataBuf() + m.getPayloadSize());
 +    }
-+    CHECK(inexact > 0, "%s: no sample marked inexact", what);
++};
++
++static void test_a_reset_during_the_callback_leaves_its_message()
++{
++    HeldCodec codec;
++    codec.hold = false;
++    SlowListener l;
++    codec.setMessageListener(&l);
++    auto c1 = capsule(false, 9, 110);
++    auto stream = cat({descriptor(false), c1});
++    std::thread decoder([&] { codec.onDecodeDataAt(stream.data(), stream.size(), getus(), 1); });
++    while (!l.inside) std::this_thread::sleep_for(std::chrono::milliseconds(1));
++    codec.exitLoopMode();  // the control thread's reset, while the listener holds the message
++    decoder.join();
++    CHECK(l.seen == c1, "reset: the listener read another message than the one decoded");
++    codec.setMessageListener(nullptr);
++}
++
++// Reads still queued when the transceiver closes are freed as the Buffer objects they are (an upstream new / delete[]
++// mismatch -- Codex 7a-3b round 2 P2-1; ASan shows it).
++static void test_reads_queued_at_close_are_freed()
++{
++    auto c1 = capsule(false, 9, 110), c2 = capsule(false, 18, 120);
++    Run r(false, {descriptor(false), c1, c2, c1, c2}, true);  // the decoder held 500 ms: the reads wait in the queue
++    r.rx->openChannelAndBind(&r.ch);
++    _u64 at = r.t0 + 4 * READ_GAP_US + 30 * MS;
++    while (getus() < at) std::this_thread::sleep_for(std::chrono::milliseconds(2));
++    r.stop();  // closes during the hold
++    CHECK(true, "close with queued reads");
 +}
 +
 +// A scan restart (disable / enable on the control thread) while a decode is inside a sample callback: disable waits
@@ -1482,8 +1621,10 @@ index 0000000..f5a515c
 +    test_angle_jump_keeps_its_own_time(true);
 +    test_reset_drops_the_previous_capsule(false);
 +    test_reset_drops_the_previous_capsule(true);
-+    test_a_resync_is_never_exact(false);
-+    test_a_resync_is_never_exact(true);
++    test_a_resync_takes_each_capsules_own_read(false);
++    test_a_resync_takes_each_capsules_own_read(true);
++    test_a_reset_during_the_callback_leaves_its_message();
++    test_reads_queued_at_close_are_freed();
 +    test_a_restart_waits_for_the_decode_in_progress();
 +    if (g_failed) {
 +        std::printf("%d check(s) failed\n", g_failed);

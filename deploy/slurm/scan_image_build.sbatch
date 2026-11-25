@@ -21,7 +21,10 @@ read -r BASE BASE_ID < <(python3 "$ROOT/tools/scan_image.py" base --arch amd64)
 # the base recorded in the tag's inputs, or no build (deploy/ros2/scan_image_base.txt)
 HAVE=$(docker image inspect -f '{{.Id}}' "$BASE")
 [[ "$HAVE" == "$BASE_ID" ]] || { echo "base $BASE is $HAVE here, not $BASE_ID" | tee "$OUT/built.txt"; exit 1; }
-docker build --build-arg "BASE_IMAGE=$BASE" -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" \
+# built over a tag made from the ID itself: the reference cannot move between this check and the build (round 2 P3)
+PINNED="forklift/ros2-dev:scanbase-${BASE_ID:7:16}"
+docker tag "$BASE_ID" "$PINNED"
+docker build --build-arg "BASE_IMAGE=$PINNED" -f "$ROOT/deploy/ros2/Dockerfile.scan" -t "$TAG" "$ROOT/deploy/ros2" \
     > "$OUT/build.log" 2>&1
 docker image inspect -f '{{.Id}}' "$TAG" > "$OUT/image.txt"
 docker image inspect -f '{{.Architecture}}' "$TAG" > "$OUT/arch.txt"

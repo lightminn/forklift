@@ -105,10 +105,11 @@ def test_the_build_entry_points_and_launchers_read_the_tag_from_lidar_yaml():
     sbatch = (REPO / "deploy/slurm/scan_image_build.sbatch").read_text(encoding="utf-8")
     assert "tools/scan_image.py\" check --arch amd64" in sbatch and "all checks passed" in sbatch
     assert 'scan_image.py" base --arch amd64' in sbatch and '"$HAVE" == "$BASE_ID"' in sbatch
-    assert '--build-arg "BASE_IMAGE=$BASE"' in sbatch
+    assert 'docker tag "$BASE_ID" "$PINNED"' in sbatch and '--build-arg "BASE_IMAGE=$PINNED"' in sbatch
     arm = (REPO / "tools/scan_image_build_arm64.sh").read_text(encoding="utf-8")
     assert "tools/scan_image.py check --arch arm64" in arm and "--platform linux/arm64" in arm
     assert "scan_image.py base --arch arm64" in arm and "FORKLIFT_ARM64_BASE" not in arm
+    assert 'docker tag "$base_id" "$pinned"' in arm and 'BASE_IMAGE=${pinned}' in arm
     launcher = (REPO / "tools/ros2_dev.sh").read_text(encoding="utf-8")
     assert "tools/scan_image.py\" configured --arch" in launcher
     for f in ("tools/hwday/jetson_prep.sh", "tools/hwday/jetson_a2m12.sh"):

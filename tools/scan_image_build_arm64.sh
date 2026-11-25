@@ -16,10 +16,12 @@ tarball="data/hwday/$(python3 tools/scan_image.py tarball --arch arm64)"
 read -r base base_id < <(python3 tools/scan_image.py base --arch arm64)
 have="$(docker image inspect -f '{{.Id}}' "$base")"
 [[ "$have" == "$base_id" ]] || { echo "base $base is $have here, not $base_id" >&2; exit 1; }
+pinned="forklift/ros2-dev:scanbase-${base_id:7:16}"  # made from the ID: it cannot move before the build uses it
+docker tag "$base_id" "$pinned"
 out="${1:-data/hwday/scan_image_$(date +%Y%m%d_%H%M%S)}"
 mkdir -p "$out" data/hwday
 echo "building $tag over $base (records in $out)" >&2
-docker buildx build --platform linux/arm64 --build-arg "BASE_IMAGE=${base}" -f deploy/ros2/Dockerfile.scan \
+docker buildx build --platform linux/arm64 --build-arg "BASE_IMAGE=${pinned}" -f deploy/ros2/Dockerfile.scan \
     -t "$tag" --load deploy/ros2 > "$out/build.log" 2>&1
 docker image inspect -f '{{.Id}}' "$tag" > "$out/image.txt"
 docker image inspect -f '{{.Architecture}}' "$tag" > "$out/arch.txt"
