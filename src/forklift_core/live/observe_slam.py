@@ -75,6 +75,13 @@ class ObserveSlam:
         self.history.append(entry)
         self.src.odom_step(entry)
 
+    def on_disconnect(self) -> None:
+        """The board's link went: the odometry is cut at once, not at the next connection's first STATE (round 2
+        P2-1)."""
+        if self.fatal is None:
+            self._guard(lambda: self._break("disconnected"))
+            self._last = None
+
     def _break(self, why: str) -> None:
         self.gen += 1
         self.history.clear()

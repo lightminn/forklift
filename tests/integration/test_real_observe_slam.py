@@ -28,11 +28,25 @@ from test_real_observe import REPO, _rows, model, ro  # noqa: F401 -- the model 
 VEHICLE = REPO / "config" / "real" / "vehicle.yaml"
 
 
-def _grid():
-    """A survey with a wall all round a 4 m square at 0.05 m (the scans below are 2 m rays from the middle)."""
-    data = np.zeros((100, 100), np.int8)
-    data[0, :] = data[-1, :] = data[:, 0] = data[:, -1] = 100
-    return Grid(data, (-2.5, -2.5, 0.0), 0.05)
+def _grid(center=None):
+    """A survey whose walls are a 2 m ring around ``center`` (the still truck's laser in the map), at 0.05 m: the scans
+    below are 2 m rays, so the right laser pose scores near 1 and a pose off by the mount's offset scores lower."""
+    if center is None:
+        center = _laser_xy()
+    res, n = 0.05, 140
+    origin = (-3.5, -3.5)
+    ys, xs = np.mgrid[0:n, 0:n]
+    cx = origin[0] + (xs + 0.5) * res
+    cy = origin[1] + (ys + 0.5) * res
+    ring = np.abs(np.hypot(cx - center[0], cy - center[1]) - 2.0) <= 0.04
+    return Grid(np.where(ring, 100, 0).astype(np.int8), (origin[0], origin[1], 0.0), res)
+
+
+def _laser_xy():
+    lid = lidar_cfg.load_lidar_config()
+    _tip, rear, _c = chassis_reference(chassis_model_path(VEHICLE).parent / "forklift.urdf")
+    bx, by, _bz, _byaw = base_from_laser(lid.mount, rear)
+    return (bx, by)
 
 
 def _slam(tmp_path, lid, start_ns):
@@ -109,6 +123,7 @@ def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
                 next_scan += 0.1
             obs.cycle()
             time.sleep(0.01)
+        before_finish = len(_rows(rec))
         stopped = obs.finish()
     finally:
         bridge.closing()
@@ -116,11 +131,12 @@ def _observe(model, tmp_path, seconds, *, lose_bridge_at=None):
         scan_sock.close()
         sock.close()
         bridge.stop()
-    return _rows(rec), bridge, slam, stopped, lid
+    rows = _rows(rec)
+    return rows, bridge, slam, stopped, lid, before_finish
 
 
 def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path):
-    rows, bridge, slam, stopped, lid = _observe(model, tmp_path, 6.0)
+    rows, bridge, slam, stopped, lid, _n = _observe(model, tmp_path, 6.0)
     assert stopped
     assert not lid.timing_measured  # before 7a-3: diagnostic
     assert bridge.error is None and slam.fatal is None, (bridge.error, slam.fatal)
@@ -142,10 +158,13 @@ def test_the_observe_run_records_the_real_slam_source_diagnostic(model, tmp_path
     from forklift_core.localization.slam_pose import compose
 
     bx, by, _bz, byaw = slam.base_laser
-    assert abs(bx) > 0.0  # the mount is not at base_link: the transform is exercised
+    assert abs(bx) > 0.1  # the mount is not at base_link: the transform is exercised
     n = 16
     expect = slam_map.endpoint_fraction(_grid(), compose((0.0, 0.0, 0.0), (bx, by, byaw)), np.full(n, 2.0),
                                         -np.pi, 2 * np.pi / n, 0.1, 10.0)
+    no_mount = slam_map.endpoint_fraction(_grid(), (0.0, 0.0, 0.0), np.full(n, 2.0), -np.pi, 2 * np.pi / n, 0.1,
+                                          10.0)
+    assert expect > 0.9 and no_mount < expect - 0.3  # the grid tells the mount transform apart (round 2 P3)
     fr = [e["endpoint_fraction"] for e in replies]
     assert fr and all(f is not None and abs(f - expect) < 1e-6 for f in fr), (fr[:3], expect)
     assert any(e["event"] == "state" and e["kind"] == "ready" and e["id"] == 1 for e in ev)
@@ -176,6 +195,29 @@ def test_the_cli_refuses_slam_without_a_bundle_or_a_scan_socket(tmp_path, capsys
     code = ro.main(base + ["--out", str(tmp_path / "b.jsonl"), "--slam-bundle", str(tmp_path)])
     assert code == 2 and "--slam needs --scan-socket" in capsys.readouterr().out
     assert not (tmp_path / "a.jsonl").exists() and not (tmp_path / "b.jsonl").exists()
+
+
+def test_an_unreadable_s10a_or_chassis_model_is_refused_with_its_file(tmp_path, capsys, monkeypatch):
+    sock = tmp_path / "scan.sock"
+    bad = tmp_path / "s10a.yaml"
+    bad.write_text("start_rear: [0, 0\n  : :\n")
+    base = ["--device", "/dev/null-forklift", "--seconds", "1", "--slam", str(tmp_path / "none.sock"),
+            "--scan-socket", str(sock), "--slam-bundle", str(tmp_path)]
+    monkeypatch.setattr("forklift_core.localization.slam_map.load_bundle", lambda folder: SimpleNamespace(
+        map_id="m" * 64, grid=_grid()))
+    code = ro.main(base + ["--out", str(tmp_path / "a.jsonl"), "--s10a", str(bad)])
+    out = capsys.readouterr().out
+    assert code == 2 and str(bad) in out and not (tmp_path / "a.jsonl").exists()
+
+    def broken(urdf):
+        from xml.etree.ElementTree import ParseError
+
+        raise ParseError("not well-formed")
+
+    monkeypatch.setattr("forklift_core.live.real_run.chassis_reference", broken)
+    code = ro.main(base + ["--out", str(tmp_path / "b.jsonl")])
+    out = capsys.readouterr().out
+    assert code == 2 and "forklift.urdf" in out and "ParseError" in out
 
 
 def test_a_bridge_that_refuses_the_connection_refuses_the_start(tmp_path):
@@ -209,11 +251,11 @@ def test_a_bridge_ending_records_the_fault_and_the_run_goes_on(tmp_path, why):
 
 def test_a_bridge_lost_mid_run_ends_the_slam_path_and_the_board_still_stops(model, tmp_path):
     """Round 1 P3-2: the observe run goes on recording the board, its DISARM refresh and its end DISARM confirmed."""
-    rows, bridge, slam, stopped, _lid = _observe(model, tmp_path, 5.0, lose_bridge_at=2.5)
+    rows, bridge, slam, stopped, _lid, before_finish = _observe(model, tmp_path, 5.0, lose_bridge_at=2.5)
     assert stopped and slam.fatal is not None and any(r["t"] == "slam_fatal" for r in rows)
     fatal_at = next(i for i, r in enumerate(rows) if r["t"] == "slam_fatal")
-    later = [r for r in rows[fatal_at:] if r["t"] == "written" and r["kind"] == "DISARM"]
-    assert later  # the 1 s refresh and the end DISARM after the SLAM path ended
+    refresh = [r for r in rows[fatal_at:before_finish] if r["t"] == "written" and r["kind"] == "DISARM"]
+    assert refresh  # the 1 s refresh went on after the SLAM path ended, before the end DISARM (round 2 P3)
 
 
 def test_an_input_break_cuts_what_waits_and_drops_the_reply_in_flight(tmp_path):

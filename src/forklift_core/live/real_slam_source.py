@@ -325,8 +325,16 @@ class RealSlamSource:
             if w is not None:
                 self._drop("slam_input_break", key=w["key"] if isinstance(w, dict) else w.key, why_break=why)
         self._waiting, self._odom_wait = None, None
-        if self._inflight is not None:
-            self._inflight["old_gen"] = True
+        f = self._inflight
+        if f is not None and self.link.retract("scan"):
+            # not one byte of it went: never sent at all (7c-1c round 2 P2-1), and not one of a start check's seven
+            self._inflight = None
+            t = self.target
+            if t is not None and t["id"] == f["target"] and f["phase"] == "scans":
+                t["start_scans"] -= 1
+            self._drop("slam_input_break", key=f["key"], why_break=why)
+        elif f is not None:
+            f["old_gen"] = True
 
     def request_processed(self, epoch, attempt, not_before) -> None:
         if int(epoch) >= self.epoch:
@@ -540,14 +548,7 @@ class RealSlamSource:
         rec = {"t": "reply", "scan_id": int(r.scan_id), "status": r.status, "map_from_odom": list(r.map_from_odom),
                "received_ns": received, "flo_ns": f["flo_ns"], "target": f["target"], "phase": f["phase"],
                "epoch": f["epoch"], "attempt": None if f["attempt"] is None else f["attempt"][1]}
-        if r.status == "failed":
-            self._event(**rec, passed=False, why="failed")
-            self._fatal(f"bridge failed scan {r.scan_id}: {r.reason}")
-        if r.status != "processed" and f["phase"] == "ready":
-            self._fatal(f"protocol: a {r.status} reply from a localized instance")  # every scan gets a /pose (P2-6)
-        self._inflight = None
-        t = self.target
-        if self.reply_hook is not None:
+        if self.reply_hook is not None:  # every reply of a scan sent whole, whatever its verdict (7c-1c round 2 P2-3)
             try:
                 extra = self.reply_hook(f["scan"], rec)
                 if extra:
@@ -555,6 +556,14 @@ class RealSlamSource:
             except Exception as exc:  # noqa: BLE001 -- a diagnostic never ends the source
                 self.counts["reply_hook_errors"] += 1
                 rec["hook_error"] = f"{type(exc).__name__}: {exc}"
+        if r.status == "failed":
+            self._event(**rec, passed=False, why="failed")
+            self._fatal(f"bridge failed scan {r.scan_id}: {r.reason}")
+        if r.status != "processed" and f["phase"] == "ready":
+            self._event(**rec, passed=False, why="not_processed")
+            self._fatal(f"protocol: a {r.status} reply from a localized instance")  # every scan gets a /pose (P2-6)
+        self._inflight = None
+        t = self.target
         why = None
         if f["old_gen"]:
             why = "old_generation"

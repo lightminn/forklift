@@ -291,6 +291,8 @@ class Observer:
                           **{k: str(v) for k, v in e.detail.items()}})
             if e.kind in ("connected", "disconnected"):
                 self._restart_session(e.kind)
+                if e.kind == "disconnected" and self.slam is not None:
+                    self.slam.on_disconnect()
         if refresh:
             self._disarms(now)
         if self.feed is not None:
@@ -454,6 +456,18 @@ def _realsense(cfg):
     return RealSenseSource(gyro_hz=cfg.gyro_hz, accel_hz=cfg.accel_hz, global_time=False)
 
 
+def _yaml_error():
+    import yaml
+
+    return yaml.YAMLError
+
+
+def _xml_error():
+    from xml.etree.ElementTree import ParseError
+
+    return ParseError
+
+
 def _slam_parts(args, lidar) -> dict:
     """What the SLAM path needs, read before anything is opened (a bad file refuses the run): the bundle's grid and
     map id, the registered start (base_link), the vehicle's odometry and the laser in base_link."""
@@ -471,10 +485,17 @@ def _slam_parts(args, lidar) -> dict:
         raise ValueError("--slam needs --slam-bundle")
     if not args.scan_socket:
         raise ValueError("--slam needs --scan-socket (its scans are the feed's)")
-    bundle = load_bundle(args.slam_bundle)
-    cfg = load_s10a(args.s10a)
-    vehicle = load_real_vehicle(args.vehicle)
-    _tip, rear_offset, _carriage = chassis_reference(chassis_model_path(args.vehicle).parent / "forklift.urdf")
+    def named(path, read):
+        try:
+            return read()
+        except Exception as exc:  # noqa: BLE001 -- refused with the file that could not be read (round 2 P2-2)
+            raise ValueError(f"{path}: {type(exc).__name__}: {exc}") from exc
+
+    bundle = named(args.slam_bundle, lambda: load_bundle(args.slam_bundle))
+    cfg = named(args.s10a, lambda: load_s10a(args.s10a))
+    vehicle = named(args.vehicle, lambda: load_real_vehicle(args.vehicle))
+    urdf = chassis_model_path(args.vehicle).parent / "forklift.urdf"
+    _tip, rear_offset, _carriage = named(urdf, lambda: chassis_reference(urdf))
     kappa = max(abs(k) for k in vehicle.steering.curvatures_inv_m)
     params = EncoderSpeedParams(radius_m=vehicle.wheel_radius_m, counts_per_rev=vehicle.counts_per_wheel_rev,
                                 track_m=vehicle.track_m, kappa_max=kappa, axle_accel_mps2=0.5, max_age_s=0.1,
@@ -544,7 +565,8 @@ def main(argv=None, *, imu_factory=_realsense) -> int:
         imu_cfg = load_imu_source_config(args.imu_config) if args.imu else None
         imu_gap_max_s = load_imu_config(SAFETY_YAML).gap_max_s if args.imu else None
         slam_parts = _slam_parts(args, lidar) if args.slam else None
-    except (SyntheticRefused, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (SyntheticRefused, OSError, ValueError, KeyError, TypeError, AttributeError, _yaml_error(),
+            _xml_error()) as exc:
         print(json.dumps({"result": "refused", "why": str(exc)}))
         return 2
     if args.out.exists():

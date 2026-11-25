@@ -990,3 +990,21 @@ def test_offers_alone_judge_the_reply_bound():
     r.hist_to(r.now)
     with pytest.raises(rss.SlamSourceFatal, match="no reply"):
         r.src.offer(r.scan(lag_ms=10))
+
+
+# --- 7c-1c (the observe run's input breaks) --------------------------------------------------------------------------
+def test_an_input_break_takes_back_a_start_scan_not_one_byte_of_which_went():
+    r = Rig()
+    r.step()
+    [hello] = r.bridge.frames()
+    r.bridge.state(1, "seeding")
+    r.bridge.state(1, "ready_for_scans")
+    r.step()
+    r.src.link.sock = Chunky(r.src.link.sock, [None, None])
+    r.src.offer(r.scan())
+    assert r.src.target["start_scans"] == 1 and r.src._inflight is not None  # noqa: SLF001
+    r.src.input_break("disconnected")
+    assert r.src._inflight is None and r.src.target["start_scans"] == 0  # noqa: SLF001
+    assert r.src.counts["slam_input_break"] == 1
+    r.step()
+    assert not any(isinstance(f, rl.RealScan) for f in r.bridge.frames())
