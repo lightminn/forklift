@@ -556,8 +556,12 @@ class RealSlamSource:
     def _reply_key_ok(r) -> bool:
         """An integer scan id, a finite stamp and three finite correction numbers -- one check for both paths that match
         a reply to the scan in flight (round 1 P2-6; 7c-1c round 4 P2)."""
-        return (not isinstance(r.scan_id, bool) and isinstance(r.scan_id, int) and not isinstance(r.stamp_s, bool)
-                and isinstance(r.stamp_s, (int, float)) and math.isfinite(r.stamp_s) and _finite_pose(r.map_from_odom))
+        try:
+            return (not isinstance(r.scan_id, bool) and isinstance(r.scan_id, int) and not isinstance(r.stamp_s, bool)
+                    and isinstance(r.stamp_s, (int, float)) and math.isfinite(r.stamp_s)
+                    and _finite_pose(r.map_from_odom))
+        except (OverflowError, TypeError, ValueError):
+            return False  # a number past a float's range is no reply of ours (7c-1c round 5 P3)
 
     def _on_reply(self, r, received: int) -> None:
         if not self._reply_key_ok(r):
