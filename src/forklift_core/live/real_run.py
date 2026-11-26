@@ -361,6 +361,11 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     # refused: the run and the operating preconditions judge the same bytes -- Codex unlock U1 review P1-2)
     hashes_at_start = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     try:
+        _params = chassis_model_path(paths.vehicle)
+        hashes_at_start.update(chassis_params=_sha_or_none(_params), chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
+    except (OSError, ValueError):
+        pass
+    try:
         cfg = ra.load_s10a(paths.s10a)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
         raise AssemblyRefused([f"s10a_unreadable:{err}"]) from err
@@ -426,6 +431,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     odo = layer_cfg.get("odometry_age") if isinstance(layer_cfg, dict) else None
     hashes["odometry_age"] = _sha_or_none(REPO / odo) if odo else None
+    hashes["chassis_params"] = _sha_or_none(chassis_model_path(paths.vehicle))
+    hashes["chassis_urdf"] = _sha_or_none(urdf)
     moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:
         raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
@@ -748,6 +755,9 @@ def real_preconditions(prep, host, transport) -> list:
                           vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
     except rp.GATHER_ERRORS as err:
         return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+    # the corridor end the run will drive is the one prep built from the chassis it loaded, not a second reading
+    # (Codex unlock U1 review round 3 P1)
+    facts.inserted_offset_m = float(prep.geometry.inserted_offset_m)
     out = rp.operating_preconditions(facts)
     # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
     out += [f"precondition:files_changed:{name}" for name, sha in facts.file_hashes.items()

@@ -177,8 +177,8 @@ def run_real_precheck(args) -> int:
             record["imu_qualified"] = rp.imu_qualified(facts)
         except rp.GATHER_ERRORS as err:
             record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
-        _write(record, args.out)
-        return 2 if record["refused"] else 0
+        written = _write(record, args.out)
+        return 2 if record["refused"] or not written else 0
     finally:
         os.close(tr.fd)
 
@@ -216,28 +216,36 @@ def _is_pty(device: str) -> bool:
     return stat_.S_ISCHR(st.st_mode) and os.major(st.st_rdev) in model_peer.PTY_SLAVE_MAJORS
 
 
-def _write(record: dict, out: Path | None) -> None:
-    """The record printed and, with ``out``, written to a regular file only: the file is opened without following a
-    link and without blocking, and checked on the opened fd itself before one byte is written (never a device, a FIFO,
-    a socket -- the real board's own node or an alias of it; Codex unlock U1 review round 2 P2-1)."""
+def _write(record: dict, out: Path | None) -> bool:
+    """The record printed (one JSON document) and, with ``out``, written whole to a regular file only: the file is
+    opened without following a link and without blocking, and checked on the opened fd itself before one byte is
+    written (never a device, a FIFO, a socket -- the real board's own node or an alias of it; Codex unlock U1 review
+    round 2 P2-1). A refused or failed output is reported inside the same document (``out_error``) and returns False."""
     import stat as stat_
 
-    text = json.dumps(record, indent=2, default=str)
+    err = None
     if out is not None:
+        text = json.dumps(record, indent=2, default=str).encode()
         try:
             fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o644)
-        except OSError as err:
-            print(json.dumps({"out_refused": f"{type(err).__name__}:{err}"}), flush=True)
+        except OSError as exc:
+            err = f"{type(exc).__name__}:{exc}"
         else:
             try:
-                if stat_.S_ISREG(os.fstat(fd).st_mode):
-                    os.ftruncate(fd, 0)
-                    os.write(fd, text.encode())
+                if not stat_.S_ISREG(os.fstat(fd).st_mode):
+                    err = "not_a_regular_file"
                 else:
-                    print(json.dumps({"out_refused": "not_a_regular_file"}), flush=True)
+                    os.ftruncate(fd, 0)
+                    view = memoryview(text)
+                    while view:
+                        view = view[os.write(fd, view):]  # every byte, not the first write's count
+            except OSError as exc:
+                err = f"{type(exc).__name__}:{exc}"
             finally:
                 os.close(fd)
-    print(text, flush=True)
+    printed = record if err is None else {**record, "out_error": err}
+    print(json.dumps(printed, indent=2, default=str), flush=True)
+    return err is None
 
 
 # --- the HIL run (design 10.3) ---------------------------------------------------------------------------------------

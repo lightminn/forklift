@@ -25,6 +25,8 @@ import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import xml.etree.ElementTree as ET
+
 import yaml
 
 REPO = Path(__file__).resolve().parents[3]
@@ -65,7 +67,8 @@ REQUIRED_PROVENANCE = {
     "budget": ("latency_budget", "overdue_end"),
     "watch": ("current", "wheel"),
 }
-GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError)
+GATHER_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError, UnicodeDecodeError, yaml.YAMLError,
+                 ET.ParseError)
 HASHED = ("s10a", "settings", "vehicle", "watch", "layer", "budget", "lidar", "imu")
 START_TOL_M = 0.001  # the taped start written in the record is the S10-A one (a copy, not a tolerance)
 
@@ -184,10 +187,14 @@ def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a
         from forklift_core.live.real_run import mission_geometry
         from forklift_core.plant.real_vehicle import chassis_model_path
 
+        params = chassis_model_path(vehicle_path)
+        urdf = params.parent / "forklift.urdf"
+        hashes["chassis_params"], hashes["chassis_urdf"] = _sha(params), _sha(urdf)
         if s10a.pallet_depth_m is not None and s10a.pallet_width_m is not None:
-            urdf = chassis_model_path(vehicle_path).parent / "forklift.urdf"
             inserted = float(mission_geometry(urdf, s10a.pallet_depth_m, s10a.pallet_width_m).inserted_offset_m)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            if _sha(urdf) != hashes["chassis_urdf"]:
+                changed.append("chassis_urdf")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ET.ParseError):
         inserted = None
     layer = parsed["layer"] if isinstance(parsed["layer"], dict) else {}
     odo = layer.get("odometry_age")
@@ -291,14 +298,15 @@ def image_commit(product) -> str | None:
     """The commit abbreviation in a USB product string ``forklift-mcu <kind> <outputs> <git describe>...`` (the
     firmware's ``git describe --always --dirty --abbrev=12``: a bare abbreviation or ``<tag>-<n>-g<abbrev>``); None
     when absent, dirty or not hex."""
+    import re
+
     parts = str(product or "").split()
     if len(parts) < 4 or parts[0] != "forklift-mcu":
         return None
     d = parts[3]
-    if d.endswith("-dirty"):
-        return None
-    tail = d.rsplit("-g", 1)[1] if "-g" in d else d
-    return tail if len(tail) >= 7 and all(c in "0123456789abcdef" for c in tail) else None
+    m = re.fullmatch(r"(?:.+-\d+-g)?([0-9a-f]{12,40})", d)
+    # an exactly tagged build ("<tag>" alone) or a dirty one carries no checkable abbreviation: refused (safe side)
+    return m.group(1) if m else None
 
 
 def _item_reasons(f: Facts, name: str) -> list:

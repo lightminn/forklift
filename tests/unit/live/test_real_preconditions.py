@@ -399,6 +399,10 @@ def test_an_invalid_lidar_file_is_refused_by_its_own_loader(site):
     ("forklift-mcu normal open 1a9afd50ebd4", "1a9afd50ebd4"),
     ("forklift-mcu normal open v1.2-3-gabcdef012345 waiver=0123abcd", "abcdef012345"),
     ("forklift-mcu normal open 1a9afd50ebd4-dirty", None),
+    ("forklift-mcu normal open diag-commission-long-1", None),  # an exactly tagged build: refused (safe side)
+    ("forklift-mcu normal open release-gabcdef012345", None),  # a tag that looks like an abbreviation
+    ("forklift-mcu normal open release-gabcdef012345-0-g1a9afd50ebd4", "1a9afd50ebd4"),
+    ("forklift-mcu normal open abcdef0", None),  # shorter than the firmware's 12
     ("forklift-mcu normal open unknown", None),
     ("something else", None),
     (None, None),
@@ -428,3 +432,16 @@ def test_malformed_settings_and_exceptions_are_structured_refusals(site):
     rec["config_exceptions"] = [{"file": ["watch"], "key": "current", "decision_id": "D"}]
     site.write_record(rec)
     assert "precondition:record:config_exceptions" in rp.operating_preconditions(site.facts())
+
+
+def test_a_corrupt_urdf_is_a_structured_reason(site, monkeypatch):
+    import xml.etree.ElementTree as ET
+
+    from forklift_core.live import real_run
+
+    def boom(*a, **k):
+        raise ET.ParseError("broken")
+
+    monkeypatch.setattr(real_run, "mission_geometry", boom)
+    out = rp.operating_preconditions(site.facts())
+    assert "precondition:C5:scan_coverage:inserted_offset_m" in out  # no corridor end: the coverage cannot pass

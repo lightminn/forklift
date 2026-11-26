@@ -241,3 +241,12 @@ def test_no_early_refusal_writes_its_record_to_a_device(capsys):
         os.close(m)
         os.close(s)
     capsys.readouterr()
+
+
+
+def test_an_output_that_cannot_be_written_is_one_json_document_with_its_error(tmp_path, capsys):
+    """Codex unlock U1 review round 3 P2: a refused --out is reported in the single printed document."""
+    missing = tmp_path / "no" / "such" / "dir" / "out.json"
+    assert tool.main(["--run", "--client", "real", "--hil", "--device", "/dev/x", "--out", str(missing)]) == 2
+    rec = json.loads(capsys.readouterr().out)  # one document
+    assert rec["refused"] == ["real_with_hil"] and rec["out_error"].startswith("FileNotFoundError")
