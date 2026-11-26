@@ -14,7 +14,9 @@ instance, and the core answers through an ``io`` object:
 - ``now_ns()``: the host monotonic clock.
 
 Rules (design 6.1, 2):
-- one session per bridge: one ``hello``; its ``map_id`` must be the bundle's;
+- one session per bridge: one ``hello``; its ``map_id`` must be the bundle's; a ``base_from_laser`` on it must match
+  this bridge's ``laser_xyz_yaw`` (``slam_real_link.laser_matches``, else ``fault``), and then every ``ready`` of the
+  session carries ``laser_checked`` (plan 2.3, unlock U2b);
 - every start (``hello``) and ``seed`` starts a new instance ``k``; ``state(id, seeding)`` then, once the instance is
   ready, ``state(id, ready_for_scans)``; the start check is the existing L4 -- seven start scans, a ``/pose`` expected
   for 1, 5, 6 and 7 (slam_toolbox drops 2-4 in a new process), the ``/map`` covering the survey's occupied cells and
@@ -50,13 +52,15 @@ class BridgeCore:
         self.awaited: dict | None = None  # the scan in flight
         self.last_stamp_ns: int | None = None
         self.correction = (0.0, 0.0, 0.0)  # the last processed reply's map <- odom
+        self.laser_checked: str | None = None  # the hello's base_from_laser digest, once compared (U2b)
         self.closed = False
         self.counts = {"processed": 0, "skipped": 0, "stale_instance": 0, "late_maps": 0}
         self.failures: list = []  # bring-up failures (no end state: see on_instance_failed)
 
     # --- outputs ---------------------------------------------------------------------------------------------------
     def _state(self, ident: int, kind: str, reason: str | None = None) -> None:
-        self.io.send(rl.encode_state(rl.State(int(ident), kind, reason)))
+        checked = self.laser_checked if kind == "ready" else None
+        self.io.send(rl.encode_state(rl.State(int(ident), kind, reason, checked)))
 
     def fault(self, reason: str) -> None:
         if self.closed:
@@ -82,6 +86,11 @@ class BridgeCore:
             if obj.map_id != self.bundle.map_id:
                 return self.fault(f"{slam_map.MISMATCH}: hello names map {obj.map_id}, the bundle is "
                                   f"{self.bundle.map_id}")
+            if obj.base_from_laser is not None:
+                if not rl.laser_matches(obj.base_from_laser, self.laser):
+                    return self.fault(f"laser_mismatch: hello base_from_laser {list(obj.base_from_laser)}, this bridge "
+                                      f"{list(self.laser)}")
+                self.laser_checked = rl.laser_digest(obj.base_from_laser)
             self.session = obj
             return self._begin(obj.start_id, "start", obj.start_pose, obj.deadline_ns)
         if self.session is None:

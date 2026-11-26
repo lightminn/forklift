@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import itertools
 import json
 import math
@@ -81,22 +82,30 @@ def _insertion_geometry():
     return module
 
 
-def mission_geometry(urdf: Path, depth_m: float, width_m: float, reserve_m: float = 0.016):
+def _urdf_source(urdf):
+    """A path as given, or the URDF's bytes read once (the operating run: hashed and parsed from the same bytes, Codex
+    U2b round 1 P2-2) as a fresh stream for each parse."""
+    return io.BytesIO(urdf) if isinstance(urdf, (bytes, bytearray)) else urdf
+
+
+def mission_geometry(urdf, depth_m: float, width_m: float, reserve_m: float = 0.016):
     from forklift_core.planning.geometry import Footprint
     from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
 
     ig = _insertion_geometry()
-    axle_to_tip, _ = ig.read_chassis_reference_m(urdf)
+    axle_to_tip, _ = ig.read_chassis_reference_m(_urdf_source(urdf))
     return SyntheticMissionGeometry(unloaded_footprint=Footprint(axle_to_tip, 0.17, 0.36), pallet_depth_m=depth_m,
                                     pallet_width_m=width_m, axle_to_fork_tip_m=axle_to_tip,
-                                    carriage_limit_m=ig.read_carriage_limit_m(urdf), insertion_reserve_m=reserve_m)
+                                    carriage_limit_m=ig.read_carriage_limit_m(_urdf_source(urdf)),
+                                    insertion_reserve_m=reserve_m)
 
 
-def chassis_reference(urdf: Path) -> tuple:
-    """(axle to fork tip, rear axle offset behind base_link, carriage limit) in metres from the chassis model."""
+def chassis_reference(urdf) -> tuple:
+    """(axle to fork tip, rear axle offset behind base_link, carriage limit) in metres from the chassis model (a path,
+    or its bytes)."""
     ig = _insertion_geometry()
-    axle_to_tip, rear_x = ig.read_chassis_reference_m(urdf)
-    return float(axle_to_tip), abs(float(rear_x)), float(ig.read_carriage_limit_m(urdf))
+    axle_to_tip, rear_x = ig.read_chassis_reference_m(_urdf_source(urdf))
+    return float(axle_to_tip), abs(float(rear_x)), float(ig.read_carriage_limit_m(_urdf_source(urdf)))
 
 
 def map_occupancy(grid):
@@ -265,6 +274,11 @@ class RunPaths:
     allow_synthetic: bool = False
     # the operating unlock (docs/plans/2026-11-26-real-operating-assembly.md 2.4): S10's human-confirmed record
     preconditions: Path = REPO / "config/real/s10_preconditions.yaml"
+    # the operating run's site bundle (plan 2.8, unlock U2b): the site record it is found by, the registry and the
+    # launcher's SLAM_BUNDLE_ROOT (the bundle is the row's folder under it; none is given by hand)
+    site_record: Path | None = None
+    registry: Path = REPO / "config/slam_map_bundles.yaml"
+    bundle_root: Path | None = None
 
 
 @dataclass
@@ -296,6 +310,7 @@ class RunPrep:
     kernels: dict = field(default_factory=dict)
     jobs: object = None
     replay: object = None  # replay_assembly.ReplayPlan (7r), None for every other run
+    site: object = None  # real_site.SiteBundle of the operating run (U2b), None for every other run
     lidar: object = None  # the operating run's LidarConfig, loaded once with the layer file (U2a; None on HIL/replay)
 
 
@@ -379,6 +394,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     settings, planner, cap = planning_settings(data, kin)
     obstacles: list = []
     replay = None
+    site = None
+    if paths.replay is None and not paths.hil:
+        # the operating run (plan 2.8, unlock U2b): the bundle is the registry row's, found before the map is loaded
+        from forklift_core.live import real_site as rs_
+
+        if paths.map_bundle is not None:
+            raise AssemblyRefused([f"{rs_.PREFIX}:map_bundle_by_hand"])
+        try:
+            site = rs_.resolve_site(site_record=paths.site_record, registry=paths.registry,
+                                    bundle_root=paths.bundle_root, encoder_model=rs_.REAL_ENCODER_MODEL)
+        except rs_.SiteRefused as err:
+            raise AssemblyRefused([err.reason]) from err
     if paths.replay is not None:
         # 7r plan 4: the record and its bundle stand for the HIL scene (no hil: part, no zero start); the configs and
         # the record are checked before anything starts
@@ -392,6 +419,15 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         obstacles = read_hil_scene(paths.s10a)  # the synthetic LiDAR casts them whatever map plans (round 1 P2)
     if replay is not None:
         pass  # the map read above, from the record's bundle (or --map-bundle)
+    elif site is not None:
+        try:
+            map_id, grid = rs_.read_site_map(site, cfg.map_id)  # every file hashed and parsed from one read
+        except rs_.SiteRefused as err:
+            raise AssemblyRefused([err.reason]) from err
+        try:
+            occupancy = map_occupancy(grid)
+        except ValueError as err:  # e.g. a rotated origin: a structured refusal, never an escape (round 2 P3)
+            raise AssemblyRefused([f"{rs_.PREFIX}:bundle_grid:{err}"]) from err
     elif paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:
@@ -409,9 +445,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     if refused:
         raise AssemblyRefused(refused)
     urdf = chassis_model_path(paths.vehicle).parent / "forklift.urdf"
+    urdf_src = urdf
+    if site is not None:
+        # the operating run: the chassis geometry parsed from the very bytes whose hash C6 compares (round 1 P2-2)
+        try:
+            urdf_src = Path(urdf).read_bytes()
+        except OSError as err:
+            raise AssemblyRefused([f"config_unreadable:{type(err).__name__}:{err}"]) from err
+        if hashlib.sha256(urdf_src).hexdigest() != hashes_at_start.get("chassis_urdf"):
+            raise AssemblyRefused(["files_changed_while_preparing:chassis_urdf"])
     try:
-        geometry = mission_geometry(urdf, cfg.pallet_depth_m, cfg.pallet_width_m)
-        axle_to_tip, rear_offset, carriage = chassis_reference(urdf)
+        geometry = mission_geometry(urdf_src, cfg.pallet_depth_m, cfg.pallet_width_m)
+        axle_to_tip, rear_offset, carriage = chassis_reference(urdf_src)
         layer_cfg = yaml.safe_load(Path(paths.layer).read_text())
         if replay is not None:
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
@@ -432,6 +477,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
         raise AssemblyRefused([f"config_unreadable:{type(err).__name__}:{err}"]) from err
     if replay is not None:
         cfg = rpa.replay_start(replay, cfg, map_id, rear_offset)  # the record's start for the loop, plan and hello
+    if site is not None:
+        # C6 (plan 2.8): the report against the files this run reads, before anything starts
+        from forklift_core.live import real_site as rs_
+        from forklift_core.live.real_loop import START_TOL_M, START_TOL_RAD
+
+        refused = rs_.check_site(site, encoder_model=rs_.REAL_ENCODER_MODEL, lidar_sha256=hashes_at_start.get("lidar"),
+                                 chassis_sha256=hashes_at_start.get("chassis_urdf"),
+                                 calibration_id=getattr(vehicle, "calibration_id", None), map_id=map_id,
+                                 start_rear=cfg.start_rear, rear_offset_m=rear_offset, tol_m=START_TOL_M,
+                                 tol_rad=START_TOL_RAD)
+        if refused:
+            raise AssemblyRefused(refused)
     # a wall-clock run (real-time plan D2-D3): the fastest obstacle and permission kernels, compiled before the loop
     from forklift_core import kernels
 
@@ -448,6 +505,8 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
     if moved:
         raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
+    if site is not None:
+        hashes.update(site.hashes)  # the site record, the registry and the report as judged (U2b)
     if replay is not None:
         hashes.update(replay_record=replay.record.sha256,
                       **{f"{k}_config": v["sha256"] for k, v in replay.configs.items() if v is not None})
@@ -458,7 +517,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
                    budget_s=budget_s, overdue_end_s=overdue_end_s, channels=RealChannels(), epoch=epoch,
                    welcome=run_welcome(epoch), start_ns=int(clock()), hashes=hashes, check_plan=plan.status,
                    kernels={"mode": kernel_mode, "warm_up_s": round(float(kernel_warm_s), 3)}, replay=replay,
-                   lidar=real_lidar)
+                   lidar=real_lidar, site=site)
     if jobs_factory is None:
         from forklift_core.planning.plan_worker import PlanWorker
 
@@ -666,6 +725,15 @@ def _real_imu(prep, device, closers, start_real_imu) -> tuple:
     return True, source
 
 
+def bridge_laser_xyz_yaw(lidar, rear_offset_m: float) -> tuple:
+    """base_link <- laser (x, y, z, yaw) from the run's ``LidarConfig`` mount (rear-axle frame) and the chassis's rear
+    axle offset: the value the operating hello carries and the SLAM bridge's ``laser_xyz_yaw`` is launched with
+    (plan 2.3, unlock U2b; ``tools/real_bridge_laser.py`` prints it for the launcher)."""
+    from forklift_core.localization.slam_real_scan import base_from_laser
+
+    return base_from_laser(lidar.mount, rear_offset_m)
+
+
 def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -> RunSources:
     """The real SLAM source for the operating run: as the HIL's (``_real_slam_sources``) but the REAL client, no HIL
     check, and no layer branch (the scan source offers its own scans)."""
@@ -693,7 +761,8 @@ def _real_slam_operating(prep: RunPrep, host, transport, box: dict, path: str) -
             odom_history=lambda: box["loop"].odom_history,
             odom_base=lambda: base_from_rear(box["loop"].odom_pose, prep.rear_offset_m),
             odom_gen=lambda: box["loop"].odom_gen, boot=boot, rear_offset_m=prep.rear_offset_m,
-            session_epoch=lambda: prep.epoch, hil_gate=None)
+            session_epoch=lambda: prep.epoch, hil_gate=None,
+            base_from_laser=bridge_laser_xyz_yaw(prep.lidar, prep.rear_offset_m))
     except BaseException:
         sock.close()
         raise

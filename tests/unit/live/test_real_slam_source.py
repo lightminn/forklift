@@ -54,8 +54,10 @@ class Bridge:
         self.got += out
         return out
 
-    def state(self, ident, kind, reason=None):
-        self.sock.sendall(rl.encode_state(rl.State(ident, kind, reason)))
+    def state(self, ident, kind, reason=None, laser_checked=None):
+        if kind == "ready" and laser_checked is None:
+            laser_checked = getattr(self, "laser_checked", None)  # a bridge that compared the hello's laser
+        self.sock.sendall(rl.encode_state(rl.State(ident, kind, reason, laser_checked)))
 
     def reply(self, real_scan, status="processed", corr=(0.0, 0.0, 0.0)):
         s = real_scan.scan
@@ -1359,3 +1361,72 @@ def test_a_completed_seeds_ready_reads_void_once_the_check_is_lost():
     assert r.src.seed_state(1) == ("void", "hil_check_lost") and not r.src.can_confirm()
     r.reboot(2)
     assert r.src.seed_state(1) == ("void", "hil_check_lost") and not r.src.can_confirm()
+
+
+# --- one calibration (plan 2.3, unlock U2b) -----------------------------------------------------------------------------
+LASER = (-0.34, 0.0, 0.25, 0.02)
+
+
+def _hello_of(r):
+    r.step()
+    [hello] = [f for f in r.bridge.frames() if isinstance(f, rl.Hello)]
+    return hello
+
+
+def _to_seven(r):
+    r.bridge.state(1, "seeding")
+    r.bridge.state(1, "ready_for_scans")
+    r.step()
+    for _ in range(7):
+        r.src.offer(r.scan())
+        [sent] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(sent)
+        r.step()
+
+
+def test_an_operating_hello_carries_the_laser_and_a_ready_with_its_digest_localizes():
+    r = Rig(base_from_laser=LASER)
+    hello = _hello_of(r)
+    assert hello.base_from_laser == LASER
+    _to_seven(r)
+    r.bridge.state(1, "ready", laser_checked=rl.laser_digest(hello.base_from_laser))
+    r.step()
+    assert r.src.can_confirm()
+
+
+@pytest.mark.parametrize("checked", [None, "0" * 64])
+def test_a_ready_without_this_runs_laser_digest_ends_the_run(checked):
+    """An older bridge (no laser_checked) or one that compared another value never localizes this session."""
+    r = Rig(base_from_laser=LASER)
+    _hello_of(r)
+    _to_seven(r)
+    r.bridge.sock.sendall(rl.encode_state(rl.State(1, "ready", None, checked)))
+    with pytest.raises(rss.SlamSourceFatal, match="slam_laser_unchecked"):
+        r.step()
+    assert not r.src.can_confirm()
+
+
+def test_a_seeds_ready_needs_the_digest_too():
+    r = Rig(base_from_laser=LASER)
+    r.bridge.laser_checked = rl.laser_digest(LASER)
+    r.started()
+    r.bridge.laser_checked = None
+    sid = seed_to_ready(r)
+    for _ in range(7):
+        r.src.offer(r.scan())
+        [sent] = [f for f in r.bridge.frames() if isinstance(f, rl.RealScan)]
+        r.bridge.reply(sent)
+        r.step()
+    r.bridge.sock.sendall(rl.encode_state(rl.State(sid, "ready")))
+    with pytest.raises(rss.SlamSourceFatal, match="slam_laser_unchecked"):
+        r.step()
+
+
+def test_without_a_laser_nothing_is_asked_or_required():
+    """The HIL and observe runs: no base_from_laser on the hello, a ready without laser_checked localizes."""
+    r = Rig()
+    assert _hello_of(r).base_from_laser is None
+    _to_seven(r)
+    r.bridge.state(1, "ready")
+    r.step()
+    assert r.src.can_confirm()

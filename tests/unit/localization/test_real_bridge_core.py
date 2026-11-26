@@ -384,3 +384,65 @@ def test_a_string_pose_is_no_pose():
             b'"deadline_ns": 1}\n')
     with pytest.raises(ValueError):
         rl.decode(body)
+
+
+# --- one calibration (plan 2.3, unlock U2b) -----------------------------------------------------------------------------
+LASER = (0.0, 0.0, 0.25, 0.0)  # in the plane of the scene's casts (the L4 check reads the laser pose)
+
+
+def test_a_hello_with_the_bridges_laser_gets_laser_checked_on_every_ready():
+    io = IO()
+    core = BridgeCore(io, BUNDLE, LASER)
+    sent = (-0.0005, 0.0004, 0.2509, math.radians(0.09))  # within 1 mm / 0.1 deg
+    core.on_frame(rl.Hello(7, "m1", 1, A, 21_000 * MS, sent))
+    bootstrap(core, io, 1, A)
+    ready = [f for f in io.frames if isinstance(f, rl.State) and f.kind == "ready"]
+    assert ready and ready[-1].laser_checked == rl.laser_digest(sent)
+    assert all(f.laser_checked is None for f in io.frames if isinstance(f, rl.State) and f.kind != "ready")
+    core.on_frame(rl.Seed(5, 2, B, (0.0, 0.0, 0.0), 1, io.ns + 20_000 * MS))
+    bootstrap(core, io, 2, B, sid0=100)
+    last = [f for f in io.frames if isinstance(f, rl.State)][-1]
+    assert (last.id, last.kind, last.laser_checked) == (5, "ready", rl.laser_digest(sent))
+
+
+@pytest.mark.parametrize("sent", [(0.0011, 0.0, 0.25, 0.0), (0.0, -0.0011, 0.25, 0.0), (0.0, 0.0, 0.2489, 0.0),
+                                  (0.0, 0.0, 0.25, math.radians(0.11)), (0.0, 0.0, 0.25, math.tau + 0.01)])
+def test_a_hello_with_another_laser_is_a_fault(sent):
+    io = IO()
+    core = BridgeCore(io, BUNDLE, LASER)
+    core.on_frame(rl.Hello(7, "m1", 1, A, 21_000 * MS, sent))
+    assert core.closed and io.started == []
+    [st] = [f for f in io.frames if isinstance(f, rl.State)]
+    assert st.kind == "fault" and st.reason.startswith("laser_mismatch")
+
+
+def test_a_full_turn_of_yaw_is_the_same_laser():
+    io = IO()
+    core = BridgeCore(io, BUNDLE, LASER)
+    core.on_frame(rl.Hello(7, "m1", 1, A, 21_000 * MS, (0.0, 0.0, 0.25, math.tau)))
+    assert not core.closed
+
+
+def test_a_hello_without_the_field_asks_nothing_and_gets_no_laser_checked():
+    """The HIL and observe runs' hello: no comparison, no laser_checked (their executors require none)."""
+    io = IO()
+    core = BridgeCore(io, BUNDLE, LASER)
+    core.on_frame(hello())
+    bootstrap(core, io, 1, A)
+    assert io.states()[-1] == (1, "ready")
+    assert all(f.laser_checked is None for f in io.frames if isinstance(f, rl.State))
+
+
+def test_the_laser_fields_round_trip_and_malformed_ones_are_refused():
+    h = rl.Hello(7, "m1", 1, A, 5, (-0.34, 0.0, 0.25, 0.1))
+    assert rl.decode(rl.encode_hello(h)[4:]) == h
+    st = rl.State(1, "ready", None, "a" * 64)
+    assert rl.decode(rl.encode_state(st)[4:]) == st
+    for body in (b'{"type": "hello", "session_epoch": 1, "map_id": "m", "start_id": 1, "start_pose": [0, 0, 0], '
+                 b'"deadline_ns": 1, "base_from_laser": [0, 0, 0]}\n',
+                 b'{"type": "hello", "session_epoch": 1, "map_id": "m", "start_id": 1, "start_pose": [0, 0, 0], '
+                 b'"deadline_ns": 1, "base_from_laser": [0, 0, 0, "x"]}\n',
+                 b'{"type": "state", "id": 1, "kind": "ready", "laser_checked": "short"}\n',
+                 b'{"type": "state", "id": 1, "kind": "ready", "laser_checked": 5}\n'):
+        with pytest.raises(ValueError):
+            rl.decode(body)

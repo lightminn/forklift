@@ -460,6 +460,8 @@ def test_make_real_sources_on_a_listening_bridge(tmp_path):
         assert src.slam_feed == src.scans.offer_for and src.scans.cfg is _PREP_LIDAR[0]
         assert src.imu is None and src.imu_qualified is False and src.depth is None
         assert src.slam.hil_gate is None
+        # the hello carries base_link <- laser from the run's one LiDAR calibration (plan 2.3, U2b)
+        assert src.slam.base_from_laser == rr.bridge_laser_xyz_yaw(prep.lidar, prep.rear_offset_m)
         for fn in src.closers:
             fn()
         with pytest.raises(OSError):
