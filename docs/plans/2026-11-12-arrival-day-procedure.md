@@ -200,7 +200,7 @@ python tools/h743_first_boot.py --record $D/run.jsonl | tee $D/result.json   # �
 
 **실패하면 볼 것**:
 - `drivers` 가 실패하면: VM 이 들어왔는지, `bad_status` 값, nFAULT 핀.
-- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이거나 범위 밖이면, 아직 실측 전인 설정(CRC 변형·영점) 때문일 수 있다 — 고장으로 단정하지 말고 6.2 의 `kth` 판정과 영점 기록으로 가린다(Codex).
+- `kth` 가 실패하면: RJ50 케이블과 축 배정(CS1 조향, CS2 승강). 원시 0xFFFF 고정이면 다음 둘을 확인한다. 하나는 메인 U8 의 그 축 MISO 쌍에 100 Ω 종단이 덧납땜돼 있는지다(V1.0 결함, RJ1 은 2026-11-27 덧납땜, RJ2 는 아직). 다른 하나는 STDS U8 이 SN65LVDS32(수신)인지다(2026-11-27 LVDS31 오실장 사례) — [벤치 기록](../validation/2026-11-27-bench-kth-lvds.md). 프레임이 안 오르면 배선 문제다. 프레임은 오르는데 NaN 이거나 범위 밖이면, 아직 실측 전인 설정(CRC 변형·영점) 때문일 수 있다 — 고장으로 단정하지 말고 6.2 의 `kth` 판정과 영점 기록으로 가린다(Codex).
 - `current`·`faults` 가 실패하면: 6.1 4번에서 잰 핀 전압과 대조한다.
 
 ### 6.2 기록과 손 회전
@@ -216,7 +216,7 @@ python tools/bringup.py record --device /dev/forklift-mcu --out $D/run.jsonl --s
   - `wheel_count_left/right` 가 회전과 비례하는지
   - `steering_rad`·`lift_m` 이 손 회전을 따라가는지
 - 조향 끝에서 끝까지 KTH 각이 한 바퀴 안에 드는지, **넘김 지점이 사용 범위 밖에 있는지** 보고, 직진 영점을 기록한다(계획 S2).
-- **KTH CRC 변형 확정**(계획 S2, mcu-link/3 계약 3.3): 위 기록의 STATE 에 축별 KTH 계수 셋(받은 프레임, 설정 변형 CRC 오류, 다른 변형이었다면 났을 오류)이 실린다. 펌웨어의 설정 변형은 두 축 모두 `g704_bytes` 다(`board_config.c`). 기록 동안 **조향·승강을 범위 안에서 천천히 끝까지 움직인다** — 두 변형은 4096 개 각도 중 256 개에서 CRC 가 같다. 축이 그런 각도에 멈춰 있으면 판정이 나지 않는다. 다른 각도에 멈춰 있어도 `configured_ok` 는 나올 수 있지만, 범위 전체를 지나는지는 S2 가 따로 본다(Codex).
+- **KTH CRC 변형 확정**(계획 S2, mcu-link/3 계약 3.3) — 조향 축의 형식은 2026-11-27 진단 이미지로 `g704_bytes` 로 식별됐다([벤치 기록](../validation/2026-11-27-bench-kth-lvds.md) ④). 그 기록은 이 판정에 쓸 수 없으므로(`not_for_gate`) 아래 판정은 그대로 한다: 위 기록의 STATE 에 축별 KTH 계수 셋(받은 프레임, 설정 변형 CRC 오류, 다른 변형이었다면 났을 오류)이 실린다. 펌웨어의 설정 변형은 두 축 모두 `g704_bytes` 다(`board_config.c`). 기록 동안 **조향·승강을 범위 안에서 천천히 끝까지 움직인다** — 두 변형은 4096 개 각도 중 256 개에서 CRC 가 같다. 축이 그런 각도에 멈춰 있으면 판정이 나지 않는다. 다른 각도에 멈춰 있어도 `configured_ok` 는 나올 수 있지만, 범위 전체를 지나는지는 S2 가 따로 본다(Codex).
   ```bash
   python tools/bringup.py kth --record $D/run.jsonl --configured-m g704_bytes --configured-h g704_bytes \
     --image "<3.1 의 udevadm 으로 읽은 제품 문자열>" | tee $D/kth.json
@@ -276,7 +276,7 @@ USB 멈춤을 본 날짜·조건은 기록한다. 조건부 감시 리셋을 다
 - 사용자가 보호 확인 기록을 쓰고 커밋했다.
   - 표지 줄: `IPROPI protection record: confirmed-by=…; date=YYYY-MM-DD; evidence=…`
 - `fw-open` 이 구성·빌드되고, 3.1 로 구운 보드의 제품 문자열이 `forklift-mcu commission OPEN <git> rec=<해시> lim=lr1` 이다(2026-11-25 부터 열린 시운전 이미지는 `lim=lr1` 로 끝난다).
-  - 11-24 벤치 뒤 보드에는 진단 이미지 `diag-commission-unlimited-1` 이 남아 있다. 첫 작업으로 main 에서 빌드한 `fw-open` 을 3.1 대로 굽는다. 진단 이미지(`diag-` 토큰)로 남긴 기록은 판정 도구가 `not_for_gate` 로 거부한다.
+  - 지금 보드에는 진단 이미지 `diag-kthraw-2` 가 남아 있다([2026-11-27 벤치 기록](../validation/2026-11-27-bench-kth-lvds.md); 그 전에는 11-24 의 `diag-commission-unlimited-1`). 첫 작업으로 main 에서 빌드한 `fw-open` 을 3.1 대로 굽는다. 진단 이미지(`diag-` 토큰)로 남긴 기록은 판정 도구가 `not_for_gate` 로 거부한다.
 - 한 보드에는 한 실행기만 붙는다. 보드를 여는 모든 도구는 장치를 배타 잠금한다(실 안전 배선 설계 8.1). 다른 도구가 잡고 있으면 아무것도 쓰지 않고 `refused`·종료 2 다. `record --markers` 와 `commission` 을 따로 띄우지 않는다(11 절). 보드 점검 사본(`data/h743_check/`)은 잠금 머지 뒤 main 에서 다시 스테이징한다.
 - **Jetson 이 실제로 실행할 도구의 커밋**을 확인했다. 열린 시운전 이미지는 L·R 을 1.0·검증기 천장까지 받으므로, 큰 값의 확인(TTY 재입력·`--vcc-watched`)은 도구에만 있다. 11-24 처럼 진단 도구가 남아 있으면 그 확인이 빠진다.
   - 확인하고 실행하는 곳이 같아야 한다. 확인한 체크아웃으로 **먼저 이동한 뒤**, 그 자리에서 확인하고 그 자리의 `tools/bringup.py` 로 실행한다. `git -C` 는 현재 디렉터리를 바꾸지 않아서, 진단 체크아웃에 머문 채 main 을 확인하는 일이 생긴다.
