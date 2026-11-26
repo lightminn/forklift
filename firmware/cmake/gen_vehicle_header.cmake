@@ -102,10 +102,11 @@ macro(check_inputs)
     endif()
 endmacro()
 check_inputs()
-# The operating build generates from the committed blobs themselves (the HEAD the identity names), staged with
-# their repository-relative layout so the config's relative chassis path still resolves -- never from work-tree
-# bytes that could change between the checks (Codex U3d round 4 P2-2).
+# The operating build generates from the committed blobs themselves (the commit the identity names), staged and
+# both handed to the generator by their staged paths -- never work-tree bytes that could change between the checks
+# (Codex U3d round 4 P2-2), nor a chassis path in the config that could lead out of the stage (round 6 P2).
 set(gen_yaml "${YAML}")
+set(gen_chassis "")
 if(COMMITTED)
     set(stage "${OUT}.stage")
     file(REMOVE_RECURSE "${stage}")
@@ -120,11 +121,13 @@ if(COMMITTED)
         endif()
     endforeach()
     file(RELATIVE_PATH rel_yaml "${top}" "${YAML}")
+    file(RELATIVE_PATH rel_chassis "${top}" "${written}")
     set(gen_yaml "${stage}/${rel_yaml}")
+    set(gen_chassis --chassis "${stage}/${rel_chassis}")
 endif()
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${REPO}/src
-            ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${gen_yaml} --out ${OUT}.new
+            ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${gen_yaml} ${gen_chassis} --out ${OUT}.new
     RESULT_VARIABLE rc)
 if(NOT rc EQUAL 0)
     message(FATAL_ERROR "could not generate ${OUT} from ${YAML}")

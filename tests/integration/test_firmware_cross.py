@@ -735,6 +735,8 @@ def test_the_operating_header_is_generated_from_the_committed_blobs(record_repo,
     assert gen.returncode == 0, gen.stderr
     generating = [ln for ln in log.read_text().splitlines() if "--out" in ln]
     assert len(generating) == 1 and f"{out}.stage/config/real/vehicle.yaml" in generating[0], generating
+    # the chassis model too, by its staged path (Codex U3d round 6 P2: a relative path could lead out of the stage)
+    assert f"--chassis {out}.stage/sim/models/dls08_measured/parameters.yaml" in generating[0], generating
     assert out.read_text() == header.read_text() and not Path(f"{out}.stage").exists()
 
 
