@@ -10,7 +10,12 @@ ready, not as an error.
 synthetic sources (scan, SLAM, IMU) of ``forklift_core.live.real_run`` -- the one assembly the real-input run (PR 7)
 reuses with its sources swapped. ``--run`` with a device (a real MCU) is refused before anything is opened: the real
 MCU's AUTO waits for S10's preconditions. The loaders, the geometry and the checks are the dry assembly's
-(``real_run``)."""
+(``real_run``).
+
+``--run --client real --device D`` (the operating unlock U1, docs/plans/2026-11-26-real-operating-assembly.md 2.1,
+2.4): the real board opened with the executor lock on its fd, its USB identity read and its first STATE waited for --
+nothing is ever written -- then S10's operating preconditions judged and printed. Until the unlock's last PR the list
+always holds ``precondition:unlock_incomplete`` and the run exits 2 without assembling."""
 
 from __future__ import annotations
 
@@ -95,8 +100,8 @@ def dry_assemble(s10a_path: Path, settings_path: Path, vehicle_path: Path, map_b
     plan = rr.check_plan(cfg, planner, geometry, occupancy)
     record.update(asm.assembly_record(core, cfg, {"planner": cap, "tracker": cap, "preview": cap}),
                   assembled=True, check_plan=plan.status, ready="not_ready:link:no_state (dry assembly)")
-    _write(record, out)
-    return 0 if plan.success else 2
+    written = _write(record, out)
+    return 0 if plan.success and written else 2
 
 
 def run_refused(device: str | None, out: Path | None) -> int:
@@ -107,11 +112,140 @@ def run_refused(device: str | None, out: Path | None) -> int:
     return 2
 
 
-def _write(record: dict, out: Path | None) -> None:
-    text = json.dumps(record, indent=2, default=str)
+REAL_FIRST_STATE_S = 2.0
+
+
+def run_real_precheck(args) -> int:
+    """U1's real path (plan 2.1, 2.4): open, read the identity and the first STATE, judge, print, close. The transport
+    is never granted and nothing is written to the board."""
+    sys.path.insert(0, str(REPO / "tools"))
+    import real_loop_transport as rlt
+    import yaml
+
+    from forklift_core.live import real_preconditions as rp
+    from forklift_core.live import real_run as rr
+    from forklift_core.live.executor_lock import DeviceBusy
+    from forklift_core.live.real_loop import real_host
+    from forklift_core.live.synthetic import SyntheticRefused, device_identity  # noqa: F401 -- the pty refusal below
+    from forklift_core.mcu_link.build_policy import Client
+
+    record = {"run": False, "client": "real", "device": args.device, "opened": []}
+    if args.out is not None and not _plain_output(args.out, args.device):
+        # the record never goes to a device (the board itself or an alias of it): nothing is written anywhere
+        _write({**record, "refused": ["out_not_a_regular_file"]}, None)
+        return 2
+    if args.device is None:
+        record["refused"] = ["real_needs_device"]
+        _write(record, args.out)
+        return 2
+    if _is_pty(args.device):
+        record["refused"] = ["real_device_is_pty"]  # a real MCU never links by pty (the model's bench is HIL's)
+        _write(record, args.out)
+        return 2
+    try:
+        tr = rlt.RealTtyTransport.open(args.device)
+    except DeviceBusy as busy:
+        record["refused"] = [f"device_busy:{busy}"]
+        _write(record, args.out)
+        return 2
+    except OSError as err:
+        record["refused"] = [f"device_unopenable:{type(err).__name__}:{err}"]
+        _write(record, args.out)
+        return 2
+    record["opened"] = [args.device]
+    try:
+        host = real_host(rr.RUN_HOST_CFG, client=Client.REAL)
+        record["identity_events"] = [{"kind": e.kind, **dict(e.detail)} for e in host.link_identity(tr.usb_product)]
+        end = time.monotonic() + REAL_FIRST_STATE_S
+        while host.state is None and time.monotonic() < end:
+            try:
+                tr.receive(host, time.monotonic_ns())
+            except rlt.DeviceLost as lost:
+                record["refused"] = [f"device_lost:{lost}"]
+                _write(record, args.out)
+                return 2
+            time.sleep(0.005)
+        board = rr.board_facts(host, tr)
+        record["board"] = board
+        try:
+            facts = rp.gather(record_path=args.preconditions, lidar_path=args.lidar_config, imu_path=args.imu_config,
+                              settings_path=args.settings, s10a_path=args.s10a or REPO / "config/real/s10a.yaml",
+                              layer_path=REPO / "config/real/obstacle_layer_real.yaml",
+                              budget_path=REPO / "config/real/obstacle_layer.yaml", vehicle_path=args.vehicle,
+                              watch_path=args.watch, board=board)
+            record["refused"] = rp.operating_preconditions(facts)
+            record["imu_qualified"] = rp.imu_qualified(facts)
+        except rp.GATHER_ERRORS as err:
+            record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+        written = _write(record, args.out)
+        return 2 if record["refused"] or not written else 0
+    finally:
+        os.close(tr.fd)
+
+
+def _plain_output(out: Path, device: str | None) -> bool:
+    """``--out`` may be a regular file or a new name -- never a device, a FIFO or the board's own node."""
+    import stat as stat_
+
+    try:
+        st = os.stat(out)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat_.S_ISREG(st.st_mode):
+        return False
+    if device is not None:
+        try:
+            dev = os.stat(device)
+            return not (dev.st_ino == st.st_ino and dev.st_dev == st.st_dev)
+        except OSError:
+            return True
+    return True
+
+
+def _is_pty(device: str) -> bool:
+    import stat as stat_
+
+    from forklift_core.live import model_peer
+
+    try:
+        st = os.stat(device)
+    except OSError:
+        return False
+    return stat_.S_ISCHR(st.st_mode) and os.major(st.st_rdev) in model_peer.PTY_SLAVE_MAJORS
+
+
+def _write(record: dict, out: Path | None) -> bool:
+    """The record printed (one JSON document) and, with ``out``, written whole to a regular file only: the file is
+    opened without following a link and without blocking, and checked on the opened fd itself before one byte is
+    written (never a device, a FIFO, a socket -- the real board's own node or an alias of it; Codex unlock U1 review
+    round 2 P2-1). A refused or failed output is reported inside the same document (``out_error``) and returns False."""
+    import stat as stat_
+
+    err = None
     if out is not None:
-        out.write_text(text)
-    print(text, flush=True)
+        text = json.dumps(record, indent=2, default=str).encode()
+        try:
+            fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o644)
+        except OSError as exc:
+            err = f"{type(exc).__name__}:{exc}"
+        else:
+            try:
+                if not stat_.S_ISREG(os.fstat(fd).st_mode):
+                    err = "not_a_regular_file"
+                else:
+                    os.ftruncate(fd, 0)
+                    view = memoryview(text)
+                    while view:
+                        view = view[os.write(fd, view):]  # every byte, not the first write's count
+            except OSError as exc:
+                err = f"{type(exc).__name__}:{exc}"
+            finally:
+                os.close(fd)
+    printed = record if err is None else {**record, "out_error": err}
+    print(json.dumps(printed, indent=2, default=str), flush=True)
+    return err is None
 
 
 # --- the HIL run (design 10.3) ---------------------------------------------------------------------------------------
@@ -499,7 +633,11 @@ def main(argv=None) -> int:
     ap.add_argument("--allow-synthetic", action="store_true",
                     help="--replay: a synthetic record may be replayed (the output is marked not_for_judgement)")
     ap.add_argument("--duration-s", type=float, default=None, help="--hil: required, 0 < s <= 3600")
-    ap.add_argument("--device", default=None, help="refused: no real MCU AUTO before S10's preconditions")
+    ap.add_argument("--device", default=None, help="--run --client real: the real board's tty (U1: a precheck only)")
+    ap.add_argument("--client", choices=("hil", "real"), default=None,
+                    help="--run --client real: open the real board read-only and judge S10's operating preconditions")
+    ap.add_argument("--preconditions", type=Path, default=REPO / "config/real/s10_preconditions.yaml",
+                    help="--client real: S10's human-confirmed precondition record")
     ap.add_argument("--s10a", "--config", dest="s10a", type=Path, default=None,
                     help="the S10-A file (default config/real/s10a.yaml; --run --hil: config/real/s10a_hil.yaml)")
     ap.add_argument("--settings", type=Path, default=REPO / "config/real/autonomy.yaml")
@@ -517,6 +655,11 @@ def main(argv=None) -> int:
         _write({"run": False, "refused": ["replay_needs_run_hil"], "opened": []}, args.out)
         return 2
     if args.run:
+        if args.client == "real":
+            if args.hil:
+                _write({"run": False, "refused": ["real_with_hil"], "opened": []}, args.out)
+                return 2
+            return run_real_precheck(args)
         if not args.hil:
             return run_refused(args.device, args.out)
         if args.s10a is None:

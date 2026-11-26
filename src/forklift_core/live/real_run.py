@@ -263,6 +263,8 @@ class RunPaths:
     lidar_config: Path = REPO / "config/real/lidar.yaml"
     imu_config: Path = REPO / "config/real/imu.yaml"
     allow_synthetic: bool = False
+    # the operating unlock (docs/plans/2026-11-26-real-operating-assembly.md 2.4): S10's human-confirmed record
+    preconditions: Path = REPO / "config/real/s10_preconditions.yaml"
 
 
 @dataclass
@@ -333,6 +335,19 @@ class _Handover:
             worker.close()
 
 
+def _sha_or_none(path) -> str | None:
+    try:
+        return _sha(path)
+    except OSError:
+        return None
+
+
+def _hashed_files(paths) -> tuple:
+    return (("s10a", paths.s10a), ("settings", paths.settings), ("vehicle", paths.vehicle), ("watch", paths.watch),
+            ("layer", paths.layer), ("budget", paths.budget), ("lidar", paths.lidar_config),
+            ("imu", paths.imu_config))
+
+
 def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Event | None = None,
                 jobs_factory=None, epoch: int | None = None) -> RunPrep:
     """Everything before the model starts (10.3 ②). ``AssemblyRefused`` with the structural reasons, ``RunCancelled``
@@ -342,6 +357,15 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     from forklift_core.plant.real_vehicle import chassis_model_path
 
     stop = stop or threading.Event()
+    # the files' hashes before anything is loaded; compared again at the end (a file changed while it was loaded is
+    # refused: the run and the operating preconditions judge the same bytes -- Codex unlock U1 review P1-2)
+    hashes_at_start = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
+    try:
+        _params = chassis_model_path(paths.vehicle)
+        hashes_at_start.update(chassis_params=_sha_or_none(_params),
+                               chassis_urdf=_sha_or_none(_params.parent / "forklift.urdf"))
+    except (OSError, ValueError, TypeError, yaml.YAMLError):
+        pass  # the vehicle loader below refuses it with its own reason (vehicle_unreadable)
     try:
         cfg = ra.load_s10a(paths.s10a)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
@@ -405,9 +429,14 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     plan = check_plan(cfg, planner, geometry, occupancy)
     if not plan.success:
         raise AssemblyRefused([f"check_plan:{plan.status}"])
-    hashes = {name: _sha(p) for name, p in (("s10a", paths.s10a), ("settings", paths.settings),
-                                             ("vehicle", paths.vehicle), ("watch", paths.watch),
-                                             ("layer", paths.layer), ("budget", paths.budget))}
+    hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
+    odo = layer_cfg.get("odometry_age") if isinstance(layer_cfg, dict) else None
+    hashes["odometry_age"] = _sha_or_none(REPO / odo) if odo else None
+    hashes["chassis_params"] = _sha_or_none(chassis_model_path(paths.vehicle))
+    hashes["chassis_urdf"] = _sha_or_none(urdf)
+    moved = [name for name, sha in hashes.items() if name in hashes_at_start and hashes_at_start.get(name) != sha]
+    if moved:
+        raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
     if replay is not None:
         hashes.update(replay_record=replay.record.sha256,
                       **{f"{k}_config": v["sha256"] for k, v in replay.configs.items() if v is not None})
@@ -660,7 +689,9 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     out = []
     client = sources.client
     if client is Client.REAL:
-        out.append("client_real:pr7_preconditions")  # 10.5: LiDAR interval, SLAM processed, generations, budget
+        # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal -- with
+        # precondition:unlock_incomplete until the unlock's last PR, so it is refused whatever the record says
+        out += real_preconditions(prep, sources.host, sources.transport)
     elif client is not Client.HIL:
         out.append(f"client_unsupported:{client}")
     host_client = getattr(sources.host, "client", None)
@@ -692,6 +723,58 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     if sources.depth is not None and (not callable(getattr(sources.depth, "pocket_frame", None))
                                       or not callable(getattr(sources.depth, "pocket_check", None))):
         out.append("depth_without_pocket_hooks")
+    return out
+
+
+def board_facts(host, transport) -> dict:
+    """The first STATE's facts for the operating preconditions: the opened fd's USB product string and serial, the
+    first STATE read on that fd (the transport's own; else the host's latest), the host's build refusal for it, and
+    whether any bad build was ever seen on the fd."""
+    state = getattr(transport, "first_state", None) or getattr(host, "state", None)
+    refusal = None
+    if state is not None:
+        try:
+            refusal = host.build_refusal(state)
+        except Exception as err:  # noqa: BLE001 -- recorded as the refusal
+            refusal = f"build_refusal:{type(err).__name__}"
+    return {"usb_product": getattr(transport, "usb_product", None), "usb_serial": getattr(transport, "usb_serial", None),
+            "state_seen": state is not None, "drive_refusal": refusal,
+            "boot_id": None if state is None else int(state.boot_id),
+            "bad_build_seen": bool(getattr(transport, "bad_build_seen", False))}
+
+
+def real_preconditions(prep, host, transport) -> list:
+    """``real_preconditions.operating_preconditions`` on this run's paths and the board's facts (plan 2.4)."""
+    import yaml
+
+    from forklift_core.live import real_preconditions as rp
+
+    p = prep.paths
+    try:
+        facts = rp.gather(record_path=p.preconditions, lidar_path=p.lidar_config, imu_path=p.imu_config,
+                          settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
+                          vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
+    except rp.GATHER_ERRORS as err:
+        return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
+    # the corridor end the run will drive is the one prep built from the chassis it loaded, not a second reading
+    # (Codex unlock U1 review round 3 P1)
+    facts.inserted_offset_m = float(prep.geometry.inserted_offset_m)
+    # C12 compares the record with the calibration the run loaded, not a second reading (Codex U1 round 4 P1)
+    if facts.vehicle_calibration_id != prep.vehicle.calibration_id:
+        changed_calib = True
+    else:
+        changed_calib = False
+    facts.vehicle_calibration_id = prep.vehicle.calibration_id
+    out = rp.operating_preconditions(facts)
+    if changed_calib:
+        out.append("precondition:files_changed:vehicle_calibration")
+    # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
+    out += [f"precondition:files_changed:{name}" for name, sha in facts.file_hashes.items()
+            if name in prep.hashes and prep.hashes[name] != sha]
+    out += [f"precondition:files_changed:{name}" for name in ("chassis_params", "chassis_urdf")
+            if prep.hashes.get(name) is None or facts.file_hashes.get(name) != prep.hashes.get(name)]
+    if facts.stop_files.get("odometry_age") != prep.hashes.get("odometry_age"):
+        out.append("precondition:files_changed:odometry_age")
     return out
 
 
@@ -784,7 +867,10 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
     # the real layer from the configuration files (10.9: the budget, the overdue end, the scan period, the state
     # delay and the sensor timeout read here, not the rig's constants)
     lc, b = prep.layer_cfg, prep.layer_cfg["bridge"]
-    age = json.loads((REPO / lc["odometry_age"]).read_text())
+    data = (REPO / lc["odometry_age"]).read_bytes()  # one read: parsed and hashed from the same bytes
+    if prep.hashes.get("odometry_age") is not None and hashlib.sha256(data).hexdigest() != prep.hashes["odometry_age"]:
+        raise AssemblyRefused(["files_changed:odometry_age"])  # the table judged is the table the layer takes
+    age = json.loads(data.decode("utf-8"))
     table = AgeErrorTable(tuple(age["ages_s"]), tuple(age["cumulative_position_m"]), tuple(age["cumulative_yaw_rad"]))
     kappa = max(abs(k) for k in vehicle.steering.curvatures_inv_m)
     # the layer's grid over the S10-A field and a metre round it (the odometry frame is the map frame at the HIL start,
