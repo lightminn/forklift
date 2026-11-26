@@ -262,3 +262,20 @@ def test_a_zero_frame_that_never_went_out_does_not_count_as_a_stop():
     since = len(r.transport.sent)
     r.tick(20)
     assert any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
+
+
+def test_a_start_left_while_the_plan_is_pending_writes_no_arm():
+    """Plan 5 / 6.1 merge table (Codex U3e-1 round 2 P2-4): the submit accepted at the start, the truck's start then
+    taken 0.2 m off before the plan is ready -- with the start_pose bypass on too -- and no ARM or moving DRIVE goes out."""
+    r = rig()
+    r.loop.run_deadline_ns = r.now + int(1000 * 1e9)
+    ask(r, "check_bypass", check="start_pose", on=True)
+    r.tick(2)
+    reply = submit(r)
+    assert reply["t"] == "ack", reply
+    r.loop.start_rear = (r.loop.start_rear[0] - 0.2, r.loop.start_rear[1], r.loop.start_rear[2])  # truck 0.2 m off
+    permits = []
+    for _ in range(600):
+        r.tick()
+        permits.append(r.permit.state)
+    assert set(permits) <= {"OFF"}, sorted(set(permits))  # never armed
