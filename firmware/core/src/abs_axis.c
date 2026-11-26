@@ -37,6 +37,9 @@ void abs_axis_init(abs_axis *a)
     a->frames = 0;
     a->crc_errors = 0;
     a->alt_crc_errors = 0;
+#ifdef FW_DIAG_KTH_RAW
+    a->last_raw = 0; /* DIAGNOSTIC IMAGE ONLY (Codex diag check P2-1); kth_frames tells whether any word came */
+#endif
 }
 
 /* Into (-pi, pi] in bounded time (no subtract loop that a large input could stall). */

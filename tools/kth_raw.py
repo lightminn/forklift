@@ -4,7 +4,10 @@ whose STATE kth_alt_crc_errors slot carries the newest raw KTH SPI word per axis
 CS2 PD1). Prints, per axis, the frames counted, the standard-CRC failures, how many distinct raw words were seen
 (sampled at the STATE rate), the most common ones in hex with their bits, and the angle/CRC split.
 
-    python tools/kth_raw.py RUN.jsonl
+    python tools/kth_raw.py RUN.jsonl --product "<the board's USB product string, udevadm ATTRS{product}>"
+
+The product string must end in the token ``kthraw`` (the flag itself, not the tag): on any other image the slot is
+the alternative-CRC counter, and reading it as raw words would be wrong (Codex diag check P2-2).
 """
 
 from __future__ import annotations
@@ -14,7 +17,10 @@ import json
 import sys
 
 
-def main(path: str) -> int:
+def main(path: str, product: str) -> int:
+    if not product or product.split()[-1:] != ["kthraw"]:
+        print(f"refused: the product string {product!r} does not end in 'kthraw' -- not the raw-word image")
+        return 2
     rows = [json.loads(line) for line in open(path, encoding="utf-8")]
     st = [r for r in rows if r.get("t") == "state"]
     if not st:
@@ -32,4 +38,10 @@ def main(path: str) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1]))
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("record")
+    ap.add_argument("--product", required=True)
+    a = ap.parse_args()
+    sys.exit(main(a.record, a.product))

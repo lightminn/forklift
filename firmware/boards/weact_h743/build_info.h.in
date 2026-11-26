@@ -18,7 +18,13 @@
 #define FW_WAIVER_TAG ""
 #endif
 #define FW_TOOLCHAIN "@FW_TOOLCHAIN_VERSION@"
+#ifdef FW_DIAG_KTH_RAW
+#define FW_DIAG_TAG " kthraw" /* DIAGNOSTIC IMAGE ONLY (diag/kth-raw): the flag itself named in the identity */
+#else
+#define FW_DIAG_TAG ""
+#endif
 /* Board design 3.7: the USB product string and the head of the ELF identity. */
-#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG FW_WAIVER_TAG
+#define FW_IDENTITY "forklift-mcu " FW_BUILD_KIND " @FW_OUTPUTS_WORD@ " FW_GIT_DESCRIBE FW_RECORD_TAG FW_WAIVER_TAG \
+    FW_DIAG_TAG
 
 #endif
