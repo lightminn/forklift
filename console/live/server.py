@@ -79,8 +79,15 @@ class LiveHandle(wire.ControlOutboxMixin, wire.MediaFanoutMixin):
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-jpeg")
         self._wake = asyncio.Event()
         self._jpeg: tuple[int, bytes] | None = None  # (frame_id, bytes): one encoding per frame
+        # the operating REAL run's WebSocket Origin allow-list (operating plan 2026-11-26 6.1): None = no check (HIL)
+        self.allowed_origins: frozenset | None = None
 
     def process_request(self, connection: ServerConnection, request: Request) -> Response | None:
+        if self.allowed_origins is not None and request.headers.get("Upgrade", "").lower() == "websocket":
+            # a WebSocket from a page this console did not serve (a missing Origin too) is refused before its handshake
+            # completes: a browser's cross-site request never reaches the lease (Codex U3e-1 round 2 P1-2)
+            if request.headers.get("Origin") not in self.allowed_origins:
+                return connection.respond(403, "origin not allowed\n")
         if self.web_root is None:
             return None
         return wire.static_response(connection, request, self.web_root)
@@ -199,7 +206,11 @@ class LiveServer:
     ends the loop and joins the thread (agy A4, T6)."""
 
     def __init__(self, channels, store: MediaStore, welcome: dict, *, host: str = "127.0.0.1", port: int = 0,
-                 web_root: Path | None = None, cancel: threading.Event | None = None):
+                 web_root: Path | None = None, cancel: threading.Event | None = None, origin_hosts=None):
+        """``origin_hosts``: the operating REAL run's hosts a page may come from (plan 6.1); the WebSocket Origin must be
+        ``http://<host>:<bound port>`` for one of them, made once the port is bound -- never from a request's own
+        Host header. None (HIL, the simulation): no Origin check."""
+        self.origin_hosts = None if origin_hosts is None else tuple(str(h) for h in origin_hosts)
         self.channels, self.store, self.welcome = channels, store, welcome
         self.host, self.port, self.web_root = host, port, web_root
         # set by a caller that gave up waiting for ``start`` (6a-2b design 10.7): a server bound after that closes its
@@ -233,10 +244,14 @@ class LiveServer:
 
     async def _serve(self) -> None:
         h = self.handle = LiveHandle(self.channels, self.store, self.welcome, self.web_root)
+        if self.origin_hosts is not None:
+            h.allowed_origins = frozenset()  # nothing until the port is bound and the list made from it
         self.channels.notify = lambda: self.loop.call_soon_threadsafe(h.wake)
         h.server = await serve(h.handler, self.host, self.port, process_request=h.process_request,
                                compression=None, close_timeout=1.0, max_size=64 * 1024)
         self.port = h.server.sockets[0].getsockname()[1]
+        if self.origin_hosts is not None:
+            h.allowed_origins = frozenset(f"http://{host}:{self.port}" for host in self.origin_hosts)
         if self.cancel is not None and self.cancel.is_set():
             h.server.close()
             with contextlib.suppress(Exception):

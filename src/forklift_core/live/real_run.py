@@ -314,6 +314,8 @@ class RunPrep:
     lidar: object = None  # the operating run's LidarConfig, loaded once with the layer file (U2a; None on HIL/replay)
     # U3c (plan 2.6): the pallet confirmation's lift target, test pallet and mass, from the record the assembly judged
     operator_load: dict | None = None
+    # U3e-1 (plan 6.1): the operating preconditions' list as the assembly judged it (None: not judged -- HIL, replay)
+    judgement: list | None = None
 
 
 class _Handover:
@@ -935,7 +937,9 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     if client is Client.REAL:
         # the operating unlock (plan 2.4): S10's preconditions instead of PR 7's unconditional refusal -- with
         # precondition:unlock_incomplete until the unlock's last PR, so it is refused whatever the record says
-        out += real_preconditions(prep, sources.host, sources.transport)
+        judged = real_preconditions(prep, sources.host, sources.transport)
+        prep.judgement = list(judged)  # the list the assembly judged on; the run's grant takes this one (U3e-1)
+        out += judged
     elif client is not Client.HIL:
         out.append(f"client_unsupported:{client}")
     host_client = getattr(sources.host, "client", None)
@@ -1393,6 +1397,25 @@ def _emit(events, event: dict) -> None:
 
 
 # --- the record (design 10.3) ----------------------------------------------------------------------------------------
+def exclusive_record_opener(path, mode: str = "w"):
+    """The operating run's record file (plan 6.1, Codex U3e-1 P1-3): created anew (``O_EXCL``, an existing file or a
+    link refused, ``O_NOFOLLOW``) and only kept when the opened fd is a regular file -- the record writer never writes
+    to a device or an alias of one, and never cuts an earlier run's record."""
+    import os
+    import stat as stat_
+
+    if mode != "w":
+        raise ValueError("the record is written only")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644)
+    try:
+        if not stat_.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"{path}: not a regular file")
+        return os.fdopen(fd, "w")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 class RunRecord:
     """JSONL by a writer thread from a bounded queue: ``put`` never waits (a full queue or a failed writer leaves
     ``incomplete``); ``close(end)`` drains up to the end event and says whether every row was written."""
@@ -1494,6 +1517,8 @@ class RealRun:
         self.clock = clock
         self.end_reason: str | None = None
         self.ticks = 0
+        # U3e-1: the operating judgement the assembly passed on (empty on an assembled operating run), for the grant
+        self.judgement = None if prep.judgement is None else list(prep.judgement)
 
     def start_session(self, now_ns: int) -> None:
         """The permit's callbacks bound and its session check started (two DISARM exchanges; 10.3 ⑧)."""
