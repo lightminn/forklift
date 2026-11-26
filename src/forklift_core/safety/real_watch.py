@@ -239,7 +239,11 @@ def load_imu_config(path) -> ImuConfig:
     """The ``imu:`` part of ``config/real/safety_watch.yaml`` (it must carry a provenance: provisional values)."""
     import yaml
 
-    raw = yaml.safe_load(Path(path).read_text())
+    return imu_config_from(yaml.safe_load(Path(path).read_text()))
+
+
+def imu_config_from(raw) -> ImuConfig:
+    """The ``imu:`` part of a parsed ``safety_watch.yaml`` (a caller that hashed the bytes it parsed)."""
     part = raw.get("imu") if isinstance(raw, dict) else None
     if not isinstance(part, dict) or "provenance" not in part:
         raise ValueError("imu_config:missing")

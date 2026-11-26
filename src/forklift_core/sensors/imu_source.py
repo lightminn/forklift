@@ -85,7 +85,11 @@ def _int(v, name):
 
 
 def load_imu_source_config(path: str | Path = IMU_YAML) -> ImuSourceConfig:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    return imu_source_config_from(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+
+
+def imu_source_config_from(raw) -> ImuSourceConfig:
+    """The parsed ``imu.yaml`` (a caller that hashed the bytes it parsed: the judged bytes are the used bytes)."""
     if not isinstance(raw, dict) or raw.get("schema") != "imu_source/1":
         raise ValueError("imu source config: schema")
     s, t, g = raw["stream"], raw["timing"], raw["generation"]

@@ -142,8 +142,12 @@ class RealSenseDepthSource(RealSenseSource):
             removed = info.was_removed(self.dev)
         except Exception:  # noqa: BLE001
             return
-        if removed and self._on_lost is not None:
-            self._on_lost("device_removed")
+        fn = self._on_lost
+        if removed and fn is not None:
+            fn("device_removed")
+
+    def _others_streaming(self) -> bool:
+        return self.depth_start_state in ("calling", "done") or self.depth_open_state in ("calling", "done")
 
     def depth_profile_info(self) -> dict:
         opts = self._depth_options()
@@ -208,6 +212,7 @@ class RealSenseDepthSource(RealSenseSource):
                 errors.append(str(e))
         if errors:
             raise RuntimeError("; ".join(errors))
+        self._on_lost = None  # everything stopped: a later removal notice reports to no one (Codex U2a round 4 P3)
 
 
 __all__ = ["DepthSettingsMismatch", "META_KEYS", "RealSenseDepthSource"]

@@ -108,11 +108,13 @@
 
 - **스캔 `RealScanSource`**(`live/real_sources.py`, 새로)
   - 스캔 컨테이너의 소켓을 읽어 `ScanFeed` 로 해석한다.
-  - 수신 공백(`SCAN_GAP_NS`)과 소켓 오류는 `("lost", sensor)` 이다.
+  - 수신 공백(`SCAN_GAP_NS`)과 소켓 오류는 `("lost", sensor)` 이다. 소켓 오류는 실행을 끝낸다(`scan_socket_error`).
+  - 공백이 한 번의 읽기 안에서 끝나면 그 읽기에서 공백 앞의 스캔은 버리고 센다(`before_gap_dropped`). 그래서 층은 `lost` → `connected` 뒤 스캔만 보고, SLAM 은 공백의 세대 뒤에 옛 세대를 듣지 않는다.
   - 각 프레임은 먼저 생산 세대를 SLAM 에 알린다. 그다음 `frame_bound` 로 자격을 본다(7a-3 규칙).
-  - 자격 있는 프레임은 층에 `to_layer_scan` 으로, SLAM 에 `from_feed` 로 넣는다. 오차 구간과 세대를 보존하고, HIL 의 `from_layer` 는 쓰지 않는다.
-  - 합성 표식이 붙은 프레임은 거부한다.
-- **IMU 장치 래퍼**: D435i 를 열고 실제 열린 프로필의 `fits_watch` 를 확인한다. 분리되면 `imu.lost()` 를 부르고, 닫을 때 `stop()` 한다(`closers`). 원천 판정은 `ImuSource(operating=True)` 다.
+  - 자격 있는 프레임은 층에 `to_layer_scan` 으로 넘긴다. SLAM 에는 **층이 받아들인 스캔만** `from_feed` 로 넣는다(실행의 SLAM 분기 `slam_feed` = `offer_for`, 층 거부면 둘 다 받지 않는다). 오차 구간과 세대를 보존하고, HIL 의 `from_layer` 는 쓰지 않는다.
+  - 합성 표식이 붙은 프레임은 판정과 상관없이 실행을 끝낸다(`scan_synthetic`, `ScanFeed.synthetic_frames` 로 센다).
+  - 층과 스캔 원천은 `prepare_run` 이 한 번 읽은 같은 `LidarConfig` 를 쓴다(`RunPrep.lidar`).
+- **IMU 장치 래퍼**: D435i 를 열고 실제 열린 프로필의 `fits_watch` 를 확인한다(열린 가속도 주기를 말하지 않는 프로필은 맞지 않음). 분리되면 `imu.lost()` 를 부르고(`start(..., on_lost=)`), 닫을 때 `stop()` 한다(`closers`, 실패한 `stop` 은 남겨 다시 시도). 원천 판정은 `ImuSource(operating=True)` 다. 시작은 C7 의 세 조건(`imu.yaml` 측정·지연 상한, 감시의 `level_ref` 측정)을 prep 이 해시한 바이트로 본 뒤에만 한다.
 - **SLAM**: `RealSlamSource(mode="operating")`, `client = Client.REAL` 이다. HIL 확인 대신 실 전송기의 부팅 확인을 쓴다.
 - **깊이**: 없다(2.6).
 - **한 호스트**: 스캔 컨테이너·SLAM 브리지·실행기는 같은 Jetson 에서 돈다(같은 `CLOCK_MONOTONIC`). 변환의 `after_receipt` 는 프레임 안의 어댑터 수신 시각과 비교하므로, 다른 호스트여도 거부가 보장되지는 않는다. 그래서 같은 시계 도메인은 런처의 운용 조건이고 C14 기록에 들어간다.
@@ -123,7 +125,7 @@
     - 그래서 삽입 진입과 재개 직전에도 남은 시간(잠정 120 s)을 다시 본다. 모자라면 그 단계로 들어가지 않고 대기 프레임이다.
     - 시한이 실제로 닿으면 지금의 정지와 현장 복구 절차가 우선이다.
   - 기동 시한은 새 설정값(`autonomy.yaml` `real_startup_max_s`, 잠정 30 s)이다.
-  - **수신량**: `ScanFeed.poll()` 은 큐를 비울 때까지 읽는다. REAL 어댑터는 한 틱에 읽는 원시 데이터그램 수를 제한한다(잠정 8, 넘으면 오래된 것을 버리고 센다). 원천 사건(`lost`·세대 변경)은 같은 틱의 송신 판단 전에 루프에 전한다.
+  - **수신량**: `ScanFeed.poll()` 은 큐를 비울 때까지 읽는다. REAL 어댑터는 한 틱에 읽는 원시 데이터그램 수를 제한한다(잠정 8, `read_capped` 로 센다). 남은 것은 버리지 않고 다음 틱에 읽는다(밀린 수신은 공백이 아니다). 한 틱에 층으로 가는 스캔은 마지막 4 개이고 나머지는 센다(`cut`). 원천 사건(`lost`·세대 변경)은 같은 틱의 송신 판단 전에 루프에 전한다.
 
 ### 2.3 한 보정에서 층과 SLAM
 
