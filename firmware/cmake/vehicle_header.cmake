@@ -26,13 +26,18 @@ function(fw_vehicle_header target out_dir)
     endif()
     set(gen ${CMAKE_COMMAND} -DREPO=${repo} -DPYTHON=${FW_PYTHON} -DYAML=${yaml} -DOUT=${header}
         -DCOMMITTED=${committed} -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_vehicle_header.cmake)
-    execute_process(COMMAND ${gen} RESULT_VARIABLE rc ERROR_VARIABLE err)
-    if(NOT rc EQUAL 0)
-        message(FATAL_ERROR "${err}")
+    if(committed)  # the operating build fails at configure already; the others at their build, as before
+        execute_process(COMMAND ${gen} RESULT_VARIABLE rc ERROR_VARIABLE err)
+        if(NOT rc EQUAL 0)
+            message(FATAL_ERROR "${err}")
+        endif()
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${yaml})
     add_custom_target(${target}_vehicle_header COMMAND ${gen} BYPRODUCTS ${header}
                       COMMENT "Generating ${header} from ${yaml}" VERBATIM)
     add_dependencies(${target} ${target}_vehicle_header)
     target_include_directories(${target} PRIVATE ${out_dir})
+    # the include names this header by its absolute path: a stray vehicle_config.h beside a source file or
+    # in another include directory is never the one compiled (Codex U3d round 2 P2-2)
+    target_compile_definitions(${target} PRIVATE "FW_VEHICLE_HEADER_PATH=\"${header}\"")
 endfunction()

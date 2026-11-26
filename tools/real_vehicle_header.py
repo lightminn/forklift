@@ -71,9 +71,20 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path)
     ap.add_argument("--print-chassis", action="store_true",
                     help="print the chassis model file the config names (a build dependency) and exit")
+    ap.add_argument("--print-chassis-as-written", action="store_true",
+                    help="print the config's directory joined with chassis_model, normalised lexically but with "
+                         "no symbolic link followed (the operating build checks that path itself) and exit")
     args = ap.parse_args(argv)
     if args.print_chassis:
         print(chassis_model_path(args.config))
+        return 0
+    if args.print_chassis_as_written:
+        import os
+
+        import yaml
+
+        data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+        print(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(args.config)), data["chassis_model"])))
         return 0
     if args.out is None:
         ap.error("--out is required")

@@ -5,7 +5,11 @@
 #include <string.h>
 
 #include "board/board_config.h"
+#ifdef FW_VEHICLE_HEADER_PATH
+#include FW_VEHICLE_HEADER_PATH /* the generated header by its absolute path (the board build) */
+#else
 #include "vehicle_config.h"
+#endif
 
 #if defined(FW_BUILD_commission)
 #define BOARD_COMMISSION true

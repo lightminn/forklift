@@ -597,6 +597,7 @@ def test_a_header_left_in_the_build_directory_is_not_taken_by_the_operating_buil
     cfg = _configure_in(repo, header, build, "-UFW_VEHICLE_HEADER", "-UFW_BUILD", *WAIVED,
                         "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
     assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    made.write_text(other.read_text())  # left behind after the reconfiguration too: only the build can replace it
     res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
     assert res.returncode == 0, res.stdout + res.stderr
     assert made.read_text() == text  # the commit's values, not the copy left behind
@@ -624,14 +625,50 @@ def test_the_operating_build_refuses_an_uncommitted_vehicle_config(record_repo, 
     build = tmp_path / "d"
     cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
     assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    # the chassis model is not a configure dependency: only the build's own check can catch its edit
+    chassis = repo / "sim" / "models" / "dls08_measured" / "parameters.yaml"
+    chassis_text = chassis.read_text()
     try:
-        yaml_path.write_text(original + "# edited after configure\n")
+        chassis.write_text(chassis_text + "# edited after configure\n")
         res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
                              capture_output=True, text=True)
         assert res.returncode != 0
         assert "differs from its committed version" in _flat(res.stdout + res.stderr)
     finally:
-        yaml_path.write_text(original)
+        chassis.write_text(chassis_text)
+
+
+def _copy_repo(repo: Path, dest: Path) -> Path:
+    shutil.copytree(repo, dest, symlinks=True, ignore=shutil.ignore_patterns("build"))
+    return dest
+
+
+def test_the_operating_build_refuses_a_chassis_model_through_a_symbolic_link(record_repo, tmp_path):
+    """Codex U3d round 2 P2-1: the chassis path the config writes is the one checked -- a committed symbolic link
+    to another committed model is refused, not followed."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "sim" / "models" / "alias").symlink_to("dls08_measured")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    cfg_path.write_text(cfg_path.read_text().replace("sim/models/dls08_measured/", "sim/models/alias/"))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "alias")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "goes through a symbolic link" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_a_stray_vehicle_header_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
+    """Codex U3d round 2 P2-2: the board source includes the generated header by its absolute path."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "firmware" / "boards" / "weact_h743" / "src" / "vehicle_config.h").write_text(
+        '#error "a stray vehicle_config.h was compiled"\n')  # untracked: git describe stays clean
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
 
 
 def test_the_commissioning_open_build_carries_no_waiver(open_build):

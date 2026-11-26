@@ -319,7 +319,8 @@ def image_commit(product) -> str | None:
         return None
     d = parts[3]
     m = re.fullmatch(r"(?:.+-\d+-g)?([0-9a-f]{12,40})", d)
-    # an exactly tagged build ("<tag>" alone) or a dirty one carries no checkable abbreviation: refused (safe side)
+    # a dirty build, or a pre-U3d exactly tagged build ("<tag>" alone) whose tag looks like neither form, carries no
+    # checkable abbreviation: refused (safe side) -- see the docstring for the tags that do look like one
     return m.group(1) if m else None
 
 

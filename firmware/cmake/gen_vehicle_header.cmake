@@ -13,6 +13,12 @@ function(refuse why)
 endfunction()
 
 function(check_committed top path)
+    # no symbolic link anywhere on the path: the path itself is the file the generator reads (its
+    # resolve() then changes nothing), so the bytes checked are the bytes used (Codex U3d round 2 P2-1)
+    get_filename_component(real "${path}" REALPATH)
+    if(NOT real STREQUAL path)
+        refuse("'${path}' goes through a symbolic link")
+    endif()
     file(RELATIVE_PATH rel "${top}" "${path}")
     if(rel MATCHES "^\\.\\./" OR rel STREQUAL ".." OR IS_ABSOLUTE "${rel}")
         refuse("'${path}' is outside the repository")
@@ -39,15 +45,29 @@ execute_process(
 if(NOT rc EQUAL 0 OR NOT EXISTS "${chassis}")
     message(FATAL_ERROR "could not read the chassis model named by ${YAML}")
 endif()
-if(COMMITTED)
-    execute_process(COMMAND git rev-parse --show-toplevel WORKING_DIRECTORY ${REPO}
-                    OUTPUT_VARIABLE top RESULT_VARIABLE rc OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(NOT rc EQUAL 0 OR NOT top)
-        refuse("the repository is not a git repository")
+macro(check_inputs)
+    if(COMMITTED)
+        execute_process(COMMAND git rev-parse --show-toplevel WORKING_DIRECTORY ${REPO}
+                        OUTPUT_VARIABLE top RESULT_VARIABLE rc OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(NOT rc EQUAL 0 OR NOT top)
+            refuse("the repository is not a git repository")
+        endif()
+        get_filename_component(top "${top}" REALPATH)
+        execute_process(
+            COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${REPO}/src
+                    ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${YAML} --print-chassis-as-written
+            OUTPUT_VARIABLE written OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE rc)
+        if(NOT rc EQUAL 0 OR NOT written)
+            refuse("could not read the chassis model path ${YAML} names")
+        endif()
+        check_committed("${top}" "${YAML}")
+        check_committed("${top}" "${written}")
+        if(NOT written STREQUAL chassis)
+            refuse("the chassis model resolves to '${chassis}', not the path '${written}' the config names")
+        endif()
     endif()
-    check_committed("${top}" "${YAML}")
-    check_committed("${top}" "${chassis}")
-endif()
+endmacro()
+check_inputs()
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env PYTHONPATH=${REPO}/src
             ${PYTHON} ${REPO}/tools/real_vehicle_header.py --config ${YAML} --out ${OUT}.new
@@ -55,6 +75,7 @@ execute_process(
 if(NOT rc EQUAL 0)
     message(FATAL_ERROR "could not generate ${OUT} from ${YAML}")
 endif()
+check_inputs()  # again after the generation: the bytes it read are still the committed ones
 file(READ "${OUT}.new" new)
 if(EXISTS "${OUT}")
     file(READ "${OUT}" old)
