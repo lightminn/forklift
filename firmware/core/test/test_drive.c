@@ -2281,7 +2281,8 @@ static void bench_m_needs_a_fresh_count(void)
     send(arm_msg(seq++, d.boot_id, echo_now()));
     send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
-    /* a count, then 6 ms without a countable frame, then ARM + M(0) + M(0.12) in one cycle */
+    /* a count, then 6 ms of 0x0000 (valid angle, never counted), then ARM + M(0) + M(0.12) in one cycle with the
+       new arming's generation: the freshness check alone refuses M */
     boot_with(mod_bench);
     in.abs_fresh[1] = false;
     set_steer(2.0);
@@ -2289,14 +2290,40 @@ static void bench_m_needs_a_fresh_count(void)
     CHECK(d.bench_kth_have);
     seq = 1;
     send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
-    in.abs_fresh[0] = false;
+    in.abs_frame[0] = 0x0000;
     ticks(6);
+    CHECK(d.steer.valid);
+    uint16_t gen = (uint16_t)(d.arm_gen + 1u);
     link_msg three[3] = {arm_msg(seq, d.boot_id, echo_now()),
                          commission_msg((uint16_t)(seq + 1), DRIVE_CH_M, 0, 150, echo_now()),
                          commission_msg((uint16_t)(seq + 2), DRIVE_CH_M, 1200, 150, echo_now())};
-    tick_msgs(three, 3);
+    three[1].u.commission.arm_gen = gen;
+    three[2].u.commission.arm_gen = gen;
+    seq = (uint16_t)(seq + 3);
+    tick_msgs(three, 2); /* ARM + M(0): the zero itself is refused by the freshness check */
+    CHECK_EQ_U(d.arm_gen, gen);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    tick_msgs(&three[2], 1); /* M(0.12) then: no zero was ever taken */
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
-    in.abs_fresh[0] = true;
+    /* a jump found in the cycle of the ARM is kept by it (Codex round 6 P2) */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    set_steer(0.1); /* a CRC-passing jump of 1.9 rad in one frame */
+    gen = (uint16_t)(d.arm_gen + 1u);
+    link_msg four[4] = {arm_msg(seq, d.boot_id, echo_now()),
+                        commission_msg((uint16_t)(seq + 1), DRIVE_CH_L, 0, 150, echo_now()),
+                        commission_msg((uint16_t)(seq + 2), DRIVE_CH_M, 0, 150, echo_now()),
+                        commission_msg((uint16_t)(seq + 3), DRIVE_CH_M, 1200, 150, echo_now())};
+    for (int k = 1; k < 4; k++) {
+        four[k].u.commission.arm_gen = gen;
+    }
+    tick_msgs(four, 4);
+    CHECK(d.bench_kth_lost);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
 }
 
 static void bench_limits_are_the_sessions(void)

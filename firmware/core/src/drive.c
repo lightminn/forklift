@@ -496,6 +496,7 @@ static void read_sensors(drive *d, const drive_inputs *in)
                     /* a gap or a step no axis makes in one frame (a glitch passing the CRC): never
                        counted, and the count is lost until the next ARM (Codex fw-bench round 3 P2-2) */
                     d->bench_kth_lost = true;
+                    d->bench_kth_lost_us = d->time_us;
                 } else {
                     d->bench_kth_counts += (uint32_t)step; /* modular: the host reads differences */
                 }
@@ -507,6 +508,7 @@ static void read_sensors(drive *d, const drive_inputs *in)
     }
     if (BENCH(c) && d->bench_kth_have && d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US) {
         d->bench_kth_lost = true; /* no countable frame for too long: lost now, not at the next one */
+        d->bench_kth_lost_us = d->time_us;
     }
 #endif
     if (in->adc_fresh) {
@@ -846,8 +848,11 @@ static void handle_arm(drive *d, const link_msg *m)
     d->mode = DRIVE_MODE_ARMED;
     d->latched &= ~ARM_CLEARS;
 #if defined(FW_CORE_BENCH)
-    d->bench_kth_lost = false; /* diag/fw-bench: a new arming counts afresh */
-    d->latched &= ~DRIVE_FAULT_BENCH_KTH_LOST;
+    if (!(d->bench_kth_lost && d->bench_kth_lost_us == d->time_us)) {
+        /* diag/fw-bench: a new arming counts afresh -- except a loss found in this very cycle (Codex round 6) */
+        d->bench_kth_lost = false;
+        d->latched &= ~DRIVE_FAULT_BENCH_KTH_LOST;
+    }
 #endif
     reset_control(d);
     d->zero_seen = false;
