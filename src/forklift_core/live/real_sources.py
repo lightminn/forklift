@@ -69,18 +69,32 @@ class RealScanSource:
         self._seen_gen: int | None = None  # the feed generation last looked at (a change since is a boundary)
         self._any_taken = False  # a scan was taken: before it there is no evidence a boundary could void
         self._last_key = None  # the last taken scan's (feed, producer) generation
+        self._raised: Exception | None = None  # an error inside a read, raised once its events were handed over
         self._clock_break = False  # a clock jump of the current producer opened its boundary: its re-establishment
         # ("clock") is the same break, not a second boundary
         self.last_delivered_s: float | None = None
 
     # --- the loop's calls ---------------------------------------------------------------------------------------------
+    def _run(self, now_ns: int) -> None:
+        """One read per tick; an error raised inside it (SLAM told a generation and refusing, Codex U3a round 3 P2) is
+        kept: the events already queued -- a boundary first of all -- reach the loop before it is raised."""
+        if self._raised is None:
+            try:
+                self._advance(int(now_ns))
+            except Exception as exc:  # noqa: BLE001 -- re-raised by the next call that has nothing to hand over
+                self._raised = exc
+
     def scan_source_events(self, now_ns: int) -> list:
-        self._advance(int(now_ns))
+        self._run(now_ns)
         out, self._events = self._events, []
+        if not out and self._raised is not None:
+            raise self._raised
         return out
 
     def scans(self, now_ns: int) -> list:
-        self._advance(int(now_ns))
+        self._run(now_ns)
+        if self._raised is not None:
+            raise self._raised  # the run's end, its own reason kept
         out, self._ready = self._ready, []
         return out
 
@@ -129,6 +143,17 @@ class RealScanSource:
         self.last_boundary = why
         self._last_key = None  # the next scan starts the new generation (no second boundary for the same break)
         self._events.append(("boundary", self.sensor))
+
+    def _frame_of_current(self, data) -> bool:
+        """The refused frame is the current producer's (its nonce), not a candidate's whose refusal restored the
+        current producer's state (Codex U3a round 3 P3)."""
+        from forklift_core.sensors.scan_feed import FrameError, decode_frame
+
+        try:
+            gen = decode_frame(data)[0].get("gen")
+        except (FrameError, ValueError, KeyError, TypeError):
+            return False
+        return gen == self._producer
 
     def _watch_generation(self, items: list) -> None:
         """A feed generation raised since the last look is a boundary (whatever raised it), except the clock's
@@ -200,7 +225,7 @@ class RealScanSource:
             if scan is None:
                 self.counts[f"feed_{why}"] += 1
                 self.last_refusal = f"feed:{why}"
-                if why == "clock_jump" and self.feed.establishing:
+                if why == "clock_jump" and self.feed.establishing and self._frame_of_current(data):
                     # the current producer's own clock pair jumped (a candidate's refusal leaves its clock established,
                     # Codex U3a round 2 P2): the break itself -- a boundary now, and a feed generation SLAM is told, so
                     # what waits or is in flight there is cut; the re-establishment adds none

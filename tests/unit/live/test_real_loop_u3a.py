@@ -190,7 +190,7 @@ def test_a_late_reply_of_the_old_generation_never_refreshes_the_evidence():
     assert loop._fresh_ns is not None  # noqa: SLF001
 
 
-def _rearmed_after_a_boundary(*, slam_replies: bool, layer_installs: bool):
+def _rearmed_after_a_boundary(*, slam_replies: bool, layer_installs: bool, slam_bypass: bool = False):
     """Codex U3a rounds 1-2 P2: an operating truck latched on a boundary, rearmed by the operator, then given only the
     new evidence named -- the real ARM path decides."""
     from test_real_loop_console import ask
@@ -207,6 +207,10 @@ def _rearmed_after_a_boundary(*, slam_replies: bool, layer_installs: bool):
     reply, _ = ask(r, "rearm")
     r.tick(5)
     assert reply["t"] == "ack", reply
+    if slam_bypass:
+        reply, _ = ask(r, "check_bypass", check="slam", on=True)
+        assert reply["t"] == "ack", reply
+        r.tick(2)
     return r
 
 
@@ -233,13 +237,19 @@ def _arms_after_submit(r, ticks=400):
     return False, refusals
 
 
-@pytest.mark.parametrize("slam_replies, layer_installs, arms", [(False, True, False), (True, False, False),
-                                                                (True, True, True)])
-def test_a_rearm_after_a_boundary_needs_both_new_pieces_of_evidence(slam_replies, layer_installs, arms):
-    r = _rearmed_after_a_boundary(slam_replies=slam_replies, layer_installs=layer_installs)
+@pytest.mark.parametrize("slam_replies, layer_installs, slam_bypass, arms", [
+    (False, True, False, False), (True, False, False, False), (True, True, False, True),
+    (False, True, True, False),  # Codex U3a round 3: the slam bypass drives on, it never arms without a new processed
+])
+def test_a_rearm_after_a_boundary_needs_both_new_pieces_of_evidence(slam_replies, layer_installs, slam_bypass, arms):
+    r = _rearmed_after_a_boundary(slam_replies=slam_replies, layer_installs=layer_installs, slam_bypass=slam_bypass)
     armed, refusals = _arms_after_submit(r)
     assert armed is arms, (refusals, r.loop.last_refusal, r.loop.session.results[-1:])
     if not arms:
         # readiness names the missing piece itself: SLAM's freshness, or the layer's new result
         ready = r.loop._ready(r.now, "drive") or ""  # noqa: SLF001
-        assert ready.startswith("slam:") if not slam_replies else ready.startswith(("layer:", "wait:")), (ready, refusals)
+        if not slam_bypass:
+            assert ready.startswith("slam:") if not slam_replies else ready.startswith(("layer:", "wait:")), \
+                (ready, refusals)
+        else:
+            assert any("slam" in str(x) for x in refusals), refusals  # the start check: slam_stale

@@ -799,3 +799,57 @@ def test_a_boundary_before_any_scan_was_taken_is_none(frames, monkeypatch):
     tx.send(frames[0][1])
     clock.ns = frames[0][0]
     assert src.scan_source_events(clock.ns) == [] and src.counts["boundaries"] == 0
+
+
+def test_a_slam_refusal_at_the_jump_still_hands_the_boundary_over_first(frames):
+    """Codex U3a round 3 P2: SLAM refusing the new generation (start_check_generation_changed) does not swallow the
+    boundary queued before it -- the loop gets the event, then the error on its next call."""
+    from forklift_core.sensors.scan_feed import JUMP_NS, decode_frame
+
+    tx, rx = pair()
+    clock = Clock()
+
+    class Refusing(Slam):
+        refuse = False
+
+        def generation(self, gen):
+            if self.refuse:
+                raise RuntimeError("start_check_generation_changed")
+            super().generation(gen)
+
+    slam = Refusing()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    slam.refuse = True
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    tx.send(_reframed(data, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [("boundary", "lidar")]
+    with pytest.raises(RuntimeError, match="start_check_generation_changed"):
+        src.scans(recv)
+    with pytest.raises(RuntimeError):
+        src.scan_source_events(recv + MS)  # nothing more to hand over: the error again
+
+
+def test_a_candidates_clock_jump_while_the_current_one_re_establishes_is_no_boundary(frames, monkeypatch):
+    """Codex U3a round 3 P3: the restored establishing state is the current producer's -- a refusal of another
+    producer's frame never opens a second boundary."""
+    from forklift_core.sensors.scan_feed import decode_frame
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    other = _reframed(data, gen=int(h.get("gen") or 1) + 9)
+
+    def judge(d, r):
+        src.feed.establishing = True  # the current producer re-establishing, its state restored by the feed
+        return None, "clock_jump"
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    tx.send(other)
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [] and src.counts["boundaries"] == 0
