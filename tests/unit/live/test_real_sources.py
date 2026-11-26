@@ -248,7 +248,10 @@ def test_one_call_delivers_one_generation(frames, monkeypatch):
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     offers = [e for e in slam.log[told:] if e[0] == "offer"]
     ids = [decode_frame(data)[0]["scan_id"] for _r, data in burst]
-    assert src.counts["before_generation_dropped"] == 2 and len(out) == 2
+    # U3a: the producer change is an evidence boundary -- the older scans of the read are dropped there
+    assert src.counts["before_boundary_dropped"] == 2 and len(out) == 2
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")] and src.counts["boundaries"] == 1
+    assert src.last_boundary == "producer_changed"
     assert [e[2][2] for e in offers] == ids[2:]  # exactly the newer generation's two scans
     assert gens and all(g[1] in switched for g in gens) and all(e[1][1] in switched for e in offers)
 
@@ -290,11 +293,13 @@ def test_a_newer_generation_the_layer_cannot_take_still_drops_the_older(frames, 
         tx.send(data)
     told = len(slam.log)
     out = src.scans(burst[-1][0])
-    assert out == [] and src.counts["before_generation_dropped"] == 2
+    assert out == [] and src.counts["before_boundary_dropped"] == 2 and src.counts["boundaries"] == 3
+    assert src.last_boundary.startswith("qualification:") and src.last_refusal == "frame:no_bound"
     assert [e for e in slam.log[told:] if e[0] == "offer"] == []
     # SLAM is still told the newer generation (the older one's pending replies are void -- Codex U2a round 4 P3)
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     assert gens and gens[-1][1] in switched and all(g[1] in switched for g in gens)
+    assert gens[-1][0] == src.feed.generation  # each lost qualification opened a feed generation SLAM was told
 
 
 def test_a_socket_error_ends_the_run():
@@ -629,3 +634,44 @@ def test_an_unfit_imu_whose_stop_fails_keeps_its_stop_on_the_closers(tmp_path, m
     for fn in reversed(src.closers):
         fn()
     assert log.count("stop") == 2  # and not again once done
+
+
+# --- U3a: a lost qualification within one producer generation --------------------------------------------------------
+def test_a_lost_qualification_in_one_producer_generation_is_a_boundary(frames, monkeypatch):
+    """Codex U3 split round 2 P1: good A, unqualified B, good C of the same producer -- B is a boundary: A of the same
+    read is dropped, the feed opens a generation SLAM is told before C, and the loop gets ("boundary", sensor)."""
+    from forklift_core.sensors import lidar_cfg
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    bad_id = decode_frame(frames[i + 1][1])[0]["scan_id"]
+    real_layer = lidar_cfg.to_layer_scan
+
+    def to_layer(scan, *a, **kw):
+        return (None, "no_bound") if scan.scan_id == bad_id else real_layer(scan, *a, **kw)
+
+    monkeypatch.setattr(lidar_cfg, "to_layer_scan", to_layer)
+    burst = frames[i:i + 3]
+    stamps = iter(r for r, _ in burst)
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, burst[-1][0]))
+    for _recv, data in burst:
+        tx.send(data)
+    gen_before = src.feed.generation
+    told = len(slam.log)
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")]
+    out = src.scans(burst[-1][0])
+    for layer in out:
+        src.offer_for(layer)
+    assert src.counts["before_boundary_dropped"] == 1 and len(out) == 1  # A dropped, C delivered
+    assert src.feed.generation == gen_before + 1 and src.last_refusal == "frame:no_bound"
+    offers = [e for e in slam.log[told:] if e[0] == "offer"]
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    assert [o[1][0] for o in offers] == [src.feed.generation] and gens[0][0] == src.feed.generation

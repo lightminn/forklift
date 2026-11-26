@@ -624,6 +624,8 @@ class Evidence:
     operator_start_ok: object  # this session's, this lease's physical check for the next submit
     core_refusal: object  # real_auto_refusal on the core's safety state
     mission_gen: object = None  # -> the running mission's generation (a hold must be this mission's)
+    # the operating REAL run's IMU did not qualify (unlock U3a, plan 2.7: C7) -> True; None elsewhere
+    imu_unqualified: object = None
 
 
 # the readiness checks the operator may bypass for the session (real safety wiring design 5, 5c-1); everything else
@@ -649,6 +651,8 @@ def auto_ready_refusal(now_ns: int, stage: str, ev: Evidence, bypass=frozenset()
     why = ev.link_reason(now_ns)
     if why is not None:
         return f"link:{why}"
+    if ev.imu_unqualified is not None and "imu" not in bypass and ev.imu_unqualified(now_ns):
+        return "imu:unqualified"  # submit and arm alike (plan 2.7); the session's imu bypass opens both
     if "measurement" not in bypass:
         m = ev.measurement(now_ns)
         for name in ("steering_ok", "lift_ok", "lift_origin_ok", "counts_ok"):

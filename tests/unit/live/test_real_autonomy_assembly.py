@@ -192,3 +192,12 @@ def test_the_snapshot_bypass_keeps_an_install_still_waited_for():
     """5c-1 r2 P2-3: another mission's or path's install (the view's installing) is still a wait."""
     ev = evidence(snapshot=lambda n: ra.SnapshotView((0.0, 0.0, 0.0), (0.1, 0.0, 0.0), n, True, 3, 4))
     assert ra.auto_ready_refusal(NOW, "drive", ev, bypass={"snapshot"}) == "wait:snapshot_installing"
+
+
+# --- U3a: the operating run's unqualified IMU (plan 2.7) -----------------------------------------------------------------
+@pytest.mark.parametrize("stage", ["submit", "drive"])
+def test_an_unqualified_imu_refuses_both_stages_until_the_imu_bypass(stage):
+    ev = evidence(imu_unqualified=lambda n: True)
+    assert ra.auto_ready_refusal(NOW, stage, ev) == "imu:unqualified"
+    assert ra.auto_ready_refusal(NOW, stage, ev, bypass=frozenset({"imu"})) is None
+    assert ra.auto_ready_refusal(NOW, stage, evidence()) is None  # off the operating run: no such check

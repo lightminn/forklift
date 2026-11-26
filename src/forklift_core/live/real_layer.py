@@ -539,6 +539,13 @@ class RealLayer:
         """The scan source says it is connected again (its scans still have to come and be installed)."""
         self.disconnected.discard(str(sensor))
 
+    def evidence_boundary(self) -> None:
+        """The operating run's scan evidence boundary (unlock U3a, plan 2.5: a producer change or a lost
+        qualification): a sticky end the loop latches on (``scan_generation_changed``); the loop resets the grid."""
+        self._exceeded = "scan_generation_changed"
+        self._watch_cache = None
+        self.counts["evidence_boundaries"] = self.counts.get("evidence_boundaries", 0) + 1
+
     def end_taken(self) -> None:
         """The loop latched on the watchdog's end: the deadlines start again from the next result (a rearm follows)."""
         self._exceeded = None
