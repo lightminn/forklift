@@ -2,7 +2,11 @@
    the device by serial number (the 96-bit UID) and product string (the build identity), so the
    ROM DFU device (0483:df11) is never mistaken for the link. */
 #include "board/link_cfg.h"
+#ifdef FW_BUILD_INFO_PATH
+#include FW_BUILD_INFO_PATH /* the generated identity by its absolute path (operating plan 2026-11-26 U3d) */
+#else
 #include "build_info.h"
+#endif
 #include "fw/link.h"
 #include "stm32h7xx.h"
 #include "tusb.h"

@@ -51,6 +51,12 @@ set(FW_ESTOP_WAIVED 0)
 if(FW_ESTOP_WAIVER_RECORD AND NOT (FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal"))
     message(FATAL_ERROR "FW_ESTOP_WAIVER_RECORD is only for FW_BUILD=normal with FW_MOTOR_OUTPUT=1.")
 endif()
+if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal" AND FW_VEHICLE_HEADER)
+    # Operating plan 2026-11-26 2.4 (C12): the operating image's vehicle header comes only from this
+    # commit's config/real/vehicle.yaml, so the calibration it was built with is the commit's.
+    message(FATAL_ERROR "FW_VEHICLE_HEADER is not for the open normal (operating) build: its vehicle "
+        "header is generated from config/real/vehicle.yaml of this commit (give FW_PYTHON instead).")
+endif()
 if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal")
     if(NOT FW_ESTOP_WAIVER_RECORD)
         message(FATAL_ERROR "E-stop waiver record: none given. The open normal build needs a committed "
@@ -199,6 +205,9 @@ if(NOT FW_MOTOR_OUTPUT)
     set_source_files_properties(${MOTOR_OUT} PROPERTIES COMPILE_OPTIONS "${GUARD}")
 endif()
 add_dependencies(fw build_info)
+# the identity compiled is the generated one by its absolute path -- a stray build_info.h beside a source is never
+# taken, so the identity the vehicle header check reads is the one in the image (Codex U3d round 4 P2-1)
+target_compile_definitions(fw PRIVATE "FW_BUILD_INFO_PATH=\"${BUILD_INFO_H}\"")
 if(FW_MOTOR_OUTPUT)
     add_dependencies(fw protection_record)
     target_compile_definitions(fw PRIVATE FW_MOTOR_OUTPUT_OPEN=1)
@@ -229,6 +238,11 @@ endif()
 set_property(TARGET fw APPEND PROPERTY LINK_DEPENDS ${BOARD_DIR}/stm32h743vi_dtcm.ld)
 # Vehicle values from config/real/vehicle.yaml, never written twice (plan P0-6).
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vehicle_header.cmake)
+# the operating build's inputs must be the commit's (operating plan 2026-11-26 2.4, C12)
+if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal")
+    set(FW_VEHICLE_COMMITTED 1)
+    set(FW_VEHICLE_BUILD_INFO ${BUILD_INFO_H})
+endif()
 fw_vehicle_header(fw ${CMAKE_CURRENT_BINARY_DIR}/generated)
 
 add_custom_command(TARGET fw POST_BUILD

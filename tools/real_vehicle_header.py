@@ -19,6 +19,7 @@ from forklift_core.plant.real_vehicle import (
     RealVehicleConfig,
     chassis_model_path,
     load_real_vehicle,
+    real_vehicle_from_mapping,
 )
 
 ROUNDING_LIMIT = 1e-5  # relative; a scale this coarse is a wrong configuration, not a rounding
@@ -69,16 +70,56 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--config", type=Path, required=True)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--chassis", type=Path,
+                    help="read the chassis model from this file instead of the path the config names (the operating "
+                         "build's staged copy of the committed blob)")
     ap.add_argument("--print-chassis", action="store_true",
                     help="print the chassis model file the config names (a build dependency) and exit")
+    ap.add_argument("--print-chassis-as-written", action="store_true",
+                    help="print the config's directory joined with chassis_model, normalised lexically but with "
+                         "no symbolic link followed (the operating build checks that path itself) and exit")
     args = ap.parse_args(argv)
     if args.print_chassis:
         print(chassis_model_path(args.config))
         return 0
+    if args.print_chassis_as_written:
+        import os
+
+        import yaml
+
+        data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+        import re
+
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", str(data["chassis_model"])):
+            # a name CMake would carry differently (a trailing space, a newline, ...): refused (Codex U3d r7 P2)
+            print(f"real_vehicle_header: chassis_model {data['chassis_model']!r} has characters outside "
+                  "[A-Za-z0-9._/-]", file=sys.stderr)
+            return 5
+        if os.path.isabs(str(data["chassis_model"])):
+            # the operating build generates from a staged copy: an absolute path would leave it (Codex U3d r5 P2-1)
+            print(f"real_vehicle_header: chassis_model {data['chassis_model']} is absolute", file=sys.stderr)
+            return 4
+        raw = os.path.join(os.path.dirname(os.path.abspath(args.config)), data["chassis_model"])
+        # every component as written, before ".." folds any of them away (Codex U3d round 3 P2-1: alias/../x)
+        prefix = os.sep
+        for part in Path(raw).parts[1:]:
+            prefix = os.path.join(prefix, part)
+            if part not in (".", "..") and os.path.islink(prefix):
+                print(f"real_vehicle_header: {prefix} is a symbolic link", file=sys.stderr)
+                return 3
+        print(os.path.normpath(raw))
+        return 0
     if args.out is None:
         ap.error("--out is required")
     try:
-        text = render_header(load_real_vehicle(args.config))
+        if args.chassis is not None:
+            import yaml
+
+            data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+            chassis = yaml.safe_load(args.chassis.read_text(encoding="utf-8"))
+            text = render_header(real_vehicle_from_mapping(data, chassis))
+        else:
+            text = render_header(load_real_vehicle(args.config))
     except ValueError as exc:
         print(f"real_vehicle_header: {exc}", file=sys.stderr)
         return 2

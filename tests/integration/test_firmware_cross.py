@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -302,6 +303,14 @@ def record_repo(tmp_path_factory):
     root = tmp_path_factory.mktemp("record_repo")
     repo = root / "repo"
     shutil.copytree(FIRMWARE, repo / "firmware", ignore=shutil.ignore_patterns("build"))
+    # the operating (open normal) build generates its vehicle header from the copy's own vehicle.yaml
+    # (operating plan 2026-11-26 2.4): the config, its chassis model, the generator and the package
+    shutil.copytree(REPO / "config" / "real", repo / "config" / "real")
+    shutil.copytree(REPO / "sim" / "models" / "dls08_measured", repo / "sim" / "models" / "dls08_measured")
+    (repo / "tools").mkdir()
+    shutil.copy2(REPO / "tools" / "real_vehicle_header.py", repo / "tools" / "real_vehicle_header.py")
+    shutil.copytree(REPO / "src" / "forklift_core", repo / "src" / "forklift_core",
+                    ignore=shutil.ignore_patterns("__pycache__"))
     (repo / "records").mkdir()
     (repo / "records" / "ipropi.md").write_text("# fake\n" + MARKER)
     (repo / "records" / "waiver.md").write_text("# fake\n" + WAIVER_MARKER)
@@ -321,10 +330,19 @@ def _git(repo: Path, *args: str) -> str:
                           cwd=repo, capture_output=True, text=True, check=True).stdout
 
 
-def _configure_in(repo: Path, header: Path, build: Path, *extra: str) -> subprocess.CompletedProcess:
+def _operating(extra) -> bool:
+    return "-DFW_MOTOR_OUTPUT=1" in extra and "-DFW_BUILD=normal" in extra
+
+
+def _configure_in(repo: Path, header: Path, build: Path, *extra: str, header_given: bool | None = None
+                  ) -> subprocess.CompletedProcess:
+    """The open normal (operating) build generates its header from the copy's vehicle.yaml (FW_PYTHON); every other
+    build takes the pre-generated one. ``header_given`` forces either (the refusal test)."""
+    given = not _operating(extra) if header_given is None else header_given
+    vehicle = [f"-DFW_VEHICLE_HEADER={header}"] if given else [f"-DFW_PYTHON={sys.executable}"]
     return subprocess.run(
         ["cmake", "-S", str(repo / "firmware"), "-B", str(build), "-DFW_BOARD=weact_h743",
-         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", f"-DFW_VEHICLE_HEADER={header}",
+         f"-DARM_GNU_TOOLCHAIN_DIR={TOOLCHAIN}", *vehicle,
          f"-DCMAKE_TOOLCHAIN_FILE={repo / 'firmware/boards/weact_h743/arm-gnu-13.3.cmake'}", *extra],
         capture_output=True, text=True)
 
@@ -535,6 +553,218 @@ def test_normal_build_opens_only_with_the_waiver_record(record_repo, tmp_path):
         assert "would cut the waiver= token" in _flat(res.stdout + res.stderr)
     finally:
         _git(repo, "tag", "-d", "t" + "x" * 80)
+
+
+def test_the_operating_build_refuses_a_given_vehicle_header(record_repo, tmp_path):
+    """Operating plan 2026-11-26 2.4 (C12, U3d): the open normal build's header comes only from the commit's
+    vehicle.yaml -- a header handed in is refused, before any other judgement."""
+    repo, header = record_repo
+    cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md",
+                        header_given=True)
+    assert cfg.returncode != 0
+    assert "FW_VEHICLE_HEADER is not for the open normal (operating) build" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_the_operating_build_generates_its_header_from_the_commits_vehicle_yaml(record_repo, tmp_path):
+    """The header the operating build compiled is the generator's output for the copy's vehicle.yaml: the same
+    calibration id as the host's config (``RealVehicleConfig.calibration_id``)."""
+    from forklift_core.plant.real_vehicle import load_real_vehicle
+
+    repo, header = record_repo
+    build = tmp_path / "b"
+    cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    made = (build / "boards" / "weact_h743" / "generated" / "vehicle_config.h").read_text()
+    calib = load_real_vehicle(repo / "config" / "real" / "vehicle.yaml").calibration_id
+    assert f'"{calib}"' in made and made == header.read_text()  # the same generator, the same yaml
+
+
+def test_a_header_left_in_the_build_directory_is_not_taken_by_the_operating_build(record_repo, tmp_path):
+    """Codex U3d P2-1: a build directory configured first with a handed-in header (another calibration) and then
+    reconfigured as the operating build regenerates its header from the commit's vehicle.yaml at the build."""
+    repo, header = record_repo
+    build = tmp_path / "b"
+    other = tmp_path / "other_vehicle_config.h"
+    text = header.read_text()
+    calib = re.search(r'FW_VEHICLE_CALIBRATION_ID "([0-9a-f]+)"', text).group(1)
+    other.write_text(text.replace(calib, "f" * len(calib)))
+    cfg = _configure_in(repo, other, build, *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    made = build / "boards" / "weact_h743" / "generated" / "vehicle_config.h"
+    assert "f" * len(calib) in made.read_text()  # the copy sits in the build directory
+    cfg = _configure_in(repo, header, build, "-UFW_VEHICLE_HEADER", "-UFW_BUILD", *WAIVED,
+                        "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    made.write_text(other.read_text())  # left behind after the reconfiguration too: only the build can replace it
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert made.read_text() == text  # the commit's values, not the copy left behind
+    elf = (build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+    assert b"forklift-mcu normal OPEN" in elf
+
+
+def test_the_operating_build_refuses_an_uncommitted_vehicle_config(record_repo, tmp_path):
+    """Codex U3d P2-2: the operating build's vehicle.yaml (and the chassis model it names) must be the HEAD blob --
+    at configure time and at every build."""
+    repo, header = record_repo
+    yaml_path = repo / "config" / "real" / "vehicle.yaml"
+    original = yaml_path.read_text()
+    try:
+        yaml_path.write_text(original + "# edited\n")
+        cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+        assert cfg.returncode != 0
+        assert "differs from its committed version" in _flat(cfg.stderr), cfg.stderr
+        # a locked or commissioning build may read the working copy (a bench edit), as before -- at its build
+        yaml_path.write_text(original.replace("rad_s: 8.0", "rad_s: 7.5"))
+        cfg = _configure_in(repo, header, tmp_path / "c", *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md",
+                            header_given=False)
+        assert cfg.returncode == 0, cfg.stderr
+        res = subprocess.run(["cmake", "--build", str(tmp_path / "c"), "--target", "fw_vehicle_header"],
+                             capture_output=True, text=True)
+        assert res.returncode == 0, res.stdout + res.stderr
+        made = (tmp_path / "c" / "boards" / "weact_h743" / "generated" / "vehicle_config.h").read_text()
+        assert "7.5" in made and made != header.read_text()
+    finally:
+        yaml_path.write_text(original)
+    build = tmp_path / "d"
+    cfg = _configure_in(repo, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    # the chassis model is not a configure dependency: only the build's own check can catch its edit
+    chassis = repo / "sim" / "models" / "dls08_measured" / "parameters.yaml"
+    chassis_text = chassis.read_text()
+    try:
+        chassis.write_text(chassis_text + "# edited after configure\n")
+        res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                             capture_output=True, text=True)
+        assert res.returncode != 0
+        assert "differs from its committed version" in _flat(res.stdout + res.stderr)
+    finally:
+        chassis.write_text(chassis_text)
+
+
+def _copy_repo(repo: Path, dest: Path) -> Path:
+    shutil.copytree(repo, dest, symlinks=True, ignore=shutil.ignore_patterns("build"))
+    return dest
+
+
+def test_the_operating_build_refuses_a_chassis_model_through_a_symbolic_link(record_repo, tmp_path):
+    """Codex U3d round 2 P2-1: the chassis path the config writes is the one checked -- a committed symbolic link
+    to another committed model is refused, not followed."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "sim" / "models" / "alias").symlink_to("dls08_measured")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    cfg_path.write_text(cfg_path.read_text().replace("sim/models/dls08_measured/", "sim/models/alias/"))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "alias")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "goes through a symbolic link" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_a_symbolic_link_folded_away_by_dot_dot_is_still_refused(record_repo, tmp_path):
+    """Codex U3d round 3 P2-1: "alias/../dls08_measured" normalises to a link-free path; the components as written
+    are checked first."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "sim" / "models" / "alias").symlink_to("dls08_measured")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    cfg_path.write_text(cfg_path.read_text().replace("sim/models/dls08_measured/", "sim/models/alias/../dls08_measured/"))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "alias dot-dot")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "goes through a symbolic link" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_the_header_check_and_the_identity_name_one_commit(record_repo, tmp_path):
+    """Codex U3d round 3 P2-2: HEAD moving after the identity was made: the header's check refuses."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "build_info"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    info = build / "boards" / "weact_h743" / "generated" / "build_info.h"
+    (r2 / "moved.txt").write_text("b\n")
+    _git(r2, "add", "moved.txt")
+    _git(r2, "commit", "-q", "-m", "b")  # HEAD moves between the two targets
+    gen = subprocess.run(
+        ["cmake", f"-DREPO={r2}", f"-DPYTHON={sys.executable}", f"-DYAML={r2 / 'config/real/vehicle.yaml'}",
+         f"-DOUT={tmp_path / 'v.h'}", "-DCOMMITTED=1", f"-DBUILD_INFO={info}",
+         "-P", str(r2 / "firmware" / "cmake" / "gen_vehicle_header.cmake")], capture_output=True, text=True)
+    assert gen.returncode != 0
+    assert "is not the commit the build identity names" in _flat(gen.stderr), gen.stderr
+    # the whole build makes the identity again first, so it passes on the new HEAD
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+
+def test_a_stray_build_info_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
+    """Codex U3d round 4 P2-1: the identity compiled is the generated build_info.h (the one the header check read)."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "firmware" / "boards" / "weact_h743" / "src" / "build_info.h").write_text(
+        '#error "a stray build_info.h was compiled"\n')  # untracked: git describe stays clean
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    head = _git(r2, "rev-parse", "--short=12", "HEAD").strip()
+    assert f"forklift-mcu normal OPEN {head} ".encode() in (build / "boards" / "weact_h743" / "fw.elf").read_bytes()
+
+
+def test_the_operating_header_is_generated_from_the_committed_blobs(record_repo, tmp_path):
+    """Codex U3d round 4 P2-2: the generator reads a staged copy of the HEAD blobs, never the work tree."""
+    repo, header = record_repo
+    log = tmp_path / "argv.log"
+    wrapper = tmp_path / "py.sh"
+    wrapper.write_text(f'#!/bin/sh\necho "$@" >> {shlex.quote(str(log))}\nexec {shlex.quote(sys.executable)} "$@"\n')
+    wrapper.chmod(0o755)
+    out = tmp_path / "v.h"
+    gen = subprocess.run(
+        ["cmake", f"-DREPO={repo}", f"-DPYTHON={wrapper}", f"-DYAML={repo / 'config/real/vehicle.yaml'}",
+         f"-DOUT={out}", "-DCOMMITTED=1", "-P", str(repo / "firmware" / "cmake" / "gen_vehicle_header.cmake")],
+        capture_output=True, text=True)
+    assert gen.returncode == 0, gen.stderr
+    generating = [ln for ln in log.read_text().splitlines() if "--out" in ln]
+    assert len(generating) == 1 and f"{out}.stage/config/real/vehicle.yaml" in generating[0], generating
+    # the chassis model too, by its staged path (Codex U3d round 6 P2: a relative path could lead out of the stage)
+    assert f"--chassis {out}.stage/sim/models/dls08_measured/parameters.yaml" in generating[0], generating
+    assert out.read_text() == header.read_text() and not Path(f"{out}.stage").exists()
+
+
+def test_the_operating_build_refuses_an_absolute_chassis_model_path(record_repo, tmp_path):
+    """Codex U3d round 5 P2-1: the header is generated from a staged copy, which a path outside it would leave."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    absolute = (r2 / "sim" / "models" / "dls08_measured" / "parameters.yaml").as_posix()
+    cfg_path.write_text(re.sub(r"chassis_model: .*", f"chassis_model: {absolute}", cfg_path.read_text()))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "absolute")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "is absolute" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_a_stray_vehicle_header_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
+    """Codex U3d round 2 P2-2: the board source includes the generated header by its absolute path."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "firmware" / "boards" / "weact_h743" / "src" / "vehicle_config.h").write_text(
+        '#error "a stray vehicle_config.h was compiled"\n')  # untracked: git describe stays clean
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "-j2"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
 
 
 def test_the_commissioning_open_build_carries_no_waiver(open_build):
