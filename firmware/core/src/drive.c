@@ -1088,7 +1088,8 @@ static void handle_bench_hold(drive *d, const link_msg *m)
     }
     if (h->axis != DRIVE_CH_M || (h->sign != 1 && h->sign != -1) || !isfinite(h->kp) || !(h->kp > 0.0f) ||
         !isfinite(h->ki) || h->ki < 0.0f || h->duty_max_e4 == 0 ||
-        h->duty_max_e4 > cm_duty_max_e4(d, DRIVE_CH_M) || h->valid_after_echo_ms == 0) {
+        h->duty_max_e4 > cm_duty_max_e4(d, DRIVE_CH_M) || h->min_duty_e4 > h->duty_max_e4 ||
+        h->valid_after_echo_ms == 0) {
         d->reject_reason = DRIVE_REJECT_BAD_VALUE;
         return;
     }
@@ -1115,6 +1116,7 @@ static void handle_bench_hold(drive *d, const link_msg *m)
     d->hold_on = true;
     d->hold_target = h->target_counts;
     d->hold_sign = h->sign;
+    d->hold_min_duty = (float)h->min_duty_e4 / 10000.0f;
     d->hold_pi_cfg = (pi_config){.kp = h->kp,
                                  .ki = h->ki,
                                  .kff = 0.0f,
@@ -1281,6 +1283,9 @@ static void commission_outputs(drive *d, drive_outputs *o, float dt)
             u = 0.0f;
             if (d->mode == DRIVE_MODE_ARMED && !over && bench_count_fresh(d)) {
                 u = (float)d->hold_sign * pi_step(&d->hold_pi_cfg, &d->hold_pi, e, 0.0f, dt);
+                if (u != 0.0f && fabsf(u) < d->hold_min_duty) {
+                    u = u > 0.0f ? d->hold_min_duty : -d->hold_min_duty; /* the break-away floor (off at 0) */
+                }
             }
         }
 #endif

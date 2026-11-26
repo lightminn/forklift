@@ -60,3 +60,25 @@ def test_the_travel_counter_is_read_mod_2_32():
     assert bl.counts_delta(0xFFFFFFF0, 0x10) == 0x20
     assert bl.counts_delta(0x10, 0xFFFFFFF0) == -0x20
     assert bl.KTH_COUNTS_PER_TURN == 4096
+
+
+def test_hold_targets_and_the_boards_steering_zero():
+    """diag/fw-bench hold: here, the nearest raw 0, an offset; the raw angle read with the board's own steering zero."""
+    import re as _re
+
+    block = BOARD[BOARD.index("c.steer = (abs_axis_config)"):]
+    block = block[:block.index("};")]
+    assert ".zero_offset_rad = PI_F" in block and ".sign = 1" in block and ".sensor_per_joint = 1.0f" in block
+    assert _re.search(r"zero_offset_rad = PI_F", block) and bl.STEER_ZERO_OFFSET_RAD == pytest.approx(math.pi)
+    assert bl.kth_raw_angle(-math.pi) == 0 and bl.kth_raw_angle(0.0) == 2048 and bl.kth_raw_angle(float("nan")) is None
+    assert bl.hold_target("here", 1000, 0.0) == 1000
+    # raw 2048 (joint 0): the nearest raw 0 is half a turn either way -- the negative way by the rule (a <= 2048)
+    assert bl.hold_target("zero", 10_000, 0.0) == 10_000 - 2048
+    a100 = -math.pi + 100 * math.tau / 4096  # raw 100: back 100
+    assert bl.hold_target("zero", 10_000, a100) == 10_000 - 100
+    a4000 = -math.pi + 4000 * math.tau / 4096  # raw 4000: on 96
+    assert bl.hold_target("zero", 10_000, a4000) == 10_000 + 96
+    assert bl.hold_target("-500", 100, 0.0) == (100 - 500) & 0xFFFFFFFF
+    for bad in ("zero", "nope", str(101 * 4096)):
+        with pytest.raises(bl.LimitRefused):
+            bl.hold_target(bad, 0, float("nan") if bad == "zero" else 0.0)

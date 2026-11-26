@@ -96,6 +96,7 @@ def _stopper(turns, window=None, names=()):
     s.axis, s.ignore, s.sensorless, s.stop_kth_turns, s.window = 2, FaultFlag(0), False, turns, window
     s.bench = bringup.bl.BenchAsk(2, tuple(names), None, None) if names else None
     s.bench_taken = {"seq": 1} if names or turns is not None else None
+    s.hold = None
     s._kth_base, s._kth_started, s._prog_us, s._prog_value = None, False, None, None
     return s
 
@@ -198,3 +199,34 @@ def test_another_bench_generation_is_refused_for_every_run(model):
     res = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
     assert res["result"] == "refused" and "another generation" in res["why"]
     assert "ARM" not in kinds_written(b) and "BENCH_SET" not in kinds_written(b)
+
+
+def test_a_hold_brings_m_to_its_target_on_the_model(model):
+    """diag/fw-bench hold on the bench model (its M turns 1 rad/s per duty): BENCH_HOLD resent, M driven to a
+    +100-count target and held there."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH
+    res = bringup.execute(args(axis="M", duty=0.15, seconds=3.0, bench_bypass="steer_range", bench_duty_max=0.25,
+                               bench_time_max=5.0, hold_target="+100", hold_kp=2.0, hold_ki=0.0, hold_deadband=12,
+                               hold_sign=1, hold_min_duty=0.0, observed="none"), b)
+    assert res["result"] in ("ok", "invalid_measurement") and res["cleanup_confirmed"], res
+    h = res["hold"]
+    assert h["target_counts"] == (h["start_counts"] + 100) & 0xFFFFFFFF
+    assert abs(h["final_error_counts"]) <= 24, h
+    assert "BENCH_HOLD" in kinds_written(b) and "COMMISSION" in kinds_written(b)  # the arming zero is a COMMISSION
+
+
+@pytest.mark.parametrize("kw,why", [
+    (dict(hold_target="+600"), "with --bench-bypass steer_range"),                    # range on
+    (dict(hold_target="+600", bench_bypass="steer_range", stop_kth_turns=1.0), "no --stop-kth-turns"),
+    (dict(hold_target="sideways", bench_bypass="steer_range"), "here, zero"),
+    (dict(hold_target="+600", bench_bypass="steer_range", hold_min_duty=0.5), "hold-min-duty"),
+])
+def test_hold_argument_refusals(model, kw, why):
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH
+    base = dict(axis="M", duty=0.15, seconds=1.0, bench_duty_max=0.25, hold_kp=1.0, hold_ki=0.0, hold_deadband=12,
+                hold_sign=1, hold_min_duty=0.0, observed="none")
+    res = bringup.execute(args(**{**base, **kw}), b)
+    assert res["result"] == "refused" and why in res["why"], res
+    assert "ARM" not in kinds_written(b)

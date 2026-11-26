@@ -2409,6 +2409,7 @@ static link_msg hold_msg(uint16_t seq, uint32_t target, float kp, float ki, uint
                                  .ki = ki,
                                  .deadband_counts = db,
                                  .duty_max_e4 = dmax,
+                                 .min_duty_e4 = 0,
                                  .valid_after_echo_ms = 150,
                                  .arm_gen = d.arm_gen,
                                  .boot_id = d.boot_id,
@@ -2523,6 +2524,28 @@ static void bench_hold_reaches_and_restores_the_target(void)
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
 }
 
+static void bench_hold_min_duty_floor(void)
+{
+    uint16_t seq = hold_arm();
+    uint32_t target = d.bench_kth_counts + 100u; /* a small error: the PI asks a small duty */
+    link_msg m = hold_msg(seq++, target, 0.5f, 0.0f, 4, 2000);
+    hold_tick(&m);
+    float plain = out.duty[DRIVE_CH_M];
+    CHECK(plain > 0.0f && plain < 0.1f);
+    m = hold_msg(seq++, target, 0.5f, 0.0f, 4, 2000);
+    m.u.hold.min_duty_e4 = 1500;
+    hold_tick(&m);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.15, 1e-6); /* raised to the floor */
+    m = hold_msg(seq++, d.bench_kth_counts + 2u, 0.5f, 0.0f, 4, 2000); /* inside the deadband: still 0 */
+    m.u.hold.min_duty_e4 = 1500;
+    hold_tick(&m);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    m = hold_msg(seq++, target, 0.5f, 0.0f, 4, 1000);
+    m.u.hold.min_duty_e4 = 1500; /* a floor above the cap: refused */
+    hold_tick(&m);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+}
+
 static void bench_hold_ends_on_expiry_and_on_a_commission(void)
 {
     uint16_t seq = hold_arm();
@@ -2613,5 +2636,6 @@ int main(void)
     bench_hold_refusals();
     bench_hold_reaches_and_restores_the_target();
     bench_hold_ends_on_expiry_and_on_a_commission();
+    bench_hold_min_duty_floor();
     return FW_TEST_RESULT();
 }

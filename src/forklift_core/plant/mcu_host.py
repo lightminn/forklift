@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 from forklift_core.mcu_link.messages import (
     Arm,
+    BenchHold,
     BenchSet,
     ClearFaults,
     Commission,
@@ -118,7 +119,7 @@ class Outgoing:
     echo: tuple | None = None  # ARM and the arming zero: the (boot id, MCU time) of the STATE they echo (6a design 2)
 
 
-_MOTION = ("DRIVE", "COMMISSION")  # the commands that move an axis: one outbox rule for both
+_MOTION = ("DRIVE", "COMMISSION", "BENCH_HOLD")  # the commands that move an axis: one outbox rule for all
 
 
 _NONE, _ARM_PENDING, _ZERO_PENDING, _READY = "none", "arm_pending", "zero_pending", "ready"
@@ -622,6 +623,24 @@ class McuLinkHost:
         s = self._state
         msg = Commission(axis, duty_e4, valid, s.arm_gen, s.boot_id, s.mcu_time_us)
         self._enqueue("COMMISSION", msg, now_ns, expires_ns=expires_ns, nonzero=duty_e4 != 0)
+        return None
+
+    def bench_hold(self, sign: int, target_counts: int, kp: float, ki: float, deadband_counts: int,
+                   duty_max_e4: int, expires_ns: int, now_ns: int, min_duty_e4: int = 0) -> Blocked | None:
+        """DIAGNOSTIC BRANCH ONLY (diag/fw-bench): queue one BENCH_HOLD (M at a travel-counter target) expiring at
+        ``expires_ns``; the same checks and validity rule as ``commission``."""
+        if not self.commission_mode:
+            return Blocked("not_commission_host")
+        blocked, valid = self._motion_check(expires_ns, now_ns)
+        if blocked is not None:
+            return blocked
+        s = self._state
+        try:
+            msg = BenchHold(2, int(sign), int(target_counts) & 0xFFFFFFFF, float(kp), float(ki), int(deadband_counts),
+                            int(duty_max_e4), int(min_duty_e4), valid, s.arm_gen, s.boot_id, s.mcu_time_us)
+        except ValueError as exc:
+            return Blocked(f"bad_value: {exc}")
+        self._enqueue("BENCH_HOLD", msg, now_ns, expires_ns=expires_ns, nonzero=True)
         return None
 
     def _motion_check(self, expires_ns: int, now_ns: int) -> tuple[Blocked | None, int]:

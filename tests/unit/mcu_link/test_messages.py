@@ -6,6 +6,7 @@ import pytest
 from forklift_core.mcu_link.framing import cobs_decode, cobs_encode, crc16_ccitt_false
 from forklift_core.mcu_link.messages import (
     Arm,
+    BenchHold,
     BenchSet,
     ClearFaults,
     Commission,
@@ -34,6 +35,7 @@ DRIVE_0007 = (
 CLEAR_0008 = "0403040807efbeaddea4c100"
 DISARM_0009 = "0403030903d4fc00"
 COMMISSION_000A = "0403050a050224fa960a0302efbeaddeefcdab02010101037f4500"
+BENCH_HOLD_000C = "0403070c07020178563412010102400101033f0803d007010296020308efbeaddeefcdab020101010378f600"  # DIAGNOSTIC BRANCH ONLY (diag/fw-bench)
 BENCH_SET_000B = "0403060b06efbeadde0101010c10271027c409dc059bc420049bc4200330750103d0070103f52600"  # DIAGNOSTIC BRANCH ONLY (diag/fw-bench)
 STATE_0102 = (
     "0a03810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
@@ -106,6 +108,9 @@ GOLDEN = [
     (STATE_V2_BITS, 0x0103, STATE_0103),
     (BenchSet(boot_id=0xDEADBEEF, bypass=1, duty_max_e4=(10000, 10000, 2500, 1500),
               time_ms=(2147483, 2147483, 30000, 2000)), 0x000B, BENCH_SET_000B),
+    (BenchHold(axis=2, sign=1, target_counts=0x12345678, kp=2.0, ki=0.5, deadband_counts=8, duty_max_e4=2000,
+               min_duty_e4=0, valid_after_echo_ms=150, arm_gen=3, boot_id=0xDEADBEEF, echo_mcu_time_us=0x00000001_00ABCDEF),
+     0x000C, BENCH_HOLD_000C),
 ]
 
 

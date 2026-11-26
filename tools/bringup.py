@@ -702,6 +702,8 @@ class CommissionSession(Session):
         self.bench: bl.BenchAsk | None = None
         self.bench_taken: dict | None = None
         self.stop_kth_turns: float | None = None
+        self.hold: dict | None = None  # diag/fw-bench: --hold-target and its PI (the run then sends BENCH_HOLD)
+        self.hold_info: dict | None = None
         self._kth_base: int | None = None  # the board's travel counter just before the run's first driven STATE
         self._kth_started = False
         self._bench_index: int | None = None  # the sample index the BENCH_SET was taken at
@@ -892,6 +894,40 @@ class CommissionSession(Session):
             time.sleep(0.01)
         return first
 
+    def hold_target(self, seconds: float, stop=None) -> None:
+        """diag/fw-bench: hold M at the asked travel-counter target for ``seconds`` -- BENCH_HOLD resent every cycle
+        (each valid within the cap, never past the hold's end); ``stop()`` naming a reason ends it."""
+        b, h = self.b, self.hold
+        st = b.state
+        try:
+            target = bl.hold_target(h["target"], bl.kth_counts(st), st.steering_rad)
+        except bl.LimitRefused as exc:
+            self.aborted = f"hold_target: {exc}"
+            return
+        self.hold_info = {"spec": h["target"], "target_counts": target, "start_counts": bl.kth_counts(st),
+                          "start_raw_angle": bl.kth_raw_angle(st.steering_rad)}
+        b.emit({"t": "hold_start", **self.hold_info, **{k: v for k, v in h.items() if k != "target"}})
+        end_ns = time.monotonic_ns() + int(seconds * 1e9)
+        stop_ns = end_ns - int(HANDOVER_S * 1e9)
+        while time.monotonic_ns() < stop_ns:
+            now = time.monotonic_ns()
+            expires = min(self.test_end_ns, now + b.host.cfg.cap_ms * 1_000_000, end_ns)
+            b.last_queued = None
+            blocked = b.host.bench_hold(h["sign"], target, h["kp"], h["ki"], h["deadband"], h["duty_max_e4"],
+                                        expires, now, min_duty_e4=h["min_duty_e4"])
+            if blocked is None and b.last_queued is not None:
+                self.sent.append((b.last_queued["seq"], h["duty_max_e4"]))
+                self.last_expires_ns = expires
+            b.cycle()
+            why = self._abort_reason()
+            if why is not None:
+                self.aborted = why
+                return
+            if stop is not None and (reason := stop()) is not None:
+                self.stop_reason = reason
+                return
+            time.sleep(0.01)
+
     def cleanup(self) -> bool:
         """Design ② 3: the tool ① cleanup, but never a DISARM into a commissioning STOPPING -- the firmware ends it
         on DISARM and its four-axis electric brake with it (Codex design P1-1, against contract 3.4). Queued
@@ -925,6 +961,9 @@ class CommissionSession(Session):
             return "encoder_bit" if (state.fault_flags & watched) & ~at_start else None
         if self.sensorless:
             return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
+        if self.hold is not None:
+            # diag/fw-bench hold: holding still is the point -- only a lost count ends it (the board faults M too)
+            return "kth_lost" if state.fault_flags & FaultFlag.BENCH_KTH_LOST else None
         v = state.steering_rad if self.axis == 2 else state.lift_m
         range_off = self._range_off()
         pos = None
@@ -1008,7 +1047,9 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     session.hold_duty(0, PRE_ZERO_S)
     b.phase = "on"
     if session.aborted is None:
-        if profile is None:
+        if session.hold is not None:
+            session.hold_target(seconds, early_stop)  # diag/fw-bench: M held on the KTH travel counter
+        elif profile is None:
             session.hold_duty(duty_e4, seconds, early_stop)
         else:
             # design 2026-11-25 1.2: each piece ends at its absolute deadline from the profile's start, so the
@@ -1035,7 +1076,8 @@ def run_commission(bench: Bench, session: CommissionSession, duty: float, second
     seen = b.seen()
     # each command's phase comes from when it was queued, so a nonzero frame finishing during the post-zero still
     # counts as driving (Codex PR-2a P2-4)
-    m_on = accepted(seen, b.writes, lambda w: w.kind == "COMMISSION" and w.phase == "on" and w.duty_e4 != 0, i_arm)
+    m_on = accepted(seen, b.writes, lambda w: (w.kind == "BENCH_HOLD" or (w.kind == "COMMISSION" and w.duty_e4 != 0))
+                    and w.phase == "on", i_arm)
     on_index = m_on.index
     ambiguous = m_on.ambiguous_at
     # the driven span ends at the first sample accepting a later command, or at the MCU's own stop (it left ARMED:
@@ -1645,6 +1687,16 @@ def main(argv=None) -> int:
                                            f"({', '.join(sorted(bl.BENCH_BYPASS_BITS))}); the stopping side never")
     cm.add_argument("--bench-duty-max", type=float, help="fw-bench: this axis's duty limit for the run, (0, 1]")
     cm.add_argument("--bench-time-max", type=float, help="fw-bench: this axis's continuous output limit for the run, s")
+    cm.add_argument("--hold-target",
+                    help="fw-bench, steering: hold M at the KTH travel counter's here | zero | +-counts (--duty = "
+                         "the hold's duty cap) instead of an open-loop duty")
+    cm.add_argument("--hold-kp", type=float, default=1.0, help="hold: duty per rad of KTH error")
+    cm.add_argument("--hold-ki", type=float, default=0.0, help="hold: duty per rad*s")
+    cm.add_argument("--hold-deadband", type=int, default=12, help="hold: counts (4096 a turn) of no output")
+    cm.add_argument("--hold-sign", type=int, choices=(1, -1), default=1,
+                    help="hold: the duty sign that raises the KTH count (+1 on the 11-27 bench)")
+    cm.add_argument("--hold-min-duty", type=float, default=0.0,
+                    help="hold: a non-zero output is at least this (a cogging motor's break-away); 0 = off")
     cm.add_argument("--stop-kth-turns", type=float,
                     help="steering: stop once the KTH has turned this many turns either way (unwrapped per STATE)")
     cm.add_argument("--sensorless", action="store_true",
@@ -1860,6 +1912,28 @@ def _bench_ask(args) -> bl.BenchAsk | None:
     return ask
 
 
+def _hold_summary(session, samples: list) -> dict:
+    """diag/fw-bench hold: the counter error (target - count, counts; 4096 a turn) over the samples the hold drove
+    (applied M duty non-zero or the hold accepted), of this run's boot."""
+    info = dict(session.hold_info)
+    tgt = info["target_counts"]
+    run_ = [s for s in samples[session._bench_index or 0:] if s.state.boot_id == session._bench_boot]
+    armed = [s for s in run_ if s.state.mode == Mode.ARMED]
+    errs = [bl.counts_delta(bl.kth_counts(s.state), tgt) for s in armed]
+    db = session.hold["deadband"]
+    if errs:
+        first_in = next((k for k, e in enumerate(errs) if abs(e) <= db), None)
+        after = errs[first_in:] if first_in is not None else []
+        cur = [abs(s.state.current_ma[2]) for s in armed]
+        info.update({"armed_states": len(errs), "final_error_counts": errs[-1], "max_abs_error_counts": max(map(abs, errs)),
+                     "settled_after_s": None if first_in is None else first_in * 0.01,
+                     "max_abs_error_after_settle_counts": max(map(abs, after)) if after else None,
+                     "in_deadband_share_after_settle": (sum(1 for e in after if abs(e) <= db) / len(after)) if after
+                     else None,
+                     "current_mean_ma": sum(cur) / len(cur), "current_peak_ma": max(cur)})
+    return info
+
+
 def _kth_summary(samples: list, ch: int = 2, *, start: int = 0, boot: int | None = None) -> dict:
     """diag/fw-bench: the steering KTH's travel over this run (from ``start``, the boot that took its BENCH_SET only) --
     from the last STATE before the axis was driven to the last driven one, and to the run's last STATE (the coast
@@ -1887,6 +1961,8 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         raise Refused(str(exc)) from None
     # diag/fw-bench: a plain run only, and the KTH turn stop on the steering's own sensor
     bench = _bench_ask(args)
+    if getattr(args, "hold_target", None) is not None and bench is None:
+        raise Refused("hold-target: a bench run (--bench-bypass steer_range on the bench image)")
     if bench is not None and (getattr(args, "single_axis", False) or getattr(args, "scenario", None) is not None
                               or getattr(args, "profile_tri", None) is not None):
         raise Refused("bench: a plain run only (no --single-axis, --scenario or --profile-tri)")
@@ -2009,6 +2085,23 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
             # Codex fw-bench round 1 P2-4: M and H share the wheels' VM = VCC rail on V1.0 (R5)
             raise Refused(f"vcc: above duty {bl.VCC_WATCH_ABOVE} watch VCC (--vcc-watched); step 0.3 -> 0.5 -> 0.7")
         range_off = (axis == 2 and "steer_range" in bench.names) or (axis == 3 and "lift_range" in bench.names)
+        if getattr(args, "hold_target", None) is not None:
+            # diag/fw-bench hold: M on the travel counter -- its range off (the shaft may sit anywhere), no turn stop
+            if axis != 2 or not range_off:
+                raise Refused("hold-target: the steering axis (M) with --bench-bypass steer_range")
+            if turns is not None:
+                raise Refused("hold-target: no --stop-kth-turns (holding still is the point)")
+            if not (math.isfinite(args.hold_kp) and args.hold_kp > 0 and math.isfinite(args.hold_ki)
+                    and args.hold_ki >= 0):
+                raise Refused("hold: --hold-kp > 0 and --hold-ki >= 0")
+            if not 0 <= args.hold_deadband <= 0xFFFF:
+                raise Refused("hold: --hold-deadband in [0, 65535] counts")
+            if not (math.isfinite(args.hold_min_duty) and 0 <= args.hold_min_duty <= abs(args.duty)):
+                raise Refused("hold: --hold-min-duty in [0, |--duty|]")
+            try:
+                bl.hold_target(args.hold_target, 0, 0.0)  # the spec's form only (the value needs the board)
+            except bl.LimitRefused as exc:
+                raise Refused(str(exc)) from None
         if range_off and args.window is not None:
             raise Refused("window: the range is off for this run -- give no --window (stop by time or turns)")
         if not range_off and not sensorless and (args.window is None or not args.window[0] < args.window[1]):
@@ -2185,6 +2278,11 @@ def execute(args, bench: Bench) -> dict:
             session.scenario = getattr(args, "scenario", None)
             session.bench = _bench_ask(args)  # diag/fw-bench
             session.stop_kth_turns = getattr(args, "stop_kth_turns", None)
+            if getattr(args, "hold_target", None) is not None:
+                session.hold = {"target": args.hold_target, "kp": args.hold_kp, "ki": args.hold_ki,
+                                "deadband": args.hold_deadband, "sign": args.hold_sign,
+                                "duty_max_e4": int(round(abs(args.duty) * 10000)),
+                                "min_duty_e4": int(round(args.hold_min_duty * 10000))}
             if session.bench is not None and session.bench.duty_max is not None:
                 session.duty_max = (session.bench.duty_max if AXES[args.axis] >= 2
                                     else min(session.duty_max, session.bench.duty_max))
@@ -2262,6 +2360,8 @@ def execute(args, bench: Bench) -> dict:
                     armed_ = next((k for k, s in enumerate(run_) if s.state.mode == Mode.ARMED), len(run_))
                     result["kth"]["lost"] = any(s.state.fault_flags & FaultFlag.BENCH_KTH_LOST
                                                 for s in run_[armed_:])
+                if session.hold_info is not None:
+                    result["hold"] = _hold_summary(session, bench.samples)
                 if getattr(args, "sensorless", False):
                     # no KTH: the run shows the output accepted and the stop confirmed, never a position or a sign
                     # (partial-parts plan v4)

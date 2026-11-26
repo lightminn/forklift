@@ -25,6 +25,7 @@ _CLEAR = struct.Struct("<I")
 _STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
 _BENCH_SET = struct.Struct("<II4H4I")  # diag/fw-bench: boot_id, bypass, duty_max_e4[4], time_ms[4]
+_BENCH_HOLD = struct.Struct("<BbIffHHHHHIQ")  # diag/fw-bench: axis, sign, target, kp, ki, deadband, duty max, valid...
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
@@ -32,6 +33,7 @@ TYPE_DISARM = 0x03
 TYPE_CLEAR_FAULTS = 0x04
 TYPE_COMMISSION = 0x05
 TYPE_BENCH_SET = 0x06  # DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged)
+TYPE_BENCH_HOLD = 0x07  # DIAGNOSTIC BRANCH ONLY: hold M at a target of the bench image's KTH travel counter
 # diag/fw-bench: the bypass bits a BENCH_SET may name (firmware drive.h DRIVE_BENCH_*); the stopping side has none
 BENCH_STEER_RANGE = 1 << 0
 BENCH_LIFT_RANGE = 1 << 1
@@ -279,7 +281,43 @@ class BenchSet:
             _check_range("time_ms", self.time_ms[i], 1, BENCH_TIME_MAX_MS)
 
 
-Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState | BenchSet
+@dataclass(frozen=True)
+class BenchHold:
+    """DIAGNOSTIC BRANCH ONLY (diag/fw-bench): hold M at ``target_counts`` of the bench image's KTH travel counter
+    (mod 2^32) with a PI (``kp`` duty per rad, ``ki`` duty per rad*s) within ``duty_max_e4``; ``sign`` is the duty
+    sign that raises the count. Freshness as ``Commission``."""
+
+    axis: int
+    sign: int
+    target_counts: int
+    kp: float
+    ki: float
+    deadband_counts: int
+    duty_max_e4: int
+    min_duty_e4: int  # 0: off; else a non-zero output is at least this (a cogging motor's break-away)
+    valid_after_echo_ms: int
+    arm_gen: int
+    boot_id: int
+    echo_mcu_time_us: int
+
+    def __post_init__(self) -> None:
+        if self.axis != 2:
+            raise ValueError("axis: M (2) only")
+        if self.sign not in (1, -1):
+            raise ValueError("sign: +1 or -1")
+        _check_range("target_counts", self.target_counts, 0, U32_MAX)
+        if not (math.isfinite(self.kp) and self.kp > 0 and math.isfinite(self.ki) and self.ki >= 0):
+            raise ValueError("kp > 0 and ki >= 0, finite")
+        _check_range("deadband_counts", self.deadband_counts, 0, 0xFFFF)
+        _check_range("duty_max_e4", self.duty_max_e4, 1, 10000)
+        _check_range("min_duty_e4", self.min_duty_e4, 0, self.duty_max_e4)
+        _check_range("valid_after_echo_ms", self.valid_after_echo_ms, 1, 0xFFFF)
+        _check_range("arm_gen", self.arm_gen, 1, 0xFFFF)
+        _check_range("boot_id", self.boot_id, 1, U32_MAX)
+        _check_range("echo_mcu_time_us", self.echo_mcu_time_us, 0, U64_MAX)
+
+
+Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState | BenchSet | BenchHold
 
 
 def _kth(message: McuState) -> tuple[int, ...]:
@@ -316,6 +354,11 @@ def _payload(message: Message) -> tuple[int, bytes]:
     if isinstance(message, Commission):
         return TYPE_COMMISSION, _COMMISSION.pack(
             message.axis, message.duty_e4, message.valid_after_echo_ms, message.arm_gen, message.boot_id,
+            message.echo_mcu_time_us)
+    if isinstance(message, BenchHold):
+        return TYPE_BENCH_HOLD, _BENCH_HOLD.pack(
+            message.axis, message.sign, message.target_counts, message.kp, message.ki, message.deadband_counts,
+            message.duty_max_e4, message.min_duty_e4, message.valid_after_echo_ms, message.arm_gen, message.boot_id,
             message.echo_mcu_time_us)
     if isinstance(message, BenchSet):
         return TYPE_BENCH_SET, _BENCH_SET.pack(message.boot_id, message.bypass, *message.duty_max_e4,
@@ -412,6 +455,7 @@ def decode(body: bytes) -> tuple[int, Message]:
         TYPE_STATE: _STATE,
         TYPE_COMMISSION: _COMMISSION,
         TYPE_BENCH_SET: _BENCH_SET,
+        TYPE_BENCH_HOLD: _BENCH_HOLD,
     }
     if type_ == TYPE_DISARM:
         if payload:
@@ -436,6 +480,8 @@ def decode(body: bytes) -> tuple[int, Message]:
             message = ClearFaults(*fields)
         elif type_ == TYPE_COMMISSION:
             message = Commission(*fields)
+        elif type_ == TYPE_BENCH_HOLD:
+            message = BenchHold(*fields)
         elif type_ == TYPE_BENCH_SET:
             message = BenchSet(fields[0], fields[1], tuple(fields[2:6]), tuple(fields[6:10]))
         else:

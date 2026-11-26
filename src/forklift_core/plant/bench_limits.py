@@ -254,6 +254,40 @@ def bench_refusal(ask: BenchAsk) -> str | None:
     return None
 
 
+# diag/fw-bench hold: the board's steering axis (board_config.c: sign +1, sensor_per_joint 1, zero_offset pi, pinned by
+# the unit test) -- the KTH raw angle from STATE.steering_rad, for a hold at the sensor's own zero
+STEER_ZERO_OFFSET_RAD = 3.141592653589793
+
+
+def kth_raw_angle(steering_rad: float) -> int | None:
+    """The KTH raw angle (0..4095) a STATE's steering_rad reads (the board's sign, ratio and zero), or None."""
+    import math
+
+    if steering_rad is None or not math.isfinite(steering_rad):
+        return None
+    return int(round((steering_rad + STEER_ZERO_OFFSET_RAD) * 4096 / math.tau)) % 4096
+
+
+def hold_target(spec: str, counts_now: int, steering_rad: float) -> int:
+    """The travel-counter target (mod 2^32) of ``--hold-target``: ``here`` (now), ``zero`` (the nearest sensor raw
+    angle 0) or a signed count offset from now. LimitRefused when it cannot be told."""
+    if spec == "here":
+        return counts_now & 0xFFFFFFFF
+    if spec == "zero":
+        a = kth_raw_angle(steering_rad)
+        if a is None:
+            raise LimitRefused("hold-target zero: the KTH angle is not valid now")
+        delta = -a if a <= 2048 else 4096 - a
+        return (counts_now + delta) & 0xFFFFFFFF
+    try:
+        off = int(spec)
+    except ValueError:
+        raise LimitRefused("hold-target: here, zero or a signed count offset") from None
+    if abs(off) > 100 * KTH_COUNTS_PER_TURN:
+        raise LimitRefused("hold-target: an offset within 100 turns")
+    return (counts_now + off) & 0xFFFFFFFF
+
+
 def kth_counts(state) -> int:
     """The bench image's steering KTH travel counter (mod 2^32) from STATE's kth_alt_crc_errors pair (low, high)."""
     lo, hi = state.kth_alt_crc_errors

@@ -71,6 +71,7 @@ typedef struct {
     float kp, ki;           /* duty per rad of counter error, duty per rad*s */
     uint16_t deadband_counts;
     uint16_t duty_max_e4;
+    uint16_t min_duty_e4; /* 0: off; else a non-zero output is at least this (a cogging motor's break-away) */
     uint16_t valid_after_echo_ms;
     uint16_t arm_gen;
     uint32_t boot_id;
