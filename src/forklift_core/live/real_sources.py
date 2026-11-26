@@ -125,11 +125,15 @@ class RealScanSource:
             self.slam.generation(gen)
         self._told = gen
 
-    def _open_gap(self) -> None:
+    def _open_gap(self, items: list) -> None:
+        """A receive gap: a new feed generation, ``lost``, and its evidence boundary queued **before** SLAM is told --
+        a SLAM refusal raised there never swallows the boundary (Codex U3a round 4 P2)."""
         self._gap_open = True
         self.counts["receive_gaps"] += 1
         self.feed.new_generation("receive_gap")
         self._events.append(("lost", self.sensor))
+        self._boundary(items, "feed_generation:receive_gap")
+        self._seen_gen = self.feed.generation
         self._tell((self.feed.generation, self._producer))
 
     def _boundary(self, items: list, why: str) -> None:
@@ -209,8 +213,7 @@ class RealScanSource:
                 # never told an older generation after the gap's -- Codex U2a round 1 P2-1)
                 self.counts["before_gap_dropped"] += sum(1 for it in items if it[2] is not None)
                 items.clear()
-                self._open_gap()
-                self._watch_generation(items)
+                self._open_gap(items)
             if self._gap_open:
                 self._gap_open = False
                 self._events.append(("connected", self.sensor))
@@ -254,8 +257,7 @@ class RealScanSource:
             self._any_taken = True
             items.append(("scan", scan, layer))
         if not items and not self._gap_open and self._last_rx is not None and now - self._last_rx > SCAN_GAP_NS:
-            self._open_gap()  # a quiet call past the gap
-            self._watch_generation(items)
+            self._open_gap(items)  # a quiet call past the gap
         if items:
             # one call delivers one generation: the scans before the newest (feed, producer) generation of this read
             # are dropped as the gap's are -- SLAM is never told an older generation after a newer one, and the layer

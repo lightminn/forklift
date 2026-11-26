@@ -853,3 +853,32 @@ def test_a_candidates_clock_jump_while_the_current_one_re_establishes_is_no_boun
     tx.send(other)
     clock.ns = recv
     assert src.scan_source_events(recv) == [] and src.counts["boundaries"] == 0
+
+
+@pytest.mark.parametrize("on_read", [False, True])
+def test_a_slam_refusal_at_a_receive_gap_still_hands_the_boundary_over_first(frames, on_read):
+    """Codex U3a round 4 P2: a gap seen on a quiet call or on the read that ends it queues its boundary before SLAM is
+    told -- a refusal there keeps the events (lost, boundary) and is raised after them."""
+    tx, rx = pair()
+    clock = Clock()
+
+    class Refusing(Slam):
+        refuse = False
+
+        def generation(self, gen):
+            if self.refuse:
+                raise RuntimeError("start_check_generation_changed")
+            super().generation(gen)
+
+    slam = Refusing()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    slam.refuse = True
+    later = frames[i - 1][0] + rs.SCAN_GAP_NS + 5 * MS
+    if on_read:
+        tx.send(frames[i][1])
+    clock.ns = later
+    events = src.scan_source_events(later)
+    assert events[:2] == [("lost", "lidar"), ("boundary", "lidar")]
+    with pytest.raises(RuntimeError, match="start_check_generation_changed"):
+        src.scans(later)
