@@ -1614,7 +1614,7 @@ class RealLoop:
         fresh_slam = sl.pose_reply_ns is not None and now_ns - sl.pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
         still = standing and self.odom_continuous and fresh_slam
         lift = lifts[-1] if standing else None
-        if still and self.still_since_ns is not None and self._span_moved(lift):
+        if still and self.still_since_ns is not None and self._span_moved():
             still = False  # the span ends here; the next still tick starts a new one with a new number
         if not still:
             if self.still_since_ns is not None:
@@ -1623,23 +1623,36 @@ class RealLoop:
         elif self.still_since_ns is None:
             self.still_since_ns = int(now_ns)
             self._still_serial += 1
-            self._span_base = (tuple(float(v) for v in self.odom_pose), lift, self.reloc_gen,
-                               self.core.relocalize_generation())
+            last = self.samples[-1].host_ns if self.samples else None
+            self._span_base = {"pose": tuple(float(v) for v in self.odom_pose), "lo": lift, "hi": lift,
+                               "seen_ns": last, "gen": self.reloc_gen, "open": self.core.relocalize_generation()}
         return still
 
-    def _span_moved(self, lift) -> bool:
-        """On the D5-confirmation run: whether the odometry, the lift or the relocalization state left the still span's
-        start (the eyes' tolerances, D5_STILL_M / D5_STILL_RAD and the port's lift tolerance)."""
+    def _span_moved(self) -> bool:
+        """On the D5-confirmation run: whether the truck moved within the still span by more than the eyes' tolerance
+        between ANY two of its moments (Codex U3c round 4 P2): every lift sample since the span began, each STATE of a
+        tick on its own, keeps the span's lift range within the port's tolerance; the odometry stays within half of
+        D5_STILL_M / D5_STILL_RAD of the span's start (so any two poses are within the whole); and the relocalization
+        state is the start's."""
         b = self._span_base
         if not self._d5_confirm_required() or b is None:
             return False
-        (x0, y0, h0), lift0, gen0, open0 = b
+        tol = float(getattr(self.port, "lift_still_m", 0.0))
+        for smp in self.samples:
+            if b["seen_ns"] is not None and smp.host_ns <= b["seen_ns"]:
+                continue
+            v = float(smp.state.lift_m)
+            if not math.isfinite(v) or b["lo"] is None:
+                return True
+            b["lo"], b["hi"] = min(b["lo"], v), max(b["hi"], v)
+            b["seen_ns"] = smp.host_ns
+        if b["lo"] is None or b["hi"] - b["lo"] > tol:
+            return True
+        x0, y0, h0 = b["pose"]
         x, y, h = (float(v) for v in self.odom_pose)
-        if math.hypot(x - x0, y - y0) > D5_STILL_M or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD:
+        if math.hypot(x - x0, y - y0) > D5_STILL_M / 2 or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD / 2:
             return True
-        if lift is None or lift0 is None or abs(float(lift) - float(lift0)) > float(getattr(self.port, "lift_still_m", 0.0)):
-            return True
-        return gen0 != self.reloc_gen or open0 != self.core.relocalize_generation()
+        return b["gen"] != self.reloc_gen or b["open"] != self.core.relocalize_generation()
 
     def _span_ended(self) -> None:
         """A still span ended: on the D5-confirmation run a confirmation given in it and not yet used is void (the

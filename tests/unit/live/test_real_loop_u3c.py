@@ -167,3 +167,34 @@ def test_a_relocalization_change_ends_the_still_span():
     assert status["still_serial"] is not None and status["still_serial"] > span
     assert status["operator_start_binding"] is None
 
+
+
+def _with_lifts(r, lifts):
+    """Append STATE samples (each a copy of the newest with another lift) after the span's last seen one."""
+    from forklift_core.plant.bringup import Sample
+
+    last = r.loop.samples[-1]
+    for i, v in enumerate(lifts, 1):
+        r.loop.samples.append(Sample(last.host_ns + i, dataclasses.replace(last.state, lift_m=v)))
+
+
+def test_every_state_of_a_tick_counts_not_only_the_last():
+    """Codex round 4 P2-1: a STATE past the tolerance followed in the same tick by one back inside it."""
+    r = rig()
+    _confirmed(r)
+    base = r.loop._span_base["lo"]  # noqa: SLF001
+    tol = float(r.loop.port.lift_still_m)
+    _with_lifts(r, [base + 1.03 * tol, base + 0.97 * tol])
+    assert r.loop._span_moved()  # noqa: SLF001
+
+
+def test_two_moments_of_one_span_stay_within_the_tolerance_of_each_other():
+    """Codex round 4 P2-2: each within the tolerance of the span's start, but 1.2x apart from each other."""
+    r = rig()
+    _confirmed(r)
+    base = r.loop._span_base["lo"]  # noqa: SLF001
+    tol = float(r.loop.port.lift_still_m)
+    _with_lifts(r, [base + 0.6 * tol])
+    assert not r.loop._span_moved()  # noqa: SLF001
+    _with_lifts(r, [base - 0.6 * tol])
+    assert r.loop._span_moved()  # noqa: SLF001

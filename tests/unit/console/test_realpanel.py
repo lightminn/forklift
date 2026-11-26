@@ -166,6 +166,9 @@ out.keys = [k0 === P.checksKey(d5r, g, reg, out.texts),
             k0 === P.checksKey({...d5r, relocalize_generation: 4}, g, reg, out.texts), // a relocalization
             k0 === P.checksKey({...d5r, still_serial: 8}, g, reg, out.texts),         // moved and stood again
             P.checksKey(d5r, g, null, out.texts)];
+out.wait = [P.confirmWaitText(reg, d5r), P.confirmWaitText(reg, {...d5r, relocalize_generation: 3}),
+            P.confirmWaitText(reg, {...d5r, still_serial: null}), P.confirmWaitText(null, d5r),
+            P.confirmWaitText(reg, base)];
 const opb = (st) => Object.fromEntries(P.bypassButtons(st, true).map((b) => [b.check, b.enabled]));
 out.opButtons = [opb({...d5, operating: true}), opb({...base, operating: false})];
 console.log(JSON.stringify(out));
@@ -203,7 +206,9 @@ def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
                                        "still_serial": 7}]
     assert out["region"] == [[1, 2, 1.8, 0.8, 0]] + [None] * 8  # only this console's current registration
     assert out["regionText"].endswith("중심 (1.00, 2.00) m · 1.80×0.80 m · 0.0°")
-    assert out["keys"] == [True, False, False, False, False, ""]  # the ticks are bound to the lease, pose and generation
+    assert out["keys"] == [True, False, False, False, False, ""]
+    assert out["wait"][0] == "" and out["wait"][1].startswith("재위치가 끝나면") and out["wait"][2].startswith("차가 서면")
+    assert out["wait"][3].startswith("팔레트를 (다시) 등록") and out["wait"][4] == ""  # no confirmation on this run  # the ticks are bound to the lease, pose and generation
     assert out["opButtons"][0]["layer_timing"] is False and out["opButtons"][0]["operator_start"] is False
     assert out["opButtons"][0]["imu"] is True and out["opButtons"][1]["layer_timing"] is True
     assert out["opButtons"][1]["operator_start"] is True

@@ -261,3 +261,13 @@ export function checksKey(status, generations, registered, texts) {
     registered.pose, registered.revision, registered.serial, status.register_serial,
     status.relocalize_generation ?? null, status.still_serial ?? null, texts]);  // a move unticks (round 2 P1)
 }
+
+// Why the six lines are not shown now (Codex round 4 P3): the registration kept, only the moment not right -- or
+// the registration itself is missing or old. Empty when they are shown.
+export function confirmWaitText(registered, status, targets = null) {
+  if (!status || !Number.isInteger(status.register_serial)) return "";
+  if (Number.isInteger(status.relocalize_generation)) return "재위치가 끝나면 확인할 영역과 여섯 항목이 나옵니다";
+  if (!Number.isInteger(status.still_serial)) return "차가 서면 확인할 영역과 여섯 항목이 나옵니다";
+  if (confirmRegion(registered, status, targets)) return "";
+  return "팔레트를 (다시) 등록하면 확인할 영역과 여섯 항목이 나옵니다";
+}

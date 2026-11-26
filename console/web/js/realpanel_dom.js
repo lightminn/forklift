@@ -2,7 +2,7 @@
 // pallet, confirm the start, submit with the registered revision, answer the operator check bound to what was
 // pressed, finish a field recovery, bypass checks, rearm. The decisions are realpanel.js's; this file draws and sends.
 
-import { answerKey, answerStillOpen, bypassButtons, checksKey, confirmRegion, manualOnlyNotice, palletConfirmTexts,
+import { answerKey, answerStillOpen, bypassButtons, checksKey, confirmRegion, confirmWaitText, manualOnlyNotice, palletConfirmTexts,
   panelShown, poseOf, preconditionRows, regionText, relocalizeClosedWhy, relocalizeResult, relocalizeView, startFields, startStateText, statusIsMine,
   statusSig, submitClosedWhy, submitRevision, toggleShown } from "./realpanel.js";
 
@@ -131,6 +131,8 @@ export function bindRealPanel(m, rejectText, clientId) {
   $("rp-start").onclick = guard(() => {
     if (panel.toggle) return say("우회 변경이 적용되기를 기다립니다");
     const st = m.session.realStatus;
+    const wait = confirmWaitText(panel.registered, st, m.session.targets);
+    if (wait) return say(wait); // the registration kept when only the moment is not right (round 4 P3)
     const fields = startFields(panel.registered, st, m.session.targets);
     if (fields === null) return say("팔레트를 (다시) 등록한 뒤 확인하세요");
     const texts = palletConfirmTexts(st);
@@ -339,11 +341,11 @@ export function renderRealPanel(m, clientId) {
   const checks = $("rp-checks");
   checks.hidden = texts === null;
   $("rp-start").textContent = texts === null ? "시작 확인" : "팔레트 확인";
-  const ckey = region ? checksKey(st, gens, panel.registered, texts) : "";
+  const ckey = region ? checksKey(st, gens, panel.registered, texts) : `wait:${confirmWaitText(panel.registered, st, m.session.targets)}`;
   if (checks.dataset.key !== ckey) {
     const head = document.createElement("div");
     head.className = "hint";
-    head.textContent = region ? regionText(region) : "팔레트를 등록하면 확인할 영역과 여섯 항목이 나옵니다";
+    head.textContent = region ? regionText(region) : confirmWaitText(panel.registered, st, m.session.targets);
     checks.replaceChildren(head, ...(region ? texts : []).map((text, i) => {
       const label = document.createElement("label");
       const box = document.createElement("input");
