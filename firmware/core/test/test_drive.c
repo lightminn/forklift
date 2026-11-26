@@ -2281,8 +2281,9 @@ static void bench_m_needs_a_fresh_count(void)
     send(arm_msg(seq++, d.boot_id, echo_now()));
     send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
-    /* a count, then 6 ms of 0x0000 (valid angle, never counted), then ARM + M(0) + M(0.12) in one cycle with the
-       new arming's generation: the freshness check alone refuses M */
+    /* a count, then 6 ms of 0x0000 (valid angle, never counted), then ARM + M(0) in one cycle with the new arming's
+       generation and M(0.12) in the next: M is refused (the per-cycle gap rule has lost the count; the freshness
+       clause would refuse it too) */
     boot_with(mod_bench);
     in.abs_fresh[1] = false;
     set_steer(2.0);
