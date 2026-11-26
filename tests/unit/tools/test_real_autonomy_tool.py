@@ -562,3 +562,23 @@ def test_a_run_exception_writes_nothing_to_stderr_before_the_device_is_released(
     args = tool.build_parser().parse_args(["--run", "--client", "real", "--out-dir", str(tmp_path / "rec")])
     assert tool.run_real(args, transport_factory=lambda d: None) == tool.EXIT_FAILED
     assert order == ["cleanup", "stderr"]
+
+
+def test_a_failed_summary_keeps_the_disarm_evidence_and_names_the_gap(monkeypatch):
+    """Codex U3e-1 implementation round 6 P3: the DISARM times and frames are written on their own, and a summary
+    that fails is named in the end row (which makes the run's exit non-zero)."""
+
+    def boom(results):
+        raise ValueError("bad results")
+
+    class Done(_Run):
+        def run(self, duration_s, stop, record):
+            return "deadline"
+
+    monkeypatch.setattr(tool, "mission_counts", boom)
+    end = {"reason": None}
+    reason, closing = tool._run_session(Done(None), SimpleNamespace(counts={}), 1.0, None, _Rec(),  # noqa: SLF001
+                                        SimpleNamespace(trace=None), end)
+    assert (reason, closing) == ("deadline", "confirmed")
+    assert end["closing_confirmed_ns"] == 2 and end["closing_disarms"] == [[1, 2]]
+    assert end["end_fields_error"].startswith("summary:ValueError")

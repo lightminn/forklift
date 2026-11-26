@@ -448,7 +448,8 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     reason, closing = _run_session(run, sources, args.duration_s, stop, record, held, end)
     # step 11: the permission revoked and the fd released at once (the lock with it), the blocking cleanup after
     _release_device(held, "closing")
-    return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
+    complete = "end_fields_error" not in end  # a record missing its own fields is not a clean run (impl round 6 P3)
+    return 0 if closing == "confirmed" and reason in ("deadline", "signal") and complete else EXIT_FAILED
 
 
 def _run_session(run, sources, duration_s, stop, record, held, end):
@@ -474,15 +475,19 @@ def _run_session(run, sources, duration_s, stop, record, held, end):
         except Exception as err:  # noqa: BLE001
             closing = f"closing_exception:{type(err).__name__}:{err}"
         end["closing"] = closing
-        try:
+        try:  # the DISARM evidence first, on its own (impl round 6 P3)
             loop = run.loop
             end.update(closing_started_ns=loop.closing_started_ns, closing_confirmed_ns=loop.closing_confirmed_ns,
-                       closing_disarms=[list(d) for d in loop.closing_disarms],
-                       results=list(loop.session.results), permit=loop.permit.state,
+                       closing_disarms=[list(d) for d in loop.closing_disarms])
+        except Exception as err:  # noqa: BLE001 -- the closing verdict above is already in the end row
+            end["end_fields_error"] = f"closing:{type(err).__name__}:{err}"
+        try:
+            loop = run.loop
+            end.update(results=list(loop.session.results), permit=loop.permit.state,
                        permit_reason=loop.permit.reason, counts=dict(sources.counts),
                        mission_counts=mission_counts(loop.session.results), ticks=run.ticks)
-        except Exception as err:  # noqa: BLE001 -- the closing verdict above is already in the end row
-            end["end_fields_error"] = f"{type(err).__name__}:{err}"
+        except Exception as err:  # noqa: BLE001
+            end.setdefault("end_fields_error", f"summary:{type(err).__name__}:{err}")
     return reason, closing
 
 
