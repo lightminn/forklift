@@ -10,7 +10,7 @@ import pytest
 
 from real_loop_rig import PALLET, Rig
 from test_real_loop_console import ask
-from test_real_loop_u3b2 import REGION, _confirmed, bypass_d5, register, rig, still
+from test_real_loop_u3b2 import REGION, _confirmed, bypass_d5, register, rig, still, submit
 
 
 def rows(r):
@@ -169,22 +169,20 @@ def test_a_relocalization_change_ends_the_still_span():
 
 
 
-def _with_lifts(r, lifts):
-    """Append STATE samples (each a copy of the newest with another lift) after the span's last seen one."""
-    from forklift_core.plant.bringup import Sample
 
-    last = r.loop.samples[-1]
-    for i, v in enumerate(lifts, 1):
-        r.loop.samples.append(Sample(last.host_ns + i, dataclasses.replace(last.state, lift_m=v)))
+def _states(r, lifts):
+    """STATEs as one read delivers them (one receipt time): each goes through the loop's per-STATE note."""
+    for v in lifts:
+        r.loop._span_note(v, False)  # noqa: SLF001 -- what _on_state calls for every STATE
 
 
-def test_every_state_of_a_tick_counts_not_only_the_last():
-    """Codex round 4 P2-1: a STATE past the tolerance followed in the same tick by one back inside it."""
+def test_every_state_of_a_read_counts_not_only_the_last():
+    """Codex rounds 4-5 P2: a STATE past the tolerance followed in the same read by one back inside it."""
     r = rig()
     _confirmed(r)
     base = r.loop._span_base["lo"]  # noqa: SLF001
     tol = float(r.loop.port.lift_still_m)
-    _with_lifts(r, [base + 1.03 * tol, base + 0.97 * tol])
+    _states(r, [base + 1.03 * tol, base + 0.97 * tol])
     assert r.loop._span_moved()  # noqa: SLF001
 
 
@@ -194,7 +192,25 @@ def test_two_moments_of_one_span_stay_within_the_tolerance_of_each_other():
     _confirmed(r)
     base = r.loop._span_base["lo"]  # noqa: SLF001
     tol = float(r.loop.port.lift_still_m)
-    _with_lifts(r, [base + 0.6 * tol])
+    _states(r, [base + 0.6 * tol])
     assert not r.loop._span_moved()  # noqa: SLF001
-    _with_lifts(r, [base - 0.6 * tol])
+    _states(r, [base - 0.6 * tol])
     assert r.loop._span_moved()  # noqa: SLF001
+
+
+def test_the_first_arm_is_judged_from_the_eyes_check_not_from_the_submit():
+    """Codex round 5 P2-2: 0.6x the tolerance before the submit and 0.6x more before the first ARM is 1.2x from what
+    the eyes saw -- the used span's range ends the mission with no ARM."""
+    r = rig()
+    pid, rev = _confirmed(r)
+    base = r.loop._span_base["lo"]  # noqa: SLF001
+    tol = float(r.loop.port.lift_still_m)
+    r.mcu.lift = r.mcu.lift_target = base + 0.6 * tol  # moved after the eyes' check, still within one span
+    r.tick(5)
+    assert still(r) is not None and r.loop._span_base["hi"] >= base + 0.6 * tol - 1e-9  # noqa: SLF001
+    assert submit(r, rev)["t"] == "ack"
+    assert r.loop._d5_used_span is not None and r.loop._d5_base[2] == pytest.approx(base + 0.6 * tol)  # noqa: SLF001
+    _states(r, [base + 1.2 * tol])  # 0.6x from the submit's baseline, 1.2x from what the eyes saw
+    assert r.loop._d5_moved(base + 1.2 * tol)  # noqa: SLF001
+    r.loop._d5_used_span = None  # noqa: SLF001 -- without the used span the submit's baseline alone lets it go
+    assert not r.loop._d5_moved(base + 1.2 * tol)  # noqa: SLF001

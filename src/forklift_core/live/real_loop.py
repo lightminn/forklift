@@ -463,7 +463,10 @@ class RealLoop:
         # its start on the D5-confirmation run: the odometry pose, the lift and the relocalization state -- a span
         # ends when they move past the eyes' tolerance however slowly (Codex round 3 P1) or a relocalization opens or
         # closes (round 3 P2), so the next span gets a new number
-        self._span_base: tuple | None = None
+        self._span_base: dict | None = None
+        # the span of the confirmation a submit used: its range keeps growing on every STATE until the mission's
+        # first ARM is written (Codex round 5 P2-2: the eyes' tolerance is from what they saw, not from the submit)
+        self._d5_used_span: dict | None = None
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -834,7 +837,7 @@ class RealLoop:
         self.reloc_gen = gen
         if self.attempt is not None:
             self._attempt_end(t, "refused", "relocalize_superseded")
-        self.still_since_ns = None
+        self._end_still()
         self.stand_since_ns = None
         if self.operator_start is not None:
             self.operator_start.void("relocalize")
@@ -1306,6 +1309,7 @@ class RealLoop:
         self.odom_pose = tuple(float(v) for v in step.pose)
         # U3b-2 (Codex round 3 P2): every STATE is judged against the eyes' baseline, latched until the first ARM --
         # a later sample of the same read never hides an earlier one past the tolerance (a broken odometry too)
+        self._span_note(float(state.lift_m), bool(step.continuity_broken))
         self._d5_watch(float(state.lift_m), bool(step.continuity_broken))
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
@@ -1313,7 +1317,7 @@ class RealLoop:
             self._odom_broken = True  # sticky for the tick: a later good sample does not mend this tick's break
             self.odom_gen += 1
             self._odom_good = False
-            self.still_since_ns = None
+            self._end_still()
             self.stand_since_ns = None
         else:
             self._odom_good = True
@@ -1623,36 +1627,48 @@ class RealLoop:
         elif self.still_since_ns is None:
             self.still_since_ns = int(now_ns)
             self._still_serial += 1
-            last = self.samples[-1].host_ns if self.samples else None
             self._span_base = {"pose": tuple(float(v) for v in self.odom_pose), "lo": lift, "hi": lift,
-                               "seen_ns": last, "gen": self.reloc_gen, "open": self.core.relocalize_generation()}
+                               "bad": lift is None, "gen": self.reloc_gen, "open": self.core.relocalize_generation()}
         return still
 
     def _span_moved(self) -> bool:
         """On the D5-confirmation run: whether the truck moved within the still span by more than the eyes' tolerance
-        between ANY two of its moments (Codex U3c round 4 P2): every lift sample since the span began, each STATE of a
-        tick on its own, keeps the span's lift range within the port's tolerance; the odometry stays within half of
-        D5_STILL_M / D5_STILL_RAD of the span's start (so any two poses are within the whole); and the relocalization
-        state is the start's."""
+        between any two of its moments (Codex U3c rounds 4-5) -- the STATEs' notes (``_span_note``) -- or the
+        relocalization state is not the start's."""
         b = self._span_base
         if not self._d5_confirm_required() or b is None:
             return False
-        tol = float(getattr(self.port, "lift_still_m", 0.0))
-        for smp in self.samples:
-            if b["seen_ns"] is not None and smp.host_ns <= b["seen_ns"]:
-                continue
-            v = float(smp.state.lift_m)
-            if not math.isfinite(v) or b["lo"] is None:
-                return True
-            b["lo"], b["hi"] = min(b["lo"], v), max(b["hi"], v)
-            b["seen_ns"] = smp.host_ns
-        if b["lo"] is None or b["hi"] - b["lo"] > tol:
+        return self._span_out(b) or b["gen"] != self.reloc_gen or b["open"] != self.core.relocalize_generation()
+
+    def _span_out(self, b: dict) -> bool:
+        """A span's notes past the tolerance: a bad sample, the lift range over the port's tolerance, or the odometry
+        more than half of D5_STILL_M / D5_STILL_RAD from the span's start (so any two poses are within the whole)."""
+        if b["bad"] or b["lo"] is None or b["hi"] - b["lo"] > float(getattr(self.port, "lift_still_m", 0.0)):
             return True
         x0, y0, h0 = b["pose"]
         x, y, h = (float(v) for v in self.odom_pose)
-        if math.hypot(x - x0, y - y0) > D5_STILL_M / 2 or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD / 2:
-            return True
-        return b["gen"] != self.reloc_gen or b["open"] != self.core.relocalize_generation()
+        return math.hypot(x - x0, y - y0) > D5_STILL_M / 2 or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD / 2
+
+    def _span_note(self, lift: float, broken: bool) -> None:
+        """Every STATE (each of a read on its own): the lift into the open span's range and the used span's, and
+        whether the odometry left them (D5-confirmation run only)."""
+        if not self._d5_confirm_required():
+            return
+        for b in (self._span_base, self._d5_used_span):
+            if b is None:
+                continue
+            if broken or not math.isfinite(lift) or b["lo"] is None:
+                b["bad"] = True
+                continue
+            b["lo"], b["hi"] = min(b["lo"], lift), max(b["hi"], lift)
+            if self._span_out(b):
+                b["bad"] = True
+
+    def _end_still(self) -> None:
+        """The still span ends outside ``_still`` (an odometry break, a relocalization opened): as there."""
+        if self.still_since_ns is not None:
+            self._span_ended()
+        self.still_since_ns = None
 
     def _span_ended(self) -> None:
         """A still span ended: on the D5-confirmation run a confirmation given in it and not yet used is void (the
@@ -1753,7 +1769,7 @@ class RealLoop:
             self._odom_broken = True
             self.odom_gen += 1
             self._odom_good = False
-            self.still_since_ns = None
+            self._end_still()
             self.stand_since_ns = None
         if self.operating and self.scan_events is not None and self.fatal_source is None:
             # U3a (Codex U3 split round 1 P1-2): the scan source's events before any install this tick -- a boundary
@@ -1810,7 +1826,7 @@ class RealLoop:
             # U3b-2 (Codex rounds 1-2 P1): the truck moved between the submit that used the D5 confirmation and the
             # first ARM written (an ARM queued and not yet out included) -- what the eyes cleared no longer holds;
             # the mission ends (a new check, a new submit)
-            self.operator_start.used, self._d5_base = None, None
+            self.operator_start.used, self._d5_base, self._d5_used_span = None, None, None
             core.commands.terminate("cancelled", t, "operator_start_moved")
         if core.slam is not None:
             core.slam["stop_now"] = still
@@ -2049,7 +2065,10 @@ class RealLoop:
                 "region": [float(v) for v in region]}
 
     def _d5_moved(self, lift, broken: bool = False) -> bool:
-        """This odometry pose and this lift against the baseline the D5 confirmation was used at."""
+        """This odometry pose and this lift against the baseline the D5 confirmation was used at, and the range of the
+        still span the confirmation was given in, from the eyes' check on (Codex U3c round 5 P2-2)."""
+        if self._d5_used_span is not None and self._span_out(self._d5_used_span):
+            return True
         b = self._d5_base
         x0, y0, h0 = b[1]
         x, y, h = (float(v) for v in self.odom_pose)
@@ -2264,6 +2283,7 @@ class RealLoop:
                     self._emit({"t": "operator_start_used", "ns": int(now_ns), **self.operator_start.used})
                     lift_ = float(self.samples[-1].state.lift_m) if self.samples else None
                     self._d5_base = (cmds.mission_id, tuple(float(v) for v in self.odom_pose), lift_)
+                    self._d5_used_span = self._span_base  # the same notes go on, until the first ARM is written
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None and self._planning_ready():

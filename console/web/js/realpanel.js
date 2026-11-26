@@ -242,6 +242,8 @@ export function confirmRegion(registered, status, targets = null) {
   if (targets && Number.isInteger(targets.targets_revision) && targets.targets_revision > registered.revision) return null;
   // a relocalization open: the place is not known, nothing to check yet (Codex round 3 P2)
   if (Number.isInteger(status.relocalize_generation)) return null;
+  // not standing: nothing the eyes can check yet (Codex round 5 P3)
+  if (!Number.isInteger(status.still_serial)) return null;
   return r.region.map(Number);
 }
 

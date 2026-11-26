@@ -156,7 +156,8 @@ out.region = [P.confirmRegion(reg, d5r), P.confirmRegion({...reg, serial: 1}, d5
               P.confirmRegion(reg, {...d5r, targets_revision: 6}),   // the list moved on since the registration
               P.confirmRegion({...reg, session_epoch: 2}, d5r),
               P.confirmRegion(reg, d5r, {targets_revision: 6}),     // the targets message is newer
-              P.confirmRegion(reg, {...d5r, relocalize_generation: 3})];  // a relocalization open
+              P.confirmRegion(reg, {...d5r, relocalize_generation: 3}),  // a relocalization open
+              P.confirmRegion(reg, {...d5r, still_serial: null})];      // not standing
 out.regionText = P.regionText([1, 2, 1.8, 0.8, 0]);
 const g = {session_epoch: 3, lease_id: "L1"};
 const k0 = P.checksKey(d5r, g, reg, out.texts);
@@ -204,7 +205,7 @@ def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
     assert out["sig"] is False  # a press drawn for one registration is not taken for the next
     assert out["newerList"] == [None, {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2,
                                        "still_serial": 7}]
-    assert out["region"] == [[1, 2, 1.8, 0.8, 0]] + [None] * 8  # only this console's current registration
+    assert out["region"] == [[1, 2, 1.8, 0.8, 0]] + [None] * 9  # only this console's current registration
     assert out["regionText"].endswith("중심 (1.00, 2.00) m · 1.80×0.80 m · 0.0°")
     assert out["keys"] == [True, False, False, False, False, ""]
     assert out["wait"][0] == "" and out["wait"][1].startswith("재위치가 끝나면") and out["wait"][2].startswith("차가 서면")
