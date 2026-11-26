@@ -274,6 +274,8 @@ export const REJECT = {
   // U3c (Codex round 1 P3-2): the scan source's refusals the precondition row tells (real_sources.py), reason after
   "feed:": "스캔 수신을 거부했습니다",
   "frame:": "스캔 프레임이 자격을 잃었습니다",
+  // U3c (Codex round 2): the truck moved after the six lines were ticked
+  still_changed: "확인한 뒤 차가 움직였습니다 · 서 있는 지금 여섯 항목을 다시 확인하세요",
   "imu:unqualified": "IMU 가 검증되지 않았습니다 · imu 우회를 켜야 제출·무장할 수 있습니다(우회 중에는 기울기 감시 꺼짐)",
   // U3b-1: the operating run's case A and run time
   run_time_short: "남은 실행 시간이 모자랍니다",

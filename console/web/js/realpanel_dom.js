@@ -260,7 +260,10 @@ export function renderRealPanel(m, clientId) {
   if (!el) return;
   const st = m.session.realStatus;
   el.hidden = !panelShown(st);
-  if (el.hidden) return;
+  if (el.hidden) {
+    if (m.realPanel) m.realPanel.confirmRegion = null; // a new session without a status: no old region on the map
+    return;
+  }
   const panel = m.realPanel;
   const gens = m.session.generations;
   // only a status received while this lease was held counts (r2 P2-2; protocol.js records it at receipt)

@@ -457,6 +457,9 @@ class RealLoop:
         self._register_serial = 0  # every pallet registration on this run (Codex round 2 P2-1: same pose, same rev)
         # U3c (Codex round 1 P1-2): the bypass region of the newest registration, shown before the eyes check it
         self._register_region: dict | None = None
+        # U3c (Codex round 2 P1): every still span (standing, continuous odometry, fresh SLAM) gets a number; the
+        # pallet confirmation names the span its six lines were ticked in, so a move in between voids them
+        self._still_serial = 0
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -590,13 +593,17 @@ class RealLoop:
             rev_ = register_pallet(core, msg["pallet_id"], msg["pose"])
             if not self._d5_confirm_required():
                 return None, {"targets_revision": rev_}
+            # U3c (Codex round 2 P2-2): a registration the targets did not take (a carried pallet keeps no pose)
+            # changes nothing here -- no serial, no region, the earlier confirmation as it was
+            pose = core.targets.pallets[msg["pallet_id"]].pose
+            if pose is None or self.d5_region is None:
+                return "pallet_not_registered", {}
+            region = [float(v) for v in self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))]
             # U3b-2 (Codex rounds 1-2 P2): a pallet registered again -- even at the same pose and revision, as when a
             # pallet is swapped -- needs the eyes again, and a confirmation sent from the screen before it is stale
             self._register_serial += 1
             if self.operator_start is not None:
                 self.operator_start.void("registered")
-            pose = core.targets.pallets[msg["pallet_id"]].pose
-            region = [float(v) for v in self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))]
             self._register_region = {"pallet_id": msg["pallet_id"], "register_serial": self._register_serial,
                                      "targets_revision": rev_, "region": region}
             return None, {"targets_revision": rev_, "register_serial": self._register_serial, "region": region}
@@ -703,6 +710,8 @@ class RealLoop:
             # U3b-2: what the D5 confirmation bound (pallet, revision, relocalization generation, region), or None
             "operator_start_binding": None if start is None or start.binding is None else dict(start.binding),
             "register_serial": self._register_serial if self._d5_confirm_required() else None,
+            # U3c (Codex round 2 P1): the still span now (None while not still) -- the confirmation names it
+            "still_serial": self._still_serial if self.still_since_ns is not None else None,
             # U3c: the region the newest registration's confirmation would bind (the same d5_region), before it
             "register_region": None if self._register_region is None or not self._d5_confirm_required()
             else {**self._register_region, "region": list(self._register_region["region"])},
@@ -1604,6 +1613,7 @@ class RealLoop:
             self.still_since_ns = None
         elif self.still_since_ns is None:
             self.still_since_ns = int(now_ns)
+            self._still_serial += 1
         return still
 
     def _t(self, now_ns: int) -> float:
@@ -1961,10 +1971,19 @@ class RealLoop:
         from forklift_core.live import real_assembly as asm_
 
         pid, rev, serial = msg.get("pallet_id"), msg.get("targets_revision"), msg.get("register_serial")
-        if not isinstance(pid, str) or type(rev) is not int or type(serial) is not int:
+        still = msg.get("still_serial")
+        if not isinstance(pid, str) or type(rev) is not int or type(serial) is not int or type(still) is not int:
             return "operator_start_needs_registration"
-        if rev != int(self.core.targets.revision) or serial != self._register_serial:
+        reg = self._register_region
+        if reg is None:
+            return "pallet_not_registered"  # no registration on this run yet
+        # the registration itself (Codex U3c round 2 P2-1): its own pallet and revision -- a list moved on since
+        # (a pose correction) is not what the eyes were shown
+        if (rev != int(self.core.targets.revision) or serial != self._register_serial
+                or reg["register_serial"] != serial or reg["targets_revision"] != rev or reg["pallet_id"] != pid):
             return "targets_changed"
+        if self.still_since_ns is None or still != self._still_serial:
+            return "still_changed"  # the truck moved since the six lines were ticked (Codex U3c round 2 P1)
         if asm_.s10_submit_refusal(self.core, pid) is not None:
             return "pallet_not_registered"
         if self.d5_region is None:
@@ -1975,10 +1994,12 @@ class RealLoop:
         """The binding of a confirmation ``_d5_refusal`` passed: the whole bypass region computed from that
         registration (plan 2.6: the region the eyes must clear is the region exempted)."""
         pid, rev = msg["pallet_id"], int(msg["targets_revision"])
-        pose = self.core.targets.pallets[pid].pose
-        region = self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))  # the check's own geometry
+        # the region computed at that registration with the check's own geometry -- the one the console showed
+        # (U3c); _d5_refusal made sure the registration is this one and the list has not moved since
+        region = self._register_region["region"]
         return {"pallet_id": pid, "targets_revision": rev, "register_serial": int(msg["register_serial"]),
-                "reloc_gen": self.reloc_gen, "region": [float(v) for v in region]}
+                "still_serial": int(msg["still_serial"]), "reloc_gen": self.reloc_gen,
+                "region": [float(v) for v in region]}
 
     def _d5_moved(self, lift, broken: bool = False) -> bool:
         """This odometry pose and this lift against the baseline the D5 confirmation was used at."""

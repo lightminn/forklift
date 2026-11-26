@@ -211,7 +211,10 @@ export function startFields(registered, status, targets = null) {
     || registered.serial !== status.register_serial || registered.revision !== status.targets_revision) return null;
   // a newer list from either message (as submitRevision, Codex round 1 P3-1)
   if (targets && Number.isInteger(targets.targets_revision) && targets.targets_revision > registered.revision) return null;
-  return { pallet_id: registered.pallet, targets_revision: registered.revision, register_serial: registered.serial };
+  // the still span the six lines were ticked in (Codex round 2 P1): none while not still -- nothing to confirm
+  if (!Number.isInteger(status.still_serial)) return null;
+  return { pallet_id: registered.pallet, targets_revision: registered.revision, register_serial: registered.serial,
+    still_serial: status.still_serial };
 }
 
 // U3c: the start check's state line -- what the vehicle bound (pallet, register serial, the bypass region), or the
@@ -231,8 +234,10 @@ export function startStateText(status) {
 export function confirmRegion(registered, status) {
   const r = status && status.register_region;
   if (!r || !registered || !Array.isArray(r.region) || r.region.length !== 5) return null;
-  if (r.register_serial !== registered.serial || r.targets_revision !== registered.revision
-    || r.pallet_id !== registered.pallet) return null;
+  if (registered.session_epoch !== status.session_epoch || r.register_serial !== registered.serial
+    || r.targets_revision !== registered.revision || r.pallet_id !== registered.pallet) return null;
+  // the list moved on since (a pose correction, Codex round 2 P2-1): that region is no longer the one bound
+  if (status.targets_revision !== registered.revision) return null;
   return r.region.map(Number);
 }
 
@@ -243,11 +248,12 @@ export function regionText(region) {
     + `${len.toFixed(2)}×${wid.toFixed(2)} m · ${((yaw * 180) / Math.PI).toFixed(1)}°`;
 }
 
-// What the six ticks are bound to (Codex round 1 P1-1): the session, the lease, the registration (pallet, pose,
-// revision, serial), the relocalization generation and the six lines -- any change unticks them.
+// What the six ticks are bound to (Codex round 1 P1-1, round 2 P1): the session, the lease, the registration
+// (pallet, pose, revision, serial), the relocalization generation, the still span and the six lines -- any change
+// unticks them.
 export function checksKey(status, generations, registered, texts) {
   if (!status || !texts || !registered) return "";
   return JSON.stringify([status.session_epoch, generations ? generations.lease_id : null, registered.pallet,
     registered.pose, registered.revision, registered.serial, status.register_serial,
-    status.relocalize_generation ?? null, texts]);
+    status.relocalize_generation ?? null, status.still_serial ?? null, texts]);  // a move unticks (round 2 P1)
 }

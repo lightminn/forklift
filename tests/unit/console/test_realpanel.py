@@ -134,7 +134,7 @@ const pre = {passed: ["C1", "C2"], load: {lift_target_m: 0.204, test_pallet: "P-
 const out = {};
 out.rows = P.preconditionRows({...base, preconditions: pre}, (r) => `<${r}>`);
 out.noRows = [P.preconditionRows(base), P.preconditionRows(null), P.preconditionRows({...base, preconditions: null})];
-const d5 = {...base, register_serial: 2, preconditions: pre};
+const d5 = {...base, register_serial: 2, still_serial: 7, preconditions: pre};
 out.texts = P.palletConfirmTexts(d5);
 out.noTexts = [P.palletConfirmTexts(base), P.palletConfirmTexts(null)];
 out.textsNoLoad = P.palletConfirmTexts({...d5, preconditions: {...pre, load: null}});
@@ -142,7 +142,8 @@ const reg = {session_epoch: 3, revision: 5, pallet: "P-S10", pose: [1, 2, 0], se
 out.fields = [P.startFields(reg, d5), P.startFields(reg, base), P.startFields(null, base),
               P.startFields({...reg, serial: 1}, d5), P.startFields({...reg, revision: 4}, d5),
               P.startFields({...reg, session_epoch: 2}, d5), P.startFields(null, d5),
-              P.startFields({...reg, serial: null}, d5), P.startFields(reg, null)];
+              P.startFields({...reg, serial: null}, d5), P.startFields(reg, null),
+              P.startFields(reg, {...d5, still_serial: null})];  // not still: nothing to confirm
 out.state = [P.startStateText({...d5, operator_start: true, operator_start_binding:
                {pallet_id: "P-S10", register_serial: 2, region: [1, 2, 1.8, 0.8, Math.PI / 2]}}),
              P.startStateText({...base, operator_start: true}), P.startStateText({...base, operator_start: false})];
@@ -151,7 +152,9 @@ out.newerList = [P.startFields(reg, d5, {targets_revision: 6}), P.startFields(re
 const rr = {pallet_id: "P-S10", register_serial: 2, targets_revision: 5, region: [1, 2, 1.8, 0.8, 0]};
 const d5r = {...d5, register_region: rr};
 out.region = [P.confirmRegion(reg, d5r), P.confirmRegion({...reg, serial: 1}, d5r),
-              P.confirmRegion({...reg, pallet: "Q"}, d5r), P.confirmRegion(reg, d5), P.confirmRegion(null, d5r)];
+              P.confirmRegion({...reg, pallet: "Q"}, d5r), P.confirmRegion(reg, d5), P.confirmRegion(null, d5r),
+              P.confirmRegion(reg, {...d5r, targets_revision: 6}),   // the list moved on since the registration
+              P.confirmRegion({...reg, session_epoch: 2}, d5r)];
 out.regionText = P.regionText([1, 2, 1.8, 0.8, 0]);
 const g = {session_epoch: 3, lease_id: "L1"};
 const k0 = P.checksKey(d5r, g, reg, out.texts);
@@ -159,6 +162,7 @@ out.keys = [k0 === P.checksKey(d5r, g, reg, out.texts),
             k0 === P.checksKey(d5r, {...g, lease_id: "L2"}, reg, out.texts),          // another lease
             k0 === P.checksKey(d5r, g, {...reg, pose: [1.5, 2, 0]}, out.texts),       // another registered pose
             k0 === P.checksKey({...d5r, relocalize_generation: 4}, g, reg, out.texts), // a relocalization
+            k0 === P.checksKey({...d5r, still_serial: 8}, g, reg, out.texts),         // moved and stood again
             P.checksKey(d5r, g, null, out.texts)];
 const opb = (st) => Object.fromEntries(P.bypassButtons(st, true).map((b) => [b.check, b.enabled]));
 out.opButtons = [opb({...d5, operating: true}), opb({...base, operating: false})];
@@ -187,16 +191,17 @@ def test_the_u3c_precondition_rows_and_pallet_confirmation(tmp_path):
     assert out["noTexts"] == [None, None]
     assert out["textsNoLoad"][3] == "승강 목표 — m + 팔레트 높이까지 위 공간 비어 있음"
     assert out["textsNoLoad"][5] == "C11 에서 승인한 시험 팔레트 —, 질량 — kg 이하"
-    assert out["fields"][0] == {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2}
+    assert out["fields"][0] == {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2, "still_serial": 7}
     assert out["fields"][1] == {} and out["fields"][2] == {}  # no per-pallet confirmation: as before
-    assert out["fields"][3:] == [None] * 6  # another serial, revision or session, none registered, no status
+    assert out["fields"][3:] == [None] * 7  # another serial, revision or session, none registered, no status, moving
     assert out["state"][0] == "확인됨 · P-S10 · 등록 #2 · 영역 중심 (1.00, 2.00) m · 1.80×0.80 m · 90.0°"
     assert out["state"][1:] == ["확인됨", ""]
     assert out["sig"] is False  # a press drawn for one registration is not taken for the next
-    assert out["newerList"] == [None, {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2}]
-    assert out["region"] == [[1, 2, 1.8, 0.8, 0], None, None, None, None]  # only this console's registration
+    assert out["newerList"] == [None, {"pallet_id": "P-S10", "targets_revision": 5, "register_serial": 2,
+                                       "still_serial": 7}]
+    assert out["region"] == [[1, 2, 1.8, 0.8, 0]] + [None] * 6  # only this console's current registration
     assert out["regionText"].endswith("중심 (1.00, 2.00) m · 1.80×0.80 m · 0.0°")
-    assert out["keys"] == [True, False, False, False, ""]  # the ticks are bound to the lease, pose and generation
+    assert out["keys"] == [True, False, False, False, False, ""]  # the ticks are bound to the lease, pose and generation
     assert out["opButtons"][0]["layer_timing"] is False and out["opButtons"][0]["operator_start"] is False
     assert out["opButtons"][0]["imu"] is True and out["opButtons"][1]["layer_timing"] is True
     assert out["opButtons"][1]["operator_start"] is True

@@ -4,11 +4,13 @@ confirmation, the scan source's newest refusal), each pass / blocked / bypassed 
 
 from forklift_core.live.real_preconditions import ASSEMBLY_CHECKS
 
+import dataclasses
+
 import pytest
 
 from real_loop_rig import PALLET, Rig
 from test_real_loop_console import ask
-from test_real_loop_u3b2 import REGION, _confirmed, register, rig
+from test_real_loop_u3b2 import REGION, _confirmed, bypass_d5, register, rig, still
 
 
 def rows(r):
@@ -57,7 +59,7 @@ def test_the_registration_tells_its_region_before_the_confirmation():
     assert shown["targets_revision"] == reply["targets_revision"] and shown["region"] == pytest.approx(REGION)
     r.tick(30)
     ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=reply["targets_revision"],
-                register_serial=reply["register_serial"])
+                register_serial=reply["register_serial"], still_serial=still(r))
     assert ok["t"] == "ack" and ok["region"] == pytest.approx(shown["region"])  # the region shown is the one bound
     assert rig(no_depth=False).loop.real_status(0)["register_region"] is None  # with depth: no confirmation
 
@@ -85,3 +87,52 @@ def test_the_summary_and_the_load_are_the_runs():
     pre = r.loop.real_status(r.now)["preconditions"]
     assert pre["passed"] == list(ASSEMBLY_CHECKS)
     assert pre["load"] == {"lift_target_m": 0.2, "test_pallet": "P-S10", "pallet_mass_kg": 4.5}
+
+
+def test_a_move_after_the_ticks_voids_them():
+    """Codex round 2 P1: the confirmation names the still span its six lines were ticked in; a move and a new stand
+    in between (even one the console missed) refuses it."""
+    r = rig()
+    bypass_d5(r)
+    pid, rev = register(r)
+    ticked = still(r)
+    assert isinstance(ticked, int)
+    r.loop.still_since_ns = None  # the truck moved ...
+    r.tick(30)  # ... and stands again: a new span
+    assert still(r) == ticked + 1
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial,
+                   still_serial=ticked)
+    assert reply["t"] == "reject" and reply["reason"] == "still_changed", reply
+    ok, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial,
+                still_serial=still(r))
+    assert ok["t"] == "ack", ok
+
+
+def test_a_list_moved_since_the_registration_is_not_confirmed():
+    """Codex round 2 P2-1: a pose correction after the registration (a new revision, no new registration) is not
+    what the eyes were shown."""
+    from forklift_core.live.real_assembly import register_pallet
+
+    r = rig()
+    bypass_d5(r)
+    pid, rev = register(r)
+    register_pallet(r.core, pid, [PALLET[0] + 0.035, PALLET[1], PALLET[2]])  # moved by the list, not the console
+    rev2 = int(r.core.targets.revision)
+    assert rev2 != rev
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev2, register_serial=r.serial,
+                   still_serial=still(r))
+    assert reply["t"] == "reject" and reply["reason"] == "targets_changed", reply
+
+
+def test_a_registration_the_targets_did_not_take_changes_nothing():
+    """Codex round 2 P2-2: a pallet with no pose after the registration (carried) is refused before the serial."""
+    r = rig()
+    _confirmed(r)
+    before = r.loop.real_status(r.now)
+    pid = before["register_region"]["pallet_id"]
+    r.core.targets.pallets[pid] = dataclasses.replace(r.core.targets.pallets[pid], state="carried", pose=None)
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    assert reply["t"] == "reject" and reply["reason"] == "pallet_not_registered", reply
+    after = r.loop.real_status(r.now)
+    assert after["register_serial"] == before["register_serial"]
+    assert after["register_region"] == before["register_region"] and after["operator_start"] is True
