@@ -1714,9 +1714,7 @@ def main(argv=None) -> int:
         marks = {**marks, **jmarks}
     if args.cmd == "kth":
         rows = rows_
-        products = {args.image} | {r.get("product") for r in rows
-                                   if r.get("t") == "connected" or (r.get("t") == "event"
-                                                                    and r.get("kind") == "connected")}
+        products = {args.image} | {r.get("product") for r in rows if "product" in r}  # every row naming it
         if any(bl.any_bench_image(p) for p in products):
             # diag/fw-bench: the bench image carries its KTH travel counter where the other variant's CRC count goes
             print(json.dumps({**marks, "result": "invalid", "why": "bench image: no other-variant CRC counts "

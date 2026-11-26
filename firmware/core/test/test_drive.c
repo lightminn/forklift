@@ -2267,12 +2267,44 @@ static void bench_a_step_the_counter_cannot_tell_stops_m(void)
     CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
 }
 
+static void bench_m_needs_a_fresh_count(void)
+{
+    /* Codex fw-bench round 5 P2: no countable frame since boot (0x0000 only), or the last one too old in the cycle
+       an ARM clears a stale loss: M is not taken */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    in.abs_frame[0] = 0x0000;
+    ticks(10);
+    CHECK(!d.bench_kth_have);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID);
+    /* a count, then 6 ms without a countable frame, then ARM + M(0) + M(0.12) in one cycle */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    CHECK(d.bench_kth_have);
+    seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    in.abs_fresh[0] = false;
+    ticks(6);
+    link_msg three[3] = {arm_msg(seq, d.boot_id, echo_now()),
+                         commission_msg((uint16_t)(seq + 1), DRIVE_CH_M, 0, 150, echo_now()),
+                         commission_msg((uint16_t)(seq + 2), DRIVE_CH_M, 1200, 150, echo_now())};
+    tick_msgs(three, 3);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    in.abs_fresh[0] = true;
+}
+
 static void bench_limits_are_the_sessions(void)
 {
     /* the session's M time limit (0.5 s) ends the interval, not the build's 2 s */
     boot_with(mod_bench);
     in.abs_fresh[1] = false;
-    set_steer(0.0);
+    set_steer(0.1); /* not sensor angle 0: a 0x0000 frame is never counted */
     ticks(5);
     uint16_t seq = 1;
     send(bench_msg(seq++, d.boot_id, 0, 1500, 500));
@@ -2368,5 +2400,6 @@ int main(void)
     bench_overrides_never_weaken_the_stopping_side();
     bench_counts_a_fast_turn_frame_by_frame();
     bench_a_step_the_counter_cannot_tell_stops_m();
+    bench_m_needs_a_fresh_count();
     return FW_TEST_RESULT();
 }

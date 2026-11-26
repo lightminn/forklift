@@ -478,6 +478,12 @@ int main(int argc, char **argv)
     /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): --bench 1 -- the bench image (an open commissioning model that takes
        BENCH_SET); the product string ends " lim=lr1 bench2". */
     cfg.bench_build = arg_long(argc, argv, "--bench", 0) != 0;
+    if (cfg.bench_build) {
+        /* as the board: joint zero half a turn from sensor 0, so the joint's zero is not the 0x0000 frame the bench
+           image never counts (board design 3.7) */
+        cfg.steer.zero_offset_rad = 3.14159265f;
+        cfg.lift.zero_offset_rad = 3.14159265f;
+    }
     plant_init(&B.p, &cfg); /* drivers wake with a fault latched until CLR_FLT */
     B.p.enc_flip = (int)enc_flip;
     B.p.enc_frozen = (int)enc_frozen;

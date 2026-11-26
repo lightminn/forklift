@@ -959,8 +959,12 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
         return DRIVE_REJECT_NONE; /* M and H need no KTH here */
     }
 #if defined(FW_CORE_BENCH)
-    if (c->axis == DRIVE_CH_M && BENCH(d->cfg) && d->bench_kth_lost) {
-        return DRIVE_REJECT_SENSOR_INVALID; /* a lost travel count: M not taken (Codex fw-bench round 4 P2-2) */
+    if (c->axis == DRIVE_CH_M && BENCH(d->cfg) &&
+        (d->bench_kth_lost || !d->bench_kth_have ||
+         d->time_us - d->bench_kth_last_us > BENCH_KTH_GAP_US)) {
+        /* M only with a travel count that exists, is fresh and was never lost since the ARM (Codex fw-bench
+           rounds 4-5): not before a first countable frame, nor in the cycle an ARM cleared a stale loss */
+        return DRIVE_REJECT_SENSOR_INVALID;
     }
 #endif
     if ((c->axis == DRIVE_CH_M && !cm_axis_ok(d, &d->steer, DRIVE_BENCH_STEER_RANGE)) ||
