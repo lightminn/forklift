@@ -136,3 +136,34 @@ def test_a_registration_the_targets_did_not_take_changes_nothing():
     after = r.loop.real_status(r.now)
     assert after["register_serial"] == before["register_serial"]
     assert after["register_region"] == before["register_region"] and after["operator_start"] is True
+
+
+def test_a_slow_lift_creep_ends_the_still_span_and_voids_its_confirmation():
+    """Codex round 3 P1: each sample window steady, but the lift crept past the port's tolerance since the span
+    began -- a new span (number) and the confirmation given in the old one void."""
+    r = rig()
+    pid, rev = _confirmed(r)
+    span = still(r)
+    tol = float(r.loop.port.lift_still_m)
+    for _ in range(5):  # 3x the tolerance, each step inside it and a whole sample window (128) apart
+        r.mcu.lift = r.mcu.lift_target = r.mcu.lift + 0.6 * tol
+        r.tick(140)
+    status = r.loop.real_status(r.now)
+    assert status["still_serial"] is not None and status["still_serial"] > span
+    assert status["operator_start"] is False and status["operator_start_binding"] is None
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial,
+                   still_serial=span)
+    assert reply["t"] == "reject" and reply["reason"] == "still_changed", reply
+
+
+def test_a_relocalization_change_ends_the_still_span():
+    """Codex round 3 P2: a confirmation checked before a relocalization changed the map place is not taken after."""
+    r = rig()
+    _confirmed(r)
+    span = still(r)
+    r.loop.reloc_gen = 9  # a relocalization generation came and went
+    r.tick(30)
+    status = r.loop.real_status(r.now)
+    assert status["still_serial"] is not None and status["still_serial"] > span
+    assert status["operator_start_binding"] is None
+

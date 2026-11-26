@@ -231,13 +231,17 @@ export function startStateText(status) {
 // U3c (Codex round 1 P1-2): the region the confirmation would bind, shown before the six lines are ticked -- the
 // vehicle's own d5_region of this console's registration (real_status.register_region), or null when the status's
 // region is not of that registration (another serial, revision or pallet).
-export function confirmRegion(registered, status) {
+export function confirmRegion(registered, status, targets = null) {
   const r = status && status.register_region;
   if (!r || !registered || !Array.isArray(r.region) || r.region.length !== 5) return null;
   if (registered.session_epoch !== status.session_epoch || r.register_serial !== registered.serial
     || r.targets_revision !== registered.revision || r.pallet_id !== registered.pallet) return null;
-  // the list moved on since (a pose correction, Codex round 2 P2-1): that region is no longer the one bound
+  // the list moved on since (a pose correction, Codex round 2 P2-1; the targets message first, round 3 P3): that
+  // region is no longer the one bound
   if (status.targets_revision !== registered.revision) return null;
+  if (targets && Number.isInteger(targets.targets_revision) && targets.targets_revision > registered.revision) return null;
+  // a relocalization open: the place is not known, nothing to check yet (Codex round 3 P2)
+  if (Number.isInteger(status.relocalize_generation)) return null;
   return r.region.map(Number);
 }
 

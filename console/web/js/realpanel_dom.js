@@ -138,7 +138,7 @@ export function bindRealPanel(m, rejectText, clientId) {
       // U3c (plan 2.6): the six lines ticked for exactly the registration, lease and region on screen now
       // (Codex round 1 P1-1), and the inputs still name the registration
       const reg = panel.registered;
-      if (!confirmRegion(reg, st)) return say("확인할 영역이 아직 오지 않았습니다 · 잠시 뒤 다시 보세요");
+      if (!confirmRegion(reg, st, m.session.targets)) return say("확인할 영역이 아직 오지 않았습니다 · 잠시 뒤 다시 보세요");
       const box = $("rp-checks");
       const boxes = [...box.querySelectorAll("input[type=checkbox]")];
       if (box.dataset.key !== checksKey(st, gens(), reg, texts) || boxes.length !== texts.length
@@ -334,7 +334,7 @@ export function renderRealPanel(m, clientId) {
   // U3c (plan 2.6): the region the confirmation would bind, then the six lines -- only for this console's current
   // registration, unticked again whenever the session, lease, registration, generation or lines change
   const texts = palletConfirmTexts(st);
-  const region = texts === null ? null : confirmRegion(panel.registered, st);
+  const region = texts === null ? null : confirmRegion(panel.registered, st, m.session.targets);
   panel.confirmRegion = region; // the map draws it (main.js)
   const checks = $("rp-checks");
   checks.hidden = texts === null;

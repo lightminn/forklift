@@ -460,6 +460,10 @@ class RealLoop:
         # U3c (Codex round 2 P1): every still span (standing, continuous odometry, fresh SLAM) gets a number; the
         # pallet confirmation names the span its six lines were ticked in, so a move in between voids them
         self._still_serial = 0
+        # its start on the D5-confirmation run: the odometry pose, the lift and the relocalization state -- a span
+        # ends when they move past the eyes' tolerance however slowly (Codex round 3 P1) or a relocalization opens or
+        # closes (round 3 P2), so the next span gets a new number
+        self._span_base: tuple | None = None
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -1609,12 +1613,42 @@ class RealLoop:
         sl = self.evidence.slam(now_ns)
         fresh_slam = sl.pose_reply_ns is not None and now_ns - sl.pose_reply_ns <= ra.SLAM_MAX_AGE_S * 1e9
         still = standing and self.odom_continuous and fresh_slam
+        lift = lifts[-1] if standing else None
+        if still and self.still_since_ns is not None and self._span_moved(lift):
+            still = False  # the span ends here; the next still tick starts a new one with a new number
         if not still:
+            if self.still_since_ns is not None:
+                self._span_ended()
             self.still_since_ns = None
         elif self.still_since_ns is None:
             self.still_since_ns = int(now_ns)
             self._still_serial += 1
+            self._span_base = (tuple(float(v) for v in self.odom_pose), lift, self.reloc_gen,
+                               self.core.relocalize_generation())
         return still
+
+    def _span_moved(self, lift) -> bool:
+        """On the D5-confirmation run: whether the odometry, the lift or the relocalization state left the still span's
+        start (the eyes' tolerances, D5_STILL_M / D5_STILL_RAD and the port's lift tolerance)."""
+        b = self._span_base
+        if not self._d5_confirm_required() or b is None:
+            return False
+        (x0, y0, h0), lift0, gen0, open0 = b
+        x, y, h = (float(v) for v in self.odom_pose)
+        if math.hypot(x - x0, y - y0) > D5_STILL_M or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD:
+            return True
+        if lift is None or lift0 is None or abs(float(lift) - float(lift0)) > float(getattr(self.port, "lift_still_m", 0.0)):
+            return True
+        return gen0 != self.reloc_gen or open0 != self.core.relocalize_generation()
+
+    def _span_ended(self) -> None:
+        """A still span ended: on the D5-confirmation run a confirmation given in it and not yet used is void (the
+        truck moved after the eyes checked)."""
+        self._span_base = None
+        st = self.operator_start
+        if self._d5_confirm_required() and st is not None and st.binding is not None \
+                and st.binding.get("still_serial") == self._still_serial:
+            st.void("moved")
 
     def _t(self, now_ns: int) -> float:
         return (int(now_ns) - self.start_ns) / 1e9
