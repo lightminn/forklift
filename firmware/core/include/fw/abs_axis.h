@@ -26,6 +26,10 @@ typedef struct {
     uint32_t frames;
     uint32_t crc_errors;
     uint32_t alt_crc_errors;
+#ifdef FW_DIAG_KTH_RAW
+    /* DIAGNOSTIC IMAGE ONLY (diag-kthraw, never merged): the newest fresh raw SPI word as received. */
+    uint16_t last_raw;
+#endif
 } abs_axis;
 
 /* 16-bit SPI word = angle (bits 15..4) | CRC-4 (bits 3..0). */

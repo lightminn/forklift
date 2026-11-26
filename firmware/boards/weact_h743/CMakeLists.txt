@@ -11,6 +11,12 @@ set(FW_ESTOP_WAIVER_RECORD "" CACHE STRING
 set(FW_LINK usb CACHE STRING "usb | uart7")
 set(FW_ESTOP_PIN none CACHE STRING "none or a pin name; the schematic has no e-stop net yet")
 set(FW_TEST_IWDG_STALL 0 CACHE STRING "0, or N = 1..60: S5 test build that stops the tick N s after boot")
+# DIAGNOSTIC IMAGE ONLY (branch diag/kth-raw, never merged): STATE's kth_alt_crc_errors carries the newest raw
+# KTH SPI word per axis. Tag the commit diag-kthraw-N so the product string names it.
+option(FW_DIAG_KTH_RAW "diagnostic: report the raw KTH SPI word in STATE (never for a real run)" OFF)
+if(FW_DIAG_KTH_RAW)
+    add_compile_definitions(FW_DIAG_KTH_RAW=1)
+endif()
 
 if(NOT FW_LINK MATCHES "^(usb|uart7)$")
     message(FATAL_ERROR "FW_LINK must be usb or uart7")

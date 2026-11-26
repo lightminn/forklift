@@ -57,6 +57,9 @@ void abs_axis_update(abs_axis *a, const abs_axis_config *c, uint16_t frame, bool
     bool good = fresh && kth7801_decode(frame, c->crc, &angle);
     if (fresh) {
         a->frames++;
+#ifdef FW_DIAG_KTH_RAW
+        a->last_raw = frame; /* DIAGNOSTIC IMAGE ONLY: the raw word, whatever its CRC */
+#endif
         if (!good) {
             a->crc_errors++;
         }

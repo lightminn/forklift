@@ -1042,7 +1042,13 @@ void drive_fill_state(const drive *d, link_state *s)
     for (int i = 0; i < 2; i++) { /* the wire carries them mod 2^16 */
         s->kth_frames[i] = (uint16_t)ax[i]->frames;
         s->kth_crc_errors[i] = (uint16_t)ax[i]->crc_errors;
+#ifdef FW_DIAG_KTH_RAW
+        /* DIAGNOSTIC IMAGE ONLY (diag-kthraw): the alternative-variant counter's slot carries the newest
+           raw SPI word instead (the product string names the image; tools/kth_raw.py reads it). */
+        s->kth_alt_crc_errors[i] = ax[i]->last_raw;
+#else
         s->kth_alt_crc_errors[i] = (uint16_t)ax[i]->alt_crc_errors;
+#endif
     }
     for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
         s->current_ma[ch] = sat16(d->current_a[ch] * 1000.0f);

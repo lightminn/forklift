@@ -35,6 +35,15 @@ foreach(test_source ${FW_TESTS})
     add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
+# DIAGNOSTIC IMAGE ONLY (branch diag/kth-raw, never merged): the raw-word path under its flag, compiled
+# apart from fw_core (the flag changes the axis struct).
+add_executable(test_kthraw ${CMAKE_CURRENT_SOURCE_DIR}/core/test_diag/test_kthraw.c
+               ${CMAKE_CURRENT_SOURCE_DIR}/core/src/abs_axis.c ${CMAKE_CURRENT_SOURCE_DIR}/core/src/crc.c)
+target_include_directories(test_kthraw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/core/include)
+target_compile_definitions(test_kthraw PRIVATE FW_DIAG_KTH_RAW=1)
+target_link_libraries(test_kthraw PRIVATE m)
+add_test(NAME test_kthraw COMMAND test_kthraw)
+
 # Board logic that does not touch registers (reset cause, clock constants), host-tested.
 add_executable(test_weact_h743_reset_cause
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/weact_h743/test/test_reset_cause.c
