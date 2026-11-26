@@ -1,18 +1,22 @@
-"""S10's preconditions for the operating REAL assembly (docs/plans/2026-11-26-real-operating-assembly.md 2.4, 3).
+"""S10's preconditions for the operating REAL assembly (docs/plans/2026-11-26-real-operating-assembly.md 2.4, 2.10, 3).
 
 ``operating_preconditions(facts)`` is the one judgement the assembly and the console share: a pure function of the
 ``Facts`` gathered from the settings, the board and the record file, returning ``precondition:<C>:<item>:<why>``
 reasons (empty: every precondition holds). The record file ``config/real/s10_preconditions.yaml`` keeps what only a
 person can confirm; every item is bound (``binds``) to what it was measured on -- the board's USB serial and product
-string, the stop and timing files actually read, the vehicle calibration, the lift settings, the S10 limits -- so a
-later change voids it. The settings themselves (LiDAR bound and mount, provenance of the vehicle, layer and watch
-values) are read directly, never copied into the record.
+string, the stop and timing files actually read, the vehicle calibration, the lift settings and load, the S10 limits and
+placement, the scan image -- so a later change voids it. The settings themselves (LiDAR bound and mount, provenance of
+the vehicle, layer and watch values) are read directly, never copied into the record.
+
+Every file is parsed from the very bytes its sha256 is taken of; a loader that reads a path itself (the S10-A config,
+the vehicle, the LiDAR validator) is bracketed by the file's hash before and after, and a change is a reason
+(``files_changed``). The assembly also compares these hashes with the ones ``prepare_run`` loaded.
 
 ``UNLOCK_INCOMPLETE`` stays in the list until the last unlock PR (U3) removes it: until then the operating assembly is
 refused whatever the record says (plan 2.4, 6).
 
 IMU qualification (C7) is not an assembly refusal: it is returned apart (``imu_qualified``) for the runtime readiness
-(``imu:unqualified``, bypassable for the session, plan 2.7)."""
+(``imu:unqualified``, bypassable for the session, plan 2.7); the watch's ``imu`` provenance is C7's, not C13's."""
 
 from __future__ import annotations
 
@@ -28,6 +32,8 @@ RECORD_YAML = REPO / "config" / "real" / "s10_preconditions.yaml"
 SCHEMA = "s10_preconditions/1"
 UNLOCK_INCOMPLETE = "precondition:unlock_incomplete"
 STATUSES = ("pass", "approved_limited")
+CORRIDOR_HALF_M = 0.10  # plan 2.4: the approved corridor's half width (the coverage record is bound to it)
+APPROVED_CASES = ["A"]  # S10: case A only (plan 2.4)
 
 # record item -> (precondition, the binds it must carry); every item needs status, evidence and date
 ITEMS = {
@@ -36,10 +42,11 @@ ITEMS = {
     "fault_detection": ("C3", ("board_serial", "product")),
     "port_review": ("C4", ()),
     "scan_load": ("C5", ("lidar_sha256", "scan_image")),
-    "scan_coverage": ("C5", ("lidar_sha256",)),
-    "s10_speed": ("C9", ("approved_max_speed_mps", "tested_speed_mps")),
+    "scan_coverage": ("C5", ("lidar_sha256", "start_rear", "check_pallet_pose", "corridor_half_width_m")),
+    "s10_speed": ("C9", ("approved_max_speed_mps", "tested_speed_mps", "approved_cases")),
     "start_taped": ("C10", ("start_rear",)),
-    "lift": ("C11", ("board_serial", "lift_target_m", "lift_rate_mps", "test_pallet", "lift_mechanism")),
+    "lift": ("C11", ("board_serial", "lift_target_m", "lift_rate_mps", "test_pallet", "lift_mechanism",
+                     "pallet_mass_kg")),
     "firmware_build": ("C12", ("product", "firmware_vehicle_calibration_id", "readback_sha256",
                                "board_lift_rate_max_mps")),
     "stop_model": ("C13", ("stop_files",)),
@@ -48,8 +55,16 @@ ITEMS = {
 # the files whose values the stop model, the timing and the watches read (plan 2.4 binds)
 STOP_FILES = ("layer", "budget", "odometry_age", "vehicle", "watch")
 PROVENANCE_FILES = ("vehicle", "budget", "watch")  # their measured: false entries need a measurement or an exception
-# entries the autonomy never reads (the teleop bridge's own): not S10 preconditions
-TELEOP_ONLY = {("vehicle", "teleop_speed_limit"), ("watch", "tilt")}
+# entries the autonomy never reads as a C12/C13 precondition: the teleop bridge's own, and the IMU watch (C7, runtime)
+NOT_C12_C13 = {("vehicle", "teleop_speed_limit"), ("watch", "tilt"), ("watch", "imu")}
+# entries that must carry a provenance at all (a deleted or null provenance is not a pass)
+REQUIRED_PROVENANCE = {
+    "vehicle": ("wheel_counts.left", "wheel_counts.right", "wheel_radius", "steering_map", "wheel_rate_limit",
+                "steering_control"),
+    "budget": ("latency_budget", "overdue_end"),
+    "watch": ("current", "wheel"),
+}
+HASHED = ("s10a", "settings", "vehicle", "watch", "layer", "budget", "lidar", "imu")
 START_TOL_M = 0.001  # the taped start written in the record is the S10-A one (a copy, not a tolerance)
 
 
@@ -62,13 +77,22 @@ class Facts:
     repo: Path
     lidar: dict  # lidar.yaml as parsed
     lidar_sha256: str
+    lidar_error: str | None  # the LiDAR loader's own validation (None: valid)
     imu: dict  # imu.yaml as parsed
     settings: dict  # autonomy.yaml as parsed
     s10a: object  # real_autonomy.S10AConfig
     stop_files: dict  # name -> sha256 (STOP_FILES)
-    provenance: dict  # name -> [(key path, provenance dict)] for PROVENANCE_FILES
+    provenance: dict  # name -> [(key path, provenance value)] for PROVENANCE_FILES
     vehicle_calibration_id: str | None
+    file_hashes: dict = field(default_factory=dict)  # name -> sha256 (HASHED), from the bytes parsed
+    changed: list = field(default_factory=list)  # files that changed while gathered
     board: dict = field(default_factory=dict)  # usb_serial, usb_product, drive_refusal (None: none), first STATE seen
+
+
+def _read(path) -> tuple:
+    """(bytes, sha256, parsed YAML) from one read."""
+    data = Path(path).read_bytes()
+    return data, hashlib.sha256(data).hexdigest(), yaml.safe_load(data.decode("utf-8"))
 
 
 def _sha(path) -> str:
@@ -76,11 +100,11 @@ def _sha(path) -> str:
 
 
 def _provenances(node, path=()) -> list:
-    """Every ``provenance`` mapping in a parsed YAML with the key path to it."""
+    """Every ``provenance`` key in a parsed YAML with the key path to it (its value as is: a null is kept)."""
     out = []
     if isinstance(node, dict):
         for k, v in node.items():
-            if k == "provenance" and isinstance(v, dict):
+            if k == "provenance":
                 out.append((".".join(map(str, path)), v))
             else:
                 out += _provenances(v, path + (k,))
@@ -94,7 +118,7 @@ def load_record(path=RECORD_YAML) -> tuple:
     """``(record, None)`` or ``(None, why)``: the schema and every item's shape (the values are judged later)."""
     try:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as err:
+    except (OSError, UnicodeDecodeError, yaml.YAMLError) as err:
         return None, f"unreadable:{type(err).__name__}"
     if not isinstance(raw, dict) or raw.get("schema") != SCHEMA:
         return None, "schema"
@@ -102,8 +126,15 @@ def load_record(path=RECORD_YAML) -> tuple:
     if not isinstance(items, dict) or set(items) - set(ITEMS):
         return None, "items"
     for name, item in items.items():
-        if item is not None and not isinstance(item, dict):
+        if item is None:
+            continue
+        if not isinstance(item, dict):
             return None, f"item_shape:{name}"
+        if "binds" in item and not isinstance(item["binds"], dict):
+            return None, f"binds_shape:{name}"
+    lift = items.get("lift") or {}
+    if "origin" in lift and not isinstance(lift["origin"], dict):
+        return None, "origin_shape:lift"
     exc = raw.get("config_exceptions") or []
     if not isinstance(exc, list) or any(not isinstance(e, dict) or set(e) != {"file", "key", "decision_id"}
                                         for e in exc):
@@ -113,37 +144,124 @@ def load_record(path=RECORD_YAML) -> tuple:
 
 def gather(*, record_path=RECORD_YAML, lidar_path, imu_path, settings_path, s10a_path, layer_path, budget_path,
            vehicle_path, watch_path, repo=REPO, board=None) -> Facts:
-    """The facts for ``operating_preconditions`` (the paths are the run's; ``board`` the first STATE's facts)."""
+    """The facts for ``operating_preconditions`` (the paths are the run's; ``board`` the first STATE's facts). Raises
+    on an unreadable settings file (OSError, ValueError, yaml.YAMLError): the caller turns it into a reason."""
     from forklift_core.live.real_autonomy import load_s10a
     from forklift_core.plant.real_vehicle import load_real_vehicle
+    from forklift_core.sensors.lidar_cfg import load_lidar_config
 
     record, record_error = load_record(record_path)
-    lidar = yaml.safe_load(Path(lidar_path).read_text(encoding="utf-8"))
-    layer = yaml.safe_load(Path(layer_path).read_text(encoding="utf-8"))
-    odo = layer.get("odometry_age")
-    odo_path = (Path(repo) / odo) if odo else None
-    files = {"layer": layer_path, "budget": budget_path, "vehicle": vehicle_path, "watch": watch_path}
-    stop = {name: _sha(p) for name, p in files.items()}
-    stop["odometry_age"] = _sha(odo_path) if odo_path is not None and odo_path.is_file() else None
-    prov = {name: _provenances(yaml.safe_load(Path(files[name]).read_text(encoding="utf-8")))
-            for name in PROVENANCE_FILES}
+    paths = {"s10a": s10a_path, "settings": settings_path, "vehicle": vehicle_path, "watch": watch_path,
+             "layer": layer_path, "budget": budget_path, "lidar": lidar_path, "imu": imu_path}
+    parsed, hashes = {}, {}
+    for name, p in paths.items():
+        _data, hashes[name], parsed[name] = _read(p)
+    changed = []
+
+    def bracketed(name, loader):
+        value = loader(paths[name])
+        if _sha(paths[name]) != hashes[name]:
+            changed.append(name)
+        return value
+
+    s10a = bracketed("s10a", load_s10a)
     try:
-        calib = load_real_vehicle(vehicle_path).calibration_id
+        calib = bracketed("vehicle", load_real_vehicle).calibration_id
     except (OSError, ValueError, KeyError, TypeError):
         calib = None
-    return Facts(record=record, record_error=record_error, repo=Path(repo), lidar=lidar or {},
-                 lidar_sha256=_sha(lidar_path), imu=yaml.safe_load(Path(imu_path).read_text(encoding="utf-8")) or {},
-                 settings=yaml.safe_load(Path(settings_path).read_text(encoding="utf-8")) or {},
-                 s10a=load_s10a(s10a_path), stop_files=stop, provenance=prov, vehicle_calibration_id=calib,
-                 board=dict(board or {}))
+    try:
+        bracketed("lidar", load_lidar_config)
+        lidar_error = None
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        lidar_error = f"{type(err).__name__}"
+    layer = parsed["layer"] or {}
+    odo = layer.get("odometry_age")
+    odo_path = (Path(repo) / odo) if odo else None
+    stop = {name: hashes[name] for name in ("layer", "budget", "vehicle", "watch")}
+    stop["odometry_age"] = _sha(odo_path) if odo_path is not None and odo_path.is_file() else None
+    prov = {name: _provenances(parsed[name] or {}) for name in PROVENANCE_FILES}
+    return Facts(record=record, record_error=record_error, repo=Path(repo), lidar=parsed["lidar"] or {},
+                 lidar_sha256=hashes["lidar"], lidar_error=lidar_error, imu=parsed["imu"] or {},
+                 settings=parsed["settings"] or {}, s10a=s10a, stop_files=stop, provenance=prov,
+                 vehicle_calibration_id=calib, file_hashes=hashes, changed=changed, board=dict(board or {}))
 
 
 # --- the judgement ---------------------------------------------------------------------------------------------------
+def _finite(*vals) -> bool:
+    return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
+
+
+def _positive(*vals) -> bool:
+    return _finite(*vals) and all(v > 0 for v in vals)
+
+
 def _num_eq(a, b, tol=1e-9) -> bool:
-    try:
-        return abs(float(a) - float(b)) <= tol
-    except (TypeError, ValueError):
+    return _finite(a, b) and abs(float(a) - float(b)) <= tol
+
+
+def _inside_repo(f: Facts, rel) -> bool:
+    """A repo-relative path to an existing file whose resolved location (links followed) stays in the repository."""
+    if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
         return False
+    try:
+        target = (f.repo / rel).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return False
+    root = f.repo.resolve()
+    return target.is_file() and root in target.parents
+
+
+def _pose_eq(v, pose, tol) -> bool:
+    return isinstance(v, (list, tuple)) and pose is not None and len(v) == 3 and len(pose) == 3 \
+        and all(_num_eq(a, e, tol) for a, e in zip(v, pose))
+
+
+def _is_hex(v, n) -> bool:
+    return isinstance(v, str) and len(v) == n and all(c in "0123456789abcdef" for c in v)
+
+
+def _bind_bad(f: Facts, k: str, v) -> bool:
+    """Whether one bind does not match what it must be now."""
+    b = f.board
+    lidar_t = f.lidar.get("timing") or {}
+    if k == "board_serial":
+        return not v or v != b.get("usb_serial")
+    if k == "product":
+        return not v or v != b.get("usb_product")
+    if k == "stop_files":
+        return not isinstance(v, dict) or any(not _is_hex(v.get(n), 64) or v.get(n) != f.stop_files.get(n)
+                                              for n in STOP_FILES)
+    if k == "lidar_sha256":
+        return v != f.lidar_sha256
+    if k == "scan_image":
+        return not v or v != (lidar_t.get("applies_to") or {}).get("image_id")
+    if k == "lift_target_m":
+        return not _num_eq(v, f.settings.get("lift_target_m"))
+    if k == "lift_rate_mps":
+        return not _num_eq(v, f.settings.get("lift_rate_mps"))
+    if k == "test_pallet":
+        return v != f.s10a.pallet_id
+    if k == "lift_mechanism":
+        return not isinstance(v, str) or not v.strip()
+    if k in ("pallet_mass_kg", "board_lift_rate_max_mps", "approved_max_speed_mps", "tested_speed_mps"):
+        return not _positive(v)
+    if k == "start_rear":
+        return not _pose_eq(v, f.s10a.start_rear, START_TOL_M)
+    if k == "check_pallet_pose":
+        return not _pose_eq(v, f.s10a.check_pallet_pose, START_TOL_M)
+    if k == "corridor_half_width_m":
+        return not _num_eq(v, CORRIDOR_HALF_M)
+    if k == "firmware_vehicle_calibration_id":
+        return not v or v != f.vehicle_calibration_id
+    if k == "readback_sha256":
+        return not _is_hex(v, 64)
+    if k == "commit":
+        # the IWDG evidence's commit is the final image's: its abbreviation appears in the product string (git describe)
+        return not (isinstance(v, str) and len(v) >= 7 and all(ch in "0123456789abcdef" for ch in v)
+                    and f"g{v[:7]}" in str(b.get("usb_product") or ""))
+    if k == "approved_cases":
+        return v != APPROVED_CASES
+    return True  # an unknown bind never passes
 
 
 def _item_reasons(f: Facts, name: str) -> list:
@@ -157,9 +275,7 @@ def _item_reasons(f: Facts, name: str) -> list:
         return [f"{tag}:status"]
     if item.get("status") == "approved_limited" and not item.get("decision_id"):
         return [f"{tag}:decision_id"]
-    ev = item.get("evidence")
-    if not isinstance(ev, str) or not ev or Path(ev).is_absolute() or ".." in Path(ev).parts \
-            or not (f.repo / ev).is_file():
+    if not _inside_repo(f, item.get("evidence")):
         return [f"{tag}:evidence"]
     if not item.get("date"):
         return [f"{tag}:date"]
@@ -167,31 +283,7 @@ def _item_reasons(f: Facts, name: str) -> list:
     missing = [k for k in need if k not in binds]
     if missing:
         return [f"{tag}:binds_missing:{missing[0]}"]
-    b = f.board
-    out = []
-    for k in need:
-        v = binds[k]
-        if k == "board_serial" and v != b.get("usb_serial"):
-            out.append(f"{tag}:board_serial")
-        elif k == "product" and v != b.get("usb_product"):
-            out.append(f"{tag}:product")
-        elif k == "stop_files" and (not isinstance(v, dict) or any(v.get(n) != f.stop_files.get(n)
-                                                                    for n in STOP_FILES)):
-            out.append(f"{tag}:stop_files")
-        elif k == "lidar_sha256" and v != f.lidar_sha256:
-            out.append(f"{tag}:lidar_sha256")
-        elif k == "lift_target_m" and not _num_eq(v, f.settings.get("lift_target_m")):
-            out.append(f"{tag}:lift_target_m")
-        elif k == "lift_rate_mps" and not _num_eq(v, f.settings.get("lift_rate_mps")):
-            out.append(f"{tag}:lift_rate_mps")
-        elif k == "test_pallet" and v != f.s10a.pallet_id:
-            out.append(f"{tag}:test_pallet")
-        elif k == "start_rear" and (not isinstance(v, (list, tuple)) or len(v) != 3
-                                    or any(not _num_eq(a, e, START_TOL_M) for a, e in zip(v, f.s10a.start_rear))):
-            out.append(f"{tag}:start_rear")
-        elif k == "firmware_vehicle_calibration_id" and v != f.vehicle_calibration_id:
-            out.append(f"{tag}:firmware_vehicle_calibration_id")
-    return out
+    return [f"{tag}:{k}" for k in need if _bind_bad(f, k, binds[k])]
 
 
 def _c1_board(f: Facts) -> list:
@@ -201,6 +293,8 @@ def _c1_board(f: Facts) -> list:
         out.append("precondition:C1:board:no_state")
     elif b.get("drive_refusal"):
         out.append(f"precondition:C1:board:{b['drive_refusal']}")
+    if b.get("bad_build_seen"):
+        out.append("precondition:C1:board:bad_build_seen")
     product = b.get("usb_product")
     if not product:
         out.append("precondition:C1:board:no_usb_product")
@@ -212,17 +306,23 @@ def _c1_board(f: Facts) -> list:
 
 
 def _c5_scan(f: Facts) -> list:
+    from forklift_core.sensors.lidar_cfg import APPLIES_KEYS, BASES
+
     t = f.lidar.get("timing") or {}
     m = f.lidar.get("mount") or {}
     out = []
-    if t.get("first_beam_err_s") is None:
+    if f.lidar_error is not None:
+        out.append(f"precondition:C5:lidar:invalid:{f.lidar_error}")
+    err = t.get("first_beam_err_s")
+    if not _finite(err) or err < 0:
         out.append("precondition:C5:lidar:first_beam_err_s")
-    if t.get("basis") is None:
+    if t.get("basis") not in BASES:
         out.append("precondition:C5:lidar:basis")
-    if not t.get("applies_to"):
+    applies = t.get("applies_to")
+    if not isinstance(applies, dict) or set(applies) != set(APPLIES_KEYS) \
+            or any(v in (None, "") for v in applies.values()):
         out.append("precondition:C5:lidar:applies_to")
-    doc = t.get("basis_doc")
-    if t.get("basis") is not None and (not doc or not (f.repo / str(doc)).is_file()):
+    if t.get("basis") is not None and not _inside_repo(f, t.get("basis_doc")):
         out.append("precondition:C5:lidar:basis_doc")
     if m.get("measured") is not True:
         out.append("precondition:C5:lidar:mount_unmeasured")
@@ -230,68 +330,76 @@ def _c5_scan(f: Facts) -> list:
 
 
 def _provenance_reasons(f: Facts) -> list:
-    """C12 (vehicle) / C13 (layer budget, watches): an unmeasured value needs a lead exception in the record."""
+    """C12 (vehicle) / C13 (layer budget, watches): an unmeasured or missing provenance needs a lead exception."""
     exc = {(e["file"], e["key"]) for e in (f.record or {}).get("config_exceptions") or () if e.get("decision_id")}
     out = []
     for name in PROVENANCE_FILES:
         c = "C12" if name == "vehicle" else "C13"
+        found = set()
         for key, prov in f.provenance.get(name, ()):
-            if prov.get("measured") is not True and (name, key) not in exc and (name, key) not in TELEOP_ONLY:
+            found.add(key)
+            if (name, key) in NOT_C12_C13 or (name, key) in exc:
+                continue
+            if not isinstance(prov, dict) or prov.get("measured") is not True:
                 out.append(f"precondition:{c}:{name}:{key or '-'}:unmeasured")
+        for key in REQUIRED_PROVENANCE.get(name, ()):
+            if key not in found and (name, key) not in exc:
+                out.append(f"precondition:{c}:{name}:{key}:provenance_missing")
     return out
 
 
 def _limits(f: Facts) -> list:
-    """C9 speed against its approval, C11 lift rate against the board's limit (values in the record's binds)."""
+    """C4/C9 speed against every approval, C11 lift rate against the board's limit (values in the record's binds)."""
     out = []
     items = (f.record or {}).get("items") or {}
-    sp = (items.get("s10_speed") or {}).get("binds") or {}
-    approved, tested = sp.get("approved_max_speed_mps"), sp.get("tested_speed_mps")
-    try:
-        if approved is not None and float(f.s10a.max_speed_mps) > float(approved) + 1e-9:
-            out.append("precondition:C9:s10_speed:over_approved")
-        if approved is not None and tested is not None and float(approved) > float(tested) + 1e-9:
+    limits = []
+    sp = items.get("s10_speed") or {}
+    spb = sp.get("binds") or {}
+    if sp.get("status") is not None and _positive(spb.get("approved_max_speed_mps"), spb.get("tested_speed_mps")):
+        limits.append(float(spb["approved_max_speed_mps"]))
+        if float(spb["approved_max_speed_mps"]) > float(spb["tested_speed_mps"]) + 1e-9:
             out.append("precondition:C9:s10_speed:over_tested")
-    except (TypeError, ValueError):
-        out.append("precondition:C9:s10_speed:values")
-    fw = (items.get("firmware_build") or {}).get("binds") or {}
-    board_max = fw.get("board_lift_rate_max_mps")
+    pr = items.get("port_review") or {}
+    if pr.get("status") == "approved_limited":
+        prb = pr.get("binds") or {}
+        if not _positive(prb.get("approved_max_speed_mps")):
+            out.append("precondition:C4:port_review:approved_max_speed_mps")
+        else:
+            limits.append(float(prb["approved_max_speed_mps"]))
+        if prb.get("approved_cases") != APPROVED_CASES:
+            out.append("precondition:C4:port_review:approved_cases")
+    if limits and (not _finite(f.s10a.max_speed_mps) or float(f.s10a.max_speed_mps) > min(limits) + 1e-9):
+        out.append("precondition:C9:s10_speed:over_approved")
+    fw = items.get("firmware_build") or {}
+    board_max = (fw.get("binds") or {}).get("board_lift_rate_max_mps")
     rate = f.settings.get("lift_rate_mps")
-    try:
-        if board_max is not None and (rate is None or float(rate) > float(board_max) + 1e-9):
-            out.append("precondition:C11:lift_rate_over_board")
-    except (TypeError, ValueError):
-        out.append("precondition:C11:lift_rate_values")
+    if fw.get("status") is not None and _positive(board_max) and (not _positive(rate) or rate > board_max + 1e-9):
+        out.append("precondition:C11:lift_rate_over_board")
     lift = items.get("lift") or {}
     if lift.get("status") is not None:
         out += _lift_checks(f, lift)
     return out
 
 
-def _finite(*vals) -> bool:
-    return all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in vals)
-
-
 def _lift_checks(f: Facts, lift: dict) -> list:
-    """C11 (plan 2.10): the hold at the target height with no support, under a lead-approved sag limit, and the
-    origin/scale against a tape (the host's ``lift_origin_ok`` only means a finite, in-range reading)."""
+    """C11 (plan 2.10): the hold at the target height and at the weakest height with no support, under a
+    lead-approved sag limit, and the origin/scale against a tape (the host's ``lift_origin_ok`` only means a finite,
+    in-range reading)."""
     out = []
     target = f.settings.get("lift_target_m")
     rows = lift.get("hold") or []
     limit = lift.get("sag_limit_cm")
-    if not isinstance(rows, list) or not rows or not _finite(limit, target) \
-            or any(not isinstance(r, dict) or not _finite(r.get("raised_cm"), r.get("sag_cm_after_60s")) for r in rows):
+    if not isinstance(rows, list) or not rows or not _positive(limit, target) \
+            or any(not isinstance(r, dict) or not _finite(r.get("raised_cm"), r.get("sag_cm_after_60s"))
+                   or r["raised_cm"] <= 0 or r["sag_cm_after_60s"] < 0 for r in rows):
         out.append("precondition:C11:lift:hold_values")
     else:
         top = float(target) * 100.0
-        if not any(r["raised_cm"] >= top - 0.5 for r in rows):
+        if not any(abs(r["raised_cm"] - top) <= 0.5 for r in rows):
             out.append("precondition:C11:lift:hold_no_target_height")
-        doc = lift.get("self_locking_evidence")
-        has_doc = isinstance(doc, str) and bool(doc) and not Path(doc).is_absolute() and ".." not in Path(doc).parts \
-            and (f.repo / doc).is_file()
         worst = [r for r in rows if r.get("worst") is True and isinstance(r.get("worst_reason"), str)
-                 and r["worst_reason"].strip() and 0.0 < r["raised_cm"] <= top + 0.5]
-        if not has_doc and not worst:
+                 and r["worst_reason"].strip() and r["raised_cm"] <= top + 0.5]
+        if not _inside_repo(f, lift.get("self_locking_evidence")) and not worst:
             # a stop mid-lift is a DISARM too: the height where holding is weakest, chosen from the mechanism with its
             # reason written down (Codex plan v8 review rounds 2-3)
             out.append("precondition:C11:lift:hold_no_worst_height")
@@ -299,8 +407,6 @@ def _lift_checks(f: Facts, lift: dict) -> list:
             out.append("precondition:C11:lift:sag_over_limit")
     if not lift.get("sag_limit_decision_id"):
         out.append("precondition:C11:lift:sag_limit_decision_id")
-    if not (lift.get("binds") or {}).get("lift_mechanism"):
-        out.append("precondition:C11:lift:lift_mechanism")
     org = lift.get("origin") or {}
     floor, tape, at_target = (org.get("state_lift_m_at_floor"), org.get("tape_cm_at_target"),
                               org.get("state_lift_m_at_target"))
@@ -318,29 +424,36 @@ def _lift_checks(f: Facts, lift: dict) -> list:
 
 def imu_qualified(f: Facts, opened_profile_fits: bool | None = None) -> bool:
     """C7 (plan 2.7): imu.yaml measured with a delay bound, the opened profile fitting the watch (None: not opened
-    yet -- not qualified), the watch's level reference measured. Not an assembly refusal."""
+    yet -- not qualified), the watch's level reference (its ``imu`` provenance) measured. Not an assembly refusal."""
     t = f.imu.get("timing") or {}
-    level = [prov for key, prov in f.provenance.get("watch", ()) if key == "imu"]  # safety_watch.yaml imu.level_ref
+    level = [prov for key, prov in f.provenance.get("watch", ()) if key == "imu"]
     return bool(t.get("measured") is True and t.get("delay_bound_s") is not None and opened_profile_fits is True
-                and level and all(prov.get("measured") is True for prov in level))
+                and level and all(isinstance(prov, dict) and prov.get("measured") is True for prov in level))
 
 
 def operating_preconditions(f: Facts) -> list:
     """Every reason the operating REAL assembly is refused (plan 3: the non-bypassable rows). Empty: it may."""
     out = [UNLOCK_INCOMPLETE]
+    out += [f"precondition:files_changed:{name}" for name in f.changed]
     out += _c1_board(f)
     out += _c5_scan(f)
     if f.record is None:
         out.append(f"precondition:record:{f.record_error}")
     else:
         for name in ITEMS:
-            out += _item_reasons(f, name)
-        out += _limits(f)
+            try:
+                out += _item_reasons(f, name)
+            except (TypeError, AttributeError, ValueError):
+                out.append(f"precondition:{ITEMS[name][0]}:{name}:malformed")
+        try:
+            out += _limits(f)
+        except (TypeError, AttributeError, ValueError):
+            out.append("precondition:record:limits_malformed")
     out += _provenance_reasons(f)
     if f.stop_files.get("odometry_age") is None:
         out.append("precondition:C13:odometry_age:missing")
     return out
 
 
-__all__ = ["Facts", "ITEMS", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather", "imu_qualified",
-           "load_record", "operating_preconditions"]
+__all__ = ["Facts", "HASHED", "ITEMS", "RECORD_YAML", "SCHEMA", "STOP_FILES", "UNLOCK_INCOMPLETE", "gather",
+           "imu_qualified", "load_record", "operating_preconditions"]

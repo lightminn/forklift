@@ -629,3 +629,20 @@ def test_the_hold_records_the_mission_it_began_in(base_prep):
     core.hold_slam(r.loop._t(r.now), held_frame_pallet=False)  # noqa: SLF001
     assert core.hold_mission_id == "m7" and core.slam["tracker"].mode == "holding"
     assert r.loop.evidence.slam(r.now).hold_mission_gen == "m7"
+
+
+def test_a_file_changed_while_preparing_is_refused(monkeypatch):
+    """Codex unlock U1 review P1-2: the run and the operating preconditions judge the same bytes -- a settings file that
+    changes between the start and the end of the preparation refuses it."""
+    calls = {"n": 0}
+    real_sha = rr._sha
+
+    def sha(path):
+        calls["n"] += 1
+        h = real_sha(path)
+        return h if calls["n"] <= len(rr._hashed_files(rr.RunPaths(s10a=HIL_YAML))) else "changed" + h[7:]
+
+    monkeypatch.setattr(rr, "_sha", sha)
+    with pytest.raises(AssemblyRefused) as err:
+        rr.prepare_run(rr.RunPaths(s10a=HIL_YAML), jobs_factory=InlineJobs)
+    assert any(r.startswith("files_changed_while_preparing:") for r in err.value.reasons)

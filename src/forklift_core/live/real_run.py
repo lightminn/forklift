@@ -335,6 +335,19 @@ class _Handover:
             worker.close()
 
 
+def _sha_or_none(path) -> str | None:
+    try:
+        return _sha(path)
+    except OSError:
+        return None
+
+
+def _hashed_files(paths) -> tuple:
+    return (("s10a", paths.s10a), ("settings", paths.settings), ("vehicle", paths.vehicle), ("watch", paths.watch),
+            ("layer", paths.layer), ("budget", paths.budget), ("lidar", paths.lidar_config),
+            ("imu", paths.imu_config))
+
+
 def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Event | None = None,
                 jobs_factory=None, epoch: int | None = None) -> RunPrep:
     """Everything before the model starts (10.3 ②). ``AssemblyRefused`` with the structural reasons, ``RunCancelled``
@@ -344,6 +357,9 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     from forklift_core.plant.real_vehicle import chassis_model_path
 
     stop = stop or threading.Event()
+    # the files' hashes before anything is loaded; compared again at the end (a file changed while it was loaded is
+    # refused: the run and the operating preconditions judge the same bytes -- Codex unlock U1 review P1-2)
+    hashes_at_start = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
     try:
         cfg = ra.load_s10a(paths.s10a)
     except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
@@ -407,9 +423,10 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     plan = check_plan(cfg, planner, geometry, occupancy)
     if not plan.success:
         raise AssemblyRefused([f"check_plan:{plan.status}"])
-    hashes = {name: _sha(p) for name, p in (("s10a", paths.s10a), ("settings", paths.settings),
-                                             ("vehicle", paths.vehicle), ("watch", paths.watch),
-                                             ("layer", paths.layer), ("budget", paths.budget))}
+    hashes = {name: _sha_or_none(p) for name, p in _hashed_files(paths)}
+    moved = [name for name, sha in hashes.items() if hashes_at_start.get(name) != sha]
+    if moved:
+        raise AssemblyRefused([f"files_changed_while_preparing:{name}" for name in moved])
     if replay is not None:
         hashes.update(replay_record=replay.record.sha256,
                       **{f"{k}_config": v["sha256"] for k, v in replay.configs.items() if v is not None})
@@ -700,9 +717,10 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
 
 
 def board_facts(host, transport) -> dict:
-    """The first STATE's facts for the operating preconditions: the opened fd's USB product string and serial, whether
-    a STATE came, and the host's own build refusal for the real client (``drive_refusal``)."""
-    state = getattr(host, "state", None)
+    """The first STATE's facts for the operating preconditions: the opened fd's USB product string and serial, the
+    first STATE read on that fd (the transport's own; else the host's latest), the host's build refusal for it, and
+    whether any bad build was ever seen on the fd."""
+    state = getattr(transport, "first_state", None) or getattr(host, "state", None)
     refusal = None
     if state is not None:
         try:
@@ -711,11 +729,14 @@ def board_facts(host, transport) -> dict:
             refusal = f"build_refusal:{type(err).__name__}"
     return {"usb_product": getattr(transport, "usb_product", None), "usb_serial": getattr(transport, "usb_serial", None),
             "state_seen": state is not None, "drive_refusal": refusal,
-            "boot_id": None if state is None else int(state.boot_id)}
+            "boot_id": None if state is None else int(state.boot_id),
+            "bad_build_seen": bool(getattr(transport, "bad_build_seen", False))}
 
 
 def real_preconditions(prep, host, transport) -> list:
     """``real_preconditions.operating_preconditions`` on this run's paths and the board's facts (plan 2.4)."""
+    import yaml
+
     from forklift_core.live import real_preconditions as rp
 
     p = prep.paths
@@ -723,9 +744,13 @@ def real_preconditions(prep, host, transport) -> list:
         facts = rp.gather(record_path=p.preconditions, lidar_path=p.lidar_config, imu_path=p.imu_config,
                           settings_path=p.settings, s10a_path=p.s10a, layer_path=p.layer, budget_path=p.budget,
                           vehicle_path=p.vehicle, watch_path=p.watch, board=board_facts(host, transport))
-    except (OSError, ValueError, KeyError, TypeError) as err:
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
         return [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
-    return rp.operating_preconditions(facts)
+    out = rp.operating_preconditions(facts)
+    # the judgement's bytes are the ones the run loaded (Codex unlock U1 review P1-2)
+    out += [f"precondition:files_changed:{name}" for name, sha in facts.file_hashes.items()
+            if name in prep.hashes and prep.hashes[name] != sha]
+    return out
 
 
 def _layer_sensors(layer_cfg: dict) -> dict:

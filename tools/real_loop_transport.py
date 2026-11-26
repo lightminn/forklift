@@ -305,38 +305,55 @@ class LoopTtyTransport:
 
 class RealTtyTransport(LoopTtyTransport):
     """The operating REAL link (docs/plans/2026-11-26-real-operating-assembly.md 2.1): the loop contract of
-    ``LoopTtyTransport`` on the real board's USB CDC tty, opened with the executor lock taken on that very fd before
-    anything is set on the port, and the board's USB product string and serial read from that fd (the e-stop waiver,
-    the precondition record's binds). Never a HIL check: ``hil_plant`` stays False.
+    ``LoopTtyTransport`` on the real board's USB CDC tty, opened (``open``) with the executor lock taken on that very
+    fd before anything is set on the port, a pty refused by the opened fd's own type, and the board's USB product
+    string and serial read from that fd (the e-stop waiver, the precondition record's binds). Never a HIL check:
+    ``hil_plant`` stays False.
 
-    ``real_operating`` (the device block's third way, ``real_loop.motion_allowed``) is true only after ``grant`` --
-    given by the run once the operating preconditions held at assembly -- and until the first of: a revocation, a
-    lost device (never reopened), a STATE of another boot than the one granted on, or a STATE showing a HIL or
-    commissioning build. Every other send check (the host's ``drive_refusal``, freshness, the gate) stays."""
+    ``real_operating`` (the device block's third way, ``real_loop.motion_allowed``) is true only after ``grant`` and
+    until the first of: a revocation, a lost device (never reopened), a STATE of another boot than the one granted on,
+    a STATE showing a HIL or commissioning build or locked outputs. ``grant`` takes the judgement itself and refuses
+    unless the lock is held, a first STATE was read on this fd, the judgement is empty, the boot named is the one the
+    board last showed and no bad build was ever seen. Every ARM/DRIVE byte -- the first and each continuation -- is
+    written only while the permission holds; every other send check (the host's ``drive_refusal``, freshness, the gate)
+    stays."""
 
-    def __init__(self, fd: int, *, usb_product: str | None, usb_serial: str | None, **kw) -> None:
+    _BAD_BUILD = StateFlag.HIL_PLANT | StateFlag.COMMISSION_BUILD | StateFlag.OUTPUTS_LOCKED
+
+    def __init__(self, fd: int, *, usb_product: str | None, usb_serial: str | None, locked: bool = False,
+                 **kw) -> None:
         super().__init__(fd, **kw)
         self.usb_product, self.usb_serial = usb_product, usb_serial
+        self.locked = bool(locked)
         self._token = None
         self._grant_boot: int | None = None
         self._last_boot: int | None = None
+        self.first_state: McuState | None = None  # the first STATE read on this fd (the precondition's board facts)
+        self.bad_build_seen = False
         self.revoked: str | None = None
 
     @classmethod
-    def open(cls, path: str, *, opener=None, lock=None, product_reader=None, serial_reader=None, **kw):
+    def open(cls, path: str, *, opener=None, lock=None, product_reader=None, serial_reader=None, allow_pty=False,
+             **kw):
         """Open ``path`` raw with the executor lock on the fd first (``DeviceBusy`` if held; the fd closed on any
-        failure), then read the USB identity from the same fd."""
+        failure), refuse a pty by the opened fd's type, then read the USB identity from the same fd."""
+        import stat as stat_
+
         import real_mcu_link as rml
 
         from forklift_core.live.executor_lock import lock_fd
+        from forklift_core.live.model_peer import PTY_SLAVE_MAJORS
 
         opener = rml.open_raw if opener is None else opener
         lock = (lambda fd: lock_fd(fd, path)) if lock is None else lock
         fd = opener(path, before_config=lock)
         try:
+            st = os.fstat(fd)
+            if not allow_pty and stat_.S_ISCHR(st.st_mode) and os.major(st.st_rdev) in PTY_SLAVE_MAJORS:
+                raise OSError(errno.ENOTTY, "a real MCU never links by pty", path)
             product = (rml.usb_product_of_fd if product_reader is None else product_reader)(fd)
             serial = (rml.usb_serial_of_fd if serial_reader is None else serial_reader)(fd)
-            return cls(fd, usb_product=product, usb_serial=serial, **kw)
+            return cls(fd, usb_product=product, usb_serial=serial, locked=True, **kw)
         except BaseException:
             os.close(fd)
             raise
@@ -345,12 +362,15 @@ class RealTtyTransport(LoopTtyTransport):
     def real_operating(self) -> bool:
         return self._token is not None and self.lost is None and self.revoked is None
 
-    def grant(self, token, boot_id: int | None) -> bool:
-        """The run's permission once the preconditions held (on the boot the first STATE showed). False: refused
-        (already revoked, lost, or no boot)."""
-        if self.revoked is not None or self.lost is not None or boot_id in (None, 0):
+    def grant(self, judgement, boot_id: int | None) -> bool:
+        """The run's permission once the operating preconditions held: ``judgement`` is their list, which must be
+        empty. False (nothing granted): not locked, no first STATE, a non-empty judgement, a boot other than the one
+        the board last showed, a bad build seen, already revoked or lost."""
+        if (not self.locked or self.first_state is None or not isinstance(judgement, list) or judgement
+                or boot_id in (None, 0) or int(boot_id) != self._last_boot or self.bad_build_seen
+                or self.revoked is not None or self.lost is not None):
             return False
-        self._token, self._grant_boot = token, int(boot_id)
+        self._token, self._grant_boot = object(), int(boot_id)
         self._event({"t": "real_operating", "granted": True, "boot": int(boot_id), "ns": int(self.clock())})
         return True
 
@@ -361,12 +381,15 @@ class RealTtyTransport(LoopTtyTransport):
             self._event({"t": "real_operating", "granted": False, "reason": self.revoked, "ns": int(self.clock())})
 
     def _check_hil(self, s: McuState) -> None:
-        """Not a HIL check (``hil_plant`` stays False): a STATE of a HIL or commissioning build, or of another boot
-        than the granted one, revokes the permission."""
+        """Not a HIL check (``hil_plant`` stays False): the first STATE is kept; a STATE of a HIL or commissioning
+        build or with locked outputs, or of another boot than the granted one, revokes the permission."""
         if s.boot_id == 0:
             return
+        if self.first_state is None:
+            self.first_state = s
         self._last_boot = int(s.boot_id)
-        if s.flags & (StateFlag.HIL_PLANT | StateFlag.COMMISSION_BUILD):
+        if s.flags & self._BAD_BUILD:
+            self.bad_build_seen = True
             self.revoke("board_build_changed")
         if self._grant_boot is not None and int(s.boot_id) != self._grant_boot:
             self.revoke("boot_changed")
@@ -374,6 +397,19 @@ class RealTtyTransport(LoopTtyTransport):
     @property
     def last_boot(self) -> int | None:
         return self._last_boot
+
+    def _motion_frame(self, f) -> bool:
+        return getattr(f, "kind", None) in ("ARM", "DRIVE")
+
+    def _write_first(self, f, judged_ns) -> str:
+        if self._motion_frame(f) and not self.real_operating:
+            return "eagain"  # not one byte: back to the queue (the next gate refuses it without the permission)
+        return super()._write_first(f, judged_ns)
+
+    def _write_rest(self, f, judged_ns) -> bool:
+        if self._motion_frame(f) and not self.real_operating:
+            return False  # no continuation: the next gate refuses it and the half frame is abandoned (resync)
+        return super()._write_rest(f, judged_ns)
 
     def _lose(self, path: str) -> None:
         self.revoke(f"device_lost:{path}")

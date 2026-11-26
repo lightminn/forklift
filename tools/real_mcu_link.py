@@ -52,6 +52,15 @@ def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
             os.close(fd)
             raise
     try:
+        _configure(fd, baud)
+    except BaseException:
+        os.close(fd)  # nothing configured is left open (Codex unlock U1 review P2)
+        raise
+    return fd
+
+
+def _configure(fd: int, baud: int | None) -> None:
+    try:
         attrs = termios.tcgetattr(fd)
         attrs[0] = attrs[1] = attrs[3] = 0  # iflag, oflag, lflag: raw
         attrs[2] = (attrs[2] & ~(termios.CSIZE | termios.PARENB | termios.CSTOPB)) | termios.CS8 | termios.CREAD | termios.CLOCAL
@@ -66,7 +75,6 @@ def open_raw(path: str, baud: int | None = None, *, before_config=None) -> int:
         fcntl.ioctl(fd, termios.TIOCMBIS, bits)
     except OSError:
         pass  # no modem control on this endpoint
-    return fd
 
 
 def usb_product_for_rdev(rdev: int, *, sys_root="/sys") -> str | None:

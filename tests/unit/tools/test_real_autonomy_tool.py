@@ -199,3 +199,19 @@ def test_the_real_precheck_reads_the_first_state_judges_and_writes_nothing(monke
     except OSError as err:
         assert err.errno == errno.EIO  # the slave closed with nothing pending (written bytes would be read first)
     os.close(m)
+
+
+def test_the_real_precheck_never_writes_its_record_to_a_device(tmp_path, capsys):
+    """Codex unlock U1 review P2: --out naming a device (the board itself or an alias) is refused before anything."""
+    import os
+
+    m, s = os.openpty()
+    try:
+        name = os.ttyname(s)
+        assert tool.main(["--run", "--client", "real", "--device", name, "--out", name]) == 2
+        assert json.loads(capsys.readouterr().out)["refused"] == ["out_not_a_regular_file"]
+        assert tool.main(["--run", "--client", "real", "--device", "/dev/x", "--out", "/dev/null"]) == 2
+        assert json.loads(capsys.readouterr().out)["refused"] == ["out_not_a_regular_file"]
+    finally:
+        os.close(m)
+        os.close(s)

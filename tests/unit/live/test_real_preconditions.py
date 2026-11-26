@@ -42,8 +42,11 @@ class Site:
         (root / "docs").mkdir()
         (root / "docs" / "evidence.md").write_text("evidence\n")
         (root / "docs" / "bound.md").write_text("bound\n")
-        for name in ("autonomy.yaml", "s10a.yaml", "imu.yaml", "obstacle_layer_real.yaml"):
+        for name in ("autonomy.yaml", "imu.yaml", "obstacle_layer_real.yaml"):
             shutil.copy(REAL / name, cfg / name)
+        s10a = yaml.safe_load((REAL / "s10a.yaml").read_text())
+        s10a["check_pallet_pose"] = [3.0, 0.0, 0.0]
+        (cfg / "s10a.yaml").write_text(yaml.safe_dump(s10a, sort_keys=False))
         layer = yaml.safe_load((REAL / "obstacle_layer_real.yaml").read_text())
         odo = REPO / layer["odometry_age"]
         (root / layer["odometry_age"]).parent.mkdir(parents=True, exist_ok=True)
@@ -54,8 +57,12 @@ class Site:
                 d["chassis_model"] = str((REAL / d["chassis_model"]).resolve())
             (cfg / name).write_text(yaml.safe_dump(d, sort_keys=False))
         lidar = yaml.safe_load((REAL / "lidar.yaml").read_text())
+        from forklift_core.sensors.lidar_cfg import APPLIES_KEYS
+
+        applies = {k: f"v-{k}" for k in APPLIES_KEYS}
+        applies.update(image_id="img", ans_type=129, sample_period_us=250, baudrate=256000)
         lidar["timing"].update(first_beam_err_s=0.002, basis="engineering", decision_id="D-1", basis_doc="docs/bound.md",
-                               applies_to={"image_id": "x"})
+                               applies_to=applies)
         lidar["mount"]["measured"] = True
         (cfg / "lidar.yaml").write_text(yaml.safe_dump(lidar, sort_keys=False))
         self.record_path = cfg / "s10_preconditions.yaml"
@@ -85,12 +92,13 @@ class Site:
             "fault_detection": {"board_serial": SERIAL, "product": PRODUCT},
             "port_review": {},
             "scan_load": {"lidar_sha256": f.lidar_sha256, "scan_image": "img"},
-            "scan_coverage": {"lidar_sha256": f.lidar_sha256},
-            "s10_speed": {"approved_max_speed_mps": 0.15, "tested_speed_mps": 0.15},
+            "scan_coverage": {"lidar_sha256": f.lidar_sha256, "start_rear": list(f.s10a.start_rear),
+                              "check_pallet_pose": list(f.s10a.check_pallet_pose), "corridor_half_width_m": 0.10},
+            "s10_speed": {"approved_max_speed_mps": 0.15, "tested_speed_mps": 0.15, "approved_cases": ["A"]},
             "start_taped": {"start_rear": list(f.s10a.start_rear)},
             "lift": {"board_serial": SERIAL, "lift_target_m": f.settings["lift_target_m"],
                      "lift_rate_mps": f.settings["lift_rate_mps"], "test_pallet": f.s10a.pallet_id,
-                     "lift_mechanism": "lead screw, docs/evidence.md"},
+                     "lift_mechanism": "lead screw, docs/evidence.md", "pallet_mass_kg": 4.5},
             "firmware_build": {"product": PRODUCT, "firmware_vehicle_calibration_id": f.vehicle_calibration_id,
                                "readback_sha256": "0" * 64, "board_lift_rate_max_mps": 0.10},
             "stop_model": {"stop_files": stop},
@@ -204,9 +212,43 @@ def test_lift_and_pallet_settings_are_bound(site):
      "precondition:C9:s10_speed:over_tested"),
     (lambda r: r["items"]["firmware_build"]["binds"].update(board_lift_rate_max_mps=0.01),
      "precondition:C11:lift_rate_over_board"),
+    (lambda r: r["items"]["firmware_build"]["binds"].update(board_lift_rate_max_mps=None),
+     "precondition:C12:firmware_build:board_lift_rate_max_mps"),
+    (lambda r: r["items"]["firmware_build"]["binds"].update(board_lift_rate_max_mps=float("nan")),
+     "precondition:C12:firmware_build:board_lift_rate_max_mps"),
+    (lambda r: r["items"]["firmware_build"]["binds"].update(readback_sha256=None),
+     "precondition:C12:firmware_build:readback_sha256"),
+    (lambda r: r["items"]["iwdg_evidence"]["binds"].update(commit="1234567"),
+     "precondition:C2:iwdg_evidence:commit"),
+    (lambda r: r["items"]["s10_speed"]["binds"].update(approved_max_speed_mps=None),
+     "precondition:C9:s10_speed:approved_max_speed_mps"),
+    (lambda r: r["items"]["s10_speed"]["binds"].update(approved_max_speed_mps=float("nan")),
+     "precondition:C9:s10_speed:approved_max_speed_mps"),
+    (lambda r: r["items"]["s10_speed"]["binds"].update(approved_cases=["A", "B"]),
+     "precondition:C9:s10_speed:approved_cases"),
+    (lambda r: r["items"]["port_review"].update(status="approved_limited", decision_id="D-9"),
+     "precondition:C4:port_review:approved_max_speed_mps"),
+    (lambda r: r["items"]["port_review"].update(status="approved_limited", decision_id="D-9",
+                                                binds={"approved_max_speed_mps": 0.10, "approved_cases": ["A"]}),
+     "precondition:C9:s10_speed:over_approved"),
+    (lambda r: r["items"]["port_review"].update(status="approved_limited", decision_id="D-9",
+                                                binds={"approved_max_speed_mps": 0.2, "approved_cases": []}),
+     "precondition:C4:port_review:approved_cases"),
+    (lambda r: r["items"]["lift"]["binds"].update(pallet_mass_kg=None), "precondition:C11:lift:pallet_mass_kg"),
+    (lambda r: r["items"]["scan_load"]["binds"].update(scan_image="other"), "precondition:C5:scan_load:scan_image"),
+    (lambda r: r["items"]["scan_coverage"]["binds"].update(check_pallet_pose=[3.5, 0.0, 0.0]),
+     "precondition:C5:scan_coverage:check_pallet_pose"),
+    (lambda r: r["items"]["scan_coverage"]["binds"].update(corridor_half_width_m=0.2),
+     "precondition:C5:scan_coverage:corridor_half_width_m"),
+    (lambda r: r["items"]["stop_model"]["binds"].update(stop_files=["a"]), "precondition:C13:stop_model:stop_files"),
+    (lambda r: r["items"]["lift"].update(origin="x"), None),
 ])
 def test_record_items(site, change, reason):
-    assert reason in site.change_record(change)
+    out = site.change_record(change)
+    if reason is None:  # a malformed nested shape is a structured refusal, never an exception
+        assert "precondition:record:origin_shape:lift" in out
+    else:
+        assert reason in out
 
 
 def _hold(r, rows=None, **kw):
@@ -227,6 +269,13 @@ def _hold(r, rows=None, **kw):
                               {"raised_cm": 20.0, "sag_cm_after_60s": 0.1}]),
      "precondition:C11:lift:sag_over_limit"),
     (lambda r: _hold(r, sag_limit_decision_id=None), "precondition:C11:lift:sag_limit_decision_id"),
+    (lambda r: _hold(r, rows=[{"raised_cm": 8.0, "sag_cm_after_60s": 0.1, "worst": True, "worst_reason": "x"},
+                              {"raised_cm": 60.0, "sag_cm_after_60s": 0.1}]),
+     "precondition:C11:lift:hold_no_target_height"),
+    (lambda r: _hold(r, rows=[{"raised_cm": 8.0, "sag_cm_after_60s": -0.1, "worst": True, "worst_reason": "x"},
+                              {"raised_cm": 20.0, "sag_cm_after_60s": 0.1}]),
+     "precondition:C11:lift:hold_values"),
+    (lambda r: _hold(r, sag_limit_cm=-1.0), "precondition:C11:lift:hold_values"),
     (lambda r: _hold(r, rows="20"), "precondition:C11:lift:hold_values"),
     (lambda r: r["items"]["lift"]["origin"].update(state_lift_m_at_floor=0.008), "precondition:C11:lift:origin_floor"),
     (lambda r: r["items"]["lift"]["origin"].update(tape_cm_at_target=18.5), "precondition:C11:lift:origin_scale"),
@@ -297,3 +346,42 @@ def test_imu_qualification_is_apart_from_the_refusals(site):
     f2.provenance["watch"] = [(k, {**v, "measured": False}) if k == "imu" else (k, v) for k, v in f2.provenance["watch"]]
     assert rp.imu_qualified(f2, opened_profile_fits=True) is False  # the level reference unmeasured
     assert not any(r.startswith("precondition:C7") for r in rp.operating_preconditions(f))
+
+
+def test_evidence_through_a_link_out_of_the_repository_is_refused(site, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside") / "secret.md"
+    outside.write_text("x")
+    (site.root / "docs" / "link.md").symlink_to(outside)
+    out = site.change_record(lambda r: r["items"]["s5_safety"].update(evidence="docs/link.md"))
+    assert "precondition:C2:s5_safety:evidence" in out
+
+
+def test_a_missing_or_null_provenance_is_not_a_pass(site):
+    watch = site.root / "config/real/safety_watch.yaml"
+    d = yaml.safe_load(watch.read_text())
+    d["current"]["provenance"] = None
+    del d["wheel"]["provenance"]
+    watch.write_text(yaml.safe_dump(d, sort_keys=False))
+    site.write_record(site.full_record())
+    out = rp.operating_preconditions(site.facts())
+    assert "precondition:C13:watch:current:unmeasured" in out
+    assert "precondition:C13:watch:wheel:provenance_missing" in out
+
+
+def test_the_imu_watch_provenance_is_c7_not_an_assembly_refusal(site):
+    watch = site.root / "config/real/safety_watch.yaml"
+    d = yaml.safe_load(watch.read_text())
+    d["imu"]["provenance"]["measured"] = False
+    watch.write_text(yaml.safe_dump(d, sort_keys=False))
+    site.write_record(site.full_record())
+    assert rp.operating_preconditions(site.facts()) == [rp.UNLOCK_INCOMPLETE]
+
+
+def test_an_invalid_lidar_file_is_refused_by_its_own_loader(site):
+    p = site.root / "config/real/lidar.yaml"
+    d = yaml.safe_load(p.read_text())
+    d["timing"]["first_beam_err_s"] = float("nan")
+    p.write_text(yaml.safe_dump(d, sort_keys=False))
+    out = rp.operating_preconditions(site.facts())
+    assert any(r.startswith("precondition:C5:lidar:invalid:") for r in out)
+    assert "precondition:C5:lidar:first_beam_err_s" in out

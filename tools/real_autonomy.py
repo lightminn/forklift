@@ -120,6 +120,7 @@ def run_real_precheck(args) -> int:
     is never granted and nothing is written to the board."""
     sys.path.insert(0, str(REPO / "tools"))
     import real_loop_transport as rlt
+    import yaml
 
     from forklift_core.live import real_preconditions as rp
     from forklift_core.live import real_run as rr
@@ -129,6 +130,10 @@ def run_real_precheck(args) -> int:
     from forklift_core.mcu_link.build_policy import Client
 
     record = {"run": False, "client": "real", "device": args.device, "opened": []}
+    if args.out is not None and not _plain_output(args.out, args.device):
+        # the record never goes to a device (the board itself or an alias of it): nothing is written anywhere
+        _write({**record, "refused": ["out_not_a_regular_file"]}, None)
+        return 2
     if args.device is None:
         record["refused"] = ["real_needs_device"]
         _write(record, args.out)
@@ -150,7 +155,7 @@ def run_real_precheck(args) -> int:
     record["opened"] = [args.device]
     try:
         host = real_host(rr.RUN_HOST_CFG, client=Client.REAL)
-        host.link_identity(tr.usb_product)
+        record["identity_events"] = [{"kind": e.kind, **dict(e.detail)} for e in host.link_identity(tr.usb_product)]
         end = time.monotonic() + REAL_FIRST_STATE_S
         while host.state is None and time.monotonic() < end:
             try:
@@ -170,12 +175,33 @@ def run_real_precheck(args) -> int:
                               watch_path=args.watch, board=board)
             record["refused"] = rp.operating_preconditions(facts)
             record["imu_qualified"] = rp.imu_qualified(facts)
-        except (OSError, ValueError, KeyError, TypeError) as err:
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as err:
             record["refused"] = [rp.UNLOCK_INCOMPLETE, f"precondition:facts_unreadable:{type(err).__name__}:{err}"]
         _write(record, args.out)
         return 2 if record["refused"] else 0
     finally:
         os.close(tr.fd)
+
+
+def _plain_output(out: Path, device: str | None) -> bool:
+    """``--out`` may be a regular file or a new name -- never a device, a FIFO or the board's own node."""
+    import stat as stat_
+
+    try:
+        st = os.stat(out)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if not stat_.S_ISREG(st.st_mode):
+        return False
+    if device is not None:
+        try:
+            dev = os.stat(device)
+            return not (dev.st_ino == st.st_ino and dev.st_dev == st.st_dev)
+        except OSError:
+            return True
+    return True
 
 
 def _is_pty(device: str) -> bool:
