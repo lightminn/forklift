@@ -162,6 +162,7 @@ def _moved_start(tmp_path, dx_m, dyaw_deg):
     rpath = p["folder"] / "site_survey_report.json"
     rpath.write_text(json.dumps(p["report"]))
     p["row"]["survey_report"]["sha256"] = sha(rpath)
+    p["row"]["start_pose"] = list(p["report"]["start_pose"])  # registered from the report
     paths.registry.write_text(yaml.safe_dump({"bundles": [p["row"]]}))
     return paths
 
@@ -218,3 +219,83 @@ def test_the_bridge_laser_tool_prints_the_hellos_value():
     want = rr.bridge_laser_xyz_yaw(load_lidar_config(REPO / "config/real/lidar.yaml"), rr.chassis_reference(urdf)[1])
     assert tool.laser_param(REPO / "config/real/lidar.yaml", REPO / "config/real/vehicle.yaml") == list(want)
     assert tool.main(["--lidar", str(REPO / "nonexistent.yaml")]) == 1
+
+
+# --- Codex U2b round 1 ---------------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("row_start", [None, "here", [0.0, 0.0], "moved"])
+def test_the_rows_start_must_be_the_reports(tmp_path, row_start):
+    """P2-1: the row's start (the hello's and relocalization's) is checked against the report's, not skipped."""
+    paths, p = make_site(tmp_path)
+    if row_start == "moved":
+        row_start = [p["row"]["start_pose"][0] + 0.11, *p["row"]["start_pose"][1:]]
+    p["row"]["start_pose"] = row_start
+    paths.registry.write_text(yaml.safe_dump({"bundles": [p["row"]]}))
+    assert refused(paths) == ["precondition:site_bundle:row_start"]
+
+
+def test_the_chassis_urdf_is_parsed_from_the_bytes_hashed_at_the_start(tmp_path, monkeypatch):
+    """P2-2: other URDF bytes than those hashed at the start refuse the run (A -> B -> A)."""
+    paths, _ = make_site(tmp_path)
+    urdf = chassis_model_path(paths.vehicle).parent / "forklift.urdf"
+    real_sha = rr._sha  # noqa: SLF001
+    calls = {"n": 0}
+
+    def fake(path):
+        h = real_sha(path)
+        if Path(path) == urdf:
+            calls["n"] += 1
+            return "0" * 64 if calls["n"] == 1 else h
+        return h
+
+    monkeypatch.setattr(rr, "_sha", fake)
+    assert "files_changed_while_preparing:chassis_urdf" in refused(paths)
+
+
+def test_the_bundle_grid_is_the_one_its_hash_names(tmp_path, monkeypatch):
+    """P2-3: the grid the planner takes is parsed from the bytes whose hash makes the map id (one read per file)."""
+    from forklift_core.live import real_site as rs_
+
+    paths, p = make_site(tmp_path)
+    reads = []
+    real_read = rs_._read  # noqa: SLF001
+
+    def counting(path, what):
+        reads.append(Path(path).name)
+        return real_read(path, what)
+
+    monkeypatch.setattr(rs_, "_read", counting)
+    prep = prepare(paths)
+    assert reads.count("grid.npz") == 1 and prep.map_id == p["map_id"]
+
+
+def test_a_bundle_whose_files_differ_from_the_manifest_or_another_map(tmp_path):
+    paths, p = make_site(tmp_path)
+    (p["folder"] / "map.data").write_bytes(b"other")
+    assert refused(paths) == ["precondition:site_bundle:bundle_files"]
+    paths, p = make_site(tmp_path / "b")
+    d = yaml.safe_load(paths.s10a.read_text())
+    d["map_id"] = "e" * 64
+    paths.s10a.write_text(yaml.safe_dump(d))
+    assert refused(paths) == ["precondition:site_bundle:map_id"]  # the plan's reason, not the loader's
+
+
+def test_a_folder_linked_out_of_the_root_is_refused(tmp_path):
+    paths, p = make_site(tmp_path)
+    outside = tmp_path / "outside"
+    p["folder"].rename(outside)
+    (p["root"] / p["folder"].name).symlink_to(outside, target_is_directory=True)
+    assert refused(paths) == ["precondition:site_bundle:row_folder_outside_root"]
+
+
+def test_a_missing_registry_tool_refuses_and_leaves_no_half_module(monkeypatch, tmp_path):
+    import sys
+
+    from forklift_core.live import real_site as rs_
+
+    monkeypatch.setattr(rs_, "REPO", tmp_path)
+    monkeypatch.delitem(sys.modules, "slam_bundle_registry", raising=False)
+    for _ in range(2):
+        with pytest.raises(rs_.SiteRefused) as err:
+            rs_._registry_module()  # noqa: SLF001
+        assert err.value.reason.startswith("precondition:site_bundle:registry_tool:")
+        assert "slam_bundle_registry" not in sys.modules

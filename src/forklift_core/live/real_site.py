@@ -19,11 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import json
 import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import numpy as np
 
 REPO = Path(__file__).resolve().parents[3]
 PREFIX = "precondition:site_bundle"
@@ -51,13 +54,20 @@ class SiteBundle:
 
 
 def _registry_module():
+    """``tools/slam_bundle_registry.py`` (its ``lookup_site``, the registration's own rule). A missing or broken file
+    refuses (``registry_tool``) and leaves no half-made module behind for a retry."""
     name = "slam_bundle_registry"
-    if name in sys.modules:
+    if name in sys.modules and hasattr(sys.modules[name], "lookup_site"):
         return sys.modules[name]
-    spec = importlib.util.spec_from_file_location(name, REPO / "tools/slam_bundle_registry.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
+    path = REPO / "tools/slam_bundle_registry.py"
+    try:
+        spec = importlib.util.spec_from_file_location(name, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    except Exception as err:  # noqa: BLE001 -- any failure to load the rule is a refusal, never an escape
+        sys.modules.pop(name, None)
+        raise SiteRefused(f"registry_tool:{type(err).__name__}") from err
     return module
 
 
@@ -105,6 +115,9 @@ def resolve_site(*, site_record, registry, bundle_root, encoder_model: str) -> S
     if not (isinstance(rep, dict) and isinstance(rep.get("path"), str) and rep["path"] and _hex64(rep.get("sha256"))):
         raise SiteRefused("row_report")
     root = Path(bundle_root).resolve()
+    bundle = (root / folder).resolve()
+    if bundle.parent != root:
+        raise SiteRefused("row_folder_outside_root")  # a link out of the root is no folder of it
     report_path = (root / rep["path"]).resolve()
     if root not in report_path.parents:
         raise SiteRefused("row_report_outside_root")
@@ -117,9 +130,49 @@ def resolve_site(*, site_record, registry, bundle_root, encoder_model: str) -> S
         raise SiteRefused("report_unreadable") from err
     if not isinstance(report, dict) or report.get("kind") != SITE_REPORT_KIND or report.get("ok") is not True:
         raise SiteRefused("report_not_accepted")
-    return SiteBundle(row=row, bundle=root / folder, report=report,
+    return SiteBundle(row=row, bundle=bundle, report=report,
                       hashes={"site_record": rec_sha, "registry": hashlib.sha256(raw).hexdigest(),
                               "site_report": rep["sha256"]})
+
+
+def _pose3(v) -> bool:
+    return (isinstance(v, list) and len(v) == 3
+            and all(isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in v))
+
+
+def read_site_map(site: SiteBundle, expected_map_id):
+    """``(map_id, Grid)`` of the row's bundle, every file read once and hashed and parsed from the same bytes (the
+    shared ``slam_map.load_bundle`` reads the grid twice: Codex U2b round 1 P2-3). ``SiteRefused`` naming the first
+    problem; a bundle whose map is not S10-A's is ``map_id``."""
+    from forklift_core.localization import slam_map as sm
+
+    folder = site.bundle
+    try:
+        manifest = json.loads(_read(folder / "manifest.json", "bundle_manifest").decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as err:
+        raise SiteRefused("bundle_manifest_unreadable") from err
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("files"), dict) \
+            or manifest.get("format") != sm.FORMAT:
+        raise SiteRefused("bundle_manifest_unreadable")
+    raw = {name: _read(folder / name, "bundle_file") for name in sm.BUNDLE_FILES}
+    hashes = {name: hashlib.sha256(b).hexdigest() for name, b in raw.items()}
+    if hashes != manifest.get("files"):
+        raise SiteRefused("bundle_files")
+    actual = sm.map_id_of(hashes)
+    if actual != manifest.get("map_id"):
+        raise SiteRefused("bundle_files")
+    if expected_map_id is None or actual != expected_map_id:
+        raise SiteRefused("map_id")
+    try:
+        with np.load(io.BytesIO(raw["grid.npz"])) as z:
+            grid = sm.Grid(np.asarray(z["data"], np.int8), tuple(float(v) for v in z["origin"]),
+                           float(z["resolution_m"]))
+    except (OSError, ValueError, KeyError, TypeError) as err:
+        raise SiteRefused("bundle_grid") from err
+    if (grid.data.ndim != 2 or not grid.data.size or len(grid.origin) != 3 or not all(map(math.isfinite, grid.origin))
+            or not (math.isfinite(grid.resolution_m) and grid.resolution_m > 0)):
+        raise SiteRefused("bundle_grid")
+    return actual, grid
 
 
 def check_site(site: SiteBundle, *, encoder_model: str, lidar_sha256, chassis_sha256, calibration_id, map_id,
@@ -145,10 +198,12 @@ def check_site(site: SiteBundle, *, encoder_model: str, lidar_sha256, chassis_sh
     if not map_id or r.get("map_id") != map_id or row.get("map_id") != map_id:
         bad("map_id")
     start = r.get("start_pose")
-    ok_start = (isinstance(start, list) and len(start) == 3
-                and all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in start))
+    ok_start = _pose3(start)
     if not ok_start:
         bad("start_pose")
+    elif not (_pose3(row.get("start_pose")) and all(abs(float(a) - float(b)) <= 1e-9
+                                                     for a, b in zip(row["start_pose"], start))):
+        bad("row_start")  # the row's start is the report's (registered from it): the hello and relocalization read it
     else:
         x, y, yaw = (float(v) for v in start)
         rear = (x - rear_offset_m * math.cos(yaw), y - rear_offset_m * math.sin(yaw), yaw)  # start_reloc.rear_from_base
@@ -160,4 +215,5 @@ def check_site(site: SiteBundle, *, encoder_model: str, lidar_sha256, chassis_sh
     return out
 
 
-__all__ = ["PREFIX", "REAL_ENCODER_MODEL", "SITE_REPORT_KIND", "SiteBundle", "SiteRefused", "check_site", "resolve_site"]
+__all__ = ["PREFIX", "REAL_ENCODER_MODEL", "SITE_REPORT_KIND", "SiteBundle", "SiteRefused", "check_site",
+           "read_site_map", "resolve_site"]

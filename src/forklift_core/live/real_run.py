@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import io
 import itertools
 import json
 import math
@@ -81,22 +82,30 @@ def _insertion_geometry():
     return module
 
 
-def mission_geometry(urdf: Path, depth_m: float, width_m: float, reserve_m: float = 0.016):
+def _urdf_source(urdf):
+    """A path as given, or the URDF's bytes read once (the operating run: hashed and parsed from the same bytes, Codex
+    U2b round 1 P2-2) as a fresh stream for each parse."""
+    return io.BytesIO(urdf) if isinstance(urdf, (bytes, bytearray)) else urdf
+
+
+def mission_geometry(urdf, depth_m: float, width_m: float, reserve_m: float = 0.016):
     from forklift_core.planning.geometry import Footprint
     from forklift_core.planning.pallet_mission import SyntheticMissionGeometry
 
     ig = _insertion_geometry()
-    axle_to_tip, _ = ig.read_chassis_reference_m(urdf)
+    axle_to_tip, _ = ig.read_chassis_reference_m(_urdf_source(urdf))
     return SyntheticMissionGeometry(unloaded_footprint=Footprint(axle_to_tip, 0.17, 0.36), pallet_depth_m=depth_m,
                                     pallet_width_m=width_m, axle_to_fork_tip_m=axle_to_tip,
-                                    carriage_limit_m=ig.read_carriage_limit_m(urdf), insertion_reserve_m=reserve_m)
+                                    carriage_limit_m=ig.read_carriage_limit_m(_urdf_source(urdf)),
+                                    insertion_reserve_m=reserve_m)
 
 
-def chassis_reference(urdf: Path) -> tuple:
-    """(axle to fork tip, rear axle offset behind base_link, carriage limit) in metres from the chassis model."""
+def chassis_reference(urdf) -> tuple:
+    """(axle to fork tip, rear axle offset behind base_link, carriage limit) in metres from the chassis model (a path,
+    or its bytes)."""
     ig = _insertion_geometry()
-    axle_to_tip, rear_x = ig.read_chassis_reference_m(urdf)
-    return float(axle_to_tip), abs(float(rear_x)), float(ig.read_carriage_limit_m(urdf))
+    axle_to_tip, rear_x = ig.read_chassis_reference_m(_urdf_source(urdf))
+    return float(axle_to_tip), abs(float(rear_x)), float(ig.read_carriage_limit_m(_urdf_source(urdf)))
 
 
 def map_occupancy(grid):
@@ -411,7 +420,11 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     if replay is not None:
         pass  # the map read above, from the record's bundle (or --map-bundle)
     elif site is not None:
-        map_id, occupancy = read_map(site.bundle, cfg)
+        try:
+            map_id, grid = rs_.read_site_map(site, cfg.map_id)  # every file hashed and parsed from one read
+        except rs_.SiteRefused as err:
+            raise AssemblyRefused([err.reason]) from err
+        occupancy = map_occupancy(grid)
     elif paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:
@@ -429,9 +442,18 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     if refused:
         raise AssemblyRefused(refused)
     urdf = chassis_model_path(paths.vehicle).parent / "forklift.urdf"
+    urdf_src = urdf
+    if site is not None:
+        # the operating run: the chassis geometry parsed from the very bytes whose hash C6 compares (round 1 P2-2)
+        try:
+            urdf_src = Path(urdf).read_bytes()
+        except OSError as err:
+            raise AssemblyRefused([f"config_unreadable:{type(err).__name__}:{err}"]) from err
+        if hashlib.sha256(urdf_src).hexdigest() != hashes_at_start.get("chassis_urdf"):
+            raise AssemblyRefused(["files_changed_while_preparing:chassis_urdf"])
     try:
-        geometry = mission_geometry(urdf, cfg.pallet_depth_m, cfg.pallet_width_m)
-        axle_to_tip, rear_offset, carriage = chassis_reference(urdf)
+        geometry = mission_geometry(urdf_src, cfg.pallet_depth_m, cfg.pallet_width_m)
+        axle_to_tip, rear_offset, carriage = chassis_reference(urdf_src)
         layer_cfg = yaml.safe_load(Path(paths.layer).read_text())
         if replay is not None:
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
