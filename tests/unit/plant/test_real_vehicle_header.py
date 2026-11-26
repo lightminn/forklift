@@ -121,10 +121,15 @@ def test_the_chassis_given_is_the_one_read(tmp_path):
 
     chassis_path = gen.chassis_model_path(VEHICLE_YAML)
     other = yaml.safe_load(chassis_path.read_text(encoding="utf-8"))
-    text = chassis_path.read_text(encoding="utf-8")
+
+    def halve(node):  # the steering limit wherever the model keeps it, halved
+        if isinstance(node, dict):
+            return {k: (v / 2 if k == "steering_limit_rad" else halve(v)) for k, v in node.items()}
+        return node
+
     changed = tmp_path / "other.yaml"
-    changed.write_text(text.replace("steering_limit_rad: 0.2617993878", "steering_limit_rad: 0.3"), encoding="utf-8")
-    assert changed.read_text() != text
+    changed.write_text(yaml.safe_dump(halve(other)), encoding="utf-8")
+    assert yaml.safe_load(changed.read_text()) != other
     default, given = tmp_path / "a.h", tmp_path / "b.h"
     assert gen.main(["--config", str(VEHICLE_YAML), "--out", str(default)]) == 0
     assert gen.main(["--config", str(VEHICLE_YAML), "--chassis", str(changed), "--out", str(given)]) == 0
