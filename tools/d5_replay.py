@@ -30,6 +30,13 @@ first changes). Each field is reported reproduced or not; the analysis is read o
 reproduced run.
 
     python tools/d5_replay.py --run <run dir> --source <snapshot root> --output <file.json>
+
+PR 7 7e-2a: ``--real PALLET_M,OWN_M,CAM_T_M,CAM_ROT_DEG`` rebuilds the same check with the real D435i path's options
+(docs/plans/2026-11-26-7e-depth-pocket-check.md 6.2: no synthetic noise, novelty by frame identity, the usable
+observation, the three-state visibility with that error budget, refutation, the chassis model's own boxes) -- with
+``--source`` a tree that has them (this branch's snapshot; the run's own source does not, so the reproduction is not
+expected). Every tick's limit is counted (``limit_ticks``: stops by reason, slowed ticks), the normal approach's stop
+increase being the comparison of a run with and without ``--real`` on the same source (plan 9.2).
 """
 
 from __future__ import annotations
@@ -220,10 +227,43 @@ def camera_face_m(check, rear) -> float:
     return float(check.face_x - centre[0])
 
 
-def replay(run: Run, source: Path) -> tuple[dict, dict]:
+def real_options(run: Run, source: Path, modules: dict, check, budget):
+    """The real path's options for the run's check: the budget (pallet, own, camera translation, camera angle in
+    degrees) and every fork_carriage collision box of the run's URDF as the own boxes (real_depth.own_boxes_rear's
+    rule, from the source's insertion_geometry)."""
+    import xml.etree.ElementTree as ET
+
+    ig = modules["insertion_geometry"]
+    truck = ET.parse(source / run.result["arguments"]["forklift_urdf"]).getroot()
+    carriage = ig._base_position_m(truck, "fork_lift")
+    offset, base_z = check.rear_axle_offset_m, check.base_z_m
+    own = []
+    for _name, centre, half in ig._boxes(truck.find("link[@name='fork_carriage']")):
+        c = carriage + centre
+        own.append((float(c[0] - half[0] + offset), float(c[0] + half[0] + offset), float(c[1] - half[1]),
+                    float(c[1] + half[1]), float(c[2] - half[2] + base_z), float(c[2] + half[2] + base_z)))
+    pallet, own_e, cam_t, cam_rot = budget
+    return modules["pocket_check"].RealPocketOptions(
+        pallet_rel_error_m=pallet, own_error_m=own_e, cam_trans_error_m=cam_t, cam_rot_error_rad=math.radians(cam_rot),
+        own_boxes_rear=tuple(own))
+
+
+def replay(run: Run, source: Path, real=None) -> tuple[dict, dict]:
+    import dataclasses
+
     recorded_sources = run.result.get("source_sha256") or {}
     modules, hashes = load_source(source, recorded_sources)
     check, model_files = build_check(run, source, modules)
+    if real is not None:
+        check = dataclasses.replace(check, synthetic_noise=False,
+                                    real=real_options(run, source, modules, check, real), records=[])
+    frame_no = [0]
+
+    def key():
+        frame_no[0] += 1
+        return {} if real is None else {"frame_key": (1, (), frame_no[0])}
+
+    limit_ticks = {"ticks": 0, "stopped": {}, "slowed": 0}
     r = run.result
     built = r["pocket_check"]
     built_s = float(built["built_s"])
@@ -231,7 +271,7 @@ def replay(run: Run, source: Path) -> tuple[dict, dict]:
     vol = check.memory.volume
     near = r["near_capture"]
     capture = np.load(run.directory / f"perception_capture_{int(near['near_attempt'])}_depth_m.npy")
-    first = check.add_frame(built_s, capture, tuple(float(v) for v in built["first_frame"]["rear"]))
+    first = check.add_frame(built_s, capture, tuple(float(v) for v in built["first_frame"]["rear"]), **key())
     frames = [{"index": 0, "time_s": built_s, "source": "near_capture",
                "rear": [float(v) for v in built["first_frame"]["rear"]], "speed_mps": 0.0,
                "camera_face_m": camera_face_m(check, built["first_frame"]["rear"]), "erosion_voxels": 0}]
@@ -291,7 +331,7 @@ def replay(run: Run, source: Path) -> tuple[dict, dict]:
             speed_now = abs(float(rd["odom_speed_mps"]))
             yaw_now = abs(float(rd.get("odom_yaw_rate_rps") or 0.0))
             rec = check.add_frame(stamp, depth, rear_at, speed_mps=speed_now, yaw_rate_rps=yaw_now,
-                                  lift_m=float(rd["lift_m"]))
+                                  lift_m=float(rd["lift_m"]), **key())
             if rec.get("new"):
                 n = len(frames)
                 cert_frame[check.memory.certified_s == stamp] = n
@@ -314,6 +354,11 @@ def replay(run: Run, source: Path) -> tuple[dict, dict]:
         speed = max(abs(requested), abs(truth_speed))
         direction = 1 if requested > 0 else (1 if requested == 0 and truth_speed >= 0 else -1)
         allowed, why = check.limit(t, rear, kappa, direction, speed, lift)
+        limit_ticks["ticks"] += 1
+        if allowed <= 0.0:
+            limit_ticks["stopped"][why] = limit_ticks["stopped"].get(why, 0) + 1
+        elif allowed < speed:
+            limit_ticks["slowed"] += 1
         if first_stop is None and why != "ok":
             first_stop = {"time_s": t, "reason": why, "allowed_mps": allowed,
                           "last_fail": getattr(check, "last_fail", None), "frames": len(frames),
@@ -369,6 +414,9 @@ def replay(run: Run, source: Path) -> tuple[dict, dict]:
             "truth speed: one-tick difference of the truth rear axle along its heading",
         ],
         "ticks": ticks,
+        "real": None if real is None else {"budget": list(real), "summary": json_safe(
+            {k: v for k, v in check.summary().items() if k in ("depth", "refuted", "usable_frames")})},
+        "limit_ticks": limit_ticks,
         "frames": len(frames),
         "reads_used": k_read,
         "pallet_truth_max_move_m": max(pallet_moves) if pallet_moves else None,
@@ -486,9 +534,13 @@ def main(argv=None) -> int:
     parser.add_argument("--source", type=Path, required=True, help="the snapshot root the run executed")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--arrays", type=Path, help="also save the per-voxel first-demand arrays (.npz)")
+    parser.add_argument("--real", help="PALLET_M,OWN_M,CAM_T_M,CAM_ROT_DEG: the real D435i path's options (7e-2a)")
     a = parser.parse_args(argv)
     run = Run(a.run)
-    out, arrays = replay(run, a.source)
+    real = None if a.real is None else tuple(float(v) for v in a.real.split(","))
+    if real is not None and len(real) != 4:
+        parser.error("--real takes four numbers")
+    out, arrays = replay(run, a.source, real)
     out["tool_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(json.dumps(json_safe(out), indent=1) + "\n")
@@ -497,7 +549,7 @@ def main(argv=None) -> int:
     rep = out["reproduction"]
     print(f"reproduced={rep['reproduced']} source_matches_run={out['source_matches_run']} "
           f"first_stop={out['first_stop'] and out['first_stop']['time_s']} asked={out['demand']['asked_voxels']} "
-          f"expired={out['demand']['asked_expired']}")
+          f"expired={out['demand']['asked_expired']} limit_ticks={out['limit_ticks']}")
     return 0
 
 

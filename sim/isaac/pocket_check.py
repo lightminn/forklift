@@ -15,6 +15,27 @@ the user's 2026-10-05 D5 body delta).
 Frame survival (Codex L3c P1): a frame is new only if its raw depth hash
 differs from the last one; the newest new frame must be at most
 frame_max_age_s old, or the limit is 0 (N13). Noise is added after hashing.
+
+The real D435i path (PR 7 7e, docs/plans/2026-11-26-7e-depth-pocket-check.md
+6.2): ``synthetic_noise=False`` and ``real=RealPocketOptions(...)``. Both
+default to the Isaac behaviour above -- the Isaac runner never passes them,
+so its calls and records are unchanged. With ``real``:
+
+* a frame is new by its device identity ``frame_key = (generation,
+  correction, frame_number)``, not its pixels; one of another generation or
+  correction than ``guard()`` gives now is refused (``frame_generation_stale``);
+* ``last_new_s`` (the ``depth_stale`` clock) moves only for a usable
+  observation: enough valid pixels among those whose rays meet V;
+* every voxel of V in view is classed by the known surfaces' geometry (the
+  estimated pallet and the truck's own boxes) shrunk by the error
+  budget: surely visible, surely hidden, or uncertain (treated as visible).
+  A visible one the frame does not pass is refuted (its certification
+  cleared); a voxel the newest frame expected to see needs a certification
+  within ``frame_max_age_s`` -- only surely hidden ones use the lifetime;
+* ``guard()`` (the source's depth generation and the core's applied
+  correction) is read first in ``add_frame`` and ``limit``: a change forgets
+  every certification and the freshness (``boundary_s`` keeps when);
+* the truck's own boxes are the chassis model's (``own_boxes_rear``).
 """
 
 from __future__ import annotations
@@ -38,6 +59,22 @@ H_DET_M = 0.17  # body band top (D0 detection band)
 SCOPE_FLOOR_M = 0.03
 BODY_FLOOR_M = SCOPE_FLOOR_M
 FORK_Z_M = (SCOPE_FLOOR_M, 0.072)  # lowered blades 0.028-0.052 +0.01, from the scope floor
+
+
+@dataclass
+class RealPocketOptions:
+    """The real D435i path's settings (module text). The error budget: the pallet's place relative to the truck (the
+    operator's tape-measured pose + the SLAM pose error), the truck's own geometry, and the camera ray (mount
+    position, mount/pose angle; the frame's motion is added per frame)."""
+
+    view_min_px: int = 2000
+    view_valid_min: float = 0.5
+    pallet_rel_error_m: float = 0.02
+    own_error_m: float = 0.005
+    cam_trans_error_m: float = 0.01
+    cam_rot_error_rad: float = math.radians(1.0)
+    guard: object = None  # () -> (depth generation, applied correction tuple), or None
+    own_boxes_rear: tuple = ()  # (x0, x1, y0, y1, z0, z1) at lift 0, rear-axle frame; empty: the Isaac constants
 
 
 @dataclass
@@ -87,11 +124,14 @@ class PocketCheck:
     stopping: StoppingModel  # latency, deceleration (margin unused inside the region)
     config: PocketConfig = field(default_factory=PocketConfig)
     noise_seed: int = 0
+    synthetic_noise: bool = True  # False: the frames' own noise only (the real D435i)
+    real: RealPocketOptions | None = None  # None: the Isaac behaviour
     valid: bool = True
     invalid_reason: str | None = None
     last_hash: str | None = None
     last_new_s: float = -math.inf
     records: list = field(default_factory=list)
+    boundary_s: float = -math.inf  # the real path's last forget (a generation or correction change)
 
     def __post_init__(self) -> None:
         g = self.pallet_geometry
@@ -134,6 +174,8 @@ class PocketCheck:
         self.region = (-half_l, half_l, -half_w, half_w)
         self.rng = np.random.default_rng([self.noise_seed, 11])
         self.real_stop = StoppingModel(self.stopping.latency_s, self.stopping.decel_mps2, cfg.envelope_m)
+        self._seen_keys: list = []  # the real path's device identities taken (newest last, bounded)
+        self._guard_last = None if self.real is None or self.real.guard is None else self._guard_value()
 
     # Frames -----------------------------------------------------------------
     def to_insertion(self, x, y, yaw):
@@ -163,8 +205,69 @@ class PocketCheck:
         trans = r_ob @ (r_bc @ t_ci + t_bc) + t_ob
         return rot, trans
 
+    # The real path's guard ------------------------------------------------------------------------------------
+    def _guard_value(self):
+        gen, corr = self.real.guard()
+        return (gen, tuple(float(v) for v in corr))
+
+    def _check_guard(self, stamp_s: float | None = None) -> None:
+        """The source's generation and the applied correction now: a change forgets everything (plan 6.2)."""
+        if self.real is None or self.real.guard is None:
+            return
+        now = self._guard_value()
+        if now != self._guard_last:
+            self._guard_last = now
+            self.forget("guard_changed", stamp_s)
+
+    def forget(self, reason: str, stamp_s: float | None = None) -> None:
+        """Every certification and the freshness cleared (an obstacle stays latched); ``boundary_s`` the time."""
+        self.memory.forget()
+        self.last_new_s = -math.inf
+        self.boundary_s = math.inf if stamp_s is None else float(stamp_s)
+        self.records.append({"forget": reason, "time_s": None if stamp_s is None else float(stamp_s)})
+
+    def _visibility(self, rear_at_stamp, lift_m: float, speed_mps: float, yaw_rate_rps: float):
+        """Per evaluated voxel: expected visible (surely visible or uncertain) -- not surely hidden by the known
+        surfaces shrunk by the error budget (plan 6.2; result 6.5)."""
+        from forklift_core.perception.insertion_clearance import ray_blocked
+
+        r = self.real
+        rot, trans = self.optical_from_insertion(rear_at_stamp)
+        origin = -rot.T @ trans
+        _idx, all_centres = self.memory.volume.centres(evaluated=True)
+        # only the voxels in the image are classed (the memory uses no other); the rest come back not visible
+        cam = self.camera
+        pts = all_centres @ rot.T + trans
+        z = pts[:, 2]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = np.round(cam.fx * pts[:, 0] / z + cam.cx)
+            w = np.round(cam.fy * pts[:, 1] / z + cam.cy)
+        inside = (z > 0) & (u >= 0) & (u < cam.width) & (w >= 0) & (w < cam.height)
+        centres = all_centres[inside]
+        dist = np.linalg.norm(centres - origin, axis=1)
+        motion = self.pose_uncertainty_m(speed_mps, yaw_rate_rps)
+        hidden = np.zeros(len(centres), dtype=bool)
+        # Every known surface's box is SHRUNK by its band (plan 6.2 2: hidden only when surely hidden, the uncertain
+        # band counts as visible -- for the truck's own boxes too, Codex 7e-2a round 1 P1-2): its own share, the
+        # ray's sideways shift at the box (the mount's translation, its angle times the distance to the box's far
+        # side, at most the voxel's), the frame's motion, and half a pixel's diagonal at that distance (the depth is
+        # read on the rounded pixel's ray, not the voxel centre's -- Codex 7e-2a round 1 P2-3)
+        own = self.own_boxes(self.to_insertion(*rear_at_stamp), lift_m)
+        pixel = math.sqrt(0.5) / min(cam.fx, cam.fy)
+        for boxes, share in ((self.solids, r.pallet_rel_error_m), (own, r.own_error_m)):
+            for b in boxes:
+                far = float(np.linalg.norm(np.asarray(b.center) - origin) + np.linalg.norm(b.half))
+                d_box = np.minimum(dist, far)
+                band = share + r.cam_trans_error_m + d_box * (r.cam_rot_error_rad + pixel) + motion
+                hidden |= ray_blocked(origin, centres, [b], -band)
+        out = np.zeros(len(all_centres), dtype=bool)
+        out[inside] = ~hidden
+        return out
+
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, rear_at_stamp, speed_mps: float = 0.0,
-                  yaw_rate_rps: float = 0.0, lift_m: float = 0.0) -> dict:
+                  yaw_rate_rps: float = 0.0, lift_m: float = 0.0, *, frame_key=None) -> dict:
+        if self.real is not None:
+            return self._add_real_frame(stamp_s, depth_m, rear_at_stamp, speed_mps, yaw_rate_rps, lift_m, frame_key)
         raw = np.ascontiguousarray(np.asarray(depth_m, dtype=np.float32))
         digest = hashlib.sha256(raw.tobytes()).hexdigest()
         if digest == self.last_hash:
@@ -174,12 +277,13 @@ class PocketCheck:
         self.last_hash = digest
         self.last_new_s = float(stamp_s)
         depth = np.asarray(depth_m, dtype=float).copy()
-        finite = np.isfinite(depth) & (depth > 0)
-        sigma = self.camera.sigma_a * depth[finite] ** 2
-        # Synthetic contract, like the LiDAR's: Gaussian sigma(z) cut at the
-        # same k sigma the classification tolerates.
-        k = self.camera.sigma_k
-        depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
+        if self.synthetic_noise:
+            finite = np.isfinite(depth) & (depth > 0)
+            sigma = self.camera.sigma_a * depth[finite] ** 2
+            # Synthetic contract, like the LiDAR's: Gaussian sigma(z) cut at the
+            # same k sigma the classification tolerates.
+            k = self.camera.sigma_k
+            depth[finite] = depth[finite] + np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) * sigma
         # The truck's own blades (and the carriage face they hang from) are in
         # view from 0.28 m on: a return from them is the truck, not an obstacle
         # (L3c v32 seed 4: the blade tops latched one). Self-filter by their
@@ -189,6 +293,44 @@ class PocketCheck:
                                     surfaces, surface_extra_m=self.config.surface_estimate_m,
                                     pose_uncertainty_m=self.pose_uncertainty_m(speed_mps, yaw_rate_rps))
         rec = {**rec, "new": True, "rear": [float(v) for v in rear_at_stamp]}
+        self.records.append(rec)
+        return rec
+
+    def _add_real_frame(self, stamp_s, depth_m, rear_at_stamp, speed_mps, yaw_rate_rps, lift_m, frame_key) -> dict:
+        """The real path's frame (module text)."""
+        if frame_key is None:
+            raise ValueError("the real path needs the frame's (generation, correction, frame_number)")
+        gen, corr, number = frame_key
+        self._check_guard(stamp_s)
+        if self._guard_last is not None and (gen, tuple(float(v) for v in corr)) != self._guard_last:
+            rec = {"time_s": float(stamp_s), "new": False, "rejected": "frame_generation_stale"}
+            self.records.append(rec)
+            return rec
+        key = (gen, number)
+        if key in self._seen_keys:
+            rec = {"time_s": float(stamp_s), "new": False}
+            self.records.append(rec)
+            return rec
+        self._seen_keys.append(key)
+        del self._seen_keys[:-64]
+        depth = np.asarray(depth_m, dtype=float).copy()
+        if self.synthetic_noise:
+            finite = np.isfinite(depth) & (depth > 0)
+            k = self.camera.sigma_k
+            depth[finite] += np.clip(self.rng.normal(0.0, 1.0, int(finite.sum())), -k, k) \
+                * self.camera.sigma_a * depth[finite] ** 2
+        surfaces = self.surfaces + self.own_boxes(self.to_insertion(*rear_at_stamp), lift_m)
+        visible = self._visibility(rear_at_stamp, lift_m, speed_mps, yaw_rate_rps)
+        rec = self.memory.add_frame(stamp_s, depth, self.camera, self.optical_from_insertion(rear_at_stamp),
+                                    surfaces, surface_extra_m=self.config.surface_estimate_m,
+                                    pose_uncertainty_m=self.pose_uncertainty_m(speed_mps, yaw_rate_rps),
+                                    visible=visible, view_mask=True)
+        usable = (rec["view_px"] > 0 and rec["view_valid_px"] >= self.real.view_min_px
+                  and rec["view_valid_px"] >= self.real.view_valid_min * rec["view_px"])
+        if usable:
+            self.last_new_s = float(stamp_s)  # the depth_stale clock: usable observations only
+        rec = {**rec, "new": True, "usable": bool(usable), "rear": [float(v) for v in rear_at_stamp],
+               "frame_key": [gen, list(corr), number]}
         self.records.append(rec)
         return rec
 
@@ -205,9 +347,17 @@ class PocketCheck:
 
     # Per tick ----------------------------------------------------------------
     def own_boxes(self, pose_i, lift_m: float) -> list:
-        """The blades and the carriage face (0.02 m deep) at a pose, no margins."""
+        """The blades and the carriage face (0.02 m deep) at a pose, no margins -- or, on the real path with the
+        chassis model's boxes given, those (rear-axle frame at lift 0, carried up by the lift)."""
         x, y, yaw = pose_i
         c, s = math.cos(yaw), math.sin(yaw)
+        if self.real is not None and self.real.own_boxes_rear:
+            boxes = []
+            for x0, x1, y0, y1, z0, z1 in self.real.own_boxes_rear:
+                u, v = (x0 + x1) / 2, (y0 + y1) / 2
+                boxes.append(Box((x + u * c - v * s, y + u * s + v * c, (z0 + z1) / 2 + lift_m),
+                                 ((x1 - x0) / 2, (y1 - y0) / 2, (z1 - z0) / 2), yaw))
+            return boxes
         out = []
         for x0, x1, y0, y1 in self.blades_rear:
             u, v = (x0 + x1) / 2, (y0 + y1) / 2
@@ -242,6 +392,7 @@ class PocketCheck:
 
     def limit(self, now_s: float, rear, curvature_inv_m: float, direction: int, speed_mps: float,
               lift_m: float) -> tuple[float, str]:
+        self._check_guard(now_s)  # the real path: a generation or correction change forgets first (plan 6.2)
         if not self.valid:
             return 0.0, f"pocket_invalid:{self.invalid_reason}"
         if self.memory.obstacle:
@@ -254,10 +405,12 @@ class PocketCheck:
         samples, arc = arc_poses(tuple(rear), curvature_inv_m, 1 if direction >= 0 else -1, length,
                                  self.config.sample_m)
         verified = 0.0
+        recent = None if self.real is None else self.config.frame_max_age_s - self.config.frame_lag_s
         for pose, s in zip(samples, arc):
             pose_i = self.to_insertion(*pose)
             boxes = self.truck_boxes(pose_i, lift_m)
-            failing = [k for k, b in enumerate(boxes) if not self.memory.contained(b, now_s, self.region)]
+            failing = [k for k, b in enumerate(boxes)
+                       if not self.memory.contained(b, now_s, self.region, recent_age_s=recent)]
             if failing:
                 self.last_fail = self._explain(boxes[failing[0]], failing[0], now_s, float(s), pose_i)
                 break
@@ -370,8 +523,11 @@ class PocketCheck:
             "new_frames": len(new),
             "first_frame": new[0] if new else None,
             "config": self.config.__dict__,
-            "depth": "synthetic (Isaac depth + sigma(z) = 0.0036 z^2 noise)",
+            "depth": ("real D435i depth" if self.real is not None and not self.synthetic_noise
+                      else "synthetic (Isaac depth + sigma(z) = 0.0036 z^2 noise)"),
+            **({} if self.real is None else {"refuted": self.memory.refuted, "boundary_s": self.boundary_s,
+                                             "usable_frames": sum(1 for r in new if r.get("usable"))}),
         }
 
 
-__all__ = ["PocketCheck", "PocketConfig"]
+__all__ = ["PocketCheck", "PocketConfig", "RealPocketOptions"]

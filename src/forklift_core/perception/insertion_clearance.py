@@ -23,6 +23,21 @@ rectangle plus its axial band) is earned with depth instead:
 Frames come from the stand-off capture and the 10 Hz frames on the way in:
 near the face the far capture cannot separate a voxel from the face within
 the depth noise, a closer frame can (Codex L3c P1).
+
+The real D435i path (PR 7 7e, docs/plans/2026-11-26-7e-depth-pocket-check.md
+6.2) adds, only when a caller asks for it -- every default keeps the Isaac
+behaviour and its recorded calls:
+
+* ``add_frame(..., visible=)``: the voxels the frame was expected to see
+  (``ray_blocked`` against the known surfaces, with the error budget). One of
+  them in view that the frame did not pass is a **refutation**: its
+  certification is cleared, whatever its age. Each voxel also keeps whether
+  the newest frame expected to see it (``need_recent``).
+* ``add_frame(..., view_mask=True)``: the pixels whose rays meet V and how
+  many of them hold a valid depth (the frame's usable-observation test).
+* ``contained(..., recent_age_s=)``: a voxel the newest frame expected to see
+  needs a certification that recent; the others the lifetime.
+* ``forget()``: every certification cleared (an obstacle stays latched).
 numpy only.
 """
 
@@ -92,6 +107,37 @@ def _box_filter(mask: np.ndarray, k: int, op) -> np.ndarray:
     return out
 
 
+def ray_blocked(origin, points: np.ndarray, boxes, inflate) -> np.ndarray:
+    """Per point: whether the segment from ``origin`` to the point meets any of ``boxes`` (yaw about z) grown by
+    ``inflate`` (a scalar or one value per point; negative shrinks, the half extents never below zero) before it
+    reaches the point. A hit at the point itself or beyond does not count."""
+    pts = np.asarray(points, dtype=float).reshape(-1, 3)
+    o = np.asarray(origin, dtype=float)
+    infl = np.broadcast_to(np.asarray(inflate, dtype=float), (len(pts),))
+    out = np.zeros(len(pts), dtype=bool)
+    d = pts - o
+    for b in boxes:
+        c, s = cos(b.yaw), sin(b.yaw)
+        rot = np.array([[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]])  # control -> box local
+        ol = rot @ (o - np.asarray(b.center, dtype=float))
+        dl = d @ rot.T
+        half = np.maximum(np.asarray(b.half, dtype=float)[None, :] + infl[:, None], 0.0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t1 = (-half - ol) / dl
+            t2 = (half - ol) / dl
+        lo = np.where(dl == 0.0, np.where(np.abs(ol) <= half, -np.inf, np.inf), np.minimum(t1, t2))
+        hi = np.where(dl == 0.0, np.where(np.abs(ol) <= half, np.inf, -np.inf), np.maximum(t1, t2))
+        tmin = np.max(lo, axis=1)
+        tmax = np.min(hi, axis=1)
+        # a box that holds the origin is no occluder of it (the camera on its own carriage): counted neither way --
+        # never 'surely hidden' by a box the camera sits in
+        holds_origin = np.all(np.abs(ol)[None, :] <= half, axis=1)
+        # a box shrunk to nothing along an axis (a band wider than it) hides nothing
+        solid = np.all(half > 0.0, axis=1)
+        out |= (tmax >= tmin) & (tmax > 0.0) & (np.maximum(tmin, 0.0) < 1.0 - 1e-9) & ~holds_origin & solid
+    return out
+
+
 def overlapping_voxels(volume: InsertionVolume, box: Box, region=None) -> tuple[np.ndarray, bool]:
     """(indices (k, 3) of every grid voxel the box overlaps, whether it leaves the grid).
 
@@ -144,6 +190,10 @@ class ClearanceMemory:
 
     def __post_init__(self) -> None:
         self.certified_s = np.full(self.volume.shape, -np.inf)
+        # the real path (7e): whether the newest frame expected to see each voxel (then a recent certification is
+        # needed), and how many certifications refutations cleared
+        self.need_recent = np.zeros(self.volume.shape, dtype=bool)
+        self.refuted = 0
         # Diagnostics: per voxel, how the latest frame that had it in view saw
         # it -- 0 never in view, 1 certified, 2 passed but eroded, 3 return in
         # front on a known surface, 4 return in front off the surfaces,
@@ -159,8 +209,14 @@ class ClearanceMemory:
                 hits[idx[:, 0], idx[:, 1], idx[:, 2]] = True
         return int((hits & self.volume.in_v).sum())
 
+    def forget(self) -> None:
+        """Every certification cleared (7e: a new depth generation or another applied correction); an obstacle stays
+        latched."""
+        self.certified_s[:] = -np.inf
+
     def add_frame(self, stamp_s: float, depth_m: np.ndarray, camera: DepthCamera, optical_from_insertion,
-                  solids: list, surface_extra_m: float = 0.0, pose_uncertainty_m: float = 0.0) -> dict:
+                  solids: list, surface_extra_m: float = 0.0, pose_uncertainty_m: float = 0.0, *,
+                  visible=None, view_mask: bool = False) -> dict:
         """Certify V voxels from one depth frame; latch an obstacle if one is seen.
 
         optical_from_insertion: (R (3, 3), t (3,)) taking insertion-frame points
@@ -217,6 +273,13 @@ class ClearanceMemory:
         if k > 0:
             free_grid = _box_filter(free_grid, k, np.min)
         certified = free_grid & self.volume.in_v
+        if visible is not None:
+            # 7e: only a voxel the frame was expected to see is certified by it -- a surely hidden one keeps what it
+            # had (plan 6.2 3; Codex 7e-2a round 2 P2: a stray far pixel certified a hidden voxel for the lifetime)
+            exp = np.zeros(self.volume.shape, dtype=bool)
+            ev = np.asarray(visible, dtype=bool) & inside
+            exp[idx[ev, 0], idx[ev, 1], idx[ev, 2]] = True
+            certified &= exp
         self.certified_s[certified] = float(stamp_s)
         seen = inside & in_v
         code = np.full(len(idx), 5, dtype=np.int8)
@@ -229,12 +292,55 @@ class ClearanceMemory:
         self.last_code[certified] = 1
         record = {"time_s": float(stamp_s), "voxels": int(in_v.sum()), "free": int(certified.sum()),
                   "in_view": int((inside & in_v).sum()), "obstacle": obstacle_count, "erosion_voxels": k}
+        if visible is not None:
+            # 7e: a voxel of V in view the frame was expected to see but did not certify (no depth, a return in
+            # front or at its depth, or passed but eroded by the motion) is refuted -- its certification cleared at
+            # once (an earlier one, however recent, says nothing now), never revived by a later frame that cannot
+            # see it. The newest frame's expectation is kept per voxel: a voxel it expected to see needs a recent
+            # certification; one out of its view or surely hidden falls back to the lifetime (plan 6.2 3-4; Codex
+            # 7e-2a round 1 P1-1: an eroded voxel neither escapes refutation nor the recent requirement)
+            vis = np.asarray(visible, dtype=bool) & inside & in_v
+            passed = certified[idx[:, 0], idx[:, 1], idx[:, 2]]
+            ref = vis & ~passed
+            ri = idx[ref]
+            self.certified_s[ri[:, 0], ri[:, 1], ri[:, 2]] = -np.inf
+            self.refuted += int(ref.sum())
+            self.need_recent[idx[:, 0], idx[:, 1], idx[:, 2]] = vis
+            record.update(expected_visible=int(vis.sum()), refuted=int(ref.sum()))
+        if view_mask:
+            # 7e: the pixels whose rays meet V (plan 6.2 1'; a voxel's centre alone leaves most of them out, Codex
+            # 7e plan round 6 P2-2) -- each pixel's ray against V's parts as the grid holds them (snapped out to
+            # whole voxels), exactly (Codex 7e-2a round 1 P2-5)
+            mask = self.view_mask(camera, rot, trans)
+            dep = np.asarray(depth_m, dtype=float)
+            good = mask & np.isfinite(dep) & (dep > 0)
+            record.update(view_px=int(mask.sum()), view_valid_px=int(good.sum()))
         self.frames.append(record)
         return record
 
-    def contained(self, box: Box, now_s: float, region: tuple | None = None) -> bool:
+    def view_mask(self, camera: DepthCamera, rot, trans) -> np.ndarray:
+        """(height, width): the pixels whose rays (from the optical centre, forward) meet a part of V."""
+        rot, trans = np.asarray(rot, dtype=float), np.asarray(trans, dtype=float)
+        origin = -rot.T @ trans
+        u, w = np.meshgrid(np.arange(camera.width), np.arange(camera.height))
+        d = np.stack([(u - camera.cx) / camera.fx, (w - camera.cy) / camera.fy, np.ones(u.shape)], axis=-1) @ rot
+        mask = np.zeros(u.shape, dtype=bool)
+        v, lo = self.volume.voxel_m, self.volume.lo
+        for b in self.volume.boxes:
+            b0 = lo + np.floor((np.subtract(b.center, b.half) - lo) / v + 1e-9) * v
+            b1 = lo + np.ceil((np.add(b.center, b.half) - lo) / v - 1e-9) * v
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t1, t2 = (b0 - origin) / d, (b1 - origin) / d
+            inside_slab = (origin >= b0) & (origin <= b1)
+            tmin = np.where(d == 0.0, np.where(inside_slab, -np.inf, np.inf), np.minimum(t1, t2)).max(axis=-1)
+            tmax = np.where(d == 0.0, np.where(inside_slab, np.inf, -np.inf), np.maximum(t1, t2)).min(axis=-1)
+            mask |= (tmax >= tmin) & (tmax > 0.0)
+        return mask
+
+    def contained(self, box: Box, now_s: float, region: tuple | None = None, recent_age_s: float | None = None) -> bool:
         """Every voxel the box overlaps (inside region, an x/y AABB in I) is in V
-        and certified within the lifetime; False once an obstacle was seen."""
+        and certified within the lifetime; False once an obstacle was seen. With ``recent_age_s`` (7e) a voxel the
+        newest frame expected to see needs a certification that recent."""
         if self.obstacle:
             return False
         if region is not None and not self._box_meets_region(box, region):
@@ -255,7 +361,11 @@ class ClearanceMemory:
         if not len(idx):
             return True
         in_v = self.volume.in_v[idx[:, 0], idx[:, 1], idx[:, 2]]
-        fresh = now_s - self.certified_s[idx[:, 0], idx[:, 1], idx[:, 2]] <= self.lifetime_s
+        age = now_s - self.certified_s[idx[:, 0], idx[:, 1], idx[:, 2]]
+        fresh = age <= self.lifetime_s
+        if recent_age_s is not None:
+            need = self.need_recent[idx[:, 0], idx[:, 1], idx[:, 2]]
+            fresh &= ~need | (age <= recent_age_s)
         return bool((in_v & fresh).all())
 
     @staticmethod
@@ -288,4 +398,4 @@ class ClearanceMemory:
                     and zlo >= v.lo[2] and zhi <= top[2])
 
 
-__all__ = ["Box", "ClearanceMemory", "InsertionVolume", "overlapping_voxels"]
+__all__ = ["Box", "ClearanceMemory", "InsertionVolume", "overlapping_voxels", "ray_blocked"]
