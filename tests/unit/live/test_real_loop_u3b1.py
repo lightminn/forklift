@@ -247,13 +247,18 @@ def test_a_zero_frame_that_never_went_out_does_not_count_as_a_stop():
     r.submit()
     run_until(r, lambda rec: r.core.ms.phase == "insert" and r.loop._insert_moving, 3000)  # noqa: SLF001
     r.loop.run_deadline_ns = r.now + int(100 * 1e9)
-    r.layer.worker.held = True
-    r.transport.eagain = {"DRIVE"}  # no byte of any DRIVE goes out
+    # one tick of a layer overdue (a wait, not its end): this tick's frame is a zero one, and no byte of it goes out
+    t = r.loop._t(r.now)  # noqa: SLF001
+    r.layer._missed_expected = (t, t, r.layer._scan_id)  # noqa: SLF001
+    r.layer._watch_cache = None  # noqa: SLF001
+    r.transport.eagain = {"DRIVE"}
     r.tick(1)
+    assert r.loop._zero_judged  # noqa: SLF001 -- a zero frame was judged this tick (the case under test)
     assert r.loop._insert_moving  # noqa: SLF001 -- nothing went out: the motion was never stopped
     r.transport.eagain = set()
-    r.layer.worker.held = False
-    r.layer.worker.step()
+    r.layer._missed_expected = None  # noqa: SLF001
+    r.layer._overdue_since = None  # noqa: SLF001
+    r.layer._watch_cache = None  # noqa: SLF001
     since = len(r.transport.sent)
     r.tick(20)
     assert any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
