@@ -22,7 +22,10 @@ FLOWS = {
     (ARBITER, "verdict"): ("call", "admit", "ledger"),
     (ARBITER, "rec['reason']"): ("direct", None, [COMMANDS]),
     ("src/forklift_core/mission/commands.py", "context.submit_refusal"): (
-        "direct", None, [("src/forklift_core/mission/cargo.py", frozenset({"submit_refusal"}))]),
+        "direct", None, [("src/forklift_core/mission/cargo.py", frozenset({"submit_refusal"})),
+                         # U3b-1/U3b-2: the operating run's own judgement of each submit (Codex U3b-2 round 1 P3-2)
+                         ("src/forklift_core/live/real_loop.py",
+                          frozenset({"_operating_submit_refusal", "_operating_submit_refusal_of"}))]),
     ("src/forklift_core/mission/commands.py", "refused"): (
         "call", "check_submit", [("src/forklift_core/mission/targets.py", frozenset({"check_submit"}))]),
     # B-P2c: the start relocalization's pick and retry refusals ((False, reason) returns, see ``returns``)
@@ -37,6 +40,12 @@ FLOWS = {
     # 5c-2 (design 6, 5): the relocalization attempt's refusals
     ("src/forklift_core/live/real_loop.py", "self._attempt_request(kind, msg, now_ns)"): (
         "direct", None, [("src/forklift_core/live/real_loop.py", frozenset({"_attempt_request"}))]),
+    # U3b-2 (operating unlock plan 2.6): the operating run's D5 confirmation without a depth source
+    ("src/forklift_core/live/real_loop.py", "why"): [
+        ("call", "_d5_refusal", [("src/forklift_core/live/real_loop.py", frozenset({"_d5_refusal"}))]),
+        ("call", "_operating_submit_refusal_of",
+         [("src/forklift_core/live/real_loop.py", frozenset({"_operating_submit_refusal_of"}))]),
+        ("call", "placement_refusal", [("src/forklift_core/live/real_case_a.py", frozenset({"placement_refusal"}))])],
     ("src/forklift_core/live/real_loop.py", "done[1]"): (
         "direct", None, [("src/forklift_core/mission/core.py", frozenset({"field_recovery_done"}))]),
     (MOCK, "verdict"): ("call", "admit", "ledger"),
