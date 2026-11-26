@@ -225,11 +225,13 @@ def test_one_call_delivers_one_generation(frames, monkeypatch):
         i += 1
     real = src.feed.judge
     switch_at = frames[i + 2][0]
+    switched: set = set()
 
     def judge(data, recv):
         scan, why = real(data, recv)
         if scan is not None and recv >= switch_at:
-            scan = dataclasses.replace(scan, producer_gen=(scan.producer_gen or 0) + 1000)  # a new producer
+            scan = dataclasses.replace(scan, producer_gen=(scan.producer_gen or 0) + 1)  # a new producer
+            switched.add(scan.producer_gen)
         return scan, why
 
     monkeypatch.setattr(src.feed, "judge", judge)
@@ -245,8 +247,51 @@ def test_one_call_delivers_one_generation(frames, monkeypatch):
         src.offer_for(layer)
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     offers = [e for e in slam.log[told:] if e[0] == "offer"]
+    ids = [decode_frame(data)[0]["scan_id"] for _r, data in burst]
     assert src.counts["before_generation_dropped"] == 2 and len(out) == 2
-    assert gens and all(g[1] >= 1000 for g in gens) and all(e[1][1] >= 1000 for e in offers)
+    assert [e[2][2] for e in offers] == ids[2:]  # exactly the newer generation's two scans
+    assert gens and all(g[1] in switched for g in gens) and all(e[1][1] in switched for e in offers)
+
+
+def test_a_newer_generation_the_layer_cannot_take_still_drops_the_older(frames, monkeypatch):
+    """Codex U2a round 3 P3: the newer generation's scan has no layer scan (no bound): nothing of the older goes."""
+    from forklift_core.sensors import lidar_cfg
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    real, real_layer = src.feed.judge, lidar_cfg.to_layer_scan
+    switch_at = frames[i + 2][0]
+    switched: set = set()
+
+    def judge(data, recv):
+        scan, why = real(data, recv)
+        if scan is not None and recv >= switch_at:
+            scan = dataclasses.replace(scan, producer_gen=(scan.producer_gen or 0) + 1)
+            switched.add(scan.producer_gen)
+        return scan, why
+
+    def to_layer(scan, *a, **kw):
+        return (None, "no_bound") if scan.producer_gen in switched else real_layer(scan, *a, **kw)
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    monkeypatch.setattr(lidar_cfg, "to_layer_scan", to_layer)
+    burst = frames[i:i + 4]
+    stamps = iter(r for r, _ in burst)
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, burst[-1][0]))
+    for _recv, data in burst:
+        tx.send(data)
+    told = len(slam.log)
+    out = src.scans(burst[-1][0])
+    assert out == [] and src.counts["before_generation_dropped"] == 2
+    assert [e for e in slam.log[told:] if e[0] == "offer"] == []
 
 
 def test_a_socket_error_ends_the_run():
@@ -470,10 +515,31 @@ def _measured_imu(tmp_path, monkeypatch, *, level_measured):
     watch["imu"]["provenance"]["measured"] = level_measured
     wp = tmp_path / "watch.yaml"
     wp.write_text(yaml.safe_dump(watch))
-    prep = _prep(tmp_path, SimpleNamespace(cfg=SimpleNamespace(gap_max_s=0.05)))
+    from forklift_core.safety.real_watch import load_imu_config
+
+    prep = _prep(tmp_path, SimpleNamespace(cfg=load_imu_config(wp)))
     prep.paths = rr.RunPaths(s10a=REPO / "config/real/s10a.yaml", hil=False, watch=wp)
     prep.hashes = {"watch": rr._sha(wp), "imu": rr._sha(prep.paths.imu_config)}  # noqa: SLF001 -- as prep hashed them
     return prep
+
+
+def test_a_running_watch_other_than_the_judged_one_does_not_qualify(tmp_path, monkeypatch):
+    """Codex U2a round 3 P2: the watch built from another read (A -> B -> A) is not the judged one."""
+    import dataclasses as dc
+
+    from forklift_core.live import real_run as rr
+
+    prep = _measured_imu(tmp_path, monkeypatch, level_measured=True)
+    prep.watches.imu = SimpleNamespace(cfg=dc.replace(prep.watches.imu.cfg, gap_max_s=0.09))
+    started = []
+    device = SimpleNamespace(start=lambda cb, on_lost=None: started.append(cb), stop=lambda: None,
+                             profile_info=lambda: {"actual": {"accel_hz": 200}})
+    _tx, rx = pair()
+    src = rr.make_real_sources(prep, SimpleNamespace(state=None), SimpleNamespace(), scan_sock=rx,
+                               slam_socket=_bridge(tmp_path), imu_device=device)
+    assert src.imu is None and src.imu_qualified is False and started == []
+    for fn in src.closers:
+        fn()
 
 
 def test_an_imu_judged_on_other_bytes_than_prep_hashed_is_not_started(tmp_path, monkeypatch):

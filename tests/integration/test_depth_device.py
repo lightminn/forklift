@@ -342,3 +342,33 @@ def test_the_motion_module_alone_reports_the_removal_to_on_lost():
     src.start(lambda *a: None)  # started again without on_lost
     rs.context.cb(Info(True))
     assert lost == ["device_removed"]
+
+
+def test_the_removal_notice_stays_while_the_depth_stream_has_not_stopped():
+    """Codex U2a round 3 P3: the motion module stopped but the depth stream's stop failed -- the shared removal notice
+    is not cleared under a live stream."""
+    class StuckStereo(Stereo):
+        def stop(self):
+            self.events.append(("stop",))
+            raise RuntimeError("busy")
+
+    class MotionOnly(Motion):
+        def open(self, profiles):
+            self.events.append(("open", len(profiles)))
+
+    stereo = StuckStereo([Profile("stream.depth")])
+    motion = MotionOnly([Profile("stream.gyro", "format.motion_xyz32f", fps=200),
+                         Profile("stream.accel", "format.motion_xyz32f", fps=200)])
+    rs = fake_rs(stereo, motion)
+    src = dd.RealSenseDepthSource(depth=load_depth_config(), motion=True, rs=rs)
+    lost = []
+    src.start(on_sample=lambda *a: None, on_depth=lambda *a: None, on_lost=lost.append)
+    with pytest.raises(RuntimeError):
+        src.stop()
+
+    class Info:
+        def was_removed(self, dev):
+            return dev is rs.dev
+
+    rs.context.cb(Info())
+    assert lost == ["device_removed"]

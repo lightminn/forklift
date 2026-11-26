@@ -169,8 +169,13 @@ class RealSenseSource:
             removed = info.was_removed(self.dev)
         except Exception:  # noqa: BLE001 -- never raised into the SDK's thread
             return
-        if removed and self._on_lost is not None:
-            self._on_lost("device_removed")
+        fn = self._on_lost  # read once: a stop clearing it meanwhile never turns the call into None()
+        if removed and fn is not None:
+            fn("device_removed")
+
+    def _others_streaming(self) -> bool:
+        """Another stream of this device still to stop (the depth source's): the removal notice stays."""
+        return False
 
     def stop(self) -> None:
         """Stop and close whatever may have been reached -- including a call interrupted inside it, whose effect is
@@ -192,7 +197,8 @@ class RealSenseSource:
                 errors.append(f"close ({self.open_state}): {e}")
         if errors:
             raise RuntimeError("; ".join(errors))
-        self._on_lost = None  # stopped: a later removal notice reports to no one (Codex U2a round 2 P3)
+        if not self._others_streaming():
+            self._on_lost = None  # stopped: a later removal notice reports to no one (Codex U2a round 2 P3)
 
 
 class StreamStats:

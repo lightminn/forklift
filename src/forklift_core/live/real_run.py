@@ -602,22 +602,30 @@ def _run_closers(closers) -> None:
             pass
 
 
-def _watch_level_measured(path, want_sha) -> bool:
-    """The watch's level reference (``safety_watch.yaml`` ``imu`` provenance) measured: C7's third condition, judged on
-    the bytes prep hashed (``want_sha``; other bytes or none: not measured)."""
+def _watch_imu_on_hashed_bytes(path, want_sha, watch_cfg):
+    """The IMU watch's gap limit when C7's watch side holds on the bytes prep hashed (``want_sha``), else None: the
+    level reference (``safety_watch.yaml`` ``imu`` provenance) measured, and the running watch's config (``watch_cfg``,
+    built by ``build_watches`` from its own read) equal to the one these bytes give -- the watch that runs is the
+    watch that was judged (Codex U2a round 3 P2)."""
     import yaml
 
     from forklift_core.live.real_preconditions import _provenances  # noqa: PLC2701 -- the one walker
+    from forklift_core.safety.real_watch import imu_config_from
 
     try:
         raw = Path(path).read_bytes()
         if want_sha is None or hashlib.sha256(raw).hexdigest() != want_sha:
-            return False
+            return None
         data = yaml.safe_load(raw.decode("utf-8"))
-    except (OSError, ValueError, yaml.YAMLError):
-        return False
+        judged = imu_config_from(data)
+    except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError):
+        return None
     level = [prov for key, prov in _provenances(data if isinstance(data, dict) else {}) if key == "imu"]
-    return bool(level) and all(isinstance(prov, dict) and prov.get("measured") is True for prov in level)
+    if not (level and all(isinstance(prov, dict) and prov.get("measured") is True for prov in level)):
+        return None
+    if watch_cfg is None or judged != watch_cfg:
+        return None
+    return float(judged.gap_max_s)
 
 
 def _real_imu(prep, device, closers, start_real_imu) -> tuple:
@@ -635,10 +643,10 @@ def _real_imu(prep, device, closers, start_real_imu) -> tuple:
     if want is None or hashlib.sha256(raw).hexdigest() != want:
         return False, None  # the IMU config judged only on the bytes prep hashed (Codex U2a round 2 P2-2)
     cfg = imu_source_config_from(yaml.safe_load(raw.decode("utf-8")))
-    watch = prep.watches.imu
-    gap = None if watch is None else float(watch.cfg.gap_max_s)
-    if (not cfg.measured or cfg.delay_bound_s is None or gap is None
-            or not _watch_level_measured(prep.paths.watch, hashes.get("watch"))):
+    if not cfg.measured or cfg.delay_bound_s is None or prep.watches.imu is None:
+        return False, None
+    gap = _watch_imu_on_hashed_bytes(prep.paths.watch, hashes.get("watch"), prep.watches.imu.cfg)
+    if gap is None:
         return False, None
     stopped = {"done": False}
 
