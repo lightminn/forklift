@@ -427,7 +427,7 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
     1. **판정 무주입, 유효한 시험 사이트**: 조립이 거부되고 사유는 `precondition:unlock_incomplete` 하나다. 이것이 잠금까지 도달했다는 증거다. 장치에 쓴 바이트 전체 0 — 프레임 없는 재동기화 바이트(`POISON`)까지 `_os_write` 의 성공 바이트를 모두 센다(3 회차 P2-5).
     2. **저장소 기본 설정으로 실행 CLI 를 서브프로세스로**(P3): 필수 인자를 모두 채우고 등록부에 없는 사이트 기록을 준다 → `precondition:site_bundle:no_row`, 장치는 열리지 않음(장치 경로에 남은 바이트 0). CLI 가 실제 `prepare_run` 을 탔다는 증거다. U3e-2 머지 표의 '저장소 기본값으로 어느 관문에서 거부되는지'는 저장소 설정 그대로 `gather`+`operating_preconditions` 를 돌린 사유 목록으로 따로 만든다.
     3. **정상**(Codex P2-3): 세션 DISARM 교환 뒤 `OFF`·정지 → lease·echo → 재위치 확인(요청 뒤 이번 epoch 의 `processed`·새 층 설치·`confirmed` 까지) → 팔레트 등록 → `d5_pocket`·`imu` 우회 → 팔레트 확인(`pallet_id`·`targets_revision`·`register_serial`·`still_serial`) → 제출 → ARM → 비영 DRIVE(모두 ≤ 0.06 m/s) → 승강 → `lifted` 확인 요청에 `operator_answer(confirm)` → `s10_lifted` 기록, 정지 DRIVE 수락, 미션 DISARM 과 같은 boot·seq 의 DISARMED STATE → 그 뒤 실행 종료의 별도 DISARM 확인.
-    4. **출발 전 거부**: 팔레트 확인 없이 제출 → 정확한 거부 사유, 세션 전체 ARM·DRIVE 바이트 0. 주입 감싸기가 `unlock_incomplete` 외 사유 하나(예: C1 `dirty_image`)를 남기면 조립 거부·바이트 0.
+    4. **출발 전 거부**: 팔레트 확인 없이 제출 → 정확한 거부 사유, 세션 전체 ARM·DRIVE 바이트 0. 유효한 시험 기록에서 `fault_detection` 한 항목만 비우면 `unlock_incomplete` 를 뺀 판정이 정확히 `precondition:C3:fault_detection:unset` 하나이고, 조립 거부·장치 바이트 0(4 회차 P3: `-dirty` 는 C1 과 C2 커밋 대조가 함께 걸려 사유가 하나가 아님).
     5. **주행 중 스캔 단절**: 이동 DRIVE 수락을 먼저 확인한다. 그 뒤 스캔 송신을 끊고, 마지막 스캔의 유효기한·`scan_boundary`·정지 결정을 기록한다. 종료 신호를 보내기 **전에** `scan_generation_changed`(또는 수신 공백) 래치와 그 래치의 DISARM 확인이 있어야 한다(2 회차 P2-4). 검사 구간은 **호스트의 고장 래치 시각부터** 종료까지다: 그 사이 ARM·DRIVE(바퀴 0 인 승강·조향 DRIVE 포함)의 첫 쓰기·이어쓰기 성공 바이트 0(3 회차 P2-5).
     6. **도구가 직접 맡는 것**(실제 pty 경로): 실행 중(쓰기가 오가는 동안) SIGTERM → DISARM 확인 **전에는** 다른 프로세스가 장치 잠금을 얻지 못하고, 확인 **뒤에는** 얻는다(조기 fd 해제 검출). 실행 중 pty 상실 → `link_lost`, 재연결 없음, 권한 폐기.
   - **CLI 거부**(서브프로세스): pty 장치, HIL·재생 전용 인자(`--hil-model-arg` 포함), 이미 있는 출력 폴더, `--console-lan` 없는 비루프백 `--host`.
@@ -472,6 +472,7 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
 | Codex 3 회차 P2-4 | 동적 포트·LAN 에서 Origin 기준 불명 | 바인드 뒤 포트, `--console-origin-host`, `Host` 미사용 |
 | Codex 3 회차 P2-5 | 바이트 0 범위(재동기화 바이트·래치 시각) | `_os_write` 전체·래치 시각부터 |
 | Codex 3 회차 P3 | `--imu-serial` 예시·게이트 범위 | 예시에서 빼고 인자 오류, 게이트 줄 보강 |
+| Codex 4 회차 | 새 P1/P2 없음. P3: 태블릿 인자 예시·IMU 표시 시점, 경우 4 의 단일 사유 예시 | 시운전 계획 S10 줄 보강, 경우 4 를 `fault_detection` 비우기로 |
 | 총괄 동의(2026-11-27) | 위 세 변경(C13·콘솔 범위·IMU 범위 밖) | S10 선행 조건(시운전 계획 5 절)에 C13 한 줄·`--console-lan` 한 줄, 콘솔은 '우회 중: IMU' 표시(U3c 그대로) |
 
 ## 7. 남는 위험과 실기 전용 항목
