@@ -393,6 +393,32 @@ lift:
 - **U2** — 실 원천과 한 보정(2.2·2.3·2.8). 스캔 어댑터, IMU 래퍼, SLAM REAL, 층 설정 배선, 브리지 `hello` 대조, 등록부 대조를 담는다.
 - **U3** — 실차 준비 판정과 콘솔(2.5·2.6·2.7·2.9), 끝까지 도는 시험, 운영 빌드의 `FW_VEHICLE_HEADER` 덮어쓰기 금지(2.4, 펌웨어 교차 시험 fixture 포함), 펌웨어 제품 문자열에 태그와 무관한 커밋 약어를 늘 넣기(`git describe --long` 이나 별도 칸 — 태그 이름이 긴 형식처럼 보여도 커밋을 오인하지 않게, Codex U1 4 회차), `unlock_incomplete` 제거.
 - 각 PR 은 Codex 를 수렴할 때까지 돌리고, HIL 4 CPU 와 전체 pytest 를 최종 트리에서 한 번 돌린다. U3 머지가 송신을 여는 유일한 지점이다. 그래도 설정이 비어 있으면 거부된다.
+- **U3e 나눔**(총괄 동의 2026-11-27): U3e-1 = 실행 도구의 REAL 조립·실행 경로 + 끝까지 도는 시험(잠금 유지, 시험에서만 판정 주입), U3e-2 = `unlock_incomplete` 제거만(머지 전 총괄이 사용자에게 알림, 머지 요청에 '저장소 기본값으로 어느 관문에서 거부되는지' 표).
+
+### 6.1 U3e-1 설계
+
+- **실행 경로**(`tools/real_autonomy.py --run --client real --device D --scan-socket P --slam-bridge S [--imu-device X] --site-record R --bundle-root B --duration-s T --out-dir O`). U1 의 선행 조건만 보는 경로를 조립·실행까지 잇는다. 순서는 HIL(10.3)을 따른다.
+  1. 인자 판정(장치·소켓·출력 폴더·시간, 열기 전).
+  2. `prepare_run`(REAL 경로: 사이트 기록·등록부·번들 뿌리, `hil=False`).
+  3. `RealTtyTransport.open(D)`(잠금·pty 거부·USB 제품 문자열·일련번호). 실패 사유는 U1 과 같다.
+  4. REAL 호스트, 첫 `STATE`.
+  5. 스캔 소켓을 묶고 `make_real_sources`(스캔·SLAM 브리지·IMU).
+  6. `assemble_run` — 여기서 `assembly_refusal` 이 선행 조건을 판정한다(U3e-2 전까지 `unlock_incomplete` 로 늘 거부). 판정 목록을 실행이 쥔다.
+  7. `transport.grant(판정 목록, 첫 STATE 의 boot)` — 빈 목록일 때만 권한. 실패면 조립했어도 실행하지 않고 끝낸다(`grant_refused`).
+  8. 콘솔, 세션, 실행. 9. 닫기: 정상·신호면 DISARM 확인까지 fd·잠금을 쥔다. 장치 상실이면 권한만 버린다(2.1). 정리는 원천 closers·작업자·기록 순.
+- **판정 주입**: `assemble_run(..., judge=None)` 와 실행 경로 내부 함수에 같은 인자를 둔다. 기본은 `real_preconditions`(저장소 기본). 시험만 주입한다. 실행 CLI 에는 인자가 없다.
+- **끝까지 도는 시험**(`tests/integration/test_real_run_operating.py`): 실행 경로의 내부 함수를 직접 부른다(CLI 는 pty 를 거부).
+  - 장치: `mcu_model --hil-plant 0`(출력 열림, 비상정지 배선 — `ESTOP_UNWIRED` 없음)을 시험이 연 pty 에 붙이고, `RealTtyTransport.open(pty, allow_pty=True, product_reader=, serial_reader=)` 로 운영 제품 문자열(`forklift-mcu normal OPEN <약어> rec=… waiver=…`)과 일련번호를 준다.
+  - 원천: 스캔은 시험 스레드가 SDK 어댑터 프레임(`SdkStream`, 합성 표식 없음, 빈 방·먼 벽)을 실시간으로 소켓에 보낸다. SLAM 은 `tests/integration/fake_slam_bridge.FakeBridge`. IMU 장치는 없음(미검증 → `imu` 우회로 연다).
+  - 사이트: `test_real_site.make_site` 와 같은 방식으로 임시 사이트 기록·등록부·번들을 만든다.
+  - 판정: 정상 경로는 `judge=lambda *a: []`. 저장소 기본 경우는 주입 없음.
+  - 경우:
+    1. **저장소 기본(주입 없음)**: 조립이 `precondition:unlock_incomplete` 로 거부, 장치에 쓴 ARM·비영 DRIVE 바이트 0(모형의 accept-log 로도 확인).
+    2. **정상**: 재위치 확인 → 팔레트 등록 → `d5_pocket`·`imu` 우회 → 팔레트 확인(여섯 표시는 요청 필드로) → 제출 → ARM → 비영 DRIVE(모두 ≤ 0.06 m/s) → S10 정지(승강) → DISARM 확인.
+    3. **출발 전 거부**: 팔레트 확인 없이 제출 → ARM·비영 DRIVE 0. 판정 목록이 비어 있지 않으면(예: 주입한 `precondition:C1:board:dirty_image` 한 줄) 조립이 거부되고 ARM·비영 DRIVE 0. `-dirty`·`estop_unwired` 판정 자체는 단위 시험(`test_real_preconditions` C1, `test_estop_waiver`)이 본다.
+    4. **주행 중 고장**: 비영 DRIVE 뒤 스캔 송신을 끊으면 그 뒤 새 ARM·비영 DRIVE 0, DISARM 확인.
+  - 나머지 5 절 항목은 단위 시험 위치를 머지 요청 표로 잇는다(배치·시작점·S자·남은 시간 U3b-1, 세대·경계 U3a, D5 계약 U3b-2·U3c, IMU U3a·U2a, 브리지 `laser_checked`, CLI 의 pty·재생·합성 거부).
+- **게이트**: 미션 코어·장애물 층·Isaac 러너를 건드리지 않으면 재생 게이트는 필요 없다(실행 도구·`real_run` 조립·시험만).
 
 ## 7. 남는 위험과 실기 전용 항목
 
