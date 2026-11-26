@@ -54,6 +54,8 @@ class RealSenseSource:
         self.fallback = None
         # None (not tried), "calling" (the call may have taken effect: interrupted inside it), "done", "failed"
         self.open_state = self.start_state = None
+        self._on_lost = None
+        self._lost_ctx = None
 
     def _options(self) -> dict:
         """Each option as supported / set / read back on the sensor that streams."""
@@ -122,9 +124,19 @@ class RealSenseSource:
                         pass
         return out or None
 
-    def start(self, on_sample) -> None:
+    def start(self, on_sample, on_lost=None) -> None:
+        """``on_lost`` (optional): the device's removal reported as ``on_lost("device_removed")`` through the SDK's
+        devices-changed notice (the operating run's IMU source, unlock U2a; a backend without the notice leaves the
+        source's own receive gap)."""
         rs = self.rs
         meta = rs.frame_metadata_value.frame_timestamp
+        if on_lost is not None:
+            self._on_lost = on_lost
+            try:
+                self._lost_ctx = rs.context()  # kept: the notice lives as long as its context
+                self._lost_ctx.set_devices_changed_callback(self._devices_changed)
+            except (RuntimeError, AttributeError):
+                pass
 
         def cb(f):
             d = f.as_motion_frame().get_motion_data()
@@ -151,6 +163,14 @@ class RealSenseSource:
             self.start_state = "failed"
             raise
         self.start_state = "done"
+
+    def _devices_changed(self, info) -> None:
+        try:
+            removed = info.was_removed(self.dev)
+        except Exception:  # noqa: BLE001 -- never raised into the SDK's thread
+            return
+        if removed and self._on_lost is not None:
+            self._on_lost("device_removed")
 
     def stop(self) -> None:
         """Stop and close whatever may have been reached -- including a call interrupted inside it, whose effect is

@@ -306,3 +306,33 @@ def test_a_stop_that_failed_once_after_a_partial_start_is_tried_again_when_the_c
     assert src.depth_start_state == "calling" and src.depth_open_state == "done"
     src.stop()
     assert stereo.events[-2:] == [("stop",), ("close",)] and src.depth_open_state is None
+
+
+def test_the_motion_module_alone_reports_the_removal_to_on_lost():
+    """Unlock U2a (Codex round 1 P2-4): the operating run's IMU device (``imu_record.RealSenseSource``) takes the
+    removal callback without the depth stream."""
+    import imu_record
+
+    class MotionOnly(Motion):
+        def open(self, profiles):
+            self.events.append(("open", len(profiles)))
+
+    motion = MotionOnly([Profile("stream.gyro", "format.motion_xyz32f", fps=200),
+                         Profile("stream.accel", "format.motion_xyz32f", fps=200)])
+    rs = fake_rs(Stereo([]), motion)
+    src = imu_record.RealSenseSource(gyro_hz=200, accel_hz=200, global_time=False, rs=rs)
+    lost = []
+    src.start(lambda *a: None, on_lost=lost.append)
+    assert ("open", 2) in motion.events and ("start",) in motion.events
+
+    class Info:
+        def __init__(self, removed):
+            self.removed = removed
+
+        def was_removed(self, dev):
+            return self.removed and dev is rs.dev
+
+    rs.context.cb(Info(False))
+    assert lost == []
+    rs.context.cb(Info(True))
+    assert lost == ["device_removed"]
