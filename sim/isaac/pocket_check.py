@@ -27,7 +27,7 @@ so its calls and records are unchanged. With ``real``:
 * ``last_new_s`` (the ``depth_stale`` clock) moves only for a usable
   observation: enough valid pixels among those whose rays meet V;
 * every voxel of V in view is classed by the known surfaces' geometry (the
-  estimated pallet and the truck's own boxes) grown and shrunk by the error
+  estimated pallet and the truck's own boxes) shrunk by the error
   budget: surely visible, surely hidden, or uncertain (treated as visible).
   A visible one the frame does not pass is refuted (its certification
   cleared); a voxel the newest frame expected to see needs a certification
@@ -228,7 +228,7 @@ class PocketCheck:
 
     def _visibility(self, rear_at_stamp, lift_m: float, speed_mps: float, yaw_rate_rps: float):
         """Per evaluated voxel: expected visible (surely visible or uncertain) -- not surely hidden by the known
-        surfaces grown/shrunk by the error budget (plan 6.2)."""
+        surfaces shrunk by the error budget (plan 6.2; result 6.5)."""
         from forklift_core.perception.insertion_clearance import ray_blocked
 
         r = self.real
@@ -247,26 +247,19 @@ class PocketCheck:
         dist = np.linalg.norm(centres - origin, axis=1)
         motion = self.pose_uncertainty_m(speed_mps, yaw_rate_rps)
         hidden = np.zeros(len(centres), dtype=bool)
-        # Each box changed by its own share and the ray's sideways shift at the box: the mount's translation, its
-        # angle times the distance to the box's far side (at most the voxel's), and the frame's motion -- the
-        # pallet's whole; the truck's own boxes ride with the camera, so the motion moves their shadow against the
-        # voxels, at the box the motion scaled by box/voxel distance.
-        # The pallet's boxes are SHRUNK: hidden only when surely hidden, its uncertain band counts as visible (an
-        # object stuck to the pallet in the band must refute, Codex plan round 5 P1-1). The truck's own boxes are
-        # GROWN: their uncertain band counts as hidden (7e-2a). The shadow ahead of a blade tip is 1-3 cm and the
-        # motion alone (0.15 m/s x 0.07 s) exceeds the blade's half thickness, so the band would refute it every
-        # frame and stop the truck at the stand-off whatever the pallet error; and the own boxes move with the
-        # truck, so a world voxel in their shadow now was in view from elsewhere before (a static world, D0) --
-        # keeping that earlier certification within the lifetime is the hidden rule, and a voxel never certified
-        # stays uncertified.
+        # Every known surface's box is SHRUNK by its band (plan 6.2 2: hidden only when surely hidden, the uncertain
+        # band counts as visible -- for the truck's own boxes too, Codex 7e-2a round 1 P1-2): its own share, the
+        # ray's sideways shift at the box (the mount's translation, its angle times the distance to the box's far
+        # side, at most the voxel's), the frame's motion, and half a pixel's diagonal at that distance (the depth is
+        # read on the rounded pixel's ray, not the voxel centre's -- Codex 7e-2a round 1 P2-3)
         own = self.own_boxes(self.to_insertion(*rear_at_stamp), lift_m)
-        for boxes, share, world in ((self.solids, r.pallet_rel_error_m, True), (own, r.own_error_m, False)):
+        pixel = math.sqrt(0.5) / min(cam.fx, cam.fy)
+        for boxes, share in ((self.solids, r.pallet_rel_error_m), (own, r.own_error_m)):
             for b in boxes:
                 far = float(np.linalg.norm(np.asarray(b.center) - origin) + np.linalg.norm(b.half))
                 d_box = np.minimum(dist, far)
-                move = motion if world else motion * d_box / np.maximum(dist, 1e-9)
-                band = share + r.cam_trans_error_m + d_box * r.cam_rot_error_rad + move
-                hidden |= ray_blocked(origin, centres, [b], -band if world else band)
+                band = share + r.cam_trans_error_m + d_box * (r.cam_rot_error_rad + pixel) + motion
+                hidden |= ray_blocked(origin, centres, [b], -band)
         out = np.zeros(len(all_centres), dtype=bool)
         out[inside] = ~hidden
         return out

@@ -271,15 +271,7 @@ class ClearanceMemory:
         free_grid[idx[free, 0], idx[free, 1], idx[free, 2]] = True
         k = int(np.ceil(pose_uncertainty_m / self.volume.voxel_m - 1e-9))
         if k > 0:
-            if visible is None:
-                free_grid = _box_filter(free_grid, k, np.min)
-            else:
-                # 7e: a neighbour surely hidden by a known surface is no ray that could have passed beside the
-                # voxel (its ray met the surface), so it does not erode; the voxel itself must still be passed
-                hid = inside & ~np.asarray(visible, dtype=bool)
-                spare = free_grid.copy()
-                spare[idx[hid, 0], idx[hid, 1], idx[hid, 2]] = True
-                free_grid = _box_filter(spare, k, np.min) & free_grid
+            free_grid = _box_filter(free_grid, k, np.min)
         certified = free_grid & self.volume.in_v
         self.certified_s[certified] = float(stamp_s)
         seen = inside & in_v
@@ -294,39 +286,49 @@ class ClearanceMemory:
         record = {"time_s": float(stamp_s), "voxels": int(in_v.sum()), "free": int(certified.sum()),
                   "in_view": int((inside & in_v).sum()), "obstacle": obstacle_count, "erosion_voxels": k}
         if visible is not None:
-            # 7e: a voxel of V in view the frame was expected to see and whose own ray did not pass it (no depth, a
-            # return in front, or one at the voxel's depth) is refuted -- its certification cleared at once (an
-            # earlier one, however recent, says nothing now), never revived by a later frame that cannot see it.
-            # One its ray passed but the motion erosion left uncertified answers neither way (7e-2a: a voxel at the
-            # image's edge has neighbours out of view every frame). The newest frame's expectation is kept per
-            # voxel: expected visible with an answer (certified or refuted) -- out of view, hidden or unanswered
-            # voxels fall back to the lifetime
+            # 7e: a voxel of V in view the frame was expected to see but did not certify (no depth, a return in
+            # front or at its depth, or passed but eroded by the motion) is refuted -- its certification cleared at
+            # once (an earlier one, however recent, says nothing now), never revived by a later frame that cannot
+            # see it. The newest frame's expectation is kept per voxel: a voxel it expected to see needs a recent
+            # certification; one out of its view or surely hidden falls back to the lifetime (plan 6.2 3-4; Codex
+            # 7e-2a round 1 P1-1: an eroded voxel neither escapes refutation nor the recent requirement)
             vis = np.asarray(visible, dtype=bool) & inside & in_v
             passed = certified[idx[:, 0], idx[:, 1], idx[:, 2]]
-            ref = vis & ~free
+            ref = vis & ~passed
             ri = idx[ref]
             self.certified_s[ri[:, 0], ri[:, 1], ri[:, 2]] = -np.inf
             self.refuted += int(ref.sum())
-            self.need_recent[idx[:, 0], idx[:, 1], idx[:, 2]] = vis & (passed | ref)
+            self.need_recent[idx[:, 0], idx[:, 1], idx[:, 2]] = vis
             record.update(expected_visible=int(vis.sum()), refuted=int(ref.sum()))
         if view_mask:
-            # 7e: the pixels whose rays meet V -- each voxel of V in view marks the pixel square its footprint covers
-            # at its depth (a voxel's centre alone leaves most of them out, Codex 7e plan round 6 P2-2)
-            mask = np.zeros((camera.height, camera.width), dtype=bool)
-            vv = inside & in_v
-            r = np.ceil(0.5 * camera.fx * self.volume.voxel_m / np.where(vv, z, 1.0)).astype(np.int64)
-            for rad in np.unique(r[vv]):
-                sel = vv & (r == rad)
-                for du in range(-int(rad), int(rad) + 1):
-                    for dw in range(-int(rad), int(rad) + 1):
-                        uu = np.clip(ui[sel] + du, 0, camera.width - 1)
-                        ww = np.clip(wi[sel] + dw, 0, camera.height - 1)
-                        mask[ww, uu] = True
+            # 7e: the pixels whose rays meet V (plan 6.2 1'; a voxel's centre alone leaves most of them out, Codex
+            # 7e plan round 6 P2-2) -- each pixel's ray against V's parts as the grid holds them (snapped out to
+            # whole voxels), exactly (Codex 7e-2a round 1 P2-5)
+            mask = self.view_mask(camera, rot, trans)
             dep = np.asarray(depth_m, dtype=float)
             good = mask & np.isfinite(dep) & (dep > 0)
             record.update(view_px=int(mask.sum()), view_valid_px=int(good.sum()))
         self.frames.append(record)
         return record
+
+    def view_mask(self, camera: DepthCamera, rot, trans) -> np.ndarray:
+        """(height, width): the pixels whose rays (from the optical centre, forward) meet a part of V."""
+        rot, trans = np.asarray(rot, dtype=float), np.asarray(trans, dtype=float)
+        origin = -rot.T @ trans
+        u, w = np.meshgrid(np.arange(camera.width), np.arange(camera.height))
+        d = np.stack([(u - camera.cx) / camera.fx, (w - camera.cy) / camera.fy, np.ones(u.shape)], axis=-1) @ rot
+        mask = np.zeros(u.shape, dtype=bool)
+        v, lo = self.volume.voxel_m, self.volume.lo
+        for b in self.volume.boxes:
+            b0 = lo + np.floor((np.subtract(b.center, b.half) - lo) / v + 1e-9) * v
+            b1 = lo + np.ceil((np.add(b.center, b.half) - lo) / v - 1e-9) * v
+            with np.errstate(divide="ignore", invalid="ignore"):
+                t1, t2 = (b0 - origin) / d, (b1 - origin) / d
+            inside_slab = (origin >= b0) & (origin <= b1)
+            tmin = np.where(d == 0.0, np.where(inside_slab, -np.inf, np.inf), np.minimum(t1, t2)).max(axis=-1)
+            tmax = np.where(d == 0.0, np.where(inside_slab, np.inf, -np.inf), np.maximum(t1, t2)).min(axis=-1)
+            mask |= (tmax >= tmin) & (tmax > 0.0)
+        return mask
 
     def contained(self, box: Box, now_s: float, region: tuple | None = None, recent_age_s: float | None = None) -> bool:
         """Every voxel the box overlaps (inside region, an x/y AABB in I) is in V

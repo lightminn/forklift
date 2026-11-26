@@ -147,6 +147,18 @@ def test_the_usable_test_counts_the_pixels_whose_rays_meet_the_volume():
     depth[:, : CAM.width // 2] = np.nan
     rec = check.add_frame(0.2, depth, rear, frame_key=(1, (), 2))
     assert rec["usable"] == (rec["view_valid_px"] >= 500 and rec["view_valid_px"] >= 0.5 * rec["view_px"])
+    # the exact ray mask is the denominator: one pixel under half of it is not usable, half of it is (Codex 7e-2a
+    # round 1 P2-5: a square approximation passed a 48.8 % frame)
+    mask = check.memory.view_mask(CAM, *check.optical_from_insertion(rear))
+    assert int(mask.sum()) == rec["view_px"]
+    need = int(np.ceil(0.5 * mask.sum()))
+    ww, uu = np.nonzero(mask)
+    for n, usable in ((need - 1, False), (need, True)):
+        depth = np.full((CAM.height, CAM.width), np.nan)
+        depth[ww[:n], uu[:n]] = 5.0
+        depth[~mask] = 5.0  # pixels off the mask do not count
+        rec = check.add_frame(0.3 + n * 1e-6, depth, rear, frame_key=(1, (), 10 + n))
+        assert rec["view_valid_px"] == n and rec["usable"] is usable
 
 
 # --- refutation ------------------------------------------------------------------------------------------------------
@@ -229,32 +241,47 @@ def test_ray_blocked_rules():
     assert not ray_blocked((1.0, 0.0, 0.0), pts, [box], 0.0).any()
 
 
-def test_the_pallet_band_counts_visible_and_the_trucks_own_band_hidden():
+def test_every_known_surface_band_counts_visible():
+    # plan 6.2 2: hidden only when surely hidden -- the pallet's band and the truck's own band alike turn hidden into
+    # visible, never the reverse (Codex 7e-2a round 1 P1-2: a grown own box swallowed a real refutation)
     rear = (FACE - 0.5 - TIP, 0.0, 0.0)
     exact, banded = make(), make(real=options(pallet_rel_error_m=0.02, own_error_m=0.02))
     v0 = exact._visibility(rear, 0.0, 0.0, 0.0)
     v1 = banded._visibility(rear, 0.0, 0.0, 0.0)
     idx, centres = exact.memory.volume.centres(evaluated=True)
+    assert not (v0 & ~v1).any()
     behind_pallet = centres[:, 0] > FACE + 0.02
-    # behind the pallet's face: the band can only turn hidden into visible
-    assert (v1 & ~v0 & behind_pallet).any() and not (v0 & ~v1 & behind_pallet).any()
-    # around the own blades (ahead of their tips, at their height): the band only turns visible into hidden
     near_tip = (centres[:, 0] < FACE) & (centres[:, 2] < 0.06)
-    assert (v0 & ~v1 & near_tip).any()
+    assert (v1 & ~v0 & behind_pallet).any() and (v1 & ~v0 & near_tip).any()
 
 
-def test_a_shadowed_voxel_keeps_its_lifetime_and_a_visible_one_needs_a_recent_certification():
+def test_a_voxel_beside_the_trucks_own_box_edge_is_not_surely_hidden():
+    # Codex 7e-2a round 1 P1-2: the nominal ray misses the own box's side, a 2 mm grown box would catch it
+    box = Box((0.5, 0.0, 0.0), (0.01, 0.02, 0.01))
+    voxel = np.array([[1.0, 0.043, 0.0]])  # crosses x = 0.49 at y = 0.0211
+    assert not ray_blocked((0.0, 0.0, 0.0), voxel, [box], 0.0)[0]
+    assert ray_blocked((0.0, 0.0, 0.0), voxel, [box], 0.002)[0]
+    assert not ray_blocked((0.0, 0.0, 0.0), voxel, [box], -0.002)[0]  # the band shrinks: visible, refutable
+
+
+def test_a_passed_but_eroded_voxel_is_refuted_and_needs_a_recent_certification():
+    # Codex 7e-2a round 1 P1-1: an eroded voxel escapes neither refutation nor the recent requirement
     check = make()
-    xs = [FACE - 0.8 - TIP + 0.1 * k for k in range(6)]
+    xs = [FACE - 0.8 - TIP + 0.1 * k for k in range(4)]
     approach(check, xs)
     mem = check.memory
-    certified = np.isfinite(mem.certified_s)
-    # voxels the newest frame expected and answered need a recent certification; out of view or hidden ones not
-    assert (mem.need_recent & certified).any() and (~mem.need_recent & certified).any()
-    rear = (xs[-1], 0.0, 0.0)
-    assert check.limit(0.55, rear, 0.0, 1, 0.1, 0.0)[0] > 0
-    # 0.3 s later with no frame: depth_stale anyway; the recent window is frame_max_age - frame_lag
-    assert check.limit(0.85, rear, 0.0, 1, 0.1, 0.0)[1] == "depth_stale"
+    rear = (xs[-1] + 0.1, 0.0, 0.0)
+    rec = check.add_frame(0.5, render(check, rear), rear, speed_mps=0.3, frame_key=(1, (), 40))
+    assert rec["erosion_voxels"] >= 2
+    idx, _ = mem.volume.centres(evaluated=True)
+    vis = check._visibility(rear, 0.0, 0.3, 0.0)
+    in_v = mem.volume.in_v[idx[:, 0], idx[:, 1], idx[:, 2]]
+    seen = vis & in_v
+    cert = mem.certified_s[idx[:, 0], idx[:, 1], idx[:, 2]]
+    eroded = seen & (mem.last_code[idx[:, 0], idx[:, 1], idx[:, 2]] == 2)
+    assert eroded.any()
+    assert np.isneginf(cert[eroded]).all()
+    assert mem.need_recent[idx[seen, 0], idx[seen, 1], idx[seen, 2]].all()
 
 
 # --- the guard -------------------------------------------------------------------------------------------------------
