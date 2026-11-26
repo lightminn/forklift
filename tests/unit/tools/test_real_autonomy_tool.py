@@ -427,3 +427,28 @@ def test_the_precheck_refuses_a_fifo_the_vehicle_file_names(tmp_path, capsys, mo
                       "--vehicle", str(veh)]) == 2
     rec = json.loads(capsys.readouterr().out)
     assert "input_not_regular:chassis_model" in rec["refused"] and rec["opened"] == []
+
+
+def test_a_failed_copy_before_the_bind_leaves_no_name(tmp_path, monkeypatch):
+    """Codex U3e-1 implementation round 4 P2-1: the kept copy is made before the bind, so a copy that fails (EMFILE)
+    leaves no bound name behind and nothing in ``held``."""
+    import socket
+    from types import SimpleNamespace
+
+    def no_dup(self):
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(socket.socket, "dup", no_dup)
+    path = tmp_path / "scan.sock"
+    held = SimpleNamespace(scan_path=None, scan_ino=None, scan_keep=None)
+    with pytest.raises(OSError):
+        tool._bind_own_socket(path, held)  # noqa: SLF001
+    assert not path.exists() and held.scan_path is None and held.scan_keep is None
+
+
+def test_a_broken_vehicle_file_is_a_refusal_not_a_traceback(tmp_path):
+    """Codex U3e-1 implementation round 4 P3: a vehicle.yaml that does not parse is refused by name."""
+    veh = tmp_path / "vehicle.yaml"
+    veh.write_text("chassis_model: [unclosed\n")
+    out = tool._vehicle_files_refused(veh)  # noqa: SLF001
+    assert len(out) == 1 and out[0].startswith("input_unreadable:vehicle:")

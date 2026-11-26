@@ -258,11 +258,13 @@ def _inputs_refused(inputs: dict) -> list:
 def _vehicle_files_refused(vehicle) -> list:
     """The chassis model vehicle.yaml names and the URDF beside it -- read by the judgement too -- regular files
     (Codex U3e-1 implementation round 3 P2-2)."""
+    import yaml
+
     from forklift_core.plant.real_vehicle import chassis_model_path
 
     try:
         params = chassis_model_path(vehicle)
-    except (OSError, ValueError, TypeError, AttributeError) as err:
+    except (OSError, ValueError, TypeError, AttributeError, yaml.YAMLError) as err:
         return [f"input_unreadable:vehicle:{type(err).__name__}"]
     return _inputs_refused({"chassis_model": params, "chassis_urdf": params.parent / "forklift.urdf"})
 
@@ -295,18 +297,23 @@ def run_real(args, *, transport_factory=None) -> int:
             return 2
         end = {"t": "end", "reason": None, "opened": []}
         held = SimpleNamespace(tr=None, fd_closed=False, server=None, run=None, sources=None, scan_path=None,
-                               scan_ino=None, scan_keep=None, prep=None)
+                               scan_ino=None, scan_keep=None, prep=None, trace=None)
         code = EXIT_FAILED
         try:
             code = _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
         except Exception as err:  # noqa: BLE001 -- recorded as the end; the cleanup below still runs
             import traceback
 
-            traceback.print_exc()
+            held.trace = traceback.format_exc()  # printed after the cleanup: no stderr write while the device is held
             end["reason"] = end["reason"] or f"exception:{type(err).__name__}:{err}"
             code = EXIT_FAILED
         finally:
             ok = _real_cleanup(held, record, end)
+            if held.trace:
+                try:
+                    sys.stderr.write(held.trace)
+                except Exception:  # noqa: BLE001 -- a closed stderr changes nothing once the device is released
+                    pass
         if not ok:
             return rr.EXIT_RECORD
         return code
@@ -438,6 +445,9 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
         record.put({"t": "warning", "kind": "console_lan", "host": args.host, "origin_host": args.console_origin_host})
     print(json.dumps(started), flush=True)
     # step 10: the session and the run; from the session's first act every exit goes through the closing
+    # (impl round 4 P2-2) no stderr write before the closing -- a closed or full pipe would skip or stall it while
+    # the device is held; the trace is kept as text and printed after the device is released
+    reason = closing = None
     try:
         now = time.monotonic_ns()
         run.start_session(now)
@@ -446,13 +456,14 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     except Exception as err:  # noqa: BLE001 -- the closing below still runs while the link lives
         import traceback
 
-        traceback.print_exc()
+        held.trace = traceback.format_exc()
         reason = f"exception:{type(err).__name__}:{err}"
-    end["reason"] = reason
-    try:
-        closing = run.close(record=record)
-    except Exception as err:  # noqa: BLE001
-        closing = f"closing_exception:{type(err).__name__}:{err}"
+    finally:
+        end["reason"] = reason or end["reason"] or "exception:BaseException"
+        try:
+            closing = run.close(record=record)
+        except Exception as err:  # noqa: BLE001
+            closing = f"closing_exception:{type(err).__name__}:{err}"
     loop = run.loop
     end.update(closing=closing, closing_started_ns=loop.closing_started_ns,
                closing_confirmed_ns=loop.closing_confirmed_ns,
@@ -473,15 +484,20 @@ def _bind_own_socket(path, held):
     import socket as socket_
 
     s = socket_.socket(socket_.AF_UNIX, socket_.SOCK_DGRAM)
+    keep = None
     try:
         s.setsockopt(socket_.SOL_SOCKET, socket_.SO_RCVBUF, 1 << 20)
+        keep = s.dup()  # before the bind: nothing after it can fail before the name is owned (impl round 4 P2-1)
         s.bind(str(path))  # EADDRINUSE on any existing name
+        held.scan_path, held.scan_keep, keep = str(path), keep, None
         st = os.lstat(path)
-        held.scan_path, held.scan_ino, held.scan_keep = str(path), (st.st_dev, st.st_ino), s.dup()
+        held.scan_ino = (st.st_dev, st.st_ino)
         os.chmod(path, 0o660)
         s.setblocking(False)
         return s
     except BaseException:
+        if keep is not None:
+            keep.close()
         s.close()  # the name, if bound, is removed by the cleanup while held.scan_keep still holds it
         raise
 
