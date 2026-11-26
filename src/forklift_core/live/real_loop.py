@@ -40,6 +40,10 @@ from forklift_core.safety.truth_access import SafetySpeed
 
 TICK_S = 1 / 50
 DRIVE_LIFE_S = 0.10  # a decision's absolute life from its tick (the MCU's cap is 150 ms)
+# U3b-2 (Codex round 2 P1): the truck as the eyes left it, from the used D5 confirmation to the first ARM written --
+# odometry travel and heading, and the lift beyond the port's own still tolerance
+D5_STILL_M = 0.01
+D5_STILL_RAD = math.radians(0.5)
 SLOW_TICK_S = 0.030  # the tick's own elapsed time before its first write: over this, a wait (design 3)
 LATE_TICK_S = 0.060  # over this (or the start interval), the emergency branch
 SLOW_STARTS = 3  # this many start intervals over SLOW_TICK_S in a row: the emergency branch
@@ -253,7 +257,7 @@ class RealLoop:
                  kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None, start_rear=None,
                  rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS,
                  scan_feed=None, events=None, operating: bool = False, scan_events=None,
-                 imu_unqualified: bool = False) -> None:
+                 imu_unqualified: bool = False, d5_region=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         # the operating REAL run (unlock U3a, named by the assembly -- not inferred from the client, which the 4c rigs
         # share): its non-bypassable checks, its scan source's events judged at the tick head before any install, and
@@ -332,6 +336,9 @@ class RealLoop:
         self.state_delay_s = float(state_delay_s)
         self.v_scan_mps = (1.5 * float(max_speed_mps)) if v_scan_mps is None else float(v_scan_mps)
         self.kappa_max = float(kappa_max_inv_m)
+        # U3b-2: pose -> the D5 bypass region on the assembly's own geometry (RealHooks.bypass_region, the one source
+        # the confirmation and the mission's bypass check share); None: no D5 confirmation on this run
+        self.d5_region = d5_region
         self.pallet_size = pallet_size  # (depth, width) of the S10-A pallet (s10a.yaml): the planning grid's split
         self.odom_history: deque = deque(maxlen=256)  # (lo_s, hi_s, pose, continuous, included, speed_ok, yaw_ok)
         self._layer_asked = None  # the last (mission gen, path id, loaded) a refresh was asked for
@@ -438,6 +445,12 @@ class RealLoop:
         self.declared_epoch = None  # the session epoch carrying a declaration's mark (7b)
         self.stand_since_ns: int | None = None  # the MCU sample stand, no SLAM term (design 6, 3)
         self._moved_for = None  # the mission whose first moving DRIVE has been written whole (design 6, 6)
+        # U3b-2: (mission id, odometry pose, lift) when the D5 confirmation was used, and the mission whose first ARM
+        # has been written; between the two the truck must not move (Codex round 2 P1)
+        self._d5_base = None
+        self._d5_armed_for = None
+        self._d5_moved_for = None  # the mission a STATE showed moved within that span (latched)
+        self._register_serial = 0  # every pallet registration on this run (Codex round 2 P2-1: same pose, same rev)
         self._rear_now = None  # this tick's control rear pose (the transmit gate's start comparison)
         self.reloc_events: list = []
         self._disarms_taken = 0
@@ -568,7 +581,15 @@ class RealLoop:
                 return "mission_active", {}
             if msg["pallet_id"] not in core.targets.pallets:
                 return "unknown_pallet", {}
-            return None, {"targets_revision": register_pallet(core, msg["pallet_id"], msg["pose"])}
+            rev_ = register_pallet(core, msg["pallet_id"], msg["pose"])
+            if not self._d5_confirm_required():
+                return None, {"targets_revision": rev_}
+            # U3b-2 (Codex rounds 1-2 P2): a pallet registered again -- even at the same pose and revision, as when a
+            # pallet is swapped -- needs the eyes again, and a confirmation sent from the screen before it is stale
+            self._register_serial += 1
+            if self.operator_start is not None:
+                self.operator_start.void("registered")
+            return None, {"targets_revision": rev_, "register_serial": self._register_serial}
         if kind == "operator_start":
             if core.relocalize_generation() is not None:
                 return "relocalize_required", {}  # 5c-2 (6, 2): no start check while the place is not known
@@ -580,9 +601,20 @@ class RealLoop:
             lease = self.link.a.lease
             if self.operator_start is None or lease is None:
                 return "unsupported", {}
-            if not self.operator_start.confirm(int(msg["session_epoch"]), lease.lease_id):
+            binding = None
+            if self._d5_confirm_required():
+                why = self._d5_refusal(msg)
+                if why is not None:
+                    return why, {}
+                binding = self._d5_binding(msg)
+            if not self.operator_start.confirm(int(msg["session_epoch"]), lease.lease_id, binding):
                 return "stale_epoch", {}
-            return None, {}
+            if binding is None:
+                return None, {}
+            self._emit({"t": "operator_start", "ns": int(now_ns), "lease_id": lease.lease_id,
+                        "session_epoch": int(msg["session_epoch"]), **binding})
+            return None, {"pallet_id": binding["pallet_id"], "targets_revision": binding["targets_revision"],
+                          "register_serial": binding["register_serial"], "region": list(binding["region"])}
         if kind == "operator_answer":
             open_ = core.operator_open()
             if open_ is None:
@@ -595,8 +627,9 @@ class RealLoop:
             return None, {"received": True}
         if kind == "check_bypass":
             check = msg["check"]
-            if check in NOT_BYPASSABLE or (self.operating and check in OPERATING_NOT_BYPASSABLE):
-                return "not_bypassable", {}
+            if check in NOT_BYPASSABLE or (self.operating and check in OPERATING_NOT_BYPASSABLE) or (
+                    check == "operator_start" and self._d5_confirm_required()):
+                return "not_bypassable", {}  # U3b-2: without depth the per-pallet confirmation is not bypassable
             if check not in BYPASSABLE:
                 return "unknown_check", {}
             lease = self.link.a.lease
@@ -656,7 +689,10 @@ class RealLoop:
             "operator_request": core.operator_open(),
             "field_recovery": None if recovery is None else recovery.get("id"),
             "relocalize_generation": core.relocalize_generation(),
-            "operator_start": None if start is None else start.ok(None if a.lease is None else a.lease.lease_id),
+            "operator_start": None if start is None else self._start_shown(a),
+            # U3b-2: what the D5 confirmation bound (pallet, revision, relocalization generation, region), or None
+            "operator_start_binding": None if start is None or start.binding is None else dict(start.binding),
+            "register_serial": self._register_serial if self._d5_confirm_required() else None,
             "targets_revision": core.targets.revision,
             "last_refusal": self.last_refusal,
             "restart_required": self.session.collect_failed,  # 6a: a mission collection raised (restart the executor)
@@ -1209,6 +1245,9 @@ class RealLoop:
         step = odometry_step(self.odometry, state)
         before = self.odom_pose
         self.odom_pose = tuple(float(v) for v in step.pose)
+        # U3b-2 (Codex round 3 P2): every STATE is judged against the eyes' baseline, latched until the first ARM --
+        # a later sample of the same read never hides an earlier one past the tolerance (a broken odometry too)
+        self._d5_watch(float(state.lift_m), bool(step.continuity_broken))
         if step.integrated:
             self.odom_travel += math.hypot(self.odom_pose[0] - before[0], self.odom_pose[1] - before[1])
         if step.continuity_broken:
@@ -1664,6 +1703,12 @@ class RealLoop:
         still = self._still(now_ns)
         if not still and self.operator_start is not None:
             self.operator_start.void("moved")  # 5c-1: a check given before the truck moved does not count
+        if self.operator_start is not None and self._d5_confirm_required() and self._d5_disturbed():
+            # U3b-2 (Codex rounds 1-2 P1): the truck moved between the submit that used the D5 confirmation and the
+            # first ARM written (an ARM queued and not yet out included) -- what the eyes cleared no longer holds;
+            # the mission ends (a new check, a new submit)
+            self.operator_start.used, self._d5_base = None, None
+            core.commands.terminate("cancelled", t, "operator_start_moved")
         if core.slam is not None:
             core.slam["stop_now"] = still
             core.slam["still_since"] = None if self.still_since_ns is None else self._t(self.still_since_ns)
@@ -1859,6 +1904,87 @@ class RealLoop:
             self.delay_bound.restart_check()
             self.permit.restart_session(now_ns)
 
+    def _d5_confirm_required(self) -> bool:
+        """The operating run with no depth source (7e-2b on hold): D5 is the session's bypass, and the operator's
+        per-pallet confirmation stands in for the eyes (plan 2.6, U3b-2)."""
+        return self.operating and self.depth_source is None
+
+    def _d5_refusal(self, msg) -> str | None:
+        """Why the D5 confirmation cannot bind: the console must name the pallet and registration revision it shows
+        (the server never puts its own newest revision in their place), and they must be the current registration."""
+        from forklift_core.live import real_assembly as asm_
+
+        pid, rev, serial = msg.get("pallet_id"), msg.get("targets_revision"), msg.get("register_serial")
+        if not isinstance(pid, str) or type(rev) is not int or type(serial) is not int:
+            return "operator_start_needs_registration"
+        if rev != int(self.core.targets.revision) or serial != self._register_serial:
+            return "targets_changed"
+        if asm_.s10_submit_refusal(self.core, pid) is not None:
+            return "pallet_not_registered"
+        if self.d5_region is None:
+            return "unsupported"
+        return None
+
+    def _d5_binding(self, msg) -> dict:
+        """The binding of a confirmation ``_d5_refusal`` passed: the whole bypass region computed from that
+        registration (plan 2.6: the region the eyes must clear is the region exempted)."""
+        pid, rev = msg["pallet_id"], int(msg["targets_revision"])
+        pose = self.core.targets.pallets[pid].pose
+        region = self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))  # the check's own geometry
+        return {"pallet_id": pid, "targets_revision": rev, "register_serial": int(msg["register_serial"]),
+                "reloc_gen": self.reloc_gen, "region": [float(v) for v in region]}
+
+    def _d5_moved(self, lift, broken: bool = False) -> bool:
+        """This odometry pose and this lift against the baseline the D5 confirmation was used at."""
+        b = self._d5_base
+        x0, y0, h0 = b[1]
+        x, y, h = (float(v) for v in self.odom_pose)
+        if broken or math.hypot(x - x0, y - y0) > D5_STILL_M or abs(math.remainder(h - h0, math.tau)) > D5_STILL_RAD:
+            return True
+        return (lift is None or b[2] is None or not math.isfinite(lift)
+                or abs(lift - b[2]) > float(getattr(self.port, "lift_still_m", 0.0)))
+
+    def _d5_span(self):
+        """The mission inside the eyes' span (its confirmation used, no ARM of it written), or None."""
+        b = self._d5_base
+        mid = self.core.commands.mission_id
+        if b is None or b[0] != mid or self._d5_armed_for == mid:
+            return None
+        return mid
+
+    def _d5_watch(self, lift, broken: bool) -> None:
+        mid = self._d5_span()
+        if mid is not None and self._d5_moved(lift, broken):
+            self._d5_moved_for = mid
+
+    def _d5_disturbed(self) -> bool:
+        """The truck moved (odometry or lift, on any STATE since) after this mission used its D5 confirmation, and no
+        ARM of it has been written yet."""
+        mid = self._d5_span()
+        if mid is None:
+            return False
+        if self._d5_moved_for == mid:
+            return True
+        lift = float(self.samples[-1].state.lift_m) if self.samples else None
+        return self._d5_moved(lift)
+
+    def _start_shown(self, a) -> bool:
+        """The start check as the console shows it: given under this lease and, on a D5 confirmation, still for the
+        current registration revision and relocalization generation (Codex U3b-2 round 1 P2-3)."""
+        lease = None if a.lease is None else a.lease.lease_id
+        b = self.operator_start.binding
+        if not self._d5_confirm_required():
+            return self.operator_start.ok(lease)
+        return b is not None and self.operator_start.ok_for(
+            lease, (b.get("pallet_id"), int(self.core.targets.revision), self.reloc_gen))
+
+    def confirmed_region(self):
+        """The region the D5 confirmation used by the running mission named (the bypass check's comparison)."""
+        used = None if self.operator_start is None else self.operator_start.used
+        if used is None or used.get("mission_id") != self.core.commands.mission_id:
+            return None
+        return used.get("region")
+
     def _partial_is_zero(self) -> bool:
         """The frame left half written is a zero or a hold (some of its bytes are out)."""
         partial = getattr(self.transport, "partial_frame", None)
@@ -1882,11 +2008,38 @@ class RealLoop:
             return "case_a:start_unknown"
         if self._off_start(rear):
             return "case_a:not_at_start"
-        sub = next((c for c in queued if getattr(c, "kind", None) == "submit"), None)
-        pallet = None if sub is None else self.core.targets.pallets.get(sub.pallet_id)
+        # on the D5 run every submit of the batch is judged on its own and the first refusal refuses the batch (Codex
+        # U3b-2 round 1 P2-2: a later submit must never ride an earlier one's judgement); elsewhere the batch's first
+        # submit as before (round 2 P2-2: the commands accept only the first submit of a batch)
+        subs = [c for c in queued if getattr(c, "kind", None) == "submit"]
+        for sub in (subs if self._d5_confirm_required() else subs[:1]):
+            why = self._operating_submit_refusal_of(sub)
+            if why is not None:
+                return why
+        return None
+
+    def _operating_submit_refusal_of(self, sub) -> str | None:
+        pallet = self.core.targets.pallets.get(getattr(sub, "pallet_id", None))
         pose = None if pallet is None or pallet.pose is None else (
             float(pallet.pose.x_m), float(pallet.pose.y_m), float(pallet.pose.yaw_rad))
-        return rca.placement_refusal(pose, self.check_pallet_pose)
+        why = rca.placement_refusal(pose, self.check_pallet_pose)
+        if why is not None or not self._d5_confirm_required():
+            return why
+        # U3b-2 (plan 2.6): no depth source -- the D5 bypass is the only way, and the operator's confirmation must be
+        # for this very submit's pallet and registration revision, this lease and relocalization generation
+        if "d5_pocket" not in self._tick_bypass:
+            return "d5_pocket:no_depth_source"
+        lease = self.link.a.lease
+        if self.operator_start is None or not self.operator_start.ok_for(
+                None if lease is None else lease.lease_id, self._d5_key(sub)):
+            return "operator_start:unconfirmed"
+        return None
+
+    def _d5_key(self, sub) -> tuple:
+        """(pallet id, registration revision, relocalization generation) of a submit; a revision that is not an int
+        (missing, a bool) keys as None and never matches a confirmation (Codex U3b-2 round 1 P2-1)."""
+        rev = getattr(sub, "targets_revision", None)
+        return (getattr(sub, "pallet_id", None), rev if type(rev) is int else None, self.reloc_gen)
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         if self.session.collect_failed is not None:
@@ -1986,9 +2139,17 @@ class RealLoop:
         if cmds.status == "accepted" and self.frozen is None:
             if self.operator_start is not None and not self._bypassed("operator_start"):
                 lease = self.link.a.lease
-                if not self.operator_start.take(None if lease is None else lease.lease_id):
+                m_ = cmds.mission
+                key = None
+                if self._d5_confirm_required():
+                    key = ("", None, None) if m_ is None else self._d5_key(m_)  # never None: always keyed here
+                if not self.operator_start.take(None if lease is None else lease.lease_id, key, cmds.mission_id):
                     cmds.terminate("cancelled", t, "operator_start_unconfirmed")  # its check was used or voided
                     return
+                if self.operator_start.used is not None:
+                    self._emit({"t": "operator_start_used", "ns": int(now_ns), **self.operator_start.used})
+                    lift_ = float(self.samples[-1].state.lift_m) if self.samples else None
+                    self._d5_base = (cmds.mission_id, tuple(float(v) for v in self.odom_pose), lift_)
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None and self._planning_ready():
@@ -2709,6 +2870,8 @@ class RealLoop:
                     return "run_stopping", "alarm"
                 if frame.kind == "ARM" and (self._rear_now is None or self._off_start(self._rear_now)):
                     return "not_at_start", "alarm"
+                if frame.kind == "ARM" and self._d5_confirm_required() and self._d5_disturbed():
+                    return "operator_start_moved", "alarm"  # U3b-2: at every ARM written, until the first one
             if frame.kind == "ARM" and why is not None and not ra.latches(why):
                 return f"arm_wait:{why}", "alarm"  # no new ARM while a wait holds: latch, a rearm (design 3)
             if frame.kind == "ARM":
@@ -2880,6 +3043,8 @@ class RealLoop:
             if kind == "DRIVE":
                 self._written_now.append(int(seq) & 0xFFFF)  # the record's DRIVEs (a DISARM is not one)
             permit.written(kind, seq, written_ns)
+            if kind == "ARM":
+                self._d5_armed_for = self.core.commands.mission_id  # U3b-2: the eyes' span ends at the ARM written
             if self.closing and kind == "DISARM" and self.host.state is not None:
                 self.closing_disarms.append((self.host.state.boot_id, int(seq) & 0xFFFF, int(written_ns)))
             self._emit({"t": "frame_written", "kind": kind, "seq": int(seq) & 0xFFFF, "written_ns": int(written_ns),

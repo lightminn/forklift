@@ -85,6 +85,26 @@ class BypassPocketCheck:
     def summary(self):
         return {"bypass": True, "region": list(self.region_control())}
 
+def bypass_region(pose, depth_m: float, width_m: float) -> list:
+    """The D5 bypass region of a registered pallet pose (x, y, yaw): [x, y, length, width, yaw] -- the pallet grown by
+    the bypass bands, about its own axis (case A: the approach axis is the pallet's, plan 2.4)."""
+    x, y, yaw = (float(v) for v in pose)
+    return [x, y, float(depth_m) + 2 * BYPASS_BAND_ALONG_M, float(width_m) + 2 * BYPASS_BAND_ACROSS_M, yaw]
+
+
+REGION_YAW_TOL_RAD = math.radians(5.0)
+
+
+def bypass_region_matches(applied, confirmed) -> bool:
+    """The region applied (``region_control()``: centre, length, width, yaw) is the confirmed one: the same centre
+    and size (they come from the same registration) and an axis within the case-A tolerance."""
+    a, c = [float(v) for v in applied], [float(v) for v in confirmed]
+    if len(a) != 5 or len(c) != 5:
+        return False
+    same = all(abs(a[i] - c[i]) <= 1e-6 for i in range(4))
+    return same and abs(math.remainder(a[4] - c[4], math.tau)) <= REGION_YAW_TOL_RAD
+
+
 # Optional hooks those paths try and the real truck leaves absent (the core falls back to its default).
 ADOPTION_OPTIONAL_ABSENT = frozenset({"exit_prefix", "far_recognition_mission_end"})
 
@@ -100,7 +120,9 @@ class RealHooks:
     executor's own start, ``record(name, obj)`` the run folder."""
 
     def __init__(self, *, lift_m, odom_base, ready, started, record, geometry, occupancy=None,
-                 pocket_frame=None, pocket_check=None, operator=None, tick=None, layer=None) -> None:
+                 pocket_frame=None, pocket_check=None, operator=None, tick=None, layer=None,
+                 confirmed_region=None) -> None:
+        self._confirmed_region = confirmed_region  # () -> the region this mission's D5 confirmation named (U3b-2)
         self._lift_m, self._odom_base, self._ready, self._started = lift_m, odom_base, ready, started
         self._record, self._occupancy, self._geometry = record, occupancy, geometry
         # PR 7 supplies the depth frame and the check (until then: no frame -- 4a's wait ends the mission); the
@@ -234,13 +256,29 @@ class RealHooks:
                 raise RealRequireFailed(f"pocket_check_refused:{getattr(check, 'invalid_reason', 'no_check')}")
             self._layer.exempt = check.region_control()
 
+    def bypass_region(self, pose) -> list:
+        """The bypass region of a pallet pose on this assembly's geometry -- the one source the D5 confirmation's
+        region and the check built for the mission both use (U3b-2)."""
+        g = self._geometry
+        return bypass_region(pose, float(g.pallet_depth_m), float(g.pallet_width_m))
+
     def build_bypass_pocket_check(self, axis_yaw, pickup):
         """5d (design 7.2): the bypass check for the submitted pickup -- built only, no side effect (the core
-        registers it, then sets the exemption)."""
-        g = self._geometry
-        return BypassPocketCheck((float(pickup.x_m), float(pickup.y_m)),
-                                 float(g.pallet_depth_m) + 2 * BYPASS_BAND_ALONG_M,
-                                 float(g.pallet_width_m) + 2 * BYPASS_BAND_ACROSS_M, float(axis_yaw))
+        registers it, then sets the exemption). On the operating run (``confirmed_region``) the region applied must be
+        the one the operator confirmed on screen for this mission, from the same registration (plan 2.6, U3b-2)."""
+        x, y, length, width, _ = self.bypass_region((pickup.x_m, pickup.y_m, axis_yaw))
+        check = BypassPocketCheck((x, y), length, width, float(axis_yaw))
+        if self._confirmed_region is not None:
+            confirmed = self._confirmed_region()
+            if confirmed is None:
+                raise RealRequireFailed("d5_confirmation_missing")
+            if not bypass_region_matches(check.region_control(), confirmed):
+                raise RealRequireFailed("d5_region_mismatch")
+            # the region exempted is the confirmed rectangle itself, not one turned within the axis tolerance
+            # (Codex U3b-2 round 1 P3-1: a turned rectangle frees cells outside what the eyes cleared)
+            cx, cy, clen, cwid, cyaw = (float(v) for v in confirmed)
+            check = BypassPocketCheck((cx, cy), clen, cwid, cyaw)
+        return check
 
     def operator_check(self, request):
         return None if self._operator is None else self._operator(request)
@@ -447,25 +485,38 @@ class OperatorStart:
         self.session_epoch = int(session_epoch)
         self._given: tuple | None = None
         self.voided: str | None = None
+        # the operating run's D5 confirmation (plan 2.6, unlock U3b-2): what the operator saw and confirmed on screen
+        # -- the pallet, its registration revision, the relocalization generation and the whole bypass region --
+        # and, once a submit used it, that binding with its mission id (the record and the region's check)
+        self.binding: dict | None = None
+        self.used: dict | None = None
 
-    def confirm(self, session_epoch: int, lease_id: str) -> bool:
+    def confirm(self, session_epoch: int, lease_id: str, binding: dict | None = None) -> bool:
         if int(session_epoch) != self.session_epoch:
             return False
         self._given, self.voided = (int(session_epoch), str(lease_id)), None
+        self.binding = None if binding is None else dict(binding)
         return True
 
     def void(self, reason: str) -> None:
         if self._given is not None:
-            self._given, self.voided = None, reason
+            self._given, self.voided, self.binding = None, reason, None
 
     def ok(self, lease_id: str | None) -> bool:
         return self._given is not None and lease_id is not None and self._given[1] == str(lease_id)
 
-    def take(self, lease_id: str | None) -> bool:
-        """A submit uses it up (one submit only)."""
-        if not self.ok(lease_id):
+    def ok_for(self, lease_id: str | None, key: tuple) -> bool:
+        """Given by this lease for exactly (pallet id, registration revision, relocalization generation)."""
+        b = self.binding
+        return self.ok(lease_id) and b is not None and (
+            b.get("pallet_id"), b.get("targets_revision"), b.get("reloc_gen")) == tuple(key)
+
+    def take(self, lease_id: str | None, key: tuple | None = None, mission_id=None) -> bool:
+        """A submit uses it up (one submit only); with ``key`` only a confirmation of that registration does."""
+        if not self.ok(lease_id) or (key is not None and not self.ok_for(lease_id, key)):
             return False
-        self._given, self.voided = None, "used"
+        self.used = None if self.binding is None else {**self.binding, "mission_id": mission_id}
+        self._given, self.voided, self.binding = None, "used", None
         return True
 
 
