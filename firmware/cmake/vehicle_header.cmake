@@ -33,8 +33,19 @@ function(fw_vehicle_header target out_dir)
         endif()
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${yaml})
-    add_custom_target(${target}_vehicle_header COMMAND ${gen} BYPRODUCTS ${header}
+    if(committed)
+        # at the build: the identity first, and the inputs checked against the commit it names (Codex U3d r3 P2-2)
+        set(gen_build ${CMAKE_COMMAND} -DREPO=${repo} -DPYTHON=${FW_PYTHON} -DYAML=${yaml} -DOUT=${header}
+            -DCOMMITTED=1 -DBUILD_INFO=${FW_VEHICLE_BUILD_INFO}
+            -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/gen_vehicle_header.cmake)
+    else()
+        set(gen_build ${gen})
+    endif()
+    add_custom_target(${target}_vehicle_header COMMAND ${gen_build} BYPRODUCTS ${header}
                       COMMENT "Generating ${header} from ${yaml}" VERBATIM)
+    if(committed)
+        add_dependencies(${target}_vehicle_header build_info)
+    endif()
     add_dependencies(${target} ${target}_vehicle_header)
     target_include_directories(${target} PRIVATE ${out_dir})
     # the include names this header by its absolute path: a stray vehicle_config.h beside a source file or

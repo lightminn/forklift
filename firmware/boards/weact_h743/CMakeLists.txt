@@ -238,6 +238,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/vehicle_header.cmake)
 # the operating build's inputs must be the commit's (operating plan 2026-11-26 2.4, C12)
 if(FW_MOTOR_OUTPUT AND FW_BUILD STREQUAL "normal")
     set(FW_VEHICLE_COMMITTED 1)
+    set(FW_VEHICLE_BUILD_INFO ${BUILD_INFO_H})
 endif()
 fw_vehicle_header(fw ${CMAKE_CURRENT_BINARY_DIR}/generated)
 

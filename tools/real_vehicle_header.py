@@ -84,7 +84,15 @@ def main(argv=None) -> int:
         import yaml
 
         data = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
-        print(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(args.config)), data["chassis_model"])))
+        raw = os.path.join(os.path.dirname(os.path.abspath(args.config)), data["chassis_model"])
+        # every component as written, before ".." folds any of them away (Codex U3d round 3 P2-1: alias/../x)
+        prefix = os.sep
+        for part in Path(raw).parts[1:]:
+            prefix = os.path.join(prefix, part)
+            if part not in (".", "..") and os.path.islink(prefix):
+                print(f"real_vehicle_header: {prefix} is a symbolic link", file=sys.stderr)
+                return 3
+        print(os.path.normpath(raw))
         return 0
     if args.out is None:
         ap.error("--out is required")

@@ -616,10 +616,16 @@ def test_the_operating_build_refuses_an_uncommitted_vehicle_config(record_repo, 
         cfg = _configure_in(repo, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
         assert cfg.returncode != 0
         assert "differs from its committed version" in _flat(cfg.stderr), cfg.stderr
-        # a locked or commissioning build may read the working copy (a bench edit), as before
+        # a locked or commissioning build may read the working copy (a bench edit), as before -- at its build
+        yaml_path.write_text(original.replace("rad_s: 8.0", "rad_s: 7.5"))
         cfg = _configure_in(repo, header, tmp_path / "c", *OPEN, "-DFW_IPROPI_PROTECTION_RECORD=records/ipropi.md",
                             header_given=False)
         assert cfg.returncode == 0, cfg.stderr
+        res = subprocess.run(["cmake", "--build", str(tmp_path / "c"), "--target", "fw_vehicle_header"],
+                             capture_output=True, text=True)
+        assert res.returncode == 0, res.stdout + res.stderr
+        made = (tmp_path / "c" / "boards" / "weact_h743" / "generated" / "vehicle_config.h").read_text()
+        assert "7.5" in made and made != header.read_text()
     finally:
         yaml_path.write_text(original)
     build = tmp_path / "d"
@@ -656,6 +662,46 @@ def test_the_operating_build_refuses_a_chassis_model_through_a_symbolic_link(rec
     cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
     assert cfg.returncode != 0
     assert "goes through a symbolic link" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_a_symbolic_link_folded_away_by_dot_dot_is_still_refused(record_repo, tmp_path):
+    """Codex U3d round 3 P2-1: "alias/../dls08_measured" normalises to a link-free path; the components as written
+    are checked first."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    (r2 / "sim" / "models" / "alias").symlink_to("dls08_measured")
+    cfg_path = r2 / "config" / "real" / "vehicle.yaml"
+    cfg_path.write_text(cfg_path.read_text().replace("sim/models/dls08_measured/", "sim/models/alias/../dls08_measured/"))
+    _git(r2, "add", "-A")
+    _git(r2, "commit", "-q", "-m", "alias dot-dot")
+    cfg = _configure_in(r2, header, tmp_path / "b", *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode != 0
+    assert "goes through a symbolic link" in _flat(cfg.stderr), cfg.stderr
+
+
+def test_the_header_check_and_the_identity_name_one_commit(record_repo, tmp_path):
+    """Codex U3d round 3 P2-2: HEAD moving after the identity was made: the header's check refuses."""
+    repo, header = record_repo
+    r2 = _copy_repo(repo, tmp_path / "r2")
+    build = tmp_path / "b"
+    cfg = _configure_in(r2, header, build, *WAIVED, "-DFW_ESTOP_WAIVER_RECORD=records/waiver.md")
+    assert cfg.returncode == 0, cfg.stdout + cfg.stderr
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "build_info"], capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    info = build / "boards" / "weact_h743" / "generated" / "build_info.h"
+    (r2 / "moved.txt").write_text("b\n")
+    _git(r2, "add", "moved.txt")
+    _git(r2, "commit", "-q", "-m", "b")  # HEAD moves between the two targets
+    gen = subprocess.run(
+        ["cmake", f"-DREPO={r2}", f"-DPYTHON={sys.executable}", f"-DYAML={r2 / 'config/real/vehicle.yaml'}",
+         f"-DOUT={tmp_path / 'v.h'}", "-DCOMMITTED=1", f"-DBUILD_INFO={info}",
+         "-P", str(r2 / "firmware" / "cmake" / "gen_vehicle_header.cmake")], capture_output=True, text=True)
+    assert gen.returncode != 0
+    assert "is not the commit the build identity names" in _flat(gen.stderr), gen.stderr
+    # the whole build makes the identity again first, so it passes on the new HEAD
+    res = subprocess.run(["cmake", "--build", str(build), "--target", "fw_vehicle_header"],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
 
 
 def test_a_stray_vehicle_header_beside_the_board_source_is_not_compiled(record_repo, tmp_path):
