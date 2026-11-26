@@ -48,11 +48,26 @@ def test_the_bench_image_is_told_by_its_exact_suffix():
     assert not bl.bench_image(None)
 
 
-def test_kth_turns_unwraps_and_flags_a_step_too_far():
+def test_kth_turns_unwraps_and_flags_what_it_cannot_tell():
     step = 0.3
-    vals = [math.remainder(i * step, math.tau) for i in range(200)]  # 200 x 0.3 rad = 60 rad
+    vals = [(math.remainder(i * step, math.tau), i * 10_000) for i in range(200)]  # 0.3 rad per 10 ms
     turns, amb = bl.kth_turns(vals)
-    assert turns == pytest.approx(199 * step / math.tau) and not amb
-    turns, amb = bl.kth_turns([0.0, -2.8])
-    assert amb
-    assert bl.kth_turns([0.0, float("nan"), 0.1]) == (pytest.approx(0.1 / math.tau), False)
+    assert turns == pytest.approx(199 * step / math.tau) and amb is None
+    assert bl.kth_turns([(0.0, 0), (-2.8, 10_000)])[1] == "kth_step"
+    assert bl.kth_turns([(0.0, 0), (0.1, 30_000)])[1] == "kth_gap"  # a STATE missed
+    # an invalid reading is a missing one: the next valid STATE is then too far in MCU time to trust
+    assert bl.kth_turns([(0.0, 0), (float("nan"), 10_000), (0.1, 20_000)])[1] == "kth_gap"
+
+
+def test_a_skipped_state_at_speed_never_folds_the_count_the_other_way():
+    """Codex fw-bench round 1 P2-2: +0.35 turn per STATE with one STATE missing reads as -0.30 turn; the gap, the jerk
+    or the reverse check stops it whichever one sees it."""
+    a = 0.35 * math.tau
+    vals = [(math.remainder(i * a, math.tau), i * 10_000) for i in range(6)]
+    vals.append((math.remainder(7 * a, math.tau), 70_000))  # STATE 6 missed
+    turns, amb = bl.kth_turns(vals)
+    assert amb is not None
+    # the same fold with no gap in the MCU time (a turn faster than half a turn per STATE): the jerk/reverse checks
+    fast = [(math.remainder(i * a, math.tau), i * 10_000) for i in range(6)]
+    fast.append((math.remainder(5 * a + 0.7 * math.tau, math.tau), 60_000))
+    assert bl.kth_turns(fast)[1] in ("kth_jerk", "kth_reverse")

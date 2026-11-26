@@ -98,8 +98,10 @@ static size_t payload_len(uint8_t type)
         return CLEAR_LEN;
     case LINK_COMMISSION:
         return COMMISSION_LEN;
+#if defined(FW_CORE_BENCH) /* the other images keep 0x06 an unknown type (Codex fw-bench round 1 P3-2) */
     case LINK_BENCH_SET:
         return BENCH_SET_LEN;
+#endif
     case LINK_STATE:
         return STATE_LEN;
     default:

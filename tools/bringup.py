@@ -697,8 +697,9 @@ class CommissionSession(Session):
         self.bench: bl.BenchAsk | None = None
         self.bench_taken: dict | None = None
         self.stop_kth_turns: float | None = None
-        self._kth_prev: float | None = None
-        self._kth_rad = 0.0
+        self._kth = bl.KthTracker()
+        self._on_us: int | None = None  # the MCU time the axis's applied duty went non-zero, and the value then
+        self._on_value: float | None = None
         self.sent: list[tuple[int, int]] = []  # (seq, duty_e4) of every COMMISSION queued by the tool
         self.stop_reason: str | None = None
         self.stopping_waited_ms: float | None = None
@@ -763,21 +764,63 @@ class CommissionSession(Session):
         return self.bench is not None and name in self.bench.names
 
     def _bench_set(self) -> None:
-        """diag/fw-bench: send this run's BENCH_SET and read the board's acceptance (its seq in STATE.last_rx_seq) and
-        its BENCH_OVERRIDES bit; anything else refuses the run before the ARM."""
+        """diag/fw-bench: send this run's BENCH_SET and read the board's acceptance from one STATE of the same
+        connection and boot received after the frame was written whole: its seq in last_rx_seq, no reject, DISARMED
+        and the BENCH_OVERRIDES bit as sent (Codex fw-bench round 1 P2-1). A seq equal to the board's last one before
+        the send is not told apart from a stale STATE, so a second identical BENCH_SET is sent and read instead."""
         b = self.b
         ask = self.bench or bl.BenchAsk(self.axis, (), None, None)
-        blocked = b.host.bench_set(ask.bypass, ask.duty_max_e4(), ask.time_ms(), time.monotonic_ns())
-        if blocked is not None:
-            raise Refused(f"bench: BENCH_SET not queued ({blocked.reason})")
-        seq = b.host.last_queued_seq
-        if not b.run_until(lambda: b.state is not None and b.state.last_rx_seq == seq, 1.0):
-            why = None if b.state is None else b.state.reject_reason.name
-            raise Refused(f"bench: the board did not take BENCH_SET seq {seq} (reject {why})")
-        if not b.run_until(lambda: bool(b.state.fault_flags & FaultFlag.BENCH_OVERRIDES) == ask.overrides(), 0.5):
-            raise Refused("bench: the board's BENCH_OVERRIDES bit disagrees with the BENCH_SET it took")
+        conn0, dis0 = b.conn, b.host.disconnects
+        st0 = b.state
+        boot0, last0, n0 = st0.boot_id, st0.last_rx_seq, len(b.samples)
+        seq = None
+        for _ in range(2):
+            blocked = b.host.bench_set(ask.bypass, ask.duty_max_e4(), ask.time_ms(), time.monotonic_ns())
+            if blocked is not None:
+                raise Refused(f"bench: BENCH_SET not queued ({blocked.reason})")
+            seq = b.host.last_queued_seq
+            if seq != last0:
+                break
+        want = ask.overrides()
+
+        def written():
+            return next((w for w in b.writes if w.kind == "BENCH_SET" and w.seq == seq and w.conn == conn0), None)
+
+        if not b.run_until(lambda: written() is not None, 1.0):
+            raise Refused(f"bench: BENCH_SET seq {seq} was not written")
+        done = written().done_ns
+        verdict: dict = {}
+
+        def judged() -> bool:
+            for i in range(n0, len(b.samples)):
+                s = b.samples[i]
+                if s.host_ns <= done or b.sample_conn[i] != conn0:
+                    continue
+                st = s.state
+                if st.boot_id != boot0:
+                    verdict["why"] = "the board rebooted"
+                    return True
+                if st.last_rx_seq == seq:
+                    if st.reject_reason != RejectReason.NONE or st.mode != Mode.DISARMED:
+                        verdict["why"] = f"reject {st.reject_reason.name}, mode {st.mode.name}"
+                    elif bool(st.fault_flags & FaultFlag.BENCH_OVERRIDES) != want:
+                        verdict["why"] = "its BENCH_OVERRIDES bit disagrees with what it took"
+                    else:
+                        verdict["ok"] = True
+                    return True
+                if st.reject_reason != RejectReason.NONE and st.reject_reason != st0.reject_reason:
+                    verdict["why"] = f"reject {st.reject_reason.name}"
+                    return True
+            return False
+
+        if not b.run_until(judged, 1.0):
+            verdict["why"] = "no STATE took it"
+        if b.conn != conn0 or b.host.disconnects != dis0:
+            raise Refused("bench: the link reconnected around the BENCH_SET: run it again")
+        if not verdict.get("ok"):
+            raise Refused(f"bench: the board did not take BENCH_SET seq {seq} ({verdict.get('why')})")
         self.bench_taken = {"seq": seq, "bypass": list(ask.names), "duty_max_e4": list(ask.duty_max_e4()),
-                            "time_ms": list(ask.time_ms()), "overrides": ask.overrides()}
+                            "time_ms": list(ask.time_ms()), "overrides": want}
         b.emit({"t": "bench_set", **self.bench_taken})
 
     def send(self, left, right, end_ns=None):  # noqa: ARG002 -- a commissioning build takes no DRIVE
@@ -865,15 +908,24 @@ class CommissionSession(Session):
         if self.sensorless:
             return None  # no KTH: the motor is off the mechanism (--motor-detached), the hold ends by time
         v = state.steering_rad if self.axis == 2 else state.lift_m
-        if self.stop_kth_turns is not None and self.axis == 2 and v == v:
-            if self._kth_prev is not None:
-                d = math.remainder(v - self._kth_prev, math.tau)
-                if abs(d) > bl.BENCH_KTH_STEP_MAX_RAD:
-                    return "kth_step_ambiguous"  # too far in one STATE to tell the way round: stop, never guess
-                self._kth_rad += d
-            self._kth_prev = v
-            if abs(self._kth_rad) >= self.stop_kth_turns * math.tau:
+        range_off = self._range_off()
+        if self.axis == 2 and (self.stop_kth_turns is not None or range_off):
+            why = self._kth.feed(v, state.mcu_time_us)
+            if why is not None:
+                return why  # the count can no longer be trusted: stop, never guess
+            if self.stop_kth_turns is not None and abs(self._kth.turns) >= self.stop_kth_turns:
                 return "kth_turns"
+        if range_off and v == v:
+            # Codex fw-bench round 1 P2-3: the range was what caught a KTH stuck low; now the sensor must move
+            if state.duty_e4[self.axis] == 0:
+                self._on_us = self._on_value = None
+            elif self._on_us is None:
+                self._on_us, self._on_value = state.mcu_time_us, (self._kth.total if self.axis == 2 else v)
+            elif state.mcu_time_us - self._on_us > bl.BENCH_NO_MOTION_S * 1e6:
+                moved = abs(self._kth.total - self._on_value) >= bl.BENCH_NO_MOTION_RAD if self.axis == 2 else (
+                    abs(v - self._on_value) >= bl.BENCH_NO_MOTION_LIFT_M)
+                if not moved:
+                    return "kth_no_motion"
         if self.window is None:
             return None  # diag/fw-bench: the range is off for this run; the hold ends by time or the turn count
         lo, hi = self.window
@@ -1780,11 +1832,11 @@ def _kth_summary(samples: list, ch: int = 2) -> dict:
     idx = [i for i, s in enumerate(samples) if s.state.duty_e4[ch] != 0]
     if not idx:
         return {"driven_turns": 0.0, "driven_s": 0.0, "mean_turns_per_s": None, "to_end_turns": 0.0,
-                "ambiguous": False}
+                "ambiguous": None}
     span = samples[idx[0]:idx[-1] + 1]
-    turns, amb = bl.kth_turns([s.state.steering_rad for s in span])
+    turns, amb = bl.kth_turns([(s.state.steering_rad, s.state.mcu_time_us) for s in span])
     secs = (span[-1].state.mcu_time_us - span[0].state.mcu_time_us) / 1e6
-    to_end, amb2 = bl.kth_turns([s.state.steering_rad for s in samples[idx[0]:]])
+    to_end, amb2 = bl.kth_turns([(s.state.steering_rad, s.state.mcu_time_us) for s in samples[idx[0]:]])
     return {"driven_turns": turns, "driven_s": secs, "mean_turns_per_s": turns / secs if secs > 0 else None,
             "to_end_turns": to_end, "ambiguous": amb or amb2}
 
@@ -1916,6 +1968,10 @@ def _check_commission_args(args) -> tuple[bl.RunAsk, bl.Profile | None, tuple[st
         if not COMMISSION_HOLD_MIN_S <= seconds <= t_lim:
             raise Refused(f"seconds must be in [{COMMISSION_HOLD_MIN_S}, {t_lim:g}] (the bench run's time limit less "
                           f"{bl.TIME_MARGIN_S} s)")
+        if (abs(ask.duty) > bl.VCC_WATCH_ABOVE + 1e-12 and not getattr(args, "vcc_watched", False)
+                and not getattr(args, "synthetic", False)):
+            # Codex fw-bench round 1 P2-4: M and H share the wheels' VM = VCC rail on V1.0 (R5)
+            raise Refused(f"vcc: above duty {bl.VCC_WATCH_ABOVE} watch VCC (--vcc-watched); step 0.3 -> 0.5 -> 0.7")
         range_off = (axis == 2 and "steer_range" in bench.names) or (axis == 3 and "lift_range" in bench.names)
         if range_off and args.window is not None:
             raise Refused("window: the range is off for this run -- give no --window (stop by time or turns)")
@@ -2224,6 +2280,8 @@ def execute(args, bench: Bench) -> dict:
         # abort's too (Codex PR-2b P3)
         for k, v in conditions.items():
             result.setdefault(k, v)
+        if bl.bench_image(session.preflight_product) and "bench_image" not in names:
+            names = names + ("bench_image",)  # Codex fw-bench round 1 P3-1: no bench-image run is gate evidence
         _mark_commission_result(result, names, session.large, session.preflight_product, _absent_of(args))
     elif args.cmd in ("step", "scenario"):
         _mark_absent_result(result, _absent_of(args))

@@ -2083,6 +2083,65 @@ static void bench_steer_range_bypass(void)
     CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
 }
 
+static void bench_set_refused_while_stopping_or_inside_an_interval(void)
+{
+    /* Codex fw-bench round 1 P3-3: not in STOPPING, nor DISARMED with the output interval still open */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_L, 0, 150, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_L, 1000, 150, echo_now()));
+    ticks(2);
+    CHECK(d.cm_on);
+    /* DISARM and BENCH_SET in one cycle: DISARMED, but the interval is still open until a zero-output cycle */
+    link_msg two[2] = {simple(LINK_DISARM, seq), bench_msg((uint16_t)(seq + 1), d.boot_id, 0, 2500, 30000)};
+    seq = (uint16_t)(seq + 2);
+    tick_msgs(two, 2);
+    CHECK_EQ_U(d.bench_duty_max_e4[DRIVE_CH_M], cfg.commission_duty_max_e4[DRIVE_CH_M]);
+    /* expiry: STOPPING refuses it */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_L, 0, 150, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_L, 1000, 150, echo_now()));
+    ticks(200);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    send(bench_msg(seq++, d.boot_id, 0, 2500, 30000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_DISARMED);
+}
+
+static void bench_overrides_never_weaken_the_stopping_side(void)
+{
+    /* with the range off and the limits raised, an expiry still stops M at once and DISARMs after the grace */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0);
+    ticks(5);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, DRIVE_BENCH_STEER_RANGE, 10000, 0x7FFFFFFFu / 1000u));
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 5000, 150, echo_now()));
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.5, 1e-6);
+    ticks(200); /* no command: the 150 ms validity runs out */
+    CHECK_EQ_U(d.mode, DRIVE_MODE_STOPPING);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    CHECK(d.latched & DRIVE_FAULT_COMMAND_TIMEOUT);
+    ticks((int)cfg.stop_grace_ms + 1);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    /* a DISARM while driving with the overrides: the output goes to zero */
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 5000, 150, echo_now()));
+    send(simple(LINK_DISARM, seq++));
+    tick();
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+    /* the overrides survive a CLEAR_FAULTS re-init on the same boot, and are shown (the tool re-sends every run) */
+    CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES);
+}
+
 static void bench_limits_are_the_sessions(void)
 {
     /* the session's M time limit (0.5 s) ends the interval, not the build's 2 s */
@@ -2180,5 +2239,7 @@ int main(void)
     bench_set_refusals();
     bench_steer_range_bypass();
     bench_limits_are_the_sessions();
+    bench_set_refused_while_stopping_or_inside_an_interval();
+    bench_overrides_never_weaken_the_stopping_side();
     return FW_TEST_RESULT();
 }

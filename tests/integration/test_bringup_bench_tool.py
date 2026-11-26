@@ -35,7 +35,8 @@ def test_a_steering_run_with_its_range_off_and_its_own_limits(model):
     assert taken["duty_max_e4"] == [10000, 10000, 2500, 1500] and taken["time_ms"][2] == 5000
     # the BENCH_SET went out before the ARM, and the board shows its overrides from then on
     order = [k for k in kinds_written(b) if k in ("BENCH_SET", "ARM")]
-    assert order[:2] == ["BENCH_SET", "ARM"]
+    # a fresh boot's last_rx_seq equals the first seq: a second identical BENCH_SET is the one read (P2-1)
+    assert order.index("ARM") > 0 and set(order[:order.index("ARM")]) == {"BENCH_SET"}
     assert max(abs(s.state.duty_e4[2]) for s in b.samples) == 2000  # 0.2 > the image's 0.15
     armed = [s for s in b.samples if s.state.mode.name == "ARMED"]
     assert armed and all(s.state.fault_flags & FaultFlag.BENCH_OVERRIDES for s in armed)
@@ -90,31 +91,64 @@ def test_without_the_range_bypass_the_steering_still_needs_its_window(model):
     assert res["result"] == "refused" and "--window" in res["why"]
 
 
-def _stopper(turns, window=None):
+def _stopper(turns, window=None, names=()):
+    s = object.__new__(bringup.CommissionSession)
+    s.axis, s.ignore, s.sensorless, s.stop_kth_turns, s.window = 2, FaultFlag(0), False, turns, window
+    s.bench = bringup.bl.BenchAsk(2, tuple(names), None, None) if names else None
+    s._kth, s._on_us, s._on_value = bringup.bl.KthTracker(), None, None
+    return s
+
+
+def _st(rad, us, duty=1200):
     from types import SimpleNamespace
 
-    return SimpleNamespace(axis=2, ignore=FaultFlag(0), sensorless=False, stop_kth_turns=turns, _kth_prev=None,
-                           _kth_rad=0.0, window=window)
+    return SimpleNamespace(steering_rad=rad, lift_m=0.0, fault_flags=FaultFlag(0), mcu_time_us=us,
+                           duty_e4=(0, 0, duty, 0))
 
 
-def _st(rad):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(steering_rad=rad, lift_m=0.0, fault_flags=FaultFlag(0))
-
-
-def test_the_kth_turn_stop_counts_across_the_wrap_and_refuses_a_step_too_far():
+def test_the_kth_turn_stop_counts_across_the_wrap_and_refuses_what_it_cannot_tell():
     import math
 
-    s = _stopper(1.0)
+    s = _stopper(1.0, names=("steer_range",))
     stop = bringup.CommissionSession.early_stop
     why, i = None, 0
     while why is None and i < 1000:
-        why = stop(s, _st(math.remainder(-0.4 * i, math.tau)), FaultFlag(0))  # the negative way, 0.4 rad per STATE
+        why = stop(s, _st(math.remainder(-0.4 * i, math.tau), i * 10_000), FaultFlag(0))  # 0.4 rad per STATE
         i += 1
     assert why == "kth_turns" and i == 17  # 16 steps x 0.4 = 6.4 rad >= one turn (6.28)
-    s = _stopper(3.0)
-    assert stop(s, _st(0.0), FaultFlag(0)) is None
-    assert stop(s, _st(2.5), FaultFlag(0)) == "kth_step_ambiguous"  # 143 deg in one STATE: never guessed
+    s = _stopper(3.0, names=("steer_range",))
+    assert stop(s, _st(0.0, 0), FaultFlag(0)) is None
+    assert stop(s, _st(2.5, 10_000), FaultFlag(0)) == "kth_step"  # 143 deg in one STATE: never guessed
     s = _stopper(None, window=(-0.2, 0.2))
-    assert stop(s, _st(0.3), FaultFlag(0)) == "window"  # no turn stop: the window as before
+    assert stop(s, _st(0.3, 0), FaultFlag(0)) == "window"  # no turn stop, range on: the window as before
+
+
+def test_a_driven_steering_whose_kth_stays_put_is_stopped_when_its_range_is_off():
+    """Codex fw-bench round 1 P2-3: a KTH stuck low reads a valid fixed angle once the range is off."""
+    s = _stopper(3.0, names=("steer_range",))
+    stop = bringup.CommissionSession.early_stop
+    why = None
+    for i in range(80):  # 0.8 s at the same angle with the duty on
+        why = stop(s, _st(3.1415, i * 10_000), FaultFlag(0)) or why
+        if why:
+            break
+    assert why == "kth_no_motion" and 50 <= i <= 52
+    s = _stopper(3.0, names=("steer_range",))  # the duty off: no judgement
+    assert all(stop(s, _st(3.1415, i * 10_000, duty=0), FaultFlag(0)) is None for i in range(80))
+
+
+def test_a_second_run_on_the_same_boot_gets_the_defaults_back(model):
+    """Codex fw-bench round 1 P3-3: an override run, then a plain one on the same board: the second's BENCH_SET
+    takes the defaults back and the bit goes off."""
+    b = model("--bench", "1")
+    b.host.usb_product = BENCH
+    first = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, bench_duty_max=0.5, observed="none"), b)
+    assert first["result"] == "ok" and first["bench_set"]["overrides"], first
+    assert any(s.state.fault_flags & FaultFlag.BENCH_OVERRIDES for s in b.samples)
+    n = len(b.samples)
+    second = bringup.execute(args(axis="L", duty=0.1, seconds=0.6, observed="none"), b)
+    assert second["result"] == "ok" and second["bench_set"]["overrides"] is False, second
+    assert second["bench_set"]["seq"] != first["bench_set"]["seq"]
+    armed = [s for s in b.samples[n:] if s.state.mode.name == "ARMED"]
+    assert armed and not any(s.state.fault_flags & FaultFlag.BENCH_OVERRIDES for s in armed)
+    assert second["not_for_gate"] and "bench_image" in second["bypassed"]
