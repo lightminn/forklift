@@ -445,14 +445,23 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
         record.put({"t": "warning", "kind": "console_lan", "host": args.host, "origin_host": args.console_origin_host})
     print(json.dumps(started), flush=True)
     # step 10: the session and the run; from the session's first act every exit goes through the closing
-    # (impl round 4 P2-2) no stderr write before the closing -- a closed or full pipe would skip or stall it while
-    # the device is held; the trace is kept as text and printed after the device is released
+    reason, closing = _run_session(run, sources, args.duration_s, stop, record, held, end)
+    # step 11: the permission revoked and the fd released at once (the lock with it), the blocking cleanup after
+    _release_device(held, "closing")
+    return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
+
+
+def _run_session(run, sources, duration_s, stop, record, held, end):
+    """Step 10: the session, the run and -- whatever ends it, a non-Exception too -- the closing, with the closing's
+    verdict and times in the end row before anything propagates (impl round 5 P3). No stderr write before the closing:
+    a closed or full pipe would skip or stall it while the device is held, so the trace is kept as text and printed
+    after the device is released (impl round 4 P2-2)."""
     reason = closing = None
     try:
         now = time.monotonic_ns()
         run.start_session(now)
         record.put({"t": "session", "ns": now})
-        reason = run.run(float(args.duration_s), stop=stop, record=record)
+        reason = run.run(float(duration_s), stop=stop, record=record)
     except Exception as err:  # noqa: BLE001 -- the closing below still runs while the link lives
         import traceback
 
@@ -464,15 +473,17 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
             closing = run.close(record=record)
         except Exception as err:  # noqa: BLE001
             closing = f"closing_exception:{type(err).__name__}:{err}"
-    loop = run.loop
-    end.update(closing=closing, closing_started_ns=loop.closing_started_ns,
-               closing_confirmed_ns=loop.closing_confirmed_ns,
-               closing_disarms=[list(d) for d in loop.closing_disarms],
-               results=list(loop.session.results), permit=loop.permit.state, permit_reason=loop.permit.reason,
-               counts=dict(sources.counts), mission_counts=mission_counts(loop.session.results), ticks=run.ticks)
-    # step 11: the permission revoked and the fd released at once (the lock with it), the blocking cleanup after
-    _release_device(held, "closing")
-    return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
+        end["closing"] = closing
+        try:
+            loop = run.loop
+            end.update(closing_started_ns=loop.closing_started_ns, closing_confirmed_ns=loop.closing_confirmed_ns,
+                       closing_disarms=[list(d) for d in loop.closing_disarms],
+                       results=list(loop.session.results), permit=loop.permit.state,
+                       permit_reason=loop.permit.reason, counts=dict(sources.counts),
+                       mission_counts=mission_counts(loop.session.results), ticks=run.ticks)
+        except Exception as err:  # noqa: BLE001 -- the closing verdict above is already in the end row
+            end["end_fields_error"] = f"{type(err).__name__}:{err}"
+    return reason, closing
 
 
 def _bind_own_socket(path, held):
@@ -490,7 +501,7 @@ def _bind_own_socket(path, held):
         keep = s.dup()  # before the bind: nothing after it can fail before the name is owned (impl round 4 P2-1)
         s.bind(str(path))  # EADDRINUSE on any existing name
         held.scan_path, held.scan_keep, keep = str(path), keep, None
-        st = os.lstat(path)
+        st = _lstat_retried(path)  # impl round 5 P2: a transient failure retried while the socket is held
         held.scan_ino = (st.st_dev, st.st_ino)
         os.chmod(path, 0o660)
         s.setblocking(False)
@@ -547,7 +558,9 @@ def _real_cleanup(held, record, end) -> bool:
     try:
         _release_device(held, "run_end")
     finally:
-        _remove_scan_path(held)  # while the socket is still held: no other receiver can take the name over first
+        left = _remove_scan_path(held)  # while the socket is still held: no receiver can take the name over first
+        if left is not None:
+            end["scan_socket_left"] = {"path": held.scan_path, "why": left}
         try:
             if held.server is not None:
                 end["server_stopped"] = held.server.stop()
@@ -572,20 +585,40 @@ def _real_cleanup(held, record, end) -> bool:
     return ok
 
 
-def _remove_scan_path(held) -> None:
+def _lstat_retried(path, tries: int = 3, gap_s: float = 0.05):
+    for i in range(tries):
+        try:
+            return os.lstat(path)
+        except OSError:
+            if i == tries - 1:
+                raise
+            time.sleep(gap_s)
+    raise AssertionError("unreachable")
+
+
+def _remove_scan_path(held) -> str | None:
     """This run's scan socket name removed while the run still holds the socket (``scan_keep``), only when it is still
-    this run's inode; then the held copy closed (Codex U3e-1 impl rounds 1-3)."""
+    this run's inode; then the held copy closed (Codex U3e-1 impl rounds 1-3). A name this run bound but could not
+    remove -- its inode never read, or the unlink refused -- is returned so the end row names it (impl round 5 P2):
+    the next run would refuse it as ``scan_socket_exists``, and the operator has to know why."""
+    left = None
     try:
         if held.scan_path is not None:
-            st = os.lstat(held.scan_path)
-            if (st.st_dev, st.st_ino) == held.scan_ino:
+            try:
+                st = _lstat_retried(held.scan_path)
+            except FileNotFoundError:
+                return None
+            if held.scan_ino is None:
+                left = "inode_unknown"
+            elif (st.st_dev, st.st_ino) == held.scan_ino:
                 os.unlink(held.scan_path)
-    except OSError:
-        pass
+    except OSError as err:
+        left = f"{type(err).__name__}:{err}"
     finally:
         if held.scan_keep is not None:
             held.scan_keep.close()
             held.scan_keep = None
+    return left
 
 
 def _plain_output(out: Path, device: str | None) -> bool:

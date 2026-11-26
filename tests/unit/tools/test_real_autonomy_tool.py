@@ -6,6 +6,7 @@ and the files' hashes. No device is opened."""
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -452,3 +453,112 @@ def test_a_broken_vehicle_file_is_a_refusal_not_a_traceback(tmp_path):
     veh.write_text("chassis_model: [unclosed\n")
     out = tool._vehicle_files_refused(veh)  # noqa: SLF001
     assert len(out) == 1 and out[0].startswith("input_unreadable:vehicle:")
+
+
+def test_a_transient_inode_read_after_the_bind_is_retried_and_the_name_removed(tmp_path, monkeypatch):
+    """Codex U3e-1 implementation round 5 P2: the first lstat after the bind failing (ESTALE) is retried while held."""
+    import errno
+    import os
+    from types import SimpleNamespace
+
+    path = tmp_path / "scan.sock"
+    real_lstat, calls = os.lstat, []
+
+    def flaky(p, *a, **k):
+        if str(p) == str(path) and not calls:
+            calls.append(p)
+            raise OSError(errno.ESTALE, "Stale file handle")
+        return real_lstat(p, *a, **k)
+
+    monkeypatch.setattr(tool.os, "lstat", flaky)
+    held = SimpleNamespace(scan_path=None, scan_ino=None, scan_keep=None)
+    s = tool._bind_own_socket(path, held)  # noqa: SLF001
+    s.close()
+    assert calls and held.scan_ino is not None
+    assert tool._remove_scan_path(held) is None and not path.exists()  # noqa: SLF001
+
+
+def test_a_name_whose_inode_was_never_read_is_reported_not_removed_blind(tmp_path):
+    """Codex U3e-1 implementation round 5 P2: without the inode the name is left and named for the end row."""
+    import socket
+    from types import SimpleNamespace
+
+    path = tmp_path / "scan.sock"
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    s.bind(str(path))
+    held = SimpleNamespace(scan_path=str(path), scan_ino=None, scan_keep=s)
+    assert tool._remove_scan_path(held) == "inode_unknown"  # noqa: SLF001
+    assert path.exists() and held.scan_keep is None
+
+
+class _Loop:
+    closing_started_ns, closing_confirmed_ns, closing_disarms = 1, 2, [(1, 2)]
+    session = SimpleNamespace(results=[])
+    permit = SimpleNamespace(state="revoked", reason="closing")
+
+
+class _Run:
+    def __init__(self, fail):
+        self.fail, self.loop, self.ticks, self.order = fail, _Loop(), 0, []
+
+    def start_session(self, now):
+        self.order.append("session")
+
+    def run(self, duration_s, stop, record):
+        raise self.fail
+
+    def close(self, record):
+        self.order.append("close")
+        return "confirmed"
+
+
+class _Rec:
+    def put(self, row):
+        pass
+
+
+class _Interrupt(BaseException):
+    pass
+
+
+def test_a_non_exception_still_closes_and_leaves_the_verdict_in_the_end_row():
+    """Codex U3e-1 implementation round 5 P3: the closing's verdict and times reach the end row before it propagates."""
+    run, end = _Run(_Interrupt()), {"reason": None}
+    with pytest.raises(_Interrupt):
+        tool._run_session(run, SimpleNamespace(counts={}), 1.0, None, _Rec(), SimpleNamespace(trace=None), end)  # noqa: SLF001
+    assert run.order == ["session", "close"]
+    assert end["closing"] == "confirmed" and end["closing_confirmed_ns"] == 2 and end["reason"].startswith("exception")
+
+
+def test_a_run_exception_writes_nothing_to_stderr_before_the_device_is_released(monkeypatch, tmp_path):
+    """Codex U3e-1 implementation rounds 4-5: the trace is kept, the closing runs, and stderr -- even a broken one --
+    is written only after the cleanup has released the device."""
+    order = []
+    run, held, end = _Run(RuntimeError("boom")), SimpleNamespace(trace=None), {"reason": None}
+
+    class BrokenErr:
+        def write(self, s):
+            order.append("stderr")
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self):
+            raise BrokenPipeError(32, "Broken pipe")
+
+    monkeypatch.setattr(tool.sys, "stderr", BrokenErr())
+    reason, closing = tool._run_session(run, SimpleNamespace(counts={}), 1.0, None, _Rec(), held, end)  # noqa: SLF001
+    assert closing == "confirmed" and reason.startswith("exception:RuntimeError") and "boom" in held.trace
+    assert order == []  # nothing written during the session
+
+    def body(args, rlt, rr, refused, record, held_, end_, stop, factory):
+        held_.trace = held.trace
+        raise RuntimeError("after the closing")
+
+    def cleanup(held_, record, end_):
+        order.append("cleanup")
+        return True
+
+    monkeypatch.setattr(tool, "_real_body", body)
+    monkeypatch.setattr(tool, "_real_cleanup", cleanup)
+    args = tool.build_parser().parse_args(["--run", "--client", "real", "--out-dir", str(tmp_path / "rec")])
+    assert tool.run_real(args, transport_factory=lambda d: None) == tool.EXIT_FAILED
+    assert order == ["cleanup", "stderr"]
