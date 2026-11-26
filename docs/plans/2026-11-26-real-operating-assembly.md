@@ -438,6 +438,35 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
 - **머지 요청 표**(Codex P2-5, 2 회차 P2-4): 5 절 항목마다 셋 중 하나로 적는다 — '도구 배선까지 검증(위 시험)', '단위 시험이 그 전이를 실제로 만듦(시험 이름)', '미검증(이유)'. 시험 이름만 걸지 않고 그 시험이 해당 전이를 실제로 만드는지 확인해 적는다. 이미 알려진 것: `test_real_tty_transport` 의 보드 표식 시험은 권한을 얻기 전에 표식을 바꾸고, 부분 쓰기 시험은 `revoke("test")` 를 직접 부르며, U3b-1 시작점 시험은 제출 전 이탈이다 — U3e-1 에서 각각 '권한 뒤 표식 변경으로 철회', '실제 신호 배선', '계획 대기 중 이탈' 시험을 더하거나 미검증으로 적는다.
 - **게이트**: 미션 코어·장애물 층·Isaac 러너를 건드리지 않는다(실행 도구, `real_run` 의 판정 목록 보존·기록 열기, `real_preconditions` 의 C13 판정, `obstacle_layer_real.yaml` 의 `provenance` 키, 콘솔 서버의 REAL Origin 검사, 시험). 재생 게이트는 필요 없다. 회귀는 `test_real_run_hil*`(4 CPU), 브리지 시험, 전체 pytest 를 최종 트리에서 한 번.
 
+#### 6.1 검증 표 (5 절 항목별, U3e-1)
+
+'도구'는 `tests/integration/test_real_run_operating.py`(실행 도구의 REAL 경로를 운영 보드 표식의 MCU 모형에서), '단위'는 그 전이를 실제로 만드는 단위 시험, '미검증'은 이유를 적는다.
+
+| 5 절 항목 | 검증 |
+|---|---|
+| 정상 경로(재위치 확인 → 등록 → 팔레트 확인 → `d5_pocket` 우회 → 제출 → ARM → 비영 DRIVE ≤ 0.06 m/s → S10 정지 → DISARM) | 도구: `test_the_operating_run_drives_to_the_lift_stops_and_disarms`(`imu` 우회 포함, 권한 부여 boot, S10 DISARM 응답, 실행 종료 DISARM 확인) |
+| 면제·비면제 제품 문자열 | 단위: `test_estop_waiver.test_the_product_string_says_waived`·`test_the_waiver_makes_bit7_a_warning_and_nothing_else`(모형은 비상정지 배선이라 도구 시험은 비면제 경로만) |
+| 출발 전: 팔레트 확인 없음 | 도구: `test_a_submit_without_the_pallet_confirmation_never_moves_the_board`(ARM·DRIVE 바이트 0) |
+| 출발 전: 확인 뒤 lease·재위치 세대·revision 변경, 움직임 | 단위: U3b-2 `test_a_confirmation_of_an_older_registration_does_not_carry`·`..._another_relocalization_generation_...`, U3c `test_a_move_after_the_ticks_voids_them`·`test_a_slow_lift_creep_...` |
+| 출발 전: `operator_start`·`d5_pocket` 동시 우회 | 단위: U3b-2 `test_the_start_check_is_not_bypassable_without_depth_only` |
+| 출발 전: 배치 0.11 m·시작점 밖(`start_pose` 우회 켬)·후진 구간·S자·남은 시간 | 단위: U3b-1 `test_the_placement_is_the_approved_one`·`test_the_start_is_checked_whatever_the_start_pose_bypass`·`test_a_reverse_piece_in_the_driven_stages_is_refused`·`test_a_plan_off_the_corridor_or_missing_a_stage_is_refused`·`test_too_little_run_time_refuses_the_submit` |
+| 출발 전: IMU 미검증이면 제출·무장 닫힘, `imu` 우회로 열림 | 단위: U3a `test_an_unqualified_imu_refuses_the_submit_until_the_imu_bypass`; 도구: 정상 경로가 `imu` 우회로 연다 |
+| 출발 전: `-dirty` 제품 문자열 | 단위: `test_real_preconditions.test_board_facts`(C1 `dirty_image`); 도구: 판정 사유가 하나라도 남으면 조립 거부·바이트 0(`test_one_reason_left_in_the_judgement_refuses_the_assembly`) |
+| 정상 A 의 통과(`insert` 끝까지, 미실행 `extract` 허용) | 단위: U3b-1 `test_a_straight_forward_plan_passes_and_extract_is_not_judged` |
+| 제출 뒤 계획 대기 중 시작점 이탈 | 단위(U3e-1 추가): U3b-1 `test_a_start_left_while_the_plan_is_pending_writes_no_arm`(`start_pose` 우회 켬, 이탈 없으면 무장함을 확인) |
+| 주행 중: 보드 표식 변경 | 단위(U3e-1 추가): `test_real_tty_transport.test_a_build_change_after_the_grant_revokes_a_held_permission` |
+| 주행 중: 스캔 단절 | 도구: `test_a_scan_cut_while_driving_latches_and_no_motion_byte_follows`(`scan_generation_changed` 래치, 래치 시각부터 ARM·DRIVE 바이트 0, 래치 DISARM 의 DISARMED STATE) |
+| 주행 중: `applies_to` 변경·짧은 어댑터 재시작·같은 읽기의 단절과 복귀 | 단위: `test_real_sources` `test_a_lost_qualification_in_one_producer_generation_is_a_boundary`·`test_one_call_delivers_one_generation`·`test_a_gap_ended_on_the_read_that_ends_it_is_still_opened`·`test_a_gap_inside_one_read_drops_the_scans_before_it` |
+| 주행 중: 이전 층 작업·옛 세대 응답의 늦은 완료 | 단위: U3a `test_a_boundary_drops_a_layer_request_not_started_yet`·`test_a_late_reply_of_the_old_generation_never_refreshes_the_evidence` |
+| 주행 중: 종료 신호 | 도구: `test_a_signal_while_driving_holds_the_device_until_the_disarm_is_confirmed`(DISARM 확인 전 경쟁자 잠금 실패, 뒤에 성공) |
+| 주행 중: 장치 상실 | 도구: `test_a_lost_device_while_driving_revokes_and_is_never_reopened`(`link_lost`, 권한 폐기, 한 번만 엶) |
+| 부분 프레임 폐기 | 단위: `test_real_tty_transport` 의 부분 쓰기 시험(직접 `revoke`) — **부분 쓰기 중 실제 신호 배선은 미검증**(쓰기 도중 신호를 맞추는 시험이 없음; 신호 경로 자체는 도구 시험이 봄) |
+| 구형 브리지(`laser_checked` 없음) | 단위: `test_real_slam_source.test_a_ready_without_this_runs_laser_digest_ends_the_run` |
+| `layer_timing` 토글 거부 | 단위: U3a `test_layer_timing_is_not_bypassable_on_the_operating_run_only` |
+| 실행 CLI 의 pty·재생·합성·HIL 인자 거부 | 단위: `test_real_autonomy_tool` 의 REAL 인자 시험들; 도구: CLI 가 실제 준비를 타서 `site_bundle:no_row` 로 거부(`test_the_command_line_takes_the_real_preparation_and_refuses_an_unregistered_site`) |
+| 잠금(저장소 기본) | 도구: `test_on_a_valid_site_the_lock_alone_refuses_and_nothing_reaches_the_board`(유효 사이트, 사유는 잠금 하나, 재동기화 바이트까지 0) |
+| C13 정지 모델·콘솔 Origin | 단위: `test_real_preconditions` C13 시험들, `test_live_origin` |
+
 #### 6.1 자체 검토
 
 | 검토 | 지적 | 처리 |
