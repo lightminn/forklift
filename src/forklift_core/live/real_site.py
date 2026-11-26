@@ -100,8 +100,9 @@ def resolve_site(*, site_record, registry, bundle_root, encoder_model: str) -> S
     if not isinstance(book, dict) or not isinstance(book.get("bundles"), list) \
             or not all(isinstance(r, dict) for r in book["bundles"]):
         raise SiteRefused("registry_unreadable:shape")
+    registry_tool = _registry_module()  # its own refusal (registry_tool:...), never read as two rows (round 2 P3)
     try:
-        row = _registry_module().lookup_site(book, rec_sha, encoder_model)
+        row = registry_tool.lookup_site(book, rec_sha, encoder_model)
     except (KeyError, TypeError) as err:
         raise SiteRefused(f"registry_unreadable:{type(err).__name__}") from err
     except ValueError as err:

@@ -424,7 +424,10 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
             map_id, grid = rs_.read_site_map(site, cfg.map_id)  # every file hashed and parsed from one read
         except rs_.SiteRefused as err:
             raise AssemblyRefused([err.reason]) from err
-        occupancy = map_occupancy(grid)
+        try:
+            occupancy = map_occupancy(grid)
+        except ValueError as err:  # e.g. a rotated origin: a structured refusal, never an escape (round 2 P3)
+            raise AssemblyRefused([f"{rs_.PREFIX}:bundle_grid:{err}"]) from err
     elif paths.map_bundle is not None:
         map_id, occupancy = read_map(paths.map_bundle, cfg)
     elif paths.hil:

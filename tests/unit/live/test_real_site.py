@@ -299,3 +299,38 @@ def test_a_missing_registry_tool_refuses_and_leaves_no_half_module(monkeypatch, 
             rs_._registry_module()  # noqa: SLF001
         assert err.value.reason.startswith("precondition:site_bundle:registry_tool:")
         assert "slam_bundle_registry" not in sys.modules
+
+
+# --- Codex U2b round 2 P3 ------------------------------------------------------------------------------------------------
+def test_a_missing_registry_tool_is_its_own_reason_in_the_preparation(tmp_path, monkeypatch):
+    import sys
+
+    from forklift_core.live import real_site as rs_
+
+    paths, _ = make_site(tmp_path)
+    monkeypatch.setattr(rs_, "REPO", tmp_path / "nowhere")
+    monkeypatch.delitem(sys.modules, "slam_bundle_registry", raising=False)
+    [why] = refused(paths)
+    assert why.startswith("precondition:site_bundle:registry_tool:")
+
+
+def test_a_rotated_grid_origin_is_a_structured_refusal(tmp_path):
+    paths, p = make_site(tmp_path)
+    folder = p["folder"]
+    np.savez(folder / "grid.npz", data=np.zeros((50, 70), np.int8), origin=np.asarray((-1.0, -2.5, 0.1)),
+             resolution_m=0.1)
+    hashes = {name: sm.file_sha256(folder / name) for name in sm.BUNDLE_FILES}
+    map_id = sm.map_id_of(hashes)
+    (folder / "manifest.json").write_text(json.dumps({"format": sm.FORMAT, "map_id": map_id, "files": hashes}))
+    d = yaml.safe_load(paths.s10a.read_text())
+    d["map_id"] = map_id
+    paths.s10a.write_text(yaml.safe_dump(d))
+    for key in ("map_id",):
+        p["report"][key] = map_id
+        p["row"][key] = map_id
+    rpath = folder / "site_survey_report.json"
+    rpath.write_text(json.dumps(p["report"]))
+    p["row"]["survey_report"]["sha256"] = sha(rpath)
+    paths.registry.write_text(yaml.safe_dump({"bundles": [p["row"]]}))
+    [why] = refused(paths)
+    assert why.startswith("precondition:site_bundle:bundle_grid:")
