@@ -413,7 +413,7 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
   8. **권한**: 조립 동안 들어온 STATE·장치 상실을 받은 뒤 `transport.grant(run.judgement, 보존한 첫 STATE 의 boot)`. 거짓이면 실행하지 않고 닫는다(`grant_refused`).
   9. 4–8 과 콘솔 시작에는 `autonomy.yaml real_startup_max_s` 기한 하나와 종료 신호를 적용한다. 기한은 각 호출에 **남은 시간**으로 넘긴다: 첫 STATE 대기, SLAM 브리지 연결(지금 고정 5 s 를 남은 시간과 작은 쪽으로), 콘솔 `start(timeout_s=)`(포기하면 늦은 바인드도 취소 플래그로 닫힘, HIL 과 같음). 각 단계 뒤에도 기한·신호를 본다(P2-2).
   10. 콘솔, 세션, 실행. 세션 시작을 시도한 뒤의 예외는 모두 `run.close()` 로 간다.
-  11. **닫기**: 링크가 살아 있으면 DISARM 확인 또는 확인 시한(`CLOSING_CONFIRM_S`)까지 fd·잠금을 쥔다. 장치 상실은 다시 열지 않고 `link_lost`, 확인 시한 초과는 `disarm_unconfirmed` 로 구별한다. 닫기 판정이 끝나면 **먼저** 권한 폐기(`revoke`)와 fd 해제(잠금 해제, 한 번만)를 하고, 그 뒤에 막힐 수 있는 정리를 한다(P2-3): 콘솔 `stop()` → 원천 closers → 작업자(`close_workers`) → 기록 닫기 → 스캔 소켓 파일 삭제. 앞 단계가 실패해도 뒤 단계는 한다.
+  11. **닫기**: 링크가 살아 있으면 DISARM 확인 또는 확인 시한(`CLOSING_CONFIRM_S`)까지 fd·잠금을 쥔다. 장치 상실은 다시 열지 않고 `link_lost`, 확인 시한 초과는 `disarm_unconfirmed` 로 구별한다. 닫기 판정이 끝나면 **먼저** 권한 폐기(`revoke`)와 fd 해제(잠금 해제, 한 번만)를 하고, 그 뒤 스캔 소켓 이름을 지운다(이 실행이 아직 소켓을 쥔 채, 자기 inode 일 때만 — 바인드 순간부터 복제 fd 로 쥠, 구현 2–3 회차). 그다음 막힐 수 있는 정리를 한다(P2-3): 콘솔 `stop()` → 원천 closers → 작업자(`close_workers`) → 기록 닫기. 앞 단계가 실패해도 뒤 단계는 한다.
   12. `--duration-s` 만료·신호는 위 닫기를 거쳐, **DISARM 확인과 기록 완결이 둘 다 있을 때만** 종료 코드 0 이다. 그 밖은 실패 코드(HIL 과 같은 구분).
 - **판정 주입 없음**(Codex P1-1): `assemble_run`·실행 함수의 서명은 바꾸지 않는다. 끝까지 도는 시험은 pytest 의 `monkeypatch` 로 `real_preconditions.operating_preconditions` 를 감싸 `unlock_incomplete` **한 항목만** 뺀다. 나머지 판정(C1–C14·설정 해시 재대조·`operator_load`)은 시험 사이트에서 실제로 돈다.
 - **D5 깊이 원천은 U3e-1 범위가 아니다**(7e-2b 보류). 운영은 `d5_pocket` 우회와 팔레트 확인(2.6)으로만 간다.

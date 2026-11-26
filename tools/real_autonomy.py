@@ -143,6 +143,7 @@ def run_real_precheck(args) -> int:
         _write(record, None)
         return 2
     bad = _inputs_refused({k: v for k, v in real_inputs(args).items() if k not in ("site_record", "registry")})
+    bad += _vehicle_files_refused(args.vehicle) if not bad else []
     if bad:  # a FIFO would block the judgement's read with the device lock held (Codex U3e-1 impl round 2 P2-3)
         record["refused"] = bad
         _write(record, None)
@@ -227,6 +228,8 @@ def real_run_refused(args) -> list:
     if args.scan_socket is not None and os.path.lexists(args.scan_socket):
         out.append("scan_socket_exists")  # never replaced: another run's receiver may be on it
     out += _inputs_refused(real_inputs(args))
+    if args.vehicle is not None and not any(r.endswith(":vehicle") for r in out):
+        out += _vehicle_files_refused(args.vehicle)
     if args.host not in LOOPBACK and not args.console_lan:
         out.append("console_host_needs_console_lan")
     if args.console_lan and not args.console_origin_host:
@@ -250,6 +253,18 @@ def _inputs_refused(inputs: dict) -> list:
         if not stat_.S_ISREG(st.st_mode):
             out.append(f"input_not_regular:{name}")
     return out
+
+
+def _vehicle_files_refused(vehicle) -> list:
+    """The chassis model vehicle.yaml names and the URDF beside it -- read by the judgement too -- regular files
+    (Codex U3e-1 implementation round 3 P2-2)."""
+    from forklift_core.plant.real_vehicle import chassis_model_path
+
+    try:
+        params = chassis_model_path(vehicle)
+    except (OSError, ValueError, TypeError, AttributeError) as err:
+        return [f"input_unreadable:vehicle:{type(err).__name__}"]
+    return _inputs_refused({"chassis_model": params, "chassis_urdf": params.parent / "forklift.urdf"})
 
 
 def real_origin_hosts(args) -> tuple:
@@ -280,7 +295,7 @@ def run_real(args, *, transport_factory=None) -> int:
             return 2
         end = {"t": "end", "reason": None, "opened": []}
         held = SimpleNamespace(tr=None, fd_closed=False, server=None, run=None, sources=None, scan_path=None,
-                               scan_ino=None, prep=None)
+                               scan_ino=None, scan_keep=None, prep=None)
         code = EXIT_FAILED
         try:
             code = _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
@@ -371,12 +386,10 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     # run's cleanup must not unlink a newer run's receiver, impl round 1 P2-2), and only the inode bound here is
     # removed at the end
     try:
-        sock = _bind_own_socket(args.scan_socket)
-        st = os.lstat(args.scan_socket)
+        sock = _bind_own_socket(args.scan_socket, held)
     except OSError as err:
         end["reason"] = f"scan_socket:{type(err).__name__}:{err}"
         return 2
-    held.scan_path, held.scan_ino = str(args.scan_socket), (st.st_dev, st.st_ino)
     try:
         held.sources = sources = rr.make_real_sources(prep, host, tr, scan_sock=sock, slam_socket=args.slam_bridge,
                                                       connect_timeout_s=max(0.001, _remaining(deadline)))
@@ -451,21 +464,25 @@ def _real_body(args, rlt, rr, AssemblyRefused, record, held, end, stop, factory)
     return 0 if closing == "confirmed" and reason in ("deadline", "signal") else EXIT_FAILED
 
 
-def _bind_own_socket(path):
-    """The operating run's scan receiver (plan 6.1 step 6, Codex U3e-1 impl round 2 P2-2): a non-blocking Unix datagram
+def _bind_own_socket(path, held):
+    """The operating run's scan receiver (plan 6.1 step 6, Codex U3e-1 impl rounds 2-3): a non-blocking Unix datagram
     socket bound at ``path`` only when nothing is there -- ``bind`` itself fails on an existing name, so no stale or
-    live receiver is ever replaced -- group-writable for the container's user, as ``scan_feed.bind_socket``."""
+    live receiver is ever replaced -- group-writable for the container's user, as ``scan_feed.bind_socket``. From the
+    bind on, ``held`` owns the name: its inode, and a duplicate of the socket kept open until the cleanup has removed
+    the name (the sources may close their own copy first, and a closed socket's name could be taken over as stale)."""
     import socket as socket_
 
     s = socket_.socket(socket_.AF_UNIX, socket_.SOCK_DGRAM)
     try:
         s.setsockopt(socket_.SOL_SOCKET, socket_.SO_RCVBUF, 1 << 20)
         s.bind(str(path))  # EADDRINUSE on any existing name
+        st = os.lstat(path)
+        held.scan_path, held.scan_ino, held.scan_keep = str(path), (st.st_dev, st.st_ino), s.dup()
         os.chmod(path, 0o660)
         s.setblocking(False)
         return s
     except BaseException:
-        s.close()
+        s.close()  # the name, if bound, is removed by the cleanup while held.scan_keep still holds it
         raise
 
 
@@ -540,15 +557,19 @@ def _real_cleanup(held, record, end) -> bool:
 
 
 def _remove_scan_path(held) -> None:
-    """This run's scan socket name removed, only when it is still this run's inode (Codex U3e-1 impl rounds 1-2)."""
-    if held.scan_path is None:
-        return
+    """This run's scan socket name removed while the run still holds the socket (``scan_keep``), only when it is still
+    this run's inode; then the held copy closed (Codex U3e-1 impl rounds 1-3)."""
     try:
-        st = os.lstat(held.scan_path)
-        if (st.st_dev, st.st_ino) == held.scan_ino:
-            os.unlink(held.scan_path)
+        if held.scan_path is not None:
+            st = os.lstat(held.scan_path)
+            if (st.st_dev, st.st_ino) == held.scan_ino:
+                os.unlink(held.scan_path)
     except OSError:
         pass
+    finally:
+        if held.scan_keep is not None:
+            held.scan_keep.close()
+            held.scan_keep = None
 
 
 def _plain_output(out: Path, device: str | None) -> bool:

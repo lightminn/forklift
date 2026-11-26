@@ -378,12 +378,52 @@ def test_the_operating_scan_socket_never_replaces_an_existing_name(tmp_path):
     stale.bind(str(path))
     stale.close()  # nobody holds it now: scan_feed.bind_socket would replace it
     ino = path.lstat().st_ino
+    from types import SimpleNamespace
+
+    held = SimpleNamespace(scan_path=None, scan_ino=None, scan_keep=None)
     with pytest.raises(OSError):
-        tool._bind_own_socket(path)  # noqa: SLF001
-    assert path.lstat().st_ino == ino
+        tool._bind_own_socket(path, held)  # noqa: SLF001
+    assert path.lstat().st_ino == ino and held.scan_path is None  # not this run's name: never removed by it
     path.unlink()
-    s = tool._bind_own_socket(path)  # noqa: SLF001
+    s = tool._bind_own_socket(path, held)  # noqa: SLF001
     try:
         assert oct(path.stat().st_mode & 0o777) == oct(0o660) and s.getblocking() is False
     finally:
         s.close()
+        tool._remove_scan_path(held)  # noqa: SLF001
+
+
+def test_a_bound_scan_name_is_owned_from_the_bind_and_removed_while_held(tmp_path):
+    """Codex U3e-1 implementation round 3 P2-1: the name is the run's from the bind on (its inode and a kept copy);
+    the cleanup removes it while that copy still holds the socket, then closes the copy."""
+    import socket
+    from types import SimpleNamespace
+
+    path = tmp_path / "scan.sock"
+    held = SimpleNamespace(scan_path=None, scan_ino=None, scan_keep=None)
+    s = tool._bind_own_socket(path, held)  # noqa: SLF001
+    s.close()  # the sources' copy closed first (as make_real_sources on a failure)
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        probe.connect(str(path))  # still live: no receiver could take the name over as stale
+    finally:
+        probe.close()
+    tool._remove_scan_path(held)  # noqa: SLF001
+    assert not path.exists() and held.scan_keep is None
+
+
+def test_the_precheck_refuses_a_fifo_the_vehicle_file_names(tmp_path, capsys, monkeypatch):
+    """Codex U3e-1 implementation round 3 P2-2: the chassis model vehicle.yaml names is read by the judgement too."""
+    import os
+
+    fifo = tmp_path / "chassis.fifo"
+    os.mkfifo(fifo)
+    veh = tmp_path / "vehicle.yaml"
+    d = yaml.safe_load((tool.REPO / "config/real/vehicle.yaml").read_text())
+    d["chassis_model"] = str(fifo)
+    veh.write_text(yaml.safe_dump(d))
+    monkeypatch.setattr(tool, "_is_pty", lambda d: False)
+    assert tool.main(["--run", "--client", "real", "--precheck", "--device", "/dev/forklift-mcu-none",
+                      "--vehicle", str(veh)]) == 2
+    rec = json.loads(capsys.readouterr().out)
+    assert "input_not_regular:chassis_model" in rec["refused"] and rec["opened"] == []
