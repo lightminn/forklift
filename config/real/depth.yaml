@@ -56,3 +56,20 @@ mount:
   rides_lift: null
   measured: false
 distortion_max_px: 0.5     # the largest pixel shift the recorded distortion may cause; more refuses the check (4.3)
+pocket:
+  # The real D5 pocket check's numbers (PR 7 7e-2, docs/plans/2026-11-26-7e-depth-pocket-check.md 6.2), read by
+  # live/real_depth.make_pocket_check. Provisional until the bench: sigma_a from the team capture's frame_640 level
+  # (config/depth_noise_d435i_team.yaml) and B5; surface_estimate_m and the lifetime as the Isaac check's (B5, B7).
+  sigma_a: 0.0058
+  surface_estimate_m: 0.02
+  lifetime_s: 20.0
+  view_min_px: 2000        # a usable observation: this many valid pixels among those whose rays meet V ...
+  view_valid_min: 0.5      # ... and at least this share of them
+  error:
+    # The error budget of the three-state visibility. A null refuses the check (pocket_budget_unset:<term>): the
+    # real D5 runs only under the d5_pocket bypass until each term is entered with its basis.
+    operator_m: null       # the operator's tape-measured pallet pose on the map (B7)
+    slam_m: null           # the SLAM pose error on the surveyed map
+    own_m: 0.002           # the chassis model's relative shape (URDF collision boxes; provisional)
+    cam_trans_m: null      # the mount's position (B6)
+    cam_rot_deg: null      # the mount's and pose's angle (B6)

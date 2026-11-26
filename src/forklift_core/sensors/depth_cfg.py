@@ -40,6 +40,7 @@ class DepthConfig:
     applies_to: tuple = ()
     mount: dict = field(default_factory=dict)
     distortion_max_px: float = 0.5
+    pocket: dict = field(default_factory=dict)  # the real pocket check's numbers (7e-2; nulls refuse at its build)
 
     @property
     def interval_bound_s(self) -> float:
@@ -99,6 +100,8 @@ def load_depth_config(path: str | Path = DEPTH_YAML) -> DepthConfig:
             raise ValueError(f"depth config: timing.applies_to must give exactly {APPLIES_KEYS}")
         if basis == "engineering" and not (t.get("decision_id") and t.get("basis_doc")):
             raise ValueError("depth config: an engineering basis needs timing.decision_id and timing.basis_doc")
+    pocket = raw.get("pocket") or {}
+    _check_pocket(pocket)
     measured = t.get("measured") is True
     if measured and bound is None:
         raise ValueError("depth config: measured without timing.delay_bound_s")
@@ -112,7 +115,29 @@ def load_depth_config(path: str | Path = DEPTH_YAML) -> DepthConfig:
         timing_decision=t.get("decision_id"), timing_doc=t.get("basis_doc"),
         applies_to=() if applies is None else tuple(sorted(applies.items())),
         mount=dict(raw.get("mount") or {}),
-        distortion_max_px=_pos(raw.get("distortion_max_px", 0.5), "distortion_max_px"))
+        distortion_max_px=_pos(raw.get("distortion_max_px", 0.5), "distortion_max_px"), pocket=pocket)
+
+
+POCKET_KEYS = ("sigma_a", "surface_estimate_m", "lifetime_s", "view_min_px", "view_valid_min", "error")
+ERROR_KEYS = ("operator_m", "slam_m", "own_m", "cam_trans_m", "cam_rot_deg")
+
+
+def _check_pocket(pocket: dict) -> None:
+    """The ``pocket`` section's keys and numbers: positive where given; the error terms null or >= 0."""
+    if not isinstance(pocket, dict) or set(pocket) - set(POCKET_KEYS):
+        raise ValueError(f"depth config: pocket keys must be among {POCKET_KEYS}")
+    for k in POCKET_KEYS[:-1]:
+        if k in pocket:
+            _pos(pocket[k], f"pocket.{k}", allow_none=True)
+    if "view_valid_min" in pocket and pocket["view_valid_min"] is not None and pocket["view_valid_min"] > 1:
+        raise ValueError("depth config: pocket.view_valid_min")
+    err = pocket.get("error") or {}
+    if not isinstance(err, dict) or set(err) - set(ERROR_KEYS):
+        raise ValueError(f"depth config: pocket.error keys must be among {ERROR_KEYS}")
+    for k, v in err.items():
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v)
+                              or v < 0):
+            raise ValueError(f"depth config: pocket.error.{k}")
 
 
 def calib_id(intr: dict) -> str:
