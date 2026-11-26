@@ -253,7 +253,7 @@ class RealLoop:
                  kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None, start_rear=None,
                  rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS,
                  scan_feed=None, events=None, operating: bool = False, scan_events=None,
-                 imu_unqualified: bool = False) -> None:
+                 imu_unqualified: bool = False, d5_region=None) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
         # the operating REAL run (unlock U3a, named by the assembly -- not inferred from the client, which the 4c rigs
         # share): its non-bypassable checks, its scan source's events judged at the tick head before any install, and
@@ -332,6 +332,9 @@ class RealLoop:
         self.state_delay_s = float(state_delay_s)
         self.v_scan_mps = (1.5 * float(max_speed_mps)) if v_scan_mps is None else float(v_scan_mps)
         self.kappa_max = float(kappa_max_inv_m)
+        # U3b-2: pose -> the D5 bypass region on the assembly's own geometry (RealHooks.bypass_region, the one source
+        # the confirmation and the mission's bypass check share); None: no D5 confirmation on this run
+        self.d5_region = d5_region
         self.pallet_size = pallet_size  # (depth, width) of the S10-A pallet (s10a.yaml): the planning grid's split
         self.odom_history: deque = deque(maxlen=256)  # (lo_s, hi_s, pose, continuous, included, speed_ok, yaw_ok)
         self._layer_asked = None  # the last (mission gen, path id, loaded) a refresh was asked for
@@ -580,9 +583,20 @@ class RealLoop:
             lease = self.link.a.lease
             if self.operator_start is None or lease is None:
                 return "unsupported", {}
-            if not self.operator_start.confirm(int(msg["session_epoch"]), lease.lease_id):
+            binding = None
+            if self._d5_confirm_required():
+                why = self._d5_refusal(msg)
+                if why is not None:
+                    return why, {}
+                binding = self._d5_binding(msg)
+            if not self.operator_start.confirm(int(msg["session_epoch"]), lease.lease_id, binding):
                 return "stale_epoch", {}
-            return None, {}
+            if binding is None:
+                return None, {}
+            self._emit({"t": "operator_start", "ns": int(now_ns), "lease_id": lease.lease_id,
+                        "session_epoch": int(msg["session_epoch"]), **binding})
+            return None, {"pallet_id": binding["pallet_id"], "targets_revision": binding["targets_revision"],
+                          "region": list(binding["region"])}
         if kind == "operator_answer":
             open_ = core.operator_open()
             if open_ is None:
@@ -595,8 +609,9 @@ class RealLoop:
             return None, {"received": True}
         if kind == "check_bypass":
             check = msg["check"]
-            if check in NOT_BYPASSABLE or (self.operating and check in OPERATING_NOT_BYPASSABLE):
-                return "not_bypassable", {}
+            if check in NOT_BYPASSABLE or (self.operating and check in OPERATING_NOT_BYPASSABLE) or (
+                    check == "operator_start" and self._d5_confirm_required()):
+                return "not_bypassable", {}  # U3b-2: without depth the per-pallet confirmation is not bypassable
             if check not in BYPASSABLE:
                 return "unknown_check", {}
             lease = self.link.a.lease
@@ -1859,6 +1874,43 @@ class RealLoop:
             self.delay_bound.restart_check()
             self.permit.restart_session(now_ns)
 
+    def _d5_confirm_required(self) -> bool:
+        """The operating run with no depth source (7e-2b on hold): D5 is the session's bypass, and the operator's
+        per-pallet confirmation stands in for the eyes (plan 2.6, U3b-2)."""
+        return self.operating and self.depth_source is None
+
+    def _d5_refusal(self, msg) -> str | None:
+        """Why the D5 confirmation cannot bind: the console must name the pallet and registration revision it shows
+        (the server never puts its own newest revision in their place), and they must be the current registration."""
+        from forklift_core.live import real_assembly as asm_
+
+        pid, rev = msg.get("pallet_id"), msg.get("targets_revision")
+        if not isinstance(pid, str) or isinstance(rev, bool) or not isinstance(rev, int):
+            return "operator_start_needs_registration"
+        if rev != int(self.core.targets.revision):
+            return "targets_changed"
+        if asm_.s10_submit_refusal(self.core, pid) is not None:
+            return "pallet_not_registered"
+        if self.d5_region is None:
+            return "unsupported"
+        return None
+
+    def _d5_binding(self, msg) -> dict:
+        """The binding of a confirmation ``_d5_refusal`` passed: the whole bypass region computed from that
+        registration (plan 2.6: the region the eyes must clear is the region exempted)."""
+        pid, rev = msg["pallet_id"], int(msg["targets_revision"])
+        pose = self.core.targets.pallets[pid].pose
+        region = self.d5_region((pose.x_m, pose.y_m, pose.yaw_rad))  # the check's own geometry
+        return {"pallet_id": pid, "targets_revision": rev, "reloc_gen": self.reloc_gen,
+                "region": [float(v) for v in region]}
+
+    def confirmed_region(self):
+        """The region the D5 confirmation used by the running mission named (the bypass check's comparison)."""
+        used = None if self.operator_start is None else self.operator_start.used
+        if used is None or used.get("mission_id") != self.core.commands.mission_id:
+            return None
+        return used.get("region")
+
     def _partial_is_zero(self) -> bool:
         """The frame left half written is a zero or a hold (some of its bytes are out)."""
         partial = getattr(self.transport, "partial_frame", None)
@@ -1886,7 +1938,19 @@ class RealLoop:
         pallet = None if sub is None else self.core.targets.pallets.get(sub.pallet_id)
         pose = None if pallet is None or pallet.pose is None else (
             float(pallet.pose.x_m), float(pallet.pose.y_m), float(pallet.pose.yaw_rad))
-        return rca.placement_refusal(pose, self.check_pallet_pose)
+        why = rca.placement_refusal(pose, self.check_pallet_pose)
+        if why is not None or not self._d5_confirm_required():
+            return why
+        # U3b-2 (plan 2.6): no depth source -- the D5 bypass is the only way, and the operator's confirmation must be
+        # for this very submit's pallet and registration revision, this lease and relocalization generation
+        if "d5_pocket" not in self._tick_bypass:
+            return "d5_pocket:no_depth_source"
+        lease = self.link.a.lease
+        key = (sub.pallet_id, int(sub.targets_revision), self.reloc_gen)
+        if self.operator_start is None or not self.operator_start.ok_for(
+                None if lease is None else lease.lease_id, key):
+            return "operator_start:unconfirmed"
+        return None
 
     def _submit_refusal(self, now_ns: int) -> str | None:
         if self.session.collect_failed is not None:
@@ -1986,9 +2050,14 @@ class RealLoop:
         if cmds.status == "accepted" and self.frozen is None:
             if self.operator_start is not None and not self._bypassed("operator_start"):
                 lease = self.link.a.lease
-                if not self.operator_start.take(None if lease is None else lease.lease_id):
+                m_ = cmds.mission
+                key = (m_.pallet_id, int(m_.targets_revision), self.reloc_gen) \
+                    if self._d5_confirm_required() and m_ is not None else None
+                if not self.operator_start.take(None if lease is None else lease.lease_id, key, cmds.mission_id):
                     cmds.terminate("cancelled", t, "operator_start_unconfirmed")  # its check was used or voided
                     return
+                if self.operator_start.used is not None:
+                    self._emit({"t": "operator_start_used", "ns": int(now_ns), **self.operator_start.used})
             self.frozen = freeze_submit(core)
         if cmds.status in ("accepted", "preparing") and not core.job_pending():
             if self.frozen is not None and self._planning_ready():

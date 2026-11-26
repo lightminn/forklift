@@ -322,7 +322,7 @@ class FakeImu:
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
                  initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False,
-                 check_builder=True, operating=False, imu_unqualified=False):
+                 check_builder=True, operating=False, imu_unqualified=False, no_depth=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -428,7 +428,10 @@ class Rig:
                               pocket_check=build_check if check_builder else None,  # 5d: no builder (PR 7)
                               operator=((lambda r: loop_box["loop"].operator_check(r)) if real_requests
                                         else self._operator), tick=tick, layer=self.layer,
-                              occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None)
+                              occupancy=(lambda: loop_box["loop"].planning_occupancy()) if real_layer else None,
+                              # U3b-2: the operating run without a depth source checks the D5 confirmation's region
+                              confirmed_region=(lambda: loop_box["loop"].confirmed_region())
+                              if operating and no_depth else None)
         base_cfg = cfg or replace(ra.load_s10a(ROOT / "config/real/s10a.yaml"), map_id="hall-1", pallet_depth_m=0.6,
                                   pallet_width_m=0.4, check_pallet_pose=PALLET)
         settings = {"drive_acceleration_mps2": 0.3, "lift_rate_mps": 0.05, "lift_target_m": 0.08,
@@ -500,7 +503,7 @@ class Rig:
                              start_ns=10_000 * MS,
                              slam_source=FakeSlam(self) if reloc else SimpleNamespace(replies=lambda n: []),
                              evidence=evidence, base_scenario=core.options.scenario, wait_pose=None,
-                             depth_source=SimpleNamespace(frames=self._depth_frames),
+                             depth_source=None if no_depth else SimpleNamespace(frames=self._depth_frames),
                              clock=lambda: self.now + self.tick_cost_ns,
                              real_layer=self.layer, delay_bound=self.delay_bound if real_layer else None,
                              state_delay_s=0.05, pallet_size=(0.6, 0.4),
@@ -508,7 +511,7 @@ class Rig:
                              operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
                              **({"start_rear": tuple(base_cfg.start_rear), "rear_offset_m": REAR_OFFSET_M}
                                 if reloc or operating else {}),
-                             operating=operating, imu_unqualified=imu_unqualified,
+                             operating=operating, imu_unqualified=imu_unqualified, d5_region=hooks.bypass_region,
                              **self._watch_args(watch, imu))
         self.slam = self.loop.slam_source
         if operating:

@@ -1183,6 +1183,9 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
         hooks = asm.RealHooks(lift_m=lambda: float("nan") if host.state is None else float(host.state.lift_m),
                               odom_base=odom_base, ready=lambda t, inputs: None,
                               started=_case_a_started(prep) if sources.client is Client.REAL else (lambda *a: None),
+                              # U3b-2: the operating run's bypass region must be the one its D5 confirmation named
+                              confirmed_region=(lambda: box["loop"].confirmed_region())
+                              if sources.client is Client.REAL and sources.depth is None else None,
                               record=lambda name, obj: _emit(events, {"t": "record", "name": str(name)}),
                               geometry=prep.geometry,
                               # the depth source's frame and check builder (PR 7; HIL has none: D5 only by the bypass)
@@ -1308,7 +1311,8 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                         rear_offset_m=prep.rear_offset_m, watches=prep.watches,
                         imu_source=None if sources.imu is None or imu_unqualified else _ImuGuard(sources.imu, mark),
                         scan_feed=scan_feed, events=events, operating=operating,
-                        scan_events=scan_events if operating else None, imu_unqualified=imu_unqualified)
+                        scan_events=scan_events if operating else None, imu_unqualified=imu_unqualified,
+                        d5_region=hooks.bypass_region)
         loop.scan_refusal = lambda: getattr(scans, "last_refusal", None)
         if operating:
             # U3b-1 (plan 2.2, 2.4): the approved placement and the run-time margins (the run sets its deadline)

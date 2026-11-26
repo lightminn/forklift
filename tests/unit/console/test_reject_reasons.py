@@ -37,6 +37,9 @@ FLOWS = {
     # 5c-2 (design 6, 5): the relocalization attempt's refusals
     ("src/forklift_core/live/real_loop.py", "self._attempt_request(kind, msg, now_ns)"): (
         "direct", None, [("src/forklift_core/live/real_loop.py", frozenset({"_attempt_request"}))]),
+    # U3b-2 (operating unlock plan 2.6): the operating run's D5 confirmation without a depth source
+    ("src/forklift_core/live/real_loop.py", "why"): (
+        "call", "_d5_refusal", [("src/forklift_core/live/real_loop.py", frozenset({"_d5_refusal"}))]),
     ("src/forklift_core/live/real_loop.py", "done[1]"): (
         "direct", None, [("src/forklift_core/mission/core.py", frozenset({"field_recovery_done"}))]),
     (MOCK, "verdict"): ("call", "admit", "ledger"),
