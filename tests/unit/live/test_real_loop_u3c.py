@@ -214,3 +214,16 @@ def test_the_first_arm_is_judged_from_the_eyes_check_not_from_the_submit():
     assert r.loop._d5_moved(base + 1.2 * tol)  # noqa: SLF001
     r.loop._d5_used_span = None  # noqa: SLF001 -- without the used span the submit's baseline alone lets it go
     assert not r.loop._d5_moved(base + 1.2 * tol)  # noqa: SLF001
+
+
+def test_a_confirmation_in_the_tick_its_span_ended_says_the_truck_moved():
+    """Codex round 6 P3: not still now -> the span it names ended: still_changed, not slam_stale; and the used span's
+    notes stop at the first ARM written."""
+    r = rig()
+    bypass_d5(r)
+    pid, rev = register(r)
+    span = still(r)
+    r.loop._end_still()  # noqa: SLF001 -- the span ended this tick
+    reply, _ = ask(r, "operator_start", pallet_id=pid, targets_revision=rev, register_serial=r.serial,
+                   still_serial=span)
+    assert reply["t"] == "reject" and reply["reason"] == "still_changed", reply

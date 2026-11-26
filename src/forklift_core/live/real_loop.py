@@ -620,6 +620,10 @@ class RealLoop:
             if not disarmed:
                 return "armed", {}
             if self.still_since_ns is None:
+                # U3c (Codex round 6 P3): not still now, so the span a confirmation names has ended -- the truck
+                # moved since its six lines were ticked
+                if self._d5_confirm_required() and type(msg.get("still_serial")) is int:
+                    return "still_changed", {}
                 # standing on the MCU samples but no fresh SLAM: say so (5c-2, 6, 3)
                 return ("slam_stale" if self.stand_since_ns is not None else "not_still"), {}
             lease = self.link.a.lease
@@ -3179,6 +3183,7 @@ class RealLoop:
             permit.written(kind, seq, written_ns)
             if kind == "ARM":
                 self._d5_armed_for = self.core.commands.mission_id  # U3b-2: the eyes' span ends at the ARM written
+                self._d5_used_span = None  # its notes end there too (Codex U3c round 6 P3)
             if self.closing and kind == "DISARM" and self.host.state is not None:
                 self.closing_disarms.append((self.host.state.boot_id, int(seq) & 0xFFFF, int(written_ns)))
             self._emit({"t": "frame_written", "kind": kind, "seq": int(seq) & 0xFFFF, "written_ns": int(written_ns),
