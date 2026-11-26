@@ -507,10 +507,12 @@ class Rig:
                              kappa_max_inv_m=max(abs(k) for k in VEH.steering.curvatures_inv_m),
                              operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
                              **({"start_rear": tuple(base_cfg.start_rear), "rear_offset_m": REAR_OFFSET_M}
-                                if reloc else {}),
+                                if reloc or operating else {}),
                              operating=operating, imu_unqualified=imu_unqualified,
                              **self._watch_args(watch, imu))
         self.slam = self.loop.slam_source
+        if operating:
+            self.loop.check_pallet_pose = tuple(float(v) for v in PALLET)  # U3b-1: the rig's pallet is case A's
         loop_box["loop"] = self.loop
         # 5c-2 (design 6, 2b): the arbiter's stop evidence is the physical stand (no SLAM term)
         self.arbiter.stop_evidence = lambda now: self.loop.physical_stop(now)
