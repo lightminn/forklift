@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 
 from forklift_core.mcu_link.messages import (
     Arm,
+    BenchSet,
     ClearFaults,
     Commission,
     Disarm,
@@ -568,6 +569,24 @@ class McuLinkHost:
         if len(self._outbox) >= self.cfg.outbox_max:
             return Blocked("outbox_full")
         self._enqueue("CLEAR_FAULTS", ClearFaults(s.boot_id), now_ns)
+        return None
+
+    def bench_set(self, bypass: int, duty_max_e4, time_ms, now_ns: int) -> Blocked | None:
+        """DIAGNOSTIC BRANCH ONLY (diag/fw-bench): queue one BENCH_SET -- the bench image's session overrides, taken
+        by the board in DISARMED only. Its seq is ``last_queued_seq``; the caller reads the board's acceptance from
+        STATE (``last_rx_seq`` and ``reject_reason``)."""
+        s = self._state
+        if s is None or not self._fresh(now_ns):
+            return Blocked("no_state")
+        if s.mode != Mode.DISARMED or self._auth != _NONE:
+            return Blocked("not_disarmed")
+        if len(self._outbox) >= self.cfg.outbox_max:
+            return Blocked("outbox_full")
+        try:
+            msg = BenchSet(s.boot_id, int(bypass), tuple(int(v) for v in duty_max_e4), tuple(int(v) for v in time_ms))
+        except ValueError as exc:
+            return Blocked(f"bad_value: {exc}")
+        self._enqueue("BENCH_SET", msg, now_ns)
         return None
 
     # ---------------------------------------------------------------- drive

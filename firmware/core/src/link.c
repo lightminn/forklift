@@ -12,6 +12,7 @@
 #define ARM_LEN 12u
 #define CLEAR_LEN 4u
 #define COMMISSION_LEN 19u
+#define BENCH_SET_LEN 32u /* diag/fw-bench */
 #define STATE_LEN 84u
 
 /* Little-endian writer/reader over a byte buffer; no struct copies (padding, endianness). */
@@ -97,6 +98,8 @@ static size_t payload_len(uint8_t type)
         return CLEAR_LEN;
     case LINK_COMMISSION:
         return COMMISSION_LEN;
+    case LINK_BENCH_SET:
+        return BENCH_SET_LEN;
     case LINK_STATE:
         return STATE_LEN;
     default:
@@ -135,6 +138,18 @@ static void put_payload(wr *w, const link_msg *m)
         put_u16(w, c->arm_gen);
         put_u32(w, c->boot_id);
         put_u64(w, c->echo_mcu_time_us);
+        break;
+    }
+    case LINK_BENCH_SET: {
+        const link_bench_set *b = &m->u.bench;
+        put_u32(w, b->boot_id);
+        put_u32(w, b->bypass);
+        for (int i = 0; i < 4; i++) {
+            put_u16(w, b->duty_max_e4[i]);
+        }
+        for (int i = 0; i < 4; i++) {
+            put_u32(w, b->time_ms[i]);
+        }
         break;
     }
     case LINK_STATE: {
@@ -212,6 +227,18 @@ static void get_payload(rd *r, link_msg *m)
         c->arm_gen = get_u16(r);
         c->boot_id = get_u32(r);
         c->echo_mcu_time_us = get_u64(r);
+        break;
+    }
+    case LINK_BENCH_SET: {
+        link_bench_set *b = &m->u.bench;
+        b->boot_id = get_u32(r);
+        b->bypass = get_u32(r);
+        for (int i = 0; i < 4; i++) {
+            b->duty_max_e4[i] = get_u16(r);
+        }
+        for (int i = 0; i < 4; i++) {
+            b->time_ms[i] = get_u32(r);
+        }
         break;
     }
     case LINK_STATE: {

@@ -25,6 +25,8 @@ endif()
 if(FW_BUILD STREQUAL "commission" AND NOT FW_OUTPUTS_LOCKED)
     if(FW_SINGLE_AXIS)
         set(FW_LIMITS_TAG " lim=lr1 sa1")
+    elseif(FW_BENCH) # diag/fw-bench: the bench image, told apart by this exact suffix
+        set(FW_LIMITS_TAG " lim=lr1 bench")
     else()
         set(FW_LIMITS_TAG " lim=lr1")
     endif()

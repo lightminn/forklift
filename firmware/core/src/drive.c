@@ -12,6 +12,12 @@
 #else
 #define SINGLE_AXIS(c) false
 #endif
+/* diag/fw-bench: the bench image's session overrides, compiled in only with FW_CORE_BENCH. */
+#if defined(FW_CORE_BENCH)
+#define BENCH(c) ((c)->bench_build)
+#else
+#define BENCH(c) false
+#endif
 #define HALF_RANGE_MARGIN 16383.0f /* half of the 16-bit difference's half range */
 
 /* Bits cleared by a successful ARM rather than by CLEAR_FAULTS: the expiry and commissioning
@@ -81,6 +87,10 @@ bool drive_config_valid(const drive_config *c)
     }
     /* Single-axis commissioning: an open commissioning build only (plan 2026-11-25 PR-B). */
     if (SINGLE_AXIS(c) && (!c->commission_build || c->outputs_locked || c->hil_plant)) {
+        return false;
+    }
+    /* diag/fw-bench: an open commissioning build only, never single-axis at the same time. */
+    if (BENCH(c) && (!c->commission_build || c->outputs_locked || c->hil_plant || SINGLE_AXIS(c))) {
         return false;
     }
     if (c->commission_build) {
@@ -317,6 +327,12 @@ bool drive_init(drive *d, const drive_config *c, const drive_inputs *first, uint
 #if defined(FW_CORE_SINGLE_AXIS)
     d->sa_last_axis = CM_AXIS_NONE;
 #endif
+#if defined(FW_CORE_BENCH)
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) { /* the boot starts with no override */
+        d->bench_duty_max_e4[ch] = c->commission_duty_max_e4[ch];
+        d->bench_time_ms[ch] = c->commission_time_ms[ch];
+    }
+#endif
     d->last_now32 = first->now_us;
     d->mode = DRIVE_MODE_BOOT;
     for (int i = 0; i < 2; i++) {
@@ -339,6 +355,67 @@ static bool driving(const drive *d)
 static bool axis_ok(const abs_axis *a)
 {
     return a->valid && !a->out_of_range;
+}
+
+/* diag/fw-bench: whether this session's BENCH_SET turned a check off. */
+static bool bench_bypassed(const drive *d, uint32_t bit)
+{
+#if defined(FW_CORE_BENCH)
+    return BENCH(d->cfg) && (d->bench_bypass & bit) != 0;
+#else
+    (void)d;
+    (void)bit;
+    return false;
+#endif
+}
+
+/* The commissioning limits in force: the build's, or the bench session's. */
+static uint32_t cm_duty_max_e4(const drive *d, uint8_t ch)
+{
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        return d->bench_duty_max_e4[ch];
+    }
+#endif
+    return d->cfg->commission_duty_max_e4[ch];
+}
+
+static uint32_t cm_time_ms(const drive *d, uint8_t ch)
+{
+#if defined(FW_CORE_BENCH)
+    if (BENCH(d->cfg)) {
+        return d->bench_time_ms[ch];
+    }
+#endif
+    return d->cfg->commission_time_ms[ch];
+}
+
+/* A commissioning axis is measurable: its KTH valid and, unless the bench session turned the
+   range off for it, inside its joint range. */
+static bool cm_axis_ok(const drive *d, const abs_axis *a, uint32_t range_bit)
+{
+    return a->valid && (!a->out_of_range || bench_bypassed(d, range_bit));
+}
+
+static bool bench_overrides(const drive *d)
+{
+#if defined(FW_CORE_BENCH)
+    if (!BENCH(d->cfg)) {
+        return false;
+    }
+    if (d->bench_bypass != 0) {
+        return true;
+    }
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        if (d->bench_duty_max_e4[ch] != d->cfg->commission_duty_max_e4[ch] ||
+            d->bench_time_ms[ch] != d->cfg->commission_time_ms[ch]) {
+            return true;
+        }
+    }
+#else
+    (void)d;
+#endif
+    return false;
 }
 
 /* What ARM and CLEAR_FAULTS require. A commission build needs only the current sense: the
@@ -447,9 +524,15 @@ static uint32_t driving_sensor_bits(const drive *d)
         return bits & keep; /* M and H drive without their KTH: the bits stay in STATE only */
     }
     if (d->cm_axis == DRIVE_CH_M) {
-        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID | DRIVE_FAULT_STEER_OUT_OF_RANGE;
+        keep |= DRIVE_FAULT_STEER_SENSOR_INVALID;
+        if (!bench_bypassed(d, DRIVE_BENCH_STEER_RANGE)) {
+            keep |= DRIVE_FAULT_STEER_OUT_OF_RANGE;
+        }
     } else if (d->cm_axis == DRIVE_CH_H) {
-        keep |= DRIVE_FAULT_LIFT_SENSOR_INVALID | DRIVE_FAULT_LIFT_OUT_OF_RANGE;
+        keep |= DRIVE_FAULT_LIFT_SENSOR_INVALID;
+        if (!bench_bypassed(d, DRIVE_BENCH_LIFT_RANGE)) {
+            keep |= DRIVE_FAULT_LIFT_OUT_OF_RANGE;
+        }
     }
     return bits & keep;
 }
@@ -564,6 +647,9 @@ static void refresh_flags(drive *d)
     if (!d->drivers_ready) {
         live |= DRIVE_FAULT_DRIVER_NOT_READY;
     }
+    if (bench_overrides(d)) {
+        live |= DRIVE_FAULT_BENCH_OVERRIDES; /* diag/fw-bench: shown, never latched */
+    }
     d->fault_flags = d->latched | live;
 }
 
@@ -573,7 +659,7 @@ static bool commission_over_limit(const drive *d)
        cm_on still holds until a zero-output cycle (design 2026-11-25 1.1, Codex S P1-1). */
     return d->cfg->commission_build && d->cm_on && d->cm_on_axis < DRIVE_CH_COUNT &&
            d->time_us - d->cm_on_since_us >
-               (uint64_t)d->cfg->commission_time_ms[d->cm_on_axis] * US_PER_MS;
+               (uint64_t)cm_time_ms(d, d->cm_on_axis) * US_PER_MS;
 }
 
 /* After the commissioning time limit: the limit bit, and no ARM before stop_grace_ms of zero
@@ -799,7 +885,7 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
     /* Integer e4 against the picked axis's limit: a float x 10000 comparison misreads the edge. */
     int32_t duty = c->duty_e4;
     uint32_t duty_abs = (uint32_t)(duty < 0 ? -duty : duty);
-    if (duty_abs > d->cfg->commission_duty_max_e4[c->axis]) {
+    if (duty_abs > cm_duty_max_e4(d, c->axis)) {
         return DRIVE_REJECT_BAD_VALUE;
     }
     uint8_t why =
@@ -827,8 +913,8 @@ static uint8_t commission_check(const drive *d, const link_msg *m, uint32_t wind
         }
         return DRIVE_REJECT_NONE; /* M and H need no KTH here */
     }
-    if ((c->axis == DRIVE_CH_M && !axis_ok(&d->steer)) ||
-        (c->axis == DRIVE_CH_H && !axis_ok(&d->lift))) {
+    if ((c->axis == DRIVE_CH_M && !cm_axis_ok(d, &d->steer, DRIVE_BENCH_STEER_RANGE)) ||
+        (c->axis == DRIVE_CH_H && !cm_axis_ok(d, &d->lift, DRIVE_BENCH_LIFT_RANGE))) {
         return DRIVE_REJECT_SENSOR_INVALID; /* the picked axis must be measurable */
     }
     return DRIVE_REJECT_NONE;
@@ -911,6 +997,48 @@ static void handle_clear(drive *d, const link_msg *m)
     start_driver_init(d, true);
 }
 
+/* diag/fw-bench: the bench session's overrides, in DISARMED only and outside an output interval. */
+static void handle_bench_set(drive *d, const link_msg *m)
+{
+#if defined(FW_CORE_BENCH)
+    const link_bench_set *b = &m->u.bench;
+    const uint32_t max_ms = 0x7FFFFFFFu / US_PER_MS; /* drive_config_valid's ceiling */
+    if (!BENCH(d->cfg)) {
+        d->reject_reason = DRIVE_REJECT_WRONG_BUILD;
+        return;
+    }
+    if (d->mode != DRIVE_MODE_DISARMED || d->cm_on) {
+        d->reject_reason = DRIVE_REJECT_NOT_DISARMED;
+        return;
+    }
+    if (b->boot_id != d->boot_id) {
+        d->reject_reason = DRIVE_REJECT_BOOT_MISMATCH;
+        return;
+    }
+    if ((b->bypass & ~DRIVE_BENCH_KNOWN) != 0) {
+        d->reject_reason = DRIVE_REJECT_BAD_VALUE;
+        return;
+    }
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        if (b->duty_max_e4[ch] == 0 || b->duty_max_e4[ch] > 10000u || b->time_ms[ch] == 0 ||
+            b->time_ms[ch] > max_ms) {
+            d->reject_reason = DRIVE_REJECT_BAD_VALUE;
+            return;
+        }
+    }
+    d->bench_bypass = b->bypass;
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        d->bench_duty_max_e4[ch] = b->duty_max_e4[ch];
+        d->bench_time_ms[ch] = b->time_ms[ch];
+    }
+    d->reject_reason = DRIVE_REJECT_NONE;
+    d->last_rx_seq = m->seq;
+#else
+    (void)m;
+    d->reject_reason = DRIVE_REJECT_WRONG_BUILD;
+#endif
+}
+
 void drive_handle(drive *d, const link_msg *m)
 {
     switch (m->type) {
@@ -933,6 +1061,9 @@ void drive_handle(drive *d, const link_msg *m)
         break;
     case LINK_COMMISSION:
         handle_commission(d, m);
+        break;
+    case LINK_BENCH_SET:
+        handle_bench_set(d, m);
         break;
     default:
         break;

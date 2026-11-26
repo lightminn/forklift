@@ -58,6 +58,16 @@ enum { DRIVE_CH_L, DRIVE_CH_R, DRIVE_CH_M, DRIVE_CH_H, DRIVE_CH_COUNT };
 #define DRIVE_FAULT_ENCODER_POLARITY(w) (1u << (20 + (w))) /* v2 */
 #define DRIVE_FAULT_ENCODER_JUMP(w) (1u << (22 + (w)))     /* v2 */
 #define DRIVE_FAULT_COMMISSION_TIME_LIMIT (1u << 24)       /* v2 */
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): live, never latched -- the bench image runs with a
+   BENCH_SET that differs from the build's defaults (a bypass bit or a limit). */
+#define DRIVE_FAULT_BENCH_OVERRIDES (1u << 31)
+
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the checks a BENCH_SET may turn off for the session. The
+   stopping side (overcurrent, driver faults, STOP/DISARM, command expiry, IWDG, cycle overrun)
+   has no bit and never will. */
+#define DRIVE_BENCH_STEER_RANGE (1u << 0) /* M: the steering joint range (KTH validity stays) */
+#define DRIVE_BENCH_LIFT_RANGE (1u << 1)  /* H: the lift joint range (KTH validity stays) */
+#define DRIVE_BENCH_KNOWN (DRIVE_BENCH_STEER_RANGE | DRIVE_BENCH_LIFT_RANGE)
 
 /* STATE.flags bits. */
 #define DRIVE_STATE_LIMITED 0x01u
@@ -124,6 +134,12 @@ typedef struct {
        keep their bytes. */
 #if defined(FW_CORE_SINGLE_AXIS)
     bool commission_single_axis;
+#endif
+    /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the bench image (an open commissioning build) takes
+       BENCH_SET in DISARMED; its defaults are the build's commissioning limits above, no bypass.
+       Compiled only with FW_CORE_BENCH (the bench image and the host tests). */
+#if defined(FW_CORE_BENCH)
+    bool bench_build;
 #endif
     float wheel_duty_slew_per_s; /* wheel duty change limit while the outputs are on */
     /* Encoder fault detection (plan 3.3); board values wait for S3/S4 measurements. */
@@ -197,6 +213,12 @@ typedef struct drive {
     uint64_t cm_on_since_us;
 #if defined(FW_CORE_SINGLE_AXIS)
     uint8_t sa_last_axis; /* single-axis build: the axis an arming last fixed (kept across DISARM) */
+#endif
+#if defined(FW_CORE_BENCH)
+    /* diag/fw-bench: the session overrides the last accepted BENCH_SET set (boot: the defaults) */
+    uint32_t bench_bypass;
+    uint16_t bench_duty_max_e4[DRIVE_CH_COUNT];
+    uint32_t bench_time_ms[DRIVE_CH_COUNT];
 #endif
     uint64_t cm_hold_until_us; /* after the time limit: no ARM before this (zero output) */
     /* Encoder fault detection episodes. */

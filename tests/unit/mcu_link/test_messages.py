@@ -6,6 +6,7 @@ import pytest
 from forklift_core.mcu_link.framing import cobs_decode, cobs_encode, crc16_ccitt_false
 from forklift_core.mcu_link.messages import (
     Arm,
+    BenchSet,
     ClearFaults,
     Commission,
     Disarm,
@@ -33,6 +34,7 @@ DRIVE_0007 = (
 CLEAR_0008 = "0403040807efbeaddea4c100"
 DISARM_0009 = "0403030903d4fc00"
 COMMISSION_000A = "0403050a050224fa960a0302efbeaddeefcdab02010101037f4500"
+BENCH_SET_000B = "0403060b06efbeadde0101010c10271027c409dc059bc420049bc4200330750103d0070103f52600"  # DIAGNOSTIC BRANCH ONLY (diag/fw-bench)
 STATE_0102 = (
     "0a03810201443322110201010eefbeadde03020201020701800108c01dfefff1fb0901"
     "0103a03f010102bf0103803d0108403fdc0538ff1e09a00f8813f0d8c4090104c0c4e0"
@@ -102,6 +104,8 @@ GOLDEN = [
     (STATE, 0x0102, STATE_0102),
     (COMMISSION, 0x000A, COMMISSION_000A),
     (STATE_V2_BITS, 0x0103, STATE_0103),
+    (BenchSet(boot_id=0xDEADBEEF, bypass=1, duty_max_e4=(10000, 10000, 2500, 1500),
+              time_ms=(2147483, 2147483, 30000, 2000)), 0x000B, BENCH_SET_000B),
 ]
 
 
@@ -225,6 +229,10 @@ def test_the_golden_vectors_are_the_contract_formats_with_the_standard_crc():
                                                                0x00000001_00ABCDEF)
     body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
     assert cobs_encode(body) + b"\x00" == bytes.fromhex(COMMISSION_000A)
+    body = struct.pack("<BBH", 3, 0x06, 0x000B) + struct.pack("<II4H4I", 0xDEADBEEF, 1, 10000, 10000, 2500, 1500,
+                                                               2147483, 2147483, 30000, 2000)  # diag/fw-bench
+    body += binascii.crc_hqx(body, 0xFFFF).to_bytes(2, "little")
+    assert cobs_encode(body) + b"\x00" == bytes.fromhex(BENCH_SET_000B)
     fields = (0x00000002_11223344, 0xDEADBEEF, 0x0203, 0x0102, 2, 7, (1 << 17) | (1 << 19) | (1 << 22) | (1 << 24),
               -123456, 654321, 1.25, -0.5, 0.0625, 0.75, 1500, -200, 30, 4000, 5000, -10000, 2500, 0,
               0xC0, 0xC4, 0xE0, 0x00, 17, 2, 0x01 | 0x08 | 0x10 | 0x40 | 0x80, 2,
@@ -277,3 +285,13 @@ def test_a_v3_state_fills_the_largest_body():
     from forklift_core.mcu_link.framing import BODY_MAX
 
     assert len(body_of(STATE_0102)) + 2 == BODY_MAX == 90  # body_of drops the CRC
+
+
+def test_a_bench_set_refuses_unknown_bits_and_out_of_range_limits():
+    """DIAGNOSTIC BRANCH ONLY (diag/fw-bench): no bit beyond the known ones (the stopping side has none)."""
+    ok = dict(boot_id=1, bypass=0, duty_max_e4=(1500,) * 4, time_ms=(2000,) * 4)
+    BenchSet(**ok)
+    for bad in ({"bypass": 1 << 7}, {"duty_max_e4": (0, 1, 1, 1)}, {"duty_max_e4": (10001, 1, 1, 1)},
+                {"time_ms": (0, 1, 1, 1)}, {"time_ms": (2147484, 1, 1, 1)}, {"time_ms": (1, 1, 1)}):
+        with pytest.raises(ValueError):
+            BenchSet(**{**ok, **bad})

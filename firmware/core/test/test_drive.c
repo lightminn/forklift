@@ -1982,6 +1982,146 @@ static void s25_each_axis_reads_its_own_time_limit(void)
     }
 }
 
+/* ---- DIAGNOSTIC BRANCH ONLY (diag/fw-bench): BENCH_SET session overrides ---------------- */
+static void mod_bench(drive_config *c)
+{
+    mod_commission_open_lr(c);
+    c->bench_build = true;
+}
+
+static link_msg bench_msg(uint16_t seq, uint32_t boot, uint32_t bypass, uint16_t m_duty_e4, uint32_t m_time_ms)
+{
+    link_msg m = {.type = LINK_BENCH_SET, .seq = seq};
+    for (int ch = 0; ch < DRIVE_CH_COUNT; ch++) {
+        m.u.bench.duty_max_e4[ch] = cfg.commission_duty_max_e4[ch];
+        m.u.bench.time_ms[ch] = cfg.commission_time_ms[ch];
+    }
+    m.u.bench.boot_id = boot;
+    m.u.bench.bypass = bypass;
+    m.u.bench.duty_max_e4[DRIVE_CH_M] = m_duty_e4;
+    m.u.bench.time_ms[DRIVE_CH_M] = m_time_ms;
+    return m;
+}
+
+static void bench_set_refusals(void)
+{
+    boot_with(mod_commission_open_lr); /* not the bench image */
+    send(bench_msg(1, d.boot_id, 0, 1500, 2000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_WRONG_BUILD);
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    send(bench_msg(1, d.boot_id + 1u, 0, 1500, 2000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BOOT_MISMATCH);
+    send(bench_msg(2, d.boot_id, 1u << 7, 1500, 2000)); /* an unknown bit: never a stopping check */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(bench_msg(3, d.boot_id, 0, 0, 2000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(bench_msg(4, d.boot_id, 0, 10001, 2000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(bench_msg(5, d.boot_id, 0, 1500, 0));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    send(bench_msg(6, d.boot_id, 0, 1500, 0x7FFFFFFFu / 1000u + 1u));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES, 0); /* nothing taken */
+    send(arm_msg(7, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    send(bench_msg(8, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000)); /* armed: refused */
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NOT_DISARMED);
+    CHECK_EQ_U(d.bench_bypass, 0);
+    CHECK(d.last_rx_seq != 8);
+}
+
+static void bench_steer_range_bypass(void)
+{
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(2.0); /* joint 2.0 > max 0.5: out of range, the frame valid */
+    ticks(5);
+    CHECK(d.steer.valid && d.steer.out_of_range);
+    uint16_t seq = 1;
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_SENSOR_INVALID); /* no bypass: the range holds */
+    send(simple(LINK_DISARM, seq++));
+    ticks(5);
+    uint16_t set_seq = seq++;
+    send(bench_msg(set_seq, d.boot_id, DRIVE_BENCH_STEER_RANGE, 2500, 30000));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(d.last_rx_seq, set_seq); /* the tool reads its acceptance here */
+    CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES);
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED);
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    double s = 2.0;
+    for (int t = 0; t < 3000; t++) { /* 3 s at 0.12: the sensor turns ~24 times, every joint range */
+        if (t % 50 == 0) {
+            link_msg m = commission_msg(seq++, DRIVE_CH_M, 1200, 150, echo_now());
+            tick_msgs(&m, 1);
+            CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+        } else {
+            tick();
+        }
+        s += 0.05;
+        set_steer(s);
+        CHECK_EQ_U(d.mode, DRIVE_MODE_ARMED); /* 3 s past the default 2 s limit too (M: 30 s) */
+    }
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.12, 1e-6);
+    CHECK_EQ_U(d.latched & DRIVE_FAULT_STEER_OUT_OF_RANGE, 0);
+    CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES);
+    link_msg over = commission_msg(seq++, DRIVE_CH_M, 2501, 150, echo_now()); /* the session's 0.25 */
+    tick_msgs(&over, 1);
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_BAD_VALUE);
+    /* the KTH going invalid still stops M (validity is not a bypass bit) */
+    in.abs_frame[0] = 0xFFFF;
+    for (int t = 0; t < 20; t++) {
+        link_msg m = commission_msg(seq++, DRIVE_CH_M, 1200, 150, echo_now());
+        tick_msgs(&m, 1);
+    }
+    CHECK(d.latched & DRIVE_FAULT_STEER_SENSOR_INVALID);
+    CHECK(d.mode != DRIVE_MODE_ARMED);
+    CHECK_NEAR(out.duty[DRIVE_CH_M], 0.0, 0.0);
+}
+
+static void bench_limits_are_the_sessions(void)
+{
+    /* the session's M time limit (0.5 s) ends the interval, not the build's 2 s */
+    boot_with(mod_bench);
+    in.abs_fresh[1] = false;
+    set_steer(0.0);
+    ticks(5);
+    uint16_t seq = 1;
+    send(bench_msg(seq++, d.boot_id, 0, 1500, 500));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES); /* a limit differs from the build's */
+    send(arm_msg(seq++, d.boot_id, echo_now()));
+    send(commission_msg(seq++, DRIVE_CH_M, 0, 150, echo_now()));
+    int t = 0;
+    for (; t < 1500 && !(d.latched & DRIVE_FAULT_COMMISSION_TIME_LIMIT); t++) {
+        if (t % 50 == 0) {
+            link_msg m = commission_msg(seq++, DRIVE_CH_M, 1000, 150, echo_now());
+            tick_msgs(&m, 1);
+        } else {
+            tick();
+        }
+    }
+    CHECK(d.latched & DRIVE_FAULT_COMMISSION_TIME_LIMIT);
+    CHECK(t > 450 && t < 600);
+    /* back to the build's values: no override shown */
+    ticks((int)cfg.stop_grace_ms + 50);
+    send(simple(LINK_DISARM, seq++));
+    ticks(5);
+    CHECK_EQ_U(d.mode, DRIVE_MODE_DISARMED);
+    send(bench_msg(seq++, d.boot_id, 0, cfg.commission_duty_max_e4[DRIVE_CH_M], cfg.commission_time_ms[DRIVE_CH_M]));
+    CHECK_EQ_U(d.reject_reason, DRIVE_REJECT_NONE);
+    CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES, 0);
+    /* a new boot starts with none */
+    boot_with(mod_bench);
+    CHECK_EQ_U(d.bench_bypass, 0);
+    CHECK_EQ_U(d.bench_time_ms[DRIVE_CH_M], cfg.commission_time_ms[DRIVE_CH_M]);
+    CHECK_EQ_U(d.fault_flags & DRIVE_FAULT_BENCH_OVERRIDES, 0);
+}
+
 int main(void)
 {
     boot_and_retry();
@@ -2037,5 +2177,8 @@ int main(void)
     s25_disarm_alone_keeps_the_interval_axis();
     s25_axis_change_inside_an_interval();
     s25_each_axis_reads_its_own_time_limit();
+    bench_set_refusals();
+    bench_steer_range_bypass();
+    bench_limits_are_the_sessions();
     return FW_TEST_RESULT();
 }

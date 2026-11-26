@@ -111,6 +111,13 @@ static drive_config make(void)
 #elif defined(FW_CORE_SINGLE_AXIS)
     c.commission_single_axis = false;
 #endif
+    /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image takes BENCH_SET (session
+       overrides of the range checks and the limits above); the defaults are the limits above. */
+#if defined(FW_BENCH_IMAGE)
+    c.bench_build = true;
+#elif defined(FW_CORE_BENCH)
+    c.bench_build = false;
+#endif
     c.wheel_duty_slew_per_s = 2.0f; /* S1/S3 실측 대기 */
     /* Encoder fault detection (plan 3.3), all S3/S4 실측 대기. The gap limit keeps the largest
        real step unambiguous: 0.02 s x 15 rad/s x 327680 / 2pi = 15645 <= 16383. */

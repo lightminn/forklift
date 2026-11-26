@@ -16,6 +16,13 @@ set(FW_SINGLE_AXIS 0 CACHE STRING
 if(FW_SINGLE_AXIS AND NOT (FW_BUILD STREQUAL "commission" AND FW_MOTOR_OUTPUT))
     message(FATAL_ERROR "FW_SINGLE_AXIS=1 is only for FW_BUILD=commission with FW_MOTOR_OUTPUT=1 (fw-single).")
 endif()
+# DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image -- the open commissioning
+# build that takes BENCH_SET (session overrides); its product string ends "lim=lr1 bench".
+set(FW_BENCH 0 CACHE STRING "1 = fw-bench (diag/fw-bench): the open commissioning build with session overrides")
+if(FW_BENCH AND NOT (FW_BUILD STREQUAL "commission" AND FW_MOTOR_OUTPUT AND FW_LINK STREQUAL "usb"
+                     AND NOT FW_SINGLE_AXIS))
+    message(FATAL_ERROR "FW_BENCH=1 is only for FW_BUILD=commission, FW_MOTOR_OUTPUT=1, FW_LINK=usb, not fw-single.")
+endif()
 # The tool tells fw-single apart only by the USB product string; UART7 has none (Codex PR-B P2-1).
 if(FW_SINGLE_AXIS AND NOT FW_LINK STREQUAL "usb")
     message(FATAL_ERROR "FW_SINGLE_AXIS=1 is only for FW_LINK=usb: the tool reads fw-single from the USB product string.")
@@ -110,7 +117,7 @@ add_custom_target(build_info
     COMMAND ${CMAKE_COMMAND} -DSRC_DIR=${BOARD_DIR} -DIN=${BOARD_DIR}/build_info.h.in
             -DOUT=${BUILD_INFO_H} -DFW_BUILD=${FW_BUILD_KIND} -DFW_LINK=${FW_LINK}
             -DFW_OUTPUTS_WORD=${FW_OUTPUTS_WORD} -DFW_OUTPUTS_LOCKED=${FW_OUTPUTS_LOCKED}
-            -DFW_ESTOP_WAIVED=${FW_ESTOP_WAIVED} -DFW_SINGLE_AXIS=${FW_SINGLE_AXIS}
+            -DFW_ESTOP_WAIVED=${FW_ESTOP_WAIVED} -DFW_SINGLE_AXIS=${FW_SINGLE_AXIS} -DFW_BENCH=${FW_BENCH}
             "-DFW_TOOLCHAIN_VERSION=${FW_TOOLCHAIN_VERSION}"
             -P ${BOARD_DIR}/gen_build_info.cmake
     BYPRODUCTS ${BUILD_INFO_H}
@@ -124,6 +131,9 @@ target_include_directories(fw_core_arm PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/../../
 target_compile_options(fw_core_arm PRIVATE -O2 -Wdouble-promotion -fstack-usage -fcallgraph-info=su)
 if(FW_SINGLE_AXIS) # fw-single only: every other image keeps the core it had
     target_compile_definitions(fw_core_arm PUBLIC FW_CORE_SINGLE_AXIS=1)
+endif()
+if(FW_BENCH) # diag/fw-bench only
+    target_compile_definitions(fw_core_arm PUBLIC FW_CORE_BENCH=1)
 endif()
 
 set(BOARD_SOURCES
@@ -209,6 +219,9 @@ if(FW_ESTOP_WAIVED)
 endif()
 if(FW_SINGLE_AXIS)
     target_compile_definitions(fw PRIVATE FW_COMMISSION_SINGLE=1)
+endif()
+if(FW_BENCH)
+    target_compile_definitions(fw PRIVATE FW_BENCH_IMAGE=1)
 endif()
 set_target_properties(fw PROPERTIES SUFFIX ".elf" OUTPUT_NAME ${FW_IMAGE})
 target_include_directories(fw PRIVATE ${BOARD_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/generated

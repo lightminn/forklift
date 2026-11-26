@@ -17,6 +17,7 @@
 #define LINK_DISARM 0x03u
 #define LINK_CLEAR_FAULTS 0x04u
 #define LINK_COMMISSION 0x05u /* v2: FW_COMMISSION builds only */
+#define LINK_BENCH_SET 0x06u /* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's session overrides */
 #define LINK_STATE 0x81u
 
 #define LINK_DRIVE_FLAG_LIFT_HOLD 0x01u
@@ -49,6 +50,16 @@ typedef struct {
     uint64_t echo_mcu_time_us;
 } link_commission;
 
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's overrides for this boot's
+   next arming(s) -- bypass bits (drive.h DRIVE_BENCH_*) and per-axis commissioning limits. Taken in
+   DISARMED only; the boot starts with none. */
+typedef struct {
+    uint32_t boot_id;
+    uint32_t bypass;
+    uint16_t duty_max_e4[4];
+    uint32_t time_ms[4];
+} link_bench_set;
+
 typedef struct {
     uint64_t mcu_time_us;
     uint32_t boot_id;
@@ -75,6 +86,7 @@ typedef struct {
         link_arm arm;
         link_clear clear;
         link_commission commission;
+        link_bench_set bench;
         link_state state;
     } u;
 } link_msg;

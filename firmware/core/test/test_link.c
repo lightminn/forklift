@@ -19,6 +19,9 @@ static const uint8_t DISARM_0009[] = {
 static const uint8_t COMMISSION_000A[] = {
     0x04, 0x03, 0x05, 0x0a, 0x05, 0x02, 0x24, 0xfa, 0x96, 0x0a, 0x03, 0x02, 0xef, 0xbe, 0xad, 0xde,
     0xef, 0xcd, 0xab, 0x02, 0x01, 0x01, 0x01, 0x03, 0x7f, 0x45, 0x00};
+/* DIAGNOSTIC BRANCH ONLY (diag/fw-bench): the Python encoder's vector (tests/unit/mcu_link/test_messages.py). */
+static const uint8_t BENCH_SET_000B[] = {
+    0x04, 0x03, 0x06, 0x0b, 0x06, 0xef, 0xbe, 0xad, 0xde, 0x01, 0x01, 0x01, 0x0c, 0x10, 0x27, 0x10, 0x27, 0xc4, 0x09, 0xdc, 0x05, 0x9b, 0xc4, 0x20, 0x04, 0x9b, 0xc4, 0x20, 0x03, 0x30, 0x75, 0x01, 0x03, 0xd0, 0x07, 0x01, 0x03, 0xf5, 0x26, 0x00};
 static const uint8_t STATE_0102[] = {
     0x0a, 0x03, 0x81, 0x02, 0x01, 0x44, 0x33, 0x22, 0x11, 0x02, 0x01, 0x01, 0x0e, 0xef, 0xbe, 0xad,
     0xde, 0x03, 0x02, 0x02, 0x01, 0x02, 0x07, 0x01, 0x80, 0x01, 0x08, 0xc0, 0x1d, 0xfe, 0xff, 0xf1,
@@ -138,6 +141,12 @@ static void golden_vectors_encode(void)
     link_msg state3 = state_0103();
     link_msg commission = commission_000a();
     CHECK(encodes_to(&commission, COMMISSION_000A, sizeof COMMISSION_000A));
+    link_msg bench = {.type = LINK_BENCH_SET, .seq = 0x000B};
+    bench.u.bench = (link_bench_set){.boot_id = 0xDEADBEEFu,
+                                     .bypass = 1,
+                                     .duty_max_e4 = {10000, 10000, 2500, 1500},
+                                     .time_ms = {2147483, 2147483, 30000, 2000}};
+    CHECK(encodes_to(&bench, BENCH_SET_000B, sizeof BENCH_SET_000B));
     CHECK(encodes_to(&state3, STATE_0103, sizeof STATE_0103));
     CHECK(encodes_to(&arm, ARM_1234, sizeof ARM_1234));
     CHECK(encodes_to(&drive, DRIVE_0007, sizeof DRIVE_0007));
@@ -215,6 +224,15 @@ static void golden_vectors_decode(void)
     CHECK_EQ_U(m.u.commission.arm_gen, 0x0203);
     CHECK_EQ_U(m.u.commission.boot_id, 0xDEADBEEFu);
     CHECK_EQ_U(m.u.commission.echo_mcu_time_us, 0x0000000100ABCDEFull);
+
+    CHECK_EQ_I(feed_all(&rx, BENCH_SET_000B, sizeof BENCH_SET_000B, &m), 1);
+    CHECK_EQ_U(m.type, LINK_BENCH_SET);
+    CHECK_EQ_U(m.seq, 0x000B);
+    CHECK_EQ_U(m.u.bench.boot_id, 0xDEADBEEFu);
+    CHECK_EQ_U(m.u.bench.bypass, 1);
+    CHECK_EQ_U(m.u.bench.duty_max_e4[2], 2500);
+    CHECK_EQ_U(m.u.bench.time_ms[2], 30000);
+    CHECK_EQ_U(m.u.bench.time_ms[0], 2147483);
 
     CHECK_EQ_I(feed_all(&rx, ARM_1234, sizeof ARM_1234, &m), 1);
     CHECK_EQ_U(m.type, LINK_ARM);

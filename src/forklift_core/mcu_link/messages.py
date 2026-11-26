@@ -24,12 +24,19 @@ _ARM = struct.Struct("<IQ")
 _CLEAR = struct.Struct("<I")
 _STATE = struct.Struct("<QIHHBBIiiffff4h4h4BHHBB6H")  # v3: the KTH counters
 _COMMISSION = struct.Struct("<BhHHIQ")
+_BENCH_SET = struct.Struct("<II4H4I")  # diag/fw-bench: boot_id, bypass, duty_max_e4[4], time_ms[4]
 
 TYPE_DRIVE = 0x01
 TYPE_ARM = 0x02
 TYPE_DISARM = 0x03
 TYPE_CLEAR_FAULTS = 0x04
 TYPE_COMMISSION = 0x05
+TYPE_BENCH_SET = 0x06  # DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged)
+# diag/fw-bench: the bypass bits a BENCH_SET may name (firmware drive.h DRIVE_BENCH_*); the stopping side has none
+BENCH_STEER_RANGE = 1 << 0
+BENCH_LIFT_RANGE = 1 << 1
+BENCH_KNOWN = BENCH_STEER_RANGE | BENCH_LIFT_RANGE
+BENCH_TIME_MAX_MS = 0x7FFFFFFF // 1000  # the firmware's validator ceiling
 TYPE_STATE = 0x81
 
 _LIFT_HOLD = 0x01
@@ -94,6 +101,7 @@ class FaultFlag(IntFlag):
     ENCODER_JUMP_L = 1 << 22
     ENCODER_JUMP_R = 1 << 23
     COMMISSION_TIME_LIMIT = 1 << 24  # v2: a nonzero commissioning duty held past its limit (kept until ARM)
+    BENCH_OVERRIDES = 1 << 31  # diag/fw-bench: live, the bench image runs with a BENCH_SET other than its defaults
 
 
 class StateFlag(IntFlag):
@@ -248,7 +256,29 @@ class McuState:
         return tuple(value / 10000 for value in self.duty_e4)
 
 
-Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState
+@dataclass(frozen=True)
+class BenchSet:
+    """DIAGNOSTIC BRANCH ONLY (diag/fw-bench, never merged): the bench image's session overrides, taken in DISARMED
+    only -- ``bypass`` (BENCH_* bits) and per-axis (L, R, M, H) commissioning limits."""
+
+    boot_id: int
+    bypass: int
+    duty_max_e4: tuple
+    time_ms: tuple
+
+    def __post_init__(self) -> None:
+        _check_range("boot_id", self.boot_id, 1, U32_MAX)
+        _check_range("bypass", self.bypass, 0, U32_MAX)
+        if self.bypass & ~BENCH_KNOWN:
+            raise ValueError(f"bypass: unknown bits 0x{self.bypass & ~BENCH_KNOWN:x}")
+        if len(self.duty_max_e4) != 4 or len(self.time_ms) != 4:
+            raise ValueError("duty_max_e4 and time_ms carry four axes")
+        for i in range(4):
+            _check_range("duty_max_e4", self.duty_max_e4[i], 1, 10000)
+            _check_range("time_ms", self.time_ms[i], 1, BENCH_TIME_MAX_MS)
+
+
+Message = Drive | Commission | Arm | Disarm | ClearFaults | McuState | BenchSet
 
 
 def _kth(message: McuState) -> tuple[int, ...]:
@@ -286,6 +316,9 @@ def _payload(message: Message) -> tuple[int, bytes]:
         return TYPE_COMMISSION, _COMMISSION.pack(
             message.axis, message.duty_e4, message.valid_after_echo_ms, message.arm_gen, message.boot_id,
             message.echo_mcu_time_us)
+    if isinstance(message, BenchSet):
+        return TYPE_BENCH_SET, _BENCH_SET.pack(message.boot_id, message.bypass, *message.duty_max_e4,
+                                               *message.time_ms)
     if isinstance(message, Arm):
         return TYPE_ARM, _ARM.pack(message.boot_id, message.echo_mcu_time_us)
     if isinstance(message, Disarm):
@@ -377,6 +410,7 @@ def decode(body: bytes) -> tuple[int, Message]:
         TYPE_CLEAR_FAULTS: _CLEAR,
         TYPE_STATE: _STATE,
         TYPE_COMMISSION: _COMMISSION,
+        TYPE_BENCH_SET: _BENCH_SET,
     }
     if type_ == TYPE_DISARM:
         if payload:
@@ -401,6 +435,8 @@ def decode(body: bytes) -> tuple[int, Message]:
             message = ClearFaults(*fields)
         elif type_ == TYPE_COMMISSION:
             message = Commission(*fields)
+        elif type_ == TYPE_BENCH_SET:
+            message = BenchSet(fields[0], fields[1], tuple(fields[2:6]), tuple(fields[6:10]))
         else:
             message = _state(fields)
     except LinkError:
