@@ -195,8 +195,13 @@ NOT_BYPASSABLE = ("stop", "disarm", "lease", "rearm", "link", "measurement_stale
                   "relocalize",  # relocalize: the declaration's session mark is no toggle (5c-2, 7b)
                   "wait_axis_moved")  # 6a: the axis watch over a holding span (design 2, lead decision A')
 
-# the layer watchdog's ends: the latch at once (a wait is "layer_overdue")
-LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost")
+# the operating REAL run's checks that are not bypassable there although they are elsewhere (unlock U3a, plan 2.5:
+# with no deadline judged a late layer drives on old evidence -- a stopping-side protection)
+OPERATING_NOT_BYPASSABLE = ("layer_timing",)
+
+# the layer watchdog's ends: the latch at once (a wait is "layer_overdue"); scan_generation_changed: the operating
+# run's scan evidence boundary (U3a)
+LAYER_ENDS = ("layer_latency_exceeded", "layer_worker_dead", "scan_source_lost", "scan_generation_changed")
 
 
 def _evidence(reply) -> tuple:
@@ -238,8 +243,16 @@ class RealLoop:
                  delay_bound=None, state_delay_s: float = 0.03, v_scan_mps: float | None = None,
                  kappa_max_inv_m: float = 0.0, pallet_size=None, imu_source=None, start_rear=None,
                  rear_offset_m: float | None = None, declared_speed_mps: float = DECLARED_SPEED_MPS,
-                 scan_feed=None, events=None) -> None:
+                 scan_feed=None, events=None, operating: bool = False, scan_events=None,
+                 imu_unqualified: bool = False) -> None:
         self.core, self.session, self.permit, self.port, self.host = core, session, permit, port, host
+        # the operating REAL run (unlock U3a, named by the assembly -- not inferred from the client, which the 4c rigs
+        # share): its non-bypassable checks, its scan source's events judged at the tick head before any install, and
+        # an IMU that did not qualify (C7: no watch, no source; readiness refuses imu:unqualified until bypassed)
+        self.operating, self.scan_events = bool(operating), scan_events
+        self.imu_unqualified = bool(imu_unqualified) and self.operating
+        self.scan_boundaries = 0
+        self.scan_refusal = None  # () -> the scan source's newest refusal reason (the run sets it; plan 2.5 console)
         # 6a-2b (design 10): the run's scan feed after the tick's STATE (None: the rig feeds before cycle), a source's
         # fatal error (set by the run's source guard or here; the run ends on it), the closing state (DISARM only,
         # no source called) with the DISARMs written in it, an event sink for the run's record (never blocks)
@@ -310,7 +323,9 @@ class RealLoop:
             watches.safety, watches.imu, watches.imu_policy)
         if watches is not None and imu_policy not in ("required", "none"):
             raise ValueError(f"imu_policy {imu_policy!r}")
-        if imu_policy == "required" and (imu_watch is None or imu_source is None):
+        if self.imu_unqualified:
+            imu_watch, imu_source = None, None  # nothing judged from a source that did not qualify (plan 2.7)
+        elif imu_policy == "required" and (imu_watch is None or imu_source is None):
             raise ValueError("imu_required")
         if (imu_watch is None) != (imu_source is None):
             raise ValueError("imu_watch and imu_source go together")
@@ -391,6 +406,9 @@ class RealLoop:
         self._last_scan = None  # the newest scan id passed in this epoch
         self.provenance = None  # (epoch, attempt, scan id, stamp) of the reply the applied correction came from
         self._fresh_ns = None  # the newest real processed reply of this epoch (first beam, host ns)
+        # U3a: no reply whose evidence began before the operating run's last scan evidence boundary refreshes it
+        # (core seconds; a late reply of the old generation never vouches for the new one -- Codex U3a round 1 P2)
+        self._evidence_floor_s = float("-inf")
         self.reloc_dropped: Counter = Counter()
         self.reloc_gen = None  # the relocalization generation the loop opened
         self._reloc_reset_due = False  # the tracker's and the core's reset, after the mission is over
@@ -558,7 +576,7 @@ class RealLoop:
             return None, {"received": True}
         if kind == "check_bypass":
             check = msg["check"]
-            if check in NOT_BYPASSABLE:
+            if check in NOT_BYPASSABLE or (self.operating and check in OPERATING_NOT_BYPASSABLE):
                 return "not_bypassable", {}
             if check not in BYPASSABLE:
                 return "unknown_check", {}
@@ -635,7 +653,18 @@ class RealLoop:
             "f1_blocking": self._f1_blocks(),
             # the MCU sample stand (6, 3) with its link on the clock now: not_still's own value (impl round 6 P2-1)
             "standing": self.stand_since_ns is not None and bool(self.host.health(int(self.clock())).fresh),  # the arbiter's (STOPPED: a rearm is needed -- the console's real panel, 5c-1b)
+            # the operating run (U3a): whether it is one, its IMU's qualification (C7) and the scan source's newest
+            # refusal and evidence boundaries (plan 2.5)
+            "operating": self.operating,
+            "imu_unqualified": self.imu_unqualified,
+            "scan": {"last_refusal": self._scan_refusal_now(), "boundaries": self.scan_boundaries},
         }
+
+    def _scan_refusal_now(self):
+        try:
+            return None if self.scan_refusal is None else self.scan_refusal()
+        except Exception:  # noqa: BLE001 -- a status line, never a reason to stop
+            return None
 
     # --- 5c-2: relocalization (design 6) -------------------------------------------------------------------------
     @property
@@ -936,6 +965,8 @@ class RealLoop:
                 why = "epoch"
             elif lo < self.t_epoch:
                 why = "before_epoch"
+            elif lo < self._evidence_floor_s:
+                why = "before_scan_boundary"
             elif hi > t + 1e-9:
                 why = "future"
             elif self._last_stamp is not None and stamp < self._last_stamp:
@@ -1259,6 +1290,34 @@ class RealLoop:
             return None
         return (self.frozen.pallet_id, tuple(float(v) for v in self.frozen.pose), int(self.core.obstacle["version"]))
 
+    def scan_boundary(self, now_ns: int, sensor) -> None:
+        """The operating run's scan evidence boundary (U3a, plan 2.5; Codex U3 split rounds 1-3): a producer change or a
+        lost qualification. The layer's end latches (``scan_generation_changed``: stop, DISARM, no resume of its
+        own); its grid, installed result, planning grid and placed scans go and the computing ones are stale by their
+        key; this epoch's processed freshness goes (a reply already taken never vouches for the new generation); a
+        relocalization attempt in progress is refused -- even while already latched, where the emergency returns
+        early. A rearm then needs the new generation's own install and its own processed."""
+        t = self._t(now_ns)
+        self.scan_boundaries += 1
+        if self.real_layer is not None:
+            lay = self.real_layer
+            lay.grid = type(lay.grid)(lay.grid_config)
+            lay._installed = None  # noqa: SLF001 -- the layer's own reset (as _reset_layer)
+            lay._unplaced.clear()  # noqa: SLF001
+            lay.exempt_serial += 1  # a computing job's key is stale: its late answer is never installed
+            lay._placed_id = 0  # noqa: SLF001
+            lay.last_scan_s.clear()
+            lay.last_beam_s.clear()
+            drop = getattr(lay.worker, "drop_pending", None)
+            if drop is not None:
+                drop()  # a request not started yet would compute the old grid (Codex U3a round 1 P2)
+            lay.evidence_boundary()
+        self._fresh_ns = None
+        self._evidence_floor_s = t
+        if self.attempt is not None:
+            self._attempt_end(t, "refused", "relocalize_voided:scan_boundary")
+        self._emit({"t": "scan_boundary", "ns": int(now_ns), "sensor": str(sensor), "count": self.scan_boundaries})
+
     def _reset_layer(self, now_ns: int) -> None:
         """A new grid, no installed or computing result (the worker's late answer is stale by its key) -- the odometry
         the stored scans were placed on is gone."""
@@ -1534,6 +1593,13 @@ class RealLoop:
             self._odom_good = False
             self.still_since_ns = None
             self.stand_since_ns = None
+        if self.operating and self.scan_events is not None and self.fatal_source is None:
+            # U3a (Codex U3 split round 1 P1-2): the scan source's events before any install this tick -- a boundary
+            # throws the layer's evidence away before an older result could be installed
+            try:
+                self.scan_events(now_ns)
+            except Exception as exc:  # noqa: BLE001 -- a source's error ends the run (the run reads fatal_source)
+                self.fatal_source = self.fatal_source or f"scan:{type(exc).__name__}:{exc}"
         self._odometry_head(now_ns, t)  # before any early return: a break's lock is never skipped (round 2 P1-3)
         self._sync_relocalization(now_ns, t)  # 5c-2 (6, 1): a reboot's or a break's generation
         if self.scan_feed is not None and self.fatal_source is None:
@@ -1897,7 +1963,8 @@ class RealLoop:
             self._emergency(now_ns, layer_stop)
             if before_arm:
                 self._end_now(now_ns, layer_stop)  # a mission the latch does not collect yet (design 3, round 3 P2-1)
-            if layer_stop in ("layer_latency_exceeded", "scan_source_lost") and hasattr(layer_, "end_taken") \
+            if layer_stop in ("layer_latency_exceeded", "scan_source_lost", "scan_generation_changed") \
+                    and hasattr(layer_, "end_taken") \
                     and self.permit.state in (ra.LATCHED, ra.DISARMING):
                 layer_.end_taken()  # latched on it: the next result's deadlines start afresh (a rearm follows)
             return

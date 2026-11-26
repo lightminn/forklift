@@ -176,7 +176,8 @@ def test_a_gap_inside_one_read_drops_the_scans_before_it(frames):
     clock.queue = [frames[i][0], frames[k][0]]
     now = clock.ns = frames[k][0]
     told = len(slam.log)
-    assert src.scan_source_events(now) == [("lost", "lidar"), ("connected", "lidar")]
+    # U3a: the gap's new feed generation is an evidence boundary too (Codex U3a round 1 P1)
+    assert src.scan_source_events(now) == [("lost", "lidar"), ("boundary", "lidar"), ("connected", "lidar")]
     out = src.scans(now)
     assert src.counts["before_gap_dropped"] == 1 and src.counts["receive_gaps"] == 1 and len(out) <= 1
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
@@ -248,7 +249,10 @@ def test_one_call_delivers_one_generation(frames, monkeypatch):
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     offers = [e for e in slam.log[told:] if e[0] == "offer"]
     ids = [decode_frame(data)[0]["scan_id"] for _r, data in burst]
-    assert src.counts["before_generation_dropped"] == 2 and len(out) == 2
+    # U3a: the producer change is an evidence boundary -- the older scans of the read are dropped there
+    assert src.counts["before_boundary_dropped"] == 2 and len(out) == 2
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")] and src.counts["boundaries"] == 1
+    assert src.last_boundary == "generation_changed"
     assert [e[2][2] for e in offers] == ids[2:]  # exactly the newer generation's two scans
     assert gens and all(g[1] in switched for g in gens) and all(e[1][1] in switched for e in offers)
 
@@ -290,11 +294,13 @@ def test_a_newer_generation_the_layer_cannot_take_still_drops_the_older(frames, 
         tx.send(data)
     told = len(slam.log)
     out = src.scans(burst[-1][0])
-    assert out == [] and src.counts["before_generation_dropped"] == 2
+    assert out == [] and src.counts["before_boundary_dropped"] == 2 and src.counts["boundaries"] == 3
+    assert src.last_boundary.startswith("qualification:") and src.last_refusal == "frame:no_bound"
     assert [e for e in slam.log[told:] if e[0] == "offer"] == []
     # SLAM is still told the newer generation (the older one's pending replies are void -- Codex U2a round 4 P3)
     gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
     assert gens and gens[-1][1] in switched and all(g[1] in switched for g in gens)
+    assert gens[-1][0] == src.feed.generation  # each lost qualification opened a feed generation SLAM was told
 
 
 def test_a_socket_error_ends_the_run():
@@ -629,3 +635,250 @@ def test_an_unfit_imu_whose_stop_fails_keeps_its_stop_on_the_closers(tmp_path, m
     for fn in reversed(src.closers):
         fn()
     assert log.count("stop") == 2  # and not again once done
+
+
+# --- U3a: a lost qualification within one producer generation --------------------------------------------------------
+def test_a_lost_qualification_in_one_producer_generation_is_a_boundary(frames, monkeypatch):
+    """Codex U3 split round 2 P1: good A, unqualified B, good C of the same producer -- B is a boundary: A of the same
+    read is dropped, the feed opens a generation SLAM is told before C, and the loop gets ("boundary", sensor)."""
+    from forklift_core.sensors import lidar_cfg
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    bad_id = decode_frame(frames[i + 1][1])[0]["scan_id"]
+    real_layer = lidar_cfg.to_layer_scan
+
+    def to_layer(scan, *a, **kw):
+        return (None, "no_bound") if scan.scan_id == bad_id else real_layer(scan, *a, **kw)
+
+    monkeypatch.setattr(lidar_cfg, "to_layer_scan", to_layer)
+    burst = frames[i:i + 3]
+    stamps = iter(r for r, _ in burst)
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, burst[-1][0]))
+    for _recv, data in burst:
+        tx.send(data)
+    gen_before = src.feed.generation
+    told = len(slam.log)
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")]
+    out = src.scans(burst[-1][0])
+    for layer in out:
+        src.offer_for(layer)
+    assert src.counts["before_boundary_dropped"] == 1 and len(out) == 1  # A dropped, C delivered
+    assert src.feed.generation == gen_before + 1 and src.last_refusal == "frame:no_bound"
+    offers = [e for e in slam.log[told:] if e[0] == "offer"]
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    assert [o[1][0] for o in offers] == [src.feed.generation] and gens[0][0] == src.feed.generation
+
+
+def _warm(src, tx, clock, frames):
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    return i
+
+
+def test_the_clock_established_again_in_one_producer_generation_is_a_boundary(frames, monkeypatch):
+    """Codex U3a round 1 P1: a feed generation raised for the clock (same producer) is a boundary, not only SLAM's."""
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    real = src.feed.judge
+    calls = {"n": 0}
+
+    def judge(data, recv):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            src.feed.new_generation("clock")  # the clock pair established again on this frame
+        return real(data, recv)
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    burst = frames[i:i + 3]
+    stamps = iter(r for r, _ in burst)
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, burst[-1][0]))
+    for _recv, data in burst:
+        tx.send(data)
+    assert src.scan_source_events(burst[-1][0]) == [("boundary", "lidar")]
+    out = src.scans(burst[-1][0])
+    assert src.counts["before_boundary_dropped"] == 1 and len(out) == 2
+    assert src.last_boundary == "feed_generation:clock"
+
+
+def _reframed(data, **head):
+    from forklift_core.sensors.scan_feed import decode_frame, encode_frame
+
+    h, ranges, inten = decode_frame(data)
+    h.update(head)
+    return encode_frame(h, ranges, inten)
+
+
+def test_the_current_producers_clock_jump_is_one_boundary_through_its_re_establishment(frames, monkeypatch):
+    """Codex U3a round 2 P2, on the real ScanFeed: A's clock pair jumps -- the boundary and SLAM's cut at the jump,
+    none more when the clock is established again."""
+    from forklift_core.sensors.scan_feed import JUMP_NS
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    events = []
+    told = len(slam.log)
+    gen_before = src.feed.generation
+    delivered_before = src.counts["delivered"]
+    for recv, data in frames[i:i + 20]:
+        h = __import__("forklift_core.sensors.scan_feed", fromlist=["decode_frame"]).decode_frame(data)[0]
+        tx.send(_reframed(data, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+        clock.ns = recv
+        events += src.scan_source_events(recv)
+        src.scans(recv)
+    assert events.count(("boundary", "lidar")) == 1 and src.last_boundary == "clock_jump"
+    assert src.counts["delivered"] > delivered_before and not src.feed.establishing  # re-established, no 2nd boundary
+    assert src.feed.generation > gen_before and src.counts["feed_clock_jump"] == 1
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    assert gens and gens[0][0] == gen_before + 1  # SLAM told at the jump itself
+
+
+def test_a_stray_candidates_clock_refusal_is_no_boundary(frames, monkeypatch):
+    """Codex U3a round 2 P2: a frame of another producer whose pair jumped is refused on the candidate's own clock --
+    the current producer's evidence stands."""
+    from forklift_core.sensors.scan_feed import JUMP_NS, decode_frame
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    tx.send(_reframed(data, gen=int(h.get("gen") or 1) + 7, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [] and src.counts["boundaries"] == 0
+    tx.send(frames[i + 1][1])
+    clock.ns = frames[i + 1][0]
+    assert src.scan_source_events(clock.ns) == [] and len(src.scans(clock.ns)) == 1
+
+
+def test_a_socket_error_after_scans_is_a_boundary_before_the_loss(frames):
+    """Codex U3a round 2 P2: the boundary comes before the loss, so the loop throws the evidence away before its
+    install."""
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+
+    class Broken:
+        def recv(self, n):
+            raise ConnectionResetError("gone")
+
+        def close(self):
+            pass
+
+    src.sock = Broken()
+    clock.ns = frames[i][0]
+    assert src.scan_source_events(clock.ns) == [("boundary", "lidar"), ("lost", "lidar")]
+    assert src.fatal == "scan_socket_error"
+
+
+def test_a_boundary_before_any_scan_was_taken_is_none(frames, monkeypatch):
+    """Nothing taken yet: no evidence to void, so the start (the feed establishing) never latches the run."""
+    tx, rx = pair()
+    clock = Clock()
+    src = source(rx, clock)
+    monkeypatch.setattr(src.feed, "judge", lambda data, recv: (None, "clock_jump"))
+    tx.send(frames[0][1])
+    clock.ns = frames[0][0]
+    assert src.scan_source_events(clock.ns) == [] and src.counts["boundaries"] == 0
+
+
+def test_a_slam_refusal_at_the_jump_still_hands_the_boundary_over_first(frames):
+    """Codex U3a round 3 P2: SLAM refusing the new generation (start_check_generation_changed) does not swallow the
+    boundary queued before it -- the loop gets the event, then the error on its next call."""
+    from forklift_core.sensors.scan_feed import JUMP_NS, decode_frame
+
+    tx, rx = pair()
+    clock = Clock()
+
+    class Refusing(Slam):
+        refuse = False
+
+        def generation(self, gen):
+            if self.refuse:
+                raise RuntimeError("start_check_generation_changed")
+            super().generation(gen)
+
+    slam = Refusing()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    slam.refuse = True
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    tx.send(_reframed(data, sys_minus_mono_ns=int(h["sys_minus_mono_ns"]) + 2 * JUMP_NS))
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [("boundary", "lidar")]
+    with pytest.raises(RuntimeError, match="start_check_generation_changed"):
+        src.scans(recv)
+    with pytest.raises(RuntimeError):
+        src.scan_source_events(recv + MS)  # nothing more to hand over: the error again
+
+
+def test_a_candidates_clock_jump_while_the_current_one_re_establishes_is_no_boundary(frames, monkeypatch):
+    """Codex U3a round 3 P3: the restored establishing state is the current producer's -- a refusal of another
+    producer's frame never opens a second boundary."""
+    from forklift_core.sensors.scan_feed import decode_frame
+
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    recv, data = frames[i]
+    h = decode_frame(data)[0]
+    other = _reframed(data, gen=int(h.get("gen") or 1) + 9)
+
+    def judge(d, r):
+        src.feed.establishing = True  # the current producer re-establishing, its state restored by the feed
+        return None, "clock_jump"
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    tx.send(other)
+    clock.ns = recv
+    assert src.scan_source_events(recv) == [] and src.counts["boundaries"] == 0
+
+
+@pytest.mark.parametrize("on_read", [False, True])
+def test_a_slam_refusal_at_a_receive_gap_still_hands_the_boundary_over_first(frames, on_read):
+    """Codex U3a round 4 P2: a gap seen on a quiet call or on the read that ends it queues its boundary before SLAM is
+    told -- a refusal there keeps the events (lost, boundary) and is raised after them."""
+    tx, rx = pair()
+    clock = Clock()
+
+    class Refusing(Slam):
+        refuse = False
+
+        def generation(self, gen):
+            if self.refuse:
+                raise RuntimeError("start_check_generation_changed")
+            super().generation(gen)
+
+    slam = Refusing()
+    src = source(rx, clock, slam)
+    i = _warm(src, tx, clock, frames)
+    slam.refuse = True
+    later = frames[i - 1][0] + rs.SCAN_GAP_NS + 5 * MS
+    if on_read:
+        tx.send(frames[i][1])
+    clock.ns = later
+    events = src.scan_source_events(later)
+    assert events[:2] == [("lost", "lidar"), ("boundary", "lidar")]
+    with pytest.raises(RuntimeError, match="start_check_generation_changed"):
+        src.scans(later)

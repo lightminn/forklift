@@ -954,8 +954,8 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     sensor = getattr(sources.scans, "sensor", None)
     if sensor not in names:
         out.append(f"scan_sensor_unknown:{sensor}")
-    if prep.watches.imu_policy == "required" and sources.imu is None:
-        out.append("imu_required")
+    if prep.watches.imu_policy == "required" and sources.imu is None and client is not Client.REAL:
+        out.append("imu_required")  # the operating run's unqualified IMU is a readiness refusal instead (plan 2.7)
     if sources.depth is None and "d5_pocket" not in BYPASSABLE:
         out.append("no_depth_no_bypass")
     if prep.jobs is None:
@@ -1203,6 +1203,11 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
             why = host.build_refusal()
             return None if why is None else f"build:{why}"
 
+        operating = sources.client is Client.REAL  # the operating REAL run (make_real_sources), never HIL or replay
+        # C7 (plan 2.7): qualified only with its source started on a measured config and a fitting profile, and the
+        # watch required; autonomy.yaml's imu: none is unqualified there (a setting never removes the watch)
+        imu_unqualified = operating and not (sources.imu is not None and sources.imu_qualified is True
+                                             and prep.watches.imu_policy == "required")
         evidence = ra.Evidence(
             worker_ok=worker_ok, baseline_ok=lambda n: core.baseline is not None,
             layer_ok=lambda n: layer.ok(t_of(n)), link_reason=link_reason,
@@ -1218,13 +1223,24 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
             operator_start_ok=lambda n: box["loop"].operator_start.ok(
                 None if arbiter.lease is None else arbiter.lease.lease_id),
             core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
-            mission_gen=lambda n: core.commands.mission_id)
+            mission_gen=lambda n: core.commands.mission_id,
+            imu_unqualified=(lambda n: True) if imu_unqualified else None)
         scans = sources.scans
         counts = sources.counts
 
-        def scan_feed(now_ns):
+        def scan_events(now_ns):
             for kind, sensor in scans.scan_source_events(now_ns):
-                (layer.source_lost if kind == "lost" else layer.source_connected)(sensor)
+                if kind == "lost":
+                    layer.source_lost(sensor)
+                elif kind == "connected":
+                    layer.source_connected(sensor)
+                elif kind == "boundary" and operating:
+                    box["loop"].scan_boundary(now_ns, sensor)  # U3a: the evidence boundary's latch
+                else:
+                    raise ValueError(f"scan source event {kind!r}")
+
+        def scan_feed(now_ns):
+            scan_events(now_ns)
             got = list(scans.scans(now_ns))
             if len(got) > SCANS_PER_CALL:
                 counts["scans_dropped"] += len(got) - SCANS_PER_CALL
@@ -1258,8 +1274,10 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
                         pallet_size=(float(cfg.pallet_depth_m), float(cfg.pallet_width_m)), kappa_max_inv_m=kappa,
                         operator_start=asm.OperatorStart(prep.epoch), start_rear=tuple(cfg.start_rear),
                         rear_offset_m=prep.rear_offset_m, watches=prep.watches,
-                        imu_source=None if sources.imu is None else _ImuGuard(sources.imu, mark),
-                        scan_feed=scan_feed, events=events)
+                        imu_source=None if sources.imu is None or imu_unqualified else _ImuGuard(sources.imu, mark),
+                        scan_feed=scan_feed, events=events, operating=operating,
+                        scan_events=scan_events if operating else None, imu_unqualified=imu_unqualified)
+        loop.scan_refusal = lambda: getattr(scans, "last_refusal", None)
         box["loop"] = loop
         arbiter.stop_evidence = lambda now: loop.physical_stop(now)
         if real_slam:

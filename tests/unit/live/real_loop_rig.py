@@ -322,7 +322,7 @@ class FakeImu:
 class Rig:
     def __init__(self, *, cfg=None, plan=None, frames=None, check=None, operator=None, direction_evidence=True,
                  initial_seq=None, watch=None, real_layer=False, imu=False, real_requests=False, reloc=False,
-                 check_builder=True):
+                 check_builder=True, operating=False, imu_unqualified=False):
         self.direction_evidence = direction_evidence
         self.now = 10_000 * MS
         # the executor's host; its first seq set so the run after the session check crosses the u16 wrap
@@ -492,7 +492,8 @@ class Rig:
             snapshot=snapshot_view,
             operator_start_ok=(lambda n: self.loop.operator_start.ok(self.lease)) if real_requests
             else (lambda n: True), core_refusal=lambda n: real_auto_refusal(core.safety_state(None)),
-            mission_gen=lambda n: core.commands.mission_gen)
+            mission_gen=lambda n: core.commands.mission_gen,
+            imu_unqualified=(lambda n: True) if imu_unqualified else None)  # U3a: as the operating assembly gives it
         self.loop = RealLoop(core=core, session=RealSession(core, self.link), permit=self.permit, port=self.port,
                              host=self.host, link=self.link, channels=self.channels, transport=self.transport,
                              params=params, odometry=self.odo, kinematics=KIN, max_speed_mps=0.15,
@@ -507,6 +508,7 @@ class Rig:
                              operator_start=asm.OperatorStart(EPOCH) if real_requests else None,
                              **({"start_rear": tuple(base_cfg.start_rear), "rear_offset_m": REAR_OFFSET_M}
                                 if reloc else {}),
+                             operating=operating, imu_unqualified=imu_unqualified,
                              **self._watch_args(watch, imu))
         self.slam = self.loop.slam_source
         loop_box["loop"] = self.loop

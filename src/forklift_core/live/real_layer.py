@@ -142,6 +142,9 @@ class ManualWorker:
     def submit(self, job, fn) -> None:
         self.pending = (job, fn)  # the newest request only
 
+    def drop_pending(self) -> None:
+        self.pending = None
+
     def step(self) -> None:
         if self.pending is not None:
             job, fn = self.pending
@@ -191,6 +194,11 @@ class ThreadWorker:
         with self._lock:
             out, self.done = self.done, []
         return out
+
+    def drop_pending(self) -> None:
+        """A request not started yet goes (U3a: an evidence boundary); one already running ends stale by its key."""
+        with self._lock:
+            self.pending = None
 
     def close(self) -> None:
         with self._wake:
@@ -538,6 +546,13 @@ class RealLayer:
     def source_connected(self, sensor: str) -> None:
         """The scan source says it is connected again (its scans still have to come and be installed)."""
         self.disconnected.discard(str(sensor))
+
+    def evidence_boundary(self) -> None:
+        """The operating run's scan evidence boundary (unlock U3a, plan 2.5: a producer change or a lost
+        qualification): a sticky end the loop latches on (``scan_generation_changed``); the loop resets the grid."""
+        self._exceeded = "scan_generation_changed"
+        self._watch_cache = None
+        self.counts["evidence_boundaries"] = self.counts.get("evidence_boundaries", 0) + 1
 
     def end_taken(self) -> None:
         """The loop latched on the watchdog's end: the deadlines start again from the next result (a rearm follows)."""
