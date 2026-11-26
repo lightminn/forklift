@@ -1861,11 +1861,17 @@ class RealLoop:
     def _operating_submit_refusal(self, queued, now_ns: int) -> str | None:
         """The operating run's judgement of this batch's submit (plan 2.2, 2.4): enough run time left, the truck at
         the taped start whatever the start_pose bypass, and the submitted pallet on the approved placement."""
-        if rca.remaining_s(self.run_deadline_ns, now_ns) < self.mission_time_budget_s:
+        judged = int(self.clock())  # the instant it is judged at, not the tick's start (Codex U3b-1 round 1 P2-3)
+        if rca.remaining_s(self.run_deadline_ns, judged) < self.mission_time_budget_s:
             return "run_time_short"
-        if self.start_rear is None or self._rear_now is None:
+        try:
+            # this tick's odometry under the applied correction (the tick's own control pose comes later)
+            rear = tuple(float(v) for v in self.core.hooks.slam_rear(self._t(judged)))
+        except Exception:  # noqa: BLE001 -- no pose now: no submit
+            rear = None
+        if self.start_rear is None or rear is None:
             return "case_a:start_unknown"
-        if self._off_start(self._rear_now):
+        if self._off_start(rear):
             return "case_a:not_at_start"
         sub = next((c for c in queued if getattr(c, "kind", None) == "submit"), None)
         pallet = None if sub is None else self.core.targets.pallets.get(sub.pallet_id)
@@ -2095,7 +2101,7 @@ class RealLoop:
                                                           command_.tracking, command_.rear)
             dwell_hold, safety_hold = command_.dwell_hold, command_.safety_hold
             if (tracking.status == "arrived" and self.operating and ms.phase == "approach"
-                    and rca.remaining_s(self.run_deadline_ns, now_ns) < self.insert_time_min_s):
+                    and rca.remaining_s(self.run_deadline_ns, int(self.clock())) < self.insert_time_min_s):
                 # U3b-1 (plan 2.2): too little run time for the insert -- its entry is withheld, a wait frame instead
                 arrival_wait = "run_time_short:insert"
             elif tracking.status == "arrived":
@@ -2756,6 +2762,11 @@ class RealLoop:
             if (booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
                     and self._moved_for != self.core.commands.mission_id and self._off_start(self._rear_now)):
                 return "not_at_start", "alarm"  # 5c-2 (6, 6): at the first byte and a continuation alike
+            if self.operating and booked is not None and (
+                    booked.kind in HOLDING_KINDS or (booked.kind == "drive" and float(booked.speed_mps) == 0.0)):
+                # Codex U3b-1 round 1 P2-1: a zero or a hold going out (its continuation included) ends the insert's
+                # motion now -- a moving frame judged after it in the same transmit is a resume
+                self._insert_moving = False
             if (self.operating and booked is not None and booked.kind == "drive" and float(booked.speed_mps) != 0.0
                     and self.core.ms.phase == "insert" and not self._insert_moving
                     and rca.remaining_s(self.run_deadline_ns, ns) < self.insert_time_min_s):
@@ -2783,6 +2794,11 @@ class RealLoop:
                 limit = min(limit, decided + int((WRITE_MARGIN_S - WRITE_ALLOWANCE_S) * 1e9))
             judged = int(self.clock())
             self._judged_ns = judged
+            if self.operating and ((self.run_stopping is not None and self.run_stopping())
+                                   or (self.run_deadline_ns is not None and judged >= int(self.run_deadline_ns))):
+                # Codex U3b-1 round 1 P2-2: the stop and the deadline again at the last read before the write
+                return ("run_stopping" if self.run_stopping is not None and self.run_stopping() else "run_deadline"), \
+                    "alarm"
             if judged > limit:
                 if frame.kind == "DRIVE" and booked is None and decided is not None \
                         and judged > decided + int((WRITE_MARGIN_S - WRITE_ALLOWANCE_S) * 1e9):

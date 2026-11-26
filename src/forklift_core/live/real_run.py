@@ -968,6 +968,15 @@ def assembly_refusal(prep: RunPrep, sources: RunSources) -> list:
     return out
 
 
+def run_time_setting(data: dict, key: str, default: float) -> float:
+    """A run-time margin from autonomy.yaml (U3b-1): a finite positive number, else the run is refused -- a NaN would
+    leave every comparison open (Codex U3b-1 round 1 P2-4)."""
+    v = data.get(key, default) if isinstance(data, dict) else default
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)) or v <= 0:
+        raise AssemblyRefused([f"settings_unreadable:{key}"])
+    return float(v)
+
+
 def _case_a_started(prep):
     """The operating run's adoption check (plan 2.4, U3b-1): the adopted plan's approach and insert go forward only
     and stay within the approved corridor -- S10-A's taped start to the insert end on the approved placement -- else
@@ -1300,8 +1309,8 @@ def assemble_run(prep: RunPrep, sources: RunSources, *, events=None, clock=time.
         if operating:
             # U3b-1 (plan 2.2, 2.4): the approved placement and the run-time margins (the run sets its deadline)
             loop.check_pallet_pose = None if cfg.check_pallet_pose is None else tuple(cfg.check_pallet_pose)
-            loop.mission_time_budget_s = float(prep.data.get("mission_time_budget_s", loop.mission_time_budget_s))
-            loop.insert_time_min_s = float(prep.data.get("insert_time_min_s", loop.insert_time_min_s))
+            for key in ("mission_time_budget_s", "insert_time_min_s"):
+                setattr(loop, key, run_time_setting(prep.data, key, getattr(loop, key)))
         box["loop"] = loop
         arbiter.stop_evidence = lambda now: loop.physical_stop(now)
         if real_slam:

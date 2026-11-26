@@ -174,3 +174,65 @@ def test_off_the_operating_run_nothing_changes():
     r.loop.run_deadline_ns = r.now + int(10 * 1e9)  # no effect off the operating run
     reply = submit(r, (PALLET[0] + 0.5, PALLET[1], PALLET[2]))
     assert reply["t"] == "ack", reply
+
+
+# --- Codex U3b-1 round 1 ---------------------------------------------------------------------------------------------
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -5, True, "300"])
+def test_a_run_time_margin_that_is_not_a_finite_positive_number_refuses_the_run(value):
+    from forklift_core.live import real_run as rr
+    from forklift_core.live.real_assembly import AssemblyRefused
+
+    with pytest.raises(AssemblyRefused, match="settings_unreadable:insert_time_min_s"):
+        rr.run_time_setting({"insert_time_min_s": value}, "insert_time_min_s", 120.0)
+    assert rr.run_time_setting({}, "insert_time_min_s", 120.0) == 120.0
+
+
+def test_the_submit_is_judged_on_the_clock_at_the_judgement_not_the_ticks_start():
+    """P2-3: with the tick's own processing time, 299.998 s left at the judgement refuses the submit."""
+    r = rig()
+    r.tick_cost_ns = 4 * MS
+    pid = next(iter(r.core.targets.pallets))
+    reply, _ = ask(r, "pallet_register", pallet_id=pid, pose=list(PALLET))
+    r.tick(30)
+    ask(r, "operator_start")
+    r.loop.run_deadline_ns = r.now + 20 * MS + int(300 * 1e9) + 2 * MS  # the submit's tick starts 20 ms on
+    rid = r.say("mission_submit", pallet_id="P-S10", destination_id="D-S10", targets_revision=reply["targets_revision"])
+    r.tick()
+    got, _ = replies(r)
+    mine = [m for m in got if m.get("request_id") == rid]
+    assert mine and mine[0]["t"] == "reject" and mine[0]["reason"] == "run_time_short", mine
+
+
+def test_a_stop_set_inside_the_gate_refuses_the_write():
+    """P2-2: the stop read again at the last read before the write."""
+    r = _driving()
+    since = len(r.transport.sent)
+    flag = {"set": False}
+    orig = r.loop._lease_valid  # noqa: SLF001
+
+    def lease_valid(ns):
+        flag["set"] = True  # the signal arrives while the gate judges
+        return orig(ns)
+
+    r.loop._lease_valid = lease_valid  # noqa: SLF001
+    r.loop.run_stopping = lambda: flag["set"]
+    r.tick(3)
+    assert not any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
+
+
+def test_a_resume_after_zero_frames_in_the_insert_waits_for_the_margin():
+    """P2-1: zero frames going out inside the insert end its motion; the next moving frame is a resume."""
+    r = Rig(frames=True, operator=[(1, "confirm")], operating=True, real_layer=True)
+    r.start()
+    r.tick(40)
+    r.submit()
+    run_until(r, lambda rec: r.core.ms.phase == "insert" and r.loop._insert_moving, 3000)  # noqa: SLF001
+    r.loop.run_deadline_ns = r.now + int(100 * 1e9)
+    r.layer.worker.held = True  # no new result: the drive waits with zero frames
+    r.tick(15)
+    assert not r.loop._insert_moving  # noqa: SLF001
+    since = len(r.transport.sent)
+    r.layer.worker.held = False
+    r.layer.worker.step()
+    r.tick(20)
+    assert not any(d.left_wheel_rad_s or d.right_wheel_rad_s for d in r.loop_drives(since))
