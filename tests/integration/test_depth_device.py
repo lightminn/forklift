@@ -336,3 +336,9 @@ def test_the_motion_module_alone_reports_the_removal_to_on_lost():
     assert lost == []
     rs.context.cb(Info(True))
     assert lost == ["device_removed"]
+    src.stop()
+    rs.context.cb(Info(True))
+    assert lost == ["device_removed"]  # stopped: the notice reports to no one (Codex U2a round 2 P3)
+    src.start(lambda *a: None)  # started again without on_lost
+    rs.context.cb(Info(True))
+    assert lost == ["device_removed"]

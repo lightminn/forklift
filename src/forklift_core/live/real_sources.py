@@ -14,6 +14,8 @@ behind the loop's calls, the replay's delivery rules (``replay_sources.ReplaySca
   simulator's frames;
 - a receive gap found on a read drops the scans of this call from before it (the layer sees lost, connected, then
   only later scans; SLAM is never told an older generation after the gap's);
+- one call delivers one generation: scans read in the same call before the newest (feed, producer) generation are
+  dropped (counted), as a gap's are -- the layer never takes a scan of a generation SLAM has left;
 - every accepted scan tells SLAM its (feed, producer) generation first (7a-3), in receipt order, then becomes a layer
   scan (``lidar_cfg.to_layer_scan``: no bound for this frame keeps it diagnostic, counted by reason); per call the
   last ``SCANS_PER_CALL`` layer scans go, the rest of a backlog read on the next call; a scan reaches SLAM only through
@@ -28,6 +30,7 @@ the run's closers."""
 from __future__ import annotations
 
 import collections
+import math
 import time
 
 SCANS_PER_CALL = 4  # real_run.SCANS_PER_CALL
@@ -162,6 +165,14 @@ class RealScanSource:
             items.append(("scan", scan, layer))
         if not items and not self._gap_open and self._last_rx is not None and now - self._last_rx > SCAN_GAP_NS:
             self._open_gap()  # a quiet call past the gap
+        if items:
+            # one call delivers one generation: the scans before the newest (feed, producer) generation of this read
+            # are dropped as the gap's are -- SLAM is never told an older generation after a newer one, and the layer
+            # never takes a scan of a generation SLAM has left (Codex U2a round 2 P2-1)
+            start = max(i for i, it in enumerate(items) if i == 0 or (it[1].feed_gen, it[1].producer_gen)
+                        != (items[i - 1][1].feed_gen, items[i - 1][1].producer_gen))
+            self.counts["before_generation_dropped"] += sum(1 for it in items[:start] if it[2] is not None)
+            items = items[start:]
         layered = [i for i, it in enumerate(items) if it[2] is not None]
         kept = set(layered[-SCANS_PER_CALL:])
         self.counts["cut"] += len(layered) - len(kept)
@@ -187,7 +198,7 @@ def start_real_imu(cfg, device, gap_max_s: float):
     device.start(source.on_sample, on_lost=source.lost)
     profile = device.profile_info()
     hz = (profile.get("actual") or {}).get("accel_hz")
-    if not isinstance(hz, (int, float)) or isinstance(hz, bool) or hz <= 0:
+    if not isinstance(hz, (int, float)) or isinstance(hz, bool) or not math.isfinite(hz) or hz <= 0:
         return source, False, profile  # the rate actually opened unknown: never the requested one in its place
     fits = fits_watch(cfg, gap_max_s, bound_s=source.bound_ns / 1e9, accel_hz=hz)
     return source, bool(fits), profile

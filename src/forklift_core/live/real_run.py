@@ -356,7 +356,7 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
     import yaml
 
     from forklift_core.plant.real_vehicle import chassis_model_path
-    from forklift_core.sensors.lidar_cfg import load_lidar_config
+    from forklift_core.sensors.lidar_cfg import lidar_config_from
 
     stop = stop or threading.Event()
     real_lidar = None
@@ -417,7 +417,11 @@ def prepare_run(paths: RunPaths, *, clock=time.monotonic_ns, stop: threading.Eve
             layer_cfg = rpa.replay_layer_cfg(layer_cfg, replay.lidar_cfg)  # one LiDAR source (7r plan 4)
         elif not paths.hil:
             # the operating run: one LiDAR calibration object for the layer and the scan source (U2a, Codex P2-5)
-            real_lidar = load_lidar_config(paths.lidar_config)
+            # parsed from the very bytes hashed: those must be the bytes hashed at the start (Codex U2a round 2 P2-2)
+            lidar_bytes = Path(paths.lidar_config).read_bytes()
+            if hashlib.sha256(lidar_bytes).hexdigest() != hashes_at_start.get("lidar"):
+                raise AssemblyRefused(["files_changed_while_preparing:lidar"])
+            real_lidar = lidar_config_from(yaml.safe_load(lidar_bytes.decode("utf-8")))
             layer_cfg = real_layer_cfg(layer_cfg, real_lidar)
         budget = yaml.safe_load(Path(paths.budget).read_text())
         budget_s = float(budget["latency_budget"]["seconds"])
@@ -618,15 +622,19 @@ def _watch_level_measured(path, want_sha) -> bool:
 
 def _real_imu(prep, device, closers, start_real_imu) -> tuple:
     """(qualified, source or None) -- module text of ``make_real_sources``."""
-    from forklift_core.sensors.imu_source import load_imu_source_config
+    import yaml
+
+    from forklift_core.sensors.imu_source import imu_source_config_from
 
     hashes = getattr(prep, "hashes", None) or {}
     want = hashes.get("imu")
-    if want is None or _sha_or_none(prep.paths.imu_config) != want:
-        return False, None  # the IMU config judged only on the bytes prep hashed
-    cfg = load_imu_source_config(prep.paths.imu_config)
-    if _sha_or_none(prep.paths.imu_config) != want:
+    try:
+        raw = Path(prep.paths.imu_config).read_bytes()  # read once: hashed and parsed from the same bytes
+    except OSError:
         return False, None
+    if want is None or hashlib.sha256(raw).hexdigest() != want:
+        return False, None  # the IMU config judged only on the bytes prep hashed (Codex U2a round 2 P2-2)
+    cfg = imu_source_config_from(yaml.safe_load(raw.decode("utf-8")))
     watch = prep.watches.imu
     gap = None if watch is None else float(watch.cfg.gap_max_s)
     if (not cfg.measured or cfg.delay_bound_s is None or gap is None

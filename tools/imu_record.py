@@ -192,6 +192,7 @@ class RealSenseSource:
                 errors.append(f"close ({self.open_state}): {e}")
         if errors:
             raise RuntimeError("; ".join(errors))
+        self._on_lost = None  # stopped: a later removal notice reports to no one (Codex U2a round 2 P3)
 
 
 class StreamStats:

@@ -128,7 +128,11 @@ def _timing_basis(t: dict, err) -> dict:
 
 
 def load_lidar_config(path: str | Path = LIDAR_YAML) -> LidarConfig:
-    raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    return lidar_config_from(yaml.safe_load(Path(path).read_text(encoding="utf-8")))
+
+
+def lidar_config_from(raw) -> LidarConfig:
+    """The parsed ``lidar.yaml`` (a caller that hashed the bytes it parsed: the judged bytes are the used bytes)."""
     m = raw["mount"]
     xyz = [_finite(v, "mount.xyz") for v in m["xyz"]]
     if len(xyz) != 3:

@@ -4,6 +4,7 @@ frame, the per-call caps, SLAM told each generation before an offer and offered 
 operating start judged against the watch, and the operating layer file from lidar.yaml."""
 
 import base64
+import dataclasses
 import json
 import socket
 import sys
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from forklift_core.live import real_sources as rs
+from forklift_core.sensors.scan_feed import decode_frame
 
 REPO = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO / "tests" / "fixtures" / "replay"))
@@ -200,11 +202,51 @@ def test_the_last_scans_of_a_call_reach_the_layer_and_slam(frames):
     clock.ns = burst[-1][0]
     out = src.scans(clock.ns)
     assert len(out) == rs.SCANS_PER_CALL and src.counts["cut"] == len(burst) - rs.SCANS_PER_CALL
+    want = [decode_frame(data)[0]["scan_id"] for _recv, data in burst][-rs.SCANS_PER_CALL:]
+    assert [src._pending[id(layer)].scan_id for layer in out] == want  # noqa: SLF001 -- the layer's four
     for layer in out:
         src.offer_for(layer)
     offers = [e for e in slam.log if e[0] == "offer"][before:]
-    keys = [e[2] for e in offers]
-    assert len(offers) == rs.SCANS_PER_CALL and keys == sorted(keys)  # the newest four, in order
+    assert [e[2][2] for e in offers] == want  # SLAM's four: the same, the newest, in order
+
+
+def test_one_call_delivers_one_generation(frames, monkeypatch):
+    """Codex U2a round 2 P2-1: a read holding scans of a producer generation and then of a newer one delivers the newer
+    one's only -- SLAM is never told the older generation after the newer, the layer never takes the older."""
+    tx, rx = pair()
+    clock, slam = Clock(), Slam()
+    src = source(rx, clock, slam)
+    i = 0
+    while src.counts["delivered"] == 0:
+        tx.send(frames[i][1])
+        clock.ns = frames[i][0]
+        for layer in src.scans(clock.ns):
+            src.offer_for(layer)
+        i += 1
+    real = src.feed.judge
+    switch_at = frames[i + 2][0]
+
+    def judge(data, recv):
+        scan, why = real(data, recv)
+        if scan is not None and recv >= switch_at:
+            scan = dataclasses.replace(scan, producer_gen=(scan.producer_gen or 0) + 1000)  # a new producer
+        return scan, why
+
+    monkeypatch.setattr(src.feed, "judge", judge)
+    burst = frames[i:i + 4]
+    stamps = iter(r for r, _ in burst)
+    clock_ns = clock.ns
+    monkeypatch.setattr(src, "clock", lambda: next(stamps, clock_ns))
+    for _recv, data in burst:
+        tx.send(data)
+    told = len(slam.log)
+    out = src.scans(burst[-1][0])
+    for layer in out:
+        src.offer_for(layer)
+    gens = [e[1] for e in slam.log[told:] if e[0] == "gen"]
+    offers = [e for e in slam.log[told:] if e[0] == "offer"]
+    assert src.counts["before_generation_dropped"] == 2 and len(out) == 2
+    assert gens and all(g[1] >= 1000 for g in gens) and all(e[1][1] >= 1000 for e in offers)
 
 
 def test_a_socket_error_ends_the_run():
@@ -298,7 +340,8 @@ def test_the_imu_start_is_judged_against_the_watch_with_the_opened_profile():
 
 
 @pytest.mark.parametrize("profile", [{}, {"actual": {}}, {"actual": {"accel_hz": None}}, {"actual": {"accel_hz": 0}},
-                                     {"actual": {"accel_hz": True}}, {"requested": {"accel_hz": 200}}])
+                                     {"actual": {"accel_hz": True}}, {"requested": {"accel_hz": 200}},
+                                     {"actual": {"accel_hz": float("inf")}}, {"actual": {"accel_hz": float("nan")}}])
 def test_a_profile_that_does_not_say_its_opened_rate_never_fits(profile):
     dev = SimpleNamespace(start=lambda cb, on_lost=None: None, profile_info=lambda: profile)
     _src, fits, _ = rs.start_real_imu(mr.imu_config(), dev, gap_max_s=0.05)
@@ -422,7 +465,7 @@ def _measured_imu(tmp_path, monkeypatch, *, level_measured):
     from forklift_core.sensors import imu_source
 
     cfg = mr.imu_config()
-    monkeypatch.setattr(imu_source, "load_imu_source_config", lambda path: cfg)
+    monkeypatch.setattr(imu_source, "imu_source_config_from", lambda raw: cfg)
     watch = yaml.safe_load((REPO / "config/real/safety_watch.yaml").read_text())
     watch["imu"]["provenance"]["measured"] = level_measured
     wp = tmp_path / "watch.yaml"
