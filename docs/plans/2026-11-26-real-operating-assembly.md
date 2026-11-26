@@ -399,11 +399,11 @@ lift:
 
 U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험이다. **잠금(`unlock_incomplete`)은 그대로**이고, 운영 코드의 함수 서명에 판정 주입은 두지 않는다. 그래서 U3e-1 이 머지돼도 실차는 열리지 않는다.
 
-- **C13 정지 모델 근거**(Codex U3e-1 2 회차 P1-1, U3e-2 전에 닫음): `obstacle_layer_real.yaml` 의 `permission.latency_s`·`decel_mps2` 는 실행 층이 그대로 쓰는 정지 모델인데 지금 판정은 그 파일의 해시만 묶는다. 두 값에 `provenance`(`measured`·`source`·`until: S5`)를 두고(층 설정 로더가 받는 자리에, 팔레트 다리·`hwday` 도구가 같은 파일을 읽으니 그쪽 로더도 확인), `PROVENANCE_FILES` 에 `layer` 를, `REQUIRED_PROVENANCE` 에 그 두 값을 더한다. 잠정값이면 `precondition:C13:layer:<키>:unmeasured`, 총괄 예외 `decision_id` 가 있으면 통과. 지금 값(0.30 s·0.5 m/s²)은 잠정이라 거부된다.
-- **REAL 콘솔 접속 범위**(P1-2): REAL 은 기본으로 루프백(`127.0.0.1`)에만 묶는다. 다른 주소는 `--console-lan` 을 명시해야 하고 기록에 경고로 남긴다(운용 콘솔 결정 2026-10-13 '인증 나중' — 그때까지 같은 망의 누구나 lease 를 받을 수 있다는 것을 기록과 시작 출력에 적는다). REAL 에서는 WebSocket `Origin` 이 콘솔을 내준 그 주소·포트가 아니면 연결을 거부한다(브라우저의 다른 사이트 요청 차단). HIL 은 지금 그대로다.
+- **C13 정지 모델 근거**(Codex U3e-1 2 회차 P1-1, U3e-2 전에 닫음): `obstacle_layer_real.yaml` 의 `permission.latency_s`·`decel_mps2` 는 실행 층이 그대로 쓰는 정지 모델인데 지금 판정은 그 파일의 해시만 묶는다. 두 값에 `provenance`(`measured`·`source`·`until: S5`)를 두고(층 설정 로더가 받는 자리에, 팔레트 다리·`hwday` 도구가 같은 파일을 읽으니 그쪽 로더도 확인), `PROVENANCE_FILES` 에 `layer` 를, `REQUIRED_PROVENANCE` 에 그 두 값을 더한다. 잠정값이면 `precondition:C13:layer:<키>:unmeasured`, 총괄 예외 `decision_id` 가 있으면 통과. 지금 값(0.30 s·0.5 m/s²)은 잠정이라 거부된다. **값 자체도** 측정 표시·예외와 무관하게 본다(3 회차 P1): `latency_s` 는 유한한 수이고 ≥ 0, `decel_mps2` 는 유한한 수이고 > 0, `bool` 거부 — 아니면 `precondition:C13:layer:<키>:invalid`. 또 `stop_model` 기록의 `binds` 에 `lidar_sha256` 을 더한다(실행 층이 `lidar.yaml` 의 `scan_period_s` 를 정지 지연에 더하므로, 주기만 바꿔도 옛 C13 승인이 무효 — 3 회차 P2-1).
+- **REAL 콘솔 접속 범위**(P1-2): REAL 은 기본으로 루프백(`127.0.0.1`)에만 묶는다. 다른 주소는 `--console-lan` 을 명시해야 하고 기록에 경고로 남긴다(운용 콘솔 결정 2026-10-13 '인증 나중' — 그때까지 같은 망의 누구나 lease 를 받을 수 있다는 것을 기록과 시작 출력에 적는다). REAL 에서는 WebSocket `Origin` 이 허용 목록에 없으면(없음 포함) 연결을 거부한다(브라우저의 다른 사이트 요청 차단). 허용 목록은 **바인드 뒤 실제 포트**로 만든다: 루프백이면 `http://127.0.0.1:<포트>`·`http://localhost:<포트>`, `--console-lan` 이면 그에 더해 운용자가 명시한 접속 주소 `--console-origin-host H` 의 `http://H:<포트>`(없으면 거부). 요청의 `Host` 로 목록을 만들지 않는다(3 회차 P2-4). HIL 은 지금 그대로다.
 
-- **실행 경로**: `tools/real_autonomy.py --run --client real --device D --scan-socket P --slam-bridge S [--imu-serial N] --site-record R --bundle-root B --duration-s T --out-dir O`.
-  1. **인자**(아무것도 열기 전): 장치·소켓·출력 폴더·시간, 그리고 HIL·재생 전용 인자(`--hil-model`·`--hil-inject`·`--replay`·`--allow-synthetic`·`--hil-slam-bridge`·`--map-bundle`)가 있으면 거부.
+- **실행 경로**: `tools/real_autonomy.py --run --client real --device D --scan-socket P --slam-bridge S --site-record R --bundle-root B --duration-s T --out-dir O [--console-lan --console-origin-host H]`. `--imu-serial` 은 U3e-1 에 없다(주면 인자 오류).
+  1. **인자**(아무것도 열기 전): 장치·소켓·출력 폴더·시간, 그리고 HIL·재생 전용 인자(`--hil-model`·`--hil-model-arg`·`--hil-inject`·`--replay`·`--allow-synthetic`·`--hil-slam-bridge`·`--map-bundle`·`--hil`)가 있으면 거부. 이 REAL 판정은 `main()` 의 다른 분기(재생·HIL 조합의 `_write(…, args.out)`)보다 **먼저** 하고, REAL 의 조기 거부는 표준 출력으로만 낸다 — 기존 파일을 `--out` 으로 준 거부가 그 파일을 자르지 않는다(3 회차 P2-2). 설정·기록 경로(`--s10a`·`--settings`·`--vehicle`·`--watch`·`--lidar-config`·`--imu-config`·`--preconditions`·`--site-record`·등록부)는 장치를 열기 전에 일반 파일인지(`stat`, FIFO·장치 거부) 본다 — 잠금을 쥔 채 막히는 읽기를 막는다(3 회차 P2-3; 확인과 읽기 사이에 경로가 바뀌는 경우는 운용자가 쥔 파일이라 남는 위험으로 적는다).
   2. **기록**: `O` 는 새 폴더여야 하고, `O/run.jsonl` 을 배타 생성(`O_CREAT|O_EXCL|O_NOFOLLOW`)해 연 fd 가 일반 파일인지 본다(U1 의 `_plain_output` 과 같은 이유, Codex U3e-1 P1-3). 기록을 열 수 있게 된 뒤의 거부는 종료 코드 2·표준 출력·끝 행에 같은 사유로 남는다.
   3. `prepare_run`(REAL 경로: 사이트 기록·등록부·번들 뿌리, `hil=False`).
   4. `RealTtyTransport.open(D)` — 잠금·pty 거부·같은 fd 의 USB 제품 문자열과 일련번호. REAL 호스트를 만들고 `host.link_identity(tr.usb_product)` 를 먼저 부른다(면제 경고 기록).
@@ -424,17 +424,19 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
   - **스캔**: 시험 스레드가 SDK 어댑터 프레임을 매 회전 새 ID·취득 시각으로 보낸다. 빈 통로를 덮는 범위 안의 유한한 먼 거리값이다(무효 빔 아님). 자세와 무관하므로 이 시험이 보는 것은 빈 통로의 실행과 정지까지다. 장애물 투영·SLAM 정합 정확도는 범위 밖이다.
   - **SLAM**: `fake_slam_bridge.FakeBridge` 에 실 브리지와 같은 비교 모드를 더한다. 기대 `map_id`·장착 변환을 받고, 맞는 `hello` 의 `laser_digest` 를 그 세션의 `ready` 에 싣는다. 비교 없는 기존 모드는 구형 브리지 거부 시험에 그대로 쓴다(Codex P1-2).
   - **경우**:
-    1. **판정 무주입, 유효한 시험 사이트**: 조립이 거부되고 사유는 `precondition:unlock_incomplete` 하나다. 이것이 잠금까지 도달했다는 증거다. 장치에 쓴 바이트 전체 0.
+    1. **판정 무주입, 유효한 시험 사이트**: 조립이 거부되고 사유는 `precondition:unlock_incomplete` 하나다. 이것이 잠금까지 도달했다는 증거다. 장치에 쓴 바이트 전체 0 — 프레임 없는 재동기화 바이트(`POISON`)까지 `_os_write` 의 성공 바이트를 모두 센다(3 회차 P2-5).
     2. **저장소 기본 설정으로 실행 CLI 를 서브프로세스로**(P3): 필수 인자를 모두 채우고 등록부에 없는 사이트 기록을 준다 → `precondition:site_bundle:no_row`, 장치는 열리지 않음(장치 경로에 남은 바이트 0). CLI 가 실제 `prepare_run` 을 탔다는 증거다. U3e-2 머지 표의 '저장소 기본값으로 어느 관문에서 거부되는지'는 저장소 설정 그대로 `gather`+`operating_preconditions` 를 돌린 사유 목록으로 따로 만든다.
     3. **정상**(Codex P2-3): 세션 DISARM 교환 뒤 `OFF`·정지 → lease·echo → 재위치 확인(요청 뒤 이번 epoch 의 `processed`·새 층 설치·`confirmed` 까지) → 팔레트 등록 → `d5_pocket`·`imu` 우회 → 팔레트 확인(`pallet_id`·`targets_revision`·`register_serial`·`still_serial`) → 제출 → ARM → 비영 DRIVE(모두 ≤ 0.06 m/s) → 승강 → `lifted` 확인 요청에 `operator_answer(confirm)` → `s10_lifted` 기록, 정지 DRIVE 수락, 미션 DISARM 과 같은 boot·seq 의 DISARMED STATE → 그 뒤 실행 종료의 별도 DISARM 확인.
     4. **출발 전 거부**: 팔레트 확인 없이 제출 → 정확한 거부 사유, 세션 전체 ARM·DRIVE 바이트 0. 주입 감싸기가 `unlock_incomplete` 외 사유 하나(예: C1 `dirty_image`)를 남기면 조립 거부·바이트 0.
-    5. **주행 중 스캔 단절**: 이동 DRIVE 수락을 먼저 확인한다. 그 뒤 스캔 송신을 끊고, 마지막 스캔의 유효기한·`scan_boundary`·정지 결정을 기록한다. 종료 신호를 보내기 **전에** `scan_generation_changed`(또는 수신 공백) 래치와 그 래치의 DISARM 확인이 있어야 한다(2 회차 P2-4). 그 뒤 새 ARM·DRIVE(바퀴 0 인 승강·조향 DRIVE 포함)의 첫 쓰기·이어쓰기 0.
+    5. **주행 중 스캔 단절**: 이동 DRIVE 수락을 먼저 확인한다. 그 뒤 스캔 송신을 끊고, 마지막 스캔의 유효기한·`scan_boundary`·정지 결정을 기록한다. 종료 신호를 보내기 **전에** `scan_generation_changed`(또는 수신 공백) 래치와 그 래치의 DISARM 확인이 있어야 한다(2 회차 P2-4). 검사 구간은 **호스트의 고장 래치 시각부터** 종료까지다: 그 사이 ARM·DRIVE(바퀴 0 인 승강·조향 DRIVE 포함)의 첫 쓰기·이어쓰기 성공 바이트 0(3 회차 P2-5).
     6. **도구가 직접 맡는 것**(실제 pty 경로): 실행 중(쓰기가 오가는 동안) SIGTERM → DISARM 확인 **전에는** 다른 프로세스가 장치 잠금을 얻지 못하고, 확인 **뒤에는** 얻는다(조기 fd 해제 검출). 실행 중 pty 상실 → `link_lost`, 재연결 없음, 권한 폐기.
   - **CLI 거부**(서브프로세스): pty 장치, HIL·재생 전용 인자(`--hil-model-arg` 포함), 이미 있는 출력 폴더, `--console-lan` 없는 비루프백 `--host`.
   - **콘솔**: REAL 실행에서 다른 `Origin` 의 WebSocket 은 거부, 같은 `Origin` 은 받음.
-  - **C13**: 잠정 `latency_s`·`decel_mps2` 거부, 측정됨 또는 총괄 예외면 통과(단위). 팔레트 다리·`hwday` 도구가 새 `provenance` 키로 깨지지 않음.
+  - **C13**: 잠정 `latency_s`·`decel_mps2` 거부, 측정됨 또는 총괄 예외면 통과(단위). 측정됨·예외 각각에서 음수 지연·0 감속·NaN·`bool` 은 `invalid` 로 거부. `lidar.yaml` 의 `scan_period_s` 만 바꾸면 옛 `stop_model` 거부. 팔레트 다리·`hwday` 도구가 새 `provenance` 키로 깨지지 않음.
+  - **조기 거부·막히는 입력**: 기존 파일을 `--out` 으로 준 REAL·재생 조합 거부에서 그 파일 바이트 보존. `--preconditions` 에 FIFO 를 주면 장치를 열기 전에 거부.
+  - **콘솔 Origin**: 기본 포트(0 → 실제 포트)·`--console-lan`+`--console-origin-host` 각각에서 맞는 Origin 은 받고, 누락·불일치는 거부. 정상 경로 시험의 콘솔 연결은 맞는 Origin 을 보낸다.
 - **머지 요청 표**(Codex P2-5, 2 회차 P2-4): 5 절 항목마다 셋 중 하나로 적는다 — '도구 배선까지 검증(위 시험)', '단위 시험이 그 전이를 실제로 만듦(시험 이름)', '미검증(이유)'. 시험 이름만 걸지 않고 그 시험이 해당 전이를 실제로 만드는지 확인해 적는다. 이미 알려진 것: `test_real_tty_transport` 의 보드 표식 시험은 권한을 얻기 전에 표식을 바꾸고, 부분 쓰기 시험은 `revoke("test")` 를 직접 부르며, U3b-1 시작점 시험은 제출 전 이탈이다 — U3e-1 에서 각각 '권한 뒤 표식 변경으로 철회', '실제 신호 배선', '계획 대기 중 이탈' 시험을 더하거나 미검증으로 적는다.
-- **게이트**: 미션 코어·장애물 층·Isaac 러너를 건드리지 않는다(실행 도구·`real_run` 조립의 판정 목록 보존·기록 열기·시험만). 재생 게이트는 필요 없다. 회귀는 `test_real_run_hil*`(4 CPU), 브리지 시험, 전체 pytest 를 최종 트리에서 한 번.
+- **게이트**: 미션 코어·장애물 층·Isaac 러너를 건드리지 않는다(실행 도구, `real_run` 의 판정 목록 보존·기록 열기, `real_preconditions` 의 C13 판정, `obstacle_layer_real.yaml` 의 `provenance` 키, 콘솔 서버의 REAL Origin 검사, 시험). 재생 게이트는 필요 없다. 회귀는 `test_real_run_hil*`(4 CPU), 브리지 시험, 전체 pytest 를 최종 트리에서 한 번.
 
 #### 6.1 자체 검토
 
@@ -463,6 +465,13 @@ U3e-1 은 실행 도구의 REAL 조립·실행 경로와 끝까지 도는 시험
 | Codex 2 회차 P2-3 | 콘솔 회수·폐기와 fd 해제 순서·종료 코드 | 11·12 단계, SIGTERM 잠금 시험 |
 | Codex 2 회차 P2-4 | 머지 표의 단위 시험 인용이 전이를 입증 못함 | 셋 중 하나로 적기, 세 시험 보강 또는 미검증 |
 | Codex 2 회차 P3 | CLI 사례 2 가 인자 누락으로도 합격 | 필수 인자 채우고 `site_bundle:no_row` |
+| Codex 3 회차 P1 | C13 측정 표시만 보고 값 범위를 안 봄(음수 지연·0 감속) | 값 범위 검사 `invalid`, 측정·예외 각각 시험 |
+| Codex 3 회차 P2-1 | C13 승인이 스캔 주기에 안 묶임 | `stop_model.binds` 에 `lidar_sha256` |
+| Codex 3 회차 P2-2 | 기존 `--out` 조기 거부가 기록 파일을 자름 | REAL 인자 판정 먼저, 조기 거부는 표준 출력만 |
+| Codex 3 회차 P2-3 | 잠금 쥔 채 FIFO 읽기로 막힘 | 장치 열기 전 설정·기록 경로의 일반 파일 확인 |
+| Codex 3 회차 P2-4 | 동적 포트·LAN 에서 Origin 기준 불명 | 바인드 뒤 포트, `--console-origin-host`, `Host` 미사용 |
+| Codex 3 회차 P2-5 | 바이트 0 범위(재동기화 바이트·래치 시각) | `_os_write` 전체·래치 시각부터 |
+| Codex 3 회차 P3 | `--imu-serial` 예시·게이트 범위 | 예시에서 빼고 인자 오류, 게이트 줄 보강 |
 | 총괄 동의(2026-11-27) | 위 세 변경(C13·콘솔 범위·IMU 범위 밖) | S10 선행 조건(시운전 계획 5 절)에 C13 한 줄·`--console-lan` 한 줄, 콘솔은 '우회 중: IMU' 표시(U3c 그대로) |
 
 ## 7. 남는 위험과 실기 전용 항목
